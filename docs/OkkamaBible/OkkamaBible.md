@@ -2500,7 +2500,9 @@ The language's answer today has three parts.
    rebound (`counter = counter.increment();`) only when its type is an object
    with successor actions; `let n = 1; n = 2;` is rejected. Scalar and
    collection locals cannot be rebound at all, which is why accumulation goes
-   through `reduce` or library objects.
+   through `reduce` — or, in synchronous code, through a `cell::Cell`, the one
+   explicit mutable container, which the compiler keeps out of async actions
+   and object fields (issue #152).
 
 The most common operations — appending to an array, setting or removing one
 key of a map — are `+` and `-` (issue #145): `items + [item]`, `a + b + c`,
