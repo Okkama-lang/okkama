@@ -82,6 +82,16 @@
   - [8.5 Building and changing collections](#85-building-and-changing-collections)
   - [8.6 Iterating user collections](#86-iterating-user-collections)
   - [8.7 Limits](#87-limits)
+- [Chapter 9. Expressions and Control Flow](#chapter-9-expressions-and-control-flow)
+  - [9.1 Blocks have values](#91-blocks-have-values)
+  - [9.2 Names are bound once](#92-names-are-bound-once)
+  - [9.3 Operators](#93-operators)
+  - [9.4 Choosing](#94-choosing)
+  - [9.5 Loops](#95-loops)
+  - [9.6 `return`](#96-return)
+  - [9.7 Order of evaluation](#97-order-of-evaluation)
+  - [9.8 What is not there](#98-what-is-not-there)
+  - [9.9 Limits](#99-limits)
 
 # Part I. The Razor
 
@@ -2589,6 +2599,548 @@ Most of these are the same gap seen from different sides (the milestone
 language needs efficient persistent operations, and Okkama has the
 immutability already and the operations not yet.
 
+# Chapter 9. Expressions and Control Flow
+
+Okkama's control flow fits in one sentence. It has two conditionals, `if` and
+`match`, plus a compact two-way choice, `?? !!`. It has two loops: `for` over a
+source and an unbounded `loop`. It has three exits — `next`, `last` and
+`return` — and a postfix condition. There is no `while`, no `do`, no `switch`
+with fall-through, no `goto`, no labels, no `+=` and no `++`. Most of what is
+left are expressions: they produce values.
+
+This chapter covers those constructs, the operators, and the order in which an
+expression is evaluated. Other chapters cover the rest:
+
+- failure (`throw`, `try`) — Chapter 10;
+- cleanup (`defer`) — Chapter 11;
+- patterns over enums — Chapter 16;
+- `for await` — Chapter 20.
+
+The program below uses nearly all of it.
+
+```okkama
+module bible/expressions v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Gradebook {
+    has scores is %string:int;
+    Gradebook(:scores);
+
+    names() is @string { scores.keys(); }
+    score(name is string) is int { scores[name]; }
+
+    // An if chain in tail position is the value of the action.
+    letter(score is int) is string {
+        if score >= 90 { "A" } else if score >= 75 { "B" } else if score >= 60 { "C" } else { "F" }
+    }
+
+    // `return` leaves the action from inside the loop.
+    first_below(limit is int) is Maybe<string> {
+        for scores.keys() -> name {
+            if scores[name] < limit { return Maybe.some(name); }
+        }
+        Maybe.none;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let book = Gradebook(scores: ["Grace": 58, "Ada": 97, "Edsger": 60, "Alan": 74]);
+
+    for book.names() -> name {
+        let score = book.score(name);
+        let letter = book.letter(score);
+        // `match` compares values; `else` takes the rest.
+        let verdict = match letter {
+            case "A", "B" { "good"; }
+            case "C" { "pass"; }
+            else { "retake"; }
+        };
+        // `?? !!` is a two-way choice; both branches have one type.
+        let honours = score >= 95 ?? ", with honours" !! "";
+        out.writeln(name + ": " + score.string() + " " + letter + ", " + verdict + honours);
+    }
+
+    // `next` and `last` take a postfix condition.
+    for 1..=20 -> n {
+        next if n % 3 != 0;
+        last if n > 12;
+        out.writeln("multiple of 3: " + n.string());
+    }
+
+    out.writeln("first below 60: " + (book.first_below(60) else "nobody"));
+    out.writeln("first below 50: " + (book.first_below(50) else "nobody"));
+    0;
+}
+```
+
+Output:
+
+```text
+Ada: 97 A, good, with honours
+Alan: 74 C, pass
+Edsger: 60 C, pass
+Grace: 58 F, retake
+multiple of 3: 3
+multiple of 3: 6
+multiple of 3: 9
+multiple of 3: 12
+first below 60: Grace
+first below 50: nobody
+```
+
+## 9.1 Blocks have values
+
+The value of a block is the value of its last expression, so an action needs
+no `return` to produce its result. `letter` above is a single `if` chain:
+whichever branch runs supplies the string. The semicolon after the last
+expression is optional. `{ "A" }` and `{ "A"; }` are the same block, and the
+formatter keeps whichever spelling the author chose.
+
+The idea is older than most languages in use today:
+
+- McCarthy's LISP introduced the conditional *expression* [[McCarthy 1960](#ref-mccarthy1960)].
+- Landin's "The Next 700 Programming Languages" argued for building a language
+  from expressions, with a statement as the special case of an expression
+  whose value nobody uses [[Landin 1966](#ref-landin1966)].
+- ML, Haskell, Scala, Kotlin and Rust followed that line.
+
+C and Java followed ALGOL 60 instead. In them `if` is a statement, and since
+programs still need a conditional value, both languages added a second
+construct for it, `cond ? a : b`. Two spellings of one idea are exactly the
+multiplication Chapter 1 argues against.
+
+`if`, `match`, `loop` and `try` (Chapter 10) produce values, and so does every
+call. A bare block `{ … }` does not. It is a statement that opens a scope, and
+`let v = { … };` is a syntax error. A scope that has to produce a value
+becomes an action, which gives it a name, a type and a test.
+
+## 9.2 Names are bound once
+
+`let` binds a name to a value, with an optional declared type:
+
+```okkama
+let limit = 60;                 // inferred: int
+let names is @string = [];      // declared: a typed boundary (Chapter 4)
+```
+
+A name cannot be declared twice in the same scope. A nested block may shadow
+it, and the outer meaning returns when the block ends. A name also cannot be
+pointed at a new value:
+
+```okkama
+module bible/rebind v1.0.0;
+
+main() is int {
+    let total = 0;
+    for 1..=3 -> n {
+        total = total + n;
+    }
+    total;
+}
+```
+
+The compiler answers:
+
+```text
+09-rebind-rejected.ok:6:9: semantic error: Cannot rebind variable "total": type "int" has no successor actions
+```
+
+The rule comes from the manifesto (Chapter 3): a name means what it was bound
+to, so a reader never has to search forward for the assignment that changed
+it. Scalars and collections are values, and there is no such thing as "the
+same total, now bigger". The loop above has three idiomatic replacements:
+
+- **`reduce`**, when the loop computes one value from a collection:
+  `(1..=3).reduce(0) -> sum, n { sum + n; }` (Chapter 8).
+- **A successor object**, when the changing state is a thing in the program's
+  domain. A local whose type declares a successor action *may* be rebound to
+  its successor (section 9.5 and Chapter 13).
+- **A `Cell`**, the one explicit mutable container, which is allowed only in
+  synchronous code (Chapter 13).
+
+Without reassignment, compound assignment has nothing to abbreviate. So `+=`,
+`-=` and the rest do not exist, and neither do `++` and `--`.
+
+## 9.3 Operators
+
+Operators, loosest first:
+
+| Operators | Meaning |
+|---|---|
+| `?? … !!` | compact choice (9.4) |
+| `else` | fallback for a `Maybe`, a missing index or key |
+| `\|\|` | boolean or |
+| `&&` | boolean and |
+| `<-` | write to a stream |
+| `==  !=` | equality |
+| `..  ..=` | range |
+| `<  <=  >  >=` | ordering |
+| `\|`  `^`  `&` | bitwise or, exclusive or, and (in this order) |
+| `<<  >>  >>>` | shifts |
+| `+  -` | addition, concatenation, collection `+` and `-` (Chapter 8) |
+| `*  /  %` | multiplication, division, remainder |
+| `!  -  ~` | not, negation, bitwise complement |
+| postfix | calls, member access, indexing, unpacking `...` |
+
+The table departs from C in two places:
+
+- **Bitwise operators bind tighter than comparisons.** `flags & mask != 0`
+  means `(flags & mask) != 0`, which is what the programmer meant. In C the
+  same text means `flags & (mask != 0)`. Ritchie traced the C rule to B, where
+  `&` also served as logical *and*, and wrote that in hindsight moving `&`
+  above `==` would have been better [[Ritchie 1993](#ref-ritchie1993)].
+- **Writing to a stream has its own operator**, `<-`. As a result `<<` is
+  always a shift.
+
+Every operator requires operands of the right category and converts nothing:
+
+- `&&`, `||`, `!` and every condition take a `bool`. That includes the
+  conditions of `if`, `next if`, `confirm` and `??`. `if count { … }` is an
+  error, not a test for zero.
+- `==` and `!=` compare values of one category. `1 == 1.0` is rejected
+  (Chapter 5), and so is comparing an `int` with a range.
+- `<` and the other orderings need the same numeric category on both sides.
+  `1 < 2.5` is rejected; write `1.float() < 2.5`.
+- `+` adds numbers, joins strings and concatenates collections, and never
+  mixes them: `"n = " + 1` is an error (Chapter 6).
+- `/` on two integers gives an exact `rat`. There is no `**`; powers are
+  written with `pow` (Chapter 5).
+
+## 9.4 Choosing
+
+### `if`
+
+The condition of `if` is a `bool`, and the braces are mandatory: there is no
+`if (c) statement;`. The brace-less form is behind one of the best-known
+security bugs of the last decade. In 2014 Apple's TLS code had two consecutive
+`goto fail;` lines under one unbraced `if`. The second line always ran, so the
+signature on the server's key exchange was never verified [[Langley 2014](#ref-langley2014)]. With
+mandatory braces, indentation cannot misrepresent which lines a condition
+guards.
+
+As an expression, `if` must have an `else`:
+
+```okkama
+module bible/if_value v1.0.0;
+
+main() is int {
+    let ready = true;
+    let code = if ready { 0; };
+    code;
+}
+```
+
+The compiler answers:
+
+```text
+09-if-rejected.ok:5:31: syntax error at ";": If expression requires else branch.
+  |
+5 |     let code = if ready { 0; };
+  |                               ^
+```
+
+Kotlin and Rust reject this too. If the arm that is not written were allowed,
+it would need a value, and Okkama has no such value to supply (Chapter 7).
+
+An `else if` chain is allowed wherever `if` is a statement, including the tail
+of an action, as in `letter`. After `let x =` it is a syntax error today, and
+the second `if` has to go inside the `else` block (issue #257).
+
+### `match`
+
+`match` compares a subject with each case's values using `==`. A case may list
+several values, and `else` takes the rest. There is no fall-through and no
+`break`: each case is its own block, and cases that share a body list their
+values in one `case`, as `case "A", "B"` does above.
+
+A case value is compared, not tested. `case 1..5` compares an `int` with a
+range and is rejected as such; a condition on a value belongs in `if`. A
+`match` that produces a value needs an `else`, unless its cases cover every
+possibility, which only enums can do (Chapter 16). All its branches must have
+one type.
+
+### `?? !!`
+
+`cond ?? a !! b` is a typed two-way choice:
+
+- the condition is a `bool`;
+- both branches have one type;
+- only the chosen branch is evaluated.
+
+On an enum, the same operator chooses by case and binds the payload
+(Chapter 7 used it on `Maybe`; Chapter 16 covers the rest):
+
+```okkama
+let greeting = users.find(1) ?? .some(name): "hello, " + name !! .none: "hello, stranger";
+```
+
+Choices cannot be nested — not inside a branch, not in the condition, not
+inside parentheses:
+
+```text
+syntax error: Nested ?? / !! choices are not allowed; use a local variable or match.
+```
+
+A nested ternary is legal in C and Java and hard to read in both. Okkama turns
+the usual style advice into a rule, and following it costs one named local.
+
+`?? !!` is the one place where Okkama keeps two spellings of one idea, and it
+does so on purpose. The enum form chooses by pattern in a single expression,
+which otherwise would take a full `match`. The boolean form comes along
+because a language with the enum form and without the boolean one would be
+stranger than a language with both.
+
+## 9.5 Loops
+
+### `for`
+
+`for source -> name { … }` runs its body once per element. The source can be:
+
+- an array;
+- a range;
+- an object that performs `Iterating<T>` (Chapter 8).
+
+A map is walked through `keys()` or `values()`, in sorted key order. A string
+is not a source: code points are reached by index today (issue #210). There is
+exactly one binding. An index comes from a range:
+`for 0..names.size() -> i`.
+
+### `loop`
+
+`loop { … }` repeats until `last`, `return` or a failure leaves it. It is an
+expression: `last value` leaves the loop with that value. Each iteration runs
+in a fresh scope, and the tail value of the body is ignored. A bare `last`
+gives no value, so a `loop` whose value is used must end with `last value`;
+otherwise the compiler reports "Bare `last` cannot produce the value of this
+loop".
+
+```okkama
+module bible/dice v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// A deterministic die: a linear congruential generator. Rolling does not
+// change the die; it returns its successor, with the next seed and one more
+// roll counted.
+object Die {
+    has seed is int;
+    has rolls is int;
+    Die(:seed, :rolls);
+    rolled() is ^Die {
+        ^seed = (seed * 1103515245 + 12345) % 2147483648;
+        ^rolls = rolls + 1;
+    }
+    face() is int { seed % 6 + 1; }
+    count() is int { rolls; }
+}
+
+main() is int {
+    let out = Stdout();
+    let die = Die(seed: 2026, rolls: 0);
+    // `loop` is an expression: `last value` leaves it with that value.
+    let attempts = loop {
+        die = die.rolled();
+        out.writeln("rolled " + die.face().string());
+        last die.count() if die.face() == 6;
+    };
+    out.writeln("a six after " + attempts.string() + " rolls");
+    0;
+}
+```
+
+Output:
+
+```text
+rolled 4
+rolled 5
+rolled 4
+rolled 3
+rolled 4
+rolled 1
+rolled 2
+rolled 1
+rolled 4
+rolled 1
+rolled 6
+a six after 11 rolls
+```
+
+The die is the second replacement from section 9.2. It never changes:
+`rolled()` returns its successor, and the local `die` is rebound to that
+successor. The rebinding is allowed because `Die` declares a successor action
+(`is ^Die`). The rebinding inside the loop body updates the `die` declared
+outside it, and the loop's value is the number of rolls.
+
+There is no `while`, because `loop` already covers it:
+
+- `while c { body }` is `loop { last if !c; body }`;
+- `do { body } while c` is `loop { body; last if !c; }`.
+
+Knuth's survey of structured programming discussed the loop whose exit is in
+the middle [[Knuth 1974](#ref-knuth1974)]. Neither `while` nor `do` can express that loop without
+duplicating code; `loop` with `last if` writes it directly, and the two
+classic loops become special cases of it. One construct does the work of
+three.
+
+### `next`, `last` and the postfix condition
+
+`next` starts the next iteration and `last` leaves the loop. Both take a
+postfix condition, and `last` can also carry a value. In `last value if found;`
+the condition is evaluated first, and the value only if the condition holds.
+A postfix `if` also works on an expression statement:
+`out.writeln(line) if verbose;`. It does not work on `return` and `throw`
+(issue #258).
+
+`next` and `last` act on the nearest `for` or `loop`; there are no labels. To
+leave two loops at once, move the inner loop into an action and `return` from
+it, or make the inner loop a `loop` whose value tells the outer one what to
+do.
+
+`next` and `last` are also rejected outside a loop and directly inside a
+functional block. A `map` visits every element, and searches have their own
+operations, `any`, `all` and `find` (Chapter 8). These checks happen at
+compile time, even in code that never runs.
+
+### Unbounded loops and budgets
+
+A `loop` without a `last` runs until something stops it. The step budget
+(Chapter 26) counts every branch back to an earlier point of the program. So
+`okkama run --max-steps N` stops any loop, on every engine, with the same
+report.
+
+## 9.6 `return`
+
+`return value;` leaves the action from any depth. Most actions never need it,
+because the tail value is the result. `return` is for early exits: a search
+that has found its item, like `first_below` in the first example, or a guard
+with nothing more to do.
+
+A functional block is part of its call, not a function of its own
+(Chapter 8). So `return` inside a `map` or `filter` block leaves the
+*enclosing action*, just as a return inside a Smalltalk block leaves its home
+method, or a `return` inside a Kotlin inline lambda leaves the calling
+function.
+
+## 9.7 Order of evaluation
+
+```okkama
+module bible/order v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// Every call says that it was evaluated.
+object Trace {
+    has out is Stdout;
+    Trace(:out);
+    flag(name is string, value is bool) is bool {
+        out.writeln("  " + name);
+        value;
+    }
+    number(name is string, value is int) is int {
+        out.writeln("  " + name);
+        value;
+    }
+    sum(a is int, b is int, c is int) is int { a + b + c; }
+}
+
+main() is int {
+    let out = Stdout();
+    let t = Trace(out: out);
+
+    out.writeln("arguments, left to right:");
+    let total = t.sum(t.number("a", 1), t.number("b", 2), t.number("c", 3));
+
+    out.writeln("operands, left to right:");
+    let product = t.number("x", 6) * t.number("y", 7);
+
+    out.writeln("&& stops at false:");
+    let both = t.flag("left", false) && t.flag("right", true);
+
+    out.writeln("|| stops at true:");
+    let either = t.flag("left", true) || t.flag("right", false);
+
+    out.writeln("?? !! evaluates one branch:");
+    let chosen = t.flag("condition", true) ?? t.number("then", 1) !! t.number("otherwise", 2);
+
+    out.writeln(total.string() + " " + product.string() + " "
+        + (both ?? "true" !! "false") + " " + (either ?? "true" !! "false") + " " + chosen.string());
+    0;
+}
+```
+
+Output:
+
+```text
+arguments, left to right:
+  a
+  b
+  c
+operands, left to right:
+  x
+  y
+&& stops at false:
+  left
+|| stops at true:
+  left
+?? !! evaluates one branch:
+  condition
+  then
+6 42 false true 1
+```
+
+An expression is evaluated by these rules:
+
+- the receiver first, then the arguments left to right, each exactly once,
+  all before the call;
+- the left operand, then the right one, for every binary operator. Only `&&`
+  and `||` may skip their right operand, as soon as the answer is known;
+- for `if`, `match` and `?? !!`, the condition or subject once, then one
+  branch;
+- for `else`, the fallback only when the value is missing;
+- for `last value if c`, `c` first, and `value` only if `c` holds.
+
+C leaves the order of operands and arguments unspecified. `f() + g()` may call
+either function first, and a program whose output depends on the order is
+legal and unpredictable. Java fixed the order as left to right [[Gosling 2023](#ref-gosling2023)],
+and Okkama does the same.
+
+Okkama has a second reason as well. Three engines run the same program — the
+IR interpreter, the JVM and the Sparrow core — and the conformance suite
+compares their outputs byte for byte. With an unspecified order, the expected
+answer for a test would be a set of outputs instead of one.
+
+## 9.8 What is not there
+
+| Elsewhere | In Okkama |
+|---|---|
+| `while (c) { … }` | `loop { last if !c; … }` |
+| `do { … } while (c)` | `loop { …; last if !c; }` |
+| `break`, `continue` | `last`, `next` |
+| `break outer` (labels) | an action and `return`, or a loop value |
+| `x = x + 1`, `x += 1`, `x++` | a new name, `reduce`, a successor or a `Cell` |
+| `c ? a : b` | `if c { a } else { b }` or `c ?? a !! b` |
+| `switch` with fall-through | `match`, several values per `case` |
+| `goto` | none [[Dijkstra 1968](#ref-dijkstra1968)] |
+| `if (c) statement;` | braces always |
+
+## 9.9 Limits
+
+- **Diagnostics for missing constructs.** `while`, `+=` and `break` produce
+  generic parse or name errors instead of a pointer to `loop`, successors and
+  `last` (issue #256).
+- **`else if` only where `if` is a statement.** `let x = if a { … } else if b
+  { … } else { … };` is a syntax error. Nest the second `if` inside the
+  `else` block, or use `match` (issue #257).
+- **No postfix condition on `return` and `throw`.** `last value if found;`
+  works and `return value if found;` does not (issue #258).
+- **Strings are not a `for` source.** Code points are reached by index
+  (issue #210).
+
+The first limit is about error messages. The others are small asymmetries in
+an otherwise regular grammar, and each has a one-line workaround.
+
 # References
 
 - <a id="ref-lions1996"></a>Jacques-Louis Lions et al. (1996). *ARIANE 5 Flight 501 Failure: Report by the Inquiry Board*. European Space Agency, Paris, 19 July 1996. https://www.esa.int/Newsroom/Press_Releases/Ariane_501_-_Presentation_of_Inquiry_Board_report
@@ -2632,6 +3184,8 @@ immutability already and the operations not yet.
 - <a id="ref-knuth1974"></a>Donald E. Knuth (1974). Structured Programming with go to Statements. *ACM Computing Surveys* 6(4): 261–301. https://doi.org/10.1145/356635.356640
 - <a id="ref-knuth1997"></a>Donald E. Knuth (1997). *The Art of Computer Programming, Volume 2: Seminumerical Algorithms*, 3rd edition. Addison-Wesley.
 - <a id="ref-kotlinspec"></a>JetBrains (2024). *Kotlin Language Specification*, chapter Type System: Nullable Types. https://kotlinlang.org/spec/type-system.html
+- <a id="ref-landin1966"></a>P. J. Landin (1966). The Next 700 Programming Languages. *Communications of the ACM* 9(3): 157–166. https://doi.org/10.1145/365230.365257
+- <a id="ref-langley2014"></a>Adam Langley (2014). Apple's SSL/TLS bug. *ImperialViolet*, 22 February 2014. https://www.imperialviolet.org/2014/02/22/applebug.html
 - <a id="ref-li2019"></a>Ming Li, Paul Vitányi (2019). *An Introduction to Kolmogorov Complexity and Its Applications*, 4th edition. Springer. https://doi.org/10.1007/978-3-030-11298-1
 - <a id="ref-liskov1994"></a>Barbara H. Liskov, Jeannette M. Wing (1994). A Behavioral Notion of Subtyping. *ACM TOPLAS* 16(6): 1811–1841. https://doi.org/10.1145/197320.197383
 - <a id="ref-mackay2003"></a>David J. C. MacKay (2003). *Information Theory, Inference, and Learning Algorithms*. Cambridge University Press. Chapter 28: Model Comparison and Occam's Razor.
@@ -2656,6 +3210,7 @@ immutability already and the operations not yet.
 - <a id="ref-rfc7396"></a>Paul Hoffman, James Snell (2014). *JSON Merge Patch*. RFC 7396, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc7396
 - <a id="ref-rfc8259"></a>Tim Bray (ed.) (2017). *The JavaScript Object Notation (JSON) Data Interchange Format*. RFC 8259, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc8259
 - <a id="ref-rissanen1978"></a>Jorma Rissanen (1978). Modeling by Shortest Data Description. *Automatica* 14(5): 465–471. https://doi.org/10.1016/0005-1098(78)90005-5
+- <a id="ref-ritchie1993"></a>Dennis M. Ritchie (1993). The Development of the C Language. *HOPL-II: The Second ACM SIGPLAN Conference on History of Programming Languages*: 201–208. https://doi.org/10.1145/154766.155580
 - <a id="ref-saltzer1975"></a>Jerome H. Saltzer, Michael D. Schroeder (1975). The Protection of Information in Computer Systems. *Proceedings of the IEEE* 63(9): 1278–1308. https://doi.org/10.1109/PROC.1975.9939
 - <a id="ref-smith2018"></a>Nathaniel J. Smith (2018). Notes on Structured Concurrency, or: Go Statement Considered Harmful. Blog post, 25 April 2018. https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/
 - <a id="ref-snyder1986"></a>Alan Snyder (1986). Encapsulation and Inheritance in Object-Oriented Programming Languages. In *Proceedings of OOPSLA '86*: 38–45. ACM. https://doi.org/10.1145/28697.28702

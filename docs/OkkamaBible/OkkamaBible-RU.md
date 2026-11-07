@@ -82,6 +82,16 @@
   - [8.5 Построение и изменение коллекций](#85-построение-и-изменение-коллекций)
   - [8.6 Обход пользовательских коллекций](#86-обход-пользовательских-коллекций)
   - [8.7 Ограничения](#87-ограничения)
+- [Глава 9. Выражения и управление потоком](#глава-9-выражения-и-управление-потоком)
+  - [9.1 У блоков есть значения](#91-у-блоков-есть-значения)
+  - [9.2 Имя связывается один раз](#92-имя-связывается-один-раз)
+  - [9.3 Операторы](#93-операторы)
+  - [9.4 Выбор](#94-выбор)
+  - [9.5 Циклы](#95-циклы)
+  - [9.6 `return`](#96-return)
+  - [9.7 Порядок вычисления](#97-порядок-вычисления)
+  - [9.8 Чего нет](#98-чего-нет)
+  - [9.9 Ограничения](#99-ограничения)
 
 # Часть I. Бритва
 
@@ -2640,6 +2650,547 @@ role Iterating<T> {
 неизменяемому языку нужны эффективные персистентные операции, а у Okkama
 неизменяемость уже есть, а операций пока нет.
 
+# Глава 9. Выражения и управление потоком
+
+Управление потоком в Okkama умещается в одно предложение. В языке два
+условных оператора, `if` и `match`, и компактный выбор из двух, `?? !!`. Два
+цикла: `for` по источнику и неограниченный `loop`. Три выхода — `next`, `last`
+и `return` — и постфиксное условие. Нет `while`, нет `do`, нет `switch` с
+проваливанием, нет `goto`, меток, `+=` и `++`. Почти всё остальное —
+выражения: у них есть значения.
+
+Глава описывает эти конструкции, операторы и порядок вычисления выражений.
+Остальное разобрано в других главах:
+
+- отказы (`throw`, `try`) — глава 10;
+- освобождение ресурсов (`defer`) — глава 11;
+- образцы над перечислениями — глава 16;
+- `for await` — глава 20.
+
+Программа ниже использует почти всё перечисленное.
+
+```okkama
+module bible/expressions v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Gradebook {
+    has scores is %string:int;
+    Gradebook(:scores);
+
+    names() is @string { scores.keys(); }
+    score(name is string) is int { scores[name]; }
+
+    // An if chain in tail position is the value of the action.
+    letter(score is int) is string {
+        if score >= 90 { "A" } else if score >= 75 { "B" } else if score >= 60 { "C" } else { "F" }
+    }
+
+    // `return` leaves the action from inside the loop.
+    first_below(limit is int) is Maybe<string> {
+        for scores.keys() -> name {
+            if scores[name] < limit { return Maybe.some(name); }
+        }
+        Maybe.none;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let book = Gradebook(scores: ["Grace": 58, "Ada": 97, "Edsger": 60, "Alan": 74]);
+
+    for book.names() -> name {
+        let score = book.score(name);
+        let letter = book.letter(score);
+        // `match` compares values; `else` takes the rest.
+        let verdict = match letter {
+            case "A", "B" { "good"; }
+            case "C" { "pass"; }
+            else { "retake"; }
+        };
+        // `?? !!` is a two-way choice; both branches have one type.
+        let honours = score >= 95 ?? ", with honours" !! "";
+        out.writeln(name + ": " + score.string() + " " + letter + ", " + verdict + honours);
+    }
+
+    // `next` and `last` take a postfix condition.
+    for 1..=20 -> n {
+        next if n % 3 != 0;
+        last if n > 12;
+        out.writeln("multiple of 3: " + n.string());
+    }
+
+    out.writeln("first below 60: " + (book.first_below(60) else "nobody"));
+    out.writeln("first below 50: " + (book.first_below(50) else "nobody"));
+    0;
+}
+```
+
+Вывод:
+
+```text
+Ada: 97 A, good, with honours
+Alan: 74 C, pass
+Edsger: 60 C, pass
+Grace: 58 F, retake
+multiple of 3: 3
+multiple of 3: 6
+multiple of 3: 9
+multiple of 3: 12
+first below 60: Grace
+first below 50: nobody
+```
+
+## 9.1 У блоков есть значения
+
+Значение блока — значение его последнего выражения, поэтому действию не нужен
+`return`, чтобы вернуть результат. `letter` выше — одна цепочка `if`: строку
+даёт та ветвь, которая выполнилась. Точка с запятой после последнего
+выражения необязательна. `{ "A" }` и `{ "A"; }` — один и тот же блок, а
+форматировщик сохраняет написание, которое выбрал автор.
+
+Идея старше большинства нынешних языков:
+
+- в LISP Маккарти появилось условное *выражение* [[McCarthy 1960](#ref-mccarthy1960)];
+- Лэндин в статье «The Next 700 Programming Languages» предлагал строить язык
+  из выражений, а оператор считать частным случаем выражения, значение
+  которого никому не нужно [[Landin 1966](#ref-landin1966)];
+- по этому пути пошли ML, Haskell, Scala, Kotlin и Rust.
+
+C и Java пошли за ALGOL 60. В них `if` — оператор, а условное значение
+программам всё равно нужно, поэтому оба языка завели для него вторую
+конструкцию, `cond ? a : b`. Два написания одной идеи — ровно то умножение
+сущностей, против которого выступает глава 1.
+
+Значения дают `if`, `match`, `loop` и `try` (глава 10), а также любой вызов.
+Голый блок `{ … }` значения не даёт: это оператор, открывающий область
+видимости, и `let v = { … };` — синтаксическая ошибка. Область, которая должна
+вычислить значение, становится действием, а у действия есть имя, тип и тест.
+
+## 9.2 Имя связывается один раз
+
+`let` связывает имя со значением; тип можно объявить:
+
+```okkama
+let limit = 60;                 // выведен: int
+let names is @string = [];      // объявлен: типизированная граница (глава 4)
+```
+
+Объявить имя дважды в одной области нельзя. Вложенный блок может его
+затенить, и после блока возвращается прежний смысл. Перенаправить имя на новое
+значение тоже нельзя:
+
+```okkama
+module bible/rebind v1.0.0;
+
+main() is int {
+    let total = 0;
+    for 1..=3 -> n {
+        total = total + n;
+    }
+    total;
+}
+```
+
+Ответ компилятора:
+
+```text
+09-rebind-rejected.ok:6:9: semantic error: Cannot rebind variable "total": type "int" has no successor actions
+```
+
+Правило идёт из манифеста (глава 3): имя значит то, с чем его связали, и
+читателю не нужно искать дальше по тексту присваивание, которое его поменяло.
+Скаляры и коллекции — значения, и «той же суммы, только побольше» не бывает. У
+цикла выше три идиоматичные замены:
+
+- **`reduce`**, когда цикл вычисляет одно значение по коллекции:
+  `(1..=3).reduce(0) -> sum, n { sum + n; }` (глава 8);
+- **объект с преемником**, когда меняющееся состояние — сущность предметной
+  области программы. Локальное имя, тип которого объявляет successor-действие,
+  *можно* перевязать на преемника (раздел 9.5 и глава 13);
+- **`Cell`** — единственный явный изменяемый контейнер, он разрешён только в
+  синхронном коде (глава 13).
+
+Без переприсваивания составному присваиванию нечего сокращать. Поэтому `+=`,
+`-=` и прочих нет, как нет и `++` и `--`.
+
+## 9.3 Операторы
+
+Операторы от самого слабого связывания к самому сильному:
+
+| Операторы | Смысл |
+|---|---|
+| `?? … !!` | компактный выбор (9.4) |
+| `else` | запасное значение для `Maybe`, отсутствующего индекса или ключа |
+| `\|\|` | логическое «или» |
+| `&&` | логическое «и» |
+| `<-` | запись в поток |
+| `==  !=` | равенство |
+| `..  ..=` | диапазон |
+| `<  <=  >  >=` | порядок |
+| `\|`  `^`  `&` | побитовые «или», «исключающее или», «и» (в этом порядке) |
+| `<<  >>  >>>` | сдвиги |
+| `+  -` | сложение, склейка, `+` и `-` над коллекциями (глава 8) |
+| `*  /  %` | умножение, деление, остаток |
+| `!  -  ~` | отрицание, минус, побитовое дополнение |
+| постфикс | вызовы, доступ к членам, индексация, распаковка `...` |
+
+Таблица расходится с C в двух местах:
+
+- **Побитовые операторы связывают сильнее сравнений.** `flags & mask != 0`
+  означает `(flags & mask) != 0` — то, что программист и имел в виду. В C тот
+  же текст означает `flags & (mask != 0)`. Ричи возводил это правило к B, где
+  `&` служил и логическим «и», и писал, что задним числом поднять `&` выше
+  `==` было бы лучше [[Ritchie 1993](#ref-ritchie1993)].
+- **Для записи в поток есть свой оператор**, `<-`. Поэтому `<<` — всегда
+  сдвиг.
+
+Каждый оператор требует операндов нужной категории и ничего не преобразует:
+
+- `&&`, `||`, `!` и любое условие принимают `bool`. Это относится и к
+  условиям `if`, `next if`, `confirm` и `??`. `if count { … }` — ошибка, а не
+  проверка на ноль.
+- `==` и `!=` сравнивают значения одной категории. `1 == 1.0` отвергается
+  (глава 5), как и сравнение `int` с диапазоном.
+- `<` и другие сравнения порядка требуют одной числовой категории с обеих
+  сторон. `1 < 2.5` отвергается; пишется `1.float() < 2.5`.
+- `+` складывает числа, склеивает строки и коллекции и никогда их не
+  смешивает: `"n = " + 1` — ошибка (глава 6).
+- `/` над двумя целыми даёт точный `rat`. Оператора `**` нет; степень
+  записывается через `pow` (глава 5).
+
+## 9.4 Выбор
+
+### `if`
+
+Условие `if` — `bool`, фигурные скобки обязательны: формы
+`if (c) statement;` нет. Форма без скобок стоит за одной из самых известных
+уязвимостей последнего десятилетия. В 2014 году в TLS-коде Apple под одним
+`if` без скобок оказались две строки `goto fail;` подряд. Вторая выполнялась
+всегда, и подпись сервера в обмене ключами не проверялась [[Langley 2014](#ref-langley2014)].
+Когда скобки обязательны, отступы не могут исказить, какие строки охраняет
+условие.
+
+В роли выражения `if` обязан иметь `else`:
+
+```okkama
+module bible/if_value v1.0.0;
+
+main() is int {
+    let ready = true;
+    let code = if ready { 0; };
+    code;
+}
+```
+
+Ответ компилятора:
+
+```text
+09-if-rejected.ok:5:31: syntax error at ";": If expression requires else branch.
+  |
+5 |     let code = if ready { 0; };
+  |                               ^
+```
+
+Kotlin и Rust тоже это отвергают. Если разрешить ненаписанную ветвь, ей
+понадобилось бы значение, а такого значения в Okkama нет (глава 7).
+
+Цепочка `else if` разрешена везде, где `if` — оператор, в том числе в
+хвосте действия, как в `letter`. После `let x =` она сегодня синтаксическая
+ошибка, и второй `if` приходится вкладывать в блок `else` (тикет #257).
+
+### `match`
+
+`match` сравнивает субъект со значениями каждой ветви через `==`. Ветвь может
+перечислять несколько значений, а `else` забирает остальное. Проваливания и
+`break` нет: у каждой ветви свой блок, а ветви с общим телом перечисляют свои
+значения в одном `case`, как `case "A", "B"` выше.
+
+Значение ветви сравнивается, а не проверяется. `case 1..5` сравнивает `int` с
+диапазоном и поэтому отвергается; условие на значение пишется через `if`.
+`match`, дающему значение, нужен `else`, если только ветви не покрывают все
+случаи, а покрыть все случаи могут лишь перечисления (глава 16). Все ветви
+должны давать один тип.
+
+### `?? !!`
+
+`cond ?? a !! b` — типизированный выбор из двух:
+
+- условие — `bool`;
+- обе ветви одного типа;
+- вычисляется только выбранная ветвь.
+
+На перечислении тот же оператор выбирает по варианту и связывает полезную
+нагрузку (глава 7 использовала его на `Maybe`, остальное — в главе 16):
+
+```okkama
+let greeting = users.find(1) ?? .some(name): "hello, " + name !! .none: "hello, stranger";
+```
+
+Выборы нельзя вкладывать — ни в ветвь, ни в условие, ни через скобки:
+
+```text
+syntax error: Nested ?? / !! choices are not allowed; use a local variable or match.
+```
+
+Вложенный тернарный оператор в C и Java допустим, и в обоих языках его трудно
+читать. Okkama превращает обычный совет из руководств по стилю в правило, и
+соблюдение этого правила стоит одного именованного локального имени.
+
+`?? !!` — единственное место, где Okkama сознательно держит два написания
+одной идеи. Форма для перечислений выбирает по образцу в одном выражении, а
+без неё понадобился бы полный `match`. Булева форма идёт в комплекте: язык с
+формой для перечислений и без булевой был бы страннее языка с обеими.
+
+## 9.5 Циклы
+
+### `for`
+
+`for source -> name { … }` выполняет тело по разу на элемент. Источником
+может быть:
+
+- массив;
+- диапазон;
+- объект, исполняющий роль `Iterating<T>` (глава 8).
+
+Словарь обходят через `keys()` или `values()`, в порядке отсортированных
+ключей. Строка источником не бывает: к кодовым точкам сегодня обращаются по
+индексу (тикет #210). Связывание ровно одно. Индекс берётся из диапазона:
+`for 0..names.size() -> i`.
+
+### `loop`
+
+`loop { … }` повторяется, пока его не покинут `last`, `return` или отказ. Это
+выражение: `last value` выходит из цикла с этим значением. Каждая итерация
+выполняется в свежей области видимости, а хвостовое значение тела
+игнорируется. Голый `last` значения не даёт, поэтому `loop`, значение которого
+используется, должен завершаться через `last value`; иначе компилятор
+сообщает «Bare `last` cannot produce the value of this loop».
+
+```okkama
+module bible/dice v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// A deterministic die: a linear congruential generator. Rolling does not
+// change the die; it returns its successor, with the next seed and one more
+// roll counted.
+object Die {
+    has seed is int;
+    has rolls is int;
+    Die(:seed, :rolls);
+    rolled() is ^Die {
+        ^seed = (seed * 1103515245 + 12345) % 2147483648;
+        ^rolls = rolls + 1;
+    }
+    face() is int { seed % 6 + 1; }
+    count() is int { rolls; }
+}
+
+main() is int {
+    let out = Stdout();
+    let die = Die(seed: 2026, rolls: 0);
+    // `loop` is an expression: `last value` leaves it with that value.
+    let attempts = loop {
+        die = die.rolled();
+        out.writeln("rolled " + die.face().string());
+        last die.count() if die.face() == 6;
+    };
+    out.writeln("a six after " + attempts.string() + " rolls");
+    0;
+}
+```
+
+Вывод:
+
+```text
+rolled 4
+rolled 5
+rolled 4
+rolled 3
+rolled 4
+rolled 1
+rolled 2
+rolled 1
+rolled 4
+rolled 1
+rolled 6
+a six after 11 rolls
+```
+
+Кубик — вторая замена из раздела 9.2. Он никогда не меняется: `rolled()`
+возвращает преемника, и локальное имя `die` перевязывается на этого преемника.
+Перевязка разрешена, потому что `Die` объявляет successor-действие
+(`is ^Die`). Перевязка в теле цикла обновляет `die`, объявленный снаружи, а
+значение цикла — число бросков.
+
+`while` нет, потому что `loop` уже его покрывает:
+
+- `while c { body }` — это `loop { last if !c; body }`;
+- `do { body } while c` — это `loop { body; last if !c; }`.
+
+Кнут в обзоре структурного программирования разбирал цикл, выход из которого
+находится в середине [[Knuth 1974](#ref-knuth1974)]. Ни `while`, ни `do` не выражают такой цикл
+без дублирования кода; `loop` с `last if` записывает его прямо, а два
+классических цикла становятся его частными случаями. Одна конструкция делает
+работу трёх.
+
+### `next`, `last` и постфиксное условие
+
+`next` переходит к следующей итерации, `last` выходит из цикла. Оба принимают
+постфиксное условие, а `last` может ещё и нести значение. В
+`last value if found;` сначала вычисляется условие, а значение — только если
+условие выполнено. Постфиксный `if` работает и на операторе-выражении:
+`out.writeln(line) if verbose;`. На `return` и `throw` он не работает
+(тикет #258).
+
+`next` и `last` действуют на ближайший `for` или `loop`; меток нет. Чтобы
+выйти из двух циклов сразу, внутренний цикл выносят в действие и делают из
+него `return` — или делают внутренний цикл `loop`, значение которого говорит
+внешнему, что делать.
+
+Кроме того, `next` и `last` отвергаются вне цикла и прямо внутри
+функционального блока. `map` обходит каждый элемент, а у поисков есть свои
+операции, `any`, `all` и `find` (глава 8). Эти проверки выполняются при
+компиляции, даже в коде, который никогда не выполнится.
+
+### Бесконечные циклы и бюджеты
+
+`loop` без `last` работает, пока его что-нибудь не остановит. Бюджет шагов
+(глава 26) считает каждый переход назад, к более ранней точке программы.
+Поэтому `okkama run --max-steps N` останавливает любой цикл на любом движке с
+одним и тем же отчётом.
+
+## 9.6 `return`
+
+`return value;` выходит из действия с любой глубины. Большинству действий он
+не нужен, потому что результат — хвостовое значение. `return` нужен для
+ранних выходов: поиску, который уже нашёл элемент, как `first_below` в первом
+примере, или проверке, после которой делать больше нечего.
+
+Функциональный блок — часть своего вызова, а не отдельная функция (глава 8).
+Поэтому `return` внутри блока `map` или `filter` выходит из *объемлющего
+действия* — так же, как return из блока Smalltalk выходит из метода, где блок
+написан, а `return` из inline-лямбды Kotlin — из вызывающей функции.
+
+## 9.7 Порядок вычисления
+
+```okkama
+module bible/order v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// Every call says that it was evaluated.
+object Trace {
+    has out is Stdout;
+    Trace(:out);
+    flag(name is string, value is bool) is bool {
+        out.writeln("  " + name);
+        value;
+    }
+    number(name is string, value is int) is int {
+        out.writeln("  " + name);
+        value;
+    }
+    sum(a is int, b is int, c is int) is int { a + b + c; }
+}
+
+main() is int {
+    let out = Stdout();
+    let t = Trace(out: out);
+
+    out.writeln("arguments, left to right:");
+    let total = t.sum(t.number("a", 1), t.number("b", 2), t.number("c", 3));
+
+    out.writeln("operands, left to right:");
+    let product = t.number("x", 6) * t.number("y", 7);
+
+    out.writeln("&& stops at false:");
+    let both = t.flag("left", false) && t.flag("right", true);
+
+    out.writeln("|| stops at true:");
+    let either = t.flag("left", true) || t.flag("right", false);
+
+    out.writeln("?? !! evaluates one branch:");
+    let chosen = t.flag("condition", true) ?? t.number("then", 1) !! t.number("otherwise", 2);
+
+    out.writeln(total.string() + " " + product.string() + " "
+        + (both ?? "true" !! "false") + " " + (either ?? "true" !! "false") + " " + chosen.string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+arguments, left to right:
+  a
+  b
+  c
+operands, left to right:
+  x
+  y
+&& stops at false:
+  left
+|| stops at true:
+  left
+?? !! evaluates one branch:
+  condition
+  then
+6 42 false true 1
+```
+
+Выражение вычисляется по таким правилам:
+
+- сначала получатель, затем аргументы слева направо, каждый ровно один раз,
+  всё — до вызова;
+- для любого бинарного оператора — левый операнд, затем правый. Только `&&` и
+  `||` могут пропустить правый операнд, как только ответ известен;
+- для `if`, `match` и `?? !!` — один раз условие или субъект, затем одна
+  ветвь;
+- для `else` — запасное значение только тогда, когда значения нет;
+- для `last value if c` — сначала `c`, а `value` только если `c` выполнено.
+
+C оставляет порядок операндов и аргументов неуточнённым. `f() + g()` может
+вызвать любую из функций первой, и программа, вывод которой зависит от этого
+порядка, законна и непредсказуема. Java зафиксировала порядок слева направо
+[[Gosling 2023](#ref-gosling2023)], и Okkama делает так же.
+
+У Okkama есть и вторая причина. Одну и ту же программу исполняют три движка —
+интерпретатор IR, JVM и ядро Sparrow, — а набор conformance сравнивает их
+вывод побайтно. При неуточнённом порядке ожидаемым ответом теста было бы
+множество выводов, а не один.
+
+## 9.8 Чего нет
+
+| В других языках | В Okkama |
+|---|---|
+| `while (c) { … }` | `loop { last if !c; … }` |
+| `do { … } while (c)` | `loop { …; last if !c; }` |
+| `break`, `continue` | `last`, `next` |
+| `break outer` (метки) | действие и `return` или значение цикла |
+| `x = x + 1`, `x += 1`, `x++` | новое имя, `reduce`, преемник или `Cell` |
+| `c ? a : b` | `if c { a } else { b }` или `c ?? a !! b` |
+| `switch` с проваливанием | `match`, несколько значений в `case` |
+| `goto` | нет [[Dijkstra 1968](#ref-dijkstra1968)] |
+| `if (c) statement;` | всегда скобки |
+
+## 9.9 Ограничения
+
+- **Диагностика отсутствующих конструкций.** `while`, `+=` и `break` дают
+  общие ошибки разбора или имени вместо подсказки про `loop`, преемников и
+  `last` (тикет #256).
+- **`else if` только там, где `if` — оператор.** `let x = if a { … } else if b
+  { … } else { … };` — синтаксическая ошибка. Второй `if` вкладывают в блок
+  `else` или пишут `match` (тикет #257).
+- **Нет постфиксного условия у `return` и `throw`.** `last value if found;`
+  работает, а `return value if found;` — нет (тикет #258).
+- **Строка не источник для `for`.** К кодовым точкам обращаются по индексу
+  (тикет #210).
+
+Первое ограничение — про сообщения об ошибках. Остальные — мелкие асимметрии
+в остальном регулярной грамматики, и у каждой есть обход в одну строку.
+
 # Литература
 
 - <a id="ref-lions1996"></a>Jacques-Louis Lions et al. (1996). *ARIANE 5 Flight 501 Failure: Report by the Inquiry Board*. European Space Agency, Paris, 19 July 1996. https://www.esa.int/Newsroom/Press_Releases/Ariane_501_-_Presentation_of_Inquiry_Board_report
@@ -2683,6 +3234,8 @@ role Iterating<T> {
 - <a id="ref-knuth1974"></a>Donald E. Knuth (1974). Structured Programming with go to Statements. *ACM Computing Surveys* 6(4): 261–301. https://doi.org/10.1145/356635.356640
 - <a id="ref-knuth1997"></a>Donald E. Knuth (1997). *The Art of Computer Programming, Volume 2: Seminumerical Algorithms*, 3rd edition. Addison-Wesley.
 - <a id="ref-kotlinspec"></a>JetBrains (2024). *Kotlin Language Specification*, chapter Type System: Nullable Types. https://kotlinlang.org/spec/type-system.html
+- <a id="ref-landin1966"></a>P. J. Landin (1966). The Next 700 Programming Languages. *Communications of the ACM* 9(3): 157–166. https://doi.org/10.1145/365230.365257
+- <a id="ref-langley2014"></a>Adam Langley (2014). Apple's SSL/TLS bug. *ImperialViolet*, 22 February 2014. https://www.imperialviolet.org/2014/02/22/applebug.html
 - <a id="ref-li2019"></a>Ming Li, Paul Vitányi (2019). *An Introduction to Kolmogorov Complexity and Its Applications*, 4th edition. Springer. https://doi.org/10.1007/978-3-030-11298-1
 - <a id="ref-liskov1994"></a>Barbara H. Liskov, Jeannette M. Wing (1994). A Behavioral Notion of Subtyping. *ACM TOPLAS* 16(6): 1811–1841. https://doi.org/10.1145/197320.197383
 - <a id="ref-mackay2003"></a>David J. C. MacKay (2003). *Information Theory, Inference, and Learning Algorithms*. Cambridge University Press. Chapter 28: Model Comparison and Occam's Razor.
@@ -2707,6 +3260,7 @@ role Iterating<T> {
 - <a id="ref-rfc7396"></a>Paul Hoffman, James Snell (2014). *JSON Merge Patch*. RFC 7396, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc7396
 - <a id="ref-rfc8259"></a>Tim Bray (ed.) (2017). *The JavaScript Object Notation (JSON) Data Interchange Format*. RFC 8259, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc8259
 - <a id="ref-rissanen1978"></a>Jorma Rissanen (1978). Modeling by Shortest Data Description. *Automatica* 14(5): 465–471. https://doi.org/10.1016/0005-1098(78)90005-5
+- <a id="ref-ritchie1993"></a>Dennis M. Ritchie (1993). The Development of the C Language. *HOPL-II: The Second ACM SIGPLAN Conference on History of Programming Languages*: 201–208. https://doi.org/10.1145/154766.155580
 - <a id="ref-saltzer1975"></a>Jerome H. Saltzer, Michael D. Schroeder (1975). The Protection of Information in Computer Systems. *Proceedings of the IEEE* 63(9): 1278–1308. https://doi.org/10.1109/PROC.1975.9939
 - <a id="ref-smith2018"></a>Nathaniel J. Smith (2018). Notes on Structured Concurrency, or: Go Statement Considered Harmful. Blog post, 25 April 2018. https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/
 - <a id="ref-snyder1986"></a>Alan Snyder (1986). Encapsulation and Inheritance in Object-Oriented Programming Languages. In *Proceedings of OOPSLA '86*: 38–45. ACM. https://doi.org/10.1145/28697.28702

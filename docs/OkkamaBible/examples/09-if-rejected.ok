@@ -1,0 +1,7 @@
+module bible/if_value v1.0.0;
+
+main() is int {
+    let ready = true;
+    let code = if ready { 0; };
+    code;
+}

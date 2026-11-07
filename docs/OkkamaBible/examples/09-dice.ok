@@ -1,0 +1,31 @@
+module bible/dice v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// A deterministic die: a linear congruential generator. Rolling does not
+// change the die; it returns its successor, with the next seed and one more
+// roll counted.
+object Die {
+    has seed is int;
+    has rolls is int;
+    Die(:seed, :rolls);
+    rolled() is ^Die {
+        ^seed = (seed * 1103515245 + 12345) % 2147483648;
+        ^rolls = rolls + 1;
+    }
+    face() is int { seed % 6 + 1; }
+    count() is int { rolls; }
+}
+
+main() is int {
+    let out = Stdout();
+    let die = Die(seed: 2026, rolls: 0);
+    // `loop` is an expression: `last value` leaves it with that value.
+    let attempts = loop {
+        die = die.rolled();
+        out.writeln("rolled " + die.face().string());
+        last die.count() if die.face() == 6;
+    };
+    out.writeln("a six after " + attempts.string() + " rolls");
+    0;
+}

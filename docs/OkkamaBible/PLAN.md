@@ -27,6 +27,11 @@ language. `build.py --stats` prints the current size of every chapter.
   for simple flow diagrams.
 - **Honest.** Each part ends with what Okkama does badly or not yet, linked to
   its issue.
+- **Two formats.** The finished book ships as Markdown (`OkkamaBible.md`,
+  `OkkamaBible-RU.md`) and as PDF in both languages, with highlighted code.
+  Okkama code is coloured from the compiler's own lexer
+  (`okkama tokens --format json`), so highlighting never disagrees with the
+  language; the PDF toolchain runs in a container, not on the host.
 
 ## Outline and page budget
 
