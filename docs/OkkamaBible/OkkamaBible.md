@@ -1467,8 +1467,9 @@ never loses information: `/` on two integers gives a `rat`. So `+`, `-`, `*`
 and `%` on two `int`s give an `int`, on two `rat`s a `rat`, on two `float`s a
 `float`, and two `byte`s add up to an `int`. Mixing categories is an error —
 `1 == 1.0`, `1.5 + 1`, even `1 + 1 / 2` — and the program converts
-explicitly: `1.rat() + 1 / 2`. (The older Okkama Book allows `int` and `rat` to
-mix; the compiler does not, and issue #230 asks which of the two is right.)
+explicitly: `1.rat() + 1 / 2`. The rule has no exceptions by design: even the
+step from `int` to `rat`, which loses nothing, is written down (issue #230
+records the decision).
 
 ```okkama
 module bible/exact v1.0.0;
@@ -1654,6 +1655,13 @@ the program inspect a partial result. Such code can check magnitudes before
 the operation; Chapter 32 discusses whether an explicit non-finite type should
 exist.
 
+**Literals.** A float literal has a fraction, an exponent or both: `3.14`,
+`6.022e23`, `1.6e-19`, `2E+10`. An exponent always makes a `float` — the
+exact categories have no scientific notation, because `1e3` as an `int` would
+hide the difference between a count and a measurement. The literal obeys the
+same rule as arithmetic: `1e400` is a compile error rather than an infinity,
+and so is `1e-400`, a nonzero number that would silently become `0.0`.
+
 ## 5.5 Bytes
 
 `byte` is an octet, `0..255`: the unit of binary data — file contents,
@@ -1706,10 +1714,6 @@ that making the default numbers exact did not make them slow.
 
 ## 5.8 Limits
 
-- **Explicit mixing of exact categories.** Even the lossless step from `int`
-  to `rat` must be written today (issue #230).
-- **No exponent literals.** `1e300` does not parse; large and small floats are
-  written with `pow` or in full (issue #57 records the open decision).
 - **`int.pow` returns a float.** `(2).pow(100)` is `1.2676506002282294e+30`,
   not the exact integer — an inconsistency with the rest of integer arithmetic
   (issue #228).
@@ -1722,7 +1726,7 @@ that making the default numbers exact did not make them slow.
 - **Elementary functions.** `abs`, `sign`, `pow` and `sqrt` are built in;
   `exp`, logarithms and trigonometry are not yet available (issue #192).
 
-The first three are small and fixable; the fourth is a stance; the last two
+The first two are small and fixable; the third is a stance; the last two
 are gaps the standard library audit found and the next releases are meant to
 close.
 
