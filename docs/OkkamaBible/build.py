@@ -14,7 +14,8 @@ contents. Placeholders in a chapter:
 
 --figures runs figures/src/*.py first; --check runs every example on the IR
 engine and on the Sparrow core (OKKAMA, default the release build) and
-compares stdout plus a final "exit N" line with examples/NAME.expected;
+compares stdout plus a final "exit N" line with examples/NAME.expected (for
+NAME-rejected, the compiler's diagnostic on stderr);
 --stats prints characters and pages (2,500 characters) per chapter.
 """
 import os
@@ -27,8 +28,8 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 OKKAMA = os.environ.get("OKKAMA", os.path.join(ROOT, "okkama-rs", "target", "release", "okkama"))
 PAGE = 2500
 LANGUAGES = {
-    "en": ("OkkamaBible.md", "The Okkama Bible", "Contents", "Output", "References"),
-    "ru": ("OkkamaBible-RU.md", "Библия Okkama", "Содержание", "Вывод", "Литература"),
+    "en": ("OkkamaBible.md", "The Okkama Bible", "Contents", "Output", "References", "The compiler answers"),
+    "ru": ("OkkamaBible-RU.md", "Библия Okkama", "Содержание", "Вывод", "Литература", "Ответ компилятора"),
 }
 
 
@@ -52,7 +53,8 @@ def example(name, language):
     if os.path.exists(expected):
         output = open(expected).read().rstrip()
         if output:
-            block += f"\n\n{LANGUAGES[language][3]}:\n\n```text\n{output}\n```"
+            label = LANGUAGES[language][5 if name.endswith("-rejected") else 3]
+            block += f"\n\n{label}:\n\n```text\n{output}\n```"
     return block
 
 
@@ -77,7 +79,7 @@ def slug(title):
 
 
 def build(language, cited):
-    target, title, contents, _, refs_title = LANGUAGES[language]
+    target, title, contents, _, refs_title, _ = LANGUAGES[language]
     directory = os.path.join(HERE, "chapters", language)
     parts = []
     for name in sorted(os.listdir(directory)):
@@ -145,8 +147,10 @@ def check():
             p = subprocess.run(cage + [OKKAMA, "run", "--engine", engine, name], cwd=examples,
                                capture_output=True, text=True, timeout=120,
                                env={**os.environ, "OKKAMA_STDLIB_DIR": os.path.join(ROOT, "std"), "OKKAMA_TRACE": "off"})
-            output = p.stdout.rstrip("\n").splitlines() if p.stdout else []
-            if p.returncode != 0:
+            # A rejected example is shown with the compiler's diagnostic.
+            shown = p.stderr if stem.endswith("-rejected") else p.stdout
+            output = shown.rstrip("\n").splitlines() if shown else []
+            if p.returncode != 0 and not stem.endswith("-rejected"):
                 output.append(f"exit {p.returncode}")
             if expected is None:
                 print(f"{stem} [{engine}]: no .expected; printed {output} {p.stderr.strip()[:200]}")
