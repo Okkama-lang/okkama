@@ -2502,11 +2502,14 @@ The language's answer today has three parts.
    collection locals cannot be rebound at all, which is why accumulation goes
    through `reduce` or library objects.
 
-What is missing is the most common operation of all: appending to an array,
-and setting one key of a map. Without them, code that genuinely builds an
-array step by step — a parser collecting tokens, a server registering
-connections — has to copy the whole array at each step. The standard library
-does exactly that in about forty places, with an idiom like
+The most common operations — appending to an array, setting or removing one
+key of a map — are `+` and `-` (issue #145): `items + [item]`, `a + b + c`,
+`prices + ["fig": 90]`, `prices - ["pear": 0]`. A chain is one allocation of
+the result, never a series of intermediate arrays. What `+` does not do yet is
+share: the result is a fresh copy, so code that genuinely builds an array
+step by step — a parser collecting tokens, a server registering connections —
+still copies the whole array at each step, whether it writes `old + [item]`
+or the idiom the standard library used before:
 
 ```okkama
 let following = (0..old.size() + 1).map() -> index {
@@ -2514,7 +2517,7 @@ let following = (0..old.size() + 1).map() -> index {
 };
 ```
 
-which copies `old` to add one element. Figure 8.1 measures the consequence.
+Figure 8.1 measures the consequence.
 
 ![Figure 8.1. Building an array of n integers: one map() stays flat; appending one element at a time by copying is quadratic (issue #145). Data: data/append-cost.json.](figures/append-cost.svg)
 
@@ -2530,11 +2533,9 @@ The cure is well known. Persistent vectors and hash maps — Bagwell's hash
 array mapped tries [[Bagwell 2001](#ref-bagwell2001)], as used by Clojure [[Hickey 2008](#ref-hickey2008)], and the
 structures in Okasaki's book [[Okasaki 1998](#ref-okasaki1998)] — give immutable collections
 effectively constant-time append and update by sharing all but a logarithmic
-path of their structure between versions. Issues #145 (array append and
-concatenation) and #151 (map update) propose bringing these operations into
-the language, named like the standard library's existing successors:
-`array.addition(x)`, `map.addition(key, value)`, `map.difference(key)` — the
-word `with`, common in other languages for this, is reserved in Okkama.
+path of their structure between versions. The operations are already in the
+language as `+` and `-`; giving them such a representation, without changing
+a line of the programs that use them, is the remaining step.
 
 ## 8.6 Iterating user collections
 
