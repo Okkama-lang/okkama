@@ -76,10 +76,12 @@ can lower it to a plain loop without allocating a closure. Lazy views —
 `collections/views` for the cases where materialising every step would be
 wasteful (Chapter 22).
 
-The operations cannot exit early: there is no `last` inside a functional
-block, so `reduce(false) -> found, x { found || x == y; }` visits every element
-even after it has found one. Early-exit operations — `any`, `all`, `find` —
-are among the open language proposals (issue #150).
+There is no `last` inside a functional block: `reduce` always visits every
+element. Searches therefore have their own operations, which stop at the
+first decisive item: `any` (is there one?), `all` (are they all?) and `find`
+(a `Maybe` of the first match) — `xs.any() -> x { x == y; }` where one would
+otherwise write `reduce(false) -> found, x { found || x == y; }` and walk the
+whole array (issue #150).
 
 ## 8.3 Maps
 
@@ -89,9 +91,12 @@ string `"apple"`; `[apple: 5]` would use the value of a variable named
 `apple`. There is no implicit string-key shorthand, so a typo cannot quietly
 turn a variable into a string or the other way round.
 
-Keys must be scalar values — integers, strings, booleans and the other
-scalar categories, except `byte` and `any` — and the map keeps them **in sorted
-order**. `keys()` and
+Keys are scalar values — integers, strings, booleans and the other scalar
+categories, except `byte` and `any` — or value objects: objects whose fields
+are all scalars, enums or such objects, with no `destroy`. Because objects are
+immutable, an object key is its fields: two equal cards are one key, exactly
+as `==` says. The map keeps its keys **in sorted order** — objects field by
+field in declaration order. `keys()` and
 `values()` return arrays in that order, and every functional operation visits
 entries in it. Iteration order therefore never depends on hashing, insertion
 history or the memory layout of a run: the same program prints the same output
@@ -131,13 +136,21 @@ The language's answer today has three parts.
    rebound (`counter = counter.increment();`) only when its type is an object
    with successor actions; `let n = 1; n = 2;` is rejected. Scalar and
    collection locals cannot be rebound at all, which is why accumulation goes
-   through `reduce` or library objects.
+   through `reduce` — or, in synchronous code, through a `cell::Cell`, the one
+   explicit mutable container, which the compiler keeps out of async actions
+   and object fields (issue #152).
 
-What is missing is the most common operation of all: appending to an array,
-and setting one key of a map. Without them, code that genuinely builds an
-array step by step — a parser collecting tokens, a server registering
-connections — has to copy the whole array at each step. The standard library
-does exactly that in about forty places, with an idiom like
+The most common operations — appending to an array, setting or removing one
+key of a map — are `+` and `-` (issue #145): `items + [item]`, `a + b + c`,
+`prices + ["fig": 90]`, `prices - ["pear": 0]`. A chain is one allocation of
+the result, never a series of intermediate arrays. Inside `reduce` the
+accumulator also grows in place when nothing else sees it (issue #243): a
+block that only returns `acc` or `acc + [item]` appends in amortized constant
+time, the way a mutable vector would, because no one can observe the
+intermediate arrays. Elsewhere `+` does not share yet: the result is a fresh
+copy, so code that builds an array step by step through an object's fields
+or a shared cell still copies the whole array at each step, whether it writes
+`old + [item]` or the idiom the standard library used before:
 
 ```okkama
 let following = (0..old.size() + 1).map() -> index {
@@ -145,7 +158,7 @@ let following = (0..old.size() + 1).map() -> index {
 };
 ```
 
-which copies `old` to add one element. Figure 8.1 measures the consequence.
+Figure 8.1 measures the consequence.
 
 {{figure:append-cost|Figure 8.1. Building an array of n integers: one map() stays flat; appending one element at a time by copying is quadratic (issue #145). Data: data/append-cost.json.}}
 
@@ -159,11 +172,9 @@ The cure is well known. Persistent vectors and hash maps — Bagwell's hash
 array mapped tries [@bagwell2001], as used by Clojure [@hickey2008], and the
 structures in Okasaki's book [@okasaki1998] — give immutable collections
 effectively constant-time append and update by sharing all but a logarithmic
-path of their structure between versions. Issues #145 (array append and
-concatenation) and #151 (map update) propose bringing these operations into
-the language, named like the standard library's existing successors:
-`array.addition(x)`, `map.addition(key, value)`, `map.difference(key)` — the
-word `with`, common in other languages for this, is reserved in Okkama.
+path of their structure between versions. The operations are already in the
+language as `+` and `-`; giving them such a representation, without changing
+a line of the programs that use them, is the remaining step.
 
 ## 8.6 Iterating user collections
 
@@ -191,17 +202,21 @@ right method names is not enough.
 
 ## 8.7 Limits
 
-- **No append or concatenation for arrays**, so incremental building copies
-  (issue #145, Figure 8.1).
-- **No map update**: changing one entry rebuilds the map (issue #151).
-- **Map keys must be scalars.** Objects cannot be keys and there is no hashing
-  contract, so sets and maps keyed by objects are linear in the library
-  (issue #212).
+- **Building one element at a time copies outside `reduce`.** `items + [item]`
+  and `a + b + c` allocate the result once per expression (issue #145), and a
+  `reduce` accumulator grows in place (issue #243), but an array grown through
+  successor fields or a cell is still copied at each step (Figure 8.1;
+  issue #246).
+- **Map updates copy.** `prices + ["fig": 90]` and `prices - ["pear": 0]`
+  give a new map, but by copying the whole origin (issues #252, #253).
+- **Generic keys are checked late.** A map keyed by a type parameter accepts
+  any type argument until run time, so the library's generic sets and counts
+  stay linear (issue #242).
 - **Few array builtins.** `contains`, `index_of`, `reversed` and their kin are
   written with `reduce` today (issue #211).
-- **No early exit from functional operations** (issue #150).
 - **`ordering()` needs `compare.Comparing` in scope** (issue #233).
 
-Most of these are the same gap seen from different sides: an immutable
+Most of these are the same gap seen from different sides (the milestone
+"Persistence Operations" tracks it, one issue per operation): an immutable
 language needs efficient persistent operations, and Okkama has the
 immutability already and the operations not yet.

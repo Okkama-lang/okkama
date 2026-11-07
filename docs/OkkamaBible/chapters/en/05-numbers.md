@@ -61,7 +61,10 @@ The algorithms behind big-integer arithmetic — schoolbook and Karatsuba
 multiplication, long division, conversion to decimal — are the classical ones
 of Knuth's *Seminumerical Algorithms* [@knuth1997]. A product whose result
 cannot fit in the run's memory budget is refused before it is computed, so a
-program cannot exhaust memory with one multiplication (Chapter 26).
+program cannot exhaust memory with one multiplication (Chapter 26). Powers are
+exact too: `(2).pow(100)` is `1267650600228229401496703205376`; an `int`
+cannot be raised to a negative power — that result is not an integer — while
+`rat.pow` takes one and inverts (issue #228).
 
 **Cost.** Each integer operation must check for overflow. On the Sparrow core
 this is one compare-and-branch after the machine instruction, taken almost
@@ -136,6 +139,13 @@ the program inspect a partial result. Such code can check magnitudes before
 the operation; Chapter 32 discusses whether an explicit non-finite type should
 exist.
 
+**Literals.** A float literal has a fraction, an exponent or both: `3.14`,
+`6.022e23`, `1.6e-19`, `2E+10`. An exponent always makes a `float` — the
+exact categories have no scientific notation, because `1e3` as an `int` would
+hide the difference between a count and a measurement. The literal obeys the
+same rule as arithmetic: `1e400` is a compile error rather than an infinity,
+and so is `1e-400`, a nonzero number that would silently become `0.0`.
+
 ## 5.5 Bytes
 
 `byte` is an octet, `0..255`: the unit of binary data — file contents,
@@ -186,11 +196,6 @@ that making the default numbers exact did not make them slow.
 
 ## 5.8 Limits
 
-- **No exponent literals.** `1e300` does not parse; large and small floats are
-  written with `pow` or in full (issue #57 records the open decision).
-- **`int.pow` returns a float.** `(2).pow(100)` is `1.2676506002282294e+30`,
-  not the exact integer — an inconsistency with the rest of integer arithmetic
-  (issue #228).
 - **No non-finite floats.** Code that relies on IEEE infinities and NaN must
   be restructured (Section 5.4).
 - **Decimal arithmetic lives in the library, and it is thin.** The standard
