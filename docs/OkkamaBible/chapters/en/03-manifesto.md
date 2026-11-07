@@ -195,8 +195,9 @@ closes a file and one with `close()` that closes a deal should not be
 interchangeable by accident.
 
 **Cost.** Forwarding. A decorator must implement every action of its role,
-even the ones it only passes on, and today there are no default action bodies
-in roles (issue #146).
+even the ones it only passes on. Default action bodies in roles would remove
+that, and were declined on purpose (issue #146): a role with code in it is a
+base class again.
 
 ## 3.8 Rule eight: failures are typed, and bugs are not exceptions
 

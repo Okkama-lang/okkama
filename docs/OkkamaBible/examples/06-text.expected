@@ -1,0 +1,13 @@
+Привет has 6 characters and 12 UTF-8 bytes
+slice(0, 3) = При
+split: 4 fields
+replace: baNANA
+trim: [padded]
+chomp: [line]
+empty: 1
+escape: café
+raw: a "raw" \n string
+char equals itself: 1
+equal as written: 0
+equal after NFC: 1
+round trip: Привет

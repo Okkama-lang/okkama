@@ -207,9 +207,10 @@ pretend otherwise.
 - **Implementation reuse.** A subclass inherits dozens of methods for free; a
   decorator must implement every action of its role, even those it merely
   forwards. For roles with many actions this is boilerplate. Several
-  languages answer with automatic delegation; Okkama has none yet, and it has
-  no default action bodies in roles either (issue #146), so forwarding is
-  written by hand today.
+  languages answer with automatic delegation; Okkama has none, and default
+  action bodies in roles were considered and declined (issue #146): a role
+  stays a pure contract, with no implementation to inherit through the back
+  door. Forwarding is written by hand.
 - **Frameworks built on hierarchies.** Many libraries — GUI toolkits, web
   frameworks, ORMs — are organised as base classes to extend. Their designs
   do not translate directly; Okkama's standard library had to be written in

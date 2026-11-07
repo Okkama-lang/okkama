@@ -16,7 +16,8 @@ contents. Placeholders in a chapter:
 engine and on the Sparrow core (OKKAMA, default the release build) and
 compares stdout plus a final "exit N" line with examples/NAME.expected (for
 NAME-rejected, the compiler's diagnostic on stderr);
---stats prints characters and pages (2,500 characters) per chapter.
+--stats prints characters and pages (2,500 characters) per chapter;
+--issues lists every issue the chapters cite with its current title (gh).
 """
 import os
 import re
@@ -40,6 +41,12 @@ def references():
         match = re.match(r"- \[@([\w-]+)\] (.+)$", line.strip())
         if match:
             key, entry = match.groups()
+            # An explicit {label: ...} names organisations and standards.
+            label = re.search(r"\s*\{label: ([^}]+)\}", entry)
+            if label:
+                entry = entry.replace(label.group(0), "")
+                found[key] = (label.group(1), entry)
+                continue
             authors = re.split(r"[,(]", entry, 1)[0].strip()
             year = re.search(r"\((\d{4}[a-z]?|n\.d\.)\)", entry)
             found[key] = (f"{authors.split(' and ')[0].split(' ')[-1]} {year.group(1) if year else ''}".strip(), entry)
@@ -162,6 +169,20 @@ def check():
     return failures
 
 
+def issues():
+    """Every `issue #N` the chapters cite, with its title, to review by eye."""
+    cited = {}
+    for language in LANGUAGES:
+        directory = os.path.join(HERE, "chapters", language)
+        for name in sorted(os.listdir(directory)):
+            for number in re.findall(r"#(\d+)", open(os.path.join(directory, name)).read()):
+                cited.setdefault(int(number), set()).add(f"{language}/{name}")
+    for number in sorted(cited):
+        title = subprocess.run(["gh", "issue", "view", str(number), "--json", "title,state", "-q", '.state + " " + .title'],
+                               capture_output=True, text=True).stdout.strip() or "?"
+        print(f"#{number:<5} {title[:90]:<92} {', '.join(sorted(cited[number]))}")
+
+
 if __name__ == "__main__":
     if "--figures" in sys.argv:
         for script in sorted(os.listdir(os.path.join(HERE, "figures", "src"))):
@@ -172,5 +193,7 @@ if __name__ == "__main__":
         build(language, cited)
     if "--stats" in sys.argv:
         stats()
+    if "--issues" in sys.argv:
+        issues()
     if "--check" in sys.argv:
         sys.exit(1 if check() else 0)

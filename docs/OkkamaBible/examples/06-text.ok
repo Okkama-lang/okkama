@@ -1,0 +1,31 @@
+module bible/text v1.0.0;
+
+import "io/stdout" take Stdout;
+import "encoding/utf" take Utf8Encoded, Utf8Decoded;
+import "unicode/normalization" take Normalized, NormalizationForm;
+
+main() is int {
+    let out = Stdout();
+    let word = "Привет";
+    out.writeln(word + " has " + word.length().string() + " characters and "
+        + Utf8Encoded(word).bytes().size().string() + " UTF-8 bytes");
+    out.writeln("slice(0, 3) = " + word.slice(0, 3));
+    out.writeln("split: " + "a,,b,".split(",").size().string() + " fields");
+    out.writeln("replace: " + "banana".replace("na", "NA"));
+    out.writeln("trim: [" + "  padded  ".trim() + "]");
+    out.writeln("chomp: [" + "line\n".chomp() + "]");
+    out.writeln("empty: " + "".empty().string());
+    out.writeln("escape: caf\u{e9}");
+    let raw = ```a "raw" \n string```;
+    out.writeln("raw: " + raw);
+    let letter is char = 'Ж';
+    out.writeln("char equals itself: " + (letter == 'Ж').string());
+    // Two spellings of "é": one code point, or "e" plus a combining accent.
+    let composed = "\u{e9}";
+    let decomposed = "e\u{301}";
+    out.writeln("equal as written: " + (composed == decomposed).string());
+    let nfc = Normalized(origin: decomposed, form: NormalizationForm.nfc).string();
+    out.writeln("equal after NFC: " + (composed == nfc).string());
+    out.writeln("round trip: " + Utf8Decoded(Utf8Encoded(word).bytes()).string());
+    0;
+}

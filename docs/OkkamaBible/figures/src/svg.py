@@ -112,3 +112,26 @@ def bars(name, groups, series, values, language, ylabel, log=False, width=660, h
     if note:
         plot.items.append(f'<text x="{width - 8}" y="14" text-anchor="end">{text(note, language)}</text>')
     plot.save(name, language)
+
+
+def lines(name, series, language, xlabel, ylabel, width=640, height=340, note=""):
+    """Line chart: series = [(label, [(x, y), ...]), ...]."""
+    plot = Plot(width, height, margin=(60, 20, 48, 56))
+    xs = [x for _, pts in series for x, _ in pts]
+    ys = [y for _, pts in series for _, y in pts]
+    plot.frame((0, max(xs) * 1.05), (0, max(ys) * 1.15))
+    import math
+    xstep = 10 ** math.floor(math.log10(max(xs)))
+    ystep = 10 ** math.floor(math.log10(max(ys))) / 2
+    plot.axes(text(xlabel, language), text(ylabel, language),
+              xticks=[(k * xstep, f"{k * xstep:g}") for k in range(0, int(max(xs) * 1.05 / xstep) + 1)],
+              yticks=[(k * ystep, f"{k * ystep:g}") for k in range(0, int(max(ys) * 1.15 / ystep) + 1)])
+    for j, (label, pts) in enumerate(series):
+        plot.line(pts, SERIES[j % len(SERIES)])
+        for x, y in pts:
+            plot.items.append(f'<circle cx="{plot.px(x):.1f}" cy="{plot.py(y):.1f}" r="3" fill="{SERIES[j % len(SERIES)]}"/>')
+        lx, ly = pts[-1]
+        plot.label(lx, ly + (max(ys) * 0.04), text(label, language), SERIES[j % len(SERIES)], anchor="end")
+    if note:
+        plot.items.append(f'<text x="{width - 8}" y="14" text-anchor="end">{text(note, language)}</text>')
+    plot.save(name, language)

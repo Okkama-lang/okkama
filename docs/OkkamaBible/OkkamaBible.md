@@ -56,6 +56,16 @@
   - [5.6 Conversions](#56-conversions)
   - [5.7 What exactness costs](#57-what-exactness-costs)
   - [5.8 Limits](#58-limits)
+- [Chapter 6. Text](#chapter-6-text)
+  - [6.1 Three layers of text](#61-three-layers-of-text)
+  - [6.2 Okkama's choice: immutable code points](#62-okkamas-choice-immutable-code-points)
+  - [6.3 Writing strings](#63-writing-strings)
+  - [6.4 What a string can do](#64-what-a-string-can-do)
+  - [6.5 Equality and normalisation](#65-equality-and-normalisation)
+  - [6.6 Text and bytes](#66-text-and-bytes)
+  - [6.7 Characters](#67-characters)
+  - [6.8 What text costs](#68-what-text-costs)
+  - [6.9 Limits](#69-limits)
 
 # Part I. The Razor
 
@@ -681,9 +691,10 @@ pretend otherwise.
 - **Implementation reuse.** A subclass inherits dozens of methods for free; a
   decorator must implement every action of its role, even those it merely
   forwards. For roles with many actions this is boilerplate. Several
-  languages answer with automatic delegation; Okkama has none yet, and it has
-  no default action bodies in roles either (issue #146), so forwarding is
-  written by hand today.
+  languages answer with automatic delegation; Okkama has none, and default
+  action bodies in roles were considered and declined (issue #146): a role
+  stays a pure contract, with no implementation to inherit through the back
+  door. Forwarding is written by hand.
 - **Frameworks built on hierarchies.** Many libraries — GUI toolkits, web
   frameworks, ORMs — are organised as base classes to extend. Their designs
   do not translate directly; Okkama's standard library had to be written in
@@ -848,7 +859,7 @@ The compiler answers:
 of accidental complexity [[Moseley 2006](#ref-moseley2006)]; Bloch's first advice about classes is
 to minimise mutability, because immutable objects are simple (one state),
 thread-safe without locks and freely shareable [[Bloch 2018](#ref-bloch2018)]. Successors give
-the convenience of "changing" an object — `cart.with(item)` reads like a
+the convenience of "changing" an object — `cart.addition(item)` reads like a
 mutation — without the aliasing: whoever held the old cart still holds the
 old cart. The must-use rule closes the most common bug of immutable APIs in
 other languages: calling `date.plusDays(1)` and forgetting that it returns
@@ -1005,10 +1016,10 @@ The compiler answers:
 
 **Why.** Silent overflow has caused famous failures: the Ariane 5 maiden
 flight was lost in 1996 because a 64-bit floating-point value was converted to
-a 16-bit integer that could not hold it [[al. 1996](#ref-lions1996)]. Silent truncation in `7 / 2 == 3`
+a 16-bit integer that could not hold it [[Ariane 501 Inquiry Board 1996](#ref-lions1996)]. Silent truncation in `7 / 2 == 3`
 and silent rounding in `0.1 + 0.2 != 0.3` are among the most common surprises
 of new programmers, and Goldberg's classic survey shows how subtle
-floating-point reasoning is even for experts [[Goldberg 1991](#ref-goldberg1991); [IEEE 2019](#ref-ieee754)].
+floating-point reasoning is even for experts [[Goldberg 1991](#ref-goldberg1991); [IEEE 754](#ref-ieee754)].
 Okkama keeps `float` for when binary floating point is what the problem
 wants — physics, graphics, statistics — and makes the exact categories the
 default for counting and money. Mixing them is a decision the programmer
@@ -1039,8 +1050,9 @@ closes a file and one with `close()` that closes a deal should not be
 interchangeable by accident.
 
 **Cost.** Forwarding. A decorator must implement every action of its role,
-even the ones it only passes on, and today there are no default action bodies
-in roles (issue #146).
+even the ones it only passes on. Default action bodies in roles would remove
+that, and were declined on purpose (issue #146): a role with code in it is a
+base class again.
 
 ## 3.8 Rule eight: failures are typed, and bugs are not exceptions
 
@@ -1501,12 +1513,12 @@ cannot observe the switch except by the time it takes.
 
 **Why.** Overflow is a correctness failure that type checking does not catch.
 The loss of the first Ariane 5 in 1996 came from converting a value into a
-16-bit integer too small for it [[al. 1996](#ref-lions1996)]; countless security
+16-bit integer too small for it [[Ariane 501 Inquiry Board 1996](#ref-lions1996)]; countless security
 vulnerabilities come from a size computation that wrapped around. Languages
 that care about correctness have been moving away from silent wrapping: Python
 decided in 2001 to unify its integer types into one arbitrary-precision type,
-a change completed in Python 3 [[Zadka 2001](#ref-pep237)], Scheme has long distinguished exact from inexact numbers in its
-numeric tower [[Shinn 2013](#ref-r7rs2013)], and Rust panics on overflow in debug builds. Okkama
+a change completed in Python 3 [[PEP 237](#ref-pep237)], Scheme has long distinguished exact from inexact numbers in its
+numeric tower [[R7RS](#ref-r7rs2013)], and Rust panics on overflow in debug builds. Okkama
 goes all the way: there is no wrapping integer type to choose by mistake.
 
 The algorithms behind big-integer arithmetic — schoolbook and Karatsuba
@@ -1578,7 +1590,7 @@ paid: 3334 + 3333 + 3333 = 10000
 and the remainder goes to the first payer. The three payments add up to the
 bill because every step before the explicit rounding was exact.
 
-**Why.** Exact rationals are standard in Scheme and Lisp [[Shinn 2013](#ref-r7rs2013)] and in
+**Why.** Exact rationals are standard in Scheme and Lisp [[R7RS](#ref-r7rs2013)] and in
 computer algebra systems, and absent from most industrial languages, where
 `1 / 3` silently becomes `0` or `0.333…`. Okkama's choice follows from the
 categories: if integer division must not lose information, its result cannot
@@ -1591,7 +1603,7 @@ round deliberately at known points, as the bill example does.
 
 ## 5.4 Floating point, kept finite
 
-`float` is an IEEE 754 binary64 number [[IEEE 2019](#ref-ieee754)] — the `double` of C and
+`float` is an IEEE 754 binary64 number [[IEEE 754](#ref-ieee754)] — the `double` of C and
 Java — with one deliberate difference: an Okkama float is always *finite*. An
 operation whose result would be infinite or not a number is a runtime failure
 ("Float value must contain a finite number"), not a special value that
@@ -1698,6 +1710,299 @@ The first three are small and fixable; the fourth is a stance; the last two
 are gaps the standard library audit found and the next releases are meant to
 close.
 
+# Chapter 6. Text
+
+Text looks like the simplest kind of data and is one of the hardest. A
+programmer reading `"Привет".length()` expects one answer; a C programmer
+counting bytes gets 12, a Java programmer counting UTF-16 units gets 6, a
+Swift programmer counting what users see as characters also gets 6 — and for
+`"👍🏽"` the same three programmers get 8, 4 and 1. Each answer is correct
+for some definition of "length", and each language has chosen one definition
+and let the others leak through its APIs. This chapter explains which
+definition Okkama chose, why, and what that choice costs.
+
+## 6.1 Three layers of text
+
+Modern text has three layers, and most confusion about strings comes from
+mixing them [[Unicode 16.0](#ref-unicode16)].
+
+| Layer | Unit | Example: "é" written as e + combining accent |
+|---|---|---|
+| Bytes | an octet of an encoding | 3 bytes in UTF-8 (`65 CC 81`) |
+| Code points | a Unicode scalar value | 2 code points (`U+0065 U+0301`) |
+| Grapheme clusters | what a reader sees as one character | 1 cluster |
+
+*Bytes* are what files and networks carry. Their meaning depends on an
+encoding; the dominant one today is UTF-8, which encodes each code point in
+one to four bytes and keeps ASCII unchanged [[RFC 3629](#ref-rfc3629)]. *Code points* are the
+numbers the Unicode standard assigns to abstract characters — about 155,000 of
+them in version 16.0. *Grapheme clusters* are sequences of code points that a
+reader perceives as one character: a letter with combining accents, an emoji
+with a skin-tone modifier, a flag made of two regional indicators. Their
+boundaries are defined by rules that change between Unicode versions
+[[UAX #29](#ref-uax29)].
+
+A language must pick one layer as the meaning of "a character of a string".
+
+- **C, Go and Rust** index bytes. This is fast and honest about memory, but
+  `s[0..3]` on non-ASCII text can cut a character in half, and Rust makes
+  such slices a runtime panic.
+- **Java, JavaScript and C#** index UTF-16 code units, an accident of history:
+  they were designed when Unicode fitted in 16 bits. Characters outside the
+  Basic Multilingual Plane, including most emoji, take two units, and
+  `length` counts both.
+- **Swift** indexes grapheme clusters. This matches what users see, but
+  indexing is no longer a number — it is an opaque position that must be
+  walked to — and the answer depends on the Unicode version of the runtime.
+- **Python 3 and Okkama** index code points.
+
+## 6.2 Okkama's choice: immutable code points
+
+An Okkama `string` is an immutable sequence of Unicode scalar values. Its
+`length()` is the number of code points; `slice(start, end)` takes code
+points `start..end-1`; `split`, `replace` and the rest work on code points.
+Strings are values: they are never modified, and two strings with the same
+code points are equal.
+
+```okkama
+module bible/text v1.0.0;
+
+import "io/stdout" take Stdout;
+import "encoding/utf" take Utf8Encoded, Utf8Decoded;
+import "unicode/normalization" take Normalized, NormalizationForm;
+
+main() is int {
+    let out = Stdout();
+    let word = "Привет";
+    out.writeln(word + " has " + word.length().string() + " characters and "
+        + Utf8Encoded(word).bytes().size().string() + " UTF-8 bytes");
+    out.writeln("slice(0, 3) = " + word.slice(0, 3));
+    out.writeln("split: " + "a,,b,".split(",").size().string() + " fields");
+    out.writeln("replace: " + "banana".replace("na", "NA"));
+    out.writeln("trim: [" + "  padded  ".trim() + "]");
+    out.writeln("chomp: [" + "line\n".chomp() + "]");
+    out.writeln("empty: " + "".empty().string());
+    out.writeln("escape: caf\u{e9}");
+    let raw = ```a "raw" \n string```;
+    out.writeln("raw: " + raw);
+    let letter is char = 'Ж';
+    out.writeln("char equals itself: " + (letter == 'Ж').string());
+    // Two spellings of "é": one code point, or "e" plus a combining accent.
+    let composed = "\u{e9}";
+    let decomposed = "e\u{301}";
+    out.writeln("equal as written: " + (composed == decomposed).string());
+    let nfc = Normalized(origin: decomposed, form: NormalizationForm.nfc).string();
+    out.writeln("equal after NFC: " + (composed == nfc).string());
+    out.writeln("round trip: " + Utf8Decoded(Utf8Encoded(word).bytes()).string());
+    0;
+}
+```
+
+Output:
+
+```text
+Привет has 6 characters and 12 UTF-8 bytes
+slice(0, 3) = При
+split: 4 fields
+replace: baNANA
+trim: [padded]
+chomp: [line]
+empty: 1
+escape: café
+raw: a "raw" \n string
+char equals itself: 1
+equal as written: 0
+equal after NFC: 1
+round trip: Привет
+```
+
+The first line shows the difference between layers: six characters, twelve
+bytes, because each Cyrillic letter takes two bytes in UTF-8. `slice(0, 3)`
+gives the first three letters, never a broken byte sequence.
+
+**Why code points.** They are the smallest unit that is stable — the same
+text has the same code points in every encoding and every Unicode version —
+and that cannot be cut into invalid pieces: every slice of a string is again
+valid text. Bytes fail the second test, UTF-16 units fail both, and grapheme
+clusters fail the first, because their rules change between versions. Code
+points are not what a reader calls a character in every case, and
+Section 6.8 shows the price; but they are the largest unit an operation can
+rely on without consulting tables that change every year.
+
+**Why immutable.** Every argument of Chapter 3 applies, and text adds one
+more: an immutable string can be shared between objects, threads and the
+garbage collector without copying, and a substring can share its parent's
+storage. Java made strings immutable in 1995 for the same reasons, and
+`StringBuilder` for the cases where text is assembled piece by piece
+[[Gosling 2023](#ref-gosling2023)]; Okkama has the first and still lacks the second (issue #139).
+
+## 6.3 Writing strings
+
+String literals are written in double quotes and support a small set of
+escapes:
+
+| Escape | Meaning |
+|---|---|
+| `\n`, `\r`, `\t` | newline, carriage return, tab |
+| `\"`, `\\` | a quote, a backslash |
+| `\u{H…}` | the Unicode scalar value with 1 to 6 hexadecimal digits, e.g. `\u{e9}` for é, `\u{1b}` for ESC |
+
+An unknown escape or a lone backslash at the end is a lexical error, not a
+literal backslash — a typo cannot silently change the text.
+
+For text that contains quotes and backslashes — JSON, regular expressions,
+Windows paths, SQL — Okkama has *raw* literals fenced by three backticks:
+
+```okkama
+let document = ```{"name": "Ada", "path": "C:\new"}```;
+```
+
+Everything between the fences is kept exactly: no escapes, no interpolation,
+no trimming of indentation. The first closing fence ends the literal, so a
+raw literal cannot contain three backticks itself.
+
+There is no string interpolation. Text is assembled with `+`, which accepts
+only strings, so every number must be converted explicitly with `.string()`.
+The rule is the same as for numbers (Chapter 5): `"n = " + 1` is an error, not
+an implicit conversion. It costs some typing in output code and removes a
+whole class of formatting surprises; the standard library's `strings/format`
+offers positional formatting for longer templates.
+
+## 6.4 What a string can do
+
+The builtin actions of `string` are few; the table is generated from the
+compiler. Searching, prefixes and case conversion live in the standard
+library today, and Chapter 32 discusses moving the most common ones into the
+language (issue #210).
+
+| Action | Result | Note |
+|---|---|---|
+| `length()` | `int` | number of code points |
+| `empty()` | `bool` | `length() == 0` |
+| `slice(start, end)` | `string` | code points `start..end-1`; out-of-range indexes fail, never clamp |
+| `split(separator)` | `@string` | literal separator; keeps empty fields; `""` splits into code points |
+| `replace(target, replacement)` | `string` | every non-overlapping occurrence, left to right |
+| `replace_first(target, replacement)` | `string` | the first occurrence |
+| `trim()` | `string` | removes leading and trailing whitespace |
+| `chomp()` | `string` | removes one trailing line ending |
+| `string()` | `string` | the string itself |
+| `order(other)` | `Order` | code point order |
+
+Two design decisions recur in this table. Operations are *literal*: `split`
+and `replace` never interpret their argument as a regular expression, so
+`"a.b".split(".")` splits on dots; patterns go through the `regex` module,
+explicitly. And operations do not guess: a `slice` past the end fails rather
+than returning a shorter string, because a caller who asked for ten characters
+and silently got seven has a bug that will surface far away.
+
+## 6.5 Equality and normalisation
+
+Two strings are equal when they contain the same code points. That is not
+always what a reader means. "é" can be written as one code point (U+00E9) or
+as "e" followed by a combining acute accent (U+0065 U+0301); both look the
+same, and the example above shows that Okkama — like Python, Java and Rust —
+considers them different strings until they are *normalised*.
+
+Unicode defines four normalisation forms [[UAX #15](#ref-uax15)]. NFC composes sequences
+into precomposed characters where possible; NFD decomposes them; NFKC and
+NFKD additionally replace *compatibility* characters — ligatures such as "ﬃ",
+full-width letters, superscripts — by their plain equivalents. The standard
+library's `unicode/normalization` implements all four for Unicode 16.0.0.
+
+Okkama does not normalise implicitly, and the reason is the razor once more.
+Implicit normalisation would make equality depend on tables that change with
+Unicode versions, would make `length()` of a string differ from the length of
+the text it was built from, and would hide a decision that belongs to the
+program: an identifier comparison wants NFKC, a text editor wants to keep what
+the user typed. The rule is: normalise at the boundary where text enters the
+program, in the form the program needs, and compare normalised strings
+afterwards — the same "parse, don't validate" principle as for numbers
+[[King 2019](#ref-king2019)].
+
+## 6.6 Text and bytes
+
+Text crosses into bytes only through explicit encoders and decoders, and only
+there:
+
+```okkama
+let bytes is @byte = Utf8Encoded(word).bytes();
+let back is string = Utf8Decoded(bytes).string();
+```
+
+`encoding/utf` provides UTF-8, UTF-16 and UTF-32 (the last two with an
+explicit byte order — serialised data never inherits the machine's), and
+`encoding/single_byte` provides ASCII and Latin-1. Decoding is *strict*:
+invalid input is an error naming the offset, never a silent U+FFFD
+replacement character. A program that wants replacement — a log viewer, for
+example — asks for it.
+
+This separation is the lesson of two decades of encoding bugs. Python 2 let
+byte strings and text mix implicitly, and code worked until it met its first
+non-ASCII user; Python 3 separated them at the cost of a famously painful
+migration. Okkama starts on the far side of that migration: there is no
+implicit conversion in either direction, and a function's signature says
+whether it takes text (`string`) or data (`@byte`).
+
+## 6.7 Characters
+
+`char` is a single code point, written in single quotes: `'x'`, `'Ж'`,
+`'\u{1F44D}'`. A `char` literal must contain exactly one code point after
+escapes, so `'é'` written with a combining accent is rejected. Characters
+compare and order like strings.
+
+That is almost all they do today. A `char` cannot be turned into a string or
+into its code point, and a string cannot be taken apart into `char`s — `slice`
+returns one-character *strings* — so most code, including the standard
+library, works with one-character strings instead (issue #231). This is a
+case where the razor has not finished its work: the language has two
+half-entities where one whole one would do. Chapter 32 returns to it.
+
+## 6.8 What text costs
+
+Code-point indexing has a cost that byte indexing does not: finding the 1000th
+code point of a UTF-8 string means walking the first 999, because code points
+have different byte lengths. The Sparrow core keeps a fast path — a string
+known to be ASCII has one byte per code point, so `length()` and `slice()` are
+constant-time — and walks otherwise.
+
+The walk is cheap once and expensive in a loop. A program that visits every
+character of a string with `slice(i, i + 1)` does a walk per visit, so its
+total cost is quadratic in the length of non-ASCII text. Figure 6.1 measures
+exactly that program on the 0.4.1 core.
+
+![Figure 6.1. Visiting each character with slice(i, i + 1): constant per character for ASCII, quadratic for Cyrillic text (issue #52). Data: data/slice-cost.json.](figures/slice-cost.svg)
+
+*Figure 6.1. Visiting each character with slice(i, i + 1): constant per character for ASCII, quadratic for Cyrillic text (issue #52). Data: data/slice-cost.json.*
+
+For 32,000 ASCII characters the program takes 0.15 s, almost all of it
+process start; for 32,000 Cyrillic letters it takes 2.6 s, and doubling the
+text quadruples the time. The remedy belongs to the language and runtime,
+not to every program: a cursor that walks a string once (issue #52 plans it),
+or builtin character iteration (issue #210). Until then, programs that scan
+long non-ASCII text should split it, encode it to bytes, or use the
+`regex` module, all of which walk once.
+
+The standard library audit of November 2026 found the same pattern —
+character-by-character slicing — in about forty modules, from MIME header
+parsing to template compilation, and filed an issue for each hot one. It is
+the best example in this book of a cost that a design choice moved from the
+language to its users, and of why the choice has to be paid for with the
+right operation.
+
+## 6.9 Limits
+
+- **No searching or case builtins.** `contains`, `starts_with`, `ends_with`,
+  `find`, `lower` and `upper` are not builtins yet (issue #210).
+- **Characters are half an entity.** `char` cannot become text or a code
+  point (issue #231).
+- **No string builder.** Assembling long text from many pieces with `+` is
+  quadratic; the library has no native builder yet (issue #139).
+- **Per-character loops are quadratic on non-ASCII text** until a cursor
+  exists (issue #52).
+- **Booleans print as `1` and `0`.** `true.string()` is `"1"`, a choice
+  inherited from the first implementation that surprises readers of output
+  (Chapter 9 discusses it).
+
 # References
 
 - <a id="ref-lions1996"></a>Jacques-Louis Lions et al. (1996). *ARIANE 5 Flight 501 Failure: Report by the Inquiry Board*. European Space Agency, Paris, 19 July 1996. https://www.esa.int/Newsroom/Press_Releases/Ariane_501_-_Presentation_of_Inquiry_Board_report
@@ -1711,7 +2016,6 @@ close.
 - <a id="ref-bugayenko2017"></a>Yegor Bugayenko (2017). *Elegant Objects*, Volume 2. Self-published (CreateSpace).
 - <a id="ref-cardelli1985"></a>Luca Cardelli, Peter Wegner (1985). On Understanding Types, Data Abstraction, and Polymorphism. *ACM Computing Surveys* 17(4): 471–523. https://doi.org/10.1145/6041.6042
 - <a id="ref-claessen2000"></a>Koen Claessen, John Hughes (2000). QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs. In *Proceedings of ICFP 2000*: 268–279. ACM. https://doi.org/10.1145/351240.351266
-- <a id="ref-unicode16"></a>The Unicode Consortium (2024). *The Unicode Standard, Version 16.0.0*. https://www.unicode.org/versions/Unicode16.0.0/
 - <a id="ref-cook2009"></a>William R. Cook (2009). On Understanding Data Abstraction, Revisited. In *Proceedings of OOPSLA 2009*, *ACM SIGPLAN Notices* 44(10): 557–572. https://doi.org/10.1145/1640089.1640133
 - <a id="ref-cytron1991"></a>Ron Cytron, Jeanne Ferrante, Barry K. Rosen, Mark N. Wegman, F. Kenneth Zadeck (1991). Efficiently Computing Static Single Assignment Form and the Control Dependence Graph. *ACM TOPLAS* 13(4): 451–490. https://doi.org/10.1145/115372.115320
 - <a id="ref-dahl1966"></a>Ole-Johan Dahl, Kristen Nygaard (1966). SIMULA — an ALGOL-Based Simulation Language. *Communications of the ACM* 9(9): 671–678. https://doi.org/10.1145/365813.365819
@@ -1753,11 +2057,13 @@ close.
 - <a id="ref-okasaki1998"></a>Chris Okasaki (1998). *Purely Functional Data Structures*. Cambridge University Press. https://doi.org/10.1017/CBO9780511530104
 - <a id="ref-ousterhout2018"></a>John Ousterhout (2018). *A Philosophy of Software Design*. Yaknyam Press.
 - <a id="ref-parnas1972"></a>David L. Parnas (1972). On the Criteria To Be Used in Decomposing Systems into Modules. *Communications of the ACM* 15(12): 1053–1058. https://doi.org/10.1145/361598.361623
+- <a id="ref-pep237"></a>Moshe Zadka, Guido van Rossum (2001). PEP 237 — Unifying Long Integers and Integers. Python Enhancement Proposals. https://peps.python.org/pep-0237/
 - <a id="ref-pierce2002"></a>Benjamin C. Pierce (2002). *Types and Programming Languages*. MIT Press.
 - <a id="ref-poletto1999"></a>Massimiliano Poletto, Vivek Sarkar (1999). Linear Scan Register Allocation. *ACM TOPLAS* 21(5): 895–913. https://doi.org/10.1145/330249.330250
+- <a id="ref-r7rs2013"></a>Alex Shinn, John Cowan, Arthur A. Gleckler (eds.) (2013). *Revised⁷ Report on the Algorithmic Language Scheme*. https://small.r7rs.org/attachment/r7rs.pdf
+- <a id="ref-rfc3629"></a>François Yergeau (2003). *UTF-8, a Transformation Format of ISO 10646*. RFC 3629, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc3629
 - <a id="ref-rissanen1978"></a>Jorma Rissanen (1978). Modeling by Shortest Data Description. *Automatica* 14(5): 465–471. https://doi.org/10.1016/0005-1098(78)90005-5
 - <a id="ref-saltzer1975"></a>Jerome H. Saltzer, Michael D. Schroeder (1975). The Protection of Information in Computer Systems. *Proceedings of the IEEE* 63(9): 1278–1308. https://doi.org/10.1109/PROC.1975.9939
-- <a id="ref-r7rs2013"></a>Alex Shinn, John Cowan, Arthur A. Gleckler (eds.) (2013). *Revised⁷ Report on the Algorithmic Language Scheme*. https://small.r7rs.org/attachment/r7rs.pdf
 - <a id="ref-smith2018"></a>Nathaniel J. Smith (2018). Notes on Structured Concurrency, or: Go Statement Considered Harmful. Blog post, 25 April 2018. https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/
 - <a id="ref-snyder1986"></a>Alan Snyder (1986). Encapsulation and Inheritance in Object-Oriented Programming Languages. In *Proceedings of OOPSLA '86*: 38–45. ACM. https://doi.org/10.1145/28697.28702
 - <a id="ref-sober2015"></a>Elliott Sober (2015). *Ockham's Razors: A User's Manual*. Cambridge University Press. https://doi.org/10.1017/CBO9781107705937
@@ -1766,6 +2072,8 @@ close.
 - <a id="ref-stroustrup1994"></a>Bjarne Stroustrup (1994). *The Design and Evolution of C++*. Addison-Wesley.
 - <a id="ref-thorburn1918"></a>W. M. Thorburn (1918). The Myth of Occam's Razor. *Mind* 27(107): 345–353. https://doi.org/10.1093/mind/XXVII.3.345
 - <a id="ref-tofte1997"></a>Mads Tofte, Jean-Pierre Talpin (1997). Region-Based Memory Management. *Information and Computation* 132(2): 109–176. https://doi.org/10.1006/inco.1996.2613
+- <a id="ref-uax15"></a>The Unicode Consortium (2024). *Unicode Standard Annex #15: Unicode Normalization Forms* (for Unicode 16.0.0). https://www.unicode.org/reports/tr15/
+- <a id="ref-uax29"></a>The Unicode Consortium (2024). *Unicode Standard Annex #29: Unicode Text Segmentation* (for Unicode 16.0.0). https://www.unicode.org/reports/tr29/
+- <a id="ref-unicode16"></a>The Unicode Consortium (2024). *The Unicode Standard, Version 16.0.0*. https://www.unicode.org/versions/Unicode16.0.0/
 - <a id="ref-wadler1989"></a>Philip Wadler (1989). Theorems for Free! In *Proceedings of FPCA 1989*: 347–359. ACM. https://doi.org/10.1145/99370.99404
 - <a id="ref-wirth1995"></a>Niklaus Wirth (1995). A Plea for Lean Software. *Computer* 28(2): 64–68. https://doi.org/10.1109/2.348001
-- <a id="ref-pep237"></a>Moshe Zadka, Guido van Rossum (2001). PEP 237 — Unifying Long Integers and Integers. Python Enhancement Proposals. https://peps.python.org/pep-0237/

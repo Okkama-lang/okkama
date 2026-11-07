@@ -1,0 +1,17 @@
+{
+ "description": "Wall-clock seconds (best of 3, process start included) of a program that walks a string one character at a time with slice(i, i + 1), on the Sparrow core of release/0.4.1, Apple M2 Max, 2026-11-07. Generator: chapter 6 of the Okkama Bible.",
+ "ascii": {
+  "2000": 0.142,
+  "4000": 0.141,
+  "8000": 0.139,
+  "16000": 0.132,
+  "32000": 0.15
+ },
+ "cyrillic": {
+  "2000": 0.159,
+  "4000": 0.205,
+  "8000": 0.427,
+  "16000": 0.987,
+  "32000": 2.568
+ }
+}
