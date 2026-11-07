@@ -2505,11 +2505,14 @@ The language's answer today has three parts.
 The most common operations — appending to an array, setting or removing one
 key of a map — are `+` and `-` (issue #145): `items + [item]`, `a + b + c`,
 `prices + ["fig": 90]`, `prices - ["pear": 0]`. A chain is one allocation of
-the result, never a series of intermediate arrays. What `+` does not do yet is
-share: the result is a fresh copy, so code that genuinely builds an array
-step by step — a parser collecting tokens, a server registering connections —
-still copies the whole array at each step, whether it writes `old + [item]`
-or the idiom the standard library used before:
+the result, never a series of intermediate arrays. Inside `reduce` the
+accumulator also grows in place when nothing else sees it (issue #243): a
+block that only returns `acc` or `acc + [item]` appends in amortized constant
+time, the way a mutable vector would, because no one can observe the
+intermediate arrays. Elsewhere `+` does not share yet: the result is a fresh
+copy, so code that builds an array step by step through an object's fields
+or a shared cell still copies the whole array at each step, whether it writes
+`old + [item]` or the idiom the standard library used before:
 
 ```okkama
 let following = (0..old.size() + 1).map() -> index {
@@ -2563,9 +2566,10 @@ right method names is not enough.
 
 ## 8.7 Limits
 
-- **Building one element at a time copies.** `items + [item]` and `a + b + c`
-  allocate the result once per expression (issue #145), but an array grown in
-  a loop is still copied at each step (Figure 8.1).
+- **Building one element at a time copies outside `reduce`.** `items + [item]`
+  and `a + b + c` allocate the result once per expression (issue #145), and a
+  `reduce` accumulator grows in place (issue #243), but an array grown through
+  successor fields or a cell is still copied at each step (Figure 8.1).
 - **No map update**: changing one entry rebuilds the map (issue #151).
 - **Generic keys are checked late.** A map keyed by a type parameter accepts
   any type argument until run time, so the library's generic sets and counts
