@@ -83,7 +83,7 @@ is an error.
 of accidental complexity [@moseley2006]; Bloch's first advice about classes is
 to minimise mutability, because immutable objects are simple (one state),
 thread-safe without locks and freely shareable [@bloch2018]. Successors give
-the convenience of "changing" an object — `cart.with(item)` reads like a
+the convenience of "changing" an object — `cart.addition(item)` reads like a
 mutation — without the aliasing: whoever held the old cart still holds the
 old cart. The must-use rule closes the most common bug of immutable APIs in
 other languages: calling `date.plusDays(1)` and forgetting that it returns
