@@ -26,8 +26,9 @@ never loses information: `/` on two integers gives a `rat`. So `+`, `-`, `*`
 and `%` on two `int`s give an `int`, on two `rat`s a `rat`, on two `float`s a
 `float`, and two `byte`s add up to an `int`. Mixing categories is an error —
 `1 == 1.0`, `1.5 + 1`, even `1 + 1 / 2` — and the program converts
-explicitly: `1.rat() + 1 / 2`. (The older Okkama Book allows `int` and `rat` to
-mix; the compiler does not, and issue #230 asks which of the two is right.)
+explicitly: `1.rat() + 1 / 2`. The rule has no exceptions by design: even the
+step from `int` to `rat`, which loses nothing, is written down (issue #230
+records the decision).
 
 {{example:05-exact}}
 
@@ -185,8 +186,6 @@ that making the default numbers exact did not make them slow.
 
 ## 5.8 Limits
 
-- **Explicit mixing of exact categories.** Even the lossless step from `int`
-  to `rat` must be written today (issue #230).
 - **No exponent literals.** `1e300` does not parse; large and small floats are
   written with `pow` or in full (issue #57 records the open decision).
 - **`int.pow` returns a float.** `(2).pow(100)` is `1.2676506002282294e+30`,
@@ -201,6 +200,6 @@ that making the default numbers exact did not make them slow.
 - **Elementary functions.** `abs`, `sign`, `pow` and `sqrt` are built in;
   `exp`, logarithms and trigonometry are not yet available (issue #192).
 
-The first three are small and fixable; the fourth is a stance; the last two
+The first two are small and fixable; the third is a stance; the last two
 are gaps the standard library audit found and the next releases are meant to
 close.
