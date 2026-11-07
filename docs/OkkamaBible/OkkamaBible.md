@@ -2442,10 +2442,12 @@ can lower it to a plain loop without allocating a closure. Lazy views —
 `collections/views` for the cases where materialising every step would be
 wasteful (Chapter 22).
 
-The operations cannot exit early: there is no `last` inside a functional
-block, so `reduce(false) -> found, x { found || x == y; }` visits every element
-even after it has found one. Early-exit operations — `any`, `all`, `find` —
-are among the open language proposals (issue #150).
+There is no `last` inside a functional block: `reduce` always visits every
+element. Searches therefore have their own operations, which stop at the
+first decisive item: `any` (is there one?), `all` (are they all?) and `find`
+(a `Maybe` of the first match) — `xs.any() -> x { x == y; }` where one would
+otherwise write `reduce(false) -> found, x { found || x == y; }` and walk the
+whole array (issue #150).
 
 ## 8.3 Maps
 
