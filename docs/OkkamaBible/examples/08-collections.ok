@@ -1,0 +1,39 @@
+module bible/collections v1.0.0;
+
+import "io/stdout" take Stdout;
+import "compare" take Comparing;     // ordering() needs the Comparing role in scope
+
+main() is int {
+    let out = Stdout();
+
+    // Arrays: immutable, typed, indexed from zero.
+    let primes = [2, 3, 5, 7, 11, 13];
+    out.writeln("size " + primes.size().string()
+        + ", first " + primes.first().string()
+        + ", last " + primes.last().string());
+    out.writeln("slice(1, 4) = " + primes.slice(1, 4).map() -> p { p.string(); }.join(" "));
+    out.writeln("index 9, or 0: " + (primes[9] else 0).string());
+
+    // Ranges expand inside literals; ordering() sorts.
+    let mixed = [9, 0, 2..=4, 1];
+    out.writeln("expanded " + mixed.map() -> n { n.string(); }.join(" "));
+    out.writeln("sorted " + mixed.ordering().map() -> n { n.string(); }.join(" "));
+
+    // Functional operations make new arrays; nothing is changed in place.
+    let squares = (1..=5).map() -> n { n * n; };
+    let odd = squares.filter() -> n { n % 2 == 1; };
+    let total = squares.reduce(0) -> sum, n { sum + n; };
+    out.writeln("squares " + squares.map() -> n { n.string(); }.join(" ")
+        + "; odd " + odd.map() -> n { n.string(); }.join(" ")
+        + "; total " + total.string());
+
+    // Maps: keys are expressions, iteration is in sorted key order.
+    let stock is %string:int = ["pear": 3, "apple": 5, "fig": 0];
+    out.writeln("keys " + stock.keys().join(", "));
+    out.writeln("has kiwi: " + stock.has("kiwi").string() + ", kiwi or 0: " + (stock["kiwi"] else 0).string());
+    let available = stock.filter() -> name, count { count > 0; };
+    out.writeln("in stock " + available.keys().join(", "));
+    let units = stock.reduce(0) -> sum, name, count { sum + count; };
+    out.writeln("units " + units.string());
+    0;
+}

@@ -74,6 +74,14 @@
   - [7.5 How other languages handle absence](#75-how-other-languages-handle-absence)
   - [7.6 What it costs](#76-what-it-costs)
   - [7.7 Limits](#77-limits)
+- [Chapter 8. Collections](#chapter-8-collections)
+  - [8.1 Arrays](#81-arrays)
+  - [8.2 Functional operations](#82-functional-operations)
+  - [8.3 Maps](#83-maps)
+  - [8.4 Ranges](#84-ranges)
+  - [8.5 Building and changing collections](#85-building-and-changing-collections)
+  - [8.6 Iterating user collections](#86-iterating-user-collections)
+  - [8.7 Limits](#87-limits)
 
 # Part I. The Razor
 
@@ -2297,11 +2305,277 @@ characters and large in culture: the shortest way to get a value out of a
   fallback. The json module's style is the reference the library is being
   aligned with.
 
+# Chapter 8. Collections
+
+Okkama has three built-in collections — arrays, maps and ranges — and the
+standard library adds lists, sets, deques, heaps and lazy views on top of
+them. All of them are immutable. That single fact decides most of this
+chapter: how collections are built, how they are changed, what they cost and
+what is still missing.
+
+## 8.1 Arrays
+
+An array is an immutable, ordered sequence of values of one type, written
+`@T`. Literals use brackets, elements are indexed from zero, and every
+operation that "changes" an array returns a new one.
+
+```okkama
+module bible/collections v1.0.0;
+
+import "io/stdout" take Stdout;
+import "compare" take Comparing;     // ordering() needs the Comparing role in scope
+
+main() is int {
+    let out = Stdout();
+
+    // Arrays: immutable, typed, indexed from zero.
+    let primes = [2, 3, 5, 7, 11, 13];
+    out.writeln("size " + primes.size().string()
+        + ", first " + primes.first().string()
+        + ", last " + primes.last().string());
+    out.writeln("slice(1, 4) = " + primes.slice(1, 4).map() -> p { p.string(); }.join(" "));
+    out.writeln("index 9, or 0: " + (primes[9] else 0).string());
+
+    // Ranges expand inside literals; ordering() sorts.
+    let mixed = [9, 0, 2..=4, 1];
+    out.writeln("expanded " + mixed.map() -> n { n.string(); }.join(" "));
+    out.writeln("sorted " + mixed.ordering().map() -> n { n.string(); }.join(" "));
+
+    // Functional operations make new arrays; nothing is changed in place.
+    let squares = (1..=5).map() -> n { n * n; };
+    let odd = squares.filter() -> n { n % 2 == 1; };
+    let total = squares.reduce(0) -> sum, n { sum + n; };
+    out.writeln("squares " + squares.map() -> n { n.string(); }.join(" ")
+        + "; odd " + odd.map() -> n { n.string(); }.join(" ")
+        + "; total " + total.string());
+
+    // Maps: keys are expressions, iteration is in sorted key order.
+    let stock is %string:int = ["pear": 3, "apple": 5, "fig": 0];
+    out.writeln("keys " + stock.keys().join(", "));
+    out.writeln("has kiwi: " + stock.has("kiwi").string() + ", kiwi or 0: " + (stock["kiwi"] else 0).string());
+    let available = stock.filter() -> name, count { count > 0; };
+    out.writeln("in stock " + available.keys().join(", "));
+    let units = stock.reduce(0) -> sum, name, count { sum + count; };
+    out.writeln("units " + units.string());
+    0;
+}
+```
+
+Output:
+
+```text
+size 6, first 2, last 13
+slice(1, 4) = 3 5 7
+index 9, or 0: 0
+expanded 9 0 2 3 4 1
+sorted 0 1 2 3 4 9
+squares 1 4 9 16 25; odd 1 9 25; total 55
+keys apple, fig, pear
+has kiwi: 0, kiwi or 0: 0
+in stock apple, pear
+units 8
+```
+
+The first lines of the program show the builtin actions of arrays: `size()`,
+`first()`, `last()`, `slice(start, end)`, `join(separator)` for arrays of
+strings, `ordering()` to sort, and `item(index)` — or the indexing operator
+`array[index]`. An index outside the array is a runtime failure, unless the
+expression supplies a fallback: `primes[9] else 0` is `0`. Like
+`slice` on strings, nothing is clamped silently.
+
+Ranges expand inside array literals: `[9, 0, 2..=4, 1]` is the array
+`9 0 2 3 4 1`. `a..b` excludes its end and `a..=b` includes it; bounds are
+integers and the start may not exceed the end.
+
+`ordering()` sorts an array whose elements can be compared. The comment in
+the example records a wrinkle of the current compiler: the builtin
+recognises numbers and strings as comparable only when the `Comparing` role
+from the `compare` module is in scope (issue #233).
+
+### Typed identity
+
+An array remembers its element type. Once it crosses a declared boundary —
+`let names is @string = ...`, a parameter, a field — it is tagged with that
+type, and even an empty result of `slice` or `keys` keeps it. An untyped
+empty literal `[]` has no evidence of its type, so it may cross any
+compatible boundary once, and that boundary fixes its type. This is why empty
+collections sometimes need an annotation (Chapter 4).
+
+### Equality
+
+Arrays compare deeply: two arrays are equal when they have the same length
+and equal elements in the same order. Maps compare by keys and values,
+ranges by their bounds and kind, objects by type and *all* fields. Comparing
+values of different categories is an error, not `false` — the same rule as
+`1 == 1.0` in Chapter 5.
+
+## 8.2 Functional operations
+
+Three operations — `map`, `filter` and `reduce` — work on arrays, ranges,
+maps and any object that performs the `Iterating` role. They are written with
+a dedicated block syntax:
+
+```okkama
+let squares = (1..=5).map() -> n { n * n; };
+let odd = squares.filter() -> n { n % 2 == 1; };
+let total = squares.reduce(0) -> sum, n { sum + n; };
+```
+
+The block after `->` names its bindings and computes one value. For a map,
+`map` and `filter` bind `key, value`, and `reduce` binds `accumulator, key,
+value`. The operations are **eager**: each produces a complete array (or, for
+`filter` on a map, a map). They visit elements in order — maps in sorted key
+order — exactly once, and the first failure inside a block stops the
+operation.
+
+Why only three, and why a special syntax? `map`, `filter` and `reduce` are the
+classical trio from which most collection algorithms are built, and they cover
+the overwhelming majority of loops that produce a value. A dedicated syntax
+makes the block a part of the call rather than an ordinary argument: it may
+use the surrounding names, it cannot be stored or passed on, and the compiler
+can lower it to a plain loop without allocating a closure. Lazy views —
+`Taken`, `Filtered`, `Chunked` and friends — live in
+`collections/views` for the cases where materialising every step would be
+wasteful (Chapter 22).
+
+The operations cannot exit early: there is no `last` inside a functional
+block, so `reduce(false) -> found, x { found || x == y; }` visits every element
+even after it has found one. Early-exit operations — `any`, `all`, `find` —
+are among the open language proposals (issue #150).
+
+## 8.3 Maps
+
+A map `%K:V` associates keys with values. Map literals use brackets with
+`key: value` pairs, and the keys are *expressions*: `["apple": 5]` maps the
+string `"apple"`; `[apple: 5]` would use the value of a variable named
+`apple`. There is no implicit string-key shorthand, so a typo cannot quietly
+turn a variable into a string or the other way round.
+
+Keys must be scalar values — integers, strings, booleans and the other
+scalar categories, except `byte` and `any` — and the map keeps them **in sorted
+order**. `keys()` and
+`values()` return arrays in that order, and every functional operation visits
+entries in it. Iteration order therefore never depends on hashing, insertion
+history or the memory layout of a run: the same program prints the same output
+every time, on every engine. Python made its dictionaries keep insertion order
+in version 3.7 for the same reason — predictability — and many test suites
+in languages with unordered maps contain workarounds for nondeterministic
+output.
+
+A lookup of a missing key is a runtime failure unless it has a fallback:
+`stock["kiwi"] else 0`. `has(key)` asks without looking up, and a `Maybe` is
+one `if` away when an action wants to return absence (Chapter 7).
+
+## 8.4 Ranges
+
+A range is a value: `1..5` and `1..=5` can be stored, passed and compared.
+They are the source of most counted loops (`for 0..n -> i`), expand inside
+array literals, and accept the functional operations, producing arrays.
+Chained ranges such as `1..5..9` are rejected, and a range whose start is
+greater than its end is an error rather than an empty range — a reversed
+range is more often a bug than an intention.
+
+## 8.5 Building and changing collections
+
+Immutability raises the practical question: how do you build a collection
+element by element, or change one entry of a map?
+
+The language's answer today has three parts.
+
+1. **Build in one step when possible.** `map`, `filter` and range expansion
+   build complete arrays in one pass. Most collections in real programs are
+   transformations of other collections, and these are linear.
+2. **Accumulate with `reduce` or a library collection.** The standard library
+   has persistent collections — `List` (a linked list with constant-time
+   prefix), `Deque`, `OrderedSet`, `Heap` — whose "updates" return new
+   versions that share structure with the old ones.
+3. **Rebind a local that holds a successor-capable object.** A local may be
+   rebound (`counter = counter.increment();`) only when its type is an object
+   with successor actions; `let n = 1; n = 2;` is rejected. Scalar and
+   collection locals cannot be rebound at all, which is why accumulation goes
+   through `reduce` or library objects.
+
+What is missing is the most common operation of all: appending to an array,
+and setting one key of a map. Without them, code that genuinely builds an
+array step by step — a parser collecting tokens, a server registering
+connections — has to copy the whole array at each step. The standard library
+does exactly that in about forty places, with an idiom like
+
+```okkama
+let following = (0..old.size() + 1).map() -> index {
+    if index < old.size() { old[index]; } else { item; }
+};
+```
+
+which copies `old` to add one element. Figure 8.1 measures the consequence.
+
+![Figure 8.1. Building an array of n integers: one map() stays flat; appending one element at a time by copying is quadratic (issue #145). Data: data/append-cost.json.](figures/append-cost.svg)
+
+*Figure 8.1. Building an array of n integers: one map() stays flat; appending one element at a time by copying is quadratic (issue #145). Data: data/append-cost.json.*
+
+One `map()` builds 16,000 elements in the time it takes to start the process;
+appending them one at a time by copying takes 3.7 seconds, and doubling the
+size roughly quadruples it. This is the clearest case in the language of the
+rule from Chapter 1: removing mutation must not remove efficiency, and the cure
+is an operation, not a mutable entity.
+
+The cure is well known. Persistent vectors and hash maps — Bagwell's hash
+array mapped tries [[Bagwell 2001](#ref-bagwell2001)], as used by Clojure [[Hickey 2008](#ref-hickey2008)], and the
+structures in Okasaki's book [[Okasaki 1998](#ref-okasaki1998)] — give immutable collections
+effectively constant-time append and update by sharing all but a logarithmic
+path of their structure between versions. Issues #145 (array append and
+concatenation) and #151 (map update) propose bringing these operations into
+the language, named like the standard library's existing successors:
+`array.addition(x)`, `map.addition(key, value)`, `map.difference(key)` — the
+word `with`, common in other languages for this, is reserved in Okkama.
+
+## 8.6 Iterating user collections
+
+`for` walks arrays, ranges, maps' keys through `keys()`, and any object that
+performs the standard `Iterating<T>` role from `collections/iteration`:
+
+```okkama
+role Cursor<T> {
+    available() is bool;
+    item() is T;
+    successor() is Cursor<T>;
+}
+
+role Iterating<T> {
+    cursor() is Cursor<T>;
+}
+```
+
+A cursor is immutable: `successor()` returns the next cursor and leaves the
+current one where it was, so two loops over the same collection never
+interfere, and a cursor can be kept to resume later. Exhaustion is an
+ordinary `false` from `available()` — no sentinel, no null, no exception. The
+role is nominal: a collection must declare `does Iterating<T>`; having the
+right method names is not enough.
+
+## 8.7 Limits
+
+- **No append or concatenation for arrays**, so incremental building copies
+  (issue #145, Figure 8.1).
+- **No map update**: changing one entry rebuilds the map (issue #151).
+- **Map keys must be scalars.** Objects cannot be keys and there is no hashing
+  contract, so sets and maps keyed by objects are linear in the library
+  (issue #212).
+- **Few array builtins.** `contains`, `index_of`, `reversed` and their kin are
+  written with `reduce` today (issue #211).
+- **No early exit from functional operations** (issue #150).
+- **`ordering()` needs `compare.Comparing` in scope** (issue #233).
+
+Most of these are the same gap seen from different sides: an immutable
+language needs efficient persistent operations, and Okkama has the
+immutability already and the operations not yet.
+
 # References
 
 - <a id="ref-lions1996"></a>Jacques-Louis Lions et al. (1996). *ARIANE 5 Flight 501 Failure: Report by the Inquiry Board*. European Space Agency, Paris, 19 July 1996. https://www.esa.int/Newsroom/Press_Releases/Ariane_501_-_Presentation_of_Inquiry_Board_report
 - <a id="ref-armstrong2003"></a>Joe Armstrong (2003). *Making Reliable Distributed Systems in the Presence of Software Errors*. PhD thesis, Royal Institute of Technology (KTH), Stockholm.
 - <a id="ref-aycock2003"></a>John Aycock (2003). A Brief History of Just-In-Time. *ACM Computing Surveys* 35(2): 97–113. https://doi.org/10.1145/857076.857077
+- <a id="ref-bagwell2001"></a>Phil Bagwell (2001). *Ideal Hash Trees*. Technical report, École Polytechnique Fédérale de Lausanne. https://infoscience.epfl.ch/record/64398
 - <a id="ref-baker-sep"></a>Alan Baker (2022). Simplicity. In *The Stanford Encyclopedia of Philosophy* (Summer 2022 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/simplicity/
 - <a id="ref-bloch2018"></a>Joshua Bloch (2018). *Effective Java*, 3rd edition. Addison-Wesley.
 - <a id="ref-braun2013"></a>Matthias Braun, Sebastian Buchwald, Sebastian Hack, Roland Leißa, Christoph Mallon, Andreas Zwinkau (2013). Simple and Efficient Construction of Static Single Assignment Form. In *Compiler Construction (CC 2013)*, LNCS 7791: 102–122. Springer. https://doi.org/10.1007/978-3-642-37051-9_6
@@ -2324,6 +2598,7 @@ characters and large in culture: the shortest way to get a value out of a
 - <a id="ref-goodenough1975"></a>John B. Goodenough (1975). Exception Handling: Issues and a Proposed Notation. *Communications of the ACM* 18(12): 683–696. https://doi.org/10.1145/361227.361230
 - <a id="ref-gosling2023"></a>James Gosling, Bill Joy, Guy Steele, Gilad Bracha, Alex Buckley, Daniel Smith, Gavin Bierman (2023). *The Java Language Specification, Java SE 21 Edition*. Oracle. https://docs.oracle.com/javase/specs/jls/se21/html/
 - <a id="ref-haskell2010"></a>Simon Marlow (ed.) (2010). *Haskell 2010 Language Report*. https://www.haskell.org/onlinereport/haskell2010/
+- <a id="ref-hickey2008"></a>Rich Hickey (2008). The Clojure Programming Language. In *Proceedings of the 2008 Symposium on Dynamic Languages (DLS '08)*. ACM. https://doi.org/10.1145/1408681.1408682
 - <a id="ref-hickey2011"></a>Rich Hickey (2011). Simple Made Easy. Talk at Strange Loop, 20 September 2011. https://www.infoq.com/presentations/Simple-Made-Easy/
 - <a id="ref-hoare1978"></a>C. A. R. Hoare (1978). Communicating Sequential Processes. *Communications of the ACM* 21(8): 666–677. https://doi.org/10.1145/359576.359585
 - <a id="ref-hoare1981"></a>C. A. R. Hoare (1981). The Emperor's Old Clothes. *Communications of the ACM* 24(2): 75–83. https://doi.org/10.1145/358549.358561

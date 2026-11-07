@@ -1,0 +1,17 @@
+{
+ "description": "Wall-clock seconds (best of 3, process start included) to build an array of n integers on the Sparrow core of release/0.4.1, Apple M2 Max, 2026-11-07: 'map' builds it with one (0..n).map(), 'concat' appends one element at a time with the (0..a.size() + 1).map() idiom std uses for lack of append (issue #145). Generator: chapter 8 of the Okkama Bible.",
+ "map": {
+  "1000": 0.138,
+  "2000": 0.15,
+  "4000": 0.129,
+  "8000": 0.15,
+  "16000": 0.136
+ },
+ "concat": {
+  "1000": 0.181,
+  "2000": 0.213,
+  "4000": 0.42,
+  "8000": 1.007,
+  "16000": 3.672
+ }
+}
