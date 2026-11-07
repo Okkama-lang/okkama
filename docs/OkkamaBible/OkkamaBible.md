@@ -66,6 +66,14 @@
   - [6.7 Characters](#67-characters)
   - [6.8 What text costs](#68-what-text-costs)
   - [6.9 Limits](#69-limits)
+- [Chapter 7. Absence Without Null](#chapter-7-absence-without-null)
+  - [7.1 What null means — too many things](#71-what-null-means--too-many-things)
+  - [7.2 Okkama's answer: one construct per meaning](#72-okkamas-answer-one-construct-per-meaning)
+  - [7.3 `Maybe<T>`](#73-maybet)
+  - [7.4 `Presence<T>`: three states for updates](#74-presencet-three-states-for-updates)
+  - [7.5 How other languages handle absence](#75-how-other-languages-handle-absence)
+  - [7.6 What it costs](#76-what-it-costs)
+  - [7.7 Limits](#77-limits)
 
 # Part I. The Razor
 
@@ -2003,6 +2011,292 @@ right operation.
   inherited from the first implementation that surprises readers of output
   (Chapter 9 discusses it).
 
+# Chapter 7. Absence Without Null
+
+"I call it my billion-dollar mistake. It was the invention of the null
+reference in 1965." Tony Hoare's confession [[Hoare 2009](#ref-hoare2009)] is the most quoted
+sentence about programming-language design of the last twenty years, and for
+good reason: almost every program written in a mainstream language contains
+code whose only purpose is to ask whether a reference is null, and almost
+every such program has crashed, somewhere, because one such question was not
+asked. This chapter explains what null was trying to express, how Okkama
+expresses each of those things separately, and what the replacement costs.
+
+## 7.1 What null means — too many things
+
+Hoare added null to ALGOL W because it was easy to implement: a reference
+that points nowhere costs one reserved address. The trouble is not the
+implementation but the meaning. In real programs a null reference stands for
+at least five different situations:
+
+| Situation | Example |
+|---|---|
+| A value that may legitimately be absent | a user without a middle name |
+| A lookup that found nothing | `map.get(key)` for a missing key |
+| A failure | a file that could not be opened |
+| A value not yet initialised | a field set later in the object's life |
+| An explicit "clear this" | a JSON `null` in an update request |
+
+A language with null uses one value for all five, so the type of a reference
+cannot tell the reader which situation applies — or whether any applies at
+all. Every reference of every type may be null; the type system, which is
+supposed to say what operations a value supports, says nothing about the most
+common way those operations fail.
+
+## 7.2 Okkama's answer: one construct per meaning
+
+Okkama has no null, and the reserved words `null` and `nil` do not parse
+(Chapter 3). Instead, each of the five situations has its own construct.
+
+| Situation | Okkama construct | Chapter |
+|---|---|---|
+| A value that may be absent | `Maybe<T>`: `some(value)` or `none` | this chapter |
+| A lookup that found nothing | an explicit fallback (`map[key] else default`) or `Maybe` | 7, 8 |
+| A failure | a typed error, thrown and caught by type | 10 |
+| A value not yet initialised | impossible: an object exists only after its constructor bound every field | 12 |
+| An explicit "clear" next to "leave alone" | `Presence<T>`: `some(value)`, `none`, `missing` | this chapter |
+
+Two of these lines remove the problem rather than represent it. A failure is
+not a value at all: it is a typed error that travels up the call stack to a
+handler that names its type. And an uninitialised field cannot be observed,
+because there is no moment at which an object exists with a field unbound.
+
+The remaining cases are values that may be absent, and Okkama gives them a
+type that says so.
+
+## 7.3 `Maybe<T>`
+
+`Maybe<T>` is an ordinary enum, available without import, with two cases:
+`some(value)` and `none`. An action that may have no answer says so in its
+result type, and a caller cannot use the value without first deciding what to
+do when it is not there. Okkama offers four ways to decide, in increasing
+order of ceremony; the program below uses all four.
+
+```okkama
+module bible/maybe v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Missing is Error = (user(id is int));
+
+object Directory {
+    has names is %int:string;
+    Directory(:names);
+
+    // Absence is part of the answer, and the type says so.
+    find(id is int) is Maybe<string> {
+        if names.has(id) { Maybe.some(names[id]); } else { Maybe.none; }
+    }
+
+    // The caller who cannot continue without a user gets a typed error.
+    require(id is int) is string {
+        confirm names.has(id) else throw Missing.user(id);
+        names[id];
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let users = Directory(names: [1: "Ada", 2: "Grace"]);
+
+    // 1. A fallback with else.
+    out.writeln("user 3 is " + (users.find(3) else "nobody"));
+
+    // 2. A compact choice over the two cases.
+    let greeting = users.find(1)
+        ?? .some(name): "hello, " + name
+        !! .none: "hello, stranger";
+    out.writeln(greeting);
+
+    // 3. match, when each case needs more than an expression.
+    match users.find(2) {
+        case Maybe.some(name) { out.writeln(name + " is registered"); }
+        case Maybe.none { out.writeln("not registered"); }
+    }
+
+    // 4. try? turns a typed error into absence.
+    let found = try? users.require(4);
+    out.writeln("require(4) gave " + (found ?? .some(name): name !! .none: "none"));
+    0;
+}
+```
+
+Output:
+
+```text
+user 3 is nobody
+hello, Ada
+Grace is registered
+require(4) gave none
+```
+
+1. **`else` gives a fallback.** `users.find(3) else "nobody"` is the value if
+   present, the fallback otherwise. The fallback is evaluated only when
+   needed, and it may be `else throw Error...` or `else panic "..."` when
+   absence is not acceptable at that point.
+2. **A compact choice** `?? … !!` maps each case to a value, with the
+   case's payload bound by name: `?? .some(name): "hello, " + name !! .none:
+   "hello, stranger"`. It must cover every case, and it cannot be nested —
+   nested choices are a known source of unreadable code, and a separate
+   variable is always clearer.
+3. **`match`** handles each case with a block when the cases need statements,
+   not just expressions.
+4. **`try?`** converts a typed error into absence: `try? users.require(4)` is
+   `Maybe.some(name)` if the call returned and `Maybe.none` if it threw any
+   error. Its counterpart `try!` asserts that a call cannot fail and turns a
+   thrown error into a panic.
+
+Notice what is *not* in the list: a way to take the value out without
+deciding. There is no `.get()` that throws, no `!` that asserts, no implicit
+unwrapping at an assignment. Every exit from a `Maybe` names what happens in
+the `none` case, and that name is visible in the code.
+
+### No automatic wrapping, no collapsing
+
+Two rules keep `Maybe` predictable. Results are not wrapped automatically: an
+action declared `is Maybe<string>` returns `Maybe.some(name)`, not `name`, so a
+reader can see which return statements produce an answer and which produce its
+absence. And nested `Maybe` values are never collapsed: `Maybe<Maybe<int>>`
+keeps both levels, because "the cache has no entry" and "the cache has an
+entry saying there is no value" are different facts. Languages that collapse
+nested optionals — TypeScript's `undefined`, JavaScript's optional chaining —
+lose exactly that distinction.
+
+## 7.4 `Presence<T>`: three states for updates
+
+Some data needs three states, and the most common example is a partial
+update. When a client sends a JSON PATCH for a user record, each field can
+mean one of three things: set the field to a new value, clear the field, or
+leave it as it is. JSON Merge Patch encodes these as a value, a `null`, and an
+absent key [[RFC 7396](#ref-rfc7396); [RFC 8259](#ref-rfc8259)]. A language with only null cannot represent the
+third state without an extra flag per field; a language with only `Maybe`
+cannot represent it either.
+
+`Presence<T>` has three cases — `some(value)`, `none` and `missing` — for
+exactly this purpose.
+
+```okkama
+module bible/presence v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// A PATCH request distinguishes three intents for a field:
+// set it (some), clear it (none), or leave it alone (missing).
+object NicknamePatch {
+    has nickname is Presence<string>;
+    NicknamePatch(:nickname);
+
+    applied(current is string) is string {
+        nickname
+            ?? .some(value): value
+            !! .none: ""
+            !! .missing: current;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let patches is @NicknamePatch = [
+        NicknamePatch(nickname: Presence.some("ace")),
+        NicknamePatch(nickname: Presence<string>.none),
+        NicknamePatch(nickname: Presence<string>.missing)
+    ];
+    for patches -> patch {
+        out.writeln("[" + patch.applied("old") + "]");
+    }
+    0;
+}
+```
+
+Output:
+
+```text
+[ace]
+[]
+[old]
+```
+
+The patch object's `applied` action maps "set" to the new value, "clear" to
+the empty string and "leave alone" to the current value. The compact choice
+must name all three cases; forgetting `missing` is a compile-time error, not a
+bug report from the first client that sends a partial update.
+
+Because `Presence` carries more information than `Maybe`, Okkama does not let
+it degrade silently. `else` works only on `Maybe`; on a `Presence` it is
+rejected, and the program must say how to merge the two kinds of absence.
+
+```okkama
+module bible/presence_else v1.0.0;
+
+main() is int {
+    let nickname is Presence<string> = Presence<string>.missing;
+    let shown = nickname else "anonymous";
+    0;
+}
+```
+
+The compiler answers:
+
+```text
+07-presence-rejected.ok:5:17: semantic error: Optional fallback requires Maybe<T>; fold Presence explicitly
+```
+
+`nickname.fold() else "anonymous"` is the explicit form: `fold()` turns
+`missing` and `none` into `Maybe.none` — on purpose, in writing. (In the other
+direction, `Maybe.as_presence()` keeps `some` and `none` and never invents
+`missing`.)
+
+## 7.5 How other languages handle absence
+
+Okkama's approach belongs to a family that started with ML's `option` type
+and Haskell's `Maybe` [[Pierce 2002](#ref-pierce2002); [Haskell 2010](#ref-haskell2010)]. The table compares the
+mainstream designs.
+
+| Language | Absence | Can a value of type T be absent? | Unwrapping without deciding |
+|---|---|---|---|
+| Java | `null`; `Optional<T>` in libraries | yes, every reference | `.get()` throws; null dereference throws |
+| C# 8+ | `null`; nullable reference types as warnings | yes, with warnings | `!` suppresses the warning |
+| Kotlin | `T?` nullable types | no, unless declared `T?` [[Kotlin specification](#ref-kotlinspec)] | `!!` throws |
+| Swift | `Optional<T>`, written `T?` | no, unless declared `T?` | `!` traps |
+| Rust | `Option<T>` | no [[Klabnik 2023](#ref-klabnik2023)] | `.unwrap()` panics |
+| Haskell | `Maybe a` | no | `fromJust` errors |
+| Okkama | `Maybe<T>`, `Presence<T>` | no | none: every exit names the `none` case |
+
+Kotlin, Swift and Rust made the decisive move — a plain `T` cannot be absent —
+and their experience shows that it removes most null-related crashes. Each of
+them also kept an escape hatch for "I know it is there": `!!`, `!`,
+`.unwrap()`. Okkama's only equivalent is `else panic "reason"`, which costs a
+message and therefore a moment's thought. The difference is small in
+characters and large in culture: the shortest way to get a value out of a
+`Maybe` is to say what absence means.
+
+## 7.6 What it costs
+
+- **Ceremony at the boundaries.** Every lookup that may miss needs a fallback,
+  a match or a `try?`. Code that reads many optional fields — configuration,
+  request parameters, JSON — is longer than in a language with null. The
+  standard library's answer is the json-style reading API: `maybe(name).text()
+  else "default"` reads an optional field in one line (Chapter 22), and the
+  library audit asks for the same style in every module that reads data.
+- **Deciding what absence means.** Porting a design built on null forces a
+  decision at every nullable reference: is this a `Maybe`, an error, a
+  default, or a sign that the object was built wrongly? The decision is work;
+  it is also the work the original design skipped.
+- **Two types instead of one.** `Maybe` and `Presence` are separate types, and
+  converting between them is explicit (`fold()`, `as_presence()`). This is the
+  price of keeping the third state; most programs never need `Presence`.
+
+## 7.7 Limits
+
+- `Maybe` has no library of combinators such as `map`, `and_then` or `filter`
+  in the language today; chained optional computations are written with
+  compact choices or `match`. Whether to add them is an open question: each is
+  convenient, and each is another way to say what `??` already says.
+- Standard-library APIs are not yet uniform: some modules return `Maybe`,
+  some throw a typed error for a missing value, some take an explicit
+  fallback. The json module's style is the reference the library is being
+  aligned with.
+
 # References
 
 - <a id="ref-lions1996"></a>Jacques-Louis Lions et al. (1996). *ARIANE 5 Flight 501 Failure: Report by the Inquiry Board*. European Space Agency, Paris, 19 July 1996. https://www.esa.int/Newsroom/Press_Releases/Ariane_501_-_Presentation_of_Inquiry_Board_report
@@ -2029,6 +2323,7 @@ right operation.
 - <a id="ref-goldberg1991"></a>David Goldberg (1991). What Every Computer Scientist Should Know About Floating-Point Arithmetic. *ACM Computing Surveys* 23(1): 5–48. https://doi.org/10.1145/103162.103163
 - <a id="ref-goodenough1975"></a>John B. Goodenough (1975). Exception Handling: Issues and a Proposed Notation. *Communications of the ACM* 18(12): 683–696. https://doi.org/10.1145/361227.361230
 - <a id="ref-gosling2023"></a>James Gosling, Bill Joy, Guy Steele, Gilad Bracha, Alex Buckley, Daniel Smith, Gavin Bierman (2023). *The Java Language Specification, Java SE 21 Edition*. Oracle. https://docs.oracle.com/javase/specs/jls/se21/html/
+- <a id="ref-haskell2010"></a>Simon Marlow (ed.) (2010). *Haskell 2010 Language Report*. https://www.haskell.org/onlinereport/haskell2010/
 - <a id="ref-hickey2011"></a>Rich Hickey (2011). Simple Made Easy. Talk at Strange Loop, 20 September 2011. https://www.infoq.com/presentations/Simple-Made-Easy/
 - <a id="ref-hoare1978"></a>C. A. R. Hoare (1978). Communicating Sequential Processes. *Communications of the ACM* 21(8): 666–677. https://doi.org/10.1145/359576.359585
 - <a id="ref-hoare1981"></a>C. A. R. Hoare (1981). The Emperor's Old Clothes. *Communications of the ACM* 24(2): 75–83. https://doi.org/10.1145/358549.358561
@@ -2039,8 +2334,10 @@ right operation.
 - <a id="ref-kay1993"></a>Alan C. Kay (1993). The Early History of Smalltalk. *ACM SIGPLAN Notices* 28(3): 69–95 (HOPL-II). https://doi.org/10.1145/155360.155364
 - <a id="ref-kay2003"></a>Alan Kay (2003). On the Meaning of "Object-Oriented Programming". E-mail to Stefan Ram, 23 July 2003. https://www.purl.org/stefan_ram/pub/doc_kay_oop_en
 - <a id="ref-king2019"></a>Alexis King (2019). Parse, Don't Validate. Blog post, 5 November 2019. https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/
+- <a id="ref-klabnik2023"></a>Steve Klabnik, Carol Nichols (2023). *The Rust Programming Language*, 2nd edition. No Starch Press. https://doc.rust-lang.org/book/
 - <a id="ref-knuth1974"></a>Donald E. Knuth (1974). Structured Programming with go to Statements. *ACM Computing Surveys* 6(4): 261–301. https://doi.org/10.1145/356635.356640
 - <a id="ref-knuth1997"></a>Donald E. Knuth (1997). *The Art of Computer Programming, Volume 2: Seminumerical Algorithms*, 3rd edition. Addison-Wesley.
+- <a id="ref-kotlinspec"></a>JetBrains (2024). *Kotlin Language Specification*, chapter Type System: Nullable Types. https://kotlinlang.org/spec/type-system.html
 - <a id="ref-li2019"></a>Ming Li, Paul Vitányi (2019). *An Introduction to Kolmogorov Complexity and Its Applications*, 4th edition. Springer. https://doi.org/10.1007/978-3-030-11298-1
 - <a id="ref-liskov1994"></a>Barbara H. Liskov, Jeannette M. Wing (1994). A Behavioral Notion of Subtyping. *ACM TOPLAS* 16(6): 1811–1841. https://doi.org/10.1145/197320.197383
 - <a id="ref-mackay2003"></a>David J. C. MacKay (2003). *Information Theory, Inference, and Learning Algorithms*. Cambridge University Press. Chapter 28: Model Comparison and Occam's Razor.
@@ -2062,6 +2359,8 @@ right operation.
 - <a id="ref-poletto1999"></a>Massimiliano Poletto, Vivek Sarkar (1999). Linear Scan Register Allocation. *ACM TOPLAS* 21(5): 895–913. https://doi.org/10.1145/330249.330250
 - <a id="ref-r7rs2013"></a>Alex Shinn, John Cowan, Arthur A. Gleckler (eds.) (2013). *Revised⁷ Report on the Algorithmic Language Scheme*. https://small.r7rs.org/attachment/r7rs.pdf
 - <a id="ref-rfc3629"></a>François Yergeau (2003). *UTF-8, a Transformation Format of ISO 10646*. RFC 3629, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc3629
+- <a id="ref-rfc7396"></a>Paul Hoffman, James Snell (2014). *JSON Merge Patch*. RFC 7396, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc7396
+- <a id="ref-rfc8259"></a>Tim Bray (ed.) (2017). *The JavaScript Object Notation (JSON) Data Interchange Format*. RFC 8259, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc8259
 - <a id="ref-rissanen1978"></a>Jorma Rissanen (1978). Modeling by Shortest Data Description. *Automatica* 14(5): 465–471. https://doi.org/10.1016/0005-1098(78)90005-5
 - <a id="ref-saltzer1975"></a>Jerome H. Saltzer, Michael D. Schroeder (1975). The Protection of Information in Computer Systems. *Proceedings of the IEEE* 63(9): 1278–1308. https://doi.org/10.1109/PROC.1975.9939
 - <a id="ref-smith2018"></a>Nathaniel J. Smith (2018). Notes on Structured Concurrency, or: Go Statement Considered Harmful. Blog post, 25 April 2018. https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/

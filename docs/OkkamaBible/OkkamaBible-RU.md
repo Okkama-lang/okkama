@@ -66,6 +66,14 @@
   - [6.7 Символы](#67-символы)
   - [6.8 Чего стоит текст](#68-чего-стоит-текст)
   - [6.9 Ограничения](#69-ограничения)
+- [Глава 7. Отсутствие без null](#глава-7-отсутствие-без-null)
+  - [7.1 Что означает null — слишком многое](#71-что-означает-null--слишком-многое)
+  - [7.2 Ответ Okkama: одна конструкция на один смысл](#72-ответ-okkama-одна-конструкция-на-один-смысл)
+  - [7.3 `Maybe<T>`](#73-maybet)
+  - [7.4 `Presence<T>`: три состояния для обновлений](#74-presencet-три-состояния-для-обновлений)
+  - [7.5 Как отсутствие устроено в других языках](#75-как-отсутствие-устроено-в-других-языках)
+  - [7.6 Чего это стоит](#76-чего-это-стоит)
+  - [7.7 Ограничения](#77-ограничения)
 
 # Часть I. Бритва
 
@@ -2050,6 +2058,293 @@ let back is string = Utf8Decoded(bytes).string();
   выбор, унаследованный от первой реализации и удивляющий читателей вывода
   (глава 9 его обсуждает).
 
+# Глава 7. Отсутствие без null
+
+«Я называю это своей ошибкой на миллиард долларов. Это было изобретение
+нулевой ссылки в 1965 году». Признание Тони Хоара [[Hoare 2009](#ref-hoare2009)] — самая
+цитируемая фраза о проектировании языков программирования за последние
+двадцать лет, и не зря: почти каждая программа на популярном языке содержит
+код, единственная цель которого — спросить, не null ли ссылка, и почти
+каждая такая программа где-нибудь падала, потому что один такой вопрос не
+задали. Эта глава объясняет, что пытался выразить null, как Okkama выражает
+каждую из этих вещей отдельно и чего стоит замена.
+
+## 7.1 Что означает null — слишком многое
+
+Хоар добавил null в ALGOL W, потому что это было легко реализовать: ссылка,
+указывающая в никуда, стоит одного зарезервированного адреса. Беда не в
+реализации, а в смысле. В реальных программах нулевая ссылка обозначает по
+меньшей мере пять разных ситуаций:
+
+| Ситуация | Пример |
+|---|---|
+| Значение, которого законно может не быть | пользователь без отчества |
+| Поиск, который ничего не нашёл | `map.get(key)` для отсутствующего ключа |
+| Отказ | файл, который не удалось открыть |
+| Ещё не инициализированное значение | поле, заполняемое позже в жизни объекта |
+| Явное «очисти это» | JSON `null` в запросе на обновление |
+
+Язык с null использует одно значение для всех пяти, поэтому тип ссылки не
+может сказать читателю, какая ситуация имеет место, — и имеет ли место
+какая-то вообще. Любая ссылка любого типа может быть null; система типов,
+которая должна говорить, какие операции поддерживает значение, молчит о
+самом частом способе, которым эти операции ломаются.
+
+## 7.2 Ответ Okkama: одна конструкция на один смысл
+
+В Okkama null нет, а зарезервированные слова `null` и `nil` не разбираются
+(глава 3). Вместо этого у каждой из пяти ситуаций своя конструкция.
+
+| Ситуация | Конструкция Okkama | Глава |
+|---|---|---|
+| Значение, которого может не быть | `Maybe<T>`: `some(value)` или `none` | эта |
+| Поиск, ничего не нашедший | явное запасное значение (`map[key] else default`) или `Maybe` | 7, 8 |
+| Отказ | типизированная ошибка, бросаемая и перехватываемая по типу | 10 |
+| Ещё не инициализированное значение | невозможно: объект существует только после того, как конструктор связал каждое поле | 12 |
+| Явное «очисти» рядом с «оставь как есть» | `Presence<T>`: `some(value)`, `none`, `missing` | эта |
+
+Две из этих строк не представляют проблему, а убирают её. Отказ — вообще не
+значение: это типизированная ошибка, которая поднимается по стеку вызовов к
+обработчику, называющему её тип. А неинициализированное поле нельзя
+наблюдать, потому что нет момента, когда объект существует с несвязанным
+полем.
+
+Остаются значения, которых может не быть, и Okkama даёт им тип, который
+об этом говорит.
+
+## 7.3 `Maybe<T>`
+
+`Maybe<T>` — обычное перечисление, доступное без импорта, с двумя случаями:
+`some(value)` и `none`. Действие, у которого может не быть ответа, говорит об
+этом в типе результата, и вызывающий не может использовать значение, не решив
+сначала, что делать, когда его нет. Okkama предлагает четыре способа решить,
+по возрастанию церемоний; программа ниже использует все четыре.
+
+```okkama
+module bible/maybe v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Missing is Error = (user(id is int));
+
+object Directory {
+    has names is %int:string;
+    Directory(:names);
+
+    // Absence is part of the answer, and the type says so.
+    find(id is int) is Maybe<string> {
+        if names.has(id) { Maybe.some(names[id]); } else { Maybe.none; }
+    }
+
+    // The caller who cannot continue without a user gets a typed error.
+    require(id is int) is string {
+        confirm names.has(id) else throw Missing.user(id);
+        names[id];
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let users = Directory(names: [1: "Ada", 2: "Grace"]);
+
+    // 1. A fallback with else.
+    out.writeln("user 3 is " + (users.find(3) else "nobody"));
+
+    // 2. A compact choice over the two cases.
+    let greeting = users.find(1)
+        ?? .some(name): "hello, " + name
+        !! .none: "hello, stranger";
+    out.writeln(greeting);
+
+    // 3. match, when each case needs more than an expression.
+    match users.find(2) {
+        case Maybe.some(name) { out.writeln(name + " is registered"); }
+        case Maybe.none { out.writeln("not registered"); }
+    }
+
+    // 4. try? turns a typed error into absence.
+    let found = try? users.require(4);
+    out.writeln("require(4) gave " + (found ?? .some(name): name !! .none: "none"));
+    0;
+}
+```
+
+Вывод:
+
+```text
+user 3 is nobody
+hello, Ada
+Grace is registered
+require(4) gave none
+```
+
+1. **`else` даёт запасное значение.** `users.find(3) else "nobody"` — это
+   значение, если оно есть, и запасное иначе. Запасное вычисляется только
+   при необходимости и может быть `else throw Ошибка...` или `else panic
+   "..."`, когда отсутствие в этом месте недопустимо.
+2. **Компактный выбор** `?? … !!` сопоставляет каждому случаю значение,
+   связывая полезную нагрузку случая по имени: `?? .some(name): "hello, " +
+   name !! .none: "hello, stranger"`. Он обязан покрыть все случаи и не может
+   быть вложенным: вложенные выборы — известный источник нечитаемого кода, а
+   отдельная переменная всегда яснее.
+3. **`match`** обрабатывает каждый случай блоком, когда случаям нужны
+   операторы, а не только выражения.
+4. **`try?`** превращает типизированную ошибку в отсутствие: `try?
+   users.require(4)` — это `Maybe.some(name)`, если вызов вернул значение, и
+   `Maybe.none`, если он бросил любую ошибку. Его пара `try!` утверждает, что
+   вызов не может отказать, и превращает брошенную ошибку в панику.
+
+Обратите внимание, чего в списке *нет*: способа достать значение, не решив.
+Нет `.get()`, который бросает, нет `!`, который утверждает, нет неявного
+разворачивания при присваивании. Каждый выход из `Maybe` называет, что
+происходит в случае `none`, и это название видно в коде.
+
+### Без автоматической упаковки и без схлопывания
+
+Два правила делают `Maybe` предсказуемым. Результаты не упаковываются
+автоматически: действие, объявленное `is Maybe<string>`, возвращает
+`Maybe.some(name)`, а не `name`, так что читатель видит, какие операторы
+возврата дают ответ, а какие — его отсутствие. И вложенные значения `Maybe`
+никогда не схлопываются: `Maybe<Maybe<int>>` сохраняет оба уровня, потому что
+«в кэше нет записи» и «в кэше есть запись, что значения нет» — разные факты.
+Языки, схлопывающие вложенные optional, — `undefined` в TypeScript,
+опциональные цепочки JavaScript, — теряют ровно это различие.
+
+## 7.4 `Presence<T>`: три состояния для обновлений
+
+Некоторым данным нужны три состояния, и самый частый пример — частичное
+обновление. Когда клиент присылает JSON PATCH для записи пользователя, каждое
+поле может означать одно из трёх: установить новое значение, очистить поле
+или оставить как есть. JSON Merge Patch кодирует их значением, `null` и
+отсутствующим ключом [[RFC 7396](#ref-rfc7396); [RFC 8259](#ref-rfc8259)]. Язык с одним только null не может
+представить третье состояние без лишнего флага на каждое поле; язык с одним
+только `Maybe` — тоже.
+
+У `Presence<T>` три случая — `some(value)`, `none` и `missing` — ровно для
+этого.
+
+```okkama
+module bible/presence v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// A PATCH request distinguishes three intents for a field:
+// set it (some), clear it (none), or leave it alone (missing).
+object NicknamePatch {
+    has nickname is Presence<string>;
+    NicknamePatch(:nickname);
+
+    applied(current is string) is string {
+        nickname
+            ?? .some(value): value
+            !! .none: ""
+            !! .missing: current;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let patches is @NicknamePatch = [
+        NicknamePatch(nickname: Presence.some("ace")),
+        NicknamePatch(nickname: Presence<string>.none),
+        NicknamePatch(nickname: Presence<string>.missing)
+    ];
+    for patches -> patch {
+        out.writeln("[" + patch.applied("old") + "]");
+    }
+    0;
+}
+```
+
+Вывод:
+
+```text
+[ace]
+[]
+[old]
+```
+
+Действие `applied` объекта-патча отображает «установить» в новое значение,
+«очистить» — в пустую строку, а «оставить» — в текущее значение. Компактный
+выбор обязан назвать все три случая; забытый `missing` — ошибка компиляции, а
+не сообщение об ошибке от первого клиента, приславшего частичное обновление.
+
+Поскольку `Presence` несёт больше сведений, чем `Maybe`, Okkama не даёт ему
+молча деградировать. `else` работает только на `Maybe`; на `Presence` он
+отвергается, и программа должна сказать, как слить два вида отсутствия.
+
+```okkama
+module bible/presence_else v1.0.0;
+
+main() is int {
+    let nickname is Presence<string> = Presence<string>.missing;
+    let shown = nickname else "anonymous";
+    0;
+}
+```
+
+Ответ компилятора:
+
+```text
+07-presence-rejected.ok:5:17: semantic error: Optional fallback requires Maybe<T>; fold Presence explicitly
+```
+
+`nickname.fold() else "anonymous"` — явная форма: `fold()` превращает
+`missing` и `none` в `Maybe.none` — намеренно, на письме. (В обратную сторону
+`Maybe.as_presence()` сохраняет `some` и `none` и никогда не выдумывает
+`missing`.)
+
+## 7.5 Как отсутствие устроено в других языках
+
+Подход Okkama принадлежит семейству, начатому типом `option` в ML и `Maybe`
+в Haskell [[Pierce 2002](#ref-pierce2002); [Haskell 2010](#ref-haskell2010)]. Таблица сравнивает популярные решения.
+
+| Язык | Отсутствие | Может ли значение типа T отсутствовать? | Разворачивание без решения |
+|---|---|---|---|
+| Java | `null`; `Optional<T>` в библиотеках | да, любая ссылка | `.get()` бросает; разыменование null бросает |
+| C# 8+ | `null`; nullable reference types как предупреждения | да, с предупреждениями | `!` гасит предупреждение |
+| Kotlin | nullable-типы `T?` | нет, если не объявлен `T?` [[Kotlin specification](#ref-kotlinspec)] | `!!` бросает |
+| Swift | `Optional<T>`, пишется `T?` | нет, если не объявлен `T?` | `!` аварийно останавливает |
+| Rust | `Option<T>` | нет [[Klabnik 2023](#ref-klabnik2023)] | `.unwrap()` паникует |
+| Haskell | `Maybe a` | нет | `fromJust` даёт ошибку |
+| Okkama | `Maybe<T>`, `Presence<T>` | нет | нет: каждый выход называет случай `none` |
+
+Kotlin, Swift и Rust сделали решающий шаг — простой `T` не может
+отсутствовать, — и их опыт показывает, что это убирает большинство падений,
+связанных с null. Каждый из них при этом оставил лазейку для «я знаю, что оно
+там»: `!!`, `!`, `.unwrap()`. Единственный аналог в Okkama — `else panic
+"причина"`, который стоит сообщения, а значит, минуты размышления. Разница
+мала в символах и велика в культуре: самый короткий способ достать значение
+из `Maybe` — сказать, что означает отсутствие.
+
+## 7.6 Чего это стоит
+
+- **Церемонии на границах.** Каждому поиску, который может промахнуться,
+  нужно запасное значение, `match` или `try?`. Код, читающий много
+  необязательных полей, — конфигурацию, параметры запроса, JSON, — длиннее,
+  чем в языке с null. Ответ стандартной библиотеки — API чтения в стиле json:
+  `maybe(name).text() else "default"` читает необязательное поле одной строкой
+  (глава 22), и аудит библиотеки просит того же стиля в каждом модуле,
+  читающем данные.
+- **Решать, что означает отсутствие.** Перенос дизайна, построенного на null,
+  заставляет принять решение у каждой ссылки, которая может быть null: это
+  `Maybe`, ошибка, значение по умолчанию или знак, что объект собран неверно?
+  Решение — работа; и та самая работа, которую исходный дизайн пропустил.
+- **Два типа вместо одного.** `Maybe` и `Presence` — разные типы, и
+  преобразование между ними явное (`fold()`, `as_presence()`). Это цена
+  третьего состояния; большинству программ `Presence` не понадобится никогда.
+
+## 7.7 Ограничения
+
+- У `Maybe` сегодня нет в языке библиотеки комбинаторов вроде `map`,
+  `and_then` или `filter`; цепочки вычислений с отсутствием пишутся
+  компактными выборами или `match`. Добавлять ли их — открытый вопрос: каждый
+  удобен, и каждый — ещё один способ сказать то, что уже говорит `??`.
+- API стандартной библиотеки пока не единообразны: одни модули возвращают
+  `Maybe`, другие бросают типизированную ошибку на отсутствующее значение,
+  третьи принимают явное запасное. Стиль модуля json — образец, к которому
+  библиотеку приводят.
+
 # Литература
 
 - <a id="ref-lions1996"></a>Jacques-Louis Lions et al. (1996). *ARIANE 5 Flight 501 Failure: Report by the Inquiry Board*. European Space Agency, Paris, 19 July 1996. https://www.esa.int/Newsroom/Press_Releases/Ariane_501_-_Presentation_of_Inquiry_Board_report
@@ -2076,6 +2371,7 @@ let back is string = Utf8Decoded(bytes).string();
 - <a id="ref-goldberg1991"></a>David Goldberg (1991). What Every Computer Scientist Should Know About Floating-Point Arithmetic. *ACM Computing Surveys* 23(1): 5–48. https://doi.org/10.1145/103162.103163
 - <a id="ref-goodenough1975"></a>John B. Goodenough (1975). Exception Handling: Issues and a Proposed Notation. *Communications of the ACM* 18(12): 683–696. https://doi.org/10.1145/361227.361230
 - <a id="ref-gosling2023"></a>James Gosling, Bill Joy, Guy Steele, Gilad Bracha, Alex Buckley, Daniel Smith, Gavin Bierman (2023). *The Java Language Specification, Java SE 21 Edition*. Oracle. https://docs.oracle.com/javase/specs/jls/se21/html/
+- <a id="ref-haskell2010"></a>Simon Marlow (ed.) (2010). *Haskell 2010 Language Report*. https://www.haskell.org/onlinereport/haskell2010/
 - <a id="ref-hickey2011"></a>Rich Hickey (2011). Simple Made Easy. Talk at Strange Loop, 20 September 2011. https://www.infoq.com/presentations/Simple-Made-Easy/
 - <a id="ref-hoare1978"></a>C. A. R. Hoare (1978). Communicating Sequential Processes. *Communications of the ACM* 21(8): 666–677. https://doi.org/10.1145/359576.359585
 - <a id="ref-hoare1981"></a>C. A. R. Hoare (1981). The Emperor's Old Clothes. *Communications of the ACM* 24(2): 75–83. https://doi.org/10.1145/358549.358561
@@ -2086,8 +2382,10 @@ let back is string = Utf8Decoded(bytes).string();
 - <a id="ref-kay1993"></a>Alan C. Kay (1993). The Early History of Smalltalk. *ACM SIGPLAN Notices* 28(3): 69–95 (HOPL-II). https://doi.org/10.1145/155360.155364
 - <a id="ref-kay2003"></a>Alan Kay (2003). On the Meaning of "Object-Oriented Programming". E-mail to Stefan Ram, 23 July 2003. https://www.purl.org/stefan_ram/pub/doc_kay_oop_en
 - <a id="ref-king2019"></a>Alexis King (2019). Parse, Don't Validate. Blog post, 5 November 2019. https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/
+- <a id="ref-klabnik2023"></a>Steve Klabnik, Carol Nichols (2023). *The Rust Programming Language*, 2nd edition. No Starch Press. https://doc.rust-lang.org/book/
 - <a id="ref-knuth1974"></a>Donald E. Knuth (1974). Structured Programming with go to Statements. *ACM Computing Surveys* 6(4): 261–301. https://doi.org/10.1145/356635.356640
 - <a id="ref-knuth1997"></a>Donald E. Knuth (1997). *The Art of Computer Programming, Volume 2: Seminumerical Algorithms*, 3rd edition. Addison-Wesley.
+- <a id="ref-kotlinspec"></a>JetBrains (2024). *Kotlin Language Specification*, chapter Type System: Nullable Types. https://kotlinlang.org/spec/type-system.html
 - <a id="ref-li2019"></a>Ming Li, Paul Vitányi (2019). *An Introduction to Kolmogorov Complexity and Its Applications*, 4th edition. Springer. https://doi.org/10.1007/978-3-030-11298-1
 - <a id="ref-liskov1994"></a>Barbara H. Liskov, Jeannette M. Wing (1994). A Behavioral Notion of Subtyping. *ACM TOPLAS* 16(6): 1811–1841. https://doi.org/10.1145/197320.197383
 - <a id="ref-mackay2003"></a>David J. C. MacKay (2003). *Information Theory, Inference, and Learning Algorithms*. Cambridge University Press. Chapter 28: Model Comparison and Occam's Razor.
@@ -2109,6 +2407,8 @@ let back is string = Utf8Decoded(bytes).string();
 - <a id="ref-poletto1999"></a>Massimiliano Poletto, Vivek Sarkar (1999). Linear Scan Register Allocation. *ACM TOPLAS* 21(5): 895–913. https://doi.org/10.1145/330249.330250
 - <a id="ref-r7rs2013"></a>Alex Shinn, John Cowan, Arthur A. Gleckler (eds.) (2013). *Revised⁷ Report on the Algorithmic Language Scheme*. https://small.r7rs.org/attachment/r7rs.pdf
 - <a id="ref-rfc3629"></a>François Yergeau (2003). *UTF-8, a Transformation Format of ISO 10646*. RFC 3629, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc3629
+- <a id="ref-rfc7396"></a>Paul Hoffman, James Snell (2014). *JSON Merge Patch*. RFC 7396, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc7396
+- <a id="ref-rfc8259"></a>Tim Bray (ed.) (2017). *The JavaScript Object Notation (JSON) Data Interchange Format*. RFC 8259, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc8259
 - <a id="ref-rissanen1978"></a>Jorma Rissanen (1978). Modeling by Shortest Data Description. *Automatica* 14(5): 465–471. https://doi.org/10.1016/0005-1098(78)90005-5
 - <a id="ref-saltzer1975"></a>Jerome H. Saltzer, Michael D. Schroeder (1975). The Protection of Information in Computer Systems. *Proceedings of the IEEE* 63(9): 1278–1308. https://doi.org/10.1109/PROC.1975.9939
 - <a id="ref-smith2018"></a>Nathaniel J. Smith (2018). Notes on Structured Concurrency, or: Go Statement Considered Harmful. Blog post, 25 April 2018. https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/
