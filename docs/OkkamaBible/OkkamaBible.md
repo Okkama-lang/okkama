@@ -1542,7 +1542,10 @@ The algorithms behind big-integer arithmetic — schoolbook and Karatsuba
 multiplication, long division, conversion to decimal — are the classical ones
 of Knuth's *Seminumerical Algorithms* [[Knuth 1997](#ref-knuth1997)]. A product whose result
 cannot fit in the run's memory budget is refused before it is computed, so a
-program cannot exhaust memory with one multiplication (Chapter 26).
+program cannot exhaust memory with one multiplication (Chapter 26). Powers are
+exact too: `(2).pow(100)` is `1267650600228229401496703205376`; an `int`
+cannot be raised to a negative power — that result is not an integer — while
+`rat.pow` takes one and inverts (issue #228).
 
 **Cost.** Each integer operation must check for overflow. On the Sparrow core
 this is one compare-and-branch after the machine instruction, taken almost
@@ -1714,9 +1717,6 @@ that making the default numbers exact did not make them slow.
 
 ## 5.8 Limits
 
-- **`int.pow` returns a float.** `(2).pow(100)` is `1.2676506002282294e+30`,
-  not the exact integer — an inconsistency with the rest of integer arithmetic
-  (issue #228).
 - **No non-finite floats.** Code that relies on IEEE infinities and NaN must
   be restructured (Section 5.4).
 - **Decimal arithmetic lives in the library, and it is thin.** The standard
