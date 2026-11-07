@@ -74,3 +74,41 @@ class Plot:
     def save(self, name, language):
         suffix = "" if language == "en" else "-ru"
         open(os.path.join(OUT, f"{name}{suffix}.svg"), "w").write(self.svg())
+
+
+def bars(name, groups, series, values, language, ylabel, log=False, width=660, height=340, note=""):
+    """Grouped bar chart: values[group][series] -> number (None skips)."""
+    import math
+    plot = Plot(width, height, margin=(60, 20, 60, 56))
+    top = max(v for g in groups for v in values[g].values() if v is not None)
+    if log:
+        low = min(v for g in groups for v in values[g].values() if v)
+        y0, y1 = math.floor(math.log10(low)), math.ceil(math.log10(top))
+        plot.frame((0, len(groups)), (y0, y1))
+        conv = lambda v: math.log10(v)
+        ticks = [(e, f"{10 ** e:g}") for e in range(y0, y1 + 1)]
+    else:
+        plot.frame((0, len(groups)), (0, top * 1.1))
+        conv = lambda v: v
+        step = 10 ** math.floor(math.log10(top))
+        ticks = [(k * step, f"{k * step:g}") for k in range(0, int(top * 1.1 / step) + 1)]
+    plot.axes("", ylabel, xticks=[(i + 0.5, text(g, language) if isinstance(g, tuple) else g) for i, g in enumerate(groups)], yticks=ticks)
+    slot = 0.8 / len(series)
+    for i, g in enumerate(groups):
+        for j, s in enumerate(series):
+            v = values[g].get(s)
+            if v is None:
+                continue
+            x0 = plot.px(i + 0.1 + j * slot)
+            x1 = plot.px(i + 0.1 + (j + 1) * slot) - 1
+            ytop, ybase = plot.py(conv(v)), plot.py(plot.y0)
+            plot.items.append(f'<rect x="{x0:.1f}" y="{ytop:.1f}" width="{x1 - x0:.1f}" height="{ybase - ytop:.1f}" fill="{SERIES[j % len(SERIES)]}"/>')
+    lx = plot.left
+    for j, s in enumerate(series):
+        plot.items.append(f'<rect x="{lx}" y="{height - 22}" width="10" height="10" fill="{SERIES[j % len(SERIES)]}"/>')
+        label = text(s, language) if isinstance(s, tuple) else s
+        plot.items.append(f'<text x="{lx + 14}" y="{height - 13}">{label}</text>')
+        lx += 14 + 7 * len(label) + 18
+    if note:
+        plot.items.append(f'<text x="{width - 8}" y="14" text-anchor="end">{text(note, language)}</text>')
+    plot.save(name, language)

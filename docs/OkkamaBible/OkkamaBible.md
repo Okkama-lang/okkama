@@ -37,6 +37,25 @@
   - [3.10 Rule ten: authority is explicit](#310-rule-ten-authority-is-explicit)
   - [3.11 Rule eleven: concurrency is structured](#311-rule-eleven-concurrency-is-structured)
   - [3.12 One design, not eleven](#312-one-design-not-eleven)
+- [Part II. Values](#part-ii-values)
+- [Chapter 4. Types at a Glance](#chapter-4-types-at-a-glance)
+  - [4.1 What a type is for](#41-what-a-type-is-for)
+  - [4.2 The inventory](#42-the-inventory)
+  - [4.3 Where types are written](#43-where-types-are-written)
+  - [4.4 Nominal, not structural](#44-nominal-not-structural)
+  - [4.5 Inference: local and exact](#45-inference-local-and-exact)
+  - [4.6 The top type `any`](#46-the-top-type-any)
+  - [4.7 What the compiler checks, and what remains for run time](#47-what-the-compiler-checks-and-what-remains-for-run-time)
+  - [4.8 Limits](#48-limits)
+- [Chapter 5. Numbers](#chapter-5-numbers)
+  - [5.1 Four categories](#51-four-categories)
+  - [5.2 Exact integers](#52-exact-integers)
+  - [5.3 Exact rationals](#53-exact-rationals)
+  - [5.4 Floating point, kept finite](#54-floating-point-kept-finite)
+  - [5.5 Bytes](#55-bytes)
+  - [5.6 Conversions](#56-conversions)
+  - [5.7 What exactness costs](#57-what-exactness-costs)
+  - [5.8 Limits](#58-limits)
 
 # Part I. The Razor
 
@@ -1137,6 +1156,548 @@ whole rather than as options: as *Elegant Objects* argued for Java, the
 discipline works only when it is complete — and only a language can make it
 complete.
 
+# Part II. Values
+
+# Chapter 4. Types at a Glance
+
+Every value in an Okkama program has a type, and the compiler knows it before
+the program runs. This chapter surveys the whole type system in one place —
+what kinds of types there are, where they are written, how the compiler finds
+the ones you do not write, and where the deliberate gaps are. The following
+chapters take each kind in turn.
+
+## 4.1 What a type is for
+
+A type is a promise about a value: which operations it supports and what
+they mean. Pierce's textbook definition is that a type system is "a tractable
+syntactic method for proving the absence of certain program behaviors by
+classifying phrases according to the kinds of values they compute"
+[[Pierce 2002](#ref-pierce2002)]. The important words are *absence* and *tractable*: a type
+checker cannot prove that a program is right, but it can prove cheaply that
+certain mistakes cannot happen — adding a string to a number, calling an
+action an object does not have, forgetting that a value may be absent.
+
+Okkama uses its type system for three jobs:
+
+- **To reject meaningless programs** before they run — the examples of Chapter 3
+  were all rejected this way.
+- **To document intent.** A signature such as `share(people is int) is rat`
+  tells a reader what goes in and what comes out without reading the body.
+- **To make the runtime fast.** The Sparrow core chooses a machine
+  representation for every register from its type — a raw 64-bit integer, a
+  double, a pointer the garbage collector traces — which is only safe because
+  the types are checked (Chapter 25).
+
+## 4.2 The inventory
+
+The table lists every kind of type a program can write.
+
+| Kind | Spelling | Examples | Chapter |
+|---|---|---|---|
+| Exact integer | `int` | `42`, `-7`, `9223372036854775808` | 5 |
+| Octet | `byte` | `byte(255)` | 5 |
+| Exact rational | `rat` | `1 / 3`, `rat(2, 6)` | 5 |
+| Binary floating point | `float` | `3.14`, `0.1` | 5 |
+| Truth value | `bool` | `true`, `false` | 9 |
+| Text | `string` | `"Hello"` | 6 |
+| One character | `char` | `'x'` | 6 |
+| Array | `@T` | `@int`, `@@string` | 8 |
+| Map | `%K:V` | `%string:int` | 8 |
+| Object | its name | `Bottle`, `Percent` | 12 |
+| Role | its name | `Price`, `Shape` | 14 |
+| Enum | its name | `Unknown`, `Maybe<int>` | 16 |
+| Applied generic | `Name<T>` | `Maybe<int>`, `List<string>` | 17 |
+| Successor | `^T` | `^Bottle` | 13 |
+| Anonymous action | `(T1, T2) is R` | `(int) is int` | 18 |
+| Future | `Future<T>` | `Future<string>` | 20 |
+| Top type | `any` | `any`, `@any` | 4.6 |
+
+There are no pointer types, no reference-versus-value distinction, no
+nullable variants of other types, no unsigned integers apart from `byte`, no
+fixed-width integer zoo (`i8`…`u64`), and no `void` value — an action that
+returns nothing is declared `is void`, and its "result" cannot be stored.
+
+## 4.3 Where types are written
+
+Types are written at *boundaries*: places where a value enters a name that
+other code will rely on.
+
+- `let name is T = …` — a local binding with a declared type;
+- `has field is T` — a field;
+- parameters and results of constructors and actions;
+- `catch e is T` — what a handler accepts;
+- the elements and keys of collection types.
+
+Inside a body, most types are inferred. The program below writes types only
+where they say something — the declared `rat`, the array of roles — and lets
+the compiler find the rest.
+
+```okkama
+module bible/types v1.0.0;
+
+import "io/stdout" take Stdout;
+
+role Shape {
+    area() is rat;
+}
+
+object Square does Shape {
+    has side is int;
+    Square(side is int) { self.side = side; }
+    area() is rat { (side * side).rat(); }
+}
+
+object Triangle does Shape {
+    has base, height is int;
+    Triangle(base is int, height is int) { self.base = base; self.height = height; }
+    area() is rat { base * height / 2; }
+}
+
+main() is int {
+    let out = Stdout();
+    let count = 3;                                   // inferred: int
+    let ratio is rat = 1 / count;                    // declared: rat
+    let names is @string = ["square", "triangle"];   // an array of strings
+    let sides is %string:int = ["square": 4, "triangle": 3];
+    let shapes is @Shape = [Square(3), Triangle(5, 3)];
+    let total = shapes.reduce(0.rat()) -> sum, shape { sum + shape.area(); };
+    out.writeln("ratio " + ratio.string());
+    out.writeln(names.join(", ") + " have " + (sides["square"] + sides["triangle"]).string() + " sides");
+    out.writeln("total area " + total.string());
+    0;
+}
+```
+
+Output:
+
+```text
+ratio 1/3
+square, triangle have 7 sides
+total area 33/2
+```
+
+Three details are worth noticing. `count` has no annotation, and its type is
+`int` because `3` is an `int`; inference in Okkama is *local and exact* — a
+binding gets exactly the type of its initialiser, never a wider one. `1 /
+count` is a `rat`, because dividing integers is exact. And `shapes` holds two
+different objects behind one role: `@Shape` is an array whose elements all
+perform `Shape`, so the `reduce` may call `area()` on each without knowing
+which object it is.
+
+## 4.4 Nominal, not structural
+
+Two type systems can disagree about when two types are "the same". In a
+*structural* system — TypeScript, Go's interfaces, OCaml's objects — a type
+is compatible with another if it has the right shape: the same fields or
+methods. In a *nominal* system — Java's classes, Rust's traits, Okkama — it is
+compatible only if a declaration says so [[Cardelli 1985](#ref-cardelli1985); [Pierce 2002](#ref-pierce2002)].
+
+Okkama is nominal for objects and roles. `Triangle` performs `Shape` because
+it says `does Shape`; an object with an action `area() is rat` that does not
+say so is not a `Shape`. Chapter 3 gave the reason: a shared method name is
+not a shared contract. Nominal roles cost a word in each declaration and buy
+the certainty that every implementation of a role was written *as* an
+implementation of it, by someone who could read the role's documentation.
+
+Between objects there is no subtyping at all. `Square` is not a subtype of
+`Triangle`, and no object is a subtype of another object; the only relation
+is "performs a role". This removes the variance puzzles that make generic
+code in languages with class hierarchies hard to write — whether a list of
+squares is a list of shapes — at the price of writing `@Shape` where a
+hierarchy would have inferred it.
+
+## 4.5 Inference: local and exact
+
+Okkama infers the types of local bindings, of the results of expressions,
+and of generic type arguments, but it does so only from what is directly
+visible, and it never widens.
+
+- `let x = expression;` gives `x` the type of `expression`.
+- An array literal's element type is the type of its elements: `[1, 2, 3]`
+  is `@int`. A literal with mixed elements such as `[1, "two"]` keeps each
+  element's own type and does not silently become `@any`; only a declared
+  `@any` boundary boxes them.
+- A generic object's type arguments are inferred from its constructor's
+  arguments when they determine them; otherwise they must be written:
+  `let empty is List<string> = EmptyList();`.
+
+This is deliberately weaker than the Hindley–Milner inference of ML and
+Haskell, which finds the most general type of a whole program without any
+annotations [[Milner 1978](#ref-milner1978)]. Global inference is powerful, but its error
+messages can point far from the mistake, and its results depend on code the
+reader is not looking at. Okkama annotates every declaration — parameters,
+results, fields — and infers inside bodies, so that a type is always found
+within a few lines of where it is used.
+
+Inference has known rough edges. Anonymous actions cannot declare their
+result type, so some generic calls need an annotation on the binding that
+receives them (issue #214), and empty literals need a declared type because
+they contain no evidence.
+
+## 4.6 The top type `any`
+
+`any` is the one type that every value can enter. It exists for the places
+where heterogeneity is the point: a database row of mixed columns, a log
+record with fields of different kinds, a generic transport.
+
+A value that enters `any` becomes an *opaque box*: it remembers what it is,
+but the program cannot look inside. Arithmetic, comparison, member access,
+indexing and `match` on an `any` are all rejected, and nothing converts an
+`any` back to a concrete type implicitly.
+
+```okkama
+module bible/opaque v1.0.0;
+
+main() is int {
+    let value is any = 42;
+    let larger = value + 1;
+    0;
+}
+```
+
+The compiler answers:
+
+```text
+04-any-rejected.ok:5:18: semantic error: Operator + cannot be applied to any and int
+```
+
+This makes `any` a *boundary*, not an escape from typing. In TypeScript `any`
+switches the checker off for everything it touches; in Okkama it switches
+*access* off. Code may pass, store and return boxed values, and only the
+trusted native layer — which receives them unboxed — or a future explicit
+narrowing construct can open them.
+
+## 4.7 What the compiler checks, and what remains for run time
+
+The Okkama compiler checks, before anything runs:
+
+- that every type name refers to a declared type with the right number of
+  generic arguments;
+- that operators receive operands of compatible categories (`int` with
+  `float` is an error, Chapter 5);
+- that every action call names an action the receiver's type has, with
+  arguments of the right types;
+- that conditions are `bool`, successors are used, fields are not accessed
+  from outside, and objects that claim a role implement all of it;
+- that a `match` used as a value covers every case of its enum, so that it
+  always produces one (a non-exhaustive `match` used as a statement is
+  allowed, and the editor flags it with a lint).
+
+Some checks can only happen while the program runs, because they depend on
+values: an index within an array's bounds, a key present in a map, a
+conversion such as `byte(256)` in range, a division by a non-zero number, a
+float result that stays finite. These are *runtime failures* (Chapter 10):
+precise, located errors that stop the program — or, in the case of typed
+errors, that a caller may catch.
+
+The boundary between the two lists has moved over time. The first Okkama
+implementation, an interpreter in Perl, checked most types while running;
+the Rust compiler checks most of them statically, and the remaining dynamic
+checks are concentrated where values, not types, decide.
+
+## 4.8 Limits
+
+- **No union or intersection types.** A value is of one type; a choice
+  between types is expressed by a role or by an enum with cases.
+- **No type-level computation.** Generics take types as parameters, but there
+  are no type functions, associated types or dependent types (Chapter 17).
+- **Annotation of empty and anonymous things.** Empty collections and some
+  anonymous actions need declared types (issue #214).
+- **No explicit narrowing of `any` yet.** Opaque values can only be passed
+  on (Chapter 32).
+
+None of these is an accident. Each would add a kind of entity; the razor asks
+for the work each would do, and so far the answer has been "it saves an
+annotation" — which is exactly the kind of convenience Chapter 1 promised to
+weigh, not to grant.
+
+# Chapter 5. Numbers
+
+Numbers are where programming languages lie most often. A machine integer is
+not an integer: it is a residue modulo 2⁶⁴ that pretends to be one until it
+overflows. A floating-point number is not a real number: it is the nearest of
+a finite set of binary fractions, and `0.1` is not among them. Most languages
+expose these representations directly and leave the programmer to remember
+where they differ from arithmetic. Okkama does the opposite: its default
+numbers *are* the mathematical objects they look like, and the machine
+representations are used only where the program asks for them.
+
+## 5.1 Four categories
+
+Okkama has four numeric categories, and they never convert into each other
+silently.
+
+| Category | What it is | Literal | Exact? |
+|---|---|---|---|
+| `int` | an integer of any size | `42`, `-7`, `0xFF`, `0b1010` | yes |
+| `rat` | a fraction of two integers, always reduced | `1 / 3`, `rat(2, 6)` | yes |
+| `float` | an IEEE 754 binary64 number, always finite | `3.14` | no |
+| `byte` | an octet, `0..255` | `byte(255)` | yes |
+
+Arithmetic takes two operands of the same category, with one exception that
+never loses information: `/` on two integers gives a `rat`. So `+`, `-`, `*`
+and `%` on two `int`s give an `int`, on two `rat`s a `rat`, on two `float`s a
+`float`, and two `byte`s add up to an `int`. Mixing categories is an error —
+`1 == 1.0`, `1.5 + 1`, even `1 + 1 / 2` — and the program converts
+explicitly: `1.rat() + 1 / 2`. (The older Okkama Book allows `int` and `rat` to
+mix; the compiler does not, and issue #230 asks which of the two is right.)
+
+```okkama
+module bible/exact v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Factorial {
+    Factorial() {}
+    of(n is int) is int {
+        if n <= 1 { 1; } else { n * self.of(n - 1); }
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let largest = 9223372036854775807;                 // 2^63 - 1
+    out.writeln("2^63 - 1 + 1 = " + (largest + 1).string());
+    out.writeln("30! = " + Factorial().of(30).string());
+    out.writeln("1/3 + 2/3 = " + (1 / 3 + 2 / 3).string());
+    out.writeln("1/10 + 2/10 = " + (1 / 10 + 2 / 10).string());
+    out.writeln("0.1 + 0.2 = " + (0.1 + 0.2).string());
+    out.writeln("-7 % 3 = " + (-7 % 3).string());
+    out.writeln("int(-3.9) = " + int(-3.9).string());
+    out.writeln("0.125 as rat = " + 0.125.rat().string());
+    out.writeln("1/3 as float = " + (1 / 3).float().string());
+    0;
+}
+```
+
+Output:
+
+```text
+2^63 - 1 + 1 = 9223372036854775808
+30! = 265252859812191058636308480000000
+1/3 + 2/3 = 1
+1/10 + 2/10 = 3/10
+0.1 + 0.2 = 0.30000000000000004
+-7 % 3 = -1
+int(-3.9) = -3
+0.125 as rat = 1/8
+1/3 as float = 0.3333333333333333
+```
+
+Every line of this output differs from at least one mainstream language. In C,
+Java and Go, `9223372036854775807 + 1` wraps to a negative number; in Okkama
+it is the next integer. `30!` needs more than 64 bits and is exact. `1/3 +
+2/3` is exactly `1`, and `1/10 + 2/10` is exactly `3/10`, while the same sum in
+`float` shows the binary rounding every programmer meets eventually. `-7 % 3`
+is `-1`: the remainder has the sign of the dividend, as in C and Java (Python
+gives `2`). `int(-3.9)` truncates toward zero.
+
+## 5.2 Exact integers
+
+An Okkama `int` behaves as a mathematical integer. Internally the
+implementations keep small values in a machine word and switch to an
+arbitrary-precision representation when a result does not fit; the program
+cannot observe the switch except by the time it takes.
+
+**Why.** Overflow is a correctness failure that type checking does not catch.
+The loss of the first Ariane 5 in 1996 came from converting a value into a
+16-bit integer too small for it [[al. 1996](#ref-lions1996)]; countless security
+vulnerabilities come from a size computation that wrapped around. Languages
+that care about correctness have been moving away from silent wrapping: Python
+decided in 2001 to unify its integer types into one arbitrary-precision type,
+a change completed in Python 3 [[Zadka 2001](#ref-pep237)], Scheme has long distinguished exact from inexact numbers in its
+numeric tower [[Shinn 2013](#ref-r7rs2013)], and Rust panics on overflow in debug builds. Okkama
+goes all the way: there is no wrapping integer type to choose by mistake.
+
+The algorithms behind big-integer arithmetic — schoolbook and Karatsuba
+multiplication, long division, conversion to decimal — are the classical ones
+of Knuth's *Seminumerical Algorithms* [[Knuth 1997](#ref-knuth1997)]. A product whose result
+cannot fit in the run's memory budget is refused before it is computed, so a
+program cannot exhaust memory with one multiplication (Chapter 26).
+
+**Cost.** Each integer operation must check for overflow. On the Sparrow core
+this is one compare-and-branch after the machine instruction, taken almost
+never; Figure 5.1 shows that integer-heavy code is still several times faster
+than in the dynamic languages Okkama is usually compared with. Where results
+do become big, they cost what big integers cost in any language.
+
+## 5.3 Exact rationals
+
+Dividing two integers gives a `rat`, an exact fraction kept in lowest terms
+with a positive denominator. Rationals add, subtract, multiply and divide with
+other rationals; an integer joins them through `.rat()`. `rat(2, 6)` and `1 / 3` are the same value and
+print as `1/3`; a fraction whose denominator reduces to one prints as an
+integer, so `6 / 2` prints `3`.
+
+Rationals are the right numbers for quantities that must add up exactly:
+shares, proportions, money before rounding. The program below divides a bill
+between three people without losing a cent — and makes the rounding rule,
+which every real system needs and most hide, an explicit line of code.
+
+```okkama
+module bible/money v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// Split a bill of 100.00 between three people, exactly.
+object Bill {
+    has cents is int;
+    Bill(cents is int) { self.cents = cents; }
+
+    // Each share is a rational number of cents; nothing is lost yet.
+    share(people is int) is rat { cents / people; }
+
+    // Rounding is a decision: everyone pays the truncated share and the
+    // first person pays what is left over.
+    shares(people is int) is @int {
+        let each = int(self.share(people));
+        let rest = cents - each * people;
+        (0..people).map() -> index { if index == 0 { each + rest; } else { each; } };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let bill = Bill(10000);
+    out.writeln("exact share: " + bill.share(3).string() + " cents");
+    let parts = bill.shares(3);
+    out.writeln("paid: " + parts.map() -> part { part.string(); }.join(" + ")
+        + " = " + parts.reduce(0) -> sum, part { sum + part; }.string());
+    0;
+}
+```
+
+Output:
+
+```text
+exact share: 10000/3 cents
+paid: 3334 + 3333 + 3333 = 10000
+```
+
+`bill.share(3)` is `10000/3` cents, exactly. `int(...)` truncates it to 3333,
+and the remainder goes to the first payer. The three payments add up to the
+bill because every step before the explicit rounding was exact.
+
+**Why.** Exact rationals are standard in Scheme and Lisp [[Shinn 2013](#ref-r7rs2013)] and in
+computer algebra systems, and absent from most industrial languages, where
+`1 / 3` silently becomes `0` or `0.333…`. Okkama's choice follows from the
+categories: if integer division must not lose information, its result cannot
+be an integer.
+
+**Cost.** Numerators and denominators can grow: repeatedly adding fractions
+with unrelated denominators makes them large, and arithmetic slows down with
+them. Programs that iterate thousands of times over rational quantities should
+round deliberately at known points, as the bill example does.
+
+## 5.4 Floating point, kept finite
+
+`float` is an IEEE 754 binary64 number [[IEEE 2019](#ref-ieee754)] — the `double` of C and
+Java — with one deliberate difference: an Okkama float is always *finite*. An
+operation whose result would be infinite or not a number is a runtime failure
+("Float value must contain a finite number"), not a special value that
+spreads through later computations.
+
+**Why floats at all.** Binary floating point is the right tool for
+measurements: physics, geometry, statistics, signal processing, where inputs
+are approximate anyway and speed matters. Hardware does it in one
+instruction. Goldberg's survey explains its rules and its traps
+[[Goldberg 1991](#ref-goldberg1991)]: `0.1 + 0.2` is `0.30000000000000004` because neither `0.1` nor
+`0.2` is representable in binary; addition is not associative; subtracting
+nearly equal numbers loses precision. Okkama keeps floats for the problems
+that want them and makes them a separate category so they cannot leak into
+counting and money by accident.
+
+**Why finite.** IEEE 754 defines infinities and NaN (not-a-number) so that a
+long computation can continue past an exceptional operation and the program
+can check the result at the end. William Kahan, the standard's principal
+architect, defends this design: stopping at the first exception is often
+worse than producing ∞ or NaN and letting the program decide [[Kahan 1996](#ref-kahan1996)].
+Okkama takes the other side of this argument deliberately. NaN breaks
+equality (NaN ≠ NaN), breaks ordering, and propagates silently into places
+far from its cause; infinities turn into NaNs at the next subtraction. In a
+language whose rules say that values are what they look like and failures are
+reported where they happen, a value that is not equal to itself has no
+place. A failure at the operation that overflowed points at the cause.
+
+This is a trade-off, not a free win. Numerical code that relies on IEEE
+special values — for example, using ∞ as an initial minimum — must be written
+differently, and a single overflow stops the computation instead of letting
+the program inspect a partial result. Such code can check magnitudes before
+the operation; Chapter 32 discusses whether an explicit non-finite type should
+exist.
+
+## 5.5 Bytes
+
+`byte` is an octet, `0..255`: the unit of binary data — file contents,
+network packets, encoded text. It is a separate category, not a small `int`:
+`byte(256)` fails rather than wrapping, `byte(255.9)` is 255 (truncation, then
+the range check), and arithmetic on bytes produces `int`. Binary data is
+`@byte`, an immutable array of octets; Chapter 6 shows how text and bytes meet.
+
+## 5.6 Conversions
+
+Every conversion between categories is written. The table lists them.
+
+| From → to | Spelling | Meaning |
+|---|---|---|
+| `int` → `float` | `x.float()` or `float(x)` | nearest binary64; may lose precision above 2⁵³ |
+| `float` → `int` | `int(x)` or `x.int()` | truncation toward zero |
+| `int` → `rat` | `x.rat()` | exact |
+| `rat` → `int` | `int(x)` or `x.int()` | truncation toward zero |
+| `rat` → `float` | `x.float()` | nearest binary64 |
+| `float` → `rat` | `x.rat()` | the float's shortest decimal value, as a fraction (`0.125.rat()` is `1/8`) |
+| any → `byte` | `byte(x)` | truncation, then a check of `0..255` |
+| number → text | `x.string()` | canonical text: `1/3`, `0.30000000000000004`, `42` |
+
+Two choices in the table deserve a word. `float.rat()` converts the float's
+shortest decimal spelling, not its exact binary value: `0.1.rat()` is
+`1/10`, not the 55-digit fraction that `0.1` really stores, because the
+decimal is what the programmer wrote and meant. And float-to-text produces
+the shortest string that reads back as the same float, so printing never
+invents digits.
+
+## 5.7 What exactness costs
+
+Figure 5.1 compares three numeric benchmarks of the Okkama benchmark suite —
+integer arithmetic, floating-point arithmetic and big-integer arithmetic — on
+the Sparrow core, on the JVM backend, and in Python, Ruby and Perl, measured
+for the 0.4.0 release.
+
+![Figure 5.1. Wall-clock time of three numeric benchmarks (logarithmic scale). Data: data/benchmarks-0.4.0.json.](figures/numbers-cost.svg)
+
+*Figure 5.1. Wall-clock time of three numeric benchmarks (logarithmic scale). Data: data/benchmarks-0.4.0.json.*
+
+On the Sparrow core, exact integer arithmetic takes 0.043 s where Python
+takes 0.52 s and Ruby 0.19 s: the overflow check costs little next to
+dynamic dispatch. Floating point is fastest (0.026 s), as expected of one
+machine instruction per operation. Big integers cost what big integers cost —
+0.23 s on the core against 0.36 s in Python and 0.40 s in Ruby, which use
+mature C libraries; Perl's pure-Perl big integers take 24 s. The lesson of the
+figure is not that Okkama is the fastest — it is not, against C or Rust — but
+that making the default numbers exact did not make them slow.
+
+## 5.8 Limits
+
+- **Explicit mixing of exact categories.** Even the lossless step from `int`
+  to `rat` must be written today (issue #230).
+- **No exponent literals.** `1e300` does not parse; large and small floats are
+  written with `pow` or in full (issue #57 records the open decision).
+- **`int.pow` returns a float.** `(2).pow(100)` is `1.2676506002282294e+30`,
+  not the exact integer — an inconsistency with the rest of integer arithmetic
+  (issue #228).
+- **No non-finite floats.** Code that relies on IEEE infinities and NaN must
+  be restructured (Section 5.4).
+- **Decimal arithmetic lives in the library, and it is thin.** The standard
+  library's `Decimal`, used for JSON numbers, has no arithmetic yet (issue
+  #191), and the library's string-backed `BigInt` duplicates the language's
+  own arbitrary-precision `int` (issues #189, #190).
+- **Elementary functions.** `abs`, `sign`, `pow` and `sqrt` are built in;
+  `exp`, logarithms and trigonometry are not yet available (issue #192).
+
+The first three are small and fixable; the fourth is a stance; the last two
+are gaps the standard library audit found and the next releases are meant to
+close.
+
 # References
 
 - <a id="ref-lions1996"></a>Jacques-Louis Lions et al. (1996). *ARIANE 5 Flight 501 Failure: Report by the Inquiry Board*. European Space Agency, Paris, 19 July 1996. https://www.esa.int/Newsroom/Press_Releases/Ariane_501_-_Presentation_of_Inquiry_Board_report
@@ -1148,6 +1709,7 @@ complete.
 - <a id="ref-brooks1987"></a>Frederick P. Brooks, Jr. (1987). No Silver Bullet — Essence and Accidents of Software Engineering. *Computer* 20(4): 10–19. https://doi.org/10.1109/MC.1987.1663532
 - <a id="ref-bugayenko2016"></a>Yegor Bugayenko (2016). *Elegant Objects*, Volume 1. Self-published (CreateSpace).
 - <a id="ref-bugayenko2017"></a>Yegor Bugayenko (2017). *Elegant Objects*, Volume 2. Self-published (CreateSpace).
+- <a id="ref-cardelli1985"></a>Luca Cardelli, Peter Wegner (1985). On Understanding Types, Data Abstraction, and Polymorphism. *ACM Computing Surveys* 17(4): 471–523. https://doi.org/10.1145/6041.6042
 - <a id="ref-claessen2000"></a>Koen Claessen, John Hughes (2000). QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs. In *Proceedings of ICFP 2000*: 268–279. ACM. https://doi.org/10.1145/351240.351266
 - <a id="ref-unicode16"></a>The Unicode Consortium (2024). *The Unicode Standard, Version 16.0.0*. https://www.unicode.org/versions/Unicode16.0.0/
 - <a id="ref-cook2009"></a>William R. Cook (2009). On Understanding Data Abstraction, Revisited. In *Proceedings of OOPSLA 2009*, *ACM SIGPLAN Notices* 44(10): 557–572. https://doi.org/10.1145/1640089.1640133
@@ -1169,10 +1731,12 @@ complete.
 - <a id="ref-hoare2009"></a>Tony Hoare (2009). Null References: The Billion Dollar Mistake. Talk at QCon London, March 2009. https://www.infoq.com/presentations/Null-References-The-Billion-Dollar-Mistake-Tony-Hoare/
 - <a id="ref-ieee754"></a>IEEE (2019). *IEEE Standard for Floating-Point Arithmetic* (IEEE Std 754-2019). https://doi.org/10.1109/IEEESTD.2019.8766229
 - <a id="ref-jones2023"></a>Richard Jones, Antony Hosking, Eliot Moss (2023). *The Garbage Collection Handbook: The Art of Automatic Memory Management*, 2nd edition. CRC Press.
+- <a id="ref-kahan1996"></a>William Kahan (1996). *Lecture Notes on the Status of IEEE Standard 754 for Binary Floating-Point Arithmetic*. University of California, Berkeley. https://people.eecs.berkeley.edu/~wkahan/ieee754status/IEEE754.PDF
 - <a id="ref-kay1993"></a>Alan C. Kay (1993). The Early History of Smalltalk. *ACM SIGPLAN Notices* 28(3): 69–95 (HOPL-II). https://doi.org/10.1145/155360.155364
 - <a id="ref-kay2003"></a>Alan Kay (2003). On the Meaning of "Object-Oriented Programming". E-mail to Stefan Ram, 23 July 2003. https://www.purl.org/stefan_ram/pub/doc_kay_oop_en
 - <a id="ref-king2019"></a>Alexis King (2019). Parse, Don't Validate. Blog post, 5 November 2019. https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/
 - <a id="ref-knuth1974"></a>Donald E. Knuth (1974). Structured Programming with go to Statements. *ACM Computing Surveys* 6(4): 261–301. https://doi.org/10.1145/356635.356640
+- <a id="ref-knuth1997"></a>Donald E. Knuth (1997). *The Art of Computer Programming, Volume 2: Seminumerical Algorithms*, 3rd edition. Addison-Wesley.
 - <a id="ref-li2019"></a>Ming Li, Paul Vitányi (2019). *An Introduction to Kolmogorov Complexity and Its Applications*, 4th edition. Springer. https://doi.org/10.1007/978-3-030-11298-1
 - <a id="ref-liskov1994"></a>Barbara H. Liskov, Jeannette M. Wing (1994). A Behavioral Notion of Subtyping. *ACM TOPLAS* 16(6): 1811–1841. https://doi.org/10.1145/197320.197383
 - <a id="ref-mackay2003"></a>David J. C. MacKay (2003). *Information Theory, Inference, and Learning Algorithms*. Cambridge University Press. Chapter 28: Model Comparison and Occam's Razor.
@@ -1193,6 +1757,7 @@ complete.
 - <a id="ref-poletto1999"></a>Massimiliano Poletto, Vivek Sarkar (1999). Linear Scan Register Allocation. *ACM TOPLAS* 21(5): 895–913. https://doi.org/10.1145/330249.330250
 - <a id="ref-rissanen1978"></a>Jorma Rissanen (1978). Modeling by Shortest Data Description. *Automatica* 14(5): 465–471. https://doi.org/10.1016/0005-1098(78)90005-5
 - <a id="ref-saltzer1975"></a>Jerome H. Saltzer, Michael D. Schroeder (1975). The Protection of Information in Computer Systems. *Proceedings of the IEEE* 63(9): 1278–1308. https://doi.org/10.1109/PROC.1975.9939
+- <a id="ref-r7rs2013"></a>Alex Shinn, John Cowan, Arthur A. Gleckler (eds.) (2013). *Revised⁷ Report on the Algorithmic Language Scheme*. https://small.r7rs.org/attachment/r7rs.pdf
 - <a id="ref-smith2018"></a>Nathaniel J. Smith (2018). Notes on Structured Concurrency, or: Go Statement Considered Harmful. Blog post, 25 April 2018. https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/
 - <a id="ref-snyder1986"></a>Alan Snyder (1986). Encapsulation and Inheritance in Object-Oriented Programming Languages. In *Proceedings of OOPSLA '86*: 38–45. ACM. https://doi.org/10.1145/28697.28702
 - <a id="ref-sober2015"></a>Elliott Sober (2015). *Ockham's Razors: A User's Manual*. Cambridge University Press. https://doi.org/10.1017/CBO9781107705937
@@ -1203,3 +1768,4 @@ complete.
 - <a id="ref-tofte1997"></a>Mads Tofte, Jean-Pierre Talpin (1997). Region-Based Memory Management. *Information and Computation* 132(2): 109–176. https://doi.org/10.1006/inco.1996.2613
 - <a id="ref-wadler1989"></a>Philip Wadler (1989). Theorems for Free! In *Proceedings of FPCA 1989*: 347–359. ACM. https://doi.org/10.1145/99370.99404
 - <a id="ref-wirth1995"></a>Niklaus Wirth (1995). A Plea for Lean Software. *Computer* 28(2): 64–68. https://doi.org/10.1109/2.348001
+- <a id="ref-pep237"></a>Moshe Zadka, Guido van Rossum (2001). PEP 237 — Unifying Long Integers and Integers. Python Enhancement Proposals. https://peps.python.org/pep-0237/
