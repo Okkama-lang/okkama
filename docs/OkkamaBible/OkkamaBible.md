@@ -2455,9 +2455,12 @@ string `"apple"`; `[apple: 5]` would use the value of a variable named
 `apple`. There is no implicit string-key shorthand, so a typo cannot quietly
 turn a variable into a string or the other way round.
 
-Keys must be scalar values — integers, strings, booleans and the other
-scalar categories, except `byte` and `any` — and the map keeps them **in sorted
-order**. `keys()` and
+Keys are scalar values — integers, strings, booleans and the other scalar
+categories, except `byte` and `any` — or value objects: objects whose fields
+are all scalars, enums or such objects, with no `destroy`. Because objects are
+immutable, an object key is its fields: two equal cards are one key, exactly
+as `==` says. The map keeps its keys **in sorted order** — objects field by
+field in declaration order. `keys()` and
 `values()` return arrays in that order, and every functional operation visits
 entries in it. Iteration order therefore never depends on hashing, insertion
 history or the memory layout of a run: the same program prints the same output
@@ -2559,12 +2562,13 @@ right method names is not enough.
 
 ## 8.7 Limits
 
-- **No append or concatenation for arrays**, so incremental building copies
-  (issue #145, Figure 8.1).
+- **Building one element at a time copies.** `items + [item]` and `a + b + c`
+  allocate the result once per expression (issue #145), but an array grown in
+  a loop is still copied at each step (Figure 8.1).
 - **No map update**: changing one entry rebuilds the map (issue #151).
-- **Map keys must be scalars.** Objects cannot be keys and there is no hashing
-  contract, so sets and maps keyed by objects are linear in the library
-  (issue #212).
+- **Generic keys are checked late.** A map keyed by a type parameter accepts
+  any type argument until run time, so the library's generic sets and counts
+  stay linear (issue #242).
 - **Few array builtins.** `contains`, `index_of`, `reversed` and their kin are
   written with `reduce` today (issue #211).
 - **No early exit from functional operations** (issue #150).
