@@ -2571,8 +2571,10 @@ right method names is not enough.
 - **Building one element at a time copies outside `reduce`.** `items + [item]`
   and `a + b + c` allocate the result once per expression (issue #145), and a
   `reduce` accumulator grows in place (issue #243), but an array grown through
-  successor fields or a cell is still copied at each step (Figure 8.1).
-- **No map update**: changing one entry rebuilds the map (issue #151).
+  successor fields or a cell is still copied at each step (Figure 8.1;
+  issue #246).
+- **Map updates copy.** `prices + ["fig": 90]` and `prices - ["pear": 0]`
+  give a new map, but by copying the whole origin (issues #252, #253).
 - **Generic keys are checked late.** A map keyed by a type parameter accepts
   any type argument until run time, so the library's generic sets and counts
   stay linear (issue #242).
@@ -2581,7 +2583,8 @@ right method names is not enough.
 - **No early exit from functional operations** (issue #150).
 - **`ordering()` needs `compare.Comparing` in scope** (issue #233).
 
-Most of these are the same gap seen from different sides: an immutable
+Most of these are the same gap seen from different sides (the milestone
+"Persistence Operations" tracks it, one issue per operation): an immutable
 language needs efficient persistent operations, and Okkama has the
 immutability already and the operations not yet.
 
