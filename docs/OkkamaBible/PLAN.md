@@ -1,0 +1,87 @@
+# The Okkama Bible — plan
+
+Working plan of the book (not part of the published text). A page is counted
+as 2,500 characters of text, code included; the target is 400–500 pages per
+language. `build.py --stats` prints the current size of every chapter.
+
+## Principles
+
+- **Two languages.** `chapters/en` and `chapters/ru` carry the same chapters
+  with the same file names; the Russian text is a translation of meaning, not
+  of word order.
+- **True to the implementation.** Every statement about Okkama is checked
+  against the compiler (`okkama-rs`), the conformance suite or a run. Tables of
+  builtins, std modules and instructions are generated from the code, never
+  typed by hand. Where the older Okkama Book disagrees, the code wins.
+- **Every example runs.** Programs live in `examples/NN-name.ok`; a chapter
+  includes one with `{{example:NN-name}}`, and `build.py --check` runs each
+  on the IR engine and on the Sparrow core and compares stdout and exit code
+  with `examples/NN-name.expected`.
+- **Every claim about design is sourced.** Arguments cite published work by
+  key, `[@hoare1981]`; `references.md` lists every key with authors, title,
+  venue, year and a stable link. No key is cited that is not in the list, and
+  no work is listed that the author has not checked exists.
+- **Figures are generated.** `figures/src/*.py` write SVG into `figures/`
+  from data in `data/` (benchmarks, compiler measurements) or from code
+  (diagrams); `{{figure:name|caption}}` places one. Mermaid blocks are allowed
+  for simple flow diagrams.
+- **Honest.** Each part ends with what Okkama does badly or not yet, linked to
+  its issue.
+
+## Outline and page budget
+
+| # | Chapter | Pages |
+|---|---|---:|
+| | **Part I. The razor** | |
+| 1 | Entities must not be multiplied: Ockham, parsimony and software | 14 |
+| 2 | A short history of objects: Simula, Smalltalk, Java, Elegant Objects | 16 |
+| 3 | The Okkama manifesto, rule by rule, and what each rule costs | 18 |
+| | **Part II. Values** | |
+| 4 | Types at a glance: categories, exactness, no implicit conversion | 12 |
+| 5 | Numbers: int, byte, rat, float, BigInt promotion, IEEE 754 | 20 |
+| 6 | Text: strings, characters, Unicode, bytes | 14 |
+| 7 | Absence without null: Maybe, Presence, else | 14 |
+| 8 | Collections: arrays, maps, ranges, functional operations | 16 |
+| | **Part III. Behaviour** | |
+| 9 | Expressions and control flow | 14 |
+| 10 | Failure: throw, panic, try/catch, causes, confirm | 22 |
+| 11 | defer, destroy, regions: deterministic resources | 20 |
+| | **Part IV. Objects** | |
+| 12 | Objects, fields and constructors | 18 |
+| 13 | Actions, successors and immutability | 18 |
+| 14 | Roles: nominal contracts and composition | 18 |
+| 15 | Fakes, tests and properties | 14 |
+| 16 | Enums and pattern matching | 14 |
+| 17 | Generics | 14 |
+| 18 | Anonymous actions and closures | 10 |
+| | **Part V. Programs** | |
+| 19 | Modules, imports, packages and blade | 14 |
+| 20 | Async, futures and structured concurrency | 22 |
+| 21 | Processes, natives and capabilities | 14 |
+| 22 | The standard library and its style (the json reference) | 24 |
+| | **Part VI. Under the hood** | |
+| 23 | The compiler: lexer to OIR | 20 |
+| 24 | Three engines: IR interpreter, JVM, Sparrow | 16 |
+| 25 | The Sparrow core: JIT, precise GC, stack maps | 20 |
+| 26 | Safety by construction: verification, budgets, fuzzing, conformance | 18 |
+| 27 | Performance: measurements and what they mean | 16 |
+| | **Part VII. Practice and judgement** | |
+| 28 | Building a CLI tool | 12 |
+| 29 | Building a web service | 16 |
+| 30 | Patterns and anti-patterns | 14 |
+| 31 | Okkama among languages: Java, Kotlin, Go, Rust, Haskell, OCaml | 16 |
+| 32 | Weaknesses, open problems and the road ahead | 14 |
+| | **Appendices** | |
+| A | Grammar | 8 |
+| B | Builtin behaviour (generated) | 6 |
+| C | Standard library index (generated) | 12 |
+| D | Glossary | 6 |
+| E | References | 10 |
+| | **Total** | **≈ 552** |
+
+The budget is a ceiling; chapters are written to their substance, then the
+total is reviewed against 400–500.
+
+## Progress
+
+Updated with each chapter: `build.py --stats`.
