@@ -2580,7 +2580,6 @@ right method names is not enough.
   stay linear (issue #242).
 - **Few array builtins.** `contains`, `index_of`, `reversed` and their kin are
   written with `reduce` today (issue #211).
-- **No early exit from functional operations** (issue #150).
 - **`ordering()` needs `compare.Comparing` in scope** (issue #233).
 
 Most of these are the same gap seen from different sides (the milestone
