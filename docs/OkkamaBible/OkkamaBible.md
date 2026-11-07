@@ -14,6 +14,16 @@
   - [1.7 A first taste](#17-a-first-taste)
   - [1.8 What the razor costs](#18-what-the-razor-costs)
   - [1.9 How to read this book](#19-how-to-read-this-book)
+- [Chapter 2. A Short History of Objects](#chapter-2-a-short-history-of-objects)
+  - [2.1 Simula: objects for simulation](#21-simula-objects-for-simulation)
+  - [2.2 Smalltalk: everything is a message](#22-smalltalk-everything-is-a-message)
+  - [2.3 C++ and Java: objects for industry](#23-c-and-java-objects-for-industry)
+  - [2.4 The trouble with inheritance](#24-the-trouble-with-inheritance)
+  - [2.5 The trouble with state](#25-the-trouble-with-state)
+  - [2.6 Objects as behaviour](#26-objects-as-behaviour)
+  - [2.7 Elegant Objects: the discipline](#27-elegant-objects-the-discipline)
+  - [2.8 Composition in practice](#28-composition-in-practice)
+  - [2.9 What was lost](#29-what-was-lost)
 
 # Part I. The Razor
 
@@ -381,6 +391,279 @@ where each idea comes from and where to read the full argument. Okkama
 invented few of its ideas. What it adds is the decision to make them all
 mandatory at once.
 
+# Chapter 2. A Short History of Objects
+
+Okkama calls itself an object language, and it disagrees with most other
+object languages about what an object is. To see why, we have to go back to
+where objects came from, follow how the idea changed as it moved from
+research into industry, and look at the problems that the industrial version
+created. Okkama is an attempt to keep what the original idea got right and to
+remove, by rule, what the industrial version added and later regretted.
+
+## 2.1 Simula: objects for simulation
+
+The first object language was built to simulate ships in a harbour. At the
+Norwegian Computing Center in Oslo, Ole-Johan Dahl and Kristen Nygaard needed
+to describe systems made of many independent, interacting things — ships,
+cranes, queues — each with its own state and its own course of action over
+time [[Dahl 1966](#ref-dahl1966); [Nygaard 1978](#ref-nygaard1978)]. Simula I (1962–1965) gave each such thing a
+*process*; Simula 67 generalised it into the constructs every object
+language has since borrowed: the *class*, describing a kind of object; the
+*object*, an instance with its own data; *subclassing* ("prefixing"), where a
+class extends another; and *virtual procedures*, which a subclass may
+redefine.
+
+Two things about Simula matter for the rest of this chapter. First, objects
+were invented to *model behaviour over time*: a ship is not a record of
+fields but something that acts. Second, inheritance arrived together with
+objects, as a way to say "a tanker is a ship with more cargo". The two ideas
+were born joined, and for thirty years most languages kept them joined.
+
+## 2.2 Smalltalk: everything is a message
+
+Alan Kay saw Simula in 1966 and drew a different lesson from it. In his
+history of Smalltalk he describes his idea of objects as being like
+biological cells or computers on a network: independent units that
+communicate only by sending messages, none of them able to reach into
+another's insides [[Kay 1993](#ref-kay1993)]. Smalltalk, developed at Xerox PARC in the 1970s
+by Kay, Dan Ingalls, Adele Goldberg and others, made this uniform:
+everything is an object, and all computation is objects sending messages to
+objects.
+
+Kay later summed up what he meant in a sentence that is quoted almost as
+often as Hoare's: "OOP to me means only messaging, local retention and
+protection and hiding of state-process, and extreme late-binding of all
+things" [[Kay 2003](#ref-kay2003)]. Notice what is *not* in the list: classes, inheritance,
+types. For Kay these were implementation choices; the essence was that an
+object hides its state and responds to messages.
+
+Okkama is closer to Kay's list than to Simula's. Its objects hide their state
+absolutely — there is no syntax to read another object's field — and they are
+used only through their actions. It parts with Smalltalk on the last item:
+Okkama binds early and checks statically, because late binding of everything
+makes the program text say less about what the program does (Chapter 14).
+
+## 2.3 C++ and Java: objects for industry
+
+The idea reached industry through C++ and Java. Bjarne Stroustrup began "C
+with Classes" at Bell Labs in 1979, bringing Simula's classes to C so that
+large systems could be organised without giving up C's efficiency
+[[Stroustrup 1994](#ref-stroustrup1994)]. Java, released by Sun in 1995, simplified C++ and made
+classes and objects the only way to organise a program, with single
+inheritance of classes, multiple inheritance of interfaces, garbage
+collection — and `null` [[Gosling 2023](#ref-gosling2023)].
+
+In these languages an object became, above all, a *type with data and
+methods*, and inheritance became the main mechanism of *reuse*: to get the
+behaviour of a class, extend it. Conventions grew around this model. Fields
+were made private, but every field got a public getter and often a setter, so
+that frameworks could fill objects from databases and forms. Objects became
+mutable containers of data with procedures attached — far from Kay's cells.
+
+The model was enormously successful, and it also produced a set of problems
+so persistent that a large part of the object-oriented literature of the
+1990s and 2000s is about avoiding its own core mechanisms.
+
+## 2.4 The trouble with inheritance
+
+Already in 1986 Alan Snyder pointed out that inheritance breaks the very
+encapsulation objects were supposed to provide: a subclass depends on how its
+parent is implemented, not only on what it promises, so the parent can no
+longer change its insides freely [[Snyder 1986](#ref-snyder1986)]. The phenomenon got a name, the
+*fragile base class problem*: an apparently safe change to a base class —
+adding a method, calling one method from another — breaks subclasses its
+author has never seen [[Mikhajlov 1998](#ref-mikhajlov1998)].
+
+Barbara Liskov and Jeannette Wing gave the precise condition under which a
+subtype may stand in for its supertype: it must preserve the supertype's
+behaviour — its invariants, preconditions and postconditions — not only its
+method signatures [[Liskov 1994](#ref-liskov1994)]. Inheritance in mainstream languages checks
+the signatures and leaves the behaviour to luck. A `Square` that extends a
+mutable `Rectangle` type-checks perfectly and breaks every caller that sets
+the width and expects the height to stay.
+
+The "Gang of Four" put the conclusion at the front of their catalogue of
+design patterns: "Favor object composition over class inheritance", and
+"Program to an interface, not an implementation" [[Gamma 1994](#ref-gamma1994)]. Most of their
+patterns — Decorator, Strategy, Composite, Proxy — are ways to get the reuse
+inheritance promised by composing objects instead. Joshua Bloch, who designed
+much of the Java collections library, gave the same advice to Java
+programmers: favour composition over inheritance, and "design and document
+for inheritance or else prohibit it" [[Bloch 2018](#ref-bloch2018)].
+
+When the most-cited books on a paradigm advise against using one of its two
+founding mechanisms, the razor has an obvious candidate.
+
+## 2.5 The trouble with state
+
+The second problem is mutable state, and objects made it worse by hiding it
+behind friendly names. A mutable object shared between two parts of a program
+is a channel between them: a change made by one is seen by the other, at a
+time the other did not choose. Moseley and Marks argue that this kind of
+state is the largest source of accidental complexity in software
+[[Moseley 2006](#ref-moseley2006)]: to understand what a method does, you must know every state
+the object can be in, and every path by which it got there.
+
+Getters and setters make the problem invisible. An object with a getter and a
+setter for each field is a record with extra steps; any part of the program
+can change it, and its invariants live in the heads of the people who
+remember to call the setters in the right order. Bloch's advice — "minimize
+mutability", make classes immutable unless there is a very good reason
+[[Bloch 2018](#ref-bloch2018)] — is, again, advice to avoid what the language makes easiest.
+
+Bertrand Meyer attacked the same problem from the side of contracts. In
+Eiffel and in *Object-Oriented Software Construction*, a class states its
+invariants and each routine its preconditions and postconditions, and the
+runtime checks them [[Meyer 1992](#ref-meyer1992); [Meyer 1997](#ref-meyer1997)]. Meyer also proposed the
+*command–query separation* principle: a routine either changes the state
+(a command) or returns information (a query), never both. Okkama's successor
+actions can be read as command–query separation taken to its end: there are
+no commands in place; a "command" is a query that returns the next object.
+
+## 2.6 Objects as behaviour
+
+What, then, is an object if not data with methods? William Cook gave a
+precise answer by contrasting objects with *abstract data types* [[Cook 2009](#ref-cook2009)].
+An abstract data type hides a representation behind a set of operations that
+all know the representation — a module can compare two of its values by
+looking inside both. An object is a *procedural* abstraction: it knows only
+itself, and it interacts with another object only through that object's
+interface. Two objects implementing the same interface may have completely
+different representations and still work together.
+
+This is Kay's idea in a formal dress, and it is the idea Okkama keeps. An
+Okkama object is defined by the actions it offers; a role names a set of
+actions; any object that declares it does the role can stand in for it, and
+nothing — not even an object of the same kind — can look at its fields.
+
+## 2.7 Elegant Objects: the discipline
+
+In 2016 and 2017 Yegor Bugayenko published *Elegant Objects*, two short and
+deliberately provocative volumes that turn the criticisms above into a code of
+practice for Java programmers [[Bugayenko 2016](#ref-bugayenko2016); [Bugayenko 2017](#ref-bugayenko2017)]. Its rules are
+blunt: never use `null`; no getters and setters; objects must be immutable;
+constructors only assign fields, and real work happens in methods; no static
+methods and no utility classes; no class inheritance beyond what is
+unavoidable; extend behaviour with decorators; replace mocks with fake
+implementations of interfaces; name objects as things, not as "-er" doers
+(a `Cash`, not a `CashFormatter`).
+
+Many experienced programmers find the rules excessive, and in Java they are
+costly to follow: the language, the libraries and the frameworks all push the
+other way, and nothing checks that a team actually follows them. Code review
+is the only enforcement, and code review is tired at five in the afternoon.
+
+Okkama starts where *Elegant Objects* stops. It takes the discipline and
+makes it the language, so that the compiler and the runtime enforce what a
+reviewer would otherwise have to catch:
+
+| *Elegant Objects* rule | Okkama rule |
+|---|---|
+| Never use `null` | there is no null; `null` and `nil` are reserved words that do not parse |
+| No getters and setters | fields are private, always; there is no field access from outside and no setter syntax |
+| Objects are immutable | fields are bound only during construction |
+| A changed object is a new object | successor actions `is ^T` return a new object; discarding it is an error |
+| No inheritance | there is no `extends`, `super`, `abstract` or `protected` |
+| Program to interfaces | roles are nominal contracts implemented with `does` |
+| Fakes instead of mocks | a role can carry a `fake` block, its reference test double |
+| Constructors bind and validate | constructors bind fields and check invariants with `confirm` |
+| Fail fast | `confirm` failures are panics or typed errors; there are no partial results |
+
+## 2.8 Composition in practice
+
+Here is the decorator pattern, which the Gang of Four offered as the
+alternative to subclassing, written in Okkama. A role says what a price can
+do; one object holds a listed amount; two decorators each wrap any price and
+change one thing about it.
+
+```okkama
+module bible/decorators v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// A price is anything that can say how many cents it is.
+role Price {
+    cents() is int;
+}
+
+object Listed does Price {
+    has amount is int;
+    Listed(amount is int) { self.amount = amount; }
+    cents() is int { amount; }
+}
+
+// Decorators: each wraps another Price and adds one rule.
+object Discounted does Price {
+    has origin is Price;
+    has percent is int;
+    Discounted(:origin, :percent);
+    cents() is int { origin.cents() - int(origin.cents() * percent / 100); }
+}
+
+object Taxed does Price {
+    has origin is Price;
+    has percent is int;
+    Taxed(:origin, :percent);
+    cents() is int { origin.cents() + int(origin.cents() * percent / 100); }
+}
+
+main() is int {
+    let out = Stdout();
+    let book is Price = Listed(2000);
+    let sale is Price = Discounted(origin: book, percent: 10);
+    let checkout is Price = Taxed(origin: sale, percent: 20);
+    out.writeln("listed:   " + book.cents().string());
+    out.writeln("on sale:  " + sale.cents().string());
+    out.writeln("checkout: " + checkout.cents().string());
+    0;
+}
+```
+
+Output:
+
+```text
+listed:   2000
+on sale:  1800
+checkout: 2160
+```
+
+There is no hierarchy here. `Discounted` and `Taxed` are not kinds of
+`Listed`; they are things that *have* a price and *are* prices. They can be
+stacked in any order, wrapped around any present or future implementation of
+`Price`, and tested with a fake price instead of a real one. Each object has
+one reason to exist and is a few lines long.
+
+Two details show the rest of the language at work. The shorthand constructor
+`Discounted(:origin, :percent);` binds two fields from named arguments, and
+callers must name them: `Discounted(origin: book, percent: 10)`. And the
+discount is computed with an explicit `int(...)`: in Okkama, dividing two
+integers gives an exact rational number, not a truncated integer, so turning
+it back into cents is a decision the program must write down. Chapter 5
+explains why.
+
+## 2.9 What was lost
+
+Removing inheritance removes real conveniences, and it would be dishonest to
+pretend otherwise.
+
+- **Implementation reuse.** A subclass inherits dozens of methods for free; a
+  decorator must implement every action of its role, even those it merely
+  forwards. For roles with many actions this is boilerplate. Several
+  languages answer with automatic delegation; Okkama has none yet, and it has
+  no default action bodies in roles either (issue #146), so forwarding is
+  written by hand today.
+- **Frameworks built on hierarchies.** Many libraries — GUI toolkits, web
+  frameworks, ORMs — are organised as base classes to extend. Their designs
+  do not translate directly; Okkama's standard library had to be written in
+  the compositional style from the start, and some of it shows the strain
+  (Chapter 22).
+- **A familiar vocabulary.** "Is-a" is how textbooks teach modelling. Okkama
+  asks for "has-a" and "does": a tanker *has* a hull and *does* the role of a
+  ship. The modelling is often clearer, but it must be learned.
+
+The trade is the one the literature has recommended for thirty years. Okkama
+simply stops offering the alternative.
+
 # References
 
 - <a id="ref-armstrong2003"></a>Joe Armstrong (2003). *Making Reliable Distributed Systems in the Presence of Software Errors*. PhD thesis, Royal Institute of Technology (KTH), Stockholm.
@@ -393,6 +676,7 @@ mandatory at once.
 - <a id="ref-bugayenko2017"></a>Yegor Bugayenko (2017). *Elegant Objects*, Volume 2. Self-published (CreateSpace).
 - <a id="ref-claessen2000"></a>Koen Claessen, John Hughes (2000). QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs. In *Proceedings of ICFP 2000*: 268–279. ACM. https://doi.org/10.1145/351240.351266
 - <a id="ref-unicode16"></a>The Unicode Consortium (2024). *The Unicode Standard, Version 16.0.0*. https://www.unicode.org/versions/Unicode16.0.0/
+- <a id="ref-cook2009"></a>William R. Cook (2009). On Understanding Data Abstraction, Revisited. In *Proceedings of OOPSLA 2009*, *ACM SIGPLAN Notices* 44(10): 557–572. https://doi.org/10.1145/1640089.1640133
 - <a id="ref-cytron1991"></a>Ron Cytron, Jeanne Ferrante, Barry K. Rosen, Mark N. Wegman, F. Kenneth Zadeck (1991). Efficiently Computing Static Single Assignment Form and the Control Dependence Graph. *ACM TOPLAS* 13(4): 451–490. https://doi.org/10.1145/115372.115320
 - <a id="ref-dahl1966"></a>Ole-Johan Dahl, Kristen Nygaard (1966). SIMULA — an ALGOL-Based Simulation Language. *Communications of the ACM* 9(9): 671–678. https://doi.org/10.1145/365813.365819
 - <a id="ref-dennis1966"></a>Jack B. Dennis, Earl C. Van Horn (1966). Programming Semantics for Multiprogrammed Computations. *Communications of the ACM* 9(3): 143–155. https://doi.org/10.1145/365230.365252
@@ -404,6 +688,7 @@ mandatory at once.
 - <a id="ref-gamma1994"></a>Erich Gamma, Richard Helm, Ralph Johnson, John Vlissides (1994). *Design Patterns: Elements of Reusable Object-Oriented Software*. Addison-Wesley.
 - <a id="ref-goldberg1991"></a>David Goldberg (1991). What Every Computer Scientist Should Know About Floating-Point Arithmetic. *ACM Computing Surveys* 23(1): 5–48. https://doi.org/10.1145/103162.103163
 - <a id="ref-goodenough1975"></a>John B. Goodenough (1975). Exception Handling: Issues and a Proposed Notation. *Communications of the ACM* 18(12): 683–696. https://doi.org/10.1145/361227.361230
+- <a id="ref-gosling2023"></a>James Gosling, Bill Joy, Guy Steele, Gilad Bracha, Alex Buckley, Daniel Smith, Gavin Bierman (2023). *The Java Language Specification, Java SE 21 Edition*. Oracle. https://docs.oracle.com/javase/specs/jls/se21/html/
 - <a id="ref-hickey2011"></a>Rich Hickey (2011). Simple Made Easy. Talk at Strange Loop, 20 September 2011. https://www.infoq.com/presentations/Simple-Made-Easy/
 - <a id="ref-hoare1978"></a>C. A. R. Hoare (1978). Communicating Sequential Processes. *Communications of the ACM* 21(8): 666–677. https://doi.org/10.1145/359576.359585
 - <a id="ref-hoare1981"></a>C. A. R. Hoare (1981). The Emperor's Old Clothes. *Communications of the ACM* 24(2): 75–83. https://doi.org/10.1145/358549.358561
@@ -411,6 +696,7 @@ mandatory at once.
 - <a id="ref-ieee754"></a>IEEE (2019). *IEEE Standard for Floating-Point Arithmetic* (IEEE Std 754-2019). https://doi.org/10.1109/IEEESTD.2019.8766229
 - <a id="ref-jones2023"></a>Richard Jones, Antony Hosking, Eliot Moss (2023). *The Garbage Collection Handbook: The Art of Automatic Memory Management*, 2nd edition. CRC Press.
 - <a id="ref-kay1993"></a>Alan C. Kay (1993). The Early History of Smalltalk. *ACM SIGPLAN Notices* 28(3): 69–95 (HOPL-II). https://doi.org/10.1145/155360.155364
+- <a id="ref-kay2003"></a>Alan Kay (2003). On the Meaning of "Object-Oriented Programming". E-mail to Stefan Ram, 23 July 2003. https://www.purl.org/stefan_ram/pub/doc_kay_oop_en
 - <a id="ref-king2019"></a>Alexis King (2019). Parse, Don't Validate. Blog post, 5 November 2019. https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/
 - <a id="ref-knuth1974"></a>Donald E. Knuth (1974). Structured Programming with go to Statements. *ACM Computing Surveys* 6(4): 261–301. https://doi.org/10.1145/356635.356640
 - <a id="ref-li2019"></a>Ming Li, Paul Vitányi (2019). *An Introduction to Kolmogorov Complexity and Its Applications*, 4th edition. Springer. https://doi.org/10.1007/978-3-030-11298-1
@@ -420,10 +706,12 @@ mandatory at once.
 - <a id="ref-meszaros2007"></a>Gerard Meszaros (2007). *xUnit Test Patterns: Refactoring Test Code*. Addison-Wesley.
 - <a id="ref-meyer1992"></a>Bertrand Meyer (1992). Applying "Design by Contract". *Computer* 25(10): 40–51. https://doi.org/10.1109/2.161279
 - <a id="ref-meyer1997"></a>Bertrand Meyer (1997). *Object-Oriented Software Construction*, 2nd edition. Prentice Hall.
+- <a id="ref-mikhajlov1998"></a>Leonid Mikhajlov, Emil Sekerinski (1998). A Study of the Fragile Base Class Problem. In *ECOOP'98*, LNCS 1445: 355–382. Springer. https://doi.org/10.1007/BFb0054099
 - <a id="ref-miller1990"></a>Barton P. Miller, Lars Fredriksen, Bryan So (1990). An Empirical Study of the Reliability of UNIX Utilities. *Communications of the ACM* 33(12): 32–44. https://doi.org/10.1145/96267.96279
 - <a id="ref-miller2006"></a>Mark S. Miller (2006). *Robust Composition: Towards a Unified Approach to Access Control and Concurrency Control*. PhD thesis, Johns Hopkins University.
 - <a id="ref-milner1978"></a>Robin Milner (1978). A Theory of Type Polymorphism in Programming. *Journal of Computer and System Sciences* 17(3): 348–375. https://doi.org/10.1016/0022-0000(78)90014-4
 - <a id="ref-moseley2006"></a>Ben Moseley, Peter Marks (2006). Out of the Tar Pit. Software Practice Advancement (SPA) 2006. https://curtclifton.net/papers/MoseleyMarks06a.pdf
+- <a id="ref-nygaard1978"></a>Kristen Nygaard, Ole-Johan Dahl (1978). The Development of the SIMULA Languages. *ACM SIGPLAN Notices* 13(8): 245–272 (HOPL I). https://doi.org/10.1145/960118.808391
 - <a id="ref-okasaki1998"></a>Chris Okasaki (1998). *Purely Functional Data Structures*. Cambridge University Press. https://doi.org/10.1017/CBO9780511530104
 - <a id="ref-ousterhout2018"></a>John Ousterhout (2018). *A Philosophy of Software Design*. Yaknyam Press.
 - <a id="ref-parnas1972"></a>David L. Parnas (1972). On the Criteria To Be Used in Decomposing Systems into Modules. *Communications of the ACM* 15(12): 1053–1058. https://doi.org/10.1145/361598.361623
@@ -432,6 +720,7 @@ mandatory at once.
 - <a id="ref-rissanen1978"></a>Jorma Rissanen (1978). Modeling by Shortest Data Description. *Automatica* 14(5): 465–471. https://doi.org/10.1016/0005-1098(78)90005-5
 - <a id="ref-saltzer1975"></a>Jerome H. Saltzer, Michael D. Schroeder (1975). The Protection of Information in Computer Systems. *Proceedings of the IEEE* 63(9): 1278–1308. https://doi.org/10.1109/PROC.1975.9939
 - <a id="ref-smith2018"></a>Nathaniel J. Smith (2018). Notes on Structured Concurrency, or: Go Statement Considered Harmful. Blog post, 25 April 2018. https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/
+- <a id="ref-snyder1986"></a>Alan Snyder (1986). Encapsulation and Inheritance in Object-Oriented Programming Languages. In *Proceedings of OOPSLA '86*: 38–45. ACM. https://doi.org/10.1145/28697.28702
 - <a id="ref-sober2015"></a>Elliott Sober (2015). *Ockham's Razors: A User's Manual*. Cambridge University Press. https://doi.org/10.1017/CBO9781107705937
 - <a id="ref-spade-sep"></a>Paul Vincent Spade, Claude Panaccio (2019). William of Ockham. In *The Stanford Encyclopedia of Philosophy* (Spring 2019 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/ockham/
 - <a id="ref-strom1986"></a>Robert E. Strom, Shaula Yemini (1986). Typestate: A Programming Language Concept for Enhancing Software Reliability. *IEEE Transactions on Software Engineering* SE-12(1): 157–171. https://doi.org/10.1109/TSE.1986.6312929

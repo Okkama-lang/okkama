@@ -14,6 +14,16 @@
   - [1.7 Первая проба](#17-первая-проба)
   - [1.8 Чего стоит бритва](#18-чего-стоит-бритва)
   - [1.9 Как читать эту книгу](#19-как-читать-эту-книгу)
+- [Глава 2. Краткая история объектов](#глава-2-краткая-история-объектов)
+  - [2.1 Simula: объекты для моделирования](#21-simula-объекты-для-моделирования)
+  - [2.2 Smalltalk: всё — сообщение](#22-smalltalk-всё--сообщение)
+  - [2.3 C++ и Java: объекты для индустрии](#23-c-и-java-объекты-для-индустрии)
+  - [2.4 Беда с наследованием](#24-беда-с-наследованием)
+  - [2.5 Беда с состоянием](#25-беда-с-состоянием)
+  - [2.6 Объекты как поведение](#26-объекты-как-поведение)
+  - [2.7 Elegant Objects: дисциплина](#27-elegant-objects-дисциплина)
+  - [2.8 Композиция на практике](#28-композиция-на-практике)
+  - [2.9 Что потеряно](#29-что-потеряно)
 
 # Часть I. Бритва
 
@@ -391,6 +401,286 @@ Sparrow и сравнивает вывод с текстом, который в�
 немногие из своих идей. Что он добавляет — это решение сделать их все
 обязательными одновременно.
 
+# Глава 2. Краткая история объектов
+
+Okkama называет себя объектным языком — и расходится с большинством
+объектных языков в том, что такое объект. Чтобы понять почему, нужно
+вернуться туда, откуда объекты пришли, проследить, как идея менялась по пути
+из лабораторий в индустрию, и посмотреть на проблемы, которые породила
+индустриальная версия. Okkama — попытка сохранить то, что исходная идея
+угадала верно, и правилом убрать то, что индустриальная версия добавила, а
+потом пожалела.
+
+## 2.1 Simula: объекты для моделирования
+
+Первый объектный язык создавался, чтобы моделировать корабли в гавани. В
+Норвежском вычислительном центре в Осло Оле-Йохан Даль и Кристен Нюгор
+описывали системы из множества независимых взаимодействующих вещей —
+кораблей, кранов, очередей, — у каждой из которых своё состояние и свой ход
+действий во времени [[Dahl 1966](#ref-dahl1966); [Nygaard 1978](#ref-nygaard1978)]. Simula I (1962–1965) дала
+каждой такой вещи *процесс*; Simula 67 обобщила это в конструкции, которые
+с тех пор заимствовал каждый объектный язык: *класс*, описывающий вид
+объектов; *объект* — экземпляр со своими данными; *подкласс* («префикс»),
+расширяющий другой класс; и *виртуальные процедуры*, которые подкласс может
+переопределить.
+
+Для дальнейшего в Simula важны две вещи. Во-первых, объекты были придуманы,
+чтобы *моделировать поведение во времени*: корабль — не запись из полей, а
+нечто действующее. Во-вторых, наследование появилось вместе с объектами —
+как способ сказать «танкер — это корабль с большим грузом». Две идеи
+родились сросшимися, и тридцать лет большинство языков их так и держали.
+
+## 2.2 Smalltalk: всё — сообщение
+
+Алан Кэй увидел Simula в 1966 году и вынес из неё другой урок. В истории
+Smalltalk он описывает свою идею объектов как биологических клеток или
+компьютеров в сети: независимых единиц, которые общаются только посылкой
+сообщений и не могут залезть друг другу внутрь [[Kay 1993](#ref-kay1993)]. Smalltalk,
+созданный в Xerox PARC в 1970-х Кэем, Дэном Ингаллсом, Адель Голдберг и
+другими, сделал это всеобщим: всё — объект, а всё вычисление — объекты,
+посылающие сообщения объектам.
+
+Позже Кэй подытожил, что имел в виду, фразой, которую цитируют почти так же
+часто, как фразу Хоара: «ООП для меня — это только обмен сообщениями,
+локальное хранение, защита и сокрытие состояния-процесса и предельно позднее
+связывание всего» [[Kay 2003](#ref-kay2003)]. Обратите внимание, чего в списке *нет*:
+классов, наследования, типов. Для Кэя это были решения реализации; суть же
+в том, что объект скрывает своё состояние и отвечает на сообщения.
+
+Okkama ближе к списку Кэя, чем к Simula. Его объекты скрывают состояние
+абсолютно — синтаксиса, чтобы прочитать поле другого объекта, нет, — и
+используются только через свои действия. С Smalltalk он расходится в
+последнем пункте: Okkama связывает рано и проверяет статически, потому что
+позднее связывание всего делает текст программы менее говорящим о том, что
+программа делает (глава 14).
+
+## 2.3 C++ и Java: объекты для индустрии
+
+В индустрию идея пришла через C++ и Java. Бьёрн Страуструп начал «C с
+классами» в Bell Labs в 1979 году, принеся классы Simula в C, чтобы большие
+системы можно было организовать, не теряя эффективности C [[Stroustrup 1994](#ref-stroustrup1994)].
+Java, выпущенная Sun в 1995 году, упростила C++ и сделала классы и объекты
+единственным способом организовать программу — с одиночным наследованием
+классов, множественным наследованием интерфейсов, сборкой мусора — и с
+`null` [[Gosling 2023](#ref-gosling2023)].
+
+В этих языках объект стал прежде всего *типом с данными и методами*, а
+наследование — главным механизмом *повторного использования*: чтобы получить
+поведение класса, расширь его. Вокруг этой модели выросли соглашения. Поля
+делали приватными, но каждому полю давали публичный геттер, а часто и
+сеттер, чтобы фреймворки могли наполнять объекты из баз данных и форм.
+Объекты стали изменяемыми контейнерами данных с приделанными процедурами —
+очень далеко от клеток Кэя.
+
+Модель имела огромный успех и породила набор проблем настолько устойчивых,
+что заметная часть объектно-ориентированной литературы 1990-х и 2000-х
+посвящена тому, как избегать собственных базовых механизмов.
+
+## 2.4 Беда с наследованием
+
+Уже в 1986 году Алан Снайдер показал, что наследование ломает ту самую
+инкапсуляцию, которую должны были дать объекты: подкласс зависит от того,
+как реализован родитель, а не только от того, что родитель обещает, и
+родитель больше не может свободно менять свои внутренности [[Snyder 1986](#ref-snyder1986)].
+У явления появилось имя — *проблема хрупкого базового класса*: внешне
+безопасное изменение базового класса — добавить метод, вызвать один метод из
+другого — ломает подклассы, которых автор и не видел [[Mikhajlov 1998](#ref-mikhajlov1998)].
+
+Барбара Лисков и Джаннет Винг дали точное условие, при котором подтип
+может заменить свой супертип: он должен сохранять *поведение* супертипа —
+его инварианты, предусловия и постусловия, — а не только сигнатуры методов
+[[Liskov 1994](#ref-liskov1994)]. Наследование в популярных языках проверяет сигнатуры, а
+поведение оставляет на удачу. `Square`, расширяющий изменяемый `Rectangle`,
+отлично проходит проверку типов и ломает каждого вызывающего, который задаёт
+ширину и ждёт, что высота не изменится.
+
+«Банда четырёх» вынесла вывод в начало своего каталога паттернов:
+«Предпочитайте композицию объектов наследованию классов» и «Программируйте
+на уровне интерфейса, а не реализации» [[Gamma 1994](#ref-gamma1994)]. Большинство их
+паттернов — Декоратор, Стратегия, Компоновщик, Заместитель — это способы
+получить обещанное наследованием повторное использование через композицию
+объектов. Джошуа Блох, спроектировавший значительную часть коллекций Java,
+дал программистам на Java тот же совет: предпочитайте композицию
+наследованию и «проектируйте и документируйте класс для наследования —
+или запрещайте его» [[Bloch 2018](#ref-bloch2018)].
+
+Когда самые цитируемые книги о парадигме советуют не пользоваться одним из
+двух её основополагающих механизмов, у бритвы появляется очевидный
+кандидат.
+
+## 2.5 Беда с состоянием
+
+Вторая проблема — изменяемое состояние, и объекты её усугубили, спрятав за
+дружелюбными именами. Изменяемый объект, разделяемый двумя частями
+программы, — это канал между ними: изменение, сделанное одной, видно другой
+в момент, который та не выбирала. Мозли и Маркс считают такое состояние
+крупнейшим источником случайной сложности в программах [[Moseley 2006](#ref-moseley2006)]: чтобы
+понять, что делает метод, нужно знать каждое состояние, в котором может
+оказаться объект, и каждый путь, которым он туда попал.
+
+Геттеры и сеттеры делают проблему невидимой. Объект с геттером и сеттером
+на каждое поле — это запись с лишними шагами; любая часть программы может
+её изменить, а инварианты живут в головах тех, кто не забывает вызывать
+сеттеры в правильном порядке. Совет Блоха — «минимизируйте изменяемость»,
+делайте классы неизменяемыми, если нет очень веской причины [[Bloch 2018](#ref-bloch2018)], —
+это снова совет избегать того, что язык делает самым лёгким.
+
+Бертран Мейер атаковал ту же проблему со стороны контрактов. В Eiffel и в
+*Object-Oriented Software Construction* класс объявляет свои инварианты, а
+каждая процедура — пред- и постусловия, и рантайм их проверяет
+[[Meyer 1992](#ref-meyer1992); [Meyer 1997](#ref-meyer1997)]. Мейер же предложил *принцип разделения команд и
+запросов*: процедура либо меняет состояние (команда), либо возвращает
+сведения (запрос), но не то и другое сразу. Successor-действия Okkama можно
+прочитать как разделение команд и запросов, доведённое до конца: команд на
+месте нет вовсе; «команда» — это запрос, возвращающий следующий объект.
+
+## 2.6 Объекты как поведение
+
+Что же тогда объект, если не данные с методами? Уильям Кук дал точный ответ,
+противопоставив объекты *абстрактным типам данных* [[Cook 2009](#ref-cook2009)]. Абстрактный
+тип данных скрывает представление за набором операций, которые все это
+представление знают: модуль может сравнить два своих значения, заглянув в
+оба. Объект — это *процедурная* абстракция: он знает только себя и
+взаимодействует с другим объектом только через его интерфейс. Два объекта,
+реализующие один интерфейс, могут иметь совершенно разные представления и
+всё равно работать вместе.
+
+Это идея Кэя в формальном облачении, и именно её Okkama сохраняет. Объект
+Okkama определяется действиями, которые он предлагает; роль называет набор
+действий; любой объект, объявивший, что исполняет роль, может её
+заменить, и ничто — даже объект того же вида — не может посмотреть на его
+поля.
+
+## 2.7 Elegant Objects: дисциплина
+
+В 2016 и 2017 годах Егор Бугаенко выпустил *Elegant Objects* — два коротких
+и нарочито провокационных тома, превращающих изложенную критику в кодекс
+практики для программистов на Java [[Bugayenko 2016](#ref-bugayenko2016); [Bugayenko 2017](#ref-bugayenko2017)]. Правила
+резки: никогда не использовать `null`; никаких геттеров и сеттеров; объекты
+неизменяемы; конструкторы только присваивают поля, а настоящая работа
+происходит в методах; никаких статических методов и утилитных классов;
+никакого наследования классов сверх неизбежного; расширять поведение
+декораторами; заменять моки фейковыми реализациями интерфейсов; называть
+объекты как вещи, а не как исполнителей на «-er» (`Cash`, а не
+`CashFormatter`).
+
+Многие опытные программисты считают эти правила чрезмерными, а в Java
+следовать им дорого: язык, библиотеки и фреймворки тянут в другую сторону,
+и ничто не проверяет, что команда действительно правилам следует.
+Единственное принуждение — код-ревью, а код-ревью устаёт к пяти вечера.
+
+Okkama начинается там, где заканчиваются *Elegant Objects*. Он берёт
+дисциплину и делает её языком, так что компилятор и рантайм обеспечивают то,
+что иначе должен был бы ловить рецензент:
+
+| Правило *Elegant Objects* | Правило Okkama |
+|---|---|
+| Никогда не используй `null` | null нет; `null` и `nil` — зарезервированные слова, которые не разбираются |
+| Никаких геттеров и сеттеров | поля всегда приватны; доступа к полю извне и синтаксиса сеттера нет |
+| Объекты неизменяемы | поля связываются только при создании |
+| Изменённый объект — новый объект | successor-действия `is ^T` возвращают новый объект; выбросить его — ошибка |
+| Никакого наследования | нет `extends`, `super`, `abstract` и `protected` |
+| Программируй через интерфейсы | роли — номинальные контракты, реализуемые через `does` |
+| Фейки вместо моков | роль может нести блок `fake` — свой эталонный тестовый двойник |
+| Конструкторы связывают и проверяют | конструкторы связывают поля и проверяют инварианты через `confirm` |
+| Падай быстро | отказы `confirm` — паники или типизированные ошибки; частичных результатов нет |
+
+## 2.8 Композиция на практике
+
+Вот паттерн «Декоратор», который «Банда четырёх» предлагала как
+альтернативу наследованию, на Okkama. Роль говорит, что умеет цена; один
+объект хранит указанную сумму; два декоратора оборачивают любую цену и
+меняют в ней одну вещь.
+
+```okkama
+module bible/decorators v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// A price is anything that can say how many cents it is.
+role Price {
+    cents() is int;
+}
+
+object Listed does Price {
+    has amount is int;
+    Listed(amount is int) { self.amount = amount; }
+    cents() is int { amount; }
+}
+
+// Decorators: each wraps another Price and adds one rule.
+object Discounted does Price {
+    has origin is Price;
+    has percent is int;
+    Discounted(:origin, :percent);
+    cents() is int { origin.cents() - int(origin.cents() * percent / 100); }
+}
+
+object Taxed does Price {
+    has origin is Price;
+    has percent is int;
+    Taxed(:origin, :percent);
+    cents() is int { origin.cents() + int(origin.cents() * percent / 100); }
+}
+
+main() is int {
+    let out = Stdout();
+    let book is Price = Listed(2000);
+    let sale is Price = Discounted(origin: book, percent: 10);
+    let checkout is Price = Taxed(origin: sale, percent: 20);
+    out.writeln("listed:   " + book.cents().string());
+    out.writeln("on sale:  " + sale.cents().string());
+    out.writeln("checkout: " + checkout.cents().string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+listed:   2000
+on sale:  1800
+checkout: 2160
+```
+
+Иерархии здесь нет. `Discounted` и `Taxed` — не разновидности `Listed`; это
+вещи, которые *имеют* цену и *являются* ценами. Их можно складывать в любом
+порядке, оборачивать вокруг любой нынешней или будущей реализации `Price` и
+тестировать с фейковой ценой вместо настоящей. У каждого объекта одна
+причина существовать, и он занимает несколько строк.
+
+Две детали показывают остальной язык в работе. Сокращённый конструктор
+`Discounted(:origin, :percent);` связывает два поля из именованных
+аргументов, и вызывающий обязан их назвать: `Discounted(origin: book,
+percent: 10)`. А скидка вычисляется с явным `int(...)`: в Okkama деление
+двух целых даёт точное рациональное число, а не усечённое целое, поэтому
+превращение его обратно в центы — решение, которое программа должна
+записать. Почему так — в главе 5.
+
+## 2.9 Что потеряно
+
+Убирая наследование, мы убираем настоящие удобства, и было бы нечестно
+делать вид, что это не так.
+
+- **Повторное использование реализации.** Подкласс получает десятки методов
+  даром; декоратор обязан реализовать каждое действие своей роли, даже те,
+  которые он просто передаёт дальше. Для ролей с многими действиями это
+  шаблонный код. Некоторые языки отвечают на это автоматическим
+  делегированием; в Okkama его пока нет, как нет и тел действий по
+  умолчанию в ролях (тикет #146), поэтому пересылка сегодня пишется руками.
+- **Фреймворки на иерархиях.** Многие библиотеки — GUI-тулкиты,
+  веб-фреймворки, ORM — устроены как базовые классы для расширения. Их
+  устройство напрямую не переносится; стандартную библиотеку Okkama
+  пришлось с самого начала писать в композиционном стиле, и местами это
+  заметно (глава 22).
+- **Привычный словарь.** «Является» (is-a) — так учебники учат
+  моделированию. Okkama просит «имеет» и «исполняет роль»: танкер *имеет*
+  корпус и *исполняет роль* корабля. Модель часто получается яснее, но этому
+  приходится учиться.
+
+Это тот самый обмен, который литература рекомендует уже тридцать лет. Okkama
+просто перестаёт предлагать альтернативу.
+
 # Литература
 
 - <a id="ref-armstrong2003"></a>Joe Armstrong (2003). *Making Reliable Distributed Systems in the Presence of Software Errors*. PhD thesis, Royal Institute of Technology (KTH), Stockholm.
@@ -403,6 +693,7 @@ Sparrow и сравнивает вывод с текстом, который в�
 - <a id="ref-bugayenko2017"></a>Yegor Bugayenko (2017). *Elegant Objects*, Volume 2. Self-published (CreateSpace).
 - <a id="ref-claessen2000"></a>Koen Claessen, John Hughes (2000). QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs. In *Proceedings of ICFP 2000*: 268–279. ACM. https://doi.org/10.1145/351240.351266
 - <a id="ref-unicode16"></a>The Unicode Consortium (2024). *The Unicode Standard, Version 16.0.0*. https://www.unicode.org/versions/Unicode16.0.0/
+- <a id="ref-cook2009"></a>William R. Cook (2009). On Understanding Data Abstraction, Revisited. In *Proceedings of OOPSLA 2009*, *ACM SIGPLAN Notices* 44(10): 557–572. https://doi.org/10.1145/1640089.1640133
 - <a id="ref-cytron1991"></a>Ron Cytron, Jeanne Ferrante, Barry K. Rosen, Mark N. Wegman, F. Kenneth Zadeck (1991). Efficiently Computing Static Single Assignment Form and the Control Dependence Graph. *ACM TOPLAS* 13(4): 451–490. https://doi.org/10.1145/115372.115320
 - <a id="ref-dahl1966"></a>Ole-Johan Dahl, Kristen Nygaard (1966). SIMULA — an ALGOL-Based Simulation Language. *Communications of the ACM* 9(9): 671–678. https://doi.org/10.1145/365813.365819
 - <a id="ref-dennis1966"></a>Jack B. Dennis, Earl C. Van Horn (1966). Programming Semantics for Multiprogrammed Computations. *Communications of the ACM* 9(3): 143–155. https://doi.org/10.1145/365230.365252
@@ -414,6 +705,7 @@ Sparrow и сравнивает вывод с текстом, который в�
 - <a id="ref-gamma1994"></a>Erich Gamma, Richard Helm, Ralph Johnson, John Vlissides (1994). *Design Patterns: Elements of Reusable Object-Oriented Software*. Addison-Wesley.
 - <a id="ref-goldberg1991"></a>David Goldberg (1991). What Every Computer Scientist Should Know About Floating-Point Arithmetic. *ACM Computing Surveys* 23(1): 5–48. https://doi.org/10.1145/103162.103163
 - <a id="ref-goodenough1975"></a>John B. Goodenough (1975). Exception Handling: Issues and a Proposed Notation. *Communications of the ACM* 18(12): 683–696. https://doi.org/10.1145/361227.361230
+- <a id="ref-gosling2023"></a>James Gosling, Bill Joy, Guy Steele, Gilad Bracha, Alex Buckley, Daniel Smith, Gavin Bierman (2023). *The Java Language Specification, Java SE 21 Edition*. Oracle. https://docs.oracle.com/javase/specs/jls/se21/html/
 - <a id="ref-hickey2011"></a>Rich Hickey (2011). Simple Made Easy. Talk at Strange Loop, 20 September 2011. https://www.infoq.com/presentations/Simple-Made-Easy/
 - <a id="ref-hoare1978"></a>C. A. R. Hoare (1978). Communicating Sequential Processes. *Communications of the ACM* 21(8): 666–677. https://doi.org/10.1145/359576.359585
 - <a id="ref-hoare1981"></a>C. A. R. Hoare (1981). The Emperor's Old Clothes. *Communications of the ACM* 24(2): 75–83. https://doi.org/10.1145/358549.358561
@@ -421,6 +713,7 @@ Sparrow и сравнивает вывод с текстом, который в�
 - <a id="ref-ieee754"></a>IEEE (2019). *IEEE Standard for Floating-Point Arithmetic* (IEEE Std 754-2019). https://doi.org/10.1109/IEEESTD.2019.8766229
 - <a id="ref-jones2023"></a>Richard Jones, Antony Hosking, Eliot Moss (2023). *The Garbage Collection Handbook: The Art of Automatic Memory Management*, 2nd edition. CRC Press.
 - <a id="ref-kay1993"></a>Alan C. Kay (1993). The Early History of Smalltalk. *ACM SIGPLAN Notices* 28(3): 69–95 (HOPL-II). https://doi.org/10.1145/155360.155364
+- <a id="ref-kay2003"></a>Alan Kay (2003). On the Meaning of "Object-Oriented Programming". E-mail to Stefan Ram, 23 July 2003. https://www.purl.org/stefan_ram/pub/doc_kay_oop_en
 - <a id="ref-king2019"></a>Alexis King (2019). Parse, Don't Validate. Blog post, 5 November 2019. https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/
 - <a id="ref-knuth1974"></a>Donald E. Knuth (1974). Structured Programming with go to Statements. *ACM Computing Surveys* 6(4): 261–301. https://doi.org/10.1145/356635.356640
 - <a id="ref-li2019"></a>Ming Li, Paul Vitányi (2019). *An Introduction to Kolmogorov Complexity and Its Applications*, 4th edition. Springer. https://doi.org/10.1007/978-3-030-11298-1
@@ -430,10 +723,12 @@ Sparrow и сравнивает вывод с текстом, который в�
 - <a id="ref-meszaros2007"></a>Gerard Meszaros (2007). *xUnit Test Patterns: Refactoring Test Code*. Addison-Wesley.
 - <a id="ref-meyer1992"></a>Bertrand Meyer (1992). Applying "Design by Contract". *Computer* 25(10): 40–51. https://doi.org/10.1109/2.161279
 - <a id="ref-meyer1997"></a>Bertrand Meyer (1997). *Object-Oriented Software Construction*, 2nd edition. Prentice Hall.
+- <a id="ref-mikhajlov1998"></a>Leonid Mikhajlov, Emil Sekerinski (1998). A Study of the Fragile Base Class Problem. In *ECOOP'98*, LNCS 1445: 355–382. Springer. https://doi.org/10.1007/BFb0054099
 - <a id="ref-miller1990"></a>Barton P. Miller, Lars Fredriksen, Bryan So (1990). An Empirical Study of the Reliability of UNIX Utilities. *Communications of the ACM* 33(12): 32–44. https://doi.org/10.1145/96267.96279
 - <a id="ref-miller2006"></a>Mark S. Miller (2006). *Robust Composition: Towards a Unified Approach to Access Control and Concurrency Control*. PhD thesis, Johns Hopkins University.
 - <a id="ref-milner1978"></a>Robin Milner (1978). A Theory of Type Polymorphism in Programming. *Journal of Computer and System Sciences* 17(3): 348–375. https://doi.org/10.1016/0022-0000(78)90014-4
 - <a id="ref-moseley2006"></a>Ben Moseley, Peter Marks (2006). Out of the Tar Pit. Software Practice Advancement (SPA) 2006. https://curtclifton.net/papers/MoseleyMarks06a.pdf
+- <a id="ref-nygaard1978"></a>Kristen Nygaard, Ole-Johan Dahl (1978). The Development of the SIMULA Languages. *ACM SIGPLAN Notices* 13(8): 245–272 (HOPL I). https://doi.org/10.1145/960118.808391
 - <a id="ref-okasaki1998"></a>Chris Okasaki (1998). *Purely Functional Data Structures*. Cambridge University Press. https://doi.org/10.1017/CBO9780511530104
 - <a id="ref-ousterhout2018"></a>John Ousterhout (2018). *A Philosophy of Software Design*. Yaknyam Press.
 - <a id="ref-parnas1972"></a>David L. Parnas (1972). On the Criteria To Be Used in Decomposing Systems into Modules. *Communications of the ACM* 15(12): 1053–1058. https://doi.org/10.1145/361598.361623
@@ -442,6 +737,7 @@ Sparrow и сравнивает вывод с текстом, который в�
 - <a id="ref-rissanen1978"></a>Jorma Rissanen (1978). Modeling by Shortest Data Description. *Automatica* 14(5): 465–471. https://doi.org/10.1016/0005-1098(78)90005-5
 - <a id="ref-saltzer1975"></a>Jerome H. Saltzer, Michael D. Schroeder (1975). The Protection of Information in Computer Systems. *Proceedings of the IEEE* 63(9): 1278–1308. https://doi.org/10.1109/PROC.1975.9939
 - <a id="ref-smith2018"></a>Nathaniel J. Smith (2018). Notes on Structured Concurrency, or: Go Statement Considered Harmful. Blog post, 25 April 2018. https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/
+- <a id="ref-snyder1986"></a>Alan Snyder (1986). Encapsulation and Inheritance in Object-Oriented Programming Languages. In *Proceedings of OOPSLA '86*: 38–45. ACM. https://doi.org/10.1145/28697.28702
 - <a id="ref-sober2015"></a>Elliott Sober (2015). *Ockham's Razors: A User's Manual*. Cambridge University Press. https://doi.org/10.1017/CBO9781107705937
 - <a id="ref-spade-sep"></a>Paul Vincent Spade, Claude Panaccio (2019). William of Ockham. In *The Stanford Encyclopedia of Philosophy* (Spring 2019 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/ockham/
 - <a id="ref-strom1986"></a>Robert E. Strom, Shaula Yemini (1986). Typestate: A Programming Language Concept for Enhancing Software Reliability. *IEEE Transactions on Software Engineering* SE-12(1): 157–171. https://doi.org/10.1109/TSE.1986.6312929
