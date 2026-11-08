@@ -1,0 +1,15 @@
+module bible/self_call v1.0.0;
+
+object Account {
+    has owner is string;
+    has code is string;
+
+    Account(owner is string) {
+        self.owner = owner;
+        code = self.initials() + "-1";
+    }
+
+    initials() is string { owner.slice(0, 2); }
+}
+
+main() is int { 0; }

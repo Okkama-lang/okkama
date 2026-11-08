@@ -138,7 +138,11 @@
   - [12.7 Действия и частные действия](#127-действия-и-частные-действия)
   - [12.8 cap: вид объекта только для чтения](#128-cap-вид-объекта-только-для-чтения)
   - [12.9 Объекты — значения](#129-объекты--значения)
-  - [12.10 Чего стоит такой замысел](#1210-чего-стоит-такой-замысел)
+  - [12.10 Во что компилируется конструктор](#1210-во-что-компилируется-конструктор)
+  - [12.11 Отдать `self` из конструктора](#1211-отдать-self-из-конструктора)
+  - [12.12 Как движки хранят объект](#1212-как-движки-хранят-объект)
+  - [12.13 Объекты в других языках](#1213-объекты-в-других-языках)
+  - [12.14 Чего стоит такой замысел](#1214-чего-стоит-такой-замысел)
 
 # Часть I. Бритва
 
@@ -5706,7 +5710,287 @@ cap — объектный ответ на «мне нужен геттер дл
 которые надо сравнивать по чему-то другому, например по бизнес-ключу,
 открывают для этого действие, и словарь ключуется по его результату.
 
-## 12.10 Чего стоит такой замысел
+## 12.10 Во что компилируется конструктор
+
+Компилятор превращает каждый конструктор в функцию IR с пометкой `[ctor]`.
+`okkama ir` их печатает. Для `Point` с проверяющим полным конструктором и
+сокращением:
+
+```okkama
+object Point {
+    has x is int;
+    has y is int = 0;
+
+    Point(x is int, y is int) {
+        self.x = x;
+        self.y = y;
+        confirm x >= 0 else throw InvalidPoint.negative(x);
+    }
+    Point(:x);
+
+    sum() is int { x + y; }
+}
+```
+
+оба конструктора выглядят так:
+
+```text
+func @Point.new#0(%0: int, %1: int) -> Point [ctor Point] {
+^b0:
+    %2: int = call @Point.default.y()
+    %3: int = const 0
+    %4: bool = int.ge %0, %3
+    cond %4, ^b1, ^b2
+^b1:
+    %5: Point = obj.new Point { x: %0, y: %1 }
+    ret %5
+^b2:
+    %6: int = const 0
+    %7: array<int> = array.new [%0]
+    %8: InvalidPoint = call @InvalidPoint.new(%6, %7)
+    throw %8
+}
+func @Point.new#1(%0: int) -> Point [ctor Point] {
+^b0:
+    %1: int = call @Point.default.y()
+    %2: Point = obj.new Point { x: %0, y: %1 }
+    ret %2
+}
+```
+
+Здесь видны четыре вещи.
+
+- **Перегрузки — отдельные функции.** `new#0` и `new#1` — два
+  конструктора. Перегрузка выбрана при компиляции, и место вызова прямо
+  называет одну из них: `call @Point.new#0(%1, %2)`.
+- **Связывание поля — не запись.** `self.x = x` не порождает ни одной
+  инструкции. Компилятор держит связанное значение в регистре, а объект
+  создаётся одним `obj.new` сразу со всеми полями. Так дёшево обеспечивается
+  «каждое поле связывается один раз»: наполовину заполненного объекта, в
+  который можно было бы писать, просто нет.
+- **Объект появляется только после проверок.** `obj.new` стоит в ветке, где
+  `confirm` выполнилось. В другой ветке никакого `Point` нет, есть только
+  брошенный `InvalidPoint`. «Никакой `Cash` не создаётся» (§12.6) надо
+  понимать буквально.
+- **Умолчания — функции.** `@Point.default.y` вызывается при каждом
+  создании, до тела, как сказано в §12.2. Полный конструктор вызывает её
+  тоже, хотя его тело связывает `y` само.
+
+Чтение поля — `obj.get %0, x`. Действие `sum` — функция, первый параметр
+которой — объект:
+
+```text
+func @Point.sum(%0: Point) -> int [method Point] {
+^b0:
+    %1: int = obj.get %0, x
+    %2: int = obj.get %0, y
+    %3: int = int.add %1, %2
+    ret %3
+}
+```
+
+## 12.11 Отдать `self` из конструктора
+
+Конструктор не может вызывать собственные действия. `self.initials()`
+внутри конструктора отвергается, даже когда поля, которые читает
+`initials`, уже связаны:
+
+```okkama
+module bible/self_call v1.0.0;
+
+object Account {
+    has owner is string;
+    has code is string;
+
+    Account(owner is string) {
+        self.owner = owner;
+        code = self.initials() + "-1";
+    }
+
+    initials() is string { owner.slice(0, 2); }
+}
+
+main() is int { 0; }
+```
+
+Ответ компилятора:
+
+```text
+12-self-call-rejected.ok:9:16: semantic error: Cannot call actions on self before construction completes
+```
+
+Действие вправе полагаться на всё, что устанавливает конструктор, включая
+проверки, которые ещё не выполнились. Компилятор не видит, какие поля
+действие читает через вызываемые им действия, поэтому запрещает вызов
+целиком.
+
+Сам `self` конструктор передать сотруднику *может*. Только так два
+неизменяемых объекта могут ссылаться друг на друга: второй создаётся, пока
+первый ещё строится.
+
+```okkama
+module bible/escape v1.0.0;
+
+// A constructor may hand its unfinished `self` to a collaborator. This is the
+// only way two immutable objects can refer to each other.
+import "io/stdout" take Stdout;
+
+object Leaf {
+    has up is Tree;
+    Leaf(:up);
+    describe() is string { "leaf of " + up.name(); }
+}
+
+object Tree {
+    has name is string;
+    has leaf is Maybe<Leaf>;
+
+    Tree(name is string) {
+        self.name = name;
+        leaf = Maybe.some(Leaf(up: self));
+    }
+
+    name() is string { name; }
+    describe() is string {
+        match leaf {
+            case Maybe.some(l) { name + " has a " + l.describe(); }
+            case Maybe.none { name; }
+        }
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    out.writeln(Tree("oak").describe());
+    0;
+}
+```
+
+Вывод:
+
+```text
+oak has a leaf of oak
+```
+
+`Leaf(up: self)` получает `Tree`, поле `leaf` которого ещё не связано.
+Компилятор справляется с этим второй формой создания. Когда `self`
+используется как значение, объект создаётся в этой точке, а несвязанные
+поля остаются неопределёнными. Каждое последующее связывание становится
+`obj.init` того же объекта:
+
+```text
+func @Tree.new#0(%0: str) -> Tree [ctor Tree] {
+^b0:
+    %1: int = const 0
+    %2: $variant_Maybe_2 = undef
+    %3: Tree = obj.new Tree { name: %0, leaf: %2 }
+    %4: Leaf = call @Leaf.new#0(%3)
+    %5: array<Leaf> = array.new [%4]
+    %6: $variant_Maybe_2 = call @$variant_Maybe_2.new(%1, %5)
+    obj.init %3, leaf, %6
+    ret %3
+}
+```
+
+Сотрудник держит недостроенный объект, и правило из начала раздела следует
+за ним туда. Спецификация запрещает вызывать *любое* действие получателя,
+чьё создание не завершено, «через псевдонимы, ссылки на роли, связанные
+действия и сотрудников», и требует, чтобы время выполнения отвергало такой
+вызов до вычисления аргументов. `Leaf` выше только запоминает `up`; вызов
+`up.describe()` в конструкторе `Leaf` нарушил бы правило. Прямой вызов
+`self.` ловит компилятор. В 0.4.1 половина этого правила, относящаяся ко
+времени выполнения, не реализована. Вызов через сотрудника, читающий ещё не
+связанное поле, на каждом движке проваливается по-своему, а на Sparrow
+роняет процесс (#271). Пока это не исправлено, сотрудник, получивший
+недостроенный `self`, должен только запомнить его.
+
+Проблема старая. Java позволяет `this` утечь из конструктора и оставляет
+последствия программисту. Ненулевое поле строящегося объекта ещё может
+читаться как `null`. Фендрих и Лейно дали таким объектам собственные
+«сырые» (raw) типы [[Fähndrich 2003](#ref-fahndrich2003)]. «Freedom Before Commitment» Саммерса и
+Мюллера отслеживает, какие объекты полностью инициализированы, а какие ещё
+могут быть «свободными», с небольшим числом аннотаций [[Summers 2011](#ref-summers2011)].
+Okkama идёт более дешёвым путём: одно статическое правило для `self` и
+проверка во время выполнения для косвенных случаев.
+
+## 12.12 Как движки хранят объект
+
+Три движка держат один и тот же объект в трёх разных формах. Программа их
+не различит, различается цена.
+
+**IR-движок** (`okkama-runtime-core`) хранит объект как структуру Rust со
+счётчиком ссылок:
+
+- номер объявления;
+- вектор значений полей;
+- серийный номер, место идентичности в порядке создания;
+- ячейка владельца, регион, который его уничтожит (глава 11);
+- необязательная боковая часть, выделяемая только при надобности.
+
+Боковая часть держит поля, связанные `obj.init`, и состояние рантайма у
+объектов std со встроенными действиями, например у каналов. Вектор полей
+после `obj.new` никогда не пишется. Поле `undef`, связанное позже, ищется в
+боковой части. Большинство объектов её никогда не выделяет.
+
+**Ядро Sparrow** хранит объект в собственной неперемещающей куче. Объект —
+одно слово заголовка и по одному 8-байтовому слову на поле. Заголовок
+держит вид (`OBJECT`), бит пометки для сборщика, несколько флагов и номер
+дескриптора объекта в старших 32 битах. Представление каждого слова поля
+задаёт дескриптор:
+
+- `Int`: тегированное малое целое или указатель на большое;
+- `Raw`: биты числа с плавающей точкой, `bool`, байта или символа;
+- `Ref`: указатель на другую ячейку кучи.
+
+Сборщик идёт по словам `Ref` и по тем словам `Int`, что указывают на
+большие целые; внутрь слов `Raw` он не заглядывает. `Point(3, 4)` — три
+слова, 24 байта, оба целых хранятся прямо в объекте. Малые ячейки берутся
+из списков свободных ячеек по размерам, в страницах по 64 КиБ: 2, 3, 4, 5,
+6, 8 … 128 слов. Машинный код, порождённый JIT, может снять ячейку со
+списка, не обращаясь к рантайму. Чтение поля — одна загрузка по адресу
+`object + 8 + 8 × index`.
+
+**JVM-бэкенд** делает каждый объект `final`-классом, наследующим
+`okkama.rt.Obj` из рантайма. `Obj` держит серийный номер, регион-владелец и
+место для встроенного состояния. Каждая роль объекта становится
+Java-интерфейсом, который класс реализует. Поля становятся полями
+экземпляра. В class-файле они не `final`, потому что `obj.init` должен
+суметь связать их после раннего `self`. Неизменяемость гарантирует язык, а
+не class-файл. Класс получает порождённые `equals` и `hashCode`, поле за
+полем и согласованные друг с другом, так что Java-коллекции рантайма видят
+то же структурное равенство, что и программа. Дальше JIT виртуальной машины
+обращается с объектом как с любым маленьким Java-объектом.
+
+## 12.13 Объекты в других языках
+
+Большинство языков, всерьёз взявшихся за неизменяемость, добавили
+сокращение для «объекта, который и есть свои поля». Сравнение показывает,
+что Okkama решила не брать.
+
+| | Объект Okkama | Запись Java | Data-класс Kotlin | Структура Rust |
+|---|---|---|---|---|
+| Поля читаются снаружи | никогда | через порождённые методы доступа | да (свойства) | внутри модуля или если `pub` |
+| Конструктор | пишется руками; сокращение `(:x)` | порождённый канонический, может быть компактным | первичный конструктор | нет; функция `new` по соглашению |
+| Проверка | `confirm` в каждом конструкторе | в компактном конструкторе | блок `init` | в функции `new` |
+| Равенство | структурное, всегда | порождённое по компонентам | порождённое по первичному конструктору | `#[derive(PartialEq)]` |
+| Изменение | нет | нет (поля `final`) | `var` разрешён | привязка `mut` |
+| Копия с изменениями | действия-преемники (глава 13) | встроенной нет | `copy(x = …)` | обновление структуры `..old` |
+
+Ближе всего записи Java (JEP 395): поля `final`, канонический конструктор,
+порождённые `equals`, `hashCode` и `toString` [[Bierman 2021](#ref-jep395)]. Разница — в
+методах доступа. Запись публикует каждый компонент, так что её
+представление *и есть* её API. Data-классы Kotlin делают то же, и в
+порождённом `equals` участвуют только свойства первичного конструктора
+[[Kotlin documentation](#ref-kotlindata)]. Rust прячет поля за приватностью модуля, а это грубее
+объекта: любой код того же модуля может их читать [[Klabnik 2023](#ref-klabnik2023)].
+
+Okkama оставляет порождённое равенство и отказывается от порождённого
+доступа. Запись — кортеж с именами. Объект Okkama — значение с поведением,
+и его поля никого больше не касаются. Совет Блоха для Java, «сводите
+изменяемость к минимуму» и «предпочитайте композицию наследованию», здесь
+не требует дисциплины: язык просто не позволяет иного [[Bloch 2018](#ref-bloch2018)].
+
+## 12.14 Чего стоит такой замысел
 
 - **Больше объектов.** Без свободных функций небольшое вычисление, которое
   в другом языке было бы функцией, становится объектом с одним действием
@@ -5737,6 +6021,7 @@ cap — объектный ответ на «мне нужен геттер дл
 - <a id="ref-aycock2003"></a>John Aycock (2003). A Brief History of Just-In-Time. *ACM Computing Surveys* 35(2): 97–113. https://doi.org/10.1145/857076.857077
 - <a id="ref-bagwell2001"></a>Phil Bagwell (2001). *Ideal Hash Trees*. Technical report, École Polytechnique Fédérale de Lausanne. https://infoscience.epfl.ch/record/64398
 - <a id="ref-baker-sep"></a>Alan Baker (2022). Simplicity. In *The Stanford Encyclopedia of Philosophy* (Summer 2022 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/simplicity/
+- <a id="ref-jep395"></a>Gavin Bierman (2021). JEP 395: Records. OpenJDK. https://openjdk.org/jeps/395
 - <a id="ref-bloch2018"></a>Joshua Bloch (2018). *Effective Java*, 3rd edition. Addison-Wesley.
 - <a id="ref-boehm2003"></a>Hans-J. Boehm (2003). Destructors, Finalizers, and Synchronization. In *Proceedings of POPL 2003*: 262–272. ACM. https://doi.org/10.1145/604131.604153
 - <a id="ref-braun2013"></a>Matthias Braun, Sebastian Buchwald, Sebastian Hack, Roland Leißa, Christoph Mallon, Andreas Zwinkau (2013). Simple and Efficient Construction of Static Single Assignment Form. In *Compiler Construction (CC 2013)*, LNCS 7791: 102–122. Springer. https://doi.org/10.1007/978-3-642-37051-9_6
@@ -5754,6 +6039,7 @@ cap — объектный ответ на «мне нужен геттер дл
 - <a id="ref-dijkstra1972"></a>Edsger W. Dijkstra (1972). The Humble Programmer. *Communications of the ACM* 15(10): 859–866. https://doi.org/10.1145/355604.361591
 - <a id="ref-duffy2016"></a>Joe Duffy (2016). The Error Model. Blog post, 7 February 2016. http://joeduffyblog.com/2016/02/07/the-error-model/
 - <a id="ref-fowler2007"></a>Martin Fowler (2007). Mocks Aren't Stubs. https://martinfowler.com/articles/mocksArentStubs.html
+- <a id="ref-fahndrich2003"></a>Manuel Fähndrich, K. Rustan M. Leino (2003). Declaring and Checking Non-null Types in an Object-Oriented Language. In *Proceedings of OOPSLA 2003*: 302–312. ACM. https://doi.org/10.1145/949305.949332
 - <a id="ref-gabriel1991"></a>Richard P. Gabriel (1991). The Rise of "Worse is Better". In *Lisp: Good News, Bad News, How to Win Big*. https://www.dreamsongs.com/RiseOfWorseIsBetter.html
 - <a id="ref-gamma1994"></a>Erich Gamma, Richard Helm, Ralph Johnson, John Vlissides (1994). *Design Patterns: Elements of Reusable Object-Oriented Software*. Addison-Wesley.
 - <a id="ref-goldberg1991"></a>David Goldberg (1991). What Every Computer Scientist Should Know About Floating-Point Arithmetic. *ACM Computing Surveys* 23(1): 5–48. https://doi.org/10.1145/103162.103163
@@ -5774,6 +6060,7 @@ cap — объектный ответ на «мне нужен геттер дл
 - <a id="ref-klabnik2023"></a>Steve Klabnik, Carol Nichols (2023). *The Rust Programming Language*, 2nd edition. No Starch Press. https://doc.rust-lang.org/book/
 - <a id="ref-knuth1974"></a>Donald E. Knuth (1974). Structured Programming with go to Statements. *ACM Computing Surveys* 6(4): 261–301. https://doi.org/10.1145/356635.356640
 - <a id="ref-knuth1997"></a>Donald E. Knuth (1997). *The Art of Computer Programming, Volume 2: Seminumerical Algorithms*, 3rd edition. Addison-Wesley.
+- <a id="ref-kotlindata"></a>JetBrains (2024). Data classes. *Kotlin documentation*. https://kotlinlang.org/docs/data-classes.html
 - <a id="ref-kotlinspec"></a>JetBrains (2024). *Kotlin Language Specification*, chapter Type System: Nullable Types. https://kotlinlang.org/spec/type-system.html
 - <a id="ref-landin1966"></a>P. J. Landin (1966). The Next 700 Programming Languages. *Communications of the ACM* 9(3): 157–166. https://doi.org/10.1145/365230.365257
 - <a id="ref-langley2014"></a>Adam Langley (2014). Apple's SSL/TLS bug. *ImperialViolet*, 22 February 2014. https://www.imperialviolet.org/2014/02/22/applebug.html
@@ -5813,6 +6100,7 @@ cap — объектный ответ на «мне нужен геттер дл
 - <a id="ref-spade-sep"></a>Paul Vincent Spade, Claude Panaccio (2019). William of Ockham. In *The Stanford Encyclopedia of Philosophy* (Spring 2019 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/ockham/
 - <a id="ref-strom1986"></a>Robert E. Strom, Shaula Yemini (1986). Typestate: A Programming Language Concept for Enhancing Software Reliability. *IEEE Transactions on Software Engineering* SE-12(1): 157–171. https://doi.org/10.1109/TSE.1986.6312929
 - <a id="ref-stroustrup1994"></a>Bjarne Stroustrup (1994). *The Design and Evolution of C++*. Addison-Wesley.
+- <a id="ref-summers2011"></a>Alexander J. Summers, Peter Müller (2011). Freedom Before Commitment: A Lightweight Type System for Object Initialisation. In *Proceedings of OOPSLA 2011*: 1013–1032. ACM. https://doi.org/10.1145/2048066.2048142
 - <a id="ref-thorburn1918"></a>W. M. Thorburn (1918). The Myth of Occam's Razor. *Mind* 27(107): 345–353. https://doi.org/10.1093/mind/XXVII.3.345
 - <a id="ref-tofte1997"></a>Mads Tofte, Jean-Pierre Talpin (1997). Region-Based Memory Management. *Information and Computation* 132(2): 109–176. https://doi.org/10.1006/inco.1996.2613
 - <a id="ref-uax15"></a>The Unicode Consortium (2024). *Unicode Standard Annex #15: Unicode Normalization Forms* (for Unicode 16.0.0). https://www.unicode.org/reports/tr15/

@@ -138,7 +138,11 @@
   - [12.7 Actions and private actions](#127-actions-and-private-actions)
   - [12.8 Caps: a read-only view of an object](#128-caps-a-read-only-view-of-an-object)
   - [12.9 Objects are values](#129-objects-are-values)
-  - [12.10 What this design costs](#1210-what-this-design-costs)
+  - [12.10 What a constructor compiles to](#1210-what-a-constructor-compiles-to)
+  - [12.11 Handing `self` out of a constructor](#1211-handing-self-out-of-a-constructor)
+  - [12.12 How the engines store an object](#1212-how-the-engines-store-an-object)
+  - [12.13 Objects elsewhere](#1213-objects-elsewhere)
+  - [12.14 What this design costs](#1214-what-this-design-costs)
 
 # Part I. The Razor
 
@@ -5617,7 +5621,286 @@ the same rank and suit. Objects that should compare by something else, such
 as a business key, expose an action for it, and the map keys on that
 action's result instead.
 
-## 12.10 What this design costs
+## 12.10 What a constructor compiles to
+
+The compiler turns each constructor into an IR function marked `[ctor]`.
+`okkama ir` prints them. For a `Point` with a checked full constructor and
+a shorthand:
+
+```okkama
+object Point {
+    has x is int;
+    has y is int = 0;
+
+    Point(x is int, y is int) {
+        self.x = x;
+        self.y = y;
+        confirm x >= 0 else throw InvalidPoint.negative(x);
+    }
+    Point(:x);
+
+    sum() is int { x + y; }
+}
+```
+
+the two constructors come out as follows:
+
+```text
+func @Point.new#0(%0: int, %1: int) -> Point [ctor Point] {
+^b0:
+    %2: int = call @Point.default.y()
+    %3: int = const 0
+    %4: bool = int.ge %0, %3
+    cond %4, ^b1, ^b2
+^b1:
+    %5: Point = obj.new Point { x: %0, y: %1 }
+    ret %5
+^b2:
+    %6: int = const 0
+    %7: array<int> = array.new [%0]
+    %8: InvalidPoint = call @InvalidPoint.new(%6, %7)
+    throw %8
+}
+func @Point.new#1(%0: int) -> Point [ctor Point] {
+^b0:
+    %1: int = call @Point.default.y()
+    %2: Point = obj.new Point { x: %0, y: %1 }
+    ret %2
+}
+```
+
+Four things are visible here.
+
+- **Overloads are separate functions.** `new#0` and `new#1` are the two
+  constructors. The overload was chosen at compile time, so a call site
+  names one of them directly: `call @Point.new#0(%1, %2)`.
+- **A field bind is not a store.** `self.x = x` emits no instruction. The
+  compiler keeps the bound value in a register, and the object is made by
+  one `obj.new` with every field at once. That is how "each field is bound
+  once" is enforced cheaply: there is no half-filled object to write into.
+- **The object exists only after the checks.** `obj.new` sits in the branch
+  where `confirm` held. On the other branch there is no `Point` at all, only
+  the `InvalidPoint` being thrown. "No `Cash` is ever made" (§12.6) is meant
+  literally.
+- **Defaults are functions.** `@Point.default.y` is called on each
+  construction, before the body, as §12.2 says. The full constructor calls it
+  too, although its body binds `y` itself.
+
+Reading a field is `obj.get %0, x`. The action `sum` is a function that takes
+the object as its first parameter:
+
+```text
+func @Point.sum(%0: Point) -> int [method Point] {
+^b0:
+    %1: int = obj.get %0, x
+    %2: int = obj.get %0, y
+    %3: int = int.add %1, %2
+    ret %3
+}
+```
+
+## 12.11 Handing `self` out of a constructor
+
+A constructor cannot call its own actions. `self.initials()` inside the
+constructor is rejected, even after the fields that `initials` reads are
+bound:
+
+```okkama
+module bible/self_call v1.0.0;
+
+object Account {
+    has owner is string;
+    has code is string;
+
+    Account(owner is string) {
+        self.owner = owner;
+        code = self.initials() + "-1";
+    }
+
+    initials() is string { owner.slice(0, 2); }
+}
+
+main() is int { 0; }
+```
+
+The compiler answers:
+
+```text
+12-self-call-rejected.ok:9:16: semantic error: Cannot call actions on self before construction completes
+```
+
+An action may rely on everything the constructor establishes, including the
+checks that have not run yet. The compiler cannot see which fields an
+action reads through the actions it calls, so it forbids the call outright.
+
+The constructor *may* pass `self` itself to a collaborator. This is the
+only way two immutable objects can refer to each other: the second one is
+made while the first is still being built.
+
+```okkama
+module bible/escape v1.0.0;
+
+// A constructor may hand its unfinished `self` to a collaborator. This is the
+// only way two immutable objects can refer to each other.
+import "io/stdout" take Stdout;
+
+object Leaf {
+    has up is Tree;
+    Leaf(:up);
+    describe() is string { "leaf of " + up.name(); }
+}
+
+object Tree {
+    has name is string;
+    has leaf is Maybe<Leaf>;
+
+    Tree(name is string) {
+        self.name = name;
+        leaf = Maybe.some(Leaf(up: self));
+    }
+
+    name() is string { name; }
+    describe() is string {
+        match leaf {
+            case Maybe.some(l) { name + " has a " + l.describe(); }
+            case Maybe.none { name; }
+        }
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    out.writeln(Tree("oak").describe());
+    0;
+}
+```
+
+Output:
+
+```text
+oak has a leaf of oak
+```
+
+`Leaf(up: self)` receives a `Tree` whose `leaf` field is not bound yet. The
+compiler handles this with a second form of construction. When `self` is
+used as a value, the object is created at that point, with the unbound
+fields left undefined. Each later bind becomes an `obj.init` of the same
+object:
+
+```text
+func @Tree.new#0(%0: str) -> Tree [ctor Tree] {
+^b0:
+    %1: int = const 0
+    %2: $variant_Maybe_2 = undef
+    %3: Tree = obj.new Tree { name: %0, leaf: %2 }
+    %4: Leaf = call @Leaf.new#0(%3)
+    %5: array<Leaf> = array.new [%4]
+    %6: $variant_Maybe_2 = call @$variant_Maybe_2.new(%1, %5)
+    obj.init %3, leaf, %6
+    ret %3
+}
+```
+
+The collaborator holds an unfinished object, and the rule from the start of
+this section follows it there. The specification forbids calling *any*
+action on a receiver whose construction is pending, "through aliases, role
+references, bound actions and collaborators", and requires the run time to
+reject such a call before evaluating its arguments. `Leaf` above only
+stores `up`; calling `up.describe()` in `Leaf`'s constructor would break
+the rule. The compiler catches the direct `self.` call. In 0.4.1 the
+run-time half is not implemented. A call through a collaborator that reads
+a field not yet bound fails differently on each engine, and on Sparrow it
+crashes the process (#271). Until that is fixed, a collaborator that gets
+an unfinished `self` should only store it.
+
+The problem is old. Java lets `this` escape from a constructor and leaves
+the consequences to the programmer. A non-null field of an object under
+construction can still read as `null`. Fähndrich and Leino gave such
+objects their own "raw" types [[Fähndrich 2003](#ref-fahndrich2003)]. Summers and Müller's
+"Freedom Before Commitment" tracks which objects are fully initialised and
+which may still be "free", with few annotations [[Summers 2011](#ref-summers2011)]. Okkama
+takes the cheaper road: one static rule for `self`, and a run-time check
+for the indirect cases.
+
+## 12.12 How the engines store an object
+
+The three engines keep the same object in three different shapes. A
+program cannot tell them apart; the costs differ.
+
+**The IR engine** (`okkama-runtime-core`) keeps an object as a
+reference-counted Rust struct:
+
+- the number of its declaration;
+- a vector of field values;
+- a serial number, the identity's place in creation order;
+- an owner cell, the region that will destroy it (Chapter 11);
+- an optional side part, allocated only when needed.
+
+The side part holds fields bound by `obj.init` and the run-time state of
+std objects with built-in actions, such as channels. The field vector is
+never written after `obj.new`. An `undef` field bound later is looked up in
+the side part. Most objects never allocate one.
+
+**The Sparrow core** keeps an object in its own non-moving heap. The object
+is one header word followed by one 8-byte word per field. The header holds
+the kind (`OBJECT`), a mark bit for the collector, a few flags, and the
+object's descriptor number in its upper 32 bits. Each field word has a
+representation fixed by the descriptor:
+
+- `Int`: a tagged small integer, or a pointer to a big one;
+- `Raw`: the bits of a float, `bool`, byte or char;
+- `Ref`: a pointer to another heap cell.
+
+The collector follows `Ref` words and the `Int` words that point to big
+integers; it never looks inside `Raw` words.
+`Point(3, 4)` is three words, 24 bytes, with both integers stored inline.
+Small cells come from per-size free lists in 64 KiB pages: 2, 3, 4, 5, 6,
+8 … 128 words. Machine code produced by the JIT can pop a cell from its
+list without calling into the runtime. A field read is one load at
+`object + 8 + 8 × index`.
+
+**The JVM backend** makes every object a `final` class that extends the
+runtime's `okkama.rt.Obj`. `Obj` holds the serial number, the owning region
+and the slot for built-in state. Each role the object plays becomes a Java
+interface it implements. Fields become instance fields. They are not
+`final` in the class file, because `obj.init` must still be able to bind
+them after an early `self`. The language guarantees immutability; the class
+file does not. The class gets generated `equals` and `hashCode`, field by
+field and consistent with each other, so the runtime's Java collections
+see the same structural equality as the program. The JIT of the JVM then
+treats the object like any other small Java object.
+
+## 12.13 Objects elsewhere
+
+Most languages that took immutability seriously added a shorthand for "an
+object that is its fields". Comparing them shows what Okkama chose to
+leave out.
+
+| | Okkama object | Java record | Kotlin data class | Rust struct |
+|---|---|---|---|---|
+| Fields readable from outside | never | via generated accessors | yes (properties) | within the module, or if `pub` |
+| Constructor | written by hand; shorthand `(:x)` | generated canonical, may be compact | primary constructor | none; a `new` function by convention |
+| Validation | `confirm` in each constructor | in the compact constructor | `init` block | in the `new` function |
+| Equality | structural, always | generated from components | generated from the primary constructor | `#[derive(PartialEq)]` |
+| Mutation | none | none (fields `final`) | `var` allowed | `mut` binding |
+| Copy with changes | successor actions (Chapter 13) | none built in | `copy(x = …)` | struct update `..old` |
+
+Java records (JEP 395) are the closest: final fields, a canonical
+constructor, generated `equals`, `hashCode` and `toString`
+[[Bierman 2021](#ref-jep395)]. The difference is the accessors. A record publishes every
+component, so its representation *is* its API. Kotlin's data classes do
+the same, and only properties of the primary constructor take part in the
+generated `equals` [[Kotlin documentation](#ref-kotlindata)]. Rust hides fields behind module privacy,
+which is coarser than an object: any code in the same module can read
+them [[Klabnik 2023](#ref-klabnik2023)].
+
+Okkama keeps the generated equality and drops the generated access. A
+record is a tuple with names. An Okkama object is a value with behaviour,
+and its fields are nobody else's business. Bloch's advice for Java,
+"minimize mutability" and "favor composition over inheritance", needs no
+discipline here: the language allows nothing else [[Bloch 2018](#ref-bloch2018)].
+
+## 12.14 What this design costs
 
 - **More objects.** Without free functions, a small computation that would
   be a function elsewhere becomes an object with one action, or an action
@@ -5650,6 +5933,7 @@ In return:
 - <a id="ref-aycock2003"></a>John Aycock (2003). A Brief History of Just-In-Time. *ACM Computing Surveys* 35(2): 97–113. https://doi.org/10.1145/857076.857077
 - <a id="ref-bagwell2001"></a>Phil Bagwell (2001). *Ideal Hash Trees*. Technical report, École Polytechnique Fédérale de Lausanne. https://infoscience.epfl.ch/record/64398
 - <a id="ref-baker-sep"></a>Alan Baker (2022). Simplicity. In *The Stanford Encyclopedia of Philosophy* (Summer 2022 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/simplicity/
+- <a id="ref-jep395"></a>Gavin Bierman (2021). JEP 395: Records. OpenJDK. https://openjdk.org/jeps/395
 - <a id="ref-bloch2018"></a>Joshua Bloch (2018). *Effective Java*, 3rd edition. Addison-Wesley.
 - <a id="ref-boehm2003"></a>Hans-J. Boehm (2003). Destructors, Finalizers, and Synchronization. In *Proceedings of POPL 2003*: 262–272. ACM. https://doi.org/10.1145/604131.604153
 - <a id="ref-braun2013"></a>Matthias Braun, Sebastian Buchwald, Sebastian Hack, Roland Leißa, Christoph Mallon, Andreas Zwinkau (2013). Simple and Efficient Construction of Static Single Assignment Form. In *Compiler Construction (CC 2013)*, LNCS 7791: 102–122. Springer. https://doi.org/10.1007/978-3-642-37051-9_6
@@ -5667,6 +5951,7 @@ In return:
 - <a id="ref-dijkstra1972"></a>Edsger W. Dijkstra (1972). The Humble Programmer. *Communications of the ACM* 15(10): 859–866. https://doi.org/10.1145/355604.361591
 - <a id="ref-duffy2016"></a>Joe Duffy (2016). The Error Model. Blog post, 7 February 2016. http://joeduffyblog.com/2016/02/07/the-error-model/
 - <a id="ref-fowler2007"></a>Martin Fowler (2007). Mocks Aren't Stubs. https://martinfowler.com/articles/mocksArentStubs.html
+- <a id="ref-fahndrich2003"></a>Manuel Fähndrich, K. Rustan M. Leino (2003). Declaring and Checking Non-null Types in an Object-Oriented Language. In *Proceedings of OOPSLA 2003*: 302–312. ACM. https://doi.org/10.1145/949305.949332
 - <a id="ref-gabriel1991"></a>Richard P. Gabriel (1991). The Rise of "Worse is Better". In *Lisp: Good News, Bad News, How to Win Big*. https://www.dreamsongs.com/RiseOfWorseIsBetter.html
 - <a id="ref-gamma1994"></a>Erich Gamma, Richard Helm, Ralph Johnson, John Vlissides (1994). *Design Patterns: Elements of Reusable Object-Oriented Software*. Addison-Wesley.
 - <a id="ref-goldberg1991"></a>David Goldberg (1991). What Every Computer Scientist Should Know About Floating-Point Arithmetic. *ACM Computing Surveys* 23(1): 5–48. https://doi.org/10.1145/103162.103163
@@ -5687,6 +5972,7 @@ In return:
 - <a id="ref-klabnik2023"></a>Steve Klabnik, Carol Nichols (2023). *The Rust Programming Language*, 2nd edition. No Starch Press. https://doc.rust-lang.org/book/
 - <a id="ref-knuth1974"></a>Donald E. Knuth (1974). Structured Programming with go to Statements. *ACM Computing Surveys* 6(4): 261–301. https://doi.org/10.1145/356635.356640
 - <a id="ref-knuth1997"></a>Donald E. Knuth (1997). *The Art of Computer Programming, Volume 2: Seminumerical Algorithms*, 3rd edition. Addison-Wesley.
+- <a id="ref-kotlindata"></a>JetBrains (2024). Data classes. *Kotlin documentation*. https://kotlinlang.org/docs/data-classes.html
 - <a id="ref-kotlinspec"></a>JetBrains (2024). *Kotlin Language Specification*, chapter Type System: Nullable Types. https://kotlinlang.org/spec/type-system.html
 - <a id="ref-landin1966"></a>P. J. Landin (1966). The Next 700 Programming Languages. *Communications of the ACM* 9(3): 157–166. https://doi.org/10.1145/365230.365257
 - <a id="ref-langley2014"></a>Adam Langley (2014). Apple's SSL/TLS bug. *ImperialViolet*, 22 February 2014. https://www.imperialviolet.org/2014/02/22/applebug.html
@@ -5726,6 +6012,7 @@ In return:
 - <a id="ref-spade-sep"></a>Paul Vincent Spade, Claude Panaccio (2019). William of Ockham. In *The Stanford Encyclopedia of Philosophy* (Spring 2019 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/ockham/
 - <a id="ref-strom1986"></a>Robert E. Strom, Shaula Yemini (1986). Typestate: A Programming Language Concept for Enhancing Software Reliability. *IEEE Transactions on Software Engineering* SE-12(1): 157–171. https://doi.org/10.1109/TSE.1986.6312929
 - <a id="ref-stroustrup1994"></a>Bjarne Stroustrup (1994). *The Design and Evolution of C++*. Addison-Wesley.
+- <a id="ref-summers2011"></a>Alexander J. Summers, Peter Müller (2011). Freedom Before Commitment: A Lightweight Type System for Object Initialisation. In *Proceedings of OOPSLA 2011*: 1013–1032. ACM. https://doi.org/10.1145/2048066.2048142
 - <a id="ref-thorburn1918"></a>W. M. Thorburn (1918). The Myth of Occam's Razor. *Mind* 27(107): 345–353. https://doi.org/10.1093/mind/XXVII.3.345
 - <a id="ref-tofte1997"></a>Mads Tofte, Jean-Pierre Talpin (1997). Region-Based Memory Management. *Information and Computation* 132(2): 109–176. https://doi.org/10.1006/inco.1996.2613
 - <a id="ref-uax15"></a>The Unicode Consortium (2024). *Unicode Standard Annex #15: Unicode Normalization Forms* (for Unicode 16.0.0). https://www.unicode.org/reports/tr15/

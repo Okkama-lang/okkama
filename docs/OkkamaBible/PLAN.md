@@ -122,13 +122,14 @@ Updated with each chapter: `build.py --stats`.
   a walk (#9), limits, costs. To add: channels; a larger worked example (a connection
   pool); how each engine implements regions (the core's region arrays and
   identity table, the IR engine's owner cells, the JVM's `Region`).
-- Chapter 12 (objects): 5.3 pages (EN) of its floor of 18. Written:
+- Chapter 12 (objects): 8.9 pages (EN) of its floor of 18. Written:
   declaring an object, private and permanent fields, explicit constructors,
   shorthands, several constructors (variadic), validation in the
   constructor, `self` calls and `private:`, caps (`12-cap`), structural
-  equality and objects as map keys, costs. To add: a worked domain model
-  (money, an order and its lines); how each engine lays out an object
-  (the core's slots, the IR engine's records, JVM classes); constructor
-  failure and partial objects in depth; a comparison with records in
-  Java, Kotlin data classes and Rust structs; designing small objects
-  (one noun per computation) with std examples.
+  equality and objects as map keys, what a constructor compiles to (IR of
+  `Point`), handing `self` out of a constructor (`12-escape`, `obj.init`;
+  the missing run-time check is #271), how each engine stores an object,
+  a comparison with Java records, Kotlin data classes and Rust structs,
+  costs. To add: a worked domain model (money, an order and its lines);
+  designing small objects (one noun per computation) with std examples;
+  constructor failure and partial objects in depth.
