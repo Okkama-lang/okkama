@@ -108,10 +108,11 @@
   - [10.13 Budgets are not failures](#1013-budgets-are-not-failures)
   - [10.14 Failures across tasks](#1014-failures-across-tasks)
   - [10.15 What reaches the top](#1015-what-reaches-the-top)
-  - [10.16 Designing an error vocabulary](#1016-designing-an-error-vocabulary)
-  - [10.17 Testing failures](#1017-testing-failures)
-  - [10.18 Okkama among other languages](#1018-okkama-among-other-languages)
-  - [10.19 What this design costs](#1019-what-this-design-costs)
+  - [10.16 How the engines carry a failure](#1016-how-the-engines-carry-a-failure)
+  - [10.17 Designing an error vocabulary](#1017-designing-an-error-vocabulary)
+  - [10.18 Testing failures](#1018-testing-failures)
+  - [10.19 Okkama among other languages](#1019-okkama-among-other-languages)
+  - [10.20 What this design costs](#1020-what-this-design-costs)
 
 # Part I. The Razor
 
@@ -4221,7 +4222,52 @@ Stack trace (most recent call first):
 int in 0..255, got N`, so the success channel and the failure channel stay
 apart here too.
 
-## 10.16 Designing an error vocabulary
+## 10.16 How the engines carry a failure
+
+The two channels exist in the compiled program, not only in the source. In
+OIR, the compiler's intermediate form (Chapter 23), every basic block may
+name an *unwind target*: the block that receives a failure raised by any of
+its instructions, as its last parameter. Here is the end of a small method
+that owns a resource region:
+
+```text
+^b1 unwind ^b4:
+    region.adopt %1, %0
+    br ^b2
+...
+^b4(%6: failure):
+    %7: failure = region.unwind %1, %6
+    raise %7
+```
+
+`^b4` is the landing block. It closes the method's region on the failure
+path, which runs `defer` blocks and destroys what the region owns, and
+passes the failure on with `raise`. A `try` lowers the same way: the body's
+blocks unwind to a landing block that closes the body's scopes and then
+tests the `catch` types in order. A panic travels the same edges, but no
+clause accepts it.
+
+Each engine carries the failure along those edges in its own way.
+
+- **The IR engine** interprets the blocks. A failure is the error branch of
+  a Rust result, which travels up through the interpreter's frames.
+- **The Sparrow core** compiles to machine code. A failing helper sets the
+  `status` and `failure` fields of the run's context, and every caller
+  checks `status` after each call or helper and branches to its landing
+  block. A failure thus crosses machine frames without Rust unwinding and
+  without `setjmp`. A `try` that does not throw costs nothing beyond those
+  checks.
+- **The JVM** throws a Java exception, `okkama.rt.Failure`, a
+  `RuntimeException` created without a Java stack trace or suppression
+  (`super(message, null, false, false)`), so throwing is cheap. Its
+  uncaught report does not yet give the location or the Okkama stack
+  (#270). Regions close in Java `catch` blocks.
+
+The conformance suite runs the same programs on all three and requires the
+same output, exit status and `catch` behaviour. The reports still differ in
+detail (#270). Chapters 24 and 25 return to the engines.
+
+## 10.17 Designing an error vocabulary
 
 A module's error enums are part of its public API, as much as its actions.
 The standard library follows a handful of rules, and they work outside it
@@ -4250,7 +4296,7 @@ too.
   returns `Maybe` (Chapter 7), not an error. An error says the operation
   could not do what it promised. A missing optional value is not that.
 
-## 10.17 Testing failures
+## 10.18 Testing failures
 
 A failure is part of an action's contract, so it gets tests like the
 successful path. The test runner (`okkama run -t`) provides
@@ -4275,7 +4321,7 @@ Error handlers are rarely exercised in production, and that is where
 Yuan et al. found the catastrophic bugs. A failure path that a test has
 never run is a guess. Chapter 15 returns to tests, fakes and properties.
 
-## 10.18 Okkama among other languages
+## 10.19 Okkama among other languages
 
 | Language | Expected failure | Bug | Forced to handle? | Catch everything | Cleanup |
 |---|---|---|---|---|---|
@@ -4293,7 +4339,7 @@ everything. Okkama is weaker in the "forced to handle" column: nothing makes
 a caller deal with an error, and the compiler does not know which errors an
 action can throw.
 
-## 10.19 What this design costs
+## 10.20 What this design costs
 
 The two channels are a strong opinion, and opinions cost something.
 
