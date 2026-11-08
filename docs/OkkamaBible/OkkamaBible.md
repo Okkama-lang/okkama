@@ -2638,7 +2638,7 @@ object Gradebook {
     // `return` leaves the action from inside the loop.
     first_below(limit is int) is Maybe<string> {
         for scores.keys() -> name {
-            if scores[name] < limit { return Maybe.some(name); }
+            return Maybe.some(name) if scores[name] < limit;
         }
         Maybe.none;
     }
@@ -2844,9 +2844,9 @@ The compiler answers:
 Kotlin and Rust reject this too. If the arm that is not written were allowed,
 it would need a value, and Okkama has no such value to supply (Chapter 7).
 
-An `else if` chain is allowed wherever `if` is a statement, including the tail
-of an action, as in `letter`. After `let x =` it is a syntax error today, and
-the second `if` has to go inside the `else` block (issue #257).
+An `else if` chain works in every position: as a statement, as the tail of an
+action (as in `letter`) and as a value after `let x =`. Every link has its
+`else`, and all branches have one type (issue #257).
 
 ### `match`
 
@@ -2989,9 +2989,11 @@ three.
 `next` starts the next iteration and `last` leaves the loop. Both take a
 postfix condition, and `last` can also carry a value. In `last value if found;`
 the condition is evaluated first, and the value only if the condition holds.
-A postfix `if` also works on an expression statement:
-`out.writeln(line) if verbose;`. It does not work on `return` and `throw`
-(issue #258).
+A postfix `if` also works on an expression statement,
+`out.writeln(line) if verbose;`, and on `return` and `throw`:
+`return found if done;`, `throw Empty.list if items.size() == 0;`
+(issue #258). Right after `return`, `if c;` is the bare form with a
+condition, while `return if a { 1 } else { 2 };` returns an `if` expression.
 
 `next` and `last` act on the nearest `for` or `loop`; there are no labels. To
 leave two loops at once, move the inner loop into an action and `return` from
@@ -3125,21 +3127,27 @@ answer for a test would be a set of outputs instead of one.
 | `goto` | none [[Dijkstra 1968](#ref-dijkstra1968)] |
 | `if (c) statement;` | braces always |
 
+The compiler knows this table. `while`, `do`, `+=` and its kin, `++`, `--`,
+`break` and `continue` are rejected with a message that names the Okkama form
+(issue #256):
+
+```text
+syntax error at "while": Okkama has no `while`: write `loop { last if !(condition); ... }`.
+syntax error at "=": Okkama has no compound assignment: a name is bound once; bind a new name, or use `reduce` or a successor.
+semantic error: Undefined variable "break"; Okkama leaves a loop with `last`
+```
+
 ## 9.9 Limits
 
-- **Diagnostics for missing constructs.** `while`, `+=` and `break` produce
-  generic parse or name errors instead of a pointer to `loop`, successors and
-  `last` (issue #256).
-- **`else if` only where `if` is a statement.** `let x = if a { … } else if b
-  { … } else { … };` is a syntax error. Nest the second `if` inside the
-  `else` block, or use `match` (issue #257).
-- **No postfix condition on `return` and `throw`.** `last value if found;`
-  works and `return value if found;` does not (issue #258).
 - **Strings are not a `for` source.** Code points are reached by index
   (issue #210).
+- **One binding per `for`.** An index comes from a range, not from a second
+  binding.
 
-The first limit is about error messages. The others are small asymmetries in
-an otherwise regular grammar, and each has a one-line workaround.
+Writing this chapter turned up three more: messages for `while`, `+=` and
+`break` that did not name the Okkama form, `else if` that worked only where
+`if` was a statement, and `return` and `throw` without a postfix condition.
+All three were fixed in 0.4.1 (issues #256, #257, #258).
 
 # References
 

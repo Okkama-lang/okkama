@@ -17,7 +17,7 @@ object Gradebook {
     // `return` leaves the action from inside the loop.
     first_below(limit is int) is Maybe<string> {
         for scores.keys() -> name {
-            if scores[name] < limit { return Maybe.some(name); }
+            return Maybe.some(name) if scores[name] < limit;
         }
         Maybe.none;
     }
