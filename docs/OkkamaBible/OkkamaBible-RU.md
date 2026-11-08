@@ -92,6 +92,20 @@
   - [9.7 Порядок вычисления](#97-порядок-вычисления)
   - [9.8 Чего нет](#98-чего-нет)
   - [9.9 Ограничения](#99-ограничения)
+- [Глава 10. Отказ: throw, panic, try/catch, причины, confirm](#глава-10-отказ-throw-panic-trycatch-причины-confirm)
+  - [10.1 Кому нужно узнать об отказе](#101-кому-нужно-узнать-об-отказе)
+  - [10.2 Краткая история: коды, исключения, значения](#102-краткая-история-коды-исключения-значения)
+  - [10.3 Ошибки программы — не значения: panic и ошибки исполнения](#103-ошибки-программы--не-значения-panic-и-ошибки-исполнения)
+  - [10.4 Перечисления ошибок](#104-перечисления-ошибок)
+  - [10.5 throw](#105-throw)
+  - [10.6 try и catch](#106-try-и-catch)
+  - [10.7 Причины](#107-причины)
+  - [10.8 confirm: контракт внутри кода](#108-confirm-контракт-внутри-кода)
+  - [10.9 try? и try!](#109-try-и-try)
+  - [10.10 Отказы хоста](#1010-отказы-хоста)
+  - [10.11 Бюджеты — не отказы](#1011-бюджеты--не-отказы)
+  - [10.12 Что доходит до верха](#1012-что-доходит-до-верха)
+  - [10.13 Чего стоит такой замысел](#1013-чего-стоит-такой-замысел)
 
 # Часть I. Бритва
 
@@ -3260,6 +3274,800 @@ semantic error: Undefined variable "break"; Okkama leaves a loop with `last`
 `if` — оператор; `return` и `throw` без постфиксного условия. Все три
 исправлены в 0.4.1 (тикеты #256, #257, #258).
 
+# Глава 10. Отказ: throw, panic, try/catch, причины, confirm
+
+Любая программа встречает неприятности двух родов, и общего у них мало.
+
+- **Мир отвечает «нет».** Файла нет, сервер не принимает соединение,
+  пользователь вводит `sixty` там, где ждали число, счёт ушёл бы в минус.
+  С программой всё в порядке. Это исход, который она обязана ожидать, и
+  кто-то — вызывающий или тот, кто вызвал его, — знает, что с ним делать.
+- **Ошибка в самой программе.** Индекс вышел за конец массива, инвариант, в
+  котором автор был уверен, оказался ложным, делитель равен нулю там, где
+  код считал это невозможным. Вызывающий это не починит: он не знает, какое
+  именно допущение сломалось. Полезный ответ один: остановиться, прибрать за
+  собой и точно сообщить, где.
+
+Okkama даёт этим двум родам два канала и не позволяет им смешиваться.
+Ожидаемые отказы — **значения**: случаи *перечисления ошибок*, которые
+бросает `throw` и ловит типизированный `catch`. Ошибки программы — **не
+значения**: `panic`, проваленный голый `confirm` или ошибка исполнения
+завершают запуск после уборки, и ни одна ветка `catch` их не видит. Всё в
+этой главе вытекает из этого разделения.
+
+Программа ниже загружает крошечную книгу учёта. Каждая строка —
+`account,amount`. Загрузка может провалиться четырьмя способами, о которых
+вызывающему важно знать: пустая строка, строка не того вида, сумма не
+число и перерасход. Каждый — случай перечисления ошибок, контекст лежит в
+его полезной нагрузке. `report` превращает каждый отказ в фразу, а `try?`
+превращает отказ в запасное значение.
+
+```okkama
+module bible/failure v1.0.0;
+
+// A ledger import: every failure the import can report is a case of one
+// error enum, and the context travels in the payload.
+import "io/stdout" take Stdout;
+import "strings/parse" take ParsedInt, InvalidInteger;
+
+enum LineError is Error = (blank(line is int), shape(line is int, text is string), amount(line is int, cause is InvalidInteger));
+enum LedgerError is Error = (line(cause is LineError), overdraft(account is string, short is int));
+
+object Entry {
+    has account is string;
+    has amount is int;
+    Entry(:account, :amount);
+    name() is string { account; }
+    value() is int { amount; }
+}
+
+object Lines {
+    Lines();
+    entry(number is int, text is string) is Entry {
+        confirm text.length() > 0 else throw LineError.blank(number);
+        let parts = text.split(",");
+        confirm parts.size() == 2 else throw LineError.shape(number, text);
+        let amount = try { ParsedInt(parts[1]).value(); } catch e is InvalidInteger { throw LineError.amount(number, e); };
+        Entry(account: parts[0], amount: amount);
+    }
+}
+
+object Ledger {
+    has balance is int;
+    Ledger(:balance);
+    after(entry is Entry) is Ledger {
+        let after = balance + entry.value();
+        confirm after >= 0 else throw LedgerError.overdraft(entry.name(), 0 - after);
+        Ledger(balance: after);
+    }
+    total() is int { balance; }
+}
+
+object Import {
+    has lines is @string;
+    Import(:lines);
+    run(start is int) is int {
+        let parser = Lines();
+        let ledger = (0..lines.size()).reduce(Ledger(balance: start)) -> book, i {
+            let entry = try { parser.entry(i + 1, lines[i]); } catch e is LineError { throw LedgerError.line(e); };
+            book.after(entry);
+        };
+        ledger.total();
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let report = (lines is @string, start is int) is string {
+        try {
+            "balance " + Import(lines: lines).run(start).string();
+        }
+        catch LedgerError.overdraft(account, short) {
+            "overdraft on " + account + " by " + short.string();
+        }
+        catch LedgerError.line(cause) {
+            match cause {
+                case LineError.shape(line, text) { "line " + line.string() + " is not account,amount: " + text; }
+                else { "rejected: " + cause.text(); }
+            }
+        }
+        catch e is LedgerError {
+            "rejected: " + e.text();
+        }
+    };
+    out.writeln(report(["cash,100", "rent,-60", "food,-25"], 0));
+    out.writeln(report(["cash,100", "rent,-160"], 0));
+    out.writeln(report(["cash,100", "rent -60"], 0));
+    out.writeln(report(["cash,100", "rent,sixty"], 0));
+    out.writeln(report(["cash,100", ""], 0));
+    let quick = try? Import(lines: ["cash,ten"]).run(0) else -1;
+    out.writeln("quick " + quick.string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+balance 15
+overdraft on rent by 60
+line 2 is not account,amount: rent -60
+rejected: LineError.amount(2, InvalidInteger.source("sixty"))
+rejected: LineError.blank(2)
+quick -1
+```
+
+Остальная глава разбирает её по частям:
+
+- два канала и то, почему к ним привела история обработки ошибок;
+- перечисления ошибок и `throw`;
+- `try`/`catch` и то, чего в нём намеренно нет;
+- причины, `confirm`, `try?` и `try!`;
+- отказы хоста;
+- что доходит до верха программы.
+
+Уборка — `defer`, `destroy`, регионы — выполняется на каждом из этих путей;
+о ней глава 11.
+
+## 10.1 Кому нужно узнать об отказе
+
+Прежде чем выбирать механизм, полезно разложить отказы по тому, кто может
+на них ответить.
+
+| Род | Пример | Кто может ответить | В Okkama |
+|---|---|---|---|
+| Ожидаемый отказ | нет файла, плохой ввод, отказ в соединении | вызывающий | перечисление ошибок, `throw`, типизированный `catch` |
+| Ошибка программы | индекс за границей, нарушенный инвариант | разработчик, прочитав отчёт | `panic`, `confirm`, ошибка исполнения: не ловится |
+| Исчерпание | истрачен бюджет шагов, памяти или времени | тот, кто запустил программу | остановка по бюджету: не ловится и не считается отказом программы |
+| Отмена | задача, ждавшая эту работу, исчезла | планировщик | `Cancelled` (глава 20) |
+
+Только в первой строке код *внутри* программы может сделать что-то лучше,
+чем остановиться. Механизм, который обращается со всеми четырьмя строками
+одинаково — один `catch (Exception e)`, видящий в одной переменной и выход
+за границу, и отсутствующий файл, — подталкивает к коду, который
+«обрабатывает» ошибку программы записью в журнал и продолжает работать с
+испорченным состоянием. Разделение в Okkama — это таблица выше, ставшая
+синтаксисом.
+
+## 10.2 Краткая история: коды, исключения, значения
+
+Обработку ошибок изобретали заново примерно раз в десятилетие, и каждое
+новое изобретение чинило настоящую беду предыдущего.
+
+**Коды возврата.** C сообщает об отказе через возвращаемое значение и
+глобальный `errno`. Это ничего не стоит во время исполнения, и ничто не
+заставляет вызывающего посмотреть на результат. `close` в Unix возвращает
+ошибку, которую почти никто не проверяет, и переполненный диск,
+обнаруженный при `close`, теряется молча. Отказ и обычный результат делят
+один канал: `-1` — это и «ошибка», и для некоторых функций законное
+значение.
+
+**Исключения.** Статья Джона Гудинафа 1975 года описала пространство
+решений, которым пользуются до сих пор: как поднимается отказ, как ищется
+обработчик и *продолжается* ли выполнение после обработчика или
+*прекращается* неудавшаяся операция [[Goodenough 1975](#ref-goodenough1975)]. CLU в 1979 году
+выбрал прекращение и заставил каждую процедуру объявлять исключения, которые
+она может сигнализировать; необъявленное превращается в `failure`
+[[Liskov 1979](#ref-liskov1979)]. Эта пара решений — прекращение и различие между объявленными
+исключениями и всем остальным — предок почти всех современных моделей,
+включая модель Okkama.
+
+**Иерархии исключений.** C++ и Java сделали исключения объектами иерархии
+классов, которые ловят по типу [[Stroustrup 1994](#ref-stroustrup1994)]. Java пошла дальше и ввела
+*проверяемые* исключения: метод объявляет в сигнатуре проверяемые
+исключения, которые может бросить, а компилятор следит, чтобы каждое было
+поймано или передано дальше [[Gosling 2023](#ref-gosling2023)]. Спорят о них с тех пор. Обычная
+жалоба: сигнатуры обрастают типами исключений, которые меняются вместе с
+реализацией, и вызывающие оборачивают или глушат их, лишь бы компилятор
+замолчал. Java сохранила и второе, непроверяемое семейство —
+`RuntimeException` и `Error`. Это снова различие CLU, только обработчик
+`catch (Exception e)` видит оба.
+
+**Ошибки как значения.** Go вернулся к возвращаемым значениям, но как к
+соглашению, а не к случайности: функция возвращает `(result, error)`, а
+вызывающий проверяет `err != nil`. Роб Пайк в «Errors are values»
+доказывает, что ошибка — это данные, с которыми программа может считать, а
+не особый путь управления [[Pike 2015](#ref-pike2015)]. Плата — повторение и старая слабость
+кодов возврата: проверку ничто не требует. Rust сохраняет подход значений,
+но делает его неизбежным: функция, которая может провалиться, возвращает
+`Result<T, E>`, его нужно развернуть или передать дальше через `?`, а для
+ошибок программы есть отдельный механизм, `panic!` [[Klabnik 2023](#ref-klabnik2023)]. Снова два
+канала.
+
+**Пусть падает.** Резче всех провёл границу Erlang. Процесс, встретивший
+условие, на которое он не рассчитан, не пытается восстановиться. Он падает,
+а супервизор, который видит картину шире, перезапускает его в известном
+состоянии [[Armstrong 2003](#ref-armstrong2003)]. Оборонительный код, пытающийся на месте
+обработать все мыслимые отказы, — по Армстронгу, то место, где умирает
+надёжность.
+
+**Отказ от процесса.** Ближе всего к Okkama модель, которую Джо Даффи
+описывает для Midori, исследовательской операционной системы Microsoft.
+Ошибки программы — нарушения контрактов, выход за границы, арифметическое
+переполнение — *обрывают* весь процесс, и локальный код не может их
+перехватить. Восстановимые ошибки объявляются в сигнатурах и обрабатываются
+лёгким `try` [[Duffy 2016](#ref-duffy2016)]. Довод Даффи: этим двум нужны разные механизмы.
+Код, который считает ошибку программы восстановимой, продолжает работу в
+состоянии, на которое никто не рассчитывал, а модель без такой возможности
+и проще, и надёжнее.
+
+Наблюдения за системами вне исследовательских лабораторий говорят то же.
+Юань с коллегами изучили 198 отказов пяти широко используемых
+распределённых систем, о которых сообщили пользователи (Cassandra, HBase,
+HDFS, Hadoop MapReduce и Redis). В 92% катастрофических отказов последним
+шагом была неверная обработка нефатальной ошибки, о которой код явно
+сообщил. Многие из ошибочных обработчиков были пусты, или только писали в
+журнал, или содержали `TODO` [[Yuan 2014](#ref-yuan2014)]. Урок неудобный. Обработчики
+ошибок — код, который выполняется редко, поэтому его редко тестируют,
+поэтому ошибки живут именно там. Язык не сделает обработчики правильными,
+но может сделать их немногочисленными, типизированными и невозможными по
+случайности.
+
+Okkama берёт от каждого шага:
+
+- от CLU и Midori — прекращение и жёсткую границу между объявленными
+  отказами и ошибками программы;
+- от Go и Rust — объявленные отказы как обычные значения;
+- от Erlang — ошибки программы вообще не обрабатываются на месте;
+- от Юаня и соавторов — никакой конструкции, ловящей «что угодно».
+
+## 10.3 Ошибки программы — не значения: panic и ошибки исполнения
+
+Эти конструкции завершают запуск, какие бы ветки `catch` их ни окружали:
+
+- `panic "message"` — собственное заявление программы, что случилось
+  невозможное. Сообщение должно быть строковым литералом: паника несёт
+  готовую фразу, а не данные.
+- Голый `confirm condition;`, условие которого ложно (§10.8).
+- **Ошибки исполнения.** Индекс или срез за границей, деление или остаток
+  от деления на ноль, неудавшееся сужение значения роли или `any`. Их
+  обнаруживает движок и сообщает как `RuntimeError: …`.
+
+Запуск не просто останавливается. Он *разматывается*: каждая область между
+местом отказа и верхом выполняет свои `defer` и уничтожает ресурсы, которыми
+владеет, в обратном порядке (глава 11). Затем отчёт уходит в стандартный
+поток ошибок, а процесс завершается с кодом 1. Вот снятие денег, в котором
+программа бросает ожидаемую ошибку для нулевой суммы и паникует в случае,
+который считает невозможным:
+
+```okkama
+module bible/panic v1.0.0;
+
+// A panic is not an error value: no catch clause sees it, and the run ends
+// with exit status 1 after cleanup.
+import "io/stdout" take Stdout;
+
+enum Rejected is Error = (rejected);
+
+object Account {
+    has balance is int;
+    Account(:balance);
+    withdraw(amount is int) is Account {
+        confirm amount > 0 else throw Rejected.rejected;
+        confirm amount <= balance else panic "Withdrawal checked above, still overdrawn";
+        Account(balance: balance - amount);
+    }
+    left() is int { balance; }
+}
+
+main() is int {
+    let out = Stdout();
+    let account = Account(balance: 50);
+    out.writeln(try { account.withdraw(0).left().string(); } catch e is Rejected { "rejected: " + e.text(); });
+    out.writeln(try { account.withdraw(80).left().string(); } catch e is Error { "never printed"; });
+    0;
+}
+```
+
+Вывод:
+
+```text
+rejected: Rejected.rejected
+exit 1
+```
+
+У второго `try` есть `catch e is Error` — самая широкая типизированная ветка,
+какая бывает, — и она всё равно не выполняется. Отчёт называет панику,
+место и стек вызовов:
+
+```text
+Panic: Withdrawal checked above, still overdrawn
+  --> 10-panic.ok:14:9
+   |
+14 |         confirm amount <= balance else panic "Withdrawal checked above, still overdrawn";
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Stack trace (most recent call first):
+  at Account.withdraw (10-panic.ok:14:9)
+  at main (10-panic.ok:24:23)
+```
+
+Ошибка исполнения выглядит так же, только вместо `Panic:` стоит
+`RuntimeError:`. Индекс за концом массива печатает
+`RuntimeError: Array index out of bounds`, а `7 % d` при нулевом `d` —
+`RuntimeError: Modulo by zero`, и в обоих случаях виновное выражение
+подчёркнуто.
+
+Почему не дать программе ловить и это? Потому что пойманная ошибка
+программы — спрятанная ошибка. Обработчик, поймавший выход за границу, не
+может знать, какое допущение не выполнилось и в каком состоянии осталась
+недоделанная операция. На практике такой обработчик пишет в журнал и даёт
+программе работать дальше с этим состоянием. Именно этот образец Юань и
+соавторы нашли в корне катастрофических отказов. Остановка сохраняет улики.
+Долго живущий сервис, который обязан пережить собственные ошибки, делает
+как Erlang: выполняет рискованную работу в отдельной единице (задаче или
+процессе-воркере) и даёт надзирающему коду реагировать на гибель единицы, а
+не на ошибку внутри неё.
+
+## 10.4 Перечисления ошибок
+
+Ожидаемый отказ — значение, и его тип — **перечисление ошибок**:
+перечисление, объявленное `is Error`. Его случаи — способы, которыми может
+провалиться компонент, а их нагрузки несут контекст.
+
+```okkama
+enum LineError is Error = (
+    blank(line is int),
+    shape(line is int, text is string),
+    amount(line is int, cause is InvalidInteger)
+);
+enum LedgerError is Error = (line(cause is LineError), overdraft(account is string, short is int));
+```
+
+Правила короткие.
+
+- **`is Error` — единственная роль, которую может объявить перечисление.**
+  Перечисление ошибок не бывает обобщённым и всегда *вариантное*: `match`
+  по нему обязан покрыть все случаи или иметь `else`, даже если ни у одного
+  случая нет нагрузки.
+- **Нагрузки — значения.** Поле нагрузки может хранить `string`, `int`,
+  `byte`, `float`, `rat`, `bool` и перечисления, чьи нагрузки подчиняются
+  тому же правилу. Это включает другие перечисления ошибок: так один отказ
+  несёт другой (`LedgerError.line(cause)`). Объекты, роли, коллекции, `char`,
+  действия и `any` запрещены. Ошибка должна пережить область, в которой её
+  бросили, а ресурсы этой области — нет, поэтому ошибка не может держать
+  ресурс.
+- **`text()` генерируется.** Он записывает случай так, как его записал бы
+  исходник: `LineError.blank(2)`,
+  `LineError.amount(2, InvalidInteger.source("sixty"))`. Строки в кавычках,
+  числа через `string()`, булевы как `true`/`false`, вложенные перечисления
+  выписываются рекурсивно. С него начинается отчёт о непойманной ошибке.
+
+Роль `Error` встроена в язык и требует публичного `text() is string`. Её
+выполняют три рода значений:
+
+- перечисления ошибок;
+- `NativeFailure`, отказ хоста (§10.10);
+- `Cancelled`, отменённая задача (глава 20).
+
+Объект — не может. `object Fault does Error` — ошибка компиляции:
+``Object "Fault" cannot do Error: errors are enums, declare `enum Fault is Error = (...)` `` (с подсказкой, как надо).
+
+Это правило — самое заметное отличие от Java или C#, и оно намеренное. Там
+исключение — объект иерархии классов. Вызывающие ловят надкласс, имея в
+виду «любое из этих», иерархия растёт вместе с реализацией, а поля
+добавляются, чтобы нести то, что однажды кому-то понадобилось. Перечисление
+ошибок — закрытый список, видный в одном объявлении. Новый случай —
+изменение, которое замечает каждый исчерпывающий `match`. Группировка
+явная: компонент, оборачивающий отказы другого компонента, говорит об этом
+нагрузкой, а не надклассом. А поскольку значение — это данные, две ошибки
+сравниваются по значению и печатаются одинаково на всех движках.
+
+Задуманная гранулярность — одно перечисление на компонент. `LineError` —
+всё, о чём может сообщить разбор строки, `LedgerError` — всё, о чём может
+сообщить загрузка, включая «строка оказалась плохой» как случай, несущий
+`LineError`.
+
+## 10.5 throw
+
+`throw` поднимает ожидаемый отказ. Он принимает значение перечисления
+ошибок, ссылку `Error` — обычно пойманную ошибку, которую передают дальше —
+или `NativeFailure`:
+
+```okkama
+throw LineError.blank(number);
+throw LedgerError.line(e);        // новая ошибка, несущая пойманную
+throw e;                          // передать пойманную ошибку дальше
+throw;                            // повторно бросить обрабатываемую ошибку
+```
+
+Голый `throw;` существует только внутри тела `catch`, и компилятор
+проверяет это лексически. Действие, вызванное из тела `catch`, не может
+бросить повторно неявно: оно не знает, что сейчас обрабатывается. Голый
+`throw;` сохраняет идентичность и происхождение брошенного значения: отчёт
+по-прежнему указывает на место, где ошибку бросили впервые, а не на
+повторный бросок.
+
+`throw` никогда не даёт значения, как и `return`, поэтому телу `catch`,
+которое бросает, своё значение не нужно. Разбор строки в начальном примере
+на это и опирается:
+
+```okkama
+let amount = try { ParsedInt(parts[1]).value(); }
+             catch e is InvalidInteger { throw LineError.amount(number, e); };
+```
+
+`try` даёт `int`. Тело `catch` значения не даёт: оно бросает.
+
+`confirm condition else throw value;` (§10.8) — защищённая форма, и на
+практике большинство ошибок поднимается именно так: проверка и отказ, если
+проверка не выполнена.
+
+## 10.6 try и catch
+
+`try` вычисляет блок и, если блок бросил, выбирает ветку `catch` по типу
+брошенного:
+
+```okkama
+let message = try {
+    "balance " + Import(lines: lines).run(start).string();
+}
+catch LedgerError.overdraft(account, short) {
+    "overdraft on " + account + " by " + short.string();
+}
+catch e is LedgerError {
+    "rejected: " + e.text();
+};
+```
+
+Правила:
+
+- **`try` — выражение и инструкция.** Как `if`, он даёт значение
+  выполнившегося блока — тела `try` или выбранной ветки `catch`. Может он
+  стоять и сам по себе, как инструкция.
+- **Хотя бы одна типизированная ветка.** Каждая ветка называет свои типы, и
+  типы обязаны гарантировать `Error`: сам `Error`, перечисление ошибок,
+  `NativeFailure` или `Cancelled`. Ветка может назвать несколько типов,
+  `catch e is DbError, NetError { … }`, и тогда привязка имеет тип `Error`.
+- **Образцы вместо привязки.** Ветка может перечислить случаи перечисления
+  ошибок с позиционно привязанными нагрузками, `_` — пропущенное поле:
+  `catch LedgerError.overdraft(account, short) { … }`. Случай нужного
+  перечисления, не подошедший под образец, идёт к следующей ветке того же
+  `try`. Образцы одноуровневые:
+  `catch LedgerError.line(LineError.shape(line, text))` отвергается с
+  `Expected a binding or _ in variant pattern`. Вложенную причину разбирает
+  `match` в теле ветки, как делает `report` в начальном примере.
+- **Порядок исходника.** Ветки проверяются сверху вниз, побеждает первая
+  подходящая. Отказ, к которому не подошла ни одна ветка, покидает `try` без
+  изменений — с тем же типом, значением и происхождением.
+- **Отдельные области.** Тело `try` и каждое тело `catch` — отдельные
+  дочерние области. Имена, связанные в теле, в ветке не видны, а привязка
+  ветки существует только в этой ветке.
+- **Сначала уборка.** До выбора ветки область тела `try` закрывается: её
+  `defer` выполняются, а ресурсы, которыми она владеет, уничтожаются, самые
+  новые первыми. В ветку переживает только нагрузка самой брошенной
+  ошибки. Отказ во время этой уборки не заменяет отказ тела, а
+  присоединяется к нему (§10.7).
+
+То, чего в `try` нет, не менее важно, чем то, что в нём есть.
+
+**Нет «поймать всё».** Нет ни `catch e { }`, ни `catch (...)`. Самый узкий
+способ поймать любой ожидаемый отказ — `catch e is Error`. Даже эта ветка
+видит только брошенные ошибки, никогда — панику, ошибку исполнения или
+остановку по бюджету, и читатель видит в исходнике, что это самая широкая
+сеть. Одно имя в нижнем регистре не компилируется:
+
+```okkama
+module bible/catch_all v1.0.0;
+
+import "io/stdout" take Stdout;
+
+main() is int {
+    let text = try { "ok"; } catch e { "anything"; };
+    Stdout().writeln(text);
+    0;
+}
+```
+
+Ответ компилятора:
+
+```text
+10-catchall-rejected.ok:6:38: syntax error at "{": Expect "is" after catch error name.
+  |
+6 |     let text = try { "ok"; } catch e { "anything"; };
+  |                                      ^
+```
+
+**Нет `finally`.** Работа, которая должна выполниться и при успехе, и при
+отказе блока, — это `defer` в этом блоке (глава 11). Ветка `finally` была бы
+вторым написанием той же идеи и выполнялась бы в другой области, чем код,
+за которым она убирает.
+
+**Нет охранных условий.** Ветка не может добавить условие (`catch e is
+DbError if e.retryable()`). Условию место в случае перечисления ошибок:
+решает его бросающий, один раз, а не каждый обработчик.
+
+## 10.7 Причины
+
+У отказа часто есть причина, которая сама — отказ. Ошибка хранилища
+проваливает заказ, ошибка разбора проваливает строку. Okkama хранит
+причину двумя способами.
+
+**Как нагрузку.** Когда причина нужна вызывающему для решения, положите её в
+ошибку: `enum OrderError is Error = (storage(cause is StoreError), …)`.
+Тогда причина — обычное значение. Вызывающий может сопоставить её с
+образцом, `text()` её печатает, и на всех движках она значит одно и то же.
+
+```okkama
+module bible/cause v1.0.0;
+
+// Two ways to keep the cause of a failure: as a payload (a value the
+// program can match), and as the runtime link a new error gets when it
+// leaves a catch (for the report).
+import "io/stdout" take Stdout;
+
+enum StoreError is Error = (closed, full(limit is int));
+enum OrderError is Error = (storage(cause is StoreError), rejected(reason is string));
+
+object Store {
+    Store();
+    save(id is int) is int {
+        if id > 2 { throw StoreError.full(2); }
+        id;
+    }
+}
+
+object Orders {
+    has store is Store;
+    Orders(:store);
+    place(id is int) is int {
+        try { store.save(id); } catch e is StoreError { throw OrderError.storage(e); }
+    }
+    explain(id is int) is string {
+        try {
+            self.place(id).string();
+        }
+        catch OrderError.storage(cause) {
+            match cause {
+                case StoreError.full(limit) { "store holds " + limit.string(); }
+                case StoreError.closed { "store closed"; }
+            }
+        }
+        catch e is OrderError { e.text(); }
+    }
+}
+
+main() is int {
+    let orders = Orders(store: Store());
+    let out = Stdout();
+    out.writeln(orders.explain(1));
+    out.writeln(orders.explain(3));
+    out.writeln(OrderError.storage(StoreError.full(2)).text());
+    0;
+}
+```
+
+Вывод:
+
+```text
+1
+store holds 2
+OrderError.storage(StoreError.full(2))
+```
+
+**Как связь времени исполнения.** Каждая новая ошибка, поднятая, пока тело
+`catch` обрабатывает другую, хранит обрабатываемую ошибку как свою
+*причину* — со значением, происхождением и стеком. Это происходит,
+упоминает ли новая ошибка старую или нет, так что `catch`, бросающий менее
+подробную ошибку, улики не теряет. Работает это и после `await`. Связь
+диагностическая: программа её не читает, но отчёт о непойманном отказе её
+печатает. На ядре Sparrow:
+
+```text
+OrderError: OrderError.failed(7)
+Caused by:
+  StoreError: StoreError.closed
+  --> uncaught.ok:10:56
+```
+
+Тело `catch`, завершившееся нормально, связи не оставляет, так что
+позднейший, не относящийся к делу бросок не будет приписан старому отказу.
+Голый `throw;` сохраняет исходный носитель, а не создаёт новый.
+
+Третий род дополнительных отказов — **вторичный**. Когда во время размотки
+после отказа проваливается сама уборка, отказ уборки не заменяет исходный, а
+присоединяется к нему как вторичный и печатается после него. Читать обычно
+стоит первый отказ, и код уборки не должен иметь возможности его спрятать.
+
+## 10.8 confirm: контракт внутри кода
+
+`confirm` формулирует условие, на которое опирается код. Это форма Okkama
+для утверждений проектирования по контракту, где предусловия, постусловия и
+инварианты — часть текста программы, а не её комментариев [[Meyer 1992](#ref-meyer1992)].
+Форм три, по одной на канал отказа:
+
+```okkama
+confirm items.size() == 3;                            // ошибка программы, если ложно
+confirm amount > 0 else throw Rejected.rejected;      // ожидаемый отказ
+confirm amount <= balance else panic "Overdrawn";     // ошибка программы с фразой
+```
+
+- **Голый `confirm`** — внутренний инвариант. Если он не выполнен, запуск
+  останавливается с `RuntimeError: confirm failed` и местом `confirm`.
+- **`confirm … else throw`** — предусловие публичного действия, проверяемое
+  на данных, которые дал вызывающий. Ложное условие бросает указанную
+  ошибку, и вызывающий может её поймать. Большинство ошибок стандартной
+  библиотеки поднимается именно так. `ParsedInt` начинается с
+  `confirm self.source.length() > 0 && self.source != "-" else throw InvalidInteger.source(self.source);`.
+- **`confirm … else panic`** — инвариант, заслуживающий фразы в отчёте.
+
+Условие должно быть `bool`, и выключить `confirm` нельзя. Контракт, который
+исчезает в рабочей сборке, — контракт, который никто не проверяет, а
+`confirm` стоит одного вычисления своего условия.
+
+## 10.9 try? и try!
+
+Две префиксные формы приспосабливают выражение, которое может провалиться,
+к коду, который хочет считать отказ значением — или невозможностью:
+
+```okkama
+module bible/marks v1.0.0;
+
+// try? turns a thrown error into Maybe.none; try! turns it into a panic.
+import "io/stdout" take Stdout;
+import "strings/parse" take ParsedInt;
+
+main() is int {
+    let out = Stdout();
+    let port = try? ParsedInt("8080").value() else 80;
+    let fallback = try? ParsedInt("http").value() else 80;
+    out.writeln(port.string() + " " + fallback.string());
+    let parsed = try? ParsedInt("12").value();
+    out.writeln(parsed ?? .some(n): "some " + n.string() !! .none: "none");
+    let sure = try! ParsedInt("42").value();
+    out.writeln(sure.string());
+    let broken = try! ParsedInt("forty-two").value();
+    out.writeln(broken.string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+8080 80
+some 12
+42
+exit 1
+```
+
+- **`try? value`** имеет тип `Maybe<T>`: `Maybe.some(value)` или `.none`,
+  если при вычислении брошена любая ошибка. Он сочетается с `else`, дающим
+  запасное значение, и с двусторонним выбором `?? !!` из главы 7. Обернуть
+  вызов без значения нельзя — класть в `Maybe` нечего, — как нельзя и
+  результат-преемник: его обязательство использования потерялось бы.
+- **`try! value`** сохраняет тип значения и превращает брошенную ошибку в
+  панику `Unexpected error: <text()>` с местом `try!`. Он говорит «здесь
+  провала быть не может». Если автор ошибся, запуск останавливается с
+  исходной ошибкой в отчёте, а не с молча неверным значением.
+
+Обе формы видят только брошенные ошибки. Паника и ошибки исполнения
+проходят сквозь них, уборка выполняется как для `try`. `try?` отбрасывает
+ошибку, поэтому он для случаев, когда *почему* что-то не удалось, неважно:
+запасной порт, необязательная настройка. Где причина важна, ошибка остаётся
+ошибкой.
+
+## 10.10 Отказы хоста
+
+Код, выходящий за пределы программы — файлы, сокеты, процессы, базы данных,
+криптография, — тоже получает отказы хоста как значения. Нативный провайдер
+сообщает об отказе как `NativeFailure` со стабильным `domain` (`core.fs`,
+`core.crypto`, …), стабильным `code` (`not_found`, `already_closed`,
+`invalid_input`, `permission_denied`, …), каноническим именем `operation`,
+которая не удалась, и диагностическим `message`:
+
+```okkama
+try { open(path, 1, 0); }
+catch failure is NativeFailure {
+    failure.domain();     // "core.fs"
+    failure.code();       // "not_found"
+    failure.message();    // для людей, никогда для ветвления
+}
+```
+
+Ветвиться стоит только по `domain` и `code`. Сырые значения `errno`, классы
+исключений хоста и локализованные сообщения ОС никогда не становятся
+значениями языка, поэтому программа ведёт себя одинаково на macOS, Linux и
+JVM.
+
+Большинство программ никогда не видят `NativeFailure` напрямую. Стандартная
+библиотека ловит его на границе и бросает типизированную ошибку из словаря
+самого модуля. `crypto/error` превращает `NativeFailure` с `invalid_input`
+в `InvalidCryptoInput.because(message)`, `permission_denied` — в
+`AuthenticationFailed.failed`, а всё остальное — в `CryptoUnavailable`.
+Программа, пользующаяся `crypto/kdf`, ловит криптографические ошибки, а не
+коды хоста.
+
+*Неожиданная* ошибка хоста — та, для которой у провайдера нет стабильного
+кода, — не `NativeFailure`. Это ошибка исполнения, и запуск
+завершается.
+
+`Cancelled` — отказ, который видит задача, когда ожидаемую ею работу
+отменили. Глава 20 объясняет его вместе со структурной конкурентностью.
+
+## 10.11 Бюджеты — не отказы
+
+Запуску можно дать бюджеты: `--max-steps`, `--max-memory`, `--max-output` и
+`--timeout`. Исчерпание бюджета — ни ожидаемый отказ, ни ошибка программы.
+Это окружение отзывает разрешение продолжать. Запуск завершается с
+`Execution budget exhausted: steps` (`memory`, `output`) или
+`Execution interrupted` и кодом 1. Его не видит ни один `catch`, даже
+`catch e is Error`, и `destroy` не выполняется: уборка снова тратила бы
+бюджет.
+
+Остановка происходит в ближайшей точке, где движок смотрит на бюджет:
+
+- на каждом шаге, входе в функцию и итерации цикла;
+- внутри долгой сортировки;
+- между раундами вычисления PBKDF2.
+
+Нативная операция, которая смотреть не умеет, — хеш Argon2, блокирующее
+чтение — заканчивается, когда заканчивается. С `--timeout` командная строка
+тогда останавливает запуск не позже чем через секунду после срока.
+
+## 10.12 Что доходит до верха
+
+Ошибка, которую не поймал ни один `catch`, разматывает весь запуск, как
+паника: уборка выполняется область за областью, процесс завершается с
+кодом 1. Отчёт начинается с типа ошибки и её `text()`, затем даёт место
+`throw`, цепочку причин и стек вызовов:
+
+```text
+OrderError: OrderError.failed(7)
+Caused by:
+  StoreError: StoreError.closed
+  --> uncaught.ok:10:56
+   |
+10 |         try { self.save(id); } catch e is StoreError { throw OrderError.failed(id); }
+   |                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Stack trace (most recent call first):
+  at Orders.place (uncaught.ok:10:56)
+  at main (uncaught.ok:14:17)
+```
+
+`main` возвращает код завершения успешного запуска, и он должен лежать в
+пределах 0–255. Большее значение сообщается как `RuntimeError: main() must
+return an int in 0..255, got N`, так что и здесь канал успеха и канал отказа
+остаются раздельными.
+
+## 10.13 Чего стоит такой замысел
+
+Два канала — сильное мнение, а за мнения платят.
+
+- **Больше объявлений.** Каждый компонент, который может провалиться,
+  объявляет перечисление ошибок. Программист на Java тянется к
+  `IllegalArgumentException`, программист на Okkama пишет случай.
+- **Нет «поймать всё».** Код, который действительно имеет в виду «любой
+  ожидаемый отказ», пишет `catch e is Error`, а код, который хочет пережить
+  ошибки программы, должен вынести рискованную работу в отдельную задачу или
+  процесс. Это больше структуры, чем `catch (Throwable t)`. Okkama считает
+  это достоинством; тому, кому нужен быстрый скрипт, может казаться иначе.
+- **Ошибки не несут объектов.** Ошибка, которой естественно было бы держать
+  провалившийся запрос, держит вместо этого идентифицирующие его значения.
+- **Образцы одноуровневые.** Вложенную причину разбирает `match` в теле
+  ветки.
+- **Цепочка причин времени исполнения — только для отчётов.** Программа не
+  может по ней пройти. Причину, которую программа должна разобрать, нужно
+  сделать нагрузкой.
+- **Движки пока расходятся в отчёте.** Ядро Sparrow печатает цепочку
+  причин. IR-движок пропускает `Caused by:`, а JVM печатает только первую
+  строку ([#270](https://github.com/shootnix/okkama/issues/270)). Код
+  завершения и поведение `catch` одинаковы на всех трёх.
+- **Пока нет именованных обработчиков.** Обработчик, общий для нескольких
+  блоков `try`, приходится делать действием, которое вызывает каждая ветка.
+  Именованные обработчики предлагались и отложены как слишком магические для
+  0.4.1 ([#148](https://github.com/shootnix/okkama/issues/148)).
+
+Против этих издержек стоит то, что замысел убирает:
+
+- обработчики, которые глушат ошибки программы;
+- иерархии исключений, растущие вместе с реализацией;
+- блоки `finally`, убирающие не в той области;
+- сообщения об ошибках, различающиеся от платформы к платформе;
+- догадки у каждого `catch` о том, что туда может прийти.
+
+Следующая глава — о другой половине истории: что выполняется, когда область
+заканчивается, успешно или с отказом.
+
 # Литература
 
 - <a id="ref-lions1996"></a>Jacques-Louis Lions et al. (1996). *ARIANE 5 Flight 501 Failure: Report by the Inquiry Board*. European Space Agency, Paris, 19 July 1996. https://www.esa.int/Newsroom/Press_Releases/Ariane_501_-_Presentation_of_Inquiry_Board_report
@@ -3306,6 +4114,7 @@ semantic error: Undefined variable "break"; Okkama leaves a loop with `last`
 - <a id="ref-landin1966"></a>P. J. Landin (1966). The Next 700 Programming Languages. *Communications of the ACM* 9(3): 157–166. https://doi.org/10.1145/365230.365257
 - <a id="ref-langley2014"></a>Adam Langley (2014). Apple's SSL/TLS bug. *ImperialViolet*, 22 February 2014. https://www.imperialviolet.org/2014/02/22/applebug.html
 - <a id="ref-li2019"></a>Ming Li, Paul Vitányi (2019). *An Introduction to Kolmogorov Complexity and Its Applications*, 4th edition. Springer. https://doi.org/10.1007/978-3-030-11298-1
+- <a id="ref-liskov1979"></a>Barbara H. Liskov, Alan Snyder (1979). Exception Handling in CLU. *IEEE Transactions on Software Engineering* SE-5(6): 546–558. https://doi.org/10.1109/TSE.1979.230191
 - <a id="ref-liskov1994"></a>Barbara H. Liskov, Jeannette M. Wing (1994). A Behavioral Notion of Subtyping. *ACM TOPLAS* 16(6): 1811–1841. https://doi.org/10.1145/197320.197383
 - <a id="ref-mackay2003"></a>David J. C. MacKay (2003). *Information Theory, Inference, and Learning Algorithms*. Cambridge University Press. Chapter 28: Model Comparison and Occam's Razor.
 - <a id="ref-mccarthy1960"></a>John McCarthy (1960). Recursive Functions of Symbolic Expressions and Their Computation by Machine, Part I. *Communications of the ACM* 3(4): 184–195. https://doi.org/10.1145/367177.367199
@@ -3323,6 +4132,7 @@ semantic error: Undefined variable "break"; Okkama leaves a loop with `last`
 - <a id="ref-parnas1972"></a>David L. Parnas (1972). On the Criteria To Be Used in Decomposing Systems into Modules. *Communications of the ACM* 15(12): 1053–1058. https://doi.org/10.1145/361598.361623
 - <a id="ref-pep237"></a>Moshe Zadka, Guido van Rossum (2001). PEP 237 — Unifying Long Integers and Integers. Python Enhancement Proposals. https://peps.python.org/pep-0237/
 - <a id="ref-pierce2002"></a>Benjamin C. Pierce (2002). *Types and Programming Languages*. MIT Press.
+- <a id="ref-pike2015"></a>Rob Pike (2015). Errors are values. *The Go Blog*, 12 January 2015. https://go.dev/blog/errors-are-values
 - <a id="ref-poletto1999"></a>Massimiliano Poletto, Vivek Sarkar (1999). Linear Scan Register Allocation. *ACM TOPLAS* 21(5): 895–913. https://doi.org/10.1145/330249.330250
 - <a id="ref-r7rs2013"></a>Alex Shinn, John Cowan, Arthur A. Gleckler (eds.) (2013). *Revised⁷ Report on the Algorithmic Language Scheme*. https://small.r7rs.org/attachment/r7rs.pdf
 - <a id="ref-rfc3629"></a>François Yergeau (2003). *UTF-8, a Transformation Format of ISO 10646*. RFC 3629, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc3629
@@ -3344,3 +4154,4 @@ semantic error: Undefined variable "break"; Okkama leaves a loop with `last`
 - <a id="ref-unicode16"></a>The Unicode Consortium (2024). *The Unicode Standard, Version 16.0.0*. https://www.unicode.org/versions/Unicode16.0.0/
 - <a id="ref-wadler1989"></a>Philip Wadler (1989). Theorems for Free! In *Proceedings of FPCA 1989*: 347–359. ACM. https://doi.org/10.1145/99370.99404
 - <a id="ref-wirth1995"></a>Niklaus Wirth (1995). A Plea for Lean Software. *Computer* 28(2): 64–68. https://doi.org/10.1109/2.348001
+- <a id="ref-yuan2014"></a>Ding Yuan, Yu Luo, Xin Zhuang, Guilherme Renna Rodrigues, Xu Zhao, Yongle Zhang, Pranay U. Jain, Michael Stumm (2014). Simple Testing Can Prevent Most Critical Failures: An Analysis of Production Failures in Distributed Data-Intensive Systems. In *11th USENIX Symposium on Operating Systems Design and Implementation (OSDI 14)*: 249–265. USENIX. https://www.usenix.org/conference/osdi14/technical-sessions/presentation/yuan

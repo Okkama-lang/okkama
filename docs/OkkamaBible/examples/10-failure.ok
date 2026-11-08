@@ -1,0 +1,81 @@
+module bible/failure v1.0.0;
+
+// A ledger import: every failure the import can report is a case of one
+// error enum, and the context travels in the payload.
+import "io/stdout" take Stdout;
+import "strings/parse" take ParsedInt, InvalidInteger;
+
+enum LineError is Error = (blank(line is int), shape(line is int, text is string), amount(line is int, cause is InvalidInteger));
+enum LedgerError is Error = (line(cause is LineError), overdraft(account is string, short is int));
+
+object Entry {
+    has account is string;
+    has amount is int;
+    Entry(:account, :amount);
+    name() is string { account; }
+    value() is int { amount; }
+}
+
+object Lines {
+    Lines();
+    entry(number is int, text is string) is Entry {
+        confirm text.length() > 0 else throw LineError.blank(number);
+        let parts = text.split(",");
+        confirm parts.size() == 2 else throw LineError.shape(number, text);
+        let amount = try { ParsedInt(parts[1]).value(); } catch e is InvalidInteger { throw LineError.amount(number, e); };
+        Entry(account: parts[0], amount: amount);
+    }
+}
+
+object Ledger {
+    has balance is int;
+    Ledger(:balance);
+    after(entry is Entry) is Ledger {
+        let after = balance + entry.value();
+        confirm after >= 0 else throw LedgerError.overdraft(entry.name(), 0 - after);
+        Ledger(balance: after);
+    }
+    total() is int { balance; }
+}
+
+object Import {
+    has lines is @string;
+    Import(:lines);
+    run(start is int) is int {
+        let parser = Lines();
+        let ledger = (0..lines.size()).reduce(Ledger(balance: start)) -> book, i {
+            let entry = try { parser.entry(i + 1, lines[i]); } catch e is LineError { throw LedgerError.line(e); };
+            book.after(entry);
+        };
+        ledger.total();
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let report = (lines is @string, start is int) is string {
+        try {
+            "balance " + Import(lines: lines).run(start).string();
+        }
+        catch LedgerError.overdraft(account, short) {
+            "overdraft on " + account + " by " + short.string();
+        }
+        catch LedgerError.line(cause) {
+            match cause {
+                case LineError.shape(line, text) { "line " + line.string() + " is not account,amount: " + text; }
+                else { "rejected: " + cause.text(); }
+            }
+        }
+        catch e is LedgerError {
+            "rejected: " + e.text();
+        }
+    };
+    out.writeln(report(["cash,100", "rent,-60", "food,-25"], 0));
+    out.writeln(report(["cash,100", "rent,-160"], 0));
+    out.writeln(report(["cash,100", "rent -60"], 0));
+    out.writeln(report(["cash,100", "rent,sixty"], 0));
+    out.writeln(report(["cash,100", ""], 0));
+    let quick = try? Import(lines: ["cash,ten"]).run(0) else -1;
+    out.writeln("quick " + quick.string());
+    0;
+}

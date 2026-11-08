@@ -1,0 +1,6 @@
+balance 15
+overdraft on rent by 60
+line 2 is not account,amount: rent -60
+rejected: LineError.amount(2, InvalidInteger.source("sixty"))
+rejected: LineError.blank(2)
+quick -1
