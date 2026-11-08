@@ -133,3 +133,13 @@ Updated with each chapter: `build.py --stats`.
   costs. To add: a worked domain model (money, an order and its lines);
   designing small objects (one noun per computation) with std examples;
   constructor failure and partial objects in depth.
+- Chapter 13 (actions and successors): 7.7 pages (EN) of its floor of 18.
+  Written: actions and results, `return` boundaries, `void`, parameters,
+  defaults and named calls, overloads (ambiguity, #273), variadics,
+  successors and `obj.next`, reads see the receiver, the must-use rule
+  (#272 for its location), rebinding, failure, naming transitions (`with_*`
+  rejected, CQS), composition and private successors, `Cell`, the cost of
+  a successor on each engine, a comparison table, costs. To add: a worked
+  state machine (an order's life) across several objects; successors
+  through roles (`^Role`, with Chapter 14); measurements of successor
+  loops against `Cell` and `reduce`; async successors.

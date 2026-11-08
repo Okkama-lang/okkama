@@ -1,0 +1,54 @@
+module bible/successors v1.0.0;
+
+// State changes are successors: `is ^Type` actions that stage new field
+// values with `^field = …` and return a new object. The original stays.
+import "io/stdout" take Stdout;
+
+enum TabError is Error = (closed, over_limit(total is int));
+
+object Tab {
+    has items is int = 0;
+    has total is int = 0;
+    has limit is int;
+    has open is bool = true;
+
+    Tab(:limit);
+
+    ordered(price is int) is ^Tab {
+        confirm open else throw TabError.closed;
+        confirm total + price <= limit else throw TabError.over_limit(total + price);
+        ^items = items + 1;
+        ^total = total + price;
+    }
+
+    closed() is ^Tab {
+        ^open = false;
+    }
+
+    summary() is string {
+        items.string() + " items, " + total.string() + (if open { " (open)"; } else { " (closed)"; });
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let empty = Tab(limit: 100);
+    let two = empty.ordered(30).ordered(25);
+    out.writeln(empty.summary());
+    out.writeln(two.summary());
+
+    let tab = Tab(limit: 100);
+    for [10, 20, 30] -> price {
+        tab = tab.ordered(price);
+    }
+    out.writeln(tab.summary());
+
+    let refused = try { tab.ordered(50).summary(); } catch e is TabError { e.text(); };
+    out.writeln(refused);
+    out.writeln(tab.summary());
+
+    let done = tab.closed();
+    out.writeln(done.summary());
+    out.writeln(try { done.ordered(1).summary(); } catch e is TabError { e.text(); });
+    0;
+}

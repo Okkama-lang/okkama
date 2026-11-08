@@ -1,0 +1,12 @@
+module bible/ambiguous v1.0.0;
+
+object Pairing {
+    Pairing();
+    joined(left is int, right is any) is string { "left"; }
+    joined(left is any, right is int) is string { "right"; }
+}
+
+main() is int {
+    Pairing().joined(1, 2);
+    0;
+}

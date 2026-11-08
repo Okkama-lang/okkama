@@ -1,0 +1,42 @@
+module bible/actions v1.0.0;
+
+// Actions: typed results, defaults, named arguments, overloads by type,
+// a variadic tail and an early return.
+import "io/stdout" take Stdout;
+
+object Greeter {
+    has greeting is string;
+    Greeter(:greeting);
+
+    greet(name is string, mark is string = "!") is string {
+        greeting + ", " + name + mark;
+    }
+
+    describe(value is int) is string { "int " + value.string(); }
+    describe(value is string) is string { "string " + value; }
+    describe(value is any) is string { "something else"; }
+
+    total(values is ...int) is int {
+        let all is @int = values...;
+        all.reduce(0) -> sum, value { sum + value; };
+    }
+
+    first_negative(values is @int) is int {
+        for values -> value {
+            if value < 0 { return value; }
+        }
+        return 0;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let hello = Greeter(greeting: "Hello");
+    out.writeln(hello.greet("Ada"));
+    out.writeln(hello.greet("Ada", "?"));
+    out.writeln(hello.greet(mark: ".", name: "Alan"));
+    out.writeln(hello.describe(7) + " / " + hello.describe("x") + " / " + hello.describe(1.5));
+    out.writeln(hello.total().string() + " " + hello.total(1, 2, 3).string());
+    out.writeln(hello.first_negative([3, -2, -5]).string());
+    0;
+}

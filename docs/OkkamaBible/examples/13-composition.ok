@@ -1,0 +1,47 @@
+module bible/composition v1.0.0;
+
+// A successor of an outer object stages a successor of its part. Where a
+// value must change in synchronous code, a Cell holds it.
+import "io/stdout" take Stdout;
+import "cell" take Cell;
+
+object Lamp {
+    has on is bool = false;
+    Lamp();
+    switched() is ^Lamp {
+        if on { ^on = false; } else { ^on = true; }
+    }
+    lit() is bool { on; }
+    state() is string { if on { "on"; } else { "off"; } }
+}
+
+object Room {
+    has name is string;
+    has lamp is Lamp = Lamp();
+    has visits is int = 0;
+    Room(:name);
+
+    entered() is ^Room {
+        ^visits = visits + 1;
+        if !lamp.lit() { ^lamp = lamp.switched(); }
+    }
+    left() is ^Room {
+        if lamp.lit() { ^lamp = lamp.switched(); }
+    }
+    report() is string { name + ": lamp " + lamp.state() + ", " + visits.string() + " visits"; }
+}
+
+main() is int {
+    let out = Stdout();
+    let hall = Room(name: "hall");
+    let busy = hall.entered().left().entered();
+    out.writeln(hall.report());
+    out.writeln(busy.report());
+
+    let lengths = Cell(0);
+    for ["ab", "cde", "f"] -> word {
+        lengths.replace(lengths.value() + word.length());
+    }
+    out.writeln(lengths.value().string());
+    0;
+}

@@ -27,6 +27,8 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 OKKAMA = os.environ.get("OKKAMA", os.path.join(ROOT, "okkama-rs", "target", "release", "okkama"))
+# The std that matches OKKAMA: this checkout's, unless OKKAMA_STDLIB_DIR names another.
+STDLIB = os.environ.get("OKKAMA_STDLIB_DIR", os.path.join(ROOT, "std"))
 PAGE = 2500
 LANGUAGES = {
     "en": ("OkkamaBible.md", "The Okkama Bible", "Contents", "Output", "References", "The compiler answers"),
@@ -153,7 +155,7 @@ def check():
                     "--cpu-seconds", "30", "--timeout", "60", "--memory-mb", "1024", "--writable", examples, "--"]
             p = subprocess.run(cage + [OKKAMA, "run", "--engine", engine, name], cwd=examples,
                                capture_output=True, text=True, timeout=120,
-                               env={**os.environ, "OKKAMA_STDLIB_DIR": os.path.join(ROOT, "std"), "OKKAMA_TRACE": "off"})
+                               env={**os.environ, "OKKAMA_STDLIB_DIR": STDLIB, "OKKAMA_TRACE": "off"})
             # A rejected example is shown with the compiler's diagnostic.
             shown = p.stderr if stem.endswith("-rejected") else p.stdout
             output = shown.rstrip("\n").splitlines() if shown else []
