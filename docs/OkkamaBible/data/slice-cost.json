@@ -1,17 +1,31 @@
 {
- "description": "Wall-clock seconds (best of 3, process start included) of a program that walks a string one character at a time with slice(i, i + 1), on the Sparrow core of release/0.4.1, Apple M2 Max, 2026-11-07. Generator: chapter 6 of the Okkama Bible.",
- "ascii": {
+ "description": "Wall-clock seconds (best of 3, process start included) of a program that walks a string one character at a time, run with okkama run --engine sparrow on an Apple M2 Max. before_52: slice(i, i + 1) on the Sparrow core before issue #52 was fixed (2026-11-07). slice and characters: Cyrillic text on release/0.4.1 at 84b04501 (2026-11-08), walked with slice(i, i + 1) and with characters(). Generator: chapter 6 of the Okkama Bible.",
+ "ascii_before_52": {
   "2000": 0.142,
   "4000": 0.141,
   "8000": 0.139,
   "16000": 0.132,
   "32000": 0.15
  },
- "cyrillic": {
+ "cyrillic_before_52": {
   "2000": 0.159,
   "4000": 0.205,
   "8000": 0.427,
   "16000": 0.987,
   "32000": 2.568
+ },
+ "cyrillic_slice": {
+  "2000": 0.128,
+  "4000": 0.122,
+  "8000": 0.13,
+  "16000": 0.123,
+  "32000": 0.134
+ },
+ "cyrillic_characters": {
+  "2000": 0.133,
+  "4000": 0.129,
+  "8000": 0.131,
+  "16000": 0.128,
+  "32000": 0.131
  }
 }

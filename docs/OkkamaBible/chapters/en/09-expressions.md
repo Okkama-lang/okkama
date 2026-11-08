@@ -182,6 +182,15 @@ syntax error: Nested ?? / !! choices are not allowed; use a local variable or ma
 A nested ternary is legal in C and Java and hard to read in both. Okkama turns
 the usual style advice into a rule, and following it costs one named local.
 
+The examples of this chapter print booleans through `?? !!` —
+`both ?? "true" !! "false"` in the order example — rather than with `string()`, and for a reason:
+`true.string()` is `"1"` and `false.string()` is `"0"`. The rule comes from
+the first implementation, written in Perl, where truth prints as `1` and
+falsehood as an empty string; Okkama kept the `1` and made the other value
+visible. It is exact and stable, and it surprises every reader of output who
+expected a word. A program that shows a boolean to a person chooses the words
+itself, which is what `?? !!` is for.
+
 `?? !!` is the one place where Okkama keeps two spellings of one idea, and it
 does so on purpose. The enum form chooses by pattern in a single expression,
 which otherwise would take a full `match`. The boolean form comes along
@@ -199,8 +208,8 @@ stranger than a language with both.
 - an object that performs `Iterating<T>` (Chapter 8).
 
 A map is walked through `keys()` or `values()`, in sorted key order. A string
-is not a source: code points are reached by index today (issue #210). There is
-exactly one binding. An index comes from a range:
+is not a source by itself, but its characters are:
+`for text.characters() -> letter` (Chapter 6). There is exactly one binding. An index comes from a range:
 `for 0..names.size() -> i`.
 
 ### `loop`
@@ -323,8 +332,6 @@ semantic error: Undefined variable "break"; Okkama leaves a loop with `last`
 
 ## 9.9 Limits
 
-- **Strings are not a `for` source.** Code points are reached by index
-  (issue #210).
 - **One binding per `for`.** An index comes from a range, not from a second
   binding.
 

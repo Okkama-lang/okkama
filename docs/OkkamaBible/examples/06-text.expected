@@ -4,10 +4,15 @@ split: 4 fields
 replace: baNANA
 trim: [padded]
 chomp: [line]
+contains: yes
+find_last: 6
+upper: STRASSE
 empty: 1
 escape: café
 raw: a "raw" \n string
 char equals itself: 1
+char: Ж is 1046, and back: Ж
+characters: 1055 1088 1080 1074 1077 1090
 equal as written: 0
 equal after NFC: 1
 round trip: Привет

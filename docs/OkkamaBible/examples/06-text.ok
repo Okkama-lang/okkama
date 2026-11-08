@@ -14,12 +14,17 @@ main() is int {
     out.writeln("replace: " + "banana".replace("na", "NA"));
     out.writeln("trim: [" + "  padded  ".trim() + "]");
     out.writeln("chomp: [" + "line\n".chomp() + "]");
+    out.writeln("contains: " + (word.contains("иве") ?? "yes" !! "no"));
+    out.writeln("find_last: " + ("мир и мир".find_last("мир") ?? .some(at): at.string() !! .none: "none"));
+    out.writeln("upper: " + "Straße".upper());
     out.writeln("empty: " + "".empty().string());
     out.writeln("escape: caf\u{e9}");
     let raw = ```a "raw" \n string```;
     out.writeln("raw: " + raw);
     let letter is char = 'Ж';
     out.writeln("char equals itself: " + (letter == 'Ж').string());
+    out.writeln("char: " + letter.string() + " is " + letter.code().string() + ", and back: " + char(1046).string());
+    out.writeln("characters: " + word.characters().map() -> c { c.code().string(); }.join(" "));
     // Two spellings of "é": one code point, or "e" plus a combining accent.
     let composed = "\u{e9}";
     let decomposed = "e\u{301}";

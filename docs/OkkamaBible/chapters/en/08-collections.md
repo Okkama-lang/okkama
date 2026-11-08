@@ -21,6 +21,14 @@ strings, `ordering()` to sort, and `item(index)` — or the indexing operator
 expression supplies a fallback: `primes[9] else 0` is `0`. Like
 `slice` on strings, nothing is clamped silently.
 
+Five more builtins search and reshape (issue #211): `contains(value)` and
+`index_of(value)` — a `Maybe<int>` — compare elements with `==`, so a value
+object is found by its fields; `reversed()` turns an array around; and
+`take(count)` and `drop(count)` keep, respectively remove, at most `count`
+elements from the start. Unlike `slice`, these two are defined for any
+count that is not negative — `[1, 2].take(5)` is `[1, 2]` — because "at most
+`count`" is what their names promise; a negative count fails.
+
 Ranges expand inside array literals: `[9, 0, 2..=4, 1]` is the array
 `9 0 2 3 4 1`. `a..b` excludes its end and `a..=b` includes it; bounds are
 integers and the start may not exceed the end.
@@ -79,9 +87,10 @@ wasteful (Chapter 22).
 There is no `last` inside a functional block: `reduce` always visits every
 element. Searches therefore have their own operations, which stop at the
 first decisive item: `any` (is there one?), `all` (are they all?) and `find`
-(a `Maybe` of the first match) — `xs.any() -> x { x == y; }` where one would
-otherwise write `reduce(false) -> found, x { found || x == y; }` and walk the
-whole array (issue #150).
+(a `Maybe` of the first match) — `xs.any() -> x { x.overdue(); }` where one
+would otherwise write `reduce(false) -> found, x { found || x.overdue(); }`
+and walk the whole array (issue #150). A search for an equal element needs
+no block at all: `xs.contains(y)`.
 
 ## 8.3 Maps
 
@@ -212,8 +221,6 @@ right method names is not enough.
 - **Generic keys are checked late.** A map keyed by a type parameter accepts
   any type argument until run time, so the library's generic sets and counts
   stay linear (issue #242).
-- **Few array builtins.** `contains`, `index_of`, `reversed` and their kin are
-  written with `reduce` today (issue #211).
 - **`ordering()` needs `compare.Comparing` in scope** (issue #233).
 
 Most of these are the same gap seen from different sides (the milestone

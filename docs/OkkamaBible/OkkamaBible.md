@@ -1811,12 +1811,17 @@ main() is int {
     out.writeln("replace: " + "banana".replace("na", "NA"));
     out.writeln("trim: [" + "  padded  ".trim() + "]");
     out.writeln("chomp: [" + "line\n".chomp() + "]");
+    out.writeln("contains: " + (word.contains("иве") ?? "yes" !! "no"));
+    out.writeln("find_last: " + ("мир и мир".find_last("мир") ?? .some(at): at.string() !! .none: "none"));
+    out.writeln("upper: " + "Straße".upper());
     out.writeln("empty: " + "".empty().string());
     out.writeln("escape: caf\u{e9}");
     let raw = ```a "raw" \n string```;
     out.writeln("raw: " + raw);
     let letter is char = 'Ж';
     out.writeln("char equals itself: " + (letter == 'Ж').string());
+    out.writeln("char: " + letter.string() + " is " + letter.code().string() + ", and back: " + char(1046).string());
+    out.writeln("characters: " + word.characters().map() -> c { c.code().string(); }.join(" "));
     // Two spellings of "é": one code point, or "e" plus a combining accent.
     let composed = "\u{e9}";
     let decomposed = "e\u{301}";
@@ -1837,10 +1842,15 @@ split: 4 fields
 replace: baNANA
 trim: [padded]
 chomp: [line]
+contains: yes
+find_last: 6
+upper: STRASSE
 empty: 1
 escape: café
 raw: a "raw" \n string
 char equals itself: 1
+char: Ж is 1046, and back: Ж
+characters: 1055 1088 1080 1074 1077 1090
 equal as written: 0
 equal after NFC: 1
 round trip: Привет
@@ -1900,10 +1910,10 @@ offers positional formatting for longer templates.
 
 ## 6.4 What a string can do
 
-The builtin actions of `string` are few; the table is generated from the
-compiler. Searching, prefixes and case conversion live in the standard
-library today, and Chapter 32 discusses moving the most common ones into the
-language (issue #210).
+The builtin actions of `string` cover measuring, cutting, searching,
+trimming, case and repetition. Until 0.4.1 searching and case lived in the
+standard library, which worked around their absence in about forty modules;
+the most common ones are now builtins (issue #210).
 
 | Action | Result | Note |
 |---|---|---|
@@ -1914,16 +1924,30 @@ language (issue #210).
 | `replace(target, replacement)` | `string` | every non-overlapping occurrence, left to right |
 | `replace_first(target, replacement)` | `string` | the first occurrence |
 | `trim()` | `string` | removes leading and trailing whitespace |
+| `trim_start()`, `trim_end()` | `string` | removes it from one edge |
 | `chomp()` | `string` | removes one trailing line ending |
+| `contains(part)` | `bool` | literal search |
+| `starts_with(part)`, `ends_with(part)` | `bool` | literal prefix and suffix |
+| `find(part)`, `find_last(part)` | `Maybe<int>` | code point index of the first or last occurrence; `""` is found at the start, respectively the end |
+| `lower()`, `upper()` | `string` | full Unicode case mapping, no locale: `"ß".upper()` is `"SS"` |
+| `repeat(count)` | `string` | a negative count, or a result over 1 GiB, fails |
+| `characters()` | `@char` | the code points, in one walk |
 | `string()` | `string` | the string itself |
 | `order(other)` | `Order` | code point order |
 
-Two design decisions recur in this table. Operations are *literal*: `split`
-and `replace` never interpret their argument as a regular expression, so
-`"a.b".split(".")` splits on dots; patterns go through the `regex` module,
-explicitly. And operations do not guess: a `slice` past the end fails rather
-than returning a shorter string, because a caller who asked for ten characters
-and silently got seven has a bug that will surface far away.
+Two design decisions recur in this table. Operations are *literal*: `split`,
+`replace` and `contains` never interpret their argument as a regular
+expression, so `"a.b".split(".")` splits on dots; patterns go through the
+`regex` module, explicitly. And operations do not guess: a `slice` past the
+end fails rather than returning a shorter string, because a caller who asked
+for ten characters and silently got seven has a bug that will surface far
+away; a search that finds nothing says so with `Maybe.none`, not with `-1`.
+
+Case conversion is the one place where "no guessing" needs a qualification.
+`lower()` and `upper()` apply the Unicode default case mapping, which is the
+same everywhere and needs no locale — but Turkish, Azeri and Lithuanian have
+their own rules (in Turkish, `"I".lower()` should be the dotless `"ı"`), and
+Okkama has no locale-aware case mapping yet (issue #261).
 
 ## 6.5 Equality and normalisation
 
@@ -1980,12 +2004,19 @@ whether it takes text (`string`) or data (`@byte`).
 escapes, so `'é'` written with a combining accent is rejected. Characters
 compare and order like strings.
 
-That is almost all they do today. A `char` cannot be turned into a string or
-into its code point, and a string cannot be taken apart into `char`s — `slice`
-returns one-character *strings* — so most code, including the standard
-library, works with one-character strings instead (issue #231). This is a
-case where the razor has not finished its work: the language has two
-half-entities where one whole one would do. Chapter 32 returns to it.
+A `char` converts in both directions: `letter.code()` is its code point as an
+`int`, `letter.string()` (or `string(letter)`) its text, and `char(1046)`
+makes one from a code point — a number that is not a Unicode scalar value
+(above `0x10FFFF`, or a surrogate) is a runtime error, not a replacement
+character. `text.characters()` takes a string apart into its `@char`, so a
+loop over the characters of a string is `for text.characters() -> letter`.
+
+Until 0.4.1 none of this existed: a `char` could be written and compared and
+nothing else, and code — the standard library included — worked with
+one-character strings (issue #231). The razor had left two half-entities
+where one whole one would do; the cure was to finish the entity rather than
+to remove it, because a code point and a one-code-point string are different
+things — one is a number with a name, the other a sequence.
 
 ## 6.8 What text costs
 
@@ -1996,21 +2027,28 @@ known to be ASCII has one byte per code point, so `length()` and `slice()` are
 constant-time — and walks otherwise.
 
 The walk is cheap once and expensive in a loop. A program that visits every
-character of a string with `slice(i, i + 1)` does a walk per visit, so its
-total cost is quadratic in the length of non-ASCII text. Figure 6.1 measures
-exactly that program on the 0.4.1 core.
+character of a string with `slice(i, i + 1)` walked from the start at each
+visit, so its total cost was quadratic in the length of non-ASCII text.
+Figure 6.1 measures that program on the Sparrow core before and after the
+fix.
 
-![Figure 6.1. Visiting each character with slice(i, i + 1): constant per character for ASCII, quadratic for Cyrillic text (issue #52). Data: data/slice-cost.json.](figures/slice-cost.svg)
+![Figure 6.1. Visiting each Cyrillic character with slice(i, i + 1): quadratic before issue #52, linear after it. Data: data/slice-cost.json.](figures/slice-cost.svg)
 
-*Figure 6.1. Visiting each character with slice(i, i + 1): constant per character for ASCII, quadratic for Cyrillic text (issue #52). Data: data/slice-cost.json.*
+*Figure 6.1. Visiting each Cyrillic character with slice(i, i + 1): quadratic before issue #52, linear after it. Data: data/slice-cost.json.*
 
-For 32,000 ASCII characters the program takes 0.15 s, almost all of it
-process start; for 32,000 Cyrillic letters it takes 2.6 s, and doubling the
-text quadruples the time. The remedy belongs to the language and runtime,
-not to every program: a cursor that walks a string once (issue #52 plans it),
-or builtin character iteration (issue #210). Until then, programs that scan
-long non-ASCII text should split it, encode it to bytes, or use the
-`regex` module, all of which walk once.
+Before the fix, 32,000 Cyrillic letters took 2.6 s, and doubling the text
+quadrupled the time; ASCII text was already constant per character. After
+it, the same program takes 0.13 s — the process start. The fix keeps strings
+indexed by code point and remembers, for the four most recently indexed long
+strings, the last position reached (its code point and byte offset); every
+lookup walks from the nearest of the start, the end and that position. A
+sequential scan therefore walks the text once, and random access costs the
+distance from the nearest known point. Every engine does the same (issue
+#52).
+
+`characters()` needs no cache at all: it walks the string once and returns
+every code point. On the same 32,000 letters it also takes 0.13 s, and it is
+the loop to write when the program wants characters rather than positions.
 
 The standard library audit of November 2026 found the same pattern —
 character-by-character slicing — in about forty modules, from MIME header
@@ -2021,14 +2059,14 @@ right operation.
 
 ## 6.9 Limits
 
-- **No searching or case builtins.** `contains`, `starts_with`, `ends_with`,
-  `find`, `lower` and `upper` are not builtins yet (issue #210).
-- **Characters are half an entity.** `char` cannot become text or a code
-  point (issue #231).
 - **No string builder.** Assembling long text from many pieces with `+` is
   quadratic; the library has no native builder yet (issue #139).
-- **Per-character loops are quadratic on non-ASCII text** until a cursor
-  exists (issue #52).
+- **Case conversion has no locale.** `lower()` and `upper()` follow the
+  Unicode default; Turkish, Azeri and Lithuanian rules are missing
+  (issue #261).
+- **The standard library still has its workarounds.** About forty modules
+  search, compare prefixes and walk characters by slicing; moving them to
+  the builtins is planned for 0.5 (issue #260).
 - **Booleans print as `1` and `0`.** `true.string()` is `"1"`, a choice
   inherited from the first implementation that surprises readers of output
   (Chapter 9 discusses it).
@@ -2349,6 +2387,10 @@ main() is int {
         + ", last " + primes.last().string());
     out.writeln("slice(1, 4) = " + primes.slice(1, 4).map() -> p { p.string(); }.join(" "));
     out.writeln("index 9, or 0: " + (primes[9] else 0).string());
+    out.writeln("contains 7: " + (primes.contains(7) ?? "yes" !! "no")
+        + ", reversed " + primes.reversed().map() -> p { p.string(); }.join(" ")
+        + ", take(2) " + primes.take(2).map() -> p { p.string(); }.join(" ")
+        + ", drop(4) " + primes.drop(4).map() -> p { p.string(); }.join(" "));
 
     // Ranges expand inside literals; ordering() sorts.
     let mixed = [9, 0, 2..=4, 1];
@@ -2381,6 +2423,7 @@ Output:
 size 6, first 2, last 13
 slice(1, 4) = 3 5 7
 index 9, or 0: 0
+contains 7: yes, reversed 13 11 7 5 3 2, take(2) 2 3, drop(4) 11 13
 expanded 9 0 2 3 4 1
 sorted 0 1 2 3 4 9
 squares 1 4 9 16 25; odd 1 9 25; total 55
@@ -2396,6 +2439,14 @@ strings, `ordering()` to sort, and `item(index)` — or the indexing operator
 `array[index]`. An index outside the array is a runtime failure, unless the
 expression supplies a fallback: `primes[9] else 0` is `0`. Like
 `slice` on strings, nothing is clamped silently.
+
+Five more builtins search and reshape (issue #211): `contains(value)` and
+`index_of(value)` — a `Maybe<int>` — compare elements with `==`, so a value
+object is found by its fields; `reversed()` turns an array around; and
+`take(count)` and `drop(count)` keep, respectively remove, at most `count`
+elements from the start. Unlike `slice`, these two are defined for any
+count that is not negative — `[1, 2].take(5)` is `[1, 2]` — because "at most
+`count`" is what their names promise; a negative count fails.
 
 Ranges expand inside array literals: `[9, 0, 2..=4, 1]` is the array
 `9 0 2 3 4 1`. `a..b` excludes its end and `a..=b` includes it; bounds are
@@ -2455,9 +2506,10 @@ wasteful (Chapter 22).
 There is no `last` inside a functional block: `reduce` always visits every
 element. Searches therefore have their own operations, which stop at the
 first decisive item: `any` (is there one?), `all` (are they all?) and `find`
-(a `Maybe` of the first match) — `xs.any() -> x { x == y; }` where one would
-otherwise write `reduce(false) -> found, x { found || x == y; }` and walk the
-whole array (issue #150).
+(a `Maybe` of the first match) — `xs.any() -> x { x.overdue(); }` where one
+would otherwise write `reduce(false) -> found, x { found || x.overdue(); }`
+and walk the whole array (issue #150). A search for an equal element needs
+no block at all: `xs.contains(y)`.
 
 ## 8.3 Maps
 
@@ -2590,8 +2642,6 @@ right method names is not enough.
 - **Generic keys are checked late.** A map keyed by a type parameter accepts
   any type argument until run time, so the library's generic sets and counts
   stay linear (issue #242).
-- **Few array builtins.** `contains`, `index_of`, `reversed` and their kin are
-  written with `reduce` today (issue #211).
 - **`ordering()` needs `compare.Comparing` in scope** (issue #233).
 
 Most of these are the same gap seen from different sides (the milestone
@@ -2886,6 +2936,15 @@ syntax error: Nested ?? / !! choices are not allowed; use a local variable or ma
 A nested ternary is legal in C and Java and hard to read in both. Okkama turns
 the usual style advice into a rule, and following it costs one named local.
 
+The examples of this chapter print booleans through `?? !!` —
+`both ?? "true" !! "false"` in the order example — rather than with `string()`, and for a reason:
+`true.string()` is `"1"` and `false.string()` is `"0"`. The rule comes from
+the first implementation, written in Perl, where truth prints as `1` and
+falsehood as an empty string; Okkama kept the `1` and made the other value
+visible. It is exact and stable, and it surprises every reader of output who
+expected a word. A program that shows a boolean to a person chooses the words
+itself, which is what `?? !!` is for.
+
 `?? !!` is the one place where Okkama keeps two spellings of one idea, and it
 does so on purpose. The enum form chooses by pattern in a single expression,
 which otherwise would take a full `match`. The boolean form comes along
@@ -2903,8 +2962,8 @@ stranger than a language with both.
 - an object that performs `Iterating<T>` (Chapter 8).
 
 A map is walked through `keys()` or `values()`, in sorted key order. A string
-is not a source: code points are reached by index today (issue #210). There is
-exactly one binding. An index comes from a range:
+is not a source by itself, but its characters are:
+`for text.characters() -> letter` (Chapter 6). There is exactly one binding. An index comes from a range:
 `for 0..names.size() -> i`.
 
 ### `loop`
@@ -3139,8 +3198,6 @@ semantic error: Undefined variable "break"; Okkama leaves a loop with `last`
 
 ## 9.9 Limits
 
-- **Strings are not a `for` source.** Code points are reached by index
-  (issue #210).
 - **One binding per `for`.** An index comes from a range, not from a second
   binding.
 
