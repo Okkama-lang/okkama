@@ -134,6 +134,7 @@ let document = ```{"name": "Ada", "path": "C:\new"}```;
 | `characters()` | `@char` | кодовые точки, за один проход |
 | `string()` | `string` | сама строка |
 | `order(other)` | `Order` | порядок по кодовым точкам |
+| `less(other)`, `less_or_equal(other)` | `bool` | тот же порядок: `order(other) == Order.less`, `!= Order.greater` (до 0.4.2 сравнивали длины) |
 
 В этой таблице повторяются два проектных решения. Операции *буквальны*:
 `split`, `replace` и `contains` никогда не толкуют аргумент как регулярное

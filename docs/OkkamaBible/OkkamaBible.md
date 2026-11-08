@@ -2031,6 +2031,7 @@ the most common ones are now builtins (issue #210).
 | `characters()` | `@char` | the code points, in one walk |
 | `string()` | `string` | the string itself |
 | `order(other)` | `Order` | code point order |
+| `less(other)`, `less_or_equal(other)` | `bool` | the same order: `order(other) == Order.less`, `!= Order.greater` (until 0.4.2 they compared lengths) |
 
 Two design decisions recur in this table. Operations are *literal*: `split`,
 `replace` and `contains` never interpret their argument as a regular
