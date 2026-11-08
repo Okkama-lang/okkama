@@ -104,13 +104,13 @@ language.
 
 Updated with each chapter: `build.py --stats`.
 
-- Chapter 10 (failure): 13.3 pages (EN) of its floor of 22. Written: the
+- Chapter 10 (failure): 14.1 pages (EN) of its floor of 22. Written: the
   two channels, history, error enums, throw, try/catch, causes, confirm,
   try?/try!, host failures, a module boundary (`10-config`), budgets,
   failures across tasks (`10-tasks`), the uncaught report, designing an
-  error vocabulary, testing failures, a comparison table, costs. To add:
-  resumption and Common Lisp's conditions and restarts as the road not
-  taken; how the engines unwind (landing blocks in OIR, the core's
+  error vocabulary, testing failures, a comparison table, costs, and
+  resumption with Common Lisp restarts as the road not taken. To add:
+  how the engines unwind (landing blocks in OIR, the core's
   failure words, JVM exceptions) — or a pointer to Part VI; a case study
   of the std HTTP client's failures. Engines disagree on the uncaught
   report (#270).

@@ -1,0 +1,44 @@
+module bible/policy v1.0.0;
+
+// What a Lisp restart offers, as a role: the code that meets a bad amount
+// asks a policy the caller passed in, and the caller's policy decides.
+import "io/stdout" take Stdout;
+import "strings/parse" take ParsedInt;
+
+enum AmountError is Error = (invalid(text is string));
+
+role BadAmount {
+    replacement(text is string) is Maybe<int>;
+}
+
+object Strict does BadAmount {
+    Strict();
+    replacement(text is string) is Maybe<int> { Maybe<int>.none; }
+}
+
+object Zero does BadAmount {
+    Zero();
+    replacement(text is string) is Maybe<int> { Maybe.some(0); }
+}
+
+object Amounts {
+    has policy is BadAmount;
+    Amounts(:policy);
+    total(texts is @string) is int {
+        texts.reduce(0) -> sum, text {
+            let parsed = try? ParsedInt(text).value() else -1;
+            let amount = if parsed >= 0 { parsed; } else {
+                policy.replacement(text) ?? .some(n): n !! .none: throw AmountError.invalid(text);
+            };
+            sum + amount;
+        };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let texts = ["10", "x", "5"];
+    out.writeln(Amounts(policy: Zero()).total(texts).string());
+    out.writeln(try { Amounts(policy: Strict()).total(texts).string(); } catch e is AmountError { e.text(); });
+    0;
+}

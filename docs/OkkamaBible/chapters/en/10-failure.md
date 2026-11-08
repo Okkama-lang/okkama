@@ -136,14 +136,52 @@ Okkama takes from each step:
 - From Erlang: bugs are not handled locally at all.
 - From Yuan et al.: no construct catches "anything".
 
-## 10.3 Bugs are not values: panic and runtime errors
+## 10.3 Resumption: the road not taken
+
+Goodenough's paper allowed two outcomes after a handler runs. *Termination*
+abandons the failed operation; *resumption* lets the handler repair the
+situation and the operation continues where it stopped [@goodenough1975].
+PL/I's ON-conditions resumed, and so do the conditions of Common Lisp, the
+most expressive error system in wide use. In Lisp, signalling a condition
+does not unwind the stack: handlers run *on top of* the code that signalled,
+and that code offers named *restarts* — use another value, retry, skip this
+record — among which a handler higher up chooses [@hyperspec]. The policy is
+decided by the code that knows the larger picture, the mechanism by the code
+that knows the details, and nothing is unwound until the choice is made.
+
+C++ considered resumption and left it out. Stroustrup recounts that the
+committee heard from people who had used resumption in large systems:
+it was seldom used, and where it was used, a termination with a retry
+written around it served as well [@stroustrup1994]. Every widely used
+language since has chosen termination.
+
+Okkama terminates too, for two reasons of its own.
+
+- **A resumed handler runs inside the failed scope.** Its resources are
+  still owned and live, half-built objects included. Termination closes
+  that scope first, and its resources are destroyed before any handler
+  runs.
+- **Restarts would be a second control-flow vocabulary.** What a restart
+  offers can be said with what Okkama already has: a role the caller passes
+  in. The low-level code asks the policy what to do, and the caller's
+  policy decides.
+
+{{example:10-policy}}
+
+`Amounts` does not know whether a bad amount should count as zero or stop
+the import. It asks its `BadAmount`, and only a `.none` answer becomes an
+error. The decision stays with the caller, as with a restart. It is visible
+in the type, travels as an ordinary value and can be faked in a test, and
+no stack is held open while it is made.
+
+## 10.4 Bugs are not values: panic and runtime errors
 
 These end the run, whatever `catch` clauses surround them:
 
 - `panic "message"` — the program's own declaration that something
   impossible happened. The message must be a literal string: a panic carries
   a fixed sentence, not data.
-- A bare `confirm condition;` whose condition is false (§10.8).
+- A bare `confirm condition;` whose condition is false (§10.9).
 - **Runtime errors.** An index or slice out of bounds, division or modulo by
   zero, a failed narrowing of a role or `any` value. Each is detected by the
   engine and reported as `RuntimeError: …`.
@@ -187,7 +225,7 @@ service that must survive its own bugs does what Erlang does: it runs the
 risky work in a separate unit (a task or a worker process) and lets the
 supervising code react to the unit's death, not to the bug inside it.
 
-## 10.4 Error enums
+## 10.5 Error enums
 
 An expected failure is a value, and its type is an **error enum**: an enum
 declared `is Error`. Its cases are the ways the component can fail, and
@@ -223,7 +261,7 @@ The role `Error` is built in and requires a public `text() is string`. Three
 kinds of value do it:
 
 - error enums;
-- `NativeFailure`, a host failure (§10.10);
+- `NativeFailure`, a host failure (§10.11);
 - `Cancelled`, a cancelled task (Chapter 20).
 
 An object cannot. `object Fault does Error` is a compile error, and the
@@ -245,7 +283,7 @@ everything the line parser can report, and `LedgerError` everything the
 import can report, including "a line was bad" as a case that carries the
 `LineError`.
 
-## 10.5 throw
+## 10.6 throw
 
 `throw` raises an expected failure. It takes an error enum value, an
 `Error` reference — usually a caught error being passed on — or a
@@ -275,11 +313,11 @@ let amount = try { ParsedInt(parts[1]).value(); }
 
 The `try` yields an `int`. The `catch` body never yields, because it throws.
 
-`confirm condition else throw value;` (§10.8) is the guarded form, and it is
+`confirm condition else throw value;` (§10.9) is the guarded form, and it is
 how most errors are raised in practice: a check, and the failure if the
 check does not hold.
 
-## 10.6 try and catch
+## 10.7 try and catch
 
 `try` evaluates a block and, if the block throws, selects a `catch` clause
 by the type of what was thrown:
@@ -323,7 +361,7 @@ The rules:
   scope is closed: its `defer` blocks run and the resources it owns are
   destroyed, newest first. Only the thrown error's own payload survives into
   the clause. A failure during that cleanup does not replace the body's
-  failure; it is attached to it (§10.7).
+  failure; it is attached to it (§10.8).
 
 What `try` does not have is as important as what it has.
 
@@ -344,7 +382,7 @@ code it cleans up after.
 e.retryable()`). The condition belongs in a case of the error enum, where
 the thrower decides it once, not in each handler.
 
-## 10.7 Causes
+## 10.8 Causes
 
 A failure often has a reason that is itself a failure. A storage error makes
 an order fail, and a parse error makes a line fail. Okkama keeps the reason
@@ -383,7 +421,7 @@ replace the original; it is attached to it as a secondary and reported
 after it. The first failure is usually the one worth reading, and cleanup
 code should not be able to hide it.
 
-## 10.8 confirm: the contract inside the code
+## 10.9 confirm: the contract inside the code
 
 `confirm` states a condition the code relies on. It is Okkama's form of the
 assertions of Design by Contract, in which preconditions, postconditions and
@@ -410,7 +448,7 @@ The condition must be a `bool`, and there is no way to switch `confirm` off.
 A contract that disappears in production is a contract nobody tests, and a
 `confirm` costs one evaluation of its condition.
 
-## 10.9 try? and try!
+## 10.10 try? and try!
 
 Two prefix forms adapt a fallible expression to code that wants to treat
 failure as a value, or as impossible:
@@ -434,7 +472,7 @@ the cases where *why* something failed does not matter, such as a fallback
 port or an optional setting. Where the reason matters, the error stays an
 error.
 
-## 10.10 Failures from the host
+## 10.11 Failures from the host
 
 Code that reaches outside the program — files, sockets, processes,
 databases, cryptography — gets the host's failures as values too. A native
@@ -470,7 +508,7 @@ a `NativeFailure`. It is a runtime error and ends the run.
 `Cancelled` is the failure a task sees when the work it awaited was
 cancelled. Chapter 20 explains it with structured concurrency.
 
-## 10.11 A boundary in practice
+## 10.12 A boundary in practice
 
 The pieces meet at module boundaries. Below is a settings loader. Reading the
 file can fail in the file system's terms, and parsing can fail in the
@@ -497,7 +535,7 @@ The `confirm … else throw` inside the `catch` body reads as a sentence:
 the code must not be `not_found`, or the file is missing. A `catch` body is
 ordinary code, and the guarded throw is as natural there as anywhere.
 
-## 10.12 Budgets are not failures
+## 10.13 Budgets are not failures
 
 A run can be given budgets: `--max-steps`, `--max-memory`, `--max-output`
 and `--timeout`. Running out of one is neither an expected failure nor a
@@ -517,7 +555,7 @@ A native that cannot look, such as an Argon2 hash or a blocking read, ends
 when it ends. With `--timeout`, the command line then stops the run at most a
 second after the deadline.
 
-## 10.13 Failures across tasks
+## 10.14 Failures across tasks
 
 `await` passes a task's failure to the awaiting code unchanged: same type,
 same value, same origin. The awaiting code catches it like any other:
@@ -541,7 +579,7 @@ code. A program that must outlive its own bugs needs a boundary a bug cannot
 cross, which is Erlang's lesson again. In Okkama that boundary is a separate
 process, supervised from outside (Chapter 21).
 
-## 10.14 What reaches the top
+## 10.15 What reaches the top
 
 An error that no `catch` handles unwinds the whole run like a panic: cleanup
 runs scope by scope, and the process exits with status 1. The report
@@ -566,7 +604,7 @@ Stack trace (most recent call first):
 int in 0..255, got N`, so the success channel and the failure channel stay
 apart here too.
 
-## 10.15 Designing an error vocabulary
+## 10.16 Designing an error vocabulary
 
 A module's error enums are part of its public API, as much as its actions.
 The standard library follows a handful of rules, and they work outside it
@@ -595,7 +633,7 @@ too.
   returns `Maybe` (Chapter 7), not an error. An error says the operation
   could not do what it promised. A missing optional value is not that.
 
-## 10.16 Testing failures
+## 10.17 Testing failures
 
 A failure is part of an action's contract, so it gets tests like the
 successful path. The test runner (`okkama run -t`) provides
@@ -620,7 +658,7 @@ Error handlers are rarely exercised in production, and that is where
 Yuan et al. found the catastrophic bugs. A failure path that a test has
 never run is a guess. Chapter 15 returns to tests, fakes and properties.
 
-## 10.17 Okkama among other languages
+## 10.18 Okkama among other languages
 
 | Language | Expected failure | Bug | Forced to handle? | Catch everything | Cleanup |
 |---|---|---|---|---|---|
@@ -638,7 +676,7 @@ everything. Okkama is weaker in the "forced to handle" column: nothing makes
 a caller deal with an error, and the compiler does not know which errors an
 action can throw.
 
-## 10.18 What this design costs
+## 10.19 What this design costs
 
 The two channels are a strong opinion, and opinions cost something.
 
