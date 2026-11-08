@@ -8,7 +8,6 @@ use std::fmt;
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use blake2::digest::consts::{U16, U20, U28, U32, U48, U64};
 use hmac::Mac;
-use rand_core::SeedableRng;
 use sha2::Digest;
 use subtle::ConstantTimeEq;
 
@@ -384,6 +383,70 @@ fn hkdf(hash: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// Rounds between two looks at the interrupt flag (#238): a round is one
+/// HMAC, well under a microsecond.
+const PBKDF2_POLL: u32 = 4096;
+
+/// PBKDF2 (RFC 8018 §5.2) over the keyed MAC `M`, as `pbkdf2::pbkdf2_hmac`
+/// computes it, but up to 2^32 rounds can take minutes: between rounds it
+/// gives up once the run's interrupt flag is raised (see [`interruptible`]).
+fn pbkdf2_rounds<M: Mac + hmac::digest::KeyInit + Clone>(
+    password: &[u8],
+    salt: &[u8],
+    rounds: u32,
+    out: &mut [u8],
+) -> Result<()> {
+    let prf: M = hmac_key(password)?;
+    let size = <M as hmac::digest::OutputSizeUser>::output_size();
+    for (index, block) in out.chunks_mut(size).enumerate() {
+        let mut mac = prf.clone();
+        mac.update(salt);
+        mac.update(&(index as u32 + 1).to_be_bytes());
+        let mut chained = mac.finalize().into_bytes();
+        let mut sum = chained.clone();
+        for round in 1..rounds {
+            if round.is_multiple_of(PBKDF2_POLL) && interrupted() {
+                return Err(Error::Failed("PBKDF2 interrupted".into()));
+            }
+            let mut mac = prf.clone();
+            mac.update(&chained);
+            chained = mac.finalize().into_bytes();
+            for (total, byte) in sum.iter_mut().zip(chained.iter()) {
+                *total ^= byte;
+            }
+        }
+        block.copy_from_slice(&sum[..block.len()]);
+    }
+    Ok(())
+}
+
+thread_local! {
+    /// The interrupt flag of the run a host operation serves (#238).
+    static INTERRUPT: std::cell::RefCell<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `body` with long operations watching the run's interrupt `flag`
+/// (#238): PBKDF2 gives up between rounds once it is raised, with an error
+/// the caller replaces by the run's interruption.
+pub fn interruptible<R>(flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>, body: impl FnOnce() -> R) -> R {
+    struct Restore(Option<std::sync::Arc<std::sync::atomic::AtomicBool>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = self.0.take();
+            INTERRUPT.with(|slot| *slot.borrow_mut() = previous);
+        }
+    }
+    let _restore = Restore(INTERRUPT.with(|slot| slot.replace(flag)));
+    body()
+}
+
+fn interrupted() -> bool {
+    INTERRUPT.with(|slot| {
+        slot.borrow().as_ref().is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+    })
+}
+
 fn pbkdf2(hash: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
     arity(args, 4, "pbkdf2")?;
     let (password, salt) = (args[0], args[1]);
@@ -398,9 +461,9 @@ fn pbkdf2(hash: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
     let rounds = rounds as u32;
     let mut out = vec![0; length];
     match hash {
-        "sha256" => pbkdf2::pbkdf2_hmac::<sha2::Sha256>(password, salt, rounds, &mut out),
-        "sha384" => pbkdf2::pbkdf2_hmac::<sha2::Sha384>(password, salt, rounds, &mut out),
-        "sha512" => pbkdf2::pbkdf2_hmac::<sha2::Sha512>(password, salt, rounds, &mut out),
+        "sha256" => pbkdf2_rounds::<hmac::Hmac<sha2::Sha256>>(password, salt, rounds, &mut out)?,
+        "sha384" => pbkdf2_rounds::<hmac::Hmac<sha2::Sha384>>(password, salt, rounds, &mut out)?,
+        "sha512" => pbkdf2_rounds::<hmac::Hmac<sha2::Sha512>>(password, salt, rounds, &mut out)?,
         "sha1" => {
             return Err(Error::Unsupported(
                 "PBKDF2-HMAC-SHA1 is not provided".into(),
@@ -652,142 +715,107 @@ fn ecdsa(op: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
     }
 }
 
-/// Детерминированный генератор из 32 байт энтропии вызывающего.
-fn seeded(seed: &[u8]) -> Result<rand_chacha::ChaCha20Rng> {
-    Ok(rand_chacha::ChaCha20Rng::from_seed(fixed::<32>(
-        seed,
-        "random seed",
-    )?))
-}
-
+/// RSA через aws-lc: закрытые операции (генерация, подпись, расшифровка OAEP)
+/// постоянного времени с ослеплением (RUSTSEC-2023-0071 у крейта `rsa`, #70).
+/// Случайность генерации, соли PSS и OAEP берётся из CSPRNG aws-lc;
+/// энтропия вызывающего остаётся аргументом ABI и не используется.
 fn rsa_op(op: &str, args: &[&[u8]]) -> Result<Vec<u8>> {
-    use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
-    use rsa::signature::{RandomizedSigner, SignatureEncoding, Signer, Verifier};
-    use rsa::{RsaPrivateKey, RsaPublicKey};
-    let private = |der: &[u8]| -> Result<RsaPrivateKey> {
-        RsaPrivateKey::from_pkcs8_der(der).map_err(|_| invalid("invalid RSA PKCS#8 key"))
+    use aws_lc_rs::encoding::AsDer;
+    use aws_lc_rs::rand::SystemRandom;
+    use aws_lc_rs::rsa::{
+        KeyPair, KeySize, OaepAlgorithm, OaepPrivateDecryptingKey, OaepPublicEncryptingKey, PrivateDecryptingKey,
+        PublicEncryptingKey,
     };
-    let public = |der: &[u8]| -> Result<RsaPublicKey> {
-        RsaPublicKey::from_public_key_der(der).map_err(|_| invalid("invalid RSA SPKI key"))
+    use aws_lc_rs::signature::{self, KeyPair as _, RsaEncoding};
+    use crate::rsa_public::{Hash, PublicKey};
+    let private = |der: &[u8]| -> Result<KeyPair> {
+        KeyPair::from_pkcs8(der).map_err(|_| invalid("invalid RSA PKCS#8 key"))
+    };
+    // Открытый ключ SPKI для проверки подписей: те же модули, что у X.509.
+    let public = |der: &[u8]| -> Result<PublicKey> {
+        crate::x509::rsa_spki(der).ok_or_else(|| invalid("invalid RSA SPKI key"))
     };
     let (action, hash) = op.split_once(':').unwrap_or((op, ""));
-    macro_rules! hashed {
-        ($body:ident) => {
-            match hash {
-                "sha256" => $body!(sha2::Sha256),
-                "sha384" => $body!(sha2::Sha384),
-                "sha512" => $body!(sha2::Sha512),
-                other => Err(Error::Unsupported(format!("unknown RSA hash {other}"))),
+    let (digest, pss, pkcs1, oaep): (Hash, &'static dyn RsaEncoding, &'static dyn RsaEncoding, &'static OaepAlgorithm) =
+        match hash {
+            "sha256" => (Hash::Sha256, &signature::RSA_PSS_SHA256, &signature::RSA_PKCS1_SHA256, &aws_lc_rs::rsa::OAEP_SHA256_MGF1SHA256),
+            "sha384" => (Hash::Sha384, &signature::RSA_PSS_SHA384, &signature::RSA_PKCS1_SHA384, &aws_lc_rs::rsa::OAEP_SHA384_MGF1SHA384),
+            "sha512" => (Hash::Sha512, &signature::RSA_PSS_SHA512, &signature::RSA_PKCS1_SHA512, &aws_lc_rs::rsa::OAEP_SHA512_MGF1SHA512),
+            "" if matches!(action, "generate" | "public" | "bits") => {
+                (Hash::Sha256, &signature::RSA_PSS_SHA256, &signature::RSA_PKCS1_SHA256, &aws_lc_rs::rsa::OAEP_SHA256_MGF1SHA256)
             }
+            other => return Err(Error::Unsupported(format!("unknown RSA hash {other}"))),
         };
-    }
+    let hashed = |message: &[u8]| -> Vec<u8> {
+        match digest {
+            Hash::Sha384 => sha2::Sha384::digest(message).to_vec(),
+            Hash::Sha512 => sha2::Sha512::digest(message).to_vec(),
+            _ => sha2::Sha256::digest(message).to_vec(),
+        }
+    };
+    let sign = |key: &KeyPair, encoding: &'static dyn RsaEncoding, message: &[u8]| -> Result<Vec<u8>> {
+        let mut out = vec![0; key.public_modulus_len()];
+        key.sign(encoding, &SystemRandom::new(), message, &mut out)
+            .map_err(|_| Error::Failed("RSA signing".into()))?;
+        Ok(out)
+    };
     match action {
         "generate" => {
             arity(args, 2, op)?;
-            let bits = number(args[0], "bits")? as usize;
-            if !matches!(bits, 2048 | 3072 | 4096) {
-                return Err(invalid("RSA modulus must be 2048, 3072 or 4096 bits"));
-            }
-            let mut rng = seeded(args[1])?;
-            let key = RsaPrivateKey::new(&mut rng, bits)
-                .map_err(|_| Error::Failed("RSA key generation".into()))?;
-            Ok(key
-                .to_pkcs8_der()
-                .map_err(|_| Error::Failed("PKCS#8 encoding".into()))?
-                .as_bytes()
-                .to_vec())
+            let size = match number(args[0], "bits")? {
+                2048 => KeySize::Rsa2048,
+                3072 => KeySize::Rsa3072,
+                4096 => KeySize::Rsa4096,
+                _ => return Err(invalid("RSA modulus must be 2048, 3072 or 4096 bits")),
+            };
+            let key = KeyPair::generate(size).map_err(|_| Error::Failed("RSA key generation".into()))?;
+            Ok(key.as_der().map_err(|_| Error::Failed("PKCS#8 encoding".into()))?.as_ref().to_vec())
         }
         "public" => {
             arity(args, 1, op)?;
             let key = private(args[0])?;
-            Ok(key
-                .to_public_key()
-                .to_public_key_der()
-                .map_err(|_| Error::Failed("SPKI encoding".into()))?
-                .as_bytes()
-                .to_vec())
+            Ok(key.public_key().as_der().map_err(|_| Error::Failed("SPKI encoding".into()))?.as_ref().to_vec())
         }
         "bits" => {
             arity(args, 1, op)?;
-            use rsa::traits::PublicKeyParts;
-            Ok(public(args[0])?.n().bits().to_string().into_bytes())
+            Ok(public(args[0])?.bits().to_string().into_bytes())
         }
         "pss-sign" => {
             arity(args, 3, op)?;
-            let key = private(args[0])?;
-            let mut rng = seeded(args[2])?;
-            macro_rules! sign {
-                ($h:ty) => {{
-                    let signer = rsa::pss::SigningKey::<$h>::new(key);
-                    Ok(signer.sign_with_rng(&mut rng, args[1]).to_vec())
-                }};
-            }
-            hashed!(sign)
+            sign(&private(args[0])?, pss, args[1])
         }
         "pss-verify" => {
             arity(args, 3, op)?;
-            let key = public(args[0])?;
-            macro_rules! verify {
-                ($h:ty) => {{
-                    let verifier = rsa::pss::VerifyingKey::<$h>::new(key);
-                    let valid = match rsa::pss::Signature::try_from(args[2]) {
-                        Ok(signature) => verifier.verify(args[1], &signature).is_ok(),
-                        Err(_) => false,
-                    };
-                    Ok(truth(valid))
-                }};
-            }
-            hashed!(verify)
+            let salt = hashed(b"").len();
+            Ok(truth(public(args[0])?.pss(digest, digest, salt, &hashed(args[1]), args[2])))
         }
         "pkcs1-sign" => {
             arity(args, 2, op)?;
-            let key = private(args[0])?;
-            macro_rules! sign {
-                ($h:ty) => {{
-                    let signer = rsa::pkcs1v15::SigningKey::<$h>::new(key);
-                    Ok(signer.sign(args[1]).to_vec())
-                }};
-            }
-            hashed!(sign)
+            sign(&private(args[0])?, pkcs1, args[1])
         }
         "pkcs1-verify" => {
             arity(args, 3, op)?;
-            let key = public(args[0])?;
-            macro_rules! verify {
-                ($h:ty) => {{
-                    let verifier = rsa::pkcs1v15::VerifyingKey::<$h>::new(key);
-                    let valid = match rsa::pkcs1v15::Signature::try_from(args[2]) {
-                        Ok(signature) => verifier.verify(args[1], &signature).is_ok(),
-                        Err(_) => false,
-                    };
-                    Ok(truth(valid))
-                }};
-            }
-            hashed!(verify)
+            Ok(truth(public(args[0])?.pkcs1(digest, &hashed(args[1]), args[2])))
         }
         "oaep-encrypt" => {
             arity(args, 3, op)?;
-            let key = public(args[0])?;
-            let mut rng = seeded(args[2])?;
-            macro_rules! encrypt {
-                ($h:ty) => {
-                    key.encrypt(&mut rng, rsa::Oaep::<$h>::new(), args[1])
-                        .map_err(|_| invalid("message too long for RSA-OAEP"))
-                };
-            }
-            hashed!(encrypt)
+            let key = PublicEncryptingKey::from_der(args[0]).map_err(|_| invalid("invalid RSA SPKI key"))?;
+            let key = OaepPublicEncryptingKey::new(key).map_err(|_| invalid("invalid RSA SPKI key"))?;
+            let mut out = vec![0; key.ciphertext_size()];
+            let sealed = key
+                .encrypt(oaep, args[1], &mut out, None)
+                .map_err(|_| invalid("message too long for RSA-OAEP"))?;
+            Ok(sealed.to_vec())
         }
         "oaep-decrypt" => {
             arity(args, 3, op)?;
-            let key = private(args[0])?;
-            let mut rng = seeded(args[2])?;
-            macro_rules! decrypt {
-                ($h:ty) => {
-                    key.decrypt_blinded(&mut rng, rsa::Oaep::<$h>::new(), args[1])
-                        .map_err(|_| Error::Authentication("RSA-OAEP decryption failed".into()))
-                };
-            }
-            hashed!(decrypt)
+            let key = PrivateDecryptingKey::from_pkcs8(args[0]).map_err(|_| invalid("invalid RSA PKCS#8 key"))?;
+            let key = OaepPrivateDecryptingKey::new(key).map_err(|_| invalid("invalid RSA PKCS#8 key"))?;
+            let mut out = vec![0; key.min_output_size()];
+            let opened = key
+                .decrypt(oaep, args[1], &mut out, None)
+                .map_err(|_| Error::Authentication("RSA-OAEP decryption failed".into()))?;
+            Ok(opened.to_vec())
         }
         other => Err(Error::Unsupported(format!("unknown RSA operation {other}"))),
     }
@@ -808,11 +836,10 @@ fn spki_algorithm(der: &[u8]) -> Result<Vec<u8>> {
 
 fn algorithm_text(algorithm: &spki::AlgorithmIdentifierRef<'_>) -> String {
     let mut text = algorithm.oid.to_string();
-    if let Some(parameters) = &algorithm.parameters {
-        if let Ok(curve) = parameters.decode_as::<spki::ObjectIdentifier>() {
+    if let Some(parameters) = &algorithm.parameters
+        && let Ok(curve) = parameters.decode_as::<spki::ObjectIdentifier>() {
             text.push('|');
             text.push_str(&curve.to_string());
         }
-    }
     text
 }

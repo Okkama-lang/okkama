@@ -139,6 +139,12 @@ impl Rewrite {
                 }
             }
             ast::Item::NativeObject(_) => {}
+            ast::Item::Const(decl) => {
+                if let Some(ty) = &mut decl.ty {
+                    self.ty(ty);
+                }
+                self.expr(&mut decl.value, false);
+            }
             ast::Item::Test(test) => self.test(test),
             ast::Item::NativeAction(decl) => {
                 self.params(&mut decl.params);
@@ -286,9 +292,12 @@ impl Rewrite {
             }
             S::SelfFieldBind { value, .. } => self.expr(value, false),
             S::Try(body) => self.try_body(body),
-            S::Throw { value } | S::Return { value } => {
+            S::Throw { value, condition } | S::Return { value, condition } => {
                 if let Some(value) = value {
                     self.expr(value, false);
+                }
+                if let Some(condition) = condition {
+                    self.expr(condition, false);
                 }
             }
             S::Confirm { condition, fallback } => {

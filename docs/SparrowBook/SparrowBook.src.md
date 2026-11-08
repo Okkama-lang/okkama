@@ -4,7 +4,7 @@ Sparrow is the bytecode of Okkama: `okkama build --target sparrow` writes it,
 the Sparrow core (`sparrow`, `okkama exec`) verifies it and runs it as machine
 code. This book teaches its text form, Sparrow assembly (`.spa`), well enough
 to read what the compiler produces and to write programs by hand. It describes
-SPB version 9, the format of Okkama 0.4.
+SPB version 12, the format of Okkama 0.4.1.
 
 Every example lives in [examples/](examples/) and is assembled, checked and
 run as part of writing this book; the result shown after each one is what
@@ -68,7 +68,7 @@ result. Comments start with `;`.
 ## 3. The shape of a file
 
 ```text
-sparrow 9                       ; format version
+sparrow 12                      ; format version
 module "name" "version"         ; the module's name and version (may be "")
 type t0 …                       ; the type table, in order
 enum enum0 "Name" ["a", "b"]    ; enums with their cases
@@ -76,6 +76,7 @@ role role0 "Name" { method "m" [t…] -> t… … }
 object obj0 "Name" { field "f" t… … does role0 [f…] destroy f… }
 handle "Name"                   ; opaque host types (handles)
 cap cap0 "Name" obj0 { field "f" f… }
+global g0 t3 f2                ; a module constant: type and init (#153)
 function f0 "symbol" [async] [native "…"] [intrinsic "…" [obj…] [f…]] { … }
 entry f3                        ; the program's main
 tests { test "name" f5 … }      ; or a test profile
@@ -173,7 +174,8 @@ reading them is the key to reading compiled code.
 
 `str.concat`, `str.len`, `str.slice`, `str.split`, `str.replace`,
 `str.replace_first`, `str.trim`, `str.chomp`, `str.cmp` and `str.utf8` (to
-`array byte`) work on immutable text. Lengths and offsets count Unicode
+`array byte`) work on immutable text; `str.fn` names the rest — searches,
+edges, case, repetition and the characters of a string. Lengths and offsets count Unicode
 scalar values. String constants use `\n`, `\t`, `\"`, `\\` and `\u{…}`.
 
 ## 9. Objects, successors and roles
@@ -210,6 +212,12 @@ builder to use next (here the same register). `arr.get` fails on a bad index,
 while `arr.lookup` and `map.lookup` end the block and branch: the element is
 written to their destination register on the *found* edge only. Maps
 (`map.new r11, [r10: r12]`) keep keys in their natural order.
+
+The operators `+` and `-` of Okkama collections compile to one instruction
+per chain: `arr.concat rD, [rA, rB, rC]` allocates its result once for the sum
+of the parts' lengths, `arr.diff rD, rA, [rB, rC]` keeps the elements of `rA`
+equal to none of the others, and `map.merge` and `map.diff` do the same for
+maps (a repeated key takes the rightmost value).
 
 ## 11. Calls, closures and natives
 

@@ -1,19 +1,19 @@
-//! Константы циклов — во входной блок функции.
+//! Константы циклов — перед циклом.
 //!
 //! Значение `const` определено один раз и неизменяемо, поэтому его можно
 //! вычислить заранее: константы блоков, лежащих на цикле, переносятся в конец
-//! входного блока (он доминирует над всеми блоками) и не исполняются на
-//! каждой итерации. Константы блоков вне циклов остаются на месте: перенос
-//! заставил бы каждый вызов вычислять константы всех ветвей. Функция, во
-//! входной блок которой есть переход, не меняется.
+//! ближайшего блока вне цикла, доминирующего над его входами, и не
+//! исполняются на каждой итерации. Не во входной блок функции: там константа
+//! жила бы от входа до своего цикла, и в функции из тысяч циклов тысячи
+//! значений жили бы одновременно — живость и раскраска регистров стали бы
+//! квадратичными (#239). Константы блоков вне циклов остаются на месте:
+//! перенос заставил бы каждый вызов вычислять константы всех ветвей. Функция,
+//! во входной блок которой есть переход, не меняется.
 //!
 //! Проход идёт до генерации кода всех движков, поэтому места инструкций
 //! (`Function::span_at`) остаются согласованными с исполняемым кодом.
 use super::cfg::all_successors;
 use super::{BlockId, Function, InstKind, Module};
-
-/// Наибольшее число блоков функции, для которой ищутся циклы.
-const MAX_BLOCKS: usize = 4096;
 
 /// Перенести константы циклов во входные блоки; число перенесённых.
 pub fn hoist_loop_constants(module: &mut Module) -> usize {
@@ -22,7 +22,7 @@ pub fn hoist_loop_constants(module: &mut Module) -> usize {
 
 fn hoist(function: &mut Function) -> usize {
     let count = function.blocks.len();
-    if count < 2 || count > MAX_BLOCKS {
+    if count < 2 {
         return 0;
     }
     let successors: Vec<Vec<usize>> = (0..count)
@@ -31,34 +31,49 @@ fn hoist(function: &mut Function) -> usize {
     if successors.iter().any(|targets| targets.contains(&0)) {
         return 0;
     }
-    let looping: Vec<bool> = (0..count).map(|block| reaches_itself(&successors, block)).collect();
-    let mut hoisted = Vec::new();
+    // The cycle of each block: one linear pass over the strongly connected
+    // components, whatever the size of the function (#51).
+    let cycle = super::cfg::cycles(&successors);
+    let (idom, rpo) = super::cfg::dominators(&successors);
+    // Each cycle's constants go to the nearest block outside it that
+    // dominates all its entries, hence every block of the cycle (#239).
+    let mut entry: Vec<Option<usize>> = Vec::new();
+    for (block, targets) in successors.iter().enumerate() {
+        for &target in targets {
+            let Some(component) = cycle[target] else { continue };
+            if cycle[block] == Some(component) || idom[block].is_none() {
+                continue;
+            }
+            if entry.len() <= component {
+                entry.resize(component + 1, None);
+            }
+            entry[component] = Some(match entry[component] {
+                None => block,
+                Some(current) => super::cfg::common_dominator(&idom, &rpo, block, current),
+            });
+        }
+    }
+    let mut hoisted: Vec<Vec<super::Inst>> = vec![Vec::new(); count];
     for (block, body) in function.blocks.iter_mut().enumerate().skip(1) {
-        if !looping[block] || !body.insts.iter().any(|inst| matches!(inst.kind, InstKind::Const(_))) {
+        let Some(component) = cycle[block] else { continue };
+        // A cycle without a reachable entry stays as it is.
+        let Some(mut target) = entry.get(component).copied().flatten() else { continue };
+        while cycle[target] == Some(component) {
+            target = idom[target].expect("reachable");
+        }
+        if !body.insts.iter().any(|inst| matches!(inst.kind, InstKind::Const(_))) {
             continue;
         }
         let (constants, rest) = std::mem::take(&mut body.insts)
             .into_iter()
             .partition(|inst| matches!(inst.kind, InstKind::Const(_)));
         body.insts = rest;
-        hoisted.extend::<Vec<_>>(constants);
+        hoisted[target].extend::<Vec<_>>(constants);
     }
-    let moved = hoisted.len();
-    function.blocks[0].insts.extend(hoisted);
+    let mut moved = 0;
+    for (block, constants) in hoisted.into_iter().enumerate() {
+        moved += constants.len();
+        function.blocks[block].insts.extend(constants);
+    }
     moved
-}
-
-/// Есть ли путь из блока в него же.
-fn reaches_itself(successors: &[Vec<usize>], start: usize) -> bool {
-    let mut seen = vec![false; successors.len()];
-    let mut stack: Vec<usize> = successors[start].clone();
-    while let Some(block) = stack.pop() {
-        if block == start {
-            return true;
-        }
-        if !std::mem::replace(&mut seen[block], true) {
-            stack.extend(&successors[block]);
-        }
-    }
-    false
 }

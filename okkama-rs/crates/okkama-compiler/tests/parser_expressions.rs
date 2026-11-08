@@ -258,8 +258,8 @@ fn functional_suffixes() {
         "(map (group (..= 1 5)) -> [number] {(* number number)})"
     );
     assert_eq!(
-        expr_sexpr("mapping.filter() -> key, value { value.more(0); }"),
-        "(filter mapping -> [key value] {(call (. value more) 0)})"
+        expr_sexpr("mapping.filter() -> key, value { value.greater(0); }"),
+        "(filter mapping -> [key value] {(call (. value greater) 0)})"
     );
     // Chains nest through the receiver.
     assert_eq!(
@@ -486,9 +486,14 @@ fn if_match_loop_and_try_expressions() {
         "module app v1.0.0; main() is int { let x = if c { 1; }; }",
         "If expression requires else branch.",
     );
+    // An `else if` link is an else block holding the nested `if` (#257).
+    assert_eq!(
+        body_sexpr("let x = if a { 1; } else if b { 2; } else { 3; };"),
+        "(LetStatement name=x type=_ value=(if a {1} {(if b {2} {3})}))"
+    );
     assert_rejects(
-        "module app v1.0.0; main() is int { let x = if a { 1; } else if b { 2; } else { 3; }; }",
-        "Expect \"{\" before block.",
+        "module app v1.0.0; main() is int { let x = if a { 1; } else if b { 2; }; }",
+        "If expression requires else branch.",
     );
     assert_eq!(
         body_sexpr("let v = match x { case 1, 2 { a; } else { b; } };"),
@@ -518,4 +523,34 @@ fn generic_closers_split_compound_tokens() {
     }
     // Expressions keep `>>` as a shift.
     assert_eq!(expr_sexpr("a >> b"), "(>> a b)");
+}
+
+/// Each pair of adjacent binary levels, loosest first, with one operator of
+/// each: the tighter one groups first on either side, and an operator of
+/// the same level groups left (#46).
+#[test]
+fn adjacent_precedence_levels_group_the_tighter_operator() {
+    let levels = ["||", "&&", "<-", "==", "..", "<", "|", "^", "&", "<<", "+", "*"];
+    for pair in levels.windows(2) {
+        let (loose, tight) = (pair[0], pair[1]);
+        assert_eq!(expr_sexpr(&format!("a {loose} b {tight} c")), format!("({loose} a ({tight} b c))"), "{loose} {tight}");
+        assert_eq!(expr_sexpr(&format!("a {tight} b {loose} c")), format!("({loose} ({tight} a b) c)"), "{tight} {loose}");
+    }
+    for operator in levels.iter().filter(|&&operator| operator != "..") {
+        assert_eq!(expr_sexpr(&format!("a {operator} b {operator} c")), format!("({operator} ({operator} a b) c)"));
+    }
+    assert_rejects("module app v1.0.0; main() is int { a .. b ..= c; }", "Range expressions cannot be chained.");
+}
+
+/// `test.throws(Type) { … }` (#216) is the `try` it means: the block, a
+/// panic when nothing was thrown, and one catch of `Type` yielding the error.
+#[test]
+fn test_throws_is_a_try_with_one_catch() {
+    let tree = body_sexpr("let refused = test.throws(Refused) { gate.check(0); };");
+    assert!(tree.contains("TryExpr"), "{tree}");
+    assert!(tree.contains("test.throws: the block did not throw Refused"), "{tree}");
+    assert!(tree.contains("test.throws#error"), "{tree}");
+    assert_rejects("module app v1.0.0; main() is int { test.throws(Refused); 0; }", "Expect a block after test.throws(Type)");
+    // Elsewhere `throws` is an ordinary member.
+    assert!(!body_sexpr("checker.throws(Refused);").contains("TryExpr"));
 }

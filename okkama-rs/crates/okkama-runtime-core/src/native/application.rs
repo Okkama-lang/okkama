@@ -95,8 +95,14 @@ struct Session {
     resizes: Vec<Rc<RefCell<Resizes>>>,
     /// Однопоточный исполнитель чтения JVM.
     reader: Arc<Mutex<()>>,
-    reading: Option<sched::Future>,
+    /// The waiting read and its limit.
+    reading: Option<(sched::Future, usize)>,
+    /// Input read by a cancelled read that nobody has taken yet.
     pending: Option<Vec<u8>>,
+    /// The blocking `read(2)` in flight, if any (#12): a cancelled read
+    /// cannot stop it, so the next read waits for its bytes instead of
+    /// queueing another one behind it.
+    in_flight: Option<sched::Op>,
 }
 
 type SessionRef = Rc<RefCell<Session>>;
@@ -203,6 +209,7 @@ fn new_session(input: i32, output: i32, controlling: bool) -> Session {
         reader: Arc::new(Mutex::new(())),
         reading: None,
         pending: None,
+        in_flight: None,
     }
 }
 
@@ -259,7 +266,7 @@ fn close(state: &SessionRef) -> Result<(), Rc<Failure>> {
     }
     let operation = symbol("terminal_close", 1);
     let reading = state.borrow().reading.clone();
-    if let Some(reading) = reading {
+    if let Some((reading, _)) = reading {
         sched::settle(&reading, Err(terminal_failure("already_closed", &operation, "Terminal session is closed")));
     }
     let mut first = None;
@@ -273,20 +280,18 @@ fn close(state: &SessionRef) -> Result<(), Rc<Failure>> {
             Err(failure) => first = Some(failure),
         }
     }
-    if let Some(original) = session.original.clone() {
-        if let Err(failure) = apply(&session, &original, &operation) {
+    if let Some(original) = session.original.clone()
+        && let Err(failure) = apply(&session, &original, &operation) {
             first = first.or(Some(failure));
         }
-    }
     session.modes.clear();
     close_fds(&session);
-    if let Ok(mut owners) = OWNERS.lock() {
-        if let Some(owners) = owners.as_mut() {
+    if let Ok(mut owners) = OWNERS.lock()
+        && let Some(owners) = owners.as_mut() {
             for claim in &session.claims {
                 owners.remove(claim);
             }
         }
-    }
     session.claims.clear();
     match first {
         Some(failure) => Err(failure),
@@ -316,12 +321,36 @@ fn terminal_read(value: &Value, limit: &crate::IntValue) -> Value {
         return resolved(Ok(byte_array(pending)));
     }
     let promise = sched::promise();
-    state.borrow_mut().reading = Some(promise.clone());
+    state.borrow_mut().reading = Some((promise.clone(), limit));
+    let in_flight = state.borrow().in_flight.clone();
+    let op = match in_flight {
+        // A cancelled read's `read(2)` still waits for input: its bytes come
+        // to this read (`deliver_input`), and its operation is awaited again.
+        Some(op) => {
+            op.attach();
+            op
+        }
+        None => start_read(&state, operation),
+    };
+    let weak = Rc::downgrade(&state);
+    promise.listen(move || {
+        op.detach();
+        if let Some(state) = weak.upgrade() {
+            state.borrow_mut().reading = None;
+        }
+    });
+    Value::Future(promise)
+}
+
+/// One blocking `read(2)` on the reader thread. Its outcome goes to whichever
+/// read is waiting when it completes, which is not necessarily the one that
+/// started it: that one may have been cancelled meanwhile (#12).
+fn start_read(state: &SessionRef, operation: String) -> sched::Op {
+    let limit = 65536;
     let (fd, gate) = {
         let session = state.borrow();
         (session.input, session.reader.clone())
     };
-    let target = promise.clone();
     let delivered = state.clone();
     let op = sched::offload(
         move || {
@@ -341,33 +370,39 @@ fn terminal_read(value: &Value, limit: &crate::IntValue) -> Value {
             }
         },
         move |outcome: Result<Vec<u8>, i32>| {
-            if target.state() != sched::State::Running {
-                if let Ok(data) = outcome {
-                    if !data.is_empty() {
-                        delivered.borrow_mut().pending = Some(data);
-                    }
-                }
-                return;
-            }
-            let result = match outcome {
-                Ok(data) => Ok(byte_array(data)),
-                Err(_) if delivered.borrow().closed => {
-                    Err(terminal_failure("already_closed", &operation, "Terminal session is closed"))
-                }
-                Err(code) => Err(errno_failure(code, &operation, "Cannot read terminal input")),
-            };
-            sched::settle(&target, result);
+            delivered.borrow_mut().in_flight = None;
+            deliver_input(&delivered, outcome, &operation);
         },
     );
-    let weak = Rc::downgrade(&state);
-    promise.listen(move || {
-        op.detach();
-        if let Some(state) = weak.upgrade() {
-            state.borrow_mut().reading = None;
-        }
-    });
-    Value::Future(promise)
+    state.borrow_mut().in_flight = Some(op.clone());
+    op
 }
+
+/// The outcome of a `read(2)`: to the waiting read, at most its limit, the
+/// rest kept for the next one; with nobody waiting, kept whole.
+fn deliver_input(state: &SessionRef, outcome: Result<Vec<u8>, i32>, operation: &str) {
+    let waiting = state.borrow().reading.clone().filter(|(read, _)| read.state() == sched::State::Running);
+    let Some((read, limit)) = waiting else {
+        if let Ok(data) = outcome
+            && !data.is_empty() {
+                state.borrow_mut().pending.get_or_insert_with(Vec::new).extend(data);
+            }
+        return;
+    };
+    let result = match outcome {
+        Ok(mut data) => {
+            if data.len() > limit {
+                let rest = data.split_off(limit);
+                state.borrow_mut().pending.get_or_insert_with(Vec::new).extend(rest);
+            }
+            Ok(byte_array(data))
+        }
+        Err(_) if state.borrow().closed => Err(terminal_failure("already_closed", operation, "Terminal session is closed")),
+        Err(code) => Err(errno_failure(code, operation, "Cannot read terminal input")),
+    };
+    sched::settle(&read, result);
+}
+
 
 // ---- режимы ----
 
@@ -621,11 +656,10 @@ fn close_resizes(source: &Rc<RefCell<Resizes>>) {
         borrowed.closed = true;
         (borrowed.pending.clone(), borrowed.session.clone())
     };
-    if let Some(session) = session {
-        if let Ok(mut session) = session.try_borrow_mut() {
+    if let Some(session) = session
+        && let Ok(mut session) = session.try_borrow_mut() {
             session.resizes.retain(|known| !Rc::ptr_eq(known, source));
         }
-    }
     if let Some(pending) = pending {
         sched::settle(
             &pending,
@@ -777,11 +811,10 @@ fn account(native: Native, name: &str, args: &[Value]) -> Result<Value, Error> {
                     if user.is_null() {
                         break;
                     }
-                    if let Some(login) = c_text((*user).pw_name) {
-                        if (*user).pw_gid == gid {
+                    if let Some(login) = c_text((*user).pw_name)
+                        && (*user).pw_gid == gid {
                             names.insert(login);
                         }
-                    }
                 }
                 libc::endpwent();
             }

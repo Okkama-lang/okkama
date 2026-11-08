@@ -42,7 +42,7 @@ fn integer_addition_has_the_canonical_module_text() {
             "^b0:\n",
             "    %0: int = const 1\n",
             "    %1: int = const 1\n",
-            "    %2: int = int.add %0, %1\n",
+            "    %2: int = const 2\n",
             "    ret %2\n",
             "}\n",
         )
@@ -65,8 +65,8 @@ fn literals_are_exact_canonical_integers() {
     }
     assert_eq!(text.matches("const 42\n").count(), 3, "{text}");
     // Унарный минус перед литералом сворачивается, перед выражением — нет.
-    let negated = main_listing("let x = 5; -x;");
-    assert!(negated.contains("int.neg %0"), "{negated}");
+    let negated = main_listing("let x = \"xxxxx\".length(); -x;");
+    assert!(negated.contains("= int.neg %"), "{negated}");
 }
 
 #[test]
@@ -78,7 +78,7 @@ fn let_bindings_reuse_values_and_check_declared_types() {
             "^b0:\n",
             "    %0: int = const 40\n",
             "    %1: int = const 2\n",
-            "    %2: int = int.add %0, %1\n",
+            "    %2: int = const 42\n",
             "    ret %2\n",
             "}\n",
         )
@@ -198,7 +198,7 @@ fn strings_concatenate_and_compare_and_print_escaped() {
 #[test]
 fn every_operator_maps_to_one_instruction_family() {
     let ops = main_listing(
-        "let a = 6; let b = 3; let s = a - b; let m = a * b; let r = a % b; let x = a & b; \
+        "let a = \"666666\".length(); let b = \"333\".length(); let s = a - b; let m = a * b; let r = a % b; let x = a & b; \
          let o = a | b; let y = a ^ b; let l = a << b; let h = a >> b; let u = a >>> b; \
          let n = ~a; let lt = a < b; let le = a <= b; let gt = a > b; let ge = a >= b; \
          let ne = a != b; let t = !(true == false); 0;",
@@ -361,4 +361,97 @@ fn endless_specialization_is_a_diagnostic_with_its_chain() {
         assert!(error.contains("requests a chain of more than 256 generic specializations"), "{error}");
         assert!(error.contains(&format!("{action} <- ")), "{error}");
     }
+}
+
+#[test]
+fn collection_operator_chains_are_one_instruction() {
+    // `a + b + c` and `a + (b + c)` allocate one result for all parts (#145).
+    let text = main_listing("let a = [1]; let b = [2]; let c = [3]; let d = a + b + c; let e = a + (b + c); d.size() + e.size();");
+    assert_eq!(text.matches("array.concat [").count(), 2, "{text}");
+    // Each line is the result and its three parts.
+    assert!(text.lines().filter(|l| l.contains("array.concat")).all(|l| l.matches('%').count() == 4), "{text}");
+    // `(a - b) - c` subtracts both at once; `a - (b - c)` stays nested.
+    let text = main_listing("let a = [1, 2, 3]; let b = [1]; let c = [2]; let d = a - b - c; let e = a - (b - c); d.size() + e.size();");
+    let differences: Vec<&str> = text.lines().filter(|l| l.contains("array.difference")).collect();
+    assert_eq!(differences.len(), 3, "{text}");
+    assert!(differences[0].contains(", [%") && differences[0].matches('%').count() == 4, "{text}");
+    // Maps merge and subtract the same way.
+    let text = main_listing("let m = [\"a\": 1] + [\"b\": 2] + [\"c\": 3]; let n = m - [\"a\": 0] - [\"b\": 0]; n.size();");
+    assert_eq!(text.matches("map.merge [").count(), 1, "{text}");
+    assert_eq!(text.matches("map.difference").count(), 1, "{text}");
+}
+
+#[test]
+fn collection_operators_need_one_collection_type() {
+    for body in ["let c = [1] + [[1]];", "let c = [1] + [\"k\": 1];", "let a is @any = [1]; let c = a - a;", "let c = [1] * [2];"] {
+        let source = format!("module app v1.0.0; main() is int {{ {body} 0; }}");
+        assert!(lower(&source).is_err(), "{body} must be rejected");
+    }
+}
+
+/// An anonymous action captures `self` only when its body reads the receiver
+/// — a field, `self`, an action of `self`, or through a nested anonymous
+/// action (#53).
+#[test]
+fn anonymous_actions_capture_self_only_when_they_read_it() {
+    let module = lower(
+        "module app v1.0.0;
+object Box {
+    has n is int;
+    Box(:n);
+    plain(k is int) is (int) is int { (x is int) is int { x + k; }; }
+    field() is (int) is int { (x is int) is int { x + n; }; }
+    explicit() is () is Box { () is Box { self; }; }
+    value() is int { n; }
+    method() is () is int { () is int { self.field()(1); }; }
+    nested() is () is int { () is int { let inner = () is int { n; }; inner(); }; }
+}
+main() is int { Box(n: 1).plain(2)(3) + Box(n: 1).field()(1) + Box(n: 1).method()() + Box(n: 1).nested()() + Box(n: 2).explicit()().value(); }",
+    )
+    .unwrap();
+    ir::verify(&module).expect("lowering output verifies");
+    let text = module.to_string();
+    // The receiver is the first parameter of an action: a capture of `self`
+    // in a method body is `%0`.
+    let captures = |method: &str| {
+        let start = text.find(&format!("func @Box.{method}(")).unwrap_or_else(|| panic!("{method} in\n{text}"));
+        let body = &text[start..start + text[start..].find("\n}\n").unwrap()];
+        let line = body.lines().find(|line| line.contains("fn.closure")).unwrap_or_else(|| panic!("{method}:\n{body}"));
+        line[line.find('[').unwrap()..].to_string()
+    };
+    assert_eq!(captures("plain"), "[%1]", "{text}");
+    for method in ["field", "explicit", "method", "nested"] {
+        assert!(captures(method).starts_with("[%0"), "{method}: {}", captures(method));
+    }
+}
+
+/// Constant arithmetic folds exactly (H-36): a sum beyond 64 bits is the big
+/// integer the engines promote to; what may fail (`% 0`) stays.
+#[test]
+fn constant_arithmetic_folds_exactly() {
+    let text = main_listing("let a = 10 + 20 * 3; let b = 9223372036854775807 + 1; let c = 7 % 0; if a < 100 && -a == 0 - 70 { a + b.string().length() + c; } else { 0; }");
+    assert!(text.contains("const 70"), "{text}");
+    assert!(text.contains("const 9223372036854775808"), "{text}");
+    assert!(text.contains("int.mod"), "{text}");
+    assert!(!text.contains("int.add") || text.matches("int.add").count() <= 2, "{text}");
+    assert!(text.contains("const true") || text.contains("const 1"), "{text}");
+}
+
+/// A `reduce` accumulator used only as the block's value — alone or as the
+/// left end of `acc + ...` — lives in a builder and grows in place (#243);
+/// any other use keeps the copying `+`.
+#[test]
+fn reduce_accumulators_grow_in_place_when_nothing_else_sees_them() {
+    let grows = |body: &str| {
+        let text = main_listing(body);
+        (text.contains("builder.push") || text.contains("mbuilder.put"), text.contains("array.concat") || text.contains("map.merge"))
+    };
+    assert_eq!(grows("let xs = (1..=3).reduce([0]) -> acc, n { acc + [n]; }; xs.size();"), (true, false));
+    assert_eq!(grows("let xs = (1..=3).reduce([0]) -> acc, n { if n > 1 { acc + [n, n]; } else { acc; } }; xs.size();"), (true, false));
+    assert_eq!(grows("let m is %int:int = (1..=3).reduce([:]) -> acc, n { acc + [n: n]; }; m.size();"), (true, false));
+    // Read in the block, or merged with a map that is not a literal: copied.
+    assert_eq!(grows("let xs = (1..=3).reduce([0]) -> acc, n { acc + [acc.size()]; }; xs.size();"), (false, true));
+    assert_eq!(grows("let base is %int:int = [1: 1]; let m is %int:int = (1..=3).reduce([:]) -> acc, n { acc + base; }; m.size();"), (false, true));
+    // Captured by an anonymous action: copied.
+    assert_eq!(grows("let xs = (1..=3).reduce([0]) -> acc, n { let f = () is int { acc.size(); }; acc + [f()]; }; xs.size();"), (false, true));
 }

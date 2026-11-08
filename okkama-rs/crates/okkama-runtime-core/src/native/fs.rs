@@ -138,11 +138,10 @@ fn win32_canon_cat(parts: &[String]) -> String {
     path = jre::replace_first(&path, r"(?s)\\\z", "");
     if volume.ends_with('\\') {
         path = jre::replace_first(&path, r"(?s)\A\.\.(?:\\\.\.)*(?:\\|\z)", "");
-        if path.is_empty() {
-            if let Some(share) = jre::captures(r"(?s)\A(\\\\.*)\\\z", &volume) {
+        if path.is_empty()
+            && let Some(share) = jre::captures(r"(?s)\A(\\\\.*)\\\z", &volume) {
                 return share[1].clone().unwrap_or_default();
             }
-        }
     }
     if !path.is_empty() || !volume.is_empty() {
         format!("{volume}{path}")
@@ -277,11 +276,10 @@ impl Spec {
             }
             Spec::Win32 => {
                 let mut volume = volume.to_string();
-                if let Some(share) = jre::captures(r"(?s)^([\\/])[\\/][^\\/]+[\\/][^\\/]+\z", &volume) {
-                    if jre::is_match(r"(?s)^[^\\/]", directory) {
+                if let Some(share) = jre::captures(r"(?s)^([\\/])[\\/][^\\/]+[\\/][^\\/]+\z", &volume)
+                    && jre::is_match(r"(?s)^[^\\/]", directory) {
                         volume.push_str(&share[1].clone().unwrap_or_default());
                     }
-                }
                 volume.push_str(directory);
                 if !jre::matches("^[a-zA-Z]:", &volume)
                     && jre::is_match(r"[^\\/]\z", &volume)
@@ -938,7 +936,7 @@ fn temporary_name(prefix: &str) -> String {
     name
 }
 
-fn prefix<'a>(native: Native, prefix: &'a str) -> Result<&'a str, Error> {
+fn prefix(native: Native, prefix: &str) -> Result<&str, Error> {
     if prefix.contains(['\0', '/', '\\']) {
         return Err(fail(native, "invalid_input", "Temporary prefix must be one path component"));
     }
@@ -1107,6 +1105,8 @@ fn native_failure(error: Error) -> Rc<crate::failure::Failure> {
         Error::Trap(message) | Error::InvalidState(message) | Error::Unsupported(message) => {
             crate::failure::Failure::new(crate::failure::Kind::Program(message))
         }
+        // File watching writes no standard output; a budget cannot run out here.
+        Error::Exhausted(exhausted) => crate::failure::Failure::new(crate::failure::Kind::Program(exhausted.message().into())),
     }
 }
 

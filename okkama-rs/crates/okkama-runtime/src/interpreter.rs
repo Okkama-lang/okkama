@@ -33,7 +33,21 @@ pub fn execute_traced(
     module: &ir::Module,
     arguments: Vec<String>,
 ) -> (Result<IntValue, RuntimeError>, Vec<Site>) {
+    execute_limited(module, arguments, &okkama_runtime_core::budget::Limits::default())
+}
+
+/// [`execute_traced`] в пределах бюджетов запуска (шаги, память, вывод,
+/// прерывание; #71): исчерпанный бюджет — [`RuntimeError::Exhausted`].
+pub fn execute_limited(
+    module: &ir::Module,
+    arguments: Vec<String>,
+    limits: &okkama_runtime_core::budget::Limits,
+) -> (Result<IntValue, RuntimeError>, Vec<Site>) {
     let mut trace = Vec::new();
+    let _budget = match okkama_runtime_core::budget::begin(limits) {
+        Ok(budget) => budget,
+        Err(message) => return (Err(invalid_state(module.span, message)), trace),
+    };
     let result = execute_inner(module, arguments, &mut trace);
     (result, trace)
 }
@@ -51,6 +65,7 @@ fn execute_inner(
         ));
     }
     let entry = module.entry.ok_or(RuntimeError::MissingEntry)?;
+    let _host = okkama_runtime_core::host::session();
     let engine = new_engine(module);
     if crate::worker::active() {
         crate::worker::serve(&engine);
@@ -109,10 +124,19 @@ pub(crate) fn new_engine(module: &ir::Module) -> Rc<Engine> {
     let engine = Rc::new(Engine {
         module: module.clone(),
         state: State::default(),
+        globals: std::cell::RefCell::new(vec![None; module.globals.len()]),
         fatal: std::cell::RefCell::new(None),
         uncaught: std::cell::RefCell::new(None),
     });
     engine.state.set_enums(module);
+    // Значения `const` (#153) строятся здесь, как в `<clinit>` JVM: init чист
+    // и не читает других глобалов, поэтому порядок не виден. Вызов
+    // исполнителя изнутри вычисления инструкции замедлял каждый вызов (#265).
+    for (index, global) in module.globals.iter().enumerate() {
+        if let Ok(Some(value)) = execute_function(&engine, global.init, Vec::new()) {
+            engine.globals.borrow_mut()[index] = Some(value);
+        }
+    }
     engine
 }
 
@@ -134,6 +158,8 @@ pub(crate) fn into_failure(error: RuntimeError) -> Result<Rc<Failure>, RuntimeEr
 pub(crate) struct Engine {
     pub(crate) module: ir::Module,
     pub(crate) state: State,
+    /// Значения `const` модуля (#153), построенные при создании движка.
+    globals: std::cell::RefCell<Vec<Option<Value>>>,
     /// Ошибка реализации внутри задачи: завершает запуск после планировщика.
     fatal: std::cell::RefCell<Option<RuntimeError>>,
     /// Последний отказ, дошедший до корня исполнения (его стек вызовов —
@@ -259,16 +285,25 @@ pub(crate) fn execute_function(
                     .collect::<Result<Vec<_>, _>>()?;
                 role_call = Some((callee, arguments));
             }
-            if let InstKind::RegionLeave { region, .. } | InstKind::RegionUnwind { region, .. } =
-                &inst.kind
+            if let InstKind::RegionLeave { region, .. }
+            | InstKind::RegionUnwind { region, .. }
+            | InstKind::RegionSettle { region, .. }
+            | InstKind::RegionSettleUnwind { region, .. } = &inst.kind
             {
+                // `region.settle`: async destroy ожидаются на месте (#154).
+                let settles = matches!(
+                    inst.kind,
+                    InstKind::RegionSettle { .. } | InstKind::RegionSettleUnwind { .. }
+                );
                 let Value::Region(region) = read(slots, *region, inst.span)? else {
                     return Err(invalid_state(inst.span, "expected region value"));
                 };
                 let region = region.clone();
                 // Пустой регион: уничтожать нечего, отказ уходит дальше как есть.
                 if frame.closing.is_none() && region.is_empty() {
-                    if let InstKind::RegionUnwind { failure: id, .. } = &inst.kind {
+                    if let InstKind::RegionUnwind { failure: id, .. }
+                    | InstKind::RegionSettleUnwind { failure: id, .. } = &inst.kind
+                    {
                         let active = failure(read(slots, *id, inst.span)?, inst.span)?.clone();
                         let result = inst
                             .result
@@ -279,12 +314,13 @@ pub(crate) fn execute_function(
                 }
                 if frame.closing.is_none() {
                     let keep = match &inst.kind {
-                        InstKind::RegionLeave { keep, .. } => keep
+                        InstKind::RegionLeave { keep, .. } | InstKind::RegionSettle { keep, .. } => keep
                             .map(|id| read(slots, id, inst.span).cloned())
                             .into_iter()
                             .collect::<Result<Vec<_>, _>>()?,
                         // Error-объекты отказа освобождаются (`Region.unwind`).
-                        InstKind::RegionUnwind { failure: id, .. } => {
+                        InstKind::RegionUnwind { failure: id, .. }
+                        | InstKind::RegionSettleUnwind { failure: id, .. } => {
                             thrown_errors(failure(read(slots, *id, inst.span)?, inst.span)?)
                         }
                         _ => unreachable!("matched above"),
@@ -297,9 +333,21 @@ pub(crate) fn execute_function(
                 let pending = frame.closing.as_mut().expect("closing started above");
                 let mut destroy = None;
                 while let Some(object) = region.next_destroyed(&mut pending.closing) {
-                    if let Some(body) = module.objects.get(object.declaration).and_then(|o| o.destroy) {
+                    let Some(body) = module.objects.get(object.declaration).and_then(|o| o.destroy) else {
+                        continue;
+                    };
+                    if !module.functions[body.0].is_async() {
                         destroy = Some((body, object));
                         break;
+                    }
+                    if !settles {
+                        pending.failures.push(Failure::new(FailureKind::Program(
+                            "an object with an async destroy was released in a synchronous scope".into(),
+                        )));
+                        continue;
+                    }
+                    if let Some(failure) = settle_destroy(engine, body, object) {
+                        pending.failures.push(failure);
                     }
                 }
                 if let Some((body, object)) = destroy {
@@ -313,7 +361,8 @@ pub(crate) fn execute_function(
                 }
                 let failures = frame.closing.take().expect("closing started above").failures;
                 match &inst.kind {
-                    InstKind::RegionUnwind { failure: id, .. } => {
+                    InstKind::RegionUnwind { failure: id, .. }
+                    | InstKind::RegionSettleUnwind { failure: id, .. } => {
                         // Отказы destroy на пути отказа — вторичные к нему.
                         let mut active = failure(read(slots, *id, inst.span)?, inst.span)?.clone();
                         for cleanup in failures {
@@ -387,7 +436,13 @@ pub(crate) fn execute_function(
                                 slots[result.0] = Some(value);
                             }
                         }
-                        Err(raised) => propagate(engine, &mut frames, raised, inst.span, false)?,
+                        Err(raised) => {
+                            // A sort stopped by the budget (#238): no handler sees it.
+                            if let Some(exhausted) = okkama_runtime_core::budget::take_pending() {
+                                return Err(RuntimeError::Exhausted(exhausted));
+                            }
+                            propagate(engine, &mut frames, raised, inst.span, false)?
+                        }
                     }
                     continue;
                 }
@@ -609,6 +664,11 @@ pub(crate) fn execute_function(
                     InstKind::ObjGet { object, field } => {
                         state.object_get(read(slots, *object, inst.span)?, *field, inst.span)?
                     }
+                    // Несвязанное `$pending` — создание не завершено (#271).
+                    InstKind::ObjPending { object, field } => Value::Bool(!matches!(
+                        state.object_get(read(slots, *object, inst.span)?, *field, inst.span)?,
+                        Value::Bool(false)
+                    )),
                     InstKind::ObjNext { object, updates } => {
                         let updates = updates
                             .iter()
@@ -617,6 +677,13 @@ pub(crate) fn execute_function(
                         state.object_next(read(slots, *object, inst.span)?, updates, inst.span)?
                     }
                     InstKind::Undef => Value::Undef,
+                    InstKind::Global(index) => engine
+                        .globals
+                        .borrow()
+                        .get(*index)
+                        .cloned()
+                        .flatten()
+                        .ok_or_else(|| invalid_state(inst.span, "a constant has no value"))?,
                     InstKind::Const(value) => operations::constant(value, inst.span)?,
                     InstKind::Str {
                         op: ir::StrOp::Split,
@@ -831,6 +898,30 @@ pub(crate) fn execute_function(
                         boxed @ Value::Any(_) => boxed.clone(),
                         other => Value::Any(Rc::new(other.clone())),
                     },
+                    InstKind::ArrayConcat(parts) | InstKind::MapMerge(parts) => {
+                        let parts = parts
+                            .iter()
+                            .map(|id| read(slots, *id, inst.span))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        if matches!(&inst.kind, InstKind::ArrayConcat(_)) {
+                            operations::array_concat(&parts, inst.span)?
+                        } else {
+                            operations::map_merge(&parts, inst.span)?
+                        }
+                    }
+                    InstKind::ArrayDifference { array: base, removed }
+                    | InstKind::MapDifference { map: base, removed } => {
+                        let base_value = read(slots, *base, inst.span)?;
+                        let removed = removed
+                            .iter()
+                            .map(|id| read(slots, *id, inst.span))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        if matches!(&inst.kind, InstKind::ArrayDifference { .. }) {
+                            operations::array_difference(base_value, &removed, inst.span)?
+                        } else {
+                            operations::map_difference(base_value, &removed, inst.span)?
+                        }
+                    }
                     InstKind::MapNew(entries) => operations::map_new(
                         entries
                             .iter()
@@ -1075,6 +1166,10 @@ pub(crate) fn execute_function(
         for (param, value) in function.blocks[target.block.0].params.iter().zip(arguments) {
             slots[param.0] = Some(value);
         }
+        // A branch back to this block or an earlier one closes a loop: a step.
+        if target.block.0 <= frame.block.0 {
+            okkama_runtime_core::budget::step().map_err(RuntimeError::Exhausted)?;
+        }
         frame.block = target.block;
         frame.next_inst = 0;
     }
@@ -1157,6 +1252,8 @@ impl Frame {
         destination: Option<ir::ValueId>,
         span: Span,
     ) -> Result<Self, RuntimeError> {
+        // A function entry is one step of the run's budget (#71).
+        okkama_runtime_core::budget::step().map_err(RuntimeError::Exhausted)?;
         let function = &module.functions[id.0];
         if function.extern_symbol().is_some() || function.intrinsic().is_some() {
             return Err(unsupported(
@@ -1173,7 +1270,11 @@ impl Frame {
                 "call argument count does not match parameters",
             ));
         }
-        let mut slots = vec![None; function.values.len()];
+        // Not `vec![None; n]`: its `from_elem` is shared with other callers,
+        // then stays out of line and clones `None` per slot on every call
+        // (#265); this closure is ours alone and inlines to a fill.
+        let mut slots = Vec::with_capacity(function.values.len());
+        slots.resize_with(function.values.len(), || None);
         for (param, value) in function.params.iter().zip(args) {
             slots[param.0] = Some(value);
         }
@@ -1187,6 +1288,16 @@ impl Frame {
             boundary: false,
         })
     }
+}
+
+/// Await the async destroy of `object` where its region settles (#154). Out
+/// of line: the scheduler code would otherwise land in the instruction loop
+/// and slow every call (#265).
+#[cold]
+#[inline(never)]
+fn settle_destroy(engine: &Rc<Engine>, body: ir::FuncId, object: Rc<okkama_runtime_core::heap::Object>) -> Option<Rc<Failure>> {
+    let settling = cold_call(engine, body, vec![Value::Object(object)]);
+    sched::await_shielded(&settling).err()
 }
 
 fn read(slots: &[Option<Value>], id: ir::ValueId, span: Span) -> Result<&Value, RuntimeError> {
@@ -1348,8 +1459,7 @@ pub(crate) fn describe_failure(
     if let FailureKind::Thrown {
         object, message, ..
     } = &mut described.kind
-    {
-        if message.is_none() {
+        && message.is_none() {
             let value = Value::Object(object.0.clone());
             let (role, declaration) = module
                 .roles
@@ -1377,7 +1487,6 @@ pub(crate) fn describe_failure(
                 .ok_or_else(|| invalid_state(span, "Error.text returned void"))?;
             *message = Some(text.string(span)?.to_owned());
         }
-    }
     described.secondary = std::cell::RefCell::new(failure
         .secondaries()
         .iter()

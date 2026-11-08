@@ -1,0 +1,6 @@
+module app v1.0.0;
+
+main() is int {
+    let huge = 1e400;
+    0;
+}

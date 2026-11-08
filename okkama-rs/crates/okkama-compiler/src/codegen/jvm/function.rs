@@ -112,7 +112,12 @@ impl<'c, 'f> FunctionGen<'c, 'f> {
         for index in 0..self.function.blocks.len() {
             let block = BlockId(index);
             let label = self.labels[index];
-            if index == 0 {
+            if index == 0 && self.class.steps.is_some_and(|original| self.index < original) {
+                // Вход в функцию — шаг; переход в блок 0 считается отдельно.
+                self.step()?;
+                let frame = self.frame(UsePoint::Unwind(block));
+                self.asm.place_with_frame(label, frame);
+            } else if index == 0 {
                 self.asm.place(label, 0);
             } else {
                 let frame = self.frame(UsePoint::Unwind(block));
@@ -452,6 +457,11 @@ impl<'c, 'f> FunctionGen<'c, 'f> {
             InstKind::Undef => {
                 let result = result.expect("verified: undef defines a value");
                 match self.types[result.0] {
+                    // Несвязанный bool читается только `obj.pending`: `true` —
+                    // создание не завершено (#271).
+                    VType::Integer if self.function.values[result.0] == Type::Bool => {
+                        self.asm.op(&[0x04], 0, 1) // iconst_1
+                    }
                     VType::Integer => self.asm.op(&[0x03], 0, 1), // iconst_0
                     _ => self.asm.op(&[0x01], 0, 1),              // aconst_null
                 }
@@ -498,7 +508,7 @@ impl<'c, 'f> FunctionGen<'c, 'f> {
                     0,
                 )?;
             }
-            InstKind::RegionLeave { region, keep } => {
+            InstKind::RegionLeave { region, keep } | InstKind::RegionSettle { region, keep } => {
                 self.load(*region);
                 match keep {
                     Some(keep) => {
@@ -507,22 +517,24 @@ impl<'c, 'f> FunctionGen<'c, 'f> {
                     }
                     None => self.asm.op(&[0x01], 0, 1), // aconst_null
                 }
+                let name = if matches!(kind, InstKind::RegionLeave { .. }) { "leave" } else { "settle" };
                 self.class.invoke_virtual(
                     &mut self.asm,
                     runtime::REGION,
-                    "leave",
+                    name,
                     "(Ljava/lang/Object;)V",
                     2,
                     0,
                 )?;
             }
-            InstKind::RegionUnwind { region, failure } => {
+            InstKind::RegionUnwind { region, failure } | InstKind::RegionSettleUnwind { region, failure } => {
                 self.load(*region);
                 self.load(*failure);
+                let name = if matches!(kind, InstKind::RegionUnwind { .. }) { "unwind" } else { "settleUnwind" };
                 self.class.invoke_virtual(
                     &mut self.asm,
                     runtime::REGION,
-                    "unwind",
+                    name,
                     "(Lokkama/rt/Failure;)Lokkama/rt/Failure;",
                     2,
                     1,
@@ -538,6 +550,13 @@ impl<'c, 'f> FunctionGen<'c, 'f> {
                     2,
                     1,
                 )?;
+            }
+            InstKind::Global(index) => {
+                let ty = &self.function.values[result.expect("verified: global defines a value").0];
+                let descriptor = self.class.layout.descriptor(ty);
+                let main = self.class.layout.main.clone();
+                let field = self.class.pool.field_ref(&main, &format!("G{index}"), &descriptor)?;
+                self.asm.op_index(0xb2, field, 0, 1); // getstatic
             }
             InstKind::EnumCase { ty, case } => {
                 let decl = &self.class.layout.enums[ty.0];
@@ -672,7 +691,7 @@ impl<'c, 'f> FunctionGen<'c, 'f> {
                     Ok(())
                 })?;
             }
-            InstKind::ObjGet { object, field } => {
+            InstKind::ObjGet { object, field } | InstKind::ObjPending { object, field } => {
                 let owner = object_of(&self.function.values[object.0]);
                 self.get_field(*object, owner, *field)?;
             }
@@ -956,7 +975,12 @@ impl<'c, 'f> FunctionGen<'c, 'f> {
                     return Ok(());
                 }
                 match (&self.function.values[value.0], target) {
-                    (Type::Byte, Type::Int) => self.int_to_big()?,
+                    (Type::Byte | Type::Char, Type::Int) => self.int_to_big()?,
+                    // `char` ↔ text and code point (#231).
+                    (Type::Char, _) => self.class.call_rt(&mut self.asm, "charText", "(I)Ljava/lang/String;", 1, 1)?,
+                    (Type::Int, Type::Char) => {
+                        self.class.call_rt(&mut self.asm, "charFrom", "(Ljava/math/BigInteger;)I", 1, 1)?
+                    }
                     (Type::Int, _) => self.class.invoke_virtual(
                         &mut self.asm,
                         BIG,
@@ -965,7 +989,15 @@ impl<'c, 'f> FunctionGen<'c, 'f> {
                         1,
                         1,
                     )?,
-                    // bool.string(): "1" или "0", как в Perl-интерпретаторе.
+                    // bool.string(): "true" или "false" (#262).
+                    (Type::Bool, _) => self.class.invoke_static(
+                        &mut self.asm,
+                        STRING,
+                        "valueOf",
+                        "(Z)Ljava/lang/String;",
+                        1,
+                        1,
+                    )?,
                     _ => self.class.invoke_static(
                         &mut self.asm,
                         STRING,
@@ -1094,6 +1126,16 @@ impl<'c, 'f> FunctionGen<'c, 'f> {
                     StrOp::Trim => ("trim", "(Ljava/lang/String;)Ljava/lang/String;"),
                     StrOp::Chomp => ("chomp", "(Ljava/lang/String;)Ljava/lang/String;"),
                     StrOp::Utf8 => ("utf8", "(Ljava/lang/String;)Ljava/util/List;"),
+                    StrOp::Find => ("find", "(Ljava/lang/String;Ljava/lang/String;)Ljava/math/BigInteger;"),
+                    StrOp::FindLast => ("findLast", "(Ljava/lang/String;Ljava/lang/String;)Ljava/math/BigInteger;"),
+                    StrOp::StartsWith => ("startsWith", "(Ljava/lang/String;Ljava/lang/String;)Z"),
+                    StrOp::EndsWith => ("endsWith", "(Ljava/lang/String;Ljava/lang/String;)Z"),
+                    StrOp::TrimStart => ("trimStart", "(Ljava/lang/String;)Ljava/lang/String;"),
+                    StrOp::TrimEnd => ("trimEnd", "(Ljava/lang/String;)Ljava/lang/String;"),
+                    StrOp::Lower => ("lower", "(Ljava/lang/String;)Ljava/lang/String;"),
+                    StrOp::Upper => ("upper", "(Ljava/lang/String;)Ljava/lang/String;"),
+                    StrOp::Repeat => ("repeat", "(Ljava/lang/String;Ljava/math/BigInteger;)Ljava/lang/String;"),
+                    StrOp::Characters => ("characters", "(Ljava/lang/String;)Ljava/util/List;"),
                 };
                 self.class
                     .call_rt(&mut self.asm, name, descriptor, args.len() as i32, 1)?;
@@ -1154,6 +1196,38 @@ impl<'c, 'f> FunctionGen<'c, 'f> {
             }
             // Сборщик словаря линеен, как и сборщик массива: та же ссылка.
             InstKind::MapRetag(map) | InstKind::MapBuilderFinish(map) => self.load(*map),
+            // Склейка и вычитание коллекций: части — массив `Object[]` для `Rt`,
+            // который выделяет результат один раз.
+            InstKind::ArrayConcat(parts) => {
+                self.boxed_array(parts)?;
+                self.class.call_rt(&mut self.asm, "concat", "([Ljava/lang/Object;)Ljava/util/List;", 1, 1)?;
+            }
+            InstKind::ArrayDifference { array, removed } => {
+                self.load(*array);
+                self.boxed_array(removed)?;
+                self.class.call_rt(
+                    &mut self.asm,
+                    "difference",
+                    "(Ljava/util/List;[Ljava/lang/Object;)Ljava/util/List;",
+                    2,
+                    1,
+                )?;
+            }
+            InstKind::MapMerge(parts) => {
+                self.boxed_array(parts)?;
+                self.class.call_rt(&mut self.asm, "merge", "([Ljava/lang/Object;)Ljava/util/Map;", 1, 1)?;
+            }
+            InstKind::MapDifference { map, removed } => {
+                self.load(*map);
+                self.boxed_array(removed)?;
+                self.class.call_rt(
+                    &mut self.asm,
+                    "without",
+                    "(Ljava/util/Map;[Ljava/lang/Object;)Ljava/util/Map;",
+                    2,
+                    1,
+                )?;
+            }
             InstKind::MapLen(map) => {
                 self.load(*map);
                 self.class.call_rt(
@@ -1583,31 +1657,51 @@ impl<'c, 'f> FunctionGen<'c, 'f> {
         self.asm.jump(0xa7, label, 0); // goto
     }
 
+    /// Шаг бюджета `--max-steps` (#237).
+    fn step(&mut self) -> Result<()> {
+        self.class.call_rt(&mut self.asm, "step", "()V", 0, 0)
+    }
+
+    /// Ребро в этот же или более ранний блок замыкает цикл: шаг, как у IR.
+    fn back_edge(&self, from: BlockId, target: &Target) -> bool {
+        self.class.steps.is_some() && target.block.0 <= from.0
+    }
+
+    /// Переход терминатора `Br`/`Cond`: обратное ребро сначала делает шаг.
+    fn branch(&mut self, from: BlockId, target: &Target) -> Result<()> {
+        if self.back_edge(from, target) {
+            self.step()?;
+        }
+        self.goto(target);
+        Ok(())
+    }
+
     fn terminator(&mut self, block: BlockId, kind: &TermKind) -> Result<()> {
         match kind {
-            TermKind::Br(target) => self.goto(target),
+            TermKind::Br(target) => self.branch(block, target)?,
             TermKind::Cond {
                 condition,
                 then_target,
                 else_target,
             } => {
                 self.load(*condition);
-                if else_target.args.is_empty() {
+                // Прямой условный переход — у ребра без аргументов и без шага.
+                if else_target.args.is_empty() && !self.back_edge(block, else_target) {
                     let label = self.labels[else_target.block.0];
                     self.asm.jump(0x99, label, 1); // ifeq
-                    self.goto(then_target);
-                } else if then_target.args.is_empty() {
+                    self.branch(block, then_target)?;
+                } else if then_target.args.is_empty() && !self.back_edge(block, then_target) {
                     let label = self.labels[then_target.block.0];
                     self.asm.jump(0x9a, label, 1); // ifne
-                    self.goto(else_target);
+                    self.branch(block, else_target)?;
                 } else {
-                    // У обоих рёбер есть аргументы: ветка else копирует в своей заглушке.
+                    // Ветка else копирует аргументы (и делает шаг) в своей заглушке.
                     let stub = self.asm.label();
                     self.asm.jump(0x99, stub, 1); // ifeq
-                    self.goto(then_target);
+                    self.branch(block, then_target)?;
                     let frame = self.frame(UsePoint::Term(block));
                     self.asm.place_with_frame(stub, frame);
-                    self.goto(else_target);
+                    self.branch(block, else_target)?;
                 }
             }
             TermKind::Ret(Some(value)) => {

@@ -392,10 +392,6 @@ fn variadic_parameters() {
             "bad(values is ...int = 1) is int { 0; }",
             "Variadic parameter \"values\" cannot have a default value.",
         ),
-        (
-            "bad(value is int = 1) is int { 0; }",
-            "Expect \")\" after action parameters.",
-        ),
     ] {
         assert_rejects(
             &format!("module app v1.0.0; object Format {{ {source} }}"),
@@ -795,8 +791,62 @@ fn removed_allow_and_while_forms_stay_invalid() {
     }
     assert_rejects(
         "module app v1.0.0; main() is int { while true { 1; } }",
-        "Expect \";\" after expression.",
+        "Okkama has no `while`",
     );
     // As ordinary names they remain usable.
     parse_ok("module app v1.0.0; main() is int { let allow = 1; let while = 2; allow + while; }");
+}
+
+/// Words from other languages get the construct Okkama uses (#227).
+#[test]
+fn class_interface_extends_implements_and_static_are_explained() {
+    for (source, expected) in [
+        ("module app v1.0.0; object A { A(); } object B extends A { B(); } main() is int { 0; }", "Okkama has no inheritance"),
+        ("module app v1.0.0; object B implements R { B(); } main() is int { 0; }", "does Role"),
+        ("module app v1.0.0; class Dog { } main() is int { 0; }", "Okkama has no classes"),
+        ("module app v1.0.0; interface Named { } main() is int { 0; }", "declare a `role`"),
+        ("module app v1.0.0; object C { static total is int; C(); } main() is int { 0; }", "no static members"),
+    ] {
+        assert_rejects(source, expected);
+    }
+}
+
+/// Module constants (#153): `const`, an optional type, `hidden const`.
+#[test]
+fn module_constants_parse_and_print() {
+    let text = "module app v1.0.0; const LANG = \"en\"; hidden const MB is int = 1024 * 1024; main() is int { 0; }";
+    let program = parse_ok(text);
+    let consts: Vec<&okkama_compiler::syntax::ast::ConstDecl> = program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            okkama_compiler::syntax::ast::Item::Const(decl) => Some(decl),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(consts.len(), 2);
+    assert_eq!((consts[0].name.text.as_str(), consts[0].hidden, consts[0].ty.is_some()), ("LANG", false, false));
+    assert_eq!((consts[1].name.text.as_str(), consts[1].hidden, consts[1].ty.is_some()), ("MB", true, true));
+    assert_rejects("module app v1.0.0; const = 1; main() is int { 0; }", "Expect constant name after \"const\".");
+    assert_rejects("module app v1.0.0; const X 1; main() is int { 0; }", "Expect \"=\" after constant name.");
+}
+
+/// `async destroy { … }` (#154).
+#[test]
+fn async_destroy_parses() {
+    let program = parse_ok("module app v1.0.0; object Conn { has n is int; Conn(:n); async destroy { n; } } object Res { destroy { 1; } } main() is int { 0; }");
+    let destroys: Vec<bool> = program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            okkama_compiler::syntax::ast::Item::Object(object) => Some(object),
+            _ => None,
+        })
+        .flat_map(|object| &object.members)
+        .filter_map(|member| match member {
+            okkama_compiler::syntax::ast::ObjectMember::Destroy(destroy) => Some(destroy.is_async),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(destroys, [true, false]);
 }

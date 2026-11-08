@@ -35,6 +35,35 @@ pub enum TypeRef {
 pub struct Names {
     pub types: HashMap<String, TypeRef>,
     pub natives: HashMap<String, usize>,
+    /// `const` модулей: индекс в `Registry::consts` (#153).
+    pub consts: HashMap<String, usize>,
+}
+
+/// Вычисленная константа (#153): тип, значение для lowering и то же
+/// значение в представлении рантайма (из него строятся зависящие константы).
+#[derive(Clone, Debug)]
+pub struct ConstResult {
+    pub ty: Ty,
+    pub value: super::thir::ConstValue,
+    pub runtime: okkama_runtime_core::Value,
+}
+
+/// Состояние вычисления константы.
+#[derive(Clone, Debug)]
+pub enum ConstState {
+    Pending,
+    /// Вычисляется: ссылка на неё сейчас — цикл.
+    Busy,
+    /// `None` — ошибка уже сообщена.
+    Done(Option<ConstResult>),
+}
+
+/// `const NAME = value;` модуля (#153); значение вычисляет анализ.
+#[derive(Clone, Debug)]
+pub struct ConstInfo<'a> {
+    pub name: String,
+    pub module: usize,
+    pub decl: &'a ast::ConstDecl,
 }
 
 /// Пространство имён `import "p" [as alias] [take …]`.
@@ -66,6 +95,8 @@ pub struct ParamInfo {
     pub name: String,
     /// `T: Comparing<T>` — роль-ограничение.
     pub bound: Option<Ty>,
+    /// `%T:V` в объявлении: аргумент должен быть типом ключа (#242).
+    pub key: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -81,6 +112,8 @@ pub enum CtorShape<'a> {
     Full {
         params: Vec<(String, Ty)>,
         names: Vec<&'a ast::Name>,
+        /// `name is T = value` per parameter (#149).
+        defaults: Vec<Option<&'a ast::Expr>>,
         variadic: bool,
         body: &'a ast::Block,
     },
@@ -236,6 +269,21 @@ pub struct Standard {
     pub sizing: Option<RoleId>,
     pub byte_source: Option<RoleId>,
     pub writing: Option<RoleId>,
+    /// `cell::Cell`: stays in synchronous code (#152).
+    pub cell: Option<ObjectId>,
+    /// Operator roles of module `operators` (#215), by operator.
+    pub operators: Operators,
+}
+
+/// The roles that give `+ - * / %` and unary `-` a meaning for objects.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Operators {
+    pub adding: Option<RoleId>,
+    pub subtracting: Option<RoleId>,
+    pub multiplying: Option<RoleId>,
+    pub dividing: Option<RoleId>,
+    pub remaindering: Option<RoleId>,
+    pub negating: Option<RoleId>,
 }
 
 #[derive(Debug)]
@@ -246,6 +294,9 @@ pub struct Registry<'a> {
     pub enums: Vec<EnumInfo>,
     pub handles: Vec<HandleInfo>,
     pub natives: Vec<NativeInfo<'a>>,
+    pub consts: Vec<ConstInfo<'a>>,
+    /// По одному на `consts`, заполняется при проверке тел.
+    pub const_state: Vec<ConstState>,
     pub params: Vec<ParamInfo>,
     pub system: System,
     pub standard: Standard,
@@ -270,6 +321,11 @@ pub struct Registry<'a> {
     current: usize,
     /// Применённые типы с ограничениями — проверяются после `does`.
     pending_bounds: Vec<(usize, Ty, Span)>,
+    /// Объекты-ключи словарей в объявлениях — проверяются, когда известны
+    /// поля всех объектов (#212).
+    pending_keys: Vec<(usize, Ty, Span)>,
+    /// Specializations whose key parameters are checked after the bodies (#242).
+    pub key_uses: Vec<(usize, ObjectId, Vec<Ty>, Span)>,
 }
 
 /// Объекты std без конструктора: их создаёт только рантайм.
@@ -315,6 +371,8 @@ impl<'a> Registry<'a> {
             enums: Vec::new(),
             handles: Vec::new(),
             natives: Vec::new(),
+            consts: Vec::new(),
+            const_state: Vec::new(),
             params: Vec::new(),
             system: System {
                 error: RoleId(0),
@@ -333,6 +391,8 @@ impl<'a> Registry<'a> {
             warnings: Vec::new(),
             current: 0,
             pending_bounds: Vec::new(),
+            pending_keys: Vec::new(),
+            key_uses: Vec::new(),
         };
         registry.entry_module = registry.root();
         registry.add_system();
@@ -363,13 +423,140 @@ impl<'a> Registry<'a> {
         registry.check_error_payloads();
         registry.check_hidden_leaks();
         registry.find_standard();
+        registry.check_cell_fields();
         registry.add_adapters();
         for (module, ty, span) in std::mem::take(&mut registry.pending_bounds) {
             registry.current = module;
             registry.check_bounds(&ty, span);
         }
+        for (module, ty, span) in std::mem::take(&mut registry.pending_keys) {
+            registry.current = module;
+            if let Some(problem) = registry.key_problem(&ty) {
+                registry.error(span, problem);
+            }
+        }
         registry.current = registry.root();
         registry
+    }
+
+    /// Почему `ty` не может быть ключом словаря; `None` — может (#212).
+    /// Ключ — скаляр, enum, параметр типа (проверяется при исполнении) или
+    /// объект-значение: без `destroy` и cap, все поля которого — скаляры
+    /// (также `byte` и `rat`), enum или такие же объекты. Объекты
+    /// неизменяемы, поэтому равенство и порядок ключа — по полям, как `==`.
+    pub fn key_problem(&self, ty: &Ty) -> Option<String> {
+        if ty.is_map_key() || matches!(ty, Ty::Param(_)) || ty.is_error() {
+            return None;
+        }
+        let Ty::Object(..) = ty else {
+            return Some(format!("Map key type {} is not a scalar key type", self.type_name(ty)));
+        };
+        self.object_key_problem(ty, &mut Vec::new())
+            .map(|reason| format!("Map key type {} cannot be a key: {reason}", self.type_name(ty)))
+    }
+
+    /// The argument of a parameter used as a map key must be a key type (#242).
+    fn key_argument_problem(&self, object: ObjectId, param: ParamId, arg: &Ty) -> Option<String> {
+        if !self.params[param.0].key {
+            return None;
+        }
+        self.key_problem(arg).map(|problem| {
+            format!(
+                "Generic parameter \"{}\" for object \"{}\" is a map key: {problem}",
+                self.params[param.0].name, self.objects[object.0].name
+            )
+        })
+    }
+
+    /// Key arguments (#242), checked once every body is known: a parameter
+    /// passed on as a key argument — `Wrap<U> { has inner is Index<U>; }` —
+    /// is a key parameter too, so `Wrap<@int>` fails like `Index<@int>`.
+    pub fn check_key_arguments(&mut self) {
+        let uses = std::mem::take(&mut self.key_uses);
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for (_, object, args, _) in &uses {
+                for (param, arg) in self.objects[object.0].params.iter().zip(args) {
+                    if let Ty::Param(inner) = arg
+                        && self.params[param.0].key
+                        && !self.params[inner.0].key
+                    {
+                        self.params[inner.0].key = true;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        for (module, object, args, span) in uses {
+            let params = self.objects[object.0].params.clone();
+            for (param, arg) in params.iter().zip(&args) {
+                if let Some(message) = self.key_argument_problem(object, *param, arg) {
+                    self.set_module(module);
+                    self.error(span, message);
+                }
+            }
+        }
+    }
+
+    /// The object, or one it holds in a field, has an async destroy (#154):
+    /// it may be owned only where the end of its scope can be awaited.
+    pub fn async_destroy(&self, ty: &Ty) -> bool {
+        self.async_destroy_in(ty, &mut Vec::new())
+    }
+
+    fn async_destroy_in(&self, ty: &Ty, visiting: &mut Vec<ObjectId>) -> bool {
+        let (id, args) = match ty {
+            Ty::Object(id, args) => (id, args),
+            Ty::Array(element) => return self.async_destroy_in(element, visiting),
+            Ty::Map(_, value) => return self.async_destroy_in(value, visiting),
+            _ => return false,
+        };
+        if visiting.contains(id) {
+            return false;
+        }
+        let info = &self.objects[id.0];
+        if info.destroy.is_some_and(|destroy| destroy.is_async) {
+            return true;
+        }
+        let env: Vec<(ParamId, Ty)> = info.params.iter().copied().zip(args.iter().cloned()).collect();
+        visiting.push(*id);
+        let found = info.fields.iter().any(|field| self.async_destroy_in(&field.ty.subst(&env), visiting));
+        visiting.pop();
+        found
+    }
+
+    fn object_key_problem(&self, ty: &Ty, visiting: &mut Vec<ObjectId>) -> Option<String> {
+        let Ty::Object(id, args) = ty else {
+            return Some(format!("{} is not a key type", self.type_name(ty)));
+        };
+        if visiting.contains(id) {
+            return Some(format!("{} contains itself", self.type_name(ty)));
+        }
+        let info = &self.objects[id.0];
+        if info.destroy.is_some() {
+            return Some(format!("{} has a destroy block", self.type_name(ty)));
+        }
+        if !info.caps.is_empty() {
+            return Some(format!("{} holds capabilities", self.type_name(ty)));
+        }
+        let env: Vec<(ParamId, Ty)> = info.params.iter().copied().zip(args.iter().cloned()).collect();
+        visiting.push(*id);
+        let problem = info.fields.iter().find_map(|field| {
+            let field_ty = field.ty.subst(&env);
+            let fits = field_ty.is_map_key() || matches!(field_ty, Ty::Byte | Ty::Rat | Ty::Error);
+            if fits {
+                return None;
+            }
+            match &field_ty {
+                Ty::Object(..) => self
+                    .object_key_problem(&field_ty, visiting)
+                    .map(|inner| format!("field \"{}\" ({}): {inner}", field.name, self.type_name(&field_ty))),
+                other => Some(format!("field \"{}\" is {}", field.name, self.type_name(other))),
+            }
+        });
+        visiting.pop();
+        problem
     }
 
     pub fn root(&self) -> usize {
@@ -468,6 +655,9 @@ impl<'a> Registry<'a> {
                 for (name, found) in own.natives {
                     scope.natives.entry(name).or_insert(found);
                 }
+                for (name, found) in own.consts {
+                    scope.consts.entry(name).or_insert(found);
+                }
             }
         }
     }
@@ -507,6 +697,7 @@ impl<'a> Registry<'a> {
             self.params.push(ParamInfo {
                 name: "T".into(),
                 bound: None,
+                key: false,
             });
             let mut payloads = vec![Vec::new(); cases.len()];
             payloads[0] = vec![("value".into(), Ty::Param(param))];
@@ -601,6 +792,7 @@ impl<'a> Registry<'a> {
                 self.params.push(ParamInfo {
                     name: param.name.text.clone(),
                     bound: None,
+                    key: false,
                 });
                 ParamId(self.params.len() - 1)
             })
@@ -823,6 +1015,21 @@ impl<'a> Registry<'a> {
                     });
                     self.modules[module].own.natives.insert(name.clone(), index);
                 }
+                ast::Item::Const(decl) => {
+                    let name = &decl.name.text;
+                    let own = &self.modules[module].own;
+                    if own.consts.contains_key(name) || own.natives.contains_key(name) {
+                        self.error(decl.name.span, format!("Constant \"{name}\" is already declared"));
+                        continue;
+                    }
+                    let index = self.consts.len();
+                    self.consts.push(ConstInfo {
+                        name: name.clone(),
+                        module,
+                        decl,
+                    });
+                    self.modules[module].own.consts.insert(name.clone(), index);
+                }
                 ast::Item::Action(_) | ast::Item::Test(_) | ast::Item::Cap(_) => {}
             }
         }
@@ -915,7 +1122,10 @@ impl<'a> Registry<'a> {
                     continue;
                 }
                 let own = &self.modules[dependency].own;
-                if !own.types.contains_key(&name.text) && !own.natives.contains_key(&name.text) {
+                if !own.types.contains_key(&name.text)
+                    && !own.natives.contains_key(&name.text)
+                    && !own.consts.contains_key(&name.text)
+                {
                     self.error(
                         name.span,
                         format!("Import \"{path}\" has no declaration \"{}\"", name.text),
@@ -936,8 +1146,8 @@ impl<'a> Registry<'a> {
                         .as_ref()
                         .map_or_else(|| last_segment(&path), |alias| alias.text.clone());
                     let only = (!import.take.is_empty()).then(|| taken.clone());
-                    if let Some(existing) = self.modules[module].namespaces.get(&namespace) {
-                        if existing.module != dependency {
+                    if let Some(existing) = self.modules[module].namespaces.get(&namespace)
+                        && existing.module != dependency {
                             let (first, second) = (&self.modules[existing.module].name, &self.modules[dependency].name);
                             self.error(
                                 import.span,
@@ -945,7 +1155,6 @@ impl<'a> Registry<'a> {
                             );
                             continue;
                         }
-                    }
                     self.modules[module].namespaces.insert(
                         namespace,
                         Namespace {
@@ -962,8 +1171,8 @@ impl<'a> Registry<'a> {
         let own = self.modules[dependency].own.clone();
         if let Some(found) = own.types.get(text) {
             let scope = &self.modules[module].scope;
-            if let Some(existing) = scope.types.get(text) {
-                if existing != found {
+            if let Some(existing) = scope.types.get(text)
+                && existing != found {
                     let kind = match existing {
                         TypeRef::Object(_) => "Object",
                         TypeRef::Role(_) => "Role",
@@ -974,7 +1183,6 @@ impl<'a> Registry<'a> {
                     self.error(span, format!("{kind} \"{text}\" is already declared by {first}; this import takes another from {second}"));
                     return;
                 }
-            }
             self.modules[module]
                 .scope
                 .types
@@ -998,6 +1206,13 @@ impl<'a> Registry<'a> {
                 .natives
                 .insert(text.to_string(), *found);
         }
+        if let Some(found) = own.consts.get(text) {
+            if self.modules[module].scope.consts.get(text).is_some_and(|existing| existing != found) {
+                self.error(span, format!("Constant \"{text}\" is already visible"));
+                return;
+            }
+            self.modules[module].scope.consts.insert(text.to_string(), *found);
+        }
     }
 
     // ----- разрешение имён -----
@@ -1009,7 +1224,7 @@ impl<'a> Registry<'a> {
             .types
             .get(name)
             .copied()
-            .or_else(|| match name {
+            .or(match name {
                 "Maybe" => Some(TypeRef::Enum(EnumId(0))),
                 "Presence" => Some(TypeRef::Enum(EnumId(1))),
                 _ => None,
@@ -1042,6 +1257,22 @@ impl<'a> Registry<'a> {
                 owner.name
             )
         })
+    }
+
+    /// `NAME`: константа модуля или взятая импортом (#153).
+    pub fn find_const(&self, module: usize, name: &str) -> Option<usize> {
+        self.modules[module].scope.consts.get(name).copied()
+    }
+
+    /// `ns.NAME`: открытая константа модуля пространства имён.
+    pub fn find_qualified_const(&self, module: usize, namespace: &str, name: &str) -> Option<usize> {
+        let space = self.modules[module].namespaces.get(namespace)?;
+        if self.modules[space.module].hidden.contains(name)
+            || space.only.as_ref().is_some_and(|only| !only.iter().any(|taken| taken == name))
+        {
+            return None;
+        }
+        self.modules[space.module].own.consts.get(name).copied()
     }
 
     pub fn find_native(&self, module: usize, name: &str) -> Option<usize> {
@@ -1077,7 +1308,14 @@ impl<'a> Registry<'a> {
             ast::TypeKind::Map { key, value } => {
                 let key_type = self.resolve(key, params);
                 let value_type = self.resolve(value, params);
-                if !key_type.is_error()
+                // A parameter used as a key bounds its argument to key types (#242).
+                if let Ty::Param(param) = key_type {
+                    self.params[param.0].key = true;
+                }
+                if matches!(key_type, Ty::Object(..)) {
+                    // Поля объекта ещё могут быть не собраны: проверка в конце.
+                    self.pending_keys.push((self.current, key_type.clone(), key.span));
+                } else if !key_type.is_error()
                     && !key_type.is_map_key()
                     && !matches!(key_type, Ty::Param(_))
                 {
@@ -1299,6 +1537,7 @@ impl<'a> Registry<'a> {
         let Ty::Object(id, args) = ty else {
             return;
         };
+        self.key_uses.push((self.current, *id, args.clone(), span));
         let params = self.objects[id.0].params.clone();
         let env: Vec<(ParamId, Ty)> = params.iter().copied().zip(args.iter().cloned()).collect();
         for (param, arg) in params.iter().zip(args) {
@@ -1674,7 +1913,7 @@ impl<'a> Registry<'a> {
                 .collect();
             let mut payloads = Vec::new();
             for fields in &decl.payloads {
-                let (fields, variadic) = self.signature_params(fields, &names);
+                let (fields, variadic) = self.signature_params(fields, &names, Some("Enum payloads"));
                 if variadic {
                     self.error(decl.span, "Variant payloads cannot be variadic");
                 }
@@ -1707,7 +1946,7 @@ impl<'a> Registry<'a> {
                     if !std::ptr::eq(self.natives[index].decl, decl) {
                         continue;
                     }
-                    let (params, variadic) = self.signature_params(&decl.params, &[]);
+                    let (params, variadic) = self.signature_params(&decl.params, &[], Some("Natives"));
                     for (param, (_, ty)) in decl.params.iter().zip(&params) {
                         if contains_action(ty) {
                             self.error(
@@ -1798,12 +2037,36 @@ impl<'a> Registry<'a> {
 
     /// Параметры сигнатуры; variadic-хвост `...T` — последний, его тип
     /// внутри действия — массив `@T` (§11.8.1).
+    /// `without_defaults` names a declaration whose parameters cannot have
+    /// default values (roles, natives, enum payloads).
     fn signature_params(
         &mut self,
         params: &[ast::Param],
         scope: &[(String, ParamId)],
+        without_defaults: Option<&str>,
     ) -> (Vec<(String, Ty)>, bool) {
         let mut resolved: Vec<(String, Ty)> = Vec::new();
+        // Default values (#149): only on trailing parameters, not with a
+        // variadic tail, and only on object actions and constructors.
+        let mut defaulted = false;
+        for param in params {
+            match (&param.default, without_defaults) {
+                (Some(default), Some(what)) => {
+                    self.error(default.span, format!("{what} cannot declare default values"));
+                }
+                (Some(default), None) if params.last().is_some_and(|last| last.variadic) => {
+                    self.error(default.span, "An action with a variadic parameter cannot declare default values");
+                }
+                (Some(_), None) => defaulted = true,
+                (None, None) if defaulted && !param.variadic => {
+                    self.error(
+                        param.name.span,
+                        format!("Parameter \"{}\" follows a parameter with a default value, so it needs one too", param.name.text),
+                    );
+                }
+                _ => {}
+            }
+        }
         for (index, param) in params.iter().enumerate() {
             if param.variadic && index + 1 != params.len() {
                 self.error(
@@ -1869,7 +2132,7 @@ impl<'a> Registry<'a> {
                     continue;
                 }
             };
-            let (params, variadic) = self.signature_params(&signature.params, &scope);
+            let (params, variadic) = self.signature_params(&signature.params, &scope, Some("Role actions"));
             let result = self.resolve_result(&signature.result, &scope);
             if methods.iter().any(|other| {
                 other.name == signature.name.text
@@ -1889,21 +2152,6 @@ impl<'a> Registry<'a> {
                     ),
                 );
                 continue;
-            }
-            if let Some(other) = methods
-                .iter()
-                .find(|other| other.name == signature.name.text)
-            {
-                if other.result != result {
-                    self.error(
-                        signature.span,
-                        format!(
-                            "Role action \"{}\" overloads on \"{}\" must declare the same return type",
-                            signature.name.text, decl.name.text
-                        ),
-                    );
-                    continue;
-                }
             }
             methods.push(RoleMethod {
                 name: signature.name.text.clone(),
@@ -2047,10 +2295,11 @@ impl<'a> Registry<'a> {
             }
             let shape = match &ctor.form {
                 ast::ConstructorForm::Full { params, body } => {
-                    let (resolved, variadic) = self.signature_params(params, &scope);
+                    let (resolved, variadic) = self.signature_params(params, &scope, None);
                     CtorShape::Full {
                         params: resolved,
                         names: params.iter().map(|param| &param.name).collect(),
+                        defaults: params.iter().map(|param| param.default.as_ref()).collect(),
                         variadic,
                         body,
                     }
@@ -2167,14 +2416,14 @@ impl<'a> Registry<'a> {
 
         let mut methods: Vec<MethodInfo<'a>> = Vec::new();
         for action in actions {
-            let (params, variadic) = self.signature_params(&action.params, &scope);
+            let (params, variadic) = self.signature_params(&action.params, &scope, None);
             let mut result = self.resolve_result(&action.result, &scope);
             let successor = matches!(action.result, ast::ResultSpec::Successor { .. });
             let private = action.visibility == ast::Visibility::Private;
             // Successor объекта — его собственная копия (§11.9); `^Role` бывает
             // только в сигнатуре роли, реализация которой возвращает `^Self`.
-            if let Some(Ty::Successor(target)) = &result {
-                if **target != self_type {
+            if let Some(Ty::Successor(target)) = &result
+                && **target != self_type {
                     let message = if matches!(&**target, Ty::Role(..)) {
                         format!(
                             "Successor action \"{}\" on object \"{name}\" must return ^{name}; declare ^{} in a role signature and implement it as ^{name}",
@@ -2190,7 +2439,6 @@ impl<'a> Registry<'a> {
                     self.error(action.result.span(), message);
                     result = Some(Ty::Error);
                 }
-            }
             let candidate = MethodInfo {
                 name: action.name.text.clone(),
                 params,
@@ -2243,7 +2491,10 @@ impl<'a> Registry<'a> {
                         continue;
                     }
                 };
-                if does.iter().any(|(declared, _)| *declared == role) {
+                // A generic role may be declared again with other arguments
+                // (`Subtracting<Duration, Instant>` and `Subtracting<Instant,
+                // Duration>`, #215); the same instance twice is an error.
+                if does.iter().any(|(declared, known)| *declared == role && *known == args) {
                     self.error(
                         role_type.span,
                         format!("Role \"{}\" is listed twice", self.roles[role.0].name),
@@ -2398,6 +2649,35 @@ impl<'a> Registry<'a> {
 
     // ----- стандартные роли -----
 
+    /// A field cannot hold a `Cell` (#152): an object can reach async code,
+    /// and a cell stays in synchronous code.
+    fn check_cell_fields(&mut self) {
+        let Some(cell) = self.standard.cell else {
+            return;
+        };
+        for object in 0..self.objects.len() {
+            if object == cell.0 {
+                continue;
+            }
+            let found: Vec<(Span, String)> = self.objects[object]
+                .fields
+                .iter()
+                .filter(|field| field.ty.holds_object(cell))
+                .map(|field| (field.span, field.name.clone()))
+                .collect();
+            if found.is_empty() {
+                continue;
+            }
+            self.current = self.objects[object].module;
+            for (span, name) in found {
+                self.error(
+                    span,
+                    format!("Field \"{name}\" cannot hold a Cell: a cell stays in synchronous code; state an object shares with tasks is an Atomic"),
+                );
+            }
+        }
+    }
+
     fn find_standard(&mut self) {
         let lookup = |registry: &Registry<'_>, module: &str, name: &str| {
             registry
@@ -2422,6 +2702,18 @@ impl<'a> Registry<'a> {
             sizing: role(lookup(self, "size", "Sizing")),
             byte_source: role(lookup(self, "io/stream", "ByteSource")),
             writing: role(lookup(self, "io/stream", "Writing")),
+            cell: match lookup(self, "cell", "Cell") {
+                Some(TypeRef::Object(id)) => Some(id),
+                _ => None,
+            },
+            operators: Operators {
+                adding: role(lookup(self, "operators", "Adding")),
+                subtracting: role(lookup(self, "operators", "Subtracting")),
+                multiplying: role(lookup(self, "operators", "Multiplying")),
+                dividing: role(lookup(self, "operators", "Dividing")),
+                remaindering: role(lookup(self, "operators", "Remaindering")),
+                negating: role(lookup(self, "operators", "Negating")),
+            },
         };
     }
 
@@ -2448,6 +2740,7 @@ impl<'a> Registry<'a> {
             registry.params.push(ParamInfo {
                 name: name.to_string(),
                 bound: None,
+                key: false,
             });
             ParamId(registry.params.len() - 1)
         };
@@ -2841,12 +3134,6 @@ fn overload_conflict(
                 method.name
             ));
         }
-        if method.params.len() == other.params.len() && method.result != other.result {
-            return Some(format!(
-                "Overloads of action \"{}\" on object \"{object}\" must declare the same result",
-                method.name
-            ));
-        }
     }
     None
 }
@@ -2886,6 +3173,7 @@ fn hidden_names(program: &ast::Program) -> HashSet<String> {
             ast::Item::Object(decl) if decl.hidden => Some(decl.name.text.clone()),
             ast::Item::Role(decl) if decl.hidden => Some(decl.name.text.clone()),
             ast::Item::Enum(decl) if decl.hidden => Some(decl.name.text.clone()),
+            ast::Item::Const(decl) if decl.hidden => Some(decl.name.text.clone()),
             _ => None,
         })
         .collect()

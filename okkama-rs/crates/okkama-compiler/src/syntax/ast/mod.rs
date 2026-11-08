@@ -118,6 +118,8 @@ pub enum Item {
     Cap(CapDecl),
     /// The entry point. The grammar allows only `main()` at module scope.
     Action(ActionDecl),
+    /// `const NAME = value;` (#153).
+    Const(ConstDecl),
 }
 
 impl Item {
@@ -131,6 +133,7 @@ impl Item {
             Item::NativeObject(decl) => decl.span,
             Item::Cap(decl) => decl.span,
             Item::Action(decl) => decl.span,
+            Item::Const(decl) => decl.span,
         }
     }
 }
@@ -245,9 +248,10 @@ pub enum ConstructorForm {
     },
 }
 
-/// `destroy { ... }`
+/// `destroy { ... }` or `async destroy { ... }` (#154).
 #[derive(Clone, Debug, PartialEq)]
 pub struct DestroyDecl {
+    pub is_async: bool,
     pub body: Block,
     pub span: Span,
 }
@@ -307,6 +311,12 @@ pub struct Param {
     pub variadic: bool,
     pub ty: TypeExpr,
     pub span: Span,
+    /// Written `a, b is T` (#232): this parameter's type is written once,
+    /// after the next one's name — kept so `okkama fmt` keeps the grouping.
+    pub shares_type: bool,
+    /// `name is T = value` (#149): the value when a call leaves this trailing
+    /// parameter out, evaluated at each such call in the declaration's scope.
+    pub default: Option<Expr>,
 }
 
 /// `role Name<T> { signatures, fake, tests }`
@@ -358,6 +368,17 @@ pub struct FakeDecl {
 pub enum FakeBody {
     Parsed(Vec<ObjectMember>),
     Skipped(Span),
+}
+
+/// `const NAME is Type = value;`: a module constant the compiler computes
+/// (#153); `hidden const` keeps it inside its module.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConstDecl {
+    pub hidden: bool,
+    pub name: Name,
+    pub ty: Option<TypeExpr>,
+    pub value: Expr,
+    pub span: Span,
 }
 
 /// `enum Name = (a, b);`

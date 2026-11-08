@@ -46,8 +46,30 @@ struct State {
     /// Непогашенные обязательства.
     pending: Obligations,
     /// Обязательства значения каждой локальной.
-    holds: Vec<Obligations>,
+    holds: Holds,
     fields: Vec<Bound>,
+}
+
+/// Обязательства значений локальных — только у тех, что их держат (#50):
+/// состояние копируется на каждом ветвлении, поэтому его размер — то, что
+/// держится, а не число локальных функции.
+#[derive(Clone, Debug, Default)]
+struct Holds(std::collections::BTreeMap<usize, Obligations>);
+
+static NO_OBLIGATIONS: Obligations = Obligations::new();
+
+impl Holds {
+    fn get(&self, local: usize) -> &Obligations {
+        self.0.get(&local).unwrap_or(&NO_OBLIGATIONS)
+    }
+
+    fn set(&mut self, local: usize, held: Obligations) {
+        if held.is_empty() {
+            self.0.remove(&local);
+        } else {
+            self.0.insert(local, held);
+        }
+    }
 }
 
 impl State {
@@ -56,8 +78,8 @@ impl State {
         let mut merged = iter.next()?;
         for state in iter {
             merged.pending.extend(state.pending);
-            for (held, other) in merged.holds.iter_mut().zip(state.holds) {
-                held.extend(other);
+            for (local, other) in state.holds.0 {
+                merged.holds.0.entry(local).or_default().extend(other);
             }
             for (field, other) in merged.fields.iter_mut().zip(state.fields) {
                 *field = field.meet(other);
@@ -105,7 +127,7 @@ pub(super) fn check(reg: &mut Registry<'_>, body: &Body) {
     };
     let mut state = State {
         pending: Obligations::new(),
-        holds: vec![Obligations::new(); body.locals.len()],
+        holds: Holds::default(),
         fields,
     };
     let result = flow.block_inner(&body.block, body.returns_value, &mut state, false);
@@ -174,7 +196,7 @@ impl<'r> Flow<'r, '_> {
         let mut held = Obligations::new();
         for scope in &self.scopes[..depth] {
             for local in scope {
-                held.extend(state.holds[local.0].iter().copied());
+                held.extend(state.holds.get(local.0).iter().copied());
             }
         }
         held
@@ -184,18 +206,28 @@ impl<'r> Flow<'r, '_> {
         self.scopes
             .iter()
             .flatten()
-            .any(|local| !state.holds[local.0].is_disjoint(obligations))
+            .any(|local| !state.holds.get(local.0).is_disjoint(obligations))
     }
 
     /// Непогашенные обязательства привязок областей `depth..` не должны их
     /// пережить (кроме значения `kept`). Как Perl, называется самая поздняя
     /// привязка.
     fn check_scopes(&mut self, state: &mut State, depth: usize, kept: &Obligations, span: Span) {
+        // Обычно привязки области ничего не держат: тогда внешние области не
+        // перебираются, и выход из области стоит её размера, а не функции (#239).
+        let mut locals: Vec<LocalId> = self.scopes[depth..]
+            .iter()
+            .flatten()
+            .copied()
+            .filter(|local| !state.holds.get(local.0).is_empty())
+            .collect();
+        if locals.is_empty() {
+            return;
+        }
         let outer = self.held_outside(state, depth);
-        let mut locals: Vec<LocalId> = self.scopes[depth..].iter().flatten().copied().collect();
         locals.sort_by_key(|local| std::cmp::Reverse(local.0));
         for local in locals {
-            let leaking: Obligations = state.holds[local.0]
+            let leaking: Obligations = state.holds.get(local.0)
                 .iter()
                 .copied()
                 .filter(|ob| {
@@ -314,7 +346,7 @@ impl<'r> Flow<'r, '_> {
         match &stmt.kind {
             StmtKind::Let { local, value } => {
                 let held = self.expr(value, true, state)?;
-                state.holds[local.0] = held.clone();
+                state.holds.set(local.0, held.clone());
                 if let Some(scope) = self.scopes.last_mut() {
                     scope.push(*local);
                 }
@@ -382,7 +414,7 @@ impl<'r> Flow<'r, '_> {
             StmtKind::Rebind { local, value } => {
                 let new = self.expr(value, true, state)?;
                 // Перезапись не гасит прежнее значение, если его не держит алиас.
-                let old: Obligations = state.holds[local.0]
+                let old: Obligations = state.holds.get(local.0)
                     .intersection(&state.pending)
                     .copied()
                     .collect();
@@ -392,7 +424,7 @@ impl<'r> Flow<'r, '_> {
                         .iter()
                         .flatten()
                         .filter(|other| **other != *local)
-                        .any(|other| !state.holds[other.0].is_disjoint(&old));
+                        .any(|other| !state.holds.get(other.0).is_disjoint(&old));
                     if !others {
                         let message = format!(
                             "Successor action result must be used; binding \"{}\" can leave scope without consumption",
@@ -404,7 +436,7 @@ impl<'r> Flow<'r, '_> {
                         }
                     }
                 }
-                state.holds[local.0] = new;
+                state.holds.set(local.0, new);
                 Some(Obligations::new())
             }
             StmtKind::Defer(value) => {
@@ -488,7 +520,7 @@ impl<'r> Flow<'r, '_> {
                 self.expr(value, true, state)?;
                 none()
             }
-            ExprKind::Constant(_)
+            ExprKind::Constant(_) | ExprKind::Global(_)
             | ExprKind::SelfValue
             | ExprKind::Field(_)
             | ExprKind::EnumCase { .. }
@@ -496,8 +528,8 @@ impl<'r> Flow<'r, '_> {
             | ExprKind::TestCapability
             | ExprKind::Unreachable => none(),
             ExprKind::PendingField(field) => {
-                if state.fields.get(*field) == Some(&Bound::No) {
-                    if let Some(object) = self.ctor_object {
+                if state.fields.get(*field) == Some(&Bound::No)
+                    && let Some(object) = self.ctor_object {
                         let info = &self.reg.objects[object.0];
                         let message = format!(
                             "Object \"{}\" field \"{}\" is read before it is bound",
@@ -505,10 +537,9 @@ impl<'r> Flow<'r, '_> {
                         );
                         self.error(expr.span, message);
                     }
-                }
                 none()
             }
-            ExprKind::Local(local) => Some(state.holds[local.0].clone()),
+            ExprKind::Local(local) => Some(state.holds.get(local.0).clone()),
             ExprKind::Coerce { coercion, value } => {
                 let held = self.expr(value, true, state)?;
                 if *coercion == Coercion::Take {

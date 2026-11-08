@@ -412,6 +412,60 @@
    "aspects": {
     "boundary": {
      "cases": [
+      "L08.for-await.stream"
+     ],
+     "mandatory_cases": [
+      "L08.for-await.stream"
+     ],
+     "requirement": "required"
+    },
+    "interaction": {
+     "cases": [
+      "L08.for-await.stream"
+     ],
+     "mandatory_cases": [
+      "L08.for-await.stream"
+     ],
+     "requirement": "required"
+    },
+    "invalid": {
+     "cases": [
+      "L08.for-await.multiple-bindings",
+      "L08.for-await.sync-action",
+      "L08.for-await.sync-next",
+      "L08.for-await.wrong-result"
+     ],
+     "mandatory_cases": [
+      "L08.for-await.multiple-bindings",
+      "L08.for-await.sync-action",
+      "L08.for-await.sync-next",
+      "L08.for-await.wrong-result"
+     ],
+     "requirement": "required"
+    },
+    "normal": {
+     "cases": [
+      "L08.for-await.stream"
+     ],
+     "mandatory_cases": [
+      "L08.for-await.stream"
+     ],
+     "requirement": "required"
+    }
+   },
+   "contract": "ASYNC.FOR-AWAIT",
+   "discrepancies": [],
+   "family": "Async and concurrency",
+   "spec_refs": [
+    "docs/for-await.md"
+   ],
+   "status": "mandatory",
+   "title": "Async iteration through next returning Future<Maybe<T>>"
+  },
+  {
+   "aspects": {
+    "boundary": {
+     "cases": [
       "L08.future.lazy-and-cached",
       "L08.future.never-awaited"
      ],
@@ -666,6 +720,51 @@
   {
    "aspects": {
     "boundary": {
+     "cases": [
+      "L08.cancel.shared-awaited-survives"
+     ],
+     "mandatory_cases": [
+      "L08.cancel.shared-awaited-survives"
+     ],
+     "requirement": "required"
+    },
+    "interaction": {
+     "cases": [
+      "L08.cancel.awaited-spawned"
+     ],
+     "mandatory_cases": [
+      "L08.cancel.awaited-spawned"
+     ],
+     "requirement": "required"
+    },
+    "invalid": {
+     "cases": [],
+     "mandatory_cases": [],
+     "requirement": "n/a: the contract defines no rejected or failing form"
+    },
+    "normal": {
+     "cases": [
+      "L08.cancel.awaited-cleanup-settles"
+     ],
+     "mandatory_cases": [
+      "L08.cancel.awaited-cleanup-settles"
+     ],
+     "requirement": "required"
+    }
+   },
+   "contract": "ASYNC.STRUCTURED-AWAIT",
+   "discrepancies": [],
+   "family": "Async and concurrency",
+   "spec_refs": [
+    "docs/okkama-spec-11072026.md#18",
+    "docs/async-guide.md#4.6"
+   ],
+   "status": "mandatory",
+   "title": "Cancelling a task cancels the future it awaits unless another task awaits it, and the task resumes only once that future has settled"
+  },
+  {
+   "aspects": {
+    "boundary": {
      "cases": [],
      "mandatory_cases": [],
      "requirement": "n/a: the contract defines no boundary values distinct from its normal behaviour"
@@ -806,10 +905,12 @@
     },
     "interaction": {
      "cases": [
-      "L03.anon.captures-self"
+      "L03.anon.captures-self",
+      "L03.anon.self-retained-only-when-read"
      ],
      "mandatory_cases": [
-      "L03.anon.captures-self"
+      "L03.anon.captures-self",
+      "L03.anon.self-retained-only-when-read"
      ],
      "requirement": "required"
     },
@@ -862,8 +963,12 @@
      "requirement": "required"
     },
     "interaction": {
-     "cases": [],
-     "mandatory_cases": [],
+     "cases": [
+      "L03.args.default-values"
+     ],
+     "mandatory_cases": [
+      "L03.args.default-values"
+     ],
      "requirement": "n/a: no fragile cross-feature interaction is identified in the audited sources"
     },
     "invalid": {
@@ -885,10 +990,12 @@
     },
     "normal": {
      "cases": [
-      "L01.gram.call.args"
+      "L01.gram.call.args",
+      "L03.args.default-values"
      ],
      "mandatory_cases": [
-      "L01.gram.call.args"
+      "L01.gram.call.args",
+      "L03.args.default-values"
      ],
      "requirement": "required"
     }
@@ -950,21 +1057,25 @@
    "aspects": {
     "boundary": {
      "cases": [
-      "L03.functional.empty-sources"
+      "L03.functional.empty-sources",
+      "L05.functional.early-exit"
      ],
      "mandatory_cases": [
-      "L03.functional.empty-sources"
+      "L03.functional.empty-sources",
+      "L05.functional.early-exit"
      ],
      "requirement": "required"
     },
     "interaction": {
      "cases": [
       "L03.return.from-functional-block",
-      "L05.iterable.functional"
+      "L05.iterable.functional",
+      "L05.reduce.accumulator-in-place"
      ],
      "mandatory_cases": [
       "L03.return.from-functional-block",
-      "L05.iterable.functional"
+      "L05.iterable.functional",
+      "L05.reduce.accumulator-in-place"
      ],
      "requirement": "required"
     },
@@ -986,11 +1097,15 @@
     "normal": {
      "cases": [
       "L01.gram.functional.suffix",
-      "L03.functional.arrays-ranges-maps"
+      "L03.functional.arrays-ranges-maps",
+      "L05.functional.early-exit",
+      "L05.reduce.accumulator-in-place"
      ],
      "mandatory_cases": [
       "L01.gram.functional.suffix",
-      "L03.functional.arrays-ranges-maps"
+      "L03.functional.arrays-ranges-maps",
+      "L05.functional.early-exit",
+      "L05.reduce.accumulator-in-place"
      ],
      "requirement": "required"
     }
@@ -1053,11 +1168,13 @@
     "boundary": {
      "cases": [
       "L03.overloads.named-shape",
+      "L03.overloads.results-differ-by-parameter-types",
       "L03.overloads.selection",
       "L03.variadic.overloaded"
      ],
      "mandatory_cases": [
       "L03.overloads.named-shape",
+      "L03.overloads.results-differ-by-parameter-types",
       "L03.overloads.selection",
       "L03.variadic.overloaded"
      ],
@@ -1071,14 +1188,12 @@
     "invalid": {
      "cases": [
       "L03.overloads.ambiguous",
-      "L03.overloads.incompatible-returns",
       "L03.overloads.no-candidate",
       "L03.variadic.overload-duplicate-signature",
       "L03.variadic.overload-empty-tail-ambiguous"
      ],
      "mandatory_cases": [
       "L03.overloads.ambiguous",
-      "L03.overloads.incompatible-returns",
       "L03.overloads.no-candidate",
       "L03.variadic.overload-duplicate-signature",
       "L03.variadic.overload-empty-tail-ambiguous"
@@ -1087,10 +1202,12 @@
     },
     "normal": {
      "cases": [
+      "L03.overloads.results-differ-by-parameter-types",
       "L03.overloads.selection",
       "L03.variadic.overload-by-tail-type"
      ],
      "mandatory_cases": [
+      "L03.overloads.results-differ-by-parameter-types",
       "L03.overloads.selection",
       "L03.variadic.overload-by-tail-type"
      ],
@@ -1368,20 +1485,26 @@
     "boundary": {
      "cases": [
       "L02.byte.compare-and-index",
-      "L05.array.access"
+      "L05.array.access",
+      "L05.collections.array-difference"
      ],
      "mandatory_cases": [
       "L02.byte.compare-and-index",
-      "L05.array.access"
+      "L05.array.access",
+      "L05.collections.array-difference"
      ],
      "requirement": "required"
     },
     "interaction": {
      "cases": [
-      "L05.array.no-push"
+      "L05.array.no-push",
+      "L05.collections.array-concat",
+      "L05.collections.array-difference"
      ],
      "mandatory_cases": [
-      "L05.array.no-push"
+      "L05.array.no-push",
+      "L05.collections.array-concat",
+      "L05.collections.array-difference"
      ],
      "requirement": "required"
     },
@@ -1390,24 +1513,34 @@
       "L05.array.byte-index-rejected",
       "L05.array.negative-index",
       "L05.array.out-of-bounds",
-      "L05.array.string-index"
+      "L05.array.string-index",
+      "L05.collections.operator-any-difference-rejected",
+      "L05.collections.operator-array-map-rejected",
+      "L05.collections.operator-element-types-rejected"
      ],
      "mandatory_cases": [
       "L05.array.byte-index-rejected",
       "L05.array.negative-index",
       "L05.array.out-of-bounds",
-      "L05.array.string-index"
+      "L05.array.string-index",
+      "L05.collections.operator-any-difference-rejected",
+      "L05.collections.operator-array-map-rejected",
+      "L05.collections.operator-element-types-rejected"
      ],
      "requirement": "required"
     },
     "normal": {
      "cases": [
       "L01.gram.index.fallback",
-      "L05.array.access"
+      "L05.array.access",
+      "L05.collections.array-concat",
+      "L05.collections.array-difference"
      ],
      "mandatory_cases": [
       "L01.gram.index.fallback",
-      "L05.array.access"
+      "L05.array.access",
+      "L05.collections.array-concat",
+      "L05.collections.array-difference"
      ],
      "requirement": "required"
     }
@@ -1421,6 +1554,52 @@
    ],
    "status": "mandatory",
    "title": "Arrays: immutable, indexed by int (byte only after .int()), out-of-bounds fails unless `else`"
+  },
+  {
+   "aspects": {
+    "boundary": {
+     "cases": [
+      "L05.array.search-and-shape"
+     ],
+     "mandatory_cases": [
+      "L05.array.search-and-shape"
+     ],
+     "requirement": "required"
+    },
+    "interaction": {
+     "cases": [],
+     "mandatory_cases": [],
+     "requirement": "n/a: no fragile cross-feature interaction is identified in the audited sources"
+    },
+    "invalid": {
+     "cases": [
+      "L05.array.contains-type-rejected",
+      "L05.array.take-negative"
+     ],
+     "mandatory_cases": [
+      "L05.array.contains-type-rejected",
+      "L05.array.take-negative"
+     ],
+     "requirement": "required"
+    },
+    "normal": {
+     "cases": [
+      "L05.array.search-and-shape"
+     ],
+     "mandatory_cases": [
+      "L05.array.search-and-shape"
+     ],
+     "requirement": "required"
+    }
+   },
+   "contract": "COLL.ARRAY-SEARCH-SHAPE",
+   "discrepancies": [],
+   "family": "Types, generics and collections",
+   "spec_refs": [
+    "docs/okkama-spec-11072026.md#6.6"
+   ],
+   "status": "mandatory",
+   "title": "contains and index_of use ==; reversed, take and drop return new arrays"
   },
   {
    "aspects": {
@@ -1523,10 +1702,12 @@
    "aspects": {
     "boundary": {
      "cases": [
+      "L05.collections.map-difference",
       "L05.map.int-key-order",
       "L05.map.key-types"
      ],
      "mandatory_cases": [
+      "L05.collections.map-difference",
       "L05.map.int-key-order",
       "L05.map.key-types"
      ],
@@ -1534,34 +1715,46 @@
     },
     "interaction": {
      "cases": [
-      "L05.map.fallback-lazy"
+      "L05.collections.map-merge",
+      "L05.map.fallback-lazy",
+      "L05.map.object-key"
      ],
      "mandatory_cases": [
-      "L05.map.fallback-lazy"
+      "L05.collections.map-merge",
+      "L05.map.fallback-lazy",
+      "L05.map.object-key"
      ],
      "requirement": "required"
     },
     "invalid": {
      "cases": [
+      "L05.collections.operator-array-map-rejected",
       "L05.map.missing-key",
       "L05.map.mixed-key-types-rejected",
-      "L05.map.object-key",
+      "L05.map.resource-key-rejected",
       "L05.map.undefined-key-variable"
      ],
      "mandatory_cases": [
+      "L05.collections.operator-array-map-rejected",
       "L05.map.missing-key",
       "L05.map.mixed-key-types-rejected",
-      "L05.map.object-key",
+      "L05.map.resource-key-rejected",
       "L05.map.undefined-key-variable"
      ],
      "requirement": "required"
     },
     "normal": {
      "cases": [
-      "L05.map.access"
+      "L05.collections.map-difference",
+      "L05.collections.map-merge",
+      "L05.map.access",
+      "L05.map.object-key"
      ],
      "mandatory_cases": [
-      "L05.map.access"
+      "L05.collections.map-difference",
+      "L05.collections.map-merge",
+      "L05.map.access",
+      "L05.map.object-key"
      ],
      "requirement": "required"
     }
@@ -1574,7 +1767,7 @@
     "docs/okkama-spec-11072026.md#6.3"
    ],
    "status": "mandatory",
-   "title": "Maps: expression keys, scalar key types with exact key identity, missing keys fail unless `else`, keys()/values() sorted by key"
+   "title": "Maps: expression keys, scalar or value-object key types with exact key identity, missing keys fail unless `else`, keys()/values() sorted by key"
   },
   {
    "aspects": {
@@ -1746,11 +1939,13 @@
      "cases": [
       "L00.exit.if-expression",
       "L01.gram.if.chains",
+      "L03.if.expression-else-if",
       "L03.if.statement-and-expression"
      ],
      "mandatory_cases": [
       "L00.exit.if-expression",
       "L01.gram.if.chains",
+      "L03.if.expression-else-if",
       "L03.if.statement-and-expression"
      ],
      "requirement": "required"
@@ -1998,10 +2193,12 @@
    "aspects": {
     "boundary": {
      "cases": [
-      "L03.return.from-functional-block"
+      "L03.return.from-functional-block",
+      "L03.return.postfix-if"
      ],
      "mandatory_cases": [
-      "L03.return.from-functional-block"
+      "L03.return.from-functional-block",
+      "L03.return.postfix-if"
      ],
      "requirement": "required"
     },
@@ -2030,11 +2227,13 @@
     "normal": {
      "cases": [
       "L00.exit.explicit-return",
-      "L03.return.from-nested-loop"
+      "L03.return.from-nested-loop",
+      "L03.return.postfix-if"
      ],
      "mandatory_cases": [
       "L00.exit.explicit-return",
-      "L03.return.from-nested-loop"
+      "L03.return.from-nested-loop",
+      "L03.return.postfix-if"
      ],
      "requirement": "required"
     }
@@ -2570,6 +2769,58 @@
    "aspects": {
     "boundary": {
      "cases": [
+      "L07.catch-pattern.cases-and-types",
+      "L07.catch-pattern.unmatched-propagates"
+     ],
+     "mandatory_cases": [
+      "L07.catch-pattern.cases-and-types",
+      "L07.catch-pattern.unmatched-propagates"
+     ],
+     "requirement": "required"
+    },
+    "interaction": {
+     "cases": [
+      "L07.catch-pattern.cases-and-types"
+     ],
+     "mandatory_cases": [
+      "L07.catch-pattern.cases-and-types"
+     ],
+     "requirement": "required"
+    },
+    "invalid": {
+     "cases": [
+      "L07.catch-pattern.bindings-need-one-pattern",
+      "L07.catch-pattern.plain-enum-case"
+     ],
+     "mandatory_cases": [
+      "L07.catch-pattern.bindings-need-one-pattern",
+      "L07.catch-pattern.plain-enum-case"
+     ],
+     "requirement": "required"
+    },
+    "normal": {
+     "cases": [
+      "L07.catch-pattern.cases-and-types"
+     ],
+     "mandatory_cases": [
+      "L07.catch-pattern.cases-and-types"
+     ],
+     "requirement": "required"
+    }
+   },
+   "contract": "ERR.CATCH-PATTERNS",
+   "discrepancies": [],
+   "family": "Errors, cleanup and lifetimes",
+   "spec_refs": [
+    "docs/okkama-spec-11072026.md#9.6"
+   ],
+   "status": "mandatory",
+   "title": "catch clauses with several types or error enum case patterns; a missed case continues with the next clause"
+  },
+  {
+   "aspects": {
+    "boundary": {
+     "cases": [
       "L07.confirm.lazy-else"
      ],
      "mandatory_cases": [
@@ -2656,6 +2907,63 @@
   {
    "aspects": {
     "boundary": {
+     "cases": [
+      "L07.error-enum.non-exhaustive-match",
+      "L07.error-enum.throw-and-catch"
+     ],
+     "mandatory_cases": [
+      "L07.error-enum.non-exhaustive-match",
+      "L07.error-enum.throw-and-catch"
+     ],
+     "requirement": "required"
+    },
+    "interaction": {
+     "cases": [
+      "L07.error-enum.throw-and-catch"
+     ],
+     "mandatory_cases": [
+      "L07.error-enum.throw-and-catch"
+     ],
+     "requirement": "required"
+    },
+    "invalid": {
+     "cases": [
+      "L07.error-enum.catch-plain-enum",
+      "L07.error-enum.generic",
+      "L07.error-enum.object-payload"
+     ],
+     "mandatory_cases": [
+      "L07.error-enum.catch-plain-enum",
+      "L07.error-enum.generic",
+      "L07.error-enum.object-payload"
+     ],
+     "requirement": "required"
+    },
+    "normal": {
+     "cases": [
+      "L07.error-enum.throw-and-catch",
+      "L07.error-enum.uncaught"
+     ],
+     "mandatory_cases": [
+      "L07.error-enum.throw-and-catch",
+      "L07.error-enum.uncaught"
+     ],
+     "requirement": "required"
+    }
+   },
+   "contract": "ERR.ENUM",
+   "discrepancies": [],
+   "family": "Errors, cleanup and lifetimes",
+   "spec_refs": [
+    "docs/okkama-spec-11072026.md#9.5.1",
+    "docs/okkama-spec-11072026.md#9.6"
+   ],
+   "status": "mandatory",
+   "title": "enum Name is Error declares error values: thrown, caught by enum type or Error, generated text()"
+  },
+  {
+   "aspects": {
+    "boundary": {
      "cases": [],
      "mandatory_cases": [],
      "requirement": "n/a: the contract defines no boundary values distinct from its normal behaviour"
@@ -2691,7 +2999,7 @@
     "docs/okkama-spec-11072026.md#9.5"
    ],
    "status": "mandatory",
-   "title": "Error is a system role requiring text(); objects must explicitly does Error"
+   "title": "Error is a system role requiring text(); only error enums (and NativeFailure) implement it, objects cannot do Error"
   },
   {
    "aspects": {
@@ -2871,7 +3179,7 @@
     "docs/okkama-spec-11072026.md#9.5"
    ],
    "status": "mandatory",
-   "title": "throw accepts only objects that nominally do Error (or NativeFailure)"
+   "title": "throw accepts only error enum values (or NativeFailure and rethrown Error references)"
   },
   {
    "aspects": {
@@ -2912,6 +3220,62 @@
    ],
    "status": "mandatory",
    "title": "try is an expression yielding the try or selected catch value"
+  },
+  {
+   "aspects": {
+    "boundary": {
+     "cases": [
+      "L07.try-mark.optional",
+      "L07.try-mark.panic-passes"
+     ],
+     "mandatory_cases": [
+      "L07.try-mark.optional",
+      "L07.try-mark.panic-passes"
+     ],
+     "requirement": "required"
+    },
+    "interaction": {
+     "cases": [
+      "L07.try-mark.optional",
+      "L07.try-mark.optional-successor"
+     ],
+     "mandatory_cases": [
+      "L07.try-mark.optional",
+      "L07.try-mark.optional-successor"
+     ],
+     "requirement": "required"
+    },
+    "invalid": {
+     "cases": [
+      "L07.try-mark.optional-successor",
+      "L07.try-mark.optional-void"
+     ],
+     "mandatory_cases": [
+      "L07.try-mark.optional-successor",
+      "L07.try-mark.optional-void"
+     ],
+     "requirement": "required"
+    },
+    "normal": {
+     "cases": [
+      "L07.try-mark.force-panics",
+      "L07.try-mark.optional"
+     ],
+     "mandatory_cases": [
+      "L07.try-mark.force-panics",
+      "L07.try-mark.optional"
+     ],
+     "requirement": "required"
+    }
+   },
+   "contract": "ERR.TRY-MARK",
+   "discrepancies": [],
+   "family": "Errors, cleanup and lifetimes",
+   "spec_refs": [
+    "docs/okkama-spec-11072026.md#9.6.1"
+   ],
+   "status": "mandatory",
+   "title": "try? value yields Maybe<T> (none on a thrown error); try! value turns a thrown error into a panic"
   },
   {
    "aspects": {
@@ -3021,9 +3385,11 @@
     },
     "normal": {
      "cases": [
+      "L05.generic.bound-role-argument",
       "L05.generic.bound-satisfied"
      ],
      "mandatory_cases": [
+      "L05.generic.bound-role-argument",
       "L05.generic.bound-satisfied"
      ],
      "requirement": "required"
@@ -3187,6 +3553,57 @@
   {
    "aspects": {
     "boundary": {
+     "cases": [],
+     "mandatory_cases": [],
+     "requirement": "n/a: the contract defines no boundary values distinct from its normal behaviour"
+    },
+    "interaction": {
+     "cases": [
+      "L05.generic.key-param-forwarded-rejected",
+      "L05.generic.key-param-values"
+     ],
+     "mandatory_cases": [
+      "L05.generic.key-param-forwarded-rejected",
+      "L05.generic.key-param-values"
+     ],
+     "requirement": "required"
+    },
+    "invalid": {
+     "cases": [
+      "L05.generic.key-param-forwarded-rejected",
+      "L05.generic.key-param-literal-rejected",
+      "L05.generic.key-param-rejected"
+     ],
+     "mandatory_cases": [
+      "L05.generic.key-param-forwarded-rejected",
+      "L05.generic.key-param-literal-rejected",
+      "L05.generic.key-param-rejected"
+     ],
+     "requirement": "required"
+    },
+    "normal": {
+     "cases": [
+      "L05.generic.key-param-values"
+     ],
+     "mandatory_cases": [
+      "L05.generic.key-param-values"
+     ],
+     "requirement": "required"
+    }
+   },
+   "contract": "GEN.KEY-PARAMS",
+   "discrepancies": [],
+   "family": "Types, generics and collections",
+   "spec_refs": [
+    "docs/okkama-spec-11072026.md#6.5",
+    "docs/okkama-spec-11072026.md#8.8"
+   ],
+   "status": "mandatory",
+   "title": "A type parameter used as a map key takes only key types, checked at specialization and through parameters passed on"
+  },
+  {
+   "aspects": {
+    "boundary": {
      "cases": [
       "L05.generic.fake-target",
       "L05.generic.role-evidence-from-field"
@@ -3251,22 +3668,26 @@
       "L01.gram.action.empty-result",
       "L01.gram.action.missing-parens",
       "L01.gram.action.missing-result",
-      "L01.gram.action.untyped-param"
+      "L01.gram.action.untyped-param",
+      "L01.gram.params.grouped-variadic-rejected"
      ],
      "mandatory_cases": [
       "L01.gram.action.empty-result",
       "L01.gram.action.missing-parens",
       "L01.gram.action.missing-result",
-      "L01.gram.action.untyped-param"
+      "L01.gram.action.untyped-param",
+      "L01.gram.params.grouped-variadic-rejected"
      ],
      "requirement": "required"
     },
     "normal": {
      "cases": [
-      "L01.gram.action.forms"
+      "L01.gram.action.forms",
+      "L01.gram.params.grouped"
      ],
      "mandatory_cases": [
-      "L01.gram.action.forms"
+      "L01.gram.action.forms",
+      "L01.gram.params.grouped"
      ],
      "requirement": "required"
     }
@@ -3773,23 +4194,23 @@
      "cases": [
       "L01.gram.if.dangling-else",
       "L01.gram.if.else-expression",
-      "L01.gram.if.no-braces",
-      "L03.if.expression-else-if"
+      "L01.gram.if.no-braces"
      ],
      "mandatory_cases": [
       "L01.gram.if.dangling-else",
       "L01.gram.if.else-expression",
-      "L01.gram.if.no-braces",
-      "L03.if.expression-else-if"
+      "L01.gram.if.no-braces"
      ],
      "requirement": "required"
     },
     "normal": {
      "cases": [
-      "L01.gram.if.chains"
+      "L01.gram.if.chains",
+      "L03.if.expression-else-if"
      ],
      "mandatory_cases": [
-      "L01.gram.if.chains"
+      "L01.gram.if.chains",
+      "L03.if.expression-else-if"
      ],
      "requirement": "required"
     }
@@ -4367,10 +4788,12 @@
     },
     "normal": {
      "cases": [
-      "L01.gram.return.forms"
+      "L01.gram.return.forms",
+      "L03.return.postfix-if"
      ],
      "mandatory_cases": [
-      "L01.gram.return.forms"
+      "L01.gram.return.forms",
+      "L03.return.postfix-if"
      ],
      "requirement": "required"
     }
@@ -5124,9 +5547,11 @@
    "aspects": {
     "boundary": {
      "cases": [
+      "L01.lex.float.exponent",
       "L01.lex.float.integral-text"
      ],
      "mandatory_cases": [
+      "L01.lex.float.exponent",
       "L01.lex.float.integral-text"
      ],
      "requirement": "required"
@@ -5142,10 +5567,12 @@
     },
     "invalid": {
      "cases": [
+      "L01.lex.float.exponent-out-of-range",
       "L01.lex.float.leading-dot",
       "L01.lex.float.trailing-dot"
      ],
      "mandatory_cases": [
+      "L01.lex.float.exponent-out-of-range",
       "L01.lex.float.leading-dot",
       "L01.lex.float.trailing-dot"
      ],
@@ -5153,10 +5580,12 @@
     },
     "normal": {
      "cases": [
-      "L01.lex.float.basic"
+      "L01.lex.float.basic",
+      "L01.lex.float.exponent"
      ],
      "mandatory_cases": [
-      "L01.lex.float.basic"
+      "L01.lex.float.basic",
+      "L01.lex.float.exponent"
      ],
      "requirement": "required"
     }
@@ -5169,7 +5598,7 @@
     "docs/okkama-grammar-1.0.ebnf"
    ],
    "status": "mandatory",
-   "title": "Float literals are digits '.' digits"
+   "title": "Float literals are digits '.' digits, digits with an exponent, or both"
   },
   {
    "aspects": {
@@ -5235,9 +5664,13 @@
      "requirement": "n/a: no fragile cross-feature interaction is identified in the audited sources"
     },
     "invalid": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "n/a: no invalid decimal spelling is specified; out-of-range literals are covered by VAL.INT-OVERFLOW (unresolved)"
+     "cases": [
+      "L01.lex.int.double-underscore"
+     ],
+     "mandatory_cases": [
+      "L01.lex.int.double-underscore"
+     ],
+     "requirement": "required"
     },
     "normal": {
      "cases": [
@@ -5796,6 +6229,57 @@
   {
    "aspects": {
     "boundary": {
+     "cases": [
+      "L07.destroy.async-not-interrupted"
+     ],
+     "mandatory_cases": [
+      "L07.destroy.async-not-interrupted"
+     ],
+     "requirement": "required"
+    },
+    "interaction": {
+     "cases": [
+      "L07.destroy.async-on-cancel",
+      "L07.destroy.async-on-failure"
+     ],
+     "mandatory_cases": [
+      "L07.destroy.async-on-cancel",
+      "L07.destroy.async-on-failure"
+     ],
+     "requirement": "required"
+    },
+    "invalid": {
+     "cases": [
+      "L07.destroy.async-in-sync-rejected"
+     ],
+     "mandatory_cases": [
+      "L07.destroy.async-in-sync-rejected"
+     ],
+     "requirement": "required"
+    },
+    "normal": {
+     "cases": [
+      "L07.destroy.async-scope-exit"
+     ],
+     "mandatory_cases": [
+      "L07.destroy.async-scope-exit"
+     ],
+     "requirement": "required"
+    }
+   },
+   "contract": "LIFE.ASYNC-DESTROY",
+   "discrepancies": [],
+   "family": "Errors, cleanup and lifetimes",
+   "spec_refs": [
+    "docs/okkama-spec-11072026.md#19",
+    "docs/okkama-spec-11072026.md#18"
+   ],
+   "status": "mandatory",
+   "title": "async destroy is awaited at the owning async scope's exit in reverse order, also on failure paths, without being interrupted by cancellation; sync code cannot own such an object"
+  },
+  {
+   "aspects": {
+    "boundary": {
      "cases": [],
      "mandatory_cases": [],
      "requirement": "n/a: the contract defines no boundary values distinct from its normal behaviour"
@@ -5893,20 +6377,28 @@
    "aspects": {
     "boundary": {
      "cases": [
-      "L07.ownership.alias-borrows"
+      "L07.ownership.alias-borrows",
+      "L07.ownership.shared-structure-returned"
      ],
      "mandatory_cases": [
-      "L07.ownership.alias-borrows"
+      "L07.ownership.alias-borrows",
+      "L07.ownership.shared-structure-returned"
      ],
      "requirement": "required"
     },
     "interaction": {
      "cases": [
+      "L07.ownership.reduce-builder",
       "L07.ownership.returned-object-survives",
+      "L07.ownership.shared-structure-loop",
+      "L07.ownership.shared-structure-returned",
       "L07.ownership.successor-independent"
      ],
      "mandatory_cases": [
+      "L07.ownership.reduce-builder",
       "L07.ownership.returned-object-survives",
+      "L07.ownership.shared-structure-loop",
+      "L07.ownership.shared-structure-returned",
       "L07.ownership.successor-independent"
      ],
      "requirement": "required"
@@ -5918,10 +6410,12 @@
     },
     "normal": {
      "cases": [
-      "L07.ownership.alias-borrows"
+      "L07.ownership.alias-borrows",
+      "L07.ownership.shared-structure-loop"
      ],
      "mandatory_cases": [
-      "L07.ownership.alias-borrows"
+      "L07.ownership.alias-borrows",
+      "L07.ownership.shared-structure-loop"
      ],
      "requirement": "required"
     }
@@ -6020,6 +6514,64 @@
    ],
    "status": "mandatory",
    "title": "`as` replaces the namespace"
+  },
+  {
+   "aspects": {
+    "boundary": {
+     "cases": [
+      "L06.const.failure-rejected",
+      "L06.const.values"
+     ],
+     "mandatory_cases": [
+      "L06.const.failure-rejected",
+      "L06.const.values"
+     ],
+     "requirement": "required"
+    },
+    "interaction": {
+     "cases": [
+      "L06.const.import"
+     ],
+     "mandatory_cases": [
+      "L06.const.import"
+     ],
+     "requirement": "required"
+    },
+    "invalid": {
+     "cases": [
+      "L06.const.call-rejected",
+      "L06.const.cycle-rejected",
+      "L06.const.failure-rejected",
+      "L06.const.hidden-take-rejected"
+     ],
+     "mandatory_cases": [
+      "L06.const.call-rejected",
+      "L06.const.cycle-rejected",
+      "L06.const.failure-rejected",
+      "L06.const.hidden-take-rejected"
+     ],
+     "requirement": "required"
+    },
+    "normal": {
+     "cases": [
+      "L06.const.import",
+      "L06.const.values"
+     ],
+     "mandatory_cases": [
+      "L06.const.import",
+      "L06.const.values"
+     ],
+     "requirement": "required"
+    }
+   },
+   "contract": "MOD.CONST",
+   "discrepancies": [],
+   "family": "Modules and native boundaries",
+   "spec_refs": [
+    "docs/okkama-spec-11072026.md#5.1.2"
+   ],
+   "status": "mandatory",
+   "title": "const declares a module constant the compiler computes; hidden const stays in its module"
   },
   {
    "aspects": {
@@ -6187,6 +6739,62 @@
    ],
    "status": "mandatory",
    "title": "A physical file reached through different spellings is one module; imports are relative to the physical file"
+  },
+  {
+   "aspects": {
+    "boundary": {
+     "cases": [
+      "L06.hidden.contextual-keyword",
+      "L06.hidden.namespace-rejected"
+     ],
+     "mandatory_cases": [
+      "L06.hidden.contextual-keyword",
+      "L06.hidden.namespace-rejected"
+     ],
+     "requirement": "required"
+    },
+    "interaction": {
+     "cases": [
+      "L06.hidden.state-views"
+     ],
+     "mandatory_cases": [
+      "L06.hidden.state-views"
+     ],
+     "requirement": "required"
+    },
+    "invalid": {
+     "cases": [
+      "L06.hidden.namespace-rejected",
+      "L06.hidden.public-does-hidden-role",
+      "L06.hidden.signature-leak",
+      "L06.hidden.take-rejected"
+     ],
+     "mandatory_cases": [
+      "L06.hidden.namespace-rejected",
+      "L06.hidden.public-does-hidden-role",
+      "L06.hidden.signature-leak",
+      "L06.hidden.take-rejected"
+     ],
+     "requirement": "required"
+    },
+    "normal": {
+     "cases": [
+      "L06.hidden.state-views"
+     ],
+     "mandatory_cases": [
+      "L06.hidden.state-views"
+     ],
+     "requirement": "required"
+    }
+   },
+   "contract": "MOD.HIDDEN",
+   "discrepancies": [],
+   "family": "Modules and native boundaries",
+   "spec_refs": [
+    "docs/okkama-spec-11072026.md#5.1.1"
+   ],
+   "status": "mandatory",
+   "title": "hidden object/role/enum is visible only inside its module; public signatures and does lists cannot name hidden types"
   },
   {
    "aspects": {
@@ -6754,18 +7362,28 @@
     },
     "interaction": {
      "cases": [
+      "L04.invariant.escaped-self-after-construction",
       "L04.invariant.projection-not-called"
      ],
      "mandatory_cases": [
+      "L04.invariant.escaped-self-after-construction",
       "L04.invariant.projection-not-called"
      ],
      "requirement": "required"
     },
     "invalid": {
      "cases": [
+      "L04.invariant.escaped-self-bound-action",
+      "L04.invariant.escaped-self-collaborator-call",
+      "L04.invariant.escaped-self-failed-constructor",
+      "L04.invariant.escaped-self-role-call",
       "L04.invariant.self-call-in-constructor"
      ],
      "mandatory_cases": [
+      "L04.invariant.escaped-self-bound-action",
+      "L04.invariant.escaped-self-collaborator-call",
+      "L04.invariant.escaped-self-failed-constructor",
+      "L04.invariant.escaped-self-role-call",
       "L04.invariant.self-call-in-constructor"
      ],
      "requirement": "required"
@@ -6894,9 +7512,11 @@
    "aspects": {
     "boundary": {
      "cases": [
+      "L04.equality.cyclic-graphs",
       "L04.equality.includes-private-fields"
      ],
      "mandatory_cases": [
+      "L04.equality.cyclic-graphs",
       "L04.equality.includes-private-fields"
      ],
      "requirement": "required"
@@ -6989,10 +7609,12 @@
    "aspects": {
     "boundary": {
      "cases": [
-      "L04.fields.defaults-per-construction"
+      "L04.fields.defaults-per-construction",
+      "L04.fields.scalar-replacement"
      ],
      "mandatory_cases": [
-      "L04.fields.defaults-per-construction"
+      "L04.fields.defaults-per-construction",
+      "L04.fields.scalar-replacement"
      ],
      "requirement": "required"
     },
@@ -7023,11 +7645,13 @@
     "normal": {
      "cases": [
       "L01.gram.has.forms",
-      "L04.fields.defaults-per-construction"
+      "L04.fields.defaults-per-construction",
+      "L04.fields.scalar-replacement"
      ],
      "mandatory_cases": [
       "L01.gram.has.forms",
-      "L04.fields.defaults-per-construction"
+      "L04.fields.defaults-per-construction",
+      "L04.fields.scalar-replacement"
      ],
      "requirement": "required"
     }
@@ -7087,6 +7711,52 @@
    "aspects": {
     "boundary": {
      "cases": [
+      "L04.operators.arithmetic-and-ordering"
+     ],
+     "mandatory_cases": [
+      "L04.operators.arithmetic-and-ordering"
+     ],
+     "requirement": "required"
+    },
+    "interaction": {
+     "cases": [],
+     "mandatory_cases": [],
+     "requirement": "n/a: no fragile cross-feature interaction is identified in the audited sources"
+    },
+    "invalid": {
+     "cases": [
+      "L04.operators.same-role-instance-twice-rejected",
+      "L04.operators.undeclared-role-rejected"
+     ],
+     "mandatory_cases": [
+      "L04.operators.same-role-instance-twice-rejected",
+      "L04.operators.undeclared-role-rejected"
+     ],
+     "requirement": "required"
+    },
+    "normal": {
+     "cases": [
+      "L04.operators.arithmetic-and-ordering"
+     ],
+     "mandatory_cases": [
+      "L04.operators.arithmetic-and-ordering"
+     ],
+     "requirement": "required"
+    }
+   },
+   "contract": "OBJ.OPERATOR-ROLES",
+   "discrepancies": [],
+   "family": "Objects, roles, caps and successors",
+   "spec_refs": [
+    "docs/okkama-spec-11072026.md#12.2"
+   ],
+   "status": "mandatory",
+   "title": "Arithmetic and ordering operators on objects dispatch to the operator roles the type declares"
+  },
+  {
+   "aspects": {
+    "boundary": {
+     "cases": [
       "L04.private-actions.overload"
      ],
      "mandatory_cases": [
@@ -7103,21 +7773,25 @@
      "cases": [
       "L03.bound.private-action",
       "L04.private-actions.external-call",
-      "L04.private-actions.peer-call"
+      "L04.private-actions.peer-call",
+      "L04.private-actions.successor-external-call"
      ],
      "mandatory_cases": [
       "L03.bound.private-action",
       "L04.private-actions.external-call",
-      "L04.private-actions.peer-call"
+      "L04.private-actions.peer-call",
+      "L04.private-actions.successor-external-call"
      ],
      "requirement": "required"
     },
     "normal": {
      "cases": [
-      "L01.gram.private.section"
+      "L01.gram.private.section",
+      "L04.private-actions.successor"
      ],
      "mandatory_cases": [
-      "L01.gram.private.section"
+      "L01.gram.private.section",
+      "L04.private-actions.successor"
      ],
      "requirement": "required"
     }
@@ -7956,11 +8630,13 @@
     "boundary": {
      "cases": [
       "L08.channel.close-semantics",
-      "L08.channel.rendezvous"
+      "L08.channel.rendezvous",
+      "L08.intrinsic.retained-arguments"
      ],
      "mandatory_cases": [
       "L08.channel.close-semantics",
-      "L08.channel.rendezvous"
+      "L08.channel.rendezvous",
+      "L08.intrinsic.retained-arguments"
      ],
      "requirement": "required"
     },
@@ -8206,9 +8882,12 @@
      "requirement": "required"
     },
     "normal": {
-     "cases": [],
-     "gap": true,
-     "mandatory_cases": [],
+     "cases": [
+      "L08.timeout.before-and-within"
+     ],
+     "mandatory_cases": [
+      "L08.timeout.before-and-within"
+     ],
      "requirement": "required"
     }
    },
@@ -9011,10 +9690,12 @@
    "aspects": {
     "boundary": {
      "cases": [
-      "L09.compare.builtin-order"
+      "L09.compare.builtin-order",
+      "L09.compare.failing-order-stops-the-sort"
      ],
      "mandatory_cases": [
-      "L09.compare.builtin-order"
+      "L09.compare.builtin-order",
+      "L09.compare.failing-order-stops-the-sort"
      ],
      "requirement": "required"
     },
@@ -9029,10 +9710,12 @@
     },
     "invalid": {
      "cases": [
-      "L09.compare.bool-has-no-order"
+      "L09.compare.bool-has-no-order",
+      "L09.compare.failing-order-stops-the-sort"
      ],
      "mandatory_cases": [
-      "L09.compare.bool-has-no-order"
+      "L09.compare.bool-has-no-order",
+      "L09.compare.failing-order-stops-the-sort"
      ],
      "requirement": "required"
     },
@@ -9198,9 +9881,12 @@
   {
    "aspects": {
     "boundary": {
-     "cases": [],
-     "gap": true,
-     "mandatory_cases": [],
+     "cases": [
+      "L09.ini.native-equivalence"
+     ],
+     "mandatory_cases": [
+      "L09.ini.native-equivalence"
+     ],
      "requirement": "required"
     },
     "interaction": {
@@ -9209,15 +9895,21 @@
      "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
     },
     "invalid": {
-     "cases": [],
-     "gap": true,
-     "mandatory_cases": [],
+     "cases": [
+      "L09.ini.native-equivalence"
+     ],
+     "mandatory_cases": [
+      "L09.ini.native-equivalence"
+     ],
      "requirement": "required"
     },
     "normal": {
-     "cases": [],
-     "gap": true,
-     "mandatory_cases": [],
+     "cases": [
+      "L09.ini.native-equivalence"
+     ],
+     "mandatory_cases": [
+      "L09.ini.native-equivalence"
+     ],
      "requirement": "required"
     }
    },
@@ -9478,9 +10170,12 @@
   {
    "aspects": {
     "boundary": {
-     "cases": [],
-     "gap": true,
-     "mandatory_cases": [],
+     "cases": [
+      "L12.x509-path-search-budget"
+     ],
+     "mandatory_cases": [
+      "L12.x509-path-search-budget"
+     ],
      "requirement": "required"
     },
     "interaction": {
@@ -9489,15 +10184,21 @@
      "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
     },
     "invalid": {
-     "cases": [],
-     "gap": true,
-     "mandatory_cases": [],
+     "cases": [
+      "L12.x509-path-search-budget"
+     ],
+     "mandatory_cases": [
+      "L12.x509-path-search-budget"
+     ],
      "requirement": "required"
     },
     "normal": {
-     "cases": [],
-     "gap": true,
-     "mandatory_cases": [],
+     "cases": [
+      "L12.x509-path-search-budget"
+     ],
+     "mandatory_cases": [
+      "L12.x509-path-search-budget"
+     ],
      "requirement": "required"
     }
    },
@@ -9770,9 +10471,12 @@
   {
    "aspects": {
     "boundary": {
-     "cases": [],
-     "gap": true,
-     "mandatory_cases": [],
+     "cases": [
+      "L11.sqlite.param-binding"
+     ],
+     "mandatory_cases": [
+      "L11.sqlite.param-binding"
+     ],
      "requirement": "required"
     },
     "interaction": {
@@ -9781,15 +10485,66 @@
      "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
     },
     "invalid": {
-     "cases": [],
-     "gap": true,
-     "mandatory_cases": [],
+     "cases": [
+      "L11.sqlite.param-binding"
+     ],
+     "mandatory_cases": [
+      "L11.sqlite.param-binding"
+     ],
      "requirement": "required"
     },
     "normal": {
+     "cases": [
+      "L11.sqlite.param-binding"
+     ],
+     "mandatory_cases": [
+      "L11.sqlite.param-binding"
+     ],
+     "requirement": "required"
+    }
+   },
+   "contract": "STD.DB.PARAM",
+   "discrepancies": [],
+   "family": "Standard library: db",
+   "spec_refs": [
+    "std/db/param.ok",
+    "docs/std/db-values.md"
+   ],
+   "status": "mandatory",
+   "title": "std db/param typed bound values and Maybe NULL contract"
+  },
+  {
+   "aspects": {
+    "boundary": {
+     "cases": [
+      "L11.sqlite.prepared-pool-query"
+     ],
+     "mandatory_cases": [
+      "L11.sqlite.prepared-pool-query"
+     ],
+     "requirement": "required"
+    },
+    "interaction": {
      "cases": [],
-     "gap": true,
      "mandatory_cases": [],
+     "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
+    },
+    "invalid": {
+     "cases": [
+      "L11.sqlite.prepared-pool-query"
+     ],
+     "mandatory_cases": [
+      "L11.sqlite.prepared-pool-query"
+     ],
+     "requirement": "required"
+    },
+    "normal": {
+     "cases": [
+      "L11.sqlite.prepared-pool-query"
+     ],
+     "mandatory_cases": [
+      "L11.sqlite.prepared-pool-query"
+     ],
      "requirement": "required"
     }
    },
@@ -9805,9 +10560,12 @@
   {
    "aspects": {
     "boundary": {
-     "cases": [],
-     "gap": true,
-     "mandatory_cases": [],
+     "cases": [
+      "L11.sqlite.prepared-pool-query"
+     ],
+     "mandatory_cases": [
+      "L11.sqlite.prepared-pool-query"
+     ],
      "requirement": "required"
     },
     "interaction": {
@@ -9816,15 +10574,21 @@
      "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
     },
     "invalid": {
-     "cases": [],
-     "gap": true,
-     "mandatory_cases": [],
+     "cases": [
+      "L11.sqlite.prepared-pool-query"
+     ],
+     "mandatory_cases": [
+      "L11.sqlite.prepared-pool-query"
+     ],
      "requirement": "required"
     },
     "normal": {
-     "cases": [],
-     "gap": true,
-     "mandatory_cases": [],
+     "cases": [
+      "L11.sqlite.prepared-pool-query"
+     ],
+     "mandatory_cases": [
+      "L11.sqlite.prepared-pool-query"
+     ],
      "requirement": "required"
     }
    },
@@ -9840,9 +10604,20 @@
   {
    "aspects": {
     "boundary": {
-     "cases": [],
-     "gap": true,
-     "mandatory_cases": [],
+     "cases": [
+      "L08.db.query-lifetime",
+      "L11.sqlite.closed-reply-row",
+      "L11.sqlite.prepared-pool-query",
+      "L11.sqlite.query-cardinality",
+      "L11.sqlite.throughput-lifetime"
+     ],
+     "mandatory_cases": [
+      "L08.db.query-lifetime",
+      "L11.sqlite.closed-reply-row",
+      "L11.sqlite.prepared-pool-query",
+      "L11.sqlite.query-cardinality",
+      "L11.sqlite.throughput-lifetime"
+     ],
      "requirement": "required"
     },
     "interaction": {
@@ -9851,16 +10626,80 @@
      "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
     },
     "invalid": {
-     "cases": [],
-     "gap": true,
-     "mandatory_cases": [],
+     "cases": [
+      "L08.db.query-lifetime",
+      "L11.sqlite.closed-reply-row",
+      "L11.sqlite.prepared-pool-query",
+      "L11.sqlite.query-cardinality",
+      "L11.sqlite.throughput-lifetime"
+     ],
+     "mandatory_cases": [
+      "L08.db.query-lifetime",
+      "L11.sqlite.closed-reply-row",
+      "L11.sqlite.prepared-pool-query",
+      "L11.sqlite.query-cardinality",
+      "L11.sqlite.throughput-lifetime"
+     ],
      "requirement": "required"
     },
     "normal": {
      "cases": [
+      "L11.sqlite.closed-reply-row",
+      "L11.sqlite.prepared-pool-query",
+      "L11.sqlite.query-cardinality",
+      "L11.sqlite.throughput-lifetime"
+     ],
+     "mandatory_cases": [
+      "L11.sqlite.closed-reply-row",
+      "L11.sqlite.prepared-pool-query",
+      "L11.sqlite.query-cardinality",
+      "L11.sqlite.throughput-lifetime"
+     ],
+     "requirement": "required"
+    }
+   },
+   "contract": "STD.DB.QUERY",
+   "discrepancies": [],
+   "family": "Standard library: db",
+   "spec_refs": [
+    "std/db/query.ok",
+    "docs/std/db-values.md"
+   ],
+   "status": "mandatory",
+   "title": "std db/query cardinality, bounded collection and streaming ownership contract"
+  },
+  {
+   "aspects": {
+    "boundary": {
+     "cases": [
+      "L09.db.row-readers"
+     ],
+     "mandatory_cases": [
+      "L09.db.row-readers"
+     ],
+     "requirement": "required"
+    },
+    "interaction": {
+     "cases": [],
+     "mandatory_cases": [],
+     "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
+    },
+    "invalid": {
+     "cases": [
+      "L09.db.row-readers"
+     ],
+     "mandatory_cases": [
+      "L09.db.row-readers"
+     ],
+     "requirement": "required"
+    },
+    "normal": {
+     "cases": [
+      "L09.db.row-readers",
       "L11.sqlite.round-trip"
      ],
      "mandatory_cases": [
+      "L09.db.row-readers",
       "L11.sqlite.round-trip"
      ],
      "requirement": "required"
@@ -9878,9 +10717,12 @@
   {
    "aspects": {
     "boundary": {
-     "cases": [],
-     "gap": true,
-     "mandatory_cases": [],
+     "cases": [
+      "L09.db.row-readers"
+     ],
+     "mandatory_cases": [
+      "L09.db.row-readers"
+     ],
      "requirement": "required"
     },
     "interaction": {
@@ -9889,16 +10731,21 @@
      "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
     },
     "invalid": {
-     "cases": [],
-     "gap": true,
-     "mandatory_cases": [],
+     "cases": [
+      "L09.db.row-readers"
+     ],
+     "mandatory_cases": [
+      "L09.db.row-readers"
+     ],
      "requirement": "required"
     },
     "normal": {
      "cases": [
+      "L09.db.row-readers",
       "L11.sqlite.round-trip"
      ],
      "mandatory_cases": [
+      "L09.db.row-readers",
       "L11.sqlite.round-trip"
      ],
      "requirement": "required"
@@ -9928,9 +10775,11 @@
     },
     "interaction": {
      "cases": [
+      "L11.sqlite.cancel-close-race",
       "L11.sqlite.transaction-rollback-commit"
      ],
      "mandatory_cases": [
+      "L11.sqlite.cancel-close-race",
       "L11.sqlite.transaction-rollback-commit"
      ],
      "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
@@ -9946,9 +10795,11 @@
     },
     "normal": {
      "cases": [
+      "L11.sqlite.cancel-close-race",
       "L11.sqlite.round-trip"
      ],
      "mandatory_cases": [
+      "L11.sqlite.cancel-close-race",
       "L11.sqlite.round-trip"
      ],
      "requirement": "required"
@@ -10071,9 +10922,12 @@
   {
    "aspects": {
     "boundary": {
-     "cases": [],
-     "gap": true,
-     "mandatory_cases": [],
+     "cases": [
+      "L11.sqlite.prepared-pool-query"
+     ],
+     "mandatory_cases": [
+      "L11.sqlite.prepared-pool-query"
+     ],
      "requirement": "required"
     },
     "interaction": {
@@ -10082,16 +10936,23 @@
      "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
     },
     "invalid": {
-     "cases": [],
-     "gap": true,
-     "mandatory_cases": [],
+     "cases": [
+      "L11.sqlite.prepared-pool-query"
+     ],
+     "mandatory_cases": [
+      "L11.sqlite.prepared-pool-query"
+     ],
      "requirement": "required"
     },
     "normal": {
      "cases": [
+      "L11.sqlite.param-binding",
+      "L11.sqlite.prepared-pool-query",
       "L11.sqlite.round-trip"
      ],
      "mandatory_cases": [
+      "L11.sqlite.param-binding",
+      "L11.sqlite.prepared-pool-query",
       "L11.sqlite.round-trip"
      ],
      "requirement": "required"
@@ -15176,11 +16037,13 @@
     "boundary": {
      "cases": [
       "L09.json.codec",
+      "L09.json.member-readers",
       "L09.json.parsed-reading",
       "L09.json.typed-reading"
      ],
      "mandatory_cases": [
       "L09.json.codec",
+      "L09.json.member-readers",
       "L09.json.parsed-reading",
       "L09.json.typed-reading"
      ],
@@ -15194,11 +16057,13 @@
     "invalid": {
      "cases": [
       "L09.json.codec",
+      "L09.json.member-readers",
       "L09.json.parsed-reading",
       "L09.json.typed-reading"
      ],
      "mandatory_cases": [
       "L09.json.codec",
+      "L09.json.member-readers",
       "L09.json.parsed-reading",
       "L09.json.typed-reading"
      ],
@@ -15207,11 +16072,13 @@
     "normal": {
      "cases": [
       "L09.json.codec",
+      "L09.json.member-readers",
       "L09.json.parsed-reading",
       "L09.json.typed-reading"
      ],
      "mandatory_cases": [
       "L09.json.codec",
+      "L09.json.member-readers",
       "L09.json.parsed-reading",
       "L09.json.typed-reading"
      ],
@@ -20350,8 +21217,12 @@
      "requirement": "required"
     },
     "interaction": {
-     "cases": [],
-     "mandatory_cases": [],
+     "cases": [
+      "L11.tls.cancelled-read-keeps-data"
+     ],
+     "mandatory_cases": [
+      "L11.tls.cancelled-read-keeps-data"
+     ],
      "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
     },
     "invalid": {
@@ -20488,7 +21359,7 @@
     "std/numbers/bigint.ok"
    ],
    "status": "mandatory",
-   "title": "std numbers/bigint public contract (BigDifference, BigDivisionByZero, BigGcd, BigInt, BigLcm, BigPower, BigPowerLimitExceeded, BigProduct, BigQuotient, BigRemainder, BigSum, InvalidBigExponent, InvalidBigInt, InvalidBigPowerLimit)"
+   "title": "std numbers/bigint public contract (BigDivisionByZero, BigInt, BigPowerLimitExceeded, InvalidBigExponent, InvalidBigInt, InvalidBigPowerLimit)"
   },
   {
    "aspects": {
@@ -20568,6 +21439,50 @@
    ],
    "status": "mandatory",
    "title": "std numbers/float public contract (Binary64RoundingInterval, BinaryPowerRatio, FloatDecimalCandidate, InvalidFloatRepresentation, ShortestFloat)"
+  },
+  {
+   "aspects": {
+    "boundary": {
+     "cases": [
+      "L04.operators.arithmetic-and-ordering"
+     ],
+     "mandatory_cases": [
+      "L04.operators.arithmetic-and-ordering"
+     ],
+     "requirement": "required"
+    },
+    "interaction": {
+     "cases": [],
+     "mandatory_cases": [],
+     "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
+    },
+    "invalid": {
+     "cases": [
+      "L04.operators.undeclared-role-rejected"
+     ],
+     "mandatory_cases": [
+      "L04.operators.undeclared-role-rejected"
+     ],
+     "requirement": "required"
+    },
+    "normal": {
+     "cases": [
+      "L04.operators.arithmetic-and-ordering"
+     ],
+     "mandatory_cases": [
+      "L04.operators.arithmetic-and-ordering"
+     ],
+     "requirement": "required"
+    }
+   },
+   "contract": "STD.OPERATORS",
+   "discrepancies": [],
+   "family": "Standard library: operators",
+   "spec_refs": [
+    "std/operators.ok"
+   ],
+   "status": "mandatory",
+   "title": "std operators public contract (Adding, Dividing, Multiplying, Negating, Remaindering, Subtracting)"
   },
   {
    "aspects": {
@@ -22159,38 +23074,6 @@
    ],
    "status": "informative",
    "title": "std runtime/idna public contract (no public declarations)"
-  },
-  {
-   "aspects": {
-    "boundary": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "n/a: module owns no public declarations"
-    },
-    "interaction": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
-    },
-    "invalid": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "n/a: module owns no public declarations"
-    },
-    "normal": {
-     "cases": [],
-     "mandatory_cases": [],
-     "requirement": "required"
-    }
-   },
-   "contract": "STD.RUNTIME.INI",
-   "discrepancies": [],
-   "family": "Standard library: runtime",
-   "spec_refs": [
-    "std/runtime/ini.ok"
-   ],
-   "status": "informative",
-   "title": "std runtime/ini public contract (no public declarations)"
   },
   {
    "aspects": {
@@ -24620,9 +25503,11 @@
     },
     "normal": {
      "cases": [
+      "L09.time.operators",
       "L10.clock.monotonic-order"
      ],
      "mandatory_cases": [
+      "L09.time.operators",
       "L10.clock.monotonic-order"
      ],
      "requirement": "required"
@@ -24743,10 +25628,12 @@
     },
     "normal": {
      "cases": [
-      "L09.time.durations"
+      "L09.time.durations",
+      "L09.time.operators"
      ],
      "mandatory_cases": [
-      "L09.time.durations"
+      "L09.time.durations",
+      "L09.time.operators"
      ],
      "requirement": "required"
     }
@@ -25688,7 +26575,9 @@
       "L04.successor.assign-in-destroy",
       "L04.successor.assign-outside-successor",
       "L04.successor.assign-unknown-field",
-      "L04.successor.assign-wrong-type"
+      "L04.successor.assign-wrong-type",
+      "L04.successor.object-role-result",
+      "L04.successor.tail-replacement"
      ],
      "mandatory_cases": [
       "L03.return.value-in-successor",
@@ -25696,15 +26585,19 @@
       "L04.successor.assign-in-destroy",
       "L04.successor.assign-outside-successor",
       "L04.successor.assign-unknown-field",
-      "L04.successor.assign-wrong-type"
+      "L04.successor.assign-wrong-type",
+      "L04.successor.object-role-result",
+      "L04.successor.tail-replacement"
      ],
      "requirement": "required"
     },
     "normal": {
      "cases": [
+      "L04.private-actions.successor",
       "L04.successor.new-object"
      ],
      "mandatory_cases": [
+      "L04.private-actions.successor",
       "L04.successor.new-object"
      ],
      "requirement": "required"
@@ -25929,21 +26822,25 @@
    "aspects": {
     "boundary": {
      "cases": [
-      "L07.test-runner.isolated-failures"
+      "L07.test-runner.isolated-failures",
+      "L07.test-runner.successor-assertions"
      ],
      "mandatory_cases": [
-      "L07.test-runner.isolated-failures"
+      "L07.test-runner.isolated-failures",
+      "L07.test-runner.successor-assertions"
      ],
      "requirement": "required"
     },
     "interaction": {
      "cases": [
       "L01.gram.test.skipped-in-production",
-      "L07.test-runner.isolated-failures"
+      "L07.test-runner.isolated-failures",
+      "L07.test-runner.successor-assertions"
      ],
      "mandatory_cases": [
       "L01.gram.test.skipped-in-production",
-      "L07.test-runner.isolated-failures"
+      "L07.test-runner.isolated-failures",
+      "L07.test-runner.successor-assertions"
      ],
      "requirement": "required"
     },
@@ -26701,10 +27598,10 @@
    "aspects": {
     "boundary": {
      "cases": [
-      "L02.char.string-cast"
+      "L02.char.code-round-trip"
      ],
      "mandatory_cases": [
-      "L02.char.string-cast"
+      "L02.char.code-round-trip"
      ],
      "requirement": "required"
     },
@@ -26716,20 +27613,26 @@
     "invalid": {
      "cases": [
       "L02.char.equal-string",
+      "L02.char.surrogate-rejected",
       "L02.string.plus-char"
      ],
      "mandatory_cases": [
       "L02.char.equal-string",
+      "L02.char.surrogate-rejected",
       "L02.string.plus-char"
      ],
      "requirement": "required"
     },
     "normal": {
      "cases": [
-      "L01.lex.char.basic-and-escapes"
+      "L01.lex.char.basic-and-escapes",
+      "L02.char.code-round-trip",
+      "L02.char.string-cast"
      ],
      "mandatory_cases": [
-      "L01.lex.char.basic-and-escapes"
+      "L01.lex.char.basic-and-escapes",
+      "L02.char.code-round-trip",
+      "L02.char.string-cast"
      ],
      "requirement": "required"
     }
@@ -26739,10 +27642,12 @@
    "family": "Values and operators",
    "spec_refs": [
     "docs/okkama-spec-11072026.md#6.1",
+    "docs/okkama-spec-11072026.md#6.6",
+    "docs/okkama-spec-11072026.md#6.6.1",
     "docs/okkama-spec-11072026.md#8.4"
    ],
    "status": "mandatory",
-   "title": "char is distinct from string and compares only with char"
+   "title": "char is distinct from string, compares only with char, and converts to its code point and text"
   },
   {
    "aspects": {
@@ -27038,10 +27943,12 @@
    "aspects": {
     "boundary": {
      "cases": [
-      "L02.int.arith-extremes"
+      "L02.int.arith-extremes",
+      "L02.int.pow-exact"
      ],
      "mandatory_cases": [
-      "L02.int.arith-extremes"
+      "L02.int.arith-extremes",
+      "L02.int.pow-exact"
      ],
      "requirement": "required"
     },
@@ -27071,10 +27978,12 @@
     },
     "normal": {
      "cases": [
-      "L02.int.arith-basic"
+      "L02.int.arith-basic",
+      "L02.int.pow-exact"
      ],
      "mandatory_cases": [
-      "L02.int.arith-basic"
+      "L02.int.arith-basic",
+      "L02.int.pow-exact"
      ],
      "requirement": "required"
     }
@@ -27261,7 +28170,7 @@
     "docs/okkama-spec-11072026.md#6.6"
    ],
    "status": "mandatory",
-   "title": "less/less_or_equal/more/more_or_equal require the exact same numeric category"
+   "title": "less/less_or_equal/greater/greater_or_equal require the exact same numeric category"
   },
   {
    "aspects": {
@@ -27406,11 +28315,13 @@
     },
     "normal": {
      "cases": [
+      "L02.int.pow-exact",
       "L02.rat.arithmetic",
       "L02.rat.constructor",
       "L02.rat.division"
      ],
      "mandatory_cases": [
+      "L02.int.pow-exact",
       "L02.rat.arithmetic",
       "L02.rat.constructor",
       "L02.rat.division"
@@ -27451,8 +28362,7 @@
       "L02.cast.reject-int-from-bool",
       "L02.cast.reject-int-from-string",
       "L02.cast.reject-named-argument",
-      "L02.cast.reject-scalar-unpack",
-      "L02.char.string-cast"
+      "L02.cast.reject-scalar-unpack"
      ],
      "mandatory_cases": [
       "L02.byte.too-large",
@@ -27460,19 +28370,20 @@
       "L02.cast.reject-int-from-bool",
       "L02.cast.reject-int-from-string",
       "L02.cast.reject-named-argument",
-      "L02.cast.reject-scalar-unpack",
-      "L02.char.string-cast"
+      "L02.cast.reject-scalar-unpack"
      ],
      "requirement": "required"
     },
     "normal": {
      "cases": [
       "L02.byte.construction",
-      "L02.cast.scalar-calls"
+      "L02.cast.scalar-calls",
+      "L02.char.string-cast"
      ],
      "mandatory_cases": [
       "L02.byte.construction",
-      "L02.cast.scalar-calls"
+      "L02.cast.scalar-calls",
+      "L02.char.string-cast"
      ],
      "requirement": "required"
     }
@@ -27587,6 +28498,50 @@
    ],
    "status": "mandatory",
    "title": "`sink <- source` writes through the Writing/ByteSource roles, left-associative, returns the sink"
+  },
+  {
+   "aspects": {
+    "boundary": {
+     "cases": [
+      "L02.string.case-and-repeat"
+     ],
+     "mandatory_cases": [
+      "L02.string.case-and-repeat"
+     ],
+     "requirement": "required"
+    },
+    "interaction": {
+     "cases": [],
+     "mandatory_cases": [],
+     "requirement": "n/a: no fragile cross-feature interaction is identified in the audited sources"
+    },
+    "invalid": {
+     "cases": [
+      "L02.string.repeat-negative"
+     ],
+     "mandatory_cases": [
+      "L02.string.repeat-negative"
+     ],
+     "requirement": "required"
+    },
+    "normal": {
+     "cases": [
+      "L02.string.case-and-repeat"
+     ],
+     "mandatory_cases": [
+      "L02.string.case-and-repeat"
+     ],
+     "requirement": "required"
+    }
+   },
+   "contract": "VAL.STRING-CASE-REPEAT",
+   "discrepancies": [],
+   "family": "Values and operators",
+   "spec_refs": [
+    "docs/okkama-spec-11072026.md#6.6"
+   ],
+   "status": "mandatory",
+   "title": "trim_start, trim_end, lower, upper (full Unicode, no locale) and repeat return new strings"
   },
   {
    "aspects": {
@@ -27722,6 +28677,50 @@
    ],
    "status": "mandatory",
    "title": "replace / replace_first are literal, left-to-right, non-overlapping; empty target means code-point boundaries"
+  },
+  {
+   "aspects": {
+    "boundary": {
+     "cases": [
+      "L02.string.search"
+     ],
+     "mandatory_cases": [
+      "L02.string.search"
+     ],
+     "requirement": "required"
+    },
+    "interaction": {
+     "cases": [],
+     "mandatory_cases": [],
+     "requirement": "n/a: no fragile cross-feature interaction is identified in the audited sources"
+    },
+    "invalid": {
+     "cases": [
+      "L02.string.search-type-rejected"
+     ],
+     "mandatory_cases": [
+      "L02.string.search-type-rejected"
+     ],
+     "requirement": "required"
+    },
+    "normal": {
+     "cases": [
+      "L02.string.search"
+     ],
+     "mandatory_cases": [
+      "L02.string.search"
+     ],
+     "requirement": "required"
+    }
+   },
+   "contract": "VAL.STRING-SEARCH",
+   "discrepancies": [],
+   "family": "Values and operators",
+   "spec_refs": [
+    "docs/okkama-spec-11072026.md#6.6"
+   ],
+   "status": "mandatory",
+   "title": "contains, starts_with, ends_with, find and find_last search by code point"
   },
   {
    "aspects": {
@@ -28476,7 +29475,6 @@
    "STD.ASYNC.SEMAPHORE [normal]",
    "STD.ASYNC.SEMAPHORE [boundary]",
    "STD.ASYNC.SEMAPHORE [invalid]",
-   "STD.ASYNC.TIMEOUT [normal]",
    "STD.ASYNC.TIMEOUT [boundary]",
    "STD.ASYNC.TIMEOUT [invalid]",
    "STD.CALENDAR [normal]",
@@ -28537,9 +29535,6 @@
    "STD.CONFIG.ENVIRONMENT [normal]",
    "STD.CONFIG.ENVIRONMENT [boundary]",
    "STD.CONFIG.ENVIRONMENT [invalid]",
-   "STD.CONFIG.INI [normal]",
-   "STD.CONFIG.INI [boundary]",
-   "STD.CONFIG.INI [invalid]",
    "STD.CONFIG.KEY [normal]",
    "STD.CONFIG.KEY [boundary]",
    "STD.CONFIG.KEY [invalid]",
@@ -28561,9 +29556,6 @@
    "STD.CRYPTO.X509.NAME [normal]",
    "STD.CRYPTO.X509.NAME [boundary]",
    "STD.CRYPTO.X509.NAME [invalid]",
-   "STD.CRYPTO.X509.TRUST [normal]",
-   "STD.CRYPTO.X509.TRUST [boundary]",
-   "STD.CRYPTO.X509.TRUST [invalid]",
    "STD.CRYPTO.X509.VALUE [normal]",
    "STD.CRYPTO.X509.VALUE [boundary]",
    "STD.CRYPTO.X509.VALUE [invalid]",
@@ -28581,16 +29573,6 @@
    "STD.DB.CONNECTION [invalid]",
    "STD.DB.ERROR [boundary]",
    "STD.DB.ERROR [invalid]",
-   "STD.DB.POOL [normal]",
-   "STD.DB.POOL [boundary]",
-   "STD.DB.POOL [invalid]",
-   "STD.DB.PREPARED [normal]",
-   "STD.DB.PREPARED [boundary]",
-   "STD.DB.PREPARED [invalid]",
-   "STD.DB.READ [boundary]",
-   "STD.DB.READ [invalid]",
-   "STD.DB.ROW [boundary]",
-   "STD.DB.ROW [invalid]",
    "STD.DB.SQLITE.BACKUP [normal]",
    "STD.DB.SQLITE.BACKUP [boundary]",
    "STD.DB.SQLITE.BACKUP [invalid]",
@@ -28600,8 +29582,6 @@
    "STD.DB.SQLITE.SCRIPT [normal]",
    "STD.DB.SQLITE.SCRIPT [boundary]",
    "STD.DB.SQLITE.SCRIPT [invalid]",
-   "STD.DB.STATEMENT [boundary]",
-   "STD.DB.STATEMENT [invalid]",
    "STD.DB.TRANSACTION [invalid]",
    "STD.DB.VALUE [boundary]",
    "STD.DB.VALUE [invalid]",
@@ -29632,7 +30612,6 @@
    "STD.ASYNC.BARRIER",
    "STD.ASYNC.LOCK",
    "STD.ASYNC.SEMAPHORE",
-   "STD.ASYNC.TIMEOUT",
    "STD.CALENDAR",
    "STD.CHECKSUM.STATE",
    "STD.CLI.HELP",
@@ -29650,7 +30629,6 @@
    "STD.COMPRESSION.STATE",
    "STD.CONFIG.DOCUMENT",
    "STD.CONFIG.ENVIRONMENT",
-   "STD.CONFIG.INI",
    "STD.CONFIG.KEY",
    "STD.CONFIG.SOURCE",
    "STD.CONFIG.VALUE",
@@ -29658,14 +30636,11 @@
    "STD.CRYPTO.SECRET",
    "STD.CRYPTO.X509.CERTIFICATE",
    "STD.CRYPTO.X509.NAME",
-   "STD.CRYPTO.X509.TRUST",
    "STD.CRYPTO.X509.VALUE",
    "STD.CSV.INPUT",
    "STD.CSV.STREAM",
    "STD.DB.ACQUISITION",
    "STD.DB.CONNECTION",
-   "STD.DB.POOL",
-   "STD.DB.PREPARED",
    "STD.DB.SQLITE.BACKUP",
    "STD.DB.SQLITE.BLOB",
    "STD.DB.SQLITE.SCRIPT",
@@ -29931,7 +30906,6 @@
    "STD.NET.MULTICAST",
    "STD.NET.PUBLIC_SUFFIX",
    "STD.NET.TCP_RACING",
-   "STD.NET.TLS",
    "STD.NET.UDP",
    "STD.NET.UNIX",
    "STD.NUMBERS.FLOAT",
@@ -30001,5 +30975,5 @@
  },
  "results_from": [],
  "schema": "ocs-coverage/1",
- "suite_tree_sha256": "3cb4a14baee71dbe378618e3c29556ccdd224ee930214138a0e11b208ab53bce"
+ "suite_tree_sha256": "c65a5522c23c8dcb22d350a1c1dd7984f4ab7e9a8efa9ccfc099791e1bb5a5e5"
 }

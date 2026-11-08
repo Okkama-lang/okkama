@@ -23,7 +23,9 @@ fn run_stdin(args: &[&str], input: &[u8]) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn okkama");
-    child.stdin.take().unwrap().write_all(input).unwrap();
+    // A usage error exits before reading stdin: the write may then meet a
+    // closed pipe, which the exit status and stderr already report.
+    let _ = child.stdin.take().unwrap().write_all(input);
     child.wait_with_output().unwrap()
 }
 
@@ -281,11 +283,8 @@ fn native_run_engines_execute_source_without_java() {
 #[test]
 fn uncaught_failure_prints_place_and_call_stack() {
     let source = b"module app v1.0.0;\nobject Box {\n    Box();\n    at(i is int) is int { [1, 2][i]; }\n}\nmain() is int {\n    Box().at(5);\n}\n";
-    // The Sparrow core reports the failure without its place yet (#10).
-    let core = run_stdin(&["run", "--engine", "sparrow", "-"], source);
-    assert_eq!(core.status.code(), Some(1));
-    assert_eq!(stderr(&core), "RuntimeError: Array index out of bounds\n");
-    for engine in ["ir", "sparrow-origin"] {
+    // Every engine reports the place and the call stack (the core since #10).
+    for engine in ["ir", "sparrow", "sparrow-origin"] {
         let output = run_stdin(&["run", "--engine", engine, "-"], source);
         assert_eq!(output.status.code(), Some(1));
         let text = stderr(&output);
@@ -552,7 +551,7 @@ fn help_and_version() {
         assert_eq!(output.status.code(), Some(0));
         assert!(stdout(&output).contains("okkama ast <FILE|->"));
         assert!(stdout(&output).contains("okkama ir <FILE|->"));
-        assert!(stdout(&output).contains("okkama build <FILE|-> --target jvm -o <FILE>"));
+        assert!(stdout(&output).contains("okkama build <FILE|-> --target jvm [--budgeted] -o <FILE>"));
         assert!(stderr(&output).is_empty());
     }
     let output = run(&["help", "ast"]);
@@ -648,7 +647,7 @@ fn ir_file_and_stdin_include_module_function_and_return() {
         "^b0:\n",
         "    %0: int = const 1\n",
         "    %1: int = const 1\n",
-        "    %2: int = int.add %0, %1\n",
+        "    %2: int = const 2\n",
         "    ret %2\n",
         "}\n",
     );
@@ -683,9 +682,9 @@ fn ir_keeps_all_statements_and_nested_additions() {
             "    %0: int = const 7\n",
             "    %1: int = const 1\n",
             "    %2: int = const 2\n",
-            "    %3: int = int.add %1, %2\n",
+            "    %3: int = const 3\n",
             "    %4: int = const 3\n",
-            "    %5: int = int.add %3, %4\n",
+            "    %5: int = const 6\n",
             "    ret %5\n",
             "}\n",
         )
@@ -1354,7 +1353,7 @@ fn functions_with_huge_frames_stay_interpreted_under_eager_jit() {
         values.join(", ")
     );
     // Σ(seed + i) for seed 1 and 2 over i < 20 000, modulo 251.
-    let expected = ((count * (count - 1) + 3 * count) % 251) as i32;
+    let expected = (count * (count - 1) + 3 * count) % 251;
     let file = TempFile::new("wide-frame.ok", source.as_bytes());
     for mode in ["off", "eager"] {
         let output = okkama()
@@ -1369,4 +1368,33 @@ fn functions_with_huge_frames_stay_interpreted_under_eager_jit() {
             assert!(stderr(&output).contains("Wide.sum not compiled:"), "{}", stderr(&output));
         }
     }
+}
+
+/// A `cell::Cell` stays in synchronous code (#152): a field cannot hold one
+/// and an async action cannot use one; a sync action that does may be called
+/// from async code.
+#[test]
+fn a_cell_stays_in_synchronous_code() {
+    let source = "module app v1.0.0;\nimport \"cell\" take Cell;\n\
+        object Counter { has count is @Cell<int>; Counter() { count = []; } }\n\
+        object Work {\n    Work();\n    async total(items is @int) is int { let sum = Cell(0); sum.value(); }\n\
+        sum(items is @int) is int { let sum = Cell(0); for items -> item { sum.replace(sum.value() + item); } sum.value(); }\n\
+        async fine(items is @int) is int { self.sum(items); }\n}\n\
+        async main() is int { await Work().fine([1]); }\n";
+    let std = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../std");
+    let mut child = okkama()
+        .args(["check", "-"])
+        .env("OKKAMA_STDLIB_DIR", std)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn okkama");
+    child.stdin.take().unwrap().write_all(source.as_bytes()).unwrap();
+    let output = child.wait_with_output().unwrap();
+    let stderr = stderr(&output);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("Field \"count\" cannot hold a Cell"), "{stderr}");
+    assert!(stderr.contains("A Cell cannot be used in an async action"), "{stderr}");
+    assert_eq!(stderr.matches("error").count(), 2, "{stderr}");
 }

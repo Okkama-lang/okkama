@@ -7,9 +7,11 @@
 #
 # Шаги:
 #   1. release-сборка okkama и sparrow (провал — ворота останавливаются),
-#      тесты Rust всего workspace (release), тесты освобождения IR в debug;
+#      тесты Rust всего workspace (release и debug: глубина стека и
+#      debug-проверки видны только там), clippy без предупреждений;
 #   2. conformance на IR, JVM, Sparrow (ядро; компилирует каждую функцию
-#      целиком), на IR без IR-проходов (OKKAMA_IR_PASSES=none) и, до 0.5, на прежнем VM (`sparrow-origin`, только для
+#      целиком), на IR без IR-проходов (OKKAMA_IR_PASSES=none), на IR со
+#      сборкой циклов на каждом кандидате (OKKAMA_GC=stress) и, до 0.5, на прежнем VM (`sparrow-origin`, только для
 #      сведения: у него нет нативов, добавленных с 0.4.0);
 #   3. встроенные тесты всех модулей std на IR и Sparrow (tools/gate/std-tests.py).
 #
@@ -48,6 +50,11 @@ def git(*args):
         return subprocess.run(["git", "-C", root, *args], capture_output=True, text=True).stdout.strip() or None
     except OSError:
         return None
+def toolchain():
+    try:
+        return subprocess.run(["rustc", "-V"], capture_output=True, text=True, cwd=os.path.join(root, "okkama-rs")).stdout.strip() or None
+    except OSError:
+        return None
 steps = []
 with open(os.path.join(logs, "steps.tsv")) as rows:
     for row in rows:
@@ -64,6 +71,7 @@ if os.path.exists(std):
     known = [line.split("known:", 1)[1].strip() for line in open(std) if line.strip().startswith("known:")]
 report = {
     "commit": os.environ.get("GITHUB_SHA") or os.environ.get("GATE_COMMIT") or git("rev-parse", "HEAD"),
+    "toolchain": toolchain(),
     "passed": failed == 0,
     "steps": steps,
     "known_std_failures": known,
@@ -106,16 +114,27 @@ if [[ $QUICK -eq 0 ]]; then
 fi
 
 if [[ $QUICK -eq 0 ]]; then
-    # Drops of deep value graphs must not recurse: debug frames are larger,
-    # so the IR runtime's drop tests run unoptimized too (#28).
-    step "IR runtime drop tests (debug)"
+    # Debug frames are larger and debug assertions are on: stack depth (drops
+    # of deep value graphs, #28) and invariants fail here first (#42).
+    step "Rust tests (debug, workspace)"
     started=$SECONDS
-    if (cd "$ROOT/okkama-rs" && cargo test -p okkama-runtime-core --lib drop_tests >"$LOGS/debug-drop-tests.log" 2>&1); then
-        record "debug drop tests" pass $((SECONDS - started))
+    if (cd "$ROOT/okkama-rs" && cargo test --workspace --no-fail-fast >"$LOGS/cargo-test-debug.log" 2>&1); then
+        record "rust tests debug" pass $((SECONDS - started))
+        echo "ok: $(grep -c '^test result: ok' "$LOGS/cargo-test-debug.log") test binaries"
     else
-        record "debug drop tests" fail $((SECONDS - started))
-        tail -20 "$LOGS/debug-drop-tests.log"
-        fail "IR runtime drop tests (debug)"
+        record "rust tests debug" fail $((SECONDS - started))
+        grep -E "^test .* FAILED|panicked|^error|SIGABRT|overflowed its stack" "$LOGS/cargo-test-debug.log" | head -20
+        fail "Rust tests (debug)"
+    fi
+
+    step "clippy"
+    started=$SECONDS
+    if (cd "$ROOT/okkama-rs" && cargo clippy --workspace --all-targets -- -D warnings >"$LOGS/clippy.log" 2>&1); then
+        record clippy pass $((SECONDS - started))
+    else
+        record clippy fail $((SECONDS - started))
+        grep -E "^(warning|error)" -A4 "$LOGS/clippy.log" | head -30
+        fail "clippy"
     fi
 fi
 
@@ -149,6 +168,9 @@ conformance sparrow --adapter-env OCS_RUST_ENGINE=sparrow
 # Every engine runs the passed OIR: the IR suite again with the passes off
 # shows a pass that changes meaning (#29).
 conformance ir-passes-off --adapter-env OCS_RUST_ENGINE=ir --adapter-env OKKAMA_IR_PASSES=none
+# The IR cycle collector at every candidate: an edge it miscounts frees a
+# live value at once instead of thousands of candidates later (#43).
+conformance ir-gc-stress --adapter-env OCS_RUST_ENGINE=ir --adapter-env OKKAMA_GC=stress
 if [[ $QUICK -eq 0 ]]; then
     conformance sparrow-origin --adapter-env OCS_RUST_ENGINE=sparrow-origin
 fi

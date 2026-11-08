@@ -4,7 +4,7 @@ use super::{PResult, Parser};
 use crate::source::Span;
 use crate::syntax::ParseMode;
 use crate::syntax::ast::{
-    ActionDecl, ActionSignature, CapDecl, ComputedField, ConstructorDecl, ConstructorForm,
+    ActionDecl, ActionSignature, CapDecl, ComputedField, ConstDecl, ConstructorDecl, ConstructorForm,
     DestroyDecl, EnumDecl, FakeBody, FakeDecl, HasDecl, Item, Name, NativeActionDecl,
     NativeObjectDecl, ObjectDecl, ObjectMember, Param, PrivateSection, RoleDecl, RoleMember,
     TestBody, TestDecl, Visibility,
@@ -45,12 +45,24 @@ impl Parser<'_> {
         if self.check(TokenKind::Async) && self.check_next(TokenKind::Native) {
             return Err(self.error_here("Native declarations cannot be async."));
         }
-        // `hidden` is contextual: only before `object`, `role` or `enum`.
+        // `class Name` and `interface Name` from other languages (#227).
+        if self.check_name() && is_type_word(self.lexeme(self.nth(1))) {
+            match self.lexeme(self.peek()) {
+                "class" | "struct" => {
+                    return Err(self.error_here("Okkama has no classes: declare an `object` (fields, a constructor, actions)."));
+                }
+                "interface" | "trait" | "protocol" => {
+                    return Err(self.error_here("Okkama's interfaces are roles: declare a `role` and perform it with `does`."));
+                }
+                _ => {}
+            }
+        }
+        // `hidden` is contextual: only before `object`, `role`, `enum` or `const`.
         if self.check_name()
             && self.lexeme(self.peek()) == "hidden"
             && matches!(
                 self.nth(1).kind,
-                TokenKind::Object | TokenKind::Role | TokenKind::Enum
+                TokenKind::Object | TokenKind::Role | TokenKind::Enum | TokenKind::Const
             )
         {
             let start = self.advance().span;
@@ -68,9 +80,16 @@ impl Parser<'_> {
                     decl.hidden = true;
                     decl.span = start.to(decl.span);
                 }
+                Item::Const(decl) => {
+                    decl.hidden = true;
+                    decl.span = start.to(decl.span);
+                }
                 _ => {}
             }
             return Ok(item);
+        }
+        if self.eat(TokenKind::Const) {
+            return Ok(Item::Const(self.const_declaration()?));
         }
         if self.eat(TokenKind::Object) {
             return Ok(Item::Object(self.object_declaration()?));
@@ -223,6 +242,18 @@ impl Parser<'_> {
         if self.check(TokenKind::LeftParen) {
             return Err(self.error_here("Object headers do not accept parameters in v1.0."));
         }
+        // Words from other languages get the construct Okkama uses (#227).
+        if self.check_name() {
+            match self.lexeme(self.peek()) {
+                "extends" | "inherits" => {
+                    return Err(self.error_here(
+                        "Okkama has no inheritance: an object holds the objects it builds on as fields and performs roles with `does Role`.",
+                    ));
+                }
+                "implements" => return Err(self.error_here("An object performs a role with `does Role`, not `implements`.")),
+                _ => {}
+            }
+        }
         let mut roles = Vec::new();
         if self.eat(TokenKind::Does) {
             roles.push(self.type_expr()?);
@@ -285,6 +316,11 @@ impl Parser<'_> {
     }
 
     fn object_member(&mut self, owner: Option<&Name>) -> PResult<ObjectMember> {
+        if self.check_name() && self.lexeme(self.peek()) == "static" && self.nth(1).kind != TokenKind::LeftParen {
+            return Err(self.error_here(
+                "Okkama has no static members: shared state is an object passed in, and a helper is an action of a module-level object or a function value.",
+            ));
+        }
         if self.check_cap_declaration() {
             if owner.is_none() {
                 return Err(self.error_here("Caps are only allowed inside objects."));
@@ -306,10 +342,17 @@ impl Parser<'_> {
         if self.eat(TokenKind::Has) {
             return Ok(ObjectMember::Has(self.has_declaration()?));
         }
+        // `async destroy { … }` is awaited where its owner's scope ends (#154).
+        let start = self.peek().span;
+        let is_async = self.check(TokenKind::Async) && self.check_next(TokenKind::Destroy);
+        if is_async {
+            self.advance();
+        }
         if self.eat(TokenKind::Destroy) {
-            let keyword = self.previous().span;
+            let keyword = if is_async { start } else { self.previous().span };
             let body = self.block()?;
             return Ok(ObjectMember::Destroy(DestroyDecl {
+                is_async,
                 span: keyword.to(body.span),
                 body,
             }));
@@ -380,13 +423,12 @@ impl Parser<'_> {
     /// `Name(params) { }`, `Name(:a, :b);`, `Name(:a) { }` or `Name();`.
     fn constructor_declaration(&mut self, owner: Option<&Name>) -> PResult<ConstructorDecl> {
         let name = self.consume_type_name("Expect constructor name.")?;
-        if let Some(owner) = owner {
-            if name.text != owner.text {
+        if let Some(owner) = owner
+            && name.text != owner.text {
                 return Err(
                     self.error_at_span(name.span, "Constructor name must match enclosing object.")
                 );
             }
-        }
         if self.check(TokenKind::LeftParen) && self.check_next(TokenKind::Colon) {
             return self.constructor_shorthand(name);
         }
@@ -540,10 +582,13 @@ impl Parser<'_> {
                         "Constructor shorthand cannot mix field entries and typed parameters.",
                     ));
                 }
-                params.push(self.parameter()?);
-                if context == ParamContext::Native && self.check(TokenKind::Equal) {
-                    return Err(self.error_here("Native parameters cannot have default values."));
+                let group = self.parameter_group()?;
+                if context == ParamContext::Native
+                    && let Some(default) = group.iter().find_map(|param| param.default.as_ref())
+                {
+                    return Err(self.error_at_span(default.span, "Native parameters cannot have default values."));
                 }
+                params.extend(group);
                 if !self.eat(TokenKind::Comma) || self.check(TokenKind::RightParen) {
                     break;
                 }
@@ -577,6 +622,60 @@ impl Parser<'_> {
         Ok(params)
     }
 
+    /// `name ("," name)* is ...? Type` (#232): names before one type share
+    /// it, as fields do (`has given, family is string;`). A group cannot be
+    /// variadic.
+    pub(super) fn parameter_group(&mut self) -> PResult<Vec<Param>> {
+        let mut names = Vec::new();
+        while self.grouped_name_follows() {
+            names.push(self.consume_identifier("Expect parameter name.")?);
+            self.advance();
+        }
+        let last = self.parameter()?;
+        if names.is_empty() {
+            return Ok(vec![last]);
+        }
+        if last.variadic {
+            return Err(self.error_at_span(
+                names[0].span,
+                "Grouped parameters cannot be variadic: give the variadic parameter its own type.",
+            ));
+        }
+        let mut params: Vec<Param> = names
+            .into_iter()
+            .map(|name| Param {
+                span: name.span.to(last.ty.span),
+                name,
+                variadic: false,
+                ty: last.ty.clone(),
+                shares_type: true,
+                default: None,
+            })
+            .collect();
+        params.push(last);
+        Ok(params)
+    }
+
+    /// At `name ,` inside a group that ends in `is`: another name follows.
+    pub(super) fn grouped_name_follows(&self) -> bool {
+        self.check_name_token(0) && self.nth(1).kind == TokenKind::Comma && Self::group_ends_in_is(&self.tokens, self.pos + 2)
+    }
+
+    fn check_name_token(&self, offset: usize) -> bool {
+        self.nth(offset).kind == TokenKind::Identifier
+    }
+
+    /// Do the tokens from `index` read `name ("," name)* is`?
+    pub(super) fn group_ends_in_is(tokens: &[crate::syntax::token::Token], mut index: usize) -> bool {
+        loop {
+            match (tokens.get(index).map(|t| t.kind), tokens.get(index + 1).map(|t| t.kind)) {
+                (Some(TokenKind::Identifier), Some(TokenKind::Is)) => return true,
+                (Some(TokenKind::Identifier), Some(TokenKind::Comma)) => index += 2,
+                _ => return false,
+            }
+        }
+    }
+
     /// `name is ...? Type`
     pub(super) fn parameter(&mut self) -> PResult<Param> {
         let name = self.consume_identifier("Expect parameter name.")?;
@@ -597,11 +696,15 @@ impl Parser<'_> {
                 name.text
             )));
         }
+        let default = if self.eat(TokenKind::Equal) { Some(self.expression()?) } else { None };
+        let end = default.as_ref().map_or(ty.span, |value| value.span);
         Ok(Param {
-            span: name.span.to(ty.span),
+            span: name.span.to(end),
             name,
             variadic,
             ty,
+            shares_type: false,
+            default,
         })
     }
 
@@ -739,6 +842,27 @@ impl Parser<'_> {
     }
 
     // ===== enums and tests ===================================================
+
+    /// After `const`: `NAME ("is" type)? "=" expr ";"`.
+    fn const_declaration(&mut self) -> PResult<ConstDecl> {
+        let start = self.previous().span;
+        let name = self.consume_binding_name("Expect constant name after \"const\".")?;
+        let ty = if self.eat(TokenKind::Is) {
+            Some(self.type_expr()?)
+        } else {
+            None
+        };
+        self.consume(TokenKind::Equal, "Expect \"=\" after constant name.")?;
+        let value = self.expression()?;
+        let end = self.consume(TokenKind::Semicolon, "Expect \";\" after constant declaration.")?;
+        Ok(ConstDecl {
+            hidden: false,
+            name,
+            ty,
+            value,
+            span: start.to(end.span),
+        })
+    }
 
     /// After `enum`: `Name = (a, b);` or `Name is Error = (a(message is string));`
     fn enum_declaration(&mut self) -> PResult<EnumDecl> {

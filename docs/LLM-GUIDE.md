@@ -109,10 +109,11 @@ okkama exec x.spb      # SPB on the core inside okkama
 
 Environment: `OKKAMA_STDLIB_DIR` (std root), `OKKAMA_ENGINE`,
 `SPARROW_CORE_STATS=1` (= `--stats`: counts of natives, intrinsics, slow paths,
-regions, awaits, heap bytes), `SPARROW_CORE_GC_STRESS=1` (collect at every
+regions, awaits, heap bytes, compile time and code size per function),
+`SPARROW_CORE_DUMP`/`SPARROW_CORE_UNOPTIMIZED`/`SPARROW_CORE_PLAIN=symbol,…|*`
+(§9), `SPARROW_CORE_GC_STRESS=1` (collect at every
 safepoint and poison reclaimed cells: values kept alive by mistake fail at
-once), `OKKAMA_TRACE=off` (no stack in failures; the
-core prints none yet, #10), `OKKAMA_ICU_LIBDIR` (pinned ICU for collation;
+once), `OKKAMA_TRACE=off` (no stack in failures), `OKKAMA_ICU_LIBDIR` (pinned ICU for collation;
 `tools/build-icu-collation.sh`). `OKKAMA_JIT*` switches belong to the previous
 VM only.
 
@@ -157,8 +158,9 @@ zsh does not split `$var`; use `${=var}` or a function when passing commands.
 | All std, core vs previous VM | `python3 okkama-rs/tools/new-runtime/std-compare.py --compiler okkama --stdlib std --reference sparrow-origin --core sparrow --work DIR [prefixes]` | runs each module caged; expected fails: `locale/collation` (ICU), `net/tcp` (network in cage) |
 | Conformance, core vs previous VM | `core-compare.py --compiler … --stdlib std --origin sparrow-origin --core sparrow --work DIR L00 … L13` | caged; skips workers/network; `SPEC` = core matches case.json where the previous VM cannot |
 | Conformance (OCS) | `cd conformance && ./ocs run --adapter adapters/rust/adapter.json --profile full-release -j 6 --adapter-env OCS_RUST_ENGINE=sparrow` | Docker only; the adapter builds its own debug `okkama` in `adapters/rust/.target` |
-| Dependency advisories | `cd okkama-rs && cargo audit --deny warnings` | RustSec against `Cargo.lock`; CI `audit.yml` on every change and weekly. Exceptions with reason and ticket in `okkama-rs/.cargo/audit.toml` (only RUSTSEC-2023-0071, #70) |
-| Release gate | `make gate` (= `tools/gate/docker.sh`, ~40 min) | Rust tests, conformance ir/jvm/sparrow (+ sparrow-origin, informative), std tests ir/sparrow vs `tools/gate/known-failures.txt`; logs in `conformance/reports/runs/gate-*`, statuses from exit codes in `gate.json`; a failed build stops it. On GitHub `gate.yml` runs it on the tagged commit and `packages.yml` publishes only after it passes. The Docker VM has ~8 GB: the container gets 7 GB and 2 cargo jobs (fat LTO) |
+| Dependency advisories | `cd okkama-rs && cargo audit --deny warnings` | RustSec against `Cargo.lock`; CI `audit.yml` on every change and weekly. Exceptions with reason and ticket in `okkama-rs/.cargo/audit.toml` (none since #70) |
+| Generated programs | `tools/gen/okgen.py run --seeds N` (`show SEED`) | terminating deterministic programs (BigInt, strings, arrays, objects, roles, closures, try/catch, recursion) on ir/sparrow/jvm; a disagreement is minimized (ddmin over `main`) into `conformance/reports/runs/okgen/<seed>`; `tools/gen/mutants.sh` checks it finds a seeded defect in each engine. Containers only |
+| Release gate | `make gate` (= `tools/gate/docker.sh`, ~40 min) | Rust tests (release and debug), clippy with `-D warnings`, conformance ir/jvm/sparrow (+ sparrow-origin, informative), std tests ir/sparrow vs `tools/gate/known-failures.txt`; logs in `conformance/reports/runs/gate-*`, statuses from exit codes in `gate.json`; a failed build stops it. On GitHub `gate.yml` runs it on the tagged commit and `packages.yml` publishes only after it passes. The Docker VM has ~8 GB: the container gets 7 GB and 2 cargo jobs (fat LTO) |
 
 Last known state (0.4.0): conformance 420/420 on core-compare + 13 core-only
 DB cases matching their spec; std 238 modules pass on the core.
@@ -173,6 +175,19 @@ Benchmarks live outside the repository in `../okkama-docs/benchmarks`
   (`sparrow-origin`); results in `results/`; `export.py` writes a report into
   `reports/<date>-v<X.Y.Z>/` (results.json, before.json, CSVs, REPORT.md; a
   hand-written README.md with conclusions). One report per release.
+  Method (#54): every program is built first, each configuration warmed up
+  once, then all runs go in a shuffled order (`--seed`, recorded); results
+  carry raw samples, median, quartiles, σ and `real_iqr_ratio`, versions,
+  build parameters, sha256 of inputs and binaries, timer bounds, `startup`
+  (00-hello per configuration) and `reference_outdated` interpreters.
+  `sparrow-core-compile` is compile+run in one process (`okkama run --engine
+  sparrow`). Steady state (#236): `--steady N` adds one run per configuration
+  with `BENCH_REPEAT=N`. The program repeats its work N times in-process and
+  prints `iteration <ns>` per repetition to stderr. Okkama programs do this
+  through a `Repeat` object; the Python, Perl and Ruby ports are driven by
+  `steady/repeat.{py,pl,rb}`. Results carry `steady` per pair: the first
+  repetition and the median of the second half. `export.py` writes
+  `steady.csv`, and the HTML report shows them next to the cold time.
 - DB: `db/main.ok` + `db/main.py` (SQLite), `db/postgres.ok` +
   `db/postgres.py` (PostgreSQL, Docker). Env: `DB_BENCH_ROWS=5000
   DB_BENCH_LOOKUPS=500 DB_BENCH_WARMUPS=6`. Each prints `kind nanos checksum`
@@ -181,8 +196,11 @@ Benchmarks live outside the repository in `../okkama-docs/benchmarks`
 
 Reference numbers (0.4.0, Apple M2 Max / Docker arm64): the core is ~2× the
 previous VM, 5.4× Python, 6.1× Perl, 4.0× Ruby on the ladder (geometric
-mean). PostgreSQL vs psycopg2: scans 1.3–1.7× slower, point query 94 µs vs 69
-µs, inserts faster.
+mean). PostgreSQL vs psycopg2: scans 1.3–1.7× slower, inserts faster; a
+point query is one round trip since #11 (68 µs vs psycopg2's 73 µs, Docker
+arm64). Driver checks against a live server:
+`okkama-docs/examples/std-v4/db-postgres*.ok` (`-stream-check` covers paging,
+early close, failures mid-stream, COPY refusal, transactions).
 
 ## 7. Architecture
 
@@ -190,14 +208,17 @@ mean). PostgreSQL vs psycopg2: scans 1.3–1.7× slower, point query 94 µs vs 6
 (`analysis`: types, roles, caps, errors; THIR) → lowering (`lowering`) to OIR
 (`ir`, verified by `ir/verify.rs`) → backends: IR interpreter
 (`okkama-runtime`), SPB (`codegen/sparrow`) executed by `sparrow-core`, JVM
-classes (`codegen/jvm` + runtime `okkama.rt` embedded in `okkama`).
+classes (`codegen/jvm` + runtime `okkama.rt` embedded in `okkama`). What each
+phase guarantees and what checks it: [phases.md](phases.md).
 
 **IR passes** (`lowering/mod.rs`, after lowering, before `ir::verify`), each
-on verified OIR and keeping it verifiable and meaning-preserving:
-`tail-calls` (self tail calls become loops; needs calls in tail position),
-`hoist` (loop-invariant constants to the entry block), `regions` (regions
-that own nothing are not opened), `jumps` (empty trampoline blocks are
-skipped), `undef` (unread `undef` removed). `OKKAMA_IR_PASSES=none|all|list`
+on verified OIR and keeping it verifiable and meaning-preserving, in this
+order: `regions` (regions that own nothing are not opened; first, so that
+an empty `region.leave` does not hide a tail call, #285), `tail-calls` (self
+tail calls become loops; needs calls in tail position, empty trampolines
+allowed), `fold` (exact constant arithmetic and comparisons; never what may
+fail), `hoist` (loop-invariant constants to the entry block), `jumps` (empty
+trampoline blocks are skipped), `undef` (unread `undef` removed). `OKKAMA_IR_PASSES=none|all|list`
 selects them; every engine runs the passed OIR, so the gate runs the IR
 conformance suite with the passes off as well (`tests/ir_passes.rs` checks
 each pass alone and that `sabotage-int-add` is caught). A new pass gets a
@@ -264,8 +285,8 @@ there ("native provider is not implemented"; the gate catches it):
 3. IR engine: `okkama-runtime-core/src/native/*.rs` (route the module in
    `native.rs` `route`).
 4. JVM: a `public static` method `runtime_<module>__<name>` in a class of
-   `okkama-compiler/runtime/jvm/src/okkama/rt` (Java 8; FFM code in `src22`,
-   Java 22); types: `int` → `BigInteger`, `bool` → `boolean`, `float` →
+   `okkama-compiler/runtime/jvm/src/okkama/rt` (Java 22, FFM natives
+   included); types: `int` → `BigInteger`, `bool` → `boolean`, `float` →
    `Double`, arrays → `List<Object>` (bytes as `Byte`), native objects →
    `Object`. Rebuild with `okkama-rs/tools/jvm-runtime/build.sh` and commit
    the classes (they are embedded in `okkama`).
@@ -294,11 +315,25 @@ drivers `std/db/sqlite.ok` (worker thread in Rust) and `std/db/postgres.ok`
 
 ## 9. Debugging recipes
 
-- Runtime event counts: `sparrow --stats x.spb` or `SPARROW_CORE_STATS=1`.
+- Runtime event counts: `sparrow --stats x.spb` or `SPARROW_CORE_STATS=1` —
+  also allocations by site (`alloc site <function>:<pc> obj.new <Type>`, from
+  machine code) and by kind (`alloc runtime object <Type>|string|array|…`),
+  collection time and the run's wall time.
+- A/B of an optimization: `tools/profile/ab.py OLD/sparrow NEW/sparrow
+  x.spb --runs 15 --out DIR` — shuffled runs, same output, median and IQR,
+  peak memory, `--stats` differences; accepts when the new IQR lies below
+  the old and memory grows ≤ 5 %; `DIR/ab.json` records commit, hashes,
+  seed and settings.
 - Suspected lost roots (stack maps, handler edges, Rust-held values): run with
   `SPARROW_CORE_GC_STRESS=1` and compare with `--engine ir`
   (`okkama-cli/tests/handlers.rs`, `sparrow-cli/tests/handlers/*.spa`).
 - Bytecode: `sparrow --disassemble x.spb`.
+- A wrong result on the core only (#44): run with `SPARROW_CORE_UNOPTIMIZED=*`
+  (no Cranelift passes) and `SPARROW_CORE_PLAIN=*` (no inline fast paths:
+  those instructions take the shared slow path). If either fixes it, bisect
+  the symbol list (symbols as in `--disassemble`) down to one function, then
+  read its CLIF and machine code with `SPARROW_CORE_DUMP=symbol`. A
+  function that is slow to compile shows in `--stats`.
 - Temporary instrumentation in the core: copy the file to the scratchpad,
   add counters (print them from `stats_report`), build in Docker into
   `okkama-core-dbg`, measure, then restore the copy.
@@ -313,6 +348,13 @@ drivers `std/db/sqlite.ok` (worker thread in Rust) and `std/db/postgres.ok`
    --offline` refreshes Cargo.lock); move CHANGELOG `[Unreleased]` to
    `## [X.Y.Z] — date` with a summary.
 3. `make gate` (Docker) must pass; write the benchmark report (§6).
+   Releases are built with the toolchain pinned in
+   `tools/release-toolchain.txt` (the gate image, the CI gate and
+   `packages.yml` install it;
+   each package carries `lib/okkama/TOOLCHAIN`, every `gate.json` its
+   `rustc -V`). The declared MSRV is `rust-version` in `okkama-rs/Cargo.toml`
+   — the oldest Rust the dependencies allow — and the CI job *MSRV* checks
+   every target on it. Raise both together with the dependency that needs it.
 4. Merge the release branch into `develop` (fast-forward history on
    `develop`), tag `vX.Y.Z` (annotated, must match Cargo.toml), push `develop`,
    the release branch and the tag: `.github/workflows/packages.yml` builds
@@ -334,7 +376,6 @@ drivers `std/db/sqlite.ok` (worker thread in Rust) and `std/db/postgres.ok`
   `new-runtime/core-rebuild.md` (journal of the core rebuild, stages 0–6).
 - `benchmarks/`, `examples/` (to be reworked), `experiments/`, `archive/`.
 
-Open issues worth knowing: #7 inline blocking natives, #9 region tracking
-cost, #10 source locations on the core, #11 PostgreSQL round trips, #12 TLS and
-terminal cancellation tests, #13 format natives in Okkama, #14 removal of the
-previous VM.
+Open issues worth knowing: #7 inline blocking natives, #12 TLS and terminal
+cancellation tests, #13 format natives in Okkama, #14 removal of the
+previous VM, #270 uncaught-failure reports differ between engines.

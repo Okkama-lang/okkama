@@ -59,6 +59,14 @@ pub fn verify(module: &Module) -> Result<()> {
             )));
         }
     }
+    for (index, global) in module.globals.iter().enumerate() {
+        let valid = module.functions.get(global.init.0).is_some_and(|function| {
+            function.params.is_empty() && function.result == ResultType::Value(global.ty.clone())
+        });
+        if !valid {
+            return Err(module_error(format!("global g{index} needs an init function () -> {}", global.ty)));
+        }
+    }
     if let Some(entry) = module.entry {
         let Some(function) = module.functions.get(entry.0) else {
             return Err(module_error(format!(
@@ -843,6 +851,10 @@ impl<'a> FunctionVerifier<'a> {
             InstKind::Const(constant) => {
                 constant.ty()
             }
+            InstKind::Global(index) => match self.module.globals.get(*index) {
+                Some(global) => global.ty.clone(),
+                None => return Err(format!("global g{index} does not exist")),
+            },
             InstKind::IntBinary { left, right, .. } => {
                 self.expect_type(*left, &Type::Int)?;
                 self.expect_type(*right, &Type::Int)?;
@@ -930,6 +942,18 @@ impl<'a> FunctionVerifier<'a> {
                 let owner = self.object_of(*object)?;
                 self.require_owner(owner, "obj.get")?;
                 self.field_type(owner, *field)?.clone()
+            }
+            InstKind::ObjPending { object, field } => {
+                let owner = self.object_of(*object)?;
+                let named = self
+                    .module
+                    .object(owner)
+                    .and_then(|declared| declared.fields.get(*field))
+                    .is_some_and(|declared| declared.name == "$pending" && declared.ty == Type::Bool);
+                if !named {
+                    return Err(format!("obj.pending reads field #{field}, which is not `$pending`"));
+                }
+                Type::Bool
             }
             InstKind::ObjNext { object, updates } => {
                 let owner = self.object_of(*object)?;
@@ -1114,6 +1138,41 @@ impl<'a> FunctionVerifier<'a> {
                 self.expect_type(*separator, &Type::Str)?;
                 Type::Str
             }
+            // Склейка и вычитание коллекций: каждая часть того же типа, что и
+            // результат, или пустой литерал без тега.
+            InstKind::ArrayConcat(parts)
+            | InstKind::ArrayDifference { removed: parts, .. }
+            | InstKind::MapMerge(parts)
+            | InstKind::MapDifference { removed: parts, .. } => {
+                let Some(result) = result else {
+                    return Err(format!("`{kind}` must define a value"));
+                };
+                let ty = self.ty(result)?.clone();
+                let untagged = match &ty {
+                    Type::Array(_) if matches!(kind, InstKind::ArrayConcat(_) | InstKind::ArrayDifference { .. }) => {
+                        Type::Array(Box::new(Type::Never))
+                    }
+                    Type::Map(..) if matches!(kind, InstKind::MapMerge(_) | InstKind::MapDifference { .. }) => {
+                        Type::Map(Box::new(Type::Never), Box::new(Type::Never))
+                    }
+                    other => return Err(format!("{kind} cannot define {other}")),
+                };
+                if parts.is_empty() && matches!(kind, InstKind::ArrayConcat(_) | InstKind::MapMerge(_)) {
+                    return Err(format!("{kind} needs at least one part"));
+                }
+                let base = match kind {
+                    InstKind::ArrayDifference { array, .. } => Some(*array),
+                    InstKind::MapDifference { map, .. } => Some(*map),
+                    _ => None,
+                };
+                for part in base.iter().chain(parts.iter()) {
+                    let part_ty = self.ty(*part)?;
+                    if part_ty != &ty && part_ty != &untagged {
+                        return Err(format!("{kind}: {part} is {part_ty}, expected {ty}"));
+                    }
+                }
+                return Ok(());
+            }
             InstKind::Retag(value) => {
                 let Some(result) = result else {
                     return Err("`retag` must define a value".to_string());
@@ -1179,6 +1238,7 @@ impl<'a> FunctionVerifier<'a> {
                         self.expect_int(args[1])?;
                         self.expect_int(args[2])?;
                     }
+                    StrOp::Repeat => self.expect_int(args[1])?,
                     _ => {
                         for arg in &args[1..] {
                             self.expect_type(*arg, &Type::Str)?;
@@ -1186,9 +1246,11 @@ impl<'a> FunctionVerifier<'a> {
                     }
                 }
                 match op {
-                    StrOp::Len => Type::Int,
+                    StrOp::Len | StrOp::Find | StrOp::FindLast => Type::Int,
+                    StrOp::StartsWith | StrOp::EndsWith => Type::Bool,
                     StrOp::Split => Type::Array(Box::new(Type::Str)),
                     StrOp::Utf8 => Type::Array(Box::new(Type::Byte)),
+                    StrOp::Characters => Type::Array(Box::new(Type::Char)),
                     _ => Type::Str,
                 }
             }
@@ -1501,6 +1563,24 @@ impl<'a> FunctionVerifier<'a> {
                 self.expect_type(*failure, &Type::Failure)?;
                 Type::Failure
             }
+            InstKind::RegionSettle { region, .. } => {
+                if !self.function.is_async() {
+                    return Err("`region.settle` is allowed only in async functions".to_string());
+                }
+                self.expect_type(*region, &Type::Region)?;
+                return match result {
+                    None => Ok(()),
+                    Some(_) => Err("`region.settle` defines no value".to_string()),
+                };
+            }
+            InstKind::RegionSettleUnwind { region, failure } => {
+                if !self.function.is_async() {
+                    return Err("`region.settle_unwind` is allowed only in async functions".to_string());
+                }
+                self.expect_type(*region, &Type::Region)?;
+                self.expect_type(*failure, &Type::Failure)?;
+                Type::Failure
+            }
             InstKind::FailSecondary { primary, cleanup } => {
                 self.expect_type(*primary, &Type::Failure)?;
                 self.expect_type(*cleanup, &Type::Failure)?;
@@ -1641,10 +1721,11 @@ impl<'a> FunctionVerifier<'a> {
                 let to = result.map(|result| self.ty(result)).transpose()?;
                 return match (from, to) {
                     (
-                        Type::Int | Type::Bool | Type::Byte | Type::Float | Type::Rat,
+                        Type::Int | Type::Bool | Type::Byte | Type::Float | Type::Rat | Type::Char,
                         Some(Type::Str),
                     )
-                    | (Type::Byte | Type::Rat, Some(Type::Int))
+                    | (Type::Byte | Type::Rat | Type::Char, Some(Type::Int))
+                    | (Type::Int, Some(Type::Char))
                     | (Type::Int | Type::Byte | Type::Rat, Some(Type::Float))
                     | (Type::Float, Some(Type::Int))
                     | (Type::Int | Type::Byte | Type::Float, Some(Type::Rat)) => Ok(()),

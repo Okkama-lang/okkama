@@ -428,6 +428,20 @@ impl<'s> Printer<'s> {
             }
             Item::Cap(decl) => self.cap(decl),
             Item::Action(decl) => self.action(decl),
+            Item::Const(decl) => {
+                if decl.hidden {
+                    self.word("hidden ");
+                }
+                self.word("const ");
+                self.word(&decl.name.text);
+                if let Some(ty) = &decl.ty {
+                    self.word(" is ");
+                    self.ty(ty);
+                }
+                self.word(" = ");
+                self.expr(&decl.value);
+                self.word(";");
+            }
         }
     }
 
@@ -550,6 +564,9 @@ impl<'s> Printer<'s> {
                 }
             }
             ObjectMember::Destroy(destroy) => {
+                if destroy.is_async {
+                    self.word("async ");
+                }
                 self.word("destroy ");
                 self.block(&destroy.body);
             }
@@ -673,11 +690,19 @@ impl<'s> Printer<'s> {
             close,
             |p, param| {
                 p.word(&param.name.text);
+                // `a, b is T` keeps its single type (#232).
+                if param.shares_type {
+                    return;
+                }
                 p.word(" is ");
                 if param.variadic {
                     p.word("...");
                 }
                 p.ty(&param.ty);
+                if let Some(default) = &param.default {
+                    p.word(" = ");
+                    p.expr(default);
+                }
             },
             |param| param.span,
         );
@@ -842,11 +867,10 @@ impl<'s> Printer<'s> {
 
     /// Комментарий в конце строки элемента списка (после его запятой).
     fn trailing_comment_before(&mut self, end: u32, limit: u32) {
-        if let Some(comment) = self.comments.get(self.next_comment) {
-            if comment.span.start < limit {
+        if let Some(comment) = self.comments.get(self.next_comment)
+            && comment.span.start < limit {
                 self.trailing_comment(end);
             }
-        }
     }
 
     // ---- блоки и операторы ----
@@ -886,20 +910,22 @@ impl<'s> Printer<'s> {
                 self.word(";");
             }
             StmtKind::Try(body) => self.try_body(body),
-            StmtKind::Throw { value } => {
+            StmtKind::Throw { value, condition } => {
                 self.word("throw");
                 if let Some(value) = value {
                     self.word(" ");
                     self.expr(value);
                 }
+                self.postfix_if(condition.as_ref());
                 self.word(";");
             }
-            StmtKind::Return { value } => {
+            StmtKind::Return { value, condition } => {
                 self.word("return");
                 if let Some(value) = value {
                     self.word(" ");
                     self.expr(value);
                 }
+                self.postfix_if(condition.as_ref());
                 self.word(";");
             }
             StmtKind::Confirm {
@@ -1081,6 +1107,21 @@ impl<'s> Printer<'s> {
     }
 
     fn try_body(&mut self, body: &TryBody) {
+        // `test.throws(Type) { … }` (#216) is parsed as the `try` it means:
+        // its catch binds a name source cannot spell, and its block ends with
+        // the panic the parser added.
+        if let [catch] = body.catches.as_slice()
+            && catch.name.as_ref().is_some_and(|name| name.text == "test.throws#error")
+            && let [ty] = catch.types.as_slice()
+        {
+            self.word("test.throws(");
+            self.ty(ty);
+            self.word(") ");
+            let mut written = body.body.clone();
+            written.stmts.pop();
+            self.block(&written);
+            return;
+        }
         self.word("try ");
         self.block(&body.body);
         for catch in &body.catches {
@@ -1368,7 +1409,10 @@ impl<'s> Printer<'s> {
                 self.block(then_block);
                 self.else_line(else_block.span.start);
                 self.word("else ");
-                self.block(else_block);
+                match else_if(else_block) {
+                    Some(next) => self.expr(next),
+                    None => self.block(else_block),
+                }
             }
             ExprKind::Match(body) => self.match_body(body),
             ExprKind::Loop { body } => {
@@ -1447,6 +1491,20 @@ impl<'s> Printer<'s> {
             }
             self.expr(operand);
         }
+    }
+}
+
+/// Вложенный `if` звена `else if` в if-выражении: парсер хранит его как
+/// else-блок из одного этого `if` с его же span, а написанный блок включает
+/// ещё и фигурные скобки.
+fn else_if(block: &Block) -> Option<&Expr> {
+    match block.stmts.as_slice() {
+        [Stmt { kind: StmtKind::Expr { expr, condition: None }, span }]
+            if *span == block.span && matches!(expr.kind, ExprKind::If { .. }) =>
+        {
+            Some(expr)
+        }
+        _ => None,
     }
 }
 

@@ -152,6 +152,9 @@ fn check_tables(program: &Program) -> Result<(), VerifyError> {
             check_function_ref(program, function.0)?;
         }
     }
+    for global in &program.globals {
+        check_function_ref(program, global.init.0)?;
+    }
     if let Some(entry) = program.entry {
         check_function_ref(program, entry.0)?;
     }
@@ -261,8 +264,11 @@ impl Set {
     }
 }
 
-/// Рёбра инструкции: цель, присваивания и регистр значения ребра.
-fn edges(pc: usize, instruction: &Instruction) -> Vec<(u32, &[(Register, Register)], Option<Register>)> {
+/// Ребро инструкции: цель, присваивания и регистр значения ребра.
+pub(crate) type Edge<'a> = (u32, &'a [(Register, Register)], Option<Register>);
+
+/// Рёбра инструкции.
+pub(crate) fn edges(pc: usize, instruction: &Instruction) -> Vec<Edge<'_>> {
     match instruction {
         Instruction::Jump { target } => vec![(target.pc, &target.moves[..], None)],
         Instruction::Branch {
@@ -291,7 +297,7 @@ fn edges(pc: usize, instruction: &Instruction) -> Vec<(u32, &[(Register, Registe
 pub const MAX_ANALYSIS_BYTES: usize = 64 * 1024 * 1024;
 
 /// Does `pc` only fall through to the next instruction?
-fn falls_through(pc: usize, edges: &[(u32, &[(Register, Register)], Option<Register>)]) -> bool {
+fn falls_through(pc: usize, edges: &[Edge<'_>]) -> bool {
     matches!(edges, [(target, moves, None)] if *target as usize == pc + 1 && moves.is_empty())
 }
 

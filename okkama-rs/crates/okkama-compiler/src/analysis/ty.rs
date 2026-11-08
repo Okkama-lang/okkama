@@ -76,7 +76,41 @@ pub struct ActionTy {
     pub result: Option<Ty>,
 }
 
+/// Deepest type a local may hold (#49). Written types are bounded by the
+/// parser's nesting limit, but a chain of `let`s can deepen a generic type
+/// one level per step (`let b2 = b1.deeper();` with `deeper() is Box<@T>`),
+/// and lowering keeps a full copy of each value's type: memory grows with
+/// the square of the depth (2 000 levels took 840 MB to build).
+pub const MAX_TYPE_DEPTH: usize = 64;
+
 impl Ty {
+    /// Nesting depth (a scalar is 1), counted without recursion up to
+    /// `cap + 1`: a deeper type stops the walk.
+    pub fn depth_up_to(&self, cap: usize) -> usize {
+        let mut deepest = 0;
+        let mut stack = vec![(self, 1usize)];
+        while let Some((ty, depth)) = stack.pop() {
+            deepest = deepest.max(depth);
+            if deepest > cap {
+                return deepest;
+            }
+            let next = depth + 1;
+            match ty {
+                Ty::Array(inner) | Ty::Successor(inner) | Ty::Varargs(inner) => stack.push((inner, next)),
+                Ty::Future(inner) => stack.extend(inner.iter().map(|inner| (&**inner, next))),
+                Ty::Map(key, value) => stack.extend([(&**key, next), (&**value, next)]),
+                Ty::Object(_, args) | Ty::Role(_, args) | Ty::Variant(_, args) | Ty::Cap(_, args, _) => {
+                    stack.extend(args.iter().map(|arg| (arg, next)))
+                }
+                Ty::Action(action) => {
+                    stack.extend(action.params.iter().chain(action.result.iter()).map(|ty| (ty, next)))
+                }
+                _ => {}
+            }
+        }
+        deepest
+    }
+
     pub fn array(element: Ty) -> Ty {
         Ty::Array(Box::new(element))
     }
@@ -181,6 +215,20 @@ impl Ty {
             })),
             Ty::Future(Some(inner)) => Ty::Future(Some(Box::new(inner.subst(env)))),
             other => other.clone(),
+        }
+    }
+
+    /// Holds a value of object `object` — directly, in a collection, a
+    /// successor, a future or a generic argument; an action type does not
+    /// (calling it needs one from elsewhere).
+    pub fn holds_object(&self, object: ObjectId) -> bool {
+        match self {
+            Ty::Object(id, args) => *id == object || args.iter().any(|arg| arg.holds_object(object)),
+            Ty::Array(inner) | Ty::Successor(inner) | Ty::Varargs(inner) => inner.holds_object(object),
+            Ty::Map(key, value) => key.holds_object(object) || value.holds_object(object),
+            Ty::Role(_, args) | Ty::Variant(_, args) | Ty::Cap(_, args, _) => args.iter().any(|arg| arg.holds_object(object)),
+            Ty::Future(Some(inner)) => inner.holds_object(object),
+            _ => false,
         }
     }
 

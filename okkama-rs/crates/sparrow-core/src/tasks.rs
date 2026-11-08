@@ -43,6 +43,9 @@ const CANCEL_DELIVERED: u64 = 8;
 pub const DELIVER_NOW: u64 = 16;
 /// A driver waiting for a wake (see the module comment).
 pub const PARKED: u64 = 32;
+/// An async destroy awaited by a region close (#154): a cancellation neither
+/// reaches it nor resumes its awaiter; it stays requested for the next await.
+const SHIELDED: u64 = 64;
 /// Flags above this bit hold the completion order of a settled Future.
 const ORDER_SHIFT: u64 = 16;
 
@@ -117,6 +120,7 @@ impl Runtime {
         let source = &self.loaded.program.functions[function];
         let registers = source.registers.len();
         let words = 1 + FIXED_WORDS + registers + usize::from(self.loaded.functions[function].driver);
+        self.heap.counted("async frame", 0, words);
         let frame = self.heap.allocate(words);
         // SAFETY: fresh storage of `words` words.
         unsafe {
@@ -249,7 +253,7 @@ impl Runtime {
                 set(frame, FLAGS, flags | CANCEL_DELIVERED);
                 return Some(self.cancelled_failure());
             }
-            if flags & SPAWNED != 0 {
+            if flags & (SPAWNED | SHIELDED) != 0 {
                 break;
             }
         }
@@ -266,13 +270,26 @@ impl Runtime {
                 break;
             }
             let header = self.heap.header_of(awaited);
-            let inner = heap::kind(header) == heap::FRAME
-                && get(awaited, STATE) == RUNNING
-                && get(awaited, FLAGS) & SPAWNED == 0;
-            if !inner {
+            if heap::kind(header) != heap::FRAME || get(awaited, STATE) != RUNNING {
                 break;
             }
-            frame = awaited;
+            if get(awaited, FLAGS) & SHIELDED != 0 {
+                return;
+            }
+            if get(awaited, FLAGS) & SPAWNED == 0 {
+                frame = awaited;
+                continue;
+            }
+            // Structured await (#147): a spawned task that no other frame
+            // awaits is cancelled with its awaiter, which keeps waiting and
+            // raises Cancelled once that task has settled.
+            if !self.is_driver(frame) && self.sole_awaiter(awaited, frame) {
+                set(task, FLAGS, get(task, FLAGS) | CANCEL_DELIVERED);
+                set(frame, FLAGS, get(frame, FLAGS) | DELIVER_NOW);
+                self.cancel_running(awaited);
+                return;
+            }
+            break;
         }
         let awaited = get(frame, AWAITING);
         if awaited != UNBOUND {
@@ -289,15 +306,29 @@ impl Runtime {
         self.ready.push_back(frame);
     }
 
+    /// True when no frame but `frame` awaits `future` (frames that only
+    /// listen to it, such as a group's, do not count).
+    fn sole_awaiter(&self, future: Word, frame: Word) -> bool {
+        let waiters = get(future, WAITER);
+        if waiters == UNBOUND || heap::kind(self.heap.header_of(waiters)) == heap::FRAME {
+            return true;
+        }
+        self.heap
+            .payload::<Waiters>(waiters)
+            .expect("waiters")
+            .0
+            .iter()
+            .all(|&waiter| waiter == frame || get(waiter, AWAITING) != future)
+    }
+
     /// Resume ready frames until `root` settles (or nothing can run).
     pub fn schedule(&mut self, ctx: *mut Ctx, root: Word) {
         while get(root, STATE) == RUNNING || get(root, STATE) == COLD {
-            if self.limits.interrupt.is_some() || self.limits.memory.is_some() {
-                if let Some(what) = self.over_budget() {
+            if (self.limits.interrupt.is_some() || self.limits.memory.is_some())
+                && let Some(what) = self.over_budget() {
                     self.exhaust(unsafe { &mut *ctx }, what);
                     return;
                 }
-            }
             self.poll_io();
             let Some(frame) = self.ready.pop_front() else {
                 if self.wait_external() {
@@ -391,16 +422,18 @@ impl Runtime {
                 let failure = self.cancelled_failure();
                 self.settle(future, FAILURE_STATE, failure);
             }
-            RUNNING => {
-                let flags = get(future, FLAGS);
-                if flags & CANCEL_REQUESTED == 0 {
-                    set(future, FLAGS, flags | CANCEL_REQUESTED);
-                    if get(future, AWAITING) != UNBOUND || Self::parked(future) {
-                        self.deliver_cancel(future);
-                    }
-                }
-            }
+            RUNNING => self.cancel_running(future),
             _ => {}
+        }
+    }
+
+    fn cancel_running(&mut self, future: Word) {
+        let flags = get(future, FLAGS);
+        if flags & CANCEL_REQUESTED == 0 {
+            set(future, FLAGS, flags | CANCEL_REQUESTED);
+            if get(future, AWAITING) != UNBOUND || Self::parked(future) {
+                self.deliver_cancel(future);
+            }
         }
     }
 }
@@ -463,6 +496,83 @@ pub extern "C" fn rt_await(ctx_ptr: *mut Ctx, this: Word, future: Word) -> u64 {
             AWAIT_PENDING
         }
     }
+}
+
+/// `region.settle` / `region.settle_unwind` from frame `this` (#154): close
+/// the region from its last identity, awaiting each async destroy shielded
+/// from cancellation. Ready (the unwind failure in `scratch`; a leave's
+/// destroy failure raised) or pending: `this` waits for the destroy, keeps it
+/// in the region, and re-enters here when it settles.
+#[inline(never)]
+pub extern "C" fn rt_region_settle(ctx_ptr: *mut Ctx, this: Word, region: Word, keep: Word, failure: Word) -> u64 {
+    let (_, runtime) = unsafe { parts(ctx_ptr) };
+    let unwind = failure != UNBOUND;
+    let link = |runtime: &mut Runtime, primary: Option<Word>, cleanup: Word| match primary {
+        Some(primary) => runtime.failure_link(primary, cleanup, true),
+        None => cleanup,
+    };
+    let (settling, settled) = runtime.region_settling(region);
+    let mut primary = settled.or(unwind.then_some(failure));
+    if let Some(future) = settling {
+        match get(future, STATE) {
+            DONE => {}
+            FAILURE_STATE => primary = Some(link(runtime, primary, get(future, FAILURE))),
+            _ => {
+                runtime.add_waiter(future, this);
+                return AWAIT_PENDING;
+            }
+        }
+        runtime.set_region_settling(region, None, primary);
+    }
+    let kept = if unwind {
+        runtime.failure_payloads(failure)
+    } else if keep == UNBOUND {
+        Vec::new()
+    } else {
+        vec![keep]
+    };
+    loop {
+        let (object, so_far) = match runtime.region_close_until(ctx_ptr, region, &kept, primary, true) {
+            crate::failures::Closed::Done(done) => {
+                primary = done;
+                break;
+            }
+            crate::failures::Closed::Async(object, so_far) => (object, so_far),
+        };
+        primary = so_far;
+        let descriptor = heap::payload(runtime.heap.header_of(object)) as usize;
+        let destroy = runtime.loaded.program.objects[descriptor].destroy.expect("an async destroy").0 as usize;
+        let rooted = [Some(region), Some(this), primary, (keep != UNBOUND).then_some(keep), unwind.then_some(failure)];
+        let depth = runtime.roots.len();
+        runtime.roots.extend(rooted.iter().flatten().map(|&word| (word, Repr::Ref)));
+        let future = runtime.future_new(destroy, &[object]);
+        set(future, FLAGS, get(future, FLAGS) | SHIELDED | OBSERVED);
+        set(future, STATE, RUNNING);
+        runtime.roots.push((future, Repr::Ref));
+        runtime.run_body(ctx_ptr, future);
+        runtime.roots.truncate(depth);
+        if unsafe { (*ctx_ptr).status } != OK {
+            return AWAIT_READY;
+        }
+        match get(future, STATE) {
+            DONE => {}
+            FAILURE_STATE => primary = Some(link(runtime, primary, get(future, FAILURE))),
+            _ => {
+                runtime.set_region_settling(region, Some(future), primary);
+                runtime.add_waiter(future, this);
+                return AWAIT_PENDING;
+            }
+        }
+    }
+    runtime.set_region_settling(region, None, None);
+    let ctx = unsafe { &mut *ctx_ptr };
+    if unwind {
+        ctx.scratch = primary.unwrap_or(failure);
+    } else if let Some(primary) = primary {
+        ctx.failure = primary;
+        ctx.status = FAILED;
+    }
+    AWAIT_READY
 }
 
 /// `return value` of an async body: settle its Future.

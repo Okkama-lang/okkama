@@ -908,7 +908,7 @@ pub(crate) fn evaluate<'a>(
         }
         I::Bits { op, byte, dst, value, count } => {
             let code = sparrow_runtime::integer::BitOp::from_code(op.code()).ok_or_else(|| invalid("unknown bit operation"))?;
-            let count = count.map(|count| r(count)).transpose()?;
+            let count = count.map(&r).transpose()?;
             write(*dst, ops::bits(code, op.counts(), *byte, r(*value)?, count)?)
         }
         I::ByteAnd { dst, left, right } => byte_op(N::And, *dst, *left, *right),
@@ -953,6 +953,12 @@ pub(crate) fn evaluate<'a>(
         I::StrTrim { dst, text } => string_op(S::Trim, *dst, &[*text]),
         I::StrChomp { dst, text } => string_op(S::Chomp, *dst, &[*text]),
         I::StrUtf8 { dst, text } => string_op(S::Utf8, *dst, &[*text]),
+        // The previous VM is not extended any more (#14).
+        I::StrFn { op, .. } => Err(Stop::Unsupported(format!("str.fn {} is not supported by sparrow-origin", op.name()))),
+        I::GlobalGet { .. } => Err(Stop::Unsupported("module constants are not supported by sparrow-origin".into())),
+        I::RegionSettle { .. } | I::RegionSettleUnwind { .. } => {
+            Err(Stop::Unsupported("async destroy is not supported by sparrow-origin".into()))
+        }
         I::ValCmp { op, dst, left, right } => {
             let equal = ops::equal(r(*left)?, r(*right)?)?;
             write(*dst, Value::Bool(if *op == Cmp::Eq { equal } else { !equal }))
@@ -1031,6 +1037,18 @@ pub(crate) fn evaluate<'a>(
         I::MapGet { dst, map, key } => write(*dst, ops::map_get(r(*map)?, r(*key)?, &|declaration, case| engine.case_name(declaration, case))?),
         I::MapKeys { dst, map } => write(*dst, ops::map_keys(r(*map)?)?),
         I::MapValues { dst, map } => write(*dst, ops::map_values(r(*map)?)?),
+        I::ArrayConcat { dst, parts } | I::MapMerge { dst, parts } => {
+            let parts = parts.iter().map(|part| r(*part)).collect::<Result<Vec<_>, _>>()?;
+            write(*dst, if matches!(instruction, I::ArrayConcat { .. }) { ops::array_concat(&parts)? } else { ops::map_merge(&parts)? })
+        }
+        I::ArrayDiff { dst, array: base, removed } | I::MapDiff { dst, map: base, removed } => {
+            let removed = removed.iter().map(|part| r(*part)).collect::<Result<Vec<_>, _>>()?;
+            let base = r(*base)?;
+            write(
+                *dst,
+                if matches!(instruction, I::ArrayDiff { .. }) { ops::array_difference(base, &removed)? } else { ops::map_difference(base, &removed)? },
+            )
+        }
         I::MapBuilderNew { dst } => write(*dst, sparrow_runtime::heap::maps::new_builder()),
         I::MapBuilderPut { dst, builder, key, value } => write(*dst, ops::map_builder_put(r(*builder)?, r(*key)?, r(*value)?.clone())?),
         I::MapBuilderFinish { dst, builder } => write(*dst, ops::map_builder_finish(r(*builder)?)?),
@@ -1280,10 +1298,7 @@ fn fast(engine: &Rc<Engine>, frames: &mut Vec<Frame>, spare: &mut Vec<Vec<Value>
     let interpreted = engine.jit.is_none();
     let frame = frames.last_mut().expect("frame");
     let registers = &mut frame.registers;
-    let int = |value: Option<i64>| match value {
-        Some(value) => Some(Value::Int(IntValue::from_i64(value))),
-        None => None,
-    };
+    let int = |value: Option<i64>| value.map(|value| Value::Int(IntValue::from_i64(value)));
     let (dst, value) = match instruction {
         I::Const { dst, .. } => match engine.prepared(index) {
             Ok(prepared) => (dst, prepared.constants[pc].copied()),
@@ -1547,8 +1562,8 @@ pub(crate) fn describe_failure(engine: &Rc<Engine>, failure: &Rc<Failure>) -> Re
     let program = &engine.program;
     let located = |stop| Located { function: program.entry.map_or(0, |entry| entry.0 as usize), pc: 0, stop };
     let mut described = (**failure).clone();
-    if let Kind::Thrown { object, message, .. } = &mut described.kind {
-        if message.is_none() {
+    if let Kind::Thrown { object, message, .. } = &mut described.kind
+        && message.is_none() {
             let value = Value::Object(object.0.clone());
             let (role, declaration) = program
                 .roles
@@ -1572,7 +1587,6 @@ pub(crate) fn describe_failure(engine: &Rc<Engine>, failure: &Rc<Failure>) -> Re
                 .ok_or_else(|| located(invalid("Error.text returned void")))?;
             *message = Some(text.as_string().map_err(|error| located(invalid(error.message)))?.to_owned());
         }
-    }
     described.secondary = RefCell::new(
         failure
             .secondaries()
@@ -1672,6 +1686,7 @@ fn execute_inner(program: &Program, arguments: Vec<String>, trace: &mut Vec<Site
         });
     }
     let entry = program.entry.ok_or(Error::MissingEntry)?.0 as usize;
+    let _host = sparrow_runtime::host::session();
     let engine = new_engine(program);
     if sparrow_runtime::worker::active() {
         serve(&engine);

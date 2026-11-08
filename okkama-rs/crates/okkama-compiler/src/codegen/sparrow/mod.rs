@@ -14,7 +14,7 @@ use crate::{ir, source::Span};
 use okkama_sparrow::{
     BitOp, CapDecl, CapRef, CatchKind, Cmp, Constant, Dst, EnumDecl, EnumRef, FuncRef, FutOp, Function,
     Handler, Instruction as I, Intrinsic, ObjectDecl, ObjectRef, Program, Register, RoleDecl, RoleMethod,
-    RoleRef, Target, TrapCode, Type, TypeRef, Witness,
+    GlobalDecl, RoleRef, StrFn, Target, TrapCode, Type, TypeRef, Witness,
 };
 use std::{collections::HashMap, fmt};
 
@@ -173,6 +173,7 @@ impl FunctionGen<'_> {
             _ => Err(error(span, "role result type is missing")),
         };
         Ok(match &inst.kind {
+            K::Global(index) => I::GlobalGet { dst: dst()?, global: *index as u32 },
             K::Const(constant) => I::Const {
                 dst: dst()?,
                 value: match constant {
@@ -210,7 +211,9 @@ impl FunctionGen<'_> {
             K::StrCompare { op, left, right } => I::StrCmp { op: cmp(*op), dst: dst()?, left: reg(*left), right: reg(*right) },
             K::ObjNew { object, fields } => I::ObjNew { dst: dst()?, object: ObjectRef(object.0 as u32), fields: regs(fields) },
             K::ObjInit { object, field, value } => I::ObjInit { object: reg(*object), field: *field as u32, value: reg(*value) },
-            K::ObjGet { object, field } => I::ObjGet { dst: dst()?, object: reg(*object), field: *field as u32 },
+            K::ObjGet { object, field } | K::ObjPending { object, field } => {
+                I::ObjGet { dst: dst()?, object: reg(*object), field: *field as u32 }
+            }
             K::ObjNext { object, updates } => I::ObjNext {
                 dst: dst()?,
                 object: reg(*object),
@@ -266,6 +269,10 @@ impl FunctionGen<'_> {
             K::ArrayGet { array, index } => I::ArrayGet { dst: dst()?, array: reg(*array), index: reg(*index) },
             K::ArraySlice { array, start, end } => I::ArraySlice { dst: dst()?, array: reg(*array), start: reg(*start), end: reg(*end) },
             K::ArrayJoin { array, separator } => I::ArrayJoin { dst: dst()?, array: reg(*array), separator: reg(*separator) },
+            K::ArrayConcat(parts) => I::ArrayConcat { dst: dst()?, parts: regs(parts) },
+            K::ArrayDifference { array, removed } => I::ArrayDiff { dst: dst()?, array: reg(*array), removed: regs(removed) },
+            K::MapMerge(parts) => I::MapMerge { dst: dst()?, parts: regs(parts) },
+            K::MapDifference { map, removed } => I::MapDiff { dst: dst()?, map: reg(*map), removed: regs(removed) },
             K::BuilderNew => I::BuilderNew { dst: dst()? },
             K::BuilderPush { builder, value } => I::BuilderPush { dst: dst()?, builder: reg(*builder), value: reg(*value) },
             K::BuilderAppend { builder, array } => I::BuilderAppend { dst: dst()?, builder: reg(*builder), array: reg(*array) },
@@ -283,6 +290,7 @@ impl FunctionGen<'_> {
                 if args.len() != op.arity() {
                     return Err(error(span, "string operation argument count mismatch"));
                 }
+                let str_fn = |op| I::StrFn { op, dst, args: args.iter().map(|value| reg(*value)).collect() };
                 match op {
                     ir::StrOp::Len => I::StrLen { dst, text: arg(0)? },
                     ir::StrOp::Slice => I::StrSlice { dst, text: arg(0)?, start: arg(1)?, end: arg(2)? },
@@ -292,6 +300,16 @@ impl FunctionGen<'_> {
                     ir::StrOp::Trim => I::StrTrim { dst, text: arg(0)? },
                     ir::StrOp::Chomp => I::StrChomp { dst, text: arg(0)? },
                     ir::StrOp::Utf8 => I::StrUtf8 { dst, text: arg(0)? },
+                    ir::StrOp::Find => str_fn(StrFn::Find),
+                    ir::StrOp::FindLast => str_fn(StrFn::FindLast),
+                    ir::StrOp::StartsWith => str_fn(StrFn::StartsWith),
+                    ir::StrOp::EndsWith => str_fn(StrFn::EndsWith),
+                    ir::StrOp::TrimStart => str_fn(StrFn::TrimStart),
+                    ir::StrOp::TrimEnd => str_fn(StrFn::TrimEnd),
+                    ir::StrOp::Lower => str_fn(StrFn::Lower),
+                    ir::StrOp::Upper => str_fn(StrFn::Upper),
+                    ir::StrOp::Repeat => str_fn(StrFn::Repeat),
+                    ir::StrOp::Characters => str_fn(StrFn::Characters),
                 }
             }
             K::ValCompare { op, left, right } => I::ValCmp { op: cmp(*op), dst: dst()?, left: reg(*left), right: reg(*right) },
@@ -319,6 +337,10 @@ impl FunctionGen<'_> {
             K::RegionTrack { region, value } => I::RegionTrack { region: reg(*region), value: reg(*value) },
             K::RegionLeave { region, keep } => I::RegionLeave { region: reg(*region), keep: keep.map(reg) },
             K::RegionUnwind { region, failure } => I::RegionUnwind { dst: dst()?, region: reg(*region), failure: reg(*failure) },
+            K::RegionSettle { region, keep } => I::RegionSettle { region: reg(*region), keep: keep.map(reg) },
+            K::RegionSettleUnwind { region, failure } => {
+                I::RegionSettleUnwind { dst: dst()?, region: reg(*region), failure: reg(*failure) }
+            }
             K::FailSecondary { primary, cleanup } => I::FailSecondary { dst: dst()?, primary: reg(*primary), cleanup: reg(*cleanup) },
             K::EnumCase { ty, case } => I::EnumCase { dst: dst()?, ty: EnumRef(ty.0 as u32), case: *case as u32 },
             K::EnumCompare { op, left, right } => I::EnumCmp { op: cmp(*op), dst: dst()?, left: reg(*left), right: reg(*right) },
@@ -415,6 +437,7 @@ impl FunctionGen<'_> {
                     ir::TrapCode::Empty => TrapCode::Empty,
                     ir::TrapCode::Unbound => TrapCode::Unbound,
                     ir::TrapCode::Unreachable => TrapCode::Unreachable,
+                    ir::TrapCode::Pending => TrapCode::Pending,
                 },
                 message: message.clone(),
             },
@@ -583,6 +606,14 @@ pub fn generate(module: &ir::Module) -> Result<Program, GenerateError> {
             fields: cap.fields.iter().map(|(name, function)| (name.clone(), FuncRef(function.0 as u32))).collect(),
         })
         .collect();
+    let globals = module
+        .globals
+        .iter()
+        .map(|global| GlobalDecl {
+            ty: types.intern(&global.ty),
+            init: FuncRef(global.init.0 as u32),
+        })
+        .collect();
     let functions = module
         .functions
         .iter()
@@ -597,6 +628,7 @@ pub fn generate(module: &ir::Module) -> Result<Program, GenerateError> {
         objects,
         handles,
         caps,
+        globals,
         functions,
         entry: module.entry.map(|entry| FuncRef(entry.0 as u32)),
         tests: module

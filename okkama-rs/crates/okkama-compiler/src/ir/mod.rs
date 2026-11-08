@@ -10,6 +10,7 @@
 //! выводится через `Display` у [`Module`].
 
 pub mod cfg;
+pub mod fold;
 pub mod hoist;
 pub mod regions;
 mod print;
@@ -185,7 +186,8 @@ impl Type {
         matches!(self, Type::Builder(_) | Type::MapBuilder(..))
     }
 
-    /// Допустимый тип ключа словаря.
+    /// Допустимый тип ключа словаря; пригодность объекта (поля — скаляры,
+    /// enum, такие же объекты) проверяет анализ (#212).
     pub fn is_map_key(&self) -> bool {
         matches!(
             self,
@@ -196,6 +198,7 @@ impl Type {
                 | Type::Float
                 | Type::Str
                 | Type::Enum(_)
+                | Type::Object(_)
         )
     }
 }
@@ -223,6 +226,8 @@ pub struct Module {
     pub handles: Vec<Handle>,
     /// Caps объектов (§8.5).
     pub caps: Vec<Cap>,
+    /// Значения `const` модуля, построенные при запуске (#153).
+    pub globals: Vec<Global>,
     /// Тестовый профиль (§15): тесты корневого модуля (имя и функция);
     /// `None` — production-модуль.
     pub tests: Option<Vec<(String, FuncId)>>,
@@ -415,6 +420,14 @@ pub struct Cap {
     pub owner: ObjectId,
     pub fields: Vec<(String, FuncId)>,
     pub span: Span,
+}
+
+/// `const` модуля (#153): массив или словарь, который движок строит один
+/// раз при запуске программы функцией `init` без параметров и разделяет.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Global {
+    pub ty: Type,
+    pub init: FuncId,
 }
 
 /// Native object модуля: только имя; значения создаёт и читает рантайм.
@@ -865,6 +878,8 @@ impl CompareOp {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InstKind {
     Const(Constant),
+    /// Значение `globals[index]` модуля (#153).
+    Global(usize),
     IntBinary {
         op: IntBinaryOp,
         left: ValueId,
@@ -910,6 +925,14 @@ pub enum InstKind {
     },
     /// Чтение поля по индексу.
     ObjGet {
+        object: ValueId,
+        field: usize,
+    },
+    /// Создание объекта не завершено (#271): его скрытое поле `$pending`
+    /// ещё не связано (ранний `self`) или не `false`. В отличие от `obj.get` —
+    /// в любой функции: место вызова проверяет получателя до аргументов
+    /// (§11.4).
+    ObjPending {
         object: ValueId,
         field: usize,
     },
@@ -1010,6 +1033,15 @@ pub enum InstKind {
         start: ValueId,
         end: ValueId,
     },
+    /// `a + b + ...` над массивами одного типа: результат выделяется один раз
+    /// под сумму длин частей (цепочка `+` — одна инструкция).
+    ArrayConcat(Vec<ValueId>),
+    /// `a - b - ...`: элементы `array`, не равные ни одному элементу
+    /// `removed`, в исходном порядке; одно выделение.
+    ArrayDifference {
+        array: ValueId,
+        removed: Vec<ValueId>,
+    },
     /// Склейка `array<str>` через разделитель.
     ArrayJoin {
         array: ValueId,
@@ -1107,6 +1139,18 @@ pub enum InstKind {
         region: ValueId,
         failure: ValueId,
     },
+    /// `region.leave` в async-функции программы с `async destroy` (#154):
+    /// точка приостановки — async destroy ожидаются по порядку, отмена до
+    /// конца закрытия не доставляется.
+    RegionSettle {
+        region: ValueId,
+        keep: Option<ValueId>,
+    },
+    /// `region.unwind` в async-функции: то же на пути отказа.
+    RegionSettleUnwind {
+        region: ValueId,
+        failure: ValueId,
+    },
     /// Отказ cleanup `cleanup` при идущем отказе `primary`: вторичный.
     FailSecondary {
         primary: ValueId,
@@ -1189,6 +1233,14 @@ pub enum InstKind {
     MapValues(ValueId),
     /// `map<never,never>` → `map<K,V>` (тип — из результата).
     MapRetag(ValueId),
+    /// `a + b + ...` над словарями одного типа; при повторе ключа побеждает
+    /// значение более правой части.
+    MapMerge(Vec<ValueId>),
+    /// `a - b - ...`: записи `map`, ключей которых нет ни в одной из `removed`.
+    MapDifference {
+        map: ValueId,
+        removed: Vec<ValueId>,
+    },
     MapBuilderNew,
     MapBuilderPut {
         builder: ValueId,
@@ -1216,6 +1268,20 @@ pub enum StrOp {
     Chomp,
     /// Строгий UTF-8 строки: `array<byte>` (строка как `ByteSource`, §15).
     Utf8,
+    /// `find(part)`/`find_last(part)`: индекс code point или -1 (#210).
+    Find,
+    FindLast,
+    StartsWith,
+    EndsWith,
+    TrimStart,
+    TrimEnd,
+    /// Unicode-регистр.
+    Lower,
+    Upper,
+    /// `repeat(count)`: отрицательное число — ошибка.
+    Repeat,
+    /// `characters()`: `array<char>` (#231).
+    Characters,
 }
 
 impl StrOp {
@@ -1229,14 +1295,37 @@ impl StrOp {
             StrOp::Trim => "str.trim",
             StrOp::Chomp => "str.chomp",
             StrOp::Utf8 => "str.utf8",
+            StrOp::Find => "str.find",
+            StrOp::FindLast => "str.find_last",
+            StrOp::StartsWith => "str.starts_with",
+            StrOp::EndsWith => "str.ends_with",
+            StrOp::TrimStart => "str.trim_start",
+            StrOp::TrimEnd => "str.trim_end",
+            StrOp::Lower => "str.lower",
+            StrOp::Upper => "str.upper",
+            StrOp::Repeat => "str.repeat",
+            StrOp::Characters => "str.characters",
         }
     }
 
     /// Число операндов, включая строку-receiver.
     pub fn arity(self) -> usize {
         match self {
-            StrOp::Len | StrOp::Trim | StrOp::Chomp | StrOp::Utf8 => 1,
-            StrOp::Split => 2,
+            StrOp::Len
+            | StrOp::Trim
+            | StrOp::Chomp
+            | StrOp::Utf8
+            | StrOp::TrimStart
+            | StrOp::TrimEnd
+            | StrOp::Lower
+            | StrOp::Upper
+            | StrOp::Characters => 1,
+            StrOp::Split
+            | StrOp::Find
+            | StrOp::FindLast
+            | StrOp::StartsWith
+            | StrOp::EndsWith
+            | StrOp::Repeat => 2,
             StrOp::Slice | StrOp::Replace | StrOp::ReplaceFirst => 3,
         }
     }
@@ -1261,6 +1350,9 @@ impl InstKind {
             | InstKind::RoleNarrow { value: operand, .. }
             | InstKind::ObjGet {
                 object: operand, ..
+            }
+            | InstKind::ObjPending {
+                object: operand, ..
             } => vec![*operand],
             InstKind::CallRole { receiver, args, .. } => std::iter::once(*receiver)
                 .chain(args.iter().copied())
@@ -1275,6 +1367,11 @@ impl InstKind {
             InstKind::ArrayGet { array, index } => vec![*array, *index],
             InstKind::ArraySlice { array, start, end } => vec![*array, *start, *end],
             InstKind::ArrayJoin { array, separator } => vec![*array, *separator],
+            InstKind::ArrayConcat(parts) | InstKind::MapMerge(parts) => parts.clone(),
+            InstKind::ArrayDifference { array: base, removed }
+            | InstKind::MapDifference { map: base, removed } => {
+                std::iter::once(*base).chain(removed.iter().copied()).collect()
+            }
             InstKind::BuilderNew => Vec::new(),
             InstKind::BuilderPush { builder, value } => vec![*builder, *value],
             InstKind::BuilderAppend { builder, array } => vec![*builder, *array],
@@ -1325,15 +1422,16 @@ impl InstKind {
                 .chain(fields.iter().copied())
                 .collect(),
             InstKind::RangePart { range, .. } => vec![*range],
-            InstKind::EnumCase { .. } | InstKind::RegionEnter | InstKind::Undef => Vec::new(),
+            InstKind::EnumCase { .. } | InstKind::Global(_) | InstKind::RegionEnter | InstKind::Undef => Vec::new(),
             InstKind::RegionAdopt { region, value } | InstKind::RegionTrack { region, value } => {
                 vec![*region, *value]
             }
             InstKind::RegionTransfer { from, to, value } => vec![*from, *to, *value],
-            InstKind::RegionLeave { region, keep } => std::iter::once(*region)
-                .chain(keep.iter().copied())
-                .collect(),
-            InstKind::RegionUnwind { region, failure } => vec![*region, *failure],
+            InstKind::RegionLeave { region, keep } | InstKind::RegionSettle { region, keep } => {
+                std::iter::once(*region).chain(keep.iter().copied()).collect()
+            }
+            InstKind::RegionUnwind { region, failure }
+            | InstKind::RegionSettleUnwind { region, failure } => vec![*region, *failure],
             InstKind::FailSecondary { primary, cleanup } => vec![*primary, *cleanup],
             InstKind::ByteNot(value) | InstKind::ByteFrom { value, .. } => vec![*value],
             InstKind::Bits { value, count, .. } => std::iter::once(*value)
@@ -1372,6 +1470,9 @@ impl InstKind {
             | InstKind::RoleNarrow { value: operand, .. }
             | InstKind::ObjGet {
                 object: operand, ..
+            }
+            | InstKind::ObjPending {
+                object: operand, ..
             } => vec![operand],
             InstKind::CallRole { receiver, args, .. } => {
                 std::iter::once(receiver).chain(args.iter_mut()).collect()
@@ -1386,6 +1487,11 @@ impl InstKind {
             InstKind::ArrayGet { array, index } => vec![array, index],
             InstKind::ArraySlice { array, start, end } => vec![array, start, end],
             InstKind::ArrayJoin { array, separator } => vec![array, separator],
+            InstKind::ArrayConcat(parts) | InstKind::MapMerge(parts) => parts.iter_mut().collect(),
+            InstKind::ArrayDifference { array: base, removed }
+            | InstKind::MapDifference { map: base, removed } => {
+                std::iter::once(base).chain(removed.iter_mut()).collect()
+            }
             InstKind::BuilderNew => Vec::new(),
             InstKind::BuilderPush { builder, value } => vec![builder, value],
             InstKind::BuilderAppend { builder, array } => vec![builder, array],
@@ -1434,15 +1540,16 @@ impl InstKind {
                 .chain(fields.iter_mut())
                 .collect(),
             InstKind::RangePart { range, .. } => vec![range],
-            InstKind::EnumCase { .. } | InstKind::RegionEnter | InstKind::Undef => Vec::new(),
+            InstKind::EnumCase { .. } | InstKind::Global(_) | InstKind::RegionEnter | InstKind::Undef => Vec::new(),
             InstKind::RegionAdopt { region, value } | InstKind::RegionTrack { region, value } => {
                 vec![region, value]
             }
             InstKind::RegionTransfer { from, to, value } => vec![from, to, value],
-            InstKind::RegionLeave { region, keep } => {
+            InstKind::RegionLeave { region, keep } | InstKind::RegionSettle { region, keep } => {
                 std::iter::once(region).chain(keep.iter_mut()).collect()
             }
-            InstKind::RegionUnwind { region, failure } => vec![region, failure],
+            InstKind::RegionUnwind { region, failure }
+            | InstKind::RegionSettleUnwind { region, failure } => vec![region, failure],
             InstKind::FailSecondary { primary, cleanup } => vec![primary, cleanup],
             InstKind::ByteNot(value) | InstKind::ByteFrom { value, .. } => vec![value],
             InstKind::Bits { value, count, .. } => {
@@ -1485,6 +1592,8 @@ pub enum TrapCode {
     Unbound,
     /// Исполнение достигло `unreachable`-точки lowering.
     Unreachable,
+    /// Действие вызвано у объекта, чьё создание не завершено (§11.4, #271).
+    Pending,
 }
 
 impl TrapCode {
@@ -1495,6 +1604,7 @@ impl TrapCode {
             TrapCode::Empty => "empty",
             TrapCode::Unbound => "unbound",
             TrapCode::Unreachable => "unreachable",
+            TrapCode::Pending => "pending",
         }
     }
 }

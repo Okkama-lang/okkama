@@ -63,11 +63,10 @@ impl RawFile {
 
     pub(crate) fn close(&mut self, n: Native) -> Result<(), ProviderError> {
         #[cfg(unix)]
-        if let Some(lock) = self.lock.take() {
-            if let Some(file) = &self.file {
+        if let Some(lock) = self.lock.take()
+            && let Some(file) = &self.file {
                 lock.release(file).map_err(|e| host(n, e))?;
             }
-        }
         self.file.take();
         Ok(())
     }
@@ -104,13 +103,9 @@ pub(crate) fn handles(n: Native) -> bool {
     )
 }
 impl Heap {
+    /// The program's working directory, from the run's host session (#40).
     pub(crate) fn working_directory(&mut self) -> Result<PathBuf, Error> {
-        if let Some(path) = &self.cwd {
-            return Ok(path.clone());
-        }
-        let path = std::env::current_dir().map_err(|e| Error(e.to_string()))?;
-        self.cwd = Some(path.clone());
-        Ok(path)
+        Ok(okkama_runtime_core::host::cwd())
     }
     pub(crate) fn fs_path(&mut self, n: Native, v: Slot) -> Result<PathBuf, ProviderError> {
         let bytes = self.native_bytes(v)?;

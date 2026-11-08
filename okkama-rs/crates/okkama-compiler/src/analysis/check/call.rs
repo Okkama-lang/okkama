@@ -38,6 +38,24 @@ pub(super) struct Shape {
     pub params: Vec<(String, Ty)>,
     /// Последний параметр — variadic-хвост (`@T`).
     pub variadic: bool,
+    /// Where each parameter's default value is declared (#149); empty when
+    /// no parameter has one.
+    pub defaults: Vec<Option<DefaultRef>>,
+}
+
+/// A parameter's default value: the action or constructor declaring it.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct DefaultRef {
+    pub object: ObjectId,
+    pub ctor: bool,
+    pub member: usize,
+    pub param: usize,
+}
+
+impl Shape {
+    fn has_default(&self, param: usize) -> bool {
+        self.defaults.get(param).is_some_and(Option::is_some)
+    }
 }
 
 impl CallArgs {
@@ -66,11 +84,10 @@ impl Checker<'_, '_> {
         let mut call = CallArgs::default();
         let mut seen: HashSet<String> = HashSet::new();
         for (index, arg) in args.iter().enumerate() {
-            if let Some(name) = &arg.name {
-                if !seen.insert(name.text.clone()) {
+            if let Some(name) = &arg.name
+                && !seen.insert(name.text.clone()) {
                     self.error(name.span, format!("Duplicate argument \"{}\"", name.text));
                 }
-            }
             if let ast::ExprKind::Unpack { operand, .. } = &strip_grouping(&arg.value).kind {
                 if index + 1 != args.len() || arg.name.is_some() {
                     self.error(
@@ -148,6 +165,50 @@ impl Checker<'_, '_> {
             .join(", ")
     }
 
+    /// The default value of a parameter a call leaves out (#149): its
+    /// declared expression, checked here — so it is evaluated at each such
+    /// call — but in the declaring module, with no local of the caller and
+    /// no `self` visible. Errors in it are reported once, at the declaration.
+    pub(super) fn param_default(&mut self, default: DefaultRef, ty: &Ty, span: Span) -> Expr {
+        let info = &self.reg.objects[default.object.0];
+        let module = info.module;
+        let expr = if default.ctor {
+            match &info.ctors[default.member].shape {
+                CtorShape::Full { defaults, .. } => defaults.get(default.param).copied().flatten(),
+                CtorShape::Shorthand { .. } => None,
+            }
+        } else {
+            info.methods[default.member].decl.and_then(|decl| decl.params.get(default.param)?.default.as_ref())
+        };
+        let Some(expr) = expr else {
+            return Self::poisoned(span);
+        };
+        let reported = self.reg.errors.len();
+        let saved_module = self.module;
+        let saved_barrier = self.barrier.replace(self.scopes.len());
+        let saved_object = self.object.take();
+        let saved_self = self.self_ty.take();
+        let saved_outer = self.outer.take();
+        let saved_generics = std::mem::take(&mut self.generics);
+        let saved_kind = std::mem::replace(&mut self.kind, Kind::Default);
+        self.module = module;
+        self.reg.set_module(module);
+        self.push_scope();
+        let value = self.value(expr, Some(ty));
+        let value = self.coerce(value, ty, expr.span, "Default value");
+        self.pop_scope();
+        self.kind = saved_kind;
+        self.generics = saved_generics;
+        self.outer = saved_outer;
+        self.self_ty = saved_self;
+        self.object = saved_object;
+        self.barrier = saved_barrier;
+        self.module = saved_module;
+        self.reg.set_module(saved_module);
+        self.reg.errors.truncate(reported);
+        value
+    }
+
     /// Специфичность аргумента для параметра: точный тип > роль > `any`.
     fn rank(&self, actual: &Ty, param: &Ty) -> u8 {
         if actual.taken() == *param {
@@ -166,17 +227,34 @@ impl Checker<'_, '_> {
         let accepts = |actual: &Ty, param: &Ty| self.reg.assignable(&actual.taken(), param);
         let named = call.named();
         if !shape.variadic {
-            if call.spread.is_some() || shape.params.len() != call.values.len() {
+            // Trailing parameters with default values may be left out (#149).
+            if call.spread.is_some()
+                || call.values.len() > shape.params.len()
+                || (call.values.len()..shape.params.len()).any(|index| !named && !shape.has_default(index))
+            {
+                return None;
+            }
+            if named
+                && call.values.iter().any(|arg| {
+                    !shape.params.iter().any(|(name, _)| arg.name.as_deref() == Some(name.as_str()))
+                })
+            {
                 return None;
             }
             let mut ranks = Vec::new();
             for (index, (name, param)) in shape.params.iter().enumerate() {
-                let arg = if named {
-                    call.values
-                        .iter()
-                        .find(|arg| arg.name.as_deref() == Some(name.as_str()))?
+                let found = if named {
+                    call.values.iter().find(|arg| arg.name.as_deref() == Some(name.as_str()))
                 } else {
-                    &call.values[index]
+                    call.values.get(index)
+                };
+                let Some(arg) = found else {
+                    if !shape.has_default(index) {
+                        return None;
+                    }
+                    // A left-out parameter does not make a candidate more specific.
+                    ranks.push(3);
+                    continue;
                 };
                 let actual = Self::ty_of(&arg.value);
                 if !accepts(&actual, param) {
@@ -304,24 +382,35 @@ impl Checker<'_, '_> {
         } else {
             Vec::new()
         };
-        let ordered: Vec<Arg> = if values.iter().any(|arg| arg.name.is_some()) {
-            let mut ordered = Vec::new();
-            for (name, _) in &shape.params[..fixed_count] {
+        // One slot per fixed parameter; a left-out one takes its default (#149).
+        let mut slots: Vec<Option<Arg>> = (0..fixed_count).map(|_| None).collect();
+        if values.iter().any(|arg| arg.name.is_some()) {
+            for (slot, (name, _)) in slots.iter_mut().zip(&shape.params[..fixed_count]) {
                 if let Some(position) = values
                     .iter()
                     .position(|arg| arg.name.as_deref() == Some(name.as_str()))
                 {
-                    ordered.push(values.remove(position));
+                    *slot = Some(values.remove(position));
                 }
             }
-            ordered
         } else {
-            values
-        };
+            for (slot, arg) in slots.iter_mut().zip(values) {
+                *slot = Some(arg);
+            }
+        }
         let mut args = Vec::new();
-        for (arg, (name, ty)) in ordered.into_iter().zip(&shape.params[..fixed_count]) {
-            let what = format!("{what} argument \"{name}\"");
-            args.push(self.coerce(arg.value, ty, arg.span, &what));
+        for (index, (slot, (name, ty))) in slots.into_iter().zip(&shape.params[..fixed_count]).enumerate() {
+            match slot {
+                Some(arg) => {
+                    let what = format!("{what} argument \"{name}\"");
+                    args.push(self.coerce(arg.value, ty, arg.span, &what));
+                }
+                None => {
+                    if let Some(default) = shape.defaults.get(index).copied().flatten() {
+                        args.push(self.param_default(default, ty, span));
+                    }
+                }
+            }
         }
         if shape.variadic {
             let element = match &shape.params[fixed_count].1 {
@@ -372,11 +461,10 @@ impl Checker<'_, '_> {
         span: Span,
         expected: Option<&Ty>,
     ) -> Expr {
-        if let ast::ExprKind::Get { object, name } = &strip_grouping(callee).kind {
-            if let Some((id, explicit)) = self.variant_receiver(object) {
+        if let ast::ExprKind::Get { object, name } = &strip_grouping(callee).kind
+            && let Some((id, explicit)) = self.variant_receiver(object) {
                 return self.variant_construct(id, explicit, name, args, expected, span);
             }
-        }
         let named = args.iter().filter(|arg| arg.name.is_some()).count();
         if named != 0 && named != args.len() {
             self.error(span, "A call cannot mix positional and named arguments");
@@ -387,7 +475,7 @@ impl Checker<'_, '_> {
             ast::ExprKind::Name(name)
                 if matches!(
                     name.text.as_str(),
-                    "int" | "string" | "byte" | "float" | "rat"
+                    "int" | "string" | "byte" | "float" | "rat" | "char"
                 ) =>
             {
                 self.primitive_cast(&name.text, args, span)
@@ -419,13 +507,12 @@ impl Checker<'_, '_> {
                 let fields_visible =
                     matches!(self.kind, Kind::Method | Kind::Successor | Kind::Destroy)
                         || (self.kind == Kind::Closure && self.self_ty.is_some());
-                if fields_visible {
-                    if let Some(field) = self.own_field(&name.text) {
+                if fields_visible
+                    && let Some(field) = self.own_field(&name.text) {
                         let ty = self.field_type(field);
                         let value = Self::typed(ExprKind::Field(field), ty, name.span);
                         return self.call_value(value, args, span);
                     }
-                }
                 if matches!(name.text.as_str(), "NativeFailure" | "Cancelled") {
                     self.error(span, format!("Source cannot construct \"{}\"", name.text));
                     return Self::poisoned(span);
@@ -438,13 +525,12 @@ impl Checker<'_, '_> {
                     return call;
                 }
                 // `ns.Object(...)` и `ns.native(...)`: имя пространства, не локальная.
-                if let ast::ExprKind::Name(space) = &strip_grouping(object).kind {
-                    if self.local(&space.text).is_none()
+                if let ast::ExprKind::Name(space) = &strip_grouping(object).kind
+                    && self.local(&space.text).is_none()
                         && self.reg.is_namespace(self.module, &space.text)
                     {
                         return self.qualified_call(&space.text, name, args, span, expected);
                     }
-                }
                 self.method_call(object, name, args, span)
             }
             _ => {
@@ -643,6 +729,7 @@ impl Checker<'_, '_> {
         let shape = Shape {
             params: info.params.clone(),
             variadic: info.variadic,
+            defaults: Vec::new(),
         };
         let (result, is_async, name) = (info.result.clone(), info.is_async, info.name.clone());
         let call = self.call_arguments(args, Some(&shape));
@@ -723,6 +810,7 @@ impl Checker<'_, '_> {
                 .map(|(index, ty)| (format!("{}", index + 1), ty.clone()))
                 .collect(),
             variadic: false,
+            defaults: Vec::new(),
         };
         let call = self.call_arguments(args, Some(&shape));
         if call.values.len() != shape.params.len() || call.spread.is_some() {
@@ -763,9 +851,10 @@ impl Checker<'_, '_> {
         let info = &self.reg.objects[object.0];
         info.ctors
             .iter()
-            .map(|ctor| match &ctor.shape {
+            .enumerate()
+            .map(|(member, ctor)| match &ctor.shape {
                 CtorShape::Full {
-                    params, variadic, ..
+                    params, variadic, defaults, ..
                 } => (
                     Shape {
                         params: params
@@ -773,6 +862,11 @@ impl Checker<'_, '_> {
                             .map(|(name, ty)| (name.clone(), ty.subst(env)))
                             .collect(),
                         variadic: *variadic,
+                        defaults: defaults
+                            .iter()
+                            .enumerate()
+                            .map(|(param, default)| default.map(|_| DefaultRef { object, ctor: true, member, param }))
+                            .collect(),
                     },
                     false,
                 ),
@@ -788,6 +882,7 @@ impl Checker<'_, '_> {
                             })
                             .collect(),
                         variadic: false,
+                        defaults: Vec::new(),
                     },
                     true,
                 ),
@@ -840,6 +935,7 @@ impl Checker<'_, '_> {
                         .map(|field| (field.name.clone(), field.ty.subst(env)))
                         .collect(),
                     variadic: false,
+                    defaults: Vec::new(),
                 };
                 self.fits(call, &given)
             } else if shape.variadic {
@@ -848,9 +944,14 @@ impl Checker<'_, '_> {
                 }
                 self.fits(call, shape)
             } else {
+                // Parameters with default values may be left out (#149).
                 let fits = call.spread.is_none()
-                    && shape.params.len() == call.values.len()
-                    && (!named || shape.params.iter().all(|(name, _)| names.contains(name)));
+                    && call.values.len() <= shape.params.len()
+                    && shape.params.iter().enumerate().all(|(index, (name, _))| {
+                        let given = if named { names.contains(name) } else { index < call.values.len() };
+                        given || shape.has_default(index)
+                    })
+                    && (!named || names.iter().all(|name| shape.params.iter().any(|(param, _)| param == name)));
                 if !fits {
                     continue;
                 }
@@ -954,6 +1055,19 @@ impl Checker<'_, '_> {
         self.construct_values(object, resolved, call, span)
     }
 
+    /// The end of this body can await an async destroy (#154): an async body,
+    /// or a constructor or field default of an object that has one itself.
+    fn awaits_destroys(&self) -> bool {
+        if self.is_async {
+            return true;
+        }
+        let Some(owner) = self.object.filter(|_| matches!(self.kind, Kind::Ctor | Kind::Default)) else {
+            return false;
+        };
+        let params = self.reg.objects[owner.0].params.iter().map(|param| Ty::Param(*param)).collect();
+        self.reg.async_destroy(&Ty::Object(owner, params))
+    }
+
     /// Конструирование по вычисленным аргументам.
     pub(super) fn construct_values(
         &mut self,
@@ -971,6 +1085,10 @@ impl Checker<'_, '_> {
         let shapes = self.ctor_shapes(object, &env);
         let object_ty = Ty::Object(object, type_args.clone());
         let name = self.type_name(&object_ty);
+        if self.reg.async_destroy(&object_ty) && !self.awaits_destroys() {
+            self.error(span, format!("{name} has an async destroy; own it in an async action"));
+            return Self::poisoned(span);
+        }
         let names = call.names();
         let (by_shape, typed) = self.ctor_candidates(object, &shapes, &call, &env);
         // Типам не подошёл никто, а по форме — ровно один: его ошибку типа
@@ -1024,6 +1142,7 @@ impl Checker<'_, '_> {
                 Shape {
                     params,
                     variadic: false,
+                    defaults: Vec::new(),
                 },
                 given,
             )
@@ -1072,6 +1191,15 @@ impl Checker<'_, '_> {
                             .map(|(name, ty)| (name.clone(), ty.subst(&env)))
                             .collect(),
                         variadic: method.variadic,
+                        defaults: method.decl.map_or_else(Vec::new, |decl| {
+                            decl.params
+                                .iter()
+                                .enumerate()
+                                .map(|(param, declared)| {
+                                    declared.default.as_ref().map(|_| DefaultRef { object, ctor: false, member: index, param })
+                                })
+                                .collect()
+                        }),
                     },
                 )
             })
@@ -1100,6 +1228,7 @@ impl Checker<'_, '_> {
                             .map(|(name, ty)| (name.clone(), ty.subst(&env)))
                             .collect(),
                         variadic: method.variadic,
+                        defaults: Vec::new(),
                     },
                 )
             })
@@ -1114,16 +1243,17 @@ impl Checker<'_, '_> {
             .iter()
             .map(|(_, shape)| shape)
             .filter(|shape| {
-                // Параметров по умолчанию нет: именованный вызов называет все.
+                // A parameter with a default value may be left out (#149).
+                let required = (0..shape.params.len()).filter(|index| !shape.has_default(*index)).count();
                 if named {
-                    shape.params.len() == args.len()
+                    (required..=shape.params.len()).contains(&args.len())
                         && args.iter().all(|arg| {
                             arg.name.as_ref().is_some_and(|name| {
                                 shape.params.iter().any(|(param, _)| *param == name.text)
                             })
                         })
                 } else {
-                    shape.variadic || shape.params.len() == args.len()
+                    shape.variadic || (required..=shape.params.len()).contains(&args.len())
                 }
             })
             .collect();
@@ -1190,7 +1320,7 @@ impl Checker<'_, '_> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn object_method(
+    pub(super) fn object_method(
         &mut self,
         target: Expr,
         object: ObjectId,
@@ -1376,7 +1506,9 @@ impl Checker<'_, '_> {
                     arg.value.span,
                     &format!("test.{} argument", name.text),
                 ),
-                None => value,
+                // An assertion argument consumes a successor like any call
+                // argument; the intrinsic is specialized for its object (#275).
+                None => Self::consume(value),
             };
             values.push(value);
         }
@@ -1448,8 +1580,11 @@ impl Checker<'_, '_> {
                 }
             };
         }
-        if let ast::ExprKind::Name(space) = &strip_grouping(receiver).kind {
-            if self.local(&space.text).is_none() {
+        if let ast::ExprKind::Name(space) = &strip_grouping(receiver).kind
+            && self.local(&space.text).is_none() {
+                if let Some(id) = self.reg.find_qualified_const(self.module, &space.text, &name.text) {
+                    return self.const_value(id, span);
+                }
                 if self.reg.is_namespace(self.module, &space.text) {
                     let message = self
                         .reg
@@ -1470,7 +1605,6 @@ impl Checker<'_, '_> {
                     return Self::poisoned(span);
                 }
             }
-        }
         let target = self.value(receiver, None);
         let target_ty = Self::ty_of(&target).taken();
         match &target_ty {
@@ -1805,6 +1939,7 @@ impl Checker<'_, '_> {
             "int" => CastTarget::Int,
             "byte" => CastTarget::Byte,
             "float" => CastTarget::Float,
+            "char" => CastTarget::Char,
             _ => CastTarget::Str,
         };
         self.convert(value, cast, arg.value.span, None, span)

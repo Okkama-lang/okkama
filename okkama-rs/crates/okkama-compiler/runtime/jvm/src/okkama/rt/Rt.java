@@ -92,6 +92,45 @@ public final class Rt {
     static String[] argv = new String[0];
 
     /**
+     * Бюджеты JVM (#237), как у ядра. {@code okkama.steps} — сколько шагов
+     * разрешено программе, собранной под {@code --max-steps} (вход в функцию
+     * и обратный переход вызывают {@link #step}); без свойства предела нет.
+     * {@code okkama.memory} — предел памяти в байтах, он же {@code -Xmx}:
+     * нехватка кучи или стека (стеки не больше предела) — отчёт о памяти.
+     */
+    static long steps = Long.getLong("okkama.steps", Long.MAX_VALUE);
+    static final long MEMORY = Long.getLong("okkama.memory", 0L);
+
+    /** Шаг бюджета: после {@code okkama.steps} шагов — отчёт. */
+    public static void step() {
+        if (steps == 0) {
+            exhausted("steps");
+        }
+        steps--;
+    }
+
+    /**
+     * Исчерпанный бюджет: отчёт ядра и код 1 сразу, без catch, defer и
+     * cleanup программы (их бы перехватила или продлила сама программа).
+     */
+    static void exhausted(String budget) {
+        System.out.flush();
+        System.err.println("Execution budget exhausted: " + budget);
+        System.err.flush();
+        Runtime.getRuntime().halt(1);
+    }
+
+    /** Нехватка памяти под бюджетом {@code okkama.memory}. */
+    static boolean outOfMemory(Throwable error) {
+        return MEMORY > 0 && (error instanceof OutOfMemoryError || error instanceof StackOverflowError);
+    }
+
+    /** Стек потока не больше бюджета памяти, если он задан. */
+    static long stack(long size) {
+        return MEMORY > 0 ? Math.min(size, MEMORY) : size;
+    }
+
+    /**
      * Стек потока программы: глубокая (нехвостовая) рекурсия ограничена
      * памятью, как у исполнителей IR и Sparrow с кадрами в куче, а не 8 МБ
      * стека главного потока JVM. Память стека выделяется по мере роста.
@@ -100,16 +139,31 @@ public final class Rt {
 
     /** Исполнить {@code body} в потоке программы с большим стеком. */
     static void onProgramStack(final Runnable body) {
+        if (MEMORY > 0) {
+            // Задачи и рабочие потоки: нехватка памяти — тот же отчёт.
+            Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
+                public void uncaughtException(Thread thread, Throwable error) {
+                    if (outOfMemory(error)) {
+                        exhausted("memory");
+                    }
+                    System.err.print("Exception in thread \"" + thread.getName() + "\" ");
+                    error.printStackTrace();
+                }
+            });
+        }
         final Throwable[] escaped = new Throwable[1];
         Thread thread = new Thread(null, new Runnable() {
             public void run() {
                 try {
                     body.run();
                 } catch (Throwable other) {
+                    if (outOfMemory(other)) {
+                        exhausted("memory");
+                    }
                     escaped[0] = other;
                 }
             }
-        }, "main", PROGRAM_STACK);
+        }, "main", stack(PROGRAM_STACK));
         thread.start();
         boolean interrupted = false;
         while (true) {
@@ -431,14 +485,88 @@ public final class Rt {
 
     // ----- строки (по code points) -----
 
+    /**
+     * Позиции нескольких недавних строк потока (#52): число code points и
+     * индекс char последнего достигнутого code point. Индекс рядом с ним
+     * ищется от него, поэтому size() в цикле и срез по одному code point
+     * подряд линейны, а не квадратичны.
+     */
+    private static final class Positions {
+        final java.lang.ref.WeakReference<?>[] texts = new java.lang.ref.WeakReference<?>[4];
+        final int[] counts = new int[4], points = new int[4], chars = new int[4];
+        int next;
+
+        int entry(String text) {
+            for (int at = 0; at < texts.length; at++) {
+                if (texts[at] != null && texts[at].get() == text) {
+                    return at;
+                }
+            }
+            int at = next;
+            next = (next + 1) % texts.length;
+            texts[at] = new java.lang.ref.WeakReference<String>(text);
+            counts[at] = text.codePointCount(0, text.length());
+            points[at] = 0;
+            chars[at] = 0;
+            return at;
+        }
+
+        /** Индекс char code point {@code index} (не больше числа). */
+        int offset(String text, int index) {
+            int at = entry(text);
+            int point = 0, position = 0;
+            int best = index;
+            if (Math.abs(counts[at] - index) < best) {
+                point = counts[at];
+                position = text.length();
+                best = Math.abs(counts[at] - index);
+            }
+            if (Math.abs(points[at] - index) < best) {
+                point = points[at];
+                position = chars[at];
+            }
+            while (point < index) {
+                position += Character.charCount(text.codePointAt(position));
+                point++;
+            }
+            while (point > index) {
+                position--;
+                if (position > 0 && Character.isLowSurrogate(text.charAt(position)) && Character.isHighSurrogate(text.charAt(position - 1))) {
+                    position--;
+                }
+                point--;
+            }
+            points[at] = point;
+            chars[at] = position;
+            return position;
+        }
+    }
+
+    private static final ThreadLocal<Positions> POSITIONS = ThreadLocal.withInitial(Positions::new);
+
+    /** Короткие строки дешевле посчитать, чем искать в кэше. */
+    private static final int CACHED_LENGTH = 64;
+
+    private static int codePoints(String text) {
+        if (text.length() < CACHED_LENGTH) {
+            return text.codePointCount(0, text.length());
+        }
+        Positions positions = POSITIONS.get();
+        return positions.counts[positions.entry(text)];
+    }
+
     public static BigInteger length(String text) {
-        return BigInteger.valueOf(text.codePointCount(0, text.length()));
+        return BigInteger.valueOf(codePoints(text));
     }
 
     public static String slice(String text, BigInteger start, BigInteger end) {
-        sliceBounds(start, end, text.codePointCount(0, text.length()));
-        int from = text.offsetByCodePoints(0, start.intValue());
-        int to = text.offsetByCodePoints(0, end.intValue());
+        sliceBounds(start, end, codePoints(text));
+        if (text.length() < CACHED_LENGTH) {
+            return text.substring(text.offsetByCodePoints(0, start.intValue()), text.offsetByCodePoints(0, end.intValue()));
+        }
+        Positions positions = POSITIONS.get();
+        int from = positions.offset(text, start.intValue());
+        int to = positions.offset(text, end.intValue());
         return text.substring(from, to);
     }
 
@@ -523,6 +651,89 @@ public final class Rt {
         return text.substring(start, end);
     }
 
+    public static String trimStart(String text) {
+        int start = 0;
+        while (start < text.length() && space(text.codePointAt(start))) {
+            start += Character.charCount(text.codePointAt(start));
+        }
+        return text.substring(start);
+    }
+
+    public static String trimEnd(String text) {
+        int end = text.length();
+        while (end > 0 && space(text.codePointBefore(end))) {
+            end -= Character.charCount(text.codePointBefore(end));
+        }
+        return text.substring(0, end);
+    }
+
+    /** Индекс code point первого вхождения или -1 (#210); пустая часть — в 0. */
+    public static BigInteger find(String text, String part) {
+        int found = text.indexOf(part);
+        return BigInteger.valueOf(found < 0 ? -1 : text.codePointCount(0, found));
+    }
+
+    /** Индекс code point последнего вхождения или -1; пустая часть — в конце. */
+    public static BigInteger findLast(String text, String part) {
+        int found = text.lastIndexOf(part);
+        return BigInteger.valueOf(found < 0 ? -1 : text.codePointCount(0, found));
+    }
+
+    public static boolean startsWith(String text, String part) {
+        return text.startsWith(part);
+    }
+
+    public static boolean endsWith(String text, String part) {
+        return text.endsWith(part);
+    }
+
+    /** Полное Unicode-отображение регистра, без учёта локали (как Rust). */
+    public static String lower(String text) {
+        return text.toLowerCase(java.util.Locale.ROOT);
+    }
+
+    public static String upper(String text) {
+        return text.toUpperCase(java.util.Locale.ROOT);
+    }
+
+    /** Самый длинный результат {@code repeat} в байтах UTF-8, как в Rust-движках. */
+    private static final long REPEAT_LIMIT = 1L << 30;
+
+    public static String repeat(String text, BigInteger count) {
+        if (count.signum() < 0 || count.bitLength() > 62) {
+            throw count.signum() < 0 ? trap("repeat needs a non-negative count") : trap("repeat result is too large");
+        }
+        long size = (long) text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        long times = count.longValue();
+        if (times != 0 && size > REPEAT_LIMIT / times) {
+            throw trap("repeat result is too large");
+        }
+        return text.repeat((int) times);
+    }
+
+    /** {@code @char} строки: code points (#231). */
+    public static List<Object> characters(String text) {
+        List<Object> out = new ArrayList<Object>();
+        text.codePoints().forEach(codePoint -> out.add(Integer.valueOf(codePoint)));
+        return out;
+    }
+
+    public static String charText(int codePoint) {
+        return new String(Character.toChars(codePoint));
+    }
+
+    /** {@code char(code)}: скалярное значение Unicode (без суррогатов). */
+    public static int charFrom(BigInteger code) {
+        if (code.signum() < 0 || code.bitLength() > 21) {
+            throw trap("char needs a Unicode scalar value (0..0x10FFFF, not a surrogate)");
+        }
+        int value = code.intValue();
+        if (value > 0x10FFFF || (value >= 0xD800 && value <= 0xDFFF)) {
+            throw trap("char needs a Unicode scalar value (0..0x10FFFF, not a surrogate)");
+        }
+        return value;
+    }
+
     /** Ровно один завершающий CRLF или LF; одиночный CR остаётся (D-033). */
     public static String chomp(String text) {
         if (text.endsWith("\r\n")) {
@@ -570,7 +781,7 @@ public final class Rt {
             return "\"" + key + "\"";
         }
         if (key instanceof Boolean) {
-            return ((Boolean) key) ? "1" : "0";
+            return ((Boolean) key) ? "true" : "false";
         }
         if (key instanceof Byte) {
             return Integer.toString(((Byte) key) & 0xFF);
@@ -586,6 +797,61 @@ public final class Rt {
             return "\"" + new String(Character.toChars((Integer) key)) + "\"";
         }
         return key.toString();
+    }
+
+    /** {@code a + b + ...} over arrays: one list sized for all parts. */
+    public static List<Object> concat(Object[] parts) {
+        int size = 0;
+        for (Object part : parts) {
+            size += ((List<?>) part).size();
+        }
+        ArrayList<Object> result = new ArrayList<Object>(size);
+        for (Object part : parts) {
+            result.addAll((List<?>) part);
+        }
+        return result;
+    }
+
+    /** {@code a - b - ...} over arrays: elements equal to none of the removed ones, in order. */
+    public static List<Object> difference(List<?> array, Object[] removed) {
+        ArrayList<Object> all = new ArrayList<Object>();
+        boolean hashable = true;
+        for (Object part : removed) {
+            for (Object item : (List<?>) part) {
+                all.add(item);
+                hashable &= item instanceof BigInteger || item instanceof String || item instanceof Boolean
+                    || item instanceof Byte || item instanceof Character;
+            }
+        }
+        java.util.Collection<Object> excluded = hashable ? new java.util.HashSet<Object>(all) : all;
+        ArrayList<Object> result = new ArrayList<Object>(array.size());
+        for (Object item : array) {
+            if (!excluded.contains(item)) {
+                result.add(item);
+            }
+        }
+        return result;
+    }
+
+    /** {@code a + b + ...} over maps: entries of every part; a repeated key takes the rightmost value. */
+    public static Map<Object, Object> merge(Object[] parts) {
+        Map<Object, Object> result = newMap();
+        for (Object part : parts) {
+            result.putAll((Map<?, ?>) part);
+        }
+        return result;
+    }
+
+    /** {@code a - b - ...} over maps: entries of {@code map} whose keys are in none of the removed maps. */
+    public static Map<Object, Object> without(Map<?, ?> map, Object[] removed) {
+        Map<Object, Object> result = newMap();
+        result.putAll(map);
+        for (Object part : removed) {
+            for (Object key : ((Map<?, ?>) part).keySet()) {
+                result.remove(key);
+            }
+        }
+        return result;
     }
 
     public static List<Object> keys(Map<?, ?> map) {

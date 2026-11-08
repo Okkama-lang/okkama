@@ -95,6 +95,8 @@ impl Heap {
             Err(Origin::InvalidState(message) | Origin::Trap(message) | Origin::Unsupported(message)) => {
                 Err(Error(message))
             }
+            // The origin's budgets belong to the IR engine; the core has its own.
+            Err(Origin::Exhausted(exhausted)) => Err(Error(exhausted.message().into())),
         }
     }
 
@@ -166,6 +168,7 @@ impl Heap {
         })
     }
 
+    #[allow(clippy::wrong_self_convention)] // converts into this heap
     fn from_origin(&mut self, value: Value, ty: &Type) -> Result<Slot, Error> {
         Ok(match (ty, value) {
             (Type::Void, _) => Slot::boolean(true),

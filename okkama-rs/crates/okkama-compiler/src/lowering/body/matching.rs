@@ -177,6 +177,12 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         right: &'r thir::Expr,
         span: Span,
     ) -> Result<Out> {
+        if matches!(
+            op,
+            BinaryOp::ArrayConcat | BinaryOp::ArrayDifference | BinaryOp::MapMerge | BinaryOp::MapDifference
+        ) {
+            return self.collection_operator(op, left, right, span);
+        }
         // Операнды вычисляются ровно один раз, слева направо.
         let Some(lhs) = self.value(left)? else {
             return Ok(Out::Diverged);
@@ -185,6 +191,133 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             return Ok(Out::Diverged);
         };
         Ok(Out::Value(self.binary_values(op, lhs, rhs, span)?))
+    }
+
+    /// `a + b + c` над коллекциями — одна инструкция над всеми частями, чтобы
+    /// результат выделялся один раз; `(a - b) - c` — вычитание объединения
+    /// `b` и `c` из `a`. Части вычисляются один раз, слева направо.
+    fn collection_operator(
+        &mut self,
+        op: BinaryOp,
+        left: &'r thir::Expr,
+        right: &'r thir::Expr,
+        span: Span,
+    ) -> Result<Out> {
+        let concat = matches!(op, BinaryOp::ArrayConcat | BinaryOp::MapMerge);
+        let mut parts: Vec<&'r thir::Expr> = Vec::new();
+        if concat {
+            // Склейка ассоциативна: разворачиваются обе стороны.
+            flatten(op, left, &mut parts);
+            flatten(op, right, &mut parts);
+        } else {
+            // Вычитание — только левая цепочка: `a - (b - c)` остаётся вложенным.
+            let mut base = left;
+            let mut removed = vec![right];
+            while let thir::ExprKind::Binary { op: inner, left, right } = &base.kind {
+                if *inner != op {
+                    break;
+                }
+                removed.push(right);
+                base = left;
+            }
+            removed.reverse();
+            parts.push(base);
+            parts.extend(removed);
+        }
+        let mut values = Vec::with_capacity(parts.len());
+        for (index, part) in parts.iter().enumerate() {
+            let Some(value) = self.value(part)? else {
+                return Ok(Out::Diverged);
+            };
+            // A `reduce` accumulator held in a builder (#243): the other parts
+            // grow it in place.
+            if index == 0 && matches!(value.ty, Type::Builder(_) | Type::MapBuilder(..)) {
+                return self.grow_builder(value, &parts[1..], span);
+            }
+            values.push(value);
+        }
+        // Тип результата — тип первой части с тегом (пустой литерал без тега
+        // принимает тип остальных).
+        let ty = parts
+            .iter()
+            .filter_map(|part| part.ty.as_ref())
+            .find(|ty| !ty.is_untagged())
+            .or(parts[0].ty.as_ref())
+            .cloned()
+            .expect("collection operands have types");
+        let ty = self.ir_type(&ty, span)?;
+        let ids: Vec<_> = values.iter().map(|value| value.value).collect();
+        let kind = match op {
+            BinaryOp::ArrayConcat => InstKind::ArrayConcat(ids),
+            BinaryOp::MapMerge => InstKind::MapMerge(ids),
+            BinaryOp::ArrayDifference => InstKind::ArrayDifference { array: ids[0], removed: ids[1..].to_vec() },
+            _ => InstKind::MapDifference { map: ids[0], removed: ids[1..].to_vec() },
+        };
+        Ok(Out::Value(self.emit(kind, ty, span)))
+    }
+
+    /// `acc + [a, b] + more` on a builder: literal elements are pushed, other
+    /// arrays appended, map literal entries put; parts evaluate in order.
+    fn grow_builder(&mut self, mut builder: Typed, parts: &[&'r thir::Expr], span: Span) -> Result<Out> {
+        for part in parts {
+            match (&builder.ty, &part.kind) {
+                (Type::Builder(element), thir::ExprKind::Array(items))
+                    if items.iter().all(|item| matches!(item, thir::ArrayPart::Value(_))) =>
+                {
+                    let element = (**element).clone();
+                    for item in items {
+                        let thir::ArrayPart::Value(item) = item else { unreachable!("checked above") };
+                        let Some(value) = self.value(item)? else {
+                            return Ok(Out::Diverged);
+                        };
+                        let value = self.normalize(&value, &element, span);
+                        self.hand_to_builder_home(&value, span);
+                        builder = self.emit(InstKind::BuilderPush { builder: builder.value, value: value.value }, builder.ty.clone(), span);
+                    }
+                }
+                (Type::Builder(_), _) => {
+                    let Some(array) = self.value(part)? else {
+                        return Ok(Out::Diverged);
+                    };
+                    self.hand_to_builder_home(&array, span);
+                    builder = self.emit(InstKind::BuilderAppend { builder: builder.value, array: array.value }, builder.ty.clone(), span);
+                }
+                (Type::MapBuilder(key_type, value_type), thir::ExprKind::Map(entries)) => {
+                    let (key_type, value_type) = ((**key_type).clone(), (**value_type).clone());
+                    for (key, value) in entries {
+                        let Some(key) = self.value(key)? else {
+                            return Ok(Out::Diverged);
+                        };
+                        let key = self.normalize(&key, &key_type, span);
+                        let Some(value) = self.value(value)? else {
+                            return Ok(Out::Diverged);
+                        };
+                        let value = self.normalize(&value, &value_type, span);
+                        self.hand_to_builder_home(&value, span);
+                        builder = self.emit(
+                            InstKind::MapBuilderPut { builder: builder.value, key: key.value, value: value.value },
+                            builder.ty.clone(),
+                            span,
+                        );
+                    }
+                }
+                _ => {
+                    return Err(LoweringError::invalid(
+                        part.span,
+                        "internal compiler error: a map accumulator grows only by literals",
+                    ));
+                }
+            }
+        }
+        Ok(Out::Value(builder))
+    }
+
+    /// A value pushed onto a `reduce` builder belongs to the scope of that
+    /// `reduce` (#266).
+    fn hand_to_builder_home(&mut self, value: &Typed, span: Span) {
+        if let Some(&home) = self.builder_homes.last() {
+            self.hand_to(home, value, span);
+        }
     }
 
     fn binary_values(&mut self, op: BinaryOp, lhs: Typed, rhs: Typed, span: Span) -> Result<Typed> {
@@ -290,6 +423,9 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                 },
                 Type::Byte,
             ),
+            BinaryOp::ArrayConcat | BinaryOp::ArrayDifference | BinaryOp::MapMerge | BinaryOp::MapDifference => {
+                unreachable!("collection operators lower through collection_operator")
+            }
             BinaryOp::Concat => (
                 InstKind::StrConcat {
                     left: lhs.value,
@@ -430,18 +566,16 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         }
         let mut tracked: Vec<usize> = Vec::new();
         for local in locals {
-            if let Some(var) = self.local_vars[local.0] {
-                if self.vars[var].rebindable && !tracked.contains(&var) {
+            if let Some(var) = self.local_vars[local.0]
+                && self.vars[var].rebindable && !tracked.contains(&var) {
                     tracked.push(var);
                 }
-            }
         }
         for field in fields {
-            if let Some(var) = self.field_vars.get(field).copied() {
-                if !tracked.contains(&var) {
+            if let Some(var) = self.field_vars.get(field).copied()
+                && !tracked.contains(&var) {
                     tracked.push(var);
                 }
-            }
         }
         tracked.sort_unstable();
         // Staged-поле без значения получает исходное; несвязанное поле не передаётся.
@@ -725,5 +859,16 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         self.b.terminate(TermKind::Raise(failure), span);
         self.restore(&entry);
         self.join(arms, base, want, span)
+    }
+}
+
+/// Части склейки `a + b + c` в порядке вычисления.
+fn flatten<'r>(op: BinaryOp, expr: &'r thir::Expr, parts: &mut Vec<&'r thir::Expr>) {
+    match &expr.kind {
+        thir::ExprKind::Binary { op: inner, left, right } if *inner == op => {
+            flatten(op, left, parts);
+            flatten(op, right, parts);
+        }
+        _ => parts.push(expr),
     }
 }

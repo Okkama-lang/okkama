@@ -11,12 +11,14 @@
 
 mod asm;
 mod codec;
+mod liveness;
 mod operand;
 mod typing;
 mod verify;
 
 pub use asm::{AsmError, assemble, disassemble};
 pub use codec::{CodecError, MAX_FILE_BYTES, VERSION, decode, encode};
+pub use liveness::{MAX_LIVENESS_BYTES, live_counts, live_weight};
 pub use okkama_runtime_abi as abi;
 pub use operand::{Access, Operand};
 
@@ -99,6 +101,22 @@ op_enum! {
 }
 
 op_enum! {
+    /// Строковая функция `str.fn` (#210, #231): поиск, края, регистр, повтор.
+    StrFn {
+        Find = 0, "find",
+        FindLast = 1, "find_last",
+        StartsWith = 2, "starts_with",
+        EndsWith = 3, "ends_with",
+        TrimStart = 4, "trim_start",
+        TrimEnd = 5, "trim_end",
+        Lower = 6, "lower",
+        Upper = 7, "upper",
+        Repeat = 8, "repeat",
+        Characters = 9, "characters",
+    }
+}
+
+op_enum! {
     /// Битовое действие над словом `int` или `byte` (§16.2).
     BitOp {
         BitCount = 0, "bit_count",
@@ -130,7 +148,7 @@ op_enum! {
 
 op_enum! {
     /// Код программной ошибки `trap` (§5.3).
-    TrapCode { Confirm = 0, "confirm", Range = 1, "range", Empty = 2, "empty", Unbound = 3, "unbound", Unreachable = 4, "unreachable" }
+    TrapCode { Confirm = 0, "confirm", Range = 1, "range", Empty = 2, "empty", Unbound = 3, "unbound", Unreachable = 4, "unreachable", Pending = 5, "pending" }
 }
 
 macro_rules! instructions {
@@ -282,6 +300,10 @@ instructions! {
     StrTrim = 77, "str.trim" { dst: Dst, text: Register }
     StrChomp = 78, "str.chomp" { dst: Dst, text: Register }
     StrUtf8 = 79, "str.utf8" { dst: Dst, text: Register }
+    /// Строковая функция `op` над `args` (первый — строка, #210).
+    StrFn = 86, "str.fn" { op: StrFn, dst: Dst, args: Vec<Register> }
+    /// Значение `globals[global]` программы (#153).
+    GlobalGet = 87, "global.get" { dst: Dst, global: u32 }
 
     /// Глубокое равенство (§16.3), только `eq`/`ne`.
     ValCmp = 80, "val.cmp" { op: Cmp, dst: Dst, left: Register, right: Register }
@@ -308,6 +330,10 @@ instructions! {
     ArrayGet = 102, "arr.get" { dst: Dst, array: Register, index: Register }
     ArraySlice = 103, "arr.slice" { dst: Dst, array: Register, start: Register, end: Register }
     ArrayJoin = 104, "arr.join" { dst: Dst, array: Register, separator: Register }
+    /// `a + b + ...`: один массив под сумму длин частей.
+    ArrayConcat = 96, "arr.concat" { dst: Dst, parts: Vec<Register> }
+    /// `a - b - ...`: элементы `array`, не равные ни одному элементу `removed`.
+    ArrayDiff = 97, "arr.diff" { dst: Dst, array: Register, removed: Vec<Register> }
     BuilderNew = 105, "builder.new" { dst: Dst }
     BuilderPush = 106, "builder.push" { dst: Dst, builder: Register, value: Register }
     BuilderAppend = 107, "builder.append" { dst: Dst, builder: Register, array: Register }
@@ -320,6 +346,10 @@ instructions! {
     MapGet = 113, "map.get" { dst: Dst, map: Register, key: Register }
     MapKeys = 114, "map.keys" { dst: Dst, map: Register }
     MapValues = 115, "map.values" { dst: Dst, map: Register }
+    /// `a + b + ...`: записи всех частей; повтор ключа — значение правой части.
+    MapMerge = 98, "map.merge" { dst: Dst, parts: Vec<Register> }
+    /// `a - b - ...`: записи `map`, ключей которых нет ни в одной из `removed`.
+    MapDiff = 99, "map.diff" { dst: Dst, map: Register, removed: Vec<Register> }
     MapBuilderNew = 116, "mbuilder.new" { dst: Dst }
     MapBuilderPut = 117, "mbuilder.put" { dst: Dst, builder: Register, key: Register, value: Register }
     MapBuilderFinish = 118, "mbuilder.finish" { dst: Dst, builder: Register }
@@ -350,6 +380,11 @@ instructions! {
     RegionLeave = 134, "region.leave" { region: Register, keep: Option<Register> }
     /// Закрыть регион на пути отказа; результат — отказ с вторичными отказами destroy.
     RegionUnwind = 135, "region.unwind" { dst: Dst, region: Register, failure: Register }
+    /// `region.leave` в async-функции: точка приостановки, async destroy
+    /// ожидаются, отмена до конца закрытия не доставляется (#154).
+    RegionSettle = 138, "region.settle" { region: Register, keep: Option<Register> }
+    /// `region.unwind` в async-функции (#154).
+    RegionSettleUnwind = 139, "region.settle_unwind" { dst: Dst, region: Register, failure: Register }
     FailSecondary = 136, "fail.secondary" { dst: Dst, primary: Register, cleanup: Register }
     FailCaused = 137, "fail.caused" { dst: Dst, new: Register, handled: Register }
 
@@ -468,6 +503,14 @@ impl ObjectDecl {
     }
 }
 
+/// `const` модуля (#153): значение типа `ty` строит `init` (без параметров)
+/// при запуске программы, а `global.get` читает его без копии.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GlobalDecl {
+    pub ty: TypeRef,
+    pub init: FuncRef,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CapDecl {
     pub name: String,
@@ -532,6 +575,7 @@ pub struct Program {
     pub objects: Vec<ObjectDecl>,
     pub handles: Vec<String>,
     pub caps: Vec<CapDecl>,
+    pub globals: Vec<GlobalDecl>,
     pub functions: Vec<Function>,
     pub entry: Option<FuncRef>,
     /// Тестовый профиль: имя и функция каждого теста корня.

@@ -170,7 +170,7 @@
         },
         {
           "name": "constant.numeric.float.okkama",
-          "match": "\\b[0-9]+(?:_[0-9]+)*\\.[0-9]+(?:_[0-9]+)*\\b"
+          "match": "\\b[0-9]+(?:_[0-9]+)*(?:\\.[0-9]+(?:_[0-9]+)*(?:[eE][+-]?[0-9]+(?:_[0-9]+)*)?|[eE][+-]?[0-9]+(?:_[0-9]+)*)\\b"
         },
         {
           "name": "constant.numeric.integer.okkama",
@@ -323,7 +323,7 @@
         },
         {
           "name": "keyword.declaration.okkama",
-          "match": "\\b(module|import|take|as|native|object|role|does|enum|has|is|private|test|fake|destroy|let)\\b"
+          "match": "\\b(module|import|take|as|native|object|role|does|enum|has|is|private|test|fake|destroy|let|const)\\b"
         },
         {
           "name": "storage.modifier.async.okkama",

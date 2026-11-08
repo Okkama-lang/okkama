@@ -91,6 +91,9 @@ pub struct Runtime {
     pub constants: Vec<(Word, Repr)>,
     /// Values held by Rust while machine code runs (entry arguments, results).
     pub roots: Vec<(Word, Repr)>,
+    /// `const` arrays and maps (#153), built at their first read; each is
+    /// then also in `constants`, so it stays a root.
+    pub globals: Vec<Option<Word>>,
     pub fatal: Option<String>,
     /// The last failure `describe` reported, as the OCS protocol sees it.
     pub uncaught: Option<crate::Uncaught>,
@@ -115,6 +118,9 @@ pub struct Runtime {
     pub io: crate::io::Io,
     /// Event counts by name when `SPARROW_CORE_STATS` is set (diagnostics).
     pub stats: Option<Box<std::collections::HashMap<String, u64>>>,
+    /// When this runtime was made: `--stats` reports the run's wall time, so
+    /// machine code ≈ run − compile − collection (#55).
+    created: std::time::Instant,
     /// The command (`sparrow-next`, FILE.spb) process workers run; empty
     /// when the embedder configured none.
     pub worker_command: Vec<std::ffi::OsString>,
@@ -136,6 +142,9 @@ pub(crate) struct Budget {
     pub written: u64,
     /// Steps left in the current slice; machine code polls below zero.
     pub fuel: crate::budget::Fuel,
+    /// The memory budget caps the machine stack: overflowing it is running
+    /// out of memory, as on the IR engine and the JVM (#241).
+    pub stack_capped: bool,
 }
 
 /// Frame pointer of the calling function's own frame record.
@@ -160,6 +169,9 @@ impl Runtime {
         crate::contracts::check(&loaded)?;
         let mut heap = Heap::new(loaded.layouts());
         heap.set_stress(std::env::var_os("SPARROW_CORE_GC_STRESS").is_some_and(|value| value == "1"));
+        if std::env::var_os("SPARROW_CORE_STATS").is_some() {
+            heap.allocations = Some(Box::default());
+        }
         let functions = loaded.program.functions.len();
         let resources = crate::failures::Resources::new(&loaded.program);
         let intrinsics = loaded
@@ -186,6 +198,7 @@ impl Runtime {
             host: Some(Box::new(crate::host::Heap::new(&loaded.program))),
             io: crate::io::Io::default(),
             stats: std::env::var_os("SPARROW_CORE_STATS").map(|_| Box::default()),
+            created: std::time::Instant::now(),
             worker_command: Vec::new(),
             limits: crate::budget::Limits::default(),
             poisoned: false,
@@ -193,6 +206,7 @@ impl Runtime {
             heap,
             jit: crate::jit::Jit::new()?,
             code: vec![0; functions].into_boxed_slice(),
+            globals: vec![None; loaded.program.globals.len()],
             loaded,
             constants: Vec::new(),
             roots: Vec::new(),
@@ -267,11 +281,34 @@ impl Runtime {
             ("heap live bytes, mean after collection".to_string(), (heap.live_sum / heap.collections.max(1)) as u64),
         ];
         let helpers = self.jit.helper_calls();
+        // Runtime allocations by kind (objects by type) and collection time.
+        let program = &self.loaded.program;
+        let allocations: Vec<(String, u64)> = self
+            .heap
+            .allocations
+            .iter()
+            .flat_map(|allocations| {
+                allocations
+                    .kinds
+                    .iter()
+                    .flat_map(|(&(kind, descriptor), &(count, bytes))| {
+                        let what = match kind {
+                            "object" => format!("object {}", program.objects.get(descriptor as usize).map_or("?", |object| object.name.as_str())),
+                            other => other.to_string(),
+                        };
+                        [(format!("alloc runtime {what}, count"), count), (format!("alloc runtime {what}, bytes"), bytes)]
+                    })
+                    .chain([
+                        ("collection, microseconds".to_string(), allocations.collection_nanos / 1000),
+                        ("run, microseconds".to_string(), self.created.elapsed().as_micros() as u64),
+                    ])
+            })
+            .collect();
         let mut entries: Vec<_> = stats
             .iter()
-            .map(|(k, v)| (k, v))
             .chain(extra.iter().map(|(k, v)| (k, v)))
             .chain(helpers.iter().map(|(k, v)| (k, v)))
+            .chain(allocations.iter().map(|(k, v)| (k, v)))
             .collect();
         entries.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
         Some(entries.iter().map(|(k, v)| format!("{v:>12} {k}\n")).collect())
@@ -374,6 +411,13 @@ impl Runtime {
         0
     }
 
+    /// Mark the memory budget exhausted from code without a context (a
+    /// native): the run stops at its next poll.
+    pub(crate) fn refuse_memory(&mut self) {
+        self.budget.exhausted.get_or_insert(Exhausted::Memory);
+        self.budget.fuel.set(0);
+    }
+
     /// Would `bytes` more cross the memory budget?
     pub(crate) fn would_exceed(&self, bytes: u64) -> bool {
         match (self.limits.memory, &self.budget.meter) {
@@ -432,7 +476,7 @@ impl Runtime {
     /// The report of an exhausted run.
     fn exhausted_report(&mut self) -> Error {
         let message = self.budget.exhausted.unwrap_or(Exhausted::Interrupted).message();
-        self.uncaught = Some(crate::Uncaught { category: "exhausted", error_type: None, message: message.into() });
+        self.uncaught = Some(crate::Uncaught { category: "exhausted", error_type: None, message: message.into(), trace: Vec::new() });
         Error(message.into())
     }
 }
@@ -504,9 +548,12 @@ pub extern "C" fn rt_int_order(ctx: *mut Ctx, left: Word, right: Word) -> i64 {
 pub extern "C" fn rt_concat(ctx: *mut Ctx, left: Word, right: Word) -> Word {
     let frame = frame_pointer!();
     let (ctx, runtime) = unsafe { runtime(ctx) };
-    let mut text = String::with_capacity(
-        runtime.heap.text(left).len() + runtime.heap.text(right).len(),
-    );
+    // The size is known before the copy (#72): a memory budget stops it here.
+    let size = runtime.heap.text(left).len() + runtime.heap.text(right).len();
+    if runtime.would_exceed(size as u64) {
+        return runtime.exhaust(ctx, Exhausted::Memory);
+    }
+    let mut text = String::with_capacity(size);
     text.push_str(runtime.heap.text(left));
     text.push_str(runtime.heap.text(right));
     let word = runtime.heap.allocate_text(&text);
@@ -541,6 +588,17 @@ pub extern "C" fn rt_trap(ctx: *mut Ctx, message: Word) -> Word {
     fail(ctx, runtime, FailureKind::Program(message))
 }
 
+/// The machine stack ran out at a function entry: the memory budget when it
+/// caps the stack, otherwise the failure `Stack overflow`.
+#[inline(never)]
+pub extern "C" fn rt_stack_overflow(ctx: *mut Ctx) -> Word {
+    let (ctx, runtime) = unsafe { runtime(ctx) };
+    if runtime.budget.stack_capped {
+        return runtime.exhaust(ctx, Exhausted::Memory);
+    }
+    fail(ctx, runtime, FailureKind::Program("Stack overflow".into()))
+}
+
 /// `throw value`.
 #[inline(never)]
 pub extern "C" fn rt_throw(ctx: *mut Ctx, value: Word) -> Word {
@@ -558,12 +616,11 @@ pub extern "C" fn rt_throw(ctx: *mut Ctx, value: Word) -> Word {
 pub extern "C" fn rt_trace(ctx: *mut Ctx, function: u64, pc: u64, frame: u64) {
     let (ctx, runtime) = unsafe { runtime(ctx) };
     let failure = ctx.failure;
-    if let Some(failure) = runtime.heap.payload_mut::<Failure>(failure) {
-        if failure.last_frame != Some((function as u32, frame)) {
+    if let Some(failure) = runtime.heap.payload_mut::<Failure>(failure)
+        && failure.last_frame != Some((function as u32, frame)) {
             failure.trace.push((function as u32, pc as u32));
             failure.last_frame = Some((function as u32, frame));
         }
-    }
 }
 
 /// Call a native provider with `count` argument words at `arguments`.
@@ -642,6 +699,7 @@ impl Runtime {
         let fuel = self.start_budget()?;
         self.budget.fuel.set(fuel);
         // A memory budget also bounds the machine stack.
+        self.budget.stack_capped = self.limits.memory.is_some_and(|memory| memory.max(2 << 20) < stack);
         let stack = self.limits.memory.map_or(stack, |memory| stack.min(memory.max(2 << 20)));
         let marker = 0u8;
         let mut ctx = Ctx {
@@ -662,12 +720,11 @@ impl Runtime {
             if ctx.status == OK {
                 self.schedule(&mut ctx, root);
             }
-            if ctx.status == OK {
-                if let Some(failure) = self.shutdown(&mut ctx) {
+            if ctx.status == OK
+                && let Some(failure) = self.shutdown(&mut ctx) {
                     let message = self.describe(&mut ctx, failure);
                     return Err(Error(message));
                 }
-            }
             if ctx.status == OK {
                 let state = unsafe { *((root + crate::tasks::STATE) as *const u64) };
                 if state == crate::tasks::FAILURE_STATE {

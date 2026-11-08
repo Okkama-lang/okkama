@@ -26,8 +26,14 @@ USAGE:
 
 run          Verify and execute bytecode; ARGS are the program's arguments.
              main's integer result in 0..255 becomes the exit status; an
-             uncaught failure is reported on stderr (exit 1). `--stats` prints
-             counts of runtime events at exit (also SPARROW_CORE_STATS=1).
+             uncaught failure is reported on stderr (exit 1) with the call
+             stack in Sparrow terms (OKKAMA_TRACE=off: without). `--stats` prints
+             counts of runtime events at exit (also SPARROW_CORE_STATS=1),
+             with the compile time and machine-code size of each function.
+             DEBUGGING the compiled code (SYMBOLS: comma-separated, or *):
+               SPARROW_CORE_DUMP=SYMBOLS         CLIF and machine code to stderr
+               SPARROW_CORE_UNOPTIMIZED=SYMBOLS  compile without Cranelift's passes
+               SPARROW_CORE_PLAIN=SYMBOLS        compile without inline fast paths
              BUDGETS (all off by default; running out exits 1 with
              \"Execution budget exhausted: …\" or \"Execution interrupted\"):
                --max-steps N      stop after N steps (function entries, loop iterations)
@@ -83,11 +89,37 @@ fn report(error: sparrow_core::Error) -> Result<u8, Failure> {
     Ok(1)
 }
 
+/// Stop the process with the interrupt report one second after `flag` is
+/// raised, if the run has not stopped by then: a native that cannot look at
+/// the flag (Argon2, a blocking read) still ends (#238).
+fn watchdog(flag: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    let _ = std::thread::Builder::new().name("sparrow-watchdog".into()).spawn(move || {
+        while !flag.load(std::sync::atomic::Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        eprintln!("{}", sparrow_core::budget::Exhausted::Interrupted.message());
+        std::process::exit(1);
+    });
+}
+
 fn execute(path: &Path, arguments: &[String], stats: bool, limits: sparrow_core::budget::Limits) -> Result<u8, Failure> {
-    let (bytes, _) = load(path)?;
+    let (bytes, program) = load(path)?;
+    if let Some(flag) = &limits.interrupt {
+        watchdog(flag.clone());
+    }
     let arguments = arguments.iter().map(|a| a.clone().into_bytes()).collect();
-    match sparrow_core::run_limited(bytes, arguments, stats, worker_command(path), limits) {
-        Ok(code) => u8::try_from(code).map_err(|_| (1, format!("main() must return an int in 0..255, got {code}"))),
+    match sparrow_core::run_described(bytes, arguments, stats, worker_command(path), limits) {
+        Ok(Ok(code)) => u8::try_from(code).map_err(|_| (1, format!("main() must return an int in 0..255, got {code}"))),
+        Ok(Err((error, uncaught))) => {
+            let code = report(error);
+            // `OKKAMA_TRACE=off` — the failure alone, as with `okkama run`.
+            if let Some(uncaught) = uncaught.filter(|_| std::env::var("OKKAMA_TRACE").as_deref() != Ok("off")) {
+                eprint!("{}", sparrow_core::render_trace(&program, &uncaught.trace));
+            }
+            code
+        }
         Err(error) => report(error),
     }
 }
@@ -183,13 +215,14 @@ fn run() -> Result<u8, Failure> {
             let mut stats = false;
             let mut limits = sparrow_core::budget::Limits::default();
             let mut rest = rest;
-            while first == "run" {
-                match rest {
-                    [flag, tail @ ..] if flag == "--stats" => {
+            // Options belong to `run` only.
+            while let ("run", [flag, tail @ ..]) = (first.as_str(), rest) {
+                match (flag.as_str(), tail) {
+                    ("--stats", _) => {
                         stats = true;
                         rest = tail;
                     }
-                    [flag, value, tail @ ..] if limits.option(flag, value).map_err(|e| (2, e))? => rest = tail,
+                    (_, [value, tail @ ..]) if limits.option(flag, value).map_err(|e| (2, e))? => rest = tail,
                     _ => break,
                 }
             }

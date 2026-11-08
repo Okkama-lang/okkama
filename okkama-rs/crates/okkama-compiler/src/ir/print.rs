@@ -153,6 +153,10 @@ impl Display for Module {
             writeln!(f)?;
             writeln!(f, "native object {}", decl.name)?;
         }
+        for (index, global) in self.globals.iter().enumerate() {
+            writeln!(f)?;
+            writeln!(f, "global g{index}: {} = @{}()", global.ty, self.functions[global.init.0].symbol)?;
+        }
         for cap in &self.caps {
             writeln!(f)?;
             writeln!(f, "cap {} {{", cap.name)?;
@@ -375,6 +379,7 @@ fn write_inst(
     };
     match kind {
         InstKind::Const(constant) => write!(f, "const {constant}"),
+        InstKind::Global(index) => write!(f, "global g{index}"),
         InstKind::IntBinary { op, left, right } => {
             write!(f, "{} {left}, {right}", op.mnemonic())
         }
@@ -412,6 +417,10 @@ fn write_inst(
         }
         InstKind::ObjGet { object, field } => {
             write!(f, "obj.get {object}, ")?;
+            write_field(f, module, object_of(object), *field)
+        }
+        InstKind::ObjPending { object, field } => {
+            write!(f, "obj.pending {object}, ")?;
             write_field(f, module, object_of(object), *field)
         }
         InstKind::ObjNext { object, updates } => {
@@ -511,6 +520,26 @@ fn write_inst(
             write!(f, "array.slice {array}, {start}, {end}")
         }
         InstKind::ArrayJoin { array, separator } => write!(f, "array.join {array}, {separator}"),
+        InstKind::ArrayConcat(parts) => {
+            f.write_str("array.concat [")?;
+            write_list(f, parts)?;
+            f.write_char(']')
+        }
+        InstKind::ArrayDifference { array, removed } => {
+            write!(f, "array.difference {array}, [")?;
+            write_list(f, removed)?;
+            f.write_char(']')
+        }
+        InstKind::MapMerge(parts) => {
+            f.write_str("map.merge [")?;
+            write_list(f, parts)?;
+            f.write_char(']')
+        }
+        InstKind::MapDifference { map, removed } => {
+            write!(f, "map.difference {map}, [")?;
+            write_list(f, removed)?;
+            f.write_char(']')
+        }
         InstKind::Retag(value) => write!(f, "array.retag {value}"),
         InstKind::BuilderNew => f.write_str("builder.new"),
         InstKind::BuilderPush { builder, value } => write!(f, "builder.push {builder}, {value}"),
@@ -603,6 +632,16 @@ fn write_inst(
         }
         InstKind::RegionUnwind { region, failure } => {
             write!(f, "region.unwind {region}, {failure}")
+        }
+        InstKind::RegionSettle { region, keep } => {
+            write!(f, "region.settle {region}")?;
+            if let Some(keep) = keep {
+                write!(f, ", keep {keep}")?;
+            }
+            Ok(())
+        }
+        InstKind::RegionSettleUnwind { region, failure } => {
+            write!(f, "region.settle_unwind {region}, {failure}")
         }
         InstKind::FailSecondary { primary, cleanup } => {
             write!(f, "fail.secondary {primary}, {cleanup}")

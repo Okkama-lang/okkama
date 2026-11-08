@@ -14,7 +14,7 @@ use num_bigint::BigInt;
 use num_integer::Integer as _;
 use num_rational::BigRational;
 use num_traits::{Signed, ToPrimitive, Zero};
-use okkama_sparrow::{Access, Cmp, Instruction as I, Type, TypeRef};
+use okkama_sparrow::{Access, Cmp, Instruction as I, StrFn, Type, TypeRef};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -78,13 +78,18 @@ payload! {
     }
 }
 
-/// Map keys own immutable scalar data; order follows the previous engine.
+/// Map keys own immutable data; order follows the previous engine. An
+/// object key (#212) is its declaration and its fields as keys, so equality
+/// and order are structural, like `==`; the entry keeps the object's word.
 #[derive(Debug, Clone)]
 pub enum Key {
     Int(BigInt),
     Float(f64),
     Raw(u64),
     Str(Rc<str>),
+    /// A `rat` field of an object key.
+    Rat(Rc<BigRational>),
+    Object(u32, Rc<[Key]>),
 }
 impl Ord for Key {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -93,6 +98,8 @@ impl Ord for Key {
             (Self::Float(a), Self::Float(b)) => a.partial_cmp(b).expect("finite float key"),
             (Self::Raw(a), Self::Raw(b)) => a.cmp(b),
             (Self::Str(a), Self::Str(b)) => a.cmp(b),
+            (Self::Rat(a), Self::Rat(b)) => a.cmp(b),
+            (Self::Object(a, x), Self::Object(b, y)) => a.cmp(b).then_with(|| x.iter().cmp(y.iter())),
             _ => self.rank().cmp(&other.rank()),
         }
     }
@@ -104,6 +111,8 @@ impl Key {
             Self::Float(_) => 1,
             Self::Raw(_) => 2,
             Self::Str(_) => 3,
+            Self::Rat(_) => 4,
+            Self::Object(..) => 5,
         }
     }
 }
@@ -150,12 +159,51 @@ impl Runtime {
     fn kind_of(&self, ty: TypeRef) -> Kind {
         Kind::of(&self.loaded.program, ty)
     }
+    /// A map key (#242): a value whose type is not a key type — an array, a
+    /// map, an object holding one — is refused instead of being compared by
+    /// identity; a generic map could otherwise reach one at run time.
+    pub(crate) fn checked_key(&self, word: Word, kind: Kind, ty: Option<&Type>) -> Result<Key, String> {
+        if self.is_key(word, kind, ty) {
+            Ok(self.key(word, kind, ty))
+        } else {
+            Err("map key must be a scalar, enum, string or value object".into())
+        }
+    }
+
+    fn is_key(&self, word: Word, kind: Kind, ty: Option<&Type>) -> bool {
+        match (kind, ty) {
+            (Kind::Int | Kind::Float | Kind::Raw | Kind::Byte, _) | (_, Some(Type::Str | Type::Rat)) => true,
+            (_, Some(Type::Object(_))) if heap::kind(self.heap.header_of(word)) == heap::OBJECT => {
+                let declaration = heap::payload(self.heap.header_of(word));
+                let program = &self.loaded.program;
+                program.objects[declaration as usize]
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .all(|(index, &(_, field))| self.is_key(self.heap.field(word, index), self.kind_of(field), program.ty(field)))
+            }
+            _ => false,
+        }
+    }
+
     pub(crate) fn key(&self, word: Word, kind: Kind, ty: Option<&Type>) -> Key {
         match (kind, ty) {
             (Kind::Int, _) => Key::Int(self.big_value(word)),
             (Kind::Float, _) => Key::Float(f64::from_bits(word)),
             (Kind::Raw | Kind::Byte, _) => Key::Raw(word),
             (_, Some(Type::Str)) => Key::Str(Rc::from(self.heap.text(word))),
+            (_, Some(Type::Rat)) => Key::Rat(Rc::new(self.rational(word).clone())),
+            (_, Some(Type::Object(_))) if heap::kind(self.heap.header_of(word)) == heap::OBJECT => {
+                let declaration = heap::payload(self.heap.header_of(word));
+                let program = &self.loaded.program;
+                let fields = program.objects[declaration as usize]
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &(_, field))| self.key(self.heap.field(word, index), self.kind_of(field), program.ty(field)))
+                    .collect();
+                Key::Object(declaration, fields)
+            }
             _ => Key::Raw(word),
         }
     }
@@ -270,12 +318,11 @@ fn slice_bounds(runtime: &Runtime, length: usize, start: Word, end: Word) -> Res
 pub(crate) fn new_array(runtime: &mut Runtime, function: usize, dst: okkama_sparrow::Register, repr: Repr, items: &[Word]) -> Word {
     let program = &runtime.loaded.program;
     let ty = program.functions[function].registers[dst.0 as usize];
-    if let Some(Type::Array(element)) = program.ty(ty) {
-        if Kind::of(program, *element) == Kind::Byte {
+    if let Some(Type::Array(element)) = program.ty(ty)
+        && Kind::of(program, *element) == Kind::Byte {
             let bytes: Vec<u8> = items.iter().map(|&w| w as u8).collect();
             return runtime.heap.allocate_bytes(&bytes);
         }
-    }
     runtime.heap.allocate_array(repr, items)
 }
 
@@ -426,6 +473,11 @@ pub extern "C" fn rt_exec(ctx: *mut Ctx, function: u64, pc: u64, uses: *const Wo
     // the instruction stays valid while the runtime is borrowed mutably.
     let instruction: &I = unsafe { &*(&runtime.loaded.program.functions[function].code[pc as usize] as *const I) };
     runtime.count(|_| format!("exec {}", instruction.mnemonic()));
+    if runtime.limits.memory.is_some()
+        && let Some(bytes) = result_bytes(runtime, instruction, uses)
+            && runtime.would_exceed(bytes) {
+                return runtime.exhaust(ctx, crate::budget::Exhausted::Memory);
+            }
     // Uses in visit order: inline for the common case, spilled past 16 (map
     // and array literals can use any number of registers).
     let mut inline = [okkama_sparrow::Register(u32::MAX); 16];
@@ -460,6 +512,8 @@ pub extern "C" fn rt_exec(ctx: *mut Ctx, function: u64, pc: u64, uses: *const Wo
                 _ => crate::worker::spawn(runtime, &mut *ctx, value(entry), &arguments, *direct),
             }
         }
+        // The init of a constant runs machine code: it needs the context.
+        I::GlobalGet { global, .. } => crate::intrinsics::global(ctx, runtime, *global as usize),
         _ => execute(runtime, function, instruction, &value),
     };
     match outcome {
@@ -475,6 +529,35 @@ pub extern "C" fn rt_exec(ctx: *mut Ctx, function: u64, pc: u64, uses: *const Wo
             ctx.status = crate::runtime::FAILED;
             0
         }
+    }
+}
+
+/// The size of the result of an instruction whose result can be much larger
+/// than its operands (#72) — a join, a replacement — before it is built,
+/// so a memory budget stops it instead of the allocation it would make.
+fn result_bytes(runtime: &Runtime, instruction: &I, uses: *const Word) -> Option<u64> {
+    let mut registers = Vec::new();
+    instruction.visit(&mut |access| {
+        if let Access::Use(register) = access {
+            registers.push(register);
+        }
+    });
+    // SAFETY: rt_exec's caller passes one word per use.
+    let words = unsafe { std::slice::from_raw_parts(uses, registers.len()) };
+    let value = |register: &okkama_sparrow::Register| words[registers.iter().position(|r| r == register).expect("used register")];
+    let text = |register| runtime.heap.text(value(register));
+    match instruction {
+        I::ArrayJoin { array, separator, .. } => {
+            let elements = runtime.heap.elements(value(array));
+            let parts: u64 = elements.iter().map(|&element| runtime.heap.text(element).len() as u64).sum();
+            Some(parts + text(separator).len() as u64 * elements.len().saturating_sub(1) as u64)
+        }
+        I::StrReplace { text: source, pattern, replacement, .. } => {
+            let (source, pattern, replacement) = (text(source), text(pattern), text(replacement));
+            let count = if pattern.is_empty() { source.chars().count() + 1 } else { source.matches(pattern).count() };
+            Some(source.len() as u64 + count as u64 * replacement.len() as u64)
+        }
+        _ => None,
     }
 }
 
@@ -602,6 +685,7 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
             let bytes = runtime.heap.text(value(text)).as_bytes().to_vec();
             Ok(runtime.heap.allocate_bytes(&bytes))
         }
+        I::StrFn { op, args, .. } => str_fn(runtime, *op, args.iter().map(value).collect()),
         I::StrReplaceFirst { text, pattern, replacement, .. } => {
             let replaced = runtime
                 .heap
@@ -704,33 +788,16 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
             Ok(compare_flag(*op, order))
         }
         I::StrLen { text, .. } => {
-            let text = value(text);
-            let length = if runtime.heap.is_ascii_text(text) {
-                runtime.heap.text(text).len()
-            } else {
-                runtime.heap.text(text).chars().count()
-            };
+            let length = runtime.heap.char_count(value(text));
             Ok(runtime.heap.int(length as i64))
         }
         I::StrSlice { text, start, end, .. } => {
             let text = value(text);
-            // ASCII strings index by byte; others map code points to bytes once.
-            let (first, last) = if runtime.heap.is_ascii_text(text) {
-                let range = slice_bounds(runtime, runtime.heap.text(text).len(), value(start), value(end))?;
-                (range.start, range.end)
-            } else {
-                let count = runtime.heap.text(text).chars().count();
-                let range = slice_bounds(runtime, count, value(start), value(end))?;
-                let source = runtime.heap.text(text);
-                let mut offsets = source.char_indices().map(|(i, _)| i).chain(std::iter::once(source.len()));
-                let first = offsets.nth(range.start).expect("validated code point boundary");
-                let last = if range.end == range.start {
-                    first
-                } else {
-                    offsets.nth(range.end - range.start - 1).expect("validated code point boundary")
-                };
-                (first, last)
-            };
+            // Code points map to bytes from the last position reached (#52).
+            let count = runtime.heap.char_count(text);
+            let range = slice_bounds(runtime, count, value(start), value(end))?;
+            let first = runtime.heap.char_offset(text, range.start);
+            let last = runtime.heap.char_offset(text, range.end);
             Ok(runtime.heap.substring(text, first, last))
         }
         I::StrSplit { text, separator, .. } => {
@@ -859,8 +926,89 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
             let (key_kind, key_type) = map_key(runtime, function, dst.0);
             for (key, item) in entries {
                 let (key, item) = (value(key), value(item));
-                let k = runtime.key(key, key_kind, key_type.as_ref());
+                let k = runtime.checked_key(key, key_kind, key_type.as_ref())?;
                 map.entries.entry(k).and_modify(|e| e.1 = item).or_insert((key, item));
+            }
+            Ok(runtime.heap.allocate_payload(Box::new(map)))
+        }
+        I::ArrayConcat { dst, parts } => {
+            let words: Vec<Word> = parts.iter().map(value).collect();
+            let element = match runtime.ty(function, dst.0) {
+                Some(Type::Array(element)) => *element,
+                _ => return Err("arr.concat needs an array type".into()),
+            };
+            // The result is allocated once, for the sum of the parts' lengths.
+            let size: usize = words.iter().map(|&w| crate::heap::payload(runtime.heap.header_of(w)) as usize).sum();
+            if runtime.kind_of(element) == Kind::Byte {
+                let mut bytes = Vec::with_capacity(size);
+                for &w in &words {
+                    bytes.extend_from_slice(&runtime.heap.byte_view(w));
+                }
+                return Ok(runtime.heap.allocate_bytes(&bytes));
+            }
+            let mut items = Vec::with_capacity(size);
+            for &w in &words {
+                items.extend_from_slice(&runtime.heap.elements(w));
+            }
+            let repr = runtime.kind_of(element).repr();
+            Ok(new_array(runtime, function, dst.0, repr, &items))
+        }
+        I::ArrayDiff { dst, array, removed } => {
+            let element = match runtime.ty(function, dst.0) {
+                Some(Type::Array(element)) => *element,
+                _ => return Err("arr.diff needs an array type".into()),
+            };
+            let kind = runtime.kind_of(element);
+            let ty = runtime.loaded.program.ty(element).cloned();
+            let mut excluded = Vec::new();
+            for part in removed {
+                excluded.extend_from_slice(&runtime.heap.elements(value(part)));
+            }
+            let items = runtime.heap.elements(value(array)).into_owned();
+            // Scalars and strings compare by key; other elements deeply.
+            let keyed = matches!(kind, Kind::Int | Kind::Raw | Kind::Byte) || ty == Some(Type::Str);
+            let mut kept = Vec::with_capacity(items.len());
+            if keyed {
+                let keys: std::collections::BTreeSet<_> = excluded.iter().map(|&w| runtime.key(w, kind, ty.as_ref())).collect();
+                kept.extend(items.into_iter().filter(|&w| !keys.contains(&runtime.key(w, kind, ty.as_ref()))));
+            } else {
+                for item in items {
+                    let mut found = false;
+                    for &other in &excluded {
+                        if equal(runtime, item, other, element)? {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        kept.push(item);
+                    }
+                }
+            }
+            if kind == Kind::Byte {
+                let bytes: Vec<u8> = kept.iter().map(|&w| w as u8).collect();
+                return Ok(runtime.heap.allocate_bytes(&bytes));
+            }
+            Ok(new_array(runtime, function, dst.0, kind.repr(), &kept))
+        }
+        I::MapMerge { dst, parts } => {
+            let mut map = map_for(runtime, function, dst.0)?;
+            for part in parts {
+                let entries = &runtime.heap.payload::<MapValue>(value(part)).expect("map").entries;
+                for (key, (key_word, item)) in entries {
+                    map.entries.entry(key.clone()).and_modify(|e| e.1 = *item).or_insert((*key_word, *item));
+                }
+            }
+            Ok(runtime.heap.allocate_payload(Box::new(map)))
+        }
+        I::MapDiff { dst, map: base, removed } => {
+            let mut map = map_for(runtime, function, dst.0)?;
+            map.entries = runtime.heap.payload::<MapValue>(value(base)).expect("map").entries.clone();
+            for part in removed {
+                let entries = &runtime.heap.payload::<MapValue>(value(part)).expect("map").entries;
+                for key in entries.keys() {
+                    map.entries.remove(key);
+                }
             }
             Ok(runtime.heap.allocate_payload(Box::new(map)))
         }
@@ -871,7 +1019,7 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
         I::MapBuilderPut { builder, key, value: item, .. } => {
             let (builder, key, item) = (value(builder), value(key), value(item));
             let (key_kind, key_type) = map_key(runtime, function, *builder_register(instruction));
-            let k = runtime.key(key, key_kind, key_type.as_ref());
+            let k = runtime.checked_key(key, key_kind, key_type.as_ref())?;
             let map = runtime.heap.payload_mut::<MapValue>(builder).expect("map builder");
             map.entries.entry(k).and_modify(|e| e.1 = item).or_insert((key, item));
             Ok(builder)
@@ -892,7 +1040,7 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
         I::MapHas { map, key, .. } | I::MapGet { map, key, .. } => {
             let (key_kind, key_type) = map_key(runtime, function, *map);
             let key_word = value(key);
-            let k = runtime.key(key_word, key_kind, key_type.as_ref());
+            let k = runtime.checked_key(key_word, key_kind, key_type.as_ref())?;
             let found = runtime.heap.payload::<MapValue>(value(map)).expect("map").entries.get(&k).map(|e| e.1);
             if matches!(instruction, I::MapHas { .. }) {
                 return Ok(bool_word(found.is_some()));
@@ -959,6 +1107,7 @@ fn key_text(runtime: &Runtime, word: Word, kind: Kind, ty: Option<&Type>) -> Str
         }
         (_, Some(Type::Str)) => format!("\"{}\"", runtime.heap.text(word)),
         (_, Some(Type::Char)) => format!("\"{}\"", char::from_u32(word as u32).unwrap_or('?')),
+        (_, Some(Type::Bool)) => if word != 0 { "true" } else { "false" }.to_string(),
         (Kind::Float, _) => crate::scalar::float_text(f64::from_bits(word)),
         (Kind::Raw | Kind::Byte, _) => word.to_string(),
         _ => runtime.big_value(word).to_string(),
@@ -992,7 +1141,8 @@ fn convert(runtime: &mut Runtime, function: usize, source: okkama_sparrow::Regis
     let to = runtime.ty(function, dst).cloned();
     match (from, to) {
         (Some(Type::Int), Some(Type::Str)) => Ok(int_text(runtime, word)),
-        (Some(Type::Bool | Type::Byte), Some(Type::Str)) => Ok(runtime.text_new(&word.to_string())),
+        (Some(Type::Bool), Some(Type::Str)) => Ok(runtime.text_new(if word != 0 { "true" } else { "false" })),
+        (Some(Type::Byte), Some(Type::Str)) => Ok(runtime.text_new(&word.to_string())),
         (Some(Type::Float), Some(Type::Str)) => Ok(runtime.text_new(&crate::scalar::float_text(f64::from_bits(word)))),
         (Some(Type::Rat), Some(Type::Str)) => {
             let text = runtime.rational(word).to_string();
@@ -1010,6 +1160,16 @@ fn convert(runtime: &mut Runtime, function: usize, source: okkama_sparrow::Regis
         }
         (Some(Type::Rat), Some(Type::Float)) => rational_to_float(runtime.rational(word)).map(f64::to_bits),
         (Some(Type::Byte), Some(Type::Int)) => Ok(runtime.heap.int(word as i64)),
+        // `char` ↔ text and code point (#231).
+        (Some(Type::Char), Some(Type::Int)) => Ok(runtime.heap.int(word as i64)),
+        (Some(Type::Char), Some(Type::Str)) => {
+            let text = char::from_u32(word as u32).map(String::from).unwrap_or_default();
+            Ok(runtime.text_new(&text))
+        }
+        (Some(Type::Int), Some(Type::Char)) => {
+            let code = int_value(runtime, word);
+            Ok(u64::from(u32::from(okkama_runtime_core::strings::character(&code)?)))
+        }
         (Some(Type::Int), Some(Type::Float)) => {
             let n = runtime.big_value(word).to_f64().unwrap_or(f64::INFINITY);
             finite(n)
@@ -1027,6 +1187,48 @@ fn convert(runtime: &mut Runtime, function: usize, source: okkama_sparrow::Regis
             Ok(runtime.heap.int(truncated as i64))
         }
         _ => Err("unsupported scalar conversion".into()),
+    }
+}
+
+/// An `int` word as the IR engine's integer, for the shared string contracts.
+fn int_value(runtime: &Runtime, word: Word) -> okkama_runtime_core::IntValue {
+    match runtime.small_or_big(word) {
+        Some(n) => okkama_runtime_core::IntValue::from_i64(n),
+        None => okkama_runtime_core::IntValue::parse(&runtime.big_value(word).to_string()).expect("decimal digits"),
+    }
+}
+
+/// `str.fn` (#210, #231): the same contracts as the IR engine's
+/// `okkama_runtime_core::strings`.
+fn str_fn(runtime: &mut Runtime, op: StrFn, args: Vec<Word>) -> Outcome {
+    use okkama_runtime_core::strings;
+    let text = runtime.heap.text(args[0]);
+    match op {
+        StrFn::Find | StrFn::FindLast => {
+            let part = runtime.heap.text(args[1]);
+            let found = if op == StrFn::Find { strings::find(text, part) } else { strings::find_last(text, part) };
+            Ok(runtime.heap.int(found.map_or(-1, |index| index as i64)))
+        }
+        StrFn::StartsWith => Ok(bool_word(text.starts_with(runtime.heap.text(args[1])))),
+        StrFn::EndsWith => Ok(bool_word(text.ends_with(runtime.heap.text(args[1])))),
+        StrFn::TrimStart | StrFn::TrimEnd | StrFn::Lower | StrFn::Upper => {
+            let result = match op {
+                StrFn::TrimStart => strings::trim_start(text).to_owned(),
+                StrFn::TrimEnd => strings::trim_end(text).to_owned(),
+                StrFn::Lower => text.to_lowercase(),
+                _ => text.to_uppercase(),
+            };
+            Ok(runtime.text_new(&result))
+        }
+        StrFn::Repeat => {
+            let count = int_value(runtime, args[1]);
+            let repeated = strings::repeat(runtime.heap.text(args[0]), &count)?;
+            Ok(runtime.text_new(&repeated))
+        }
+        StrFn::Characters => {
+            let codes: Vec<Word> = text.chars().map(|c| u64::from(u32::from(c))).collect();
+            Ok(runtime.heap.allocate_array(Repr::Raw, &codes))
+        }
     }
 }
 

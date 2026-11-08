@@ -5,7 +5,7 @@ Sparrow — байткод Okkama: его пишет `okkama build --target spar
 Sparrow (`sparrow`, `okkama exec`) проверяет его и исполняет как машинный код.
 Книга учит текстовой форме байткода — ассемблеру Sparrow (`.spa`) — настолько,
 чтобы читать то, что выдаёт компилятор, и писать программы вручную. Описана
-версия SPB 9, формат Okkama 0.4.
+версия SPB 12, формат Okkama 0.4.1.
 
 Все примеры лежат в [examples/](examples/); при сборке книги каждый из них
 ассемблируется, проверяется и запускается, а показанный после примера
@@ -55,7 +55,7 @@ okkama exec prog.spb                       # запуск SPB внутри okkam
 
 ```text
 ; Hello from Sparrow assembly: a native writes the UTF-8 bytes of a string.
-sparrow 9
+sparrow 12
 module "hello" "1.0.0"
 type t0 int
 type t1 str
@@ -97,7 +97,7 @@ Hello, Sparrow!
 ## 3. Устройство файла
 
 ```text
-sparrow 9                       ; версия формата
+sparrow 12                      ; версия формата
 module "name" "version"         ; имя и версия модуля (можно "")
 type t0 …                       ; таблица типов по порядку
 enum enum0 "Name" ["a", "b"]    ; enum и его варианты
@@ -105,6 +105,7 @@ role role0 "Name" { method "m" [t…] -> t… … }
 object obj0 "Name" { field "f" t… … does role0 [f…] destroy f… }
 handle "Name"                   ; непрозрачные типы хоста (handle)
 cap cap0 "Name" obj0 { field "f" f… }
+global g0 t3 f2                ; константа модуля: тип и init (#153)
 function f0 "symbol" [async] [native "…"] [intrinsic "…" [obj…] [f…]] { … }
 entry f3                        ; main программы
 tests { test "name" f5 … }      ; или тестовый профиль
@@ -171,7 +172,7 @@ BigInt.
 
 ```text
 ; 30! with a loop: exact integers grow into BigInt transparently.
-sparrow 9
+sparrow 12
 module "factorial" "1.0.0"
 type t0 int
 type t1 bool
@@ -231,7 +232,7 @@ $ sparrow run factorial.spb
 
 ```text
 ; Fibonacci with edge moves: the jump back writes both loop registers at once.
-sparrow 9
+sparrow 12
 module "fibonacci" "1.0.0"
 type t0 int
 type t1 bool
@@ -271,7 +272,8 @@ $ sparrow run fibonacci.spb; echo $?
 
 `str.concat`, `str.len`, `str.slice`, `str.split`, `str.replace`,
 `str.replace_first`, `str.trim`, `str.chomp`, `str.cmp` и `str.utf8` (в
-`array byte`) работают с неизменяемым текстом. Длины и позиции считаются в
+`array byte`) работают с неизменяемым текстом; остальное — поиск, края,
+регистр, повтор и символы строки — называет `str.fn`. Длины и позиции считаются в
 скалярных значениях Unicode. В строковых константах есть `\n`, `\t`, `\"`,
 `\\` и `\u{…}`.
 
@@ -280,7 +282,7 @@ $ sparrow run fibonacci.spb; echo $?
 ```text
 ; Objects, a role with two implementations, dispatch through role slots and
 ; a successor (a changed copy of an immutable object).
-sparrow 9
+sparrow 12
 module "shapes" "1.0.0"
 type t0 int
 type t1 object obj0
@@ -362,7 +364,7 @@ $ sparrow run shapes.spb; echo $?
 ```text
 ; Arrays are built through a linear builder; `arr.lookup` and `map.lookup`
 ; branch on whether the element exists.
-sparrow 9
+sparrow 12
 module "collections" "1.0.0"
 type t0 int
 type t1 array t0
@@ -416,6 +418,12 @@ $ sparrow run collections.spb; echo $?
 пишется в их регистр назначения только на ребре «найдено». Словари
 (`map.new r11, [r10: r12]`) хранят ключи в естественном порядке.
 
+Операторы `+` и `-` над коллекциями Okkama компилируются в одну инструкцию на
+цепочку: `arr.concat rD, [rA, rB, rC]` выделяет результат один раз под сумму
+длин частей, `arr.diff rD, rA, [rB, rC]` оставляет элементы `rA`, не равные ни
+одному элементу остальных, а `map.merge` и `map.diff` делают то же для
+словарей (при повторе ключа — значение самой правой части).
+
 ## 11. Вызовы, замыкания и natives
 
 - `call rD, fN, [args]` вызывает функцию напрямую; `call _, …` отбрасывает
@@ -426,7 +434,7 @@ $ sparrow run collections.spb; echo $?
 ```text
 ; A closure value: `fn.closure` fills the leading parameters of its function
 ; with captures; `call.fn` passes the rest.
-sparrow 9
+sparrow 12
 module "closures" "1.0.0"
 type t0 int
 type t1 fn [t0] -> t0
@@ -471,7 +479,7 @@ $ sparrow run closures.spb; echo $?
 ```text
 ; Throwing and catching: an object that does the builtin Error role is
 ; thrown; a handler range sends failures to a `catch`, which matches the type.
-sparrow 9
+sparrow 12
 module "errors" "1.0.0"
 type t0 int
 type t1 str
@@ -558,7 +566,7 @@ sparrow: Sparrow assembly line 0: Sparrow @main instruction 2: register r2 may b
 ; Ownership regions: an object with `destroy` is tracked and adopted by the
 ; region of its scope; leaving the region runs `destroy`, on the failure path
 ; too (`region.unwind`).
-sparrow 9
+sparrow 12
 module "resources" "1.0.0"
 type t0 int
 type t1 str
@@ -632,7 +640,7 @@ closing data.txt
 ```text
 ; Async functions: a call makes a cold future, `await` runs it to its value,
 ; `fut.spawn` starts one now so it runs while the caller goes on.
-sparrow 9
+sparrow 12
 module "tasks" "1.0.0"
 type t0 int
 type t1 future t0
@@ -680,7 +688,7 @@ async.
 ```text
 ; A test profile: `tests` lists parameterless functions; `sparrow test` runs
 ; each on a fresh runtime and reports it. A failure fails the test.
-sparrow 9
+sparrow 12
 module "testing" "1.0.0"
 type t0 int
 type t1 bool
@@ -829,6 +837,8 @@ sparrow: Sparrow assembly line 0: Sparrow @main instruction 2: r1 has type str, 
 | 76 | `str.replace_first rD, rX, rX, rX` | замена первого вхождения |
 | 77 | `str.trim rD, rX` | обрезка пробелов по краям |
 | 78 | `str.chomp rD, rX` | удаление одного конца строки |
+| 86 | `str.fn FN, rD, [rX, …]` | строковая функция: `find`, `find_last`, `starts_with`, `ends_with`, `trim_start`, `trim_end`, `lower`, `upper`, `repeat`, `characters` |
+| 87 | `global.get rD, N` | значение константы модуля, построенное один раз её функцией init |
 | 80 | `val.cmp CMP, rD, rX, rX` | глубокое равенство, только `eq` и `ne` |
 | 81 | `enum.case rD, enumN, N` | вариант enum по номеру |
 | 82 | `enum.cmp CMP, rD, rX, rX` | сравнение вариантов enum |
@@ -846,6 +856,8 @@ sparrow: Sparrow assembly line 0: Sparrow @main instruction 2: r1 has type str, 
 | 102 | `arr.get rD, rX, rX` | элемент по индексу; неверный индекс — отказ |
 | 103 | `arr.slice rD, rX, rX, rX` | подмассив start..end |
 | 104 | `arr.join rD, rX, rX` | склейка массива str через разделитель |
+| 96 | `arr.concat rD, [rX, …]` | `a + b + …`: один массив, выделенный под сумму длин частей |
+| 97 | `arr.diff rD, rX, [rX, …]` | `a - b - …`: элементы первого массива, не равные ни одному элементу остальных, по порядку |
 | 105 | `builder.new rD` | пустой сборщик массива |
 | 106 | `builder.push rD, rX, rX` | добавить элемент; результат — сборщик для дальнейшей работы |
 | 107 | `builder.append rD, rX, rX` | добавить массив |
@@ -857,6 +869,8 @@ sparrow: Sparrow assembly line 0: Sparrow @main instruction 2: r1 has type str, 
 | 113 | `map.get rD, rX, rX` | значение по ключу; нет ключа — отказ |
 | 114 | `map.keys rD, rX` | ключи в естественном порядке |
 | 115 | `map.values rD, rX` | значения в порядке ключей |
+| 98 | `map.merge rD, [rX, …]` | `a + b + …`: записи всех частей; при повторе ключа — значение самой правой |
+| 99 | `map.diff rD, rX, [rX, …]` | `a - b - …`: записи первого словаря, ключей которых нет ни в одном из остальных |
 | 116 | `mbuilder.new rD` | пустой сборщик словаря |
 | 117 | `mbuilder.put rD, rX, rX, rX` | добавить запись; результат — сборщик для дальнейшей работы |
 | 118 | `mbuilder.finish rD, rX` | собранный словарь |
@@ -876,13 +890,15 @@ sparrow: Sparrow assembly line 0: Sparrow @main instruction 2: r1 has type str, 
 | 133 | `region.track rX, rX` | записать новую идентичность в регион |
 | 134 | `region.leave rX, rX/_` | закрыть: `destroy` всего, чем владеет, кроме достижимого из сохраняемого значения |
 | 135 | `region.unwind rD, rX, rX` | закрыть на пути отказа; отказ с вторичными отказами `destroy` |
+| 138 | `region.settle rX, rX/_` | закрыть регион в async-функции: destroy идут с последней идентичности, каждый async destroy ожидается, отмена ждёт конца закрытия |
+| 139 | `region.settle_unwind rD, rX, rX` | `region.settle` на пути отказа; результат — отказ с отказами destroy как вторичными |
 | 136 | `fail.secondary rD, rX, rX` | присоединить отказ очистки к основному |
 | 137 | `fail.caused rD, rX, rX` | новый отказ, вызванный обработанным |
 | 140 | `jmp @T` | переход с присваиваниями ребра |
 | 141 | `br rX, @T, @T` | ветвление по bool |
 | 142 | `ret rX/_` | возврат (`_` из void-функции) |
 | 143 | `panic rX` | отказ с сообщением str |
-| 144 | `trap CODE, "…"` | программная ошибка: `confirm`, `range`, `empty`, `unbound`, `unreachable` с сообщением |
+| 144 | `trap CODE, "…"` | программная ошибка: `confirm`, `range`, `empty`, `unbound`, `unreachable`, `pending` (действие у недостроенного объекта) с сообщением |
 | 145 | `unreachable` | управление сюда не приходит |
 | 146 | `throw rX` | бросить объект, делающий встроенную роль Error |
 | 147 | `raise rX` | передать отказ дальше |

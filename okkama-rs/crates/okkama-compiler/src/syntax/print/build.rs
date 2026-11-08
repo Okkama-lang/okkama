@@ -104,6 +104,10 @@ fn item_node(item: &Item) -> Node {
         }
         Item::Cap(decl) => cap_node(decl),
         Item::Action(decl) => action_node(decl),
+        Item::Const(decl) => hidden(Node::new("ConstDecl", decl.span), decl.hidden)
+            .field("name", name(&decl.name))
+            .field("type", opt_node(decl.ty.as_ref(), type_node))
+            .field("value", Value::node(expr_node(&decl.value))),
     }
 }
 
@@ -139,7 +143,9 @@ fn member_node(member: &ObjectMember) -> Node {
         ObjectMember::Cap(decl) => cap_node(decl),
         ObjectMember::Constructor(decl) => constructor_node(decl),
         ObjectMember::Destroy(decl) => {
-            Node::new("DestroyDecl", decl.span).field("body", Value::node(block_node(&decl.body)))
+            Node::new("DestroyDecl", decl.span)
+                .field("async", Value::Bool(decl.is_async))
+                .field("body", Value::node(block_node(&decl.body)))
         }
         ObjectMember::Test(decl) => test_node(decl),
         ObjectMember::Action(decl) => action_node(decl),
@@ -345,12 +351,14 @@ fn stmt_node(stmt: &Stmt) -> Node {
             Node::new("DeferStatement", span).field("value", Value::node(expr_node(value)))
         }
         StmtKind::Try(body) => try_fields(Node::new("TryStatement", span), body),
-        StmtKind::Throw { value } => {
-            Node::new("ThrowStatement", span).field("value", opt_node(value.as_ref(), expr_node))
-        }
-        StmtKind::Return { value } => {
-            Node::new("ReturnStatement", span).field("value", opt_node(value.as_ref(), expr_node))
-        }
+        StmtKind::Throw { value, condition } => postfix(
+            Node::new("ThrowStatement", span).field("value", opt_node(value.as_ref(), expr_node)),
+            condition.as_ref(),
+        ),
+        StmtKind::Return { value, condition } => postfix(
+            Node::new("ReturnStatement", span).field("value", opt_node(value.as_ref(), expr_node)),
+            condition.as_ref(),
+        ),
         StmtKind::Confirm {
             condition,
             fallback,
@@ -419,6 +427,15 @@ fn stmt_node(stmt: &Stmt) -> Node {
         StmtKind::Expr { expr, condition } => Node::new("ExpressionStatement", span)
             .field("expression", Value::node(expr_node(expr)))
             .field("condition", opt_node(condition.as_ref(), expr_node)),
+    }
+}
+
+/// A postfix `if` on `return` or `throw`: the field appears only when written,
+/// so dumps of plain statements keep their shape.
+fn postfix(node: Node, condition: Option<&Expr>) -> Node {
+    match condition {
+        Some(condition) => node.field("condition", Value::node(expr_node(condition))),
+        None => node,
     }
 }
 

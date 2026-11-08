@@ -29,9 +29,10 @@ for `--target`. `sparrow check out.spb` verifies without execution.
 See the [Rust implementation guide](../okkama-rs/README.md) for building the
 tools and current runtime coverage.
 
-The Sparrow core (`okkama exec`, `okkama run --engine sparrow`, `sparrow run`)
-can bound a run, for untrusted programs or services. Every budget is off by
-default and costs nothing then:
+Every engine can bound a run, for untrusted programs or services: the Sparrow
+core (`okkama exec`, `okkama run --engine sparrow`, `sparrow run`), the IR
+engine (`okkama run`) and the JVM (`okkama run --engine jvm`). Every budget is
+off by default and costs nothing then:
 
 ```sh
 okkama exec --max-steps 100000000 --max-memory 256M --timeout 5 app.spb
@@ -40,8 +41,8 @@ okkama exec --max-steps 100000000 --max-memory 256M --timeout 5 app.spb
 - `--max-steps N` counts function entries and loop iterations.
 - `--max-memory SIZE` (bytes, or `K`/`M`/`G`) bounds the memory the process
   holds beyond the start of the run — the core heap, big integers, strings and
-  collections — and the machine stack, so deep recursion ends as `Stack
-  overflow` within it.
+  collections — and the machine stack, so deep recursion that outgrows it
+  ends with the same memory report.
 - `--max-output SIZE` bounds what the program writes to stdout and stderr.
 - `--timeout SECONDS` interrupts the run after that much wall-clock time, also
   while it awaits.
@@ -49,8 +50,19 @@ okkama exec --max-steps 100000000 --max-memory 256M --timeout 5 app.spb
 Running out ends the program with exit status 1 and `Execution budget
 exhausted: steps` (`memory`, `output`) or `Execution interrupted`. It is not a
 failure of the program: `catch` does not see it and `destroy` does not run. A
-single native operation (a long BigInt division, a sort) finishes before the
-run stops; a BigInt product that cannot fit is refused before it is computed.
+long sort stops for the timeout and the memory budget, and PBKDF2 for the
+timeout; another single native operation (a long BigInt division, an Argon2
+hash) finishes first, but with `--timeout` the command line ends the run at
+most a second after the time is up. A BigInt product that cannot fit is
+refused before it is computed.
+
+Steps are counted alike on every engine, so a limit that is enough on one is
+enough on the others. On the JVM the steps are counted by code generated only
+when `--max-steps` is given, and the memory budget is the Java heap (`-Xmx`,
+which includes the runtime's own objects) and the size of each thread stack.
+A JAR built with `okkama build --target jvm --budgeted` takes its step limit
+from `java -Dokkama.steps=N -jar app.jar`; `-Xmx` with `-Dokkama.memory=N`
+gives any JAR the memory report.
 
 ---
 
@@ -333,6 +345,7 @@ The runtime-supported literals are:
 ````okkama
 10          // int
 3.14        // float
+1.5e-3      // float, with an exponent
 "hello"     // string
 ```raw "text" \n remains raw``` // string
 'x'         // char
@@ -442,13 +455,22 @@ Key properties of the type system:
 
 ### 5.1 `int` and `float`
 
-Integers and floats are written as ordinary literals (`42`, `3.14`). The
-arithmetic operators are `+ - * / %`. Rules:
+Integers and floats are written as ordinary literals (`42`, `3.14`). An
+exponent makes a float, with or without a fraction: `1e5` is `100000.0`,
+`1.5e-3` is `0.0015`, `2E+10` is `20000000000.0`; `_` separates digits in the
+exponent as elsewhere (`1_000e1_0`). The value is the nearest binary64, and a
+literal must be one: `1e400` (not finite) and `1e-400` (not zero, but it would
+round to `0.0`) are compile errors. `1.e5` stays a member access on `1`, and
+there is no hexadecimal float. The arithmetic operators are `+ - * / %`.
+Rules:
 
 - `-`, `*`, `/`, `%` require numeric operands;
-- for `+`, `-`, `*`, and `%`, the result is `rat` when a `rat` participates,
-  otherwise `int` unless a `float` operand forces `float`;
-- `/` returns `float` when a `float` participates and exact `rat` otherwise,
+- both operands must have the **same** numeric category: types never mix.
+  `1 + 1.5`, `1 + 1 / 2` and `byte(2) + 3` are compile errors; convert
+  explicitly (`1.float()`, `1.rat()`, `byte(2).int()`);
+- `+`, `-`, `*` and `%` give `int` for `int`, `rat` for `rat` and `float` for
+  `float`; two `byte` operands give `int`;
+- `/` gives `float` for `float` and the exact `rat` for integer operands,
   including `6 / 2`;
 - division and modulo by zero are runtime errors.
 
@@ -461,7 +483,7 @@ Numeric and scalar conversions are explicit builtin actions:
 - `byte.int()` returns an ordinary `int`;
 - `int.string()`, `float.string()`, and `byte.string()` return canonical
   numeric text; an integral float therefore renders without a `.0` suffix;
-- `bool.string()` returns `"1"` for `true` and `"0"` for `false`.
+- `bool.string()` returns `"true"` or `"false"` (before 0.4.1 it was `"1"`/`"0"`).
 
 These actions take no arguments and never introduce implicit conversion at a
 typed boundary. A failed byte conversion is a runtime error.
@@ -477,14 +499,15 @@ let whole is int = int(-3.9);             // -3
 let packet = @byte(122, 11, 22);           // @byte
 let singleton = @byte(112);               // one-element @byte
 let empty = @byte();                      // typed empty @byte
-let labels = @string(101, byte(2), true);  // ["101", "2", "1"]
+let labels = @string(101, byte(2), true);  // ["101", "2", "true"]
 ```
 
 Numeric targets accept `int`, `byte`, `float`, and `rat`. Integer casts
 truncate toward zero, then check the signed-64 range for `int` or `0..255`
 for `byte`. Thus `byte(255.9)` is 255 and `byte(-0.5)` is 0. Float casts
 round to finite binary64 and can lose integer precision. String casts accept
-numeric primitives, bool (`"1"`/`"0"`), and string; rational text is canonical.
+numeric primitives, bool (`"true"`/`"false"`), char and string; rational text
+is canonical.
 
 An empty `@byte()` also provides exact `T = byte` evidence to a generic
 constructor accepting `@T`; inference does not require a first element.
@@ -521,10 +544,9 @@ greatest common divisor, keeps the denominator positive, and rejects zero
 denominators. Thus `rat(2, 6)` and `rat(1, 3)` have one canonical value.
 
 Integer division produces `rat`, so `(1 / 3 + 2 / 3).string()` is exactly
-`"1"`. Arithmetic may mix `rat` with `int` or `byte` and remains `rat`.
-Mixing `rat` with `float` is an error until `.float()` is called explicitly.
-Equality remains category-strict, while ordering accepts `rat` with exact
-integer categories.
+`"1"`. Arithmetic, equality and ordering combine `rat` only with `rat`:
+`1 / 2 + 1`, `1 / 2 < 1` and `1 / 2 + 0.5` are errors until the other operand
+is converted (`1.rat()`, `(1 / 2).float()`).
 
 `rat.string()` returns canonical `n/d` text (or just `n` for denominator
 one), `.int()` truncates toward zero, `.byte()` truncates and checks `0..255`,
@@ -568,8 +590,8 @@ let payload is @byte = @byte(0, 127, maximum);
   operators (`<`, `<=`, `>`, `>=`) are broader and accept mixed numeric
   operands under the promotion rules.
 - A `byte` is a valid array index (interpreted by its integer value) and a
-  valid range bound (normalized to `int`). Byte-valued **map keys** are
-  currently unsupported.
+  valid range bound (normalized to `int`). A `byte` is not a **map key**
+  (`%byte:V` is a compile error; decision D-007).
 
 `@byte` is an ordinary immutable typed array of bytes — the language's raw
 binary sequence. It is not a mutable buffer and not a second string type.
@@ -625,7 +647,8 @@ Strings concatenate with `+`, and only with other strings:
 "n = " + 1;      // runtime error: no implicit stringification
 ```
 
-There is no string repetition operator and no interpolation in 1.0.
+There is no string repetition operator (`"ab".repeat(3)` is an action) and
+no interpolation in 1.0.
 
 Portable builtin behaviors are available on every string (Chapter 10):
 
@@ -636,6 +659,20 @@ Portable builtin behaviors are available on every string (Chapter 10):
 "banana".replace("na", "NA");       // "baNANA"
 "banana".replace_first("na", "NA"); // "baNAna"
 ["red", "green"].join(","); // "red,green"
+"okkama.ok".ends_with(".ok");        // true; also contains, starts_with
+"мир и мир".find_last("мир");        // Maybe.some(6): a code point index
+"Straße".upper();                    // "STRASSE": full Unicode case, no locale
+```
+
+A `char` is one code point. `"Жук".characters()` is the `@char` of a string,
+`letter.code()` its code point, `letter.string()` (or `string(letter)`) its
+text, and `char(1046)` the character back — a value outside the Unicode scalar
+values (above `0x10FFFF` or a surrogate) is a runtime error:
+
+```okkama
+for "Жук".characters() -> letter {
+    out.writeln(letter.string() + " " + letter.code().string());
+}
 ```
 
 Text meets binary data only through explicit, fallible conversion at the
@@ -706,9 +743,74 @@ let empty_map = [:];
   the *variable* `name`; write `["name": "Alex"]` for a string key.
 - Missing keys are runtime errors unless an `else` fallback is given:
   `prices["fig"] else 0;`
-- Map keys must be scalar values. Keys cannot be `any` or `byte` (the current
-  map backend cannot preserve typed key identity for them). Map *values* may
-  be any type including `any`.
+- Map keys are scalar values or value objects. Keys cannot be `any` or `byte`
+  (decision D-007: `Map key type byte is not a scalar key type`). A `byte`
+  may still be a field of a key object. Map *values* may be any type
+  including `any`.
+- A **value object** is a key when every field is a scalar (`byte` and `rat`
+  included), an enum or another such object, and it has no `destroy` block and
+  no capabilities. Objects are immutable, so a key compares by its fields
+  exactly like `==`, and `keys()` orders object keys field by field in
+  declaration order:
+
+  ```okkama
+  object Card {
+      has rank is int;
+      has suit is Suit;
+      Card(rank is int, suit is Suit) { self.rank = rank; self.suit = suit; }
+  }
+
+  let seen is %Card:int = [Card(10, Suit.hearts): 1];
+  seen[Card(10, Suit.hearts)] else 0;   // 1: an equal Card is the same key
+  ```
+
+  A type that is not a key is named with its reason: `Map key type Tagged
+  cannot be a key: field "tags" is @string`.
+- A **type parameter** can be a key too. `%T:V` anywhere in a generic object
+  (a field, a signature, a body) or a literal keyed by a `T` value makes `T` a
+  *key parameter*: every specialization must pass a key type, and a parameter
+  passed on to a key parameter (`Wrap<U> { has inner is Index<U>; }`) is one
+  as well. The compiler checks it:
+
+  ```okkama
+  object Index<T> {
+      has entries is %T:int;
+      Index() { let empty is %T:int = [:]; entries = empty; }
+  }
+
+  let words is Index<string> = Index();   // a string is a key
+  let lists is Index<@int> = Index();     // compile error
+  ```
+
+  The error names the parameter: `Generic parameter "T" for object "Index"
+  is a map key: Map key type @int is not a scalar key type`. The standard
+  library's `KeyedSet<T>` (`collections/set`) and `KeyedFrequencies<T>`
+  (`collections/frequencies`) are built this way: logarithmic membership and
+  counting, traversal in key order. `OrderedSet` and `Frequencies` take any
+  `T` with equality, arrays included, and search linearly.
+
+### 8.2a `+` and `-` on collections
+
+Arrays and maps of exactly the same type combine with `+` and `-`:
+
+```okkama
+let all = [1, 2] + [3] + [4, 5];          // [1, 2, 3, 4, 5]
+let rest = [1, 2, 3, 2] - [2];            // [1, 3]: every equal element goes
+let merged = ["a": 1] + ["a": 2, "b": 3]; // ["a": 2, "b": 3]: the right value wins
+let kept = merged - ["a": 0];             // ["b": 3]: keys of the right map go
+```
+
+- Both operands must have the same type: `@int + @@int`, `@int + %string:int`
+  and `@int + @string` are compile errors. An untagged empty literal (`[]`,
+  `[:]`) takes the other operand's type.
+- `a + b + c` is one operation: the result is allocated once for the sum of
+  the parts, never through intermediate arrays or maps. `(a - b) - c` removes
+  the elements (or keys) of `b` and `c` in one pass; `a - (b - c)` keeps its
+  grouping.
+- `-` on arrays compares elements deeply (`==`), so arrays holding `any`
+  cannot be subtracted. `-` on maps removes keys and ignores the right map's
+  values.
+- To append one element, concatenate a one-element array: `items + [item]`.
 
 ### 8.3 Typed collection identity
 
@@ -810,8 +912,8 @@ prices.keys();               // @K, sorted by key
 prices.values();             // @V, same pairing order as keys()
 1.less(2);                   // true
 2.less_or_equal(2);          // true
-3.more(1);                   // true
-3.more_or_equal(4);          // false
+3.greater(1);                // true
+3.greater_or_equal(4);       // false
 ```
 
 Rules:
@@ -828,15 +930,31 @@ Rules:
   joining an empty array returns `""`. Removal is
   `text.replace(target, "")`, not a separate builtin.
 - Every transformation is immutable: it returns a new string or array.
-- The numeric comparisons `.less`, `.less_or_equal`, `.more`,
-  `.more_or_equal` require the **exact same** numeric category on both sides:
-  `1.less(2.0)` fails. (The operators `<`/`>` are broader; the builtin action
+- The numeric comparisons `.less`, `.less_or_equal`, `.greater`,
+  `.greater_or_equal` require the **exact same** numeric category on both
+  sides: `1.less(2.0)` fails. (The operators `<`/`>` are broader; the builtin action
   form is deliberately strict.)
 - Builtin calls are positional-only and exact-arity.
 - Builtin dispatch activates only for non-object receivers, so an object's
   own action named `size` or `less` is never shadowed and never shadows.
-- Receivers with no builtin support at all (`bool`, `range`, `enum`, `any`)
-  still report `Can only call actions on objects` when called.
+- `bool` has one builtin, `string()` (`"true"` or `"false"`). Receivers with no
+  builtin support at all (`range`, `enum`, `any`) still report
+  `Can only call actions on objects` when called.
+
+Complete list (a test checks it against the compiler's table, `analysis/check/builtin.rs`):
+
+| Receiver | Builtin actions |
+|---|---|
+| `@T` | `size()`, `slice(start, end)`, `item(index)`, `first()`, `last()`, `cursor()`, `ordering()` (elements that do `Comparing<T>`; needs `import "compare" take Comparing`), `join(separator)` on `@string`; `contains(value)`, `index_of(value)` (a `Maybe<int>`; equality as `==`), `reversed()`, `take(count)`, `drop(count)` (at most `count` elements; a negative count is an error) |
+| `%K:V` | `size()`, `has(key)`, `keys()`, `values()` |
+| `string` | `length()`, `empty()`, `slice(start, end)`, `split(separator)`, `replace(from, to)`, `replace_first(from, to)`, `trim()`, `trim_start()`, `trim_end()`, `chomp()`, `string()`, `less(other)`, `less_or_equal(other)`, `order(other)`; `contains(part)`, `starts_with(part)`, `ends_with(part)`, `find(part)`, `find_last(part)` (a `Maybe<int>` code point index; an empty part is found at the start or the end), `lower()`, `upper()` (full Unicode case mapping, no locale), `repeat(count)` (a negative count is an error; at most 1 GiB), `characters()` (an `@char` of code points) |
+| `int`, `float` | `abs()`, `sign()`, `pow(exponent)`, `sqrt()` (a `float`) — `int.pow(int)` is the exact `int` (a negative exponent is an error), `float.pow(float)` a `float` |
+| `rat` | `abs()`, `sign()`, `numerator()`, `denominator()` (decimal strings), `pow(exponent)` — the exact `rat`; a negative exponent inverts it |
+| numbers, `byte` | `less`, `less_or_equal`, `greater`, `greater_or_equal`, `order` with the same category |
+| `char` | `order(other)`, `code()` (the code point, an `int`), `string()`; `char(code)` and `code.char()` make one from an `int` (a Unicode scalar value, else an error) |
+| `int`, `byte` | `bit_count()`, `leading_zeros()`, `trailing_zeros()`, `rotate_left(n)`, `rotate_right(n)`, `reverse_bits()`, `swap_bytes()` |
+| scalars | conversions `int()`, `float()`, `rat()`, `byte()`, `string()` (Chapter 5); `char()` on `int` |
+| `Future<T>` | `cancel()`, `done()`, `cancelled()` |
 
 ---
 
@@ -856,12 +974,12 @@ else                   optional fallback (Maybe<T> else T, map[k] else v)
 <-                     stream write
 ==  !=                 equality          (strict same-category)
 ..  ..=                range construction
-<  <=  >  >=           numeric ordering  (numeric promotion applies)
+<  <=  >  >=           numeric ordering  (same category only)
 |                      bitwise or
 ^                      bitwise exclusive or
 &                      bitwise and
 <<  >>  >>>             fixed-width shifts
-+  -                   addition/concat, subtraction
++  -                   addition/concat, subtraction (also arrays and maps, 8.2a)
 *  /  %                multiplication, division, modulo
 !  -  ~                unary not, unary minus, bitwise complement
 postfix                calls, member access, indexing, unpack `...`
@@ -898,9 +1016,11 @@ Neither binary `~` nor `<<<` is a stream-write operator.
 ### 11.3 Equality vs ordering
 
 Equality (`==`, `!=`) is strict per category (Chapter 4): `1 == 1.0` and
-`byte(1) == 1` are errors, not `false`. Ordering (`<` etc.) accepts mixed
-numeric operands under promotion. Boolean operators require `bool` operands
-and never coerce.
+`byte(1) == 1` are errors, not `false`. Ordering (`<` etc.) needs the same
+numeric category on both sides too: `1 < 2.5` is an error; write
+`1.float() < 2.5`. Boolean operators require `bool` operands and never coerce;
+`&&` and `||` evaluate their right operand only when the left one does not
+decide the result.
 
 ### 11.4 Calls
 
@@ -915,6 +1035,13 @@ cash.add_bonus(bonus: 10);
   errors.
 - Receiver and arguments evaluate exactly once, left to right, in the
   *caller's* scope.
+- **Default values.** Trailing parameters of an object's action or
+  constructor may declare one: `greet(name is string, mark is string = "!")`.
+  A call may leave them out — positionally from the end, or by name in any
+  combination — and each left-out parameter takes its value, evaluated at
+  that call in the *declaring* module: it sees module names, not the caller's
+  locals or `self`. A parameter after a defaulted one needs a default too;
+  variadic actions, role signatures, natives and enum payloads have none.
 - Anonymous actions are ordinary expression values and use the same call
   syntax; their grammar, lexical capture and explicit signatures are covered
   in Section 18.5.
@@ -937,7 +1064,11 @@ the branch's last statement is its value:
 
 ```okkama
 let value = if ready { 1; } else { 0; };
+let size = if n > 5 { "large" } else if n > 2 { "medium" } else { "small" };
 ```
+
+An `else if` chain is an expression too: every link needs its `else`, and
+all branches produce one type.
 
 `match` may also be used in expression position with the same syntax as the
 match statement (Chapter 12).
@@ -984,7 +1115,8 @@ rebind-eligible. Eligibility is an explicit per-action opt-in by the type's
 author (`is ^Type`, Chapter 19), not something inferred from return-type
 shape; see `docs/todo/local-rebinding-22072026.md` for the earlier, broader
 rule that was tried and reverted. A plain scalar, array, map, or enum never
-qualifies either way — `let n = 1; n = 2;` stays illegal.
+qualifies either way — `let n = 1; n = 2;` stays illegal; a value that must
+change in synchronous code lives in a `Cell` (Section 19.1).
 
 The new value must satisfy the same declared type as the existing binding,
 using the same rules as `let`. A rebind always updates the scope that
@@ -1154,14 +1286,22 @@ last result;           // exit and produce a loop result
 last result if done;   // the result is lazy when the condition is false
 ```
 
-Postfix `if` also works on ordinary expression statements:
+Postfix `if` also works on ordinary expression statements, `return` and
+`throw`:
 
 ```okkama
 counter.bump() if enabled;
+return found if done;          // leave the action with a value
+return if done;                // a void action: the bare form
+throw Failure.empty if items.size() == 0;
 ```
 
+Right after `return` or `throw`, `if cond;` is the bare form with a condition,
+while `return if a { 1; } else { 2; };` still returns an `if` expression.
+
 The postfix condition must be `bool`, like every condition. It is evaluated
-before a `last` payload; a false condition does not evaluate that payload.
+before a `last`, `return` or `throw` payload; a false condition does not
+evaluate that payload.
 Control targets the nearest `for` or `loop`. A functional
 `map`/`filter`/`reduce` block cannot control an enclosing loop directly, but a
 nested explicit `loop` establishes its own boundary. Placement is checked
@@ -1180,7 +1320,7 @@ let doubled = values.map() -> value {
 };
 
 let selected = values.filter() -> value {
-    value.more(0);
+    value.greater(0);
 };
 
 let total = values.reduce(0) -> accumulator, value {
@@ -1192,7 +1332,7 @@ They chain naturally:
 
 ```okkama
 let total = values
-    .filter() -> value { value.more(0); }
+    .filter() -> value { value.greater(0); }
     .map() -> value { value * 2; }
     .reduce(0) -> sum, value { sum + value; };
 ```
@@ -1223,10 +1363,33 @@ Semantics:
   checked against it. `@any` output happens only with an explicit `@any`
   target.
 - **`filter`** predicates must return exact `bool`.
+- **`any`, `all`, `find` stop early.** With the same block syntax and
+  bindings, `any` is `true` at the first item whose block is `true`, `all` is
+  `false` at the first whose block is `false`, and `find` gives
+  `Maybe.some(item)` for the first match (arrays, ranges and `Iterable`
+  objects; not maps). Later items are not visited, so a block with effects
+  stops with them; an empty source gives `false`, `true` and `Maybe.none`:
+
+  ```okkama
+  let late = orders.any() -> order { order.overdue(); };
+  let first = users.find() -> user { user.admin(); };  // Maybe<User>
+  ```
 - **`reduce`** always takes one initial value. The accumulator keeps one
   exact type, supplied by a direct declared target or the initial value.
   Reducing an empty source returns the checked initial value without running
   the block.
+- **Building with `reduce` is linear.** When the block uses an array or map
+  accumulator only as its value — alone, or as the left end of `acc + ...` —
+  the accumulator grows in place: `acc + [x]` is an append, amortized O(1),
+  not a copy of everything gathered so far. Nothing else can see an
+  intermediate accumulator, so the result is the same. Any other use (a read
+  such as `acc.size()`, a call, a capture) keeps the copying `+`; a map
+  accumulator grows in place from `[:]` by literal entries:
+
+  ```okkama
+  let squares = (1..=n).reduce(@int()) -> acc, i { acc + [i * i]; };
+  let lengths is %string:int = words.reduce([:]) -> acc, w { acc + [w: w.length()]; };
+  ```
 - The receiver and the initial value evaluate exactly once; items are visited
   deterministically in source order (maps in sorted-key order); the first
   failing item stops the operation and propagates through ordinary typed
@@ -1841,7 +2004,11 @@ total_cents() is int {
 - Actions read fields directly (or as `self.field`) and call other actions
   through `self`, including private ones.
 - Parameters are typed and checked; the result is checked against the
-  declared return type.
+  declared return type. Names before one type share it, as fields do:
+  `full(separator, suffix is string)`. The grouping works in every
+  parameter list — constructors, actions, role signatures, natives, enum
+  case payloads (`declined(id, line is int)`) and anonymous actions — but
+  not for a variadic parameter, which takes its own type.
 - A caller's contextual expected type stops at the action boundary; it cannot
   retag a nested expression inside the callee.
 - A typed action returns its final statement's value or an explicit `return` value.
@@ -1960,6 +2127,15 @@ fields and validate invariants directly with `confirm`; they may read initialize
 fields and inspect parameters or other completed objects. A captured callback
 may invoke `self` after construction finishes. Private actions cannot be exported
 as values.
+
+The compiler rejects a direct `self.` call. A constructor may still hand `self`
+to a collaborator, and every engine rejects an action called through it while
+the constructor has not returned, including calls through a role or a bound
+action. A direct call is rejected before its arguments are evaluated (#271):
+`Action "describe" on object "Tree" was called before its construction completed`.
+If the constructor fails after `self` escaped, the escaped object never
+completes, and every later call on it fails the same way. Only objects whose
+constructor uses `self` as a value pay for the check.
 External calls fail *after* signature selection (so overload
 resolution is uniform): `Action "secret" on object "Cash" is private`.
 
@@ -1993,7 +2169,9 @@ Resolution:
    during selection.
 7. Named calls additionally filter by parameter names, so same-type
    signatures can be distinguished by name where a positional call cannot.
-8. Overloads of one name and arity must declare the same return type.
+8. Overloads of one name and arity may declare different results when their
+   parameter types differ (#215): the result of a call is that of the
+   selected overload.
 9. A variadic tail compares its element type with every tail value. A call
    with an empty tail is ambiguous between `f(xs is ...int)` and
    `f(xs is ...string)`; declare `f()` to give it a meaning.
@@ -2289,6 +2467,31 @@ This is the EO immutability discipline with runtime teeth: state transitions
 are explicit in signatures (`is ^Type`), visible at call sites (`let opened =
 bottle.open()`), and impossible to fake through hidden mutation.
 
+### 19.1 `Cell`: a mutable value in synchronous code
+
+Some state is genuinely a variable: a running total, a parser's position,
+headers gathered while reading. `reduce` covers most accumulations; where it
+reads badly, `cell::Cell` is the one explicit mutable container:
+
+```okkama
+import "cell" take Cell;
+
+let total = Cell(0);
+for items -> item { total.replace(total.value() + item.price()); }
+total.value();
+```
+
+- `Cell(value: initial)`, `value()`, `replace(value)`. It is not a resource:
+  no `close()`, nothing to destroy. Values read from it are ordinary immutable
+  values; cells compare by identity.
+- **A cell stays in synchronous code**, checked by the compiler: an async
+  action cannot create, receive or use one (`A Cell cannot be used in an async
+  action`), and an object's field cannot hold one. Synchronous code has no
+  suspension point, so every read and write is whole with respect to tasks; a
+  sync action that uses a cell may be called from async code.
+- State shared between tasks is `async/atomic`'s `Atomic`, with
+  `compare_and_replace` and an explicit `close()`.
+
 ## Chapter 20. Ownership, Scope, and `destroy`
 
 ### 20.1 `destroy` blocks
@@ -2322,6 +2525,43 @@ main() is int {
   host garbage collector.
 - If a destroy block fails, the runtime reports it as a runtime error; a body
   failure that triggered the unwind takes precedence over cleanup failures.
+
+### 20.1.1 `async destroy`
+
+A resource whose cleanup must wait — flush a socket, let a server drain —
+declares `async destroy` (#154). It is awaited where its owner's scope ends,
+in the same reverse order, also on `return` and on a failure:
+
+```okkama
+object Connection {
+    has socket is Socket;
+    Connection(:socket);
+
+    async destroy {
+        await socket.flush();
+        socket.close();
+    }
+}
+
+object Server {
+    Server();
+
+    async serve(socket is Socket) is void {
+        let connection = Connection(socket: socket);
+        await connection.handle();
+    }   // the destroy is awaited here, before serve's Future settles
+}
+```
+
+- Such an object — or one holding it in a field, an array or a map — can be
+  owned only in an async action (or a constructor of an object that has an
+  async destroy itself). In synchronous code it is a compile error:
+  `Connection has an async destroy; own it in an async action`. Borrowing it
+  as an argument of a synchronous action is fine.
+- A cancellation that arrives while the destroy awaits does not interrupt it:
+  the task receives `Cancelled` at its next await, after the scope has closed.
+- This replaces a `defer close` plus a `defer await settled` pair and helper
+  objects that exist only to await in cleanup.
 
 ### 20.2 Ownership follows identity, not names
 
@@ -2552,6 +2792,54 @@ describe the states of a protocol: each role exposes only what is valid in
 that state, and an invalid transition does not type-check. Section 30.6 shows
 the full pattern.
 
+### 22.3 Operator roles
+
+Module `operators` gives arithmetic operators a meaning for objects (#215).
+Each operator has a role; the first type parameter is the right operand, the
+second the result:
+
+| Role | Action | Operator |
+|---|---|---|
+| `Adding<T, R>` | `plus(other is T) is R` | `a + b` |
+| `Subtracting<T, R>` | `minus(other is T) is R` | `a - b` |
+| `Multiplying<T, R>` | `times(other is T) is R` | `a * b` |
+| `Dividing<T, R>` | `divided(other is T) is R` | `a / b` |
+| `Remaindering<T, R>` | `remainder(other is T) is R` | `a % b` |
+| `Negating<R>` | `negated() is R` | `-a` |
+
+```okkama
+import "operators" take Adding, Subtracting;
+import "compare" take Comparing, Order;
+
+object Money does Adding<Money, Money>, Subtracting<Money, Money>, Comparing<Money> {
+    has cents is int;
+    Money(:cents);
+    cents() is int { cents; }
+    plus(other is Money) is Money { Money(cents: cents + other.cents()); }
+    minus(other is Money) is Money { Money(cents: cents - other.cents()); }
+    order(other is Money) is Order { cents.order(other.cents()); }
+}
+
+let total = Money(cents: 250) + Money(cents: 75);   // total.plus(...)
+total > Money(cents: 300);                           // order() == Order.greater
+```
+
+- With an object, a role reference or a role-bounded type parameter on the
+  left, `a + b` is `a.plus(b)`. The type must declare the role: an action
+  named `plus` without `does Adding<…>` gives no `+`
+  (`Operator + cannot be applied to Plain and Plain: Plain does not do Adding`).
+- The right operand is checked like any argument, with no implicit
+  conversion, and the selected overload must be a role instance the type
+  declares. One role may be declared several times with different
+  arguments: `Instant` does `Subtracting<Duration, Instant>` and
+  `Subtracting<Instant, Duration>`, so `later - minute` is an `Instant` and
+  `later - start` a `Duration`.
+- `<`, `<=`, `>`, `>=` go through `compare.Comparing<T>`: `a < b` is
+  `a.order(b) == Order.less`. `==` stays structural.
+- In std: `BigInt` (`+ - * / %`, `-a`, ordering; `/` truncates toward zero),
+  `Duration` (`+ -`, `-a`, ordering), `Instant` and `MonotonicInstant`
+  (`+ Duration`, `- Duration`, `- Instant`, ordering), `Decimal` (ordering).
+
 ## Chapter 23. Role Fakes and Testing
 
 Elegant Objects argues that an interface should ship its own fake so tests
@@ -2696,8 +2984,20 @@ first-class, fresh for every case, and absent outside test execution. Failed
 assertions do not abort the block. An uncaught throw, panic, runtime, defer, or
 destroy failure ends only the current test, cleanup finishes, and the next test
 runs. The Go-like reporter returns process status 0 only for an entirely green
-suite and 1 otherwise. There is no `test.panics`; typed `try`/`catch` covers
-throw behavior, while panic is intentionally uncatchable.
+suite and 1 otherwise. There is no `test.panics`: panic is intentionally
+uncatchable.
+
+`test.throws(Type) { … }` asserts that a block throws: it fails the test
+unless the block throws a `Type` (an error type, enum or role, as after
+`catch e is`), and its value is the caught error, for further checks:
+
+```okkama
+let refused = test.throws(Refused) { Gate().check(0); };
+test.is(refused, Refused.because("non-positive"));
+```
+
+It means exactly `try { …; panic "test.throws: the block did not throw Refused"; }
+catch e is Refused { e; }`; another error still propagates and fails the test.
 
 Reusable assertions come from the bundled module:
 
@@ -3156,6 +3456,34 @@ in bodies defined there — and nowhere else.
   (`hidden-error`).
 
 `hidden` is a contextual keyword: `has hidden is int` is still a field.
+
+### 26.3.2 Module constants
+
+```okkama
+module settings v1.0.0;
+
+const LANG = "en";
+const MB = 1024 * 1024;
+const NAME = "okkama-" + LANG;
+const PRIMES is @int = [2, 3, 5, 7];
+const LIMITS = ["upload": 10 * MB, "header": 64 * 1024];
+hidden const SALT = "x";
+```
+
+`const NAME = value;` names a value the compiler computes (#153). It is made
+of literals, payload-free enum cases, `rat(n, d)`, scalar casts, operators,
+other constants (declared in any order) and arrays and maps of such values;
+a call, a constructor, an object or a local is an error. The computation has
+the semantics of the running program — a big integer stays exact, `1 / 2` is
+a `rat` — and a failing one (`1 % 0`) or a cycle between constants is a
+compile error. A constant is public like an object: `take LANG` or
+`settings.LANG` reaches it, and `hidden const` keeps it in its module. A
+scalar is a literal where it is used; an array or a map is built once per run
+and shared without copies.
+
+Constants are not a way to share objects: an expensive object (a compiled
+regex, a database) is built once where the program starts and passed to the
+objects that need it, so its lifetime and its users stay visible.
 
 ### 26.4 Hygiene rules
 
@@ -5698,9 +6026,10 @@ The fixed rules follow the language's existing philosophy:
   available in direct expressions too (`Dump([1, 2, 3])`, generic inference
   from literals, overload resolution).
 
-Map keys preserve exact scalar or enum identity, including `byte`, `char` and
-`bool`. A same-spelled key of another type is distinct. Native/worker transport
-retains these identities; objects, handles and Any boxes are not map keys.
+Map keys preserve exact scalar or enum identity, including `char` and `bool`.
+A same-spelled key of another type is distinct. Native/worker transport
+retains these identities. Value objects are keys (§8.2); `byte`
+values (D-007), handles and Any boxes are not.
 An action's own declared `@U` return also supplies its `.map()` result target,
 including empty, mixed concrete role implementations, branches and await paths.
 
@@ -5804,6 +6133,14 @@ unchanged synchronous path. Use `spawn` for the restricted process-parallel
 contract. Future cancellation and the std `async/*` modules provide structured
 cleanup and composition. Spawning an async action instead starts cooperative
 work in the current runtime; it does not move that work to a process.
+
+Await is structured (#147). Cancelling a task cancels the future it is
+awaiting — a lazy future its `await` started, a task it spawned, a native
+request — and the task resumes only once that future has settled, deferred
+cleanup included; then its own `await` throws `Cancelled`. A future that
+another task still awaits is left running: the cancelled awaiter only stops
+waiting for it. One awaited child therefore needs no group; `FutureGroup` and
+`FutureScope` are for real fan-out.
 
 ### 31.5.1 Process-parallel `spawn`
 
@@ -5991,15 +6328,15 @@ Keyword inventory in active use: `module`, `import`, `as`, `take`, `object`,
 `role`, `enum`, `has`, `is`, `does`, `self`, `let`, `if`, `else`, `match`,
 `case`, `for`, `loop`, `next`, `last`, `return`, `confirm`, `throw`, `panic`, `try`, `catch`, `defer`,
 `test`, `fake`, `destroy`, `private`, `native`, `async`,
-`await`, `spawn`, `true`, `false`, `main` (contextually), `hidden`
-(contextually, before `object`, `role` or `enum`).
+`await`, `spawn`, `const`, `true`, `false`, `main` (contextually), `hidden`
+(contextually, before `object`, `role`, `enum` or `const`).
 
 Contextual namespace names (not ordinary identifiers) include keyword-shaped
 module path segments such as `test` in `test/more`, declared action labels such
 as `is`, `fake` in `Role.fake()`, assertion names in `test.ok(...)`, and
 builtin action names such as `size`, `slice`, `length`, `trim`, `chomp`,
 `split`, `join`, `replace`, `replace_first`, `keys`, `values`, `has`, `less`,
-`more`.
+`greater`.
 
 ## Appendix B. Implementation Status
 

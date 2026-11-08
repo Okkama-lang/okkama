@@ -78,7 +78,7 @@ public final class Scheduler {
 
     private static Carrier fresh() {
         Carrier carrier = new Carrier();
-        Thread thread = new Thread(null, carrier, "okkama-task", STACK);
+        Thread thread = new Thread(null, carrier, "okkama-task", Rt.stack(STACK));
         thread.setDaemon(true);
         thread.start();
         return carrier;
@@ -281,6 +281,24 @@ public final class Scheduler {
         return future.outcome();
     }
 
+    /**
+     * Ожидание {@code async destroy} при закрытии области (#154): отмена задачи
+     * его не прерывает и остаётся отложенной до следующего {@code await}.
+     */
+    static Object awaitShielded(Future future) {
+        future.shielded = true;
+        observe(future);
+        Task me = current;
+        start(future, me);
+        while (future.state == Future.RUNNING) {
+            future.waiters.add(me);
+            me.awaiting = future;
+            suspend();
+            me.awaiting = null;
+        }
+        return future.outcome();
+    }
+
     /** {@code fut.cancel}: идемпотентная кооперативная отмена. */
     static void cancel(Future future) {
         if (future.state == Future.COLD) {
@@ -301,29 +319,23 @@ public final class Scheduler {
             return;
         }
         task.cancelPending = true;
-        if (task == current || task.awaiting == null) {
+        if (task == current || task.awaiting == null || task.awaiting.shielded) {
             return;
         }
         Future inner = task.awaiting;
-        if (inner.starter == task && inner.state == Future.RUNNING) {
-            // Отмена идёт вглубь цепочки: внутренний завершится отменой и
-            // продолжит эту задачу как ожидающую.
+        boolean shared = false;
+        for (Object waiter : inner.waiters) {
+            if (waiter instanceof Task && waiter != task) shared = true;
+        }
+        if (inner.state == Future.RUNNING && (inner.starter == task || !shared)) {
+            // Structured await (#147): the awaited future — one this task
+            // started, a spawned task or a native request no other task
+            // awaits — is cancelled with its awaiter, which keeps waiting and
+            // throws Cancelled once it has settled.
             cancel(inner);
-            if (future.state != Future.RUNNING || task.awaiting == null) {
-                return;
-            }
+            return;
         }
         inner.waiters.remove(task);
-        // A runtime promise (a native request) that no other task awaits is
-        // cancelled with its awaiter, as on the Sparrow core: its provider then
-        // interrupts the work and releases what a late reply opened.
-        if (inner.task == null && inner.body == null && inner.state == Future.RUNNING) {
-            boolean awaited = false;
-            for (Object waiter : inner.waiters) {
-                if (waiter instanceof Task) awaited = true;
-            }
-            if (!awaited) cancel(inner);
-        }
         transfer(task);
     }
 

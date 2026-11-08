@@ -12,6 +12,7 @@
 mod builtin;
 mod call;
 mod collections;
+mod consts;
 mod expr;
 mod generics;
 mod stmt;
@@ -39,6 +40,8 @@ pub(super) enum Kind {
     CapField,
     Closure,
     Test,
+    /// Инициализатор `const` модуля (#153).
+    Const,
 }
 
 /// Активный цикл: цель `next`/`last` и типы значений `last`.
@@ -95,11 +98,18 @@ pub(super) struct Checker<'r, 'a> {
     pub shorthand_fields: Vec<usize>,
     /// Тело поля внешнего cap: поля владельца читаются как `Owner::field`.
     pub cap_external: bool,
+    /// Scopes below this index are hidden: a parameter's default value is
+    /// checked at the call without the caller's locals (#149).
+    pub barrier: Option<usize>,
 }
 
 /// Проверить все тела программы: зависимости раньше корня, в порядке исходника.
 pub(super) fn check_bodies(reg: &mut Registry<'_>) -> Vec<Body> {
     let mut bodies = Vec::new();
+    // Every constant, used or not, is computed once and reports its errors (#153).
+    for id in 0..reg.consts.len() {
+        let _ = consts::evaluate(reg, id);
+    }
     for module in 0..reg.modules.len() {
         reg.set_module(module);
         let objects: Vec<ObjectId> = (0..reg.objects.len())
@@ -121,16 +131,47 @@ pub(super) fn check_bodies(reg: &mut Registry<'_>) -> Vec<Body> {
             let block = checker.body(test.body, &test.name);
             bodies.push(checker.finish(BodyOwner::Test(index), Vec::new(), block, test.span));
         }
-        if module == reg.entry_module {
-            if let Some(entry) = reg.entry {
+        if module == reg.entry_module
+            && let Some(entry) = reg.entry {
                 let mut checker = Checker::new(reg, Kind::Entry, None, Some(Ty::Int));
                 checker.is_async = entry.is_async;
                 let block = checker.body(&entry.body, &entry.name.text);
                 bodies.push(checker.finish(BodyOwner::Entry, Vec::new(), block, entry.span));
             }
+    }
+    reg.check_key_arguments();
+    bodies
+}
+
+/// Default values of parameters (#149), checked once where they are
+/// declared: each call that leaves a parameter out checks its value again at
+/// the call (so it is evaluated there) without repeating these errors.
+fn check_param_defaults(reg: &mut Registry<'_>, object: ObjectId) {
+    let mut defaults = Vec::new();
+    for ctor in &reg.objects[object.0].ctors {
+        if let CtorShape::Full { params, defaults: values, .. } = &ctor.shape {
+            for ((_, ty), value) in params.iter().zip(values) {
+                if let Some(value) = value {
+                    defaults.push((*value, ty.clone()));
+                }
+            }
         }
     }
-    bodies
+    for method in &reg.objects[object.0].methods {
+        if let Some(decl) = method.decl {
+            for ((_, ty), param) in method.params.iter().zip(&decl.params) {
+                if let Some(value) = &param.default {
+                    defaults.push((value, ty.clone()));
+                }
+            }
+        }
+    }
+    for (value, ty) in defaults {
+        let mut checker = Checker::new(reg, Kind::Default, Some(object), Some(ty.clone()));
+        checker.self_ty = None;
+        let checked = checker.value(value, Some(&ty));
+        let _ = checker.coerce(checked, &ty, value.span, "Default value");
+    }
 }
 
 fn check_object(reg: &mut Registry<'_>, object: ObjectId, bodies: &mut Vec<Body>) {
@@ -161,6 +202,7 @@ fn check_object(reg: &mut Registry<'_>, object: ObjectId, bodies: &mut Vec<Body>
         let body = check_ctor(reg, object, ctor);
         bodies.push(body);
     }
+    check_param_defaults(reg, object);
     for method in 0..reg.objects[object.0].methods.len() {
         let info = &reg.objects[object.0].methods[method];
         let Some(decl) = info.decl else {
@@ -200,6 +242,7 @@ fn check_object(reg: &mut Registry<'_>, object: ObjectId, bodies: &mut Vec<Body>
     }
     if let Some(destroy) = reg.objects[object.0].destroy {
         let mut checker = Checker::new(reg, Kind::Destroy, Some(object), None);
+        checker.is_async = destroy.is_async;
         let block = checker.body(&destroy.body, "destroy");
         bodies.push(checker.finish(
             BodyOwner::Destroy { object },
@@ -238,6 +281,7 @@ fn check_ctor(reg: &mut Registry<'_>, object: ObjectId, ctor: usize) -> Body {
             names,
             variadic,
             body,
+            ..
         } => {
             let count = params.len();
             for (index, ((_, ty), name)) in params.into_iter().zip(names).enumerate() {
@@ -311,10 +355,20 @@ impl<'r, 'a> Checker<'r, 'a> {
             captures: Vec::new(),
             shorthand_fields: Vec::new(),
             cap_external: false,
+            barrier: None,
         }
     }
 
-    pub fn finish(self, owner: BodyOwner, params: Vec<LocalId>, block: Block, span: Span) -> Body {
+    pub fn finish(mut self, owner: BodyOwner, params: Vec<LocalId>, block: Block, span: Span) -> Body {
+        if self.is_async
+            && let Some(cell) = self.reg.standard.cell
+        {
+            // A cell stays in synchronous code (#152): one error per async body.
+            let local = self.locals.iter().find(|local| local.ty.holds_object(cell)).map(|local| local.span);
+            if let Some(at) = local.or_else(|| super::thir::first_expr(&block, &|expr| expr.ty.as_ref().is_some_and(|ty| ty.holds_object(cell)))) {
+                self.error(at, "A Cell cannot be used in an async action: a cell stays in synchronous code; share state between tasks with Atomic");
+            }
+        }
         let returns_value =
             self.result.is_some() && !matches!(self.kind, Kind::Successor | Kind::Ctor);
         let body = Body {
@@ -324,6 +378,7 @@ impl<'r, 'a> Checker<'r, 'a> {
             params,
             block,
             returns_value,
+            is_async: self.is_async,
             span,
         };
         super::flow::check(self.reg, &body);
@@ -443,7 +498,18 @@ impl<'r, 'a> Checker<'r, 'a> {
     }
 
     /// Новая привязка в текущей области.
-    pub fn declare(&mut self, name: &ast::Name, ty: Ty, variadic: bool) -> LocalId {
+    pub fn declare(&mut self, name: &ast::Name, mut ty: Ty, variadic: bool) -> LocalId {
+        if ty.depth_up_to(crate::analysis::ty::MAX_TYPE_DEPTH) > crate::analysis::ty::MAX_TYPE_DEPTH {
+            self.error(
+                name.span,
+                format!(
+                    "Type of \"{}\" is nested deeper than {} levels",
+                    name.text,
+                    crate::analysis::ty::MAX_TYPE_DEPTH
+                ),
+            );
+            ty = Ty::Error;
+        }
         if self
             .scopes
             .last()
@@ -467,13 +533,16 @@ impl<'r, 'a> Checker<'r, 'a> {
 
     /// Локальная по имени; во внешнем теле анонимного действия — захват.
     pub fn local(&mut self, name: &str) -> Option<LocalId> {
-        if let Some(local) = self
-            .scopes
+        let visible = self.barrier.unwrap_or(0);
+        if let Some(local) = self.scopes[visible..]
             .iter()
             .rev()
             .find_map(|scope| scope.get(name).copied())
         {
             return Some(local);
+        }
+        if self.barrier.is_some() {
+            return None;
         }
         let (outer_local, ty) = self.outer.as_ref()?.visible.get(name).cloned()?;
         if let Some((_, inner)) = self
@@ -837,9 +906,9 @@ impl<'r, 'a> Checker<'r, 'a> {
                 self.stmt(stmt, want && last, if last { expected } else { None });
             // Ожидаемый тип блока — граница его последнего значения: ветви
             // `if`/`match`/`try` приводятся к нему каждая (§6.5).
-            if let (true, Some(target), Some(actual)) = (want && last, expected, value.ty.clone()) {
-                if !value.diverges && actual != *target && !actual.is_error() {
-                    if let StmtKind::Expr(expr) = checked.kind {
+            if let (true, Some(target), Some(actual)) = (want && last, expected, value.ty.clone())
+                && !value.diverges && actual != *target && !actual.is_error()
+                    && let StmtKind::Expr(expr) = checked.kind {
                         checked.kind = match self.try_coerce(expr, target, "Value") {
                             Ok(coerced) => {
                                 value.ty = Some(target.clone());
@@ -848,8 +917,6 @@ impl<'r, 'a> Checker<'r, 'a> {
                             Err(original) => StmtKind::Expr(*original),
                         };
                     }
-                }
-            }
             if !diverged {
                 if value.diverges {
                     diverged = true;

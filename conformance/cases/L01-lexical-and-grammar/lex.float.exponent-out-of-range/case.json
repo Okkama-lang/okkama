@@ -1,0 +1,44 @@
+{
+  "schema": "ocs-case/1",
+  "id": "L01.lex.float.exponent-out-of-range",
+  "title": "an exponent literal beyond binary64 is rejected",
+  "purpose": "Invalid source is rejected before execution.",
+  "level": "L01",
+  "contracts": [
+    {
+      "contract": "LEX.FLOAT-LITERALS",
+      "aspects": [
+        "invalid"
+      ]
+    }
+  ],
+  "mode": "check",
+  "sources": [
+    "main.ok"
+  ],
+  "entry": "main.ok",
+  "expect": {
+    "outcome": "reject",
+    "rejection": {
+      "stages": [
+        "check"
+      ],
+      "categories": [
+        "semantic"
+      ],
+      "justification": "1e400 is a well-formed float literal whose value is not a finite binary64; the checker rejects it, as it rejects a literal that is not zero but rounds to 0.0."
+    }
+  },
+  "spec_refs": [
+    "docs/okkama-spec-11072026.md#4.2",
+    "docs/okkama-grammar-1.0.ebnf"
+  ],
+  "budget": {
+    "timeout_s": 30
+  },
+  "provenance": {
+    "origin": "authored for OCS with issue #45; exponents became float literals in #57",
+    "expected_basis": "FLOAT allows an exponent; a literal must denote a finite binary64 value (spec 4.2)."
+  },
+  "status": "mandatory"
+}

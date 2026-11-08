@@ -78,7 +78,13 @@ impl Checker<'_, '_> {
                 let flow = Flow::of(&value);
                 (StmtKind::Expr(value), flow)
             }),
-            ast::StmtKind::Return { value } => self.return_stmt(value.as_ref(), span),
+            ast::StmtKind::Return { value, condition: None } => self.return_stmt(value.as_ref(), span),
+            ast::StmtKind::Return {
+                value,
+                condition: Some(condition),
+            } => self.guarded(condition, "Return condition", span, |checker| {
+                checker.return_stmt(value.as_ref(), span)
+            }),
             ast::StmtKind::Confirm {
                 condition,
                 fallback,
@@ -121,12 +127,11 @@ impl Checker<'_, '_> {
             }
             ast::StmtKind::FieldBind { name, value } => {
                 // В конструкторе имя поля важнее одноимённой локальной привязки.
-                if self.kind == Kind::Ctor {
-                    if let Some(field) = self.own_field(&name.text) {
+                if self.kind == Kind::Ctor
+                    && let Some(field) = self.own_field(&name.text) {
                         let (kind, flow) = self.bind_field(field, value, false);
                         return (Stmt { kind, span }, flow);
                     }
-                }
                 self.rebind(name, value)
             }
             ast::StmtKind::SelfFieldBind {
@@ -179,7 +184,13 @@ impl Checker<'_, '_> {
                 let value = self.expr(value, false, None);
                 (StmtKind::Defer(value), Flow::unit())
             }
-            ast::StmtKind::Throw { value } => self.throw(value.as_ref(), span),
+            ast::StmtKind::Throw { value, condition: None } => self.throw(value.as_ref(), span),
+            ast::StmtKind::Throw {
+                value,
+                condition: Some(condition),
+            } => self.guarded(condition, "Throw condition", span, |checker| {
+                checker.throw(value.as_ref(), span)
+            }),
         };
         (Stmt { kind, span }, flow)
     }
@@ -314,7 +325,15 @@ impl Checker<'_, '_> {
 
     fn rebind(&mut self, name: &ast::Name, value: &ast::Expr) -> (StmtKind, Flow) {
         let Some(local) = self.local(&name.text) else {
-            self.error(name.span, format!("Undefined variable \"{}\"", name.text));
+            let message = match (self.own_field(&name.text), self.object) {
+                // A field outside its constructor (#226): fields never change.
+                (Some(_), Some(object)) => format!(
+                    "Field \"{}\" cannot be assigned after construction: objects are immutable; return a successor instead (`is ^{}` and `^{} = …`)",
+                    name.text, self.reg.objects[object.0].name, name.text
+                ),
+                _ => format!("Undefined variable \"{}\"", name.text),
+            };
+            self.error(name.span, message);
             let _ = self.value(value, None);
             return (StmtKind::Expr(Self::poisoned(name.span)), Flow::unit());
         };
@@ -405,7 +424,7 @@ impl Checker<'_, '_> {
                 self.error(span, "return is only allowed inside an action");
                 return (StmtKind::Return(None), Flow::diverged());
             }
-            Kind::Entry | Kind::Method | Kind::Default | Kind::CapField | Kind::Closure => {}
+            Kind::Entry | Kind::Method | Kind::Default | Kind::CapField | Kind::Closure | Kind::Const => {}
         }
         let result = self.result.clone();
         let checked = match (value, &result) {

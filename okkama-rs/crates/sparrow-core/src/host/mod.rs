@@ -199,10 +199,8 @@ pub(crate) struct Heap {
     shape_index: HashMap<Shape, usize>,
     /// Shapes of each native's parameters, by native.
     signatures: Vec<Option<Box<[Shape]>>>,
-    pub(crate) cwd: Option<std::path::PathBuf>,
     pub(crate) stdin: Option<Box<native_input::Stdin>>,
     pub(crate) arguments: Vec<Vec<u8>>,
-    pub(crate) environment: Option<std::collections::BTreeMap<String, String>>,
     /// Descriptor of the builtin NativeFailure object.
     native_failure: Option<u32>,
     /// Provider state of the bridged origin natives (`native_origin`).
@@ -218,10 +216,8 @@ impl Heap {
             json_nodes: Arena::default(),
             futures: Arena::default(),
             test_failures: None,
-            cwd: None,
             stdin: None,
             arguments: Vec::new(),
-            environment: None,
             objects: Default::default(),
             ids: Default::default(),
             signatures: Vec::new(),
@@ -362,11 +358,10 @@ impl Heap {
             }
             self.json_nodes.begin_collection();
             while let Some(root) = roots.pop() {
-                if root.kind() == JSON_NODE && self.json_nodes.mark(root.bits).unwrap_or(false) {
-                    if let Ok(node) = self.json_nodes.get(root.bits) {
+                if root.kind() == JSON_NODE && self.json_nodes.mark(root.bits).unwrap_or(false)
+                    && let Ok(node) = self.json_nodes.get(root.bits) {
                         node.roots(&mut roots);
                     }
-                }
             }
             self.json_nodes.sweep();
         }

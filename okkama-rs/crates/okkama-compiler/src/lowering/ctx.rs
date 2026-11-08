@@ -20,6 +20,10 @@ use crate::ir::{self, FuncId, ObjectId, ResultType, RoleId, Type};
 use crate::source::Span;
 use crate::syntax::ast;
 
+/// Скрытое последнее поле объекта, чей конструктор отдаёт `self`: `true`,
+/// пока создание не завершено (#271).
+pub(super) const PENDING_FIELD: &str = "$pending";
+
 /// Специализация объекта в OIR.
 #[derive(Debug)]
 pub(super) struct Instance {
@@ -34,6 +38,9 @@ pub(super) struct Instance {
     pub methods: Vec<Option<FuncId>>,
     pub destroy: Option<FuncId>,
     pub does: Vec<(RoleId, Vec<FuncId>)>,
+    /// Номер скрытого поля `$pending`, если конструктор отдаёт `self`
+    /// значением: пока создание не завершено, действия отвергаются (#271).
+    pub pending: Option<usize>,
     pub span: Span,
 }
 
@@ -71,6 +78,10 @@ pub(super) enum Task {
     },
     Native {
         native: usize,
+    },
+    /// Функция, строящая значение массива или словаря `const` (#153).
+    Global {
+        constant: usize,
     },
     /// Конструктор адаптера встроенного значения: параметры — поля.
     AdapterNew {
@@ -123,6 +134,8 @@ pub(super) enum Task {
         receiver: Type,
         name: String,
         arity: usize,
+        /// Типы параметров, если имя и арность не выбирают одну перегрузку.
+        params: Option<Vec<Type>>,
         /// Тело bound action: receiver — захват замыкания (`fn.closure`).
         bound: bool,
     },
@@ -185,6 +198,9 @@ pub(super) struct Ctx<'r, 'a> {
     /// Функции в порядке выделения: задача и символ.
     pub tasks: Vec<(Task, String)>,
     task_map: HashMap<Task, FuncId>,
+    /// `const` модуля (#153) по индексу `Registry::consts`: номер в `globals`.
+    global_map: HashMap<usize, usize>,
+    pub globals: Vec<ir::Global>,
     /// Задача, тело которой сейчас понижается: она запрашивает новые.
     pub current: Option<usize>,
     /// Кто запросил каждую задачу и глубина цепочки запросов (H-15).
@@ -198,6 +214,9 @@ pub(super) struct Ctx<'r, 'a> {
     pub prefixes: Vec<String>,
     /// В программе есть `destroy`: lowering выпускает регионы владения (§7).
     pub ownership: bool,
+    /// В программе есть `async destroy`: области async-функций закрываются
+    /// `region.settle` (#154).
+    pub settles: bool,
     plain_objects: Vec<bool>,
     plain_roles: Vec<bool>,
     /// Plain-ность объявлений ролей по всем объявлениям объектов программы
@@ -227,6 +246,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
             })
             .collect();
         let ownership = reg.objects.iter().any(|object| object.destroy.is_some());
+        let settles = reg.objects.iter().any(|object| object.destroy.is_some_and(|destroy| destroy.is_async));
         let decl_plain_roles = decl_plain_roles(reg);
         let decl_plain_objects = decl_plain_objects(reg, &decl_plain_roles);
         Ctx {
@@ -243,6 +263,8 @@ impl<'r, 'a> Ctx<'r, 'a> {
             role_map: HashMap::new(),
             tasks: Vec::new(),
             task_map: HashMap::new(),
+            global_map: HashMap::new(),
+            globals: Vec::new(),
             current: None,
             requested_by: Vec::new(),
             depths: Vec::new(),
@@ -251,6 +273,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
             entry: None,
             prefixes,
             ownership,
+            settles,
             plain_objects: Vec::new(),
             plain_roles: Vec::new(),
             decl_plain_roles,
@@ -272,8 +295,8 @@ impl<'r, 'a> Ctx<'r, 'a> {
             .flat_map(|module| reg.modules[module].program.items.iter())
             .collect();
         for &item in &items {
-            if let ast::Item::NativeAction(decl) = item {
-                if let Some(native) = self
+            if let ast::Item::NativeAction(decl) = item
+                && let Some(native) = self
                     .reg
                     .natives
                     .iter()
@@ -281,7 +304,6 @@ impl<'r, 'a> Ctx<'r, 'a> {
                 {
                     self.native_func(native, decl.span)?;
                 }
-            }
         }
         for &item in &items {
             match item {
@@ -488,6 +510,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
             Task::Test { index } => self.reg.tests[*index].module,
             Task::Runtime { .. } | Task::Member { .. } | Task::Describe { .. } => self.reg.root(),
             Task::Native { native } => self.reg.natives[*native].module,
+            Task::Global { constant } => self.reg.consts[*constant].module,
         }
     }
 
@@ -548,12 +571,14 @@ impl<'r, 'a> Ctx<'r, 'a> {
         receiver: Type,
         name: &str,
         arity: usize,
+        params: Option<Vec<Type>>,
         bound: bool,
     ) -> FuncId {
         let task = Task::Member {
             receiver,
             name: name.to_string(),
             arity,
+            params,
             bound,
         };
         if let Some(func) = self.task_map.get(&task) {
@@ -561,6 +586,37 @@ impl<'r, 'a> Ctx<'r, 'a> {
         }
         let symbol = format!("member.{name}#{}", self.tasks.len());
         self.allocate(task, symbol)
+    }
+
+    /// Действие `name` арности `arity` специализации `object`; с `params` —
+    /// перегрузка именно с этими типами параметров.
+    pub fn member_method(
+        &mut self,
+        object: ObjectId,
+        name: &str,
+        arity: usize,
+        params: Option<&[Type]>,
+        span: Span,
+    ) -> Result<Option<usize>> {
+        let env = self.objects[object.0].env.clone();
+        let reg = self.reg;
+        let info = &reg.objects[self.objects[object.0].decl.0];
+        for (index, method) in info.methods.iter().enumerate() {
+            if method.name != name || method.params.len() != arity {
+                continue;
+            }
+            let Some(params) = params else {
+                return Ok(Some(index));
+            };
+            let mut types = Vec::new();
+            for (_, ty) in &method.params {
+                types.push(self.ir_type(&ty.subst(&env), span)?);
+            }
+            if types == params {
+                return Ok(Some(index));
+            }
+        }
+        Ok(None)
     }
 
     /// Вход воркера для `spawn` действия `method` специализации `object`.
@@ -659,6 +715,24 @@ impl<'r, 'a> Ctx<'r, 'a> {
     }
 
     /// Конструктор адаптера `object` (`obj.new` из полей по порядку).
+    /// The global of constant `constant` (#153): its init function is lowered
+    /// once, and every use reads the value built at program start.
+    pub fn global(&mut self, constant: usize, span: Span) -> Result<usize> {
+        if let Some(index) = self.global_map.get(&constant) {
+            return Ok(*index);
+        }
+        let Some(crate::analysis::registry::ConstState::Done(Some(result))) = self.reg.const_state.get(constant) else {
+            return Err(LoweringError::invalid(span, "internal compiler error: a constant without a value"));
+        };
+        let ty = self.ir_type(&result.ty.clone(), span)?;
+        let symbol = format!("{}const.{}", self.prefixes[self.reg.consts[constant].module], self.reg.consts[constant].name);
+        let init = self.allocate(Task::Global { constant }, symbol);
+        let index = self.globals.len();
+        self.globals.push(ir::Global { ty, init });
+        self.global_map.insert(constant, index);
+        Ok(index)
+    }
+
     pub fn adapter_ctor(&mut self, object: ObjectId) -> FuncId {
         let task = Task::AdapterNew { object };
         if let Some(func) = self.task_map.get(&task) {
@@ -807,6 +881,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
             module,
             fields: Vec::new(),
             methods: Vec::new(),
+            pending: None,
             destroy: None,
             does: Vec::new(),
             span,
@@ -1002,6 +1077,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
             methods: vec![None; info.methods.len()],
             destroy: None,
             does: Vec::new(),
+            pending: None,
             span: info.decl.map_or(span, |decl| decl.span),
         });
         self.object_map.insert((decl, args), id);
@@ -1061,7 +1137,21 @@ impl<'r, 'a> Ctx<'r, 'a> {
                 _ => {}
             }
         }
+        if self.escapes_self(decl) {
+            let instance = &mut self.objects[id.0];
+            instance.pending = Some(instance.fields.len());
+            instance.fields.push((PENDING_FIELD.to_string(), Type::Bool, None));
+        }
         Ok(())
+    }
+
+    /// Конструктор объявления отдаёт `self` значением (§11.4): сотрудник может
+    /// получить объект, создание которого ещё не завершено.
+    fn escapes_self(&self, decl: DeclObject) -> bool {
+        self.bodies.iter().any(|body| {
+            matches!(body.owner, BodyOwner::Ctor { object, .. } if object == decl)
+                && thir::first_expr(&body.block, &|expr| matches!(expr.kind, thir::ExprKind::SelfValue)).is_some()
+        })
     }
 
     /// `does R`: функция каждого слота роли (анализ проверил соответствие).
@@ -1378,6 +1468,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
             objects,
             handles,
             caps,
+            globals: self.globals.clone(),
             tests: self.tests.clone(),
             functions,
             entry: self.entry,

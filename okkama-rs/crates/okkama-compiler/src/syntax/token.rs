@@ -122,6 +122,8 @@ pub enum TokenKind {
     Test,
     Fake,
     Destroy,
+    /// `const NAME = value;` at module level (#153).
+    Const,
 
     // Removed or deferred words (reserved: always rejected by the parser).
     Isa,
@@ -184,6 +186,7 @@ impl TokenKind {
             "test" => Test,
             "fake" => Fake,
             "destroy" => Destroy,
+            "const" => Const,
             "isa" => Isa,
             "super" => Super,
             "none" => None,
@@ -307,6 +310,7 @@ impl TokenKind {
             Test => "TEST",
             Fake => "FAKE",
             Destroy => "DESTROY",
+            Const => "CONST",
             Isa => "ISA",
             Super => "SUPER",
             None => "NONE",
@@ -375,17 +379,29 @@ impl IntLiteral {
     }
 }
 
-/// A float literal `digits.digits`, with `_` separators removed.
+/// A float literal `digits.digits`, `digits e exponent` or both (`1.5e-3`),
+/// with `_` separators removed. A literal without a fraction has `fraction`
+/// "0"; `exponent` is empty or a signed decimal (`-3`, `+10`, `5`).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FloatLiteral {
     pub whole: String,
     pub fraction: String,
+    pub exponent: String,
 }
 
 impl FloatLiteral {
-    /// The normalised spelling `whole.fraction`.
+    /// The normalised spelling `whole.fraction` or `whole.fractione±exponent`.
     pub fn text(&self) -> String {
-        format!("{}.{}", self.whole, self.fraction)
+        if self.exponent.is_empty() {
+            format!("{}.{}", self.whole, self.fraction)
+        } else {
+            format!("{}.{}e{}", self.whole, self.fraction, self.exponent)
+        }
+    }
+
+    /// Some digit of the mantissa is not zero.
+    pub fn nonzero(&self) -> bool {
+        self.whole.bytes().chain(self.fraction.bytes()).any(|digit| digit != b'0')
     }
 }
 

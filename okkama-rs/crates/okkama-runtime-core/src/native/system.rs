@@ -155,7 +155,7 @@ fn names(native: Native, entry: &Rooted, maximum: &crate::IntValue) -> Result<Va
     Ok(string_array(names))
 }
 
-fn snapshot_name<'a>(native: Native, text: &'a str) -> Result<&'a str, Error> {
+fn snapshot_name(native: Native, text: &str) -> Result<&str, Error> {
     if !component(text) {
         return Err(failure(
             SNAPSHOT,
@@ -433,7 +433,7 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
         "environment_path_separator" => Ok(text(if cfg!(windows) { ";" } else { ":" })),
         "environment_get" => {
             let name = environment_name(native, &args[0])?;
-            match host::environment().get(&name) {
+            match host::variable(&name) {
                 Some(value) => Ok(byte_array(value.bytes())),
                 None => Err(failure(ENVIRONMENT, "not_found", native, "Environment variable was not found")),
             }
@@ -454,7 +454,7 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
         }
         "environment_remove" => {
             let name = environment_name(native, &args[0])?;
-            let present = host::environment().contains_key(&name);
+            let present = host::variable(&name).is_some();
             host::set_environment(&name, None);
             Ok(Value::Bool(present))
         }

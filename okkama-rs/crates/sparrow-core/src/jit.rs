@@ -19,7 +19,7 @@ use cranelift_codegen::ir::{AbiParam, Block, InstBuilder, MemFlagsData, Signatur
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
-use cranelift_module::{FuncId, Linkage, Module, default_libcall_names};
+use cranelift_module::{FuncId, Linkage, Module, ModuleReloc, default_libcall_names};
 use okkama_sparrow::{Cmp, Constant, Instruction as I, Target, Type};
 use std::collections::BTreeMap;
 
@@ -89,9 +89,10 @@ helpers! {
     compile = runtime::rt_compile as (ctx, function: u64) -> u64; [Fails];
     int = runtime::rt_int as (ctx, op: u64, left: Word, right: Word) -> Word; [Allocates, Collects, Fails];
     int_order = runtime::rt_int_order as (ctx, left: Word, right: Word) -> i64; [];
-    concat = runtime::rt_concat as (ctx, left: Word, right: Word) -> Word; [Allocates, Collects];
+    concat = runtime::rt_concat as (ctx, left: Word, right: Word) -> Word; [Allocates, Collects, Fails];
     array = runtime::rt_array as (ctx, repr: u64, elements: *const Word, count: u64) -> Word; [Allocates, Collects];
     trap = runtime::rt_trap as (ctx, message: Word) -> Word; [Allocates, Fails];
+    stack_overflow = runtime::rt_stack_overflow as (ctx) -> Word; [Allocates, Fails];
     throw = runtime::rt_throw as (ctx, value: Word) -> Word; [Allocates, Fails];
     trace = runtime::rt_trace as (ctx, function: u64, pc: u64, frame: u64); [];
     native = runtime::rt_native as (ctx, function: u64, arguments: *const Word, count: u64) -> Word; [Allocates, Collects, Fails];
@@ -109,6 +110,7 @@ helpers! {
     int_text = crate::ops::rt_int_text as (ctx, word: Word) -> Word; [Allocates, Collects];
     future_new = crate::tasks::rt_future_new as (ctx, function: u64, arguments: *const Word, count: u64) -> Word; [Allocates, Collects, Fails];
     await_ = crate::tasks::rt_await as (ctx, this: Word, future: Word) -> u64; [Collects, Reenters, Fails];
+    region_settle = crate::tasks::rt_region_settle as (ctx, this: Word, region: Word, keep: Word, failure: Word) -> u64; [Allocates, Collects, Reenters, Fails];
     complete = crate::tasks::rt_complete as (ctx, frame: Word, value: Word); [Collects, Reenters];
     spawn = crate::tasks::rt_spawn as (ctx, future: Word) -> Word; [Reenters, Fails];
     fut = crate::tasks::rt_fut as (ctx, op: u64, future: Word) -> Word; [Reenters, Fails];
@@ -130,12 +132,81 @@ pub struct Jit {
     helper_counts: Box<[u64]>,
     /// The largest machine frame compiled, bytes (`--stats`).
     largest_frame: u32,
+    /// Functions whose CLIF and machine code go to stderr (`SPARROW_CORE_DUMP`).
+    dump: Chosen,
+    /// Functions compiled without Cranelift's optimizations, and the target
+    /// that does it (`SPARROW_CORE_UNOPTIMIZED`).
+    unoptimized: Chosen,
+    unoptimized_isa: Option<std::sync::Arc<dyn cranelift_codegen::isa::TargetIsa>>,
+    /// Functions compiled without the core's inline fast paths: each
+    /// instruction that has one runs through the shared slow path instead
+    /// (`SPARROW_CORE_PLAIN`).
+    plain: Chosen,
+    /// Allocations of each inline allocation site compiled under `--stats`:
+    /// its label and the count and bytes machine code adds there (#55).
+    alloc_sites: Vec<(String, Box<[u64; 2]>)>,
+}
+
+/// Functions chosen by symbol in an environment variable: a comma-separated
+/// list, or `*` for all. Bisecting a wrong result over these lists narrows it
+/// to one compiled function without rebuilding (#44).
+#[derive(Debug, Default)]
+struct Chosen {
+    all: bool,
+    symbols: std::collections::BTreeSet<String>,
+}
+
+impl Chosen {
+    fn from_env(variable: &str) -> Self {
+        let Some(text) = std::env::var_os(variable) else {
+            return Self::default();
+        };
+        let text = text.to_string_lossy();
+        let symbols: std::collections::BTreeSet<String> =
+            text.split(',').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect();
+        Self { all: symbols.contains("*"), symbols }
+    }
+
+    fn any(&self) -> bool {
+        self.all || !self.symbols.is_empty()
+    }
+
+    fn has(&self, symbol: &str) -> bool {
+        self.all || self.symbols.contains(symbol)
+    }
+}
+
+/// The target for compiled code, at a Cranelift optimization level.
+fn target(opt_level: &str) -> Result<std::sync::Arc<dyn cranelift_codegen::isa::TargetIsa>, Error> {
+    let mut flags = settings::builder();
+    let set = |flags: &mut settings::Builder, name: &str, value: &str| {
+        flags.set(name, value).map_err(|e| Error(format!("JIT flag {name}: {e}")))
+    };
+    set(&mut flags, "opt_level", opt_level)?;
+    set(&mut flags, "is_pic", "false")?;
+    set(&mut flags, "use_colocated_libcalls", "false")?;
+    // The collector walks frame records to find each frame's stack map.
+    set(&mut flags, "preserve_frame_pointers", "true")?;
+    cranelift_native::builder()
+        .map_err(|e| Error(format!("JIT target: {e}")))?
+        .finish(settings::Flags::new(flags))
+        .map_err(|e| Error(format!("JIT target: {e}")))
 }
 
 /// Largest machine frame of a compiled function: a quarter of the stack
 /// headroom (`STACK_HEADROOM`), leaving the rest to the Rust helpers below the
 /// deepest machine frame.
 pub const MAX_FRAME: u64 = crate::runtime::STACK_HEADROOM / 4;
+
+/// Memory compiling one function may take (#73). Machine-code liveness and
+/// register allocation keep a set per Cranelift block, so the cost is about
+/// Σ registers live at an instruction × blocks it emits — quadratic for k
+/// values live across k fallible instructions. A memory budget lowers it.
+pub const MAX_COMPILE_BYTES: u64 = 256 << 20;
+/// Compiler bytes per live register in one block (measured: about 58).
+const BYTES_PER_LIVE_BLOCK: u64 = 64;
+/// No instruction emits more blocks than this (inline allocation, checks).
+const MAX_BLOCKS_PER_INSTRUCTION: u64 = 16;
 
 impl std::fmt::Debug for Jit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -148,19 +219,9 @@ impl std::fmt::Debug for Jit {
 
 impl Jit {
     pub fn new() -> Result<Self, Error> {
-        let mut flags = settings::builder();
-        let set = |flags: &mut settings::Builder, name: &str, value: &str| {
-            flags.set(name, value).map_err(|e| Error(format!("JIT flag {name}: {e}")))
-        };
-        set(&mut flags, "opt_level", "speed")?;
-        set(&mut flags, "is_pic", "false")?;
-        set(&mut flags, "use_colocated_libcalls", "false")?;
-        // The collector walks frame records to find each frame's stack map.
-        set(&mut flags, "preserve_frame_pointers", "true")?;
-        let isa = cranelift_native::builder()
-            .map_err(|e| Error(format!("JIT target: {e}")))?
-            .finish(settings::Flags::new(flags))
-            .map_err(|e| Error(format!("JIT target: {e}")))?;
+        let isa = target("speed")?;
+        let unoptimized = Chosen::from_env("SPARROW_CORE_UNOPTIMIZED");
+        let unoptimized_isa = if unoptimized.any() { Some(target("none")?) } else { None };
         let mut builder = JITBuilder::with_isa(isa, default_libcall_names());
         builder.memory_provider(Box::new(crate::code_memory::CodeMemory::new()));
         declare_helpers(&mut builder);
@@ -175,6 +236,11 @@ impl Jit {
             dispatch: BTreeMap::new(),
             helper_counts: vec![0; HELPERS.len()].into_boxed_slice(),
             largest_frame: 0,
+            dump: Chosen::from_env("SPARROW_CORE_DUMP"),
+            unoptimized,
+            unoptimized_isa,
+            plain: Chosen::from_env("SPARROW_CORE_PLAIN"),
+            alloc_sites: Vec::new(),
         })
     }
 
@@ -187,6 +253,9 @@ impl Jit {
             .filter(|(_, count)| **count > 0)
             .map(|((name, _), &count)| (format!("helper {name}"), count))
             .chain([("largest machine frame, bytes".to_string(), u64::from(self.largest_frame))])
+            .chain(self.alloc_sites.iter().filter(|(_, counts)| counts[0] > 0).flat_map(|(site, counts)| {
+                [(format!("alloc site {site}, count"), counts[0]), (format!("alloc site {site}, bytes"), counts[1])]
+            }))
             .collect()
     }
 
@@ -262,13 +331,59 @@ pub(crate) unsafe fn invoke(code: u64, ctx: *mut Ctx, words: &[Word]) -> Word {
 }
 
 /// Compile `function` unless it is compiled; returns its code address.
+/// Instructions where control enters other than by falling through: the
+/// first, every jump/branch/lookup/catch target, every handler target and
+/// every `await` (its resume point). Only these get their own Cranelift
+/// block: a block per instruction made stack-map liveness and register
+/// allocation quadratic in straight-line code with many live values (#73).
+fn leaders(source: &okkama_sparrow::Function) -> Vec<bool> {
+    let mut leaders = vec![false; source.code.len()];
+    let mut mark = |target: &Target| {
+        if let Some(leader) = leaders.get_mut(target.pc as usize) {
+            *leader = true;
+        }
+    };
+    for instruction in &source.code {
+        match instruction {
+            I::Jump { target } => mark(target),
+            I::Branch { then_target, else_target, .. } => {
+                mark(then_target);
+                mark(else_target);
+            }
+            I::Catch { handler, next, .. } => {
+                mark(handler);
+                mark(next);
+            }
+            I::ArrayLookup { found, missing, .. } | I::MapLookup { found, missing, .. } => {
+                mark(found);
+                mark(missing);
+            }
+            _ => {}
+        }
+    }
+    for handler in &source.handlers {
+        mark(&handler.target);
+    }
+    for (pc, instruction) in source.code.iter().enumerate() {
+        if suspends(instruction) {
+            leaders[pc] = true;
+        }
+    }
+    if let Some(first) = leaders.first_mut() {
+        *first = true;
+    }
+    leaders
+}
+
 pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
     if runtime.code[function] != 0 {
         return Ok(runtime.code[function]);
     }
     let Runtime { heap, loaded, jit, code, constants, resources, limits, budget, stats, .. } = runtime;
+    let started = stats.is_some().then(std::time::Instant::now);
     let program = &loaded.program;
     let source = &program.functions[function];
+    let symbol = source.symbol.as_str();
     if source.is_async && (source.native.is_some() || source.intrinsic.is_some()) {
         return Err(Error(format!("{}: async natives and intrinsics are driven, not compiled", source.symbol)));
     }
@@ -286,6 +401,21 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
             id
         }
     };
+    // Live registers per instruction, for the cost of large functions only:
+    // a function whose instructions × registers × blocks cannot reach the
+    // limit skips the analysis.
+    let cost_limit = limits.memory.map_or(MAX_COMPILE_BYTES, |memory| memory.min(MAX_COMPILE_BYTES)) / BYTES_PER_LIVE_BLOCK;
+    let bound = (source.code.len() as u64)
+        .saturating_mul(source.registers.len() as u64)
+        .saturating_mul(MAX_BLOCKS_PER_INSTRUCTION);
+    let live = if bound > cost_limit {
+        Some(okkama_sparrow::live_counts(source).ok_or_else(|| {
+            Error(format!("{}: too large to compile ({} instructions, {} registers)", source.symbol, source.code.len(), source.registers.len()))
+        })?)
+    } else {
+        None
+    };
+    let plain = jit.plain.has(symbol);
     let config = jit.module.target_config();
     let mut context = jit.module.make_context();
     context.func.signature = jit.signature(params);
@@ -312,14 +442,50 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
             refusable: limits.memory.is_some(),
             pc: 0,
             spill_area: None,
+            live,
+            cost: 0,
+            cost_limit,
+            plain,
         };
         emit.body()?;
         builder.seal_all_blocks();
         builder.finalize(config);
     }
-    jit.module
-        .define_function(id, &mut context)
-        .map_err(|e| Error(format!("{}: {e:?}", source.symbol)))?;
+    let dump = jit.dump.has(symbol);
+    if dump {
+        // Callees by their CLIF names: the runtime's helpers and the program's functions.
+        let callees: String = context
+            .func
+            .params
+            .user_named_funcs()
+            .values()
+            .map(|name| {
+                let id = FuncId::from_u32(name.index);
+                let linkage = jit.module.declarations().get_function_decl(id).linkage_name(id).into_owned();
+                let callee = match linkage.strip_prefix('f').and_then(|n| n.parse::<usize>().ok()) {
+                    Some(n) => program.functions[n].symbol.clone(),
+                    None => linkage,
+                };
+                format!(";   u{}:{} = {callee}\n", name.namespace, name.index)
+            })
+            .collect();
+        eprintln!("; CLIF of {symbol} (f{function}), before Cranelift's passes\n{callees}{}", context.func.display());
+        context.set_disasm(true);
+    }
+    match &jit.unoptimized_isa {
+        Some(isa) if jit.unoptimized.has(symbol) => {
+            // What `define_function` does, with the unoptimizing target.
+            context.compile(&**isa, &mut Default::default()).map_err(|e| Error(format!("{symbol}: {:?}", e.inner)))?;
+            let compiled = context.compiled_code().expect("compiled function");
+            let alignment = u64::from(compiled.buffer.min_alignment);
+            let relocs: Vec<ModuleReloc> =
+                compiled.buffer.relocs().iter().map(|reloc| ModuleReloc::from_mach_reloc(reloc, &context.func, id)).collect();
+            jit.module
+                .define_function_bytes(id, alignment, compiled.code_buffer(), &relocs)
+                .map_err(|e| Error(format!("{symbol}: {e:?}")))?;
+        }
+        _ => jit.module.define_function(id, &mut context).map_err(|e| Error(format!("{symbol}: {e:?}")))?,
+    }
     let compiled = context.compiled_code().expect("compiled function");
     let maps: Vec<(u32, Vec<u32>)> = compiled
         .buffer
@@ -352,6 +518,20 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
     jit.ranges.push((address, address + u64::from(size)));
     jit.ranges.sort_unstable();
     code[function] = address;
+    if dump && let Some(listing) = &compiled.vcode {
+        eprintln!("; machine code of {symbol} at {address:#x}, {size} bytes, frame {fp_to_sp} bytes\n{listing}");
+    }
+    if let (Some(stats), Some(started)) = (stats, started) {
+        let micros = started.elapsed().as_micros() as u64;
+        for (key, value) in [
+            (format!("compile {symbol}, microseconds"), micros),
+            (format!("machine code {symbol}, bytes"), u64::from(size)),
+            ("compile, microseconds".to_string(), micros),
+            ("machine code, bytes".to_string(), u64::from(size)),
+        ] {
+            *stats.entry(key).or_default() += value;
+        }
+    }
     Ok(address)
 }
 
@@ -366,7 +546,18 @@ struct Emitter<'a, 'b> {
     function: usize,
     kinds: &'a [Kind],
     vars: Vec<Variable>,
-    blocks: Vec<Block>,
+    /// The block of each instruction where control enters other than by
+    /// falling through (`leaders`); straight-line instructions share one.
+    blocks: Vec<Option<Block>>,
+    /// Registers live before each instruction, when the function is large
+    /// enough to need the compile-cost check (#73).
+    live: Option<Vec<u32>>,
+    /// Σ live registers × blocks emitted so far, and its limit.
+    cost: u64,
+    cost_limit: u64,
+    /// Instructions with an inline fast path take the shared slow path
+    /// (`SPARROW_CORE_PLAIN`).
+    plain: bool,
     ctx: Option<Value>,
     /// The frame variable of an async body.
     frame: Option<Variable>,
@@ -534,6 +725,11 @@ impl Emitter<'_, '_> {
         self.builder.switch_to_block(next);
     }
 
+    /// The block of a leader instruction.
+    fn block(&self, pc: usize) -> Block {
+        self.blocks[pc].expect("a jump, handler or resume target starts a block")
+    }
+
     fn jump(&mut self, target: &Target) {
         if self.polled && target.pc as usize <= self.pc {
             self.poll();
@@ -542,11 +738,15 @@ impl Emitter<'_, '_> {
         for ((dst, _), value) in target.moves.iter().zip(values) {
             self.set(dst, value);
         }
-        self.builder.ins().jump(self.blocks[target.pc as usize], &[]);
+        let block = self.block(target.pc as usize);
+        self.builder.ins().jump(block, &[]);
     }
 
     /// Inline allocation of `words` words from the free list of their class.
     fn allocate(&mut self, words: usize) -> Value {
+        if self.count_helpers {
+            self.count_allocation(words);
+        }
         let ctx = self.ctx();
         let Some(class) = Heap::class_of(words) else {
             let size = self.iconst(words as i64);
@@ -573,6 +773,28 @@ impl Emitter<'_, '_> {
         self.builder.ins().jump(done, &[fresh.into()]);
         self.builder.switch_to_block(done);
         self.builder.block_params(done)[0]
+    }
+
+    /// Count an allocation of `words` words at this instruction (`--stats`):
+    /// the site is the function, the instruction and, for objects, the type.
+    fn count_allocation(&mut self, words: usize) {
+        let program = &self.loaded.program;
+        let source = &program.functions[self.function];
+        let instruction = &source.code[self.pc];
+        let what = match instruction {
+            I::ObjNew { object, .. } => format!("{} {}", instruction.mnemonic(), program.objects[object.0 as usize].name),
+            _ => instruction.mnemonic().to_string(),
+        };
+        let label = format!("{}:{} {what}", source.symbol, self.pc);
+        let counts = Box::new([0u64; 2]);
+        let address = counts.as_ptr() as i64;
+        self.jit.alloc_sites.push((label, counts));
+        let address = self.iconst(address);
+        for (offset, step) in [(0, 1), (8, words as i64 * 8)] {
+            let value = self.builder.ins().load(types::I64, MEMORY, address, offset);
+            let value = self.builder.ins().iadd_imm_s(value, step);
+            self.builder.ins().store(MEMORY, value, address, offset);
+        }
     }
 
     fn constant_text(&mut self, text: &str) -> Value {
@@ -697,7 +919,10 @@ impl Emitter<'_, '_> {
                 self.set_word(register, value);
             }
         }
-        self.blocks = source.code.iter().map(|_| self.builder.create_block()).collect();
+        self.blocks = leaders(source)
+            .into_iter()
+            .map(|leader| leader.then(|| self.builder.create_block()))
+            .collect();
         // R2: stack exhaustion is a typed failure.
         let ctx = self.ctx();
         let sp = self.builder.ins().get_stack_pointer(types::I64);
@@ -709,7 +934,7 @@ impl Emitter<'_, '_> {
         );
         let low = self.builder.ins().icmp(IntCC::UnsignedLessThan, sp, limit);
         let overflow = self.builder.create_block();
-        let start = if source.is_async { self.builder.create_block() } else { self.blocks[0] };
+        let start = if source.is_async { self.builder.create_block() } else { self.block(0) };
         let entered = if self.polled { self.builder.create_block() } else { start };
         self.builder.ins().brif(low, overflow, &[], entered, &[]);
         if self.polled {
@@ -722,22 +947,44 @@ impl Emitter<'_, '_> {
             self.resume_dispatch(start);
         }
         self.builder.switch_to_block(overflow);
-        let message = self.constant_text("Stack overflow");
-        self.helper(|h| h.trap, &[ctx, message]);
+        self.helper(|h| h.stack_overflow, &[ctx]);
         let zero = self.iconst(0);
         self.builder.ins().return_(&[zero]);
+        // Open: the previous instruction falls through into this one.
+        let mut open = false;
         for pc in 0..source.code.len() {
-            self.builder.switch_to_block(self.blocks[pc]);
-            self.pc = pc;
-            if self.instruction(pc)? {
-                continue;
-            }
-            match self.blocks.get(pc + 1).copied() {
-                Some(next) => {
-                    self.builder.ins().jump(next, &[]);
+            match self.blocks[pc] {
+                Some(block) => {
+                    if open {
+                        self.builder.ins().jump(block, &[]);
+                    }
+                    self.builder.switch_to_block(block);
                 }
-                None => return Err(Error(format!("{}: falls off the end", source.symbol))),
+                // Unreachable: nothing jumps here and nothing falls through.
+                None if !open => {
+                    let block = self.builder.create_block();
+                    self.builder.switch_to_block(block);
+                }
+                None => {}
             }
+            self.pc = pc;
+            let before = self.builder.func.dfg.num_blocks();
+            open = !self.instruction(pc)?;
+            if let Some(live) = &self.live {
+                let blocks = self.builder.func.dfg.num_blocks() - before + usize::from(self.blocks[pc].is_some());
+                self.cost = self.cost.saturating_add(u64::from(live[pc]) * blocks as u64);
+                if self.cost > self.cost_limit {
+                    return Err(Error(format!(
+                        "{}: compiling it would take more than {} MiB (registers live across its blocks, at instruction {pc}); \
+                         keep fewer values alive at once or split the function",
+                        source.symbol,
+                        (self.cost_limit * BYTES_PER_LIVE_BLOCK) >> 20
+                    )));
+                }
+            }
+        }
+        if open {
+            return Err(Error(format!("{}: falls off the end", source.symbol)));
         }
         Ok(())
     }
@@ -753,7 +1000,7 @@ impl Emitter<'_, '_> {
         let mut switch = cranelift_frontend::Switch::new();
         let mut reloads = Vec::new();
         for (pc, instruction) in source.code.iter().enumerate() {
-            if matches!(instruction, I::Await { .. }) {
+            if suspends(instruction) {
                 let block = self.builder.create_block();
                 switch.set_entry(pc as u128 + 1, block);
                 reloads.push((pc, block));
@@ -765,14 +1012,16 @@ impl Emitter<'_, '_> {
             let value = self.frame_register(register.0 as usize);
             self.set_word(register, value);
         }
-        self.builder.ins().jump(self.blocks[0], &[]);
+        let first = self.block(0);
+        self.builder.ins().jump(first, &[]);
         for (pc, block) in reloads {
             self.builder.switch_to_block(block);
             for register in 0..self.kinds.len() {
                 let value = self.frame_register(register);
                 self.set_word(&okkama_sparrow::Register(register as u32), value);
             }
-            self.builder.ins().jump(self.blocks[pc], &[]);
+            let resumed = self.block(pc);
+            self.builder.ins().jump(resumed, &[]);
         }
     }
 
@@ -783,6 +1032,39 @@ impl Emitter<'_, '_> {
     }
 
     /// Emit one instruction; true when it ends its block.
+    /// After an await-like helper: continue when ready (its value, if any, in
+    /// `scratch`), or save every register and return pending; the resumed
+    /// frame re-enters the instruction at `pc`.
+    fn suspend_unless_ready(&mut self, pc: usize, outcome: Value, dst: Option<okkama_sparrow::Dst>) {
+        let ctx = self.ctx();
+        let suspend = self.builder.create_block();
+        let ready = self.builder.create_block();
+        let pending = self.builder.ins().icmp_imm_u(IntCC::Equal, outcome, crate::tasks::AWAIT_PENDING as i64);
+        self.builder.ins().brif(pending, suspend, &[], ready, &[]);
+        // Save every register and re-enter this await when resumed.
+        self.builder.switch_to_block(suspend);
+        let frame = self.builder.use_var(self.frame.expect("frame"));
+        for register in 0..self.kinds.len() {
+            let value = self.word(&okkama_sparrow::Register(register as u32));
+            let offset = crate::tasks::REGISTERS as i32 + register as i32 * 8;
+            self.builder.ins().store(MEMORY, value, frame, offset);
+        }
+        let resume = self.iconst(pc as i64 + 1);
+        self.builder.ins().store(MEMORY, resume, frame, crate::tasks::RESUME as i32);
+        let one = self.iconst(1);
+        self.builder.ins().return_(&[one]);
+        self.builder.switch_to_block(ready);
+        if let Some(dst) = dst {
+            let value = self.builder.ins().load(
+                types::I64,
+                MEMORY,
+                ctx,
+                std::mem::offset_of!(Ctx, scratch) as i32,
+            );
+            self.set_word(&dst.0, value);
+        }
+    }
+
     fn instruction(&mut self, pc: usize) -> Result<bool, Error> {
         let program = &self.loaded.program;
         let source = &program.functions[self.function];
@@ -795,6 +1077,10 @@ impl Emitter<'_, '_> {
                 instruction.mnemonic()
             ))
         };
+        if self.plain && generic(instruction) {
+            self.generic_instruction(pc, instruction);
+            return Ok(false);
+        }
         match instruction {
             I::Const { dst, value } => {
                 let value = match value {
@@ -968,6 +1254,7 @@ impl Emitter<'_, '_> {
             I::StrConcat { dst, left, right } => {
                 let (l, r) = (self.get(left), self.get(right));
                 let text = self.helper(|h| h.concat, &[ctx, l, r]).expect("result");
+                self.check(pc);
                 self.set(&dst.0, text);
             }
             I::ArrayNew { dst, elements } => {
@@ -1212,37 +1499,27 @@ impl Emitter<'_, '_> {
                 }
                 return Ok(true);
             }
+            I::RegionSettle { .. } | I::RegionSettleUnwind { .. } if self.frame.is_some() => {
+                let this = self.builder.use_var(self.frame.expect("frame"));
+                let unbound = self.iconst(word::UNBOUND as i64);
+                let (region, keep, failure, dst) = match instruction {
+                    I::RegionSettle { region, keep } => {
+                        let keep = keep.map(|keep| self.word(&keep)).unwrap_or(unbound);
+                        (self.get(region), keep, unbound, None)
+                    }
+                    I::RegionSettleUnwind { dst, region, failure } => (self.get(region), unbound, self.get(failure), Some(*dst)),
+                    _ => unreachable!("matched above"),
+                };
+                let outcome = self.helper(|h| h.region_settle, &[ctx, this, region, keep, failure]).expect("result");
+                self.check(pc);
+                self.suspend_unless_ready(pc, outcome, dst);
+            }
             I::Await { dst, future } if self.frame.is_some() => {
                 let this = self.builder.use_var(self.frame.expect("frame"));
                 let future = self.get(future);
                 let outcome = self.helper(|h| h.await_, &[ctx, this, future]).expect("result");
                 self.check(pc);
-                let suspend = self.builder.create_block();
-                let ready = self.builder.create_block();
-                let pending = self.builder.ins().icmp_imm_u(IntCC::Equal, outcome, crate::tasks::AWAIT_PENDING as i64);
-                self.builder.ins().brif(pending, suspend, &[], ready, &[]);
-                // Save every register and re-enter this await when resumed.
-                self.builder.switch_to_block(suspend);
-                let frame = self.builder.use_var(self.frame.expect("frame"));
-                for register in 0..self.kinds.len() {
-                    let value = self.word(&okkama_sparrow::Register(register as u32));
-                    let offset = crate::tasks::REGISTERS as i32 + register as i32 * 8;
-                    self.builder.ins().store(MEMORY, value, frame, offset);
-                }
-                let resume = self.iconst(pc as i64 + 1);
-                self.builder.ins().store(MEMORY, resume, frame, crate::tasks::RESUME as i32);
-                let one = self.iconst(1);
-                self.builder.ins().return_(&[one]);
-                self.builder.switch_to_block(ready);
-                if let Some(dst) = dst {
-                    let value = self.builder.ins().load(
-                        types::I64,
-                        MEMORY,
-                        ctx,
-                        std::mem::offset_of!(Ctx, scratch) as i32,
-                    );
-                    self.set_word(&dst.0, value);
-                }
+                self.suspend_unless_ready(pc, outcome, *dst);
             }
             I::FutSpawn { dst, future } => {
                 let future = self.get(future);
@@ -1614,18 +1891,7 @@ impl Emitter<'_, '_> {
                 let value = self.builder.block_params(done)[0];
                 self.set(&dst.0, value);
             }
-            other if generic(other) => {
-                let mut def = None;
-                other.visit(&mut |access| {
-                    if let okkama_sparrow::Access::Def(register) = access {
-                        def = Some(register);
-                    }
-                });
-                let result = self.exec_generic(pc, other);
-                if let Some(def) = def {
-                    self.set_word(&def, result);
-                }
-            }
+            other if generic(other) => self.generic_instruction(pc, other),
             _ => return Err(unsupported()),
         }
         Ok(false)
@@ -1706,6 +1972,20 @@ impl Emitter<'_, '_> {
         result
     }
 
+    /// Compile `instruction` as a call of the shared slow path, defining its result.
+    fn generic_instruction(&mut self, pc: usize, instruction: &I) {
+        let mut def = None;
+        instruction.visit(&mut |access| {
+            if let okkama_sparrow::Access::Def(register) = access {
+                def = Some(register);
+            }
+        });
+        let result = self.exec_generic(pc, instruction);
+        if let Some(def) = def {
+            self.set_word(&def, result);
+        }
+    }
+
     /// Run `instruction` through the shared slow path (`rt_exec`); its result word.
     fn exec_generic(&mut self, pc: usize, instruction: &I) -> Value {
         let mut uses = Vec::new();
@@ -1743,11 +2023,18 @@ impl Emitter<'_, '_> {
             self.set(dst, value);
         }
         self.set_word(&register, word);
-        self.builder.ins().jump(self.blocks[target.pc as usize], &[]);
+        let block = self.block(target.pc as usize);
+        self.builder.ins().jump(block, &[]);
     }
 }
 
 /// Instructions executed by `failures::rt_failure_op`.
+/// An instruction that may suspend its async frame and is re-entered on
+/// resumption: `await` and the region closes that await async destroys (#154).
+fn suspends(instruction: &I) -> bool {
+    matches!(instruction, I::Await { .. } | I::RegionSettle { .. } | I::RegionSettleUnwind { .. })
+}
+
 fn failure_or_region(instruction: &I) -> bool {
     matches!(
         instruction,
@@ -1794,6 +2081,8 @@ fn generic(instruction: &I) -> bool {
             | I::RangeNew { .. }
             | I::RangePart { .. }
             | I::StrUtf8 { .. }
+            | I::StrFn { .. }
+            | I::GlobalGet { .. }
             | I::StrReplaceFirst { .. }
             | I::IntAnd { .. }
             | I::IntOr { .. }
@@ -1834,6 +2123,10 @@ fn generic(instruction: &I) -> bool {
             | I::AnyBox { .. }
             | I::ArraySlice { .. }
             | I::ArrayJoin { .. }
+            | I::ArrayConcat { .. }
+            | I::ArrayDiff { .. }
+            | I::MapMerge { .. }
+            | I::MapDiff { .. }
             | I::BuilderNew { .. }
             | I::BuilderPush { .. }
             | I::BuilderAppend { .. }

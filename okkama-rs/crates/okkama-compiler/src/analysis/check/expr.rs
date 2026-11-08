@@ -6,7 +6,7 @@ use crate::analysis::thir::{
     ArithOp, ArrayPart, BinaryOp, BitOp, Catch, CatchAlt, CatchType, CompareKind, CompareOp,
     Constant, Expr, ExprKind, Match, NumericKind, Stmt, StmtKind, Try, UnaryOp,
 };
-use crate::analysis::ty::{EnumId, Ty};
+use crate::analysis::ty::{EnumId, ParamId, RoleId, Ty};
 use crate::ir::IntValue;
 use crate::source::Span;
 use crate::syntax::ast;
@@ -17,10 +17,39 @@ impl Checker<'_, '_> {
     pub(super) fn value(&mut self, expr: &ast::Expr, expected: Option<&Ty>) -> Expr {
         let checked = self.expr(expr, true, expected);
         if checked.ty.is_none() && !checked.diverges {
-            self.error(expr.span, "Expression does not produce a value");
+            let message = self
+                .missing_cases(&checked)
+                .unwrap_or_else(|| "Expression does not produce a value".to_string());
+            self.error(expr.span, message);
             return Self::poisoned(expr.span);
         }
         checked
+    }
+
+    /// Why a `match` over an enum has no value: the cases it leaves out
+    /// (#229), named as the IDE lint `non-exhaustive-match` names them.
+    fn missing_cases(&self, checked: &Expr) -> Option<String> {
+        let ExprKind::Match(matched) = &checked.kind else { return None };
+        let Some(Ty::Enum(id)) = &matched.subject.ty else { return None };
+        if matched.exhaustive || matched.else_block.is_some() {
+            return None;
+        }
+        let declaration = &self.reg.enums[id.0];
+        let mut seen = vec![false; declaration.cases.len()];
+        for pattern in matched.cases.iter().flat_map(|(patterns, _)| patterns) {
+            match &pattern.kind {
+                ExprKind::EnumCase { ty, case } if ty == id => seen[*case] = true,
+                _ => return None,
+            }
+        }
+        let missing: Vec<&str> = declaration.cases.iter().zip(&seen).filter(|(_, seen)| !**seen).map(|(name, _)| name.as_str()).collect();
+        (!missing.is_empty()).then(|| {
+            format!(
+                "match over enum `{}` does not cover {}, so it has no value here; add the cases or an `else` branch",
+                declaration.name,
+                missing.join(", ")
+            )
+        })
     }
 
     /// Выражение; `want` — значение используется, `expected` — тип границы,
@@ -90,11 +119,10 @@ impl Checker<'_, '_> {
                 if let ast::ExprKind::Match(body) = &inner.kind {
                     let mut names = std::collections::HashSet::new();
                     for arm in &body.cases {
-                        if let ast::ExprKind::Get { name, .. } = &arm.patterns[0].kind {
-                            if !names.insert(&name.text) {
+                        if let ast::ExprKind::Get { name, .. } = &arm.patterns[0].kind
+                            && !names.insert(&name.text) {
                                 self.error(name.span, "Duplicate variant pattern");
                             }
-                        }
                     }
                     if let ExprKind::Match(found) = &result.kind {
                         if !matches!(Self::ty_of(&found.subject), Ty::Enum(_)) {
@@ -126,6 +154,11 @@ impl Checker<'_, '_> {
                     return self.binary_values(*op, lhs, rhs, span);
                 }
                 let lhs = self.value(left, None);
+                // An object, a role or a role-bounded type on the left: the
+                // operator role it declares (#215).
+                if Self::operator_operand(*op, &lhs) {
+                    return self.operator_call(*op, lhs, right, span);
+                }
                 let rhs = if is_fake_get(right) || matches!(lhs.ty, Some(Ty::Variant(..))) {
                     let ty = Self::ty_of(&lhs).taken();
                     self.value(right, Some(&ty))
@@ -225,6 +258,11 @@ impl Checker<'_, '_> {
                 }
             },
             ast::Literal::Float(float) => match float_value(float) {
+                // A literal that is not zero but rounds to it lost its value (#57).
+                Some(value) if value == 0.0 && float.nonzero() => {
+                    self.error(span, "Float literal is too small: it would round to 0.0");
+                    return Self::poisoned(span);
+                }
                 Some(value) => (Constant::Float(value.to_bits()), Ty::Float),
                 None => {
                     self.error(span, "Float value must contain a finite number");
@@ -266,20 +304,27 @@ impl Checker<'_, '_> {
             );
             return Self::poisoned(name.span);
         }
-        if matches!(
+        if (matches!(
             self.kind,
             Kind::Method | Kind::Successor | Kind::Destroy | Kind::CapField
-        ) || (self.kind == Kind::Closure && self.self_ty.is_some())
-        {
-            if let Some(field) = self.own_field(&name.text) {
+        ) || (self.kind == Kind::Closure && self.self_ty.is_some()))
+            && let Some(field) = self.own_field(&name.text) {
                 let ty = self.field_type(field);
                 return Self::typed(ExprKind::Field(field), ty, name.span);
             }
+        if let Some(id) = self.reg.find_const(self.module, &name.text) {
+            return self.const_value(id, name.span);
         }
         if name.text == "test" {
             return Self::typed(ExprKind::TestCapability, Ty::Test, name.span);
         }
-        self.error(name.span, format!("Undefined variable \"{}\"", name.text));
+        // Выходы из цикла в других языках здесь читаются как имена (#256).
+        let hint = match name.text.as_str() {
+            "break" => "; Okkama leaves a loop with `last`",
+            "continue" => "; Okkama starts the next iteration with `next`",
+            _ => "",
+        };
+        self.error(name.span, format!("Undefined variable \"{}\"{hint}", name.text));
         Self::poisoned(name.span)
     }
 
@@ -318,6 +363,10 @@ impl Checker<'_, '_> {
             match &operand.kind {
                 ast::ExprKind::Literal(ast::Literal::Float(float)) => {
                     return match float_value(float) {
+                        Some(value) if value == 0.0 && float.nonzero() => {
+                            self.error(operand.span, "Float literal is too small: it would round to 0.0");
+                            Self::poisoned(span)
+                        }
                         Some(value) => Self::typed(
                             ExprKind::Constant(Constant::Float((-value).to_bits())),
                             Ty::Float,
@@ -357,6 +406,9 @@ impl Checker<'_, '_> {
         let ty = Self::ty_of(&value).taken();
         if ty.is_error() {
             return Self::poisoned(span);
+        }
+        if op == ast::UnaryOp::Negate && matches!(ty, Ty::Object(..) | Ty::Role(..) | Ty::Param(_)) {
+            return self.negation_call(value, span);
         }
         let (unary, result) = match (op, &ty) {
             (ast::UnaryOp::Not, Ty::Bool) => (UnaryOp::Not, Ty::Bool),
@@ -436,11 +488,10 @@ impl Checker<'_, '_> {
             (lhs, rhs)
         };
         let (left, right) = (Self::ty_of(&lhs).taken(), Self::ty_of(&rhs).taken());
-        if left == right && matches!(op, B::Equal | B::NotEqual) {
-            if let Ty::Variant(id, types) = &left {
+        if left == right && matches!(op, B::Equal | B::NotEqual)
+            && let Ty::Variant(id, types) = &left {
                 return self.variant_compare(lhs, rhs, *id, types.clone(), op == B::NotEqual, span);
             }
-        }
         if left.is_error() || right.is_error() {
             return Self::poisoned(span);
         }
@@ -492,6 +543,13 @@ impl Checker<'_, '_> {
                 (_, _, Ty::Str, Ty::Str) if arith == ArithOp::Add => {
                     Ok((BinaryOp::Concat, Ty::Str))
                 }
+                // Массивы и словари: `+` склеивает, `-` вычитает; оба операнда
+                // одного типа (пустой литерал `[]`/`[:]` принимает тип другого).
+                (_, _, Ty::Array(_), Ty::Array(_)) | (_, _, Ty::Map(..), Ty::Map(..))
+                    if matches!(arith, ArithOp::Add | ArithOp::Sub) =>
+                {
+                    self.collection_operator(op, arith, &left, &right)
+                }
                 _ => Err(self.operator_error(op, &left, &right)),
             }
         } else if let Some(bits) = bits {
@@ -528,30 +586,7 @@ impl Checker<'_, '_> {
             }
         } else {
             let compare = compare.expect("binary operators are arithmetic, bitwise or comparisons");
-            // `any` не распаковывается: коллекция из `any` не сравнима никогда.
-            let kind = if left == right && !holds_any(&left) {
-                match &left {
-                    Ty::Int => Some(CompareKind::Int),
-                    Ty::Byte => Some(CompareKind::Byte),
-                    Ty::Float => Some(CompareKind::Float),
-                    Ty::Rat => Some(CompareKind::Rat),
-                    Ty::Bool => Some(CompareKind::Bool),
-                    Ty::Char => Some(CompareKind::Char),
-                    Ty::Str => Some(CompareKind::Str),
-                    Ty::Enum(_) => Some(CompareKind::Enum),
-                    Ty::Object(..)
-                    | Ty::Role(..)
-                    | Ty::Array(_)
-                    | Ty::Map(..)
-                    | Ty::Range
-                    | Ty::Param(_)
-                    | Ty::Future(_)
-                    | Ty::Action(_) => Some(CompareKind::Value),
-                    _ => None,
-                }
-            } else {
-                None
-            };
+            let kind = if left == right { equality_kind(&left) } else { None };
             match kind {
                 Some(kind) if compare.is_equality() => {
                     Ok((BinaryOp::Compare(kind, compare), Ty::Bool))
@@ -585,6 +620,199 @@ impl Checker<'_, '_> {
                 Self::poisoned(span)
             }
         }
+    }
+
+    /// Whether `op` with this left operand goes through an operator role (#215):
+    /// arithmetic or ordering with an object, a role or a type parameter.
+    fn operator_operand(op: ast::BinaryOp, lhs: &Expr) -> bool {
+        use ast::BinaryOp as B;
+        matches!(
+            op,
+            B::Add | B::Subtract | B::Multiply | B::Divide | B::Remainder | B::Less | B::LessEqual | B::Greater | B::GreaterEqual
+        ) && !lhs.diverges
+            && matches!(Self::ty_of(lhs).taken(), Ty::Object(..) | Ty::Role(..) | Ty::Param(_))
+    }
+
+    /// The instances of `role` that `ty` declares, as role arguments: an
+    /// object's `does`, a role reference of that role, or a type parameter
+    /// bounded by it.
+    fn declared_roles(&self, ty: &Ty, role: RoleId) -> Vec<Vec<Ty>> {
+        match ty {
+            Ty::Object(object, type_args) => {
+                let info = &self.reg.objects[object.0];
+                let env: Vec<(ParamId, Ty)> = info.params.iter().copied().zip(type_args.iter().cloned()).collect();
+                info.does
+                    .iter()
+                    .filter(|(found, _)| *found == role)
+                    .map(|(_, args)| args.iter().map(|arg| arg.subst(&env)).collect())
+                    .collect()
+            }
+            Ty::Role(found, args) if *found == role => vec![args.clone()],
+            Ty::Param(param) => match &self.reg.params[param.0].bound {
+                Some(Ty::Role(found, args)) if *found == role => vec![args.clone()],
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
+        }
+    }
+
+    /// The action call an operator stands for, on an already checked left
+    /// operand; `None` for the role name when the type has no such action.
+    fn role_action(&mut self, target: Expr, action: &str, args: &[ast::Argument], span: Span) -> Expr {
+        let name = ast::Name { text: action.to_string(), span };
+        match Self::ty_of(&target).taken() {
+            Ty::Object(object, type_args) => self.object_method(target, object, type_args, &name, args, false, span),
+            Ty::Role(role, role_args) => self.role_method(target, role, role_args, &name, args, span),
+            Ty::Param(param) => match self.reg.params[param.0].bound.clone() {
+                Some(Ty::Role(role, role_args)) => self.role_method(target, role, role_args, &name, args, span),
+                _ => Self::poisoned(span),
+            },
+            _ => Self::poisoned(span),
+        }
+    }
+
+    /// `a op b` through the operator role of `a` (#215): `a.plus(b)`, …;
+    /// `<`, `<=`, `>`, `>=` compare `a.order(b)` with an `Order` case. The
+    /// right operand is checked by the action's own overload selection, and
+    /// the chosen overload must be one the declared role instances name.
+    fn operator_call(&mut self, op: ast::BinaryOp, lhs: Expr, right: &ast::Expr, span: Span) -> Expr {
+        use ast::BinaryOp as B;
+        let operators = self.reg.standard.operators;
+        let (role, action, role_name) = match op {
+            B::Add => (operators.adding, "plus", "Adding"),
+            B::Subtract => (operators.subtracting, "minus", "Subtracting"),
+            B::Multiply => (operators.multiplying, "times", "Multiplying"),
+            B::Divide => (operators.dividing, "divided", "Dividing"),
+            B::Remainder => (operators.remaindering, "remainder", "Remaindering"),
+            _ => (self.reg.standard.comparing, "order", "Comparing"),
+        };
+        let left = Self::ty_of(&lhs).taken();
+        let instances = role.map(|role| self.declared_roles(&left, role)).unwrap_or_default();
+        if instances.is_empty() {
+            let rhs = self.value(right, None);
+            let right_ty = Self::ty_of(&rhs).taken();
+            if !right_ty.is_error() {
+                let message = format!(
+                    "Operator {} cannot be applied to {} and {}: {} does not do {}",
+                    op.symbol(),
+                    self.type_name(&left),
+                    self.type_name(&right_ty),
+                    self.type_name(&left),
+                    role_name
+                );
+                self.error(span, message);
+            }
+            return Self::poisoned(span);
+        }
+        let args = [ast::Argument { name: None, value: right.clone(), span: right.span }];
+        let call = self.role_action(lhs, action, &args, span);
+        let (operand, result) = match &call.kind {
+            ExprKind::Call { args, .. } if !call.diverges => (
+                args.first().map(|arg| Self::ty_of(arg).taken()),
+                Self::ty_of(&call).taken(),
+            ),
+            _ => return call,
+        };
+        let comparison = !matches!(op, B::Add | B::Subtract | B::Multiply | B::Divide | B::Remainder);
+        let declared = instances.iter().any(|args| {
+            operand.as_ref() == args.first() && (comparison || Some(&result) == args.get(1))
+        });
+        if !declared {
+            let message = format!(
+                "Operator {} on {} calls {}({}), which is not one of the {} roles {} declares",
+                op.symbol(),
+                self.type_name(&left),
+                action,
+                operand.as_ref().map_or_else(String::new, |ty| self.type_name(ty)),
+                role_name,
+                self.type_name(&left)
+            );
+            self.error(span, message);
+            return Self::poisoned(span);
+        }
+        if !comparison {
+            return call;
+        }
+        let Some(order) = self.reg.standard.order else {
+            return Self::poisoned(span);
+        };
+        let (case_name, negated) = match op {
+            B::Less => ("less", false),
+            B::LessEqual => ("greater", true),
+            B::Greater => ("greater", false),
+            _ => ("less", true),
+        };
+        let Some(case) = self.reg.enums[order.0].cases.iter().position(|case| case == case_name) else {
+            return Self::poisoned(span);
+        };
+        let constant = Self::typed(ExprKind::EnumCase { ty: order, case }, Ty::Enum(order), span);
+        self.binary_values(if negated { B::NotEqual } else { B::Equal }, call, constant, span)
+    }
+
+    /// `-a` through `Negating<R>` (#215).
+    fn negation_call(&mut self, value: Expr, span: Span) -> Expr {
+        let ty = Self::ty_of(&value).taken();
+        let instances = self
+            .reg
+            .standard
+            .operators
+            .negating
+            .map(|role| self.declared_roles(&ty, role))
+            .unwrap_or_default();
+        if instances.is_empty() {
+            let message = format!(
+                "Operator - cannot be applied to {}: {} does not do Negating",
+                self.type_name(&ty),
+                self.type_name(&ty)
+            );
+            self.error(span, message);
+            return Self::poisoned(span);
+        }
+        let call = self.role_action(value, "negated", &[], span);
+        if call.diverges || !matches!(call.kind, ExprKind::Call { .. }) {
+            return call;
+        }
+        let result = Self::ty_of(&call).taken();
+        if !instances.iter().any(|args| args.first() == Some(&result)) {
+            let message = format!(
+                "Operator - on {} gives {}, which is not the result its Negating role declares",
+                self.type_name(&ty),
+                self.type_name(&result)
+            );
+            self.error(span, message);
+            return Self::poisoned(span);
+        }
+        call
+    }
+
+    /// `+`/`-` над массивами и словарями: тип результата — общий тип операндов.
+    fn collection_operator(&self, op: ast::BinaryOp, arith: ArithOp, left: &Ty, right: &Ty) -> Result<(BinaryOp, Ty), String> {
+        let ty = if left.is_untagged() {
+            right.clone()
+        } else if right.is_untagged() || left == right {
+            left.clone()
+        } else {
+            return Err(format!(
+                "Operator {} needs two collections of the same type, got {} and {}",
+                op.symbol(),
+                self.type_name(left),
+                self.type_name(right)
+            ));
+        };
+        let array = matches!(ty, Ty::Array(_));
+        if arith == ArithOp::Sub && holds_any(&ty) {
+            return Err(format!(
+                "Operator - compares elements, and {} holds any, which cannot be compared",
+                self.type_name(&ty)
+            ));
+        }
+        let kind = match (array, arith) {
+            (true, ArithOp::Add) => BinaryOp::ArrayConcat,
+            (true, _) => BinaryOp::ArrayDifference,
+            (false, ArithOp::Add) => BinaryOp::MapMerge,
+            (false, _) => BinaryOp::MapDifference,
+        };
+        Ok((kind, ty))
     }
 
     fn operator_error(&self, op: ast::BinaryOp, left: &Ty, right: &Ty) -> String {
@@ -787,22 +1015,18 @@ impl Checker<'_, '_> {
                 let total = self.reg.enums[id.0].cases.len();
                 let mut seen = vec![false; total];
                 for pattern in patterns {
-                    if let ast::ExprKind::Get { object, name } = &strip_grouping(pattern).kind {
-                        if let ast::ExprKind::Name(enum_name) = &strip_grouping(object).kind {
-                            if self.local(&enum_name.text).is_none()
+                    if let ast::ExprKind::Get { object, name } = &strip_grouping(pattern).kind
+                        && let ast::ExprKind::Name(enum_name) = &strip_grouping(object).kind
+                            && self.local(&enum_name.text).is_none()
                                 && (enum_name.text == "$choice"
                                     || self.enum_named(&enum_name.text) == Some(*id))
-                            {
-                                if let Some(case) = self.reg.enums[id.0]
+                                && let Some(case) = self.reg.enums[id.0]
                                     .cases
                                     .iter()
                                     .position(|case| *case == name.text)
                                 {
                                     seen[case] = true;
                                 }
-                            }
-                        }
-                    }
                 }
                 seen.iter().all(|seen| *seen)
             }
@@ -857,6 +1081,7 @@ impl Checker<'_, '_> {
 
     /// Образец catch: вариант error enum (`Enum.case`, `Enum.case(x, _)`) или
     /// тип ошибки; привязки payload — для тела.
+    #[allow(clippy::type_complexity)] // alternative and the enum case it binds
     fn catch_pattern(
         &mut self,
         pattern: &ast::Expr,
@@ -865,8 +1090,8 @@ impl Checker<'_, '_> {
             ast::ExprKind::Call { callee, args } => (&**callee, Some(args)),
             _ => (pattern, None),
         };
-        if let ast::ExprKind::Get { object, name } = &strip_grouping(callee).kind {
-            if let Some((id, _)) = self.variant_receiver(object) {
+        if let ast::ExprKind::Get { object, name } = &strip_grouping(callee).kind
+            && let Some((id, _)) = self.variant_receiver(object) {
                 let decl = self.reg.enums[id.0].clone();
                 if !decl.error {
                     self.error(
@@ -890,7 +1115,6 @@ impl Checker<'_, '_> {
                 };
                 return Some((alt, Some((id, case, args.cloned().unwrap_or_default()))));
             }
-        }
         let path = args.is_none().then(|| expr_path(callee)).flatten();
         let Some(path) = path else {
             self.error(
@@ -1382,11 +1606,11 @@ impl Checker<'_, '_> {
                 (key, value)
             }
         };
-        if !key_type.is_error() && !key_type.is_map_key() {
-            let message = format!(
-                "Map key type {} is not a scalar key type",
-                self.type_name(&key_type)
-            );
+        // A literal keyed by a parameter bounds its argument like `%T:V` (#242).
+        if let Ty::Param(param) = key_type {
+            self.reg.params[param.0].key = true;
+        }
+        if let Some(message) = self.reg.key_problem(&key_type) {
             let at = entries.first().map_or(span, |entry| entry.key.span);
             self.error(at, message);
             return Self::poisoned(span);
@@ -1758,7 +1982,8 @@ fn int_value(literal: &crate::syntax::token::IntLiteral) -> Option<IntValue> {
     }
 }
 
-/// Конечный binary64 литерала `whole.fraction`.
+/// Конечный binary64 литерала `whole.fraction[e±exponent]`; экспонента любой
+/// длины разбирается без раскрытия в цифры (`1e999999999` — бесконечность).
 pub(super) fn float_value(literal: &crate::syntax::token::FloatLiteral) -> Option<f64> {
     literal
         .text()
@@ -1825,6 +2050,33 @@ fn expr_path(expr: &ast::Expr) -> Option<Vec<ast::Name>> {
             path.push(name.clone());
             Some(path)
         }
+        _ => None,
+    }
+}
+
+/// Как сравниваются на равенство два значения типа `ty` (`==`, `contains`).
+/// `any` не распаковывается: коллекция из `any` не сравнима никогда.
+pub(super) fn equality_kind(ty: &Ty) -> Option<CompareKind> {
+    if holds_any(ty) {
+        return None;
+    }
+    match ty {
+        Ty::Int => Some(CompareKind::Int),
+        Ty::Byte => Some(CompareKind::Byte),
+        Ty::Float => Some(CompareKind::Float),
+        Ty::Rat => Some(CompareKind::Rat),
+        Ty::Bool => Some(CompareKind::Bool),
+        Ty::Char => Some(CompareKind::Char),
+        Ty::Str => Some(CompareKind::Str),
+        Ty::Enum(_) => Some(CompareKind::Enum),
+        Ty::Object(..)
+        | Ty::Role(..)
+        | Ty::Array(_)
+        | Ty::Map(..)
+        | Ty::Range
+        | Ty::Param(_)
+        | Ty::Future(_)
+        | Ty::Action(_) => Some(CompareKind::Value),
         _ => None,
     }
 }

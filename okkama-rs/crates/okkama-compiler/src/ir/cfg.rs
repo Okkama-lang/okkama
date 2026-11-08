@@ -259,7 +259,11 @@ fn body(block: BlockId) -> usize {
 /// Требует, чтобы все цели существовали и все блоки были достижимы.
 #[derive(Clone, Debug)]
 pub struct Dominators {
-    idom: Vec<usize>,
+    /// Entry and exit numbers of each node in a walk of the dominator tree:
+    /// `a` dominates `b` when `b`'s interval lies inside `a`'s — one
+    /// comparison instead of a climb up the tree (#50).
+    enter: Vec<usize>,
+    exit: Vec<usize>,
 }
 
 impl Dominators {
@@ -267,7 +271,7 @@ impl Dominators {
         let count = function.blocks.len() * 2;
         let node_successors = |node: usize| -> Vec<usize> {
             let block = BlockId(node / 2);
-            if node % 2 == 0 {
+            if node.is_multiple_of(2) {
                 let mut next = vec![body(block)];
                 if let Some(unwind) = &function.blocks[block.0].unwind {
                     next.push(start(unwind.block));
@@ -341,25 +345,37 @@ impl Dominators {
                 }
             }
         }
-        Ok(Self {
-            idom: idom
-                .into_iter()
-                .map(|parent| parent.expect("every reachable node has an idom"))
-                .collect(),
-        })
+        let idom: Vec<usize> = idom
+            .into_iter()
+            .map(|parent| parent.expect("every reachable node has an idom"))
+            .collect();
+        let mut children = vec![Vec::new(); count];
+        for (node, &parent) in idom.iter().enumerate() {
+            if parent != node {
+                children[parent].push(node);
+            }
+        }
+        let (mut enter, mut exit) = (vec![0; count], vec![0; count]);
+        let mut clock = 0;
+        let mut walk = vec![(0usize, 0usize)];
+        enter[0] = clock;
+        clock += 1;
+        while let Some((node, next)) = walk.pop() {
+            if let Some(&child) = children[node].get(next) {
+                walk.push((node, next + 1));
+                enter[child] = clock;
+                clock += 1;
+                walk.push((child, 0));
+            } else {
+                exit[node] = clock;
+                clock += 1;
+            }
+        }
+        Ok(Self { enter, exit })
     }
 
-    fn dominates_node(&self, dominator: usize, mut node: usize) -> bool {
-        loop {
-            if node == dominator {
-                return true;
-            }
-            let parent = self.idom[node];
-            if parent == node {
-                return false;
-            }
-            node = parent;
-        }
+    fn dominates_node(&self, dominator: usize, node: usize) -> bool {
+        self.enter[dominator] <= self.enter[node] && self.exit[node] <= self.exit[dominator]
     }
 
     /// Видно ли значение с определением `def` в точке использования.
@@ -376,5 +392,168 @@ impl Dominators {
                 _ => self.dominates_node(body(block), use_node),
             },
         }
+    }
+}
+
+/// Which nodes of the graph `edges` lie on a cycle (a strongly connected
+/// component of two or more nodes, or a self edge).
+pub(crate) fn on_cycles(edges: &[Vec<usize>]) -> Vec<bool> {
+    cycles(edges).iter().map(Option::is_some).collect()
+}
+
+/// The cycle each node lies on — the number of its strongly connected
+/// component of two or more nodes, or with a self edge — or `None`: Tarjan's
+/// algorithm with an explicit stack, linear in nodes and edges.
+pub(crate) fn cycles(edges: &[Vec<usize>]) -> Vec<Option<usize>> {
+    let count = edges.len();
+    let mut index = vec![usize::MAX; count];
+    let mut low = vec![0; count];
+    let mut on_stack = vec![false; count];
+    let mut stack = Vec::new();
+    let mut next = 0;
+    let mut components = 0;
+    let mut result = vec![None; count];
+    for root in 0..count {
+        if index[root] != usize::MAX {
+            continue;
+        }
+        // A frame of the walk: the node and its next edge.
+        let mut frames = vec![(root, 0usize)];
+        index[root] = next;
+        low[root] = next;
+        next += 1;
+        stack.push(root);
+        on_stack[root] = true;
+        while let Some(&(node, edge)) = frames.last() {
+            if let Some(&to) = edges[node].get(edge) {
+                frames.last_mut().expect("frame").1 += 1;
+                if index[to] == usize::MAX {
+                    index[to] = next;
+                    low[to] = next;
+                    next += 1;
+                    stack.push(to);
+                    on_stack[to] = true;
+                    frames.push((to, 0));
+                } else if on_stack[to] {
+                    low[node] = low[node].min(index[to]);
+                }
+                continue;
+            }
+            frames.pop();
+            if let Some(&(parent, _)) = frames.last() {
+                low[parent] = low[parent].min(low[node]);
+            }
+            if low[node] == index[node] {
+                let mut component = Vec::new();
+                loop {
+                    let member = stack.pop().expect("tarjan stack");
+                    on_stack[member] = false;
+                    component.push(member);
+                    if member == node {
+                        break;
+                    }
+                }
+                if component.len() > 1 || edges[node].contains(&node) {
+                    for member in component {
+                        result[member] = Some(components);
+                    }
+                    components += 1;
+                }
+            }
+        }
+    }
+    result
+}
+
+/// Immediate dominators of the graph `edges` from node 0 (Cooper, Harvey and
+/// Kennedy), with each node's reverse postorder number; `None` — unreachable.
+pub(crate) fn dominators(edges: &[Vec<usize>]) -> (Vec<Option<usize>>, Vec<usize>) {
+    let count = edges.len();
+    let mut order = Vec::new();
+    let mut seen = vec![false; count];
+    let mut stack = vec![(0usize, 0usize)];
+    seen[0] = true;
+    while let Some((node, next)) = stack.pop() {
+        if let Some(&target) = edges[node].get(next) {
+            stack.push((node, next + 1));
+            if !seen[target] {
+                seen[target] = true;
+                stack.push((target, 0));
+            }
+        } else {
+            order.push(node);
+        }
+    }
+    order.reverse();
+    let mut rpo = vec![usize::MAX; count];
+    for (index, node) in order.iter().enumerate() {
+        rpo[*node] = index;
+    }
+    let mut preds = vec![Vec::new(); count];
+    for &node in &order {
+        for &target in &edges[node] {
+            preds[target].push(node);
+        }
+    }
+    let mut idom: Vec<Option<usize>> = vec![None; count];
+    idom[0] = Some(0);
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &node in order.iter().skip(1) {
+            let mut new = None;
+            for &pred in &preds[node] {
+                if idom[pred].is_none() {
+                    continue;
+                }
+                new = Some(match new {
+                    None => pred,
+                    Some(current) => common_dominator(&idom, &rpo, pred, current),
+                });
+            }
+            if new.is_some() && idom[node] != new {
+                idom[node] = new;
+                changed = true;
+            }
+        }
+    }
+    (idom, rpo)
+}
+
+/// The nearest node dominating both `a` and `b` (both reachable).
+pub(crate) fn common_dominator(idom: &[Option<usize>], rpo: &[usize], mut a: usize, mut b: usize) -> usize {
+    while a != b {
+        while rpo[a] > rpo[b] {
+            a = idom[a].expect("reachable");
+        }
+        while rpo[b] > rpo[a] {
+            b = idom[b].expect("reachable");
+        }
+    }
+    a
+}
+
+#[cfg(test)]
+mod cycle_tests {
+    use super::on_cycles;
+
+    #[test]
+    fn cycles_self_edges_and_acyclic_nodes() {
+        // 0 → 1 → 2 → 1 (loop), 2 → 3, 3 → 3 (self edge), 4 alone.
+        let edges = vec![vec![1], vec![2], vec![1, 3], vec![3], vec![]];
+        assert_eq!(on_cycles(&edges), [false, true, true, true, false]);
+    }
+
+    #[test]
+    fn a_long_loop_is_found_in_linear_time() {
+        // 10⁵ blocks in one loop, and a 10⁵-block chain off it: an iterative
+        // walk, no recursion and no per-block search.
+        let n = 100_000;
+        let mut edges: Vec<Vec<usize>> = (0..n).map(|block| vec![(block + 1) % n]).collect();
+        edges[0].push(n);
+        edges.extend((n..2 * n).map(|block| if block + 1 < 2 * n { vec![block + 1] } else { vec![] }));
+        let looping = on_cycles(&edges);
+        assert!(looping[..n].iter().all(|&on| on));
+        assert!(looping[n..].iter().all(|&on| !on));
     }
 }

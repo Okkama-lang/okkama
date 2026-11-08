@@ -118,7 +118,7 @@ pub fn decode(bytes: &[u8], encoding: &str) -> Option<String> {
         "ascii" => bytes.iter().all(u8::is_ascii).then(|| bytes.iter().map(|b| char::from(*b)).collect()),
         "latin-1" => Some(bytes.iter().map(|b| char::from(*b)).collect()),
         "utf-16-le" | "utf-16-be" => {
-            if bytes.len() % 2 != 0 {
+            if !bytes.len().is_multiple_of(2) {
                 return None;
             }
             let units: Vec<u16> = bytes
@@ -134,7 +134,7 @@ pub fn decode(bytes: &[u8], encoding: &str) -> Option<String> {
             String::from_utf16(&units).ok()
         }
         "utf-32-le" | "utf-32-be" => {
-            if bytes.len() % 4 != 0 {
+            if !bytes.len().is_multiple_of(4) {
                 return None;
             }
             bytes
@@ -165,21 +165,6 @@ pub fn encode(text: &str, encoding: &str) -> Option<Vec<u8>> {
         "utf-32-le" => Some(text.chars().flat_map(|c| u32::from(c).to_le_bytes()).collect()),
         "utf-32-be" => Some(text.chars().flat_map(|c| u32::from(c).to_be_bytes()).collect()),
         _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::split;
-
-    #[test]
-    fn split_follows_java_trailing_rules() {
-        assert_eq!(split("a/b//", "/", 0), vec!["a", "b"]);
-        assert_eq!(split("a/b//", "/", -1), vec!["a", "b", "", ""]);
-        assert_eq!(split("/a", "/", 0), vec!["", "a"]);
-        assert_eq!(split("", "/", 0), vec![""]);
-        assert_eq!(split("abc", "/", 0), vec!["abc"]);
-        assert_eq!(split("x,y,z", ",", 2), vec!["x", "y,z"]);
     }
 }
 
@@ -263,4 +248,19 @@ fn scaled(value: u128, shift: i64) -> f64 {
     }
     let shift = shift + drop.max(0) - (-drop).max(0);
     (mantissa as f64) * 2f64.powi(shift as i32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split;
+
+    #[test]
+    fn split_follows_java_trailing_rules() {
+        assert_eq!(split("a/b//", "/", 0), vec!["a", "b"]);
+        assert_eq!(split("a/b//", "/", -1), vec!["a", "b", "", ""]);
+        assert_eq!(split("/a", "/", 0), vec!["", "a"]);
+        assert_eq!(split("", "/", 0), vec![""]);
+        assert_eq!(split("abc", "/", 0), vec!["abc"]);
+        assert_eq!(split("x,y,z", ",", 2), vec!["x", "y,z"]);
+    }
 }

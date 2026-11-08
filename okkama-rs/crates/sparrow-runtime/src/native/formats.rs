@@ -293,7 +293,7 @@ fn base64_invalid(source: &[char]) -> i64 {
             return offset as i64;
         }
     }
-    if size % 4 != 0 {
+    if !size.is_multiple_of(4) {
         return size as i64;
     }
     let expected = match data_end % 4 {
@@ -488,8 +488,11 @@ struct Template {
     source: String,
     input: IntValue,
     maximum_nodes: IntValue,
-    compiled: RefCell<Option<Result<Vec<(i64, String)>, TemplateError>>>,
+    compiled: RefCell<Option<Compiled>>,
 }
+
+/// Разобранный шаблон: части по позициям или отказ разбора.
+type Compiled = Result<Vec<(i64, String)>, TemplateError>;
 
 fn index_of(source: &[char], needle: &str, from: usize) -> Option<usize> {
     let needle: Vec<char> = needle.chars().collect();
@@ -570,15 +573,14 @@ fn compile_template(state: &Template) -> Result<Vec<(i64, String)>, TemplateErro
                 (Some('\r'), Some('\n')) => Some(2),
                 _ => None,
             };
-            if prefix.chars().all(|c| c == ' ' || c == '\t') {
-                if let Some(ending) = ending {
+            if prefix.chars().all(|c| c == ' ' || c == '\t')
+                && let Some(ending) = ending {
                     if !prefix.is_empty() {
                         let keep = literal.len() - prefix.len();
                         literal.truncate(keep);
                     }
                     position += spaces + ending;
                 }
-            }
             continue;
         }
         let body = body.trim_matches([' ', '\t']).to_string();

@@ -287,8 +287,8 @@ impl Linter<'_, '_> {
             {
                 continue;
             }
-            if let Some(alias) = &import.alias {
-                if import.take.is_empty() && !used.contains(alias.text.as_str()) {
+            if let Some(alias) = &import.alias
+                && import.take.is_empty() && !used.contains(alias.text.as_str()) {
                     self.warn(
                         alias.span,
                         "unused-import",
@@ -296,7 +296,6 @@ impl Linter<'_, '_> {
                         true,
                     );
                 }
-            }
             for name in &import.take {
                 if !used.contains(name.text.as_str()) {
                     self.warn(
@@ -531,7 +530,7 @@ fn walk_expr(expr: &thir::Expr, visit: &mut dyn FnMut(&thir::Expr)) {
                 walk_expr(value, visit);
             }
         }
-        ExprKind::Constant(_)
+        ExprKind::Constant(_) | ExprKind::Global(_)
         | ExprKind::Local(_)
         | ExprKind::SelfValue
         | ExprKind::Field(_)
@@ -657,6 +656,9 @@ fn walk_expr(expr: &thir::Expr, visit: &mut dyn FnMut(&thir::Expr)) {
             walk_source(&functional.source, visit);
             if let Some(initial) = &functional.initial {
                 walk_expr(initial, visit);
+            }
+            if let Some(found) = &functional.found {
+                walk_expr(found, visit);
             }
             walk_block(&functional.body, visit);
         }
@@ -864,6 +866,9 @@ fn children_of<'b>(
             source_exprs(&functional.source, out);
             if let Some(initial) = &functional.initial {
                 out.push(initial);
+            }
+            if let Some(found) = &functional.found {
+                out.push(found);
             }
             blocks.push(&functional.body);
         }

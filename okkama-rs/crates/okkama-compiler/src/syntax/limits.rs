@@ -146,6 +146,7 @@ fn push_item<'a>(item: &'a Item, stack: &mut Vec<(Node<'a>, usize)>) {
         Item::Cap(cap) => cap.fields.iter().for_each(|field| block(&field.body)),
         Item::Action(action) => block(&action.body),
         Item::Enum(_) | Item::NativeAction(_) | Item::NativeObject(_) => {}
+        Item::Const(decl) => stack.push((Node::Expr(&decl.value), 1)),
     }
     // Значения полей по умолчанию — выражения на глубине 1.
     if let Item::Object(decl) = item {
@@ -292,10 +293,10 @@ fn stmt_children<'a>(stmt: &'a Stmt, push: &mut impl FnMut(Node<'a>)) {
         | StmtKind::SuccessorAssign { value, .. }
         | StmtKind::FieldBind { value, .. }
         | StmtKind::SelfFieldBind { value, .. } => push(Node::Expr(value)),
-        StmtKind::Throw { value }
-        | StmtKind::Return { value }
-        | StmtKind::Next { condition: value } => optional(value, push),
-        StmtKind::Last { value, condition } => {
+        StmtKind::Next { condition: value } => optional(value, push),
+        StmtKind::Throw { value, condition }
+        | StmtKind::Return { value, condition }
+        | StmtKind::Last { value, condition } => {
             optional(value, push);
             optional(condition, push);
         }

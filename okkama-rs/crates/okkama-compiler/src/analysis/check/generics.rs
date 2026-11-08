@@ -178,11 +178,10 @@ impl Checker<'_, '_> {
             }
         }
         // Финальная распаковка `xs...` — массив элементов variadic-хвоста.
-        if let (Some(element), Some((array, _))) = (tail, &call.spread) {
-            if let Ty::Array(item) = Self::ty_of(array).taken() {
+        if let (Some(element), Some((array, _))) = (tail, &call.spread)
+            && let Ty::Array(item) = Self::ty_of(array).taken() {
                 self.unify(&mut inference, element, &item);
             }
-        }
         if let Some(message) = inference.conflict.take() {
             return Err(message);
         }
@@ -208,6 +207,7 @@ impl Checker<'_, '_> {
         args: &[Ty],
         span: Span,
     ) -> bool {
+        self.reg.key_uses.push((self.module, object, args.to_vec(), span));
         let params = self.reg.objects[object.0].params.clone();
         let env: Vec<(ParamId, Ty)> = params.iter().copied().zip(args.iter().cloned()).collect();
         for (param, arg) in params.iter().zip(args) {

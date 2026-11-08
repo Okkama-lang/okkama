@@ -2,7 +2,7 @@
 //!
 //! Precedence, lowest first. All binary levels are left-associative except
 //! ranges, which do not chain. The binary levels are parsed by precedence
-//! climbing over the table in [`binary_operator`]; the other levels are
+//! climbing over the table [`LEVELS`]; the other levels are
 //! one function each, mirroring `docs/okkama-grammar-1.0.md`.
 //!
 //! | level          | operators                       |
@@ -26,10 +26,10 @@
 use super::{PResult, Parser};
 use crate::source::Span;
 use crate::syntax::ast::{
-    ActionResult, Argument, BinaryOp, Expr, ExprKind, FunctionalOp, Literal, MapEntry, Name,
-    ResultSpec, UnaryOp,
+    ActionResult, Argument, BinaryOp, Block, CatchClause, Expr, ExprKind, FunctionalOp, Literal, MapEntry,
+    Name, ResultSpec, Stmt, StmtKind, TryBody, UnaryOp,
 };
-use crate::syntax::token::{TokenKind, TokenValue, is_lower_word, is_type_word};
+use crate::syntax::token::{StrLiteral, StringForm, TokenKind, TokenValue, is_lower_word, is_type_word};
 
 impl Parser<'_> {
     /// `expr = logic_or optional_else? compact_choice?`.
@@ -323,25 +323,24 @@ impl Parser<'_> {
     /// (`logic_or` ... `factor`). Parsing them with one function per level
     /// would push about thirty stack frames for every parenthesised
     /// sub-expression, so they are parsed here by precedence climbing over
-    /// the same table ([`binary_operator`]): identical trees, a few frames
-    /// per nesting level. All levels are left-associative; the range level
-    /// accepts at most one operator.
+    /// the same table ([`LEVELS`]): identical trees, a few frames per
+    /// nesting level.
     pub(super) fn logic_or(&mut self) -> PResult<Expr> {
-        self.binary(Precedence::Or)
+        self.binary(0)
     }
 
-    /// Parses operators whose precedence is at least `min`.
-    fn binary(&mut self, min: Precedence) -> PResult<Expr> {
+    /// Parses operators of level `min` (index into [`LEVELS`]) and tighter.
+    fn binary(&mut self, min: usize) -> PResult<Expr> {
         let mut left = self.unary()?;
-        while let Some((precedence, operator)) = binary_operator(self.peek_kind()) {
-            if precedence < min {
+        while let Some((level, operator)) = binary_operator(self.peek_kind()) {
+            if level < min {
                 break;
             }
             self.advance();
             let op_span = self.previous().span;
             // Left associativity: the right operand only takes operators
             // that bind strictly tighter.
-            let right = self.binary(precedence.next())?;
+            let right = self.binary(level + 1)?;
             let span = left.span.to(right.span);
             left = Expr {
                 span,
@@ -365,8 +364,8 @@ impl Parser<'_> {
                     },
                 },
             };
-            if matches!(operator, Operator::Range { .. })
-                && matches!(self.peek_kind(), TokenKind::DotDot | TokenKind::DotDotEqual)
+            if LEVELS[level].chaining == Chaining::Single
+                && binary_operator(self.peek_kind()).is_some_and(|(next, _)| next == level)
             {
                 return Err(self.error_here("Range expressions cannot be chained."));
             }
@@ -548,6 +547,13 @@ impl Parser<'_> {
             }
             if self.eat(TokenKind::Dot) {
                 let name = self.consume_member_name("Expect property name after \".\".")?;
+                if name.text == "throws"
+                    && matches!(&expr.kind, ExprKind::Name(test) if test.text == "test")
+                    && self.check(TokenKind::LeftParen)
+                {
+                    expr = self.test_throws(expr.span)?;
+                    continue;
+                }
                 expr = Expr {
                     span: expr.span.to(name.span),
                     kind: ExprKind::Get {
@@ -592,6 +598,44 @@ impl Parser<'_> {
             }
             return Ok(expr);
         }
+    }
+
+    /// `test.throws(Type) { … }` (#216) after `test.throws`: the block must
+    /// throw a `Type`, whose value is the expression's. It is written as the
+    /// `try` it means — the block, then a panic that fails the test, under a
+    /// `catch` of `Type` that yields the error — so checking and every engine
+    /// treat it as one. The binding's name cannot be written in source.
+    fn test_throws(&mut self, start: Span) -> PResult<Expr> {
+        self.consume(TokenKind::LeftParen, "Expect \"(\" after test.throws.")?;
+        let ty = self.type_expr()?;
+        self.consume(TokenKind::RightParen, "Expect \")\" after the error type of test.throws.")?;
+        if !self.check(TokenKind::LeftBrace) {
+            return Err(self.error_here("Expect a block after test.throws(Type): test.throws(Type) { … }"));
+        }
+        let mut body = self.block()?;
+        let span = start.to(body.span);
+        let expected = format!("test.throws: the block did not throw {}", self.text_of(ty.span));
+        let literal = |value: String| Expr {
+            kind: ExprKind::Literal(Literal::String(StrLiteral { value, form: StringForm::Quoted })),
+            span,
+        };
+        let panic = Expr { kind: ExprKind::Panic { value: Box::new(literal(expected)) }, span };
+        body.stmts.push(Stmt { kind: StmtKind::Expr { expr: panic, condition: None }, span: body.span });
+        let caught = Name { text: "test.throws#error".into(), span: ty.span };
+        let clause = CatchClause {
+            name: Some(caught.clone()),
+            types: vec![ty],
+            patterns: Vec::new(),
+            body: Block {
+                stmts: vec![Stmt {
+                    kind: StmtKind::Expr { expr: Expr { kind: ExprKind::Name(caught), span }, condition: None },
+                    span,
+                }],
+                span,
+            },
+            span,
+        };
+        Ok(Expr { kind: ExprKind::Try(Box::new(TryBody { body, catches: vec![clause], span })), span })
     }
 
     /// Arguments after `(` up to and including `)`.
@@ -663,7 +707,7 @@ impl Parser<'_> {
     fn starts_anonymous_action(&self, index: usize) -> bool {
         index + 2 < self.tokens.len()
             && self.tokens[index].kind == TokenKind::LeftParen
-            && self.tokens[index + 2].kind == TokenKind::Is
+            && (self.tokens[index + 2].kind == TokenKind::Is || Self::group_ends_in_is(&self.tokens, index + 1))
     }
 
     // ===== primaries =========================================================
@@ -728,8 +772,41 @@ impl Parser<'_> {
             _ => {
                 let token = self.peek().clone();
                 self.reject_reserved(&token)?;
-                Err(self.error_here("Expect expression."))
+                Err(self.error_here(self.foreign_operator().unwrap_or("Expect expression.")))
             }
+        }
+    }
+
+    /// `x += 1`, `x++` and `x--` stop here with an operator and no right
+    /// operand; name what Okkama writes instead (#256).
+    fn foreign_operator(&self) -> Option<&'static str> {
+        use TokenKind::{
+            Amp, Caret, Equal, Minus, Percent, Pipe, Plus, ShiftLeft, ShiftRight, ShiftUnsigned,
+            Slash, Star,
+        };
+        const STEP: &str =
+            "Okkama has no `++` or `--`: a name is bound once; bind a new name, or use `reduce` or a successor.";
+        let (before, here) = (self.previous(), self.peek());
+        // `x--` reads as `x - -` and stops after the unary minus.
+        if self.pos >= 2 {
+            let first = &self.tokens[self.pos - 2];
+            if first.kind == Minus && before.kind == Minus && first.span.end == before.span.start {
+                return Some(STEP);
+            }
+        }
+        if self.pos == 0 || before.span.end != here.span.start {
+            return None;
+        }
+        match (before.kind, here.kind) {
+            (Plus, Plus) | (Minus, Minus) => Some(STEP),
+            (
+                Plus | Minus | Star | Slash | Percent | Amp | Pipe | Caret | ShiftLeft | ShiftRight
+                | ShiftUnsigned,
+                Equal,
+            ) => Some(
+                "Okkama has no compound assignment: a name is bound once; bind a new name, or use `reduce` or a successor.",
+            ),
+            _ => None,
         }
     }
 
@@ -795,7 +872,10 @@ impl Parser<'_> {
     /// anonymous action.
     fn parenthesized(&mut self, start: Span) -> PResult<Expr> {
         self.advance();
-        if self.check(TokenKind::RightParen) || self.nth(1).kind == TokenKind::Is {
+        if self.check(TokenKind::RightParen)
+            || self.nth(1).kind == TokenKind::Is
+            || Self::group_ends_in_is(&self.tokens, self.pos)
+        {
             return self.anonymous_action(start);
         }
         let inner = self.expression()?;
@@ -832,8 +912,8 @@ impl Parser<'_> {
     fn anonymous_action(&mut self, start: Span) -> PResult<Expr> {
         let mut params = Vec::new();
         if !self.check(TokenKind::RightParen) {
-            loop {
-                let param = self.parameter()?;
+            'params: loop {
+                for param in self.parameter_group()? {
                 if params
                     .iter()
                     .any(|seen: &crate::syntax::ast::Param| seen.name.text == param.name.text)
@@ -851,8 +931,9 @@ impl Parser<'_> {
                     ));
                 }
                 params.push(param);
+                }
                 if !self.eat(TokenKind::Comma) {
-                    break;
+                    break 'params;
                 }
                 if self.check(TokenKind::RightParen) {
                     return Err(self.error_here("Expect anonymous action parameter after \",\"."));
@@ -947,67 +1028,35 @@ impl Parser<'_> {
         })
     }
 
-    /// After `if` in expression position: `expr block "else" block`.
-    /// `else if` chains exist only in statement position.
+    /// After `if` in expression position: `expr block "else" (if_expr |
+    /// block)`. An `else if` link is an else block holding the nested `if`
+    /// alone and spanning exactly it, the shape of a choice branch; the
+    /// formatter prints it back as `else if`. Each link counts against the
+    /// nesting limit.
     fn if_expression(&mut self, start: Span) -> PResult<Expr> {
-        let condition = self.expression()?;
-        let then_block = self.block()?;
-        self.consume(TokenKind::Else, "If expression requires else branch.")?;
-        let else_block = self.block()?;
-        Ok(Expr {
-            span: start.to(else_block.span),
-            kind: ExprKind::If {
-                condition: Box::new(condition),
-                then_block,
-                else_block,
-            },
+        self.nested(|parser| {
+            let condition = parser.expression()?;
+            let then_block = parser.block()?;
+            parser.consume(TokenKind::Else, "If expression requires else branch.")?;
+            let else_block = if parser.eat(TokenKind::If) {
+                let nested_start = parser.previous().span;
+                Self::choice_block(parser.if_expression(nested_start)?)
+            } else {
+                parser.block()?
+            };
+            Ok(Expr {
+                span: start.to(else_block.span),
+                kind: ExprKind::If {
+                    condition: Box::new(condition),
+                    then_block,
+                    else_block,
+                },
+            })
         })
     }
 }
 
-/// `Type` or `module.Type` — the only valid projection targets. The
-/// qualifier only has to be lower-case-shaped (the reference parser treats
-/// `self` like any other variable here); whether it names a module is a
-/// semantic question.
-/// Binary precedence levels, lowest first (the grammar's ladder).
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum Precedence {
-    Or,
-    And,
-    StreamWrite,
-    Equality,
-    Range,
-    Comparison,
-    BitOr,
-    BitXor,
-    BitAnd,
-    Shift,
-    Term,
-    Factor,
-    /// Above every binary operator: only prefix/postfix forms.
-    Unary,
-}
-
-impl Precedence {
-    fn next(self) -> Precedence {
-        use Precedence::*;
-        match self {
-            Or => And,
-            And => StreamWrite,
-            StreamWrite => Equality,
-            Equality => Range,
-            Range => Comparison,
-            Comparison => BitOr,
-            BitOr => BitXor,
-            BitXor => BitAnd,
-            BitAnd => Shift,
-            Shift => Term,
-            Term => Factor,
-            Factor | Unary => Unary,
-        }
-    }
-}
-
+/// What a binary operator builds.
 #[derive(Copy, Clone, Debug)]
 enum Operator {
     Binary(BinaryOp),
@@ -1015,49 +1064,72 @@ enum Operator {
     Range { inclusive: bool },
 }
 
-/// The precedence table:
-///
-/// | level        | operators                |
-/// |--------------|--------------------------|
-/// | Or           | `\|\|`                     |
-/// | And          | `&&`                     |
-/// | StreamWrite  | `<-`                     |
-/// | Equality     | `==` `!=`                |
-/// | Range        | `..` `..=`               |
-/// | Comparison   | `<` `<=` `>` `>=`        |
-/// | BitOr        | `\|`                      |
-/// | BitXor       | `^`                      |
-/// | BitAnd       | `&`                      |
-/// | Shift        | `<<` `>>` `>>>`          |
-/// | Term         | `+` `-`                  |
-/// | Factor       | `*` `/` `%`              |
-fn binary_operator(kind: TokenKind) -> Option<(Precedence, Operator)> {
+/// How operators of one level combine with each other.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum Chaining {
+    /// `a - b - c` is `(a - b) - c`.
+    Left,
+    /// At most one operator: `1..2..3` is an error.
+    Single,
+}
+
+/// One precedence level of the grammar's ladder.
+struct Level {
+    chaining: Chaining,
+    operators: &'static [(TokenKind, Operator)],
+}
+
+/// Every binary operator, by precedence level from the loosest to the
+/// tightest: the one place that knows token, AST operation, precedence and
+/// chaining (#46). A new operator is a new row; a new level a new entry.
+const LEVELS: &[Level] = {
     use BinaryOp as B;
-    use Precedence as P;
-    let entry = match kind {
-        TokenKind::PipePipe => (P::Or, Operator::Binary(B::Or)),
-        TokenKind::AmpAmp => (P::And, Operator::Binary(B::And)),
-        TokenKind::StreamWrite => (P::StreamWrite, Operator::StreamWrite),
-        TokenKind::EqualEqual => (P::Equality, Operator::Binary(B::Equal)),
-        TokenKind::BangEqual => (P::Equality, Operator::Binary(B::NotEqual)),
-        TokenKind::DotDot => (P::Range, Operator::Range { inclusive: false }),
-        TokenKind::DotDotEqual => (P::Range, Operator::Range { inclusive: true }),
-        TokenKind::Less => (P::Comparison, Operator::Binary(B::Less)),
-        TokenKind::LessEqual => (P::Comparison, Operator::Binary(B::LessEqual)),
-        TokenKind::Greater => (P::Comparison, Operator::Binary(B::Greater)),
-        TokenKind::GreaterEqual => (P::Comparison, Operator::Binary(B::GreaterEqual)),
-        TokenKind::Pipe => (P::BitOr, Operator::Binary(B::BitOr)),
-        TokenKind::Caret => (P::BitXor, Operator::Binary(B::BitXor)),
-        TokenKind::Amp => (P::BitAnd, Operator::Binary(B::BitAnd)),
-        TokenKind::ShiftLeft => (P::Shift, Operator::Binary(B::ShiftLeft)),
-        TokenKind::ShiftRight => (P::Shift, Operator::Binary(B::ShiftRight)),
-        TokenKind::ShiftUnsigned => (P::Shift, Operator::Binary(B::ShiftRightUnsigned)),
-        TokenKind::Plus => (P::Term, Operator::Binary(B::Add)),
-        TokenKind::Minus => (P::Term, Operator::Binary(B::Subtract)),
-        TokenKind::Star => (P::Factor, Operator::Binary(B::Multiply)),
-        TokenKind::Slash => (P::Factor, Operator::Binary(B::Divide)),
-        TokenKind::Percent => (P::Factor, Operator::Binary(B::Remainder)),
-        _ => return None,
-    };
-    Some(entry)
+    use Chaining::*;
+    use Operator::Binary;
+    use TokenKind as T;
+    &[
+        Level { chaining: Left, operators: &[(T::PipePipe, Binary(B::Or))] },
+        Level { chaining: Left, operators: &[(T::AmpAmp, Binary(B::And))] },
+        Level { chaining: Left, operators: &[(T::StreamWrite, Operator::StreamWrite)] },
+        Level { chaining: Left, operators: &[(T::EqualEqual, Binary(B::Equal)), (T::BangEqual, Binary(B::NotEqual))] },
+        Level {
+            chaining: Single,
+            operators: &[
+                (T::DotDot, Operator::Range { inclusive: false }),
+                (T::DotDotEqual, Operator::Range { inclusive: true }),
+            ],
+        },
+        Level {
+            chaining: Left,
+            operators: &[
+                (T::Less, Binary(B::Less)),
+                (T::LessEqual, Binary(B::LessEqual)),
+                (T::Greater, Binary(B::Greater)),
+                (T::GreaterEqual, Binary(B::GreaterEqual)),
+            ],
+        },
+        Level { chaining: Left, operators: &[(T::Pipe, Binary(B::BitOr))] },
+        Level { chaining: Left, operators: &[(T::Caret, Binary(B::BitXor))] },
+        Level { chaining: Left, operators: &[(T::Amp, Binary(B::BitAnd))] },
+        Level {
+            chaining: Left,
+            operators: &[
+                (T::ShiftLeft, Binary(B::ShiftLeft)),
+                (T::ShiftRight, Binary(B::ShiftRight)),
+                (T::ShiftUnsigned, Binary(B::ShiftRightUnsigned)),
+            ],
+        },
+        Level { chaining: Left, operators: &[(T::Plus, Binary(B::Add)), (T::Minus, Binary(B::Subtract))] },
+        Level {
+            chaining: Left,
+            operators: &[(T::Star, Binary(B::Multiply)), (T::Slash, Binary(B::Divide)), (T::Percent, Binary(B::Remainder))],
+        },
+    ]
+};
+
+/// The level (index into [`LEVELS`]) and operation of a binary operator token.
+fn binary_operator(kind: TokenKind) -> Option<(usize, Operator)> {
+    LEVELS.iter().enumerate().find_map(|(level, entry)| {
+        entry.operators.iter().find(|(token, _)| *token == kind).map(|&(_, operator)| (level, operator))
+    })
 }

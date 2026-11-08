@@ -357,46 +357,85 @@ impl Lexer<'_> {
             self.based_number();
             return;
         }
-        let mut whole = String::new();
-        whole.push(first as char);
-        self.digits_into(&mut whole);
+        self.pos = self.start;
+        let (whole, mut valid) = self.digit_groups();
 
         // A float needs digits after the dot; `1.` and `1.x` leave the dot
         // for member access and ranges (`1..2`).
-        if self.peek() == b'.' && self.peek_next().is_ascii_digit() {
+        let fraction = if self.peek() == b'.' && self.peek_next().is_ascii_digit() {
             self.pos += 1;
-            let mut fraction = String::new();
-            self.digits_into(&mut fraction);
-            self.add_value(
-                TokenKind::Float,
-                TokenValue::Float(FloatLiteral { whole, fraction }),
+            let (fraction, groups) = self.digit_groups();
+            valid &= groups;
+            Some(fraction)
+        } else {
+            None
+        };
+        // `1e5`, `1.5E-3`, `2e+10`: an exponent makes a float (#57). It
+        // needs a digit after `e` or after its sign; `1e_5` and `1.e5` are
+        // not exponents.
+        let exponent = if matches!(self.peek(), b'e' | b'E')
+            && (self.peek_next().is_ascii_digit()
+                || (matches!(self.peek_next(), b'+' | b'-')
+                    && self.bytes.get(self.pos + 2).is_some_and(u8::is_ascii_digit)))
+        {
+            self.pos += 1;
+            let sign = if matches!(self.peek(), b'+' | b'-') {
+                self.pos += 1;
+                self.text[self.pos - 1..self.pos].to_string()
+            } else {
+                String::new()
+            };
+            let (digits, groups) = self.digit_groups();
+            valid &= groups;
+            Some(sign + &digits)
+        } else {
+            None
+        };
+        let span = self.span_from(self.start);
+        let text = self.text[self.start..self.pos].to_string();
+        if !valid {
+            let kind = if fraction.is_some() || exponent.is_some() { "float" } else { "integer" };
+            self.error(
+                format!("Invalid {kind} literal {text}: `_` may only separate two digits."),
+                span,
             );
-            return;
         }
-        self.add_value(
-            TokenKind::Int,
-            TokenValue::Int(IntLiteral {
-                radix: Radix::Decimal,
-                digits: whole,
-            }),
-        );
+        match (fraction, exponent) {
+            (None, None) => self.add_value(
+                TokenKind::Int,
+                TokenValue::Int(IntLiteral {
+                    radix: Radix::Decimal,
+                    digits: whole,
+                }),
+            ),
+            (fraction, exponent) => self.add_value(
+                TokenKind::Float,
+                TokenValue::Float(FloatLiteral {
+                    whole,
+                    fraction: fraction.unwrap_or_else(|| "0".to_string()),
+                    exponent: exponent.unwrap_or_default(),
+                }),
+            ),
+        }
     }
 
-    /// Consumes `[0-9]` digits and `_` separators that sit between two
-    /// digits. A `_` that is not followed by a digit ends the number, so
-    /// `1__0` lexes as `1` followed by the identifier `__0`.
-    fn digits_into(&mut self, out: &mut String) {
-        loop {
+    /// Consumes a run of `[0-9]` digits and `_` separators that starts with a
+    /// digit; returns the digits and whether every `_` sits between two
+    /// digits. `1__0` and `1_` are one malformed literal, not a number
+    /// followed by the identifier `__0` or `_`.
+    fn digit_groups(&mut self) -> (String, bool) {
+        let mut digits = String::new();
+        let mut valid = true;
+        while self.peek().is_ascii_digit() || self.peek() == b'_' {
             let byte = self.peek();
-            if byte.is_ascii_digit() {
-                out.push(byte as char);
-                self.pos += 1;
-            } else if byte == b'_' && self.peek_next().is_ascii_digit() {
-                self.pos += 1;
+            if byte == b'_' {
+                valid &= self.peek_next().is_ascii_digit();
             } else {
-                break;
+                digits.push(byte as char);
             }
+            self.pos += 1;
         }
+        (digits, valid)
     }
 
     fn based_number(&mut self) {
@@ -430,6 +469,8 @@ impl Lexer<'_> {
             .to_u128()
             .is_none_or(|value| value > i64::MAX as u128)
         {
+            // Based literals are bit patterns for 64-bit bitwise operations
+            // (docs/bitwise-guide.md); decimal literals have no bound.
             let text = text.to_string();
             self.error(
                 format!("Integer literal {text} exceeds the signed 64-bit maximum."),

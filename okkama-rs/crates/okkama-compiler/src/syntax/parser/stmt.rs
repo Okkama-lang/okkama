@@ -22,7 +22,27 @@ impl Parser<'_> {
     fn finish_block(&mut self, open: Span) -> PResult<Block> {
         let mut stmts = Vec::new();
         while !self.check(TokenKind::RightBrace) && !self.is_at_end() {
-            stmts.push(self.statement()?);
+            if !self.recovering {
+                stmts.push(self.statement()?);
+                continue;
+            }
+            if self.at_line_start() {
+                // An unindented line is the next declaration: this block
+                // lacks its `}` (recovering parses only).
+                return Err(self.error_here("Expect \"}\" after block."));
+            }
+            let (from, for_source, owner) = (self.pos, self.for_source, self.external_cap_owner.clone());
+            match self.statement() {
+                Ok(statement) => stmts.push(statement),
+                Err(error) => {
+                    self.damaged = true;
+                    (self.for_source, self.external_cap_owner) = (for_source, owner);
+                    if !self.recover(error) {
+                        return Err(self.error_here("Too many syntax errors."));
+                    }
+                    self.synchronize_statement(from);
+                }
+            }
         }
         let close = self.consume(TokenKind::RightBrace, "Expect \"}\" after block.")?;
         Ok(Block {
@@ -86,31 +106,52 @@ impl Parser<'_> {
         Ok(StmtKind::Defer { value })
     }
 
-    /// `throw expr? ;` — the bare form rethrows.
+    /// `throw expr? (if cond)? ;` — the bare form rethrows.
     fn throw_statement(&mut self) -> PResult<StmtKind> {
         self.advance();
-        let value = if self.check(TokenKind::Semicolon) {
-            None
-        } else {
-            Some(self.expression()?)
-        };
+        let (value, condition) = self.exit_value()?;
         self.consume(TokenKind::Semicolon, "Expect \";\" after throw statement.")?;
-        Ok(StmtKind::Throw { value })
+        Ok(StmtKind::Throw { value, condition })
     }
 
-    /// `return expr? ;` — exactly one value.
+    /// `return expr? (if cond)? ;` — exactly one value.
     fn return_statement(&mut self) -> PResult<StmtKind> {
         self.advance();
-        let value = if self.check(TokenKind::Semicolon) {
-            None
-        } else {
-            Some(self.expression()?)
-        };
+        let (value, condition) = self.exit_value()?;
         self.consume(
             TokenKind::Semicolon,
             "Expect \";\" after return; only one value is allowed.",
         )?;
-        Ok(StmtKind::Return { value })
+        Ok(StmtKind::Return { value, condition })
+    }
+
+    /// The optional value and postfix condition of `return` and `throw`, up
+    /// to the `;`. Right after the keyword, `if c;` is the bare form with a
+    /// condition, while `if c { … } else { … }` is an `if` expression value:
+    /// the condition is parsed once to see which follows, then again as part
+    /// of the value.
+    fn exit_value(&mut self) -> PResult<(Option<Expr>, Option<Expr>)> {
+        if self.check(TokenKind::Semicolon) {
+            return Ok((None, None));
+        }
+        if self.check(TokenKind::If) {
+            let (pos, errors, damaged) = (self.pos, self.errors.len(), self.damaged);
+            self.advance();
+            let condition = self.expression()?;
+            if self.check(TokenKind::Semicolon) {
+                return Ok((None, Some(condition)));
+            }
+            self.pos = pos;
+            self.errors.truncate(errors);
+            self.damaged = damaged;
+        }
+        let value = self.expression()?;
+        let condition = if self.eat(TokenKind::If) {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+        Ok((Some(value), condition))
     }
 
     /// `^ name = expr ;`
@@ -189,6 +230,11 @@ impl Parser<'_> {
             None
         };
         if !self.check(TokenKind::RightBrace) {
+            if !self.check(TokenKind::Semicolon)
+                && let Some((name, hint)) = foreign_loop(&expr)
+            {
+                return Err(self.error_at_span(name, hint));
+            }
             self.consume(TokenKind::Semicolon, "Expect \";\" after expression.")?;
         }
         Ok(StmtKind::Expr { expr, condition })
@@ -507,4 +553,24 @@ impl Parser<'_> {
             kind: ExprKind::Loop { body },
         })
     }
+}
+
+/// A loop keyword of other languages at the start of a statement, which
+/// Okkama reads as a name followed by something a statement cannot hold:
+/// `while c { }`, `while (c) { }`, `do { } while c;` (#256).
+fn foreign_loop(expr: &Expr) -> Option<(Span, &'static str)> {
+    let name = match &expr.kind {
+        ExprKind::Name(name) => name,
+        ExprKind::Call { callee, .. } => match &callee.kind {
+            ExprKind::Name(name) => name,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let hint = match name.text.as_str() {
+        "while" | "until" => "Okkama has no `while`: write `loop { last if !(condition); ... }`.",
+        "do" => "Okkama has no `do ... while`: write `loop { ...; last if !(condition); }`.",
+        _ => return None,
+    };
+    Some((name.span, hint))
 }

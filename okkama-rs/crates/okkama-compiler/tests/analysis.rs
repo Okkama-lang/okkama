@@ -469,3 +469,176 @@ fn calls_through_a_cap_name_the_cap() {
         ]
     );
 }
+
+/// A chain of `let`s that deepens a generic type stops at the type depth
+/// limit with one error (#49): lowering would keep a full copy of every
+/// value's type, memory growing with the square of the depth.
+#[test]
+fn types_deeper_than_the_limit_are_refused_once() {
+    let lets: String = (0..100).map(|i| format!("    let b{} = b{i}.deeper();\n", i + 1)).collect();
+    let text = format!(
+        "object Box<T> {{\n    has value is T;\n    Box(:value);\n    deeper() is Box<@T> {{ Box(value: [value]); }}\n}}\nmain() is int {{\n    let b0 = Box(value: 1);\n{lets}    0;\n}}\n"
+    );
+    let found = messages(&text);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("is nested deeper than 64 levels"), "{found:?}");
+}
+
+/// Diagnostics that say what the rule is (#226, #229, #233).
+#[test]
+fn diagnostics_name_the_rule_and_the_fix() {
+    let assign = messages("object Bottle {\n has opened is bool;\n Bottle(:opened);\n close() is void { opened = false; }\n}\nmain() is int { 0; }");
+    assert!(assign.iter().any(|m| m.contains("Field \"opened\" cannot be assigned after construction") && m.contains("^opened")), "{assign:?}");
+    let matched = messages("enum Color = (red, green, blue);\nmain() is int {\n let c = Color.red;\n let name = match c { case Color.red { \"r\"; } case Color.green { \"g\"; } };\n 0;\n}");
+    assert!(matched.iter().any(|m| m.contains("does not cover blue")), "{matched:?}");
+    let ordering = messages("main() is int {\n let sorted = [9, 0, 2, 1].ordering();\n 0;\n}");
+    assert!(ordering.iter().any(|m| m.contains("import \"compare\" take Comparing")), "{ordering:?}");
+}
+
+/// Exponent literals are floats (#57); one that cannot be a finite float, or
+/// that is not zero but would round to 0.0, is an error.
+#[test]
+fn exponent_literals_are_floats_in_range() {
+    assert!(messages("main() is int { let a is float = 1e5; let b is float = 1.5E-3; let c is float = -2e+10; let d is float = 4.9e-324; let e is float = 0e9; let f is float = 0.0e-999; 0; }").is_empty());
+    assert_eq!(
+        messages("main() is int { let a is int = 1e5; let b = 1e400; let c = 1e-400; let d = -1e-400; let e = 0.000_1e-330; 0; }"),
+        [
+            "Cannot initialize variable \"a\" of type int with float",
+            "Float value must contain a finite number",
+            "Float literal is too small: it would round to 0.0",
+            "Float literal is too small: it would round to 0.0",
+            "Float literal is too small: it would round to 0.0",
+        ]
+    );
+    assert_eq!(messages("main() is int { let a = 1e99999999999999999999999; 0; }"), ["Float value must contain a finite number"]);
+}
+
+/// Value objects are map keys (#212): every field a scalar (also `byte` and
+/// `rat`), an enum or such an object; a resource, a collection field or a
+/// generic argument that is not a key is named in the error.
+#[test]
+fn value_objects_are_map_keys() {
+    let declarations = "enum Suit = (hearts, spades); \
+        object Card { has rank is int; has suit is Suit; has weight is rat; has mark is byte; Card(rank is int, suit is Suit, weight is rat, mark is byte) { self.rank = rank; self.suit = suit; self.weight = weight; self.mark = mark; } } \
+        object Hand { has best is Card; Hand(best is Card) { self.best = best; } } \
+        object Box<T> { has value is T; Box(value is T) { self.value = value; } } \
+        object Tagged { has tags is @string; Tagged(tags is @string) { self.tags = tags; } } \
+        object Outer { has inner is Tagged; Outer(inner is Tagged) { self.inner = inner; } } \
+        object File { has path is string; File(path is string) { self.path = path; } destroy { path; } } \
+        object Early { has index is %Tagged:int; Early(index is %Tagged:int) { self.index = index; } }";
+    assert_eq!(
+        messages(&format!("{declarations} main() is int {{ let a is %Card:int = [:]; let b is %Hand:int = [:]; let c is %Box<string>:int = [Box(\"x\"): 1]; let d is %File:int = [:]; let e is %Box<@int>:int = [:]; let f is %Outer:int = [:]; 0; }}")),
+        [
+            "Map key type Tagged cannot be a key: field \"tags\" is @string",
+            "Map key type Tagged cannot be a key: field \"tags\" is @string",
+            "Map key type File cannot be a key: File has a destroy block",
+            "Map key type Box<@int> cannot be a key: field \"value\" is @int",
+            "Map key type Outer cannot be a key: field \"inner\" (Tagged): field \"tags\" is @string",
+        ]
+    );
+    assert_eq!(messages("main() is int { let a is %@int:int = [:]; 0; }"), ["Map key type @int is not a scalar key type"]);
+}
+
+/// A generic parameter used as a map key takes only key types (#242): the
+/// specialization is rejected at compile time, also through a parameter
+/// passed on to another generic object and through a key used only in a body.
+#[test]
+fn generic_map_keys_take_key_types() {
+    let declarations = "object Card { has rank is int; Card(rank is int) { self.rank = rank; } } \
+        object File { has path is string; File(path is string) { self.path = path; } destroy { path; } } \
+        object Index<T> { has entries is %T:int; Index() { let empty is %T:int = [:]; entries = empty; } size() is int { entries.size(); } } \
+        object Wrap<U> { has inner is Index<U>; Wrap() { inner = Index(); } } \
+        object Late<T> { has items is @T; Late(items is @T) { self.items = items; } distinct() is int { let seen is %T:bool = [:]; seen.size(); } } \
+        object Plain<T> { has items is @T; Plain(items is @T) { self.items = items; } } \
+        object Literal<T> { has item is T; Literal(item is T) { self.item = item; } count() is int { [item: 1].size(); } }";
+    assert!(messages(&format!("{declarations} main() is int {{ let a is Index<string> = Index(); let b is Index<Card> = Index(); let c is Wrap<int> = Wrap(); let d = Plain(items: [[1]]); let e = Late(items: [1]); let f = Literal(item: \"x\"); a.size() + b.size(); }}")).is_empty());
+    assert_eq!(
+        messages(&format!("{declarations} main() is int {{ let a is Index<@int> = Index(); let b is Index<File> = Index(); let c is Wrap<@string> = Wrap(); let d = Late(items: [[1]]); let e = Literal(item: [1]); 0; }}")),
+        [
+            "Generic parameter \"T\" for object \"Index\" is a map key: Map key type @int is not a scalar key type",
+            "Generic parameter \"T\" for object \"Index\" is a map key: Map key type File cannot be a key: File has a destroy block",
+            "Generic parameter \"U\" for object \"Wrap\" is a map key: Map key type @string is not a scalar key type",
+            "Generic parameter \"T\" for object \"Late\" is a map key: Map key type @int is not a scalar key type",
+            "Generic parameter \"T\" for object \"Literal\" is a map key: Map key type @int is not a scalar key type",
+        ]
+    );
+}
+
+/// An object with an async destroy, or one holding it in a field, is owned
+/// only where the end of its scope can be awaited (#154): async bodies, and
+/// constructors of objects that have such a destroy themselves.
+#[test]
+fn async_destroys_need_an_async_owner() {
+    let declarations = "object Conn { has n is int; Conn(:n); async destroy { confirm n > 0; } } \
+        object Holder { has conn is Conn; Holder(n is int) { conn = Conn(n: n); } } \
+        object Pool { has conns is @Conn; Pool(:conns); }";
+    assert!(messages(&format!("{declarations} async main() is int {{ let c = Conn(n: 1); let h = Holder(1); let p = Pool(conns: [Conn(n: 2)]); 0; }}")).is_empty());
+    assert_eq!(
+        messages(&format!("{declarations} main() is int {{ let c = Conn(n: 1); let h = Holder(1); let p = Pool(conns: []); 0; }}")),
+        [
+            "Conn has an async destroy; own it in an async action",
+            "Holder has an async destroy; own it in an async action",
+            "Pool has an async destroy; own it in an async action",
+        ]
+    );
+    assert!(messages("object Conn { has n is int; Conn(:n); async destroy { await Conn(n: 1).wait(); } async wait() is void { confirm n > 0; } } async main() is int { 0; }").is_empty());
+    assert!(!messages("object Conn { has n is int; Conn(:n); destroy { await Conn(n: 1).wait(); } async wait() is void { confirm n > 0; } } main() is int { 0; }").is_empty());
+}
+
+/// An anonymous action's declared result fixes its type and supplies generic
+/// arguments (#214): `Keyed(origin:, key: (job is Job) is int { … })` infers
+/// `Keyed<Job, int>` without an annotation at the binding.
+#[test]
+fn anonymous_action_results_supply_generic_arguments() {
+    let declarations = "object Job { has weight is int; Job(weight is int) { self.weight = weight; } weight() is int { weight; } } \
+        object Keyed<T, K> { has origin is @T; has key is (T) is K; Keyed(origin is @T, key is (T) is K) { self.origin = origin; self.key = key; } first() is K { key(origin[0]); } }";
+    assert!(messages(&format!("{declarations} main() is int {{ let keyed = Keyed(origin: [Job(3)], key: (job is Job) is int {{ job.weight(); }}); let k is int = keyed.first(); k; }}")).is_empty());
+    assert_eq!(
+        messages(&format!("{declarations} main() is int {{ let keyed = Keyed(origin: [Job(3)], key: (job is Job) is int {{ job.weight(); }}); let k is string = keyed.first(); 0; }}")),
+        ["Cannot initialize variable \"k\" of type string with int"]
+    );
+}
+
+/// Default values of trailing parameters (#149): a call may leave them out,
+/// positionally or by name; the value is checked in the declaring scope,
+/// without the caller's locals, and reported once at the declaration.
+#[test]
+fn trailing_parameters_take_default_values() {
+    let greeter = "object Greeter { has greeting is string; Greeter(greeting is string = \"hello\") { self.greeting = greeting; } \
+        greet(name is string, mark is string = \"!\", times is int = 1) is string { greeting + name + mark + times.string(); } }";
+    assert!(messages(&format!("{greeter} main() is int {{ let a = Greeter().greet(\"x\"); let b = Greeter(\"hi\").greet(\"y\", \"?\"); let c = Greeter().greet(name: \"z\", times: 2); 0; }}")).is_empty());
+    assert_eq!(
+        messages("object Bad { Bad(); first(a is int = 1, b is int) is int { a + b; } typed(a is int = \"one\") is int { a; } hidden(a is int = secret) is int { a; } } main() is int { let secret = 1; Bad().typed(); Bad().typed(); 0; }"),
+        [
+            "Parameter \"b\" follows a parameter with a default value, so it needs one too",
+            "Default value must be int, got string",
+            "Undefined variable \"secret\"",
+        ]
+    );
+    assert_eq!(messages("role Named { name(prefix is string = \"x\") is string; } main() is int { 0; }"), ["Role actions cannot declare default values"]);
+}
+
+#[test]
+fn break_and_continue_point_to_last_and_next() {
+    let found = messages("main() is int { loop { break; } 0; }");
+    assert!(found.iter().any(|m| m.ends_with("Okkama leaves a loop with `last`")), "{found:?}");
+    let found = messages("main() is int { for [1] -> n { continue; } 0; }");
+    assert!(found.iter().any(|m| m.contains("next iteration with `next`")), "{found:?}");
+}
+
+/// Module constants (#153): the compiler computes them, so what it cannot
+/// compute — a call, a cycle, a failing operation — is an error.
+#[test]
+fn constants_are_computed_by_the_compiler() {
+    assert!(messages("const A = B * 2; const B = 21; main() is int { A; }").is_empty());
+    for (text, expected) in [
+        ("const A = B + 1; const B = A + 1; main() is int { 0; }", "Constant \"A\" depends on itself"),
+        ("const X = \"a\".length(); main() is int { 0; }", "it calls an action or a constructor"),
+        ("const Z = 1 % 0; main() is int { 0; }", "cannot be computed by the compiler: Modulo by zero"),
+        ("const X is int = \"a\"; main() is int { 0; }", "Constant must be int, got string"),
+        ("const X = 1; const X = 2; main() is int { 0; }", "Constant \"X\" is already declared"),
+    ] {
+        let found = messages(text);
+        assert!(found.iter().any(|m| m.contains(expected)), "{text}: {found:?}");
+    }
+}

@@ -638,3 +638,83 @@ fn a_fresh_name_is_not_taken_for_the_checked_name_it_replaced() {
             .is_none()
     );
 }
+
+/// A file with two syntax errors: both reach the editor, coded `syntax`,
+/// with the outline of the declarations that parsed (#47).
+#[test]
+fn syntax_errors_are_all_reported_with_the_outline_of_the_rest() {
+    let text = "module app v1.0.0;\n\nobject Broken {\n    has a is int;\n    Broken(:a);\n    value() is int { a +; }\n}\n\nobject Kept {\n    has b is int;\n    Kept(:b);\n}\n\nmain() is int {\n    let = 1;\n}\n";
+    let inspection = inspect(text);
+    let lines: Vec<u32> = inspection.diagnostics.iter().map(|d| d.range.start.line).collect();
+    assert_eq!(lines, [5, 14], "{:?}", inspection.diagnostics);
+    assert!(inspection.diagnostics.iter().all(|d| d.code.as_deref() == Some("syntax")));
+    assert!(!inspection.parsed);
+    let names: Vec<&str> = inspection.outline.iter().map(|item| item.name.as_str()).collect();
+    assert_eq!(names, ["Kept"]);
+}
+
+/// Positions in every encoding over the hard cases (#48): Cyrillic, emoji
+/// (a UTF-16 surrogate pair), combining marks, tabs, LF and CRLF, the end of
+/// the file. Every character boundary round-trips byte → position → byte.
+#[test]
+fn positions_round_trip_in_every_encoding() {
+    use crate::ide::{Encoding, LineIndex, Position};
+    let text = "привет\tмир\r\n😀 e\u{301}x\n\r\nlast";
+    for encoding in [Encoding::Utf8, Encoding::Utf16, Encoding::Utf32] {
+        let lines = LineIndex::with_encoding(text, encoding);
+        for (offset, ch) in text.char_indices() {
+            if ch == '\r' || ch == '\n' {
+                continue;
+            }
+            let position = lines.position(offset as u32);
+            assert_eq!(lines.offset(position) as usize, offset, "{encoding:?} {offset} {position:?}");
+        }
+        assert_eq!(lines.offset(lines.position(text.len() as u32)) as usize, text.len(), "{encoding:?} EOF");
+    }
+    // The emoji line: `😀` is 4 UTF-8 bytes, 2 UTF-16 units, 1 scalar.
+    let after_emoji = text.find(' ').unwrap() as u32;
+    for (encoding, character) in [(Encoding::Utf8, 4), (Encoding::Utf16, 2), (Encoding::Utf32, 1)] {
+        assert_eq!(LineIndex::with_encoding(text, encoding).position(after_emoji), Position { line: 1, character });
+    }
+    // `e` + U+0301: the mark is its own unit in every encoding.
+    let x = text.find('x').unwrap() as u32;
+    assert_eq!(LineIndex::with_encoding(text, Encoding::Utf16).position(x).character, 5);
+    let lines = LineIndex::with_encoding(text, Encoding::Utf16);
+    // CRLF: the end of a line is before `\r`, and a column past it stays there.
+    let crlf = text.find('\r').unwrap() as u32;
+    assert_eq!(lines.position(crlf), Position { line: 0, character: 10 });
+    assert_eq!(lines.position(crlf + 1), Position { line: 0, character: 10 });
+    assert_eq!(lines.offset(Position { line: 0, character: 99 }), crlf);
+    // An empty CRLF line, and lines past the end.
+    assert_eq!(lines.offset(Position { line: 2, character: 3 }) as usize, text.find("\n\r\n").unwrap() + 1);
+    assert_eq!(lines.offset(Position { line: 9, character: 0 }) as usize, text.len());
+    // A column inside a surrogate pair lands after the character.
+    assert_eq!(lines.offset(Position { line: 1, character: 1 }) as usize, text.find(' ').unwrap());
+}
+
+/// Members after every link of a chain (#225): a field through `self`,
+/// indexing, generic builtin results, functional-block bindings and locals
+/// typed since the last successful check.
+#[test]
+fn chains_complete_through_fields_indexing_generics_bindings_and_new_locals() {
+    let base = MAIN.replace("        let sum = total.plus(amount);\n", "        let sum = total.plus(amount);\n        let all = [sum, total];\n");
+    let complete = |edited: &str, marker: &str| -> Vec<String> {
+        let inspection = inspect(&base);
+        let offset = (edited.find(marker).unwrap_or_else(|| panic!("{marker}")) + marker.len()) as u32;
+        let mut labels: Vec<String> = inspection.complete(&base, edited, offset).into_iter().map(|c| c.label).collect();
+        labels.sort();
+        labels.dedup();
+        labels
+    };
+    let edit = |line: &str| base.replace("        sum;\n", &format!("        {line}\n"));
+    let money = ["cents", "plus"];
+    assert_eq!(complete(&edit("self.total."), "self.total."), money);
+    assert!(complete(&edit("self.total.cents()."), "self.total.cents().").contains(&"abs".to_string()));
+    assert_eq!(complete(&edit("all[0]."), "all[0]."), money);
+    assert_eq!(complete(&edit("all.first()."), "all.first()."), money);
+    assert_eq!(complete(&edit("all.map() -> m { m. };"), "m { m."), money);
+    let fresh = edit("let c = sum.cents();\n        c.");
+    assert!(complete(&fresh, "        c.").contains(&"abs".to_string()), "{:?}", complete(&fresh, "        c."));
+    let typed = edit("let d is Money = sum;\n        d.");
+    assert_eq!(complete(&typed, "        d."), money);
+}

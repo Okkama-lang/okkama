@@ -58,7 +58,7 @@ USAGE:
     okkama repl
     okkama env
     okkama ir <FILE|-> [--format text]
-    okkama build <FILE|-> --target jvm -o <FILE>
+    okkama build <FILE|-> --target jvm [--budgeted] -o <FILE>
     okkama build <FILE|-> --target sparrow -o <FILE.spb>
     okkama exec [BUDGETS] <FILE.spb>
     okkama run [-t] <FILE> [FILE.ok...] [ARGS...]
@@ -103,10 +103,11 @@ IR OPTIONS:
     --format text          Output format (default: text); see `okkama help ir`
 
 BUILD OPTIONS:
-    --target jvm          Select the backend (required; Java 8+ class files)
+    --target jvm          Select the backend (required; the JAR runs on JDK 22+)
     --target sparrow      Select Sparrow bytecode (.spb)
     --backend NAME        Compatibility alias for --target
     -o, --output FILE      Output artifact path (required)
+    --budgeted            JVM: count steps (`java -Dokkama.steps=N`)
 
 RUN OPTIONS:
     --engine ir           Execute IR inside the Rust process (default)
@@ -117,9 +118,13 @@ RUN OPTIONS:
                           tests (-t), program arguments and `spawn` workers.
                           OKKAMA_ENGINE=ir|sparrow|sparrow-origin|jvm sets the default.
     --max-steps N         Stop after N steps: function entries and loop
-                          iterations (sparrow and exec; off by default)
+                          iterations (off by default), counted alike on
+                          every engine; on the jvm only a run with this
+                          option generates the counting code
     --max-memory SIZE     Stop when the run holds more than SIZE bytes
-                          (K/M/G suffixes); also bounds recursion depth
+                          (K/M/G suffixes); also bounds recursion depth. On
+                          the jvm: the Java heap (-Xmx, runtime included)
+                          and every thread stack
     --max-output SIZE     Stop when stdout and stderr exceed SIZE bytes
     --timeout SECONDS     Interrupt the run after SECONDS of wall-clock time
                           Running out exits 1: \"Execution budget exhausted:
@@ -172,10 +177,13 @@ const IR_HELP: &str = "\
 okkama ir — print module and function IR
 
 USAGE:
-    okkama ir <FILE|-> [--format text]
+    okkama ir <FILE|-> [--format text] [--passes LIST | --after PASS]
 
 OPTIONS:
     --format text     Output format (default: text)
+    --passes LIST     Run only these IR passes: none, all, or a comma list of
+                      regions, tail-calls, fold, hoist, jumps, undef (in that order)
+    --after PASS      The IR after PASS: the passes up to it in that order
 
 Input is a complete Okkama program: one or several source files of one module
 (spec §5.1). Imports are loaded (import directories, the importing file's
@@ -194,7 +202,7 @@ const BUILD_HELP: &str = "\
 okkama build — invoke a code generation backend
 
 USAGE:
-    okkama build <FILE|-> --target jvm -o <FILE>
+    okkama build <FILE|-> --target jvm [--budgeted] -o <FILE>
     okkama build <FILE|-> --target sparrow -o <FILE.spb>
 
 OPTIONS:
@@ -202,6 +210,8 @@ OPTIONS:
     --target sparrow      Generate Sparrow bytecode
     --backend NAME        Compatibility alias for --target
     -o, --output FILE      Output artifact path (required)
+    --budgeted            JVM: count steps; the limit comes from
+                          `java -Dokkama.steps=N` (without it, no limit)
 
 Use `-` as input to read Okkama source from standard input.
 The pipeline is source -> AST -> module IR -> selected backend -> output file.
@@ -282,7 +292,9 @@ fn sparrow_exec_command(args: &[String]) -> Outcome {
         return core_tests(bytes);
     }
     let arguments = arguments.iter().map(|a| a.clone().into_bytes()).collect();
-    core_outcome(sparrow_core::run_limited(bytes, arguments, false, core::worker_command(Path::new(path)), limits))
+    let (outcome, trace) =
+        core_described(sparrow_core::run_described(bytes, arguments, false, core::worker_command(Path::new(path)), limits));
+    with_trace(outcome, || sparrow_core::render_trace(&program, &trace))
 }
 
 /// A test-profile program on the core: the report goes to stdout.
@@ -291,6 +303,33 @@ fn core_tests(bytes: Vec<u8>) -> Outcome {
         Ok(passed) => Outcome { stdout: String::new(), stderr: String::new(), code: u8::from(!passed) },
         Err(error) => Outcome::failure(format!("okkama: {}\n", error.0), EXIT_DIAGNOSTICS),
     }
+}
+
+/// `core_outcome` of `run_described`, with the failure's call stack.
+fn core_described(
+    result: Result<Result<i64, (sparrow_core::Error, Option<sparrow_core::Uncaught>)>, sparrow_core::Error>,
+) -> (Outcome, Vec<sparrow_core::Site>) {
+    match result {
+        Ok(Ok(value)) => (core_outcome(Ok(value)), Vec::new()),
+        Ok(Err((error, uncaught))) => (core_outcome(Err(error)), uncaught.map(|u| u.trace).unwrap_or_default()),
+        Err(error) => (core_outcome(Err(error)), Vec::new()),
+    }
+}
+
+/// Stop the process with the interrupt report one second after `flag` is
+/// raised, if the run has not stopped by itself by then: the engines poll the
+/// flag while they run code and in long natives that can look at it, not in
+/// one that cannot (Argon2, a blocking read; #238).
+fn watchdog(flag: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    let _ = std::thread::Builder::new().name("okkama-timeout".into()).spawn(move || {
+        while !flag.load(std::sync::atomic::Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let _ = io::stdout().flush();
+        let _ = writeln!(io::stderr(), "{}", okkama_runtime::budget::Exhausted::Interrupted.message());
+        std::process::exit(1);
+    });
 }
 
 /// main's result on the core: the exit status, or the failure report (exit 1).
@@ -306,9 +345,11 @@ fn core_outcome(result: Result<i64, sparrow_core::Error>) -> Outcome {
 
 /// Диагностика отказа программы (код 1) и его место со стеком вызовов;
 /// `OKKAMA_TRACE=off` — без них (например, для сравнения движков).
-fn with_trace(mut outcome: Outcome, trace: String) -> Outcome {
+/// The trace is rendered only when it is printed: with `OKKAMA_TRACE=off`
+/// a stack of millions of frames costs nothing (#241).
+fn with_trace(mut outcome: Outcome, trace: impl FnOnce() -> String) -> Outcome {
     if outcome.code == 1 && std::env::var("OKKAMA_TRACE").as_deref() != Ok("off") {
-        outcome.stderr.push_str(&trace);
+        outcome.stderr.push_str(&trace());
     }
     outcome
 }
@@ -386,6 +427,7 @@ fn main() -> ExitCode {
     let _allocation_report = allocation_stats::Report;
     #[cfg(not(feature = "allocation-stats"))]
     sparrow_core::budget::set_memory_probe(sparrow_core::budget::mimalloc_committed);
+    okkama_runtime::budget::set_memory_probe(sparrow_core::budget::mimalloc_committed);
     let args: Vec<String> = std::env::args().skip(1).collect();
     // Сервер языка владеет stdin/stdout сам.
     if args.first().map(String::as_str) == Some("lsp") {
@@ -468,6 +510,8 @@ struct CommandLine {
     prune_tests: bool,
     backend: Option<String>,
     output: Option<String>,
+    /// `build --budgeted`: JVM-классы считают шаги (`-Dokkama.steps=N`, #237).
+    budgeted: bool,
     help: bool,
 }
 
@@ -511,6 +555,7 @@ fn parse_command_line(args: &[String], options: CommandOptions) -> Result<Comman
             "-o" | "--output" if options == CommandOptions::Build => {
                 line.output = Some(value_for(flag)?);
             }
+            "--budgeted" if options == CommandOptions::Build => line.budgeted = true,
             "-" => set_input(&mut line, arg, options)?,
             other if other.starts_with('-') => return Err(format!("unknown option `{other}`")),
             _ => set_input(&mut line, arg, options)?,
@@ -701,6 +746,30 @@ fn ast_command(args: &[String]) -> Outcome {
 }
 
 fn ir_command(args: &[String]) -> Outcome {
+    // `--passes LIST` / `--after PASS`: the IR after some passes (H-19).
+    let mut rest = Vec::new();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--passes" | "--after" => {
+                let Some(value) = iter.next() else {
+                    return Outcome::usage(&format!("{arg} needs a value"));
+                };
+                let spec = if arg == "--passes" {
+                    value.clone()
+                } else {
+                    let Some(at) = lowering::PASSES.iter().position(|pass| pass == value) else {
+                        return Outcome::usage(&format!("unknown pass `{value}` (passes: {})", lowering::PASSES.join(", ")));
+                    };
+                    
+                    lowering::PASSES[..=at].join(",")
+                };
+                lowering::select_passes(&spec);
+            }
+            _ => rest.push(arg.clone()),
+        }
+    }
+    let args = &rest[..];
     let line = match parse_command_line(args, CommandOptions::Program) {
         Ok(line) => line,
         Err(message) => return Outcome::usage(&message),
@@ -910,12 +979,11 @@ fn fmt_command(args: &[String]) -> Outcome {
                 unformatted = true;
             }
         } else if write && file != "-" {
-            if formatted != text {
-                if let Err(error) = std::fs::write(file, &formatted) {
+            if formatted != text
+                && let Err(error) = std::fs::write(file, &formatted) {
                     stderr.push_str(&format!("okkama: cannot write `{file}`: {error}\n"));
                     io_failed = true;
                 }
-            }
         } else {
             stdout.push_str(&formatted);
         }
@@ -1074,20 +1142,17 @@ impl FileLoader {
 
 impl ModuleLoader for FileLoader {
     fn load(&mut self, path: &str, importer: &str) -> Result<Option<LoadedModule>, String> {
-        let file = if path.ends_with(".ok") {
-            path.to_string()
-        } else {
-            format!("{path}.ok")
-        };
-        // A module never imports itself: `"json"` from app/json.ok skips
-        // app/json.ok and finds std/json.
-        let itself = std::fs::canonicalize(importer_path(importer)).ok();
-        let dirs: Vec<PathBuf> = self
-            .search_dirs(path, importer)
-            .into_iter()
-            .filter(|dir| itself.is_none() || std::fs::canonicalize(dir.join(&file)).ok() != itself)
-            .collect();
+        let (file, dirs) = self.candidates(path, importer);
         self.load_from(&file, &dirs)
+    }
+
+    fn resolve(&mut self, path: &str, importer: &str) -> Result<Option<String>, String> {
+        let (file, dirs) = self.candidates(path, importer);
+        Ok(locate(&file, &dirs).map(|found| found.display().to_string()))
+    }
+
+    fn resolve_std(&mut self, path: &str, _importer: &str) -> Result<Option<String>, String> {
+        Ok(locate(&format!("{path}.ok"), std::slice::from_ref(&self.stdlib)).map(|found| found.display().to_string()))
     }
 
     /// В blade-проекте `pkg/…` — только прямые зависимости пакета, которому
@@ -1142,7 +1207,31 @@ fn importer_path(importer: &str) -> PathBuf {
     }
 }
 
+/// The first file `file` of the directories `dirs`, canonical.
+fn locate(file: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+    let candidate = dirs.iter().map(|dir| dir.join(file)).find(|candidate| candidate.is_file())?;
+    Some(std::fs::canonicalize(&candidate).unwrap_or(candidate))
+}
+
 impl FileLoader {
+    /// The file name of import `path` and the directories to look in.
+    fn candidates(&self, path: &str, importer: &str) -> (String, Vec<PathBuf>) {
+        let file = if path.ends_with(".ok") {
+            path.to_string()
+        } else {
+            format!("{path}.ok")
+        };
+        // A module never imports itself: `"json"` from app/json.ok skips
+        // app/json.ok and finds std/json.
+        let itself = std::fs::canonicalize(importer_path(importer)).ok();
+        let dirs = self
+            .search_dirs(path, importer)
+            .into_iter()
+            .filter(|dir| itself.is_none() || std::fs::canonicalize(dir.join(&file)).ok() != itself)
+            .collect();
+        (file, dirs)
+    }
+
     fn in_std(&self, file: &Path) -> bool {
         let stdlib = std::fs::canonicalize(&self.stdlib).unwrap_or_else(|_| self.stdlib.clone());
         file.starts_with(stdlib)
@@ -1161,11 +1250,10 @@ impl FileLoader {
             return vec![self.stdlib.clone(), base];
         }
         let package = manifest::package_root(&importer);
-        if let Some(package) = &package {
-            if manifest::is_dependency_path(path) {
+        if let Some(package) = &package
+            && manifest::is_dependency_path(path) {
                 return vec![manifest::project_root(package)];
             }
-        }
         let mut dirs = vec![base];
         dirs.extend(package.filter(|package| !dirs.contains(package)));
         dirs.extend(self.import_dirs.iter().cloned());
@@ -1175,11 +1263,7 @@ impl FileLoader {
 
     /// Первый файл `file` из каталогов `dirs`, разобранный как модуль.
     fn load_from(&mut self, file: &str, dirs: &[PathBuf]) -> Result<Option<LoadedModule>, String> {
-        for candidate in dirs.iter().map(|dir| dir.join(file)) {
-            if !candidate.is_file() {
-                continue;
-            }
-            let canonical = std::fs::canonicalize(&candidate).unwrap_or(candidate);
+        if let Some(canonical) = locate(file, dirs) {
             let name = canonical.display().to_string();
             let text = match self.overlay.get(&canonical) {
                 Some(text) => text.clone(),
@@ -1249,8 +1333,12 @@ fn build_command(args: &[String]) -> Outcome {
         Ok(lowered) => lowered,
         Err(outcome) => return outcome,
     };
+    if line.budgeted && backend != Backend::Jvm {
+        return Outcome::usage("--budgeted applies to --target jvm (Sparrow bytecode always honours budgets)");
+    }
     let options = CodegenOptions {
         artifact_name: artifact_name.to_string(),
+        budgeted: line.budgeted,
     };
     let artifact = match codegen::generate(&module, backend, &options) {
         Ok(artifact) => with_native_libraries(&module, artifact),
@@ -1296,14 +1384,13 @@ fn build_command(args: &[String]) -> Outcome {
             directory.join(&file.name)
         };
         // Runtime classes live in package subdirectories (`okkama/rt/`).
-        if let Some(parent) = path.parent().filter(|_| index > 0) {
-            if let Err(error) = std::fs::create_dir_all(parent) {
+        if let Some(parent) = path.parent().filter(|_| index > 0)
+            && let Err(error) = std::fs::create_dir_all(parent) {
                 return Outcome::failure(
                     format!("okkama: cannot create `{}`: {error}\n", parent.display()),
                     EXIT_IO,
                 );
             }
-        }
         if let Err(error) = std::fs::write(&path, &file.bytes) {
             return Outcome::failure(
                 format!("okkama: cannot write `{}`: {error}\n", path.display()),
@@ -1381,8 +1468,8 @@ fn run_command(args: &[String]) -> Outcome {
         }
         rest = &rest[1..];
     }
-    if budgeted && engine != "sparrow" {
-        return Outcome::usage("execution budgets (--max-*, --timeout) need --engine sparrow");
+    if budgeted && !matches!(engine, "sparrow" | "ir" | "jvm") {
+        return Outcome::usage("execution budgets (--max-*, --timeout) need --engine sparrow, ir or jvm");
     }
     let Some((input, mut program_args)) = rest.split_first() else {
         return Outcome::usage("missing input file");
@@ -1437,11 +1524,19 @@ fn run_command(args: &[String]) -> Outcome {
             };
         }
         let arguments = program_args.to_vec();
-        let (result, trace) = okkama_runtime::execute_traced(&module, arguments);
-        return with_trace(
-            native_outcome(result),
-            okkama_runtime::render_trace(&module, &trace),
-        );
+        let budget = okkama_runtime::budget::Limits {
+            steps: limits.steps,
+            memory: limits.memory,
+            output: limits.output,
+            interrupt: limits.interrupt.clone(),
+        };
+        if limits.interrupt.is_some() {
+            // A run blocked in a native (sleeping, waiting for input) does not
+            // step: it is stopped a second after the flag is raised.
+            watchdog(limits.interrupt.clone().expect("flag"));
+        }
+        let (result, trace) = okkama_runtime::execute_limited(&module, arguments, &budget);
+        return with_trace(native_outcome(result), || okkama_runtime::render_trace(&module, &trace));
     }
     if engine == "sparrow" {
         let program = match codegen::sparrow::generate(&module) {
@@ -1460,7 +1555,12 @@ fn run_command(args: &[String]) -> Outcome {
             Err(message) => return Outcome::failure(format!("okkama: {message}\n"), EXIT_IO),
         };
         let arguments = program_args.iter().map(|a| a.clone().into_bytes()).collect();
-        return core_outcome(sparrow_core::run_limited(bytes, arguments, false, command, limits));
+        if let Some(flag) = &limits.interrupt {
+            watchdog(flag.clone());
+        }
+        // Номера функций и инструкций ядра совпадают с OIR: место — по исходнику.
+        let (outcome, trace) = core_described(sparrow_core::run_described(bytes, arguments, false, command, limits));
+        return with_trace(outcome, || okkama_runtime::render_trace(&module, &trace));
     }
     if engine == "sparrow-origin" {
         let program = match codegen::sparrow::generate(&module) {
@@ -1482,15 +1582,15 @@ fn run_command(args: &[String]) -> Outcome {
         // Номера функций и инструкций Sparrow совпадают с OIR: место — по исходнику.
         let (result, trace) =
             sparrow_vm::execute_traced(&program, program_args.to_vec());
-        return with_trace(
-            sparrow_outcome(result),
+        return with_trace(sparrow_outcome(result), || {
             okkama_runtime::render_trace(&module, &trace.iter().map(|site| okkama_runtime::Site {
                 function: site.function, pc: site.pc,
-            }).collect::<Vec<_>>()),
-        );
+            }).collect::<Vec<_>>())
+        });
     }
     let options = CodegenOptions {
         artifact_name: "Main".to_string(),
+        budgeted: limits.steps.is_some(),
     };
     let artifact = match codegen::generate(&module, Backend::Jvm, &options) {
         Ok(artifact) => with_native_libraries(&module, artifact),
@@ -1505,9 +1605,111 @@ fn run_command(args: &[String]) -> Outcome {
         Ok(classpath) => classpath,
         Err(text) => return Outcome::failure(text, EXIT_IO),
     };
+    // The runtime classes are Java 22 (FFM natives); an older `java` would
+    // only fail with UnsupportedClassVersionError.
+    let major = java_major();
+    if (1..22).contains(&major) {
+        return Outcome::failure(
+            format!("okkama: the JVM engine needs JDK 22 or newer; `java` is Java {major}\n"),
+            EXIT_IO,
+        );
+    }
     let args: Vec<&str> = program_args.iter().map(String::as_str).collect();
-    let mut command = java_command(&classpath, "Main", &args);
+    let mut command = java_command(&classpath, "Main", &args, &jvm_limits(limits.steps, limits.memory));
+    if limits.output.is_some() || limits.interrupt.is_some() {
+        return jvm_budgeted(&mut command, limits.output, limits.interrupt.clone());
+    }
     exec_or_wait(&mut command)
+}
+
+/// Steps and memory on the JVM (#237): the program counts steps itself
+/// (classes generated with `budgeted`, `Rt.step`), and the memory limit is the
+/// Java heap (`-Xmx`, which also counts the runtime's own objects) and the
+/// bound of every thread stack; `okkama.rt.Rt` turns running out of either
+/// into the core's report.
+fn jvm_limits(steps: Option<u64>, memory: Option<u64>) -> Vec<String> {
+    let mut options = Vec::new();
+    if let Some(steps) = steps {
+        options.push(format!("-Dokkama.steps={steps}"));
+    }
+    if let Some(memory) = memory {
+        // The JVM refuses a heap below 2 MiB and an initial heap above the maximum.
+        let heap = memory.max(2 << 20);
+        options.push(format!("-Xmx{heap}"));
+        options.push(format!("-Xms{}", heap.min(8 << 20)));
+        options.push(format!("-Dokkama.memory={heap}"));
+    }
+    options
+}
+
+/// The JVM under an output limit or a timeout (#71): `java` as a child whose
+/// stdout and stderr pass through counters; past the limit, or when the
+/// timer raises `interrupt`, it is killed with the core's report.
+fn jvm_budgeted(
+    command: &mut std::process::Command,
+    output: Option<u64>,
+    interrupt: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> Outcome {
+    use std::io::Read;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::Arc;
+    command.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => return Outcome::failure(format!("okkama: cannot start java: {error}\n"), EXIT_IO),
+    };
+    let left = Arc::new(AtomicU64::new(output.unwrap_or(u64::MAX)));
+    let exceeded = Arc::new(AtomicBool::new(false));
+    let copy = |mut from: Box<dyn Read + Send>, to: fn() -> Box<dyn Write>| {
+        let (left, exceeded) = (left.clone(), exceeded.clone());
+        std::thread::spawn(move || {
+            let mut buffer = [0u8; 8192];
+            while let Ok(count) = from.read(&mut buffer) {
+                if count == 0 {
+                    break;
+                }
+                let allowed = left.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| Some(n.saturating_sub(count as u64))).unwrap_or(0);
+                let shown = count.min(allowed as usize);
+                let mut out = to();
+                let _ = out.write_all(&buffer[..shown]).and_then(|()| out.flush());
+                if shown < count {
+                    exceeded.store(true, Ordering::SeqCst);
+                    break;
+                }
+            }
+        })
+    };
+    let stdout = copy(Box::new(child.stdout.take().expect("piped")), || Box::new(io::stdout()));
+    let stderr = copy(Box::new(child.stderr.take().expect("piped")), || Box::new(io::stderr()));
+    let report = loop {
+        if exceeded.load(Ordering::SeqCst) {
+            break Some(okkama_runtime::budget::Exhausted::Output);
+        }
+        if interrupt.as_ref().is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            break Some(okkama_runtime::budget::Exhausted::Interrupted);
+        }
+        match child.try_wait() {
+            Ok(Some(_)) => break None,
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+            Err(error) => return Outcome::failure(format!("okkama: java: {error}\n"), EXIT_IO),
+        }
+    };
+    if let Some(exhausted) = report {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = stdout.join();
+        let _ = stderr.join();
+        return Outcome::failure(format!("{}\n", exhausted.message()), 1);
+    }
+    let status = child.wait();
+    let _ = stdout.join();
+    let _ = stderr.join();
+    // The last bytes may have run past the limit after the program ended.
+    if exceeded.load(Ordering::SeqCst) {
+        return Outcome::failure(format!("{}\n", okkama_runtime::budget::Exhausted::Output.message()), 1);
+    }
+    let code = status.ok().and_then(|status| status.code()).map_or(1, |code| u8::try_from(code).unwrap_or(1));
+    Outcome { stdout: String::new(), stderr: String::new(), code }
 }
 
 /// Запуск программы: на Unix процесс заменяется `java` (сигналы и код выхода —
@@ -1605,13 +1807,13 @@ fn java_command(
     dir: impl AsRef<std::ffi::OsStr>,
     main: &str,
     args: &[&str],
+    options: &[String],
 ) -> std::process::Command {
     let mut command = std::process::Command::new("java");
-    // JDK 22+: natives на FFM (SQLite) без предупреждений о native access.
-    if java_major() >= 22 {
-        command.arg("--enable-native-access=ALL-UNNAMED");
-    }
+    // Natives на FFM (SQLite, crypto, терминал) без предупреждений о native access.
+    command.arg("--enable-native-access=ALL-UNNAMED");
     command
+        .args(options)
         .arg("-cp")
         .arg(dir)
         .arg(main)
@@ -1631,11 +1833,10 @@ fn java_command(
         .stdin(std::process::Stdio::inherit())
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit());
-    if std::env::var_os("OKKAMA_ICU_LIBDIR").is_none() {
-        if let Some(icu) = pinned_icu() {
+    if std::env::var_os("OKKAMA_ICU_LIBDIR").is_none()
+        && let Some(icu) = pinned_icu() {
             command.env("OKKAMA_ICU_LIBDIR", icu);
         }
-    }
     command
 }
 
@@ -1669,8 +1870,8 @@ fn with_native_libraries(
     if let Some(path) = local.filter(|path| path.is_file()) {
         libraries.push((platform.clone(), path));
     }
-    if let Some(root) = std::env::var_os("OKKAMA_NATIVE_DIR") {
-        if let Ok(entries) = std::fs::read_dir(root) {
+    if let Some(root) = std::env::var_os("OKKAMA_NATIVE_DIR")
+        && let Ok(entries) = std::fs::read_dir(root) {
             for entry in entries.flatten() {
                 let target = entry.file_name().to_string_lossy().into_owned();
                 let os = target.split('-').next().unwrap_or("").to_string();
@@ -1680,7 +1881,6 @@ fn with_native_libraries(
                 }
             }
         }
-    }
     for (target, path) in libraries {
         if let Ok(bytes) = std::fs::read(&path) {
             let os = target.split('-').next().unwrap_or("").to_string();
@@ -1750,8 +1950,8 @@ USAGE:
 
 Prints the version, the executable, the std directory, the host crypto
 library, the pinned ICU used by locale/collation and the `java` that
-`okkama run` starts (JDK 22 or newer enables the FFM natives: crypto, SQLite,
-terminal, accounts, collation). OKKAMA_STDLIB_DIR, OKKAMA_NATIVE_LIB and
+`okkama run --engine jvm` starts (the JVM engine needs JDK 22 or newer).
+OKKAMA_STDLIB_DIR, OKKAMA_NATIVE_LIB and
 OKKAMA_ICU_LIBDIR override the installed locations.
 ";
 
@@ -1782,8 +1982,8 @@ fn env_command(args: &[String]) -> Outcome {
         .or_else(pinned_icu);
     let java = match java_major() {
         0 => "(not found: `okkama run` needs Java)".to_string(),
-        major if major >= 22 => format!("Java {major} (FFM natives enabled)"),
-        major => format!("Java {major} (JDK 22+ needed for crypto, SQLite and other FFM natives)"),
+        major if major >= 22 => format!("Java {major}"),
+        major => format!("Java {major} (too old: the JVM engine needs JDK 22+)"),
     };
     let exe = std::env::current_exe()
         .ok()

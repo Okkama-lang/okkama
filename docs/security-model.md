@@ -12,7 +12,7 @@ Update this document in the same change that closes or opens a boundary issue.
 | Input | Today |
 |---|---|
 | Okkama source | check and compile in your process (`okkama check`, `okkama build`); every compiler phase is bounded, see §1 |
-| Bytecode `.spb` | verified before it runs; run it in a separate process with OS limits on memory (§2, [#73]) |
+| Bytecode `.spb` | verified before it runs, compiled under a memory bound (§2); a separate process with OS limits remains the safest way to run untrusted bytecode |
 | A program | on the Sparrow core under budgets (`--max-steps`, `--max-memory`, `--max-output`, `--timeout`); in a sandbox when it must not reach files, network or processes (§3) |
 | Embedding `sparrow-core` | `run_limited` with `Limits`: budgets and the native groups the program may use (§5) |
 
@@ -58,9 +58,12 @@ types, so the verifier is a memory-safety boundary.
   time ([#23]); exceptional edges keep the values their handlers read, also
   under a stressed collector ([#22]).
 
+- Compiling a function is bounded: the core estimates its cost (registers
+  live at each instruction × the blocks it emits) while generating it and
+  refuses a function above 256 MiB, or above the run's memory budget, before
+  the expensive phases run ([#73]).
+
 **Not guaranteed.**
-- Compiling a function with thousands of simultaneously live values takes
-  memory quadratic in their number, before any budget applies ([#73]).
 - Generic intrinsic payloads are checked by representation, not by exact type
   ([#69]).
 
@@ -70,22 +73,26 @@ separate process with an OS memory limit.
 ## 3. Programs
 
 **Guaranteed.**
-- On the core, `--max-steps`, `--max-memory`, `--max-output` and `--timeout`
-  stop a runaway program with its own report, which `catch` cannot intercept;
-  without them nothing changes and nothing is spent ([#21]).
+- On every engine (the core, IR and the JVM), `--max-steps`, `--max-memory`,
+  `--max-output` and `--timeout` stop a runaway program with its own report,
+  which `catch` cannot intercept; without them nothing changes and nothing is
+  spent ([#21], [#71], [#237]). Steps are counted alike on all three.
 - Value graphs of the IR engine are freed without recursion ([#28]).
 - A cancelled SQLite query never reaches a closed connection ([#18]); X.509
   path search is bounded ([#17]).
+- Private RSA operations (key generation, PSS and PKCS#1 v1.5 signing, OAEP
+  decryption) run in aws-lc, constant-time and blinded, on every Rust engine
+  ([#70]).
 
 **Not guaranteed.**
-- Budgets on the IR and JVM engines ([#71]).
+- On the JVM the memory budget is the Java heap and the thread stacks, not
+  the whole process ([#237]).
 - A single native operation (a long BigInt division, a sort) finishes before a
   budget stops the run; the memory budget measures the whole process ([#72]).
 - From the CLI a program has the host access of the user running it: files,
   network, processes, environment.
-- Private RSA operations on the Rust engines are not constant-time ([#70]).
 
-**Use today.** Budgets on the core; a container or OS sandbox for host
+**Use today.** Budgets on any engine; a container or OS sandbox for host
 access.
 
 ## 4. Packages
@@ -142,3 +149,4 @@ passed on the same commit ([#26]).
 [#71]: https://github.com/shootnix/okkama/issues/71
 [#72]: https://github.com/shootnix/okkama/issues/72
 [#73]: https://github.com/shootnix/okkama/issues/73
+[#237]: https://github.com/shootnix/okkama/issues/237

@@ -40,15 +40,13 @@ impl Context {
         let start = prefix_start(text, offset) as usize;
         let line_start = text[..start].rfind('\n').map_or(0, |at| at + 1);
         let line = text[line_start..start].trim_start();
-        if let Some(rest) = line.strip_prefix("import \"") {
-            if let Some((path, tail)) = rest.split_once('"') {
-                if tail.contains(" take ") || tail.trim_end().ends_with("take") {
+        if let Some(rest) = line.strip_prefix("import \"")
+            && let Some((path, tail)) = rest.split_once('"')
+                && (tail.contains(" take ") || tail.trim_end().ends_with("take")) {
                     return Context::Take {
                         path: path.to_string(),
                     };
                 }
-            }
-        }
         let mut dot = start;
         while dot > 0 && bytes[dot - 1] == b' ' {
             dot -= 1;
@@ -85,6 +83,14 @@ impl Context {
             b'"' => Context::Member {
                 anchor: ((end - 1) as u32, end as u32),
                 literal: true,
+            },
+            // `all[0].`: an element (#225).
+            b']' => match matching_open(bytes, end - 1, b'[', b']') {
+                Some(open) => Context::Member {
+                    anchor: (open as u32, end as u32),
+                    literal: false,
+                },
+                None => Context::Plain,
             },
             byte if is_ident(byte) => {
                 let mut name_start = end;
@@ -177,6 +183,40 @@ fn scope_offset(analyzed: &str, text: &str, offset: u32) -> u32 {
 }
 
 /// Тип результата из подписи `(a is int) is R` (без `^` successor).
+/// A builtin's generic result for a concrete receiver (#225): `T` of `@T`,
+/// `K` and `V` of `%K:V`.
+fn instantiate(receiver: &str, result: String) -> String {
+    let (element, key, value) = if let Some(element) = receiver.strip_prefix('@') {
+        (Some(element), None, None)
+    } else if let Some((key, value)) = receiver.strip_prefix('%').and_then(|map| map.split_once(':')) {
+        (None, Some(key), Some(value))
+    } else {
+        return result;
+    };
+    let mut out = String::new();
+    let mut word = String::new();
+    let flush = |word: &mut String, out: &mut String| {
+        let replaced = match word.as_str() {
+            "T" => element,
+            "K" => key,
+            "V" => value,
+            _ => None,
+        };
+        out.push_str(replaced.unwrap_or(word));
+        word.clear();
+    };
+    for ch in result.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            word.push(ch);
+        } else {
+            flush(&mut word, &mut out);
+            out.push(ch);
+        }
+    }
+    flush(&mut word, &mut out);
+    out
+}
+
 fn result_type(detail: &str) -> Option<String> {
     let (_, result) = detail.rsplit_once(" is ")?;
     let result = result.trim().trim_start_matches('^');
@@ -244,7 +284,8 @@ impl Inspection {
                         .find(|member| {
                             member.label == name && member.kind == CompletionKind::Method
                         })
-                        .and_then(|member| result_type(&member.detail));
+                        .and_then(|member| result_type(&member.detail))
+                        .map(|result| instantiate(&receiver, result));
                 }
                 if name.starts_with(|ch: char| ch.is_ascii_uppercase()) {
                     return Some(name.to_string());
@@ -261,7 +302,13 @@ impl Inspection {
                 }
                 let name = &text[start..end];
                 if start > 0 && bytes[start - 1] == b'.' {
-                    return None;
+                    // `self.total.`: a field of the receiver's type (#225).
+                    let receiver = self.infer(analyzed, text, start - 1, depth + 1)?;
+                    return self
+                        .members_for(&receiver)
+                        .into_iter()
+                        .find(|member| member.kind == CompletionKind::Field && member.label == name)
+                        .map(|member| member.detail);
                 }
                 if name == "self" {
                     return self.scope_object(scope);
@@ -287,6 +334,14 @@ impl Inspection {
                         return Some(ty.clone());
                     }
                 }
+                // Names the last successful check did not see (#225): a
+                // functional-block binding, a `let` typed since.
+                if let Some(found) = self.binding_type(analyzed, text, start, name, depth) {
+                    return Some(found);
+                }
+                if let Some(found) = self.declared_type(analyzed, text, start, name, depth) {
+                    return Some(found);
+                }
                 let object = self.scope_object(scope)?;
                 self.members
                     .get(&object)?
@@ -296,6 +351,79 @@ impl Inspection {
             }
             _ => None,
         }
+    }
+
+    /// The type of `name` bound by the nearest functional block before
+    /// `before` — `xs.map() -> x {`, `m.filter() -> k, v {`,
+    /// `xs.reduce(0) -> sum, x {` — from its receiver's type.
+    fn binding_type(&self, analyzed: &str, text: &str, before: usize, name: &str, depth: usize) -> Option<String> {
+        let head = &text[..before];
+        let mut search = head.len();
+        while let Some(arrow) = head[..search].rfind("->") {
+            search = arrow;
+            let Some(open) = head[arrow..].find('{').map(|at| arrow + at) else { continue };
+            let bindings: Vec<&str> = head[arrow + 2..open].split(',').map(str::trim).collect();
+            let Some(position) = bindings.iter().position(|binding| *binding == name) else { continue };
+            let bytes = head.as_bytes();
+            let mut close = arrow;
+            while close > 0 && bytes[close - 1].is_ascii_whitespace() {
+                close -= 1;
+            }
+            if close == 0 || bytes[close - 1] != b')' {
+                return None;
+            }
+            let paren = matching_open(bytes, close - 1, b'(', b')')?;
+            let mut call = paren;
+            while call > 0 && is_ident(bytes[call - 1]) {
+                call -= 1;
+            }
+            let operation = &head[call..paren];
+            if call == 0 || bytes[call - 1] != b'.' {
+                return None;
+            }
+            let receiver = self.infer(analyzed, text, call - 1, depth + 1)?;
+            let mut types: Vec<String> = if let Some(element) = receiver.strip_prefix('@') {
+                vec![element.to_string()]
+            } else if let Some((key, value)) = receiver.strip_prefix('%').and_then(|map| map.split_once(':')) {
+                vec![key.to_string(), value.to_string()]
+            } else if receiver == "range" {
+                vec!["int".to_string()]
+            } else {
+                return None;
+            };
+            if operation == "reduce" {
+                let initial = self.infer(analyzed, text, close - 1, depth + 1)?;
+                types.insert(0, initial);
+            }
+            return types.get(position).cloned();
+        }
+        None
+    }
+
+    /// The type of a `let name` declared before `before` in the current
+    /// text: its written type, or the type of its value.
+    fn declared_type(&self, analyzed: &str, text: &str, before: usize, name: &str, depth: usize) -> Option<String> {
+        let head = &text[..before];
+        let pattern = format!("let {name}");
+        let mut search = head.len();
+        while let Some(at) = head[..search].rfind(&pattern) {
+            search = at;
+            let rest = &head[at + pattern.len()..];
+            if rest.starts_with(|ch: char| is_ident(ch as u8)) || (at > 0 && is_ident(head.as_bytes()[at - 1])) {
+                continue;
+            }
+            let rest_start = at + pattern.len();
+            let trimmed = rest.trim_start();
+            if let Some(typed) = trimmed.strip_prefix("is ") {
+                let ty = typed.split(" = ").next()?.trim();
+                return (!ty.is_empty()).then(|| ty.to_string());
+            }
+            if trimmed.starts_with('=') {
+                let semicolon = head[rest_start..].find(';')? + rest_start;
+                return self.infer(analyzed, text, semicolon, depth + 1);
+            }
+        }
+        None
     }
 
     /// Тип символа проверки в месте `offset` текущего текста (если оно перенеслось).
@@ -623,7 +751,7 @@ impl CallSite {
         names
             .iter()
             .position(|param| free(param) && param.starts_with(typed))
-            .or_else(|| names.iter().position(|param| free(param)))
+            .or_else(|| names.iter().position(free))
             .unwrap_or(position)
     }
 
@@ -745,7 +873,7 @@ pub fn builtin_members(key: &str) -> Vec<Completion> {
         }
     };
     let compare = |out: &mut Vec<Completion>| {
-        for name in ["less", "less_or_equal", "more", "more_or_equal"] {
+        for name in ["less", "less_or_equal", "greater", "greater_or_equal"] {
             out.push(method(name, &["other is Self"], "bool", ""));
         }
         out.push(method(
@@ -775,6 +903,11 @@ pub fn builtin_members(key: &str) -> Vec<Completion> {
             key,
             "elements sorted by compare.Comparing",
         ));
+        out.push(method("contains", &["value is T"], "bool", "an element equal to value"));
+        out.push(method("index_of", &["value is T"], "Maybe<int>", "the first equal element"));
+        out.push(method("reversed", &[], key, "last element first"));
+        out.push(method("take", &["count is int"], key, "at most count from the start"));
+        out.push(method("drop", &["count is int"], key, "all but the first count"));
         out.push(functional(
             "map",
             "${2:item}",
@@ -793,6 +926,9 @@ pub fn builtin_members(key: &str) -> Vec<Completion> {
             true,
             "fold from initial",
         ));
+        out.push(functional("any", "${2:item}", false, "true at the first item the block accepts"));
+        out.push(functional("all", "${2:item}", false, "false at the first item the block rejects"));
+        out.push(functional("find", "${2:item}", false, "Maybe of the first item the block accepts"));
     } else if key.starts_with('%') || key == "[:]" {
         out.push(method("size", &[], "int", ""));
         out.push(method("has", &["key is K"], "bool", ""));
@@ -806,6 +942,8 @@ pub fn builtin_members(key: &str) -> Vec<Completion> {
             true,
             "",
         ));
+        out.push(functional("any", "${2:key}, ${3:value}", false, ""));
+        out.push(functional("all", "${2:key}, ${3:value}", false, ""));
     } else if key == "string" {
         out.push(method("length", &[], "int", "characters"));
         out.push(method("empty", &[], "bool", ""));
@@ -824,6 +962,17 @@ pub fn builtin_members(key: &str) -> Vec<Completion> {
             "",
         ));
         out.push(method("trim", &[], "string", ""));
+        out.push(method("trim_start", &[], "string", ""));
+        out.push(method("trim_end", &[], "string", ""));
+        out.push(method("contains", &["part is string"], "bool", ""));
+        out.push(method("starts_with", &["part is string"], "bool", ""));
+        out.push(method("ends_with", &["part is string"], "bool", ""));
+        out.push(method("find", &["part is string"], "Maybe<int>", "code point index of the first occurrence"));
+        out.push(method("find_last", &["part is string"], "Maybe<int>", "code point index of the last occurrence"));
+        out.push(method("lower", &[], "string", "Unicode lower case"));
+        out.push(method("upper", &[], "string", "Unicode upper case"));
+        out.push(method("repeat", &["count is int"], "string", ""));
+        out.push(method("characters", &[], "@char", "code points"));
         out.push(method(
             "chomp",
             &[],
@@ -840,7 +989,8 @@ pub fn builtin_members(key: &str) -> Vec<Completion> {
         if key == "int" {
             out.push(method("abs", &[], "int", ""));
             out.push(method("sign", &[], "int", ""));
-            out.push(method("pow", &["exponent is int"], "float", ""));
+            out.push(method("pow", &["exponent is int"], "int", "exact; a negative exponent is an error"));
+            out.push(method("char", &[], "char", "the code point as a char"));
             out.push(method("sqrt", &[], "float", ""));
         }
         for bits in ["bit_count", "leading_zeros", "trailing_zeros"] {
@@ -867,6 +1017,8 @@ pub fn builtin_members(key: &str) -> Vec<Completion> {
         out.push(method("string", &[], "string", "\"true\" or \"false\""));
     } else if key == "char" {
         out.push(method("order", &["other is char"], "Order", ""));
+        out.push(method("code", &[], "int", "the code point"));
+        out.push(method("string", &[], "string", ""));
     } else if key.starts_with("Future<") {
         out.push(method("cancel", &[], key, "cooperative cancellation"));
         out.push(method("done", &[], "bool", ""));
@@ -875,6 +1027,9 @@ pub fn builtin_members(key: &str) -> Vec<Completion> {
         out.push(functional("map", "${2:item}", false, ""));
         out.push(functional("filter", "${2:item}", false, ""));
         out.push(functional("reduce", "${2:sum}, ${3:item}", true, ""));
+        out.push(functional("any", "${2:item}", false, ""));
+        out.push(functional("all", "${2:item}", false, ""));
+        out.push(functional("find", "${2:item}", false, ""));
     }
     out
 }

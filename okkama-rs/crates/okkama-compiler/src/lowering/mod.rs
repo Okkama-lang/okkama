@@ -373,17 +373,23 @@ fn lower_modules(
         return Err((owners[func.0], LoweringError::invalid(module.functions[func.0].span, message)));
     }
     let passes = Passes::from_env();
+    // Регионы, которые ничем не владеют, не открываются и не закрываются.
+    // Раньше хвостовых вызовов: в программе с `destroy` пустой `region.leave`
+    // после вызова иначе оставляет его вызовом (#285).
+    if passes.on("regions") {
+        ir::regions::elide_unused_regions(&mut module);
+    }
     // Хвостовая рекурсия исполняется циклом на всех движках.
     if passes.on("tail-calls") {
         ir::recursion::eliminate_tail_calls(&mut module);
     }
+    // Constant arithmetic is computed once, exactly, at build time.
+    if passes.on("fold") {
+        ir::fold::fold_constants(&mut module);
+    }
     // Константы циклов вычисляются один раз, во входном блоке.
     if passes.on("hoist") {
         ir::hoist::hoist_loop_constants(&mut module);
-    }
-    // Регионы, которые ничем не владеют, не открываются и не закрываются.
-    if passes.on("regions") {
-        ir::regions::elide_unused_regions(&mut module);
     }
     // `undef`, которые никто не читает (от убранных регионов и блоков), — тоже.
     // Пустые блоки-трамплины пропускаются.
@@ -438,16 +444,25 @@ pub fn inspect(
     };
     let parsed = match syntax::parse(source, &options) {
         Ok(program) => program,
-        Err(diagnostics) => {
+        Err(_) => {
+            // Every syntax error at once, and the outline of the declarations
+            // that parsed (#47); nothing damaged goes on to analysis.
+            let recovered = syntax::parse_recovering(source, &options);
             return Inspection {
-                diagnostics: diagnostics
+                outline: recovered
+                    .program
+                    .as_ref()
+                    .map(|program| crate::ide::outline(program, &lines))
+                    .unwrap_or_default(),
+                diagnostics: recovered
+                    .diagnostics
                     .iter()
                     .map(|found| Diagnostic {
                         path: source.name().to_string(),
                         range: lines.range(found.span),
                         severity: Severity::Error,
                         message: found.message.clone(),
-                        code: None,
+                        code: Some(found.kind.as_str().to_string()),
                         unnecessary: false,
                     })
                     .collect(),
@@ -566,7 +581,7 @@ pub fn inspect(
 }
 
 /// The IR passes of a build (H-09): `OKKAMA_IR_PASSES` is `all` (the
-/// default), `none` or a comma list of `tail-calls`, `hoist`, `regions`,
+/// default), `none` or a comma list of `regions`, `tail-calls`, `fold`, `hoist`,
 /// `jumps`, `undef`. Every engine runs the passed OIR, so only a run with the
 /// passes off shows whether a pass changed meaning; the release gate runs the
 /// IR conformance suite both ways. `sabotage-int-add` turns the first
@@ -577,9 +592,21 @@ struct Passes {
     sabotage: bool,
 }
 
+/// The IR passes in pipeline order.
+pub const PASSES: [&str; 6] = ["regions", "tail-calls", "fold", "hoist", "jumps", "undef"];
+
+static SELECTED: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+/// Select the IR passes of later lowerings in this process, as
+/// `OKKAMA_IR_PASSES` does (`okkama ir --passes`, `--after`).
+pub fn select_passes(spec: &str) {
+    *SELECTED.write().expect("pass selection") = Some(spec.to_string());
+}
+
 impl Passes {
     fn from_env() -> Self {
-        let spec = std::env::var("OKKAMA_IR_PASSES").unwrap_or_default();
+        let selected = SELECTED.read().expect("pass selection").clone();
+        let spec = selected.unwrap_or_else(|| std::env::var("OKKAMA_IR_PASSES").unwrap_or_default());
         let mut names: Vec<String> = spec.split(',').map(|name| name.trim().to_string()).filter(|name| !name.is_empty()).collect();
         let sabotage = names.iter().any(|name| name == "sabotage-int-add");
         names.retain(|name| name != "sabotage-int-add");

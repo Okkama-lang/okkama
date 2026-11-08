@@ -35,6 +35,9 @@ pub const PACKED: u64 = 1 << 11;
 pub const VISITED: u64 = 1 << 12;
 /// A string whose bytes are all ASCII: lengths and slices are byte offsets.
 pub const ASCII: u64 = 1 << 13;
+/// A container (array, closure, map, box) with an entry in the resource walk
+/// summaries (#9): the walk looks the entry up only when this bit is set.
+pub const SUMMARY: u64 = 1 << 14;
 const PAGE_WORDS: usize = 64 * 1024 / 8;
 /// Bytes of one page of small cells.
 pub const PAGE_BYTES: usize = PAGE_WORDS * 8;
@@ -129,9 +132,65 @@ pub struct Heap {
     /// and poison reclaimed cells, so a value kept alive by mistake fails at
     /// once instead of after a reuse.
     stress: bool,
+    /// Code point positions of recently indexed non-ASCII strings.
+    positions: Positions,
+    /// Allocations made by the runtime (not inline by machine code), by
+    /// kind, and the time spent collecting — when statistics are on (#55).
+    pub allocations: Option<Box<Allocations>>,
+}
+
+/// Code point positions of a few recently indexed non-ASCII strings (#52):
+/// the number of code points, and the byte offset of the last code point
+/// index reached. Indexing near it walks from there, so `size()` in a loop
+/// and slicing one code point after another are linear, not quadratic.
+/// Strings are immutable and freed only by a collection, which clears it.
+#[derive(Debug, Default)]
+struct Positions {
+    entries: [Position; 4],
+    next: usize,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct Position {
+    string: Word,
+    count: Option<usize>,
+    char: usize,
+    byte: usize,
+}
+
+impl Positions {
+    fn entry(&mut self, string: Word) -> &mut Position {
+        let at = match self.entries.iter().position(|entry| entry.string == string) {
+            Some(at) => at,
+            None => {
+                let at = self.next;
+                self.next = (self.next + 1) % self.entries.len();
+                self.entries[at] = Position { string, ..Position::default() };
+                at
+            }
+        };
+        &mut self.entries[at]
+    }
+}
+
+/// Runtime allocations by kind: count and bytes; collection time.
+#[derive(Debug, Default)]
+pub struct Allocations {
+    /// (kind, object descriptor or 0) → (count, bytes).
+    pub kinds: std::collections::BTreeMap<(&'static str, u32), (u64, u64)>,
+    pub collection_nanos: u64,
 }
 
 impl Heap {
+    #[inline]
+    pub(crate) fn counted(&mut self, kind: &'static str, descriptor: u32, words: usize) {
+        if let Some(allocations) = &mut self.allocations {
+            let entry = allocations.kinds.entry((kind, descriptor)).or_default();
+            entry.0 += 1;
+            entry.1 += words as u64 * 8;
+        }
+    }
+
     pub fn new(layouts: Layouts) -> Self {
         Self {
             layouts,
@@ -148,6 +207,8 @@ impl Heap {
             watched: crate::word::FastSet::default(),
             released: Vec::new(),
             watch: None,
+            positions: Positions::default(),
+            allocations: None,
             stress: false,
         }
     }
@@ -247,6 +308,7 @@ impl Heap {
     // ---- objects ----
 
     pub fn object_new(&mut self, descriptor: u32, fields: &[Word]) -> Word {
+        self.counted("object", descriptor, fields.len().max(1) + 1);
         let object = self.allocate(fields.len().max(1) + 1);
         // SAFETY: freshly allocated storage of fields.len() + 1 words.
         unsafe {
@@ -277,6 +339,18 @@ impl Heap {
         // SAFETY: as in `visit`.
         unsafe { *(object as *mut u64) &= !VISITED }
     }
+    /// Set or clear the [`SUMMARY`] bit of `object`.
+    pub fn summarized(&mut self, object: Word, on: bool) {
+        // SAFETY: as in `visit`.
+        unsafe {
+            let header = &mut *(object as *mut u64);
+            if on {
+                *header |= SUMMARY;
+            } else {
+                *header &= !SUMMARY;
+            }
+        }
+    }
     pub fn header_of(&self, object: Word) -> u64 {
         unsafe { *(object as *const u64) }
     }
@@ -286,6 +360,7 @@ impl Heap {
     pub fn allocate_text(&mut self, text: &str) -> Word {
         let bytes = text.len();
         let words = 1 + bytes.div_ceil(8).max(1);
+        self.counted("string", 0, words);
         let string = self.allocate(words);
         // SAFETY: room for the header and `bytes` bytes.
         unsafe {
@@ -309,6 +384,53 @@ impl Heap {
         self.allocate_text(part)
     }
 
+    /// The number of code points of `string`.
+    pub fn char_count(&mut self, string: Word) -> usize {
+        if self.is_ascii_text(string) {
+            return self.text(string).len();
+        }
+        if let Some(count) = self.positions.entry(string).count {
+            return count;
+        }
+        let count = self.text(string).chars().count();
+        self.positions.entry(string).count = Some(count);
+        count
+    }
+
+    /// The byte offset of code point `index` (at most the count) of
+    /// `string`, walking from the nearest of the start, the end and the last
+    /// position reached.
+    pub fn char_offset(&mut self, string: Word, index: usize) -> usize {
+        if self.is_ascii_text(string) {
+            return index;
+        }
+        let count = self.char_count(string);
+        let text: &str = {
+            let length = payload(self.header_of(string)) as usize;
+            // SAFETY: as in `text`; the string outlives this call.
+            unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts((string + 8) as *const u8, length)) }
+        };
+        let entry = self.positions.entry(string);
+        let (mut char, mut byte) = [(0, 0), (count, text.len()), (entry.char, entry.byte)]
+            .into_iter()
+            .min_by_key(|(char, _)| char.abs_diff(index))
+            .expect("three starts");
+        let bytes = text.as_bytes();
+        while char < index {
+            byte += utf8_width(bytes[byte]);
+            char += 1;
+        }
+        while char > index {
+            byte -= 1;
+            while bytes[byte] & 0xC0 == 0x80 {
+                byte -= 1;
+            }
+            char -= 1;
+        }
+        (entry.char, entry.byte) = (char, byte);
+        byte
+    }
+
     pub fn text(&self, string: Word) -> &str {
         let length = payload(self.header_of(string)) as usize;
         // SAFETY: strings are written once from valid UTF-8 and never mutated.
@@ -323,6 +445,7 @@ impl Heap {
     // ---- arrays ----
 
     pub fn allocate_array(&mut self, repr: Repr, elements: &[Word]) -> Word {
+        self.counted("array", 0, elements.len() + 1);
         let array = self.allocate(elements.len() + 1);
         // SAFETY: room for the header and the elements.
         unsafe {
@@ -348,6 +471,7 @@ impl Heap {
 
     /// A byte array (`@byte`): one byte per element after the header.
     pub fn allocate_bytes(&mut self, bytes: &[u8]) -> Word {
+        self.counted("bytes", 0, 1 + bytes.len().div_ceil(8));
         let array = self.allocate(1 + bytes.len().div_ceil(8));
         // SAFETY: room for the header and the bytes.
         unsafe {
@@ -416,6 +540,7 @@ impl Heap {
         // The digits live outside the heap pages; count them so that garbage
         // big integers trigger collections by their real size.
         self.allocated += (n.bits() / 8) as usize + 32;
+        self.counted("bigint", 0, 2);
         let object = self.allocate(2);
         // SAFETY: two fresh words; the box is dropped by the sweep.
         unsafe {
@@ -435,6 +560,7 @@ impl Heap {
     // ---- Rust payloads ----
 
     pub fn allocate_payload(&mut self, payload: Box<dyn Payload>) -> Word {
+        self.counted("payload", 0, 2);
         let object = self.allocate(2);
         // SAFETY: two fresh words; the double box gives a thin pointer.
         unsafe {
@@ -463,6 +589,7 @@ impl Heap {
     pub fn closure_new(&mut self, function: u32, captures: &[Word]) -> Word {
         let words = self.layouts.closures[function as usize].len();
         debug_assert!(captures.len() <= words);
+        self.counted("closure", 0, words.max(1) + 1);
         let closure = self.allocate(words.max(1) + 1);
         // SAFETY: room for the header and `words` words.
         unsafe {
@@ -482,6 +609,16 @@ impl Heap {
     /// Mark everything reachable from `roots`, then sweep. Roots report each
     /// word with its representation; the heap traces the rest by layout.
     pub fn collect(&mut self, roots: impl FnOnce(&mut dyn FnMut(Word, Repr))) {
+        // A freed string's address may be reused for another one.
+        self.positions = Positions::default();
+        let started = self.allocations.is_some().then(std::time::Instant::now);
+        self.collect_inner(roots);
+        if let (Some(allocations), Some(started)) = (&mut self.allocations, started) {
+            allocations.collection_nanos += started.elapsed().as_nanos() as u64;
+        }
+    }
+
+    fn collect_inner(&mut self, roots: impl FnOnce(&mut dyn FnMut(Word, Repr))) {
         let mut worklist = std::mem::take(&mut self.worklist);
         roots(&mut |word, repr| {
             if let Some(pointer) = repr.pointer(word) {
@@ -619,6 +756,25 @@ impl Drop for Heap {
     fn drop(&mut self) {
         // Release Rust data of every remaining object.
         self.collect(|_| {});
+    }
+}
+
+impl std::fmt::Display for Integer<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Small(n) => write!(f, "{n}"),
+            Self::Big(n) => write!(f, "{n}"),
+        }
+    }
+}
+
+/// Bytes of the UTF-8 sequence that starts with `lead`.
+fn utf8_width(lead: u8) -> usize {
+    match lead {
+        0x00..=0x7F => 1,
+        0xC0..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        _ => 4,
     }
 }
 
@@ -774,13 +930,28 @@ mod tests {
         heap.collect(|_| {});
         assert_eq!(heap.stats().large, 0);
     }
-}
 
-impl std::fmt::Display for Integer<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Small(n) => write!(f, "{n}"),
-            Self::Big(n) => write!(f, "{n}"),
+    /// Code point positions agree with a plain count from the start, in any
+    /// order of access, for several strings at once and across collections
+    /// (#52).
+    #[test]
+    fn code_point_positions_match_a_plain_count() {
+        let mut heap = Heap::new(layouts());
+        let texts = ["ascii only text", "жёлтый 😀 e\u{301} 中文 ok", "😀😀😀", ""];
+        let words: Vec<Word> = texts.iter().map(|text| heap.allocate_text(text)).collect();
+        let mut state: u64 = 7;
+        for round in 0..2000 {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let which = (state >> 33) as usize % texts.len();
+            let (text, word) = (texts[which], words[which]);
+            let count = text.chars().count();
+            assert_eq!(heap.char_count(word), count);
+            let index = (state >> 13) as usize % (count + 1);
+            let plain = text.char_indices().map(|(at, _)| at).chain([text.len()]).nth(index).unwrap();
+            assert_eq!(heap.char_offset(word, index), plain, "{text:?} {index}");
+            if round % 500 == 0 {
+                heap.collect(|visit| words.iter().for_each(|&word| visit(word, Repr::Ref)));
+            }
         }
     }
 }

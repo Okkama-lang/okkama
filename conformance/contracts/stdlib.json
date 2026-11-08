@@ -79,6 +79,21 @@
       }
     },
     {
+      "id": "STD.OPERATORS",
+      "title": "std operators public contract (Adding, Dividing, Multiplying, Negating, Remaindering, Subtracting)",
+      "family": "Standard library: operators",
+      "spec_refs": [
+        "std/operators.ok"
+      ],
+      "status": "mandatory",
+      "aspects": {
+        "normal": "required",
+        "boundary": "required",
+        "invalid": "required",
+        "interaction": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
+      }
+    },
+    {
       "id": "STD.SIZE",
       "title": "std size public contract (Sizing)",
       "family": "Standard library: size",
@@ -5437,7 +5452,7 @@
     },
     {
       "id": "STD.NUMBERS.BIGINT",
-      "title": "std numbers/bigint public contract (BigDifference, BigDivisionByZero, BigGcd, BigInt, BigLcm, BigPower, BigPowerLimitExceeded, BigProduct, BigQuotient, BigRemainder, BigSum, InvalidBigExponent, InvalidBigInt, InvalidBigPowerLimit)",
+      "title": "std numbers/bigint public contract (BigDivisionByZero, BigInt, BigPowerLimitExceeded, InvalidBigExponent, InvalidBigInt, InvalidBigPowerLimit)",
       "family": "Standard library: numbers",
       "spec_refs": [
         "std/numbers/bigint.ok"
@@ -6184,22 +6199,6 @@
       "family": "Standard library: runtime",
       "spec_refs": [
         "std/runtime/idna.ok"
-      ],
-      "status": "informative",
-      "aspects": {
-        "normal": "required",
-        "boundary": "n/a: module owns no public declarations",
-        "invalid": "n/a: module owns no public declarations",
-        "interaction": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
-      },
-      "notes": "Native substrate module; its behaviour is observed through the public modules that compose it."
-    },
-    {
-      "id": "STD.RUNTIME.INI",
-      "title": "std runtime/ini public contract (no public declarations)",
-      "family": "Standard library: runtime",
-      "spec_refs": [
-        "std/runtime/ini.ok"
       ],
       "status": "informative",
       "aspects": {

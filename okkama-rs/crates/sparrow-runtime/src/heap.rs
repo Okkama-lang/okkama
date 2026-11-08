@@ -806,9 +806,8 @@ impl Drop for WalkLease {
         }
         let mut available = Some(scratch);
         let _ = WALK_SCRATCH.try_with(|slot| {
-            if let Ok(mut slot) = slot.try_borrow_mut() {
-                if slot.is_none() { *slot = available.take(); }
-            }
+            if let Ok(mut slot) = slot.try_borrow_mut()
+                && slot.is_none() { *slot = available.take(); }
         });
         // Any unused scratch drops outside the cache borrow, including at TLS exit.
     }
@@ -845,11 +844,10 @@ fn collect(value: &Value, out: &mut Vec<Rc<Object>>, via: Option<u64>) {
                 #[cfg(feature = "region-walk-stats")]
                 { stats[8] += 1; }
                 for index in (0..object.field_count()).rev() {
-                    if let Some(value) = object.field(index) {
-                        if !matches!(value, Value::Undef) {
+                    if let Some(value) = object.field(index)
+                        && !matches!(value, Value::Undef) {
                             pending.push(value);
                         }
-                    }
                 }
                 out.push(object);
             }
@@ -1179,7 +1177,7 @@ mod tests {
         let mut closing = first.begin_close(&[]);
         assert!(first.next_destroyed(&mut closing).is_none());
         // A cached seen-set must not suppress the same objects in a later walk.
-        let mut preserved = second.begin_close(&[root.clone()]);
+        let mut preserved = second.begin_close(std::slice::from_ref(&root));
         assert!(second.next_destroyed(&mut preserved).is_none());
         let third = Region::new();
         third.adopt(&root);

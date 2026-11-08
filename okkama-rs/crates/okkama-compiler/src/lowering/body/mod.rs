@@ -13,6 +13,7 @@
 //! проверены анализом, и тип параметра слияния — `C`.
 
 mod adapters;
+mod builtins;
 mod calls;
 mod collections;
 mod matching;
@@ -63,16 +64,23 @@ struct Var {
     /// `None` — поле ещё не связано или не staged.
     value: Option<Typed>,
     rebindable: bool,
+    /// Значение может смениться после объявления: поля, staged-поля, признаки
+    /// связывания, rebind-локальные и `^C` (его гасит `succ.take`).
+    mutable: bool,
     kind: VarKind,
     /// Область объявления: rebind принимает значение в её регион.
     scope: usize,
 }
 
+/// Значения изменяемых переменных (`Var::mutable`) по возрастанию индекса:
+/// остальные одинаковы на всех путях, и снимок стоит число изменяемых (#239).
+type Env = Vec<(usize, Option<Typed>)>;
+
 /// Незавершённая ветвь: блок, итог и значения переменных в её конце.
 struct Arm {
     end: BlockId,
     out: Out,
-    env: Vec<Option<Typed>>,
+    env: Env,
 }
 
 struct LoopFrame {
@@ -113,6 +121,8 @@ enum Kind {
 struct BodyLowerer<'c, 'r, 'a> {
     ctx: &'c mut Ctx<'r, 'a>,
     body: &'r thir::Body,
+    /// Scope exits await async destroys: `region.settle` (#154).
+    settles: bool,
     kind: Kind,
     object: Option<ObjectId>,
     /// Подстановка параметров типа специализации.
@@ -120,6 +130,8 @@ struct BodyLowerer<'c, 'r, 'a> {
     self_value: Option<ValueId>,
     b: FnBuilder,
     vars: Vec<Var>,
+    /// Индексы изменяемых переменных по возрастанию: `vars` только растёт.
+    mutables: Vec<usize>,
     /// Переменная каждой локальной THIR.
     local_vars: Vec<Option<usize>>,
     /// Переменные каждой открытой области.
@@ -147,6 +159,9 @@ struct BodyLowerer<'c, 'r, 'a> {
     /// построенный в этой точке, и значения его полей; конец конструктора
     /// возвращает его же.
     early_self: Option<(ValueId, Vec<ValueId>)>,
+    /// Scope of each `reduce` whose accumulator is a builder (#243), innermost
+    /// last: what its block pushes is handed to that scope (#266).
+    builder_homes: Vec<usize>,
 }
 
 /// Lowering одной выделенной функции модуля.
@@ -179,6 +194,7 @@ pub(super) fn lower_task(ctx: &mut Ctx<'_, '_>, func: FuncId) -> Result<ir::Func
         }
         Task::VariantText { object } => adapters::lower_variant_text(ctx, symbol, object),
         Task::Describe { ty } => adapters::lower_describe(ctx, symbol, &ty),
+        Task::Global { constant } => adapters::lower_global(ctx, symbol, constant),
         Task::Closure { index } => lower_closure(ctx, symbol, index),
         Task::Test { index } => lower_test(ctx, symbol, index),
         Task::Runtime {
@@ -208,8 +224,9 @@ pub(super) fn lower_task(ctx: &mut Ctx<'_, '_>, func: FuncId) -> Result<ir::Func
             receiver,
             name,
             arity,
+            params,
             bound,
-        } => lower_member(ctx, symbol, receiver, &name, arity, bound),
+        } => lower_member(ctx, symbol, receiver, &name, arity, params.as_deref(), bound),
         Task::WorkerEntry {
             object,
             ctor,
@@ -256,6 +273,7 @@ fn lowerer_for<'c, 'r, 'a>(
     result: ResultType,
 ) -> BodyLowerer<'c, 'r, 'a> {
     BodyLowerer {
+        settles: ctx.settles && body.is_async,
         body,
         kind,
         object,
@@ -263,6 +281,7 @@ fn lowerer_for<'c, 'r, 'a>(
         self_value: None,
         b: FnBuilder::new(),
         vars: Vec::new(),
+        mutables: Vec::new(),
         local_vars: vec![None; body.locals.len()],
         scopes: vec![Vec::new()],
         field_vars: Vec::new(),
@@ -276,6 +295,7 @@ fn lowerer_for<'c, 'r, 'a>(
         field_flags: Vec::new(),
         flag_values: None,
         early_self: None,
+        builder_homes: Vec::new(),
         ctx,
     }
 }
@@ -400,6 +420,7 @@ fn lower_member(
     receiver: Type,
     name: &str,
     arity: usize,
+    params: Option<&[Type]>,
     bound: bool,
 ) -> Result<ir::Function> {
     let span = Span::empty(0);
@@ -415,11 +436,7 @@ fn lower_member(
             let env = ctx.objects[object.0].env.clone();
             let reg = ctx.reg;
             let info = &reg.objects[ctx.objects[object.0].decl.0];
-            let method = info
-                .methods
-                .iter()
-                .position(|method| method.name == name && method.params.len() == arity)
-                .ok_or_else(missing)?;
+            let method = ctx.member_method(*object, name, arity, params, span)?.ok_or_else(missing)?;
             let target = &info.methods[method];
             let mut types = vec![receiver.clone()];
             for (_, ty) in &target.params {
@@ -796,6 +813,10 @@ fn lower_method(
         lowerer.params.push(value);
     }
     lowerer.open_root(span);
+    // Вызов через роль или связанное действие проверяется здесь; прямой —
+    // ещё до аргументов, в месте вызова (#271).
+    let name = info.name.clone();
+    lowerer.check_constructed(receiver, object, &name, span);
     let mut attrs = vec![if successor {
         ir::Attr::Successor(object)
     } else {
@@ -809,13 +830,14 @@ fn lower_method(
     }
     if successor {
         for field in 0..lowerer.ctx.objects[object.0].fields.len() {
-            lowerer.vars.push(Var {
+            let var = lowerer.push_var(Var {
                 value: None,
                 rebindable: false,
+                mutable: true,
                 kind: VarKind::Staged(field),
                 scope: 0,
             });
-            lowerer.field_vars.push(lowerer.vars.len() - 1);
+            lowerer.field_vars.push(var);
         }
         let block = &lowerer.body.block;
         let out = lowerer.block(block, false)?;
@@ -928,29 +950,31 @@ fn lower_ctor(
         ResultType::Value(Type::Object(object)),
     );
     for _ in &fields {
-        lowerer.vars.push(Var {
+        let var = lowerer.push_var(Var {
             value: None,
             rebindable: false,
+            mutable: true,
             kind: VarKind::Field,
             scope: 0,
         });
-        lowerer.field_vars.push(lowerer.vars.len() - 1);
+        lowerer.field_vars.push(var);
     }
     // Признаки связывания полей: `false` на входе, `true` после связывания.
     let yes = lowerer.constant(Constant::Bool(true), span).value;
     let no = lowerer.constant(Constant::Bool(false), span).value;
     lowerer.flag_values = Some((yes, no));
     for _ in &fields {
-        lowerer.vars.push(Var {
+        let var = lowerer.push_var(Var {
             value: Some(Typed {
                 value: no,
                 ty: Type::Bool,
             }),
             rebindable: false,
+            mutable: true,
             kind: VarKind::Local,
             scope: 0,
         });
-        lowerer.field_flags.push(lowerer.vars.len() - 1);
+        lowerer.field_flags.push(var);
     }
     // Параметры — значения вызывающего, определены на входе.
     let param_values: Vec<ValueId> = if full {
@@ -988,6 +1012,16 @@ fn lower_ctor(
         };
         lowerer.adopt_into(0, &typed, span);
         lowerer.vars[var].value = Some(typed);
+        lowerer.mark_bound(field);
+    }
+    // `$pending` объекта, построенного в конце конструктора, — `false`; ранний
+    // `self` строит его несвязанным, `obj.init` в конце связывает `false` (#271).
+    if let Some(field) = lowerer.ctx.objects[object.0].pending {
+        let var = lowerer.field_vars[field];
+        lowerer.vars[var].value = Some(Typed {
+            value: no,
+            ty: Type::Bool,
+        });
         lowerer.mark_bound(field);
     }
     if full {
@@ -1080,7 +1114,11 @@ fn lower_destroy(ctx: &mut Ctx<'_, '_>, symbol: String, object: ObjectId) -> Res
     lowerer.params.push(receiver);
     lowerer.open_root(span);
     lowerer.body_block()?;
-    finish(lowerer, symbol, vec![ir::Attr::Destroy(object)], span)
+    let mut attrs = vec![ir::Attr::Destroy(object)];
+    if lowerer.body.is_async {
+        attrs.push(ir::Attr::Async);
+    }
+    finish(lowerer, symbol, attrs, span)
 }
 
 fn lower_default(
@@ -1164,13 +1202,14 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
     /// Новая переменная локальной THIR в текущей области.
     fn bind_local(&mut self, local: LocalId, value: Typed) {
         let rebindable = self.body.locals[local.0].rebindable;
-        self.vars.push(Var {
+        let mutable = rebindable || matches!(value.ty, Type::Successor(_));
+        let var = self.push_var(Var {
             value: Some(value),
             rebindable,
+            mutable,
             kind: VarKind::Local,
             scope: self.scopes.len() - 1,
         });
-        let var = self.vars.len() - 1;
         self.local_vars[local.0] = Some(var);
         self.scopes
             .last_mut()
@@ -1353,9 +1392,29 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             self.b.switch_to(ok);
             self.sync_unwind();
         }
+        let pending = self.ctx.objects[object.0].pending;
         let built = match self.early_self.take() {
-            // `self` уже ушёл значением: результат — тот же объект.
-            Some((built, known)) if known == fields => built,
+            // `self` уже ушёл значением: результат — тот же объект, и его
+            // создание завершено (#271).
+            Some((built, known))
+                if known
+                    .iter()
+                    .zip(&fields)
+                    .enumerate()
+                    .all(|(index, (known, bound))| Some(index) == pending || known == bound) =>
+            {
+                if let (Some(field), Some((_, no))) = (pending, self.flag_values) {
+                    self.b.emit_void(
+                        InstKind::ObjInit {
+                            object: built,
+                            field,
+                            value: no,
+                        },
+                        span,
+                    );
+                }
+                built
+            }
             Some(_) => {
                 return Err(unsupported(
                     span,
@@ -1393,8 +1452,15 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             }));
         }
         // Ещё не связанные поля: `undef`, позже — `obj.init` того же объекта.
+        // `$pending` не связано до конца конструктора: создание не
+        // завершено (#271).
+        let pending = self.ctx.objects[object.0].pending;
         let mut fields = Vec::new();
         for (index, var) in self.field_vars.clone().into_iter().enumerate() {
+            if Some(index) == pending {
+                fields.push(self.b.emit(InstKind::Undef, Type::Bool, span));
+                continue;
+            }
             match &self.vars[var].value {
                 Some(value) => fields.push(value.value),
                 None => {
@@ -1445,13 +1511,22 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
 
     // ----- слияние ветвей -----
 
-    fn snapshot(&self) -> Vec<Option<Typed>> {
-        self.vars.iter().map(|var| var.value.clone()).collect()
+    fn push_var(&mut self, var: Var) -> usize {
+        let index = self.vars.len();
+        if var.mutable {
+            self.mutables.push(index);
+        }
+        self.vars.push(var);
+        index
     }
 
-    fn restore(&mut self, env: &[Option<Typed>]) {
-        for (var, value) in self.vars.iter_mut().zip(env) {
-            var.value = value.clone();
+    fn snapshot(&self) -> Env {
+        self.mutables.iter().map(|&var| (var, self.vars[var].value.clone())).collect()
+    }
+
+    fn restore(&mut self, env: &[(usize, Option<Typed>)]) {
+        for (var, value) in env {
+            self.vars[*var].value = value.clone();
         }
         self.sync_unwind();
     }
@@ -1488,6 +1563,36 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             }
         });
         self.b.unwind = unwind;
+    }
+
+    /// Ловушка вызова `action` у объекта, создание которого не завершено
+    /// (§11.4, #271). Только у объектов, чей конструктор отдаёт `self`.
+    pub(super) fn check_constructed(&mut self, receiver: ValueId, object: ObjectId, action: &str, span: Span) {
+        let Some(field) = self.ctx.objects[object.0].pending else {
+            return;
+        };
+        let pending = self.b.emit(InstKind::ObjPending { object: receiver, field }, Type::Bool, span);
+        let stop = self.b.new_block();
+        let go = self.b.new_block();
+        self.b.terminate(
+            TermKind::Cond {
+                condition: pending,
+                then_target: Target::new(stop),
+                else_target: Target::new(go),
+            },
+            span,
+        );
+        self.b.switch_to(stop);
+        let name = self.ctx.objects[object.0].name.clone();
+        self.b.terminate(
+            TermKind::Trap {
+                code: TrapCode::Pending,
+                message: format!("Action \"{action}\" on object \"{name}\" was called before its construction completed"),
+            },
+            span,
+        );
+        self.b.switch_to(go);
+        self.sync_unwind();
     }
 
     /// После присваивания переменной, которую получает цель unwind, следующий
@@ -1597,9 +1702,14 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             });
         }
         let mut merged: Vec<(usize, Option<Typed>)> = Vec::new();
+        // Ячейки снимков ветвей с переменными, объявленными до ветвления:
+        // каждая ветвь сняла их в одном порядке.
         let mut params: Vec<usize> = Vec::new();
-        for var in 0..base {
-            let values: Vec<Option<Typed>> = arms.iter().map(|arm| arm.env[var].clone()).collect();
+        let slots = arms[0].env.iter().take_while(|(var, _)| *var < base).count();
+        for slot in 0..slots {
+            let var = arms[0].env[slot].0;
+            debug_assert!(arms.iter().all(|arm| arm.env[slot].0 == var), "arms snapshot the same variables");
+            let values: Vec<Option<Typed>> = arms.iter().map(|arm| arm.env[slot].1.clone()).collect();
             if values.iter().all(|value| *value == values[0]) {
                 merged.push((var, values[0].clone()));
                 continue;
@@ -1611,13 +1721,13 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                     VarKind::Field => {
                         let ty = arms
                             .iter()
-                            .find_map(|arm| arm.env[var].as_ref().map(|value| value.ty.clone()))
+                            .find_map(|arm| arm.env[slot].1.as_ref().map(|value| value.ty.clone()))
                             .expect("some arm binds the field");
                         for arm in arms.iter_mut() {
-                            if arm.env[var].is_none() {
+                            if arm.env[slot].1.is_none() {
                                 self.b.switch_to(arm.end);
                                 let value = self.b.emit(InstKind::Undef, ty.clone(), span);
-                                arm.env[var] = Some(Typed {
+                                arm.env[slot].1 = Some(Typed {
                                     value,
                                     ty: ty.clone(),
                                 });
@@ -1628,10 +1738,10 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                     VarKind::Staged(field) => {
                         // Ветвь без `^field` передаёт исходное значение поля.
                         for arm in arms.iter_mut() {
-                            if arm.env[var].is_none() {
+                            if arm.env[slot].1.is_none() {
                                 self.b.switch_to(arm.end);
                                 let original = self.read_field(field, span);
-                                arm.env[var] = Some(original);
+                                arm.env[slot].1 = Some(original);
                             }
                         }
                         self.b.close();
@@ -1641,21 +1751,21 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             }
             let types: Vec<Type> = arms
                 .iter()
-                .map(|arm| arm.env[var].as_ref().expect("filled above").ty.clone())
+                .map(|arm| arm.env[slot].1.as_ref().expect("filled above").ty.clone())
                 .collect();
             let ty = Self::join_type(&types);
             for arm in arms.iter_mut() {
-                let value = arm.env[var].clone().expect("filled above");
+                let value = arm.env[slot].1.clone().expect("filled above");
                 if value.ty != ty {
                     self.b.switch_to(arm.end);
                     let normalized = self.normalize(&value, &ty, span);
-                    arm.env[var] = Some(normalized);
+                    arm.env[slot].1 = Some(normalized);
                     arm.end = self.b.current().expect("normalizing keeps the arm open");
                 }
             }
             self.b.close();
             let param = self.b.add_param(join, ty.clone());
-            params.push(var);
+            params.push(slot);
             merged.push((var, Some(Typed { value: param, ty })));
         }
         for arm in &arms {
@@ -1663,8 +1773,8 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             if let (Some(_), Out::Value(value)) = (&result, &arm.out) {
                 args.push(value.value);
             }
-            for var in &params {
-                args.push(arm.env[*var].as_ref().expect("checked").value);
+            for slot in &params {
+                args.push(arm.env[*slot].1.as_ref().expect("checked").value);
             }
             self.b
                 .terminate_block(arm.end, TermKind::Br(Target { block: join, args }), span);
@@ -1720,11 +1830,10 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         let out = result?;
         closed?;
         // Значение блока освобождено его регионом: его учитывает внешняя область.
-        if let Out::Value(value) = &out {
-            if keep {
+        if let Out::Value(value) = &out
+            && keep {
                 self.track(value, block.span);
             }
-        }
         Ok(out)
     }
 
@@ -1982,6 +2091,11 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                 };
                 Ok(Out::Value(self.constant(constant, span)))
             }
+            ExprKind::Global(constant) => {
+                let index = self.ctx.global(*constant, span)?;
+                let ty = self.expr_type(expr)?;
+                Ok(Out::Value(self.emit(InstKind::Global(index), ty, span)))
+            }
             ExprKind::Local(local) => {
                 let var = self.local_var(*local, span)?;
                 Ok(Out::Value(
@@ -2104,11 +2218,9 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                     None,
                     ExprKind::Constant(thir::Constant::Int(text)),
                 ) = (target, position, &value.kind)
-                {
-                    if let Ok(byte) = text.parse::<u8>() {
+                    && let Ok(byte) = text.parse::<u8>() {
                         return Ok(Out::Value(self.constant(Constant::Byte(byte), span)));
                     }
-                }
                 let Some(typed) = self.value(value)? else {
                     return Ok(Out::Diverged);
                 };
@@ -2331,8 +2443,9 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         span: Span,
     ) -> Result<Out> {
         let mut values = Vec::new();
+        // `self` only when the body reads the receiver (#53).
         let self_capture = match (self.self_value, self.object) {
-            (Some(receiver), Some(_)) if self.kind != Kind::Ctor => {
+            (Some(receiver), Some(_)) if self.kind != Kind::Ctor && thir::uses_receiver(body) => {
                 values.push(receiver);
                 true
             }
@@ -2477,11 +2590,10 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                     .iter()
                     .map(|value| self.b.value_type(*value).clone())
                     .collect();
-                if let Type::Future(result) = &ty {
-                    if let ResultType::Value(result) = &**result {
+                if let Type::Future(result) = &ty
+                    && let ResultType::Value(result) = &**result {
                         crossing.push(result.clone());
                     }
-                }
                 if let Some(bad) = crossing.iter().find(|value| !transferable(value)) {
                     return Err(LoweringError::invalid(
                         span,
@@ -2572,7 +2684,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                 "bound action values of overloaded role actions",
             ));
         }
-        let func = self.ctx.member_thunk(target.ty.clone(), &name, arity, true);
+        let func = self.ctx.member_thunk(target.ty.clone(), &name, arity, None, true);
         let ty = self.expr_type(expr)?;
         Ok(Out::Value(self.emit(
             InstKind::FnClosure {
@@ -2753,18 +2865,16 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         assigned_in_block(body, &mut locals, &mut fields);
         let mut carried: Vec<usize> = Vec::new();
         for local in locals {
-            if let Some(var) = self.local_vars[local.0] {
-                if !carried.contains(&var) {
+            if let Some(var) = self.local_vars[local.0]
+                && !carried.contains(&var) {
                     carried.push(var);
                 }
-            }
         }
         for field in fields {
-            if let Some(var) = self.field_vars.get(field).copied() {
-                if !carried.contains(&var) {
+            if let Some(var) = self.field_vars.get(field).copied()
+                && !carried.contains(&var) {
                     carried.push(var);
                 }
-            }
         }
         carried.sort_unstable();
         for var in &carried {
@@ -2907,9 +3017,9 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         }
         // Значение `last` освобождено регионами итерации: его учитывает
         // область, содержащая цикл.
-        if let Some(value) = &payload {
-            if let Some(region) = self.region_at(depth.saturating_sub(1)) {
-                if !self.ctx.is_plain(&value.ty) {
+        if let Some(value) = &payload
+            && let Some(region) = self.region_at(depth.saturating_sub(1))
+                && !self.ctx.is_plain(&value.ty) && !value.ty.is_builder() {
                     self.b.emit_void(
                         InstKind::RegionTrack {
                             region,
@@ -2918,12 +3028,30 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                         span,
                     );
                 }
-            }
-        }
         let arm = self.arm(out).expect("`last` is reached in an open block");
         self.loops[frame].exits.push(arm);
         self.b.close();
         Ok(Out::Diverged)
+    }
+
+    /// Leave the innermost loop with `value`, as `last value` does after its
+    /// value is computed (`any`/`all`/`find`, #150).
+    fn leave_loop(&mut self, value: Typed, span: Span) -> Result<()> {
+        let frame = self.loops.len() - 1;
+        let depth = self.loops[frame].depth;
+        if !self.exit_scopes(depth, Some(&value), span)? {
+            return Ok(());
+        }
+        if let Some(region) = self.region_at(depth.saturating_sub(1))
+            && !self.ctx.is_plain(&value.ty)
+            && !value.ty.is_builder()
+        {
+            self.b.emit_void(InstKind::RegionTrack { region, value: value.value }, span);
+        }
+        let arm = self.arm(Out::Value(value)).expect("the loop is left from an open block");
+        self.loops[frame].exits.push(arm);
+        self.b.close();
+        Ok(())
     }
 
     // ----- блоки с параметрами (try, lookup) -----

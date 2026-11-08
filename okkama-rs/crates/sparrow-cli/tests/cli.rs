@@ -187,9 +187,15 @@ fn uncaught_failures_are_reported_like_okkama() {
     );
     let result = file.run("run");
     assert_eq!(result.status.code(), Some(1));
-    // The core reports the failure without a stack yet (#10).
-    assert_eq!(String::from_utf8_lossy(&result.stderr), "RuntimeError: confirm failed\n");
-    // The previous VM adds its Sparrow stack; `OKKAMA_TRACE=off` — only the failure.
+    // The core and the previous VM add the Sparrow stack (the core since #10);
+    // `OKKAMA_TRACE=off` — only the failure.
+    assert_eq!(
+        String::from_utf8_lossy(&result.stderr),
+        "RuntimeError: confirm failed\n\
+         Stack trace (Sparrow, most recent call first):\n  at main [f0 @0: trap confirm, \"confirm failed\"]\n"
+    );
+    let quiet_core = Command::new(env!("CARGO_BIN_EXE_sparrow")).arg("run").arg(&file.0).env("OKKAMA_TRACE", "off").output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&quiet_core.stderr), "RuntimeError: confirm failed\n");
     let origin = Command::new(env!("CARGO_BIN_EXE_sparrow-origin")).arg("run").arg(&file.0).output().unwrap();
     assert_eq!(
         String::from_utf8_lossy(&origin.stderr),
@@ -300,5 +306,83 @@ fn handlers_read_old_registers_across_collections() {
                 .unwrap();
             assert_eq!(output.status.code(), Some(5), "{name}, stress {stress}: {}", String::from_utf8_lossy(&output.stderr));
         }
+    }
+}
+#[test]
+fn chosen_functions_dump_and_compile_without_optimizations_or_fast_paths() {
+    // −(−21) + −(−21): negation has an inline fast path, addition too.
+    let program = main(
+        4,
+        vec![
+            Instruction::Const { dst: Dst(Register(0)), value: Constant::Int("21".into()) },
+            Instruction::IntNeg { dst: Dst(Register(1)), operand: Register(0) },
+            Instruction::IntNeg { dst: Dst(Register(2)), operand: Register(1) },
+            Instruction::IntAdd { dst: Dst(Register(3)), left: Register(2), right: Register(2) },
+            Instruction::Return { value: Some(Register(3)) },
+        ],
+    );
+    let file = File::new(&okkama_sparrow::encode(&program).unwrap());
+    let run = |variables: &[(&str, &str)], options: &[&str]| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_sparrow"));
+        command.arg("run").args(options).arg(&file.0).env("PATH", "");
+        for (name, value) in variables {
+            command.env(name, value);
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.code(), Some(42), "{variables:?}: {}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stderr).into_owned()
+    };
+    assert!(run(&[], &[]).is_empty());
+    let dump = run(&[("SPARROW_CORE_DUMP", "main")], &[]);
+    assert!(dump.contains("; CLIF of main (f0)") && dump.contains("function "), "{dump}");
+    assert!(dump.contains("; machine code of main at 0x"), "{dump}");
+    assert!(run(&[("SPARROW_CORE_DUMP", "other")], &[]).is_empty());
+    // The same result without Cranelift's passes and without inline fast
+    // paths; the plain body calls the shared slow path for each negation.
+    run(&[("SPARROW_CORE_UNOPTIMIZED", "*")], &[]);
+    let plain = run(&[("SPARROW_CORE_PLAIN", "main"), ("SPARROW_CORE_STATS", "1")], &[]);
+    assert!(plain.contains(" exec int.neg"), "{plain}");
+    let stats = run(&[], &["--stats"]);
+    assert!(stats.contains(" compile main, microseconds") && stats.contains(" machine code main, bytes"), "{stats}");
+}
+#[test]
+fn stats_attribute_allocations_to_sites_and_kinds() {
+    // main: a Point(x: 7) object, then x as the exit status.
+    let program = Program {
+        module: "app".into(),
+        version: "1.0.0".into(),
+        types: vec![Type::Int, Type::Object(okkama_sparrow::ObjectRef(0))],
+        objects: vec![okkama_sparrow::ObjectDecl {
+            name: "Point".into(),
+            fields: vec![("x".into(), TypeRef(0))],
+            does: Vec::new(),
+            destroy: None,
+            builtin: false,
+        }],
+        functions: vec![Function {
+            symbol: "main".into(),
+            is_async: false,
+            native: None,
+            intrinsic: None,
+            registers: vec![TypeRef(0), TypeRef(1), TypeRef(0)],
+            params: Vec::new(),
+            result: Some(TypeRef(0)),
+            code: vec![
+                Instruction::Const { dst: Dst(Register(0)), value: Constant::Int("7".into()) },
+                Instruction::ObjNew { dst: Dst(Register(1)), object: okkama_sparrow::ObjectRef(0), fields: vec![Register(0)] },
+                Instruction::ObjGet { dst: Dst(Register(2)), object: Register(1), field: 0 },
+                Instruction::Return { value: Some(Register(2)) },
+            ],
+            handlers: Vec::new(),
+        }],
+        entry: Some(FuncRef(0)),
+        ..Program::default()
+    };
+    let file = File::new(&okkama_sparrow::encode(&program).unwrap());
+    let output = file.run_with(&["run", "--stats"]);
+    assert_eq!(output.status.code(), Some(7));
+    let stats = String::from_utf8_lossy(&output.stderr);
+    for line in ["1 alloc site main:1 obj.new Point, count", "16 alloc site main:1 obj.new Point, bytes", " run, microseconds", " collection, microseconds"] {
+        assert!(stats.contains(line), "{line:?} in\n{stats}");
     }
 }

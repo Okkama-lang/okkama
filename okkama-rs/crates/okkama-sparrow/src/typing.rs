@@ -5,7 +5,7 @@
 //! параметров. Ядро Sparrow выбирает машинное представление регистра по его
 //! типу, поэтому программа с ложными типами отвергается до исполнения.
 use crate::{
-    CatchKind, Constant, FutOp, Function, Instruction, Program, Register, Target, Type, TypeRef,
+    CatchKind, Constant, FutOp, Function, Instruction, Program, Register, StrFn, Target, Type, TypeRef,
 };
 
 type Rule = Result<(), String>;
@@ -215,6 +215,13 @@ impl<'a> Typing<'a> {
         let rat = Type::Rat;
         let str_ = Type::Str;
         match instruction {
+            I::GlobalGet { dst, global } => match self.program.globals.get(*global as usize) {
+                Some(decl) => {
+                    let ty = self.resolve(decl.ty).clone();
+                    self.define(dst.0, &ty, "global.get")
+                }
+                None => Err(format!("global g{global} does not exist")),
+            },
             I::Const { dst, value } => {
                 let ty = match value {
                     Constant::Int(_) => Type::Int,
@@ -285,8 +292,9 @@ impl<'a> Typing<'a> {
             I::Convert { dst, source } => {
                 let ok = matches!(
                     (self.ty(*source), self.ty(dst.0)),
-                    (Type::Int | Type::Bool | Type::Byte | Type::Float | Type::Rat, Type::Str)
-                        | (Type::Byte | Type::Rat, Type::Int)
+                    (Type::Int | Type::Bool | Type::Byte | Type::Float | Type::Rat | Type::Char, Type::Str)
+                        | (Type::Byte | Type::Rat | Type::Char, Type::Int)
+                        | (Type::Int, Type::Char)
                         | (Type::Int | Type::Byte | Type::Rat, Type::Float)
                         | (Type::Float, Type::Int)
                         | (Type::Int | Type::Byte | Type::Float, Type::Rat)
@@ -432,6 +440,28 @@ impl<'a> Typing<'a> {
                 match self.ty(dst.0) {
                     Type::Array(e) if *self.resolve(*e) == Type::Byte => Ok(()),
                     other => Err(format!("str.utf8 defines @byte, not {}", self.name(other))),
+                }
+            }
+            I::StrFn { op, dst, args } => {
+                let binary = matches!(
+                    op,
+                    StrFn::Find | StrFn::FindLast | StrFn::StartsWith | StrFn::EndsWith | StrFn::Repeat
+                );
+                if args.len() != 1 + usize::from(binary) {
+                    return Err(format!("str.fn {} takes {} operands", op.name(), 1 + usize::from(binary)));
+                }
+                self.expect(args[0], &str_)?;
+                if binary {
+                    self.expect(args[1], if *op == StrFn::Repeat { &int } else { &str_ })?;
+                }
+                match op {
+                    StrFn::Find | StrFn::FindLast => self.define(dst.0, &int, "str.fn"),
+                    StrFn::StartsWith | StrFn::EndsWith => self.define(dst.0, &bool_, "str.fn"),
+                    StrFn::Characters => match self.ty(dst.0) {
+                        Type::Array(e) if *self.resolve(*e) == Type::Char => Ok(()),
+                        other => Err(format!("str.fn characters defines @char, not {}", self.name(other))),
+                    },
+                    _ => self.define(dst.0, &str_, "str.fn"),
                 }
             }
             I::ValCmp { dst, left, right, .. } => {
@@ -582,6 +612,42 @@ impl<'a> Typing<'a> {
                 };
                 self.expect_ref(*value, *e)?;
                 self.define(dst.0, ty, "builder.push")
+            }
+            I::ArrayConcat { dst, parts } | I::ArrayDiff { dst, removed: parts, .. } => {
+                let ty = self.ty(dst.0);
+                let Type::Array(element) = ty else {
+                    return Err(format!("{} defines {}, not an array", instruction.mnemonic(), self.name(ty)));
+                };
+                if parts.is_empty() && matches!(instruction, I::ArrayConcat { .. }) {
+                    return Err("arr.concat needs at least one part".into());
+                }
+                let base = if let I::ArrayDiff { array, .. } = instruction { Some(*array) } else { None };
+                for part in base.iter().chain(parts.iter()) {
+                    match self.ty(*part) {
+                        Type::Array(e) if self.equal(self.resolve(*e), self.resolve(*element)) || *self.resolve(*e) == Type::Never => {}
+                        other => return Err(format!("{} of {} into {}", instruction.mnemonic(), self.name(other), self.name(ty))),
+                    }
+                }
+                Ok(())
+            }
+            I::MapMerge { dst, parts } | I::MapDiff { dst, removed: parts, .. } => {
+                let ty = self.ty(dst.0);
+                let Type::Map(key, value) = ty else {
+                    return Err(format!("{} defines {}, not a map", instruction.mnemonic(), self.name(ty)));
+                };
+                if parts.is_empty() && matches!(instruction, I::MapMerge { .. }) {
+                    return Err("map.merge needs at least one part".into());
+                }
+                let base = if let I::MapDiff { map, .. } = instruction { Some(*map) } else { None };
+                for part in base.iter().chain(parts.iter()) {
+                    match self.ty(*part) {
+                        Type::Map(k, v)
+                            if (self.equal(self.resolve(*k), self.resolve(*key)) && self.equal(self.resolve(*v), self.resolve(*value)))
+                                || *self.resolve(*k) == Type::Never => {}
+                        other => return Err(format!("{} of {} into {}", instruction.mnemonic(), self.name(other), self.name(ty))),
+                    }
+                }
+                Ok(())
             }
             I::BuilderAppend { dst, builder, array } => {
                 let ty = self.ty(*builder);
@@ -785,6 +851,20 @@ impl<'a> Typing<'a> {
                 self.expect(*failure, &Type::Failure)?;
                 self.define(dst.0, &Type::Failure, "region.unwind")
             }
+            I::RegionSettle { region, .. } => {
+                if !self.function.is_async {
+                    return Err("region.settle is allowed only in async functions".into());
+                }
+                self.expect(*region, &Type::Region)
+            }
+            I::RegionSettleUnwind { dst, region, failure } => {
+                if !self.function.is_async {
+                    return Err("region.settle_unwind is allowed only in async functions".into());
+                }
+                self.expect(*region, &Type::Region)?;
+                self.expect(*failure, &Type::Failure)?;
+                self.define(dst.0, &Type::Failure, "region.settle_unwind")
+            }
             I::FailSecondary { dst, primary, cleanup } => {
                 self.expect(*primary, &Type::Failure)?;
                 self.expect(*cleanup, &Type::Failure)?;
@@ -804,11 +884,10 @@ impl<'a> Typing<'a> {
             I::Return { value } => match (self.function.result, value) {
                 (Some(result), Some(value)) => {
                     // Successor-действие возвращает построенный объект или ^ того же объекта.
-                    if let (Type::Successor(o), Type::Object(p)) = (self.resolve(result), self.ty(*value)) {
-                        if o == p {
+                    if let (Type::Successor(o), Type::Object(p)) = (self.resolve(result), self.ty(*value))
+                        && o == p {
                             return Ok(());
                         }
-                    }
                     self.expect_ref(*value, result)
                 }
                 (None, None) => Ok(()),
@@ -948,7 +1027,8 @@ pub(crate) fn tables(program: &Program) -> Result<(), String> {
         }
         if let Some(destroy) = object.destroy {
             let (function, params) = signature(destroy);
-            if params.len() != 1 || !first(function, &params) || function.is_async {
+            // An async destroy (#154) is awaited by `region.settle`.
+            if params.len() != 1 || !first(function, &params) {
                 return Err(format!("@{} is not a destroy of {}", function.symbol, object.name));
             }
         }
@@ -962,6 +1042,15 @@ pub(crate) fn tables(program: &Program) -> Result<(), String> {
             if !owner || function.is_async || function.result.is_none() {
                 return Err(format!("@{} is not field {name} of cap {}", function.symbol, cap.name));
             }
+        }
+    }
+    for (index, global) in program.globals.iter().enumerate() {
+        let (function, params) = signature(global.init);
+        let typing = Typing::new(program, function);
+        let result = function.result.map(|result| typing.resolve(result).clone());
+        let ty = typing.resolve(global.ty).clone();
+        if !params.is_empty() || function.is_async || !result.is_some_and(|result| typing.equal(&result, &ty)) {
+            return Err(format!("@{} is not the init of global g{index}", function.symbol));
         }
     }
     for function in &program.functions {
