@@ -101,8 +101,10 @@ string `"apple"`; `[apple: 5]` would use the value of a variable named
 turn a variable into a string or the other way round.
 
 Keys are scalar values — integers, strings, booleans and the other scalar
-categories, except `byte` and `any` — or value objects: objects whose fields
-are all scalars, enums or such objects, with no `destroy`. Because objects are
+categories, except `byte` and `any` — or value objects. A `rat` key is its
+exact value: `rat(1, 2)` and `2 / 4` are one key (since 0.4.2). Value objects
+are objects whose fields are all scalars, enums or such objects, with no
+`destroy`. Because objects are
 immutable, an object key is its fields: two equal cards are one key, exactly
 as `==` says. The map keeps its keys **in sorted order** — objects field by
 field in declaration order. `keys()` and
