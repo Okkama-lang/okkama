@@ -104,11 +104,13 @@ language.
 
 Updated with each chapter: `build.py --stats`.
 
-- Chapter 10 (failure): first pass, 10.5 pages per language, below its floor
-  of 22. To add: designing an error vocabulary for a library (one enum per
-  module, cases named by what happened, when to wrap and when to pass on, the
-  std's `crypto/error`, `db/error`, `strings/parse`); testing failures
-  (`test.throws`); failures across `await` and spawned tasks (an unobserved
-  failure fails the run); a comparison table with Java, Kotlin, Go, Rust and
-  Haskell; a larger worked example over `fs` with `NativeFailure` mapped to
-  typed errors. Engines disagree on the uncaught report (#270).
+- Chapter 10 (failure): 13.3 pages (EN) of its floor of 22. Written: the
+  two channels, history, error enums, throw, try/catch, causes, confirm,
+  try?/try!, host failures, a module boundary (`10-config`), budgets,
+  failures across tasks (`10-tasks`), the uncaught report, designing an
+  error vocabulary, testing failures, a comparison table, costs. To add:
+  resumption and Common Lisp's conditions and restarts as the road not
+  taken; how the engines unwind (landing blocks in OIR, the core's
+  failure words, JVM exceptions) — or a pointer to Part VI; a case study
+  of the std HTTP client's failures. Engines disagree on the uncaught
+  report (#270).

@@ -103,9 +103,14 @@
   - [10.8 confirm: the contract inside the code](#108-confirm-the-contract-inside-the-code)
   - [10.9 try? and try!](#109-try-and-try)
   - [10.10 Failures from the host](#1010-failures-from-the-host)
-  - [10.11 Budgets are not failures](#1011-budgets-are-not-failures)
-  - [10.12 What reaches the top](#1012-what-reaches-the-top)
-  - [10.13 What this design costs](#1013-what-this-design-costs)
+  - [10.11 A boundary in practice](#1011-a-boundary-in-practice)
+  - [10.12 Budgets are not failures](#1012-budgets-are-not-failures)
+  - [10.13 Failures across tasks](#1013-failures-across-tasks)
+  - [10.14 What reaches the top](#1014-what-reaches-the-top)
+  - [10.15 Designing an error vocabulary](#1015-designing-an-error-vocabulary)
+  - [10.16 Testing failures](#1016-testing-failures)
+  - [10.17 Okkama among other languages](#1017-okkama-among-other-languages)
+  - [10.18 What this design costs](#1018-what-this-design-costs)
 
 # Part I. The Razor
 
@@ -3925,7 +3930,105 @@ a `NativeFailure`. It is a runtime error and ends the run.
 `Cancelled` is the failure a task sees when the work it awaited was
 cancelled. Chapter 20 explains it with structured concurrency.
 
-## 10.11 Budgets are not failures
+## 10.11 A boundary in practice
+
+The pieces meet at module boundaries. Below is a settings loader. Reading the
+file can fail in the file system's terms, and parsing can fail in the
+loader's own terms. The caller should see only the loader's terms.
+
+```okkama
+module bible/config v1.0.0;
+
+// A settings loader at a module boundary: the file system's failures arrive
+// as FileSystemFailure (std turned the host's NativeFailure into it), and
+// the loader answers in its own vocabulary, ConfigError.
+import "io/stdout" take Stdout;
+import "fs/path" take Path;
+import "fs/file" take FileEntry, FileContent, FileSystemFailure;
+import "encoding/utf" take Utf8Decoded;
+
+enum ConfigError is Error = (missing(path is string), unreadable(path is string, code is string), syntax(line is int, text is string));
+
+object Settings {
+    has pairs is %string:string;
+    Settings(:pairs);
+    value(key is string, fallback is string) is string { pairs[key] else fallback; }
+    size() is int { pairs.size(); }
+}
+
+object SettingsText {
+    has text is string;
+    SettingsText(:text);
+    settings() is Settings {
+        let lines = text.split("\n").filter() -> line { line.length() > 0; };
+        let pairs is %string:string = (0..lines.size()).reduce([:]) -> found, i {
+            let parts = lines[i].split("=");
+            confirm parts.size() == 2 else throw ConfigError.syntax(i + 1, lines[i]);
+            found + [parts[0]: parts[1]];
+        };
+        Settings(pairs: pairs);
+    }
+}
+
+object SettingsFile {
+    has path is string;
+    SettingsFile(:path);
+    settings() is Settings {
+        let bytes = try {
+            FileContent(FileEntry(Path(path))).bytes();
+        }
+        catch FileSystemFailure.detailed(code, message) {
+            confirm code != "not_found" else throw ConfigError.missing(path);
+            throw ConfigError.unreadable(path, code);
+        };
+        SettingsText(text: Utf8Decoded(bytes).string()).settings();
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let parsed = SettingsText(text: "port=8080\nhost=example.org\n").settings();
+    out.writeln(parsed.value("host", "localhost") + ":" + parsed.value("port", "80"));
+    let describe = (load is () is Settings) is string {
+        try { "loaded " + load().size().string(); }
+        catch ConfigError.missing(path) { "no file " + path + ", using defaults"; }
+        catch ConfigError.syntax(line, text) { "line " + line.string() + " is not key=value: " + text; }
+        catch e is ConfigError { e.text(); }
+    };
+    out.writeln(describe(() is Settings { SettingsFile(path: "no-such-settings.conf").settings(); }));
+    out.writeln(describe(() is Settings { SettingsText(text: "port=8080\nverbose\n").settings(); }));
+    0;
+}
+```
+
+Output:
+
+```text
+example.org:8080
+no file no-such-settings.conf, using defaults
+line 2 is not key=value: verbose
+```
+
+Three things happen at the boundary.
+
+1. `fs/file` already caught the host's `NativeFailure` and rethrew it as
+   `FileSystemFailure.detailed(code, message)`. The loader never touches a
+   host code directly.
+2. The loader translates once, in one place. A missing file becomes
+   `ConfigError.missing(path)`, the case a caller is likely to handle, by
+   falling back to defaults. Any other file-system failure becomes
+   `ConfigError.unreadable(path, code)`, which keeps the stable code and
+   drops the host's message.
+3. The caller's `describe` names the cases it handles and lets
+   `catch e is ConfigError` print the rest. Nothing outside the loader
+   mentions `FileSystemFailure`. If the loader one day reads settings from a
+   database, its callers do not change.
+
+The `confirm … else throw` inside the `catch` body reads as a sentence:
+the code must not be `not_found`, or the file is missing. A `catch` body is
+ordinary code, and the guarded throw is as natural there as anywhere.
+
+## 10.12 Budgets are not failures
 
 A run can be given budgets: `--max-steps`, `--max-memory`, `--max-output`
 and `--timeout`. Running out of one is neither an expected failure nor a
@@ -3945,7 +4048,64 @@ A native that cannot look, such as an Argon2 hash or a blocking read, ends
 when it ends. With `--timeout`, the command line then stops the run at most a
 second after the deadline.
 
-## 10.12 What reaches the top
+## 10.13 Failures across tasks
+
+`await` passes a task's failure to the awaiting code unchanged: same type,
+same value, same origin. The awaiting code catches it like any other:
+
+```okkama
+module bible/tasks v1.0.0;
+
+// A failure crosses await unchanged: the awaiting task catches it by type.
+import "io/stdout" take Stdout;
+
+enum FetchError is Error = (timeout(host is string), refused(host is string));
+
+object Fetcher {
+    has host is string;
+    Fetcher(:host);
+    async body() is string {
+        if host == "slow.example" { throw FetchError.timeout(host); }
+        "page from " + host;
+    }
+}
+
+async main() is int {
+    let out = Stdout();
+    let fast = spawn Fetcher(host: "fast.example").body();
+    let slow = spawn Fetcher(host: "slow.example").body();
+    out.writeln(await fast);
+    let text = try { await slow; } catch FetchError.timeout(host) { "gave up on " + host; };
+    out.writeln(text);
+    0;
+}
+```
+
+Output:
+
+```text
+page from fast.example
+gave up on slow.example
+```
+
+Two rules make concurrent failure as strict as sequential failure.
+
+- **A failure is never lost.** If a spawned task fails and no one awaits
+  it, the run itself fails: the report is printed and the process exits
+  with status 1, even when `main` returned 0. A forgotten task cannot hide
+  an error. This is a deliberate choice, and the conformance suite pins it
+  (`ASYNC.UNOBSERVED-FAILURE`).
+- **Cancellation is a failure value of its own.** When the work a task
+  awaited is cancelled, the task sees `Cancelled`, which does `Error` and
+  can be caught. Structured await (Chapter 20) guarantees that the task
+  resumes only after the cancelled work has finished its cleanup.
+
+Within one run, a bug in any task ends the run, as it does in sequential
+code. A program that must outlive its own bugs needs a boundary a bug cannot
+cross, which is Erlang's lesson again. In Okkama that boundary is a separate
+process, supervised from outside (Chapter 21).
+
+## 10.14 What reaches the top
 
 An error that no `catch` handles unwinds the whole run like a panic: cleanup
 runs scope by scope, and the process exits with status 1. The report
@@ -3970,7 +4130,79 @@ Stack trace (most recent call first):
 int in 0..255, got N`, so the success channel and the failure channel stay
 apart here too.
 
-## 10.13 What this design costs
+## 10.15 Designing an error vocabulary
+
+A module's error enums are part of its public API, as much as its actions.
+The standard library follows a handful of rules, and they work outside it
+too.
+
+- **One enum per kind of failure the caller tells apart.** `strings/parse`
+  has `InvalidInteger`. `crypto/error` has `InvalidCryptoInput`,
+  `AuthenticationFailed` and `CryptoUnavailable`, because a caller reacts
+  differently to bad input, a forged message and a missing algorithm.
+- **Name the case after what happened, not after who noticed.**
+  `ConfigError.missing(path)`, not `ConfigError.file_system_error`. The
+  caller decides from what happened. Who noticed is in the stack trace.
+- **Put in the payload what the caller needs to act, and nothing else.**
+  A line number for a syntax error, the missing amount for an overdraft.
+  The host's message goes into a diagnostic payload at most. It is not
+  stable across platforms, and code must never branch on it.
+- **Translate at the boundary, once.** A module catches the failures of
+  the modules it uses and rethrows them in its own terms, as the settings
+  loader does. Failures that pass through many layers unchanged tie every
+  caller to the bottom layer.
+- **Wrap when the caller needs the cause, pass on when it does not.**
+  `LedgerError.line(cause)` wraps because the caller may want to know which
+  line failed and how. `throw e;` passes on when the module has nothing to
+  add.
+- **Do not use errors for control flow.** A lookup that may find nothing
+  returns `Maybe` (Chapter 7), not an error. An error says the operation
+  could not do what it promised. A missing optional value is not that.
+
+## 10.16 Testing failures
+
+A failure is part of an action's contract, so it gets tests like the
+successful path. The test runner (`okkama run -t`) provides
+`test.throws(Type) { … }`, which passes when the block throws a value of
+that type and fails otherwise. When the payload matters, a `try` with a
+pattern says exactly which case is expected:
+
+```okkama
+test "an overdraft is refused with the missing amount" {
+    test.throws(LedgerError) { Account(balance: 50).withdraw(80); };
+    let short = try { Account(balance: 50).withdraw(80).left(); }
+                catch LedgerError.overdraft(missing) { missing; };
+    test.is(short, 30);
+}
+```
+
+A panic or a runtime error inside a test fails that test, not the whole
+run: the runner isolates each test, reports `--- FAIL` with the message, and
+goes on to the next one.
+
+Error handlers are rarely exercised in production, and that is where
+Yuan et al. found the catastrophic bugs. A failure path that a test has
+never run is a guess. Chapter 15 returns to tests, fakes and properties.
+
+## 10.17 Okkama among other languages
+
+| Language | Expected failure | Bug | Forced to handle? | Catch everything | Cleanup |
+|---|---|---|---|---|---|
+| Java | checked exception (declared) | `RuntimeException`, `Error` | checked ones, by the compiler | `catch (Throwable t)` | `finally`, try-with-resources |
+| Kotlin | exception (all unchecked); `Result` in the library | exception | no | `catch (e: Throwable)` | `finally`, `use { }` |
+| Go | `error` value | `panic` | no, by convention | `recover()` in a deferred call | `defer` |
+| Rust | `Result<T, E>` | `panic!` | warned if ignored (`#[must_use]`) | `catch_unwind`, discouraged | `Drop` |
+| Haskell | `Either`, `Maybe`; exceptions in `IO` | `error`, exceptions | by the type, for `Either` | `catch` on `SomeException` | `bracket` |
+| Okkama | error enum value, thrown | `panic`, `confirm`, runtime error | no | none (`catch e is Error` sees thrown errors only) | `defer`, `destroy` |
+
+Two columns set Okkama apart. In the bug column it is the only language in
+the table where a bug cannot be caught at all; Rust comes closest. In the
+catch-everything column it is the only one where no construct catches
+everything. Okkama is weaker in the "forced to handle" column: nothing makes
+a caller deal with an error, and the compiler does not know which errors an
+action can throw.
+
+## 10.18 What this design costs
 
 The two channels are a strong opinion, and opinions cost something.
 
@@ -3982,6 +4214,13 @@ The two channels are a strong opinion, and opinions cost something.
   risky work in a separate task or process. That is more structure than a
   `catch (Throwable t)`. Okkama counts it as a feature; a programmer who
   needs a quick script may not.
+- **Signatures do not say what an action throws.** CLU and Java's checked
+  exceptions put the failures in the signature, and Midori did too. Okkama
+  does not: the caller learns from the documentation and the source which
+  error enums an action may throw, and the compiler does not check that a
+  caller handles them. Declaring them would bring back the churn checked
+  exceptions are known for; not declaring them leaves a gap a reader must
+  fill.
 - **Errors cannot carry objects.** An error that would naturally hold the
   request that failed must hold the request's identifying values instead.
 - **Patterns are one level deep.** A nested cause is taken apart with a

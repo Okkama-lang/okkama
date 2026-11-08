@@ -1,0 +1,62 @@
+module bible/config v1.0.0;
+
+// A settings loader at a module boundary: the file system's failures arrive
+// as FileSystemFailure (std turned the host's NativeFailure into it), and
+// the loader answers in its own vocabulary, ConfigError.
+import "io/stdout" take Stdout;
+import "fs/path" take Path;
+import "fs/file" take FileEntry, FileContent, FileSystemFailure;
+import "encoding/utf" take Utf8Decoded;
+
+enum ConfigError is Error = (missing(path is string), unreadable(path is string, code is string), syntax(line is int, text is string));
+
+object Settings {
+    has pairs is %string:string;
+    Settings(:pairs);
+    value(key is string, fallback is string) is string { pairs[key] else fallback; }
+    size() is int { pairs.size(); }
+}
+
+object SettingsText {
+    has text is string;
+    SettingsText(:text);
+    settings() is Settings {
+        let lines = text.split("\n").filter() -> line { line.length() > 0; };
+        let pairs is %string:string = (0..lines.size()).reduce([:]) -> found, i {
+            let parts = lines[i].split("=");
+            confirm parts.size() == 2 else throw ConfigError.syntax(i + 1, lines[i]);
+            found + [parts[0]: parts[1]];
+        };
+        Settings(pairs: pairs);
+    }
+}
+
+object SettingsFile {
+    has path is string;
+    SettingsFile(:path);
+    settings() is Settings {
+        let bytes = try {
+            FileContent(FileEntry(Path(path))).bytes();
+        }
+        catch FileSystemFailure.detailed(code, message) {
+            confirm code != "not_found" else throw ConfigError.missing(path);
+            throw ConfigError.unreadable(path, code);
+        };
+        SettingsText(text: Utf8Decoded(bytes).string()).settings();
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let parsed = SettingsText(text: "port=8080\nhost=example.org\n").settings();
+    out.writeln(parsed.value("host", "localhost") + ":" + parsed.value("port", "80"));
+    let describe = (load is () is Settings) is string {
+        try { "loaded " + load().size().string(); }
+        catch ConfigError.missing(path) { "no file " + path + ", using defaults"; }
+        catch ConfigError.syntax(line, text) { "line " + line.string() + " is not key=value: " + text; }
+        catch e is ConfigError { e.text(); }
+    };
+    out.writeln(describe(() is Settings { SettingsFile(path: "no-such-settings.conf").settings(); }));
+    out.writeln(describe(() is Settings { SettingsText(text: "port=8080\nverbose\n").settings(); }));
+    0;
+}
