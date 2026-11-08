@@ -1,8 +1,9 @@
 # The Okkama Bible — plan
 
 Working plan of the book (not part of the published text). A page is counted
-as 2,500 characters of text, code included; the target is 400–500 pages per
-language. `build.py --stats` prints the current size of every chapter.
+as 2,500 characters of text, code included. The book has no page limit: at
+least 600 pages per language, and more is better — it is a Bible.
+`build.py --stats` prints the current size of every chapter.
 
 ## Principles
 
@@ -35,7 +36,7 @@ language. `build.py --stats` prints the current size of every chapter.
 
 ## Outline and page budget
 
-| # | Chapter | Pages |
+| # | Chapter | Pages (at least) |
 |---|---|---:|
 | | **Part I. The razor** | |
 | 1 | Entities must not be multiplied: Ockham, parsimony and software | 14 |
@@ -84,8 +85,10 @@ language. `build.py --stats` prints the current size of every chapter.
 | E | References | 10 |
 | | **Total** | **≈ 552** |
 
-The budget is a ceiling; chapters are written to their substance, then the
-total is reviewed against 400–500.
+The page counts are a floor, not a ceiling: a chapter is written to its
+substance and grows with it. The planned floors add up to about 552 pages, so
+chapters are expected to exceed them until the whole book passes 600 pages per
+language.
 
 ## Progress
 
