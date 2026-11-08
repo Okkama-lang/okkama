@@ -153,3 +153,11 @@ Updated with each chapter: `build.py --stats`.
   (`Writing`, `WritingText`) and built-in values behind roles; async role
   actions; a larger composition case study from std (HTTP client layers);
   measurements of role calls against direct calls.
+- Chapter 15 (fakes, tests, properties): 5.2 pages (EN) of its floor of 14.
+  Written: test blocks and the report, the `test` binding, fakes versus
+  mocks (Meszaros, Fowler, EO), writing a fake, state in a fake (fields,
+  successors, `fake.storage`), properties with shrinking (QuickCheck), the
+  std toolbox, current gaps (#275, #276, #277), costs. `build.py --check`
+  runs `NAME-tests` examples with `-t`. To add: a worked test suite for a
+  service with a clock and a repository fake; `RecordedCalls`, `Stub` and
+  `ManualClock` examples; async tests in depth; snapshot tests.

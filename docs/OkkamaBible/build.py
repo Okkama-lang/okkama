@@ -15,7 +15,8 @@ contents. Placeholders in a chapter:
 --figures runs figures/src/*.py first; --check runs every example on the IR
 engine and on the Sparrow core (OKKAMA, default the release build) and
 compares stdout plus a final "exit N" line with examples/NAME.expected (for
-NAME-rejected, the compiler's diagnostic on stderr);
+NAME-rejected, the compiler's diagnostic on stderr; NAME-tests runs as a test
+suite with -t);
 --stats prints characters and pages (2,500 characters) per chapter;
 --issues lists every issue the chapters cite with its current title (gh).
 """
@@ -153,7 +154,9 @@ def check():
             # writes outside examples/, bounded CPU and memory.
             cage = [sys.executable, os.path.join(ROOT, "okkama-rs", "tools", "new-runtime", "caged.py"),
                     "--cpu-seconds", "30", "--timeout", "60", "--memory-mb", "1024", "--writable", examples, "--"]
-            p = subprocess.run(cage + [OKKAMA, "run", "--engine", engine, name], cwd=examples,
+            # A `-tests` example is a test suite: its report is the output.
+            tests = ["-t"] if stem.endswith("-tests") else []
+            p = subprocess.run(cage + [OKKAMA, "run", *tests, "--engine", engine, name], cwd=examples,
                                capture_output=True, text=True, timeout=120,
                                env={**os.environ, "OKKAMA_STDLIB_DIR": STDLIB, "OKKAMA_TRACE": "off"})
             # A rejected example is shown with the compiler's diagnostic.
