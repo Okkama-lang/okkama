@@ -182,14 +182,13 @@ syntax error: Nested ?? / !! choices are not allowed; use a local variable or ma
 A nested ternary is legal in C and Java and hard to read in both. Okkama turns
 the usual style advice into a rule, and following it costs one named local.
 
-The examples of this chapter print booleans through `?? !!` —
-`both ?? "true" !! "false"` in the order example — rather than with `string()`, and for a reason:
-`true.string()` is `"1"` and `false.string()` is `"0"`. The rule comes from
-the first implementation, written in Perl, where truth prints as `1` and
-falsehood as an empty string; Okkama kept the `1` and made the other value
-visible. It is exact and stable, and it surprises every reader of output who
-expected a word. A program that shows a boolean to a person chooses the words
-itself, which is what `?? !!` is for.
+Until 0.4.1 `true.string()` was `"1"` and `false.string()` was `"0"`, a rule
+inherited from the first implementation, written in Perl, where truth prints
+as `1` and falsehood as an empty string. It was exact, stable and surprising
+to every reader of output who expected a word, so programs chose the words
+with `?? !!`, as the order example below still does. Since 0.4.1 `string()`
+gives `"true"` and `"false"` (issue #262); `?? !!` remains the way to say
+`"yes"` and `"no"`, or `"on"` and `"off"`.
 
 `?? !!` is the one place where Okkama keeps two spellings of one idea, and it
 does so on purpose. The enum form chooses by pattern in a single expression,

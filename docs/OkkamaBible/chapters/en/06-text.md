@@ -263,6 +263,3 @@ right operation.
 - **The standard library still has its workarounds.** About forty modules
   search, compare prefixes and walk characters by slicing; moving them to
   the builtins is planned for 0.5 (issue #260).
-- **Booleans print as `1` and `0`.** `true.string()` is `"1"`, a choice
-  inherited from the first implementation that surprises readers of output
-  (Chapter 9 discusses it).

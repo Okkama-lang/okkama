@@ -6,6 +6,6 @@ expanded 9 0 2 3 4 1
 sorted 0 1 2 3 4 9
 squares 1 4 9 16 25; odd 1 9 25; total 55
 keys apple, fig, pear
-has kiwi: 0, kiwi or 0: 0
+has kiwi: false, kiwi or 0: 0
 in stock apple, pear
 units 8

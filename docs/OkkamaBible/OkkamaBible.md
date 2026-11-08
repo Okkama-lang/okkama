@@ -1845,14 +1845,14 @@ chomp: [line]
 contains: yes
 find_last: 6
 upper: STRASSE
-empty: 1
+empty: true
 escape: café
 raw: a "raw" \n string
-char equals itself: 1
+char equals itself: true
 char: Ж is 1046, and back: Ж
 characters: 1055 1088 1080 1074 1077 1090
-equal as written: 0
-equal after NFC: 1
+equal as written: false
+equal after NFC: true
 round trip: Привет
 ```
 
@@ -2067,9 +2067,6 @@ right operation.
 - **The standard library still has its workarounds.** About forty modules
   search, compare prefixes and walk characters by slicing; moving them to
   the builtins is planned for 0.5 (issue #260).
-- **Booleans print as `1` and `0`.** `true.string()` is `"1"`, a choice
-  inherited from the first implementation that surprises readers of output
-  (Chapter 9 discusses it).
 
 # Chapter 7. Absence Without Null
 
@@ -2428,7 +2425,7 @@ expanded 9 0 2 3 4 1
 sorted 0 1 2 3 4 9
 squares 1 4 9 16 25; odd 1 9 25; total 55
 keys apple, fig, pear
-has kiwi: 0, kiwi or 0: 0
+has kiwi: false, kiwi or 0: 0
 in stock apple, pear
 units 8
 ```
@@ -2936,14 +2933,13 @@ syntax error: Nested ?? / !! choices are not allowed; use a local variable or ma
 A nested ternary is legal in C and Java and hard to read in both. Okkama turns
 the usual style advice into a rule, and following it costs one named local.
 
-The examples of this chapter print booleans through `?? !!` —
-`both ?? "true" !! "false"` in the order example — rather than with `string()`, and for a reason:
-`true.string()` is `"1"` and `false.string()` is `"0"`. The rule comes from
-the first implementation, written in Perl, where truth prints as `1` and
-falsehood as an empty string; Okkama kept the `1` and made the other value
-visible. It is exact and stable, and it surprises every reader of output who
-expected a word. A program that shows a boolean to a person chooses the words
-itself, which is what `?? !!` is for.
+Until 0.4.1 `true.string()` was `"1"` and `false.string()` was `"0"`, a rule
+inherited from the first implementation, written in Perl, where truth prints
+as `1` and falsehood as an empty string. It was exact, stable and surprising
+to every reader of output who expected a word, so programs chose the words
+with `?? !!`, as the order example below still does. Since 0.4.1 `string()`
+gives `"true"` and `"false"` (issue #262); `?? !!` remains the way to say
+`"yes"` and `"no"`, or `"on"` and `"off"`.
 
 `?? !!` is the one place where Okkama keeps two spellings of one idea, and it
 does so on purpose. The enum form chooses by pattern in a single expression,

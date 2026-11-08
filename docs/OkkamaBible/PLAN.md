@@ -90,6 +90,13 @@ substance and grows with it. The planned floors add up to about 552 pages, so
 chapters are expected to exceed them until the whole book passes 600 pages per
 language.
 
+## Notes for unwritten chapters
+
+- Chapter 19 (modules): module constants — `const NAME = value;`, computed by
+  the compiler, public unless `hidden const`, arrays and maps built once per
+  run; why constants are not a way to share objects (#153).
+- Chapter 20 (async): `async destroy`, awaited at scope exit (#154).
+
 ## Progress
 
 Updated with each chapter: `build.py --stats`.
