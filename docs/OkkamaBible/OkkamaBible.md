@@ -121,10 +121,12 @@
   - [11.5 Who owns what](#115-who-owns-what)
   - [11.6 Cleanup on the failure path](#116-cleanup-on-the-failure-path)
   - [11.7 async destroy](#117-async-destroy)
-  - [11.8 Regions: how ownership runs](#118-regions-how-ownership-runs)
-  - [11.9 The cost of a walk](#119-the-cost-of-a-walk)
-  - [11.10 What is not promised](#1110-what-is-not-promised)
-  - [11.11 What this design costs](#1111-what-this-design-costs)
+  - [11.8 Resources and tasks](#118-resources-and-tasks)
+  - [11.9 Close early, destroy anyway](#119-close-early-destroy-anyway)
+  - [11.10 Regions: how ownership runs](#1110-regions-how-ownership-runs)
+  - [11.11 The cost of a walk](#1111-the-cost-of-a-walk)
+  - [11.12 What is not promised](#1112-what-is-not-promised)
+  - [11.13 What this design costs](#1113-what-this-design-costs)
 
 # Part I. The Razor
 
@@ -4842,7 +4844,142 @@ and an awaited `settled()`. The standard library still has helper objects
 that exist only to await in cleanup. Moving them onto async destroy is
 [#264](https://github.com/shootnix/okkama/issues/264).
 
-## 11.8 Regions: how ownership runs
+## 11.8 Resources and tasks
+
+A task is a scope too. What an async action makes and keeps is released
+when the action's task ends. What it returns moves to the scope that awaits
+it, exactly as a synchronous result moves to its caller:
+
+```okkama
+module bible/task_resources v1.0.0;
+
+// Tasks own what they make: a resource a task keeps to itself is released
+// when the task ends; one it returns moves to the scope that awaits it.
+import "io/stdout" take Stdout;
+
+object Handle {
+    has name is string;
+    Handle(:name) { Stdout().writeln("open " + name); }
+    label() is string { name; }
+    destroy { Stdout().writeln("close " + name); }
+}
+
+object Worker {
+    has name is string;
+    Worker(:name);
+    async count() is int {
+        let scratch = Handle(name: name + ".scratch");
+        scratch.label().length();
+    }
+    async opened() is Handle {
+        let temp = Handle(name: name + ".tmp");
+        Handle(name: name);
+    }
+}
+
+async main() is int {
+    let out = Stdout();
+    let length = await Worker(name: "w1").count();
+    out.writeln("counted " + length.string());
+    {
+        let handle = await Worker(name: "w2").opened();
+        out.writeln("awaited " + handle.label());
+    }
+    out.writeln("end");
+    0;
+}
+```
+
+Output:
+
+```text
+open w1.scratch
+close w1.scratch
+counted 10
+open w2.tmp
+open w2
+close w2.tmp
+awaited w2
+close w2
+end
+```
+
+`w1.scratch` closes before `counted` is printed: the task that made it has
+ended. `w2.tmp` closes inside `opened`, and `w2` lives in the block that
+awaited it, until that block ends.
+
+A task that is never awaited still releases what it owns when it finishes,
+and a cancelled task unwinds through its scopes like a failure, async
+destroys included (Chapter 20). A resource cannot outlive its owner
+unnoticed by escaping into a forgotten future.
+
+## 11.9 Close early, destroy anyway
+
+Scope exit is the latest moment a resource is released, not the only one.
+The resources of the standard library follow one pattern:
+
+- an idempotent `close()`, part of the `Closing` role;
+- `closed()`, to ask whether it already happened;
+- a `destroy` that calls `close()`.
+
+Code that knows it is done releases early. Code that forgets, or fails
+halfway, still gets the release when the scope ends.
+
+```okkama
+module bible/closing v1.0.0;
+
+// The standard library's resources pair an idempotent close() with a destroy
+// that calls it: release early when you can, and the scope still releases
+// whatever you forgot.
+import "io/stdout" take Stdout;
+import "fs/directory" take Directory;
+import "fs/path" take Path;
+import "fs/file" take FileEntry;
+import "fs/temp" take TemporaryDirectory;
+
+object Workspace {
+    Workspace();
+    used(parent is Directory) is bool {
+        let scratch = TemporaryDirectory(parent, "bible-");
+        let where = scratch.path();
+        let before = FileEntry(where).existence();
+        scratch.close();
+        scratch.close();
+        before && !FileEntry(where).existence() && scratch.closed();
+    }
+    forgotten(parent is Directory) is Path {
+        let scratch = TemporaryDirectory(parent, "bible-");
+        scratch.path();
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let parent = Directory(Path("."));
+    out.writeln("closed early, twice: " + Workspace().used(parent).string());
+    let left = Workspace().forgotten(parent);
+    out.writeln("closed by destroy: " + (!FileEntry(left).existence()).string());
+    0;
+}
+```
+
+Output:
+
+```text
+closed early, twice: true
+closed by destroy: true
+```
+
+`used` closes its temporary directory twice. The second call does nothing,
+and the directory is gone before the action returns. `forgotten` never
+calls `close()`: the directory is removed when `forgotten` ends, because
+the action owned it and returned only its path, a plain value.
+
+The pattern costs one rule for authors of resource objects: `close()` must
+be idempotent, and every other action of a closed resource should fail with
+a catchable `already_closed`, not misbehave.
+
+## 11.10 Regions: how ownership runs
 
 The compiler implements ownership with **regions**: run-time sets of
 identities, one per scope that may own a resource. It decides at compile
@@ -4917,7 +5054,7 @@ region-based memory management [[Tofte 1997](#ref-tofte1997)]. Those hold memory
 all at once. Okkama's regions hold *identities to release*. Memory stays
 with the collector, and a region only decides when each `destroy` runs.
 
-## 11.9 The cost of a walk
+## 11.11 The cost of a walk
 
 To track or adopt a value, the engine walks what the value reaches. It
 looks for identities that are still free, owned by nobody. The walk stops
@@ -4940,7 +5077,7 @@ data. Non-plain data costs a walk the first time a structure is seen and
 almost nothing after that. A program that keeps a million records reaching
 a socket pays once, not once per request.
 
-## 11.10 What is not promised
+## 11.12 What is not promised
 
 Deterministic cleanup has limits, and they are worth knowing.
 
@@ -4957,7 +5094,7 @@ Deterministic cleanup has limits, and they are worth knowing.
 - **A `destroy` cannot be retried.** It runs at most once. If it fails, the
   failure is reported and the identity is considered released.
 
-## 11.11 What this design costs
+## 11.13 What this design costs
 
 - **Ownership is checked at run time, not at compile time.** Rust rejects a
   program that would release a value twice or use it after release. Okkama

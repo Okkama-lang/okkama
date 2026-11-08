@@ -1,0 +1,35 @@
+module bible/closing v1.0.0;
+
+// The standard library's resources pair an idempotent close() with a destroy
+// that calls it: release early when you can, and the scope still releases
+// whatever you forgot.
+import "io/stdout" take Stdout;
+import "fs/directory" take Directory;
+import "fs/path" take Path;
+import "fs/file" take FileEntry;
+import "fs/temp" take TemporaryDirectory;
+
+object Workspace {
+    Workspace();
+    used(parent is Directory) is bool {
+        let scratch = TemporaryDirectory(parent, "bible-");
+        let where = scratch.path();
+        let before = FileEntry(where).existence();
+        scratch.close();
+        scratch.close();
+        before && !FileEntry(where).existence() && scratch.closed();
+    }
+    forgotten(parent is Directory) is Path {
+        let scratch = TemporaryDirectory(parent, "bible-");
+        scratch.path();
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let parent = Directory(Path("."));
+    out.writeln("closed early, twice: " + Workspace().used(parent).string());
+    let left = Workspace().forgotten(parent);
+    out.writeln("closed by destroy: " + (!FileEntry(left).existence()).string());
+    0;
+}

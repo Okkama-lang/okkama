@@ -1,0 +1,37 @@
+module bible/task_resources v1.0.0;
+
+// Tasks own what they make: a resource a task keeps to itself is released
+// when the task ends; one it returns moves to the scope that awaits it.
+import "io/stdout" take Stdout;
+
+object Handle {
+    has name is string;
+    Handle(:name) { Stdout().writeln("open " + name); }
+    label() is string { name; }
+    destroy { Stdout().writeln("close " + name); }
+}
+
+object Worker {
+    has name is string;
+    Worker(:name);
+    async count() is int {
+        let scratch = Handle(name: name + ".scratch");
+        scratch.label().length();
+    }
+    async opened() is Handle {
+        let temp = Handle(name: name + ".tmp");
+        Handle(name: name);
+    }
+}
+
+async main() is int {
+    let out = Stdout();
+    let length = await Worker(name: "w1").count();
+    out.writeln("counted " + length.string());
+    {
+        let handle = await Worker(name: "w2").opened();
+        out.writeln("awaited " + handle.label());
+    }
+    out.writeln("end");
+    0;
+}

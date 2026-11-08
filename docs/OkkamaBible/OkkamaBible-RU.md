@@ -121,10 +121,12 @@
   - [11.5 Кто чем владеет](#115-кто-чем-владеет)
   - [11.6 Уборка на пути отказа](#116-уборка-на-пути-отказа)
   - [11.7 async destroy](#117-async-destroy)
-  - [11.8 Регионы: как работает владение](#118-регионы-как-работает-владение)
-  - [11.9 Цена обхода](#119-цена-обхода)
-  - [11.10 Чего не обещают](#1110-чего-не-обещают)
-  - [11.11 Чего стоит такой замысел](#1111-чего-стоит-такой-замысел)
+  - [11.8 Ресурсы и задачи](#118-ресурсы-и-задачи)
+  - [11.9 Закройте раньше, destroy подстрахует](#119-закройте-раньше-destroy-подстрахует)
+  - [11.10 Регионы: как работает владение](#1110-регионы-как-работает-владение)
+  - [11.11 Цена обхода](#1111-цена-обхода)
+  - [11.12 Чего не обещают](#1112-чего-не-обещают)
+  - [11.13 Чего стоит такой замысел](#1113-чего-стоит-такой-замысел)
 
 # Часть I. Бритва
 
@@ -4922,7 +4924,145 @@ main() is int { Client().talk(); }
 вспомогательные объекты, существующие только для ожидания при уборке. Их
 перевод на `async destroy` — [#264](https://github.com/shootnix/okkama/issues/264).
 
-## 11.8 Регионы: как работает владение
+## 11.8 Ресурсы и задачи
+
+Задача — тоже область. То, что асинхронное действие создаёт и оставляет у
+себя, освобождается, когда заканчивается задача действия. То, что оно
+возвращает, переходит в область, которая его ждёт, — точно так же, как
+синхронный результат переходит к вызывающему:
+
+```okkama
+module bible/task_resources v1.0.0;
+
+// Tasks own what they make: a resource a task keeps to itself is released
+// when the task ends; one it returns moves to the scope that awaits it.
+import "io/stdout" take Stdout;
+
+object Handle {
+    has name is string;
+    Handle(:name) { Stdout().writeln("open " + name); }
+    label() is string { name; }
+    destroy { Stdout().writeln("close " + name); }
+}
+
+object Worker {
+    has name is string;
+    Worker(:name);
+    async count() is int {
+        let scratch = Handle(name: name + ".scratch");
+        scratch.label().length();
+    }
+    async opened() is Handle {
+        let temp = Handle(name: name + ".tmp");
+        Handle(name: name);
+    }
+}
+
+async main() is int {
+    let out = Stdout();
+    let length = await Worker(name: "w1").count();
+    out.writeln("counted " + length.string());
+    {
+        let handle = await Worker(name: "w2").opened();
+        out.writeln("awaited " + handle.label());
+    }
+    out.writeln("end");
+    0;
+}
+```
+
+Вывод:
+
+```text
+open w1.scratch
+close w1.scratch
+counted 10
+open w2.tmp
+open w2
+close w2.tmp
+awaited w2
+close w2
+end
+```
+
+`w1.scratch` закрывается раньше, чем печатается `counted`: создавшая его
+задача закончилась. `w2.tmp` закрывается внутри `opened`, а `w2` живёт в
+блоке, который его дождался, до конца этого блока.
+
+Задача, которую так и не дождались, всё равно освобождает то, чем владеет,
+когда заканчивается, а отменённая задача разматывает свои области, как при
+отказе, вместе с асинхронными `destroy` (глава 20). Ресурс не может
+незаметно пережить владельца, ускользнув в забытый Future.
+
+## 11.9 Закройте раньше, destroy подстрахует
+
+Конец области — самый поздний момент освобождения ресурса, а не
+единственный. Ресурсы стандартной библиотеки следуют одному образцу:
+
+- идемпотентный `close()` из роли `Closing`;
+- `closed()`, чтобы спросить, не случилось ли это уже;
+- `destroy`, вызывающий `close()`.
+
+Код, который знает, что закончил, освобождает раньше. Код, который забыл
+или провалился на полпути, всё равно получает освобождение в конце области.
+
+```okkama
+module bible/closing v1.0.0;
+
+// The standard library's resources pair an idempotent close() with a destroy
+// that calls it: release early when you can, and the scope still releases
+// whatever you forgot.
+import "io/stdout" take Stdout;
+import "fs/directory" take Directory;
+import "fs/path" take Path;
+import "fs/file" take FileEntry;
+import "fs/temp" take TemporaryDirectory;
+
+object Workspace {
+    Workspace();
+    used(parent is Directory) is bool {
+        let scratch = TemporaryDirectory(parent, "bible-");
+        let where = scratch.path();
+        let before = FileEntry(where).existence();
+        scratch.close();
+        scratch.close();
+        before && !FileEntry(where).existence() && scratch.closed();
+    }
+    forgotten(parent is Directory) is Path {
+        let scratch = TemporaryDirectory(parent, "bible-");
+        scratch.path();
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let parent = Directory(Path("."));
+    out.writeln("closed early, twice: " + Workspace().used(parent).string());
+    let left = Workspace().forgotten(parent);
+    out.writeln("closed by destroy: " + (!FileEntry(left).existence()).string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+closed early, twice: true
+closed by destroy: true
+```
+
+`used` закрывает свой временный каталог дважды. Второй вызов ничего не
+делает, и каталога уже нет до того, как действие вернёт результат.
+`forgotten` никогда не вызывает `close()`: каталог удаляется, когда
+`forgotten` заканчивается, потому что действие им владело, а вернуло лишь
+путь — простое значение.
+
+Образец стоит одного правила для авторов объектов-ресурсов: `close()`
+должен быть идемпотентным, а любое другое действие закрытого ресурса
+должно проваливаться перехватываемым `already_closed`, а не вести себя
+как попало.
+
+## 11.10 Регионы: как работает владение
 
 Компилятор реализует владение **регионами**: множествами идентичностей
 времени исполнения, по одному на область, которая может владеть ресурсом.
@@ -4999,7 +5139,7 @@ func @Use.owned(%0: Use, %1: int) -> int [method Use] {
 освободить*. Память остаётся за сборщиком, а регион лишь решает, когда
 выполнится каждый `destroy`.
 
-## 11.9 Цена обхода
+## 11.11 Цена обхода
 
 Чтобы учесть значение или принять его во владение, движок обходит то, что
 из него достижимо, в поисках идентичностей, которые ещё свободны, то есть
@@ -5024,7 +5164,7 @@ func @Use.owned(%0: Use, %1: int) -> int [method Use] {
 и почти ничего после. Программа, держащая миллион записей, достигающих
 сокета, платит один раз, а не на каждый запрос.
 
-## 11.10 Чего не обещают
+## 11.12 Чего не обещают
 
 У детерминированной уборки есть пределы, и их стоит знать.
 
@@ -5041,7 +5181,7 @@ func @Use.owned(%0: Use, %1: int) -> int [method Use] {
 - **`destroy` нельзя повторить.** Он выполняется не больше одного раза. Если
   он провалился, отказ сообщается, а идентичность считается освобождённой.
 
-## 11.11 Чего стоит такой замысел
+## 11.13 Чего стоит такой замысел
 
 - **Владение проверяется во время исполнения, а не при компиляции.** Rust
   отвергает программу, которая освободила бы значение дважды или
