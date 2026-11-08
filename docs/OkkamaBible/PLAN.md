@@ -143,12 +143,14 @@ Updated with each chapter: `build.py --stats`.
   state machine (an order's life) across several objects; successors
   through roles (`^Role`, with Chapter 14); measurements of successor
   loops against `Cell` and `reduce`; async successors.
-- Chapter 14 (roles): 5.7 pages (EN) of its floor of 18. Written:
+- Chapter 14 (roles): 6.9 pages (EN) of its floor of 18. Written:
   declaring a role and conformance (exact parameters), nominal versus
   structural (Go, Liskov–Wing), restricted references and no downcast
   (capabilities, attenuation), narrowing between roles, successors through
   roles and typestate (`14-states`), decorators instead of inheritance, how
-  each engine runs a role call, a comparison table, costs. To add: generic
+  each engine runs a role call, operators as roles (#215, `14-operators`;
+  C++, Python, Haskell `Num`, Rust `std::ops`), a comparison table, costs
+  (operators look only left). To add: generic
   roles (`Iterable<T>`, `Cursor<T>`) and the iteration contract; std roles
   (`Writing`, `WritingText`) and built-in values behind roles; async role
   actions; a larger composition case study from std (HTTP client layers);
@@ -161,3 +163,23 @@ Updated with each chapter: `build.py --stats`.
   runs `NAME-tests` examples with `-t`. To add: a worked test suite for a
   service with a clock and a repository fake; `RecordedCalls`, `Stub` and
   `ManualClock` examples; async tests in depth; snapshot tests.
+- Chapter 16 (enums and pattern matching): 8.2 pages (EN) of its floor of
+  14. Written: payload-free enums (no ordinal, order, actions or mixing; C,
+  Pascal, Java, Go), declaration order as map-key order, variants (positional
+  payloads, no accessors, generic inference, structural equality; Pascal
+  variant records, HOPE, ML, Haskell, Rust, Java sealed/records/pattern
+  switch), `match` and its exhaustiveness rules (Maranget), compact choices,
+  enums versus roles (the expression problem: Reynolds, Cook, Wadler), how
+  both kinds run (OIR, the core's enum word, the JVM's `Case`, the
+  `$variant` object with one-element arrays) with measurements, a comparison
+  table, limits (#286–#291), costs. To add: a worked protocol (messages as
+  variants) and a state machine; error enums in depth with Chapter 10;
+  `Maybe`/`Presence` as variants with Chapter 7; what changes when #287,
+  #288 and #290 land.
+
+## Notes for the build
+
+- `builtins_table()` (for Appendix B) matches `(Ty::X, "name")` only;
+  alternatives such as `"less" | "less_or_equal" | "greater" |
+  "greater_or_equal"` are missed and must be handled before the appendix is
+  written.
