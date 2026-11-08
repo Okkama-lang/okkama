@@ -158,6 +158,16 @@
   - [13.12 Чего стоит преемник](#1312-чего-стоит-преемник)
   - [13.13 Неизменяемость в других языках](#1313-неизменяемость-в-других-языках)
   - [13.14 Чего стоит такой замысел](#1314-чего-стоит-такой-замысел)
+- [Глава 14. Роли: номинальные контракты и композиция](#глава-14-роли-номинальные-контракты-и-композиция)
+  - [14.1 Объявление роли](#141-объявление-роли)
+  - [14.2 Номинальность, а не структура](#142-номинальность-а-не-структура)
+  - [14.3 Ссылка через роль ограничивает держателя](#143-ссылка-через-роль-ограничивает-держателя)
+  - [14.4 Переход между ролями](#144-переход-между-ролями)
+  - [14.5 Преемники через роль](#145-преемники-через-роль)
+  - [14.6 Композиция вместо наследования](#146-композиция-вместо-наследования)
+  - [14.7 Как выполняется вызов через роль](#147-как-выполняется-вызов-через-роль)
+  - [14.8 Роли в других языках](#148-роли-в-других-языках)
+  - [14.9 Чего стоит такой замысел](#149-чего-стоит-такой-замысел)
 
 # Часть I. Бритва
 
@@ -5721,9 +5731,13 @@ cap — объектный ответ на «мне нужен геттер дл
 одной суммы денег — одна и та же сумма, где бы их ни создали. Это же делает
 объекты-значения пригодными ключами словаря: `%Card:int` ключуется по полям
 карты, упорядочиваясь по ним, поэтому `more[Card(10, Suit.hearts)]` находит
-запись, созданную другим `Card` того же достоинства и масти. Объекты,
-которые надо сравнивать по чему-то другому, например по бизнес-ключу,
-открывают для этого действие, и словарь ключуется по его результату.
+запись, созданную другим `Card` того же достоинства и масти. Объект-ключ
+должен быть значением насквозь: каждое поле — скаляр, enum или такой же
+объект, без `destroy` и без cap. `%Tagged:int` для объекта с полем
+`tags is @string` отвергается: `Map key type Tagged cannot be a key: field
+"tags" is @string`. Объекты, которые надо сравнивать по чему-то другому,
+например по бизнес-ключу, открывают для этого действие, и словарь ключуется
+по его результату.
 
 ## 12.10 Во что компилируется конструктор
 
@@ -6797,6 +6811,738 @@ Okkama отличают две вещи. Копия — именованный �
 - забытое изменение состояния — ошибка компиляции;
 - у каждого законного изменения состояния есть имя, выбранное автором.
 
+# Глава 14. Роли: номинальные контракты и композиция
+
+Без наследования две вещи, которые другие языки получают от базового
+класса, должны браться откуда-то ещё. Первая — контракт: «всё, что можно
+открыть и подписать». Вторая — общее поведение. Okkama отвечает на первое
+**ролями**, на второе — композицией. Эта глава — об обеих, а ещё о третьем,
+что делает роль и чего не делает большинство интерфейсов: она ограничивает
+то, что может её держатель.
+
+```okkama
+module bible/roles v1.0.0;
+
+// A role is a named contract. Objects declare that they do it; code that
+// holds a role sees only the role's actions, and successors stay successors.
+import "io/stdout" take Stdout;
+
+role Package {
+    label() is string;
+    opened() is ^Package;
+}
+
+object Bottle does Package {
+    has open is bool = false;
+    has volume is int;
+    Bottle(:volume);
+
+    label() is string { "bottle " + volume.string() + (if open { " open"; } else { " sealed"; }); }
+    opened() is ^Bottle { ^open = true; }
+    poured() is int { volume; }
+}
+
+object Crate does Package {
+    has count is int;
+    has open is bool = false;
+    Crate(:count);
+
+    label() is string { "crate of " + count.string() + (if open { " open"; } else { " sealed"; }); }
+    opened() is ^Crate { ^open = true; }
+}
+
+object Shelf {
+    has packages is @Package;
+    Shelf(packages is ...Package) { self.packages = packages...; }
+
+    labels() is string {
+        packages.map() -> p { p.label(); }.join(", ");
+    }
+    unpacked() is @Package {
+        packages.map() -> p { p.opened(); };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let shelf = Shelf(Bottle(volume: 500), Crate(count: 12));
+    out.writeln(shelf.labels());
+    out.writeln(Shelf(shelf.unpacked()...).labels());
+    let one is Package = Bottle(volume: 330);
+    let unsealed = one.opened();
+    out.writeln(unsealed.label());
+    0;
+}
+```
+
+Вывод:
+
+```text
+bottle 500 sealed, crate of 12 sealed
+bottle 500 open, crate of 12 open
+bottle 330 open
+```
+
+- `Package` — роль: две сигнатуры и никаких тел.
+- `Bottle` и `Crate` объявляют `does Package` и реализуют оба действия.
+- `Shelf` держит `@Package`. Каких объектов он держит, он никогда не знает.
+- `opened()` — преемник на роли. Каждый объект реализует его собственным
+  `^Bottle` или `^Crate`, а вызывающий получает обратно `^Package`.
+- `poured()` есть у `Bottle`, но ничто, держащее `Package`, вызвать его не
+  может.
+
+## 14.1 Объявление роли
+
+```okkama
+role Package {
+    label() is string;
+    opened() is ^Package;
+}
+```
+
+Роль — список сигнатур действий: имена, параметры и результаты. У неё нет
+полей, конструкторов и тел. (Единственное исключение — блок `fake` для
+тестов, тема главы 15.) Роль может объявить несколько сигнатур с одним
+именем, если их типы параметров различаются, а результаты совпадают.
+
+Объект реализует роль, заявив об этом:
+
+```okkama
+object Bottle does Package { … }
+object Wallet does Account, Labelled { … }
+```
+
+Компилятор проверяет заявление:
+
+- каждое действие роли есть у объекта;
+- типы параметров, а также фиксированная или вариадическая форма,
+  совпадают *точно*;
+- типы результатов совместимы: `^Bottle` удовлетворяет `^Package`, потому
+  что `Bottle does Package`.
+
+«Точно» значит точно. Действие роли, принимающее `int`, не реализуется
+действием, принимающим `float`, хотя версия с float могла бы принять любое
+целое:
+
+```okkama
+module bible/mismatch v1.0.0;
+
+role Meter { reading(scale is int) is int; }
+
+object Thermometer does Meter {
+    has degrees is int;
+    Thermometer(:degrees);
+    reading(scale is float) is int { degrees; }
+}
+
+main() is int { 0; }
+```
+
+Ответ компилятора:
+
+```text
+14-mismatch-rejected.ok:5:8: semantic error: Action "reading" parameter 1 on object "Thermometer" must be int for role "Meter", got float
+```
+
+Подтипизация функций в теории типов это бы разрешила: параметры
+контравариантны [[Pierce 2002](#ref-pierce2002)]. Okkama держит параметры инвариантными по
+той же причине, по которой строги перегрузки (глава 13): вызов через роль
+и прямой вызов должны выбрать один и тот же код без преобразования
+посередине.
+
+## 14.2 Номинальность, а не структура
+
+Объект, у которого есть нужные действия, но который не объявил роль, ей не
+удовлетворяет:
+
+```okkama
+module bible/nominal v1.0.0;
+
+role Presentation { label() is string; }
+
+object Invoice {
+    has number is int;
+    Invoice(:number);
+    label() is string { "invoice " + number.string(); }
+}
+
+main() is int {
+    let shown is Presentation = Invoice(number: 7);
+    0;
+}
+```
+
+Ответ компилятора:
+
+```text
+14-nominal-rejected.ok:12:33: semantic error: Cannot initialize variable "shown" of type Presentation with Invoice
+```
+
+У `Invoice` есть `label() is string` — ровно то, что просит
+`Presentation`. И всё же использовать его в этом качестве нельзя: никто
+этого не заявил. Go делает противоположный выбор: тип удовлетворяет
+интерфейсу всякий раз, когда его набор методов содержит методы интерфейса,
+без всякого объявления [[Go specification](#ref-gospec)]. TypeScript поступает так же. Java, C# и
+Rust номинальны: класс `implements` интерфейс, у типа есть `impl Trait`
+[[Klabnik 2023](#ref-klabnik2023)]. Пирс излагает компромисс: структурная типизация гибче, а
+номинальная заставляет имена типов нести намерение и даёт проверяющему, о
+чём сообщать [[Pierce 2002](#ref-pierce2002)].
+
+Довод Okkama — тот же, что стоит за поведенческой подтипизацией Лисков и
+Винг. Контракт — больше, чем набор сигнатур. В него входит то, что
+действия *означают*: их предусловия, результаты, состояния, к которым они
+ведут [[Liskov 1994](#ref-liskov1994)]. Два действия `label()` с одной сигнатурой могут
+обещать разное. `does Presentation` — заявление автора, что объект держит
+обещания роли, и компилятор держит его к ответу в той части, которую может
+проверить.
+
+Цена — церемония на границе модулей. Объект, написанный до появления роли,
+задним числом ей не удовлетворит. Реализовать роль можно только в модуле,
+объявляющем объект. Чтобы использовать чужой объект как роль, его
+оборачивают в маленький объект, который делает (`does`) роль и
+переадресует ему вызовы (§14.6).
+
+## 14.3 Ссылка через роль ограничивает держателя
+
+В Java переменную типа интерфейса можно привести обратно к классу, а
+`instanceof` скажет, какой это класс. В Okkama значение с типом роли — это
+*ограниченная ссылка*. Она указывает на тот же объект, ничего не
+копируется, и через неё достижимы только действия роли:
+
+```okkama
+module bible/restricted v1.0.0;
+
+role Presentation { label() is string; }
+
+object Customer does Presentation {
+    has number is int;
+    Customer(:number);
+    label() is string { "customer " + number.string(); }
+    id() is int { number; }
+}
+
+main() is int {
+    let shown is Presentation = Customer(number: 7);
+    shown.id();
+}
+```
+
+Ответ компилятора:
+
+```text
+14-restricted-rejected.ok:14:11: semantic error: Role "Presentation" has no action "id"
+```
+
+Обратного пути к конкретному типу нет:
+
+```okkama
+module bible/downcast v1.0.0;
+
+role Presentation { label() is string; }
+
+object Customer does Presentation {
+    has number is int;
+    Customer(:number);
+    label() is string { "customer " + number.string(); }
+    id() is int { number; }
+}
+
+main() is int {
+    let shown is Presentation = Customer(number: 7);
+    let customer is Customer = shown;
+    customer.id();
+}
+```
+
+Ответ компилятора:
+
+```text
+14-downcast-rejected.ok:14:32: semantic error: Cannot initialize variable "customer" of type Customer with Presentation
+```
+
+Ограничение сохраняется на всём, через что проходит ссылка:
+
+- псевдонимы, параметры, поля, результаты и коллекции;
+- связанные действия, `Maybe` и `Presence`, полезная нагрузка enum;
+- вывод обобщений: `T`, выведенный из ссылки через роль, — это роль, а не
+  скрытый класс;
+- упаковка в `any`. `any` никогда не сужается, поэтому упаковка сохраняет
+  ограничение.
+
+Реализация по-прежнему выполняется с полным `self`. `Bottle.label` читает
+`volume` и `open` как обычно. Ограничение наложено на *держателя*, а не на
+объект.
+
+Ограничение неглубокое. Результат разрешённого действия доступен согласно
+собственному объявленному типу. Если бы у `Package` было действие,
+возвращающее `Bottle`, держатель мог бы пользоваться этим `Bottle`
+полностью. Роль ограничивает ровно то, что открывают её сигнатуры.
+
+Это делает ссылку через роль возможностью (capability) в смысле
+объектно-возможностной безопасности. Обладание ссылкой и есть разрешение
+ею пользоваться, а выдача более узкой ссылки выдаёт меньше прав. Это
+ослабление (attenuation), термин Марка Миллера для встраивания наименьших
+полномочий в программу [[Miller 2006](#ref-miller2006); [Saltzer 1975](#ref-saltzer1975)]. Функция, получившая
+`Labelled`, может напечатать подпись. Узнать баланс она не может даже
+приведением типа, потому что в языке нет приведения, которое можно было бы
+попробовать.
+
+Исключения тоже не снимают ограничения. Объекты не могут делать `Error`:
+
+```okkama
+module bible/object_error v1.0.0;
+
+object Failure does Error {
+    Failure();
+    text() is string { "failed"; }
+}
+
+main() is int { 0; }
+```
+
+Ответ компилятора:
+
+```text
+14-error-rejected.ok:3:21: semantic error: Object "Failure" cannot do Error: errors are enums, declare `enum Failure is Error = (...)`
+```
+
+Ошибки — это enum (глава 10), поэтому `catch` никогда не называет тип
+объекта и не может извлечь конкретный объект из роли.
+
+## 14.4 Переход между ролями
+
+Ссылка через роль может перейти в другую роль при двух условиях:
+
+- объект за ней *номинально* делает целевую роль;
+- каждое действие целевой роли уже достижимо через текущую.
+
+Это сужение: переход от больших прав к меньшим.
+
+```okkama
+module bible/narrowing v1.0.0;
+
+import "io/stdout" take Stdout;
+
+role Account { label() is string; balance() is int; }
+role Labelled { label() is string; }
+
+object Wallet does Account, Labelled {
+    has owner is string;
+    has cents is int;
+    Wallet(:owner, :cents);
+    label() is string { owner; }
+    balance() is int { cents; }
+}
+
+object Printer {
+    Printer();
+    print(item is Labelled) is string { "[" + item.label() + "]"; }
+}
+
+main() is int {
+    let out = Stdout();
+    let account is Account = Wallet(owner: "Ada", cents: 250);
+    out.writeln(Printer().print(account));
+    let tag is Labelled = account;
+    out.writeln(tag.label());
+    0;
+}
+```
+
+Вывод:
+
+```text
+[Ada]
+Ada
+```
+
+У `Account` есть `label` и `balance`; у `Labelled` — только `label`.
+`Wallet` делает обе, поэтому ссылка `Account` проходит как `Labelled` в
+`Printer.print` и связывается с локальным именем типа `Labelled`. Обратное —
+расширение, и оно отвергается, хотя объект за ссылкой делает `Account`:
+
+```okkama
+module bible/widen v1.0.0;
+
+role Account { label() is string; balance() is int; }
+role Labelled { label() is string; }
+
+object Wallet does Account, Labelled {
+    has owner is string;
+    has cents is int;
+    Wallet(:owner, :cents);
+    label() is string { owner; }
+    balance() is int { cents; }
+}
+
+main() is int {
+    let tag is Labelled = Wallet(owner: "Ada", cents: 250);
+    let account is Account = tag;
+    account.balance();
+}
+```
+
+Ответ компилятора:
+
+```text
+14-widen-rejected.ok:16:30: semantic error: Cannot initialize variable "account" of type Account with Labelled
+```
+
+Если бы `Wallet` делал только `Account`, сужение тоже было бы отвергнуто, с
+тем же сообщением для `Labelled`. Роль — номинальный контракт, и
+подмножество сигнатур — не контракт, который объект подписал.
+
+## 14.5 Преемники через роль
+
+Роль может объявлять действия-преемники. `opened() is ^Package` говорит:
+вызов даёт следующее состояние, и оно по-прежнему `Package`. Каждая
+реализация возвращает собственный тип, `^Bottle` или `^Crate`. Вызывающий,
+держащий `Package`, получает ограниченный `^Package`. Правило обязательного
+использования из главы 13 действует и через роль.
+
+На объекте преемник всегда возвращает собственный тип объекта. `is
+^Package` у `Bottle` — ошибка. Что видит вызывающий, решает роль; что
+строится, решает объект.
+
+Преемники на ролях превращают роли в **виды состояний**. Дайте каждому
+состоянию протокола собственную роль, открывающую только то, что допустимо
+в этом состоянии, и пусть каждый переход возвращает роль следующего
+состояния:
+
+```okkama
+module bible/states v1.0.0;
+
+// Typestate with roles: each state is a role that exposes only what is valid
+// in it, and a successor declared on a role returns the next state.
+import "io/stdout" take Stdout;
+
+role Created    { id() is string; authorize(approve is bool) is Authorization; }
+role Authorized { id() is string; capture() is ^Captured; }
+role Captured   { id() is string; refund() is ^Refunded; }
+role Refunded   { id() is string; }
+role Declined   { id() is string; reason() is string; }
+
+enum Authorization = (approved(payment is Authorized), declined(payment is Declined));
+
+enum Stage = (created, authorized, captured, refunded, declined(reason is string));
+enum PaymentError is Error = (invalid_transition(action is string));
+
+object Payment does Created, Authorized, Captured, Refunded, Declined {
+    has key is string;
+    has stage is Stage = Stage.created;
+    Payment(:key);
+
+    id() is string { key; }
+    authorize(approve is bool) is Authorization {
+        confirm stage == Stage.created else throw PaymentError.invalid_transition("authorize");
+        if approve {
+            Authorization.approved(self.approved());
+        } else {
+            Authorization.declined(self.rejected("card declined"));
+        }
+    }
+    capture() is ^Payment {
+        confirm stage == Stage.authorized else throw PaymentError.invalid_transition("capture");
+        ^stage = Stage.captured;
+    }
+    refund() is ^Payment {
+        confirm stage == Stage.captured else throw PaymentError.invalid_transition("refund");
+        ^stage = Stage.refunded;
+    }
+    reason() is string {
+        match stage {
+            case Stage.declined(text) { text; }
+            else { ""; }
+        }
+    }
+
+    private:
+    approved() is ^Payment { ^stage = Stage.authorized; }
+    rejected(reason is string) is ^Payment { ^stage = Stage.declined(reason); }
+}
+
+object Payments {
+    Payments();
+    open(id is string) is Created { Payment(key: id); }
+}
+
+main() is int {
+    let out = Stdout();
+    for [true, false] -> approve {
+        let result = match Payments().open("p-" + approve.string()).authorize(approve) {
+            case Authorization.approved(payment) { payment.capture().refund().id() + " refunded"; }
+            case Authorization.declined(payment) { payment.id() + " declined: " + payment.reason(); }
+        };
+        out.writeln(result);
+    }
+    0;
+}
+```
+
+Вывод:
+
+```text
+p-true refunded
+p-false declined: card declined
+```
+
+- `Payments.open` возвращает `Created`. Всё, что с ним может сделать
+  вызывающий, — `id()` и `authorize(...)`.
+- `authorize` возвращает enum, два варианта которого несут *разные* виды:
+  `Authorized` или `Declined`. `match` обязан обработать оба.
+- `capture()` есть только у `Authorized` и возвращает `^Captured`.
+  `refund()` есть только у `Captured`.
+- Один неизменяемый объект, `Payment`, реализует все пять ролей. Частное
+  поле `stage` хранит настоящее состояние, и каждый переход проверяет его
+  через `confirm`.
+
+Перескочить состояние не получится, программа не скомпилируется:
+
+```okkama
+module bible/skip_state v1.0.0;
+
+
+role Created    { id() is string; authorize(approve is bool) is Authorization; }
+role Authorized { id() is string; capture() is ^Captured; }
+role Captured   { id() is string; refund() is ^Refunded; }
+role Refunded   { id() is string; }
+role Declined   { id() is string; reason() is string; }
+
+enum Authorization = (approved(payment is Authorized), declined(payment is Declined));
+
+enum Stage = (created, authorized, captured, refunded, declined(reason is string));
+enum PaymentError is Error = (invalid_transition(action is string));
+
+object Payment does Created, Authorized, Captured, Refunded, Declined {
+    has key is string;
+    has stage is Stage = Stage.created;
+    Payment(:key);
+
+    id() is string { key; }
+    authorize(approve is bool) is Authorization {
+        confirm stage == Stage.created else throw PaymentError.invalid_transition("authorize");
+        if approve {
+            Authorization.approved(self.approved());
+        } else {
+            Authorization.declined(self.rejected("card declined"));
+        }
+    }
+    capture() is ^Payment {
+        confirm stage == Stage.authorized else throw PaymentError.invalid_transition("capture");
+        ^stage = Stage.captured;
+    }
+    refund() is ^Payment {
+        confirm stage == Stage.captured else throw PaymentError.invalid_transition("refund");
+        ^stage = Stage.refunded;
+    }
+    reason() is string {
+        match stage {
+            case Stage.declined(text) { text; }
+            else { ""; }
+        }
+    }
+
+    private:
+    approved() is ^Payment { ^stage = Stage.authorized; }
+    rejected(reason is string) is ^Payment { ^stage = Stage.declined(reason); }
+}
+
+object Payments {
+    Payments();
+    open(id is string) is Created { Payment(key: id); }
+}
+
+main() is int {
+    let payment = Payments().open("p-1");
+    payment.capture().id();
+    0;
+}
+```
+
+Ответ компилятора:
+
+```text
+14-state-rejected.ok:56:13: semantic error: Role "Created" has no action "capture"
+```
+
+Стром и Емини назвали эту идею **typestate** в 1986 году: допустимые над
+значением операции зависят от его состояния, и состояние отслеживает
+компилятор [[Strom 1986](#ref-strom1986)]. Typestate в Rust и похожих языках опирается на
+семантику перемещения, чтобы старое состояние нельзя было использовать после
+перехода. Okkama обходится без неё. Старое состояние — неизменяемый объект и
+остаётся действительным: `authorized.capture()` можно вызвать дважды на
+одном `Authorized`, и каждый вызов вернёт `Captured`. Должен ли второй
+захват удаться — вопрос о внешнем мире (ушли ли деньги?), и место ему — в
+долговременном состоянии с ключами идемпотентности, а не в системе типов.
+`confirm` в каждом переходе — вторая линия обороны внутри модуля.
+
+В настоящей программе `Payment` и `Stage` объявляются `hidden`, чтобы
+другие модули вообще не могли назвать класс. Они всегда держат лишь один из
+пяти видов.
+
+## 14.6 Композиция вместо наследования
+
+Роль — контракт; кода она не несёт. Общее поведение берётся из объектов,
+которые держат другие объекты. Основная форма — **декоратор**: объект,
+который делает роль, держит другую реализацию той же роли и добавляет
+вокруг неё одно поведение [[Gamma 1994](#ref-gamma1994)].
+
+```okkama
+module bible/decorators v1.0.0;
+
+// Composition through a role: each decorator does the role it wraps, holds
+// another implementation of it, and adds one behaviour.
+import "io/stdout" take Stdout;
+
+role Pricing {
+    price(item is string) is int;
+}
+
+object Catalog does Pricing {
+    has prices is %string:int;
+    Catalog(:prices);
+    price(item is string) is int { prices[item] else 0; }
+}
+
+object Discounted does Pricing {
+    has origin is Pricing;
+    has percent is int;
+    Discounted(:origin, :percent);
+    price(item is string) is int {
+        let full = origin.price(item);
+        full - (full * percent / 100).int();
+    }
+}
+
+object Rounded does Pricing {
+    has origin is Pricing;
+    Rounded(:origin);
+    price(item is string) is int {
+        let exact = origin.price(item);
+        exact - exact % 10;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let base = Catalog(prices: ["tea": 345, "cake": 520]);
+    let sale is Pricing = Rounded(origin: Discounted(origin: base, percent: 15));
+    for ["tea", "cake", "soup"] -> item {
+        out.writeln(item + ": " + base.price(item).string() + " -> " + sale.price(item).string());
+    }
+    0;
+}
+```
+
+Вывод:
+
+```text
+tea: 345 -> 290
+cake: 520 -> 440
+soup: 0 -> 0
+```
+
+`Catalog` знает цены. `Discounted` снимает 15 процентов с того, что говорит
+его `origin`. `Rounded` округляет вниз до десятков. Каждый — несколько
+строк, каждый можно протестировать отдельно, и они сочетаются в любом
+порядке. Вызывающий держит `Pricing` и не может сказать, сколько в нём
+слоёв. `sale.price("tea")` проходит через три объекта: 345, затем 294,
+затем 290.
+
+Сравните иерархию классов для той же задачи: `Catalog`,
+`DiscountedCatalog`, `RoundedDiscountedCatalog`. Каждое новое поведение
+умножает классы, а каждый подкласс зависит от подробностей родителя — это
+проблема хрупкого базового класса из главы 12. «Предпочитайте композицию
+объектов наследованию классов» — собственный совет «Банды четырёх»
+[[Gamma 1994](#ref-gamma1994)]. Okkama делает его единственным вариантом. Elegant Objects
+повсюду опирается на такие декораторы: маленькие объекты, каждый
+оборачивает другой за общим интерфейсом [[Bugayenko 2016](#ref-bugayenko2016)].
+
+Цена — переадресация. Роль с десятью действиями требует десяти
+переадресующих действий в каждом декораторе, даже если декоратор меняет
+одно из них. Сокращения для делегирования («реализуй `Pricing`,
+переадресуя `origin`») в Okkama нет. Код переадресации легко читать и
+скучно писать. Маленькие роли делают его коротким: роль с одним-двумя
+действиями — обычный случай в стандартной библиотеке.
+
+## 14.7 Как выполняется вызов через роль
+
+Граница роли и вызов через роль явно видны в IR:
+
+```text
+%19: Bottle = call @Bottle.new#0(%18)
+%20: Package = role.wrap %19
+%21: Package = call.role %20, Package.opened()
+%22: str = call.role %21, Package.label()
+```
+
+`role.wrap` отмечает границу, где `Bottle` становится `Package`.
+`call.role` вызывает слот `opened` роли `Package` у того объекта, что
+стоит за ссылкой. Объявление каждого объекта перечисляет для каждой роли,
+которую он делает, функцию, заполняющую каждый слот:
+`does Package { label = @Bottle.label, opened = @Bottle.opened }`.
+
+Движки различаются тем, как находят эту функцию:
+
+- **IR-движок** при каждом вызове читает объявление получателя и ищет в нём
+  свидетеля (witness) для роли.
+- **Ядро Sparrow** компилирует `role.wrap` в ничто: ссылка через роль — тот
+  же указатель. `call.role` загружает заголовок объекта, выдвигает номер
+  дескриптора и индексирует таблицу, построенную один раз на слот роли. В
+  таблице по одной функции на тип объекта. Затем вызывается эта функция. По
+  сравнению с прямым вызовом это несколько загрузок и косвенный вызов.
+- **JVM-бэкенд** превращает каждую роль в Java-интерфейс. Классы объектов,
+  которые её делают, реализуют интерфейс, `role.wrap` снова ничего не
+  делает, а `call.role` — это `invokeinterface`. Встроенные кэши и
+  спекулятивная подстановка JVM затем обращаются с местом вызова, которое
+  видит один-два типа объектов, как с прямым вызовом.
+
+Ни в одном из них ограничение ничего не стоит во время выполнения. Оно
+проверяется при компиляции и верификации программы, а ссылка — это
+обычный объект.
+
+## 14.8 Роли в других языках
+
+| | Роль Okkama | Интерфейс Java | Интерфейс Go | Трейт Rust |
+|---|---|---|---|---|
+| Соответствие | заявленное (`does`) | заявленное (`implements`) | неявное, по набору методов | заявленное (`impl`) |
+| Тела методов по умолчанию | нет | да | нет | да |
+| Приведение вниз от контракта | невозможно | приведение, `instanceof` | утверждение типа, type switch | только через `Any` |
+| Сопоставление параметров | точное | точное (переопределение) | точное | точное |
+| Результаты-преемники (следующее состояние) | да (`^Role`) | нет | нет | метод, поглощающий `self` и возвращающий новый тип |
+| Соответствие чужого типа | нет; оберните его | нет | автоматически, если методы совпадают | если трейт или тип локальны |
+
+Важнее всего две строки. **Тела по умолчанию**: Java и Rust позволяют
+интерфейсу нести код, а это возвращает часть наследования, вместе с
+вопросом, чьё умолчание побеждает, когда его дают два интерфейса. Роль не
+несёт ни одного; общий код живёт в объекте. **Приведение вниз**: у всех
+остальных языков таблицы есть путь назад от контракта к конкретному типу.
+У Okkama его нет, и именно это делает ссылку через роль возможностью, а не
+аннотацией типа.
+
+## 14.9 Чего стоит такой замысел
+
+- **Код переадресации.** Декораторы повторяют каждое действие роли.
+  Синтаксиса делегирования, который бы это сократил, нет (§14.6).
+- **Нет соответствия задним числом.** Добавить роль объекту извне его
+  модуля нельзя. Обычное средство, объект-адаптер, — ещё один объект.
+- **Никакого приведения вниз, никогда.** Код, которому «просто нужно
+  проверить, что это на самом деле», придётся перепроектировать: действие
+  роли, отвечающее на вопрос, или enum, несущий варианты.
+- **Инвариантные параметры.** Реализация не может принимать больше, чем
+  просит роль. Обычно ей это и не нужно.
+- **Одна диспетчеризация на вызов.** Вызов через роль — косвенный вызов. В
+  горячих циклах по одному типу его избегают, держа конкретный тип; JVM с
+  её встроенными кэшами возвращает большую часть разницы.
+
+Взамен:
+
+- контракт выражает намерение, а не случайность формы;
+- ссылку можно сузить, и сужение окончательно;
+- поведение складывается из маленьких объектов, а не растёт вниз по
+  иерархии;
+- протоколы можно типизировать по состояниям без линейных типов.
+
 # Литература
 
 - <a id="ref-lions1996"></a>Jacques-Louis Lions et al. (1996). *ARIANE 5 Flight 501 Failure: Report by the Inquiry Board*. European Space Agency, Paris, 19 July 1996. https://www.esa.int/Newsroom/Press_Releases/Ariane_501_-_Presentation_of_Inquiry_Board_report
@@ -6825,6 +7571,7 @@ Okkama отличают две вещи. Копия — именованный �
 - <a id="ref-fahndrich2003"></a>Manuel Fähndrich, K. Rustan M. Leino (2003). Declaring and Checking Non-null Types in an Object-Oriented Language. In *Proceedings of OOPSLA 2003*: 302–312. ACM. https://doi.org/10.1145/949305.949332
 - <a id="ref-gabriel1991"></a>Richard P. Gabriel (1991). The Rise of "Worse is Better". In *Lisp: Good News, Bad News, How to Win Big*. https://www.dreamsongs.com/RiseOfWorseIsBetter.html
 - <a id="ref-gamma1994"></a>Erich Gamma, Richard Helm, Ralph Johnson, John Vlissides (1994). *Design Patterns: Elements of Reusable Object-Oriented Software*. Addison-Wesley.
+- <a id="ref-gospec"></a>The Go Authors (2026). *The Go Programming Language Specification*, language version go1.27 (26 May 2026). https://go.dev/ref/spec
 - <a id="ref-goldberg1991"></a>David Goldberg (1991). What Every Computer Scientist Should Know About Floating-Point Arithmetic. *ACM Computing Surveys* 23(1): 5–48. https://doi.org/10.1145/103162.103163
 - <a id="ref-goodenough1975"></a>John B. Goodenough (1975). Exception Handling: Issues and a Proposed Notation. *Communications of the ACM* 18(12): 683–696. https://doi.org/10.1145/361227.361230
 - <a id="ref-gosling2023"></a>James Gosling, Bill Joy, Guy Steele, Gilad Bracha, Alex Buckley, Daniel Smith, Gavin Bierman (2023). *The Java Language Specification, Java SE 21 Edition*. Oracle. https://docs.oracle.com/javase/specs/jls/se21/html/

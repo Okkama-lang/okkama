@@ -270,9 +270,12 @@ characterised by what it holds. Two copies of the same amount of money are
 the same amount, wherever they were made. It also makes value objects usable
 as map keys: a `%Card:int` keys on the card's fields, ordered by them, so
 `more[Card(10, Suit.hearts)]` finds an entry made with another `Card` of
-the same rank and suit. Objects that should compare by something else, such
-as a business key, expose an action for it, and the map keys on that
-action's result instead.
+the same rank and suit. A key object must be a value through and through:
+every field a scalar, an enum or another such object, and no `destroy` and
+no caps. `%Tagged:int` for an object with a `tags is @string` field is
+rejected: `Map key type Tagged cannot be a key: field "tags" is @string`.
+Objects that should compare by something else, such as a business key,
+expose an action for it, and the map keys on that action's result instead.
 
 ## 12.10 What a constructor compiles to
 

@@ -1,0 +1,14 @@
+module bible/nominal v1.0.0;
+
+role Presentation { label() is string; }
+
+object Invoice {
+    has number is int;
+    Invoice(:number);
+    label() is string { "invoice " + number.string(); }
+}
+
+main() is int {
+    let shown is Presentation = Invoice(number: 7);
+    0;
+}

@@ -158,6 +158,16 @@
   - [13.12 What a successor costs](#1312-what-a-successor-costs)
   - [13.13 Immutability elsewhere](#1313-immutability-elsewhere)
   - [13.14 What this design costs](#1314-what-this-design-costs)
+- [Chapter 14. Roles: nominal contracts and composition](#chapter-14-roles-nominal-contracts-and-composition)
+  - [14.1 Declaring a role](#141-declaring-a-role)
+  - [14.2 Nominal, not structural](#142-nominal-not-structural)
+  - [14.3 A role reference limits what its holder can do](#143-a-role-reference-limits-what-its-holder-can-do)
+  - [14.4 Moving between roles](#144-moving-between-roles)
+  - [14.5 Successors through a role](#145-successors-through-a-role)
+  - [14.6 Composition instead of inheritance](#146-composition-instead-of-inheritance)
+  - [14.7 How a role call runs](#147-how-a-role-call-runs)
+  - [14.8 Roles elsewhere](#148-roles-elsewhere)
+  - [14.9 What this design costs](#149-what-this-design-costs)
 
 # Part I. The Razor
 
@@ -5632,9 +5642,12 @@ characterised by what it holds. Two copies of the same amount of money are
 the same amount, wherever they were made. It also makes value objects usable
 as map keys: a `%Card:int` keys on the card's fields, ordered by them, so
 `more[Card(10, Suit.hearts)]` finds an entry made with another `Card` of
-the same rank and suit. Objects that should compare by something else, such
-as a business key, expose an action for it, and the map keys on that
-action's result instead.
+the same rank and suit. A key object must be a value through and through:
+every field a scalar, an enum or another such object, and no `destroy` and
+no caps. `%Tagged:int` for an object with a `tags is @string` field is
+rejected: `Map key type Tagged cannot be a key: field "tags" is @string`.
+Objects that should compare by something else, such as a business key,
+expose an action for it, and the map keys on that action's result instead.
 
 ## 12.10 What a constructor compiles to
 
@@ -6706,6 +6719,738 @@ In return:
 - a forgotten state change is a compile error;
 - every legal state change has a name the author chose.
 
+# Chapter 14. Roles: nominal contracts and composition
+
+Without inheritance, two things that other languages get from a base class
+have to come from somewhere else. The first is a contract: "anything that
+can be opened and labelled". The second is shared behaviour. Okkama
+answers the first with **roles** and the second with composition. This
+chapter is about both, and about the third thing a role does that most
+interfaces do not: it limits what its holder may do.
+
+```okkama
+module bible/roles v1.0.0;
+
+// A role is a named contract. Objects declare that they do it; code that
+// holds a role sees only the role's actions, and successors stay successors.
+import "io/stdout" take Stdout;
+
+role Package {
+    label() is string;
+    opened() is ^Package;
+}
+
+object Bottle does Package {
+    has open is bool = false;
+    has volume is int;
+    Bottle(:volume);
+
+    label() is string { "bottle " + volume.string() + (if open { " open"; } else { " sealed"; }); }
+    opened() is ^Bottle { ^open = true; }
+    poured() is int { volume; }
+}
+
+object Crate does Package {
+    has count is int;
+    has open is bool = false;
+    Crate(:count);
+
+    label() is string { "crate of " + count.string() + (if open { " open"; } else { " sealed"; }); }
+    opened() is ^Crate { ^open = true; }
+}
+
+object Shelf {
+    has packages is @Package;
+    Shelf(packages is ...Package) { self.packages = packages...; }
+
+    labels() is string {
+        packages.map() -> p { p.label(); }.join(", ");
+    }
+    unpacked() is @Package {
+        packages.map() -> p { p.opened(); };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let shelf = Shelf(Bottle(volume: 500), Crate(count: 12));
+    out.writeln(shelf.labels());
+    out.writeln(Shelf(shelf.unpacked()...).labels());
+    let one is Package = Bottle(volume: 330);
+    let unsealed = one.opened();
+    out.writeln(unsealed.label());
+    0;
+}
+```
+
+Output:
+
+```text
+bottle 500 sealed, crate of 12 sealed
+bottle 500 open, crate of 12 open
+bottle 330 open
+```
+
+- `Package` is a role: two signatures and no bodies.
+- `Bottle` and `Crate` each declare `does Package` and implement both
+  actions.
+- `Shelf` holds `@Package`. It never knows which objects it holds.
+- `opened()` is a successor on the role. Each object implements it with its
+  own `^Bottle` or `^Crate`, and the caller gets a `^Package` back.
+- `poured()` exists on `Bottle`, but nothing holding a `Package` can call
+  it.
+
+## 14.1 Declaring a role
+
+```okkama
+role Package {
+    label() is string;
+    opened() is ^Package;
+}
+```
+
+A role is a list of action signatures: names, parameters and results. It
+has no fields, no constructors and no bodies. (The one exception is a
+`fake` block for tests, the subject of Chapter 15.) A role may declare
+several signatures with one name, as long as their parameter types differ
+and their results agree.
+
+An object implements a role by saying so:
+
+```okkama
+object Bottle does Package { … }
+object Wallet does Account, Labelled { … }
+```
+
+The compiler checks the claim:
+
+- every action of the role exists on the object;
+- parameter types, and the fixed or variadic shape, match *exactly*;
+- result types are compatible: `^Bottle` satisfies `^Package` because
+  `Bottle does Package`.
+
+"Exactly" means exactly. A role action that takes `int` is not implemented
+by one that takes `float`, even though the float version could accept every
+integer:
+
+```okkama
+module bible/mismatch v1.0.0;
+
+role Meter { reading(scale is int) is int; }
+
+object Thermometer does Meter {
+    has degrees is int;
+    Thermometer(:degrees);
+    reading(scale is float) is int { degrees; }
+}
+
+main() is int { 0; }
+```
+
+The compiler answers:
+
+```text
+14-mismatch-rejected.ok:5:8: semantic error: Action "reading" parameter 1 on object "Thermometer" must be int for role "Meter", got float
+```
+
+Function subtyping in type theory would allow it, since parameters are
+contravariant [[Pierce 2002](#ref-pierce2002)]. Okkama keeps parameters invariant for the same
+reason it keeps overloads strict (Chapter 13): a call through the role and
+a direct call must select the same code, with no conversion in between.
+
+## 14.2 Nominal, not structural
+
+An object that has the right actions but does not declare the role does not
+satisfy it:
+
+```okkama
+module bible/nominal v1.0.0;
+
+role Presentation { label() is string; }
+
+object Invoice {
+    has number is int;
+    Invoice(:number);
+    label() is string { "invoice " + number.string(); }
+}
+
+main() is int {
+    let shown is Presentation = Invoice(number: 7);
+    0;
+}
+```
+
+The compiler answers:
+
+```text
+14-nominal-rejected.ok:12:33: semantic error: Cannot initialize variable "shown" of type Presentation with Invoice
+```
+
+`Invoice` has `label() is string`, exactly what `Presentation` asks for.
+It still cannot be used as one, because nobody said it was. Go makes the
+opposite choice: a type satisfies an interface whenever its method set
+contains the interface's methods, with no declaration at all [[Go specification](#ref-gospec)].
+TypeScript does the same. Java, C# and Rust are nominal: a class
+`implements` an interface, a type has an `impl Trait` [[Klabnik 2023](#ref-klabnik2023)]. Pierce
+sets out the trade-off: structural typing is more flexible, while nominal
+typing makes the type names carry intent and gives the checker
+something to report against [[Pierce 2002](#ref-pierce2002)].
+
+Okkama's reason is the one behind Liskov and Wing's behavioural subtyping.
+A contract is more than a set of signatures. It includes what the actions
+*mean*: their preconditions, their results, the states they lead to
+[[Liskov 1994](#ref-liskov1994)]. Two `label()` actions with the same signature may promise
+different things. `does Presentation` is the author's statement that this
+object keeps the role's promises, and the compiler holds them to the parts
+of it that it can check.
+
+The cost is ceremony at the boundary between modules. An object written
+before a role existed cannot satisfy it after the fact. A role can only be
+implemented in the module that declares the object. To use a foreign
+object as a role, wrap it in a small object that `does` the role and
+forwards to it (§14.6).
+
+## 14.3 A role reference limits what its holder can do
+
+In Java, a variable of an interface type can be cast back to the class,
+and `instanceof` tells which class it is. In Okkama a role-typed value is a
+*restricted reference*. It points to the same object, nothing is copied,
+and only the role's actions are reachable through it:
+
+```okkama
+module bible/restricted v1.0.0;
+
+role Presentation { label() is string; }
+
+object Customer does Presentation {
+    has number is int;
+    Customer(:number);
+    label() is string { "customer " + number.string(); }
+    id() is int { number; }
+}
+
+main() is int {
+    let shown is Presentation = Customer(number: 7);
+    shown.id();
+}
+```
+
+The compiler answers:
+
+```text
+14-restricted-rejected.ok:14:11: semantic error: Role "Presentation" has no action "id"
+```
+
+There is no way back to the concrete type:
+
+```okkama
+module bible/downcast v1.0.0;
+
+role Presentation { label() is string; }
+
+object Customer does Presentation {
+    has number is int;
+    Customer(:number);
+    label() is string { "customer " + number.string(); }
+    id() is int { number; }
+}
+
+main() is int {
+    let shown is Presentation = Customer(number: 7);
+    let customer is Customer = shown;
+    customer.id();
+}
+```
+
+The compiler answers:
+
+```text
+14-downcast-rejected.ok:14:32: semantic error: Cannot initialize variable "customer" of type Customer with Presentation
+```
+
+The restriction holds through everything a reference can pass through:
+
+- aliases, parameters, fields, results and collections;
+- bound actions, `Maybe` and `Presence`, enum payloads;
+- generic inference: a `T` inferred from a role reference is the role, not
+  the hidden class;
+- boxing into `any`. `any` never narrows, so the box keeps the
+  restriction.
+
+The implementation still runs with its full `self`. `Bottle.label` reads
+`volume` and `open` as usual. The restriction is on the *holder*, not on
+the object.
+
+The restriction is shallow. A result of an allowed action is accessible
+according to its own declared type. If `Package` had an action returning
+`Bottle`, the holder could use that `Bottle` fully. A role restricts
+exactly what its signatures expose.
+
+This makes a role reference a capability in the sense of object-capability
+security. Holding a reference is the permission to use it, and handing out
+a narrower reference hands out fewer rights. That is attenuation, Mark
+Miller's term for building least authority into a program
+[[Miller 2006](#ref-miller2006); [Saltzer 1975](#ref-saltzer1975)]. A function that receives a `Labelled` can print
+a label. It cannot learn the balance, even with a cast, because the
+language has no cast to try.
+
+Exceptions do not reopen the restriction either. Objects cannot do `Error`:
+
+```okkama
+module bible/object_error v1.0.0;
+
+object Failure does Error {
+    Failure();
+    text() is string { "failed"; }
+}
+
+main() is int { 0; }
+```
+
+The compiler answers:
+
+```text
+14-error-rejected.ok:3:21: semantic error: Object "Failure" cannot do Error: errors are enums, declare `enum Failure is Error = (...)`
+```
+
+Errors are enums (Chapter 10), so a `catch` never names an object type and
+can never recover a concrete object from a role.
+
+## 14.4 Moving between roles
+
+A role reference may cross into another role on two conditions:
+
+- the underlying object *nominally* does the target role;
+- every action of the target role is already reachable through the current
+  role.
+
+That is narrowing: going from more rights to fewer.
+
+```okkama
+module bible/narrowing v1.0.0;
+
+import "io/stdout" take Stdout;
+
+role Account { label() is string; balance() is int; }
+role Labelled { label() is string; }
+
+object Wallet does Account, Labelled {
+    has owner is string;
+    has cents is int;
+    Wallet(:owner, :cents);
+    label() is string { owner; }
+    balance() is int { cents; }
+}
+
+object Printer {
+    Printer();
+    print(item is Labelled) is string { "[" + item.label() + "]"; }
+}
+
+main() is int {
+    let out = Stdout();
+    let account is Account = Wallet(owner: "Ada", cents: 250);
+    out.writeln(Printer().print(account));
+    let tag is Labelled = account;
+    out.writeln(tag.label());
+    0;
+}
+```
+
+Output:
+
+```text
+[Ada]
+Ada
+```
+
+`Account` has `label` and `balance`; `Labelled` has only `label`. A
+`Wallet` does both, so an `Account` reference passes as `Labelled` to
+`Printer.print`, and binds to a `Labelled` local. The reverse is widening,
+and it is rejected even though the object behind the reference does
+`Account`:
+
+```okkama
+module bible/widen v1.0.0;
+
+role Account { label() is string; balance() is int; }
+role Labelled { label() is string; }
+
+object Wallet does Account, Labelled {
+    has owner is string;
+    has cents is int;
+    Wallet(:owner, :cents);
+    label() is string { owner; }
+    balance() is int { cents; }
+}
+
+main() is int {
+    let tag is Labelled = Wallet(owner: "Ada", cents: 250);
+    let account is Account = tag;
+    account.balance();
+}
+```
+
+The compiler answers:
+
+```text
+14-widen-rejected.ok:16:30: semantic error: Cannot initialize variable "account" of type Account with Labelled
+```
+
+If `Wallet` did only `Account`, the narrowing would be rejected too, with
+the same message for `Labelled`. A role is a nominal contract, and a
+subset of signatures is not a contract the object signed.
+
+## 14.5 Successors through a role
+
+A role may declare successor actions. `opened() is ^Package` says: calling
+this gives the next state, and it is still a `Package`. Each implementation
+returns its own type, `^Bottle` or `^Crate`. The caller holding a
+`Package` receives a restricted `^Package`. The must-use rule of
+Chapter 13 still applies through the role.
+
+On an object, a successor always returns the object's own type. `is
+^Package` on `Bottle` is an error. The role decides what a caller sees; the
+object decides what it builds.
+
+Successors on roles make roles into **state views**. Give each state of a
+protocol its own role, exposing only what is valid in that state, and
+let each transition return the role of the next state:
+
+```okkama
+module bible/states v1.0.0;
+
+// Typestate with roles: each state is a role that exposes only what is valid
+// in it, and a successor declared on a role returns the next state.
+import "io/stdout" take Stdout;
+
+role Created    { id() is string; authorize(approve is bool) is Authorization; }
+role Authorized { id() is string; capture() is ^Captured; }
+role Captured   { id() is string; refund() is ^Refunded; }
+role Refunded   { id() is string; }
+role Declined   { id() is string; reason() is string; }
+
+enum Authorization = (approved(payment is Authorized), declined(payment is Declined));
+
+enum Stage = (created, authorized, captured, refunded, declined(reason is string));
+enum PaymentError is Error = (invalid_transition(action is string));
+
+object Payment does Created, Authorized, Captured, Refunded, Declined {
+    has key is string;
+    has stage is Stage = Stage.created;
+    Payment(:key);
+
+    id() is string { key; }
+    authorize(approve is bool) is Authorization {
+        confirm stage == Stage.created else throw PaymentError.invalid_transition("authorize");
+        if approve {
+            Authorization.approved(self.approved());
+        } else {
+            Authorization.declined(self.rejected("card declined"));
+        }
+    }
+    capture() is ^Payment {
+        confirm stage == Stage.authorized else throw PaymentError.invalid_transition("capture");
+        ^stage = Stage.captured;
+    }
+    refund() is ^Payment {
+        confirm stage == Stage.captured else throw PaymentError.invalid_transition("refund");
+        ^stage = Stage.refunded;
+    }
+    reason() is string {
+        match stage {
+            case Stage.declined(text) { text; }
+            else { ""; }
+        }
+    }
+
+    private:
+    approved() is ^Payment { ^stage = Stage.authorized; }
+    rejected(reason is string) is ^Payment { ^stage = Stage.declined(reason); }
+}
+
+object Payments {
+    Payments();
+    open(id is string) is Created { Payment(key: id); }
+}
+
+main() is int {
+    let out = Stdout();
+    for [true, false] -> approve {
+        let result = match Payments().open("p-" + approve.string()).authorize(approve) {
+            case Authorization.approved(payment) { payment.capture().refund().id() + " refunded"; }
+            case Authorization.declined(payment) { payment.id() + " declined: " + payment.reason(); }
+        };
+        out.writeln(result);
+    }
+    0;
+}
+```
+
+Output:
+
+```text
+p-true refunded
+p-false declined: card declined
+```
+
+- `Payments.open` returns a `Created`. The only things a caller can do with
+  it are `id()` and `authorize(...)`.
+- `authorize` returns an enum whose two cases carry *different* views: an
+  `Authorized` or a `Declined`. The `match` must handle both.
+- `capture()` exists only on `Authorized`, and returns `^Captured`.
+  `refund()` exists only on `Captured`.
+- One immutable object, `Payment`, implements all five roles. A private
+  `stage` field records the real state, and each transition checks it with
+  `confirm`.
+
+Skipping a state does not compile:
+
+```okkama
+module bible/skip_state v1.0.0;
+
+
+role Created    { id() is string; authorize(approve is bool) is Authorization; }
+role Authorized { id() is string; capture() is ^Captured; }
+role Captured   { id() is string; refund() is ^Refunded; }
+role Refunded   { id() is string; }
+role Declined   { id() is string; reason() is string; }
+
+enum Authorization = (approved(payment is Authorized), declined(payment is Declined));
+
+enum Stage = (created, authorized, captured, refunded, declined(reason is string));
+enum PaymentError is Error = (invalid_transition(action is string));
+
+object Payment does Created, Authorized, Captured, Refunded, Declined {
+    has key is string;
+    has stage is Stage = Stage.created;
+    Payment(:key);
+
+    id() is string { key; }
+    authorize(approve is bool) is Authorization {
+        confirm stage == Stage.created else throw PaymentError.invalid_transition("authorize");
+        if approve {
+            Authorization.approved(self.approved());
+        } else {
+            Authorization.declined(self.rejected("card declined"));
+        }
+    }
+    capture() is ^Payment {
+        confirm stage == Stage.authorized else throw PaymentError.invalid_transition("capture");
+        ^stage = Stage.captured;
+    }
+    refund() is ^Payment {
+        confirm stage == Stage.captured else throw PaymentError.invalid_transition("refund");
+        ^stage = Stage.refunded;
+    }
+    reason() is string {
+        match stage {
+            case Stage.declined(text) { text; }
+            else { ""; }
+        }
+    }
+
+    private:
+    approved() is ^Payment { ^stage = Stage.authorized; }
+    rejected(reason is string) is ^Payment { ^stage = Stage.declined(reason); }
+}
+
+object Payments {
+    Payments();
+    open(id is string) is Created { Payment(key: id); }
+}
+
+main() is int {
+    let payment = Payments().open("p-1");
+    payment.capture().id();
+    0;
+}
+```
+
+The compiler answers:
+
+```text
+14-state-rejected.ok:56:13: semantic error: Role "Created" has no action "capture"
+```
+
+Strom and Yemini named this idea **typestate** in 1986: the operations
+allowed on a value depend on its state, and the compiler tracks the state
+[[Strom 1986](#ref-strom1986)]. Typestate in Rust and similar languages relies on move
+semantics, so that an old state cannot be used after the transition.
+Okkama does without them. The old state is an immutable object and remains
+valid: `authorized.capture()` can be called twice on the same
+`Authorized`, and each call returns a `Captured`. Whether the second
+capture should succeed is a question about the outside world (has the
+money moved?), and it belongs in durable state with idempotency keys, not
+in the type system. The `confirm` in each transition is the second line of
+defence inside the module.
+
+In a real program, `Payment` and `Stage` are declared `hidden`, so that
+other modules cannot name the class at all. They only ever hold one of the
+five views.
+
+## 14.6 Composition instead of inheritance
+
+A role is a contract; it carries no code. Shared behaviour comes from
+objects that hold other objects. The **decorator** is the basic form: an
+object that does a role, holds another implementation of the same role,
+and adds one behaviour around it [[Gamma 1994](#ref-gamma1994)].
+
+```okkama
+module bible/decorators v1.0.0;
+
+// Composition through a role: each decorator does the role it wraps, holds
+// another implementation of it, and adds one behaviour.
+import "io/stdout" take Stdout;
+
+role Pricing {
+    price(item is string) is int;
+}
+
+object Catalog does Pricing {
+    has prices is %string:int;
+    Catalog(:prices);
+    price(item is string) is int { prices[item] else 0; }
+}
+
+object Discounted does Pricing {
+    has origin is Pricing;
+    has percent is int;
+    Discounted(:origin, :percent);
+    price(item is string) is int {
+        let full = origin.price(item);
+        full - (full * percent / 100).int();
+    }
+}
+
+object Rounded does Pricing {
+    has origin is Pricing;
+    Rounded(:origin);
+    price(item is string) is int {
+        let exact = origin.price(item);
+        exact - exact % 10;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let base = Catalog(prices: ["tea": 345, "cake": 520]);
+    let sale is Pricing = Rounded(origin: Discounted(origin: base, percent: 15));
+    for ["tea", "cake", "soup"] -> item {
+        out.writeln(item + ": " + base.price(item).string() + " -> " + sale.price(item).string());
+    }
+    0;
+}
+```
+
+Output:
+
+```text
+tea: 345 -> 290
+cake: 520 -> 440
+soup: 0 -> 0
+```
+
+`Catalog` knows prices. `Discounted` takes 15 percent off whatever its
+`origin` says. `Rounded` rounds down to ten. Each is a few lines, each can
+be tested alone, and they combine in any order. The caller holds a
+`Pricing` and cannot tell how many layers it has. `sale.price("tea")` goes
+through three objects: 345, then 294, then 290.
+
+Compare a class hierarchy for the same job: `Catalog`, `DiscountedCatalog`,
+`RoundedDiscountedCatalog`. Every new behaviour multiplies the classes, and
+every subclass depends on the details of its parent, which is the fragile
+base class problem of Chapter 12. "Favor object composition over class
+inheritance" is the Gang of Four's own advice [[Gamma 1994](#ref-gamma1994)]. Okkama makes it
+the only option. Elegant Objects leans on such decorators throughout:
+small objects, each wrapping another behind a shared interface
+[[Bugayenko 2016](#ref-bugayenko2016)].
+
+The cost is forwarding. A role with ten actions needs ten forwarding
+actions in every decorator, even when the decorator changes one of them.
+Okkama has no delegation shorthand ("implement `Pricing` by forwarding to
+`origin`"). The forwarding code is plain to read and tedious to write.
+Keeping roles small keeps it short: a role with one or two actions is the
+common case in the standard library.
+
+## 14.7 How a role call runs
+
+A role boundary and a role call are explicit in the IR:
+
+```text
+%19: Bottle = call @Bottle.new#0(%18)
+%20: Package = role.wrap %19
+%21: Package = call.role %20, Package.opened()
+%22: str = call.role %21, Package.label()
+```
+
+`role.wrap` marks the boundary where a `Bottle` becomes a `Package`.
+`call.role` calls slot `opened` of `Package` on whatever object is behind
+the reference. Each object's declaration lists, for every role it does, the
+function that fills each slot:
+`does Package { label = @Bottle.label, opened = @Bottle.opened }`.
+
+The engines differ in how they find that function:
+
+- **The IR engine** reads the receiver's declaration and looks up its
+  witness for the role on each call.
+- **The Sparrow core** compiles `role.wrap` to nothing: a role reference is
+  the same pointer. `call.role` loads the object's header, shifts out the
+  descriptor number, and indexes a table built once per role slot. The
+  table holds one function per object type. Then it calls that function.
+  Compared with a direct call, that is a few loads and an indirect call.
+- **The JVM backend** turns each role into a Java interface. The classes of
+  objects that do it implement the interface, `role.wrap` is again a no-op,
+  and `call.role` is an `invokeinterface`. The JVM's inline caches and
+  speculative inlining then treat a call site that sees one or two object
+  types like a direct call.
+
+In none of them does the restriction cost anything at run time. It is
+checked when the program is compiled and verified, and the reference is
+the plain object.
+
+## 14.8 Roles elsewhere
+
+| | Okkama role | Java interface | Go interface | Rust trait |
+|---|---|---|---|---|
+| Conformance | declared (`does`) | declared (`implements`) | implicit, by method set | declared (`impl`) |
+| Default method bodies | no | yes | no | yes |
+| Downcast from the contract | impossible | cast, `instanceof` | type assertion, type switch | only through `Any` |
+| Parameter matching | exact | exact (overriding) | exact | exact |
+| Successor (next-state) results | yes (`^Role`) | no | no | a method that consumes `self` and returns a new type |
+| Conformance of a foreign type | no; wrap it | no | automatic, if the methods match | if the trait or the type is local |
+
+Two rows matter most. **Default bodies**: Java and Rust let an interface
+carry code, which brings back part of inheritance, including the question
+of which default wins when two interfaces supply one. A role carries none;
+shared code lives in an object. **Downcasting**: every other language in
+the table has a way back from the contract to the concrete type. Okkama
+has none, and that is what makes a role reference a capability rather than
+a type annotation.
+
+## 14.9 What this design costs
+
+- **Forwarding code.** Decorators repeat every action of the role. No
+  delegation syntax shortens it (§14.6).
+- **No retroactive conformance.** A role cannot be added to an object from
+  outside its module. The usual fix, an adapter object, is one more object.
+- **No downcast, ever.** Code that "just needs to check what this really
+  is" has to be redesigned: an action on the role that answers the
+  question, or an enum that carries the alternatives.
+- **Invariant parameters.** An implementation cannot accept more than the
+  role asks for. Usually it does not need to.
+- **One dispatch per call.** A role call is an indirect call. In hot loops
+  over a single type, holding the concrete type avoids it; the JVM and its
+  inline caches recover most of the difference.
+
+In return:
+
+- a contract states intent, not an accident of shape;
+- a reference can be narrowed, and narrowed is final;
+- behaviour composes from small objects instead of growing down a
+  hierarchy;
+- protocols can be typed by state, with no linear types.
+
 # References
 
 - <a id="ref-lions1996"></a>Jacques-Louis Lions et al. (1996). *ARIANE 5 Flight 501 Failure: Report by the Inquiry Board*. European Space Agency, Paris, 19 July 1996. https://www.esa.int/Newsroom/Press_Releases/Ariane_501_-_Presentation_of_Inquiry_Board_report
@@ -6734,6 +7479,7 @@ In return:
 - <a id="ref-fahndrich2003"></a>Manuel Fähndrich, K. Rustan M. Leino (2003). Declaring and Checking Non-null Types in an Object-Oriented Language. In *Proceedings of OOPSLA 2003*: 302–312. ACM. https://doi.org/10.1145/949305.949332
 - <a id="ref-gabriel1991"></a>Richard P. Gabriel (1991). The Rise of "Worse is Better". In *Lisp: Good News, Bad News, How to Win Big*. https://www.dreamsongs.com/RiseOfWorseIsBetter.html
 - <a id="ref-gamma1994"></a>Erich Gamma, Richard Helm, Ralph Johnson, John Vlissides (1994). *Design Patterns: Elements of Reusable Object-Oriented Software*. Addison-Wesley.
+- <a id="ref-gospec"></a>The Go Authors (2026). *The Go Programming Language Specification*, language version go1.27 (26 May 2026). https://go.dev/ref/spec
 - <a id="ref-goldberg1991"></a>David Goldberg (1991). What Every Computer Scientist Should Know About Floating-Point Arithmetic. *ACM Computing Surveys* 23(1): 5–48. https://doi.org/10.1145/103162.103163
 - <a id="ref-goodenough1975"></a>John B. Goodenough (1975). Exception Handling: Issues and a Proposed Notation. *Communications of the ACM* 18(12): 683–696. https://doi.org/10.1145/361227.361230
 - <a id="ref-gosling2023"></a>James Gosling, Bill Joy, Guy Steele, Gilad Bracha, Alex Buckley, Daniel Smith, Gavin Bierman (2023). *The Java Language Specification, Java SE 21 Edition*. Oracle. https://docs.oracle.com/javase/specs/jls/se21/html/

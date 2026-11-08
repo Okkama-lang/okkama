@@ -1,0 +1,67 @@
+module bible/states v1.0.0;
+
+// Typestate with roles: each state is a role that exposes only what is valid
+// in it, and a successor declared on a role returns the next state.
+import "io/stdout" take Stdout;
+
+role Created    { id() is string; authorize(approve is bool) is Authorization; }
+role Authorized { id() is string; capture() is ^Captured; }
+role Captured   { id() is string; refund() is ^Refunded; }
+role Refunded   { id() is string; }
+role Declined   { id() is string; reason() is string; }
+
+enum Authorization = (approved(payment is Authorized), declined(payment is Declined));
+
+enum Stage = (created, authorized, captured, refunded, declined(reason is string));
+enum PaymentError is Error = (invalid_transition(action is string));
+
+object Payment does Created, Authorized, Captured, Refunded, Declined {
+    has key is string;
+    has stage is Stage = Stage.created;
+    Payment(:key);
+
+    id() is string { key; }
+    authorize(approve is bool) is Authorization {
+        confirm stage == Stage.created else throw PaymentError.invalid_transition("authorize");
+        if approve {
+            Authorization.approved(self.approved());
+        } else {
+            Authorization.declined(self.rejected("card declined"));
+        }
+    }
+    capture() is ^Payment {
+        confirm stage == Stage.authorized else throw PaymentError.invalid_transition("capture");
+        ^stage = Stage.captured;
+    }
+    refund() is ^Payment {
+        confirm stage == Stage.captured else throw PaymentError.invalid_transition("refund");
+        ^stage = Stage.refunded;
+    }
+    reason() is string {
+        match stage {
+            case Stage.declined(text) { text; }
+            else { ""; }
+        }
+    }
+
+    private:
+    approved() is ^Payment { ^stage = Stage.authorized; }
+    rejected(reason is string) is ^Payment { ^stage = Stage.declined(reason); }
+}
+
+object Payments {
+    Payments();
+    open(id is string) is Created { Payment(key: id); }
+}
+
+main() is int {
+    let out = Stdout();
+    for [true, false] -> approve {
+        let result = match Payments().open("p-" + approve.string()).authorize(approve) {
+            case Authorization.approved(payment) { payment.capture().refund().id() + " refunded"; }
+            case Authorization.declined(payment) { payment.id() + " declined: " + payment.reason(); }
+        };
+        out.writeln(result);
+    }
+    0;
+}

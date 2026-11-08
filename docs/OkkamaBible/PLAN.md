@@ -143,3 +143,13 @@ Updated with each chapter: `build.py --stats`.
   state machine (an order's life) across several objects; successors
   through roles (`^Role`, with Chapter 14); measurements of successor
   loops against `Cell` and `reduce`; async successors.
+- Chapter 14 (roles): 5.7 pages (EN) of its floor of 18. Written:
+  declaring a role and conformance (exact parameters), nominal versus
+  structural (Go, Liskov–Wing), restricted references and no downcast
+  (capabilities, attenuation), narrowing between roles, successors through
+  roles and typestate (`14-states`), decorators instead of inheritance, how
+  each engine runs a role call, a comparison table, costs. To add: generic
+  roles (`Iterable<T>`, `Cursor<T>`) and the iteration contract; std roles
+  (`Writing`, `WritingText`) and built-in values behind roles; async role
+  actions; a larger composition case study from std (HTTP client layers);
+  measurements of role calls against direct calls.

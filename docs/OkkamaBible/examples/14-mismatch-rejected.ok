@@ -1,0 +1,11 @@
+module bible/mismatch v1.0.0;
+
+role Meter { reading(scale is int) is int; }
+
+object Thermometer does Meter {
+    has degrees is int;
+    Thermometer(:degrees);
+    reading(scale is float) is int { degrees; }
+}
+
+main() is int { 0; }
