@@ -166,8 +166,9 @@
   - [14.5 Successors through a role](#145-successors-through-a-role)
   - [14.6 Composition instead of inheritance](#146-composition-instead-of-inheritance)
   - [14.7 How a role call runs](#147-how-a-role-call-runs)
-  - [14.8 Roles elsewhere](#148-roles-elsewhere)
-  - [14.9 What this design costs](#149-what-this-design-costs)
+  - [14.8 Operators are roles](#148-operators-are-roles)
+  - [14.9 Roles elsewhere](#149-roles-elsewhere)
+  - [14.10 What this design costs](#1410-what-this-design-costs)
 - [Chapter 15. Fakes, tests and properties](#chapter-15-fakes-tests-and-properties)
   - [15.1 Tests live next to the code](#151-tests-live-next-to-the-code)
   - [15.2 The `test` binding](#152-the-test-binding)
@@ -178,6 +179,16 @@
   - [15.7 The rest of the toolbox](#157-the-rest-of-the-toolbox)
   - [15.8 What does not work yet](#158-what-does-not-work-yet)
   - [15.9 What this design costs](#159-what-this-design-costs)
+- [Chapter 16. Enums and pattern matching](#chapter-16-enums-and-pattern-matching)
+  - [16.1 A closed set of names](#161-a-closed-set-of-names)
+  - [16.2 Cases that carry data](#162-cases-that-carry-data)
+  - [16.3 `match`](#163-match)
+  - [16.4 Compact choices](#164-compact-choices)
+  - [16.5 Closed or open: enums and roles](#165-closed-or-open-enums-and-roles)
+  - [16.6 How enums run](#166-how-enums-run)
+  - [16.7 Enums elsewhere](#167-enums-elsewhere)
+  - [16.8 Limits](#168-limits)
+  - [16.9 What this design costs](#169-what-this-design-costs)
 
 # Part I. The Razor
 
@@ -2947,6 +2958,10 @@ Every operator requires operands of the right category and converts nothing:
   mixes them: `"n = " + 1` is an error (Chapter 6).
 - `/` on two integers gives an exact `rat`. There is no `**`; powers are
   written with `pow` (Chapter 5).
+- An object takes part in arithmetic and ordering only through roles it
+  declares: `a + b` is `a.plus(b)` when the type of `a` does `Adding`, and
+  `a < b` asks `a.order(b)` through `Comparing` (§14.8). An object without
+  those roles has no operators.
 
 ## 9.4 Choosing
 
@@ -6251,7 +6266,10 @@ The rules are short, and they never guess:
 4. A candidate wins only if it is no less specific in *every* position and
    more specific in at least one.
 5. Declaration order never breaks a tie. A tie is an error.
-6. Overloads of one name and arity must declare the same result type.
+6. Overloads of one name and arity may declare different results when
+   their parameter types differ. A call gets the result of the overload it
+   selects: `minus(duration is Duration) is Instant` and
+   `minus(other is Instant) is Duration` sit side by side (§14.8).
 
 Rule 4 makes `(int, any)` and `(any, int)` ambiguous for a call with two
 integers. Each is better in one position and worse in the other:
@@ -7475,7 +7493,116 @@ In none of them does the restriction cost anything at run time. It is
 checked when the program is compiled and verified, and the reference is
 the plain object.
 
-## 14.8 Roles elsewhere
+## 14.8 Operators are roles
+
+Arithmetic on objects goes through roles as well. The standard module
+`operators` declares one role per operator (#215). The first type parameter
+is the right operand, the second the result:
+
+| Role | Action | Operator |
+|---|---|---|
+| `Adding<T, R>` | `plus(other is T) is R` | `a + b` |
+| `Subtracting<T, R>` | `minus(other is T) is R` | `a - b` |
+| `Multiplying<T, R>` | `times(other is T) is R` | `a * b` |
+| `Dividing<T, R>` | `divided(other is T) is R` | `a / b` |
+| `Remaindering<T, R>` | `remainder(other is T) is R` | `a % b` |
+| `Negating<R>` | `negated() is R` | `-a` |
+
+```okkama
+module bible/operators v1.0.0;
+
+// Arithmetic on an object is a call to a role action: a + b is a.plus(b)
+// when the type does Adding<…>, and a < b asks Comparing for an Order.
+import "io/stdout" take Stdout;
+import "operators" take Adding, Subtracting, Multiplying, Negating;
+import "compare" take Comparing, Order;
+
+object Money does Adding<Money, Money>, Subtracting<Money, Money>, Multiplying<int, Money>,
+        Negating<Money>, Comparing<Money> {
+    has cents is int;
+    Money(:cents);
+
+    cents() is int { cents; }
+    plus(other is Money) is Money { Money(cents: cents + other.cents()); }
+    minus(other is Money) is Money { Money(cents: cents - other.cents()); }
+    times(count is int) is Money { Money(cents: cents * count); }
+    negated() is Money { Money(cents: -cents); }
+    order(other is Money) is Order { cents.order(other.cents()); }
+}
+
+main() is int {
+    let out = Stdout();
+    let price = Money(cents: 1250);
+    let total = price * 3 + Money(cents: 499);      // price.times(3).plus(…)
+    let refund = -Money(cents: 300);                // Money(cents: 300).negated()
+    out.writeln(total.cents().string() + " " + (total + refund).cents().string());
+    out.writeln(if total > price && price <= price { "ordered"; } else { "not ordered"; });
+    0;
+}
+```
+
+Output:
+
+```text
+4249 3949
+ordered
+```
+
+With an object on the left, `a + b` is the call `a.plus(b)` and nothing
+more. The compiler rewrites the operator into that call and checks it like
+any other call: the right operand gets no conversion, and the overload it
+selects must be a role instance the type declares. The engines never see an
+operator on an object. The orderings `<`, `<=`, `>` and `>=` use the role
+that already existed for them, `compare.Comparing<T>`: `a < b` is
+`a.order(b) == Order.less`. `==` stays structural (Chapter 12).
+
+The roles are nominal, like every role (§14.2). An action named `plus` does
+not give an object `+`:
+
+```okkama
+module bible/undeclared v1.0.0;
+
+object Weight {
+    has grams is int;
+    Weight(:grams);
+    grams() is int { grams; }
+    plus(other is Weight) is Weight { Weight(grams: grams + other.grams()); }
+}
+
+main() is int {
+    let both = Weight(grams: 300) + Weight(grams: 200);
+    0;
+}
+```
+
+The compiler answers:
+
+```text
+14-operator-undeclared-rejected.ok:11:16: semantic error: Operator + cannot be applied to Weight and Weight: Weight does not do Adding
+```
+
+One role may be declared several times with different arguments. `Instant`
+does `Subtracting<Duration, Instant>` and `Subtracting<Instant, Duration>`:
+an instant minus a duration is an instant, an instant minus an instant is a
+duration. Its two `minus` actions are overloads with different results,
+which §13.3 allows because their parameter types differ. In the standard
+library `BigInt` does all six roles and `Comparing`; `Duration`, `Instant`
+and `MonotonicInstant` do the ones time arithmetic needs.
+
+Other languages find operators in one of three ways. C++ and Python look
+them up by name: a function `operator+` [[Stroustrup 1994](#ref-stroustrup1994)], or a method
+`__add__`. Haskell puts them in a class, and `Num` bundles `+`, `-`, `*`,
+`negate`, `abs`, `signum` and `fromInteger` together [[Haskell 2010](#ref-haskell2010)]. A type
+that can be added but not multiplied, such as a duration, cannot be a `Num`
+honestly. Rust has one trait per operator, `Add`, `Sub`, `Mul`, each with
+the right operand as a parameter and the result as an associated type
+[[Klabnik 2023](#ref-klabnik2023)]. Okkama is closest to Rust: a role per operator, the result
+spelled out, conformance declared. Lookup by name was ruled out because
+nothing in a name says that `plus` means addition, which is the argument
+of §14.2. One class for all arithmetic was ruled out because a contract
+should not ask for actions the object cannot keep.
+
+## 14.9 Roles elsewhere
 
 | | Okkama role | Java interface | Go interface | Rust trait |
 |---|---|---|---|---|
@@ -7485,6 +7612,7 @@ the plain object.
 | Parameter matching | exact | exact (overriding) | exact | exact |
 | Successor (next-state) results | yes (`^Role`) | no | no | a method that consumes `self` and returns a new type |
 | Conformance of a foreign type | no; wrap it | no | automatic, if the methods match | if the trait or the type is local |
+| Operators on user types | through roles (`Adding`, …) | no | no | through traits (`Add`, …) |
 
 Two rows matter most. **Default bodies**: Java and Rust let an interface
 carry code, which brings back part of inheritance, including the question
@@ -7494,7 +7622,7 @@ the table has a way back from the contract to the concrete type. Okkama
 has none, and that is what makes a role reference a capability rather than
 a type annotation.
 
-## 14.9 What this design costs
+## 14.10 What this design costs
 
 - **Forwarding code.** Decorators repeat every action of the role. No
   delegation syntax shortens it (§14.6).
@@ -7505,6 +7633,10 @@ a type annotation.
   question, or an enum that carries the alternatives.
 - **Invariant parameters.** An implementation cannot accept more than the
   role asks for. Usually it does not need to.
+- **Operators look only to the left.** `price * 3` works; `3 * price` does
+  not, because `int` cannot be given a role. Python asks the right operand
+  through `__rmul__`, and Rust allows `impl Mul<Money> for i64` in Money's
+  crate. Okkama has neither (no retroactive conformance, above).
 - **One dispatch per call.** A role call is an indirect call. In hot loops
   over a single type, holding the concrete type avoids it; the JVM and its
   inline caches recover most of the difference.
@@ -7965,6 +8097,622 @@ In return:
 - a failed property comes back as a seed and a minimal input that
   reproduce it on any engine.
 
+# Chapter 16. Enums and pattern matching
+
+Some values come from a short list that is known in advance: a priority is
+low, normal or urgent; an order is a draft, paid, shipped or cancelled. Some of
+those alternatives carry data of their own. A paid order has an amount, a
+shipped one has a carrier and a tracking number, and a draft has nothing.
+Okkama covers both with one declaration, `enum`, and takes them apart with
+`match` and the compact choice `?? !!`. The compiler knows every case, so it can
+tell when code forgets one.
+
+```okkama
+module bible/enums v1.0.0;
+
+// A payload-free enum names a closed set; a variant carries data in some of
+// its cases. match takes either apart, and the compiler checks the cases.
+import "io/stdout" take Stdout;
+
+enum Priority = (low, normal, urgent);
+
+enum Stage = (draft, paid(amount is int), shipped(carrier is string, tracking is string),
+    cancelled(reason is string));
+
+object Order {
+    has number is int;
+    has priority is Priority;
+    has stage is Stage;
+    Order(:number, :priority, :stage);
+
+    line() is string {
+        let flag = priority ?? .urgent: "!" !! _: " ";
+        let state = match stage {
+            case Stage.draft { "draft"; }
+            case Stage.paid(amount) { "paid " + amount.string(); }
+            case Stage.shipped(carrier, tracking) { "shipped by " + carrier + ", " + tracking; }
+            case Stage.cancelled(reason) { "cancelled: " + reason; }
+        };
+        flag + " #" + number.string() + " " + state;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let orders is @Order = [
+        Order(number: 1, priority: Priority.normal, stage: Stage.draft),
+        Order(number: 2, priority: Priority.urgent, stage: Stage.paid(4250)),
+        Order(number: 3, priority: Priority.low, stage: Stage.shipped("DHL", "JD0142")),
+        Order(number: 4, priority: Priority.normal, stage: Stage.cancelled("out of stock"))
+    ];
+    for orders -> order { out.writeln(order.line()); }
+    0;
+}
+```
+
+Output:
+
+```text
+  #1 draft
+! #2 paid 4250
+  #3 shipped by DHL, JD0142
+  #4 cancelled: out of stock
+```
+
+- `Priority` is a **payload-free enum**: three names and nothing else.
+- `Stage` is a **variant enum**: some of its cases carry typed fields.
+- `match stage` has one branch per case and binds each case's fields to
+  names. Drop the `cancelled` branch and the program no longer compiles.
+- `priority ?? .urgent: "!" !! _: " "` is the one-line form: one pattern, and
+  `_` for everything else.
+
+This chapter covers enums of both kinds and the rules of matching, and then
+asks the design question that enums share with roles: when should a set of
+alternatives be closed, and when open?
+
+## 16.1 A closed set of names
+
+```okkama
+enum Priority = (low, normal, urgent);
+```
+
+An enum declaration names a type and lists its cases. The type name is
+capitalised, like every type; the cases are lower-case identifiers
+(`enum Status = (Ready, failed)` is a syntax error: `Expect enum case
+name`). A case is always written with its type, `Priority.urgent`. There is no
+bare `urgent` in scope, so two enums can share a case name without conflict. A
+duplicate case is an error: `Enum "Status" already has case "ready"`.
+
+What an Okkama enum value *does not* have is as important as what it has:
+
+- **No number.** A case has no ordinal you can read, and there is no
+  conversion to or from `int`.
+- **No order.** `Priority.low < Priority.urgent` is rejected:
+
+```okkama
+module bible/order v1.0.0;
+
+enum Priority = (low, normal, urgent);
+
+main() is int {
+    let first = Priority.low < Priority.urgent;
+    0;
+}
+```
+
+The compiler answers:
+
+```text
+16-order-rejected.ok:6:17: semantic error: Operator < cannot be applied to Priority and Priority
+```
+
+- **No actions.** An enum value is not an object. `Priority.low.string()` is
+  an error, `Can only call actions on objects`, and there is no `values()` that
+  lists the cases.
+- **No mixing.** Two cases are equal only if they belong to the same enum and
+  are the same case. `Status.ready == Other.ready` is not `false`, it is a
+  compile error, `Cannot compare Status and Other`, like any comparison across
+  categories (Chapter 4).
+
+What it does have is equality, and the right to be a map key and an array
+element. `[Unit.celsius: 2, Unit.kelvin: 1]` is a `%Unit:int`, and `@Status`
+is an array of statuses.
+
+Each refusal has a history. In C an enumerator is an `int` constant. It can be
+added, compared, stored in any integer variable and printed as a number
+[[Kernighan 1988](#ref-kernighan1988)], so an enum gives a name to a number without giving it a
+type. Pascal made the enumerated type a type of its own, but an *ordinal* one:
+its values are ordered, `succ` and `pred` step through them, and they index
+arrays and drive `for` loops [[Wirth 1971](#ref-wirth1971)]. Java turned each case into an
+object with methods, fields, an `ordinal()` and a generated `values()`
+[[Gosling 2023](#ref-gosling2023)]. Bloch's advice in *Effective Java* is to use enums instead of
+`int` constants and never derive anything from `ordinal()`
+[[Bloch 2018](#ref-bloch2018)]. Go has no enum declaration at all: a block of constants with
+`iota` numbers them [[Go specification](#ref-gospec)].
+
+Okkama takes the type from Pascal and leaves out the arithmetic. An
+ordinal invites code that depends on the order of a declaration: `if level >
+Priority.normal` silently changes meaning when someone inserts `high`
+between `normal` and `urgent`. If a domain does have an order, the order is a
+fact about the domain, and the program states it: a `match` that maps each
+case to a weight, or an object that does `Comparing` (Chapter 14). The same
+goes for text. The word printed for a case is a presentation decision. It
+depends on the audience and the language. A `string()` on the enum would pick
+one silently. A `?? !!` or a `match` makes the choice where it is used.
+
+The order of a declaration is not entirely invisible. A map keeps its keys
+sorted, and enum keys sort by their position in the declaration, on every
+engine:
+
+```okkama
+enum Unit = (celsius, kelvin, fahrenheit);
+let units = [Unit.fahrenheit: 3, Unit.kelvin: 2, Unit.celsius: 1];
+// units.keys(): celsius, kelvin, fahrenheit
+```
+
+That gives iteration a stable order without making the order an operator.
+
+## 16.2 Cases that carry data
+
+```okkama
+enum Stage = (draft, paid(amount is int), shipped(carrier is string, tracking is string),
+    cancelled(reason is string));
+```
+
+A case may declare fields. The enum is then a **variant**, a *tagged union*,
+or what the ML family calls an algebraic data type. A value of `Stage` is
+exactly one of four things, and the case decides which fields exist:
+
+- `Stage.paid(4250)` builds a value. Payload fields are given positionally,
+  in declaration order. `Stage.paid(amount: 4250)` is rejected: `Variant
+  Stage.paid expects 1 positional payload field(s)`.
+- Payload fields are immutable and have no accessors. `stage.amount` does not
+  exist, because on a `draft` there would be nothing to return. The only way to
+  read a field is a pattern that has first established the case.
+- Equality compares the enum, the case and the payload, field by field.
+
+A variant may be generic:
+
+```okkama
+module bible/variants v1.0.0;
+
+// A variant may be generic. Equality compares the enum, the case and the
+// payload; a payload-free enum is also a map key.
+import "io/stdout" take Stdout;
+
+enum Reading<T> = (missing, single(value is T), range(low is T, high is T));
+enum Unit = (celsius, kelvin);
+
+object Sensor {
+    has name is string;
+    has unit is Unit;
+    has reading is Reading<int>;
+    Sensor(:name, :unit, :reading);
+
+    text() is string {
+        let suffix = unit ?? .celsius: " C" !! .kelvin: " K";
+        let shown = match reading {
+            case Reading.missing { "no data"; }
+            case Reading.single(value) { value.string() + suffix; }
+            case Reading.range(low, high) { low.string() + ".." + high.string() + suffix; }
+        };
+        name + ": " + shown;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let sensors is @Sensor = [
+        Sensor(name: "hall", unit: Unit.celsius, reading: Reading.single(21)),
+        Sensor(name: "cellar", unit: Unit.celsius, reading: Reading.range(8, 11)),
+        Sensor(name: "probe", unit: Unit.kelvin, reading: Reading<int>.missing)
+    ];
+    for sensors -> sensor { out.writeln(sensor.text()); }
+    let same = Reading.single(21) == Reading.single(21);
+    let other = Reading.single(21) == Reading.range(21, 21);
+    out.writeln(same.string() + " " + other.string());
+    let units = [Unit.celsius: 2, Unit.kelvin: 1];
+    out.writeln(units.has(Unit.kelvin).string());
+    0;
+}
+```
+
+Output:
+
+```text
+hall: 21 C
+cellar: 8..11 C
+probe: no data
+true false
+true
+```
+
+`Reading.single(21)` infers `Reading<int>` from its argument. A case without
+fields has nothing to infer from, so without an expected type it needs explicit
+arguments: `Reading<int>.missing`. Writing `Reading.missing` alone is
+rejected: `Cannot infer type arguments for Reading.missing; provide an expected
+type or explicit type arguments`. In the `Sensor` constructor the
+field type supplies the context.
+
+Two enums of the standard prelude are variants of exactly this kind:
+`Maybe<T> = (some(value), none)` and `Presence<T>`, which adds `missing`
+(Chapter 7). Error enums declared `is Error` are variants too, even when no
+case has a payload, and a `catch` takes them apart with the same patterns
+(Chapter 10).
+
+Pascal's variant records gave the idea wide use in an unsafe form
+[[Wirth 1971](#ref-wirth1971)]. The tag was an ordinary field, and the language did not check
+that a program read the fields of the variant the tag named. HOPE combined
+data types defined by cases with functions defined by patterns over them
+[[Burstall 1980](#ref-burstall1980)], and ML made the pair standard, with the compiler checking
+the patterns [[Milner 1997](#ref-milner1997)]. Haskell kept it [[Haskell 2010](#ref-haskell2010)], and Rust brought
+it to systems programming as `enum` with `match` [[Klabnik 2023](#ref-klabnik2023)]. Java reached
+it in steps: records, then sealed interfaces that close a hierarchy, then
+`switch` with patterns that checks the hierarchy is covered
+[[Bierman 2021](#ref-jep395); [Bierman 2021](#ref-jep409); [Bierman 2023](#ref-jep441)].
+
+Okkama's variant is the ML one with the field names of a record. Its fields
+are named in the declaration and positional at use, and the compiler checks
+both arity and types.
+
+## 16.3 `match`
+
+```okkama
+let state = match stage {
+    case Stage.draft { "draft"; }
+    case Stage.paid(amount) { "paid " + amount.string(); }
+    case Stage.shipped(carrier, tracking) { "shipped by " + carrier + ", " + tracking; }
+    case Stage.cancelled(reason) { "cancelled: " + reason; }
+};
+```
+
+The subject is evaluated once. Each `case` lists one or more patterns, and the
+first case with a matching pattern runs. There is no fall-through and no
+`break`; a branch is a block, and its last value is the value of the `match`.
+`else` takes whatever no case matched.
+
+Patterns are of two kinds:
+
+- **A value.** `case Priority.low, Priority.normal`, `case 404`, `case "GET"`.
+  The subject is compared with `==`, so the rules of equality apply: the value
+  must be of the subject's category, and `case 1..5` against an `int` is
+  rejected rather than read as a range test (Chapter 9).
+- **A variant pattern.** `case Stage.shipped(carrier, tracking)` tests the
+  case and binds each field to a name, or ignores it with `_`. The number of
+  bindings must equal the number of fields: `Wrong number of variant pattern
+  bindings`. A binding exists only inside its branch.
+
+All branches of a `match` that produces a value must produce one type:
+
+```text
+semantic error: Branches produce different types: int and string
+```
+
+A branch that returns, throws or panics produces no value and does not take
+part in the check.
+
+### Exhaustiveness
+
+The compiler knows every case of an enum, so it checks that a `match` covers
+them:
+
+```okkama
+module bible/missing v1.0.0;
+
+enum Stage = (draft, paid(amount is int), cancelled(reason is string));
+
+object Report {
+    Report();
+    text(stage is Stage) is string {
+        match stage {
+            case Stage.draft { "draft"; }
+            case Stage.paid(amount) { "paid " + amount.string(); }
+        }
+    }
+}
+
+main() is int { 0; }
+```
+
+The compiler answers:
+
+```text
+16-missing-rejected.ok:8:9: semantic error: Non-exhaustive match: missing cancelled
+```
+
+The rule depends on the kind of enum:
+
+- A `match` over a **variant enum** — one with a payload anywhere, an error
+  enum, `Maybe`, `Presence` — must cover every case or have `else`. That holds
+  for a statement `match` as well as for one that produces a value.
+- A `match` over a **payload-free enum** that produces a value must cover
+  every case or have `else`. Otherwise there would be no value to produce:
+
+```okkama
+module bible/value v1.0.0;
+
+enum Priority = (low, normal, urgent);
+
+object Queue {
+    Queue();
+    weight(priority is Priority) is int {
+        let weight = match priority {
+            case Priority.low { 1; }
+            case Priority.normal { 2; }
+        };
+        weight;
+    }
+}
+
+main() is int { 0; }
+```
+
+The compiler answers:
+
+```text
+16-value-rejected.ok:8:22: semantic error: match over enum `Priority` does not cover urgent, so it has no value here; add the cases or an `else` branch
+```
+
+- A *statement* `match` over a payload-free enum may leave cases out; it then
+  does nothing for them. `okkama lint` reports it:
+
+```text
+warning[non-exhaustive-match]: match over enum `Status` does not handle failed, done; add the cases or an `else` branch
+```
+
+The second and third rules differ because a payload-free enum used to be
+treated as a set of constants, and a statement over constants may
+legitimately act on some of them only. The lint keeps the old freedom visible.
+Variants never had it. A missing case of a variant is a missing piece of data
+handling, and the compiler treats it as such.
+
+Exhaustiveness pays off most when the enum changes. Add `refunded(amount is
+int)` to `Stage`, and every `match` over a stage that lists cases becomes an
+error that names `refunded`. The list of places to update comes from the
+compiler, not from a search. This is the reason to prefer listing cases over
+`else`. An `else` covers today's remaining cases and every future one, and so
+it hides exactly the places that a new case should reach. Maranget describes
+the two checks a compiler can make on a match: *exhaustiveness*, whether some
+value is matched by no case, and *usefulness*, whether a case can never be
+reached [[Maranget 2007](#ref-maranget2007)]. Okkama implements the first. The second is partial:
+a repeated variant pattern is an error (`Duplicate variant pattern`), but a
+repeated payload-free case, a repeated literal, or an `else` after every case
+is accepted without a word (issue #286).
+
+## 16.4 Compact choices
+
+Chapter 9 introduced `?? !!` on booleans and Chapter 7 on `Maybe`. On any enum
+it is a `match` written as one expression:
+
+```okkama
+let suffix = unit ?? .celsius: " C" !! .kelvin: " K";
+let flag = priority ?? .urgent: "!" !! _: " ";
+let label = reading ?? .single(value): value.string() !! _: "no single value";
+```
+
+- After `??` and each `!!` comes a pattern, a colon and the result. Patterns
+  drop the type name (`.urgent`, not `Priority.urgent`), because the subject
+  already fixes it.
+- `_` covers the cases not named.
+- Coverage must be complete, and a case may not repeat. Both rules apply to
+  payload-free enums as well, unlike `match`. Choices cannot nest.
+
+The message for a missing case in a compact choice describes the form rather
+than the case (`Compact choice branches must produce a value or diverge`); a
+better one is issue #291. For anything longer than a line, `match` reads
+better and says more when it fails.
+
+## 16.5 Closed or open: enums and roles
+
+An enum and a role are two answers to one question: how to describe a value
+that can be one of several kinds.
+
+- An **enum** lists the kinds in one place. Code that uses it switches on the
+  kind. Adding a new *operation* over stages is easy: write one more function
+  with a `match`, and nothing else changes. Adding a new *kind* is harder:
+  every `match` must learn it, and the compiler lists them.
+- A **role** leaves the kinds open. Each kind is an object that does the role
+  and carries its own behaviour. Adding a new *kind* is easy: write one more
+  object, and nothing else changes. Adding a new *operation* is harder: the
+  role gains an action, and every object must implement it.
+
+Reynolds described this duality in 1975, and Cook revisits it as the
+difference between abstract data types and objects [[Cook 2009](#ref-cook2009)]. Wadler named it the
+*expression problem*: define a data type by cases so that both new cases and
+new functions can be added without recompiling existing code and without
+losing static type safety [[Wadler 1998](#ref-wadler1998)]. Okkama does not solve the expression
+problem; very few languages do without extra machinery. It offers both sides
+and asks the programmer to choose by what is expected to change:
+
+| The set of kinds is… | …and the operations are… | Use |
+|---|---|---|
+| closed, part of the domain's definition (order states, token kinds, protocol messages) | many, added over time (rendering, pricing, persistence) | an enum, with `match` |
+| open, extended by other modules or by tests (storage backends, transports, clocks) | few and stable | a role, with objects |
+
+The test is whether a newcomer must be written into one list or may be added
+from outside. A stage of an order belongs to the order's definition. A new
+stage is a change to the business, and every place that handles stages should
+be reviewed. A storage backend does not belong to the service that uses it,
+and a fake in a test is one more backend (Chapter 15). A role cannot be
+matched on, because there is no downcast (Chapter 14). An enum cannot be
+extended, because its declaration is the complete list. Each property is what
+makes the other choice worse.
+
+Java's sealed interfaces sit in between: a closed list of classes, each with
+its own methods, which a `switch` can also take apart [[Bierman 2021](#ref-jep409); [Bierman 2023](#ref-jep441)].
+Okkama has no single construct for this, but the effect is reachable: a
+variant enum whose payloads are objects.
+
+## 16.6 How enums run
+
+The two kinds of enum compile differently, and the difference shows in what
+they cost.
+
+A **payload-free enum** is a value of its own category in OIR. A case is
+`enum.case`, and comparison is `enum.eq`:
+
+```text
+func @Probe.code(%0: Probe, %1: Status) -> int [method Probe] {
+^b0:
+    %2: Status = enum.case Status.ready
+    %3: bool = enum.eq %1, %2
+    cond %3, ^b1, ^b2
+^b1:
+    %4: int = const 1
+    br ^b3(%4)
+^b2:
+    %5: int = const 2
+    br ^b3(%5)
+^b3(%6: int):
+    ret %6
+}
+```
+
+The source was `match s { case Status.ready { 1; } case Status.failed,
+Status.done { 2; } }`. The last case is not tested at all: the match is
+exhaustive, so whatever is not `ready` must be `failed` or `done`. On the
+Sparrow core an enum value is an immediate 64-bit word, with the enum's number
+in the high half and the case's in the low half. Building one allocates
+nothing, and comparing two compares two words. On the JVM each case is a
+singleton object of the runtime class `okkama.rt.Case`, held in a static field
+of a class generated for the enum. Equality is identity, and map keys sort by
+the case number.
+
+A **variant** becomes an object that the compiler generates. For
+
+```okkama
+enum Reading = (empty, value(item is int), pair(left is int, right is int));
+```
+
+OIR declares
+
+```text
+object $variant_Reading_1 {
+    field $tag: int
+    field $1_item: array<int>
+    field $2_left: array<int>
+    field $2_right: array<int>
+}
+```
+
+The tag is the case number. Every field of every case gets a slot, and each
+slot is a one-element array, empty when the case is not active.
+`Reading.pair(1, 2)` builds `[]`, `[1]` and `[2]` and then the object. A
+pattern reads a field through a generated accessor that checks the tag first.
+The check cannot fail after a `match` has tested the case, but it is still
+executed:
+
+```text
+func @$variant_Reading_1.$field2(%0: $variant_Reading_1) -> int [method $variant_Reading_1] {
+^b0:
+    %1: int = obj.get %0, $tag
+    %2: int = const 2
+    %3: bool = int.eq %1, %2
+    cond %3, ^b1, ^b2
+^b1:
+    %4: array<int> = obj.get %0, $2_left
+    %5: int = const 0
+    %6: int = array.get %4, %5
+    ret %6
+^b2:
+    trap empty "Cannot extract payload of an inactive enum variant"
+}
+```
+
+This representation needed no new instruction in any engine: a variant is an
+object with arrays, and every engine already had both. It is also the most
+expensive way to hold a variant. Below is a loop of ten million steps. Each
+step builds one value and takes it apart: a payload-free case, a two-field
+object, or a `value`/`pair` variant. Times are the best of three runs, on the
+release build, on an Apple M2 Max:
+
+| | payload-free enum | object with two fields | variant |
+|---|---:|---:|---:|
+| Sparrow core | 0.03 s | 0.08 s | 0.37 s |
+| JVM | 0.34 s | 0.37 s | 0.75 s |
+| IR engine (1 000 000 steps) | 0.23 s | 0.44 s | 0.90 s |
+
+A variant costs about twice an object with the same data on the JVM and on the
+IR engine, and four to five times on the core, where an object that does not
+escape is cheap. The fix is a representation with one object per case and
+plain fields, and it changes nothing a program can observe (issue #290).
+
+## 16.7 Enums elsewhere
+
+| | Okkama | C | Pascal | Java | Rust | Haskell | Go |
+|---|---|---|---|---|---|---|---|
+| Case is a number | no | yes (`int`) | ordinal | `ordinal()` | `as` cast for payload-free enums | `Enum` class, if derived | yes (`iota`) |
+| Ordering operators | no | yes | yes | `compareTo` | if derived | if derived | yes |
+| Data per case | variants | no (unions are separate and untagged) | variant records, unchecked tag | sealed classes and records | yes | yes | no |
+| Exhaustiveness checked | yes; lint only for statement matches over payload-free enums | no | no | `switch` expressions and pattern `switch` | yes | warning (`-Wincomplete-patterns`) | no |
+| Recursive data | no (#287) | through pointers | through pointers | yes | through `Box` | yes | — |
+| Nested patterns | no (#288) | — | — | yes | yes | yes | — |
+| Actions on cases | no | — | — | yes | `impl` blocks | type classes | methods on the type |
+
+Okkama's enum keeps the type safety of the Haskell and Rust column. It leaves
+out what those languages build on top of it: nested patterns, recursion,
+derived orderings and methods. The first two are missing for now. The last
+two are left out on purpose, for the reasons in §16.1.
+
+## 16.8 Limits
+
+- **No recursive variants.** A case cannot carry its own enum, directly or
+  indirectly:
+
+```okkama
+module bible/recursive v1.0.0;
+
+enum Tree = (leaf, node(left is Tree, value is int, right is Tree));
+
+main() is int { 0; }
+```
+
+The compiler answers:
+
+```text
+16-recursive-rejected.ok:3:1: semantic error: Recursive variant payload types are not supported
+```
+
+  Trees, lists and expression syntax trees, the classic uses of algebraic
+  data types since HOPE, have to be built from objects for now (issue #287).
+- **No nested patterns.** `case Pair.both(Maybe.some(x), y)` is rejected:
+  `Expected a binding or _ in variant pattern`. A second `match` on the bound
+  field does the same job in more lines (issue #288).
+- **Variants are not map keys.** A payload-free enum is a key; a variant is
+  not: `Map key type Reading is not a scalar key type` (issue #289).
+- **Redundant cases pass silently.** A repeated payload-free case, a repeated
+  literal, or an `else` that can never run is accepted (issue #286).
+- **Diagnostics.** A non-exhaustive `match` in the tail of an action reports
+  that the action has no value rather than which case is missing, and so does
+  a compact choice with a missing case (issue #291).
+- **Cost.** A variant value allocates one array per field of every case
+  (issue #290).
+
+## 16.9 What this design costs
+
+- **Text and order are written out.** Printing a case or sorting by
+  priority takes a `match` or a `?? !!`. A language with `toString` and
+  `ordinal` would do it implicitly. The cost is a few lines per enum, paid once
+  and kept in one place.
+- **No list of cases.** There is no `values()`. Code that needs every case,
+  for example to fill a menu, writes the array, and nothing checks that the
+  array is complete.
+- **Positional payloads.** Fields are named in the declaration, but a
+  construction like `Stage.shipped("DHL", "JD0142")` does not show which
+  string is the carrier. A case with more than two or three fields is often
+  better as an object carried by a one-field case.
+- **The closed world.** An enum cannot be extended from another module.
+  That is what makes exhaustiveness possible, and it is why an open family of
+  kinds should be a role.
+
+In return:
+
+- a forgotten case is a compile error, not a run-time surprise;
+- a value cannot be read through the wrong case;
+- equality is exact, and two enums can never be compared by accident;
+- a payload-free enum costs no allocation on the core and a pointer
+  comparison on the JVM.
+
 # References
 
 - <a id="ref-lions1996"></a>Jacques-Louis Lions et al. (1996). *ARIANE 5 Flight 501 Failure: Report by the Inquiry Board*. European Space Agency, Paris, 19 July 1996. https://www.esa.int/Newsroom/Press_Releases/Ariane_501_-_Presentation_of_Inquiry_Board_report
@@ -7973,12 +8721,15 @@ In return:
 - <a id="ref-bagwell2001"></a>Phil Bagwell (2001). *Ideal Hash Trees*. Technical report, École Polytechnique Fédérale de Lausanne. https://infoscience.epfl.ch/record/64398
 - <a id="ref-baker-sep"></a>Alan Baker (2022). Simplicity. In *The Stanford Encyclopedia of Philosophy* (Summer 2022 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/simplicity/
 - <a id="ref-jep395"></a>Gavin Bierman (2021). JEP 395: Records. OpenJDK. https://openjdk.org/jeps/395
+- <a id="ref-jep409"></a>Gavin Bierman (2021). JEP 409: Sealed Classes. OpenJDK. https://openjdk.org/jeps/409
+- <a id="ref-jep441"></a>Gavin Bierman (2023). JEP 441: Pattern Matching for switch. OpenJDK. https://openjdk.org/jeps/441
 - <a id="ref-bloch2018"></a>Joshua Bloch (2018). *Effective Java*, 3rd edition. Addison-Wesley.
 - <a id="ref-boehm2003"></a>Hans-J. Boehm (2003). Destructors, Finalizers, and Synchronization. In *Proceedings of POPL 2003*: 262–272. ACM. https://doi.org/10.1145/604131.604153
 - <a id="ref-braun2013"></a>Matthias Braun, Sebastian Buchwald, Sebastian Hack, Roland Leißa, Christoph Mallon, Andreas Zwinkau (2013). Simple and Efficient Construction of Static Single Assignment Form. In *Compiler Construction (CC 2013)*, LNCS 7791: 102–122. Springer. https://doi.org/10.1007/978-3-642-37051-9_6
 - <a id="ref-brooks1987"></a>Frederick P. Brooks, Jr. (1987). No Silver Bullet — Essence and Accidents of Software Engineering. *Computer* 20(4): 10–19. https://doi.org/10.1109/MC.1987.1663532
 - <a id="ref-bugayenko2016"></a>Yegor Bugayenko (2016). *Elegant Objects*, Volume 1. Self-published (CreateSpace).
 - <a id="ref-bugayenko2017"></a>Yegor Bugayenko (2017). *Elegant Objects*, Volume 2. Self-published (CreateSpace).
+- <a id="ref-burstall1980"></a>Rod M. Burstall, David B. MacQueen, Donald T. Sannella (1980). HOPE: An Experimental Applicative Language. In *Proceedings of the 1980 ACM Conference on LISP and Functional Programming*: 136–143. ACM. https://doi.org/10.1145/800087.802799
 - <a id="ref-cardelli1985"></a>Luca Cardelli, Peter Wegner (1985). On Understanding Types, Data Abstraction, and Polymorphism. *ACM Computing Surveys* 17(4): 471–523. https://doi.org/10.1145/6041.6042
 - <a id="ref-jep421"></a>Brent Christian (2021). JEP 421: Deprecate Finalization for Removal. OpenJDK. https://openjdk.org/jeps/421
 - <a id="ref-claessen2000"></a>Koen Claessen, John Hughes (2000). QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs. In *Proceedings of ICFP 2000*: 268–279. ACM. https://doi.org/10.1145/351240.351266
@@ -8008,6 +8759,7 @@ In return:
 - <a id="ref-kahan1996"></a>William Kahan (1996). *Lecture Notes on the Status of IEEE Standard 754 for Binary Floating-Point Arithmetic*. University of California, Berkeley. https://people.eecs.berkeley.edu/~wkahan/ieee754status/IEEE754.PDF
 - <a id="ref-kay1993"></a>Alan C. Kay (1993). The Early History of Smalltalk. *ACM SIGPLAN Notices* 28(3): 69–95 (HOPL-II). https://doi.org/10.1145/155360.155364
 - <a id="ref-kay2003"></a>Alan Kay (2003). On the Meaning of "Object-Oriented Programming". E-mail to Stefan Ram, 23 July 2003. https://www.purl.org/stefan_ram/pub/doc_kay_oop_en
+- <a id="ref-kernighan1988"></a>Brian W. Kernighan, Dennis M. Ritchie (1988). *The C Programming Language*, 2nd edition. Prentice Hall.
 - <a id="ref-king2019"></a>Alexis King (2019). Parse, Don't Validate. Blog post, 5 November 2019. https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/
 - <a id="ref-klabnik2023"></a>Steve Klabnik, Carol Nichols (2023). *The Rust Programming Language*, 2nd edition. No Starch Press. https://doc.rust-lang.org/book/
 - <a id="ref-knuth1974"></a>Donald E. Knuth (1974). Structured Programming with go to Statements. *ACM Computing Surveys* 6(4): 261–301. https://doi.org/10.1145/356635.356640
@@ -8020,6 +8772,7 @@ In return:
 - <a id="ref-liskov1979"></a>Barbara H. Liskov, Alan Snyder (1979). Exception Handling in CLU. *IEEE Transactions on Software Engineering* SE-5(6): 546–558. https://doi.org/10.1109/TSE.1979.230191
 - <a id="ref-liskov1994"></a>Barbara H. Liskov, Jeannette M. Wing (1994). A Behavioral Notion of Subtyping. *ACM TOPLAS* 16(6): 1811–1841. https://doi.org/10.1145/197320.197383
 - <a id="ref-mackay2003"></a>David J. C. MacKay (2003). *Information Theory, Inference, and Learning Algorithms*. Cambridge University Press. Chapter 28: Model Comparison and Occam's Razor.
+- <a id="ref-maranget2007"></a>Luc Maranget (2007). Warnings for Pattern Matching. *Journal of Functional Programming* 17(3): 387–421. https://doi.org/10.1017/S0956796807006223
 - <a id="ref-mccarthy1960"></a>John McCarthy (1960). Recursive Functions of Symbolic Expressions and Their Computation by Machine, Part I. *Communications of the ACM* 3(4): 184–195. https://doi.org/10.1145/367177.367199
 - <a id="ref-meszaros2007"></a>Gerard Meszaros (2007). *xUnit Test Patterns: Refactoring Test Code*. Addison-Wesley.
 - <a id="ref-meyer1992"></a>Bertrand Meyer (1992). Applying "Design by Contract". *Computer* 25(10): 40–51. https://doi.org/10.1109/2.161279
@@ -8028,6 +8781,7 @@ In return:
 - <a id="ref-miller1990"></a>Barton P. Miller, Lars Fredriksen, Bryan So (1990). An Empirical Study of the Reliability of UNIX Utilities. *Communications of the ACM* 33(12): 32–44. https://doi.org/10.1145/96267.96279
 - <a id="ref-miller2006"></a>Mark S. Miller (2006). *Robust Composition: Towards a Unified Approach to Access Control and Concurrency Control*. PhD thesis, Johns Hopkins University.
 - <a id="ref-milner1978"></a>Robin Milner (1978). A Theory of Type Polymorphism in Programming. *Journal of Computer and System Sciences* 17(3): 348–375. https://doi.org/10.1016/0022-0000(78)90014-4
+- <a id="ref-milner1997"></a>Robin Milner, Mads Tofte, Robert Harper, David MacQueen (1997). *The Definition of Standard ML (Revised)*. MIT Press.
 - <a id="ref-moseley2006"></a>Ben Moseley, Peter Marks (2006). Out of the Tar Pit. Software Practice Advancement (SPA) 2006. https://curtclifton.net/papers/MoseleyMarks06a.pdf
 - <a id="ref-nygaard1978"></a>Kristen Nygaard, Ole-Johan Dahl (1978). The Development of the SIMULA Languages. *ACM SIGPLAN Notices* 13(8): 245–272 (HOPL I). https://doi.org/10.1145/960118.808391
 - <a id="ref-okasaki1998"></a>Chris Okasaki (1998). *Purely Functional Data Structures*. Cambridge University Press. https://doi.org/10.1017/CBO9780511530104
@@ -8059,5 +8813,7 @@ In return:
 - <a id="ref-uax29"></a>The Unicode Consortium (2024). *Unicode Standard Annex #29: Unicode Text Segmentation* (for Unicode 16.0.0). https://www.unicode.org/reports/tr29/
 - <a id="ref-unicode16"></a>The Unicode Consortium (2024). *The Unicode Standard, Version 16.0.0*. https://www.unicode.org/versions/Unicode16.0.0/
 - <a id="ref-wadler1989"></a>Philip Wadler (1989). Theorems for Free! In *Proceedings of FPCA 1989*: 347–359. ACM. https://doi.org/10.1145/99370.99404
+- <a id="ref-wadler1998"></a>Philip Wadler (1998). The Expression Problem. Note to the java-genericity mailing list, 12 November 1998. https://homepages.inf.ed.ac.uk/wadler/papers/expression/expression.txt
+- <a id="ref-wirth1971"></a>Niklaus Wirth (1971). The Programming Language Pascal. *Acta Informatica* 1(1): 35–63. https://doi.org/10.1007/BF00264291
 - <a id="ref-wirth1995"></a>Niklaus Wirth (1995). A Plea for Lean Software. *Computer* 28(2): 64–68. https://doi.org/10.1109/2.348001
 - <a id="ref-yuan2014"></a>Ding Yuan, Yu Luo, Xin Zhuang, Guilherme Renna Rodrigues, Xu Zhao, Yongle Zhang, Pranay U. Jain, Michael Stumm (2014). Simple Testing Can Prevent Most Critical Failures: An Analysis of Production Failures in Distributed Data-Intensive Systems. In *11th USENIX Symposium on Operating Systems Design and Implementation (OSDI 14)*: 249–265. USENIX. https://www.usenix.org/conference/osdi14/technical-sessions/presentation/yuan

@@ -1,0 +1,8 @@
+module bible/order v1.0.0;
+
+enum Priority = (low, normal, urgent);
+
+main() is int {
+    let first = Priority.low < Priority.urgent;
+    0;
+}

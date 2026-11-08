@@ -108,7 +108,10 @@ The rules are short, and they never guess:
 4. A candidate wins only if it is no less specific in *every* position and
    more specific in at least one.
 5. Declaration order never breaks a tie. A tie is an error.
-6. Overloads of one name and arity must declare the same result type.
+6. Overloads of one name and arity may declare different results when
+   their parameter types differ. A call gets the result of the overload it
+   selects: `minus(duration is Duration) is Instant` and
+   `minus(other is Instant) is Duration` sit side by side (§14.8).
 
 Rule 4 makes `(int, any)` and `(any, int)` ambiguous for a call with two
 integers. Each is better in one position and worse in the other:

@@ -274,7 +274,58 @@ In none of them does the restriction cost anything at run time. It is
 checked when the program is compiled and verified, and the reference is
 the plain object.
 
-## 14.8 Roles elsewhere
+## 14.8 Operators are roles
+
+Arithmetic on objects goes through roles as well. The standard module
+`operators` declares one role per operator (#215). The first type parameter
+is the right operand, the second the result:
+
+| Role | Action | Operator |
+|---|---|---|
+| `Adding<T, R>` | `plus(other is T) is R` | `a + b` |
+| `Subtracting<T, R>` | `minus(other is T) is R` | `a - b` |
+| `Multiplying<T, R>` | `times(other is T) is R` | `a * b` |
+| `Dividing<T, R>` | `divided(other is T) is R` | `a / b` |
+| `Remaindering<T, R>` | `remainder(other is T) is R` | `a % b` |
+| `Negating<R>` | `negated() is R` | `-a` |
+
+{{example:14-operators}}
+
+With an object on the left, `a + b` is the call `a.plus(b)` and nothing
+more. The compiler rewrites the operator into that call and checks it like
+any other call: the right operand gets no conversion, and the overload it
+selects must be a role instance the type declares. The engines never see an
+operator on an object. The orderings `<`, `<=`, `>` and `>=` use the role
+that already existed for them, `compare.Comparing<T>`: `a < b` is
+`a.order(b) == Order.less`. `==` stays structural (Chapter 12).
+
+The roles are nominal, like every role (§14.2). An action named `plus` does
+not give an object `+`:
+
+{{example:14-operator-undeclared-rejected}}
+
+One role may be declared several times with different arguments. `Instant`
+does `Subtracting<Duration, Instant>` and `Subtracting<Instant, Duration>`:
+an instant minus a duration is an instant, an instant minus an instant is a
+duration. Its two `minus` actions are overloads with different results,
+which §13.3 allows because their parameter types differ. In the standard
+library `BigInt` does all six roles and `Comparing`; `Duration`, `Instant`
+and `MonotonicInstant` do the ones time arithmetic needs.
+
+Other languages find operators in one of three ways. C++ and Python look
+them up by name: a function `operator+` [@stroustrup1994], or a method
+`__add__`. Haskell puts them in a class, and `Num` bundles `+`, `-`, `*`,
+`negate`, `abs`, `signum` and `fromInteger` together [@haskell2010]. A type
+that can be added but not multiplied, such as a duration, cannot be a `Num`
+honestly. Rust has one trait per operator, `Add`, `Sub`, `Mul`, each with
+the right operand as a parameter and the result as an associated type
+[@klabnik2023]. Okkama is closest to Rust: a role per operator, the result
+spelled out, conformance declared. Lookup by name was ruled out because
+nothing in a name says that `plus` means addition, which is the argument
+of §14.2. One class for all arithmetic was ruled out because a contract
+should not ask for actions the object cannot keep.
+
+## 14.9 Roles elsewhere
 
 | | Okkama role | Java interface | Go interface | Rust trait |
 |---|---|---|---|---|
@@ -284,6 +335,7 @@ the plain object.
 | Parameter matching | exact | exact (overriding) | exact | exact |
 | Successor (next-state) results | yes (`^Role`) | no | no | a method that consumes `self` and returns a new type |
 | Conformance of a foreign type | no; wrap it | no | automatic, if the methods match | if the trait or the type is local |
+| Operators on user types | through roles (`Adding`, …) | no | no | through traits (`Add`, …) |
 
 Two rows matter most. **Default bodies**: Java and Rust let an interface
 carry code, which brings back part of inheritance, including the question
@@ -293,7 +345,7 @@ the table has a way back from the contract to the concrete type. Okkama
 has none, and that is what makes a role reference a capability rather than
 a type annotation.
 
-## 14.9 What this design costs
+## 14.10 What this design costs
 
 - **Forwarding code.** Decorators repeat every action of the role. No
   delegation syntax shortens it (§14.6).
@@ -304,6 +356,10 @@ a type annotation.
   question, or an enum that carries the alternatives.
 - **Invariant parameters.** An implementation cannot accept more than the
   role asks for. Usually it does not need to.
+- **Operators look only to the left.** `price * 3` works; `3 * price` does
+  not, because `int` cannot be given a role. Python asks the right operand
+  through `__rmul__`, and Rust allows `impl Mul<Money> for i64` in Money's
+  crate. Okkama has neither (no retroactive conformance, above).
 - **One dispatch per call.** A role call is an indirect call. In hot loops
   over a single type, holding the concrete type avoids it; the JVM and its
   inline caches recover most of the difference.

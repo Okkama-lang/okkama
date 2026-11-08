@@ -166,8 +166,9 @@
   - [14.5 Преемники через роль](#145-преемники-через-роль)
   - [14.6 Композиция вместо наследования](#146-композиция-вместо-наследования)
   - [14.7 Как выполняется вызов через роль](#147-как-выполняется-вызов-через-роль)
-  - [14.8 Роли в других языках](#148-роли-в-других-языках)
-  - [14.9 Чего стоит такой замысел](#149-чего-стоит-такой-замысел)
+  - [14.8 Операторы — это роли](#148-операторы--это-роли)
+  - [14.9 Роли в других языках](#149-роли-в-других-языках)
+  - [14.10 Чего стоит такой замысел](#1410-чего-стоит-такой-замысел)
 - [Глава 15. Фейки, тесты и свойства](#глава-15-фейки-тесты-и-свойства)
   - [15.1 Тесты живут рядом с кодом](#151-тесты-живут-рядом-с-кодом)
   - [15.2 Привязка `test`](#152-привязка-test)
@@ -178,6 +179,16 @@
   - [15.7 Остальной инструментарий](#157-остальной-инструментарий)
   - [15.8 Что пока не работает](#158-что-пока-не-работает)
   - [15.9 Чего стоит такой замысел](#159-чего-стоит-такой-замысел)
+- [Глава 16. Перечисления и сопоставление с образцом](#глава-16-перечисления-и-сопоставление-с-образцом)
+  - [16.1 Закрытый набор имён](#161-закрытый-набор-имён)
+  - [16.2 Варианты с данными](#162-варианты-с-данными)
+  - [16.3 `match`](#163-match)
+  - [16.4 Компактный выбор](#164-компактный-выбор)
+  - [16.5 Закрытое или открытое: перечисления и роли](#165-закрытое-или-открытое-перечисления-и-роли)
+  - [16.6 Как исполняются перечисления](#166-как-исполняются-перечисления)
+  - [16.7 Перечисления в других языках](#167-перечисления-в-других-языках)
+  - [16.8 Ограничения](#168-ограничения)
+  - [16.9 Чего стоит такой замысел](#169-чего-стоит-такой-замысел)
 
 # Часть I. Бритва
 
@@ -2999,6 +3010,10 @@ main() is int {
   смешивает: `"n = " + 1` — ошибка (глава 6).
 - `/` над двумя целыми даёт точный `rat`. Оператора `**` нет; степень
   записывается через `pow` (глава 5).
+- Объект участвует в арифметике и сравнениях порядка только через
+  объявленные им роли: `a + b` — это `a.plus(b)`, если тип `a` делает
+  `Adding`, а `a < b` спрашивает `a.order(b)` через `Comparing` (§14.8). У
+  объекта без этих ролей операторов нет.
 
 ## 9.4 Выбор
 
@@ -6340,8 +6355,10 @@ int 7 / string x / something else
 4. Кандидат побеждает, только если он не менее специфичен в *каждой*
    позиции и строго специфичнее хотя бы в одной.
 5. Порядок объявления ничью никогда не разрешает. Ничья — ошибка.
-6. Перегрузки одного имени и арности должны объявлять один тип
-   результата.
+6. Перегрузки одного имени и арности могут объявлять разные результаты,
+   если типы их параметров различаются. Вызов получает результат выбранной
+   перегрузки: `minus(duration is Duration) is Instant` и
+   `minus(other is Instant) is Duration` уживаются рядом (§14.8).
 
 Из правила 4 следует, что `(int, any)` и `(any, int)` неоднозначны для
 вызова с двумя целыми. Каждый лучше в одной позиции и хуже в другой:
@@ -7567,7 +7584,116 @@ soup: 0 -> 0
 проверяется при компиляции и верификации программы, а ссылка — это
 обычный объект.
 
-## 14.8 Роли в других языках
+## 14.8 Операторы — это роли
+
+Арифметика над объектами тоже идёт через роли. Стандартный модуль
+`operators` объявляет по роли на оператор (#215). Первый параметр типа —
+правый операнд, второй — результат:
+
+| Роль | Действие | Оператор |
+|---|---|---|
+| `Adding<T, R>` | `plus(other is T) is R` | `a + b` |
+| `Subtracting<T, R>` | `minus(other is T) is R` | `a - b` |
+| `Multiplying<T, R>` | `times(other is T) is R` | `a * b` |
+| `Dividing<T, R>` | `divided(other is T) is R` | `a / b` |
+| `Remaindering<T, R>` | `remainder(other is T) is R` | `a % b` |
+| `Negating<R>` | `negated() is R` | `-a` |
+
+```okkama
+module bible/operators v1.0.0;
+
+// Arithmetic on an object is a call to a role action: a + b is a.plus(b)
+// when the type does Adding<…>, and a < b asks Comparing for an Order.
+import "io/stdout" take Stdout;
+import "operators" take Adding, Subtracting, Multiplying, Negating;
+import "compare" take Comparing, Order;
+
+object Money does Adding<Money, Money>, Subtracting<Money, Money>, Multiplying<int, Money>,
+        Negating<Money>, Comparing<Money> {
+    has cents is int;
+    Money(:cents);
+
+    cents() is int { cents; }
+    plus(other is Money) is Money { Money(cents: cents + other.cents()); }
+    minus(other is Money) is Money { Money(cents: cents - other.cents()); }
+    times(count is int) is Money { Money(cents: cents * count); }
+    negated() is Money { Money(cents: -cents); }
+    order(other is Money) is Order { cents.order(other.cents()); }
+}
+
+main() is int {
+    let out = Stdout();
+    let price = Money(cents: 1250);
+    let total = price * 3 + Money(cents: 499);      // price.times(3).plus(…)
+    let refund = -Money(cents: 300);                // Money(cents: 300).negated()
+    out.writeln(total.cents().string() + " " + (total + refund).cents().string());
+    out.writeln(if total > price && price <= price { "ordered"; } else { "not ordered"; });
+    0;
+}
+```
+
+Вывод:
+
+```text
+4249 3949
+ordered
+```
+
+Если слева объект, `a + b` — это вызов `a.plus(b)`, и ничего больше.
+Компилятор переписывает оператор в этот вызов и проверяет его как любой
+другой: правый операнд не преобразуется, а выбранная перегрузка должна быть
+экземпляром роли, который тип объявил. Движки оператор над объектом не
+видят никогда. Сравнения порядка `<`, `<=`, `>` и `>=` используют роль,
+которая для них уже была, `compare.Comparing<T>`: `a < b` — это
+`a.order(b) == Order.less`. `==` остаётся структурным (глава 12).
+
+Роли номинальны, как и любые роли (§14.2). Действие с именем `plus` не даёт
+объекту `+`:
+
+```okkama
+module bible/undeclared v1.0.0;
+
+object Weight {
+    has grams is int;
+    Weight(:grams);
+    grams() is int { grams; }
+    plus(other is Weight) is Weight { Weight(grams: grams + other.grams()); }
+}
+
+main() is int {
+    let both = Weight(grams: 300) + Weight(grams: 200);
+    0;
+}
+```
+
+Ответ компилятора:
+
+```text
+14-operator-undeclared-rejected.ok:11:16: semantic error: Operator + cannot be applied to Weight and Weight: Weight does not do Adding
+```
+
+Одну роль можно объявить несколько раз с разными аргументами. `Instant`
+делает `Subtracting<Duration, Instant>` и `Subtracting<Instant, Duration>`:
+момент минус длительность — момент, момент минус момент — длительность. Два
+его действия `minus` — перегрузки с разными результатами, и §13.3 это
+разрешает, потому что типы их параметров различаются. В стандартной
+библиотеке `BigInt` делает все шесть ролей и `Comparing`; `Duration`,
+`Instant` и `MonotonicInstant` — те, что нужны арифметике времени.
+
+Другие языки находят операторы одним из трёх способов. C++ и Python ищут
+их по имени: функция `operator+` [[Stroustrup 1994](#ref-stroustrup1994)] или метод `__add__`.
+Haskell кладёт их в класс, и `Num` связывает вместе `+`, `-`, `*`, `negate`,
+`abs`, `signum` и `fromInteger` [[Haskell 2010](#ref-haskell2010)]. Тип, который можно
+складывать, но не умножать, — например, длительность — честным `Num` быть не
+может. В Rust по трейту на оператор, `Add`, `Sub`, `Mul`, с правым операндом
+в параметре и результатом в ассоциированном типе [[Klabnik 2023](#ref-klabnik2023)]. Okkama
+ближе всего к Rust: роль на оператор, результат выписан, соответствие
+заявлено. Поиск по имени отвергнут, потому что в имени ничто не говорит,
+что `plus` означает сложение, — это довод §14.2. Один класс на всю
+арифметику отвергнут, потому что контракт не должен требовать действий,
+которых объект выполнить не может.
+
+## 14.9 Роли в других языках
 
 | | Роль Okkama | Интерфейс Java | Интерфейс Go | Трейт Rust |
 |---|---|---|---|---|
@@ -7577,6 +7703,7 @@ soup: 0 -> 0
 | Сопоставление параметров | точное | точное (переопределение) | точное | точное |
 | Результаты-преемники (следующее состояние) | да (`^Role`) | нет | нет | метод, поглощающий `self` и возвращающий новый тип |
 | Соответствие чужого типа | нет; оберните его | нет | автоматически, если методы совпадают | если трейт или тип локальны |
+| Операторы для своих типов | через роли (`Adding`, …) | нет | нет | через трейты (`Add`, …) |
 
 Важнее всего две строки. **Тела по умолчанию**: Java и Rust позволяют
 интерфейсу нести код, а это возвращает часть наследования, вместе с
@@ -7586,7 +7713,7 @@ soup: 0 -> 0
 У Okkama его нет, и именно это делает ссылку через роль возможностью, а не
 аннотацией типа.
 
-## 14.9 Чего стоит такой замысел
+## 14.10 Чего стоит такой замысел
 
 - **Код переадресации.** Декораторы повторяют каждое действие роли.
   Синтаксиса делегирования, который бы это сократил, нет (§14.6).
@@ -7597,6 +7724,10 @@ soup: 0 -> 0
   роли, отвечающее на вопрос, или enum, несущий варианты.
 - **Инвариантные параметры.** Реализация не может принимать больше, чем
   просит роль. Обычно ей это и не нужно.
+- **Операторы смотрят только налево.** `price * 3` работает, `3 * price` —
+  нет: `int` роль не получит. Python спрашивает правый операнд через
+  `__rmul__`, а Rust разрешает `impl Mul<Money> for i64` в крейте Money. У
+  Okkama нет ни того, ни другого (нет соответствия задним числом, выше).
 - **Одна диспетчеризация на вызов.** Вызов через роль — косвенный вызов. В
   горячих циклах по одному типу его избегают, держа конкретный тип; JVM с
   её встроенными кэшами возвращает большую часть разницы.
@@ -8065,6 +8196,632 @@ exit 1
 - проваленное свойство возвращается зерном и минимальным входом, которые
   воспроизводят его на любом движке.
 
+# Глава 16. Перечисления и сопоставление с образцом
+
+Некоторые значения берутся из короткого списка, известного заранее:
+приоритет бывает низким, обычным или срочным; заказ — черновиком, оплаченным,
+отправленным или отменённым. У части вариантов есть собственные данные: у
+оплаченного заказа — сумма, у отправленного — перевозчик и трек-номер, а у
+черновика нет ничего. Okkama описывает и то и другое одним объявлением,
+`enum`, а разбирает конструкциями `match` и компактным выбором `?? !!`.
+Компилятор знает каждый вариант и поэтому замечает, когда код какой-то из них
+забыл.
+
+```okkama
+module bible/enums v1.0.0;
+
+// A payload-free enum names a closed set; a variant carries data in some of
+// its cases. match takes either apart, and the compiler checks the cases.
+import "io/stdout" take Stdout;
+
+enum Priority = (low, normal, urgent);
+
+enum Stage = (draft, paid(amount is int), shipped(carrier is string, tracking is string),
+    cancelled(reason is string));
+
+object Order {
+    has number is int;
+    has priority is Priority;
+    has stage is Stage;
+    Order(:number, :priority, :stage);
+
+    line() is string {
+        let flag = priority ?? .urgent: "!" !! _: " ";
+        let state = match stage {
+            case Stage.draft { "draft"; }
+            case Stage.paid(amount) { "paid " + amount.string(); }
+            case Stage.shipped(carrier, tracking) { "shipped by " + carrier + ", " + tracking; }
+            case Stage.cancelled(reason) { "cancelled: " + reason; }
+        };
+        flag + " #" + number.string() + " " + state;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let orders is @Order = [
+        Order(number: 1, priority: Priority.normal, stage: Stage.draft),
+        Order(number: 2, priority: Priority.urgent, stage: Stage.paid(4250)),
+        Order(number: 3, priority: Priority.low, stage: Stage.shipped("DHL", "JD0142")),
+        Order(number: 4, priority: Priority.normal, stage: Stage.cancelled("out of stock"))
+    ];
+    for orders -> order { out.writeln(order.line()); }
+    0;
+}
+```
+
+Вывод:
+
+```text
+  #1 draft
+! #2 paid 4250
+  #3 shipped by DHL, JD0142
+  #4 cancelled: out of stock
+```
+
+- `Priority` — **перечисление без данных**: три имени и больше ничего.
+- `Stage` — **перечисление с вариантами**: у некоторых его вариантов есть
+  типизированные поля.
+- `match stage` разбирает каждый вариант отдельной ветвью и связывает его
+  поля с именами. Уберите ветвь `cancelled`, и программа перестанет
+  компилироваться.
+- `priority ?? .urgent: "!" !! _: " "` — однострочная форма: один образец и
+  `_` для всего остального.
+
+Глава описывает оба вида перечислений и правила сопоставления, а затем
+задаёт вопрос, общий для перечислений и ролей: когда набор вариантов должен
+быть закрытым, а когда открытым?
+
+## 16.1 Закрытый набор имён
+
+```okkama
+enum Priority = (low, normal, urgent);
+```
+
+Объявление перечисления даёт имя типу и перечисляет его варианты. Имя типа
+пишется с заглавной буквы, как у любого типа; варианты — идентификаторы со
+строчной (`enum Status = (Ready, failed)` — синтаксическая ошибка: `Expect
+enum case name`). Вариант всегда пишется вместе с типом: `Priority.urgent`.
+Голого `urgent` в области видимости нет, поэтому два перечисления могут иметь
+варианты с одним именем без конфликта. Повтор варианта — ошибка: `Enum
+"Status" already has case "ready"`.
+
+Чего у значения перечисления в Okkama *нет*, так же важно, как то, что есть:
+
+- **Нет номера.** У варианта нет порядкового номера, который можно прочесть,
+  и нет преобразования в `int` или из него.
+- **Нет порядка.** `Priority.low < Priority.urgent` отвергается:
+
+```okkama
+module bible/order v1.0.0;
+
+enum Priority = (low, normal, urgent);
+
+main() is int {
+    let first = Priority.low < Priority.urgent;
+    0;
+}
+```
+
+Ответ компилятора:
+
+```text
+16-order-rejected.ok:6:17: semantic error: Operator < cannot be applied to Priority and Priority
+```
+
+- **Нет действий.** Значение перечисления — не объект. `Priority.low.string()`
+  — ошибка `Can only call actions on objects`, и нет `values()`, который
+  перечислил бы варианты.
+- **Нет смешения.** Два варианта равны, только если они из одного
+  перечисления и это один и тот же вариант. `Status.ready == Other.ready` —
+  не `false`, а ошибка компиляции `Cannot compare Status and Other`, как и
+  любое сравнение разных категорий (глава 4).
+
+Зато у перечисления есть равенство и право быть ключом словаря и элементом
+массива. `[Unit.celsius: 2, Unit.kelvin: 1]` — это `%Unit:int`, а `@Status` —
+массив состояний.
+
+У каждого отказа есть история. В C перечислитель — константа типа `int`. Её
+можно складывать, сравнивать, хранить в любой целочисленной переменной и
+печатать как число [[Kernighan 1988](#ref-kernighan1988)]: перечисление даёт числу имя, но не тип.
+Pascal сделал перечислимый тип отдельным типом, но *порядковым*: его значения
+упорядочены, `succ` и `pred` переходят от одного к другому, ими индексируют
+массивы и управляют циклами `for` [[Wirth 1971](#ref-wirth1971)]. Java превратила каждый вариант
+в объект с методами, полями, `ordinal()` и сгенерированным `values()`
+[[Gosling 2023](#ref-gosling2023)]. Блох в *Effective Java* советует заменять перечислениями
+константы `int` и никогда ничего не выводить из `ordinal()` [[Bloch 2018](#ref-bloch2018)]. В Go
+объявления перечисления нет вовсе: блок констант с `iota` нумерует их
+[[Go specification](#ref-gospec)].
+
+Okkama берёт у Pascal тип и оставляет арифметику за бортом. Порядковый номер
+провоцирует код, зависящий от порядка объявления: `if level >
+Priority.normal` молча меняет смысл, когда кто-то вставит `high` между `normal`
+и `urgent`. Если в предметной области порядок есть, это факт предметной
+области, и программа его формулирует: `match`, сопоставляющий каждому варианту
+вес, или объект, который делает `Comparing` (глава 14). С текстом так же.
+Слово, которым печатается вариант, — решение о представлении. Оно зависит от
+аудитории и языка, и `string()` у перечисления выбирал бы его молча. `?? !!`
+или `match` делают этот выбор там, где значение используется.
+
+Порядок объявления всё же не совсем невидим. Словарь хранит ключи
+отсортированными, и ключи-перечисления сортируются по месту в объявлении — на
+всех движках:
+
+```okkama
+enum Unit = (celsius, kelvin, fahrenheit);
+let units = [Unit.fahrenheit: 3, Unit.kelvin: 2, Unit.celsius: 1];
+// units.keys(): celsius, kelvin, fahrenheit
+```
+
+Так у обхода есть устойчивый порядок, но порядок не становится оператором.
+
+## 16.2 Варианты с данными
+
+```okkama
+enum Stage = (draft, paid(amount is int), shipped(carrier is string, tracking is string),
+    cancelled(reason is string));
+```
+
+Вариант может объявить поля. Тогда перечисление — это **размеченное
+объединение** (tagged union), или, как говорят в семействе ML, алгебраический
+тип данных. Значение `Stage` — ровно одно из четырёх, и от варианта зависит,
+какие поля существуют:
+
+- `Stage.paid(4250)` строит значение. Поля данных передаются по позиции, в
+  порядке объявления. `Stage.paid(amount: 4250)` отвергается: `Variant
+  Stage.paid expects 1 positional payload field(s)`.
+- Поля данных неизменяемы, и аксессоров у них нет. `stage.amount` не
+  существует: у `draft` вернуть было бы нечего. Прочитать поле можно только
+  образцом, который сначала установил вариант.
+- Равенство сравнивает перечисление, вариант и данные, поле за полем.
+
+Перечисление с вариантами может быть обобщённым:
+
+```okkama
+module bible/variants v1.0.0;
+
+// A variant may be generic. Equality compares the enum, the case and the
+// payload; a payload-free enum is also a map key.
+import "io/stdout" take Stdout;
+
+enum Reading<T> = (missing, single(value is T), range(low is T, high is T));
+enum Unit = (celsius, kelvin);
+
+object Sensor {
+    has name is string;
+    has unit is Unit;
+    has reading is Reading<int>;
+    Sensor(:name, :unit, :reading);
+
+    text() is string {
+        let suffix = unit ?? .celsius: " C" !! .kelvin: " K";
+        let shown = match reading {
+            case Reading.missing { "no data"; }
+            case Reading.single(value) { value.string() + suffix; }
+            case Reading.range(low, high) { low.string() + ".." + high.string() + suffix; }
+        };
+        name + ": " + shown;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let sensors is @Sensor = [
+        Sensor(name: "hall", unit: Unit.celsius, reading: Reading.single(21)),
+        Sensor(name: "cellar", unit: Unit.celsius, reading: Reading.range(8, 11)),
+        Sensor(name: "probe", unit: Unit.kelvin, reading: Reading<int>.missing)
+    ];
+    for sensors -> sensor { out.writeln(sensor.text()); }
+    let same = Reading.single(21) == Reading.single(21);
+    let other = Reading.single(21) == Reading.range(21, 21);
+    out.writeln(same.string() + " " + other.string());
+    let units = [Unit.celsius: 2, Unit.kelvin: 1];
+    out.writeln(units.has(Unit.kelvin).string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+hall: 21 C
+cellar: 8..11 C
+probe: no data
+true false
+true
+```
+
+`Reading.single(21)` выводит `Reading<int>` из аргумента. У варианта без полей
+выводить не из чего, и без ожидаемого типа ему нужны явные аргументы:
+`Reading<int>.missing`. Просто `Reading.missing` отвергается: `Cannot infer
+type arguments for Reading.missing; provide an expected type or explicit type
+arguments`. В конструкторе `Sensor` контекст даёт тип поля.
+
+Два перечисления стандартной прелюдии — именно такие:
+`Maybe<T> = (some(value), none)` и `Presence<T>`, добавляющий `missing`
+(глава 7). Перечисления ошибок, объявленные `is Error`, тоже считаются
+перечислениями с вариантами, даже если данных нет ни у одного варианта, и
+`catch` разбирает их теми же образцами (глава 10).
+
+Вариантные записи Pascal широко распространили эту идею, но в небезопасной
+форме [[Wirth 1971](#ref-wirth1971)]. Метка была обычным полем, и язык не проверял, что программа
+читает поля того варианта, который метка называет. HOPE соединил типы данных,
+определённые вариантами, с функциями, определёнными образцами над ними
+[[Burstall 1980](#ref-burstall1980)], а ML сделал эту пару стандартом, и компилятор проверял
+образцы [[Milner 1997](#ref-milner1997)]. Haskell её сохранил [[Haskell 2010](#ref-haskell2010)], Rust принёс в
+системное программирование как `enum` с `match` [[Klabnik 2023](#ref-klabnik2023)]. Java шла к
+ней по шагам: записи, затем запечатанные интерфейсы, закрывающие иерархию,
+затем `switch` с образцами, проверяющий, что иерархия покрыта
+[[Bierman 2021](#ref-jep395); [Bierman 2021](#ref-jep409); [Bierman 2023](#ref-jep441)].
+
+Вариант в Okkama — это вариант ML с именами полей, как у записи. Поля
+названы в объявлении и позиционны при использовании, а компилятор проверяет и
+их число, и типы.
+
+## 16.3 `match`
+
+```okkama
+let state = match stage {
+    case Stage.draft { "draft"; }
+    case Stage.paid(amount) { "paid " + amount.string(); }
+    case Stage.shipped(carrier, tracking) { "shipped by " + carrier + ", " + tracking; }
+    case Stage.cancelled(reason) { "cancelled: " + reason; }
+};
+```
+
+Предмет сопоставления вычисляется один раз. Каждый `case` перечисляет один
+или несколько образцов, и выполняется первый `case`, образец которого подошёл.
+Проваливания (fall-through) и `break` нет: ветвь — блок, и её последнее
+значение — значение `match`. `else` забирает всё, что не подошло ни под один
+`case`.
+
+Образцы бывают двух видов:
+
+- **Значение.** `case Priority.low, Priority.normal`, `case 404`, `case
+  "GET"`. Предмет сравнивается через `==`, поэтому действуют правила
+  равенства: значение должно быть той же категории, а `case 1..5` против
+  `int` отвергается, а не читается как проверка диапазона (глава 9).
+- **Образец варианта.** `case Stage.shipped(carrier, tracking)` проверяет
+  вариант и связывает каждое поле с именем или пропускает его через `_`.
+  Число связываний должно совпадать с числом полей: `Wrong number of variant
+  pattern bindings`. Связанное имя существует только внутри своей ветви.
+
+Все ветви `match`, дающего значение, должны давать один тип:
+
+```text
+semantic error: Branches produce different types: int and string
+```
+
+Ветвь, которая выполняет `return`, бросает ошибку или паникует, значения не
+даёт и в проверке не участвует.
+
+### Полнота
+
+Компилятор знает все варианты перечисления и проверяет, что `match` их
+покрывает:
+
+```okkama
+module bible/missing v1.0.0;
+
+enum Stage = (draft, paid(amount is int), cancelled(reason is string));
+
+object Report {
+    Report();
+    text(stage is Stage) is string {
+        match stage {
+            case Stage.draft { "draft"; }
+            case Stage.paid(amount) { "paid " + amount.string(); }
+        }
+    }
+}
+
+main() is int { 0; }
+```
+
+Ответ компилятора:
+
+```text
+16-missing-rejected.ok:8:9: semantic error: Non-exhaustive match: missing cancelled
+```
+
+Правило зависит от вида перечисления:
+
+- `match` над **перечислением с вариантами** — с данными хоть у одного
+  варианта, перечислением ошибок, `Maybe`, `Presence` — обязан покрыть все
+  варианты или иметь `else`. Это относится и к `match`-оператору, и к
+  `match`, дающему значение.
+- `match` над **перечислением без данных**, дающий значение, обязан покрыть
+  все варианты или иметь `else`: иначе значения бы не было:
+
+```okkama
+module bible/value v1.0.0;
+
+enum Priority = (low, normal, urgent);
+
+object Queue {
+    Queue();
+    weight(priority is Priority) is int {
+        let weight = match priority {
+            case Priority.low { 1; }
+            case Priority.normal { 2; }
+        };
+        weight;
+    }
+}
+
+main() is int { 0; }
+```
+
+Ответ компилятора:
+
+```text
+16-value-rejected.ok:8:22: semantic error: match over enum `Priority` does not cover urgent, so it has no value here; add the cases or an `else` branch
+```
+
+- `match`-*оператор* над перечислением без данных может пропустить варианты;
+  для них он ничего не делает. `okkama lint` об этом сообщает:
+
+```text
+warning[non-exhaustive-match]: match over enum `Status` does not handle failed, done; add the cases or an `else` branch
+```
+
+Второе и третье правила различаются потому, что перечисление без данных
+раньше считалось набором констант, а оператор над константами вправе
+действовать лишь на часть из них. Линтер держит эту старую свободу на виду. У
+вариантов её никогда не было: пропущенный вариант — пропущенная обработка
+данных, и компилятор считает это ошибкой.
+
+Больше всего полнота окупается, когда перечисление меняется. Добавьте в
+`Stage` вариант `refunded(amount is int)`, и каждый `match` по стадиям,
+перечисляющий варианты, станет ошибкой, называющей `refunded`. Список мест,
+которые нужно обновить, даёт компилятор, а не поиск по коду. Поэтому
+перечислять варианты лучше, чем писать `else`. `else` покрывает и сегодняшние
+оставшиеся варианты, и все будущие, а значит, прячет именно те места, куда
+должен дойти новый вариант. Маранже описывает две проверки, которые компилятор
+может выполнить над сопоставлением: *полноту* — есть ли значение, которое не
+подходит ни под один `case`, и *полезность* — может ли `case` вообще
+сработать [[Maranget 2007](#ref-maranget2007)]. Okkama реализует первую. Вторую — частично: повтор
+образца варианта — ошибка (`Duplicate variant pattern`), но повтор варианта
+перечисления без данных, повтор литерала или `else` после всех вариантов
+принимаются молча (issue #286).
+
+## 16.4 Компактный выбор
+
+Глава 9 ввела `?? !!` над булевыми значениями, глава 7 — над `Maybe`. Над любым
+перечислением это `match`, записанный одним выражением:
+
+```okkama
+let suffix = unit ?? .celsius: " C" !! .kelvin: " K";
+let flag = priority ?? .urgent: "!" !! _: " ";
+let label = reading ?? .single(value): value.string() !! _: "no single value";
+```
+
+- После `??` и каждого `!!` идут образец, двоеточие и результат. В образцах
+  имя типа опускается (`.urgent`, а не `Priority.urgent`): тип уже задан
+  предметом.
+- `_` покрывает неназванные варианты.
+- Покрытие должно быть полным, и вариант не может повторяться. В отличие от
+  `match`, оба правила действуют и для перечислений без данных. Выборы не
+  вкладываются друг в друга.
+
+Сообщение о пропущенном варианте в компактном выборе описывает форму, а не
+вариант (`Compact choice branches must produce a value or diverge`); лучшее
+сообщение — issue #291. Для всего, что длиннее строки, `match` читается лучше
+и при ошибке говорит больше.
+
+## 16.5 Закрытое или открытое: перечисления и роли
+
+Перечисление и роль — два ответа на один вопрос: как описать значение,
+которое может быть одного из нескольких видов.
+
+- **Перечисление** перечисляет виды в одном месте. Использующий его код
+  ветвится по виду. Добавить новую *операцию* над стадиями легко: ещё одна
+  функция с `match`, и больше ничего не меняется. Добавить новый *вид*
+  труднее: его должен узнать каждый `match`, и компилятор их перечислит.
+- **Роль** оставляет виды открытыми. Каждый вид — объект, который делает
+  роль и несёт своё поведение. Добавить новый *вид* легко: ещё один объект, и
+  больше ничего не меняется. Добавить новую *операцию* труднее: у роли
+  появляется действие, и его должен реализовать каждый объект.
+
+Рейнольдс описал эту двойственность в 1975 году, а Кук возвращается к ней как к
+различию между абстрактными типами данных и объектами [[Cook 2009](#ref-cook2009)]. Вадлер
+назвал её *проблемой выражений* (expression problem): определить тип данных
+вариантами так, чтобы можно было добавлять и новые варианты, и новые функции,
+не перекомпилируя существующий код и не теряя статической типобезопасности
+[[Wadler 1998](#ref-wadler1998)]. Okkama проблему выражений не решает; мало какой язык решает её
+без дополнительных механизмов. Она даёт обе стороны и просит выбирать по тому,
+что будет меняться:
+
+| Набор видов… | …а операции… | Что использовать |
+|---|---|---|
+| закрыт, входит в определение предметной области (состояния заказа, виды лексем, сообщения протокола) | многочисленны и добавляются со временем (отрисовка, цены, хранение) | перечисление и `match` |
+| открыт, расширяется другими модулями или тестами (хранилища, транспорты, часы) | немногочисленны и стабильны | роль и объекты |
+
+Проверка такая: должен ли новичок быть вписан в один список, или его можно
+добавить извне? Стадия заказа принадлежит определению заказа. Новая стадия —
+изменение бизнеса, и каждое место, обрабатывающее стадии, стоит пересмотреть.
+Хранилище не принадлежит сервису, который им пользуется, а фейк в тесте — ещё
+одно хранилище (глава 15). Роль нельзя разобрать сопоставлением, потому что
+приведения вниз нет (глава 14). Перечисление нельзя расширить, потому что его
+объявление — полный список. Каждое из этих свойств и делает другой выбор хуже.
+
+Запечатанные интерфейсы Java занимают промежуточное место: закрытый список
+классов, у каждого свои методы, и `switch` тоже может их разобрать
+[[Bierman 2021](#ref-jep409); [Bierman 2023](#ref-jep441)]. Отдельной конструкции для этого в Okkama нет, но тот же
+эффект достижим: перечисление с вариантами, данные которого — объекты.
+
+## 16.6 Как исполняются перечисления
+
+Два вида перечислений компилируются по-разному, и разница видна в их цене.
+
+**Перечисление без данных** в OIR — значение отдельной категории. Вариант — это
+`enum.case`, сравнение — `enum.eq`:
+
+```text
+func @Probe.code(%0: Probe, %1: Status) -> int [method Probe] {
+^b0:
+    %2: Status = enum.case Status.ready
+    %3: bool = enum.eq %1, %2
+    cond %3, ^b1, ^b2
+^b1:
+    %4: int = const 1
+    br ^b3(%4)
+^b2:
+    %5: int = const 2
+    br ^b3(%5)
+^b3(%6: int):
+    ret %6
+}
+```
+
+Исходник был `match s { case Status.ready { 1; } case Status.failed,
+Status.done { 2; } }`. Последний `case` не проверяется вовсе: сопоставление
+полное, и всё, что не `ready`, — это `failed` или `done`. В ядре Sparrow
+значение перечисления — непосредственное 64-битное слово: номер перечисления в
+старшей половине, номер варианта в младшей. Построение ничего не выделяет, а
+сравнение сравнивает два слова. На JVM каждый вариант — объект-одиночка
+класса рантайма `okkama.rt.Case`, лежащий в статическом поле класса,
+сгенерированного для перечисления. Равенство — идентичность, ключи словаря
+сортируются по номеру варианта.
+
+**Перечисление с вариантами** превращается в объект, который генерирует
+компилятор. Для
+
+```okkama
+enum Reading = (empty, value(item is int), pair(left is int, right is int));
+```
+
+OIR объявляет
+
+```text
+object $variant_Reading_1 {
+    field $tag: int
+    field $1_item: array<int>
+    field $2_left: array<int>
+    field $2_right: array<int>
+}
+```
+
+Метка — номер варианта. Каждое поле каждого варианта получает слот, и каждый
+слот — массив из одного элемента, пустой, когда вариант не активен.
+`Reading.pair(1, 2)` строит `[]`, `[1]` и `[2]`, а затем объект. Образец
+читает поле через сгенерированный аксессор, который сначала проверяет метку.
+После того как `match` проверил вариант, проверка провалиться не может, но
+всё равно выполняется:
+
+```text
+func @$variant_Reading_1.$field2(%0: $variant_Reading_1) -> int [method $variant_Reading_1] {
+^b0:
+    %1: int = obj.get %0, $tag
+    %2: int = const 2
+    %3: bool = int.eq %1, %2
+    cond %3, ^b1, ^b2
+^b1:
+    %4: array<int> = obj.get %0, $2_left
+    %5: int = const 0
+    %6: int = array.get %4, %5
+    ret %6
+^b2:
+    trap empty "Cannot extract payload of an inactive enum variant"
+}
+```
+
+Такое представление не потребовало ни одной новой инструкции ни в одном
+движке: вариант — это объект с массивами, а и то и другое у движков уже было.
+Но и обходится он дороже всего. Ниже цикл в десять миллионов шагов. На каждом
+шаге строится одно значение и разбирается: вариант без данных, объект с двумя
+полями или вариант `value`/`pair`. Время — лучшее из трёх запусков, релизная
+сборка, Apple M2 Max:
+
+| | перечисление без данных | объект с двумя полями | вариант |
+|---|---:|---:|---:|
+| ядро Sparrow | 0.03 с | 0.08 с | 0.37 с |
+| JVM | 0.34 с | 0.37 с | 0.75 с |
+| движок IR (1 000 000 шагов) | 0.23 с | 0.44 с | 0.90 с |
+
+Вариант обходится примерно вдвое дороже объекта с теми же данными на JVM и на
+движке IR и в четыре-пять раз — в ядре, где не убегающий объект дёшев.
+Исправление — представление с одним объектом на вариант и обычными полями, и
+программа его никак не заметит (issue #290).
+
+## 16.7 Перечисления в других языках
+
+| | Okkama | C | Pascal | Java | Rust | Haskell | Go |
+|---|---|---|---|---|---|---|---|
+| Вариант — число | нет | да (`int`) | порядковый | `ordinal()` | приведение `as` у перечислений без данных | класс `Enum`, если выведен | да (`iota`) |
+| Операторы порядка | нет | да | да | `compareTo` | если выведены | если выведены | да |
+| Данные у варианта | варианты | нет (объединения отдельно и без метки) | вариантные записи, метка не проверяется | запечатанные классы и записи | да | да | нет |
+| Проверка полноты | да; для оператора над перечислением без данных — только линтер | нет | нет | `switch`-выражения и `switch` с образцами | да | предупреждение (`-Wincomplete-patterns`) | нет |
+| Рекурсивные данные | нет (#287) | через указатели | через указатели | да | через `Box` | да | — |
+| Вложенные образцы | нет (#288) | — | — | да | да | да | — |
+| Действия у вариантов | нет | — | — | да | блоки `impl` | классы типов | методы типа |
+
+Перечисление Okkama сохраняет типобезопасность столбцов Haskell и Rust. Того,
+что эти языки строят поверх неё, оно не берёт: вложенных образцов, рекурсии,
+выведенного порядка и методов. Первых двух пока нет. Последние два отброшены
+намеренно, по причинам из §16.1.
+
+## 16.8 Ограничения
+
+- **Нет рекурсивных вариантов.** Вариант не может нести своё же
+  перечисление, ни прямо, ни косвенно:
+
+```okkama
+module bible/recursive v1.0.0;
+
+enum Tree = (leaf, node(left is Tree, value is int, right is Tree));
+
+main() is int { 0; }
+```
+
+Ответ компилятора:
+
+```text
+16-recursive-rejected.ok:3:1: semantic error: Recursive variant payload types are not supported
+```
+
+  Деревья, списки и синтаксические деревья выражений — классическое
+  применение алгебраических типов со времён HOPE — пока приходится строить из
+  объектов (issue #287).
+- **Нет вложенных образцов.** `case Pair.both(Maybe.some(x), y)` отвергается:
+  `Expected a binding or _ in variant pattern`. Второй `match` по связанному
+  полю делает то же, но длиннее (issue #288).
+- **Варианты — не ключи словаря.** Перечисление без данных — ключ, вариант —
+  нет: `Map key type Reading is not a scalar key type` (issue #289).
+- **Лишние варианты проходят молча.** Повтор варианта перечисления без данных,
+  повтор литерала или `else`, который никогда не выполнится, принимаются
+  (issue #286).
+- **Диагностика.** Неполный `match` в хвосте действия сообщает, что у действия
+  нет значения, а не какой вариант пропущен; так же ведёт себя компактный
+  выбор с пропущенным вариантом (issue #291).
+- **Цена.** Значение-вариант выделяет по массиву на каждое поле каждого
+  варианта (issue #290).
+
+## 16.9 Чего стоит такой замысел
+
+- **Текст и порядок выписываются явно.** Чтобы напечатать вариант или
+  отсортировать по приоритету, нужен `match` или `?? !!`. Язык с `toString` и
+  `ordinal` сделал бы это неявно. Цена — несколько строк на перечисление,
+  написанных один раз и в одном месте.
+- **Нет списка вариантов.** `values()` нет. Код, которому нужны все варианты,
+  например чтобы заполнить меню, выписывает массив, и полноту этого массива
+  никто не проверяет.
+- **Позиционные данные.** Поля названы в объявлении, но по записи
+  `Stage.shipped("DHL", "JD0142")` не видно, какая строка — перевозчик.
+  Вариант с тремя и более полями часто лучше сделать вариантом с одним полем,
+  несущим объект.
+- **Замкнутый мир.** Перечисление нельзя расширить из другого модуля. Именно
+  это делает полноту возможной, и поэтому открытое семейство видов должно быть
+  ролью.
+
+Взамен:
+
+- забытый вариант — ошибка компиляции, а не сюрприз во время исполнения;
+- значение нельзя прочитать через чужой вариант;
+- равенство точное, и два перечисления нельзя сравнить по ошибке;
+- перечисление без данных не выделяет память в ядре и сравнивается одним
+  сравнением указателей на JVM.
+
 # Литература
 
 - <a id="ref-lions1996"></a>Jacques-Louis Lions et al. (1996). *ARIANE 5 Flight 501 Failure: Report by the Inquiry Board*. European Space Agency, Paris, 19 July 1996. https://www.esa.int/Newsroom/Press_Releases/Ariane_501_-_Presentation_of_Inquiry_Board_report
@@ -8073,12 +8830,15 @@ exit 1
 - <a id="ref-bagwell2001"></a>Phil Bagwell (2001). *Ideal Hash Trees*. Technical report, École Polytechnique Fédérale de Lausanne. https://infoscience.epfl.ch/record/64398
 - <a id="ref-baker-sep"></a>Alan Baker (2022). Simplicity. In *The Stanford Encyclopedia of Philosophy* (Summer 2022 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/simplicity/
 - <a id="ref-jep395"></a>Gavin Bierman (2021). JEP 395: Records. OpenJDK. https://openjdk.org/jeps/395
+- <a id="ref-jep409"></a>Gavin Bierman (2021). JEP 409: Sealed Classes. OpenJDK. https://openjdk.org/jeps/409
+- <a id="ref-jep441"></a>Gavin Bierman (2023). JEP 441: Pattern Matching for switch. OpenJDK. https://openjdk.org/jeps/441
 - <a id="ref-bloch2018"></a>Joshua Bloch (2018). *Effective Java*, 3rd edition. Addison-Wesley.
 - <a id="ref-boehm2003"></a>Hans-J. Boehm (2003). Destructors, Finalizers, and Synchronization. In *Proceedings of POPL 2003*: 262–272. ACM. https://doi.org/10.1145/604131.604153
 - <a id="ref-braun2013"></a>Matthias Braun, Sebastian Buchwald, Sebastian Hack, Roland Leißa, Christoph Mallon, Andreas Zwinkau (2013). Simple and Efficient Construction of Static Single Assignment Form. In *Compiler Construction (CC 2013)*, LNCS 7791: 102–122. Springer. https://doi.org/10.1007/978-3-642-37051-9_6
 - <a id="ref-brooks1987"></a>Frederick P. Brooks, Jr. (1987). No Silver Bullet — Essence and Accidents of Software Engineering. *Computer* 20(4): 10–19. https://doi.org/10.1109/MC.1987.1663532
 - <a id="ref-bugayenko2016"></a>Yegor Bugayenko (2016). *Elegant Objects*, Volume 1. Self-published (CreateSpace).
 - <a id="ref-bugayenko2017"></a>Yegor Bugayenko (2017). *Elegant Objects*, Volume 2. Self-published (CreateSpace).
+- <a id="ref-burstall1980"></a>Rod M. Burstall, David B. MacQueen, Donald T. Sannella (1980). HOPE: An Experimental Applicative Language. In *Proceedings of the 1980 ACM Conference on LISP and Functional Programming*: 136–143. ACM. https://doi.org/10.1145/800087.802799
 - <a id="ref-cardelli1985"></a>Luca Cardelli, Peter Wegner (1985). On Understanding Types, Data Abstraction, and Polymorphism. *ACM Computing Surveys* 17(4): 471–523. https://doi.org/10.1145/6041.6042
 - <a id="ref-jep421"></a>Brent Christian (2021). JEP 421: Deprecate Finalization for Removal. OpenJDK. https://openjdk.org/jeps/421
 - <a id="ref-claessen2000"></a>Koen Claessen, John Hughes (2000). QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs. In *Proceedings of ICFP 2000*: 268–279. ACM. https://doi.org/10.1145/351240.351266
@@ -8108,6 +8868,7 @@ exit 1
 - <a id="ref-kahan1996"></a>William Kahan (1996). *Lecture Notes on the Status of IEEE Standard 754 for Binary Floating-Point Arithmetic*. University of California, Berkeley. https://people.eecs.berkeley.edu/~wkahan/ieee754status/IEEE754.PDF
 - <a id="ref-kay1993"></a>Alan C. Kay (1993). The Early History of Smalltalk. *ACM SIGPLAN Notices* 28(3): 69–95 (HOPL-II). https://doi.org/10.1145/155360.155364
 - <a id="ref-kay2003"></a>Alan Kay (2003). On the Meaning of "Object-Oriented Programming". E-mail to Stefan Ram, 23 July 2003. https://www.purl.org/stefan_ram/pub/doc_kay_oop_en
+- <a id="ref-kernighan1988"></a>Brian W. Kernighan, Dennis M. Ritchie (1988). *The C Programming Language*, 2nd edition. Prentice Hall.
 - <a id="ref-king2019"></a>Alexis King (2019). Parse, Don't Validate. Blog post, 5 November 2019. https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/
 - <a id="ref-klabnik2023"></a>Steve Klabnik, Carol Nichols (2023). *The Rust Programming Language*, 2nd edition. No Starch Press. https://doc.rust-lang.org/book/
 - <a id="ref-knuth1974"></a>Donald E. Knuth (1974). Structured Programming with go to Statements. *ACM Computing Surveys* 6(4): 261–301. https://doi.org/10.1145/356635.356640
@@ -8120,6 +8881,7 @@ exit 1
 - <a id="ref-liskov1979"></a>Barbara H. Liskov, Alan Snyder (1979). Exception Handling in CLU. *IEEE Transactions on Software Engineering* SE-5(6): 546–558. https://doi.org/10.1109/TSE.1979.230191
 - <a id="ref-liskov1994"></a>Barbara H. Liskov, Jeannette M. Wing (1994). A Behavioral Notion of Subtyping. *ACM TOPLAS* 16(6): 1811–1841. https://doi.org/10.1145/197320.197383
 - <a id="ref-mackay2003"></a>David J. C. MacKay (2003). *Information Theory, Inference, and Learning Algorithms*. Cambridge University Press. Chapter 28: Model Comparison and Occam's Razor.
+- <a id="ref-maranget2007"></a>Luc Maranget (2007). Warnings for Pattern Matching. *Journal of Functional Programming* 17(3): 387–421. https://doi.org/10.1017/S0956796807006223
 - <a id="ref-mccarthy1960"></a>John McCarthy (1960). Recursive Functions of Symbolic Expressions and Their Computation by Machine, Part I. *Communications of the ACM* 3(4): 184–195. https://doi.org/10.1145/367177.367199
 - <a id="ref-meszaros2007"></a>Gerard Meszaros (2007). *xUnit Test Patterns: Refactoring Test Code*. Addison-Wesley.
 - <a id="ref-meyer1992"></a>Bertrand Meyer (1992). Applying "Design by Contract". *Computer* 25(10): 40–51. https://doi.org/10.1109/2.161279
@@ -8128,6 +8890,7 @@ exit 1
 - <a id="ref-miller1990"></a>Barton P. Miller, Lars Fredriksen, Bryan So (1990). An Empirical Study of the Reliability of UNIX Utilities. *Communications of the ACM* 33(12): 32–44. https://doi.org/10.1145/96267.96279
 - <a id="ref-miller2006"></a>Mark S. Miller (2006). *Robust Composition: Towards a Unified Approach to Access Control and Concurrency Control*. PhD thesis, Johns Hopkins University.
 - <a id="ref-milner1978"></a>Robin Milner (1978). A Theory of Type Polymorphism in Programming. *Journal of Computer and System Sciences* 17(3): 348–375. https://doi.org/10.1016/0022-0000(78)90014-4
+- <a id="ref-milner1997"></a>Robin Milner, Mads Tofte, Robert Harper, David MacQueen (1997). *The Definition of Standard ML (Revised)*. MIT Press.
 - <a id="ref-moseley2006"></a>Ben Moseley, Peter Marks (2006). Out of the Tar Pit. Software Practice Advancement (SPA) 2006. https://curtclifton.net/papers/MoseleyMarks06a.pdf
 - <a id="ref-nygaard1978"></a>Kristen Nygaard, Ole-Johan Dahl (1978). The Development of the SIMULA Languages. *ACM SIGPLAN Notices* 13(8): 245–272 (HOPL I). https://doi.org/10.1145/960118.808391
 - <a id="ref-okasaki1998"></a>Chris Okasaki (1998). *Purely Functional Data Structures*. Cambridge University Press. https://doi.org/10.1017/CBO9780511530104
@@ -8159,5 +8922,7 @@ exit 1
 - <a id="ref-uax29"></a>The Unicode Consortium (2024). *Unicode Standard Annex #29: Unicode Text Segmentation* (for Unicode 16.0.0). https://www.unicode.org/reports/tr29/
 - <a id="ref-unicode16"></a>The Unicode Consortium (2024). *The Unicode Standard, Version 16.0.0*. https://www.unicode.org/versions/Unicode16.0.0/
 - <a id="ref-wadler1989"></a>Philip Wadler (1989). Theorems for Free! In *Proceedings of FPCA 1989*: 347–359. ACM. https://doi.org/10.1145/99370.99404
+- <a id="ref-wadler1998"></a>Philip Wadler (1998). The Expression Problem. Note to the java-genericity mailing list, 12 November 1998. https://homepages.inf.ed.ac.uk/wadler/papers/expression/expression.txt
+- <a id="ref-wirth1971"></a>Niklaus Wirth (1971). The Programming Language Pascal. *Acta Informatica* 1(1): 35–63. https://doi.org/10.1007/BF00264291
 - <a id="ref-wirth1995"></a>Niklaus Wirth (1995). A Plea for Lean Software. *Computer* 28(2): 64–68. https://doi.org/10.1109/2.348001
 - <a id="ref-yuan2014"></a>Ding Yuan, Yu Luo, Xin Zhuang, Guilherme Renna Rodrigues, Xu Zhao, Yongle Zhang, Pranay U. Jain, Michael Stumm (2014). Simple Testing Can Prevent Most Critical Failures: An Analysis of Production Failures in Distributed Data-Intensive Systems. In *11th USENIX Symposium on Operating Systems Design and Implementation (OSDI 14)*: 249–265. USENIX. https://www.usenix.org/conference/osdi14/technical-sessions/presentation/yuan

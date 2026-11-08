@@ -1,0 +1,16 @@
+module bible/value v1.0.0;
+
+enum Priority = (low, normal, urgent);
+
+object Queue {
+    Queue();
+    weight(priority is Priority) is int {
+        let weight = match priority {
+            case Priority.low { 1; }
+            case Priority.normal { 2; }
+        };
+        weight;
+    }
+}
+
+main() is int { 0; }

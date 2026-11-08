@@ -120,6 +120,10 @@ Every operator requires operands of the right category and converts nothing:
   mixes them: `"n = " + 1` is an error (Chapter 6).
 - `/` on two integers gives an exact `rat`. There is no `**`; powers are
   written with `pow` (Chapter 5).
+- An object takes part in arithmetic and ordering only through roles it
+  declares: `a + b` is `a.plus(b)` when the type of `a` does `Adding`, and
+  `a < b` asks `a.order(b)` through `Comparing` (§14.8). An object without
+  those roles has no operators.
 
 ## 9.4 Choosing
 

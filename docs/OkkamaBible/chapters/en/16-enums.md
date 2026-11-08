@@ -1,0 +1,441 @@
+# Chapter 16. Enums and pattern matching
+
+Some values come from a short list that is known in advance: a priority is
+low, normal or urgent; an order is a draft, paid, shipped or cancelled. Some of
+those alternatives carry data of their own. A paid order has an amount, a
+shipped one has a carrier and a tracking number, and a draft has nothing.
+Okkama covers both with one declaration, `enum`, and takes them apart with
+`match` and the compact choice `?? !!`. The compiler knows every case, so it can
+tell when code forgets one.
+
+{{example:16-enums}}
+
+- `Priority` is a **payload-free enum**: three names and nothing else.
+- `Stage` is a **variant enum**: some of its cases carry typed fields.
+- `match stage` has one branch per case and binds each case's fields to
+  names. Drop the `cancelled` branch and the program no longer compiles.
+- `priority ?? .urgent: "!" !! _: " "` is the one-line form: one pattern, and
+  `_` for everything else.
+
+This chapter covers enums of both kinds and the rules of matching, and then
+asks the design question that enums share with roles: when should a set of
+alternatives be closed, and when open?
+
+## 16.1 A closed set of names
+
+```okkama
+enum Priority = (low, normal, urgent);
+```
+
+An enum declaration names a type and lists its cases. The type name is
+capitalised, like every type; the cases are lower-case identifiers
+(`enum Status = (Ready, failed)` is a syntax error: `Expect enum case
+name`). A case is always written with its type, `Priority.urgent`. There is no
+bare `urgent` in scope, so two enums can share a case name without conflict. A
+duplicate case is an error: `Enum "Status" already has case "ready"`.
+
+What an Okkama enum value *does not* have is as important as what it has:
+
+- **No number.** A case has no ordinal you can read, and there is no
+  conversion to or from `int`.
+- **No order.** `Priority.low < Priority.urgent` is rejected:
+
+{{example:16-order-rejected}}
+
+- **No actions.** An enum value is not an object. `Priority.low.string()` is
+  an error, `Can only call actions on objects`, and there is no `values()` that
+  lists the cases.
+- **No mixing.** Two cases are equal only if they belong to the same enum and
+  are the same case. `Status.ready == Other.ready` is not `false`, it is a
+  compile error, `Cannot compare Status and Other`, like any comparison across
+  categories (Chapter 4).
+
+What it does have is equality, and the right to be a map key and an array
+element. `[Unit.celsius: 2, Unit.kelvin: 1]` is a `%Unit:int`, and `@Status`
+is an array of statuses.
+
+Each refusal has a history. In C an enumerator is an `int` constant. It can be
+added, compared, stored in any integer variable and printed as a number
+[@kernighan1988], so an enum gives a name to a number without giving it a
+type. Pascal made the enumerated type a type of its own, but an *ordinal* one:
+its values are ordered, `succ` and `pred` step through them, and they index
+arrays and drive `for` loops [@wirth1971]. Java turned each case into an
+object with methods, fields, an `ordinal()` and a generated `values()`
+[@gosling2023]. Bloch's advice in *Effective Java* is to use enums instead of
+`int` constants and never derive anything from `ordinal()`
+[@bloch2018]. Go has no enum declaration at all: a block of constants with
+`iota` numbers them [@gospec].
+
+Okkama takes the type from Pascal and leaves out the arithmetic. An
+ordinal invites code that depends on the order of a declaration: `if level >
+Priority.normal` silently changes meaning when someone inserts `high`
+between `normal` and `urgent`. If a domain does have an order, the order is a
+fact about the domain, and the program states it: a `match` that maps each
+case to a weight, or an object that does `Comparing` (Chapter 14). The same
+goes for text. The word printed for a case is a presentation decision. It
+depends on the audience and the language. A `string()` on the enum would pick
+one silently. A `?? !!` or a `match` makes the choice where it is used.
+
+The order of a declaration is not entirely invisible. A map keeps its keys
+sorted, and enum keys sort by their position in the declaration, on every
+engine:
+
+```okkama
+enum Unit = (celsius, kelvin, fahrenheit);
+let units = [Unit.fahrenheit: 3, Unit.kelvin: 2, Unit.celsius: 1];
+// units.keys(): celsius, kelvin, fahrenheit
+```
+
+That gives iteration a stable order without making the order an operator.
+
+## 16.2 Cases that carry data
+
+```okkama
+enum Stage = (draft, paid(amount is int), shipped(carrier is string, tracking is string),
+    cancelled(reason is string));
+```
+
+A case may declare fields. The enum is then a **variant**, a *tagged union*,
+or what the ML family calls an algebraic data type. A value of `Stage` is
+exactly one of four things, and the case decides which fields exist:
+
+- `Stage.paid(4250)` builds a value. Payload fields are given positionally,
+  in declaration order. `Stage.paid(amount: 4250)` is rejected: `Variant
+  Stage.paid expects 1 positional payload field(s)`.
+- Payload fields are immutable and have no accessors. `stage.amount` does not
+  exist, because on a `draft` there would be nothing to return. The only way to
+  read a field is a pattern that has first established the case.
+- Equality compares the enum, the case and the payload, field by field.
+
+A variant may be generic:
+
+{{example:16-variants}}
+
+`Reading.single(21)` infers `Reading<int>` from its argument. A case without
+fields has nothing to infer from, so without an expected type it needs explicit
+arguments: `Reading<int>.missing`. Writing `Reading.missing` alone is
+rejected: `Cannot infer type arguments for Reading.missing; provide an expected
+type or explicit type arguments`. In the `Sensor` constructor the
+field type supplies the context.
+
+Two enums of the standard prelude are variants of exactly this kind:
+`Maybe<T> = (some(value), none)` and `Presence<T>`, which adds `missing`
+(Chapter 7). Error enums declared `is Error` are variants too, even when no
+case has a payload, and a `catch` takes them apart with the same patterns
+(Chapter 10).
+
+Pascal's variant records gave the idea wide use in an unsafe form
+[@wirth1971]. The tag was an ordinary field, and the language did not check
+that a program read the fields of the variant the tag named. HOPE combined
+data types defined by cases with functions defined by patterns over them
+[@burstall1980], and ML made the pair standard, with the compiler checking
+the patterns [@milner1997]. Haskell kept it [@haskell2010], and Rust brought
+it to systems programming as `enum` with `match` [@klabnik2023]. Java reached
+it in steps: records, then sealed interfaces that close a hierarchy, then
+`switch` with patterns that checks the hierarchy is covered
+[@jep395; @jep409; @jep441].
+
+Okkama's variant is the ML one with the field names of a record. Its fields
+are named in the declaration and positional at use, and the compiler checks
+both arity and types.
+
+## 16.3 `match`
+
+```okkama
+let state = match stage {
+    case Stage.draft { "draft"; }
+    case Stage.paid(amount) { "paid " + amount.string(); }
+    case Stage.shipped(carrier, tracking) { "shipped by " + carrier + ", " + tracking; }
+    case Stage.cancelled(reason) { "cancelled: " + reason; }
+};
+```
+
+The subject is evaluated once. Each `case` lists one or more patterns, and the
+first case with a matching pattern runs. There is no fall-through and no
+`break`; a branch is a block, and its last value is the value of the `match`.
+`else` takes whatever no case matched.
+
+Patterns are of two kinds:
+
+- **A value.** `case Priority.low, Priority.normal`, `case 404`, `case "GET"`.
+  The subject is compared with `==`, so the rules of equality apply: the value
+  must be of the subject's category, and `case 1..5` against an `int` is
+  rejected rather than read as a range test (Chapter 9).
+- **A variant pattern.** `case Stage.shipped(carrier, tracking)` tests the
+  case and binds each field to a name, or ignores it with `_`. The number of
+  bindings must equal the number of fields: `Wrong number of variant pattern
+  bindings`. A binding exists only inside its branch.
+
+All branches of a `match` that produces a value must produce one type:
+
+```text
+semantic error: Branches produce different types: int and string
+```
+
+A branch that returns, throws or panics produces no value and does not take
+part in the check.
+
+### Exhaustiveness
+
+The compiler knows every case of an enum, so it checks that a `match` covers
+them:
+
+{{example:16-missing-rejected}}
+
+The rule depends on the kind of enum:
+
+- A `match` over a **variant enum** — one with a payload anywhere, an error
+  enum, `Maybe`, `Presence` — must cover every case or have `else`. That holds
+  for a statement `match` as well as for one that produces a value.
+- A `match` over a **payload-free enum** that produces a value must cover
+  every case or have `else`. Otherwise there would be no value to produce:
+
+{{example:16-value-rejected}}
+
+- A *statement* `match` over a payload-free enum may leave cases out; it then
+  does nothing for them. `okkama lint` reports it:
+
+```text
+warning[non-exhaustive-match]: match over enum `Status` does not handle failed, done; add the cases or an `else` branch
+```
+
+The second and third rules differ because a payload-free enum used to be
+treated as a set of constants, and a statement over constants may
+legitimately act on some of them only. The lint keeps the old freedom visible.
+Variants never had it. A missing case of a variant is a missing piece of data
+handling, and the compiler treats it as such.
+
+Exhaustiveness pays off most when the enum changes. Add `refunded(amount is
+int)` to `Stage`, and every `match` over a stage that lists cases becomes an
+error that names `refunded`. The list of places to update comes from the
+compiler, not from a search. This is the reason to prefer listing cases over
+`else`. An `else` covers today's remaining cases and every future one, and so
+it hides exactly the places that a new case should reach. Maranget describes
+the two checks a compiler can make on a match: *exhaustiveness*, whether some
+value is matched by no case, and *usefulness*, whether a case can never be
+reached [@maranget2007]. Okkama implements the first. The second is partial:
+a repeated variant pattern is an error (`Duplicate variant pattern`), but a
+repeated payload-free case, a repeated literal, or an `else` after every case
+is accepted without a word (issue #286).
+
+## 16.4 Compact choices
+
+Chapter 9 introduced `?? !!` on booleans and Chapter 7 on `Maybe`. On any enum
+it is a `match` written as one expression:
+
+```okkama
+let suffix = unit ?? .celsius: " C" !! .kelvin: " K";
+let flag = priority ?? .urgent: "!" !! _: " ";
+let label = reading ?? .single(value): value.string() !! _: "no single value";
+```
+
+- After `??` and each `!!` comes a pattern, a colon and the result. Patterns
+  drop the type name (`.urgent`, not `Priority.urgent`), because the subject
+  already fixes it.
+- `_` covers the cases not named.
+- Coverage must be complete, and a case may not repeat. Both rules apply to
+  payload-free enums as well, unlike `match`. Choices cannot nest.
+
+The message for a missing case in a compact choice describes the form rather
+than the case (`Compact choice branches must produce a value or diverge`); a
+better one is issue #291. For anything longer than a line, `match` reads
+better and says more when it fails.
+
+## 16.5 Closed or open: enums and roles
+
+An enum and a role are two answers to one question: how to describe a value
+that can be one of several kinds.
+
+- An **enum** lists the kinds in one place. Code that uses it switches on the
+  kind. Adding a new *operation* over stages is easy: write one more function
+  with a `match`, and nothing else changes. Adding a new *kind* is harder:
+  every `match` must learn it, and the compiler lists them.
+- A **role** leaves the kinds open. Each kind is an object that does the role
+  and carries its own behaviour. Adding a new *kind* is easy: write one more
+  object, and nothing else changes. Adding a new *operation* is harder: the
+  role gains an action, and every object must implement it.
+
+Reynolds described this duality in 1975, and Cook revisits it as the
+difference between abstract data types and objects [@cook2009]. Wadler named it the
+*expression problem*: define a data type by cases so that both new cases and
+new functions can be added without recompiling existing code and without
+losing static type safety [@wadler1998]. Okkama does not solve the expression
+problem; very few languages do without extra machinery. It offers both sides
+and asks the programmer to choose by what is expected to change:
+
+| The set of kinds is… | …and the operations are… | Use |
+|---|---|---|
+| closed, part of the domain's definition (order states, token kinds, protocol messages) | many, added over time (rendering, pricing, persistence) | an enum, with `match` |
+| open, extended by other modules or by tests (storage backends, transports, clocks) | few and stable | a role, with objects |
+
+The test is whether a newcomer must be written into one list or may be added
+from outside. A stage of an order belongs to the order's definition. A new
+stage is a change to the business, and every place that handles stages should
+be reviewed. A storage backend does not belong to the service that uses it,
+and a fake in a test is one more backend (Chapter 15). A role cannot be
+matched on, because there is no downcast (Chapter 14). An enum cannot be
+extended, because its declaration is the complete list. Each property is what
+makes the other choice worse.
+
+Java's sealed interfaces sit in between: a closed list of classes, each with
+its own methods, which a `switch` can also take apart [@jep409; @jep441].
+Okkama has no single construct for this, but the effect is reachable: a
+variant enum whose payloads are objects.
+
+## 16.6 How enums run
+
+The two kinds of enum compile differently, and the difference shows in what
+they cost.
+
+A **payload-free enum** is a value of its own category in OIR. A case is
+`enum.case`, and comparison is `enum.eq`:
+
+```text
+func @Probe.code(%0: Probe, %1: Status) -> int [method Probe] {
+^b0:
+    %2: Status = enum.case Status.ready
+    %3: bool = enum.eq %1, %2
+    cond %3, ^b1, ^b2
+^b1:
+    %4: int = const 1
+    br ^b3(%4)
+^b2:
+    %5: int = const 2
+    br ^b3(%5)
+^b3(%6: int):
+    ret %6
+}
+```
+
+The source was `match s { case Status.ready { 1; } case Status.failed,
+Status.done { 2; } }`. The last case is not tested at all: the match is
+exhaustive, so whatever is not `ready` must be `failed` or `done`. On the
+Sparrow core an enum value is an immediate 64-bit word, with the enum's number
+in the high half and the case's in the low half. Building one allocates
+nothing, and comparing two compares two words. On the JVM each case is a
+singleton object of the runtime class `okkama.rt.Case`, held in a static field
+of a class generated for the enum. Equality is identity, and map keys sort by
+the case number.
+
+A **variant** becomes an object that the compiler generates. For
+
+```okkama
+enum Reading = (empty, value(item is int), pair(left is int, right is int));
+```
+
+OIR declares
+
+```text
+object $variant_Reading_1 {
+    field $tag: int
+    field $1_item: array<int>
+    field $2_left: array<int>
+    field $2_right: array<int>
+}
+```
+
+The tag is the case number. Every field of every case gets a slot, and each
+slot is a one-element array, empty when the case is not active.
+`Reading.pair(1, 2)` builds `[]`, `[1]` and `[2]` and then the object. A
+pattern reads a field through a generated accessor that checks the tag first.
+The check cannot fail after a `match` has tested the case, but it is still
+executed:
+
+```text
+func @$variant_Reading_1.$field2(%0: $variant_Reading_1) -> int [method $variant_Reading_1] {
+^b0:
+    %1: int = obj.get %0, $tag
+    %2: int = const 2
+    %3: bool = int.eq %1, %2
+    cond %3, ^b1, ^b2
+^b1:
+    %4: array<int> = obj.get %0, $2_left
+    %5: int = const 0
+    %6: int = array.get %4, %5
+    ret %6
+^b2:
+    trap empty "Cannot extract payload of an inactive enum variant"
+}
+```
+
+This representation needed no new instruction in any engine: a variant is an
+object with arrays, and every engine already had both. It is also the most
+expensive way to hold a variant. Below is a loop of ten million steps. Each
+step builds one value and takes it apart: a payload-free case, a two-field
+object, or a `value`/`pair` variant. Times are the best of three runs, on the
+release build, on an Apple M2 Max:
+
+| | payload-free enum | object with two fields | variant |
+|---|---:|---:|---:|
+| Sparrow core | 0.03 s | 0.08 s | 0.37 s |
+| JVM | 0.34 s | 0.37 s | 0.75 s |
+| IR engine (1 000 000 steps) | 0.23 s | 0.44 s | 0.90 s |
+
+A variant costs about twice an object with the same data on the JVM and on the
+IR engine, and four to five times on the core, where an object that does not
+escape is cheap. The fix is a representation with one object per case and
+plain fields, and it changes nothing a program can observe (issue #290).
+
+## 16.7 Enums elsewhere
+
+| | Okkama | C | Pascal | Java | Rust | Haskell | Go |
+|---|---|---|---|---|---|---|---|
+| Case is a number | no | yes (`int`) | ordinal | `ordinal()` | `as` cast for payload-free enums | `Enum` class, if derived | yes (`iota`) |
+| Ordering operators | no | yes | yes | `compareTo` | if derived | if derived | yes |
+| Data per case | variants | no (unions are separate and untagged) | variant records, unchecked tag | sealed classes and records | yes | yes | no |
+| Exhaustiveness checked | yes; lint only for statement matches over payload-free enums | no | no | `switch` expressions and pattern `switch` | yes | warning (`-Wincomplete-patterns`) | no |
+| Recursive data | no (#287) | through pointers | through pointers | yes | through `Box` | yes | — |
+| Nested patterns | no (#288) | — | — | yes | yes | yes | — |
+| Actions on cases | no | — | — | yes | `impl` blocks | type classes | methods on the type |
+
+Okkama's enum keeps the type safety of the Haskell and Rust column. It leaves
+out what those languages build on top of it: nested patterns, recursion,
+derived orderings and methods. The first two are missing for now. The last
+two are left out on purpose, for the reasons in §16.1.
+
+## 16.8 Limits
+
+- **No recursive variants.** A case cannot carry its own enum, directly or
+  indirectly:
+
+{{example:16-recursive-rejected}}
+
+  Trees, lists and expression syntax trees, the classic uses of algebraic
+  data types since HOPE, have to be built from objects for now (issue #287).
+- **No nested patterns.** `case Pair.both(Maybe.some(x), y)` is rejected:
+  `Expected a binding or _ in variant pattern`. A second `match` on the bound
+  field does the same job in more lines (issue #288).
+- **Variants are not map keys.** A payload-free enum is a key; a variant is
+  not: `Map key type Reading is not a scalar key type` (issue #289).
+- **Redundant cases pass silently.** A repeated payload-free case, a repeated
+  literal, or an `else` that can never run is accepted (issue #286).
+- **Diagnostics.** A non-exhaustive `match` in the tail of an action reports
+  that the action has no value rather than which case is missing, and so does
+  a compact choice with a missing case (issue #291).
+- **Cost.** A variant value allocates one array per field of every case
+  (issue #290).
+
+## 16.9 What this design costs
+
+- **Text and order are written out.** Printing a case or sorting by
+  priority takes a `match` or a `?? !!`. A language with `toString` and
+  `ordinal` would do it implicitly. The cost is a few lines per enum, paid once
+  and kept in one place.
+- **No list of cases.** There is no `values()`. Code that needs every case,
+  for example to fill a menu, writes the array, and nothing checks that the
+  array is complete.
+- **Positional payloads.** Fields are named in the declaration, but a
+  construction like `Stage.shipped("DHL", "JD0142")` does not show which
+  string is the carrier. A case with more than two or three fields is often
+  better as an object carried by a one-field case.
+- **The closed world.** An enum cannot be extended from another module.
+  That is what makes exhaustiveness possible, and it is why an open family of
+  kinds should be a role.
+
+In return:
+
+- a forgotten case is a compile error, not a run-time surprise;
+- a value cannot be read through the wrong case;
+- equality is exact, and two enums can never be compared by accident;
+- a payload-free enum costs no allocation on the core and a pointer
+  comparison on the JVM.

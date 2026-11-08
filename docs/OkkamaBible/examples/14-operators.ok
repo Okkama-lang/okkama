@@ -1,0 +1,30 @@
+module bible/operators v1.0.0;
+
+// Arithmetic on an object is a call to a role action: a + b is a.plus(b)
+// when the type does Adding<…>, and a < b asks Comparing for an Order.
+import "io/stdout" take Stdout;
+import "operators" take Adding, Subtracting, Multiplying, Negating;
+import "compare" take Comparing, Order;
+
+object Money does Adding<Money, Money>, Subtracting<Money, Money>, Multiplying<int, Money>,
+        Negating<Money>, Comparing<Money> {
+    has cents is int;
+    Money(:cents);
+
+    cents() is int { cents; }
+    plus(other is Money) is Money { Money(cents: cents + other.cents()); }
+    minus(other is Money) is Money { Money(cents: cents - other.cents()); }
+    times(count is int) is Money { Money(cents: cents * count); }
+    negated() is Money { Money(cents: -cents); }
+    order(other is Money) is Order { cents.order(other.cents()); }
+}
+
+main() is int {
+    let out = Stdout();
+    let price = Money(cents: 1250);
+    let total = price * 3 + Money(cents: 499);      // price.times(3).plus(…)
+    let refund = -Money(cents: 300);                // Money(cents: 300).negated()
+    out.writeln(total.cents().string() + " " + (total + refund).cents().string());
+    out.writeln(if total > price && price <= price { "ordered"; } else { "not ordered"; });
+    0;
+}
