@@ -113,7 +113,7 @@ Updated with each chapter: `build.py --stats`.
   To add: a case study of the std HTTP client's failures; more on
   failures inside cleanup and their secondaries (with Chapter 11). Engines disagree on the uncaught
   report (#270).
-- Chapter 11 (resources): 8.5 pages (EN) of its floor of 20. Written:
+- Chapter 11 (resources): 8.2 pages (EN) of its floor of 20. Written:
   memory versus resources, finalizers, the lineage (RAII, `with`, `defer`),
   `defer`, `destroy` and its order, ownership by identity, cleanup on
   failure and in constructors, `async destroy`, resources and tasks
@@ -122,3 +122,13 @@ Updated with each chapter: `build.py --stats`.
   a walk (#9), limits, costs. To add: channels; a larger worked example (a connection
   pool); how each engine implements regions (the core's region arrays and
   identity table, the IR engine's owner cells, the JVM's `Region`).
+- Chapter 12 (objects): 5.3 pages (EN) of its floor of 18. Written:
+  declaring an object, private and permanent fields, explicit constructors,
+  shorthands, several constructors (variadic), validation in the
+  constructor, `self` calls and `private:`, caps (`12-cap`), structural
+  equality and objects as map keys, costs. To add: a worked domain model
+  (money, an order and its lines); how each engine lays out an object
+  (the core's slots, the IR engine's records, JVM classes); constructor
+  failure and partial objects in depth; a comparison with records in
+  Java, Kotlin data classes and Rust structs; designing small objects
+  (one noun per computation) with std examples.

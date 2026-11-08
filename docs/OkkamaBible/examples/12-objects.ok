@@ -1,0 +1,43 @@
+module bible/objects v1.0.0;
+
+// An object: private fields, explicit constructors that check their input,
+// public behaviour, private helpers. Its state never changes.
+import "io/stdout" take Stdout;
+
+enum InvalidCash is Error = (negative(cents is int));
+
+object Cash {
+    has digit is int;
+    has cents is int = 0;
+    has currency is string = "USD";
+
+    Cash(digit is int, cents is int) {
+        self.digit = digit;
+        self.cents = cents;
+        confirm digit * 100 + cents >= 0 else throw InvalidCash.negative(digit * 100 + cents);
+    }
+    Cash(:digit, :currency);
+
+    total() is int { self.in_cents(digit) + cents; }
+    label() is string { currency + " " + self.total().string(); }
+
+    private:
+    in_cents(units is int) is int { units * 100; }
+}
+
+object Bag {
+    has items is @int;
+    Bag() { items = []; }
+    Bag(items is ...int) { self.items = items...; }
+    size() is int { items.size(); }
+}
+
+main() is int {
+    let out = Stdout();
+    out.writeln(Cash(3, 25).label());
+    out.writeln(Cash(digit: 2, currency: "EUR").label());
+    out.writeln(Bag().size().string() + " " + Bag(1, 2, 3).size().string());
+    out.writeln((Cash(1, 0) == Cash(1, 0)).string());
+    out.writeln(try { Cash(-1, 50).label(); } catch e is InvalidCash { e.text(); });
+    0;
+}

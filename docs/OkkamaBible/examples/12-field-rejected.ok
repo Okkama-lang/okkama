@@ -1,0 +1,10 @@
+module bible/private_field v1.0.0;
+
+object Cash {
+    has cents is int;
+    Cash(:cents);
+}
+
+main() is int {
+    Cash(cents: 1).cents;
+}
