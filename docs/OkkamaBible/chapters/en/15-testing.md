@@ -262,18 +262,15 @@ that may hang should bound itself with a budget or a deadline.
 
 ## 15.8 What does not work yet
 
-Two gaps show up as soon as successors meet assertions:
-
-- Passing a successor result straight to `test.is` crashes the compiler
-  with an internal error, and a successor bound to a name and passed to
-  `test.is` is not counted as used (#275). Until that is fixed, compare
-  through an action: `test.ok(door.opened().open())`, as the example does,
-  or bind the successor and use it as a receiver before asserting.
 - Errors inside fake blocks are reported in terms of the generated object
   (#276).
 - `test.skip`, report formats, filters and parallel workers are described
   in the Book but missing from the command line, and a test after
-  `private:` does not parse (#277).
+  `private:` does not parse (#277, planned for 0.5.0).
+
+Until 0.4.1, a successor passed to `test.is` crashed the compiler and did
+not count as used (#275). It is now an ordinary argument:
+`test.is(bottle.open().close(), bottle)` compares the two bottles.
 
 ## 15.9 What this design costs
 

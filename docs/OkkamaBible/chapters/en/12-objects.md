@@ -399,11 +399,21 @@ action on a receiver whose construction is pending, "through aliases, role
 references, bound actions and collaborators", and requires the run time to
 reject such a call before evaluating its arguments. `Leaf` above only
 stores `up`; calling `up.describe()` in `Leaf`'s constructor would break
-the rule. The compiler catches the direct `self.` call. In 0.4.1 the
-run-time half is not implemented. A call through a collaborator that reads
-a field not yet bound fails differently on each engine, and on Sparrow it
-crashes the process (#271). Until that is fixed, a collaborator that gets
-an unfinished `self` should only store it.
+the rule. The compiler catches the direct `self.` call, and every engine
+catches the rest at run time:
+
+{{example:12-escape-call-rejected}}
+
+The call fails before `Echo().said("argument")` is evaluated, as the
+specification requires, and the same holds through a role or a bound action.
+Until 0.4.1 there was no such check: a call that read a field not yet bound
+failed differently on each engine, and on Sparrow it crashed the process
+(#271). If a constructor fails after `self` escaped, the escaped object
+never completes, and every later call on it is rejected the same way.
+
+One limitation remains. If the first `self` of a constructor sits inside a
+`map` or `reduce` block, the compiler fails with an internal error (#279,
+planned for 0.4.2). Naming it first, `let me = self;`, avoids it.
 
 The problem is old. Java lets `this` escape from a constructor and leaves
 the consequences to the programmer. A non-null field of an object under
@@ -429,7 +439,11 @@ reference-counted Rust struct:
 - an optional side part, allocated only when needed.
 
 The side part holds fields bound by `obj.init` and the run-time state of
-std objects with built-in actions, such as channels. The field vector is
+std objects with built-in actions, such as channels. An object whose
+constructor hands out `self` has one more field than it declares: a hidden
+`$pending`, left unbound until the constructor returns. The check of §12.11
+reads it with `obj.pending`. Objects whose constructor never hands out
+`self` have neither the field nor the check. The field vector is
 never written after `obj.new`. An `undef` field bound later is looked up in
 the side part. Most objects never allocate one.
 

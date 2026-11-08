@@ -5845,11 +5845,63 @@ action on a receiver whose construction is pending, "through aliases, role
 references, bound actions and collaborators", and requires the run time to
 reject such a call before evaluating its arguments. `Leaf` above only
 stores `up`; calling `up.describe()` in `Leaf`'s constructor would break
-the rule. The compiler catches the direct `self.` call. In 0.4.1 the
-run-time half is not implemented. A call through a collaborator that reads
-a field not yet bound fails differently on each engine, and on Sparrow it
-crashes the process (#271). Until that is fixed, a collaborator that gets
-an unfinished `self` should only store it.
+the rule. The compiler catches the direct `self.` call, and every engine
+catches the rest at run time:
+
+```okkama
+module bible/escape_call v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Echo {
+    Echo();
+    said(text is string) is string {
+        Stdout().writeln(text);
+        text;
+    }
+}
+
+object Leaf {
+    has up is Tree;
+    has seen is string = "";
+    Leaf(up is Tree) {
+        self.up = up;
+        seen = up.greeted(Echo().said("argument"));
+    }
+}
+
+object Tree {
+    has name is string;
+    has leaf is Maybe<Leaf>;
+    Tree(name is string) {
+        self.name = name;
+        leaf = Maybe.some(Leaf(self));
+    }
+    greeted(text is string) is string { text + " " + name; }
+}
+
+main() is int {
+    Tree("oak");
+    0;
+}
+```
+
+The compiler answers:
+
+```text
+RuntimeError: Action "greeted" on object "Tree" was called before its construction completed
+```
+
+The call fails before `Echo().said("argument")` is evaluated, as the
+specification requires, and the same holds through a role or a bound action.
+Until 0.4.1 there was no such check: a call that read a field not yet bound
+failed differently on each engine, and on Sparrow it crashed the process
+(#271). If a constructor fails after `self` escaped, the escaped object
+never completes, and every later call on it is rejected the same way.
+
+One limitation remains. If the first `self` of a constructor sits inside a
+`map` or `reduce` block, the compiler fails with an internal error (#279,
+planned for 0.4.2). Naming it first, `let me = self;`, avoids it.
 
 The problem is old. Java lets `this` escape from a constructor and leaves
 the consequences to the programmer. A non-null field of an object under
@@ -5875,7 +5927,11 @@ reference-counted Rust struct:
 - an optional side part, allocated only when needed.
 
 The side part holds fields bound by `obj.init` and the run-time state of
-std objects with built-in actions, such as channels. The field vector is
+std objects with built-in actions, such as channels. An object whose
+constructor hands out `self` has one more field than it declares: a hidden
+`$pending`, left unbound until the constructor returns. The check of §12.11
+reads it with `obj.pending`. Objects whose constructor never hands out
+`self` have neither the field nor the check. The field vector is
 never written after `obj.new`. An `undef` field bound later is looked up in
 the side part. Most objects never allocate one.
 
@@ -7874,18 +7930,15 @@ that may hang should bound itself with a budget or a deadline.
 
 ## 15.8 What does not work yet
 
-Two gaps show up as soon as successors meet assertions:
-
-- Passing a successor result straight to `test.is` crashes the compiler
-  with an internal error, and a successor bound to a name and passed to
-  `test.is` is not counted as used (#275). Until that is fixed, compare
-  through an action: `test.ok(door.opened().open())`, as the example does,
-  or bind the successor and use it as a receiver before asserting.
 - Errors inside fake blocks are reported in terms of the generated object
   (#276).
 - `test.skip`, report formats, filters and parallel workers are described
   in the Book but missing from the command line, and a test after
-  `private:` does not parse (#277).
+  `private:` does not parse (#277, planned for 0.5.0).
+
+Until 0.4.1, a successor passed to `test.is` crashed the compiler and did
+not count as used (#275). It is now an ordinary argument:
+`test.is(bottle.open().close(), bottle)` compares the two bottles.
 
 ## 15.9 What this design costs
 
