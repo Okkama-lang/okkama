@@ -118,6 +118,16 @@ A lookup of a missing key is a runtime failure unless it has a fallback:
 `stock["kiwi"] else 0`. `has(key)` asks without looking up, and a `Maybe` is
 one `if` away when an action wants to return absence (Chapter 7).
 
+A generic object can key a map by its own type parameter:
+`object Index<T> { has entries is %T:int; … }`. Such a `T` is a *key
+parameter*, and the compiler holds every specialization to the key rule
+above: `Index<string>` and `Index<Card>` compile, `Index<@int>` does not, and
+neither does a `Wrap<U>` that passes its `U` on to an `Index<U>` and is given
+an array (issue #242). The standard library's `KeyedSet<T>` and
+`KeyedFrequencies<T>` are built this way — logarithmic membership and counts,
+traversal in key order — beside `OrderedSet` and `Frequencies`, which accept
+any `T` with equality, arrays included, and pay for it with a linear search.
+
 ## 8.4 Ranges
 
 A range is a value: `1..5` and `1..=5` can be stored, passed and compared.
@@ -139,7 +149,7 @@ The language's answer today has three parts.
    transformations of other collections, and these are linear.
 2. **Accumulate with `reduce` or a library collection.** The standard library
    has persistent collections — `List` (a linked list with constant-time
-   prefix), `Deque`, `OrderedSet`, `Heap` — whose "updates" return new
+   prefix), `Deque`, `OrderedSet`, `KeyedSet`, `Heap` — whose "updates" return new
    versions that share structure with the old ones.
 3. **Rebind a local that holds a successor-capable object.** A local may be
    rebound (`counter = counter.increment();`) only when its type is an object
@@ -218,9 +228,6 @@ right method names is not enough.
   issue #246).
 - **Map updates copy.** `prices + ["fig": 90]` and `prices - ["pear": 0]`
   give a new map, but by copying the whole origin (issues #252, #253).
-- **Generic keys are checked late.** A map keyed by a type parameter accepts
-  any type argument until run time, so the library's generic sets and counts
-  stay linear (issue #242).
 - **`ordering()` needs `compare.Comparing` in scope** (issue #233).
 
 Most of these are the same gap seen from different sides (the milestone
