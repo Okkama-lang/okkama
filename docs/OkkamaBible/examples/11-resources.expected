@@ -1,0 +1,18 @@
+open a
+open b
+body uses a and b
+defer 2
+defer 1, sees a
+close b
+close a
+after the block
+open report.tmp
+open report
+close report.tmp
+caller holds report
+open step1
+close step1
+open step2
+close step2
+end of main
+close report

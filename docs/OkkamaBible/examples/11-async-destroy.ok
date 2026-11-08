@@ -1,0 +1,36 @@
+module bible/async_destroy v1.0.0;
+
+// A destroy that must wait is async: it is awaited where the owning scope
+// of an async action ends, before the action's result is delivered.
+import "io/stdout" take Stdout;
+
+object Channel {
+    has name is string;
+    Channel(:name);
+    async flush() is int { Stdout().writeln("flush " + name); 1; }
+}
+
+object Connection {
+    has channel is Channel;
+    Connection(:channel);
+    send(text is string) is void { Stdout().writeln("send " + text); }
+    async destroy {
+        let flushed = await channel.flush();
+        Stdout().writeln("closed after " + flushed.string() + " flush");
+    }
+}
+
+object Client {
+    Client();
+    async talk() is string {
+        let connection = Connection(channel: Channel(name: "c1"));
+        connection.send("hello");
+        "talked";
+    }
+}
+
+async main() is int {
+    let said = await Client().talk();
+    Stdout().writeln(said);
+    0;
+}

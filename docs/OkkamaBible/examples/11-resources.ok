@@ -1,0 +1,47 @@
+module bible/resources v1.0.0;
+
+// A resource is an object with destroy. The scope that owns it destroys it
+// when the scope ends, newest first, after the scope's defer blocks.
+import "io/stdout" take Stdout;
+
+object Log {
+    Log();
+    line(text is string) is void { Stdout().writeln(text); }
+}
+
+object Handle {
+    has name is string;
+    has log is Log;
+    Handle(:name, :log) { log.line("open " + name); }
+    label() is string { name; }
+    destroy { log.line("close " + name); }
+}
+
+object Opener {
+    has log is Log;
+    Opener(:log);
+    kept(name is string) is Handle {
+        let temp = Handle(name: name + ".tmp", log: log);
+        Handle(name: name, log: log);
+    }
+}
+
+main() is int {
+    let log = Log();
+    {
+        let a = Handle(name: "a", log: log);
+        let b = Handle(name: "b", log: log);
+        defer log.line("defer 1, sees " + a.label());
+        defer log.line("defer 2");
+        let alias = a;
+        log.line("body uses " + alias.label() + " and " + b.label());
+    }
+    log.line("after the block");
+    let kept = Opener(log: log).kept("report");
+    log.line("caller holds " + kept.label());
+    for [1, 2] -> i {
+        let step = Handle(name: "step" + i.string(), log: log);
+    }
+    log.line("end of main");
+    0;
+}

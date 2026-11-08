@@ -113,6 +113,18 @@
   - [10.18 Testing failures](#1018-testing-failures)
   - [10.19 Okkama among other languages](#1019-okkama-among-other-languages)
   - [10.20 What this design costs](#1020-what-this-design-costs)
+- [Chapter 11. defer, destroy, regions: deterministic resources](#chapter-11-defer-destroy-regions-deterministic-resources)
+  - [11.1 Memory and resources are different problems](#111-memory-and-resources-are-different-problems)
+  - [11.2 The lineage](#112-the-lineage)
+  - [11.3 defer](#113-defer)
+  - [11.4 destroy](#114-destroy)
+  - [11.5 Who owns what](#115-who-owns-what)
+  - [11.6 Cleanup on the failure path](#116-cleanup-on-the-failure-path)
+  - [11.7 async destroy](#117-async-destroy)
+  - [11.8 Regions: how ownership runs](#118-regions-how-ownership-runs)
+  - [11.9 The cost of a walk](#119-the-cost-of-a-walk)
+  - [11.10 What is not promised](#1110-what-is-not-promised)
+  - [11.11 What this design costs](#1111-what-this-design-costs)
 
 # Part I. The Razor
 
@@ -4384,6 +4396,595 @@ Against these costs stands what the design removes:
 The next chapter takes up the other half of the story: what runs when a
 scope ends, on success or failure.
 
+# Chapter 11. defer, destroy, regions: deterministic resources
+
+Memory is not the only thing a program borrows from the system. A file
+descriptor, a socket, a database transaction, a lock, a temporary directory
+and a child process all have to be given back, and given back at a
+predictable moment: before the next request reuses the port, before the
+transaction times out, before the disk fills with temporary files. Okkama
+manages memory for the programmer, with a collector or reference counts
+depending on the engine. It does not leave resources to the collector.
+
+Two constructs give resources back:
+
+- **`defer`** registers work to run when the current block ends.
+- **`destroy`** declares, in an object, what releasing that object means. The
+  scope that *owns* the object runs it when the scope ends.
+
+Both run on every exit from a scope: normal completion, `return`, `last`,
+`next`, a thrown error, a panic, and the cancellation of an async task. The
+program below opens handles in a block, in a called action and in a loop,
+and prints every open and close:
+
+```okkama
+module bible/resources v1.0.0;
+
+// A resource is an object with destroy. The scope that owns it destroys it
+// when the scope ends, newest first, after the scope's defer blocks.
+import "io/stdout" take Stdout;
+
+object Log {
+    Log();
+    line(text is string) is void { Stdout().writeln(text); }
+}
+
+object Handle {
+    has name is string;
+    has log is Log;
+    Handle(:name, :log) { log.line("open " + name); }
+    label() is string { name; }
+    destroy { log.line("close " + name); }
+}
+
+object Opener {
+    has log is Log;
+    Opener(:log);
+    kept(name is string) is Handle {
+        let temp = Handle(name: name + ".tmp", log: log);
+        Handle(name: name, log: log);
+    }
+}
+
+main() is int {
+    let log = Log();
+    {
+        let a = Handle(name: "a", log: log);
+        let b = Handle(name: "b", log: log);
+        defer log.line("defer 1, sees " + a.label());
+        defer log.line("defer 2");
+        let alias = a;
+        log.line("body uses " + alias.label() + " and " + b.label());
+    }
+    log.line("after the block");
+    let kept = Opener(log: log).kept("report");
+    log.line("caller holds " + kept.label());
+    for [1, 2] -> i {
+        let step = Handle(name: "step" + i.string(), log: log);
+    }
+    log.line("end of main");
+    0;
+}
+```
+
+Output:
+
+```text
+open a
+open b
+body uses a and b
+defer 2
+defer 1, sees a
+close b
+close a
+after the block
+open report.tmp
+open report
+close report.tmp
+caller holds report
+open step1
+close step1
+open step2
+close step2
+end of main
+close report
+```
+
+The output reads like a contract.
+
+- The block's `defer`s run first, newest first. Then its resources are
+  destroyed, newest first: `b` before `a`.
+- `alias` names the same object as `a`, and `a` is closed once.
+- The action `kept` closes its temporary handle when it returns, and the
+  handle it returns lives on in `main` until `main` ends.
+- Each loop iteration closes its own handle before the next begins.
+
+This chapter explains each of those rules: where they come from, how the
+compiler and the engines implement them, and what they cost.
+
+## 11.1 Memory and resources are different problems
+
+Garbage collection solved memory well, because memory has a property other
+resources lack: running out of it is the collector's signal to act. The
+collector runs when memory is short, and that is exactly when memory needs
+reclaiming. No such signal exists for file descriptors or database
+connections. A program can run out of descriptors with plenty of free
+memory, and the collector, which is not short of anything, does nothing.
+
+*Finalizers*, code the collector runs when it reclaims an object, were the
+first answer, and they failed. Hans Boehm showed that a finalizer runs at
+an unpredictable moment, on an unpredictable thread, possibly after other
+objects it needs have been finalized, and that making finalizers correct
+requires synchronization most programmers never write [[Boehm 2003](#ref-boehm2003)]. Java
+deprecated `Object.finalize` and then marked finalization for removal
+[[Christian 2021](#ref-jep421)]. Its replacement is explicit: `try`-with-resources, which closes
+an `AutoCloseable` at the end of a block.
+
+Okkama never ties a resource to the collector. When a `destroy` runs is a
+property of the program text, the same on every engine and for every heap
+size. The Sparrow core has a precise, non-moving collector, the IR engine
+counts references, and the JVM has its own collector. All three run the
+same `destroy`s in the same order.
+
+## 11.2 The lineage
+
+Deterministic cleanup has three ancestors, and Okkama takes from each.
+
+- **Destructors.** C++ ties a resource to the lifetime of a scoped object:
+  the constructor acquires it and the destructor releases it when the scope
+  ends, whatever the exit. Stroustrup calls the idiom "resource
+  acquisition is initialization" [[Stroustrup 1994](#ref-stroustrup1994)]. Rust keeps the idea,
+  as `Drop`, and adds ownership checked at compile time, so a value is
+  dropped exactly once by its single owner [[Klabnik 2023](#ref-klabnik2023)].
+- **Block-scoped release.** Python's `with` statement [[Rossum 2005](#ref-pep343)], Java's
+  `try`-with-resources and C#'s `using` release a resource at the end of a
+  block. The call site must remember to use the construct; forgetting it
+  compiles.
+- **`defer`.** Go and Swift register a call that runs when the function
+  (Go) or the block (Swift) exits. It handles work that is not about one
+  object, such as an audit line, restoring a setting or removing a file.
+
+Okkama's `destroy` is a destructor: the object says how it is released, and
+callers do not have to remember. Its `defer` is Swift's: block-scoped, not
+function-scoped. Ownership, the question "who runs the destructor", follows
+object identity at run time, not a static borrow checker (§11.5).
+
+## 11.3 defer
+
+```okkama
+defer log.line("defer 1, sees " + a.label());
+```
+
+A reached `defer` registers its expression and runs it exactly once when
+the block that contains it ends.
+
+- **The expression is evaluated at exit, not at registration.** The receiver
+  and the arguments are read when the block ends. In the opening example
+  the first `defer` sees `a`, which is still alive, because `defer`s run
+  before the block's resources are destroyed.
+- **Only reached `defer`s count.** A `defer` in a branch that did not run
+  registers nothing.
+- **Newest first.** The `defer`s of a block run in reverse order of
+  registration, and then the block's owned resources are destroyed, also
+  newest first.
+- **The current block, not the function.** A `defer` inside a loop body runs
+  at the end of that iteration, and one inside an inner block runs when the
+  inner block ends. This is Swift's rule, not Go's.
+- **Every `defer` is attempted.** If one fails, the remaining ones still run.
+  An existing failure of the body has priority. The failure of a `defer`
+  cancels a pending `return`, and otherwise the first `defer` failure wins.
+- **A `defer` may await.** In an async action, `defer await audit.flush();`
+  suspends the scope's exit until the work is done, cancellation included.
+- **The discard rules still apply.** A `defer` cannot silently drop a value
+  that must be used, such as the result of a successor action.
+
+`defer` is for work that belongs to a block. Releasing a resource belongs
+to the resource, and that is `destroy`.
+
+## 11.4 destroy
+
+```okkama
+object Handle {
+    has name is string;
+    Handle(:name) { Stdout().writeln("open " + name); }
+    destroy { Stdout().writeln("close " + name); }
+}
+```
+
+An object has at most one `destroy` block. It is not an action: nothing can
+call it. The engine runs it once, when the scope that owns the object ends.
+It may read `self` and the fields, and call actions. It cannot assign fields
+through a successor: the object is being released, not updated.
+
+The order of destruction is fixed:
+
+1. Inside one scope, objects are destroyed in reverse order of construction,
+   so a resource opened later, which may depend on an earlier one, is
+   released first.
+2. An owner is destroyed before the objects held in its fields. Its
+   `destroy` still sees intact fields, and the fields are destroyed after
+   it, newest first. The session in §11.6 shows the order:
+   `end session`, `close s2.out`, `close s2.in`.
+3. Every identity enters destruction at most once. That holds even when its
+   `destroy` fails, and even when the `destroy` makes an alias of `self`.
+
+A `destroy` that fails does not stop the others. Every remaining resource
+is still destroyed, and the failure is reported. If the scope was already
+unwinding from a failure, the cleanup failure is attached to that failure as
+a secondary (Chapter 10), not put in its place.
+
+The standard library's resources combine `destroy` with an explicit
+`close()`. A `File` or a `TlsConnection` does `Closing`, whose `close()` is
+idempotent, and its `destroy` closes it too. Code that wants to release
+early calls `close()`, and code that forgets gets the same release at scope
+exit.
+
+## 11.5 Who owns what
+
+"The scope that owns the object" needs a definition, and Okkama's is about
+identities, not names.
+
+- **A binding owns a fresh object.** `let a = Handle(...)` makes the block
+  of the `let` the owner of the new handle.
+- **An alias borrows.** `let alias = a;` creates a second name for an object
+  the scope already owns. No second owner appears, so there is no double
+  destroy.
+- **Parameters and receivers borrow.** An action that receives an existing
+  object does not own it. A *fresh* argument nobody owns yet, such as
+  `use(Handle(...))`, is adopted by the called action and destroyed when it
+  returns, unless the action returns it.
+- **A returned object moves to the caller.** When an action ends, the
+  resources reachable from its result are released from its ownership and
+  taken over by the caller. In the opening example, `kept` closes
+  `report.tmp` and hands `report` to `main`.
+- **Aggregates carry identities.** An array, a map, the fields of an object
+  and an `any` box hold the identities they contain. A fresh resource put
+  into a fresh array is owned by whoever owns the array, and repeated
+  references never duplicate ownership.
+- **Successors are independent.** A successor action returns a new object
+  with a new identity and its own lifetime (Chapter 13).
+- **Loop iterations are scopes.** What an iteration owns is destroyed when
+  the iteration ends. A value the loop produces, through `last value` or the
+  result of `map`, `reduce` and the other functional operations, moves to
+  the enclosing scope.
+
+The conformance suite pins these rules:
+
+- `L07.ownership.alias-borrows`;
+- `L07.ownership.returned-object-survives`;
+- `L07.ownership.successor-independent`;
+- the region cases added with #9 and #266, among them
+  `L07.ownership.reduce-builder`, whose resources are gathered by `reduce`.
+
+## 11.6 Cleanup on the failure path
+
+Cleanup does not depend on how a scope ends. A thrown error unwinds through
+the same `defer`s and `destroy`s as a normal exit, and so do a panic and a
+runtime error. A `try` closes its body's scope *before* it chooses a
+`catch` clause, so a clause never runs while the failed body still holds
+resources.
+
+```okkama
+module bible/unwind v1.0.0;
+
+// On a failure the same cleanup runs: the try body's resources are closed
+// before a catch clause is chosen. A constructor that fails cleans what it
+// opened, and its unfinished object is never destroyed.
+import "io/stdout" take Stdout;
+
+enum Refused is Error = (refused(name is string));
+
+object Handle {
+    has name is string;
+    Handle(:name) { Stdout().writeln("open " + name); }
+    destroy { Stdout().writeln("close " + name); }
+}
+
+object Session {
+    has input is Handle;
+    has output is Handle;
+    Session(name is string, allowed is bool) {
+        input = Handle(name: name + ".in");
+        confirm allowed else throw Refused.refused(name);
+        output = Handle(name: name + ".out");
+    }
+    destroy { Stdout().writeln("end session"); }
+}
+
+main() is int {
+    let out = Stdout();
+    let result = try {
+        let first = Handle(name: "first");
+        defer out.writeln("defer in try");
+        throw Refused.refused("body");
+        "unreachable";
+    }
+    catch Refused.refused(name) {
+        "caught " + name;
+    };
+    out.writeln(result);
+    out.writeln(try { Session("s1", false); "made"; } catch e is Refused { "session refused: " + e.text(); });
+    {
+        let ok = Session("s2", true);
+        out.writeln("session open");
+    }
+    0;
+}
+```
+
+Output:
+
+```text
+open first
+defer in try
+close first
+caught body
+open s1.in
+close s1.in
+session refused: Refused.refused("s1")
+open s2.in
+open s2.out
+session open
+end session
+close s2.out
+close s2.in
+```
+
+Three rules are visible.
+
+- In the first `try`, `defer in try` and `close first` print before
+  `caught body`. The catch clause runs after the body's cleanup.
+- `Session("s1", false)` opens `s1.in` and then fails its `confirm`. The
+  handle it opened is closed. The session itself was never finished, so its
+  `destroy` does not run: an object that did not finish construction is
+  never released as if it had.
+- A finished session is destroyed owner first: `end session`, then its
+  fields, newest first.
+
+The thrown error's own payload survives the cleanup: it moves into the
+matching `catch` clause. It cannot hold a resource in any case
+(Chapter 10), so the move releases nothing early.
+
+## 11.7 async destroy
+
+Some resources cannot be released instantly. A connection must flush what
+it buffered, and a server must let its requests drain. Their `destroy` has
+to wait, and Okkama lets it: `async destroy` (#154).
+
+```okkama
+module bible/async_destroy v1.0.0;
+
+// A destroy that must wait is async: it is awaited where the owning scope
+// of an async action ends, before the action's result is delivered.
+import "io/stdout" take Stdout;
+
+object Channel {
+    has name is string;
+    Channel(:name);
+    async flush() is int { Stdout().writeln("flush " + name); 1; }
+}
+
+object Connection {
+    has channel is Channel;
+    Connection(:channel);
+    send(text is string) is void { Stdout().writeln("send " + text); }
+    async destroy {
+        let flushed = await channel.flush();
+        Stdout().writeln("closed after " + flushed.string() + " flush");
+    }
+}
+
+object Client {
+    Client();
+    async talk() is string {
+        let connection = Connection(channel: Channel(name: "c1"));
+        connection.send("hello");
+        "talked";
+    }
+}
+
+async main() is int {
+    let said = await Client().talk();
+    Stdout().writeln(said);
+    0;
+}
+```
+
+Output:
+
+```text
+send hello
+flush c1
+closed after 1 flush
+talked
+```
+
+- **It is awaited where the owner's scope ends**, in the same reverse
+  order as other `destroy`s, on every exit, a failure included. `talk`
+  delivers its result only after the connection has flushed and closed.
+- **A cancellation does not interrupt it.** A task cancelled while an async
+  destroy runs gets `Cancelled` at its next `await`, after the scope has
+  closed. Cleanup that can be interrupted halfway is worse than no cleanup.
+- **Only async code may own such an object.** A synchronous scope has
+  nothing to suspend, so owning one there is a compile error:
+
+```okkama
+module bible/async_owner v1.0.0;
+
+object Connection {
+    Connection();
+    async destroy { 0; }
+}
+
+object Client {
+    Client();
+    talk() is int {
+        let connection = Connection();
+        1;
+    }
+}
+
+main() is int { Client().talk(); }
+```
+
+The compiler answers:
+
+```text
+11-async-owner-rejected.ok:11:26: semantic error: Connection has an async destroy; own it in an async action
+```
+
+The rule is transitive. An object that holds an async-destroy resource in a
+field, an array or a map has to be owned in async code too. Borrowing one,
+by passing it to a synchronous action that does not keep it, is fine.
+
+An async destroy replaces a pattern that needed two `defer`s, a `close`
+and an awaited `settled()`. The standard library still has helper objects
+that exist only to await in cleanup. Moving them onto async destroy is
+[#264](https://github.com/shootnix/okkama/issues/264).
+
+## 11.8 Regions: how ownership runs
+
+The compiler implements ownership with **regions**: run-time sets of
+identities, one per scope that may own a resource. It decides at compile
+time which scopes need one, and that decision is most of the cost model.
+
+A type is **plain** when none of its values can reach an object with a
+`destroy`. Most types are plain: numbers, text, records of plain fields,
+arrays and maps of plain values. Plain values never touch a region. Here
+are two actions that differ only in the type they create:
+
+```text
+func @Use.plain(%0: Use, %1: int) -> int [method Use] {
+^b0:
+    br ^b1
+^b1:
+    br ^b2
+^b2:
+    %2: Point = call @Point.new#0(%1)
+    %3: int = call @Point.value(%2)
+    %4: int = const 1
+    %5: int = int.add %3, %4
+    br ^b3
+^b3:
+    ret %5
+}
+func @Use.owned(%0: Use, %1: int) -> int [method Use] {
+^b0:
+    br ^b1
+^b1:
+    %2: region = region.enter
+    br ^b2
+^b2 unwind ^b5:
+    %3: Handle = call @Handle.new#0(%1)
+    region.track %2, %3
+    region.adopt %2, %3
+    %4: int = call @Handle.value(%3)
+    %5: int = const 1
+    %6: int = int.add %4, %5
+    br ^b3
+^b3:
+    region.leave %2
+    br ^b4
+^b4:
+    ret %6
+^b5(%7: failure):
+    %8: failure = region.unwind %2, %7
+    raise %8
+}
+```
+
+`Point` has no `destroy`, so `plain` has no region at all. `Handle` has
+one, so `owned` gets the full set. The instructions are a small vocabulary.
+
+| Instruction | Meaning |
+|---|---|
+| `region.enter` | a new, empty region for this scope |
+| `region.track r, v` | remember the free identities `v` reaches; do not own them yet (a call result, a temporary) |
+| `region.adopt r, v` | own the free identities `v` reaches (`let`, a fresh argument) |
+| `region.transfer from, to, v` | move what `from` owns of `v` to `to` (a value leaving a nested scope) |
+| `region.leave r [, keep v]` | close: run destroys, newest first; what `keep` reaches becomes free again (a result) |
+| `region.unwind r, f` | close on the failure path; cleanup failures join `f` as secondaries |
+| `region.settle`, `region.settle_unwind` | the same in async functions, awaiting async destroys (#154) |
+
+An optimization pass removes regions that provably stay empty. The
+compiler's plainness is per declaration. One role implemented by one object
+with a `destroy` makes every value of that role non-plain, even where no
+such object is ever built ([#268](https://github.com/shootnix/okkama/issues/268)
+would refine that).
+
+Regions are named after, but are not, the regions of Tofte and Talpin's
+region-based memory management [[Tofte 1997](#ref-tofte1997)]. Those hold memory and free it
+all at once. Okkama's regions hold *identities to release*. Memory stays
+with the collector, and a region only decides when each `destroy` runs.
+
+## 11.9 The cost of a walk
+
+To track or adopt a value, the engine walks what the value reaches. It
+looks for identities that are still free, owned by nobody. The walk stops
+at objects owned by another scope, at plain values and at objects without
+an identity. Until 0.4.1 it did not stop at arrays, maps and closures,
+which have no owner. A fresh value pointing at a large owned structure cost
+a walk over the whole structure, on every track and every close. A loop
+building such values was quadratic.
+
+Since #9 the engines remember containers whose walk met no free identity.
+Containers are immutable, so what one reaches is at most as old as the
+container. A remembered container is skipped until an identity at least as
+old becomes free again, which happens when a scope returns it. Then all
+the summaries are dropped. On the benchmark built for this
+(`11-ownership`: 100 000 records in an array and a map, 300 rounds), the
+change made the Sparrow core 85% faster, the IR engine 86% and the JVM 75%.
+
+The lesson for program design is modest. Ownership costs nothing for plain
+data. Non-plain data costs a walk the first time a structure is seen and
+almost nothing after that. A program that keeps a million records reaching
+a socket pays once, not once per request.
+
+## 11.10 What is not promised
+
+Deterministic cleanup has limits, and they are worth knowing.
+
+- **A scope that never ends never cleans up.** A `loop` without an exit
+  keeps its resources until the process ends.
+- **A killed process runs nothing.** `kill -9`, a power failure or an
+  out-of-memory kill from the operating system skip every `destroy`.
+  Durable state needs a transaction or a write-ahead design, not a
+  destructor.
+- **A budget stop runs no `destroy`.** When `--timeout` or another budget
+  ends the run, cleanup does not run, since it would spend the budget again
+  (Chapter 10). The process exits, and the operating system closes what
+  the process held.
+- **A `destroy` cannot be retried.** It runs at most once. If it fails, the
+  failure is reported and the identity is considered released.
+
+## 11.11 What this design costs
+
+- **Ownership is checked at run time, not at compile time.** Rust rejects a
+  program that would release a value twice or use it after release. Okkama
+  prevents the double release by construction (at most once per identity),
+  but a program can still use a closed resource. The `Closing` objects of
+  the standard library answer that with a catchable `already_closed`
+  failure, not with undefined behaviour.
+- **Non-plain values cost a walk.** Small since #9, but not zero, and
+  per-declaration plainness makes more values non-plain than strictly need
+  to be (#268).
+- **Async destroy constrains the owner.** A synchronous library cannot own
+  a resource whose release must wait. It has to borrow one or become
+  async.
+- **Cleanup order is fixed.** Newest first, owner before fields. A program
+  that needs another order must express it with `defer`, or by nesting
+  scopes.
+
+Against that stands what the design removes:
+
+- `finally` blocks;
+- forgotten `close()` calls;
+- finalizers and their surprises;
+- resource leaks that show up only under load.
+
+All of it comes from two constructs and one rule: the scope that owns a
+resource releases it.
+
 # References
 
 - <a id="ref-lions1996"></a>Jacques-Louis Lions et al. (1996). *ARIANE 5 Flight 501 Failure: Report by the Inquiry Board*. European Space Agency, Paris, 19 July 1996. https://www.esa.int/Newsroom/Press_Releases/Ariane_501_-_Presentation_of_Inquiry_Board_report
@@ -4392,11 +4993,13 @@ scope ends, on success or failure.
 - <a id="ref-bagwell2001"></a>Phil Bagwell (2001). *Ideal Hash Trees*. Technical report, École Polytechnique Fédérale de Lausanne. https://infoscience.epfl.ch/record/64398
 - <a id="ref-baker-sep"></a>Alan Baker (2022). Simplicity. In *The Stanford Encyclopedia of Philosophy* (Summer 2022 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/simplicity/
 - <a id="ref-bloch2018"></a>Joshua Bloch (2018). *Effective Java*, 3rd edition. Addison-Wesley.
+- <a id="ref-boehm2003"></a>Hans-J. Boehm (2003). Destructors, Finalizers, and Synchronization. In *Proceedings of POPL 2003*: 262–272. ACM. https://doi.org/10.1145/604131.604153
 - <a id="ref-braun2013"></a>Matthias Braun, Sebastian Buchwald, Sebastian Hack, Roland Leißa, Christoph Mallon, Andreas Zwinkau (2013). Simple and Efficient Construction of Static Single Assignment Form. In *Compiler Construction (CC 2013)*, LNCS 7791: 102–122. Springer. https://doi.org/10.1007/978-3-642-37051-9_6
 - <a id="ref-brooks1987"></a>Frederick P. Brooks, Jr. (1987). No Silver Bullet — Essence and Accidents of Software Engineering. *Computer* 20(4): 10–19. https://doi.org/10.1109/MC.1987.1663532
 - <a id="ref-bugayenko2016"></a>Yegor Bugayenko (2016). *Elegant Objects*, Volume 1. Self-published (CreateSpace).
 - <a id="ref-bugayenko2017"></a>Yegor Bugayenko (2017). *Elegant Objects*, Volume 2. Self-published (CreateSpace).
 - <a id="ref-cardelli1985"></a>Luca Cardelli, Peter Wegner (1985). On Understanding Types, Data Abstraction, and Polymorphism. *ACM Computing Surveys* 17(4): 471–523. https://doi.org/10.1145/6041.6042
+- <a id="ref-jep421"></a>Brent Christian (2021). JEP 421: Deprecate Finalization for Removal. OpenJDK. https://openjdk.org/jeps/421
 - <a id="ref-claessen2000"></a>Koen Claessen, John Hughes (2000). QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs. In *Proceedings of ICFP 2000*: 268–279. ACM. https://doi.org/10.1145/351240.351266
 - <a id="ref-cook2009"></a>William R. Cook (2009). On Understanding Data Abstraction, Revisited. In *Proceedings of OOPSLA 2009*, *ACM SIGPLAN Notices* 44(10): 557–572. https://doi.org/10.1145/1640089.1640133
 - <a id="ref-cytron1991"></a>Ron Cytron, Jeanne Ferrante, Barry K. Rosen, Mark N. Wegman, F. Kenneth Zadeck (1991). Efficiently Computing Static Single Assignment Form and the Control Dependence Graph. *ACM TOPLAS* 13(4): 451–490. https://doi.org/10.1145/115372.115320
@@ -4457,6 +5060,7 @@ scope ends, on success or failure.
 - <a id="ref-rfc8259"></a>Tim Bray (ed.) (2017). *The JavaScript Object Notation (JSON) Data Interchange Format*. RFC 8259, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc8259
 - <a id="ref-rissanen1978"></a>Jorma Rissanen (1978). Modeling by Shortest Data Description. *Automatica* 14(5): 465–471. https://doi.org/10.1016/0005-1098(78)90005-5
 - <a id="ref-ritchie1993"></a>Dennis M. Ritchie (1993). The Development of the C Language. *HOPL-II: The Second ACM SIGPLAN Conference on History of Programming Languages*: 201–208. https://doi.org/10.1145/154766.155580
+- <a id="ref-pep343"></a>Guido van Rossum, Nick Coghlan (2005). PEP 343 — The "with" Statement. Python Enhancement Proposals. https://peps.python.org/pep-0343/
 - <a id="ref-saltzer1975"></a>Jerome H. Saltzer, Michael D. Schroeder (1975). The Protection of Information in Computer Systems. *Proceedings of the IEEE* 63(9): 1278–1308. https://doi.org/10.1109/PROC.1975.9939
 - <a id="ref-smith2018"></a>Nathaniel J. Smith (2018). Notes on Structured Concurrency, or: Go Statement Considered Harmful. Blog post, 25 April 2018. https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/
 - <a id="ref-snyder1986"></a>Alan Snyder (1986). Encapsulation and Inheritance in Object-Oriented Programming Languages. In *Proceedings of OOPSLA '86*: 38–45. ACM. https://doi.org/10.1145/28697.28702

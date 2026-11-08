@@ -1,0 +1,16 @@
+module bible/async_owner v1.0.0;
+
+object Connection {
+    Connection();
+    async destroy { 0; }
+}
+
+object Client {
+    Client();
+    talk() is int {
+        let connection = Connection();
+        1;
+    }
+}
+
+main() is int { Client().talk(); }

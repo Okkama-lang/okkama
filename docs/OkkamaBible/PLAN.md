@@ -113,3 +113,12 @@ Updated with each chapter: `build.py --stats`.
   To add: a case study of the std HTTP client's failures; more on
   failures inside cleanup and their secondaries (with Chapter 11). Engines disagree on the uncaught
   report (#270).
+- Chapter 11 (resources): first pass, 7.1 pages (EN) of its floor of 20.
+  Written: memory versus resources, finalizers, the lineage (RAII, `with`,
+  `defer`), `defer`, `destroy` and its order, ownership by identity,
+  cleanup on failure and in constructors, `async destroy`, regions and the
+  IR they lower to, the cost of a walk (#9), limits, costs. To add:
+  ownership through tasks, futures and channels; resources in maps and
+  closures; the std `Closing` pattern in depth (`File`, `TlsConnection`,
+  `already_closed`); a larger worked example (a connection pool or a
+  temporary-directory workflow); how each engine implements regions.
