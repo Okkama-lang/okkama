@@ -134,7 +134,7 @@ The order of destruction is fixed:
    released first.
 2. An owner is destroyed before the objects held in its fields. Its
    `destroy` still sees intact fields, and the fields are destroyed after
-   it, newest first. The session in §11.6 shows the order:
+   it, newest first. The session in §11.7 shows the order:
    `end session`, `close s2.out`, `close s2.in`.
 3. Every identity enters destruction at most once. That holds even when its
    `destroy` fails, and even when the `destroy` makes an alias of `self`.
@@ -187,7 +187,33 @@ The conformance suite pins these rules:
 - the region cases added with #9 and #266, among them
   `L07.ownership.reduce-builder`, whose resources are gathered by `reduce`.
 
-## 11.6 Cleanup on the failure path
+## 11.6 Resources in collections and closures
+
+Containers do not own; they carry. A map of handles, an array of
+connections and a closure that captured a socket all hold identities, and
+whoever owns the container owns what it holds.
+
+{{example:11-containers}}
+
+The map built in `named` leaves the action as its result, so `main`'s inner
+block owns both handles and closes them when it ends, newest first. The
+closure returned by `greeter` captured `handle`. The handle therefore moves
+with the closure, the closure keeps it usable, and it closes when the block
+that holds the closure ends, not when `greeter` returns.
+
+Two consequences are worth stating.
+
+- **Removing an element does not release it.** Maps and arrays are values:
+  removing a key with `-` builds a new map, while the old map, still owned,
+  keeps the handle. A resource is released when its owner's scope
+  ends, not when the last collection that mentions it is computed.
+- **A closure is as much an owner's tool as a field.** A callback that keeps
+  a connection alive keeps it alive exactly as long as the callback is
+  reachable from an owning scope. That is usually what the author meant, and
+  when it is not, the remedy is to pass the connection as an argument
+  instead of capturing it.
+
+## 11.7 Cleanup on the failure path
 
 Cleanup does not depend on how a scope ends. A thrown error unwinds through
 the same `defer`s and `destroy`s as a normal exit, and so do a panic and a
@@ -212,7 +238,7 @@ The thrown error's own payload survives the cleanup: it moves into the
 matching `catch` clause. It cannot hold a resource in any case
 (Chapter 10), so the move releases nothing early.
 
-## 11.7 async destroy
+## 11.8 async destroy
 
 Some resources cannot be released instantly. A connection must flush what
 it buffered, and a server must let its requests drain. Their `destroy` has
@@ -240,7 +266,7 @@ and an awaited `settled()`. The standard library still has helper objects
 that exist only to await in cleanup. Moving them onto async destroy is
 [#264](https://github.com/shootnix/okkama/issues/264).
 
-## 11.8 Resources and tasks
+## 11.9 Resources and tasks
 
 A task is a scope too. What an async action makes and keeps is released
 when the action's task ends. What it returns moves to the scope that awaits
@@ -257,7 +283,7 @@ and a cancelled task unwinds through its scopes like a failure, async
 destroys included (Chapter 20). A resource cannot outlive its owner
 unnoticed by escaping into a forgotten future.
 
-## 11.9 Close early, destroy anyway
+## 11.10 Close early, destroy anyway
 
 Scope exit is the latest moment a resource is released, not the only one.
 The resources of the standard library follow one pattern:
@@ -280,7 +306,7 @@ The pattern costs one rule for authors of resource objects: `close()` must
 be idempotent, and every other action of a closed resource should fail with
 a catchable `already_closed`, not misbehave.
 
-## 11.10 Regions: how ownership runs
+## 11.11 Regions: how ownership runs
 
 The compiler implements ownership with **regions**: run-time sets of
 identities, one per scope that may own a resource. It decides at compile
@@ -355,7 +381,7 @@ region-based memory management [@tofte1997]. Those hold memory and free it
 all at once. Okkama's regions hold *identities to release*. Memory stays
 with the collector, and a region only decides when each `destroy` runs.
 
-## 11.11 The cost of a walk
+## 11.12 The cost of a walk
 
 To track or adopt a value, the engine walks what the value reaches. It
 looks for identities that are still free, owned by nobody. The walk stops
@@ -378,7 +404,7 @@ data. Non-plain data costs a walk the first time a structure is seen and
 almost nothing after that. A program that keeps a million records reaching
 a socket pays once, not once per request.
 
-## 11.12 What is not promised
+## 11.13 What is not promised
 
 Deterministic cleanup has limits, and they are worth knowing.
 
@@ -395,7 +421,7 @@ Deterministic cleanup has limits, and they are worth knowing.
 - **A `destroy` cannot be retried.** It runs at most once. If it fails, the
   failure is reported and the identity is considered released.
 
-## 11.13 What this design costs
+## 11.14 What this design costs
 
 - **Ownership is checked at run time, not at compile time.** Rust rejects a
   program that would release a value twice or use it after release. Okkama

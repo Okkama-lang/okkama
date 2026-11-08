@@ -113,12 +113,12 @@ Updated with each chapter: `build.py --stats`.
   To add: a case study of the std HTTP client's failures; more on
   failures inside cleanup and their secondaries (with Chapter 11). Engines disagree on the uncaught
   report (#270).
-- Chapter 11 (resources): 7.7 pages (EN) of its floor of 20. Written:
+- Chapter 11 (resources): 8.5 pages (EN) of its floor of 20. Written:
   memory versus resources, finalizers, the lineage (RAII, `with`, `defer`),
   `defer`, `destroy` and its order, ownership by identity, cleanup on
   failure and in constructors, `async destroy`, resources and tasks
-  (`11-tasks`), the `Closing` pattern (`11-closing`), regions and the IR
-  they lower to, the cost of a walk (#9), limits, costs. To add: resources
-  in maps and closures; channels; a larger worked example (a connection
+  (`11-tasks`), the `Closing` pattern (`11-closing`), resources in maps and
+  closures (`11-containers`), regions and the IR they lower to, the cost of
+  a walk (#9), limits, costs. To add: channels; a larger worked example (a connection
   pool); how each engine implements regions (the core's region arrays and
   identity table, the IR engine's owner cells, the JVM's `Region`).
