@@ -95,6 +95,11 @@ language.
 - Chapter 19 (modules): module constants — `const NAME = value;`, computed by
   the compiler, public unless `hidden const`, arrays and maps built once per
   run; why constants are not a way to share objects (#153).
+- Chapter 18 (closures): in a program with a `destroy` anywhere, every
+  function value is treated as possibly owning a resource, so closures are
+  tracked by regions (#292); 09-closures with `os/environment` imported runs
+  6× slower on the JVM. Also for Chapter 11's limits, with #285 (tail calls
+  lost to empty regions, fixed in 0.4.1).
 - Chapter 20 (async): `async destroy`, awaited at scope exit (#154);
   structured await — cancelling a task cancels the future it awaits unless
   another task awaits it, and waits for it to settle (#147); why one child
