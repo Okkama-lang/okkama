@@ -1,0 +1,1 @@
+18-await-rejected.ok:10:28: semantic error: await is available only inside an async action

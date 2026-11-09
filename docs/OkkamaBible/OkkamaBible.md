@@ -207,11 +207,13 @@
   - [18.1 Writing an anonymous action](#181-writing-an-anonymous-action)
   - [18.2 What a closure remembers](#182-what-a-closure-remembers)
   - [18.3 Types are exact](#183-types-are-exact)
-  - [18.4 Closures or objects](#184-closures-or-objects)
-  - [18.5 How closures run](#185-how-closures-run)
-  - [18.6 Okkama among other languages](#186-okkama-among-other-languages)
-  - [18.7 Limits](#187-limits)
-  - [18.8 What this design costs](#188-what-this-design-costs)
+  - [18.4 Action values as data](#184-action-values-as-data)
+  - [18.5 Closures or objects](#185-closures-or-objects)
+  - [18.6 How closures run](#186-how-closures-run)
+  - [18.7 Where closures came from](#187-where-closures-came-from)
+  - [18.8 Okkama among other languages](#188-okkama-among-other-languages)
+  - [18.9 Limits](#189-limits)
+  - [18.10 What this design costs](#1810-what-this-design-costs)
 
 # Part I. The Razor
 
@@ -9870,8 +9872,9 @@ Output:
 
 This chapter covers how anonymous actions are written and typed, what a
 closure remembers and what it does not, why Okkama's closures are values
-and not variables, how the engines run them, and how they compare with
-lambdas in other languages.
+and not variables, how they compare for equality, how they serve as data,
+how the engines run them, where the idea came from, and how they compare
+with lambdas in other languages.
 
 ## 18.1 Writing an anonymous action
 
@@ -10036,6 +10039,85 @@ The Book also says that rebinding a captured name *inside* the action is an
 error. The compiler does not enforce it yet: such a rebind changes a copy
 that lives for one call (#321).
 
+### Closures made in a loop
+
+The difference shows in the classic test: one closure created in each pass
+of a loop.
+
+```okkama
+module bible/closure_loop v1.0.0;
+
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    // Each anonymous action is created in its own pass of the block and
+    // keeps the value `n` had in that pass.
+    let makers = [1, 2, 3].map() -> n { () is int { n * 10; }; };
+    out.writeln(makers.map() -> make { make().string(); }.join(" "));
+    0;
+}
+```
+
+Output:
+
+```text
+10 20 30
+```
+
+Each pass of the `map` block binds a fresh `n`, and each anonymous action
+captures the value of its own pass, so the three actions answer 10, 20 and
+30. In JavaScript with `var`, the same three functions would all answer 30,
+because they share one variable that ends at the last value. Go behaved the
+same way for its loop variables until version 1.22 changed the rule after
+years of bugs [[Go specification](#ref-gospec)]. In Okkama there is no variable to share, so the
+question does not arise.
+
+### Captured successors
+
+The result of a successor action (Chapter 13) must be used: a binding to it
+that can leave its scope unused is an error. The Book carries the rule
+through closures. Creating a closure that captures a successor does not use
+it, but invoking, returning, passing or storing the closure does.
+
+The compiler does not follow the successor into the closure yet. Its check
+of successor use does not look inside anonymous actions, so a successor
+read only inside a closure is never counted as used, whatever happens to the
+closure afterwards (#322):
+
+```okkama
+module bible/closure_successor v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Counter {
+    has count is int;
+    Counter(:count);
+    count() is int { count; }
+    bumped() is ^Counter { ^count = count + 1; }
+}
+
+main() is int {
+    let later = Counter(count: 1).bumped();
+    let show = () is int { later.count(); };
+    Stdout().writeln(show().string());
+    0;
+}
+```
+
+The compiler answers:
+
+```text
+18-successor-rejected.ok:12:1: semantic error: Successor action result must be used; binding "later" can leave scope without consumption
+```
+
+`show()` is called, and its result is printed, yet `later` is reported as
+unused. Until the check is fixed, read the successor outside the closure and
+capture what was read: `let count = later.count();` and then
+`() is int { count; }`. That is accepted, and it is often the clearer
+program anyway, since the closure then holds the number it needs and not the
+object.
+
 ## 18.3 Types are exact
 
 An action value has exactly the type it was declared with. A `() is Square`
@@ -10105,7 +10187,155 @@ anonymous action; it needs an object that `does` it. Java's lambdas, which
 become instances of any *functional interface* with one abstract method, are
 the opposite choice.
 
-## 18.4 Closures or objects
+### Equality is identity
+
+Two action values are equal only when they are the same value:
+
+```okkama
+module bible/closure_identity v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Maker {
+    Maker();
+    adder(amount is int) is (int) is int { (value is int) is int { value + amount; }; }
+}
+
+main() is int {
+    let maker = Maker();
+    let one = maker.adder(1);
+    let alias = one;
+    let another_one = maker.adder(1);
+    let literal = (value is int) is int { value + 1; };
+    let twin = (value is int) is int { value + 1; };
+    Stdout().writeln((one == alias).string() + " " + (one == another_one).string() + " " +
+        (literal == twin).string() + " " + (Maker() == Maker()).string());
+    0;
+}
+```
+
+Output:
+
+```text
+true false false true
+```
+
+`one` and `alias` are one closure under two names, so they are equal.
+`another_one` was made by the same action from the same argument, and `twin`
+has the same text as `literal`, but each is a closure of its own, and
+neither equals its look-alike. Objects are the opposite case: two `Maker()`
+are equal, because objects compare by type and fields (Chapter 12). An
+object that holds an action in a field compares that field by identity too:
+two objects holding the same closure are equal, two holding different but
+identical-looking closures are not.
+
+Futures follow the same rule, for the same reason: there is no useful
+structural equality to offer. Whether two functions give the same result for
+every argument cannot be decided in general, by Rice's theorem [[Rice 1953](#ref-rice1953)].
+Comparing their code and captured values instead would make equality depend
+on how an engine compiles an action, which Okkama does not let into a
+program's behaviour. Identity is cheap, predictable and the same on every
+engine. An action value is not a map key either: keys are scalars and value
+objects (Chapter 8).
+
+## 18.4 Action values as data
+
+Action types are ordinary types, so action values go where values go: into
+arrays, maps, fields, generic objects and `Maybe`, and in and out of other
+actions.
+
+```okkama
+module bible/closure_table v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Rule {
+    has accepts is (int) is bool;
+    has name is string;
+    Rule(:accepts, :name);
+    check(value is int) is string { name + " " + accepts(value).string(); }
+}
+
+main() is int {
+    let out = Stdout();
+    let operations is %string:(int, int) is int = [
+        "+": (left is int, right is int) is int { left + right; },
+        "*": (left is int, right is int) is int { left * right; }
+    ];
+    let times = operations["*"];
+    out.writeln(times(6, 7).string() + " " + operations.keys().join(","));
+    let minus = operations["-"] else (left is int, right is int) is int { left - right; };
+    out.writeln(minus(10, 3).string());
+    let limit = 10;
+    let small = Rule(accepts: (value is int) is bool { value < limit; }, name: "small");
+    out.writeln(small.check(3) + ", " + small.check(30));
+    0;
+}
+```
+
+Output:
+
+```text
+42 *,+
+7
+small true, small false
+```
+
+- `operations` maps strings to actions of type `(int, int) is int`. The
+  type is written `%string:(int, int) is int`, with the action type in place
+  of the value type. Picking an action is an ordinary lookup, and a missing
+  key takes the `else` branch like any map read (Chapter 8), here with a
+  fallback action written in place. A table of actions is how dispatch by
+  name is written without a chain of `if`s.
+- `Rule` keeps a predicate in a field and calls the field like an action,
+  `accepts(value)`. The predicate was created in `main` and captured
+  `limit`, so the rule carries that limit with it.
+
+Generic objects take action types the same way. A
+`let box is Box<(int) is int> = Box(item: …)` holds one action, and a
+`Maybe<(int) is int>` holds one or none; `chosen else (value is int) is int
+{ value; }` falls back to the identity action. Inference reads the declared
+signatures, as in Chapter 17.
+
+An action can also take actions and return one:
+
+```okkama
+module bible/closure_compose v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Compose {
+    Compose();
+    // An action that takes two actions and returns a third.
+    then(first is (int) is int, second is (int) is int) is (int) is int {
+        (value is int) is int { second(first(value)); };
+    }
+}
+
+main() is int {
+    let increment = (value is int) is int { value + 1; };
+    let square = (value is int) is int { value * value; };
+    let compose = Compose();
+    let up_then_square = compose.then(increment, square);
+    let square_then_up = compose.then(square, increment);
+    Stdout().writeln(up_then_square(4).string() + " " + square_then_up(4).string());
+    0;
+}
+```
+
+Output:
+
+```text
+25 17
+```
+
+`then` returns a closure over its two arguments. `up_then_square(4)` is
+`(4 + 1)²`, 25, and `square_then_up(4)` is `4² + 1`, 17. Haskell writes
+composition as one operator, `.`; in Okkama it is an action of an object
+with a full signature, `((int) is int, (int) is int) is (int) is int`. That
+is longer, and it leaves nothing to infer.
+
+## 18.5 Closures or objects
 
 An anonymous action and a small object can do the same job. The pipeline of
 the first example could hold `Step` objects with an `apply` action instead
@@ -10136,7 +10366,89 @@ exactly that ability and no other. This is the object-capability pattern of
 Miller's thesis, where a reference is the only way to an effect [[Miller 2006](#ref-miller2006)];
 in Okkama a closure is one more kind of reference.
 
-## 18.5 How closures run
+### Behaviour that waits needs an object
+
+An anonymous action is always synchronous. It cannot be declared `async`
+(the parser does not yet say so clearly, #323), and an `await` inside it is
+rejected even when the closure is created inside an async action:
+
+```okkama
+module bible/closure_await_rejected v1.0.0;
+
+object Source {
+    Source();
+    async value() is int { 1; }
+}
+
+async main() is int {
+    let source = Source();
+    let read = () is int { await source.value(); };
+    read();
+}
+```
+
+The compiler answers:
+
+```text
+18-await-rejected.ok:10:28: semantic error: await is available only inside an async action
+```
+
+The closure is an action of its own, and a synchronous one, so the `await`
+has no async action around it. Behaviour that has to wait is therefore
+passed as an object that does a role with an async action, and closures
+stay on the synchronous side:
+
+```okkama
+module bible/closure_async v1.0.0;
+
+import "io/stdout" take Stdout;
+
+role Fetching {
+    async fetch(id is int) is string;
+}
+
+object Table does Fetching {
+    Table();
+    async fetch(id is int) is string { "item " + id.string(); }
+}
+
+object Loader {
+    has source is Fetching;
+    has label is (string) is string;
+    Loader(:source, :label);
+    // The synchronous closure runs after the await, with what it captured.
+    async load(id is int) is string { label(await source.fetch(id)); }
+}
+
+async main() is int {
+    let prefix = "#";
+    let loader = Loader(source: Table(), label: (text is string) is string { prefix + text; });
+    Stdout().writeln(await loader.load(7));
+    0;
+}
+```
+
+Output:
+
+```text
+#item 7
+```
+
+`Loader` takes both kinds. Its source is a `Fetching`, a role with an async
+`fetch`; its label is a plain `(string) is string`. In `load` the closure
+runs after the `await`, with the `prefix` it captured in `main`, and nothing
+it holds can have changed during the wait, because what it holds are values.
+This is where the snapshot rule pays off: a closure that is called across an
+`await` needs no thought about what other tasks did in the meantime.
+
+The restriction keeps every suspension point in one kind of place: an
+`await` inside a named `async` action, whose declaration says that it waits
+(Chapter 20). A type such as `(int) is int` promises that calling the value
+does not suspend. Kotlin draws the same line in its types with `suspend`
+function types, and JavaScript with `async` functions, but both also allow
+anonymous functions that suspend; Okkama, for now, does not.
+
+## 18.6 How closures run
 
 In the IR a closure is two instructions. `fn.closure` builds the value from a
 function and its captured values; `call.fn` calls it:
@@ -10210,7 +10522,87 @@ that captures only plain values is treated as plain, and that benchmark runs
 at the same speed with or without the import (IR 1.02 s, core 0.10 s, JVM
 0.22 s).
 
-## 18.6 Okkama among other languages
+### In a failure report
+
+A failure raised inside an anonymous action is reported like any other
+(Chapter 10). Here `main` hands a checking closure to `Runner.run`, which
+calls it:
+
+```okkama
+module bible/closure_report v1.0.0;
+
+enum Bad is Error = (too_big(value is int));
+
+object Runner {
+    Runner();
+    run(step is (int) is int) is int { step(3); }
+}
+
+main() is int {
+    let check = (value is int) is int {
+        if (value > 2) { throw Bad.too_big(value); }
+        value;
+    };
+    Runner().run(check);
+}
+```
+
+```text
+Bad: Bad.too_big(3)
+  --> report.ok:12:26
+   |
+12 |         if (value > 2) { throw Bad.too_big(value); }
+   |                          ^^^^^^^^^^^^^^^^^^^^^^^^^
+Stack trace (most recent call first):
+  at lambda#0 (report.ok:12:26)
+  at Runner.run (report.ok:7:40)
+  at main (report.ok:15:5)
+```
+
+The anonymous action has no name, so its frame carries the name of its
+function in the IR, `lambda#0`, and the location points into its body. The
+three engines print the same report since 0.4.2 (#270): the JVM maps its own
+stack frames back to the IR functions through a table the compiler writes
+into the jar. The frame does not say which action created the closure. In
+the IR the closure and its creator are separate functions, and the creating
+call may have returned long before the closure fails; the source location is
+what identifies it.
+
+## 18.7 Where closures came from
+
+Closures are older than objects. Church's lambda calculus of 1936 already
+treated functions as values [[Church 1936](#ref-church1936)], and McCarthy built LISP on it in
+1960 [[McCarthy 1960](#ref-mccarthy1960)]. LISP then met the question every language with function
+values has to answer: when a function uses a name it did not declare, which
+binding does it see, the one where it was created or the one where it is
+called? Early LISPs looked the name up where the function was called, and a
+function passed as an argument could see the wrong variable. This became
+known as the *funarg problem*. Moses argued in 1970 that it should be called
+the environment problem, because the cure is to give the function the
+environment it was created in [[Moses 1970](#ref-moses1970)]. Landin had done exactly that in
+1964: his SECD machine paired a function with that environment and called
+the pair a closure [[Landin 1964](#ref-landin1964)]. Scheme made lexically scoped closures the
+basis of a whole language in 1975 [[Sussman 1975](#ref-sussman1975)].
+
+Object-oriented languages took the idea in through blocks. Smalltalk-80
+blocks are closures, and the library builds every control structure on
+them, conditionals and loops included [[Goldberg 1983](#ref-goldberg1983)]. A `^` inside a block
+returns from the method that created the block, which is what lets a block
+act as the body of a loop. The mainstream came later: C# 2.0 added anonymous
+methods in 2005, and Java 8 added lambdas in 2014, typed by functional
+interfaces and limited to effectively final locals [[Gosling 2023](#ref-gosling2023)].
+
+Okkama follows Landin and Scheme in what a closure is, a function together
+with what it saw, and departs from all of them in that what it saw is values
+only. It also keeps apart the two jobs Smalltalk gave to blocks. The blocks
+of `for` and `map` are control structures and are not values; anonymous
+actions are values and are not control structures, so a `return` inside one
+returns from that action, and `next` and `last` cannot reach an outer loop
+(Section 18.1). Since Okkama locals are never assigned, the later form of the
+funarg problem, which variable a closure shares with its creator, has no
+room to arise.
+
+## 18.8 Okkama among other languages
 
 | | Captures | Assigning a captured name | Typing |
 |---|---|---|---|
@@ -10228,7 +10620,7 @@ variable, and with Java on the declaration being explicit. It is stricter
 than all of them on types: an action value has exactly its declared
 signature, and nothing converts it to a role or to a wider function type.
 
-## 18.7 Limits
+## 18.9 Limits
 
 - **No recursion by name.** The Book says a `let` bound to an anonymous
   action can call itself by that name; the compiler rejects it as an
@@ -10236,17 +10628,21 @@ signature, and nothing converts it to a role or to a wider function type.
   constant-stack self tail calls and the compiler's check for recursion that
   cannot end.
 - **Rebinding a captured name inside the action is not rejected** (#321).
+- **A successor captured by a closure never counts as used** (#322); read
+  it outside and capture the value.
+- **Equality by identity only**, and an action value is never a map key.
 - **Positional calls only**, exactly the declared number of arguments; no
   variadic anonymous parameters, no defaults.
 - **No currying or partial application.** `make_adder` has to be written
   out.
 - **No async anonymous actions.** An action that awaits must be a named
-  `async` action.
+  `async` action, passed as an object that does a role; the parser's message
+  for `async () is …` does not say this yet (#323).
 - **No `any`, no native ABI, no conversion to a role.**
 - **One helper call per closure call on the Sparrow core**, about ten
   nanoseconds.
 
-## 18.8 What this design costs
+## 18.10 What this design costs
 
 Explicit signatures make short closures longer than in languages that infer
 them: `(value is int) is int { value * 2; }` where Kotlin writes `{ it * 2 }`.
@@ -10283,6 +10679,7 @@ object model instead of opening a second, functional one beside it.
 - <a id="ref-canning1989"></a>Peter Canning, William Cook, Walter Hill, Walter Olthoff, John C. Mitchell (1989). F-Bounded Polymorphism for Object-Oriented Programming. In *Proceedings of FPCA 1989*: 273–280. ACM. https://doi.org/10.1145/99370.99392
 - <a id="ref-cardelli1985"></a>Luca Cardelli, Peter Wegner (1985). On Understanding Types, Data Abstraction, and Polymorphism. *ACM Computing Surveys* 17(4): 471–523. https://doi.org/10.1145/6041.6042
 - <a id="ref-jep421"></a>Brent Christian (2021). JEP 421: Deprecate Finalization for Removal. OpenJDK. https://openjdk.org/jeps/421
+- <a id="ref-church1936"></a>Alonzo Church (1936). An Unsolvable Problem of Elementary Number Theory. *American Journal of Mathematics* 58(2): 345–363. https://doi.org/10.2307/2371045
 - <a id="ref-claessen2000"></a>Koen Claessen, John Hughes (2000). QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs. In *Proceedings of ICFP 2000*: 268–279. ACM. https://doi.org/10.1145/351240.351266
 - <a id="ref-cook2009"></a>William R. Cook (2009). On Understanding Data Abstraction, Revisited. In *Proceedings of OOPSLA 2009*, *ACM SIGPLAN Notices* 44(10): 557–572. https://doi.org/10.1145/1640089.1640133
 - <a id="ref-cytron1991"></a>Ron Cytron, Jeanne Ferrante, Barry K. Rosen, Mark N. Wegman, F. Kenneth Zadeck (1991). Efficiently Computing Static Single Assignment Form and the Control Dependence Graph. *ACM TOPLAS* 13(4): 451–490. https://doi.org/10.1145/115372.115320
@@ -10296,6 +10693,7 @@ object model instead of opening a second, functional one beside it.
 - <a id="ref-gabriel1991"></a>Richard P. Gabriel (1991). The Rise of "Worse is Better". In *Lisp: Good News, Bad News, How to Win Big*. https://www.dreamsongs.com/RiseOfWorseIsBetter.html
 - <a id="ref-gamma1994"></a>Erich Gamma, Richard Helm, Ralph Johnson, John Vlissides (1994). *Design Patterns: Elements of Reusable Object-Oriented Software*. Addison-Wesley.
 - <a id="ref-gospec"></a>The Go Authors (2026). *The Go Programming Language Specification*, language version go1.27 (26 May 2026). https://go.dev/ref/spec
+- <a id="ref-goldberg1983"></a>Adele Goldberg, David Robson (1983). *Smalltalk-80: The Language and Its Implementation*. Addison-Wesley.
 - <a id="ref-goldberg1991"></a>David Goldberg (1991). What Every Computer Scientist Should Know About Floating-Point Arithmetic. *ACM Computing Surveys* 23(1): 5–48. https://doi.org/10.1145/103162.103163
 - <a id="ref-goodenough1975"></a>John B. Goodenough (1975). Exception Handling: Issues and a Proposed Notation. *Communications of the ACM* 18(12): 683–696. https://doi.org/10.1145/361227.361230
 - <a id="ref-gosling2023"></a>James Gosling, Bill Joy, Guy Steele, Gilad Bracha, Alex Buckley, Daniel Smith, Gavin Bierman (2023). *The Java Language Specification, Java SE 21 Edition*. Oracle. https://docs.oracle.com/javase/specs/jls/se21/html/
@@ -10339,6 +10737,7 @@ object model instead of opening a second, functional one beside it.
 - <a id="ref-milner1978"></a>Robin Milner (1978). A Theory of Type Polymorphism in Programming. *Journal of Computer and System Sciences* 17(3): 348–375. https://doi.org/10.1016/0022-0000(78)90014-4
 - <a id="ref-milner1997"></a>Robin Milner, Mads Tofte, Robert Harper, David MacQueen (1997). *The Definition of Standard ML (Revised)*. MIT Press.
 - <a id="ref-moseley2006"></a>Ben Moseley, Peter Marks (2006). Out of the Tar Pit. Software Practice Advancement (SPA) 2006. https://curtclifton.net/papers/MoseleyMarks06a.pdf
+- <a id="ref-moses1970"></a>Joel Moses (1970). The Function of FUNCTION in LISP, or Why the FUNARG Problem Should Be Called the Environment Problem. *ACM SIGSAM Bulletin* 15: 13–27. https://doi.org/10.1145/1093410.1093411
 - <a id="ref-nygaard1978"></a>Kristen Nygaard, Ole-Johan Dahl (1978). The Development of the SIMULA Languages. *ACM SIGPLAN Notices* 13(8): 245–272 (HOPL I). https://doi.org/10.1145/960118.808391
 - <a id="ref-okasaki1998"></a>Chris Okasaki (1998). *Purely Functional Data Structures*. Cambridge University Press. https://doi.org/10.1017/CBO9780511530104
 - <a id="ref-ousterhout2018"></a>John Ousterhout (2018). *A Philosophy of Software Design*. Yaknyam Press.
@@ -10352,6 +10751,7 @@ object model instead of opening a second, functional one beside it.
 - <a id="ref-rfc3629"></a>François Yergeau (2003). *UTF-8, a Transformation Format of ISO 10646*. RFC 3629, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc3629
 - <a id="ref-rfc7396"></a>Paul Hoffman, James Snell (2014). *JSON Merge Patch*. RFC 7396, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc7396
 - <a id="ref-rfc8259"></a>Tim Bray (ed.) (2017). *The JavaScript Object Notation (JSON) Data Interchange Format*. RFC 8259, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc8259
+- <a id="ref-rice1953"></a>H. Gordon Rice (1953). Classes of Recursively Enumerable Sets and Their Decision Problems. *Transactions of the American Mathematical Society* 74(2): 358–366. https://doi.org/10.1090/S0002-9947-1953-0053041-6
 - <a id="ref-rissanen1978"></a>Jorma Rissanen (1978). Modeling by Shortest Data Description. *Automatica* 14(5): 465–471. https://doi.org/10.1016/0005-1098(78)90005-5
 - <a id="ref-ritchie1993"></a>Dennis M. Ritchie (1993). The Development of the C Language. *HOPL-II: The Second ACM SIGPLAN Conference on History of Programming Languages*: 201–208. https://doi.org/10.1145/154766.155580
 - <a id="ref-pep343"></a>Guido van Rossum, Nick Coghlan (2005). PEP 343 — The "with" Statement. Python Enhancement Proposals. https://peps.python.org/pep-0343/

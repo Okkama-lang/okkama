@@ -1,0 +1,1 @@
+18-successor-rejected.ok:12:1: semantic error: Successor action result must be used; binding "later" can leave scope without consumption

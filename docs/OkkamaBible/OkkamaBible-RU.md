@@ -207,11 +207,13 @@
   - [18.1 Как пишется анонимное действие](#181-как-пишется-анонимное-действие)
   - [18.2 Что помнит замыкание](#182-что-помнит-замыкание)
   - [18.3 Типы точны](#183-типы-точны)
-  - [18.4 Замыкания или объекты](#184-замыкания-или-объекты)
-  - [18.5 Как исполняются замыкания](#185-как-исполняются-замыкания)
-  - [18.6 Okkama среди других языков](#186-okkama-среди-других-языков)
-  - [18.7 Ограничения](#187-ограничения)
-  - [18.8 Чего стоит такой дизайн](#188-чего-стоит-такой-дизайн)
+  - [18.4 Значения-действия как данные](#184-значения-действия-как-данные)
+  - [18.5 Замыкания или объекты](#185-замыкания-или-объекты)
+  - [18.6 Как исполняются замыкания](#186-как-исполняются-замыкания)
+  - [18.7 Откуда пришли замыкания](#187-откуда-пришли-замыкания)
+  - [18.8 Okkama среди других языков](#188-okkama-среди-других-языков)
+  - [18.9 Ограничения](#189-ограничения)
+  - [18.10 Чего стоит такой дизайн](#1810-чего-стоит-такой-дизайн)
 
 # Часть I. Бритва
 
@@ -9997,8 +9999,8 @@ main() is int {
 
 Глава описывает, как пишутся и типизируются анонимные действия, что
 замыкание помнит и чего не помнит, почему замыкания Okkama — значения, а не
-переменные, как их исполняют движки и чем они отличаются от лямбд других
-языков.
+переменные, как они сравниваются, как служат данными, как их исполняют
+движки, откуда пришла сама идея и чем они отличаются от лямбд других языков.
 
 ## 18.1 Как пишется анонимное действие
 
@@ -10165,6 +10167,85 @@ Okkama идёт дальше Java. Её локальные имена неизм
 ошибка. Компилятор этого пока не проверяет: такая перепривязка меняет
 копию, живущую один вызов (#321).
 
+### Замыкания, созданные в цикле
+
+Разница видна на классической проверке: по замыканию на каждый проход
+цикла.
+
+```okkama
+module bible/closure_loop v1.0.0;
+
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    // Each anonymous action is created in its own pass of the block and
+    // keeps the value `n` had in that pass.
+    let makers = [1, 2, 3].map() -> n { () is int { n * 10; }; };
+    out.writeln(makers.map() -> make { make().string(); }.join(" "));
+    0;
+}
+```
+
+Вывод:
+
+```text
+10 20 30
+```
+
+Каждый проход блока `map` связывает свежее `n`, и каждое анонимное действие
+захватывает значение своего прохода, поэтому три действия отвечают 10, 20 и
+30. В JavaScript с `var` те же три функции ответили бы 30 все, потому что
+делят одну переменную, которая останавливается на последнем значении. Go
+вёл себя так же со своими переменными цикла, пока версия 1.22 не поменяла
+правило после многих лет ошибок [[Go specification](#ref-gospec)]. В Okkama разделять нечего, и
+вопрос не возникает.
+
+### Захваченные наследники
+
+Результат действия-наследника (глава 13) должен быть использован:
+связывание с ним, которое может покинуть область неиспользованным, —
+ошибка. Книга проводит это правило сквозь замыкания. Создание замыкания,
+захватившего наследника, его не использует, а вызов, возврат, передача или
+сохранение замыкания — используют.
+
+Компилятор пока не прослеживает наследника внутрь замыкания. Его проверка
+использования наследников не заглядывает в анонимные действия, поэтому
+наследник, прочитанный только внутри замыкания, никогда не считается
+использованным, что бы потом ни случилось с замыканием (#322):
+
+```okkama
+module bible/closure_successor v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Counter {
+    has count is int;
+    Counter(:count);
+    count() is int { count; }
+    bumped() is ^Counter { ^count = count + 1; }
+}
+
+main() is int {
+    let later = Counter(count: 1).bumped();
+    let show = () is int { later.count(); };
+    Stdout().writeln(show().string());
+    0;
+}
+```
+
+Ответ компилятора:
+
+```text
+18-successor-rejected.ok:12:1: semantic error: Successor action result must be used; binding "later" can leave scope without consumption
+```
+
+`show()` вызывается, и его результат печатается, а `later` всё равно
+объявлен неиспользованным. Пока проверку не исправили, прочитай наследника
+снаружи и захвати прочитанное: `let count = later.count();`, а затем
+`() is int { count; }`. Это принимается, и часто такая программа и так
+яснее: замыкание держит нужное ему число, а не объект.
+
 ## 18.3 Типы точны
 
 У значения-действия ровно тот тип, с которым оно объявлено. `() is Square` —
@@ -10234,7 +10315,156 @@ main() is int {
 экземплярами любого *функционального интерфейса* с одним абстрактным
 методом, — противоположный выбор.
 
-## 18.4 Замыкания или объекты
+### Равенство — это идентичность
+
+Два значения-действия равны, только когда это одно и то же значение:
+
+```okkama
+module bible/closure_identity v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Maker {
+    Maker();
+    adder(amount is int) is (int) is int { (value is int) is int { value + amount; }; }
+}
+
+main() is int {
+    let maker = Maker();
+    let one = maker.adder(1);
+    let alias = one;
+    let another_one = maker.adder(1);
+    let literal = (value is int) is int { value + 1; };
+    let twin = (value is int) is int { value + 1; };
+    Stdout().writeln((one == alias).string() + " " + (one == another_one).string() + " " +
+        (literal == twin).string() + " " + (Maker() == Maker()).string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+true false false true
+```
+
+`one` и `alias` — одно замыкание под двумя именами, поэтому они равны.
+`another_one` создано тем же действием из того же аргумента, а `twin` по
+тексту совпадает с `literal`, но каждое из них — отдельное замыкание, и ни
+одно не равно своему двойнику. Объекты устроены наоборот: два `Maker()`
+равны, потому что объекты сравниваются по типу и полям (глава 12). Объект,
+который хранит действие в поле, сравнивает это поле тоже по идентичности:
+два объекта с одним и тем же замыканием равны, два с разными, хоть и
+одинаковыми на вид, — нет.
+
+Future подчиняются тому же правилу и по той же причине: полезного
+структурного равенства тут не предложить. Дают ли две функции один и тот же
+результат на каждом аргументе, в общем случае не разрешимо — по теореме
+Райса [[Rice 1953](#ref-rice1953)]. Сравнение их кода и захваченных значений сделало бы
+равенство зависимым от того, как движок компилирует действие, а это Okkama в
+поведение программы не пускает. Идентичность дешева, предсказуема и одна на
+всех движках. Ключом словаря значение-действие тоже не бывает: ключи — это
+скаляры и объекты-значения (глава 8).
+
+## 18.4 Значения-действия как данные
+
+Типы действий — обычные типы, поэтому значения-действия идут туда же, куда
+и значения: в массивы, словари, поля, обобщённые объекты и `Maybe`, в
+другие действия и из них.
+
+```okkama
+module bible/closure_table v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Rule {
+    has accepts is (int) is bool;
+    has name is string;
+    Rule(:accepts, :name);
+    check(value is int) is string { name + " " + accepts(value).string(); }
+}
+
+main() is int {
+    let out = Stdout();
+    let operations is %string:(int, int) is int = [
+        "+": (left is int, right is int) is int { left + right; },
+        "*": (left is int, right is int) is int { left * right; }
+    ];
+    let times = operations["*"];
+    out.writeln(times(6, 7).string() + " " + operations.keys().join(","));
+    let minus = operations["-"] else (left is int, right is int) is int { left - right; };
+    out.writeln(minus(10, 3).string());
+    let limit = 10;
+    let small = Rule(accepts: (value is int) is bool { value < limit; }, name: "small");
+    out.writeln(small.check(3) + ", " + small.check(30));
+    0;
+}
+```
+
+Вывод:
+
+```text
+42 *,+
+7
+small true, small false
+```
+
+- `operations` отображает строки в действия типа `(int, int) is int`. Тип
+  записывается `%string:(int, int) is int`: на месте типа значения стоит
+  тип действия. Выбор действия — обычный поиск по ключу, а отсутствующий
+  ключ уходит в ветку `else`, как при любом чтении словаря (глава 8), здесь
+  с запасным действием, написанным на месте. Таблица действий — способ
+  написать диспетчеризацию по имени без цепочки `if`.
+- `Rule` хранит предикат в поле и вызывает поле, как действие:
+  `accepts(value)`. Предикат создан в `main` и захватил `limit`, так что
+  правило носит этот предел с собой.
+
+Обобщённые объекты принимают типы действий так же.
+`let box is Box<(int) is int> = Box(item: …)` хранит одно действие, а
+`Maybe<(int) is int>` — одно или ни одного; `chosen else (value is int) is
+int { value; }` откатывается к тождественному действию. Вывод читает
+объявленные сигнатуры, как в главе 17.
+
+Действие может и принимать действия, и возвращать их:
+
+```okkama
+module bible/closure_compose v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Compose {
+    Compose();
+    // An action that takes two actions and returns a third.
+    then(first is (int) is int, second is (int) is int) is (int) is int {
+        (value is int) is int { second(first(value)); };
+    }
+}
+
+main() is int {
+    let increment = (value is int) is int { value + 1; };
+    let square = (value is int) is int { value * value; };
+    let compose = Compose();
+    let up_then_square = compose.then(increment, square);
+    let square_then_up = compose.then(square, increment);
+    Stdout().writeln(up_then_square(4).string() + " " + square_then_up(4).string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+25 17
+```
+
+`then` возвращает замыкание над двумя своими аргументами.
+`up_then_square(4)` — это `(4 + 1)²`, то есть 25, а `square_then_up(4)` —
+`4² + 1`, то есть 17. Haskell записывает композицию одним оператором, `.`; в
+Okkama это действие объекта с полной сигнатурой
+`((int) is int, (int) is int) is (int) is int`. Так длиннее, зато выводить
+нечего.
+
+## 18.5 Замыкания или объекты
 
 Анонимное действие и маленький объект могут выполнять одну и ту же работу.
 Конвейер из первого примера мог бы хранить объекты `Step` с действием
@@ -10266,7 +10496,90 @@ main() is int {
 объектных возможностей из диссертации Миллера, где ссылка — единственный
 путь к эффекту [[Miller 2006](#ref-miller2006)]; в Okkama замыкание — ещё один вид ссылки.
 
-## 18.5 Как исполняются замыкания
+### Поведению, которое ждёт, нужен объект
+
+Анонимное действие всегда синхронно. Его нельзя объявить `async`
+(синтаксический анализатор пока говорит об этом невнятно, #323), а `await`
+внутри него отвергается, даже если замыкание создано внутри
+асинхронного действия:
+
+```okkama
+module bible/closure_await_rejected v1.0.0;
+
+object Source {
+    Source();
+    async value() is int { 1; }
+}
+
+async main() is int {
+    let source = Source();
+    let read = () is int { await source.value(); };
+    read();
+}
+```
+
+Ответ компилятора:
+
+```text
+18-await-rejected.ok:10:28: semantic error: await is available only inside an async action
+```
+
+Замыкание — отдельное действие, причём синхронное, поэтому вокруг `await`
+нет асинхронного действия. Поведение, которому нужно ждать, передают
+объектом, который делает роль с асинхронным действием, а замыкания остаются
+на синхронной стороне:
+
+```okkama
+module bible/closure_async v1.0.0;
+
+import "io/stdout" take Stdout;
+
+role Fetching {
+    async fetch(id is int) is string;
+}
+
+object Table does Fetching {
+    Table();
+    async fetch(id is int) is string { "item " + id.string(); }
+}
+
+object Loader {
+    has source is Fetching;
+    has label is (string) is string;
+    Loader(:source, :label);
+    // The synchronous closure runs after the await, with what it captured.
+    async load(id is int) is string { label(await source.fetch(id)); }
+}
+
+async main() is int {
+    let prefix = "#";
+    let loader = Loader(source: Table(), label: (text is string) is string { prefix + text; });
+    Stdout().writeln(await loader.load(7));
+    0;
+}
+```
+
+Вывод:
+
+```text
+#item 7
+```
+
+`Loader` принимает оба вида. Его источник — `Fetching`, роль с асинхронным
+`fetch`; его подпись — обычное `(string) is string`. В `load` замыкание
+выполняется после `await` с `prefix`, захваченным в `main`, и ничто из того,
+что оно держит, не могло измениться за время ожидания: держит оно
+значения. Здесь правило снимка и окупается: о замыкании, вызванном по ту
+сторону `await`, не нужно думать, что за это время сделали другие задачи.
+
+Ограничение держит все точки приостановки в одном виде мест: `await`
+внутри именованного `async`-действия, чьё объявление говорит, что оно ждёт
+(глава 20). Тип вроде `(int) is int` обещает, что вызов значения не
+приостанавливается. Kotlin проводит ту же границу в типах — функциональными
+типами `suspend`, JavaScript — функциями `async`, но оба разрешают и
+анонимные функции, которые приостанавливаются; Okkama пока нет.
+
+## 18.6 Как исполняются замыкания
 
 В IR замыкание — две инструкции. `fn.closure` строит значение из функции и
 захваченных значений, `call.fn` его вызывает:
@@ -10340,7 +10653,87 @@ func @lambda#1(%0: int, %1: int) -> int [lambda 1] {
 простые значения, считается простым, и этот бенчмарк идёт с импортом и без
 него одинаково (IR 1,02 с, ядро 0,10 с, JVM 0,22 с).
 
-## 18.6 Okkama среди других языков
+### В отчёте о сбое
+
+Сбой внутри анонимного действия описывается в отчёте как любой другой
+(глава 10). Здесь `main` отдаёт проверяющее замыкание в `Runner.run`, а тот
+его вызывает:
+
+```okkama
+module bible/closure_report v1.0.0;
+
+enum Bad is Error = (too_big(value is int));
+
+object Runner {
+    Runner();
+    run(step is (int) is int) is int { step(3); }
+}
+
+main() is int {
+    let check = (value is int) is int {
+        if (value > 2) { throw Bad.too_big(value); }
+        value;
+    };
+    Runner().run(check);
+}
+```
+
+```text
+Bad: Bad.too_big(3)
+  --> report.ok:12:26
+   |
+12 |         if (value > 2) { throw Bad.too_big(value); }
+   |                          ^^^^^^^^^^^^^^^^^^^^^^^^^
+Stack trace (most recent call first):
+  at lambda#0 (report.ok:12:26)
+  at Runner.run (report.ok:7:40)
+  at main (report.ok:15:5)
+```
+
+У анонимного действия нет имени, поэтому его кадр носит имя его функции в
+IR, `lambda#0`, а место указывает внутрь его тела. С 0.4.2 все три движка
+печатают одинаковый отчёт (#270): JVM переводит свои кадры стека обратно в
+функции IR по таблице, которую компилятор кладёт в jar. Кадр не говорит,
+какое действие создало замыкание. В IR замыкание и его создатель — разные
+функции, а создавший вызов мог вернуться задолго до того, как замыкание
+упало; опознаёт его место в исходнике.
+
+## 18.7 Откуда пришли замыкания
+
+Замыкания старше объектов. Лямбда-исчисление Чёрча 1936 года уже
+обращалось с функциями как со значениями [[Church 1936](#ref-church1936)], а Маккарти построил
+на нём LISP в 1960-м [[McCarthy 1960](#ref-mccarthy1960)]. Тогда LISP и столкнулся с вопросом, на
+который должен ответить каждый язык с функциями-значениями: когда функция
+использует имя, которое не объявляла, какое связывание она видит — то, где
+её создали, или то, где её вызвали? Ранние LISP искали имя там, где функцию
+вызвали, и функция, переданная аргументом, могла увидеть не ту переменную.
+Это стало известно как *проблема funarg*. Мозес в 1970 году предложил
+называть её проблемой окружения, потому что лечится она тем, что функции
+отдают окружение, в котором её создали [[Moses 1970](#ref-moses1970)]. Ландин сделал ровно
+это ещё в 1964-м: его машина SECD соединяла функцию с этим окружением и
+называла пару замыканием [[Landin 1964](#ref-landin1964)]. Scheme в 1975 году положил
+лексические замыкания в основу целого языка [[Sussman 1975](#ref-sussman1975)].
+
+Объектные языки приняли идею через блоки. Блоки Smalltalk-80 — замыкания,
+и библиотека строит на них все управляющие конструкции, включая условия и
+циклы [[Goldberg 1983](#ref-goldberg1983)]. `^` внутри блока возвращает из метода, который блок
+создал, — это и позволяет блоку служить телом цикла. Мейнстрим пришёл
+позже: C# 2.0 добавил анонимные методы в 2005 году, Java 8 — лямбды в 2014-м,
+с типами из функциональных интерфейсов и только над effectively final
+переменными [[Gosling 2023](#ref-gosling2023)].
+
+Okkama следует Ландину и Scheme в том, что такое замыкание, — функция вместе
+с тем, что она видела, — и расходится со всеми ними в том, что видела она
+только значения. Ещё она разводит две работы, которые Smalltalk поручил
+блокам. Блоки `for` и `map` — управляющие конструкции и не значения;
+анонимные действия — значения и не управляющие конструкции, поэтому
+`return` внутри такого действия возвращает из него самого, а `next` и
+`last` не дотягиваются до внешнего цикла (раздел 18.1). Раз локальные имена
+Okkama никогда не переприсваиваются, у поздней формы проблемы funarg —
+какую переменную замыкание делит со своим создателем — нет места, чтобы
+возникнуть.
+
+## 18.8 Okkama среди других языков
 
 | | Что захватывается | Присваивание захваченному имени | Типизация |
 |---|---|---|---|
@@ -10358,7 +10751,7 @@ func @lambda#1(%0: int, %1: int) -> int [lambda 1] {
 строже их всех: у значения-действия ровно объявленная сигнатура, и ничто не
 превращает его в роль или в более широкий функциональный тип.
 
-## 18.7 Ограничения
+## 18.9 Ограничения
 
 - **Нет рекурсии по имени.** Книга говорит, что `let`, связанный с анонимным
   действием, может вызвать себя по этому имени; компилятор отвергает такой
@@ -10366,17 +10759,23 @@ func @lambda#1(%0: int, %1: int) -> int [lambda 1] {
   действий: у них есть хвостовые вызовы самих себя в постоянном стеке и
   проверка компилятора на рекурсию, которая не может закончиться.
 - **Перепривязка захваченного имени внутри действия не отвергается** (#321).
+- **Наследник, захваченный замыканием, никогда не считается
+  использованным** (#322); прочитай его снаружи и захвати значение.
+- **Равенство только по идентичности**, и ключом словаря значение-действие
+  не бывает.
 - **Только позиционные вызовы**, ровно с объявленным числом аргументов; нет
   вариативных анонимных параметров и значений по умолчанию.
 - **Нет каррирования и частичного применения.** `make_adder` приходится
   писать явно.
 - **Нет асинхронных анонимных действий.** Действие, которое ждёт, должно
-  быть именованным `async`-действием.
+  быть именованным `async`-действием и передаваться объектом, который делает
+  роль; сообщение анализатора на `async () is …` пока этого не говорит
+  (#323).
 - **Нет `any`, нативного ABI и превращения в роль.**
 - **Один вызов помощника на вызов замыкания в ядре Sparrow**, около десяти
   наносекунд.
 
-## 18.8 Чего стоит такой дизайн
+## 18.10 Чего стоит такой дизайн
 
 Явные сигнатуры делают короткие замыкания длиннее, чем в языках, которые их
 выводят: `(value is int) is int { value * 2; }` там, где Kotlin пишет
@@ -10415,6 +10814,7 @@ func @lambda#1(%0: int, %1: int) -> int [lambda 1] {
 - <a id="ref-canning1989"></a>Peter Canning, William Cook, Walter Hill, Walter Olthoff, John C. Mitchell (1989). F-Bounded Polymorphism for Object-Oriented Programming. In *Proceedings of FPCA 1989*: 273–280. ACM. https://doi.org/10.1145/99370.99392
 - <a id="ref-cardelli1985"></a>Luca Cardelli, Peter Wegner (1985). On Understanding Types, Data Abstraction, and Polymorphism. *ACM Computing Surveys* 17(4): 471–523. https://doi.org/10.1145/6041.6042
 - <a id="ref-jep421"></a>Brent Christian (2021). JEP 421: Deprecate Finalization for Removal. OpenJDK. https://openjdk.org/jeps/421
+- <a id="ref-church1936"></a>Alonzo Church (1936). An Unsolvable Problem of Elementary Number Theory. *American Journal of Mathematics* 58(2): 345–363. https://doi.org/10.2307/2371045
 - <a id="ref-claessen2000"></a>Koen Claessen, John Hughes (2000). QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs. In *Proceedings of ICFP 2000*: 268–279. ACM. https://doi.org/10.1145/351240.351266
 - <a id="ref-cook2009"></a>William R. Cook (2009). On Understanding Data Abstraction, Revisited. In *Proceedings of OOPSLA 2009*, *ACM SIGPLAN Notices* 44(10): 557–572. https://doi.org/10.1145/1640089.1640133
 - <a id="ref-cytron1991"></a>Ron Cytron, Jeanne Ferrante, Barry K. Rosen, Mark N. Wegman, F. Kenneth Zadeck (1991). Efficiently Computing Static Single Assignment Form and the Control Dependence Graph. *ACM TOPLAS* 13(4): 451–490. https://doi.org/10.1145/115372.115320
@@ -10428,6 +10828,7 @@ func @lambda#1(%0: int, %1: int) -> int [lambda 1] {
 - <a id="ref-gabriel1991"></a>Richard P. Gabriel (1991). The Rise of "Worse is Better". In *Lisp: Good News, Bad News, How to Win Big*. https://www.dreamsongs.com/RiseOfWorseIsBetter.html
 - <a id="ref-gamma1994"></a>Erich Gamma, Richard Helm, Ralph Johnson, John Vlissides (1994). *Design Patterns: Elements of Reusable Object-Oriented Software*. Addison-Wesley.
 - <a id="ref-gospec"></a>The Go Authors (2026). *The Go Programming Language Specification*, language version go1.27 (26 May 2026). https://go.dev/ref/spec
+- <a id="ref-goldberg1983"></a>Adele Goldberg, David Robson (1983). *Smalltalk-80: The Language and Its Implementation*. Addison-Wesley.
 - <a id="ref-goldberg1991"></a>David Goldberg (1991). What Every Computer Scientist Should Know About Floating-Point Arithmetic. *ACM Computing Surveys* 23(1): 5–48. https://doi.org/10.1145/103162.103163
 - <a id="ref-goodenough1975"></a>John B. Goodenough (1975). Exception Handling: Issues and a Proposed Notation. *Communications of the ACM* 18(12): 683–696. https://doi.org/10.1145/361227.361230
 - <a id="ref-gosling2023"></a>James Gosling, Bill Joy, Guy Steele, Gilad Bracha, Alex Buckley, Daniel Smith, Gavin Bierman (2023). *The Java Language Specification, Java SE 21 Edition*. Oracle. https://docs.oracle.com/javase/specs/jls/se21/html/
@@ -10471,6 +10872,7 @@ func @lambda#1(%0: int, %1: int) -> int [lambda 1] {
 - <a id="ref-milner1978"></a>Robin Milner (1978). A Theory of Type Polymorphism in Programming. *Journal of Computer and System Sciences* 17(3): 348–375. https://doi.org/10.1016/0022-0000(78)90014-4
 - <a id="ref-milner1997"></a>Robin Milner, Mads Tofte, Robert Harper, David MacQueen (1997). *The Definition of Standard ML (Revised)*. MIT Press.
 - <a id="ref-moseley2006"></a>Ben Moseley, Peter Marks (2006). Out of the Tar Pit. Software Practice Advancement (SPA) 2006. https://curtclifton.net/papers/MoseleyMarks06a.pdf
+- <a id="ref-moses1970"></a>Joel Moses (1970). The Function of FUNCTION in LISP, or Why the FUNARG Problem Should Be Called the Environment Problem. *ACM SIGSAM Bulletin* 15: 13–27. https://doi.org/10.1145/1093410.1093411
 - <a id="ref-nygaard1978"></a>Kristen Nygaard, Ole-Johan Dahl (1978). The Development of the SIMULA Languages. *ACM SIGPLAN Notices* 13(8): 245–272 (HOPL I). https://doi.org/10.1145/960118.808391
 - <a id="ref-okasaki1998"></a>Chris Okasaki (1998). *Purely Functional Data Structures*. Cambridge University Press. https://doi.org/10.1017/CBO9780511530104
 - <a id="ref-ousterhout2018"></a>John Ousterhout (2018). *A Philosophy of Software Design*. Yaknyam Press.
@@ -10484,6 +10886,7 @@ func @lambda#1(%0: int, %1: int) -> int [lambda 1] {
 - <a id="ref-rfc3629"></a>François Yergeau (2003). *UTF-8, a Transformation Format of ISO 10646*. RFC 3629, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc3629
 - <a id="ref-rfc7396"></a>Paul Hoffman, James Snell (2014). *JSON Merge Patch*. RFC 7396, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc7396
 - <a id="ref-rfc8259"></a>Tim Bray (ed.) (2017). *The JavaScript Object Notation (JSON) Data Interchange Format*. RFC 8259, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc8259
+- <a id="ref-rice1953"></a>H. Gordon Rice (1953). Classes of Recursively Enumerable Sets and Their Decision Problems. *Transactions of the American Mathematical Society* 74(2): 358–366. https://doi.org/10.1090/S0002-9947-1953-0053041-6
 - <a id="ref-rissanen1978"></a>Jorma Rissanen (1978). Modeling by Shortest Data Description. *Automatica* 14(5): 465–471. https://doi.org/10.1016/0005-1098(78)90005-5
 - <a id="ref-ritchie1993"></a>Dennis M. Ritchie (1993). The Development of the C Language. *HOPL-II: The Second ACM SIGPLAN Conference on History of Programming Languages*: 201–208. https://doi.org/10.1145/154766.155580
 - <a id="ref-pep343"></a>Guido van Rossum, Nick Coghlan (2005). PEP 343 — The "with" Statement. Python Enhancement Proposals. https://peps.python.org/pep-0343/
