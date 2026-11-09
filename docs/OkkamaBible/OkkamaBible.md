@@ -7028,6 +7028,18 @@ The compiler answers:
 14-restricted-rejected.ok:14:11: semantic error: Role "Presentation" has no action "id"
 ```
 
+An object becomes such a reference only where the role is already the
+expected type: a typed `let`, a field, a parameter of an action or of a
+builtin (`shapes.contains(Square(side: 2))` on a `@Shape`), a result, the
+fallback of a `Maybe<Shape>` or of `find()`, and the branches of an `if`,
+`match` or choice whose value has a declared role type. Okkama never looks
+for a role two values happen to share. `shape == Square(side: 2)` is
+rejected: the operands keep their exact types, and the comparison goes
+through a role-typed binding. `if c { Rect(w: 1, h: 2); } else { Square(side: 2); }`
+with no declared type is rejected too, even though both objects do `Shape`.
+The conversion happens where the program states the contract, and nowhere
+else.
+
 There is no way back to the concrete type:
 
 ```okkama
