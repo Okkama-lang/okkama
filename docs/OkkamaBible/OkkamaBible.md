@@ -539,10 +539,11 @@ the main ones; later chapters return to each.
   constructions like `BigQuotient(left: a, right: b).value()` where a method
   would read better (issue #190 proposes exactly that).
 - **Performance of immutable updates.** A new object per change costs
-  allocations; collection updates without in-place mutation cost copies. The
-  Sparrow core makes allocation cheap and the compiler removes much of it, but
-  some idioms are quadratic today — arrays have no append, so building one
-  element by element copies it each time (issue #145). The razor removed
+  allocations; collection updates without in-place mutation cost copies.
+  Tomato, the Sparrow runtime, makes allocation cheap and the compiler
+  removes much of it, but some idioms are quadratic today — arrays have no
+  append, so building one element by element copies it each time
+  (issue #145). The razor removed
   mutation; it must not remove efficiency, and the remedy is to add the right
   *operation*, not the mutable entity.
 - **Unlearning.** Most programmers think with null, inheritance and mutable
@@ -562,14 +563,14 @@ philosophy and the history that shaped Okkama. Parts II–V teach the language
 from values to whole programs; each chapter explains a construct, shows it
 working in examples you can run, cites the research and practice it builds
 on, and ends with its limits. Part VI opens the implementation: the compiler,
-the three engines, the Sparrow core with its JIT and garbage collector, and
+the three engines, Tomato with its JIT and garbage collector, and
 the machinery that keeps it safe and fast. Part VII is about judgement —
 building real programs, comparing Okkama with other languages, and the open
 problems.
 
 Every program in the book is in `docs/OkkamaBible/examples`, and every one is
-checked: `build.py --check` runs it on the IR interpreter and on the Sparrow
-core and compares the output with the text you read. Tables of builtin
+checked: `build.py --check` runs it on the IR interpreter and on Tomato and
+compares the output with the text you read. Tables of builtin
 behaviour and of the standard library are generated from the code. If the
 book and the implementation ever disagree, the implementation is right and
 the book has a bug — please report it.
@@ -1018,7 +1019,7 @@ lists, trees and maps share most of their structure between versions, so a
 "new" version costs logarithmic work, not a full copy [[Okasaki 1998](#ref-okasaki1998)].
 
 **Cost.** Performance and vocabulary. A new object per change costs an
-allocation; the Sparrow core makes small allocations cheap, and the compiler
+allocation; Tomato makes small allocations cheap, and the compiler
 removes many, but arrays and maps without efficient persistent updates make
 some idioms quadratic today (issues #145 and #151). And every state a program
 cares about must be named and returned, which makes long chains of updates
@@ -1174,7 +1175,7 @@ default for counting and money. Mixing them is a decision the programmer
 writes down: `int(x)`, `x.float()`, `x.rat()`.
 
 **Cost.** Speed and ceremony. Exact integers need an overflow check on every
-operation (the Sparrow core makes it one branch); rationals are slower than
+operation (Tomato makes it one branch); rationals are slower than
 floats; and the explicit casts that Chapter 2's decorator needed —
 `int(amount * percent / 100)` — are characters other languages do not ask
 for. Chapter 5 measures the cost.
@@ -1343,7 +1344,7 @@ Okkama uses its type system for three jobs:
   were all rejected this way.
 - **To document intent.** A signature such as `share(people is int) is rat`
   tells a reader what goes in and what comes out without reading the body.
-- **To make the runtime fast.** The Sparrow core chooses a machine
+- **To make the runtime fast.** Tomato chooses a machine
   representation for every register from its type — a raw 64-bit integer, a
   double, a pointer the garbage collector traces — which is only safe because
   the types are checked (Chapter 25).
@@ -1680,7 +1681,7 @@ exact too: `(2).pow(100)` is `1267650600228229401496703205376`; an `int`
 cannot be raised to a negative power — that result is not an integer — while
 `rat.pow` takes one and inverts (issue #228).
 
-**Cost.** Each integer operation must check for overflow. On the Sparrow core
+**Cost.** Each integer operation must check for overflow. On Tomato
 this is one compare-and-branch after the machine instruction, taken almost
 never; Figure 5.1 shows that integer-heavy code is still several times faster
 than in the dynamic languages Okkama is usually compared with. Where results
@@ -1832,18 +1833,18 @@ invents digits.
 
 Figure 5.1 compares three numeric benchmarks of the Okkama benchmark suite —
 integer arithmetic, floating-point arithmetic and big-integer arithmetic — on
-the Sparrow core, on the JVM backend, and in Python, Ruby and Perl, measured
+Tomato, on the JVM backend, and in Python, Ruby and Perl, measured
 for the 0.4.0 release.
 
 ![Figure 5.1. Wall-clock time of three numeric benchmarks (logarithmic scale). Data: data/benchmarks-0.4.0.json.](figures/numbers-cost.svg)
 
 *Figure 5.1. Wall-clock time of three numeric benchmarks (logarithmic scale). Data: data/benchmarks-0.4.0.json.*
 
-On the Sparrow core, exact integer arithmetic takes 0.043 s where Python
+On Tomato, exact integer arithmetic takes 0.043 s where Python
 takes 0.52 s and Ruby 0.19 s: the overflow check costs little next to
 dynamic dispatch. Floating point is fastest (0.026 s), as expected of one
 machine instruction per operation. Big integers cost what big integers cost —
-0.23 s on the core against 0.36 s in Python and 0.40 s in Ruby, which use
+0.23 s on Tomato against 0.36 s in Python and 0.40 s in Ruby, which use
 mature C libraries; Perl's pure-Perl big integers take 24 s. The lesson of the
 figure is not that Okkama is the fastest — it is not, against C or Rust — but
 that making the default numbers exact did not make them slow.
@@ -2146,14 +2147,14 @@ things — one is a number with a name, the other a sequence.
 
 Code-point indexing has a cost that byte indexing does not: finding the 1000th
 code point of a UTF-8 string means walking the first 999, because code points
-have different byte lengths. The Sparrow core keeps a fast path — a string
+have different byte lengths. Tomato keeps a fast path — a string
 known to be ASCII has one byte per code point, so `length()` and `slice()` are
 constant-time — and walks otherwise.
 
 The walk is cheap once and expensive in a loop. A program that visits every
 character of a string with `slice(i, i + 1)` walked from the start at each
 visit, so its total cost was quadratic in the length of non-ASCII text.
-Figure 6.1 measures that program on the Sparrow core before and after the
+Figure 6.1 measures that program on Tomato before and after the
 fix.
 
 ![Figure 6.1. Visiting each Cyrillic character with slice(i, i + 1): quadratic before issue #52, linear after it. Data: data/slice-cost.json.](figures/slice-cost.svg)
@@ -3307,7 +3308,7 @@ legal and unpredictable. Java fixed the order as left to right [[Gosling 2023](#
 and Okkama does the same.
 
 Okkama has a second reason as well. Three engines run the same program — the
-IR interpreter, the JVM and the Sparrow core — and the conformance suite
+IR interpreter, the JVM and Tomato — and the conformance suite
 compares their outputs byte for byte. With an unspecified order, the expected
 answer for a test would be a set of outputs instead of one.
 
@@ -4005,7 +4006,7 @@ origin and stack. This happens whether or not the new error mentions the old
 one, so a `catch` that throws a less detailed error does not lose the
 evidence. It also holds after an `await`. The link is diagnostic: the
 program cannot read it, but the report of an uncaught failure prints it. On
-the Sparrow core:
+Tomato:
 
 ```text
 OrderError: OrderError.failed(7)
@@ -4378,7 +4379,7 @@ Each engine carries the failure along those edges in its own way.
 
 - **The IR engine** interprets the blocks. A failure is the error branch of
   a Rust result, which travels up through the interpreter's frames.
-- **The Sparrow core** compiles to machine code. A failing helper sets the
+- **Tomato** compiles to machine code. A failing helper sets the
   `status` and `failure` fields of the run's context, and every caller
   checks `status` after each call or helper and branches to its landing
   block. A failure thus crosses machine frames without Rust unwinding and
@@ -4391,7 +4392,7 @@ Each engine carries the failure along those edges in its own way.
   maps those numbers back to files, lines and columns, so the uncaught
   report shows the Okkama stack and never Java frames. Remembering the stack
   is the price of a throw: a loop that throws 500 000 failures twelve calls
-  deep takes 0.48 s instead of 0.27 s, the same as the Sparrow core.
+  deep takes 0.48 s instead of 0.27 s, the same as Tomato.
   Regions close in Java `catch` blocks.
 
 The conformance suite runs the same programs on all three and requires the
@@ -4643,7 +4644,7 @@ an `AutoCloseable` at the end of a block.
 
 Okkama never ties a resource to the collector. When a `destroy` runs is a
 property of the program text, the same on every engine and for every heap
-size. The Sparrow core has a precise, non-moving collector, the IR engine
+size. Tomato has a precise, non-moving collector, the IR engine
 counts references, and the JVM has its own collector. All three run the
 same `destroy`s in the same order.
 
@@ -5277,7 +5278,7 @@ container. A remembered container is skipped until an identity at least as
 old becomes free again, which happens when a scope returns it. Then all
 the summaries are dropped. On the benchmark built for this
 (`11-ownership`: 100 000 records in an array and a map, 300 rounds), the
-change made the Sparrow core 85% faster, the IR engine 86% and the JVM 75%.
+change made Tomato 85% faster, the IR engine 86% and the JVM 75%.
 
 The lesson for program design is modest. Ownership costs nothing for plain
 data. Non-plain data costs a walk the first time a structure is seen and
@@ -6013,7 +6014,7 @@ reads it with `obj.pending`. Objects whose constructor never hands out
 never written after `obj.new`. An `undef` field bound later is looked up in
 the side part. Most objects never allocate one.
 
-**The Sparrow core** keeps an object in its own non-moving heap. The object
+**Tomato** keeps an object in its own non-moving heap. The object
 is one header word followed by one 8-byte word per field. The header holds
 the kind (`OBJECT`), a mark bit for the collector, a few flags, and the
 object's descriptor number in its upper 32 bits. Each field word has a
@@ -6797,7 +6798,7 @@ the `Atomic` changes.
 
 A successor is a shallow copy. `obj.next` allocates an object of the same
 size and copies every field. Fields that hold other objects copy the
-reference, not the object. On the Sparrow core the JIT unrolls the copy
+reference, not the object. On Tomato the JIT unrolls the copy
 into one store per word, the header included. Unchanged words are loaded
 from the receiver; staged words come straight from registers. For `Tab`,
 with four fields, `ordered` is an allocation, three loads and five
@@ -7554,7 +7555,7 @@ The engines differ in how they find that function:
 
 - **The IR engine** reads the receiver's declaration and looks up its
   witness for the role on each call.
-- **The Sparrow core** compiles `role.wrap` to nothing: a role reference is
+- **Tomato** compiles `role.wrap` to nothing: a role reference is
   the same pointer. `call.role` loads the object's header, shifts out the
   descriptor number, and indexes a table built once per role slot. The
   table holds one function per object type. Then it calls that function.
@@ -8646,8 +8647,8 @@ func @Probe.code(%0: Probe, %1: Status) -> int [method Probe] {
 
 The source was `match s { case Status.ready { 1; } case Status.failed,
 Status.done { 2; } }`. The last case is not tested at all: the match is
-exhaustive, so whatever is not `ready` must be `failed` or `done`. On the
-Sparrow core an enum value is an immediate 64-bit word, with the enum's number
+exhaustive, so whatever is not `ready` must be `failed` or `done`. On
+Tomato an enum value is an immediate 64-bit word, with the enum's number
 in the high half and the case's in the low half. Building one allocates
 nothing, and comparing two compares two words. On the JVM each case is a
 singleton object of the runtime class `okkama.rt.Case`, held in a static field
@@ -8718,7 +8719,7 @@ func @Probe.sum(%0: Probe, %1: $variant_Reading_0) -> int [method Probe] {
 active. After a `match` has tested the tag the trap cannot fire, and the
 check is one comparison.
 
-Each engine keeps a case as one of its own objects. On the Sparrow core the
+Each engine keeps a case as one of its own objects. On Tomato the
 cases of a variant get consecutive object descriptors, so `variant.tag` is
 the descriptor in the object's header minus that of the first case: a load,
 a shift and a subtraction, with no field for the tag. The IR engine finds
@@ -8740,18 +8741,18 @@ a jar built beforehand, so its time includes the start of the JVM (about
 
 | | payload-free enum | object with two fields | `Reading` | `Wide` |
 |---|---:|---:|---:|---:|
-| Sparrow core, before #290 | 0.44 s | 0.73 s | 2.41 s | 12.64 s |
-| Sparrow core, 0.4.2 | 0.41 s | 0.73 s | 0.69 s | 0.87 s |
+| Tomato, before #290 | 0.44 s | 0.73 s | 2.41 s | 12.64 s |
+| Tomato, 0.4.2 | 0.41 s | 0.73 s | 0.69 s | 0.87 s |
 | IR engine, before #290 | 1.71 s | 2.25 s | 5.59 s | 12.50 s |
 | IR engine, 0.4.2 | 1.59 s | 2.35 s | 2.52 s | 2.53 s |
 | JVM, before #290 | 0.40 s | 0.40 s | 0.74 s | 0.98 s |
 | JVM, 0.4.2 | 0.41 s | 0.40 s | 0.52 s | 0.57 s |
 
 A variant now costs about what an object with the same data costs, on every
-engine. On the core it is even a little cheaper, because the loop over
+engine. On Tomato it is even a little cheaper, because the loop over
 objects also calls `sum()`. The old cost grew with the fields of all cases
 together: `Wide` built 26 arrays for every value, and ten million values on
-the core allocated 260 million arrays and 117 MB. Now they allocate no array
+Tomato allocated 260 million arrays and 117 MB. Now they allocate no array
 and 22 MB. Nothing a program can observe changed. Equality, `text()`,
 catching an error enum and the report of an uncaught one behave as before,
 and the conformance suite kept its expected outputs.
@@ -8827,7 +8828,7 @@ In return:
 - a forgotten case is a compile error, not a run-time surprise;
 - a value cannot be read through the wrong case;
 - equality is exact, and two enums can never be compared by accident;
-- a payload-free enum costs no allocation on the core and a pointer
+- a payload-free enum costs no allocation on Tomato and a pointer
   comparison on the JVM.
 
 # Chapter 17. Generics
@@ -9436,7 +9437,7 @@ func @Box<string>.get(%0: Box<string>) -> str [method Box<string>] {
 ```
 
 No `T` survives. `Box<int>.get` is exactly the function that a hand-written
-`IntBox.get` would be. The IR engine, the Sparrow core and the JVM back end
+`IntBox.get` would be. The IR engine, Tomato and the JVM back end
 receive only concrete objects and concrete functions. On the JVM each
 specialization becomes its own class (`box$Box$int$.class` and
 `box$Box$string$.class` in the jar) whose field has its exact type, a
@@ -9601,12 +9602,12 @@ emits it as one:
 %12: int = call.role %11, Shape.area()
 ```
 
-`role.wrap` costs nothing on the Sparrow core and the JVM, and `call.role` is a
+`role.wrap` costs nothing on Tomato and the JVM, and `call.role` is a
 lookup in a table per role slot followed by an indirect call (Section 14.7).
 Measured on a loop of ten million `area()` calls (best of five on an Apple M2
 Max, including compilation), `Total<Square>` and a `Total<Shape>` over a mix
-of squares and strips take the same time: 0.375 s and 0.378 s on the Sparrow
-core, and 1.21 s and 1.18 s for a million calls on the IR engine. What a
+of squares and strips take the same time: 0.375 s and 0.378 s on Tomato,
+and 1.21 s and 1.18 s for a million calls on the IR engine. What a
 specialization changes is the data and what flows out: a `Total<Square>`
 tells its caller that it holds squares, and a `Box<float>` keeps its field as
 the raw bits of a double, where a field of type `any` would hold a box.
@@ -10076,14 +10077,11 @@ question does not arise.
 ### Captured successors
 
 The result of a successor action (Chapter 13) must be used: a binding to it
-that can leave its scope unused is an error. The Book carries the rule
-through closures. Creating a closure that captures a successor does not use
-it, but invoking, returning, passing or storing the closure does.
-
-The compiler does not follow the successor into the closure yet. Its check
-of successor use does not look inside anonymous actions, so a successor
-read only inside a closure is never counted as used, whatever happens to the
-closure afterwards (#322):
+that can leave its scope unused is an error. The rule follows the successor
+into closures. A closure carries the obligation of each captured successor
+that its body uses on every normal path. Creating the closure, or binding it
+to a name, does not use the successor; calling the closure does, and
+returning it, passing it or storing it hands the obligation on with it:
 
 ```okkama
 module bible/closure_successor v1.0.0;
@@ -10100,7 +10098,39 @@ object Counter {
 main() is int {
     let later = Counter(count: 1).bumped();
     let show = () is int { later.count(); };
-    Stdout().writeln(show().string());
+    let alias = show;
+    // Calling the closure uses the successor it captured.
+    Stdout().writeln(alias().string());
+    0;
+}
+```
+
+Output:
+
+```text
+2
+```
+
+`alias` and `show` are one closure, so one call through either name uses
+`later`. A closure that is never called, returned, passed or stored keeps
+the obligation, and the error names the closure that holds it:
+
+```okkama
+module bible/closure_successor_rejected v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Counter {
+    has count is int;
+    Counter(:count);
+    count() is int { count; }
+    bumped() is ^Counter { ^count = count + 1; }
+}
+
+main() is int {
+    let later = Counter(count: 1).bumped();
+    let show = () is int { later.count(); };
+    Stdout().writeln("made, never called");
     0;
 }
 ```
@@ -10108,15 +10138,22 @@ main() is int {
 The compiler answers:
 
 ```text
-18-successor-rejected.ok:12:1: semantic error: Successor action result must be used; binding "later" can leave scope without consumption
+18-successor-rejected.ok:12:1: semantic error: Successor action result must be used; closure "show" captures it and can leave scope without being called, returned, passed or stored
 ```
 
-`show()` is called, and its result is printed, yet `later` is reported as
-unused. Until the check is fixed, read the successor outside the closure and
-capture what was read: `let count = later.count();` and then
-`() is int { count; }`. That is accepted, and it is often the clearer
-program anyway, since the closure then holds the number it needs and not the
-object.
+Two refinements keep the rule honest. A body that uses the successor on one
+branch only does not carry it, since a call might not use it; the successor
+must then be used elsewhere. And handing a closure on is a transfer, not a
+call: like a successor passed as an argument, it moves the responsibility
+without proving that the receiver ever calls it. Until 0.4.2 the compiler
+did not look inside closures at all, so even a called closure left its
+successor unused (#322). Bound actions, `later.count` without the call, do
+not follow the rule yet: they use their receiver as soon as they are created
+(#324).
+
+When the closure needs only what the successor knows, capturing that is
+still the simpler program: `let count = later.count();` and then
+`() is int { count; }` holds a number, not an object with an obligation.
 
 ## 18.3 Types are exact
 
@@ -10369,8 +10406,8 @@ in Okkama a closure is one more kind of reference.
 ### Behaviour that waits needs an object
 
 An anonymous action is always synchronous. It cannot be declared `async`
-(the parser does not yet say so clearly, #323), and an `await` inside it is
-rejected even when the closure is created inside an async action:
+(since 0.4.2 the parser says so at the `async`, #323), and an `await` inside
+it is rejected even when the closure is created inside an async action:
 
 ```okkama
 module bible/closure_await_rejected v1.0.0;
@@ -10446,7 +10483,7 @@ The restriction keeps every suspension point in one kind of place: an
 (Chapter 20). A type such as `(int) is int` promises that calling the value
 does not suspend. Kotlin draws the same line in its types with `suspend`
 function types, and JavaScript with `async` functions, but both also allow
-anonymous functions that suspend; Okkama, for now, does not.
+anonymous functions that suspend; Okkama does not.
 
 ## 18.6 How closures run
 
@@ -10484,7 +10521,7 @@ function and those first arguments, packed when the closure is created.
 
 - **The IR engine** stores a closure as a reference-counted value holding
   the function and the captured values.
-- **The Sparrow core** allocates a heap object laid out like the function's
+- **Tomato** allocates a heap object laid out like the function's
   parameters, whose first words hold the captured values, so the GC knows
   which words are references. Creating a closure and calling one both go through a
   runtime helper: the arguments are spilled to memory and the helper
@@ -10499,11 +10536,11 @@ action of an object that holds the same number compare as follows:
 
 | | object action | closure |
 |---|---:|---:|
-| Sparrow core | 0.31 s | 0.41 s |
+| Tomato | 0.31 s | 0.41 s |
 | IR engine (1 million calls) | 0.97 s | 0.93 s |
 | JVM | 0.59 s | 0.49 s |
 
-On the core the helper costs about ten nanoseconds per call over a direct
+On Tomato the helper costs about ten nanoseconds per call over a direct
 call. On the JVM the closure is slightly faster: the class of each anonymous
 action has one implementation of `call`, which the JIT inlines.
 
@@ -10519,7 +10556,7 @@ value was assumed to own one and paid for region tracking. A program as
 small as `benchmarks/09-closures` with `os/environment` imported ran 6×
 slower on the JVM than without that import (#292). Since 0.4.1 a closure
 that captures only plain values is treated as plain, and that benchmark runs
-at the same speed with or without the import (IR 1.02 s, core 0.10 s, JVM
+at the same speed with or without the import (IR 1.02 s, Tomato 0.10 s, JVM
 0.22 s).
 
 ### In a failure report
@@ -10628,18 +10665,17 @@ signature, and nothing converts it to a role or to a wider function type.
   constant-stack self tail calls and the compiler's check for recursion that
   cannot end.
 - **Rebinding a captured name inside the action is not rejected** (#321).
-- **A successor captured by a closure never counts as used** (#322); read
-  it outside and capture the value.
+- **A bound action uses a successor receiver when it is created** (#324),
+  not when it is called, unlike an anonymous action.
 - **Equality by identity only**, and an action value is never a map key.
 - **Positional calls only**, exactly the declared number of arguments; no
   variadic anonymous parameters, no defaults.
 - **No currying or partial application.** `make_adder` has to be written
   out.
 - **No async anonymous actions.** An action that awaits must be a named
-  `async` action, passed as an object that does a role; the parser's message
-  for `async () is …` does not say this yet (#323).
+  `async` action, passed as an object that does a role.
 - **No `any`, no native ABI, no conversion to a role.**
-- **One helper call per closure call on the Sparrow core**, about ten
+- **One helper call per closure call on Tomato**, about ten
   nanoseconds.
 
 ## 18.10 What this design costs

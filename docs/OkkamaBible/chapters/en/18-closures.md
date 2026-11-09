@@ -141,23 +141,33 @@ question does not arise.
 ### Captured successors
 
 The result of a successor action (Chapter 13) must be used: a binding to it
-that can leave its scope unused is an error. The Book carries the rule
-through closures. Creating a closure that captures a successor does not use
-it, but invoking, returning, passing or storing the closure does.
+that can leave its scope unused is an error. The rule follows the successor
+into closures. A closure carries the obligation of each captured successor
+that its body uses on every normal path. Creating the closure, or binding it
+to a name, does not use the successor; calling the closure does, and
+returning it, passing it or storing it hands the obligation on with it:
 
-The compiler does not follow the successor into the closure yet. Its check
-of successor use does not look inside anonymous actions, so a successor
-read only inside a closure is never counted as used, whatever happens to the
-closure afterwards (#322):
+{{example:18-successor}}
+
+`alias` and `show` are one closure, so one call through either name uses
+`later`. A closure that is never called, returned, passed or stored keeps
+the obligation, and the error names the closure that holds it:
 
 {{example:18-successor-rejected}}
 
-`show()` is called, and its result is printed, yet `later` is reported as
-unused. Until the check is fixed, read the successor outside the closure and
-capture what was read: `let count = later.count();` and then
-`() is int { count; }`. That is accepted, and it is often the clearer
-program anyway, since the closure then holds the number it needs and not the
-object.
+Two refinements keep the rule honest. A body that uses the successor on one
+branch only does not carry it, since a call might not use it; the successor
+must then be used elsewhere. And handing a closure on is a transfer, not a
+call: like a successor passed as an argument, it moves the responsibility
+without proving that the receiver ever calls it. Until 0.4.2 the compiler
+did not look inside closures at all, so even a called closure left its
+successor unused (#322). Bound actions, `later.count` without the call, do
+not follow the rule yet: they use their receiver as soon as they are created
+(#324).
+
+When the closure needs only what the successor knows, capturing that is
+still the simpler program: `let count = later.count();` and then
+`() is int { count; }` holds a number, not an object with an obligation.
 
 ## 18.3 Types are exact
 
@@ -284,8 +294,8 @@ in Okkama a closure is one more kind of reference.
 ### Behaviour that waits needs an object
 
 An anonymous action is always synchronous. It cannot be declared `async`
-(the parser does not yet say so clearly, #323), and an `await` inside it is
-rejected even when the closure is created inside an async action:
+(since 0.4.2 the parser says so at the `async`, #323), and an `await` inside
+it is rejected even when the closure is created inside an async action:
 
 {{example:18-await-rejected}}
 
@@ -308,7 +318,7 @@ The restriction keeps every suspension point in one kind of place: an
 (Chapter 20). A type such as `(int) is int` promises that calling the value
 does not suspend. Kotlin draws the same line in its types with `suspend`
 function types, and JavaScript with `async` functions, but both also allow
-anonymous functions that suspend; Okkama, for now, does not.
+anonymous functions that suspend; Okkama does not.
 
 ## 18.6 How closures run
 
@@ -346,7 +356,7 @@ function and those first arguments, packed when the closure is created.
 
 - **The IR engine** stores a closure as a reference-counted value holding
   the function and the captured values.
-- **The Sparrow core** allocates a heap object laid out like the function's
+- **Tomato** allocates a heap object laid out like the function's
   parameters, whose first words hold the captured values, so the GC knows
   which words are references. Creating a closure and calling one both go through a
   runtime helper: the arguments are spilled to memory and the helper
@@ -361,11 +371,11 @@ action of an object that holds the same number compare as follows:
 
 | | object action | closure |
 |---|---:|---:|
-| Sparrow core | 0.31 s | 0.41 s |
+| Tomato | 0.31 s | 0.41 s |
 | IR engine (1 million calls) | 0.97 s | 0.93 s |
 | JVM | 0.59 s | 0.49 s |
 
-On the core the helper costs about ten nanoseconds per call over a direct
+On Tomato the helper costs about ten nanoseconds per call over a direct
 call. On the JVM the closure is slightly faster: the class of each anonymous
 action has one implementation of `call`, which the JIT inlines.
 
@@ -381,7 +391,7 @@ value was assumed to own one and paid for region tracking. A program as
 small as `benchmarks/09-closures` with `os/environment` imported ran 6×
 slower on the JVM than without that import (#292). Since 0.4.1 a closure
 that captures only plain values is treated as plain, and that benchmark runs
-at the same speed with or without the import (IR 1.02 s, core 0.10 s, JVM
+at the same speed with or without the import (IR 1.02 s, Tomato 0.10 s, JVM
 0.22 s).
 
 ### In a failure report
@@ -490,18 +500,17 @@ signature, and nothing converts it to a role or to a wider function type.
   constant-stack self tail calls and the compiler's check for recursion that
   cannot end.
 - **Rebinding a captured name inside the action is not rejected** (#321).
-- **A successor captured by a closure never counts as used** (#322); read
-  it outside and capture the value.
+- **A bound action uses a successor receiver when it is created** (#324),
+  not when it is called, unlike an anonymous action.
 - **Equality by identity only**, and an action value is never a map key.
 - **Positional calls only**, exactly the declared number of arguments; no
   variadic anonymous parameters, no defaults.
 - **No currying or partial application.** `make_adder` has to be written
   out.
 - **No async anonymous actions.** An action that awaits must be a named
-  `async` action, passed as an object that does a role; the parser's message
-  for `async () is …` does not say this yet (#323).
+  `async` action, passed as an object that does a role.
 - **No `any`, no native ABI, no conversion to a role.**
-- **One helper call per closure call on the Sparrow core**, about ten
+- **One helper call per closure call on Tomato**, about ten
   nanoseconds.
 
 ## 18.10 What this design costs

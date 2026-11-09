@@ -1,4 +1,4 @@
-module bible/closure_successor v1.0.0;
+module bible/closure_successor_rejected v1.0.0;
 
 import "io/stdout" take Stdout;
 
@@ -12,6 +12,6 @@ object Counter {
 main() is int {
     let later = Counter(count: 1).bumped();
     let show = () is int { later.count(); };
-    Stdout().writeln(show().string());
+    Stdout().writeln("made, never called");
     0;
 }
