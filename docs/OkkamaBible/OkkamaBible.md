@@ -10551,12 +10551,12 @@ action has one implementation of `call`, which the JIT inlines.
 
 The micro-benchmarks of 0.4.2 (#244) isolate the creation. Net of an empty
 loop, median of five runs on the same machine, creating a closure that
-captures a loop variable and calling it once costs 79 ns on Tomato, 482 ns on
-the IR engine and 11 ns on the JVM. Constructing an object with two fields
-costs 24, 931 and 10 ns. On the JVM a closure and a small object cost the
-same; on Tomato the closure costs three times as much, because creating and
-calling it both go through the runtime helper, while an object is allocated
-inline in the compiled code.
+captures a loop variable and calling it once costs 17 ns on Tomato, 155 ns on
+the IR engine and 6 ns on the JVM. Constructing an object with two fields
+costs 4, 271 and 9 ns. On the JVM a closure costs no more than a small
+object; on Tomato it costs four times as much, because creating and calling
+it both go through the runtime helper, while an object is allocated inline
+in the compiled code.
 
 ### Closures and resources
 
