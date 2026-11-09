@@ -1,1 +1,1 @@
-18-successor-rejected.ok:12:1: semantic error: Successor action result must be used; closure "show" captures it and can leave scope without being called, returned, passed or stored
+18-successor-rejected.ok:12:1: semantic error: Successor action result must be used; "later" is carried by action value "show", which can leave scope without being called, returned, passed or stored

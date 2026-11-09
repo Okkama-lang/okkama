@@ -119,9 +119,12 @@ action. The equivalence is old: Landin introduced closures as a pair of a
 function and the environment it was created in [@landin1964], and Scheme
 made them the basis of a whole language [@sussman1975].
 
-The Book also says that rebinding a captured name *inside* the action is an
-error. The compiler does not enforce it yet: such a rebind changes a copy
-that lives for one call (#321).
+Rebinding a captured name *inside* the action is an error: `Cannot rebind
+captured variable "counter" inside an anonymous action`. Until 0.4.2 the
+compiler accepted it, and the rebind changed a copy that lived for one call
+(#321). The action's own parameters and locals, including one that shadows a
+captured name, stay rebindable; state that must outlive a call goes back to
+the caller as a successor.
 
 ### Closures made in a loop
 
@@ -151,7 +154,8 @@ returning it, passing it or storing it hands the obligation on with it:
 
 `alias` and `show` are one closure, so one call through either name uses
 `later`. A closure that is never called, returned, passed or stored keeps
-the obligation, and the error names the closure that holds it:
+the obligation, and the error names the successor and the action value that
+carries it:
 
 {{example:18-successor-rejected}}
 
@@ -161,9 +165,10 @@ must then be used elsewhere. And handing a closure on is a transfer, not a
 call: like a successor passed as an argument, it moves the responsibility
 without proving that the receiver ever calls it. Until 0.4.2 the compiler
 did not look inside closures at all, so even a called closure left its
-successor unused (#322). Bound actions, `later.count` without the call, do
-not follow the rule yet: they use their receiver as soon as they are created
-(#324).
+successor unused (#322). A bound action, `later.count` without the call,
+follows the same rule since 0.4.2: it carries its receiver's obligation until
+it is called or handed on, while a direct call `later.count()` uses the
+receiver at once (#324).
 
 When the closure needs only what the successor knows, capturing that is
 still the simpler program: `let count = later.count();` and then
@@ -485,7 +490,7 @@ room to arise.
 | Rust | by reference, by mutable reference, or by value (`move`) | through `FnMut`, checked by the borrow checker | `Fn`, `FnMut`, `FnOnce` traits |
 | Haskell | values (everything is immutable) | not applicable | inferred function types |
 | OCaml | values; `ref` cells are values too | through a `ref` cell | inferred function types |
-| Okkama | values of immutable locals, and `self` | not intended (#321) | declared, exact, no variance |
+| Okkama | values of immutable locals, and `self` | rejected (#321) | declared, exact, no variance |
 
 Okkama sits with Haskell and OCaml on what is captured, a value and never a
 variable, and with Java on the declaration being explicit. It is stricter
@@ -494,14 +499,12 @@ signature, and nothing converts it to a role or to a wider function type.
 
 ## 18.9 Limits
 
-- **No recursion by name.** The Book says a `let` bound to an anonymous
-  action can call itself by that name; the compiler rejects it as an
-  undefined action (#318). Recursion belongs to named actions, which get
-  constant-stack self tail calls and the compiler's check for recursion that
-  cannot end.
-- **Rebinding a captured name inside the action is not rejected** (#321).
-- **A bound action uses a successor receiver when it is created** (#324),
-  not when it is called, unlike an anonymous action.
+- **No recursion by name.** A `let` becomes visible only after its
+  initializer, so an anonymous action cannot call itself through the `let`
+  that holds it; the compiler reports an undefined action. The Book once
+  promised otherwise, and 0.4.2 settled on the rule (#318). Recursion
+  belongs to named actions, which get constant-stack self tail calls and the
+  compiler's check for recursion that cannot end.
 - **Equality by identity only**, and an action value is never a map key.
 - **Positional calls only**, exactly the declared number of arguments; no
   variadic anonymous parameters, no defaults.
