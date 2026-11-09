@@ -447,8 +447,8 @@ recursion* depends on a run-time value, so no finite set of copies covers it.
 Lowering stops at a chain of 256 requests, or at 2^18 specializations in
 total, and names the chain (H-15). Languages that compile generics to one
 shared copy accept such programs; Okkama, like Rust and C++, rejects them.
-The check currently happens only in lowering, so `okkama check` lets this
-program through and `okkama run` rejects it (#317).
+The check happens in lowering, and since 0.4.2 `okkama check` lowers the
+program too, so it reports this error like any other (#317).
 
 ### The alternatives
 
@@ -644,8 +644,7 @@ that disagree.
   specialization comes from the arguments or from a declared target.
 - **Code size grows with specializations.** Each element type of `Sorted`
   adds 23 functions (Section 17.7).
-- **Polymorphic recursion is rejected,** and `okkama check` does not report
-  it yet: the error appears only when the program is compiled (#317).
+- **Polymorphic recursion is rejected,** at compile time on every engine.
 - **Fake diagnostics** name the generated `Role$fake` object instead of the
   `fake` block the programmer wrote (#276).
 - **Role plainness is per declaration.** One implementation of `Cursor` that
