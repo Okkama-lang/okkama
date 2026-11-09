@@ -178,12 +178,19 @@ identities, not names.
   the iteration ends. A value the loop produces, through `last value` or the
   result of `map`, `reduce` and the other functional operations, moves to
   the enclosing scope.
+- **Branches are scopes.** An `if`, `match`, `try` or `catch` branch destroys
+  what it owns when it ends, its last `let` included, in reverse order. Only
+  a value the branch produces and the program uses moves out:
+  `let log = if verbose { File.create(a); } else { File.create(b); };`
+  (#308; before 0.4.2 the last `let` of a branch lived until the enclosing
+  scope ended).
 
 The conformance suite pins these rules:
 
 - `L07.ownership.alias-borrows`;
 - `L07.ownership.returned-object-survives`;
 - `L07.ownership.successor-independent`;
+- `L07.destroy.branch-scope`;
 - the region cases added with #9 and #266, among them
   `L07.ownership.reduce-builder`, whose resources are gathered by `reduce`.
 

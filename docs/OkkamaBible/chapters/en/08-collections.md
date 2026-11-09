@@ -44,8 +44,14 @@ An array remembers its element type. Once it crosses a declared boundary —
 `let names is @string = ...`, a parameter, a field — it is tagged with that
 type, and even an empty result of `slice` or `keys` keeps it. An untyped
 empty literal `[]` has no evidence of its type, so it may cross any
-compatible boundary once, and that boundary fixes its type. This is why empty
-collections sometimes need an annotation (Chapter 4).
+compatible boundary once, and that boundary fixes its type. Inside a larger
+expression its neighbours count as such evidence, at any depth and in either
+order: `[[1], []]` and `[[], [1]]` are `@@int`, `["a": [1], "b": []]` is
+`%string:@int`, and `[[1]] == [[]]` or `if c { [[]]; } else { [[2]]; }`
+type-check. Only `never` parts are filled in this way. Two concrete types
+still disagree (`[[1], ["s"]]`), and an expression that is empty all the way
+down waits for a boundary. This is why empty collections sometimes need an
+annotation (Chapter 4).
 
 ### Equality
 

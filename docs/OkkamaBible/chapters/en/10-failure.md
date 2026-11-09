@@ -253,9 +253,12 @@ The rules are short.
   and its owner's resources must not, so an error cannot hold a resource.
 - **`text()` is generated.** It spells the case the way the source would:
   `LineError.blank(2)`, `LineError.amount(2, InvalidInteger.source("sixty"))`.
-  Strings are quoted, numbers use `string()`, booleans are `true`/`false`,
-  and nested enums are written out recursively. The report of an uncaught
-  error starts with it.
+  Strings are written as Okkama string literals, escapes included: a
+  payload with a quote and a line break prints back as
+  `Ferr.text("a \"q\"\n")`, exactly as the source wrote it, so one payload
+  never reads as two arguments and the report stays on one line (#306). Numbers
+  use `string()`, booleans are `true`/`false`, and nested enums are written
+  out recursively. The report of an uncaught error starts with it.
 
 The role `Error` is built in and requires a public `text() is string`. Three
 kinds of value do it:
@@ -465,6 +468,15 @@ failure as a value, or as impossible:
   a panic, `Unexpected error: <text()>`, located at the `try!`. It says "this
   cannot fail here". When the author is wrong, the run stops with the
   original error in the report, not with a silently wrong value.
+
+`T` is the type of the operand's successful paths. A branch that throws does
+not erase it, even when a literal condition selects that branch:
+`try? (if true { throw E.a; } else { 2; }) else 7` is `7`. When no path
+succeeds, `T` comes from the `Maybe<T>` boundary or from the fallback after
+`else`, and without either the compiler asks for one. A caught error leaves
+`none`, so code after a `try?` is reachable even when its operand never
+returns normally. A `throw` ends its own path, not the expression that
+handles it (#307).
 
 Both forms see thrown errors only. Panics and runtime errors pass through
 them, and cleanup runs as for `try`. `try?` discards the error, so it is for

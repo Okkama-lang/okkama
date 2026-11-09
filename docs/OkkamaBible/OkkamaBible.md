@@ -2558,8 +2558,14 @@ An array remembers its element type. Once it crosses a declared boundary —
 `let names is @string = ...`, a parameter, a field — it is tagged with that
 type, and even an empty result of `slice` or `keys` keeps it. An untyped
 empty literal `[]` has no evidence of its type, so it may cross any
-compatible boundary once, and that boundary fixes its type. This is why empty
-collections sometimes need an annotation (Chapter 4).
+compatible boundary once, and that boundary fixes its type. Inside a larger
+expression its neighbours count as such evidence, at any depth and in either
+order: `[[1], []]` and `[[], [1]]` are `@@int`, `["a": [1], "b": []]` is
+`%string:@int`, and `[[1]] == [[]]` or `if c { [[]]; } else { [[2]]; }`
+type-check. Only `never` parts are filled in this way. Two concrete types
+still disagree (`[[1], ["s"]]`), and an expression that is empty all the way
+down waits for a boundary. This is why empty collections sometimes need an
+annotation (Chapter 4).
 
 ### Equality
 
@@ -3747,9 +3753,12 @@ The rules are short.
   and its owner's resources must not, so an error cannot hold a resource.
 - **`text()` is generated.** It spells the case the way the source would:
   `LineError.blank(2)`, `LineError.amount(2, InvalidInteger.source("sixty"))`.
-  Strings are quoted, numbers use `string()`, booleans are `true`/`false`,
-  and nested enums are written out recursively. The report of an uncaught
-  error starts with it.
+  Strings are written as Okkama string literals, escapes included: a
+  payload with a quote and a line break prints back as
+  `Ferr.text("a \"q\"\n")`, exactly as the source wrote it, so one payload
+  never reads as two arguments and the report stays on one line (#306). Numbers
+  use `string()`, booleans are `true`/`false`, and nested enums are written
+  out recursively. The report of an uncaught error starts with it.
 
 The role `Error` is built in and requires a public `text() is string`. Three
 kinds of value do it:
@@ -4062,6 +4071,15 @@ exit 1
   a panic, `Unexpected error: <text()>`, located at the `try!`. It says "this
   cannot fail here". When the author is wrong, the run stops with the
   original error in the report, not with a silently wrong value.
+
+`T` is the type of the operand's successful paths. A branch that throws does
+not erase it, even when a literal condition selects that branch:
+`try? (if true { throw E.a; } else { 2; }) else 7` is `7`. When no path
+succeeds, `T` comes from the `Maybe<T>` boundary or from the fallback after
+`else`, and without either the compiler asks for one. A caught error leaves
+`none`, so code after a `try?` is reachable even when its operand never
+returns normally. A `throw` ends its own path, not the expression that
+handles it (#307).
 
 Both forms see thrown errors only. Panics and runtime errors pass through
 them, and cleanup runs as for `try`. `try?` discards the error, so it is for
@@ -4718,12 +4736,19 @@ identities, not names.
   the iteration ends. A value the loop produces, through `last value` or the
   result of `map`, `reduce` and the other functional operations, moves to
   the enclosing scope.
+- **Branches are scopes.** An `if`, `match`, `try` or `catch` branch destroys
+  what it owns when it ends, its last `let` included, in reverse order. Only
+  a value the branch produces and the program uses moves out:
+  `let log = if verbose { File.create(a); } else { File.create(b); };`
+  (#308; before 0.4.2 the last `let` of a branch lived until the enclosing
+  scope ended).
 
 The conformance suite pins these rules:
 
 - `L07.ownership.alias-borrows`;
 - `L07.ownership.returned-object-survives`;
 - `L07.ownership.successor-independent`;
+- `L07.destroy.branch-scope`;
 - the region cases added with #9 and #266, among them
   `L07.ownership.reduce-builder`, whose resources are gathered by `reduce`.
 
