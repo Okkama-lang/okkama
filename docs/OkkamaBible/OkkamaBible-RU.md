@@ -6441,7 +6441,7 @@ main() is int {
 Ответ компилятора:
 
 ```text
-13-ambiguous-rejected.ok:10:5: semantic error: Ambiguous call of action "joined" on object "Pairing"
+13-ambiguous-rejected.ok:10:5: semantic error: Ambiguous call of action "joined" on object "Pairing" with (int, int): joined(int, any) and joined(any, int) fit equally well
 ```
 
 Сообщение называет типы аргументов и сошедшихся кандидатов, так что видно,

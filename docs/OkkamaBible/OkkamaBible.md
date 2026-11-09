@@ -6353,7 +6353,7 @@ main() is int {
 The compiler answers:
 
 ```text
-13-ambiguous-rejected.ok:10:5: semantic error: Ambiguous call of action "joined" on object "Pairing"
+13-ambiguous-rejected.ok:10:5: semantic error: Ambiguous call of action "joined" on object "Pairing" with (int, int): joined(int, any) and joined(any, int) fit equally well
 ```
 
 The message names the argument types and the candidates that tie, so the
