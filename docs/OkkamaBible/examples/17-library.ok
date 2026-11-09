@@ -1,0 +1,23 @@
+module bible/library v1.0.0;
+
+import "io/stdout" take Stdout;
+import "collections/ordering" take Sorted, SortedBy;
+
+object Job {
+    has name is string;
+    has hours is int;
+    Job(:name, :hours);
+    name() is string { name; }
+    hours() is int { hours; }
+}
+
+main() is int {
+    let out = Stdout();
+    // Sorted<T: Comparing<T>>: T = int and T = string, two specializations.
+    out.writeln(Sorted([5, 3, 8]).first().string() + " " + Sorted(["pear", "fig"]).first());
+    // SortedBy<T, K: Comparing<K>>: K comes from the key's declared result.
+    let jobs = [Job(name: "paint", hours: 6), Job(name: "wire", hours: 2), Job(name: "tile", hours: 4)];
+    let quickest = SortedBy(origin: jobs, key: (job is Job) is int { job.hours(); });
+    out.writeln(quickest.map() -> job { job.name(); }.join(" "));
+    0;
+}

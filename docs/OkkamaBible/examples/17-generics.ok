@@ -1,0 +1,40 @@
+module bible/generics v1.0.0;
+
+import "io/stdout" take Stdout;
+import "compare" take Comparing, Order;
+
+// Two type parameters; a successor with them swapped.
+object Pair<K, V> {
+    has key is K;
+    has value is V;
+    Pair(:key, :value);
+    key() is K { key; }
+    value() is V { value; }
+    swapped() is Pair<V, K> { Pair(key: value, value: key); }
+}
+
+// An algorithm is an object too: the least of its values, for any T that
+// orders itself.
+object Least<T: Comparing<T>> {
+    has first is T;
+    has rest is @T;
+    Least(first is T, rest is ...T) {
+        self.first = first;
+        self.rest = rest...;
+    }
+    value() is T {
+        rest.reduce(first) -> best, item { item.order(best) == Order.less ?? item !! best; };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let pair = Pair(key: "answer", value: 42);
+    let back = pair.swapped();
+    out.writeln(pair.key() + " = " + pair.value().string());
+    out.writeln(back.key().string() + " = " + back.value());
+    out.writeln(Least(3, 9, 1, 4).value().string());
+    out.writeln(Least("pear", "apple", "fig").value());
+    out.writeln(Least(2.5, -0.5).value().string());
+    0;
+}

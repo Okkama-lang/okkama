@@ -188,3 +188,18 @@ Updated with each chapter: `build.py --stats`.
   alternatives such as `"less" | "less_or_equal" | "greater" |
   "greater_or_equal"` are missed and must be handled before the appendix is
   written.
+- Chapter 17 (generics): 13.2 pages (EN) of its floor of 14. Written:
+  parameters on objects, roles and enums; no generic actions (algorithms
+  are objects); history (CLU, ML, GJ, .NET, Go); exact identity
+  (`Least(1, 2.0)`); inference at construction (arguments, expected type,
+  roles, several constructors, anonymous action results, no explicit
+  specialization); F-bounded role bounds; key parameters (#242);
+  specialization as identity, no variance, generic fakes; a table of
+  diagnostics; monomorphization with OIR, its code size (`Sorted` ×1..4
+  types) and polymorphic recursion (H-15, #317); erasure, reification,
+  dictionaries; parameter or role (calls through a bound stay `call.role`,
+  measured equal); a worked `Top<T>`; std generics; a comparison table;
+  limits (#276, #268, #317). To add: generics and async (`Future<T>`,
+  `Channel<T>`) with Chapter 20; a measurement of compile time against the
+  number of specializations.
+

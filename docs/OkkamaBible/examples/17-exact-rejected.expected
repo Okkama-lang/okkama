@@ -1,0 +1,1 @@
+17-exact-rejected.ok:15:17: semantic error: Generic parameter "T" for object "Least" cannot be both int and float

@@ -189,6 +189,20 @@
   - [16.7 Enums elsewhere](#167-enums-elsewhere)
   - [16.8 Limits](#168-limits)
   - [16.9 What this design costs](#169-what-this-design-costs)
+- [Chapter 17. Generics](#chapter-17-generics)
+  - [17.1 Parameters on objects, roles and enums](#171-parameters-on-objects-roles-and-enums)
+  - [17.2 One `T`, one type](#172-one-t-one-type)
+  - [17.3 Inference at construction](#173-inference-at-construction)
+  - [17.4 Bounds](#174-bounds)
+  - [17.5 Parameters used as map keys](#175-parameters-used-as-map-keys)
+  - [17.6 A specialization is a type](#176-a-specialization-is-a-type)
+  - [17.7 How generics run: one copy per specialization](#177-how-generics-run-one-copy-per-specialization)
+  - [17.8 A parameter or a role?](#178-a-parameter-or-a-role)
+  - [17.9 A worked example: the best N](#179-a-worked-example-the-best-n)
+  - [17.10 Generics in the standard library](#1710-generics-in-the-standard-library)
+  - [17.11 Okkama among other languages](#1711-okkama-among-other-languages)
+  - [17.12 Limits](#1712-limits)
+  - [17.13 What this design costs](#1713-what-this-design-costs)
 
 # Part I. The Razor
 
@@ -1449,9 +1463,10 @@ visible, and it never widens.
 
 - `let x = expression;` gives `x` the type of `expression`.
 - An array literal's element type is the type of its elements: `[1, 2, 3]`
-  is `@int`. A literal with mixed elements such as `[1, "two"]` keeps each
-  element's own type and does not silently become `@any`; only a declared
-  `@any` boundary boxes them.
+  is `@int`. A literal with mixed elements such as `[1, "two"]` has no
+  element type, and it never silently becomes `@any`: it compiles only where
+  a declared `@any` boundary expects it (`let mixed is @any = [1, "two"];`),
+  and anywhere else the compiler rejects it and names both types.
 - A generic object's type arguments are inferred from its constructor's
   arguments when they determine them; otherwise they must be written:
   `let empty is List<string> = EmptyList();`.
@@ -5942,9 +5957,12 @@ failed differently on each engine, and on Sparrow it crashed the process
 (#271). If a constructor fails after `self` escaped, the escaped object
 never completes, and every later call on it is rejected the same way.
 
-One limitation remains. If the first `self` of a constructor sits inside a
-`map` or `reduce` block, the compiler fails with an internal error (#279,
-planned for 0.4.2). Naming it first, `let me = self;`, avoids it.
+The first `self` may sit anywhere in a statement: inside a `map`,
+`filter` or `reduce` block, in a nested block or in one branch of an `if`.
+The object is built once, just before the constructor statement that holds
+that first use, so every leaf made in a loop points at the same object.
+Until 0.4.2 such a constructor crashed the compiler, and the workaround was
+to name `self` first with `let me = self;` (#279).
 
 The problem is old. Java lets `this` escape from a constructor and leaves
 the consequences to the programmer. A non-null field of an object under
@@ -8794,8 +8812,992 @@ In return:
 - a payload-free enum costs no allocation on the core and a pointer
   comparison on the JVM.
 
+# Chapter 17. Generics
+
+A box that holds an `int` and a box that holds a `string` do the same work. So
+do a sorted list of prices and a sorted list of names, a channel of jobs and a
+channel of results. Without type parameters a language makes you pick one of
+three bad options: write the same object once per type, give up the type and
+store `any`, or check every element when it comes back out. Generics are the
+fourth option. You write the object once, over a type `T`, and the compiler
+makes sure each use of it has one concrete `T`.
+
+```okkama
+module bible/generics v1.0.0;
+
+import "io/stdout" take Stdout;
+import "compare" take Comparing, Order;
+
+// Two type parameters; a successor with them swapped.
+object Pair<K, V> {
+    has key is K;
+    has value is V;
+    Pair(:key, :value);
+    key() is K { key; }
+    value() is V { value; }
+    swapped() is Pair<V, K> { Pair(key: value, value: key); }
+}
+
+// An algorithm is an object too: the least of its values, for any T that
+// orders itself.
+object Least<T: Comparing<T>> {
+    has first is T;
+    has rest is @T;
+    Least(first is T, rest is ...T) {
+        self.first = first;
+        self.rest = rest...;
+    }
+    value() is T {
+        rest.reduce(first) -> best, item { item.order(best) == Order.less ?? item !! best; };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let pair = Pair(key: "answer", value: 42);
+    let back = pair.swapped();
+    out.writeln(pair.key() + " = " + pair.value().string());
+    out.writeln(back.key().string() + " = " + back.value());
+    out.writeln(Least(3, 9, 1, 4).value().string());
+    out.writeln(Least("pear", "apple", "fig").value());
+    out.writeln(Least(2.5, -0.5).value().string());
+    0;
+}
+```
+
+Output:
+
+```text
+answer = 42
+42 = answer
+1
+apple
+-0.5
+```
+
+- `Pair<K, V>` has two type parameters. `swapped()` returns a `Pair<V, K>`, a
+  different specialization of the same declaration.
+- `Least<T: Comparing<T>>` is an algorithm written as an object. Its `T` must
+  be able to order itself, and the compiler checks that before the
+  constructor runs.
+- No call names a type. `Pair(key: "answer", value: 42)` is a
+  `Pair<string, int>` and `Least(3, 9, 1, 4)` is a `Least<int>`: the compiler
+  works out the arguments from the values.
+- `Least(2.5, -0.5)` is a third specialization, `Least<float>`. Each one is
+  compiled separately, so none of them pays for the others.
+
+This chapter covers what can be generic, the one rule that inference follows,
+bounds, parameters used as map keys, and why a specialization is a type of its
+own. It then shows what the compiler does with generic code and compares the
+result with Java, C#, Go, Rust, Haskell and OCaml.
+
+## 17.1 Parameters on objects, roles and enums
+
+Three kinds of declaration take type parameters: objects, roles and enums.
+
+```okkama
+object Box<T> {
+    has value is T;
+    Box(:value);
+    get() is T { value; }
+}
+
+role Echo<T> {
+    echo(value is T) is T;
+}
+
+enum Slot<T> = (vacant, full(item is T));
+```
+
+The parameters follow the declaration's name in angle brackets. They are type
+names, so they are capitalised, and they must be unique and differ from the
+declaration's own name. A parameter is visible everywhere inside its
+declaration: in fields, constructors (full and shorthand), actions, successor
+actions and `destroy` of an object, in the signatures and the `fake` block of a
+role, in the payloads of an enum. Outside it the parameter does not exist; a
+caller sees `Box<int>`, never `T`.
+
+A use of a generic type gives exactly as many arguments as the declaration has
+parameters, and a type without parameters takes none:
+
+```text
+Generic type "Pair" expects 2 type argument(s), got 1
+Type "Coin" is not generic and cannot accept type arguments
+```
+
+A parameter stands for one concrete type. It cannot take arguments of its own,
+so `T<int>` is not a type; Okkama has no higher-kinded parameters.
+
+The enums `Maybe<T>` and `Presence<T>` of Chapter 7 are generic enums built into
+the compiler. A program declares its own the same way, as `Slot<T>` above. A
+case without a payload does not mention `T`, so where nothing else fixes the
+type it is written with its specialization: `Slot<int>.vacant`, like
+`Maybe<Shape>.none`.
+
+### No generic actions
+
+The list leaves something out: an action cannot take type parameters of its
+own. There is no `first<T>(items is @T) is T`. This follows from the object
+model of Chapter 3. Okkama has no free functions and no static methods, so a
+generic function would need an object to live on, and that object would need
+its own `T` anyway. The language goes the other way and makes the algorithm
+the object. `Least<T>` in the example is what Java would write as
+`static <T extends Comparable<T>> T least(T first, T... rest)`. It is a value
+that knows its inputs and computes its answer on request, the style that
+*Elegant Objects* recommends in place of static methods and utility classes
+[[Bugayenko 2016](#ref-bugayenko2016)].
+
+The cost is an allocation per call, since `Least(3, 9, 1, 4)` builds an object
+before `value()` reads it: one small heap object, cheap next to the work of
+most algorithms. The gain is that inference has one home. Every generic
+argument in Okkama is inferred at a constructor call, by one procedure, with
+one set of error messages.
+
+### Where the idea comes from
+
+Cardelli and Wegner's survey of polymorphism separates two kinds [[Cardelli 1985](#ref-cardelli1985)].
+*Inclusion* polymorphism is what roles give: one value is usable as several
+types, because it belongs to all of them. *Parametric* polymorphism is what
+this chapter is about: one piece of code works uniformly over a type that is
+supplied as a parameter. Both came into programming languages in the 1970s.
+CLU let a cluster, its abstract data type, take type parameters, and checked
+at compile time that the arguments offered the operations the cluster needed
+[[Liskov 1977](#ref-liskov1977)]. ML inferred polymorphic types for whole functions without any
+annotations [[Milner 1978](#ref-milner1978)]. Object-oriented languages took parameters much
+later and with more compromises. Java added generics in version 5, in 2004,
+on top of a virtual machine that knew nothing about them [[Bracha 1998](#ref-bracha1998)], and C#
+added them in version 2.0, in 2005, together with a runtime that did
+[[Kennedy 2001](#ref-kennedy2001)]. Go, which had shipped without generics for a decade, added
+them in version 1.18 in 2022 [[Griesemer 2020](#ref-griesemer2020); [Scales 2022](#ref-scales2022)].
+
+Okkama's generics are parametric polymorphism in CLU's sense, restricted to
+objects, roles and enums, with ML's idea that a programmer should rarely have
+to write type arguments, but without ML's global inference.
+
+## 17.2 One `T`, one type
+
+The whole model rests on one rule: **within one specialization, `T` is one
+exact type.** Every occurrence of `T` must resolve to the same type, and
+nothing is widened to make them agree.
+
+```okkama
+module bible/exact v1.0.0;
+
+import "compare" take Comparing, Order;
+
+object Least<T: Comparing<T>> {
+    has first is T;
+    has rest is @T;
+    Least(first is T, rest is ...T) {
+        self.first = first;
+        self.rest = rest...;
+    }
+}
+
+main() is int {
+    let least = Least(1, 2.0);
+    0;
+}
+```
+
+The compiler answers:
+
+```text
+17-exact-rejected.ok:15:17: semantic error: Generic parameter "T" for object "Least" cannot be both int and float
+```
+
+`1` is an `int` and `2.0` is a `float`. In Okkama these are different
+categories that never convert implicitly (Chapter 5), so `Least(1, 2.0)` has
+no `T`. The compiler does not look for a common supertype, does not invent a
+union `int | float`, and does not fall back to `any`. The program fails before
+anything runs, and the fix is an explicit conversion: `Least(1.float(), 2.0)`.
+Version 0.4.2 applies the same rule to collection literals: `[1, 2.0]` is
+rejected unless an explicit `@any` is expected (Chapter 8).
+
+Other languages answer the same question differently. Java's inference
+computes a least upper bound. For `Arrays.asList(1, 2.0)` it finds an
+intersection type of the form `Number & Comparable<…>`, a type that no
+programmer wrote and whose values can barely be used: `Number` has no
+arithmetic, so the list cannot be summed without casts [[Gosling 2023](#ref-gosling2023)]. Kotlin
+infers a similar intersection type. TypeScript infers the union
+`(string | number)[]` for `[1, "two"]`. Each answer
+compiles, and each pushes the problem to the place where the values are
+used.
+
+Okkama keeps the problem where it was created. A type argument is evidence of
+what the values are, and an inferred `T` that no value has would be a guess.
+The rule also keeps every other part of the type system simple: once inference
+succeeds, `T` is an ordinary concrete type, and the body of `Least<int>`
+type-checks exactly as if it had been written for `int`.
+
+## 17.3 Inference at construction
+
+`Box(value: 7)` names a declaration, not a type. The specialization is worked
+out at the call, from two sources.
+
+**The arguments.** Each constructor parameter whose type mentions a parameter
+gives one *equation*: `value is T` with the argument `7` gives `T = int`. The
+equations go into structure: a parameter `items is @T` with an `@string`
+argument gives `T = string`, a parameter `%K:V` with a `%string:int` gives two
+equations, a parameter `Box<T>` with a `Box<float>` argument gives `T = float`,
+and a variadic tail `rest is ...T` gives one equation per value. A shorthand
+constructor `Box(:value)` uses the field's type in the same way. If two
+equations disagree, the error names both answers:
+
+```text
+Generic parameter "T" for object "Least" cannot be both int and float
+```
+
+**The expected type.** When the call stands where a type is already declared,
+in a typed binding, a field, an argument for a typed parameter, a result or
+`return`, that type is evidence too. This is what makes an empty collection
+usable:
+
+```okkama
+module bible/evidence v1.0.0;
+
+object Bucket<T> {
+    has values is @T;
+    Bucket(:values);
+}
+
+main() is int {
+    let empty = Bucket(values: []);
+    0;
+}
+```
+
+The compiler answers:
+
+```text
+17-evidence-rejected.ok:9:17: semantic error: Cannot infer generic parameter "T" for object "Bucket"
+```
+
+`[]` has no elements, so it says nothing about `T`, and without other evidence
+the compiler stops. A declared target fixes it:
+`let empty is Bucket<int> = Bucket(values: []);`. The declared type supplies
+evidence that is *missing*. It never overrides evidence that is present: in
+`let wrong is Box<int> = Box(value: "x");` the argument and the target
+disagree, and that is an error, not a conversion.
+
+The expected type reaches into nested constructions, but only through
+parameters it already fixes:
+
+```okkama
+let x is Box<Empty<int>> = Box(item: Empty());
+```
+
+The target gives the outer `T = Empty<int>`. The inner `Empty()` stands where an
+`Empty<int>` is expected, so it gets its `int` from there. The compiler does
+not look ahead to later statements, does not try overloads to see which one
+type-checks, and does not search for a type that would make a program compile.
+Inference uses only what is visible at the call.
+
+### Roles as evidence
+
+Roles take part in both directions. A role-typed target supplies the arguments
+of an object that implements the role:
+
+```okkama
+module bible/identity v1.0.0;
+
+import "io/stdout" take Stdout;
+
+role Echo<T> {
+    echo(value is T) is T;
+}
+
+object Loud does Echo<string> {
+    Loud();
+    echo(value is string) is string { value.upper() + "!"; }
+}
+
+object Same<T> does Echo<T> {
+    Same();
+    echo(value is T) is T { value; }
+}
+
+object Bucket<T> {
+    has values is @T;
+    Bucket(:values);
+    size() is int { values.size(); }
+    plus(value is T) is Bucket<T> { Bucket(values: values + [value]); }
+}
+
+enum Slot<T> = (vacant, full(item is T));
+
+object Slots {
+    Slots();
+    total(slots is @Slot<int>) is int {
+        slots.reduce(0) -> sum, slot { sum + match slot { case Slot.full(item) { item; } case Slot.vacant { 0; } }; };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    // Same() has no argument to infer from: the target Echo<string> supplies T.
+    let echoes is @Echo<string> = [Loud(), Same()];
+    out.writeln(echoes.map() -> echo { echo.echo("hi"); }.join(" "));
+    let numbers is Echo<int> = Same();
+    out.writeln(numbers.echo(7).string());
+    // An empty array is no evidence; the declared type is.
+    let empty is Bucket<int> = Bucket(values: []);
+    out.writeln(empty.plus(5).plus(6).size().string());
+    let slots = [Slot.full(3), Slot<int>.vacant, Slot.full(4)];
+    out.writeln(Slots().total(slots).string());
+    0;
+}
+```
+
+Output:
+
+```text
+HI! hi
+7
+2
+7
+```
+
+`Same()` has no arguments, so on its own it could not be specialized. In an
+array declared `@Echo<string>` each element is expected to be an
+`Echo<string>`, and `Same<T> does Echo<T>` matches that only with
+`T = string`. A builtin value can be evidence for a role parameter too:
+arrays are `Iterating<T>` and `Sequencing<T>`, so `Sorted([5, 3, 8])` in
+Section 17.10 gets `T = int` from the array's elements.
+
+When one equation gives a role and another gives an object that implements
+it, the role stays. A `List<Json>` that has a `JsonBool` prepended is still a
+`List<Json>`, not a `List<JsonBool>`. Inference never looks for a common role
+of two unrelated objects, however: if one argument is a `Square` and another a
+`Circle`, the program must say `Shape` somewhere.
+
+### Several constructors
+
+An object may have several constructors (Chapter 12), and inference runs for
+each one that fits the call's shape. Fixed and shorthand constructors are
+tried before variadic ones, as in overload resolution. If two constructors fit
+and infer different specializations, the call is ambiguous and the compiler
+says so (`Ambiguous construction of "Pair": constructors infer different
+generic arguments`) instead of picking one.
+
+### Functions as evidence
+
+An anonymous action may declare its result type, and that result is evidence
+for a generic parameter. This is how the standard library's `SortedBy<T, K>`
+learns its key type:
+
+```okkama
+let quickest = SortedBy(origin: jobs, key: (job is Job) is int { job.hours(); });
+```
+
+The key's type `(Job) is int` meets the parameter `key is (T) is K`, giving
+`T = Job` and `K = int`. Before 0.4.1 an anonymous action could not declare its
+result, and the same call needed `let quickest is SortedBy<Job, int> = …`
+(#214).
+
+### No explicit specialization
+
+There is no syntax to specialize at the call: `Box<int>(value: 7)` is an error
+(`A type is not a value`). The way to state a specialization is to declare the
+type of the place that receives the value. That keeps one way of doing it, and
+the type ends up on the binding, where a reader looks for it.
+
+## 17.4 Bounds
+
+A parameter may be required to implement a role:
+
+```okkama
+role Comparing<T> {
+    order(other is T) is Order;
+}
+
+object Least<T: Comparing<T>> { … }
+```
+
+`Comparing` is the standard library's three-way order (`std/compare`).
+`T: Comparing<T>` says that a `T` can be ordered against another `T`. The bound
+mentions the parameter it constrains. This is *F-bounded* polymorphism, named
+by Canning, Cook, Hill, Olthoff and Mitchell, who showed that ordinary bounded
+quantification cannot express "a type comparable with itself" and that a
+recursive bound can [[Canning 1989](#ref-canning1989)]. Java's `<T extends Comparable<T>>` is the
+same idea, and its roots go back to CLU, one of the first languages built
+around parameterized abstract types, where a `where` clause required a type
+argument to provide the operations a module needed [[Liskov 1977](#ref-liskov1977)].
+
+`int`, `float`, `rat`, `byte`, `string` and `char` implement `Comparing` of
+themselves, so `Least` accepts all of them. `bool` deliberately has no
+natural order:
+
+```okkama
+module bible/bound v1.0.0;
+
+import "compare" take Comparing, Order;
+
+object Least<T: Comparing<T>> {
+    has first is T;
+    has rest is @T;
+    Least(first is T, rest is ...T) {
+        self.first = first;
+        self.rest = rest...;
+    }
+}
+
+main() is int {
+    let least = Least(true, false);
+    0;
+}
+```
+
+The compiler answers:
+
+```text
+17-bound-rejected.ok:15:17: semantic error: Generic parameter "T" for object "Least" has type bool, which does not satisfy Comparing<bool>
+```
+
+The bound is checked after inference has found `T` and before the
+constructor's body runs. It never takes part in inference: `T: Comparing<T>`
+does not tell the compiler what `T` is, and an object whose `T` cannot be
+inferred is not rescued by its bound. Nor does a bound convert anything. A
+`T` either implements the role or the program is rejected.
+
+A role-typed argument satisfies a bound when the role *narrows* to it, that
+is, when it offers every action of the bound (Chapter 14). Given
+`object Tagged<T: Named>`, a value of a role `Counted` that has `name()` and
+`count()` satisfies `T: Named`. The specialization is then `Tagged<Counted>`,
+so `get()` hands back a `Counted` with `count()` still available, not a
+`Named`.
+
+What bounds cannot do is as deliberate as what they can:
+
+- **One bound per parameter.** There is no `T: Comparing<T> & Hashing`. A
+  parameter that needs two capabilities is better served by a role that
+  composes them.
+- **No category bounds.** There is no `T: number`. Numbers in Okkama do not
+  share a supertype, and arithmetic between categories needs explicit
+  conversion. Generic arithmetic is written with the operator roles of
+  Section 14.8, `Adding<T, R>` and its siblings, which an object implements per
+  operand type.
+- **No bounds on role parameters** yet, no defaults, no variance annotations.
+
+## 17.5 Parameters used as map keys
+
+A map key must be a scalar, an enum, a string or a value object (Chapter 8).
+When a generic object uses its parameter as a key, as `%T:V` in a field, a
+signature or a body, or as the key of a map literal, every specialization has
+to respect that:
+
+```okkama
+module bible/key v1.0.0;
+
+// T is a map key here, so every specialization must be a key type.
+object Tally<T> {
+    has counts is %T:int;
+    Tally() {
+        let empty is %T:int = [:];
+        counts = empty;
+    }
+    size() is int { counts.size(); }
+}
+
+main() is int {
+    let words is Tally<string> = Tally();
+    let rows is Tally<@int> = Tally();
+    words.size() + rows.size();
+}
+```
+
+The compiler answers:
+
+```text
+17-key-rejected.ok:15:31: semantic error: Generic parameter "T" for object "Tally" is a map key: Map key type @int is not a scalar key type
+```
+
+`Tally<string>` is fine. `Tally<@int>` would need arrays as keys, and the
+compiler rejects it at the place that asks for it, naming the parameter that
+made it a key. The property propagates: in `Wrap<U> { has inner is
+Tally<U>; }`, `U` is a key parameter too, because it becomes `Tally`'s `T`. The
+check runs after every body is typed, so it sees uses deep inside actions. An
+engine that met a non-key under a key parameter anyway, through a path the
+analysis missed, would fail at run time rather than compare keys by identity
+(#242).
+
+## 17.6 A specialization is a type
+
+`Box<int>` and `Box<float>` are different types, as different as `Point` and
+`Money`. A `Box<float>` cannot go where a `Box<int>` is expected, and that
+holds for fields, parameters, results, variadic tails, successors, typed
+bindings, `catch` clauses and imports. Role conformance is substituted too:
+`Same<T> does Echo<T>` makes `Same<int>` an `Echo<int>` and nothing else, so
+assigning it to an `Echo<string>` is rejected
+(`Generic parameter "T" for object "Same" cannot be both string and int`).
+
+There is also no variance. `Square` implements `Shape`, but a `Box<Square>` is
+not a `Box<Shape>`:
+
+```text
+Cannot initialize variable "shapes" of type Box<Shape> with Box<Square>
+```
+
+That is the safe answer for a type whose `T` appears in both directions, and
+Okkama does not ask the programmer to say which direction a parameter is used
+in. The common case still works because inference reads the target first:
+`let direct is Box<Shape> = Box(value: Square(side: 3));` builds a
+`Box<Shape>` from the start, wrapping the square as a `Shape`.
+
+### Generic fakes
+
+A role's `fake` block (Chapter 15) is written against the role's parameters,
+and it must conform *symbolically*. A fake whose `echo` takes `int` does not
+implement `echo(value is T)`, even though `Echo<int>` is the only
+specialization the tests use. A fake has no constructor arguments to infer
+from, so its specialization comes from the target:
+
+```okkama
+let echo is Echo<int> = Echo.fake();   // test mode only
+```
+
+Without a declared target the construction fails instead of guessing.
+
+### Reading the errors
+
+Every generic error comes from one of a few checks, and its message says which:
+
+| Message | What happened | Usual fix |
+|---|---|---|
+| `Generic parameter "T" for object "X" cannot be both A and B` | two equations disagree, or a target contradicts an argument | convert one value explicitly, or correct the declared type |
+| `Cannot infer generic parameter "T" for object "X"` | no argument gives evidence (empty collections, no arguments) and no target is declared | declare the type of the binding, field or parameter |
+| `… has type A, which does not satisfy R<A>` | the inferred type does not implement the bound | implement the role, or wrap the value in an object that does |
+| `Generic parameter "T" for object "X" is a map key: …` | a key parameter got a type that cannot be a key | use a scalar, an enum, a string or a value object |
+| `Ambiguous construction of "X": constructors infer different generic arguments` | two constructors fit with different specializations | declare the target type |
+| `Generic type "X" expects N type argument(s), got M` | a written type has the wrong arity | write every argument |
+| `A type is not a value` | an attempt to specialize at the call, `Box<int>(…)` | move the type to the binding |
+| `The program requests a chain of more than 256 generic specializations …` | polymorphic recursion | stop growing the type in the recursive call |
+
+## 17.7 How generics run: one copy per specialization
+
+The compiler turns generic code into ordinary code before any engine sees it.
+Lowering (Chapter 23) walks the program from `main`. Each time it reaches a
+generic declaration with concrete arguments, it requests that specialization:
+a new object type with the parameters substituted, and new copies of the
+actions that are actually called on it. Here is the OIR of a program that uses
+`Box<T>` with two types:
+
+```text
+object Box<int> {
+    field value: int
+}
+
+object Box<string> {
+    field value: str
+}
+
+func @main() -> int [entry] {
+^b0:
+    %0: int = const 7
+    %1: Box<int> = call @Box<int>.new#0(%0)
+    %2: str = const "seven"
+    %3: Box<string> = call @Box<string>.new#0(%2)
+    %4: int = call @Box<int>.get(%1)
+    %5: str = call @Box<string>.get(%3)
+    %6: int = str.len %5
+    %7: int = int.add %4, %6
+    ret %7
+}
+
+func @Box<int>.get(%0: Box<int>) -> int [method Box<int>] {
+^b0:
+    %1: int = obj.get %0, value
+    ret %1
+}
+
+func @Box<string>.get(%0: Box<string>) -> str [method Box<string>] {
+^b0:
+    %1: str = obj.get %0, value
+    ret %1
+}
+```
+
+No `T` survives. `Box<int>.get` is exactly the function that a hand-written
+`IntBox.get` would be. The IR engine, the Sparrow core and the JVM back end
+receive only concrete objects and concrete functions. On the JVM each
+specialization becomes its own class (`box$Box$int$.class` and
+`box$Box$string$.class` in the jar) whose field has its exact type, a
+`BigInteger` in one and a `String` in the other, so nothing is cast when it is
+read. This strategy is called *monomorphization*.
+
+### What it costs
+
+The price of monomorphization is code. Every specialization is a copy, and a
+generic object pulls in the specializations of everything it uses. The
+standard library's `Sorted<T: Comparing<T>>` shows the scale: a program that
+sorts one array and reads its first element, then the same program with arrays
+of more element types:
+
+| Element types sorted | OIR functions | OIR objects | OIR lines |
+|---|---:|---:|---:|
+| `int` | 46 | 12 | 738 |
+| `int`, `string` | 69 | 17 | 1063 |
+| `int`, `string`, `float` | 92 | 22 | 1389 |
+| `int`, `string`, `float`, `byte` | 115 | 27 | 1714 |
+
+Each new element type adds 23 functions and 5 objects: `Sorted` itself, its
+cursor, the bulk ordering that sorts it, and the adapter and cursor through
+which a plain array becomes an `Iterating<T>`. The
+growth is linear and bounded by what the program uses, because lowering
+requests only reachable code. In practice the numbers are small. The
+benchmark application `10-app` has one generic specialization, `Atomic<…>`,
+among 22 objects and 85 functions, and the INI benchmark has 14 among 61
+objects and 206 functions.
+
+Monomorphization has one hard limit. A generic action that constructs a
+*larger* specialization of its own object would need infinitely many copies:
+
+```okkama
+module bible/grow v1.0.0;
+
+object Box<T> {
+    has value is T;
+    Box(:value);
+    get() is T { value; }
+}
+
+object Grow<T> {
+    has value is T;
+    Grow(:value);
+    deeper(depth is int) is int {
+        if depth == 0 { return 0; }
+        Grow(value: Box(value: value)).deeper(depth - 1) + 1;
+    }
+}
+
+main() is int {
+    Grow(value: 1).deeper(3);
+}
+```
+
+The compiler answers:
+
+```text
+17-grow-rejected.ok:12:5: semantic error: The program requests a chain of more than 256 generic specializations, each asking for the next: Box<Box<Box<Box<Box<Box<Box<Box<Box<Box<…>>>>>>>>>>>>>>>>>>>>>>>>.new#0 <- Grow<Box<Box<Box<Box<Box<Box<Box<Box<Box…>>>>>>>>>>>>>>>>>>>>>>>.deeper <- Grow<Box<Box<Box<Box<Box<Box<Box<Box<Box…>>>>>>>>>>>>>>>>>>>>>>>.deeper <- Grow<Box<Box<Box<Box<Box<Box<Box<Box<Box…>>>>>>>>>>>>>>>>>>>>>>>.deeper <- Grow<Box<Box<Box<Box<Box<Box<Box<Box<Box…>>>>>>>>>>>>>>>>>>>>>>>.deeper <- Grow<Box<Box<Box<Box<Box<Box<Box<Box<Box…>>>>>>>>>>>>>>>>>>>>>>>.deeper <- …
+```
+
+`Grow<int>.deeper` asks for `Grow<Box<int>>.deeper`, which asks for
+`Grow<Box<Box<int>>>.deeper`, and so on. The depth of this *polymorphic
+recursion* depends on a run-time value, so no finite set of copies covers it.
+Lowering stops at a chain of 256 requests, or at 2^18 specializations in
+total, and names the chain (H-15). Languages that compile generics to one
+shared copy accept such programs; Okkama, like Rust and C++, rejects them.
+The check currently happens only in lowering, so `okkama check` lets this
+program through and `okkama run` rejects it (#317).
+
+### The alternatives
+
+Monomorphization is one of four strategies in use.
+
+**Erasure.** Java compiles `List<Integer>` and `List<String>` to one class
+that holds `Object`s, and inserts casts where values come out. The design
+came from GJ, whose stated aim was to add generics without changing the
+virtual machine or breaking existing class files [[Bracha 1998](#ref-bracha1998)]. The cost
+shows in three places. Primitives must be boxed, since there is no
+`List<int>`. A cast can fail at run time when unchecked conversions were
+allowed at compile time. And `T` does not exist at run time, so `new T()` and
+`instanceof List<String>` are impossible. Java's wildcards and inference later
+grew complex enough that subtyping between generic types became undecidable
+[[Grigore 2017](#ref-grigore2017)], and that the combination of wildcards and `null` made the type
+system unsound [[Amin 2016](#ref-amin2016)].
+
+**Reification with run-time specialization.** C# keeps type arguments at run
+time. The .NET runtime shares one compiled copy of a generic method among all
+reference types, and the JIT compiler produces a specialized copy for each
+value type, so a `List<int>` stores unboxed `int`s [[Kennedy 2001](#ref-kennedy2001)]. This is
+monomorphization for the cases where data layout differs and sharing for the
+rest, done lazily by the JIT.
+
+**Dictionaries.** Haskell compiles a function with a class constraint, such
+as `Ord a => [a] -> a`, to a function that takes an extra argument, a
+dictionary of the `Ord` operations for the actual type [[Wadler 1989](#ref-wadlerblott1989)]. One
+copy of the code serves every type, at the price of an indirect call for each
+operation and a uniform boxed representation of values. Go 1.18 mixes the two
+approaches. Types with the same *GC shape* (roughly, the same layout for the
+garbage collector) share one compiled copy, which also receives a dictionary
+for what differs between them [[Scales 2022](#ref-scales2022)]. The formal model behind Go's
+generics, Featherweight Go, gives a translation of generic programs into a
+non-generic core by monomorphization [[Griesemer 2020](#ref-griesemer2020)].
+
+**Monomorphization.** C++ templates make a copy per instantiation
+[[Stroustrup 1994](#ref-stroustrup1994)], and so does Rust for generic functions and types
+[[Klabnik 2023](#ref-klabnik2023)]. Generic code then runs at the speed of hand-written code, and
+the cost is paid in compile time and binary size.
+
+Okkama chose monomorphization because its compiler sees the whole program. A
+package is compiled from source together with its dependencies (Chapter 19),
+so there is no separately compiled generic library that would have to work for
+types it has never seen. Every engine then gets the simplest possible input.
+The IR engine needs no dictionaries, the Sparrow JIT compiles each copy with
+its exact register kinds (an `int` is a tagged word, a `float` the raw bits
+of a double), and the JVM back end needs no casts.
+
+## 17.8 A parameter or a role?
+
+Roles (Chapter 14) and type parameters both let one piece of code work with
+many types, and a design often has to choose between them. Compare a total of
+areas written both ways:
+
+```okkama
+// A role: one Totals object for any mix of shapes.
+object Totals {
+    has shapes is @Shape;
+    Totals(:shapes);
+    area() is int { shapes.reduce(0) -> sum, shape { sum + shape.area(); }; }
+}
+
+// A parameter: one specialization per element type.
+object Total<T: Shape> {
+    has items is @T;
+    Total(:items);
+    area() is int { items.reduce(0) -> sum, item { sum + item.area(); }; }
+}
+```
+
+The role version accepts `[Square(side: 2), Strip(width: 3)]`. The parameter
+version accepts that array only as `Total<Shape>`, and otherwise needs every
+element to have the same type: `Total(items: [Square(side: 2)])` is a
+`Total<Square>`. The difference shows when the object gives values back. A
+`Total<Square>` that offers `largest() is T` returns a `Square`, with all of
+its actions, while `Totals` can only return a `Shape`. A type parameter keeps
+the information about *which* type it holds, and a role deliberately forgets
+it.
+
+So the rule of thumb is about what flows out. If the code only consumes
+values through the role's actions, a role-typed field is simpler and admits
+mixtures. If it hands values back, or builds new containers of them, or uses
+them as map keys, a parameter preserves their exact type for the caller.
+
+Monomorphization does not make the parameter version faster at the call. Inside
+`Total<Square>`, `item.area()` is a call through the bound, and lowering
+emits it as one:
+
+```text
+%10: Square = array.get %7, %9
+%11: Shape = role.wrap %10
+%12: int = call.role %11, Shape.area()
+```
+
+`role.wrap` costs nothing on the Sparrow core and the JVM, and `call.role` is a
+lookup in a table per role slot followed by an indirect call (Section 14.7).
+Measured on a loop of ten million `area()` calls (best of five on an Apple M2
+Max, including compilation), `Total<Square>` and a `Total<Shape>` over a mix
+of squares and strips take the same time: 0.375 s and 0.378 s on the Sparrow
+core, and 1.21 s and 1.18 s for a million calls on the IR engine. What a
+specialization changes is the data and what flows out: a `Total<Square>`
+tells its caller that it holds squares, and a `Box<float>` keeps its field as
+the raw bits of a double, where a field of type `any` would hold a box.
+
+## 17.9 A worked example: the best N
+
+A leaderboard, a list of the most expensive orders, the three slowest
+requests: keeping the best `N` items of a stream is the same algorithm for
+any type that can be ordered. Here it is once, for every such type:
+
+```okkama
+module bible/top v1.0.0;
+
+import "io/stdout" take Stdout;
+import "compare" take Comparing, Order;
+
+// The best `size` items seen so far, largest first. Offering an item returns a
+// new Top: the old one is unchanged.
+object Top<T: Comparing<T>> {
+    has size is int;
+    has items is @T;
+    Top(:size, :items);
+    offered(item is T) is Top<T> {
+        let larger = items.filter() -> kept { kept.order(item) != Order.less; };
+        let smaller = items.filter() -> kept { kept.order(item) == Order.less; };
+        Top(size: size, items: (larger + [item] + smaller).take(size));
+    }
+    items() is @T { items; }
+}
+
+// A domain object that orders itself: higher amount first, then by name.
+object Bid does Comparing<Bid> {
+    has bidder is string;
+    has amount is int;
+    Bid(:bidder, :amount);
+    amount() is int { amount; }
+    bidder() is string { bidder; }
+    order(other is Bid) is Order {
+        if amount != other.amount() { return amount.order(other.amount()); }
+        other.bidder().order(bidder);
+    }
+    text() is string { bidder + ":" + amount.string(); }
+}
+
+main() is int {
+    let out = Stdout();
+    // No item yet, so the declared type supplies T.
+    let scores is Top<int> = Top(size: 3, items: []);
+    let best = [12, 40, 7, 33, 40, 18].reduce(scores) -> top, score { top.offered(score); };
+    out.writeln(best.items().map() -> score { score.string(); }.join(" "));
+    let words is Top<string> = Top(size: 2, items: []);
+    out.writeln(["kiwi", "apple", "pear", "fig"].reduce(words) -> top, word { top.offered(word); }.items().join(" "));
+    let bids is Top<Bid> = Top(size: 2, items: []);
+    let won = [Bid(bidder: "ann", amount: 50), Bid(bidder: "bob", amount: 70), Bid(bidder: "cy", amount: 70)]
+        .reduce(bids) -> top, bid { top.offered(bid); };
+    out.writeln(won.items().map() -> bid { bid.text(); }.join(" "));
+    0;
+}
+```
+
+Output:
+
+```text
+40 40 33
+pear kiwi
+bob:70 cy:70
+```
+
+The pieces of the chapter meet here.
+
+- **The bound.** `Top<T: Comparing<T>>` needs `order()` and nothing else, so it
+  works for `int`, `string` and any domain object that implements
+  `Comparing` of itself. `Bid` does, with its own policy: a higher amount wins
+  and equal amounts go by name.
+- **The target supplies `T`.** An empty top has no items, so
+  `Top(size: 3, items: [])` alone could not be specialized. Each start value
+  is declared, `let scores is Top<int> = …`, and from there `reduce` carries
+  the type: its accumulator is a `Top<int>`, and so is each `offered(…)`.
+- **Immutability.** `offered` returns a new `Top`, so `scores` still holds the
+  empty top after the loop. The successor-style value of Chapter 13 needs no
+  special form here: the result type is the same specialization, `Top<T>`.
+- **Three specializations.** The program uses `Top<int>`, `Top<string>` and
+  `Top<Bid>`. Each is compiled separately, so the comparison inside
+  `offered` is the builtin integer order in the first, the code-point order of
+  strings in the second, and `Bid.order` in the third.
+
+A role field could not replace the parameter here. `Comparing<T>` takes the
+type that an item is compared with, so a field `has items is @Comparing<…>`
+would have to name that type and the object would work for one type only. The
+parameter is what lets one declaration say "items that can be compared with
+each other".
+
+## 17.10 Generics in the standard library
+
+The standard library is the largest user of generics: 195 generic object
+declarations and 17 generic roles. Most of them fall into four groups.
+
+- **Collection views and cursors.** `Taken<T>`, `Sliced<T>`, `Zipped<A, B>`,
+  `Sorted<T: Comparing<T>>`, `SortedBy<T, K: Comparing<K>>` and their cursors
+  implement `Iterating<T>` and `Sequencing<T>`, so they chain with each other
+  and with plain arrays.
+- **Containers with behaviour.** `Cell<T>` (Chapter 13), `Atomic<T>` and
+  `Channel<T>` (Chapter 20).
+- **Contracts.** `Comparing<T>`, the operator roles `Adding<T, R>` and its
+  siblings, `Iterating<T>`, `Cursor<T>`, `List<T>`, `Set<T>`.
+- **Settlements and cleanups** of asynchronous natives
+  (`HttpProxySettlement<T>`), where the type parameter carries the result of
+  a native call through the scheduler.
+
+```okkama
+module bible/library v1.0.0;
+
+import "io/stdout" take Stdout;
+import "collections/ordering" take Sorted, SortedBy;
+
+object Job {
+    has name is string;
+    has hours is int;
+    Job(:name, :hours);
+    name() is string { name; }
+    hours() is int { hours; }
+}
+
+main() is int {
+    let out = Stdout();
+    // Sorted<T: Comparing<T>>: T = int and T = string, two specializations.
+    out.writeln(Sorted([5, 3, 8]).first().string() + " " + Sorted(["pear", "fig"]).first());
+    // SortedBy<T, K: Comparing<K>>: K comes from the key's declared result.
+    let jobs = [Job(name: "paint", hours: 6), Job(name: "wire", hours: 2), Job(name: "tile", hours: 4)];
+    let quickest = SortedBy(origin: jobs, key: (job is Job) is int { job.hours(); });
+    out.writeln(quickest.map() -> job { job.name(); }.join(" "));
+    0;
+}
+```
+
+Output:
+
+```text
+3 fig
+wire tile paint
+```
+
+The example uses two of them. `Sorted` is specialized twice, for `int` and for
+`string`, and each specialization gets its `T` from the array it receives.
+`SortedBy` gets `T = Job` from the array and `K = int` from the key's declared
+result. Every element type `T` has to implement `Comparing<T>`, and every key
+type `K` has to implement `Comparing<K>`, and the compiler checks both at the
+call.
+
+## 17.11 Okkama among other languages
+
+| | What can be generic | How it runs | Bounds | Variance | Type arguments |
+|---|---|---|---|---|---|
+| Java | classes, interfaces, methods | erasure, casts, boxed primitives | `extends`, several with `&` | at the use site, wildcards | inferred for methods, `<>` |
+| C# | classes, interfaces, methods, delegates | reified; shared for references, JIT-specialized for value types | `where`, several | declared on interfaces and delegates | inferred for methods |
+| Go | functions, types | GC-shape stenciling with dictionaries | interfaces with type sets | none | inferred for functions |
+| Rust | functions, types, traits | monomorphization | trait bounds, several | inferred; matters for lifetimes | inferred |
+| Haskell | functions, types, classes | dictionary passing, uniform values | class constraints, several | none (no subtyping) | inferred (Hindley–Milner) |
+| OCaml | functions, types, modules (functors) | uniform values, one copy | through modules and signatures | declared (`+'a`, `-'a`) | inferred (Hindley–Milner) |
+| Okkama | objects, roles, enums | whole-program monomorphization | one role, F-bounded allowed | none | inferred at construction, exact |
+
+Okkama sits at the conservative end on almost every column. It infers less
+than Haskell or OCaml, which find types for whole functions [[Milner 1978](#ref-milner1978)]. It
+has fewer kinds of bound than C# or Rust, and no variance at all. What it gains
+is predictability. Every generic argument is decided at one kind of place, a
+constructor call, from the values in front of it. A reader can do the same
+inference by looking at the call, and an error message names the two types
+that disagree.
+
+## 17.12 Limits
+
+- **No generic actions.** An algorithm generic in its inputs is written as a
+  generic object (Section 17.1).
+- **No variance.** `Box<Square>` is not a `Box<Shape>`. Declare the target
+  type at construction instead.
+- **One bound, on objects only.** No multiple bounds, no bounds on role
+  parameters, no category bounds such as `T: number`, no default arguments,
+  no higher-kinded parameters.
+- **No call-site specialization.** `Box<int>(…)` is not valid source; the
+  specialization comes from the arguments or from a declared target.
+- **Code size grows with specializations.** Each element type of `Sorted`
+  adds 23 functions (Section 17.7).
+- **Polymorphic recursion is rejected,** and `okkama check` does not report
+  it yet: the error appears only when the program is compiled (#317).
+- **Fake diagnostics** name the generated `Role$fake` object instead of the
+  `fake` block the programmer wrote (#276).
+- **Role plainness is per declaration.** One implementation of `Cursor` that
+  holds a resource makes the compiler track every `Cursor<T>` in regions
+  (Chapter 11), not only the instances that can reach one (#268).
+
+## 17.13 What this design costs
+
+Exact identity makes some programs longer. Mixed numbers need explicit
+conversions, empty collections need a declared type, and a function over
+`T` becomes an object with a constructor. Whole-program monomorphization makes
+compilation do more work and produces more code for programs that use one
+generic object with many types. It also rules out polymorphic recursion, which
+erased or dictionary-based implementations allow.
+
+What the design buys is that generic code is not a separate world. After
+inference, a `Least<int>` is checked, lowered and executed as a plain object
+over `int`: no casts, no boxes, no dictionaries, and the same speed on every
+engine as the code a programmer would have written by hand for that one type.
+Inference has one rule that a reader can apply in their head, and when it
+fails the message names the two types that disagree.
+
 # References
 
+- <a id="ref-amin2016"></a>Nada Amin, Ross Tate (2016). Java and Scala's Type Systems are Unsound: The Existential Crisis of Null Pointers. In *Proceedings of OOPSLA 2016*: 838–848. ACM. https://doi.org/10.1145/2983990.2984004
 - <a id="ref-lions1996"></a>Jacques-Louis Lions et al. (1996). *ARIANE 5 Flight 501 Failure: Report by the Inquiry Board*. European Space Agency, Paris, 19 July 1996. https://www.esa.int/Newsroom/Press_Releases/Ariane_501_-_Presentation_of_Inquiry_Board_report
 - <a id="ref-armstrong2003"></a>Joe Armstrong (2003). *Making Reliable Distributed Systems in the Presence of Software Errors*. PhD thesis, Royal Institute of Technology (KTH), Stockholm.
 - <a id="ref-aycock2003"></a>John Aycock (2003). A Brief History of Just-In-Time. *ACM Computing Surveys* 35(2): 97–113. https://doi.org/10.1145/857076.857077
@@ -8806,11 +9808,13 @@ In return:
 - <a id="ref-jep441"></a>Gavin Bierman (2023). JEP 441: Pattern Matching for switch. OpenJDK. https://openjdk.org/jeps/441
 - <a id="ref-bloch2018"></a>Joshua Bloch (2018). *Effective Java*, 3rd edition. Addison-Wesley.
 - <a id="ref-boehm2003"></a>Hans-J. Boehm (2003). Destructors, Finalizers, and Synchronization. In *Proceedings of POPL 2003*: 262–272. ACM. https://doi.org/10.1145/604131.604153
+- <a id="ref-bracha1998"></a>Gilad Bracha, Martin Odersky, David Stoutamire, Philip Wadler (1998). Making the Future Safe for the Past: Adding Genericity to the Java Programming Language. In *Proceedings of OOPSLA 1998*: 183–200. ACM. https://doi.org/10.1145/286936.286957
 - <a id="ref-braun2013"></a>Matthias Braun, Sebastian Buchwald, Sebastian Hack, Roland Leißa, Christoph Mallon, Andreas Zwinkau (2013). Simple and Efficient Construction of Static Single Assignment Form. In *Compiler Construction (CC 2013)*, LNCS 7791: 102–122. Springer. https://doi.org/10.1007/978-3-642-37051-9_6
 - <a id="ref-brooks1987"></a>Frederick P. Brooks, Jr. (1987). No Silver Bullet — Essence and Accidents of Software Engineering. *Computer* 20(4): 10–19. https://doi.org/10.1109/MC.1987.1663532
 - <a id="ref-bugayenko2016"></a>Yegor Bugayenko (2016). *Elegant Objects*, Volume 1. Self-published (CreateSpace).
 - <a id="ref-bugayenko2017"></a>Yegor Bugayenko (2017). *Elegant Objects*, Volume 2. Self-published (CreateSpace).
 - <a id="ref-burstall1980"></a>Rod M. Burstall, David B. MacQueen, Donald T. Sannella (1980). HOPE: An Experimental Applicative Language. In *Proceedings of the 1980 ACM Conference on LISP and Functional Programming*: 136–143. ACM. https://doi.org/10.1145/800087.802799
+- <a id="ref-canning1989"></a>Peter Canning, William Cook, Walter Hill, Walter Olthoff, John C. Mitchell (1989). F-Bounded Polymorphism for Object-Oriented Programming. In *Proceedings of FPCA 1989*: 273–280. ACM. https://doi.org/10.1145/99370.99392
 - <a id="ref-cardelli1985"></a>Luca Cardelli, Peter Wegner (1985). On Understanding Types, Data Abstraction, and Polymorphism. *ACM Computing Surveys* 17(4): 471–523. https://doi.org/10.1145/6041.6042
 - <a id="ref-jep421"></a>Brent Christian (2021). JEP 421: Deprecate Finalization for Removal. OpenJDK. https://openjdk.org/jeps/421
 - <a id="ref-claessen2000"></a>Koen Claessen, John Hughes (2000). QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs. In *Proceedings of ICFP 2000*: 268–279. ACM. https://doi.org/10.1145/351240.351266
@@ -8829,6 +9833,8 @@ In return:
 - <a id="ref-goldberg1991"></a>David Goldberg (1991). What Every Computer Scientist Should Know About Floating-Point Arithmetic. *ACM Computing Surveys* 23(1): 5–48. https://doi.org/10.1145/103162.103163
 - <a id="ref-goodenough1975"></a>John B. Goodenough (1975). Exception Handling: Issues and a Proposed Notation. *Communications of the ACM* 18(12): 683–696. https://doi.org/10.1145/361227.361230
 - <a id="ref-gosling2023"></a>James Gosling, Bill Joy, Guy Steele, Gilad Bracha, Alex Buckley, Daniel Smith, Gavin Bierman (2023). *The Java Language Specification, Java SE 21 Edition*. Oracle. https://docs.oracle.com/javase/specs/jls/se21/html/
+- <a id="ref-griesemer2020"></a>Robert Griesemer, Raymond Hu, Wen Kokke, Julien Lange, Ian Lance Taylor, Bernardo Toninho, Philip Wadler, Nobuko Yoshida (2020). Featherweight Go. *Proceedings of the ACM on Programming Languages* 4(OOPSLA): 149:1–149:29. https://doi.org/10.1145/3428217
+- <a id="ref-grigore2017"></a>Radu Grigore (2017). Java Generics are Turing Complete. In *Proceedings of POPL 2017*: 73–85. ACM. https://doi.org/10.1145/3009837.3009871
 - <a id="ref-haskell2010"></a>Simon Marlow (ed.) (2010). *Haskell 2010 Language Report*. https://www.haskell.org/onlinereport/haskell2010/
 - <a id="ref-hickey2008"></a>Rich Hickey (2008). The Clojure Programming Language. In *Proceedings of the 2008 Symposium on Dynamic Languages (DLS '08)*. ACM. https://doi.org/10.1145/1408681.1408682
 - <a id="ref-hickey2011"></a>Rich Hickey (2011). Simple Made Easy. Talk at Strange Loop, 20 September 2011. https://www.infoq.com/presentations/Simple-Made-Easy/
@@ -8840,6 +9846,7 @@ In return:
 - <a id="ref-kahan1996"></a>William Kahan (1996). *Lecture Notes on the Status of IEEE Standard 754 for Binary Floating-Point Arithmetic*. University of California, Berkeley. https://people.eecs.berkeley.edu/~wkahan/ieee754status/IEEE754.PDF
 - <a id="ref-kay1993"></a>Alan C. Kay (1993). The Early History of Smalltalk. *ACM SIGPLAN Notices* 28(3): 69–95 (HOPL-II). https://doi.org/10.1145/155360.155364
 - <a id="ref-kay2003"></a>Alan Kay (2003). On the Meaning of "Object-Oriented Programming". E-mail to Stefan Ram, 23 July 2003. https://www.purl.org/stefan_ram/pub/doc_kay_oop_en
+- <a id="ref-kennedy2001"></a>Andrew Kennedy, Don Syme (2001). Design and Implementation of Generics for the .NET Common Language Runtime. In *Proceedings of PLDI 2001*: 1–12. ACM. https://doi.org/10.1145/378795.378797
 - <a id="ref-kernighan1988"></a>Brian W. Kernighan, Dennis M. Ritchie (1988). *The C Programming Language*, 2nd edition. Prentice Hall.
 - <a id="ref-king2019"></a>Alexis King (2019). Parse, Don't Validate. Blog post, 5 November 2019. https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/
 - <a id="ref-klabnik2023"></a>Steve Klabnik, Carol Nichols (2023). *The Rust Programming Language*, 2nd edition. No Starch Press. https://doc.rust-lang.org/book/
@@ -8850,6 +9857,7 @@ In return:
 - <a id="ref-landin1966"></a>P. J. Landin (1966). The Next 700 Programming Languages. *Communications of the ACM* 9(3): 157–166. https://doi.org/10.1145/365230.365257
 - <a id="ref-langley2014"></a>Adam Langley (2014). Apple's SSL/TLS bug. *ImperialViolet*, 22 February 2014. https://www.imperialviolet.org/2014/02/22/applebug.html
 - <a id="ref-li2019"></a>Ming Li, Paul Vitányi (2019). *An Introduction to Kolmogorov Complexity and Its Applications*, 4th edition. Springer. https://doi.org/10.1007/978-3-030-11298-1
+- <a id="ref-liskov1977"></a>Barbara Liskov, Alan Snyder, Russell Atkinson, Craig Schaffert (1977). Abstraction Mechanisms in CLU. *Communications of the ACM* 20(8): 564–576. https://doi.org/10.1145/359763.359789
 - <a id="ref-liskov1979"></a>Barbara H. Liskov, Alan Snyder (1979). Exception Handling in CLU. *IEEE Transactions on Software Engineering* SE-5(6): 546–558. https://doi.org/10.1109/TSE.1979.230191
 - <a id="ref-liskov1994"></a>Barbara H. Liskov, Jeannette M. Wing (1994). A Behavioral Notion of Subtyping. *ACM TOPLAS* 16(6): 1811–1841. https://doi.org/10.1145/197320.197383
 - <a id="ref-mackay2003"></a>David J. C. MacKay (2003). *Information Theory, Inference, and Learning Algorithms*. Cambridge University Press. Chapter 28: Model Comparison and Occam's Razor.
@@ -8881,6 +9889,7 @@ In return:
 - <a id="ref-ritchie1993"></a>Dennis M. Ritchie (1993). The Development of the C Language. *HOPL-II: The Second ACM SIGPLAN Conference on History of Programming Languages*: 201–208. https://doi.org/10.1145/154766.155580
 - <a id="ref-pep343"></a>Guido van Rossum, Nick Coghlan (2005). PEP 343 — The "with" Statement. Python Enhancement Proposals. https://peps.python.org/pep-0343/
 - <a id="ref-saltzer1975"></a>Jerome H. Saltzer, Michael D. Schroeder (1975). The Protection of Information in Computer Systems. *Proceedings of the IEEE* 63(9): 1278–1308. https://doi.org/10.1109/PROC.1975.9939
+- <a id="ref-scales2022"></a>Dan Scales (2022). Go 1.18 Implementation of Generics via Dictionaries and Gcshape Stenciling. Design document, Go proposal repository, 22 February 2022. https://go.googlesource.com/proposal/+/master/design/generics-implementation-dictionaries-go1.18.md
 - <a id="ref-smith2018"></a>Nathaniel J. Smith (2018). Notes on Structured Concurrency, or: Go Statement Considered Harmful. Blog post, 25 April 2018. https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/
 - <a id="ref-snyder1986"></a>Alan Snyder (1986). Encapsulation and Inheritance in Object-Oriented Programming Languages. In *Proceedings of OOPSLA '86*: 38–45. ACM. https://doi.org/10.1145/28697.28702
 - <a id="ref-sober2015"></a>Elliott Sober (2015). *Ockham's Razors: A User's Manual*. Cambridge University Press. https://doi.org/10.1017/CBO9781107705937
@@ -8894,6 +9903,7 @@ In return:
 - <a id="ref-uax29"></a>The Unicode Consortium (2024). *Unicode Standard Annex #29: Unicode Text Segmentation* (for Unicode 16.0.0). https://www.unicode.org/reports/tr29/
 - <a id="ref-unicode16"></a>The Unicode Consortium (2024). *The Unicode Standard, Version 16.0.0*. https://www.unicode.org/versions/Unicode16.0.0/
 - <a id="ref-wadler1989"></a>Philip Wadler (1989). Theorems for Free! In *Proceedings of FPCA 1989*: 347–359. ACM. https://doi.org/10.1145/99370.99404
+- <a id="ref-wadlerblott1989"></a>Philip Wadler, Stephen Blott (1989). How to Make Ad-hoc Polymorphism Less Ad Hoc. In *Proceedings of POPL 1989*: 60–76. ACM. https://doi.org/10.1145/75277.75283
 - <a id="ref-wadler1998"></a>Philip Wadler (1998). The Expression Problem. Note to the java-genericity mailing list, 12 November 1998. https://homepages.inf.ed.ac.uk/wadler/papers/expression/expression.txt
 - <a id="ref-wirth1971"></a>Niklaus Wirth (1971). The Programming Language Pascal. *Acta Informatica* 1(1): 35–63. https://doi.org/10.1007/BF00264291
 - <a id="ref-wirth1995"></a>Niklaus Wirth (1995). A Plea for Lean Software. *Computer* 28(2): 64–68. https://doi.org/10.1109/2.348001

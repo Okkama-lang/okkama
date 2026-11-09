@@ -114,9 +114,10 @@ visible, and it never widens.
 
 - `let x = expression;` gives `x` the type of `expression`.
 - An array literal's element type is the type of its elements: `[1, 2, 3]`
-  is `@int`. A literal with mixed elements such as `[1, "two"]` keeps each
-  element's own type and does not silently become `@any`; only a declared
-  `@any` boundary boxes them.
+  is `@int`. A literal with mixed elements such as `[1, "two"]` has no
+  element type, and it never silently becomes `@any`: it compiles only where
+  a declared `@any` boundary expects it (`let mixed is @any = [1, "two"];`),
+  and anywhere else the compiler rejects it and names both types.
 - A generic object's type arguments are inferred from its constructor's
   arguments when they determine them; otherwise they must be written:
   `let empty is List<string> = EmptyList();`.

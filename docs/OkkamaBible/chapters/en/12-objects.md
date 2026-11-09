@@ -411,9 +411,12 @@ failed differently on each engine, and on Sparrow it crashed the process
 (#271). If a constructor fails after `self` escaped, the escaped object
 never completes, and every later call on it is rejected the same way.
 
-One limitation remains. If the first `self` of a constructor sits inside a
-`map` or `reduce` block, the compiler fails with an internal error (#279,
-planned for 0.4.2). Naming it first, `let me = self;`, avoids it.
+The first `self` may sit anywhere in a statement: inside a `map`,
+`filter` or `reduce` block, in a nested block or in one branch of an `if`.
+The object is built once, just before the constructor statement that holds
+that first use, so every leaf made in a loop points at the same object.
+Until 0.4.2 such a constructor crashed the compiler, and the workaround was
+to name `self` first with `let me = self;` (#279).
 
 The problem is old. Java lets `this` escape from a constructor and leaves
 the consequences to the programmer. A non-null field of an object under
