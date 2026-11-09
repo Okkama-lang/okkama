@@ -202,23 +202,17 @@ Updated with each chapter: `build.py --stats`.
   limits (#276, #268, #317). To add: generics and async (`Future<T>`,
   `Channel<T>`) with Chapter 20; a measurement of compile time against the
   number of specializations.
-- Chapter 18 (closures): 9.7 pages (EN) of its floor of 10. Written:
+- Chapter 18 (closures): 10.2 pages (EN), floor of 10 reached. Written:
   syntax and types of anonymous actions, positional calls, functional blocks
-  are not closures (`last` rejected), captures as snapshots (successor
-  rebinding outside, identity, `self`), values not variables (Java, Go,
-  Kotlin; Landin, Scheme), closures made in a loop, captured successors
-  (#322), exact types (no variance, no `any`, no role conversion), equality
-  by identity (Rice), action values as data (a dispatch map, a predicate
-  field, `Box`/`Maybe`, composition), closures or objects (capabilities;
-  behaviour that waits needs a role, #323), the IR (`fn.closure`, `call.fn`)
-  and each engine's representation with measured call costs, closures and
-  regions (#292), a closure frame in a failure report (#270), a history
-  (Church, McCarthy, funarg and Moses, Landin, Scheme, Smalltalk blocks,
-  C#, Java 8), a comparison table, limits (#318, #321, #322, #323).
-  To add: creation and call costs from the micro-benchmarks (#244:
-  `closure-create`, `closure-call` against `method-call`), which closes the
-  floor; a worked example (an event bus with handlers; retry policies as
-  closures versus objects); closures in std (`SortedBy` keys, `Cell`
-  updates); closures crossing tasks (with Chapter 20); the JVM's inlining
-  measured on a megamorphic call site.
+  are not closures, captures as snapshots and captured rebinding rejected
+  (#321), closures made in a loop, captured successors carried by closures
+  and bound actions (#322, #324), exact types, equality by identity, action
+  values as data, closures or objects, behaviour that waits needs a role
+  (#323), the IR and each engine's representation with measured call costs
+  and the 0.4.2 micro-benchmarks (#244), closures and regions (#292), a
+  closure frame in a failure report (#270), a history, a comparison table,
+  limits (no recursion through `let`, #318). To add: a worked example (an
+  event bus; retry policies as closures versus objects); closures in std
+  (`SortedBy` keys, `Cell` updates); closures crossing tasks (with Chapter
+  20); the JVM's inlining on a megamorphic call site.
 
