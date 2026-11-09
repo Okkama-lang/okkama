@@ -118,9 +118,10 @@ integers. Each is better in one position and worse in the other:
 
 {{example:13-ambiguous-rejected}}
 
-The message does not yet list the argument types or the tied candidates
-(#273). The no-match message does list the types: `No action "joined" on
-object "Pairing" accepts (string, string)`.
+The message names the argument types and the candidates that tie, so the
+fix is visible: convert one argument, or narrow one overload. Until 0.4.2
+it named neither (#273). The no-match message lists the types too:
+`No action "joined" on object "Pairing" accepts (string, string)`.
 
 Overloading is resolved at compile time from static types. A value typed
 `any` is not narrowed back to what it holds when an overload is chosen.

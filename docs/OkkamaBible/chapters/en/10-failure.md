@@ -652,14 +652,20 @@ Each engine carries the failure along those edges in its own way.
   without `setjmp`. A `try` that does not throw costs nothing beyond those
   checks.
 - **The JVM** throws a Java exception, `okkama.rt.Failure`, a
-  `RuntimeException` created without a Java stack trace or suppression
-  (`super(message, null, false, false)`), so throwing is cheap. Its
-  uncaught report does not yet give the location or the Okkama stack
-  (#270). Regions close in Java `catch` blocks.
+  `RuntimeException` that keeps the JVM's stack from where it was created.
+  Each method of the program numbers its source places in its
+  LineNumberTable, and a table next to the classes, `okkama-debug.tsv`,
+  maps those numbers back to files, lines and columns, so the uncaught
+  report shows the Okkama stack and never Java frames. Remembering the stack
+  is the price of a throw: a loop that throws 500 000 failures twelve calls
+  deep takes 0.48 s instead of 0.27 s, the same as the Sparrow core.
+  Regions close in Java `catch` blocks.
 
 The conformance suite runs the same programs on all three and requires the
-same output, exit status and `catch` behaviour. The reports still differ in
-detail (#270). Chapters 24 and 25 return to the engines.
+same output, exit status and `catch` behaviour. Since 0.4.2 the uncaught
+report is the same too, byte for byte: the failure, its secondary cleanup
+failures and its causes, the place and the stack (#270). Chapters 24 and 25
+return to the engines.
 
 ## 10.17 Designing an error vocabulary
 
@@ -758,10 +764,10 @@ The two channels are a strong opinion, and opinions cost something.
   `match` in the clause body.
 - **The runtime cause chain is for reports only.** A program cannot walk
   it. A cause the program must inspect has to be a payload.
-- **Engines still disagree on the report.** The Sparrow core prints the
-  cause chain. The IR engine leaves out `Caused by:`, and the JVM prints
-  only the first line ([#270](https://github.com/shootnix/okkama/issues/270)).
-  Exit status and `catch` behaviour are the same on all three.
+- **The JVM keeps at most 1 024 frames of a stack.** A failure deeper than
+  that reports the most recent frames and says that older ones are missing;
+  the other engines show the whole stack, compressed
+  ([#270](https://github.com/shootnix/okkama/issues/270)).
 - **No named handlers yet.** A handler shared by several `try` blocks has to
   be an action called from each clause. Named catch handlers were proposed
   and postponed as too magical for 0.4.1
