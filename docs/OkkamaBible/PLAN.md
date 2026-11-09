@@ -175,12 +175,12 @@ Updated with each chapter: `build.py --stats`.
   variant records, HOPE, ML, Haskell, Rust, Java sealed/records/pattern
   switch), `match` and its exhaustiveness rules (Maranget), compact choices,
   enums versus roles (the expression problem: Reynolds, Cook, Wadler), how
-  both kinds run (OIR, the core's enum word, the JVM's `Case`, the
-  `$variant` object with one-element arrays) with measurements, a comparison
+  both kinds run (OIR, the core's enum word, the JVM's `Case`, variants with
+  an object per case since #290, measured before and after), a comparison
   table, limits (#286–#291), costs. To add: a worked protocol (messages as
   variants) and a state machine; error enums in depth with Chapter 10;
-  `Maybe`/`Presence` as variants with Chapter 7; what changes when #287,
-  #288 and #290 land.
+  `Maybe`/`Presence` as variants with Chapter 7; what changes when #287 and
+  #288 land.
 
 ## Notes for the build
 
