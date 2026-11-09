@@ -405,7 +405,7 @@ func @Box<string>.get(%0: Box<string>) -> str [method Box<string>] {
 ```
 
 No `T` survives. `Box<int>.get` is exactly the function that a hand-written
-`IntBox.get` would be. The IR engine, the Sparrow core and the JVM back end
+`IntBox.get` would be. The IR engine, Tomato and the JVM back end
 receive only concrete objects and concrete functions. On the JVM each
 specialization becomes its own class (`box$Box$int$.class` and
 `box$Box$string$.class` in the jar) whose field has its exact type, a
@@ -543,12 +543,12 @@ emits it as one:
 %12: int = call.role %11, Shape.area()
 ```
 
-`role.wrap` costs nothing on the Sparrow core and the JVM, and `call.role` is a
+`role.wrap` costs nothing on Tomato and the JVM, and `call.role` is a
 lookup in a table per role slot followed by an indirect call (Section 14.7).
 Measured on a loop of ten million `area()` calls (best of five on an Apple M2
 Max, including compilation), `Total<Square>` and a `Total<Shape>` over a mix
-of squares and strips take the same time: 0.375 s and 0.378 s on the Sparrow
-core, and 1.21 s and 1.18 s for a million calls on the IR engine. What a
+of squares and strips take the same time: 0.375 s and 0.378 s on Tomato,
+and 1.21 s and 1.18 s for a million calls on the IR engine. What a
 specialization changes is the data and what flows out: a `Total<Square>`
 tells its caller that it holds squares, and a `Box<float>` keeps its field as
 the raw bits of a double, where a field of type `any` would hold a box.

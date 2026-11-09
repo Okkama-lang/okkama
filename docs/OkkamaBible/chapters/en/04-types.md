@@ -25,7 +25,7 @@ Okkama uses its type system for three jobs:
   were all rejected this way.
 - **To document intent.** A signature such as `share(people is int) is rat`
   tells a reader what goes in and what comes out without reading the body.
-- **To make the runtime fast.** The Sparrow core chooses a machine
+- **To make the runtime fast.** Tomato chooses a machine
   representation for every register from its type — a raw 64-bit integer, a
   double, a pointer the garbage collector traces — which is only safe because
   the types are checked (Chapter 25).

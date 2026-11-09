@@ -8,4 +8,4 @@ for language in ("en", "ru"):
     series = [(("one map()", "один map()"), sorted((int(n), t) for n, t in data["map"].items())),
               (("append by copying", "добавление копированием"), sorted((int(n), t) for n, t in data["concat"].items()))]
     lines("append-cost", series, language, ("elements", "элементов"), ("seconds", "секунды"),
-          note=("Sparrow core, Apple M2 Max", "ядро Sparrow, Apple M2 Max"))
+          note=("Tomato, Apple M2 Max", "Tomato, Apple M2 Max"))

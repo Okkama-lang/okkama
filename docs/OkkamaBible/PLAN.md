@@ -16,7 +16,7 @@ least 600 pages per language, and more is better — it is a Bible.
   typed by hand. Where the older Okkama Book disagrees, the code wins.
 - **Every example runs.** Programs live in `examples/NN-name.ok`; a chapter
   includes one with `{{example:NN-name}}`, and `build.py --check` runs each
-  on the IR engine and on the Sparrow core and compares stdout and exit code
+  on the IR engine and on Tomato and compares stdout and exit code
   with `examples/NN-name.expected`.
 - **Every claim about design is sourced.** Arguments cite published work by
   key, `[@hoare1981]`; `references.md` lists every key with authors, title,
@@ -68,7 +68,7 @@ least 600 pages per language, and more is better — it is a Bible.
 | | **Part VI. Under the hood** | |
 | 23 | The compiler: lexer to OIR | 20 |
 | 24 | Three engines: IR interpreter, JVM, Sparrow | 16 |
-| 25 | The Sparrow core: JIT, precise GC, stack maps | 20 |
+| 25 | Tomato: JIT, precise GC, stack maps | 20 |
 | 26 | Safety by construction: verification, budgets, fuzzing, conformance | 18 |
 | 27 | Performance: measurements and what they mean | 16 |
 | | **Part VII. Practice and judgement** | |
@@ -125,7 +125,7 @@ Updated with each chapter: `build.py --stats`.
   (`11-tasks`), the `Closing` pattern (`11-closing`), resources in maps and
   closures (`11-containers`), regions and the IR they lower to, the cost of
   a walk (#9), limits, costs. To add: channels; a larger worked example (a connection
-  pool); how each engine implements regions (the core's region arrays and
+  pool); how each engine implements regions (Tomato's region arrays and
   identity table, the IR engine's owner cells, the JVM's `Region`).
 - Chapter 12 (objects): 8.9 pages (EN) of its floor of 18. Written:
   declaring an object, private and permanent fields, explicit constructors,
@@ -175,7 +175,7 @@ Updated with each chapter: `build.py --stats`.
   variant records, HOPE, ML, Haskell, Rust, Java sealed/records/pattern
   switch), `match` and its exhaustiveness rules (Maranget), compact choices,
   enums versus roles (the expression problem: Reynolds, Cook, Wadler), how
-  both kinds run (OIR, the core's enum word, the JVM's `Case`, variants with
+  both kinds run (OIR, Tomato's enum word, the JVM's `Case`, variants with
   an object per case since #290, measured before and after), a comparison
   table, limits (#286–#291), costs. To add: a worked protocol (messages as
   variants) and a state machine; error enums in depth with Chapter 10;

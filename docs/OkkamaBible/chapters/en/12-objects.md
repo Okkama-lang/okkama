@@ -450,7 +450,7 @@ reads it with `obj.pending`. Objects whose constructor never hands out
 never written after `obj.new`. An `undef` field bound later is looked up in
 the side part. Most objects never allocate one.
 
-**The Sparrow core** keeps an object in its own non-moving heap. The object
+**Tomato** keeps an object in its own non-moving heap. The object
 is one header word followed by one 8-byte word per field. The header holds
 the kind (`OBJECT`), a mark bit for the collector, a few flags, and the
 object's descriptor number in its upper 32 bits. Each field word has a

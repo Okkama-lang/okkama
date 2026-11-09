@@ -309,8 +309,8 @@ func @Probe.code(%0: Probe, %1: Status) -> int [method Probe] {
 
 The source was `match s { case Status.ready { 1; } case Status.failed,
 Status.done { 2; } }`. The last case is not tested at all: the match is
-exhaustive, so whatever is not `ready` must be `failed` or `done`. On the
-Sparrow core an enum value is an immediate 64-bit word, with the enum's number
+exhaustive, so whatever is not `ready` must be `failed` or `done`. On
+Tomato an enum value is an immediate 64-bit word, with the enum's number
 in the high half and the case's in the low half. Building one allocates
 nothing, and comparing two compares two words. On the JVM each case is a
 singleton object of the runtime class `okkama.rt.Case`, held in a static field
@@ -381,7 +381,7 @@ func @Probe.sum(%0: Probe, %1: $variant_Reading_0) -> int [method Probe] {
 active. After a `match` has tested the tag the trap cannot fire, and the
 check is one comparison.
 
-Each engine keeps a case as one of its own objects. On the Sparrow core the
+Each engine keeps a case as one of its own objects. On Tomato the
 cases of a variant get consecutive object descriptors, so `variant.tag` is
 the descriptor in the object's header minus that of the first case: a load,
 a shift and a subtraction, with no field for the tag. The IR engine finds
@@ -403,18 +403,18 @@ a jar built beforehand, so its time includes the start of the JVM (about
 
 | | payload-free enum | object with two fields | `Reading` | `Wide` |
 |---|---:|---:|---:|---:|
-| Sparrow core, before #290 | 0.44 s | 0.73 s | 2.41 s | 12.64 s |
-| Sparrow core, 0.4.2 | 0.41 s | 0.73 s | 0.69 s | 0.87 s |
+| Tomato, before #290 | 0.44 s | 0.73 s | 2.41 s | 12.64 s |
+| Tomato, 0.4.2 | 0.41 s | 0.73 s | 0.69 s | 0.87 s |
 | IR engine, before #290 | 1.71 s | 2.25 s | 5.59 s | 12.50 s |
 | IR engine, 0.4.2 | 1.59 s | 2.35 s | 2.52 s | 2.53 s |
 | JVM, before #290 | 0.40 s | 0.40 s | 0.74 s | 0.98 s |
 | JVM, 0.4.2 | 0.41 s | 0.40 s | 0.52 s | 0.57 s |
 
 A variant now costs about what an object with the same data costs, on every
-engine. On the core it is even a little cheaper, because the loop over
+engine. On Tomato it is even a little cheaper, because the loop over
 objects also calls `sum()`. The old cost grew with the fields of all cases
 together: `Wide` built 26 arrays for every value, and ten million values on
-the core allocated 260 million arrays and 117 MB. Now they allocate no array
+Tomato allocated 260 million arrays and 117 MB. Now they allocate no array
 and 22 MB. Nothing a program can observe changed. Equality, `text()`,
 catching an error enum and the report of an uncaught one behave as before,
 and the conformance suite kept its expected outputs.
@@ -478,5 +478,5 @@ In return:
 - a forgotten case is a compile error, not a run-time surprise;
 - a value cannot be read through the wrong case;
 - equality is exact, and two enums can never be compared by accident;
-- a payload-free enum costs no allocation on the core and a pointer
+- a payload-free enum costs no allocation on Tomato and a pointer
   comparison on the JVM.

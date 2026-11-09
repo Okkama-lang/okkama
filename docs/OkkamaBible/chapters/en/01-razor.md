@@ -284,10 +284,11 @@ the main ones; later chapters return to each.
   constructions like `BigQuotient(left: a, right: b).value()` where a method
   would read better (issue #190 proposes exactly that).
 - **Performance of immutable updates.** A new object per change costs
-  allocations; collection updates without in-place mutation cost copies. The
-  Sparrow core makes allocation cheap and the compiler removes much of it, but
-  some idioms are quadratic today — arrays have no append, so building one
-  element by element copies it each time (issue #145). The razor removed
+  allocations; collection updates without in-place mutation cost copies.
+  Tomato, the Sparrow runtime, makes allocation cheap and the compiler
+  removes much of it, but some idioms are quadratic today — arrays have no
+  append, so building one element by element copies it each time
+  (issue #145). The razor removed
   mutation; it must not remove efficiency, and the remedy is to add the right
   *operation*, not the mutable entity.
 - **Unlearning.** Most programmers think with null, inheritance and mutable
@@ -307,14 +308,14 @@ philosophy and the history that shaped Okkama. Parts II–V teach the language
 from values to whole programs; each chapter explains a construct, shows it
 working in examples you can run, cites the research and practice it builds
 on, and ends with its limits. Part VI opens the implementation: the compiler,
-the three engines, the Sparrow core with its JIT and garbage collector, and
+the three engines, Tomato with its JIT and garbage collector, and
 the machinery that keeps it safe and fast. Part VII is about judgement —
 building real programs, comparing Okkama with other languages, and the open
 problems.
 
 Every program in the book is in `docs/OkkamaBible/examples`, and every one is
-checked: `build.py --check` runs it on the IR interpreter and on the Sparrow
-core and compares the output with the text you read. Tables of builtin
+checked: `build.py --check` runs it on the IR interpreter and on Tomato and
+compares the output with the text you read. Tables of builtin
 behaviour and of the standard library are generated from the code. If the
 book and the implementation ever disagree, the implementation is right and
 the book has a bug — please report it.

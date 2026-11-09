@@ -394,7 +394,7 @@ the `Atomic` changes.
 
 A successor is a shallow copy. `obj.next` allocates an object of the same
 size and copies every field. Fields that hold other objects copy the
-reference, not the object. On the Sparrow core the JIT unrolls the copy
+reference, not the object. On Tomato the JIT unrolls the copy
 into one store per word, the header included. Unchanged words are loaded
 from the receiver; staged words come straight from registers. For `Tab`,
 with four fields, `ordered` is an allocation, three loads and five

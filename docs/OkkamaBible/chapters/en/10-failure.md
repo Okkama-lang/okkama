@@ -405,7 +405,7 @@ origin and stack. This happens whether or not the new error mentions the old
 one, so a `catch` that throws a less detailed error does not lose the
 evidence. It also holds after an `await`. The link is diagnostic: the
 program cannot read it, but the report of an uncaught failure prints it. On
-the Sparrow core:
+Tomato:
 
 ```text
 OrderError: OrderError.failed(7)
@@ -645,7 +645,7 @@ Each engine carries the failure along those edges in its own way.
 
 - **The IR engine** interprets the blocks. A failure is the error branch of
   a Rust result, which travels up through the interpreter's frames.
-- **The Sparrow core** compiles to machine code. A failing helper sets the
+- **Tomato** compiles to machine code. A failing helper sets the
   `status` and `failure` fields of the run's context, and every caller
   checks `status` after each call or helper and branches to its landing
   block. A failure thus crosses machine frames without Rust unwinding and
@@ -658,7 +658,7 @@ Each engine carries the failure along those edges in its own way.
   maps those numbers back to files, lines and columns, so the uncaught
   report shows the Okkama stack and never Java frames. Remembering the stack
   is the price of a throw: a loop that throws 500 000 failures twelve calls
-  deep takes 0.48 s instead of 0.27 s, the same as the Sparrow core.
+  deep takes 0.48 s instead of 0.27 s, the same as Tomato.
   Regions close in Java `catch` blocks.
 
 The conformance suite runs the same programs on all three and requires the

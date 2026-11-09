@@ -53,7 +53,7 @@ an `AutoCloseable` at the end of a block.
 
 Okkama never ties a resource to the collector. When a `destroy` runs is a
 property of the program text, the same on every engine and for every heap
-size. The Sparrow core has a precise, non-moving collector, the IR engine
+size. Tomato has a precise, non-moving collector, the IR engine
 counts references, and the JVM has its own collector. All three run the
 same `destroy`s in the same order.
 
@@ -404,7 +404,7 @@ container. A remembered container is skipped until an identity at least as
 old becomes free again, which happens when a scope returns it. Then all
 the summaries are dropped. On the benchmark built for this
 (`11-ownership`: 100 000 records in an array and a map, 300 rounds), the
-change made the Sparrow core 85% faster, the IR engine 86% and the JVM 75%.
+change made Tomato 85% faster, the IR engine 86% and the JVM 75%.
 
 The lesson for program design is modest. Ownership costs nothing for plain
 data. Non-plain data costs a walk the first time a structure is seen and
