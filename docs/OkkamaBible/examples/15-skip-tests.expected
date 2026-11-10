@@ -1,0 +1,6 @@
+=== RUN   Ledger :: a test among the private actions
+--- PASS: Ledger :: a test among the private actions
+=== RUN   the archive is not mounted
+--- SKIP: the archive is not mounted
+    needs the archive volume
+PASS

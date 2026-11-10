@@ -1,0 +1,28 @@
+module skip_tests;
+
+object Ledger {
+    has entries is int;
+
+    Ledger(entries is int) {
+        self.entries = entries;
+    }
+
+    count() is int {
+        self.checked();
+    }
+
+    private:
+
+    checked() is int {
+        entries;
+    }
+
+    test "a test among the private actions" {
+        test.is(Ledger(3).count(), 3);
+    }
+}
+
+test "the archive is not mounted" {
+    test.skip("needs the archive volume");
+    test.ok(false);
+}

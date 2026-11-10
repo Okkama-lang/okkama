@@ -46,12 +46,15 @@ PASS
   them. Test-only code cannot affect a production program, and it costs
   nothing there.
 
-Tests run in the same process, on the engine chosen with `--engine`. A
-test block must come before the object's `private:` line; after it, the
-parser reads `test` as the start of an action (#277). The standard library
-can render a test report as human text, TAP, JSON or JUnit
-(`testing/report`), but the command line does not yet offer report
-formats, filters or parallel workers (#277).
+Tests run in the same process, on the engine chosen with `--engine`.
+`okkama run -t --filter TEXT` runs only the tests whose names contain
+`TEXT`; with several `--filter`s, those that contain any of them. A test
+may also stand among the actions after an object's `private:` line. It is
+still a test of the object and does not become private; before 0.5.0 the
+parser read it as the start of an action (#277). The standard library can
+render a test report as human text, TAP, JSON or JUnit (`testing/report`),
+but the command line offers no report formats, seeds or parallel workers
+yet. They are planned with the rewritten standard library (#339).
 
 ## 15.2 The `test` binding
 
@@ -62,10 +65,18 @@ not imported and does not exist outside a test:
 - `test.is(actual, expected)` and `test.isnt(actual, expected)` use the
   language's structural equality, deep through collections and objects;
 - `test.fail("explanation")` records a failure;
+- `test.skip("reason")` ends the test and reports it as skipped;
 - `test.throws(Type) { … }` requires the block to throw a `Type`, and
   returns the caught error for further checks.
 
-There is no `test.skip` yet (#277).
+`test.skip` is for a test that cannot run here: a missing volume, a
+service that is not configured. The code after it does not run, and no
+`catch` takes it, so a helper that skips cannot be overruled by its
+caller. Cleanup runs as for any failure. A skipped test does not fail the
+run, unless an assertion had already failed; a skip does not erase a
+failure. The example also puts a test among the private actions:
+
+{{example:15-skip-tests}}
 
 A failed assertion does not stop the test. The remaining assertions still
 run, and every failure is reported:
@@ -79,7 +90,7 @@ FAIL
 
 An uncaught throw, a panic or a failure in cleanup ends only the current
 case. Its `defer`s and `destroy`s run, and the next case starts. The
-process exits with 0 only when every case passed.
+process exits with 0 when no case failed; a skipped case does not fail.
 
 `test.throws(Refused) { … }` means exactly `try { …; panic …; } catch e is
 Refused { e; }`. The error it returns is an ordinary enum value, so
@@ -264,9 +275,8 @@ that may hang should bound itself with a budget or a deadline.
 
 - Errors inside fake blocks are reported in terms of the generated object
   (#276).
-- `test.skip`, report formats, filters and parallel workers are described
-  in the Book but missing from the command line, and a test after
-  `private:` does not parse (#277, planned for 0.5.0).
+- Report formats, seeds and parallel workers are not in the command line;
+  they are planned with the rewritten standard library (#339).
 
 Until 0.4.1, a successor passed to `test.is` crashed the compiler and did
 not count as used (#275). It is now an ordinary argument:
