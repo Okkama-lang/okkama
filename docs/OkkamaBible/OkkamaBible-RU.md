@@ -13626,6 +13626,25 @@ Java, и передача управления от одного к другом
 вызовов метода. Программе, которая много ждёт, место на Sparrow; JVM — движок
 для долгих вычислений между ожиданиями.
 
+### Что держит ждущая задача
+
+Десять тысяч задач, каждая ждёт одного `Event`, потом все разом будятся и
+дожидаются, против той же программы без задач (0.5.1, пиковая резидентная
+память):
+
+| движок | память на ждущую задачу | 10 000 задач, весь запуск |
+|---|---:|---:|
+| Sparrow | около 270 байт | 0,03 с |
+| IR | около 35 КБ | 0,72 с |
+| JVM | около 220 КБ (измерено на 200 задачах) | — |
+
+Задача Sparrow — это её кадр в куче: локальные значения, живущие через
+`await`, и больше ничего. IR-движок даёт каждой задаче корутину со своим
+машинным стеком, JVM — поток, чей стек растёт по мере использования.
+Программа, которая держит по задаче на открытое соединение, уместит сто тысяч
+таких задач на Sparrow в 27 МБ; на JVM одни их потоки заняли бы 22 ГБ. Для
+масштаба: Go начинает горутину со стеком в 2 КБ [[Authors 2014](#ref-go14)].
+
 ### Цены, которых нет в цикле
 
 Микробенчмарк гоняет уже скомпилированный код. Sparrow компилирует каждую
@@ -13725,6 +13744,7 @@ Okkama, о перемежении и платят ту же цену — цве�
 - <a id="ref-amin2016"></a>Nada Amin, Ross Tate (2016). Java and Scala's Type Systems are Unsound: The Existential Crisis of Null Pointers. In *Proceedings of OOPSLA 2016*: 838–848. ACM. https://doi.org/10.1145/2983990.2984004
 - <a id="ref-lions1996"></a>Jacques-Louis Lions et al. (1996). *ARIANE 5 Flight 501 Failure: Report by the Inquiry Board*. European Space Agency, Paris, 19 July 1996. https://www.esa.int/Newsroom/Press_Releases/Ariane_501_-_Presentation_of_Inquiry_Board_report
 - <a id="ref-armstrong2003"></a>Joe Armstrong (2003). *Making Reliable Distributed Systems in the Presence of Software Errors*. PhD thesis, Royal Institute of Technology (KTH), Stockholm.
+- <a id="ref-go14"></a>The Go Authors (2014). Go 1.4 Release Notes: Runtime ("the default starting size for a goroutine's stack in 1.4 has been reduced from 8192 bytes to 2048 bytes"). https://go.dev/doc/go1.4
 - <a id="ref-go114"></a>The Go Authors (2020). Go 1.14 Release Notes: Runtime ("Goroutines are now asynchronously preemptible"). https://go.dev/doc/go1.14
 - <a id="ref-aycock2003"></a>John Aycock (2003). A Brief History of Just-In-Time. *ACM Computing Surveys* 35(2): 97–113. https://doi.org/10.1145/857076.857077
 - <a id="ref-bagwell2001"></a>Phil Bagwell (2001). *Ideal Hash Trees*. Technical report, École Polytechnique Fédérale de Lausanne. https://infoscience.epfl.ch/record/64398

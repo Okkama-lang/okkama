@@ -710,6 +710,24 @@ thread, and handing control from one to another costs microseconds, two
 hundred times a method call. A program that waits a lot belongs on Sparrow;
 the JVM is the engine for long computations between waits.
 
+### What a waiting task holds
+
+Ten thousand tasks, each waiting on one `Event`, then woken and awaited all
+together, against the same program with none (0.5.1, peak resident memory):
+
+| engine | memory per waiting task | 10 000 tasks, whole run |
+|---|---:|---:|
+| Sparrow | about 270 bytes | 0.03 s |
+| IR | about 35 KB | 0.72 s |
+| JVM | about 220 KB (measured with 200 tasks) | — |
+
+A Sparrow task is its heap frame: the locals that live across the `await`,
+and nothing else. The IR engine gives each task a coroutine with a machine
+stack of its own, and the JVM a thread whose stack grows as it is used. A
+program that keeps one task per open connection can hold a hundred thousand
+of them on Sparrow in 27 MB; on the JVM their threads alone would take 22 GB.
+For scale, Go starts a goroutine with a stack of 2 KB [@go14].
+
 ### The costs that are not in the loop
 
 A micro benchmark runs code that is already compiled. Sparrow compiles each

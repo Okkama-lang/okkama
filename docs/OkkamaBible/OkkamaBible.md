@@ -13459,6 +13459,24 @@ thread, and handing control from one to another costs microseconds, two
 hundred times a method call. A program that waits a lot belongs on Sparrow;
 the JVM is the engine for long computations between waits.
 
+### What a waiting task holds
+
+Ten thousand tasks, each waiting on one `Event`, then woken and awaited all
+together, against the same program with none (0.5.1, peak resident memory):
+
+| engine | memory per waiting task | 10 000 tasks, whole run |
+|---|---:|---:|
+| Sparrow | about 270 bytes | 0.03 s |
+| IR | about 35 KB | 0.72 s |
+| JVM | about 220 KB (measured with 200 tasks) | — |
+
+A Sparrow task is its heap frame: the locals that live across the `await`,
+and nothing else. The IR engine gives each task a coroutine with a machine
+stack of its own, and the JVM a thread whose stack grows as it is used. A
+program that keeps one task per open connection can hold a hundred thousand
+of them on Sparrow in 27 MB; on the JVM their threads alone would take 22 GB.
+For scale, Go starts a goroutine with a stack of 2 KB [[Authors 2014](#ref-go14)].
+
 ### The costs that are not in the loop
 
 A micro benchmark runs code that is already compiled. Sparrow compiles each
@@ -13551,6 +13569,7 @@ code print the same lines in the same order.
 - <a id="ref-amin2016"></a>Nada Amin, Ross Tate (2016). Java and Scala's Type Systems are Unsound: The Existential Crisis of Null Pointers. In *Proceedings of OOPSLA 2016*: 838–848. ACM. https://doi.org/10.1145/2983990.2984004
 - <a id="ref-lions1996"></a>Jacques-Louis Lions et al. (1996). *ARIANE 5 Flight 501 Failure: Report by the Inquiry Board*. European Space Agency, Paris, 19 July 1996. https://www.esa.int/Newsroom/Press_Releases/Ariane_501_-_Presentation_of_Inquiry_Board_report
 - <a id="ref-armstrong2003"></a>Joe Armstrong (2003). *Making Reliable Distributed Systems in the Presence of Software Errors*. PhD thesis, Royal Institute of Technology (KTH), Stockholm.
+- <a id="ref-go14"></a>The Go Authors (2014). Go 1.4 Release Notes: Runtime ("the default starting size for a goroutine's stack in 1.4 has been reduced from 8192 bytes to 2048 bytes"). https://go.dev/doc/go1.4
 - <a id="ref-go114"></a>The Go Authors (2020). Go 1.14 Release Notes: Runtime ("Goroutines are now asynchronously preemptible"). https://go.dev/doc/go1.14
 - <a id="ref-aycock2003"></a>John Aycock (2003). A Brief History of Just-In-Time. *ACM Computing Surveys* 35(2): 97–113. https://doi.org/10.1145/857076.857077
 - <a id="ref-bagwell2001"></a>Phil Bagwell (2001). *Ideal Hash Trees*. Technical report, École Polytechnique Fédérale de Lausanne. https://infoscience.epfl.ch/record/64398

@@ -37,6 +37,7 @@ bibliographic data were checked are listed.
 - [@gabriel1991] Richard P. Gabriel (1991). The Rise of "Worse is Better". In *Lisp: Good News, Bad News, How to Win Big*. https://www.dreamsongs.com/RiseOfWorseIsBetter.html
 - [@gamma1994] Erich Gamma, Richard Helm, Ralph Johnson, John Vlissides (1994). *Design Patterns: Elements of Reusable Object-Oriented Software*. Addison-Wesley.
 - [@go114] The Go Authors (2020). Go 1.14 Release Notes: Runtime ("Goroutines are now asynchronously preemptible"). https://go.dev/doc/go1.14
+- [@go14] The Go Authors (2014). Go 1.4 Release Notes: Runtime ("the default starting size for a goroutine's stack in 1.4 has been reduced from 8192 bytes to 2048 bytes"). https://go.dev/doc/go1.4
 - [@goldberg1983] Adele Goldberg, David Robson (1983). *Smalltalk-80: The Language and Its Implementation*. Addison-Wesley.
 - [@goldberg1991] David Goldberg (1991). What Every Computer Scientist Should Know About Floating-Point Arithmetic. *ACM Computing Surveys* 23(1): 5–48. https://doi.org/10.1145/103162.103163
 - [@goodenough1975] John B. Goodenough (1975). Exception Handling: Issues and a Proposed Notation. *Communications of the ACM* 18(12): 683–696. https://doi.org/10.1145/361227.361230
