@@ -12734,6 +12734,27 @@ unwind as in an ordinary loop. The loop does not close its source: here the
 reader closes the channel when it has sent everything, and that close is what
 `next()` turns into `Maybe.none`.
 
+### What in the standard library is async
+
+About a hundred std modules have async actions, and they are where a program
+waits for the world:
+
+- **networks**: `net/tcp`, `net/udp`, `net/unix`, `net/tls`, `net/dns`, and
+  `net/tcp_racing`, which races connection attempts to several addresses;
+- **HTTP**: the client and the server, about fifty modules under `http/`;
+- **databases**: `db/connection`, `db/pool`, `db/transaction`, `db/query`,
+  SQLite and PostgreSQL. Rows come one at a time through `for await`;
+- **processes and terminals**: `os/process` and the capture of commands and
+  pipelines, `terminal/session`, `terminal/prompt`;
+- **the rest**: `fs/watch` (changes to files), `logging/queue` and
+  `logging/syslog`, `mail` (SMTP), and `time/clock` for waiting on time.
+
+Reading and writing ordinary files, JSON, text and everything that only
+computes are synchronous: they do not wait for anything another task could
+use the time for. The standard library is due to be rewritten (planned for
+0.7.0), and which of its operations suspend is one of the things the rewrite
+will decide again; the language rules of this chapter do not depend on it.
+
 ## 20.11 Async in roles, generics and tests
 
 Being async is part of an action's signature, and roles keep it. A role that
