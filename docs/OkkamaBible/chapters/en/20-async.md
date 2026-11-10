@@ -471,6 +471,28 @@ local that the spawning code still uses. An async test runs on the same
 scheduler as `async main`; when it ends, its spawned tasks are cancelled and
 drained, and a failure nobody awaited fails the test.
 
+### Time in tests
+
+Code that waits for time is the hardest to test: a test that really waits 30
+seconds is slow, and one that waits less is flaky. `testing/time` gives a test
+a `ManualClock`, which `Within`, `Before` and every other user of the
+`Timing` role accept in place of the system clock. Its time moves only when
+the test calls `advance`:
+
+{{example:20-deadline-tests}}
+
+- `spawn` runs `Dispatch.eta()` until it suspends, waiting on the clock;
+  `clock.pending()` is 1.
+- After 29 seconds of manual time nothing has fired, and the task is still
+  waiting.
+- The thirtieth second fires the deadline. The courier is cancelled, and
+  `await eta` returns −1 without a second of real time passing.
+
+The test is deterministic twice over: the clock moves only when told, and the
+scheduler runs tasks in an order fixed by the rules of Section 20.3. A test of
+concurrent code in Okkama does not need retries, sleeps or timeouts of its
+own.
+
 ## 20.12 Worked examples: a pool and a pipeline
 
 The pieces of this chapter fit together in a pool that lends a limited number

@@ -13019,6 +13019,85 @@ PASS
 заканчивается, его запущенные задачи отменяются и дожидаются, а отказ,
 которого никто не дождался, проваливает тест.
 
+### Время в тестах
+
+Труднее всего тестировать код, который ждёт времени: тест, который
+действительно ждёт 30 секунд, медленный, а тот, что ждёт меньше, нестабилен.
+`testing/time` даёт тесту `ManualClock`, который `Within`, `Before` и любой
+другой пользователь роли `Timing` принимают вместо системных часов. Его время
+движется, только когда тест вызывает `advance`:
+
+```okkama
+module bible/deadline v1.0.0;
+
+import "async/event" take Event;
+import "async/timeout" take Within, TimedOut;
+import "time/clock" take Instant;
+import "time/duration" take Duration, DurationUnit;
+import "testing/time" take ManualClock;
+
+object Courier {
+    has never is Event;
+
+    Courier(:never);
+
+    async eta() is int {
+        await never.wait();
+        0;
+    }
+}
+
+object Dispatch {
+    has clock is ManualClock;
+
+    Dispatch(:clock);
+
+    async eta() is int {
+        let bounded is Within<int> = Within(
+            origin: Courier(never: Event()).eta(),
+            limit: Duration(30.rat(), DurationUnit.second),
+            clock: clock,
+        );
+        try {
+            await bounded.result();
+        }
+        catch e is TimedOut {
+            -1;
+        }
+    }
+}
+
+async test "a courier that never answers times out after thirty seconds" {
+    let clock = ManualClock(Instant(Duration(0.rat(), DurationUnit.second)));
+    defer clock.close();
+    let eta = spawn Dispatch(clock: clock).eta();
+    test.is(clock.pending(), 1);
+    clock.advance(Duration(29.rat(), DurationUnit.second));
+    test.ok(!eta.done());
+    clock.advance(Duration(1.rat(), DurationUnit.second));
+    test.is(await eta, -1);
+}
+```
+
+Вывод:
+
+```text
+=== RUN   a courier that never answers times out after thirty seconds
+--- PASS: a courier that never answers times out after thirty seconds
+PASS
+```
+
+- `spawn` выполняет `Dispatch.eta()`, пока тот не приостановится в ожидании
+  часов; `clock.pending()` — 1.
+- Через 29 секунд ручного времени ничего не сработало, и задача всё ещё ждёт.
+- Тридцатая секунда запускает дедлайн. Курьера отменяют, и `await eta`
+  возвращает −1, хотя настоящего времени не прошло ни секунды.
+
+Тест детерминирован дважды: часы идут, только когда им велят, а планировщик
+выполняет задачи в порядке, который задают правила раздела 20.3. Тесту
+конкурентного кода в Okkama не нужны ни повторы, ни паузы, ни собственные
+таймауты.
+
 ## 20.12 Разобранные примеры: пул и конвейер
 
 Части этой главы складываются в пул, который одалживает ограниченное число
