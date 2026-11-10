@@ -245,3 +245,13 @@ previous Sparrow, `sparrow-origin`).
   (`SortedBy` keys, `Cell` updates); closures crossing tasks (with Chapter
   20); the JVM's inlining on a megamorphic call site.
 
+
+## Chapter 20 sources (checked 2026-11-10)
+
+- halstead1985: Halstead, MULTILISP, TOPLAS 7(4): 501–538, doi 10.1145/4472.4478.
+- liskov1988: Liskov & Shrira, Promises, PLDI '88, pp. 260–267, doi 10.1145/53990.54016.
+- baker1977: Baker & Hewitt, The Incremental Garbage Collection of Processes, MIT AI WP-149, hdl 1721.1/41969.
+- syme2011: Syme, Petricek & Lomov, The F# Asynchronous Programming Model, PADL 2011, LNCS 6539: 175–189, doi 10.1007/978-3-642-18378-2_15.
+- nystrom2015: What Color is Your Function?, journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/.
+- elizarov2018: Structured concurrency, medium.com/@elizarov/structured-concurrency-722d765aa952 (Sept 2018).
+- smith2018 is already listed. Examples: scratch 20-lazy.ok verified on ir/sparrow; the conformance case L08 cancel.awaited-cleanup-settles is the model for structured await.

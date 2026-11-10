@@ -8755,6 +8755,35 @@ main() is int { 0; }
 16-value-rejected.ok:8:22: semantic error: match over enum `Priority` does not cover urgent, so it has no value here; add the cases or an `else` branch
 ```
 
+То же сообщение называет варианты, когда `match` — последнее значение
+действия. До 0.5.0 эта ошибка называла только действие («must produce a return
+value», issue #291):
+
+```okkama
+module bible/tail v1.0.0;
+
+enum Priority = (low, normal, urgent);
+
+object Queue {
+    Queue();
+
+    weight(priority is Priority) is int {
+        match priority {
+            case Priority.low { 1; }
+            case Priority.normal { 2; }
+        }
+    }
+}
+
+main() is int { 0; }
+```
+
+Ответ компилятора:
+
+```text
+16-tail-rejected.ok:9:9: semantic error: match over enum `Priority` does not cover urgent, so it has no value here; add the cases or an `else` branch
+```
+
 - `match`-*оператор* над перечислением без данных может пропустить варианты;
   для них он ничего не делает. `okkama lint` об этом сообщает:
 
@@ -8801,10 +8830,10 @@ let label = reading ?? .single(value): value.string() !! _: "no single value";
   `match`, оба правила действуют и для перечислений без данных. Выборы не
   вкладываются друг в друга.
 
-Сообщение о пропущенном варианте в компактном выборе описывает форму, а не
-вариант (`Compact choice branches must produce a value or diverge`); лучшее
-сообщение — issue #291. Для всего, что длиннее строки, `match` читается лучше
-и при ошибке говорит больше.
+Компактный выбор с пропущенным вариантом называет его: ``match over enum
+`Priority` does not cover normal, so it has no value here; add the cases or a
+`_:` branch``. До 0.5.0 сообщение описывало форму, а не вариант (issue #291).
+Для всего, что длиннее строки, `match` читается лучше.
 
 ## 16.5 Закрытое или открытое: перечисления и роли
 
@@ -9030,9 +9059,6 @@ main() is int { 0; }
 - **Лишние варианты проходят молча.** Повтор варианта перечисления без данных,
   повтор литерала или `else`, который никогда не выполнится, принимаются
   (issue #286).
-- **Диагностика.** Неполный `match` в хвосте действия сообщает, что у действия
-  нет значения, а не какой вариант пропущен; так же ведёт себя компактный
-  выбор с пропущенным вариантом (issue #291).
 
 ## 16.9 Чего стоит такой замысел
 

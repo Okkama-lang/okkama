@@ -192,6 +192,12 @@ The rule depends on the kind of enum:
 
 {{example:16-value-rejected}}
 
+The same message names the cases when the `match` is the last value of an
+action. Until 0.5.0 that error named only the action ("must produce a return
+value", issue #291):
+
+{{example:16-tail-rejected}}
+
 - A *statement* `match` over a payload-free enum may leave cases out; it then
   does nothing for them. `okkama lint` reports it:
 
@@ -236,10 +242,10 @@ let label = reading ?? .single(value): value.string() !! _: "no single value";
 - Coverage must be complete, and a case may not repeat. Both rules apply to
   payload-free enums as well, unlike `match`. Choices cannot nest.
 
-The message for a missing case in a compact choice describes the form rather
-than the case (`Compact choice branches must produce a value or diverge`); a
-better one is issue #291. For anything longer than a line, `match` reads
-better and says more when it fails.
+A compact choice that misses a case names it: ``match over enum `Priority`
+does not cover normal, so it has no value here; add the cases or a `_:`
+branch``. Until 0.5.0 the message described the form, not the case (issue
+#291). For anything longer than a line, `match` reads better.
 
 ## 16.5 Closed or open: enums and roles
 
@@ -452,9 +458,6 @@ two are left out on purpose, for the reasons in §16.1.
   not: `Map key type Reading is not a scalar key type` (issue #289).
 - **Redundant cases pass silently.** A repeated payload-free case, a repeated
   literal, or an `else` that can never run is accepted (issue #286).
-- **Diagnostics.** A non-exhaustive `match` in the tail of an action reports
-  that the action has no value rather than which case is missing, and so does
-  a compact choice with a missing case (issue #291).
 
 ## 16.9 What this design costs
 
