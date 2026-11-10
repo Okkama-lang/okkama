@@ -1,0 +1,56 @@
+module bible/fanout v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/event" take Event;
+import "async/collect" take AllFutures;
+import "async/timeout" take Within, TimedOut;
+import "time/clock" take SystemClock;
+import "time/duration" take Duration, DurationUnit;
+import "collections/sequence" take Sequencing;
+
+object Supplier {
+    has name is string;
+    has price is int;
+
+    Supplier(:name, :price);
+
+    async quote() is int {
+        price;
+    }
+}
+
+object Courier {
+    has never is Event;
+
+    Courier(:never);
+
+    async eta() is int {
+        defer Stdout().writeln("courier: request withdrawn");
+        await never.wait();
+        0;
+    }
+}
+
+async main() is int {
+    let quotes is @Future<int> = [
+        Supplier(name: "mill", price: 40).quote(),
+        Supplier(name: "farm", price: 35).quote(),
+        Supplier(name: "port", price: 52).quote(),
+    ];
+    let all is AllFutures<int> = AllFutures(origins: quotes);
+    let prices is Sequencing<int> = await all.results();
+    Stdout().writeln("quotes: " + prices.size().string());
+    let bounded is Within<int> = Within(
+        origin: Courier(never: Event()).eta(),
+        limit: Duration(value: 20.rat(), unit: DurationUnit.millisecond),
+        clock: SystemClock(),
+    );
+    let eta = try {
+        await bounded.result();
+    }
+    catch e is TimedOut {
+        -1;
+    };
+    Stdout().writeln("eta: " + eta.string());
+    0;
+}

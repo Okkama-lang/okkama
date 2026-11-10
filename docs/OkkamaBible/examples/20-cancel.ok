@@ -1,0 +1,46 @@
+module bible/cancel v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/event" take Event;
+
+object Delivery {
+    has loaded is Event;
+    has road is Event;
+
+    Delivery(:loaded, :road);
+
+    async run() is string {
+        defer Stdout().writeln("delivery: van returned to the depot");
+        loaded.set();
+        await road.wait();
+        "delivered";
+    }
+}
+
+object Order {
+    has delivery is Delivery;
+
+    Order(:delivery);
+
+    async run() is string {
+        defer Stdout().writeln("order: closed");
+        await delivery.run();
+    }
+}
+
+async main() is int {
+    let loaded = Event();
+    let road = Event();
+    let order = spawn Order(delivery: Delivery(loaded: loaded, road: road)).run();
+    await loaded.wait();
+    order.cancel();
+    Stdout().writeln("customer: cancel");
+    let outcome = try {
+        await order;
+    }
+    catch e is Cancelled {
+        "cancelled";
+    };
+    Stdout().writeln("outcome: " + outcome + "; cancelled: " + order.cancelled().string());
+    0;
+}

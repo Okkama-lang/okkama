@@ -1,0 +1,47 @@
+module bible/lease v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/event" take Event;
+
+object Lease {
+    has returned is Event;
+
+    Lease(:returned);
+
+    async destroy {
+        await returned.wait();
+        Stdout().writeln("lease: returned to the pool");
+    }
+}
+
+object Job {
+    has started is Event;
+    has returned is Event;
+
+    Job(:started, :returned);
+
+    async run() is int {
+        let lease = Lease(returned: returned);
+        started.set();
+        await Event().wait();
+        1;
+    }
+}
+
+async main() is int {
+    let started = Event();
+    let returned = Event();
+    let job = spawn Job(started: started, returned: returned).run();
+    await started.wait();
+    job.cancel();
+    Stdout().writeln("main: cancel requested; done: " + job.done().string());
+    returned.set();
+    let outcome = try {
+        await job;
+    }
+    catch e is Cancelled {
+        -1;
+    };
+    Stdout().writeln("main: job " + outcome.string());
+    0;
+}

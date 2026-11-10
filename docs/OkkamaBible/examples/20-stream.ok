@@ -1,0 +1,43 @@
+module bible/stream v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/channel" take Channel, Sending, Receiving, ChannelClosed;
+
+object Lines {
+    has input is Receiving<string>;
+
+    Lines(:input);
+
+    async next() is Maybe<string> {
+        try {
+            Maybe.some(await input.item());
+        }
+        catch e is ChannelClosed {
+            Maybe.none;
+        }
+    }
+}
+
+object Reader {
+    has output is Sending<string>;
+
+    Reader(:output);
+
+    async run() is int {
+        defer output.close();
+        for ["flour", "water", "salt"] -> line {
+            await output.send(line);
+        }
+        3;
+    }
+}
+
+async main() is int {
+    let channel is Channel<string> = Channel(capacity: 1);
+    let reader = spawn Reader(output: channel.sending()).run();
+    for await Lines(input: channel.receiving()) -> line {
+        Stdout().writeln("line: " + line);
+    }
+    Stdout().writeln("lines sent: " + (await reader).string());
+    0;
+}

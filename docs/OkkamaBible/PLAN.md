@@ -106,6 +106,21 @@ language.
 
 Updated with each chapter: `build.py --stats`.
 
+- Chapter 20 (async): 10.9 pages (EN) of its floor of 22. Written: lazy
+  futures (`20-lazy`), where futures came from (Baker–Hewitt, Multilisp,
+  promises, F#, C#, JS, Rust; colour), the cooperative scheduler and wake
+  order (`20-wake`, #340), `spawn` and process workers, structured await and
+  cancellation (`20-cancel`, #147; Trio, Kotlin), channels and the state
+  owner (`20-ledger`), fan-out and deadlines (`20-fanout`), events, locks,
+  semaphores, barriers, atomics, tokens, resources across suspension and
+  `async destroy` (`20-lease`, #154), `for await` (`20-stream`), lost
+  failures (`20-lost`), how the engines run tasks, a comparison table,
+  limits, costs. `--check` of `20-wake` and `20-cancel` on IR needs a build
+  with #340. To add: a worked example (a crawler or a connection pool with a
+  bounded channel and a deadline); measured costs of await, spawn and a
+  channel round trip per engine (micro benchmarks); generics and async with
+  Chapter 17; the history of structured concurrency at more length (Dijkstra's
+  goto letter as Smith reads it, Erlang links and supervisors).
 - Chapter 10 (failure): 14.9 pages (EN) of its floor of 22. Written: the
   two channels, history, error enums, throw, try/catch, causes, confirm,
   try?/try!, host failures, a module boundary (`10-config`), budgets,

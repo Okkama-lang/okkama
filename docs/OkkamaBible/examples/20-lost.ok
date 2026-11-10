@@ -1,0 +1,19 @@
+module bible/lost v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Refused is Error = (because(reason is string));
+
+object Payment {
+    Payment();
+
+    async charge() is int {
+        throw Refused.because("card expired");
+    }
+}
+
+async main() is int {
+    let payment = spawn Payment().charge();
+    Stdout().writeln("main: done, without awaiting the payment");
+    0;
+}
