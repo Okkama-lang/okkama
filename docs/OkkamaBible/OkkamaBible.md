@@ -13459,6 +13459,29 @@ thread, and handing control from one to another costs microseconds, two
 hundred times a method call. A program that waits a lot belongs on Sparrow;
 the JVM is the engine for long computations between waits.
 
+### The costs that are not in the loop
+
+A micro benchmark runs code that is already compiled. Sparrow compiles each
+function to machine code on its first call, and a program that touches a lot
+of code once pays for that before anything else. An HTTP server and client in
+one program, serving 50 requests on loopback, ran for 834 ms on Sparrow in
+0.5.1, and 765 ms of it went to compiling 601 functions, 2 MB of machine code;
+the IR engine, which compiles nothing, finished the same program in about
+350 ms (issue #345). Sparrow wins once the code runs long enough to repay its
+compilation: a server that lives for hours, a loop over a large input. It
+loses on short runs through a lot of library code.
+
+`async destroy` has a cost of the same kind. A scope that may hold an object
+with an async destroy closes with a settle, which may suspend, so on Sparrow
+it becomes a resumption point like an `await`. The compiler decides this for
+the whole program: once any object has an async destroy, every scope of
+every async action closes with a settle. Turning one cleanup guard of the
+HTTP server into an `async destroy` (issue #328) grew the machine code from
+2.0 to 2.9 MB and the compile time from 765 to 1 236 ms, half a second on
+every run of the program, while the work done stayed the same. The IR engine
+showed no difference. Until the compiler limits settles to the scopes that
+need them, std keeps its cleanup guards as `defer await guard.close()`.
+
 ## 20.16 Okkama among other languages
 
 | | Okkama | C# | JavaScript | Python asyncio | Rust | Kotlin | Go |
@@ -13491,10 +13514,13 @@ an effect: the place where the rest of the program may change things.
 - **JVM task switches are slow.** An `await` of an async action costs about
   6.7 µs on the JVM, 176 times Sparrow (Section 20.15, issue #327), because
   each task is a thread.
-- **Async cleanup guards cost time on Sparrow.** An `async destroy` guard in
-  the HTTP server's state delays every server run by about 0.8 s (issue
-  #328), and the remaining cleanup guards of std stay synchronous until that
-  cost goes (issue #329).
+- **Async cleanup guards cost compile time on Sparrow.** One `async destroy`
+  in a program makes every async scope close with a settle, which costs the
+  HTTP stack half a second of compilation per run (issue #328, previous
+  section), so the remaining cleanup guards of std stay `defer await` until
+  that cost goes (issue #329).
+- **Short runs pay for compilation on Sparrow.** Compiling a program's code
+  can take longer than running it (issue #345).
 - **Most of std is synchronous.** Asynchronous files, pipes, CSV streams and
   decorators are open work (issues #121, #196, #204, #131), and `for await`
   over a channel's receiving end needs the small adapter of Section 20.10
