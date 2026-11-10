@@ -239,7 +239,7 @@
   - [20.9 Resources across suspension](#209-resources-across-suspension)
   - [20.10 Streams: `for await`](#2010-streams-for-await)
   - [20.11 Async in roles, generics and tests](#2011-async-in-roles-generics-and-tests)
-  - [20.12 A worked example: a pool of connections](#2012-a-worked-example-a-pool-of-connections)
+  - [20.12 Worked examples: a pool and a pipeline](#2012-worked-examples-a-pool-and-a-pipeline)
   - [20.13 Failures across tasks](#2013-failures-across-tasks)
   - [20.14 How the engines run tasks](#2014-how-the-engines-run-tasks)
   - [20.15 What async costs, measured](#2015-what-async-costs-measured)
@@ -12853,7 +12853,7 @@ local that the spawning code still uses. An async test runs on the same
 scheduler as `async main`; when it ends, its spawned tasks are cancelled and
 drained, and a failure nobody awaited fails the test.
 
-## 20.12 A worked example: a pool of connections
+## 20.12 Worked examples: a pool and a pipeline
 
 The pieces of this chapter fit together in a pool that lends a limited number
 of connections to whoever asks. Four jobs share a pool of two:
@@ -12956,6 +12956,115 @@ first served. The pool itself is a dozen lines, and no line of it handles
 concurrency: the `Semaphore` bounds the connections, `destroy` returns them
 on every path out of a job, cancellation included, and `AllFutures` makes
 `main` wait for all four.
+
+### A pipeline with backpressure
+
+The second classic shape is a pipeline: stages connected by channels, each a
+task that reads from one channel and writes to the next.
+
+```okkama
+module bible/pipeline v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/channel" take Channel, Sending, Receiving, ChannelClosed;
+
+object Source {
+    has output is Sending<int>;
+
+    Source(:output);
+
+    async run() is int {
+        defer output.close();
+        for 1..=5 -> n {
+            await output.send(n);
+            Stdout().writeln("source: sent " + n.string());
+        }
+        5;
+    }
+}
+
+object Square {
+    has input is Receiving<int>;
+    has output is Sending<int>;
+
+    Square(:input, :output);
+
+    async run() is int {
+        defer output.close();
+        loop {
+            let n = try {
+                await input.item();
+            }
+            catch e is ChannelClosed {
+                last;
+            };
+            await output.send(n * n);
+        }
+        0;
+    }
+}
+
+object Total {
+    has input is Receiving<int>;
+
+    Total(:input);
+
+    async sum(acc is int) is int {
+        let n = try {
+            await input.item();
+        }
+        catch e is ChannelClosed {
+            return acc;
+        };
+        Stdout().writeln("total: got " + n.string());
+        await self.sum(acc + n);
+    }
+}
+
+async main() is int {
+    let numbers is Channel<int> = Channel(capacity: 1);
+    let squares is Channel<int> = Channel(capacity: 1);
+    let source = spawn Source(output: numbers.sending()).run();
+    let square = spawn Square(input: numbers.receiving(), output: squares.sending()).run();
+    let total = await Total(input: squares.receiving()).sum(0);
+    await source;
+    await square;
+    Stdout().writeln("sum of squares: " + total.string());
+    0;
+}
+```
+
+Output:
+
+```text
+source: sent 1
+total: got 1
+total: got 4
+source: sent 2
+source: sent 3
+source: sent 4
+source: sent 5
+total: got 9
+total: got 16
+total: got 25
+sum of squares: 55
+```
+
+- Each stage closes its output in a `defer`, so the end of the input travels
+  down the pipeline: the source finishes and closes `numbers`, `Square` sees
+  `ChannelClosed`, leaves its loop and closes `squares`, and `Total` returns
+  its sum.
+- The channels hold one value each. The source can be at most a value or two
+  ahead of the consumer; when `Total` is slow, `send` suspends the stages
+  behind it. That is backpressure, and it needs no code: the bound of the
+  channel is the policy.
+- The interleaving of `source: sent` and `total: got` looks irregular, but it
+  is fixed by the rules of Section 20.3, so it is the same on every engine
+  and on every run.
+
+Neither shape needs a lock, a shared variable or a callback. Tasks own their
+state, channels move values between them, and the scheduler decides only the
+order, deterministically.
 
 ## 20.13 Failures across tasks
 

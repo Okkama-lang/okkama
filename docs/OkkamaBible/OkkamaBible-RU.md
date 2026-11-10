@@ -239,7 +239,7 @@
   - [20.9 Ресурсы через приостановку](#209-ресурсы-через-приостановку)
   - [20.10 Потоки значений: `for await`](#2010-потоки-значений-for-await)
   - [20.11 Async в ролях, обобщениях и тестах](#2011-async-в-ролях-обобщениях-и-тестах)
-  - [20.12 Разобранный пример: пул соединений](#2012-разобранный-пример-пул-соединений)
+  - [20.12 Разобранные примеры: пул и конвейер](#2012-разобранные-примеры-пул-и-конвейер)
   - [20.13 Отказы между задачами](#2013-отказы-между-задачами)
   - [20.14 Как движки исполняют задачи](#2014-как-движки-исполняют-задачи)
   - [20.15 Сколько стоит async, измеренно](#2015-сколько-стоит-async-измеренно)
@@ -13019,7 +13019,7 @@ PASS
 заканчивается, его запущенные задачи отменяются и дожидаются, а отказ,
 которого никто не дождался, проваливает тест.
 
-## 20.12 Разобранный пример: пул соединений
+## 20.12 Разобранные примеры: пул и конвейер
 
 Части этой главы складываются в пул, который одалживает ограниченное число
 соединений тем, кто просит. Четыре работы делят пул на два соединения:
@@ -13124,6 +13124,115 @@ main: 4 results
 занимается конкурентностью: `Semaphore` ограничивает число соединений,
 `destroy` возвращает их на любом пути из работы, включая отмену, а
 `AllFutures` заставляет `main` дождаться всех четырёх.
+
+### Конвейер с обратным давлением
+
+Вторая классическая форма — конвейер: стадии, соединённые каналами; каждая —
+задача, которая читает из одного канала и пишет в следующий.
+
+```okkama
+module bible/pipeline v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/channel" take Channel, Sending, Receiving, ChannelClosed;
+
+object Source {
+    has output is Sending<int>;
+
+    Source(:output);
+
+    async run() is int {
+        defer output.close();
+        for 1..=5 -> n {
+            await output.send(n);
+            Stdout().writeln("source: sent " + n.string());
+        }
+        5;
+    }
+}
+
+object Square {
+    has input is Receiving<int>;
+    has output is Sending<int>;
+
+    Square(:input, :output);
+
+    async run() is int {
+        defer output.close();
+        loop {
+            let n = try {
+                await input.item();
+            }
+            catch e is ChannelClosed {
+                last;
+            };
+            await output.send(n * n);
+        }
+        0;
+    }
+}
+
+object Total {
+    has input is Receiving<int>;
+
+    Total(:input);
+
+    async sum(acc is int) is int {
+        let n = try {
+            await input.item();
+        }
+        catch e is ChannelClosed {
+            return acc;
+        };
+        Stdout().writeln("total: got " + n.string());
+        await self.sum(acc + n);
+    }
+}
+
+async main() is int {
+    let numbers is Channel<int> = Channel(capacity: 1);
+    let squares is Channel<int> = Channel(capacity: 1);
+    let source = spawn Source(output: numbers.sending()).run();
+    let square = spawn Square(input: numbers.receiving(), output: squares.sending()).run();
+    let total = await Total(input: squares.receiving()).sum(0);
+    await source;
+    await square;
+    Stdout().writeln("sum of squares: " + total.string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+source: sent 1
+total: got 1
+total: got 4
+source: sent 2
+source: sent 3
+source: sent 4
+source: sent 5
+total: got 9
+total: got 16
+total: got 25
+sum of squares: 55
+```
+
+- Каждая стадия закрывает свой выход в `defer`, поэтому конец входа идёт
+  вниз по конвейеру: источник заканчивает и закрывает `numbers`, `Square`
+  видит `ChannelClosed`, выходит из цикла и закрывает `squares`, а `Total`
+  возвращает сумму.
+- Каналы держат по одному значению. Источник может опередить потребителя
+  самое большее на одно-два значения; когда `Total` медлит, `send`
+  приостанавливает стадии за ним. Это обратное давление, и кода оно не
+  требует: граница канала и есть политика.
+- Чередование `source: sent` и `total: got` выглядит неровным, но оно
+  определено правилами раздела 20.3, поэтому одинаково на каждом движке и при
+  каждом запуске.
+
+Ни одной из форм не нужны ни блокировка, ни общая переменная, ни обратный
+вызов. Задачи владеют своим состоянием, каналы переносят значения между ними,
+а планировщик решает только порядок — детерминированно.
 
 ## 20.13 Отказы между задачами
 

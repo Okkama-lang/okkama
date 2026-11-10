@@ -471,7 +471,7 @@ local that the spawning code still uses. An async test runs on the same
 scheduler as `async main`; when it ends, its spawned tasks are cancelled and
 drained, and a failure nobody awaited fails the test.
 
-## 20.12 A worked example: a pool of connections
+## 20.12 Worked examples: a pool and a pipeline
 
 The pieces of this chapter fit together in a pool that lends a limited number
 of connections to whoever asks. Four jobs share a pool of two:
@@ -500,6 +500,29 @@ first served. The pool itself is a dozen lines, and no line of it handles
 concurrency: the `Semaphore` bounds the connections, `destroy` returns them
 on every path out of a job, cancellation included, and `AllFutures` makes
 `main` wait for all four.
+
+### A pipeline with backpressure
+
+The second classic shape is a pipeline: stages connected by channels, each a
+task that reads from one channel and writes to the next.
+
+{{example:20-pipeline}}
+
+- Each stage closes its output in a `defer`, so the end of the input travels
+  down the pipeline: the source finishes and closes `numbers`, `Square` sees
+  `ChannelClosed`, leaves its loop and closes `squares`, and `Total` returns
+  its sum.
+- The channels hold one value each. The source can be at most a value or two
+  ahead of the consumer; when `Total` is slow, `send` suspends the stages
+  behind it. That is backpressure, and it needs no code: the bound of the
+  channel is the policy.
+- The interleaving of `source: sent` and `total: got` looks irregular, but it
+  is fixed by the rules of Section 20.3, so it is the same on every engine
+  and on every run.
+
+Neither shape needs a lock, a shared variable or a callback. Tasks own their
+state, channels move values between them, and the scheduler decides only the
+order, deterministically.
 
 ## 20.13 Failures across tasks
 
