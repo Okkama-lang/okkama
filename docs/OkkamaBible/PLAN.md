@@ -216,8 +216,10 @@ Updated with each chapter: `build.py --stats`.
   - whole-program builds into one SPB/JAR;
   - history (Parnas, Modula-2, ML), a comparison table, limits and costs.
 
-  To redo when blade matures: 19.7, with a real project example. Diagnostics
-  of same-named types: #338.
+  Redone for 0.5.3 (2026-11-11): 19.7 describes Blade after #347–#351, #353
+  (packages as repositories, minimal version selection, sync by locked
+  commit, local changes kept); 19.4 and 19.11 the diagnostics of #338. Still
+  no real project example: installing runs git, which the cage forbids.
 
 ## Naming (owner, 2026-11-10)
 

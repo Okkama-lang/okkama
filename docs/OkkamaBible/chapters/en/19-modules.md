@@ -346,10 +346,17 @@ way:
 `shop/money#1::Money` and `shop/money#2::Money` would be different types,
 which is what a major version is for.
 
-The diagnostic shows a weakness. Because the module prefix is left out of
-messages, the two types print the same, and the message reads as "`Money`
-does not accept `Money`". When two types in a program share a name,
-diagnostics should name them by the namespace the reader wrote (issue #338).
+The diagnostic names the two types apart. A type whose name another
+declaration of the program also has is written the way the file of the
+diagnostic can name it: `bank.Money` through the namespace its reader wrote,
+`Money` when that is the `Money` in scope, otherwise `Money from
+"bank/money"`, and the same inside composite types (`@bank.Money`,
+`Box<shop.Money>`). A call that fits no candidate then lists the candidates
+it had, up to four, so the line under the error shows which `Money` the
+action wanted. Every other name stays short: in a program whose type names
+are all different, nothing changes. Until 0.5.3 the module was left out of
+every message, and this one read "`Money` does not accept `Money`"
+(issue #338).
 
 This is information hiding in Parnas's sense [@parnas1972]: a module is
 the unit of a design decision, and what it exposes is a promise. A
@@ -462,13 +469,15 @@ through its constructor.
 
 ## 19.7 Packages and blade
 
-`blade` is Okkama's package tool. It is the youngest part of the toolchain,
-and this section describes it as it is in 0.4.3: a working core with large
-gaps, listed at the end of the section. Nothing in this section is run as an
-example, because installing a package runs `git`, and the book's examples
-run in a cage without processes.
+`blade` is Okkama's package tool. Through 0.5.1 it was the youngest part of
+the toolchain, a working core with large gaps; 0.5.3 rebuilt it around three
+decisions this section explains: a package is an ordinary git repository,
+the version a project gets is the *lowest* one that satisfies everyone, and
+nothing blade does may lose work a programmer did by hand. Nothing in this
+section is run as an example, because installing a package runs `git`, and
+the book's examples run in a cage without processes.
 
-### Packages
+### A project
 
 A directory that holds a `blade.toml` is a *package root*. A file belongs to
 the package of the nearest such directory above it, and a *project* is a
@@ -504,25 +513,68 @@ main() is int {
 }
 ```
 
-The module declares no version. In a package the version lives in
-`blade.toml`, once, and a module file that declares one is an error at the
-version. The package's files import one another as in 19.3: beside the
-importing file, then from the package root.
+The module declares no version. In a package the version lives in one place,
+and a module file that declares one is an error at the version. The
+package's files import one another as in 19.3: beside the importing file,
+then from the package root. `blade build` compiles the project as `[build]`
+says; `blade run` builds when a source, `blade.toml` or `blade.lock` is newer
+than the output, then runs it as `[run]` says, and the program's exit status
+is blade's.
 
-Dependencies are listed in `[dependencies]`:
+### A package is a repository
+
+A package is a git repository with its modules in `src/`:
+
+```
+json/
+  src/json.ok           module json;
+  src/json/parser.ok    module json/parser;
+  blade.toml            only if json has dependencies of its own
+  LICENSE, examples/, tests/ …
+```
+
+Its *name* is the key a project declares it under, and its *version* is its
+`vX.Y.Z` tag. Neither has to be written inside the package: a repository
+that has never heard of blade, but keeps Okkama modules in `src/`, is
+already a package. A `blade.toml` is needed only to declare dependencies of
+its own; a `[module]` in it is optional, and when present its name and
+version must agree with the key and the tag, which catches a release made
+from the wrong commit. A package without `blade.toml` is installed with a
+generated one, the same bytes every time, so that the compiler knows its
+files belong to the package and not to the project.
+
+Blade checks only `src/**/*.ok`, and refuses a package, naming it and its
+tag, whose modules do not parse, declare a version, are named outside
+`<name>` and `<name>/…`, or declare `native` actions (natives come from the
+runtime, never from a package). Everything else in the repository, examples
+and tests included, is copied as it is and never executed, and symbolic
+links are refused anywhere. Installing a package therefore runs none of its
+code: the first line of the package's that executes is one the project
+calls.
+
+`blade add NAME GIT [MIN]` declares a dependency and installs it:
+
+```
+blade add json https://example.org/okkama/json 1.4.0
+```
+
+writes
 
 ```toml
 [dependencies]
-web = "12.3.0"
-json = { git = "https://example.org/json", version = "1.*" }
-tools = { path = "../tools" }
+json = { git = "https://example.org/okkama/json", version = "1.4.0" }
 ```
 
-`blade install` puts each one into `pkg/<name>/` of the project root, with
-its own `blade.toml`, and the project imports them by that path:
+Without `MIN` the minimum is the repository's newest tag, so a new
+dependency starts current and the manifest says which version that was.
+A local directory is declared by hand, `tools = { path = "../tools" }`, and
+its version is the one in its `blade.toml`, since a directory has no tags.
+
+Dependencies land in `pkg/<name>/` of the project root, and the project
+imports them by that path, `src/` included:
 
 ```okkama
-import "pkg/web/router" take Router;
+import "pkg/json/src/json/parser" take Parser;
 ```
 
 An import path that starts with `pkg/` resolves against the project root
@@ -532,51 +584,120 @@ if `web` depends on `json`, the project cannot `import "pkg/json/…"` until
 it declares `json` itself. This is 19.4's no-re-export rule at the scale of
 packages. What a program uses, it lists.
 
-### Versions and the lock
+### The lowest version that satisfies everyone
 
-A dependency comes from a git repository, whose versions are its `vX.Y.Z`
-tags, or from a local directory, whose version is the one in its
-`blade.toml`. A requirement is written as follows.
+A requirement is a minimum. `version = "1.4.0"` means 1.4.0 or any later
+1.x; below 1.0 the minor is the breaking part, so `"0.3.1"` means 0.3.1 or a
+later 0.3.x. The version a project gets is the *lowest* one that meets every
+minimum anyone in the project states for that package, and this is the whole
+rule. It is Go's *minimal version selection* [@cox2018], and it has three
+consequences that the other common rule, "the highest version that
+satisfies all requirements", does not have.
 
-| Requirement | Means |
-|---|---|
-| `12.3.0` | compatible: `>=12.3.0, <13.0.0`; below 1.0 the minor is the breaking part, so `0.3.1` is `>=0.3.1, <0.4.0` |
-| `12.*`, `12.3.*` | any version with that prefix |
-| `=12.3.1` | exactly that version |
-| `*` | any version |
+First, a build depends only on manifests. A new release of `json` upstream
+changes nothing in any project until some `blade.toml` raises its minimum;
+the same manifests give the same versions on every machine, on every day,
+with or without a lock. Second, a version a project gets has been asked for
+by name: 1.4.2 is installed because some manifest says `1.4.2`, so somebody
+built and tested against at least that version. Under "highest" a project
+gets 1.9.0 the morning it is published, tested by nobody who depends on it.
+Third, the resolution is cheap and its failures are legible. Blade walks the
+requirement graph twice. The first walk finds the largest minimum of each
+package and major, reading the manifest of every version it reaches, so a
+minimum raised by one requirement brings that version's own requirements.
+The second walk goes from the project through the selected versions only,
+and what it reaches is installed: a requirement of a version that lost
+cannot cause an error, and packages only it needed are not installed. There
+is no search and no backtracking, so there is no satisfiability problem to
+time out on.
 
-This is the reading of Semantic Versioning [@semver] that Cargo also uses.
-Resolution keeps *one version of each package per project*. When several
-packages require the same one, the requirements meet at the highest version
-that satisfies all of them. When no version does, `blade install` fails and
-names who wants what. Installation is all or nothing: the new `pkg/` is
-assembled beside the old one and swapped in, and `blade.lock` records what
-was installed: name, version, source, git commit, a SHA-256 checksum, and
-dependencies. `blade update` moves to the newest allowed versions;
-`blade install` without arguments reproduces the lock.
+The price is the one Go pays. An upgrade is a decision somebody makes:
+`blade add json URL 1.5.0` raises the minimum, and `blade update json`
+resolves `json` again while every other package keeps its locked version
+unless the new one forces it up. And one version of each package per
+project is still the rule, so two majors of one package are an error that
+shows how each was reached:
 
-`blade build` compiles the project as `[build]` says, and `blade run` builds
-when a source, `blade.toml` or `blade.lock` is newer than the output, then
-runs it as `[run]` says. Both refuse a project whose dependencies are not
-installed.
-
-Two other package managers made the opposite choices on the version
-question, and the comparison shows what Okkama's rule buys and costs. npm
-installs a separate copy of a package for each dependent that needs a
-different version, so a program can hold two copies of one library and two
-incompatible `Money` types without knowing it. Cargo allows several
-semver-incompatible versions of one crate in a build and unifies compatible
-ones. Go picks, for each module, the *minimal* version that satisfies every
-requirement rather than the highest (*minimal version selection*,
-[@cox2018]), so a build does not change when a new release appears
-upstream; Okkama's lock gives the same reproducibility for an installed
-project, and picks the highest version when it resolves anew.
+```
+no single major of "json":
+  app → http 2.1.0 → json ≥ 1.2.0
+  app → next 1.0.0 → json ≥ 2.0.0
+```
 
 One version per package matches the nominal identity of 19.4. Every module
 of the program sees the same `json` module, so a `Json` value made by one
-dependency is the `Json` type another dependency expects. The cost is the
-diamond: two dependencies that need different majors of one package cannot
-both be installed, although the language could tell their types apart.
+dependency is the `Json` type another dependency expects. The diamond across
+majors is the cost: two dependencies that need different majors of one
+package cannot both be installed, although the language could tell their
+types apart. npm makes the opposite choice and installs a copy per
+dependent, so a program can hold two incompatible `Money` types without
+knowing it; Cargo allows several semver-incompatible versions of one crate
+in a build and unifies compatible ones.
+
+### The lock and sync
+
+`blade.lock` records each installed package: version, source, the git commit
+the tag pointed at, and a SHA-256 of its files. Under minimum version
+selection the lock is not what makes a build reproducible, the manifests
+already do that; it makes it *verifiable* and *offline*. `blade sync`
+installs exactly what the lock records, and is how a fresh clone gets its
+dependencies:
+
+- a package already in `pkg/` with its locked checksum stays as it is, so a
+  project that commits `pkg/` syncs with no network and no git;
+- any other is fetched by its **locked commit**, not by its tag, so a tag
+  deleted or moved upstream changes nothing; its files must have the locked
+  checksum, and a commit that is gone is an error that names it;
+- what the lock does not have leaves `pkg/`.
+
+A sync never picks a version. When the lock does not match the manifests,
+it changes nothing and says which command does:
+
+```
+blade.lock does not match blade.toml:
+  json: blade.toml wants ≥ 1.5.0, blade.lock has 1.4.2 — run `blade update json`
+  util: no longer required — run `blade update`
+```
+
+`blade build` and `blade run` never touch the network either: a dependency
+that is not installed points to `blade sync`. The only commands that fetch
+new versions are the ones that say so, `add` and `update`, and even they stop
+when a tag now points at a different commit than the lock remembers, until
+`blade update NAME` accepts the new state. A moved tag is how a supply
+chain is attacked, and blade will not follow one silently.
+
+### Work done by hand is never lost
+
+Programmers patch dependencies: a `print` in a parser to see what it gets, a
+fix that has not been released yet. A package manager that reinstalls over
+such a change destroys work without asking, and the next run of the program
+behaves as if the fix had never been made. Blade records what it installed
+in `pkg/.blade-installed` and compares before it touches anything:
+
+- a package whose files differ from the record (a changed file, an added
+  one, a removed one) stops any command that would replace or remove it,
+  `blade sync` included, before anything changes:
+
+  ```
+  pkg/json has local changes (src/parser.ok differs from blade.lock);
+  move them away or delete pkg/json, then run the command again
+  ```
+
+- an entry of `pkg/` that blade did not install (`pkg/notes`) is never
+  deleted: every install stops and names it.
+
+There is no `--force`. Deleting `pkg/json` is how one accepts a reinstall,
+and that is a decision the programmer makes with the file in front of them.
+A pulled `blade.lock` with new versions is not a local change: the record
+tells an old version from an edited one, so `blade sync` installs the new
+versions. The files an operating system leaves in folders it shows, Finder's
+`.DS_Store` and Windows' `Thumbs.db`, are neither: they stay and change
+nothing.
+
+Installation is all or nothing. The packages that change are assembled in
+`pkg.blade-new/` and moved into `pkg/` only when every one was fetched and
+checked; an interrupted blade is finished or undone by the next one, and
+packages that do not change keep their files untouched.
 
 ### What blade does not do yet
 
@@ -585,13 +706,14 @@ both be installed, although the language could tell their types apart.
 - **No workspaces.** Several packages developed together each have their
   own `pkg/`.
 - **Diamonds across majors fail**, as above.
-- **Shallow tooling around the lock.** No `blade tree`, `blade why` or
-  audit of installed checksums against a known list.
+- **Shallow tooling around the lock.** No `blade tree` or `blade why`.
 - **No build profiles or features**, and no conditional dependencies.
 
-Most of these are the ordinary gaps of a young tool rather than design
-decisions. The design decisions are the three described above: a version in
-one place, imports by explicit `pkg/` paths, and one version per package.
+These are the ordinary gaps of a young ecosystem. The design decisions are
+the ones described above: a version in one place, packages as plain
+repositories whose code does not run at install, imports by explicit `pkg/`
+paths, one version per package, the lowest version that satisfies everyone,
+and no command that overwrites what a programmer wrote.
 
 ## 19.8 How modules become one program
 
@@ -696,16 +818,16 @@ reader can trust without opening the imported file.
   when it is compiled; a plug-in system is built from roles and values passed
   in, not from loading files at run time.
 - **The version lives in two places.** Outside a package, in the module line;
-  inside one, in `blade.toml` only. A module moved into a package must lose its
-  version, and a module taken out of one must gain it.
+  inside one, never in a module: in `blade.toml` for a project or a local
+  package, in the `vX.Y.Z` tag for a package from git. A module moved into a
+  package must lose its version, and a module taken out of one must gain it.
 - **Multi-file modules are listed, not discovered.** A module's files are the
   ones the command line or `blade.toml` names; a forgotten file is a missing
   declaration, not a smaller module.
-- **Same-named types print alike** in diagnostics (issue #338).
 - **A shadowed library module cannot be named with `std.`.** One module path,
   one file, per program.
-- **blade is young.** No registry, no workspaces, no two majors of one package
-  in one project (19.7).
+- **blade's ecosystem is young.** No registry, no workspaces, no two majors of
+  one package in one project (19.7).
 
 ## 19.12 What this design costs
 
