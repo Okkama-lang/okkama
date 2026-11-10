@@ -1,0 +1,10 @@
+job 1: connected
+job 2: connected
+main: four jobs started
+job 1: connection returned
+job 2: connection returned
+job 3: connected
+job 3: connection returned
+job 4: connected
+job 4: connection returned
+main: 4 results

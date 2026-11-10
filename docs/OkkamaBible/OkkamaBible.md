@@ -238,11 +238,12 @@
   - [20.8 Waiting for each other: events, locks, semaphores, barriers](#208-waiting-for-each-other-events-locks-semaphores-barriers)
   - [20.9 Resources across suspension](#209-resources-across-suspension)
   - [20.10 Streams: `for await`](#2010-streams-for-await)
-  - [20.11 Failures across tasks](#2011-failures-across-tasks)
-  - [20.12 How the engines run tasks](#2012-how-the-engines-run-tasks)
-  - [20.13 Okkama among other languages](#2013-okkama-among-other-languages)
-  - [20.14 Limits](#2014-limits)
-  - [20.15 What this design costs](#2015-what-this-design-costs)
+  - [20.11 A worked example: a pool of connections](#2011-a-worked-example-a-pool-of-connections)
+  - [20.12 Failures across tasks](#2012-failures-across-tasks)
+  - [20.13 How the engines run tasks](#2013-how-the-engines-run-tasks)
+  - [20.14 Okkama among other languages](#2014-okkama-among-other-languages)
+  - [20.15 Limits](#2015-limits)
+  - [20.16 What this design costs](#2016-what-this-design-costs)
 
 # Part I. The Razor
 
@@ -12704,7 +12705,111 @@ unwind as in an ordinary loop. The loop does not close its source: here the
 reader closes the channel when it has sent everything, and that close is what
 `next()` turns into `Maybe.none`.
 
-## 20.11 Failures across tasks
+## 20.11 A worked example: a pool of connections
+
+The pieces of this chapter fit together in a pool that lends a limited number
+of connections to whoever asks. Four jobs share a pool of two:
+
+```okkama
+module bible/pool v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/event" take Event;
+import "async/semaphore" take Semaphore, Permit;
+import "async/collect" take AllFutures;
+import "collections/sequence" take Sequencing;
+
+object Connection {
+    has permit is Permit;
+    has job is int;
+
+    Connection(:permit, :job);
+
+    destroy {
+        permit.close();
+        Stdout().writeln("job " + job.string() + ": connection returned");
+    }
+}
+
+object Pool {
+    has slots is Semaphore;
+
+    Pool(size is int) {
+        slots = Semaphore(size);
+    }
+
+    async connection(job is int) is Connection {
+        Connection(permit: await slots.permit(), job: job);
+    }
+}
+
+object Job {
+    has pool is Pool;
+    has go is Event;
+    has id is int;
+
+    Job(:pool, :go, :id);
+
+    async run() is int {
+        let connection = await pool.connection(id);
+        Stdout().writeln("job " + id.string() + ": connected");
+        await go.wait();
+        id * 10;
+    }
+}
+
+async main() is int {
+    let pool = Pool(2);
+    let go = Event();
+    let jobs is @Future<int> = [1, 2, 3, 4].map() -> id { spawn Job(pool: pool, go: go, id: id).run(); };
+    Stdout().writeln("main: four jobs started");
+    go.set();
+    let all is AllFutures<int> = AllFutures(origins: jobs);
+    let results is Sequencing<int> = await all.results();
+    Stdout().writeln("main: " + results.size().string() + " results");
+    0;
+}
+```
+
+Output:
+
+```text
+job 1: connected
+job 2: connected
+main: four jobs started
+job 1: connection returned
+job 2: connection returned
+job 3: connected
+job 3: connection returned
+job 4: connected
+job 4: connection returned
+main: 4 results
+```
+
+The output follows from the rules of Section 20.3, step by step:
+
+- `spawn` runs each job at once, until it suspends. Jobs 1 and 2 get a
+  permit without waiting, print `connected` and suspend at `go.wait()`. Jobs
+  3 and 4 find no permit left and suspend in `permit()`, in that order.
+- `main` prints its line, sets `go` and suspends at `await all.results()`.
+  Setting `go` made jobs 1 and 2 ready; it ran neither.
+- Job 1 resumes, returns 10 and ends. Its scope closes, so the connection's
+  `destroy` runs: the permit goes back, and job 3, the first in the queue of
+  the semaphore, becomes ready behind job 2. Job 2 does the same and wakes
+  job 4.
+- Job 3 resumes inside `permit()`, connects, and its `go.wait()` returns at
+  once because `go` is already set, so it ends without suspending. Then
+  job 4.
+
+Nothing in the program says "job 3 after job 2". The order comes from three
+rules: a wake makes a task ready but does not run it, ready tasks run in the
+order they were woken, and waiters of a semaphore are served first come,
+first served. The pool itself is a dozen lines, and no line of it handles
+concurrency: the `Semaphore` bounds the connections, `destroy` returns them
+on every path out of a job, cancellation included, and `AllFutures` makes
+`main` wait for all four.
+
+## 20.12 Failures across tasks
 
 A failure inside a task belongs to the task's future. It is kept there, like
 a value, and thrown at every `await` of that future, where an ordinary
@@ -12752,7 +12857,7 @@ either handled or reported, never lost on the way. A program that really does
 not care whether a background task failed says so where it starts it, with a
 `try` around the body of the task.
 
-## 20.12 How the engines run tasks
+## 20.13 How the engines run tasks
 
 The three engines keep the same rules with three different mechanisms.
 
@@ -12784,7 +12889,7 @@ All three run on one thread at a time, which is what makes them agree: the
 order of output in this chapter is the same on each, and the conformance
 suite checks it.
 
-## 20.13 Okkama among other languages
+## 20.14 Okkama among other languages
 
 | | Okkama | C# | JavaScript | Python asyncio | Rust | Kotlin | Go |
 |---|---|---|---|---|---|---|---|
@@ -12805,7 +12910,7 @@ convention. Okkama chose the coloured side because it already makes effects
 visible elsewhere (successors, `^` fields, `try`), and a suspension point is
 an effect: the place where the rest of the program may change things.
 
-## 20.14 Limits
+## 20.15 Limits
 
 - **Detached work.** A spawned task that its starter neither awaits nor
   cancels runs until `async main` returns. Nothing ties it to the scope that
@@ -12828,7 +12933,7 @@ an effect: the place where the rest of the program may change things.
   that woke it (issue #340, Section 20.3), and the channel documentation
   described an older API (issue #341).
 
-## 20.15 What this design costs
+## 20.16 What this design costs
 
 Laziness costs an explicit `spawn` wherever work should start now, and a
 reader has to know that `Oven("rye").baked()` alone does nothing. Colour costs
