@@ -10300,7 +10300,7 @@ main() is int {
 The compiler answers:
 
 ```text
-18-successor-rejected.ok:12:1: semantic error: Successor action result must be used; "later" is carried by action value "show", which can leave scope without being called, returned, passed or stored
+18-successor-rejected.ok:14:9: semantic error: Successor action result must be used; "later" is carried by action value "show", which can leave scope without being called, returned, passed or stored
 ```
 
 Two refinements keep the rule honest. A body that uses the successor on one
@@ -12907,7 +12907,10 @@ garbage collector traces frames like any other object.
 
 The **JVM** gives each task a Java thread, taken from a pool, and lets only
 one run at a time: transferring control releases the target's semaphore and
-blocks on one's own. The scheduler has the same ready queue as the IR engine.
+blocks on one's own. The scheduler has the same ready queue as the IR engine,
+and one shortcut: a task that the loop resumed hands control straight to the
+next ready task when it suspends or ends, so a wake-up costs one thread switch
+instead of a round trip through the loop's thread.
 Threads make the JVM's task switch the most expensive of the three, a few
 microseconds against tens of nanoseconds on Sparrow, and it is why the JVM is
 the slowest engine on programs that are mostly waiting.

@@ -10433,7 +10433,7 @@ main() is int {
 Ответ компилятора:
 
 ```text
-18-successor-rejected.ok:12:1: semantic error: Successor action result must be used; "later" is carried by action value "show", which can leave scope without being called, returned, passed or stored
+18-successor-rejected.ok:14:9: semantic error: Successor action result must be used; "later" is carried by action value "show", which can leave scope without being called, returned, passed or stored
 ```
 
 Правило честным делают два уточнения. Тело, использующее наследника только в
@@ -13073,7 +13073,10 @@ runtime, которую разбирает цикл событий. Приост
 
 **JVM** даёт каждой задаче Java-поток из пула и позволяет работать только
 одному: передача управления освобождает семафор цели и блокируется на своём.
-У планировщика та же очередь готовых задач, что и у IR-движка. Из-за потоков
+У планировщика та же очередь готовых задач, что и у IR-движка, и одно
+сокращение: задача, которую продолжил цикл, при приостановке или завершении
+сама отдаёт управление следующей готовой, так что пробуждение стоит одного
+переключения потоков, а не круга через поток цикла. Из-за потоков
 переключение задач на JVM самое дорогое из трёх — несколько микросекунд против
 десятков наносекунд у Sparrow, и поэтому JVM — самый медленный движок на
 программах, которые в основном ждут.

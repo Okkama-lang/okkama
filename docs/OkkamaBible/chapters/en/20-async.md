@@ -494,7 +494,10 @@ garbage collector traces frames like any other object.
 
 The **JVM** gives each task a Java thread, taken from a pool, and lets only
 one run at a time: transferring control releases the target's semaphore and
-blocks on one's own. The scheduler has the same ready queue as the IR engine.
+blocks on one's own. The scheduler has the same ready queue as the IR engine,
+and one shortcut: a task that the loop resumed hands control straight to the
+next ready task when it suspends or ends, so a wake-up costs one thread switch
+instead of a round trip through the loop's thread.
 Threads make the JVM's task switch the most expensive of the three, a few
 microseconds against tens of nanoseconds on Sparrow, and it is why the JVM is
 the slowest engine on programs that are mostly waiting.
