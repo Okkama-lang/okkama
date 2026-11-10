@@ -1,0 +1,10 @@
+module bible/closure v1.0.0;
+
+import "io/stdout" take Stdout;
+
+async main() is int {
+    let base = 41;
+    let work is async () is int = async () is int { base + 1; };
+    Stdout().writeln((await work()).string());
+    0;
+}

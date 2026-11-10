@@ -12169,6 +12169,34 @@ and then write can still lose an update, because the `await` between the read
 and the write lets the other task in. Cooperative scheduling tells a reader
 where interleaving can happen; it does not make it impossible.
 
+### Where the rule came from
+
+Cooperative multitasking is older than async. Classic Mac OS ran its
+applications this way from MultiFinder in 1987 to Mac OS 9, and 16-bit
+Windows did the same: a program kept the processor until it called back into
+the system, so one program stuck in a loop froze the machine. Okkama accepts
+that cost inside one run and not across programs. A task that computes
+without awaiting holds up every other task of its run, and nothing preempts
+it (Section 20.17). Erlang went the other way: its virtual machine switches
+processes after a fixed budget of reductions, so no process starves the
+rest. It does not need the guarantee above, because its processes share no
+memory. Go started cooperative and made goroutines asynchronously
+preemptible in Go 1.14, in 2020, so that "loops without function calls no
+longer potentially deadlock the scheduler" [[Authors 2020](#ref-go114)].
+
+The narrower rule, that waking never runs the woken code inside the waker,
+has its own history in JavaScript. Promises/A+ requires that a promise's
+callbacks "must not be called until the execution context stack contains
+only platform code" [[Promises/A+](#ref-promisesaplus)], that is, never inside the call that
+settled the promise. The reason was a class of bugs that Isaac Schlueter
+called releasing Zalgo [[Schlueter 2013](#ref-schlueter2013)]. An API that calls its callback
+sometimes at once and sometimes later runs the code after the call in two
+different orders, and only one of them gets tested. His advice was to pick
+one timing and keep it. Before 0.5.0 Okkama had the engine-level form of the
+same bug: which of `main: after set` and `waiter: woke` came first depended
+on the engine. The fix was JavaScript's too: a queue of ready work that runs
+only when the current task yields.
+
 ## 20.4 `spawn`: work that runs beside its starter
 
 `spawn` takes a call of an object's action and starts it now. Its result is
@@ -12853,6 +12881,117 @@ local that the spawning code still uses. An async test runs on the same
 scheduler as `async main`; when it ends, its spawned tasks are cancelled and
 drained, and a failure nobody awaited fails the test.
 
+### Async actions as values
+
+A bound async action is a value of type `async (T, …) is R`. A policy that
+should not know what it repeats takes one:
+
+```okkama
+module bible/retry v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Busy is Error = (at(attempt is int));
+
+object Endpoint {
+    has failures is int;
+
+    Endpoint(:failures);
+
+    async fetch(attempt is int) is string {
+        Stdout().writeln("fetch: attempt " + attempt.string());
+        if attempt <= failures {
+            throw Busy.at(attempt);
+        }
+        "200 OK";
+    }
+}
+
+object Retry {
+    has attempts is int;
+
+    Retry(:attempts);
+
+    async run(work is async (int) is string, attempt is int) is string {
+        try {
+            await work(attempt);
+        }
+        catch e is Busy {
+            if attempt == attempts {
+                throw e;
+            }
+            await self.run(work, attempt + 1);
+        };
+    }
+}
+
+async main() is int {
+    let patient = Retry(attempts: 3);
+    let body = await patient.run(Endpoint(failures: 2).fetch, 1);
+    Stdout().writeln("main: " + body);
+    let outcome = try {
+        await patient.run(Endpoint(failures: 5).fetch, 1);
+    }
+    catch e is Busy {
+        "gave up";
+    };
+    Stdout().writeln("main: " + outcome);
+    0;
+}
+```
+
+Output:
+
+```text
+fetch: attempt 1
+fetch: attempt 2
+fetch: attempt 3
+main: 200 OK
+fetch: attempt 1
+fetch: attempt 2
+fetch: attempt 3
+main: gave up
+```
+
+`Retry.run` calls `work(attempt)` and gets a future, as from any async call.
+It awaits the future inside `try` and, on `Busy`, runs again with the next
+attempt number until the attempts run out; then it rethrows the last
+failure, which `main` catches. `Endpoint(failures: 2).fetch` is the action
+bound to its object, so whatever the work needs between attempts lives in
+that object's fields. The attempt number is an argument because the endpoint
+is immutable and has nowhere to count. One `Retry` value serves both
+endpoints.
+
+Anonymous actions cannot be async:
+
+```okkama
+module bible/closure v1.0.0;
+
+import "io/stdout" take Stdout;
+
+async main() is int {
+    let base = 41;
+    let work is async () is int = async () is int { base + 1; };
+    Stdout().writeln((await work()).string());
+    0;
+}
+```
+
+The compiler answers:
+
+```text
+20-async-closure-rejected.ok:7:35: syntax error at "async": Anonymous actions cannot be async; declare a named async action instead.
+  |
+7 |     let work is async () is int = async () is int { base + 1; };
+  |                                   ^^^^^
+```
+
+The compiler names the way out: a named async action. A small object with one
+async action takes the place of an async closure, and its fields are what
+the closure would have captured, written down where a reader sees them. A
+synchronous anonymous action may still be passed to async code and called
+there; only its body cannot suspend.
+
 ### Time in tests
 
 Code that waits for time is the hardest to test: a test that really waits 30
@@ -13194,6 +13333,72 @@ either handled or reported, never lost on the way. A program that really does
 not care whether a background task failed says so where it starts it, with a
 `try` around the body of the task.
 
+### When nothing can run
+
+A task that waits for an event only another waiting task can set waits
+forever. The scheduler notices when that has happened to the whole program:
+no task is ready, and nothing outside the runtime (a timer, a socket, a
+process worker) is left that could wake one.
+
+```okkama
+module bible/stuck v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/event" take Event;
+
+object Clerk {
+    has mine is Event;
+    has theirs is Event;
+
+    Clerk(:mine, :theirs);
+
+    async sign(name is string) is int {
+        Stdout().writeln(name + ": waiting for the other signature");
+        await theirs.wait();
+        mine.set();
+        1;
+    }
+}
+
+async main() is int {
+    let a = Event();
+    let b = Event();
+    let first = spawn Clerk(mine: a, theirs: b).sign("buyer");
+    let second = spawn Clerk(mine: b, theirs: a).sign("seller");
+    let signed = await first + await second;
+    Stdout().writeln("signed: " + signed.string());
+    0;
+}
+```
+
+Output:
+
+```text
+buyer: waiting for the other signature
+seller: waiting for the other signature
+exit 1
+```
+
+Both clerks print their line and wait; `main` waits for the first of them.
+The ready queue is now empty and nothing is pending outside, so the run ends
+with status 1 and, on stderr, `RuntimeError: async main cannot complete: no
+task can make progress`. The lines already printed stay printed.
+
+The check is exact, not a guess. It never fires because something took long:
+a task that waits for a timer an hour away is not stuck, and the scheduler
+sleeps until the timer instead. It is also global. Two tasks that wait for
+each other while a third keeps a timer or a socket alive are not reported
+until nothing else is pending, so a server that listens forever never trips
+it, and a deadlock inside it shows up as requests that never complete, as in
+any other language. The conformance cases `L08.deadlock.*` pin the message
+and the status on every engine.
+
+Go's runtime makes the same global check and stops with `fatal error: all
+goroutines are asleep - deadlock!` [[scheduler](#ref-goruntime)]. Node.js exits with code 13
+when a top-level `await` never settles [[documentation](#ref-nodeexit)]. Python's `asyncio.run`
+and Rust's Tokio have no such check: the event loop waits for an event that
+cannot come, and the process hangs.
+
 ## 20.14 How the engines run tasks
 
 The three engines keep the same rules with three different mechanisms.
@@ -13297,6 +13502,8 @@ an effect: the place where the rest of the program may change things.
 - **Until 0.5.0** the IR engine and the JVM ran a woken task inside the call
   that woke it (issue #340, Section 20.3), and the channel documentation
   described an older API (issue #341).
+- **Until 0.5.1** Sparrow worded a deadlock differently from the IR engine
+  and the JVM (issue #342).
 
 ## 20.18 What this design costs
 
@@ -13318,6 +13525,7 @@ code print the same lines in the same order.
 - <a id="ref-amin2016"></a>Nada Amin, Ross Tate (2016). Java and Scala's Type Systems are Unsound: The Existential Crisis of Null Pointers. In *Proceedings of OOPSLA 2016*: 838–848. ACM. https://doi.org/10.1145/2983990.2984004
 - <a id="ref-lions1996"></a>Jacques-Louis Lions et al. (1996). *ARIANE 5 Flight 501 Failure: Report by the Inquiry Board*. European Space Agency, Paris, 19 July 1996. https://www.esa.int/Newsroom/Press_Releases/Ariane_501_-_Presentation_of_Inquiry_Board_report
 - <a id="ref-armstrong2003"></a>Joe Armstrong (2003). *Making Reliable Distributed Systems in the Presence of Software Errors*. PhD thesis, Royal Institute of Technology (KTH), Stockholm.
+- <a id="ref-go114"></a>The Go Authors (2020). Go 1.14 Release Notes: Runtime ("Goroutines are now asynchronously preemptible"). https://go.dev/doc/go1.14
 - <a id="ref-aycock2003"></a>John Aycock (2003). A Brief History of Just-In-Time. *ACM Computing Surveys* 35(2): 97–113. https://doi.org/10.1145/857076.857077
 - <a id="ref-bagwell2001"></a>Phil Bagwell (2001). *Ideal Hash Trees*. Technical report, École Polytechnique Fédérale de Lausanne. https://infoscience.epfl.ch/record/64398
 - <a id="ref-baker-sep"></a>Alan Baker (2022). Simplicity. In *The Stanford Encyclopedia of Philosophy* (Summer 2022 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/simplicity/
@@ -13344,6 +13552,7 @@ code print the same lines in the same order.
 - <a id="ref-dennis1966"></a>Jack B. Dennis, Earl C. Van Horn (1966). Programming Semantics for Multiprogrammed Computations. *Communications of the ACM* 9(3): 143–155. https://doi.org/10.1145/365230.365252
 - <a id="ref-dijkstra1968"></a>Edsger W. Dijkstra (1968). Go To Statement Considered Harmful. *Communications of the ACM* 11(3): 147–148. https://doi.org/10.1145/362929.362947
 - <a id="ref-dijkstra1972"></a>Edsger W. Dijkstra (1972). The Humble Programmer. *Communications of the ACM* 15(10): 859–866. https://doi.org/10.1145/355604.361591
+- <a id="ref-nodeexit"></a>OpenJS Foundation. Node.js documentation, Process: exit codes (code 13, unsettled top-level await). https://nodejs.org/api/process.html#exit-codes
 - <a id="ref-duffy2016"></a>Joe Duffy (2016). The Error Model. Blog post, 7 February 2016. http://joeduffyblog.com/2016/02/07/the-error-model/
 - <a id="ref-elizarov2018"></a>Roman Elizarov (2018). Structured concurrency. Blog post, 12 September 2018. https://medium.com/@elizarov/structured-concurrency-722d765aa952
 - <a id="ref-se0304"></a>Swift Evolution (2021). SE-0304: Structured Concurrency. https://github.com/swiftlang/swift-evolution/blob/main/proposals/0304-structured-concurrency.md
@@ -13412,6 +13621,7 @@ code print the same lines in the same order.
 - <a id="ref-pike2015"></a>Rob Pike (2015). Errors are values. *The Go Blog*, 12 January 2015. https://go.dev/blog/errors-are-values
 - <a id="ref-hyperspec"></a>Kent M. Pitman (1996). *Common Lisp HyperSpec*, Chapter 9: Conditions. Harlequin; now LispWorks. https://www.lispworks.com/documentation/HyperSpec/Body/09_.htm
 - <a id="ref-poletto1999"></a>Massimiliano Poletto, Vivek Sarkar (1999). Linear Scan Register Allocation. *ACM TOPLAS* 21(5): 895–913. https://doi.org/10.1145/330249.330250
+- <a id="ref-promisesaplus"></a>Promises/A+ organization. Promises/A+, rule 2.2.4 and note 3.1. https://promisesaplus.com/
 - <a id="ref-r7rs2013"></a>Alex Shinn, John Cowan, Arthur A. Gleckler (eds.) (2013). *Revised⁷ Report on the Algorithmic Language Scheme*. https://small.r7rs.org/attachment/r7rs.pdf
 - <a id="ref-rfc3629"></a>François Yergeau (2003). *UTF-8, a Transformation Format of ISO 10646*. RFC 3629, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc3629
 - <a id="ref-rfc7396"></a>Paul Hoffman, James Snell (2014). *JSON Merge Patch*. RFC 7396, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc7396
@@ -13422,6 +13632,8 @@ code print the same lines in the same order.
 - <a id="ref-pep343"></a>Guido van Rossum, Nick Coghlan (2005). PEP 343 — The "with" Statement. Python Enhancement Proposals. https://peps.python.org/pep-0343/
 - <a id="ref-saltzer1975"></a>Jerome H. Saltzer, Michael D. Schroeder (1975). The Protection of Information in Computer Systems. *Proceedings of the IEEE* 63(9): 1278–1308. https://doi.org/10.1109/PROC.1975.9939
 - <a id="ref-scales2022"></a>Dan Scales (2022). Go 1.18 Implementation of Generics via Dictionaries and Gcshape Stenciling. Design document, Go proposal repository, 22 February 2022. https://go.googlesource.com/proposal/+/master/design/generics-implementation-dictionaries-go1.18.md
+- <a id="ref-goruntime"></a>The Go Authors. The Go runtime scheduler, src/runtime/proc.go, function checkdead. https://go.dev/src/runtime/proc.go
+- <a id="ref-schlueter2013"></a>Isaac Z. Schlueter (2013). Designing APIs for Asynchrony. Blog post, 23 August 2013. https://blog.izs.me/2013/08/designing-apis-for-asynchrony/
 - <a id="ref-semver"></a>Tom Preston-Werner (2013). *Semantic Versioning 2.0.0*. https://semver.org/
 - <a id="ref-smith2018"></a>Nathaniel J. Smith (2018). Notes on Structured Concurrency, or: Go Statement Considered Harmful. Blog post, 25 April 2018. https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/
 - <a id="ref-snyder1986"></a>Alan Snyder (1986). Encapsulation and Inheritance in Object-Oriented Programming Languages. In *Proceedings of OOPSLA '86*: 38–45. ACM. https://doi.org/10.1145/28697.28702

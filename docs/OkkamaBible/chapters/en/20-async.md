@@ -153,6 +153,34 @@ and then write can still lose an update, because the `await` between the read
 and the write lets the other task in. Cooperative scheduling tells a reader
 where interleaving can happen; it does not make it impossible.
 
+### Where the rule came from
+
+Cooperative multitasking is older than async. Classic Mac OS ran its
+applications this way from MultiFinder in 1987 to Mac OS 9, and 16-bit
+Windows did the same: a program kept the processor until it called back into
+the system, so one program stuck in a loop froze the machine. Okkama accepts
+that cost inside one run and not across programs. A task that computes
+without awaiting holds up every other task of its run, and nothing preempts
+it (Section 20.17). Erlang went the other way: its virtual machine switches
+processes after a fixed budget of reductions, so no process starves the
+rest. It does not need the guarantee above, because its processes share no
+memory. Go started cooperative and made goroutines asynchronously
+preemptible in Go 1.14, in 2020, so that "loops without function calls no
+longer potentially deadlock the scheduler" [@go114].
+
+The narrower rule, that waking never runs the woken code inside the waker,
+has its own history in JavaScript. Promises/A+ requires that a promise's
+callbacks "must not be called until the execution context stack contains
+only platform code" [@promisesaplus], that is, never inside the call that
+settled the promise. The reason was a class of bugs that Isaac Schlueter
+called releasing Zalgo [@schlueter2013]. An API that calls its callback
+sometimes at once and sometimes later runs the code after the call in two
+different orders, and only one of them gets tested. His advice was to pick
+one timing and keep it. Before 0.5.0 Okkama had the engine-level form of the
+same bug: which of `main: after set` and `waiter: woke` came first depended
+on the engine. The fix was JavaScript's too: a queue of ready work that runs
+only when the current task yields.
+
 ## 20.4 `spawn`: work that runs beside its starter
 
 `spawn` takes a call of an object's action and starts it now. Its result is
@@ -471,6 +499,32 @@ local that the spawning code still uses. An async test runs on the same
 scheduler as `async main`; when it ends, its spawned tasks are cancelled and
 drained, and a failure nobody awaited fails the test.
 
+### Async actions as values
+
+A bound async action is a value of type `async (T, …) is R`. A policy that
+should not know what it repeats takes one:
+
+{{example:20-retry}}
+
+`Retry.run` calls `work(attempt)` and gets a future, as from any async call.
+It awaits the future inside `try` and, on `Busy`, runs again with the next
+attempt number until the attempts run out; then it rethrows the last
+failure, which `main` catches. `Endpoint(failures: 2).fetch` is the action
+bound to its object, so whatever the work needs between attempts lives in
+that object's fields. The attempt number is an argument because the endpoint
+is immutable and has nowhere to count. One `Retry` value serves both
+endpoints.
+
+Anonymous actions cannot be async:
+
+{{example:20-async-closure-rejected}}
+
+The compiler names the way out: a named async action. A small object with one
+async action takes the place of an async closure, and its fields are what
+the closure would have captured, written down where a reader sees them. A
+synchronous anonymous action may still be passed to async code and called
+there; only its body cannot suspend.
+
 ### Time in tests
 
 Code that waits for time is the hardest to test: a test that really waits 30
@@ -566,6 +620,35 @@ The rule is the asynchronous form of the one in Chapter 10: a failure is
 either handled or reported, never lost on the way. A program that really does
 not care whether a background task failed says so where it starts it, with a
 `try` around the body of the task.
+
+### When nothing can run
+
+A task that waits for an event only another waiting task can set waits
+forever. The scheduler notices when that has happened to the whole program:
+no task is ready, and nothing outside the runtime (a timer, a socket, a
+process worker) is left that could wake one.
+
+{{example:20-stuck}}
+
+Both clerks print their line and wait; `main` waits for the first of them.
+The ready queue is now empty and nothing is pending outside, so the run ends
+with status 1 and, on stderr, `RuntimeError: async main cannot complete: no
+task can make progress`. The lines already printed stay printed.
+
+The check is exact, not a guess. It never fires because something took long:
+a task that waits for a timer an hour away is not stuck, and the scheduler
+sleeps until the timer instead. It is also global. Two tasks that wait for
+each other while a third keeps a timer or a socket alive are not reported
+until nothing else is pending, so a server that listens forever never trips
+it, and a deadlock inside it shows up as requests that never complete, as in
+any other language. The conformance cases `L08.deadlock.*` pin the message
+and the status on every engine.
+
+Go's runtime makes the same global check and stops with `fatal error: all
+goroutines are asleep - deadlock!` [@goruntime]. Node.js exits with code 13
+when a top-level `await` never settles [@nodeexit]. Python's `asyncio.run`
+and Rust's Tokio have no such check: the event loop waits for an event that
+cannot come, and the process hangs.
 
 ## 20.14 How the engines run tasks
 
@@ -670,6 +753,8 @@ an effect: the place where the rest of the program may change things.
 - **Until 0.5.0** the IR engine and the JVM ran a woken task inside the call
   that woke it (issue #340, Section 20.3), and the channel documentation
   described an older API (issue #341).
+- **Until 0.5.1** Sparrow worded a deadlock differently from the IR engine
+  and the JVM (issue #342).
 
 ## 20.18 What this design costs
 

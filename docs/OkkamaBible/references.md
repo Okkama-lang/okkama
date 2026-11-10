@@ -36,9 +36,11 @@ bibliographic data were checked are listed.
 - [@fowler2007] Martin Fowler (2007). Mocks Aren't Stubs. https://martinfowler.com/articles/mocksArentStubs.html
 - [@gabriel1991] Richard P. Gabriel (1991). The Rise of "Worse is Better". In *Lisp: Good News, Bad News, How to Win Big*. https://www.dreamsongs.com/RiseOfWorseIsBetter.html
 - [@gamma1994] Erich Gamma, Richard Helm, Ralph Johnson, John Vlissides (1994). *Design Patterns: Elements of Reusable Object-Oriented Software*. Addison-Wesley.
+- [@go114] The Go Authors (2020). Go 1.14 Release Notes: Runtime ("Goroutines are now asynchronously preemptible"). https://go.dev/doc/go1.14
 - [@goldberg1983] Adele Goldberg, David Robson (1983). *Smalltalk-80: The Language and Its Implementation*. Addison-Wesley.
 - [@goldberg1991] David Goldberg (1991). What Every Computer Scientist Should Know About Floating-Point Arithmetic. *ACM Computing Surveys* 23(1): 5–48. https://doi.org/10.1145/103162.103163
 - [@goodenough1975] John B. Goodenough (1975). Exception Handling: Issues and a Proposed Notation. *Communications of the ACM* 18(12): 683–696. https://doi.org/10.1145/361227.361230
+- [@goruntime] The Go Authors. The Go runtime scheduler, src/runtime/proc.go, function checkdead. https://go.dev/src/runtime/proc.go
 - [@gosling2023] James Gosling, Bill Joy, Guy Steele, Gilad Bracha, Alex Buckley, Daniel Smith, Gavin Bierman (2023). *The Java Language Specification, Java SE 21 Edition*. Oracle. https://docs.oracle.com/javase/specs/jls/se21/html/
 - [@gospec] The Go Authors (2026). *The Go Programming Language Specification*, language version go1.27 (26 May 2026). https://go.dev/ref/spec {label: Go specification}
 - [@griesemer2020] Robert Griesemer, Raymond Hu, Wen Kokke, Julien Lange, Ian Lance Taylor, Bernardo Toninho, Philip Wadler, Nobuko Yoshida (2020). Featherweight Go. *Proceedings of the ACM on Programming Languages* 4(OOPSLA): 149:1–149:29. https://doi.org/10.1145/3428217
@@ -92,6 +94,7 @@ bibliographic data were checked are listed.
 - [@milner1997] Robin Milner, Mads Tofte, Robert Harper, David MacQueen (1997). *The Definition of Standard ML (Revised)*. MIT Press.
 - [@moseley2006] Ben Moseley, Peter Marks (2006). Out of the Tar Pit. Software Practice Advancement (SPA) 2006. https://curtclifton.net/papers/MoseleyMarks06a.pdf
 - [@moses1970] Joel Moses (1970). The Function of FUNCTION in LISP, or Why the FUNARG Problem Should Be Called the Environment Problem. *ACM SIGSAM Bulletin* 15: 13–27. https://doi.org/10.1145/1093410.1093411
+- [@nodeexit] OpenJS Foundation. Node.js documentation, Process: exit codes (code 13, unsettled top-level await). https://nodejs.org/api/process.html#exit-codes
 - [@nygaard1978] Kristen Nygaard, Ole-Johan Dahl (1978). The Development of the SIMULA Languages. *ACM SIGPLAN Notices* 13(8): 245–272 (HOPL I). https://doi.org/10.1145/960118.808391
 - [@nystrom2015] Bob Nystrom (2015). What Color is Your Function? Blog post, 1 February 2015. https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/
 - [@okasaki1998] Chris Okasaki (1998). *Purely Functional Data Structures*. Cambridge University Press. https://doi.org/10.1017/CBO9780511530104
@@ -102,6 +105,7 @@ bibliographic data were checked are listed.
 - [@pierce2002] Benjamin C. Pierce (2002). *Types and Programming Languages*. MIT Press.
 - [@pike2015] Rob Pike (2015). Errors are values. *The Go Blog*, 12 January 2015. https://go.dev/blog/errors-are-values
 - [@poletto1999] Massimiliano Poletto, Vivek Sarkar (1999). Linear Scan Register Allocation. *ACM TOPLAS* 21(5): 895–913. https://doi.org/10.1145/330249.330250
+- [@promisesaplus] Promises/A+ organization. Promises/A+, rule 2.2.4 and note 3.1. https://promisesaplus.com/
 - [@r7rs2013] Alex Shinn, John Cowan, Arthur A. Gleckler (eds.) (2013). *Revised⁷ Report on the Algorithmic Language Scheme*. https://small.r7rs.org/attachment/r7rs.pdf {label: R7RS}
 - [@rfc3629] François Yergeau (2003). *UTF-8, a Transformation Format of ISO 10646*. RFC 3629, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc3629 {label: RFC 3629}
 - [@rfc7396] Paul Hoffman, James Snell (2014). *JSON Merge Patch*. RFC 7396, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc7396 {label: RFC 7396}
@@ -111,6 +115,7 @@ bibliographic data were checked are listed.
 - [@ritchie1993] Dennis M. Ritchie (1993). The Development of the C Language. *HOPL-II: The Second ACM SIGPLAN Conference on History of Programming Languages*: 201–208. https://doi.org/10.1145/154766.155580
 - [@saltzer1975] Jerome H. Saltzer, Michael D. Schroeder (1975). The Protection of Information in Computer Systems. *Proceedings of the IEEE* 63(9): 1278–1308. https://doi.org/10.1109/PROC.1975.9939
 - [@scales2022] Dan Scales (2022). Go 1.18 Implementation of Generics via Dictionaries and Gcshape Stenciling. Design document, Go proposal repository, 22 February 2022. https://go.googlesource.com/proposal/+/master/design/generics-implementation-dictionaries-go1.18.md
+- [@schlueter2013] Isaac Z. Schlueter (2013). Designing APIs for Asynchrony. Blog post, 23 August 2013. https://blog.izs.me/2013/08/designing-apis-for-asynchrony/
 - [@se0304] Swift Evolution (2021). SE-0304: Structured Concurrency. https://github.com/swiftlang/swift-evolution/blob/main/proposals/0304-structured-concurrency.md
 - [@semver] Tom Preston-Werner (2013). *Semantic Versioning 2.0.0*. https://semver.org/ {label: SemVer 2.0.0}
 - [@smith2018] Nathaniel J. Smith (2018). Notes on Structured Concurrency, or: Go Statement Considered Harmful. Blog post, 25 April 2018. https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/

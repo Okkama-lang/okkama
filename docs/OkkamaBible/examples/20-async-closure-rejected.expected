@@ -1,0 +1,4 @@
+20-async-closure-rejected.ok:7:35: syntax error at "async": Anonymous actions cannot be async; declare a named async action instead.
+  |
+7 |     let work is async () is int = async () is int { base + 1; };
+  |                                   ^^^^^

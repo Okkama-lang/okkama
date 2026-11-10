@@ -12319,6 +12319,35 @@ waiter: woke
 планирование говорит читателю, где возможно перемежение; оно не делает его
 невозможным.
 
+### Откуда взялось правило
+
+Кооперативная многозадачность старше async. Классическая Mac OS так
+исполняла приложения от MultiFinder в 1987 году до Mac OS 9, и 16-битная
+Windows делала то же: программа держала процессор, пока сама не вернётся в
+систему, поэтому одна зациклившаяся программа замораживала машину. Okkama
+принимает эту цену внутри одного запуска, но не между программами. Задача,
+которая считает и не ждёт `await`, задерживает все остальные задачи своего
+запуска, и ничто её не вытесняет (раздел 20.17). Erlang пошёл другим путём:
+его виртуальная машина переключает процессы, когда исчерпан фиксированный
+бюджет редукций, так что ни один процесс не морит голодом остальные.
+Гарантия выше ему не нужна, потому что его процессы не делят памяти. Go
+начинал кооперативным и в Go 1.14, в 2020 году, сделал горутины асинхронно
+вытесняемыми, чтобы «циклы без вызовов функций больше не могли заблокировать
+планировщик» [[Authors 2020](#ref-go114)].
+
+У более узкого правила — пробуждение никогда не выполняет разбуженный код
+внутри будящего — своя история в JavaScript. Promises/A+ требует, чтобы
+обработчики promise «не вызывались, пока на стеке контекстов исполнения есть
+что-то, кроме кода платформы» [[Promises/A+](#ref-promisesaplus)], то есть никогда внутри
+вызова, который завершил promise. Причиной был класс ошибок, который Айзек
+Шлютер назвал «выпустить Zalgo» [[Schlueter 2013](#ref-schlueter2013)]. API, которое вызывает
+обработчик то сразу, то позже, выполняет код после вызова в двух разных
+порядках, и проверяется обычно только один из них. Его совет: выбрать одно
+время вызова и держаться его. До 0.5.0 у Okkama была та же ошибка на уровне
+движков: что выйдет раньше, `main: after set` или `waiter: woke`, зависело от
+движка. Исправление тоже взято у JavaScript: очередь готовой работы, которая
+выполняется только тогда, когда текущая задача уступает ход.
+
 ## 20.4 `spawn`: работа рядом с тем, кто её начал
 
 `spawn` принимает вызов действия объекта и запускает его сейчас. Результат —
@@ -13019,6 +13048,117 @@ PASS
 заканчивается, его запущенные задачи отменяются и дожидаются, а отказ,
 которого никто не дождался, проваливает тест.
 
+### Асинхронные действия как значения
+
+Связанное асинхронное действие — значение типа `async (T, …) is R`. Политика,
+которой незачем знать, что именно она повторяет, принимает такое значение:
+
+```okkama
+module bible/retry v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Busy is Error = (at(attempt is int));
+
+object Endpoint {
+    has failures is int;
+
+    Endpoint(:failures);
+
+    async fetch(attempt is int) is string {
+        Stdout().writeln("fetch: attempt " + attempt.string());
+        if attempt <= failures {
+            throw Busy.at(attempt);
+        }
+        "200 OK";
+    }
+}
+
+object Retry {
+    has attempts is int;
+
+    Retry(:attempts);
+
+    async run(work is async (int) is string, attempt is int) is string {
+        try {
+            await work(attempt);
+        }
+        catch e is Busy {
+            if attempt == attempts {
+                throw e;
+            }
+            await self.run(work, attempt + 1);
+        };
+    }
+}
+
+async main() is int {
+    let patient = Retry(attempts: 3);
+    let body = await patient.run(Endpoint(failures: 2).fetch, 1);
+    Stdout().writeln("main: " + body);
+    let outcome = try {
+        await patient.run(Endpoint(failures: 5).fetch, 1);
+    }
+    catch e is Busy {
+        "gave up";
+    };
+    Stdout().writeln("main: " + outcome);
+    0;
+}
+```
+
+Вывод:
+
+```text
+fetch: attempt 1
+fetch: attempt 2
+fetch: attempt 3
+main: 200 OK
+fetch: attempt 1
+fetch: attempt 2
+fetch: attempt 3
+main: gave up
+```
+
+`Retry.run` вызывает `work(attempt)` и получает future, как от любого
+асинхронного вызова. Он ждёт его внутри `try` и при `Busy` запускается снова
+со следующим номером попытки, пока попытки не кончатся; тогда он заново
+бросает последний отказ, и его ловит `main`. `Endpoint(failures: 2).fetch` —
+действие, связанное со своим объектом, поэтому всё, что нужно работе между
+попытками, лежит в полях этого объекта. Номер попытки передаётся аргументом:
+endpoint неизменяем, и считать ему негде. Одно значение `Retry` обслуживает
+оба endpoint.
+
+Анонимные действия не бывают асинхронными:
+
+```okkama
+module bible/closure v1.0.0;
+
+import "io/stdout" take Stdout;
+
+async main() is int {
+    let base = 41;
+    let work is async () is int = async () is int { base + 1; };
+    Stdout().writeln((await work()).string());
+    0;
+}
+```
+
+Ответ компилятора:
+
+```text
+20-async-closure-rejected.ok:7:35: syntax error at "async": Anonymous actions cannot be async; declare a named async action instead.
+  |
+7 |     let work is async () is int = async () is int { base + 1; };
+  |                                   ^^^^^
+```
+
+Компилятор сам называет выход: именованное асинхронное действие. Маленький
+объект с одним асинхронным действием заменяет асинхронное замыкание, а его
+поля — то, что замыкание захватило бы, только записанное там, где читатель это
+видит. Синхронное анонимное действие по-прежнему можно передать в
+асинхронный код и вызвать там; не может приостановиться только его тело.
+
 ### Время в тестах
 
 Труднее всего тестировать код, который ждёт времени: тест, который
@@ -13361,6 +13501,72 @@ main` возвращается, планировщик отменяет ещё �
 упала ли фоновая задача, говорит об этом там, где её запускает, — `try`
 вокруг тела задачи.
 
+### Когда ничего не может выполняться
+
+Задача, которая ждёт события, а установить его может только другая ждущая
+задача, ждёт вечно. Планировщик замечает, когда так случилось со всей
+программой: готовых задач нет, а снаружи runtime не осталось ничего — таймера,
+сокета, process worker, — что могло бы разбудить хоть одну.
+
+```okkama
+module bible/stuck v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/event" take Event;
+
+object Clerk {
+    has mine is Event;
+    has theirs is Event;
+
+    Clerk(:mine, :theirs);
+
+    async sign(name is string) is int {
+        Stdout().writeln(name + ": waiting for the other signature");
+        await theirs.wait();
+        mine.set();
+        1;
+    }
+}
+
+async main() is int {
+    let a = Event();
+    let b = Event();
+    let first = spawn Clerk(mine: a, theirs: b).sign("buyer");
+    let second = spawn Clerk(mine: b, theirs: a).sign("seller");
+    let signed = await first + await second;
+    Stdout().writeln("signed: " + signed.string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+buyer: waiting for the other signature
+seller: waiting for the other signature
+exit 1
+```
+
+Оба клерка печатают свою строку и ждут; `main` ждёт первого из них. Очередь
+готовых пуста, снаружи ничего не ожидается, и запуск завершается со статусом
+1 и сообщением в stderr `RuntimeError: async main cannot complete: no task can
+make progress`. Уже напечатанные строки остаются.
+
+Проверка точная, а не догадка. Она не срабатывает оттого, что что-то шло
+долго: задача, ждущая таймера через час, не застряла, и планировщик просто
+спит до этого таймера. И она глобальная. Две задачи, ждущие друг друга, пока
+третья держит живым таймер или сокет, не будут названы, пока ожидать больше
+нечего. Поэтому сервер, который слушает вечно, её никогда не включит, а
+deadlock внутри него выглядит как запросы, которые не завершаются, — как в
+любом другом языке. Conformance-кейсы `L08.deadlock.*` закрепляют сообщение и
+статус на всех движках.
+
+Runtime Go делает ту же глобальную проверку и останавливается с `fatal error:
+all goroutines are asleep - deadlock!` [[scheduler](#ref-goruntime)]. Node.js завершается с
+кодом 13, когда `await` верхнего уровня так и не завершается [[documentation](#ref-nodeexit)]. У
+`asyncio.run` в Python и у Tokio в Rust такой проверки нет: цикл событий ждёт
+события, которое не может прийти, и процесс висит.
+
 ## 20.14 Как движки исполняют задачи
 
 Три движка держат одни и те же правила тремя разными механизмами.
@@ -13465,6 +13671,8 @@ Okkama, о перемежении и платят ту же цену — цве�
 - **До 0.5.0** IR-движок и JVM выполняли разбуженную задачу внутри вызова,
   который её разбудил (issue #340, раздел 20.3), а документация каналов
   описывала старый API (issue #341).
+- **До 0.5.1** Sparrow формулировал deadlock не так, как IR-движок и JVM
+  (issue #342).
 
 ## 20.18 Чего стоит такой замысел
 
@@ -13488,6 +13696,7 @@ Okkama, о перемежении и платят ту же цену — цве�
 - <a id="ref-amin2016"></a>Nada Amin, Ross Tate (2016). Java and Scala's Type Systems are Unsound: The Existential Crisis of Null Pointers. In *Proceedings of OOPSLA 2016*: 838–848. ACM. https://doi.org/10.1145/2983990.2984004
 - <a id="ref-lions1996"></a>Jacques-Louis Lions et al. (1996). *ARIANE 5 Flight 501 Failure: Report by the Inquiry Board*. European Space Agency, Paris, 19 July 1996. https://www.esa.int/Newsroom/Press_Releases/Ariane_501_-_Presentation_of_Inquiry_Board_report
 - <a id="ref-armstrong2003"></a>Joe Armstrong (2003). *Making Reliable Distributed Systems in the Presence of Software Errors*. PhD thesis, Royal Institute of Technology (KTH), Stockholm.
+- <a id="ref-go114"></a>The Go Authors (2020). Go 1.14 Release Notes: Runtime ("Goroutines are now asynchronously preemptible"). https://go.dev/doc/go1.14
 - <a id="ref-aycock2003"></a>John Aycock (2003). A Brief History of Just-In-Time. *ACM Computing Surveys* 35(2): 97–113. https://doi.org/10.1145/857076.857077
 - <a id="ref-bagwell2001"></a>Phil Bagwell (2001). *Ideal Hash Trees*. Technical report, École Polytechnique Fédérale de Lausanne. https://infoscience.epfl.ch/record/64398
 - <a id="ref-baker-sep"></a>Alan Baker (2022). Simplicity. In *The Stanford Encyclopedia of Philosophy* (Summer 2022 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/simplicity/
@@ -13514,6 +13723,7 @@ Okkama, о перемежении и платят ту же цену — цве�
 - <a id="ref-dennis1966"></a>Jack B. Dennis, Earl C. Van Horn (1966). Programming Semantics for Multiprogrammed Computations. *Communications of the ACM* 9(3): 143–155. https://doi.org/10.1145/365230.365252
 - <a id="ref-dijkstra1968"></a>Edsger W. Dijkstra (1968). Go To Statement Considered Harmful. *Communications of the ACM* 11(3): 147–148. https://doi.org/10.1145/362929.362947
 - <a id="ref-dijkstra1972"></a>Edsger W. Dijkstra (1972). The Humble Programmer. *Communications of the ACM* 15(10): 859–866. https://doi.org/10.1145/355604.361591
+- <a id="ref-nodeexit"></a>OpenJS Foundation. Node.js documentation, Process: exit codes (code 13, unsettled top-level await). https://nodejs.org/api/process.html#exit-codes
 - <a id="ref-duffy2016"></a>Joe Duffy (2016). The Error Model. Blog post, 7 February 2016. http://joeduffyblog.com/2016/02/07/the-error-model/
 - <a id="ref-elizarov2018"></a>Roman Elizarov (2018). Structured concurrency. Blog post, 12 September 2018. https://medium.com/@elizarov/structured-concurrency-722d765aa952
 - <a id="ref-se0304"></a>Swift Evolution (2021). SE-0304: Structured Concurrency. https://github.com/swiftlang/swift-evolution/blob/main/proposals/0304-structured-concurrency.md
@@ -13582,6 +13792,7 @@ Okkama, о перемежении и платят ту же цену — цве�
 - <a id="ref-pike2015"></a>Rob Pike (2015). Errors are values. *The Go Blog*, 12 January 2015. https://go.dev/blog/errors-are-values
 - <a id="ref-hyperspec"></a>Kent M. Pitman (1996). *Common Lisp HyperSpec*, Chapter 9: Conditions. Harlequin; now LispWorks. https://www.lispworks.com/documentation/HyperSpec/Body/09_.htm
 - <a id="ref-poletto1999"></a>Massimiliano Poletto, Vivek Sarkar (1999). Linear Scan Register Allocation. *ACM TOPLAS* 21(5): 895–913. https://doi.org/10.1145/330249.330250
+- <a id="ref-promisesaplus"></a>Promises/A+ organization. Promises/A+, rule 2.2.4 and note 3.1. https://promisesaplus.com/
 - <a id="ref-r7rs2013"></a>Alex Shinn, John Cowan, Arthur A. Gleckler (eds.) (2013). *Revised⁷ Report on the Algorithmic Language Scheme*. https://small.r7rs.org/attachment/r7rs.pdf
 - <a id="ref-rfc3629"></a>François Yergeau (2003). *UTF-8, a Transformation Format of ISO 10646*. RFC 3629, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc3629
 - <a id="ref-rfc7396"></a>Paul Hoffman, James Snell (2014). *JSON Merge Patch*. RFC 7396, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc7396
@@ -13592,6 +13803,8 @@ Okkama, о перемежении и платят ту же цену — цве�
 - <a id="ref-pep343"></a>Guido van Rossum, Nick Coghlan (2005). PEP 343 — The "with" Statement. Python Enhancement Proposals. https://peps.python.org/pep-0343/
 - <a id="ref-saltzer1975"></a>Jerome H. Saltzer, Michael D. Schroeder (1975). The Protection of Information in Computer Systems. *Proceedings of the IEEE* 63(9): 1278–1308. https://doi.org/10.1109/PROC.1975.9939
 - <a id="ref-scales2022"></a>Dan Scales (2022). Go 1.18 Implementation of Generics via Dictionaries and Gcshape Stenciling. Design document, Go proposal repository, 22 February 2022. https://go.googlesource.com/proposal/+/master/design/generics-implementation-dictionaries-go1.18.md
+- <a id="ref-goruntime"></a>The Go Authors. The Go runtime scheduler, src/runtime/proc.go, function checkdead. https://go.dev/src/runtime/proc.go
+- <a id="ref-schlueter2013"></a>Isaac Z. Schlueter (2013). Designing APIs for Asynchrony. Blog post, 23 August 2013. https://blog.izs.me/2013/08/designing-apis-for-asynchrony/
 - <a id="ref-semver"></a>Tom Preston-Werner (2013). *Semantic Versioning 2.0.0*. https://semver.org/
 - <a id="ref-smith2018"></a>Nathaniel J. Smith (2018). Notes on Structured Concurrency, or: Go Statement Considered Harmful. Blog post, 25 April 2018. https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/
 - <a id="ref-snyder1986"></a>Alan Snyder (1986). Encapsulation and Inheritance in Object-Oriented Programming Languages. In *Proceedings of OOPSLA '86*: 38–45. ACM. https://doi.org/10.1145/28697.28702
