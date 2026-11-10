@@ -506,7 +506,32 @@ All three run on one thread at a time, which is what makes them agree: the
 order of output in this chapter is the same on each, and the conformance
 suite checks it.
 
-## 20.14 Okkama among other languages
+## 20.14 What async costs, measured
+
+The micro benchmarks of `okkama-docs/benchmarks/micro` repeat one operation in
+a loop and subtract the empty loop. On an Apple M2 Max, with the 0.5.0
+scheduler, one repetition costs, in nanoseconds:
+
+| operation | Sparrow | IR | JVM |
+|---|---:|---:|---:|
+| a synchronous method call, for scale | 5 | 425 | about 30 |
+| `await` of an async action | 38 | 707 | 6 708 |
+| `spawn` and `await` of a task | 75 | 780 | 6 410 |
+| a value sent and received over a channel | 89 | 913 | 13 173 |
+| a task woken through an `Event` | 316 | 1 931 | 22 471 |
+| eight tasks woken by one `Event` | 2 354 | 17 710 | 163 866 |
+| a waiting task cancelled and awaited | 388 | 2 192 | 25 566 |
+| the same, with an `async destroy` to settle | 852 | 3 580 | 40 021 |
+
+On Sparrow an `await` costs as much as eight method calls, because an async
+call is a heap frame and a resumption is a jump back into compiled code. The
+IR engine pays its interpreter's price for everything, so an `await` costs
+about two of its method calls. The JVM pays for threads: each task is a Java
+thread, and handing control from one to another costs microseconds, two
+hundred times a method call. A program that waits a lot belongs on Sparrow;
+the JVM is the engine for long computations between waits.
+
+## 20.15 Okkama among other languages
 
 | | Okkama | C# | JavaScript | Python asyncio | Rust | Kotlin | Go |
 |---|---|---|---|---|---|---|---|
@@ -527,7 +552,7 @@ convention. Okkama chose the coloured side because it already makes effects
 visible elsewhere (successors, `^` fields, `try`), and a suspension point is
 an effect: the place where the rest of the program may change things.
 
-## 20.15 Limits
+## 20.16 Limits
 
 - **Detached work.** A spawned task that its starter neither awaits nor
   cancels runs until `async main` returns. Nothing ties it to the scope that
@@ -536,8 +561,8 @@ an effect: the place where the rest of the program may change things.
   suspension point. A long synchronous loop sees it only if it checks a
   `Cancellation` token.
 - **JVM task switches are slow.** An `await` of an async action costs about
-  5 µs on the JVM, 34 times Sparrow (issue #327), because each task is a
-  thread.
+  6.7 µs on the JVM, 176 times Sparrow (Section 20.14, issue #327), because
+  each task is a thread.
 - **Async cleanup guards cost time on Sparrow.** An `async destroy` guard in
   the HTTP server's state delays every server run by about 0.8 s (issue
   #328), and the remaining cleanup guards of std stay synchronous until that
@@ -550,7 +575,7 @@ an effect: the place where the rest of the program may change things.
   that woke it (issue #340, Section 20.3), and the channel documentation
   described an older API (issue #341).
 
-## 20.16 What this design costs
+## 20.17 What this design costs
 
 Laziness costs an explicit `spawn` wherever work should start now, and a
 reader has to know that `Oven("rye").baked()` alone does nothing. Colour costs
