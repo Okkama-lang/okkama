@@ -29,6 +29,15 @@ elements from the start. Unlike `slice`, these two are defined for any
 count that is not negative — `[1, 2].take(5)` is `[1, 2]` — because "at most
 `count`" is what their names promise; a negative count fails.
 
+Two more give a copy changed at one index (issues #250, #251).
+- `replaced(index, value)` is the array with `value` at `index`.
+- `removed_at(index)` is the array without the element at `index`.
+
+The receiver keeps its elements, as everywhere. An index outside the array
+fails as indexing does. `value` meets the element type by the rules of a
+parameter boundary: an array of a role takes an implementer, and `@any`
+boxes. No other conversion applies.
+
 Ranges expand inside array literals: `[9, 0, 2..=4, 1]` is the array
 `9 0 2 3 4 1`. `a..b` excludes its end and `a..=b` includes it; bounds are
 integers and the start may not exceed the end.
@@ -174,10 +183,36 @@ the result, never a series of intermediate arrays. Inside `reduce` the
 accumulator also grows in place when nothing else sees it (issue #243): a
 block that only returns `acc` or `acc + [item]` appends in amortized constant
 time, the way a mutable vector would, because no one can observe the
-intermediate arrays. Elsewhere `+` does not share yet: the result is a fresh
-copy, so code that builds an array step by step through an object's fields
-or a shared cell still copies the whole array at each step, whether it writes
-`old + [item]` or the idiom the standard library used before:
+intermediate arrays.
+
+Elsewhere `+` used to copy. Until 0.4.3 the result was a fresh copy, so code
+that built an array step by step through an object's fields or a shared cell
+copied the whole array at each step.
+
+Since 0.4.3, Tomato gives these operations representations that share
+structure between versions (issues #246–#255). Not a line of the programs
+that use them changes.
+- **Appends and prepends.** A chain of `items + [x]` or `[x] + items` on an
+  array of 32 elements or more writes into a buffer the versions share: at
+  its end, or before its start, when the version being extended ends (or
+  starts) there. Every older version keeps its elements. A second version
+  made from the same one copies, as before.
+- **Slices.** `slice`, `take` and `drop` share their origin's storage when
+  they keep at least half of it, so a slice keeps alive at most twice what it
+  holds.
+- **Replacements.** A chain of `replaced` on an array of 64 elements or more
+  turns it into a 32-way trie, so a replacement copies one path from the
+  root. A trie that is only read rewrites itself flat after two passes.
+- **Maps.** A map of more than 64 entries turns into a persistent B+ tree the
+  first time a version is made from it. Later versions share its nodes.
+- **Strings.** Chains of `+` on strings share text buffers the same way
+  (Chapter 6).
+
+Arrays and maps that are built once and then only read stay flat, so reading
+them costs what it did.
+
+One idiom still copies on every engine, because it builds a new array with
+`map` at each step. The standard library used it before `+` existed:
 
 ```okkama
 let following = (0..old.size() + 1).map() -> index {
@@ -185,23 +220,38 @@ let following = (0..old.size() + 1).map() -> index {
 };
 ```
 
-Figure 8.1 measures the consequence.
+The IR engine and the JVM keep flat copies of everything until 0.5.2 (issues
+#335, #336). Figure 8.1 measures the difference.
 
-{{figure:append-cost|Figure 8.1. Building an array of n integers: one map() stays flat; appending one element at a time by copying is quadratic (issue #145). Data: data/append-cost.json.}}
+{{figure:append-cost|Figure 8.1. Building an array of n integers on Tomato: one map() stays flat; the map() idiom and items + [x] by copying (0.4.2) are quadratic; items + [x] over the shared buffers of 0.4.3 stays flat (issues #145, #246). Data: data/append-cost.json.}}
 
-One `map()` builds 16,000 elements in the time it takes to start the process;
-appending them one at a time by copying takes 3.7 seconds, and doubling the
-size roughly quadruples it. This is the clearest case in the language of the
-rule from Chapter 1: removing mutation must not remove efficiency, and the cure
-is an operation, not a mutable entity.
+One `map()` builds 64,000 elements in the time it takes to start the process,
+about 11 milliseconds. Appending them one at a time with `+` took 1.1 seconds
+when every step copied, and doubling the size roughly quadrupled the time. On
+0.4.3 it takes 15 milliseconds. The idiom, which builds a new array at each
+step, still takes 0.85 seconds for 16,000 elements and 3.4 for 32,000.
 
-The cure is well known. Persistent vectors and hash maps — Bagwell's hash
-array mapped tries [@bagwell2001], as used by Clojure [@hickey2008], and the
-structures in Okasaki's book [@okasaki1998] — give immutable collections
-effectively constant-time append and update by sharing all but a logarithmic
-path of their structure between versions. The operations are already in the
-language as `+` and `-`; giving them such a representation, without changing
-a line of the programs that use them, is the remaining step.
+This is the clearest case in the language of the rule from Chapter 1:
+removing mutation must not remove efficiency, and the cure is an operation,
+not a mutable entity.
+
+The cure is well known. Persistent vectors and hash maps give immutable
+collections effectively constant-time append and update, by sharing all but
+a logarithmic path of their structure between versions. Examples are
+Bagwell's hash array mapped tries [@bagwell2001], as used by Clojure
+[@hickey2008], and the structures in Okasaki's book [@okasaki1998].
+
+Okkama took the step in 0.4.3 without a new operation: `+` and `-` stayed,
+and only their representation changed. It took the cure piecemeal rather
+than wholesale.
+- **Tries only where they pay.** Measured on Tomato, a trie read in an index
+  loop costs 45–75% more than a flat array, and programs read far more than
+  they write. So tries serve only chains of `replaced`, and flatten
+  themselves back once they are only read.
+- **Buffers for appends.** Appends get a flat buffer with a frontier instead,
+  which reads like any flat array.
+- **An ordered tree for maps.** Maps get an ordered B+ tree rather than a
+  hash trie, because Okkama's maps are ordered.
 
 ## 8.6 Iterating user collections
 
@@ -229,16 +279,16 @@ right method names is not enough.
 
 ## 8.7 Limits
 
-- **Building one element at a time copies outside `reduce`.** `items + [item]`
-  and `a + b + c` allocate the result once per expression (issue #145), and a
-  `reduce` accumulator grows in place (issue #243), but an array grown through
-  successor fields or a cell is still copied at each step (Figure 8.1;
-  issue #246).
-- **Map updates copy.** `prices + ["fig": 90]` and `prices - ["pear": 0]`
-  give a new map, but by copying the whole origin (issues #252, #253).
+- **Copies remain on the other engines.** The IR engine and the JVM still
+  copy at each step of a chain (issues #335, #336, planned for 0.5.2). Two
+  things copy on every engine: the `map()` idiom, and `a + b` of two large
+  arrays (issue #248 was declined).
+- **A large map's first version copies.** A map of more than 64 entries
+  becomes persistent at the first version made from it: that version costs
+  one copy, and the later ones a path. Maps of 64 entries or fewer are
+  copied whole, which is cheaper at that size.
 - **`ordering()` needs `compare.Comparing` in scope** (issue #233).
 
-Most of these are the same gap seen from different sides (the milestone
-"Persistence Operations" tracks it, one issue per operation): an immutable
-language needs efficient persistent operations, and Okkama has the
-immutability already and the operations not yet.
+The first two are what is left of the gap that the milestone "Persistence
+Operations" tracked. Okkama had the immutability and the operators. Since
+0.4.3 Tomato has the representations, and the other engines follow.

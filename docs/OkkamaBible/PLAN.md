@@ -182,6 +182,14 @@ Updated with each chapter: `build.py --stats`.
   `Maybe`/`Presence` as variants with Chapter 7; what changes when #287 and
   #288 land.
 
+- 0.4.3 (2026-11-10): Chapters 8 and 6 follow the persistent collections of
+  Tomato (#246–#255). Chapter 8 gains `replaced` and `removed_at`, how `+`,
+  slices, `replaced` and map versions share structure, why tries serve only
+  `replaced` chains, and Figure 8.1 remeasured with four series
+  (`okkama-docs/benchmarks/persistence/fig81`). Its limits now name the IR
+  and JVM ports (#335, #336), the declined #248, and the first version of a
+  large map. Chapter 6's limit on `+` says it shares on Tomato.
+
 ## Notes for the build
 
 - `builtins_table()` (for Appendix B) matches `(Ty::X, "name")` only;

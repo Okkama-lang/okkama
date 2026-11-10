@@ -256,8 +256,12 @@ right operation.
 
 ## 6.9 Limits
 
-- **No string builder.** Assembling long text from many pieces with `+` is
-  quadratic; the library has no native builder yet (issue #139).
+- **`+` shares only on Tomato.** Since 0.4.3, a chain `text + piece` on
+  Tomato writes into a text buffer the versions share (issue #255): a long
+  text assembled from many pieces costs a constant per piece, not a copy of
+  everything so far. The IR engine and the JVM still copy until 0.5.2
+  (issues #335, #336). The library has no native string builder (issue
+  #139).
 - **Case conversion has no locale.** `lower()` and `upper()` follow the
   Unicode default; Turkish, Azeri and Lithuanian rules are missing
   (issue #261).

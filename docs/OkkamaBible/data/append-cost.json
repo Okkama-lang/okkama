@@ -1,17 +1,37 @@
 {
- "description": "Wall-clock seconds (best of 3, process start included) to build an array of n integers on the Sparrow core of release/0.4.1, Apple M2 Max, 2026-11-07: 'map' builds it with one (0..n).map(), 'concat' appends one element at a time with the (0..a.size() + 1).map() idiom std uses for lack of append (issue #145). Generator: chapter 8 of the Okkama Bible.",
+ "description": "Wall-clock seconds (best of 3, process start included) to build an array of n integers on Tomato, release/0.4.3, Apple M2 Max, 2026-11-10. 'map': one (0..n).map(); 'idiom': one element at a time with the (0..a.size() + 1).map() idiom (issue #145); 'append_copy': one element at a time with items + [x] through a successor call, every step a copy (OKKAMA_ARRAYS=flat, arrays as in 0.4.2); 'append': the same with the shared buffers of 0.4.3 (issue #246). Points above 10 s are left out. Generator: okkama-docs/benchmarks/persistence/fig81 (fig81.ok, measure.py).",
  "map": {
-  "1000": 0.138,
-  "2000": 0.15,
-  "4000": 0.129,
-  "8000": 0.15,
-  "16000": 0.136
+  "1000": 0.01,
+  "2000": 0.01,
+  "4000": 0.01,
+  "8000": 0.01,
+  "16000": 0.01,
+  "32000": 0.01
  },
- "concat": {
-  "1000": 0.181,
-  "2000": 0.213,
-  "4000": 0.42,
-  "8000": 1.007,
-  "16000": 3.672
+ "idiom": {
+  "1000": 0.015,
+  "2000": 0.025,
+  "4000": 0.065,
+  "8000": 0.228,
+  "16000": 0.85,
+  "32000": 3.307
+ },
+ "append_copy": {
+  "1000": 0.012,
+  "2000": 0.012,
+  "4000": 0.016,
+  "8000": 0.033,
+  "16000": 0.101,
+  "32000": 0.287,
+  "64000": 1.142
+ },
+ "append": {
+  "1000": 0.011,
+  "2000": 0.011,
+  "4000": 0.011,
+  "8000": 0.011,
+  "16000": 0.012,
+  "32000": 0.012,
+  "64000": 0.015
  }
 }
