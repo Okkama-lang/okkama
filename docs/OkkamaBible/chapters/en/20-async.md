@@ -238,6 +238,33 @@ waits. What it does not get is the nursery's guarantee for work that nobody
 awaits. A spawned task that its starter forgets runs on until `async main`
 returns and the scheduler cancels it.
 
+### Where structured concurrency came from
+
+Smith's argument starts from Dijkstra's letter about `goto` [@dijkstra1968].
+A `goto` lets control leave a block and never come back, so a reader cannot
+treat the block as a unit: whatever it was supposed to finish may still be
+going on elsewhere. Structured programming replaced it with constructs that
+have one entry and one exit. A function that starts a thread or a goroutine
+and returns does what `goto` did, Smith says: the work it started outlives the
+call, and no caller can know when it ends or where its errors go. A nursery
+puts concurrency back into the shape of a block.
+
+The idea is older than the name. Erlang [@armstrong2003] linked processes so
+that a crash travels along the links, and supervisors restart what they
+started, so that a tree of processes fails and recovers as one. That tree is
+built and torn down at run time, by convention and library; the language does
+not stop a process from outliving its parent.
+
+After Trio the idea went into the mainstream quickly. Kotlin made every
+coroutine the child of a `CoroutineScope` in 2018 [@elizarov2018]. Swift
+shipped task groups and `async let` with structured child tasks in 2021
+[@se0304]. Python 3.11 (2022) added `asyncio.TaskGroup`. Java 21 (2023)
+previewed `StructuredTaskScope` [@jep453]. All of them give the scope an
+object or a block. Okkama gives it the `await`: a task that waits for a future
+it started owns it while it waits, which covers the common case of one child
+without any extra construct, and leaves the objects of Section 20.7 for the
+cases with many.
+
 ## 20.6 Channels and the state owner
 
 Okkama has no mutable fields and no shared mutable state. Two tasks therefore

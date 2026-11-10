@@ -12308,6 +12308,33 @@ waits. What it does not get is the nursery's guarantee for work that nobody
 awaits. A spawned task that its starter forgets runs on until `async main`
 returns and the scheduler cancels it.
 
+### Where structured concurrency came from
+
+Smith's argument starts from Dijkstra's letter about `goto` [[Dijkstra 1968](#ref-dijkstra1968)].
+A `goto` lets control leave a block and never come back, so a reader cannot
+treat the block as a unit: whatever it was supposed to finish may still be
+going on elsewhere. Structured programming replaced it with constructs that
+have one entry and one exit. A function that starts a thread or a goroutine
+and returns does what `goto` did, Smith says: the work it started outlives the
+call, and no caller can know when it ends or where its errors go. A nursery
+puts concurrency back into the shape of a block.
+
+The idea is older than the name. Erlang [[Armstrong 2003](#ref-armstrong2003)] linked processes so
+that a crash travels along the links, and supervisors restart what they
+started, so that a tree of processes fails and recovers as one. That tree is
+built and torn down at run time, by convention and library; the language does
+not stop a process from outliving its parent.
+
+After Trio the idea went into the mainstream quickly. Kotlin made every
+coroutine the child of a `CoroutineScope` in 2018 [[Elizarov 2018](#ref-elizarov2018)]. Swift
+shipped task groups and `async let` with structured child tasks in 2021
+[[Evolution 2021](#ref-se0304)]. Python 3.11 (2022) added `asyncio.TaskGroup`. Java 21 (2023)
+previewed `StructuredTaskScope` [[OpenJDK 2023](#ref-jep453)]. All of them give the scope an
+object or a block. Okkama gives it the `await`: a task that waits for a future
+it started owns it while it waits, which covers the common case of one child
+without any extra construct, and leaves the objects of Section 20.7 for the
+cases with many.
+
 ## 20.6 Channels and the state owner
 
 Okkama has no mutable fields and no shared mutable state. Two tasks therefore
@@ -12981,6 +13008,7 @@ code print the same lines in the same order.
 - <a id="ref-dijkstra1972"></a>Edsger W. Dijkstra (1972). The Humble Programmer. *Communications of the ACM* 15(10): 859–866. https://doi.org/10.1145/355604.361591
 - <a id="ref-duffy2016"></a>Joe Duffy (2016). The Error Model. Blog post, 7 February 2016. http://joeduffyblog.com/2016/02/07/the-error-model/
 - <a id="ref-elizarov2018"></a>Roman Elizarov (2018). Structured concurrency. Blog post, 12 September 2018. https://medium.com/@elizarov/structured-concurrency-722d765aa952
+- <a id="ref-se0304"></a>Swift Evolution (2021). SE-0304: Structured Concurrency. https://github.com/swiftlang/swift-evolution/blob/main/proposals/0304-structured-concurrency.md
 - <a id="ref-fowler2007"></a>Martin Fowler (2007). Mocks Aren't Stubs. https://martinfowler.com/articles/mocksArentStubs.html
 - <a id="ref-fahndrich2003"></a>Manuel Fähndrich, K. Rustan M. Leino (2003). Declaring and Checking Non-null Types in an Object-Oriented Language. In *Proceedings of OOPSLA 2003*: 302–312. ACM. https://doi.org/10.1145/949305.949332
 - <a id="ref-gabriel1991"></a>Richard P. Gabriel (1991). The Rise of "Worse is Better". In *Lisp: Good News, Bad News, How to Win Big*. https://www.dreamsongs.com/RiseOfWorseIsBetter.html
@@ -13038,6 +13066,7 @@ code print the same lines in the same order.
 - <a id="ref-nygaard1978"></a>Kristen Nygaard, Ole-Johan Dahl (1978). The Development of the SIMULA Languages. *ACM SIGPLAN Notices* 13(8): 245–272 (HOPL I). https://doi.org/10.1145/960118.808391
 - <a id="ref-nystrom2015"></a>Bob Nystrom (2015). What Color is Your Function? Blog post, 1 February 2015. https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/
 - <a id="ref-okasaki1998"></a>Chris Okasaki (1998). *Purely Functional Data Structures*. Cambridge University Press. https://doi.org/10.1017/CBO9780511530104
+- <a id="ref-jep453"></a>OpenJDK (2023). JEP 453: Structured Concurrency (Preview). https://openjdk.org/jeps/453
 - <a id="ref-ousterhout2018"></a>John Ousterhout (2018). *A Philosophy of Software Design*. Yaknyam Press.
 - <a id="ref-parnas1972"></a>David L. Parnas (1972). On the Criteria To Be Used in Decomposing Systems into Modules. *Communications of the ACM* 15(12): 1053–1058. https://doi.org/10.1145/361598.361623
 - <a id="ref-pep237"></a>Moshe Zadka, Guido van Rossum (2001). PEP 237 — Unifying Long Integers and Integers. Python Enhancement Proposals. https://peps.python.org/pep-0237/

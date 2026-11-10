@@ -12461,6 +12461,33 @@ Future, которого ждёт ещё одна задача, вместе с 
 запустивший, работает, пока не вернётся `async main` и планировщик её не
 отменит.
 
+### Откуда взялась структурная конкурентность
+
+Рассуждение Смита начинается с письма Дейкстры о `goto` [[Dijkstra 1968](#ref-dijkstra1968)].
+`goto` позволяет управлению уйти из блока и не вернуться, поэтому читатель не
+может считать блок единым целым: то, что он должен был закончить, может ещё
+идти где-то в другом месте. Структурное программирование заменило его
+конструкциями с одним входом и одним выходом. Функция, которая запускает
+поток или горутину и возвращается, делает то же, что делал `goto`, говорит
+Смит: начатая ею работа переживает вызов, и ни один вызывающий не может знать,
+когда она кончится и куда денутся её ошибки. Nursery возвращает
+конкурентности форму блока.
+
+Идея старше названия. Erlang [[Armstrong 2003](#ref-armstrong2003)] связывал процессы так, что крах
+шёл по связям, а супервизоры перезапускали запущенное ими, и дерево процессов
+падало и восстанавливалось целиком. Это дерево строится и разбирается во
+время исполнения, по соглашению и библиотекой; язык не мешает процессу
+пережить родителя.
+
+После Trio идея быстро ушла в мейнстрим. Kotlin в 2018 году сделал каждую
+корутину потомком `CoroutineScope` [[Elizarov 2018](#ref-elizarov2018)]. Swift в 2021 году получил
+группы задач и `async let` со структурными дочерними задачами [[Evolution 2021](#ref-se0304)].
+Python 3.11 (2022) добавил `asyncio.TaskGroup`. Java 21 (2023) предварительно
+ввела `StructuredTaskScope` [[OpenJDK 2023](#ref-jep453)]. Все они дают области объект или блок.
+Okkama даёт ей `await`: задача, которая ждёт Future, запущенный ею, владеет им,
+пока ждёт. Это покрывает частый случай одного потомка без всякой лишней
+конструкции и оставляет объекты раздела 20.7 для случаев со многими.
+
 ## 20.6 Каналы и владелец состояния
 
 В Okkama нет изменяемых полей и разделяемого изменяемого состояния. Поэтому
@@ -13150,6 +13177,7 @@ Okkama, о перемежении и платят ту же цену — цве�
 - <a id="ref-dijkstra1972"></a>Edsger W. Dijkstra (1972). The Humble Programmer. *Communications of the ACM* 15(10): 859–866. https://doi.org/10.1145/355604.361591
 - <a id="ref-duffy2016"></a>Joe Duffy (2016). The Error Model. Blog post, 7 February 2016. http://joeduffyblog.com/2016/02/07/the-error-model/
 - <a id="ref-elizarov2018"></a>Roman Elizarov (2018). Structured concurrency. Blog post, 12 September 2018. https://medium.com/@elizarov/structured-concurrency-722d765aa952
+- <a id="ref-se0304"></a>Swift Evolution (2021). SE-0304: Structured Concurrency. https://github.com/swiftlang/swift-evolution/blob/main/proposals/0304-structured-concurrency.md
 - <a id="ref-fowler2007"></a>Martin Fowler (2007). Mocks Aren't Stubs. https://martinfowler.com/articles/mocksArentStubs.html
 - <a id="ref-fahndrich2003"></a>Manuel Fähndrich, K. Rustan M. Leino (2003). Declaring and Checking Non-null Types in an Object-Oriented Language. In *Proceedings of OOPSLA 2003*: 302–312. ACM. https://doi.org/10.1145/949305.949332
 - <a id="ref-gabriel1991"></a>Richard P. Gabriel (1991). The Rise of "Worse is Better". In *Lisp: Good News, Bad News, How to Win Big*. https://www.dreamsongs.com/RiseOfWorseIsBetter.html
@@ -13207,6 +13235,7 @@ Okkama, о перемежении и платят ту же цену — цве�
 - <a id="ref-nygaard1978"></a>Kristen Nygaard, Ole-Johan Dahl (1978). The Development of the SIMULA Languages. *ACM SIGPLAN Notices* 13(8): 245–272 (HOPL I). https://doi.org/10.1145/960118.808391
 - <a id="ref-nystrom2015"></a>Bob Nystrom (2015). What Color is Your Function? Blog post, 1 February 2015. https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/
 - <a id="ref-okasaki1998"></a>Chris Okasaki (1998). *Purely Functional Data Structures*. Cambridge University Press. https://doi.org/10.1017/CBO9780511530104
+- <a id="ref-jep453"></a>OpenJDK (2023). JEP 453: Structured Concurrency (Preview). https://openjdk.org/jeps/453
 - <a id="ref-ousterhout2018"></a>John Ousterhout (2018). *A Philosophy of Software Design*. Yaknyam Press.
 - <a id="ref-parnas1972"></a>David L. Parnas (1972). On the Criteria To Be Used in Decomposing Systems into Modules. *Communications of the ACM* 15(12): 1053–1058. https://doi.org/10.1145/361598.361623
 - <a id="ref-pep237"></a>Moshe Zadka, Guido van Rossum (2001). PEP 237 — Unifying Long Integers and Integers. Python Enhancement Proposals. https://peps.python.org/pep-0237/
