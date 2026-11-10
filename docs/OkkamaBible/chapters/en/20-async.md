@@ -710,6 +710,16 @@ thread, and handing control from one to another costs microseconds, two
 hundred times a method call. A program that waits a lot belongs on Sparrow;
 the JVM is the engine for long computations between waits.
 
+0.5.1 made the JVM's hand-off cheaper (issue #327). A thread that gives up
+control used to park on a semaphore at once and be woken a few microseconds
+later; it now spins on its permit for up to 20 µs first, because control
+usually comes back sooner than that. The order of hand-offs is the same.
+Only two threads spin at a time: when more did, eight tasks woken by one
+`Event` competed for the cores with their spinning neighbours and got
+slower. An `await` now costs 0.77 µs on the JVM, `spawn` and `await`
+0.87 µs, a channel round trip 1.15 µs, a wake through an `Event` 7.4 µs,
+eight waiters 136 µs and a cancelled task 20 µs.
+
 ### What a waiting task holds
 
 Ten thousand tasks, each waiting on one `Event`, then woken and awaited all
@@ -780,9 +790,9 @@ an effect: the place where the rest of the program may change things.
 - **No cancellation in synchronous code.** Cancellation is delivered at a
   suspension point. A long synchronous loop sees it only if it checks a
   `Cancellation` token.
-- **JVM task switches are slow.** An `await` of an async action costs about
-  6.7 µs on the JVM, 176 times Sparrow (Section 20.15, issue #327), because
-  each task is a thread.
+- **JVM task switches cost microseconds.** Each task is a thread. Since
+  0.5.1 an `await` of an async action costs about 0.8 µs there, twenty times
+  Sparrow (Section 20.15, issue #327); in 0.5.0 it was 6.7 µs.
 - **Async cleanup guards cost compile time on Sparrow.** One `async destroy`
   in a program makes every async scope close with a settle, which costs the
   HTTP stack half a second of compilation per run (issue #328, previous
