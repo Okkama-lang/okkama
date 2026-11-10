@@ -162,8 +162,11 @@ it:
 
 A production program therefore cannot reach a fake, not even by accident
 in a code path that tests happen to cover. Mistakes inside the fake block
-are reported when the tests are compiled. The messages currently name the
-generated object (`Counter$fake`) rather than the role (#276).
+are reported when the tests are compiled, in terms of the role and at the
+fake's own code: `Fake field "value" of role "Counter" needs a default: a
+fake takes no constructor arguments`, `Action "count" of the fake of role
+"Counter" must return int, got string`. Before 0.5.0 they named the
+generated object `Counter$fake` (#276).
 
 ## 15.5 State in a fake
 
@@ -273,8 +276,6 @@ that may hang should bound itself with a budget or a deadline.
 
 ## 15.8 What does not work yet
 
-- Errors inside fake blocks are reported in terms of the generated object
-  (#276).
 - Report formats, seeds and parallel workers are not in the command line;
   they are planned with the rewritten standard library (#339).
 

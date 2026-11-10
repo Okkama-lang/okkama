@@ -645,8 +645,6 @@ that disagree.
 - **Code size grows with specializations.** Each element type of `Sorted`
   adds 23 functions (Section 17.7).
 - **Polymorphic recursion is rejected,** at compile time on every engine.
-- **Fake diagnostics** name the generated `Role$fake` object instead of the
-  `fake` block the programmer wrote (#276).
 - **Role plainness is per declaration.** One implementation of `Cursor` that
   holds a resource makes the compiler track every `Cursor<T>` in regions
   (Chapter 11), not only the instances that can reach one (#268).

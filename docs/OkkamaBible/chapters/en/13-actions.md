@@ -239,9 +239,8 @@ scope without a use. Every normal path has to consume the value. A use
 only inside a `try` does not count for the path through its `catch`, which
 starts from what was pending when the `try` began. That is why the example
 calls `done.summary()` once before the `try`. Without that line, the
-compiler reports that `done` "can leave scope without consumption". The
-report currently points at the first line of `main` instead of the
-binding (#272).
+compiler reports that `done` "can leave scope without consumption", at the
+binding (before 0.5.0 it pointed at the first line of `main`, #272).
 
 The check is not linear typing. A consumed successor can be used again.
 Aliases share one obligation, and consuming any of them is enough. The rule

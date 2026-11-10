@@ -6604,9 +6604,8 @@ scope without a use. Every normal path has to consume the value. A use
 only inside a `try` does not count for the path through its `catch`, which
 starts from what was pending when the `try` began. That is why the example
 calls `done.summary()` once before the `try`. Without that line, the
-compiler reports that `done` "can leave scope without consumption". The
-report currently points at the first line of `main` instead of the
-binding (#272).
+compiler reports that `done` "can leave scope without consumption", at the
+binding (before 0.5.0 it pointed at the first line of `main`, #272).
 
 The check is not linear typing. A consumed successor can be used again.
 Aliases share one obligation, and consuming any of them is enough. The rule
@@ -8098,8 +8097,11 @@ The compiler answers:
 
 A production program therefore cannot reach a fake, not even by accident
 in a code path that tests happen to cover. Mistakes inside the fake block
-are reported when the tests are compiled. The messages currently name the
-generated object (`Counter$fake`) rather than the role (#276).
+are reported when the tests are compiled, in terms of the role and at the
+fake's own code: `Fake field "value" of role "Counter" needs a default: a
+fake takes no constructor arguments`, `Action "count" of the fake of role
+"Counter" must return int, got string`. Before 0.5.0 they named the
+generated object `Counter$fake` (#276).
 
 ## 15.5 State in a fake
 
@@ -8257,8 +8259,6 @@ that may hang should bound itself with a budget or a deadline.
 
 ## 15.8 What does not work yet
 
-- Errors inside fake blocks are reported in terms of the generated object
-  (#276).
 - Report formats, seeds and parallel workers are not in the command line;
   they are planned with the rewritten standard library (#339).
 
@@ -9934,8 +9934,6 @@ that disagree.
 - **Code size grows with specializations.** Each element type of `Sorted`
   adds 23 functions (Section 17.7).
 - **Polymorphic recursion is rejected,** at compile time on every engine.
-- **Fake diagnostics** name the generated `Role$fake` object instead of the
-  `fake` block the programmer wrote (#276).
 - **Role plainness is per declaration.** One implementation of `Cursor` that
   holds a resource makes the compiler track every `Cursor<T>` in regions
   (Chapter 11), not only the instances that can reach one (#268).
