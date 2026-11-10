@@ -14089,6 +14089,71 @@ implicit environment. Each of them is a way for data to become code or for
 one part of a program to act with another part's settings. A command
 built from values carries exactly what it was given.
 
+### 21.5.1 Process workers
+
+Section 20.4 introduced the other way an Okkama program starts a process:
+`spawn` of a *synchronous* action runs that action in a worker process, in
+parallel with the program. Seen from this chapter, a worker is a command the
+runtime builds itself, and each of its properties follows from that.
+
+**The worker is the same program.** The runtime starts the program again,
+with the same engine, in a mode that runs one action instead of `main`:
+Tomato its `.spb` (a program compiled in memory is first written to a
+temporary file), the IR engine its source files, the JVM its classes. The
+child gets the parent's environment and working directory as the parent's
+runtime sees them, so a relative path means in the worker what it meant in
+the parent. It does not get the parent's heap, its open handles or its
+tasks. There is no fork and no copy of memory: the worker starts empty,
+loads the same code, and is handed a receiver and arguments.
+
+**Only values cross.** The receiver's fields and the arguments are encoded in
+the parent and decoded in the child: `int`, `float`, `string`, `char`,
+`byte`, `bool`, and arrays and maps of them. An object cannot cross, because
+an object is an identity (Chapter 12), and an identity does not survive a
+copy into another address space; a future, a closure or a native handle is
+the same kind of thing, and a `spawn` given one fails at once with
+`spawn cannot transfer …`, before any process starts. A worker that
+needs a file gets the path, not the open `File`. It opens the file itself,
+with the authority it was started with.
+
+**A failure comes back as text.** If the action fails, its failure is
+written into the reply as a description, and `await` of the future raises a
+runtime failure with that text. The failure's object stays in the worker.
+`catch e is ParseError` in the parent does not match a `ParseError` thrown
+in a worker. This is the same rule seen from the other side: the error
+object is an identity too. A worker that should report several kinds of
+outcome returns them as data, an enum of results, which does cross.
+
+**Cancellation is a kill.** Section 20.5's cancellation is cooperative: it
+reaches a task at its suspension point and unwinds it, defers and `destroy`s
+included. A worker is a synchronous action with no suspension points, so
+there is nothing to cooperate with. Cancelling its future kills the process
+(SIGKILL): on Tomato and the IR engine the worker leads its own process group
+and the whole group goes, so processes the worker started go with it. The
+future settles `Cancelled` only after the child has been reaped, so the code
+after `await` never runs beside a worker that is still writing. A worker
+cancelled before its process started is never started. Its defers do not
+run, and a worker that must clean up after itself must not be cancelled; it
+should be given a deadline among its arguments instead. (Until 0.5.3 the IR
+engine and the JVM sent TERM and settled the future at once; issue #359.)
+
+**Output is passed on whole.** What the action prints reaches the parent's
+standard output and error when the worker reports back, before its result,
+so the output of one worker is never interleaved with another's line by
+line. A killed worker reports nothing, and its output is dropped with it.
+
+The narrowness is deliberate, and other languages show what the wider
+designs cost. Python's `multiprocessing` pickles arbitrary objects across the
+boundary, which makes an object in the child a
+look-alike of one in the parent: equal-looking, separately mutable, and
+silently out of date. Erlang processes share nothing and exchange only
+values, as Okkama's workers do, but they live inside one runtime and are
+cheap enough to create by the million [[Armstrong 2003](#ref-armstrong2003)]; an Okkama worker is
+an operating-system process, costs what one costs to start, and is meant for
+CPU-bound or blocking work, not for modelling every concurrent activity.
+Concurrency inside a run is Chapter 20's tasks; workers are for using
+another core.
+
 ## 21.6 What an embedder can deny
 
 A program run by `okkama run` may use every native. A program run by a

@@ -275,7 +275,7 @@ previous Sparrow, `sparrow-origin`).
 
 ## Chapter 21 notes (2026-11-10)
 
-6.7 pages (EN) of its floor of 14.
+8.4 pages (EN) of its floor of 14 (2026-11-11: 21.5.1 process workers).
 
 **Written** (21.1–21.9):
 - natives and providers (`21-unregistered`);
@@ -288,8 +288,11 @@ previous Sparrow, `sparrow-origin`).
 - the command line keeps the user's authority (Deno, WASI, JEP 411);
 - limits, costs.
 
+- 21.5.1 process workers: the same program run again, values only, failures
+  as text, cancellation as a kill (#359), output passed on whole;
+  multiprocessing and Erlang.
+
 **To add:**
-- process workers in depth: transferable values, failures as data, what a worker can reach;
 - a worked example of an embedder: `run_limited` with groups and budgets, Rust side;
 - the provider side: how a native is registered and kept equal on three engines (conformance of natives);
 - TLS and PostgreSQL as handles;
