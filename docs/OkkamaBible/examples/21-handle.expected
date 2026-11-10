@@ -1,0 +1,4 @@
+wrote 6 bytes
+closed: true
+closed again: true
+write after close: already_closed

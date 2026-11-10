@@ -28,6 +28,7 @@ bibliographic data were checked are listed.
 - [@cytron1991] Ron Cytron, Jeanne Ferrante, Barry K. Rosen, Mark N. Wegman, F. Kenneth Zadeck (1991). Efficiently Computing Static Single Assignment Form and the Control Dependence Graph. *ACM TOPLAS* 13(4): 451–490. https://doi.org/10.1145/115372.115320
 - [@dahl1966] Ole-Johan Dahl, Kristen Nygaard (1966). SIMULA — an ALGOL-Based Simulation Language. *Communications of the ACM* 9(9): 671–678. https://doi.org/10.1145/365813.365819
 - [@dennis1966] Jack B. Dennis, Earl C. Van Horn (1966). Programming Semantics for Multiprogrammed Computations. *Communications of the ACM* 9(3): 143–155. https://doi.org/10.1145/365230.365252
+- [@deno] Deno documentation (2024). Security and permissions: `--allow-read`, `--allow-net` and the other permission flags. https://docs.deno.com/runtime/fundamentals/security/
 - [@dijkstra1968] Edsger W. Dijkstra (1968). Go To Statement Considered Harmful. *Communications of the ACM* 11(3): 147–148. https://doi.org/10.1145/362929.362947
 - [@dijkstra1972] Edsger W. Dijkstra (1972). The Humble Programmer. *Communications of the ACM* 15(10): 859–866. https://doi.org/10.1145/355604.361591
 - [@duffy2016] Joe Duffy (2016). The Error Model. Blog post, 7 February 2016. http://joeduffyblog.com/2016/02/07/the-error-model/
@@ -57,6 +58,7 @@ bibliographic data were checked are listed.
 - [@ieee754] IEEE (2019). *IEEE Standard for Floating-Point Arithmetic* (IEEE Std 754-2019). https://doi.org/10.1109/IEEESTD.2019.8766229 {label: IEEE 754}
 - [@jep395] Gavin Bierman (2021). JEP 395: Records. OpenJDK. https://openjdk.org/jeps/395
 - [@jep409] Gavin Bierman (2021). JEP 409: Sealed Classes. OpenJDK. https://openjdk.org/jeps/409
+- [@jep411] OpenJDK (2021). JEP 411: Deprecate the Security Manager for Removal. https://openjdk.org/jeps/411
 - [@jep421] Brent Christian (2021). JEP 421: Deprecate Finalization for Removal. OpenJDK. https://openjdk.org/jeps/421
 - [@jep441] Gavin Bierman (2023). JEP 441: Pattern Matching for switch. OpenJDK. https://openjdk.org/jeps/441
 - [@jep453] OpenJDK (2023). JEP 453: Structured Concurrency (Preview). https://openjdk.org/jeps/453
@@ -136,6 +138,7 @@ bibliographic data were checked are listed.
 - [@wadler1989] Philip Wadler (1989). Theorems for Free! In *Proceedings of FPCA 1989*: 347–359. ACM. https://doi.org/10.1145/99370.99404
 - [@wadler1998] Philip Wadler (1998). The Expression Problem. Note to the java-genericity mailing list, 12 November 1998. https://homepages.inf.ed.ac.uk/wadler/papers/expression/expression.txt
 - [@wadlerblott1989] Philip Wadler, Stephen Blott (1989). How to Make Ad-hoc Polymorphism Less Ad Hoc. In *Proceedings of POPL 1989*: 60–76. ACM. https://doi.org/10.1145/75277.75283
+- [@wasi] WebAssembly System Interface (WASI): capability-based access, pre-opened directories. https://wasi.dev/
 - [@wirth1971] Niklaus Wirth (1971). The Programming Language Pascal. *Acta Informatica* 1(1): 35–63. https://doi.org/10.1007/BF00264291
 - [@wirth1982] Niklaus Wirth (1982). *Programming in Modula-2*. Springer-Verlag.
 - [@wirth1995] Niklaus Wirth (1995). A Plea for Lean Software. *Computer* 28(2): 64–68. https://doi.org/10.1109/2.348001

@@ -13785,6 +13785,7 @@ Okkama, о перемежении и платят ту же цену — цве�
 - <a id="ref-dijkstra1968"></a>Edsger W. Dijkstra (1968). Go To Statement Considered Harmful. *Communications of the ACM* 11(3): 147–148. https://doi.org/10.1145/362929.362947
 - <a id="ref-dijkstra1972"></a>Edsger W. Dijkstra (1972). The Humble Programmer. *Communications of the ACM* 15(10): 859–866. https://doi.org/10.1145/355604.361591
 - <a id="ref-nodeexit"></a>OpenJS Foundation. Node.js documentation, Process: exit codes (code 13, unsettled top-level await). https://nodejs.org/api/process.html#exit-codes
+- <a id="ref-deno"></a>Deno documentation (2024). Security and permissions: `--allow-read`, `--allow-net` and the other permission flags. https://docs.deno.com/runtime/fundamentals/security/
 - <a id="ref-duffy2016"></a>Joe Duffy (2016). The Error Model. Blog post, 7 February 2016. http://joeduffyblog.com/2016/02/07/the-error-model/
 - <a id="ref-elizarov2018"></a>Roman Elizarov (2018). Structured concurrency. Blog post, 12 September 2018. https://medium.com/@elizarov/structured-concurrency-722d765aa952
 - <a id="ref-se0304"></a>Swift Evolution (2021). SE-0304: Structured Concurrency. https://github.com/swiftlang/swift-evolution/blob/main/proposals/0304-structured-concurrency.md
@@ -13806,6 +13807,7 @@ Okkama, о перемежении и платят ту же цену — цве�
 - <a id="ref-hoare1981"></a>C. A. R. Hoare (1981). The Emperor's Old Clothes. *Communications of the ACM* 24(2): 75–83. https://doi.org/10.1145/358549.358561
 - <a id="ref-hoare2009"></a>Tony Hoare (2009). Null References: The Billion Dollar Mistake. Talk at QCon London, March 2009. https://www.infoq.com/presentations/Null-References-The-Billion-Dollar-Mistake-Tony-Hoare/
 - <a id="ref-ieee754"></a>IEEE (2019). *IEEE Standard for Floating-Point Arithmetic* (IEEE Std 754-2019). https://doi.org/10.1109/IEEESTD.2019.8766229
+- <a id="ref-wasi"></a>WebAssembly System Interface (WASI): capability-based access, pre-opened directories. https://wasi.dev/
 - <a id="ref-jones2023"></a>Richard Jones, Antony Hosking, Eliot Moss (2023). *The Garbage Collection Handbook: The Art of Automatic Memory Management*, 2nd edition. CRC Press.
 - <a id="ref-baker1977"></a>Henry C. Baker Jr. and Carl Hewitt (1977). The Incremental Garbage Collection of Processes. MIT AI Laboratory Working Paper 149; also in *Proceedings of the Symposium on Artificial Intelligence and Programming Languages*, Rochester, NY. https://hdl.handle.net/1721.1/41969
 - <a id="ref-halstead1985"></a>Robert H. Halstead Jr. (1985). MULTILISP: A Language for Concurrent Symbolic Computation. *ACM Transactions on Programming Languages and Systems* 7(4): 501–538. https://doi.org/10.1145/4472.4478
@@ -13845,6 +13847,7 @@ Okkama, о перемежении и платят ту же цену — цве�
 - <a id="ref-nygaard1978"></a>Kristen Nygaard, Ole-Johan Dahl (1978). The Development of the SIMULA Languages. *ACM SIGPLAN Notices* 13(8): 245–272 (HOPL I). https://doi.org/10.1145/960118.808391
 - <a id="ref-nystrom2015"></a>Bob Nystrom (2015). What Color is Your Function? Blog post, 1 February 2015. https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/
 - <a id="ref-okasaki1998"></a>Chris Okasaki (1998). *Purely Functional Data Structures*. Cambridge University Press. https://doi.org/10.1017/CBO9780511530104
+- <a id="ref-jep411"></a>OpenJDK (2021). JEP 411: Deprecate the Security Manager for Removal. https://openjdk.org/jeps/411
 - <a id="ref-jep453"></a>OpenJDK (2023). JEP 453: Structured Concurrency (Preview). https://openjdk.org/jeps/453
 - <a id="ref-ousterhout2018"></a>John Ousterhout (2018). *A Philosophy of Software Design*. Yaknyam Press.
 - <a id="ref-parnas1972"></a>David L. Parnas (1972). On the Criteria To Be Used in Decomposing Systems into Modules. *Communications of the ACM* 15(12): 1053–1058. https://doi.org/10.1145/361598.361623
