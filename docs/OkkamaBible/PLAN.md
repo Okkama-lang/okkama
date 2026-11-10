@@ -273,13 +273,14 @@ previous Sparrow, `sparrow-origin`).
 
 ## Chapter 21 notes (2026-11-10)
 
-5.6 pages (EN) of its floor of 14.
+6.7 pages (EN) of its floor of 14.
 
 **Written** (21.1–21.9):
 - natives and providers (`21-unregistered`);
 - the native ABI, async natives;
 - handles (`21-handle`: idempotent close, `already_closed`);
 - authority as values (`21-directory`; FileRoot, no chdir; Miller, Dennis–Van Horn);
+- 21.4.1 the environment and the clock (`21-authority`: snapshots, `Timing`, a fixed clock, clock domains; where std still makes its own `SystemClock()`, #352);
 - running programs (Command without a shell, InheritedCommand, Process lifecycle);
 - native groups and embedding budgets (#269 MemoryScope);
 - the command line keeps the user's authority (Deno, WASI, JEP 411);
@@ -289,7 +290,6 @@ previous Sparrow, `sparrow-origin`).
 - process workers in depth: transferable values, failures as data, what a worker can reach;
 - a worked example of an embedder: `run_limited` with groups and budgets, Rust side;
 - the provider side: how a native is registered and kept equal on three engines (conformance of natives);
-- std's other explicit-authority types (Environment, clocks for tests, `ManualClock` from ch.20);
 - TLS and PostgreSQL as handles;
 - a history of FFIs (JNI, ctypes, Rust FFI) and why Okkama has none for users.
 

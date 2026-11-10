@@ -150,6 +150,55 @@ private, roles cannot be downcast (Chapter 14) — but it is a discipline of
 the library, not a guarantee of the language: a program may still import
 `runtime/fs` and open a path by name, as the example of Section 21.3 did.
 
+### 21.4.1 The environment and the clock
+
+The same discipline covers the two other things a program usually reaches
+for without asking: its environment variables and the time.
+
+`Environment` is a snapshot, not a window. `Environment()` reads the
+process environment exactly once, when it is constructed, and from then on
+the object answers from its own copy; nothing another part of the program
+does to the process can change what it says. `Environment(values: …)` makes
+one that never looked at the process at all. `addition(name, value)` and
+`difference(name)` return new snapshots and leave the receiver as it was,
+which is how a child process gets an environment of its own (Section 21.5)
+without the parent's changing. A variable that is missing and one that is
+empty are different answers: `membership` asks the first question,
+`variable` the second, and a name with `=` or NUL in it is refused before
+any snapshot can hold it.
+
+Time comes through a role. `Timing` has three actions — the wall-clock
+`instant()`, the `monotonic_instant()` that only moves forward, and an
+`async wait` — and `SystemClock` is the object that does it with the host's
+clocks. Code that measures or waits asks for a `Timing`; a test gives it the
+`ManualClock` of Chapter 20, which advances only when the test says so, and
+a program can write its own:
+
+{{example:21-authority}}
+
+`Greeting` can read exactly two things outside itself, and both are its
+fields. Run it twice with two snapshots and one fixed clock, and it prints
+two lines that do not depend on who runs it or when. That is the practical
+payoff of authority as a value: the parameters of an object are a complete
+list of what it can observe, so a test needs no mocking framework and a
+replay needs no patched system calls.
+
+The clock keeps one more promise. A monotonic instant carries the *domain*
+of the clock that made it, and subtracting or comparing instants of two
+domains throws `IncompatibleClock` instead of returning a number that means
+nothing: a reading of the manual clock and a reading of the system clock
+are not on one line, and std will not pretend they are. An instant made
+directly, as `FixedClock` makes its own, belongs to the `explicit` domain.
+
+As with directories, this is the library's discipline, and std does not yet
+keep it everywhere. `Environment()` and `SystemClock()` can be constructed
+anywhere, and some of std's own modules still do so where they should ask:
+the HTTP client and its sessions, TLS, `async/timeout` and the cookie jar
+make their own `SystemClock()`, and `os/command` reads `Environment()` to
+pass it on. A test of such code cannot hand it a manual clock. Making every
+module take its clock and its environment as values is one of the
+principles of the standard library's review after 0.5.3 (issue #352).
+
 ## 21.5 Running other programs
 
 A program that runs another one describes it first, as a value:

@@ -1,0 +1,44 @@
+module bible/authority v1.0.0;
+
+import "io/stdout" take Stdout;
+import "os/environment" take Environment;
+import "time/clock" take Timing, Instant, MonotonicInstant;
+import "time/duration" take Duration, DurationUnit;
+
+// A clock that always reads the same instant: what a test or a replay
+// hands to code that asks for the time.
+object FixedClock does Timing {
+    has at is Instant;
+
+    FixedClock(:at);
+
+    instant() is Instant { at; }
+
+    monotonic_instant() is MonotonicInstant {
+        MonotonicInstant(origin: at.unix_duration());
+    }
+
+    async wait(duration is Duration) is void {}
+}
+
+// What a greeting may read arrives as values: it has no other way to reach
+// the process environment or the system clock.
+object Greeting {
+    has environment is Environment;
+    has clock is Timing;
+
+    Greeting(:environment, :clock);
+
+    text() is string {
+        let name = if environment.membership("USER") { environment.variable("USER"); } else { "stranger"; };
+        "hello, " + name + ", at " + clock.instant().unix_duration().seconds().string() + " s";
+    }
+}
+
+main() is int {
+    let noon = Instant(origin: Duration(value: 43200.rat(), unit: DurationUnit.second));
+    let clock = FixedClock(at: noon);
+    Stdout().writeln(Greeting(environment: Environment(values: ["USER": "ada"]), clock: clock).text());
+    Stdout().writeln(Greeting(environment: Environment(values: [:]), clock: clock).text());
+    0;
+}

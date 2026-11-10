@@ -14005,6 +14005,106 @@ main() is int {
 библиотеки, а не гарантия языка: программа всё ещё может импортировать
 `runtime/fs` и открыть путь по имени, как сделал пример раздела 21.3.
 
+### 21.4.1 Окружение и часы
+
+Та же дисциплина распространяется на две другие вещи, к которым программа
+обычно тянется не спрашивая: переменные окружения и время.
+
+`Environment` — снимок, а не окно. `Environment()` читает окружение процесса
+ровно один раз, при создании, и дальше объект отвечает из своей копии:
+ничто, что другая часть программы сделает с процессом, не изменит его
+ответов. `Environment(values: …)` создаёт снимок, который на процесс вовсе не
+смотрел. `addition(name, value)` и `difference(name)` возвращают новые снимки
+и оставляют получателя как был — так дочерний процесс получает собственное
+окружение (раздел 21.5), а окружение родителя не меняется. Отсутствующая
+переменная и пустая — разные ответы: первый вопрос задаёт `membership`,
+второй — `variable`; имя с `=` или NUL отвергается раньше, чем его сможет
+содержать хоть один снимок.
+
+Время приходит через роль. У `Timing` три действия — `instant()` по
+настенным часам, `monotonic_instant()`, который движется только вперёд, и
+`async wait`, — а `SystemClock` — объект, выполняющий её часами хоста. Код,
+который измеряет или ждёт, просит `Timing`; тест даёт ему `ManualClock` из
+главы 20, который идёт, только когда велит тест, а программа может написать
+свои часы:
+
+```okkama
+module bible/authority v1.0.0;
+
+import "io/stdout" take Stdout;
+import "os/environment" take Environment;
+import "time/clock" take Timing, Instant, MonotonicInstant;
+import "time/duration" take Duration, DurationUnit;
+
+// A clock that always reads the same instant: what a test or a replay
+// hands to code that asks for the time.
+object FixedClock does Timing {
+    has at is Instant;
+
+    FixedClock(:at);
+
+    instant() is Instant { at; }
+
+    monotonic_instant() is MonotonicInstant {
+        MonotonicInstant(origin: at.unix_duration());
+    }
+
+    async wait(duration is Duration) is void {}
+}
+
+// What a greeting may read arrives as values: it has no other way to reach
+// the process environment or the system clock.
+object Greeting {
+    has environment is Environment;
+    has clock is Timing;
+
+    Greeting(:environment, :clock);
+
+    text() is string {
+        let name = if environment.membership("USER") { environment.variable("USER"); } else { "stranger"; };
+        "hello, " + name + ", at " + clock.instant().unix_duration().seconds().string() + " s";
+    }
+}
+
+main() is int {
+    let noon = Instant(origin: Duration(value: 43200.rat(), unit: DurationUnit.second));
+    let clock = FixedClock(at: noon);
+    Stdout().writeln(Greeting(environment: Environment(values: ["USER": "ada"]), clock: clock).text());
+    Stdout().writeln(Greeting(environment: Environment(values: [:]), clock: clock).text());
+    0;
+}
+```
+
+Вывод:
+
+```text
+hello, ada, at 43200 s
+hello, stranger, at 43200 s
+```
+
+`Greeting` может прочесть ровно две вещи вне себя, и обе — его поля.
+Запустите его дважды с двумя снимками и одними неподвижными часами — он
+напечатает две строки, не зависящие ни от того, кто его запускает, ни от
+того, когда. В этом практическая польза полномочий как значений: параметры
+объекта — полный список того, что он может наблюдать, поэтому тесту не
+нужен фреймворк подмен, а воспроизведению — подменённые системные вызовы.
+
+Часы держат ещё одно обещание. Монотонное мгновение несёт *домен* часов,
+которые его создали, и вычитание или сравнение мгновений двух доменов
+бросает `IncompatibleClock` вместо того, чтобы вернуть ничего не значащее
+число: показание ручных часов и показание системных лежат не на одной
+прямой, и std не делает вид, что это не так. Мгновение, созданное напрямую,
+как своё создаёт `FixedClock`, принадлежит домену `explicit`.
+
+Как и с каталогами, это дисциплина библиотеки, и std пока держит её не
+везде. `Environment()` и `SystemClock()` можно создать где угодно, и
+некоторые модули самой std так и делают там, где должны были бы попросить:
+HTTP-клиент и его сессии, TLS, `async/timeout` и хранилище cookie заводят
+собственный `SystemClock()`, а `os/command` читает `Environment()`, чтобы
+передать его дальше. Тест такого кода не может дать ему ручные часы. Чтобы
+каждый модуль получал часы и окружение как значения — один из принципов
+ревизии стандартной библиотеки после 0.5.3 (задача #352).
+
 ## 21.5 Запуск других программ
 
 Программа, которая запускает другую, сначала описывает её значением:
