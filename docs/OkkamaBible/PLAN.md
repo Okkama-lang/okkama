@@ -92,9 +92,6 @@ language.
 
 ## Notes for unwritten chapters
 
-- Chapter 19 (modules): module constants — `const NAME = value;`, computed by
-  the compiler, public unless `hidden const`, arrays and maps built once per
-  run; why constants are not a way to share objects (#153).
 - Chapter 18 (closures): in a program with a `destroy` anywhere, every
   function value is treated as possibly owning a resource, so closures are
   tracked by regions (#292); 09-closures with `os/environment` imported runs
@@ -189,6 +186,23 @@ Updated with each chapter: `build.py --stats`.
   (`okkama-docs/benchmarks/persistence/fig81`). Its limits now name the IR
   and JVM ports (#335, #336), the declined #248, and the first version of a
   large map. Chapter 6's limit on `+` says it shares on Tomato.
+
+- Chapter 19 (modules): 14.1 pages (EN), 14.4 (RU) of its floor of 14. Written:
+  - the module as a file, versions and identity, `main()` that never runs on
+    import, multi-file modules;
+  - the three import forms, no wildcard, collisions, `std.` paths, naming;
+  - lookup order, bounds, cycles, and breaking a cycle with a contract module;
+  - no re-export, the dependency closure, nominal identity by module and
+    major;
+  - `hidden` and the contract/hidden-implementation pattern;
+  - module constants;
+  - packages and blade (honestly marked young, owner 2026-11-10: «blade у нас
+    больная тема пока, там все в полусыром виде»);
+  - whole-program builds into one SPB/JAR;
+  - history (Parnas, Modula-2, ML), a comparison table, limits and costs.
+
+  To redo when blade matures: 19.7, with a real project example. Diagnostics
+  of same-named types: #338.
 
 ## Notes for the build
 

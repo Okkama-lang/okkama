@@ -1,0 +1,11 @@
+module shop/basket v1.0.0;
+
+// Found beside this file: shop/money.ok, the same module the program imports.
+import "money" take Money;
+
+object Basket {
+    has prices is @Money;
+    Basket(:prices);
+    added(price is Money) is Basket { Basket(prices: prices + [price]); }
+    total() is Money { prices.reduce(Money(cents: 0)) -> sum, price { sum.plus(price); }; }
+}

@@ -1,0 +1,16 @@
+module bible/contracts v1.0.0;
+
+// orders and customers both import parties, and neither imports the other.
+import "io/stdout" take Stdout;
+import "trade/orders" take Order;
+import "trade/customers" take Customer;
+
+main() is int {
+    let ada = Customer(label: "Ada", purchases: []);
+    let first = Order(buyer: ada, cents: 1250);
+    let second = Order(buyer: ada, cents: 399);
+    let regular = Customer(label: "Ada", purchases: [first, second]);
+    Stdout().writeln(first.line());
+    Stdout().writeln(regular.name() + " spent " + regular.spent().string());
+    0;
+}

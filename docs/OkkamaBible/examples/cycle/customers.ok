@@ -1,0 +1,8 @@
+module cycle/customers v1.0.0;
+
+import "orders" take Order;
+
+object Customer {
+    has orders is @Order;
+    Customer(:orders);
+}

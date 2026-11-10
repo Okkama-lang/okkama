@@ -23,6 +23,7 @@ bibliographic data were checked are listed.
 - [@church1936] Alonzo Church (1936). An Unsolvable Problem of Elementary Number Theory. *American Journal of Mathematics* 58(2): 345–363. https://doi.org/10.2307/2371045
 - [@claessen2000] Koen Claessen, John Hughes (2000). QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs. In *Proceedings of ICFP 2000*: 268–279. ACM. https://doi.org/10.1145/351240.351266
 - [@cook2009] William R. Cook (2009). On Understanding Data Abstraction, Revisited. In *Proceedings of OOPSLA 2009*, *ACM SIGPLAN Notices* 44(10): 557–572. https://doi.org/10.1145/1640089.1640133
+- [@cox2018] Russ Cox (2018). Minimal Version Selection. research!rsc, 21 February 2018. https://research.swtch.com/vgo-mvs
 - [@cytron1991] Ron Cytron, Jeanne Ferrante, Barry K. Rosen, Mark N. Wegman, F. Kenneth Zadeck (1991). Efficiently Computing Static Single Assignment Form and the Control Dependence Graph. *ACM TOPLAS* 13(4): 451–490. https://doi.org/10.1145/115372.115320
 - [@dahl1966] Ole-Johan Dahl, Kristen Nygaard (1966). SIMULA — an ALGOL-Based Simulation Language. *Communications of the ACM* 9(9): 671–678. https://doi.org/10.1145/365813.365819
 - [@dennis1966] Jack B. Dennis, Earl C. Van Horn (1966). Programming Semantics for Multiprogrammed Computations. *Communications of the ACM* 9(3): 143–155. https://doi.org/10.1145/365230.365252
@@ -73,6 +74,7 @@ bibliographic data were checked are listed.
 - [@liskov1979] Barbara H. Liskov, Alan Snyder (1979). Exception Handling in CLU. *IEEE Transactions on Software Engineering* SE-5(6): 546–558. https://doi.org/10.1109/TSE.1979.230191
 - [@liskov1994] Barbara H. Liskov, Jeannette M. Wing (1994). A Behavioral Notion of Subtyping. *ACM TOPLAS* 16(6): 1811–1841. https://doi.org/10.1145/197320.197383
 - [@mackay2003] David J. C. MacKay (2003). *Information Theory, Inference, and Learning Algorithms*. Cambridge University Press. Chapter 28: Model Comparison and Occam's Razor.
+- [@macqueen1984] David MacQueen (1984). Modules for Standard ML. In *Proceedings of the 1984 ACM Symposium on LISP and Functional Programming*: 198–207. ACM. https://doi.org/10.1145/800055.802036
 - [@maranget2007] Luc Maranget (2007). Warnings for Pattern Matching. *Journal of Functional Programming* 17(3): 387–421. https://doi.org/10.1017/S0956796807006223
 - [@mccarthy1960] John McCarthy (1960). Recursive Functions of Symbolic Expressions and Their Computation by Machine, Part I. *Communications of the ACM* 3(4): 184–195. https://doi.org/10.1145/367177.367199
 - [@meszaros2007] Gerard Meszaros (2007). *xUnit Test Patterns: Refactoring Test Code*. Addison-Wesley.
@@ -103,6 +105,7 @@ bibliographic data were checked are listed.
 - [@ritchie1993] Dennis M. Ritchie (1993). The Development of the C Language. *HOPL-II: The Second ACM SIGPLAN Conference on History of Programming Languages*: 201–208. https://doi.org/10.1145/154766.155580
 - [@saltzer1975] Jerome H. Saltzer, Michael D. Schroeder (1975). The Protection of Information in Computer Systems. *Proceedings of the IEEE* 63(9): 1278–1308. https://doi.org/10.1109/PROC.1975.9939
 - [@scales2022] Dan Scales (2022). Go 1.18 Implementation of Generics via Dictionaries and Gcshape Stenciling. Design document, Go proposal repository, 22 February 2022. https://go.googlesource.com/proposal/+/master/design/generics-implementation-dictionaries-go1.18.md
+- [@semver] Tom Preston-Werner (2013). *Semantic Versioning 2.0.0*. https://semver.org/ {label: SemVer 2.0.0}
 - [@smith2018] Nathaniel J. Smith (2018). Notes on Structured Concurrency, or: Go Statement Considered Harmful. Blog post, 25 April 2018. https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/
 - [@snyder1986] Alan Snyder (1986). Encapsulation and Inheritance in Object-Oriented Programming Languages. In *Proceedings of OOPSLA '86*: 38–45. ACM. https://doi.org/10.1145/28697.28702
 - [@sober2015] Elliott Sober (2015). *Ockham's Razors: A User's Manual*. Cambridge University Press. https://doi.org/10.1017/CBO9781107705937
@@ -120,5 +123,6 @@ bibliographic data were checked are listed.
 - [@wadler1998] Philip Wadler (1998). The Expression Problem. Note to the java-genericity mailing list, 12 November 1998. https://homepages.inf.ed.ac.uk/wadler/papers/expression/expression.txt
 - [@wadlerblott1989] Philip Wadler, Stephen Blott (1989). How to Make Ad-hoc Polymorphism Less Ad Hoc. In *Proceedings of POPL 1989*: 60–76. ACM. https://doi.org/10.1145/75277.75283
 - [@wirth1971] Niklaus Wirth (1971). The Programming Language Pascal. *Acta Informatica* 1(1): 35–63. https://doi.org/10.1007/BF00264291
+- [@wirth1982] Niklaus Wirth (1982). *Programming in Modula-2*. Springer-Verlag.
 - [@wirth1995] Niklaus Wirth (1995). A Plea for Lean Software. *Computer* 28(2): 64–68. https://doi.org/10.1109/2.348001
 - [@yuan2014] Ding Yuan, Yu Luo, Xin Zhuang, Guilherme Renna Rodrigues, Xu Zhao, Yongle Zhang, Pranay U. Jain, Michael Stumm (2014). Simple Testing Can Prevent Most Critical Failures: An Analysis of Production Failures in Distributed Data-Intensive Systems. In *11th USENIX Symposium on Operating Systems Design and Implementation (OSDI 14)*: 249–265. USENIX. https://www.usenix.org/conference/osdi14/technical-sessions/presentation/yuan

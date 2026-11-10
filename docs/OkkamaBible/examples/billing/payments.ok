@@ -1,0 +1,33 @@
+module billing/payments v1.0.0;
+
+// The contract is public; the implementation is not.
+role Payment {
+    id() is string;
+    amount() is int;
+    authorized() is Payment;
+    state() is string;
+}
+
+hidden enum Stage = (created, authorized);
+
+hidden object CardPayment does Payment {
+    has key is string;
+    has cents is int;
+    has stage is Stage = Stage.created;
+    CardPayment(:key, :cents);
+    CardPayment(:key, :cents, :stage);
+    id() is string { key; }
+    amount() is int { cents; }
+    authorized() is Payment { CardPayment(key: key, cents: cents, stage: Stage.authorized); }
+    state() is string {
+        match stage {
+            case Stage.created { "created"; }
+            case Stage.authorized { "authorized"; }
+        };
+    }
+}
+
+object Payments {
+    Payments();
+    open(id is string, cents is int) is Payment { CardPayment(key: id, cents: cents); }
+}

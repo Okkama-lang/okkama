@@ -1,0 +1,1 @@
+19-const-call-rejected.ok:5:15: semantic error: Constant "WIDTH" cannot be computed by the compiler: it calls an action or a constructor; a constant is made of literals, operators and other constants

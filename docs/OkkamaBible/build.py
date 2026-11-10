@@ -7,7 +7,8 @@ chapters/en/*.md and chapters/ru/*.md (same file names, ordered by name) are
 joined into OkkamaBible.md and OkkamaBible-RU.md with a generated table of
 contents. Placeholders in a chapter:
 
-    {{example:NAME}}            examples/NAME.ok and its expected output
+    {{example:NAME}}            examples/NAME.ok and its expected output (NAME may
+                                name a module in a subdirectory: shop/money)
     {{figure:NAME|caption}}     figures/NAME.svg
     {{table:builtins}}          builtin behaviour, from the compiler's table
     [@key]                      a citation of references.md
@@ -96,7 +97,7 @@ def build(language, cited):
         if name.endswith(".md"):
             parts.append(open(os.path.join(directory, name)).read().rstrip() + "\n")
     text = "\n".join(parts)
-    text = re.sub(r"\{\{example:([\w-]+)\}\}", lambda m: example(m.group(1), language), text)
+    text = re.sub(r"\{\{example:([\w/-]+)\}\}", lambda m: example(m.group(1), language), text)
     def figure(match):
         name, caption = match.groups()
         localized = f"{name}-{language}.svg"
@@ -159,8 +160,9 @@ def check():
             p = subprocess.run(cage + [OKKAMA, "run", *tests, "--engine", engine, name], cwd=examples,
                                capture_output=True, text=True, timeout=120,
                                env={**os.environ, "OKKAMA_STDLIB_DIR": STDLIB, "OKKAMA_TRACE": "off"})
-            # A rejected example is shown with the compiler's diagnostic.
-            shown = p.stderr if stem.endswith("-rejected") else p.stdout
+            # A rejected example is shown with the compiler's diagnostic; a
+            # module the example imports is named relative to examples/.
+            shown = (p.stderr if stem.endswith("-rejected") else p.stdout).replace(examples + os.sep, "")
             output = shown.rstrip("\n").splitlines() if shown else []
             if p.returncode != 0 and not stem.endswith("-rejected"):
                 output.append(f"exit {p.returncode}")

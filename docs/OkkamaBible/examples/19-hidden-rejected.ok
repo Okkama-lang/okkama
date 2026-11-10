@@ -1,0 +1,9 @@
+module bible/hidden v1.0.0;
+
+import "io/stdout" take Stdout;
+import "shop/money" take Rounding;
+
+main() is int {
+    Stdout().writeln(Rounding().half_up(1000, 15).string());
+    0;
+}

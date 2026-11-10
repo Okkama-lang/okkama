@@ -1,0 +1,1 @@
+19-reexport-rejected.ok:5:35: semantic error: Import "shop/basket" has no declaration "Money"
