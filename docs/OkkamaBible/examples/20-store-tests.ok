@@ -1,0 +1,35 @@
+module bible/store v1.0.0;
+
+role Store {
+    async load(key is string) is string;
+
+    fake {
+        has prefix is string = "fake:";
+
+        async load(key is string) is string {
+            prefix + key;
+        }
+    }
+}
+
+object Greeter {
+    has store is Store;
+
+    Greeter(:store);
+
+    async greeting(user is string) is string {
+        "hello, " + (await store.load(user));
+    }
+}
+
+async test "a greeting reads the store" {
+    let greeter = Greeter(store: Store.fake());
+    test.is(await greeter.greeting("ann"), "hello, fake:ann");
+}
+
+async test "two greetings run side by side" {
+    let store = Store.fake();
+    let first = spawn Greeter(store: store).greeting("ann");
+    let second = spawn Greeter(store: store).greeting("bob");
+    test.is((await first) + " / " + (await second), "hello, fake:ann / hello, fake:bob");
+}

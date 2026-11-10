@@ -1,0 +1,15 @@
+module bible/shape v1.0.0;
+
+role Store {
+    async load(key is string) is string;
+}
+
+object Memory does Store {
+    Memory();
+
+    load(key is string) is string {
+        key;
+    }
+}
+
+main() is int { 0; }

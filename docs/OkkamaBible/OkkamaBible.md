@@ -238,13 +238,14 @@
   - [20.8 Waiting for each other: events, locks, semaphores, barriers](#208-waiting-for-each-other-events-locks-semaphores-barriers)
   - [20.9 Resources across suspension](#209-resources-across-suspension)
   - [20.10 Streams: `for await`](#2010-streams-for-await)
-  - [20.11 A worked example: a pool of connections](#2011-a-worked-example-a-pool-of-connections)
-  - [20.12 Failures across tasks](#2012-failures-across-tasks)
-  - [20.13 How the engines run tasks](#2013-how-the-engines-run-tasks)
-  - [20.14 What async costs, measured](#2014-what-async-costs-measured)
-  - [20.15 Okkama among other languages](#2015-okkama-among-other-languages)
-  - [20.16 Limits](#2016-limits)
-  - [20.17 What this design costs](#2017-what-this-design-costs)
+  - [20.11 Async in roles, generics and tests](#2011-async-in-roles-generics-and-tests)
+  - [20.12 A worked example: a pool of connections](#2012-a-worked-example-a-pool-of-connections)
+  - [20.13 Failures across tasks](#2013-failures-across-tasks)
+  - [20.14 How the engines run tasks](#2014-how-the-engines-run-tasks)
+  - [20.15 What async costs, measured](#2015-what-async-costs-measured)
+  - [20.16 Okkama among other languages](#2016-okkama-among-other-languages)
+  - [20.17 Limits](#2017-limits)
+  - [20.18 What this design costs](#2018-what-this-design-costs)
 
 # Part I. The Razor
 
@@ -12733,7 +12734,105 @@ unwind as in an ordinary loop. The loop does not close its source: here the
 reader closes the channel when it has sent everything, and that close is what
 `next()` turns into `Maybe.none`.
 
-## 20.11 A worked example: a pool of connections
+## 20.11 Async in roles, generics and tests
+
+Being async is part of an action's signature, and roles keep it. A role that
+declares `async load(key is string) is string` is implemented only by an
+`async` action of the same shape; a synchronous `load` does not do the role:
+
+```okkama
+module bible/shape v1.0.0;
+
+role Store {
+    async load(key is string) is string;
+}
+
+object Memory does Store {
+    Memory();
+
+    load(key is string) is string {
+        key;
+    }
+}
+
+main() is int { 0; }
+```
+
+The compiler answers:
+
+```text
+20-shape-rejected.ok:7:8: semantic error: Action "load" on object "Memory" must match async shape for role "Store"
+```
+
+The rule goes both ways. A caller of a role's async action always gets a
+future, whoever implements it, so the caller's code does not change when a
+cache in memory replaces a database; and an implementation cannot quietly
+block the scheduler by answering synchronously where the role promised to
+wait.
+
+`Future<T>` is an ordinary generic type, invariant like every Okkama generic:
+a `Future<Money>` is not a `Future<Amount>` even if `Money` does `Amount`
+(Chapter 17). `Channel<T>`, `Sending<T>` and `Receiving<T>` are the same, and
+a reply channel in a command carries its own `T`.
+
+A role's fake (Chapter 15) may have async actions too, and tests may be async:
+
+```okkama
+module bible/store v1.0.0;
+
+role Store {
+    async load(key is string) is string;
+
+    fake {
+        has prefix is string = "fake:";
+
+        async load(key is string) is string {
+            prefix + key;
+        }
+    }
+}
+
+object Greeter {
+    has store is Store;
+
+    Greeter(:store);
+
+    async greeting(user is string) is string {
+        "hello, " + (await store.load(user));
+    }
+}
+
+async test "a greeting reads the store" {
+    let greeter = Greeter(store: Store.fake());
+    test.is(await greeter.greeting("ann"), "hello, fake:ann");
+}
+
+async test "two greetings run side by side" {
+    let store = Store.fake();
+    let first = spawn Greeter(store: store).greeting("ann");
+    let second = spawn Greeter(store: store).greeting("bob");
+    test.is((await first) + " / " + (await second), "hello, fake:ann / hello, fake:bob");
+}
+```
+
+Output:
+
+```text
+=== RUN   a greeting reads the store
+--- PASS: a greeting reads the store
+=== RUN   two greetings run side by side
+--- PASS: two greetings run side by side
+PASS
+```
+
+The second test spawns two greeters and awaits both. `spawn` needs a call of
+the form `Receiver(…).action(…)` (or a typed bound action value): the
+receiver is built in the `spawn` itself, so what the task runs on is never a
+local that the spawning code still uses. An async test runs on the same
+scheduler as `async main`; when it ends, its spawned tasks are cancelled and
+drained, and a failure nobody awaited fails the test.
+
+## 20.12 A worked example: a pool of connections
 
 The pieces of this chapter fit together in a pool that lends a limited number
 of connections to whoever asks. Four jobs share a pool of two:
@@ -12837,7 +12936,7 @@ concurrency: the `Semaphore` bounds the connections, `destroy` returns them
 on every path out of a job, cancellation included, and `AllFutures` makes
 `main` wait for all four.
 
-## 20.12 Failures across tasks
+## 20.13 Failures across tasks
 
 A failure inside a task belongs to the task's future. It is kept there, like
 a value, and thrown at every `await` of that future, where an ordinary
@@ -12885,7 +12984,7 @@ either handled or reported, never lost on the way. A program that really does
 not care whether a background task failed says so where it starts it, with a
 `try` around the body of the task.
 
-## 20.13 How the engines run tasks
+## 20.14 How the engines run tasks
 
 The three engines keep the same rules with three different mechanisms.
 
@@ -12920,7 +13019,7 @@ All three run on one thread at a time, which is what makes them agree: the
 order of output in this chapter is the same on each, and the conformance
 suite checks it.
 
-## 20.14 What async costs, measured
+## 20.15 What async costs, measured
 
 The micro benchmarks of `okkama-docs/benchmarks/micro` repeat one operation in
 a loop and subtract the empty loop. On an Apple M2 Max, with the 0.5.0
@@ -12945,7 +13044,7 @@ thread, and handing control from one to another costs microseconds, two
 hundred times a method call. A program that waits a lot belongs on Sparrow;
 the JVM is the engine for long computations between waits.
 
-## 20.15 Okkama among other languages
+## 20.16 Okkama among other languages
 
 | | Okkama | C# | JavaScript | Python asyncio | Rust | Kotlin | Go |
 |---|---|---|---|---|---|---|---|
@@ -12966,7 +13065,7 @@ convention. Okkama chose the coloured side because it already makes effects
 visible elsewhere (successors, `^` fields, `try`), and a suspension point is
 an effect: the place where the rest of the program may change things.
 
-## 20.16 Limits
+## 20.17 Limits
 
 - **Detached work.** A spawned task that its starter neither awaits nor
   cancels runs until `async main` returns. Nothing ties it to the scope that
@@ -12975,7 +13074,7 @@ an effect: the place where the rest of the program may change things.
   suspension point. A long synchronous loop sees it only if it checks a
   `Cancellation` token.
 - **JVM task switches are slow.** An `await` of an async action costs about
-  6.7 µs on the JVM, 176 times Sparrow (Section 20.14, issue #327), because
+  6.7 µs on the JVM, 176 times Sparrow (Section 20.15, issue #327), because
   each task is a thread.
 - **Async cleanup guards cost time on Sparrow.** An `async destroy` guard in
   the HTTP server's state delays every server run by about 0.8 s (issue
@@ -12989,7 +13088,7 @@ an effect: the place where the rest of the program may change things.
   that woke it (issue #340, Section 20.3), and the channel documentation
   described an older API (issue #341).
 
-## 20.17 What this design costs
+## 20.18 What this design costs
 
 Laziness costs an explicit `spawn` wherever work should start now, and a
 reader has to know that `Oven("rye").baked()` alone does nothing. Colour costs
