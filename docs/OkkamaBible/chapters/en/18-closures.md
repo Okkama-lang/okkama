@@ -361,7 +361,7 @@ function and those first arguments, packed when the closure is created.
 
 - **The IR engine** stores a closure as a reference-counted value holding
   the function and the captured values.
-- **Tomato** allocates a heap object laid out like the function's
+- **Sparrow** allocates a heap object laid out like the function's
   parameters, whose first words hold the captured values, so the GC knows
   which words are references. Creating a closure and calling one both go through a
   runtime helper: the arguments are spilled to memory and the helper
@@ -376,20 +376,20 @@ action of an object that holds the same number compare as follows:
 
 | | object action | closure |
 |---|---:|---:|
-| Tomato | 0.31 s | 0.41 s |
+| Sparrow | 0.31 s | 0.41 s |
 | IR engine (1 million calls) | 0.97 s | 0.93 s |
 | JVM | 0.59 s | 0.49 s |
 
-On Tomato the helper costs about ten nanoseconds per call over a direct
+On Sparrow the helper costs about ten nanoseconds per call over a direct
 call. On the JVM the closure is slightly faster: the class of each anonymous
 action has one implementation of `call`, which the JIT inlines.
 
 The micro-benchmarks of 0.4.2 (#244) isolate the creation. Net of an empty
 loop, median of five runs on the same machine, creating a closure that
-captures a loop variable and calling it once costs 17 ns on Tomato, 155 ns on
+captures a loop variable and calling it once costs 17 ns on Sparrow, 155 ns on
 the IR engine and 6 ns on the JVM. Constructing an object with two fields
 costs 4, 271 and 9 ns. On the JVM a closure costs no more than a small
-object; on Tomato it costs four times as much, because creating and calling
+object; on Sparrow it costs four times as much, because creating and calling
 it both go through the runtime helper, while an object is allocated inline
 in the compiled code.
 
@@ -405,7 +405,7 @@ value was assumed to own one and paid for region tracking. A program as
 small as `benchmarks/09-closures` with `os/environment` imported ran 6×
 slower on the JVM than without that import (#292). Since 0.4.1 a closure
 that captures only plain values is treated as plain, and that benchmark runs
-at the same speed with or without the import (IR 1.02 s, Tomato 0.10 s, JVM
+at the same speed with or without the import (IR 1.02 s, Sparrow 0.10 s, JVM
 0.22 s).
 
 ### In a failure report
@@ -522,7 +522,7 @@ signature, and nothing converts it to a role or to a wider function type.
 - **No async anonymous actions.** An action that awaits must be a named
   `async` action, passed as an object that does a role.
 - **No `any`, no native ABI, no conversion to a role.**
-- **One helper call per closure call on Tomato**, about ten
+- **One helper call per closure call on Sparrow**, about ten
   nanoseconds.
 
 ## 18.10 What this design costs

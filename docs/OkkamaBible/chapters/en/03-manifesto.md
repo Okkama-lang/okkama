@@ -94,7 +94,7 @@ lists, trees and maps share most of their structure between versions, so a
 "new" version costs logarithmic work, not a full copy [@okasaki1998].
 
 **Cost.** Performance and vocabulary. A new object per change costs an
-allocation; Tomato makes small allocations cheap, and the compiler
+allocation; Sparrow makes small allocations cheap, and the compiler
 removes many, but arrays and maps without efficient persistent updates make
 some idioms quadratic today (issues #145 and #151). And every state a program
 cares about must be named and returned, which makes long chains of updates
@@ -171,7 +171,7 @@ default for counting and money. Mixing them is a decision the programmer
 writes down: `int(x)`, `x.float()`, `x.rat()`.
 
 **Cost.** Speed and ceremony. Exact integers need an overflow check on every
-operation (Tomato makes it one branch); rationals are slower than
+operation (Sparrow makes it one branch); rationals are slower than
 floats; and the explicit casts that Chapter 2's decorator needed —
 `int(amount * percent / 100)` — are characters other languages do not ask
 for. Chapter 5 measures the cost.

@@ -305,7 +305,7 @@ legal and unpredictable. Java fixed the order as left to right [@gosling2023],
 and Okkama does the same.
 
 Okkama has a second reason as well. Three engines run the same program — the
-IR interpreter, the JVM and Tomato — and the conformance suite
+IR interpreter, the JVM and Sparrow — and the conformance suite
 compares their outputs byte for byte. With an unspecified order, the expected
 answer for a test would be a set of outputs instead of one.
 

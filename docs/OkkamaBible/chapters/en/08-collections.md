@@ -189,7 +189,7 @@ Elsewhere `+` used to copy. Until 0.4.3 the result was a fresh copy, so code
 that built an array step by step through an object's fields or a shared cell
 copied the whole array at each step.
 
-Since 0.4.3, Tomato gives these operations representations that share
+Since 0.4.3, Sparrow gives these operations representations that share
 structure between versions (issues #246–#255). Not a line of the programs
 that use them changes.
 - **Appends and prepends.** A chain of `items + [x]` or `[x] + items` on an
@@ -223,7 +223,7 @@ let following = (0..old.size() + 1).map() -> index {
 The IR engine and the JVM keep flat copies of everything until 0.5.2 (issues
 #335, #336). Figure 8.1 measures the difference.
 
-{{figure:append-cost|Figure 8.1. Building an array of n integers on Tomato: one map() stays flat; the map() idiom and items + [x] by copying (0.4.2) are quadratic; items + [x] over the shared buffers of 0.4.3 stays flat (issues #145, #246). Data: data/append-cost.json.}}
+{{figure:append-cost|Figure 8.1. Building an array of n integers on Sparrow: one map() stays flat; the map() idiom and items + [x] by copying (0.4.2) are quadratic; items + [x] over the shared buffers of 0.4.3 stays flat (issues #145, #246). Data: data/append-cost.json.}}
 
 One `map()` builds 64,000 elements in the time it takes to start the process,
 about 11 milliseconds. Appending them one at a time with `+` took 1.1 seconds
@@ -244,7 +244,7 @@ Bagwell's hash array mapped tries [@bagwell2001], as used by Clojure
 Okkama took the step in 0.4.3 without a new operation: `+` and `-` stayed,
 and only their representation changed. It took the cure piecemeal rather
 than wholesale.
-- **Tries only where they pay.** Measured on Tomato, a trie read in an index
+- **Tries only where they pay.** Measured on Sparrow, a trie read in an index
   loop costs 45–75% more than a flat array, and programs read far more than
   they write. So tries serve only chains of `replaced`, and flatten
   themselves back once they are only read.
@@ -291,4 +291,4 @@ right method names is not enough.
 
 The first two are what is left of the gap that the milestone "Persistence
 Operations" tracked. Okkama had the immutability and the operators. Since
-0.4.3 Tomato has the representations, and the other engines follow.
+0.4.3 Sparrow has the representations, and the other engines follow.

@@ -221,14 +221,14 @@ things — one is a number with a name, the other a sequence.
 
 Code-point indexing has a cost that byte indexing does not: finding the 1000th
 code point of a UTF-8 string means walking the first 999, because code points
-have different byte lengths. Tomato keeps a fast path — a string
+have different byte lengths. Sparrow keeps a fast path — a string
 known to be ASCII has one byte per code point, so `length()` and `slice()` are
 constant-time — and walks otherwise.
 
 The walk is cheap once and expensive in a loop. A program that visits every
 character of a string with `slice(i, i + 1)` walked from the start at each
 visit, so its total cost was quadratic in the length of non-ASCII text.
-Figure 6.1 measures that program on Tomato before and after the
+Figure 6.1 measures that program on Sparrow before and after the
 fix.
 
 {{figure:slice-cost|Figure 6.1. Visiting each Cyrillic character with slice(i, i + 1): quadratic before issue #52, linear after it. Data: data/slice-cost.json.}}
@@ -256,8 +256,8 @@ right operation.
 
 ## 6.9 Limits
 
-- **`+` shares only on Tomato.** Since 0.4.3, a chain `text + piece` on
-  Tomato writes into a text buffer the versions share (issue #255): a long
+- **`+` shares only on Sparrow.** Since 0.4.3, a chain `text + piece` on
+  Sparrow writes into a text buffer the versions share (issue #255): a long
   text assembled from many pieces costs a constant per piece, not a copy of
   everything so far. The IR engine and the JVM still copy until 0.5.2
   (issues #335, #336). The library has no native string builder (issue

@@ -603,7 +603,7 @@ cycle or a crossed bound stops it there. A program that compiles has found
 every module it will ever use.
 
 `okkama build` then writes the whole program into one file: an SPB for
-Tomato, or a JAR for the JVM. Every imported module is in it, the standard
+Sparrow, or a JAR for the JVM. Every imported module is in it, the standard
 library modules the program uses included, and nothing else. The shop
 program above builds into an SPB of 2.4 KB, and `sparrow shop.spb` runs it
 in an empty directory, with no sources, no standard library and no

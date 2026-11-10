@@ -271,7 +271,7 @@ The engines differ in how they find that function:
 
 - **The IR engine** reads the receiver's declaration and looks up its
   witness for the role on each call.
-- **Tomato** compiles `role.wrap` to nothing: a role reference is
+- **Sparrow** compiles `role.wrap` to nothing: a role reference is
   the same pointer. `call.role` loads the object's header, shifts out the
   descriptor number, and indexes a table built once per role slot. The
   table holds one function per object type. Then it calls that function.

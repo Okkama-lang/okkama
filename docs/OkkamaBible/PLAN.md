@@ -16,7 +16,7 @@ least 600 pages per language, and more is better — it is a Bible.
   typed by hand. Where the older Okkama Book disagrees, the code wins.
 - **Every example runs.** Programs live in `examples/NN-name.ok`; a chapter
   includes one with `{{example:NN-name}}`, and `build.py --check` runs each
-  on the IR engine and on Tomato and compares stdout and exit code
+  on the IR engine and on Sparrow and compares stdout and exit code
   with `examples/NN-name.expected`.
 - **Every claim about design is sourced.** Arguments cite published work by
   key, `[@hoare1981]`; `references.md` lists every key with authors, title,
@@ -68,7 +68,7 @@ least 600 pages per language, and more is better — it is a Bible.
 | | **Part VI. Under the hood** | |
 | 23 | The compiler: lexer to OIR | 20 |
 | 24 | Three engines: IR interpreter, JVM, Sparrow | 16 |
-| 25 | Tomato: JIT, precise GC, stack maps | 20 |
+| 25 | Sparrow: JIT, precise GC, stack maps | 20 |
 | 26 | Safety by construction: verification, budgets, fuzzing, conformance | 18 |
 | 27 | Performance: measurements and what they mean | 16 |
 | | **Part VII. Practice and judgement** | |
@@ -122,7 +122,7 @@ Updated with each chapter: `build.py --stats`.
   (`11-tasks`), the `Closing` pattern (`11-closing`), resources in maps and
   closures (`11-containers`), regions and the IR they lower to, the cost of
   a walk (#9), limits, costs. To add: channels; a larger worked example (a connection
-  pool); how each engine implements regions (Tomato's region arrays and
+  pool); how each engine implements regions (Sparrow's region arrays and
   identity table, the IR engine's owner cells, the JVM's `Region`).
 - Chapter 12 (objects): 8.9 pages (EN) of its floor of 18. Written:
   declaring an object, private and permanent fields, explicit constructors,
@@ -172,7 +172,7 @@ Updated with each chapter: `build.py --stats`.
   variant records, HOPE, ML, Haskell, Rust, Java sealed/records/pattern
   switch), `match` and its exhaustiveness rules (Maranget), compact choices,
   enums versus roles (the expression problem: Reynolds, Cook, Wadler), how
-  both kinds run (OIR, Tomato's enum word, the JVM's `Case`, variants with
+  both kinds run (OIR, Sparrow's enum word, the JVM's `Case`, variants with
   an object per case since #290, measured before and after), a comparison
   table, limits (#286–#291), costs. To add: a worked protocol (messages as
   variants) and a state machine; error enums in depth with Chapter 10;
@@ -180,12 +180,12 @@ Updated with each chapter: `build.py --stats`.
   #288 land.
 
 - 0.4.3 (2026-11-10): Chapters 8 and 6 follow the persistent collections of
-  Tomato (#246–#255). Chapter 8 gains `replaced` and `removed_at`, how `+`,
+  Sparrow (#246–#255). Chapter 8 gains `replaced` and `removed_at`, how `+`,
   slices, `replaced` and map versions share structure, why tries serve only
   `replaced` chains, and Figure 8.1 remeasured with four series
   (`okkama-docs/benchmarks/persistence/fig81`). Its limits now name the IR
   and JVM ports (#335, #336), the declined #248, and the first version of a
-  large map. Chapter 6's limit on `+` says it shares on Tomato.
+  large map. Chapter 6's limit on `+` says it shares on Sparrow.
 
 - Chapter 19 (modules): 14.1 pages (EN), 14.4 (RU) of its floor of 14. Written:
   - the module as a file, versions and identity, `main()` that never runs on
@@ -203,6 +203,13 @@ Updated with each chapter: `build.py --stats`.
 
   To redo when blade matures: 19.7, with a real project example. Diagnostics
   of same-named types: #338.
+
+## Naming (owner, 2026-11-10)
+
+The virtual machine is **Sparrow**. **Tomato** is the name of its current
+version, as Tahoe is a version of macOS. Chapters call the machine Sparrow,
+and name Tomato only where a version matters (for example, against the
+previous Sparrow, `sparrow-origin`).
 
 ## Notes for the build
 
