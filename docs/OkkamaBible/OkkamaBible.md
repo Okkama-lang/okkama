@@ -13499,16 +13499,21 @@ the IR engine, which compiles nothing, finished the same program in about
 compilation: a server that lives for hours, a loop over a large input. It
 loses on short runs through a lot of library code.
 
-`async destroy` has a cost of the same kind. A scope that may hold an object
+`async destroy` had a cost of the same kind. A scope that may hold an object
 with an async destroy closes with a settle, which may suspend, so on Sparrow
-it becomes a resumption point like an `await`. The compiler decides this for
-the whole program: once any object has an async destroy, every scope of
-every async action closes with a settle. Turning one cleanup guard of the
-HTTP server into an `async destroy` (issue #328) grew the machine code from
-2.0 to 2.9 MB and the compile time from 765 to 1 236 ms, half a second on
-every run of the program, while the work done stayed the same. The IR engine
-showed no difference. Until the compiler limits settles to the scopes that
-need them, std keeps its cleanup guards as `defer await guard.close()`.
+it is a resumption point like an `await`. Until 0.5.1 the compiler decided
+this for the whole program: once any object had an async destroy, every
+scope of every async action closed with a settle. Turning one cleanup guard
+of the HTTP server into an `async destroy` grew the machine code from 2.0 to
+2.9 MB and the compile time from 765 to 1 236 ms, half a second on every run,
+while the work done stayed the same (issue #328). Now the compiler records
+what each async action's scopes own, and once every action is compiled it
+keeps the settle only where an owned value may reach an object with an async
+destroy: the object, anything holding one in a field, a collection of them,
+a role one of them does. A value hidden in `any` or captured by a closure
+counts only if some such value is boxed or captured somewhere in the
+program. The same HTTP program now settles in one action, the guarded loop
+itself, and runs 11 ms slower than with `defer await`, not 480.
 
 ## 20.16 Okkama among other languages
 
@@ -13542,11 +13547,10 @@ an effect: the place where the rest of the program may change things.
 - **JVM task switches cost microseconds.** Each task is a thread. Since
   0.5.1 an `await` of an async action costs about 0.8 µs there, twenty times
   Sparrow (Section 20.15, issue #327); in 0.5.0 it was 6.7 µs.
-- **Async cleanup guards cost compile time on Sparrow.** One `async destroy`
-  in a program makes every async scope close with a settle, which costs the
-  HTTP stack half a second of compilation per run (issue #328, previous
-  section), so the remaining cleanup guards of std stay `defer await` until
-  that cost goes (issue #329).
+- **std's cleanup guards are still `defer await`.** Since 0.5.1 an `async
+  destroy` guard costs only the scopes that own it (issue #328, previous
+  section); moving std's guards to it waits for the std rewrite (issue
+  #329).
 - **Short runs pay for compilation on Sparrow.** Compiling a program's code
   can take longer than running it (issue #345).
 - **Most of std is synchronous.** Asynchronous files, pipes, CSV streams and
