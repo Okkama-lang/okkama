@@ -208,7 +208,7 @@ stranger than a language with both.
 
 - an array;
 - a range;
-- an object that performs `Iterating<T>` (Chapter 8).
+- an object that performs `Iterating<T>` or `Batching<T>` (Chapter 8).
 
 A map is walked through `keys()` or `values()`, in sorted key order. A string
 is not a source by itself, but its characters are:

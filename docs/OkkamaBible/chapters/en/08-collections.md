@@ -281,6 +281,23 @@ ordinary `false` from `available()` — no sentinel, no null, no exception. The
 role is nominal: a collection must declare `does Iterating<T>`; having the
 right method names is not enough.
 
+A source that is consumed as it is read — a file, a socket — performs
+`Batching<T>` instead, from the same module:
+
+```okkama
+role Batching<T> {
+    batch() is @T;      // the next batch; [] ends the source
+}
+```
+
+`for file.text() -> line { … }` asks for a batch, walks it
+as an array and asks again; `next`, `last` and `return` work as in any loop,
+and `map`, `filter`, `reduce` take such a source too. The reason is cost. A
+cursor is an object and three role calls per item, about 0.7 µs on Tomato; a
+batch is one call per batch and then the array loop, about 0.09 µs per line
+of a file whose batches the runtime cuts in Rust (#465). A source that does
+both roles is walked in batches.
+
 ## 8.7 Limits
 
 - **What still copies.** Two things copy on every engine: the `map()` idiom,
