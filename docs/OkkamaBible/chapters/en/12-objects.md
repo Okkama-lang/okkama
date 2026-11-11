@@ -15,7 +15,7 @@ The rest of the chapter takes that program apart:
 - `Cash` holds three fields and never changes them;
 - it has two constructors, one of which checks its input;
 - it exposes behaviour (`total`, `label`), never its fields;
-- a private helper sits below the `private:` line;
+- a helper marked `hidden` is callable only by `Cash` itself;
 - two `Cash` values with the same fields are equal;
 - `Bag` shows an empty and a variadic constructor side by side.
 
@@ -28,8 +28,7 @@ object Cash {
     has currency is string = "USD";
     Cash(digit is int, cents is int) { … }
     total() is int { … }
-    private:
-    in_cents(units is int) is int { … }
+    hidden in_cents(units is int) is int { … }
 }
 ```
 
@@ -40,15 +39,14 @@ cannot share a name. The body may hold:
 
 - `has` fields;
 - constructors, at least one;
-- public actions;
-- a `private:` section of private actions;
+- actions, public or marked `hidden`;
 - at most one `destroy` (Chapter 11);
 - `cap` contracts (§12.8);
 - test blocks.
 
 The order of these parts does not matter to the compiler. The style used in
 the standard library and in this book puts fields first, then constructors,
-then the public actions, then `private:`.
+then the public actions, then the hidden ones.
 
 An object is not a class in the Java sense. There is no `extends`, no
 `super`, no `protected`, no abstract or virtual method, no static member.
@@ -185,7 +183,7 @@ variadic one.
 There is no constructor chaining, no `this(...)` call from one constructor to
 another. Each constructor binds and checks on its own, and checks are not
 inherited between overloads. When two constructors share logic, the shared
-part is an object of its own, or a private action both call.
+part is an object of its own, or a hidden action both call.
 
 ## 12.6 Validation belongs in the constructor
 
@@ -218,7 +216,7 @@ checks its limits. Parsing happens in `value()`, so constructing a
 construction predictable: it validates what it was given and does nothing
 else.
 
-## 12.7 Actions and private actions
+## 12.7 Actions and hidden actions
 
 Public actions are the object's interface: `total() is int { … }`. Their full
 treatment, with overloading, default arguments and successors, is Chapter
@@ -228,9 +226,12 @@ treatment, with overloading, default arguments and successors, is Chapter
   `self.in_cents(digit)` calls the helper. A bare `in_cents(digit)` is
   `Undefined action "in_cents"`. Okkama has no free functions, so a bare
   call would have nothing to refer to.
-- **`private:` starts the private section.** Everything below the line is
-  callable only by the object itself. A private action is an implementation
-  detail, free to change; a public one is a promise.
+- **`hidden` keeps an action out of the contract.** `hidden in_cents(...)` is
+  callable only by the object itself, through `self`. Each action is marked
+  on its own; constructors cannot be hidden, since they are how the object is
+  made. A hidden action is an implementation detail, free to change; a public
+  one is a promise. The word means the same as before a hidden object or enum
+  (Chapter 19): not part of the public contract.
 
 ## 12.8 Caps: a read-only view of an object
 

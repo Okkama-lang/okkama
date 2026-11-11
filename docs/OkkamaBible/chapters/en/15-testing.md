@@ -38,7 +38,7 @@ PASS
 
 - A test inside an object or a role is shown as `Owner :: name`. That is
   only a namespace. The test gets no `self` and no access to the owner's
-  private actions or fields; it uses the object like any other caller.
+  hidden actions or fields; it uses the object like any other caller.
 - Names are unique within a module, and per owner for object and role
   tests. A duplicate is a compile error before any test runs.
 - Each test uses the imports of the file that declares it.
@@ -49,9 +49,8 @@ PASS
 Tests run in the same process, on the engine chosen with `--engine`.
 `okkama run -t --filter TEXT` runs only the tests whose names contain
 `TEXT`; with several `--filter`s, those that contain any of them. A test
-may also stand among the actions after an object's `private:` line. It is
-still a test of the object and does not become private; before 0.5.0 the
-parser read it as the start of an action (#277). The standard library can
+may stand anywhere among an object's members, between hidden actions too;
+it is still a test of the object. The standard library can
 render a test report as human text, TAP, JSON or JUnit (`testing/report`),
 but the command line offers no report formats, seeds or parallel workers
 yet. They are planned with the rewritten standard library (#339).
@@ -74,7 +73,7 @@ service that is not configured. The code after it does not run, and no
 `catch` takes it, so a helper that skips cannot be overruled by its
 caller. Cleanup runs as for any failure. A skipped test does not fail the
 run, unless an assertion had already failed; a skip does not erase a
-failure. The example also puts a test among the private actions:
+failure. The example also puts a test among the hidden actions:
 
 {{example:15-skip-tests}}
 

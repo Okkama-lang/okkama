@@ -44,9 +44,8 @@ object Payment does Created, Authorized, Captured, Refunded, Declined {
         }
     }
 
-    private:
-    approved() is ^Payment { ^stage = Stage.authorized; }
-    rejected(reason is string) is ^Payment { ^stage = Stage.declined(reason); }
+    hidden approved() is ^Payment { ^stage = Stage.authorized; }
+    hidden rejected(reason is string) is ^Payment { ^stage = Stage.declined(reason); }
 }
 
 object Payments {

@@ -335,7 +335,7 @@ An object whose part changes stages a successor of that part:
 change travels up the chain of owners. Each level makes a new object, and
 everything the change does not touch is shared.
 
-A successor can be private. Then it is a transition only the object's own
+A successor can be hidden. Then it is a transition only the object's own
 actions take through `self`:
 
 ```okkama
@@ -344,15 +344,14 @@ object Door {
     Door();
     toggled() is Door { if open { self.shut(); } else { self.opened(); } }
 
-    private:
-    opened() is ^Door { ^open = true; }
-    shut() is ^Door { ^open = false; }
+    hidden opened() is ^Door { ^open = true; }
+    hidden shut() is ^Door { ^open = false; }
 }
 ```
 
 `toggled` is a plain action that returns a `Door`. It is not a successor,
 so it cannot stage anything itself. It picks the transition and returns
-its result. A private successor keeps the must-use rule and cannot
+its result. A hidden successor keeps the must-use rule and cannot
 implement a role's action.
 
 ## 13.11 When a value must change: `Cell`

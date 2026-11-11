@@ -384,7 +384,7 @@ Hiding is enforced at the boundary, not only at the import line. The rules:
 - **Public signatures cannot name hidden types.** Parameters and results of
   public actions, constructor parameters, role signatures, enum payloads,
   generic arguments and bounds, and cap fields are all public. Any of them
-  that names a hidden type is an error at the declaration. Private actions,
+  that names a hidden type is an error at the declaration. Hidden actions,
   fields and bodies may use hidden types freely.
 - **A public object cannot do a hidden role.** Its `does` list is part of its
   public contract. A hidden object may do public and hidden roles, which is
@@ -426,7 +426,8 @@ the scale of a module. A role names what callers may rely on; `hidden`
 makes sure they cannot rely on anything else.
 
 `hidden` is a contextual keyword: `has hidden is int` is still a field
-named `hidden`.
+named `hidden`. The same word before an action keeps that action inside its
+object (§12.7): in both places it means *not part of the public contract*.
 
 Okkama's default is the opposite of Go's capitalization rule, Rust's
 private-by-default and Java's package-private. Those languages make the

@@ -1,7 +1,7 @@
 module bible/objects v1.0.0;
 
 // An object: private fields, explicit constructors that check their input,
-// public behaviour, private helpers. Its state never changes.
+// public behaviour, hidden helpers. Its state never changes.
 import "io/stdout" take Stdout;
 
 enum InvalidCash is Error = (negative(cents is int));
@@ -21,8 +21,7 @@ object Cash {
     total() is int { self.in_cents(digit) + cents; }
     label() is string { currency + " " + self.total().string(); }
 
-    private:
-    in_cents(units is int) is int { units * 100; }
+    hidden in_cents(units is int) is int { units * 100; }
 }
 
 object Bag {

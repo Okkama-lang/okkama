@@ -11,13 +11,11 @@ object Ledger {
         self.checked();
     }
 
-    private:
-
-    checked() is int {
+    hidden checked() is int {
         entries;
     }
 
-    test "a test among the private actions" {
+    test "a test among the hidden actions" {
         test.is(Ledger(3).count(), 3);
     }
 }

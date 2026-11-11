@@ -135,7 +135,7 @@
   - [12.4 Shorthand constructors](#124-shorthand-constructors)
   - [12.5 Several constructors](#125-several-constructors)
   - [12.6 Validation belongs in the constructor](#126-validation-belongs-in-the-constructor)
-  - [12.7 Actions and private actions](#127-actions-and-private-actions)
+  - [12.7 Actions and hidden actions](#127-actions-and-hidden-actions)
   - [12.8 Caps: a read-only view of an object](#128-caps-a-read-only-view-of-an-object)
   - [12.9 Objects are values](#129-objects-are-values)
   - [12.10 What a constructor compiles to](#1210-what-a-constructor-compiles-to)
@@ -5450,7 +5450,7 @@ it may not do.
 module bible/objects v1.0.0;
 
 // An object: private fields, explicit constructors that check their input,
-// public behaviour, private helpers. Its state never changes.
+// public behaviour, hidden helpers. Its state never changes.
 import "io/stdout" take Stdout;
 
 enum InvalidCash is Error = (negative(cents is int));
@@ -5470,8 +5470,7 @@ object Cash {
     total() is int { self.in_cents(digit) + cents; }
     label() is string { currency + " " + self.total().string(); }
 
-    private:
-    in_cents(units is int) is int { units * 100; }
+    hidden in_cents(units is int) is int { units * 100; }
 }
 
 object Bag {
@@ -5507,7 +5506,7 @@ The rest of the chapter takes that program apart:
 - `Cash` holds three fields and never changes them;
 - it has two constructors, one of which checks its input;
 - it exposes behaviour (`total`, `label`), never its fields;
-- a private helper sits below the `private:` line;
+- a helper marked `hidden` is callable only by `Cash` itself;
 - two `Cash` values with the same fields are equal;
 - `Bag` shows an empty and a variadic constructor side by side.
 
@@ -5520,8 +5519,7 @@ object Cash {
     has currency is string = "USD";
     Cash(digit is int, cents is int) { … }
     total() is int { … }
-    private:
-    in_cents(units is int) is int { … }
+    hidden in_cents(units is int) is int { … }
 }
 ```
 
@@ -5532,15 +5530,14 @@ cannot share a name. The body may hold:
 
 - `has` fields;
 - constructors, at least one;
-- public actions;
-- a `private:` section of private actions;
+- actions, public or marked `hidden`;
 - at most one `destroy` (Chapter 11);
 - `cap` contracts (§12.8);
 - test blocks.
 
 The order of these parts does not matter to the compiler. The style used in
 the standard library and in this book puts fields first, then constructors,
-then the public actions, then `private:`.
+then the public actions, then the hidden ones.
 
 An object is not a class in the Java sense. There is no `extends`, no
 `super`, no `protected`, no abstract or virtual method, no static member.
@@ -5713,7 +5710,7 @@ variadic one.
 There is no constructor chaining, no `this(...)` call from one constructor to
 another. Each constructor binds and checks on its own, and checks are not
 inherited between overloads. When two constructors share logic, the shared
-part is an object of its own, or a private action both call.
+part is an object of its own, or a hidden action both call.
 
 ## 12.6 Validation belongs in the constructor
 
@@ -5746,7 +5743,7 @@ checks its limits. Parsing happens in `value()`, so constructing a
 construction predictable: it validates what it was given and does nothing
 else.
 
-## 12.7 Actions and private actions
+## 12.7 Actions and hidden actions
 
 Public actions are the object's interface: `total() is int { … }`. Their full
 treatment, with overloading, default arguments and successors, is Chapter
@@ -5756,9 +5753,12 @@ treatment, with overloading, default arguments and successors, is Chapter
   `self.in_cents(digit)` calls the helper. A bare `in_cents(digit)` is
   `Undefined action "in_cents"`. Okkama has no free functions, so a bare
   call would have nothing to refer to.
-- **`private:` starts the private section.** Everything below the line is
-  callable only by the object itself. A private action is an implementation
-  detail, free to change; a public one is a promise.
+- **`hidden` keeps an action out of the contract.** `hidden in_cents(...)` is
+  callable only by the object itself, through `self`. Each action is marked
+  on its own; constructors cannot be hidden, since they are how the object is
+  made. A hidden action is an implementation detail, free to change; a public
+  one is a promise. The word means the same as before a hidden object or enum
+  (Chapter 19): not part of the public contract.
 
 ## 12.8 Caps: a read-only view of an object
 
@@ -6828,7 +6828,7 @@ hall: lamp on, 2 visits
 change travels up the chain of owners. Each level makes a new object, and
 everything the change does not touch is shared.
 
-A successor can be private. Then it is a transition only the object's own
+A successor can be hidden. Then it is a transition only the object's own
 actions take through `self`:
 
 ```okkama
@@ -6837,15 +6837,14 @@ object Door {
     Door();
     toggled() is Door { if open { self.shut(); } else { self.opened(); } }
 
-    private:
-    opened() is ^Door { ^open = true; }
-    shut() is ^Door { ^open = false; }
+    hidden opened() is ^Door { ^open = true; }
+    hidden shut() is ^Door { ^open = false; }
 }
 ```
 
 `toggled` is a plain action that returns a `Door`. It is not a successor,
 so it cannot stage anything itself. It picks the transition and returns
-its result. A private successor keeps the must-use rule and cannot
+its result. A hidden successor keeps the must-use rule and cannot
 implement a role's action.
 
 ## 13.11 When a value must change: `Cell`
@@ -7430,9 +7429,8 @@ object Payment does Created, Authorized, Captured, Refunded, Declined {
         }
     }
 
-    private:
-    approved() is ^Payment { ^stage = Stage.authorized; }
-    rejected(reason is string) is ^Payment { ^stage = Stage.declined(reason); }
+    hidden approved() is ^Payment { ^stage = Stage.authorized; }
+    hidden rejected(reason is string) is ^Payment { ^stage = Stage.declined(reason); }
 }
 
 object Payments {
@@ -7516,9 +7514,8 @@ object Payment does Created, Authorized, Captured, Refunded, Declined {
         }
     }
 
-    private:
-    approved() is ^Payment { ^stage = Stage.authorized; }
-    rejected(reason is string) is ^Payment { ^stage = Stage.declined(reason); }
+    hidden approved() is ^Payment { ^stage = Stage.authorized; }
+    hidden rejected(reason is string) is ^Payment { ^stage = Stage.declined(reason); }
 }
 
 object Payments {
@@ -7536,7 +7533,7 @@ main() is int {
 The compiler answers:
 
 ```text
-14-state-rejected.ok:56:13: semantic error: Role "Created" has no action "capture"
+14-state-rejected.ok:55:13: semantic error: Role "Created" has no action "capture"
 ```
 
 Strom and Yemini named this idea **typestate** in 1986: the operations
@@ -7952,7 +7949,7 @@ PASS
 
 - A test inside an object or a role is shown as `Owner :: name`. That is
   only a namespace. The test gets no `self` and no access to the owner's
-  private actions or fields; it uses the object like any other caller.
+  hidden actions or fields; it uses the object like any other caller.
 - Names are unique within a module, and per owner for object and role
   tests. A duplicate is a compile error before any test runs.
 - Each test uses the imports of the file that declares it.
@@ -7963,9 +7960,8 @@ PASS
 Tests run in the same process, on the engine chosen with `--engine`.
 `okkama run -t --filter TEXT` runs only the tests whose names contain
 `TEXT`; with several `--filter`s, those that contain any of them. A test
-may also stand among the actions after an object's `private:` line. It is
-still a test of the object and does not become private; before 0.5.0 the
-parser read it as the start of an action (#277). The standard library can
+may stand anywhere among an object's members, between hidden actions too;
+it is still a test of the object. The standard library can
 render a test report as human text, TAP, JSON or JUnit (`testing/report`),
 but the command line offers no report formats, seeds or parallel workers
 yet. They are planned with the rewritten standard library (#339).
@@ -7988,7 +7984,7 @@ service that is not configured. The code after it does not run, and no
 `catch` takes it, so a helper that skips cannot be overruled by its
 caller. Cleanup runs as for any failure. A skipped test does not fail the
 run, unless an assertion had already failed; a skip does not erase a
-failure. The example also puts a test among the private actions:
+failure. The example also puts a test among the hidden actions:
 
 ```okkama
 module skip_tests;
@@ -8004,13 +8000,11 @@ object Ledger {
         self.checked();
     }
 
-    private:
-
-    checked() is int {
+    hidden checked() is int {
         entries;
     }
 
-    test "a test among the private actions" {
+    test "a test among the hidden actions" {
         test.is(Ledger(3).count(), 3);
     }
 }
@@ -8024,8 +8018,8 @@ test "the archive is not mounted" {
 Output:
 
 ```text
-=== RUN   Ledger :: a test among the private actions
---- PASS: Ledger :: a test among the private actions
+=== RUN   Ledger :: a test among the hidden actions
+--- PASS: Ledger :: a test among the hidden actions
 === RUN   the archive is not mounted
 --- SKIP: the archive is not mounted
     needs the archive volume
@@ -11511,7 +11505,7 @@ Hiding is enforced at the boundary, not only at the import line. The rules:
 - **Public signatures cannot name hidden types.** Parameters and results of
   public actions, constructor parameters, role signatures, enum payloads,
   generic arguments and bounds, and cap fields are all public. Any of them
-  that names a hidden type is an error at the declaration. Private actions,
+  that names a hidden type is an error at the declaration. Hidden actions,
   fields and bodies may use hidden types freely.
 - **A public object cannot do a hidden role.** Its `does` list is part of its
   public contract. A hidden object may do public and hidden roles, which is
@@ -11613,7 +11607,8 @@ the scale of a module. A role names what callers may rely on; `hidden`
 makes sure they cannot rely on anything else.
 
 `hidden` is a contextual keyword: `has hidden is int` is still a field
-named `hidden`.
+named `hidden`. The same word before an action keeps that action inside its
+object (§12.7): in both places it means *not part of the public contract*.
 
 Okkama's default is the opposite of Go's capitalization rule, Rust's
 private-by-default and Java's package-private. Those languages make the
