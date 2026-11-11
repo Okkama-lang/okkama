@@ -4345,14 +4345,14 @@ JVM.
 module bible/config v1.0.0;
 
 // A settings loader at a module boundary: the file system's failures arrive
-// as FileSystemFailure (std turned the host's NativeFailure into it), and
-// the loader answers in its own vocabulary, ConfigError.
+// as FileError (std turned the host's NativeFailure into it), and the loader
+// answers in its own vocabulary, ConfigError.
 import "io/stdout" take Stdout;
 import "fs/path" take Path;
-import "fs/file" take FileEntry, FileContent, FileSystemFailure;
-import "encoding/utf" take Utf8Decoded;
+import "fs/file" take File;
+import "fs/error" take FileError;
 
-enum ConfigError is Error = (missing(path is string), unreadable(path is string, code is string), syntax(line is int, text is string));
+enum ConfigError is Error = (missing(path is string), unreadable(path is string), syntax(line is int, text is string));
 
 object Settings {
     has pairs is %string:string;
@@ -4379,14 +4379,16 @@ object SettingsFile {
     has path is string;
     SettingsFile(:path);
     settings() is Settings {
-        let bytes = try {
-            FileContent(FileEntry(Path(path))).bytes();
+        let text = try {
+            File(path: Path(path)).text().content();
         }
-        catch FileSystemFailure.detailed(code, message) {
-            confirm code != "not_found" else throw ConfigError.missing(path);
-            throw ConfigError.unreadable(path, code);
+        catch FileError.not_found(_) {
+            throw ConfigError.missing(path);
+        }
+        catch failure is FileError {
+            throw ConfigError.unreadable(path);
         };
-        SettingsText(text: Utf8Decoded(bytes).string()).settings();
+        SettingsText(text: text).settings();
     }
 }
 
@@ -4416,22 +4418,22 @@ line 2 is not key=value: verbose
 
 На границе происходят три вещи.
 
-1. `fs/file` уже поймал `NativeFailure` хоста и бросил его заново как
-   `FileSystemFailure.detailed(code, message)`. Загрузчик никогда не
+1. `fs/file` уже поймал `NativeFailure` хоста и бросил его заново как случай
+   `FileError`, здесь `FileError.not_found(path)`. Загрузчик никогда не
    касается кода хоста напрямую.
 2. Загрузчик переводит один раз, в одном месте. Отсутствующий файл
    становится `ConfigError.missing(path)` — случаем, который вызывающий,
    скорее всего, обработает, перейдя на значения по умолчанию. Любой другой
-   отказ файловой системы становится `ConfigError.unreadable(path, code)`:
-   стабильный код сохраняется, сообщение хоста отбрасывается.
+   отказ файловой системы становится `ConfigError.unreadable(path)`.
 3. `describe` у вызывающего называет случаи, которые он обрабатывает, а
    остальное печатает через `catch e is ConfigError`. Ничто вне загрузчика
-   не упоминает `FileSystemFailure`. Если однажды загрузчик станет читать
+   не упоминает `FileError`. Если однажды загрузчик станет читать
    настройки из базы данных, вызывающие не изменятся.
 
-`confirm … else throw` в теле `catch` читается как фраза: код не должен
-быть `not_found`, иначе файла нет. Тело `catch` — обычный код, и защищённый
-бросок там так же естествен, как в любом другом месте.
+Два предложения `catch` читаются по порядку: сначала единственный случай,
+которому загрузчик придаёт свой смысл, затем всё остальное перечисление.
+Предложение связывает из случая то, что ему нужно, а остальное отбрасывает
+через `_`.
 
 ## 10.13 Бюджеты — не отказы
 
@@ -5348,7 +5350,7 @@ module bible/closing v1.0.0;
 import "io/stdout" take Stdout;
 import "fs/directory" take Directory;
 import "fs/path" take Path;
-import "fs/file" take FileEntry;
+import "fs/entry" take FileEntry;
 import "fs/temp" take TemporaryDirectory;
 
 object Workspace {

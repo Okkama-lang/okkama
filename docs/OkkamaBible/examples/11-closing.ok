@@ -6,7 +6,7 @@ module bible/closing v1.0.0;
 import "io/stdout" take Stdout;
 import "fs/directory" take Directory;
 import "fs/path" take Path;
-import "fs/file" take FileEntry;
+import "fs/entry" take FileEntry;
 import "fs/temp" take TemporaryDirectory;
 
 object Workspace {

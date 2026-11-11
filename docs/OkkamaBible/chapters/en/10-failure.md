@@ -530,22 +530,21 @@ loader's own terms. The caller should see only the loader's terms.
 
 Three things happen at the boundary.
 
-1. `fs/file` already caught the host's `NativeFailure` and rethrew it as
-   `FileSystemFailure.detailed(code, message)`. The loader never touches a
-   host code directly.
+1. `fs/file` already caught the host's `NativeFailure` and rethrew it as a
+   case of `FileError`, here `FileError.not_found(path)`. The loader never
+   touches a host code directly.
 2. The loader translates once, in one place. A missing file becomes
    `ConfigError.missing(path)`, the case a caller is likely to handle, by
    falling back to defaults. Any other file-system failure becomes
-   `ConfigError.unreadable(path, code)`, which keeps the stable code and
-   drops the host's message.
+   `ConfigError.unreadable(path)`.
 3. The caller's `describe` names the cases it handles and lets
    `catch e is ConfigError` print the rest. Nothing outside the loader
-   mentions `FileSystemFailure`. If the loader one day reads settings from a
+   mentions `FileError`. If the loader one day reads settings from a
    database, its callers do not change.
 
-The `confirm … else throw` inside the `catch` body reads as a sentence:
-the code must not be `not_found`, or the file is missing. A `catch` body is
-ordinary code, and the guarded throw is as natural there as anywhere.
+The two `catch` clauses read in order: the one case the loader turns into
+its own meaning first, then the rest of the enum. A clause binds what it
+needs from the case and drops the rest with `_`.
 
 ## 10.13 Budgets are not failures
 

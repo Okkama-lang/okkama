@@ -4283,14 +4283,14 @@ loader's own terms. The caller should see only the loader's terms.
 module bible/config v1.0.0;
 
 // A settings loader at a module boundary: the file system's failures arrive
-// as FileSystemFailure (std turned the host's NativeFailure into it), and
-// the loader answers in its own vocabulary, ConfigError.
+// as FileError (std turned the host's NativeFailure into it), and the loader
+// answers in its own vocabulary, ConfigError.
 import "io/stdout" take Stdout;
 import "fs/path" take Path;
-import "fs/file" take FileEntry, FileContent, FileSystemFailure;
-import "encoding/utf" take Utf8Decoded;
+import "fs/file" take File;
+import "fs/error" take FileError;
 
-enum ConfigError is Error = (missing(path is string), unreadable(path is string, code is string), syntax(line is int, text is string));
+enum ConfigError is Error = (missing(path is string), unreadable(path is string), syntax(line is int, text is string));
 
 object Settings {
     has pairs is %string:string;
@@ -4317,14 +4317,16 @@ object SettingsFile {
     has path is string;
     SettingsFile(:path);
     settings() is Settings {
-        let bytes = try {
-            FileContent(FileEntry(Path(path))).bytes();
+        let text = try {
+            File(path: Path(path)).text().content();
         }
-        catch FileSystemFailure.detailed(code, message) {
-            confirm code != "not_found" else throw ConfigError.missing(path);
-            throw ConfigError.unreadable(path, code);
+        catch FileError.not_found(_) {
+            throw ConfigError.missing(path);
+        }
+        catch failure is FileError {
+            throw ConfigError.unreadable(path);
         };
-        SettingsText(text: Utf8Decoded(bytes).string()).settings();
+        SettingsText(text: text).settings();
     }
 }
 
@@ -4354,22 +4356,21 @@ line 2 is not key=value: verbose
 
 Three things happen at the boundary.
 
-1. `fs/file` already caught the host's `NativeFailure` and rethrew it as
-   `FileSystemFailure.detailed(code, message)`. The loader never touches a
-   host code directly.
+1. `fs/file` already caught the host's `NativeFailure` and rethrew it as a
+   case of `FileError`, here `FileError.not_found(path)`. The loader never
+   touches a host code directly.
 2. The loader translates once, in one place. A missing file becomes
    `ConfigError.missing(path)`, the case a caller is likely to handle, by
    falling back to defaults. Any other file-system failure becomes
-   `ConfigError.unreadable(path, code)`, which keeps the stable code and
-   drops the host's message.
+   `ConfigError.unreadable(path)`.
 3. The caller's `describe` names the cases it handles and lets
    `catch e is ConfigError` print the rest. Nothing outside the loader
-   mentions `FileSystemFailure`. If the loader one day reads settings from a
+   mentions `FileError`. If the loader one day reads settings from a
    database, its callers do not change.
 
-The `confirm … else throw` inside the `catch` body reads as a sentence:
-the code must not be `not_found`, or the file is missing. A `catch` body is
-ordinary code, and the guarded throw is as natural there as anywhere.
+The two `catch` clauses read in order: the one case the loader turns into
+its own meaning first, then the rest of the enum. A clause binds what it
+needs from the case and drops the rest with `_`.
 
 ## 10.13 Budgets are not failures
 
@@ -5265,7 +5266,7 @@ module bible/closing v1.0.0;
 import "io/stdout" take Stdout;
 import "fs/directory" take Directory;
 import "fs/path" take Path;
-import "fs/file" take FileEntry;
+import "fs/entry" take FileEntry;
 import "fs/temp" take TemporaryDirectory;
 
 object Workspace {
