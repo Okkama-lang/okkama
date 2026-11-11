@@ -421,16 +421,16 @@ Two consequences for design:
   hot inner loop over a large count, `reduce` over a range or a `Cell` of a
   scalar avoids the objects entirely.
 
-## 13.13 A value computed once: `memo let`
+## 13.13 A value computed once: `once let`
 
 Immutability makes one kind of cache safe without any discipline. An answer
 that depends only on an object's fields cannot change while the object
-lives, so the object can keep it. `memo let` says so in the action that
+lives, so the object can keep it. `once let` says so in the action that
 computes it:
 
 ```okkama
 hidden values() is @int {
-    memo let kept = source.items();   // read once per object
+    once let kept = source.items();   // read once per object
     kept;
 }
 ```
@@ -439,7 +439,7 @@ The first run computes the value and stores it in a hidden slot of `self`;
 every later run reads the slot (#491). Several actions share one result by
 calling one hidden action. The compiler keeps the stored value honest:
 
-- the value reads only fields, `self`, constants and earlier `memo let`s,
+- the value reads only fields, `self`, constants and earlier `once let`s,
   never a parameter, so it cannot belong to one call;
 - it reaches no effect: no clock, file, network, process or randomness, no
   `Cell`, `async` object, `await` or `spawn`, followed through the actions of
@@ -452,7 +452,7 @@ so an object is equal to itself before and after its first answer. A
 successor starts with empty slots, because its fields changed. A value that
 throws leaves the slot empty for the next call.
 
-`memo let` is the reason a constructor in the standard library never does
+`once let` is the reason a constructor in the standard library never does
 work: an object binds its input when it is made, and computes from it on
 the first question.
 
