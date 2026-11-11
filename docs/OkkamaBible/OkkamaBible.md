@@ -14202,6 +14202,70 @@ Sparrow it reads the runtime's own heap, so a host can run several
 programs side by side, and the one that grows past its budget stops while
 the others go on.
 
+### 21.6.1 An embedder, written out
+
+A host that runs a plug-in it did not write states the whole contract in one
+value. In Rust, against `sparrow-core`:
+
+```rust
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use sparrow_core::budget::{Limits, MemoryScope, NativeGroup};
+
+fn run_plugin(spb: Vec<u8>, arguments: Vec<Vec<u8>>, stop: Arc<AtomicBool>)
+    -> Result<i64, sparrow_core::Error>
+{
+    let limits = Limits {
+        steps: Some(200_000_000),          // function entries and loop back-edges
+        memory: Some(64 << 20),            // 64 MiB of this runtime's own heap
+        memory_scope: MemoryScope::Runtime,
+        output: Some(1 << 20),             // 1 MiB of stdout and stderr
+        interrupt: Some(stop),             // any thread may raise it
+        natives: Some(vec![NativeGroup::Clock]),
+    };
+    // No worker command: `spawn` of a synchronous action fails here.
+    sparrow_core::run_limited(spb, arguments, false, Vec::new(), limits)
+}
+```
+
+Each field is one line of the host's policy, and no field has a default
+that grants something. `natives: Some(vec![NativeGroup::Clock])` is the
+answer to "what may this program do outside itself?": read the clocks, and
+the computation and printing every program may do. A plug-in that opens a
+file fails at that call with a report that names the group it lacked. A
+plug-in that loops forever runs out of steps; one that builds an unbounded
+list runs out of its 64 MiB; one that prints in a loop runs out of output.
+The host's watchdog thread can end any of them early with
+`stop.store(true, Ordering::Relaxed)`. Each of these ends the run with its
+own message (`Execution budget exhausted: steps`, `… memory`, `… output`,
+`Execution interrupted`), which no `catch` in the plug-in intercepts and
+after which no `destroy` runs: the runtime is discarded with its heap.
+
+`MemoryScope::Runtime` is the reason one host process can run many such
+plug-ins at once. The default scope, `Process`, reads the process allocator
+through a probe the embedder installs, which is right for the CLIs (one run
+per process) and wrong for a server, where one plug-in's memory would be
+charged to all of them. With `Runtime`, Sparrow reads the bytes its own heap
+holds, its pages and large objects and the Rust memory its objects own, so
+every runtime keeps a budget of its own and no probe is needed.
+
+The empty worker command is a decision too. Process workers (21.5.1) start
+the same program again as a child process, so a host that allows them hands
+the plug-in a way to create processes. The core refuses a `spawn` of a
+synchronous action when the host gave it no command to run, and a host that
+does give one should also allow `NativeGroup::Process`, which says so.
+
+The guarantees hold only as far as the classification of the natives does.
+Every native of `runtime/*` must be named either in a group or among the
+pure ones. A native that is in neither is refused whenever the host
+restricts the groups, and a test fails the build when a module is left
+unnamed. Until 0.5.3 the table failed open: a module it did not name counted
+as pure, and two natives that read host facts, the preferred languages and
+the system's trusted certificates, passed a host that had denied `Env`
+(issue #361). What a group cannot express, such as "files, but only under
+this directory", is expressed in the program's own terms: the host passes a
+`FileRoot` as an argument (21.4), and the program can name nothing outside it.
+
 ## 21.7 The command line keeps the user's authority
 
 From the command line Okkama does not sandbox anything. A program has the
