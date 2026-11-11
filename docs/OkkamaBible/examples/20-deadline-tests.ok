@@ -29,7 +29,7 @@ object Dispatch {
             clock: clock,
         );
         try {
-            await bounded.result();
+            await bounded.outcome();
         }
         catch e is TimedOut {
             -1;

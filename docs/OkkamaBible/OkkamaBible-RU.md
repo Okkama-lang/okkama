@@ -156,8 +156,9 @@
   - [13.10 Композиция](#1310-композиция)
   - [13.11 Когда значение должно меняться: `Cell`](#1311-когда-значение-должно-меняться-cell)
   - [13.12 Чего стоит преемник](#1312-чего-стоит-преемник)
-  - [13.13 Неизменяемость в других языках](#1313-неизменяемость-в-других-языках)
-  - [13.14 Чего стоит такой замысел](#1314-чего-стоит-такой-замысел)
+  - [13.13 Значение, вычисленное один раз: `memo let`](#1313-значение-вычисленное-один-раз-memo-let)
+  - [13.14 Неизменяемость в других языках](#1314-неизменяемость-в-других-языках)
+  - [13.15 Чего стоит такой замысел](#1315-чего-стоит-такой-замысел)
 - [Глава 14. Роли: номинальные контракты и композиция](#глава-14-роли-номинальные-контракты-и-композиция)
   - [14.1 Объявление роли](#141-объявление-роли)
   - [14.2 Номинальность, а не структура](#142-номинальность-а-не-структура)
@@ -3554,7 +3555,7 @@ module bible/failure v1.0.0;
 // A ledger import: every failure the import can report is a case of one
 // error enum, and the context travels in the payload.
 import "io/stdout" take Stdout;
-import "strings/parse" take ParsedInt, InvalidInteger;
+import "strings/parse" take Number, InvalidInteger;
 
 enum LineError is Error = (blank(line is int), shape(line is int, text is string), amount(line is int, cause is InvalidInteger));
 enum LedgerError is Error = (line(cause is LineError), overdraft(account is string, short is int));
@@ -3573,7 +3574,7 @@ object Lines {
         confirm text.length() > 0 else throw LineError.blank(number);
         let parts = text.split(",");
         confirm parts.size() == 2 else throw LineError.shape(number, text);
-        let amount = try { ParsedInt(parts[1]).value(); } catch e is InvalidInteger { throw LineError.amount(number, e); };
+        let amount = try { Number(parts[1]).int(); } catch e is InvalidInteger { throw LineError.amount(number, e); };
         Entry(account: parts[0], amount: amount);
     }
 }
@@ -3794,7 +3795,7 @@ module bible/policy v1.0.0;
 // What a Lisp restart offers, as a role: the code that meets a bad amount
 // asks a policy the caller passed in, and the caller's policy decides.
 import "io/stdout" take Stdout;
-import "strings/parse" take ParsedInt;
+import "strings/parse" take Number;
 
 enum AmountError is Error = (invalid(text is string));
 
@@ -3817,7 +3818,7 @@ object Amounts {
     Amounts(:policy);
     total(texts is @string) is int {
         texts.reduce(0) -> sum, text {
-            let parsed = try? ParsedInt(text).value() else -1;
+            let parsed = try? Number(text).int() else -1;
             let amount = if parsed >= 0 { parsed; } else {
                 policy.replacement(text) ?? .some(n): n !! .none: throw AmountError.invalid(text);
             };
@@ -4023,7 +4024,7 @@ throw;                            // повторно бросить обраб�
 на это и опирается:
 
 ```okkama
-let amount = try { ParsedInt(parts[1]).value(); }
+let amount = try { Number(parts[1]).int(); }
              catch e is InvalidInteger { throw LineError.amount(number, e); };
 ```
 
@@ -4227,8 +4228,8 @@ confirm amount <= balance else panic "Overdrawn";     // ошибка прогр
 - **`confirm … else throw`** — предусловие публичного действия, проверяемое
   на данных, которые дал вызывающий. Ложное условие бросает указанную
   ошибку, и вызывающий может её поймать. Большинство ошибок стандартной
-  библиотеки поднимается именно так. `ParsedInt` начинается с
-  `confirm self.source.length() > 0 && self.source != "-" else throw InvalidInteger.source(self.source);`.
+  библиотеки поднимается именно так. `Number(text).int()` начинается с
+  `confirm source.length() > 0 && source != "-" … else throw InvalidInteger.source(source);`.
 - **`confirm … else panic`** — инвариант, заслуживающий фразы в отчёте.
 
 Условие должно быть `bool`, и выключить `confirm` нельзя. Контракт, который
@@ -4245,18 +4246,18 @@ module bible/marks v1.0.0;
 
 // try? turns a thrown error into Maybe.none; try! turns it into a panic.
 import "io/stdout" take Stdout;
-import "strings/parse" take ParsedInt;
+import "strings/parse" take Number;
 
 main() is int {
     let out = Stdout();
-    let port = try? ParsedInt("8080").value() else 80;
-    let fallback = try? ParsedInt("http").value() else 80;
+    let port = try? Number("8080").int() else 80;
+    let fallback = try? Number("http").int() else 80;
     out.writeln(port.string() + " " + fallback.string());
-    let parsed = try? ParsedInt("12").value();
+    let parsed = try? Number("12").int();
     out.writeln(parsed ?? .some(n): "some " + n.string() !! .none: "none");
-    let sure = try! ParsedInt("42").value();
+    let sure = try! Number("42").int();
     out.writeln(sure.string());
-    let broken = try! ParsedInt("forty-two").value();
+    let broken = try! Number("forty-two").int();
     out.writeln(broken.string());
     0;
 }
@@ -6293,7 +6294,7 @@ Okkama оставляет порождённое равенство и отка�
 - **Больше объектов.** Без свободных функций небольшое вычисление, которое
   в другом языке было бы функцией, становится объектом с одним действием
   или действием существующего объекта. Стандартная библиотека полна
-  маленьких объектов: `ParsedInt`, `Utf8Decoded`, `HexEncoded`. Каждый —
+  маленьких объектов: `Number`, `Utf8Decoded`, `HexEncoded`. Каждый —
   существительное для одного вычисления. К этому привыкаешь, и после этого
   читается хорошо, а до этого — многословно.
 - **Нет наследования.** Семейство похожих объектов делит код композицией, а
@@ -7041,7 +7042,42 @@ main() is int { 0; }
   внутреннего цикла на большом числе шагов `reduce` по диапазону или `Cell`
   со скаляром обходятся без объектов вовсе.
 
-## 13.13 Неизменяемость в других языках
+## 13.13 Значение, вычисленное один раз: `memo let`
+
+Неизменяемость делает один вид кэша безопасным без всякой дисциплины. Ответ,
+который зависит только от полей объекта, не может измениться, пока объект
+жив, поэтому объект может его хранить. `memo let` говорит это прямо в
+действии, которое вычисляет ответ:
+
+```okkama
+hidden values() is @int {
+    memo let kept = source.items();   // читается один раз на объект
+    kept;
+}
+```
+
+Первое выполнение вычисляет значение и кладёт его в скрытый слот `self`;
+каждое следующее читает слот (#491). Несколько действий делят один результат,
+вызывая одно скрытое действие. Компилятор держит хранимое значение честным:
+
+- значение читает только поля, `self`, константы и более ранние `memo let`, но
+  не параметры, поэтому оно не принадлежит одному вызову;
+- оно не обращается к эффектам: часам, файлам, сети, процессам и случайности,
+  `Cell`, объектам `async`, `await` и `spawn`, в том числе через действия
+  конкретных объектов. Вызову через роль доверяется как договору объекта с
+  его входом;
+- оно не держит ресурс.
+
+Слот не входит в значение. `==`, ключи словарей и `Dumper` его не видят,
+поэтому объект равен себе и до первого ответа, и после. Преемник начинает с
+пустыми слотами, потому что его поля изменились. Значение, которое бросило
+ошибку, оставляет слот пустым для следующего вызова.
+
+Из-за `memo let` конструктор в стандартной библиотеке никогда не работает:
+объект связывает свой вход при создании и вычисляет по нему на первом
+вопросе.
+
+## 13.14 Неизменяемость в других языках
 
 | | Okkama | Java | Kotlin | Rust | Clojure |
 |---|---|---|---|---|---|
@@ -7058,7 +7094,7 @@ Okkama отличают две вещи. Копия — именованный �
 [[Kotlin documentation](#ref-kotlindata); [Klabnik 2023](#ref-klabnik2023)]. Преемник делает достижимым только то, что
 назвал его автор.
 
-## 13.14 Чего стоит такой замысел
+## 13.15 Чего стоит такой замысел
 
 - **Больше выделений памяти.** Каждое изменение состояния — объект.
   Большинство из них маленькие и короткоживущие, но замысел, не учитывающий
@@ -12848,7 +12884,7 @@ async main() is int {
         clock: SystemClock(),
     );
     let eta = try {
-        await bounded.result();
+        await bounded.outcome();
     }
     catch e is TimedOut {
         -1;
@@ -12870,7 +12906,7 @@ eta: -1
   всех. Результаты возвращаются в порядке входов, а не в порядке завершения.
   Если одна падает, остальные отменяются и их очистку дожидаются, прежде чем
   бросить отказ.
-- `Within(origin, limit, clock).result()` даёт курьеру 20 миллисекунд. Когда
+- `Within(origin:, limit:, clock:).outcome()` даёт курьеру 20 миллисекунд. Когда
   побеждает время, запрос курьера отменяется и его очистка выполняется
   (`courier: request withdrawn`), прежде чем бросается `TimedOut`. `Before` —
   то же самое с дедлайном, вычисленным один раз и общим для нескольких
@@ -13354,7 +13390,7 @@ object Dispatch {
             clock: clock,
         );
         try {
-            await bounded.result();
+            await bounded.outcome();
         }
         catch e is TimedOut {
             -1;
@@ -14207,7 +14243,7 @@ object Greeting {
 
     text() is string {
         let name = if environment.membership("USER") { environment.variable("USER"); } else { "stranger"; };
-        "hello, " + name + ", at " + clock.instant().unix_duration().seconds().string() + " s";
+        "hello, " + name + ", at " + clock.instant().unix_duration()::Span::seconds.string() + " s";
     }
 }
 

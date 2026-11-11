@@ -322,7 +322,7 @@ throw;                            // повторно бросить обраб�
 на это и опирается:
 
 ```okkama
-let amount = try { ParsedInt(parts[1]).value(); }
+let amount = try { Number(parts[1]).int(); }
              catch e is InvalidInteger { throw LineError.amount(number, e); };
 ```
 
@@ -452,8 +452,8 @@ confirm amount <= balance else panic "Overdrawn";     // ошибка прогр
 - **`confirm … else throw`** — предусловие публичного действия, проверяемое
   на данных, которые дал вызывающий. Ложное условие бросает указанную
   ошибку, и вызывающий может её поймать. Большинство ошибок стандартной
-  библиотеки поднимается именно так. `ParsedInt` начинается с
-  `confirm self.source.length() > 0 && self.source != "-" else throw InvalidInteger.source(self.source);`.
+  библиотеки поднимается именно так. `Number(text).int()` начинается с
+  `confirm source.length() > 0 && source != "-" … else throw InvalidInteger.source(source);`.
 - **`confirm … else panic`** — инвариант, заслуживающий фразы в отчёте.
 
 Условие должно быть `bool`, и выключить `confirm` нельзя. Контракт, который

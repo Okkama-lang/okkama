@@ -515,7 +515,7 @@ discipline here: the language allows nothing else [@bloch2018].
 - **More objects.** Without free functions, a small computation that would
   be a function elsewhere becomes an object with one action, or an action
   on an existing object. The standard library is full of small objects:
-  `ParsedInt`, `Utf8Decoded`, `HexEncoded`. Each is a noun for one
+  `Number`, `Utf8Decoded`, `HexEncoded`. Each is a noun for one
   computation. It reads well once one is used to it, and it is verbose
   until then.
 - **No inheritance.** A family of similar objects shares code by

@@ -156,8 +156,9 @@
   - [13.10 Composition](#1310-composition)
   - [13.11 When a value must change: `Cell`](#1311-when-a-value-must-change-cell)
   - [13.12 What a successor costs](#1312-what-a-successor-costs)
-  - [13.13 Immutability elsewhere](#1313-immutability-elsewhere)
-  - [13.14 What this design costs](#1314-what-this-design-costs)
+  - [13.13 A value computed once: `memo let`](#1313-a-value-computed-once-memo-let)
+  - [13.14 Immutability elsewhere](#1314-immutability-elsewhere)
+  - [13.15 What this design costs](#1315-what-this-design-costs)
 - [Chapter 14. Roles: nominal contracts and composition](#chapter-14-roles-nominal-contracts-and-composition)
   - [14.1 Declaring a role](#141-declaring-a-role)
   - [14.2 Nominal, not structural](#142-nominal-not-structural)
@@ -3503,7 +3504,7 @@ module bible/failure v1.0.0;
 // A ledger import: every failure the import can report is a case of one
 // error enum, and the context travels in the payload.
 import "io/stdout" take Stdout;
-import "strings/parse" take ParsedInt, InvalidInteger;
+import "strings/parse" take Number, InvalidInteger;
 
 enum LineError is Error = (blank(line is int), shape(line is int, text is string), amount(line is int, cause is InvalidInteger));
 enum LedgerError is Error = (line(cause is LineError), overdraft(account is string, short is int));
@@ -3522,7 +3523,7 @@ object Lines {
         confirm text.length() > 0 else throw LineError.blank(number);
         let parts = text.split(",");
         confirm parts.size() == 2 else throw LineError.shape(number, text);
-        let amount = try { ParsedInt(parts[1]).value(); } catch e is InvalidInteger { throw LineError.amount(number, e); };
+        let amount = try { Number(parts[1]).int(); } catch e is InvalidInteger { throw LineError.amount(number, e); };
         Entry(account: parts[0], amount: amount);
     }
 }
@@ -3736,7 +3737,7 @@ module bible/policy v1.0.0;
 // What a Lisp restart offers, as a role: the code that meets a bad amount
 // asks a policy the caller passed in, and the caller's policy decides.
 import "io/stdout" take Stdout;
-import "strings/parse" take ParsedInt;
+import "strings/parse" take Number;
 
 enum AmountError is Error = (invalid(text is string));
 
@@ -3759,7 +3760,7 @@ object Amounts {
     Amounts(:policy);
     total(texts is @string) is int {
         texts.reduce(0) -> sum, text {
-            let parsed = try? ParsedInt(text).value() else -1;
+            let parsed = try? Number(text).int() else -1;
             let amount = if parsed >= 0 { parsed; } else {
                 policy.replacement(text) ?? .some(n): n !! .none: throw AmountError.invalid(text);
             };
@@ -3960,7 +3961,7 @@ needs no value of its own. The parser in the opening example relies on
 that:
 
 ```okkama
-let amount = try { ParsedInt(parts[1]).value(); }
+let amount = try { Number(parts[1]).int(); }
              catch e is InvalidInteger { throw LineError.amount(number, e); };
 ```
 
@@ -4166,8 +4167,8 @@ confirm amount <= balance else panic "Overdrawn";     // a bug, with a sentence
 - **`confirm … else throw`** is a precondition of a public action, checked
   against input the caller supplied. A false condition throws the given
   error, and the caller may catch it. Most errors in the standard library
-  are raised this way. `ParsedInt` starts with
-  `confirm self.source.length() > 0 && self.source != "-" else throw InvalidInteger.source(self.source);`.
+  are raised this way. `Number(text).int()` starts with
+  `confirm source.length() > 0 && source != "-" … else throw InvalidInteger.source(source);`.
 - **`confirm … else panic`** is an invariant that deserves a sentence in the
   report.
 
@@ -4185,18 +4186,18 @@ module bible/marks v1.0.0;
 
 // try? turns a thrown error into Maybe.none; try! turns it into a panic.
 import "io/stdout" take Stdout;
-import "strings/parse" take ParsedInt;
+import "strings/parse" take Number;
 
 main() is int {
     let out = Stdout();
-    let port = try? ParsedInt("8080").value() else 80;
-    let fallback = try? ParsedInt("http").value() else 80;
+    let port = try? Number("8080").int() else 80;
+    let fallback = try? Number("http").int() else 80;
     out.writeln(port.string() + " " + fallback.string());
-    let parsed = try? ParsedInt("12").value();
+    let parsed = try? Number("12").int();
     out.writeln(parsed ?? .some(n): "some " + n.string() !! .none: "none");
-    let sure = try! ParsedInt("42").value();
+    let sure = try! Number("42").int();
     out.writeln(sure.string());
-    let broken = try! ParsedInt("forty-two").value();
+    let broken = try! Number("forty-two").int();
     out.writeln(broken.string());
     0;
 }
@@ -6202,7 +6203,7 @@ discipline here: the language allows nothing else [[Bloch 2018](#ref-bloch2018)]
 - **More objects.** Without free functions, a small computation that would
   be a function elsewhere becomes an object with one action, or an action
   on an existing object. The standard library is full of small objects:
-  `ParsedInt`, `Utf8Decoded`, `HexEncoded`. Each is a noun for one
+  `Number`, `Utf8Decoded`, `HexEncoded`. Each is a noun for one
   computation. It reads well once one is used to it, and it is verbose
   until then.
 - **No inheritance.** A family of similar objects shares code by
@@ -6949,7 +6950,42 @@ Two consequences for design:
   hot inner loop over a large count, `reduce` over a range or a `Cell` of a
   scalar avoids the objects entirely.
 
-## 13.13 Immutability elsewhere
+## 13.13 A value computed once: `memo let`
+
+Immutability makes one kind of cache safe without any discipline. An answer
+that depends only on an object's fields cannot change while the object
+lives, so the object can keep it. `memo let` says so in the action that
+computes it:
+
+```okkama
+hidden values() is @int {
+    memo let kept = source.items();   // read once per object
+    kept;
+}
+```
+
+The first run computes the value and stores it in a hidden slot of `self`;
+every later run reads the slot (#491). Several actions share one result by
+calling one hidden action. The compiler keeps the stored value honest:
+
+- the value reads only fields, `self`, constants and earlier `memo let`s,
+  never a parameter, so it cannot belong to one call;
+- it reaches no effect: no clock, file, network, process or randomness, no
+  `Cell`, `async` object, `await` or `spawn`, followed through the actions of
+  concrete objects. A call through a role is trusted, as the object's
+  contract with its input;
+- it holds no resource.
+
+The slot is not part of the value. `==`, map keys and `Dumper` leave it out,
+so an object is equal to itself before and after its first answer. A
+successor starts with empty slots, because its fields changed. A value that
+throws leaves the slot empty for the next call.
+
+`memo let` is the reason a constructor in the standard library never does
+work: an object binds its input when it is made, and computes from it on
+the first question.
+
+## 13.14 Immutability elsewhere
 
 | | Okkama | Java | Kotlin | Rust | Clojure |
 |---|---|---|---|---|---|
@@ -6966,7 +7002,7 @@ a discarded result; Rust warns, but only for functions and types marked
 reachable from any caller [[Kotlin documentation](#ref-kotlindata); [Klabnik 2023](#ref-klabnik2023)]. A successor makes
 reachable only what its author named.
 
-## 13.14 What this design costs
+## 13.15 What this design costs
 
 - **More allocation.** Every state change is an object. Most are small
   and short-lived, but a design that ignores the cost of wide objects
@@ -12693,7 +12729,7 @@ async main() is int {
         clock: SystemClock(),
     );
     let eta = try {
-        await bounded.result();
+        await bounded.outcome();
     }
     catch e is TimedOut {
         -1;
@@ -12715,7 +12751,7 @@ eta: -1
   for all of them. The results come back in the order of the inputs, not the
   order of completion. If one fails, the others are cancelled and their
   cleanup awaited before the failure is thrown.
-- `Within(origin, limit, clock).result()` gives the courier 20 milliseconds.
+- `Within(origin:, limit:, clock:).outcome()` gives the courier 20 milliseconds.
   When time wins, the courier's request is cancelled and its cleanup runs
   (`courier: request withdrawn`) before `TimedOut` is thrown. `Before` is the
   same with a deadline computed once and shared by several operations.
@@ -13188,7 +13224,7 @@ object Dispatch {
             clock: clock,
         );
         try {
-            await bounded.result();
+            await bounded.outcome();
         }
         catch e is TimedOut {
             -1;
@@ -14032,7 +14068,7 @@ object Greeting {
 
     text() is string {
         let name = if environment.membership("USER") { environment.variable("USER"); } else { "stranger"; };
-        "hello, " + name + ", at " + clock.instant().unix_duration().seconds().string() + " s";
+        "hello, " + name + ", at " + clock.instant().unix_duration()::Span::seconds.string() + " s";
     }
 }
 

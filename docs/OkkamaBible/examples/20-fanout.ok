@@ -46,7 +46,7 @@ async main() is int {
         clock: SystemClock(),
     );
     let eta = try {
-        await bounded.result();
+        await bounded.outcome();
     }
     catch e is TimedOut {
         -1;

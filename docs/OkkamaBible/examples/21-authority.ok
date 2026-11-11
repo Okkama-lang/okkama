@@ -31,7 +31,7 @@ object Greeting {
 
     text() is string {
         let name = if environment.membership("USER") { environment.variable("USER"); } else { "stranger"; };
-        "hello, " + name + ", at " + clock.instant().unix_duration().seconds().string() + " s";
+        "hello, " + name + ", at " + clock.instant().unix_duration()::Span::seconds.string() + " s";
     }
 }
 

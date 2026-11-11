@@ -354,7 +354,7 @@ owns them all. `async/collect` and `async/timeout` provide them:
   for all of them. The results come back in the order of the inputs, not the
   order of completion. If one fails, the others are cancelled and their
   cleanup awaited before the failure is thrown.
-- `Within(origin, limit, clock).result()` gives the courier 20 milliseconds.
+- `Within(origin:, limit:, clock:).outcome()` gives the courier 20 milliseconds.
   When time wins, the courier's request is cancelled and its cleanup runs
   (`courier: request withdrawn`) before `TimedOut` is thrown. `Before` is the
   same with a deadline computed once and shared by several operations.

@@ -421,7 +421,42 @@ Two consequences for design:
   hot inner loop over a large count, `reduce` over a range or a `Cell` of a
   scalar avoids the objects entirely.
 
-## 13.13 Immutability elsewhere
+## 13.13 A value computed once: `memo let`
+
+Immutability makes one kind of cache safe without any discipline. An answer
+that depends only on an object's fields cannot change while the object
+lives, so the object can keep it. `memo let` says so in the action that
+computes it:
+
+```okkama
+hidden values() is @int {
+    memo let kept = source.items();   // read once per object
+    kept;
+}
+```
+
+The first run computes the value and stores it in a hidden slot of `self`;
+every later run reads the slot (#491). Several actions share one result by
+calling one hidden action. The compiler keeps the stored value honest:
+
+- the value reads only fields, `self`, constants and earlier `memo let`s,
+  never a parameter, so it cannot belong to one call;
+- it reaches no effect: no clock, file, network, process or randomness, no
+  `Cell`, `async` object, `await` or `spawn`, followed through the actions of
+  concrete objects. A call through a role is trusted, as the object's
+  contract with its input;
+- it holds no resource.
+
+The slot is not part of the value. `==`, map keys and `Dumper` leave it out,
+so an object is equal to itself before and after its first answer. A
+successor starts with empty slots, because its fields changed. A value that
+throws leaves the slot empty for the next call.
+
+`memo let` is the reason a constructor in the standard library never does
+work: an object binds its input when it is made, and computes from it on
+the first question.
+
+## 13.14 Immutability elsewhere
 
 | | Okkama | Java | Kotlin | Rust | Clojure |
 |---|---|---|---|---|---|
@@ -438,7 +473,7 @@ a discarded result; Rust warns, but only for functions and types marked
 reachable from any caller [@kotlindata; @klabnik2023]. A successor makes
 reachable only what its author named.
 
-## 13.14 What this design costs
+## 13.15 What this design costs
 
 - **More allocation.** Every state change is an object. Most are small
   and short-lived, but a design that ignores the cost of wide objects

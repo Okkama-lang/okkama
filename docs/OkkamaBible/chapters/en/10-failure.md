@@ -310,7 +310,7 @@ needs no value of its own. The parser in the opening example relies on
 that:
 
 ```okkama
-let amount = try { ParsedInt(parts[1]).value(); }
+let amount = try { Number(parts[1]).int(); }
              catch e is InvalidInteger { throw LineError.amount(number, e); };
 ```
 
@@ -442,8 +442,8 @@ confirm amount <= balance else panic "Overdrawn";     // a bug, with a sentence
 - **`confirm … else throw`** is a precondition of a public action, checked
   against input the caller supplied. A false condition throws the given
   error, and the caller may catch it. Most errors in the standard library
-  are raised this way. `ParsedInt` starts with
-  `confirm self.source.length() > 0 && self.source != "-" else throw InvalidInteger.source(self.source);`.
+  are raised this way. `Number(text).int()` starts with
+  `confirm source.length() > 0 && source != "-" … else throw InvalidInteger.source(source);`.
 - **`confirm … else panic`** is an invariant that deserves a sentence in the
   report.
 
