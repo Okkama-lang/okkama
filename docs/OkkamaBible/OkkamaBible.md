@@ -6516,6 +6516,17 @@ prefix:
 `hello.total()` in the example is `0`: the tail is empty, and
 `reduce(0)` over an empty array returns its seed.
 
+A `...string` tail turns the values it is given into text. A value that is
+not a string reaches it through its own `string()`: `int`, `float`, `rat`,
+`byte`, `bool`, `char`, and any object or role value whose type answers
+`string() is string`. So `out.writeln("count: ", 5, ", ready: ", true)`
+prints `count: 5, ready: true`, and `Formatted("{} version {}", id,
+id.version())` fills its slots. The conversion is chosen at compile time and
+only as a last resort: a signature that fits the call as written wins, so
+`kind(1, "a")` still picks `kind(values is ...any)` over `kind(values is
+...string)`. A value without `string()` is a compile error, and a spread
+`values...` is not converted.
+
 ## 13.5 Successors
 
 Fields never change (Chapter 12). A state change is therefore a new
