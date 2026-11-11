@@ -220,8 +220,12 @@ let following = (0..old.size() + 1).map() -> index {
 };
 ```
 
-The IR engine and the JVM keep flat copies of everything until 0.5.2 (issues
-#335, #336). Figure 8.1 measures the difference.
+Since 0.5.3 the IR engine and the JVM keep chains the same way (issues #335,
+#336). The rules are Tomato's, adapted to their memory: reference counts
+with a cycle collector on the IR engine, the JVM's own collector and
+`java.util.List` on the JVM. A step of an append chain at 100 000 elements
+costs 200–400 ns on the IR engine and 45–70 ns on the JVM, where each was a
+copy of the whole array. Figure 8.1 measures the difference on Sparrow.
 
 {{figure:append-cost|Figure 8.1. Building an array of n integers on Sparrow: one map() stays flat; the map() idiom and items + [x] by copying (0.4.2) are quadratic; items + [x] over the shared buffers of 0.4.3 stays flat (issues #145, #246). Data: data/append-cost.json.}}
 
@@ -279,10 +283,16 @@ right method names is not enough.
 
 ## 8.7 Limits
 
-- **Copies remain on the other engines.** The IR engine and the JVM still
-  copy at each step of a chain (issues #335, #336, planned for 0.5.2). Two
-  things copy on every engine: the `map()` idiom, and `a + b` of two large
-  arrays (issue #248 was declined).
+- **What still copies.** Two things copy on every engine: the `map()` idiom,
+  and `a + b` of two large arrays (issue #248 was declined). Chains of `+` on
+  strings copy on the IR engine and the JVM, which keep `Rc<str>` and
+  `java.lang.String` (issue #357, and the JVM's phase D of #336, on hold).
+  On the IR engine only arrays and maps of plain values (numbers, strings,
+  and collections of them) share their nodes, because its cycle collector
+  counts every edge as one strong reference; arrays and maps that hold
+  objects are copied as before. On the JVM, tries for chains of `replaced`
+  are built but off by default (`OKKAMA_ARRAYS=trie`): the JIT needs some
+  fifteen passes over a flattened trie to read it as fast as an `ArrayList`.
 - **A large map's first version copies.** A map of more than 64 entries
   becomes persistent at the first version made from it: that version costs
   one copy, and the later ones a path. Maps of 64 entries or fewer are
