@@ -63,6 +63,14 @@ not imported and does not exist outside a test:
 - `test.ok(condition)` requires an exact `bool`;
 - `test.is(actual, expected)` and `test.isnt(actual, expected)` use the
   language's structural equality, deep through collections and objects;
+- `test.close(actual, expected, tolerance)` compares two floats: they pass
+  when equal or no further apart than the tolerance, and a NaN is never
+  close;
+- `test.text(actual, expected)` compares two strings and names where they
+  part: the scalar, its line and column in the expected text, and the text
+  around it;
+- `test.bytes(actual, expected)` compares two `@byte` arrays and names the
+  first offset where they differ, or their sizes;
 - `test.fail("explanation")` records a failure;
 - `test.skip("reason")` ends the test and reports it as skipped;
 - `test.throws(Type) { … }` requires the block to throw a `Type`, and
