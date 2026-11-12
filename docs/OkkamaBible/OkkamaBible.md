@@ -1896,16 +1896,19 @@ that making the default numbers exact did not make them slow.
 
 - **No non-finite floats.** Code that relies on IEEE infinities and NaN must
   be restructured (Section 5.4).
-- **Decimal arithmetic lives in the library, and it is thin.** The standard
-  library's `Decimal`, used for JSON numbers, has no arithmetic yet (issue
-  #191), and the library's string-backed `BigInt` duplicates the language's
-  own arbitrary-precision `int` (issues #189, #190).
-- **Elementary functions.** `abs`, `sign`, `pow` and `sqrt` are built in;
-  `exp`, logarithms and trigonometry are not yet available (issue #192).
+- **Decimal arithmetic lives in the library.** The standard library's
+  `Decimal`, used for JSON numbers, adds, subtracts and multiplies exactly
+  and divides and rounds to a scale (issue #191); the library's
+  string-backed `BigInt` still duplicates the language's own
+  arbitrary-precision `int` (issues #189, #190).
+- **Elementary functions.** Besides `abs`, `sign`, `pow` and `sqrt`, a
+  `float` has `floor`, `ceil`, `round` (half away from zero), `trunc`,
+  `exp`, `ln`, `log2`, `log10`, `sin`, `cos`, `tan` and `atan2`, and `int`
+  and `float` have `min`, `max` and `clamp` (issue #192). A result that is
+  not finite, such as `0.0.ln()`, is an error, as for every float.
 
 The first two are small and fixable; the third is a stance; the last two
-are gaps the standard library audit found and the next releases are meant to
-close.
+were gaps the standard library audit found, and 0.5.5 closes most of them.
 
 # Chapter 6. Text
 
