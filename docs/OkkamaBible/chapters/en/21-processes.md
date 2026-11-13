@@ -234,6 +234,38 @@ running child and discards what was left unread. A process handle still
 open when the run ends is closed by the runtime like any other
 (Section 21.3), so no child outlives the program by accident.
 
+The common case needs neither object spelled out. `Run` (`os/run`, issue
+#197) runs a program found on `PATH` with this process's environment and
+directory, and gives back what it printed:
+
+```okkama
+let branch = await Run("git", ["rev-parse", "--abbrev-ref", "HEAD"]).text();
+let finished = await Run("make", ["test"]).completion();   // any exit code
+```
+
+`text()` and `bytes()` want exit code 0. Any other end is
+`CommandFailed.exited(code, errors)`, carrying what the program wrote to
+standard error, so a tool that failed cannot pass for one that printed
+nothing. Each stream is kept up to 1 MiB; more is `CaptureLimitExceeded`,
+not a silent cut. `Run` inherits the way `InheritedCommand` does, and its
+documentation says so; code that must not hand the process's environment to
+a child builds a `Command` and captures it with `CommandCapture`, which also
+sets the input, the directory and the limit.
+
+A child that has to be talked to rather than waited for is driven through
+`Process.streams()` (issue #196). Its input does `AsyncWriting` and
+`Closing`; its outputs do `AsyncReading`, with `lines()` for `for await`.
+A slow child then holds up only the task that talks to it, on every engine:
+
+```okkama
+let child = Process(command: InheritedCommand(program: Path("sort")));
+await child.streams().input().write("pear\napple\n");
+child.streams().input().close();
+for await child.streams().output().lines() -> line {
+    Stdout().writeln(line);    // apple, then pear
+}
+```
+
 The design leaves out what the shell gives for free and what most process
 APIs inherit by default: globbing, word splitting, redirection syntax, an
 implicit environment. Each of them is a way for data to become code or for
@@ -304,6 +336,38 @@ an operating-system process, costs what one costs to start, and is meant for
 CPU-bound or blocking work, not for modelling every concurrent activity.
 Concurrency inside a run is Chapter 20's tasks; workers are for using
 another core.
+
+### 21.5.2 The program's own streams
+
+The streams a program is born with are handles too, and two of their
+defaults changed in 0.5.5.
+
+Standard output is buffered (issue #132). A terminal receives each line as
+it ends; a pipe or a file receives blocks of 64 KiB; `Stdout().flush()`
+writes out what is pending. The order of what a reader sees survives,
+because the runtimes flush before standard error is written, before
+standard input is read from a terminal, before a child process starts,
+before the terminal is written to, and when the program ends. The reason is
+plain arithmetic: writing 200 000 lines into a pipe took Sparrow 155 ms and
+the IR engine 1 084 ms when every line was its own system call, and 56 ms
+and 590 ms after. The JVM still flushes every write.
+
+Standard input is read by lines (issue #221):
+
+```okkama
+for Stdin() -> line {
+    if line.starts_with("#") { next; }
+    Stdout().writeln(line.upper());
+}
+```
+
+A line loses its LF and the one CR before it, so a file written on Windows
+reads the same as one written on Unix. Input that is not valid UTF-8 is a
+failure by default; `Stdin(decoding: InputDecoding.lenient)` puts U+FFFD in
+place of each bad sequence instead, as browsers do, and
+`Stdin().chunks(size: 65536)` walks bytes. Every `Stdin()` reads through the
+one buffer the runtime keeps, so a program can read a header line by line
+and the rest as bytes without losing what sat between them.
 
 ## 21.6 What an embedder can deny
 
