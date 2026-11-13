@@ -250,6 +250,44 @@ A future that another task also awaits is not cancelled with one of its
 waiters: the cancelled task only stops waiting for it, and the others still
 get its outcome.
 
+### When the await has already finished
+
+There is a moment between two states that the rule above does not cover. A
+task's awaited future settles; the task is woken and put in the queue of
+ready tasks; before its turn comes, someone cancels it. Is the task still
+"waiting at a suspension point"?
+
+Until 0.5.7 the two Rust engines answered differently. The IR engine said
+yes and turned the finished `await` into `Cancelled`, throwing away the
+value that had arrived. Sparrow said no: the `await` was over, the task ran
+on with its result, and the cancellation reached it at its next `await`.
+The difference was invisible in most programs and very visible in one:
+when an `AllFutures` sibling failed and the collection cancelled the rest,
+siblings that had already been woken either vanished as cancelled (IR) or
+failed on their own and showed up as secondary failures (Sparrow).
+
+The owner chose Sparrow's rule (issue #546), and since 0.5.7 every engine
+keeps it:
+
+- An `await` is finished once its future has settled. A cancellation that
+  arrives after that does not undo it; the task runs on with the value or
+  the failure it was given.
+- The cancellation stays requested, and the task's next `await` raises
+  `Cancelled` before it starts anything.
+
+The rule is the one that keeps information: a value that arrived is not
+discarded, a failure that happened is not hidden behind `Cancelled`, and a
+task that is cancelled still stops at its next suspension. A sibling of an
+`AllFutures` that failed in the same turn now appears among the secondary
+failures on every engine, in input order.
+
+A related rule settles what a stream of completions does after it is
+cancelled (issue #548). Cancelling a pending `completion()` request
+cancels the stream's unfinished inputs, waits for their cleanup and fails
+with the cancellation; every later request fails the same way, with
+`Cancelled` rather than `NoFutures`, because the stream was cancelled, not
+exhausted.
+
 The rule makes a common case need nothing at all. A task that awaits one
 child needs no group, no supervisor and no "settle" object in a `defer`:
 cancelling the task reaches the child and waits for it. Groups exist for real
