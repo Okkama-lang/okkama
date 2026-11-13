@@ -263,6 +263,7 @@
   - [22.3 Objects are mechanisms, not records](#223-objects-are-mechanisms-not-records)
   - [22.4 Flat, short, one way](#224-flat-short-one-way)
   - [22.5 Readable and efficient](#225-readable-and-efficient)
+  - [22.6 Explicit authority, no global state](#226-explicit-authority-no-global-state)
 
 # Part I. The Razor
 
@@ -14775,6 +14776,38 @@ collections of `async/collect` several times faster on large inputs: the
 library's shape stayed put while its cost moved. A style that keeps the
 surface small is what lets that happen without breaking the programs above
 it.
+
+## 22.6 Explicit authority, no global state
+
+Chapter 21 showed the mechanism: a directory, an environment and a clock
+are objects, and code can touch only the ones it was given. For the
+library this is a rule with four parts.
+
+- What a module may touch arrives as a value: a `DirectoryLocating` for
+  where it writes, an `Environment` snapshot for what it reads from the
+  process, a `Timing` for what time it is.
+- No process-wide mutable state. A module keeps nothing between calls that
+  another module could change: no registry of handlers, no default locale
+  set from somewhere else, no cache another part of the program can fill.
+- No `chdir`-like operations, nothing that changes what a relative name
+  means for everyone at once.
+- Tests can pass fakes and manual clocks, because nothing in a module
+  reaches past its parameters for the real ones.
+
+The common case stays short through a default, not through an ambient
+source. Sixteen signatures in std, across the HTTP client and server,
+JWT, logging, mail and web sessions, take a clock as
+`clock is Timing = SystemClock()`: the JWT token checks its expiry with
+it, the mail message stamps its date, the HTTP client measures its
+timeouts. A program writes `HttpClient()` and gets the system's clock; a
+test writes `HttpClient(clock: ManualClock(…))` and gets one it controls.
+The default is visible in the signature, and `okkama man` prints it, so
+the authority is still a value: it is just one the caller did not have to
+spell.
+
+The rule is the library's, not the language's (Section 21.4): a program
+can still construct a `SystemClock()` anywhere it likes. What the rule
+buys is that the library itself never does so behind its caller's back.
 
 # References
 
