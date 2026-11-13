@@ -2044,7 +2044,47 @@ more: an immutable string can be shared between objects, threads and the
 garbage collector without copying, and a substring can share its parent's
 storage. Java made strings immutable in 1995 for the same reasons, and
 `StringBuilder` for the cases where text is assembled piece by piece
-[[Gosling 2023](#ref-gosling2023)]; Okkama has the first and still lacks the second (issue #139).
+[[Gosling 2023](#ref-gosling2023)]. Okkama has both. The second is `TextBuffer` from
+`strings/buffer` (issue #139, since 0.5.5): it keeps the text in the runtime,
+each `write` appends without copying what is there, and `string()` hands out
+the finished, immutable result.
+
+```okkama
+module bible/text_buffer v1.0.0;
+
+import "io/stdout" take Stdout;
+import "strings/buffer" take TextBuffer;
+
+// A page assembled piece by piece: each write appends to text the runtime
+// keeps, and string() hands out the finished, immutable result.
+main() is int {
+    let page = TextBuffer();
+    page.writeln("<ul>");
+    for ["tea", "milk", "bread"] -> item {
+        page.writeln("  <li>", item, "</li>");
+    }
+    page.write("</ul>");
+    let html = page.string();
+    Stdout().writeln(html);
+    Stdout().writeln(html.length(), " characters");
+    0;
+}
+```
+
+Output:
+
+```text
+<ul>
+  <li>tea</li>
+  <li>milk</li>
+  <li>bread</li>
+</ul>
+58 characters
+```
+
+A `TextBuffer` is a `WritingText`, so it goes wherever text is written: a
+report that prints to standard output in production prints into a buffer in
+a test.
 
 ## 6.3 Writing strings
 
@@ -2230,18 +2270,19 @@ right operation.
 
 ## 6.9 Limits
 
-- **`+` shares only on Sparrow.** Since 0.4.3, a chain `text + piece` on
-  Sparrow writes into a text buffer the versions share (issue #255): a long
-  text assembled from many pieces costs a constant per piece, not a copy of
-  everything so far. The IR engine and the JVM still copy until 0.5.2
-  (issues #335, #336). The library has no native string builder (issue
-  #139).
+- **`+` shares on every engine, but says less than a buffer.** Since 0.4.3
+  on Sparrow (issue #255) and 0.5.3 on the IR engine and the JVM (issues
+  #335, #336), a chain `text + piece` writes into a text buffer the versions
+  share: a long text assembled from many pieces costs a constant per piece,
+  not a copy of everything so far. When a loop builds one result, a
+  `TextBuffer` (issue #139) says so in the code instead of relying on that
+  sharing.
 - **Case conversion has no locale.** `lower()` and `upper()` follow the
   Unicode default; Turkish, Azeri and Lithuanian rules are missing
   (issue #261).
 - **The standard library still has its workarounds.** About forty modules
   search, compare prefixes and walk characters by slicing; moving them to
-  the builtins is planned for 0.5 (issue #260).
+  the builtins waits for the rewrite of the library (issue #260, postponed).
 
 # Chapter 7. Absence Without Null
 
