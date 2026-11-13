@@ -92,6 +92,30 @@ language.
 
 ## Notes for unwritten chapters
 
+- Chapter 25 (Sparrow GC), from 0.5.5–0.5.6:
+  - The collection trigger counts reused cells: a sweep keeps one free chain
+    per page, and a list that runs dry takes the next chain and counts its
+    bytes (#522). Before, machine code popped cells uncounted and the heap
+    grew every cycle once #503 stopped charging builders: 10-app 13 → 25 →
+    12.5 MB.
+  - Surplus empty pages are freed after a sweep (#435). A program after a
+    burst ran 1.95 → 0.70 s; resident memory did not drop, because mimalloc
+    keeps the pages.
+  - Objects are marked when queued (#438): marking −23–34% on 11-ownership.
+  - The floor of 1 MiB stays: 8 MiB made sha256 52% slower (#544). A
+    sweep-time recycling of Failure payloads did not help.
+  - A deadline heap for timers measured parity and was not adopted (#441).
+  - One waiter is woken without a vector (#440); the reactor's woken buffer
+    is reused (#442).
+- Chapter 27 (performance), from 0.5.5:
+  - The release report is the micro-benchmark A/B (protocol v2, Docker,
+    oracles, VALID/INCONCLUSIVE, no baseline subtraction); the
+    cross-language ladder is on demand.
+  - The micro suite once rotted, when all 72 programs used removed std
+    names.
+  - Cases where a measurement changed a decision: #544 (a trade of time
+    for memory, accepted), #441 (rejected at parity), #435 (CPU, not RSS).
+
 - Chapter 18 (closures): in a program with a `destroy` anywhere, every
   function value is treated as possibly owning a resource, so closures are
   tracked by regions (#292); 09-closures with `os/environment` imported runs
