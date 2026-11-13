@@ -456,7 +456,12 @@ calling one hidden action. The compiler keeps the stored value honest:
   `Cell`, `async` object, `await` or `spawn`, followed through the actions of
   concrete objects. A call through a role is trusted, as the object's
   contract with its input;
-- it holds no resource.
+- it holds no resource. A function value or a role value counts as one only
+  if it can hold one in this program: a function type when some closure of
+  that type captures a resource, a role when some object that does it has a
+  `destroy`. The compiler decides this over the whole program, after every
+  specialization exists, so a generic library may keep a closure in a
+  `once let` for every caller that passes a plain one (issue #520).
 
 The slot is not part of the value. `==`, map keys and `Dumper` leave it out,
 so an object is equal to itself before and after its first answer. A

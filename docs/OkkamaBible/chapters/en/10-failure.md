@@ -447,6 +447,13 @@ confirm amount <= balance else panic "Overdrawn";     // a bug, with a sentence
 - **`confirm … else panic`** is an invariant that deserves a sentence in the
   report.
 
+The `else` at the top level of the condition belongs to `confirm`, even when
+the condition ends in an index. `confirm size >= pair[1] else panic "short";`
+runs the panic; before 0.5.6 the index took that `else` as its own fallback,
+the sentence was lost and a false condition stopped with the bare `confirm
+failed` (issue #521). An index or `Maybe` fallback inside a condition is
+written in parentheses: `confirm size >= (pair[5] else 0) else throw …;`.
+
 The condition must be a `bool`, and there is no way to switch `confirm` off.
 A contract that disappears in production is a contract nobody tests, and a
 `confirm` costs one evaluation of its condition.

@@ -4216,6 +4216,13 @@ confirm amount <= balance else panic "Overdrawn";     // a bug, with a sentence
 - **`confirm … else panic`** is an invariant that deserves a sentence in the
   report.
 
+The `else` at the top level of the condition belongs to `confirm`, even when
+the condition ends in an index. `confirm size >= pair[1] else panic "short";`
+runs the panic; before 0.5.6 the index took that `else` as its own fallback,
+the sentence was lost and a false condition stopped with the bare `confirm
+failed` (issue #521). An index or `Maybe` fallback inside a condition is
+written in parentheses: `confirm size >= (pair[5] else 0) else throw …;`.
+
 The condition must be a `bool`, and there is no way to switch `confirm` off.
 A contract that disappears in production is a contract nobody tests, and a
 `confirm` costs one evaluation of its condition.
@@ -7029,7 +7036,12 @@ calling one hidden action. The compiler keeps the stored value honest:
   `Cell`, `async` object, `await` or `spawn`, followed through the actions of
   concrete objects. A call through a role is trusted, as the object's
   contract with its input;
-- it holds no resource.
+- it holds no resource. A function value or a role value counts as one only
+  if it can hold one in this program: a function type when some closure of
+  that type captures a resource, a role when some object that does it has a
+  `destroy`. The compiler decides this over the whole program, after every
+  specialization exists, so a generic library may keep a closure in a
+  `once let` for every caller that passes a plain one (issue #520).
 
 The slot is not part of the value. `==`, map keys and `Dumper` leave it out,
 so an object is equal to itself before and after its first answer. A
