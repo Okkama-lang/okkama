@@ -356,3 +356,43 @@ them invents a second word for the same act.
 The payoff is the one Section 22.4 promised. A reader who has seen
 `doc.maybe("note").text() else "none"` reads a configuration file, a query
 string and an environment the same way, without opening a manual.
+
+## 22.11 Whole or in pieces
+
+A source that can be read whole and in pieces says so with the same words
+everywhere. A whole text file is `content()`, its lines are `lines()`, and
+`for file.text() -> batch` walks it in batches; a reply is
+`await page.text()`, `bytes()` or `json()` whole and `reading()` in pieces.
+The words do not change from module to module, and neither do the rules
+behind them.
+
+**One loop for every stream.** A consumable source that is not an array
+does the role `Batching<T>`: it hands out its items a batch at a time, an
+array per batch, and an empty array ends it. `for`, `map`, `filter` and
+`reduce` walk such a source as they walk an array, asking for the next
+batch when one runs out (#465). A file of text, a socket and a stream of
+directory entries are all walked with the same `for`, and none of them has
+to allocate an object per item, as a cursor would.
+
+**Read to the end, carry across.** Two objects in `io/transfer` replace the
+read loop modules used to repeat (#130): `ReadUntilEnd(origin: reader,
+limit: …)` reads a source to its end and refuses one longer than the
+limit, and `Copy(from: reader, to: writer)` carries every byte across, 64
+KiB at a time, and answers how many it carried. Both accept a synchronous
+or an asynchronous source; neither flushes nor closes anything it was not
+asked to.
+
+**Structured data in pieces.** `json` reads a stream item by item with
+bounded memory (#136): `for await JsonItems(origin: upload) -> item` walks
+the elements of one top-level array or a sequence of values (NDJSON), each
+item parsed whole and read as in Section 22.10, and `JsonLines` writes
+values one per line. A broken stream is a `JsonError` at the byte offset
+where it broke, so a log of a million records fails at the one that is
+wrong, not at an offset nobody can find.
+
+**Writing is one operator.** Anything that has bytes — a string, an
+`@byte`, an encoded value — is a `ByteSource`, and `writer <- part` writes
+it; a chain such as `writer <- "header: " <- payload <- "\n"` reads left
+to right and stops at the first failed write. A write takes the whole
+source or throws `IncompleteWrite.after(written)` with the number of bytes
+taken; it never retries, flushes or closes behind the caller's back.
