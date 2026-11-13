@@ -262,6 +262,7 @@
   - [22.2 The reference: `json`](#222-the-reference-json)
   - [22.3 Objects are mechanisms, not records](#223-objects-are-mechanisms-not-records)
   - [22.4 Flat, short, one way](#224-flat-short-one-way)
+  - [22.5 Readable and efficient](#225-readable-and-efficient)
 
 # Part I. The Razor
 
@@ -14735,6 +14736,45 @@ Each of these rules alone would be a matter of taste. Together they make
 the library predictable: a reader who has met `json` can guess the shape of
 `http` or `time` before opening them, which is the reason to have a style at
 all.
+
+## 22.5 Readable and efficient
+
+Two shorter principles keep the library honest about what it costs to read
+and what it costs to run.
+
+**Readable.** Every module is formatted by `okkama fmt`, so a reader never
+meets a module written as one long line. Each public object carries a
+comment with a short example of its common use, and the examples are
+checked to compile. Names say what an object does and what an action does
+to the world or returns; there is no `Manager`, `Helper` or `Util`, the
+words a library reaches for when it has not decided what an object is for.
+The comments are also the source of `okkama man`, described later in this
+chapter, so a
+module that is documented in its source is documented everywhere.
+
+**Efficient.** The library is the code most programs spend their time in,
+so its costs are everyone's costs. Four rules govern them.
+
+- *No quadratic growth.* Collections are built with builders, `reduce`
+  accumulators or the persistent arrays and maps, never by copying in a
+  loop. The runtime makes `acc + [x]` inside `reduce` grow in place
+  (section 8.5), but a module does not rely on a reader knowing that.
+- *Measured.* A hot path has a micro-benchmark, and a change is judged on
+  the release build, not on a debug or gate profile whose code layout
+  exaggerates small differences.
+- *Natives only where measured,* or for what Okkama cannot do itself:
+  cryptography, TLS, X.509 and PEM stay native; a parser written in Okkama
+  stays in Okkama unless a measurement says otherwise.
+- *No fixed cost per call.* A table, a pattern or a template is parsed
+  once, when its object is built, not every time an action uses it.
+
+The two principles meet in the runtime underneath. The 0.5.7 release, for
+instance, changed no public API of `std`, yet it
+made `join`, ranges in array literals, map literals and the future
+collections of `async/collect` several times faster on large inputs: the
+library's shape stayed put while its cost moved. A style that keeps the
+surface small is what lets that happen without breaking the programs above
+it.
 
 # References
 
