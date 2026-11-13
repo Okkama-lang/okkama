@@ -1,7 +1,7 @@
 module digest/state v1.0.0;
 
-// An immutable digest of an ordered byte history. bytes() returns raw bytes;
-// use HexEncoded for hexadecimal display and explicit UTF encoding for text.
+// An immutable digest of an ordered byte history. bytes() returns raw bytes
+// and hex() the same as lowercase hex; the algorithms also take text as UTF-8.
 // state(bytes) appends into a fresh successor without changing this digest,
 // its earlier bytes() results or the input. Empty chunks preserve the result.
 // Observation does not prevent later append. Empty concrete constructors bind
@@ -13,19 +13,33 @@ module digest/state v1.0.0;
 // No I/O, resource ownership or close action. Algorithm-specific output widths,
 // errors and security limitations belong to concrete modules. The test-only
 // fake echoes bytes; it is not a cryptographic function or an algorithm oracle.
+
+import "encoding/hex" take HexEncoded;
+
+// A digest fed bytes piece by piece; each state is a value, so a prefix can be
+// shared.
 role Digesting {
+    // The digest continued with origin.
     state(origin is @byte) is ^Digesting;
+    // The digest of everything fed.
     bytes() is @byte;
+    // The digest as lowercase hex.
+    hex() is string;
 
     fake {
         has origin is @byte = [];
-        bytes() is @byte { origin; }
+
+        bytes() is @byte {
+            origin;
+        }
+
+        hex() is string {
+            HexEncoded(origin).string();
+        }
+
         state(origin is @byte) is ^Digesting {
             let before = self.origin;
-            let appended is @byte = (0..before.size() + origin.size()).map() -> i {
-                if i < before.size() { before[i]; }
-                else { origin[i - before.size()]; }
-            };
+            let appended is @byte = before + origin;
             ^origin = appended;
         }
     }

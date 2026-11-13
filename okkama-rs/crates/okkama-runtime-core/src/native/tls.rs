@@ -1,4 +1,5 @@
-//! `runtime/tls_transport` — перенос `TlsNatives` JVM: TLS-клиент rustls
+//! `runtime/tls_transport` — перенос `TlsNatives` JVM: TLS-клиент и (#209)
+//! TLS-сервер rustls
 //! поверх TCP-потока, отобранного у `runtime/network`. Как у JDK-провайдера,
 //! движок не проверяет цепочку пира сам (подписи рукопожатия — проверяет):
 //! `authorize` — явная проверка `verify_chain` до прикладного ввода-вывода.
@@ -11,8 +12,8 @@ use crate::failure::{Failure, Kind};
 use crate::sched;
 use crate::{Value, abi::Native};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{ClientConnection, DigitallySignedStruct, SignatureScheme};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
+use rustls::{ClientConnection, Connection, DigitallySignedStruct, ServerConnection, SignatureScheme};
 use std::cell::RefCell;
 use std::io::Read;
 use std::rc::Rc;
@@ -108,7 +109,7 @@ struct Truncated;
 
 /// Движок TLS, общий с рабочими потоками.
 struct Engine {
-    connection: Mutex<ClientConnection>,
+    connection: Mutex<Connection>,
     socket: Arc<Shared>,
     /// Шифротекст, полученный, но ещё не поданный движку.
     incoming: Mutex<Vec<u8>>,
@@ -124,7 +125,7 @@ struct Engine {
 
 impl Engine {
     /// Отправить накопленный шифротекст; движок освобождается до отправки.
-    fn flush(&self, mut connection: std::sync::MutexGuard<'_, ClientConnection>) -> std::io::Result<()> {
+    fn flush(&self, mut connection: std::sync::MutexGuard<'_, Connection>) -> std::io::Result<()> {
         let mut out = Vec::new();
         while connection.wants_write() {
             connection.write_tls(&mut out)?;
@@ -201,21 +202,19 @@ impl Engine {
         Some(plain.drain(..count).collect())
     }
 
-    fn return_plain(&self, bytes: Vec<u8>) {
-        let mut plain = self.plain.lock().expect("TLS plain lock");
-        let rest = std::mem::take(&mut *plain);
-        plain.extend(bytes);
-        plain.extend(rest);
-    }
-
-    /// Следующий открытый текст; пусто — `close_notify` пира.
-    fn receive(&self, limit: usize) -> Result<Vec<u8>, Result<std::io::Error, Truncated>> {
+    /// Принять следующий открытый текст в буфер `plain`; `false` —
+    /// `close_notify` пира. Рабочий поток только добавляет в буфер, целиком и
+    /// под замком читателя, а берёт из него лишь главный поток: чтение,
+    /// брошенное отменой, ничего не теряет, и никто не застанет буфер
+    /// опустевшим, пока брошенный поток держит его данные у себя (#486).
+    fn receive_into_plain(&self, limit: usize) -> Result<bool, Result<std::io::Error, Truncated>> {
         let _gate = self.reader.lock().expect("TLS reader lock");
-        if let Some(ready) = self.take_plain(limit) {
-            return Ok(ready);
+        // Принятое раньше ещё ждёт чтения: новое принимать незачем.
+        if !self.plain.lock().expect("TLS plain lock").is_empty() {
+            return Ok(true);
         }
         if self.eof.load(Ordering::SeqCst) {
-            return Ok(Vec::new());
+            return Ok(false);
         }
         loop {
             {
@@ -224,18 +223,15 @@ impl Engine {
                 match connection.reader().read(&mut buffer) {
                     Ok(0) => {
                         self.eof.store(true, Ordering::SeqCst);
-                        return Ok(Vec::new());
+                        return Ok(false);
                     }
                     Ok(count) => {
                         buffer.truncate(count);
-                        // Остаток записи — в буфер открытого текста, как у JVM.
-                        let mut rest = Vec::new();
-                        let _ = connection.reader().read_to_end(&mut rest);
+                        // Остаток записи — туда же, вслед за прочитанным, как у JVM.
+                        let _ = connection.reader().read_to_end(&mut buffer);
                         drop(connection);
-                        if !rest.is_empty() {
-                            self.return_plain(rest);
-                        }
-                        return Ok(buffer);
+                        self.plain.lock().expect("TLS plain lock").extend(buffer);
+                        return Ok(true);
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
                     Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Err(Err(Truncated)),
@@ -292,6 +288,8 @@ impl Engine {
 
 struct Tls {
     engine: Arc<Engine>,
+    /// Сервер не просит сертификат клиента: после рукопожатия пир проверен.
+    server: bool,
     negotiated: bool,
     authorized: bool,
     closing: bool,
@@ -338,7 +336,7 @@ fn client(args: &[Value]) -> Result<Value, Error> {
         && server.encode_utf16().count() <= 253
         && server.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
     let mut names: Vec<String> = Vec::new();
-    for protocol in protocols {
+    for protocol in protocols.iter() {
         let name = protocol.as_string()?.to_string();
         let units = name.encode_utf16().count();
         if name.is_empty() || units > 255 || name.chars().any(|c| u32::from(c) >= 256) || names.contains(&name) {
@@ -381,7 +379,7 @@ fn client(args: &[Value]) -> Result<Value, Error> {
         return Err(abort_with("unsupported", "required TLS engine policy unavailable"));
     };
     let engine = Arc::new(Engine {
-        connection: Mutex::new(connection),
+        connection: Mutex::new(Connection::Client(connection)),
         socket,
         incoming: Mutex::new(early),
         plain: Mutex::new(Vec::new()),
@@ -392,6 +390,83 @@ fn client(args: &[Value]) -> Result<Value, Error> {
     });
     Ok(new_handle(Rc::new(RefCell::new(Tls {
         engine,
+        server: false,
+        negotiated: false,
+        authorized: false,
+        closing: false,
+        closed: false,
+        handshake: None,
+        reading: None,
+        writing: None,
+        shutting: None,
+        peer: Vec::new(),
+    }))))
+}
+
+/// TLS-сервер поверх принятого TCP-потока (#209): цепочка сертификатов (DER,
+/// свой первым), ключ PKCS #8 (DER), версии и ALPN — как у клиента. Сертификат
+/// клиента не запрашивается.
+fn server(args: &[Value]) -> Result<Value, Error> {
+    let operation = symbol("server", 5);
+    let (socket, early) = take_tcp(&args[0], &operation).map_err(as_error)?;
+    let choice = int(&args[1])?.to_i64().unwrap_or(0);
+    let abort_with = |code: &str, message: &str| {
+        socket.close();
+        as_error(fail(code, &operation, message))
+    };
+    if !(1..=3).contains(&choice) {
+        return Err(abort_with("invalid_input", "invalid TLS version selection"));
+    }
+    let protocols = items(&args[2])?;
+    let mut valid = protocols.len() <= 16;
+    let mut names: Vec<String> = Vec::new();
+    for protocol in protocols.iter() {
+        let name = protocol.as_string()?.to_string();
+        let units = name.encode_utf16().count();
+        if name.is_empty() || units > 255 || name.chars().any(|c| u32::from(c) >= 256) || names.contains(&name) {
+            valid = false;
+        }
+        names.push(name);
+    }
+    let sources = items(&args[3])?;
+    let mut chain: Vec<CertificateDer<'static>> = Vec::new();
+    for source in sources.iter() {
+        chain.push(CertificateDer::from(bytes(source)?));
+    }
+    let key = bytes(&args[4])?;
+    if !valid || chain.is_empty() || chain.len() > 16 || key.is_empty() {
+        return Err(abort_with("invalid_input", "invalid TLS server configuration"));
+    }
+    let provider = Arc::new(provider());
+    let versions: &[&'static rustls::SupportedProtocolVersion] = match choice {
+        1 => &[&rustls::version::TLS12],
+        2 => &[&rustls::version::TLS13],
+        _ => &[&rustls::version::TLS13, &rustls::version::TLS12],
+    };
+    let Ok(builder) = rustls::ServerConfig::builder_with_provider(provider).with_protocol_versions(versions) else {
+        return Err(abort_with("unsupported", "required TLS engine policy unavailable"));
+    };
+    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key));
+    let Ok(mut config) = builder.with_no_client_auth().with_single_cert(chain, key) else {
+        return Err(abort_with("invalid_input", "invalid TLS server identity"));
+    };
+    config.alpn_protocols = names.iter().map(|name| name.chars().map(|c| c as u8).collect()).collect();
+    let Ok(connection) = ServerConnection::new(Arc::new(config)) else {
+        return Err(abort_with("unsupported", "required TLS engine policy unavailable"));
+    };
+    let engine = Arc::new(Engine {
+        connection: Mutex::new(Connection::Server(connection)),
+        socket,
+        incoming: Mutex::new(early),
+        plain: Mutex::new(Vec::new()),
+        sending: Mutex::new(()),
+        reader: Mutex::new(()),
+        writer: Mutex::new(()),
+        eof: AtomicBool::new(false),
+    });
+    Ok(new_handle(Rc::new(RefCell::new(Tls {
+        engine,
+        server: true,
         negotiated: false,
         authorized: false,
         closing: false,
@@ -436,14 +511,19 @@ fn handshake(value: &Value) -> Value {
         },
         move |outcome: std::io::Result<()>| match outcome {
             Ok(()) => {
-                delivered.borrow_mut().negotiated = true;
+                let mut done = delivered.borrow_mut();
+                done.negotiated = true;
+                if done.server {
+                    done.authorized = true;
+                }
+                drop(done);
                 sched::settle(&target, Ok(Value::Bool(true)));
             }
             Err(_) => {
                 let failure = if delivered.borrow().closed {
                     fail("already_closed", &operation, "TLS handshake readiness closed")
                 } else {
-                    fail("invalid_data", &operation, "TLS client handshake failed")
+                    fail("invalid_data", &operation, "TLS handshake failed")
                 };
                 sched::settle(&target, Err(failure));
             }
@@ -473,7 +553,7 @@ fn authorize(native: Native, args: &[Value]) -> Result<Value, Error> {
             return Err(as_error(fail("resource_exhausted", &operation, "TLS root count limit")));
         }
         let mut total = 0usize;
-        for root in roots {
+        for root in roots.iter() {
             let size = items(root)?.len();
             total += size;
             if size > 1_048_576 || total > 16_777_216 {
@@ -562,17 +642,16 @@ fn read(value: &Value, limit: &crate::IntValue) -> Result<Value, Error> {
     let delivered = state.clone();
     let worker = engine.clone();
     let op = sched::offload(
-        move || worker.receive(limit),
+        move || worker.receive_into_plain(limit),
         move |outcome| {
+            // Брошенное чтение: принятое уже в буфере, его получит следующее.
             if target.state() != sched::State::Running {
-                if let Ok(bytes) = outcome {
-                    engine.return_plain(bytes);
-                }
                 return;
             }
             let closed = delivered.borrow().closed;
             let result = match outcome {
-                Ok(bytes) => Ok(byte_array(bytes)),
+                Ok(true) => Ok(byte_array(engine.take_plain(limit).unwrap_or_default())),
+                Ok(false) => Ok(byte_array(Vec::new())),
                 Err(Err(Truncated)) => Err(fail("invalid_data", &operation, "TLS peer truncated input")),
                 Err(Ok(_)) => Err(io_failure(closed, &operation, "TLS I/O readiness closed")),
             };
@@ -724,6 +803,7 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
     let name = native.name();
     match name {
         "client" => client(args),
+        "server" => server(args),
         "close" => {
             let state = handle::<TlsRef>(&args[0])?.clone();
             abort(&mut state.borrow_mut());

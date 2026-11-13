@@ -572,17 +572,6 @@ impl<'s> Printer<'s> {
             }
             ObjectMember::Test(test) => self.test(test),
             ObjectMember::Action(action) => self.action(action),
-            ObjectMember::Private(section) => {
-                self.word("private:");
-                for action in &section.actions {
-                    self.newline();
-                    self.blank_line();
-                    let span = action.span;
-                    self.leading_comments(span.start, true);
-                    self.action(action);
-                    self.trailing_comment(action.span.end);
-                }
-            }
         }
     }
 
@@ -628,6 +617,9 @@ impl<'s> Printer<'s> {
     }
 
     fn action(&mut self, action: &ActionDecl) {
+        if action.visibility == Visibility::Hidden {
+            self.word("hidden ");
+        }
         if action.is_async {
             self.word("async ");
         }
@@ -893,7 +885,10 @@ impl<'s> Printer<'s> {
 
     fn stmt(&mut self, stmt: &Stmt) {
         match &stmt.kind {
-            StmtKind::Let { name, ty, value } => {
+            StmtKind::Let { name, ty, value, once } => {
+                if *once {
+                    self.word("once ");
+                }
                 self.word("let ");
                 self.word(&name.text);
                 if let Some(ty) = ty {
@@ -909,7 +904,12 @@ impl<'s> Printer<'s> {
                 self.expr(value);
                 self.word(";");
             }
-            StmtKind::Try(body) => self.try_body(body),
+            StmtKind::Try(body) => {
+                self.try_body(body);
+                if self.slice(stmt.span).trim_end().ends_with(';') {
+                    self.word(";");
+                }
+            }
             StmtKind::Throw { value, condition } => {
                 self.word("throw");
                 if let Some(value) = value {
@@ -973,7 +973,12 @@ impl<'s> Printer<'s> {
                     self.word(";");
                 }
             }
-            StmtKind::Match(body) => self.match_body(body),
+            StmtKind::Match(body) => {
+                self.match_body(body);
+                if self.slice(stmt.span).trim_end().ends_with(';') {
+                    self.word(";");
+                }
+            }
             StmtKind::For {
                 is_async,
                 source,

@@ -3,17 +3,24 @@
 
 usage: std-tests.py [--jobs N]
 
-Модуль с тестами — файл std/ со строкой, начинающейся с `test "`. Каждый
+Модуль с тестами — файл std/ с объявлением теста: `test "` или
+`async test "`, в начале строки или внутри объекта (#490). Каждый
 запускается `okkama run --engine E -t`; провал — ненулевой код выхода.
 Известные провалы перечислены в known-failures.txt рядом: они печатаются,
 но не роняют проверку; новый провал или исправленный известный — роняют.
+У нового провала печатается и хвост вывода модуля (#502): по одной
+последней строке не понять, какая проверка упала.
 """
-import argparse, concurrent.futures, os, subprocess, sys
+import argparse, concurrent.futures, os, re, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 OKKAMA = os.path.join(ROOT, "okkama-rs", "target", "release", "okkama")
+# A test declaration: async or not, at module scope or inside an object.
+TEST = re.compile(r'\s*(async\s+)?test "')
 ENGINES = ("ir", "sparrow")
+# Lines of a failing module's output kept for the report.
+TAIL = 60
 
 
 def known():
@@ -31,7 +38,7 @@ def modules():
     for directory, _, files in os.walk(os.path.join(ROOT, "std")):
         for name in files:
             path = os.path.join(directory, name)
-            if name.endswith(".ok") and any(line.startswith('test "') for line in open(path, encoding="utf-8")):
+            if name.endswith(".ok") and any(TEST.match(line) for line in open(path, encoding="utf-8")):
                 found.append(os.path.relpath(path, ROOT))
     return sorted(found)
 
@@ -42,7 +49,7 @@ def run(job):
     try:
         result = subprocess.run([OKKAMA, "run", "--engine", engine, "-t", path], cwd=ROOT, env=env,
                                 capture_output=True, text=True, timeout=600)
-        return path, engine, result.returncode == 0, (result.stdout + result.stderr).strip().splitlines()[-1:]
+        return path, engine, result.returncode == 0, (result.stdout + result.stderr).strip().splitlines()[-TAIL:]
     except subprocess.TimeoutExpired:
         return path, engine, False, ["timeout"]
 
@@ -57,14 +64,17 @@ def main():
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
         for path, engine, passed, tail in pool.map(run, jobs):
             if not passed:
-                failed[f"{engine} {path}"] = tail[0] if tail else ""
+                failed[f"{engine} {path}"] = tail
     new = sorted(set(failed) - expected)
     fixed = sorted(expected - set(failed))
     print(f"std: {len(jobs) // len(ENGINES)} modules, {len(jobs)} runs, {len(failed)} failed ({len(failed) - len(new)} known)")
     for entry in sorted(set(failed) & expected):
         print(f"  known: {entry}")
     for entry in new:
-        print(f"  NEW FAILURE: {entry}: {failed[entry]}")
+        tail = failed[entry]
+        print(f"  NEW FAILURE: {entry}: {tail[-1] if tail else ''}")
+        for line in tail:
+            print(f"      | {line}")
     for entry in fixed:
         print(f"  FIXED (remove from known-failures.txt): {entry}")
     return 1 if new or fixed else 0

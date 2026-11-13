@@ -1,0 +1,36 @@
+module examples/os/environment/variables v1.0.0;
+
+import "os/environment" take Environment, SearchPath;
+import "io/stdout" take Stdout;
+
+// An environment is a snapshot: read it, derive a changed copy for a child
+// process, and find the home directory and the search path in it. Nothing
+// here changes the environment of the running program.
+
+main() is int {
+    let out = Stdout();
+    let isolated = Environment(values: [
+        "HOME": "/home/ada",
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "APP_TOKEN": "secret",
+    ]);
+
+    out.writeln("home: ", isolated.home().path());
+    // A variable reads like a json value: text, int, boolean, list or maybe.
+    out.writeln("editor: ", isolated.maybe("EDITOR").text() else "(no EDITOR)");
+    out.writeln("path entries: ", isolated.list("PATH").size());
+
+    let child = isolated.addition("APP_ENV", "production").difference("APP_TOKEN");
+    out.writeln("child has APP_ENV: ", child.membership("APP_ENV"));
+    out.writeln("child has APP_TOKEN: ", child.membership("APP_TOKEN"));
+    out.writeln("parent still has APP_TOKEN: ", isolated.membership("APP_TOKEN"));
+
+    for SearchPath(environment: isolated) -> directory {
+        out.writeln("search: ", directory);
+    }
+
+    // The process environment, read once.
+    let system = Environment();
+    out.writeln("process PATH set: ", system.membership("PATH"));
+    0;
+}

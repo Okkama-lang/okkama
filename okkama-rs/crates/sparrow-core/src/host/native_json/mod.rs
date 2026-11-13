@@ -4,7 +4,11 @@ mod parser;
 use crate::host::*;
 use num_bigint::BigInt;
 use okkama_runtime_abi::{Native, NativeFailure};
-use std::{cell::RefCell, collections::HashSet, rc::Rc};
+use std::{
+    cell::{OnceCell, RefCell},
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 #[derive(Debug)]
 pub(crate) enum Node {
     Null,
@@ -12,7 +16,49 @@ pub(crate) enum Node {
     Number(Rc<str>),
     Text(Rc<str>),
     Array(Vec<u64>),
-    Object(Vec<Rc<str>>, Vec<u64>),
+    Object(Names, Vec<u64>),
+}
+/// Below this size an object finds a member by a scan, which beats hashing.
+const INDEXED_OBJECT: usize = 16;
+/// Member names in document order. A large object finds a name through an
+/// index built on the first lookup; otherwise walking `names()` with `get()`
+/// is quadratic (#352).
+#[derive(Debug)]
+pub(crate) struct Names {
+    list: Vec<Rc<str>>,
+    // Boxed: few objects have an index, and every node pays for `Node`'s size.
+    #[allow(clippy::box_collection)]
+    index: OnceCell<Box<HashMap<Rc<str>, usize>>>,
+}
+impl Names {
+    /// Rust memory of the names, for the collector's accounting.
+    fn bytes(&self) -> usize {
+        self.list.iter().map(|name| name.len() + 16).sum()
+    }
+    fn position(&self, sought: &str) -> Option<usize> {
+        if self.list.len() < INDEXED_OBJECT {
+            return self.list.iter().position(|name| &**name == sought);
+        }
+        let index = self.index.get_or_init(|| {
+            let mut index = HashMap::with_capacity(self.list.len());
+            for (at, name) in self.list.iter().enumerate() {
+                index.entry(name.clone()).or_insert(at);
+            }
+            Box::new(index)
+        });
+        index.get(sought).copied()
+    }
+}
+impl From<Vec<Rc<str>>> for Names {
+    fn from(list: Vec<Rc<str>>) -> Self {
+        Self { list, index: OnceCell::new() }
+    }
+}
+impl std::ops::Deref for Names {
+    type Target = [Rc<str>];
+    fn deref(&self) -> &[Rc<str>] {
+        &self.list
+    }
 }
 impl Node {
     fn kind(&self) -> i64 {
@@ -74,8 +120,66 @@ impl JsonHandle {
         }
     }
 }
+/// Line and column of `offset` in `source`, from 1; CR LF is one line break.
+fn located(source: &[char], offset: usize) -> (i64, i64) {
+    let (mut line, mut column, mut position) = (1, 1, 0);
+    while position < offset {
+        match source[position] {
+            '\r' => {
+                position += 1;
+                if position < offset && source[position] == '\n' {
+                    position += 1;
+                }
+                line += 1;
+                column = 1;
+                continue;
+            }
+            '\n' => {
+                line += 1;
+                column = 1;
+            }
+            _ => column += 1,
+        }
+        position += 1;
+    }
+    (line, column)
+}
+
+/// JSON as UTF-8 bytes (#135): the parser reads the decoded characters, with
+/// no text in between. Bytes that are not UTF-8 fail where the valid prefix
+/// ends, as a parse error there would.
+fn bytes_state(bytes: &[u8], maximum_depth: BigInt) -> ParseState {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => ParseState {
+            source: text.chars().collect(),
+            maximum_depth,
+            outcome: RefCell::new(None),
+        },
+        Err(error) => {
+            let valid = std::str::from_utf8(&bytes[..error.valid_up_to()]).unwrap_or_default();
+            let source: Vec<char> = valid.chars().collect();
+            let (line, column) = located(&source, source.len());
+            let outcome = ParsedDocument {
+                root: None,
+                offset: source.len() as i64,
+                line,
+                column,
+                message: "invalid UTF-8".into(),
+                duplicate: None,
+            };
+            ParseState {
+                source,
+                maximum_depth,
+                outcome: RefCell::new(Some(Rc::new(outcome))),
+            }
+        }
+    }
+}
+
 pub(crate) fn handles(native: Native) -> bool {
-    native.symbol().starts_with("runtime/json@1::")
+    // The stream splitter (#136) runs in okkama-runtime-core, through the
+    // origin bridge.
+    native.symbol().starts_with("runtime/json@1::") && !native.symbol().starts_with("runtime/json@1::json_split_")
 }
 fn failure(native: Native, code: &str, message: &str) -> ProviderError {
     ProviderError::Native(NativeFailure {
@@ -107,7 +211,24 @@ impl Heap {
     fn json_node(&self, value: Slot) -> Result<&Node, Error> {
         self.json_nodes.get(self.json_id(value)?)
     }
+    /// Rust memory of a JSON node, charged to the collector when it is made:
+    /// the arena is not the Okkama heap, so without the charge a loop that
+    /// parses keeps growing it while the heap sees only tiny handle cells.
+    fn json_charge(&mut self, node: &Node) {
+        let bytes = std::mem::size_of::<Node>()
+            + match node {
+                Node::Number(text) | Node::Text(text) => text.len(),
+                Node::Array(children) => children.len() * 8,
+                Node::Object(names, children) => names.bytes() + children.len() * 8,
+                Node::Null | Node::Boolean(_) => 0,
+            };
+        self.core_mut().charge_external(bytes);
+    }
     fn json_handle_new(&mut self, state: JsonHandle) -> Result<Slot, Error> {
+        if let JsonHandle::Parse(parse) = &state {
+            // The source, as characters, lives until the state is released.
+            self.core_mut().charge_external(parse.source.len() * 4);
+        }
         Ok(Slot {
             tag: HANDLE,
             bits: self.handles.allocate(Handle::Json(state))?,
@@ -118,6 +239,7 @@ impl Heap {
         self.json_handle_new(JsonHandle::Node(id))
     }
     fn json_new(&mut self, node: Node) -> Result<Slot, Error> {
+        self.json_charge(&node);
         let id = self.json_nodes.allocate(node)?;
         self.json_node_value(id)
     }
@@ -155,6 +277,7 @@ impl Heap {
                             *child = ids[*child as usize];
                         }
                     }
+                    self.json_charge(&node);
                     ids.push(self.json_nodes.allocate(node)?);
                 }
                 ParsedDocument {
@@ -168,26 +291,7 @@ impl Heap {
             }
             Err(error) => {
                 let overflow = error.message == "\u{0}overflow";
-                let (mut line, mut column, mut position) = (1, 1, 0);
-                while position < error.offset {
-                    match state.source[position] {
-                        '\r' => {
-                            position += 1;
-                            if position < error.offset && state.source[position] == '\n' {
-                                position += 1;
-                            }
-                            line += 1;
-                            column = 1;
-                            continue;
-                        }
-                        '\n' => {
-                            line += 1;
-                            column = 1;
-                        }
-                        _ => column += 1,
-                    }
-                    position += 1;
-                }
+                let (line, column) = located(&state.source, error.offset);
                 ParsedDocument {
                     root: None,
                     offset: error.offset as i64,
@@ -428,6 +532,14 @@ impl Heap {
                     outcome: RefCell::new(None),
                 })))?
             }
+            JsonJsonParseBytesState => {
+                let maximum_depth = match self.integer(args[1])? {
+                    Integer::Small(n) => BigInt::from(n),
+                    Integer::Big(n) => (*n).clone(),
+                };
+                let state = bytes_state(&self.byte_slice(args[0])?, maximum_depth);
+                self.json_handle_new(JsonHandle::Parse(Rc::new(state)))?
+            }
             JsonJsonNodeKind => Slot::small(self.json_node(args[0])?.kind()),
             JsonJsonNodeBoolean => match self.json_node(args[0])? {
                 Node::Boolean(value) => Slot::boolean(*value),
@@ -481,12 +593,7 @@ impl Heap {
                     return Err(invalid("JSON node is not an object"));
                 };
                 let sought = self.text(args[1])?;
-                Slot::small(
-                    names
-                        .iter()
-                        .position(|name| &**name == sought)
-                        .map_or(-1, |i| i as i64),
-                )
+                Slot::small(names.position(sought).map_or(-1, |i| i as i64))
             }
             JsonJsonQuote => self.allocate_text(quote(self.text(args[0])?))?,
             JsonJsonNumberText => {
@@ -596,7 +703,7 @@ impl Heap {
                 if !names.iter().all(|n| seen.insert(n.as_ref())) {
                     return Err(invalid("duplicate JSON member name"));
                 }
-                self.json_new(Node::Object(names, children))?
+                self.json_new(Node::Object(names.into(), children))?
             }
             JsonJsonNodeWrite => {
                 let indentation = self
@@ -635,7 +742,7 @@ impl Heap {
                 let Node::Object(names, _) = self.json_node(args[0])? else {
                     return Err(invalid("JSON node is not an object"));
                 };
-                let names = names.clone();
+                let names = names.to_vec();
                 let slots = names
                     .into_iter()
                     .map(|s| self.json_text(s))

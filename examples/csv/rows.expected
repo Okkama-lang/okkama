@@ -1,0 +1,11 @@
+2 fields: name | city
+2 fields: Ada, Countess | London
+2 fields: say "hi" | Paris
+order 1: total 10, note gift
+order 2: total 32, note none
+same text again: true
+'a;b';c
+d;'it''s'
+one,two words,"3,5"
+streamed id,total: 10, 32, then end
+invalid at 6

@@ -1,9 +1,7 @@
 module encoding/single_byte v1.0.0;
 
-import "runtime/single_byte" take
-    ascii_representable_prefix, ascii_encode,
-    ascii_valid_prefix, ascii_decode,
-    latin1_representable_prefix, latin1_encode, latin1_decode;
+import "runtime/single_byte" take ascii_representable_prefix, ascii_encode, ascii_valid_prefix,
+    ascii_decode, latin1_representable_prefix, latin1_encode, latin1_decode;
 
 // Immutable ASCII and ISO-8859-1 codecs.
 //
@@ -22,13 +20,16 @@ import "runtime/single_byte" take
 // ASCII decoding error reports a byte offset. Codecs never replace, skip,
 // normalize or transliterate values.
 
+// Text as ASCII bytes; a character past 127 is UnrepresentableAsciiCharacter.
 object AsciiEncoded {
     has origin is string;
 
+    // Encodes origin.
     AsciiEncoded(origin is string) {
         self.origin = origin;
     }
 
+    // The bytes.
     bytes() is @byte {
         let offset is int = ascii_representable_prefix(origin);
         confirm offset == origin.length()
@@ -37,13 +38,16 @@ object AsciiEncoded {
     }
 }
 
+// ASCII bytes as text; a byte past 127 is InvalidAsciiByte.
 object AsciiDecoded {
     has origin is @byte;
 
+    // Decodes origin.
     AsciiDecoded(origin is @byte) {
         self.origin = origin;
     }
 
+    // The text.
     string() is string {
         let offset is int = ascii_valid_prefix(origin);
         confirm offset == origin.size() else throw InvalidAsciiByte.at(offset);
@@ -51,13 +55,17 @@ object AsciiDecoded {
     }
 }
 
+// Text as ISO-8859-1 bytes; a character past 255 is
+// UnrepresentableLatin1Character.
 object Latin1Encoded {
     has origin is string;
 
+    // Encodes origin.
     Latin1Encoded(origin is string) {
         self.origin = origin;
     }
 
+    // The bytes.
     bytes() is @byte {
         let offset is int = latin1_representable_prefix(origin);
         confirm offset == origin.length()
@@ -66,20 +74,67 @@ object Latin1Encoded {
     }
 }
 
+// ISO-8859-1 bytes as text; every byte is a character.
 object Latin1Decoded {
     has origin is @byte;
 
+    // Decodes origin.
     Latin1Decoded(origin is @byte) {
         self.origin = origin;
     }
 
+    // The text.
     string() is string {
         latin1_decode(origin);
     }
 }
 
+// A character ASCII lacks; offset counts characters.
 enum UnrepresentableAsciiCharacter is Error = (at(offset is int));
 
+// A character ISO-8859-1 lacks; offset counts characters.
 enum UnrepresentableLatin1Character is Error = (at(offset is int));
 
+// A byte past 127; offset says where.
 enum InvalidAsciiByte is Error = (at(offset is int));
+
+test "ascii round-trips and refuses everything above 127" {
+    test.is(AsciiEncoded(origin: "hello").bytes(), [byte(104), byte(101), byte(108), byte(108), byte(111)]);
+    test.is(AsciiDecoded(origin: [byte(104), byte(105)]).string(), "hi");
+    test.is(
+        try {
+            AsciiEncoded(origin: "naïve").bytes();
+            -1;
+        }
+        catch UnrepresentableAsciiCharacter.at(offset) {
+            offset;
+        },
+        2
+    );
+    test.is(
+        try {
+            AsciiDecoded(origin: [byte(104), byte(200)]).string();
+            -1;
+        }
+        catch InvalidAsciiByte.at(offset) {
+            offset;
+        },
+        1
+    );
+}
+
+test "latin-1 decodes every byte and encodes up to U+00FF" {
+    test.is(Latin1Decoded(origin: [byte(99), byte(97), byte(102), byte(233)]).string(), "café");
+    test.is(Latin1Encoded(origin: "café").bytes(), [byte(99), byte(97), byte(102), byte(233)]);
+    test.is(Latin1Decoded(origin: [byte(128)]).string().length(), 1);
+    test.is(
+        try {
+            Latin1Encoded(origin: "a€").bytes();
+            -1;
+        }
+        catch UnrepresentableLatin1Character.at(offset) {
+            offset;
+        },
+        1
+    );
+}

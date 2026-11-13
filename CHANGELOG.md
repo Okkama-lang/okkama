@@ -6,11 +6,3460 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+## [0.5.5] — 2026-11-13
+
+0.5.5 is the library release: the web stack, data formats, the platform, and
+documentation for all of std.
+- **Web.** The HTTP server beats Python's `http.server` on keep-alive and on
+  new connections. The release adds route tables with the most specific
+  pattern first, sessions and CSRF, HTTPS servers, compressed replies, server
+  events, WebSockets walked with `for await`, and a test client for route
+  tables.
+- **Data.** ZIP, XML, zstd, Brotli, gzip/deflate/zlib. JSON and CSV can be read
+  from a stream with `for await`. TOML and plist read like json, CSV records
+  read by column name, and JWT is in `crypto/jwt` (#194).
+- **Platform.** Path parts, `copy` and `move(overwrite:)`,
+  `create(parents: true)`, `Run`, asynchronous processes, standard input by
+  lines, buffered standard output, PostgreSQL by URL.
+- **Documentation.** Every std module carries a synopsis, a description,
+  errors and a comment on each public name, and `okkama man` reads them
+  (#512). The examples were brought to the 0.5.5 API.
+- **Language.** `test.close`, `test.text` and `test.bytes`; elementary
+  functions, `min`, `max` and `clamp`.
+- **Measured.** From this release the release report is the micro-benchmark
+  A/B: v0.5.4 rebuilt against the candidate, 75 programs, protocol v2 in
+  limited Linux containers (`okkama-docs/benchmarks/reports/2026-11-13-v0.5.5/micro.html`).
+  - Sparrow is 7.5% faster by geometric mean, with 8 programs faster beyond
+    the noise band and 1 slower: `try-catch` is 24% slower with peak memory
+    535 → 76 MB, which is #544 and the owner's call. The IR engine is at
+    parity.
+  - The ladder is at parity. It caught #522 before the release, and 10-app
+    runs in 95 ms and 12.5 MB.
+  - Conformance passes 1025/1025 on six configurations.
+
+### Added
+
+- **`fs/path` takes paths apart (#124).** `Path` gains `parts()`, `stem()`,
+  `extension()`, `extension_replaced(…)`, `relative_to(base)` and
+  `normalized()`, for POSIX and Windows paths alike. The native
+  `runtime/fs.path_parts` splits a path the same way in the IR engine,
+  Sparrow and the JVM.
+
+- **`Directory.create(parents: true)` makes the missing parents (#125).**
+
+- **`crypto/jwt`: JSON Web Tokens (#194).** Tokens are signed and checked
+  as compact JWS with HS256/384/512, RS256/384/512, ES256/384 and EdDSA:
+
+      let key = JwtHmacKey(algorithm: JwtAlgorithm.hs256, secret: secret);
+      let token = JwtToken(claims: claims, key: key, expires: Duration(minutes: 15)).string();
+      JwtVerified(token: token, key: key, audience: "orders").claims().text("sub");
+
+  The key determines the algorithm. `alg: none` and algorithm swaps are
+  refused, `exp`/`nbf`/`iat` are checked with a leeway, and `aud`/`iss` are
+  checked when the verifier names them. `JwtKeys` picks the key by `kid`. A
+  key built from a public key only verifies. The module carries the RFC 7515
+  and RFC 8037 test vectors. `examples/crypto/jwt.ok` signs a session token
+  and an Ed25519 access token.
+
+- **An XML-RPC server can answer with the standard results (#516).**
+  `XmlRpcSuccess` and `XmlRpcFailure` are public, so an `XmlRpcCalling`
+  written outside std returns them:
+
+      XmlRpcSuccess(XmlRpcText("Hello"))
+      XmlRpcFailure(XmlRpcFault(code: -32601, message: "Unknown method"))
+
+  `examples/http/xmlrpc/greet.ok` serves one through `XmlRpcHandling` and
+  calls it with `XmlRpcClient`.
+
+- **`FileEntry.copy(destination)` copies a file with its permission bits
+  (#126).** `copy` and `move` take `overwrite`; see Changed for `move`.
+
+- **`TextBuffer` builds text piece by piece (#139).** `strings/buffer` keeps
+  the text in the runtime, as `ByteBuffer` keeps bytes: a write appends
+  without copying what is there.
+
+      let page = TextBuffer();
+      page.write("<li>", name, "</li>");
+      page.writeln();
+      let html = page.string();
+
+  It is a `WritingText`, so it goes wherever text is written.
+
+- **CSV records read their fields by column name (#202).** `CsvRecords(text)`
+  takes the first row as the header:
+
+      for CsvRecords(text) -> record {
+          record.text("name");
+          record.int("age");
+          record.maybe("note").text() else "";
+      }
+
+  A failure names the row and the column: `MissingCsvColumn`,
+  `MissingCsvValue`, `InvalidCsvValue`. `CsvRecord(fields:)` prints as before.
+
+- **A regex answers the common questions itself (#217).** `Regex` gains
+  `found(text)`, `first(text)` (a `Maybe<RegexMatch>`), `all(text)`,
+  `replaced(origin:, by:)` and `parts(text)`. They walk matches as
+  `RegexMatches` does; tests check them against `RegexMatches`,
+  `FirstRegexMatch`, `RegexSubstitution` and `RegexParts`. The replacement
+  is literal (`with` is a reserved word, hence `by`); `$1` and `${name}`
+  stay with `ExpandedRegexReplacement`. Matches read named groups like json
+  values: `match.int("year")`, `match.text("month")`,
+  `match.maybe("day").text() else ""`.
+
+- **`ParsedJson` reads UTF-8 bytes (#135).** `ParsedJson(bytes)` hands the
+  bytes to the parser, which checks the UTF-8 itself: no Okkama string in
+  between. Bytes that are not UTF-8 are `JsonError.invalid` where the valid
+  prefix ends. `WebRequest.json(limit)` and `ClientResponse.json()` parse
+  bodies this way: a 10 KB body takes Sparrow 146 → 134 µs and the IR engine
+  181 → 141 µs (release builds). New native
+  `runtime/json.json_parse_bytes_state`.
+
+- **`Logger("shop")` writes text to standard error at info (#181).**
+
+      let log = Logger("shop");
+      log.info("started");
+      log.debug("query", JsonField("ms", 9));
+      log.error("payment failed", failure);
+
+  `Logger(name:, destination:, level:)` for another destination or level;
+  `debug`, `info`, `warning`, `error` and `critical` take fields, and the
+  last three also the error that caused it (as the second argument: a call
+  cannot mix positional and named arguments). `log.enabled(level)` asks
+  before costly fields are built; `child("db")` is the logger of a part.
+  `NamedLogging` stays.
+
+- **`Decimal` does arithmetic (#191).** `plus`, `minus` and `times` are
+  exact; `divided(by:, scale:, rounding:)` and `rounded(scale:, rounding:)`
+  take every `math/rounding` mode; `Decimal(int)`, `rat()` and `float()`.
+  The arithmetic is Okkama on the coefficient and the exponent. Lining
+  exponents up may shift a coefficient by at most 4 096 digits
+  (`DecimalLimitExceeded`), so a far exponent in a document cannot ask for
+  millions of digits; dividing by zero is `DecimalDivisionByZero`.
+
+- **A channel receiver is walked with `for await` (#199).**
+  `Receiving.next()` answers the next value, or none once the channel is
+  closed and drained. Selecting over several receivers is #509, postponed.
+
+- **`Run` a tool and read its text (#197).**
+  `await Run("git", ["status", "--short"]).text()`: the program is found on
+  PATH and runs with this process's environment and directory, without a
+  shell; output and errors are kept up to 1 MiB each. A non-zero exit is
+  `CommandFailed.exited(code, errors)`; `completion()` takes any exit.
+
+- **`PostgresDatabase` connects by URL (#218).**
+  `PostgresDatabase("postgres://app:secret@db:5432/shop?sslmode=require")` or
+  `PostgresDatabase(url:, password:)`. The host is looked up by DNS;
+  `sslmode=disable` (the default) is plaintext, `require`, `verify-ca` and
+  `verify-full` verify the certificate against the system trust store and
+  the host, and `prefer` and `allow` are refused, since they fall back to
+  plaintext without a word. Checked against a Postgres service by name on
+  IR, Sparrow and the JVM.
+
+- **CSV is read from an upload as it comes (#204).**
+
+      for await CsvStream(origin: upload) -> row { … }
+      for await CsvRecords(origin: upload) -> record { record.text("name"); }
+
+  `CsvStream` and `CsvRecords` take an `AsyncReading` and give rows or
+  records to `for await`, with `CsvStream`'s limits unless given. Walking
+  such a source with `for`, or `row()`, is `AsyncCsvOrigin.walked`.
+
+- **Language: `test.close`, `test.text` and `test.bytes` (#187).**
+  `test.close(actual, expected, tolerance)` compares floats;
+  `test.text(actual, expected)` names the scalar where two strings part, with
+  its line and column; `test.bytes(actual, expected)` names the first
+  differing offset or the sizes. IR, Sparrow and the JVM write the same
+  reports. Book and spec §14, Bible §15.2; the editor grammar highlights
+  them (vscode-okkama 0.9.0); conformance `L04.test.close-text-bytes-pass`
+  and `-fail`.
+
+- **Language: elementary functions, `min`, `max` and `clamp` (#192).**
+  `float` gains `floor()`, `ceil()`, `round()` (half away from zero),
+  `trunc()`, `exp()`, `ln()`, `log2()`, `log10()`, `sin()`, `cos()`, `tan()`,
+  `atan2(y)` (`x.atan2(y)` is the angle of the point (x, y)), `finite()` and
+  `nan()`; `int` and `float` gain `min(other)`, `max(other)` and
+  `clamp(low, high)`. A result that is not finite is an error, as for every
+  float. They are intrinsics of every engine; the Sparrow image format is
+  unchanged. Book, spec §6.6, Bible §5; `t/op/float-functions.ok`.
+
+- **ZIP archives are read and written (#185).**
+
+      for ZipArchive(bytes).entries() -> entry {
+          entry.name();
+          await entry.bytes(limit: 10485760);
+      }
+      let zip = ZipWriting(destination: output);
+      zip.add(name: "a.txt", bytes: data);
+      zip.close();
+
+  Stored and deflated members, ZIP64. Reading trusts nothing: names pass
+  `ArchivePath` (no absolute names, `..`, backslashes or drives) and may not
+  repeat, `ArchiveLimits` bound entries, sizes and names, members may not
+  overlap, and `bytes(limit)` checks the declared size and the CRC-32, so a
+  member that expands beyond what it declares is `InvalidZip`. Python's
+  `zipfile` reads what Okkama writes on all three engines, and the other way
+  round.
+
+- **JSON is read from a stream and written as lines (#136).**
+  `for await JsonItems(origin: upload) -> item` reads the elements of one
+  top-level array, or NDJSON, one item at a time:
+  210 MB of NDJSON stays at 43 MB on Sparrow.
+  `await JsonLines(destination: output).write(item)` writes one compact value
+  per line.
+
+- **An XML parser (#144).**
+
+      let feed = ParsedXml(text).document();
+      feed.root().attribute("version");
+      for feed.root().children("item") -> item { item.text("title"); }
+
+  A bounded, non-validating tokenizer in the runtime checks that a document
+  is well formed; there is no DTD (an internal subset is refused, an
+  external one never fetched), and depth and size are bounded. `xml/parse`
+  builds the `XmlElement` tree and resolves namespaces, so what a tree writes
+  reads back equal. `XmlElement` reads like json: `attribute(name)`,
+  `children(name)`, `text(name)`, `text()`.
+
+- **A child process is talked to asynchronously (#196).**
+
+      let child = Process(command);
+      await child.streams().input().write("query\n");
+      for await child.streams().output().lines() -> line { … }
+
+  `Process.streams()` sits next to the blocking `input()`, `output()` and
+  `errors()`:
+  - its input does `AsyncWriting` and `Closing`;
+  - its outputs do `AsyncReading`, with `lines()` for `for await` and
+    `text(limit)`.
+
+  A slow child no longer holds up other tasks on the IR engine, Sparrow or
+  the JVM (new async natives, ABI 669–671).
+
+- **zstd and Brotli (#184).** `compression/zstd` and `compression/brotli`
+  have gzip's shape:
+
+      let packed = ZstdCompressed(data).bytes();
+      let data = BrotliDecompressed(origin: packed, limit: 10485760).bytes();
+
+  - zstd takes levels 1–22 (3 unless told) and writes one frame with a
+    checksum.
+  - Brotli takes levels 0–11 (11 unless told).
+  - `Compression()` in the web sends `br` to clients that take it at least as
+    gladly as gzip.
+  - The HTTP client asks for `br, gzip` and decodes both.
+  - The JVM has neither codec: it throws the new `UnsupportedCompression` and
+    the web stays with gzip there.
+  - Output reads with the zstd and brotli CLIs, and the other way round.
+
+- **`ReadUntilEnd` and `Copy` (#130).** `io/transfer` ends the hand-written
+  read loop:
+
+      let body = await ReadUntilEnd(origin: reader, limit: 1048576).bytes();
+      let count = await Copy(from: reader, to: writer).count();
+
+  - Both take sync and async sources; `Copy` takes sync and async
+    destinations too.
+  - A source over the limit throws `ReadLimitExceeded` after limit + 1 bytes
+    and is not read further.
+  - `Request.bytes(limit:)`, `ClientResponse.bytes()` and
+    `ProcessStreamOutput.text(limit)` are built on them.
+
+- **Standard input by lines (#221).**
+
+      for Stdin() -> line { … }
+      for Stdin(decoding: InputDecoding.lenient) -> line { … }
+      for Stdin().chunks(size: 65536) -> chunk { … }
+
+  - `Stdin().line()` gives one line.
+  - A line loses its LF and one CR before it.
+  - Lenient decoding puts U+FFFD for each bad sequence, as browsers do.
+  - Every `Stdin()` reads through the runtime's one buffer, so lines and
+    bytes mix.
+
+- **`BigInt(7)` and `int()` (#190).** `BigInt` gains `plus`, `minus`,
+  `times`, `divided` and `remainder` as methods next to the operators.
+
+- **TOML and plist read like json (#140, #141).**
+
+      let config = ParsedToml(text).root();
+      config.get("server").int("port");
+      config.maybe("debug").boolean() else false;
+      for config.tables("replica") -> replica { replica.text("host"); }
+
+      let info = ParsedPlist(bytes).dictionary();
+      info.text("CFBundleIdentifier");
+      info.date("Built");
+
+  - `TomlTable` reads `text`, `int`, `float`, `boolean`, `get`, `tables`,
+    arrays (`texts`, `ints`, `floats`, `booleans`), the four TOML dates and
+    `maybe(name)`.
+  - `PlistDictionary` reads `text`, `int`, `float`, `boolean`, `data`,
+    `date`, `get`, `dictionaries`, `texts`, `ints` and `maybe(name)`.
+  - A value of another kind is `TomlKindMismatch` or `PlistKindMismatch`,
+    with the key and both kinds.
+  - Nothing is converted, and there is no Json in between; the visitors stay
+    for walking a whole tree.
+  - Both now look keys up in a map of names instead of comparing every pair.
+
+- **`okkama man`: reference pages from doc comments (#512, phase A).**
+
+      okkama man                          the index of std, by area
+      okkama man io/stdout                a module (std/io/stdout: std only)
+      okkama man io/stdout Stdout         one declaration
+      okkama man io/stdout Stdout.write   one action, every overload
+      okkama man ./src/app.ok             a file of your own
+      okkama man --format markdown json
+
+  - **Comments:** a module documents itself in ordinary `//` comments whose
+    text is a CommonMark subset.
+    - The comment right after `module` is the overview; one after the imports
+      counts too.
+    - The comment right above a declaration is its documentation.
+  - **Pages** have NAME, VERSION, SYNOPSIS, DESCRIPTION, PUBLIC API, ERRORS,
+    ENGINE NOTES and SEE ALSO.
+    - Signatures come from the declarations.
+    - Hidden ones never show.
+  - **One model:** `okkama_compiler::doc` is the one documentation model; the
+    editor's hover reads the same comments.
+  - **Terminal:** the page wraps to the width and is bold unless `NO_COLOR`;
+    `$PAGER` shows it when set.
+  - Book §28.4.
+  - Links and hover from the model (#513), doctests and the `missing-docs`
+    lint (#514), and roff, HTML and JSON (#515) follow.
+
+- **All of std is documented (#512).** Every one of the 498 modules has an
+  overview, and every public declaration and member has a doc comment, so
+  `okkama man` gives a page for each. The overviews of the modules programs use
+  start with a working example: each was run, or type-checked when it needs a
+  network.
+  Writing them corrected comments that had drifted from the code.
+  - Overviews that sat after the imports moved right after `module`.
+  - The generated `locale/internal` modules carry their doc comments in
+    their generators, so regeneration keeps them.
+  - `okkama man` notes a long comment glued to the first declaration after
+    the imports (the old place of overviews): it stays that declaration's,
+    and a blank line makes it the overview. The text under an Errors heading
+    no longer runs into the error list.
+
+### Fixed
+
+- **Sparrow's heap no longer grows when a program recycles its garbage
+  (#522).** The collector counted only new pages, but machine code reuses
+  swept cells without telling it. A program could use up every swept cell
+  before a collection came, then grow by new pages on every cycle. #503 had
+  hidden this until it stopped charging every array builder: the ladder's
+  `10-app` doubled its memory on Sparrow (13 → 25 MB). Swept cells now count
+  as they are handed out, a page's worth at a time: `10-app` uses 12.5 MB,
+  and the hello server 76 MB instead of 87.
+
+- **`MailMessage(from:, to:, subject:, text:)` works with the system clock
+  (#518).** It threw `InvalidMail` whenever the clock had a fraction of a
+  second, which the system clock always has. The Date field now takes the
+  whole second.
+
+- **Parsed JSON grew Sparrow's memory (#510).** Sparrow keeps JSON nodes and
+  a parse's source outside the Okkama heap, which saw only tiny handles, so
+  nothing brought a collection closer: a million `ParsedJson` calls reached
+  391 MB, against 28 MB on the IR engine. They now count toward the next
+  collection: 42 MB, and 2.0 → 1.4 s.
+
+- **A server's memory grew with every request (#503).** `examples/web/hello.ok`
+  on Sparrow reached 483 MB after 7 400 requests; Python's `http.server`
+  stays at 17 MB. Each request kept its peer, connection, request, response,
+  groups and async frames forever. There were two causes in Tomato:
+  - Every task started with `spawn` or `FutureGroup.start` stayed in the
+    runtime's spawned list until the program ended, and that list is a root
+    of every collection. Finished tasks that shutdown no longer needs are now
+    dropped before each collection: it still cancels running tasks and
+    reports unobserved failures.
+  - The intrinsic state of a FutureGroup was traced as a root even after the
+    group itself was unreachable. A group's tasks now count only while the
+    group is reachable (ephemerons), so a group and its tasks no longer keep
+    each other alive.
+
+  On the IR engine every `clock.wait` slept in a thread of its own until its
+  deadline, even when a timeout was cancelled. Three timeouts per request
+  piled up thousands of threads, and the server died after about 4 500
+  connections with "failed to spawn thread". Timers are now a deadline heap
+  on the event loop, and a cancelled timer drops its continuation at once.
+
+  The JVM runtime had the same defect (#504): every wait slept in a thread
+  of its own until its deadline, so the hello server built with
+  `--target jvm` ran out of threads after about 8 seconds of load. Waits now
+  run on one timer thread, and a cancelled one is dropped at once.
+
+  Now the hello server stays at 59 MB on Sparrow and 52 MB on the IR engine
+  over 6 000 connections. It also answers 1 930 requests per second instead
+  of 1 350. `sparrow --stats` prints a census of the objects alive after the
+  last collection, by type.
+
+- **An HTTP/2 server's drain failed when the client had left first (#502).**
+  A draining HTTP/2 session sends GOAWAY and waits for it to go out. When the
+  client had already closed the connection, the output stopped first, and
+  the wait failed with `Http2OutputStopped` in a background task that nobody
+  awaited, so the run reported it at the end. Under CPU contention the
+  http/server tests failed this way in 91 runs of 240 (IR, 12 at once on 6
+  CPUs); the CI runner saw it once. A GOAWAY that cannot go out now ends the
+  drain quietly, and a session that closed before sending one no longer
+  indexes an empty list. 0 failures in 240 runs on IR, 120 on Sparrow and 48
+  on the JVM.
+
+- **A failure could become its own secondary failure (IR, JVM).** A cleanup
+  that rethrew the failure in flight, as when a task group is awaited while
+  unwinding, linked the failure to itself. Matching a `catch` then walked
+  the failure graph without end: the IR engine spun at 100% CPU and the JVM
+  overflowed its stack. It showed with HTTP/2 over TLS when a client left.
+  A failure is no longer its own or a repeated secondary, and the walks
+  remember what they have seen, as Sparrow's did.
+
+- **`PcgRandom.integer` returns for ranges wider than 2^64 (#507).** Before,
+  it looped forever on every engine, because no 64-bit sample could pass
+  the rejection threshold.
+  - A sample takes one pair of outputs per 64-bit word that
+    `stop - start - 1` needs, the first pair most significant.
+  - A range up to 2^64 still takes one pair, so every sequence that worked
+    before is unchanged; a test pins this on all three engines.
+  - Ranges below 2^63 are sampled in 64-bit arithmetic: `integer(0, 1000000)`
+    takes Sparrow 353 → 140 ns and IR 850 → 602 ns (release builds).
+
+- **`debug/dumper` shows rats on Sparrow (#508).** Sparrow printed a rat as
+  `<native>` and an array of rats as `@native`, while the IR engine printed
+  `1/2 (rat)`. The debug bridge now converts a rat like other values.
+
+- **The Russian Book's stdin example compiles (#221).** It imported
+  `EndOfInput` from `io/input` and `Stderr` from a missing `io/stderr`. It
+  also named `StdinBytes` and `StdoutBytes`, which are gone.
+
+### Changed
+
+- **The examples use the 0.5.5 API.** Fourteen examples that still did things
+  the old way now use the new calls: nested directories with
+  `create(parents: true)`, the parts of a `Path`, `copy` and
+  `move(overwrite:)`, `Run`, environment variables read like json, CSV
+  records by column name, the `Regex` shortcuts, TOML read like json, and
+  `for await` over a channel and a WebSocket.
+
+- **`BigInt` holds an `int` (#189).** Okkama's `int` already has any size,
+  so BigInt arithmetic is the int's, and digits are written only when asked
+  for. The product of 300 factors plus their sum takes Sparrow
+  2.37 ms → 34 µs and the IR engine 2.75 → 0.34 ms (release builds).
+  Signatures do not change. Moving std APIs from `BigInt` to `int` is #511.
+
+- **`Param` is gone; the typed values bind instead (#188).** Migration:
+
+      Param(7)                   → DbInteger(7)
+      Param("Ada")               → DbText("Ada")
+      Param(true)                → DbBoolean(true)
+      Param(nickname)            → DbText(nickname)   // Maybe<string>: none is NULL
+      Param()                    → DbNull()
+
+  - `DbInteger` keeps the int, so an integer parameter no longer goes
+    through text. An SQLite INSERT of three integers takes Sparrow
+    7.6 → 6.4 µs.
+  - `DbInteger`, `DbBoolean`, `DbFloating`, `DbDecimal`, `DbText` and
+    `DbBytes` each take a `Maybe` of their type.
+  - A `let` holding an array of different typed values needs its type:
+    `let values is @DbValue = […]`.
+
+- **A streamed body is joined once (#130).** `Request.bytes(limit:)` used to
+  join the pieces one by one. A 1 MiB body in 64 KiB pieces now takes
+  Sparrow 1.22 → 0.19 ms and IR 15.9 → 14.1 ms.
+
+- **Plist reads its XML form through the XML tokenizer (#144).** Every
+  document that parsed before parses to the same value; structural errors
+  are worded by the tokenizer. A small dictionary takes Sparrow 82 → 32 µs
+  and the IR engine 1 862 → 299 µs (release builds).
+
+- **Gettext plural formulas evaluate in `int` (#205).** The Russian formula
+  takes Sparrow 9 581 → 460 ns per lookup and the IR engine
+  45 879 → 12 138 ns (release builds). Characterization tests pin the forms,
+  64-bit wrap-around and every refusal.
+
+- **A disabled log level costs almost nothing (#180).** `LogWriting` gains
+  `enabled(name, level)`, and `NamedLogging` asks it before it builds
+  fields, reads the clock or the process id, or makes a record. A debug
+  call on a logger at info, release builds: Sparrow 1 787 → 74 ns, the IR
+  engine 10 118 → 2 088 ns. Writers of one's own implement `enabled`; a
+  writer that cannot tell answers `true`.
+
+- **Standard output is buffered (#132).** The IR engine flushed after every
+  write and Sparrow after every line. Now a terminal gets each line as it
+  ends and a pipe or a file gets blocks of 64 KiB; `Stdout().flush()` writes
+  out what is pending. The runtimes flush before standard error is written,
+  before standard input is read from a terminal, before a child process
+  starts, before the terminal is written and when the program ends, so the
+  order holds. 200 000 lines into a pipe: Sparrow 155 → 56 ms, the IR engine
+  1 084 → 590 ms (release builds, wall time). The JVM keeps flushing each
+  write.
+
+- **`move` refuses an occupied destination (#126).** It used a plain rename,
+  which silently replaced an existing file. Now an existing destination is
+  `FileError.already_exists`, which names it, unless the call says
+  `overwrite: true`. A move with `overwrite: true` replaces in one step; a
+  copy is written beside the destination and renamed over it. New natives
+  `runtime/fs.copy_file` and `runtime/fs.rename_noreplace`.
+
+- **Writers take bytes directly (#129).** `Writing.write(bytes is @byte)` and
+  `AsyncWriting.write(bytes is @byte)`: `output.write(bytes)` instead of
+  `output.write(ByteSnapshot(bytes))`. Every writer in std has it, and 107
+  calls in std lost their wrapper.
+
+- **Query parameters and environment variables read like json values (#134,
+  #143).** `QueryParameters.first` and `values` and `Environment.variable`
+  give way to `text`, `int`, `boolean`, `list` and `maybe`:
+  `query.int("page")`, `env.maybe("PORT").int() else 8080`,
+  `env.list("PATH")`. A value of the wrong kind is `InvalidQueryValue` or
+  `InvalidEnvironmentValue`, naming the name, the value and what was
+  expected.
+
+- **The HTTP server is faster than Python's `http.server` (#75, #76, #81,
+  #83, #100, #101, #108, #110, #112–#117, #503).** The hello server
+  (`examples/web/hello.ok`) on Sparrow, against Python's
+  `ThreadingHTTPServer` with the same client in the same container (medians
+  of three rounds):
+
+  | | 0.5.4 | 0.5.5 | Python |
+  |---|---|---|---|
+  | request on a kept-alive connection | 44 ms | 0.082 ms | 0.091 ms |
+  | requests/s on one kept-alive connection | — | 11 300 | 10 800 |
+  | new connection per request | 0.45 ms | 0.125 ms | 0.181 ms |
+  | `ab -n 10000 -c 10`, requests/s | fails | 9 060 | 6 610 |
+
+  Most of the gain is work the server no longer does:
+  - TCP connections and listeners set `TCP_NODELAY`; listeners reuse their
+    address. A small response goes out in one write, a large one in 64 KiB
+    writes.
+  - The request target was canonicalised three times a request, every
+    character through an encoder, a byte buffer and a decoder: 18 µs each
+    time, 1.5 µs now. Strings are no longer split to find one character;
+    the head and the Host field are parsed in one pass each.
+  - Header values are checked without regular expressions, chunk sizes
+    without a regex compiled per chunk (19 µs → 0.8 µs), and the framing
+    fields without making field names per lookup.
+  - The HTTP/1 limits were rebuilt five times a request, a response was
+    framed three times, a GET built a request-body reader and drained it,
+    and a kept-alive connection read the next request one byte first.
+  - A web endpoint's query is decoded once; headers and reply headers are
+    built in linear time; in-memory bodies are read without a lock; a
+    declared body over the limit is refused with 413 before it is read.
+  - Static files: one open and one stat per GET instead of three stats.
+  - Server peers are kept in linear time (1000 connections at once).
+  - Tomato: a collection no longer looks up every dead cell in the set of
+    watched objects (sweep 55% shorter), and array builders are reused
+    instead of allocating Rust memory for every `map` or `filter`.
+  - A 1 MiB streamed response takes 0.4 ms instead of 42 ms; a 1 MiB upload
+    1.8 ms instead of 51 ms.
+- **Web replies build a Response; headers are fields (#82, #207, #220).**
+  The owner, 2026-11-12: «базовый объект Response, который собирается
+  максимально подробно, а Text, Json, Html — надстройки-декораторы с
+  понятными дефолтами»; «куки это часть заголовка, а не метод тела ответа».
+  - An endpoint answers anything `Responding` (a new role in http/message):
+    a `Response` built in full, or a reply that builds one with the defaults
+    of its kind and takes `status:` and `headers:` for what differs.
+  - The replies carry a `Reply` suffix: `TextReply("ok")`, `HtmlReply`,
+    `JsonReply`, `CreatedReply`, `RedirectReply("/notes")` (303 unless told),
+    `NoContentReply()`, `ProblemReply(status:, detail:)`. Statuses are
+    `Status` values. The `.header(name, value)` successors are gone.
+  - Headers are fields one by one: `Headers(Header(name: "Cache-Control",
+    value: "no-store"), SetCookie(name: "sid", value: token),
+    ExpiredCookie("old"))`. `Header` takes its name as a string; a
+    `SetCookie` defaults to Path=/, Secure, HttpOnly and SameSite=Lax and
+    takes `max_age:`.
+  - `WebSocket(path:, application:)` routes a WebSocket; a `WebApplication`
+    server knows its own URL to check the Origin of an upgrade.
+
+  | Before | After |
+  |---|---|
+  | `async show(r is WebRequest) is HandlingResult` | `async show(r is WebRequest) is Responding` |
+  | `Text(status: 200, text: "ok")` | `TextReply("ok")` |
+  | `JsonReply(status: 201, value: v)` | `JsonReply(value: v, status: Status.created)` |
+  | `Problem(401, "expired").header("WWW-Authenticate", "Bearer")` | `ProblemReply(status: Status.unauthorized, detail: "expired", headers: Headers(Header(name: "WWW-Authenticate", value: "Bearer")))` |
+  | `.header("Set-Cookie", "sid=…; Path=/; HttpOnly")` | `headers: Headers(SetCookie(name: "sid", value: token))` |
+
+- **A route table takes the most specific pattern and any number of routes
+  (#103, #104).** Patterns of one method may now overlap: segment by
+  segment, a literal wins over a parameter and a parameter over a final
+  wildcard, so `GET /users/me` sits beside `GET /users/:id` and
+  `GET /files/index` beside `GET /files/*path`. When the most specific
+  pattern has no route for the method, the next one is tried. Only two
+  routes of one method with the same shape (`/users/:id` and
+  `/users/:name`) are refused. The 256-route limit is gone: the table is a
+  segment tree, and finding a route no longer filters every route twice.
+
+  | routes in the table | 10 | 100 | 250 | 1000 |
+  |---|---|---|---|---|
+  | dispatch before, µs | 4.9 | 12.6 | 24.2 | refused |
+  | dispatch now, µs | 2.9 | 3.0 | 2.9 | 3.0 |
+
+- **Routes for any method, a path written once, and code around routes
+  (#77, #78).** In `web/routing`:
+  - `Resource("/notes", Get(notes.list), Post(notes.add))` gives several
+    methods one path; the routes in it take no path of their own (`Get(f)`).
+  - `Route(method: Method.options, path:, endpoint:)` routes any one method,
+    `Any(path: "/proxy/*rest", endpoint:)` every method. On one pattern a
+    route of the request's own method wins over `Any`. Underneath,
+    `http/routing` has `Route(pattern:, handling:)` for every method and
+    `route.method_token()`.
+  - `Around(x)` in a table, a `Scope` or a `Resource` puts `x` around its
+    routes; `x` does the new role `Surrounding`
+    (`async around(request, inner) is Responding`). It may answer by itself
+    (401) or call `inner` and work with the reply; a thrown `Exception`
+    reaches it as its problem reply. Arounds run outer before inner, and a
+    WebSocket upgrade passes them too.
+  - New module `web/around`: `AccessLog(out)` writes one line per request,
+    `BearerAuth(token:)` lets through only `Authorization: Bearer <token>`.
+
+  ```okkama
+  WebRoutes(
+      Around(AccessLog(Stdout())),
+      Resource("/notes", Get(notes.list), Post(notes.add)),
+      Scope("/admin", Around(BearerAuth(token: secret)), Get(path: "/stats", endpoint: admin.stats)),
+      Any(path: "/proxy/*rest", endpoint: proxy.forward),
+  )
+  ```
+
+  `WebRouting` gained `around()`; an application's own routing element
+  answers `Maybe<Surrounding>.none`.
+
+- **Request values read in the json style (#79, #111, #206).** A web
+  endpoint reads route parameters, query parameters, header fields and
+  cookies by name and type; a missing or malformed value is a 400 that names
+  it ("query parameter page must be an integer"):
+
+  ```okkama
+  let id = request.path().int("id");
+  let page = request.query().maybe("page").int() else 1;
+  let trace = request.header().maybe("X-Request-Id").text() else "";
+  let session = request.cookies().text("sid");
+  ```
+
+  Each of `path()`, `query()`, `header()` and `cookies()` is a
+  `RequestValues` with `text`, `int`, `boolean`, `list` and `maybe`.
+  Underneath, `Headers` reads the same way with http errors
+  (`headers.int("Content-Length")`, `headers.list("Accept")` splits list
+  fields outside quoted strings, `headers.maybe(name)`), and the new
+  `RequestCookies(request)` parses the Cookie fields on the server.
+
+  | Before | After |
+  |---|---|
+  | `Number(request.path("id")).int()` | `request.path().int("id")` |
+  | `Number(request.query("limit") else "10").int()` | `request.query().maybe("limit").int() else 10` |
+  | `headers.first(HeaderName("Content-Type"))` | `headers.text("Content-Type")` |
+
+- **A test client for route tables (#85).** `web/testing`'s
+  `WebTestClient(routes)` sends requests through a table, its arounds and
+  exception scopes without a network, with `get`, `head`, `options`,
+  `delete`, `post`, `put`, `patch` and `response(request)` like
+  `HttpClient`, and answers the same `ClientResponse`:
+
+  ```okkama
+  let page = await WebTestClient(routes).get("/notes/7");
+  test.is(page::Head::code, 200);
+  test.is((await page.json()).text("title"), "Tea");
+  ```
+
+  `examples/web/testing.ok` tests a table this way.
+
+- **Replies of bytes, streams and server-sent events (#82).**
+  `BytesReply(bytes: png, media_type: "image/png")`,
+  `StreamReply(body: opening, media_type: "text/csv")` (Content-Length when
+  the body knows it, chunks otherwise) and `EventsReply(channel.receiving())`,
+  which streams `ServerEvent`s as `text/event-stream` until the channel
+  closes. `examples/web/events.ok` streams three events to the std client.
+
+- **A WebSocket connection is walked with `for await` (#220).**
+  `WebSocketConnection` gained `next()` (none once the connection has
+  closed), `send_text`, `send_bytes` and `send_json`, and a message `json()`:
+
+  ```okkama
+  for await connection -> message {
+      await connection.send_json(Json(JsonField("text", "you said: " + message.json().text("text"))));
+  }
+  ```
+
+  `examples/web/chat.ok` holds a JSON conversation this way. An
+  application's own `WebSocketConnection` or `WebSocketMessage` must add the
+  new actions.
+
+- **Trailing slashes, links to named routes, CORS (#105, #106, #77).**
+  - A `WebRoutes` table answers a path that differs from a route only by its
+    final slash with 308 to the declared form (`/notes/` → `/notes`);
+    `WebRoutes(Slashes(SlashPolicy.strict), …)` turns it off. Underneath,
+    `http/routing.Routes` takes `slashes: SlashPolicy.redirect` and stays
+    strict by default.
+  - A route takes `name:` (`Get(path: "/users/:id", endpoint: users.show,
+    name: "user")`), and an endpoint builds its path with
+    `request.link("user", RouteParameter(name: "id", value: "7"))`, percent-encoded.
+  - `Cors(origin: "https://app.example")` in a table or a scope answers
+    preflight requests and marks replies to that origin.
+- **The old WebRequest readers are gone.** `request.path(name)`,
+  `query(name)`, `header(name)` and `header(name, fallback)` did what the
+  json-style readers do; the owner, 2026-11-12, approved removing them.
+
+  | Before | After |
+  |---|---|
+  | `request.path("id")` | `request.path().text("id")` |
+  | `request.query("q") else ""` | `request.query().maybe("q").text() else ""` |
+  | `request.header("X-Id")` | `request.header().text("X-Id")` |
+  | `request.header("X-Id", "")` | `request.header().maybe("X-Id").text() else ""` |
+
+- **Files under a path, cache rules, content ETags, a file reply (#107,
+  #109, #82).**
+  - `Files(path: "/assets", root: assets, cache: "public, max-age=31536000,
+    immutable", tags: FileTags.content)` serves `root/<name>` for
+    `/assets/<name>` in a `WebRoutes` table, through its arounds.
+  - `cache:` is the Cache-Control of every file. `FileTags.content` makes a
+    strong ETag from the file's SHA-256, the same on every replica and
+    computed once per version of a file; `FileTags.metadata` stays the default.
+  - `FileReply(request: request, root: reports, path: "2026/q3.pdf")` answers
+    one file from an endpoint, with ranges and validators.
+  - Underneath, `http/static` has `StaticPolicy(…, cache:, tags:)`,
+    `StaticFiles(…, parameter: "file")` taking the file from a wildcard route
+    parameter, and `files.file_response(request, path)`.
+
+- **Sessions and CSRF protection (#208).** New module `web/session`:
+  - `Sessions(key: secret, store: MemorySessions())` keeps sessions on the
+    server, found by a cookie holding a random 256-bit id signed with
+    HMAC-SHA256.
+  - `await sessions.started(SessionValue(name: "user", value: name))` gives a
+    session whose `cookie()` goes into the reply. `await
+    sessions.session(request)` is 401 without a valid one. `session.text("user")`
+    reads a value, and `await sessions.ended(request)` gives the field that
+    removes the cookie.
+  - `Around(CsrfProtection(sessions))` makes POST, PUT, PATCH and DELETE with
+    a session carry `session.csrf()` as `X-CSRF-Token` or as a form field
+    `csrf`.
+  - A web request now keeps its body once read, so an Around and the endpoint
+    can both read it.
+  - `examples/web/login.ok` logs in, reads, posts with the token and logs out.
+
+- **gzip, deflate and zlib (#183).**
+  - New modules `compression/gzip`, `compression/deflate` and
+    `compression/zlib`. Each has whole-value objects,
+    `GzipCompressed(data).bytes()` and `GzipDecompressed(origin: packed,
+    limit: n).bytes()`, and stream codecs, `GzipCompressor(level:)` and
+    `GzipDecompressor(limit:)`, for the existing `Compressing` and
+    `Decompressing` roles, so `CompressedReading` and `DecompressedReading`
+    work with them.
+  - Decompression is bounded by `limit` (`CompressionLimitExceeded`).
+    Damaged data, a wrong checksum, a cut stream or bytes after the end are
+    `InvalidCompressedData`.
+  - The runtime has a streaming DEFLATE: miniz_oxide in the Rust engines
+    (Sparrow through the bridge of synchronous natives) and java.util.zip on
+    the JVM. The gzip header, CRC-32 and length are written and checked on
+    all three.
+  - What one engine writes, Python's gzip and zlib read, and the other way
+    round.
+
+- **Compressed replies and transparent decoding in the client (#186).**
+  - `WebRoutes(Around(Compression()), …)` gzips text, JSON, JavaScript, XML
+    and SVG replies of 1 KiB and more for clients that accept gzip. A reply in
+    memory keeps a Content-Length, and a stream is compressed as it goes. The
+    reply says `Vary: Accept-Encoding`, its strong ETag becomes weak and it
+    stops offering ranges.
+  - `HttpClient` sends `Accept-Encoding: gzip` on a request without its own
+    and decodes a gzip answer as it is read, up to the client's body limit;
+    `page.text()` is the decoded text. A request with its own
+    `Accept-Encoding` gets the bytes as sent.
+  - New module `http/body_coding`: `GzipEncodedBody(origin:)` and
+    `GzipDecodedBody(origin:, limit:)`, bodies coded as they are read.
+
+- **HTTPS servers (#209).**
+  - `net/tls` has `TlsIdentity(certificates:, key:)`: PEM, the server's own
+    certificate first, a PKCS #8 key. It also has
+    `TlsServerPolicy(identity:, versions:)` and `TlsServerHandshake`.
+  - `HttpServer(listener:, handling:, tls: TlsServerPolicy(identity:
+    identity))` speaks HTTPS and offers the protocols of its policy by ALPN,
+    h2 first.
+  - The runtimes do the server side as they do the client: rustls in the IR
+    engine and Sparrow, an `SSLEngine` with a key manager on the JVM.
+  - No client certificate is asked for; `TlsDetails.peer()` of such a
+    connection says the peer presented none.
+- **A web application speaks HTTPS and stops on a signal (#80).**
+  - `WebApplication(routes).listen(address:, port:, tls: identity)` serves
+    HTTPS and offers HTTP/2 and HTTP/1.1 by ALPN. `server(address, port,
+    tls)` binds such a server without serving it; its own URL is https.
+  - `listen()` serves until SIGTERM or SIGINT. Then the server stops
+    accepting, the requests in flight get 10 seconds to finish, the server
+    closes and `listen()` returns, so the program goes on and can end with
+    code 0. A second signal during the drain ends the process at once.
+  - Underneath is a new runtime boundary, `runtime/signal`:
+    `signal_wait(["TERM", "INT"])` waits for one of the named signals and
+    answers its name. A signal is handled only
+    while some wait wants it; when the wait ends, by the signal or by
+    cancellation, the signal gets its earlier action back. The IR engine uses
+    a self-pipe and a dispatcher thread, Sparrow takes it through the bridge,
+    and the JVM uses `sun.misc.Signal`.
+  - The wait begins before the port is bound, so a signal that comes as soon
+    as the port accepts already finds its handler.
+  - `okkama-cli/tests/signals.rs` runs a real application on every engine:
+    a request in flight is answered after SIGTERM, new connections are
+    refused, and the program ends with code 0; an HTTPS application stops the
+    same way. `examples/web/https.ok` serves HTTPS and answers an HTTP/2 and
+    an HTTP/1.1 client.
+- **Static files do not stall the server on a slow disk (#121).**
+  - `fs/root`: `await entry.piece(offset:, limit:)` reads a rooted file off
+    the program's thread. `http/static` reads file bodies with it, so
+    `Files(…)` and `FileReply` do too.
+  - Only a read that would wait for the disk goes to a worker. When the page
+    cache holds the range, the runtime reads at once: Linux asks `preadv2`
+    with `RWF_NOWAIT`; where the file system cannot tell (overlayfs, tmpfs)
+    and on macOS, `mincore` over a 1 MiB window ahead of the read, which the
+    entry keeps.
+  - Workers: an elastic pool of up to 64 threads in the IR engine and on the
+    JVM, Tokio's blocking pool with 64 slots in Sparrow.
+  - With the disk limited to 8 MB/s and four cold downloads in flight, a warm
+    1 KiB file now comes back as if alone: p99 0.24 ms on Sparrow instead of
+    543 ms, 4.0 ms on the IR engine instead of 537 ms, 4.3 ms on the JVM
+    instead of 559 ms.
+  - On a warm cache, 1 MiB files cost 7–10% on Sparrow and 8% on the JVM,
+    about half of it for awaiting a ready Future; the IR engine is unchanged.
+  - Opening, `stat` and the content digest of `tags: FileTags.content` stay
+    synchronous. Report: `okkama-docs/benchmarks/fs-121/REPORT.md`.
+- **The server frames every response.** A response of known length without a
+  Content-Length gets one, and one of unknown length (`StreamReply`,
+  `EventsReply`, compressed streams) is chunked for an HTTP/1.1 client.
+  Before, both were sent to the end of the connection, which closed after
+  each. A TLS connection now ends with close_notify.
+
+- **The server answers HTTP/1.0 (#102).** `ab` works: no Host is required,
+  responses are not chunked, and keep-alive applies only when asked for.
+- **RequestJson readers share one translation of reading failures (#84).**
+- **The gate prints the output tail of a new std failure (#502).**
+- **std hot paths without a string per character (#161, #170, #234).**
+  Release builds, nanoseconds per operation (median of 5):
+
+  | operation | Sparrow before → after | IR before → after |
+  |---|---|---|
+  | `MediaType("multipart/form-data; charset=utf-8; boundary=\"…\"")` | 25 426 → 5 923 | 338 750 → 272 642 |
+  | the same with an extended parameter decoding to Cyrillic | 34 156 → 11 093 | 422 202 → 383 787 |
+  | `Number("12345.6789").float()` and two more readings | 2 276 → 620 | 19 637 → 2 995 |
+
+  - `mime/media_type` encodes the field body once and compares byte codes;
+    token characters are one code class, quoted strings are copied in runs.
+  - `strings/parse`: a dotted `float()` is read by the new native
+    `runtime/number_text::float_parse`, rounded to the nearest float (before
+    it rounded twice); `byte()` uses the integer reader.
+  - About 60 places in std that joined arrays through a copying `map` now
+    write `a + b`, `old + [item]` or `[item] + old`; the hello server's
+    throughput is unchanged (18 200 requests/s on Sparrow).
+  - 17 module comments told readers to run the removed Perl tool; they say
+    `okkama run -t` now (#179).
+- **Compiled patterns and logger thresholds are kept (#138, #182); more
+  parsers compare codes (#166, #167, #168, #172).** Release builds,
+  nanoseconds per operation:
+
+  | operation | Sparrow before → after | IR before → after |
+  |---|---|---|
+  | `Regex(…)` built afresh and searched, as inside a method | 3 710 → 2 336 | 8 343 → 6 994 |
+  | `LevelThresholds.allowed()` with 100 overrides | 4 080 → 165 | 221 712 → 2 044 |
+
+  - The regex providers keep compiled patterns by expression and flags:
+    256 in the IR engine and Sparrow, a 256-entry LRU on the JVM.
+  - `LevelThresholds` resolves a logger name's threshold once and keeps
+    up to 4096 names.
+  - `http/sse` decodes a line from its bytes in place; `http/conditional`
+    scans entity tag lists by octet; `http/form` and `logging/line` walk
+    code points instead of slicing a string per character. Each has a
+    characterization test that passes before and after.
+- **Checksums by the runtime, CSV read once, POD gone (#193, #203, #200).**
+
+  | operation | Sparrow before → after | IR before → after |
+  |---|---|---|
+  | CRC-32 and Adler-32 of 1 MiB | 90.0 → 12.8 ms | 1 930 → 8.4 ms |
+  | `CsvRows` of 20 000 rows, per row | 3.83 → 2.14 µs | 67.7 → 4.1 µs |
+
+  - `checksum/crc` and `checksum/adler32` keep their objects and call the
+    new `runtime/checksum` natives (CRC-32, CRC-16/CCITT, Adler-32 from a
+    seed).
+  - `CsvRows` reads its text once (`once let`); the default dialect goes
+    to the native scanner of `csv/stream`. Its default limits are now 64 Mi
+    characters, fields of 1 Mi, a million rows and 1024 columns: the text
+    is already in memory, and a 2 MB file no longer fails by default.
+  - `cell` and the `async/*` modules document themselves in `//` comments
+    like the rest of std; no POD is left.
+- **Templates, localized digits and encoded words compare codes (#169,
+  #176, #162).** Compiling and rendering a 4 KB text template with 42 tags:
+  Sparrow 307 → 105 µs, IR 3.37 → 2.48 ms (release builds).
+  - `template/compile` finds `{{` and `}}`, spaces and indentation by
+    character code over one array of the source's characters.
+  - `locale/number` maps digits by code and localizes a grouped number
+    once; Latin digits leave the text unchanged; reading localized digits
+    back compares codes.
+  - `mime/word` sizes, splits, validates and Q-decodes encoded words by
+    code.
+  - Each change has a characterization test that passes before and after.
+- **MIME parts, property lists, IMAP names, mailbox names and mail dates
+  compare codes (#163, #171, #173, #174, #175).** Release builds, Sparrow
+  and IR, before → after:
+
+  | operation | Sparrow | IR |
+  |---|---|---|
+  | XML property list, ASCII strings | 204 → 89 µs | 2.33 → 1.99 ms |
+  | XML property list, Cyrillic strings | 214 → 94 µs | 2.38 → 2.02 ms |
+  | IMAP name to modified UTF-7 and back, Cyrillic | 34.3 → 23.6 µs | 374 → 285 µs |
+  | IMAP keyword flag | 1.26 → 0.36 µs | 10.3 → 8.8 µs |
+  | mail date with a comment, plus a Message-ID | 54.6 → 9.1 µs | 429 → 201 µs |
+  | two-part MIME message | 269 → 257 µs | 7.38 → 7.37 ms |
+
+  - `mime/part` finds a header's colon with `find` and checks boundary
+    characters by code ranges.
+  - `plist/parse` scans XML text, checks characters and decodes entities
+    by code; text without `&` or `\r` is taken as it is.
+  - `mail/imap_name` encodes and parses modified UTF-7 by code.
+  - `mail/mailbox` checks keywords, storage identifiers and Maildir names
+    by code and matches Maildir flag letters by code.
+  - `mail/message` takes each date token with one slice instead of writing
+    a buffer byte by byte, and checks Message-ID characters by code.
+  - Each change has a characterization test that passes before and after.
+- **`SecureRandom` numbers take one runtime call (#195).** Before, an
+  integer cost three runtime calls (eight bytes, then two
+  arbitrary-precision sampling steps) and a float cost two. Release builds
+  on Linux, before → after:
+
+  | operation | Sparrow | IR |
+  |---|---|---|
+  | `integer(0, 1000000)` | 1278 → 163 ns | 2190 → 604 ns |
+  | `float()` | 412 → 123 ns | 1179 → 555 ns |
+  | `bytes(16)` | 321 → 299 ns | 1109 → 1068 ns |
+
+  - New runtime natives `secure_integer` and `secure_float` sample in the
+    runtime, on all three engines.
+  - On Apple systems the bytes come from `arc4random_buf`, a user-space
+    ChaCha20 generator that the kernel seeds and reseeds. Before, each
+    request was a `getentropy` system call, about a microsecond.
+  - Elsewhere the bytes still come from `getrandom`. glibc 2.41 on Linux
+    6.11 and later serves it from the vDSO with a generator of the same
+    kind. The runtime keeps no generator state of its own.
+  - `SecureRandom.integer` accepts ranges wider than 2^64; before, it
+    never returned for them (#507).
+- **CLDR tables are runtime data (#223, #222).** `std/locale/internal` was
+  4.8 MB of generated Okkama. Every program that formatted a number compiled
+  it, and every formatted value split thousands of cells of string literals
+  again. The generators now write the tables to `cldr-*.dat` files, 944 KB
+  of gzip in all, next to the other runtime data. A runtime reads a file the
+  first time one of its tables is asked for, and the generated modules look
+  records up through the new native `runtime/cldr::cldr_fields`.
+
+  Release builds, before → after:
+
+  | operation | Sparrow | IR |
+  |---|---|---|
+  | decimal number | 175 → 35 µs | 303 → 116 µs |
+  | long date | 266 → 67 µs | 442 → 158 µs |
+  | currency with its name | 548 → 114 µs | 808 → 261 µs |
+  | full date and time with the zone name | 644 → 84 µs | 798 → 260 µs |
+
+  - Start of a program that formats one full date and time (compile, start,
+    one value): Sparrow 345 → 140 ms, IR 78 → 49 ms, JVM 292 → 166 ms.
+  - The 57 shard modules of zone and currency names are gone; the objects of
+    `locale/internal` keep their actions.
+  - All 725 CLDR locales format numbers, currencies, dates with zone names,
+    lists and likely subtags exactly as before on all three engines.
+  - The std inventory and coverage matrix of the conformance suite are
+    rewritten for 0.5.5.
+- **Sparrow carries module constants as data (#506).** A constant's value
+  used to be built by its init function, one instruction per element, and
+  Cranelift compiled that function at the first read. The Sparrow image now
+  carries plain constants as data: scalars, arrays and maps of them. Tomato
+  builds the value at the first read without running code.
+
+  Release builds, before → after:
+
+  | constant | Sparrow build | start |
+  |---|---|---|
+  | 1 000 strings | 32 → 7 ms | 12 → 8 ms |
+  | 2 000 strings | 166 → 8 ms | 14 → 8 ms |
+  | 8 000 strings | 54 → 11 ms | 28 → 9 ms |
+  | the CLDR tables as constants, one date | 2 105 → 177 ms | 324 → 77 ms |
+
+  An empty program builds in 8 ms. Of the 177 ms for the CLDR tables, the
+  front end takes 168, parsing and evaluating 3 MB of literals.
+  - The image format is SPB 15: programs built by earlier releases must be
+    rebuilt.
+  - Constants with enum cases or rationals keep their init functions.
+  - The IR engine and the JVM are unchanged.
+
+## [0.5.4] — 2026-11-12
+
+0.5.4 is the review of the standard library (#352).
+- **Method.** Every module of `std/` was read against
+  `docs/std-principles.md` and kept, simplified or rewritten in place.
+  Nothing left std (the owner, 2026-11-11). Three exemplars set the shape:
+  json, fs/file and the HTTP client. Six waves then applied it bottom-up:
+  core, formats, network, platform, web and mail.
+- **The surface.** Answers have nouns instead of `value()`. Records show
+  themselves through caps, machinery is `hidden`, and constructors take named
+  arguments with defaults.
+- **The examples pass.** A last reading of the 61 programs in `examples/`
+  with the owner made objects answer in the form people use:
+  - a capture answers text, a digest its hex, an instant its RFC 3339 form,
+    a server its port and a date its days;
+  - whole durations read `Duration(seconds: 5)`;
+  - parts of one kind are passed one by one.
+- **The language.** It gained `once let` (#491), `hidden` actions (#365),
+  `for` over `Batching<T>` sources (#465), and `...string` tails that turn
+  values into text: `out.writeln("count: ", 5)` and `Formatted("{} of {}",
+  done, total)`.
+- **Fixed.**
+  - http: the server drain (#496) and HTTP/2 targets (#497);
+  - JSON numbers in templates (#494), Windows roots (#492) and
+    `CounterNonce` (#493);
+  - the compiler: overloads with collection literals (#501) and nested
+    arrays as roles of roles (#488);
+  - the PGO training programs (#500).
+- **Tests.** Conformance has 1021 mandatory cases, and the t/ suite 50 646
+  checks per configuration.
+- **Speed.** The ladder report is
+  okkama-docs/benchmarks/reports/2026-11-12-v0.5.4. It is the first to
+  compare against Go, Java, Kotlin and Python (#363). Against v0.5.3, rebuilt
+  and measured the same morning:
+  - Tomato is 4.1% faster by geometric mean and faster on every program;
+    `11-ownership` is 16% faster (#473, #483, #484);
+  - the JVM backend is 2.0% faster.
+
+### Added
+
+- **Language: a `...string` tail turns values into text (#352).** The owner,
+  2026-11-12: `Formatted("foo: {}, bar: {}", foo, bar)`. A value that is not
+  a string reaches a `...string` tail through its own `string()`: `int`,
+  `float`, `rat`, `byte`, `bool`, `char`, and objects and role values whose
+  type answers `string() is string`.
+  - `out.writeln("count: ", 5, ", ready: ", true)` prints `count: 5, ready:
+    true`, and `out.writeln(Formatted("{} version {}", id, id.version()))`
+    fills the slots. `strings/format` gains `Formatted(pattern, values...)`.
+  - The checker inserts the call, so IR, Sparrow and the JVM run the same code.
+    The conversion is the last resort: a signature that fits as written wins,
+    so `kind(1, "a")` still picks `...any`. A value without `string()` is a
+    compile error; a spread `values...` is not converted.
+  - Book §18.4 and Bible §13.4 (EN, RU); conformance cases
+    `L03.variadic.string-tail-converts` and `…-rejects-textless`.
+
+- **Language: `for`, `map`, `filter`, `reduce` and `find` walk `Batching<T>`
+  sources (#465).** `collections/iteration` gains `role Batching<T> {
+  batch() is @T; }` for sources consumed as they are read.
+  - `for source -> item` calls `batch()` once per batch and walks each batch
+    with the array loop. The first empty batch ends it.
+  - `next`, `last`, `return` and `defer` work as in any `for`, and `last`
+    asks for no further batch.
+  - A source that does both `Iterating<T>` and `Batching<T>` is walked in
+    batches.
+  - Why: a cursor costs an object and three role calls per item.
+    Reading 100 000 lines of a file with `for` over a batching source takes
+    0.09 µs per line on Tomato, against 0.76 µs for a `line()` loop and
+    1.46 µs for a cursor, and memory stays at one batch. IR and the JVM are
+    about four times faster than with `line()`.
+  - The runtime native `runtime/fs.file_state_read_lines(state, limit)`
+    cuts the next batch of whole lines in Rust (IR, Sparrow) and Java (the
+    JVM).
+  - Conformance contract `COLL.BATCHING` has six cases.
+  - Book §12.5 and §13, spec §9.9 and Bible §8.6 describe the protocol.
+
+- **Examples for the modules people use directly (#352).** 22 new programs
+  in `examples/`, each with its `.expected` output, run by
+  `examples/check.py` on IR, Sparrow and the JVM (the owner: «примеров бы
+  еще накинуть на нужные модули. fs/directory, например»):
+  - `fs/directory`: list, walk a tree, create/rename/remove, errors;
+  - `strings/parse`, `time` (dates, durations, zones, formats), `regex`
+    (search, replace and split), `encoding` (text and bytes, a binary
+    record), `collections` (sort and search, lazy views), `random`
+    (seeded), `text/layout`;
+  - `async` (a channel between a producer and a consumer; timeouts, races
+    and waiting for all), checked in a container like the async tests.
+
+- **Language: `once let` keeps a value computed once per object (#491).**
+  The owner, 2026-11-11: a mark on the value, not on the method. The word
+  is `once`, «ближе к истине». It was `memo let` before the release.
+  Acceptance replaced it, so no released code needs a migration.
+  `once let kept = source.items();` in an object's action computes the value
+  the first time and reads a hidden slot of `self` afterwards.
+  - The compiler refuses a value that reads a parameter or a local, one that
+    reaches an effect (natives of the clock, files, network, processes,
+    randomness or environment; `Cell`, `async` objects, `await`, `spawn`,
+    followed through concrete objects' actions), a resource, and a `once let`
+    outside an action body's own statements. Calls through a role or a
+    function value are trusted.
+  - Slots are left out of `==`, map keys and `Dumper`. A successor starts
+    with empty slots, and a value that throws leaves its slot empty.
+  - IR: hidden `$onceN` fields of `Maybe<T>` marked `once`, and the
+    instructions `once.load` and `once.store`. Each engine keeps the slot its
+    own way: the IR runtime beside the fields, Sparrow and the JVM in the
+    field itself, skipped by equality, keys and dumps.
+  - Conformance contract `OBJ.ONCE-LET` with five cases; `t/lang/once.ok`
+    runs in every configuration. Book §18.6, Bible §13.13, VS Code
+    highlighting.
+
+### Changed
+
+- **Examples pass: objects answer in the form people use (#352).** The
+  owner, 2026-11-12: «любой объект сам знает, какую информацию и в каком виде
+  он должен предоставить… а не городи вокруг заборы из декодеров,
+  форматтеров». `docs/std-principles.md` §1 records the rule. The 61 programs
+  in `examples/` were read with the owner, and the std behind them changed:
+
+  | Before | After |
+  |---|---|
+  | `Duration(value: 5.rat(), unit: DurationUnit.second)` | `Duration(seconds: 5)` |
+  | `Json([JsonField("id", 7)])` | `Json(JsonField("id", 7))` |
+  | `Headers([a, b])`, `LogFields([…])`, `SettingKey(["server", "port"])` | `Headers(a, b)`, `LogFields(…)`, `SettingKey("server", "port")` (32 objects) |
+  | `HttpClient(resolver: FixedResolution([]), endpoints: ListedNetworks([IpNetwork(…)]))` | `HttpClient(endpoints: LoopbackEndpoints())` |
+  | `FutureGroup` + `serving.start(server.serve())` + `serving.wait()` | `server.started()`; `drain(limit:)` waits |
+  | a loop over `request.body().reading()` | `await request.text(limit: 4096)` |
+  | `StatusCode(page::Head::status).number()` | `page::Head::code` |
+  | `server.local_endpoint()::Parts::port` | `server::Local::port` |
+  | `WebRoutes(routings: [Scope(prefix: "/api", routings: […])], fallback: f)` | `WebRoutes(Scope("/api", Get(…), Post(…)), Fallback(f))` |
+  | `Rfc3339(origin: instant, offset: utc).string()` | `instant.string()` |
+  | `IsoDate(origin: date).string()`, `DaysBetween(left:, right:).count()` | `date.string()`, `release.days_until(deadline)` |
+  | `GregorianDay(GregorianDay(d).number()).date()` | `Date(day_number: d.day_number())` |
+  | `Zoned(local:, zone:, fold:).instant()` | `berlin.instant(local)` (`Fold.earlier` by default) |
+  | `TemplateBindings(TemplateBinding(path: TemplatePath(…), value: …))` | `template.string(["user.name": "Ada"])` |
+  | `Utf8Decoded(origin: done::Captured::output).string()` | `done::Captured::output` (text; `::Bytes` keeps bytes) |
+  | `ProcessInput(origin: p).write(ByteSnapshot(Utf8Encoded(…).bytes()))` | `p.input().write("text\n")`; `p.output().text(limit:)` |
+  | `InheritedCommand(program:, arguments: [])` | `InheritedCommand(program:)` |
+  | `client.output().write(ByteSnapshot(Utf8Encoded(…).bytes()))` | `client.output().write("hello")` |
+  | `FixedResolution(HostAddresses(host: HostName(…), addresses: […]))` | `FixedResolution(["api.example.test": ["192.0.2.10"]])` |
+  | `Utf8Decoded(message.bytes()).string().split("\r\n").join("\n")` | `message.string()` |
+  | `headers().first(MessageHeaderName("Subject"))` | `headers().first("Subject")` |
+  | `AllowedLogs(origin:, allowing: LevelThresholds(fallback:, overrides: [LevelOverride(name: LogName("shop", "db"), level:)]))` | `AllowedLogs(origin:, level: LogLevel.info, overrides: ["shop.db": LogLevel.debug])` |
+  | `TextStreamLogs(origin:, zone: FixedZone(name: "UTC", …))`, `RedactedLogs(…, replacement: Json(…))` | `TextStreamLogs(origin:)` (UTC), `RedactedLogs(origin:, names:)` (`"[redacted]"`) |
+  | `TemporaryDirectory(parent: Directory(path: Path(".")), prefix:)` | `TemporaryDirectory(prefix:)`, in `Environment().temporary()` |
+  | `TemporaryFile(directory: Directory(path: root), prefix:)` | `scratch.file(prefix:)`; `file.write([…])`, `file.write("text")`, `file.size()` |
+  | `entry.path().string().slice(root.string().length() + 1, …)` | `entry.path().name()` |
+  | `out.writeln("lowest " + scores.first().string())` | `out.writeln("lowest ", scores.first())` (159 lines in `examples/`) |
+  | `HexEncoded(Sha256(Utf8Encoded("x").bytes()).bytes()).string()` | `Sha256("x").hex()`; `Sha256().state("hello ").state("world")` (every digest and `Hmac`; `Digesting` has `hex()`) |
+  | `add.execution([Param("tea"), Param(1)])`, `db.execution(sql, [])` | `add.execution(Param("tea"), Param(1))`, `db.execution(sql)` (roles `DbExecuting`, `DbConnection`, `Transaction`, `PreparedStatement`) |
+  | `CsvStream(ByteBuffer(Utf8Encoded(text).bytes()).reading())` | `CsvStream(text: …)`; `ByteBuffer("text")` |
+  | `SecretBytes(Utf8Encoded("key").bytes())` | `SecretBytes("key")` |
+  | `cipher.sealed(nonce, Utf8Encoded("h").bytes(), Utf8Encoded("t").bytes())`, `Utf8Decoded(cipher.opened(…))` | `cipher.sealed(nonce, "h", "t")`, `cipher.opened_text(nonce, "h", sealed)` (role `Sealing`) |
+  | `ArchiveFile(…, data: Utf8Encoded("…").bytes())` | `ArchiveFile(…, text: "…")` |
+
+  The older forms stay; nothing leaves std. `Utf8Encoded` is a `ByteSource`.
+  Book §26.5 (EN, RU) shows the new forms.
+
+- **Language: `hidden` marks an action (#365).** An action that only its own
+  object calls is written `hidden secret() is int { … }`, one by one, and
+  `hidden async` marks an async one. The rules are unchanged: such an action is
+  callable only through `self` from the same object's actions, cannot be bound
+  as a value, and cannot implement a role action. `hidden` now means one thing
+  everywhere: not part of the public contract (a module for declarations, an
+  object for actions).
+  - Only actions take `hidden` inside an object. `hidden Name(...)` is "A
+    constructor cannot be hidden", and `hidden` before a field, cap, `destroy`
+    or test is a syntax error.
+  - `private` is no longer a keyword, and the section it began is gone.
+    Migration: delete the `private:` line and write `hidden ` before each
+    action that followed it.
+  - Every program in std, conformance, t/, the tests and the examples was
+    rewritten this way: 166 sections, 310 actions, 113 files. For each file,
+    the syntax tree was checked to be the old one with each action marked
+    hidden.
+  - The CLDR generators emit `hidden` too.
+- Diagnostics follow: `Action "secret" on object "Cash" is hidden`, `Hidden
+  action "secret" cannot be used as a value`. The lint rule `unused-private`
+  is now `unused-hidden`, and IR prints the attribute as `hidden`.
+- Conformance:
+  - `GRAM.PRIVATE-SECTION` and `OBJ.PRIVATE-ACTIONS` are now
+    `GRAM.HIDDEN-ACTION` and `OBJ.HIDDEN-ACTIONS`, with their cases renamed
+    to `*.hidden*`.
+  - New cases reject a hidden constructor and a hidden field.
+  - `tools/inventory_std.py` leaves hidden objects, roles, enums and actions
+    out of the std contracts.
+- VS Code extension 0.8.0:
+  - `hidden` is highlighted before actions and `const`; `private` is no
+    longer a keyword.
+  - `make install` and `make install-pgo` now install the extension too,
+    when VS Code and npm are present. The installed 0.6.0 had never
+    highlighted `hidden`.
+  - The tokenizer test checks std modules instead of the removed `examples/`.
+
+- Every std module is formatted by `okkama fmt` (#352): 437 of 468 modules
+  (the generated locale data aside) were not, 57 of them written as a few
+  very long lines. Only whitespace changed; each file's syntax tree was
+  compared before and after, and `okkama fmt --check` over std is clean.
+- `json` is the first module reviewed (#352), the exemplar for the others.
+  Its public API changes; the owner approved each change:
+  - One error enum, `JsonError`, replaces seven. Migration: `WrongJsonKind.detailed`
+    → `JsonError.wrong_kind`, `MissingJsonValue.pointer` → `missing`,
+    `InvalidJsonNumber.detailed` → `invalid_number`, `InvalidJson.located` →
+    `invalid`, `DuplicateJsonMember.named` / `.located` → `duplicate_member` /
+    `duplicate_member_at`, `InvalidJsonIndentation` → `invalid_indentation`.
+    `MissingJsonLocation` is gone, since nothing could throw it. A
+    `catch JsonError.wrong_kind(pointer, expected, actual)` binds the fields.
+  - One way to read an optional member. `optional(name)` and `JsonOptional`
+    are removed. `optional(n).text(x)` becomes `maybe(n).text() else x`,
+    `optional(n).items()` becomes `maybe(n).list() else []`, and
+    `optional(a).optional(b)` becomes `maybe(a).maybe(b)`. `JsonMaybeReader`
+    gained `maybe(name)`, `present()` and `pointer()`.
+  - Objects are walked by name with `for`, not with closures:
+    `for doc.names() -> name { doc.get(name) }`. An object built from
+    another is `Json(doc.names().map() -> name { JsonField(name, …) })`, and
+    `merged(other)` joins two. This replaces `fields()`, and `JsonField` no
+    longer has `name()` and `value()`. Lookup by name is indexed (see
+    Performance), so the walk is linear.
+  - The readers of `maybe(name)` and `presence(name)` give the member as a
+    node of any kind with `node()`, which was `value()`:
+    `order.maybe("meta").node() else Json()`.
+  - `JsonInteger` and `JsonInt` were helpers of `integer()` and `int()`. They
+    are one hidden `ExactJsonNumber` now.
+  - `web/request` follows. `RequestJson.fields()` is gone, since its objects
+    are walked with `names()` and `get(name)`. The body parse catches
+    `JsonError`. `RequestJsonOptional` is built on `JsonMaybeReader`, and its
+    `value()` is `node()`.
+  - `logging/field` follows. `LogFields(values is Json)` is a new
+    constructor; `CombinedLogFields` is `merged`, and redaction rebuilds the
+    fields by name.
+    For a list with both an empty and a repeated name, the error is now
+    "duplicate field name", not "invalid field name"; both are still
+    `InvalidLogField`.
+  - `config/document` walks JSON objects with `for … names()`.
+  - New characterization tests pin `config/document`, `logging/field` and
+    `logging/redact`, which had none.
+
+- **`fs/file` is reviewed (#352), the second exemplar, with the fs layering
+  fixed.** The owner approved each change.
+  - A file is a resource read and written through two symmetric views. The
+    first view used picks the mode (the runtime gains `file_state_open`), so
+    `binary: true` and the four constructors go: `File(path: …, mode: …,
+    encoding: …)` with defaults (reading, UTF-8).
+    - `file.text()`: `for … -> line` (in batches, #465), `line()`, `lines()`,
+      `content()`, `write`, `writeln`, `rewrite` (empty and write anew).
+    - `file.binary()`: `for … -> b`, `byte()`, `bytes(n)`, `bytes()`,
+      `offset()`, `seek(…)`, `truncate(…)`, `write`, `<-`.
+  - `file.lock(mode) is Maybe<FileLock>` does not wait, and a lock in the
+    way is `Maybe.none`. `file.locked(mode)` tells whether the file is locked
+    in that mode now, by this process or another (new runtime native).
+  - One `FileError` for the whole fs domain, in the new module `fs/error`:
+    `not_found(path)`, `already_exists(path)`, `permission_denied(path)`,
+    `not_empty(path)`, `not_symbolic_link(path)`,
+    `invalid_hard_link_source(path)`, `invalid_text(path)`,
+    `invalid_operation(message)`, `unsupported_encoding(name)`,
+    `failed(code, message)`. `FileFailure(failure, path).error()` maps a
+    runtime failure for the fs modules.
+  - The layering is fixed. `FileEntry` moves to the new module `fs/entry`.
+    `fs/lock` sits below `fs/file` and no longer imports it, and the
+    `locking(int, int)` hook goes. fs/directory, glob, root, watch, link,
+    temp and os/directory import `fs/error`, not `fs/file`.
+  - The role `ReadingText` names its whole read `content()` (was `text()`);
+    `io/stdin`'s `Utf8Input` follows.
+  - Migration:
+
+    | Before | After |
+    |---|---|
+    | `File(mode: m, path: p, binary: true)` | `File(path: p, mode: m)`, then `file.binary()` |
+    | `FileContent(origin: FileEntry(path: p)).bytes()` | `File(path: p).binary().bytes()` |
+    | `file.read_text()` | `file.text().content()` |
+    | `FilePosition(origin: file).seek(…)` | `file.binary().seek(…)` |
+    | `FileLock(origin: f, mode: m, waiting: …)` | `f.lock(m) else …` |
+    | `FileSystemFailure.detailed(code, _)` with `code == "not_found"` | `catch FileError.not_found(path)` |
+    | `DirectoryNotEmpty`, `NotSymbolicLink`, `InvalidHardLinkSource` | `FileError` cases |
+    | `import "fs/file" take FileEntry` | `import "fs/entry" take FileEntry` |
+
+  - Callers follow: mail (a busy mailbox is `InvalidState`), http/cookie_jar,
+    http/static, mime/types and logging.
+  - `fs/file` has inline tests at last, for text, bytes, errors and locks, in
+    a temporary directory.
+  - New `examples/fs/file/` shows each task as a program with its expected
+    output, and `examples/check.py` runs them.
+- The benchmark ladder compares Okkama with Go, Java, Kotlin and Python
+  instead of Perl and Ruby (#363). The twelve programs have ports in each
+  language with the same output. README and LLM-GUIDE quote the 0.5.3
+  numbers. Cold runs: Sparrow is 2.2× slower than Go, 1.5× faster than Java,
+  1.85× faster than Kotlin and 6.3× faster than Python. Warmed up, Go and
+  HotSpot are 2.4–2.6× faster than Sparrow.
+- Book, both languages: §26.5 starts from the std principles and the review
+  (#367). The 187 links to `std/*.md`, which were never in this repository,
+  now name the okkama-docs guide (`docs/std/…`) instead. The legacy `stdlib/`
+  passages go as the review finishes each area.
+
+- **`http`: statuses and methods are enums (#352).** This starts the review
+  of the HTTP client, the third exemplar.
+  - `Status` has a case for each code of the IANA registry (`Status.ok`,
+    `Status.not_found`, `Status.continue`, …), and `other(code)` for a code it
+    does not name. `StatusCode` maps both ways and classifies:
+    `StatusCode(404).status()`, `StatusCode(Status.not_found).number()`,
+    `class()`, `phrase()`. `Status.other(404)` is refused
+    (`InvalidStatus.named`), so every status has one spelling.
+  - `Method` is `get, head, post, put, patch, delete, options, trace,
+    connect, other(name)`. `MethodName` maps a method to its token and back.
+    `Method.other("GET")` is refused (`InvalidMethod.standard`).
+  - New `http/token`: `HttpToken` checks the token grammar of RFC 9110. Field
+    names, codings, media types, cookie names and WebSocket tokens used to
+    borrow `Method` for that check.
+  - Status checks inside `http` read as cases and classes:
+    `status == Status.not_modified`,
+    `StatusCode(status).class() == StatusClass.successful`.
+
+    | before | now |
+    |---|---|
+    | `Status(404)` | `Status.not_found` |
+    | `Status(code)` | `StatusCode(code).status()` |
+    | `status.code()`, `.class()`, `.phrase()` | `StatusCode(status).number()`, `.class()`, `.phrase()` |
+    | `Method("GET")` | `Method.get` |
+    | `Method(token)` | `MethodName(token).method()` |
+    | `method.string()` | `MethodName(method).string()` |
+    | `Method(text).string()` as a token check | `HttpToken(text).string()` |
+    | `ProxyConnectRejected.status(int)` | `ProxyConnectRejected.status(Status)` |
+- **`http`: messages show themselves through caps (#352).** The owner: an
+  object reveals itself through a public cap, in the way it chooses, not
+  through accessors.
+  - `Request` and `Response` take named arguments with defaults:
+    `Request(url: "https://example.com/")` is a GET with no fields and an
+    empty body, and `Request(target: …)` takes any request target.
+    `Response(status: Status.not_found)` has no fields and an empty body.
+  - Their heads are the cap `Head`: `request::Head::method`, `::target`,
+    `::headers`, `::version`, and `response::Head::status`, `::headers`,
+    `::version`. `body()` stays an action: it is the opening to read.
+  - `ClientResponse`, what a client gets back, is a mechanism:
+    - its cap `Head` has `status`, `class`, `headers` and `version`;
+    - its cap `Exchange` has `request`, `response`, `history` and `details`;
+    - `await page.text()` decodes the whole body by its charset (UTF-8,
+      US-ASCII or ISO-8859-1, else `UnsupportedBodyCharset`);
+    - `bytes()` and `json()` read the whole body, and `reading()` reads it
+      piece by piece.
+  - `ExchangeHop` has the cap `Exchange` (`request`, `response`).
+
+    | before | now |
+    |---|---|
+    | `Request(Method("GET"), AbsoluteTarget(ParsedUrl(text).value()), Headers([]))` | `Request(url: text)` |
+    | `request.method()`, `.target()`, `.headers()`, `.version()` | `request::Head::method`, … |
+    | `response.status()`, `.headers()`, `.version()` | `response::Head::status`, … |
+    | `result.response().status().code() == 200` | `result::Head::status == Status.ok` |
+    | `result.response().body().reading()` | `result.reading()` |
+    | `result.request()`, `.response()`, `.history()`, `.details()` | `result::Exchange::request`, … |
+- **`http`: `HttpClient()` works out of the box (#352).**
+  - Its parts are named arguments, each with a default:
+    - `resolver` (system DNS), `trust` (system roots);
+    - `endpoints` (public only), `protocols` (HTTP/1.1);
+    - `limits`, `timeouts`, `connections` (8), `clock`;
+    - `redirects` (none followed) and `cookies` (none kept).
+
+    The TLS policy follows from `trust` and `protocols`.
+
+    ```okkama
+    let client = HttpClient();
+    let page = await client.get("https://example.com/");
+    let created = await client.post(url: "https://api.example.com/orders", body: JsonBody(order));
+    let browser = HttpClient(cookies: MemoryCookieJar(), redirects: Redirects(limit: 5));
+    ```
+  - Shortcuts for every REST method: `get`, `head`, `options` and `delete`
+    take a URL; `post`, `put` and `patch` take a URL, a `Content` and
+    optional fields. The content's media type becomes Content-Type and its
+    length Content-Length, unless the fields already set them.
+  - New role `Content` in `http/body`, with `JsonBody(json)`,
+    `TextBody(text)` and `BytesBody(bytes)`.
+  - The connection-owning engine is now `HttpTransport`. Proxies use it, and
+    `HttpClient` builds on it. The role `Exchanging` and `HttpClientKey`
+    moved to `http/exchange`, so that the client can use the redirect and
+    cookie decorators without an import cycle.
+  - `RedirectPolicy(maximum, https_downgrade)` is
+    `Redirects(limit: 10, https_downgrade: false)`, read through its cap
+    `Rules`.
+  - `SystemTrustStore` does `TrustStore`: `trust: SystemTrustStore()`.
+    `SystemTrustStore().result()` is gone.
+  - `MemoryCookieJar()` defaults its clock and limits.
+  - The client's tests talk to a loopback server: shortcuts, the default
+    endpoint refusal, and a redirect that carries a cookie.
+  - `examples/http/client/` shows a GET as text, a POST of JSON and the
+    reading of a status, each against a stand-in local server. The Book
+    (§26.5) and the okkama-docs guide describe the client.
+- **std review, wave 1: core (#352).** Answers get their nouns and objects
+  become the subject they are about (`docs/std-principles.md` §2).
+  - `strings/parse`: one `Number(text)` reads every number type, and
+    `Truth(text)` reads a truth value. The base belongs to the reading
+    (`Number("ff").int(16)`). The errors (`InvalidInteger`, …) are unchanged.
+
+    | before | now |
+    |---|---|
+    | `ParsedInt(t).value()`, `ParsedInt(t, 16).value()` | `Number(t).int()`, `Number(t).int(16)` |
+    | `ParsedFloat(t).value()`, `ParsedRat(t).value()` | `Number(t).float()`, `Number(t).rat()` |
+    | `ParsedByte(t, 2).value()` | `Number(t).byte(2)` |
+    | `ParsedBool(t).value()` | `Truth(t).bool()` |
+  - `checksum`: the role `Checksumming` answers `checksum()`, so
+    `Crc32(bytes).checksum()`.
+  - `math/constants`: `PI`, `TAU` and `E` are module constants.
+  - `math/aggregate`: aggregates are grouped by what they are about.
+    - `Extremes(xs)`: `minimum()`, `maximum()`.
+    - `Numbers(xs)`: `sum()`, `accurate_sum()`, `product()`, `hypotenuse()`.
+    - `Vectors(left:, right:)`: `dot()`, `distance()`.
+
+    The module has inline tests now.
+  - `numbers/bigrational`: `a.plus(b)`, `a.minus(b)`, `a.times(b)` and
+    `a.divided(b)` replace the four operation objects.
+  - `numbers/float`: `ShortestFloat(x).decimal()`. Its helpers became
+    hidden; `BinaryPowerRatio`, a function dressed as an object, is now an
+    action of the rounding interval.
+  - `encoding/binary`: `Binary(bytes:, order:)` reads `.int(signedness)` or
+    `.float(width)`. `IntegerBytes` and `FloatBytes` still write.
+
+    | before | now |
+    |---|---|
+    | `Crc32(b).value()` | `Crc32(b).checksum()` |
+    | `Pi().value()`, `Tau().value()`, `Euler().value()` | `PI`, `TAU`, `E` |
+    | `Minimum(xs).value()`, `Maximum(xs).value()` | `Extremes(xs).minimum()`, `.maximum()` |
+    | `Sum`, `AccurateSum`, `Product`, `Hypotenuse` `(xs).value()` | `Numbers(xs).sum()`, `.accurate_sum()`, `.product()`, `.hypotenuse()` |
+    | `SumOfProducts(a, b).value()`, `Distance(a, b).value()` | `Vectors(left: a, right: b).dot()`, `.distance()` |
+    | `BigRationalSum(left: a, right: b).value()`, … | `a.plus(b)`, `a.minus(b)`, `a.times(b)`, `a.divided(b)` |
+    | `ShortestFloat(x).value()` | `ShortestFloat(x).decimal()` |
+    | `IntegerFromBytes(b, s, o).value()` | `Binary(bytes: b, order: o).int(s)` |
+    | `FloatFromBytes(b, w, o).value()` | `Binary(bytes: b, order: o).float(w)` |
+  - `collections`: functions dressed as objects fold into the objects whose
+    data they read.
+    - `Deque` reads and changes its own ends: `first()`, `last()`,
+      `prefix(x)`, `suffix(x)`, `tail()` and `body()`. The end views
+      `DequeFront` and `DequeBack`, which copied the whole deque, are gone.
+    - `SetMembership` and `SetSize` became each set's own `membership` and
+      `size`.
+    - The binary searches became a hidden action of `LowerBound` and
+      `UpperBound`, so no object is allocated per step. The answer is
+      `index()`, also for `PositionOf`.
+    - `Reduced` answers `total()`.
+    - In combinatorics there is one hidden `…Positions` per family:
+      `valid()`, `pivot()`, and for permutations `candidate()` and
+      `available()`. These replace eight helper objects.
+    - The cursor searches of the views are hidden.
+    - `combinatorics` and `deque` have inline tests now.
+
+    | before | now |
+    |---|---|
+    | `deque.front().value()`, `deque.back().value()` | `deque.first()`, `deque.last()` |
+    | `deque.front().addition(x)`, `deque.back().addition(x)` | `deque.prefix(x)`, `deque.suffix(x)` |
+    | `deque.front().remainder()`, `deque.back().remainder()` | `deque.tail()`, `deque.body()` |
+    | `LowerBound(xs, x).value()`, `UpperBound`, `PositionOf` | `.index()` |
+    | `Reduced(…).value()` | `Reduced(…).total()` |
+  - `async`: the awaited answer is `outcome()`, and a race answers
+    `winner()`. These five actions are runtime intrinsics, so their keys are
+    renamed in the compiler, IR, Sparrow, the IR runtime and the JVM runtime
+    (`okkama.timeout.Within.outcome`, …, `okkama.collect.Raced.winner`).
+    Programs compiled before must be compiled again.
+
+    | before | now |
+    |---|---|
+    | `await Within(f, limit, clock).result()`, `Before`, `FutureScope`, `FirstSuccessful` | `.outcome()` |
+    | `await Raced(futures).result()` | `await Raced(futures).winner()` |
+  - `time`: readers answer with what they read, and each formatter reads its
+    own text back.
+    - `IsoText(t).date()` and `.local_date_time()`.
+    - `Rfc3339(t).instant()`; its `.string()` keeps the offset that was
+      read.
+    - `FormattedDate(text:, pattern:).date()` and
+      `FormattedLocalDateTime(text:, pattern:).local_date_time()`.
+    - `Zoned(local:, zone:, fold:).instant()`.
+    - `date.shifted(days)` and `DaysBetween(left:, right:).count()`.
+    - `duration.times(factor)`.
+    - `GregorianDay` converts a date to its day number and back. It counts
+      from 0001-01-01, not from 1970. `date`, `iso`, `format`, `rfc3339` and
+      `duration` have inline tests now.
+
+    | before | now |
+    |---|---|
+    | `DateFromIso(t).value()`, `LocalDateTimeFromIso(t).value()` | `IsoText(t).date()`, `.local_date_time()` |
+    | `InstantFromRfc3339(t).value()` | `Rfc3339(t).instant()` |
+    | `DateFromFormat(t, p).value()`, `LocalDateTimeFromFormat` | `FormattedDate(text: t, pattern: p).date()`, `FormattedLocalDateTime(…).local_date_time()` |
+    | `InstantFromLocal(dt, zone, fold).value()` | `Zoned(local: dt, zone: zone, fold: fold).instant()` |
+    | `ShiftedDate(d, n).value()` | `d.shifted(n)` |
+    | `DaysBetween(a, b).value()` | `DaysBetween(left: a, right: b).count()` |
+    | `DateOrdinal(d).value()`, `OrdinalDate(n).value()` | `GregorianDay(d).number()`, `GregorianDay(n).date()` |
+    | `ScaledDuration(d, f).value()` | `d.times(f)` |
+  - `random`: the samplers that several distributions share are hidden and
+    answer `sample()`. `SecureInteger` is now a hidden action of
+    `SecureRandom`. `random/distribution` has inline tests now: seeded
+    shapes, weights and distinct samples.
+  - `regex/replace`: the substitution accumulator is hidden and answers
+    `substitution()`.
+  - The machinery behind the public objects is hidden (the owner,
+    2026-11-11: «да»): 53 cursors, tree nodes and building steps that no
+    caller names. Among them are every `…Cursor` of collections, regex and
+    pem, `CursorStep`/`CursorSteps`, the heap's `HeapTreeNode`,
+    `EmptyHeapTree`, `HeapChildren` and `HeapBuilding`, frequencies'
+    `FrequencyTally`/`Building`/`Revision`, and the replacement tokens of
+    regex. The objects people use return them as roles (`Cursor<T>`,
+    `Iterating<T>`), so no call changes.
+  - Stored parts are read through caps (the owner, 2026-11-11: «date
+    calendar делаем. Идеально»). A cap holds ready scalars only; anything
+    that needs work stays an action. 308 reads in std, conformance and the
+    examples were rewritten, and the accessors are gone:
+
+    | before | now |
+    |---|---|
+    | `date.year()`, `.month()`, `.day()` | `date::Calendar::year`, `::month`, `::day` |
+    | `time.hour()`, `.minute()`, `.second()`, `.nanosecond()` | `time::Clock::hour`, … |
+    | `duration.seconds()` | `duration::Span::seconds` |
+    | `range.start()`, `.end()`, `.length()` | `range::Bounds::start`, `::end`, `::length` |
+    | `regex.expression()`, `.flags()` | `regex::Source::expression`, `::flags` |
+    | `capture.index()`, `.name()` | `capture::Group::index`, `::name` |
+
+    The compiler's runtime helpers for `Within` and `Before` read
+    `Duration::Span::seconds`; a helper entry `Cap::field` now names a cap
+    field.
+  - Objects that build a representation take their input in the constructor
+    and build it on the first question, kept with `once let` (#491):
+    `Sorted`, `SortedBy`, `Heap`, `Deque`, `OrderedSet`, `Frequencies`,
+    `KeyedFrequencies`. Their API is unchanged. As views they now compare by
+    their input: `Sorted([2, 1]) == Sorted([1, 2])` is `false`, where it was
+    `true`. Nothing in std, the tests or conformance relied on it.
+    `BigRational` still reduces in its constructor, with the runtime's
+    integer natives over the digits, so `2/4 == 1/2` holds. `BigInt` shows
+    its digits through the cap `Digits`.
+    - Measured: 100 000 binary searches over a `Sorted` of 100 000 values
+      take 0.15 s on Tomato and 0.36 s on the JVM before and after, and 1.68 s
+      → 1.84 s on the IR engine (one more call per `item()`).
+  - More constructors only bind (the owner: «максимальное количество
+    конструкторов очистить от различных вычислений»).
+    `FormattedDate(text:, pattern:)` and `FormattedLocalDateTime` keep the
+    text and read it in `date()` and `local_date_time()`. `GregorianDay(date)`
+    counts in `number()`. `RegexMatchObservation`, and with it every search,
+    prepares its query on the first question. Each answer is kept with
+    `once let`. Still computed when made: `confirm` checks, own runtime state
+    (`Regex`, buffers, PRNG), and the canonical forms equality depends on.
+  - Constructors no longer call other objects (the owner's rule, see
+    `docs/std-principles.md` §2). `Rfc3339(text)` keeps the text and reads
+    it in `instant()` and `string()`. `Joined` walks its values in
+    `string()`. `ShortestFloat` takes the float's bits in its actions.
+    `Permutations` and `SetWith`/`SetWithout` ask their origin when walked.
+    `LinkedList` is hidden; `prefix()` gives each node its size.
+  - Constructors of several values are called with named arguments
+    everywhere (the owner, 2026-11-11: «да»; `docs/std-principles.md` §2):
+    341 calls in std, conformance and the Book, and 46 in the okkama-docs
+    examples, such as `FirstRegexMatch(origin: text, regex: pattern)`,
+    `RegexRange(start: 1, end: 4)`, `Joined(separator: ", ", values: xs)`,
+    `Duration(value: 5.rat(), unit: DurationUnit.second)` and
+    `Pair(first: a, second: b)`. A call is renamed only when exactly one
+    constructor takes that many arguments, so the constructor chosen is
+    the one chosen before. Positional calls still compile; std no longer
+    uses them for these objects.
+  - Every public object of the wave's modules has an inline test now
+    (`regex/match` through `regex/search`, which alone can make a match),
+    and the async selectors no case used (`FirstSuccessful`,
+    `FutureCompletions`, `FutureScope`) have L08 cases.
+  - Characterization tests cover the changed modules that had none:
+    `collections/ordering`, `views` and `combining`, `encoding/binary`,
+    `random/source` (the PCG32 sequence, checked against an independent
+    implementation), `regex/replace` and `time/zone`. `Reduced.total()`
+    folds with `reduce` instead of walking `Accumulated`.
+  - Book §26.5 describes each wave-1 area in its "current std" part
+    (strings/parse, encoding, collections, math and numbers, time, async,
+    random, regex, io/text/unicode). The legacy-stdlib passages of those
+    areas are gone, and so are those of the finished exemplars (json,
+    fs/file, the http client side): 1 375 lines that described APIs no
+    longer in the tree. §17.6 shows a plain call after a constructor
+    instead of the removed `#projected` (#367).
+- **std review, wave 2: formats and system (#352).** The card is
+  `okkama-docs/std-review/cards/wave-2-formats.md`, and the owner's decision
+  is at its end. This entry grows as each area is done.
+  - `fs`:
+    - Records show their data through caps (the owner: a cap holds ready
+      fields, not work):
+      - `FileStat::Shape` holds `kind` and `size`;
+      - `FileIdentity::Identity` holds `device`;
+      - `Permissions::Access` holds `readable`, `writable` and `executable`;
+      - `FileEvent::Change` holds `kind`;
+      - `Path::Grammar` holds `style`.
+
+      `mode()`, `times()`, `identity()` and `path()` stay actions, because
+      they answer objects.
+    - Helpers answer with their nouns: `FileStatFromMap(...).stat()` and
+      `NativePathStyle().style()`. `EpochInstant`, `PermissionBits`,
+      `FileKindFromCode`, `PathStyleCode`, the directory and glob cursors
+      and `ExhaustedDescendantCursor` are hidden, and the unused
+      `TemporaryFilePath` is gone.
+    - Constructors bind:
+      - `FileEvent` keeps its previous path as a `Maybe<Path>`;
+      - `Path` keeps the host grammar it reads (`==` depends on it).
+
+      Resource handles (`File`, `FileWatch`, `TemporaryFile`,
+      `TemporaryDirectory`, `FileRoot`) still open in their constructor.
+      That is a question for the owner.
+    - Constructors of several values are called with named arguments: 49
+      calls in std and the examples.
+    - Inline tests for every fs module that had none: `path`, `entry`,
+      `directory`, `glob`, `link`, `temp` and `watch`. That includes an
+      async watch test, run in a container. `error` and `lock` are tested
+      through `entry` and `file`.
+  - `os`:
+    - Caps for records:
+      - `Exit::Status` holds `kind`; `code()` still refuses an exit
+        without one, so it stays an action.
+      - `CompletedCommand::Captured` and `CompletedPipeline::Captured`
+        hold `output` and `errors`.
+    - `env.home()` replaces `HomeDirectory(environment: env).value()`, as
+      the card proposed.
+    - `GroupUsers` and the group and search-path cursors are hidden.
+    - `Platform()` and `Host()` read the system when asked, not when made.
+      `SearchPath` reads PATH in its actions.
+    - Inline tests for all nine modules. They run commands, pipelines,
+      signals and account lookups, in a container. There are examples for
+      `os/command`, `os/process` and `os/environment`.
+    - The Book drops the legacy `os`, `env/var`, `env/cwd` and `proc/cmd`
+      passages and describes the current `os` in §26.5.
+  - `toml`:
+    - `ParsedToml(text).root()` replaces `.value()`, as `json` does.
+      `TomlNode` is hidden.
+    - Caps show what was written:
+      - `TomlLocalDate::Calendar` holds `year`, `month` and `day`;
+      - `TomlLocalTime::Clock` holds `hour` through `nanosecond`;
+      - `TomlOffset::Offset` holds `minutes` and `known`.
+    - `TomlArray` and `TomlTable` still take their snapshot when made.
+      `==` depends on it, and `once let` cannot keep a role-typed value,
+      which might be a resource.
+    - Named arguments in 35 calls. There is an example, `examples/toml/`.
+  - `plist`:
+    - `ParsedPlist(bytes).root()` replaces `.value()`.
+    - Each scalar answers with its type's noun, as json's readers do:
+      `bool()`, `integer()`, `float()`, `string()`, `bytes()`, `instant()`
+      and `number()` (a UID).
+    - Sixteen parser and writer internals are hidden. `PlistXmlSource`,
+      `PlistXmlToken` and `PlistXmlText` stay public, because
+      `http/xmlrpc` reads XML with them.
+    - Named arguments in 50 calls.
+  - `xml` and `html`:
+    - `XmlText`, `XmlComment`, `HtmlText`, `HtmlComment` and
+      `HtmlDeclaration` answer `text()`. So do the roles
+      `ContainingHtmlText`, `ContainingHtmlComment` and `DeclaringHtml`.
+    - Constructors still refuse bad names and characters. They no longer
+      write: `XmlText`, `XmlAttribute`, `XmlElement` and `XmlDocument`
+      escape and serialize on the first `xml()`, and keep the text with
+      `once let`. A tree deeper than 64 or larger than 32 Mi scalars is
+      now refused by `xml()`/`depth()`, not when the element is made.
+    - `XmlChildren`, `XmlAttributes`, `XmlElementContent` and
+      `HtmlEventCursor` are hidden.
+    - New inline tests for `xml/name`, `xml/write`, `xml/node` and
+      `html/events`.
+    - Named arguments in 20 calls.
+  - `csv`:
+    - `CsvString` binds its rows and limits. It takes and checks the
+      snapshot in `string()` and keeps the text with `once let`, so a limit
+      is now refused by `string()`, not when the object is made.
+    - `CsvPrefix`, `CsvSnapshot`, `CsvPrintPrefix`, `CsvPrintRecord` and
+      `CsvMode` are hidden.
+    - `csv/stream` has inline tests.
+    - Named arguments in 47 calls. There is an example, `examples/csv/`.
+  - `archive` and `compression`:
+    - 31 TAR parser and writer internals are hidden, among them the entry
+      sequence and cursor. `TarArchive`, `TarWriting`, `ParsedTar` and
+      `TarReading` stay public.
+    - `CompressionReading` and the two flows are hidden.
+    - `ArchiveLimits::Limits` holds `entries`, `entry_size`, `total_size`
+      and `path_length`.
+    - `ArchiveModificationFromEpoch(seconds).local_date_time()` replaces
+      `.value()`. The constructor keeps the seconds, so a value that cannot
+      be represented is refused when it is converted.
+    - Named arguments in 103 calls in std, and 26 in the okkama-docs
+      examples. There is an example, `examples/archive/`.
+  - `statistics` (B2, approved). One object per kind of data, with its
+    answers as actions:
+
+    | before | now |
+    |---|---|
+    | `Mean(values: xs).value()`, `Median`, `MedianLow`, `MedianHigh`, `GeometricMean`, `HarmonicMean` | `Sample(values: xs).mean()`, `.median()`, `.median_low()`, `.median_high()`, `.geometric_mean()`, `.harmonic_mean()` |
+    | `SampleVariance(…).value()`, `SampleDeviation` | `Sample(…).variance()`, `.deviation()` |
+    | `Quantiles(values:, count:, method:).values()` | `Sample(…).quantiles(count)`, `.quantiles(count:, method:)` |
+    | `PopulationVariance(…).value()`, `PopulationDeviation` | `Population(values:).variance()`, `.deviation()` |
+    | `Covariance(left:, right:).value()`, `Correlation`, `FittedLine(left:, right:)` | `Pairs(left:, right:).covariance()`, `.correlation()`, `.line()` |
+    | `Mode(values:).value()` | `Modes(values:).first()` |
+    | `fit.slope()`, `fit.intercept()` | `fit::Line::slope`, `fit::Line::intercept` |
+
+    - `FloatSample` is now `Sample`.
+    - `FittedLine(slope:, intercept:)` is the line itself.
+    - Constructors bind. `Sample` takes its values on first use and keeps
+      them with `once let`, and so does `Modes` with its counts.
+      `ModesCursor` is hidden.
+    - The module has inline tests now. There is an example,
+      `examples/statistics/`.
+  - `diff` (B2, approved). One object for one comparison:
+
+    | before | now |
+    |---|---|
+    | `DiffScript(left, right).edits()` | `Diff(left:, right:).edits()` |
+    | `UnifiedDiff(left, right, context).string()` | `Diff(left:, right:).unified(context)` |
+    | `ContextDiff(left, right).string()` | `Diff(…).contextual()` |
+    | `MatchingRatio(left, right).value()` | `Diff(…).ratio()` |
+    | `edit.kind()`, `text()`, `left()`, `right()` | `edit::Line::kind`, `::text`, `::left`, `::right` |
+
+    - `Diff` compares on the first question and keeps the script with
+      `once let`.
+    - Hunks, ranges, spans, matching blocks, printers and the search are
+      hidden.
+    - New inline tests check the output against Python's difflib. There is
+      an example, `examples/diff/`.
+  - `uuid` (B1, revised by the owner). The object is the UUID:
+
+    | before | now |
+    |---|---|
+    | `Uuid(origin: text)` | `UuidText(origin: text)` |
+    | `UuidFromBytes(origin: b).value()` | `UuidBytes(origin: b)` |
+    | `Uuid3(namespace:, name:).value()`, `Uuid5` | `Uuid3(namespace:, name:)`, `Uuid5` |
+    | `Uuid8(high:, middle:, low:).value()` | `Uuid8(high:, middle:, low:)` |
+
+    - `role Uuid` holds `string()`, `bytes()`, `version()`, `variant()` and
+      `order()`. All five makers implement it, and `Uuid4s(…).sample()`
+      answers a `Uuid`.
+    - `Uuid3` and `Uuid5` hash on the first question, with `once let`.
+    - UUIDs made differently are different types:
+      - `UuidText(…) == UuidBytes(…)` does not compile;
+      - as `Uuid` values they compare false (the owner: role values compare,
+        and different implementations are not equal).
+
+      To ask whether two are the same UUID, compare `bytes()`, `string()`
+      or `order()`.
+    - Inline tests, with the RFC 4122 v3/v5 vectors. There is an example,
+      `examples/uuid/`.
+  - `calendar`:
+    - `Year(2028).leap()` replaces `LeapYear(2028).value()`.
+    - `YearMonth::Calendar` holds `year` and `month`, and
+      `IsoWeek::Calendar` holds `year` and `week`, like wave 1's
+      `date::Calendar`.
+    - `IsoWeek` checks its week with its own arithmetic. It matches Python's
+      `isocalendar` on the edge years, and keeps the day number of its
+      Monday.
+    - `CalendarWeek` and `CalendarMonth` bind. A grid that would leave
+      years 1..9999 is refused when it is walked or measured.
+    - Cursors, the layout and `WeekdayIndex` are hidden.
+    - The module has inline tests now. There is an example,
+      `examples/calendar/`.
+  - `message` and `parallel`:
+    - `MessageHeaderName` folds its case-insensitive key on the first
+      comparison (`once let`), not when made.
+    - The header folding, unfolding, snapshot and output helpers are hidden.
+      `MessageHeader` keeps `value()`, as a name/value pair.
+    - `ParallelMapped(origins:, action:)` reads the processor count when a
+      run starts, not when made. Its run and progress objects are hidden.
+    - `parallel/map` has inline tests now; they need no worker process.
+  - `url` (variant B, the owner: «вариант B, мне нравится»). One parser
+    and one value:
+
+    | before | now |
+    |---|---|
+    | `ParsedUrl(t).value()` (a `Url`), `ParsedUrlReference(t).value()` | `ParsedUrl(t).parts()`, one `UrlParts` for both; `parts.absolute()` tells a URL from a reference |
+    | `url.parts().scheme()`, `.authority().host()`, `.query()` | `parts::Parts::scheme`, `::host`, `::port`, `::path`, `::query`, `::fragment`, `::userinfo` |
+    | `base.url(reference)`, `UrlResolution(...).value()` | `base.resolved(reference)` |
+    | `UrlDotSegments(path).value()` | `parts.normalized()` |
+    | `authority.host().kind()`, `.name()`, `.address()` | `parts.host_kind()`, `.host_name()`, `.host_address()` |
+    | `ParsedQueryParameters(UrlQuery(t)).value()` | `ParsedQuery(t).parameters()` |
+    | `Url(UrlParts(scheme, authority, …))` | `UrlParts(scheme:, userinfo:, host:, port:, path:, query:, fragment:)` |
+
+    - The cap holds ready, canonical scalars:
+      - optional parts are `Maybe`, so `?` alone is `Maybe.some("")`;
+      - scheme and host are lowercase, and escapes are normalized;
+      - an empty port delimiter is dropped, as RFC 3986 allows.
+    - `Url`, `UrlReference` and `ParsedUrlReference` are gone. The authority,
+      host, query, fragment, port and userinfo objects, the resolution and
+      the dot-segment helper are hidden. `UrlComponentText` stays public: it
+      canonicalizes one component, which origin-form `//a/b` needs.
+    - http follows. Request targets answer `url()` and `authority()` as
+      `UrlParts`, and `query()` as `Maybe<string>`. An authority (`Host`,
+      `:authority`, CONNECT, `no_proxy`) is parsed as `ParsedUrl("//" +
+      text)`.
+    - The url, http and web inline tests pass in a container (73 modules on
+      IR and Sparrow). The two url conformance cases use the new names.
+      There is an example, `examples/url/`.
+  - `cli` (its own card, `cards/cli.md`, approved by the owner). One module,
+    `cli/command`, replaces `cli/spec`, `cli/parse` and `cli/help`, so that
+    a command can read its own arguments.
+
+    | before | now |
+    |---|---|
+    | `CliCommand("greet", "…", CommandSyntax([Option(key, ["--name", "-n"], OptionValue("NAME", false), "…")], [Flag(key, ["--help", "-h"], "true", "…")], []), [])` | `CliCommand(name: "greet", summary: "…", options: [Option(name: "name", short: "n", value: "NAME", help: "…")], flags: [Flag(name: "help", short: "h", help: "…")])` |
+    | `ParsedCommand(command, Utf8Arguments(ProcessArguments())).value()` | `command.invocation(ProcessArguments().strings())` |
+    | `ScalarSetting(invocation.settings(), key).value()` | `call.text("name") else "world"`, `call.int("count")`, `call.texts("tag")` |
+    | `invocation.settings().membership(help)` | `call.flag("help")` |
+    | `invocation.path()` and comparing names | `call.command() == add` (the declared object) |
+    | `Usage(command, "greet", 80).string()`, `ShellCompletion(…)` | `command.usage(program: "greet")`, `command.completion(program:, shell:)` |
+    | `OperandCardinality` | `OperandCount` |
+
+    - Absent values are `Maybe` (the owner's answer 1).
+    - Typed readers delegate to `strings/parse`. A malformed value is a
+      `CliFailure` naming the option (answer 2, «по аналогии с json»).
+    - The selected subcommand is the declared object, and there are no
+      callbacks (answer 3).
+    - A `SettingKey` is optional, given as `key:` and defaulting to
+      `SettingKey([name])`.
+    - Reading an undeclared name throws `UndeclaredCliName`.
+    - `Option`, `Flag`, `Operand` and `CliCommand` show their declaration
+      through the cap `Spec`. 17 parser, validation and completion helpers
+      are hidden, and so is `Utf8Arguments`.
+    - Inline tests cover reading, typed values, subcommands, errors,
+      declaration checks, usage and completion. There is an example,
+      `examples/cli/`.
+
+- **std review, wave 3: security and network, the part without a decision
+  (#352).** The card is `okkama-docs/std-review/cards/wave-3-network.md`.
+  Its public shapes (B1–B4) wait for the owner.
+  - **Hidden machinery.** 33 objects that no caller names are hidden:
+    - net: tickets, wire encoders, unpublished handles, racing internals,
+      cursors, DNS snapshots;
+    - digest: padding and compression;
+    - crypto: name and identifier helpers.
+  - **Answers with nouns:**
+    - `ParsedCertificate(der).certificate()`;
+    - `VerifiedCertificateChain(…).leaf()`;
+    - `CertificateFailureCode(…).failure()`;
+    - `ReadDigest(…).digest()`;
+    - `NetworkError(…).error()`, `StreamFailure(…).error()` and
+      `UnixError(…).error()`;
+    - and the hidden helpers.
+  - **Caps for ready fields:**
+    - `IpEndpoint::Parts` holds `port` and `zone`;
+    - `HostEndpoint::Parts` holds `port`;
+    - `IpNetwork::Mask` holds `prefix`;
+    - `Datagram::Received` holds `truncated`;
+    - `TlsDetails::Session` holds `version`, `cipher` and `protocol`.
+  - **Named arguments** in 371 constructor calls.
+  - **Examples:** `examples/digest/hash.ok`, `examples/crypto/secrets.ok`,
+    `examples/net/addresses.ok` and `examples/net/echo.ok`.
+  - The Book drops the legacy `crypto/*`, `socket/*` and `net/address`
+    passages (371 lines) and describes digest, crypto and net in §26.5.
+- **std review, wave 4: platform, the part without a decision (#352).** The
+  areas are config, db, i18n, locale, template, terminal, testing and
+  logging. The card is `okkama-docs/std-review/cards/wave-4-platform.md`.
+  Its public questions wait for the owner.
+  - **Hidden machinery.** 183 objects that no caller names are hidden,
+    among them `LogArchive`, `TerminalFallback`, `RecordedTestResult` and
+    `RecordedTestCause`.
+  - **Answers with nouns** (82), for example:
+    - db values answer `bool()`, `integer()`, `float()`, `decimal()`,
+      `string()` and `bytes()`, and readers answer `cell()`;
+    - `ParsedIni(…).document()`, `ParsedPo(…).document()` and
+      `ScalarSetting(…).text()`;
+    - `LookedUpLocale(…).locale()`, `PluralCategoryOf(…).category()` and
+      `DisplayWidth(…).columns()`;
+    - `SqliteBackup(…).report()`, and `TemplateLibrary.template(name)` and
+      `HtmlTemplateLibrary.template(name)` for a lookup by name.
+
+    Name/value pairs (`IniEntry`, `GettextHeader`) keep `value()`.
+  - **Caps for ready scalar fields**, while actions that answer objects stay
+    actions:
+    - db: `TransactionOptions::Mode`, `SqliteOptions::Settings`,
+      `DbLimits::Limits`, `Column::Parts`, `PoolOptions::Size`,
+      `PoolSnapshot::Counts`, `PostgresOptions::Settings` and
+      `PostgresCredentials::Credentials`;
+    - logging: `LogRecord::Entry` (`level`, `message`),
+      `LogQueueOptions::Limits`, `SyslogOptions::Settings` and
+      `FileLogOptions::Writes`;
+    - config: `SettingSource::Source` and `EnvironmentBinding::Binding`;
+    - terminal: `TerminalSize::Size`, `TerminalCapabilities::Support` and
+      `RgbColor::Channels`;
+    - i18n and locale: `MessageKey::Key`, `PluralForm::Form`,
+      `PoEntry::Entry`, `PoComment::Comment`, `NumberPrecision::Digits`,
+      `NumberFormat::Style`, `CurrencyFormat::Settings`,
+      `CollationOptions::Settings` and `DateTimeStyle::Styles`;
+    - testing: `TestResult::Outcome`, `TestCounts::Counts`,
+      `TestFailure::Failure`, `TestPosition::Position` and
+      `TestOutput::Captured`.
+  - **Constructors bind.** `SyslogMessage` encodes in `bytes()`.
+    `FilteredLocales` selects on first use. `LocalizedDate`, `LocalizedTime`
+    and `LocalizedLocalDateTime` render in `string()`. Each keeps its result
+    with `once let`. `PreferredLocales` and `SystemLanguagePreferences` still
+    read the system when made, as `Environment()` does, because `once let`
+    refuses an effect.
+  - **Named arguments** in about 600 constructor calls.
+  - **Tests** for every module that had none:
+    - logging: name, record, write, named, enrichment, filter, line,
+      stream, queue (async), file, rotation and syslog;
+    - db: param, row, read, error, transaction, backup, blob and script, and
+      SQLite queries, prepared statements, transactions, blobs, scripts and an
+      online backup;
+    - config: key, value and environment;
+    - terminal: capability, style and screen;
+    - `testing/runner`.
+
+    `db/acquisition`, `prepared` and `query` are tested through
+    `db/sqlite`, because an inline test there would import sqlite and make a
+    cycle. Terminal sessions, modes and prompts need a real terminal, and the
+    CLI's PTY tests cover them.
+  - **Examples:** `examples/logging/app.ok`, `config/layers.ok`,
+    `template/pages.ok`, `terminal/colors.ok`, `db/notes.ok`,
+    `locale/formats.ok` and `i18n/messages.ok`. They agree on IR, Sparrow and
+    the JVM.
+  - The Book drops the legacy log, sql, db, template and test passages (480
+    lines) and describes the wave-4 areas in §26.5.
+- **std review, wave 6: mail, the part without a decision (#352).** The card
+  is `okkama-docs/std-review/cards/wave-6-mail.md`.
+  - **Hidden machinery: 102 objects.** These are the IMAP, POP3 and SMTP
+    wire readers, UTF-7 coders, date parsers and mbox and Maildir
+    internals. The operations stay public although nothing calls them yet:
+    `CopiedMail`, `MovedMail`, `ExpungedMail`, `AppendedMail`, the mailbox
+    creation, deletion, renaming and subscription, `ChangedMailFlags`,
+    `MailboxEvents`, `PreviewedPopMail`, and the search keys `UnseenMail`,
+    `SinceMail`, `AndMail`, `OrMail` and `NotMail`.
+  - **Answers with nouns (27):** `ParsedMailDate(…).date_time()`,
+    `ImapUid.number()`, `PopNumber.number()`, `CreatedImapMailbox(…).mailbox()`,
+    `ChangedMaildirFlags(…).mail()` and the readers' `read()`.
+    `ImapFetchAttribute`, a name/value pair, keeps `value()`.
+  - **Caps:**
+    - the mail limits (`::Limits`);
+    - `PopReply::Reply` (`successful`, `text`, `body`, `lines`,
+      `multiline`);
+    - `PopMailboxState::Mailbox` (`count`);
+    - `StoredMail::Mail` (`identifier`).
+  - **Named arguments** in 241 calls.
+  - **Example:** `examples/mail/compose.ok` agrees on IR, Sparrow and the JVM.
+  - std has no SMTP client, only its wire pieces (#499, postponed).
+- **std review, the owner's decisions for waves 5 and 6 (#352, 2026-11-12:
+  «везде да»).**
+  - **Request targets read the same over every protocol (#497).** An HTTP/2
+    request reaches the handler in origin form, with its authority in
+    `Host`. `AbsoluteTarget.path()` and `query()` answer the URL's path and
+    query instead of throwing. The HTTP/1.1 server accepts absolute-form
+    requests, as RFC 9112 §3.2.2 asks. Before, `target.path()` worked over
+    HTTP/1.1 and answered 500 over HTTP/2.
+  - **`HttpServer(listener:, handling:)`**: `policy:` and `clock:` have
+    defaults, and `url:` turns on WebSocket upgrades. An upgrade without
+    `url:` gets a 500 that says so. The `origin:`/`destination:` constructors
+    are gone.
+  - **`await server.drain(limit:)`** replaces `ServerDrain(server:, limit:,
+    clock:).drain()`, which stays.
+  - **`Response(status:, content: TextBody(…))`** sets the body and its
+    Content-Type.
+  - **`WebSocketConnecting(url:)`** has `HttpClient`'s defaults: system DNS
+    and trust, no subprotocols and no extra headers.
+  - **`request.query("limit") else "10"`**: `WebRequest.query(name)` answers a
+    `Maybe`, `query(name, fallback)` is gone, and `method()` answers the
+    `Method` enum.
+  - **`MailMessage(from:, to:, subject:, text:)`** adds the Date, a fresh
+    Message-ID, MIME-Version and the Content-Type, and encodes a non-ASCII
+    subject. Tests can fix the date and identifier with `clock:` and
+    `random:`.
+  - **`Maildir(path).created()`** makes the directory with `new/`, `cur/` and
+    `tmp/`.
+  - **Mailbox operations are actions:** `await box.copied(uids, to:)`,
+    `moved` and `expunged`, and `session.created(name)`, `renamed(name, to:)`,
+    `deleted(name)` and `appended(mailbox, message:, flags:)`. The
+    operation objects move from `mail/imap_changes` into `mail/imap_session`,
+    beside the mailbox they act on.
+- **std review, the owner's decisions for waves 3 and 4 (#352, 2026-11-12:
+  «да» to every recommendation).**
+  - **TCP and UDP without matryoshkas.**
+    - `TcpListening(port: 0).listener()` listens on loopback unless
+      `address:` is given. `backlog:`, `address_reuse:`, `dual_stack:`,
+      `keep_alive:` and `no_delay:` are named arguments, and
+      `listener::Local::port` is the port it got.
+    - `TcpConnecting(address:, port:, no_delay:)` connects to one address.
+      `TcpConnecting(host: "example.com", port: 443)` resolves the name (the
+      system's DNS unless `resolver:` is given) and races the addresses as
+      RFC 8305 asks.
+    - `UdpBinding(port:, broadcast:).socket()`.
+    - The answer is `listener()`, and its type is `TcpListener`.
+      `acceptance()` and `TcpAcceptance` are gone, and `UnixListener`
+      follows for local sockets.
+    - The endpoint-and-options constructors stay.
+
+    | before | after |
+    |---|---|
+    | `await TcpListening(IpEndpoint(IpAddress("127.0.0.1"), 0)).acceptance()` | `await TcpListening(port: 0).listener()` |
+    | `TcpConnecting(IpEndpoint(IpAddress(a), p), TcpOptions(false, true))` | `TcpConnecting(address: IpAddress(a), port: p, no_delay: true)` |
+  - **`stored.matches(supplied)`** compares a `SecretBytes` in constant time.
+    `ConstantTimeEqual(left:, right:)` answers `matches()`.
+  - **`certificate.extensions()`** answers one `CertificateExtensions` with
+    `items()`, `extension(id)`, `critical()`, `constraints()`,
+    `key_usages()` and `purposes()`. Before, these were six `extensions_*`
+    actions of the certificate.
+  - **Key generation stays in constructors** (`RsaPrivateKey(bits:,
+    entropy:)`): a key is the object's own state, like an open file.
+  - **Settings by name:** `settings.int("server.port") else 8080`, `text`,
+    `float`, `bool`, `texts(name)` and `source(name)`, on `Settings` and
+    `LayeredSettings`. A malformed value throws `MalformedSetting` naming the
+    key.
+  - **SQL from the connection:** `await db.execution(sql, [Param(…)])` and
+    `db.query(sql, values).one()`, `maybe()` and `all(limit)`. Connections and
+    transactions answer them through the role `DbQuery`.
+  - **`NamedLogging(name: "shop", destination: logs)`** uses the system's clock
+    and adds no fields unless told.
+  - **`GettextCatalog` does `Translating`** itself, and `GettextTranslation` is
+    hidden.
+  - **`RowReader` is hidden**, because `Row` reads the same way.
+  - **`TemporaryDirectory` is a `DirectoryLocating`**, so
+    `TemporaryFile(directory: scratch, …)` takes it directly.
+- **std review, wave 5: web, the part without a decision (#352).** The areas
+  are mime, http and web. The card is
+  `okkama-docs/std-review/cards/wave-5-web.md`.
+  - **Hidden machinery.** 369 objects are hidden: HTTP/1 and HTTP/2 wire
+    pieces, HPACK internals, cache selections, cookie-store rows, routing
+    tables and MIME scanners. Objects that do a public role or open a
+    feature stay public even without callers. Examples are `BytesBody`,
+    `AsteriskTarget`, `EnvironmentProxy`, `ParsedUrlEncodedForm`,
+    `DigestAuthorization`, `SystemMediaTypes`, `ParsedEncodedWord`, the
+    XML-RPC values, `XmlRpcClient` and `XmlRpcHandling`.
+  - **Answers with nouns** (115), for example `ParsedHttpDate(…).instant()`,
+    `ParsedRequestTarget(…).target()`, `ParsedSetCookie(…).cookie()`,
+    `EntityTag.opaque()`, `Quality.weight()`, `RequestJson.root()`,
+    `SavedCookieJar(…).file()` and `LoadedCookieJar(…).jar()`. Name/value
+    pairs (`Header`, `Cookie`, `MimeParameter`, `HpackField`) and the XML-RPC
+    result's `value()` keep `value()`.
+  - **Caps for ready scalar fields** in 36 records: limits, credentials and
+    challenges, cookie attributes and origins, `Http1RequestHead::Head`
+    (`method`, `version`), HTTP/2 settings, media types and ranges, route
+    segments, server events, the static policy, `WebSocketClose::Close`,
+    XML-RPC faults, content disposition, multipart bodies and problems.
+  - **Named arguments** in 1028 constructor calls.
+  - **Tests.** The server had no test at all, and neither did HTTP/2,
+    WebSocket, caching or proxies. Now these run over loopback, in a
+    container, on IR and Sparrow:
+    - the server over HTTP/1.1 (GET, POST with a body, 404, drain);
+    - the server over HTTP/2 by prior knowledge, with two requests
+      multiplexed on one connection;
+    - a web application with a scope, a path parameter, a body and the
+      fallback;
+    - a WebSocket echo of text and binary messages, with a clean close;
+    - a cache that serves a fresh response without reaching the origin;
+    - a forward proxy that receives the absolute target, `Host` and
+      `Proxy-Authorization`;
+    - retries of a stale connection;
+    - HPACK tables, HTTP/2 frames, WebSocket message assembly, trailers,
+      server policy, protocol agreement, WebSocket origins and proxy
+      requests.
+
+    Modules without an inline test went from 40 to 23. The rest are HTTP/2
+    and WebSocket internals that these end-to-end tests exercise.
+  - **Examples:** `examples/web/notes.ok` (a JSON service) and
+    `examples/http/websocket/echo.ok`. They agree on IR, Sparrow and the JVM.
+  - The Book's legacy stdlib section is gone, and §26.5 describes the
+    server, web routes, WebSocket, caching, proxies and mime.
+
+### Fixed
+
+- **An array of arrays could not be passed as a role of roles (#488).**
+  `CartesianProduct(origins: [["a", "b"], ["x", "y"]])` failed on every engine
+  with "IR lowering of builtin role adapters … is not implemented yet". The
+  checker accepts `@@T` as `Sequencing<Sequencing<T>>`, but lowering wrapped
+  only objects and variants at a role element. An inner array now gets the
+  same builtin array adapter as a top-level one, at any depth. Case
+  `L05.boundary.nested-array-as-role-of-roles`; `collections/combinatorics`
+  tests products of literals.
+- **An overloaded constructor or action lost the expected type of an array
+  or map literal (#501).** `Pair([A(), B()])` beside `Pair(name is string)`
+  was "Array elements have incompatible types A and B", and so was
+  `Doc(items: [A(), B()])` beside `Doc(items is ...Part)`. A named call no
+  longer counts variadic signatures, and a collection literal picks the only
+  parameter that takes a collection. Case `L03.overload.collection-literal-argument`.
+- **`make install-pgo` stopped in training (#500).** `tools/pgo/json.ok` and
+  workload `05-strings` used removed json and `strings/parse` APIs.
+
+- **http/server: draining and closing hung (#496).** `ServerDrain(…).drain()`
+  never returned, even with no request served and with a limit, and
+  `Within` around `server.drained()` did not time out. `stop_accepting()` and
+  `close()` set the server's shared event without replacing it. The waiters
+  then spun without yielding, the closing connection never ran, and neither
+  did the timer. A hidden `signal()` now wakes the waiters and installs a
+  fresh event. No test had ever shut the server down.
+- **template: a JSON number is written as JSON writes it (#494).**
+  `SectionTemplate("Order {{id}}")` with `{"id": 17}` gave `Order 1.7e1`,
+  and `12.5` gave `1.25e1`. `JsonTemplateStrings` printed numbers through
+  the canonical form of `Decimal`, while `HtmlTemplate` printed `17`. Both
+  now print `17`, `4.5`, `1000` and `-0.25`, as `config/document` does
+  since #366.
+- **Book: links to example programs (#495).** 57 links in the two Books
+  pointed at `../examples/…` programs that live in okkama-docs, not in this
+  repository. They are now okkama-docs references.
+- **crypto/nonce: `CounterNonce` with a counter of 8 bytes or more (#493).**
+  The usual AEAD nonce, a 4-byte prefix and an 8-byte counter in 12 bytes,
+  failed with "Shift count must be in 0..63". A counter field of 8 bytes or
+  more now holds any non-negative `int`, and wider fields are zero-padded.
+- **fs/path: a Windows root is its own parent (#492).**
+  `Path("C:\\", PathStyle.windows).parent()` gave `C:`, which is the
+  current directory of drive C, not its root. All three engines had the bug,
+  because they carry the same port of `File::Spec`. The fs/path comment now
+  says what joining really does: it tidies `.` segments and repeated
+  separators and keeps `..`. Conformance case `L09.path.lexical-grammar`
+  covers both.
+- **Temporary paths are tidy on every engine.** `TemporaryDirectory(parent:
+  Directory(path: Path(".")), …).path()` was `./ocs-…` on IR and the JVM,
+  and `/cwd/./ocs-…` on Sparrow. So `file.path().parent()` did not equal
+  the directory it was made in. All three now join the parent as the program
+  spelled it and tidy the result, as `child()` does. Case
+  `L10.fs.temporary-paths-are-tidy` covers it.
+- Traversals own what they walk, and keep no record of what they walked
+  (#483, #484). This was fixed as one lifetime model.
+  - The scope of the loop adopts the source once, as a `let` would.
+  - Each step has a region of its own. It takes the current cursor before
+    `available()` and closes keeping the cursor `successor()` made. That
+    destroys the superseded cursor, and what only it reached, exactly once.
+  - A batch belongs to its own region while it is walked.
+  - `last`, `return` and failures close the step first, then the scope.
+  - What a `map` or `filter` result reaches is handed to the scope of the
+    operation.
+  - Before: a temporary source, or a resource of a cursor, was destroyed by
+    the first action called on the cursor (`for Resource().view()`,
+    `File(path: p).binary().map(…)`), and a failing `item()` leaked the
+    cursor's resource.
+  - Before: every cursor that reached a `destroy` stayed tracked by the
+    scope, about 200 bytes per step. A loop of 10⁶ steps over a
+    resource-backed cursor now runs as follows:
+
+    | engine | memory, release → now | time, release → now |
+    |---|---|---|
+    | IR | 238 MB → 9 MB | 2.8 s → 2.4 s |
+    | Tomato (live, GC stress) | 29 MB → 14 MB at 10⁵ steps | 0.60 s → 0.43 s |
+    | JVM | out of memory at `-Xmx48m` → runs | 1.13 s → 0.71 s |
+
+  - Range, array and plain-cursor loops are unchanged.
+  - Conformance contract `LIFE.TRAVERSAL` has five cases with exact
+    destroy-event sequences on every engine.
+- `config/document` turned a JSON number into a setting in the canonical form
+  of `Decimal`, so `"port": 5432` became `"5.432e3"` while INI and the
+  environment gave `5432` (#366). Numbers are now written as JSON writes
+  them: `5432`, `0.5`, `1200`.
+- The Linux `.deb` and `.rpm` did not install on distributions older than
+  glibc 2.35: Rocky/RHEL 8 and 9, Amazon Linux 2 and 2023, Debian 11 and 12,
+  Ubuntu 20.04 (#485). The binaries were built on Ubuntu 22.04. They are now
+  built in manylinux2014 against glibc 2.17, and the packages require
+  `glibc >= 2.17` (`libc6 (>= 2.17)`). glibc stays the system's own: the
+  packages do not ship it.
+  - The build step prints the newest glibc symbol the binaries need. It is
+    `GLIBC_2.17` for `okkama`, `sparrow`, `blade` and `libokkama_native.so`
+    on arm64, and `GLIBC_2.16` on x86_64.
+  - The `.deb` had a second fault: Ubuntu's `dpkg-deb` compresses its
+    members with zstd, and dpkg before Debian 12 cannot read zstd, so
+    Debian 10 and 11 rejected the package. The members are xz now.
+  - CI installs the `.rpm` on Rocky Linux 8 and 9, Amazon Linux 2 and 2023
+    and Fedora 41, and the `.deb` on Debian 11 and 12 and Ubuntu 20.04 and
+    24.04. On each it runs `okkama env`, a program on the default engine and
+    on Sparrow, `sparrow --version` and `blade --version`.
+  - Checked locally with an arm64 build: CentOS 7 (glibc 2.17), Rocky
+    Linux 8, Amazon Linux 2, Ubuntu 18.04 and 20.04, Debian 10 and 11.
+
+- IR: a TLS read that a timeout or a cancelled task abandoned could make the
+  next read return no bytes (#486). The abandoned read's worker took the
+  received plaintext out of the shared buffer and put it back, so a read
+  finishing in between found the buffer empty. Workers now only append to
+  the buffer, all at once; only the reading program takes from it. Seen once
+  in the gate under load (`L11.tls.cancelled-read-keeps-data`). A stress run
+  (240 runs, 12 at a time) passes before and after, so the race was found by
+  reading the code, not reproduced.
+
+- A constant before `<` parsed as a generic type, so `PI < 3.2` and
+  `LIMIT <= size` were syntax errors (#487). In expressions, `<` after a type
+  name now starts type arguments only when the name has a lower-case letter
+  (`List<int>`, `Maybe<int>.none`). A name in capitals is a constant and is
+  compared. Conformance case `L06.const.compared`.
+
+- Sparrow: named time zones failed, because `rat` did not cross the bridge
+  to origin natives (#489). `Zone.offset`, `abbreviation`,
+  `daylight_saving` and `instant` stopped with `native argument type is not
+  bridged`, and `Zoned(…).instant()` with `native result Rat(…) does not
+  match Rat`. A Tomato rat is a payload around the origin's own `Rat`, so the
+  bridge now clones it each way. No conformance case used a named zone; the
+  new `L09.time.zones` and the `time/zone` inline tests do.
+
+- The gate skipped every `async test` and every test declared inside an
+  object (#490). `tools/gate/std-tests.py` took a module only when a line
+  began with `test "`, so 19 of the 306 std modules with tests never ran
+  there, among them the http client's loopback tests, `http1_session`,
+  `net/dns`, `io/input`, `strings/parse` and `collections/set`. A test
+  declaration is now `\s*(async\s+)?test "`. All 19 pass on IR and Sparrow.
+
+### Performance
+
+- A JSON object of 16 members or more finds a member by name through an
+  index, which every engine builds on the first lookup (#352). Before, every
+  `get(name)`, `has(name)`, `maybe(name)` and `presence(name)` scanned the
+  names, so walking an object with `for doc.names() -> name { doc.get(name) }`
+  was quadratic. For 50 000 members:
+
+  | engine | before | now |
+  |---|---|---|
+  | Tomato | 2170 ms | 42 ms |
+  | IR | 2189 ms | 100 ms |
+  | JVM | 2098 ms | 224 ms |
+
+  - Smaller objects still scan, which is faster for them.
+  - Each node is 8 bytes larger (about 2.5% more peak memory for an array of
+    100 000 three-member objects), and the time is unchanged.
+  - Conformance case `L09.json.large-objects` covers parsed, built and merged
+    objects past the indexed size.
+- Tomato: ownership bookkeeping costs less (#473). A cursor that reaches a
+  `destroy` costs 236 ns per step instead of 418 (−43%), and 11-ownership
+  runs 9.5% faster. Plain cursors cost 9–14 ns per step and are unchanged.
+  - A region that keeps everything it holds, which is how a constructor or an
+    action returning what it made closes, releases its entries without
+    walking what they reach.
+  - Adding a lone free identity, such as a new cursor whose fields reach no
+    other free identity, skips the graph walk.
+  - `region.leave` has its own helper. Before, it went through the shared
+    failure path, which decoded the instruction on every close.
+
+## [0.5.3] — 2026-11-11
+
+0.5.3 brings the persistent collections Tomato has had since 0.4.3 to the IR
+engine and the JVM, makes Tomato compile faster, and rebuilds Blade around
+packages that are plain git repositories. On the IR engine chains of `+`,
+slices, chains of `replaced` and versions of large maps share their storage
+instead of copying it (#335): an append at 100 000 elements costs 200–400 ns
+instead of a copy, a map version 1–5 µs instead of 11 ms. On the JVM chains
+of `+` and slices share buffers and large maps are persistent B+ trees
+(#336): appends 125–190 times faster at 100 000 elements, `drop` loops 239
+times, map versions 6 µs instead of 0.86 ms. Tomato no longer runs
+Cranelift's verifier in release builds (#345), keeps its own GC roots for
+async bodies (#354, #362) and looks maps up by string without building a key
+(#343): the #328 HTTP load runs in 413 ms instead of 757, and the ladder 5%
+faster than 0.5.1 by geometric mean, with every program faster. Blade
+selects the lowest version that satisfies everyone (#347), installs packages
+without `blade.toml` (#348), syncs by locked commit and offline when `pkg/`
+matches (#349), never overwrites work done in `pkg/` (#350, #353), and
+gains `add`, `update` and `remove` (#351). Diagnostics tell two same-named
+types apart (#338). Fixed: a Tomato crash with role fakes under collection
+(#355), cancelled process workers on the IR engine and the JVM, which
+settled before their child exited (#359), native groups that failed open
+(#361), and the Book's account of process workers (#358). The gate runs
+Sparrow under GC stress (#356). Conformance has 992 mandatory cases, the t/
+suite 50 630 checks per configuration (68 new).
+
+### Added
+
+- `blade sync` installs exactly what `blade.lock` records (#349). A package
+  already in `pkg/` with its locked checksum is kept, so a project with a
+  committed `pkg/` syncs with no network and starts no git. Any other package
+  is fetched by its locked commit, not its tag, so deleted or moved tags change
+  nothing; its files must have the locked checksum, and a commit that is gone
+  is an error that names it. What the lock does not have leaves `pkg/`.
+  Without `blade.lock`, `sync` resolves, installs and writes it. A lock that
+  does not match the manifests changes nothing: `sync` lists each
+  disagreement (a minimum above the locked version, a dependency added or
+  removed by hand, a changed URL) with the `blade update` to run. A sync never
+  picks a version. `blade build` and `blade run` point to `blade sync` for a
+  missing dependency. A commit id from `blade.lock` reaches git only if it is
+  hex.
+- Blade never loses work done in `pkg/` (#350). It records what it installed
+  in `pkg/.blade-installed`. A package whose files differ from that record (a
+  file edited, added or removed) stops every operation that would replace or
+  remove it, `blade sync` included, naming the first file that differs, and
+  an entry of `pkg/` that Blade did not install is never deleted: the
+  operation stops and names it. Nothing changes before the check. A pulled
+  `blade.lock` with new versions is not a local change, so `blade sync`
+  installs it. Deleting the package is how one accepts a reinstall. The files
+  an operating system leaves in folders it shows (`.DS_Store`, `._*`,
+  `Thumbs.db`, `desktop.ini`) are neither local changes nor unknown entries,
+  and stay where they are (#353).
+
+### Changed
+
+- Blade's commands follow the package model (#351):
+  - `blade add NAME GIT [MIN]` declares a git dependency and installs it.
+    Without `MIN` the minimum is the newest tag; adding the name again moves
+    its minimum, up or down, and another URL is refused;
+  - `blade update NAME…` resolves the named packages again with every other
+    one at its locked version unless they must move, and reports each move;
+    a moved tag it accepts is reported as `(tag moved: … -> …)`; an unknown
+    name is an error;
+  - `blade remove NAME` keeps what another package still needs.
+
+  **Migration:** `blade install` is now `blade sync` and `blade install SOURCE
+  [VERSION]` is now `blade add NAME SOURCE [MIN]`; the old spellings still
+  work for one release and print their replacement.
+- Blade changes only what changes in `pkg/` (#350): packages that stay are not
+  touched, so their files keep their inodes and times, and an install that
+  changes nothing writes nothing. `blade remove` leaves `blade.toml` as it was
+  when it fails.
+- Blade selects versions by minimum version selection (#347). A dependency's
+  `version` is a minimum, `"1.2.0"`: that version or a later one of the same
+  major. Blade installs, for each package, the lowest version that meets every
+  minimum in the project and its dependencies, so a new release changes
+  nothing until some `blade.toml` raises a minimum, and the same manifests
+  always give the same versions. Only the requirements of the versions
+  selected count: what a superseded version needed, even a package of another
+  major or one that cannot be fetched, is pruned and causes no error. Two
+  majors or two sources of one package are reported with the chain of each
+  requirement. `blade.lock` still holds each version until `blade update`.
+  **Migration:** the forms `*`, `=1.2.3`, `1.*` and `1.2.*` are refused with a
+  hint; write the lowest version that works, `1.0.0` for `1.*`, and give every
+  dependency a version.
+- A Blade package is an ordinary git repository with its modules in `src/`
+  (#348), imported as `pkg/<name>/src/<path>`. Its name is the key it is
+  declared under and its version is its tag, so a library needs `blade.toml`
+  only for dependencies of its own; a `[module]` there must agree with the key
+  and the tag. Blade checks only `src/**/*.ok`, so examples and tests beside it
+  may be anything, and installs a library without `blade.toml` with a
+  generated one (`[module] name` and `version`), the same bytes every time.
+  Every refusal names the package and its tag. `blade install SOURCE` names a
+  package without `[module] name` by the last part of its URL or directory.
+  **Migration:** move a package's modules into `src/`, and its importers'
+  paths from `pkg/<name>/x` to `pkg/<name>/src/x`.
+
+### Tests
+
+- The gate runs Sparrow under GC stress too (#356): conformance and the t/
+  suite with `SPARROW_CORE_GC_STRESS=1`, a collection at every safepoint with
+  freed cells poisoned, so a lost or wrong root fails at once. Run by hand, it
+  found #355.
+
+### Fixed
+
+- Native groups fail closed (#361). `Limits::natives` sorted a native into a
+  group by its module and counted every module it did not name as pure, so
+  two host facts, the preferred language tags (`runtime/locale`) and the
+  system's trusted certificates (`runtime/x509`), passed a host that had
+  denied `Env`, and so would any module added later. Every module is now
+  named, in a group or among the pure ones; a native in neither is refused
+  while the groups are restricted, and a test fails the build when a module
+  is left out. Both need `Env` now.
+
+- The Book describes process workers as the engines run them (#358): its
+  §31.5.1 spoke of "the current Perl runtime" sending TERM and then KILL
+  after 250 ms, of a versioned JSON protocol, and of embedded and multi-file
+  programs kept on a local executor. It now says what cancellation does on
+  each engine (#359), what the worker process is on each, that an embedder
+  gives Tomato the worker command, and that the wire format is binary.
+  The specification's §18.1, which still listed cancellation as outside the
+  first contract, says the same.
+
+- A cancelled process worker stops before its Future settles on the IR
+  engine and the JVM too (#359), as on Tomato and as the Book says: `await`
+  of a cancelled `spawn` returns `Cancelled` only once the child has been
+  killed and reaped, so what follows never runs beside the worker. The IR
+  engine kills the worker's process group (its descendants with it), the JVM
+  the worker and its descendants; both used to send TERM and settle at once.
+  A worker cancelled before its process started never starts: it used to
+  start anyway, run to its end and print after the cancel. The IR engine also
+  reads a worker's output beside waiting for it, so a descendant that keeps
+  the pipe open no longer hangs the parent.
+
+- Tomato no longer crashes in a collection while a role fake keeps an integer
+  key in `fake.storage` (#355): the key was reported to the collector as a
+  pointer, so a small integer such as `1` (the word 3) was read as an object.
+  Two conformance cases failed under `SPARROW_CORE_GC_STRESS=1`.
+
+- Diagnostics tell apart two types of one name (#338). A nominal type whose
+  name another declaration of the program also has is written as the module
+  of the diagnostic can name it: `shop.Money` through its namespace, `Money`
+  when that is the `Money` in scope, otherwise `Money from "bank/money"`;
+  inside composite types too (`@bank.Money`, `Box<shop.Money>`,
+  `(shop.Money) is int`). Other names stay short. A call or construction that
+  fits no candidate lists the candidates: `No action "count" on object "Till"
+  accepts (bank.Money)` is followed by `Available: count(amount is
+  shop.Money)`, up to four of them. Names in the IR and messages at run time
+  do not change.
+
+### Performance
+
+- Tomato keeps its GC roots itself instead of in Cranelift's frontend (#354).
+  The heap does not move, so a pointer never has to be reloaded after a
+  collection: every traced register has a word in one frame slot, written at
+  each definition, and a call reports the words of the registers live at its
+  instruction. Cranelift's scheme reloaded a value at every use after any
+  call, more than half of the code of large async functions. The small HTTP
+  server and client of #328 runs in 404 ms instead of 572, and compiles in
+  675 ms instead of 838; its largest function shrinks from 65 749 CLIF
+  instructions to 21 842 and from 252 KB of machine code to 134 KB, its frame
+  from 21 KB to 5.6 KB. The liveness of Sparrow code now lets the value an
+  edge writes (`map.lookup`) die on that edge only. `SPARROW_CORE_FRONTEND_MAPS`
+  brings the old scheme back for chosen functions.
+
+- The IR engine keeps arrays as Tomato has since 0.4.3 (#335, arrays): a
+  chain of appends or prepends (`xs = xs + [x]`, `[x] + xs`, both ends in
+  turn) writes into a shared buffer in place instead of copying the array at
+  every step, and a slice that keeps at least half of its array shares its
+  storage (`take`, `drop`, `slice`). On the persistence stand these steps cost
+  200–400 ns at 100 000 elements, where each was a copy of the whole array
+  before (27 µs at 16 000, 60–250 times more); reads, branches off old
+  versions and one-off copies cost what they did. Every version still sees
+  only its own elements. An array of plain values (numbers, strings) is no
+  longer a node of the cycle collector. `OKKAMA_ARRAYS=flat` keeps every
+  append and slice a copy.
+- The IR engine makes a chain of `replaced` in a large array of plain values
+  a trie, as Tomato has since 0.4.3 (#335, tries): a replacement copies one
+  path of the trie instead of the array. A chain of replacements runs 7
+  times faster at 1 000 elements and 20 times at 16 000 and 100 000, one that
+  keeps every version 5–10 times. A trie is read by its path, and flattens
+  itself after a pass of reads; sequential reads of a replaced array cost 9%
+  more, random ones what they did. Arrays that hold objects are copied as
+  before. `OKKAMA_ARRAYS=flat` turns tries off too.
+- The JVM keeps chains of `+` on arrays in shared buffers, as Tomato has
+  since 0.4.3 (#336, arrays): `xs = xs + [x]`, `[x] + xs` and both ends in
+  turn write in place at the buffer's frontier instead of copying the array,
+  so a step costs 45–70 ns at 100 000 elements where it cost 9 µs (125–190
+  times less), and keeping every version of a chain finishes where it timed
+  out. One-off concatenations, branches off one array, reads and builders
+  cost what they did once the JIT has compiled the new path (in the first
+  few hundred concatenations of a program they cost up to half more).
+  Builders and literals stay `ArrayList`; only steps of a chain become
+  `okkama.rt.Vec`. A slice (`slice`, `take`, `drop`) of 32 elements or more
+  that keeps at least half of such an array shares it, and one of any other
+  list is copied once into a `Vec` that its own slices then share: a loop of
+  `drop(1)` costs 69 ns a step at 100 000 instead of 16.6 µs, and a slice of
+  half an array 20 µs instead of 36. `OKKAMA_ARRAYS=flat` keeps every result
+  a copy. Tries for chains of `replaced` are built but off by default on the
+  JVM (`OKKAMA_ARRAYS=trie` turns them on): they replace 3.4 times faster at
+  100 000 elements, but the JIT takes some fifteen passes to read a flattened
+  trie as fast as before.
+- The JVM makes large maps persistent, as Tomato has since 0.4.3 (#336,
+  maps): a write that versions a map of more than 64 entries makes a
+  persistent B+ tree (`okkama.rt.PMap`) whose versions share every node off
+  the path the write copied, and branches off one `TreeMap` share its
+  persistent form. `m + [k: v]` and `m - [k: v]` at 100 000 entries cost
+  6–8 µs instead of 0.77–0.89 ms, a merge of a small map into a large one 11 µs
+  instead of 9 ms, and chains of puts and removals at 100 000 finish where
+  they did not. Merges that add much (two maps of equal size) are copied as
+  before, and lookups, iteration, builders and literals cost what they did.
+  `OKKAMA_MAPS=btree` keeps every version a copy.
+- The IR engine makes a map persistent, as Tomato has since 0.4.3 (#335,
+  maps): a write that makes a version of a map of more than 64 entries turns
+  that map into a persistent B+ tree in place, and it and its versions share
+  nodes from then on, so `m + [k: v]` and `m - [k: v]` copy one path instead
+  of the map. Chains of puts and removals, branches off one map, merges of a
+  small map into a large one from either side, and versions kept all run in
+  0.7–4 µs per step at 1 000 to 100 000 entries, where each step was a copy
+  of the whole map (1.8 ms at 16 000, 11 ms at 100 000); merges of two equal
+  maps run 18–29% faster. Lookups, `keys`, `values`, equality and maps built
+  by a builder or a literal cost what they did. Only maps of plain keys and
+  values become persistent; maps that hold objects are copied as before, and
+  a map of plain values is no longer a node of the cycle collector. Versions
+  nested in versions, of maps and of tries, drop without recursion.
+  `OKKAMA_MAPS=btree` keeps every version a copy.
+
+- Tomato keeps Cranelift's stack maps for synchronous functions (#362) and
+  its own GC roots (#354) for async bodies only, where Cranelift's reloads
+  after every call made more than half of the code. In call-heavy code the
+  own roots cost a third more: the ladder's recursive `02-calls` iterates in
+  16.4 ms instead of 20.8 (15.7 with Cranelift's maps everywhere), while the
+  #328 HTTP load runs in 413 ms instead of 404 (572 before #354).
+  `SPARROW_CORE_FRONTEND_MAPS` now chooses among async bodies.
+- Tomato compiles a quarter faster (#345): release builds no longer run
+  Cranelift's IR verifier, which checks the JIT's own output and took a
+  quarter of the compile time. A small HTTP server and client (a loopback
+  server and 50 requests, #328) runs in 582 ms instead of 757; its 601
+  functions compile in 595 ms instead of 792, to the same machine code.
+  Debug builds, and the gate's debug tests, keep the verifier;
+  `SPARROW_CORE_VERIFY=1` turns it on in a release build.
+  `SPARROW_CORE_PROFILE_COMPILE=1` prints where compilation spends its time:
+  a line per function and Cranelift's passes.
+
+- Tomato looks a map up by a string key without making the key (#343). The
+  text is compared where it lies against the stored keys, in the order of
+  keys exactly, in both kinds of map entries: the standard B-tree through a
+  borrowed view and the persistent map through a search by comparison.
+  Before, each lookup copied the text into a key of its own and freed it.
+  In-process, a lookup by a short string key costs 22.8 ns instead of 47.8
+  in a map of 8 entries, 55 instead of 75 in a map of 1 000 and 190 instead
+  of 225 in a persistent map of 100 000; keys sharing their first 8 bytes
+  gain as much. In programs, `m[key]` by a string key runs 5–9% faster on
+  the persistence stand (80 -> 73 ns at 1 000 entries, 180 -> 167 at
+  100 000) and 4–10% faster in the micro programs; integer keys do not
+  change. The key's type is borrowed instead of copied on every map
+  instruction.
+
+
+## [0.5.1] — 2026-11-10
+
+0.5.1 makes Sparrow and the JVM faster where 0.5.0 left them slowest, and
+lets an embedder give each runtime a memory budget of its own. On Sparrow
+(Tomato) exact rationals are the engines' shared fraction with machine-integer
+parts: a small `rat` expression costs 312 ns instead of 1 954, level with the
+IR engine, and the ladder's 10-app runs 15% faster (#326). Instructions that
+machine code runs through the shared slow path read their operands from the
+call site, so map literals, lookups and `+` are 15–24% faster (#325), and a
+payload's Rust memory is charged once (#332). On the JVM a task hands control
+to the next through a baton that spins before it parks: an `await` costs
+0.77 µs instead of 6.9, a channel round trip 1.15 µs instead of 13.3, and
+10-app runs 29% faster (#327). The compiler settles a scope only where it may
+own an object with an `async destroy`, so one async cleanup guard no longer
+slows the compilation of every async action (#328). `Limits::memory_scope`
+gives each runtime of a process its own memory budget (#269). A deadlock is
+reported the same way on every engine (#342), and a dependency's git source
+can no longer inject options into Blade's git commands (#346). Conformance has
+992 mandatory cases (2 new), the t/ suite 50 562 checks per configuration
+(38 new).
+
+### Added
+
+- Memory budgets per runtime (#269). `Limits::memory_scope` chooses what
+  `memory` measures: `MemoryScope::Process`, the default and what the CLIs
+  use, is the process allocator through the embedder's probe, as before;
+  `MemoryScope::Runtime` is one runtime's own memory, so an embedder can run
+  several runtimes in one process with budgets of their own. On Tomato it is
+  the heap's pages and large objects plus the Rust memory its objects own
+  (`Heap::held_bytes`), and needs no probe; on the IR engine it is what the
+  run's thread holds through `budget::Counted`, which now counts per thread
+  as well and moved to `okkama-runtime-core` (re-exported where it was).
+  Tested: two Tomato runtimes on two threads, one past a 64 MiB budget and
+  one running three times within 16 MiB; two IR runs on two threads, where a
+  budget of the runtime ignores the neighbour's 16 MiB and a budget of the
+  process does not.
+
+### Changed
+
+- Compiler: an `async destroy` anywhere in a program no longer makes every
+  scope of every async body close with `region.settle` (#328). Each body
+  records the types of the values its regions take; once every body is
+  lowered, a body settles only if one of them may reach an object with an
+  async destroy: the object itself, an object with such a field, an array,
+  map, variant or successor of one, a role such an object does, a generic
+  instance over one. `any`, function values and capabilities count when some
+  such value is boxed, captured or made a capability's owner anywhere in the
+  program (a needless settle costs a suspension point, a missing one would
+  skip a destroy). Other bodies close with `region.leave` and
+  `region.unwind`. With one `async destroy` guard in the HTTP server, the
+  HTTP stack's settles fall from 314 to 12, all in `HttpServerState.run`.
+
+- JVM: a task hands control to another through a baton that spins for up
+  to 20 µs before parking its thread, instead of a `Semaphore` that parked
+  at once (#327). Control usually comes back within microseconds, and
+  parking and waking a thread cost a few on every hand-off; the order of
+  hand-offs is unchanged. At most two threads spin at a time: with more,
+  eight tasks woken by one `Event` shared the cores with spinning
+  neighbours and got slower. Micro benchmarks, release build, median of 10,
+  net per operation: `await` of an async action 6.9 → 0.77 µs, `spawn` and
+  `await` 6.5 → 0.87 µs, a channel round trip 13.3 → 1.15 µs, a wake through
+  an `Event` 22.4 → 7.4 µs, eight waiters woken 162 → 136 µs, a cancelled
+  task awaited 25.3 → 20.4 µs (with an `async destroy` 39.9 → 32.3 µs); a
+  synchronous method call is unchanged.
+
+- Sparrow (Tomato): `rat` values are the engines' shared exact fraction
+  (`okkama_runtime_core::rat::Rat`, the IR engine's), whose parts are machine
+  integers while they fit, instead of `num-rational`'s `BigRational`, which
+  normalized every result through big-integer gcd (#326). Arithmetic borrows
+  its operands instead of cloning them. Micro benchmarks, release build,
+  median of 10: the `rat` expression 1 954 → 312 ns (the IR engine 303),
+  `+` −79%, `*` −83%, `/` −84%, `%` −59%, comparison −72%, `rat(n, d)` −82%,
+  beyond 64 bits −48%; the ladder's 10-app −15%. Results are unchanged: 38 new
+  checks in `t/op/rat-edges.ok` (signs, 64-bit boundaries, promotion and
+  reduction back, conversions, keys, aliases) pass on every engine.
+
+- Sparrow (Tomato): an instruction that machine code runs through the shared
+  slow path (`rt_exec`) no longer visits the instruction on every call to
+  find its operands; the call site passes the list it computed when it was
+  compiled. A map literal also counts what its keys own as it is built
+  instead of walking them again when it is allocated (#325). Micro
+  benchmarks, median of 10 against release/0.5.1: map literal −24%, map
+  lookup −20%, `keys()` −21%, map `+` −18%, string slice −22%, string length
+  −17%, SHA-256 −16%, JSON round trip −14%; nothing slower beyond noise.
+  A small map kept as one sorted vector was measured against this and not
+  adopted: in the release build it gains 6–28% on maps of up to 8 entries
+  but costs 15–21% where a map grows past them (report:
+  `okkama-docs/benchmarks/maps-325/REPORT.md`).
+
+### Fixed
+
+- Blade: the git source of a dependency, from any `blade.toml` including a
+  transitive dependency's, reached git as a plain argument, so
+  `git = "--upload-pack=…"` ran a command during `blade install` (#346).
+  Sources now follow `--`, are refused when they start with `-`, hold
+  control characters or name a transport helper (`ext::…`), and git runs
+  with `GIT_ALLOW_PROTOCOL=file:git:https:ssh`.
+
+- Sparrow (Tomato) reported a deadlock — no task ready and nothing outside
+  the runtime able to wake one — as an engine stop worded differently from
+  the IR engine and the JVM. It is now the same runtime failure on every
+  engine: `RuntimeError: async main cannot complete: no task can make
+  progress`, status 1, the output written before it kept (#342). The
+  contract ASYNC.NO-PROGRESS and the cases `L08.deadlock.two-tasks` and
+  `L08.deadlock.after-timer` (a pending timer is still progress) pin it on
+  every engine; the spec (section 18) and the async guide (6.4) describe it.
+
+- Sparrow (Tomato): a payload's Rust memory was charged twice toward the
+  next collection, its boxes once in each of two functions, and a payload
+  that took over a map builder's entries was not charged for its own struct
+  (#332). Every part is now charged once: `allocate_payload` charges what the
+  payload owns, `allocate_payload_moved` the payload and its boxes. Measured
+  on the persistence stand (8 map scenarios × 3 sizes, 10 repetitions):
+  no change beyond noise. Letting the next collection wait for 1.5× or 2×
+  the live memory gave no consistent gain and raised peak memory by up to
+  85% (map-build-reduce, 100 000 entries), so the threshold stays at the
+  live memory. 5 000 versions of a map sharing long string keys, of which
+  every hundredth is kept, stay at 11 MB resident with 28 collections.
+
+## [0.5.0] — 2026-11-10
+
+0.5.0 makes async scheduling cooperative on every engine and removes the
+previous Sparrow VM. On the IR engine and the JVM a woken task now runs after
+the task that woke it suspends, as it always did on Sparrow, so the code of a
+task between two `await`s is never interleaved with another task's (#340); on
+the JVM a stopping task hands control straight to the next ready one, and
+wake-ups and cancellations are 7–22% faster than before. The previous VM
+(`sparrow-origin`, crates `sparrow-vm` and `sparrow-runtime`, about 37 000
+lines) is gone (#14). Tests gain `test.skip`, `okkama run -t --filter` and
+tests among private actions (#277). Diagnostics name the enum cases a `match`
+leaves out in an action's tail and in compact choices (#291), report an
+unconsumed successor at its binding (#272) and a fake's mistakes in terms of
+its role (#276). A map value may start with a parenthesis (#263). The channel
+documentation describes the std that exists, with examples checked on three
+engines (#341), and role plainness per instance is verified and measured
+(#268). Conformance has 990 mandatory cases (10 new), the t/ suite 50 524
+checks per configuration.
+
+### Added
+
+- Tests: `test.skip("reason")` ends a test and reports it as skipped
+  (`--- SKIP: name` and the reason) on every engine (#277). The code after
+  it does not run, no `catch` takes it, and cleanup runs as for any failure.
+  A skipped test does not fail the run unless an assertion failed before the
+  skip. Conformance cases `L07.test-runner.skip` and
+  `L07.test-runner.skip-after-failure`.
+- `okkama run -t --filter TEXT` runs only the tests whose names contain TEXT,
+  literally; repeated, those that contain any of the texts. A filter that
+  selects no test is an error (#277).
+
+### Fixed
+
+- Diagnostics: "Successor action result must be used; binding \"done\" can
+  leave scope without consumption" pointed at the first line of the
+  enclosing action; it points at the binding (#272), also when the path that
+  loses the value is a `catch`.
+- Diagnostics: mistakes in a role's `fake` named the generated object
+  `Counter$fake` and a constructor nobody wrote (#276). A fake field without
+  a default now reads `Fake field "value" of role "Counter" needs a default:
+  a fake takes no constructor arguments`, at the field; a fake action that
+  does not match the role reads `Action "count" of the fake of role
+  "Counter" must return int, got string`, at the action; a missing one reads
+  `The fake of role "Counter" does not implement action "reset"`, at the
+  `fake` block. Objects the programmer wrote keep their messages.
+- Documentation: the channel API in the Okkama Book (RU; the EN Book had no
+  section and now has one), spec §18.2, the channel guide and the LLM
+  context described `Sender<T>`/`Receiver<T>`, `sender()`/`receiver()`,
+  `receive()` and a positive-only capacity (#341). They now describe
+  `Sending<T>`/`Receiving<T>`, `sending()`/`receiving()`, `item()`, the
+  capacity-0 rendezvous and `InvalidChannelCapacity` for a negative
+  capacity. Five executable examples in `okkama-rs/examples/channels`
+  (buffered, rendezvous, closing, lifecycle, state owner) are checked against
+  their `.expected` output on the IR engine, Sparrow and the JVM.
+- Async: on the IR engine and the JVM, waking a task ran it inside the
+  waking call (#340). `Event.set()`, `cancel()`, a channel handoff or a
+  returned permit resumed the woken task at once, so another task's code ran
+  in the middle of the caller's, between two of its suspension points; on
+  Sparrow it ran only when the caller suspended. Both schedulers now keep a
+  queue of ready tasks, as Sparrow does: a wake makes a task ready, and the
+  launch loop runs ready tasks in wake order when the current task suspends
+  or ends. `cancel()` no longer runs the cancelled task's cleanup inside the
+  call. `spawn` and the first `await` of a cold future still start the body
+  at once. On the JVM, where a task is a thread, a task that the launch loop
+  resumed hands control straight to the next ready task when it suspends or
+  ends, in the same order, instead of switching threads through the loop:
+  waking a task is 12% faster than before the fix (an event wake-up
+  22.5 µs, eight waiters −22%, a cancellation −12%); on the IR engine the
+  queue costs 0–5%, on Sparrow nothing changed. Contract `ASYNC.COOPERATIVE-WAKE` with nine conformance cases
+  (`L08.wake.*`); spec §18 and the Book state the rule.
+- Parser: a test block after `private:` was taken for an action ("Expect
+  \"(\" before action parameters"). It is a test of the object like any
+  other and does not become private; the formatter keeps it in its place
+  (#277, conformance case `L01.gram.private.test-among-actions`).
+- Diagnostics: a `match` over an enum that leaves cases out names them also
+  as the last value of an action (#291). `weight(p is Priority) is int {
+  match p { case Priority.low { 1; } case Priority.normal { 2; } } }` said
+  `Action "weight" must produce a return value of type int`; it now says
+  ``match over enum `Priority` does not cover urgent, so it has no value
+  here; add the cases or an `else` branch``, at the match. A compact choice
+  that misses a case (`p ?? .urgent: 1 !! .low: 2`) reported two messages
+  about its form; it reports one that names `normal` and suggests a `_:`
+  branch.
+
+- Parser: a map value may start with a parenthesis (#263). `["b": (2 + 3) *
+  2]`, `[1: (2) + 1]`, `["x": (-1)]` and `[x: (2)]` were rejected with the
+  migration error of the removed `Type:(args)` projection. That error now
+  applies only to a bare type name before `:(` (`ParsedInt:(answer)`), and
+  a constant key such as `LIMIT` is all capitals, so it is not taken for one.
+  Parser and formatter tests, and the t/ suite writes negative numbers in
+  parentheses again: 543 checks that were skipped now run (50 524 on each
+  configuration). Parsing all of std takes the same time.
+
+### Changed
+
+- Compiler: role plainness per instance, asked for by #268, is what the
+  regions pass of #292 already does; verified and measured, no new
+  lowering. A test checks that `Source<int>` with only plain implementers is
+  not tracked while `Source<string>` with one that owns a resource is, and
+  conformance case `L07.regions.role-instances` checks the cleanup of such
+  values in arrays, maps, returned values and closures on every engine, with
+  IR passes on and off.
+
+- Removed: the previous Sparrow VM (#14). The crates `sparrow-vm` and
+  `sparrow-runtime`, the `sparrow-origin` binary, `okkama run --engine
+  sparrow-origin`, the OCS engine of that name and the comparison tools
+  `core-compare.py` and `std-compare.py` are gone; Sparrow is `sparrow-core`
+  (version Tomato) alone. The IR engine's tests that also ran each program
+  on the previous VM now run it on Sparrow (`okkama-runtime/tests/support`):
+  the same result, or a failure of the same category and message. Checks of
+  the previous VM's own error types are dropped; Sparrow's reports are
+  covered by the CLI tests and conformance. The benchmark ladder loses the
+  engines `sparrow` and `sparrow-interp`.
+
+- The Okkama Book (EN/RU): the section «Completed test execution and
+  snapshots» described the runner of the Perl implementation (`--workers`,
+  `--seed`, `--report`, deadlines, `fake.reading`/`fake.writing`) and links
+  to contracts that do not exist. It now describes what the runner has; the
+  rest is planned with the new std in 0.7.0 (#339). The tests chapter runs
+  `okkama run -t` instead of `perl bin/okkama -t`.
+- Documentation names the virtual machine Sparrow; Tomato is the name of
+  its current version, as Tahoe is a version of macOS. This covers the
+  README, the Okkama Book (EN/RU), the Sparrow Book (EN/RU) and the guide
+  for agents. Release notes before this entry keep their wording. Crates,
+  binaries, flags and the benchmark engine id `tomato` keep their names.
+
+## [0.4.3] — 2026-11-10
+
+0.4.3 is a Tomato performance release: immutable collections stop copying
+themselves. Each of these chains costs O(1) or O(log n) per step instead of
+a copy of the whole value, and every older version stays as it was:
+- appends, prepends, `drop` and `take` on an array, and `replaced`;
+- puts and removals on a large map;
+- `+` on a string.
+
+Reads, builds, short strings and maps are unchanged or faster. The engine
+ladder is 1.3% faster on Apple M2 Max and unchanged on an x86-64 CI runner,
+where reads and builds also stay within 1%. The representations were
+measured one by one before they were kept (#246–#255); `OKKAMA_ARRAYS`,
+`OKKAMA_MAPS` and `OKKAMA_STRINGS` turn them off. The IR engine and the JVM keep flat copies
+until 0.5.2 (#335, #336). Also new: `@T.replaced` and `@T.removed_at`.
+Map keys compare faster, and maps no longer pile up in memory (#331).
+
+### Added
+
+- `tools/perf/persistence_ab.py` and the workflow `Perf x86-64`
+  (`.github/workflows/perf-x86.yml`). They measure the persistent
+  representations on and off on one binary, on a machine the persistence
+  stand does not run on: 41 of the stand's programs (110 points) and the
+  ladder workloads, in ABBA order. Run it by hand or by pushing a `perf/*`
+  branch. Two runs before this release: the averages of reads and builds
+  are within ±1%, while single points on the shared runner swing by up to
+  ±25%. The check found one regression, fixed before the release: each
+  version made from the same long string took a buffer twice its size
+  (+80…375% on x86-64).
+- `@T.replaced(index, value)` (#250, owner's spelling): a new array equal to
+  the receiver except at `index`, which holds `value`; the receiver keeps
+  its elements. `value` meets the element type by the boundary rules of an
+  action parameter (a role wraps its implementer, `@any` boxes) and by no
+  other conversion; an index outside the array is the runtime error of
+  indexing (`Array index out of bounds`); an untyped `[]` has no element type
+  and is rejected at compile time. Programs rebuilt the array with a `map`
+  over the indices before. One new OIR instruction, `array.replace`, and one
+  SPB instruction, `arr.replace` (opcode 155, SPB format version 14), so
+  that an engine can later replace an element without copying everything
+  (#250 part 2); today every engine copies the array once (`@byte` arrays
+  stay packed on Tomato), and `sparrow-origin` reports it unsupported (#14).
+  OCS: contract `COLL.ARRAY-REPLACED`, cases `L05.array.replaced`,
+  `…-past-end`, `…-negative`, `…-type-rejected`,
+  `…-untyped-empty-rejected`; Book 10 (EN/RU), spec 6.6, Sparrow Book
+  (EN/RU), LSP completion, t/op/array.
+- `@T.removed_at(index)` (#251, owner's spelling): a new array of the
+  receiver's elements except the one at `index`, the others in their order;
+  the receiver keeps its elements. It removes by position, where `-`
+  removes by value. An index outside the array (an empty array has none) is
+  the runtime error of indexing. Programs wrote `a.slice(0, i) + a.slice(i +
+  1, a.size())` before. One OIR instruction, `array.remove`, and one SPB
+  instruction, `arr.remove` (opcode 156, still SPB format 14, which 0.4.3
+  introduces); every engine copies the array once, `sparrow-origin` reports
+  it unsupported. OCS: contract `COLL.ARRAY-REMOVED-AT`, cases
+  `L05.array.removed-at`, `…-past-end`, `…-empty`, `…-type-rejected`; Book 10
+  (EN/RU), spec 6.6, Sparrow Book (EN/RU), LSP completion, t/op/array.
+
+### Changed
+
+- Tomato: a chain of appends no longer copies the array at every step
+  (#246). `items + [x]` on an array of 32 elements or more that
+  was itself made by an append writes into a shared buffer with room to
+  grow, when `items` ends at the buffer's frontier; the new version is a
+  three-word view (the buffer, where it starts, its own length), and the old
+  one keeps its elements. A second version appended to the same one copies,
+  as before. One-shot arrays (literals, builders, `map`, `filter`, slices)
+  stay flat, so reads do not change: machine code takes one branch on a
+  header bit before the element load. `OKKAMA_ARRAYS=flat` turns it off.
+  Persistence stand (`okkama-docs/benchmarks/persistence`, same binary both
+  ways, 10 repetitions after a warm-up, M2 Max): building n elements one
+  append at a time costs 55–66 ns per append at every n (flat: 6.1 µs at
+  n = 16 000, 48 µs at 100 000, no repetition within 20 s at 10⁶); reads —
+  random and sequential indexing, a 2-D matrix, `reduce`, `map`, `filter`,
+  `==`, `contains` — move by −0.4% on geometric mean (−1.3…+1.0% per size,
+  noise); one write and R random reads per step: 10–80× faster. A native
+  prototype of the 32-way trie with a tail (`crates/okkama-persistent`)
+  reads 3–6× slower than a flat array in index loops and takes 22% more
+  memory, which is why reads stay flat. New t/ family `persistence` (3 102
+  checks: chains, pairs, successor fields, cells, prepends, branching
+  versions, at sizes around 32, 64, 128, 1 024 and 2 048).
+
+- Tomato: a chain of `replaced` calls on a large array no longer copies the
+  array at every step (#250, part 2). From the second
+  replacement in an array of 64 elements or more, the array is a 32-way trie
+  with a tail — a four-word object whose nodes are ordinary heap arrays — and
+  a replacement copies one path from the root to a leaf. A trie that is
+  only read flattens itself: after as many reads as two passes it rewrites
+  itself in place as a shared view of a flat copy, which machine code reads
+  inline, and the next replacement makes it a trie again. Machine code keeps
+  the plain load for flat arrays (one branch on two header bits); a view now
+  keeps its first element's address, so reading it costs one load more than
+  a flat array (reading a view was 11% slower; now it is on par).
+  `OKKAMA_ARRAYS=flat|shared|trie` selects the representations for
+  comparisons (the default is all of them, with flattening). Persistence
+  stand, same binary in four modes: a chain of replacements 6–82× faster
+  (n = 10³…10⁶), every version kept alive at n = 10⁶ 1.27 ms → 73 µs per
+  version and 365 → 103 MB; reading an array after replacements: +45…75%
+  when a trie stays a trie, −3% on geometric mean with flattening; arrays
+  nobody replaced in read the same in every mode. t/ family `persistence`
+  gains replacement chains up to 33 000 elements with branches from older
+  versions (3 481 checks), also under GC stress.
+
+- Tomato: a chain of prepends (`[x] + items`) no longer copies the array at
+  every step either (#247). A shared buffer keeps room at both
+  ends; its free slots hold a word no element can be (0 for `int` and
+  reference elements, the unbound raw word for the others), which the
+  collector does not take for a pointer. `[x] + items`, where `items` has at
+  least 32 elements and was made by an append or a prepend, writes right
+  before `items` when it starts at its buffer's lowest written slot and
+  there is room, else into a new buffer twice the size with three quarters
+  of its room in front; a chain that alternates ends is recognised from
+  either end, and a buffer that has grown at the front keeps a quarter of
+  its room there when an append outgrows it. Persistence stand, same binary:
+  a chain of prepends 61–92 ns per step at every n (flat: 4.6 µs at 16 000,
+  32 µs at 100 000), alternating ends 63–82 ns (flat: the same O(n)); reading
+  an array after prepends is as fast as a flat one. t/ family `persistence`:
+  prepends to one version from two sides, both ends at once, alternating
+  ends.
+
+- Tomato: slices share their origin when they keep at least half of it
+  (#249). `slice`, and `take` and `drop`, which lower to it,
+  return a view of the origin's storage — the flat array itself or the
+  buffer of a view — when the slice has 32 elements or more and keeps at
+  least half of that storage; smaller and shorter slices, and slices of
+  tries, are copied as before. A slice therefore never keeps alive more
+  than twice what it holds, and a view never points at another view, as
+  the owner asked (trimming rather than permanent views). A loop of
+  `rest = items.drop(1)` shares until half is left, copies that half once
+  and so on: O(n) in all. Concatenating a slice is a one-off, not the start
+  of an append chain, and copies once. Persistence stand, same binary:
+  half-slices 38–48 ns at every n (flat: 0.4 µs at 1 000, 0.44 ms at 10⁶),
+  `drop(1)` and `take(size − 1)` loops 31–55 ns per step (flat: 0.56 µs at
+  1 000, 46 µs at 100 000), removing an element with two slices and `+`
+  −36…−40%; tiny slices of large arrays kept alive retain no more memory
+  than before; keeping a half of each of many arrays costs up to twice
+  their memory (192 → 276 MB at 10⁶), the price of the rule. t/ family
+  `persistence`: drop and take loops, middle slices, slices of slices, both
+  ends and `replaced` on a slice.
+
+- Tomato: map keys compare inline when they can. Two small integers, and two
+  strings whose first 8 bytes differ, are compared in place. A string key
+  now carries those bytes as a big-endian number, zeros past the end, so
+  that most string comparisons read neither text. Every other key compares
+  out of line, as before, and the order is unchanged. Both map
+  representations below gain. Persistence stand, today's maps: random
+  lookups −15…−21% and lookups by string key −28…−41% (n = 10³…10⁵).
+
+- Tomato: versions of large maps share their nodes (#252–#254).
+  A map of more than 64 entries turns into a persistent B+ tree the first
+  time a new version is made from it: `m + [k: v]`, `m - [k: _]`, a merge.
+  From then on, putting, replacing and removing a key cost O(log n) instead
+  of a copy of the whole map, and old versions keep their entries.
+  - **What stays as it was.** A map that is only built and read stays the
+    standard B-tree. That covers a builder, a `reduce`, a literal, and a
+    version of a small map. Building and reading therefore cost what they
+    did. The first version of a large map costs the copy it did before; the
+    tree is built full from the ordered entries, and the map turns in place,
+    so it and its later versions share the nodes.
+  - **Tree.** Up to 16 keys and values per node, inline. A lookup scans a
+    node from the left: one comparison per key for small integers,
+    three-way for other keys. The collector counts node memory exactly,
+    shared nodes once, and visits a shared node once per collection.
+  - **Merges.** A much smaller part is inserted into the larger one; parts
+    of comparable size are merged in one ordered pass. The left key word
+    stays.
+  - `OKKAMA_MAPS=btree` turns it off.
+  - This is the revision decided on 2026-11-10. The first cut turned maps
+    persistent as they grew, which made builds 9–11% slower and raised the
+    peak memory of packing unordered string-keyed maps by 35–50%; both
+    costs are gone.
+
+  Persistence stand, same binary both ways (M2 Max, 2 processes):
+  - **Writes:** −98.3% on geometric mean. A version put on a shared map
+    takes 0.85 µs at n = 10³ (standard: 13.2 µs) and 0.79 µs at 10⁵
+    (standard: 2.5 ms). Merging two equal maps is −44…−56%.
+  - **Every version kept** at 10⁵: 4.1 ms → 0.9 µs per version, and
+    353 → 23 MB.
+  - **No change:** building in `reduce` (−0.1…+0.5%), reads (−0.1%), and
+    small maps made and dropped (±0).
+  - **One cost:** merging two equal maps of 10⁵ entries peaks at 106 MB
+    instead of 97.
+
+  t/ family `persistence`: chains of puts and removals, branching
+  versions, merges of every relative size with float keys (the left key
+  word stays), sizes across the 64-entry turn, in both modes and under GC
+  stress.
+
+- Tomato: a chain of `+` on strings no longer copies the string at every
+  step (#255).
+  - **Buffer.** A string of 256 bytes or more made by `+` starts a chain.
+    The next `+` puts both parts into a text buffer twice the size. From
+    then on, a version that ends at the buffer's high end appends in place,
+    and one that starts at its low end prepends in place.
+  - **When it copies instead.** A chain moves to a buffer twice the size
+    only when the part added is at most half the other. `s + s`, a version
+    made from an older one, and short strings are copied, as before.
+  - **Reads unchanged.** A version is a three-word string: its first byte's
+    address and the buffer. So every string operation still reads one
+    contiguous text, and machine code still reads the header alone.
+  - `OKKAMA_STRINGS=flat` turns it off.
+  - A native prototype (`okkama-persistent/examples/sbench`) also measured
+    a rope of 1 KB chunks. It appends at 80–186 ns per piece against 5–9 ns
+    for the buffer, and reads twice as slow wherever a string must be one
+    text. It wins only on branches of huge texts.
+
+  Persistence stand, same binary both ways, 2 processes:
+  - **Appends.** Building a string one `+` at a time costs 20–48 ns per
+    piece of 1–13 bytes at every n (flat: 0.8 µs at n = 16 000, 3.5 µs at
+    100 000). Pieces of 128 bytes cost 41–122 ns. Prepending costs the
+    same.
+  - **Every version kept** at 100 000: 3.6 µs → 112 ns per version, and
+    1 166 → 15 MB.
+  - **No change:** branches, `s + s` and short strings (49.1 vs 48.7 ns,
+    4 processes).
+  - **Reads:** `length`, slices, `find`, `split`, `==`, `less`,
+    `characters` and `replace` on strings built by `+` move by −0.7% on
+    geometric mean.
+
+  t/ family `persistence`: strings appended, prepended and alternated
+  0–4 097 times, in 1-, 2- and 4-byte, combining and 600-byte pieces, with
+  every version kept and branches. They are checked against `repeat()` by
+  equality, order, map keys, `length`, `slice`, `find`, `find_last`,
+  `replace`, `split`, `trim` and `chomp`, also under GC stress.
+
+### Fixed
+
+- Release gate: it no longer runs on binaries built from another tree
+  (#333). Its build volumes are shared by every gate run, and the tree was
+  copied in with its files' times, so a tree edited before another one was
+  gated looked older than that tree's artifacts: cargo reused them, and the
+  OCS adapter's cache of "built" per source hash then kept the stale binary
+  for good (conformance of `removed_at` failed on every engine while the
+  t/ suite on the release build passed). `tools/gate/stamp_sources.py` gives
+  each source the time a gate first saw its present content and drops the
+  adapter's cache when anything changed.
+- Release gate: a gate run from a tree older than #333 no longer leaves
+  the next gate on stale binaries (#334). Such a run builds into the shared
+  volumes without stamping, and the next gate took its newer artifacts for
+  its own. Every gate now seals its record when it ends, failed or not. The
+  next one rebuilds everything once when a build output changed after the
+  seal, or when there is no seal (a killed gate, a #333 manifest).
+
+- Tomato: maps no longer pile up in memory (#331). A map's entries live in
+  Rust memory that the collector did not count, so a program that made many
+  maps and few other objects never reached a collection: making 4 000
+  versions of a 1 000-key map took 2.3 GB, a put loop of 16 000 keys was
+  killed at 8 GB. The heap now counts what its objects own outside their
+  cells: pressure since the last collection (a payload as it is made, a
+  builder as it grows — O(1) per step —, big integer digits) and, apart from
+  it, an estimate of what the live objects own after the sweep, which sets
+  the next threshold together with the live cells, so large live maps do not
+  make every safepoint collect. A map's estimate is two entries' size per
+  entry (a counting allocator measured 1.5–1.95) plus its keys' data, the
+  `Rc` shares divided among their owners, computed once per map.
+  `--stats` reports the bytes charged and live and the collections they
+  triggered. Integer map keys that fit in 64 bits are no longer `BigInt`s:
+  making, copying, comparing and freeing them allocates nothing. Persistence
+  stand, before → after, n = 1 000 and 16 000: peak RSS 0.5–6.8 GB → 13–23 MB
+  on every map-writing scenario; lookups by `int` key −30…−46%, all map reads
+  −23.5%, writes −25.6% (put and merge −41…−46%), a `reduce`-built map
+  −32%. One scenario costs more: 4 000 versions `base - [k: 0]` thrown away
+  at once (+28…40%), which the old heap did not pay because it never freed
+  them.
+
+## [0.4.2] — 2026-11-09
+
+0.4.2 is a correctness and infrastructure release. Variants — enums with
+payloads, `Maybe`, `Presence` and error enums — keep their payload in place
+instead of one array per field (#290): a value with many payload fields is
+built up to 14× faster on Tomato. `rat` becomes a map key type,
+heterogeneous literals need an explicit `any` boundary, and
+`string.less` compares lexicographically (breaking). Anonymous actions now
+behave as the Book says: a captured successor is used when the closure is
+called or handed on (#322), a bound action carries its receiver (#324), a
+captured name cannot be rebound (#321), and an anonymous action does not
+recurse through its `let` (#318). Every engine prints the same uncaught
+failure report (#270), and `okkama check` also reports errors found while
+lowering (#317). The std drops 102 settlement wrappers around single
+awaits and hides its cleanup helpers (#264), which makes an HTTP/1 exchange
+up to 17% faster on Tomato. New tooling: the t/ suite (44 757 self-checking
+assertions on five engine configurations in the gate), micro-benchmarks for
+50 language constructs and std actions, an `.rpm` package and a 15-minute
+release gate. The current Sparrow runtime is now called Tomato, and the
+bundled SQLite is updated for CVE-2026-119375 (#330).
+
+### Added
+
+- Micro-benchmarks (#244), next to the ladder in `okkama-docs/benchmarks/micro`:
+  29 programs of one language construct each (numeric categories,
+  comparisons, strings, constructors plain, generic and with defaults,
+  successors, method and role calls, closures, array and map literals,
+  indexing and `+`, `map`/`filter`/`reduce`, an in-place `reduce` build,
+  `match`, `try`/`catch`, `destroy`) and 11 of one std action (JSON, base64,
+  hex, SHA-256, regex, UTF-8, split, replace, `Sorted`, `ParsedInt`). Each
+  times N repetitions in-process after a warm-up; `run.py` reports net ns/op
+  over the empty loop on Tomato, the IR engine and the JVM, checks that the
+  engines agree on a checksum, and flags changes beyond the noise band
+  against a saved release; `coverage.py` lists the std modules that have no
+  benchmark yet (12 of 473 have one).
+
+- The t/ suite (#245): self-checking Okkama programs that print TAP —
+  hand-written basics, operators and language features (`t/base`, `t/op`,
+  `t/lang`) and generated families (`tools/t/gen.py`: strings, collections,
+  nesting, control, structures, value-object keys, casts, lexical forms,
+  enums, …) whose expected values come from a Python oracle, not from
+  running Okkama. 44 757 checks in 125 files; every configuration (ir,
+  sparrow, jvm, ir-passes-off, ir-gc-stress) must print the same stream.
+  `tools/t/run.py` runs it (`--cage` locally), and it is a mandatory step of
+  the release gate. It found #294–#310; checks blocked by an open issue
+  are held back by name (#263 now).
+- Packages: an `.rpm` for Linux next to the `.deb` (#313), built by
+  `tools/package.sh --installer` from the same tree with `rpmbuild`
+  (`GPL-3.0-only`, `Requires: glibc >= 2.35`, a nightly version written with
+  `~`), with its `.sha256`, in releases and nightlies. CI installs it on
+  Fedora 41 and runs the smoke programs. The binaries need glibc 2.35, so
+  the RPM targets Fedora 36+, RHEL 10 and openSUSE Tumbleweed; RHEL 8/9 need
+  an older-glibc build (noted in #313).
+- `rat` is a map key type (#296): `%rat:V`, rat-key literals, indexing,
+  `has()`, `keys()`/`values()`, `+`/`-` and generic maps work on every
+  engine. A key is the reduced value, so `rat(1, 2)`, `rat(2, 4)` and `2 / 4`
+  are one key, and keys sort by value. Numeric categories stay apart:
+  `%rat:int` takes no `int` key. A missing rat key reads `Map key not found:
+  1/2` on Sparrow and the IR engine (it printed a debug form or failed). The
+  specification (8.8), the Book (EN/RU), the Bible (ch. 8) and the LLM
+  context say so. Conformance: case `L05.map.rat-keys`.
+
+### Changed
+
+- std API: cleanup and settlement helpers are no longer public (#264, wave
+  D). Twelve that nothing constructs any more are removed —
+  `DigestSettlement`, `HttpResolutionCleanup`, `HttpObservationSettlement`,
+  `Http2InputSettlement`, `Http1LeaseSettlement`, both `HttpProxySettlement`s,
+  `DnsAnswerCleanup`, `DnsNameCleanup`, `StreamReadCleanup`,
+  `TcpConnectCleanup`, `TlsTaskCleanup` — and 49 that are used only inside
+  their own module are `hidden` (the `Sqlite*`, `Http1*`, `Http2*`,
+  `HttpClient*`, `Form*`, `Event*`, `Imap*`, `Pop*`, `TcpRace*` guards and
+  the others). Five that other std modules import stay public:
+  `HttpAcquisitionCleanup`, `WebSocketOutputSettlement`,
+  `WebSocketOpeningCleanup`, `RedirectResponseCleanup`, `StreamWriteCleanup`.
+  A program that took one of the removed or hidden names now fails to
+  import it; nothing in the repository did. Unused `FutureGroup` imports
+  left behind are gone.
+
+- std: `Http1BodyReading.bytes` awaits its read directly (#264, wave B). Its
+  `Http1BodyOperationCleanup` watched a group with one child awaited at once,
+  which structured await already cancels and settles. Wave B also tried
+  turning the remaining per-operation guards into `async destroy` guards and
+  stopped there: an `async destroy` costs more than `defer await
+  guard.close()` (243 against 130 ns per call on Tomato, 1 101 against 889 on
+  the IR engine), and as the server's run guard it delayed every Tomato
+  server run by about 0.8 s (#328). The guards keep their deferred close.
+
+- std: 33 more single-child settlement wrappers are gone (#264, wave A of the
+  second part). Each read, connect, accept, TLS handshake, read and shutdown,
+  DNS lookup, HTTP/2 server and session step and WebSocket output step built a
+  `FutureGroup`, a settlement object and a deferred `await close()` around one
+  future it awaited at once; under structured await (#147) a cancelled task
+  cancels and settles the future it awaits, so these are plain `await`s now
+  (`net/stream`, `net/tcp`, `net/tls`, `net/dns`, `http/http2_server`,
+  `http/http2_session`, `http/server`, `http/websocket_session`,
+  `http/internal/websocket_output`, `http/transport_observation`,
+  `http/robots`, `http/digest`, `http/endpoint`). Left as they are: groups
+  with several children, and 11 places that await a memoized future other
+  tasks may share (a frame or header reading, the HTTP/2 preface, a stored
+  ticket, a cached operation), where a group cancels it for everyone and
+  structured await would not; they need their own lifecycle review. No
+  public name changes: the settlement objects stay until the visibility wave.
+  New OCS case `L11.tcp.cancelled-read-keeps-data`. Docker, 4 CPUs, median
+  of 10 alternating runs: an HTTP/1 loopback load of 150 requests takes 17%
+  less on Tomato (1 744 → 1 446 ms) and 2% less on the IR engine, with ~400
+  fewer Rust allocations per request; 200 TCP connections × 50 round trips
+  take 6.6% less on Tomato and 1.2% less on the IR engine (−51 allocations
+  per round trip there).
+
+- The Sparrow core is now called Tomato: the current Sparrow runtime (crate `sparrow-core`, binary `sparrow`) in the docs, the Book and benchmark reports; entries below still say "Sparrow core".
+
+- std: a single await no longer needs a `FutureGroup` and a settlement
+  object (#264, first part). With structured await (#147), cancelling a task
+  already cancels the future it awaits and waits for it, so 68 places in 25
+  `http/` modules that started one future in a group, deferred an
+  `await settlement.close()` and awaited the future at once now just await
+  it: `let exchange = await waiting;` instead of a group, a settlement
+  object, a deferred close and `group.start`. That is two objects and a
+  deferred await fewer per occurrence on every HTTP/1, HTTP/2, WebSocket,
+  form, proxy, XML-RPC and SSE exchange. Six settlement objects that nothing
+  uses any more are removed (`HttpConversationSettlement`,
+  `HttpRetrySettlement`, `RouteSettlement`, `XmlRpcSettlement`,
+  `Http2OutputSettlement`, `Http2SendingSettlement`). Groups with several
+  children, races and timeouts stay.
+
+- Release gate: about 15 minutes instead of 30–40. Its optimized Rust tests
+  build with a new cargo profile `gate` (release optimizations, no fat LTO,
+  16 codegen units): the step took 20.6 minutes, of which 28 seconds were
+  tests and the rest was a full LTO link of each of ~90 test binaries. The
+  release binaries the gate builds keep fat LTO, and conformance, std and
+  the t/ suite run on them. The informative conformance run on the previous
+  VM (`sparrow-origin`) is no longer part of the gate.
+
+- Heterogeneous collection literals need an explicit `any` boundary (#315,
+  owner's option 2): `let a = [1, "two"];`, `let b = [1, 2.0];` and
+  `let m = ["x": 1, "y": "two"];` are compile-time errors at the literal —
+  "Array elements have incompatible types int and string; declare an explicit
+  @any boundary to allow heterogeneous values", and for maps "Map values have
+  incompatible types int and string; declare an explicit %string:any
+  boundary …". The compiler used to infer `@any`/`%K:any`, which the Book,
+  the spec and `COLL.LITERAL-IDENTITY` ruled out. Accepted where the expected
+  type has `any` elements: a typed binding (`let a is @any = [1, "two"];`), a
+  declared parameter or result, and nested positions under one
+  (`@@any`, `%string:@any`); an untyped local is not a boundary, and an
+  `any` element is not a collection boundary (`let x is @any = [[1, "a"]];`
+  is rejected). Homogeneous literals, `[[1], []]` (#297) and boxing at
+  explicit boundaries are unchanged. Impact audit with `okkama check`: std
+  (537 files), examples (8), the Bible examples (77), the Book's checkable
+  examples (171) and the generated t/ files (82) — no change; the only
+  programs that relied on the inferred `any` were tests of that rule itself
+  and one JVM test that passed an untyped mixed local to an `@any` parameter:
+  2 conformance cases, 2 compiler tests, one JVM test and one t/ check,
+  rewritten.
+  Conformance: `L05.literal.heterogeneous-boundaries` and five
+  `…-rejected` cases; spec 6.2/6.6.2, Book 9 and 31 (EN/RU), Bible 4.5.
+- A fenced raw string keeps every character between its delimiters,
+  carriage returns included (#310): ```` ```a<CR><LF>b``` ```` is `a\r\nb`
+  (length 4) and ```` ```a<CR>b``` ```` is `a\rb`. The lexer dropped every CR
+  (D-030, "as in Go"), while the specification and the Book said every
+  character is kept; the owner superseded D-030 for raw strings. A CR between
+  tokens is still whitespace, and nothing normalizes line endings. Conformance
+  case `L01.lex.crlf.raw-string-keeps-cr` replaces
+  `L01.lex.crlf.raw-string-discards-cr`; DEF-006 is withdrawn. Lexing a
+  3.5 MB raw literal is about 35 % faster (median of 10, LF, CRLF and mixed
+  endings alike): the per-character filter is gone.
+- **Breaking:** `string.less(other)` and `string.less_or_equal(other)`
+  compare lexicographically by Unicode code point, the order of
+  `string.order()` and `ordering()`. They compared lengths, so code that
+  mixed the two orders — a binary search with `less` over an array sorted by
+  `ordering()` — was silently wrong (#281). Compare lengths with `length()`.
+  Conformance: contract VAL.STRING-ORDER, case `L02.string.order-consistent`
+  (prefixes, equal strings, the empty string, no case folding, code points
+  past the BMP, agreement with `order()` on every pair, the binary search).
+- Variants — enums with payloads, `Maybe`, `Presence` and error enums — have
+  a representation of their own (#290). OIR gains the variant type and
+  `variant.new`, `variant.tag`, `variant.get` and `variant.of`; each case is
+  an object holding only its own payload, so a value is one allocation, and
+  building or reading one no longer depends on the fields of the other
+  cases. Before, a variant was one object with a one-element array per
+  payload field of every case. Sparrow (bytecode version 13: a variant table,
+  four instructions, `catch … variant`), the IR engine and the JVM (an
+  abstract class per variant, a subclass per case) store a value as the
+  object of its case; the Sparrow verifier rejects a case or a field outside
+  the layout, and reading the payload of an inactive case traps. Sparrow,
+  10 M steps that build and match a value: `value`/`pair` 1.46 → 0.53 s and
+  30 M → 0 arrays; a 13-case variant 7.58 → 0.64 s and 260 M → 0 arrays.
+  Conformance case `L05.variants.case-layouts`; the Sparrow Book documents
+  the instructions.
+
+### Fixed
+
+- Compiler: a bound action (`later.count` without a call) carries the
+  obligation of its successor receiver, like a closure since #322 (#324).
+  Creating it used the receiver at once, so `let read = later.count; 0;` hid
+  an unused successor. The receiver's `Take` now only adapts the type: the
+  action value carries the obligation, a call uses it, and passing,
+  returning or storing it transfers it. A direct call `later.count()` and
+  successor chains such as `c.inc().inc().value()` use the receiver at once,
+  as before. An action value that leaves its scope unused is reported with
+  the successor it carries: `"later" is carried by action value "read",
+  which can leave scope without being called, returned, passed or stored`.
+
+- Compiler: rebinding a captured name inside an anonymous action is an error,
+  as the Book always said (#321). `let bump = () is int { counter =
+  counter.bumped(); counter.count(); };` was accepted and rebound a copy that
+  lived for one call (`bump()` twice printed `2 2`, `counter` stayed 1). It
+  now fails at the rebind: `Cannot rebind captured variable "counter" inside
+  an anonymous action: captured bindings are snapshots; return the successor
+  instead`. The check is by binding identity: the action's parameters and
+  locals, including ones that shadow a captured name, stay rebindable, and a
+  nested action cannot rebind what it captured from the enclosing one.
+
+- Compiler: a successor captured by an anonymous action is used when the
+  closure is (#322). `let later = c.bumped(); let show = () is int {
+  later.count(); }; show();` was rejected (`binding "later" can leave scope
+  without consumption`) because the flow check did not follow captures. A closure now carries the obligations of the successors its body
+  uses on every normal path (spec 11.1; found by a second, silent pass over
+  the body, run only when a capture holds one), transitively through
+  captured closures. Creating it and binding it to locals or aliases keep
+  them; calling it uses them; passing it as an argument, returning it and
+  storing it in an array, map, `Maybe` or field transfer them. A closure
+  that is never used is still an error, now naming it and the successor it
+  carries (the message is quoted under #324). A body that uses the capture on
+  one branch only does not carry it. Bound actions follow in #324.
+
+- Parser: `async` in front of an anonymous action says what is wrong (#323).
+  `let later = async () is int { 1; };` read as a call of a name `async`
+  and failed at `is` with `Expect ";" after let declaration`. It now fails
+  at `async`: `Anonymous actions cannot be async; declare a named async
+  action instead.` The check needs the anonymous action's signature
+  (`(…)` followed by `is`), so `async()`, `async(1)` and `receiver.async()`
+  stay calls of an action labelled `async`; nothing else in the grammar
+  changes, and a recovering parse (editors) reports the one error and goes
+  on.
+
+- Conformance: `L11.tls.cancelled-read-keeps-data` no longer fails on a
+  loaded machine (#312). The `tls-late-echo` fixture sent `late!` 0.8 s after
+  the handshake; when the client took longer than that to reach its timed
+  read (a dozen cases sharing two CPUs; one failing run took 50 s), that
+  read got the data instead of timing out,
+  the last read waited for a record already taken, and the fixture's socket
+  timeout closed the connection, which the client saw as `TLS peer truncated
+  input`. Not an engine race. A pause counted from a byte the client sends
+  before its timed read did not help either (342 failures in 1000): the
+  client can be slow between that byte and the read as well. The fixture now stays silent
+  until the client's byte, which the client sends after both interrupted
+  reads, so the record arrives after them at any speed. In Docker (2 CPUs,
+  12 cases at once) the case failed 506 of 1000 times before and 0 of 1000
+  after.
+
+- Sparrow core: a failed file operation reports the same message as on the
+  IR engine and the JVM (#319). Opening a missing file gave
+  `FileSystemFailure.detailed("not_found", "No such file or directory (os
+  error 2)")` on the core and `… "Cannot open file")` elsewhere; the core's
+  file providers now use the phrase of the operation (open, read, write,
+  seek, truncate, lock, the directory and path operations, temporary files),
+  with the reason in the code (`not_found`, `permission_denied`, …), and a
+  file opened lazily by a read says "Cannot open file" like the others.
+  Conformance `L10.fs.missing-file-message`.
+
+- `okkama check` reports every compile-time error, also those that only
+  lowering finds (#317): a chain of generic specializations that never ends
+  (polymorphic recursion, H-15), recursion that cannot complete, constructs
+  IR lowering does not support yet, and an internal error in lowering. They
+  passed `check` with exit 0 and failed only at `okkama run` or `build`.
+  After a clean analysis `check` now lowers the program, without the OIR
+  passes, and verifies the IR: 59 sample programs check in 1.56 s instead of
+  0.66 s (about 26 ms each instead of 11). `okkama lint` and the language
+  server keep the analysis-only path, for editor latency.
+- IR engine: reading length-prefixed records from a large byte buffer is
+  linear again (#280). The `runtime/bytes` natives behind `ByteRange`
+  (`integer`, `text`, `decimal`, `equal`) and `ByteSearch` converted the
+  whole source array to bytes on every call, so `PgInput.data_rows`, which
+  reads one 4-byte length per DataRow, cost the size of the buffer per row:
+  draining 10⁶ PostgreSQL rows took 78 s on the IR engine against 0.18 s on
+  the core. They now read only the range (or, for a search and a join, the
+  rest from the start offset). 20 000 records in one buffer: 16.0 s → 0.36 s
+  on the IR engine; the core is unchanged.
+
+- Conformance: the std inventory (`contracts/stdlib.json`) is current again
+  and cannot go stale (#282). Regenerated from `std/`: 32 new `STD.*`
+  contracts for modules that existed but were missing (`STD.CELL`,
+  `STD.JSON`, `STD.DB.POSTGRES`, the crypto and digest modules, …; 28
+  mandatory, now coverage gaps until cases observe them) and 4 removed for
+  modules that no longer exist (`STD.JSON.PARSE/READ/VALUE/WRITE`; their six
+  cases now map to `STD.JSON`). `std/json.ok` declared `module local/json`
+  although it is imported as `"json"`; it is `module json` now.
+  `tools/inventory_std.py --check` fails on a stale file, the release gate
+  runs it, and `conformance/CONTRIBUTING.md` says to regenerate the file in
+  the change that adds, removes or renames a std module.
+
+- Diagnostics: `reduce` from an untyped `[]` or `[:]` says what to write
+  (#295, also #267). `(0..3).reduce([]) -> acc, i { acc + [i * i]; }` gave
+  "Reduce accumulator must be [], got @int", as if `[]` were a type the block
+  had to return; it now reads "Reduce starts from [], which has no element
+  type, and its block gives @int: start from @int() or declare the result
+  type (let name is @int = …)", at the initial value; for `[:]` it suggests
+  the declared map type. Inference is unchanged.
+- Diagnostics: an ambiguous overloaded call names the argument types and the
+  tied candidates (#273), as the Book promises (§18.3, rule 5): "Ambiguous
+  call of action "joined" on object "Pairing" with (int, int): joined(int,
+  any) and joined(any, int) fit equally well"; the same for roles and for
+  constructors. Resolution is unchanged; the candidates are recomputed only
+  on the error path.
+- Uncaught failures: every engine prints the report of the Sparrow core,
+  byte for byte (#270) — the failure, its secondary cleanup failures and its
+  causes (`Caused by:`), the place with its source line, and the Okkama
+  stack. The IR engine left out the causes; the JVM printed only the first
+  line. A shared renderer walks the failure graph (cycles print
+  `[failure #N already shown]`, at most 64 failures); a native failure is
+  `NativeFailure: message` with `code`, `domain` and `operation` on all
+  three (the IR engine and the JVM said `NativeError`, the core gave no
+  details), and the core no longer reports "program has no NativeFailure"
+  for a native failure in a program that never names the type. On the JVM,
+  `okkama.rt.Failure` keeps the JVM stack from where it is created; each
+  method's LineNumberTable numbers its source places and `okkama-debug.tsv`
+  (next to the classes, ~2% of a jar) maps them back to files, lines and
+  columns, so the stack shows Okkama frames only, outlined `$part` methods
+  merged into their function, and `await` adds the awaiting task's frames.
+  The success path is unchanged; a throw on the JVM now costs about as much
+  as on the core (a loop of 500 000 throws twelve calls deep: 0.27 → 0.48 s;
+  the core takes 0.47 s). The JVM keeps at most 1 024 frames and says so
+  when older ones are missing; `OKKAMA_TRACE=off` leaves the place and the
+  stack out on every engine. Tests compare the full report of eight
+  programs across the engines (`tests/traces`).
+
+- Constructors: the first `self` value inside a `map`, `filter` or `reduce`
+  block, a nested block or one branch of an `if` no longer crashes lowering
+  with "definition does not dominate" (#279). The early object is built
+  once, just before the constructor statement that holds that first use, so
+  it dominates the rest of the constructor; fields bound after it are set
+  with `obj.init` on every path, which also lifts the "field assignment
+  after `self` escaped" limitation for fields bound in branches. Bound
+  fields, `$pending` (#271), identity and cyclic equality (#278) are kept;
+  a constructor that never uses `self` as a value still builds its object
+  at the end. Conformance `L04.invariant.early-self-in-blocks` and
+  `invariant.escaped-self-in-block-failed-constructor`; Bible 12 (EN/RU).
+
+- Equality: a `float` inside a composite compares numerically, as scalar `==`
+  does (#314). `[-0.0] == [0.0]`, `Point(x: -0.0) == Point(x: 0.0)`,
+  `[Reading.value(-0.0)] == [Reading.value(0.0)]` and map values with `-0.0`
+  were `false` because deep equality compared float bits on the IR engine and
+  the Sparrow core and went through `Double.equals` on the JVM; `contains`,
+  `index_of`, array `-` and `Atomic.compare_and_replace` now agree with `==`,
+  and the core and the IR engine no longer disagree on `[-0.0, 2.0] - [0.0]`.
+  Stored values keep their sign. On the JVM, `==` over floats, lists, maps
+  and `any` and the generated `equals`/`hashCode` of objects go through
+  `Rt.equal`/`Rt.hash`: scalars in place, nested lists and maps on a pair
+  stack instead of Java recursion, one hash for `-0.0` and `0.0`. Scalar
+  array elements and map values now compare in place on the core and the
+  JVM, and a float array `-` uses keys: on the core 1000-float array `==`
+  takes 72% fewer instructions, float `-` 94% fewer and map `==` 21% fewer;
+  on the JVM array `==` is 22% faster, `-` 26% and map `==` 81%; other
+  comparison paths are unchanged (within 0.5% of instructions). Conformance
+  `L02.equality.signed-zero-composite`; spec 8.4, Book 8.5 (EN/RU), OIR-1.
+- Roles: `contains` and `index_of` on a `@Role` take an implementer, wrapped
+  with `role.wrap` as an action parameter takes it (#299):
+  `shapes.contains(Square(side: 2))` was rejected with "Cannot pass Square to
+  builtin action". As decided, a role wraps an implementer only where it is
+  already the expected type — typed bindings, fields, parameters, results,
+  `Maybe<Role>` and `find()` fallbacks, branches with a declared role type —
+  and `role == implementer` and branches with no declared type stay rejected.
+  Conformance: `L04.roles.contextual-wrap`, `roles.compare-implementer-rejected`,
+  `roles.branches-no-common-role`; Book 22.1 and Bible 14.3 (EN/RU).
+- Inference: a generic enum case no longer passes its uninferred `T` as the
+  expected type of a payload (#304), so `Maybe.some(loop { last 42; })`,
+  `Maybe.some(Maybe.some(42) else 0)`, `Maybe.some(xs.reduce(0) -> …)` and
+  `Slot.full(…)` with such payloads compile; `T` comes from the payload and
+  every payload is then checked against the solved specialization. Explicit
+  and contextual specializations still guide the payloads; real conflicts
+  read `cannot be both int and string`. Conformance case
+  `L05.variants.inferred-payloads`.
+- Inference: an untagged `[]` or `[:]` takes the collection type of its
+  siblings, of the other branch or the other operand, at any depth and in
+  either order (#297): `[[1], []]` and `[[], [1]]` are `@@int` (they were
+  `@any`), `["a": [1], "b": []]` is `%string:@int`, `[[1]] == [[]]` and
+  `if c { [[]]; } else { [[2, 3]]; }` type-check. The value is retagged at
+  no cost: `retag`/`map.retag` (OIR) and `move` (Sparrow) now accept a
+  source that differs from the target only by `never` parts. Concrete
+  differences still need `any` (`[[1], ["s"]]`). Conformance case
+  `L05.literal.empty-collections`.
+- Lifetimes: a resource bound in an `if`, `match`, `try` or `catch` branch
+  is destroyed when the branch ends, the last `let` included, unless the
+  branch's value is used (#308). A branch passed its last value (a `let` or
+  an unused expression) to the enclosing scope even as a statement, so
+  `if true { let a = Res(); let b = Res(); }` destroyed `a` at once and `b`
+  only at the end of the action — out of order, and after resources its
+  `destroy` needed could be closed. A value that is used (`let r = if … {
+  Res(); } else { Res(); };`) still moves out. Same on every engine;
+  conformance case `L07.destroy.branch-scope` (constant and dynamic
+  conditions, nested blocks, match, try, a throw, a kept value).
+- `try?` recovers from operands whose paths throw (#307). A throwing branch
+  selected by a literal condition no longer erases the type of the other
+  branch: `try? (if true { throw E.a; } else { 2; }) else 7` is `7` (it was
+  rejected with "Optional fallback requires Maybe<T>"). An operand with no
+  successful path takes `T` from its `Maybe<T>` boundary or its fallback;
+  with neither, an inference error replaces the silent poison that ended in
+  "internal compiler error: unreachable expression reached lowering". A caught
+  error leaves `none`, so `try?` no longer diverges with its operand (`try!`
+  still does), and a compact choice with a literal condition diverges only
+  when its selected branch does, as lowering already assumed. Conformance case
+  `L07.try-mark.diverging-operand`; Book 14.5.
+- `contains` and `index_of` work on arrays of enums with payloads —
+  `@Maybe<T>`, `@Presence<T>`, user enums, generic or not (#300). They use
+  the deep equality of array `==` and `-`: the case, then the payload. A
+  `±0.0` payload is the one corner where that differs from the variant's own
+  `==` (#314). A builtin missing on a collection names its full type
+  (`Type "@any" has no builtin action "contains"`, not `"array"`).
+  Conformance case `L05.variants.search`.
+- `text()` of an error enum writes string payloads as Okkama string literals
+  (#306): quotes, backslashes, `\n`, `\t`, `\r` and other control characters
+  (`\u{1b}`) are escaped, printable Unicode is kept, nested error enums
+  follow the same rules. `Ferr.text("a \"q\"\n")` printed a bare quote and a
+  line break, so one payload could look like two arguments and an uncaught
+  report could span lines. One shared lowering helper does it for every
+  engine; the Book (14.2) gives the rules. Conformance case
+  `L07.error-enum.text-escaping`.
+- Sparrow core: a map lookup with `else` on a `float` key failed JIT
+  verification (`arg has type f64, expected i64`): the key went to the
+  runtime helper as a float register instead of its word (#301). The other
+  helper calls were checked for the same mistake; none takes a float.
+  Conformance case `L05.map.float-key-fallback`.
+- Parser: a statement `match` and `try … catch` take one optional `;`, like
+  `if` and `loop` (#302); the formatter keeps the chosen spelling (it refused
+  to format such files before). `last if a { 1; } else { 2; };` leaves the
+  loop with the `if` expression instead of reading `a` as a condition; `last`
+  now parses its value like `return` and `throw` (#303). Compile time of the
+  t/ nesting and control files is unchanged (median of 10: 0.247 → 0.246 s).
+- Diagnostics: a positional call that only a field-shorthand constructor
+  could take now says so before generic inference and before the arguments
+  are checked (#311): `Box(5)` for `Box(:v)` reads `Constructor of "Box"
+  takes named arguments only: write Box(v: …)` instead of `Cannot infer
+  generic parameter "T"`, and `let b is Box<int> = Box(5)` no longer reports
+  a mismatch with `Box<int>`. Positional overloads, variadic constructors and
+  real inference failures are unchanged; compile time is unchanged (median of
+  10 over constructor-heavy t/ files: 0.153 → 0.154 s).
+- A boolean choice or `if` with a literal condition whose selected branch is
+  an untagged `[]` or `[:]` (`(false ?? [1] !! []) == []`) no longer stops
+  the compiler with invalid IR (#298). The lowered value takes the analyzed
+  type of the whole expression (retagging the empty collection), for literal
+  and variable conditions alike; a literal condition still emits only the
+  selected branch. Conformance case `L05.choice.empty-collections`; compile
+  time of branch-heavy t/ files is unchanged (median of 10: 0.386 → 0.388 s).
+- Packages: the publish job downloads only the package artifacts
+  (`okkama-*`). Since 0.4.1 the release gate uploads its report as an
+  artifact too, and `gh release create dist/*` failed on that directory, so
+  neither the v0.4.1 release nor the nightly was published.
+- CI: the Miri job (the IR heap and cycle collector, #43) never finished:
+  its tests built chains of up to a million nodes, which Miri interprets for
+  hours, and every push to develop cancelled the run. Under Miri the tests
+  take a thousandth of the nodes and the collector's threshold is 64; the
+  job is a workflow of its own (`miri.yml`) with a 30-minute limit, run when
+  the runtime core changes, every night and by hand.
+
+### Security
+
+- SQLite: the bundled C SQLite is the one of `libsqlite3-sys` 0.39.1 instead
+  of 0.35.0, which carried CVE-2026-119375 (RUSTSEC-2026-0459, severity 6.8;
+  `cargo audit` failed CI) (#330). `rusqlite` goes from 0.37 to 0.41 in the
+  IR engine's runtime, Tomato and the previous VM; two API changes followed
+  (`Error::Utf8Error` has two fields, `Statement::columns()` is an
+  iterator).
+
+### Documentation
+
+- The Book no longer promises recursive anonymous actions (#318). A `let`
+  binding becomes visible only after its initializer is checked, so an
+  anonymous action cannot call itself through the `let` that holds it (the
+  compiler always rejected that as an undefined action); recursion goes
+  through named object actions. Book 18.5 EN/RU and spec 9.2 say so, and
+  OCS pins it: recursive `let`, parenthesized and typed forms and a later
+  local are rejected, a shadowing `let` reaches the outer binding.
+
+- `int(...)` keeps arbitrary precision (#309): casts of `int`, `byte` and
+  `rat` sources are exact at any size (a `rat` truncates toward zero); only a
+  `float` source is checked against the signed-64 range. The specification
+  (6.6.1) and the Book (5.1.1, EN/RU) said every source was range-checked;
+  the engines never did. Conformance case `L02.cast.int-arbitrary-precision`.
+- `byte` no longer mixes with other numbers in the documents either (#294,
+  decision #230): the Book (5.3, 8.1, 8.4, the builtin rules; EN/RU), the
+  specification (8.3, 8.4, ranges, 8.7) and the LLM context said that
+  arithmetic and ordering accept `byte` with `int`/`rat`/`float`, that the
+  ordering operators are broader than equality, and that a `byte` is an array
+  index and a range bound. The compiler rejects all of these; the documents
+  now say so: `byte op byte` gives `int` (`/` gives `rat`), conversions are
+  explicit (`b.int()`), and indexes and range bounds are `int`.
+
+## [0.4.1] — 2026-11-09
+
+0.4.1 completes the language proof of concept and the first hardening
+roadmap. The language gains `async destroy`, module constants (`const`),
+operator roles (`+ - * / %` and unary `-` on objects through the std
+`operators` module), structured `await`, `Cell<T>`, value objects as map
+keys, checked generic map keys, default parameters, string and array
+builtins, `else if` expressions and postfix conditions on `return` and
+`throw`. `more`/`more_or_equal` became `greater`/`greater_or_equal`, and
+`bool.string()` prints `true`/`false`. Hardening:01 is done: budgets on every
+engine, bounded verification, decoding and region walks, constant-time RSA,
+linear compilation of very large functions, and a containerized release gate
+over five engine configurations. `config/ini` is the first std module
+rewritten in Okkama. The benchmarks now also measure steady state. Tail
+calls and closures no longer pay for a `destroy` elsewhere in the program
+(#285, #292).
+
 ### Added
 
 - Benchmarks: steady state is measured (#236). `run.py --steady N` runs every
-  configuration once more with `BENCH_REPEAT=N`, and the program repeats its
-  work N times in one process, timing each repetition with its own
+  configuration once more, and the program repeats its work N times in one
+  process (an Okkama program gets N as its first argument, a reference port
+  as `BENCH_REPEAT=N`; the ladder first read it through `os/environment`,
+  which brought a `destroy` into every measured program and made 09-closures
+  6× slower on the JVM, #292), timing each repetition with its own
   monotonic clock (`iteration <ns>` on stderr; stdout must still match the
   cold runs). The ladder's Okkama programs repeat through a `Repeat` object
   (`10-app` through a loop in its async `main`). The Python, Perl and Ruby
@@ -583,6 +4032,58 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   ([#70](https://github.com/shootnix/okkama/issues/70)).
 
 ### Fixed
+
+- Sparrow core: a TLS read that completed and was then cancelled before its
+  result reached the program lost the plaintext it had taken (the core's
+  part of the abandoned-read fix below; `L11.tls.cancelled-read-keeps-data`
+  failed on CI). The read's result now puts undelivered bytes back in front
+  of the plaintext buffer when it is dropped unpublished.
+
+- JVM: splitting a large function no longer panics (`unwind targets take a
+  failure`, #305). When the moved part of a function over the method limit
+  held the handler of its own root — a `try` handler is dominated by the
+  block that enters the `try` — the remaining call kept an unwind edge into
+  the moved code, which the renumbering turned into the entry block. The
+  call now keeps its handler only when the handler stays outside. Exposed in
+  0.4.1 by block merging (#292); found by the generated t/ suite (#245).
+
+- Gate: the `ir-passes-off` and `ir-gc-stress` conformance runs get four
+  times the case budgets. Without the IR passes tail calls are real calls,
+  and `L03.recursion.tail-constant-stack` (10^7 of them in the adapter's
+  debug build) timed out on the CI runner.
+
+- IR: closures paid region tracking in any program with a `destroy` (#292).
+  Lowering judges plainness per type and treats every function value as
+  possibly owning a resource, since a closure's captures are not in its
+  type. So in a program that merely reads an environment variable
+  (`os/environment` imports `fs/directory`), every `fn.closure` was
+  tracked, every function parameter adopted, and every call of a composed
+  closure entered and left a region. `benchmarks/09-closures` with that
+  import ran 2× slower on the IR engine, 1.5× on the Sparrow core and 6× on
+  the JVM. The `regions` pass now recomputes plainness over the finished
+  module: an object is plain without a `destroy` and with plain fields, a
+  role when only plain objects do it, a function value when no closure
+  captures a non-plain value. It drops `adopt`/`track`/`transfer`/`keep` of
+  plain values before removing empty regions. The `jumps` pass now runs
+  after `undef`, and it also merges a block into its single predecessor, so
+  the scope blocks of removed regions no longer cost a jump each. The pass
+  order is `regions, tail-calls, fold, hoist, undef, jumps`. 09-closures
+  with `os/environment` now runs as fast as without it on every engine.
+  Tests in `lowering_ownership.rs`, including a closure that captures a
+  resource and stays tracked; LLM guide and phases.md updated
+  ([#292](https://github.com/shootnix/okkama/issues/292)).
+
+- IR engine and JVM: a TLS read abandoned by a timeout or a cancellation
+  could lose the record it received (#12 follow-up). The abandoned read's
+  worker kept waiting on the socket, and what it got was put back into the
+  plaintext buffer only by the completion on the main thread, after the
+  reader lock was free. A next read that took the lock first found the
+  buffer empty, read on, and met the end of the stream: `TlsFailure`
+  `invalid_data`. Under the gate's load it failed
+  `L11.tls.cancelled-read-keeps-data` once (IR engine, passes off). The
+  worker now puts what it received into the buffer under the reader lock,
+  and a live read takes it from there. The Sparrow core reads in the task
+  itself and was not affected.
 
 - IR: a self tail call stayed a call in any program with a `destroy`
   anywhere, even in an imported std module (#285). Lowering then opens a
@@ -1988,7 +5489,16 @@ First release of the Rust implementation: the compiler (lexer, parser, analysis,
 IR, Sparrow (VM with JIT) and JVM engines, the standard library, LSP, `fmt`, `lint`, the
 `blade` project manager, and packages for macOS and Linux.
 
-[Unreleased]: https://github.com/shootnix/okkama/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/shootnix/okkama/compare/v0.5.5...HEAD
+[0.5.5]: https://github.com/shootnix/okkama/compare/v0.5.4...v0.5.5
+[0.5.4]: https://github.com/shootnix/okkama/compare/v0.5.3...v0.5.4
+[0.5.3]: https://github.com/shootnix/okkama/compare/v0.5.1...v0.5.3
+[0.5.1]: https://github.com/shootnix/okkama/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/shootnix/okkama/compare/v0.4.3...v0.5.0
+[0.4.3]: https://github.com/shootnix/okkama/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/shootnix/okkama/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/shootnix/okkama/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/shootnix/okkama/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/shootnix/okkama/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/shootnix/okkama/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/shootnix/okkama/compare/v0.2.0...v0.3.0

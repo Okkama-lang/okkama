@@ -1,178 +1,548 @@
 module url/query v1.0.0;
 
-import "url/value" take UrlQuery;
+// The query of a URL as parameters, read like json.
+//
+//     let query = ParsedQuery("q=tea&page=2&tag=a&tag=b").parameters();
+//     query.text("q");                         // "tea"
+//     query.maybe("page").int() else 1;        // 2
+//     query.list("tag");                       // ["a", "b"]
+//     query.boolean("all");                    // MissingQueryParameter when absent
+//
+// A parameter written without `=` is present but unassigned.
+
 import "url/percent" take PercentEncoded, UrlComponent;
 import "collections/sequence" take Sequencing;
 import "collections/list" take List, EmptyList;
 import "encoding/utf" take Utf8Encoded, Utf8Decoded, InvalidUtf8;
 import "io/buffer" take ByteBuffer;
-import "io/decorators" take ByteSnapshot;
 import "error" take InvalidArgument;
+import "strings/parse" take Number, Truth, InvalidInteger, InvalidBoolean;
 
+// One parameter of a query.
 object QueryParameter {
     has key, text is string;
     has assignment is bool;
-    QueryParameter(name is string) {key=name;text="";assignment=false;}
-    QueryParameter(name is string, value is string) {key=name;text=value;assignment=true;}
-    name() is string {key;}
-    value() is string {text;}
-    assigned() is bool {assignment;}
+
+    // A parameter without a value: `?debug`.
+    QueryParameter(name is string) {
+        key = name;
+        text = "";
+        assignment = false;
+    }
+
+    // A parameter with a value.
+    QueryParameter(name is string, value is string) {
+        key = name;
+        text = value;
+        assignment = true;
+    }
+
+    // Its name.
+    name() is string {
+        key;
+    }
+
+    // Its value; "" when it has none.
+    value() is string {
+        text;
+    }
+
+    // Whether it was written with `=`.
+    assigned() is bool {
+        assignment;
+    }
 }
+
+// The parameters of a query, in order.
 object QueryParameters {
     has origin is @QueryParameter;
-    QueryParameters(entries is Sequencing<QueryParameter>) {origin=ParameterSnapshot(entries,10000).entries();}
+
+    // The parameters as given.
+    QueryParameters(entries is Sequencing<QueryParameter>) {
+        origin = ParameterSnapshot(origin: entries, maximum: 10000).entries();
+    }
+
+    // The same, one argument per part: QueryParameters(a, b).
+    QueryParameters(entries is ...QueryParameter) {
+        let listed is @QueryParameter = entries...;
+        origin = ParameterSnapshot(origin: listed, maximum: 10000).entries();
+    }
+
+    // The parameters, at most maximum_parameters of them.
     QueryParameters(entries is Sequencing<QueryParameter>, maximum_parameters is int) {
-        origin=ParameterSnapshot(entries,maximum_parameters).entries();
+        origin = ParameterSnapshot(origin: entries, maximum: maximum_parameters).entries();
     }
-    entries() is Sequencing<QueryParameter> {origin;}
+
+    // Every parameter, in order.
+    entries() is Sequencing<QueryParameter> {
+        origin;
+    }
+
+    // Whether a parameter has that name.
     membership(name is string) is bool {
-        origin.reduce(false) -> found,entry {found || entry.name()==name;};
+        origin.reduce(false) -> found, entry {
+            found || entry.name() == name;
+        };
     }
-    first(name is string) is string {
-        for origin -> entry {if entry.name()==name {return entry.value();}}
-        throw MissingQueryParameter.name(name);
+
+    // The first value of name: query.text("q"). An absent name is
+    // MissingQueryParameter.
+    text(name is string) is string {
+        match self.maybe(name).text() {
+            case Maybe.some(found) {
+                found;
+            }
+            else {
+                throw MissingQueryParameter.name(name);
+            }
+        }
     }
-    values(name is string) is Sequencing<string> {
-        let matches is @QueryParameter=origin.filter() -> entry {entry.name()==name;};
-        let values is @string=matches.map() -> entry {entry.value();};values;
+
+    // The first value of name as an integer: query.int("page"). A value that
+    // is not one is InvalidQueryValue, naming the parameter and the value.
+    int(name is string) is int {
+        match self.maybe(name).int() {
+            case Maybe.some(found) {
+                found;
+            }
+            else {
+                throw MissingQueryParameter.name(name);
+            }
+        }
     }
+
+    // The first value of name as true or false: query.boolean("all").
+    boolean(name is string) is bool {
+        match self.maybe(name).boolean() {
+            case Maybe.some(found) {
+                found;
+            }
+            else {
+                throw MissingQueryParameter.name(name);
+            }
+        }
+    }
+
+    // Every value of name in order: query.list("tag"); [] when it is absent.
+    list(name is string) is @string {
+        let matches is @QueryParameter = origin.filter() -> entry {
+            entry.name() == name;
+        };
+        let values is @string = matches.map() -> entry {
+            entry.value();
+        };
+        values;
+    }
+
+    // A value that may be absent: query.maybe("page").int() else 1.
+    maybe(name is string) is QueryMaybeValue {
+        for origin -> entry {
+            if entry.name() == name {
+                return QueryMaybeValue(name: name, value: Maybe.some(entry.value()));
+            }
+        }
+        QueryMaybeValue(name: name, value: Maybe<string>.none);
+    }
+
+    // The encoded query, without `?`.
     string() is string {
-        let encoded is @string=origin.map() -> entry {
-            let name=PercentEncoded(entry.name(),UrlComponent.data).string();
-            if entry.assigned() {name+"="+PercentEncoded(entry.value(),UrlComponent.data).string();} else {name;}
+        let encoded is @string = origin.map() -> entry {
+            let name = PercentEncoded(origin: entry.name(), component: UrlComponent.data).string();
+            if entry.assigned() {
+                name + "=" + PercentEncoded(origin: entry.value(), component: UrlComponent.data).string();
+            }
+            else {
+                name;
+            }
         };
         encoded.join("&");
     }
 }
-object ParsedQueryParameters {
-    has origin is UrlQuery;
+
+// The parameters of a query string, decoded as RFC 3986 query text (not
+// HTML form text: "+" stays "+").
+//
+//     let page = ParsedUrl("https://example.com/search?q=okkama&page=2").parts();
+//     let query = ParsedQuery(page::Parts::query else "").parameters();
+//     query.text("q");                      // "okkama"
+//     query.int("page");                    // 2
+//     query.maybe("limit").int() else 20;   // 20
+//     query.list("tag");                    // [] when absent
+//
+// With a name given more than once, text(), int() and boolean() read the first
+// value and list() all of them. Parameters are built part by part:
+// QueryParameters(QueryParameter(name: "q", value: "okkama")).string().
+object ParsedQuery {
+    has origin is string;
     has maximum_parameters, maximum_bytes is int;
-    ParsedQueryParameters(origin is UrlQuery) {self.origin=origin;maximum_parameters=10000;maximum_bytes=1048576;}
-    ParsedQueryParameters(origin is UrlQuery, maximum_parameters is int, maximum_bytes is int) {
-        confirm maximum_parameters>=0 && maximum_bytes>=0 else throw InvalidArgument.because("query limits must be nonnegative");
-        self.origin=origin;self.maximum_parameters=maximum_parameters;self.maximum_bytes=maximum_bytes;
+
+    // Reads a query, at most 10000 parameters and 1 MiB.
+    ParsedQuery(origin is string) {
+        self.origin = origin;
+        maximum_parameters = 10000;
+        maximum_bytes = 1048576;
     }
-    value() is QueryParameters {
-        confirm origin.string().length()<=maximum_bytes else throw QueryLimitExceeded.kind("bytes");
-        ParameterParsing(Utf8Encoded(origin.string()).bytes(),false,maximum_parameters,maximum_bytes).parameters();
+
+    // Reads a query within these limits.
+    ParsedQuery(origin is string, maximum_parameters is int, maximum_bytes is int) {
+        confirm maximum_parameters >= 0 && maximum_bytes >= 0
+            else throw InvalidArgument.because("query limits must be nonnegative");
+        self.origin = origin;
+        self.maximum_parameters = maximum_parameters;
+        self.maximum_bytes = maximum_bytes;
+    }
+
+    // The parameters; InvalidQueryEncoding for a bad escape.
+    parameters() is QueryParameters {
+        confirm origin.length() <= maximum_bytes
+            else throw QueryLimitExceeded.kind("bytes");
+        ParameterParsing(
+            origin: Utf8Encoded(origin).bytes(),
+            form: false,
+            maximum_parameters: maximum_parameters,
+            maximum_bytes: maximum_bytes
+        ).parameters();
     }
 }
+
+// A value of a query parameter, which may be absent: its readers answer Maybe.
+// A value that is there but malformed is still InvalidQueryValue.
+object QueryMaybeValue {
+    has name is string;
+    has value is Maybe<string>;
+
+    // Made by QueryParameters.maybe(name); not constructed directly.
+    QueryMaybeValue(name is string, value is Maybe<string>) {
+        self.name = name;
+        self.value = value;
+    }
+
+    // The value, or none when the parameter is absent.
+    text() is Maybe<string> {
+        value;
+    }
+
+    // The value as an int, or none.
+    int() is Maybe<int> {
+        match value {
+            case Maybe.some(text) {
+                Maybe.some(try {
+                    Number(text).int();
+                }
+                catch failure is InvalidInteger {
+                    throw InvalidQueryValue.named(name, text, "an integer");
+                });
+            }
+            else {
+                Maybe<int>.none;
+            }
+        }
+    }
+
+    // The value as true or false, or none.
+    boolean() is Maybe<bool> {
+        match value {
+            case Maybe.some(text) {
+                Maybe.some(try {
+                    Truth(text).bool();
+                }
+                catch failure is InvalidBoolean {
+                    throw InvalidQueryValue.named(name, text, "true or false");
+                });
+            }
+            else {
+                Maybe<bool>.none;
+            }
+        }
+    }
+}
+
+// No parameter has that name.
 enum MissingQueryParameter is Error = (name(name is string));
+
+// A parameter whose value is not what its reader expects.
+enum InvalidQueryValue is Error = (named(name is string, value is string, expected is string));
+
+// A bad escape in the query; offset and reason say where and why.
 enum InvalidQueryEncoding is Error = (located(offset is int, reason is string));
+
+// Too many parameters or bytes; kind says which.
 enum QueryLimitExceeded is Error = (kind(kind is string));
 
 // Importable collaborators shared with form parsing; no mutable parser state
 // escapes. Snapshot sources are observed exactly once in index order.
-object ParameterSnapshot {
+hidden object ParameterSnapshot {
     has origin is Sequencing<QueryParameter>;
     has maximum is int;
+
     ParameterSnapshot(origin is Sequencing<QueryParameter>, maximum is int) {
-        confirm maximum>=0 else throw InvalidArgument.because("query limit must be nonnegative");
-        self.origin=origin;self.maximum=maximum;
+        confirm maximum >= 0 else throw InvalidArgument.because("query limit must be nonnegative");
+        self.origin = origin;
+        self.maximum = maximum;
     }
+
     entries() is @QueryParameter {
-        let size=origin.size();
-        confirm size>=0 else throw InvalidArgument.because("query source size must be nonnegative");
-        confirm size<=maximum else throw QueryLimitExceeded.kind("parameters");
-        let entries is @QueryParameter=(0..size).map() -> index {origin.item(index);};entries;
+        let size = origin.size();
+        confirm size >= 0
+            else throw InvalidArgument.because("query source size must be nonnegative");
+        confirm size <= maximum else throw QueryLimitExceeded.kind("parameters");
+        let entries is @QueryParameter = (0..size).map() -> index {
+            origin.item(index);
+        };
+        entries;
     }
 }
+
+// Parameters read from bytes as a query or a form; ParsedQuery and ParsedForm
+// use it.
 object ParameterParsing {
     has origin is @byte;
     has form is bool;
     has maximum_parameters, maximum_bytes is int;
+
+    // Reads origin as a form (`+` is a space) or a query, within the limits.
     ParameterParsing(origin is @byte, form is bool, maximum_parameters is int, maximum_bytes is int) {
-        confirm maximum_parameters>=0 && maximum_bytes>=0 else throw InvalidArgument.because("query limits must be nonnegative");
-        self.origin=origin;self.form=form;self.maximum_parameters=maximum_parameters;self.maximum_bytes=maximum_bytes;
+        confirm maximum_parameters >= 0 && maximum_bytes >= 0
+            else throw InvalidArgument.because("query limits must be nonnegative");
+        self.origin = origin;
+        self.form = form;
+        self.maximum_parameters = maximum_parameters;
+        self.maximum_bytes = maximum_bytes;
     }
+
+    // The parameters.
     parameters() is QueryParameters {
-        let size=origin.size();
-        confirm size<=maximum_bytes else throw QueryLimitExceeded.kind("bytes");
-        let parts=ParameterParts();
-        if size>0 {
-            let stops=(0..size+1).filter() -> index {index==size || origin[index]==byte(38);};
+        let size = origin.size();
+        confirm size <= maximum_bytes else throw QueryLimitExceeded.kind("bytes");
+        let parts = ParameterParts();
+        if size > 0 {
+            let stops = (0..size + 1).filter() -> index {
+                index == size || origin[index] == byte(38);
+            };
             for stops -> end {
-                let start=parts.start();
-                if form && start==end {parts=parts.skipping(end+1);}
+                let start = parts.start();
+                if form && start == end {
+                    parts = parts.skipping(end + 1);
+                }
                 else {
-                    confirm parts.size()<maximum_parameters else throw QueryLimitExceeded.kind("parameters");
-                    let equals=(start..end).reduce(-1) -> found,index {
-                        if found<0 && origin[index]==byte(61) {index;} else {found;}
+                    confirm parts.size() < maximum_parameters
+                        else throw QueryLimitExceeded.kind("parameters");
+                    let equals = (start..end).reduce(-1) -> found, index {
+                        if found < 0 && origin[index] == byte(61) {
+                            index;
+                        }
+                        else {
+                            found;
+                        }
                     };
-                    let split=if equals<0 {end;} else {equals;};
-                    let name=ParameterText(origin.slice(start,split),form,start).string();
-                    let value=if equals<0 {"";} else {ParameterText(origin.slice(equals+1,end),form,equals+1).string();};
-                    let entry=if form || equals>=0 {QueryParameter(name,value);} else {QueryParameter(name);};
-                    parts=parts.following(end+1,entry);
+                    let split = if equals < 0 {
+                        end;
+                    }
+                    else {
+                        equals;
+                    };
+                    let name = ParameterText(
+                        origin: origin.slice(start, split),
+                        form: form,
+                        offset: start
+                    ).string();
+                    let value = if equals < 0 {
+                        "";
+                    }
+                    else {
+                        ParameterText(
+                            origin: origin.slice(equals + 1, end),
+                            form: form,
+                            offset: equals + 1
+                        ).string();
+                    };
+                    let entry = if form || equals >= 0 {
+                        QueryParameter(name: name, value: value);
+                    }
+                    else {
+                        QueryParameter(name);
+                    };
+                    parts = parts.following(end + 1, entry);
                 }
             }
         }
-        QueryParameters(parts.entries(),maximum_parameters);
+        QueryParameters(entries: parts.entries(), maximum_parameters: maximum_parameters);
     }
 }
-object ParameterParts {
+
+hidden object ParameterParts {
     has position is int;
     has reversed is List<QueryParameter>;
-    ParameterParts() {position=0;let empty is List<QueryParameter>=EmptyList();reversed=empty;}
-    start() is int {position;}
-    size() is int {reversed.size();}
-    skipping(position is int) is ^ParameterParts {^position=position;}
-    following(position is int, entry is QueryParameter) is ^ParameterParts {^position=position;^reversed=reversed.prefix(entry);}
+
+    ParameterParts() {
+        position = 0;
+        let empty is List<QueryParameter> = EmptyList();
+        reversed = empty;
+    }
+
+    start() is int {
+        position;
+    }
+
+    size() is int {
+        reversed.size();
+    }
+
+    skipping(position is int) is ^ParameterParts {
+        ^position = position;
+    }
+
+    following(position is int, entry is QueryParameter) is ^ParameterParts {
+        ^position = position;
+        ^reversed = reversed.prefix(entry);
+    }
+
     entries() is @QueryParameter {
-        let backwards is @QueryParameter=reversed.map() -> entry {entry;};
-        let entries is @QueryParameter=(0..backwards.size()).map() -> index {backwards[backwards.size()-index-1];};entries;
+        let backwards is @QueryParameter = reversed.map() -> entry {
+            entry;
+        };
+        let entries is @QueryParameter = (0..backwards.size()).map() -> index {
+            backwards[backwards.size() - index - 1];
+        };
+        entries;
     }
 }
-object ParameterPosition {
+
+hidden object ParameterPosition {
     has source, decoded is int;
-    ParameterPosition() {source=0;decoded=0;}
-    source() is int {source;}
-    decoded() is int {decoded;}
-    following(width is int) is ^ParameterPosition {^source=source+width;^decoded=decoded+1;}
+
+    ParameterPosition() {
+        source = 0;
+        decoded = 0;
+    }
+
+    source() is int {
+        source;
+    }
+
+    decoded() is int {
+        decoded;
+    }
+
+    following(width is int) is ^ParameterPosition {
+        ^source = source + width;
+        ^decoded = decoded + 1;
+    }
 }
-object ParameterText {
+
+hidden object ParameterText {
     has origin is @byte;
     has form is bool;
     has offset is int;
-    ParameterText(origin is @byte, form is bool, offset is int) {self.origin=origin;self.form=form;self.offset=offset;}
+
+    ParameterText(origin is @byte, form is bool, offset is int) {
+        self.origin = origin;
+        self.form = form;
+        self.offset = offset;
+    }
+
     string() is string {
-        let output=ByteBuffer();defer output.closing().close();let writer=output.writing();
-        let cursor=ParameterPosition();
+        let output = ByteBuffer();
+        defer output.closing().close();
+        let writer = output.writing();
+        let cursor = ParameterPosition();
         loop {
-            let index=cursor.source();last if index==origin.size();
-            let width=self.width(index);
-            let octet=if width==3 {(self.digit(origin[index+1])*16+self.digit(origin[index+2])).byte();}
-                else {if form && origin[index]==byte(43) {byte(32);} else {origin[index];}};
-            writer.write(ByteSnapshot([octet]));cursor=cursor.following(width);
+            let index = cursor.source();
+            last if index == origin.size();
+            let width = self.width(index);
+            let octet = if width == 3 {
+                (self.digit(origin[index + 1]) * 16 + self.digit(origin[index + 2])).byte();
+            }
+            else {
+                if form && origin[index] == byte(43) {
+                    byte(32);
+                }
+                else {
+                    origin[index];
+                }
+            };
+            writer.write([octet]);
+            cursor = cursor.following(width);
         }
-        try {Utf8Decoded(output.content().bytes()).string();}
+        try {
+            Utf8Decoded(output.content().bytes()).string();
+        }
         catch InvalidUtf8.at(offset) {
-            let cursor=ParameterPosition();
+            let cursor = ParameterPosition();
             loop {
-                if cursor.decoded()==offset {throw InvalidQueryEncoding.located(offset+cursor.source(), "invalid UTF-8");}
-                cursor=cursor.following(self.width(cursor.source()));
+                if cursor.decoded() == offset {
+                    throw InvalidQueryEncoding.located(offset + cursor.source(), "invalid UTF-8");
+                }
+                cursor = cursor.following(self.width(cursor.source()));
             }
         }
     }
-    private:
-    width(index is int) is int {
-        if origin[index]!=byte(37) {return 1;}
-        confirm origin.size()-index>=3 else throw InvalidQueryEncoding.located(offset+index, "incomplete percent escape");
-        confirm self.digit(origin[index+1])>=0 && self.digit(origin[index+2])>=0
-            else throw InvalidQueryEncoding.located(offset+index, "invalid percent escape");
+
+    hidden width(index is int) is int {
+        if origin[index] != byte(37) {
+            return 1;
+        }
+        confirm origin.size() - index >= 3
+            else throw InvalidQueryEncoding.located(offset + index, "incomplete percent escape");
+        confirm self.digit(origin[index + 1]) >= 0 && self.digit(origin[index + 2]) >= 0
+            else throw InvalidQueryEncoding.located(offset + index, "invalid percent escape");
         3;
     }
-    digit(octet is byte) is int {
-        let value=octet.int();
-        if value>=48 && value<=57 {return value-48;}
-        if value>=65 && value<=70 {return value-55;}
-        if value>=97 && value<=102 {return value-87;}
+
+    hidden digit(octet is byte) is int {
+        let value = octet.int();
+        if value >= 48 && value <= 57 {
+            return value - 48;
+        }
+        if value >= 65 && value <= 70 {
+            return value - 55;
+        }
+        if value >= 97 && value <= 102 {
+            return value - 87;
+        }
         -1;
     }
 }
 
 test "flags and duplicate parameters retain their identity" {
-    let entries=ParsedQueryParameters(UrlQuery("a&a=&a=1")).value();
-    test.is(entries.string(),"a&a=&a=1");
-    test.is(entries.values("a").size(),3);
+    let entries = ParsedQuery("a&a=&a=1").parameters();
+    test.is(entries.string(), "a&a=&a=1");
+    test.is(entries.list("a").size(), 3);
+}
+
+test "parameters read like json values" {
+    let query = ParsedQuery("q=okkama&page=2&tag=a&tag=b&all=true&bad=x").parameters();
+    test.is(query.text("q"), "okkama");
+    test.is(query.int("page"), 2);
+    test.ok(query.boolean("all"));
+    test.is(query.list("tag"), ["a", "b"]);
+    test.is(query.list("none").size(), 0);
+    test.is(query.maybe("limit").int() else 20, 20);
+    test.is(query.maybe("page").int() else 1, 2);
+    test.is(query.maybe("q").text() else "", "okkama");
+    test.ok(try {
+        query.text("missing");
+        false;
+    }
+    catch MissingQueryParameter.name(name) {
+        name == "missing";
+    });
+    test.ok(try {
+        query.int("bad");
+        false;
+    }
+    catch InvalidQueryValue.named(name, value, expected) {
+        name == "bad" && value == "x" && expected == "an integer";
+    });
+    test.ok(try {
+        query.maybe("bad").boolean();
+        false;
+    }
+    catch InvalidQueryValue.named(name, _value, expected) {
+        name == "bad" && expected == "true or false";
+    });
+    test.is(
+        QueryParameters(QueryParameter(name: "q", value: "a b&c"), QueryParameter(name: "flag")).string(),
+        "q=a%20b%26c&flag"
+    );
 }

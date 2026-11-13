@@ -1,10 +1,10 @@
 # The Sparrow Assembly Book
 
 Sparrow is the bytecode of Okkama: `okkama build --target sparrow` writes it,
-the Sparrow core (`sparrow`, `okkama exec`) verifies it and runs it as machine
-code. This book teaches its text form, Sparrow assembly (`.spa`), well enough
-to read what the compiler produces and to write programs by hand. It describes
-SPB version 12, the format of Okkama 0.4.1.
+the Sparrow runtime (`sparrow`, `okkama exec`; its current version is Tomato) verifies it
+and runs it as machine code. This book teaches its text form, Sparrow assembly
+(`.spa`), well enough to read what the compiler produces and to write programs
+by hand. It describes SPB version 12, the format of Okkama 0.4.1.
 
 Every example lives in [examples/](examples/) and is assembled, checked and
 run as part of writing this book; the result shown after each one is what
@@ -28,7 +28,7 @@ Contents:
 14. Async functions and futures
 15. Tests
 16. What the verifier guarantees
-17. How the core runs it
+17. How Sparrow runs it
 18. Instruction reference
 
 ## 1. Tools
@@ -68,7 +68,7 @@ result. Comments start with `;`.
 ## 3. The shape of a file
 
 ```text
-sparrow 12                      ; format version
+sparrow 15                      ; format version
 module "name" "version"         ; the module's name and version (may be "")
 type t0 …                       ; the type table, in order
 enum enum0 "Name" ["a", "b"]    ; enums with their cases
@@ -76,11 +76,20 @@ role role0 "Name" { method "m" [t…] -> t… … }
 object obj0 "Name" { field "f" t… … does role0 [f…] destroy f… }
 handle "Name"                   ; opaque host types (handles)
 cap cap0 "Name" obj0 { field "f" f… }
-global g0 t3 f2                ; a module constant: type and init (#153)
+global g0 t3 f2 [data …]       ; a module constant: type, init (#153), value as data (#506)
 function f0 "symbol" [async] [native "…"] [intrinsic "…" [obj…] [f…]] { … }
 entry f3                        ; the program's main
 tests { test "name" f5 … }      ; or a test profile
 ```
+
+A module constant (`const`, #153) is a global: `global.get` reads it, and
+the first read builds it. A constant whose value is plain data — scalars,
+arrays and maps of them — carries that value in the file after `data`, and the
+runtime builds it there without running code (#506): a scalar is written as in
+`const` (`str "a"`, `int 7`), an array as `array N` and its N items, a map as
+`map N` and N key–value pairs. Its init then only reads the global. A table of
+thousands of strings costs a few bytes each in the file and no instructions;
+before format 15 each element was an instruction of the init.
 
 Every table is indexed by position, and the index is written out: `t3`,
 `obj2`, `role0`, `f5`, `enum1`, `cap0`. The assembler checks that the indices
@@ -104,6 +113,7 @@ accepts them in any order, each table numbered on its own.
 | `successor objN` | an object under construction by `obj.next` | pointer |
 | `role roleN` | a reference through a role | pointer |
 | `enum enumN` | a payload-less enum case | raw word |
+| `variant variantN` | a value of an enum with payloads: an object of one of its cases | pointer |
 | `array tN`, `map tK tV` | immutable collections | pointer |
 | `builder tN`, `mbuilder tK tV` | linear builders of them | pointer |
 | `fn [t…] -> t` | a closure | pointer |
@@ -112,7 +122,7 @@ accepts them in any order, each table numbered on its own.
 | `region` | an ownership region | pointer |
 | `any`, `range`, `handle N`, `cap capN`, `never` | boxed value, integer range, host handle, cap, no value | |
 
-The core takes every register's machine form from its declared type. That is
+Sparrow takes every register's machine form from its declared type. That is
 why types are checked so strictly (chapter 16): a register declared `int`
 that held a string would be read as a number.
 
@@ -196,6 +206,14 @@ $ sparrow run shapes.spb; echo $?
   `call.role r7, r5, role0, 0, []` calls slot 0 of the role on it.
 - `role.narrow` converts between roles and fails with its message when the
   object does not do the target role.
+- An enum with payloads is a `variant variantN "Name" { case "c" objK … }`
+  declaration: each case has its own object, whose fields are that case's
+  payload and nothing else. `variant.new rD, variant0, 1, [r0]` makes case 1,
+  `variant.tag` gives the active case number, `variant.get rD, rV, 1, 0`
+  reads field 0 of case 1 and fails if another case is active, and
+  `variant.of` turns a case object into a value of its variant. Sparrow
+  needs the cases of a variant to be consecutive objects: it reads the case
+  number from the object header.
 
 ## 10. Arrays, builders and maps
 
@@ -217,7 +235,11 @@ The operators `+` and `-` of Okkama collections compile to one instruction
 per chain: `arr.concat rD, [rA, rB, rC]` allocates its result once for the sum
 of the parts' lengths, `arr.diff rD, rA, [rB, rC]` keeps the elements of `rA`
 equal to none of the others, and `map.merge` and `map.diff` do the same for
-maps (a repeated key takes the rightmost value).
+maps (a repeated key takes the rightmost value). `arr.replace rD, rA, rI, rV`
+is `replaced(index, value)` (#250): a copy of `rA` whose element `rI` is
+`rV`, failing on a bad index as `arr.get` does, and `arr.remove rD, rA, rI`
+is `removed_at(index)` (#251), the copy without element `rI` (format
+version 14).
 
 ## 11. Calls, closures and natives
 
@@ -239,8 +261,8 @@ $ sparrow run closures.spb; echo $?
   function's signature against it. `sparrow --native-capabilities` lists all
   natives.
 - An *intrinsic* function (`intrinsic "okkama.atomic.Atomic.get" [obj…]
-  [f…]`) is provided by the core itself — atomics, events, channels, timeouts
-  — with the objects and helper functions it works on. The core checks each
+  [f…]`) is provided by Sparrow itself — atomics, events, channels, timeouts
+  — with the objects and helper functions it works on. Sparrow checks each
   intrinsic's contract when it loads the program.
 
 ## 12. Failures: throw, handlers and catch
@@ -258,7 +280,8 @@ $ sparrow run errors.spb; echo $?
 - `handler START END @TARGET rF` covers instructions `START..END-1`: a failure
   there jumps to `TARGET` with the failure in `rF` (type `failure`).
 - `catch rF, object, N, rV, @MATCH, @OTHER` tests the failure: if it is an
-  `objN` (or, with `role`, does `roleN`), the caught value goes to `rV` on
+  `objN` (with `role`, does `roleN`; with `variant`, is a case of
+  `variantN`), the caught value goes to `rV` on
   the edge to `MATCH`; otherwise control goes to `OTHER`.
 - `raise rF` sends a failure on unchanged. `fail.caused` and
   `fail.secondary` build failures that carry the one they replaced.
@@ -342,9 +365,9 @@ Decoding and verification are bounded in memory, and `sparrow check` also
 checks the contracts of intrinsics. What remains open is listed in the trust
 model (`docs/security-model.md`).
 
-## 17. How the core runs it
+## 17. How Sparrow runs it
 
-The core compiles each function to machine code with Cranelift on its first
+Sparrow compiles each function to machine code with Cranelift on its first
 call; there is no interpreter. Registers live in machine registers or the
 frame according to their types. Objects are allocated inline from size
 classes; a precise, non-moving collector finds pointers through stack maps at

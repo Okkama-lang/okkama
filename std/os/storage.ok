@@ -17,15 +17,21 @@ import "runtime/system" take storage_usage;
 // this process after filesystem reservations and applicable quotas. used() is
 // capacity() minus available(), so the three values always form one identity.
 
+// The mounted file system that holds a path.
 object Storage {
     has origin is Path;
 
+    // The storage of path; nothing is asked yet.
     Storage(path is Path) {
         origin = path;
     }
 
-    path() is Path { origin; }
+    // The path it was made from.
+    path() is Path {
+        origin;
+    }
 
+    // How full it is now, asked fresh each time.
     usage() is StorageUsage {
         let snapshot is %string:string = try {
             storage_usage(origin.string());
@@ -40,28 +46,80 @@ object Storage {
     }
 }
 
+// Capacity, used and available bytes of a storage, at one moment.
 object StorageUsage {
     has total_capacity is BigInt;
     has available_capacity is BigInt;
 
+    // Usage as given; available must not exceed capacity.
     StorageUsage(capacity is BigInt, available is BigInt) {
         total_capacity = capacity;
         available_capacity = available;
 
-        confirm self.total_capacity.sign() >= 0 && self.available_capacity.sign() >= 0
+        confirm self.total_capacity.sign() >= 0
+            && self.available_capacity.sign() >= 0
             && self.available_capacity.order(self.total_capacity) != Order.greater
             else throw InvalidStorageUsage.invalid;
     }
 
-    capacity() is BigInt { total_capacity; }
-    used() is BigInt { (total_capacity - available_capacity); }
-    available() is BigInt { available_capacity; }
+    // All the bytes it holds.
+    capacity() is BigInt {
+        total_capacity;
+    }
+
+    // capacity() minus available().
+    used() is BigInt {
+        (total_capacity - available_capacity);
+    }
+
+    // The bytes this process may still write, after reservations and quotas.
+    available() is BigInt {
+        available_capacity;
+    }
+
+    // Whether amount bytes would fit in what is available.
     fits(amount is BigInt) is bool {
         confirm amount.sign() >= 0 else throw InvalidStorageUsage.invalid;
         amount.order(available_capacity) != Order.greater;
     }
 }
 
+// Available bytes above capacity, or a negative amount.
 enum InvalidStorageUsage is Error = (invalid);
 
+// The system could not answer; code and message say why.
 enum StorageFailure is Error = (detailed(code is string, message is string));
+
+test "usage counts what is used and what fits" {
+    let usage = StorageUsage(capacity: BigInt(origin: "100"), available: BigInt(origin: "30"));
+    test.is(usage.capacity(), BigInt(origin: "100"));
+    test.is(usage.available(), BigInt(origin: "30"));
+    test.is(usage.used(), BigInt(origin: "70"));
+    test.ok(usage.fits(BigInt(origin: "30")));
+    test.ok(!usage.fits(BigInt(origin: "31")));
+    test.ok(usage.fits(BigInt(origin: "0")));
+    test.throws(InvalidStorageUsage) {
+        usage.fits(BigInt(origin: "-1"));
+    };
+}
+
+test "impossible usage is refused" {
+    test.throws(InvalidStorageUsage) {
+        StorageUsage(capacity: BigInt(origin: "10"), available: BigInt(origin: "11"));
+    };
+    test.throws(InvalidStorageUsage) {
+        StorageUsage(capacity: BigInt(origin: "-1"), available: BigInt(origin: "0"));
+    };
+    let empty = StorageUsage(capacity: BigInt(origin: "0"), available: BigInt(origin: "0"));
+    test.is(empty.used(), BigInt(origin: "0"));
+}
+
+test "the volume of the working directory reports a consistent usage" {
+    let usage = Storage(path: Path(".")).usage();
+    test.ok(usage.capacity().sign() > 0);
+    test.ok(usage.available().order(usage.capacity()) != Order.greater);
+    test.is(Storage(path: Path(".")).path(), Path("."));
+    test.throws(StorageFailure) {
+        Storage(path: Path("./okkama-storage-test-absent/x")).usage();
+    };
+}

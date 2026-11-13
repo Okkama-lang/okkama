@@ -594,7 +594,7 @@ impl Inspection {
         let line_start = text[..start].rfind('\n').map_or(0, |at| at + 1);
         let declaration = matches!(
             text[line_start..start].trim(),
-            "" | "async" | "private" | "native" | "native async"
+            "" | "async" | "hidden" | "hidden async" | "native" | "native async"
         );
         // Встроенные действия (строк, массивов, …) — только позиционные.
         let mut named = !declaration;
@@ -815,7 +815,7 @@ pub fn keywords() -> Vec<Completion> {
         "let", "if", "else", "match", "case", "for", "loop", "return", "confirm", "throw", "try",
         "catch", "defer", "await", "async", "spawn", "panic", "next", "last", "true", "false",
         "is", "object", "role", "enum", "has", "does", "import", "take", "module", "test",
-        "native", "private", "destroy", "cap", "void",
+        "native", "hidden", "destroy", "cap", "void",
     ]
     .iter()
     .map(|word| keyword(word))
@@ -908,6 +908,8 @@ pub fn builtin_members(key: &str) -> Vec<Completion> {
         out.push(method("reversed", &[], key, "last element first"));
         out.push(method("take", &["count is int"], key, "at most count from the start"));
         out.push(method("drop", &["count is int"], key, "all but the first count"));
+        out.push(method("replaced", &["index is int", "value is T"], key, "a copy with the element at index replaced"));
+        out.push(method("removed_at", &["index is int"], key, "a copy without the element at index"));
         out.push(functional(
             "map",
             "${2:item}",
@@ -992,6 +994,9 @@ pub fn builtin_members(key: &str) -> Vec<Completion> {
             out.push(method("pow", &["exponent is int"], "int", "exact; a negative exponent is an error"));
             out.push(method("char", &[], "char", "the code point as a char"));
             out.push(method("sqrt", &[], "float", ""));
+            out.push(method("min", &["other is int"], "int", "the receiver when they are equal"));
+            out.push(method("max", &["other is int"], "int", "the receiver when they are equal"));
+            out.push(method("clamp", &["low is int", "high is int"], "int", "low above high is an error"));
         }
         for bits in ["bit_count", "leading_zeros", "trailing_zeros"] {
             out.push(method(bits, &[], "int", ""));
@@ -1006,6 +1011,15 @@ pub fn builtin_members(key: &str) -> Vec<Completion> {
         out.push(method("sign", &[], "int", ""));
         out.push(method("pow", &["exponent is float"], "float", ""));
         out.push(method("sqrt", &[], "float", ""));
+        for name in ["floor", "ceil", "round", "trunc", "exp", "ln", "log2", "log10", "sin", "cos", "tan"] {
+            out.push(method(name, &[], "float", "a result that is not finite is an error"));
+        }
+        out.push(method("atan2", &["y is float"], "float", "the angle of the point (x, y)"));
+        out.push(method("finite", &[], "bool", ""));
+        out.push(method("nan", &[], "bool", ""));
+        out.push(method("min", &["other is float"], "float", "the receiver when they are equal"));
+        out.push(method("max", &["other is float"], "float", "the receiver when they are equal"));
+        out.push(method("clamp", &["low is float", "high is float"], "float", "low above high is an error"));
     } else if key == "rat" {
         compare(&mut out);
         conversions(&mut out, &["int", "byte", "float", "rat", "string"]);

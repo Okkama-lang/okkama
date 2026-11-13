@@ -1,32 +1,237 @@
 module logging/named v1.0.0;
+
+// Named loggers with their clock, fixed fields and process id; Logger is the
+// short form.
+//
+//     let shop = NamedLogging(name: LogName("shop"), destination: TextStreamLogs(Stderr()));
+//     shop.log(LogLevel.info, "started");
+//     shop.child("db").log(LogLevel.debug, "pool ready");
+
 import "logging/level" take LogLevel;
-import "logging/name" take LogName,ChildLogName;
-import "logging/field" take LogFields,EmptyLogFields,CombinedLogFields;
-import "logging/record" take LogContext,LogRecord;
-import "logging/write" take LogWriting;
-import "time/clock" take Timing;
+import "logging/name" take LogName, ChildLogName, InvalidLogName;
+import "logging/field" take LogFields, EmptyLogFields, CombinedLogFields;
+import "logging/record" take LogContext, LogRecord, InvalidLogProcess;
+import "logging/write" take LogWriting, CollectedLogs;
+import "logging/filter" take AllowedLogs;
+import "async/atomic" take Atomic;
+import "time/clock" take Timing, Instant, SystemClock;
 import "runtime/process" take process_current_id;
-role LogProcessReading{id() is int;}
-object CurrentLogProcess does LogProcessReading{CurrentLogProcess();id() is int{process_current_id();}}
-role Logging{
-    log(level is LogLevel,message is string) is void;
-    log(level is LogLevel,message is string,fields is LogFields) is void;
-    log(level is LogLevel,message is string,fields is LogFields,cause is Error) is void;
+import "json" take JsonField;
+import "testing/time" take ManualClock;
+import "time/duration" take Duration, DurationUnit;
+
+// Where a record's process id comes from.
+role LogProcessReading {
+    // The process id.
+    id() is int;
 }
-object NamedLogging does Logging{
-    has name is LogName;has destination is LogWriting;has clock is Timing;has fields is LogFields;has process is LogProcessReading;
-    NamedLogging(name is LogName,destination is LogWriting,clock is Timing,fields is LogFields){self.name=name;self.destination=destination;self.clock=clock;self.fields=fields;process=CurrentLogProcess();}
-    NamedLogging(name is LogName,destination is LogWriting,clock is Timing,fields is LogFields,process is LogProcessReading){self.name=name;self.destination=destination;self.clock=clock;self.fields=fields;self.process=process;}
-    log(level is LogLevel,message is string) is void{let empty is @Error=[];self.emit(level,message,EmptyLogFields().value(),empty);}
-    log(level is LogLevel,message is string,fields is LogFields) is void{let empty is @Error=[];self.emit(level,message,fields,empty);}
-    log(level is LogLevel,message is string,fields is LogFields,cause is Error) is void{self.emit(level,message,fields,[cause]);}
-    child(segment is string) is NamedLogging{NamedLogging(ChildLogName(name,segment).value(),destination,clock,fields,process);}
-    name() is LogName{name;}
-    private:
-    emit(level is LogLevel,message is string,fields is LogFields,causes is @Error) is void{
-        let merged=CombinedLogFields(self.fields,fields).value();
-        let at=clock.instant();let pid=process.id();let context=LogContext(name,merged,pid);
-        let record=if causes.size()==0{LogRecord(at,level,message,context);}else{LogRecord(at,level,message,context,causes[0]);};
+
+// The process id, read once per logger, not once per record (#180).
+hidden object CurrentLogProcess does LogProcessReading {
+    has pid is int;
+
+    CurrentLogProcess() {
+        pid = process_current_id();
+    }
+
+    id() is int {
+        pid;
+    }
+}
+
+// Something that logs.
+role Logging {
+    // Logs message at level.
+    log(level is LogLevel, message is string) is void;
+    // Logs message at level with fields.
+    log(level is LogLevel, message is string, fields is LogFields) is void;
+    // Logs message at level with fields and the error that caused it.
+    log(level is LogLevel, message is string, fields is LogFields, cause is Error) is void;
+}
+
+// A logger with its name, destination, clock, fields and process.
+object NamedLogging does Logging {
+    has name is LogName;
+    has destination is LogWriting;
+    has clock is Timing;
+    has fields is LogFields;
+    has process is LogProcessReading;
+
+    // The common case: NamedLogging(name: "shop", destination: logs). The
+    // clock is the system's and no fields are added unless given.
+    NamedLogging(
+        name is string,
+        destination is LogWriting,
+        clock is Timing = SystemClock(),
+        fields is LogFields = LogFields()
+    ) {
+        self.name = LogName(name.split("."));
+        self.destination = destination;
+        self.clock = clock;
+        self.fields = fields;
+        process = CurrentLogProcess();
+    }
+
+    // A logger called name, writing to destination, with clock and fields.
+    NamedLogging(
+        name is LogName,
+        destination is LogWriting,
+        clock is Timing = SystemClock(),
+        fields is LogFields = LogFields()
+    ) {
+        self.name = name;
+        self.destination = destination;
+        self.clock = clock;
+        self.fields = fields;
+        process = CurrentLogProcess();
+    }
+
+    // The same with process.
+    NamedLogging(
+        name is LogName,
+        destination is LogWriting,
+        clock is Timing,
+        fields is LogFields,
+        process is LogProcessReading
+    ) {
+        self.name = name;
+        self.destination = destination;
+        self.clock = clock;
+        self.fields = fields;
+        self.process = process;
+    }
+
+    // A level the destination would not write costs one question (#180): no
+    // fields, clock, process id or record are made for it.
+    log(level is LogLevel, message is string) is void {
+        if destination.enabled(name, level) {
+            let empty is @Error = [];
+            self.emit(level, message, EmptyLogFields().fields(), empty);
+        }
+    }
+
+    // Logs message at level with fields.
+    log(level is LogLevel, message is string, fields is LogFields) is void {
+        if destination.enabled(name, level) {
+            let empty is @Error = [];
+            self.emit(level, message, fields, empty);
+        }
+    }
+
+    // Logs message at level with fields and its cause.
+    log(level is LogLevel, message is string, fields is LogFields, cause is Error) is void {
+        if destination.enabled(name, level) {
+            self.emit(level, message, fields, [cause]);
+        }
+    }
+
+    // The logger one segment below.
+    child(segment is string) is NamedLogging {
+        NamedLogging(
+            name: ChildLogName(origin: name, segment: segment).name(),
+            destination: destination,
+            clock: clock,
+            fields: fields,
+            process: process
+        );
+    }
+
+    // Its name.
+    name() is LogName {
+        name;
+    }
+
+    hidden emit(level is LogLevel, message is string, fields is LogFields, causes is @Error) is void {
+        let merged = CombinedLogFields(base: self.fields, added: fields).fields();
+        let at = clock.instant();
+        let pid = process.id();
+        let context = LogContext(name: name, fields: merged, process: pid);
+        let record = if causes.size() == 0 {
+            LogRecord(occurred: at, level: level, message: message, context: context);
+        }
+        else {
+            LogRecord(
+                occurred: at,
+                level: level,
+                message: message,
+                context: context,
+                cause: causes[0]
+            );
+        };
         destination.write(record);
     }
+}
+
+test "a named logger stamps time, name and process, and merges its fields" {
+    let start = Instant(Duration(seconds: 1700000000));
+    let collected = CollectedLogs();
+    let logging = NamedLogging(
+        name: LogName("app"),
+        destination: collected,
+        clock: ManualClock(start),
+        fields: LogFields(JsonField("svc", "api")),
+    );
+    logging.log(LogLevel.info, "started");
+    logging.log(LogLevel.warning, "slow", LogFields(JsonField("ms", 900)));
+    logging.log(LogLevel.error, "down", EmptyLogFields().fields(), InvalidLogProcess.invalid);
+    logging.child("db").log(LogLevel.debug, "query");
+    let records = collected.records();
+    test.is(records.size(), 4);
+    test.ok(records.item(0).time() == start);
+    test.is(records.item(0).context().name().string(), "app");
+    test.ok(records.item(0).context().process() > 0);
+    test.is(records.item(1).context().fields().values().string(), "{\"svc\":\"api\",\"ms\":900}");
+    test.ok(records.item(2).has_cause());
+    test.is(records.item(3).context().name().string(), "app.db");
+    test.is(logging.name().string(), "app");
+}
+
+test "a named logger needs only its name and destination" {
+    let kept = CollectedLogs();
+    let shop = NamedLogging(name: "shop.db", destination: kept);
+    test.is(shop.name().string(), "shop.db");
+    shop.log(LogLevel.info, "up");
+    test.is(kept.records().first()::Entry::message, "up");
+    test.is(kept.records().first().context().fields().values().names().size(), 0);
+    test.throws(InvalidLogName) {
+        NamedLogging(name: "shop..db", destination: kept);
+    };
+}
+
+hidden object CountedLogProcess does LogProcessReading {
+    has reads is Atomic<int>;
+
+    CountedLogProcess() {
+        reads = Atomic(0);
+    }
+
+    id() is int {
+        reads.replace(reads.value() + 1);
+        7;
+    }
+
+    reads() is int {
+        reads.value();
+    }
+}
+
+test "a level the destination would not write builds nothing" {
+    let kept = CollectedLogs();
+    let process = CountedLogProcess();
+    let logging = NamedLogging(
+        name: LogName("shop"),
+        destination: AllowedLogs(origin: kept, level: LogLevel.info),
+        clock: ManualClock(Instant(Duration(seconds: 0))),
+        fields: LogFields(),
+        process: process,
+    );
+    for (0..100) -> index {
+        logging.log(LogLevel.debug, "skipped", LogFields(JsonField("index", index)));
+    }
+    test.is(process.reads(), 0);
+    test.is(kept.size(), 0);
+    logging.log(LogLevel.info, "kept");
+    test.is(process.reads(), 1);
+    test.is(kept.size(), 1);
+    test.is(kept.records().first().context().process(), 7);
 }

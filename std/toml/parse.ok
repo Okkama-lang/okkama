@@ -1,14 +1,13 @@
 module toml/parse v1.0.0;
-import "toml/value" take
-    TomlValue, TomlVisitor, TomlInteger, TomlFloat, TomlString, TomlBoolean,
-    TomlInfinity, TomlNaN, TomlArray, TomlTable, TomlMember,
-    TomlLocalDate, TomlLocalTime, TomlLocalDateTime, TomlOffset, TomlOffsetDateTime;
-import "runtime/toml" take
-    TomlParseState, TomlNodeState, toml_parse_state, toml_parse_valid,
-    toml_parse_offset, toml_parse_line, toml_parse_column, toml_parse_message,
-    toml_parse_root, toml_node_kind, toml_node_size, toml_node_integer,
-    toml_node_real, toml_node_boolean, toml_node_text, toml_node_coordinates,
-    toml_node_item, toml_member_name;
+
+import "toml/value" take TomlValue, TomlVisitor, TomlInteger, TomlFloat, TomlString, TomlBoolean,
+    TomlInfinity, TomlNaN, TomlArray, TomlTable, TomlMember, TomlLocalDate, TomlLocalTime,
+    TomlLocalDateTime, TomlOffset, TomlOffsetDateTime, TomlKindMismatch, MissingTomlMember,
+    DuplicateTomlMember;
+import "runtime/toml" take TomlParseState, TomlNodeState, toml_parse_state, toml_parse_valid,
+    toml_parse_offset, toml_parse_line, toml_parse_column, toml_parse_message, toml_parse_root,
+    toml_node_kind, toml_node_size, toml_node_integer, toml_node_real, toml_node_boolean,
+    toml_node_text, toml_node_coordinates, toml_node_item, toml_member_name;
 
 // Immutable TOML 1.0 document representation; parsing occurs on value().
 // Construction binds text/budgets and rejects invalid configuration only.
@@ -33,24 +32,41 @@ import "runtime/toml" take
 // implicit parent declarations and most-recent array-of-table binding.
 // See docs/std/toml-parse-guide.md. This module does not write TOML documents.
 //
-//     let settings = ParsedToml("name='Ada'\nenabled=true").value();
-//     settings.value("name").accept(observer);
+//     let config = ParsedToml(text).root();
+//     config.get("server").int("port");             // read like json (#140)
+//     config.maybe("debug").boolean() else false;
 //
 // Run tests as a root module, because dependency test blocks are not executed:
-// OKKAMA_STDLIB_DIR=std perl okkama-pl/bin/okkama -t std/toml/parse.ok
+// okkama run -t std/toml/parse.ok
 
+// TOML 1.0 text, read when root() is asked.
 object ParsedToml {
     has state is TomlParseState;
+
+    // Text within 1 Mi characters, depth 64 and 10000 nodes.
     ParsedToml(origin is string) {
         state = toml_parse_state(origin, 1048576, 64, 10000);
     }
+
+    // Text within these limits.
     ParsedToml(origin is string, maximum_input is int, maximum_depth is int, maximum_nodes is int) {
-        confirm maximum_input >= 0 && maximum_depth >= 1 && maximum_depth <= 128 && maximum_nodes >= 1
+        confirm maximum_input >= 0
+            && maximum_depth >= 1
+            && maximum_depth <= 128
+            && maximum_nodes >= 1
             else throw InvalidTomlBudget.invalid;
         state = toml_parse_state(origin, maximum_input, maximum_depth, maximum_nodes);
     }
-    value() is TomlTable {
-        confirm toml_parse_valid(state) else throw InvalidToml.located(toml_parse_offset(state), toml_parse_line(state), toml_parse_column(state), toml_parse_message(state));
+
+    // The document as a table; InvalidToml says where the text is wrong.
+    root() is TomlTable {
+        confirm toml_parse_valid(state)
+            else throw InvalidToml.located(
+                toml_parse_offset(state),
+                toml_parse_line(state),
+                toml_parse_column(state),
+                toml_parse_message(state)
+            );
         TomlNode(toml_parse_root(state)).table();
     }
 }
@@ -59,112 +75,229 @@ object ParsedToml {
 // value/table is reconstructed with nominal constructors, never casts or JSON.
 // The kind switch is private substrate translation, not a TomlValue protocol.
 // Recursive projection is bounded by the parser's depth/node checks.
-object TomlNode {
+hidden object TomlNode {
     has origin is TomlNodeState;
-    TomlNode(origin is TomlNodeState) { self.origin = origin; }
+
+    TomlNode(origin is TomlNodeState) {
+        self.origin = origin;
+    }
+
     table() is TomlTable {
         let members is @TomlMember = (0..toml_node_size(origin)).map() -> index {
-            TomlMember(toml_member_name(origin, index), TomlNode(toml_node_item(origin, index)).value());
+            TomlMember(
+                name: toml_member_name(origin, index),
+                value: TomlNode(toml_node_item(origin, index)).toml()
+            );
         };
         TomlTable(members);
     }
-    value() is TomlValue {
+
+    toml() is TomlValue {
         match toml_node_kind(origin) {
-            case 1 { let result is TomlValue = TomlInteger(toml_node_integer(origin)); result; }
-            case 2 { let result is TomlValue = TomlFloat(toml_node_real(origin)); result; }
-            case 3 { let result is TomlValue = TomlString(toml_node_text(origin)); result; }
-            case 4 { let result is TomlValue = TomlBoolean(toml_node_boolean(origin)); result; }
+            case 1 {
+                let result is TomlValue = TomlInteger(toml_node_integer(origin));
+                result;
+            }
+            case 2 {
+                let result is TomlValue = TomlFloat(toml_node_real(origin));
+                result;
+            }
+            case 3 {
+                let result is TomlValue = TomlString(toml_node_text(origin));
+                result;
+            }
+            case 4 {
+                let result is TomlValue = TomlBoolean(toml_node_boolean(origin));
+                result;
+            }
             case 5 {
                 let values is @TomlValue = (0..toml_node_size(origin)).map() -> index {
-                    TomlNode(toml_node_item(origin, index)).value();
+                    TomlNode(toml_node_item(origin, index)).toml();
                 };
                 let result is TomlValue = TomlArray(values);
                 result;
             }
-            case 6 { let result is TomlValue = self.table(); result; }
+            case 6 {
+                let result is TomlValue = self.table();
+                result;
+            }
             case 7 {
                 let c = toml_node_coordinates(origin);
-                let result is TomlValue = TomlLocalDate(c[0], c[1], c[2]);
+                let result is TomlValue = TomlLocalDate(year: c[0], month: c[1], day: c[2]);
                 result;
             }
             case 8 {
                 let c = toml_node_coordinates(origin);
-                let result is TomlValue = TomlLocalTime(c[0], c[1], c[2], c[3]);
+                let result is TomlValue = TomlLocalTime(
+                    hour: c[0],
+                    minute: c[1],
+                    second: c[2],
+                    nanosecond: c[3]
+                );
                 result;
             }
             case 9 {
                 let c = toml_node_coordinates(origin);
                 let result is TomlValue = TomlLocalDateTime(
-                    TomlLocalDate(c[0], c[1], c[2]), TomlLocalTime(c[3], c[4], c[5], c[6]));
+                    date: TomlLocalDate(c[0], c[1], c[2]),
+                    time: TomlLocalTime(c[3], c[4], c[5], c[6])
+                );
                 result;
             }
             case 10 {
                 let c = toml_node_coordinates(origin);
-                let result is TomlValue = TomlOffsetDateTime(TomlLocalDateTime(
-                    TomlLocalDate(c[0], c[1], c[2]), TomlLocalTime(c[3], c[4], c[5], c[6])),
-                    TomlOffset(c[7], c[8] == 1));
+                let result is TomlValue = TomlOffsetDateTime(
+                    local: TomlLocalDateTime(
+                        TomlLocalDate(c[0], c[1], c[2]),
+                        TomlLocalTime(c[3], c[4], c[5], c[6])
+                    ),
+                    offset: TomlOffset(c[7], c[8] == 1)
+                );
                 result;
             }
-            case 11 { let result is TomlValue = TomlInfinity(toml_node_boolean(origin)); result; }
-            else { let result is TomlValue = TomlNaN(); result; }
+            case 11 {
+                let result is TomlValue = TomlInfinity(toml_node_boolean(origin));
+                result;
+            }
+            else {
+                let result is TomlValue = TomlNaN();
+                result;
+            }
         }
     }
 }
 
+// A limit out of range.
 enum InvalidTomlBudget is Error = (invalid);
 
 // Source coordinates identify the failed observation. No partial tree escapes.
 // text() supplies a readable diagnostic; message wording is not a stable ABI.
 enum InvalidToml is Error = (located(offset is int, line is int, column is int, message is string));
 
-
-
 test "empty and ordered root are repeatable" {
     let empty = ParsedToml("");
-    test.is(empty.value().members().size(), 0);
-    test.is(empty.value().members().size(), 0);
-    let table = ParsedToml("b=true\na=1").value();
+    test.is(empty.root().members().size(), 0);
+    test.is(empty.root().members().size(), 0);
+    let table = ParsedToml("b=true\na=1").root();
     test.is(table.members().first().name(), "b");
     test.is(table.members().last().name(), "a");
 }
+
 test "nominal scalar and temporal projection" {
-    let table = ParsedToml("text=\"é\\n\"\ninteger=9007199254740993\nreal=1.25\nflag=true\ndate=0000-02-29\ntime=23:59:60.123400000999").value();
+    let table = ParsedToml(
+        "text=\"é\\n\"\ninteger=9007199254740993\nreal=1.25\nflag=true\ndate=0000-02-29\ntime=23:59:60.123400000999"
+    ).root();
     for ["text", "integer", "real", "flag", "date", "time"] -> name {
         table.value(name).accept(TomlVisitor.fake());
     }
 }
+
 test "lazy failure repeated observation and configuration errors" {
     let invalid = ParsedToml("x=");
     for 0..2 -> attempt {
-        test.is(try { invalid.value(); -1; } catch InvalidToml.located(offset, _, _, _) { offset; }, 2);
+        test.is(
+            try {
+                invalid.root();
+                -1;
+            }
+            catch InvalidToml.located(offset, _, _, _) {
+                offset;
+            },
+            2
+        );
     }
-    test.throws(InvalidTomlBudget) { ParsedToml("", -1, 1, 1); };
+    test.throws(InvalidTomlBudget) {
+        ParsedToml(origin: "", maximum_input: -1, maximum_depth: 1, maximum_nodes: 1);
+    };
 }
+
 test "duplicate and resource limits are typed failures" {
     for ["x=1\nx=2", "a.b=1\n[a]", "a={b=1}\na.c=2", "x=9223372036854775808"] -> source {
-        test.throws(InvalidToml) { ParsedToml(source).value(); };
+        test.throws(InvalidToml) {
+            ParsedToml(source).root();
+        };
     }
-    test.throws(InvalidToml) { ParsedToml("x=1", 2, 2, 2).value(); };
-    test.throws(InvalidToml) { ParsedToml("x=1", 3, 1, 2).value(); };
-    test.throws(InvalidToml) { ParsedToml("x=1", 3, 2, 1).value(); };
+    test.throws(InvalidToml) {
+        ParsedToml(origin: "x=1", maximum_input: 2, maximum_depth: 2, maximum_nodes: 2).root();
+    };
+    test.throws(InvalidToml) {
+        ParsedToml(origin: "x=1", maximum_input: 3, maximum_depth: 1, maximum_nodes: 2).root();
+    };
+    test.throws(InvalidToml) {
+        ParsedToml(origin: "x=1", maximum_input: 3, maximum_depth: 2, maximum_nodes: 1).root();
+    };
 }
 
 test "all value categories project through nominal callbacks" {
-    let table = ParsedToml("array=[\"é\\n\",true]\ninfinity=-inf\nnan=+nan\nlocal=0000-02-29T23:59:60.1234\nfixed=0000-02-29T23:59:60.1234-00:00").value();
+    let table = ParsedToml(
+        "array=[\"é\\n\",true]\ninfinity=-inf\nnan=+nan\nlocal=0000-02-29T23:59:60.1234\nfixed=0000-02-29T23:59:60.1234-00:00"
+    ).root();
     for ["array", "infinity", "nan", "local", "fixed"] -> name {
         table.value(name).accept(TomlVisitor.fake());
     }
-    ParsedToml("\"\"=1\n\"a.b\"=true").value().accept(TomlVisitor.fake());
+    ParsedToml("\"\"=1\n\"a.b\"=true").root().accept(TomlVisitor.fake());
 }
+
 test "header-defined tables cannot be reopened with dotted keys" {
     for ["[[a.b]]\n[a]\nb.y=2", "[a.b.c]\nz=9\n[a]\nb.c.t='bad'"] -> source {
-        test.throws(InvalidToml) { ParsedToml(source).value(); };
+        test.throws(InvalidToml) {
+            ParsedToml(source).root();
+        };
     }
-    let invalid = try { ParsedToml("x=@").value(); "";} catch InvalidToml.located(offset, line, column, message) {
+    let invalid = try {
+        ParsedToml("x=@").root();
+        "";
+    }
+    catch InvalidToml.located(offset, line, column, message) {
         test.is(offset, 2);
         test.is(line, 1);
         test.is(column, 3);
         message;
     };
     test.ok(invalid.length() > 0);
+}
+
+test "a parsed table reads like json (#140)" {
+    let text = "title = \"demo\"\nratio = 0.5\nports = [80, 443]\ntags = [\"a\", \"b\"]\n" +
+        "updated = 1979-05-27T07:32:00Z\nbirthday = 1979-05-27\nlimit = inf\n\n" +
+        "[server]\nhost = \"example.org\"\nport = 8080\ndebug = true\n\n" +
+        "[[replica]]\nhost = \"a\"\n\n[[replica]]\nhost = \"b\"\n";
+    let config = ParsedToml(text).root();
+    test.is(config.text("title"), "demo");
+    test.is(config.float("ratio"), 0.5);
+    test.is(config.ints("ports"), [80, 443]);
+    test.is(config.texts("tags"), ["a", "b"]);
+    test.is(config.get("server").int("port"), 8080);
+    test.is(config.get("server").boolean("debug"), true);
+    test.is(config.maybe("debug").boolean() else false, false);
+    test.is(config.get("server").maybe("debug").boolean() else false, true);
+    test.is(config.maybe("server").get() == Maybe<TomlTable>.none, false);
+    let hosts is @string = config.tables("replica").map() -> replica {
+        replica.text("host");
+    };
+    test.is(hosts, ["a", "b"]);
+    test.is(config.date_time("updated").string(), "1979-05-27T07:32:00Z");
+    test.is(config.local_date("birthday").string(), "1979-05-27");
+    test.throws(MissingTomlMember) {
+        config.text("absent");
+    };
+    test.throws(TomlKindMismatch) {
+        config.int("title");
+    };
+    test.throws(TomlKindMismatch) {
+        config.float("limit");
+    };
+    test.throws(TomlKindMismatch) {
+        config.maybe("ports").text();
+    };
+    let named is @string = try {
+        config.texts("ports");
+    }
+    catch TomlKindMismatch.member(name, expected, found) {
+        [name, expected, found];
+    };
+    test.is(named, ["ports[0]", "string", "integer"]);
+    test.throws(DuplicateTomlMember) {
+        TomlTable(TomlMember("a", TomlInteger(1)), TomlMember("a", TomlInteger(2)));
+    };
 }

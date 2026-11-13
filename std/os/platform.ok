@@ -1,14 +1,10 @@
 module os/platform v1.0.0;
 
 import "encoding/utf" take ByteOrder;
-import "runtime/system" take
-    system_platform,
-    system_architecture,
-    system_byte_order,
-    system_host_name,
-    system_cpu_count;
+import "runtime/system" take system_platform, system_architecture, system_byte_order,
+    system_host_name, system_cpu_count;
 
-// Platform is an immutable snapshot of portable runtime identity. Consumers
+// Platform answers the portable runtime identity when asked. Consumers
 // branch only on the deliberately small OperatingSystem enum; less common
 // systems remain usable through OperatingSystem.other and architecture().
 //
@@ -28,62 +24,75 @@ import "runtime/system" take
 //         output.writeln("little-endian host");
 //     }
 
+// The few operating systems code usually branches on; others are other.
 enum OperatingSystem = (linux, macos, windows, freebsd, other);
 
+// The system and machine the program runs on.
 object Platform {
-    has system is OperatingSystem;
-    has machine is string;
-    has order is ByteOrder;
+    // The running platform.
+    Platform();
 
-    Platform() {
+    // Which operating system.
+    operating_system() is OperatingSystem {
         let platform is string = try {
             system_platform();
         }
         catch failure is NativeFailure {
             panic "System provider could not identify the operating system";
         };
-        system = match platform {
-            case "linux" { OperatingSystem.linux; }
-            case "macos" { OperatingSystem.macos; }
-            case "windows" { OperatingSystem.windows; }
-            case "freebsd" { OperatingSystem.freebsd; }
-            else { OperatingSystem.other; }
-        };
-        machine = try {
+        match platform {
+            case "linux" {
+                OperatingSystem.linux;
+            }
+            case "macos" {
+                OperatingSystem.macos;
+            }
+            case "windows" {
+                OperatingSystem.windows;
+            }
+            case "freebsd" {
+                OperatingSystem.freebsd;
+            }
+            else {
+                OperatingSystem.other;
+            }
+        }
+    }
+
+    // The machine architecture, such as `x86_64` or `aarch64`.
+    architecture() is string {
+        try {
             system_architecture();
         }
         catch failure is NativeFailure {
             panic "System provider could not identify the architecture";
-        };
+        }
+    }
+
+    // The machine's byte order; formats still name their own.
+    byte_order() is ByteOrder {
         let byte_order is string = try {
             system_byte_order();
         }
         catch failure is NativeFailure {
             panic "System provider could not identify native byte order";
         };
-        order = match byte_order {
-            case "big" { ByteOrder.big; }
-            case "little" { ByteOrder.little; }
+        match byte_order {
+            case "big" {
+                ByteOrder.big;
+            }
+            case "little" {
+                ByteOrder.little;
+            }
             else {
                 panic "System provider returned an invalid native byte order";
             }
-        };
-    }
-
-    operating_system() is OperatingSystem {
-        system;
-    }
-
-    architecture() is string {
-        machine;
-    }
-
-    byte_order() is ByteOrder {
-        order;
+        }
     }
 }
 
-// Host captures runtime-local machine capacity separately from Platform:
+// Host reads runtime-local machine capacity separately from Platform, at
+// the moment it is asked:
 //
 //     let host = Host();
 //     output.writeln(host.name());
@@ -93,33 +102,51 @@ object Platform {
 // the runtime, not a promise about physical sockets or permanently available
 // parallelism.
 
+// The computer the program runs on.
 object Host {
-    has host_name is string;
-    has processors is int;
+    // This host.
+    Host();
 
-    Host() {
-        host_name = try {
+    // Its host name.
+    name() is string {
+        try {
             system_host_name();
         }
         catch failure is NativeFailure {
             throw UnavailableHostInformation.because("host name is unavailable");
-        };
-        processors = try {
+        }
+    }
+
+    // How many processors the program may use.
+    cpu_count() is int {
+        let processors is int = try {
             system_cpu_count();
         }
         catch failure is NativeFailure {
             throw UnavailableHostInformation.because("CPU count is unavailable");
         };
-        confirm self.processors > 0 else panic "System provider returned no CPUs";
-    }
-
-    name() is string {
-        host_name;
-    }
-
-    cpu_count() is int {
+        confirm processors > 0 else panic "System provider returned no CPUs";
         processors;
     }
 }
 
+// The system could not answer; message says why.
 enum UnavailableHostInformation is Error = (because(message is string));
+
+test "the platform names a known system, an architecture and a byte order" {
+    let platform = Platform();
+    let system = platform.operating_system();
+    test.ok(system == OperatingSystem.linux || system == OperatingSystem.macos
+        || system == OperatingSystem.windows || system == OperatingSystem.freebsd
+        || system == OperatingSystem.other);
+    test.ok(!platform.architecture().empty());
+    let order = platform.byte_order();
+    test.ok(order == ByteOrder.little || order == ByteOrder.big);
+    test.ok(Platform() == platform);
+}
+
+test "the host has a name and at least one processor" {
+    let host = Host();
+    test.ok(!host.name().empty());
+    test.ok(host.cpu_count() > 0);
+}

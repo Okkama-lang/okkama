@@ -8,7 +8,7 @@
 //!
 //! [dependencies]
 //! web = "12.3.0"
-//! json = { git = "https://example.org/json", version = "1.*" }
+//! json = { git = "https://example.org/json", version = "1.2.0" }
 //! ```
 //!
 //! A directory with `blade.toml` is a package root. Dependencies live in the
@@ -37,7 +37,9 @@ pub fn is_dependency_path(path: &str) -> bool {
 pub fn check_package_name(name: &str) -> Result<(), String> {
     let identifier = |part: &str| {
         let mut chars = part.chars();
-        chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        chars
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
             && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
     };
     if name.split('/').all(identifier) {
@@ -77,7 +79,7 @@ pub struct Manifest {
 /// One entry of `[dependencies]`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Dependency {
-    /// Version requirement: `"12.3.0"` means compatible with 12.3.0, `"12.*"` any 12.x.
+    /// The minimum version: `"12.3.0"` means 12.3.0 or a later 12.x (#347).
     pub version: Option<String>,
     pub git: Option<String>,
     /// A local package, relative to the manifest.
@@ -137,6 +139,17 @@ impl Manifest {
         let text = std::fs::read_to_string(&file)
             .map_err(|error| format!("cannot read {}: {error}", file.display()))?;
         Manifest::parse(&text).map_err(|error| format!("{}: {error}", file.display()))
+    }
+
+    /// The manifest of a library being installed: a library without
+    /// dependencies needs none, and then it reads as empty (#348). A project
+    /// root always has one, so it is read with `read`.
+    pub fn read_package(root: &Path) -> Result<Manifest, String> {
+        if root.join(MANIFEST).exists() {
+            Manifest::read(root)
+        } else {
+            Ok(Manifest::default())
+        }
     }
 
     /// The dependency an import path `pkg/<name>/…` refers to: the longest
@@ -268,7 +281,7 @@ target = "sparrow"
 
 [dependencies]
 web = "12.3.0"
-json = { git = "https://example.org/json", version = "1.*" }
+json = { git = "https://example.org/json", version = "1.2.0" }
 
 [dependencies.local]
 path = "../local"

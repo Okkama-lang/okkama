@@ -1,11 +1,5 @@
 module crypto/ed25519 v1.0.0;
 
-import "crypto/key" take PublicKey, VerifyingKey, SigningKey;
-import "crypto/secret" take SecretBytes;
-import "crypto/nonce" take Entropy;
-import "crypto/error" take HostOperation, InvalidCryptoInput;
-import "encoding/hex" take HexEncoded, HexDecoded;
-
 // Ed25519 signatures (RFC 8032, pure, deterministic). A private key is its
 // 32-byte seed held as SecretBytes (Ed25519PrivateKey(seed: ...));
 // Ed25519PrivateKey(entropy: ...) draws a fresh seed. The two constructors
@@ -15,35 +9,82 @@ import "encoding/hex" take HexEncoded, HexDecoded;
 //
 //     let key = Ed25519PrivateKey(entropy: SystemEntropy());
 //     key.public_key().verified(message, key.signature(message)); // true
+
+import "crypto/key" take PublicKey, VerifyingKey, SigningKey;
+import "crypto/secret" take SecretBytes;
+import "crypto/nonce" take Entropy;
+import "crypto/error" take HostOperation, InvalidCryptoInput;
+import "encoding/hex" take HexEncoded, HexDecoded;
+
+// An Ed25519 signing key.
 object Ed25519PrivateKey does SigningKey {
     has seed is SecretBytes;
+
+    // The key of a 32-byte seed.
     Ed25519PrivateKey(seed is SecretBytes) {
-        confirm seed.size() == 32 else throw InvalidCryptoInput.because("Ed25519 seed must be 32 bytes");
+        confirm seed.size() == 32
+            else throw InvalidCryptoInput.because("Ed25519 seed must be 32 bytes");
         self.seed = seed;
     }
-    Ed25519PrivateKey(entropy is Entropy) { seed = SecretBytes(entropy.bytes(32)); }
-    pkcs8() is SecretBytes { SecretBytes(HostOperation("ed25519-pkcs8", [seed.export_bytes()]).bytes()); }
-    public_key() is VerifyingKey { Ed25519PublicKey(HostOperation("ed25519-public", [seed.export_bytes()]).bytes()); }
-    signature(message is @byte) is @byte { HostOperation("ed25519-sign", [seed.export_bytes(), message]).bytes(); }
+
+    // A new key from entropy.
+    Ed25519PrivateKey(entropy is Entropy) {
+        seed = SecretBytes(entropy.bytes(32));
+    }
+
+    // The key as DER PKCS#8.
+    pkcs8() is SecretBytes {
+        SecretBytes(HostOperation(operation: "ed25519-pkcs8", arguments: [seed.export_bytes()]).bytes());
+    }
+
+    // Its public key.
+    public_key() is VerifyingKey {
+        Ed25519PublicKey(HostOperation(operation: "ed25519-public", arguments: [seed.export_bytes()]).bytes());
+    }
+
+    // The 64-byte signature of message.
+    signature(message is @byte) is @byte {
+        HostOperation(operation: "ed25519-sign", arguments: [seed.export_bytes(), message]).bytes();
+    }
 }
 
+// An Ed25519 public key.
 object Ed25519PublicKey does PublicKey, VerifyingKey {
     has raw is @byte;
+
+    // The key of its 32 raw bytes.
     Ed25519PublicKey(raw is @byte) {
-        confirm raw.size() == 32 else throw InvalidCryptoInput.because("Ed25519 public key must be 32 bytes");
+        confirm raw.size() == 32
+            else throw InvalidCryptoInput.because("Ed25519 public key must be 32 bytes");
         self.raw = raw;
     }
-    raw() is @byte { raw; }
-    bytes() is @byte { HostOperation("ed25519-spki", [raw]).bytes(); }
+
+    // Its 32 raw bytes.
+    raw() is @byte {
+        raw;
+    }
+
+    // The key as DER SubjectPublicKeyInfo.
+    bytes() is @byte {
+        HostOperation(operation: "ed25519-spki", arguments: [raw]).bytes();
+    }
+
+    // Whether signature signs message with this key.
     verified(message is @byte, signature is @byte) is bool {
-        signature.size() == 64 && HostOperation("ed25519-verify", [raw, message, signature]).truth();
+        signature.size() == 64 && HostOperation(operation: "ed25519-verify", arguments: [raw, message, signature]).truth();
     }
 }
 
 test "Ed25519 matches RFC 8032 test 1" {
-    let key = Ed25519PrivateKey(seed: SecretBytes(HexDecoded("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60").bytes()));
+    let key = Ed25519PrivateKey(
+        seed: SecretBytes(
+            HexDecoded("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60").bytes()
+        )
+    );
     test.is(HexEncoded(key.signature([]).slice(0, 8)).string(), "e5564300c360ac72");
-    let public = Ed25519PublicKey(HexDecoded("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a").bytes());
+    let public = Ed25519PublicKey(
+        HexDecoded("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a").bytes()
+    );
     test.ok(public.verified([], key.signature([])));
     test.ok(!public.verified([1.byte()], key.signature([])));
     test.ok(!public.verified([], [1.byte()]));
@@ -55,5 +96,7 @@ test "generated Ed25519 keys export PKCS#8" {
     let key = Ed25519PrivateKey(entropy: Entropy.fake());
     test.is(key.pkcs8().size(), 48);
     test.ok(key.public_key().verified([7.byte()], key.signature([7.byte()])));
-    test.throws(InvalidCryptoInput) { Ed25519PrivateKey(seed: SecretBytes([1.byte()])); };
+    test.throws(InvalidCryptoInput) {
+        Ed25519PrivateKey(seed: SecretBytes([1.byte()]));
+    };
 }

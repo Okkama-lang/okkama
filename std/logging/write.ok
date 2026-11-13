@@ -1,44 +1,261 @@
 module logging/write v1.0.0;
-import "logging/record" take LogRecord;
+
+// Destinations of log records, and ways to combine them.
+//
+//     BroadcastLogs(TextStreamLogs(Stderr()), file_logs);           // to each
+//     FallbackLogs(primary: syslog, fallback: TextStreamLogs(Stderr()));
+//     BestEffortLogs(file_logs);                                    // never throws
+//     let kept = CollectedLogs();                                   // for tests
+
+import "logging/record" take LogRecord, LogContext;
 import "collections/sequence" take Sequencing;
 import "async/atomic" take Atomic;
 import "numbers/bigint" take BigInt;
-role LogWriting{write(origin is LogRecord) is void;}
-object DiscardingLogs does LogWriting{DiscardingLogs();write(origin is LogRecord) is void{}}
-object CollectedLogs does LogWriting{
-    has origin is Atomic<@LogRecord>;has capacity is int;
-    CollectedLogs(){let empty is @LogRecord=[];origin=Atomic(empty);capacity=4096;}
-    CollectedLogs(capacity is int){confirm capacity>=0 else throw LogCollectionLimit.exceeded;let empty is @LogRecord=[];origin=Atomic(empty);self.capacity=capacity;}
-    write(record is LogRecord) is void{let old=origin.value();confirm old.size()<capacity else throw LogCollectionLimit.exceeded;let revised is @LogRecord=(0..old.size()+1).map()->index{if index<old.size(){old[index];}else{record;}};origin.replace(revised);}
-    size() is int{origin.value().size();}
-    records() is Sequencing<LogRecord>{origin.value();}
+import "logging/name" take LogName;
+import "logging/level" take LogLevel;
+import "logging/field" take LogFields;
+import "time/clock" take Instant;
+import "time/duration" take Duration, DurationUnit;
+
+// A destination of log records.
+role LogWriting {
+    // Writes origin.
+    write(origin is LogRecord) is void;
+    // Whether a record of name at level would be written; callers skip building
+    // the rest when not.
+    enabled(name is LogName, level is LogLevel) is bool;
 }
-object BroadcastLogs does LogWriting{
+
+// Drops every record.
+object DiscardingLogs does LogWriting {
+    // The destination.
+    DiscardingLogs();
+
+    // Drops origin.
+    write(origin is LogRecord) is void {}
+
+    // false.
+    enabled(name is LogName, level is LogLevel) is bool {
+        false;
+    }
+}
+
+// Records kept in memory, for tests.
+object CollectedLogs does LogWriting {
+    has origin is Atomic<@LogRecord>;
+    has capacity is int;
+
+    // At most 4096 records.
+    CollectedLogs() {
+        let empty is @LogRecord = [];
+        origin = Atomic(empty);
+        capacity = 4096;
+    }
+
+    // At most capacity records.
+    CollectedLogs(capacity is int) {
+        confirm capacity >= 0 else throw LogCollectionLimit.exceeded;
+        let empty is @LogRecord = [];
+        origin = Atomic(empty);
+        self.capacity = capacity;
+    }
+
+    // Keeps record; LogCollectionLimit when full.
+    write(record is LogRecord) is void {
+        let old = origin.value();
+        confirm old.size() < capacity else throw LogCollectionLimit.exceeded;
+        let revised is @LogRecord = old + [record];
+        origin.replace(revised);
+    }
+
+    // Whether a record of name at level would be written.
+    enabled(name is LogName, level is LogLevel) is bool {
+        true;
+    }
+
+    // How many.
+    size() is int {
+        origin.value().size();
+    }
+
+    // The records, in order.
+    records() is Sequencing<LogRecord> {
+        origin.value();
+    }
+}
+
+// Writes each record to several destinations.
+object BroadcastLogs does LogWriting {
     has destinations is @LogWriting;
-    BroadcastLogs(destinations is Sequencing<LogWriting>){let size=destinations.size();confirm size>=0 && size<=128 else throw InvalidLogDestinations.invalid;let snapshot is @LogWriting=(0..size).map()->index{destinations.item(index);};self.destinations=snapshot;}
-    write(origin is LogRecord) is void{
-        let empty is @Error=[];let failures=Atomic(empty);
-        for destinations->destination{
-            try{destination.write(origin);}
-            catch failure is Error{let old=failures.value();let revised is @Error=(0..old.size()+1).map()->index{if index<old.size(){old[index];}else{failure;}};failures.replace(revised);}
+
+    // The destinations, at most 128.
+    BroadcastLogs(destinations is Sequencing<LogWriting>) {
+        let size = destinations.size();
+        confirm size >= 0 && size <= 128 else throw InvalidLogDestinations.invalid;
+        let snapshot is @LogWriting = (0..size).map() -> index {
+            destinations.item(index);
+        };
+        self.destinations = snapshot;
+    }
+
+    // The same, one argument per part: BroadcastLogs(a, b).
+    BroadcastLogs(destinations is ...LogWriting) {
+        let listed is @LogWriting = destinations...;
+        let size = listed.size();
+        confirm size >= 0 && size <= 128 else throw InvalidLogDestinations.invalid;
+        let snapshot is @LogWriting = (0..size).map() -> index {
+            listed.item(index);
+        };
+        self.destinations = snapshot;
+    }
+
+    // Writes origin to each; LogDeliveryFailure says how many failed.
+    write(origin is LogRecord) is void {
+        let empty is @Error = [];
+        let failures = Atomic(empty);
+        for destinations -> destination {
+            try {
+                destination.write(origin);
+            }
+            catch failure is Error {
+                let old = failures.value();
+                let revised is @Error = old + [failure];
+                failures.replace(revised);
+            }
         }
-        if failures.value().size()>0{let failed is @Error = failures.value();throw LogDeliveryFailure.failed(failed.size(), failed[0].text());}
+        if failures.value().size() > 0 {
+            let failed is @Error = failures.value();
+            throw LogDeliveryFailure.failed(failed.size(), failed[0].text());
+        }
+    }
+
+    // Any destination that would write it.
+    enabled(name is LogName, level is LogLevel) is bool {
+        destinations.reduce(false) -> any, destination {
+            any || destination.enabled(name, level);
+        };
     }
 }
-object FallbackLogs does LogWriting{
-    has primary,fallback is LogWriting;
-    FallbackLogs(primary is LogWriting,fallback is LogWriting){self.primary=primary;self.fallback=fallback;}
-    write(origin is LogRecord) is void{
-        try{primary.write(origin);}
-        catch first is Error{try{fallback.write(origin);}catch second is Error{throw LogDeliveryFailure.failed(2, first.text());}}
+
+// Writes to one destination, or another when it fails.
+object FallbackLogs does LogWriting {
+    has primary, fallback is LogWriting;
+
+    // primary, then fallback.
+    FallbackLogs(primary is LogWriting, fallback is LogWriting) {
+        self.primary = primary;
+        self.fallback = fallback;
+    }
+
+    // Writes origin to primary, or to fallback when primary throws.
+    write(origin is LogRecord) is void {
+        try {
+            primary.write(origin);
+        }
+        catch first is Error {
+            try {
+                fallback.write(origin);
+            }
+            catch second is Error {
+                throw LogDeliveryFailure.failed(2, first.text());
+            }
+        }
+    }
+
+    // The fallback writes only what the primary failed to write.
+    enabled(name is LogName, level is LogLevel) is bool {
+        primary.enabled(name, level);
     }
 }
-object BestEffortLogs does LogWriting{
-    has origin is LogWriting;has count is Atomic<BigInt>;
-    BestEffortLogs(origin is LogWriting){self.origin=origin;count=Atomic(BigInt("0"));}
-    write(record is LogRecord) is void{try{origin.write(record);}catch failure is Error{count.replace((count.value() + BigInt("1")));}}
-    failures() is BigInt{count.value();}
+
+// Writes and swallows failures, counting them.
+object BestEffortLogs does LogWriting {
+    has origin is LogWriting;
+    has count is Atomic<BigInt>;
+
+    // Writes to origin.
+    BestEffortLogs(origin is LogWriting) {
+        self.origin = origin;
+        count = Atomic(BigInt(0));
+    }
+
+    // Writes record; a failure is counted, not thrown.
+    write(record is LogRecord) is void {
+        try {
+            origin.write(record);
+        }
+        catch failure is Error {
+            count.replace((count.value() + BigInt(1)));
+        }
+    }
+
+    // Whether a record of name at level would be written.
+    enabled(name is LogName, level is LogLevel) is bool {
+        origin.enabled(name, level);
+    }
+
+    // How many writes failed.
+    failures() is BigInt {
+        count.value();
+    }
 }
+
+// Some destinations failed: how many, and the first error.
 enum LogDeliveryFailure is Error = (failed(destinations is int, first is string));
+
+// More than 128 destinations.
 enum InvalidLogDestinations is Error = (invalid);
+
+// The collection is full.
 enum LogCollectionLimit is Error = (exceeded);
+
+test "collected, broadcast, fallback and best-effort writers" {
+    let record = LogRecord(
+        occurred: Instant(Duration(seconds: 0)),
+        level: LogLevel.info,
+        message: "hi",
+        context: LogContext(name: LogName("app"), fields: LogFields(), process: 1),
+    );
+    let first = CollectedLogs();
+    let second = CollectedLogs();
+    BroadcastLogs(first, second).write(record);
+    test.is(first.size(), 1);
+    test.is(second.records().first()::Entry::message, "hi");
+    let full = CollectedLogs(capacity: 0);
+    test.throws(LogCollectionLimit) {
+        full.write(record);
+    };
+    let backup = CollectedLogs();
+    FallbackLogs(primary: full, fallback: backup).write(record);
+    test.is(backup.size(), 1);
+    let quiet = BestEffortLogs(full);
+    quiet.write(record);
+    quiet.write(record);
+    test.is(quiet.failures().string(), "2");
+    DiscardingLogs().write(record);
+    test.throws(LogDeliveryFailure) {
+        BroadcastLogs(first, full).write(record);
+    };
+    test.is(first.size(), 2);
+}
+
+test "writers say which records they would write" {
+    let app = LogName("app");
+    test.ok(!DiscardingLogs().enabled(app, LogLevel.debug));
+    test.ok(CollectedLogs().enabled(app, LogLevel.debug));
+    test.ok(BroadcastLogs(DiscardingLogs(), CollectedLogs()).enabled(app, LogLevel.info));
+    test.ok(!BroadcastLogs(DiscardingLogs(), DiscardingLogs()).enabled(app, LogLevel.info));
+    test.ok(
+        !FallbackLogs(primary: DiscardingLogs(), fallback: CollectedLogs()).enabled(
+            app,
+            LogLevel.info
+        )
+    );
+    test.ok(
+        FallbackLogs(primary: CollectedLogs(), fallback: DiscardingLogs()).enabled(
+            app,
+            LogLevel.info
+        )
+    );
+    test.ok(!BestEffortLogs(DiscardingLogs()).enabled(app, LogLevel.error));
+}

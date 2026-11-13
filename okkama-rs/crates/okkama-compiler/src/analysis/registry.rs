@@ -137,7 +137,8 @@ pub struct MethodInfo<'a> {
     /// `None` — `is void`; successor — `Ty::Successor`.
     pub result: Option<Ty>,
     pub successor: bool,
-    pub private: bool,
+    /// `hidden` (#365): callable only through `self` from the object's own actions.
+    pub hidden: bool,
     pub variadic: bool,
     pub is_async: bool,
     /// Системные действия (`NativeFailure.code()`) тела не имеют.
@@ -265,6 +266,8 @@ pub struct Standard {
     pub order: Option<EnumId>,
     pub iterating: Option<RoleId>,
     pub cursor: Option<RoleId>,
+    /// `collections/iteration.Batching<T>`: a stream walked batch by batch (#465).
+    pub batching: Option<RoleId>,
     pub sequencing: Option<RoleId>,
     pub sizing: Option<RoleId>,
     pub byte_source: Option<RoleId>,
@@ -326,6 +329,9 @@ pub struct Registry<'a> {
     pending_keys: Vec<(usize, Ty, Span)>,
     /// Specializations whose key parameters are checked after the bodies (#242).
     pub key_uses: Vec<(usize, ObjectId, Vec<Ty>, Span)>,
+    /// Names two or more nominal declarations of the program share: their
+    /// types are qualified in diagnostics (#338).
+    shared_names: HashSet<String>,
 }
 
 /// Объекты std без конструктора: их создаёт только рантайм.
@@ -393,14 +399,22 @@ impl<'a> Registry<'a> {
             pending_bounds: Vec::new(),
             pending_keys: Vec::new(),
             key_uses: Vec::new(),
+            shared_names: HashSet::new(),
         };
         registry.entry_module = registry.root();
         registry.add_system();
+        let system = (
+            registry.objects.len(),
+            registry.roles.len(),
+            registry.enums.len(),
+            registry.handles.len(),
+        );
         let count = registry.modules.len();
         for module in 0..count {
             registry.current = module;
             registry.register_names(module);
         }
+        registry.shared_names = registry.shared_names(system);
         registry.share_root_names();
         for module in 0..count {
             registry.current = module;
@@ -442,7 +456,7 @@ impl<'a> Registry<'a> {
     /// Почему `ty` не может быть ключом словаря; `None` — может (#212).
     /// Ключ — скаляр, enum, параметр типа (проверяется при исполнении) или
     /// объект-значение: без `destroy` и cap, все поля которого — скаляры
-    /// (также `byte` и `rat`), enum или такие же объекты. Объекты
+    /// (также `byte`), enum или такие же объекты. Объекты
     /// неизменяемы, поэтому равенство и порядок ключа — по полям, как `==`.
     pub fn key_problem(&self, ty: &Ty) -> Option<String> {
         if ty.is_map_key() || matches!(ty, Ty::Param(_)) || ty.is_error() {
@@ -544,7 +558,7 @@ impl<'a> Registry<'a> {
         visiting.push(*id);
         let problem = info.fields.iter().find_map(|field| {
             let field_ty = field.ty.subst(&env);
-            let fits = field_ty.is_map_key() || matches!(field_ty, Ty::Byte | Ty::Rat | Ty::Error);
+            let fits = field_ty.is_map_key() || matches!(field_ty, Ty::Byte | Ty::Error);
             if fits {
                 return None;
             }
@@ -730,7 +744,7 @@ impl<'a> Registry<'a> {
             params: Vec::new(),
             result: Some(Ty::Str),
             successor: false,
-            private: false,
+            hidden: false,
             variadic: false,
             is_async: false,
             decl: None,
@@ -1747,7 +1761,7 @@ impl<'a> Registry<'a> {
                 let Some(action) = method.decl else {
                     continue;
                 };
-                if method.private {
+                if method.hidden {
                     continue;
                 }
                 let leak = method
@@ -2247,7 +2261,6 @@ impl<'a> Registry<'a> {
                 }
                 ast::ObjectMember::Constructor(ctor) => ctor_decls.push(ctor),
                 ast::ObjectMember::Action(action) => actions.push(action),
-                ast::ObjectMember::Private(section) => actions.extend(section.actions.iter()),
                 ast::ObjectMember::Destroy(block) => {
                     if destroy.is_some() {
                         self.error(
@@ -2348,22 +2361,32 @@ impl<'a> Registry<'a> {
                         continue;
                     }
                     if body.is_none() {
-                        let missing: Vec<String> = self.objects[id.0]
+                        let missing: Vec<(String, Span)> = self.objects[id.0]
                             .fields
                             .iter()
                             .enumerate()
                             .filter(|(index, field)| {
                                 !indices.contains(index) && field.default.is_none()
                             })
-                            .map(|(_, field)| field.name.clone())
+                            .map(|(_, field)| (field.name.clone(), field.span))
                             .collect();
-                        if let Some(field) = missing.first() {
-                            self.error(
-                                ctor.span,
-                                format!(
-                                    "Constructor shorthand for \"{name}\" cannot initialize required field \"{field}\""
+                        if let Some((field, at)) = missing.first() {
+                            // A fake's constructor is generated (#276): the
+                            // field is what needs fixing.
+                            match name.strip_suffix("$fake") {
+                                Some(role) => self.error(
+                                    *at,
+                                    format!(
+                                        "Fake field \"{field}\" of role \"{role}\" needs a default: a fake takes no constructor arguments"
+                                    ),
                                 ),
-                            );
+                                None => self.error(
+                                    ctor.span,
+                                    format!(
+                                        "Constructor shorthand for \"{name}\" cannot initialize required field \"{field}\""
+                                    ),
+                                ),
+                            }
                             continue;
                         }
                     }
@@ -2419,7 +2442,7 @@ impl<'a> Registry<'a> {
             let (params, variadic) = self.signature_params(&action.params, &scope, None);
             let mut result = self.resolve_result(&action.result, &scope);
             let successor = matches!(action.result, ast::ResultSpec::Successor { .. });
-            let private = action.visibility == ast::Visibility::Private;
+            let hidden = action.visibility == ast::Visibility::Hidden;
             // Successor объекта — его собственная копия (§11.9); `^Role` бывает
             // только в сигнатуре роли, реализация которой возвращает `^Self`.
             if let Some(Ty::Successor(target)) = &result
@@ -2444,7 +2467,7 @@ impl<'a> Registry<'a> {
                 params,
                 result,
                 successor,
-                private,
+                hidden,
                 variadic,
                 is_async: action.is_async,
                 decl: Some(action),
@@ -2539,8 +2562,22 @@ impl<'a> Registry<'a> {
             .collect();
         let role_display = self.type_name(&Ty::Role(role, args.to_vec()));
         let object = decl.name.text.clone();
+        // A fake is named by its role, not by the generated object, and its
+        // errors point at the fake's own code (#276).
+        let fake = object.ends_with("$fake");
+        let (on, for_role) = if fake {
+            (format!("of the fake of role \"{role_display}\""), String::new())
+        } else {
+            (format!("on object \"{object}\""), format!(" for role \"{role_display}\""))
+        };
         let required: Vec<RoleMethod> = self.roles[role.0].methods.clone();
         for method in required {
+            let mut at = if fake { decl.span } else { decl.name.span };
+            let mut point = |candidate: &MethodInfo<'_>| {
+                if let (true, Some(action)) = (fake, candidate.decl) {
+                    at = action.span;
+                }
+            };
             let params: Vec<Ty> = method.params.iter().map(|(_, ty)| ty.subst(&env)).collect();
             let result = method.result.as_ref().map(|ty| ty.subst(&env));
             let message = {
@@ -2561,20 +2598,22 @@ impl<'a> Registry<'a> {
                 if let Some(found) = named.iter().find(|candidate| {
                     same_params(candidate) && self.result_conforms(id, &candidate.result, &result)
                 }) {
-                    if found.private {
+                    point(found);
+                    if found.hidden {
                         Some(format!(
                             "Role \"{role_display}\" has no public implementation of action \"{}\"",
                             method.name
                         ))
                     } else if found.is_async != method.is_async {
                         Some(format!(
-                            "Action \"{}\" on object \"{object}\" must match async shape for role \"{role_display}\"",
+                            "Action \"{}\" {on} must match async shape{for_role}",
                             method.name
                         ))
                     } else {
                         None
                     }
                 } else if let Some(first) = named.first() {
+                    point(first);
                     // Та же арность; среди перегрузок — с той же вариадичностью.
                     let same_arity =
                         |candidate: &&&MethodInfo<'_>| candidate.params.len() == params.len();
@@ -2584,12 +2623,18 @@ impl<'a> Registry<'a> {
                         .find(|candidate| candidate.variadic == method.variadic)
                         .or_else(|| named.iter().find(same_arity))
                     {
+                        None if fake => Some(format!(
+                            "Action \"{}\" {on} does not accept {} parameter(s)",
+                            first.name,
+                            params.len()
+                        )),
                         None => Some(format!(
                             "Object \"{object}\" does role \"{role_display}\" but action \"{}\" does not accept {} parameter(s)",
                             first.name,
                             params.len()
                         )),
                         Some(candidate) => {
+                            point(candidate);
                             let mismatch = candidate
                                 .params
                                 .iter()
@@ -2605,14 +2650,14 @@ impl<'a> Registry<'a> {
                             };
                             Some(match mismatch {
                                 Some((position, ((_, actual), expected))) => format!(
-                                    "Action \"{}\" parameter {} on object \"{object}\" must be {} for role \"{role_display}\", got {}",
+                                    "Action \"{}\" parameter {} {on} must be {}{for_role}, got {}",
                                     method.name,
                                     position + 1,
                                     shown(expected, method.variadic, position),
                                     shown(actual, candidate.variadic, position)
                                 ),
                                 None => format!(
-                                    "Action \"{}\" on object \"{object}\" must return {} for role \"{role_display}\", got {}",
+                                    "Action \"{}\" {on} must return {}{for_role}, got {}",
                                     method.name,
                                     self.result_name(&result),
                                     self.result_name(&candidate.result)
@@ -2620,6 +2665,11 @@ impl<'a> Registry<'a> {
                             })
                         }
                     }
+                } else if fake {
+                    Some(format!(
+                        "The fake of role \"{role_display}\" does not implement action \"{}\"",
+                        method.name
+                    ))
                 } else {
                     Some(format!(
                         "Object \"{object}\" does role \"{role_display}\" but does not implement action \"{}\"",
@@ -2628,7 +2678,7 @@ impl<'a> Registry<'a> {
                 }
             };
             if let Some(message) = message {
-                self.error(decl.name.span, message);
+                self.error(at, message);
             }
         }
     }
@@ -2698,6 +2748,7 @@ impl<'a> Registry<'a> {
             },
             iterating: role(lookup(self, "collections/iteration", "Iterating")),
             cursor: role(lookup(self, "collections/iteration", "Cursor")),
+            batching: role(lookup(self, "collections/iteration", "Batching")),
             sequencing: role(lookup(self, "collections/sequence", "Sequencing")),
             sizing: role(lookup(self, "size", "Sizing")),
             byte_source: role(lookup(self, "io/stream", "ByteSource")),
@@ -2725,7 +2776,7 @@ impl<'a> Registry<'a> {
             params,
             result,
             successor: false,
-            private: false,
+            hidden: false,
             variadic: false,
             is_async: false,
             decl: None,
@@ -3025,7 +3076,78 @@ impl<'a> Registry<'a> {
 
     // ----- имена типов для сообщений -----
 
+    /// Names that two or more nominal declarations of the program share; the
+    /// system's own declarations, before `system`, are not counted.
+    fn shared_names(&self, system: (usize, usize, usize, usize)) -> HashSet<String> {
+        let (objects, roles, enums, handles) = system;
+        let names = self.objects[objects..]
+            .iter()
+            .map(|object| object.name.as_str())
+            .chain(self.roles[roles..].iter().map(|role| role.name.as_str()))
+            .chain(self.enums[enums..].iter().map(|info| info.name.as_str()))
+            .chain(self.handles[handles..].iter().map(|handle| handle.name.as_str()));
+        let mut seen: HashMap<&str, usize> = HashMap::new();
+        for name in names {
+            *seen.entry(name).or_default() += 1;
+        }
+        seen.into_iter()
+            .filter(|(_, count)| *count > 1)
+            .map(|(name, _)| name.to_string())
+            .collect()
+    }
+
+    /// The name of `ty` in a diagnostic of the module being checked.
     pub fn type_name(&self, ty: &Ty) -> String {
+        self.type_name_in(self.current, ty)
+    }
+
+    /// The name of `ty` in a diagnostic of module `module` (#338): a nominal
+    /// type whose name another declaration of the program also has is
+    /// qualified as that module can name it — `shop.Money` through a
+    /// namespace, `Money` when that is the `Money` in its scope, otherwise
+    /// `Money from "bank/money"`. Other names stay short.
+    pub fn type_name_in(&self, module: usize, ty: &Ty) -> String {
+        self.render(ty, Some(module))
+    }
+
+    /// The source name of `ty`, never qualified: names of instances in the IR
+    /// and texts the program reports at run time.
+    pub fn plain_type_name(&self, ty: &Ty) -> String {
+        self.render(ty, None)
+    }
+
+    /// The name of a nominal declaration `of`, declared in `declared`, as
+    /// module `context` names it.
+    fn nominal(&self, name: &str, of: TypeRef, declared: usize, context: Option<usize>) -> String {
+        let Some(context) = context.filter(|_| self.shared_names.contains(name)) else {
+            return name.to_string();
+        };
+        let module = &self.modules[context];
+        if module.scope.types.get(name) == Some(&of) {
+            return name.to_string();
+        }
+        let visible = !self.modules[declared].hidden.contains(name);
+        let alias = module
+            .namespaces
+            .iter()
+            .filter(|(_, namespace)| {
+                namespace.module == declared
+                    && namespace
+                        .only
+                        .as_ref()
+                        .is_none_or(|only| only.iter().any(|taken| taken == name))
+            })
+            .map(|(alias, _)| alias)
+            .filter(|_| visible)
+            .min();
+        match alias {
+            Some(alias) => format!("{alias}.{name}"),
+            None => format!("{name} from \"{}\"", self.modules[declared].name),
+        }
+    }
+
+    fn render(&self, ty: &Ty, context: Option<usize>) -> String {
+        let name = |ty: &Ty| self.render(ty, context);
         match ty {
             Ty::Int => "int".to_string(),
             Ty::Bool => "bool".to_string(),
@@ -3037,40 +3159,40 @@ impl<'a> Registry<'a> {
             Ty::Any => "any".to_string(),
             Ty::Range => "range".to_string(),
             Ty::Array(element) if **element == Ty::Never => "[]".to_string(),
-            Ty::Array(element) => format!("@{}", self.type_name(element)),
+            Ty::Array(element) => format!("@{}", name(element)),
             Ty::Map(key, _) if **key == Ty::Never => "[:]".to_string(),
-            Ty::Map(key, value) => format!("%{}:{}", self.type_name(key), self.type_name(value)),
-            Ty::Object(id, args) => self.applied(&self.objects[id.0].name, args),
-            Ty::Role(id, args) => self.applied(&self.roles[id.0].name, args),
-            Ty::Variant(id, args) => {
-                let name = &self.enums[id.0].name;
-                if args.is_empty() {
-                    name.clone()
-                } else {
-                    format!(
-                        "{}<{}>",
-                        name,
-                        args.iter()
-                            .map(|t| self.type_name(t))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                }
+            Ty::Map(key, value) => format!("%{}:{}", name(key), name(value)),
+            Ty::Object(id, args) => self.applied(&self.object_name(*id, context), args, context),
+            Ty::Role(id, args) => {
+                let info = &self.roles[id.0];
+                let role = self.nominal(&info.name, TypeRef::Role(*id), info.module, context);
+                self.applied(&role, args, context)
             }
-            Ty::Enum(id) => self.enums[id.0].name.clone(),
-            Ty::Handle(id) => self.handles[id.0].name.clone(),
-            Ty::Successor(inner) => format!("^{}", self.type_name(inner)),
+            Ty::Variant(id, args) => {
+                let info = &self.enums[id.0];
+                let variant = self.nominal(&info.name, TypeRef::Enum(*id), info.module, context);
+                self.applied(&variant, args, context)
+            }
+            Ty::Enum(id) => {
+                let info = &self.enums[id.0];
+                self.nominal(&info.name, TypeRef::Enum(*id), info.module, context)
+            }
+            Ty::Handle(id) => {
+                let info = &self.handles[id.0];
+                self.nominal(&info.name, TypeRef::Handle(*id), info.module, context)
+            }
+            Ty::Successor(inner) => format!("^{}", name(inner)),
             Ty::Param(param) => self.params[param.0].name.clone(),
             Ty::Action(action) => {
                 let params: Vec<String> = action
                     .params
                     .iter()
-                    .map(|param| self.type_name(param))
+                    .map(&name)
                     .collect();
                 let result = action
                     .result
                     .as_ref()
-                    .map_or_else(|| "void".to_string(), |result| self.type_name(result));
+                    .map_or_else(|| "void".to_string(), &name);
                 format!(
                     "{}({}) is {result}",
                     if action.is_async { "async " } else { "" },
@@ -3078,24 +3200,29 @@ impl<'a> Registry<'a> {
                 )
             }
             Ty::Future(None) => "Future<void>".to_string(),
-            Ty::Future(Some(inner)) => format!("Future<{}>", self.type_name(inner)),
+            Ty::Future(Some(inner)) => format!("Future<{}>", name(inner)),
             Ty::Cap(id, args, cap) => format!(
                 "{}::{}",
-                self.applied(&self.objects[id.0].name, args),
+                self.applied(&self.object_name(*id, context), args, context),
                 self.objects[id.0].caps[*cap].name
             ),
-            Ty::Varargs(inner) => format!("...{}", self.type_name(inner)),
+            Ty::Varargs(inner) => format!("...{}", name(inner)),
             Ty::Never => "never".to_string(),
             Ty::Test => "test".to_string(),
             Ty::Error => "<error>".to_string(),
         }
     }
 
-    fn applied(&self, name: &str, args: &[Ty]) -> String {
+    fn object_name(&self, id: ObjectId, context: Option<usize>) -> String {
+        let info = &self.objects[id.0];
+        self.nominal(&info.name, TypeRef::Object(id), info.module, context)
+    }
+
+    fn applied(&self, name: &str, args: &[Ty], context: Option<usize>) -> String {
         if args.is_empty() {
             return name.to_string();
         }
-        let args: Vec<String> = args.iter().map(|arg| self.type_name(arg)).collect();
+        let args: Vec<String> = args.iter().map(|arg| self.render(arg, context)).collect();
         format!("{name}<{}>", args.join(", "))
     }
 
@@ -3103,6 +3230,13 @@ impl<'a> Registry<'a> {
         result
             .as_ref()
             .map_or_else(|| "void".to_string(), |ty| self.type_name(ty))
+    }
+
+    /// `result_name`, never qualified (the editor's hover and completion).
+    pub fn plain_result_name(&self, result: &Option<Ty>) -> String {
+        result
+            .as_ref()
+            .map_or_else(|| "void".to_string(), |ty| self.plain_type_name(ty))
     }
 }
 

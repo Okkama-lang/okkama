@@ -1,45 +1,112 @@
 module crypto/aes_gcm v1.0.0;
 
+// AES-GCM (NIST SP 800-38D): a 16- or 32-byte key, a 12-byte nonce and a
+// 16-byte tag.
+//
+//     let cipher = AesGcm(SecretBytes(SystemEntropy().bytes(32)));
+//     let nonce = RandomNonce(SystemEntropy(), 12).bytes();
+//     let sealed = cipher.sealed(nonce, aad, plaintext);
+//     let plain = cipher.opened(nonce, aad, sealed);
+//
+// Never reuse a nonce with a key. For random nonces over many messages,
+// XChaCha20-Poly1305 is safer.
+
 import "crypto/aead" take Sealing;
+import "encoding/utf" take Utf8Encoded, Utf8Decoded;
 import "crypto/secret" take SecretBytes;
 import "crypto/error" take HostOperation, InvalidCryptoInput, AuthenticationFailed;
 import "encoding/hex" take HexEncoded;
 
-// AES-GCM (NIST SP 800-38D) with a 128- or 256-bit key, 96-bit nonce and
-// 128-bit tag. The key is a SecretBytes capability; it is exported to the host
-// per operation. See crypto/aead for the sealing contract.
+// AES-GCM with a 128- or 256-bit key.
 object AesGcm does Sealing {
     has key is SecretBytes;
+
+    // A cipher with key, which must be 16 or 32 bytes.
     AesGcm(key is SecretBytes) {
-        confirm key.size() == 16 || key.size() == 32 else throw InvalidCryptoInput.because("AES-GCM key must be 16 or 32 bytes");
+        confirm key.size() == 16 || key.size() == 32
+            else throw InvalidCryptoInput.because("AES-GCM key must be 16 or 32 bytes");
         self.key = key;
     }
-    nonce_size() is int { 12; }
-    tag_size() is int { 16; }
-    algorithm() is string { if key.size() == 16 { "aes-128-gcm"; } else { "aes-256-gcm"; } }
-    sealed(nonce is @byte, aad is @byte, plaintext is @byte) is @byte {
-        HostOperation("aead-seal:" + self.algorithm(), [key.export_bytes(), nonce, aad, plaintext]).bytes();
+
+    // How many bytes a nonce has.
+    nonce_size() is int {
+        12;
     }
+
+    // How many bytes the tag adds.
+    tag_size() is int {
+        16;
+    }
+
+    // "aes-128-gcm" or "aes-256-gcm".
+    algorithm() is string {
+        if key.size() == 16 {
+            "aes-128-gcm";
+        }
+        else {
+            "aes-256-gcm";
+        }
+    }
+
+    // plaintext encrypted and authenticated with aad, under nonce; never reuse
+    // a nonce with the same key.
+    sealed(nonce is @byte, aad is @byte, plaintext is @byte) is @byte {
+        HostOperation(operation: "aead-seal:" + self.algorithm(), arguments: [key.export_bytes(), nonce, aad, plaintext]).bytes();
+    }
+
+    // The plaintext of sealed; AuthenticationFailed when it or aad was changed.
     opened(nonce is @byte, aad is @byte, sealed is @byte) is @byte {
-        HostOperation("aead-open:" + self.algorithm(), [key.export_bytes(), nonce, aad, sealed]).bytes();
+        HostOperation(operation: "aead-open:" + self.algorithm(), arguments: [key.export_bytes(), nonce, aad, sealed]).bytes();
+    }
+
+    // Text, as UTF-8: cipher.sealed(nonce, "record 7", "balance: 42").
+    sealed(nonce is @byte, aad is string, text is string) is @byte {
+        self.sealed(nonce, Utf8Encoded(aad).bytes(), Utf8Encoded(text).bytes());
+    }
+
+    // The same with aad as UTF-8 text.
+    opened(nonce is @byte, aad is string, sealed is @byte) is @byte {
+        self.opened(nonce, Utf8Encoded(aad).bytes(), sealed);
+    }
+
+    // The plaintext as UTF-8 text.
+    opened_text(nonce is @byte, aad is string, sealed is @byte) is string {
+        Utf8Decoded(self.opened(nonce, Utf8Encoded(aad).bytes(), sealed)).string();
     }
 }
 
 test "AES-GCM matches the GCM specification test case 2" {
-    let zeros is @byte = (0..16).map() -> i { 0.byte(); };
-    let nonce is @byte = (0..12).map() -> i { 0.byte(); };
+    let zeros is @byte = (0..16).map() -> i {
+        0.byte();
+    };
+    let nonce is @byte = (0..12).map() -> i {
+        0.byte();
+    };
     let sealed = AesGcm(SecretBytes(zeros)).sealed(nonce, [], zeros);
-    test.is(HexEncoded(sealed).string(), "0388dace60b6a392f328c2b971b2fe78ab6e47d42cec13bdf53a67b21257bddf");
+    test.is(
+        HexEncoded(sealed).string(),
+        "0388dace60b6a392f328c2b971b2fe78ab6e47d42cec13bdf53a67b21257bddf"
+    );
     test.is(AesGcm(SecretBytes(zeros)).opened(nonce, [], sealed), zeros);
 }
 
 test "AES-GCM rejects tampering and wrong sizes" {
-    let key is @byte = (0..32).map() -> i { i.byte(); };
-    let nonce is @byte = (0..12).map() -> i { 7.byte(); };
+    let key is @byte = (0..32).map() -> i {
+        i.byte();
+    };
+    let nonce is @byte = (0..12).map() -> i {
+        7.byte();
+    };
     let cipher = AesGcm(SecretBytes(key));
     let sealed = cipher.sealed(nonce, [1.byte()], [5.byte(), 6.byte()]);
     test.is(sealed.size(), 18);
-    test.throws(AuthenticationFailed) { cipher.opened(nonce, [2.byte()], sealed); };
-    test.throws(InvalidCryptoInput) { cipher.opened(nonce.slice(0, 11), [1.byte()], sealed); };
-    test.throws(InvalidCryptoInput) { AesGcm(SecretBytes([1.byte()])); };
+    test.throws(AuthenticationFailed) {
+        cipher.opened(nonce, [2.byte()], sealed);
+    };
+    test.throws(InvalidCryptoInput) {
+        cipher.opened(nonce.slice(0, 11), [1.byte()], sealed);
+    };
+    test.throws(InvalidCryptoInput) {
+        AesGcm(SecretBytes([1.byte()]));
+    };
 }

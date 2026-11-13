@@ -1,9 +1,23 @@
 module testing/context v1.0.0;
+
+// Whether code runs inside a test. Checks and test doubles require it.
+
 import "runtime/testing" take test_context_active;
+
+// The running test.
 object TestContext {
+    // The context.
     TestContext();
-    require() is void {confirm test_context_active() else throw MissingTestContext.missing;}
+
+    // Throws MissingTestContext outside a running test.
+    require() is void {
+        confirm test_context_active() else throw MissingTestContext.missing;
+    }
 }
+
+// Test-only code ran outside a test.
 enum MissingTestContext is Error = (missing);
 
-test "test context requirement succeeds only in a running case" {TestContext().require();}
+test "test context requirement succeeds only in a running case" {
+    TestContext().require();
+}

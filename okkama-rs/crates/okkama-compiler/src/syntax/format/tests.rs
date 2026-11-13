@@ -191,8 +191,8 @@ fn glued_generic_close_and_assignment_split_safely() {
 }
 
 #[test]
-fn match_cases_and_private_sections_are_laid_out() {
-    let text = "module app v1.0.0;\nobject A { name() is string { match kind { case 1, 2 { \"a\"; } else { \"b\"; } } }\nprivate:\nhelper() is int { 1; } }\n";
+fn match_cases_and_hidden_actions_are_laid_out() {
+    let text = "module app v1.0.0;\nobject A { name() is string { match kind { case 1, 2 { \"a\"; } else { \"b\"; } } }\nhidden helper() is int { 1; } }\n";
     assert_eq!(
         fmt(text),
         "module app v1.0.0;
@@ -209,11 +209,59 @@ object A {
         }
     }
 
-    private:
-
-    helper() is int {
+    hidden helper() is int {
         1;
     }
+}
+"
+    );
+}
+
+#[test]
+fn tests_among_hidden_actions_keep_their_place() {
+    // #277, #365: members print where they were written, with their comments.
+    let text = "module app v1.0.0;\nobject A {\nA();\nhidden helper() is int { 1; }\n// checks\ntest \"t\" { test.ok(true); }\nasync test \"u\" { test.ok(true); }\nlast_one() is int { 2; }\n}\n";
+    let formatted = "module app v1.0.0;
+
+object A {
+    A();
+
+    hidden helper() is int {
+        1;
+    }
+
+    // checks
+    test \"t\" {
+        test.ok(true);
+    }
+
+    async test \"u\" {
+        test.ok(true);
+    }
+
+    last_one() is int {
+        2;
+    }
+}
+";
+    assert_eq!(fmt(text), formatted);
+    assert_eq!(fmt(formatted), formatted);
+}
+
+#[test]
+fn map_values_that_start_with_a_parenthesis_keep_it() {
+    // #263: the parentheses of a map value survive formatting, and so does
+    // the entry; `[LIMIT:(4)]` gains the space every entry has.
+    let text = "module app v1.0.0;\nmain() is int {\nlet d = [\"a\": 1, \"b\": (2 + 3) * 2];\nlet c = [\"x\": (-1)];\nlet g = [LIMIT:(4)];\n0;\n}\n";
+    assert_eq!(
+        fmt(text),
+        "module app v1.0.0;
+
+main() is int {
+    let d = [\"a\": 1, \"b\": (2 + 3) * 2];
+    let c = [\"x\": (-1)];
+    let g = [LIMIT: (4)];
+    0;
 }
 "
     );

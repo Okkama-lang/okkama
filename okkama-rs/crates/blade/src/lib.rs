@@ -10,7 +10,7 @@ use std::{env::Args, io::Write, process::ExitCode};
 use std::path::PathBuf;
 //use std::path::{Path, PathBuf};
 
-use install::{Report, Unlock};
+use install::Report;
 
 /// Help text shared by Blade command-line front ends.
 pub const HELP: &str = "\
@@ -18,19 +18,28 @@ blade — Blade command-line tool
 
 USAGE:
     blade new NAME                   create a project NAME
-    blade install                    install the dependencies of blade.toml into pkg/
-    blade install SOURCE [VERSION]   add a dependency and install it; SOURCE is a
-                                     package directory or a git repository
-                                     (--git treats a local directory as git)
-    blade remove NAME                remove a dependency
-    blade update [NAME...]           install the newest allowed versions
+    blade add NAME GIT [MIN]         depend on the package in the git repository
+                                     GIT, version MIN or later (default: its
+                                     newest tag), and install it; adding NAME
+                                     again with another MIN moves it
+    blade sync                       install exactly what blade.lock records into
+                                     pkg/; without blade.lock, resolve and write it
+    blade update [NAME...]           resolve NAMEs again, the others staying where
+                                     they are; without NAME, everything
+    blade remove NAME                drop a dependency and what only it needed
     blade build                      compile the project as [build] says
     blade run [-- ARGS...]           build if sources changed, then run it as
                                      [run] says; ARGS follow [run] args
     blade --help
     blade --version
 
-VERSION is 1.2.3 (compatible with 1.2.3), 1.*, 1.2.*, =1.2.3 or *.
+MIN is MAJOR.MINOR.PATCH: that version or a later one of the same major.
+Blade installs the lowest version that meets every minimum in the project,
+so a new release changes nothing until a minimum is raised. A package is a
+git repository with its modules in src/, imported as pkg/NAME/src/…; its
+version is its vX.Y.Z tag, and it needs blade.toml only for dependencies of
+its own. `blade install` is now `blade sync`, `blade install SOURCE` is now
+`blade add`.
 
 blade.toml, build and run (all keys optional, defaults shown):
     [build]
@@ -61,7 +70,15 @@ struct CommandNew {
     args: Vec<String>,
 }
 
+struct CommandAdd {
+    args: Vec<String>,
+}
+
 struct CommandInstall {
+    args: Vec<String>,
+}
+
+struct CommandSync {
     args: Vec<String>,
 }
 
@@ -191,16 +208,56 @@ impl Command for CommandInstall {
             Ok(root) => root,
             Err(e) => return failure(&e),
         };
+        // Kept for one release, as the commands that replace them.
         let result = match rest.as_slice() {
-            [] if !git => install::install(&root, &Unlock::Nothing),
-            [source] => install::add(&root, source, None, git).map(|(_, report)| report),
-            [source, version] => install::add(&root, source, Some(version), git).map(|(_, report)| report),
+            [] if !git => {
+                eprintln!("blade: `blade install` is now `blade sync`");
+                install::sync(&root)
+            }
+            [source] | [source, _] => {
+                let version = rest.get(1).map(|version| version.as_str());
+                install::add_source(&root, source, version, git).map(|(name, report)| {
+                    let min = version.map(|min| format!(" {min}")).unwrap_or_default();
+                    eprintln!("blade: `blade install SOURCE` is now `blade add {name} {source}{min}`");
+                    report
+                })
+            }
             _ => {
                 eprint!("{HELP}");
                 return ExitCode::from(2);
             }
         };
         finish(result)
+    }
+}
+
+impl Command for CommandAdd {
+    fn execute(&self) -> ExitCode {
+        let (name, git, min) = match self.args.as_slice() {
+            [name, git] => (name, git, None),
+            [name, git, min] => (name, git, Some(min.as_str())),
+            _ => {
+                eprint!("{HELP}");
+                return ExitCode::from(2);
+            }
+        };
+        match project_root() {
+            Ok(root) => finish(install::add(&root, name, git, min)),
+            Err(e) => failure(&e),
+        }
+    }
+}
+
+impl Command for CommandSync {
+    fn execute(&self) -> ExitCode {
+        if !self.args.is_empty() {
+            eprint!("{HELP}");
+            return ExitCode::from(2);
+        }
+        match project_root() {
+            Ok(root) => finish(install::sync(&root)),
+            Err(e) => failure(&e),
+        }
     }
 }
 
@@ -214,11 +271,7 @@ impl Command for CommandRemove {
             Ok(root) => root,
             Err(e) => return failure(&e),
         };
-        match manifest::remove_dependency(&root, name) {
-            Ok(true) => finish(install::install(&root, &Unlock::Nothing)),
-            Ok(false) => failure(&format!("\"{name}\" is not a dependency in {}", manifest::MANIFEST)),
-            Err(e) => failure(&e),
-        }
+        finish(install::remove(&root, name))
     }
 }
 
@@ -228,12 +281,7 @@ impl Command for CommandUpdate {
             Ok(root) => root,
             Err(e) => return failure(&e),
         };
-        let unlock = if self.args.is_empty() {
-            Unlock::All
-        } else {
-            Unlock::Packages(self.args.iter().cloned().collect())
-        };
-        finish(install::install(&root, &unlock))
+        finish(install::update(&root, &self.args))
     }
 }
 
@@ -385,7 +433,9 @@ impl Cli {
         let cmd: Box<dyn Command> = match command.as_deref() {
             Some(_) if help                       => Box::new(CommandUsage::new(false)),
             Some("new")                           => Box::new(CommandNew::new(args)),
+            Some("add")                           => Box::new(CommandAdd { args: args.collect() }),
             Some("install")                       => Box::new(CommandInstall { args: args.collect() }),
+            Some("sync")                          => Box::new(CommandSync { args: args.collect() }),
             Some("remove")                        => Box::new(CommandRemove { args: args.collect() }),
             Some("update")                        => Box::new(CommandUpdate { args: args.collect() }),
             Some("build")                         => Box::new(CommandBuild { args: args.collect() }),

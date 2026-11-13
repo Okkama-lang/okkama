@@ -54,6 +54,10 @@ pub(super) struct Cleanup<'r> {
     defers: Vec<&'r thir::Expr>,
     /// `F_0 … F_n`.
     fails: Vec<FailBlock>,
+    /// The region of one step of a traversal (#483, #484): it owns the
+    /// current cursor or batch only, so call results and values of the body
+    /// are tracked by the scope around the loop, not here.
+    traversal: bool,
 }
 
 impl<'r> BodyLowerer<'_, 'r, '_> {
@@ -61,6 +65,38 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
     pub(super) fn push_scope(&mut self) {
         self.scopes.push(Default::default());
         self.cleanups.push(Cleanup::default());
+    }
+
+    /// Open the region of one traversal step (#483, #484). Its index is the
+    /// scope `last` leaves; `next` stays inside it.
+    pub(super) fn open_traversal(&mut self, span: Span) -> usize {
+        self.push_scope();
+        let index = self.cleanups.len() - 1;
+        self.cleanups[index].traversal = true;
+        self.open_cleanup(span);
+        index
+    }
+
+    /// Close the traversal scope `open_traversal` opened (its fail blocks).
+    pub(super) fn close_traversal(&mut self, span: Span) -> Result<()> {
+        let closed = self.close_cleanup(span);
+        self.scopes.pop();
+        closed
+    }
+
+    /// The region of traversal scope `index`, if the module has ownership.
+    pub(super) fn traversal_region(&self, index: usize) -> Option<ValueId> {
+        self.cleanups[index].region
+    }
+
+    /// The region that tracks fresh values at scope `scope`: the nearest one
+    /// not deeper than it that is not a traversal step's.
+    pub(super) fn tracking_region_at(&self, scope: usize) -> Option<ValueId> {
+        self.cleanups[..=scope.min(self.cleanups.len() - 1)]
+            .iter()
+            .rev()
+            .filter(|cleanup| !cleanup.traversal)
+            .find_map(|cleanup| cleanup.region)
     }
 
     pub(super) fn pop_scope(&mut self) {
@@ -102,9 +138,17 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         }
     }
 
+    /// A region of this body takes a value of `ty` (#328).
+    pub(super) fn note_owned(&mut self, ty: &Type) {
+        if self.settles && !self.owned_types.contains(ty) {
+            self.owned_types.push(ty.clone());
+        }
+    }
+
     pub(super) fn adopt(&mut self, region: ValueId, value: &Typed, span: Span) {
         // A builder is never walked: what it holds is handed over on push.
         if !self.ctx.is_plain(&value.ty) && !value.ty.is_builder() {
+            self.note_owned(&value.ty);
             self.b.emit_void(
                 InstKind::RegionAdopt {
                     region,
@@ -139,6 +183,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         let Some(root) = self.region_at(0) else {
             return;
         };
+        self.note_owned(&value.ty);
         let nested: Vec<ValueId> = self
             .cleanups
             .iter()
@@ -170,6 +215,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         let Some(home) = self.region_at(scope) else {
             return;
         };
+        self.note_owned(&value.ty);
         let nested: Vec<ValueId> = self.cleanups[scope + 1..]
             .iter()
             .filter_map(|cleanup| cleanup.region)
@@ -186,7 +232,8 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         if self.ctx.is_plain(&value.ty) || value.ty.is_builder() {
             return;
         }
-        if let Some(region) = self.region_at(self.cleanups.len() - 1) {
+        if let Some(region) = self.tracking_region_at(self.cleanups.len() - 1) {
+            self.note_owned(&value.ty);
             self.b.emit_void(
                 InstKind::RegionTrack {
                     region,

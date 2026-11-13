@@ -1,75 +1,329 @@
 module http/conversation v1.0.0;
-import "http/message" take Request,Response;
+
+// Conversations: one connection speaking HTTP/1.1 or HTTP/2, as a client pool
+// holds them.
+//
+// HttpTransport keeps conversations per origin and sends each request on one
+// that is accepting. An HTTP/1.1 conversation takes one request at a time; an
+// HTTP/2 one multiplexes. Programs use HttpClient instead.
+
+import "http/message" take Request, Response;
 import "http/transport_observation" take HttpResponseObservation;
 import "http/version" take HttpVersion;
 import "http/body" take EmptyBody;
 import "http/client_request" take HttpDirectRequest;
 import "http/proxy_request" take HttpForwardRequest;
 import "http/header" take Header;
-import "url/value" take Url;
+import "url/value" take UrlParts;
 import "http/endpoint" take EndpointAllowing;
-import "http/http1_session" take Http1Session,Http1Exchange;
-import "http/http2_session" take Http2Session,Http2Exchange;
+import "http/http1_session" take Http1Session, Http1Exchange;
+import "http/http2_session" take Http2Session, Http2Exchange;
 import "http/exchange" take ExchangeDetails;
 import "collections/sequence" take Sequencing;
 import "io/stream" take Closing;
 import "async/scope" take FutureGroup;
-import "http/http2_connection" take Http2Connecting,Http2Acquisition;
+import "http/http2_connection" take Http2Connecting, Http2Acquisition;
 import "http/connection" take HttpAcquisitionCleanup;
 import "async/atomic" take Atomic;
 import "async/event" take Event;
+
+// One client connection speaking HTTP.
 role HttpConversation {
-    closed() is bool;close() is void;accepting() is bool;multiplexed() is bool;
-    async settled() is bool;async exchange(request is Request) is HttpConversationExchange;
+    // Whether it was closed.
+    closed() is bool;
+    // Closes the connection.
+    close() is void;
+    // Whether it takes another request now.
+    accepting() is bool;
+    // Whether it carries several requests at once.
+    multiplexed() is bool;
+    // Waits until every exchange on it has finished.
+    async settled() is bool;
+    // Sends request and gives the response head; the body follows.
+    async exchange(request is Request) is HttpConversationExchange;
 }
-role HttpConversationConnecting {async acquisition() is HttpConversationAcquisition;}
+
+// How to open a conversation.
+role HttpConversationConnecting {
+    // A new conversation and how it connected.
+    async acquisition() is HttpConversationAcquisition;
+}
+
+// How a pool reaches origins: directly or through a proxy.
 role HttpConversationRouting {
-    connecting(url is Url) is HttpConversationConnecting;
-    allowed(url is Url,details is ExchangeDetails,access is EndpointAllowing) is bool;
+    // How to reach url.
+    connecting(url is UrlParts) is HttpConversationConnecting;
+    // Whether a connection with details may serve url under access.
+    allowed(url is UrlParts, details is ExchangeDetails, access is EndpointAllowing) is bool;
 }
+
+// A new conversation and how it connected.
 object HttpConversationAcquisition {
-    has session is HttpConversation;has details is ExchangeDetails;
-    HttpConversationAcquisition(session is HttpConversation,details is ExchangeDetails){self.session=session;self.details=details;}
-    session() is HttpConversation{session;}details() is ExchangeDetails{details;}
+    has session is HttpConversation;
+    has details is ExchangeDetails;
+
+    // As given.
+    HttpConversationAcquisition(session is HttpConversation, details is ExchangeDetails) {
+        self.session = session;
+        self.details = details;
+    }
+
+    // The conversation.
+    session() is HttpConversation {
+        session;
+    }
+
+    // How it connected.
+    details() is ExchangeDetails {
+        details;
+    }
 }
+
+// One request on a conversation and its response.
 object HttpConversationExchange does Closing {
-    has request is Request;has response is Response;has information is @Response;has lease is Closing;
-    HttpConversationExchange(request is Request,response is Response,information is @Response,lease is Closing){self.request=request;self.response=response;self.information=information;self.lease=lease;}
-    request() is Request{request;}response() is Response{response;}informational() is Sequencing<Response>{information;}
-    closed() is bool{lease.closed();}close() is void{lease.close();}
-}
-object Http1Conversation does HttpConversation,Closing {
-    has origin is Http1Session;has observation is @HttpResponseObservation;has forward is bool;has proxy_fields is @Header;Http1Conversation(origin is Http1Session){self.origin=origin;observation=[];forward=false;proxy_fields=[];}
-    Http1Conversation(origin is Http1Session,observation is HttpResponseObservation){self.origin=origin;self.observation=[observation];forward=false;proxy_fields=[];}
-    Http1Conversation(origin is Http1Session,observation is HttpResponseObservation,proxy_fields is @Header){self.origin=origin;self.observation=[observation];forward=true;self.proxy_fields=proxy_fields;}
-    closed() is bool{origin.closed();}close() is void{origin.close();}accepting() is bool{!origin.closed();}multiplexed() is bool{false;}
-    async settled() is bool{true;}
-    async exchange(request is Request) is HttpConversationExchange{
-        let source=Request(request.method(),request.target(),request.headers(),request.body(),HttpVersion.http_1_1);let prepared=if forward{HttpForwardRequest(source,proxy_fields).request();}else{HttpDirectRequest(source).request();};
-        for observation -> value{value.begin();}
-        let group is FutureGroup<Http1Exchange>=FutureGroup();let cleanup=HttpConversationSettlement(group);defer await cleanup.close();let pending=origin.exchange(prepared);group.start(pending);let result=await pending;
-        let heads=result.informational();let information is @Response=(0..heads.size()).map()->index{heads.item(index).response(EmptyBody());};HttpConversationExchange(request,result.response(),information,origin);
-    }
-}
-object Http2Conversation does HttpConversation,Closing {
-    has origin is Http2Session;Http2Conversation(origin is Http2Session){self.origin=origin;}
-    closed() is bool{origin.closed();}close() is void{origin.close();}accepting() is bool{origin.accepting();}multiplexed() is bool{true;}
-    async settled() is bool{await origin.settled();}
-    async exchange(request is Request) is HttpConversationExchange{
-        let prepared=Request(request.method(),request.target(),request.headers(),request.body(),HttpVersion.http_2);
-        let group is FutureGroup<Http2Exchange>=FutureGroup();let cleanup=HttpConversationSettlement(group);defer await cleanup.close();let pending=origin.exchange(prepared);group.start(pending);let result=await pending;
-        let heads=result.informational();let information is @Response=(0..heads.size()).map()->index{heads.item(index);};HttpConversationExchange(request,result.response(),information,result);
-    }
-}
-object HttpConversationSettlement<T>{has group is FutureGroup<T>;HttpConversationSettlement(group is FutureGroup<T>){self.group=group;}async close() is void{if group.active()>0{group.cancel();await group.wait();}}}
+    has request is Request;
+    has response is Response;
+    has information is @Response;
+    has lease is Closing;
 
+    // request answered by response after information, holding lease.
+    HttpConversationExchange(
+        request is Request,
+        response is Response,
+        information is @Response,
+        lease is Closing
+    ) {
+        self.request = request;
+        self.response = response;
+        self.information = information;
+        self.lease = lease;
+    }
+
+    // The request.
+    request() is Request {
+        request;
+    }
+
+    // The final response.
+    response() is Response {
+        response;
+    }
+
+    // The 1xx responses before it.
+    informational() is Sequencing<Response> {
+        information;
+    }
+
+    // Whether it was closed.
+    closed() is bool {
+        lease.closed();
+    }
+
+    // Releases the connection for the next request.
+    close() is void {
+        lease.close();
+    }
+}
+
+// An HTTP/1.1 conversation: one request at a time.
+object Http1Conversation does HttpConversation, Closing {
+    has origin is Http1Session;
+    has observation is @HttpResponseObservation;
+    has forward is bool;
+    has proxy_fields is @Header;
+
+    // Over origin.
+    Http1Conversation(origin is Http1Session) {
+        self.origin = origin;
+        observation = [];
+        forward = false;
+        proxy_fields = [];
+    }
+
+    // Over origin, watching for the first response.
+    Http1Conversation(origin is Http1Session, observation is HttpResponseObservation) {
+        self.origin = origin;
+        self.observation = [observation];
+        forward = false;
+        proxy_fields = [];
+    }
+
+    // The same, adding the proxy's fields to every request.
+    Http1Conversation(
+        origin is Http1Session,
+        observation is HttpResponseObservation,
+        proxy_fields is @Header
+    ) {
+        self.origin = origin;
+        self.observation = [observation];
+        forward = true;
+        self.proxy_fields = proxy_fields;
+    }
+
+    // Whether it was closed.
+    closed() is bool {
+        origin.closed();
+    }
+
+    // Closes the connection.
+    close() is void {
+        origin.close();
+    }
+
+    // Whether it takes another request now.
+    accepting() is bool {
+        !origin.closed();
+    }
+
+    // false.
+    multiplexed() is bool {
+        false;
+    }
+
+    // Waits until every exchange on it has finished.
+    async settled() is bool {
+        true;
+    }
+
+    // Sends request and gives the response head; the body follows.
+    async exchange(request is Request) is HttpConversationExchange {
+        let source = Request(
+            method: request::Head::method,
+            target: request::Head::target,
+            headers: request::Head::headers,
+            body: request.body()
+        );
+        let prepared = if forward {
+            HttpForwardRequest(origin: source, proxy_fields: proxy_fields).request();
+        }
+        else {
+            HttpDirectRequest(source).request();
+        };
+        for observation -> value {
+            value.begin();
+        }
+        let pending = origin.exchange(prepared);
+        let result = await pending;
+        let heads = result.informational();
+        let information is @Response = (0..heads.size()).map() -> index {
+            heads.item(index).response(EmptyBody());
+        };
+        HttpConversationExchange(
+            request: request,
+            response: result.response(),
+            information: information,
+            lease: origin
+        );
+    }
+}
+
+// An HTTP/2 conversation: many requests at once.
+object Http2Conversation does HttpConversation, Closing {
+    has origin is Http2Session;
+
+    // Over origin.
+    Http2Conversation(origin is Http2Session) {
+        self.origin = origin;
+    }
+
+    // Whether it was closed.
+    closed() is bool {
+        origin.closed();
+    }
+
+    // Closes the connection.
+    close() is void {
+        origin.close();
+    }
+
+    // Whether it takes another request now.
+    accepting() is bool {
+        origin.accepting();
+    }
+
+    // true.
+    multiplexed() is bool {
+        true;
+    }
+
+    // Waits until every exchange on it has finished.
+    async settled() is bool {
+        await origin.settled();
+    }
+
+    // Sends request and gives the response head; the body follows.
+    async exchange(request is Request) is HttpConversationExchange {
+        let prepared = Request(
+            method: request::Head::method,
+            target: request::Head::target,
+            headers: request::Head::headers,
+            body: request.body(),
+            version: HttpVersion.http_2
+        );
+        let pending = origin.exchange(prepared);
+        let result = await pending;
+        let heads = result.informational();
+        let information is @Response = (0..heads.size()).map() -> index {
+            heads.item(index);
+        };
+        HttpConversationExchange(
+            request: request,
+            response: result.response(),
+            information: information,
+            lease: result
+        );
+    }
+}
+
+// Opens HTTP/2 conversations.
 object Http2ConversationConnecting does HttpConversationConnecting {
-    has origin is Http2Connecting;Http2ConversationConnecting(origin is Http2Connecting){self.origin=origin;}
-    async acquisition() is HttpConversationAcquisition{
-        let group is FutureGroup<Http2Acquisition>=FutureGroup();let empty is @Future<Http2Acquisition>=[];let pending=Atomic(empty);let taken=Event();
-        let cleanup=HttpAcquisitionCleanup(group,pending,taken,Http2ConversationDisposal().release);defer await cleanup.close();let opening=origin.acquisition();pending.replace([opening]);group.start(opening);let result=await opening;taken.set();HttpConversationAcquisition(Http2Conversation(result.session()),result.details());
+    has origin is Http2Connecting;
+
+    // With origin.
+    Http2ConversationConnecting(origin is Http2Connecting) {
+        self.origin = origin;
+    }
+
+    // A new conversation and how it connected.
+    async acquisition() is HttpConversationAcquisition {
+        let group is FutureGroup<Http2Acquisition> = FutureGroup();
+        let empty is @Future<Http2Acquisition> = [];
+        let pending = Atomic(empty);
+        let taken = Event();
+        let cleanup = HttpAcquisitionCleanup(
+            group: group,
+            pending: pending,
+            taken: taken,
+            dispose: Http2ConversationDisposal().release
+        );
+        defer await cleanup.close();
+        let opening = origin.acquisition();
+        pending.replace([opening]);
+        group.start(opening);
+        let result = await opening;
+        taken.set();
+        HttpConversationAcquisition(
+            session: Http2Conversation(result.session()),
+            details: result.details()
+        );
     }
 }
-object Http2ConversationDisposal{Http2ConversationDisposal();release(acquired is Http2Acquisition) is void{acquired.session().close();}}
 
-object HttpConversationAcquisitionDisposal{HttpConversationAcquisitionDisposal();release(acquired is HttpConversationAcquisition) is void{acquired.session().close();}}
+hidden object Http2ConversationDisposal {
+    Http2ConversationDisposal();
+
+    release(acquired is Http2Acquisition) is void {
+        acquired.session().close();
+    }
+}
+
+// Closes a conversation nobody took.
+object HttpConversationAcquisitionDisposal {
+    // The disposal.
+    HttpConversationAcquisitionDisposal();
+
+    // Closes acquired.
+    release(acquired is HttpConversationAcquisition) is void {
+        acquired.session().close();
+    }
+}

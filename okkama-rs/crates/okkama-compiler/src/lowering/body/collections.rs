@@ -45,6 +45,12 @@ enum Source {
         item: usize,
         successor: usize,
     },
+    /// Поток `collections/iteration.Batching<T>`: `batch()` до пустой пачки (#465).
+    Batch {
+        source: Typed,
+        element: Type,
+        batch: usize,
+    },
 }
 
 impl Source {
@@ -54,6 +60,7 @@ impl Source {
             Source::Array { element, .. } => vec![element.clone()],
             Source::Map { key, value, .. } => vec![key.clone(), value.clone()],
             Source::Cursor { element, .. } => vec![element.clone()],
+            Source::Batch { element, .. } => vec![element.clone()],
         }
     }
 
@@ -143,6 +150,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             exits: vec![exhausted],
             base,
             depth: self.scopes.len(),
+            retire: None,
             want: value,
         });
         let body_out = body(self, index, state_params.clone());
@@ -306,7 +314,215 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                 }))
             }
             thir::Source::Iterating(expr) => self.cursor_source(expr),
+            thir::Source::Batching(expr) => self.batch_source(expr),
         }
+    }
+
+    /// `Batching<T>`: значение источника; пачки берёт сам цикл.
+    fn batch_source(&mut self, expr: &'r thir::Expr) -> Result<Option<Source>> {
+        let reg = self.ctx.reg;
+        let Some(batching) = reg.standard.batching else {
+            return Err(unsupported(expr.span, "iteration without collections/iteration"));
+        };
+        let Some(crate::analysis::ty::Ty::Role(_, args)) = &expr.ty else {
+            return Err(unsupported(expr.span, "iteration over this value"));
+        };
+        let element = self.ctx.ir_type(&args[0].subst(&self.env), expr.span)?;
+        let Some(batch) = reg.roles[batching.0]
+            .methods
+            .iter()
+            .position(|method| method.name == "batch" && method.params.is_empty())
+        else {
+            return Err(unsupported(expr.span, "this iteration protocol"));
+        };
+        let Some(value) = self.value(expr)? else {
+            return Ok(None);
+        };
+        Ok(Some(Source::Batch {
+            source: value,
+            element,
+            batch,
+        }))
+    }
+
+    /// Цикл по пачкам (#465), вложенный: внешний заголовок берёт пачку
+    /// (пустая завершает цикл), начало пачки открывает её регион и отдаёт ему
+    /// пачку, внутренний заголовок идёт по массиву, конец пачки закрывает
+    /// регион и возвращается за следующей (#483, #484). `next` — следующий
+    /// элемент, `last` закрывает и регион пачки.
+    #[allow(clippy::too_many_arguments)]
+    fn batch_loop(
+        &mut self,
+        source: Typed,
+        element: Type,
+        slot: usize,
+        state: Vec<Typed>,
+        scanned: &thir::Block,
+        span: Span,
+        value: bool,
+        mut body: impl FnMut(&mut Self, Vec<Typed>, Vec<Typed>) -> Result<Option<Vec<ValueId>>>,
+    ) -> Result<(Out, Vec<Typed>)> {
+        // The scope of the loop owns its source, as a `let` owns its value.
+        self.adopt_into(self.cleanups.len() - 1, &source, span);
+        let batch_type = Type::Array(Box::new(element.clone()));
+        let base = self.vars.len();
+        let carried = self.carried_vars(scanned, span)?;
+        let state_types: Vec<Type> = state.iter().map(|value| value.ty.clone()).collect();
+
+        // The outer header asks for the next batch: one call per batch.
+        let (refill, refill_params) = self.block_for_vars(&state_types, &carried);
+        let mut args: Vec<ValueId> = state.iter().map(|value| value.value).collect();
+        args.extend(self.carried_args(&carried, span));
+        self.b.terminate(TermKind::Br(Target { block: refill, args }), span);
+        self.b.switch_to(refill);
+        self.bind_carried(&carried, &refill_params[state.len()..]);
+        let refill_state: Vec<Typed> = refill_params[..state.len()]
+            .iter()
+            .zip(&state_types)
+            .map(|(value, ty)| Typed {
+                value: *value,
+                ty: ty.clone(),
+            })
+            .collect();
+        let batch = self.emit_untracked(
+            InstKind::CallRole {
+                receiver: source.value,
+                slot,
+                args: Vec::new(),
+            },
+            batch_type,
+            span,
+        );
+        let size = self.emit(InstKind::ArrayLen(batch.value), Type::Int, span);
+        let none = self.constant(Constant::Int(IntValue::from_i64(0)), span);
+        let empty = self.emit(
+            InstKind::IntCompare {
+                op: CompareOp::Eq,
+                left: size.value,
+                right: none.value,
+            },
+            Type::Bool,
+            span,
+        );
+        let finished = self.b.new_block();
+        let started = self.b.new_block();
+        self.b.terminate(
+            TermKind::Cond {
+                condition: empty.value,
+                then_target: Target::new(finished),
+                else_target: Target::new(started),
+            },
+            span,
+        );
+        self.b.switch_to(finished);
+        let exhausted = if value {
+            let last = self.last_iteration(&refill_state, span);
+            self.arm(Out::Value(last))
+        } else {
+            self.arm(Out::Unit)
+        }
+        .expect("the exhausted edge is open");
+
+        // A batch belongs to its own region while it is walked.
+        self.b.switch_to(started);
+        let traversal = self.open_traversal(span);
+        if let Some(region) = self.traversal_region(traversal) {
+            self.adopt(region, &batch, span);
+        }
+        let zero = self.constant(Constant::Int(IntValue::from_i64(0)), span);
+        let mut extra = vec![Type::Int];
+        extra.extend(state_types.iter().cloned());
+        let (head, head_params) = self.block_for_vars(&extra, &carried);
+        let mut args = vec![zero.value];
+        args.extend(refill_state.iter().map(|value| value.value));
+        args.extend(self.carried_args(&carried, span));
+        self.b.terminate(TermKind::Br(Target { block: head, args }), span);
+        self.b.switch_to(head);
+        self.bind_carried(&carried, &head_params[1 + state.len()..]);
+        let index = head_params[0];
+        let state_params: Vec<Typed> = head_params[1..=state.len()]
+            .iter()
+            .zip(&state_types)
+            .map(|(value, ty)| Typed {
+                value: *value,
+                ty: ty.clone(),
+            })
+            .collect();
+        let within = self.emit(
+            InstKind::IntCompare {
+                op: CompareOp::Lt,
+                left: index,
+                right: size.value,
+            },
+            Type::Bool,
+            span,
+        );
+        let iteration = self.b.new_block();
+        let done = self.b.new_block();
+        self.b.terminate(
+            TermKind::Cond {
+                condition: within.value,
+                then_target: Target::new(iteration),
+                else_target: Target::new(done),
+            },
+            span,
+        );
+        // The batch is walked: its region closes, then the next batch.
+        self.b.switch_to(done);
+        if self.exit_scopes(traversal, None, span)? {
+            let mut args: Vec<ValueId> = state_params.iter().map(|value| value.value).collect();
+            args.extend(self.carried_args(&carried, span));
+            self.b.terminate(TermKind::Br(Target { block: refill, args }), span);
+        }
+        let (step, step_params) = self.block_for_vars(&state_types, &carried);
+
+        self.b.switch_to(iteration);
+        self.sync_unwind();
+        self.loops.push(LoopFrame {
+            next: step,
+            state: state_params.iter().map(|value| value.value).collect(),
+            carried: carried.clone(),
+            exits: vec![exhausted],
+            base,
+            depth: self.scopes.len(),
+            retire: Some(traversal),
+            want: value,
+        });
+        let current = self.emit(InstKind::ArrayGet { array: batch.value, index }, element, span);
+        let body_out = body(self, vec![current], state_params.clone());
+        if let Ok(Some(next_state)) = &body_out
+            && self.b.is_open()
+        {
+            let mut args = next_state.clone();
+            args.extend(self.carried_args(&carried, span));
+            self.b
+                .terminate(TermKind::Br(Target { block: step, args }), span);
+        }
+        let frame = self.loops.pop().expect("loop frame pushed above");
+        body_out?;
+
+        self.b.switch_to(step);
+        self.bind_carried(&carried, &step_params[state.len()..]);
+        let one = self.constant(Constant::Int(IntValue::from_i64(1)), span);
+        let advanced = self.emit(
+            InstKind::IntBinary {
+                op: IntBinaryOp::Add,
+                left: index,
+                right: one.value,
+            },
+            Type::Int,
+            span,
+        );
+        let mut args = vec![advanced.value];
+        args.extend(step_params[..state.len()].iter().copied());
+        args.extend(self.carried_args(&carried, span));
+        self.b
+            .terminate(TermKind::Br(Target { block: head, args }), span);
+        self.close_traversal(span)?;
+        let out = self.join(frame.exits, frame.base, value, span)?;
+        // The state after the loop is the outer header's: it dominates every
+        // exit, the exhausted one and `last` from inside a batch.
+        Ok((out, refill_state))
     }
 
     /// `Iterating<T>`: один `cursor()` перед обходом (§9.9).
@@ -344,7 +560,12 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         let Some(value) = self.value(expr)? else {
             return Ok(None);
         };
-        let cursor = self.emit(
+        // The scope of the loop owns its source, as a `let` owns its value
+        // (#483): what the source reaches then outlives every cursor, while
+        // each cursor stays free and lives one step.
+        self.adopt_into(self.cleanups.len() - 1, &value, expr.span);
+        // The first step's region owns the initial cursor (cursor_loop).
+        let cursor = self.emit_untracked(
             InstKind::CallRole {
                 receiver: value.value,
                 slot: open,
@@ -364,6 +585,14 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
 
     /// Цикл по курсору: заголовок получает текущий курсор и состояние; на
     /// каждой итерации `available()`, `item()`, тело, затем `successor()`.
+    ///
+    /// Each step has a region of its own (#483, #484), opened in the header:
+    /// it owns the current cursor before `available()`, so no call takes it
+    /// and destroys what it reaches. `successor()` is not tracked by the
+    /// scope around the loop; the step's region closes keeping the new
+    /// cursor, which destroys the superseded one and what only it reached,
+    /// once, and hands the rest on to the next step's region. No record of a
+    /// past cursor stays behind. `last` closes the step's region too.
     #[allow(clippy::too_many_arguments)]
     fn cursor_loop(
         &mut self,
@@ -398,6 +627,17 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             .terminate(TermKind::Br(Target { block: head, args }), span);
         self.b.switch_to(head);
         self.bind_carried(&carried, &head_params[1 + state.len()..]);
+        let traversal = self.open_traversal(span);
+        if let Some(region) = self.traversal_region(traversal) {
+            self.adopt(
+                region,
+                &Typed {
+                    value: cursor,
+                    ty: start.ty.clone(),
+                },
+                span,
+            );
+        }
         let more = self.emit(
             InstKind::CallRole {
                 receiver: cursor,
@@ -417,24 +657,30 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             },
             span,
         );
+        // Exhausted: the last cursor's region closes with nothing kept.
         self.b.switch_to(finished);
-        let exhausted = if value {
-            let last = self.last_iteration(&state_params, span);
-            self.arm(Out::Value(last))
+        let exhausted = if self.exit_scopes(traversal, None, span)? {
+            if value {
+                let last = self.last_iteration(&state_params, span);
+                self.arm(Out::Value(last))
+            } else {
+                self.arm(Out::Unit)
+            }
         } else {
-            self.arm(Out::Unit)
-        }
-        .expect("the exhausted edge is open");
+            None
+        };
         let (step, step_params) = self.block_for_vars(&state_types, &carried);
 
         self.b.switch_to(iteration);
+        self.sync_unwind();
         self.loops.push(LoopFrame {
             next: step,
             state: state_params.iter().map(|value| value.value).collect(),
             carried: carried.clone(),
-            exits: vec![exhausted],
+            exits: exhausted.into_iter().collect(),
             base,
             depth: self.scopes.len(),
+            retire: Some(traversal),
             want: value,
         });
         let current = self.emit(
@@ -459,7 +705,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
 
         self.b.switch_to(step);
         self.bind_carried(&carried, &step_params[state.len()..]);
-        let advanced = self.emit(
+        let advanced = self.emit_untracked(
             InstKind::CallRole {
                 receiver: cursor,
                 slot: successor,
@@ -468,11 +714,15 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             start.ty.clone(),
             span,
         );
-        let mut args = vec![advanced.value];
-        args.extend(step_params[..state.len()].iter().copied());
-        args.extend(self.carried_args(&carried, span));
-        self.b
-            .terminate(TermKind::Br(Target { block: head, args }), span);
+        // The superseded cursor goes with its step; the new one is kept.
+        if self.exit_scopes(traversal, Some(&advanced), span)? {
+            let mut args = vec![advanced.value];
+            args.extend(step_params[..state.len()].iter().copied());
+            args.extend(self.carried_args(&carried, span));
+            self.b
+                .terminate(TermKind::Br(Target { block: head, args }), span);
+        }
+        self.close_traversal(span)?;
         let out = self.join(frame.exits, frame.base, value, span)?;
         Ok((out, state_params))
     }
@@ -595,6 +845,11 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                 as_value,
                 body,
             ),
+            Source::Batch {
+                source,
+                element,
+                batch,
+            } => self.batch_loop(source, element, batch, state, scanned, span, as_value, body),
         }
     }
 
@@ -838,6 +1093,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                     )));
                 }
                 let builder = self.emit(InstKind::BuilderNew, Type::Builder(output.clone()), span);
+                let home = self.cleanups.len() - 1;
                 let (out, state) = self.traverse(
                     source,
                     vec![builder],
@@ -848,6 +1104,9 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                             return Ok(None);
                         };
                         let value = lowerer.normalize(&value, &output, span);
+                        // What the result reaches belongs to the scope of the map,
+                        // not to a traversal step that ends before it (#484).
+                        lowerer.hand_to(home, &value, span);
                         let pushed = lowerer.emit(
                             InstKind::BuilderPush {
                                 builder: state[0].value,
@@ -880,6 +1139,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                         span,
                     )
                 };
+                let home = self.cleanups.len() - 1;
                 let (out, state) = self.traverse(
                     source,
                     vec![builder],
@@ -904,6 +1164,9 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                             body.span,
                         );
                         lowerer.b.switch_to(push);
+                        for item in &items {
+                            lowerer.hand_to(home, item, span);
+                        }
                         let kind = match items.as_slice() {
                             [key, value] => InstKind::MapBuilderPut {
                                 builder: builder.value,

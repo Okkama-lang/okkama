@@ -1,7 +1,7 @@
 module os/directory v1.0.0;
 
 import "fs/directory" take DirectoryLocating;
-import "fs/file" take FileSystemFailure;
+import "fs/error" take FileError, FileFailure;
 import "fs/path" take Path;
 import "runtime/fs" take cwd, path_decode;
 
@@ -21,15 +21,24 @@ import "runtime/fs" take cwd, path_decode;
 // This module deliberately exposes no process-global chdir operation. Supply
 // a DirectoryLocating object explicitly to commands and filesystem objects.
 
+// The directory the process runs in, read when asked; it is never changed.
 object WorkingDirectory does DirectoryLocating {
+    // The working directory.
     WorkingDirectory();
 
+    // Its absolute path.
     path() is Path {
         try {
             Path(path_decode(cwd()));
         }
         catch failure is NativeFailure {
-            throw FileSystemFailure.detailed(failure.code(), failure.message());
+            throw FileFailure(failure).error();
         }
     }
+}
+
+test "the working directory is an absolute path" {
+    let here = WorkingDirectory().path();
+    test.ok(here.absolute());
+    test.is(WorkingDirectory().path(), here);
 }

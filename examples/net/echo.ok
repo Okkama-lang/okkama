@@ -1,0 +1,31 @@
+module examples/net/echo v1.0.0;
+
+import "encoding/utf" take Utf8Decoded;
+import "io/stdout" take Stdout;
+import "net/ip" take IpAddress;
+import "net/tcp" take TcpConnecting, TcpListening;
+
+// A TCP echo over loopback: listen on a port the system picks, connect to
+// it, send a line and read it back. Nothing leaves the machine. Each side
+// closes what it opened.
+
+async main() is int {
+    let out = Stdout();
+    let listener = await TcpListening(port: 0).listener();
+    defer listener.close();
+    let port = listener::Local::port;
+    out.writeln("listening on a system-chosen port: ", port > 0);
+
+    let client = await TcpConnecting(address: IpAddress("127.0.0.1"), port: port, no_delay: true).connection();
+    defer client.close();
+    let server = await listener.connection();
+    defer server.close();
+    out.writeln("peer is loopback: ", server.endpoints().remote_endpoint().address() == IpAddress("127.0.0.1"));
+
+    await client.output().write("hello over tcp");
+    let received = await server.input().bytes(64);
+    await server.output().write(received);
+    let echoed = await client.input().bytes(64);
+    out.writeln("echoed: ", Utf8Decoded(echoed));
+    0;
+}

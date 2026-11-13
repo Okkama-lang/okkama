@@ -1,11 +1,7 @@
 module fs/path v1.0.0;
 
 import "compare" take Comparing, Order;
-import "runtime/fs" take
-    path_join,
-    path_parent,
-    path_child,
-    path_absolute;
+import "runtime/fs" take path_join, path_parent, path_child, path_absolute, path_parts;
 import "runtime/system" take system_platform;
 
 // Purely lexical paths for native and foreign path grammars.
@@ -22,27 +18,41 @@ import "runtime/system" take system_platform;
 //     let config = Path("etc", "okkama", "config.toml");
 //
 // A later absolute part replaces everything accumulated before it. Joining,
-// parent lookup and absolute detection never consult the filesystem and do not
-// resolve symlinks or normalize `.` and `..`.
+// parent lookup and absolute detection never consult the filesystem and never
+// resolve symlinks or `..`. The paths they make are tidied: a `.` segment and a
+// repeated separator go away, so Path("a/./b").child("c") is `a/b/c`.
 
+// Which platform's grammar a path follows: separators, roots, drive letters.
 enum PathStyle = (posix, windows);
 
+// A path as names, worked out by the text alone: the disk is never asked.
 object Path does Comparing<Path> {
     has origin is string;
     has path_style is PathStyle;
 
+    // A path in this platform's grammar: `Path("var/log/app.log")`.
     Path(origin is string) {
         confirm !origin.empty() else throw InvalidPath.because("path cannot be empty");
         self.origin = origin;
-        path_style = NativePathStyle().value();
+        // The host's grammar is part of the path's value, so `==` sees it.
+        path_style = if system_platform() == "windows" {
+            PathStyle.windows;
+        }
+        else {
+            PathStyle.posix;
+        };
     }
 
+    // A path in another platform's grammar: `Path("C:\\Users",
+    // PathStyle.windows)`.
     Path(origin is string, style is PathStyle) {
         confirm !origin.empty() else throw InvalidPath.because("path cannot be empty");
         self.origin = origin;
         path_style = style;
     }
 
+    // The parts joined with this platform's separator: `Path("etc", "okkama",
+    // "config.toml")`; a later absolute part replaces what came before.
     Path(parts is ...string) {
         let values is @string = parts...;
         confirm values.size() > 0
@@ -51,51 +61,230 @@ object Path does Comparing<Path> {
             confirm !part.empty()
                 else throw InvalidPath.because("path join rejects empty parts");
         }
-        let style is PathStyle = NativePathStyle().value();
-        origin = path_join(values, PathStyleCode(origin: style).value());
+        let style is PathStyle = if system_platform() == "windows" {
+            PathStyle.windows;
+        }
+        else {
+            PathStyle.posix;
+        };
+        origin = path_join(values, if style == PathStyle.posix {
+            0;
+        }
+        else {
+            1;
+        });
         path_style = style;
     }
 
+    // The path without its last name; the root's parent is the root.
     parent() is Path {
         Path(
-            path_parent(origin, PathStyleCode(origin: path_style).value()),
+            path_parent(origin, PathStyleCode(origin: path_style).code()),
             path_style,
         );
     }
 
+    // This path with one more name: `Path("var").child("log")`.
     child(part is string) is Path {
         confirm !part.empty() else throw InvalidPath.because("path part cannot be empty");
         Path(
             path_child(
                 origin,
                 part,
-                PathStyleCode(origin: path_style).value(),
+                PathStyleCode(origin: path_style).code(),
             ),
             path_style,
         );
     }
 
-    absolute() is bool {
-        path_absolute(origin, PathStyleCode(origin: path_style).value());
+    // The last part: Path("var/log/app.log").name() is "app.log"; "" for a root.
+    name() is string {
+        let unified = if path_style == PathStyle.windows {
+            origin.replace("\\", "/");
+        }
+        else {
+            origin;
+        };
+        let parts is @string = unified.split("/").filter() -> part {
+            part != "";
+        };
+        if parts.size() == 0 {
+            "";
+        }
+        else {
+            parts.last();
+        }
     }
 
+    // Whether the path starts at a root.
+    absolute() is bool {
+        path_absolute(origin, PathStyleCode(origin: path_style).code());
+    }
+
+    // The names of the path, after the root of an absolute one:
+    // Path("/srv/app/a.log").parts() is ["/", "srv", "app", "a.log"], and
+    // Path("docs/guide.md").parts() is ["docs", "guide.md"]. `.` and repeated
+    // separators go away, `..` stays.
+    parts() is @string {
+        let found = self.anchored();
+        if found[0] == "" {
+            found.drop(1);
+        }
+        else {
+            found;
+        }
+    }
+
+    // The name without its extension: "guide" for guide.md, "archive.tar" for
+    // archive.tar.gz; a name without an extension (notes, .bashrc) stays whole.
+    stem() is string {
+        let name = self.name();
+        let extension = self.extension();
+        if extension == "" {
+            name;
+        }
+        else {
+            name.slice(0, name.length() - extension.length() - 1);
+        }
+    }
+
+    // What follows the last dot of the name, without the dot: "md" for guide.md.
+    // It is "" when the name has no dot, starts with its only dot (.bashrc) or
+    // ends with one (notes.).
+    extension() is string {
+        let name = self.name();
+        let pieces = name.split(".");
+        let tail = pieces.last();
+        let dot = name.length() - tail.length() - 1;
+        if pieces.size() > 1 && dot > 0 && tail != "" {
+            tail;
+        }
+        else {
+            "";
+        }
+    }
+
+    // The path with another extension: Path("docs/guide.md").extension_replaced("html")
+    // is docs/guide.html, "" removes the extension, and a name without one gains
+    // it. A leading dot ("html" or ".html") is optional.
+    extension_replaced(extension is string) is Path {
+        confirm extension.split("/").size() == 1 && extension.split("\\").size() == 1
+            else throw InvalidPath.because("an extension cannot hold a separator");
+        let bare = if extension.length() > 0 && extension.slice(0, 1) == "." {
+            extension.slice(1, extension.length());
+        }
+        else {
+            extension;
+        };
+        let found = self.anchored();
+        confirm found.size() > 1 && self.name() != ""
+            else throw InvalidPath.because("a root has no name to change");
+        let name = if bare == "" {
+            self.stem();
+        }
+        else {
+            self.stem() + "." + bare;
+        };
+        let kept is @string = found.take(found.size() - 1).filter() -> part {
+            part != "";
+        };
+        Path(path_join(kept + [name], PathStyleCode(origin: path_style).code()), path_style);
+    }
+
+    // The path from base to this one, by the names alone:
+    // Path("/srv/app/logs").relative_to(Path("/srv")) is app/logs, and a path
+    // relative to itself is ".". A path outside base, or of another grammar, is
+    // refused. Names compare exactly.
+    relative_to(base is Path) is Path {
+        confirm base::Grammar::style == path_style
+            else throw InvalidPath.because("paths of different styles have no relative path");
+        let mine = self.anchored();
+        let theirs = path_parts(base.string(), PathStyleCode(origin: path_style).code());
+        let shared = theirs.size() <= mine.size()
+            && (0..theirs.size()).reduce(true) -> same, index {
+                same && mine[index] == theirs[index];
+            };
+        confirm shared else throw InvalidPath.because(origin + " is not under " + base.string());
+        let rest = mine.drop(theirs.size());
+        if rest.size() == 0 {
+            Path(".", path_style);
+        }
+        else {
+            Path(path_join(rest, PathStyleCode(origin: path_style).code()), path_style);
+        }
+    }
+
+    // `.` and `..` resolved by the names alone, without asking the disk:
+    // Path("a/./b/../c").normalized() is a/c. A `..` above the root of an
+    // absolute path goes away; one above the start of a relative path stays.
+    normalized() is Path {
+        let found = self.anchored();
+        let anchor = found[0];
+        let end = if anchor == "" {
+            "";
+        }
+        else {
+            anchor.slice(anchor.length() - 1, anchor.length());
+        };
+        let rooted = end == "/" || end == "\\";
+        let start is @string = [];
+        let names = found.drop(1).reduce(start) -> kept, name {
+            if name == ".." && kept.size() > 0 && kept.last() != ".." {
+                kept.take(kept.size() - 1);
+            }
+            else {
+                if name == ".." && rooted && kept.size() == 0 {
+                    kept;
+                }
+                else {
+                    kept + [name];
+                }
+            }
+        };
+        let all is @string = if anchor == "" {
+            names;
+        }
+        else {
+            [anchor] + names;
+        };
+        if all.size() == 0 {
+            Path(".", path_style);
+        }
+        else {
+            Path(path_join(all, PathStyleCode(origin: path_style).code()), path_style);
+        }
+    }
+
+    // The anchor ("" for a relative path), then the names.
+    hidden anchored() is @string {
+        path_parts(origin, PathStyleCode(origin: path_style).code());
+    }
+
+    // Orders paths by their text, for sorting.
     order(other is Path) is Order {
         origin.order(other.string());
     }
 
+    // The path as text, with this path's separators.
     string() is string {
         origin;
     }
 
-    // Expose the lexical grammar without probing the host filesystem.
-    style() is PathStyle { path_style; }
-
+    // The lexical grammar, without probing the host filesystem.
+    cap Grammar {
+        style is PathStyle {
+            path_style;
+        }
+    }
 }
 
+// The path grammar of the platform the program runs on.
 object NativePathStyle {
+    // Asks the runtime once.
     NativePathStyle();
 
-    value() is PathStyle {
+    // PathStyle.windows on Windows, PathStyle.posix elsewhere.
+    style() is PathStyle {
         if system_platform() == "windows" {
             PathStyle.windows;
         }
@@ -105,14 +294,174 @@ object NativePathStyle {
     }
 }
 
-object PathStyleCode {
+hidden object PathStyleCode {
     has origin is PathStyle;
 
     PathStyleCode(:origin);
 
-    value() is int {
-        if origin == PathStyle.posix { 0; } else { 1; }
+    code() is int {
+        if origin == PathStyle.posix {
+            0;
+        }
+        else {
+            1;
+        }
     }
 }
 
+// An empty path, or an empty part in a join or a child.
 enum InvalidPath is Error = (because(message is string));
+
+test "joining, parents and absolute paths follow the grammar, not the host" {
+    let posix = PathStyle.posix;
+    let windows = PathStyle.windows;
+    test.is(Path("a", posix).child("b").string(), "a/b");
+    test.is(Path("a", windows).child("b/c").string(), "a\\b\\c");
+    test.is(Path("C:\\x", windows).child("y").string(), "C:\\x\\y");
+    test.is(Path("/a/b/c", posix).parent().string(), "/a/b");
+    test.is(Path("a/b/", posix).parent().string(), "a");
+    test.is(Path("a", posix).parent().string(), ".");
+    test.is(Path("/a", posix).parent().string(), "/");
+    test.is(Path("C:\\x\\y", windows).parent().string(), "C:\\x");
+    test.is(Path("\\\\server\\share\\x", windows).parent().string(), "\\\\server\\share");
+    test.ok(Path("/x", posix).absolute());
+    test.ok(!Path("x", posix).absolute());
+    test.ok(Path("C:\\x", windows).absolute());
+    test.ok(Path("\\\\server\\share", windows).absolute());
+    test.ok(!Path("C:x", windows).absolute());
+}
+
+test "a root is its own parent, also behind a drive" {
+    test.is(Path("/", PathStyle.posix).parent().string(), "/");
+    test.is(Path("C:\\", PathStyle.windows).parent().string(), "C:\\");
+    test.is(Path("C:\\x", PathStyle.windows).parent().parent().string(), "C:\\");
+}
+
+test "dots and repeated separators are tidied; .. stays" {
+    let posix = PathStyle.posix;
+    test.is(Path("a/./b", posix).child("c").string(), "a/b/c");
+    test.is(Path("a//b", posix).child("c").string(), "a/b/c");
+    test.is(Path("./a", posix).child("b").string(), "a/b");
+    test.is(Path("a/../b", posix).child("..").string(), "a/../b/..");
+    test.is(Path("a/./b", posix).string(), "a/./b");
+}
+
+test "an absolute part replaces what came before it" {
+    let posix = PathStyle.posix;
+    test.is(Path("a", posix).child("/b").string(), "/b");
+    test.is(Path("a", PathStyle.windows).child("C:\\b").string(), "C:\\b");
+    if NativePathStyle().style() == posix {
+        test.is(Path("a", "b", "c").string(), "a/b/c");
+        test.is(Path("a", "/b", "c").string(), "/b/c");
+    }
+    test.is(Path("a", "b").string(), Path("a").child("b").string());
+}
+
+test "the grammar is part of the value; order compares only the text" {
+    let posix = PathStyle.posix;
+    let windows = PathStyle.windows;
+    test.ok(Path("a", posix) != Path("a", windows));
+    test.ok(Path("a") == Path("a", NativePathStyle().style()));
+    test.ok(Path("a", posix)::Grammar::style == posix);
+    test.ok(Path("x", windows)::Grammar::style == windows);
+    test.ok(Path("a", posix).order(Path("b", posix)) == Order.less);
+    test.ok(Path("b", posix).order(Path("a", windows)) == Order.greater);
+    test.ok(Path("a", posix).order(Path("a", windows)) == Order.equal);
+    test.ok(Path("a", posix) < Path("b", posix));
+}
+
+test "empty paths and parts are refused" {
+    test.throws(InvalidPath) {
+        Path("");
+    };
+    test.throws(InvalidPath) {
+        Path("", PathStyle.posix);
+    };
+    test.throws(InvalidPath) {
+        Path("a", "");
+    };
+    test.throws(InvalidPath) {
+        Path("a").child("");
+    };
+}
+
+test "a path names its last part" {
+    test.is(Path("var/log/app.log", PathStyle.posix).name(), "app.log");
+    test.is(Path("var/log/", PathStyle.posix).name(), "log");
+    test.is(Path("/", PathStyle.posix).name(), "");
+    test.is(Path("C:\\Users\\alice", PathStyle.windows).name(), "alice");
+}
+
+test "names, extensions, relative and normalized paths come from the text alone" {
+    let page = Path("docs/guide.md", PathStyle.posix);
+    test.is(page.parts(), ["docs", "guide.md"]);
+    test.is(page.stem(), "guide");
+    test.is(page.extension(), "md");
+    test.is(page.extension_replaced("html").string(), "docs/guide.html");
+    test.is(page.extension_replaced(".txt").string(), "docs/guide.txt");
+    test.is(page.extension_replaced("").string(), "docs/guide");
+    test.is(Path("archive.tar.gz", PathStyle.posix).stem(), "archive.tar");
+    test.is(Path("archive.tar.gz", PathStyle.posix).extension(), "gz");
+    test.is(Path(".bashrc", PathStyle.posix).stem(), ".bashrc");
+    test.is(Path(".bashrc", PathStyle.posix).extension(), "");
+    test.is(Path("notes.", PathStyle.posix).extension(), "");
+    test.is(Path("notes", PathStyle.posix).extension_replaced("txt").string(), "notes.txt");
+    test.is(
+        Path("/srv/app/./logs//a.log", PathStyle.posix).parts(),
+        ["/", "srv", "app", "logs", "a.log"]
+    );
+    test.is(Path("/", PathStyle.posix).parts(), ["/"]);
+    test.is(Path(".", PathStyle.posix).parts().size(), 0);
+    let logs = Path("/srv/app/logs", PathStyle.posix);
+    test.is(logs.relative_to(Path("/srv", PathStyle.posix)).string(), "app/logs");
+    test.is(logs.relative_to(Path("/srv/app/logs/", PathStyle.posix)).string(), ".");
+    test.is(Path("a/./b/../c", PathStyle.posix).normalized().string(), "a/c");
+    test.is(Path("../a/../../b", PathStyle.posix).normalized().string(), "../../b");
+    test.is(Path("/../a/..", PathStyle.posix).normalized().string(), "/");
+    test.is(Path("a/..", PathStyle.posix).normalized().string(), ".");
+    let refused is @bool = [
+        try {
+            Path("/etc", PathStyle.posix).relative_to(Path("/srv", PathStyle.posix));
+            false;
+        }
+        catch InvalidPath.because(_reason) {
+            true;
+        },
+        try {
+            Path("srv", PathStyle.posix).relative_to(Path("/srv", PathStyle.posix));
+            false;
+        }
+        catch InvalidPath.because(_reason) {
+            true;
+        },
+        try {
+            Path("/", PathStyle.posix).extension_replaced("txt");
+            false;
+        }
+        catch InvalidPath.because(_reason) {
+            true;
+        },
+        try {
+            page.extension_replaced("a/b");
+            false;
+        }
+        catch InvalidPath.because(_reason) {
+            true;
+        }
+    ];
+    test.is(refused, [true, true, true, true]);
+}
+
+test "windows paths keep their drive and share as the anchor" {
+    let report = Path("C:\\Users\\alice\\report.docx", PathStyle.windows);
+    test.is(report.parts(), ["C:\\", "Users", "alice", "report.docx"]);
+    test.is(report.stem(), "report");
+    test.is(report.extension_replaced("pdf").string(), "C:\\Users\\alice\\report.pdf");
+    test.is(report.relative_to(Path("C:\\Users", PathStyle.windows)).string(), "alice\\report.docx");
+    test.is(Path("C:\\a\\..\\b\\.\\c", PathStyle.windows).normalized().string(), "C:\\b\\c");
+    test.is(
+        Path("\\\\server\\share\\dir\\f.txt", PathStyle.windows).parts(),
+        ["\\\\server\\share\\", "dir", "f.txt"]
+    );
+    test.is(Path("C:notes.txt", PathStyle.windows).parts(), ["C:", "notes.txt"]);
+}

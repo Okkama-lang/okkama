@@ -1,0 +1,10 @@
+module app v1.0.0;
+
+object Box {
+    Box();
+    hidden has secret is int;
+}
+
+main() is int {
+    0;
+}

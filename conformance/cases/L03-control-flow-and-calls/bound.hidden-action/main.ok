@@ -1,0 +1,16 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Vault {
+    Vault();
+    open() is int { self.secret(); }
+    hidden secret() is int { 7; }
+}
+
+main() is int {
+    let out = Stdout();
+    let f is () is int = Vault().secret;
+    out.writeln("unreachable");
+    0;
+}

@@ -86,6 +86,8 @@ pub enum StmtKind {
     Let {
         local: LocalId,
         value: Expr,
+        /// `once let` (#491): the value is kept in a hidden slot of `self`.
+        once: bool,
     },
     Expr(Expr),
     /// `stmt if condition` (постфиксное условие, `next if`, `last if`).
@@ -140,6 +142,8 @@ pub enum Source {
     Varargs(LocalId),
     /// Значение `collections/iteration.Iterating<T>` (после границы роли).
     Iterating(Box<Expr>),
+    /// Значение `collections/iteration.Batching<T>`: обход пачками (#465).
+    Batching(Box<Expr>),
 }
 
 #[derive(Clone, Debug)]
@@ -484,7 +488,8 @@ pub enum Callee {
         receiver: Box<Expr>,
         op: Builtin,
     },
-    /// `test.ok(...)`, `test.is(...)`, `test.isnt(...)`, `test.fail(...)`.
+    /// `test.ok(...)`, `test.is(...)`, `test.isnt(...)`, `test.fail(...)`,
+    /// `test.skip(...)`.
     Test(String),
     /// `fake.storage.set/get/has/remove/clear/size(...)` в action fake (§14):
     /// хранилище экземпляра `self`.
@@ -510,6 +515,10 @@ pub enum Builtin {
     ArrayReversed,
     ArrayTake,
     ArrayDrop,
+    /// `replaced(index, value)`: a copy with one element replaced (#250).
+    ArrayReplaced,
+    /// `removed_at(index)`: a copy without one element (#251).
+    ArrayRemovedAt,
     StrLength,
     StrEmpty,
     StrSlice,
@@ -535,7 +544,8 @@ pub enum Builtin {
     StrCharacters,
     /// `c.code()`: code point символа (#231).
     CharCode,
-    /// Строки упорядочиваются по длине (как Perl): `less`, `less_or_equal`.
+    /// `less`, `less_or_equal` строк: тот же порядок по code point, что у
+    /// `order()` (#281).
     StrCompare(CompareOp),
     MapSize,
     MapHas,
@@ -558,6 +568,9 @@ pub enum Builtin {
     Convert(CastTarget),
     Numerator,
     Denominator,
+    /// An elementary function or `min`/`max`/`clamp` (#192): the call of the
+    /// named runtime intrinsic on the receiver and the arguments.
+    Math(String),
     FutureCancel,
     FutureDone,
     FutureCancelled,
@@ -661,7 +674,9 @@ fn stmt_uses_receiver(stmt: &Stmt) -> bool {
 fn source_uses_receiver(source: &Source) -> bool {
     match source {
         Source::Range { start, end, .. } => expr_uses_receiver(start) || expr_uses_receiver(end),
-        Source::Array(value) | Source::Map(value) | Source::Iterating(value) => expr_uses_receiver(value),
+        Source::Array(value) | Source::Map(value) | Source::Iterating(value) | Source::Batching(value) => {
+            expr_uses_receiver(value)
+        }
         Source::Varargs(_) => false,
     }
 }
@@ -776,7 +791,9 @@ fn stmt_mentions(stmt: &Stmt, local: LocalId) -> usize {
 fn source_mentions(source: &Source, local: LocalId) -> usize {
     match source {
         Source::Range { start, end, .. } => expr_mentions(start, local) + expr_mentions(end, local),
-        Source::Array(value) | Source::Map(value) | Source::Iterating(value) => expr_mentions(value, local),
+        Source::Array(value) | Source::Map(value) | Source::Iterating(value) | Source::Batching(value) => {
+            expr_mentions(value, local)
+        }
         Source::Varargs(varargs) => usize::from(*varargs == local),
     }
 }
@@ -874,7 +891,15 @@ pub fn first_expr(block: &Block, test: &dyn Fn(&Expr) -> bool) -> Option<Span> {
     found
 }
 
-fn first_in(expr: &Expr, test: &dyn Fn(&Expr) -> bool) -> Option<Span> {
+/// Whether an expression of `stmt` (nested blocks included, anonymous
+/// actions not) passes `test`.
+pub fn stmt_contains(stmt: &Stmt, test: &dyn Fn(&Expr) -> bool) -> bool {
+    let mut found = false;
+    each_stmt_expr(stmt, &mut |expr| found = found || first_in(expr, test).is_some());
+    found
+}
+
+pub fn first_in(expr: &Expr, test: &dyn Fn(&Expr) -> bool) -> Option<Span> {
     if test(expr) {
         return Some(expr.span);
     }
@@ -888,7 +913,7 @@ fn first_in(expr: &Expr, test: &dyn Fn(&Expr) -> bool) -> Option<Span> {
 }
 
 /// The expressions directly inside the statements of `block`.
-fn each_block_expr<'e>(block: &'e Block, visit: &mut dyn FnMut(&'e Expr)) {
+pub(crate) fn each_block_expr<'e>(block: &'e Block, visit: &mut dyn FnMut(&'e Expr)) {
     for stmt in &block.stmts {
         each_stmt_expr(stmt, visit);
     }
@@ -928,14 +953,14 @@ fn each_source_expr<'e>(source: &'e Source, visit: &mut dyn FnMut(&'e Expr)) {
             visit(start);
             visit(end);
         }
-        Source::Array(value) | Source::Map(value) | Source::Iterating(value) => visit(value),
+        Source::Array(value) | Source::Map(value) | Source::Iterating(value) | Source::Batching(value) => visit(value),
         Source::Varargs(_) => {}
     }
 }
 
 /// The direct sub-expressions of `expr` (statements of nested blocks
 /// included), except the body of an anonymous action.
-fn each_child<'e>(expr: &'e Expr, visit: &mut dyn FnMut(&'e Expr)) {
+pub(crate) fn each_child<'e>(expr: &'e Expr, visit: &mut dyn FnMut(&'e Expr)) {
     match &expr.kind {
         ExprKind::Local(_)
         | ExprKind::Constant(_) | ExprKind::Global(_)

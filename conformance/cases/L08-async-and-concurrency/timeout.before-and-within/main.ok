@@ -1,12 +1,12 @@
 module app v1.0.0;
 
-// Before.result() computes the time left as deadline.minus(now). Since #215
+// Before.outcome() computes the time left as deadline.minus(now). Since #215
 // MonotonicInstant has minus(Duration) and minus(MonotonicInstant); the
 // runtime helper must take the one that gives a Duration.
 import "io/stdout" take Stdout;
 import "async/timeout" take Within, Before;
 import "time/clock" take SystemClock;
-import "time/duration" take Duration, DurationUnit;
+import "time/duration" take Duration;
 
 object Answer {
     has value is int;
@@ -17,10 +17,10 @@ object Answer {
 async main() is int {
     let out = Stdout();
     let clock = SystemClock();
-    let budget = Duration(value: 30.rat(), unit: DurationUnit.second);
+    let budget = Duration(seconds: 30);
     let within is Within<int> = Within(origin: Answer(value: 41).compute(), limit: budget, clock: clock);
     let deadline = clock.monotonic_instant() + budget;
     let before is Before<int> = Before(origin: Answer(value: 1).compute(), deadline: deadline, clock: clock);
-    out.writeln((await within.result()).string() + " " + (await before.result()).string());
+    out.writeln((await within.outcome()).string() + " " + (await before.outcome()).string());
     0;
 }

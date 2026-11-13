@@ -8,7 +8,7 @@ is enforced by the runtime — not by code review.**
 [![CI](https://github.com/shootnix/okkama/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/shootnix/okkama/actions/workflows/ci.yml)
 [![Packages](https://github.com/shootnix/okkama/actions/workflows/packages.yml/badge.svg?branch=develop)](https://github.com/shootnix/okkama/actions/workflows/packages.yml)
 [![Release](https://img.shields.io/github/v/release/shootnix/okkama?include_prereleases&label=release)](https://github.com/shootnix/okkama/releases)
-[![Conformance](https://img.shields.io/badge/conformance-787%2F787%20×%203%20engines-brightgreen)](conformance/)
+[![Conformance](https://img.shields.io/badge/conformance-1025%2F1025%20×%203%20engines-brightgreen)](conformance/)
 [![License](https://img.shields.io/github/license/shootnix/okkama)](LICENSE)
 
 [Install](#install) ·
@@ -87,11 +87,14 @@ crypto library.
 |---|---|---|
 | macOS, Apple Silicon | `okkama-<version>-macos-aarch64.pkg` | `okkama-<version>-macos-aarch64.tar.gz` |
 | macOS, Intel | `okkama-<version>-macos-x86_64.pkg` | `okkama-<version>-macos-x86_64.tar.gz` |
-| Linux x86_64 (glibc 2.35+) | `okkama-<version>-linux-x86_64.deb` | `okkama-<version>-linux-x86_64.tar.gz` |
+| Linux x86_64 (glibc 2.35+) | `okkama-<version>-linux-x86_64.deb`, `okkama-<version>-linux-x86_64.rpm` | `okkama-<version>-linux-x86_64.tar.gz` |
 
 ```sh
 # Debian / Ubuntu
 sudo apt install ./okkama-<version>-linux-x86_64.deb
+
+# Fedora 36+, RHEL 10, openSUSE Tumbleweed (glibc 2.35+)
+sudo dnf install ./okkama-<version>-linux-x86_64.rpm
 
 # macOS: the .pkg installs into /usr/local; or, without root, from the archive:
 tar -xzf okkama-<version>-macos-aarch64.tar.gz
@@ -447,9 +450,8 @@ hidden object Payment does Created, Authorized, Captured, Refunded, Declined {
     }
     // ... authorize(), refund(), reason(), id()
 
-    private:
-    approved() is ^Payment { ^stage = Stage.authorized; }     // internal transitions
-    rejected(reason is string) is ^Payment { ^stage = Stage.declined(reason); }
+    hidden approved() is ^Payment { ^stage = Stage.authorized; }     // internal transitions
+    hidden rejected(reason is string) is ^Payment { ^stage = Stage.declined(reason); }
 }
 
 // 5. Callers only ever hold views.
@@ -473,7 +475,7 @@ is rejected by `okkama check` — these are the compiler's actual messages:
 | `let p is Payment = created;` (downcast) | `Cannot initialize variable "p" of type Payment with Created` |
 | `let back is Authorized = boxed;` (via `any`) | `Cannot initialize variable "back" of type Authorized with any` |
 | `Payment(key: "x", stage: Stage.captured)` | `No constructor of "Payment" accepts (key: string, stage: Stage)` |
-| `Payment(key: "x").approved()` | `Action "approved" on object "Payment" is private` |
+| `Payment(key: "x").approved()` | `Action "approved" on object "Payment" is hidden` |
 | a `match` without the `declined` case | `Non-exhaustive match: missing declined` |
 | `payment.refund()` in the `approved` branch | `Role "Authorized" has no action "refund"` |
 | `payments.Payment(key: "x")` in another module | `Type "payments.Payment" is hidden in module "payments"` |
@@ -495,27 +497,39 @@ identical results — output, errors and exit status. The
 
 ```sh
 okkama hello.ok                              # IR interpreter (default), in-process
-okkama run --engine sparrow hello.ok         # Sparrow core: whole-function Cranelift JIT
+okkama run --engine sparrow hello.ok         # Sparrow: whole-function Cranelift JIT
 okkama run --engine jvm hello.ok             # JVM class files, run with `java`
 okkama build hello.ok --target sparrow -o hello.spb && sparrow hello.spb
 ```
 
-| | IR interpreter | Sparrow + JIT | JVM |
+| | IR interpreter | Sparrow (JIT) | JVM |
 |---|---|---|---|
-| Start-up (`hello`) | 6 ms | **6 ms** | 45 ms |
-| `fib(32)`, 7 M calls | 1.32 s | **0.17 s** | 0.18 s |
-| Mandelbrot (float) | 0.51 s | **0.05 s** | 0.14 s |
-| 1 M successor steps | 1.00 s | **0.11 s** | 0.13 s |
-| 6-module application | 1.63 s | **0.35 s** | 0.49 s |
-| Peak memory, application | 7 MB | 15 MB | 273 MB |
+| Start-up (`hello`) | 11 ms | **11 ms** | 52 ms |
+| `fib(32)`, 7 M calls | 1.25 s | **29 ms** | 186 ms |
+| Mandelbrot (float) | 0.54 s | **28 ms** | 146 ms |
+| 1 M successor steps | 0.92 s | **24 ms** | 133 ms |
+| 6-module application | 1.58 s | **95 ms** | 367 ms |
+| Peak memory, application | 10 MB | 12 MB | 258 MB |
 | Needs | nothing | nothing | JDK |
 
-Median of ten runs on an Apple M2 Max (0.3.0, the previous Sparrow VM). Since
-0.4.0 Sparrow runs on a new core: every function is compiled to machine code
-(Cranelift) before it runs, calls are direct, async frames are stackless and
-the collector is precise. On the same programs written in each language it is
-on average 5.4× faster than Python 3.9, 6.1× faster than Perl 5.42 and 4.0×
-faster than Ruby 2.6, about twice the previous Sparrow.
+Median of ten cold runs on an Apple M2 Max (0.5.5, release build, start-up
+included). Sparrow (its current version is called Tomato) compiles every function to
+machine code (Cranelift) before it runs; calls are direct, async frames are
+stackless and the collector is precise.
+
+The same ten programs were also written in Go, Java, Kotlin and Python. Each
+port prints exactly what the Okkama program prints. Geometric mean, Sparrow
+against each (0.5.4):
+
+| | cold run, start-up included | warmed up |
+|---|---|---|
+| Go 1.26 | 2.3× slower | 2.7× slower |
+| Java 26 (HotSpot) | 1.43× faster | 2.9× slower |
+| Kotlin 2.4 (HotSpot) | 1.72× faster | 2.7× slower |
+| Python 3.9 | 5.9× faster | 8.6× faster |
+
+Sparrow runs them in 8–25 MB, Go in 4–13 MB, Java in 44–209 MB and Kotlin in
+47–433 MB.
 
 ## Documentation
 
@@ -523,11 +537,11 @@ faster than Ruby 2.6, about twice the previous Sparrow.
 |---|---|
 | 📖 [The Okkama Book](docs/OkkamaBook.md) | The textbook: philosophy, every language construct, from first principles |
 | 📖 [Книга Okkama (RU)](docs/OkkamaBook-RU.md) | The book in Russian |
-| 🐦 [The Sparrow Book](docs/SparrowBook/SparrowBook.md) | Sparrow assembly (`.spa`) and SPB: every instruction, the verifier, how the core runs it |
+| 🐦 [The Sparrow Book](docs/SparrowBook/SparrowBook.md) | Sparrow assembly (`.spa`) and SPB: every instruction, the verifier, how Sparrow runs it |
 | 🐦 [Книга Sparrow (RU)](docs/SparrowBook/SparrowBook-RU.md) | The Sparrow book in Russian |
 | 🛡️ [Trust model](docs/security-model.md) | Which input is safe to compile, verify and run today, per boundary, with the open issues |
 | 🤖 [Guide for LLM agents](docs/LLM-GUIDE.md) | Working on this repository: layout, build, tests, benchmarks, architecture |
-| 🧪 [Conformance suite](conformance/README.md) | Executable specification: 787 cases with expected observations |
+| 🧪 [Conformance suite](conformance/README.md) | Executable specification: 1021 cases with expected observations |
 
 Where documents disagree, the source of truth is the conformance suite
 (`conformance/`) and the specification — in that order.
@@ -536,7 +550,7 @@ Where documents disagree, the source of truth is the conformance suite
 
 Okkama is **experimental**: the language and the standard library still
 evolve, and nothing is stable yet. The implementation runs the whole language
-and standard library: the conformance suite passes 787/787 cases on each
+and standard library: the conformance suite passes 1021/1021 cases on each
 engine, and every deterministic program in `std/` (in test mode)
 behaves identically on all three. See
 [Appendix B of the Book](docs/OkkamaBook.md#appendix-b-implementation-status)
@@ -562,7 +576,7 @@ for each `vX.Y.Z` tag, which must match the version in `okkama-rs/Cargo.toml`.
 
 ```text
 okkama/
-├── okkama-rs/        Rust implementation: compiler, JVM backend, Sparrow VM + JIT,
+├── okkama-rs/        Rust implementation: compiler, JVM backend, Sparrow (Tomato),
 │                     IR interpreter, runtime and natives, LSP, fmt, lint, blade
 ├── std/              standard library
 ├── docs/             the Book (EN/RU) and the guide for LLM agents

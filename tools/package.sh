@@ -5,11 +5,12 @@
 #     tools/package.sh                                  # платформа этой машины
 #     tools/package.sh --target x86_64-apple-darwin     # кросс-сборка cargo
 #     tools/package.sh --no-build --out dist --version 0.1.0-nightly.20261029
-#     tools/package.sh --installer                      # ещё .pkg (macOS) или .deb (Linux)
+#     tools/package.sh --installer                      # ещё .pkg (macOS) или .deb и .rpm (Linux)
 #
 # Версия по умолчанию — из okkama-rs/Cargo.toml. Результат —
-# dist/okkama-<версия>-<платформа>.tar.gz (+ .pkg/.deb) и .sha256 к каждому.
-# `.pkg` и `.deb` ставят в /usr/local и /usr соответственно. Архив
+# dist/okkama-<версия>-<платформа>.tar.gz (+ .pkg или .deb и .rpm) и .sha256 к
+# каждому. `.pkg` ставит в /usr/local, `.deb` и `.rpm` — в /usr; `.rpm`
+# собирается, если есть `rpmbuild` (#313). Архив
 # раскладывается как установка, поэтому распакованный `bin/okkama` сразу
 # находит std и нативную библиотеку относительно себя:
 #
@@ -162,7 +163,7 @@ Architecture: $DEB_ARCH
 Maintainer: Alexander Ponomarev <shootnix@users.noreply.github.com>
 Section: devel
 Priority: optional
-Depends: libc6 (>= 2.35)
+Depends: libc6 (>= 2.17)
 Suggests: libsqlite3-0 (>= 3.41), openjdk-21-jdk-headless
 Homepage: https://github.com/shootnix/okkama
 Description: Okkama programming language
@@ -170,12 +171,62 @@ Description: Okkama programming language
  JVM backend), the standard library, the language server, the formatter
  and the blade project tool.
 CONTROL
-            dpkg-deb --root-owner-group --build "$ROOTFS" "$OUT/$NAME.deb" >/dev/null
+            # xz, not the zstd Ubuntu's dpkg-deb picks by default: dpkg before
+            # Debian 12 cannot read zstd members (#485).
+            dpkg-deb -Zxz --root-owner-group --build "$ROOTFS" "$OUT/$NAME.deb" >/dev/null
             echo "$OUT/$NAME.deb"
+            # RPM from the same tree (#313). Release binaries are built against
+            # glibc 2.17 (manylinux2014, #485): every glibc distribution since
+            # 2014 installs them — CentOS 7, Amazon Linux 2, RHEL 8 and newer.
+            if command -v rpmbuild >/dev/null 2>&1; then
+                case "$PLATFORM" in
+                    linux-x86_64) RPM_ARCH=x86_64 ;;
+                    linux-aarch64) RPM_ARCH=aarch64 ;;
+                esac
+                # RPM: no `-` in a version; `~` sorts a pre-release first.
+                RPM_VERSION="$(printf '%s' "$VERSION" | sed 's/-/~/')"
+                TOPDIR="$STAGE/rpmbuild"
+                mkdir -p "$TOPDIR/SPECS"
+                cat > "$TOPDIR/SPECS/okkama.spec" <<SPEC
+Name: okkama
+Version: $RPM_VERSION
+Release: 1
+Summary: Okkama programming language
+License: GPL-3.0-only
+URL: https://github.com/shootnix/okkama
+BuildArch: $RPM_ARCH
+Requires: glibc >= 2.17
+Recommends: sqlite-libs
+Suggests: java-21-openjdk-headless
+AutoReqProv: no
+%global debug_package %{nil}
+%global __os_install_post %{nil}
+%global _build_id_links none
+
+%description
+Compiler and runner for Okkama (IR interpreter, Sparrow VM with JIT,
+JVM backend), the standard library, the language server, the formatter
+and the blade project tool.
+
+%install
+mkdir -p %{buildroot}
+cp -a $ROOTFS/usr %{buildroot}/
+
+%files
+/usr/bin/okkama
+/usr/bin/sparrow
+/usr/bin/blade
+/usr/lib/okkama
+%doc /usr/share/doc/okkama/copyright
+SPEC
+                rpmbuild --quiet --define "_topdir $TOPDIR" -bb "$TOPDIR/SPECS/okkama.spec"
+                cp "$TOPDIR/RPMS/$RPM_ARCH/okkama-$RPM_VERSION-1.$RPM_ARCH.rpm" "$OUT/$NAME.rpm"
+                echo "$OUT/$NAME.rpm"
+            fi
             ;;
     esac
 fi
 
-(cd "$OUT" && for file in "$NAME".tar.gz "$NAME".pkg "$NAME".deb; do
+(cd "$OUT" && for file in "$NAME".tar.gz "$NAME".pkg "$NAME".deb "$NAME".rpm; do
     [[ -f "$file" ]] && shasum -a 256 "$file" > "$file.sha256"
 done; true)

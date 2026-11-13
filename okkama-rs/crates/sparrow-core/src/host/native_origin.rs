@@ -16,7 +16,7 @@ use okkama_runtime_core::{IntValue, Value, sched};
 use std::rc::Rc;
 
 pub(crate) fn handles(native: Native) -> bool {
-    !native.signature().is_async || native.module() == "runtime/application"
+    !native.signature().is_async || native.module() == "runtime/application" || native.module() == "runtime/signal"
 }
 
 /// Core wakers of pending origin promises; origin deliveries wake them all.
@@ -156,7 +156,7 @@ impl Heap {
                     let key = MapKey::from_value(&k).map_err(|e| Error(e.message))?;
                     entries.insert(key, self.to_origin(v, item)?);
                 }
-                Value::Map(Rc::new(Map(entries)))
+                Value::Map(Rc::new(Map::new(entries)))
             }
             Type::Handle(_) if slot.kind() != HANDLE => return Err(Error("expected a native object".into())),
             Type::Handle(_) => match self.handles.get(slot.bits)? {
@@ -164,7 +164,12 @@ impl Heap {
                 _ => return Err(Error("expected an origin native object".into())),
             },
             Type::Any => self.any_to_origin(slot)?,
-            Type::Rat | Type::Void => return Err(Error("native argument type is not bridged".into())),
+            // A Tomato rat is a payload around the origin's own Rat (#489).
+            Type::Rat => match self.core().payload::<crate::ops::Rational>(slot.bits) {
+                Some(rational) => Value::Rat(Rc::new(rational.0.clone())),
+                None => return Err(Error("expected a rat".into())),
+            },
+            Type::Void => return Err(Error("native argument type is not bridged".into())),
         })
     }
 
@@ -199,11 +204,14 @@ impl Heap {
                 self.allocate_array(slots)?
             }
             (Type::Map(key, item), Value::Map(map)) => {
-                let mut entries = Vec::with_capacity(map.0.len());
-                for (k, v) in &map.0 {
+                let mut entries = Vec::with_capacity(map.len());
+                for (k, v) in map.entries().iter() {
                     entries.push((self.from_origin(k.to_value(), key)?, self.from_origin(v.clone(), item)?));
                 }
                 self.map_new(entries.into_iter())?
+            }
+            (Type::Rat, Value::Rat(rat)) => {
+                Slot { tag: OBJECT, bits: self.core_mut().allocate_payload(Box::new(crate::ops::Rational((*rat).clone()))) }
             }
             (Type::Handle(_), value) => Slot { tag: HANDLE, bits: self.handles.allocate(Handle::Origin(value))? },
             (ty, value) => return Err(Error(format!("native result {value:?} does not match {ty:?}"))),

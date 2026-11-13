@@ -81,7 +81,8 @@ fn encode(runtime: &Runtime, out: &mut Vec<u8>, value: Word, ty: TypeRef) -> Res
                 let map = runtime.heap.payload::<MapValue>(value).ok_or_else(|| NOT_TRANSFERABLE.to_owned())?;
                 out.push(8);
                 count(out, map.entries.len())?;
-                for &(k, v) in map.entries.values().rev() {
+                let entries: Vec<(Word, Word)> = map.entries.values().copied().collect();
+                for &(k, v) in entries.iter().rev() {
                     work.push((v, *item));
                     work.push((k, *key));
                 }
@@ -236,6 +237,7 @@ fn build(runtime: &mut Runtime, ty: TypeRef, values: &[Word]) -> Word {
                 key: key_kind.repr(),
                 value: Kind::of(program, item).repr(),
                 entries: Default::default(),
+                owned: Default::default(),
             };
             for pair in values.chunks_exact(2) {
                 let k = runtime.key(pair[0], key_kind, key_type.as_ref());
@@ -379,8 +381,8 @@ fn settle(runtime: &mut Runtime, output: &Output, result: Option<TypeRef>) -> Re
     if !raw[start..end].starts_with(FRAME) {
         return Err("invalid worker response frame".into());
     }
-    let mut stdout = std::io::stdout();
-    stdout.write_all(&raw[..start]).and_then(|()| stdout.flush()).map_err(|e| e.to_string())?;
+    // The action's output, into the process buffer (#132).
+    okkama_runtime_core::stdout::write(&raw[..start]).map_err(|e| e.to_string())?;
     std::io::stderr().write_all(&output.stderr).map_err(|e| e.to_string())?;
     let mut reader = Reader::new(&raw[start + 4..end]);
     match reader.take(1)?[0] {

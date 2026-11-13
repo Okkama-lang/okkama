@@ -11,7 +11,7 @@
 //! необязательным типом, вложенные блоки, `if` как оператор и выражение,
 //! `loop`, `for` по диапазону, `next`, `last`, `return`, `confirm`, `panic`;
 //! объекты с типизированными полями и defaults, полные и shorthand
-//! конструкторы, actions с перегрузкой и `private`, successor-действия,
+//! конструкторы, actions с перегрузкой и `hidden`, successor-действия,
 //! rebind, обязательство использования successor, `int/bool.string()`.
 
 mod body;
@@ -92,6 +92,60 @@ pub enum LinkError {
 ///
 /// Тестовые объявления должны быть удалены заранее
 /// ([`crate::syntax::prune::strip_test_items`]): production-модуль OIR их не содержит.
+/// Region closes of async bodies await async destroys only where one may be
+/// owned (#328). Each body recorded the types its regions took; with every
+/// body lowered, every specialisation a value can be of exists, so a body
+/// none of whose types may reach an object with an `async destroy` closes
+/// with `region.leave` and `region.unwind`, on every path. A value hidden
+/// in `any`, a function value or a capability counts only if some value
+/// that may reach one is boxed, captured or made a capability's owner
+/// anywhere in the program (a fixed point: closures capture closures).
+fn settle_where_needed(ctx: &mut ctx::Ctx<'_, '_>, functions: &mut [ir::Function]) {
+    if !ctx.settles {
+        return;
+    }
+    let mut hidden: Vec<ir::Type> = Vec::new();
+    for function in functions.iter() {
+        for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+            let operands: &[ir::ValueId] = match &inst.kind {
+                ir::InstKind::AnyBox(value) | ir::InstKind::CapMake(value) => std::slice::from_ref(value),
+                ir::InstKind::FnClosure { captures, .. } => captures,
+                _ => &[],
+            };
+            for value in operands {
+                let ty = &function.values[value.0];
+                if !hidden.contains(ty) {
+                    hidden.push(ty.clone());
+                }
+            }
+        }
+    }
+    ctx.dynamic_async = false;
+    loop {
+        ctx.compute_async();
+        let dynamic = hidden.iter().any(|ty| ctx.may_async_destroy(ty));
+        if dynamic == ctx.dynamic_async {
+            break;
+        }
+        ctx.dynamic_async = dynamic;
+    }
+    for (index, function) in functions.iter_mut().enumerate() {
+        let Some(Some(types)) = ctx.settle_types.get(index) else { continue };
+        if types.iter().any(|ty| ctx.may_async_destroy(ty)) {
+            continue;
+        }
+        for inst in function.blocks.iter_mut().flat_map(|block| block.insts.iter_mut()) {
+            match inst.kind {
+                ir::InstKind::RegionSettle { region, keep } => inst.kind = ir::InstKind::RegionLeave { region, keep },
+                ir::InstKind::RegionSettleUnwind { region, failure } => {
+                    inst.kind = ir::InstKind::RegionUnwind { region, failure }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 pub fn lower_program(program: &ast::Program) -> Result<ir::Module> {
     let modules = vec![crate::analysis::SourceModule {
         path: modules::module_path(program),
@@ -242,8 +296,8 @@ pub struct CheckError {
 type CheckResult =
     std::result::Result<Vec<CheckError>, std::result::Result<Vec<CheckError>, String>>;
 
-/// Загружает импорты и проверяет программу целиком, без lowering: все
-/// ошибки анализа (`okkama check`). `Ok` — предупреждения корневого модуля;
+/// Загружает импорты и проверяет программу целиком: все ошибки анализа, а
+/// если их нет — ошибку lowering, если она есть (`okkama check`, #317). `Ok` — предупреждения корневого модуля;
 /// `Err` с пустым списком не бывает.
 pub fn check_linked(
     program: &ast::Program,
@@ -285,27 +339,39 @@ fn check_roots(
     let graph = modules::load_graph(roots, loader).map_err(link_error)?;
     let sources = modules::source_modules(&graph, roots);
     let first_root = graph.loaded.len();
-    crate::analysis::analyze_mode(sources, roots.len(), test_mode)
-        .map(|analysis| {
-            analysis
-                .warnings
-                .into_iter()
-                .filter(|warning| warning.module >= first_root)
-                .map(|error| CheckError {
-                    source: source_of(&graph, roots, error.module),
-                    error,
-                })
-                .collect()
+    let analysis = crate::analysis::analyze_mode(sources, roots.len(), test_mode).map_err(|errors| {
+        Ok(errors
+            .into_iter()
+            .map(|error| CheckError {
+                source: source_of(&graph, roots, error.module),
+                error,
+            })
+            .collect())
+    })?;
+    // A program that `okkama run` rejects at compile time is rejected here
+    // too: lowering finds the specialization limit, infinite recursion and
+    // what IR lowering does not support yet (#317).
+    if let Err((module, error)) = lower_analyzed(&analysis, roots[0].0, Vec::new(), test_mode, false) {
+        let error = match &error {
+            LoweringError::Unsupported { .. } => {
+                crate::analysis::SemanticError::unsupported(module, error.span(), error.message())
+            }
+            LoweringError::Invalid { .. } => crate::analysis::SemanticError::invalid(module, error.span(), error.message()),
+        };
+        return Err(Ok(vec![CheckError {
+            source: source_of(&graph, roots, module),
+            error,
+        }]));
+    }
+    Ok(analysis
+        .warnings
+        .into_iter()
+        .filter(|warning| warning.module >= first_root)
+        .map(|error| CheckError {
+            source: source_of(&graph, roots, error.module),
+            error,
         })
-        .map_err(|errors| {
-            Ok(errors
-                .into_iter()
-                .map(|error| CheckError {
-                    source: source_of(&graph, roots, error.module),
-                    error,
-                })
-                .collect())
-        })
+        .collect())
 }
 
 /// Анализ, затем lowering проверенной программы. Первой сообщается ошибка
@@ -330,6 +396,20 @@ fn lower_modules(
         };
         (first.module, error)
     })?;
+    lower_analyzed(&analysis, program, imports, test_mode, true)
+}
+
+/// Lowering of an analysed program and the checks that only lowering can
+/// make: the specialization limit, infinite recursion, an invalid IR.
+/// `optimize` runs the OIR passes; `okkama check` lowers without them (#317).
+fn lower_analyzed(
+    analysis: &crate::analysis::Analysis<'_>,
+    program: &ast::Program,
+    imports: Vec<ir::Import>,
+    test_mode: bool,
+    optimize: bool,
+) -> std::result::Result<(ir::Module, Vec<crate::analysis::SemanticError>), (usize, LoweringError)>
+{
     let root = analysis.registry.entry_module;
     let mut ctx = ctx::Ctx::new(&analysis.registry, &analysis.bodies);
     ctx.collect().map_err(|error| (root, error))?;
@@ -350,6 +430,7 @@ fn lower_modules(
         next += 1;
     }
     ctx.current = None;
+    settle_where_needed(&mut ctx, &mut functions);
     let owners: Vec<usize> = (0..functions.len()).map(|index| ctx.task_module(index)).collect();
     let mut module = ctx.module(program, imports, functions);
     module.debug.function_modules = owners.clone();
@@ -372,7 +453,7 @@ fn lower_modules(
         };
         return Err((owners[func.0], LoweringError::invalid(module.functions[func.0].span, message)));
     }
-    let passes = Passes::from_env();
+    let passes = if optimize { Passes::from_env() } else { Passes { enabled: Some(Vec::new()), sabotage: false } };
     // Регионы, которые ничем не владеют, не открываются и не закрываются.
     // Раньше хвостовых вызовов: в программе с `destroy` пустой `region.leave`
     // после вызова иначе оставляет его вызовом (#285).
@@ -392,13 +473,19 @@ fn lower_modules(
         ir::hoist::hoist_loop_constants(&mut module);
     }
     // `undef`, которые никто не читает (от убранных регионов и блоков), — тоже.
-    // Пустые блоки-трамплины пропускаются.
+    // Затем пропускаются пустые блоки-трамплины: блок, где остался лишь такой
+    // `undef` убранного `region.enter`, пуст только после этого (#292).
+    // Удалённые блоки могли быть единственными читателями других `undef`.
     for function in &mut module.functions {
-        if passes.on("jumps") {
-            ir::cfg::thread_jumps(function);
-        }
         if passes.on("undef") {
             ir::cfg::drop_unread_undef(function);
+        }
+        if passes.on("jumps") {
+            let threaded = ir::cfg::thread_jumps(function);
+            let merged = ir::cfg::merge_blocks(function);
+            if (threaded || merged) && passes.on("undef") {
+                ir::cfg::drop_unread_undef(function);
+            }
         }
     }
     if passes.sabotage {
@@ -582,7 +669,7 @@ pub fn inspect(
 
 /// The IR passes of a build (H-09): `OKKAMA_IR_PASSES` is `all` (the
 /// default), `none` or a comma list of `regions`, `tail-calls`, `fold`, `hoist`,
-/// `jumps`, `undef`. Every engine runs the passed OIR, so only a run with the
+/// `undef`, `jumps`. Every engine runs the passed OIR, so only a run with the
 /// passes off shows whether a pass changed meaning; the release gate runs the
 /// IR conformance suite both ways. `sabotage-int-add` turns the first
 /// `int.add` into `int.sub` — a self-test that the check catches a wrong
@@ -593,7 +680,7 @@ struct Passes {
 }
 
 /// The IR passes in pipeline order.
-pub const PASSES: [&str; 6] = ["regions", "tail-calls", "fold", "hoist", "jumps", "undef"];
+pub const PASSES: [&str; 6] = ["regions", "tail-calls", "fold", "hoist", "undef", "jumps"];
 
 static SELECTED: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
 

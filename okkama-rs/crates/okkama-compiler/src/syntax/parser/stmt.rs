@@ -60,11 +60,15 @@ impl Parser<'_> {
         self.reject_native_outside_module()?;
         let start = self.peek().span;
         let kind = match self.peek_kind() {
-            TokenKind::Let => self.let_statement()?,
+            TokenKind::Let => self.let_statement(false)?,
             TokenKind::Defer => self.defer_statement()?,
+            // Like `if` and `loop`, a statement `try` and `match` take one
+            // optional `;` (#302).
             TokenKind::Try if !self.try_mark_follows() => {
                 self.advance();
-                StmtKind::Try(self.finish_try(start)?)
+                let statement = self.finish_try(start)?;
+                self.eat(TokenKind::Semicolon);
+                StmtKind::Try(statement)
             }
             TokenKind::Throw => self.throw_statement()?,
             TokenKind::Return => self.return_statement()?,
@@ -81,12 +85,19 @@ impl Parser<'_> {
             }
             TokenKind::Match => {
                 self.advance();
-                StmtKind::Match(self.finish_match(start)?)
+                let statement = self.finish_match(start)?;
+                self.eat(TokenKind::Semicolon);
+                StmtKind::Match(statement)
             }
             TokenKind::For => self.for_statement()?,
             TokenKind::Loop => self.loop_statement(start)?,
             TokenKind::Next => self.next_statement()?,
             TokenKind::Last => self.last_statement()?,
+            // `once let` (#491): `once` is a word only right before `let`.
+            _ if self.check_name() && self.lexeme(self.peek()) == "once" && self.check_next(TokenKind::Let) => {
+                self.advance();
+                self.let_statement(true)?
+            }
             _ if self.is_member_field_bind() => self.self_field_bind()?,
             _ if self.check_name() && self.check_next(TokenKind::Equal) => self.field_bind()?,
             _ => self.expression_statement()?,
@@ -254,8 +265,8 @@ impl Parser<'_> {
             && self.tokens[self.pos + 3].kind == TokenKind::Equal
     }
 
-    /// `let name ("is" type)? "=" expr ";"`
-    fn let_statement(&mut self) -> PResult<StmtKind> {
+    /// `once? let name ("is" type)? "=" expr ";"`; the `once` is already read.
+    fn let_statement(&mut self, once: bool) -> PResult<StmtKind> {
         self.advance();
         let name = self.consume_binding_name("Expect variable name after \"let\".")?;
         let ty = if self.eat(TokenKind::Is) {
@@ -266,7 +277,7 @@ impl Parser<'_> {
         self.consume(TokenKind::Equal, "Expect \"=\" after variable name.")?;
         let value = self.expression()?;
         self.consume(TokenKind::Semicolon, "Expect \";\" after let declaration.")?;
-        Ok(StmtKind::Let { name, ty, value })
+        Ok(StmtKind::Let { name, ty, value, once })
     }
 
     /// After `try`: `block catch_clause+`. Shared by the statement and the
@@ -520,21 +531,12 @@ impl Parser<'_> {
         Ok(StmtKind::Next { condition })
     }
 
-    /// `last ("if" expr | expr ("if" expr)?)? ";"`. In `last if c`
-    /// the `if` introduces the condition; an `if` expression used as the
-    /// payload has to be grouped.
+    /// `last ("if" expr | expr ("if" expr)?)? ";"`, read like `return` and
+    /// `throw` (#303): `last if c;` is a condition, while
+    /// `last if c { 1; } else { 2; };` carries the `if` expression.
     fn last_statement(&mut self) -> PResult<StmtKind> {
         self.advance();
-        let mut value = None;
-        let mut condition = None;
-        if self.eat(TokenKind::If) {
-            condition = Some(self.expression()?);
-        } else if !self.check(TokenKind::Semicolon) {
-            value = Some(self.expression()?);
-            if self.eat(TokenKind::If) {
-                condition = Some(self.expression()?);
-            }
-        }
+        let (value, condition) = self.exit_value()?;
         self.consume(
             TokenKind::Semicolon,
             "Expect \";\" after loop control statement.",

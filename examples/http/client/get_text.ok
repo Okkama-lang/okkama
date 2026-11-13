@@ -1,0 +1,43 @@
+module examples/http/client/get_text v1.0.0;
+
+import "http/client" take HttpClient;
+import "http/server" take HttpServer;
+import "http/handler" take Handling, HandlingResult, ResponseHandling;
+import "http/request_context" take HttpRequestContext;
+import "http/message" take Request, Response;
+import "http/method" take MethodName;
+import "http/body" take TextBody;
+import "http/status" take Status;
+import "http/endpoint" take LoopbackEndpoints;
+import "net/tcp" take TcpListening;
+import "time/duration" take Duration;
+import "io/stdout" take Stdout;
+
+// GET a page and print it as text, decoded by its charset. The page comes
+// from a small server on 127.0.0.1 that this program starts and drains.
+
+object Greeting does Handling {
+    Greeting();
+
+    async handling(request is Request, context is HttpRequestContext) is HandlingResult {
+        Stdout().writeln("server got: ", MethodName(request::Head::method), " ", request::Head::target.path());
+        ResponseHandling(Response(status: Status.ok, content: TextBody(text: "Hello, wörld!")));
+    }
+}
+
+async main() is int {
+    let listener = await TcpListening(port: 0).listener();
+    let base = "http://127.0.0.1:" + listener::Local::port.string();
+    let server = HttpServer(listener: listener, handling: Greeting()).started();
+        // A real program writes HttpClient(); this one may reach 127.0.0.1.
+    let client = HttpClient(endpoints: LoopbackEndpoints());
+
+    let page = await client.get(base + "/hello");
+    if page::Head::status == Status.ok {
+        Stdout().writeln(await page.text());
+    }
+
+    client.close();
+    await server.drain(limit: Duration(seconds: 5));
+    0;
+}

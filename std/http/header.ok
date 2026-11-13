@@ -1,197 +1,676 @@
 module http/header v1.0.0;
 
-import "http/method" take Method, InvalidMethod;
-import "encoding/single_byte" take Latin1Encoded, Latin1Decoded, UnrepresentableLatin1Character;
+// Header fields: names, values and the set of fields of a message.
+//
+//     let headers = Headers(
+//         Header(name: "Content-Type", value: "text/plain"),
+//         Header(name: "Cache-Control", value: "no-store"),
+//     );
+//     headers.text("content-type");                       // "text/plain"
+//     headers.maybe("Retry-After").int() else 0;
+//     headers.list("Accept");                             // members of a list field
+//     let more = headers.addition(Header(name: "Vary", value: "Accept"));
+//
+// Names are tokens and match without regard to case, but keep their spelling.
+// Values are octet strings (one character per byte, Latin-1) without controls;
+// leading and trailing spaces and tabs are removed. Nothing is folded or
+// joined: two fields of one name stay two fields. Headers are bounded by
+// HeaderLimits (1024 fields and 1 MiB by default).
+
+import "http/token" take HttpToken, InvalidToken;
+import "encoding/single_byte" take Latin1Encoded, Latin1Decoded;
 import "collections/sequence" take Sequencing;
 import "compare" take Comparing, Order;
 import "error" take InvalidArgument;
-import "regex/pattern" take Regex;
-import "regex/search" take RegexMatches,PrefixRegexMatch;
+import "strings/parse" take Number, InvalidInteger;
 
-// HTTP names share the HTTP token grammar, not mail's broader field-name
-// grammar. Spelling is immutable; HTTP matching is explicit canonical ordering,
-// because language structural equality also observes the preserved spelling.
+// A field name: a token, matched without regard to case.
 object HeaderName does Comparing<HeaderName> {
-    has spelling,canonical is string;
+    has spelling, canonical is string;
+
+    // Checks origin; InvalidHeader when it is not a token.
     HeaderName(origin is string) {
-        let checked=try {Method(origin).string();} catch failure is InvalidMethod {
+        let checked = try {
+            HttpToken(origin).string();
+        }
+        catch failure is InvalidToken {
             throw InvalidHeader.detailed(origin, "field name must be an HTTP token");
         };
-        spelling=checked;canonical=HttpAsciiLowercase(checked).string();
+        spelling = checked;
+        // A token is ASCII, where the builtin lower() is the ASCII mapping.
+        canonical = checked.lower();
     }
-    string() is string {spelling;}
-    lowercase() is string {canonical;}
-    order(other is HeaderName) is Order {self.lowercase().order(other.lowercase());}
+
+    // The name as it was spelled.
+    string() is string {
+        spelling;
+    }
+
+    // The name in lowercase, as it is matched.
+    lowercase() is string {
+        canonical;
+    }
+
+    // Orders by the lowercase name.
+    order(other is HeaderName) is Order {
+        self.lowercase().order(other.lowercase());
+    }
 }
+
 // A logical field value uses one Unicode scalar per wire octet (Latin-1).
 // No folding or implicit Unicode encoding; only edge SP/HTAB are removed.
-object Header {
-    has name is HeaderName;has value is string;
-    Header(name is HeaderName, value is string) {
-        self.name=name;self.value=HttpFieldValue(name,value).string();
-    }
-    name() is HeaderName {name;}
-    value() is string {value;}
+// A field of a message head, what Headers are made of: a Header is one, and
+// so is anything that knows its header form, such as a SetCookie.
+role HeaderField {
+    // The field as a Header.
+    header() is Header;
 }
-// Bounded regex windows preserve the Header contract beyond the regex input
-// limit. Validation checks every window before reporting a control error.
-object HttpFieldValue {
-    has name is HeaderName;has origin is string;
-    HttpFieldValue(name is HeaderName,origin is string){self.name=name;self.origin=origin;}
-    string() is string {
-        let non_octet=Regex("[^\\x{0}-\\x{ff}]");
-        let controls=Regex("[\\x{0}-\\x{8}\\x{a}-\\x{1f}\\x{7f}]");
-        let state=HttpFieldScan(0,false);
-        loop {
-            let position=state.position();last if position==origin.length();
-            let stop=if origin.length()-position>65536 {position+65536;} else {origin.length();};
-            let piece=origin.slice(position,stop);
-            confirm !RegexMatches(piece,non_octet).found()
-                else throw InvalidHeader.detailed(name.string(), "field value is not an octet string");
-            state=state.following(stop,state.control() || RegexMatches(piece,controls).found());
-        }
-        confirm !state.control() else throw InvalidHeader.detailed(name.string(), "control in field value");
-        self.trimmed();
+
+// One field: a name and a value.
+object Header does HeaderField {
+    has name is HeaderName;
+    has value is string;
+
+    // name with value; InvalidHeader for a control or a character above one
+    // byte.
+    Header(name is HeaderName, value is string) {
+        self.name = name;
+        self.value = HttpFieldValue(name: name, origin: value).string();
     }
-    private:
-    trimmed() is string {
-        let spaces=Regex("[ \\t]*");let ending=Regex("[\\x{0}-\\x{ff}]*[^ \\t]");
-        let range=HttpFieldRange(0,origin.length());
-        loop {
-            let start=range.start();let end=range.end();last if start==end;
-            let stop=if end-start>65536 {start+65536;} else {end;};
-            let piece=origin.slice(start,stop);let removed=PrefixRegexMatch(piece,spaces).range().end();
-            range=range.following(start+removed,end);last if removed<piece.length();
+
+    // Header(name: "Cache-Control", value: "no-store"): the name is checked as
+    // a field name here (#111).
+    Header(name is string, value is string) {
+        let field = HeaderName(name);
+        self.name = field;
+        self.value = HttpFieldValue(name: field, origin: value).string();
+    }
+
+    // This field.
+    header() is Header {
+        self;
+    }
+
+    // The name.
+    name() is HeaderName {
+        name;
+    }
+
+    // The value, without leading and trailing spaces and tabs.
+    value() is string {
+        value;
+    }
+}
+
+// A field value is an octet string without controls other than HTAB, with
+// its leading and trailing spaces and tabs removed. One pass over the
+// characters (#110): the four regexes compiled per header were most of a
+// request's allocations. A value that is not an octet string is reported
+// before a control in it.
+hidden object HttpFieldValue {
+    has name is HeaderName;
+    has origin is string;
+
+    HttpFieldValue(name is HeaderName, origin is string) {
+        self.name = name;
+        self.origin = origin;
+    }
+
+    string() is string {
+        let characters = origin.characters();
+        // 0: clean, 1: a control, 2: a character beyond one octet.
+        let verdict = characters.reduce(0) -> state, character {
+            let code = character.code();
+            if code > 255 {
+                2;
+            }
+            else {
+                if state == 0 && ((code < 32 && code != 9) || code == 127) {
+                    1;
+                }
+                else {
+                    state;
+                }
+            }
+        };
+        confirm verdict != 2
+            else throw InvalidHeader.detailed(name.string(), "field value is not an octet string");
+        confirm verdict != 1
+            else throw InvalidHeader.detailed(name.string(), "control in field value");
+        let size = characters.size();
+        let first = (0..size).reduce(size) -> found, index {
+            if found == size && characters[index] != ' ' && characters[index] != '\t' {
+                index;
+            }
+            else {
+                found;
+            }
+        };
+        let end = (0..size).reduce(-1) -> found, index {
+            if characters[index] != ' ' && characters[index] != '\t' {
+                index;
+            }
+            else {
+                found;
+            }
+        };
+        if end < first {
+            "";
         }
-        loop {
-            let start=range.start();let end=range.end();last if start==end;
-            let from=if end-start>65536 {end-65536;} else {start;};
-            let piece=origin.slice(from,end);let removed=PrefixRegexMatch(piece,spaces).range().end();
-            if removed==piece.length(){range=range.following(start,from);} else {
-                range=range.following(start,from+PrefixRegexMatch(piece,ending).range().end());last;
+        else {
+            if first == 0 && end == size - 1 {
+                origin;
+            }
+            else {
+                origin.slice(first, end + 1);
             }
         }
-        origin.slice(range.start(),range.end());
     }
 }
-object HttpFieldScan {
-    has position is int;has control is bool;
-    HttpFieldScan(position is int,control is bool){self.position=position;self.control=control;}
-    position() is int {position;}control() is bool {control;}
-    following(position is int,control is bool) is ^HttpFieldScan {^position=position;^control=control;}
-}
-object HttpFieldRange {
-    has start,end is int;
-    HttpFieldRange(start is int,end is int){self.start=start;self.end=end;}
-    start() is int {start;}end() is int {end;}
-    following(start is int,end is int) is ^HttpFieldRange {^start=start;^end=end;}
-}
+
+// How many fields and bytes Headers may hold.
 object HeaderLimits {
-    has count,budget is int;
-    HeaderLimits(){count=1024;budget=1048576;}
-    HeaderLimits(entries is int, bytes is int) {
-        confirm entries>=0 && bytes>=0 else throw InvalidArgument.because("HTTP header limits must be nonnegative");
-        count=entries;budget=bytes;
+    has count, budget is int;
+
+    // 1024 fields and 1 MiB.
+    HeaderLimits() {
+        count = 1024;
+        budget = 1048576;
     }
-    entries() is int {count;}
-    bytes() is int {budget;}
+
+    // The limits as given.
+    HeaderLimits(entries is int, bytes is int) {
+        confirm entries >= 0 && bytes >= 0
+            else throw InvalidArgument.because("HTTP header limits must be nonnegative");
+        count = entries;
+        budget = bytes;
+    }
+
+    // The number of fields and of bytes.
+    cap Limits {
+        entries is int {
+            count;
+        }
+
+        bytes is int {
+            budget;
+        }
+    }
 }
+
 // Snapshot each source item once. Every derived aggregate keeps these limits;
 // no query joins duplicates or silently interprets Set-Cookie as a list field.
 object Headers {
-    has origin is @Header;has limits is HeaderLimits;
+    has origin is @Header;
+    has limits is HeaderLimits;
+    has used is int;
+
+    // The fields, in order, within the default limits.
     Headers(entries is Sequencing<Header>) {
-        let bounds=HeaderLimits();origin=HeaderSnapshot(entries,bounds).entries();limits=bounds;
+        let bounds = HeaderLimits();
+        let snapshot = HeaderSnapshot(entries: entries, limits: bounds);
+        origin = snapshot.entries();
+        used = snapshot.used();
+        limits = bounds;
     }
+
+    // The fields one by one: Headers(Header(name: "X-Trace", value: id),
+    // SetCookie(name: "sid", value: token)).
+    Headers(fields is ...HeaderField) {
+        let given is @HeaderField = fields...;
+        let listed is @Header = given.map() -> field {
+            field.header();
+        };
+        let bounds = HeaderLimits();
+        let snapshot = HeaderSnapshot(entries: listed, limits: bounds);
+        origin = snapshot.entries();
+        used = snapshot.used();
+        limits = bounds;
+    }
+
+    // The fields within limits; HeaderLimitExceeded beyond.
     Headers(entries is Sequencing<Header>, limits is HeaderLimits) {
-        origin=HeaderSnapshot(entries,limits).entries();self.limits=limits;
+        let snapshot = HeaderSnapshot(entries: entries, limits: limits);
+        origin = snapshot.entries();
+        used = snapshot.used();
+        self.limits = limits;
     }
-    limits() is HeaderLimits {limits;}
-    entries() is Sequencing<Header> {origin;}
+
+    // The limits.
+    limits() is HeaderLimits {
+        limits;
+    }
+
+    // Every field, in order.
+    entries() is Sequencing<Header> {
+        origin;
+    }
+
+    // Whether a field has the name.
     membership(name is HeaderName) is bool {
-        origin.reduce(false) -> found,entry {found || entry.name().order(name)==Order.equal;};
+        origin.reduce(false) -> found, entry {
+            found || entry.name().order(name) == Order.equal;
+        };
     }
+
+    // The value of the first field of the name; MissingHeader when there is
+    // none.
     first(name is HeaderName) is string {
-        for origin -> entry {if entry.name().order(name)==Order.equal {return entry.value();}}
+        for origin -> entry {
+            if entry.name().order(name) == Order.equal {
+                return entry.value();
+            }
+        }
         throw MissingHeader.name(name.string());
     }
+
+    // The values of every field of the name, in order.
     values(name is HeaderName) is Sequencing<string> {
-        let matching is @Header=origin.filter() -> entry {entry.name().order(name)==Order.equal;};
-        let values is @string=matching.map() -> entry {entry.value();};values;
+        let matching is @Header = origin.filter() -> entry {
+            entry.name().order(name) == Order.equal;
+        };
+        let values is @string = matching.map() -> entry {
+            entry.value();
+        };
+        values;
     }
+
+    // The value of a field by name, in the json reading style (#111):
+    // headers.text("Content-Type"). With several fields of the name, the
+    // first; MissingHeader when there is none.
+    text(name is string) is string {
+        self.first(HeaderName(name));
+    }
+
+    // A field read as a decimal integer: headers.int("Content-Length").
+    // InvalidHeader when the value is something else.
+    int(name is string) is int {
+        HeaderInteger(name: name, value: self.text(name)).int();
+    }
+
+    // The members of a list field over all its lines: "Accept: a, b" and a
+    // second "Accept: c" give ["a", "b", "c"]. A comma inside a quoted string
+    // stays in its member, and empty members are dropped (RFC 9110 5.6.1).
+    // An absent field gives [].
+    list(name is string) is @string {
+        let empty is @string = [];
+        self.values(HeaderName(name)).reduce(empty) -> members, value {
+            members + HeaderListMembers(value).members();
+        };
+    }
+
+    // A field that may be absent: its readers give Maybe, so a fallback is
+    // headers.maybe("If-None-Match").text() else "".
+    maybe(name is string) is HeaderMaybeReader {
+        let field = HeaderName(name);
+        let found = if self.membership(field) {
+            Maybe.some(self.first(field));
+        }
+        else {
+            Maybe<string>.none;
+        };
+        HeaderMaybeReader(name: name, value: found);
+    }
+
+    // Only the new field is checked against the limits; the others were
+    // checked when they came in (#112).
     addition(entry is Header) is Headers {
-        confirm origin.size()<limits.entries() else throw HeaderLimitExceeded.kind("entries");
-        let values is @Header=(0..origin.size()+1).map() -> index {
-            if index<origin.size(){origin[index];}else{entry;}
-        };Headers(values,limits);
+        confirm origin.size() < limits::Limits::entries
+            else throw HeaderLimitExceeded.kind("entries");
+        let bytes = entry.name().string().length() + entry.value().length() + 4;
+        confirm bytes <= limits::Limits::bytes - used else throw HeaderLimitExceeded.kind("bytes");
+        let extended is Headers = self.extended(entry, bytes);
+        extended;
+    }
+
+    hidden extended(entry is Header, bytes is int) is ^Headers {
+        ^origin = origin + [entry];
+        ^used = used + bytes;
     }
 }
+
+// Headers without the fields of some names.
 object HeadersWithout {
-    has origin is Headers;has selected is @string;
+    has origin is Headers;
+    has selected is @string;
+
+    // origin without the fields named in names.
     HeadersWithout(origin is Headers, names is Sequencing<HeaderName>) {
-        let count=names.size();confirm count>=0 else throw InvalidArgument.because("negative header name sequence size");
-        confirm count<=origin.limits().entries() else throw HeaderLimitExceeded.kind("entries");
-        let keys is @string=(0..count).map() -> index {names.item(index).lowercase();};
-        selected=keys;self.origin=origin;
+        let count = names.size();
+        confirm count >= 0 else throw InvalidArgument.because("negative header name sequence size");
+        confirm count <= origin.limits()::Limits::entries
+            else throw HeaderLimitExceeded.kind("entries");
+        let keys is @string = (0..count).map() -> index {
+            names.item(index).lowercase();
+        };
+        selected = keys;
+        self.origin = origin;
     }
-    result() is Headers {
-        let source=origin.entries();let entries is @Header=(0..source.size()).map() -> index {source.item(index);};
-        let kept is @Header=entries.filter() -> entry {
-            let excluded=selected.reduce(false) -> found,name {found || name==entry.name().lowercase();};
-            !excluded;
-        };Headers(kept,origin.limits());
+
+    // The remaining fields.
+    headers() is Headers {
+        let source = origin.entries();
+        let empty is @Header = [];
+        let kept is @Header = (0..source.size()).reduce(empty) -> fields, index {
+            let entry = source.item(index);
+            let excluded = selected.reduce(false) -> found, name {
+                found || name == entry.name().lowercase();
+            };
+            if excluded {
+                fields;
+            }
+            else {
+                fields + [entry];
+            }
+        };
+        Headers(entries: kept, limits: origin.limits());
     }
 }
+
+// Headers with every field of one name replaced by one field.
 object ReplacedHeader {
-    has origin is Headers;has entry is Header;
-    ReplacedHeader(origin is Headers, entry is Header){self.origin=origin;self.entry=entry;}
-    result() is Headers {HeadersWithout(origin,[entry.name()]).result().addition(entry);}
+    has origin is Headers;
+    has entry is Header;
+
+    // origin with entry in place of the fields of its name.
+    ReplacedHeader(origin is Headers, entry is Header) {
+        self.origin = origin;
+        self.entry = entry;
+    }
+
+    // The fields.
+    headers() is Headers {
+        HeadersWithout(origin: origin, names: [entry.name()]).headers().addition(entry);
+    }
 }
+
 // Logical HTTP/2 validation, not HPACK or a complete message encoder.
 // Pseudo-fields belong to the eventual typed request/response framing layer.
 object Http2Headers {
-    has origin is Headers;has request is bool;
-    Http2Headers(origin is Headers, request is bool){self.origin=origin;self.request=request;}
-    result() is Headers {
-        let source=origin.entries();let entries is @Header=(0..source.size()).map() -> index {
-            let entry=source.item(index);let name=entry.name().lowercase();
-            confirm name!="connection" && name!="proxy-connection" && name!="keep-alive"
-                && name!="transfer-encoding" && name!="upgrade"
-                else throw InvalidHeader.detailed(entry.name().string(), "connection-specific HTTP/2 field");
-            if name=="te" {confirm request && HttpAsciiLowercase(entry.value()).string()=="trailers"
-                else throw InvalidHeader.detailed(entry.name().string(), "HTTP/2 TE requires request trailers");}
-            Header(HeaderName(name),entry.value());
-        };Headers(entries,origin.limits());
+    has origin is Headers;
+    has request is bool;
+
+    // origin checked for HTTP/2, as request or response fields.
+    Http2Headers(origin is Headers, request is bool) {
+        self.origin = origin;
+        self.request = request;
+    }
+
+    // The fields with lowercase names; InvalidHeader for a connection-specific
+    // field, or TE other than `trailers`.
+    headers() is Headers {
+        let source = origin.entries();
+        let entries is @Header = (0..source.size()).map() -> index {
+            let entry = source.item(index);
+            let name = entry.name().lowercase();
+            confirm name != "connection"
+                && name != "proxy-connection"
+                && name != "keep-alive"
+                && name != "transfer-encoding"
+                && name != "upgrade"
+                else throw InvalidHeader.detailed(
+                    entry.name().string(),
+                    "connection-specific HTTP/2 field"
+                );
+            if name == "te" {
+                confirm request && HttpAsciiLowercase(entry.value()).string() == "trailers"
+                    else throw InvalidHeader.detailed(
+                        entry.name().string(),
+                        "HTTP/2 TE requires request trailers"
+                    );
+            }
+            Header(name: HeaderName(name), value: entry.value());
+        };
+        Headers(entries: entries, limits: origin.limits());
     }
 }
+
+// A field that may be absent, as headers.maybe(name) gives it: text() and
+// int() answer Maybe, so a fallback is headers.maybe("Retry-After").int() else 0.
+// A value of another form is still InvalidHeader.
+object HeaderMaybeReader {
+    has name is string;
+    has value is Maybe<string>;
+
+    // Made by Headers.maybe(name); not constructed directly.
+    HeaderMaybeReader(name is string, value is Maybe<string>) {
+        self.name = name;
+        self.value = value;
+    }
+
+    // The value, or none.
+    text() is Maybe<string> {
+        value;
+    }
+
+    // The value as a decimal integer, or none; InvalidHeader for another form.
+    int() is Maybe<int> {
+        match value {
+            case Maybe.some(text) {
+                Maybe.some(HeaderInteger(name: name, value: text).int());
+            }
+            else {
+                Maybe<int>.none;
+            }
+        };
+    }
+}
+
+hidden object HeaderInteger {
+    has name is string;
+    has value is string;
+
+    HeaderInteger(name is string, value is string) {
+        self.name = name;
+        self.value = value;
+    }
+
+    int() is int {
+        try {
+            Number(value).int();
+        }
+        catch failure is InvalidInteger {
+            throw InvalidHeader.detailed(name, "a decimal integer is required");
+        };
+    }
+}
+
+// The members of one list field value. Quoted strings are split around: the
+// escaped quotes inside them are set aside first as a character no field value
+// holds (one above Latin-1), then the value alternates between text outside and
+// inside quotes at each double quote.
+hidden object HeaderListMembers {
+    has origin is string;
+
+    HeaderListMembers(origin is string) {
+        self.origin = origin;
+    }
+
+    members() is @string {
+        if !origin.contains("\"") {
+            return self.kept(origin.split(","));
+        }
+        let pieces = origin.replace("\\\"", "\u{100}").split("\"");
+        let start is @string = [""];
+        let joined is @string = (0..pieces.size()).reduce(start) -> members, index {
+            let piece = pieces[index];
+            let open = members.slice(0, members.size() - 1);
+            let current = members[members.size() - 1];
+            if index % 2 == 1 {
+                open + [current + "\"" + piece + "\""];
+            }
+            else {
+                let parts = piece.split(",");
+                open + [current + parts[0]] + parts.slice(1, parts.size());
+            }
+        };
+        let restored is @string = joined.map() -> member {
+            member.replace("\u{100}", "\\\"");
+        };
+        self.kept(restored);
+    }
+
+    hidden kept(members is @string) is @string {
+        let trimmed is @string = members.map() -> member {
+            member.trim();
+        };
+        trimmed.filter() -> member {
+            member != "";
+        };
+    }
+}
+
+// A name that is not a token, or a value with a control; name and reason say
+// which.
 enum InvalidHeader is Error = (detailed(name is string, reason is string));
+
+// No field has that name.
 enum MissingHeader is Error = (name(name is string));
+
+// More fields or bytes than the limits; kind says which.
 enum HeaderLimitExceeded is Error = (kind(kind is string));
+
 // Internal representation collaborators; modules do not have private exports.
 object HttpAsciiLowercase {
-    has origin is string;HttpAsciiLowercase(origin is string){self.origin=origin;}
+    has origin is string;
+
+    // Text to lowercase in ASCII only.
+    HttpAsciiLowercase(origin is string) {
+        self.origin = origin;
+    }
+
+    // origin with A-Z lowered.
     string() is string {
-        let bytes is @byte=Latin1Encoded(origin).bytes().map() -> octet {
-            let code=octet.int();if code>=65 && code<=90{(code+32).byte();}else{octet;}
-        };Latin1Decoded(bytes).string();
+        // ASCII text, as every field name is: the builtin lower() is exact
+        // there, and text without capitals stays as it is (#503).
+        let codes = origin.characters();
+        let wide = codes.reduce(false) -> found, character {
+            found || character.code() > 127;
+        };
+        if !wide {
+            return origin.lower();
+        }
+        let bytes is @byte = Latin1Encoded(origin).bytes().map() -> octet {
+            let code = octet.int();
+            if code >= 65 && code <= 90 {
+                (code + 32).byte();
+            }
+            else {
+                octet;
+            }
+        };
+        Latin1Decoded(bytes).string();
     }
 }
-object HeaderSnapshot {
+
+hidden object HeaderSnapshot {
     has origin is @Header;
+    has amount is int;
+
     HeaderSnapshot(entries is Sequencing<Header>, limits is HeaderLimits) {
-        let count=entries.size();confirm count>=0 else throw InvalidArgument.because("negative header sequence size");
-        confirm count<=limits.entries() else throw HeaderLimitExceeded.kind("entries");
-        let values is @Header=(0..count).map() -> index {entries.item(index);};
-        let used=values.reduce(0) -> total,entry {
-            let bytes=entry.name().string().length()+entry.value().length()+4;
-            confirm bytes<=limits.bytes()-total else throw HeaderLimitExceeded.kind("bytes");total+bytes;
-        };origin=values;
+        let count = entries.size();
+        confirm count >= 0 else throw InvalidArgument.because("negative header sequence size");
+        confirm count <= limits::Limits::entries else throw HeaderLimitExceeded.kind("entries");
+        let values is @Header = (0..count).map() -> index {
+            entries.item(index);
+        };
+        let total = values.reduce(0) -> sum, entry {
+            let bytes = entry.name().string().length() + entry.value().length() + 4;
+            confirm bytes <= limits::Limits::bytes - sum
+                else throw HeaderLimitExceeded.kind("bytes");
+            sum + bytes;
+        };
+        origin = values;
+        amount = total;
     }
-    entries() is @Header {origin;}
+
+    entries() is @Header {
+        origin;
+    }
+
+    used() is int {
+        amount;
+    }
 }
 
 test "HTTP fields retain duplicates and compare names without case" {
-    let fields=Headers([Header(HeaderName("Set-Cookie")," a=1 "),Header(HeaderName("set-cookie"),"b=2")]);
-    test.is(fields.values(HeaderName("SET-COOKIE")).size(),2);
-    test.is(fields.first(HeaderName("set-cookie")),"a=1");
+    let fields = Headers(
+        Header(name: HeaderName("Set-Cookie"), value: " a=1 "),
+        Header(name: HeaderName("set-cookie"), value: "b=2")
+    );
+    test.is(fields.values(HeaderName("SET-COOKIE")).size(), 2);
+    test.is(fields.first(HeaderName("set-cookie")), "a=1");
+}
+
+test "a field value is trimmed and checked in one pass" {
+    test.is(Header(name: HeaderName("X-A"), value: " \t padded value \t ").value(), "padded value");
+    test.is(Header(name: HeaderName("X-A"), value: "inner \t tab").value(), "inner \t tab");
+    test.is(Header(name: HeaderName("X-A"), value: "   ").value(), "");
+    test.is(Header(name: HeaderName("X-A"), value: "").value(), "");
+    test.is(Header(name: HeaderName("X-A"), value: "caf\u{e9}").value(), "caf\u{e9}");
+    let reason = (value is string) is string {
+        try {
+            Header(name: HeaderName("X-A"), value: value).value();
+            "accepted";
+        }
+        catch InvalidHeader.detailed(name, message) {
+            message;
+        }
+    };
+    test.is(reason("bad\nline"), "control in field value");
+    test.is(reason("bell\u{7}"), "control in field value");
+    test.is(reason("del\u{7f}"), "control in field value");
+    test.is(reason("snow \u{2603}"), "field value is not an octet string");
+    test.is(reason("\n then \u{2603}"), "field value is not an octet string");
+}
+
+test "adding a field checks only the new one against the limits" {
+    let small = HeaderLimits(3, 40);
+    let fields = Headers(entries: [Header(name: HeaderName("A"), value: "1")], limits: small);
+    let more = fields.addition(Header(name: HeaderName("B"), value: "22")).addition(
+        Header(name: HeaderName("C"), value: "333")
+    );
+    test.is(more.entries().size(), 3);
+    test.is(more.entries().item(2).value(), "333");
+    test.is(fields.entries().size(), 1);
+    test.throws(HeaderLimitExceeded) {
+        more.addition(Header(name: HeaderName("D"), value: "4"));
+    };
+    // A: 1 takes 6 bytes of 12, B: 22 would take 7 more.
+    let tight = Headers(
+        entries: [Header(name: HeaderName("A"), value: "1")],
+        limits: HeaderLimits(10, 12)
+    );
+    test.throws(HeaderLimitExceeded) {
+        tight.addition(Header(name: HeaderName("B"), value: "22"));
+    };
+    test.is(tight.addition(Header(name: HeaderName("B"), value: "2")).entries().size(), 2);
+}
+
+test "headers are read by name in the json style" {
+    let headers = Headers(
+        Header(name: "Content-Length", value: "42"),
+        Header(name: "Accept", value: "text/html, application/json;q=0.9,,"),
+        Header(name: "accept", value: "*/*"),
+        Header(name: "If-None-Match", value: "\"a,b\", W/\"c\""),
+        Header(name: "X-Quoted", value: "\"say \\\"hi, there\\\"\", b"),
+        Header(name: "X-Count", value: "many"),
+    );
+    test.is(headers.text("content-length"), "42");
+    test.is(headers.int("Content-Length"), 42);
+    test.is(headers.list("Accept").join("|"), "text/html|application/json;q=0.9|*/*");
+    test.is(headers.list("If-None-Match").join("|"), "\"a,b\"|W/\"c\"");
+    test.is(headers.list("X-Quoted").join("|"), "\"say \\\"hi, there\\\"\"|b");
+    test.is(headers.list("X-Missing").size(), 0);
+    test.is(headers.maybe("X-Trace").text() else "none", "none");
+    test.is(headers.maybe("content-length").int() else 0, 42);
+    test.throws(MissingHeader) {
+        headers.text("Content-Type");
+    };
+    test.throws(InvalidHeader) {
+        headers.int("X-Count");
+    };
+    test.throws(InvalidHeader) {
+        headers.maybe("X-Count").int();
+    };
 }

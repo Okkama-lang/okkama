@@ -23,6 +23,10 @@ enum Param {
     Key,
     /// Элемент массива-получателя (`contains`, `index_of`).
     Element,
+    /// A value stored as an element (`replaced`, #250): the element type,
+    /// reached by the boundary rules of an action parameter (a role wraps
+    /// its implementer, `any` boxes).
+    Stored,
 }
 
 /// Битовые действия `int`/`byte`.
@@ -94,6 +98,12 @@ impl Checker<'_, '_> {
     }
 
     /// Сигнатура builtin-действия: параметры и результат (`None` — нет такого).
+    /// Whether a builtin value has `string()` answering a string.
+    pub(super) fn builtin_text(&self, receiver: &Ty) -> bool {
+        self.builtin_signature(receiver, "string")
+            .is_some_and(|(_, params, result)| params.is_empty() && result == Some(Ty::Str))
+    }
+
     fn builtin_signature(
         &self,
         receiver: &Ty,
@@ -142,6 +152,10 @@ impl Checker<'_, '_> {
             (Ty::Array(_), "reversed") => (Builtin::ArrayReversed, vec![], Some(receiver.clone())),
             (Ty::Array(_), "take") => (Builtin::ArrayTake, vec![int()], Some(receiver.clone())),
             (Ty::Array(_), "drop") => (Builtin::ArrayDrop, vec![int()], Some(receiver.clone())),
+            (Ty::Array(_), "replaced") => {
+                (Builtin::ArrayReplaced, vec![int(), Param::Stored], Some(receiver.clone()))
+            }
+            (Ty::Array(_), "removed_at") => (Builtin::ArrayRemovedAt, vec![int()], Some(receiver.clone())),
             (Ty::Map(..), "size") => (Builtin::MapSize, vec![], Some(Ty::Int)),
             (Ty::Map(..), "has") => (Builtin::MapHas, vec![Param::Key], Some(Ty::Bool)),
             (Ty::Map(key, _), "keys") => {
@@ -185,7 +199,8 @@ impl Checker<'_, '_> {
             (Ty::Str, "repeat") => (Builtin::StrRepeat, vec![int()], Some(Ty::Str)),
             (Ty::Str, "characters") => (Builtin::StrCharacters, vec![], Some(Ty::array(Ty::Char))),
             (Ty::Char, "code") => (Builtin::CharCode, vec![], Some(Ty::Int)),
-            // Строки упорядочиваются по длине (как Perl); `more` у строк нет.
+            // Порядок строк — по code point, как у `order()` (#281); `greater`
+            // у строк нет.
             (Ty::Str, "less" | "less_or_equal") => (
                 Builtin::StrCompare(ordering(name)?),
                 vec![Param::Same],
@@ -237,6 +252,29 @@ impl Checker<'_, '_> {
             (Ty::Rat, "pow") => (Builtin::Pow, vec![Param::Exact(Ty::Int)], Some(Ty::Rat)),
             (Ty::Float, "pow") => (Builtin::Pow, vec![Param::Same], Some(Ty::Float)),
             (Ty::Int | Ty::Float, "sqrt") => (Builtin::Sqrt, vec![], Some(Ty::Float)),
+            // Elementary functions (#192): intrinsics of every engine. A result
+            // must be finite, as every float; x.atan2(y) is the angle of (x, y).
+            (
+                Ty::Float,
+                "floor" | "ceil" | "round" | "trunc" | "exp" | "ln" | "log2" | "log10" | "sin"
+                | "cos" | "tan",
+            ) => (Builtin::Math(format!("okkama.float.{name}")), vec![], Some(Ty::Float)),
+            (Ty::Float, "atan2") => {
+                (Builtin::Math("okkama.float.atan2".into()), vec![Param::Same], Some(Ty::Float))
+            }
+            (Ty::Float, "finite" | "nan") => {
+                (Builtin::Math(format!("okkama.float.{name}")), vec![], Some(Ty::Bool))
+            }
+            (Ty::Int | Ty::Float, "min" | "max") => (
+                Builtin::Math(format!("okkama.{}.{name}", if *receiver == Ty::Int { "int" } else { "float" })),
+                vec![Param::Same],
+                Some(receiver.clone()),
+            ),
+            (Ty::Int | Ty::Float, "clamp") => (
+                Builtin::Math(format!("okkama.{}.clamp", if *receiver == Ty::Int { "int" } else { "float" })),
+                vec![Param::Same, Param::Same],
+                Some(receiver.clone()),
+            ),
             (Ty::Rat, "numerator") => (Builtin::Numerator, vec![], Some(Ty::Str)),
             (Ty::Rat, "denominator") => (Builtin::Denominator, vec![], Some(Ty::Str)),
             (Ty::Int | Ty::Byte, bits) if BIT_ACTIONS.contains(&bits) => {
@@ -308,8 +346,10 @@ impl Checker<'_, '_> {
             return Self::poisoned(span);
         };
         let Some((op, params, result)) = self.builtin_signature(&receiver, &name.text) else {
+            // The full type (`@Reading`), not only its category (#300).
             let message = format!(
-                "Type \"{category}\" has no builtin action \"{}\"",
+                "Type \"{}\" has no builtin action \"{}\"",
+                self.type_name(&receiver),
                 name.text
             );
             self.error(name.span, message);
@@ -354,7 +394,7 @@ impl Checker<'_, '_> {
                 Param::Same => Some(receiver.clone()),
                 Param::Exact(ty) => Some(ty.clone()),
                 Param::Key => None,
-                Param::Element => element.clone(),
+                Param::Element | Param::Stored => element.clone(),
             };
             let value = self.value(&arg.value, hint.as_ref());
             diverges |= value.diverges;
@@ -363,6 +403,16 @@ impl Checker<'_, '_> {
                 Param::Same => Some(receiver.clone()),
                 Param::Exact(ty) => Some(ty.clone()),
                 Param::Element => element,
+                Param::Stored => match element {
+                    Some(element) => Some(element),
+                    None => {
+                        self.error(
+                            span,
+                            "Builtin action \"replaced\" needs an element type: an untyped [] has no element to replace",
+                        );
+                        return Self::poisoned(span);
+                    }
+                },
                 Param::Key => match &receiver {
                     Ty::Map(key, _) if **key != Ty::Never => Some((**key).clone()),
                     _ => {
@@ -375,6 +425,14 @@ impl Checker<'_, '_> {
             };
             if let Some(expected) = expected
                 && actual != expected && !actual.is_error() && !value.diverges {
+                    // A role parameter takes an implementer through `role.wrap`,
+                    // as the parameter of an action does (#299).
+                    if (matches!(expected, Ty::Role(..)) || matches!(param, Param::Stored))
+                        && let Ok(wrapped) = self.try_coerce(value.clone(), &expected, "Argument")
+                    {
+                        values.push(wrapped);
+                        continue;
+                    }
                     let message = if let Builtin::Bits { .. } = op {
                         format!("Builtin action \"{}\" requires an int count", name.text)
                     } else {

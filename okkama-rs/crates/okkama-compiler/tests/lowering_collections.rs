@@ -40,23 +40,22 @@ fn map_threads_a_linear_builder_through_the_loop_header() {
             "    %5: int = array.len %2\n",
             // Константы тела цикла вынесены во вход (`ir::hoist`).
             "    %10: int = const 2\n",
-            "    %14: int = const 1\n",
+            "    %13: int = const 1\n",
             "    br ^b1(%4, %3)\n",
             "^b1(%6: int, %7: builder<int>):\n",
             "    %8: bool = int.lt %6, %5\n",
-            "    cond %8, ^b2, ^b4\n",
+            "    cond %8, ^b2, ^b3\n",
+            // Шаг тела и переход к заголовку — один блок (`ir::cfg::merge_blocks`).
             "^b2:\n",
             "    %9: int = array.get %2, %6\n",
             "    %11: int = int.mul %9, %10\n",
             "    %12: builder<int> = builder.push %7, %11\n",
-            "    br ^b3(%12)\n",
-            "^b3(%13: builder<int>):\n",
-            "    %15: int = int.add %6, %14\n",
-            "    br ^b1(%15, %13)\n",
-            "^b4:\n",
-            "    %16: array<int> = builder.finish %7\n",
-            "    %17: int = array.len %16\n",
-            "    ret %17\n",
+            "    %14: int = int.add %6, %13\n",
+            "    br ^b1(%14, %12)\n",
+            "^b3:\n",
+            "    %15: array<int> = builder.finish %7\n",
+            "    %16: int = array.len %15\n",
+            "    ret %16\n",
             "}\n",
         )
     );
@@ -204,4 +203,21 @@ fn constants_outside_loops_stay_in_their_branch() {
     let entry = listing.split("^b1").next().expect("entry block");
     assert!(!entry.contains("const 40") && !entry.contains("const 50"), "{listing}");
     assert!(listing.contains("const 40") && listing.contains("const 50"), "{listing}");
+}
+
+#[test]
+fn a_literal_choice_keeps_the_analyzed_collection_type() {
+    // #298: only the selected `[]` is emitted, retagged to `@int`; no branch.
+    for (body, retag) in [
+        ("let ok = (false ?? [1] !! []) == []; 0;", "array<int> = array.retag"),
+        ("let ok = (true ?? [] !! [1]) == []; 0;", "array<int> = array.retag"),
+        ("let ok = (false ?? [\"k\": 1] !! [:]) == [:]; 0;", "map<str,int> = map.retag"),
+    ] {
+        let main = main_listing(body);
+        assert!(main.contains(retag), "{body}\n{main}");
+        assert!(!main.contains("cond "), "{body}\n{main}");
+    }
+    // A variable condition still branches and joins with the tagged type.
+    let main = main_listing("let c = true; let ok = (c ?? [1] !! []) == []; 0;");
+    assert!(main.contains("cond "), "{main}");
 }

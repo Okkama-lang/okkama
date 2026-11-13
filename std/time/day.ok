@@ -21,12 +21,14 @@ import "compare" take Comparing, Order;
 // seconds are timeline events and are deliberately not encoded as civil field
 // values. Nanoseconds are integral and never rounded.
 
+// A wall-clock time within a day, nanosecond exact.
 object TimeOfDay does Comparing<TimeOfDay> {
     has hour_value is int;
     has minute_value is int;
     has second_value is int;
     has nanosecond_value is int;
 
+    // hour 0 to 23, minute 0 to 59, second 0 to 59, nanosecond 0 to 999999999.
     TimeOfDay(hour is int, minute is int, second is int, nanosecond is int) {
         confirm hour >= 0 && hour <= 23
             else throw InvalidTimeOfDay.because("hour must be within 0..23");
@@ -43,40 +45,99 @@ object TimeOfDay does Comparing<TimeOfDay> {
         nanosecond_value = nanosecond;
     }
 
-    hour() is int {
-        hour_value;
+    // The parts of the time, already checked by the constructor.
+    cap Clock {
+        hour is int {
+            hour_value;
+        }
+
+        minute is int {
+            minute_value;
+        }
+
+        second is int {
+            second_value;
+        }
+
+        nanosecond is int {
+            nanosecond_value;
+        }
     }
 
-    minute() is int {
-        minute_value;
-    }
-
-    second() is int {
-        second_value;
-    }
-
-    nanosecond() is int {
-        nanosecond_value;
-    }
-
-    order(other is TimeOfDay) is Order {
-        if hour_value != other.hour() {
-            hour_value.order(other.hour());
+    // ISO 8601: "12:30:45", or "12:30:45.125" with the fraction's trailing
+    // zeroes trimmed.
+    string() is string {
+        let hour is string = hour_value.string();
+        let minute is string = minute_value.string();
+        let second is string = second_value.string();
+        let fraction is string = if nanosecond_value == 0 {
+            "";
         }
         else {
-            if minute_value != other.minute() {
-                minute_value.order(other.minute());
+            let digits is string = nanosecond_value.string();
+            "." + self.trimmed(("000000000" + digits).slice(digits.length(), digits.length() + 9));
+        };
+        ("00" + hour).slice(hour.length(), hour.length() + 2) +
+            ":" +
+            ("00" + minute).slice(minute.length(), minute.length() + 2) +
+            ":" +
+            ("00" + second).slice(second.length(), second.length() + 2) +
+            fraction;
+    }
+
+    hidden trimmed(digits is string) is string {
+        if digits.slice(digits.length() - 1, digits.length()) == "0" {
+            self.trimmed(digits.slice(0, digits.length() - 1));
+        }
+        else {
+            digits;
+        }
+    }
+
+    // Earlier times come first.
+    order(other is TimeOfDay) is Order {
+        if hour_value != other::Clock::hour {
+            hour_value.order(other::Clock::hour);
+        }
+        else {
+            if minute_value != other::Clock::minute {
+                minute_value.order(other::Clock::minute);
             }
             else {
-                if second_value != other.second() {
-                    second_value.order(other.second());
+                if second_value != other::Clock::second {
+                    second_value.order(other::Clock::second);
                 }
                 else {
-                    nanosecond_value.order(other.nanosecond());
+                    nanosecond_value.order(other::Clock::nanosecond);
                 }
             }
         }
     }
 }
 
+// A time outside the day.
 enum InvalidTimeOfDay is Error = (because(message is string));
+
+test "times of day are checked and ordered" {
+    let noon = TimeOfDay(hour: 12, minute: 0, second: 0, nanosecond: 0);
+    test.is(noon::Clock::hour, 12);
+    test.is(noon.order(TimeOfDay(hour: 12, minute: 0, second: 0, nanosecond: 1)), Order.less);
+    test.is(TimeOfDay(hour: 23, minute: 59, second: 59, nanosecond: 999999999)::Clock::nanosecond, 999999999);
+    for [[24, 0, 0, 0], [0, 60, 0, 0], [0, 0, 60, 0], [0, 0, 0, 1000000000], [-1, 0, 0, 0]] -> parts {
+        test.is(
+            try {
+                TimeOfDay(hour: parts[0], minute: parts[1], second: parts[2], nanosecond: parts[3])::Clock::hour;
+            }
+            catch error is InvalidTimeOfDay {
+                -1;
+            },
+            -1
+        );
+    }
+}
+
+test "a time of day writes itself in ISO 8601" {
+    test.is(TimeOfDay(hour: 9, minute: 5, second: 0, nanosecond: 0).string(), "09:05:00");
+    test.is(TimeOfDay(hour: 12, minute: 30, second: 45, nanosecond: 125000000).string(), "12:30:45.125");
+    test.is(TimeOfDay(hour: 23, minute: 59, second: 59, nanosecond: 1).string(), "23:59:59.000000001");
+}

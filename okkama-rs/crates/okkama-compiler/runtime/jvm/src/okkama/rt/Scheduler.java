@@ -6,17 +6,20 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.Semaphore;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Кооперативный планировщик (OIR-1 §13, §18 спецификации). Каждая задача —
  * поток, но исполняется ровно одна: {@link #transfer} отдаёт управление и
- * ждёт, пока его вернут. Это повторяет модель обратных вызовов
- * Perl-интерпретатора: запуск Future исполняет тело до первой приостановки
- * сразу; завершение Future сразу продолжает его ожидающих по порядку;
- * {@code spawn} запускает задачу немедленно. Внешние события (таймеры,
- * ввод-вывод) приходят в очередь цикла {@code async main}.
+ * ждёт, пока его вернут. Запуск Future исполняет тело до первой приостановки
+ * сразу; {@code spawn} запускает задачу немедленно. Завершение Future не
+ * продолжает ожидающих на месте: они встают в очередь готовых задач по
+ * порядку, и её разбирает цикл запуска, когда текущая задача приостановится
+ * или закончится (#340). Внешние события (таймеры, ввод-вывод) приходят в
+ * очередь цикла {@code async main}.
  */
 public final class Scheduler {
     private Scheduler() {}
@@ -28,6 +31,10 @@ public final class Scheduler {
     static Task current = new Task(null);
     /** Future, запущенные `spawn`: их исход проверяет завершение программы. */
     static final java.util.LinkedHashSet<Future> registered = new java.util.LinkedHashSet<Future>();
+    /** Разбуженные задачи по порядку пробуждения: их продолжает цикл запуска. */
+    static final ArrayDeque<Task> ready = new ArrayDeque<Task>();
+    /** Корень {@code async main}, пока его ведёт цикл запуска. */
+    private static Future root;
     /** События внешних операций; их число — {@link #external}. */
     static final LinkedBlockingQueue<Runnable> events = new LinkedBlockingQueue<Runnable>();
     /** Внешние операции, исхода которых ждёт программа. */
@@ -48,7 +55,7 @@ public final class Scheduler {
      * владеющая управлением, поэтому синхронизация — семафоры передачи.
      */
     private static final class Carrier implements Runnable {
-        final Semaphore assigned = new Semaphore(0);
+        final Baton assigned = new Baton();
         Runnable work;
 
         public void run() {
@@ -106,6 +113,8 @@ public final class Scheduler {
      */
     static final class Op {
         private boolean attached;
+        /** Таймер операции {@link #timer}, если она ожидание. */
+        private ScheduledFuture<?> timer;
 
         void attach() {
             if (!attached) {
@@ -120,6 +129,51 @@ public final class Scheduler {
                 external--;
             }
         }
+
+        /** Отсоединить и снять таймер ожидания, если он ещё не сработал (#504). */
+        void cancel() {
+            detach();
+            if (timer != null) {
+                timer.cancel(false);
+            }
+        }
+    }
+
+    /**
+     * Таймеры ожиданий: один поток-планировщик, отменённый таймер снимается
+     * сразу (#504). Прежде каждое ожидание спало в своём потоке до дедлайна,
+     * даже отменённое, и сервер с тайм-аутами на каждый запрос исчерпывал
+     * потоки.
+     */
+    private static final ScheduledThreadPoolExecutor TIMERS = timers();
+
+    private static ScheduledThreadPoolExecutor timers() {
+        ScheduledThreadPoolExecutor timers = new ScheduledThreadPoolExecutor(1, new ThreadFactory() {
+            public Thread newThread(Runnable work) {
+                Thread thread = new Thread(work, "okkama-timer");
+                thread.setDaemon(true);
+                return thread;
+            }
+        });
+        timers.setRemoveOnCancelPolicy(true);
+        return timers;
+    }
+
+    /** Исход через {@code nanoseconds} — событием цикла; {@link Op#cancel} снимает таймер. */
+    static Op timer(long nanoseconds, final Outcome done) {
+        final Op op = new Op();
+        op.attach();
+        op.timer = TIMERS.schedule(new Runnable() {
+            public void run() {
+                events.add(new Runnable() {
+                    public void run() {
+                        op.detach();
+                        done.deliver(Boolean.TRUE, null);
+                    }
+                });
+            }
+        }, nanoseconds, TimeUnit.NANOSECONDS);
+        return op;
     }
 
     /** Исполнить {@code work} на рабочем потоке; исход — событием цикла. */
@@ -199,13 +253,68 @@ public final class Scheduler {
         current = me;
     }
 
+    /**
+     * Разбудить задачу: она встаёт в очередь готовых и продолжится, когда цикл
+     * запуска до неё дойдёт, а не внутри кода, который её разбудил (#340).
+     */
+    static void makeReady(Task task) {
+        if (task.queued) {
+            return;
+        }
+        task.queued = true;
+        ready.add(task);
+    }
+
+    /**
+     * Продолжить первую готовую задачу; {@code false} — очередь пуста. Зовёт
+     * только цикл запуска: так задача не продолжается внутри другой.
+     */
+    private static boolean runReady() {
+        Task task = ready.poll();
+        if (task == null) {
+            return false;
+        }
+        task.queued = false;
+        // Продолжается только приостановленная в await задача.
+        if (task.awaiting != null) {
+            transfer(task);
+        }
+        return true;
+    }
+
     /** Приостановить текущую задачу: управление — тому, кто её продолжил. */
     private static void suspend() {
         Task me = current;
         Task back = me.resumer;
         me.resumer = null;
-        back.wake.release();
+        if (!handOff(back)) {
+            back.wake.release();
+        }
         me.wake.acquireUninterruptibly();
+    }
+
+    /**
+     * Задача, которую продолжил цикл запуска, остановилась: управление сразу
+     * следующей готовой задаче, которая вернёт его туда же. Это тот порядок,
+     * что дал бы цикл, без двух переключений потоков через него (#340). Задача,
+     * запущенная другой задачей ({@code spawn}, первый {@code await}),
+     * возвращается к ней: та продолжает свой код раньше любой готовой.
+     */
+    private static boolean handOff(Task back) {
+        if (back.future != null) {
+            return false;
+        }
+        Task next;
+        while ((next = ready.poll()) != null) {
+            next.queued = false;
+            if (next.awaiting != null) {
+                next.resumer = back;
+                current = next;
+                next.wake.release();
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Запустить холодный Future: тело исполняется до первой приостановки. */
@@ -234,7 +343,12 @@ public final class Scheduler {
                 task.resumer = null;
                 // В запас до передачи управления: дальше носитель уже свободен.
                 retire(self[0]);
-                back.wake.release();
+                // Завершённый корень возвращает управление циклу: готовые
+                // задачи дальше отменяет завершение запуска.
+                boolean running = root != null && root.state == Future.RUNNING;
+                if (!running || !handOff(back)) {
+                    back.wake.release();
+                }
             }
         };
         // Тело ждёт task.wake, поэтому носитель известен ему до начала.
@@ -242,7 +356,10 @@ public final class Scheduler {
         transfer(task);
     }
 
-    /** Исход Future; ожидающие продолжаются сразу, в порядке ожидания. */
+    /**
+     * Исход Future; ожидающие задачи встают в очередь готовых в порядке
+     * ожидания, слушатели вызываются сразу.
+     */
     static void complete(Future future, Object value, Failure failure) {
         if (failure == null) {
             future.value = value;
@@ -255,7 +372,7 @@ public final class Scheduler {
         while (!future.waiters.isEmpty()) {
             Object next = future.waiters.remove(0);
             if (next instanceof Task) {
-                transfer((Task) next);
+                makeReady((Task) next);
             } else {
                 ((Runnable) next).run();
             }
@@ -314,8 +431,15 @@ public final class Scheduler {
         future.cancelRequested = true;
         Task task = future.task;
         if (task == null) {
-            // Обещание рантайма: отмена завершает его отказом `Cancelled`.
-            complete(future, null, Rt.thrown(new Cancelled()));
+            // Обещание рантайма: отмена завершает его отказом `Cancelled`, или
+            // его отменяет и потом завершает тот, кто его выдал.
+            Runnable canceller = future.canceller;
+            future.canceller = null;
+            if (canceller != null) {
+                canceller.run();
+            } else {
+                complete(future, null, Rt.thrown(new Cancelled()));
+            }
             return;
         }
         task.cancelPending = true;
@@ -336,7 +460,9 @@ public final class Scheduler {
             return;
         }
         inner.waiters.remove(task);
-        transfer(task);
+        // Отменённая задача продолжится и бросит Cancelled в свою очередь, не
+        // внутри cancel (#340).
+        makeReady(task);
     }
 
     /**
@@ -346,8 +472,13 @@ public final class Scheduler {
      */
     public static Object runMain(Future root) {
         observe(root);
-        start(root, null);
-        drive(root);
+        Scheduler.root = root;
+        try {
+            start(root, null);
+            drive(root);
+        } finally {
+            Scheduler.root = null;
+        }
         Failure unobserved = shutdown();
         registered.clear();
         if (root.state == Future.FAILED) {
@@ -366,6 +497,7 @@ public final class Scheduler {
      */
     public static void runTest(Future body) {
         registered.clear();
+        ready.clear();
         if (body != null) {
             runMain(body);
             return;
@@ -377,20 +509,32 @@ public final class Scheduler {
         }
     }
 
-    /** Обрабатывать внешние события, пока {@code until} не завершён. */
+    /**
+     * Продолжать готовые задачи и обрабатывать внешние события, пока
+     * {@code until} не завершён. Готовая задача — тоже ход вперёд, без
+     * внешних событий.
+     */
     private static void drive(Future until) {
         while (until.state == Future.RUNNING) {
+            if (runReady()) {
+                continue;
+            }
             if (external == 0) {
                 throw Rt.trap("async main cannot complete: no task can make progress");
             }
-            Runnable event;
-            try {
-                event = events.take();
-            } catch (InterruptedException interrupted) {
-                throw Rt.trap("async runtime was interrupted");
-            }
-            event.run();
+            deliver();
         }
+    }
+
+    /** Дождаться одного внешнего события и выполнить его продолжение. */
+    private static void deliver() {
+        Runnable event;
+        try {
+            event = events.take();
+        } catch (InterruptedException interrupted) {
+            throw Rt.trap("async runtime was interrupted");
+        }
+        event.run();
     }
 
     private static Failure shutdown() {
@@ -400,8 +544,14 @@ public final class Scheduler {
             }
         }
         for (Future future : new ArrayList<Future>(registered)) {
-            while (future.state == Future.RUNNING && external > 0) {
-                drive(future);
+            while (future.state == Future.RUNNING) {
+                if (runReady()) {
+                    continue;
+                }
+                if (external == 0) {
+                    break;
+                }
+                deliver();
             }
         }
         for (Future future : registered) {

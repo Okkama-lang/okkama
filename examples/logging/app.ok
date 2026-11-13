@@ -1,0 +1,77 @@
+module examples/logging/app v1.0.0;
+
+import "logging/named" take NamedLogging, LogProcessReading;
+import "logging/name" take LogName;
+import "logging/level" take LogLevel;
+import "logging/field" take LogFields;
+import "logging/filter" take AllowedLogs;
+import "logging/redact" take RedactedLogs;
+import "logging/stream" take TextStreamLogs, JsonStreamLogs;
+import "logging/write" take BroadcastLogs, CollectedLogs;
+import "json" take JsonField;
+import "time/clock" take Timing, Instant, MonotonicInstant;
+import "time/duration" take Duration;
+import "io/stdout" take Stdout;
+
+// A program logs through NamedLogging: a name, where records go, a clock and
+// the fields every record carries. Records pass through writers: a filter by
+// level, a redaction of secret fields, then text lines on stdout and records
+// kept in memory. A real program passes SystemClock() and leaves the process
+// out; this one fixes both, so its output is the same on every run.
+
+object FixedClock does Timing {
+    FixedClock();
+
+    instant() is Instant {
+        Instant(Duration(seconds: 1700000000));
+    }
+
+    monotonic_instant() is MonotonicInstant {
+        MonotonicInstant(Duration(seconds: 0));
+    }
+
+    async wait(duration is Duration) is void {}
+}
+
+object FixedProcess does LogProcessReading {
+    FixedProcess();
+
+    id() is int {
+        4242;
+    }
+}
+
+main() is int {
+    let kept = CollectedLogs();
+    // Debug is shown for "shop.db" only; everything else starts at info.
+    let destination = AllowedLogs(
+        origin: RedactedLogs(origin: BroadcastLogs(TextStreamLogs(origin: Stdout()), kept), names: ["card"]),
+        level: LogLevel.info,
+        overrides: ["shop.db": LogLevel.debug],
+    );
+    let shop = NamedLogging(
+        name: LogName("shop"),
+        destination: destination,
+        clock: FixedClock(),
+        fields: LogFields(JsonField("region", "eu")),
+        process: FixedProcess(),
+    );
+
+    shop.log(LogLevel.info, "started");
+    shop.log(LogLevel.debug, "not shown: shop is at info");
+    let db = shop.child("db");
+    db.log(LogLevel.debug, "connected", LogFields(JsonField("pool", 4)));
+    shop.log(LogLevel.info, "paid", LogFields(JsonField("order", 17), JsonField("card", "4111 1111 1111 1111")));
+    try {
+        throw InvalidOrder.empty;
+    }
+    catch error is InvalidOrder {
+        shop.log(LogLevel.error, "order refused", LogFields(JsonField("order", 18)), error);
+    }
+
+    Stdout().writeln("kept ", kept.size(), " records; the last one as JSON:");
+    JsonStreamLogs(Stdout()).write(kept.records().last());
+    0;
+}
+
+enum InvalidOrder is Error = (empty);

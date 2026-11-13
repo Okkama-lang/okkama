@@ -189,11 +189,6 @@ impl Rewrite {
             ast::ObjectMember::Destroy(destroy) => self.block(&mut destroy.body),
             ast::ObjectMember::Test(test) => self.test(test),
             ast::ObjectMember::Action(action) => self.action(action),
-            ast::ObjectMember::Private(section) => {
-                for action in &mut section.actions {
-                    self.action(action);
-                }
-            }
         }
     }
 
@@ -280,7 +275,7 @@ impl Rewrite {
     fn stmt(&mut self, stmt: &mut ast::Stmt) {
         use ast::StmtKind as S;
         match &mut stmt.kind {
-            S::Let { name, ty, value } => {
+            S::Let { name, ty, value, .. } => {
                 self.binding(name);
                 if let Some(ty) = ty {
                     self.ty(ty);

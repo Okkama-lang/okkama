@@ -1,22 +1,36 @@
 module template/library v1.0.0;
 
+// Named text templates, for partials of section templates.
+//
+//     let partials = TemplateLibrary(["item": TextTemplate("  - {{title}}\n")]);
+//     SectionTemplate(source: "{{#items}}{{>item}}{{/items}}", partials: partials);
+//
+// Names are exact: no trimming or case folding.
+
 import "collections/sequence" take Sequencing;
 import "template/compile" take TextTemplate;
 
-// Exact association between a nonempty Unicode name and a plain template.
-// Names are not paths: no trimming, case folding, normalization or I/O.
-// Declaration/lookup never compiles or renders the retained template.
-// Example: NamedTemplate("header", TextTemplate("Hello {{name}}"));
+// A text template with its name.
 object NamedTemplate {
     has key is string;
     has origin is TextTemplate;
+
+    // value named name; InvalidTemplateName for an empty name.
     NamedTemplate(name is string, value is TextTemplate) {
         confirm name != "" else throw InvalidTemplateName.invalid;
         key = name;
         origin = value;
     }
-    name() is string { key; }
-    value() is TextTemplate { origin; }
+
+    // The name.
+    name() is string {
+        key;
+    }
+
+    // The template.
+    template() is TextTemplate {
+        origin;
+    }
 }
 
 // Immutable ordered library, empty by default. Sequence constructors snapshot
@@ -29,46 +43,85 @@ object NamedTemplate {
 // Retains TextTemplate owners; no resource acquisition, compilation or destroy.
 // O(n) references, O(n²) duplicate checks, O(n) lookups within the count bound.
 // The count does not limit source bytes; TextTemplate owns compile/output limits.
-// Example: TemplateLibrary([NamedTemplate("greeting",TextTemplate("Hello"))]);
+// Example: TemplateLibrary(NamedTemplate("greeting",TextTemplate("Hello")));
 // Partial expansion is a separate contract: this module only names templates.
-// Run: OKKAMA_STDLIB_DIR=std perl okkama-pl/bin/okkama -t std/template/library.ok
+// Run: okkama run -t std/template/library.ok
 object TemplateLibrary {
     has origin is @NamedTemplate;
-    TemplateLibrary() { origin = []; }
+
+    // No templates.
+    TemplateLibrary() {
+        origin = [];
+    }
+
+    // The templates, at most 1024; DuplicateTemplate for a repeated name.
     TemplateLibrary(values is Sequencing<NamedTemplate>) {
-        origin = TemplateLibrarySnapshot(values, 1024).items();
+        origin = TemplateLibrarySnapshot(source: values, maximum: 1024).items();
     }
+
+    // The same, one argument per part: TemplateLibrary(a, b).
+    TemplateLibrary(values is ...NamedTemplate) {
+        let listed is @NamedTemplate = values...;
+        origin = TemplateLibrarySnapshot(source: listed, maximum: 1024).items();
+    }
+
+    // Templates by name: TemplateLibrary(["item": TextTemplate("- {{title}}")]).
+    TemplateLibrary(templates is %string:TextTemplate) {
+        let names = templates.keys();
+        let values = templates.values();
+        let listed is @NamedTemplate = (0..names.size()).map() -> index {
+            NamedTemplate(name: names[index], value: values[index]);
+        };
+        origin = TemplateLibrarySnapshot(source: listed, maximum: 1024).items();
+    }
+
+    // The templates, at most maximum_templates.
     TemplateLibrary(values is Sequencing<NamedTemplate>, maximum_templates is int) {
-        origin = TemplateLibrarySnapshot(values, maximum_templates).items();
+        origin = TemplateLibrarySnapshot(source: values, maximum: maximum_templates).items();
     }
+
+    // Whether a template has the name.
     membership(name is string) is bool {
         for origin -> item {
-            if item.name() == name { return true; }
+            if item.name() == name {
+                return true;
+            }
         }
         false;
     }
-    value(name is string) is TextTemplate {
+
+    // The template of the name; MissingTemplate when none.
+    template(name is string) is TextTemplate {
         for origin -> item {
-            if item.name() == name { return item.value(); }
+            if item.name() == name {
+                return item.template();
+            }
         }
         throw MissingTemplate.name(name);
     }
+
+    // Every name, in order.
     names() is Sequencing<string> {
-        let names is @string = origin.map() -> item { item.name(); };
+        let names is @string = origin.map() -> item {
+            item.name();
+        };
         names;
     }
 }
 
 // Internal snapshot collaborator; public only because Okkama has no
 // module-private declarations. No source observation after construction.
-object TemplateLibrarySnapshot {
+hidden object TemplateLibrarySnapshot {
     has origin is @NamedTemplate;
+
     TemplateLibrarySnapshot(source is Sequencing<NamedTemplate>, maximum is int) {
         confirm maximum >= 0 else throw InvalidTemplateLibraryLimit.invalid;
         let size = source.size();
         confirm size >= 0 else throw InvalidTemplateLibrarySize.invalid;
         confirm size <= maximum else throw TemplateLibraryLimitExceeded.exceeded;
-        let snapshot is @NamedTemplate = (0..size).map() -> index { source.item(index); };
+        let snapshot is @NamedTemplate = (0..size).map() -> index {
+            source.item(index);
+        };
         for (0..size) -> index {
             for (0..index) -> previous {
                 confirm snapshot[index].name() != snapshot[previous].name()
@@ -77,28 +130,64 @@ object TemplateLibrarySnapshot {
         }
         origin = snapshot;
     }
-    items() is @NamedTemplate { origin; }
+
+    items() is @NamedTemplate {
+        origin;
+    }
 }
 
 // Lookup/declaration errors preserve exact names for programmatic diagnostics.
 enum MissingTemplate is Error = (name(name is string));
+
+// Two templates with one name.
 enum DuplicateTemplate is Error = (name(name is string));
+
+// An empty name.
 enum InvalidTemplateName is Error = (invalid);
+
+// A negative limit.
 enum InvalidTemplateLibraryLimit is Error = (invalid);
+
+// A negative size.
 enum InvalidTemplateLibrarySize is Error = (invalid);
+
+// More templates than the limit.
 enum TemplateLibraryLimitExceeded is Error = (exceeded);
 
 // Imported constructors currently fail lookup in root test bodies; successful
 // nonempty library/rendering and source-failure cases run in consumer suite 285.
 test "empty and missing templates have explicit behavior" {
     test.is(TemplateLibrary().names().size(), 0);
-    test.is(TemplateLibrary([], 0).membership(""), false);
-    test.is(try {TemplateLibrary().value("x"); "bad";}
-        catch MissingTemplate.name(name) {name;}, "x");
-}
-test "empty library permits zero and rejects negative bounds" {
-    test.is(TemplateLibrary([]).names().size(), 0);
-    test.is(TemplateLibrary([],0).names().size(), 0);
-    test.ok(try {TemplateLibrary([],-1);false;} catch e is InvalidTemplateLibraryLimit {true;});
+    test.is(TemplateLibrary(values: [], maximum_templates: 0).membership(""), false);
+    test.is(
+        try {
+            TemplateLibrary().template("x");
+            "bad";
+        }
+        catch MissingTemplate.name(name) {
+            name;
+        },
+        "x"
+    );
 }
 
+test "empty library permits zero and rejects negative bounds" {
+    test.is(TemplateLibrary().names().size(), 0);
+    test.is(TemplateLibrary(values: [], maximum_templates: 0).names().size(), 0);
+    test.ok(try {
+        TemplateLibrary(values: [], maximum_templates: -1);
+        false;
+    }
+    catch e is InvalidTemplateLibraryLimit {
+        true;
+    });
+}
+
+test "a library reads a map of templates by name" {
+    let library = TemplateLibrary(
+        ["item": TextTemplate("- {{title}}"), "head": TextTemplate("Order")]
+    );
+    test.ok(library.membership("item"));
+    test.is(library.template("head").source(), "Order");
+    test.ok(!library.membership("tail"));
+}

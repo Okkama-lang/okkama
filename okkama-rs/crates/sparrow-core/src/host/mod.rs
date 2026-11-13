@@ -192,6 +192,8 @@ pub(crate) struct Heap {
     /// Results of async natives until their driver takes them.
     pub(crate) futures: Arena<FutureCell>,
     pub(crate) test_failures: Option<Vec<String>>,
+    /// The reason of the running test's `test.skip`.
+    pub(crate) test_skipped: Option<String>,
     /// Core object of each live handle, and back.
     objects: crate::word::FastMap<u64, Word>,
     ids: crate::word::FastMap<Word, u64>,
@@ -216,6 +218,7 @@ impl Heap {
             json_nodes: Arena::default(),
             futures: Arena::default(),
             test_failures: None,
+            test_skipped: None,
             stdin: None,
             arguments: Vec::new(),
             objects: Default::default(),
@@ -448,15 +451,13 @@ impl Heap {
             key: repr(entries.first().map(|e| &e.0)),
             value: repr(entries.first().map(|e| &e.1)),
             entries: Default::default(),
+            owned: Default::default(),
         };
         for (key, value) in entries {
             let k = match key.kind() {
-                SMALL => Key::Int(BigInt::from(key.bits as i64)),
-                BIG => Key::Int(match self.core().integer(key.bits) {
-                    crate::heap::Integer::Small(n) => BigInt::from(n),
-                    crate::heap::Integer::Big(n) => n.clone(),
-                }),
-                STR => Key::Str(self.text(key)?.into()),
+                SMALL => Key::Small(key.bits as i64),
+                BIG => Key::int(self.core().integer(key.bits)),
+                STR => Key::text(self.text(key)?.into()),
                 FLOAT => Key::Float(f64::from_bits(key.bits)),
                 _ => Key::Raw(key.bits),
             };

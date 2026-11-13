@@ -1,111 +1,222 @@
 module web/internal/reply v1.0.0;
+
 import "http/message" take Response;
-import "http/status" take Status;
-import "http/header" take Headers,Header,HeaderName,HttpAsciiLowercase;
-import "http/body" take ByteBody,EmptyBody;
+import "http/status" take Status, StatusCode;
+import "http/header" take Headers, Header, HeaderName;
+import "http/body" take ByteBody, EmptyBody, BodyOpening, UnknownBodyLength;
+import "http/media_type" take HttpMediaType, InvalidHttpMediaType;
 
-// Shared response assembly for web/reply and web/exception. Replies own their
-// representation and framing metadata: callers may add other fields, but never
-// Content-Type, Content-Length or Transfer-Encoding.
+// Shared response assembly for web/reply and web/exception. A reply owns its
+// representation and framing fields; the headers a caller gives may carry any
+// other field, but never Content-Type, Content-Length or Transfer-Encoding.
 
-object ReplyHeaders {
-    has origin is @Header;
-
-    ReplyHeaders() {
-        let empty is @Header = [];
-        origin = empty;
-    }
-
-    ReplyHeaders(origin is @Header) { self.origin = origin; }
-
-    added(name is string, value is string) is ReplyHeaders {
-        let lowered = HttpAsciiLowercase(name).string();
-        confirm lowered != "content-type" && lowered != "content-length" && lowered != "transfer-encoding"
-            else throw InvalidReply.because(name + " is owned by the reply itself");
-        let header = Header(HeaderName(name), value);
-        let following is @Header = (0..origin.size() + 1).map() -> index {
-            if index < origin.size() { origin[index]; } else { header; }
-        };
-        ReplyHeaders(following);
-    }
-
-    entries() is @Header { origin; }
-}
-
+// The response of a reply with a representation.
 object ReplyResponse {
-    has code is int;
+    has code is Status;
     has media is string;
     has content is @byte;
-    has extra is ReplyHeaders;
+    has given is Headers;
 
-    ReplyResponse(status is int, media is string, content is @byte, extra is ReplyHeaders) {
-        code = status;
+    // A response of status with content of type media and headers.
+    ReplyResponse(status is Status, media is string, content is @byte, headers is Headers) {
+        code = BodyStatus(status).status();
         self.media = media;
         self.content = content;
-        self.extra = extra;
+        given = headers;
     }
 
+    // The response.
     response() is Response {
         let fixed is @Header = [
-            Header(HeaderName("Content-Type"), media),
-            Header(HeaderName("Content-Length"), content.size().string())
+            Header(name: "Content-Type", value: media),
+            Header(name: "Content-Length", value: content.size().string())
         ];
-        Response(Status(code), Headers(ReplyFields(fixed, extra).entries()), ByteBody(content));
+        Response(
+            status: code,
+            headers: ReplyFields(fixed: fixed, given: given).headers(),
+            body: ByteBody(content)
+        );
     }
 }
 
-// Bodiless replies: 204 carries no framing field at all; redirects declare length 0
-// so the connection stays reusable.
+// Bodiless replies: 204 carries no framing field at all; redirects declare
+// length 0 so the connection stays reusable.
 object EmptyReplyResponse {
-    has code is int;
-    has extra is ReplyHeaders;
+    has code is Status;
+    has given is Headers;
 
-    EmptyReplyResponse(status is int, extra is ReplyHeaders) {
+    // A response of status without a body.
+    EmptyReplyResponse(status is Status, headers is Headers) {
         code = status;
-        self.extra = extra;
+        given = headers;
     }
 
+    // The response.
     response() is Response {
-        let fixed is @Header = if code == 204 { let bare is @Header = []; bare; } else { [Header(HeaderName("Content-Length"), "0")]; };
-        Response(Status(code), Headers(ReplyFields(fixed, extra).entries()), EmptyBody());
-    }
-}
-
-object ReplyFields {
-    has fixed is @Header;
-    has extra is ReplyHeaders;
-    ReplyFields(fixed is @Header, extra is ReplyHeaders) { self.fixed = fixed; self.extra = extra; }
-    entries() is @Header {
-        let more = extra.entries();
-        let all is @Header = (0..fixed.size() + more.size()).map() -> index {
-            if index < fixed.size() { fixed[index]; } else { more[index - fixed.size()]; }
+        let fixed is @Header = if code == Status.no_content {
+            let bare is @Header = [];
+            bare;
+        }
+        else {
+            [Header(name: "Content-Length", value: "0")];
         };
-        all;
+        Response(
+            status: code,
+            headers: ReplyFields(fixed: fixed, given: given).headers(),
+            body: EmptyBody()
+        );
     }
 }
 
-// Status codes that carry a representation body.
+// The response of a reply whose body is opened as it is sent: a stream, a
+// file, events. The reply gives its own fields (Content-Type, and
+// Content-Length when it knows the length).
+object OpenedReplyResponse {
+    has code is Status;
+    has fixed is @Header;
+    has body is BodyOpening;
+    has given is Headers;
+
+    // A response of status with fixed fields, body and headers.
+    OpenedReplyResponse(status is Status, fixed is @Header, body is BodyOpening, headers is Headers) {
+        code = BodyStatus(status).status();
+        self.fixed = fixed;
+        self.body = body;
+        given = headers;
+    }
+
+    // The response.
+    response() is Response {
+        Response(
+            status: code,
+            headers: ReplyFields(fixed: fixed, given: given).headers(),
+            body: body
+        );
+    }
+}
+
+// The Content-Type and, when the body knows it, Content-Length of a body.
+object OpenedReplyFields {
+    has media is string;
+    has body is BodyOpening;
+
+    // The fields for body of type media.
+    OpenedReplyFields(media is string, body is BodyOpening) {
+        self.media = media;
+        self.body = body;
+    }
+
+    // Content-Type, and Content-Length when the length is known.
+    fields() is @Header {
+        let typed = Header(name: "Content-Type", value: ReplyMediaType(media).string());
+        let sized is @Header = try {
+            [typed, Header(name: "Content-Length", value: body.length().string())];
+        }
+        catch failure is UnknownBodyLength {
+            [typed];
+        };
+        sized;
+    }
+}
+
+// A media type a reply declares, checked as a media type.
+object ReplyMediaType {
+    has origin is string;
+
+    // Checks origin as a media type.
+    ReplyMediaType(origin is string) {
+        try {
+            HttpMediaType(origin);
+        }
+        catch failure is InvalidHttpMediaType {
+            throw InvalidReply.because("not a media type: " + origin);
+        };
+        self.origin = origin;
+    }
+
+    // The media type.
+    string() is string {
+        origin;
+    }
+}
+
+// The reply's own fields, then the given ones, which may not take over the
+// representation or the framing.
+hidden object ReplyFields {
+    has fixed is @Header;
+    has given is Headers;
+
+    ReplyFields(fixed is @Header, given is Headers) {
+        self.fixed = fixed;
+        self.given = given;
+    }
+
+    headers() is Headers {
+        let more = given.entries();
+        let extra is @Header = (0..more.size()).map() -> index {
+            let field = more.item(index);
+            let lowered = field.name().lowercase();
+            confirm lowered != "content-type"
+                && lowered != "content-length"
+                && lowered != "transfer-encoding"
+                else throw InvalidReply.because(
+                    field.name().string() + " is owned by the reply itself"
+                );
+            field;
+        };
+        Headers(entries: fixed + extra, limits: given.limits());
+    }
+}
+
+// Statuses that carry a representation body.
 object BodyStatus {
-    has code is int;
-    BodyStatus(status is int) {
-        confirm status >= 200 && status <= 599 && status != 204 && status != 205 && status != 304
-            else throw InvalidReply.because("status " + status.string() + " cannot carry a body");
+    has code is Status;
+
+    // status; InvalidReply for 1xx, 204, 205 and 304, which carry no body.
+    BodyStatus(status is Status) {
+        let number = StatusCode(status).number();
+        confirm number >= 200 && number <= 599 && number != 204 && number != 205 && number != 304
+            else throw InvalidReply.because("status " + number.string() + " cannot carry a body");
         code = status;
     }
-    code() is int { code; }
+
+    // The status.
+    status() is Status {
+        code;
+    }
 }
 
+// A reply that cannot be built; reason says why.
 enum InvalidReply is Error = (because(reason is string));
 
 test "framing headers are owned by the reply" {
-    let rejected = try { ReplyHeaders().added("content-length", "1"); false; } catch failure is InvalidReply { true; };
-    test.ok(rejected);
-    test.is(ReplyHeaders().added("X-Trace", "a").added("Cache-Control", "no-store").entries().size(), 2);
+    let owned = Headers(Header(name: "Content-Length", value: "1"));
+    test.throws(InvalidReply) {
+        ReplyResponse(status: Status.ok, media: "text/plain", content: [], headers: owned).response();
+    };
+    let traced = Headers(
+        Header(name: "X-Trace", value: "a"),
+        Header(name: "Cache-Control", value: "no-store")
+    );
+    let response = ReplyResponse(
+        status: Status.ok,
+        media: "text/plain",
+        content: [104.byte()],
+        headers: traced
+    ).response();
+    test.is(response::Head::headers.entries().size(), 4);
+    test.is(response::Head::headers.first(HeaderName("Content-Length")), "1");
 }
 
 test "only representation statuses carry bodies" {
-    test.is(BodyStatus(200).code(), 200);
-    test.throws(InvalidReply) { BodyStatus(204); };
-    test.throws(InvalidReply) { BodyStatus(304); };
-    test.throws(InvalidReply) { BodyStatus(101); };
+    test.is(BodyStatus(Status.ok).status(), Status.ok);
+    test.throws(InvalidReply) {
+        BodyStatus(Status.no_content);
+    };
+    test.throws(InvalidReply) {
+        BodyStatus(Status.not_modified);
+    };
+    test.throws(InvalidReply) {
+        BodyStatus(Status.switching_protocols);
+    };
 }

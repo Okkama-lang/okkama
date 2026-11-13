@@ -4,8 +4,8 @@ import "db/query" take Query,NoRows,TooManyRows,QueryLimitExceeded,InvalidQueryL
 import "db/sqlite" take SqliteMemory;
 import "db/connection" take DbExecuting;
 import "db/statement" take Statement,Execution;
-import "db/row" take Row,Column,RowReading,RowsEnded;
-import "db/value" take DbInteger;
+import "db/row" take Row,Column,RowReading,RowsEnded,DbQuery;
+import "db/value" take DbInteger,DbValue;
 import "db/error" take DbFailure,DbClosed;
 import "numbers/bigint" take BigInt;
 import "collections/sequence" take Sequencing;
@@ -19,7 +19,7 @@ object ProbeRows does RowReading {
         self.count=count;self.fail_at=fail_at;
         reads=Atomic(0);closes=Atomic(0);
     }
-    columns() is Sequencing<Column> { [Column(0,"id","")]; }
+    columns() is Sequencing<Column> { [Column(index: 0,name: "id",declaration: "")]; }
     closed() is bool { closes.value()>0; }
     close() is void { closes.replace(closes.value()+1); }
     read_count() is int { reads.value(); }
@@ -28,7 +28,7 @@ object ProbeRows does RowReading {
         let index=reads.value();reads.replace(index+1);
         if index==fail_at { throw FetchFailed.fetch_failed; }
         confirm index<count else throw RowsEnded.ended;
-        Row([Column(0,"id","")],[DbInteger(BigInt("7"))]);
+        Row(columns: [Column(0,"id","")],values: [DbInteger(BigInt("7"))]);
     }
 }
 object ProbeDb does DbExecuting {
@@ -36,6 +36,10 @@ object ProbeDb does DbExecuting {
     ProbeDb(cursor is ProbeRows) { self.cursor=cursor; }
     async rows(statement is Statement) is RowReading { cursor; }
     async execution(statement is Statement) is Execution { Execution(); }
+    async execution(sql is string, values is Sequencing<DbValue>) is Execution { Execution(); }
+    query(sql is string, values is Sequencing<DbValue>) is DbQuery { Query(origin: self, statement: Statement(text: sql, values: values)); }
+    async execution(sql is string, values is ...DbValue) is Execution { Execution(); }
+    query(sql is string, values is ...DbValue) is DbQuery { let listed is @DbValue = values...; Query(origin: self, statement: Statement(text: sql, values: listed)); }
 }
 
 async main() is int {

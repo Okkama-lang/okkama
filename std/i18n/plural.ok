@@ -1,4 +1,14 @@
 module i18n/plural v1.0.0;
+
+// Plural categories (CLDR): which form of a word a number takes in a language.
+//
+//     PluralCategoryOf(origin: PluralNumber("21"), locale: Locale("ru"), kind: PluralKind.cardinal).category();   // one
+//     PluralCategoryOf(origin: PluralNumber("1.5"), locale: Locale("en"), kind: PluralKind.cardinal).category();  // other
+//     PluralCategoryOf(origin: PluralNumber("2"), locale: Locale("en"), kind: PluralKind.ordinal).category();     // two (2nd)
+//
+// A PluralNumber keeps its visible decimals: "1" and "1.0" differ, as CLDR says
+// they do.
+
 import "locale/tag" take Locale;
 import "math/decimal" take Decimal;
 import "numbers/bigint" take BigInt;
@@ -6,74 +16,236 @@ import "compare" take Order;
 import "encoding/utf" take Utf8Encoded;
 import "i18n/operands" take PluralOperands;
 import "locale/internal/plurals" take CldrPlurals;
+
+// The CLDR plural categories.
 enum PluralCategory = (zero, one, two, few, many, other);
+
+// Cardinal (1 book) or ordinal (1st).
 enum PluralKind = (cardinal, ordinal);
+
 // Preserve the spelling's visible fraction precision, unlike Decimal's numeric
 // identity. Plain ASCII decimal only, no exponent/compact notation; 1024 scalars.
 object PluralNumber does PluralOperands {
-    has origin is string;has integer, fraction, trimmed_fraction is BigInt;has visible, trimmed is int;
+    has origin is string;
+    has integer, fraction, trimmed_fraction is BigInt;
+    has visible, trimmed is int;
+
+    // A plain decimal such as `21` or `1.50`; InvalidPluralNumber otherwise.
     PluralNumber(origin is string) {
-        confirm origin.length()>0 && origin.length()<=1024 else throw InvalidPluralNumber.because("number length");
-        let absolute=if origin.slice(0,1)=="-" {origin.slice(1,origin.length());} else {origin;};
-        let parts=absolute.split(".");
-        confirm parts.size()>=1 && parts.size()<=2 else throw InvalidPluralNumber.because("plain decimal required");
-        for parts->part {
-            let valid=Utf8Encoded(part).bytes().reduce(true)->previous,octet{previous && octet.int()>=48 && octet.int()<=57;};
-            confirm part.length()>0 && valid
+        confirm origin.length() > 0 && origin.length() <= 1024
+            else throw InvalidPluralNumber.because("number length");
+        let absolute = if origin.slice(0, 1) == "-" {
+            origin.slice(1, origin.length());
+        }
+        else {
+            origin;
+        };
+        let parts = absolute.split(".");
+        confirm parts.size() >= 1 && parts.size() <= 2
+            else throw InvalidPluralNumber.because("plain decimal required");
+        for parts -> part {
+            let valid = Utf8Encoded(part).bytes().reduce(true) -> previous, octet {
+                previous && octet.int() >= 48 && octet.int() <= 57;
+            };
+            confirm part.length() > 0 && valid
                 else throw InvalidPluralNumber.because("ASCII decimal digits required");
         }
-        let digits=if parts.size()==2 {parts[1];} else {"";};
-        let width=(0..digits.length()).reduce(0)->previous,index{if digits.slice(index,index+1)!="0" {index+1;} else {previous;}};
-        self.origin=origin;integer=BigInt(parts[0]);visible=digits.length();trimmed=width;
-        fraction=BigInt(if digits=="" {"0";} else {digits;});
-        trimmed_fraction=BigInt(if width==0 {"0";} else {digits.slice(0,width);});
+        let digits = if parts.size() == 2 {
+            parts[1];
+        }
+        else {
+            "";
+        };
+        let width = (0..digits.length()).reduce(0) -> previous, index {
+            if digits.slice(index, index + 1) != "0" {
+                index + 1;
+            }
+            else {
+                previous;
+            }
+        };
+        self.origin = origin;
+        integer = BigInt(parts[0]);
+        visible = digits.length();
+        trimmed = width;
+        fraction = BigInt(if digits == "" {
+            "0";
+        }
+        else {
+            digits;
+        });
+        trimmed_fraction = BigInt(if width == 0 {
+            "0";
+        }
+        else {
+            digits.slice(0, width);
+        });
     }
-    string() is string {origin;}
-    number() is Decimal {Decimal(origin);}
+
+    // The number as written.
+    string() is string {
+        origin;
+    }
+
+    // Its value.
+    number() is Decimal {
+        Decimal(origin);
+    }
+
+    // A CLDR operand: n, i, v, w, f, t, c or e.
     operand(name is string) is BigInt {
         match name {
-            case "i" {integer;}case "f" {fraction;}case "t" {trimmed_fraction;}
-            case "v" {BigInt(visible.string());}case "w" {BigInt(trimmed.string());}
-            case "c" {BigInt("0");}case "e" {BigInt("0");}
-            else {throw InvalidPluralNumber.because("unknown integer operand: "+name);}
+            case "i" {
+                integer;
+            }
+            case "f" {
+                fraction;
+            }
+            case "t" {
+                trimmed_fraction;
+            }
+            case "v" {
+                BigInt(visible);
+            }
+            case "w" {
+                BigInt(trimmed);
+            }
+            case "c" {
+                BigInt(0);
+            }
+            case "e" {
+                BigInt(0);
+            }
+            else {
+                throw InvalidPluralNumber.because("unknown integer operand: " + name);
+            }
         }
     }
+
+    // Whether operand name, modulo modulus when not 0, lies in
+    // minimum..maximum.
     relation(name is string, modulus is int, minimum is int, maximum is int) is bool {
         // CLDR '=' / '!=' relations range over integers. A nonintegral n is not
         // a member even of 0..1; its negated relation is compiled by the table.
-        if name=="n" && fraction.sign()!=0 {return false;}
-        let value=if name=="n" {integer;} else {self.operand(name);};
-        let selected=if modulus==0 {value;} else {(value % BigInt(modulus.string()));};
-        selected.order(BigInt(minimum.string()))!=Order.less && selected.order(BigInt(maximum.string()))!=Order.greater;
-    }
-}
-object CanonicalPluralNumber {
-    has origin is Decimal;CanonicalPluralNumber(origin is Decimal){self.origin=origin;}
-    value() is PluralNumber {
-        let coefficient=origin.coefficient().string();let negative=coefficient.slice(0,1)=="-";
-        let digits=if negative {coefficient.slice(1,coefficient.length());} else {coefficient;};let exponent=origin.exponent();
-        confirm exponent>=-1024 && exponent<=1024 && digits.length()<=1024 else throw InvalidPluralNumber.because("expanded Decimal length");
-        let point=digits.length()+exponent;
-        let spelling=if exponent>=0 {
-            let zeros is @string=(0..exponent).map()->index{"0";};digits+zeros.join("");
-        } else {
-            if point>0 {digits.slice(0,point)+"."+digits.slice(point,digits.length());}
-            else {let zeros is @string=(0..0-point).map()->index{"0";};"0."+zeros.join("")+digits;}
+        if name == "n" && fraction.sign() != 0 {
+            return false;
+        }
+        let value = if name == "n" {
+            integer;
+        }
+        else {
+            self.operand(name);
         };
-        PluralNumber((if negative {"-";} else {"";})+spelling);
+        let selected = if modulus == 0 {
+            value;
+        }
+        else {
+            (value % BigInt(modulus));
+        };
+        selected.order(BigInt(minimum)) != Order.less
+            && selected.order(BigInt(maximum)) != Order.greater;
     }
 }
+
+hidden object CanonicalPluralNumber {
+    has origin is Decimal;
+
+    CanonicalPluralNumber(origin is Decimal) {
+        self.origin = origin;
+    }
+
+    number() is PluralNumber {
+        let coefficient = origin.coefficient().string();
+        let negative = coefficient.slice(0, 1) == "-";
+        let digits = if negative {
+            coefficient.slice(1, coefficient.length());
+        }
+        else {
+            coefficient;
+        };
+        let exponent = origin.exponent();
+        confirm exponent >= -1024 && exponent <= 1024 && digits.length() <= 1024
+            else throw InvalidPluralNumber.because("expanded Decimal length");
+        let point = digits.length() + exponent;
+        let spelling = if exponent >= 0 {
+            let zeros is @string = (0..exponent).map() -> index {
+                "0";
+            };
+            digits + zeros.join("");
+        }
+        else {
+            if point > 0 {
+                digits.slice(0, point) + "." + digits.slice(point, digits.length());
+            }
+            else {
+                let zeros is @string = (0..0 - point).map() -> index {
+                    "0";
+                };
+                "0." + zeros.join("") + digits;
+            }
+        };
+        PluralNumber((if negative {
+            "-";
+        }
+        else {
+            "";
+        }) + spelling);
+    }
+}
+
+// The plural category of a number in a locale.
 object PluralCategoryOf {
-    has origin is PluralNumber;has locale is Locale;has kind is PluralKind;
-    PluralCategoryOf(origin is PluralNumber,locale is Locale,kind is PluralKind){self.origin=origin;self.locale=locale;self.kind=kind;}
-    value() is PluralCategory {
-        let index=CldrPlurals().category(origin,locale.string(),kind==PluralKind.ordinal);
-        match index {case 0{PluralCategory.zero;}case 1{PluralCategory.one;}case 2{PluralCategory.two;}
-            case 3{PluralCategory.few;}case 4{PluralCategory.many;}else{PluralCategory.other;}}
+    has origin is PluralNumber;
+    has locale is Locale;
+    has kind is PluralKind;
+
+    // origin in locale, counted as kind.
+    PluralCategoryOf(origin is PluralNumber, locale is Locale, kind is PluralKind) {
+        self.origin = origin;
+        self.locale = locale;
+        self.kind = kind;
+    }
+
+    // The category.
+    category() is PluralCategory {
+        let index = CldrPlurals().category(origin, locale.string(), kind == PluralKind.ordinal);
+        match index {
+            case 0 {
+                PluralCategory.zero;
+            }
+            case 1 {
+                PluralCategory.one;
+            }
+            case 2 {
+                PluralCategory.two;
+            }
+            case 3 {
+                PluralCategory.few;
+            }
+            case 4 {
+                PluralCategory.many;
+            }
+            else {
+                PluralCategory.other;
+            }
+        }
     }
 }
+
+// Text that is not a plain decimal number; reason says why.
 enum InvalidPluralNumber is Error = (because(reason is string));
+
 test "visible decimal precision affects English cardinal category" {
-    test.is(PluralCategoryOf(PluralNumber("1"),Locale("en"),PluralKind.cardinal).value(),PluralCategory.one);
-    test.is(PluralCategoryOf(PluralNumber("1.0"),Locale("en"),PluralKind.cardinal).value(),PluralCategory.other);
+    test.is(
+        PluralCategoryOf(origin: PluralNumber("1"), locale: Locale("en"), kind: PluralKind.cardinal).category(),
+        PluralCategory.one
+    );
+    test.is(
+        PluralCategoryOf(
+            origin: PluralNumber("1.0"),
+            locale: Locale("en"),
+            kind: PluralKind.cardinal
+        ).category(),
+        PluralCategory.other
+    );
 }

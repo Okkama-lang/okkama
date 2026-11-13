@@ -4,7 +4,8 @@
 
 mod common;
 
-use common::{assert_rejects, body_sexpr, expr_sexpr};
+use common::{assert_rejects, body_sexpr, expr_sexpr, parse_in};
+use okkama_compiler::syntax::ParseMode;
 
 #[test]
 fn arithmetic_precedence_and_left_associativity() {
@@ -55,6 +56,15 @@ fn comparison_equality_and_logic_levels() {
     assert_eq!(expr_sexpr("a && b || c && d"), "(|| (&& a b) (&& c d))");
     // Comparisons chain left-associatively in the grammar.
     assert_eq!(expr_sexpr("a < b < c"), "(< (< a b) c)");
+}
+
+#[test]
+fn constants_compare_with_less_than() {
+    // A name in capitals is a constant: `<` after it compares (#487).
+    assert_eq!(expr_sexpr("PI < 3.2"), "(< PI 3.2)");
+    assert_eq!(expr_sexpr("E < x"), "(< E x)");
+    assert_eq!(expr_sexpr("LIMIT <= size"), "(<= LIMIT size)");
+    assert_eq!(expr_sexpr("math.PI < x"), "(< (. math PI) x)");
 }
 
 #[test]
@@ -390,6 +400,37 @@ fn anonymous_action_errors() {
     }
 }
 
+/// An anonymous action cannot be async: the error is at `async`, not at a
+/// later token of what would otherwise read as a call of `async` (#323).
+#[test]
+fn async_anonymous_actions_are_rejected_at_async() {
+    let wrap = |body: &str| format!("module app v1.0.0; async main() is int {{ {body} 0; }}");
+    for body in [
+        "let a = async () is int { 1; };",
+        "let b = async (n is int) is int { n + 1; };",
+        "let c = async () is void { };",
+        "let d = (async () is int { 1; });",
+        "let e = [async () is int { 1; }];",
+        "let f = async (left, right is int) is int { left + right; };",
+        "let g = runner.run(async () is int { 1; });",
+        "let h = runner.run(job: async () is int { 1; });",
+        "return async () is int { 1; };",
+        "let i = () is () is int { async () is int { 1; }; };",
+    ] {
+        let (message, found, _) = parse_in(&wrap(body), ParseMode::Full).expect_err(body);
+        assert_eq!(
+            message, "Anonymous actions cannot be async; declare a named async action instead.",
+            "{body}"
+        );
+        assert_eq!(found, "async", "{body}");
+    }
+    // `async` as a contextual name is still a name.
+    assert_eq!(expr_sexpr("async()"), "(call async)");
+    assert_eq!(expr_sexpr("async(1) + 2"), "(+ (call async 1) 2)");
+    assert_eq!(expr_sexpr("receiver.async()"), "(call (. receiver async))");
+    assert_eq!(expr_sexpr("(value is int) is int { value; }"), "(fn [value int] int {value})");
+}
+
 #[test]
 fn async_await_and_spawn() {
     assert_eq!(expr_sexpr("await pending"), "(await pending)");
@@ -553,4 +594,34 @@ fn test_throws_is_a_try_with_one_catch() {
     assert_rejects("module app v1.0.0; main() is int { test.throws(Refused); 0; }", "Expect a block after test.throws(Type)");
     // Elsewhere `throws` is an ordinary member.
     assert!(!body_sexpr("checker.throws(Refused);").contains("TryExpr"));
+}
+
+#[test]
+fn map_values_may_start_with_a_parenthesis() {
+    // #263: `key: (` is a map entry, not the removed `Type:(args)` projection.
+    for (source, tree) in [
+        ("[\"x\": (1 + 2)]", "(map \"x\":(group (+ 1 2)))"),
+        ("[1: (2) + 1]", "(map 1:(+ (group 2) 1))"),
+        ("[\"x\": (-1)]", "(map \"x\":(group (- 1)))"),
+        ("[\"a\": 1, \"b\": (2 + 3) * 2]", "(map \"a\":1 \"b\":(* (group (+ 2 3)) 2))"),
+        ("[\"x\": (true ?? 1 !! 2)]", "(map \"x\":(group (CompactChoice expression=(if true {1} {2}))))"),
+        ("[x: (2)]", "(map x:(group 2))"),
+        ("[LIMIT:(4)]", "(map LIMIT:(group 4))"),
+        ("[\"o\": [\"i\": (7)]]", "(map \"o\":(map \"i\":(group 7)))"),
+        ("[\"n\": (count(3)) * 2]", "(map \"n\":(* (group (call count 3)) 2))"),
+    ] {
+        assert_eq!(expr_sexpr(source), tree, "{source}");
+    }
+    // A named argument was never affected.
+    assert_eq!(expr_sexpr("Box(a: (1) + 2)"), "(call Box a:(+ (group 1) 2))");
+    // The removed spelling still gets its migration error, also as a map value,
+    // and a broken entry a syntax error.
+    for source in ["[\"a\": ParsedInt:(x)]", "[Point:(1)]"] {
+        assert_rejects(
+            &format!("module app v1.0.0; main() is int {{ let m = {source}; 0; }}"),
+            "Constructor projections have been removed; use Type(args).method().",
+        );
+    }
+    assert_rejects("module app v1.0.0; main() is int { let m = [\"a\": (]; 0; }", "Expect expression.");
+    assert_rejects("module app v1.0.0; main() is int { let m = [\"a\": (1]; 0; }", "Expect \")\" after expression.");
 }

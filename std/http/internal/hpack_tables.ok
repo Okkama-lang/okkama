@@ -1,77 +1,289 @@
 module http/internal/hpack_tables v1.0.0;
+
+// The HPACK tables (RFC 7541 §2.3): fields, the static table and the dynamic
+// table with its eviction.
+//
+// Internal to the http modules; programs do not import it.
+
 import "http/internal/hpack_static" take HpackStaticEntries;
-import "http/internal/http2_frame" take Http2Fault,Http2FaultScope;
-import "encoding/single_byte" take Latin1Encoded,UnrepresentableLatin1Character;
+import "http/internal/http2_frame" take Http2Fault, Http2FaultScope;
+import "encoding/single_byte" take Latin1Encoded, UnrepresentableLatin1Character;
 import "async/atomic" take Atomic;
 
 // Opaque octet strings. Compression accepts pseudo-fields and control octets;
 // actual HTTP field/message validity is checked above this internal layer.
 object HpackField {
-    has name,value is string;has sensitive is bool;
-    HpackField(name is string,value is string){self.name=HpackOctetText(name).value();self.value=HpackOctetText(value).value();sensitive=false;}
-    HpackField(name is string,value is string,sensitive is bool){self.name=HpackOctetText(name).value();self.value=HpackOctetText(value).value();self.sensitive=sensitive;}
-    name() is string{name;}value() is string{value;}sensitive() is bool{sensitive;}
-    size() is int{name.length()+value.length()+32;}
-}
-object HpackOctetText {
-    has origin is string;HpackOctetText(origin is string){
-        confirm origin.length()<=1048576 else throw Http2Fault.detailed(Http2FaultScope.connection, 9, 0, "HPACK octet string bound");
-        try{Latin1Encoded(origin).bytes();}catch failure is UnrepresentableLatin1Character{throw Http2Fault.detailed(Http2FaultScope.connection, 9, 0, "HPACK requires octet strings");}
-        self.origin=origin;
+    has name, value is string;
+    has sensitive is bool;
+
+    // The field.
+    HpackField(name is string, value is string) {
+        self.name = HpackOctetText(name).string();
+        self.value = HpackOctetText(value).string();
+        sensitive = false;
     }
-    value() is string{origin;}
+
+    // The field; a sensitive one is never indexed.
+    HpackField(name is string, value is string, sensitive is bool) {
+        self.name = HpackOctetText(name).string();
+        self.value = HpackOctetText(value).string();
+        self.sensitive = sensitive;
+    }
+
+    // The name.
+    name() is string {
+        name;
+    }
+
+    // The value.
+    value() is string {
+        value;
+    }
+
+    // Whether it must not be indexed.
+    sensitive() is bool {
+        sensitive;
+    }
+
+    // Its table size: name and value lengths plus 32.
+    size() is int {
+        name.length() + value.length() + 32;
+    }
 }
+
+hidden object HpackOctetText {
+    has origin is string;
+
+    HpackOctetText(origin is string) {
+        confirm origin.length() <= 1048576
+            else throw Http2Fault.detailed(
+                Http2FaultScope.connection,
+                9,
+                0,
+                "HPACK octet string bound"
+            );
+        try {
+            Latin1Encoded(origin).bytes();
+        }
+        catch failure is UnrepresentableLatin1Character {
+            throw Http2Fault.detailed(
+                Http2FaultScope.connection,
+                9,
+                0,
+                "HPACK requires octet strings"
+            );
+        }
+        self.origin = origin;
+    }
+
+    string() is string {
+        origin;
+    }
+}
+
+// The static table.
 object HpackStaticTable {
-    has entries is @HpackField;HpackStaticTable(){let fixed=HpackStaticEntries();let names=fixed.names();let values=fixed.values();let rows is @HpackField=(0..61).map()->index{HpackField(names[index],values[index]);};entries=rows;}
-    size() is int{61;}
-    field(index is int) is HpackField{
-        confirm index>=1 && index<=61 else throw Http2Fault.detailed(Http2FaultScope.connection, 9, 0, "invalid static index");entries[index-1];
+    has entries is @HpackField;
+
+    // The table.
+    HpackStaticTable() {
+        let fixed = HpackStaticEntries();
+        let names = fixed.names();
+        let values = fixed.values();
+        let rows is @HpackField = (0..61).map() -> index {
+            HpackField(name: names[index], value: values[index]);
+        };
+        entries = rows;
     }
-    named(name is string) is int{
-        for (0..61) -> index{if entries[index].name()==name{return index+1;}}0;
+
+    // 61.
+    size() is int {
+        61;
     }
-    exact(field is HpackField) is int{
-        for (0..61) -> index{let entry=entries[index];if entry.name()==field.name() && entry.value()==field.value(){return index+1;}}0;
+
+    // The field at index, from 1.
+    field(index is int) is HpackField {
+        confirm index >= 1 && index <= 61
+            else throw Http2Fault.detailed(Http2FaultScope.connection, 9, 0, "invalid static index");
+        entries[index - 1];
+    }
+
+    // The first index with that name, or 0.
+    named(name is string) is int {
+        for (0..61) -> index {
+            if entries[index].name() == name {
+                return index + 1;
+            }
+        }
+        0;
+    }
+
+    // The index of that name and value, or 0.
+    exact(field is HpackField) is int {
+        for (0..61) -> index {
+            let entry = entries[index];
+            if entry.name() == field.name() && entry.value() == field.value() {
+                return index + 1;
+            }
+        }
+        0;
     }
 }
+
+// The dynamic table: newest first, oldest evicted.
 object HpackDynamicTable {
-    has entries is @HpackField;has capacity,used is int;
-    HpackDynamicTable(capacity is int){HpackTableBound(capacity);entries=[];self.capacity=capacity;used=0;}
-    size() is int{entries.size();}capacity() is int{capacity;}used() is int{used;}
-    field(index is int) is HpackField{
-        confirm index>=1 && index<=entries.size() else throw Http2Fault.detailed(Http2FaultScope.connection, 9, 0, "invalid dynamic index");entries[index-1];
+    has entries is @HpackField;
+    has capacity, used is int;
+
+    // An empty table of capacity bytes.
+    HpackDynamicTable(capacity is int) {
+        HpackTableBound(capacity);
+        entries = [];
+        self.capacity = capacity;
+        used = 0;
     }
-    resized(capacity is int) is ^HpackDynamicTable{
-        HpackTableBound(capacity);let retained=HpackKept(entries,capacity);
-        ^entries=retained.entries();^used=retained.used();^capacity=capacity;
+
+    // How many fields it holds.
+    size() is int {
+        entries.size();
     }
-    added(field is HpackField) is ^HpackDynamicTable{
-        let size=field.size();
-        if size>capacity{let empty is @HpackField=[];^entries=empty;^used=0;}
-        else{
-            let retained=HpackKept(entries,capacity-size);let rows=retained.entries();
-            let following is @HpackField=(0..rows.size()+1).map()->index{if index==0{field;}else{rows[index-1];}};
-            ^entries=following;^used=retained.used()+size;
+
+    // Its capacity in bytes.
+    capacity() is int {
+        capacity;
+    }
+
+    // The bytes its fields take.
+    used() is int {
+        used;
+    }
+
+    // The field at index, from 1 for the newest.
+    field(index is int) is HpackField {
+        confirm index >= 1 && index <= entries.size()
+            else throw Http2Fault.detailed(
+                Http2FaultScope.connection,
+                9,
+                0,
+                "invalid dynamic index"
+            );
+        entries[index - 1];
+    }
+
+    // This table at capacity, evicting what no longer fits.
+    resized(capacity is int) is ^HpackDynamicTable {
+        HpackTableBound(capacity);
+        let retained = HpackKept(origin: entries, maximum: capacity);
+        ^entries = retained.entries();
+        ^used = retained.used();
+        ^capacity = capacity;
+    }
+
+    // This table with field first, evicting the oldest to make room.
+    added(field is HpackField) is ^HpackDynamicTable {
+        let size = field.size();
+        if size > capacity {
+            let empty is @HpackField = [];
+            ^entries = empty;
+            ^used = 0;
+        }
+        else {
+            let retained = HpackKept(origin: entries, maximum: capacity - size);
+            let rows = retained.entries();
+            let following is @HpackField = [field] + rows;
+            ^entries = following;
+            ^used = retained.used() + size;
         }
     }
 }
+
+// A table size, checked: 0 to 1 MiB.
 object HpackTableBound {
-    HpackTableBound(value is int){confirm value>=0 && value<=1048576 else throw Http2Fault.detailed(Http2FaultScope.connection, 9, 0, "HPACK table bound");}
-}
-object HpackKept {
-    has entries is @HpackField;has used is int;
-    HpackKept(origin is @HpackField,maximum is int){
-        let size=Atomic(0);let count=Atomic(0);
-        for origin -> field{if field.size()>maximum-size.value(){last;}size.replace(size.value()+field.size());count.replace(count.value()+1);}
-        entries=origin.slice(0,count.value());used=size.value();
+    // Checks value; Http2Fault outside the bound.
+    HpackTableBound(value is int) {
+        confirm value >= 0 && value <= 1048576
+            else throw Http2Fault.detailed(Http2FaultScope.connection, 9, 0, "HPACK table bound");
     }
-    entries() is @HpackField{entries;}used() is int{used;}
 }
+
+hidden object HpackKept {
+    has entries is @HpackField;
+    has used is int;
+
+    HpackKept(origin is @HpackField, maximum is int) {
+        let size = Atomic(0);
+        let count = Atomic(0);
+        for origin -> field {
+            if field.size() > maximum - size.value() {
+                last;
+            }
+            size.replace(size.value() + field.size());
+            count.replace(count.value() + 1);
+        }
+        entries = origin.slice(0, count.value());
+        used = size.value();
+    }
+
+    entries() is @HpackField {
+        entries;
+    }
+
+    used() is int {
+        used;
+    }
+}
+
+// A field by its HPACK index across both tables.
 object HpackLookup {
     has field is HpackField;
-    HpackLookup(fixed is HpackStaticTable,dynamic is HpackDynamicTable,index is int){
-        confirm index>0 else throw Http2Fault.detailed(Http2FaultScope.connection, 9, 0, "zero HPACK index");
-        field=if index<=61{fixed.field(index);}else{dynamic.field(index-61);};
+
+    // index into the static table, then the dynamic one.
+    HpackLookup(fixed is HpackStaticTable, dynamic is HpackDynamicTable, index is int) {
+        confirm index > 0
+            else throw Http2Fault.detailed(Http2FaultScope.connection, 9, 0, "zero HPACK index");
+        field = if index <= 61 {
+            fixed.field(index);
+        }
+        else {
+            dynamic.field(index - 61);
+        };
     }
-    field() is HpackField{field;}
+
+    // The field; Http2Fault for an index past both.
+    field() is HpackField {
+        field;
+    }
+}
+
+test "static lookups, dynamic insertion with eviction, and combined indexes" {
+    let fixed = HpackStaticTable();
+    test.is(fixed.size(), 61);
+    test.is(fixed.field(2).name(), ":method");
+    test.is(fixed.field(2).value(), "GET");
+    test.is(fixed.named(":path"), 4);
+    test.is(fixed.exact(HpackField(name: ":method", value: "POST")), 3);
+    test.is(fixed.exact(HpackField(name: ":method", value: "PUT")), 0);
+    let field = HpackField(name: "x-a", value: "1");
+    test.is(field.size(), 36);
+    let table = HpackDynamicTable(80);
+    table = table.added(field);
+    table = table.added(HpackField(name: "x-b", value: "2"));
+    test.is(table.size(), 2);
+    test.is(table.used(), 72);
+    test.is(table.field(1).name(), "x-b");
+    table = table.added(HpackField(name: "x-c", value: "3"));
+    test.is(table.size(), 2);
+    test.is(table.field(2).name(), "x-b");
+    test.is(HpackLookup(fixed: fixed, dynamic: table, index: 62).field().name(), "x-c");
+    test.is(HpackLookup(fixed: fixed, dynamic: table, index: 2).field().value(), "GET");
+    table = table.resized(0);
+    test.is(table.size(), 0);
+    test.is(table.capacity(), 0);
+    test.throws(Http2Fault) {
+        HpackLookup(fixed: fixed, dynamic: table, index: 0);
+    };
+    test.throws(Http2Fault) {
+        HpackDynamicTable(1048577);
+    };
+    test.is(HpackField(name: "authorization", value: "x", sensitive: true).sensitive(), true);
 }

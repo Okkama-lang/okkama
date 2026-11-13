@@ -1,206 +1,71 @@
 module strings/parse v1.0.0;
 
-// Strict projections from textual spellings to builtin scalar values.
-// Constructors never trim whitespace and never accept a leading `+`.
+// Strict readings of numbers and truth values written as text. Nothing is
+// trimmed and a leading `+` is never accepted.
 //
-//     value ParsedInt("42");            // decimal by default
-//     value ParsedInt("ff", 16);        // 255
-//     value ParsedInt("0xFF", 0);       // base 0 detects prefixes
-//     value ParsedByte("11111111", 2);  // byte(255)
-//     string value ParsedRat("6/8");    // "3/4"
+//     Number("42").int();             // 42
+//     Number("ff").int(16);           // 255
+//     Number("0x2A").int(0);          // base 0 reads the 0b, 0o and 0x prefixes
+//     Number("11111111").byte(2);     // byte 255
+//     Number("6/8").rat().string();   // "3/4"
+//     Number("-42.5").float();        // -42.5
+//     Truth("true").bool();           // true
 //
-// Explicit bases span 2..36. Only base 0 recognizes 0b/0B, 0o/0O and
-// 0x/0X. ParsedRat accepts an integer or `numerator/positive-denominator`.
-// Errors retain the exact, unmodified source string.
+// Explicit bases span 2..36. A rational is an integer or
+// `numerator/positive-denominator`. Errors keep the exact source text.
 
-import "runtime/number_text" take int_parse_valid, int_parse;
+import "runtime/number_text" take int_parse_valid, int_parse, float_parse_valid, float_parse;
 
-object ParsedInt {
+// A number written as text, read as the type asked for.
+object Number {
     has source is string;
-    has radix is int;
 
-    ParsedInt(origin is string) {
+    // A number written as text; nothing is read until asked.
+    Number(origin is string) {
         source = origin;
-        radix = 10;
-
-        confirm self.source.length() > 0 && self.source != "-"
-            else throw InvalidInteger.source(self.source);
-        confirm self.radix == 0 || (self.radix >= 2 && self.radix <= 36)
-            else throw InvalidInteger.source(self.source);
     }
 
-    ParsedInt(origin is string, base is int) {
-        source = origin;
-        radix = base;
-
-        confirm self.source.length() > 0 && self.source != "-"
-            else throw InvalidInteger.source(self.source);
-        confirm self.radix == 0 || (self.radix >= 2 && self.radix <= 36)
-            else throw InvalidInteger.source(self.source);
-    }
-
-    value() is int {
-        confirm int_parse_valid(source, radix)
+    // The text as an int in base: 2 to 36, 10 unless told, or 0 to read a 0x,
+    // 0o or 0b prefix; InvalidInteger when it is not one.
+    int(base is int = 10) is int {
+        confirm source.length() > 0
+            && source != "-"
+            && (base == 0 || (base >= 2 && base <= 36))
+            && int_parse_valid(source, base)
             else throw InvalidInteger.source(source);
-        int_parse(source, radix);
+        int_parse(source, base);
     }
 
-    test "parses integer spellings" {
-        test.is(ParsedInt("0").value(), 0);
-        test.is(ParsedInt("42").value(), 42);
-        test.is(ParsedInt("-42").value(), -42);
-        test.is(ParsedInt("0042").value(), 42);
-        test.is(ParsedInt("ff", 16).value(), 255);
-        test.is(ParsedInt("Z", 36).value(), 35);
-        test.is(ParsedInt("0b101010", 0).value(), 42);
-        test.is(ParsedInt("-0X2A", 0).value(), -42);
-    }
-
-    test "rejects non-integer spellings" {
-        for ["", "-", "+1", "1.0", " 1", "1 ", "12x"] -> invalid {
-            try {
-                ParsedInt(invalid).value();
-                test.fail("invalid integer was accepted: " + invalid);
-            }
-            catch InvalidInteger.source(source) {
-                test.is(source, invalid);
-            }
-        }
-    }
-}
-
-object ParsedFloat {
-    has source is string;
-
-    ParsedFloat(origin is string) {
-        source = origin;
-
-        confirm self.source.length() > 0 && self.source != "-"
-            else throw InvalidFloat.source(self.source);
-    }
-
-    value() is float {
-        let negative is bool = source.slice(0, 1) == "-";
-        let offset is int = if negative { 1; } else { 0; };
-        let decimal is int = self.decimal(offset);
-
-        if decimal == -1 {
-            try {
-                let res is int = ParsedInt(source).value();
-                res.float();
+    // A dotted spelling is read by the runtime, nearest float (#170); one
+    // without a dot is an integer, so "-0" stays 0.0 as before.
+    float() is float {
+        confirm source.length() > 0 && source != "-" else throw InvalidFloat.source(source);
+        if !source.contains(".") {
+            return try {
+                self.int().float();
             }
             catch error is InvalidInteger {
                 throw InvalidFloat.source(source);
-            }
+            };
         }
-        else {
-            confirm decimal > offset && decimal + 1 < source.length()
-                else throw InvalidFloat.source(source);
-
-            let whole is float = self.digits(offset, decimal);
-            let fraction is float = self.digits(decimal + 1, source.length());
-            let divisor is float = ((decimal + 1)..source.length())
-                .reduce(1.0) -> result, index {
-                    result * 10.0;
-                };
-            let magnitude is float = whole + fraction / divisor;
-
-            if negative {
-                -magnitude;
-            }
-            else {
-                magnitude;
-            }
-        }
+        confirm float_parse_valid(source) else throw InvalidFloat.source(source);
+        float_parse(source);
     }
 
-    test "parses float spellings" {
-        test.is(ParsedFloat("0.0").value(), 0.0);
-        test.is(ParsedFloat("42").value(), 42.0);
-        test.is(ParsedFloat("255").value(), 255.0);
-        test.is(ParsedFloat("42.5").value(), 42.5);
-        test.is(ParsedFloat("-42.5").value(), -42.5);
-        test.is(ParsedFloat("001.050").value(), 1.05);
-        test.is(ParsedFloat("42").value(), 42.0);
-        test.is(ParsedFloat("255").value(), 255.0);
-    }
-
-    test "rejects non-float spellings" {
-        for ["", "-", ".5", "1.", "+1.0", "1.2.3", "1e3", " 1.0", "1.0 "] -> invalid {
-            try {
-                ParsedFloat(invalid).value();
-                test.fail("invalid float was accepted: " + invalid);
-            }
-            catch InvalidFloat.source(source) {
-                test.is(source, invalid);
-            }
-        }
-    }
-
-    private:
-
-    decimal(offset is int) is int {
-        (offset..source.length()).reduce(-1) -> found, index {
-            if source.slice(index, index + 1) == "." {
-                confirm found == -1 else throw InvalidFloat.source(source);
-                index;
-            }
-            else {
-                found;
-            }
-        };
-    }
-
-    digits(start is int, end is int) is float {
-        (start..end).reduce(0.0) -> result, index {
-            result * 10.0 + self.digit(index);
-        };
-    }
-
-    digit(index is int) is float {
-        let symbol is string = source.slice(index, index + 1);
-
-        match symbol {
-            case "0" { 0.0; }
-            case "1" { 1.0; }
-            case "2" { 2.0; }
-            case "3" { 3.0; }
-            case "4" { 4.0; }
-            case "5" { 5.0; }
-            case "6" { 6.0; }
-            case "7" { 7.0; }
-            case "8" { 8.0; }
-            case "9" { 9.0; }
-
-            else {
-                throw InvalidFloat.source(source);
-            }
-        }
-    }
-}
-
-object ParsedRat {
-    has source is string;
-
-    ParsedRat(origin is string) {
-        source = origin;
-
-        confirm self.source.length() > 0
-            else throw InvalidRational.source(self.source);
-    }
-
-    value() is rat {
+    // The text as an exact rat: `1.25` or `5/4`; InvalidRational otherwise.
+    rat() is rat {
+        confirm source.length() > 0 else throw InvalidRational.source(source);
         let parts is @string = source.split("/");
         confirm parts.size() == 1 || parts.size() == 2
             else throw InvalidRational.source(source);
 
         try {
-            let numerator is int = ParsedInt(parts[0]).value();
+            let numerator is int = Number(parts[0]).int();
             let denominator is int = if parts.size() == 1 {
                 1;
             }
             else {
-                ParsedInt(parts[1]).value();
+                Number(parts[1]).int();
             };
             confirm denominator > 0
                 else throw InvalidRational.source(source);
@@ -211,197 +76,184 @@ object ParsedRat {
         }
     }
 
-    test "parses rational spellings" {
-        test.is((ParsedRat("42").value()).string(), "42");
-        test.is((ParsedRat("6/8").value()).string(), "3/4");
-        test.is((ParsedRat("-6/8").value()).string(), "-3/4");
+    // Digits below the base, no sign, at most 255; base 0 reads the 0b, 0o
+    // and 0x prefixes (#170: the integer reader, not a digit at a time).
+    byte(base is int = 10) is byte {
+        confirm source.length() > 0
+            && (base == 0 || (base >= 2 && base <= 36))
+            && !source.starts_with("-")
+            && int_parse_valid(source, base)
+            else throw InvalidByte.source(source);
+        let value = int_parse(source, base);
+        confirm value <= 255 else throw InvalidByte.source(source);
+        value.byte();
+    }
+
+    test "reads integer spellings" {
+        test.is(Number("0").int(), 0);
+        test.is(Number("42").int(), 42);
+        test.is(Number("-42").int(), -42);
+        test.is(Number("0042").int(), 42);
+        test.is(Number("ff").int(16), 255);
+        test.is(Number("Z").int(36), 35);
+        test.is(Number("0b101010").int(0), 42);
+        test.is(Number("-0X2A").int(0), -42);
+    }
+
+    test "rejects non-integer spellings and bases" {
+        for ["", "-", "+1", "1.0", " 1", "1 ", "12x"] -> invalid {
+            test.is(
+                try {
+                    Number(invalid).int();
+                    "accepted";
+                }
+                catch InvalidInteger.source(source) {
+                    source;
+                },
+                invalid
+            );
+        }
+        test.is(
+            try {
+                Number("1").int(37);
+                "accepted";
+            }
+            catch InvalidInteger.source(source) {
+                source;
+            },
+            "1"
+        );
+    }
+
+    test "reads float spellings" {
+        test.is(Number("0.0").float(), 0.0);
+        test.is(Number("42").float(), 42.0);
+        test.is(Number("42.5").float(), 42.5);
+        test.is(Number("-42.5").float(), -42.5);
+        test.is(Number("001.050").float(), 1.05);
+        // The nearest float, however many digits (#170).
+        test.is(Number("3.14159265358979323846").float(), 3.141592653589793);
+        test.is(
+            Number("0.000000000000000000000000000001").float(),
+            0.000000000000000000000000000001
+        );
+    }
+
+    test "rejects non-float spellings" {
+        for ["", "-", ".5", "1.", "+1.0", "1.2.3", "1e3", " 1.0", "1.0 "] -> invalid {
+            test.is(
+                try {
+                    Number(invalid).float();
+                    "accepted";
+                }
+                catch InvalidFloat.source(source) {
+                    source;
+                },
+                invalid
+            );
+        }
+    }
+
+    test "reads rational spellings" {
+        test.is(Number("42").rat().string(), "42");
+        test.is(Number("6/8").rat().string(), "3/4");
+        test.is(Number("-6/8").rat().string(), "-3/4");
     }
 
     test "rejects non-rational spellings" {
         for ["", "/", "1/", "/2", "1/0", "1/-2", "+1/2", " 1/2", "1/2 "] -> invalid {
-            try {
-                ParsedRat(invalid).value();
-                test.fail("invalid rational was accepted: " + invalid);
-            }
-            catch InvalidRational.source(source) {
-                test.is(source, invalid);
-            }
+            test.is(
+                try {
+                    Number(invalid).rat();
+                    "accepted";
+                }
+                catch InvalidRational.source(source) {
+                    source;
+                },
+                invalid
+            );
+        }
+    }
+
+    test "reads byte spellings" {
+        test.is(Number("0").byte(), byte(0));
+        test.is(Number("255").byte(), byte(255));
+        test.is(Number("0007").byte(), byte(7));
+        test.is(Number("000255").byte(), byte(255));
+        test.is(Number("ff").byte(16), byte(255));
+        test.is(Number("0B11111111").byte(0), byte(255));
+    }
+
+    test "rejects invalid byte spellings and bounds" {
+        for ["", "-", "-1", "256", "999999999999999999999", "+1", "1.0", " 1", "1 ", "byte"] -> invalid {
+            test.is(
+                try {
+                    Number(invalid).byte();
+                    "accepted";
+                }
+                catch InvalidByte.source(source) {
+                    source;
+                },
+                invalid
+            );
         }
     }
 }
 
-object ParsedBool {
+// A truth value written as text: exactly "true" or "false".
+object Truth {
     has source is string;
 
-    ParsedBool(origin is string) {
+    // A truth value written as text.
+    Truth(origin is string) {
         source = origin;
     }
 
-    value() is bool {
+    // true for exactly "true", false for exactly "false"; InvalidBoolean
+    // otherwise.
+    bool() is bool {
         match source {
-            case "true" { true; }
-            case "false" { false; }
+            case "true" {
+                true;
+            }
+            case "false" {
+                false;
+            }
             else {
                 throw InvalidBoolean.source(source);
             }
         }
     }
 
-    test "parses boolean spellings" {
-        test.is(ParsedBool("true").value(), true);
-        test.is(ParsedBool("false").value(), false);
-    }
-
-    test "rejects non-boolean spellings" {
+    test "reads truth spellings" {
+        test.is(Truth("true").bool(), true);
+        test.is(Truth("false").bool(), false);
         for ["", "1", "0", "True", "FALSE", " true", "false "] -> invalid {
-            try {
-                ParsedBool(invalid).value();
-                test.fail("invalid boolean was accepted: " + invalid);
-            }
-            catch InvalidBoolean.source(source) {
-                test.is(source, invalid);
-            }
+            test.is(
+                try {
+                    Truth(invalid).bool();
+                    "accepted";
+                }
+                catch InvalidBoolean.source(source) {
+                    source;
+                },
+                invalid
+            );
         }
     }
 }
 
-object ParsedByte {
-    has source is string;
-    has radix is int;
-
-    ParsedByte(origin is string) {
-        source = origin;
-        radix = 10;
-
-        confirm self.source.length() > 0 else throw InvalidByte.source(self.source);
-        confirm self.radix == 0 || (self.radix >= 2 && self.radix <= 36)
-            else throw InvalidByte.source(self.source);
-    }
-
-    ParsedByte(origin is string, base is int) {
-        source = origin;
-        radix = base;
-
-        confirm self.source.length() > 0 else throw InvalidByte.source(self.source);
-        confirm self.radix == 0 || (self.radix >= 2 && self.radix <= 36)
-            else throw InvalidByte.source(self.source);
-    }
-
-    value() is byte {
-        let prefix is string = if 2 <= source.length() {
-            source.slice(0, 2);
-        }
-        else {
-            "";
-        };
-        let prefixed is bool = radix == 0 && match prefix {
-            case "0b", "0B", "0o", "0O", "0x", "0X" { true; }
-            else { false; }
-        };
-        let base is int = if radix != 0 {
-            radix;
-        }
-        else {
-            match prefix {
-                case "0b", "0B" { 2; }
-                case "0o", "0O" { 8; }
-                case "0x", "0X" { 16; }
-                else { 10; }
-            }
-        };
-        let start is int = if prefixed { 2; } else { 0; };
-        confirm start < source.length()
-            else throw InvalidByte.source(source);
-        let integer is int = (start..source.length())
-            .reduce(0) -> result, index {
-                let digit is int = self.digit(index, base);
-                let candidate is int = result * base + digit;
-                confirm candidate <= 255
-                    else throw InvalidByte.source(source);
-                candidate;
-            };
-
-        integer.byte();
-    }
-
-    test "parses byte spellings" {
-        test.is(ParsedByte("0").value(), byte(0));
-        test.is(ParsedByte("255").value(), byte(255));
-        test.is(ParsedByte("0007").value(), byte(7));
-        test.is(ParsedByte("000255").value(), byte(255));
-        test.is(ParsedByte("ff", 16).value(), byte(255));
-        test.is(ParsedByte("0B11111111", 0).value(), byte(255));
-    }
-
-    test "rejects invalid byte spellings and bounds" {
-        for ["", "-", "-1", "256", "999999999999999999999", "+1", "1.0", " 1", "1 ", "byte"] -> invalid {
-            try {
-                ParsedByte(invalid).value();
-                test.fail("invalid byte was accepted: " + invalid);
-            }
-            catch InvalidByte.source(source) {
-                test.is(source, invalid);
-            }
-        }
-    }
-
-    private:
-
-    digit(index is int, base is int) is int {
-        let symbol is string = source.slice(index, index + 1);
-
-        let result is int = match symbol {
-            case "0" { 0; }
-            case "1" { 1; }
-            case "2" { 2; }
-            case "3" { 3; }
-            case "4" { 4; }
-            case "5" { 5; }
-            case "6" { 6; }
-            case "7" { 7; }
-            case "8" { 8; }
-            case "9" { 9; }
-            case "a", "A" { 10; }
-            case "b", "B" { 11; }
-            case "c", "C" { 12; }
-            case "d", "D" { 13; }
-            case "e", "E" { 14; }
-            case "f", "F" { 15; }
-            case "g", "G" { 16; }
-            case "h", "H" { 17; }
-            case "i", "I" { 18; }
-            case "j", "J" { 19; }
-            case "k", "K" { 20; }
-            case "l", "L" { 21; }
-            case "m", "M" { 22; }
-            case "n", "N" { 23; }
-            case "o", "O" { 24; }
-            case "p", "P" { 25; }
-            case "q", "Q" { 26; }
-            case "r", "R" { 27; }
-            case "s", "S" { 28; }
-            case "t", "T" { 29; }
-            case "u", "U" { 30; }
-            case "v", "V" { 31; }
-            case "w", "W" { 32; }
-            case "x", "X" { 33; }
-            case "y", "Y" { 34; }
-            case "z", "Z" { 35; }
-            else {
-                throw InvalidByte.source(source);
-            }
-        };
-        confirm result < base else throw InvalidByte.source(source);
-        result;
-    }
-}
-
+// Text that is not an integer.
 enum InvalidInteger is Error = (source(source is string));
 
+// Text that is not a finite float.
 enum InvalidFloat is Error = (source(source is string));
 
+// Text that is not an exact rat.
 enum InvalidRational is Error = (source(source is string));
 
+// Text that is neither true nor false.
 enum InvalidBoolean is Error = (source(source is string));
 
+// Text that is not a byte, 0 to 255.
 enum InvalidByte is Error = (source(source is string));

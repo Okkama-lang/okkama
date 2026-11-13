@@ -2,7 +2,7 @@
 //! `throw`, `next`/`last`, `defer`, постфиксное условие.
 
 use super::{Checker, Kind};
-use crate::analysis::thir::{Expr, ExprKind, Fallback, Stmt, StmtKind};
+use crate::analysis::thir::{Expr, ExprKind, Fallback, LocalId, Stmt, StmtKind};
 use crate::analysis::ty::Ty;
 use crate::source::Span;
 use crate::syntax::ast;
@@ -61,7 +61,7 @@ impl Checker<'_, '_> {
     ) -> (Stmt, Flow) {
         let span = stmt.span;
         let (kind, flow) = match &stmt.kind {
-            ast::StmtKind::Let { name, ty, value } => self.let_stmt(name, ty.as_ref(), value),
+            ast::StmtKind::Let { name, ty, value, once } => self.let_stmt(name, ty.as_ref(), value, *once),
             ast::StmtKind::Expr {
                 expr,
                 condition: None,
@@ -223,7 +223,10 @@ impl Checker<'_, '_> {
         name: &ast::Name,
         ty: Option<&ast::TypeExpr>,
         value: &ast::Expr,
+        once: bool,
     ) -> (StmtKind, Flow) {
+        // Locals declared from here on belong to the value itself (#491).
+        let mark = self.locals.len();
         let declared = ty.map(|ty| {
             let generics = self.generics.clone();
             self.reg.resolve(ty, &generics)
@@ -264,6 +267,7 @@ impl Checker<'_, '_> {
                 StmtKind::Let {
                     local,
                     value: checked,
+                    once: false,
                 },
                 Flow::diverged(),
             );
@@ -279,10 +283,15 @@ impl Checker<'_, '_> {
         if declared.is_none() && matches!(checked.kind, ExprKind::BoundAction { .. }) {
             self.unbounded.push(local);
         }
+        if once {
+            self.check_once(&checked, name.span, mark);
+            self.once_locals.push(local);
+        }
         (
             StmtKind::Let {
                 local,
                 value: checked,
+                once,
             },
             Flow {
                 ty: Some(ty),
@@ -337,6 +346,19 @@ impl Checker<'_, '_> {
             let _ = self.value(value, None);
             return (StmtKind::Expr(Self::poisoned(name.span)), Flow::unit());
         };
+        // A captured binding is the anonymous action's snapshot of an outer
+        // value: rebinding it would only change this call's copy (#321).
+        // Decided by binding identity, so shadowing locals and parameters
+        // stay rebindable.
+        if self.captures.iter().any(|(_, inner)| *inner == local) {
+            let message = format!(
+                "Cannot rebind captured variable \"{}\" inside an anonymous action: captured bindings are snapshots; return the successor instead",
+                name.text
+            );
+            self.error(name.span, message);
+            let _ = self.value(value, None);
+            return (StmtKind::Expr(Self::poisoned(name.span)), Flow::unit());
+        }
         let current = self.locals[local.0].ty.taken();
         if !self.locals[local.0].rebindable && !current.is_error() {
             let message = if matches!(current, Ty::Role(..)) {
@@ -657,4 +679,38 @@ impl Checker<'_, '_> {
 pub(super) enum ElsePart<'a> {
     Block(&'a ast::Block),
     If(&'a ast::IfStmt),
+}
+
+impl Checker<'_, '_> {
+    /// `once let` (#491): it lives in an object's action, and its value reads
+    /// only fields, `self`, constants and earlier `once let`s. A parameter or
+    /// an ordinary local would make the kept value wrong for the next call.
+    fn check_once(&mut self, value: &Expr, span: Span, mark: usize) {
+        if !matches!(self.kind, Kind::Method | Kind::Successor) {
+            self.error(span, "once let is only allowed in an object's action");
+            return;
+        }
+        if self.body_scope != Some(self.scopes.len()) {
+            self.error(span, "once let must be a statement of the action's body, not of a nested block");
+            return;
+        }
+        for id in 0..mark.min(self.locals.len()) {
+            let local = LocalId(id);
+            if self.once_locals.contains(&local) || super::super::thir::expr_mentions(value, local) == 0 {
+                continue;
+            }
+            let name = self.locals[id].name.clone();
+            self.error(
+                span,
+                format!(
+                    "once let cannot depend on \"{name}\": its value may read only fields, self, constants and other once lets"
+                ),
+            );
+            return;
+        }
+        let waits = |expr: &Expr| matches!(expr.kind, ExprKind::Await(_) | ExprKind::Spawn(_));
+        if let Some(at) = super::super::thir::first_in(value, &waits) {
+            self.error(at, "once let cannot await or spawn: its value is computed once and kept");
+        }
+    }
 }

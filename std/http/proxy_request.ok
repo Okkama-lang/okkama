@@ -1,38 +1,133 @@
 module http/proxy_request v1.0.0;
+
+// The requests a client sends to a proxy: a forwarded request in absolute form,
+// or CONNECT for a tunnel. Proxied uses them.
+
 import "http/message" take Request;
-import "http/header" take Headers,Header,HeaderName;
+import "http/header" take Headers, Header, HeaderName;
 import "http/method" take Method;
-import "http/target" take AuthorityTarget,RequestTargetKind;
+import "http/target" take AuthorityTarget, RequestTargetKind;
 import "http/client_request" take HttpDirectRequest;
 import "http/version" take HttpVersion;
-import "url/value" take Url,UrlAuthority,MissingUrlPort;
+import "url/value" take ParsedUrl, UrlParts;
+
+// A request forwarded to a proxy.
 object HttpForwardRequest {
     has request is Request;
-    HttpForwardRequest(origin is Request,proxy_fields is @Header){
-        confirm origin.target().kind()==RequestTargetKind.absolute && origin.target().url().parts().scheme()=="http" else throw InvalidProxyRequest.because("absolute HTTP target required");
-        let source=Request(origin.method(),origin.target(),origin.headers(),origin.body(),HttpVersion.http_1_1);let checked=HttpDirectRequest(source);
-        let fields=ProxyRequestFields(checked.request().headers(),proxy_fields).headers();
-        request=Request(source.method(),source.target(),fields,source.body(),source.version());
+
+    // origin with the proxy's own fields.
+    HttpForwardRequest(origin is Request, proxy_fields is @Header) {
+        confirm origin::Head::target.kind() == RequestTargetKind.absolute
+            else throw InvalidProxyRequest.because("absolute HTTP target required");
+        let target = origin::Head::target.url();
+        confirm target::Parts::scheme == "http"
+            else throw InvalidProxyRequest.because("absolute HTTP target required");
+        let source = Request(
+            method: origin::Head::method,
+            target: origin::Head::target,
+            headers: origin::Head::headers,
+            body: origin.body()
+        );
+        let checked = HttpDirectRequest(source);
+        let fields = ProxyRequestFields(
+            origin: checked.request()::Head::headers,
+            fields: proxy_fields
+        ).headers();
+        request = Request(
+            method: source::Head::method,
+            target: source::Head::target,
+            headers: fields,
+            body: source.body(),
+            version: source::Head::version
+        );
     }
-    request() is Request{request;}
+
+    // The request in absolute form; InvalidProxyRequest when origin cannot be
+    // forwarded.
+    request() is Request {
+        request;
+    }
 }
+
+// A CONNECT request for a tunnel.
 object HttpConnectRequest {
     has request is Request;
-    HttpConnectRequest(origin is Url,proxy_fields is @Header){
-        let parts=origin.parts();confirm parts.scheme()=="https" && !parts.authority().userinfo().present() else throw InvalidProxyRequest.because("HTTPS tunnel target required");
-        let port=try{parts.authority().port();}catch e is MissingUrlPort{443;};let authority=UrlAuthority(parts.authority().host(),port);
-        let fields=ProxyRequestFields(Headers([Header(HeaderName("Host"),authority.string())]),proxy_fields).headers();
-        request=Request(Method("CONNECT"),AuthorityTarget(authority),fields);
+
+    // CONNECT to origin's host and port, with the proxy's own fields.
+    HttpConnectRequest(origin is UrlParts, proxy_fields is @Header) {
+        let parts = origin;
+        confirm parts::Parts::scheme == "https" && parts::Parts::userinfo == Maybe<string>.none
+            else throw InvalidProxyRequest.because("HTTPS tunnel target required");
+        let port = parts::Parts::port else 443;
+        let authority = ParsedUrl("//" + (parts::Parts::host else "") + ":" + port.string()).parts();
+        let fields = ProxyRequestFields(
+            origin: Headers(Header(name: HeaderName("Host"), value: authority.authority())),
+            fields: proxy_fields
+        ).headers();
+        request = Request(
+            method: Method.connect,
+            target: AuthorityTarget(authority),
+            headers: fields
+        );
     }
-    request() is Request{request;}
+
+    // The request.
+    request() is Request {
+        request;
+    }
 }
-object ProxyRequestFields {
+
+hidden object ProxyRequestFields {
     has headers is Headers;
-    ProxyRequestFields(origin is Headers,fields is @Header){
-        confirm !origin.membership(HeaderName("Proxy-Authorization")) && fields.size()<=1 else throw InvalidProxyRequest.because("proxy authorization conflict");
-        for fields -> field{confirm field.name().lowercase()=="proxy-authorization" else throw InvalidProxyRequest.because("proxy field required");}
-        headers=if fields.size()==1{origin.addition(fields[0]);}else{origin;};
+
+    ProxyRequestFields(origin is Headers, fields is @Header) {
+        confirm !origin.membership(HeaderName("Proxy-Authorization")) && fields.size() <= 1
+            else throw InvalidProxyRequest.because("proxy authorization conflict");
+        for fields -> field {
+            confirm field.name().lowercase() == "proxy-authorization"
+                else throw InvalidProxyRequest.because("proxy field required");
+        }
+        headers = if fields.size() == 1 {
+            origin.addition(fields[0]);
+        }
+        else {
+            origin;
+        };
     }
-    headers() is Headers{headers;}
+
+    headers() is Headers {
+        headers;
+    }
 }
+
+// A request that cannot go through a proxy; reason says why.
 enum InvalidProxyRequest is Error = (because(reason is string));
+
+test "a forward request keeps the absolute target; CONNECT names the authority" {
+    let proxy = Header(name: HeaderName("Proxy-Authorization"), value: "Basic YTpi");
+    let forward = HttpForwardRequest(
+        origin: Request(url: "http://example.com/a?b=1"),
+        proxy_fields: [proxy]
+    ).request();
+    test.is(forward::Head::target.string(), "http://example.com/a?b=1");
+    test.is(forward::Head::headers.membership(HeaderName("Proxy-Authorization")), true);
+    test.throws(InvalidProxyRequest) {
+        HttpForwardRequest(origin: Request(url: "https://example.com/"), proxy_fields: []);
+    };
+    test.throws(InvalidProxyRequest) {
+        HttpForwardRequest(
+            origin: Request(url: "http://example.com/"),
+            proxy_fields: [Header(name: HeaderName("X-Other"), value: "1")]
+        );
+    };
+    let tunnel = HttpConnectRequest(
+        origin: ParsedUrl("https://example.com/path").parts(),
+        proxy_fields: []
+    ).request();
+    test.is(tunnel::Head::method == Method.connect, true);
+    test.is(tunnel::Head::target.string(), "example.com:443");
+    test.is(tunnel::Head::headers.values(HeaderName("Host")).item(0), "example.com:443");
+    test.throws(InvalidProxyRequest) {
+        HttpConnectRequest(origin: ParsedUrl("http://example.com/").parts(), proxy_fields: []);
+    };
+}

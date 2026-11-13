@@ -5,16 +5,16 @@ import "net/tcp" take TcpConnecting, TcpConnection;
 import "net/endpoint" take IpEndpoint;
 import "net/ip" take IpAddress;
 import "net/failure" take NetworkFailure;
-import "cli/arguments" take ProcessArguments, Utf8Arguments;
-import "strings/parse" take ParsedInt;
+import "cli/arguments" take ProcessArguments;
+import "strings/parse" take Number;
 import "encoding/utf" take Utf8Decoded, Utf8Encoded;
 import "io/decorators" take ByteSnapshot;
 
 async main() is int {
     let out = Stdout();
-    let port = ParsedInt(Utf8Arguments(ProcessArguments()).item(0)).value();
+    let port = Number(ProcessArguments().strings()[0]).int();
     let r = try {
-        let connection = await TcpConnecting(IpEndpoint(IpAddress("127.0.0.1"), port)).connection();
+        let connection = await TcpConnecting(IpEndpoint(address: IpAddress("127.0.0.1"), port: port)).connection();
         connection.close();
         "connected";
     } catch e is NetworkFailure {

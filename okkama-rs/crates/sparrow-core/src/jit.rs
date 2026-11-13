@@ -97,7 +97,7 @@ helpers! {
     trace = runtime::rt_trace as (ctx, function: u64, pc: u64, frame: u64); [];
     native = runtime::rt_native as (ctx, function: u64, arguments: *const Word, count: u64) -> Word; [Allocates, Collects, Fails];
     float = runtime::rt_float as (ctx, op: u64, left: u64, right: u64) -> u64; [Allocates, Fails];
-    exec = crate::ops::rt_exec as (ctx, function: u64, pc: u64, uses: *const Word) -> Word; [Allocates, Collects, Reenters, Fails];
+    exec = crate::ops::rt_exec as (ctx, function: u64, pc: u64, uses: *const Word, registers: *const okkama_sparrow::Register, count: u64) -> Word; [Allocates, Collects, Reenters, Fails];
     closure = runtime::rt_closure as (ctx, function: u64, captures: *const Word, count: u64) -> Word; [Allocates, Collects];
     call_closure = runtime::rt_call_closure as (ctx, closure: Word, arguments: *const Word, count: u64) -> Word; [Allocates, Collects, Reenters, Fails];
     map_find = runtime::rt_map_find as (ctx, function: u64, pc: u64, map: Word, key: Word) -> u64; [];
@@ -106,7 +106,9 @@ helpers! {
     catch = crate::failures::rt_catch as (ctx, function: u64, pc: u64, failure: Word) -> u64; [Allocates];
     created = crate::failures::rt_created as (ctx, descriptor: u64, object: Word); [];
     region_add = crate::failures::rt_region_add as (ctx, region: Word, value: Word, own: u64); [];
+    region_leave = crate::failures::rt_region_leave as (ctx, region: Word, keep: *const Word, count: u64); [Allocates, Collects, Reenters, Fails];
     builder_push = crate::ops::rt_builder_push as (ctx, builder: Word, item: Word) -> Word; [];
+    trie_get = crate::ops::rt_trie_get as (ctx, array: Word, position: u64) -> Word; [Allocates];
     int_text = crate::ops::rt_int_text as (ctx, word: Word) -> Word; [Allocates, Collects];
     future_new = crate::tasks::rt_future_new as (ctx, function: u64, arguments: *const Word, count: u64) -> Word; [Allocates, Collects, Fails];
     await_ = crate::tasks::rt_await as (ctx, this: Word, future: Word) -> u64; [Collects, Reenters, Fails];
@@ -127,6 +129,10 @@ pub struct Jit {
     ranges: Vec<(u64, u64)>,
     /// (role, slot) → function index by object descriptor (u64::MAX: none).
     dispatch: BTreeMap<(u32, u32), Box<[u64]>>,
+    /// The registers each `rt_exec` call site passes, in visit order: the
+    /// helper reads them instead of visiting the instruction on every call
+    /// (#325). Machine code holds their addresses, so they live as long.
+    operands: Vec<Box<[okkama_sparrow::Register]>>,
     /// Calls of each helper (`HELPERS` order) from code compiled under
     /// `--stats`; machine code increments them, other code does not count.
     helper_counts: Box<[u64]>,
@@ -142,9 +148,25 @@ pub struct Jit {
     /// instruction that has one runs through the shared slow path instead
     /// (`SPARROW_CORE_PLAIN`).
     plain: Chosen,
+    /// Async bodies whose stack maps Cranelift's frontend keeps, as before
+    /// #354 (`SPARROW_CORE_FRONTEND_MAPS`); synchronous functions always do
+    /// (#362).
+    frontend_maps: Chosen,
     /// Allocations of each inline allocation site compiled under `--stats`:
     /// its label and the count and bytes machine code adds there (#55).
     alloc_sites: Vec<(String, Box<[u64; 2]>)>,
+    /// Where compilation spends its time (`SPARROW_CORE_PROFILE_COMPILE=1`,
+    /// #345): a line per function on stderr, and Cranelift's own passes,
+    /// summed, when the JIT is dropped.
+    profile: Option<cranelift_codegen::timing::PassTimes>,
+}
+
+impl Drop for Jit {
+    fn drop(&mut self) {
+        if let Some(passes) = &self.profile {
+            eprintln!("; Cranelift passes, all compiled functions\n{passes}");
+        }
+    }
 }
 
 /// Functions chosen by symbol in an environment variable: a comma-separated
@@ -187,6 +209,12 @@ fn target(opt_level: &str) -> Result<std::sync::Arc<dyn cranelift_codegen::isa::
     set(&mut flags, "use_colocated_libcalls", "false")?;
     // The collector walks frame records to find each frame's stack map.
     set(&mut flags, "preserve_frame_pointers", "true")?;
+    // Cranelift's IR verifier checks the emitter, not the program: a quarter
+    // of the compile time of a large async program (#345). Debug builds,
+    // and so the gate's debug tests, keep it; `SPARROW_CORE_VERIFY=1` turns
+    // it on in a release build.
+    let verify = cfg!(debug_assertions) || std::env::var("SPARROW_CORE_VERIFY").is_ok_and(|value| value == "1");
+    set(&mut flags, "enable_verifier", if verify { "true" } else { "false" })?;
     cranelift_native::builder()
         .map_err(|e| Error(format!("JIT target: {e}")))?
         .finish(settings::Flags::new(flags))
@@ -234,13 +262,21 @@ impl Jit {
             maps: Vec::new(),
             ranges: Vec::new(),
             dispatch: BTreeMap::new(),
+            operands: Vec::new(),
             helper_counts: vec![0; HELPERS.len()].into_boxed_slice(),
             largest_frame: 0,
             dump: Chosen::from_env("SPARROW_CORE_DUMP"),
             unoptimized,
             unoptimized_isa,
             plain: Chosen::from_env("SPARROW_CORE_PLAIN"),
+            frontend_maps: Chosen::from_env("SPARROW_CORE_FRONTEND_MAPS"),
             alloc_sites: Vec::new(),
+            profile: std::env::var("SPARROW_CORE_PROFILE_COMPILE")
+                .is_ok_and(|value| !value.is_empty() && value != "0")
+                .then(|| {
+                    eprintln!("; compile\tfunction\tinstructions\tregisters\tsuspensions\tclif blocks\tclif instructions\tsafepoints\tcode bytes\tframe bytes\tdeclare\tliveness\temit\tfinalize\tcodegen\tmaps\tdefinitions\ttables (microseconds)");
+                    cranelift_codegen::timing::PassTimes::default()
+                }),
         })
     }
 
@@ -381,6 +417,17 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
     }
     let Runtime { heap, loaded, jit, code, constants, resources, limits, budget, stats, .. } = runtime;
     let started = stats.is_some().then(std::time::Instant::now);
+    // Stage boundaries under `SPARROW_CORE_PROFILE_COMPILE` (#345).
+    let profiling = jit.profile.is_some();
+    let mut marks: Vec<std::time::Instant> = Vec::new();
+    macro_rules! mark {
+        () => {
+            if profiling {
+                marks.push(std::time::Instant::now());
+            }
+        };
+    }
+    mark!();
     let program = &loaded.program;
     let source = &program.functions[function];
     let symbol = source.symbol.as_str();
@@ -401,6 +448,7 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
             id
         }
     };
+    mark!();
     // Live registers per instruction, for the cost of large functions only:
     // a function whose instructions × registers × blocks cannot reach the
     // limit skips the analysis.
@@ -415,7 +463,14 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
     } else {
         None
     };
+    mark!();
     let plain = jit.plain.has(symbol);
+    // Explicit roots for async bodies (#354), unless the analysis is too
+    // large: there Cranelift's reloads after every call made more than half
+    // of the code. A synchronous function keeps Cranelift's stack maps, which
+    // cost a third less in call-heavy code such as recursion (#362).
+    let explicit = source.is_async && !jit.frontend_maps.has(symbol);
+    let root_live = explicit.then(|| okkama_sparrow::live_sets(source)).flatten();
     let config = jit.module.target_config();
     let mut context = jit.module.make_context();
     context.func.signature = jit.signature(params);
@@ -446,11 +501,16 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
             cost: 0,
             cost_limit,
             plain,
+            root_live,
+            roots: None,
         };
         emit.body()?;
+        mark!();
         builder.seal_all_blocks();
         builder.finalize(config);
     }
+    mark!();
+    let clif = (context.func.layout.blocks().count(), context.func.dfg.num_insts());
     let dump = jit.dump.has(symbol);
     if dump {
         // Callees by their CLIF names: the runtime's helpers and the program's functions.
@@ -486,6 +546,7 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
         }
         _ => jit.module.define_function(id, &mut context).map_err(|e| Error(format!("{symbol}: {e:?}")))?,
     }
+    mark!();
     let compiled = context.compiled_code().expect("compiled function");
     let maps: Vec<(u32, Vec<u32>)> = compiled
         .buffer
@@ -507,9 +568,12 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
     }
     jit.largest_frame = jit.largest_frame.max(fp_to_sp);
     let size = compiled.code_info().total_size;
+    mark!();
     jit.module
         .finalize_definitions()
         .map_err(|e| Error(format!("JIT finalize: {e}")))?;
+    mark!();
+    let safepoints = maps.len();
     let address = jit.module.get_finalized_function(id) as u64;
     for (ret, slots) in maps {
         jit.maps.push((address + u64::from(ret), fp_to_sp, slots));
@@ -518,6 +582,20 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
     jit.ranges.push((address, address + u64::from(size)));
     jit.ranges.sort_unstable();
     code[function] = address;
+    mark!();
+    if let Some(passes) = jit.profile.as_mut() {
+        passes.add(&cranelift_codegen::timing::take_current());
+        let micros: Vec<String> = marks.windows(2).map(|pair| (pair[1] - pair[0]).as_micros().to_string()).collect();
+        eprintln!(
+            "; compile\t{symbol}\t{}\t{}\t{}\t{}\t{}\t{safepoints}\t{size}\t{fp_to_sp}\t{}",
+            source.code.len(),
+            source.registers.len(),
+            source.code.iter().filter(|instruction| suspends(instruction)).count(),
+            clif.0,
+            clif.1,
+            micros.join("\t")
+        );
+    }
     if dump && let Some(listing) = &compiled.vcode {
         eprintln!("; machine code of {symbol} at {address:#x}, {size} bytes, frame {fp_to_sp} bytes\n{listing}");
     }
@@ -573,7 +651,37 @@ struct Emitter<'a, 'b> {
     pc: usize,
     /// Stack slot of `spill`, created on first use.
     spill_area: Option<cranelift_codegen::ir::StackSlot>,
+    /// Registers live before each instruction, for explicit roots (#354);
+    /// `None`: Cranelift's frontend keeps the stack maps.
+    root_live: Option<Vec<Vec<u64>>>,
+    roots: Option<Roots>,
 }
+
+/// GC roots kept by the core instead of Cranelift's frontend (#354). The
+/// heap does not move, so a pointer never has to be reloaded after a
+/// collection; what a collection needs is to find it. Every traced register
+/// has a word in one frame slot, written at each definition of the
+/// register, and a call reports the words of the registers live before its
+/// instruction or written by it. The frontend's scheme stores a value at
+/// its definition too, but reloads it at every use after any call, which
+/// made more than half of the code of large async bodies.
+///
+/// No reported word may hold a stale pointer: a live register was written
+/// on every path in this activation; a register the instruction may write
+/// but that is not live before it is cleared when the instruction starts;
+/// an async body clears every word at entry, as a resumption enters an
+/// instruction in the middle.
+struct Roots {
+    slot: cranelift_codegen::ir::StackSlot,
+    /// The word of each traced register.
+    word: Vec<Option<u32>>,
+    /// The word of an async body's frame.
+    frame: Option<u32>,
+    /// The words a call reports now.
+    reported: Vec<u32>,
+}
+
+
 
 const MEMORY: MemFlagsData = MemFlagsData::trusted();
 
@@ -593,7 +701,59 @@ impl Emitter<'_, '_> {
         }
         let reference = self.jit.module.declare_func_in_func(id, self.builder.func);
         let call = self.builder.ins().call(reference, args);
+        self.report_roots(call);
         self.builder.inst_results(call).first().copied()
+    }
+
+    /// The roots a collection in `call` finds: the words of [`Roots`].
+    fn report_roots(&mut self, call: cranelift_codegen::ir::Inst) {
+        if let Some(roots) = &self.roots {
+            for &word in &roots.reported {
+                self.builder.func.dfg.append_user_stack_map_entry(
+                    call,
+                    cranelift_codegen::ir::UserStackMapEntry { ty: types::I64, slot: roots.slot, offset: word * 8 },
+                );
+            }
+        }
+    }
+
+    /// Instruction `pc` starts: what its calls report, and its written
+    /// registers that are not live cleared, so that none holds a stale
+    /// pointer.
+    fn enter_roots(&mut self, pc: usize) {
+        let (Some(roots), Some(live)) = (&self.roots, &self.root_live) else {
+            return;
+        };
+        let source = &self.loaded.program.functions[self.function];
+        let live_before = &live[pc];
+        let is_live = |register: usize| live_before.get(register / 64).is_some_and(|word| word >> (register % 64) & 1 != 0);
+        let mut reported: Vec<u32> = roots.frame.into_iter().collect();
+        let mut cleared = Vec::new();
+        for (register, word) in roots.word.iter().enumerate() {
+            if let Some(word) = word
+                && is_live(register)
+            {
+                reported.push(*word);
+            }
+        }
+        for register in okkama_sparrow::written(source, pc) {
+            if let Some(word) = roots.word[register.0 as usize]
+                && !is_live(register.0 as usize)
+            {
+                reported.push(word);
+                cleared.push(word);
+            }
+        }
+        let slot = roots.slot;
+        if !cleared.is_empty() {
+            let zero = self.iconst(0);
+            for word in cleared {
+                self.builder.ins().stack_store(types::I64, zero, slot, (word * 8) as i32);
+            }
+        }
+        if let Some(roots) = &mut self.roots {
+            roots.reported = reported;
+        }
     }
 
     fn iconst(&mut self, value: i64) -> Value {
@@ -606,6 +766,12 @@ impl Emitter<'_, '_> {
 
     fn set(&mut self, register: &okkama_sparrow::Register, value: Value) {
         self.builder.def_var(self.vars[register.0 as usize], value);
+        if let Some(roots) = &self.roots
+            && let Some(word) = roots.word[register.0 as usize]
+        {
+            let slot = roots.slot;
+            self.builder.ins().stack_store(types::I64, value, slot, (word * 8) as i32);
+        }
     }
 
     /// A register as a word (floats as bits).
@@ -825,6 +991,7 @@ impl Emitter<'_, '_> {
         let mut values = vec![ctx];
         values.extend_from_slice(args);
         let call = self.builder.ins().call_indirect(signature, code, &values);
+        self.report_roots(call);
         let result = self.builder.inst_results(call)[0];
         self.check(pc);
         result
@@ -867,12 +1034,39 @@ impl Emitter<'_, '_> {
         self.builder.append_block_params_for_function_params(entry);
         self.builder.switch_to_block(entry);
         self.ctx = Some(self.builder.block_params(entry)[0]);
+        let explicit = self.root_live.is_some();
+        let mut words = Vec::with_capacity(self.kinds.len());
+        let mut next = 0u32;
         for kind in self.kinds {
             let var = self.builder.declare_var(if *kind == Kind::Float { types::F64 } else { types::I64 });
-            if kind.traced() {
-                self.builder.declare_var_needs_stack_map(var);
+            if kind.traced() && explicit {
+                words.push(Some(next));
+                next += 1;
+            } else {
+                if kind.traced() {
+                    self.builder.declare_var_needs_stack_map(var);
+                }
+                words.push(None);
             }
             self.vars.push(var);
+        }
+        if explicit {
+            let frame = source.is_async.then_some(next);
+            let count = next + u32::from(frame.is_some());
+            let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+                StackSlotKind::ExplicitSlot,
+                count.max(1) * 8,
+                3,
+            ));
+            if source.is_async {
+                // A resumption enters an instruction in the middle: no word
+                // may keep what an earlier activation left.
+                let zero = self.iconst(0);
+                for word in 0..count {
+                    self.builder.ins().stack_store(types::I64, zero, slot, (word * 8) as i32);
+                }
+            }
+            self.roots = Some(Roots { slot, word: words, frame, reported: frame.into_iter().collect() });
         }
         // Registers start unbound; the verifier proves defined use.
         for (register, kind) in self.kinds.iter().enumerate() {
@@ -909,14 +1103,24 @@ impl Emitter<'_, '_> {
         }
         if source.is_async {
             let frame = self.builder.declare_var(types::I64);
-            self.builder.declare_var_needs_stack_map(frame);
             let value = self.builder.block_params(entry)[1];
+            match &self.roots {
+                Some(Roots { slot, frame: Some(word), .. }) => {
+                    let (slot, word) = (*slot, *word);
+                    self.builder.ins().stack_store(types::I64, value, slot, (word * 8) as i32);
+                }
+                _ => self.builder.declare_var_needs_stack_map(frame),
+            }
             self.builder.def_var(frame, value);
             self.frame = Some(frame);
         } else {
             for (i, register) in source.params.iter().enumerate() {
                 let value = self.builder.block_params(entry)[i + 1];
                 self.set_word(register, value);
+            }
+            // The prologue's calls find the parameters.
+            if let Some(roots) = &mut self.roots {
+                roots.reported = source.params.iter().filter_map(|register| roots.word[register.0 as usize]).collect();
             }
         }
         self.blocks = leaders(source)
@@ -968,6 +1172,7 @@ impl Emitter<'_, '_> {
                 None => {}
             }
             self.pc = pc;
+            self.enter_roots(pc);
             let before = self.builder.func.dfg.num_blocks();
             open = !self.instruction(pc)?;
             if let Some(live) = &self.live {
@@ -1297,7 +1502,7 @@ impl Emitter<'_, '_> {
                 self.check(pc);
                 self.builder.ins().jump(load, &[]);
                 self.builder.switch_to_block(load);
-                let value = self.element(array, position, self.bytes_array(array_register));
+                let value = self.element(array, header, position, self.bytes_array(array_register));
                 self.set_word(&dst.0, value);
             }
             I::ObjNew { dst, object, fields } => {
@@ -1342,6 +1547,60 @@ impl Emitter<'_, '_> {
             }
             I::RoleWrap { dst, source: value, .. } => {
                 let value = self.get(value);
+                self.set(&dst.0, value);
+            }
+            // Вариант (#290): значение — объект своего случая, только с полями
+            // payload. Случаи идут подряд (это проверяет загрузка), поэтому
+            // номер случая — разность дескрипторов.
+            I::VariantNew { dst, variant, case, fields } => {
+                let object = program.variants[variant.0 as usize].cases[*case as usize].1;
+                let words = fields.len().max(1) + 1;
+                let pointer = self.allocate(words);
+                let header = self.iconst(heap::header(heap::OBJECT, Repr::Raw, object.0) as i64);
+                self.builder.ins().store(MEMORY, header, pointer, 0);
+                for (i, field) in fields.iter().enumerate() {
+                    let value = self.word(field);
+                    self.builder.ins().store(MEMORY, value, pointer, ((i + 1) * 8) as i32);
+                }
+                self.set(&dst.0, pointer);
+                self.created(object.0 as usize, pointer);
+            }
+            I::VariantTag { dst, value } => {
+                let first = match self.register_type(value) {
+                    Some(Type::Variant(v)) => program.variants[v.0 as usize].cases[0].1.0,
+                    _ => return Err(unsupported()),
+                };
+                let pointer = self.get(value);
+                let header = self.builder.ins().load(types::I64, MEMORY, pointer, 0);
+                let descriptor = self.builder.ins().ushr_imm_u(header, 32);
+                let tag = self.builder.ins().iadd_imm_s(descriptor, -i64::from(first));
+                let doubled = self.builder.ins().ishl_imm_u(tag, 1);
+                let tagged = self.builder.ins().bor_imm_u(doubled, 1);
+                self.set(&dst.0, tagged);
+            }
+            I::VariantGet { dst, value, case, field } => {
+                let object = match self.register_type(value) {
+                    Some(Type::Variant(v)) => program.variants[v.0 as usize].cases[*case as usize].1.0,
+                    _ => return Err(unsupported()),
+                };
+                let pointer = self.get(value);
+                let header = self.builder.ins().load(types::I64, MEMORY, pointer, 0);
+                let descriptor = self.builder.ins().ushr_imm_u(header, 32);
+                let active = self.builder.ins().icmp_imm_s(IntCC::Equal, descriptor, i64::from(object));
+                let load = self.builder.create_block();
+                let inactive = self.builder.create_block();
+                self.builder.ins().brif(active, load, &[], inactive, &[]);
+                self.builder.switch_to_block(inactive);
+                let message = self.constant_text("Variant payload of an inactive case");
+                self.helper(|h| h.trap, &[ctx, message]);
+                self.check(pc);
+                self.builder.ins().jump(load, &[]);
+                self.builder.switch_to_block(load);
+                let value = self.builder.ins().load(types::I64, MEMORY, pointer, ((*field + 1) * 8) as i32);
+                self.set_word(&dst.0, value);
+            }
+            I::VariantOf { dst, source, .. } => {
+                let value = self.get(source);
                 self.set(&dst.0, value);
             }
             I::CallRole { dst, receiver, role, slot, args } => {
@@ -1550,7 +1809,7 @@ impl Emitter<'_, '_> {
                 let miss = self.builder.create_block();
                 self.builder.ins().brif(valid, hit, &[], miss, &[]);
                 self.builder.switch_to_block(hit);
-                let item = self.element(array, position, self.bytes_array(array_register));
+                let item = self.element(array, header, position, self.bytes_array(array_register));
                 // Edge moves read the old registers; the found value is written last.
                 self.jump_then(found, value.0, item);
                 self.builder.switch_to_block(miss);
@@ -1558,7 +1817,7 @@ impl Emitter<'_, '_> {
                 return Ok(true);
             }
             I::MapLookup { map, key, value, found, missing } => {
-                let (map, key) = (self.get(map), self.get(key));
+                let (map, key) = (self.get(map), self.word(key));
                 let function = self.iconst(self.function as i64);
                 let at = self.iconst(pc as i64);
                 let present = self.helper(|h| h.map_find, &[ctx, function, at, map, key]).expect("result");
@@ -1638,8 +1897,12 @@ impl Emitter<'_, '_> {
                 let (close, done) = (self.builder.create_block(), self.builder.create_block());
                 self.builder.ins().brif(entries, close, &[], done, &[]);
                 self.builder.switch_to_block(close);
-                let instruction = instruction.clone();
-                self.failure_generic(pc, &instruction);
+                let I::RegionLeave { keep, .. } = instruction else { unreachable!() };
+                let keep: Vec<_> = keep.iter().cloned().collect();
+                let count = self.iconst(keep.len() as i64);
+                let address = self.spill(&keep);
+                self.helper(|h| h.region_leave, &[ctx, cell, address, count]);
+                self.check(pc);
                 self.builder.ins().jump(done, &[]);
                 self.builder.switch_to_block(done);
             }
@@ -1796,12 +2059,18 @@ impl Emitter<'_, '_> {
             I::ValCmp { op: op @ (Cmp::Eq | Cmp::Ne), dst, left, right }
                 if matches!(self.kinds[left.0 as usize], Kind::Int | Kind::Raw | Kind::Byte | Kind::Float) =>
             {
-                // Scalars compare by word (exact ints: two inline integers);
-                // anything else takes the structural slow path.
+                // Scalars compare by word (exact ints: two inline integers),
+                // floats numerically (#314); anything else takes the
+                // structural slow path.
                 let int = self.kinds[left.0 as usize] == Kind::Int;
-                let (l, r) = (self.word(left), self.word(right));
-                let condition = if *op == Cmp::Eq { IntCC::Equal } else { IntCC::NotEqual };
-                let flag = self.builder.ins().icmp(condition, l, r);
+                let (l, r) = (self.get(left), self.get(right));
+                let flag = if self.kinds[left.0 as usize] == Kind::Float {
+                    let condition = if *op == Cmp::Eq { FloatCC::Equal } else { FloatCC::NotEqual };
+                    self.builder.ins().fcmp(condition, l, r)
+                } else {
+                    let condition = if *op == Cmp::Eq { IntCC::Equal } else { IntCC::NotEqual };
+                    self.builder.ins().icmp(condition, l, r)
+                };
                 let flag = self.builder.ins().uextend(types::I64, flag);
                 if int {
                     let both = self.builder.ins().band(l, r);
@@ -1832,6 +2101,17 @@ impl Emitter<'_, '_> {
                 let value = self.get(source);
                 let text = self.helper(|h| h.int_text, &[ctx, value]).expect("result");
                 self.set(&dst.0, text);
+            }
+            // A code point or a byte is always a small int: tag it inline
+            // (`character.code()` ran through the generic helper, #503).
+            I::Convert { dst, source }
+                if matches!(self.register_type(source), Some(Type::Char) | Some(Type::Byte))
+                    && matches!(self.register_type(&dst.0), Some(Type::Int)) =>
+            {
+                let value = self.get(source);
+                let doubled = self.builder.ins().ishl_imm_u(value, 1);
+                let tagged = self.builder.ins().bor_imm_u(doubled, 1);
+                self.set(&dst.0, tagged);
             }
             I::StrLen { dst, text } => {
                 // ASCII strings know their length in characters: the byte length.
@@ -1902,15 +2182,46 @@ impl Emitter<'_, '_> {
         matches!(self.register_type(&register), Some(Type::Array(element)) if Kind::of(&self.loaded.program, *element) == Kind::Byte)
     }
 
-    /// Element `position` (in bounds) of an array: a word, or a byte of a packed array.
-    fn element(&mut self, array: Value, position: Value, bytes: bool) -> Value {
+    /// Element `position` (in bounds) of an array whose header is `header`: a
+    /// word, or a byte of a packed array. One branch on two header bits keeps
+    /// flat arrays on the plain load; a shared version (`heap::SHARED`, #246)
+    /// reads from the address of its first element (one load more), a trie (`heap::TRIE`,
+    /// #250) calls a helper. Byte arrays are never either.
+    fn element(&mut self, array: Value, header: Value, position: Value, bytes: bool) -> Value {
         if bytes {
             let address = self.builder.ins().iadd(array, position);
             return self.builder.ins().uload8(types::I64, MEMORY, address, 8);
         }
+        let special = self.builder.ins().band_imm_u(header, (heap::SHARED | heap::TRIE) as i64);
+        let (flat, other, view, trie, done) = (
+            self.builder.create_block(),
+            self.builder.create_block(),
+            self.builder.create_block(),
+            self.builder.create_block(),
+            self.builder.create_block(),
+        );
+        self.builder.append_block_param(done, types::I64);
+        self.builder.ins().brif(special, other, &[], flat, &[]);
+        self.builder.switch_to_block(flat);
         let offset = self.builder.ins().ishl_imm_u(position, 3);
         let address = self.builder.ins().iadd(array, offset);
-        self.builder.ins().load(types::I64, MEMORY, address, 8)
+        let value = self.builder.ins().load(types::I64, MEMORY, address, 8);
+        self.builder.ins().jump(done, &[value.into()]);
+        self.builder.switch_to_block(other);
+        let shared = self.builder.ins().band_imm_u(header, heap::SHARED as i64);
+        self.builder.ins().brif(shared, view, &[], trie, &[]);
+        self.builder.switch_to_block(view);
+        let first = self.builder.ins().load(types::I64, MEMORY, array, 8);
+        let offset = self.builder.ins().ishl_imm_u(position, 3);
+        let address = self.builder.ins().iadd(first, offset);
+        let value = self.builder.ins().load(types::I64, MEMORY, address, 0);
+        self.builder.ins().jump(done, &[value.into()]);
+        self.builder.switch_to_block(trie);
+        let ctx = self.ctx();
+        let value = self.helper(|h| h.trie_get, &[ctx, array, position]).expect("result");
+        self.builder.ins().jump(done, &[value.into()]);
+        self.builder.switch_to_block(done);
+        self.builder.block_params(done)[0]
     }
 
     /// Inline access to an Atomic cell (`[header, value, closed]`; a closed
@@ -1955,22 +2266,6 @@ impl Emitter<'_, '_> {
         }
     }
 
-    /// Run a failure or region instruction through `rt_failure_op`; its result.
-    fn failure_generic(&mut self, pc: usize, instruction: &I) -> Value {
-        let mut uses = Vec::new();
-        instruction.visit(&mut |access| {
-            if let okkama_sparrow::Access::Use(register) = access {
-                uses.push(register);
-            }
-        });
-        let ctx = self.ctx();
-        let address = self.spill(&uses);
-        let function = self.iconst(self.function as i64);
-        let at = self.iconst(pc as i64);
-        let result = self.helper(|h| h.failure_op, &[ctx, function, at, address]).expect("result");
-        self.check(pc);
-        result
-    }
 
     /// Compile `instruction` as a call of the shared slow path, defining its result.
     fn generic_instruction(&mut self, pc: usize, instruction: &I) {
@@ -1998,7 +2293,11 @@ impl Emitter<'_, '_> {
         let address = self.spill(&uses);
         let function = self.iconst(self.function as i64);
         let at = self.iconst(pc as i64);
-        let result = self.helper(|h| h.exec, &[ctx, function, at, address]).expect("result");
+        let count = self.iconst(uses.len() as i64);
+        let registers: Box<[okkama_sparrow::Register]> = uses.into_boxed_slice();
+        let table = self.iconst(registers.as_ptr() as i64);
+        self.jit.operands.push(registers);
+        let result = self.helper(|h| h.exec, &[ctx, function, at, address, table, count]).expect("result");
         self.check(pc);
         result
     }
@@ -2122,6 +2421,8 @@ fn generic(instruction: &I) -> bool {
             | I::Undef { .. }
             | I::AnyBox { .. }
             | I::ArraySlice { .. }
+            | I::ArrayReplace { .. }
+            | I::ArrayRemove { .. }
             | I::ArrayJoin { .. }
             | I::ArrayConcat { .. }
             | I::ArrayDiff { .. }

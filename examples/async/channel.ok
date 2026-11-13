@@ -1,0 +1,46 @@
+module examples/async/channel v1.0.0;
+
+import "async/channel" take Channel, Sending, Receiving;
+import "io/stdout" take Stdout;
+import "strings/buffer" take TextBuffer;
+
+// A producer and a consumer share a bounded channel. The producer closes its
+// side when done; the consumer walks the channel with `for await`, which ends
+// once the channel is closed and drained.
+
+object Producer {
+    has output is Sending<string>;
+    Producer(:output);
+
+    async run() is int {
+        for ["alpha", "beta", "gamma", "delta"] -> word {
+            await output.send(word);
+        }
+        output.close();
+        4;
+    }
+}
+
+object Consumer {
+    has input is Receiving<string>;
+    Consumer(:input);
+
+    async run() is string {
+        let lengths = TextBuffer();
+        for await input -> word {
+            lengths.write(word.length().string(), " ");
+        }
+        lengths.string().trim();
+    }
+}
+
+async main() is int {
+    let out = Stdout();
+    let channel is Channel<string> = Channel(capacity: 2);
+    let produce is async () is int = Producer(output: channel.sending()).run;
+    let producing = spawn produce();
+    let lengths = await Consumer(input: channel.receiving()).run();
+    out.writeln("sent ", await producing, " words");
+    out.writeln("lengths: " + lengths);
+    0;
+}

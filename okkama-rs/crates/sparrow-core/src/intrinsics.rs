@@ -75,6 +75,21 @@ pub enum Intrinsic {
     TestIs,
     TestIsnt,
     TestFail,
+    TestSkip,
+    TestClose,
+    TestText,
+    TestBytes,
+    /// `float.floor` … `float.tan` (#192): the name after `okkama.float.`.
+    FloatFunction(&'static str),
+    FloatAtan2,
+    FloatMin,
+    FloatMax,
+    FloatClamp,
+    FloatFinite,
+    FloatNan,
+    IntMin,
+    IntMax,
+    IntClamp,
 }
 
 impl Intrinsic {
@@ -127,12 +142,12 @@ impl Intrinsic {
             "okkama.scope.FutureGroup.active" => GroupActive,
             "okkama.scope.FutureGroup.cancel" => GroupCancel,
             "okkama.scope.FutureGroup.wait" => GroupWait,
-            "okkama.scope.FutureScope.result" => ScopeResult,
+            "okkama.scope.FutureScope.outcome" => ScopeResult,
             "okkama.collect.AllFutures.results" => CollectAll,
-            "okkama.collect.Raced.result" => CollectRace,
-            "okkama.collect.FirstSuccessful.result" => CollectFirst,
-            "okkama.timeout.Before.result" => TimeoutBefore,
-            "okkama.timeout.Within.result" => TimeoutWithin,
+            "okkama.collect.Raced.winner" => CollectRace,
+            "okkama.collect.FirstSuccessful.outcome" => CollectFirst,
+            "okkama.timeout.Before.outcome" => TimeoutBefore,
+            "okkama.timeout.Within.outcome" => TimeoutWithin,
             "okkama.collect.FutureCompletions.remaining_count" => StreamRemaining,
             "okkama.collect.FutureCompletions.completion" => StreamCompletion,
             "okkama.fake.storage.set" => FakeSet,
@@ -145,6 +160,30 @@ impl Intrinsic {
             "okkama.test.is" => TestIs,
             "okkama.test.isnt" => TestIsnt,
             "okkama.test.fail" => TestFail,
+            "okkama.test.skip" => TestSkip,
+            "okkama.test.close" => TestClose,
+            "okkama.test.text" => TestText,
+            "okkama.test.bytes" => TestBytes,
+            "okkama.float.floor" => FloatFunction("floor"),
+            "okkama.float.ceil" => FloatFunction("ceil"),
+            "okkama.float.round" => FloatFunction("round"),
+            "okkama.float.trunc" => FloatFunction("trunc"),
+            "okkama.float.exp" => FloatFunction("exp"),
+            "okkama.float.ln" => FloatFunction("ln"),
+            "okkama.float.log2" => FloatFunction("log2"),
+            "okkama.float.log10" => FloatFunction("log10"),
+            "okkama.float.sin" => FloatFunction("sin"),
+            "okkama.float.cos" => FloatFunction("cos"),
+            "okkama.float.tan" => FloatFunction("tan"),
+            "okkama.float.atan2" => FloatAtan2,
+            "okkama.float.min" => FloatMin,
+            "okkama.float.max" => FloatMax,
+            "okkama.float.clamp" => FloatClamp,
+            "okkama.float.finite" => FloatFinite,
+            "okkama.float.nan" => FloatNan,
+            "okkama.int.min" => IntMin,
+            "okkama.int.max" => IntMax,
+            "okkama.int.clamp" => IntClamp,
             _ => return None,
         })
     }
@@ -248,6 +287,32 @@ fn raised(runtime: &mut Runtime, descriptor: u32, values: &[Word]) -> Word {
         words.push(runtime.heap.allocate_array(element, &elements));
     }
     runtime.heap.object_new(descriptor, &words)
+}
+
+/// A float result of #192, or the failure of a result that is not finite.
+fn float_result(result: Result<f64, String>) -> Outcome {
+    match result {
+        Ok(value) => Value(value.to_bits(), Repr::Raw),
+        Err(message) => program_failure(&message),
+    }
+}
+
+/// The order of two int words, small or big (#192).
+fn integer_order(runtime: &Runtime, left: Word, right: Word) -> Ordering {
+    use crate::heap::Integer::{Big, Small};
+    match (runtime.heap.integer(left), runtime.heap.integer(right)) {
+        (Small(a), Small(b)) => a.cmp(&b),
+        (Small(a), Big(b)) => num_bigint::BigInt::from(a).cmp(b),
+        (Big(a), Small(b)) => a.cmp(&num_bigint::BigInt::from(b)),
+        (Big(a), Big(b)) => a.cmp(b),
+    }
+}
+
+fn integer_text(runtime: &Runtime, value: Word) -> String {
+    match runtime.heap.integer(value) {
+        crate::heap::Integer::Small(n) => n.to_string(),
+        crate::heap::Integer::Big(n) => n.to_string(),
+    }
 }
 
 fn boolean(value: bool) -> Outcome {
@@ -492,13 +557,57 @@ fn call(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, intrinsic: Intrin
             Value(runtime.heap.int(remaining), Repr::Int)
         }
         FakeSet | FakeGet | FakeHas | FakeRemove | FakeClear | FakeSize => fake_storage(runtime, function, intrinsic, args),
-        TestOk | TestIs | TestIsnt | TestFail => {
+        FloatFunction(name) => float_result(okkama_runtime_core::float::function(name, f64::from_bits(args[0]))),
+        FloatAtan2 => float_result(okkama_runtime_core::float::atan2(f64::from_bits(args[0]), f64::from_bits(args[1]))),
+        FloatMin => Value(okkama_runtime_core::float::min(f64::from_bits(args[0]), f64::from_bits(args[1])).to_bits(), Repr::Raw),
+        FloatMax => Value(okkama_runtime_core::float::max(f64::from_bits(args[0]), f64::from_bits(args[1])).to_bits(), Repr::Raw),
+        FloatClamp => float_result(okkama_runtime_core::float::clamp(
+            f64::from_bits(args[0]),
+            f64::from_bits(args[1]),
+            f64::from_bits(args[2]),
+        )),
+        FloatFinite => boolean(f64::from_bits(args[0]).is_finite()),
+        FloatNan => boolean(f64::from_bits(args[0]).is_nan()),
+        IntMin => Value(if integer_order(runtime, args[1], args[0]).is_lt() { args[1] } else { args[0] }, Repr::Int),
+        IntMax => Value(if integer_order(runtime, args[1], args[0]).is_gt() { args[1] } else { args[0] }, Repr::Int),
+        IntClamp => {
+            if integer_order(runtime, args[1], args[2]).is_gt() {
+                return program_failure(&format!(
+                    "clamp: low {} is above high {}",
+                    integer_text(runtime, args[1]),
+                    integer_text(runtime, args[2])
+                ));
+            }
+            let chosen = if integer_order(runtime, args[0], args[1]).is_lt() {
+                args[1]
+            } else if integer_order(runtime, args[0], args[2]).is_gt() {
+                args[2]
+            } else {
+                args[0]
+            };
+            Value(chosen, Repr::Int)
+        }
+        TestOk | TestIs | TestIsnt | TestFail | TestClose | TestText | TestBytes => {
             if runtime.host.as_ref().is_none_or(|h| h.test_failures.is_none()) {
                 return program_failure("The test capability is available only inside a running test");
             }
             let message = match intrinsic {
                 TestOk => (args[0] == 0).then(|| "expected true, got false".to_owned()),
                 TestFail => Some(runtime.heap.text(args[0]).to_owned()),
+                TestClose => okkama_runtime_core::testing::close_failure(
+                    f64::from_bits(args[0]),
+                    f64::from_bits(args[1]),
+                    f64::from_bits(args[2]),
+                    crate::scalar::float_text,
+                ),
+                TestText => okkama_runtime_core::testing::text_failure(
+                    runtime.heap.text(args[0]),
+                    runtime.heap.text(args[1]),
+                ),
+                TestBytes => okkama_runtime_core::testing::bytes_failure(
+                    &runtime.heap.byte_view(args[0]),
+                    &runtime.heap.byte_view(args[1]),
+                ),
                 _ => {
                     let f = &runtime.loaded.program.functions[function];
                     let ty = f.registers[f.params[0].0 as usize];
@@ -520,13 +629,24 @@ fn call(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, intrinsic: Intrin
             }
             VOID
         }
+        TestSkip => {
+            if runtime.host.as_ref().is_none_or(|h| h.test_failures.is_none()) {
+                return program_failure("The test capability is available only inside a running test");
+            }
+            let reason = runtime.heap.text(args[0]).to_owned();
+            if let Some(host) = runtime.host.as_mut() {
+                host.test_skipped.get_or_insert(reason);
+            }
+            // Ends the test: no `catch` takes a failure without a thrown value.
+            program_failure("test skipped")
+        }
         _ => Fatal(format!("intrinsic {intrinsic:?} is async")),
     }
 }
 
 /// Per-fake storage of test fakes (`fake.storage.*`): typed values by key,
 /// owned by the fake object.
-type FakeMap = std::collections::BTreeMap<crate::ops::Key, (Word, Word, okkama_sparrow::TypeRef, Repr)>;
+type FakeMap = std::collections::BTreeMap<crate::ops::Key, (Word, Repr, Word, okkama_sparrow::TypeRef, Repr)>;
 
 fn fake_map(runtime: &mut Runtime, receiver: Word) -> Option<&mut FakeMap> {
     match runtime.states.get_mut(&receiver) {
@@ -564,22 +684,23 @@ fn fake_storage(runtime: &mut Runtime, function: usize, intrinsic: Intrinsic, ar
     let registers = &runtime.loaded.program.functions[function].registers;
     let key_type = registers[params[1]];
     let key_kind = runtime.loaded.functions[function].kinds[params[1]];
-    let key_ty = runtime.loaded.program.ty(key_type).cloned();
-    let indexed = runtime.key(args[1], key_kind, key_ty.as_ref());
+    let key_ty = runtime.loaded.program.ty(key_type);
+    let indexed = runtime.key(args[1], key_kind, key_ty);
     if intrinsic == FakeSet {
         let value_type = runtime.loaded.program.functions[function].registers[params[2]];
         let repr = runtime.loaded.functions[function].kinds[params[2]].repr();
         if fake_map(runtime, receiver).is_none() {
             runtime.state_new(receiver, State::FakeStorage(Default::default()));
         }
-        fake_map(runtime, receiver).expect("storage").insert(indexed, (args[1], args[2], value_type, repr));
+        let entry = (args[1], key_kind.repr(), args[2], value_type, repr);
+        fake_map(runtime, receiver).expect("storage").insert(indexed, entry);
         return VOID;
     }
     let found = fake_map(runtime, receiver).and_then(|s| s.get(&indexed)).copied();
     if intrinsic == FakeHas {
         return boolean(found.is_some());
     }
-    let Some((_, value, stored, repr)) = found else {
+    let Some((_, _, value, stored, repr)) = found else {
         let shown = show(runtime, args[1], key_type);
         return program_failure(&format!("Fake storage has no key {shown}"));
     };
@@ -765,8 +886,24 @@ pub(crate) fn global(ctx: &mut Ctx, runtime: &mut Runtime, index: usize) -> Resu
     if let Some(Some(word)) = runtime.globals.get(index) {
         return Ok(*word);
     }
-    let init = runtime.loaded.program.globals[index].init.0 as usize;
-    let word = call_function(ctx, runtime, init, &[]).ok_or("the init of a constant failed")?;
+    // A constant carried as data is built here, once, without its init
+    // (#506); the data is not needed afterwards.
+    let word = match runtime.loaded.program.globals[index].data.take() {
+        Some(data) => {
+            let ty = runtime.loaded.program.globals[index].ty;
+            match crate::ops::materialize(runtime, &data, ty) {
+                Ok(word) => word,
+                Err(error) => {
+                    runtime.loaded.program.globals[index].data = Some(data);
+                    return Err(error);
+                }
+            }
+        }
+        None => {
+            let init = runtime.loaded.program.globals[index].init.0 as usize;
+            call_function(ctx, runtime, init, &[]).ok_or("the init of a constant failed")?
+        }
+    };
     runtime.constants.push((word, Repr::Ref));
     runtime.globals[index] = Some(word);
     Ok(word)
@@ -849,7 +986,7 @@ fn ordering(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, source: Word)
             Ok(match element_type {
                 Some(Type::Int) => runtime.big_value(a).cmp(&runtime.big_value(b)),
                 Some(Type::Float) => f64::from_bits(a).partial_cmp(&f64::from_bits(b)).unwrap_or(Ordering::Equal),
-                Some(Type::Rat) => runtime.rational(a).cmp(runtime.rational(b)),
+                Some(Type::Rat) => runtime.rational(a).compare(runtime.rational(b)),
                 Some(Type::Str) => runtime.heap.text(a).cmp(runtime.heap.text(b)),
                 _ => a.cmp(&b),
             })

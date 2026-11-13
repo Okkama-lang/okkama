@@ -5,12 +5,12 @@ import "runtime/layout" take indent, dedent, wrap, shorten;
 
 // Immutable text-layout values.
 //
-// Every object projects directly to string:
+// Every object answers string():
 //
-//     let block = string Indented(
+//     let block = Indented(
 //         origin: "first\nsecond",
 //         prefix: "  ",
-//     );
+//     ).string();
 //     // "  first\n  second"
 //
 // Indented prefixes every nonblank line and preserves line endings. Empty and
@@ -19,61 +19,69 @@ import "runtime/layout" take indent, dedent, wrap, shorten;
 // Dedented removes the longest exact spaces-and-tabs prefix shared by every
 // nonblank line. It also removes spaces and tabs from otherwise blank lines:
 //
-//     string Dedented(origin: "    first\n      second");
+//     Dedented(origin: "    first\n      second").string();
 //     // "first\n  second"
 //
 // Wrapped collapses whitespace between words, removes surrounding whitespace,
 // and packs whole words into lines no wider than width. A single word longer
 // than width remains intact on its own line; words are never split:
 //
-//     string Wrapped(origin: "one two three", width: 7);
+//     Wrapped(origin: "one two three", width: 7).string();
 //     // "one two\nthree"
 //
 // Shortened performs the same whitespace normalization. If the normalized
 // text does not fit, it keeps the longest whole-word prefix for which the
 // exact placeholder also fits:
 //
-//     string Shortened(
+//     Shortened(
 //         origin: "one two three",
 //         width: 10,
 //         placeholder: "...",
-//     );
+//     ).string();
 //     // "one two..."
 //
 // Wrapped requires a positive width. Shortened accepts a nonnegative width,
 // but rejects a placeholder wider than that width. Width and length count
 // Unicode scalar values, consistently with string.length().
 
+// Text with prefix before every line that is not empty.
 object Indented {
     has source is string;
     has indentation is string;
 
+    // origin indented by prefix.
     Indented(origin is string, prefix is string) {
         source = origin;
         indentation = prefix;
     }
 
+    // The indented text.
     string() is string {
         indent(source, indentation);
     }
 }
 
+// Text without the indentation all its lines share.
 object Dedented {
     has source is string;
 
+    // origin dedented.
     Dedented(origin is string) {
         source = origin;
     }
 
+    // The dedented text.
     string() is string {
         dedent(source);
     }
 }
 
+// Text wrapped into lines of at most width characters, words kept whole.
 object Wrapped {
     has source is string;
     has line_width is int;
 
+    // origin wrapped at width.
     Wrapped(origin is string, width is int) {
         confirm width > 0
             else throw InvalidArgument.because("wrap width must be positive");
@@ -81,16 +89,19 @@ object Wrapped {
         line_width = width;
     }
 
+    // The wrapped text, lines joined with LF.
     string() is string {
         wrap(source, line_width);
     }
 }
 
+// Text cut to width characters at a word, ending in placeholder when cut.
 object Shortened {
     has source is string;
     has line_width is int;
     has ending is string;
 
+    // origin shortened to width; placeholder must fit in width.
     Shortened(origin is string, width is int, placeholder is string) {
         confirm width >= 0
             else throw InvalidArgument.because("shorten width cannot be negative");
@@ -101,7 +112,44 @@ object Shortened {
         ending = placeholder;
     }
 
+    // The shortened text.
     string() is string {
         shorten(source, line_width, ending);
     }
+}
+
+test "indent and dedent leave blank lines alone" {
+    test.is(Indented(origin: "first\nsecond", prefix: "  ").string(), "  first\n  second");
+    test.is(Indented(origin: "a\n\nb\n", prefix: "> ").string(), "> a\n\n> b\n");
+    test.is(Dedented(origin: "    first\n      second").string(), "first\n  second");
+    test.is(Dedented(origin: "  a\n   \n  b").string(), "a\n\nb");
+    test.is(Dedented(origin: "a\n  b").string(), "a\n  b");
+}
+
+test "wrap packs whole words and shorten keeps a placeholder" {
+    test.is(Wrapped(origin: "one two three", width: 7).string(), "one two\nthree");
+    test.is(Wrapped(origin: "  spaced   out  ", width: 20).string(), "spaced out");
+    test.is(Wrapped(origin: "unbreakable word", width: 4).string(), "unbreakable\nword");
+    test.is(Shortened(origin: "one two three", width: 10, placeholder: "...").string(), "one two...");
+    test.is(Shortened(origin: "one two", width: 10, placeholder: "...").string(), "one two");
+    for [0, -1] -> width {
+        test.is(
+            try {
+                Wrapped(origin: "x", width: width).string();
+            }
+            catch error is Error {
+                "refused";
+            },
+            "refused"
+        );
+    }
+    test.is(
+        try {
+            Shortened(origin: "one two three", width: 2, placeholder: "...").string();
+        }
+        catch error is Error {
+            "refused";
+        },
+        "refused"
+    );
 }

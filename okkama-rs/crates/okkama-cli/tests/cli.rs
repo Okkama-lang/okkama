@@ -281,10 +281,81 @@ fn native_run_engines_execute_source_without_java() {
 }
 
 #[test]
+fn skipped_and_filtered_tests_report_alike_on_every_engine() {
+    // #277: a test among hidden actions is an object test; `test.skip` ends its
+    // test past any `catch` and does not fail the run unless an assertion
+    // failed first; `--filter` keeps the tests whose names contain a text.
+    let source = TempFile::new(
+        "skip.ok",
+        b"module app v1.0.0;\n\
+          object Account {\n\
+              Account();\n\
+              test \"public\" { test.ok(true); }\n\
+              hidden helper() is int { 1; }\n\
+              test \"among private\" { test.ok(true); }\n\
+          }\n\
+          test \"skipped\" { test.skip(\"not today\"); test.ok(false); }\n\
+          test \"through catch\" { try { test.skip(\"uncaught\"); } catch e is Error { test.fail(\"caught\"); } }\n\
+          test \"failed first\" { test.is(1, 2); test.skip(\"too late\"); }\n",
+    );
+    for engine in ["ir", "sparrow"] {
+        let output = run(&["run", "--engine", engine, "-t", source.path()]);
+        assert_eq!(output.status.code(), Some(1), "{engine}: {}", stderr(&output));
+        assert_eq!(
+            stdout(&output),
+            "=== RUN   Account :: public\n--- PASS: Account :: public\n\
+             === RUN   Account :: among private\n--- PASS: Account :: among private\n\
+             === RUN   skipped\n--- SKIP: skipped\n    not today\n\
+             === RUN   through catch\n--- SKIP: through catch\n    uncaught\n\
+             === RUN   failed first\n--- FAIL: failed first\n    expected 2, got 1\nFAIL\n",
+            "{engine}"
+        );
+        let output = run(&[
+            "run", "--engine", engine, "-t", "--filter", "skip", "--filter", "private", source.path(),
+        ]);
+        assert_eq!(output.status.code(), Some(0), "{engine}: {}", stderr(&output));
+        assert_eq!(
+            stdout(&output),
+            "=== RUN   Account :: among private\n--- PASS: Account :: among private\n\
+             === RUN   skipped\n--- SKIP: skipped\n    not today\nPASS\n",
+            "{engine}"
+        );
+        let output = run(&["run", "--engine", engine, "-t", "--filter", "nothing", source.path()]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(stderr(&output), "okkama: no test name contains \"nothing\"\n");
+    }
+    let output = run(&["run", "--filter", "skip", source.path()]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("--filter selects tests: use it with -t"));
+}
+
+/// The channel examples the channel guide shows (#341) print what their
+/// `.expected` files say on the IR engine and on Sparrow.
+#[test]
+fn channel_examples_print_their_expected_output() {
+    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/channels");
+    let mut checked = 0;
+    for entry in std::fs::read_dir(&directory).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|extension| extension != "ok") {
+            continue;
+        }
+        let expected = std::fs::read_to_string(path.with_extension("expected")).unwrap();
+        for engine in ["ir", "sparrow"] {
+            let output = run(&["run", "--engine", engine, "--timeout", "30", path.to_str().unwrap()]);
+            assert_eq!(output.status.code(), Some(0), "{} {engine}: {}", path.display(), stderr(&output));
+            assert_eq!(stdout(&output), expected, "{} {engine}", path.display());
+        }
+        checked += 1;
+    }
+    assert_eq!(checked, 5);
+}
+
+#[test]
 fn uncaught_failure_prints_place_and_call_stack() {
     let source = b"module app v1.0.0;\nobject Box {\n    Box();\n    at(i is int) is int { [1, 2][i]; }\n}\nmain() is int {\n    Box().at(5);\n}\n";
     // Every engine reports the place and the call stack (the core since #10).
-    for engine in ["ir", "sparrow", "sparrow-origin"] {
+    for engine in ["ir", "sparrow"] {
         let output = run_stdin(&["run", "--engine", engine, "-"], source);
         assert_eq!(output.status.code(), Some(1));
         let text = stderr(&output);
@@ -1118,6 +1189,27 @@ fn every_project_example_parses() {
 }
 
 #[test]
+fn check_reports_errors_that_only_lowering_finds() {
+    // #317: what `okkama run` rejects at compile time, `okkama check` rejects.
+    let grow = "module app v1.0.0; \
+        object Box<T> { has value is T; Box(:value); } \
+        object Grow<T> { has value is T; Grow(:value); \
+        deeper(depth is int) is int { if depth == 0 { return 0; } Grow(value: Box(value: value)).deeper(depth - 1) + 1; } } \
+        main() is int { Grow(value: 1).deeper(3); }";
+    let output = run_stdin(&["check", "-"], grow.as_bytes());
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("semantic error: The program requests a chain of more than 256 generic specializations"),
+        "{}",
+        stderr(&output)
+    );
+    let spin = "module app v1.0.0; object Spin { Spin(); spin(n is int) is int { n + self.spin(n + 1); } } main() is int { Spin().spin(0); }";
+    let output = run_stdin(&["check", "-"], spin.as_bytes());
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(stderr(&output).contains("Infinite recursion"), "{}", stderr(&output));
+}
+
+#[test]
 fn check_reports_warnings_without_failing() {
     let source = "module app v1.0.0; main() is int { let n = 2; for 0..n -> index { index; } }";
     let output = run_stdin(&["check", "-"], source.as_bytes());
@@ -1338,13 +1430,14 @@ fn blade_project_rejects_undeclared_dependencies_and_file_versions() {
     assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
 }
 
-/// H-02: a function with more registers than the JIT accepts stays with the
-/// interpreter, and a direct call to it from machine code goes through the
-/// helper instead of an area in the caller's frame; the result is the same in
-/// every mode. 20 000 values that are live together make the register
-/// allocator fall back to one register per value (H-28).
+/// H-02: a function with 20 000 values that are live together (the register
+/// allocator falls back to one register per value, H-28) runs on the IR
+/// engine. Sparrow compiles every function and refuses one whose live
+/// registers would need more than its compile budget, with a message that
+/// says what to change. Until 0.5 the previous VM's JIT left such a function
+/// to its interpreter (#14).
 #[test]
-fn functions_with_huge_frames_stay_interpreted_under_eager_jit() {
+fn functions_with_huge_frames_run_on_ir_and_are_refused_by_sparrow() {
     let count = 20_000;
     let lets: String = (0..count).map(|i| format!("        let v{i} = seed + {i};\n")).collect();
     let values: Vec<String> = (0..count).map(|i| format!("v{i}")).collect();
@@ -1355,19 +1448,15 @@ fn functions_with_huge_frames_stay_interpreted_under_eager_jit() {
     // Σ(seed + i) for seed 1 and 2 over i < 20 000, modulo 251.
     let expected = (count * (count - 1) + 3 * count) % 251;
     let file = TempFile::new("wide-frame.ok", source.as_bytes());
-    for mode in ["off", "eager"] {
-        let output = okkama()
-            .args(["run", "--engine", "sparrow-origin"])
-            .arg(&file.0)
-            .env("OKKAMA_JIT", mode)
-            .env("OKKAMA_JIT_DEBUG", "1")
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(expected), "{mode}: {}", stderr(&output));
-        if mode == "eager" {
-            assert!(stderr(&output).contains("Wide.sum not compiled:"), "{}", stderr(&output));
-        }
-    }
+    let output = okkama().args(["run", "--engine", "ir"]).arg(&file.0).output().unwrap();
+    assert_eq!(output.status.code(), Some(expected), "{}", stderr(&output));
+    let output = okkama().args(["run", "--engine", "sparrow"]).arg(&file.0).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("Wide.sum: compiling it would take more than 256 MiB"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 /// A `cell::Cell` stays in synchronous code (#152): a field cannot hold one
@@ -1397,4 +1486,237 @@ fn a_cell_stays_in_synchronous_code() {
     assert!(stderr.contains("Field \"count\" cannot hold a Cell"), "{stderr}");
     assert!(stderr.contains("A Cell cannot be used in an async action"), "{stderr}");
     assert_eq!(stderr.matches("error").count(), 2, "{stderr}");
+}
+
+#[test]
+fn an_uncaught_error_text_keeps_its_payload_on_one_line() {
+    // #306: a string payload is an Okkama literal, so a newline in it does
+    // not split the report.
+    let source = b"module app v1.0.0;\nenum Ferr is Error = (text(s is string));\nmain() is int { throw Ferr.text(\"line1\\nline2 \\\"q\\\"\"); }\n";
+    for engine in ["ir", "sparrow"] {
+        let mut command = okkama();
+        command.args(["run", "--engine", engine, "-"]).env("OKKAMA_TRACE", "off");
+        command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut child = command.spawn().unwrap();
+        child.stdin.take().unwrap().write_all(source).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{engine}");
+        assert_eq!(stderr(&output), "Ferr: Ferr.text(\"line1\\nline2 \\\"q\\\"\")\n", "{engine}");
+    }
+}
+
+/// A cancelled process worker (#359): its Future settles Cancelled once the
+/// child has stopped and been reaped, as on Tomato, and a worker cancelled
+/// before its process started never starts (it used to run to its end and
+/// print after the cancel on the IR engine).
+#[test]
+fn a_cancelled_worker_stops_before_its_future_settles() {
+    let source = "module app v1.0.0;\n\
+        import \"io/stdout\" take Stdout;\n\
+        import \"time/clock\" take SystemClock;\n\
+        import \"time/duration\" take Duration, DurationUnit;\n\
+        object W {\n    W();\n\
+            noisy() is int { Stdout().writeln(\"worker ran\"); 1; }\n\
+            slow(count is int) is int { (0..count).reduce(0) -> total, i { total + i; }; }\n}\n\
+        async main() is int {\n\
+            let early = spawn W().noisy();\n\
+            early.cancel();\n\
+            let first = try { await early; } catch e is Cancelled { -1; };\n\
+            let late = spawn W().slow(count: 100000000000);\n\
+            await SystemClock().wait(Duration(1.rat(), DurationUnit.second));\n\
+            late.cancel();\n\
+            let second = try { await late; } catch e is Cancelled { -1; };\n\
+            Stdout().writeln(first.string() + \" \" + second.string() + \" \" + early.cancelled().string() + \" \" + late.cancelled().string());\n\
+            await SystemClock().wait(Duration(2.rat(), DurationUnit.second));\n\
+            Stdout().writeln(\"end\");\n\
+            0;\n}\n";
+    let file = TempFile::new("cancelled-worker.ok", source.as_bytes());
+    for engine in ["ir", "sparrow"] {
+        let started = std::time::Instant::now();
+        let output = okkama().args(["run", "--engine", engine]).arg(&file.0).output().unwrap();
+        assert_eq!(output.status.code(), Some(0), "{engine}: {}", stderr(&output));
+        assert_eq!(stdout(&output), "-1 -1 true true\nend\n", "{engine}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(20), "{engine}");
+    }
+}
+
+/// #483, #484: a cursor loop owns each cursor for one step. The step's region
+/// takes the cursor before `available()`, `successor()` is not tracked by the
+/// scope around the loop, and the step closes keeping the new cursor: no
+/// record of a past cursor stays behind, whatever the number of steps.
+#[test]
+fn traversal_steps_own_their_cursor_and_keep_no_record_of_past_ones() {
+    let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
+    let source = TempFile::new(
+        "steps.ok",
+        b"module app v1.0.0;\n\
+          import \"collections/iteration\" take Iterating, Cursor, IterationEnded;\n\
+          object Res { Res(); destroy {} }\n\
+          object View does Iterating<int> { has res is Res; View(res is Res) { self.res = res; } cursor() is Cursor<int> { Step(res, 0); } }\n\
+          object Step does Cursor<int> { has res is Res; has at is int; Step(res is Res, at is int) { self.res = res; self.at = at; }\n\
+              available() is bool { at < 3; } item() is int { at; } successor() is Cursor<int> { Step(res, at + 1); } }\n\
+          main() is int { for View(Res()) -> n { n; } 0; }\n",
+    );
+    let output = okkama().args(["ir", source.path()]).env("OKKAMA_STDLIB_DIR", &std).output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    let main = &text[text.find("func @main").expect("main")..];
+    let main = &main[..main.find("\n}").expect("end of main")];
+    let line = |needle: &str| {
+        main.lines()
+            .find(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("no {needle} in\n{main}"))
+            .trim()
+            .to_string()
+    };
+    let value = |line: &str| line.split(':').next().unwrap().trim().to_string();
+    // The source is adopted by the scope around the loop.
+    let source_wrap = value(&line("= role.wrap"));
+    assert!(main.contains(&format!("region.adopt %0, {source_wrap}")), "{main}");
+    // The step's region takes the cursor before available().
+    let step_region = value(main.lines().filter(|line| line.contains("= region.enter")).nth(1).expect("a step region").trim());
+    let adopt = main.find(&format!("region.adopt {step_region},")).expect("the step adopts its cursor");
+    assert!(adopt < main.find("available()").unwrap(), "{main}");
+    // successor() is kept by the step's close and tracked nowhere.
+    let successor = value(&line("successor()"));
+    assert!(main.contains(&format!("region.leave {step_region}, keep {successor}")), "{main}");
+    assert!(!main.contains(&format!("region.track %0, {successor}")), "{main}");
+}
+
+// ---- okkama man (#512)
+
+fn std_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std")
+}
+
+fn man(args: &[&str]) -> Output {
+    okkama()
+        .arg("man")
+        .args(args)
+        .env("OKKAMA_STDLIB_DIR", std_dir())
+        .env_remove("OKKAMA_IMPORT_DIRS")
+        .env_remove("PAGER")
+        .output()
+        .expect("run okkama man")
+}
+
+#[test]
+fn man_shows_a_std_module_with_or_without_the_std_prefix() {
+    let output = man(&["io/stdout"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let page = stdout(&output);
+    assert!(page.starts_with("NAME\n    io/stdout"), "{page}");
+    assert!(page.contains("\nVERSION\n    v1.0.0\n"), "{page}");
+    assert!(page.contains("\nPUBLIC API\n"), "{page}");
+    assert!(page.contains("    object Stdout does Writing, WritingText\n"), "{page}");
+    // Through a pipe: no escapes, at most 80 columns of prose.
+    assert!(!page.contains('\u{1b}'));
+    assert_eq!(stdout(&man(&["std/io/stdout"])), page);
+}
+
+#[test]
+fn man_shows_a_declaration_and_an_action() {
+    let output = man(&["io/stdout", "Stdout"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let page = stdout(&output);
+    assert!(page.starts_with("NAME\n    io/stdout Stdout"), "{page}");
+    assert!(page.contains("\nDECLARATION\n    object Stdout"), "{page}");
+    let output = man(&["io/stdout", "Stdout.writeln"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let page = stdout(&output);
+    assert!(page.starts_with("NAME\n    io/stdout Stdout.writeln"), "{page}");
+    assert!(page.contains("writeln(values is ...string) is void"), "{page}");
+    assert!(!page.contains("flush() is void"), "{page}");
+}
+
+#[test]
+fn man_refuses_unknown_modules_and_names_clearly() {
+    let output = man(&["no/such/module"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("no module no/such/module"), "{}", stderr(&output));
+    let output = man(&["io/stdout", "Nope"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("has no public declaration `Nope`; it has Stdout"), "{}", stderr(&output));
+    let output = man(&["io/stdout", "Stdout.nope"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("has no public member `nope`"), "{}", stderr(&output));
+    let output = man(&["../etc/passwd"]);
+    assert_eq!(output.status.code(), Some(1));
+    let output = man(&["io/../../etc"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("is not a module path"), "{}", stderr(&output));
+    let output = man(&["--format", "pdf", "io/stdout"]);
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn man_reads_a_file_of_ones_own_and_refuses_an_ambiguous_path() {
+    let dir = std::env::temp_dir().join(format!("okkama-cli-man-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("json.ok"),
+        "module json;\n\n// A json of my own.\n\n// Says hello.\nobject Hello {\n    Hello() {}\n}\n",
+    )
+    .unwrap();
+    let local = okkama()
+        .args(["man", "./json.ok"])
+        .current_dir(&dir)
+        .env("OKKAMA_STDLIB_DIR", std_dir())
+        .env_remove("PAGER")
+        .output()
+        .unwrap();
+    assert!(local.status.success(), "{}", stderr(&local));
+    let page = stdout(&local);
+    assert!(page.starts_with("NAME\n    json - A json of my own.\n"), "{page}");
+    assert!(!page.contains("VERSION"), "{page}");
+    let ambiguous = okkama()
+        .args(["man", "json"])
+        .current_dir(&dir)
+        .env("OKKAMA_STDLIB_DIR", std_dir())
+        .env_remove("PAGER")
+        .output()
+        .unwrap();
+    assert_eq!(ambiguous.status.code(), Some(1));
+    assert!(stderr(&ambiguous).contains("is both"), "{}", stderr(&ambiguous));
+    let std_json = okkama()
+        .args(["man", "std/json"])
+        .current_dir(&dir)
+        .env("OKKAMA_STDLIB_DIR", std_dir())
+        .env_remove("PAGER")
+        .output()
+        .unwrap();
+    assert!(stdout(&std_json).starts_with("NAME\n    json - "), "{}", stdout(&std_json));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn man_writes_markdown_and_an_index() {
+    let output = man(&["--format", "markdown", "io/stdout"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let page = stdout(&output);
+    assert!(page.starts_with("# io/stdout\n"), "{page}");
+    assert!(page.contains("### object Stdout\n\n```okkama\nobject Stdout does Writing, WritingText\n```"), "{page}");
+    let output = man(&[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let index = stdout(&output);
+    assert!(index.starts_with("OKKAMA STANDARD LIBRARY\n"), "{index}");
+    assert!(index.contains("\nio\n"), "{index}");
+    assert!(index.contains("    io/stdout "), "{index}");
+    assert!(index.contains("\ntop level\n"), "{index}");
+}
+
+#[test]
+fn man_survives_a_reader_that_leaves_early() {
+    let mut child = okkama()
+        .args(["man", "json"])
+        .env("OKKAMA_STDLIB_DIR", std_dir())
+        .env_remove("PAGER")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.code().is_some(), "killed by a signal");
+    assert!(!stderr(&output).contains("panicked"), "{}", stderr(&output));
 }

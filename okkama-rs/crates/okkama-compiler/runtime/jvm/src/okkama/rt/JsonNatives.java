@@ -1,7 +1,14 @@
 package okkama.rt;
 
 import java.math.BigInteger;
+import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CoderResult;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 
@@ -42,7 +49,26 @@ public final class JsonNatives {
         String value;
         ArrayList<Node> values;
         ArrayList<String> names;
+        // Name to position, built on the first lookup in a large object:
+        // walking names() with get() is otherwise quadratic (#352).
+        HashMap<String, Integer> index;
+
+        int position(String name) {
+            if (names.size() < INDEXED_OBJECT) {
+                return names.indexOf(name);
+            }
+            if (index == null) {
+                index = new HashMap<>(names.size() * 2);
+                for (int at = 0; at < names.size(); at++) {
+                    index.putIfAbsent(names.get(at), at);
+                }
+            }
+            return index.getOrDefault(name, -1);
+        }
     }
+
+    // Below this size an object finds a member by a scan, which beats hashing.
+    private static final int INDEXED_OBJECT = 16;
 
     private static final class ParseError extends RuntimeException {
         private static final long serialVersionUID = 1L;
@@ -371,30 +397,7 @@ public final class JsonNatives {
             state.offset = failure.offset;
             state.message = failure.message;
             state.duplicate = failure.duplicate;
-            int line = 1;
-            int column = 1;
-            int position = 0;
-            while (position < failure.offset) {
-                int character = state.source[position];
-                if (character == '\r') {
-                    position++;
-                    if (position < failure.offset && state.source[position] == '\n') {
-                        position++;
-                    }
-                    line++;
-                    column = 1;
-                    continue;
-                }
-                if (character == '\n') {
-                    line++;
-                    column = 1;
-                } else {
-                    column++;
-                }
-                position++;
-            }
-            state.line = line;
-            state.column = column;
+            locate(state);
         } catch (StackOverflowError overflow) {
             state.valid = false;
             state.offset = state.position;
@@ -403,8 +406,263 @@ public final class JsonNatives {
         return state;
     }
 
+    /** Line and column of state.offset, from 1; CR LF is one line break. */
+    private static void locate(ParseState state) {
+        int line = 1;
+        int column = 1;
+        int position = 0;
+        while (position < state.offset) {
+            int character = state.source[position];
+            if (character == '\r') {
+                position++;
+                if (position < state.offset && state.source[position] == '\n') {
+                    position++;
+                }
+                line++;
+                column = 1;
+                continue;
+            }
+            if (character == '\n') {
+                line++;
+                column = 1;
+            } else {
+                column++;
+            }
+            position++;
+        }
+        state.line = line;
+        state.column = column;
+    }
+
+    /**
+     * JSON items cut from a stream (#136), as okkama-runtime-core/src/native/json_split.rs:
+     * the elements of one top-level array, or whitespace-separated values.
+     */
+    static final class Splitter {
+        static final int UNKNOWN = 0, ARRAY = 1, SEQUENCE = 2, DONE = 3;
+        byte[] pending = new byte[0];
+        int length;
+        long offset;
+        int cursor;
+        int mode = UNKNOWN;
+        boolean separator, required, finished;
+        boolean open, string, escaped, scalar;
+        int start, depth;
+        final long maximum;
+        byte[] item = new byte[0];
+        String error;
+        long errorOffset;
+
+        Splitter(long maximum) {
+            this.maximum = maximum;
+        }
+
+        void feed(byte[] bytes) {
+            if (length + bytes.length > pending.length) {
+                pending = java.util.Arrays.copyOf(pending, Math.max(pending.length * 2, length + bytes.length));
+            }
+            System.arraycopy(bytes, 0, pending, length, bytes.length);
+            length += bytes.length;
+        }
+
+        String fail(int at, String message) {
+            error = message;
+            errorOffset = offset + at;
+            return "error";
+        }
+
+        void consume(int upto) {
+            System.arraycopy(pending, upto, pending, 0, length - upto);
+            length -= upto;
+            offset += upto;
+            cursor -= upto;
+        }
+
+        static boolean space(byte b) {
+            return b == ' ' || b == '\t' || b == '\n' || b == '\r';
+        }
+
+        String next() {
+            if (error != null) {
+                return "error";
+            }
+            while (true) {
+                if (open) {
+                    return scan();
+                }
+                while (cursor < length && space(pending[cursor])) {
+                    cursor++;
+                }
+                consume(cursor);
+                if (cursor >= length) {
+                    if (!finished) {
+                        return "more";
+                    }
+                    return mode == ARRAY ? fail(cursor, "the array is not closed") : "end";
+                }
+                byte b = pending[cursor];
+                if (mode == UNKNOWN && b == '[') {
+                    mode = ARRAY;
+                    cursor++;
+                    consume(cursor);
+                } else if (mode == UNKNOWN) {
+                    mode = SEQUENCE;
+                } else if (mode == DONE) {
+                    return fail(cursor, "data after the array");
+                } else if (mode == ARRAY && separator) {
+                    if (b == ',') {
+                        separator = false;
+                        required = true;
+                    } else if (b == ']') {
+                        mode = DONE;
+                    } else {
+                        return fail(cursor, "expected , or ] between items");
+                    }
+                    cursor++;
+                    consume(cursor);
+                } else if (mode == ARRAY && b == ']') {
+                    if (required) {
+                        return fail(cursor, "a comma before ]");
+                    }
+                    mode = DONE;
+                    cursor++;
+                    consume(cursor);
+                } else {
+                    if (mode == ARRAY && b == ',') {
+                        return fail(cursor, "an empty item");
+                    }
+                    open = true;
+                    start = cursor;
+                    depth = (b == '{' || b == '[') ? 1 : 0;
+                    string = b == '"';
+                    escaped = false;
+                    scalar = !(b == '{' || b == '[' || b == '"');
+                    cursor++;
+                }
+            }
+        }
+
+        String scan() {
+            int end = -1;
+            while (cursor < length) {
+                byte b = pending[cursor];
+                if (scalar) {
+                    if (space(b) || b == ',' || b == ']' || b == '}' || b == '[' || b == '{' || b == '"') {
+                        end = cursor;
+                        break;
+                    }
+                } else if (string) {
+                    if (escaped) {
+                        escaped = false;
+                    } else if (b == '\\') {
+                        escaped = true;
+                    } else if (b == '"') {
+                        string = false;
+                        if (depth == 0) {
+                            cursor++;
+                            end = cursor;
+                            break;
+                        }
+                    }
+                } else if (b == '"') {
+                    string = true;
+                } else if (b == '{' || b == '[') {
+                    depth++;
+                } else if (b == '}' || b == ']') {
+                    depth--;
+                    if (depth == 0) {
+                        cursor++;
+                        end = cursor;
+                        break;
+                    }
+                }
+                cursor++;
+                if (cursor - start > maximum) {
+                    return fail(start, "an item longer than " + maximum + " bytes");
+                }
+            }
+            if (end < 0 && scalar && finished) {
+                end = cursor;
+            }
+            if (end < 0) {
+                return finished ? fail(start, "the stream ends inside an item") : "more";
+            }
+            if (end - start > maximum) {
+                return fail(start, "an item longer than " + maximum + " bytes");
+            }
+            item = java.util.Arrays.copyOfRange(pending, start, end);
+            open = false;
+            cursor = end;
+            consume(end);
+            if (mode == ARRAY) {
+                separator = true;
+                required = false;
+            }
+            return "item";
+        }
+    }
+
+    public static Object runtime_json__json_split_state(BigInteger maximum) {
+        return new Splitter(maximum.longValue());
+    }
+
+    public static boolean runtime_json__json_split_feed(Object handle, List<?> bytes) {
+        ((Splitter) handle).feed(Natives.toBytes(bytes));
+        return true;
+    }
+
+    public static boolean runtime_json__json_split_finish(Object handle) {
+        ((Splitter) handle).finished = true;
+        return true;
+    }
+
+    public static String runtime_json__json_split_next(Object handle) {
+        return ((Splitter) handle).next();
+    }
+
+    public static List<Object> runtime_json__json_split_item(Object handle) {
+        byte[] item = ((Splitter) handle).item;
+        return Natives.fromBytes(item, item.length);
+    }
+
+    public static String runtime_json__json_split_error(Object handle) {
+        String error = ((Splitter) handle).error;
+        return error == null ? "" : error;
+    }
+
+    public static BigInteger runtime_json__json_split_offset(Object handle) {
+        Splitter splitter = (Splitter) handle;
+        return BigInteger.valueOf(splitter.error == null ? 0 : splitter.errorOffset);
+    }
+
     public static Object runtime_json__json_parse_state(String source, BigInteger maximumDepth) {
         return new ParseState(source, maximumDepth);
+    }
+
+    /**
+     * JSON as UTF-8 bytes (#135). Bytes that are not UTF-8 fail where the valid
+     * prefix ends, as a parse error there would.
+     */
+    public static Object runtime_json__json_parse_bytes_state(List<?> source, BigInteger maximumDepth) {
+        CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT);
+        ByteBuffer input = ByteBuffer.wrap(Natives.toBytes(source));
+        CharBuffer output = CharBuffer.allocate(input.remaining() + 1);
+        CoderResult result = decoder.decode(input, output, true);
+        if (!result.isError()) {
+            result = decoder.flush(output);
+        }
+        output.flip();
+        ParseState state = new ParseState(output.toString(), maximumDepth);
+        if (result.isError()) {
+            state.parsed = true;
+            state.valid = false;
+            state.offset = state.source.length;
+            state.message = "invalid UTF-8";
+            locate(state);
+        }
+        return state;
     }
 
     public static boolean runtime_json__json_parse_valid(Object handle) {
@@ -519,7 +777,7 @@ public final class JsonNatives {
         if (node.kind != 5) {
             throw failure("invalid_input", "json_member_position", 2, "JSON node is not an object");
         }
-        return BigInteger.valueOf(node.names.indexOf(name));
+        return BigInteger.valueOf(node.position(name));
     }
 
     // A JSON string literal: '"' and backslash escaped, \n, \r, \t by name, the

@@ -1,17 +1,16 @@
 module os/pipeline_capture v1.0.0;
 
-import "os/command" take Commanding;
+import "encoding/utf" take Utf8Decoded, Utf8Encoded;
+import "io/stream" take ByteSource;
+import "io/decorators" take ByteSnapshot;
+import "fs/path" take Path;
+import "os/command" take Command, Commanding;
+import "os/directory" take WorkingDirectory;
+import "os/environment" take Environment;
 import "os/process" take Exit, ExitKind, ProcessFailure;
-import "runtime/process" take
-    PipelineState,
-    CapturedPipeline,
-    pipeline_state_create,
-    pipeline_state_add,
-    pipeline_state_capture,
-    captured_pipeline_statuses,
-    captured_pipeline_overflow_stream,
-    captured_pipeline_overflow_index,
-    captured_pipeline_output,
+import "runtime/process" take PipelineState, CapturedPipeline, pipeline_state_create,
+    pipeline_state_add, pipeline_state_capture, captured_pipeline_statuses,
+    captured_pipeline_overflow_stream, captured_pipeline_overflow_index, captured_pipeline_output,
     captured_pipeline_errors;
 
 // PipelineCapture connects commands directly without a shell. stdout from
@@ -26,28 +25,44 @@ import "runtime/process" take
 // The limit applies independently to final stdout and every stderr stream.
 // completion() waits for every command and never returns a partial result.
 
+// Which stream of which command went over its limit.
 enum PipelineStream = (output, errors);
 
+// Commands joined output to input, like a shell pipeline but without a shell,
+// run to the end.
 object PipelineCapture {
     has commands is @Commanding;
-    has input is @byte;
+    has input is ByteSource;
     has limit is int;
     has state is PipelineState;
 
+    // Runs commands with the first one's input empty.
     PipelineCapture(commands is @Commanding, limit is int) {
         self.commands = commands;
-        input = [];
+        let empty is @byte = [];
+        input = ByteSnapshot(empty);
         self.limit = limit;
         state = pipeline_state_create();
     }
 
+    // Runs commands with input written to the first one.
     PipelineCapture(commands is @Commanding, input is @byte, limit is int) {
         self.commands = commands;
-        self.input = input;
+        self.input = ByteSnapshot(input);
         self.limit = limit;
         state = pipeline_state_create();
     }
 
+    // Standard input as UTF-8 text: PipelineCapture(…, text: "b\na\n", limit: 1024).
+    PipelineCapture(commands is @Commanding, text is string, limit is int) {
+        self.commands = commands;
+        input = Utf8Encoded(text);
+        self.limit = limit;
+        state = pipeline_state_create();
+    }
+
+    // Runs them all and waits; keeps the last one's output and every one's
+    // errors, at most limit bytes each.
     async completion() is CompletedPipeline {
         confirm commands.size() > 0 else throw EmptyPipeline.empty;
         confirm limit > 0 else throw InvalidPipelineCaptureLimit.limit(limit);
@@ -64,17 +79,21 @@ object PipelineCapture {
             }
             let captured is CapturedPipeline = await pipeline_state_capture(
                 state,
-                input,
+                input.bytes(),
                 limit,
             );
             let overflow is int = captured_pipeline_overflow_stream(captured);
             if overflow > 0 {
-                throw PipelineCaptureLimitExceeded.detailed(captured_pipeline_overflow_index(captured), if overflow == 1 {
+                throw PipelineCaptureLimitExceeded.detailed(
+                    captured_pipeline_overflow_index(captured),
+                    if overflow == 1 {
                         PipelineStream.output;
                     }
                     else {
                         PipelineStream.errors;
-                    }, limit);
+                    },
+                    limit
+                );
             }
             let statuses is @%string:int = captured_pipeline_statuses(captured);
             let exits is @Exit = statuses.map() -> status {
@@ -91,42 +110,136 @@ object PipelineCapture {
         }
     }
 
-    private:
-    exit_kind(status is %string:int) is ExitKind {
+    hidden exit_kind(status is %string:int) is ExitKind {
         if status["state"] == 1 {
             ExitKind.exited;
         }
         else {
             match status["code"] {
-                case 1 { ExitKind.terminated; }
-                case 2 { ExitKind.killed; }
-                case 3 { ExitKind.interrupted; }
-                else { ExitKind.other; }
+                case 1 {
+                    ExitKind.terminated;
+                }
+                case 2 {
+                    ExitKind.killed;
+                }
+                case 3 {
+                    ExitKind.interrupted;
+                }
+                else {
+                    ExitKind.other;
+                }
             }
         }
     }
 }
 
+// How each command of a pipeline ended, and what it printed.
 object CompletedPipeline {
     has completed_exits is @Exit;
     has captured_output is @byte;
     has captured_errors is @@byte;
 
+    // A result as given.
     CompletedPipeline(exits is @Exit, output is @byte, errors is @@byte) {
         completed_exits = exits;
         captured_output = output;
         captured_errors = errors;
     }
 
-    exits() is @Exit { completed_exits; }
+    // How each command ended, in order.
+    exits() is @Exit {
+        completed_exits;
+    }
 
-    output() is @byte { captured_output; }
+    // What the last command wrote to stdout, and what each wrote to stderr,
+    // as UTF-8 text. Output that is not UTF-8 throws InvalidUtf8 here;
+    // ::Bytes keeps it exact.
+    cap Captured {
+        output is string {
+            Utf8Decoded(captured_output).string();
+        }
 
-    errors() is @@byte { captured_errors; }
+        errors is @string {
+            captured_errors.map() -> bytes {
+                Utf8Decoded(bytes).string();
+            };
+        }
+    }
+
+    // The exact bytes of stdout and of each command's stderr.
+    cap Bytes {
+        output is @byte {
+            captured_output;
+        }
+
+        errors is @@byte {
+            captured_errors;
+        }
+    }
 }
 
+// A pipeline of no commands.
 enum EmptyPipeline is Error = (empty);
 
+// A limit below one.
 enum InvalidPipelineCaptureLimit is Error = (limit(limit is int));
 
-enum PipelineCaptureLimitExceeded is Error = (detailed(command_index is int, stream is PipelineStream, limit is int));
+// A stream of the command at command_index printed more than the limit.
+enum PipelineCaptureLimitExceeded is Error = (detailed(
+    command_index is int,
+    stream is PipelineStream,
+    limit is int
+));
+
+async test "a pipeline passes output along; each command's errors are kept apart" {
+    let env = Environment();
+    let here = WorkingDirectory();
+    let pipeline is @Commanding = [
+        Command(program: Path("sh"), arguments: ["-c", "printf 'b\\na\\n'; printf one >&2"], environment: env, directory: here),
+        Command(program: Path("sort"), arguments: [], environment: env, directory: here),
+        Command(program: Path("tr"), arguments: ["a-z", "A-Z"], environment: env, directory: here),
+    ];
+    let done = await PipelineCapture(commands: pipeline, limit: 1024).completion();
+    test.is(done::Captured::output, "A\nB\n");
+    test.is(done::Captured::errors.size(), 3);
+    test.is(done::Captured::errors[0], "one");
+    test.is(done::Captured::errors[2], "");
+    let codes is @int = done.exits().map() -> exit {
+        exit.code();
+    };
+    test.is(codes, [0, 0, 0]);
+}
+
+async test "input feeds the first command; every exit is reported" {
+    let env = Environment();
+    let here = WorkingDirectory();
+    let pipeline is @Commanding = [
+        Command(program: Path("cat"), arguments: [], environment: env, directory: here),
+        Command(program: Path("sh"), arguments: ["-c", "cat; exit 4"], environment: env, directory: here),
+    ];
+    let done = await PipelineCapture(commands: pipeline, input: [byte(120)], limit: 16).completion();
+    test.is(done::Bytes::output, [byte(120)]);
+    test.ok(done.exits()[0].success());
+    test.is(done.exits()[1].code(), 4);
+}
+
+async test "an empty pipeline and a zero limit are refused" {
+    let empty is @Commanding = [];
+    let refused = try {
+        await PipelineCapture(commands: empty, limit: 16).completion();
+        false;
+    }
+    catch failure is EmptyPipeline {
+        true;
+    };
+    test.ok(refused);
+    let one is @Commanding = [Command(program: Path("true"), arguments: [], environment: Environment(), directory: WorkingDirectory())];
+    let zero = try {
+        await PipelineCapture(commands: one, limit: 0).completion();
+        false;
+    }
+    catch InvalidPipelineCaptureLimit.limit(limit) {
+        limit == 0;
+    };
+    test.ok(zero);
+}

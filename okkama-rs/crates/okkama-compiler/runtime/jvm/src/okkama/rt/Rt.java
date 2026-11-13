@@ -39,7 +39,7 @@ public final class Rt {
     public static String describe(Failure failure) {
         if (failure.error instanceof NativeFailure) {
             NativeFailure native_ = (NativeFailure) failure.error;
-            return "NativeError: " + native_.message + "\ncode: " + native_.code
+            return "NativeFailure: " + native_.message + "\ncode: " + native_.code
                 + "\ndomain: " + native_.domain + "\noperation: " + native_.operation;
         }
         if (failure.kind == Failure.THROWN) {
@@ -69,6 +69,16 @@ public final class Rt {
 
     /** Отказ cleanup при уже идущем отказе становится вторичным. */
     public static Failure secondary(Failure primary, Failure cleanup) {
+        // Never its own secondary nor the same one twice: a cleanup that
+        // rethrows the failure in flight would make the graph a cycle.
+        if (cleanup == primary) {
+            return primary;
+        }
+        for (Failure known : primary.secondary) {
+            if (known == cleanup) {
+                return primary;
+            }
+        }
         primary.secondary.add(cleanup);
         return primary;
     }
@@ -236,15 +246,15 @@ public final class Rt {
         return Natives.runtime_utf__utf8_encode(text);
     }
 
-    /** Неперехваченный отказ: диагностика в stderr и код 1. */
+    /**
+     * Неперехваченный отказ: диагностика в stderr и код 1 — причины, вторичные
+     * отказы, место и стек, как у ядра Sparrow (#270).
+     */
     public static void report(Failure failure) {
         System.out.flush();
         recordFailure(failure);
-        System.err.println(describe(failure));
-        for (Failure secondary : failure.secondary) {
-            System.err.println("Secondary cleanup failure:");
-            System.err.println("  " + describe(secondary));
-        }
+        System.err.print(Report.text(failure));
+        System.err.flush();
         System.exit(1);
     }
 
@@ -467,7 +477,37 @@ public final class Rt {
 
     public static List<Object> slice(List<?> array, BigInteger start, BigInteger end) {
         sliceBounds(start, end, array.size());
+        // A slice that keeps most of a shared array shares it (#336).
+        List<Object> shared = Vec.slice(array, start.intValue(), end.intValue());
+        if (shared != null) {
+            return shared;
+        }
         return new ArrayList<Object>(array.subList(start.intValue(), end.intValue()));
+    }
+
+    /** {@code array.replaced(index, value)} (#250): a copy with one element replaced. */
+    public static List<Object> replaced(List<?> array, BigInteger index, Object value) {
+        if (!inBounds(array, index)) {
+            throw trap("Array index out of bounds");
+        }
+        // A chain of replacements in a large array copies a path (#336).
+        List<Object> shared = Vec.replaced(array, index.intValue(), value);
+        if (shared != null) {
+            return shared;
+        }
+        List<Object> copy = new ArrayList<Object>(array);
+        copy.set(index.intValue(), value);
+        return copy;
+    }
+
+    /** {@code array.removed_at(index)} (#251): a copy without one element. */
+    public static List<Object> removedAt(List<?> array, BigInteger index) {
+        if (!inBounds(array, index)) {
+            throw trap("Array index out of bounds");
+        }
+        List<Object> copy = new ArrayList<Object>(array);
+        copy.remove(index.intValue());
+        return copy;
     }
 
     public static List<Object> appendRange(
@@ -805,12 +845,141 @@ public final class Rt {
         for (Object part : parts) {
             size += ((List<?>) part).size();
         }
+        // A chain of appends or prepends shares a buffer (#336).
+        List<Object> shared = Vec.concat(parts, size);
+        if (shared != null) {
+            return shared;
+        }
         ArrayList<Object> result = new ArrayList<Object>(size);
         for (Object part : parts) {
             result.addAll((List<?>) part);
         }
         return result;
     }
+
+    // ----- равенство значений (#314) -----
+
+    /** {@code ==} двух {@code float}: численно, {@code -0.0 == 0.0}. */
+    public static boolean sameFloat(Double left, Double right) {
+        return left.doubleValue() == right.doubleValue();
+    }
+
+    /**
+     * {@code ==} значений Okkama: {@code float} численно, как скалярное {@code ==}
+     * ({@code -0.0 == 0.0}), списки поэлементно, словари по ключам и значениям,
+     * объекты своим {@code equals}. Скаляры сравниваются на месте; вложенные
+     * списки и словари обходит стек пар, а не рекурсия Java.
+     */
+    public static boolean equal(Object left, Object right) {
+        if (left == right) {
+            return true;
+        }
+        if (left instanceof Double x) {
+            return right instanceof Double y && x.doubleValue() == y.doubleValue();
+        }
+        if (!(left instanceof List) && !(left instanceof Map)) {
+            return left != null && left.equals(right);
+        }
+        ArrayList<Object> pending = new ArrayList<Object>();
+        pending.add(right);
+        pending.add(left);
+        while (!pending.isEmpty()) {
+            Object a = pending.remove(pending.size() - 1);
+            Object b = pending.remove(pending.size() - 1);
+            if (a instanceof List<?> x) {
+                if (!(b instanceof List<?> y) || x.size() != y.size()) {
+                    return false;
+                }
+                for (int index = 0; index < x.size(); index++) {
+                    if (!step(x.get(index), y.get(index), pending)) {
+                        return false;
+                    }
+                }
+            } else {
+                Map<?, ?> x = (Map<?, ?>) a;
+                if (!(b instanceof Map<?, ?> y) || x.size() != y.size()) {
+                    return false;
+                }
+                // Оба словаря в порядке ключей: пары сравниваются по порядку.
+                java.util.Iterator<? extends Map.Entry<?, ?>> others = y.entrySet().iterator();
+                for (Map.Entry<?, ?> entry : x.entrySet()) {
+                    Map.Entry<?, ?> other = others.next();
+                    if (!step(entry.getKey(), other.getKey(), pending)
+                        || !step(entry.getValue(), other.getValue(), pending)) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    /** Пара элементов: скаляр и объект — сразу, список или словарь — в стек. */
+    private static boolean step(Object a, Object b, ArrayList<Object> pending) {
+        if (a == b) {
+            return true;
+        }
+        if (a instanceof Double x) {
+            return b instanceof Double y && x.doubleValue() == y.doubleValue();
+        }
+        if (a instanceof List || a instanceof Map) {
+            pending.add(b);
+            pending.add(a);
+            return true;
+        }
+        return a != null && a.equals(b);
+    }
+
+    /**
+     * Хеш, согласованный с {@link #equal}: {@code -0.0} и {@code 0.0} дают один
+     * хеш. Списки и словари обходятся стеком в прямом порядке.
+     */
+    public static int hash(Object value) {
+        if (value instanceof Double x) {
+            return floatHash(x.doubleValue());
+        }
+        if (!(value instanceof List) && !(value instanceof Map)) {
+            return java.util.Objects.hashCode(value);
+        }
+        ArrayList<Object> pending = new ArrayList<Object>();
+        pending.add(value);
+        int hash = 1;
+        while (!pending.isEmpty()) {
+            Object current = pending.remove(pending.size() - 1);
+            if (current instanceof Double x) {
+                hash = 31 * hash + floatHash(x.doubleValue());
+            } else if (current instanceof List<?> x) {
+                hash = 31 * hash + x.size();
+                for (int index = x.size() - 1; index >= 0; index--) {
+                    pending.add(x.get(index));
+                }
+            } else if (current instanceof Map<?, ?> x) {
+                hash = 31 * hash + x.size() + 7;
+                ArrayList<Object> entries = new ArrayList<Object>(2 * x.size());
+                for (Map.Entry<?, ?> entry : x.entrySet()) {
+                    entries.add(entry.getKey());
+                    entries.add(entry.getValue());
+                }
+                for (int index = entries.size() - 1; index >= 0; index--) {
+                    pending.add(entries.get(index));
+                }
+            } else {
+                hash = 31 * hash + java.util.Objects.hashCode(current);
+            }
+        }
+        return hash;
+    }
+
+    private static int floatHash(double value) {
+        return value == 0.0 ? 0 : Double.hashCode(value);
+    }
+
+    /** Ключ множества для {@code -}: {@code -0.0} и {@code 0.0} — один. */
+    private static Object setKey(Object item) {
+        return item instanceof Double x && x.doubleValue() == 0.0 ? ZERO : item;
+    }
+
+    private static final Double ZERO = 0.0;
 
     /** {@code a - b - ...} over arrays: elements equal to none of the removed ones, in order. */
     public static List<Object> difference(List<?> array, Object[] removed) {
@@ -820,13 +989,32 @@ public final class Rt {
             for (Object item : (List<?>) part) {
                 all.add(item);
                 hashable &= item instanceof BigInteger || item instanceof String || item instanceof Boolean
-                    || item instanceof Byte || item instanceof Character;
+                    || item instanceof Byte || item instanceof Character || item instanceof Double;
             }
         }
-        java.util.Collection<Object> excluded = hashable ? new java.util.HashSet<Object>(all) : all;
         ArrayList<Object> result = new ArrayList<Object>(array.size());
+        if (hashable) {
+            java.util.HashSet<Object> excluded = new java.util.HashSet<Object>();
+            for (Object item : all) {
+                excluded.add(setKey(item));
+            }
+            for (Object item : array) {
+                if (!excluded.contains(setKey(item))) {
+                    result.add(item);
+                }
+            }
+            return result;
+        }
+        // Остальное — глубоким `==`: `float` численно (#314).
         for (Object item : array) {
-            if (!excluded.contains(item)) {
+            boolean found = false;
+            for (Object other : all) {
+                if (equal(item, other)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
                 result.add(item);
             }
         }
@@ -835,6 +1023,11 @@ public final class Rt {
 
     /** {@code a + b + ...} over maps: entries of every part; a repeated key takes the rightmost value. */
     public static Map<Object, Object> merge(Object[] parts) {
+        // A version of a large map shares its nodes (#336).
+        Map<Object, Object> shared = PMap.merge(parts);
+        if (shared != null) {
+            return shared;
+        }
         Map<Object, Object> result = newMap();
         for (Object part : parts) {
             result.putAll((Map<?, ?>) part);
@@ -844,6 +1037,10 @@ public final class Rt {
 
     /** {@code a - b - ...} over maps: entries of {@code map} whose keys are in none of the removed maps. */
     public static Map<Object, Object> without(Map<?, ?> map, Object[] removed) {
+        Map<Object, Object> shared = PMap.without(map, removed);
+        if (shared != null) {
+            return shared;
+        }
         Map<Object, Object> result = newMap();
         result.putAll(map);
         for (Object part : removed) {

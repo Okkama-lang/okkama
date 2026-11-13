@@ -1,0 +1,7 @@
+server.host = 0.0.0.0  (app.ini)
+server.port = 9090  (environment)
+server.workers = 8  (argv)
+cors.origins = https://example.com
+server.timeout = 30s
+workers as a number: 16 threads at two per worker
+app.ini:1:8: missing ]

@@ -1,85 +1,477 @@
 module logging/syslog v1.0.0;
+
+// Syslog over UDP (RFC 5424).
+//
+//     let logs = SyslogLogs(origin: udp, facility: SyslogFacility.daemon, host: "web-1", application: "shop",
+//         capacity: 1024, overflow: LogOverflow.drop_oldest, scope: scope);
+//
+// Records are queued and sent in the background; levels map to severities
+// (critical 2, error 3, warning 4, info 6, debug 7).
+
 import "logging/level" take LogLevel;
-import "logging/record" take LogRecord;
+import "logging/record" take LogRecord, LogContext;
+import "logging/name" take LogName;
+import "logging/field" take LogFields;
+import "time/clock" take Instant;
 import "logging/line" take JsonLogLine;
 import "logging/write" take LogWriting;
-import "logging/queue" take QueuedLogs,LogQueueOptions,LogOverflow,LogDelivering,LogDraining;
-import "io/stream" take ByteSource,Closing,IncompleteWrite;
+import "logging/queue" take QueuedLogs, LogQueueOptions, LogOverflow, LogDelivering, LogDraining;
+import "io/stream" take ByteSource, Closing, IncompleteWrite;
 import "encoding/utf" take Utf8Encoded;
-import "net/udp" take UdpConnection,DatagramTooLarge;
+import "net/udp" take UdpConnection, DatagramTooLarge;
 import "async/scope" take Supervising;
 import "numbers/bigint" take BigInt;
-import "time/duration" take Duration,DurationUnit;
+import "time/duration" take Duration, DurationUnit;
 import "time/rfc3339" take Rfc3339;
 
-enum SyslogFacility=(kernel,user,mail,daemon,authorization,syslog,printer,news,uucp,clock,private_authorization,ftp,ntp,audit,alert,clock2,local0,local1,local2,local3,local4,local5,local6,local7);
-object SyslogFacilityCode{
-    has origin is SyslogFacility;SyslogFacilityCode(origin is SyslogFacility){self.origin=origin;}
-    value() is int{match origin{
-        case SyslogFacility.kernel{0;}case SyslogFacility.user{1;}case SyslogFacility.mail{2;}case SyslogFacility.daemon{3;}
-        case SyslogFacility.authorization{4;}case SyslogFacility.syslog{5;}case SyslogFacility.printer{6;}case SyslogFacility.news{7;}
-        case SyslogFacility.uucp{8;}case SyslogFacility.clock{9;}case SyslogFacility.private_authorization{10;}case SyslogFacility.ftp{11;}
-        case SyslogFacility.ntp{12;}case SyslogFacility.audit{13;}case SyslogFacility.alert{14;}case SyslogFacility.clock2{15;}
-        case SyslogFacility.local0{16;}case SyslogFacility.local1{17;}case SyslogFacility.local2{18;}case SyslogFacility.local3{19;}
-        case SyslogFacility.local4{20;}case SyslogFacility.local5{21;}case SyslogFacility.local6{22;}case SyslogFacility.local7{23;}
-    }}
+// The syslog facility.
+enum SyslogFacility = (kernel, user, mail, daemon, authorization, syslog, printer, news, uucp, clock, private_authorization, ftp, ntp, audit, alert, clock2, local0, local1, local2, local3, local4, local5, local6, local7);
+
+hidden object SyslogFacilityCode {
+    has origin is SyslogFacility;
+
+    SyslogFacilityCode(origin is SyslogFacility) {
+        self.origin = origin;
+    }
+
+    code() is int {
+        match origin {
+            case SyslogFacility.kernel {
+                0;
+            }
+            case SyslogFacility.user {
+                1;
+            }
+            case SyslogFacility.mail {
+                2;
+            }
+            case SyslogFacility.daemon {
+                3;
+            }
+            case SyslogFacility.authorization {
+                4;
+            }
+            case SyslogFacility.syslog {
+                5;
+            }
+            case SyslogFacility.printer {
+                6;
+            }
+            case SyslogFacility.news {
+                7;
+            }
+            case SyslogFacility.uucp {
+                8;
+            }
+            case SyslogFacility.clock {
+                9;
+            }
+            case SyslogFacility.private_authorization {
+                10;
+            }
+            case SyslogFacility.ftp {
+                11;
+            }
+            case SyslogFacility.ntp {
+                12;
+            }
+            case SyslogFacility.audit {
+                13;
+            }
+            case SyslogFacility.alert {
+                14;
+            }
+            case SyslogFacility.clock2 {
+                15;
+            }
+            case SyslogFacility.local0 {
+                16;
+            }
+            case SyslogFacility.local1 {
+                17;
+            }
+            case SyslogFacility.local2 {
+                18;
+            }
+            case SyslogFacility.local3 {
+                19;
+            }
+            case SyslogFacility.local4 {
+                20;
+            }
+            case SyslogFacility.local5 {
+                21;
+            }
+            case SyslogFacility.local6 {
+                22;
+            }
+            case SyslogFacility.local7 {
+                23;
+            }
+        }
+    }
 }
-object SyslogSeverity{
-    has origin is LogLevel;SyslogSeverity(origin is LogLevel){self.origin=origin;}
-    value() is int{match origin{case LogLevel.debug{7;}case LogLevel.info{6;}case LogLevel.warning{4;}case LogLevel.error{3;}case LogLevel.critical{2;}}}
+
+// The syslog severity of a level.
+object SyslogSeverity {
+    has origin is LogLevel;
+
+    // The level.
+    SyslogSeverity(origin is LogLevel) {
+        self.origin = origin;
+    }
+
+    // critical 2, error 3, warning 4, info 6, debug 7.
+    code() is int {
+        match origin {
+            case LogLevel.debug {
+                7;
+            }
+            case LogLevel.info {
+                6;
+            }
+            case LogLevel.warning {
+                4;
+            }
+            case LogLevel.error {
+                3;
+            }
+            case LogLevel.critical {
+                2;
+            }
+        }
+    }
 }
-object SyslogHeaderName{
+
+hidden object SyslogHeaderName {
     has origin is string;
-    SyslogHeaderName(origin is string,maximum is int){
-        confirm origin.length()<=maximum else throw InvalidSyslogOptions.invalid;
-        let bytes=Utf8Encoded(origin).bytes();let valid=bytes.reduce(true)->allowed,byte{allowed && byte.int()>=33 && byte.int()<=126;};
-        confirm bytes.size()<=maximum && valid else throw InvalidSyslogOptions.invalid;
-        self.origin=if origin==""{"-";}else{origin;};
+
+    SyslogHeaderName(origin is string, maximum is int) {
+        confirm origin.length() <= maximum else throw InvalidSyslogOptions.invalid;
+        let bytes = Utf8Encoded(origin).bytes();
+        let valid = bytes.reduce(true) -> allowed, byte {
+            allowed && byte.int() >= 33 && byte.int() <= 126;
+        };
+        confirm bytes.size() <= maximum && valid else throw InvalidSyslogOptions.invalid;
+        self.origin = if origin == "" {
+            "-";
+        }
+        else {
+            origin;
+        };
     }
-    string() is string{origin;}
-}
-object SyslogOptions{
-    has facility is SyslogFacility;has host,application is string;has maximum is int;
-    SyslogOptions(facility is SyslogFacility,host is string,application is string,maximum_payload is int){
-        confirm maximum_payload>0 && maximum_payload<=65507 else throw InvalidSyslogOptions.invalid;
-        self.facility=facility;self.host=SyslogHeaderName(host,255).string();self.application=SyslogHeaderName(application,48).string();maximum=maximum_payload;
+
+    string() is string {
+        origin;
     }
-    facility() is SyslogFacility{facility;}host() is string{host;}application() is string{application;}maximum_payload() is int{maximum;}
 }
+
+// How syslog messages are made.
+object SyslogOptions {
+    has facility is SyslogFacility;
+    has host, application is string;
+    has maximum is int;
+
+    // facility, host and application names, at most maximum_payload bytes a
+    // message; InvalidSyslogOptions otherwise.
+    SyslogOptions(
+        facility is SyslogFacility,
+        host is string,
+        application is string,
+        maximum_payload is int
+    ) {
+        confirm maximum_payload > 0 && maximum_payload <= 65507
+            else throw InvalidSyslogOptions.invalid;
+        self.facility = facility;
+        self.host = SyslogHeaderName(origin: host, maximum: 255).string();
+        self.application = SyslogHeaderName(origin: application, maximum: 48).string();
+        maximum = maximum_payload;
+    }
+
+    // The facility, host, application and payload limit.
+    cap Settings {
+        facility is SyslogFacility {
+            facility;
+        }
+
+        host is string {
+            host;
+        }
+
+        application is string {
+            application;
+        }
+
+        maximum_payload is int {
+            maximum;
+        }
+    }
+}
+
 // RFC5424 UTC header, microseconds without rounding. The complete structured
 // record is the BOM-marked UTF8 MSG; no newline, truncation or resend is added.
-object SyslogMessage does ByteSource{
-    has origin is @byte;
-    SyslogMessage(record is LogRecord,options is SyslogOptions){
-        let priority=SyslogFacilityCode(options.facility()).value()*8+SyslogSeverity(record.level()).value();
-        let time=Rfc3339(record.time(),Duration(0.rat(),DurationUnit.second)).string();let parts=time.split(".");
-        let timestamp=if parts.size()==1{time;}else{
-            let fraction=parts[1].slice(0,parts[1].length()-1);let length=if fraction.length()>6{6;}else{fraction.length();};parts[0]+"."+fraction.slice(0,length)+"Z";
+object SyslogMessage does ByteSource {
+    has record is LogRecord;
+    has options is SyslogOptions;
+
+    // record as an RFC 5424 message under options.
+    SyslogMessage(record is LogRecord, options is SyslogOptions) {
+        self.record = record;
+        self.options = options;
+    }
+
+    // The message.
+    bytes() is @byte {
+        once let encoded is @byte = self.encoded();
+        encoded;
+    }
+
+    hidden encoded() is @byte {
+        let priority = SyslogFacilityCode(options::Settings::facility).code() * 8 + SyslogSeverity(
+            record::Entry::level
+        ).code();
+        let time = Rfc3339(origin: record.time(), offset: Duration(seconds: 0)).string();
+        let parts = time.split(".");
+        let timestamp = if parts.size() == 1 {
+            time;
+        }
+        else {
+            let fraction = parts[1].slice(0, parts[1].length() - 1);
+            let length = if fraction.length() > 6 {
+                6;
+            }
+            else {
+                fraction.length();
+            };
+            parts[0] + "." + fraction.slice(0, length) + "Z";
         };
-        let process=if record.context().process()==0{"-";}else{record.context().process().string();};
-        let header=Utf8Encoded("<"+priority.string()+">1 "+timestamp+" "+options.host()+" "+options.application()+" "+process+" - - ").bytes();
-        let message=Utf8Encoded(JsonLogLine(record).string()).bytes();let bom is @byte=[239.byte(),187.byte(),191.byte()];
-        let size=header.size()+bom.size()+message.size();confirm size<=options.maximum_payload() else throw DatagramTooLarge.size(size);
-        origin=(0..size).map()->index{if index<header.size(){header[index];}else if index<header.size()+3{bom[index-header.size()];}else{message[index-header.size()-3];}};
+        let process = if record.context().process() == 0 {
+            "-";
+        }
+        else {
+            record.context().process().string();
+        };
+        let header = Utf8Encoded(
+            "<" + priority.string() + ">1 " + timestamp + " " + options::Settings::host + " " + options::Settings::application + " " + process + " - - "
+        ).bytes();
+        let message = Utf8Encoded(JsonLogLine(record).string()).bytes();
+        let bom is @byte = [239.byte(), 187.byte(), 191.byte()];
+        let size = header.size() + bom.size() + message.size();
+        confirm size <= options::Settings::maximum_payload else throw DatagramTooLarge.size(size);
+        (0..size).map() -> index {
+            if index < header.size() {
+                header[index];
+            }
+            else if index < header.size() + 3 {
+                bom[index - header.size()];
+            }
+            else {
+                message[index - header.size() - 3];
+            }
+        };
     }
-    bytes() is @byte{origin;}
 }
-object UdpSyslogDelivery does LogDelivering{
-    has origin is UdpConnection;has options is SyslogOptions;
-    UdpSyslogDelivery(origin is UdpConnection,options is SyslogOptions){self.origin=origin;self.options=options;}
-    async deliver(record is LogRecord) is int{
-        let packet=SyslogMessage(record,options);let count=await origin.send(packet);
-        confirm count==packet.bytes().size() else throw IncompleteWrite.after(count);count;
+
+// Sends records as syslog datagrams.
+object UdpSyslogDelivery does LogDelivering {
+    has origin is UdpConnection;
+    has options is SyslogOptions;
+
+    // Over origin with options.
+    UdpSyslogDelivery(origin is UdpConnection, options is SyslogOptions) {
+        self.origin = origin;
+        self.options = options;
+    }
+
+    // Sends record.
+    async deliver(record is LogRecord) is int {
+        let packet = SyslogMessage(record: record, options: options);
+        let count = await origin.send(packet);
+        confirm count == packet.bytes().size() else throw IncompleteWrite.after(count);
+        count;
     }
 }
-object SyslogLogs does LogWriting,LogDraining,Closing{
+
+// Records sent to syslog in the background.
+object SyslogLogs does LogWriting, LogDraining, Closing {
     has queue is QueuedLogs;
-    SyslogLogs(origin is UdpConnection,options is SyslogOptions,queue_options is LogQueueOptions,scope is Supervising<int>){queue=QueuedLogs(UdpSyslogDelivery(origin,options),queue_options,scope);}
-    SyslogLogs(origin is UdpConnection,facility is SyslogFacility,host is string,application is string,capacity is int,overflow is LogOverflow,scope is Supervising<int>){queue=QueuedLogs(UdpSyslogDelivery(origin,SyslogOptions(facility,host,application,2048)),LogQueueOptions(capacity,overflow),scope);}
-    write(record is LogRecord) is void{queue.write(record);}
-    async drain() is void{await queue.drain();}
-    dropped_records() is BigInt{queue.dropped_records();}
-    closed() is bool{queue.closed();}close() is void{queue.close();}
-    destroy{self.close();}
+
+    // Over origin with options, queued as queue_options say, in scope.
+    SyslogLogs(
+        origin is UdpConnection,
+        options is SyslogOptions,
+        queue_options is LogQueueOptions,
+        scope is Supervising<int>
+    ) {
+        queue = QueuedLogs(
+            origin: UdpSyslogDelivery(origin: origin, options: options),
+            options: queue_options,
+            scope: scope
+        );
+    }
+
+    // The same, the options given one by one.
+    SyslogLogs(
+        origin is UdpConnection,
+        facility is SyslogFacility,
+        host is string,
+        application is string,
+        capacity is int,
+        overflow is LogOverflow,
+        scope is Supervising<int>
+    ) {
+        queue = QueuedLogs(
+            origin: UdpSyslogDelivery(
+                origin: origin,
+                options: SyslogOptions(facility, host, application, 2048)
+            ),
+            options: LogQueueOptions(capacity: capacity, overflow: overflow),
+            scope: scope
+        );
+    }
+
+    // Queues record.
+    write(record is LogRecord) is void {
+        queue.write(record);
+    }
+
+    // Whether a record of name at level would be written.
+    enabled(name is LogName, level is LogLevel) is bool {
+        true;
+    }
+
+    // Waits until the queue is empty.
+    async drain() is void {
+        await queue.drain();
+    }
+
+    // How many records were dropped.
+    dropped_records() is BigInt {
+        queue.dropped_records();
+    }
+
+    // Whether it was closed.
+    closed() is bool {
+        queue.closed();
+    }
+
+    // Stops taking records.
+    close() is void {
+        queue.close();
+    }
+
+    destroy {
+        self.close();
+    }
 }
+
+// Options that cannot be used.
 enum InvalidSyslogOptions is Error = (invalid);
+
+hidden object SyslogTestRecord {
+    has seconds is rat;
+    has level is LogLevel;
+    has process is int;
+
+    SyslogTestRecord(seconds is rat, level is LogLevel, process is int) {
+        self.seconds = seconds;
+        self.level = level;
+        self.process = process;
+    }
+
+    record() is LogRecord {
+        LogRecord(
+            occurred: Instant(Duration(value: seconds, unit: DurationUnit.second)),
+            level: level,
+            message: "up",
+            context: LogContext(name: LogName("web"), fields: LogFields(), process: process),
+        );
+    }
+}
+
+test "syslog severities follow RFC 5424" {
+    test.is(SyslogSeverity(LogLevel.debug).code(), 7);
+    test.is(SyslogSeverity(LogLevel.info).code(), 6);
+    test.is(SyslogSeverity(LogLevel.warning).code(), 4);
+    test.is(SyslogSeverity(LogLevel.error).code(), 3);
+    test.is(SyslogSeverity(LogLevel.critical).code(), 2);
+}
+
+test "syslog options check header names and the payload size" {
+    let options = SyslogOptions(
+        facility: SyslogFacility.local0,
+        host: "",
+        application: "api",
+        maximum_payload: 1024
+    );
+    test.is(options::Settings::host, "-");
+    test.is(options::Settings::application, "api");
+    test.is(options::Settings::maximum_payload, 1024);
+    test.throws(InvalidSyslogOptions) {
+        SyslogOptions(
+            facility: SyslogFacility.user,
+            host: "my host",
+            application: "api",
+            maximum_payload: 1024
+        );
+    };
+    test.throws(InvalidSyslogOptions) {
+        SyslogOptions(
+            facility: SyslogFacility.user,
+            host: "h",
+            application: "a".repeat(49),
+            maximum_payload: 1024
+        );
+    };
+    test.throws(InvalidSyslogOptions) {
+        SyslogOptions(
+            facility: SyslogFacility.user,
+            host: "h",
+            application: "a",
+            maximum_payload: 65508
+        );
+    };
+}
+
+test "a syslog message is an RFC 5424 header, a BOM and the JSON line" {
+    let options = SyslogOptions(
+        facility: SyslogFacility.local0,
+        host: "web1",
+        application: "api",
+        maximum_payload: 1024
+    );
+    let record = SyslogTestRecord(seconds: 1700000000.rat(), level: LogLevel.info, process: 7).record();
+    let bytes = SyslogMessage(record: record, options: options).bytes();
+    let header = "<134>1 2023-11-14T22:13:20Z web1 api 7 - - ";
+    test.is(Utf8Encoded(header).bytes(), bytes.slice(0, header.length()));
+    test.is(bytes.slice(header.length(), header.length() + 3), [239.byte(), 187.byte(), 191.byte()]);
+    test.is(
+        Utf8Encoded(JsonLogLine(record).string()).bytes(),
+        bytes.slice(header.length() + 3, bytes.size())
+    );
+    let precise = SyslogTestRecord(
+        seconds: 17000000001234567.rat() / 10000000.rat(),
+        level: LogLevel.critical,
+        process: 0
+    ).record();
+    let kernel = SyslogOptions(
+        facility: SyslogFacility.kernel,
+        host: "h",
+        application: "a",
+        maximum_payload: 1024
+    );
+    let prefix = "<2>1 2023-11-14T22:13:20.123456Z h a - - - ";
+    test.is(
+        Utf8Encoded(prefix).bytes(),
+        SyslogMessage(record: precise, options: kernel).bytes().slice(0, prefix.length())
+    );
+    let tight = SyslogOptions(
+        facility: SyslogFacility.user,
+        host: "h",
+        application: "a",
+        maximum_payload: 20
+    );
+    test.throws(DatagramTooLarge) {
+        SyslogMessage(record: record, options: tight).bytes();
+    };
+}

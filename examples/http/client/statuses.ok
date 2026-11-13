@@ -1,0 +1,55 @@
+module examples/http/client/statuses v1.0.0;
+
+import "http/client" take HttpClient;
+import "http/server" take HttpServer;
+import "http/handler" take Handling, HandlingResult, ResponseHandling;
+import "http/request_context" take HttpRequestContext;
+import "http/message" take Request, Response;
+import "http/method" take MethodName;
+import "http/status" take Status, StatusCode, StatusClass;
+import "http/endpoint" take LoopbackEndpoints;
+import "net/tcp" take TcpListening;
+import "time/duration" take Duration;
+import "io/stdout" take Stdout;
+
+// Read a status: compare it with a case, match on it, take its class, its
+// number and its phrase. The server is a small one on 127.0.0.1 that knows
+// no pages at all.
+
+object NoPages does Handling {
+    NoPages();
+
+    async handling(request is Request, context is HttpRequestContext) is HandlingResult {
+        Stdout().writeln("server got: ", MethodName(request::Head::method), " ", request::Head::target.path());
+        ResponseHandling(Response(status: Status.not_found));
+    }
+}
+
+async main() is int {
+    let listener = await TcpListening(port: 0).listener();
+    let base = "http://127.0.0.1:" + listener::Local::port.string();
+    let server = HttpServer(listener: listener, handling: NoPages()).started();
+        // A real program writes HttpClient(); this one may reach 127.0.0.1.
+    let client = HttpClient(endpoints: LoopbackEndpoints());
+
+    let reply = await client.get(base + "/missing");
+    let status = reply::Head::status;
+    let said = match status {
+        case Status.ok {
+            "found it";
+        }
+        case Status.not_found {
+            "no such page";
+        }
+        else {
+            "something else";
+        }
+    };
+    Stdout().writeln(said);
+    Stdout().writeln("client error: ", reply::Head::class == StatusClass.client_error);
+    Stdout().writeln(reply::Head::code, " ", StatusCode(status).phrase());
+
+    client.close();
+    await server.drain(limit: Duration(seconds: 5));
+    0;
+}

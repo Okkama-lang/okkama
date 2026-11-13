@@ -1,11 +1,53 @@
 module db/sqlite/script v1.0.0;
+
+// Running a SQL script: several statements separated by semicolons, without
+// bound values.
+//
+//     let done = await SqliteScript(origin: db, source: schema_sql).executions();
+
 import "db/statement" take Execution;
 import "collections/sequence" take Sequencing;
 import "encoding/utf" take Utf8Encoded;
-role SqliteScripting{async script(source is string) is Sequencing<Execution>;}
-object SqliteScript{
-    has origin is SqliteScripting;has source is string;
-    SqliteScript(origin is SqliteScripting,source is string){confirm Utf8Encoded(source).bytes().size()<=1048576 else throw InvalidSqliteScript.invalid;self.origin=origin;self.source=source;}
-    async executions() is Sequencing<Execution>{await origin.script(source);}
+
+// Something that runs scripts.
+role SqliteScripting {
+    // Runs every statement of source.
+    async script(source is string) is Sequencing<Execution>;
 }
+
+// A script to run.
+object SqliteScript {
+    has origin is SqliteScripting;
+    has source is string;
+
+    // source on origin.
+    SqliteScript(origin is SqliteScripting, source is string) {
+        confirm Utf8Encoded(source).bytes().size() <= 1048576
+            else throw InvalidSqliteScript.invalid;
+        self.origin = origin;
+        self.source = source;
+    }
+
+    // Runs it; one Execution per statement.
+    async executions() is Sequencing<Execution> {
+        await origin.script(source);
+    }
+}
+
+// A script that cannot be run.
 enum InvalidSqliteScript is Error = (invalid);
+
+hidden object NoScripts does SqliteScripting {
+    NoScripts();
+
+    async script(source is string) is Sequencing<Execution> {
+        throw InvalidSqliteScript.invalid;
+    }
+}
+
+test "a script is at most one MiB of UTF-8" {
+    SqliteScript(origin: NoScripts(), source: "SELECT 1;");
+    test.throws(InvalidSqliteScript) {
+        SqliteScript(origin: NoScripts(), source: "-".repeat(1048577));
+    };
+}

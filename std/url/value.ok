@@ -1,10 +1,20 @@
 module url/value v1.0.0;
 
+// URLs read and taken apart (RFC 3986).
+//
+//     let parts = ParsedUrl("https://user@example.org:8443/a/b?q=1#top").parts();
+//     parts::Parts::scheme;                    // "https"
+//     parts::Parts::host else "";              // "example.org"
+//     parts::Parts::port else 443;             // 8443
+//     parts::Parts::path;                      // "/a/b"
+//     ParsedQuery(parts::Parts::query else "").parameters().text("q");   // "1"
+//     parts.resolved(ParsedUrl("../c").parts()).string();
+//
+// The parts are kept as written; string() writes the URL back, and resolved()
+// and normalized() follow RFC 3986.
+
 import "url/percent" take PercentEncoded, PercentDecoded, UrlComponent, InvalidPercentEncoding;
-import "encoding/utf" take Utf8Encoded, Utf8Decoded, Utf32Encoded, ByteOrder, InvalidUtf8;
-import "encoding/binary" take IntegerFromBytes, Signedness;
-import "io/buffer" take ByteBuffer;
-import "io/decorators" take ByteSnapshot;
+import "encoding/utf" take InvalidUtf8;
 import "error" take InvalidArgument;
 import "net/endpoint" take HostName, InvalidHostName;
 import "net/ip" take IpAddress, IpVersion, InvalidIpAddress;
@@ -12,373 +22,1355 @@ import "runtime/url_text" take url_dot_segments;
 
 // Presence is separate from text. Inputs are URI/IRI component text, with
 // existing escapes; plain field data must first be encoded explicitly.
-object UrlQuery {
+hidden object UrlQuery {
     has supplied is bool;
     has text is string;
-    UrlQuery() {supplied=false;text="";}
-    UrlQuery(origin is string) {supplied=true;text=UrlComponentText(origin,UrlComponent.query).string();}
-    present() is bool {supplied;}
-    string() is string {text;}
+
+    UrlQuery() {
+        supplied = false;
+        text = "";
+    }
+
+    UrlQuery(origin is string) {
+        supplied = true;
+        text = UrlComponentText(origin: origin, component: UrlComponent.query).string();
+    }
+
+    present() is bool {
+        supplied;
+    }
+
+    string() is string {
+        text;
+    }
 }
-object UrlFragment {
+
+hidden object UrlFragment {
     has supplied is bool;
     has text is string;
-    UrlFragment() {supplied=false;text="";}
-    UrlFragment(origin is string) {supplied=true;text=UrlComponentText(origin,UrlComponent.fragment).string();}
-    present() is bool {supplied;}
-    string() is string {text;}
+
+    UrlFragment() {
+        supplied = false;
+        text = "";
+    }
+
+    UrlFragment(origin is string) {
+        supplied = true;
+        text = UrlComponentText(origin: origin, component: UrlComponent.fragment).string();
+    }
+
+    present() is bool {
+        supplied;
+    }
+
+    string() is string {
+        text;
+    }
 }
+
+// Text that is not a URL; offset and reason say where and why.
 enum InvalidUrl is Error = (located(offset is int, reason is string));
 
 // Importable implementation collaborator, not a complete URL parser.
 object UrlComponentText {
     has origin is string;
     has component is UrlComponent;
+
+    // origin checked and kept as written for component.
     UrlComponentText(origin is string, component is UrlComponent) {
-        confirm component==UrlComponent.query || component==UrlComponent.fragment
-            || component==UrlComponent.path || component==UrlComponent.userinfo
+        confirm component == UrlComponent.query
+            || component == UrlComponent.fragment
+            || component == UrlComponent.path
+            || component == UrlComponent.userinfo
             else throw InvalidArgument.because("unsupported URL component canonicalization");
-        self.origin=origin;self.component=component;
+        self.origin = origin;
+        self.component = component;
     }
+
+    // Escapes split the text into literal runs, and PercentEncoded knows
+    // which characters a run may hold. Canonical text comes back as it is;
+    // other text is checked once and joined from its pieces once (#503).
     string() is string {
-        let output=ByteBuffer();defer output.closing().close();let writer=output.writing();
-        let digits="0123456789ABCDEF";
-        let consumed=(0..origin.length()).reduce(0) -> after,index {
-            if index<after {after;}
+        if self.canonical() {
+            return origin;
+        }
+        let parts = origin.split("%");
+        // The offset of the '%' before each part; the first part has none.
+        (0..parts.size()).reduce(-1) -> at, index {
+            let part = parts[index];
+            if index == 0 {
+                self.check(part, 0);
+            }
             else {
-                let scalar=origin.slice(index,index+1);
-                if scalar=="%" {
-                    confirm origin.length()-index>=3 else throw InvalidUrl.located(index, "incomplete percent escape");
-                    let value=try {PercentDecoded(origin.slice(index,index+3)).bytes()[0].int();}
-                        catch failure is InvalidPercentEncoding {throw InvalidUrl.located(index, "invalid percent escape");};
-                    let unreserved=(value>=65 && value<=90) || (value>=97 && value<=122)
-                        || (value>=48 && value<=57) || value==45 || value==46 || value==95 || value==126;
-                    let text=if unreserved {Utf8Decoded([value.byte()]).string();}
-                        else {let high=(value/16).int();let low=value%16;
-                            "%"+digits.slice(high,high+1)+digits.slice(low,low+1);};
-                    writer.write(ByteSnapshot(Utf8Encoded(text).bytes()));index+3;
-                } else {
-                    let bytes=Utf8Encoded(scalar).bytes();
-                    let encoded=PercentEncoded(scalar,component).string();
-                    if bytes.size()==1 {
-                        confirm encoded==scalar else throw InvalidUrl.located(index, "character is not allowed in component");
-                    } else {
-                        let code=IntegerFromBytes(Utf32Encoded(scalar,ByteOrder.big).bytes(),Signedness.unsigned,ByteOrder.big).value();
-                        confirm self.unicode_allowed(code) else throw InvalidUrl.located(index, "character is not allowed in IRI component");
+                if part.length() < 2 {
+                    confirm origin.length() - at >= 3
+                        else throw InvalidUrl.located(at, "incomplete percent escape");
+                    throw InvalidUrl.located(at, "invalid percent escape");
+                }
+                let digits = part.slice(0, 2).characters();
+                confirm self.hex(digits[0].code()) >= 0 && self.hex(digits[1].code()) >= 0
+                    else throw InvalidUrl.located(at, "invalid percent escape");
+                self.check(part.slice(2, part.length()), at + 3);
+            }
+            at + 1 + part.length();
+        };
+        let pieces is @string = (0..parts.size()).map() -> index {
+            let part = parts[index];
+            if index == 0 {
+                PercentEncoded(origin: part, component: component).string();
+            }
+            else {
+                let digits = part.slice(0, 2);
+                let codes = digits.characters();
+                let value = self.hex(codes[0].code()) * 16 + self.hex(codes[1].code());
+                let escape = if self.unreserved(value) {
+                    value.char().string();
+                }
+                else {
+                    "%" + digits.upper();
+                };
+                escape + PercentEncoded(origin: part.slice(2, part.length()), component: component).string();
+            }
+        };
+        pieces.join("");
+    }
+
+    // Whether the text is spelled canonically already, in one pass over its
+    // character codes: each escape in capital hex and not of an unreserved
+    // character, every other character allowed ASCII. The two digits after
+    // a '%' were checked with it (#503).
+    hidden canonical() is bool {
+        let codes = origin.characters();
+        let size = codes.size();
+        (0..size).reduce(true) -> clean, index {
+            if !clean {
+                false;
+            }
+            else {
+                let code = codes[index].code();
+                if (index >= 1 && codes[index - 1].code() == 37) || (index >= 2 && codes[index - 2].code() == 37) {
+                    true;
+                }
+                else {
+                    if code == 37 {
+                        index + 2 < size && self.capital(codes[index + 1].code()) && self.capital(codes[index + 2].code())
+                            && !self.unreserved(self.hex(codes[index + 1].code()) * 16 + self.hex(codes[index + 2].code()));
                     }
-                    writer.write(ByteSnapshot(Utf8Encoded(encoded).bytes()));index+1;
+                    else {
+                        if code >= 128 {
+                            false;
+                        }
+                        else {
+                            if self.unreserved(code) {
+                                true;
+                            }
+                            else {
+                                let text = codes[index].string();
+                                PercentEncoded(origin: text, component: component).string() == text;
+                            }
+                        }
+                    }
                 }
             }
         };
-        Utf8Decoded(output.content().bytes()).string();
     }
-    private:
-    unicode_allowed(code is int) is bool {
-        if (code>=160 && code<=55295) || (code>=63744 && code<=64975)
-            || (code>=65008 && code<=65519) {return true;}
-        if code>=65536 && code<=917501 && code%65536<=65533 {return true;}
-        if code>=921600 && code<=983037 {return true;}
-        component==UrlComponent.query && ((code>=57344 && code<=63743)
-            || (code>=983040 && code<=1114109 && code%65536<=65533));
+
+    hidden capital(code is int) is bool {
+        (code >= 48 && code <= 57) || (code >= 65 && code <= 70);
+    }
+
+    // Every character of a literal run is allowed in the component.
+    hidden check(run is string, offset is int) is void {
+        let characters = run.characters();
+        for (0..characters.size()) -> index {
+            let character = characters[index];
+            let code = character.code();
+            if code < 128 {
+                if !self.unreserved(code) {
+                    let text = character.string();
+                    confirm PercentEncoded(origin: text, component: component).string() == text
+                        else throw InvalidUrl.located(offset + index, "character is not allowed in component");
+                }
+            }
+            else {
+                confirm self.unicode_allowed(code)
+                    else throw InvalidUrl.located(offset + index, "character is not allowed in IRI component");
+            }
+        }
+    }
+
+    hidden hex(code is int) is int {
+        if code >= 48 && code <= 57 {
+            return code - 48;
+        }
+        if code >= 65 && code <= 70 {
+            return code - 55;
+        }
+        if code >= 97 && code <= 102 {
+            return code - 87;
+        }
+        -1;
+    }
+
+    hidden unreserved(value is int) is bool {
+        (value >= 65 && value <= 90)
+            || (value >= 97 && value <= 122)
+            || (value >= 48 && value <= 57)
+            || value == 45
+            || value == 46
+            || value == 95
+            || value == 126;
+    }
+
+    hidden unicode_allowed(code is int) is bool {
+        if (code >= 160 && code <= 55295)
+            || (code >= 63744 && code <= 64975)
+            || (code >= 65008 && code <= 65519) {
+                return true;
+            }
+        if code >= 65536 && code <= 917501 && code % 65536 <= 65533 {
+            return true;
+        }
+        if code >= 921600 && code <= 983037 {
+            return true;
+        }
+        component == UrlComponent.query
+            && ((code >= 57344 && code <= 63743)
+            || (code >= 983040 && code <= 1114109 && code % 65536 <= 65533));
     }
 }
 
+// What a URL's host is: none, a name, an IP address, or another form.
 enum UrlHostKind = (empty, name, address, future);
-role UrlHost {
+
+hidden role UrlHost {
     kind() is UrlHostKind;
     name() is HostName;
     address() is IpAddress;
     string() is string;
 }
-object NamedUrlHost does UrlHost {
-    has origin is HostName;NamedUrlHost(origin is HostName){self.origin=origin;}
-    kind() is UrlHostKind {UrlHostKind.name;}name() is HostName {origin;}
-    address() is IpAddress {throw UrlHostIsNotAddress.not_address;}
-    string() is string {origin.ascii();}
-}
-object AddressUrlHost does UrlHost {
-    has origin is IpAddress;AddressUrlHost(origin is IpAddress){self.origin=origin;}
-    kind() is UrlHostKind {UrlHostKind.address;}address() is IpAddress {origin;}
-    name() is HostName {throw UrlHostIsNotName.not_name;}
-    string() is string {if origin.version()==IpVersion.v6 {"["+origin.string()+"]";}else{origin.string();}}
-}
-object EmptyUrlHost does UrlHost {
-    EmptyUrlHost();kind() is UrlHostKind {UrlHostKind.empty;}
-    name() is HostName {throw UrlHostIsNotName.not_name;}address() is IpAddress {throw UrlHostIsNotAddress.not_address;}
-    string() is string {"";}
-}
-object FutureUrlHost does UrlHost {
-    has origin is string;
-    FutureUrlHost(origin is string) {
-        confirm origin.length()>=4 && origin.length()<=1024 else throw InvalidUrl.located(0, "invalid IPvFuture width");
-        confirm origin.slice(0,1)=="v" || origin.slice(0,1)=="V" else throw InvalidUrl.located(0, "IPvFuture prefix required");
-        let parts=origin.split(".");confirm parts.size()>=2 else throw InvalidUrl.located(0, "IPvFuture version separator required");
-        let version=parts[0].slice(1,parts[0].length());
-        confirm UrlAsciiText(version).characters("0123456789abcdefABCDEF") else throw InvalidUrl.located(1, "IPvFuture hexadecimal version required");
-        let text is @string=(1..parts.size()).map() -> index {parts[index];};
-        let address=text.join(".");
-        confirm UrlAsciiText(address).characters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~!$&'()*+,;=:")
-            else throw InvalidUrl.located(parts[0].length()+1, "IPvFuture address required");
-        self.origin=UrlAsciiText(origin).lower();
+
+hidden object NamedUrlHost does UrlHost {
+    has origin is HostName;
+
+    NamedUrlHost(origin is HostName) {
+        self.origin = origin;
     }
-    kind() is UrlHostKind {UrlHostKind.future;}name() is HostName {throw UrlHostIsNotName.not_name;}
-    address() is IpAddress {throw UrlHostIsNotAddress.not_address;}string() is string {"["+origin+"]";}
+
+    kind() is UrlHostKind {
+        UrlHostKind.name;
+    }
+
+    name() is HostName {
+        origin;
+    }
+
+    address() is IpAddress {
+        throw UrlHostIsNotAddress.not_address;
+    }
+
+    string() is string {
+        origin.ascii();
+    }
 }
-object UrlUserInfo {
-    has supplied is bool;has origin is string;
-    UrlUserInfo(){supplied=false;origin="";}
-    UrlUserInfo(origin is string){supplied=true;self.origin=UrlComponentText(origin,UrlComponent.userinfo).string();}
-    present() is bool {supplied;}string() is string {origin;}
+
+hidden object AddressUrlHost does UrlHost {
+    has origin is IpAddress;
+
+    AddressUrlHost(origin is IpAddress) {
+        self.origin = origin;
+    }
+
+    kind() is UrlHostKind {
+        UrlHostKind.address;
+    }
+
+    address() is IpAddress {
+        origin;
+    }
+
+    name() is HostName {
+        throw UrlHostIsNotName.not_name;
+    }
+
+    string() is string {
+        if origin.version() == IpVersion.v6 {
+            "[" + origin.string() + "]";
+        }
+        else {
+            origin.string();
+        }
+    }
 }
+
+hidden object EmptyUrlHost does UrlHost {
+    EmptyUrlHost();
+
+    kind() is UrlHostKind {
+        UrlHostKind.empty;
+    }
+
+    name() is HostName {
+        throw UrlHostIsNotName.not_name;
+    }
+
+    address() is IpAddress {
+        throw UrlHostIsNotAddress.not_address;
+    }
+
+    string() is string {
+        "";
+    }
+}
+
+hidden object FutureUrlHost does UrlHost {
+    has origin is string;
+
+    FutureUrlHost(origin is string) {
+        confirm origin.length() >= 4 && origin.length() <= 1024
+            else throw InvalidUrl.located(0, "invalid IPvFuture width");
+        confirm origin.slice(0, 1) == "v" || origin.slice(0, 1) == "V"
+            else throw InvalidUrl.located(0, "IPvFuture prefix required");
+        let parts = origin.split(".");
+        confirm parts.size() >= 2
+            else throw InvalidUrl.located(0, "IPvFuture version separator required");
+        let version = parts[0].slice(1, parts[0].length());
+        confirm UrlAsciiText(version).characters("0123456789abcdefABCDEF")
+            else throw InvalidUrl.located(1, "IPvFuture hexadecimal version required");
+        let text is @string = (1..parts.size()).map() -> index {
+            parts[index];
+        };
+        let address = text.join(".");
+        confirm UrlAsciiText(address).characters(
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~!$&'()*+,;=:"
+        )
+            else throw InvalidUrl.located(parts[0].length() + 1, "IPvFuture address required");
+        self.origin = UrlAsciiText(origin).lower();
+    }
+
+    kind() is UrlHostKind {
+        UrlHostKind.future;
+    }
+
+    name() is HostName {
+        throw UrlHostIsNotName.not_name;
+    }
+
+    address() is IpAddress {
+        throw UrlHostIsNotAddress.not_address;
+    }
+
+    string() is string {
+        "[" + origin + "]";
+    }
+}
+
+hidden object UrlUserInfo {
+    has supplied is bool;
+    has origin is string;
+
+    UrlUserInfo() {
+        supplied = false;
+        origin = "";
+    }
+
+    UrlUserInfo(origin is string) {
+        supplied = true;
+        self.origin = UrlComponentText(origin: origin, component: UrlComponent.userinfo).string();
+    }
+
+    present() is bool {
+        supplied;
+    }
+
+    string() is string {
+        origin;
+    }
+}
+
 // Delimiter presence is distinct from an assigned numeric value: host: is
 // legal generic URI text, yet port() cannot invent a scheme-default integer.
-object UrlPort {
-    has supplied is bool;has values is @int;
-    UrlPort(){supplied=false;values=[];}
+hidden object UrlPort {
+    has supplied is bool;
+    has values is @int;
+
+    UrlPort() {
+        supplied = false;
+        values = [];
+    }
+
     UrlPort(origin is string) {
-        confirm origin.length()<=8192 else throw InvalidUrl.located(0, "port source limit exceeded");
-        supplied=true;
-        if origin=="" {values=[];}else{
-            let number=Utf8Encoded(origin).bytes().reduce(0) -> value,octet {
-                let code=octet.int();confirm code>=48 && code<=57 else throw InvalidUrl.located(0, "ASCII decimal port required");
-                let number=value*10+code-48;confirm number<=65535 else throw InvalidUrl.located(0, "port exceeds 65535");number;
+        confirm origin.length() <= 8192
+            else throw InvalidUrl.located(0, "port source limit exceeded");
+        supplied = true;
+        if origin == "" {
+            values = [];
+        }
+        else {
+            let number = origin.characters().reduce(0) -> value, character {
+                let code = character.code();
+                confirm code >= 48 && code <= 57
+                    else throw InvalidUrl.located(0, "ASCII decimal port required");
+                let number = value * 10 + code - 48;
+                confirm number <= 65535 else throw InvalidUrl.located(0, "port exceeds 65535");
+                number;
             };
-            values=[number];
+            values = [number];
         }
     }
-    present() is bool {supplied;}
-    value() is int {confirm values.size()==1 else throw MissingUrlPort.missing;values[0];}
-    string() is string {if values.size()==1 {values[0].string();}else{"";}}
-}
-object UrlAuthority {
-    has hosts is @UrlHost;has userinfo is UrlUserInfo;has port is UrlPort;
-    UrlAuthority(){hosts=[];userinfo=UrlUserInfo();port=UrlPort();}
-    UrlAuthority(host is UrlHost){hosts=[UrlHostSnapshot(host).value()];userinfo=UrlUserInfo();port=UrlPort();}
-    UrlAuthority(host is UrlHost, port is int) {
-        confirm port>=0 && port<=65535 else throw InvalidUrl.located(0, "port outside 0..65535");
-        hosts=[UrlHostSnapshot(host).value()];userinfo=UrlUserInfo();self.port=UrlPort(port.string());
+
+    present() is bool {
+        supplied;
     }
-    UrlAuthority(host is UrlHost, userinfo is UrlUserInfo, port is UrlPort) {
-        hosts=[UrlHostSnapshot(host).value()];self.userinfo=userinfo;self.port=port;
+
+    number() is int {
+        confirm values.size() == 1 else throw MissingUrlPort.missing;
+        values[0];
     }
-    present() is bool {hosts.size()==1;}
-    host() is UrlHost {confirm self.present() else throw MissingUrlAuthority.missing;hosts[0];}
-    userinfo() is UrlUserInfo {confirm self.present() else throw MissingUrlAuthority.missing;userinfo;}
-    port() is int {confirm self.present() else throw MissingUrlAuthority.missing;port.value();}
-    port_marker() is UrlPort {confirm self.present() else throw MissingUrlAuthority.missing;port;}
+
     string() is string {
-        if !self.present() {return "";}
-        (if userinfo.present(){userinfo.string()+"@";}else{"";})+hosts[0].string()
-            +(if port.present(){":"+port.string();}else{"";});
-    }
-}
-// A nominal role can be implemented by callers. Snapshot its documented
-// coordinates and enforce their canonical wire agreement at composition.
-object UrlHostSnapshot {
-    has origin is UrlHost;UrlHostSnapshot(origin is UrlHost){self.origin=origin;}
-    value() is UrlHost {
-        let kind=origin.kind();let wire=origin.string();
-        let host is UrlHost=if kind==UrlHostKind.name {NamedUrlHost(origin.name());}else{
-            if kind==UrlHostKind.address {AddressUrlHost(origin.address());}else{
-                if kind==UrlHostKind.empty {EmptyUrlHost();}else{
-                    confirm wire.length()>=2 && wire.slice(0,1)=="[" && wire.slice(wire.length()-1,wire.length())=="]"
-                        else throw InvalidUrl.located(0, "IPvFuture host requires brackets");
-                    FutureUrlHost(wire.slice(1,wire.length()-1));
-                }
-            }
-        };
-        confirm host.string()==wire else throw InvalidUrl.located(0, "host coordinates and canonical wire spelling disagree");host;
-    }
-}
-object ParsedUrlAuthority {
-    has origin is string;ParsedUrlAuthority(origin is string){self.origin=origin;}
-    value() is UrlAuthority {
-        confirm origin.length()<=8192 else throw InvalidUrl.located(8192, "authority source limit exceeded");
-        let parts=origin.split("@");confirm parts.size()<=2 else throw InvalidUrl.located(0, "multiple userinfo separators");
-        let userinfo=if parts.size()==2 {UrlUserInfo(parts[0]);}else{UrlUserInfo();};
-        let host_port=parts[parts.size()-1];
-        if host_port=="" {return UrlAuthority(EmptyUrlHost(),userinfo,UrlPort());}
-        if host_port.slice(0,1)=="[" {
-            let brackets=host_port.split("]");confirm brackets.size()==2 else throw InvalidUrl.located(0, "IP literal closing bracket required");
-            let raw=brackets[0].slice(1,brackets[0].length());let tail=brackets[1];
-            confirm tail=="" || tail.slice(0,1)==":" else throw InvalidUrl.located(brackets[0].length()+1, "invalid IP literal suffix");
-            let port=if tail=="" {UrlPort();}else{UrlPort(tail.slice(1,tail.length()));};
-            let host is UrlHost=if raw.length()>0 && (raw.slice(0,1)=="v" || raw.slice(0,1)=="V") {
-                FutureUrlHost(raw);
-            }else{
-                let address=try{IpAddress(raw);}catch failure is InvalidIpAddress {throw InvalidUrl.located(1, "invalid IPv6 literal");};
-                confirm address.version()==IpVersion.v6 else throw InvalidUrl.located(1, "bracketed literal must be IPv6");AddressUrlHost(address);
-            };
-            return UrlAuthority(host,userinfo,port);
+        if values.size() == 1 {
+            values[0].string();
         }
-        let fields=host_port.split(":");confirm fields.size()<=2 else throw InvalidUrl.located(0, "IPv6 literal requires brackets");
-        let decoded=try{PercentDecoded(fields[0]).string();}
-            catch InvalidPercentEncoding.at(offset) {throw InvalidUrl.located(offset, "invalid host escape");}
-            catch failure is InvalidUtf8 {throw InvalidUrl.located(0, "host escape requires valid UTF-8");};
-        let port=if fields.size()==2 {UrlPort(fields[1]);}else{UrlPort();};
-        let host is UrlHost=if decoded=="" {EmptyUrlHost();}else{
-            try{AddressUrlHost(IpAddress(decoded));}catch failure is InvalidIpAddress {
-                let name=try{HostName(decoded);}catch failure is InvalidHostName {throw InvalidUrl.located(0, "invalid registered host name");};
+        else {
+            "";
+        }
+    }
+}
+
+// UrlHost is hidden, so every host is one of this module's own, canonical
+// by construction: it is kept as given, not rebuilt from its parts (#503).
+hidden object UrlAuthority {
+    has hosts is @UrlHost;
+    has userinfo is UrlUserInfo;
+    has port is UrlPort;
+
+    UrlAuthority() {
+        hosts = [];
+        userinfo = UrlUserInfo();
+        port = UrlPort();
+    }
+
+    UrlAuthority(host is UrlHost) {
+        hosts = [host];
+        userinfo = UrlUserInfo();
+        port = UrlPort();
+    }
+
+    UrlAuthority(host is UrlHost, port is int) {
+        confirm port >= 0 && port <= 65535
+            else throw InvalidUrl.located(0, "port outside 0..65535");
+        hosts = [host];
+        userinfo = UrlUserInfo();
+        self.port = UrlPort(port.string());
+    }
+
+    UrlAuthority(host is UrlHost, userinfo is UrlUserInfo, port is UrlPort) {
+        hosts = [host];
+        self.userinfo = userinfo;
+        self.port = port;
+    }
+
+    present() is bool {
+        hosts.size() == 1;
+    }
+
+    host() is UrlHost {
+        confirm self.present() else throw MissingUrlAuthority.missing;
+        hosts[0];
+    }
+
+    userinfo() is UrlUserInfo {
+        confirm self.present() else throw MissingUrlAuthority.missing;
+        userinfo;
+    }
+
+    port() is int {
+        confirm self.present() else throw MissingUrlAuthority.missing;
+        port.number();
+    }
+
+    port_marker() is UrlPort {
+        confirm self.present() else throw MissingUrlAuthority.missing;
+        port;
+    }
+
+    string() is string {
+        if !self.present() {
+            return "";
+        }
+        (if userinfo.present() {
+            userinfo.string() + "@";
+        }
+        else {
+            "";
+        }) + hosts[0].string() +
+            (if port.present() {
+                ":" + port.string();
+            }
+            else {
+                "";
+            });
+    }
+}
+
+hidden object ParsedUrlAuthority {
+    has origin is string;
+
+    ParsedUrlAuthority(origin is string) {
+        self.origin = origin;
+    }
+
+    authority() is UrlAuthority {
+        confirm origin.length() <= 8192
+            else throw InvalidUrl.located(8192, "authority source limit exceeded");
+        let parts = origin.split("@");
+        confirm parts.size() <= 2 else throw InvalidUrl.located(0, "multiple userinfo separators");
+        let userinfo = if parts.size() == 2 {
+            UrlUserInfo(parts[0]);
+        }
+        else {
+            UrlUserInfo();
+        };
+        let host_port = parts[parts.size() - 1];
+        if host_port == "" {
+            return UrlAuthority(host: EmptyUrlHost(), userinfo: userinfo, port: UrlPort());
+        }
+        if host_port.slice(0, 1) == "[" {
+            let brackets = host_port.split("]");
+            confirm brackets.size() == 2
+                else throw InvalidUrl.located(0, "IP literal closing bracket required");
+            let raw = brackets[0].slice(1, brackets[0].length());
+            let tail = brackets[1];
+            confirm tail == "" || tail.slice(0, 1) == ":"
+                else throw InvalidUrl.located(brackets[0].length() + 1, "invalid IP literal suffix");
+            let port = if tail == "" {
+                UrlPort();
+            }
+            else {
+                UrlPort(tail.slice(1, tail.length()));
+            };
+            let host is UrlHost = if raw.length() > 0
+                && (raw.slice(0, 1) == "v" || raw.slice(0, 1) == "V") {
+                    FutureUrlHost(raw);
+                }
+                else {
+                    let address = try {
+                        IpAddress(raw);
+                    }
+                    catch failure is InvalidIpAddress {
+                        throw InvalidUrl.located(1, "invalid IPv6 literal");
+                    };
+                    confirm address.version() == IpVersion.v6
+                        else throw InvalidUrl.located(1, "bracketed literal must be IPv6");
+                    AddressUrlHost(address);
+                };
+            return UrlAuthority(host: host, userinfo: userinfo, port: port);
+        }
+        let fields = host_port.split(":");
+        confirm fields.size() <= 2
+            else throw InvalidUrl.located(0, "IPv6 literal requires brackets");
+        let decoded = try {
+            PercentDecoded(fields[0]).string();
+        }
+        catch InvalidPercentEncoding.at(offset) {
+            throw InvalidUrl.located(offset, "invalid host escape");
+        }
+        catch failure is InvalidUtf8 {
+            throw InvalidUrl.located(0, "host escape requires valid UTF-8");
+        };
+        let port = if fields.size() == 2 {
+            UrlPort(fields[1]);
+        }
+        else {
+            UrlPort();
+        };
+        let host is UrlHost = if decoded == "" {
+            EmptyUrlHost();
+        }
+        else {
+            try {
+                AddressUrlHost(IpAddress(decoded));
+            }
+            catch failure is InvalidIpAddress {
+                let name = try {
+                    HostName(decoded);
+                }
+                catch failure is InvalidHostName {
+                    throw InvalidUrl.located(0, "invalid registered host name");
+                };
                 NamedUrlHost(name);
             }
         };
-        UrlAuthority(host,userinfo,port);
+        UrlAuthority(host: host, userinfo: userinfo, port: port);
     }
 }
-object UrlAsciiText {
-    has origin is string;UrlAsciiText(origin is string){self.origin=origin;}
+
+hidden object UrlAsciiText {
+    has origin is string;
+
+    UrlAsciiText(origin is string) {
+        self.origin = origin;
+    }
+
     characters(alphabet is string) is bool {
-        if origin=="" {return false;}
-        (0..origin.length()).reduce(true) -> valid,index {valid && alphabet.split(origin.slice(index,index+1)).size()==2;};
+        if origin == "" {
+            return false;
+        }
+        origin.characters().reduce(true) -> valid, character {
+            valid && alphabet.contains(character.string());
+        };
     }
+
+    // Callers check the text is ASCII first, where the builtin lower() is
+    // exactly the ASCII mapping (#503); other letters keep their case.
     lower() is string {
-        let text is @string=Utf8Encoded(origin).bytes().map() -> octet {
-            let code=octet.int();Utf8Decoded([(if code>=65 && code<=90 {code+32;}else{code;}).byte()]).string();
-        };text.join("");
+        let characters = origin.characters();
+        let ascii = characters.reduce(true) -> plain, character {
+            plain && character.code() < 128;
+        };
+        if ascii {
+            return origin.lower();
+        }
+        let text is @string = characters.map() -> character {
+            let code = character.code();
+            if code >= 65 && code <= 90 {
+                (code + 32).char().string();
+            }
+            else {
+                character.string();
+            }
+        };
+        text.join("");
     }
 }
+
+// The URL has no `//authority`.
 enum MissingUrlAuthority is Error = (missing);
+
+// The URL names no port.
 enum MissingUrlPort is Error = (missing);
+
+// The host is an address, not a name.
 enum UrlHostIsNotName is Error = (not_name);
+
+// The host is a name, not an address.
 enum UrlHostIsNotAddress is Error = (not_address);
 
-object UrlParts {
-    has scheme,path is string;has authority is UrlAuthority;
-    has query is UrlQuery;has fragment is UrlFragment;
-    UrlParts(scheme is string, authority is UrlAuthority, path is string, query is UrlQuery, fragment is UrlFragment) {
-        confirm path.length()<=8192 else throw InvalidUrl.located(8192, "path source limit exceeded");
-        let protocol=UrlSchemeText(scheme).string();let canonical=UrlComponentText(path,UrlComponent.path).string();
-        confirm canonical.split("/").size()<=1024 else throw InvalidUrl.located(0, "path segment limit exceeded");
+hidden object UrlPieces {
+    has scheme, path is string;
+    has authority is UrlAuthority;
+    has query is UrlQuery;
+    has fragment is UrlFragment;
+
+    UrlPieces(
+        scheme is string,
+        authority is UrlAuthority,
+        path is string,
+        query is UrlQuery,
+        fragment is UrlFragment
+    ) {
+        confirm path.length() <= 8192
+            else throw InvalidUrl.located(8192, "path source limit exceeded");
+        let protocol = UrlSchemeText(scheme).string();
+        let canonical = UrlComponentText(origin: path, component: UrlComponent.path).string();
+        confirm canonical.split("/").size() <= 1024
+            else throw InvalidUrl.located(0, "path segment limit exceeded");
         if authority.present() {
-            confirm canonical=="" || canonical.slice(0,1)=="/" else throw InvalidUrl.located(0, "authority requires an empty or absolute path");
-        }else{
-            confirm canonical.length()<2 || canonical.slice(0,2)!="//" else throw InvalidUrl.located(0, "path cannot introduce an undeclared authority");
-            if protocol=="" && canonical!="" && canonical.slice(0,1)!="/" {
-                confirm canonical.split("/")[0].split(":").size()==1 else throw InvalidUrl.located(0, "relative first segment cannot contain colon");
+            confirm canonical == "" || canonical.slice(0, 1) == "/"
+                else throw InvalidUrl.located(0, "authority requires an empty or absolute path");
+        }
+        else {
+            confirm canonical.length() < 2 || canonical.slice(0, 2) != "//"
+                else throw InvalidUrl.located(0, "path cannot introduce an undeclared authority");
+            if protocol == "" && canonical != "" && canonical.slice(0, 1) != "/" {
+                confirm canonical.split("/")[0].split(":").size() == 1
+                    else throw InvalidUrl.located(0, "relative first segment cannot contain colon");
             }
         }
-        self.scheme=protocol;self.authority=authority;self.path=canonical;self.query=query;self.fragment=fragment;
-        let complete=(if protocol=="" {"";}else{protocol+":";})+(if authority.present(){"//"+authority.string();}else{"";})+canonical
-            +(if query.present(){"?"+query.string();}else{"";})+(if fragment.present(){"#"+fragment.string();}else{"";});
-        confirm complete.length()<=8192 else throw InvalidUrl.located(8192, "canonical URL output limit exceeded");
-    }
-    scheme() is string {scheme;}authority() is UrlAuthority {authority;}path() is string {path;}
-    query() is UrlQuery {query;}fragment() is UrlFragment {fragment;}
-    string() is string {
-        (if scheme=="" {"";}else{scheme+":";})+(if authority.present(){"//"+authority.string();}else{"";})+path
-            +(if query.present(){"?"+query.string();}else{"";})+(if fragment.present(){"#"+fragment.string();}else{"";});
-    }
-}
-object Url {
-    has origin is UrlParts;
-    Url(origin is UrlParts){confirm origin.scheme()!="" else throw InvalidUrl.located(0, "absolute URL requires scheme");self.origin=origin;}
-    parts() is UrlParts {origin;}string() is string {origin.string();}
-    url(reference is UrlReference) is Url {UrlResolution(self,reference).value();}
-}
-object UrlReference {
-    has origin is UrlParts;UrlReference(origin is UrlParts){self.origin=origin;}
-    absolute() is bool {origin.scheme()!="";}parts() is UrlParts {origin;}string() is string {origin.string();}
-}
-object ParsedUrl {
-    has origin is string;ParsedUrl(origin is string){self.origin=origin;}
-    value() is Url {Url(ParsedUrlReference(origin).value().parts());}
-}
-object ParsedUrlReference {
-    has origin is string;ParsedUrlReference(origin is string){self.origin=origin;}
-    value() is UrlReference {
-        confirm origin.length()<=8192 else throw InvalidUrl.located(8192, "URL source limit exceeded");
-        let fragments=origin.split("#");confirm fragments.size()<=2 else throw InvalidUrl.located(fragments[0].length()+1, "multiple fragment separators");
-        let fragment=if fragments.size()==2 {
-            try{UrlFragment(fragments[1]);}catch InvalidUrl.located(offset, reason) {throw InvalidUrl.located(fragments[0].length()+1+offset, reason);}
-        }else{UrlFragment();};
-        let body=fragments[0];let queries=body.split("?");
-        let query=if queries.size()>1 {
-            try{UrlQuery(body.slice(queries[0].length()+1,body.length()));}
-                catch InvalidUrl.located(offset, reason) {throw InvalidUrl.located(queries[0].length()+1+offset, reason);}
-        }else{UrlQuery();};
-        let hierarchical=queries[0];let colons=hierarchical.split(":");
-        let has_scheme=colons.size()>1 && colons[0].split("/").size()==1;
-        let scheme=if has_scheme {
-            confirm colons[0]!="" else throw InvalidUrl.located(0, "empty scheme");UrlSchemeText(colons[0]).string();
-        }else{"";};
-        let path_authority=if has_scheme {hierarchical.slice(colons[0].length()+1,hierarchical.length());}else{hierarchical;};
-        let prefix=if has_scheme {colons[0].length()+1;}else{0;};
-        if path_authority.length()>=2 && path_authority.slice(0,2)=="//" {
-            let after=path_authority.slice(2,path_authority.length());let segments=after.split("/");
-            let authority=try{ParsedUrlAuthority(segments[0]).value();}
-                catch InvalidUrl.located(offset, reason) {throw InvalidUrl.located(prefix+2+offset, reason);};
-            let path=after.slice(segments[0].length(),after.length());
-            let parts=try{UrlParts(scheme,authority,path,query,fragment);}
-                catch InvalidUrl.located(offset, reason) {
-                    let offset=prefix+2+segments[0].length()+offset;
-                    throw InvalidUrl.located(if offset>origin.length() {origin.length();}else{offset;}, reason);
-                };
-            return UrlReference(parts);
+        self.scheme = protocol;
+        self.authority = authority;
+        self.path = canonical;
+        self.query = query;
+        self.fragment = fragment;
+        let complete = (if protocol == "" {
+            "";
         }
-        let parts=try{UrlParts(scheme,UrlAuthority(),path_authority,query,fragment);}
-            catch InvalidUrl.located(offset, reason) {throw InvalidUrl.located(prefix+offset, reason);};
-        UrlReference(parts);
+        else {
+            protocol + ":";
+        }) + (if authority.present() {
+            "//" + authority.string();
+        }
+        else {
+            "";
+        }) + canonical +
+            (if query.present() {
+                "?" + query.string();
+            }
+            else {
+                "";
+            }) + (if fragment.present() {
+                "#" + fragment.string();
+            }
+            else {
+                "";
+            });
+        confirm complete.length() <= 8192
+            else throw InvalidUrl.located(8192, "canonical URL output limit exceeded");
+    }
+
+    scheme() is string {
+        scheme;
+    }
+
+    authority() is UrlAuthority {
+        authority;
+    }
+
+    path() is string {
+        path;
+    }
+
+    query() is UrlQuery {
+        query;
+    }
+
+    fragment() is UrlFragment {
+        fragment;
+    }
+
+    string() is string {
+        (if scheme == "" {
+            "";
+        }
+        else {
+            scheme + ":";
+        }) + (if authority.present() {
+            "//" + authority.string();
+        }
+        else {
+            "";
+        }) + path +
+            (if query.present() {
+                "?" + query.string();
+            }
+            else {
+                "";
+            }) + (if fragment.present() {
+                "#" + fragment.string();
+            }
+            else {
+                "";
+            });
     }
 }
-object UrlSchemeText {
-    has origin is string;UrlSchemeText(origin is string){self.origin=origin;}
+
+hidden object UrlReading {
+    has origin is string;
+
+    UrlReading(origin is string) {
+        self.origin = origin;
+    }
+
+    pieces() is UrlPieces {
+        confirm origin.length() <= 8192
+            else throw InvalidUrl.located(8192, "URL source limit exceeded");
+        let fragments = origin.split("#");
+        confirm fragments.size() <= 2
+            else throw InvalidUrl.located(fragments[0].length() + 1, "multiple fragment separators");
+        let fragment = if fragments.size() == 2 {
+            try {
+                UrlFragment(fragments[1]);
+            }
+            catch InvalidUrl.located(offset, reason) {
+                throw InvalidUrl.located(fragments[0].length() + 1 + offset, reason);
+            }
+        }
+        else {
+            UrlFragment();
+        };
+        let body = fragments[0];
+        let queries = body.split("?");
+        let query = if queries.size() > 1 {
+            try {
+                UrlQuery(body.slice(queries[0].length() + 1, body.length()));
+            }
+            catch InvalidUrl.located(offset, reason) {
+                throw InvalidUrl.located(queries[0].length() + 1 + offset, reason);
+            }
+        }
+        else {
+            UrlQuery();
+        };
+        let hierarchical = queries[0];
+        let colons = hierarchical.split(":");
+        let has_scheme = colons.size() > 1 && colons[0].split("/").size() == 1;
+        let scheme = if has_scheme {
+            confirm colons[0] != "" else throw InvalidUrl.located(0, "empty scheme");
+            UrlSchemeText(colons[0]).string();
+        }
+        else {
+            "";
+        };
+        let path_authority = if has_scheme {
+            hierarchical.slice(colons[0].length() + 1, hierarchical.length());
+        }
+        else {
+            hierarchical;
+        };
+        let prefix = if has_scheme {
+            colons[0].length() + 1;
+        }
+        else {
+            0;
+        };
+        if path_authority.length() >= 2 && path_authority.slice(0, 2) == "//" {
+            let after = path_authority.slice(2, path_authority.length());
+            let segments = after.split("/");
+            let authority = try {
+                ParsedUrlAuthority(segments[0]).authority();
+            }
+            catch InvalidUrl.located(offset, reason) {
+                throw InvalidUrl.located(prefix + 2 + offset, reason);
+            };
+            let path = after.slice(segments[0].length(), after.length());
+            let parts = try {
+                UrlPieces(scheme: scheme, authority: authority, path: path, query: query, fragment: fragment);
+            }
+            catch InvalidUrl.located(offset, reason) {
+                let offset = prefix + 2 + segments[0].length() + offset;
+                throw InvalidUrl.located(
+                    if offset > origin.length() {
+                        origin.length();
+                    }
+                    else {
+                        offset;
+                    },
+                    reason
+                );
+            };
+            return parts;
+        }
+        try {
+            UrlPieces(scheme: scheme, authority: UrlAuthority(), path: path_authority, query: query, fragment: fragment);
+        }
+        catch InvalidUrl.located(offset, reason) {
+            throw InvalidUrl.located(prefix + offset, reason);
+        }
+    }
+}
+
+hidden object UrlSchemeText {
+    has origin is string;
+
+    UrlSchemeText(origin is string) {
+        self.origin = origin;
+    }
+
     string() is string {
-        if origin=="" {return "";}
-        confirm origin.length()<=8192 && UrlAsciiText(origin.slice(0,1)).characters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-            && UrlAsciiText(origin).characters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-")
+        if origin == "" {
+            return "";
+        }
+        confirm origin.length() <= 8192
+            && UrlAsciiText(origin.slice(0, 1)).characters(
+                "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            )
+            && UrlAsciiText(origin).characters(
+                "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-"
+            )
             else throw InvalidUrl.located(0, "invalid URL scheme");
         UrlAsciiText(origin).lower();
     }
 }
+
 // Resolution, rather than reference construction, removes dot segments. The
 // profiled bulk operation avoids VM ownership walks over a persistent stack.
-object UrlDotSegments {
-    has origin is string;UrlDotSegments(origin is string){self.origin=origin;}
-    value() is string {
-        confirm origin.length()<=8192 else throw InvalidUrl.located(8192, "dot path source limit exceeded");
-        let path=try{url_dot_segments(origin);}catch failure is NativeFailure {
-            if failure.domain()=="core.url_text" && failure.code()=="invalid_input" {throw InvalidUrl.located(0, "invalid bounded dot path");}
+hidden object UrlDotSegments {
+    has origin is string;
+
+    UrlDotSegments(origin is string) {
+        self.origin = origin;
+    }
+
+    path() is string {
+        confirm origin.length() <= 8192
+            else throw InvalidUrl.located(8192, "dot path source limit exceeded");
+        let path = try {
+            url_dot_segments(origin);
+        }
+        catch failure is NativeFailure {
+            if failure.domain() == "core.url_text" && failure.code() == "invalid_input" {
+                throw InvalidUrl.located(0, "invalid bounded dot path");
+            }
             throw;
-        };path;
+        };
+        path;
     }
 }
-object UrlResolution {
-    has base is Url;has reference is UrlReference;
-    UrlResolution(base is Url, reference is UrlReference){self.base=base;self.reference=reference;}
-    value() is Url {
-        let original=base.parts();let relative=reference.parts();
-        if relative.scheme()!="" {
-            return Url(UrlParts(relative.scheme(),relative.authority(),UrlDotSegments(relative.path()).value(),relative.query(),relative.fragment()));
+
+hidden object UrlResolution {
+    has base is UrlPieces;
+    has reference is UrlPieces;
+
+    UrlResolution(base is UrlPieces, reference is UrlPieces) {
+        self.base = base;
+        self.reference = reference;
+    }
+
+    pieces() is UrlPieces {
+        let original = base;
+        let relative = reference;
+        if relative.scheme() != "" {
+            return UrlPieces(
+                    scheme: relative.scheme(),
+                    authority: relative.authority(),
+                    path: UrlDotSegments(relative.path()).path(),
+                    query: relative.query(),
+                    fragment: relative.fragment()
+                );
         }
         if relative.authority().present() {
-            return Url(UrlParts(original.scheme(),relative.authority(),UrlDotSegments(relative.path()).value(),relative.query(),relative.fragment()));
+            return UrlPieces(
+                    scheme: original.scheme(),
+                    authority: relative.authority(),
+                    path: UrlDotSegments(relative.path()).path(),
+                    query: relative.query(),
+                    fragment: relative.fragment()
+                );
         }
-        if relative.path()=="" {
-            let query=if relative.query().present() {relative.query();}else{original.query();};
-            return Url(UrlParts(original.scheme(),original.authority(),original.path(),query,relative.fragment()));
+        if relative.path() == "" {
+            let query = if relative.query().present() {
+                relative.query();
+            }
+            else {
+                original.query();
+            };
+            return UrlPieces(
+                    scheme: original.scheme(),
+                    authority: original.authority(),
+                    path: original.path(),
+                    query: query,
+                    fragment: relative.fragment()
+                );
         }
-        let merged=if relative.path().slice(0,1)=="/" {relative.path();}else{
-            if original.authority().present() && original.path()=="" {"/"+relative.path();}else{
-                let segments=original.path().split("/");
-                let prefix is @string=(0..segments.size()-1).map() -> index {segments[index];};
-                (if segments.size()>1 {prefix.join("/")+"/";}else{"";})+relative.path();
+        let merged = if relative.path().slice(0, 1) == "/" {
+            relative.path();
+        }
+        else {
+            if original.authority().present() && original.path() == "" {
+                "/" + relative.path();
+            }
+            else {
+                let segments = original.path().split("/");
+                let prefix is @string = (0..segments.size() - 1).map() -> index {
+                    segments[index];
+                };
+                (if segments.size() > 1 {
+                    prefix.join("/") + "/";
+                }
+                else {
+                    "";
+                }) + relative.path();
             }
         };
-        Url(UrlParts(original.scheme(),original.authority(),UrlDotSegments(merged).value(),relative.query(),relative.fragment()));
+        UrlPieces(
+                scheme: original.scheme(),
+                authority: original.authority(),
+                path: UrlDotSegments(merged).path(),
+                query: relative.query(),
+                fragment: relative.fragment()
+            );
+    }
+}
+
+// A URL or a relative reference, parsed once into ready parts.
+//
+//     let page = ParsedUrl("https://user@Example.com:8443/a/b?q=1#top").parts();
+//     page::Parts::scheme;     // "https"
+//     page::Parts::host;       // Maybe.some("example.com")
+//     page::Parts::port;       // Maybe.some(8443)
+//     page::Parts::path;       // "/a/b"
+//     page::Parts::query;      // Maybe.some("q=1"); "?" alone is some("")
+//     page.absolute();         // true: it has a scheme
+//     page.resolved(ParsedUrl("../c").parts()).string();  // https://…/c
+//
+// Optional parts are Maybe: a URL without "?" has no query, one ending in
+// "?" has an empty one. A part is kept in its canonical spelling (scheme and
+// host lowercased, escapes normalized), so two spellings of one URL are ==.
+// The host is text; host_kind(), host_name() and host_address() read it as a
+// registered name or an IP address. An empty port delimiter ("host:") is
+// dropped, as RFC 3986 normalization allows.
+object UrlParts {
+    has scheme_text is string;
+    has userinfo_text is Maybe<string>;
+    has host_text is Maybe<string>;
+    has port_number is Maybe<int>;
+    has path_text is string;
+    has query_text is Maybe<string>;
+    has fragment_text is Maybe<string>;
+
+    // Every part is checked and brought to its canonical spelling, which `==`
+    // depends on.
+    UrlParts(
+        scheme is string,
+        userinfo is Maybe<string>,
+        host is Maybe<string>,
+        port is Maybe<int>,
+        path is string,
+        query is Maybe<string>,
+        fragment is Maybe<string>,
+    ) {
+        let canonical = UrlCanonical(pieces: UrlPiecesFrom(
+            scheme: scheme,
+            userinfo: userinfo,
+            host: host,
+            port: port,
+            path: path,
+            query: query,
+            fragment: fragment,
+        ).pieces());
+        scheme_text = canonical.scheme();
+        userinfo_text = canonical.userinfo();
+        host_text = canonical.host();
+        port_number = canonical.port();
+        path_text = canonical.path();
+        query_text = canonical.query();
+        fragment_text = canonical.fragment();
+    }
+
+    // The parts as parsed: ready, canonical scalars.
+    cap Parts {
+        scheme is string {
+            scheme_text;
+        }
+
+        userinfo is Maybe<string> {
+            userinfo_text;
+        }
+
+        host is Maybe<string> {
+            host_text;
+        }
+
+        port is Maybe<int> {
+            port_number;
+        }
+
+        path is string {
+            path_text;
+        }
+
+        query is Maybe<string> {
+            query_text;
+        }
+
+        fragment is Maybe<string> {
+            fragment_text;
+        }
+    }
+
+    // A URL has a scheme; a relative reference does not.
+    absolute() is bool {
+        scheme_text != "";
+    }
+
+    // userinfo@host:port, or "" without a host.
+    authority() is string {
+        match host_text {
+            case Maybe.some(host) {
+                (match userinfo_text {
+                    case Maybe.some(userinfo) {
+                        userinfo + "@";
+                    }
+                    else {
+                        "";
+                    }
+                }) + host + match port_number {
+                    case Maybe.some(port) {
+                        ":" + port.string();
+                    }
+                    else {
+                        "";
+                    }
+                };
+            }
+            else {
+                "";
+            }
+        }
+    }
+
+    // The URL, canonical.
+    string() is string {
+        (if scheme_text == "" {
+            "";
+        }
+        else {
+            scheme_text + ":";
+        }) + (if host_text != Maybe<string>.none {
+            "//" + self.authority();
+        }
+        else {
+            "";
+        }) + path_text + (match query_text {
+            case Maybe.some(query) {
+                "?" + query;
+            }
+            else {
+                "";
+            }
+        }) + match fragment_text {
+            case Maybe.some(fragment) {
+                "#" + fragment;
+            }
+            else {
+                "";
+            }
+        };
+    }
+
+    // The reference resolved against this URL (RFC 3986 §5.2); dot segments
+    // are removed. This URL must be absolute.
+    resolved(reference is UrlParts) is UrlParts {
+        confirm self.absolute()
+            else throw InvalidUrl.located(0, "a base URL requires a scheme");
+        UrlCanonical(pieces: UrlResolution(
+            base: UrlPiecesOf(parts: self).pieces(),
+            reference: UrlPiecesOf(parts: reference).pieces(),
+        ).pieces()).parts();
+    }
+
+    // The same URL with "." and ".." segments removed from its path.
+    normalized() is UrlParts {
+        UrlParts(
+            scheme: scheme_text,
+            userinfo: userinfo_text,
+            host: host_text,
+            port: port_number,
+            path: UrlDotSegments(path_text).path(),
+            query: query_text,
+            fragment: fragment_text,
+        );
+    }
+
+    // What its host is.
+    host_kind() is UrlHostKind {
+        self.host_value().kind();
+    }
+
+    // The host as a registered name; an address host throws UrlHostIsNotName.
+    host_name() is HostName {
+        self.host_value().name();
+    }
+
+    // The host as an IP address; a named host throws UrlHostIsNotAddress.
+    host_address() is IpAddress {
+        self.host_value().address();
+    }
+
+    hidden host_value() is UrlHost {
+        match host_text {
+            case Maybe.some(host) {
+                ParsedUrlAuthority(host).authority().host();
+            }
+            else {
+                throw MissingUrlAuthority.missing;
+            }
+        }
+    }
+}
+
+// Parses any URL or relative reference; check absolute() where a URL must
+// have a scheme.
+object ParsedUrl {
+    has origin is string;
+
+    // Reads origin; nothing is checked until parts() is asked.
+    ParsedUrl(origin is string) {
+        self.origin = origin;
+    }
+
+    // Its parts; InvalidUrl says where the text is wrong.
+    parts() is UrlParts {
+        UrlCanonical(pieces: UrlReading(origin).pieces()).parts();
+    }
+}
+
+// The structured pieces of parsed parts.
+hidden object UrlPiecesOf {
+    has parts is UrlParts;
+
+    UrlPiecesOf(:parts);
+
+    pieces() is UrlPieces {
+        UrlPiecesFrom(
+            scheme: parts::Parts::scheme,
+            userinfo: parts::Parts::userinfo,
+            host: parts::Parts::host,
+            port: parts::Parts::port,
+            path: parts::Parts::path,
+            query: parts::Parts::query,
+            fragment: parts::Parts::fragment,
+        ).pieces();
+    }
+}
+
+// Structured pieces from the scalars of UrlParts.
+hidden object UrlPiecesFrom {
+    has scheme is string;
+    has userinfo is Maybe<string>;
+    has host is Maybe<string>;
+    has port is Maybe<int>;
+    has path is string;
+    has query is Maybe<string>;
+    has fragment is Maybe<string>;
+
+    UrlPiecesFrom(:scheme, :userinfo, :host, :port, :path, :query, :fragment);
+
+    pieces() is UrlPieces {
+        let authority = match host {
+            case Maybe.some(text) {
+                let parsed = ParsedUrlAuthority(text).authority();
+                confirm !parsed.userinfo().present() && !parsed.port_marker().present()
+                    else throw InvalidUrl.located(0, "a host carries neither userinfo nor port");
+                let info = match userinfo {
+                    case Maybe.some(given) {
+                        UrlUserInfo(given);
+                    }
+                    else {
+                        UrlUserInfo();
+                    }
+                };
+                let marker = match port {
+                    case Maybe.some(number) {
+                        confirm number >= 0 && number <= 65535
+                            else throw InvalidUrl.located(0, "port outside 0..65535");
+                        UrlPort(number.string());
+                    }
+                    else {
+                        UrlPort();
+                    }
+                };
+                UrlAuthority(host: parsed.host(), userinfo: info, port: marker);
+            }
+            else {
+                confirm userinfo == Maybe<string>.none && port == Maybe<int>.none
+                    else throw InvalidUrl.located(0, "userinfo and port require a host");
+                UrlAuthority();
+            }
+        };
+        UrlPieces(
+            scheme: UrlSchemeText(scheme).string(),
+            authority: authority,
+            path: path,
+            query: match query {
+                case Maybe.some(text) {
+                    UrlQuery(text);
+                }
+                else {
+                    UrlQuery();
+                }
+            },
+            fragment: match fragment {
+                case Maybe.some(text) {
+                    UrlFragment(text);
+                }
+                else {
+                    UrlFragment();
+                }
+            },
+        );
+    }
+}
+
+// The canonical scalars of structured pieces.
+hidden object UrlCanonical {
+    has pieces is UrlPieces;
+
+    UrlCanonical(:pieces);
+
+    scheme() is string {
+        pieces.scheme();
+    }
+
+    userinfo() is Maybe<string> {
+        let authority = pieces.authority();
+        if authority.present() && authority.userinfo().present() {
+            Maybe.some(authority.userinfo().string());
+        }
+        else {
+            Maybe<string>.none;
+        }
+    }
+
+    host() is Maybe<string> {
+        let authority = pieces.authority();
+        if authority.present() {
+            Maybe.some(authority.host().string());
+        }
+        else {
+            Maybe<string>.none;
+        }
+    }
+
+    port() is Maybe<int> {
+        let authority = pieces.authority();
+        if authority.present() && authority.port_marker().string() != "" {
+            Maybe.some(authority.port());
+        }
+        else {
+            Maybe<int>.none;
+        }
+    }
+
+    path() is string {
+        pieces.path();
+    }
+
+    query() is Maybe<string> {
+        if pieces.query().present() {
+            Maybe.some(pieces.query().string());
+        }
+        else {
+            Maybe<string>.none;
+        }
+    }
+
+    fragment() is Maybe<string> {
+        if pieces.fragment().present() {
+            Maybe.some(pieces.fragment().string());
+        }
+        else {
+            Maybe<string>.none;
+        }
+    }
+
+    parts() is UrlParts {
+        UrlParts(
+            scheme: self.scheme(),
+            userinfo: self.userinfo(),
+            host: self.host(),
+            port: self.port(),
+            path: self.path(),
+            query: self.query(),
+            fragment: self.fragment(),
+        );
     }
 }
 
 test "query presence and reserved escapes survive canonicalization" {
-    test.ok(UrlQuery()!=UrlQuery(""));
-    test.is(UrlQuery("%7e%2f").string(),"~%2F");
+    test.ok(UrlQuery() != UrlQuery(""));
+    test.is(UrlQuery("%7e%2f").string(), "~%2F");
 }
+
 test "authority presence includes empty userinfo and unassigned port" {
-    test.is(ParsedUrlAuthority("@example:").value().string(),"@example:");
+    test.is(ParsedUrlAuthority("@example:").authority().string(), "@example:");
     test.ok(!UrlAuthority().present());
-    test.ok(ParsedUrlAuthority("").value().present());
+    test.ok(ParsedUrlAuthority("").authority().present());
 }
+
 test "explicit URL reference resolution preserves empty query and trailing slash" {
-    let base=ParsedUrl("http://a/b/c?q#old").value();
-    test.is(base.url(ParsedUrlReference("../g/").value()).string(),"http://a/g/");
-    test.is(base.url(ParsedUrlReference("?").value()).string(),"http://a/b/c?");
+    let base = ParsedUrl("http://a/b/c?q#old").parts();
+    test.is(base.resolved(ParsedUrl("../g/").parts()).string(), "http://a/g/");
+    test.is(base.resolved(ParsedUrl("?").parts()).string(), "http://a/b/c?");
 }

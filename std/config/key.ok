@@ -1,40 +1,130 @@
 module config/key v1.0.0;
+
+// Setting keys: names made of parts, written `server.port`.
+//
+//     let key = SettingKey("server", "port");
+//     key.string();                                          // "server.port"
+//     SettingKeyFromString(origin: "server/port", separator: "/").key();
+
 import "collections/sequence" take Sequencing;
-import "compare" take Comparing,Order;
+import "compare" take Comparing, Order;
 
 // Exact segments are identity; string() is deliberately diagnostic.
 object SettingKey does Comparing<SettingKey> {
     has parts is @string;
+
+    // A key of these parts, none empty.
     SettingKey(segments is Sequencing<string>) {
-        let size=segments.size();
-        confirm size>0 && size<=64 else throw InvalidSettingKey.because("key must have 1..64 segments");
-        let snapshot is @string=(0..size).map()->index{
-            let part=segments.item(index);
-            confirm part!="" else throw InvalidSettingKey.because("empty key segment");
+        let size = segments.size();
+        confirm size > 0 && size <= 64
+            else throw InvalidSettingKey.because("key must have 1..64 segments");
+        let snapshot is @string = (0..size).map() -> index {
+            let part = segments.item(index);
+            confirm part != "" else throw InvalidSettingKey.because("empty key segment");
             part;
         };
-        let length=snapshot.reduce(0)->used,part{used+part.length();};
-        confirm length<=4096 else throw InvalidSettingKey.because("key exceeds 4096 scalars");
-        parts=snapshot;
-    }
-    segments() is Sequencing<string>{parts;}
-    string() is string{parts.join(".");}
-    order(other is SettingKey) is Order{
-        let right=other.segments();
-        let count=if parts.size()<right.size(){parts.size();}else{right.size();};
-        let prefix=(0..count).reduce(Order.equal)->old,index{
-            if old==Order.equal{parts[index].order(right.item(index));}else{old;}
+        let length = snapshot.reduce(0) -> used, part {
+            used + part.length();
         };
-        if prefix==Order.equal{parts.size().order(right.size());}else{prefix;}
+        confirm length <= 4096 else throw InvalidSettingKey.because("key exceeds 4096 scalars");
+        parts = snapshot;
+    }
+
+    // The same, one argument per part: SettingKey(a, b).
+    SettingKey(segments is ...string) {
+        let listed is @string = segments...;
+        let size = listed.size();
+        confirm size > 0 && size <= 64
+            else throw InvalidSettingKey.because("key must have 1..64 listed");
+        let snapshot is @string = (0..size).map() -> index {
+            let part = listed.item(index);
+            confirm part != "" else throw InvalidSettingKey.because("empty key segment");
+            part;
+        };
+        let length = snapshot.reduce(0) -> used, part {
+            used + part.length();
+        };
+        confirm length <= 4096 else throw InvalidSettingKey.because("key exceeds 4096 scalars");
+        parts = snapshot;
+    }
+
+    // Its parts.
+    segments() is Sequencing<string> {
+        parts;
+    }
+
+    // The parts joined with `.`.
+    string() is string {
+        parts.join(".");
+    }
+
+    // Orders part by part.
+    order(other is SettingKey) is Order {
+        let right = other.segments();
+        let count = if parts.size() < right.size() {
+            parts.size();
+        }
+        else {
+            right.size();
+        };
+        let prefix = (0..count).reduce(Order.equal) -> old, index {
+            if old == Order.equal {
+                parts[index].order(right.item(index));
+            }
+            else {
+                old;
+            }
+        };
+        if prefix == Order.equal {
+            parts.size().order(right.size());
+        }
+        else {
+            prefix;
+        }
     }
 }
-object SettingKeyFromString{
-    has origin,separator is string;
-    SettingKeyFromString(origin is string,separator is string){self.origin=origin;self.separator=separator;}
-    value() is SettingKey{
-        confirm separator!="" else throw InvalidSettingKey.because("empty key separator");
-        confirm origin.length()<=4096 else throw InvalidSettingKey.because("key exceeds 4096 scalars");
+
+// A key read from text with a separator.
+object SettingKeyFromString {
+    has origin, separator is string;
+
+    // origin split at separator.
+    SettingKeyFromString(origin is string, separator is string) {
+        self.origin = origin;
+        self.separator = separator;
+    }
+
+    // The key; InvalidSettingKey for an empty part.
+    key() is SettingKey {
+        confirm separator != "" else throw InvalidSettingKey.because("empty key separator");
+        confirm origin.length() <= 4096
+            else throw InvalidSettingKey.because("key exceeds 4096 scalars");
         SettingKey(origin.split(separator));
     }
 }
+
+// A key with no parts or an empty part.
 enum InvalidSettingKey is Error = (because(reason is string));
+
+test "a setting key is its segments; the string form is for diagnostics" {
+    let key = SettingKeyFromString(origin: "db.pool.size", separator: ".").key();
+    test.is(key.segments().size(), 3);
+    test.is(key.string(), "db.pool.size");
+    test.is(
+        SettingKeyFromString(origin: "DB__POOL", separator: "__").key().segments().last(),
+        "POOL"
+    );
+    test.is(SettingKey("a.b").order(SettingKey("a", "b")) == Order.equal, false);
+    test.is(SettingKey("a").order(SettingKey("a", "b")), Order.less);
+    test.is(SettingKey("b").order(SettingKey("a", "z")), Order.greater);
+    test.throws(InvalidSettingKey) {
+        SettingKeyFromString(origin: "a..b", separator: ".").key();
+    };
+    test.throws(InvalidSettingKey) {
+        SettingKeyFromString(origin: "a", separator: "").key();
+    };
+    test.throws(InvalidSettingKey) {
+        let nothing is @string = [];
+        SettingKey(nothing);
+    };
+}

@@ -1,42 +1,156 @@
 module crypto/x509/name v1.0.0;
+
+// Distinguished names: the subject and issuer of a certificate, kept as their
+// RDN groups in DER order.
+//
+//     for certificate.subject().relative_names() -> group {
+//         for group.attributes() -> attribute { attribute.identifier(); attribute.value(); }
+//     }
+
 import "collections/sequence" take Sequencing;
 import "regex/pattern" take Regex;
 import "regex/search" take RegexMatches;
-import "strings/parse" take ParsedInt;
+import "strings/parse" take Number;
 
+// One attribute: an OID and its text, such as 2.5.4.3 (CN).
 object NameAttribute {
-    has identifier,value is string;
-    NameAttribute(identifier is string,value is string){
-        confirm identifier.length()<=1024 && value.length()<=4096 else throw InvalidDistinguishedName.because("attribute limit exceeded");
-        confirm RegexMatches(identifier,Regex("^[012]\\.(?:0|[1-9][0-9]*)(?:\\.(?:0|[1-9][0-9]*))*$")).found()
+    has identifier, value is string;
+
+    // As given.
+    NameAttribute(identifier is string, value is string) {
+        confirm identifier.length() <= 1024 && value.length() <= 4096
+            else throw InvalidDistinguishedName.because("attribute limit exceeded");
+        confirm RegexMatches(
+            origin: identifier,
+            regex: Regex("^[012]\\.(?:0|[1-9][0-9]*)(?:\\.(?:0|[1-9][0-9]*))*$")
+        ).found()
             else throw InvalidDistinguishedName.because("canonical dotted OID required");
-        let parts=identifier.split(".");confirm parts.size()<=128 else throw InvalidDistinguishedName.because("OID arc limit exceeded");
-        if parts[0]!="2"{confirm parts[1].length()<=2 && ParsedInt(parts[1]).value()<=39 else throw InvalidDistinguishedName.because("OID second arc outside root range");}
-        self.identifier=identifier;self.value=value;
+        let parts = identifier.split(".");
+        confirm parts.size() <= 128
+            else throw InvalidDistinguishedName.because("OID arc limit exceeded");
+        if parts[0] != "2" {
+            confirm parts[1].length() <= 2 && Number(parts[1]).int() <= 39
+                else throw InvalidDistinguishedName.because("OID second arc outside root range");
+        }
+        self.identifier = identifier;
+        self.value = value;
     }
-    identifier() is string{identifier;}value() is string{value;}
+
+    // The OID.
+    identifier() is string {
+        identifier;
+    }
+
+    // The text.
+    value() is string {
+        value;
+    }
 }
+
+// One RDN: a group of attributes.
 object RelativeDistinguishedName {
-    has origin is @NameAttribute;has cost is int;
-    RelativeDistinguishedName(attributes is Sequencing<NameAttribute>){
-        let count=attributes.size();confirm count>0 && count<=32 else throw InvalidDistinguishedName.because("RDN attribute count outside limits");
-        let values is @NameAttribute=(0..count).map()->index{attributes.item(index);};
-        let cost=values.reduce(0)->sum,item{sum+item.identifier().length()+item.value().length();};
-        confirm cost<=65536 else throw InvalidDistinguishedName.because("RDN scalar budget exceeded");origin=values;self.cost=cost;
+    has origin is @NameAttribute;
+    has cost is int;
+
+    // The attributes, at most 32.
+    RelativeDistinguishedName(attributes is Sequencing<NameAttribute>) {
+        let count = attributes.size();
+        confirm count > 0 && count <= 32
+            else throw InvalidDistinguishedName.because("RDN attribute count outside limits");
+        let values is @NameAttribute = (0..count).map() -> index {
+            attributes.item(index);
+        };
+        let cost = values.reduce(0) -> sum, item {
+            sum + item.identifier().length() + item.value().length();
+        };
+        confirm cost <= 65536
+            else throw InvalidDistinguishedName.because("RDN scalar budget exceeded");
+        origin = values;
+        self.cost = cost;
     }
-    attributes() is Sequencing<NameAttribute>{origin;}scalars() is int{cost;}
+
+    // The same, one argument per part: RelativeDistinguishedName(a, b).
+    RelativeDistinguishedName(attributes is ...NameAttribute) {
+        let listed is @NameAttribute = attributes...;
+        let count = listed.size();
+        confirm count > 0 && count <= 32
+            else throw InvalidDistinguishedName.because("RDN attribute count outside limits");
+        let values is @NameAttribute = (0..count).map() -> index {
+            listed.item(index);
+        };
+        let cost = values.reduce(0) -> sum, item {
+            sum + item.identifier().length() + item.value().length();
+        };
+        confirm cost <= 65536
+            else throw InvalidDistinguishedName.because("RDN scalar budget exceeded");
+        origin = values;
+        self.cost = cost;
+    }
+
+    // The attributes.
+    attributes() is Sequencing<NameAttribute> {
+        origin;
+    }
+
+    // How many characters they hold.
+    scalars() is int {
+        cost;
+    }
 }
+
+// A distinguished name.
 object DistinguishedName {
     has origin is @RelativeDistinguishedName;
-    DistinguishedName(relative_names is Sequencing<RelativeDistinguishedName>){
-        let count=relative_names.size();confirm count>=0 && count<=128 else throw InvalidDistinguishedName.because("DN group count outside limits");
-        let values is @RelativeDistinguishedName=(0..count).map()->index{relative_names.item(index);};
-        let cost=values.reduce(0)->sum,item{sum+item.scalars();};confirm cost<=65536 else throw InvalidDistinguishedName.because("DN scalar budget exceeded");origin=values;
+
+    // The RDNs, in order.
+    DistinguishedName(relative_names is Sequencing<RelativeDistinguishedName>) {
+        let count = relative_names.size();
+        confirm count >= 0 && count <= 128
+            else throw InvalidDistinguishedName.because("DN group count outside limits");
+        let values is @RelativeDistinguishedName = (0..count).map() -> index {
+            relative_names.item(index);
+        };
+        let cost = values.reduce(0) -> sum, item {
+            sum + item.scalars();
+        };
+        confirm cost <= 65536
+            else throw InvalidDistinguishedName.because("DN scalar budget exceeded");
+        origin = values;
     }
-    relative_names() is Sequencing<RelativeDistinguishedName>{origin;}
+
+    // The same, one argument per part: DistinguishedName(a, b).
+    DistinguishedName(relative_names is ...RelativeDistinguishedName) {
+        let listed is @RelativeDistinguishedName = relative_names...;
+        let count = listed.size();
+        confirm count >= 0 && count <= 128
+            else throw InvalidDistinguishedName.because("DN group count outside limits");
+        let values is @RelativeDistinguishedName = (0..count).map() -> index {
+            listed.item(index);
+        };
+        let cost = values.reduce(0) -> sum, item {
+            sum + item.scalars();
+        };
+        confirm cost <= 65536
+            else throw InvalidDistinguishedName.because("DN scalar budget exceeded");
+        origin = values;
+    }
+
+    // The RDNs.
+    relative_names() is Sequencing<RelativeDistinguishedName> {
+        origin;
+    }
 }
+
+// A name that is not valid; reason says why.
 enum InvalidDistinguishedName is Error = (because(reason is string));
+
 test "two attributes in one RDN retain their membership" {
-    let name=DistinguishedName([RelativeDistinguishedName([NameAttribute("2.5.4.3","a"),NameAttribute("2.5.4.10","b")])]);
-    test.is(name.relative_names().size(),1);test.is(name.relative_names().item(0).attributes().size(),2);
+    let name = DistinguishedName(
+        RelativeDistinguishedName(
+            NameAttribute(identifier: "2.5.4.3", value: "a"),
+            NameAttribute(identifier: "2.5.4.10", value: "b")
+        )
+    );
+    test.is(name.relative_names().size(), 1);
+    test.is(name.relative_names().item(0).attributes().size(), 2);
 }

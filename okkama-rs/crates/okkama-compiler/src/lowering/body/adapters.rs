@@ -59,7 +59,7 @@ pub(super) fn lower_method(
         (AdapterKind::Sequence, "item") => {
             let items = a.field(ctx, 0);
             let item = a.get(ctx, items, values[1]);
-            let item = a.cross(item, &result_ty)?;
+            let item = a.cross(ctx, item, &result_ty)?;
             a.ret(item);
         }
         (AdapterKind::Sequence, name @ ("first" | "last")) => {
@@ -80,7 +80,7 @@ pub(super) fn lower_method(
             };
             let message = format!("Cannot read {name} item of an empty sequence");
             let item = a.lookup(ctx, items, index, message);
-            let item = a.cross(item, &result_ty)?;
+            let item = a.cross(ctx, item, &result_ty)?;
             a.ret(item);
         }
         (AdapterKind::Sequence, "cursor") => {
@@ -103,7 +103,7 @@ pub(super) fn lower_method(
             let items = a.field(ctx, 0);
             let at = a.field(ctx, 1);
             let item = a.lookup(ctx, items, at, "Array cursor is exhausted".to_string());
-            let item = a.cross(item, &result_ty)?;
+            let item = a.cross(ctx, item, &result_ty)?;
             a.ret(item);
         }
         (AdapterKind::Cursor, "successor") => {
@@ -214,105 +214,6 @@ pub(super) fn lower_new(
         params,
         result: ResultType::Value(Type::Object(object)),
         attrs: vec![Attr::Ctor(object)],
-        values,
-        blocks,
-        span,
-    })
-}
-
-pub(super) fn lower_variant_get(
-    ctx: &mut Ctx<'_, '_>,
-    symbol: String,
-    object: ObjectId,
-    field: usize,
-) -> Result<ir::Function> {
-    let span = ctx.objects[object.0].span;
-    let ty = ctx.objects[object.0].fields[field].1.clone();
-    let mut b = FnBuilder::new();
-    let receiver = b.new_value(Type::Object(object));
-    if let Some(case) = ctx.variant_field_case(object, field) {
-        let tag = b.emit(
-            InstKind::ObjGet {
-                object: receiver,
-                field: 0,
-            },
-            Type::Int,
-            span,
-        );
-        let expected = b.emit(
-            InstKind::Const(Constant::Int(IntValue::parse(&case.to_string()).unwrap())),
-            Type::Int,
-            span,
-        );
-        let matches = b.emit(
-            InstKind::IntCompare {
-                op: CompareOp::Eq,
-                left: tag,
-                right: expected,
-            },
-            Type::Bool,
-            span,
-        );
-        let found = b.new_block();
-        let invalid = b.new_block();
-        b.terminate(
-            TermKind::Cond {
-                condition: matches,
-                then_target: Target::new(found),
-                else_target: Target::new(invalid),
-            },
-            span,
-        );
-        b.switch_to(invalid);
-        b.terminate(
-            TermKind::Trap {
-                code: TrapCode::Empty,
-                message: "Cannot extract payload of an inactive enum variant".into(),
-            },
-            span,
-        );
-        b.switch_to(found);
-    }
-    let value = b.emit(
-        InstKind::ObjGet {
-            object: receiver,
-            field,
-        },
-        ty.clone(),
-        span,
-    );
-    let (value, ty) = if field > 0 {
-        let Type::Array(inner) = ty else {
-            return Err(internal(span, "variant payload slot must be an array"));
-        };
-        let zero = b.emit(
-            InstKind::Const(Constant::Int(IntValue::from_i64(0))),
-            Type::Int,
-            span,
-        );
-        (
-            b.emit(
-                InstKind::ArrayGet {
-                    array: value,
-                    index: zero,
-                },
-                (*inner).clone(),
-                span,
-            ),
-            *inner,
-        )
-    } else {
-        (value, ty)
-    };
-    b.terminate(TermKind::Ret(Some(value)), span);
-    let (values, blocks, params) = b
-        .finish(&[receiver])
-        .map_err(|message| internal(span, &message))?;
-    Ok(ir::Function {
-        symbol,
-        params,
-        result: ResultType::Value(ty),
-        attrs: vec![Attr::Method(object)],
         values,
         blocks,
         span,
@@ -445,20 +346,71 @@ impl Adapter {
     }
 
     /// Элемент массива на границе элемента роли.
-    fn cross(&mut self, value: ValueId, target: &Type) -> Result<ValueId> {
+    fn cross(&mut self, ctx: &mut Ctx<'_, '_>, value: ValueId, target: &Type) -> Result<ValueId> {
         let ty = self.b.value_type(value).clone();
         if ty == *target {
             return Ok(value);
         }
         match (&ty, target) {
-            (Type::Object(_), Type::Role(_)) => {
+            (Type::Object(_) | Type::Variant(_), Type::Role(_)) => {
                 Ok(self.emit(InstKind::RoleWrap(value), target.clone()))
             }
+            // An inner array becomes a role of its own through the same
+            // builtin adapter a top-level array gets: `@@string` as
+            // `Sequencing<Sequencing<string>>` (#488). Deeper nesting follows,
+            // because the inner adapter's actions cross their items in turn.
+            (Type::Array(_), Type::Role(_)) => self.nested(ctx, value, target),
             _ => Err(LoweringError::unsupported(
                 self.span,
-                "IR lowering of builtin role adapters (arrays and scalars as roles) is not implemented yet.",
+                "IR lowering of builtin role adapters (scalars as roles) is not implemented yet.",
             )),
         }
+    }
+
+    /// `value` (an element of type S, an array) as the role T of this
+    /// adapter's `ArraySequence<S, T>` / `ArrayCursor<S, T>` instance.
+    fn nested(&mut self, ctx: &mut Ctx<'_, '_>, value: ValueId, target: &Type) -> Result<ValueId> {
+        let unsupported = |span| {
+            LoweringError::unsupported(span, "IR lowering of this nested array role is not implemented yet.")
+        };
+        let env = &ctx.objects[self.object.0].env;
+        let (Some((_, source)), Some((_, role))) = (env.first(), env.get(1)) else {
+            return Err(internal(self.span, "array adapter without its element types"));
+        };
+        let (Ty::Array(inner), Ty::Role(role_id, role_args)) = (source.clone(), role.clone()) else {
+            return Err(unsupported(self.span));
+        };
+        let standard = ctx.reg.standard;
+        if ![standard.sequencing, standard.iterating, standard.sizing].contains(&Some(role_id)) {
+            return Err(unsupported(self.span));
+        }
+        let mut element = role_args.first().cloned().unwrap_or_else(|| (*inner).clone());
+        if element == Ty::Never {
+            element = Ty::Int;
+        }
+        let from = if *inner == Ty::Never { element.clone() } else { (*inner).clone() };
+        let decl = ctx
+            .reg
+            .adapters
+            .array_sequence
+            .ok_or_else(|| internal(self.span, "no Sequencing role for array adapters"))?;
+        let adapter = ctx.object_instance(decl, vec![from, element], self.span)?;
+        // An untagged `[]` takes the adapter field's type.
+        let field = ctx.objects[adapter.0].fields[0].1.clone();
+        let items = if *self.b.value_type(value) == field {
+            value
+        } else {
+            self.emit(InstKind::Retag(value), field)
+        };
+        let ctor = ctx.adapter_ctor(adapter);
+        let object = self.emit(
+            InstKind::Call {
+                func: ctor,
+                args: vec![items],
+            },
+            Type::Object(adapter),
+        );
+        Ok(self.emit(InstKind::RoleWrap(object), target.clone()))
     }
 
     /// Курсор `ArrayCursor<S, T>` с позиции `at`, как ссылка `Cursor<T>`.
@@ -502,26 +454,19 @@ fn internal(span: Span, message: &str) -> LoweringError {
 pub(super) fn lower_variant_text(
     ctx: &mut Ctx<'_, '_>,
     symbol: String,
-    object: ObjectId,
+    variant: ir::VariantId,
 ) -> Result<ir::Function> {
-    let span = ctx.objects[object.0].span;
-    let Some(Ty::Variant(id, args)) = ctx.variant_ty(object) else {
-        return Err(internal(span, "variant text of a non-variant object"));
+    let span = ctx.variants[variant.0].span;
+    let Some(Ty::Variant(id, args)) = ctx.variant_ty(variant) else {
+        return Err(internal(span, "variant text of a non-variant type"));
     };
     let reg = ctx.reg;
     let decl = &reg.enums[id.0];
     let env: Vec<_> = decl.params.iter().copied().zip(args).collect();
+    let cases = ctx.variants[variant.0].cases.clone();
     let mut b = FnBuilder::new();
-    let receiver = b.new_value(Type::Object(object));
-    let tag = b.emit(
-        InstKind::ObjGet {
-            object: receiver,
-            field: 0,
-        },
-        Type::Int,
-        span,
-    );
-    let mut offset = 1;
+    let receiver = b.new_value(Type::Variant(variant));
+    let tag = b.emit(InstKind::VariantTag(receiver), Type::Int, span);
     for (case, payload) in decl.payloads.iter().enumerate() {
         let expected = b.emit(
             InstKind::Const(Constant::Int(IntValue::from_i64(case as i64))),
@@ -551,33 +496,19 @@ pub(super) fn lower_variant_text(
         let mut text = text_const(&mut b, &format!("{}.{}", decl.name, decl.cases[case]), span);
         if !payload.is_empty() {
             text = append(&mut b, text, "(", span);
-            for (index, (_, field_ty)) in payload.iter().enumerate() {
-                if index > 0 {
+            for (field, (_, field_ty)) in payload.iter().enumerate() {
+                if field > 0 {
                     text = append(&mut b, text, ", ", span);
                 }
-                let field = offset + index;
-                let Type::Array(inner) = ctx.objects[object.0].fields[field].1.clone() else {
-                    return Err(internal(span, "variant payload slot must be an array"));
-                };
-                let slot = b.emit(
-                    InstKind::ObjGet {
-                        object: receiver,
+                let object = cases[case].1;
+                let ty = ctx.objects[object.0].fields[field].1.clone();
+                let value = b.emit(
+                    InstKind::VariantGet {
+                        value: receiver,
+                        case,
                         field,
                     },
-                    Type::Array(inner.clone()),
-                    span,
-                );
-                let zero = b.emit(
-                    InstKind::Const(Constant::Int(IntValue::from_i64(0))),
-                    Type::Int,
-                    span,
-                );
-                let value = b.emit(
-                    InstKind::ArrayGet {
-                        array: slot,
-                        index: zero,
-                    },
-                    (*inner).clone(),
+                    ty,
                     span,
                 );
                 let shown = show(ctx, &mut b, value, &field_ty.subst(&env), span)?;
@@ -587,7 +518,6 @@ pub(super) fn lower_variant_text(
         }
         b.terminate(TermKind::Ret(Some(text)), span);
         b.switch_to(next);
-        offset += payload.len();
     }
     b.terminate(
         TermKind::Trap {
@@ -603,7 +533,93 @@ pub(super) fn lower_variant_text(
         symbol,
         params,
         result: ResultType::Value(Type::Str),
+        attrs: Vec::new(),
+        values,
+        blocks,
+        span,
+    })
+}
+
+/// Слот `text()` роли Error у случая error enum: значение случая как
+/// значение его варианта, затем текст варианта.
+pub(super) fn lower_case_text(
+    ctx: &mut Ctx<'_, '_>,
+    symbol: String,
+    object: ObjectId,
+) -> Result<ir::Function> {
+    let span = ctx.objects[object.0].span;
+    let Some((variant, _)) = ctx.case_of(object) else {
+        return Err(internal(span, "case text of an object that is not a case"));
+    };
+    let text = ctx.variant_text(variant);
+    let mut b = FnBuilder::new();
+    let receiver = b.new_value(Type::Object(object));
+    let value = b.emit(InstKind::VariantOf(receiver), Type::Variant(variant), span);
+    let result = b.emit(
+        InstKind::Call {
+            func: text,
+            args: vec![value],
+        },
+        Type::Str,
+        span,
+    );
+    b.terminate(TermKind::Ret(Some(result)), span);
+    let (values, blocks, params) = b
+        .finish(&[receiver])
+        .map_err(|message| internal(span, &message))?;
+    Ok(ir::Function {
+        symbol,
+        params,
+        result: ResultType::Value(Type::Str),
         attrs: vec![Attr::Method(object)],
+        values,
+        blocks,
+        span,
+    })
+}
+
+/// Строка в синтаксисе литерала Okkama без кавычек: `\`, `"`, `\n`, `\t`, `\r`
+/// и прочие управляющие символы (`\u{1b}`) экранированы, остальное — как
+/// есть. Литеральные `replace`, обратный слэш — первым.
+pub(super) fn lower_escape_text(symbol: String) -> Result<ir::Function> {
+    let span = Span::empty(0);
+    let mut escapes: Vec<(String, String)> = vec![
+        ("\\".into(), "\\\\".into()),
+        ("\"".into(), "\\\"".into()),
+        ("\n".into(), "\\n".into()),
+        ("\t".into(), "\\t".into()),
+        ("\r".into(), "\\r".into()),
+    ];
+    for code in (0u32..0x20).chain([0x7f]) {
+        if ![0x09, 0x0a, 0x0d].contains(&code) {
+            let c = char::from_u32(code).expect("ASCII control");
+            escapes.push((c.to_string(), format!("\\u{{{code:x}}}")));
+        }
+    }
+    let mut b = FnBuilder::new();
+    let text = b.new_value(Type::Str);
+    let mut value = text;
+    for (from, to) in escapes {
+        let from = text_const(&mut b, &from, span);
+        let to = text_const(&mut b, &to, span);
+        value = b.emit(
+            InstKind::Str {
+                op: StrOp::Replace,
+                args: vec![value, from, to],
+            },
+            Type::Str,
+            span,
+        );
+    }
+    b.terminate(TermKind::Ret(Some(value)), span);
+    let (values, blocks, params) = b
+        .finish(&[text])
+        .map_err(|message| internal(span, &message))?;
+    Ok(ir::Function {
+        symbol,
+        params,
+        result: ResultType::Value(Type::Str),
+        attrs: Vec::new(),
         values,
         blocks,
         span,
@@ -701,8 +717,11 @@ fn show(
     span: Span,
 ) -> Result<ValueId> {
     Ok(match ty {
+        // In Okkama literal syntax (#306): `Ferr.text("a \"q\"\n")`.
         Ty::Str => {
-            let quoted = append_to(b, "\"", value, span);
+            let func = ctx.escape_text();
+            let escaped = b.emit(InstKind::Call { func, args: vec![value] }, Type::Str, span);
+            let quoted = append_to(b, "\"", escaped, span);
             append(b, quoted, "\"", span)
         }
         Ty::Int | Ty::Byte | Ty::Float | Ty::Rat => b.emit(InstKind::Cvt(value), Type::Str, span),
@@ -718,10 +737,10 @@ fn show(
             )
         }
         Ty::Variant(..) => {
-            let Type::Object(object) = ctx.ir_type(ty, span)? else {
-                return Err(internal(span, "a variant lowers to an object"));
+            let Type::Variant(variant) = ctx.ir_type(ty, span)? else {
+                return Err(internal(span, "a variant lowers to a variant"));
             };
-            let func = ctx.variant_text(object);
+            let func = ctx.variant_text(variant);
             b.emit(
                 InstKind::Call {
                     func,

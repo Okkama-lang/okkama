@@ -149,8 +149,6 @@ fn member_node(member: &ObjectMember) -> Node {
         }
         ObjectMember::Test(decl) => test_node(decl),
         ObjectMember::Action(decl) => action_node(decl),
-        ObjectMember::Private(section) => Node::new("PrivateSection", section.span)
-            .field("actions", list(&section.actions, action_node)),
     }
 }
 
@@ -343,10 +341,19 @@ fn stmt_node(stmt: &Stmt) -> Node {
             name: binding,
             ty,
             value,
-        } => Node::new("LetStatement", span)
-            .field("name", name(binding))
-            .field("type", opt_node(ty.as_ref(), type_node))
-            .field("value", Value::node(expr_node(value))),
+            once,
+        } => {
+            let node = Node::new("LetStatement", span)
+                .field("name", name(binding))
+                .field("type", opt_node(ty.as_ref(), type_node))
+                .field("value", Value::node(expr_node(value)));
+            // Only `once let` carries the field, so plain lets print as before.
+            if *once {
+                node.field("once", Value::Bool(true))
+            } else {
+                node
+            }
+        }
         StmtKind::Defer { value } => {
             Node::new("DeferStatement", span).field("value", Value::node(expr_node(value)))
         }

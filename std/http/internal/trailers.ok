@@ -1,22 +1,88 @@
 module http/internal/trailers v1.0.0;
+
+// Which fields may be trailers, for HTTP/1.1 and HTTP/2 alike.
+//
+// Internal to the http modules; programs do not import it.
+
 import "http/header" take Header;
 import "http/message" take InvalidHttpMessage;
+import "http/header" take HeaderName;
 
 // Shared conservative trailer policy for HTTP1 and HTTP2. HTTP1 additionally
 // provides Connection-nominated names; HTTP2 forbids Connection altogether.
 object HttpTrailerRules {
-    has forbidden,nominated is @string;
-    HttpTrailerRules(nominated is @string){
-        self.nominated=nominated;
-        forbidden=["content-length","transfer-encoding","host","connection","trailer","te","upgrade","keep-alive","proxy-connection",
-            "authorization","proxy-authorization","www-authenticate","proxy-authenticate","content-encoding","content-type","content-range",
-            "expect","max-forwards","range","cookie","set-cookie","if-match","if-none-match","if-modified-since","if-unmodified-since","if-range",
-            "cache-control","pragma","age","date","expires","vary","warning","retry-after","location","content-language","content-location","content-disposition"];
+    has forbidden, nominated is @string;
+
+    // The rules, with the names Connection nominated.
+    HttpTrailerRules(nominated is @string) {
+        self.nominated = nominated;
+        forbidden = [
+            "content-length",
+            "transfer-encoding",
+            "host",
+            "connection",
+            "trailer",
+            "te",
+            "upgrade",
+            "keep-alive",
+            "proxy-connection",
+            "authorization",
+            "proxy-authorization",
+            "www-authenticate",
+            "proxy-authenticate",
+            "content-encoding",
+            "content-type",
+            "content-range",
+            "expect",
+            "max-forwards",
+            "range",
+            "cookie",
+            "set-cookie",
+            "if-match",
+            "if-none-match",
+            "if-modified-since",
+            "if-unmodified-since",
+            "if-range",
+            "cache-control",
+            "pragma",
+            "age",
+            "date",
+            "expires",
+            "vary",
+            "warning",
+            "retry-after",
+            "location",
+            "content-language",
+            "content-location",
+            "content-disposition"
+        ];
     }
-    check(entry is Header) is void{
-        let name=entry.name().lowercase();let banned is bool=forbidden.reduce(false)->found,value{found || value==name;};
+
+    // Throws InvalidHttpMessage when entry may not be a trailer.
+    check(entry is Header) is void {
+        let name = entry.name().lowercase();
+        let banned is bool = forbidden.reduce(false) -> found, value {
+            found || value == name;
+        };
         confirm !banned else throw InvalidHttpMessage.because("forbidden trailer field");
-        let connection is bool=nominated.reduce(false)->found,value{found || value==name;};
-        confirm !connection else throw InvalidHttpMessage.because("Connection nominated trailer field");
+        let connection is bool = nominated.reduce(false) -> found, value {
+            found || value == name;
+        };
+        confirm !connection
+            else throw InvalidHttpMessage.because("Connection nominated trailer field");
     }
+}
+
+test "trailers refuse framing and routing fields, and the ones Connection nominates" {
+    let rules = HttpTrailerRules(["x-debug"]);
+    rules.check(Header(name: HeaderName("X-Checksum"), value: "abc"));
+    test.throws(InvalidHttpMessage) {
+        rules.check(Header(name: HeaderName("Content-Length"), value: "3"));
+    };
+    test.throws(InvalidHttpMessage) {
+        rules.check(Header(name: HeaderName("Set-Cookie"), value: "a=b"));
+    };
+    test.throws(InvalidHttpMessage) {
+        rules.check(Header(name: HeaderName("X-Debug"), value: "1"));
+    };
 }

@@ -1,31 +1,36 @@
 module regex/split v1.0.0;
 
-import "collections/iteration" take Cursor, Iterating, IterationEnded;
-import "regex/match" take RegexMatching;
-import "regex/pattern" take Regex;
-import "regex/search" take RegexMatches;
-
 // RegexParts is the collection itself. It does not wrap an array behind
 // values(), and it does not materialize the complete split before traversal.
 //
-//     let fields = RegexParts("one, two;three", Regex("[,;]\\s*"));
+//     let fields = RegexParts(origin: "one, two;three", regex: Regex("[,;]\\s*"));
 //     for fields -> field {
 //         Stdout().writeln(field);
 //     }
 //
 // An explicit limit counts separators, so a limit of 1 yields at most two
 // fields. Empty leading, adjacent and trailing fields are retained.
+
+import "collections/iteration" take Cursor, Iterating, IterationEnded;
+import "regex/match" take RegexMatching;
+import "regex/pattern" take Regex;
+import "regex/search" take RegexMatches;
+
+// A text cut at every match of a pattern: `RegexParts(origin: "a, b,c", regex:
+// Regex(",\\s*"))`.
 object RegexParts does Iterating<string> {
     has source is string;
     has pattern is Regex;
     has maximum is int;
 
+    // origin cut at every match.
     RegexParts(origin is string, regex is Regex) {
         source = origin;
         pattern = regex;
         maximum = -1;
     }
 
+    // origin cut at the first limit matches; the rest is the last part.
     RegexParts(origin is string, regex is Regex, limit is int) {
         confirm limit > 0 else throw InvalidRegexSplitLimit.limit(limit);
         source = origin;
@@ -33,10 +38,11 @@ object RegexParts does Iterating<string> {
         maximum = limit;
     }
 
+    // Walks the parts.
     cursor() is Cursor<string> {
         RegexPartsCursor(
             origin: source,
-            separators: RegexMatches(source, pattern).cursor(),
+            separators: RegexMatches(origin: source, regex: pattern).cursor(),
             offset: 0,
             remaining: maximum,
             final: false,
@@ -44,7 +50,7 @@ object RegexParts does Iterating<string> {
     }
 }
 
-object RegexPartsCursor does Cursor<string> {
+hidden object RegexPartsCursor does Cursor<string> {
     has source is string;
     has separators is Cursor<RegexMatching>;
     has offset is int;
@@ -65,12 +71,14 @@ object RegexPartsCursor does Cursor<string> {
         self.final = final;
     }
 
-    available() is bool { !final; }
+    available() is bool {
+        !final;
+    }
 
     item() is string {
         confirm self.available() else throw IterationEnded.ended;
         if self.separated() {
-            source.slice(offset, separators.item().range().start());
+            source.slice(offset, separators.item().range()::Bounds::start);
         }
         else {
             source.slice(offset, source.length());
@@ -83,8 +91,13 @@ object RegexPartsCursor does Cursor<string> {
             RegexPartsCursor(
                 origin: source,
                 separators: separators.successor(),
-                offset: separators.item().range().end(),
-                remaining: if remaining < 0 { -1; } else { remaining - 1; },
+                offset: separators.item().range()::Bounds::end,
+                remaining: if remaining < 0 {
+                    -1;
+                }
+                else {
+                    remaining - 1;
+                },
                 final: false,
             );
         }
@@ -99,10 +112,56 @@ object RegexPartsCursor does Cursor<string> {
         }
     }
 
-    private:
-    separated() is bool {
+    hidden separated() is bool {
         remaining != 0 && separators.available();
     }
 }
 
+// A negative limit.
 enum InvalidRegexSplitLimit is Error = (limit(limit is int));
+
+test "parts keep empty fields and honour a limit" {
+    let text = (parts is Iterating<string>) is string {
+        parts.map() -> part {
+            "[" + part + "]";
+        }.join("");
+    };
+    test.is(text(RegexParts(origin: ",a,,b,", regex: Regex(","))), "[][a][][b][]");
+    test.is(
+        text(RegexParts(origin: "one, two;three", regex: Regex("[,;]\\s*"))),
+        "[one][two][three]"
+    );
+    test.is(text(RegexParts(origin: "a,b,c", regex: Regex(","), limit: 1)), "[a][b,c]");
+    test.is(text(RegexParts(origin: "abc", regex: Regex(","))), "[abc]");
+    test.is(text(RegexParts(origin: "", regex: Regex(","))), "[]");
+    test.is(
+        try {
+            text(RegexParts(origin: "a,b", regex: Regex(","), limit: 0));
+        }
+        catch InvalidRegexSplitLimit.limit(limit) {
+            "limit " + limit.string();
+        },
+        "limit 0"
+    );
+}
+
+test "a regex splits the way RegexParts does" {
+    for [
+        [",", ",a,,b,"],
+        ["[,;]\\s*", "one, two;three"],
+        [",", "abc"],
+        [",", ""],
+        ["x*", "abc"],
+        ["\\s*", "a b"],
+        ["😀", "a😀😀b"],
+    ] -> pair {
+        let regex = Regex(pair[0]);
+        let eager = regex.parts(pair[1]).map() -> part {
+            "[" + part + "]";
+        }.join("");
+        let lazy = RegexParts(origin: pair[1], regex: regex).map() -> part {
+            "[" + part + "]";
+        }.join("");
+        test.is(eager, lazy);
+    }
+}

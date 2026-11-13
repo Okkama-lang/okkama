@@ -6,7 +6,7 @@ use crate::syntax::ParseMode;
 use crate::syntax::ast::{
     ActionDecl, ActionSignature, CapDecl, ComputedField, ConstDecl, ConstructorDecl, ConstructorForm,
     DestroyDecl, EnumDecl, FakeBody, FakeDecl, HasDecl, Item, Name, NativeActionDecl,
-    NativeObjectDecl, ObjectDecl, ObjectMember, Param, PrivateSection, RoleDecl, RoleMember,
+    NativeObjectDecl, ObjectDecl, ObjectMember, Param, RoleDecl, RoleMember,
     TestBody, TestDecl, Visibility,
 };
 use crate::syntax::token::{TokenKind, is_type_word};
@@ -278,44 +278,47 @@ impl Parser<'_> {
         self.consume(TokenKind::LeftBrace, "Expect \"{\" before object body.")?;
         let mut members = Vec::new();
         while !self.check(TokenKind::RightBrace) && !self.is_at_end() {
-            if self.eat(TokenKind::Private) {
-                members.push(ObjectMember::Private(self.private_section()?));
-                break;
-            }
             members.push(self.object_member(owner)?);
         }
         let close = self.consume(TokenKind::RightBrace, "Expect \"}\" after object body.")?;
         Ok((members, close.span))
     }
 
-    /// After `private`: `: action*` up to the end of the body. `private` is a
-    /// section marker, not a per-action modifier.
-    fn private_section(&mut self) -> PResult<PrivateSection> {
-        let keyword = self.previous().span;
-        let colon = self.consume(TokenKind::Colon, "Expect \":\" after \"private\".")?;
-        let mut actions = Vec::new();
-        while !self.check(TokenKind::RightBrace) && !self.is_at_end() {
-            self.reject_native_outside_module()?;
-            if self.eat(TokenKind::Amp) {
-                let token = self.previous().clone();
-                return Err(self.error_at(
-                    &token,
-                    "Constructor projections have been removed; use Type(args).method().",
-                ));
-            }
-            if self.eat(TokenKind::Hash) {
-                self.reject_action_directive()?;
-            }
-            actions.push(self.action_declaration(Visibility::Private)?);
+    /// `hidden` before an action (#365) is contextual: `hidden(` is an action
+    /// named `hidden`, and `hidden` before anything but an action is an error.
+    fn check_hidden_action(&self) -> bool {
+        self.check_name() && self.lexeme(self.peek()) == "hidden" && self.nth(1).kind != TokenKind::LeftParen
+    }
+
+    /// After `hidden`: the action it marks.
+    fn hidden_action(&mut self) -> PResult<ActionDecl> {
+        let start = self.advance().span;
+        self.reject_native_outside_module()?;
+        if self.check_type_name() && self.check_next(TokenKind::LeftParen) {
+            return Err(self.error_here(
+                "A constructor cannot be hidden: constructors are how the object is made, so they are always public.",
+            ));
         }
-        let end = actions.last().map_or(colon.span, |action| action.span);
-        Ok(PrivateSection {
-            actions,
-            span: keyword.to(end),
-        })
+        let other_member = (self.check(TokenKind::Has) && !self.check_next(TokenKind::LeftParen))
+            || self.check(TokenKind::Test)
+            || self.check_async_test()
+            || self.check(TokenKind::Destroy)
+            || (self.check(TokenKind::Async) && self.check_next(TokenKind::Destroy))
+            || self.check_cap_declaration();
+        if other_member || !(self.check_async_modifier() || self.check_name()) {
+            return Err(self.error_here(
+                "Inside an object only an action can be hidden, as in \"hidden secret() is int { ... }\".",
+            ));
+        }
+        let mut action = self.action_declaration(Visibility::Hidden)?;
+        action.span = start.to(action.span);
+        Ok(action)
     }
 
     fn object_member(&mut self, owner: Option<&Name>) -> PResult<ObjectMember> {
+        if self.check_hidden_action() {
+            return Ok(ObjectMember::Action(self.hidden_action()?));
+        }
         if self.check_name() && self.lexeme(self.peek()) == "static" && self.nth(1).kind != TokenKind::LeftParen {
             return Err(self.error_here(
                 "Okkama has no static members: shared state is an object passed in, and a helper is an action of a module-level object or a function value.",

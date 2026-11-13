@@ -1,20 +1,84 @@
 module xml/write v1.0.0;
+
+// Text escaped for XML.
+//
+//     EscapedXml(origin: "a < b & c", attribute: false).string();   // "a &lt; b &amp; c"
+
 import "xml/name" take InvalidXml;
 import "regex/pattern" take Regex;
-import "regex/search" take RegexMatches,FirstRegexMatch;
+import "regex/search" take RegexMatches, FirstRegexMatch;
+
+// Text checked to hold only characters XML allows.
 object XmlCharacters {
-    XmlCharacters(origin is string){
-        confirm origin.length()<=33554432 else throw InvalidXml.located(0, "XML text exceeds 32 Mi scalars");
-        let invalid=Regex("[\\x{0}-\\x{8}\\x{B}\\x{C}\\x{E}-\\x{1F}\\x{FFFE}\\x{FFFF}]");
-        if RegexMatches(origin,invalid).found(){throw InvalidXml.located(FirstRegexMatch(origin,invalid).range().start(), "character forbidden by XML 1.0");}
+    // Checks origin; InvalidXml for a character XML refuses.
+    XmlCharacters(origin is string) {
+        confirm origin.length() <= 33554432
+            else throw InvalidXml.located(0, "XML text exceeds 32 Mi scalars");
+        let invalid = Regex("[\\x{0}-\\x{8}\\x{B}\\x{C}\\x{E}-\\x{1F}\\x{FFFE}\\x{FFFF}]");
+        if RegexMatches(origin: origin, regex: invalid).found() {
+            throw InvalidXml.located(
+                FirstRegexMatch(origin: origin, regex: invalid).range()::Bounds::start,
+                "character forbidden by XML 1.0"
+            );
+        }
     }
 }
+
+// Text with `&`, `<` and `>` escaped, and quotes too inside an attribute.
 object EscapedXml {
-    has origin is string;has attribute is bool;
-    EscapedXml(origin is string,attribute is bool){XmlCharacters(origin);self.origin=origin;self.attribute=attribute;}
-    string() is string {
-        let escaped=origin.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\r","&#13;");
-        let text=if attribute{escaped.replace("\"","&quot;").replace("\t","&#9;").replace("\n","&#10;");}else{escaped;};
-        confirm text.length()<=33554432 else throw InvalidXml.located(0, "escaped XML exceeds 32 Mi scalars");text;
+    has origin is string;
+    has attribute is bool;
+
+    // Escapes origin, for an attribute value or for text.
+    EscapedXml(origin is string, attribute is bool) {
+        XmlCharacters(origin);
+        self.origin = origin;
+        self.attribute = attribute;
     }
+
+    // The escaped text.
+    string() is string {
+        let escaped = origin.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace(
+            "\r",
+            "&#13;"
+        );
+        let text = if attribute {
+            escaped.replace("\"", "&quot;").replace("\t", "&#9;").replace("\n", "&#10;");
+        }
+        else {
+            escaped;
+        };
+        confirm text.length() <= 33554432
+            else throw InvalidXml.located(0, "escaped XML exceeds 32 Mi scalars");
+        text;
+    }
+}
+
+test "text and attribute escaping differ only in quotes and whitespace" {
+    test.is(
+        EscapedXml(origin: "a<b & c>\"d\"", attribute: false).string(),
+        "a&lt;b &amp; c&gt;\"d\""
+    );
+    test.is(
+        EscapedXml(origin: "a<b & c>\"d\"", attribute: true).string(),
+        "a&lt;b &amp; c&gt;&quot;d&quot;"
+    );
+    test.is(EscapedXml(origin: "x\ty\nz\r", attribute: true).string(), "x&#9;y&#10;z&#13;");
+    test.is(EscapedXml(origin: "x\ty\nz\r", attribute: false).string(), "x\ty\nz&#13;");
+    test.is(EscapedXml(origin: "", attribute: false).string(), "");
+}
+
+test "characters XML 1.0 forbids are refused with their offset" {
+    test.ok(try {
+        XmlCharacters("ok\u{1}");
+        false;
+    }
+    catch InvalidXml.located(offset, reason) {
+        offset == 2 && reason == "character forbidden by XML 1.0";
+    });
+    test.throws(InvalidXml) {
+        EscapedXml(origin: "\u{FFFE}", attribute: false);
+    };
+    XmlCharacters("tab\tnewline\n é ✓");
+    test.ok(true);
 }

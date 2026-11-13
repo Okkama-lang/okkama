@@ -1,125 +1,337 @@
 module net/dns v1.0.0;
-import "net/endpoint" take HostName,HostEndpoint,IpEndpoint,InvalidHostName;
+
+// Names to addresses and back.
+//
+//     let resolver is Resolving = SystemResolution();
+//     let endpoints = await resolver.addresses(HostEndpoint(HostName("example.org"), 443));
+//     let name = await resolver.name(IpAddress("93.184.215.14"));
+//
+//     let fixed = FixedResolution(hosts: [HostAddresses(HostName("db"), [IpAddress("10.0.0.5")])]);
+//
+// Code takes a Resolving so tests can give a FixedResolution. SystemResolution
+// asks the operating system's resolver.
+
+import "net/endpoint" take HostName, HostEndpoint, IpEndpoint, InvalidHostName;
 import "runtime/network" as network;
-import "async/scope" take FutureGroup;
 import "net/ip" take IpAddress;
 import "collections/sequence" take Sequencing;
-import "collections/ordering" take Sorted,SortedBy;
-import "compare" take Comparing,Order;
+import "collections/ordering" take Sorted, SortedBy;
+import "compare" take Comparing, Order;
 import "error" take InvalidArgument;
 
+// A resolver of host names and addresses.
 role Resolving {
+    // The addresses of origin's host, each with origin's port; UnknownHost when
+    // there are none.
     async addresses(origin is HostEndpoint) is Sequencing<IpEndpoint>;
+    // The host name of origin; UnknownAddress when it has none.
     async name(origin is IpAddress) is HostName;
 }
+
 // Explicit configuration records, never native DNS wire records or object map
 // keys. Snapshot at construction; canonical identity and source order are exact.
 object HostAddresses {
-    has host is HostName;has origin is @IpAddress;
-    HostAddresses(host is HostName,addresses is Sequencing<IpAddress>){self.host=host;origin=DnsAddressSnapshot(addresses).items();}
-    host() is HostName{host;}addresses() is Sequencing<IpAddress>{origin;}
+    has host is HostName;
+    has origin is @IpAddress;
+
+    // host has addresses.
+    HostAddresses(host is HostName, addresses is Sequencing<IpAddress>) {
+        self.host = host;
+        origin = DnsAddressSnapshot(addresses).items();
+    }
+
+    // The host.
+    host() is HostName {
+        host;
+    }
+
+    // Its addresses.
+    addresses() is Sequencing<IpAddress> {
+        origin;
+    }
 }
+
+// The name an address answers to.
 object AddressName {
-    has address is IpAddress;has name is HostName;
-    AddressName(address is IpAddress,name is HostName){self.address=address;self.name=name;}
-    address() is IpAddress{address;}name() is HostName{name;}
+    has address is IpAddress;
+    has name is HostName;
+
+    // address is called name.
+    AddressName(address is IpAddress, name is HostName) {
+        self.address = address;
+        self.name = name;
+    }
+
+    // The address.
+    address() is IpAddress {
+        address;
+    }
+
+    // The name.
+    name() is HostName {
+        name;
+    }
 }
+
+// A resolver of fixed answers, for tests and pinned hosts.
 object FixedResolution does Resolving {
-    has hosts is @HostAddresses;has names is @AddressName;
-    FixedResolution(hosts is Sequencing<HostAddresses>){
-        let empty is @AddressName=[];let records=DnsConfiguration(hosts,empty);self.hosts=records.hosts();names=records.names();
+    has hosts is @HostAddresses;
+    has names is @AddressName;
+
+    // Answers names from hosts.
+    FixedResolution(hosts is Sequencing<HostAddresses>) {
+        let empty is @AddressName = [];
+        let records = DnsConfiguration(hosts: hosts, names: empty);
+        self.hosts = records.hosts();
+        names = records.names();
     }
-    FixedResolution(hosts is Sequencing<HostAddresses>,names is Sequencing<AddressName>){
-        let records=DnsConfiguration(hosts,names);self.hosts=records.hosts();self.names=records.names();
+
+    // The same, one argument per part: FixedResolution(a, b).
+    FixedResolution(hosts is ...HostAddresses) {
+        let listed is @HostAddresses = hosts...;
+        let empty is @AddressName = [];
+        let records = DnsConfiguration(hosts: listed, names: empty);
+        self.hosts = records.hosts();
+        names = records.names();
     }
+
+    // Names and their addresses as text:
+    // FixedResolution(["api.example.test": ["192.0.2.10", "2001:db8::10"]]).
+    FixedResolution(table is %string:@string) {
+        let hostnames = table.keys();
+        let texts = table.values();
+        let listed is @HostAddresses = (0..hostnames.size()).map() -> index {
+            let addresses is @IpAddress = texts[index].map() -> text {
+                IpAddress(text);
+            };
+            HostAddresses(host: HostName(hostnames[index]), addresses: addresses);
+        };
+        let empty is @AddressName = [];
+        let records = DnsConfiguration(hosts: listed, names: empty);
+        self.hosts = records.hosts();
+        names = records.names();
+    }
+
+    // Answers names from hosts and addresses from names.
+    FixedResolution(hosts is Sequencing<HostAddresses>, names is Sequencing<AddressName>) {
+        let records = DnsConfiguration(hosts: hosts, names: names);
+        self.hosts = records.hosts();
+        self.names = records.names();
+    }
+
+    // The fixed addresses of the host.
     async addresses(origin is HostEndpoint) is Sequencing<IpEndpoint> {
-        for hosts -> record {if record.host().order(origin.host())==Order.equal {
-            let source=record.addresses();let endpoints is @IpEndpoint=(0..source.size()).map()->index{IpEndpoint(source.item(index),origin.port());};return endpoints;
-        }}
+        for hosts -> record {
+            if record.host().order(origin.host()) == Order.equal {
+                let source = record.addresses();
+                let endpoints is @IpEndpoint = (0..source.size()).map() -> index {
+                    IpEndpoint(address: source.item(index), port: origin::Parts::port);
+                };
+                return endpoints;
+            }
+        }
         throw UnknownHost.host(origin.host().ascii());
     }
+
+    // The fixed name of the address.
     async name(origin is IpAddress) is HostName {
-        for names -> record{if record.address().order(origin)==Order.equal{return record.name();}}
+        for names -> record {
+            if record.address().order(origin) == Order.equal {
+                return record.name();
+            }
+        }
         throw UnknownAddress.address(origin.string());
     }
 }
+
+// The operating system's resolver.
 object SystemResolution does Resolving {
+    // The system resolver.
     SystemResolution();
+
+    // Asks the system for the host's addresses.
     async addresses(origin is HostEndpoint) is Sequencing<IpEndpoint> {
-        let group is FutureGroup<@@string>=FutureGroup();let cleanup=DnsAnswerCleanup(group);defer await cleanup.close();
         try {
-            let pending=network.dns_addresses(origin.host().ascii(),origin.port());group.start(pending);let records=await pending;
-            let result is @IpEndpoint=records.map()->record{IpEndpoint(IpAddress(record[0]),origin.port(),record[2]);};result;
-        }catch e is NativeFailure {
-            if e.domain()=="core.net" {
-                if e.code()=="not_found" {throw UnknownHost.host(origin.host().ascii());}
-                if e.code()=="resource_exhausted" {throw ResolutionLimitExceeded.kind("addresses");}
+            let pending = network.dns_addresses(origin.host().ascii(), origin::Parts::port);
+            let records = await pending;
+            let result is @IpEndpoint = records.map() -> record {
+                IpEndpoint(address: IpAddress(record[0]), port: origin::Parts::port, zone: record[2]);
+            };
+            result;
+        }
+        catch e is NativeFailure {
+            if e.domain() == "core.net" {
+                if e.code() == "not_found" {
+                    throw UnknownHost.host(origin.host().ascii());
+                }
+                if e.code() == "resource_exhausted" {
+                    throw ResolutionLimitExceeded.kind("addresses");
+                }
                 throw DnsFailure.because(e.message());
-            }throw;
+            }
+            throw;
         }
     }
+
+    // Asks the system for the address's name.
     async name(origin is IpAddress) is HostName {
-        let group is FutureGroup<string>=FutureGroup();let cleanup=DnsNameCleanup(group);defer await cleanup.close();
         try {
-            let pending=network.dns_name(origin.string());group.start(pending);let value=await pending;
-            try{HostName(value);}catch e is InvalidHostName{throw DnsFailure.because("invalid reverse hostname from system resolver");}
-        }catch e is NativeFailure {
-            if e.domain()=="core.net" {if e.code()=="not_found"{throw UnknownAddress.address(origin.string());}throw DnsFailure.because(e.message());}throw;
+            let pending = network.dns_name(origin.string());
+            let value = await pending;
+            try {
+                HostName(value);
+            }
+            catch e is InvalidHostName {
+                throw DnsFailure.because("invalid reverse hostname from system resolver");
+            }
+        }
+        catch e is NativeFailure {
+            if e.domain() == "core.net" {
+                if e.code() == "not_found" {
+                    throw UnknownAddress.address(origin.string());
+                }
+                throw DnsFailure.because(e.message());
+            }
+            throw;
         }
     }
 }
-object DnsAnswerCleanup {
-    has group is FutureGroup<@@string>;DnsAnswerCleanup(group is FutureGroup<@@string>){self.group=group;}
-    async close() is void{if group.active()>0{group.cancel();await group.wait();}}
-}
-object DnsNameCleanup {
-    has group is FutureGroup<string>;DnsNameCleanup(group is FutureGroup<string>){self.group=group;}
-    async close() is void{if group.active()>0{group.cancel();await group.wait();}}
-}
+
+// The resolver failed; message says why.
 enum DnsFailure is Error = (because(message is string));
-object DnsConfiguration {
-    has hosts is @HostAddresses;has names is @AddressName;
-    DnsConfiguration(hosts is Sequencing<HostAddresses>,names is Sequencing<AddressName>){
-        let forward=hosts.size();let reverse=names.size();
-        confirm forward>=0 && reverse>=0 else throw InvalidArgument.because("negative DNS configuration size");
-        confirm forward<=256 && reverse<=256 else throw ResolutionLimitExceeded.kind("records");
-        let h is @HostAddresses=(0..forward).map()->index{hosts.item(index);};let n is @AddressName=(0..reverse).map()->index{names.item(index);};
-        let host_keys is @string=h.map()->record{record.host().ascii();};let address_keys is @string=n.map()->record{record.address().string();};
-        let by_host=Sorted(host_keys);let by_address=Sorted(address_keys);
-        for (0..forward) -> index{if index>0{confirm by_host.item(index)!=by_host.item(index-1) else throw InvalidArgument.because("duplicate canonical DNS host");}}
-        for (0..reverse) -> index{if index>0{confirm by_address.item(index)!=by_address.item(index-1) else throw InvalidArgument.because("duplicate DNS reverse address");}}
-        self.hosts=h;self.names=n;
+
+hidden object DnsConfiguration {
+    has hosts is @HostAddresses;
+    has names is @AddressName;
+
+    DnsConfiguration(hosts is Sequencing<HostAddresses>, names is Sequencing<AddressName>) {
+        let forward = hosts.size();
+        let reverse = names.size();
+        confirm forward >= 0 && reverse >= 0
+            else throw InvalidArgument.because("negative DNS configuration size");
+        confirm forward <= 256 && reverse <= 256 else throw ResolutionLimitExceeded.kind("records");
+        let h is @HostAddresses = (0..forward).map() -> index {
+            hosts.item(index);
+        };
+        let n is @AddressName = (0..reverse).map() -> index {
+            names.item(index);
+        };
+        let host_keys is @string = h.map() -> record {
+            record.host().ascii();
+        };
+        let address_keys is @string = n.map() -> record {
+            record.address().string();
+        };
+        let by_host = Sorted(host_keys);
+        let by_address = Sorted(address_keys);
+        for (0..forward) -> index {
+            if index > 0 {
+                confirm by_host.item(index) != by_host.item(index - 1)
+                    else throw InvalidArgument.because("duplicate canonical DNS host");
+            }
+        }
+        for (0..reverse) -> index {
+            if index > 0 {
+                confirm by_address.item(index) != by_address.item(index - 1)
+                    else throw InvalidArgument.because("duplicate DNS reverse address");
+            }
+        }
+        self.hosts = h;
+        self.names = n;
     }
-    hosts() is @HostAddresses{hosts;}names() is @AddressName{names;}
+
+    hosts() is @HostAddresses {
+        hosts;
+    }
+
+    names() is @AddressName {
+        names;
+    }
 }
-object DnsAddressSnapshot {
+
+hidden object DnsAddressSnapshot {
     has origin is @IpAddress;
-    DnsAddressSnapshot(source is Sequencing<IpAddress>){
-        let count=source.size();confirm count>0 else throw InvalidArgument.because("DNS answer must contain addresses");
-        confirm count<=256 else throw ResolutionLimitExceeded.kind("addresses");
-        let indexed is @DnsIndexedAddress=(0..count).map()->index{DnsIndexedAddress(source.item(index),index);};
-        let ordered=Sorted(indexed);
-        let positions is @int=(0..count).filter()->index{index==0 || ordered.item(index).address().order(ordered.item(index-1).address())!=Order.equal;};
-        let kept is @DnsIndexedAddress=positions.map()->index{ordered.item(index);};
-        let preserved is SortedBy<DnsIndexedAddress,int>=SortedBy(kept,(item is DnsIndexedAddress) is int {item.position();});
-        let values is @IpAddress=(0..preserved.size()).map()->index{preserved.item(index).address();};origin=values;
+
+    DnsAddressSnapshot(source is Sequencing<IpAddress>) {
+        let count = source.size();
+        confirm count > 0 else throw InvalidArgument.because("DNS answer must contain addresses");
+        confirm count <= 256 else throw ResolutionLimitExceeded.kind("addresses");
+        let indexed is @DnsIndexedAddress = (0..count).map() -> index {
+            DnsIndexedAddress(address: source.item(index), position: index);
+        };
+        let ordered = Sorted(indexed);
+        let positions is @int = (0..count).filter() -> index {
+            index == 0
+                || ordered.item(index).address().order(ordered.item(index - 1).address()) != Order.equal;
+        };
+        let kept is @DnsIndexedAddress = positions.map() -> index {
+            ordered.item(index);
+        };
+        let preserved is SortedBy<DnsIndexedAddress, int> = SortedBy(
+            kept,
+            (item is DnsIndexedAddress) is int {
+                item.position();
+            }
+        );
+        let values is @IpAddress = (0..preserved.size()).map() -> index {
+            preserved.item(index).address();
+        };
+        origin = values;
     }
-    items() is @IpAddress{origin;}
+
+    items() is @IpAddress {
+        origin;
+    }
 }
-object DnsIndexedAddress does Comparing<DnsIndexedAddress> {
-    has address is IpAddress;has position is int;
-    DnsIndexedAddress(address is IpAddress,position is int){self.address=address;self.position=position;}
-    address() is IpAddress{address;}position() is int{position;}
-    order(other is DnsIndexedAddress) is Order{address.order(other.address());}
+
+hidden object DnsIndexedAddress does Comparing<DnsIndexedAddress> {
+    has address is IpAddress;
+    has position is int;
+
+    DnsIndexedAddress(address is IpAddress, position is int) {
+        self.address = address;
+        self.position = position;
+    }
+
+    address() is IpAddress {
+        address;
+    }
+
+    position() is int {
+        position;
+    }
+
+    order(other is DnsIndexedAddress) is Order {
+        address.order(other.address());
+    }
 }
+
+// The host has no addresses.
 enum UnknownHost is Error = (host(name is string));
+
+// The address has no name.
 enum UnknownAddress is Error = (address(address is string));
+
+// An answer went over a limit; kind says which.
 enum ResolutionLimitExceeded is Error = (kind(kind is string));
+
 async test "fixed lookup preserves requested port without a system resolver" {
-    let resolver=FixedResolution([HostAddresses(HostName("example.com"),[IpAddress("192.0.2.1")])]);
-    test.is((await resolver.addresses(HostEndpoint(HostName("EXAMPLE.com"),443))).item(0).port(),443);
+    let resolver = FixedResolution(HostAddresses(host: HostName("example.com"), addresses: [IpAddress("192.0.2.1")])
+    );
+    test.is(
+        (await resolver.addresses(HostEndpoint(host: HostName("EXAMPLE.com"), port: 443))).item(0)::Parts::port,
+        443
+    );
 }
+
 async test "system lookup cancellation before start launches no worker" {
-    let pending=SystemResolution().addresses(HostEndpoint(HostName("unused.invalid"),80));pending.cancel();
-    test.ok(try{await pending;false;}catch e is Cancelled{true;});
+    let pending = SystemResolution().addresses(HostEndpoint(host: HostName("unused.invalid"), port: 80));
+    pending.cancel();
+    test.ok(try {
+        await pending;
+        false;
+    }
+    catch e is Cancelled {
+        true;
+    });
 }

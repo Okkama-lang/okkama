@@ -17,19 +17,41 @@ impl Checker<'_, '_> {
     pub(super) fn value(&mut self, expr: &ast::Expr, expected: Option<&Ty>) -> Expr {
         let checked = self.expr(expr, true, expected);
         if checked.ty.is_none() && !checked.diverges {
-            let message = self
+            let (span, message) = self
                 .missing_cases(&checked)
-                .unwrap_or_else(|| "Expression does not produce a value".to_string());
-            self.error(expr.span, message);
+                .unwrap_or_else(|| (expr.span, "Expression does not produce a value".to_string()));
+            self.error(span, message);
             return Self::poisoned(expr.span);
         }
         checked
     }
 
-    /// Why a `match` over an enum has no value: the cases it leaves out
-    /// (#229), named as the IDE lint `non-exhaustive-match` names them.
-    fn missing_cases(&self, checked: &Expr) -> Option<String> {
-        let ExprKind::Match(matched) = &checked.kind else { return None };
+    /// The `match` that is the value of `checked`, also as the last value of
+    /// a block, and its span.
+    pub(super) fn tail_match(checked: &Expr) -> Option<(&Match, Span)> {
+        match &checked.kind {
+            ExprKind::Block(block) => match &block.stmts.last()?.kind {
+                StmtKind::Expr(last) => Self::tail_match(last),
+                _ => None,
+            },
+            ExprKind::Match(matched) => Some((matched, checked.span)),
+            _ => None,
+        }
+    }
+
+    /// Why `checked` has no value when that is a `match` over an enum that
+    /// leaves cases out (#229), also as the last value of a block (#291):
+    /// the match and a message that names the cases.
+    pub(super) fn missing_cases(&self, checked: &Expr) -> Option<(Span, String)> {
+        let (matched, span) = Self::tail_match(checked)?;
+        Some((span, self.uncovered_message(matched, "an `else` branch")?))
+    }
+
+    /// The cases of its enum a `match` without `else` leaves out, in
+    /// declaration order, as the IDE lint `non-exhaustive-match` names them;
+    /// `fallback` is the branch that would cover the rest. `None` when the
+    /// match is exhaustive or not over a payload-free enum.
+    fn uncovered_message(&self, matched: &Match, fallback: &str) -> Option<String> {
         let Some(Ty::Enum(id)) = &matched.subject.ty else { return None };
         if matched.exhaustive || matched.else_block.is_some() {
             return None;
@@ -45,7 +67,7 @@ impl Checker<'_, '_> {
         let missing: Vec<&str> = declaration.cases.iter().zip(&seen).filter(|(_, seen)| !**seen).map(|(name, _)| name.as_str()).collect();
         (!missing.is_empty()).then(|| {
             format!(
-                "match over enum `{}` does not cover {}, so it has no value here; add the cases or an `else` branch",
+                "match over enum `{}` does not cover {}, so it has no value here; add the cases or {fallback}",
                 declaration.name,
                 missing.join(", ")
             )
@@ -91,13 +113,19 @@ impl Checker<'_, '_> {
                     self.expect(&check, &Ty::Bool, condition.span, "Choice condition");
                     let yes = self.block(then_block, true, expected);
                     let no = self.block(else_block, true, expected);
-                    let (ty, diverges) = self.join(&[&yes, &no], true, span);
-                    if ty.is_none() && !diverges {
+                    let (ty, joined) = self.join(&[&yes, &no], true, span);
+                    if ty.is_none() && !joined {
                         self.error(
                             span,
                             "Compact choice branches must produce a value or diverge",
                         );
                     }
+                    // A literal condition selects the branch that runs, as in lowering.
+                    let diverges = match literal_condition(condition) {
+                        Some(true) => yes.diverges,
+                        Some(false) => no.diverges,
+                        None => joined,
+                    };
                     return Expr {
                         diverges: check.diverges || diverges,
                         kind: ExprKind::If {
@@ -110,7 +138,17 @@ impl Checker<'_, '_> {
                     };
                 }
                 let result = self.expr(inner, true, expected);
-                if result.ty.is_none() && !result.diverges {
+                // A compact match that leaves cases out has no value for
+                // them: one error, that names them when it can (#291).
+                let partial = match &result.kind {
+                    ExprKind::Match(found) if !found.exhaustive && found.else_block.is_none() => Some(
+                        self.uncovered_message(found, "a `_:` branch")
+                            .unwrap_or_else(|| "Non-exhaustive compact match".to_string()),
+                    ),
+                    _ => None,
+                };
+                let valueless = partial.is_none() && result.ty.is_none() && !result.diverges;
+                if valueless {
                     self.error(
                         span,
                         "Compact choice branches must produce a value or diverge",
@@ -124,14 +162,18 @@ impl Checker<'_, '_> {
                                 self.error(name.span, "Duplicate variant pattern");
                             }
                     }
-                    if let ExprKind::Match(found) = &result.kind {
-                        if !matches!(Self::ty_of(&found.subject), Ty::Enum(_)) {
+                    if let ExprKind::Match(found) = &result.kind
+                        && !matches!(Self::ty_of(&found.subject), Ty::Enum(_)) {
                             self.error(span, "Compact patterns require an enum value");
                         }
-                        if !found.exhaustive && found.else_block.is_none() {
-                            self.error(span, "Non-exhaustive compact match");
-                        }
-                    }
+                }
+                // Reported once here: the value it lacks is not reported again.
+                if let Some(message) = partial {
+                    self.error(span, message);
+                    return Self::poisoned(span);
+                }
+                if valueless {
+                    return Self::poisoned(span);
                 }
                 result
             }
@@ -844,9 +886,9 @@ impl Checker<'_, '_> {
             (Some(Ty::Never), true)
         } else {
             match literal_condition(condition) {
-                Some(true) => (then_value.ty.clone(), then_value.diverges),
+                Some(true) => Self::selected(&then_value, else_value.as_ref()),
                 Some(false) => match &else_value {
-                    Some(value) => (value.ty.clone(), value.diverges),
+                    Some(value) => Self::selected(value, Some(&then_value)),
                     None => (None, false),
                 },
                 None => {
@@ -868,6 +910,17 @@ impl Checker<'_, '_> {
             diverges,
             span,
         }
+    }
+
+    /// The flow of an `if` whose literal condition selects `chosen`: when it
+    /// diverges, the other branch still gives the type (#307), so an
+    /// enclosing `try?` recovering from a `throw` there keeps its `Maybe<T>`.
+    fn selected(chosen: &Expr, other: Option<&Expr>) -> (Option<Ty>, bool) {
+        let ty = match other {
+            Some(other) if chosen.diverges && !other.diverges && other.ty.is_some() => other.ty.clone(),
+            _ => chosen.ty.clone(),
+        };
+        (ty, chosen.diverges)
     }
 
     fn loop_expr(
@@ -1155,6 +1208,7 @@ impl Checker<'_, '_> {
         span: Span,
     ) -> Expr {
         let maybe = crate::analysis::ty::EnumId(0);
+        let open = std::mem::take(&mut self.open_try);
         let inner = match expected {
             Some(ty) if force => Some(ty.clone()),
             Some(Ty::Variant(id, args)) if *id == maybe => args.first().cloned(),
@@ -1164,7 +1218,9 @@ impl Checker<'_, '_> {
         let checked = self.expr(value, want || !force, inner.as_ref());
         self.pop_scope();
         let operand = checked.ty.clone();
-        let diverges = checked.diverges;
+        // A caught error leaves `try?` with `none`, so only `try!` (whose
+        // handler panics) diverges with its operand, as `try/catch` joins.
+        let diverges = force && checked.diverges;
         let result = if force {
             operand.clone()
         } else {
@@ -1184,7 +1240,18 @@ impl Checker<'_, '_> {
                     return Self::poisoned(span);
                 }
                 Some(ty) if ty.is_error() => return Self::poisoned(span),
-                Some(Ty::Never) | None => Some(Ty::Error),
+                // No successful path: the boundary gives `T`, or the fallback
+                // does (`Maybe<never>` until `optional_fallback` settles it).
+                Some(Ty::Never) | None => match inner.clone().or(open.then_some(Ty::Never)) {
+                    Some(ty) => Some(Ty::Variant(maybe, vec![ty])),
+                    None => {
+                        self.error(
+                            value.span,
+                            "Cannot infer the type of try?: its operand never produces a value; declare Maybe<T> or add a fallback",
+                        );
+                        return Self::poisoned(span);
+                    }
+                },
                 Some(ty) => Some(Ty::Variant(maybe, vec![ty.clone()])),
             }
         };
@@ -1192,7 +1259,8 @@ impl Checker<'_, '_> {
             return Self::poisoned(span);
         }
         let body_value = match &result {
-            Some(maybe_ty) if !force => Self::typed(
+            // An operand that never gives a value is not wrapped in `some`.
+            Some(maybe_ty) if !force && !checked.diverges => Self::typed(
                 ExprKind::VariantNew {
                     case: 0,
                     values: vec![checked],
@@ -1393,6 +1461,7 @@ impl Checker<'_, '_> {
                         kind: StmtKind::Let {
                             local: binding_local,
                             value,
+                            once: false,
                         },
                         span: arg.span,
                     });
@@ -1442,7 +1511,7 @@ impl Checker<'_, '_> {
 
     /// `[a, b, 1..=3]`: элементы одного точного типа; диапазоны раскрываются.
     /// С целевым `@E` каждый элемент пересекает границу `E`; разнородные
-    /// элементы без цели — `@any` с явной упаковкой каждого (R08).
+    /// элементы — только под явным `@any`, каждый в box (R08, #315).
     fn array_literal(&mut self, elements: &[ast::Expr], expected: Option<&Ty>, span: Span) -> Expr {
         // Цель — `@E` или роль массивов `Sequencing<E>`/`Iterating<E>`.
         let target = match expected {
@@ -1490,11 +1559,23 @@ impl Checker<'_, '_> {
         let element_type = match &target {
             Some(target) => Some(target.clone()),
             None if types.iter().any(Ty::is_error) => Some(Ty::Error),
-            None => match types.first() {
-                None => None,
-                Some(first) if types.iter().all(|ty| ty == first) => Some(first.clone()),
-                Some(_) => Some(Ty::Any),
-            },
+            // Elements meet at the type each fits by retagging, so `[]` adds no
+            // conflict to `[1]` at any depth (#297); concrete differences need
+            // an explicit `@any` (#315).
+            None if types.is_empty() => None,
+            None => Some(match Ty::unify_all(&types) {
+                Some(ty) => ty,
+                None => {
+                    let (first, other) = conflict(&types);
+                    let message = format!(
+                        "Array elements have incompatible types {} and {}; declare an explicit @any boundary to allow heterogeneous values",
+                        self.type_name(&first),
+                        self.type_name(&other)
+                    );
+                    self.error(span, message);
+                    Ty::Error
+                }
+            }),
         };
         let Some(element_type) = element_type else {
             let mut out = Self::typed(ExprKind::Array(Vec::new()), Ty::array(Ty::Never), span);
@@ -1536,7 +1617,8 @@ impl Checker<'_, '_> {
     }
 
     /// `[k: v, …]`: ключи и значения — по одному точному типу; повтор ключа —
-    /// последнее значение (R05). Разнородные значения без цели — `any` (R08).
+    /// последнее значение (R05). Разнородные значения — только под явным
+    /// `%K:any` (#315).
     fn map_literal(
         &mut self,
         entries: &[ast::MapEntry],
@@ -1598,10 +1680,19 @@ impl Checker<'_, '_> {
                 };
                 let value = if values.iter().any(Ty::is_error) {
                     Ty::Error
-                } else if values.iter().all(|ty| *ty == values[0]) {
-                    values[0].clone()
+                } else if let Some(value) = Ty::unify_all(&values) {
+                    value
                 } else {
-                    Ty::Any
+                    // Разнородные значения — только под явным `%K:any` (#315).
+                    let (first, other) = conflict(&values);
+                    let message = format!(
+                        "Map values have incompatible types {} and {}; declare an explicit %{}:any boundary to allow heterogeneous values",
+                        self.type_name(&first),
+                        self.type_name(&other),
+                        self.type_name(&key)
+                    );
+                    self.error(span, message);
+                    Ty::Error
                 };
                 (key, value)
             }
@@ -2056,6 +2147,19 @@ fn expr_path(expr: &ast::Expr) -> Option<Vec<ast::Name>> {
 
 /// Как сравниваются на равенство два значения типа `ty` (`==`, `contains`).
 /// `any` не распаковывается: коллекция из `any` не сравнима никогда.
+/// Первая пара типов без общего: объединение предыдущих и элемент, который
+/// с ним не сходится (`unify_all` уже вернул `None`, #315).
+fn conflict(types: &[Ty]) -> (Ty, Ty) {
+    let mut joined = types[0].clone();
+    for ty in &types[1..] {
+        match joined.unify_untagged(ty) {
+            Some(next) => joined = next,
+            None => return (joined, ty.clone()),
+        }
+    }
+    unreachable!("the types have no common type")
+}
+
 pub(super) fn equality_kind(ty: &Ty) -> Option<CompareKind> {
     if holds_any(ty) {
         return None;
@@ -2069,8 +2173,11 @@ pub(super) fn equality_kind(ty: &Ty) -> Option<CompareKind> {
         Ty::Char => Some(CompareKind::Char),
         Ty::Str => Some(CompareKind::Str),
         Ty::Enum(_) => Some(CompareKind::Enum),
+        // A variant compares by case and payload: `==` desugars to that
+        // (`variant_compare`), searches use the same deep equality (#300).
         Ty::Object(..)
         | Ty::Role(..)
+        | Ty::Variant(..)
         | Ty::Array(_)
         | Ty::Map(..)
         | Ty::Range

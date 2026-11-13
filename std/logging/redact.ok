@@ -1,39 +1,176 @@
 module logging/redact v1.0.0;
-import "logging/write" take LogWriting;
-import "logging/record" take LogRecord,LogContext;
-import "logging/field" take LogFields,InvalidLogField;
-import "json" take Json,JsonField;
+
+// Hiding secrets in log records before they are written.
+//
+//     RedactedLogs(origin: destination, names: ["password", "card"]);     // those fields become "[redacted]"
+//     RedactedCauseLogs(origin: destination, replacement: "error");        // causes' text hidden
+
+import "logging/write" take LogWriting, CollectedLogs;
+import "logging/record" take LogRecord, LogContext;
+import "logging/field" take LogFields, EmptyLogFields, InvalidLogField;
+import "logging/name" take LogName;
+import "logging/level" take LogLevel;
+import "time/clock" take Instant;
+import "time/duration" take Duration, DurationUnit;
+import "json" take Json, JsonField;
 import "collections/sequence" take Sequencing;
-object RedactedLogs does LogWriting{
-    has origin is LogWriting;has names is @string;has replacement is Json;
-    RedactedLogs(origin is LogWriting,names is Sequencing<string>,replacement is Json){
-        let size=names.size();confirm size>=0 && size<=256 else throw InvalidLogField.because("redaction name count exceeds 256");
-        let snapshot is @string=(0..size).map()->index{let name=names.item(index);confirm name!="" && name.length()<=4096 else throw InvalidLogField.because("invalid redaction name");name;};
-        self.origin=origin;self.names=snapshot;self.replacement=LogFields([JsonField("replacement",replacement)]).value("replacement");
-    }
-    write(record is LogRecord) is void{
-        let members is @JsonField=record.context().fields().members().map()->member{
-            let matches=names.reduce(false)->old,name{old || name==member.name();};
-            if matches{JsonField(member.name(),replacement);}else{member;}
+
+// Records with some fields replaced.
+object RedactedLogs does LogWriting {
+    has origin is LogWriting;
+    has names is @string;
+    has replacement is Json;
+
+    // The named fields are written as "[redacted]" unless a replacement is given.
+    RedactedLogs(
+        origin is LogWriting,
+        names is Sequencing<string>,
+        replacement is Json = Json("[redacted]")
+    ) {
+        let size = names.size();
+        confirm size >= 0 && size <= 256
+            else throw InvalidLogField.because("redaction name count exceeds 256");
+        let snapshot is @string = (0..size).map() -> index {
+            let name = names.item(index);
+            confirm name != "" && name.length() <= 4096
+                else throw InvalidLogField.because("invalid redaction name");
+            name;
         };
-        let causes is @Error=if record.has_cause(){[record.cause()];}else{[];};
-        origin.write(ChangedLogRecord(record,LogFields(members),causes).value());
+        self.origin = origin;
+        self.names = snapshot;
+        self.replacement = LogFields(JsonField("replacement", replacement)).value("replacement");
+    }
+
+    // Writes record with the named fields replaced.
+    write(record is LogRecord) is void {
+        let values = record.context().fields().values();
+        let fields = Json(values.names().map() -> name {
+            let matches = names.reduce(false) -> old, candidate {
+                old || candidate == name;
+            };
+            if matches {
+                JsonField(name, replacement);
+            }
+            else {
+                JsonField(name, values.get(name));
+            }
+        });
+        let causes is @Error = if record.has_cause() {
+            [record.cause()];
+        }
+        else {
+            [];
+        };
+        origin.write(
+            ChangedLogRecord(origin: record, fields: LogFields(fields), causes: causes).record()
+        );
+    }
+
+    // Whether a record of name at level would be written.
+    enabled(name is LogName, level is LogLevel) is bool {
+        origin.enabled(name, level);
     }
 }
-object RedactedCauseLogs does LogWriting{
-    has origin is LogWriting;has replacement is string;
-    RedactedCauseLogs(origin is LogWriting,replacement is string){self.origin=origin;self.replacement=replacement;}
-    write(record is LogRecord) is void{
-        let causes is @Error=if record.has_cause(){[RedactedLogCause.origin(replacement)];}else{[];};
-        origin.write(ChangedLogRecord(record,record.context().fields(),causes).value());
+
+// Records with their cause's text replaced.
+object RedactedCauseLogs does LogWriting {
+    has origin is LogWriting;
+    has replacement is string;
+
+    // Writes to origin, replacing causes' text with replacement.
+    RedactedCauseLogs(origin is LogWriting, replacement is string) {
+        self.origin = origin;
+        self.replacement = replacement;
+    }
+
+    // Writes record with its cause replaced.
+    write(record is LogRecord) is void {
+        let causes is @Error = if record.has_cause() {
+            [RedactedLogCause.origin(replacement)];
+        }
+        else {
+            [];
+        };
+        origin.write(
+            ChangedLogRecord(origin: record, fields: record.context().fields(), causes: causes).record()
+        );
+    }
+
+    // Whether a record of name at level would be written.
+    enabled(name is LogName, level is LogLevel) is bool {
+        origin.enabled(name, level);
     }
 }
+
+// A cause whose text was replaced.
 enum RedactedLogCause is Error = (origin(origin is string));
-object ChangedLogRecord{
-    has origin is LogRecord;has fields is LogFields;has causes is @Error;
-    ChangedLogRecord(origin is LogRecord,fields is LogFields,causes is @Error){confirm causes.size()<=1 else throw InvalidLogField.because("only one cause allowed");self.origin=origin;self.fields=fields;self.causes=causes;}
-    value() is LogRecord{
-        let context=LogContext(origin.context().name(),fields,origin.context().process());
-        if causes.size()==0{LogRecord(origin.time(),origin.level(),origin.message(),context);}else{LogRecord(origin.time(),origin.level(),origin.message(),context,causes[0]);}
+
+hidden object ChangedLogRecord {
+    has origin is LogRecord;
+    has fields is LogFields;
+    has causes is @Error;
+
+    ChangedLogRecord(origin is LogRecord, fields is LogFields, causes is @Error) {
+        confirm causes.size() <= 1 else throw InvalidLogField.because("only one cause allowed");
+        self.origin = origin;
+        self.fields = fields;
+        self.causes = causes;
     }
+
+    record() is LogRecord {
+        let context = LogContext(
+            name: origin.context().name(),
+            fields: fields,
+            process: origin.context().process()
+        );
+        if causes.size() == 0 {
+            LogRecord(
+                occurred: origin.time(),
+                level: origin::Entry::level,
+                message: origin::Entry::message,
+                context: context
+            );
+        }
+        else {
+            LogRecord(
+                occurred: origin.time(),
+                level: origin::Entry::level,
+                message: origin::Entry::message,
+                context: context,
+                cause: causes[0]
+            );
+        }
+    }
+}
+
+test "redaction replaces the named members and keeps the rest in order" {
+    let collected = CollectedLogs();
+    let redacted = RedactedLogs(
+        origin: collected,
+        names: ["pass", "token"],
+        replacement: Json("***")
+    );
+    let time = Instant(Duration(seconds: 0));
+    let fields = LogFields(JsonField("user", "ann"), JsonField("id", 7), JsonField("pass", "x"));
+    redacted.write(
+        LogRecord(
+            occurred: time,
+            level: LogLevel.info,
+            message: "hi",
+            context: LogContext(name: LogName("app"), fields: fields, process: 1)
+        )
+    );
+    redacted.write(
+        LogRecord(
+            occurred: time,
+            level: LogLevel.info,
+            message: "hi",
+            context: LogContext(name: LogName("app"), fields: EmptyLogFields().fields(), process: 1)
+        )
+    );
+    let texts is @string = collected.records().map() -> record {
+        record.context().fields().values().string();
+    };
+    test.is(texts[0], "{\"user\":\"ann\",\"id\":7,\"pass\":\"***\"}");
+    test.is(texts[1], "{}");
 }

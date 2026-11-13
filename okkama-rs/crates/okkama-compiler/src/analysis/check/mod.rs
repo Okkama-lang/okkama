@@ -101,6 +101,14 @@ pub(super) struct Checker<'r, 'a> {
     /// Scopes below this index are hidden: a parameter's default value is
     /// checked at the call without the caller's locals (#149).
     pub barrier: Option<usize>,
+    /// The `try?` being checked is the operand of a fallback (`try? x else y`):
+    /// with no successful path its type may come from the fallback (#307).
+    pub open_try: bool,
+    /// Locals bound by `once let`: another `once let` may read them (#491).
+    pub once_locals: Vec<LocalId>,
+    /// The scope depth of the action body's own statements: a `once let`
+    /// stands there, not in a nested block (#491).
+    pub body_scope: Option<usize>,
 }
 
 /// Проверить все тела программы: зависимости раньше корня, в порядке исходника.
@@ -356,6 +364,9 @@ impl<'r, 'a> Checker<'r, 'a> {
             shorthand_fields: Vec::new(),
             cap_external: false,
             barrier: None,
+            open_try: false,
+            once_locals: Vec::new(),
+            body_scope: None,
         }
     }
 
@@ -402,8 +413,9 @@ impl<'r, 'a> Checker<'r, 'a> {
         self.reg.unsupported(span, message);
     }
 
+    /// The name of `ty` in this module's diagnostics (#338).
     pub fn type_name(&self, ty: &Ty) -> String {
-        self.reg.type_name(ty)
+        self.reg.type_name_in(self.module, ty)
     }
 
     // ----- конструкторы выражений -----
@@ -646,7 +658,10 @@ impl<'r, 'a> Checker<'r, 'a> {
             return Ok(wrap(Coercion::Take, value, expected.clone()));
         }
         let taken = actual.taken();
-        let convertible = (taken.is_untagged() && self.same_shape(&taken, expected))
+        // An untagged `[]`/`[:]`, at any depth, takes the collection type (#297).
+        let retaggable = matches!((&taken, expected), (Ty::Array(_), Ty::Array(_)) | (Ty::Map(..), Ty::Map(..)))
+            && taken.fits_untagged(expected);
+        let convertible = retaggable
             || match expected {
                 Ty::Role(..) => match taken {
                     Ty::Role(..) => self.narrowing(&taken, expected, what).is_some(),
@@ -669,7 +684,7 @@ impl<'r, 'a> Checker<'r, 'a> {
         } else {
             value
         };
-        if taken.is_untagged() && self.same_shape(&taken, expected) {
+        if retaggable {
             return Ok(wrap(Coercion::Retag, value, expected.clone()));
         }
         Ok(match expected {
@@ -695,21 +710,16 @@ impl<'r, 'a> Checker<'r, 'a> {
                 Ok(value) => value,
                 Err(value) => *value,
             };
-        if left.is_untagged() && !right.is_untagged() && self.same_shape(&left, &right) {
-            (retag(self, lhs, &right), rhs)
-        } else if right.is_untagged() && !left.is_untagged() && self.same_shape(&right, &left) {
-            let rhs = retag(self, rhs, &left);
-            (lhs, rhs)
-        } else {
-            (lhs, rhs)
+        // Both sides meet at the type each fits by retagging (#297):
+        // `[[1]] == [[]]` compares two @@int.
+        match left.unify_untagged(&right) {
+            Some(joined) if joined != left || joined != right => {
+                let lhs = if left == joined { lhs } else { retag(self, lhs, &joined) };
+                let rhs = if right == joined { rhs } else { retag(self, rhs, &joined) };
+                (lhs, rhs)
+            }
+            _ => (lhs, rhs),
         }
-    }
-
-    fn same_shape(&self, untagged: &Ty, target: &Ty) -> bool {
-        matches!(
-            (untagged, target),
-            (Ty::Array(_), Ty::Array(_)) | (Ty::Map(..), Ty::Map(..))
-        )
     }
 
     /// Роль → роль сужением (§12.1): текст ошибки проверки во время исполнения.
@@ -772,20 +782,14 @@ impl<'r, 'a> Checker<'r, 'a> {
         if types.iter().any(Ty::is_error) {
             return (Some(Ty::Error), false);
         }
-        let tagged = types
-            .iter()
-            .find(|ty| matches!(ty, Ty::Array(_) | Ty::Map(..)) && !ty.is_untagged())
-            .cloned();
-        let normalized: Vec<Ty> = types
-            .iter()
-            .map(|ty| match &tagged {
-                Some(target) if ty.is_untagged() && self.same_shape(ty, target) => target.clone(),
-                _ => ty.clone(),
-            })
-            .collect();
-        let first = normalized[0].clone();
-        for other in &normalized[1..] {
-            if *other != first {
+        // Collection branches meet at the type each fits by retagging (#297);
+        // lowering retags the arms.
+        if let Some(joined) = Ty::unify_all(&types) {
+            return (Some(joined), false);
+        }
+        let first = types[0].clone();
+        for other in &types[1..] {
+            if first.unify_untagged(other).is_none() {
                 let message = format!(
                     "Branches produce different types: {} and {}",
                     self.type_name(&first),
@@ -804,6 +808,7 @@ impl<'r, 'a> Checker<'r, 'a> {
     pub fn body(&mut self, block: &ast::Block, name: &str) -> Block {
         let result = self.result.clone();
         let want = result.is_some();
+        self.body_scope = Some(self.scopes.len() + 1);
         let out = self.block(block, want, result.as_ref());
         let tail_span = block.stmts.last().map_or(block.span, |stmt| stmt.span);
         let mut thir = self.block_of(out.clone());
@@ -814,10 +819,10 @@ impl<'r, 'a> Checker<'r, 'a> {
                 if let Some(last) = thir.stmts.pop() {
                     let value = match last.kind {
                         StmtKind::Expr(value) => value,
-                        StmtKind::Let { local, value } => {
+                        StmtKind::Let { local, value, once } => {
                             // `let` последним: значение — значение привязки.
                             thir.stmts.push(Stmt {
-                                kind: StmtKind::Let { local, value },
+                                kind: StmtKind::Let { local, value, once },
                                 span: last.span,
                             });
                             let ty = self.locals[local.0].ty.clone();
@@ -838,13 +843,19 @@ impl<'r, 'a> Checker<'r, 'a> {
                     });
                 }
             }
-            (None, Some(ty)) => {
-                let message = format!(
-                    "Action \"{name}\" must produce a return value of type {}.",
-                    self.type_name(ty)
-                );
-                self.error(block.span, message);
-            }
+            (None, Some(ty)) => match self.missing_cases(&out) {
+                // A last `match` that leaves enum cases out names them (#291).
+                Some((span, message)) => self.error(span, message),
+                // One over a value in error has already said why.
+                None if Self::tail_match(&out).is_some_and(|(matched, _)| Self::ty_of(&matched.subject).is_error()) => {}
+                None => {
+                    let message = format!(
+                        "Action \"{name}\" must produce a return value of type {}.",
+                        self.type_name(ty)
+                    );
+                    self.error(block.span, message);
+                }
+            },
             (_, None) => {}
         }
         thir

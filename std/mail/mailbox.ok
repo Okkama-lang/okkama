@@ -1,5 +1,21 @@
 module mail/mailbox v1.0.0;
 
+// Message flags, stored messages and Maildir folders.
+//
+//     let box = Maildir(Path("Mail/inbox")).created();
+//     box.add(message);
+//     for box.messages() -> stored {
+//         stored::Mail::identifier;
+//         stored.flags().membership(SystemFlag(SystemMailFlag.seen));
+//     }
+//     ChangedMaildirFlags(origin: box, identifier: id, flags: MailFlags(SystemFlag(SystemMailFlag.seen))).mail();
+//
+// A Maildir keeps one message per file in new/ and cur/ and delivers through
+// tmp/, so a reader never sees half a message. Operations take
+// `.okkama-maildir.lock` (shared to read, exclusive to change). Flags D, F, R,
+// S and T are kept in file names; Recent is not stored. By default a Maildir
+// reads at most 1000 messages and 64 MiB.
+
 import "compare" take Comparing, Order;
 import "encoding/utf" take Utf8Encoded, Utf8Decoded;
 import "collections/set" take Set;
@@ -8,456 +24,1163 @@ import "collections/iteration" take Cursor, Iterating;
 import "mime/media_type" take MimeItems, MimePosition;
 import "mime/part" take MimePart, MimeLimits, MimeLimitFailure;
 import "mail/message" take MailMessage, ParsedMail;
-import "error" take InvalidArgument;
+import "error" take InvalidArgument, InvalidState;
 import "fs/path" take Path, PathStyle;
 import "fs/directory" take Directory, DirectoryEntry, DirectoryEntries;
-import "fs/lock" take FileLock, FileLockMode, FileLockWaiting;
-import "fs/file" take File, FileMode, FileEntry, FileSystemFailure;
-import "fs/temp" take TemporaryFile, TemporaryFilePath;
+import "fs/lock" take FileLock, FileLockMode;
+import "fs/file" take File, FileMode;
+import "fs/entry" take FileEntry;
+import "fs/error" take FileError;
+import "fs/temp" take TemporaryFile, TemporaryDirectory;
 import "fs/link" take HardLink;
 import "random/source" take Randomizing, SecureRandom;
 import "encoding/hex" take HexEncoded;
 import "fs/stat" take FileKind;
 import "io/buffer" take ByteBuffer;
-import "io/decorators" take ByteSnapshot;
 
-// Protocol flag values, stored snapshots and trusted-local Maildir operations.
-// Constructors are pure except explicit snapshots. Maildir filesystem effects
-// occur only in messages/add/remove/deliver and ChangedMaildirFlags.result().
-// Operations acquire the permanent .okkama-maildir.lock immediately (shared
-// reads, exclusive mutations); callers must control the local path namespace.
-// ChangedMaildirFlags snapshots supported DFRST flags before I/O and preserves
-// message bytes/inode/mtime on rename. Recent is a legacy observation, not a
-// stored Maildir flag. See docs/std/maildir.md for limits and commit failures.
+// A system flag or a keyword.
 enum MailFlagKind = (system, keyword);
+
+// The system flags of IMAP: \Answered, \Flagged, \Deleted, \Seen, \Draft and
+// \Recent.
 enum SystemMailFlag = (answered, flagged, deleted, seen, draft, recent);
+
+// A message flag.
 role MailFlag {
+    // System flag or keyword.
     kind() is MailFlagKind;
+    // As IMAP writes it.
     string() is string;
+    // The system flag; WrongMailFlagKind for a keyword.
     system() is SystemMailFlag;
+    // The keyword; WrongMailFlagKind for a system flag.
     keyword() is string;
+    // Orders flags.
     order(other is MailFlag) is Order;
 }
+
+// A system flag.
 object SystemFlag does MailFlag, Comparing<MailFlag> {
     has origin is SystemMailFlag;
-    SystemFlag(origin is SystemMailFlag) {self.origin=origin;}
-    kind() is MailFlagKind {MailFlagKind.system;}
-    system() is SystemMailFlag {origin;}
-    keyword() is string {throw WrongMailFlagKind.detailed(MailFlagKind.keyword, MailFlagKind.system);}
+
+    // The flag.
+    SystemFlag(origin is SystemMailFlag) {
+        self.origin = origin;
+    }
+
+    // MailFlagKind.system.
+    kind() is MailFlagKind {
+        MailFlagKind.system;
+    }
+
+    // The flag.
+    system() is SystemMailFlag {
+        origin;
+    }
+
+    // WrongMailFlagKind.
+    keyword() is string {
+        throw WrongMailFlagKind.detailed(MailFlagKind.keyword, MailFlagKind.system);
+    }
+
+    // `\Seen` and the like.
     string() is string {
         match origin {
-            case SystemMailFlag.answered {"\\Answered";} case SystemMailFlag.flagged {"\\Flagged";}
-            case SystemMailFlag.deleted {"\\Deleted";} case SystemMailFlag.seen {"\\Seen";}
-            case SystemMailFlag.draft {"\\Draft";} case SystemMailFlag.recent {"\\Recent";}
+            case SystemMailFlag.answered {
+                "\\Answered";
+            }
+            case SystemMailFlag.flagged {
+                "\\Flagged";
+            }
+            case SystemMailFlag.deleted {
+                "\\Deleted";
+            }
+            case SystemMailFlag.seen {
+                "\\Seen";
+            }
+            case SystemMailFlag.draft {
+                "\\Draft";
+            }
+            case SystemMailFlag.recent {
+                "\\Recent";
+            }
         }
     }
-    order(other is MailFlag) is Order {MailFlagName(self.string()).key().order(MailFlagName(other.string()).key());}
+
+    // Orders by name, ignoring ASCII case.
+    order(other is MailFlag) is Order {
+        MailFlagName(self.string()).key().order(MailFlagName(other.string()).key());
+    }
 }
+
+// A keyword flag such as `$Forwarded`.
 object KeywordFlag does MailFlag, Comparing<MailFlag> {
     has origin is string;
+
+    // Checks origin as an IMAP atom; InvalidMailFlag otherwise.
     KeywordFlag(origin is string) {
-        confirm origin.length()>0 && origin.length()<=255 else throw InvalidMailFlag.located(0, "keyword length outside 1..255");
-        for (0..origin.length()) -> index {
-            let scalar=origin.slice(index,index+1);let bytes=Utf8Encoded(scalar).bytes();let value=bytes[0].int();
-            confirm bytes.size()==1 && value>=33 && value<=126 && "(){%*\"\\]".split(scalar).size()==1
+        confirm origin.length() > 0 && origin.length() <= 255
+            else throw InvalidMailFlag.located(0, "keyword length outside 1..255");
+        // Code points by code (#174): an atom character, not ( ) { % * " \ ].
+        let characters = origin.characters();
+        for (0..characters.size()) -> index {
+            let value = characters[index].code();
+            confirm value >= 33
+                && value <= 126
+                && value != 40
+                && value != 41
+                && value != 123
+                && value != 37
+                && value != 42
+                && value != 34
+                && value != 92
+                && value != 93
                 else throw InvalidMailFlag.located(index, "invalid keyword atom character");
         }
-        self.origin=origin;
+        self.origin = origin;
     }
-    kind() is MailFlagKind {MailFlagKind.keyword;}
-    system() is SystemMailFlag {throw WrongMailFlagKind.detailed(MailFlagKind.system, MailFlagKind.keyword);}
-    keyword() is string {origin;}
-    string() is string {origin;}
-    order(other is MailFlag) is Order {MailFlagName(origin).key().order(MailFlagName(other.string()).key());}
+
+    // MailFlagKind.keyword.
+    kind() is MailFlagKind {
+        MailFlagKind.keyword;
+    }
+
+    // WrongMailFlagKind.
+    system() is SystemMailFlag {
+        throw WrongMailFlagKind.detailed(MailFlagKind.system, MailFlagKind.keyword);
+    }
+
+    // The keyword.
+    keyword() is string {
+        origin;
+    }
+
+    // The keyword.
+    string() is string {
+        origin;
+    }
+
+    // Orders by name, ignoring ASCII case.
+    order(other is MailFlag) is Order {
+        MailFlagName(origin).key().order(MailFlagName(other.string()).key());
+    }
 }
+
+// A system flag asked of a keyword, or the reverse.
 enum WrongMailFlagKind is Error = (detailed(expected is MailFlagKind, actual is MailFlagKind));
+
+// Text that is not a flag; offset says where.
 enum InvalidMailFlag is Error = (located(offset is int, reason is string));
-object MailFlagName {
+
+hidden object MailFlagName {
     has origin is string;
-    MailFlagName(origin is string) {self.origin=origin;}
+
+    MailFlagName(origin is string) {
+        self.origin = origin;
+    }
+
     key() is string {
-        let bytes is @byte=Utf8Encoded(origin).bytes().map() -> octet {
-            let value=octet.int();if value>=65 && value<=90 {(value+32).byte();} else {octet;}
-        };Utf8Decoded(bytes).string();
+        let bytes is @byte = Utf8Encoded(origin).bytes().map() -> octet {
+            let value = octet.int();
+            if value >= 65 && value <= 90 {
+                (value + 32).byte();
+            }
+            else {
+                octet;
+            }
+        };
+        Utf8Decoded(bytes).string();
     }
 }
 
 // Bounded protocol sets keep first spelling, independent of object equality.
 object MailFlags does Set<MailFlag>, Sequencing<MailFlag>, Iterating<MailFlag> {
-    has entries is @MailFlag;has maximum is int;
-    MailFlags(entries is Sequencing<MailFlag>) {self.entries=MailFlagEntries(entries,256).values();maximum=256;}
-    MailFlags(entries is Sequencing<MailFlag>, maximum_entries is int) {
-        self.entries=MailFlagEntries(entries,maximum_entries).values();maximum=maximum_entries;
-    }
-    size() is int {entries.size();}
-    item(index is int) is MailFlag {entries[index];}
-    first() is MailFlag {entries.first();}
-    last() is MailFlag {entries.last();}
-    cursor() is Cursor<MailFlag> {entries.cursor();}
-    membership(value is MailFlag) is bool {
-        let key=MailFlagName(MailFlagSnapshot(value).value().string()).key();
-        entries.reduce(false) -> found,entry {found || MailFlagName(entry.string()).key()==key;};
-    }
-    addition(value is MailFlag) is Set<MailFlag> {
-        let snapshot=MailFlagSnapshot(value).value();
-        if self.membership(snapshot) {return self;}
-        confirm entries.size()<maximum else throw MailboxLimitExceeded.kind("flags");
-        let following is @MailFlag=(0..entries.size()+1).map() -> index {if index<entries.size() {entries[index];} else {snapshot;}};
-        MailFlags(following,maximum);
-    }
-    difference(value is MailFlag) is Set<MailFlag> {
-        let key=MailFlagName(MailFlagSnapshot(value).value().string()).key();
-        let following is @MailFlag=entries.filter() -> entry {MailFlagName(entry.string()).key()!=key;};
-        MailFlags(following,maximum);
-    }
-}
-object MailFlagSnapshot {
-    has origin is MailFlag;
-    MailFlagSnapshot(origin is MailFlag) {self.origin=origin;}
-    value() is MailFlag {
-        if origin.kind()==MailFlagKind.system {SystemFlag(origin.system());} else {KeywordFlag(origin.keyword());}
-    }
-}
-object MailFlagEntries {
-    has origin is Sequencing<MailFlag>;has maximum is int;
-    MailFlagEntries(origin is Sequencing<MailFlag>, maximum is int) {
-        confirm maximum>=0 else throw InvalidArgument.because("mail flag bound must be nonnegative");
-        self.origin=origin;self.maximum=maximum;
-    }
-    values() is @MailFlag {
-        let size=origin.size();confirm size>=0 else throw InvalidArgument.because("mail flag source size must be nonnegative");
-        confirm size<=maximum else throw MailboxLimitExceeded.kind("flags");
-        let result is MimeItems<MailFlag>=MimeItems();
-        for (0..size) -> index {
-            let flag=MailFlagSnapshot(origin.item(index)).value();let key=MailFlagName(flag.string()).key();
-            let present=result.entries().reduce(false) -> found,entry {found || MailFlagName(entry.string()).key()==key;};
-            if !present {result=result.following(flag);}
-        }
-        result.entries();
-    }
-}
-object MailSetEntries {
-    has origin is Set<MailFlag>;
-    MailSetEntries(origin is Set<MailFlag>) {self.origin=origin;}
-    values() is @MailFlag {
-        let size=origin.size();confirm size>=0 else throw InvalidMailbox.located(0, "negative flag set size");
-        confirm size<=256 else throw MailboxLimitExceeded.kind("flags");
-        let cursor=MailFlagCursor(origin.cursor());let result is MimeItems<MailFlag>=MimeItems();
-        for (0..size) -> index {
-            confirm cursor.available() else throw InvalidMailbox.located(index, "flag set ended before declared size");
-            result=result.following(MailFlagSnapshot(cursor.item()).value());cursor=cursor.following();
-        }
-        confirm !cursor.available() else throw InvalidMailbox.located(size, "flag set exceeds declared size");
-        result.entries();
-    }
-}
-object MailFlagCursor {
-    has origin is Cursor<MailFlag>;
-    MailFlagCursor(origin is Cursor<MailFlag>) {self.origin=origin;}
-    available() is bool {origin.available();}
-    item() is MailFlag {origin.item();}
-    following() is ^MailFlagCursor {^origin=origin.successor();}
-}
-object StoredMail {
-    has identifier is string;has content is MailMessage;has marks is MailFlags;
-    StoredMail(identifier is string, message is MailMessage, flags is Set<MailFlag>) {
-        MailStorageIdentifier(identifier).validate();self.identifier=identifier;
-        marks=MailFlags(MailSetEntries(flags).values());content=StoredMailContent(message,message.limits()).message();
-    }
-    StoredMail(identifier is string, message is MailMessage, flags is Set<MailFlag>, limits is MimeLimits) {
-        MailStorageIdentifier(identifier).validate();self.identifier=identifier;
-        marks=MailFlags(MailSetEntries(flags).values());content=StoredMailContent(message,limits).message();
-    }
-    identifier() is string {identifier;}
-    message() is MailMessage {content;}
-    flags() is Set<MailFlag> {marks;}
-}
-object StoredMailContent {
-    has origin is MailMessage;has limits is MimeLimits;
-    StoredMailContent(origin is MailMessage, limits is MimeLimits) {self.origin=origin;self.limits=limits;}
-    message() is MailMessage {ParsedMail(MimePart(origin.headers(),origin.body(),limits).bytes(),limits).message();}
-}
-object MailStorageIdentifier {
-    has origin is string;
-    MailStorageIdentifier(origin is string) {self.origin=origin;}
-    validate() is void {
-        confirm origin.length()>0 && origin.length()<=1024 else throw InvalidMailbox.located(0, "storage identifier length outside 1..1024");
-        for (0..origin.length()) -> index {
-            let bytes=Utf8Encoded(origin.slice(index,index+1)).bytes();let value=bytes[0].int();
-            confirm bytes.size()==1 && value>=33 && value<=126 else throw InvalidMailbox.located(index, "invalid storage identifier character");
-        }
-    }
-}
-enum InvalidMailbox is Error = (located(offset is int, reason is string));
-enum MailboxLimitExceeded is Error = (kind(kind is string));
+    has entries is @MailFlag;
+    has maximum is int;
 
-object MaildirLimits {
-    has messages, wire_bytes is int;has mime is MimeLimits;
-    MaildirLimits() {messages=1000;wire_bytes=67108864;mime=MimeLimits();}
-    MaildirLimits(messages is int, wire_bytes is int, mime is MimeLimits) {
-        confirm messages>=0 && wire_bytes>=0 else throw InvalidArgument.because("maildir bounds must be nonnegative");
-        self.messages=messages;self.wire_bytes=wire_bytes;self.mime=mime;
+    // The flags, each once.
+    MailFlags(entries is Sequencing<MailFlag>) {
+        self.entries = MailFlagEntries(origin: entries, maximum: 256).values();
+        maximum = 256;
     }
-    messages() is int {messages;}
-    wire_bytes() is int {wire_bytes;}
-    mime() is MimeLimits {mime;}
-}
-object MaildirName {
-    has origin, identifier is string;has current is bool;has marks is MailFlags;
-    MaildirName(origin is string) {
-        confirm origin.length()>0 && origin.length()<=255 else throw InvalidMailbox.located(0, "maildir filename length outside 1..255");
-        confirm origin.slice(0,1)!="." else throw InvalidMailbox.located(0, "dot maildir filename is reserved");
-        for (0..origin.length()) -> index {
-            let bytes=Utf8Encoded(origin.slice(index,index+1)).bytes();let value=bytes[0].int();
-            confirm bytes.size()==1 && value>=33 && value<=126 && value!=47 && value!=92
-                else throw InvalidMailbox.located(index, "invalid maildir filename character");
+
+    // The same, one argument per part: MailFlags(a, b).
+    MailFlags(entries is ...MailFlag) {
+        let listed is @MailFlag = entries...;
+        self.entries = MailFlagEntries(origin: listed, maximum: 256).values();
+        maximum = 256;
+    }
+
+    // The flags, at most maximum_entries.
+    MailFlags(entries is Sequencing<MailFlag>, maximum_entries is int) {
+        self.entries = MailFlagEntries(origin: entries, maximum: maximum_entries).values();
+        maximum = maximum_entries;
+    }
+
+    // How many.
+    size() is int {
+        entries.size();
+    }
+
+    // The flag at index.
+    item(index is int) is MailFlag {
+        entries[index];
+    }
+
+    // The first flag.
+    first() is MailFlag {
+        entries.first();
+    }
+
+    // The last flag.
+    last() is MailFlag {
+        entries.last();
+    }
+
+    // Walks the flags.
+    cursor() is Cursor<MailFlag> {
+        entries.cursor();
+    }
+
+    // Whether value is one of them.
+    membership(value is MailFlag) is bool {
+        let key = MailFlagName(MailFlagSnapshot(value).flag().string()).key();
+        entries.reduce(false) -> found, entry {
+            found || MailFlagName(entry.string()).key() == key;
+        };
+    }
+
+    // These flags and value.
+    addition(value is MailFlag) is Set<MailFlag> {
+        let snapshot = MailFlagSnapshot(value).flag();
+        if self.membership(snapshot) {
+            return self;
         }
-        let parts=origin.split(":");confirm parts.size()<=2 && parts[0].length()>0 else throw InvalidMailbox.located(0, "invalid maildir info separator");
-        let flags is MimeItems<MailFlag>=MimeItems();
-        if parts.size()==2 {
-            let suffix=parts[1];confirm suffix.length()>=2 && suffix.slice(0,2)=="2," else throw InvalidMailbox.located(parts[0].length()+1, "unsupported maildir info version");
-            for (2..suffix.length()) -> index {
-                let letter=suffix.slice(index,index+1);
-                confirm suffix.slice(2,index).split(letter).size()==1 else throw InvalidMailbox.located(parts[0].length()+1+index, "duplicate maildir flag");
-                let kind=match letter {
-                    case "D" {SystemMailFlag.draft;} case "F" {SystemMailFlag.flagged;} case "R" {SystemMailFlag.answered;}
-                    case "S" {SystemMailFlag.seen;} case "T" {SystemMailFlag.deleted;}
-                    else {throw InvalidMailbox.located(parts[0].length()+1+index, "unsupported maildir flag");}
-                };
-                flags=flags.following(SystemFlag(kind));
+        confirm entries.size() < maximum else throw MailboxLimitExceeded.kind("flags");
+        let following is @MailFlag = entries + [snapshot];
+        MailFlags(entries: following, maximum_entries: maximum);
+    }
+
+    // These flags without value.
+    difference(value is MailFlag) is Set<MailFlag> {
+        let key = MailFlagName(MailFlagSnapshot(value).flag().string()).key();
+        let following is @MailFlag = entries.filter() -> entry {
+            MailFlagName(entry.string()).key() != key;
+        };
+        MailFlags(entries: following, maximum_entries: maximum);
+    }
+}
+
+hidden object MailFlagSnapshot {
+    has origin is MailFlag;
+
+    MailFlagSnapshot(origin is MailFlag) {
+        self.origin = origin;
+    }
+
+    flag() is MailFlag {
+        if origin.kind() == MailFlagKind.system {
+            SystemFlag(origin.system());
+        }
+        else {
+            KeywordFlag(origin.keyword());
+        }
+    }
+}
+
+hidden object MailFlagEntries {
+    has origin is Sequencing<MailFlag>;
+    has maximum is int;
+
+    MailFlagEntries(origin is Sequencing<MailFlag>, maximum is int) {
+        confirm maximum >= 0
+            else throw InvalidArgument.because("mail flag bound must be nonnegative");
+        self.origin = origin;
+        self.maximum = maximum;
+    }
+
+    values() is @MailFlag {
+        let size = origin.size();
+        confirm size >= 0
+            else throw InvalidArgument.because("mail flag source size must be nonnegative");
+        confirm size <= maximum else throw MailboxLimitExceeded.kind("flags");
+        let result is MimeItems<MailFlag> = MimeItems();
+        for (0..size) -> index {
+            let flag = MailFlagSnapshot(origin.item(index)).flag();
+            let key = MailFlagName(flag.string()).key();
+            let present = result.entries().reduce(false) -> found, entry {
+                found || MailFlagName(entry.string()).key() == key;
+            };
+            if !present {
+                result = result.following(flag);
             }
         }
-        self.origin=origin;identifier=parts[0];current=parts.size()==2;marks=MailFlags(flags.entries());
+        result.entries();
     }
-    string() is string {origin;}
-    identifier() is string {identifier;}
-    current() is bool {current;}
-    flags() is Set<MailFlag> {marks;}
 }
+
+hidden object MailSetEntries {
+    has origin is Set<MailFlag>;
+
+    MailSetEntries(origin is Set<MailFlag>) {
+        self.origin = origin;
+    }
+
+    values() is @MailFlag {
+        let size = origin.size();
+        confirm size >= 0 else throw InvalidMailbox.located(0, "negative flag set size");
+        confirm size <= 256 else throw MailboxLimitExceeded.kind("flags");
+        let cursor = MailFlagCursor(origin.cursor());
+        let result is MimeItems<MailFlag> = MimeItems();
+        for (0..size) -> index {
+            confirm cursor.available()
+                else throw InvalidMailbox.located(index, "flag set ended before declared size");
+            result = result.following(MailFlagSnapshot(cursor.item()).flag());
+            cursor = cursor.following();
+        }
+        confirm !cursor.available()
+            else throw InvalidMailbox.located(size, "flag set exceeds declared size");
+        result.entries();
+    }
+}
+
+hidden object MailFlagCursor {
+    has origin is Cursor<MailFlag>;
+
+    MailFlagCursor(origin is Cursor<MailFlag>) {
+        self.origin = origin;
+    }
+
+    available() is bool {
+        origin.available();
+    }
+
+    item() is MailFlag {
+        origin.item();
+    }
+
+    following() is ^MailFlagCursor {
+        ^origin = origin.successor();
+    }
+}
+
+// A message kept in a mailbox, with its id and flags.
+object StoredMail {
+    has identifier is string;
+    has content is MailMessage;
+    has marks is MailFlags;
+
+    // As given.
+    StoredMail(identifier is string, message is MailMessage, flags is Set<MailFlag>) {
+        MailStorageIdentifier(identifier).validate();
+        self.identifier = identifier;
+        marks = MailFlags(MailSetEntries(flags).values());
+        content = StoredMailContent(origin: message, limits: message.limits()).message();
+    }
+
+    // As given, within limits.
+    StoredMail(
+        identifier is string,
+        message is MailMessage,
+        flags is Set<MailFlag>,
+        limits is MimeLimits
+    ) {
+        MailStorageIdentifier(identifier).validate();
+        self.identifier = identifier;
+        marks = MailFlags(MailSetEntries(flags).values());
+        content = StoredMailContent(origin: message, limits: limits).message();
+    }
+
+    // The message.
+    message() is MailMessage {
+        content;
+    }
+
+    // Its flags.
+    flags() is Set<MailFlag> {
+        marks;
+    }
+
+    // Its id in the mailbox.
+    cap Mail {
+        identifier is string {
+            identifier;
+        }
+    }
+}
+
+hidden object StoredMailContent {
+    has origin is MailMessage;
+    has limits is MimeLimits;
+
+    StoredMailContent(origin is MailMessage, limits is MimeLimits) {
+        self.origin = origin;
+        self.limits = limits;
+    }
+
+    message() is MailMessage {
+        ParsedMail(
+            origin: MimePart(headers: origin.headers(), body: origin.body(), limits: limits).bytes(),
+            limits: limits
+        ).message();
+    }
+}
+
+hidden object MailStorageIdentifier {
+    has origin is string;
+
+    MailStorageIdentifier(origin is string) {
+        self.origin = origin;
+    }
+
+    validate() is void {
+        confirm origin.length() > 0 && origin.length() <= 1024
+            else throw InvalidMailbox.located(0, "storage identifier length outside 1..1024");
+        let characters = origin.characters();
+        for (0..characters.size()) -> index {
+            let value = characters[index].code();
+            confirm value >= 33 && value <= 126
+                else throw InvalidMailbox.located(index, "invalid storage identifier character");
+        }
+    }
+}
+
+// A mailbox or a stored name that is not valid; offset says where.
+enum InvalidMailbox is Error = (located(offset is int, reason is string));
+
+// A mailbox over a limit; kind says which.
+enum MailboxLimitExceeded is Error = (kind(kind is string));
+
+// How much of a Maildir is read.
+object MaildirLimits {
+    has messages, wire_bytes is int;
+    has mime is MimeLimits;
+
+    // 1000 messages, 64 MiB and the default MIME limits.
+    MaildirLimits() {
+        messages = 1000;
+        wire_bytes = 67108864;
+        mime = MimeLimits();
+    }
+
+    // The limits as given.
+    MaildirLimits(messages is int, wire_bytes is int, mime is MimeLimits) {
+        confirm messages >= 0 && wire_bytes >= 0
+            else throw InvalidArgument.because("maildir bounds must be nonnegative");
+        self.messages = messages;
+        self.wire_bytes = wire_bytes;
+        self.mime = mime;
+    }
+
+    // The MIME limits of a message.
+    mime() is MimeLimits {
+        mime;
+    }
+
+    // Messages and bytes in all.
+    cap Limits {
+        messages is int {
+            messages;
+        }
+
+        wire_bytes is int {
+            wire_bytes;
+        }
+    }
+}
+
+hidden object MaildirName {
+    has origin, identifier is string;
+    has current is bool;
+    has marks is MailFlags;
+
+    MaildirName(origin is string) {
+        confirm origin.length() > 0 && origin.length() <= 255
+            else throw InvalidMailbox.located(0, "maildir filename length outside 1..255");
+        confirm origin.slice(0, 1) != "."
+            else throw InvalidMailbox.located(0, "dot maildir filename is reserved");
+        let characters = origin.characters();
+        for (0..characters.size()) -> index {
+            let value = characters[index].code();
+            confirm value >= 33 && value <= 126 && value != 47 && value != 92
+                else throw InvalidMailbox.located(index, "invalid maildir filename character");
+        }
+        let parts = origin.split(":");
+        confirm parts.size() <= 2 && parts[0].length() > 0
+            else throw InvalidMailbox.located(0, "invalid maildir info separator");
+        let flags is MimeItems<MailFlag> = MimeItems();
+        if parts.size() == 2 {
+            let suffix = parts[1];
+            confirm suffix.length() >= 2 && suffix.slice(0, 2) == "2,"
+                else throw InvalidMailbox.located(
+                    parts[0].length() + 1,
+                    "unsupported maildir info version"
+                );
+            // The suffix is ASCII here: flag letters are read by code (#174).
+            let letters = suffix.characters();
+            for (2..letters.size()) -> index {
+                let code = letters[index].code();
+                let repeated = (2..index).reduce(false) -> found, prior {
+                    found || letters[prior].code() == code;
+                };
+                confirm !repeated
+                    else throw InvalidMailbox.located(
+                        parts[0].length() + 1 + index,
+                        "duplicate maildir flag"
+                    );
+                let kind = match code {
+                    case 68 {
+                        SystemMailFlag.draft;
+                    }
+                    case 70 {
+                        SystemMailFlag.flagged;
+                    }
+                    case 82 {
+                        SystemMailFlag.answered;
+                    }
+                    case 83 {
+                        SystemMailFlag.seen;
+                    }
+                    case 84 {
+                        SystemMailFlag.deleted;
+                    }
+                    else {
+                        throw InvalidMailbox.located(
+                            parts[0].length() + 1 + index,
+                            "unsupported maildir flag"
+                        );
+                    }
+                };
+                flags = flags.following(SystemFlag(kind));
+            }
+        }
+        self.origin = origin;
+        identifier = parts[0];
+        current = parts.size() == 2;
+        marks = MailFlags(flags.entries());
+    }
+
+    string() is string {
+        origin;
+    }
+
+    identifier() is string {
+        identifier;
+    }
+
+    current() is bool {
+        current;
+    }
+
+    flags() is Set<MailFlag> {
+        marks;
+    }
+}
+
+// A Maildir folder.
 object Maildir {
-    has origin is Path;has bounds is MaildirLimits;
-    Maildir(path is Path) {origin=path;bounds=MaildirLimits();}
-    Maildir(path is Path, limits is MaildirLimits) {origin=path;bounds=limits;}
-    path() is Path {origin;}
-    limits() is MaildirLimits {bounds;}
+    has origin is Path;
+    has bounds is MaildirLimits;
+
+    // The folder at path, with the default limits.
+    Maildir(path is Path) {
+        origin = path;
+        bounds = MaildirLimits();
+    }
+
+    // The folder within limits.
+    Maildir(path is Path, limits is MaildirLimits) {
+        origin = path;
+        bounds = limits;
+    }
+
+    // Its path.
+    path() is Path {
+        origin;
+    }
+
+    // Its limits.
+    limits() is MaildirLimits {
+        bounds;
+    }
+
+    // Every message in new/ and cur/, with its flags.
     messages() is Sequencing<StoredMail> {
-        let access=MaildirAccess(origin,FileLockMode.shared);defer access.close();
-        let entries=MaildirEntries(origin,bounds.messages()).values();let total=MimePosition(0);
-        let messages is MimeItems<StoredMail>=MimeItems();
+        let access = MaildirAccess(path: origin, mode: FileLockMode.shared);
+        defer access.close();
+        let entries = MaildirEntries(origin: origin, maximum: bounds::Limits::messages).values();
+        let total = MimePosition(0);
+        let messages is MimeItems<StoredMail> = MimeItems();
         for entries -> entry {
-            let bytes=MaildirFileBytes(entry.path(),bounds.mime().body_bytes(),bounds.wire_bytes()-total.index()).bytes();
-            total=total.following(total.index()+bytes.size());
-            messages=messages.following(StoredMail(entry.name().identifier(),ParsedMail(bytes,bounds.mime()).message(),entry.name().flags(),bounds.mime()));
+            let bytes = MaildirFileBytes(
+                path: entry.path(),
+                maximum: bounds.mime()::Limits::body_bytes,
+                aggregate: bounds::Limits::wire_bytes - total.index()
+            ).bytes();
+            total = total.following(total.index() + bytes.size());
+            messages = messages.following(
+                StoredMail(
+                    identifier: entry.name().identifier(),
+                    message: ParsedMail(bytes, bounds.mime()).message(),
+                    flags: entry.name().flags(),
+                    limits: bounds.mime()
+                )
+            );
         }
         messages.entries();
     }
-    add(message is MailMessage) is void {MaildirDelivery(self,message).deliver();}
+
+    // Make the directory and its new/, cur/ and tmp/ where they are missing,
+    // and answer the Maildir: Maildir(path).created().
+    created() is Maildir {
+        for [origin, origin.child("new"), origin.child("cur"), origin.child("tmp")] -> folder {
+            let place = Directory(path: folder);
+            if !place.existence() {
+                place.create();
+            }
+        }
+        self;
+    }
+
+    // Delivers message through tmp/ into new/.
+    add(message is MailMessage) is void {
+        MaildirDelivery(origin: self, message: message).deliver();
+    }
+
+    // Removes the message identifier; MissingStoredMail when there is none.
     remove(identifier is string) is void {
-        let name=MaildirName(identifier);confirm !name.current() else throw InvalidMailbox.located(0, "remove requires a base identifier");
-        let access=MaildirAccess(origin,FileLockMode.exclusive);defer access.close();
-        let entries=MaildirEntries(origin,bounds.messages()).values();
-        for entries -> entry {if entry.name().identifier()==identifier {
-            FileEntry(entry.path()).remove();MaildirCommitRelease(access,identifier).close();return;
-        }}
-        throw MissingStoredMail.identifier(identifier);
-    }
-}
-object MaildirDelivery {
-    has origin is Maildir;has message is MailMessage;has random is Randomizing;
-    MaildirDelivery(origin is Maildir, message is MailMessage) {self.origin=origin;self.message=message;random=SecureRandom();}
-    MaildirDelivery(origin is Maildir, message is MailMessage, random is Randomizing) {self.origin=origin;self.message=message;self.random=random;}
-    deliver() is void {
-        let access=MaildirAccess(origin.path(),FileLockMode.exclusive);defer access.close();
-        let limits=origin.limits();let entries=MaildirEntries(origin.path(),limits.messages()).values();
-        confirm entries.size()<limits.messages() else throw MailboxLimitExceeded.kind("messages");
-        let bytes=MimePart(message.headers(),message.body(),limits.mime()).bytes();
-        confirm bytes.size()<=limits.wire_bytes() else throw MailboxLimitExceeded.kind("wire_bytes");
-        let temporary=TemporaryFile(Directory(origin.path().child("tmp")),".okkama-");
-        let identifier=try {
-            temporary.write(ByteSnapshot(bytes));temporary.flush();
-            MaildirPublication(origin.path(),temporary,entries,random).identifier();
-        } catch failure is Error {
-            try {temporary.close();} catch cleanup is Error {}
-            throw failure;
-        };
-        try {temporary.close();} catch FileSystemFailure.detailed(code, message) {
-            throw CommittedMaildirFailure.detailed(identifier, code, message);
-        }
-        MaildirCommitRelease(access,identifier).close();
-    }
-}
-// Persistent lock inode: every library reader/writer uses the same coordinate.
-// The path namespace is trusted; advisory locks do not constrain other clients.
-object MaildirAccess {
-    has owner is File;has guard is FileLock;
-    MaildirAccess(path is Path, mode is FileLockMode) {
-        confirm Directory(path).existence() else throw InvalidMailbox.located(0, "maildir root is not a directory");
-        let coordinate=path.child(".okkama-maildir.lock");
-        try {
-            confirm DirectoryEntry(coordinate).kind()==FileKind.file else throw InvalidMailbox.located(0, "maildir lock is not a regular file");
-        } catch failure is FileSystemFailure {match failure {case FileSystemFailure.detailed(code, _) {if code!="not_found" {throw failure;}}}}
-        let file=File(mode:FileMode.reading_and_appending,path:coordinate,binary:true);
-        let lock=try {FileLock(file,mode,FileLockWaiting.immediate);}
-            catch failure is Error {try {file.close();} catch cleanup is Error {} throw failure;};
-        owner=file;guard=lock;
-    }
-    closed() is bool {guard.closed();}
-    close() is void {
-        try {guard.close();} catch failure is Error {try {owner.close();} catch cleanup is Error {} throw failure;}
-        owner.close();
-    }
-    destroy {self.close();}
-}
-object MaildirCommitRelease {
-    has access is MaildirAccess;has identifier is string;
-    MaildirCommitRelease(access is MaildirAccess, identifier is string) {self.access=access;self.identifier=identifier;}
-    close() is void {
-        try {access.close();} catch FileSystemFailure.detailed(code, message) {
-            throw CommittedMaildirFailure.detailed(identifier, code, message);
-        }
-    }
-}
-object ChangedMaildirFlags {
-    has origin is Maildir;has identifier is string;has marks is MailFlags;has name is MaildirName;
-    ChangedMaildirFlags(origin is Maildir, identifier is string, flags is Set<MailFlag>) {
-        let base=MaildirName(identifier);confirm !base.current() else throw InvalidMailbox.located(0, "flag change requires a base identifier");
-        let snapshot=MailFlags(MailSetEntries(flags).values());
-        let target=MaildirFlagName(identifier,snapshot).name();
-        self.origin=origin;self.identifier=identifier;marks=snapshot;name=target;
-    }
-    result() is StoredMail {
-        let access=MaildirAccess(origin.path(),FileLockMode.exclusive);defer access.close();
-        let limits=origin.limits();let entries=MaildirEntries(origin.path(),limits.messages()).values();
+        let name = MaildirName(identifier);
+        confirm !name.current()
+            else throw InvalidMailbox.located(0, "remove requires a base identifier");
+        let access = MaildirAccess(path: origin, mode: FileLockMode.exclusive);
+        defer access.close();
+        let entries = MaildirEntries(origin: origin, maximum: bounds::Limits::messages).values();
         for entries -> entry {
-            if entry.name().identifier()==identifier {
-                let bytes=MaildirFileBytes(entry.path(),limits.mime().body_bytes(),limits.wire_bytes()).bytes();
-                let result=StoredMail(identifier,ParsedMail(bytes,limits.mime()).message(),marks,limits.mime());
-                let destination=origin.path().child("cur").child(name.string());
-                if entry.path().string()!=destination.string() {FileEntry(entry.path()).move(destination);}
-                MaildirCommitRelease(access,identifier).close();return result;
+            if entry.name().identifier() == identifier {
+                FileEntry(entry.path()).remove();
+                MaildirCommitRelease(access: access, identifier: identifier).close();
+                return;
             }
         }
         throw MissingStoredMail.identifier(identifier);
     }
 }
-object MaildirFlagName {
-    has identifier is string;has marks is MailFlags;
-    MaildirFlagName(identifier is string, marks is MailFlags) {self.identifier=identifier;self.marks=marks;}
-    name() is MaildirName {
-        for marks -> flag {
-            confirm flag.kind()==MailFlagKind.system else throw InvalidMailbox.located(0, "Maildir keyword maps are unsupported");
-            confirm flag.system()!=SystemMailFlag.recent else throw InvalidMailbox.located(0, "Recent is not a stored Maildir flag");
+
+hidden object MaildirDelivery {
+    has origin is Maildir;
+    has message is MailMessage;
+    has random is Randomizing;
+
+    MaildirDelivery(origin is Maildir, message is MailMessage) {
+        self.origin = origin;
+        self.message = message;
+        random = SecureRandom();
+    }
+
+    MaildirDelivery(origin is Maildir, message is MailMessage, random is Randomizing) {
+        self.origin = origin;
+        self.message = message;
+        self.random = random;
+    }
+
+    deliver() is void {
+        let access = MaildirAccess(path: origin.path(), mode: FileLockMode.exclusive);
+        defer access.close();
+        let limits = origin.limits();
+        let entries = MaildirEntries(origin: origin.path(), maximum: limits::Limits::messages).values();
+        confirm entries.size() < limits::Limits::messages
+            else throw MailboxLimitExceeded.kind("messages");
+        let bytes = MimePart(
+            headers: message.headers(),
+            body: message.body(),
+            limits: limits.mime()
+        ).bytes();
+        confirm bytes.size() <= limits::Limits::wire_bytes
+            else throw MailboxLimitExceeded.kind("wire_bytes");
+        let temporary = TemporaryFile(
+            directory: Directory(origin.path().child("tmp")),
+            prefix: ".okkama-"
+        );
+        let identifier = try {
+            temporary.write(bytes);
+            temporary.flush();
+            MaildirPublication(
+                path: origin.path(),
+                temporary: temporary,
+                entries: entries,
+                random: random
+            ).identifier();
         }
-        let kinds=[SystemMailFlag.draft,SystemMailFlag.flagged,SystemMailFlag.answered,SystemMailFlag.seen,SystemMailFlag.deleted];
-        let letters="DFRST";
-        let suffix=(0..5).reduce("") -> value,index {
-            value+if marks.membership(SystemFlag(kinds[index])) {letters.slice(index,index+1);} else {"";};
+        catch failure is Error {
+            try {
+                temporary.close();
+            }
+            catch cleanup is Error {}
+            throw failure;
         };
-        MaildirName(identifier+":2,"+suffix);
+        try {
+            temporary.close();
+        }
+        catch failure is FileError {
+            throw CommittedMaildirFailure.detailed(identifier, "file", failure.text());
+        }
+        MaildirCommitRelease(access: access, identifier: identifier).close();
     }
 }
-object MaildirPublication {
-    has path is Path;has temporary is TemporaryFile;has entries is @MaildirEntry;has random is Randomizing;
-    MaildirPublication(path is Path, temporary is TemporaryFile, entries is @MaildirEntry, random is Randomizing) {
-        self.path=path;self.temporary=temporary;self.entries=entries;self.random=random;
+
+// Persistent lock inode: every library reader/writer uses the same coordinate.
+// The path namespace is trusted; advisory locks do not constrain other clients.
+hidden object MaildirAccess {
+    has owner is File;
+    has guard is FileLock;
+
+    MaildirAccess(path is Path, mode is FileLockMode) {
+        confirm Directory(path).existence()
+            else throw InvalidMailbox.located(0, "maildir root is not a directory");
+        let coordinate = path.child(".okkama-maildir.lock");
+        try {
+            confirm DirectoryEntry(coordinate).kind() == FileKind.file
+                else throw InvalidMailbox.located(0, "maildir lock is not a regular file");
+        }
+        catch FileError.not_found(_) {}
+        let file = File(path: coordinate, mode: FileMode.reading_and_appending);
+        let lock = file.lock(mode) else throw InvalidState.because(
+            "maildir is locked by another session"
+        );
+        owner = file;
+        guard = lock;
     }
+
+    closed() is bool {
+        guard.closed();
+    }
+
+    close() is void {
+        try {
+            guard.close();
+        }
+        catch failure is Error {
+            try {
+                owner.close();
+            }
+            catch cleanup is Error {}
+            throw failure;
+        }
+        owner.close();
+    }
+
+    destroy {
+        self.close();
+    }
+}
+
+hidden object MaildirCommitRelease {
+    has access is MaildirAccess;
+    has identifier is string;
+
+    MaildirCommitRelease(access is MaildirAccess, identifier is string) {
+        self.access = access;
+        self.identifier = identifier;
+    }
+
+    close() is void {
+        try {
+            access.close();
+        }
+        catch failure is FileError {
+            throw CommittedMaildirFailure.detailed(identifier, "file", failure.text());
+        }
+    }
+}
+
+// A message's flags changed by renaming its file.
+object ChangedMaildirFlags {
+    has origin is Maildir;
+    has identifier is string;
+    has marks is MailFlags;
+    has name is MaildirName;
+
+    // Gives identifier in origin the flags.
+    ChangedMaildirFlags(origin is Maildir, identifier is string, flags is Set<MailFlag>) {
+        let base = MaildirName(identifier);
+        confirm !base.current()
+            else throw InvalidMailbox.located(0, "flag change requires a base identifier");
+        let snapshot = MailFlags(MailSetEntries(flags).values());
+        let target = MaildirFlagName(identifier: identifier, marks: snapshot).name();
+        self.origin = origin;
+        self.identifier = identifier;
+        marks = snapshot;
+        name = target;
+    }
+
+    // Renames the file and gives the stored message; the bytes are untouched.
+    mail() is StoredMail {
+        let access = MaildirAccess(path: origin.path(), mode: FileLockMode.exclusive);
+        defer access.close();
+        let limits = origin.limits();
+        let entries = MaildirEntries(origin: origin.path(), maximum: limits::Limits::messages).values();
+        for entries -> entry {
+            if entry.name().identifier() == identifier {
+                let bytes = MaildirFileBytes(
+                    path: entry.path(),
+                    maximum: limits.mime()::Limits::body_bytes,
+                    aggregate: limits::Limits::wire_bytes
+                ).bytes();
+                let result = StoredMail(
+                    identifier: identifier,
+                    message: ParsedMail(bytes, limits.mime()).message(),
+                    flags: marks,
+                    limits: limits.mime()
+                );
+                let destination = origin.path().child("cur").child(name.string());
+                if entry.path().string() != destination.string() {
+                    FileEntry(entry.path()).move(destination);
+                }
+                MaildirCommitRelease(access: access, identifier: identifier).close();
+                return result;
+            }
+        }
+        throw MissingStoredMail.identifier(identifier);
+    }
+}
+
+hidden object MaildirFlagName {
+    has identifier is string;
+    has marks is MailFlags;
+
+    MaildirFlagName(identifier is string, marks is MailFlags) {
+        self.identifier = identifier;
+        self.marks = marks;
+    }
+
+    name() is MaildirName {
+        for marks -> flag {
+            confirm flag.kind() == MailFlagKind.system
+                else throw InvalidMailbox.located(0, "Maildir keyword maps are unsupported");
+            confirm flag.system() != SystemMailFlag.recent
+                else throw InvalidMailbox.located(0, "Recent is not a stored Maildir flag");
+        }
+        let kinds = [
+            SystemMailFlag.draft,
+            SystemMailFlag.flagged,
+            SystemMailFlag.answered,
+            SystemMailFlag.seen,
+            SystemMailFlag.deleted
+        ];
+        let letters = ["D", "F", "R", "S", "T"];
+        let suffix = (0..5).reduce("") -> value, index {
+            value + if marks.membership(SystemFlag(kinds[index])) {
+                letters[index];
+            }
+            else {
+                "";
+            };
+        };
+        MaildirName(identifier + ":2," + suffix);
+    }
+}
+
+hidden object MaildirPublication {
+    has path is Path;
+    has temporary is TemporaryFile;
+    has entries is @MaildirEntry;
+    has random is Randomizing;
+
+    MaildirPublication(
+        path is Path,
+        temporary is TemporaryFile,
+        entries is @MaildirEntry,
+        random is Randomizing
+    ) {
+        self.path = path;
+        self.temporary = temporary;
+        self.entries = entries;
+        self.random = random;
+    }
+
     identifier() is string {
-        let source=FileEntry(TemporaryFilePath(temporary).value());
+        let source = FileEntry(temporary.path());
         for (0..32) -> attempt {
-            let bytes=random.bytes(24);confirm bytes.size()==24 else throw InvalidMailbox.located(0, "maildir randomness must return 24 bytes");
-            let identifier=HexEncoded(bytes).string();
-            let used=entries.reduce(false) -> found,entry {found || entry.name().identifier()==identifier;};
+            let bytes = random.bytes(24);
+            confirm bytes.size() == 24
+                else throw InvalidMailbox.located(0, "maildir randomness must return 24 bytes");
+            let identifier = HexEncoded(bytes).string();
+            let used = entries.reduce(false) -> found, entry {
+                found || entry.name().identifier() == identifier;
+            };
             if !used {
-                let published=try {HardLink(source:source,destination:path.child("new").child(identifier)).create();true;}
-                    catch failure is FileSystemFailure {match failure {case FileSystemFailure.detailed(code, _) {if code=="already_exists" {false;} else {throw failure;}}}};
-                if published {return identifier;}
+                let published = try {
+                    HardLink(source: source, destination: path.child("new").child(identifier)).create();
+                    true;
+                }
+                catch FileError.already_exists(_) {
+                    false;
+                };
+                if published {
+                    return identifier;
+                }
             }
         }
         throw MailboxLimitExceeded.kind("collisions");
     }
 }
+
+// No message has that id.
 enum MissingStoredMail is Error = (identifier(identifier is string));
-enum CommittedMaildirFailure is Error = (detailed(identifier is string, code is string, reason is string));
-object MaildirEntry {
-    has path is Path;has name is MaildirName;
-    MaildirEntry(path is Path, name is MaildirName) {self.path=path;self.name=name;}
-    path() is Path {path;}
-    name() is MaildirName {name;}
+
+// The change was made, but a later step failed; identifier, code and reason say
+// what.
+enum CommittedMaildirFailure is Error = (detailed(
+    identifier is string,
+    code is string,
+    reason is string
+));
+
+hidden object MaildirEntry {
+    has path is Path;
+    has name is MaildirName;
+
+    MaildirEntry(path is Path, name is MaildirName) {
+        self.path = path;
+        self.name = name;
+    }
+
+    path() is Path {
+        path;
+    }
+
+    name() is MaildirName {
+        name;
+    }
 }
-object MaildirEntries {
-    has origin is Path;has maximum is int;
-    MaildirEntries(origin is Path, maximum is int) {self.origin=origin;self.maximum=maximum;}
+
+hidden object MaildirEntries {
+    has origin is Path;
+    has maximum is int;
+
+    MaildirEntries(origin is Path, maximum is int) {
+        self.origin = origin;
+        self.maximum = maximum;
+    }
+
     values() is @MaildirEntry {
-        confirm Directory(origin).existence() else throw InvalidMailbox.located(0, "maildir root is not a directory");
-        for ["new","cur","tmp"] -> child {
-            confirm Directory(origin.child(child)).existence() else throw InvalidMailbox.located(0, "maildir requires new/cur/tmp directories");
+        confirm Directory(origin).existence()
+            else throw InvalidMailbox.located(0, "maildir root is not a directory");
+        for ["new", "cur", "tmp"] -> child {
+            confirm Directory(origin.child(child)).existence()
+                else throw InvalidMailbox.located(0, "maildir requires new/cur/tmp directories");
         }
-        let entries is MimeItems<MaildirEntry>=MimeItems();
-        for ["new","cur"] -> child {
+        let entries is MimeItems<MaildirEntry> = MimeItems();
+        for ["new", "cur"] -> child {
             for DirectoryEntries(Directory(origin.child(child))) -> entry {
-                let path=entry.path();let text=if path.style()==PathStyle.windows {path.string().split("\\").last().split("/").last();}
-                    else {path.string().split("/").last();};
-                if text.slice(0,1)!="." {
-                    confirm entries.size()<maximum else throw MailboxLimitExceeded.kind("messages");
-                    let name=MaildirName(text);
-                    confirm name.current()==(child=="cur") else throw InvalidMailbox.located(0, "maildir info suffix differs from entry directory");
-                    confirm entry.kind()==FileKind.file else throw InvalidMailbox.located(0, "maildir message is not a regular file");
-                    let duplicate=entries.entries().reduce(false) -> found,previous {found || previous.name().identifier()==name.identifier();};
-                    confirm !duplicate else throw InvalidMailbox.located(0, "duplicate maildir base identifier");
-                    entries=entries.following(MaildirEntry(path,name));
+                let path = entry.path();
+                let text = if path::Grammar::style == PathStyle.windows {
+                    path.string().split("\\").last().split("/").last();
+                }
+                else {
+                    path.string().split("/").last();
+                };
+                if text.slice(0, 1) != "." {
+                    confirm entries.size() < maximum
+                        else throw MailboxLimitExceeded.kind("messages");
+                    let name = MaildirName(text);
+                    confirm name.current() == (child == "cur")
+                        else throw InvalidMailbox.located(
+                            0,
+                            "maildir info suffix differs from entry directory"
+                        );
+                    confirm entry.kind() == FileKind.file
+                        else throw InvalidMailbox.located(
+                            0,
+                            "maildir message is not a regular file"
+                        );
+                    let duplicate = entries.entries().reduce(false) -> found, previous {
+                        found || previous.name().identifier() == name.identifier();
+                    };
+                    confirm !duplicate
+                        else throw InvalidMailbox.located(0, "duplicate maildir base identifier");
+                    entries = entries.following(MaildirEntry(path: path, name: name));
                 }
             }
         }
         entries.entries();
     }
 }
-object MaildirFileBytes {
-    has path is Path;has maximum, aggregate is int;
-    MaildirFileBytes(path is Path, maximum is int, aggregate is int) {self.path=path;self.maximum=maximum;self.aggregate=aggregate;}
+
+hidden object MaildirFileBytes {
+    has path is Path;
+    has maximum, aggregate is int;
+
+    MaildirFileBytes(path is Path, maximum is int, aggregate is int) {
+        self.path = path;
+        self.maximum = maximum;
+        self.aggregate = aggregate;
+    }
+
     bytes() is @byte {
-        let file=File(mode:FileMode.reading,path:path,binary:true);defer file.close();
-        let buffer=ByteBuffer();defer buffer.closing().close();let reader=file.binary();
-        let bound=if maximum<aggregate {maximum;} else {aggregate;};
+        let file = File(path: path);
+        defer file.close();
+        let buffer = ByteBuffer();
+        defer buffer.closing().close();
+        let reader = file.binary();
+        let bound = if maximum < aggregate {
+            maximum;
+        }
+        else {
+            aggregate;
+        };
         loop {
-            let remaining=bound-buffer.content().size();let amount=if remaining<65536 {remaining+1;} else {65536;};
-            let bytes=reader.bytes(amount);last if bytes.size()==0;
-            confirm bytes.size()<=maximum-buffer.content().size() else throw MimeLimitFailure.kind("body_bytes");
-            confirm bytes.size()<=aggregate-buffer.content().size() else throw MailboxLimitExceeded.kind("wire_bytes");
-            buffer.writing().write(ByteSnapshot(bytes));
+            let remaining = bound - buffer.content().size();
+            let amount = if remaining < 65536 {
+                remaining + 1;
+            }
+            else {
+                65536;
+            };
+            let bytes = reader.bytes(amount);
+            last if bytes.size() == 0;
+            confirm bytes.size() <= maximum - buffer.content().size()
+                else throw MimeLimitFailure.kind("body_bytes");
+            confirm bytes.size() <= aggregate - buffer.content().size()
+                else throw MailboxLimitExceeded.kind("wire_bytes");
+            buffer.writing().write(bytes);
         }
         buffer.content().bytes();
     }
 }
 
 test "keyword flags retain spelling and compare without ASCII case" {
-    let flag=KeywordFlag("$Custom");
-    test.is(flag.keyword(),"$Custom");
-    test.is(flag.order(KeywordFlag("$custom")),Order.equal);
+    let flag = KeywordFlag("$Custom");
+    test.is(flag.keyword(), "$Custom");
+    test.is(flag.order(KeywordFlag("$custom")), Order.equal);
 }
+
 test "system flags expose only their own variant" {
-    test.is(SystemFlag(SystemMailFlag.seen).string(),"\\Seen");
-    let wrong=try {SystemFlag(SystemMailFlag.seen).keyword();false;}
-        catch failure is WrongMailFlagKind {true;};
+    test.is(SystemFlag(SystemMailFlag.seen).string(), "\\Seen");
+    let wrong = try {
+        SystemFlag(SystemMailFlag.seen).keyword();
+        false;
+    }
+    catch failure is WrongMailFlagKind {
+        true;
+    };
     test.ok(wrong);
 }
+
 test "flag sets retain first spelling and compare protocol identity" {
-    let flags=MailFlags([KeywordFlag("$Tag"),KeywordFlag("$tag")]);
-    test.is(flags.size(),1);test.is(flags.first().string(),"$Tag");
+    let flags = MailFlags(KeywordFlag("$Tag"), KeywordFlag("$tag"));
+    test.is(flags.size(), 1);
+    test.is(flags.first().string(), "$Tag");
     test.ok(flags.membership(KeywordFlag("$TAG")));
 }
+
 test "maildir filenames retain identifiers and interpret standard flags" {
-    let name=MaildirName("opaque-id:2,RS");test.is(name.identifier(),"opaque-id");
+    let name = MaildirName("opaque-id:2,RS");
+    test.is(name.identifier(), "opaque-id");
     test.ok(name.flags().membership(SystemFlag(SystemMailFlag.seen)));
 }
+
 test "stored messages retain content and protocol flags" {
-    let stored=StoredMail("id",ParsedMail(Utf8Encoded("\r\nbody").bytes()).message(),MailFlags([KeywordFlag("Tag")]));
-    test.is(Utf8Decoded(stored.message().body().bytes()).string(),"body");
+    let stored = StoredMail(
+        identifier: "id",
+        message: ParsedMail(Utf8Encoded("\r\nbody").bytes()).message(),
+        flags: MailFlags(KeywordFlag("Tag"))
+    );
+    test.is(Utf8Decoded(stored.message().body().bytes()).string(), "body");
     test.ok(stored.flags().membership(KeywordFlag("TAG")));
 }
+
 test "maildir flag names use canonical order" {
-    let flags=MailFlags([SystemFlag(SystemMailFlag.seen),SystemFlag(SystemMailFlag.draft)]);
-    test.is(MaildirFlagName("id",flags).name().string(),"id:2,DS");
-    let rejected=try {MaildirFlagName("id",MailFlags([KeywordFlag("custom")])).name();false;}
-        catch failure is InvalidMailbox {true;};
+    let flags = MailFlags(SystemFlag(SystemMailFlag.seen), SystemFlag(SystemMailFlag.draft));
+    test.is(MaildirFlagName(identifier: "id", marks: flags).name().string(), "id:2,DS");
+    let rejected = try {
+        MaildirFlagName(identifier: "id", marks: MailFlags(KeywordFlag("custom"))).name();
+        false;
+    }
+    catch failure is InvalidMailbox {
+        true;
+    };
     test.ok(rejected);
+}
+
+test "a Maildir creates its folders, then keeps and lists messages" {
+    let scratch = TemporaryDirectory(parent: Directory(path: Path(".")), prefix: "maildir-test-");
+    let box = Maildir(scratch.path().child("inbox")).created();
+    Maildir(scratch.path().child("inbox")).created();
+    test.is(box.messages().size(), 0);
+    box.add(ParsedMail(Utf8Encoded("Subject: hi\r\n\r\nbody\r\n").bytes()).message());
+    test.is(box.messages().size(), 1);
+    scratch.close();
+}
+
+test "mailbox names take ASCII characters only, by position" {
+    let keywords is @int = [
+        "$Ok_1",
+        "a[b}",
+        "a(b",
+        "ab{",
+        "a%",
+        "*",
+        "a\"b",
+        "a\\b",
+        "a]b",
+        "aé",
+        "a b",
+        "ok~"
+    ].map() -> keyword {
+        try {
+            KeywordFlag(keyword);
+            -1;
+        }
+        catch InvalidMailFlag.located(at, _reason) {
+            at;
+        }
+    };
+    test.is(keywords, [-1, -1, 1, 2, 1, 0, 1, 1, 1, 1, 1, -1]);
+    let identifiers is @int = ["id-1~", "a b", "абв", "a\tb", "ok!"].map() -> identifier {
+        try {
+            MailStorageIdentifier(identifier).validate();
+            -1;
+        }
+        catch InvalidMailbox.located(at, _reason) {
+            at;
+        }
+    };
+    test.is(identifiers, [-1, 1, 0, 1, -1]);
+    let names is @int = [
+        "id:2,DFRST",
+        "i/d",
+        "i\\d",
+        "id:2,SS",
+        "id:2,SX",
+        "id:1,S",
+        "ид",
+        "id:2,",
+        ".id",
+        "a:b:c",
+        "id:2,TDT"
+    ].map() -> name {
+        try {
+            MaildirName(name);
+            -1;
+        }
+        catch InvalidMailbox.located(at, _reason) {
+            at;
+        }
+    };
+    test.is(names, [-1, 1, 1, 6, 6, 3, 0, -1, 0, 0, 7]);
+    let all = MaildirName("id:2,TDSRF").flags();
+    test.is(all.size(), 5);
+    test.ok(all.membership(SystemFlag(SystemMailFlag.deleted)));
+    test.ok(all.membership(SystemFlag(SystemMailFlag.answered)));
+    let marks = MailFlags(
+        SystemFlag(SystemMailFlag.seen),
+        SystemFlag(SystemMailFlag.deleted),
+        SystemFlag(SystemMailFlag.draft),
+        SystemFlag(SystemMailFlag.answered),
+        SystemFlag(SystemMailFlag.flagged)
+    );
+    test.is(MaildirFlagName(identifier: "id", marks: marks).name().string(), "id:2,DFRST");
+    let empty is @MailFlag = [];
+    test.is(MaildirFlagName(identifier: "id", marks: MailFlags(empty)).name().string(), "id:2,");
 }

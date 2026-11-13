@@ -147,6 +147,13 @@ fn descriptor_flags(program: &Program) -> Vec<bool> {
                 roles.entry(role.0).or_default().push(index);
                 None
             }
+            // A variant value is an object of one of its cases (#290).
+            Type::Variant(variant) => {
+                for (_, case) in &program.variants[variant.0 as usize].cases {
+                    parents[offset + case.0 as usize].push(index);
+                }
+                None
+            }
             _ => {
                 pending.push(index);
                 None
@@ -288,7 +295,8 @@ impl Runtime {
                 }
                 _ => {
                     if let Some(map) = self.heap.payload::<crate::ops::MapValue>(object) {
-                        pending.extend(map.entries.values().rev().map(|(_, v)| (*v, map.value)));
+                        let values: Vec<Word> = map.entries.values().map(|(_, v)| *v).collect();
+                        pending.extend(values.into_iter().rev().map(|v| (v, map.value)));
                     } else if let Some(boxed) = self.heap.payload::<crate::ops::AnyBox>(object) {
                         pending.push((boxed.value, boxed.repr));
                     } else {
@@ -358,6 +366,22 @@ impl Runtime {
             heap::CLOSURE | heap::PAYLOAD => true,
             _ => false,
         }
+    }
+
+    /// `value` if it is a free identity none of whose fields may reach a free
+    /// identity (`may_reach_free(value)` holds): the walk would find just it.
+    fn lone_free(&self, value: Word) -> Option<Word> {
+        let header = self.heap.header_of(value);
+        if heap::kind(header) != heap::OBJECT {
+            return None;
+        }
+        let layout = &self.heap.layouts.objects[heap::payload(header) as usize];
+        for (index, &field) in layout.iter().enumerate() {
+            if field.pointer(self.heap.field(value, index)).is_some_and(|pointer| self.may_reach_free(pointer)) {
+                return None;
+            }
+        }
+        Some(value)
     }
 
     fn region_len(&self, region: Word) -> usize {
@@ -451,6 +475,17 @@ impl Runtime {
 
     fn region_add(&mut self, region: Word, value: Word, own: bool) {
         if !self.may_reach_free(value) {
+            return;
+        }
+        // The common add, a cursor or a constructor's result, is one free
+        // identity whose fields reach no other: no walk.
+        if let Some(object) = self.lone_free(value) {
+            if own {
+                self.resources.identities.get_mut(&object).expect("identity").owner = Owner::Region(region);
+            } else if self.region_contains(region, object) {
+                return;
+            }
+            self.region_push(region, object);
             return;
         }
         // Tracking (not owning) skips what the region already holds; adopting
@@ -565,7 +600,24 @@ impl Runtime {
         mut primary: Option<Word>,
         awaits: bool,
     ) -> Closed {
-        if self.region_len(region) == 0 {
+        let length = self.region_len(region);
+        if length == 0 {
+            return Closed::Done(primary);
+        }
+        // The common close keeps all it holds: a constructor, or an action
+        // returning what it made. Nothing dies, so nothing is walked.
+        if length <= REGION_SLOTS && (0..length).all(|index| keep.contains(&self.region_get(region, index))) {
+            for index in 0..length {
+                let object = self.region_get(region, index);
+                if let Some(identity) = self.resources.identities.get_mut(&object)
+                    && identity.owner == Owner::Region(region)
+                {
+                    identity.owner = Owner::Free;
+                    let serial = identity.serial;
+                    self.freed(serial);
+                }
+            }
+            self.region_clear(region);
             return Closed::Done(primary);
         }
         let kept: HashSet<Word> =
@@ -719,6 +771,7 @@ impl Runtime {
     }
 
     fn report(&self, root: Word, messages: &HashMap<Word, String>) -> String {
+        const CHAIN_ENTRIES: usize = 64;
         use std::fmt::Write;
         let mut output = String::new();
         let mut pending = vec![(root, "")];
@@ -732,6 +785,11 @@ impl Runtime {
                 let _ = write!(output, "[failure #{index} already shown]");
                 continue;
             }
+            // The same bound as the other engines' reports (#270).
+            if next_index == CHAIN_ENTRIES {
+                output.push_str("... further failures not shown");
+                break;
+            }
             shown.insert(failure, next_index);
             next_index += 1;
             let Some(record) = self.failure(failure) else {
@@ -741,7 +799,17 @@ impl Runtime {
             match &record.kind {
                 FailureKind::Cancelled => output.push_str("Cancelled: Operation was cancelled"),
                 FailureKind::Native(object) => {
-                    let _ = write!(output, "NativeFailure: {}", self.heap.text(self.heap.field(*object, 3)));
+                    // Host details as the IR engine and the JVM print them; a
+                    // nested entry keeps them indented under its label.
+                    let field = |index| self.heap.text(self.heap.field(*object, index));
+                    let text = format!(
+                        "NativeFailure: {}\ncode: {}\ndomain: {}\noperation: {}",
+                        field(3),
+                        field(1),
+                        field(0),
+                        field(2)
+                    );
+                    output.push_str(&if label.is_empty() { text } else { text.replace('\n', "\n  ") });
                 }
                 FailureKind::Program(message) => {
                     let _ = write!(output, "RuntimeError: {message}");
@@ -791,6 +859,20 @@ pub extern "C" fn rt_region_add(ctx: *mut Ctx, region: Word, value: Word, own: u
     let (_, runtime) = unsafe { parts(ctx) };
     runtime.count(|_| "region add".into());
     runtime.region_add(region, value, own != 0);
+}
+
+/// `region.leave` of a region that holds something: close it, keeping what the
+/// `count` words at `keep` reach.
+#[inline(never)]
+pub extern "C" fn rt_region_leave(ctx_ptr: *mut Ctx, region: Word, keep: *const Word, count: u64) {
+    let (_, runtime) = unsafe { parts(ctx_ptr) };
+    runtime.count(|_| "region leave".into());
+    let keep = if count == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(keep, count as usize) } };
+    if let Some(failure) = runtime.region_close(ctx_ptr, region, keep, None) {
+        let ctx = unsafe { &mut *ctx_ptr };
+        ctx.failure = failure;
+        ctx.status = FAILED;
+    }
 }
 
 /// Resource identity of a new object with a destroy-reaching descriptor.
@@ -910,6 +992,7 @@ pub extern "C" fn rt_catch(ctx: *mut Ctx, function: u64, pc: u64, failure: Word)
         let matches = match kind {
             CatchKind::Object => builtin == Some(*ty as usize),
             CatchKind::Role => program.roles.get(*ty as usize).is_some_and(|r| r.is_error()),
+            CatchKind::Variant => false,
         };
         if !matches {
             return 0;
@@ -930,6 +1013,7 @@ pub extern "C" fn rt_catch(ctx: *mut Ctx, function: u64, pc: u64, failure: Word)
         let matches = match kind {
             CatchKind::Object => program.objects.get(*ty as usize).is_some_and(|o| o.is_native_failure()),
             CatchKind::Role => program.roles.get(*ty as usize).is_some_and(|r| r.is_error()),
+            CatchKind::Variant => false,
         };
         if matches {
             ctx.scratch = object;
@@ -948,6 +1032,7 @@ pub extern "C" fn rt_catch(ctx: *mut Ctx, function: u64, pc: u64, failure: Word)
     let matches = match kind {
         CatchKind::Object => owner == *ty,
         CatchKind::Role => runtime.loaded.program.objects[owner as usize].does.iter().any(|w| w.role.0 == *ty),
+        CatchKind::Variant => runtime.loaded.program.variants[*ty as usize].cases.iter().any(|(_, o)| o.0 == owner),
     };
     if matches {
         ctx.scratch = payload;

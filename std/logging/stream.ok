@@ -1,47 +1,253 @@
 module logging/stream v1.0.0;
+
+// Writing records as lines to a stream or a terminal.
+//
+//     TextStreamLogs(Stderr());
+//     JsonStreamLogs(Stdout());
+//     TextTerminalLogs(origin: session.output(), zone: utc, styles: [LogStyle(level: LogLevel.error, style: red)]);
+
 import "logging/write" take LogWriting;
-import "logging/record" take LogRecord;
+import "logging/record" take LogRecord, LogContext;
 import "logging/level" take LogLevel;
-import "logging/line" take TextLogLine,JsonLogLine;
-import "time/zone" take TimeZone;
+import "logging/line" take TextLogLine, JsonLogLine;
+import "time/zone" take TimeZone, FixedZone;
 import "io/stream" take Writing;
-import "io/decorators" take ByteSnapshot;
-import "encoding/utf" take Utf8Encoded;
+import "encoding/utf" take Utf8Encoded, Utf8Decoded;
 import "terminal/session" take TerminalOutput;
-import "terminal/style" take TextStyle,StyledText,DefaultColor;
+import "terminal/style" take TextStyle, StyledText, DefaultColor;
 import "collections/sequence" take Sequencing;
-object LogStyle{
-    has level is LogLevel;has style is TextStyle;
-    LogStyle(level is LogLevel,style is TextStyle){self.level=level;self.style=style;}
-    level() is LogLevel{level;}style() is TextStyle{style;}
-}
-object LogStyles{
-    has origin is @LogStyle;
-    LogStyles(styles is Sequencing<LogStyle>){
-        confirm styles.size()>=0 && styles.size()<=5 else throw InvalidLogStyles.invalid;
-        let snapshot is @LogStyle=(0..styles.size()).map()->index{styles.item(index);};
-        for (0..snapshot.size())->index{for (0..index)->previous{confirm snapshot[index].level()!=snapshot[previous].level() else throw InvalidLogStyles.invalid;}}
-        origin=snapshot;
+import "io/buffer" take ByteBuffer;
+import "json" take JsonField;
+import "logging/field" take LogFields;
+import "logging/name" take LogName;
+import "time/clock" take Instant;
+import "time/duration" take Duration, DurationUnit;
+
+// The style of one level's lines on a terminal.
+object LogStyle {
+    has level is LogLevel;
+    has style is TextStyle;
+
+    // style for level.
+    LogStyle(level is LogLevel, style is TextStyle) {
+        self.level = level;
+        self.style = style;
     }
-    style(level is LogLevel) is TextStyle{origin.reduce(TextStyle(DefaultColor(),DefaultColor(),[]))->old,entry{if entry.level()==level{entry.style();}else{old;}};}
+
+    // The level.
+    level() is LogLevel {
+        level;
+    }
+
+    // The style.
+    style() is TextStyle {
+        style;
+    }
 }
+
+// Styles by level.
+object LogStyles {
+    has origin is @LogStyle;
+
+    // The styles, at most 5; InvalidLogStyles beyond.
+    LogStyles(styles is Sequencing<LogStyle>) {
+        confirm styles.size() >= 0 && styles.size() <= 5 else throw InvalidLogStyles.invalid;
+        let snapshot is @LogStyle = (0..styles.size()).map() -> index {
+            styles.item(index);
+        };
+        for (0..snapshot.size()) -> index {
+            for (0..index) -> previous {
+                confirm snapshot[index].level() != snapshot[previous].level()
+                    else throw InvalidLogStyles.invalid;
+            }
+        }
+        origin = snapshot;
+    }
+
+    // The same, one argument per part: LogStyles(a, b).
+    LogStyles(styles is ...LogStyle) {
+        let listed is @LogStyle = styles...;
+        confirm listed.size() >= 0 && listed.size() <= 5 else throw InvalidLogStyles.invalid;
+        let snapshot is @LogStyle = (0..listed.size()).map() -> index {
+            listed.item(index);
+        };
+        for (0..snapshot.size()) -> index {
+            for (0..index) -> previous {
+                confirm snapshot[index].level() != snapshot[previous].level()
+                    else throw InvalidLogStyles.invalid;
+            }
+        }
+        origin = snapshot;
+    }
+
+    // The style of level; the plain style when none is given.
+    style(level is LogLevel) is TextStyle {
+        origin.reduce(
+            TextStyle(foreground: DefaultColor(), background: DefaultColor(), attributes: [])
+        ) -> old, entry {
+            if entry.level() == level {
+                entry.style();
+            }
+            else {
+                old;
+            }
+        };
+    }
+}
+
+// Styles that cannot be used.
 enum InvalidLogStyles is Error = (invalid);
-object TextStreamLogs does LogWriting{
-    has origin is Writing;has zone is TimeZone;
-    TextStreamLogs(origin is Writing,zone is TimeZone){self.origin=origin;self.zone=zone;}
-    write(record is LogRecord) is void{let line=TextLogLine(record,zone).string();origin.write(ByteSnapshot(Utf8Encoded(line+"\n").bytes()));}
+
+// Records as text lines on a stream.
+object TextStreamLogs does LogWriting {
+    has origin is Writing;
+    has zone is TimeZone;
+
+    // Times are written in UTC unless a zone is given.
+    TextStreamLogs(
+        origin is Writing,
+        zone is TimeZone = FixedZone(name: "UTC", offset: Duration(seconds: 0))
+    ) {
+        self.origin = origin;
+        self.zone = zone;
+    }
+
+    // Writes record as a text line.
+    write(record is LogRecord) is void {
+        let line = TextLogLine(origin: record, zone: zone).string();
+        origin.write(Utf8Encoded(line + "\n").bytes());
+    }
+
+    // Whether a record of name at level would be written.
+    enabled(name is LogName, level is LogLevel) is bool {
+        true;
+    }
 }
-object JsonStreamLogs does LogWriting{
-    has origin is Writing;JsonStreamLogs(origin is Writing){self.origin=origin;}
-    write(record is LogRecord) is void{let line=JsonLogLine(record).string();origin.write(ByteSnapshot(Utf8Encoded(line+"\n").bytes()));}
+
+// Records as JSON lines on a stream.
+object JsonStreamLogs does LogWriting {
+    has origin is Writing;
+
+    // Writes JSON lines to origin.
+    JsonStreamLogs(origin is Writing) {
+        self.origin = origin;
+    }
+
+    // Writes record as a JSON line.
+    write(record is LogRecord) is void {
+        let line = JsonLogLine(record).string();
+        origin.write(Utf8Encoded(line + "\n").bytes());
+    }
+
+    // Whether a record of name at level would be written.
+    enabled(name is LogName, level is LogLevel) is bool {
+        true;
+    }
 }
-object TextTerminalLogs does LogWriting{
-    has origin is TerminalOutput;has zone is TimeZone;has styles is LogStyles;
-    TextTerminalLogs(origin is TerminalOutput,zone is TimeZone,styles is Sequencing<LogStyle>){self.origin=origin;self.zone=zone;self.styles=LogStyles(styles);}
-    write(record is LogRecord) is void{origin.writeln(StyledText(TextLogLine(record,zone).string(),styles.style(record.level())));}
+
+// Records as styled text lines on a terminal.
+object TextTerminalLogs does LogWriting {
+    has origin is TerminalOutput;
+    has zone is TimeZone;
+    has styles is LogStyles;
+
+    // Writes styled text lines to origin, times in zone.
+    TextTerminalLogs(origin is TerminalOutput, zone is TimeZone, styles is Sequencing<LogStyle>) {
+        self.origin = origin;
+        self.zone = zone;
+        self.styles = LogStyles(styles);
+    }
+
+    // Writes record as a styled line.
+    write(record is LogRecord) is void {
+        origin.writeln(
+            StyledText(
+                origin: TextLogLine(origin: record, zone: zone).string(),
+                style: styles.style(record::Entry::level)
+            )
+        );
+    }
+
+    // Whether a record of name at level would be written.
+    enabled(name is LogName, level is LogLevel) is bool {
+        true;
+    }
 }
-object JsonTerminalLogs does LogWriting{
-    has origin is TerminalOutput;has styles is LogStyles;
-    JsonTerminalLogs(origin is TerminalOutput,styles is Sequencing<LogStyle>){self.origin=origin;self.styles=LogStyles(styles);}
-    write(record is LogRecord) is void{origin.writeln(StyledText(JsonLogLine(record).string(),styles.style(record.level())));}
+
+// Records as styled JSON lines on a terminal.
+object JsonTerminalLogs does LogWriting {
+    has origin is TerminalOutput;
+    has styles is LogStyles;
+
+    // Writes styled JSON lines to origin.
+    JsonTerminalLogs(origin is TerminalOutput, styles is Sequencing<LogStyle>) {
+        self.origin = origin;
+        self.styles = LogStyles(styles);
+    }
+
+    // Writes record as a styled JSON line.
+    write(record is LogRecord) is void {
+        origin.writeln(
+            StyledText(
+                origin: JsonLogLine(record).string(),
+                style: styles.style(record::Entry::level)
+            )
+        );
+    }
+
+    // Whether a record of name at level would be written.
+    enabled(name is LogName, level is LogLevel) is bool {
+        true;
+    }
+}
+
+test "stream writers put one line per record on their output" {
+    let record = LogRecord(
+        occurred: Instant(Duration(seconds: 1700000000)),
+        level: LogLevel.info,
+        message: "up",
+        context: LogContext(name: LogName("app"), fields: LogFields(), process: 1),
+    );
+    let text = ByteBuffer();
+    let zone = FixedZone(name: "UTC", offset: Duration(seconds: 0));
+    TextStreamLogs(origin: text.writing(), zone: zone).write(record);
+    test.is(
+        Utf8Decoded(text.content().bytes()).string(),
+        "2023-11-14T22:13:20Z level=INFO name=\"app\" process=1 message=\"up\" fields={}\n"
+    );
+    let json = ByteBuffer();
+    JsonStreamLogs(json.writing()).write(record);
+    test.ok(
+        Utf8Decoded(json.content().bytes()).string().starts_with(
+            "{\"time\":\"2023-11-14T22:13:20Z\",\"level\":\"INFO\""
+        )
+    );
+    let styles = LogStyles(
+        LogStyle(
+            level: LogLevel.error,
+            style: TextStyle(foreground: DefaultColor(), background: DefaultColor(), attributes: [])
+        )
+    );
+    styles.style(LogLevel.error);
+    styles.style(LogLevel.info);
+    test.throws(InvalidLogStyles) {
+        LogStyles(
+            LogStyle(
+                level: LogLevel.error,
+                style: TextStyle(
+                    foreground: DefaultColor(),
+                    background: DefaultColor(),
+                    attributes: []
+                )
+            ),
+            LogStyle(
+                level: LogLevel.error,
+                style: TextStyle(
+                    foreground: DefaultColor(),
+                    background: DefaultColor(),
+                    attributes: []
+                )
+            )
+        );
+    };
 }

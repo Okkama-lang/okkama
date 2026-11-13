@@ -1,18 +1,29 @@
 module http/tls_session v1.0.0;
+
+// HTTP/1.1 over a verified TLS connection, once ALPN agrees: `http/1.1`, or no
+// ALPN at all.
+
 import "net/tls" take TlsConnection;
-import "http/http1_session" take Http1Session,Http1Exchange,Http1SessionClosed;
+import "http/http1_session" take Http1Session, Http1Exchange, Http1SessionClosed;
 import "http/http1_head" take Http1Limits;
 import "http/message" take Request;
-import "http/version" take HttpVersion,UnsupportedHttpVersion;
+import "http/version" take HttpVersion, UnsupportedHttpVersion;
 import "io/stream" take Closing;
 
 // Exact selected ALPN is definitive for this connection. HTTP1 fallback is
 // valid only when ALPN is absent, never when another protocol was selected.
 object Http1TlsProtocol {
     has selected is string;
-    Http1TlsProtocol(selected is string){self.selected=selected;}
+
+    // The ALPN protocol selected ("" for none).
+    Http1TlsProtocol(selected is string) {
+        self.selected = selected;
+    }
+
+    // HTTP/1.1; UnsupportedHttpVersion when another protocol was selected.
     version() is HttpVersion {
-        confirm selected=="" || selected=="http/1.1" else throw UnsupportedHttpVersion.unsupported;
+        confirm selected == "" || selected == "http/1.1"
+            else throw UnsupportedHttpVersion.unsupported;
         HttpVersion.http_1_1;
     }
 }
@@ -22,25 +33,69 @@ object Http1TlsProtocol {
 // delegates body leases, cancellation and disposal to the existing session.
 object Http1TlsSession does Closing {
     has origin is Http1Session;
-    Http1TlsSession(connection is TlsConnection){
+
+    // HTTP/1.1 over connection with the default limits.
+    Http1TlsSession(connection is TlsConnection) {
         confirm !connection.closed() else throw Http1SessionClosed.closed;
-        Http1TlsProtocol(connection.details().protocol()).version();
-        origin=Http1Session(connection.input(),connection.output(),connection);
+        Http1TlsProtocol(connection.details()::Session::protocol).version();
+        origin = Http1Session(
+            input: connection.input(),
+            output: connection.output(),
+            owner: connection
+        );
     }
-    Http1TlsSession(connection is TlsConnection,limits is Http1Limits){
+
+    // The same within limits.
+    Http1TlsSession(connection is TlsConnection, limits is Http1Limits) {
         confirm !connection.closed() else throw Http1SessionClosed.closed;
-        Http1TlsProtocol(connection.details().protocol()).version();
-        origin=Http1Session(connection.input(),connection.output(),connection,limits);
+        Http1TlsProtocol(connection.details()::Session::protocol).version();
+        origin = Http1Session(
+            input: connection.input(),
+            output: connection.output(),
+            owner: connection,
+            limits: limits
+        );
     }
-    async exchange(request is Request) is Http1Exchange{await origin.exchange(request);}
-    closed() is bool{origin.closed();}
-    close() is void{origin.close();}
-    destroy{try{origin.close();}catch e is Error{}catch e is NativeFailure{}}
+
+    // Sends request and reads the response head.
+    async exchange(request is Request) is Http1Exchange {
+        await origin.exchange(request);
+    }
+
+    // Whether it was closed.
+    closed() is bool {
+        origin.closed();
+    }
+
+    // Closes the connection.
+    close() is void {
+        origin.close();
+    }
+
+    destroy {
+        try {
+            origin.close();
+        }
+        catch e is Error {}
+        catch e is NativeFailure {}
+    }
 }
 
 test "HTTP1 TLS uses exact ALPN or absent-protocol fallback" {
-    test.ok(Http1TlsProtocol("http/1.1").version()==HttpVersion.http_1_1);
-    test.ok(Http1TlsProtocol("").version()==HttpVersion.http_1_1);
-    test.ok(try{Http1TlsProtocol("h2").version();false;}catch e is UnsupportedHttpVersion{true;});
-    test.ok(try{Http1TlsProtocol("HTTP/1.1").version();false;}catch e is UnsupportedHttpVersion{true;});
+    test.ok(Http1TlsProtocol("http/1.1").version() == HttpVersion.http_1_1);
+    test.ok(Http1TlsProtocol("").version() == HttpVersion.http_1_1);
+    test.ok(try {
+        Http1TlsProtocol("h2").version();
+        false;
+    }
+    catch e is UnsupportedHttpVersion {
+        true;
+    });
+    test.ok(try {
+        Http1TlsProtocol("HTTP/1.1").version();
+        false;
+    }
+    catch e is UnsupportedHttpVersion {
+        true;
+    });
 }

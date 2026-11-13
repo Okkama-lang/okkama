@@ -1,12 +1,35 @@
 module runtime/system v1.0.0;
 
+// The native layer under fs/path, locale/system, os/platform, os/storage: the
+// calls those modules make into the host runtime. Programs use those modules
+// instead; these declarations may change with the runtime.
+
 // Portable platform identity and operating-system entropy boundary.
 native system_platform() is string;
+
+// The machine architecture, such as `x86_64` or `aarch64`.
 native system_architecture() is string;
+
+// `little` or `big`.
 native system_byte_order() is string;
+
+// The host name.
 native system_host_name() is string;
+
+// How many processors.
 native system_cpu_count() is int;
+
+// size bytes from the system's secure random source.
 native secure_random(size is int) is @byte;
+
+// An unbiased integer in start..stop (start < stop): a sample of as many
+// 64-bit words as stop - start - 1 needs is drawn again while it falls below
+// 2^(64 * words) mod (stop - start).
+native secure_integer(start is int, stop is int) is int;
+
+// 53 random bits as a float in [0, 1).
+native secure_float() is float;
+
 // One coherent provider observation. Decimal strings avoid narrowing storage
 // capacities to the builtin runtime int width.
 native storage_usage(path is string) is %string:string;

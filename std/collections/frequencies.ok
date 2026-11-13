@@ -43,10 +43,12 @@ import "size" take Sizing;
 // O(n log d) and traverses in key order; the compiler checks that its T is a
 // key type (#242). Native opaque handles have no equality.
 
+// How many times one item occurred.
 object Frequency<T> {
     has origin is T;
     has quantity is int;
 
+    // item counted amount times.
     Frequency(item is T, amount is int) {
         confirm amount > 0
             else throw InvalidArgument.because("frequency amount must be positive");
@@ -54,35 +56,39 @@ object Frequency<T> {
         quantity = amount;
     }
 
+    // The item.
     item() is T {
         origin;
     }
 
+    // How many times it occurred, at least once.
     amount() is int {
         quantity;
     }
 }
 
+// How often each distinct item occurs, in the order items first appear.
 object Frequencies<T> does Iterating<Frequency<T>>, Sizing {
-    has origin is List<Frequency<T>>;
-    has quantity is int;
+    has values is Iterating<T>;
 
+    // Counts values once, now.
     Frequencies(values is Iterating<T>) {
-        let tally = FrequencyTally(values: values);
-        origin = tally.frequencies();
-        quantity = tally.total();
+        self.values = values;
     }
 
+    // Walks the counts.
     cursor() is Cursor<Frequency<T>> {
-        origin.cursor();
+        self.counted().cursor();
     }
 
+    // How many distinct items.
     size() is int {
-        origin.size();
+        self.counted().size();
     }
 
+    // How many times value occurred; 0 when never.
     amount(value is T) is int {
-        let cursor = origin.cursor();
+        let cursor = self.counted().cursor();
         if !cursor.available() {
             0;
         }
@@ -94,8 +100,16 @@ object Frequencies<T> does Iterating<Frequency<T>>, Sizing {
         }
     }
 
+    // How many items were counted.
     total() is int {
+        once let quantity = FrequencyTally(values: values).total();
         quantity;
+    }
+
+    // One Frequency per distinct value, counted on the first question (#491).
+    hidden counted() is List<Frequency<T>> {
+        once let kept = FrequencyTally(values: values).frequencies();
+        kept;
     }
 }
 
@@ -105,46 +119,59 @@ object Frequencies<T> does Iterating<Frequency<T>>, Sizing {
 //     let counts = KeyedFrequencies(values: ["red", "blue", "red"]);
 //     counts.amount("red");          // 2; traversal: blue:1, red:2
 object KeyedFrequencies<T> does Iterating<Frequency<T>>, Sizing {
-    has counts is %T:int;
-    has quantity is int;
+    has values is Iterating<T>;
 
+    // Counts values once, now, by map key.
     KeyedFrequencies(values is Iterating<T>) {
-        let empty is %T:int = [:];
-        let items = values.map() -> value { value; };
-        counts = items.reduce(empty) -> found, value {
-            let seen = found[value] else 0;
-            found + [value: seen + 1];
-        };
-        quantity = items.size();
+        self.values = values;
     }
 
+    // Walks the counts.
     cursor() is Cursor<Frequency<T>> {
+        let counts = self.counts();
         let frequencies = counts.keys().map() -> key {
             Frequency(item: key, amount: counts[key]);
         };
         frequencies.cursor();
     }
 
+    // How many distinct items.
     size() is int {
-        counts.size();
+        self.counts().size();
     }
 
+    // How many times value occurred; 0 when never.
     amount(value is T) is int {
-        counts[value] else 0;
+        self.counts()[value] else 0;
     }
 
+    // How many items were counted.
     total() is int {
+        once let quantity = values.map() -> value {
+            value;
+        }.size();
         quantity;
+    }
+
+    // Each distinct value with its count, in key order (#491).
+    hidden counts() is %T:int {
+        once let kept is %T:int = values.reduce([:]) -> found, value {
+            let seen = found[value] else 0;
+            found + [value: seen + 1];
+        };
+        kept;
     }
 }
 
 // One pass over the input: distinct values in first-occurrence order, then
 // one counting scan per distinct value. No intermediate list is rebuilt.
-object FrequencyTally<T> {
+hidden object FrequencyTally<T> {
     has items is @T;
 
     FrequencyTally(values is Iterating<T>) {
-        items = values.map() -> value { value; };
+        items = values.map() -> value {
+            value;
+        };
     }
 
     frequencies() is List<Frequency<T>> {
@@ -154,9 +181,7 @@ object FrequencyTally<T> {
                 found;
             }
             else {
-                (0..found.size() + 1).map() -> index {
-                    if index < found.size() { found[index]; } else { value; }
-                };
+                found + [value];
             }
         };
         let empty is List<Frequency<T>> = EmptyList();
@@ -164,7 +189,12 @@ object FrequencyTally<T> {
         (0..distinct.size()).reduce(empty) -> frequencies, offset {
             let item is T = distinct[distinct.size() - 1 - offset];
             let amount is int = items.reduce(0) -> count, value {
-                if value == item { count + 1; } else { count; }
+                if value == item {
+                    count + 1;
+                }
+                else {
+                    count;
+                }
             };
             frequencies.prefix(Frequency(item: item, amount: amount));
         };
@@ -174,9 +204,7 @@ object FrequencyTally<T> {
         items.size();
     }
 
-    private:
-
-    listed(found is @T, value is T) is bool {
+    hidden listed(found is @T, value is T) is bool {
         // `for` over an empty array produces no value.
         if found.size() == 0 {
             false;
@@ -190,7 +218,7 @@ object FrequencyTally<T> {
     }
 }
 
-object FrequencyBuilding<T> {
+hidden object FrequencyBuilding<T> {
     has origin is List<Frequency<T>>;
     has quantity is int;
 
@@ -224,15 +252,14 @@ object FrequencyBuilding<T> {
         else {
             revised.frequencies().prefix(Frequency(item: value, amount: 1));
         };
-        let ordered is List<Frequency<T>> = reversed.reduce(EmptyList())
-            -> frequencies, frequency {
-                frequencies.prefix(frequency);
-            };
+        let ordered is List<Frequency<T>> = reversed.reduce(EmptyList()) -> frequencies, frequency {
+            frequencies.prefix(frequency);
+        };
         FrequencyBuilding(frequencies: ordered, total: quantity + 1);
     }
 }
 
-object FrequencyRevision<T> {
+hidden object FrequencyRevision<T> {
     has origin is List<Frequency<T>>;
     has sought is T;
     has present is bool;
@@ -284,7 +311,9 @@ test "counts in first-occurrence order" {
     test.is(counts.amount("red"), 2);
     test.is(counts.amount("green"), 1);
     test.is(counts.amount("missing"), 0);
-    let order = counts.map() -> frequency { frequency.item() + ":" + frequency.amount().string(); };
+    let order = counts.map() -> frequency {
+        frequency.item() + ":" + frequency.amount().string();
+    };
     test.is(order, ["blue:3", "red:2", "green:1"]);
 }
 
@@ -303,7 +332,9 @@ test "keyed counts in key order" {
     test.is(counts.amount("blue"), 3);
     test.is(counts.amount("red"), 2);
     test.is(counts.amount("missing"), 0);
-    let order = counts.map() -> frequency { frequency.item() + ":" + frequency.amount().string(); };
+    let order = counts.map() -> frequency {
+        frequency.item() + ":" + frequency.amount().string();
+    };
     test.is(order, ["blue:3", "green:1", "red:2"]);
     let nothing is @int = [];
     test.is(KeyedFrequencies(values: nothing).size(), 0);

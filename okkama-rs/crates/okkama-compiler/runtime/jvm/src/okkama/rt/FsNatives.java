@@ -401,13 +401,16 @@ public final class FsNatives {
             return spec.canonpath(parent.isEmpty() ? "." : parent);
         }
         List<String> segments = new ArrayList<String>(spec.splitdir(split[1]));
+        boolean rooted = segments.size() > 1 && segments.get(0).isEmpty();
         while (segments.size() > 1 && segments.get(segments.size() - 1).isEmpty()) {
             segments.remove(segments.size() - 1);
         }
         if (!segments.isEmpty()) {
             segments.remove(segments.size() - 1);
         }
-        String parent = spec.catpath(split[0], segments.isEmpty() ? "" : spec.catdir(segments), "");
+        // The parent of a root is the root itself, also behind a volume (C:\).
+        String directory = segments.isEmpty() ? (rooted ? spec.rootdir() : "") : spec.catdir(segments);
+        String parent = spec.catpath(split[0], directory, "");
         if (parent.isEmpty() && spec.absolute(path)) {
             parent = spec.rootdir();
         }
@@ -415,6 +418,30 @@ public final class FsNatives {
             parent = ".";
         }
         return spec.canonpath(parent);
+    }
+
+    /**
+     * Якорь пути (том и корень, {@code ""} у относительного), затем его имена:
+     * {@code .} и повторные разделители уходят, {@code ..} остаётся (#124).
+     */
+    public static List<Object> runtime_fs__path_parts(String path, BigInteger style) {
+        Spec spec = spec(style, "path_parts", 2);
+        if (path.isEmpty() || path.indexOf('\0') >= 0) {
+            throw fail("invalid_input", "path_parts", 2, "Invalid lexical path");
+        }
+        String[] split = spec.splitpath(spec.canonpath(path));
+        boolean rooted = split[1].startsWith("/") || (spec == WIN32 && split[1].startsWith("\\"));
+        ArrayList<Object> parts = new ArrayList<Object>();
+        parts.add(split[0] + (rooted ? spec.rootdir() : ""));
+        for (String name : spec.splitdir(split[1])) {
+            if (!name.isEmpty() && !name.equals(".")) {
+                parts.add(name);
+            }
+        }
+        if (!split[2].isEmpty() && !split[2].equals(".")) {
+            parts.add(split[2]);
+        }
+        return parts;
     }
 
     public static String runtime_fs__path_child(String path, String part, BigInteger style) {
@@ -776,6 +803,20 @@ public final class FsNatives {
         return true;
     }
 
+    /** Каталог и все недостающие родители; готовый каталог — не отказ (#125). */
+    public static boolean runtime_fs__mkdir_all(List<?> pathValue, BigInteger mode) {
+        String path = path(pathValue, "mkdir_all", 2);
+        if (!validMode(mode)) {
+            throw fail("invalid_input", "mkdir_all", 2, "Invalid directory mode");
+        }
+        try {
+            Files.createDirectories(Host.path(path), PosixFilePermissions.asFileAttribute(permissions(mode.intValue())));
+        } catch (IOException error) {
+            throw host(error, "mkdir_all", 2, "Cannot create directory");
+        }
+        return true;
+    }
+
     private static boolean directory(Path path) {
         return Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS);
     }
@@ -819,6 +860,48 @@ public final class FsNatives {
             Files.move(Host.path(source), Host.path(target), StandardCopyOption.ATOMIC_MOVE);
         } catch (IOException error) {
             throw host(error, "rename", 2, "Cannot rename path");
+        }
+        return true;
+    }
+
+    /** rename, отказывающий занятой цели (already_exists) вместо замены (#126). */
+    public static boolean runtime_fs__rename_noreplace(List<?> sourceValue, List<?> targetValue) {
+        String source = path(sourceValue, "rename_noreplace", 2);
+        String target = path(targetValue, "rename_noreplace", 2);
+        try {
+            Files.move(Host.path(source), Host.path(target));
+        } catch (IOException error) {
+            throw host(error, "rename_noreplace", 2, "Cannot rename path");
+        }
+        return true;
+    }
+
+    /**
+     * Копия файла с его правами (#126). Занятая цель — already_exists, если не
+     * replace; при replace копия пишется рядом и переименовывается поверх цели.
+     */
+    public static boolean runtime_fs__copy_file(List<?> sourceValue, List<?> targetValue, boolean replace) {
+        String source = path(sourceValue, "copy_file", 3);
+        String target = path(targetValue, "copy_file", 3);
+        Path from = Host.path(source);
+        Path to = Host.path(target);
+        try {
+            if (Files.isDirectory(from)) {
+                throw fail("invalid_input", "copy_file", 3, "Cannot copy file");
+            }
+            if (replace) {
+                Path written = to.resolveSibling("." + to.getFileName() + "." + ProcessHandle.current().pid() + "-" + System.nanoTime() + ".copy");
+                try {
+                    Files.copy(from, written, StandardCopyOption.COPY_ATTRIBUTES);
+                    Files.move(written, to, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                } finally {
+                    Files.deleteIfExists(written);
+                }
+            } else {
+                Files.copy(from, to, StandardCopyOption.COPY_ATTRIBUTES);
+            }
+        } catch (IOException error) {
+            throw host(error, "copy_file", 3, "Cannot copy file");
         }
         return true;
     }
@@ -1226,6 +1309,8 @@ public final class FsNatives {
         int mode;
         int flags;
         boolean binary;
+        // file_state_open: the first text or byte operation picks binary.
+        boolean undecided;
         String encoding;
         Charset charset;
         FileChannel channel;
@@ -1243,6 +1328,27 @@ public final class FsNatives {
         FileState file;
         FileLock lock;
         boolean closed;
+        Object key;
+    }
+
+    // The locks of this process by file, and whether each is shared.
+    private static final Map<Object, Boolean> HELD = new HashMap<Object, Boolean>();
+
+    private static Object lockKey(String path) {
+        Path file = Path.of(path).toAbsolutePath().normalize();
+        try {
+            Object key = Files.readAttributes(file, java.nio.file.attribute.BasicFileAttributes.class).fileKey();
+            return key != null ? key : file.toString();
+        } catch (IOException error) {
+            return file.toString();
+        }
+    }
+
+    private static void forget(LockState lock) {
+        if (lock.key != null) {
+            HELD.remove(lock.key);
+            lock.key = null;
+        }
     }
 
     private static Integer stateFlags(BigInteger mode) {
@@ -1270,6 +1376,27 @@ public final class FsNatives {
             case "latin-1": return StandardCharsets.ISO_8859_1;
             default: return null;
         }
+    }
+
+    public static Object runtime_fs__file_state_open(List<?> pathValue, BigInteger mode, String encoding) {
+        String name = "file_state_open";
+        String path = path(pathValue, name, 3);
+        Integer flags = stateFlags(mode);
+        if (flags == null) {
+            throw fail("invalid_input", name, 3, "Invalid file mode");
+        }
+        Charset charset = charset(encoding);
+        if (charset == null) {
+            throw fail("unsupported", name, 3, "Unsupported file encoding");
+        }
+        FileState state = new FileState();
+        state.path = path;
+        state.mode = mode.intValue();
+        state.flags = flags;
+        state.undecided = true;
+        state.encoding = encoding;
+        state.charset = charset;
+        return state;
     }
 
     public static Object runtime_fs__file_state_create(List<?> pathValue, BigInteger mode, String encoding,
@@ -1330,16 +1457,25 @@ public final class FsNatives {
         return (state.flags & APPEND) != 0;
     }
 
+    // Picks the mode of an undecided state; then fails an operation of the other kind.
+    private static void settleMode(FileState state, boolean text, String name, int arity) {
+        if (state.undecided) {
+            state.binary = !text;
+            state.undecided = false;
+        }
+        if (text && state.binary) {
+            throw fail("invalid_input", name, arity, "The file is open as bytes");
+        }
+        if (!text && !state.binary) {
+            throw fail("invalid_input", name, arity, "The file is open as text");
+        }
+    }
+
     private static FileChannel prepareRead(FileState state, boolean text, String name, int arity) {
         if (!readable(state)) {
             throw fail("invalid_input", name, arity, "File mode does not permit reading");
         }
-        if (text && state.binary) {
-            throw fail("invalid_input", name, arity, "Text operation required");
-        }
-        if (!text && !state.binary) {
-            throw fail("invalid_input", name, arity, "Binary operation required");
-        }
+        settleMode(state, text, name, arity);
         FileChannel channel = stateOpen(state, name, arity);
         state.last = "read";
         return channel;
@@ -1349,12 +1485,7 @@ public final class FsNatives {
         if (!writable(state)) {
             throw fail("invalid_input", name, arity, "File mode does not permit writing");
         }
-        if (text && state.binary) {
-            throw fail("invalid_input", name, arity, "Text operation required");
-        }
-        if (!text && !state.binary) {
-            throw fail("invalid_input", name, arity, "Binary operation required");
-        }
+        settleMode(state, text, name, arity);
         FileChannel channel = stateOpen(state, name, arity);
         if ("read".equals(state.last) && state.buffer.size() > 0) {
             try {
@@ -1472,6 +1603,63 @@ public final class FsNatives {
         }
     }
 
+    public static List<Object> runtime_fs__file_state_read_lines(Object handle, BigInteger limit) {
+        String name = "file_state_read_lines";
+        FileState state = state(handle, name, 2);
+        FileChannel channel = prepareRead(state, true, name, 2);
+        int target = limit.signum() <= 0 ? 1
+            : limit.compareTo(BigInteger.valueOf(1 << 26)) > 0 ? 1 << 26 : limit.intValue();
+        byte[] needle = newline(state);
+        while (state.buffer.size() < target && !state.eof) {
+            fill(state, channel, name, 2);
+        }
+        // The batch ends after its last whole line; a longer line is read whole.
+        int end = lastLineEnd(state.buffer.toByteArray(), needle);
+        while (end < 0 && !state.eof) {
+            fill(state, channel, name, 2);
+            end = lastLineEnd(state.buffer.toByteArray(), needle);
+        }
+        byte[] buffer = state.buffer.toByteArray();
+        if (end < 0) {
+            end = buffer.length;
+        }
+        ArrayList<Object> lines = new ArrayList<Object>();
+        if (end == 0) {
+            return lines;
+        }
+        byte[] data = new byte[end];
+        System.arraycopy(buffer, 0, data, 0, end);
+        state.buffer.reset();
+        state.buffer.write(buffer, end, buffer.length - end);
+        String decoded = decode(state, data, name, 2);
+        String body = decoded.endsWith("\n") ? decoded.substring(0, decoded.length() - 1) : decoded;
+        int start = 0;
+        while (true) {
+            int stop = body.indexOf('\n', start);
+            String line = stop < 0 ? body.substring(start) : body.substring(start, stop);
+            lines.add(line.endsWith("\r") ? line.substring(0, line.length() - 1) : line);
+            if (stop < 0) {
+                return lines;
+            }
+            start = stop + 1;
+        }
+    }
+
+    // The end of the last whole line in buffer, after its newline; -1 when none.
+    private static int lastLineEnd(byte[] buffer, byte[] needle) {
+        int unit = needle.length;
+        outer:
+        for (int offset = buffer.length / unit * unit - unit; offset >= 0; offset -= unit) {
+            for (int index = 0; index < unit; index++) {
+                if (buffer[offset + index] != needle[index]) {
+                    continue outer;
+                }
+            }
+            return offset + unit;
+        }
+        return -1;
+    }
+
     public static BigInteger runtime_fs__file_state_write(Object handle, List<?> value) {
         FileState state = state(handle, "file_state_write", 2);
         FileChannel channel = prepareWrite(state, false, "file_state_write", 2);
@@ -1483,6 +1671,39 @@ public final class FsNatives {
         } catch (IOException error) {
             throw host(error, "file_state_write", 2, "Cannot write file");
         }
+    }
+
+    public static BigInteger runtime_fs__file_state_rewrite_text(Object handle, List<?> values) {
+        String name = "file_state_rewrite_text";
+        FileState state = state(handle, name, 2);
+        FileChannel channel = prepareWrite(state, true, name, 2);
+        StringBuilder text = new StringBuilder();
+        for (Object value : values) {
+            text.append((String) value);
+        }
+        byte[] bytes;
+        try {
+            ByteBuffer encoded = state.charset.newEncoder().onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT).encode(CharBuffer.wrap(text));
+            bytes = new byte[encoded.remaining()];
+            encoded.get(bytes);
+        } catch (CharacterCodingException invalid) {
+            throw fail("invalid_data", name, 2, "Text cannot be encoded");
+        }
+        state.buffer.reset();
+        state.eof = false;
+        state.last = null;
+        try {
+            channel.truncate(0);
+            channel.position(0);
+            ByteBuffer buffer = ByteBuffer.wrap(bytes);
+            while (buffer.hasRemaining()) {
+                channel.write(buffer);
+            }
+        } catch (IOException error) {
+            throw host(error, name, 2, "Cannot write file");
+        }
+        return BigInteger.valueOf(bytes.length);
     }
 
     public static BigInteger runtime_fs__file_state_write_text(Object handle, List<?> values, boolean newline) {
@@ -1538,6 +1759,7 @@ public final class FsNatives {
                 // Закрытие канала всё равно снимает блокировку.
             }
             state.lock.closed = true;
+            forget(state.lock);
             state.lock.file = null;
             state.lock = null;
         }
@@ -1582,9 +1804,7 @@ public final class FsNatives {
 
     public static BigInteger runtime_fs__file_state_position(Object handle) {
         FileState state = state(handle, "file_state_position", 1);
-        if (!state.binary) {
-            throw fail("invalid_input", "file_state_position", 1, "Byte position is unavailable in text mode");
-        }
+        settleMode(state, false, "file_state_position", 1);
         try {
             return BigInteger.valueOf(stateOpen(state, "file_state_position", 1).position());
         } catch (IOException error) {
@@ -1594,9 +1814,7 @@ public final class FsNatives {
 
     public static BigInteger runtime_fs__file_state_seek(Object handle, BigInteger offset, BigInteger origin) {
         FileState state = state(handle, "file_state_seek", 3);
-        if (!state.binary) {
-            throw fail("invalid_input", "file_state_seek", 3, "Byte seeking is unavailable in text mode");
-        }
+        settleMode(state, false, "file_state_seek", 3);
         if (!origin.equals(BigInteger.ZERO) && !origin.equals(BigInteger.ONE) && !origin.equals(BigInteger.valueOf(2))) {
             throw fail("invalid_input", "file_state_seek", 3, "Invalid seek origin");
         }
@@ -1611,9 +1829,7 @@ public final class FsNatives {
     public static boolean runtime_fs__file_state_truncate(Object handle, BigInteger size) {
         String name = "file_state_truncate";
         FileState state = state(handle, name, 2);
-        if (!state.binary) {
-            throw fail("invalid_input", name, 2, "Truncation is unavailable in text mode");
-        }
+        settleMode(state, false, name, 2);
         if (!writable(state)) {
             throw fail("invalid_input", name, 2, "File mode does not permit writing");
         }
@@ -1661,8 +1877,57 @@ public final class FsNatives {
         LockState lockState = new LockState();
         lockState.file = state;
         lockState.lock = lock;
+        lockState.key = lockKey(state.path);
+        HELD.put(lockState.key, shared);
         state.lock = lockState;
         return lockState;
+    }
+
+    public static boolean runtime_fs__file_state_locked(Object handle, BigInteger mode) {
+        String name = "file_state_locked";
+        FileState state = state(handle, name, 2);
+        if (!mode.equals(BigInteger.ZERO) && !mode.equals(BigInteger.ONE)) {
+            throw fail("invalid_input", name, 2, "Invalid file lock mode");
+        }
+        boolean shared = mode.signum() == 0;
+        stateOpen(state, name, 2);
+        Boolean own = HELD.get(lockKey(state.path));
+        if (own != null) {
+            return own == shared;
+        }
+        // Another process: a lock in the way refuses ours, and the kind it refuses
+        // tells its own. The probe has a channel of its own; this process holds no
+        // lock on the file, so closing it releases nothing.
+        Path file = Path.of(state.path);
+        boolean writable = true;
+        FileChannel probe;
+        try {
+            probe = FileChannel.open(file, StandardOpenOption.READ, StandardOpenOption.WRITE);
+        } catch (IOException readOnly) {
+            writable = false;
+            try {
+                probe = FileChannel.open(file, StandardOpenOption.READ);
+            } catch (IOException error) {
+                throw host(error, name, 2, "Cannot inspect file lock");
+            }
+        }
+        try (FileChannel channel = probe) {
+            if (writable) {
+                FileLock any = channel.tryLock(0, Long.MAX_VALUE, false);
+                if (any != null) {
+                    any.release();
+                    return false;
+                }
+            }
+            FileLock reading = channel.tryLock(0, Long.MAX_VALUE, true);
+            if (reading == null) {
+                return !shared;
+            }
+            reading.release();
+            return shared && writable;
+        } catch (IOException | OverlappingFileLockException error) {
+            throw host(Host.io(error), name, 2, "Cannot inspect file lock");
+        }
     }
 
     public static boolean runtime_fs__file_lock_closed(Object handle) {
@@ -1685,6 +1950,7 @@ public final class FsNatives {
         if (file != null && file.lock == lock) {
             file.lock = null;
         }
+        forget(lock);
         lock.file = null;
         lock.closed = true;
         return true;
@@ -1716,7 +1982,7 @@ public final class FsNatives {
         String directory = path(directoryValue, name, 2);
         String prefix = prefix(prefixValue, name);
         for (int attempt = 0; attempt < 100; attempt++) {
-            String path = child(directory, temporaryName(prefix));
+            String path = UNIX.canonpath(child(directory, temporaryName(prefix)));
             Set<OpenOption> options = new HashSet<OpenOption>();
             options.add(StandardOpenOption.READ);
             options.add(StandardOpenOption.WRITE);
@@ -1803,7 +2069,7 @@ public final class FsNatives {
         String parent = path(parentValue, name, 2);
         String prefix = prefix(prefixValue, name);
         for (int attempt = 0; attempt < 100; attempt++) {
-            String path = child(parent, temporaryName(prefix));
+            String path = UNIX.canonpath(child(parent, temporaryName(prefix)));
             try {
                 Files.createDirectory(Host.path(path), PosixFilePermissions.asFileAttribute(permissions(0700)));
             } catch (java.nio.file.FileAlreadyExistsException exists) {

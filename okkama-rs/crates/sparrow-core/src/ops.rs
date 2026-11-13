@@ -11,12 +11,12 @@ use crate::program::Kind;
 use crate::runtime::{Ctx, FailureKind, Runtime};
 use crate::word::{self, Repr, UNBOUND, Word};
 use num_bigint::BigInt;
-use num_integer::Integer as _;
-use num_rational::BigRational;
-use num_traits::{Signed, ToPrimitive, Zero};
-use okkama_sparrow::{Access, Cmp, Instruction as I, StrFn, Type, TypeRef};
+use num_traits::{Signed, ToPrimitive};
+use okkama_runtime_core::IntValue;
+use okkama_runtime_core::bignum::Big;
+use okkama_runtime_core::rat::Rat;
+use okkama_sparrow::{Access, Cmp, Constant, Data, Instruction as I, StrFn, Type, TypeRef};
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
 use std::rc::Rc;
 
 type Outcome = Result<Word, String>;
@@ -24,7 +24,9 @@ type Outcome = Result<Word, String>;
 // ---- payload values ----
 
 #[derive(Debug)]
-pub struct Rational(pub BigRational);
+/// A `rat`: the engines' shared exact fraction, whose small parts are
+/// machine integers (#326).
+pub struct Rational(pub Rat);
 #[derive(Debug)]
 pub struct Builder {
     pub repr: Repr,
@@ -46,16 +48,23 @@ pub struct AnyBox {
 pub struct MapValue {
     pub key: Repr,
     pub value: Repr,
-    pub entries: BTreeMap<Key, (Word, Word)>,
+    pub entries: crate::maps::Entries,
+    /// The Rust memory estimate (#331), computed once: a finished map does
+    /// not change, and a builder adds each new entry's share as it goes.
+    pub owned: std::cell::Cell<Option<usize>>,
 }
 
 macro_rules! payload {
-    ($($ty:ty => |$this:ident, $visit:ident| $body:block)*) => {$(
+    ($($ty:ty => |$this:ident, $visit:ident| $body:block $(, owns |$owner:ident| $bytes:block)?)*) => {$(
         impl Payload for $ty {
             fn trace(&self, $visit: &mut dyn FnMut(Word, Repr)) {
                 let $this = self;
                 $body
             }
+            $(fn external_bytes(&self) -> usize {
+                let $owner = self;
+                $bytes
+            })?
             fn as_any(&self) -> &dyn std::any::Any {
                 self
             }
@@ -66,16 +75,39 @@ macro_rules! payload {
     )*};
 }
 payload! {
-    Rational => |_this, _visit| {}
+    Rational => |_this, _visit| {}, owns |this| { rational_bytes(&this.0) }
     RangeValue => |this, visit| { visit(this.start, Repr::Int); visit(this.end, Repr::Int); }
-    Builder => |this, visit| { for &item in &this.items { visit(item, this.repr); } }
+    Builder => |this, visit| { for &item in &this.items { visit(item, this.repr); } },
+        owns |this| { this.items.capacity() * 8 }
     AnyBox => |this, visit| { visit(this.value, this.repr); }
     MapValue => |this, visit| {
-        for &(key, value) in this.entries.values() {
+        this.entries.trace(|&(key, value)| {
             visit(key, this.key);
             visit(value, this.value);
+        });
+    }, owns |this| {
+        // A persistent map's nodes and their keys are counted exactly by the
+        // heap (`maps::node_memory`), shared ones once.
+        if this.entries.is_persistent() {
+            return 0;
         }
+        this.owned.get().unwrap_or_else(|| {
+            let bytes = this.entries.len() * MAP_ENTRY_BYTES + this.entries.keys().map(Key::owned_bytes).sum::<usize>();
+            this.owned.set(Some(bytes));
+            bytes
+        })
     }
+}
+
+/// Bytes of B-tree nodes per map entry (#331): an entry's size twice. A
+/// counting allocator measured 1.5–1.95 times (random and ascending keys,
+/// 10³–10⁵ entries, Rust 1.97's `BTreeMap`); the estimate errs high.
+pub const MAP_ENTRY_BYTES: usize = 2 * std::mem::size_of::<(Key, (Word, Word))>();
+
+/// What a fraction owns outside itself: the digits of a part beyond 64 bits.
+fn rational_bytes(value: &Rat) -> usize {
+    let part = |n: &IntValue| if n.to_i64().is_some() { 0 } else { 48 + n.as_big().bits().div_ceil(64) as usize * 8 };
+    part(value.numerator()) + part(value.denominator())
 }
 
 /// Map keys own immutable data; order follows the previous engine. An
@@ -83,22 +115,113 @@ payload! {
 /// and order are structural, like `==`; the entry keeps the object's word.
 #[derive(Debug, Clone)]
 pub enum Key {
+    /// An `int` that fits in 64 bits: no allocation to make, copy or free
+    /// (#331). Always this form when the value fits, so equal keys are
+    /// equal variants.
+    Small(i64),
+    /// An `int` outside 64 bits.
     Int(BigInt),
     Float(f64),
     Raw(u64),
-    Str(Rc<str>),
+    /// A string, and its first 8 bytes as a big-endian number, zeros past
+    /// the end ([`Key::text`]): strings whose numbers differ order by them
+    /// alone, inline, without reading either text.
+    Str(u64, Rc<str>),
     /// A `rat` field of an object key.
-    Rat(Rc<BigRational>),
+    Rat(Rc<Rat>),
     Object(u32, Rc<[Key]>),
 }
+impl Key {
+    /// The key of an `int`: small when it fits in 64 bits.
+    pub fn int(value: Integer<'_>) -> Self {
+        match value {
+            Integer::Small(n) => Self::Small(n),
+            Integer::Big(n) => n.to_i64().map_or_else(|| Self::Int(n.clone()), Self::Small),
+        }
+    }
+
+    /// The key of a string.
+    pub fn text(text: Rc<str>) -> Self {
+        Self::Str(Self::prefix(&text), text)
+    }
+
+    /// The first 8 bytes of a text as a big-endian number, zeros past its
+    /// end: the number [`Key::Str`] keeps.
+    #[inline]
+    pub fn prefix(text: &str) -> u64 {
+        let mut first = [0; 8];
+        let length = text.len().min(8);
+        first[..length].copy_from_slice(&text.as_bytes()[..length]);
+        u64::from_be_bytes(first)
+    }
+
+    /// How this key compares with the string key of `text`, whose
+    /// [`Key::prefix`] is `prefix`, without making that key (#343): the order
+    /// of `self.cmp(&Key::text(text))`.
+    #[inline]
+    pub fn cmp_text(&self, prefix: u64, text: &str) -> Ordering {
+        match self {
+            Self::Str(own, _) if *own != prefix => own.cmp(&prefix),
+            Self::Str(_, own) => (**own).cmp(text),
+            other => other.rank().cmp(&3),
+        }
+    }
+
+    /// Rust memory this key owns beyond the enum itself (#331). Data shared
+    /// through `Rc` (copies of one map share their keys) counts its share
+    /// only, so a map and its copies do not each pay for it in full.
+    pub fn owned_bytes(&self) -> usize {
+        match self {
+            // A `BigInt` keeps its digits in a vector of its own.
+            Self::Int(n) => n.bits().div_ceil(64) as usize * 8,
+            Self::Small(_) | Self::Float(_) | Self::Raw(_) => 0,
+            Self::Str(_, text) => (text.len() + 16) / std::rc::Rc::strong_count(text),
+            Self::Rat(value) => rational_bytes(value) / std::rc::Rc::strong_count(value),
+            Self::Object(_, fields) => {
+                let own = 16 + fields.len() * std::mem::size_of::<Key>() + fields.iter().map(Key::owned_bytes).sum::<usize>();
+                own / std::rc::Rc::strong_count(fields)
+            }
+        }
+    }
+
+    /// Rust memory this key's data takes, shared or not: what a persistent
+    /// map node counts for its keys, the same when it takes them on and when
+    /// it lets them go.
+    pub fn data_bytes(&self) -> usize {
+        match self {
+            Self::Small(_) | Self::Float(_) | Self::Raw(_) => 0,
+            Self::Int(n) => n.bits().div_ceil(64) as usize * 8,
+            Self::Str(_, text) => text.len() + 16,
+            Self::Rat(value) => rational_bytes(value),
+            Self::Object(_, fields) => 16 + fields.len() * std::mem::size_of::<Key>() + fields.iter().map(Key::data_bytes).sum::<usize>(),
+        }
+    }
+}
 impl Ord for Key {
+    /// Small integers and strings that differ in their first bytes, the
+    /// common keys, compare inline; the rest out of line.
+    #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
+            (Self::Small(a), Self::Small(b)) => a.cmp(b),
+            (Self::Str(a, _), Self::Str(b, _)) if a != b => a.cmp(b),
+            _ => self.cmp_other(other),
+        }
+    }
+}
+impl Key {
+    #[inline(never)]
+    fn cmp_other(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (Self::Small(a), Self::Small(b)) => a.cmp(b),
             (Self::Int(a), Self::Int(b)) => a.cmp(b),
+            // A wide key lies beyond every small one, on its sign's side.
+            (Self::Small(_), Self::Int(b)) => if b.is_positive() { Ordering::Less } else { Ordering::Greater },
+            (Self::Int(a), Self::Small(_)) => if a.is_positive() { Ordering::Greater } else { Ordering::Less },
             (Self::Float(a), Self::Float(b)) => a.partial_cmp(b).expect("finite float key"),
             (Self::Raw(a), Self::Raw(b)) => a.cmp(b),
-            (Self::Str(a), Self::Str(b)) => a.cmp(b),
-            (Self::Rat(a), Self::Rat(b)) => a.cmp(b),
+            (Self::Str(_, a), Self::Str(_, b)) => a.cmp(b),
+            (Self::Rat(a), Self::Rat(b)) => a.compare(b),
             (Self::Object(a, x), Self::Object(b, y)) => a.cmp(b).then_with(|| x.iter().cmp(y.iter())),
             _ => self.rank().cmp(&other.rank()),
         }
@@ -107,21 +230,23 @@ impl Ord for Key {
 impl Key {
     fn rank(&self) -> u8 {
         match self {
-            Self::Int(_) => 0,
+            Self::Small(_) | Self::Int(_) => 0,
             Self::Float(_) => 1,
             Self::Raw(_) => 2,
-            Self::Str(_) => 3,
+            Self::Str(..) => 3,
             Self::Rat(_) => 4,
             Self::Object(..) => 5,
         }
     }
 }
 impl PartialOrd for Key {
+    #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 impl PartialEq for Key {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other).is_eq()
     }
@@ -137,16 +262,23 @@ impl Runtime {
             Integer::Big(n) => n.clone(),
         }
     }
+    /// An `int` word as the shared integer type: small ones need no digits.
+    pub fn int_value(&self, word: Word) -> IntValue {
+        match self.heap.integer(word) {
+            Integer::Small(n) => IntValue::from_i64(n),
+            Integer::Big(n) => IntValue::from_big(Big::from_bigint(n.clone())),
+        }
+    }
     pub fn small_or_big(&self, word: Word) -> Option<i64> {
         match self.heap.integer(word) {
             Integer::Small(n) => Some(n),
             Integer::Big(n) => n.to_i64(),
         }
     }
-    pub fn rational(&self, word: Word) -> &BigRational {
+    pub fn rational(&self, word: Word) -> &Rat {
         &self.heap.payload::<Rational>(word).expect("rational value").0
     }
-    pub fn rational_new(&mut self, value: BigRational) -> Word {
+    pub fn rational_new(&mut self, value: Rat) -> Word {
         self.heap.allocate_payload(Box::new(Rational(value)))
     }
     pub fn text_new(&mut self, text: &str) -> Word {
@@ -170,6 +302,18 @@ impl Runtime {
         }
     }
 
+    /// The value `map` holds under `key`: a string key is looked up by its
+    /// text in place (#343), any other is made and checked first.
+    pub(crate) fn lookup(&self, map: Word, key: Word, kind: Kind, ty: Option<&Type>) -> Result<Option<Word>, String> {
+        let entries = &self.heap.payload::<MapValue>(map).ok_or("map value expected")?.entries;
+        let found = match (kind, ty) {
+            (Kind::Int | Kind::Float | Kind::Raw | Kind::Byte, _) => entries.get(&self.key(key, kind, ty)),
+            (_, Some(Type::Str)) => entries.get_text(self.heap.text(key)),
+            _ => entries.get(&self.checked_key(key, kind, ty)?),
+        };
+        Ok(found.map(|entry| entry.1))
+    }
+
     fn is_key(&self, word: Word, kind: Kind, ty: Option<&Type>) -> bool {
         match (kind, ty) {
             (Kind::Int | Kind::Float | Kind::Raw | Kind::Byte, _) | (_, Some(Type::Str | Type::Rat)) => true,
@@ -180,6 +324,7 @@ impl Runtime {
                     .fields
                     .iter()
                     .enumerate()
+                    .filter(|(_, (name, _))| !is_once_slot(name))
                     .all(|(index, &(_, field))| self.is_key(self.heap.field(word, index), self.kind_of(field), program.ty(field)))
             }
             _ => false,
@@ -188,10 +333,10 @@ impl Runtime {
 
     pub(crate) fn key(&self, word: Word, kind: Kind, ty: Option<&Type>) -> Key {
         match (kind, ty) {
-            (Kind::Int, _) => Key::Int(self.big_value(word)),
+            (Kind::Int, _) => Key::int(self.heap.integer(word)),
             (Kind::Float, _) => Key::Float(f64::from_bits(word)),
             (Kind::Raw | Kind::Byte, _) => Key::Raw(word),
-            (_, Some(Type::Str)) => Key::Str(Rc::from(self.heap.text(word))),
+            (_, Some(Type::Str)) => Key::text(Rc::from(self.heap.text(word))),
             (_, Some(Type::Rat)) => Key::Rat(Rc::new(self.rational(word).clone())),
             (_, Some(Type::Object(_))) if heap::kind(self.heap.header_of(word)) == heap::OBJECT => {
                 let declaration = heap::payload(self.heap.header_of(word));
@@ -200,6 +345,7 @@ impl Runtime {
                     .fields
                     .iter()
                     .enumerate()
+                    .filter(|(_, (name, _))| !is_once_slot(name))
                     .map(|(index, &(_, field))| self.key(self.heap.field(word, index), self.kind_of(field), program.ty(field)))
                     .collect();
                 Key::Object(declaration, fields)
@@ -211,67 +357,6 @@ impl Runtime {
 
 fn integer_word(runtime: &mut Runtime, value: BigInt) -> Word {
     runtime.heap.big(value)
-}
-
-fn decimal_parts(value: f64) -> (i128, i32) {
-    let text = crate::scalar::float_text(value);
-    let (mantissa, exponent) = text.split_once('e').map_or((text.as_str(), 0), |(m, e)| {
-        (m, e.parse::<i32>().expect("float decimal exponent"))
-    });
-    let fraction = mantissa.split_once('.').map_or(0, |(_, f)| f.len() as i32);
-    let digits = mantissa
-        .replace('.', "")
-        .parse()
-        .expect("shortest binary64 decimal fits i128");
-    (digits, exponent - fraction)
-}
-
-fn decimal_ratio(value: f64) -> BigRational {
-    let (digits, exponent) = decimal_parts(value);
-    let power = BigInt::from(10).pow(exponent.unsigned_abs());
-    if exponent >= 0 {
-        BigRational::from_integer(BigInt::from(digits) * power)
-    } else {
-        BigRational::new(BigInt::from(digits), power)
-    }
-}
-
-/// DECIMAL128 half-even (34 significant digits), then binary64: the Okkama/JVM
-/// conversion contract.
-fn rational_to_float(value: &BigRational) -> Result<f64, String> {
-    if value.is_zero() {
-        return Ok(0.0);
-    }
-    let n = value.numer().abs();
-    let d = value.denom();
-    let mut scale = 33 - (n.to_string().len() as i64 - d.to_string().len() as i64);
-    let minimum = BigInt::from(10).pow(33);
-    let (mut quotient, remainder, divisor) = loop {
-        let power = BigInt::from(10).pow(
-            u32::try_from(scale.unsigned_abs()).map_err(|_| "rational conversion exponent too large")?,
-        );
-        let (numerator, divisor) = if scale >= 0 { (&n * power, d.clone()) } else { (n.clone(), d * power) };
-        let (q, r) = numerator.div_rem(&divisor);
-        if q < minimum {
-            scale += 1;
-        } else if q.to_string().len() > 34 {
-            scale -= 1;
-        } else {
-            break (q, r, divisor);
-        }
-    };
-    let twice = remainder * 2;
-    if twice > divisor || (twice == divisor && quotient.is_odd()) {
-        quotient += 1;
-    }
-    let sign = if value.is_negative() { "-" } else { "" };
-    let result: f64 = format!("{sign}{quotient}e{}", -scale)
-        .parse()
-        .map_err(|_| "invalid rational conversion")?;
-    if !result.is_finite() {
-        return Err("Cannot convert rat to float: expected a finite binary64 value".into());
-    }
-    Ok(result)
 }
 
 fn finite(value: f64) -> Outcome {
@@ -311,6 +396,235 @@ fn slice_bounds(runtime: &Runtime, length: usize, start: Word, end: Word) -> Res
     Ok(start.to_usize().expect("validated")..end.to_usize().expect("validated"))
 }
 
+// ---- shared arrays (#246) ----
+
+/// Which persistent array representations are on (#246, #250), so that one
+/// binary measures each: `OKKAMA_ARRAYS=flat` copies as before, `shared`
+/// keeps append chains in shared buffers but no tries, anything else (the
+/// default) has both.
+fn arrays_mode() -> &'static str {
+    static MODE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    MODE.get_or_init(|| std::env::var("OKKAMA_ARRAYS").unwrap_or_default())
+}
+
+pub(crate) fn shared_arrays() -> bool {
+    arrays_mode() != "flat"
+}
+
+pub(crate) fn trie_arrays() -> bool {
+    !matches!(arrays_mode(), "flat" | "shared")
+}
+
+/// Tries that are only read flatten themselves (`Heap::trie_read`) unless
+/// `OKKAMA_ARRAYS=trie` keeps them tries, so that both can be measured.
+fn flattening_tries() -> bool {
+    arrays_mode() != "trie"
+}
+
+/// `a + b + …` when `a` continues a chain of appends: written in place at
+/// the frontier of `a`'s buffer when `a` ends there and there is room, else
+/// into a new buffer twice the size. `None` for anything else, which is
+/// copied flat as before (and marked [`crate::heap::APPENDED`] when `a` is
+/// large, so that the next append starts a chain).
+fn append_shared(runtime: &mut Runtime, repr: Repr, words: &[Word], size: usize) -> Option<Word> {
+    use crate::heap::{PREPENDED, SHARED, payload};
+    if !shared_arrays() || words.len() < 2 {
+        return None;
+    }
+    let first = words[0];
+    let header = runtime.heap.header_of(first);
+    // A version made by an append or a prepend: a chain either way, also
+    // one that alternates ends.
+    if !continues_chain(runtime, first, header) {
+        return None;
+    }
+    let length = payload(header) as usize;
+    // The appended parts are copied out first: one of them may be a version
+    // of the very buffer written below.
+    let rest: Vec<Word> = words[1..].iter().flat_map(|&w| runtime.heap.elements(w).into_owned()).collect();
+    if header & SHARED != 0 {
+        let (buffer, start) = runtime.heap.shared(first);
+        let (used, capacity) = runtime.heap.buffer_room(buffer);
+        if start + length == used && used + rest.len() <= capacity {
+            runtime.heap.buffer_extend(buffer, &rest);
+            return Some(runtime.heap.allocate_view(repr, buffer, start, size));
+        }
+    }
+    // A new buffer twice the size; a chain that has grown at the front too
+    // keeps a quarter of the room there, so that alternating ends does not
+    // copy at every turn.
+    let head = runtime.heap.elements(first).into_owned();
+    let capacity = (2 * size).next_power_of_two();
+    let both = header & PREPENDED != 0 || (header & SHARED != 0 && runtime.heap.shared(first).1 > 0);
+    let front = if both { (capacity - size) / 4 } else { 0 };
+    let buffer = runtime.heap.allocate_buffer(repr, &[&head, &rest], capacity, front);
+    Some(runtime.heap.allocate_view(repr, buffer, front, size))
+}
+
+/// Text buffers for chains of `+` on strings (#255) unless
+/// `OKKAMA_STRINGS=flat`, which keeps every concatenation a copy.
+pub(crate) fn shared_strings() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("OKKAMA_STRINGS").map_or(true, |v| v != "flat"))
+}
+
+/// `left + right` on strings (#255): bytes the size of a new allocation,
+/// checked against the memory budget first, or `None` when it would exceed
+/// it.
+///
+/// A chain of appends writes at the high end of a text buffer when `left`
+/// ends there and there is room, a chain of prepends right before the low
+/// end when `right` starts there. A chain that outgrows its buffer moves to
+/// one twice the size (three quarters of the room in front for prepends, a
+/// quarter for a chain that has grown at both ends), but only when the part
+/// added is at most half the other: `s + s`, or a version made from an
+/// older one (a branch), is copied flat as before, and so is everything
+/// shorter than [`TEXT_CHAIN_MIN`](crate::heap::TEXT_CHAIN_MIN). A flat
+/// string made by `+` from a long part is marked
+/// [`APPENDED`](crate::heap::APPENDED) or [`PREPENDED`](crate::heap::PREPENDED):
+/// its next `+` starts a buffer, and loses the mark, so that more versions
+/// made from it (branches) copy instead of each taking a buffer twice its
+/// size (x86-64 made that +80…375%).
+pub(crate) fn concat_text(runtime: &mut Runtime, left: Word, right: Word, fits: impl Fn(&Runtime, usize) -> bool) -> Option<Word> {
+    use crate::heap::{APPENDED, ASCII, PREPENDED, SHARED, TEXT_CHAIN_MIN, payload};
+    let (lh, rh) = (runtime.heap.header_of(left), runtime.heap.header_of(right));
+    let (ll, rl) = (payload(lh) as usize, payload(rh) as usize);
+    let (size, ascii) = (ll + rl, lh & rh & ASCII != 0);
+    let chains = shared_strings() && 2 * size <= u32::MAX as usize;
+    let chained = |header: u64| header & (APPENDED | PREPENDED | SHARED) != 0;
+    // A new buffer for a chain that outgrew its own: the share of the room
+    // it keeps in front, as a fraction.
+    let mut grow = None;
+    // A flat string a buffer is started from: no longer a chain's start.
+    let mut spent = None;
+    if chains && chained(lh) && ll >= rl {
+        if lh & SHARED != 0 {
+            let (buffer, start) = runtime.heap.text_shared(left);
+            let (_, high, capacity) = runtime.heap.text_buffer_room(buffer);
+            if start + ll == high && high + rl <= capacity {
+                let text = runtime.heap.text(right) as *const str;
+                // SAFETY: `right` stays where it is; the write lies outside it.
+                runtime.heap.text_buffer_write(buffer, unsafe { &*text }, false);
+                return Some(runtime.heap.allocate_text_view(buffer, start, size, ascii));
+            }
+            if start + ll == high && 2 * rl <= ll {
+                grow = Some(if start > 0 { (1, 4) } else { (0, 1) });
+            }
+        } else if 2 * rl <= ll {
+            grow = Some(if lh & PREPENDED != 0 { (1, 4) } else { (0, 1) });
+            spent = Some(left);
+        }
+    } else if chains && chained(rh) && rl > ll {
+        if rh & SHARED != 0 {
+            let (buffer, start) = runtime.heap.text_shared(right);
+            let (low, _, _) = runtime.heap.text_buffer_room(buffer);
+            if start == low && start >= ll {
+                let text = runtime.heap.text(left) as *const str;
+                // SAFETY: as above.
+                runtime.heap.text_buffer_write(buffer, unsafe { &*text }, true);
+                return Some(runtime.heap.allocate_text_view(buffer, start - ll, size, ascii));
+            }
+            if start == low && 2 * ll <= rl {
+                grow = Some((3, 4));
+            }
+        } else if 2 * ll <= rl {
+            grow = Some((3, 4));
+            spent = Some(right);
+        }
+    }
+    let (l, r) = (runtime.heap.text(left) as *const str, runtime.heap.text(right) as *const str);
+    // SAFETY: allocation neither moves nor collects the parts.
+    let parts: [&str; 2] = unsafe { [&*l, &*r] };
+    if let Some((share, of)) = grow {
+        let capacity = (2 * size).next_power_of_two();
+        if !fits(runtime, capacity) {
+            return None;
+        }
+        let front = (capacity - size) * share / of;
+        if let Some(string) = spent {
+            runtime.heap.unmark(string, APPENDED | PREPENDED);
+        }
+        let buffer = runtime.heap.allocate_text_buffer(&parts, capacity, front);
+        return Some(runtime.heap.allocate_text_view(buffer, front, size, ascii));
+    }
+    if !fits(runtime, size) {
+        return None;
+    }
+    let string = runtime.heap.allocate_text_of(&parts);
+    if chains && ll >= TEXT_CHAIN_MIN {
+        runtime.heap.mark(string, APPENDED);
+    } else if chains && rl >= TEXT_CHAIN_MIN {
+        runtime.heap.mark(string, PREPENDED);
+    }
+    Some(string)
+}
+
+/// Was `array` made by an append or a prepend (a flat copy marked so, or a
+/// view of a buffer)? A view of a plain array — a slice (#249) or a
+/// flattened trie — is not: concatenating it is a one-off and copies once.
+fn continues_chain(runtime: &Runtime, array: Word, header: u64) -> bool {
+    use crate::heap::{APPENDED, PREPENDED, SHARED};
+    header & (APPENDED | PREPENDED) != 0 || (header & SHARED != 0 && runtime.heap.is_buffer(runtime.heap.shared(array).0))
+}
+
+/// A slice (and `take`, `drop`, which lower to it) that shares its origin's
+/// storage (#249): a view of the flat array, or of the buffer of a view,
+/// when the slice keeps at least half of that storage, so a slice never
+/// keeps alive more than twice what it holds. Views always point at the
+/// storage itself, never at another view. Smaller slices, short ones and
+/// slices of tries are copied, as before. `rest = items.drop(1)` in a loop
+/// shares until half is left, copies that half once, and so on: O(n) in all.
+fn slice_shared(runtime: &mut Runtime, array: Word, repr: Repr, range: std::ops::Range<usize>) -> Option<Word> {
+    use crate::heap::{CHAIN_MIN, SHARED, TRIE, payload};
+    let header = runtime.heap.header_of(array);
+    if !shared_arrays() || range.len() < CHAIN_MIN || header & TRIE != 0 {
+        return None;
+    }
+    let (storage, start, kept) = if header & SHARED != 0 {
+        let (buffer, start) = runtime.heap.shared(array);
+        let (used, capacity) = runtime.heap.buffer_room(buffer);
+        (buffer, start, capacity.max(used))
+    } else {
+        (array, 0, payload(header) as usize)
+    };
+    if 2 * range.len() < kept {
+        return None;
+    }
+    Some(runtime.heap.allocate_view(repr, storage, start + range.start, range.len()))
+}
+
+/// `… + [x] + items` when `items` continues a chain of prepends (#247): the
+/// mirror of [`append_shared`]. Written in place right before `items` when
+/// it starts at its buffer's lowest written slot and there is room, else
+/// into a new buffer twice the size with three quarters of its room in
+/// front. `None` for anything else.
+fn prepend_shared(runtime: &mut Runtime, repr: Repr, words: &[Word], size: usize) -> Option<Word> {
+    use crate::heap::{SHARED, payload};
+    if !shared_arrays() || words.len() < 2 {
+        return None;
+    }
+    let last = words[words.len() - 1];
+    let header = runtime.heap.header_of(last);
+    if !continues_chain(runtime, last, header) {
+        return None;
+    }
+    let length = payload(header) as usize;
+    let front: Vec<Word> = words[..words.len() - 1].iter().flat_map(|&w| runtime.heap.elements(w).into_owned()).collect();
+    if header & SHARED != 0 {
+        let (buffer, start) = runtime.heap.shared(last);
+        if runtime.heap.buffer_front_free(buffer, start, front.len(), repr) {
+            runtime.heap.buffer_prepend(buffer, start, &front);
+            return Some(runtime.heap.allocate_view(repr, buffer, start - front.len(), size));
+        }
+    }
+    let tail = runtime.heap.elements(last).into_owned();
+    let capacity = (2 * size).next_power_of_two();
+    let room = (capacity - size) * 3 / 4;
+    let buffer = runtime.heap.allocate_buffer(repr, &[&front, &tail], capacity, room);
+    debug_assert_eq!(length, tail.len());
+    Some(runtime.heap.allocate_view(repr, buffer, room, size))
+}
+
 // ---- structural equality ----
 
 /// A new array for register `dst` of `function`: byte arrays (`@byte`) are
@@ -340,7 +654,14 @@ pub(crate) fn equal(runtime: &Runtime, left: Word, right: Word, ty: TypeRef) -> 
                 }
                 continue;
             }
-            Kind::Float | Kind::Raw | Kind::Byte => {
+            // Numerically, as scalar `==` (#314): `-0.0 == 0.0`.
+            Kind::Float => {
+                if f64::from_bits(a) != f64::from_bits(b) {
+                    return Ok(false);
+                }
+                continue;
+            }
+            Kind::Raw | Kind::Byte => {
                 if a != b {
                     return Ok(false);
                 }
@@ -390,8 +711,23 @@ pub(crate) fn equal(runtime: &Runtime, left: Word, right: Word, ty: TypeRef) -> 
                 if x.len() != y.len() {
                     return Ok(false);
                 }
-                if a != b && seen.insert((a, b)) {
-                    pending.extend(x.iter().zip(y.iter()).rev().map(|(&x, &y)| (x, y, *element)));
+                // Scalar elements compare in place, without the pair stack.
+                match runtime.kind_of(*element) {
+                    Kind::Float => {
+                        if !x.iter().zip(y.iter()).all(|(&x, &y)| f64::from_bits(x) == f64::from_bits(y)) {
+                            return Ok(false);
+                        }
+                    }
+                    Kind::Raw | Kind::Byte => {
+                        if x != y {
+                            return Ok(false);
+                        }
+                    }
+                    Kind::Int | Kind::Ref => {
+                        if a != b && seen.insert((a, b)) {
+                            pending.extend(x.iter().zip(y.iter()).rev().map(|(&x, &y)| (x, y, *element)));
+                        }
+                    }
                 }
             }
             Some(Type::Map(_, value)) => {
@@ -403,15 +739,22 @@ pub(crate) fn equal(runtime: &Runtime, left: Word, right: Word, ty: TypeRef) -> 
                     return Ok(false);
                 }
                 if a != b && seen.insert((a, b)) {
-                    for ((k, (_, v)), (k2, (_, v2))) in x.entries.iter().zip(&y.entries) {
+                    // Scalar values compare in place, as array elements do.
+                    let kind = runtime.kind_of(*value);
+                    for ((k, (_, v)), (k2, (_, v2))) in x.entries.iter().zip(y.entries.iter()) {
                         if k != k2 {
                             return Ok(false);
                         }
-                        pending.push((*v, *v2, *value));
+                        match kind {
+                            Kind::Float if f64::from_bits(*v) != f64::from_bits(*v2) => return Ok(false),
+                            Kind::Raw | Kind::Byte if v != v2 => return Ok(false),
+                            Kind::Float | Kind::Raw | Kind::Byte => {}
+                            Kind::Int | Kind::Ref => pending.push((*v, *v2, *value)),
+                        }
                     }
                 }
             }
-            Some(Type::Object(_) | Type::Successor(_) | Type::Role(_)) => {
+            Some(Type::Object(_) | Type::Successor(_) | Type::Role(_) | Type::Variant(_)) => {
                 let (ha, hb) = (runtime.heap.header_of(a), runtime.heap.header_of(b));
                 if heap::kind(ha) != heap::OBJECT || heap::kind(hb) != heap::OBJECT {
                     if a != b {
@@ -424,7 +767,11 @@ pub(crate) fn equal(runtime: &Runtime, left: Word, right: Word, ty: TypeRef) -> 
                 }
                 if a != b && seen.insert((a, b)) {
                     let fields = &program.objects[heap::payload(ha) as usize].fields;
-                    for (index, (_, field)) in fields.iter().enumerate().rev() {
+                    for (index, (name, field)) in fields.iter().enumerate().rev() {
+                        // A `once let` slot is a cache, not part of the value (#491).
+                        if is_once_slot(name) {
+                            continue;
+                        }
                         let (x, y) = (runtime.heap.field(a, index), runtime.heap.field(b, index));
                         let unbound = |w: Word| match runtime.kind_of(*field) {
                             Kind::Float | Kind::Raw | Kind::Byte => w == word::UNBOUND_RAW,
@@ -448,6 +795,12 @@ pub(crate) fn equal(runtime: &Runtime, left: Word, right: Word, ty: TypeRef) -> 
     Ok(true)
 }
 
+/// A hidden `once let` slot (#491): the compiler names them `$once0`, `$once1`, …
+/// They cache an answer, so equality, map keys and dumps leave them out.
+pub(crate) fn is_once_slot(name: &str) -> bool {
+    name.starts_with("$once")
+}
+
 // ---- the helper ----
 
 /// `builder.push`: append a word to a builder (no collection here: the
@@ -455,8 +808,33 @@ pub(crate) fn equal(runtime: &Runtime, left: Word, right: Word, ty: TypeRef) -> 
 #[inline(never)]
 pub extern "C" fn rt_builder_push(ctx: *mut Ctx, builder: Word, item: Word) -> Word {
     let runtime = unsafe { &mut *(*ctx).runtime };
-    runtime.heap.payload_mut::<Builder>(builder).expect("builder").items.push(item);
+    grow_builder(&mut runtime.heap, builder, |items| items.push(item));
     builder
+}
+
+/// Element `position` (in bounds) of a trie array (#250), for machine code.
+#[inline(never)]
+pub extern "C" fn rt_trie_get(ctx: *mut Ctx, array: Word, position: u64) -> Word {
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    if flattening_tries() {
+        runtime.heap.trie_read(array, position as usize)
+    } else {
+        runtime.heap.trie_get(array, position as usize)
+    }
+}
+
+/// Grow a builder's items and charge the capacity its vector took on
+/// (#331): O(1), and nothing at all while the capacity holds.
+fn grow_builder(heap: &mut crate::heap::Heap, builder: Word, grow: impl FnOnce(&mut Vec<Word>)) {
+    let grown = {
+        let items = &mut heap.payload_mut::<Builder>(builder).expect("builder").items;
+        let before = items.capacity();
+        grow(items);
+        items.capacity().saturating_sub(before)
+    };
+    if grown > 0 {
+        heap.charge_external(grown * 8);
+    }
 }
 
 /// Execute instruction `pc` of `function` with its used words at `uses`.
@@ -464,7 +842,14 @@ pub extern "C" fn rt_builder_push(ctx: *mut Ctx, builder: Word, item: Word) -> W
 /// SAFETY: called from machine code with its context; `uses` holds one word
 /// per `Access::Use` of the instruction, in `visit` order.
 #[inline(never)]
-pub extern "C" fn rt_exec(ctx: *mut Ctx, function: u64, pc: u64, uses: *const Word) -> Word {
+pub extern "C" fn rt_exec(
+    ctx: *mut Ctx,
+    function: u64,
+    pc: u64,
+    uses: *const Word,
+    registers: *const okkama_sparrow::Register,
+    count: u64,
+) -> Word {
     let frame = crate::runtime::frame_pointer!();
     let ctx = unsafe { &mut *ctx };
     let runtime = unsafe { &mut *ctx.runtime };
@@ -473,34 +858,20 @@ pub extern "C" fn rt_exec(ctx: *mut Ctx, function: u64, pc: u64, uses: *const Wo
     // the instruction stays valid while the runtime is borrowed mutably.
     let instruction: &I = unsafe { &*(&runtime.loaded.program.functions[function].code[pc as usize] as *const I) };
     runtime.count(|_| format!("exec {}", instruction.mnemonic()));
-    if runtime.limits.memory.is_some()
-        && let Some(bytes) = result_bytes(runtime, instruction, uses)
-            && runtime.would_exceed(bytes) {
-                return runtime.exhaust(ctx, crate::budget::Exhausted::Memory);
-            }
-    // Uses in visit order: inline for the common case, spilled past 16 (map
-    // and array literals can use any number of registers).
-    let mut inline = [okkama_sparrow::Register(u32::MAX); 16];
-    let mut spilled = Vec::new();
-    let mut count = 0;
-    instruction.visit(&mut |access| {
-        if let Access::Use(register) = access {
-            if count < inline.len() {
-                inline[count] = register;
-            } else {
-                if spilled.is_empty() {
-                    spilled.extend_from_slice(&inline);
-                }
-                spilled.push(register);
-            }
-            count += 1;
-        }
-    });
-    let registers: &[okkama_sparrow::Register] = if count <= inline.len() { &inline[..count] } else { &spilled };
-    let words = unsafe { std::slice::from_raw_parts(uses, count) };
+    // The instruction's uses in visit order, as the call site recorded them
+    // when it was compiled, and one word for each.
+    // SAFETY: the table lives with the machine code; the caller spilled one
+    // word per register.
+    let registers = unsafe { std::slice::from_raw_parts(registers, count as usize) };
+    let words = unsafe { std::slice::from_raw_parts(uses, count as usize) };
     let value = |register: &okkama_sparrow::Register| {
         words[registers.iter().position(|r| r == register).expect("used register")]
     };
+    if runtime.limits.memory.is_some()
+        && let Some(bytes) = result_bytes(runtime, instruction, &value)
+            && runtime.would_exceed(bytes) {
+                return runtime.exhaust(ctx, crate::budget::Exhausted::Memory);
+            }
     let outcome = match instruction {
         // Spawning runs the worker's driver now: it needs the context.
         I::WorkerSpawn { entry, args, direct, .. } => {
@@ -535,16 +906,7 @@ pub extern "C" fn rt_exec(ctx: *mut Ctx, function: u64, pc: u64, uses: *const Wo
 /// The size of the result of an instruction whose result can be much larger
 /// than its operands (#72) — a join, a replacement — before it is built,
 /// so a memory budget stops it instead of the allocation it would make.
-fn result_bytes(runtime: &Runtime, instruction: &I, uses: *const Word) -> Option<u64> {
-    let mut registers = Vec::new();
-    instruction.visit(&mut |access| {
-        if let Access::Use(register) = access {
-            registers.push(register);
-        }
-    });
-    // SAFETY: rt_exec's caller passes one word per use.
-    let words = unsafe { std::slice::from_raw_parts(uses, registers.len()) };
-    let value = |register: &okkama_sparrow::Register| words[registers.iter().position(|r| r == register).expect("used register")];
+fn result_bytes(runtime: &Runtime, instruction: &I, value: &dyn Fn(&okkama_sparrow::Register) -> Word) -> Option<u64> {
     let text = |register| runtime.heap.text(value(register));
     match instruction {
         I::ArrayJoin { array, separator, .. } => {
@@ -717,11 +1079,7 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
                     let n = f64::from_bits(word);
                     if n > 0.0 { 1 } else if n < 0.0 { -1 } else { 0 }
                 }
-                _ => match runtime.rational(word).numer().sign() {
-                    num_bigint::Sign::Minus => -1,
-                    num_bigint::Sign::NoSign => 0,
-                    num_bigint::Sign::Plus => 1,
-                },
+                _ => runtime.rational(word).sign(),
             };
             Ok(runtime.heap.int(sign))
         }
@@ -745,42 +1103,40 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
         I::Convert { dst, source } => convert(runtime, function, *source, dst.0, value(source)),
         I::ByteFrom { source, context, .. } => byte_from(runtime, kinds[source.0 as usize], value(source), context.as_deref()),
         I::RatNew { left, right, .. } => {
-            let (n, d) = (runtime.big_value(value(left)), runtime.big_value(value(right)));
-            if d.is_zero() {
-                return Err("Division by zero".into());
-            }
-            Ok(runtime.rational_new(BigRational::new(n, d)))
+            let ratio = Rat::new(&runtime.int_value(value(left)), &runtime.int_value(value(right)))?;
+            Ok(runtime.rational_new(ratio))
         }
         I::RatAdd { left, right, .. }
         | I::RatSub { left, right, .. }
         | I::RatMul { left, right, .. }
         | I::RatDiv { left, right, .. }
         | I::RatMod { left, right, .. } => {
-            let (a, b) = (runtime.rational(value(left)).clone(), runtime.rational(value(right)).clone());
-            if b.is_zero() && matches!(instruction, I::RatDiv { .. } | I::RatMod { .. }) {
-                return Err(if matches!(instruction, I::RatDiv { .. }) { "Division by zero" } else { "Modulo by zero" }.into());
-            }
-            let result = match instruction {
-                I::RatAdd { .. } => a + b,
-                I::RatSub { .. } => a - b,
-                I::RatMul { .. } => a * b,
-                I::RatDiv { .. } => a / b,
-                _ => a % b,
+            // Borrowed operands: the result is computed before the runtime
+            // is borrowed again to allocate it (#326).
+            let result = {
+                let (a, b) = (runtime.rational(value(left)), runtime.rational(value(right)));
+                match instruction {
+                    I::RatAdd { .. } => a.add(b),
+                    I::RatSub { .. } => a.sub(b),
+                    I::RatMul { .. } => a.mul(b),
+                    I::RatDiv { .. } => a.div(b)?,
+                    _ => a.modulo(b)?,
+                }
             };
             Ok(runtime.rational_new(result))
         }
         I::RatNeg { operand, .. } | I::RatAbs { operand, .. } => {
-            let n = runtime.rational(value(operand)).clone();
-            let result = if matches!(instruction, I::RatNeg { .. }) { -n } else { n.abs() };
+            let n = runtime.rational(value(operand));
+            let result = if matches!(instruction, I::RatNeg { .. }) { n.neg() } else { n.abs() };
             Ok(runtime.rational_new(result))
         }
         I::RatCmp { op, left, right, .. } => {
-            let order = runtime.rational(value(left)).cmp(runtime.rational(value(right)));
+            let order = runtime.rational(value(left)).compare(runtime.rational(value(right)));
             Ok(compare_flag(*op, order))
         }
         I::RatPart { value: source, denominator, .. } => {
             let ratio = runtime.rational(value(source));
-            let text = if *denominator { ratio.denom() } else { ratio.numer() }.to_string();
+            let text = if *denominator { ratio.denominator() } else { ratio.numerator() }.to_string();
             Ok(runtime.text_new(&text))
         }
         I::StrCmp { op, left, right, .. } => {
@@ -869,7 +1225,60 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
                 return Ok(runtime.heap.allocate_bytes(&bytes));
             }
             let repr = element_repr(runtime, array);
+            if let Some(view) = slice_shared(runtime, array, repr, range.clone()) {
+                return Ok(view);
+            }
             let items: Vec<Word> = runtime.heap.elements(array)[range].to_vec();
+            Ok(runtime.heap.allocate_array(repr, &items))
+        }
+        I::ArrayRemove { array, index, .. } => {
+            // A copy without one element (#251); `arr.get`'s bounds.
+            let (array, index) = (value(array), value(index));
+            let length = crate::heap::payload(runtime.heap.header_of(array)) as usize;
+            let at = word::small_value(index)
+                .and_then(|i| usize::try_from(i).ok())
+                .filter(|&i| i < length)
+                .ok_or_else(|| "Array index out of bounds".to_string())?;
+            if runtime.heap.is_bytes(array) {
+                let mut bytes = runtime.heap.bytes(array).to_vec();
+                bytes.remove(at);
+                return Ok(runtime.heap.allocate_bytes(&bytes));
+            }
+            let repr = element_repr(runtime, array);
+            let mut items = runtime.heap.elements(array).into_owned();
+            items.remove(at);
+            Ok(runtime.heap.allocate_array(repr, &items))
+        }
+        I::ArrayReplace { array, index, value: item, .. } => {
+            // A copy with one element replaced (#250); `arr.get`'s bounds.
+            let (array, index, item) = (value(array), value(index), value(item));
+            let length = crate::heap::payload(runtime.heap.header_of(array)) as usize;
+            let at = word::small_value(index)
+                .and_then(|i| usize::try_from(i).ok())
+                .filter(|&i| i < length)
+                .ok_or_else(|| "Array index out of bounds".to_string())?;
+            if runtime.heap.is_bytes(array) {
+                let mut bytes = runtime.heap.bytes(array).to_vec();
+                bytes[at] = item as u8;
+                return Ok(runtime.heap.allocate_bytes(&bytes));
+            }
+            let repr = element_repr(runtime, array);
+            let header = runtime.heap.header_of(array);
+            // A chain of replacements in a large array becomes a trie, which
+            // copies one path per replacement instead of the array (#250).
+            if trie_arrays() && header & crate::heap::TRIE != 0 {
+                return Ok(runtime.heap.trie_set(array, at, item));
+            }
+            let mut items = runtime.heap.elements(array).into_owned();
+            items[at] = item;
+            if trie_arrays() && length >= crate::heap::TRIE_MIN {
+                if header & crate::heap::REPLACED != 0 {
+                    return Ok(runtime.heap.trie_from(repr, &items));
+                }
+                let copy = runtime.heap.allocate_array(repr, &items);
+                runtime.heap.mark(copy, crate::heap::REPLACED);
+                return Ok(copy);
+            }
             Ok(runtime.heap.allocate_array(repr, &items))
         }
         I::ArrayJoin { array, separator, .. } => {
@@ -888,17 +1297,30 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
                 Some(Type::Builder(element)) => runtime.kind_of(*element).repr(),
                 _ => return Err("builder.new needs a builder type".into()),
             };
-            Ok(runtime.heap.allocate_payload(Box::new(Builder { repr, items: Vec::new() })))
+            let spare = runtime.heap.allocate_spare(|payload| {
+                match payload.as_any_mut().downcast_mut::<Builder>() {
+                    Some(builder) => {
+                        builder.repr = repr;
+                        builder.items.clear();
+                        true
+                    }
+                    None => false,
+                }
+            });
+            match spare {
+                Some(object) => Ok(object),
+                None => Ok(runtime.heap.allocate_payload(Box::new(Builder { repr, items: Vec::new() }))),
+            }
         }
         I::BuilderPush { builder, value: item, .. } => {
             let (builder, item) = (value(builder), value(item));
-            runtime.heap.payload_mut::<Builder>(builder).expect("builder").items.push(item);
+            grow_builder(&mut runtime.heap, builder, |items| items.push(item));
             Ok(builder)
         }
         I::BuilderAppend { builder, array, .. } => {
             let builder = value(builder);
             let items = runtime.heap.elements(value(array)).to_vec();
-            runtime.heap.payload_mut::<Builder>(builder).expect("builder").items.extend(items);
+            grow_builder(&mut runtime.heap, builder, |all| all.extend(items));
             Ok(builder)
         }
         I::BuilderRange { builder, start, end, inclusive, .. } => {
@@ -913,22 +1335,41 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
                 items.push(integer_word(runtime, n.clone()));
                 n += 1;
             }
-            runtime.heap.payload_mut::<Builder>(builder).expect("builder").items.extend(items);
+            grow_builder(&mut runtime.heap, builder, |all| all.extend(items));
             Ok(builder)
         }
         I::BuilderFinish { dst, builder } => {
-            let builder = runtime.heap.payload_mut::<Builder>(value(builder)).expect("builder");
-            let (repr, items) = (builder.repr, std::mem::take(&mut builder.items));
-            Ok(new_array(runtime, function, dst.0, repr, &items))
+            let object = value(builder);
+            let builder = runtime.heap.payload_mut::<Builder>(object).expect("builder");
+            let (repr, mut items) = (builder.repr, std::mem::take(&mut builder.items));
+            let array = new_array(runtime, function, dst.0, repr, &items);
+            // Its growth was charged as it grew; the buffer is freed or kept
+            // for the next builder here (#503).
+            runtime.heap.discharge_external(items.capacity() * 8);
+            if items.capacity() <= crate::heap::SPARE_CAPACITY {
+                items.clear();
+                if let Some(builder) = runtime.heap.payload_mut::<Builder>(object) {
+                    builder.items = items;
+                }
+                runtime.heap.retire_payload(object);
+            }
+            Ok(array)
         }
         I::MapNew { dst, entries } => {
             let mut map = map_for(runtime, function, dst.0)?;
             let (key_kind, key_type) = map_key(runtime, function, dst.0);
+            // What the entries own, counted as they go in, so the heap does
+            // not walk the keys again to charge them (#325).
+            let mut owned = 0;
             for (key, item) in entries {
                 let (key, item) = (value(key), value(item));
-                let k = runtime.checked_key(key, key_kind, key_type.as_ref())?;
-                map.entries.entry(k).and_modify(|e| e.1 = item).or_insert((key, item));
+                let k = runtime.checked_key(key, key_kind, key_type)?;
+                let bytes = MAP_ENTRY_BYTES + k.owned_bytes();
+                if map.entries.upsert(k, (key, item)) {
+                    owned += bytes;
+                }
             }
+            map.owned.set(Some(owned));
             Ok(runtime.heap.allocate_payload(Box::new(map)))
         }
         I::ArrayConcat { dst, parts } => {
@@ -946,12 +1387,27 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
                 }
                 return Ok(runtime.heap.allocate_bytes(&bytes));
             }
+            let repr = runtime.kind_of(element).repr();
+            if let Some(array) = append_shared(runtime, repr, &words, size) {
+                return Ok(array);
+            }
+            if let Some(array) = prepend_shared(runtime, repr, &words, size) {
+                return Ok(array);
+            }
             let mut items = Vec::with_capacity(size);
             for &w in &words {
                 items.extend_from_slice(&runtime.heap.elements(w));
             }
-            let repr = runtime.kind_of(element).repr();
-            Ok(new_array(runtime, function, dst.0, repr, &items))
+            let array = new_array(runtime, function, dst.0, repr, &items);
+            let first = crate::heap::payload(runtime.heap.header_of(words[0])) as usize;
+            let last = crate::heap::payload(runtime.heap.header_of(words[words.len() - 1])) as usize;
+            if shared_arrays() && words.len() > 1 && first < crate::heap::CHAIN_MIN && last >= crate::heap::CHAIN_MIN {
+                runtime.heap.mark(array, crate::heap::PREPENDED);
+            }
+            if shared_arrays() && words.len() > 1 && first >= crate::heap::CHAIN_MIN {
+                runtime.heap.mark_appended(array);
+            }
+            Ok(array)
         }
         I::ArrayDiff { dst, array, removed } => {
             let element = match runtime.ty(function, dst.0) {
@@ -965,8 +1421,9 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
                 excluded.extend_from_slice(&runtime.heap.elements(value(part)));
             }
             let items = runtime.heap.elements(value(array)).into_owned();
-            // Scalars and strings compare by key; other elements deeply.
-            let keyed = matches!(kind, Kind::Int | Kind::Raw | Kind::Byte) || ty == Some(Type::Str);
+            // Scalars and strings compare by key (a float key is numeric, so
+            // `-0.0` and `0.0` are one, #314); other elements deeply.
+            let keyed = matches!(kind, Kind::Int | Kind::Float | Kind::Raw | Kind::Byte) || ty == Some(Type::Str);
             let mut kept = Vec::with_capacity(items.len());
             if keyed {
                 let keys: std::collections::BTreeSet<_> = excluded.iter().map(|&w| runtime.key(w, kind, ty.as_ref())).collect();
@@ -992,17 +1449,27 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
             Ok(new_array(runtime, function, dst.0, kind.repr(), &kept))
         }
         I::MapMerge { dst, parts } => {
+            // The first part as it is (O(1) for a persistent map), then each
+            // later part's entries: the rightmost value wins, the leftmost key
+            // word stays (#254).
             let mut map = map_for(runtime, function, dst.0)?;
+            // A large standard map a version is made from turns persistent
+            // in place, so that this and later versions share its nodes.
             for part in parts {
-                let entries = &runtime.heap.payload::<MapValue>(value(part)).expect("map").entries;
-                for (key, (key_word, item)) in entries {
-                    map.entries.entry(key.clone()).and_modify(|e| e.1 = *item).or_insert((*key_word, *item));
-                }
+                runtime.heap.payload_mut::<MapValue>(value(part)).expect("map").entries.make_persistent();
+            }
+            let mut parts = parts.iter().map(|part| &runtime.heap.payload::<MapValue>(value(part)).expect("map").entries);
+            if let Some(first) = parts.next() {
+                map.entries = first.clone();
+            }
+            for entries in parts {
+                map.entries.merge(entries);
             }
             Ok(runtime.heap.allocate_payload(Box::new(map)))
         }
         I::MapDiff { dst, map: base, removed } => {
             let mut map = map_for(runtime, function, dst.0)?;
+            runtime.heap.payload_mut::<MapValue>(value(base)).expect("map").entries.make_persistent();
             map.entries = runtime.heap.payload::<MapValue>(value(base)).expect("map").entries.clone();
             for part in removed {
                 let entries = &runtime.heap.payload::<MapValue>(value(part)).expect("map").entries;
@@ -1019,9 +1486,16 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
         I::MapBuilderPut { builder, key, value: item, .. } => {
             let (builder, key, item) = (value(builder), value(key), value(item));
             let (key_kind, key_type) = map_key(runtime, function, *builder_register(instruction));
-            let k = runtime.checked_key(key, key_kind, key_type.as_ref())?;
+            let k = runtime.checked_key(key, key_kind, key_type)?;
             let map = runtime.heap.payload_mut::<MapValue>(builder).expect("map builder");
-            map.entries.entry(k).and_modify(|e| e.1 = item).or_insert((key, item));
+            // A new entry of a standard map is Rust memory the builder took
+            // on (#331); persistent map nodes count themselves.
+            let charged = (!map.entries.is_persistent()).then(|| MAP_ENTRY_BYTES + k.owned_bytes());
+            let fresh = map.entries.upsert(k, (key, item));
+            if let (true, Some(bytes)) = (fresh, charged) {
+                map.owned.set(map.owned.get().map(|owned| owned + bytes));
+                runtime.heap.charge_external(bytes);
+            }
             Ok(builder)
         }
         I::WorkerBind { action, entry, fields, .. } => {
@@ -1030,8 +1504,10 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
         }
         I::MapBuilderFinish { builder, .. } => {
             let map = runtime.heap.payload_mut::<MapValue>(value(builder)).expect("map builder");
-            let finished = MapValue { key: map.key, value: map.value, entries: std::mem::take(&mut map.entries) };
-            Ok(runtime.heap.allocate_payload(Box::new(finished)))
+            let owned = map.owned.replace(Some(0));
+            let finished = MapValue { key: map.key, value: map.value, entries: std::mem::take(&mut map.entries), owned: owned.into() };
+            // The entries were charged as the builder took them.
+            Ok(runtime.heap.allocate_payload_moved(Box::new(finished)))
         }
         I::MapLen { map, .. } => {
             let length = runtime.heap.payload::<MapValue>(value(map)).expect("map").entries.len();
@@ -1040,12 +1516,11 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, value: &dyn 
         I::MapHas { map, key, .. } | I::MapGet { map, key, .. } => {
             let (key_kind, key_type) = map_key(runtime, function, *map);
             let key_word = value(key);
-            let k = runtime.checked_key(key_word, key_kind, key_type.as_ref())?;
-            let found = runtime.heap.payload::<MapValue>(value(map)).expect("map").entries.get(&k).map(|e| e.1);
+            let found = runtime.lookup(value(map), key_word, key_kind, key_type)?;
             if matches!(instruction, I::MapHas { .. }) {
                 return Ok(bool_word(found.is_some()));
             }
-            found.ok_or_else(|| format!("Map key not found: {}", key_text(runtime, key_word, key_kind, key_type.as_ref())))
+            found.ok_or_else(|| format!("Map key not found: {}", key_text(runtime, key_word, key_kind, key_type)))
         }
         I::MapKeys { dst, map } | I::MapValues { dst, map } => {
             let map = runtime.heap.payload::<MapValue>(value(map)).expect("map");
@@ -1064,8 +1539,7 @@ pub fn map_find(runtime: &Runtime, function: usize, pc: usize, map: Word, key: W
         return None;
     };
     let (key_kind, key_type) = map_key(runtime, function, *register);
-    let k = runtime.key(key, key_kind, key_type.as_ref());
-    runtime.heap.payload::<MapValue>(map)?.entries.get(&k).map(|e| e.1)
+    runtime.lookup(map, key, key_kind, key_type).ok().flatten()
 }
 
 fn builder_register(instruction: &I) -> &okkama_sparrow::Register {
@@ -1079,13 +1553,72 @@ fn element_repr(runtime: &Runtime, array: Word) -> Repr {
     Repr::from_bits((runtime.heap.header_of(array) >> 9) & 3)
 }
 
-fn map_key(runtime: &Runtime, function: usize, map: okkama_sparrow::Register) -> (Kind, Option<Type>) {
+/// The kind and type of a map's keys, borrowed from the program (#343).
+fn map_key(runtime: &Runtime, function: usize, map: okkama_sparrow::Register) -> (Kind, Option<&Type>) {
     match runtime.ty(function, map) {
-        Some(Type::Map(key, _) | Type::MapBuilder(key, _)) => {
-            (runtime.kind_of(*key), runtime.loaded.program.ty(*key).cloned())
-        }
+        Some(Type::Map(key, _) | Type::MapBuilder(key, _)) => (runtime.kind_of(*key), runtime.loaded.program.ty(*key)),
         _ => (Kind::Raw, None),
     }
+}
+
+/// The value of a constant carried as data (#506), built as its init
+/// function would build it: the same scalar words, arrays with the element's
+/// representation (bytes packed), maps through the same keys. Allocation
+/// does not collect, so the words built so far need no rooting; the caller
+/// roots the result.
+pub(crate) fn materialize(runtime: &mut Runtime, data: &Data, ty: TypeRef) -> Result<Word, String> {
+    Ok(match data {
+        Data::Scalar(constant) => match constant {
+            Constant::Int(text) => {
+                let n: BigInt = text.parse().map_err(|_| "invalid integer constant")?;
+                runtime.heap.big(n)
+            }
+            Constant::Bool(value) => Word::from(*value),
+            Constant::Byte(value) => Word::from(*value),
+            Constant::Char(value) => Word::from(u32::from(*value)),
+            Constant::Float(bits) => *bits,
+            Constant::Str(text) => runtime.text_new(text),
+        },
+        Data::Array(items) => {
+            let Some(&Type::Array(element)) = runtime.loaded.program.ty(ty) else {
+                return Err("array data needs an array type".into());
+            };
+            let kind = runtime.kind_of(element);
+            let mut words = Vec::with_capacity(items.len());
+            for item in items {
+                words.push(materialize(runtime, item, element)?);
+            }
+            if kind == Kind::Byte {
+                let bytes: Vec<u8> = words.iter().map(|&word| word as u8).collect();
+                runtime.heap.allocate_bytes(&bytes)
+            } else {
+                runtime.heap.allocate_array(kind.repr(), &words)
+            }
+        }
+        Data::Map(entries) => {
+            let Some(&Type::Map(key, value)) = runtime.loaded.program.ty(ty) else {
+                return Err("map data needs a map type".into());
+            };
+            let (key_kind, key_type) = (runtime.kind_of(key), runtime.loaded.program.ty(key).cloned());
+            let mut map = MapValue {
+                key: key_kind.repr(),
+                value: runtime.kind_of(value).repr(),
+                entries: Default::default(),
+                owned: Default::default(),
+            };
+            let mut owned = 0;
+            for (k, v) in entries {
+                let (k, v) = (materialize(runtime, k, key)?, materialize(runtime, v, value)?);
+                let checked = runtime.checked_key(k, key_kind, key_type.as_ref())?;
+                let bytes = MAP_ENTRY_BYTES + checked.owned_bytes();
+                if map.entries.upsert(checked, (k, v)) {
+                    owned += bytes;
+                }
+            }
+            map.owned.set(Some(owned));
+            runtime.heap.allocate_payload(Box::new(map))
+        }
+    })
 }
 
 fn map_for(runtime: &Runtime, function: usize, register: okkama_sparrow::Register) -> Result<MapValue, String> {
@@ -1093,7 +1626,8 @@ fn map_for(runtime: &Runtime, function: usize, register: okkama_sparrow::Registe
         Some(Type::Map(key, value) | Type::MapBuilder(key, value)) => Ok(MapValue {
             key: runtime.kind_of(*key).repr(),
             value: runtime.kind_of(*value).repr(),
-            entries: BTreeMap::new(),
+            entries: Default::default(),
+            owned: Default::default(),
         }),
         _ => Err("map instruction needs a map type".into()),
     }
@@ -1108,6 +1642,7 @@ fn key_text(runtime: &Runtime, word: Word, kind: Kind, ty: Option<&Type>) -> Str
         (_, Some(Type::Str)) => format!("\"{}\"", runtime.heap.text(word)),
         (_, Some(Type::Char)) => format!("\"{}\"", char::from_u32(word as u32).unwrap_or('?')),
         (_, Some(Type::Bool)) => if word != 0 { "true" } else { "false" }.to_string(),
+        (_, Some(Type::Rat)) => runtime.rational(word).to_string(),
         (Kind::Float, _) => crate::scalar::float_text(f64::from_bits(word)),
         (Kind::Raw | Kind::Byte, _) => word.to_string(),
         _ => runtime.big_value(word).to_string(),
@@ -1149,16 +1684,19 @@ fn convert(runtime: &mut Runtime, function: usize, source: okkama_sparrow::Regis
             Ok(runtime.text_new(&text))
         }
         (Some(Type::Int), Some(Type::Rat)) => {
-            let n = runtime.big_value(word);
-            Ok(runtime.rational_new(BigRational::from_integer(n)))
+            let n = runtime.int_value(word);
+            Ok(runtime.rational_new(Rat::from_int(&n)))
         }
-        (Some(Type::Byte), Some(Type::Rat)) => Ok(runtime.rational_new(BigRational::from_integer(BigInt::from(word)))),
-        (Some(Type::Float), Some(Type::Rat)) => Ok(runtime.rational_new(decimal_ratio(f64::from_bits(word)))),
+        (Some(Type::Byte), Some(Type::Rat)) => Ok(runtime.rational_new(Rat::from_int(&IntValue::from_i64(word as i64)))),
+        (Some(Type::Float), Some(Type::Rat)) => Ok(runtime.rational_new(Rat::from_float(f64::from_bits(word)))),
         (Some(Type::Rat), Some(Type::Int)) => {
-            let n = runtime.rational(word).to_integer();
-            Ok(integer_word(runtime, n))
+            let n = runtime.rational(word).to_int();
+            Ok(match n.to_i64() {
+                Some(small) => runtime.heap.int(small),
+                None => integer_word(runtime, n.as_big().as_bigint().clone()),
+            })
         }
-        (Some(Type::Rat), Some(Type::Float)) => rational_to_float(runtime.rational(word)).map(f64::to_bits),
+        (Some(Type::Rat), Some(Type::Float)) => runtime.rational(word).to_float().map(f64::to_bits),
         (Some(Type::Byte), Some(Type::Int)) => Ok(runtime.heap.int(word as i64)),
         // `char` ↔ text and code point (#231).
         (Some(Type::Char), Some(Type::Int)) => Ok(runtime.heap.int(word as i64)),
@@ -1249,7 +1787,7 @@ fn byte_from(runtime: &mut Runtime, kind: Kind, word: Word, context: Option<&str
         }
         _ => {
             let n = runtime.rational(word);
-            if let Some(byte) = n.to_integer().to_u8() {
+            if let Some(byte) = n.to_int().to_i64().and_then(|n| u8::try_from(n).ok()) {
                 return Ok(Word::from(byte));
             }
             ("rat", n.to_string())

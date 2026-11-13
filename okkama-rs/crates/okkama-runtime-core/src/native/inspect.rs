@@ -18,7 +18,7 @@ pub(super) fn execute(name: &str, native: Native, value: &Value, context: &Conte
         "data_leaf" => text(leaf(native, context, value)?),
         "data_names" => array(names(context, value).into_iter().map(text).collect()),
         "data_keys" => array(keys(value).into_iter().map(boxed).collect()),
-        "data_items" => array(items(value).into_iter().map(boxed).collect()),
+        "data_items" => array(items(context, value).into_iter().map(boxed).collect()),
         _ => return Err(super::support::failed(native)),
     })
 }
@@ -67,10 +67,11 @@ fn type_name(context: &Context, value: &Value) -> String {
             .map_or_else(|| "enum".to_string(), |(name, _)| name.clone()),
         Value::Object(object) => object_name(context, object.declaration),
         Value::NativeFailure(_) => "NativeFailure".to_string(),
-        Value::Array(array) => format!("@{}", common(context, array.0.iter())),
+        Value::Array(array) => format!("@{}", common(context, array.items().iter())),
         Value::Map(map) => {
-            let keys: Vec<Value> = map.0.keys().map(|key| key.to_value()).collect();
-            format!("%{}:{}", common(context, keys.iter()), common(context, map.0.values()))
+            let entries = map.entries();
+            let keys: Vec<Value> = entries.keys().map(|key| key.to_value()).collect();
+            format!("%{}:{}", common(context, keys.iter()), common(context, entries.values()))
         }
         other => kind(other).to_string(),
     }
@@ -124,8 +125,8 @@ pub fn short_type(name: &str) -> String {
 
 fn size(context: &Context, value: &Value) -> usize {
     match plain(value) {
-        Value::Array(array) => array.0.len(),
-        Value::Map(map) => map.0.len(),
+        Value::Array(array) => array.len(),
+        Value::Map(map) => map.len(),
         Value::Str(text) => text.chars().count(),
         Value::Object(_) | Value::NativeFailure(_) => names(context, value).len(),
         _ => 0,
@@ -155,7 +156,10 @@ fn leaf(native: Native, context: &Context, value: &Value) -> Result<String, Erro
 fn names(context: &Context, value: &Value) -> Vec<String> {
     match plain(value) {
         Value::Object(object) => match context.objects.get(object.declaration) {
-            Some((_, fields)) => fields.clone(),
+            Some((_, fields)) => shown(context, object.declaration, object.field_count())
+                .into_iter()
+                .map(|index| fields[index].clone())
+                .collect(),
             None => (0..object.field_count()).map(|index| format!("#{index}")).collect(),
         },
         Value::NativeFailure(_) => NATIVE_FAILURE_FIELDS.map(String::from).to_vec(),
@@ -165,16 +169,26 @@ fn names(context: &Context, value: &Value) -> Vec<String> {
 
 fn keys(value: &Value) -> Vec<Value> {
     match plain(value) {
-        Value::Map(map) => map.0.keys().map(|key| key.to_value()).collect(),
+        Value::Map(map) => map.entries().keys().map(|key| key.to_value()).collect(),
         _ => Vec::new(),
     }
 }
 
-fn items(value: &Value) -> Vec<Value> {
+/// The fields a dump shows: all but the `once let` slots (#491), which the
+/// compiler names `$once0`, `$once1`, … and which only cache an answer.
+fn shown(context: &Context, declaration: usize, count: usize) -> Vec<usize> {
+    let names = context.objects.get(declaration).map(|(_, fields)| fields.as_slice()).unwrap_or(&[]);
+    (0..count)
+        .filter(|index| !names.get(*index).is_some_and(|name| name.starts_with("$once")))
+        .collect()
+}
+
+fn items(context: &Context, value: &Value) -> Vec<Value> {
     match plain(value) {
-        Value::Array(array) => array.0.clone(),
-        Value::Map(map) => map.0.values().cloned().collect(),
-        Value::Object(object) => (0..object.field_count())
+        Value::Array(array) => array.items().to_vec(),
+        Value::Map(map) => map.entries().values().cloned().collect(),
+        Value::Object(object) => shown(context, object.declaration, object.field_count())
+            .into_iter()
             .map(|index| object.field(index).unwrap_or(Value::Undef))
             .collect(),
         Value::NativeFailure(failure) => [&failure.domain, &failure.code, &failure.operation, &failure.message]

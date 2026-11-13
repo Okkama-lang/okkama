@@ -1,13 +1,5 @@
 module net/unix v1.0.0;
 
-import "fs/path" take Path;
-import "encoding/utf" take Utf8Encoded, Utf8Decoded;
-import "io/stream" take AsyncReading, AsyncWriting, ByteSource, InvalidReadLimit;
-import "net/stream" take ConnectionEndpoints;
-import "net/failure" take NetworkError, NetworkOperation, NetworkClosed;
-import "error" take InvalidArgument;
-import "runtime/network";
-
 // Exact filesystem address for the current host. UTF-8 byte length (including
 // room for a terminating NUL) is checked before sockaddr packing. No socket or
 // filesystem I/O, normalization, existence check or absolute conversion occurs.
@@ -16,33 +8,71 @@ import "runtime/network";
 //
 //     let address=UnixAddress(Path("run/service.sock"));
 //     address.string(); // "run/service.sock"
+
+import "fs/path" take Path;
+import "encoding/utf" take Utf8Encoded, Utf8Decoded;
+import "io/stream" take AsyncReading, AsyncWriting, ByteSource, InvalidReadLimit;
+import "net/stream" take ConnectionEndpoints;
+import "net/failure" take NetworkError, NetworkOperation, NetworkClosed;
+import "error" take InvalidArgument;
+import "runtime/network";
+import "io/decorators" take ByteSnapshot;
+
+// A Unix socket path on this host.
 object UnixAddress {
     has origin is Path;
+
+    // The socket at origin.
     UnixAddress(origin is Path) {
-        try {network.unix_path_valid(Utf8Encoded(origin.string()).bytes());}
+        try {
+            network.unix_path_valid(Utf8Encoded(origin.string()).bytes());
+        }
         catch failure is NativeFailure {
-            if failure.domain()=="core.net" && failure.code()=="invalid_input" {
+            if failure.domain() == "core.net" && failure.code() == "invalid_input" {
                 throw InvalidArgument.because(failure.message());
             }
-            if failure.domain()=="core.net" && failure.code()=="unsupported" {
+            if failure.domain() == "core.net" && failure.code() == "unsupported" {
                 throw UnixSocketsUnsupported.unsupported;
             }
             throw;
         }
-        self.origin=origin;
+        self.origin = origin;
     }
-    path() is Path {origin;}
-    string() is string {origin.string();}
+
+    // Its path.
+    path() is Path {
+        origin;
+    }
+
+    // Its path as text.
+    string() is string {
+        origin.string();
+    }
 }
 
+// This platform has no Unix sockets.
 enum UnixSocketsUnsupported is Error = (unsupported);
 
 // An unnamed endpoint is an observation, never an empty filesystem Path.
 object UnixEndpoint {
     has addresses is @UnixAddress;
-    UnixEndpoint() {addresses=[];}
-    UnixEndpoint(address is UnixAddress) {addresses=[address];}
-    named() is bool {addresses.size()>0;}
+
+    // An unnamed end, as a socket pair has.
+    UnixEndpoint() {
+        addresses = [];
+    }
+
+    // The end at address.
+    UnixEndpoint(address is UnixAddress) {
+        addresses = [address];
+    }
+
+    // Whether it has an address.
+    named() is bool {
+        addresses.size() > 0;
+    }
+
+    // Its address; InvalidArgument when it is unnamed.
     address() is UnixAddress {
         confirm self.named() else throw InvalidArgument.because("Unix endpoint is unnamed");
         addresses[0];
@@ -53,25 +83,48 @@ object UnixEndpoint {
 object UnixError {
     has operation is NetworkOperation;
     has failure is NativeFailure;
+
+    // The failure of operation.
     UnixError(operation is NetworkOperation, failure is NativeFailure) {
-        self.operation=operation;self.failure=failure;
+        self.operation = operation;
+        self.failure = failure;
     }
-    applicable() is bool {NetworkError(operation,failure).applicable();}
-    value() is Error {
+
+    // Whether it is a Unix socket failure.
+    applicable() is bool {
+        NetworkError(operation: operation, failure: failure).applicable();
+    }
+
+    // The error.
+    error() is Error {
         confirm self.applicable() else throw InvalidArgument.because("not a terminal Unix failure");
-        if failure.code()=="unsupported" {return UnixSocketsUnsupported.unsupported;}
-        if failure.code()=="already_closed" {return NetworkClosed.closed;}
-        if failure.code()=="invalid_input" {return InvalidArgument.because(failure.message());}
-        NetworkError(operation,failure).value();
+        if failure.code() == "unsupported" {
+            return UnixSocketsUnsupported.unsupported;
+        }
+        if failure.code() == "already_closed" {
+            return NetworkClosed.closed;
+        }
+        if failure.code() == "invalid_input" {
+            return InvalidArgument.because(failure.message());
+        }
+        NetworkError(operation: operation, failure: failure).error();
     }
 }
 
-object UnixEndpointBytes {
+hidden object UnixEndpointBytes {
     has bytes is @byte;
-    UnixEndpointBytes(bytes is @byte) {self.bytes=bytes;}
+
+    UnixEndpointBytes(bytes is @byte) {
+        self.bytes = bytes;
+    }
+
     endpoint() is UnixEndpoint {
-        if bytes.size()==0 {UnixEndpoint();}
-        else {UnixEndpoint(UnixAddress(Path(Utf8Decoded(bytes).string())));}
+        if bytes.size() == 0 {
+            UnixEndpoint();
+        }
+        else {
+            UnixEndpoint(UnixAddress(Path(Utf8Decoded(bytes).string())));
+        }
     }
 }
 
@@ -81,141 +134,306 @@ object UnixConnection {
     has state is network.SocketState;
     has ends is ConnectionEndpoints<UnixEndpoint>;
 
+    // Made by UnixConnecting, UnixListener and UnixPaired; not constructed
+    // directly.
     UnixConnection(state is network.SocketState) {
-        self.state=state;
-        ends=try {
+        self.state = state;
+        ends = try {
             ConnectionEndpoints(
-                UnixEndpointBytes(network.unix_endpoint(state,false)).endpoint(),
-                UnixEndpointBytes(network.unix_endpoint(state,true)).endpoint());
-        } catch failure is NativeFailure {network.close(state);throw;}
-          catch failure is Error {network.close(state);throw;};
+                local: UnixEndpointBytes(network.unix_endpoint(state, false)).endpoint(),
+                remote: UnixEndpointBytes(network.unix_endpoint(state, true)).endpoint()
+            );
+        }
+        catch failure is NativeFailure {
+            network.close(state);
+            throw;
+        }
+        catch failure is Error {
+            network.close(state);
+            throw;
+        };
     }
-    endpoints() is ConnectionEndpoints<UnixEndpoint> {ends;}
-    input() is AsyncReading {UnixReading(self);}
-    output() is AsyncWriting {UnixWriting(self);}
-    closed() is bool {network.closed(state);}
+
+    // Its two ends.
+    endpoints() is ConnectionEndpoints<UnixEndpoint> {
+        ends;
+    }
+
+    // The reading side.
+    input() is AsyncReading {
+        UnixReading(self);
+    }
+
+    // The writing side.
+    output() is AsyncWriting {
+        UnixWriting(self);
+    }
+
+    // Whether the connection is closed.
+    closed() is bool {
+        network.closed(state);
+    }
+
+    // Closes the connection; closing again does nothing.
     close() is void {
-        try {network.close(state);}
+        try {
+            network.close(state);
+        }
         catch failure is NativeFailure {
-            let translated=UnixError(NetworkOperation.closing,failure);
-            if translated.applicable() {throw translated.value();}throw;
+            let translated = UnixError(operation: NetworkOperation.closing, failure: failure);
+            if translated.applicable() {
+                throw translated.error();
+            }
+            throw;
         }
     }
-    destroy {network.close(state);}
 
+    destroy {
+        network.close(state);
+    }
+
+    // Used by input() and output(); programs read and write through those.
     async read_bytes(limit is int) is @byte {
-        confirm limit>0 else throw InvalidReadLimit.limit(limit);
-        try {await network.stream_read(state,limit);}
+        confirm limit > 0 else throw InvalidReadLimit.limit(limit);
+        try {
+            await network.stream_read(state, limit);
+        }
         catch failure is NativeFailure {
-            let translated=UnixError(NetworkOperation.reading,failure);
-            if translated.applicable() {throw translated.value();}throw;
+            let translated = UnixError(operation: NetworkOperation.reading, failure: failure);
+            if translated.applicable() {
+                throw translated.error();
+            }
+            throw;
         }
     }
 
+    // Used by input() and output(); programs read and write through those.
     async write_bytes(source is ByteSource) is bool {
         confirm !self.closed() else throw NetworkClosed.closed;
-        let payload=source.bytes();
-        try {await network.stream_write(state,payload);}
+        let payload = source.bytes();
+        try {
+            await network.stream_write(state, payload);
+        }
         catch failure is NativeFailure {
-            let translated=UnixError(NetworkOperation.writing,failure);
-            if translated.applicable() {throw translated.value();}throw;
+            let translated = UnixError(operation: NetworkOperation.writing, failure: failure);
+            if translated.applicable() {
+                throw translated.error();
+            }
+            throw;
         }
         true;
     }
 }
 
+// The reading side of a Unix connection.
 object UnixReading does AsyncReading {
     has owner is UnixConnection;
-    UnixReading(owner is UnixConnection) {self.owner=owner;}
-    async bytes(limit is int) is @byte { await owner.read_bytes(limit); }
+
+    // Made by input(); not constructed directly.
+    UnixReading(owner is UnixConnection) {
+        self.owner = owner;
+    }
+
+    // At most limit bytes; [] at the end.
+    async bytes(limit is int) is @byte {
+        await owner.read_bytes(limit);
+    }
 }
 
+// The writing side of a Unix connection.
 object UnixWriting does AsyncWriting {
     has owner is UnixConnection;
-    UnixWriting(owner is UnixConnection) {self.owner=owner;}
-    async write(source is ByteSource) is AsyncWriting { await owner.write_bytes(source);self; }
+
+    // Made by output(); not constructed directly.
+    UnixWriting(owner is UnixConnection) {
+        self.owner = owner;
+    }
+
+    // Writes the bytes of source.
+    async write(source is ByteSource) is AsyncWriting {
+        await owner.write_bytes(source);
+        self;
+    }
+
+    // Writes the bytes.
+    async write(bytes is @byte) is AsyncWriting {
+        await owner.write_bytes(ByteSnapshot(bytes));
+        self;
+    }
 }
 
+// Two connected ends, as UnixPaired makes them.
 object UnixPair {
     has left is UnixConnection;
     has right is UnixConnection;
-    UnixPair(first is UnixConnection, second is UnixConnection) {left=first;right=second;}
-    first() is UnixConnection {left;}
-    second() is UnixConnection {right;}
+
+    // The two ends.
+    UnixPair(first is UnixConnection, second is UnixConnection) {
+        left = first;
+        right = second;
+    }
+
+    // One end.
+    first() is UnixConnection {
+        left;
+    }
+
+    // The other end.
+    second() is UnixConnection {
+        right;
+    }
 }
 
+// A pair of connected Unix sockets, for talking to a child or within a test.
 object UnixPaired {
+    // A pair to make.
     UnixPaired();
+
+    // Makes the pair.
     async result() is UnixPair {
         try {
-            let states=network.unix_pair();
+            let states = network.unix_pair();
             try {
-                let pair=UnixPair(UnixConnection(network.unix_pair_socket(states,false)),
-                    UnixConnection(network.unix_pair_socket(states,true)));
-                network.unix_pair_release(states);pair;
+                let pair = UnixPair(
+                    first: UnixConnection(network.unix_pair_socket(states, false)),
+                    second: UnixConnection(network.unix_pair_socket(states, true))
+                );
+                network.unix_pair_release(states);
+                pair;
             }
-            catch failure is NativeFailure {network.unix_pair_close(states);throw;}
-            catch failure is Error {network.unix_pair_close(states);throw;}
-        } catch failure is NativeFailure {
-            let translated=UnixError(NetworkOperation.connecting,failure);
-            if translated.applicable() {throw translated.value();}throw;
+            catch failure is NativeFailure {
+                network.unix_pair_close(states);
+                throw;
+            }
+            catch failure is Error {
+                network.unix_pair_close(states);
+                throw;
+            }
+        }
+        catch failure is NativeFailure {
+            let translated = UnixError(operation: NetworkOperation.connecting, failure: failure);
+            if translated.applicable() {
+                throw translated.error();
+            }
+            throw;
         }
     }
 }
 
+// A connection to a Unix socket.
 object UnixConnecting {
     has remote is UnixAddress;
-    UnixConnecting(remote is UnixAddress) {self.remote=remote;}
+
+    // To remote.
+    UnixConnecting(remote is UnixAddress) {
+        self.remote = remote;
+    }
+
+    // Connects.
     async connection() is UnixConnection {
-        try {UnixConnection(await network.unix_connect(Utf8Encoded(remote.string()).bytes()));}
+        try {
+            UnixConnection(await network.unix_connect(Utf8Encoded(remote.string()).bytes()));
+        }
         catch failure is NativeFailure {
-            let translated=UnixError(NetworkOperation.connecting,failure);
-            if translated.applicable() {throw translated.value();}throw;
+            let translated = UnixError(operation: NetworkOperation.connecting, failure: failure);
+            if translated.applicable() {
+                throw translated.error();
+            }
+            throw;
         }
     }
 }
 
+// A Unix socket to listen on.
 object UnixListening {
     has local is UnixAddress;
     has backlog is int;
-    UnixListening(local is UnixAddress, backlog is int) {self.local=local;self.backlog=backlog;}
-    async acceptance() is UnixAcceptance {
-        try {UnixAcceptance(network.unix_listen(Utf8Encoded(local.string()).bytes(),backlog));}
+
+    // At local with backlog waiting connections.
+    UnixListening(local is UnixAddress, backlog is int) {
+        self.local = local;
+        self.backlog = backlog;
+    }
+
+    // Opens the listener.
+    async listener() is UnixListener {
+        try {
+            UnixListener(network.unix_listen(Utf8Encoded(local.string()).bytes(), backlog));
+        }
         catch failure is NativeFailure {
-            let translated=UnixError(NetworkOperation.listening,failure);
-            if translated.applicable() {throw translated.value();}throw;
+            let translated = UnixError(operation: NetworkOperation.listening, failure: failure);
+            if translated.applicable() {
+                throw translated.error();
+            }
+            throw;
         }
     }
 }
 
-object UnixAcceptance {
+// An open Unix socket listener.
+object UnixListener {
     has state is network.ListenerState;
     has local is UnixAddress;
-    UnixAcceptance(state is network.ListenerState) {
-        self.state=state;
-        local=try {UnixAddress(Path(Utf8Decoded(network.unix_listener_path(state)).string()));}
-            catch failure is NativeFailure {network.unix_listener_close(state);throw;}
-            catch failure is Error {network.unix_listener_close(state);throw;};
+
+    // Made by UnixListening; not constructed directly.
+    UnixListener(state is network.ListenerState) {
+        self.state = state;
+        local = try {
+            UnixAddress(Path(Utf8Decoded(network.unix_listener_path(state)).string()));
+        }
+        catch failure is NativeFailure {
+            network.unix_listener_close(state);
+            throw;
+        }
+        catch failure is Error {
+            network.unix_listener_close(state);
+            throw;
+        };
     }
-    local_address() is UnixAddress {local;}
-    closed() is bool {network.unix_listener_closed(state);}
+
+    // Where it listens.
+    local_address() is UnixAddress {
+        local;
+    }
+
+    // Whether the listener is closed.
+    closed() is bool {
+        network.unix_listener_closed(state);
+    }
+
+    // Closes the listener; closing again does nothing.
     close() is void {
-        try {network.unix_listener_close(state);}
+        try {
+            network.unix_listener_close(state);
+        }
         catch failure is NativeFailure {
-            let translated=UnixError(NetworkOperation.closing,failure);
-            if translated.applicable() {throw translated.value();}throw;
+            let translated = UnixError(operation: NetworkOperation.closing, failure: failure);
+            if translated.applicable() {
+                throw translated.error();
+            }
+            throw;
         }
     }
+
+    // The next connection.
     async connection() is UnixConnection {
-        try {UnixConnection(await network.unix_accept(state));}
+        try {
+            UnixConnection(await network.unix_accept(state));
+        }
         catch failure is NativeFailure {
-            let translated=UnixError(NetworkOperation.accepting,failure);
-            if translated.applicable() {throw translated.value();}throw;
+            let translated = UnixError(operation: NetworkOperation.accepting, failure: failure);
+            if translated.applicable() {
+                throw translated.error();
+            }
+            throw;
         }
     }
-    destroy {network.unix_listener_close(state);}
+
+    destroy {
+        network.unix_listener_close(state);
+    }
 }
 
 test "Unix unsupported diagnostic is stable" {
-    test.is(UnixSocketsUnsupported.unsupported.text(),"UnixSocketsUnsupported.unsupported");
+    test.is(UnixSocketsUnsupported.unsupported.text(), "UnixSocketsUnsupported.unsupported");
 }

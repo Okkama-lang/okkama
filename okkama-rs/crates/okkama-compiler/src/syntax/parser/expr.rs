@@ -537,9 +537,14 @@ impl Parser<'_> {
                 }
                 continue;
             }
+            // The removed `Type:(args)` projection: a bare type name before
+            // `:(`. Anything else followed by `: (` is a map key and its value
+            // (`["b": (2 + 3) * 2]`, `[x: (2)]`, #263), and so is a constant
+            // key, which is all capitals where a type name is not.
             if self.check(TokenKind::Colon)
                 && self.check_next(TokenKind::LeftParen)
                 && !self.starts_anonymous_action(self.pos + 1)
+                && matches!(&expr.kind, ExprKind::Name(name) if is_projected_type_name(&name.text))
             {
                 return Err(self.error_here(
                     "Constructor projections have been removed; use Type(args).method().",
@@ -750,10 +755,19 @@ impl Parser<'_> {
                 self.if_expression(start)
             }
             TokenKind::Match => self.match_expression(start),
-            _ if (self.check_type_name() && self.check_next(TokenKind::Less))
+            // `async` before an anonymous action signature: the action would
+            // read as a call of a name `async` and fail later, at `is` (#323).
+            TokenKind::Async if self.starts_anonymous_action(self.pos + 1) => Err(self.error_here(
+                "Anonymous actions cannot be async; declare a named async action instead.",
+            )),
+            // `Name<…>` is a type with arguments; a constant (`LIMIT < x`) is
+            // a comparison.
+            _ if (self.check_type_name()
+                && is_generic_type_name(self.lexeme(self.peek()))
+                && self.check_next(TokenKind::Less))
                 || (self.check_name()
                     && self.check_next(TokenKind::Dot)
-                    && is_type_word(self.lexeme(self.nth(2)))
+                    && is_generic_type_name(self.lexeme(self.nth(2)))
                     && self.nth(3).kind == TokenKind::Less) =>
             {
                 let ty = self.type_expr()?;
@@ -1126,6 +1140,18 @@ const LEVELS: &[Level] = {
         },
     ]
 };
+
+/// A name the removed `Type:(args)` projection could have started with: a
+/// type name (`ParsedInt`), not a constant (`LIMIT`).
+fn is_projected_type_name(text: &str) -> bool {
+    is_generic_type_name(text)
+}
+
+/// A type name that `<` may follow with type arguments (`List<int>`): it has a
+/// lower-case letter, so a constant (`PI`, `LIMIT`, `E`) is not one (#487).
+fn is_generic_type_name(text: &str) -> bool {
+    is_type_word(text) && text.contains(|c: char| c.is_ascii_lowercase())
+}
 
 /// The level (index into [`LEVELS`]) and operation of a binary operator token.
 fn binary_operator(kind: TokenKind) -> Option<(usize, Operator)> {

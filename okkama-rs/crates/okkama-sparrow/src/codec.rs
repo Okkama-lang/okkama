@@ -3,8 +3,9 @@
 //! операции и операнды в порядке полей; никакой сериализации layout Rust.
 use crate::operand::Operand;
 use crate::{
-    CapDecl, CapRef, EnumDecl, EnumRef, FuncRef, Function, GlobalDecl, Handler, Instruction, Intrinsic, ObjectDecl,
-    ObjectRef, Program, Register, RoleDecl, RoleMethod, RoleRef, Target, Type, TypeRef, Witness,
+    CapDecl, CapRef, Data, EnumDecl, EnumRef, FuncRef, Function, GlobalDecl, Handler, Instruction, Intrinsic, ObjectDecl,
+    ObjectRef, Program, Register, RoleDecl, RoleMethod, RoleRef, Target, Type, TypeRef, VariantDecl, VariantRef,
+    Witness,
 };
 use std::fmt;
 
@@ -14,8 +15,8 @@ pub const MAX_FILE_BYTES: usize = 256 * 1024 * 1024;
 /// in-memory size before vectors are allocated, so a small file cannot
 /// expand into a large `Program` (each encoded element is at least a byte).
 pub const MAX_DECODED_BYTES: usize = 512 * 1024 * 1024;
-/// Версия формата.
-pub const VERSION: u16 = 12;
+/// Версия формата. 14: `arr.replace` (#250), `arr.remove` (#251).
+pub const VERSION: u16 = 15;
 const MAGIC: &[u8; 4] = b"SPRW";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -234,6 +235,10 @@ fn encode_type(writer: &mut Writer, ty: &Type) {
             writer.byte(23);
             cap.encode(writer);
         }
+        Type::Variant(variant) => {
+            writer.byte(24);
+            variant.encode(writer);
+        }
     }
 }
 
@@ -288,6 +293,7 @@ fn decode_type(reader: &mut Reader<'_>) -> Result<Type, CodecError> {
         }
         22 => Type::Future(read_option_type(reader)?),
         23 => Type::Cap(CapRef::decode(reader)?),
+        24 => Type::Variant(VariantRef::decode(reader)?),
         other => return Err(reader.error(format!("invalid type tag {other}"))),
     })
 }
@@ -421,6 +427,15 @@ pub fn encode(program: &Program) -> Result<Vec<u8>, CodecError> {
         object.destroy.encode(&mut writer);
         writer.byte(u8::from(object.builtin));
     }
+    writer.number(program.variants.len() as u64);
+    for variant in &program.variants {
+        writer.text(&variant.name);
+        writer.number(variant.cases.len() as u64);
+        for (name, object) in &variant.cases {
+            writer.text(name);
+            object.encode(&mut writer);
+        }
+    }
     program.handles.encode(&mut writer);
     writer.number(program.caps.len() as u64);
     for cap in &program.caps {
@@ -436,6 +451,13 @@ pub fn encode(program: &Program) -> Result<Vec<u8>, CodecError> {
     for global in &program.globals {
         type_ref(&mut writer, global.ty);
         global.init.encode(&mut writer);
+        match &global.data {
+            None => writer.byte(0),
+            Some(data) => {
+                writer.byte(1);
+                data.encode(&mut writer);
+            }
+        }
     }
     writer.number(program.functions.len() as u64);
     for function in &program.functions {
@@ -540,6 +562,17 @@ pub fn decode(bytes: &[u8]) -> Result<Program, CodecError> {
             builtin: bool::decode(&mut reader)?,
         });
     }
+    let count = reader.count_of::<VariantDecl>()?;
+    let mut variants = Vec::with_capacity(count);
+    for _ in 0..count {
+        let name = reader.text()?;
+        let cases_count = reader.count_of::<(String, ObjectRef)>()?;
+        let mut cases = Vec::with_capacity(cases_count);
+        for _ in 0..cases_count {
+            cases.push((reader.text()?, ObjectRef::decode(&mut reader)?));
+        }
+        variants.push(VariantDecl { name, cases });
+    }
     let handles = Vec::<String>::decode(&mut reader)?;
     let count = reader.count_of::<CapDecl>()?;
     let mut caps = Vec::with_capacity(count);
@@ -556,10 +589,14 @@ pub fn decode(bytes: &[u8]) -> Result<Program, CodecError> {
     let count = reader.count_of::<GlobalDecl>()?;
     let mut globals = Vec::with_capacity(count);
     for _ in 0..count {
-        globals.push(GlobalDecl {
-            ty: read_type_ref(&mut reader)?,
-            init: FuncRef::decode(&mut reader)?,
-        });
+        let ty = read_type_ref(&mut reader)?;
+        let init = FuncRef::decode(&mut reader)?;
+        let data = match reader.byte()? {
+            0 => None,
+            1 => Some(Data::decode(&mut reader)?),
+            other => return Err(reader.error(format!("invalid global data tag {other}"))),
+        };
+        globals.push(GlobalDecl { ty, init, data });
     }
     let count = reader.count_of::<Function>()?;
     let mut functions = Vec::with_capacity(count);
@@ -589,6 +626,7 @@ pub fn decode(bytes: &[u8]) -> Result<Program, CodecError> {
         enums,
         roles,
         objects,
+        variants,
         handles,
         caps,
         globals,

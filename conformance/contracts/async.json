@@ -172,6 +172,21 @@
       "family": "Async and concurrency"
     },
     {
+      "id": "ASYNC.COOPERATIVE-WAKE",
+      "title": "Waking a task (a completion, Event.set, cancel, a channel or permit handoff) makes it ready; it runs when the current task suspends or ends, never inside the waking call",
+      "spec_refs": [
+        "docs/okkama-spec-11072026.md#18"
+      ],
+      "status": "mandatory",
+      "aspects": {
+        "normal": "required",
+        "boundary": "required",
+        "invalid": "n/a: the contract defines no rejected or failing form",
+        "interaction": "required"
+      },
+      "family": "Async and concurrency"
+    },
+    {
       "id": "ASYNC.UNOBSERVED-FAILURE",
       "title": "An unobserved spawned failure makes the run fail with a nonzero status (owner decision)",
       "spec_refs": [
@@ -188,6 +203,21 @@
       "discrepancies": [
         "D-034"
       ],
+      "family": "Async and concurrency"
+    },
+    {
+      "id": "ASYNC.NO-PROGRESS",
+      "title": "A run in which no task can make progress and nothing external can wake one fails at runtime with a nonzero status; earlier output stays",
+      "spec_refs": [
+        "docs/okkama-spec-11072026.md#18"
+      ],
+      "status": "mandatory",
+      "aspects": {
+        "normal": "required",
+        "boundary": "n/a: the contract defines no boundary values distinct from its normal behaviour",
+        "invalid": "n/a: the contract defines no rejected form; the failing run is its normal behaviour",
+        "interaction": "required"
+      },
       "family": "Async and concurrency"
     }
   ]

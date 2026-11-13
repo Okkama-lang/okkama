@@ -24,13 +24,14 @@ sparrow out.spb
 ```
 
 `run` executes source with the Rust interpreter. `build` emits the selected
-bytecode; standalone Sparrow executes `.spb`. `--backend` remains an alias
+bytecode; the `sparrow` binary runs `.spb` on the Sparrow runtime (its current
+version is called Tomato). `--backend` remains an alias
 for `--target`. `sparrow check out.spb` verifies without execution.
 See the [Rust implementation guide](../okkama-rs/README.md) for building the
 tools and current runtime coverage.
 
-Every engine can bound a run, for untrusted programs or services: the Sparrow
-core (`okkama exec`, `okkama run --engine sparrow`, `sparrow run`), the IR
+Every engine can bound a run, for untrusted programs or services: Sparrow
+(`okkama exec`, `okkama run --engine sparrow`, `sparrow run`), the IR
 engine (`okkama run`) and the JVM (`okkama run --engine jvm`). Every budget is
 off by default and costs nothing then:
 
@@ -40,7 +41,7 @@ okkama exec --max-steps 100000000 --max-memory 256M --timeout 5 app.spb
 
 - `--max-steps N` counts function entries and loop iterations.
 - `--max-memory SIZE` (bytes, or `K`/`M`/`G`) bounds the memory the process
-  holds beyond the start of the run — the core heap, big integers, strings and
+  holds beyond the start of the run — the Sparrow heap, big integers, strings and
   collections — and the machine stack, so deep recursion that outgrows it
   ends with the same memory report.
 - `--max-output SIZE` bounds what the program writes to stdout and stderr.
@@ -373,7 +374,8 @@ let document = ```
 ````
 
 Everything between the delimiters is retained exactly. Quotes, backslashes,
-comment-looking text, indentation and newlines have no special treatment.
+comment-looking text, indentation and line endings — a CRLF or a lone CR
+included (#310) — have no special treatment.
 There is no interpolation, escape processing, dedenting, trimming or fence
 modifier. The first following three-backtick sequence closes the literal, so
 that exact sequence cannot occur inside this initial form. One or two
@@ -491,7 +493,8 @@ typed boundary. A failed byte conversion is a runtime error.
 ### 5.1.1 Scalar casts and array casts `@T(...)`
 
 Use `T(value)` for one primitive value and `@T(...)` for an immutable array.
-The supported targets are `int`, `float`, `byte`, and `string`:
+The supported targets are `int`, `float`, `byte`, and `string`; a scalar
+cast also has `char`:
 
 ```okkama
 let label is string = string(101);        // "101"
@@ -503,11 +506,17 @@ let labels = @string(101, byte(2), true);  // ["101", "2", "true"]
 ```
 
 Numeric targets accept `int`, `byte`, `float`, and `rat`. Integer casts
-truncate toward zero, then check the signed-64 range for `int` or `0..255`
-for `byte`. Thus `byte(255.9)` is 255 and `byte(-0.5)` is 0. Float casts
-round to finite binary64 and can lose integer precision. String casts accept
+truncate toward zero. `int` is arbitrary-precision, so `int(...)` of an
+`int`, a `byte` or a `rat` is exact at any size:
+`int(100000000000000000000000000000 / 3)` is
+`33333333333333333333333333333`. Only a `float` source is checked against
+the signed-64 range: `int(1e30)` fails (#309). `byte(...)` checks
+`0..255`: `byte(255.9)` is 255 and `byte(-0.5)` is 0. Float casts round to
+finite binary64 and can lose integer precision. String casts accept
 numeric primitives, bool (`"true"`/`"false"`), char and string; rational text
-is canonical.
+is canonical. `char(value)` accepts an `int` code point or a `char`: `char(65)`
+is `'A'`, and a value outside `0..0x10FFFF` or a surrogate is a runtime error.
+There is no `@char(...)`; `'A'.code()` goes back to `int`.
 
 An empty `@byte()` also provides exact `T = byte` evidence to a generic
 constructor accepting `@T`; inference does not require a first element.
@@ -532,7 +541,7 @@ Bare primitive calls take precedence over same-named locals; native declarations
 cannot reuse these four names. Member methods retain ordinary action dispatch.
 The two-argument `rat(numerator, denominator)` constructor is unchanged.
 
-Run [primitive-casts.ok](../examples/primitive-casts.ok) for a complete example.
+Run primitive-casts.ok (okkama-docs `examples/primitive-casts.ok`) for a complete example.
 The [specification](okkama-spec-11072026.md#661-primitive-cast-calls-and-array-casts)
 contains the normative conversion table.
 
@@ -580,17 +589,18 @@ let payload is @byte = @byte(0, 127, maximum);
   syntax. `byte(256)` fails.
 - `byte` satisfies the numeric umbrella `number`, but it does not satisfy
   `int`, and `int` does not satisfy `byte`.
-- Arithmetic accepts `byte` operands mixed with `byte`/`int`/`rat`/`float`,
-  but the *result* is never `byte` — it promotes to `int`, `rat` for exact
-  division, or `float`. So byte
-  arithmetic can never silently overflow within `0..255`; the result simply
-  becomes an ordinary number and must be re-checked with `byte(...)` if you
-  want a byte back.
-- Equality is exact-category: `byte(1) == 1` is a runtime error. Ordering
-  operators (`<`, `<=`, `>`, `>=`) are broader and accept mixed numeric
-  operands under the promotion rules.
-- A `byte` is a valid array index (interpreted by its integer value) and a
-  valid range bound (normalized to `int`). A `byte` is not a **map key**
+- Arithmetic takes two `byte` operands, and the *result* is never `byte`:
+  `+ - * %` give `int` and `/` gives the exact `rat`; unary `-` gives `int`.
+  So byte arithmetic can never silently overflow within `0..255`; the result
+  simply becomes an ordinary number and must be re-checked with `byte(...)`
+  if you want a byte back. Bitwise operators keep `byte` (5.4).
+- Numeric categories never mix (#230): `byte(2) + 3`, `byte(2) / 2` and
+  `byte(2) + 1.5` are compile errors. Convert one side explicitly:
+  `byte(2).int() + 3`.
+- Equality and ordering are exact-category too: `byte(1) == 1` and
+  `byte(1) < 2` are compile errors; `byte(1) < byte(2)` is `true`.
+- A `byte` is neither an array index nor a range bound — convert it:
+  `xs[b.int()]`, `0..b.int()`. A `byte` is not a **map key** either
   (`%byte:V` is a compile error; decision D-007).
 
 `@byte` is an ordinary immutable typed array of bytes — the language's raw
@@ -723,7 +733,8 @@ let empty = [];
 
 - Arrays are immutable values.
 - `@T` at a typed boundary validates every element recursively.
-- Indexing uses brackets and `int` (or `byte`) indexes:
+- Indexing uses brackets and `int` indexes (a `byte` is converted
+  explicitly, `xs[b.int()]`):
   `[10, 20, 30][1]` is `20`. Out-of-bounds indexing is a runtime error unless
   an `else` fallback is present: `xs[9] else 0;`
 - Ranges expand inside array literals: `[0, 2..=4, 9]` is `[0, 2, 3, 4, 9]`.
@@ -747,7 +758,11 @@ let empty_map = [:];
   (decision D-007: `Map key type byte is not a scalar key type`). A `byte`
   may still be a field of a key object. Map *values* may be any type
   including `any`.
-- A **value object** is a key when every field is a scalar (`byte` and `rat`
+- A `rat` key is its exact, reduced value: `rat(1, 2)`, `rat(2, 4)` and
+  `2 / 4` are one key, and `keys()` orders rat keys by value. Numeric
+  categories never mix, so `%rat:int` takes no `int` key — write `1.rat()`
+  (#296).
+- A **value object** is a key when every field is a scalar (`byte`
   included), an enum or another such object, and it has no `destroy` block and
   no capabilities. Objects are immutable, so a key compares by its fields
   exactly like `==`, and `keys()` orders object keys field by field in
@@ -829,8 +844,8 @@ tag.
 1..=5    // inclusive: 1, 2, 3, 4, 5
 ```
 
-- Bounds must be integer-like (`int` or `byte`; byte bounds normalize to
-  `int`).
+- Bounds must be `int`; a `byte` bound is converted explicitly
+  (`0..b.int()`).
 - `start` must be `<=` `end`.
 - Chained ranges are forbidden.
 - Ranges are first-class values: they compare by `start`, `end`, and
@@ -849,6 +864,9 @@ tag.
 - Futures and action values compare by handle identity without running them.
   Aliases remain equal after completion; separate invocations, closures and
   independently obtained bound references are distinct;
+- elements and fields compare exactly as they would on their own: a `float`
+  numerically at any depth, so `[-0.0] == [0.0]` is `true`, as `-0.0 == 0.0`
+  is. `contains`, `index_of` and array `-` use the same equality;
 - mixed runtime categories are runtime errors, never `false`.
 
 ## Chapter 9. The Top Type `any`
@@ -876,8 +894,12 @@ The rules:
 - Repeated `any` boundaries do not nest boxes.
 - `@any` and `%K:any` preserve the same opacity per element. Map *keys*
   cannot be `any`.
-- Untyped heterogeneous literals (`[1, "two"]`) keep concrete elements; they
-  do not infer `any` automatically. Only an explicit `any` boundary boxes.
+- A heterogeneous literal (`[1, "two"]`, `["id": 7, "name": "Ada"]`) needs
+  an explicit `any` boundary: a typed binding, a declared parameter or result,
+  a typed constant, or a nested position under one. Without it the literal is
+  a compile-time error that names the two element types; an untyped `let`
+  does not box it (`let a = [1, "two"];` is rejected, `let a is @any = [1,
+  "two"];` is accepted).
 - Role and fake signatures must spell `any` exactly; it is not variance.
 - Trusted native dispatch is the one place concrete payloads are visible: a
   native parameter declared exactly `any` (or `...any`) receives the unboxed
@@ -899,6 +921,8 @@ Runtime-supported today:
 ```okkama
 [1, 2, 3].size();            // 3
 [1, 2, 3, 4].slice(1, 3);    // [2, 3]        end-exclusive
+[10, 20, 30].replaced(1, 99); // [10, 99, 30]  a new array; the original stays
+[10, 20, 30].removed_at(0);   // [20, 30]      by position; `-` removes by value
 "héllo".length();            // 5             Unicode code points
 "hello".slice(0, 2);         // "he"
 "a,,b,".split(",");          // ["a", "", "b", ""]
@@ -932,8 +956,14 @@ Rules:
 - Every transformation is immutable: it returns a new string or array.
 - The numeric comparisons `.less`, `.less_or_equal`, `.greater`,
   `.greater_or_equal` require the **exact same** numeric category on both
-  sides: `1.less(2.0)` fails. (The operators `<`/`>` are broader; the builtin action
-  form is deliberately strict.)
+  sides: `1.less(2.0)` fails. The operators `<`, `<=`, `>`, `>=` follow the
+  same rule (§11.3).
+- `string.less(other)` and `string.less_or_equal(other)` follow
+  `order(other)`: lexicographic by Unicode code point, a prefix before the
+  longer string, no case folding — `"ab".less("b")` and `"Z".less("a")` are
+  `true`. A string has one order, shared by `less`, `order` and `ordering()`;
+  compare lengths with `length()`. (Until 0.4.2 `less` and `less_or_equal`
+  compared lengths, #281.)
 - Builtin calls are positional-only and exact-arity.
 - Builtin dispatch activates only for non-object receivers, so an object's
   own action named `size` or `less` is never shadowed and never shadows.
@@ -945,10 +975,12 @@ Complete list (a test checks it against the compiler's table, `analysis/check/bu
 
 | Receiver | Builtin actions |
 |---|---|
-| `@T` | `size()`, `slice(start, end)`, `item(index)`, `first()`, `last()`, `cursor()`, `ordering()` (elements that do `Comparing<T>`; needs `import "compare" take Comparing`), `join(separator)` on `@string`; `contains(value)`, `index_of(value)` (a `Maybe<int>`; equality as `==`), `reversed()`, `take(count)`, `drop(count)` (at most `count` elements; a negative count is an error) |
+| `@T` | `size()`, `slice(start, end)`, `item(index)`, `first()`, `last()`, `cursor()`, `ordering()` (elements that do `Comparing<T>`; needs `import "compare" take Comparing`), `join(separator)` on `@string`; `contains(value)`, `index_of(value)` (a `Maybe<int>`; equality as `==`), `reversed()`, `take(count)`, `drop(count)` (at most `count` elements; a negative count is an error), `replaced(index, value)` (a copy with element `index` replaced by `value`, an element of the array's type; the original is unchanged; an index outside the array is the error of indexing), `removed_at(index)` (a copy without element `index`, the others in order; an index outside the array is the error of indexing; `-` removes by value) |
 | `%K:V` | `size()`, `has(key)`, `keys()`, `values()` |
 | `string` | `length()`, `empty()`, `slice(start, end)`, `split(separator)`, `replace(from, to)`, `replace_first(from, to)`, `trim()`, `trim_start()`, `trim_end()`, `chomp()`, `string()`, `less(other)`, `less_or_equal(other)`, `order(other)`; `contains(part)`, `starts_with(part)`, `ends_with(part)`, `find(part)`, `find_last(part)` (a `Maybe<int>` code point index; an empty part is found at the start or the end), `lower()`, `upper()` (full Unicode case mapping, no locale), `repeat(count)` (a negative count is an error; at most 1 GiB), `characters()` (an `@char` of code points) |
 | `int`, `float` | `abs()`, `sign()`, `pow(exponent)`, `sqrt()` (a `float`) — `int.pow(int)` is the exact `int` (a negative exponent is an error), `float.pow(float)` a `float` |
+| `int`, `float` | `min(other)`, `max(other)` (the receiver when they are equal), `clamp(low, high)` (`low` above `high` is an error) — of the receiver's type |
+| `float` | `floor()`, `ceil()`, `round()` (half away from zero), `trunc()`, `exp()`, `ln()`, `log2()`, `log10()`, `sin()`, `cos()`, `tan()`, `atan2(y)` (`x.atan2(y)` is the angle of the point (x, y)) — each a `float`, and a result that is not finite (`0.0.ln()`, `1000.0.exp()`) is an error, as for every float; `finite()`, `nan()` (a `bool`) |
 | `rat` | `abs()`, `sign()`, `numerator()`, `denominator()` (decimal strings), `pow(exponent)` — the exact `rat`; a negative exponent inverts it |
 | numbers, `byte` | `less`, `less_or_equal`, `greater`, `greater_or_equal`, `order` with the same category |
 | `char` | `order(other)`, `code()` (the code point, an `int`), `string()`; `char(code)` and `code.char()` make one from an `int` (a Unicode scalar value, else an error) |
@@ -1238,6 +1270,34 @@ Neither the collection nor an existing cursor changes. Normal completion and
 A false `available()` is ordinary exhaustion, with no sentinel, null or
 exception. Consumable I/O streams are deliberately a separate protocol.
 
+A consumable source — a file, a socket, anything that is read as it goes —
+does `Batching<T>` from the same module (#465):
+
+```okkama
+role Batching<T> {
+    batch() is @T;      // the next batch; [] when the source is exhausted
+}
+```
+
+`for source -> item { ... }` asks for a batch, walks it with the array loop,
+and asks again until a batch is empty. `next`, `last`, `return` and `defer`
+behave as in any `for`; `last` does not ask for another batch, and an empty
+source runs no body. The protocol is nominal, like `Iterable<T>`, and a source
+that does both is walked in batches. It exists for speed: a cursor costs an
+object and three role calls per item, while a batch costs one call per batch
+and the array loop per item, about ten times less on Tomato. `file.text()`
+hands out lines and `file.binary()` bytes this way, with the batch made by the
+runtime.
+
+A traversal owns what it walks (#483, #484):
+- The source belongs to the scope around the loop, as with a `let`, so
+  `for Resource().view() -> x` is as safe as the bound form.
+- Each step owns its cursor. When `successor()` replaces it, the old cursor
+  and what only it reached are destroyed once.
+- A batch lives until the next one is requested.
+- Nothing about past cursors is kept, so a loop over a resource-backed cursor
+  runs in constant memory.
+
 ### Async streams: `for await`
 
 Inside an async action, use `for await stream -> item { ... }` to consume
@@ -1257,7 +1317,7 @@ integer() is int {
     loop {
         let text = input.prompt("Enter an integer:");
         try {
-            last value ParsedInt(text);
+            last Number(text).int();
         }
         catch error is InvalidInteger {
             output.writeln("Not a valid integer");
@@ -1296,8 +1356,10 @@ return if done;                // a void action: the bare form
 throw Failure.empty if items.size() == 0;
 ```
 
-Right after `return` or `throw`, `if cond;` is the bare form with a condition,
-while `return if a { 1; } else { 2; };` still returns an `if` expression.
+Right after `return`, `throw` or `last`, `if cond;` is the bare form with a
+condition, while `return if a { 1; } else { 2; };` still returns an `if`
+expression, and `last if a { 1; } else { 2; };` leaves the loop with one
+(#303).
 
 The postfix condition must be `bool`, like every condition. It is evaluated
 before a `last`, `return` or `throw` payload; a false condition does not
@@ -1311,7 +1373,7 @@ functional block, is a semantic error even in code that never runs.
 ## Chapter 13. Functional Collection Operations
 
 Arrays, ranges, typed maps, and objects nominally implementing the standard
-`Iterable<T>` role support exactly three **eager, immutable** operations,
+`Iterable<T>` or `Batching<T>` role support exactly three **eager, immutable** operations,
 written with a dedicated block syntax:
 
 ```okkama
@@ -1471,8 +1533,14 @@ throw DbError.query("select 1", 42);
   collections, `char`, actions and `any` are rejected.
 - `text()` is generated from the case: `DbError.closed`,
   `DbError.query("select 1", 42)`, `RepoError.db(DbError.closed)`. Strings
-  are quoted, numbers use `string()`, booleans are `true`/`false`, enum cases
-  are `Enum.case`. It is callable on the value and through `Error`.
+  are written as Okkama string literals (#306): `\\`, `\"`, `\n`, `\t` and
+  `\r` are escaped, other control characters become `\u{1b}`, printable
+  Unicode stays as is — so `Ferr.text("a \"q\"\n").text()` is
+  `Ferr.text("a \"q\"\n")`, a quote or comma inside a payload cannot pass for
+  an argument boundary, and a newline cannot split an uncaught-error report.
+  Numbers use `string()`, booleans are `true`/`false`, enum cases are
+  `Enum.case`, nested error enums use the same rules. It is callable on the
+  value and through `Error`.
 - An error enum value converts to `Error`; uncaught, it reports
   `DbError: DbError.query("select 1", 42)`.
 
@@ -1597,6 +1665,12 @@ let config = try! Config.parse(source);     // "cannot fail" → panic if it doe
   flattened. A void call is rejected (there is no value to wrap; use
   `try`/`catch`), and so is a successor result (its must-use obligation would
   be lost).
+- `T` is the type of the operand's successful paths; a branch that throws
+  does not erase it, even when a literal condition selects that branch:
+  `try? (if true { throw E.a; } else { 2; }) else 7` is `7`. When no path
+  succeeds (every branch throws), `T` comes from the `Maybe<T>` boundary or
+  from the fallback after `else`; without either it is a compile error. A
+  caught error leaves `none`, so code after a `try?` is reachable.
 - `try! value` keeps the value's type, including void and successor results.
   A thrown error becomes the panic `Unexpected error: <text()>` located at the
   `try!`.
@@ -1673,8 +1747,8 @@ one module are forbidden. Object headers take no parameters (state is never
 declared in the header).
 
 An object body may contain: `has` and `cap` declarations, constructors, at most one
-`destroy` block, test blocks, public actions, and a `private:` section of
-private actions.
+`destroy` block, test blocks and actions; an action marked `hidden` is callable
+only through `self`.
 
 ### 16.2 Fields (`has`)
 
@@ -1695,7 +1769,7 @@ has digit, cents is int;       // several names may share one declaration
   being built.
 - **Fields are private through ordinary references.** `Cash(digit: 1).digit`
   is a runtime error; peers call public owner behavior.
-  Grants control field reads and never make private actions public. There is
+  Grants control field reads and never make hidden actions public. There is
   no setter syntax.
 - Inside the object's own code, fields are read bare (`digit`) or explicitly
   (`self.digit`). A parameter or local may shadow a bare field name; the
@@ -1767,9 +1841,9 @@ cannot unwrap the owner. Diagnostic formatting may safely name the cap type.
 This is an interface boundary with no general secrecy, purity or revocation
 promise. Other full references retain their capabilities.
 
-Object views have been removed. Roles and `#projected` keep their
+Object views and `#projected` have been removed. Roles keep their
 separate contracts. OIR Profile 0 remains int-only and explicitly refuses
-objects and caps. See the [working example](../examples/object-caps.ok) and
+objects and caps. See the working example (okkama-docs `examples/object-caps.ok`) and
 [full guide](object-caps-0.0.1-ru.md).
 
 ## Chapter 17. Constructors
@@ -1931,63 +2005,26 @@ including newly created field values, are released; borrowed caller-owned
 resources remain the caller's responsibility. See Chapter 15 and
 `t/interpreter/258-constructor-confirm.t`.
 
-### 17.6 Named constructor projections
+### 17.6 A plain call after the constructor
 
-An object can expose one or more actions as readable constructor projections.
-`#projected` uses the action name as the prefix; `#projected(alias)` provides a
-different prefix:
+The `#projected` directives, their aliases and prefix projections have been
+removed. Taking an object's result is an ordinary action call:
 
 ```okkama
-object ParsedInt {
-    has source is string;
-    ParsedInt(:source);
-
-    #projected(value)
-    integer() is int {
-        42; // abbreviated derivation from source
-    }
+object Celsius {
+    has degrees is float;
+    Celsius(:degrees);
+    fahrenheit() is float { degrees * 9.0 / 5.0 + 32.0; }
 }
 
-value ParsedInt(answer)                 // ParsedInt(answer).integer()
+// Inside an action:
+let boiling = Celsius(degrees: 100.0).fahrenheit(); // 212.0
 ```
 
-The prefix is resolved only after the following constructor target has been
-resolved to a concrete object. It is not a free function or a dynamic operator,
-and it cannot project variables, calls, or arbitrary parenthesized expressions.
-The projection action must be public,
-synchronous, zero-argument, explicitly typed, non-successor, and return a type
-different from the enclosing object. A generic result such as `T` is valid;
-returning the enclosing `Object<T>` is not. An object may mark several actions,
-but each effective prefix must be unique within that object.
-
-The named prefix works with every constructor surface:
-
-```okkama
-of Cash(digit: 1, cents: 25)
-value numbers.ParsedInt(answer)
-```
-
-Empty, full, shorthand, variadic, overloaded, generic, and
-namespace-qualified constructors retain their ordinary selection rules.
-Construction, including its `confirm` checks, must succeed before the projection action is called.
-Arguments evaluate exactly once, left to right, and the result can continue
-through normal postfix operations.
-
-The directive selects a declaration, not an entire action name. Other fixed
-overloads remain available:
-
-```okkama
-#projected
-value() is int { 10; }
-value(base is int) is int { base * 10; }
-```
-
-`value Object()` calls the zero-argument overload, while
-`Object().value(16)` calls the one-argument overload. The ordinary rule that
-all overloads of one name share a return type still applies. A duplicate
-zero-argument signature remains ambiguous; the projection directive is not an
-overload tie-breaker. The removed single-`&` syntax is a parse error; `&&`
-continues to mean boolean conjunction.
+The constructor and its checks complete before the action is called. The
+action's result type is explicit: `string`, `Maybe<string>` and
+`Presence<string>` are different contracts, with no automatic wrapping or
+unwrapping.
 
 ## Chapter 18. Actions
 
@@ -2002,7 +2039,7 @@ total_cents() is int {
 ```
 
 - Actions read fields directly (or as `self.field`) and call other actions
-  through `self`, including private ones.
+  through `self`, including hidden ones.
 - Parameters are typed and checked; the result is checked against the
   declared return type. Names before one type share it, as fields do:
   `full(separator, suffix is string)`. The grouping works in every
@@ -2042,7 +2079,7 @@ collection or value-returning tail is invalid. Typed throws, panic, cancellation
 A call creates a lazy reusable completion handle: `let pending = command.commit();`
 may be followed by `await pending;` more than once. Its inferred internal
 completion contract has no source-level type spelling. `spawn` starts it eagerly.
-Async anonymous action expressions remain unsupported.
+Anonymous actions cannot be async; an action that awaits is a named `async` action.
 
 Explicit receiver result:
 
@@ -2095,12 +2132,12 @@ Async actions support `return await task;` and await deferred cleanup before
 settling their Future. Cancellation while awaiting a return expression also
 unwinds cleanup. Cancellation requested during deferred cleanup is delivered
 after that cleanup completes, before any result escapes; the Future stays
-pending meanwhile. See [runnable example](../examples/return-defer.ok) and the
+pending meanwhile. See runnable example (okkama-docs `examples/return-defer.ok`) and the
 implementation checklist.
 
-### 18.2 Private actions
+### 18.2 Hidden actions
 
-A `private:` section marker starts the private actions:
+`hidden` before an action keeps it out of the object's public contract:
 
 ```okkama
 object Cash {
@@ -2112,21 +2149,29 @@ object Cash {
         self.secret();
     }
 
-    private:
-    secret() is int {
+    hidden secret() is int {
         digit;
     }
 }
 ```
 
-Private actions are callable only through `self` from the same object's
-actions. A constructor cannot call any action on its unfinished receiver,
-public, private or async, including inside `confirm`. Aliases, role references,
+`hidden` means the same thing everywhere: not part of the public contract. A
+hidden object, role, enum or const is not visible outside its module; a hidden
+action is callable only through `self` from the same object's actions. Each
+action is marked on its own, wherever it stands among the members, and
+`hidden async` marks an async action. Only actions take `hidden` inside an
+object: a constructor is how the object is made and is always public, and
+fields, caps, `destroy` and tests are not part of the contract anyway, so
+`hidden Cash(...)` and `hidden has ...` are syntax errors. An action may still
+be named `hidden`: `hidden()` is an ordinary public action.
+
+A constructor cannot call any action on its unfinished receiver,
+public, hidden or async, including inside `confirm`. Aliases, role references,
 bound actions and collaborators cannot bypass this rule. Constructors initialize
 fields and validate invariants directly with `confirm`; they may read initialized
 fields and inspect parameters or other completed objects. A captured callback
-may invoke `self` after construction finishes. Private actions cannot be exported
-as values.
+may invoke `self` after construction finishes. Hidden actions cannot be exported
+as values: `Hidden action "secret" cannot be used as a value`.
 
 The compiler rejects a direct `self.` call. A constructor may still hand `self`
 to a collaborator, and every engine rejects an action called through it while
@@ -2137,7 +2182,7 @@ If the constructor fails after `self` escaped, the escaped object never
 completes, and every later call on it fails the same way. Only objects whose
 constructor uses `self` as a value pay for the check.
 External calls fail *after* signature selection (so overload
-resolution is uniform): `Action "secret" on object "Cash" is private`.
+resolution is uniform): `Action "secret" on object "Cash" is hidden`.
 
 ### 18.3 Typed action overloads
 
@@ -2218,6 +2263,19 @@ delegate(pattern is string, values is ...any) is string {
 }
 ```
 
+A `...string` tail also takes values that are not strings and turns each
+into text with its own `string()`: `int`, `float`, `rat`, `byte`, `bool` and
+`char`, and objects and role values whose type answers `string() is string`.
+The conversion is static, and it is the last resort: a signature that fits the
+call as written wins, so `kind(1, "a")` still picks `kind(values is ...any)`
+over `kind(values is ...string)`. A value without `string()` is rejected. A
+spread `values...` is not converted; its elements must already be strings.
+
+```okkama
+out.writeln("count: ", 5, ", ready: ", true);       // count: 5, ready: true
+out.writeln(Formatted("{} version {}", id, id.version()));
+```
+
 `name...` accepts an array or a real variadic binding and expands one level:
 
 ```okkama
@@ -2242,7 +2300,7 @@ source makes no writes. Failure stops subsequent elements and chain sources;
 completed writes are not rolled back. Use parentheses for an awaited array:
 `out <- (await source.words())...;`. Postfix `...` already binds above `<-`.
 The same expansion rules hold across `await`. See the
-[array spread guide](array-spread.md) and [runnable example](../examples/array-spread.ok).
+[array spread guide](array-spread.md) and runnable example (okkama-docs `examples/array-spread.ok`).
 
 ### 18.5 Anonymous actions and action-value types
 
@@ -2279,8 +2337,13 @@ add_ten(5); // 15, even after make_adder's call has ended
 Parameters and local declarations shadow captured names. Each action captures
 values and declared types at creation: later rebinding outside the action does
 not change the snapshot, and declarations appearing later are not captured.
-Rebinding a captured name inside the action is an error. Capturing an object
-preserves its identity; it does not copy the object.
+Rebinding a captured name inside the action is an error (`Cannot rebind
+captured variable "counter" inside an anonymous action`): the capture is a
+snapshot, and rebinding it would change nothing outside. To keep state across
+calls, return the successor and let the caller hold it. The action's own
+parameters and locals, including ones that shadow a captured name, stay
+rebindable under the ordinary rules. Capturing an object preserves its
+identity; it does not copy the object.
 
 An escaping action transfers ownership of captured local resources through the
 same rules as an object containing those resources. Unreferenced locals are
@@ -2288,10 +2351,12 @@ not retained. A reference to `self`, or to the implicit receiver of
 `fake.storage`, retains that receiver. Access permissions from the declaring
 action remain in force even when the receiver is not captured.
 
-A `let` initialized directly with an anonymous action (optionally parenthesized)
-can refer recursively to its own name when no outer binding of that name is
-visible. That name is supplied in each invocation, without retaining the
-original scope. Mutual recursion through later declarations is not supported.
+Anonymous actions use ordinary lexical scope. A local binding becomes visible
+only after its initializer has been checked, so an anonymous action assigned to
+a `let` cannot refer to itself through that binding: inside the initializer the
+name is undefined, or it is an outer binding of the same name if one is
+visible. Names declared later are not visible either. Anonymous actions capture
+values declared before them; use named object actions for recursion.
 
 The public type of an action value is its exact signature:
 
@@ -2348,11 +2413,59 @@ Current boundaries are intentionally narrow:
 - anonymous parameters require explicit types and cannot be variadic;
 - a trailing comma in an anonymous parameter list is rejected;
 - no implicit currying, partial application, or async anonymous actions;
+- no recursion through the `let` that holds the action: the binding is not
+  visible in its own initializer (use a named action);
 - action values cannot cross `any` or the native ABI;
 - there is no automatic conversion to an arbitrary user role;
 - each call is a control boundary: `next`/`last` cannot escape into an outer
   loop, while `throw`, `catch`, and per-invocation `defer` follow ordinary
   action rules.
+
+### 18.6 `once let`
+
+`once let name = value;` keeps a value the object computes once. The first
+time the statement runs, the value is computed and stored in a hidden slot of
+`self`; every later run on the same object reads the slot (#491). Objects are
+immutable, so a value that depends only on them stays right:
+
+```okkama
+object Stats {
+    has source is Source;
+    Stats(:source);
+
+    maximum() is int {
+        self.values().reduce(self.values()[0]) -> best, item { if item > best { item; } else { best; } };
+    }
+
+    // One kept value, shared by every action that calls it.
+    hidden values() is @int {
+        once let kept = source.items();
+        kept;
+    }
+}
+```
+
+The rules keep the stored value right for every later call:
+
+- `once let` stands among the statements of an object's action, not in a
+  nested block, a constructor, a cap, a test or `main`.
+- Its value reads only fields, `self`, constants and earlier `once let`s. A
+  parameter or an ordinary local makes the value depend on the call:
+  `once let cannot depend on "n"`.
+- Its value has no effects. Natives that reach the clock, files, the
+  network, processes, randomness or the environment are refused, and so are
+  `Cell`, the `async` objects, `await` and `spawn`. The compiler follows
+  calls into concrete objects' actions and constructors. Calls through a role
+  or a function value are trusted: that the input answers the same each time
+  is part of the contract.
+- The value holds no resource (an object with `destroy`), because it would
+  outlive the scope that releases it.
+
+A slot is not part of the object's value. `==`, map keys and `Dumper` ignore
+it, so an object compares equal before and after its first answer. A
+successor (`^field = …`) starts with empty slots: its fields changed, so the
+old answers no longer hold. When the value throws, the slot stays empty and
+the next call computes again.
 
 ## Chapter 19. Successor Actions and Immutability
 
@@ -2420,8 +2533,17 @@ try-entry obligations, so use only inside a try may need an additional use on
 the handler path. A reached defer can consume a binding at its own scope exit,
 after intervening rebinds. An early return from a nested scope conservatively
 cannot rely on an enclosing defer.
-Closure creation alone is not use: a closure carrying successor captures must
-be invoked, returned, passed, or stored. Await transfers a successor future's
+Closure creation alone is not use. A closure carries the obligations of the
+successors its body uses on every normal path (a body that uses a capture on
+one branch only does not carry it, and the capture must be used elsewhere).
+Binding the closure to a local or to aliases keeps them, and one obligation
+shared by several closures or aliases stays one. Invoking the closure uses
+them; returning it, passing it as an argument, or storing it in an aggregate or
+a field transfers them. A transfer, like passing a successor value, does not
+prove that the receiver ever calls it. A bound action (`later.count` without a
+call) carries its successor receiver's obligation by the same rules, while a
+direct call `later.count()`, and a chain such as `bottle.opened().is_open()`,
+uses the receiver at once. Await transfers a successor future's
 obligation to its result. Runtime discard guards remain for dynamic cases.
 These checks concern language-level consumption, not persistence or business
 usefulness; they do not forbid using an already consumed object again.
@@ -2447,7 +2569,7 @@ Successor types compose with roles: `^Bottle` satisfies `^Package` when
 `Bottle does Package` (Chapter 22). A call through the role returns the new
 object as a restricted `^Package`.
 
-A successor may be private: an internal transition that only the object's own
+A successor may be hidden: an internal transition that only the object's own
 actions call through `self`. It keeps the must-use obligation and cannot
 implement a role action:
 
@@ -2457,9 +2579,8 @@ object Door {
     Door();
     toggled() is Door { if open { self.shut(); } else { self.opened(); } }
 
-    private:
-    opened() is ^Door { ^open = true; }
-    shut() is ^Door { ^open = false; }
+    hidden opened() is ^Door { ^open = true; }
+    hidden shut() is ^Door { ^open = false; }
 }
 ```
 
@@ -2775,6 +2896,15 @@ parameters, fields, results, collections, bound actions, generic inference
 result `^Customer` comes back as `^Presentation` when the role declares it,
 and the must-use obligation stays.
 
+An object becomes a role reference only where the role is already the
+expected type: a typed `let`, a field, a parameter of an action or of a
+builtin (`shapes.contains(Square(side: 2))` on a `@Shape`), a result, the
+fallback of a `Maybe<Shape>` or of `find()`, and the branches of an `if`,
+`match` or choice whose value has a declared role type. Elsewhere the static
+types stay exact: `shape == Square(side: 2)` is rejected (compare through a
+role-typed binding), and `if c { Rect(w: 1, h: 2); } else { Square(side: 2); }`
+with no declared type does not look for a role the two share.
+
 There is no way back: a role cannot be assigned to the concrete type
 (`Cannot initialize variable "c" of type Customer with Presentation`), and
 `any` never narrows. A role may cross into another role only if the original
@@ -2836,7 +2966,8 @@ total > Money(cents: 300);                           // order() == Order.greater
   `later - start` a `Duration`.
 - `<`, `<=`, `>`, `>=` go through `compare.Comparing<T>`: `a < b` is
   `a.order(b) == Order.less`. `==` stays structural.
-- In std: `BigInt` (`+ - * / %`, `-a`, ordering; `/` truncates toward zero),
+- In std: `BigInt` (`+ - * / %`, `-a`, ordering; `/` truncates toward zero;
+  `BigInt(7)` and `.int()`, since a BigInt holds an `int`, #189),
   `Duration` (`+ -`, `-a`, ordering), `Instant` and `MonotonicInstant`
   (`+ Duration`, `- Duration`, `- Instant`, ordering), `Decimal` (ordering).
 
@@ -2950,13 +3081,18 @@ Production parsing consumes the header and balanced body but emits no Test or
 Fake AST, so test-only inner grammar cannot affect production. Run tests with:
 
 ```text
-perl bin/okkama -t path/to/module.ok
+okkama run -t path/to/module.ok
+okkama run -t --filter parse path/to/module.ok
 ```
+
+`--filter TEXT` runs only the tests whose names contain TEXT, literally and
+case-sensitively; repeated, the tests that contain any of the texts.
 
 The runner retains test/fake AST across imports but executes only tests owned
 by the root file. It does not run or require `main`. Object/role test names are
 displayed as `Owner :: name`; this is namespacing only, with no implicit
-`self` or private-access exception. Test names must be unique within the
+`self` or hidden-access exception. A test may stand anywhere in an object's
+body, also between hidden actions. Test names must be unique within the
 module (per owner for object/role tests); duplicates are semantic errors
 before any test runs.
 
@@ -2970,11 +3106,23 @@ Every running test receives an automatic `test` binding—no import:
 test.ok(condition);
 test.is(actual, expected);
 test.isnt(actual, expected);
+test.close(actual, expected, tolerance);
+test.text(actual, expected);
+test.bytes(actual, expected);
 test.fail("explanation");
+test.skip("reason");
 ```
 
 `ok` requires exact bool; `is` and `isnt` use strict/deep Okkama equality;
-`fail` records its string. At this trusted assertion boundary, values carried
+`close` takes three floats and passes when the values are equal or no further
+apart than the tolerance (a NaN is never close; a negative tolerance fails);
+`text` compares two strings and reports where they part: the scalar, its line
+and column in the expected text, and eight scalars around it; `bytes` compares
+two `@byte` arrays and reports the first differing offset, or the sizes;
+`fail` records its string. `skip` ends the test and reports it as skipped
+(`--- SKIP: name` and the reason): the code after it does not run, no `catch`
+takes it, and cleanup runs as for any failure. A skipped test does not fail the
+run, unless an assertion failed before the skip. At this trusted assertion boundary, values carried
 through `any` parameters can be compared recursively without becoming visible
 or narrowed in source code. Ordinary `any` equality remains forbidden.
 
@@ -2983,8 +3131,8 @@ from an imported module can delegate to it. It is still contextual rather than
 first-class, fresh for every case, and absent outside test execution. Failed
 assertions do not abort the block. An uncaught throw, panic, runtime, defer, or
 destroy failure ends only the current test, cleanup finishes, and the next test
-runs. The Go-like reporter returns process status 0 only for an entirely green
-suite and 1 otherwise. There is no `test.panics`: panic is intentionally
+runs. The Go-like reporter returns process status 0 when no test failed
+(skipped tests do not fail) and 1 otherwise. There is no `test.panics`: panic is intentionally
 uncatchable.
 
 `test.throws(Type) { … }` asserts that a block throws: it fails the test
@@ -3118,8 +3266,9 @@ main() is int { if true { 1 } else { 0 }; }
 `{ 1 }` and `{ 1; }` produce the same value. The rule applies to action bodies,
 `match` arms and functional blocks. Between statements `;` is still required,
 and `let`, `return`, `throw`, `defer` and assignments keep it even before `}`.
-A statement-level `if` may take one optional `;`. The formatter keeps the
-chosen spelling.
+A statement-level `if`, `loop`, `match` or `try … catch` may take one
+optional `;` (#302); two are an error, and the rule is not a general one for
+expressions. The formatter keeps the chosen spelling.
 
 ### 24.3 Compact choices: `?? … !!`
 
@@ -3168,9 +3317,9 @@ payloads, so every `match` over it is exhaustive. A payload-free enum without
 `okkama lint` reports that as `non-exhaustive-match`. Prefer a payload enum
 whenever the cases model states you must handle.
 
-Runnable programs: [choices.ok](../examples/choices.ok),
-[variants.ok](../examples/variants.ok) and
-[examples/showcase/](../examples/showcase/).
+Runnable programs: choices.ok (okkama-docs `examples/choices.ok`),
+variants.ok (okkama-docs `examples/variants.ok`) and
+examples/showcase/ (okkama-docs `examples/showcase/`).
 
 ## Chapter 25. Generic Type Parameters
 
@@ -3267,7 +3416,7 @@ concrete values, so unrelated concrete equations remain an error.
 
 Builtin arrays are `Iterating<T>`, `Sequencing<T>` and `Sizing`, and their
 cursors are `Cursor<T>`, so a plain array is evidence for a role-typed
-generic parameter: `Maximum(values: [3, 9, 4])` infers `T = int` from the
+generic parameter: `Extremes([3, 9, 4])` infers `T = int` from the
 element tag (or, for an untagged literal, from its elements). An untagged
 empty literal still has no evidence.
 
@@ -3342,17 +3491,41 @@ module shadows a bundled stdlib module with the same path for the program's
 own imports; the standard library resolves its own imports only inside itself.
 
 In a blade project, dependencies are installed in `pkg/<name>/` of the project
-root and imported by that path: `import "pkg/web/router" take Router;`. Only
-dependencies declared in `[dependencies]` of the importing package's
+root and imported by that path: `import "pkg/web/src/router" take Router;`.
+Only dependencies declared in `[dependencies]` of the importing package's
 `blade.toml` can be imported this way. Module files of a project declare no
 version (`module app;`): the version is set in `blade.toml` (spec §5.2.2).
 
+A package is an ordinary git repository with its modules in `src/`. Its name
+is the key it is declared under, and its version is its `vX.Y.Z` tag. It needs
+a `blade.toml` only to declare dependencies of its own; a `[module]` there is
+optional, and when present its `name` and `version` must agree with the key
+and the tag. Blade checks only `src/**/*.ok`: syntax, module names `<name>` or
+`<name>/…`, no module versions, no natives. Anything else (a licence, examples,
+tests) is copied as it is and never executed, and links are refused. A package
+without `blade.toml` is installed with a generated one (`[module] name` and
+`version`), so the compiler knows its files belong to `pkg/<name>`.
+
 ### 26.2.1 Building and running a Blade project
 
-`blade` manages a project: `blade new NAME` creates one (`blade.toml`,
-`src/main.ok`), `blade install` puts its dependencies into `pkg/` and records
-them in `blade.lock`, `blade build` compiles it and `blade run` runs it. Every
-setting of the last two lives in `blade.toml`; all keys are optional:
+`blade` manages a project:
+
+- `blade new NAME` creates one (`blade.toml`, `src/main.ok`);
+- `blade add NAME GIT [MIN]` declares a dependency on the package in git
+  repository `GIT`, version `MIN` or later (by default its newest tag), and
+  installs it into `pkg/`, recording it in `blade.lock`; adding it again with
+  another `MIN` moves it;
+- `blade sync` installs exactly what `blade.lock` records (offline when `pkg/`
+  already matches it, otherwise by the locked commits);
+- `blade update [NAME…]` resolves the named packages again, or all of them;
+- `blade remove NAME` drops a dependency and what only it needed;
+- `blade build` compiles the project and `blade run` runs it.
+
+A dependency's `version` is a minimum: `"1.2.0"` means 1.2.0 or a later 1.x.
+Blade installs the lowest version that meets every minimum in the project and
+its dependencies, so a new release of a dependency changes nothing until some
+`blade.toml` raises its minimum: `blade add json URL 1.5.0`. Every setting of
+`blade build` and `blade run` lives in `blade.toml`; all keys are optional:
 
 ```toml
 [build]
@@ -3433,9 +3606,10 @@ object Payments {
 }
 ```
 
-`hidden` before `object`, `role` or `enum` keeps a declaration inside its
+`hidden` before `object`, `role`, `enum` or `const` keeps a declaration inside its
 module: it is visible in every file of the module, in its tests and fakes, and
-in bodies defined there — and nowhere else.
+in bodies defined there — and nowhere else. Before an action, the same word keeps
+the action inside its object (18.2): one meaning, not part of the public contract.
 
 - `take Payment` is rejected (`Import "payments" cannot take hidden
   declaration "Payment"`), and a namespace does not expose it
@@ -3447,7 +3621,7 @@ in bodies defined there — and nowhere else.
   parameters and results of public actions (including collections, `Maybe`,
   successors, async and action types), constructor parameters, role
   signatures, enum payloads, generic arguments and bounds, cap fields.
-  Private actions, fields and bodies may use hidden types.
+  Hidden actions, fields and bodies may use hidden types.
 - A public object cannot do a hidden role — the `does` list is part of its
   public contract. A hidden object may do public and hidden roles; that is how
   an implementation is hidden behind a contract.
@@ -3455,7 +3629,8 @@ in bodies defined there — and nowhere else.
   only as `Error`; `okkama lint` reports such throws from public actions
   (`hidden-error`).
 
-`hidden` is a contextual keyword: `has hidden is int` is still a field.
+`hidden` is a contextual keyword: `has hidden is int` is still a field, and
+`hidden()` is still an action named `hidden`.
 
 ### 26.3.2 Module constants
 
@@ -3497,1955 +3672,427 @@ objects that need it, so its lifetime and its users stay visible.
 - An imported module's `main()` never runs on import.
 - Cyclic imports are rejected.
 
-### 26.5 Standard libraries: current std and legacy stdlib
-
-The current library is the root `std/` tree. Its contract is
-[roadmap v4](std/stdlib-roadmap-v4.md), with [design principles](std/stdlib-design-principles.md)
-and the [completion guide](std/stdlib-completion-todo-v4.md).
-`File` owns closing; `File.binary()` and `File.text()` expose separate stream roles.
-Tree deletion and temporary-file preservation are explicit void commands.
-`Formatted(pattern: "{}", values: ["Ada"]).string()` performs typed interpolation;
-`document.string()` writes a `Json` value without reflection.
-See the [migration guide](std/stdlib-v4-migration.md) for removed APIs.
-
-The historical inventory and examples below describe **legacy `stdlib/`**.
-They remain executable with that library, but are not API proposals or completion
-claims for `std/`. Select the library root explicitly; do not combine their modules.
-
-
-The stdlib is intentionally narrow while the language stabilizes:
-
-- `okkama` — `Dump`, the debug formatter (Chapter 28);
-- `math` — small generic examples such as `Max<T>`;
-- `strings/parse` — strict, pure-Okkama conversion from strings to `int`,
-  `float`, `bool`, and `byte`;
-- `collections/iteration`, `collections/list`, `collections/queue`, and
-  `collections/stack` — nominal immutable traversal plus persistent linked,
-  FIFO, and LIFO values;
-- `format` — positional and named immutable projections with typed pattern
-  and missing-value failures;
-- `template/plain` — pure named string templates with closed
-  ERB/Mojolicious-style lexical tags and typed source/value failures;
-- `template/html` — HTML rendering over the same lexical tags, where a
-  binding's `SafeHtml` type — not its tag — decides whether it is escaped;
-- `encoding/binary` — cursor-free endian-explicit reads and composed
-  fixed-width binary values;
-- `encoding/utf8` — explicit strict conversion between Unicode `string` and
-  raw `@byte`, with typed invalid-sequence offsets;
-- `encoding/base64` — canonical padded RFC 4648 conversion between raw
-  `@byte` and ASCII `string`, with strict typed decoding failures;
-- `encoding/hex` — lowercase canonical hexadecimal output and strict
-  case-insensitive ASCII decoding with typed source offsets;
-- `encoding/json` — nominal exact JSON values, strict recursive parsing,
-  deterministic compact encoding and located Unicode errors;
-- `encoding/csv` — RFC 4180-shaped streaming rows over `Input`/`Output`
-  under an explicit dialect, with a located `InvalidCsv`;
-- `encoding/toml` — a practical single-line-document TOML v1.0.0 subset
-  with dotted-path lookup and deterministic `[table]`-sectioned rendering;
-- `crypto/random` — stateless OS-CSPRNG byte capability with a deterministic
-  test fake and typed size/unavailability failures;
-- `crypto/digest` — reviewed SHA-256/384/512 digests over bytes or a full
-  `Input` stream, with hex/base64 projections and sanitized provider
-  failures;
-- `crypto/hmac` — keyed HMAC-SHA256/384/512 with constant-time `matches()`
-  verification over the reviewed `secure_equal` primitive;
-- `socket/socket` — the shared `Socket` role, explicit option enums and
-  timeout vocabulary ahead of concrete TCP/UDP/Unix socket resources;
-- `sql/value` — exact bindable SQL scalar wrappers, including an explicit
-  `SqlNull`, ahead of SQL statement/query building;
-- `http/status` — a validated `Status(code, reason)` with status-class
-  queries, plus `Ok`/`Created`/`BadRequest`/`NotFoundStatus`/
-  `InternalServerError` projecting into it;
-- `http/headers` — immutable case-insensitive `Headers`, `ExtendedHeaders`/
-  `FilteredHeaders` composition, and CRLF-injection-rejecting `Header`
-  values;
-- `log/event` — immutable structured `LogEvent` (level, message, fields,
-  instant) and the six standard `LogLevel` severities;
-- `db/result` — non-row execution outcome (`affected()`, an optional
-  `last_id()`) for `INSERT`/`UPDATE`/`DELETE`;
-- `db/row` — name/index access to one query-result row's `SqlValue`s;
-- `fs/file` — whole-file `File` (`bytes()`/`string()`/`write()`/`append()`/
-  `remove()`) plus streaming `OpenedFile` (`Input`/`Output`/`Closeable`);
-- `fs/dir` — directory creation/listing/removal, recursive
-  `DirectoryWalk`, and symlink-safe recursive `remove_all()`;
-- `socket/tcp` — real TCP `TcpSocket`/`TcpListener`, and
-  `TcpConnection`'s DNS-driven ordered address attempts;
-- `socket/udp` — real UDP `UdpSocket` datagram send/receive with genuine
-  sender identity;
-- `socket/unix` — `UnixSocket`/`UnixListener`, honestly reporting
-  `UnsupportedUnixSocket` since the native provider has no `AF_UNIX`
-  support at all yet;
-- `crypto/tls` — `TlsPolicy`, an encrypted `TlsSocket`, and peer
-  `Certificate` inspection;
-- `sql/dialect` — reviewed SQLite/Postgres/MySQL placeholder, identifier
-  and boolean rendering differences;
-- `sql/statement` — `Insert`/`Update`/`Delete`/`RawStatement`, rendered
-  through any `Dialect`;
-- `sql/query` — `Select`/`RawQuery`, with explicit `EveryRow`/
-  `UnlimitedRows`/`RowWindow` vocabulary;
-- `http/request` — immutable `HttpRequest` and the `Get`/`Post`/`Put`/
-  `Patch`/`Delete` convenience constructors;
-- `http/response` — streamed `HttpResponse` plus explicit
-  bytes/string/JSON materialization;
-- `http/handler` — the `Handler` role plus `HandlerChain`'s
-  chain-of-responsibility dispatch, where declining is spelled by throwing
-  `HandlerFailure` rather than returning;
-- `http/router` — `Router`/`GetRoute`/etc. dispatch by method and
-  `PathPattern`, with `:name` segments extracted as `@PathParameter` (not a
-  native map — Okkama cannot build one with a runtime-determined entry
-  count from pure code);
-- `http/client` — a hand-rolled HTTP/1.1 `Client` over `socket/tcp`/
-  `crypto/tls`, serializing requests and parsing responses byte-by-byte,
-  following `Location` redirects up to a configured limit;
-- `http/server` — a sequential `Server` accepting one connection at a time
-  over plain TCP, parsing requests and writing responses the same
-  byte-by-byte way as `http/client`, in reverse; `ServerPolicy.tls()` is
-  stored but not yet wired up, since `crypto/tls` has no server-side
-  wrapper at all today, only the client side;
-- `log/formatter` — deterministic `LineFormatter`/`JsonFormatter`
-  rendering of a `LogEvent`;
-- `log/logger` — `OutputLogger`/`FileLogger`/`SilentLogger`/
-  `ContextLogger`/`MemoryLogger` behind one `Logger` role; `MemoryLogger`
-  round-trips events by serializing them into a `runtime/memory` cell, since
-  Okkama has no mutable-cell primitive for arbitrary values, only bytes;
-- `fs/temp` — `TempFile`/`TempDir` remove their owned entry on destroy
-  unless `keep()` transfers ownership out; `TempRoot` generates collision-free
-  unique names via real exclusive creation, not a racy check-then-create;
-- `db/transaction` — the `Transaction` role and `InactiveTransaction`; every
-  concrete implementer is a still-ahead database driver, since transaction
-  framing is inherently database-specific — this, the sixth and final
-  Phase 7 module, closes "owned workflows";
-- `db/connection` — the `Connection` role and `ConnectionClosed`/
-  `DbFailure`, the same shape as `db/transaction` for the same reason; this,
-  the third and final Phase 8 module, closes "composition layers" alongside
-  `http/router` and `http/server`;
-- `db/driver` — the DBI-style `Driver` role (`connect() is Connection`,
-  `dialect() is Dialect`) and `DriverFailure`, the same role-and-errors-only
-  shape as `db/connection`/`db/transaction` for the same reason; opens Phase 9
-  ("application-level batteries") ahead of the concrete `db/sqlite`/
-  `db/postgres`/`db/mysql` drivers;
-- `db/database` — `Database`, a thin application-facing facade constructed
-  with a `Driver`; `connect()` delegates and translates any `DriverFailure`
-  into one stable `DatabaseUnavailable`, so application code never depends
-  on a specific driver's own failure type;
-- `db/sqlite`/`db/postgres`/`db/mysql` — explicitly **deferred**: a real
-  SQLite file-format engine or Postgres/MySQL wire-protocol driver is a
-  multi-week undertaking on its own, and there is no structured-AST
-  shortcut around parsing SQL text — `Statement.sql()`/`Query.sql()` always
-  render to plain SQL strings. See `db-sqlite-22072026.md`;
-- `db/migration` — `Migrations`, a real (not role-only) implementation
-  composed against any `Connection`: rejects duplicate migration versions
-  at construction, applies/rolls back each migration in its own
-  transaction (most-recently-applied first on rollback); its own applied-
-  migration history lives in an owned `runtime/memory` cell rather than
-  being read back from the database, since this stdlib has no runtime
-  role-to-concrete downcast from a queried `Row` and `sql/query`/
-  `sql/statement` have no `WHERE`-clause support at all yet — a known,
-  documented limitation, not durable across a process restart; building it
-  also surfaced a real interpreter bug (`.map()` used as a bare action-body
-  tail expression infers its element type from the first result's *concrete*
-  type rather than the declared role return type, wrongly rejecting later,
-  differently-typed-but-role-compatible elements), root-caused but not
-  fixed, worked around with an explicit `let` — see
-  `db-migration-22072026.md`;
-- `random` — secure ranges/fractions plus explicitly injectable deterministic
-  choices and immutable permutations;
-- `os` — typed host and explicit POSIX/Windows descriptions with closed
-  platform, architecture, and path-style enums;
-- `fs/path` — host-selected and explicit POSIX/Windows immutable lexical paths
-  with exact UTF-8 projection and typed failures;
-- `fs/meta` — portable `FileKind`/`Permissions` metadata read through
-  `lstat`, so symlinks are never silently followed;
-- `time/duration` — signed checked nanosecond spans and exact named-unit
-  projections;
-- `time/instant`, `time/clock`, and `time/date` — clock-bound points,
-  injectable wall/monotonic clocks, Gregorian dates and UTC civil projection;
-- `time/timer` — explicitly acquired owned one-shot and fixed-rate periodic
-  timers;
-- `test/fake_clock` — a `Clock` implementation tests can explicitly advance,
-  rewind or set, so `sleep` never blocks;
-- `test/benchmark` — injectable-clock repeatable duration measurement over a
-  `BenchmarkCase`, so statistics are asserted exactly against `FakeClock`
-  instead of tolerated against real timing noise;
-- `test/suite` — `Suite`, constructed with an explicit `@TestCase` list, an
-  explicit `@Fixture` list and an injected `Clock`; pass/fail is purely
-  exception-based (any thrown `Error` fails a case), since the language's
-  own contextual `test` capability that `test/more.Assertions` delegates to
-  only exists inside a real `test { }` block, never in ordinary runtime
-  code a `Suite` executes; every `Fixture.after()` runs even when a case
-  throws, without a `finally` clause — this language's grammar has none —
-  by structuring the per-case `try`/`catch` to fully absorb any `Error`
-  into a `bool` first, so the `after()` loop that follows it is always
-  reached;
-- `env/var` — nominal environment variables, exact raw-byte access, strict
-  UTF-8 text projections and an isolated role fake;
-- `env/cwd` — the explicit, stateless ambient working-directory capability,
-  with an immutable `FixedCwd` that rejects every change;
-- `proc/args` — immutable application argv with exact byte and strict UTF-8
-  views plus indexed failures;
-- `proc/cmd` — `Cmd`/`RunningCmd` build, run and supervise a child process
-  over real OS pipes with no shell and no ambient environment/directory
-  inheritance unless explicitly requested (POSIX only);
-- `net/address` — immutable validated IPv4/IPv6, socket endpoint and unresolved
-  host/port values without exposing native endpoint envelopes;
-- `test/more` — stateless reusable assertions over the contextual test
-  capability, plus the `AssertionFailure` Error value;
-- `io/input`, `io/output`, and `io/closeable` — host-independent transport and
-  lifecycle capabilities with typed protocol errors;
-- `io/buffer` — explicitly acquired owned byte/string buffers and non-owning
-  input/output buffering decorators;
-- `io/stdin`, `io/stdout`, and `io/stderr` — concrete process standard-stream
-  objects over the native byte boundary;
-- `regex` — the immutable `Regex` object over the portable regex substrate
-  (Chapter 31.3);
-- `runtime/*` — declaration-only native substrate modules (Chapter 27):
-  `runtime/time`, `runtime/fs`, `runtime/process`, `runtime/net`,
-  `runtime/poll`, `runtime/environment`, `runtime/system`, `runtime/debug`,
-  `runtime/regex`, `runtime/stdio`, `runtime/memory`, `runtime/format`, `runtime/crypto`,
-  `runtime/tls`, `runtime/utf8`.
-
-Operating-system conventions are values, not raw host strings or constants:
-
-```okkama
-import "os" take
-    Host, OperatingSystem, Posix,
-    Platform, Architecture, PathStyle;
-
-main() is int {
-    let host is OperatingSystem = Host();
-    let foreign is OperatingSystem = Posix(
-        Platform.freebsd,
-        Architecture.arm64,
-    );
-
-    host.platform();
-    host.path_style();
-    foreign.path_list_separator(); // ":"
-    return 0;
-}
-```
-
-`Host()` has no retained state and resolves each property through
-`runtime/system` only when requested. Known non-Windows hosts use POSIX paths,
-LF, and `:`; Windows uses Windows paths, CRLF, and `;`. An unknown host still
-has the typed identity `Platform.unknown`, but asking it for path or line
-conventions throws `UnsupportedPlatform` instead of making a guess. `Posix`
-and `Windows` describe an explicit foreign or test target; their overloaded
-constructors only retain enum state.
-
-Paths are syntax values before they become filesystem arguments:
-
-```okkama
-import "fs/path" take PathValue, Path, PosixPath, WindowsPath;
-
-main() is int {
-    let log is PathValue = Path("var")
-        .joined("log")
-        .joined("okkama.log");
-    let archive = PosixPath("/srv//data/../archive").normalized();
-    let artifact = WindowsPath("C:/build/./out/app.exe").normalized();
-
-    log.bytes();
-    archive.string();  // "/srv/archive"
-    artifact.string(); // "C:\\build\\out\\app.exe"
-    return 0;
-}
-```
-
-`Path` uses `Host().path_style()` when an action is evaluated. It never chooses
-a syntax in its constructor, and an unknown host throws `UnsupportedPlatform`.
-`PosixPath` and `WindowsPath` are explicit foreign grammars and never inspect
-the host. All three constructors only retain their source; no path action
-checks existence, follows links, resolves a real path or changes cwd.
-
-`string()` preserves valid source spelling and `bytes()` is its exact UTF-8
-encoding. `normalized()` is the only canonicalizing action: it removes
-repeated separators and `.`, resolves `..` without crossing a root, removes a
-non-root trailing separator and maps an empty relative path to `.`. `parent()`
-uses that normalized structure. Roots, `.`, empty normalized values, bare
-drive contexts and UNC share roots throw `MissingPathParent`.
-
-`joined(part)` accepts a relative fragment and never discards its base; rooted,
-drive-qualified and UNC fragments throw `InvalidPath`. POSIX rejects NUL and
-treats backslash as an ordinary character. Windows accepts both separators,
-canonicalizes them to backslash, and distinguishes drive-rooted (`C:\\x`),
-drive-relative (`C:x`), root-relative (`\\x`) and UNC paths. Only drive-rooted
-and complete UNC paths are absolute. Raw non-UTF-8 directory entries from
-`runtime/fs` remain `@byte`; this text-originated API does not rewrite them.
-
-`fs/meta` normalizes `stat`/`lstat` into portable, typed metadata:
-
-```okkama
-import "fs/meta" take FileKind, Meta, Permissions, MissingPath;
-import "fs/path" take Path;
-
-main() is int {
-    try {
-        let meta is Meta = Meta(Path("README.md"));
-
-        if meta.kind() == FileKind.file {
-            meta.size();
-            meta.modified();               // Instant, ClockIdentity.system
-            meta.permissions().readable();
-        }
-    }
-    catch error is MissingPath {
-        error.text();
-    }
-    return 0;
-}
-```
-
-`Meta` reads through `lstat`, not `stat`: a followed symlink always resolves
-to what it points at, so only `lstat` can ever report `FileKind.link`.
-`FileKind` is deliberately narrow — file, directory, link, or other — so
-device files, fifos and sockets all fall under `other` rather than growing
-the enum. `Permissions` decodes only the owner's read/write/execute bits
-from the raw POSIX mode; the provider exposes no ownership or process
-identity, so "can the current process access this" cannot be computed
-portably, and owner bits are the closest consistently meaningful reading
-across POSIX and Windows. `Meta`'s path is caller-supplied, so a
-`not_found` failure is the catchable `MissingPath` above; any other native
-failure (permission denied, unexpected) is an invariant panic instead, since
-this module declares no broader error vocabulary for it.
-
-Durations use one signed, exact nanosecond representation:
-
-```okkama
-import "time/duration" take
-    Duration, Milliseconds, Seconds, Minutes;
-
-main() is int {
-    let timeout is Duration = duration Seconds(30);
-    let retry = timeout.plus(duration Milliseconds(500));
-    let rewind = (duration Minutes(2)).times(-1);
-
-    retry.nanoseconds();        // 30500000000
-    rewind.less(Duration(0));   // true
-    return 0;
-}
-```
-
-`Duration`, `Nanoseconds`, `Milliseconds`, `Seconds`, `Minutes`, and `Hours`
-have state-only constructors. Validation, arithmetic, and unit scaling happen
-in actions. Negative spans are valid, but every result must fit signed 64-bit
-nanoseconds. Overflow throws `InvalidDuration` before arithmetic can wrap or
-cross a float boundary. The pure-Okkama module has no clock or sleep side
-effect; `time/clock` decides where a nonnegative relative span is
-required.
-
-Instants never lose the clock that gives their integer meaning:
-
-```okkama
-import "time/duration" take Duration, Milliseconds, Seconds;
-import "time/instant" take ClockIdentity, Instant;
-import "time/clock" take Clock, MonotonicClock, OffsetClock;
-import "time/date" take Date, TimeZone;
-import "time/timer" take
-    ScheduledTimer, Timer,
-    ScheduledPeriodicTimer, PeriodicTimer;
-
-main() is int {
-    let clock is Clock = MonotonicClock();
-    let started = clock.now();
-    let shifted = OffsetClock(clock, duration Seconds(1)).now();
-    let elapsed = shifted.since(started);
-
-    let leap = Date(2024, 2, 28).plus_days(1);
-    let epoch = TimeZone("UTC").at(
-        Instant(0, ClockIdentity.system)
-    );
-
-    let timeout is Timer = timer ScheduledTimer(duration Milliseconds(10));
-    timeout.wait();
-
-    let ticker is PeriodicTimer =
-        timer ScheduledPeriodicTimer(duration Seconds(1));
-    ticker.cancel();
-
-    leap.string();       // "2024-02-29"
-    epoch.string();      // "1970-01-01T00:00:00Z"
-    elapsed.nanoseconds();
-    ticker.cancelled();  // true
-    return 0;
-}
-```
-
-`Instant` stores signed-64 nanoseconds plus `ClockIdentity.system` or
-`ClockIdentity.monotonic`. Shifts preserve that identity; ordering or
-subtracting different identities throws `IncompatibleClocks`. `SystemClock`
-reads Unix time, `MonotonicClock` is for measurements/deadlines, and
-`OffsetClock` decorates either without changing its identity. Negative spans
-remain valid values, while `Clock.sleep` rejects an invalid relative sleep as
-`InvalidSleepDuration`.
-
-`Date` implements the proleptic Gregorian calendar for years `1..9999`.
-`DateTime` retains its exact source instant. The initial `TimeZone` policy is
-deliberately UTC-only; other names throw `UnknownTimeZone` until versioned
-time-zone data is bundled rather than inherited silently from the host.
-
-Timers are live resources, not immutable values. `ScheduledTimer` and
-`ScheduledPeriodicTimer` are state-only schedule values; their `#projected timer()`
-projection acquires an owned resource. `cancel()` is an idempotent command and
-`cancelled()` is its query. Waiting after cancellation throws
-`CancelledTimer`. Periodic timers use an anchored fixed-rate schedule and skip
-missed ticks; destruction closes their opaque runtime handle.
-
-Code written against the `Clock` role can be tested without a real clock
-through `test/fake_clock`:
-
-```okkama
-import "test/fake_clock" take FakeClock;
-import "time/clock" take Clock;
-import "time/duration" take Duration;
-import "time/instant" take ClockIdentity, Instant;
-
-main() is int {
-    let clock is Clock = FakeClock(Instant(0, ClockIdentity.monotonic));
-
-    clock.sleep(duration Seconds(1));      // advances instantly, never blocks
-    clock.advance(Duration(-500)); // rewinding is allowed; it is a test tool
-    clock.set(Instant(1000000000, ClockIdentity.monotonic));
-
-    clock.now();
-    return 0;
-}
-```
-
-`FakeClock(start)` fixes its simulated `ClockIdentity` for its lifetime.
-`sleep` is `advance` by another name, so it never blocks a test, but it still
-rejects a negative duration as `InvalidSleepDuration` like a real clock
-would; `advance` itself accepts a signed `Duration` since it is a test-only
-control, not part of `Clock`. `set` throws the existing `IncompatibleClocks`
-if given an instant with a different identity. Since Okkama fields cannot be
-reassigned outside a constructor, the current instant is not stored as one:
-it lives in an owned `runtime/memory` byte cell, the same way `io/buffer`
-owns its byte content, encoded through `encoding/binary`'s big-endian codec.
-
-`test/benchmark` times a `BenchmarkCase` against an injected `Clock` and
-summarizes the samples:
-
-```okkama
-import "test/benchmark" take BenchmarkCase, Benchmark, BenchmarkResult;
-import "time/clock" take MonotonicClock;
-import "strings/parse" take ParsedInt;
-
-object ParseWorkload does BenchmarkCase {
-    ParseWorkload();
-    run() is void {
-        value ParsedInt("12345");
-    }
-}
-
-main() is int {
-    let result is BenchmarkResult =
-        Benchmark(ParseWorkload(), MonotonicClock(), 1000).measure();
-
-    result.iterations();
-    result.average();
-    result.minimum();
-    result.maximum();
-    result.total();
-    return 0;
-}
-```
-
-The clock is a constructor argument rather than fixed to `MonotonicClock` so
-`Benchmark` can be driven by `test/fake_clock` in tests and asserted against
-exact statistics instead of tolerating real timing noise. `BenchmarkResult`
-is independently constructible from an already-computed `@Duration`, so its
-statistics — including `average()`, which avoids the float-precision risk of
-plain integer division the same way `encoding/hex`/`encoding/base64` do —
-are unit-tested without any clock at all. `InvalidBenchmark` covers a
-non-positive iteration count and a run whose clock reports an earlier
-instant afterward than before, which is a real, reachable case (not just
-defensive code) when a `test/fake_clock`-backed case rewinds its own clock.
-
-Environment variables preserve the raw host boundary without making ordinary
-application code procedural:
-
-```okkama
-import "env/var" take Environment, Env, EnvVar, EnvEntry;
-
-main() is int {
-    let environment is Environment = Env();
-    let home = EnvVar("HOME");
-
-    if environment.has(home) {
-        environment.value(home); // strict UTF-8
-        environment.bytes(home); // exact bytes
-    }
-
-    let snapshot is @EnvEntry = environment.variables();
-    snapshot.size();
-}
-```
-
-`EnvVar` and `EnvEntry` constructors only retain their arguments. Names are
-validated when observed: they are nonempty UTF-8 without NUL or `=`. Values
-may be empty or non-UTF-8 raw bytes, but cannot contain NUL. Text projection
-throws `InvalidEnvEncoding`; no replacement or normalization occurs.
-`MissingEnvVar` distinguishes absence from a present empty value. `Env`
-mutates the ambient process, whereas `Environment.fake()` is test-only,
-instance-local and returns detached byte-sorted snapshots.
-
-The current working directory is its own explicit capability, `env/cwd`, not
-an incidental static function on `fs`:
-
-```okkama
-import "env/cwd" take WorkingDirectory, Cwd, FixedCwd, InvalidWorkingDirectory;
-import "fs/path" take Path;
-
-main() is int {
-    let cwd is WorkingDirectory = Cwd();
-    let previous is Path = cwd.path();
-
-    try {
-        cwd.change(Path("/tmp"));
-    }
-    catch error is InvalidWorkingDirectory {
-        error.text();
-    }
-    return 0;
-}
-```
-
-`Cwd` is stateless: `path()` always re-reads the host, and `change()` always
-calls `chdir` directly, matching how `SystemClock`/`Env`/`Dns` never cache
-ambient state either. A `chdir` failure — a missing target, a permission
-error, anything the caller could plausibly retry with a different path —
-becomes one sanitized `InvalidWorkingDirectory`; failing to *read* the
-ambient directory is instead an invariant panic, the same treatment
-`SystemClock.now()` gives an unreadable host clock, since no caller input
-could be at fault. `FixedCwd(start)` is immutable rather than a mutable test
-double: `change()` always throws `InvalidWorkingDirectory`, which doubles as
-a way to assert in a test that some code path never tries to change
-directories at all.
-
-Application arguments use a separate stateless object over the immutable
-runtime snapshot:
-
-```okkama
-import "proc/args" take Args;
-
-main() is int {
-    let arguments = Args();
-    arguments.size();
-    arguments.bytes();
-
-    if arguments.size() > 0 {
-        arguments.at(0);
-    }
-    return 0;
-}
-```
-
-`bytes()` preserves every exact argument, including empty and non-UTF-8
-values. `strings()` decodes the complete snapshot strictly and reports the
-first malformed value as `InvalidArgumentEncoding(index)`. `at(index)` uses
-the same policy for one value and throws `MissingArgument(index)` for negative
-or upper-bound indices. The source path used by the CLI is not included.
-`Args()` performs no native work in its constructor; the runtime provider
-already owns the defensive snapshot.
-
-Persistent queues and stacks start from explicitly typed empty values. Every
-derived value leaves the earlier version unchanged, and both work directly
-with `for`:
-
-```okkama
-import "collections/queue" take Queue, EmptyQueue;
-import "collections/stack" take Stack, EmptyStack;
-
-main() is int {
-    let empty_queue is Queue<int> = EmptyQueue();
-    let queue = empty_queue.enqueued(1).enqueued(2);
-    queue.head();             // 1: FIFO
-
-    let empty_stack is Stack<int> = EmptyStack();
-    let stack = empty_stack.pushed(1).pushed(2);
-    stack.top();              // 2: LIFO
-
-    for queue -> value { value; } // 1, then 2
-    for stack -> value { value; } // 2, then 1
-    return 0;
-}
-```
-
-Queue uses a private two-list representation and reverses its rear list only
-when the front is exhausted, giving amortized O(1) enqueue/tail. Stack is a
-semantic wrapper over `List<T>` and reuses its storage; its cursor traverses
-only the public Stack contract. Empty
-`head`/`tail` and `top`/`popped` throw typed contextual errors.
-
-Formatting is an immutable projection over direct positional values or an
-explicit named-value map:
-
-```okkama
-import "format" take
-    Formatted, NamedFormatted, PrintfFormatted,
-    InvalidFormat, MissingFormatValue, InvalidPrintf;
-
-main() is int {
-    let named is %string:any = ["name": "Ada", "count": 3];
-
-    string Formatted("{}: {}", "Ada", 3);            // "Ada: 3"
-    string NamedFormatted("{name}: {count}", named);  // "Ada: 3"
-    string PrintfFormatted("exact=%8r hex=%04x", rat(1, 3), 15);
-    // "exact=     1/3 hex=000f"
-    return 0;
-}
-```
-
-`Formatted` consumes only empty `{}` fields in order. `NamedFormatted` accepts
-ASCII identifier fields such as `{name}` and `{count_2}`; they may repeat.
-Both forms use `{{` and `}}` for literal braces and permit unused supplied
-values. The `Formatted` variadic constructor retains positional values as
-private `@any` state, so the caller creates no auxiliary array. Malformed syntax throws
-`InvalidFormat` with the first zero-based
-Unicode code-point offset. A missing value throws `MissingFormatValue` whose
-text retains the positional index or named key. Constructors only retain the
-pattern and collection; parsing and native rendering happen in `string()`.
-`PrintfFormatted` provides the portable sprintf-compatible subset
-`%s/%c/%d/%i/%u/%o/%x/%X/%b/%f/%e/%E/%g/%G`, `%%`, and exact `%r`.
-Numeric width/precision and ordinary flags are supported. Dynamic `*`,
-positional `$`, `%n`, `%p`, `%v`, and host length modifiers are rejected as
-`InvalidPrintf`; `%r` accepts width and `-` but never precision.
-
-Plain templates are reusable string objects, not embedded Okkama programs:
-
-```okkama
-import "template/plain" take Template, TemplateBinding, TemplateValues;
-
-main() is int {
-    let values = TemplateValues(
-        TemplateBinding("name", "Ada"),
-        TemplateBinding("language", "Okkama"),
-    );
-    Template("Hello, <%= name %> from <%= language %>!").string(values);
-    return 0;
-}
-```
-
-`<%= name %>` uses the template escaping policy and `<%== name %>` is the raw
-channel. For `template/plain` that policy is identity, so both preserve exact
-strings; `template/html` (below) keeps both tags but decides escaping by the
-bound value's type instead, so they stay lexically identical there too.
-`<%# ... %>` is a non-nesting comment ending at the first `%>`, and `<%%`
-emits literal `<%`. Ordinary braces remain literal, making JSON and source-code
-templates usable without brace escaping. Other `<% ... %>` forms are reserved
-and invalid in v1—templates never evaluate Okkama or host code.
-
-Placeholder names are exact ASCII identifiers with optional ASCII space/tab around them.
-The whole source is validated before lookup; invalid syntax reports a
-zero-based Unicode code-point offset. Missing and duplicate bindings are
-separate typed errors, surplus bindings are allowed, and inserted strings are
-never interpreted recursively. All constructors only retain state; parsing
-and production happen in the noun query `string(values)`.
-
-`template/html` renders the same tag grammar into HTML, escaping by default:
-
-```okkama
-import "template/html" take
-    HtmlTemplate, HtmlBinding, HtmlValues, SafeHtml, EscapedHtml;
-
-main() is int {
-    let comment is string = "<script>alert('xss')</script>";
-    let values is HtmlValues = HtmlValues([
-        HtmlBinding("comment", safe EscapedHtml(comment)),
-    ]);
-    HtmlTemplate("<div><%= comment %></div>").render(values);
-    // "<div>&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;</div>"
-    return 0;
-}
-```
-
-`HtmlBinding` takes a `SafeHtml` value, not a plain `string` — there is no
-code path for binding unescaped text at all. `safe EscapedHtml(text)` escapes
-`&`, `<`, `>`, `"` and `'` (ampersand first, so text that already contains
-`&amp;` is not doubled into `&amp;amp;`); `SafeHtml(text)` is the explicit,
-visible assertion that some text — typically the already-rendered output of
-a nested `HtmlTemplate.render()` — is safe to insert as-is:
-
-```okkama
-let partial is string = HtmlTemplate("<em><%= word %></em>")
-    .render(HtmlValues([HtmlBinding("word", safe EscapedHtml("safe & sound"))]));
-HtmlTemplate("<section><%== body %></section>")
-    .render(HtmlValues([HtmlBinding("body", SafeHtml(partial))]));
-// "<section><em>safe &amp; sound</em></section>"
-```
-
-`HtmlTemplate.render` runs the source through the exact same `Template`
-lexer `template/plain` uses; `InvalidTemplate` becomes `InvalidHtmlTemplate`,
-while `MissingTemplateValue`/`DuplicateTemplateValue` are reused unchanged,
-since a missing or duplicate binding name is not an HTML-specific concept.
-
-Binary protocols remain ordinary immutable Okkama code. A reader always names
-its offset and endianness; output is composed from values whose types name the
-representation:
-
-```okkama
-import "encoding/binary" take
-    BinaryReader, BinaryPart, BinarySequence,
-    Unsigned16BigEndian, Signed32LittleEndian;
-
-main() is int {
-    let parts is @BinaryPart = [
-        Unsigned16BigEndian(258),
-        Signed32LittleEndian(-2),
-    ];
-    let packet is @byte = bytes BinarySequence(parts);
-
-    let reader = BinaryReader(bytes: packet);
-    reader.u16_be(0);               // 258
-    reader.i32_le(2);               // -2
-    reader.bytes(0, 2);             // [byte(1), byte(2)]
-    return 0;
-}
-```
-
-The `_be` and `_le` suffixes are mandatory; host byte order is never consulted.
-Unsigned parts reject values outside their width, signed values use exact
-two's-complement boundaries, and short reads throw `EndOfBinaryData`. Negative
-offsets, negative slice sizes, and out-of-range values throw
-`InvalidBinaryValue`. Constructors only retain their source values; checked
-encoding happens in `bytes()`. `BinarySequence` reduces immutable parts into
-persistent byte chunks and performs one linear `Iterable<byte>` identity map
-into `@byte`.
-
-Text and bytes cross through an explicit UTF-8 projection. No call silently
-chooses a character encoding:
-
-```okkama
-import "encoding/utf8" take Utf8Encoded, Utf8Decoded, InvalidUtf8;
-
-main() is int {
-    let bytes is @byte = bytes Utf8Encoded("Hello, Привет, 猫, 😀");
-    let text is string = string Utf8Decoded(bytes);
-
-    try {
-        string Utf8Decoded([byte(65), byte(255)]);
-    }
-    catch error is InvalidUtf8 {
-        error.offset(); // 1: byte offset of the malformed sequence
-    }
-    return 0;
-}
-```
-
-Encoding emits canonical UTF-8 without a BOM or normalization. Decoding is
-strict: it never inserts replacement characters, and overlong forms,
-surrogates, values above `U+10FFFF`, invalid continuations and truncated tails
-all throw `InvalidUtf8`. The retained offset is the start of the first
-ill-formed byte sequence. Both projection objects are immutable, so repeated
-conversion is deterministic and does not cache hidden mutable state.
-
-Base64 is a byte encoding, not a character encoding and not encryption. Its
-two projections therefore compose explicitly with UTF-8 when text is
-involved:
-
-```okkama
-import "encoding/base64" take Base64Encoded, Base64Decoded, InvalidBase64;
-import "encoding/utf8" take Utf8Encoded, Utf8Decoded;
-
-main() is int {
-    let encoded is string = string Base64Encoded(bytes Utf8Encoded("Привет"));
-    let decoded is string = string Utf8Decoded(bytes Base64Decoded(encoded));
-
-    try {
-        bytes Base64Decoded("Zh==");
-    }
-    catch error is InvalidBase64 {
-        error.offset(); // 1: non-zero unused bits
-    }
-    return 0;
-}
-```
-
-The first codec version accepts exactly canonical padded RFC 4648 with the
-standard `+` and `/` alphabet. It does not ignore whitespace and does not
-accept URL-safe, unpadded or MIME forms. Padding shape and unused tail bits
-are validated, so two different accepted strings cannot represent the same
-byte sequence. Decoding composes immutable `BinaryBytes` parts into one
-`BinarySequence`; no mutable output buffer or hidden native Base64 codec is
-introduced.
-
-Hexadecimal uses the same explicit byte boundary with a smaller canonical
-surface:
-
-```okkama
-import "encoding/hex" take HexEncoded, HexDecoded, InvalidHex;
-
-main() is int {
-    let encoded is string = string HexEncoded([
-        byte(222), byte(173), byte(190), byte(239),
-    ]); // "deadbeef"
-    let decoded is @byte = bytes HexDecoded("DEADBEEF");
-
-    try {
-        bytes HexDecoded("0x");
-    }
-    catch error is InvalidHex {
-        error.offset(); // 1: prefixes are not part of the codec
-    }
-    return 0;
-}
-```
-
-The encoder always emits two lowercase characters per byte. The decoder also
-accepts uppercase `A-F`, but rejects odd lengths, whitespace, `0x` prefixes,
-separators and non-ASCII characters. Odd length reports the missing nibble
-position at `text.length()`; other failures identify the first invalid
-code-point offset. Both transformations are immutable, linear and written in
-Okkama without a native codec.
-
-JSON is represented by nominal objects instead of maps containing `any`:
-
-```okkama
-import "encoding/json" take
-    Json, JsonKind, JsonMember, JsonObject, JsonArray,
-    JsonString, JsonNumber, JsonBool, JsonNull, JsonSource, JsonReader,
-    InvalidJson, UnexpectedJsonKind;
-
-main() is int {
-    let values is @Json = [
-        JsonString("Ada"),
-        JsonNumber("1e400"),
-        JsonBool(true),
-        JsonNull(),
-    ];
-    let generated = JsonObject([
-        JsonMember("values", JsonArray(values)),
-    ]);
-    let parsed is Json = json JsonSource(
-        "{\"emoji\":\"\\uD83D\\uDE00\",\"count\":3}",
-    );
-    [generated.encoded(), parsed.encoded()];
-    return 0;
-}
-```
-
-`Json`, implemented by the six JSON value families, exposes `kind()` and
-`encoded()`. `kind()` returns the exact `JsonKind` without inspecting encoded
-text. `JsonMember`, `JsonObject` and `JsonArray` preserve order and
-nominal types. Duplicate member names are rejected rather than acquiring a
-silent first-wins or last-wins policy; missing members and array indexes also
-have distinct typed failures.
-
-A `JsonNumber` stores its exact RFC 8259 decimal spelling. It does not parse
-through an Okkama numeric primitive, so `1e400` remains valid JSON and
-re-encodes verbatim. `int()` and `float()` are explicit checked views;
-`InvalidJsonNumberConversion` means only that the requested bounded view is
-unavailable, not that the JSON number is invalid.
-
-The parser accepts all JSON escapes and valid UTF-16 surrogate pairs, rejects
-lone surrogates and unescaped controls, and encodes controls canonically.
-`InvalidJson` reports a zero-based code-point offset into the original source
-plus one-based line and column. CRLF is one line break while the offset still
-counts both original code points. Construction only retains state; parsing,
-number validation and encoding occur in queries, entirely in Okkama without a
-host JSON codec.
-
-For schema-oriented reading, `JsonReader` parses a source and acts as an
-immutable cursor:
-
-````okkama
-let reader = JsonReader(```
-{
-    "name": "Ada",
-    "address": {"city": "London"},
-    "users": [{"age": 37}],
-    "active": null
-}
-```);
-
-let name is string = reader.required_string("name");
-let city is string = reader.required("address").required_string("city");
-let age is int = reader.required("users").at(0).required_int("age");
-let active is bool = reader.optional_bool("active", false);
-````
-
-`required(name)` and `at(index)` return new readers; the original reader never
-changes. `string()`, `int()`, `float()` and `bool()` project the current node.
-`required_*` requires a present member of the requested kind.
-`optional_*(name, fallback)` returns its same-typed fallback only when the
-member is absent or JSON null. A present non-null wrong kind throws
-`UnexpectedJsonKind`, whose path identifies locations such as
-`$.users[0].age`. This facade reads JSON only. Encoding remains the explicit
-construction of `JsonObject`, `JsonMember`, `JsonArray` and scalar JSON
-values; private domain-object state is never reflected automatically.
-
-`encoding/csv` reads and writes RFC 4180-shaped rows over `Input`/`Output`
-under an explicit, injectable dialect:
-
-```okkama
-import "encoding/csv" take CsvDialect, CsvReader, CsvWriter, CsvRow;
-import "io/buffer" take Buffer, BufferAllocation;
-
-main() is int {
-    let dialect is CsvDialect = CsvDialect(); // ",", "\"", "\r\n", header: true
-
-    let sink is Buffer = buffer BufferAllocation();
-    let writer is CsvWriter = CsvWriter(sink, dialect);
-    writer.write(["id", "bio"]);
-    writer.write(["1", "wrote the first algorithm, comma included"]);
-    writer.flush();
-
-    let rows is @@string = CsvReader(sink, dialect).rows();
-    let row is CsvRow = CsvRow(rows[0], rows[1], 2);
-    row.value("bio");
-    return 0;
-}
-```
-
-`CsvDialect()` supplies RFC 4180 defaults; the full constructor takes an
-explicit delimiter, quote character, line separator and header flag — all
-four as `string`, not `char`: `char` has no defined conversion to or from
-`string` in this implementation (confirmed directly — concatenation,
-comparison and every action call against a bare `char` all fail), and is
-used nowhere else in the stdlib, so a single-character `string` is used
-instead, matching every other place that already represents one character
-this way. A doubled quote (`""`) inside a quoted field is a literal quote;
-content between a closing quote and the next delimiter throws `InvalidCsv`.
-`CsvReader.rows()` returns every row undifferentiated — `CsvDialect.header()`
-is metadata a caller acts on, not something `CsvReader` branches on — so
-`CsvRow` is a separate step that pairs an already-read header with an
-already-read data row for named/indexed access.
-
-`encoding/toml` covers a practical, single-line-document subset of TOML
-v1.0.0 — the shape real configuration files actually use, not the complete
-grammar:
-
-```okkama
-import "encoding/toml" take TomlDocument, TomlSource, TomlValue;
-
-main() is int {
-    let document is TomlDocument = document TomlSource(
-        "name = \"app\"\n"
-            + "\n"
-            + "[server]\n"
-            + "port = 8080\n"
-            + "tags = [\"a\", \"b\"]\n",
-    );
-    document.value("name");            // TomlString
-    document.value("server.port");     // TomlInteger, by dotted path
-    document.value("server.tags");     // TomlArray
-    document.string();                 // re-renders with [server] headers
-    return 0;
-}
-```
-
-Multi-line strings/arrays, `[[array of tables]]`, and dotted keys inside a
-`[table]` block exploding into further nested tables (`[a]\nb.c = 1` stays
-one entry literally named `"b.c"`; only an explicit `[a.b]` header nests)
-are all out of scope for this version — each is a deliberate reduction, not
-an oversight, recorded with its reasoning in `encoding-toml-21072026.md`.
-`TomlDateTime` wraps `time/date.Date` — TOML's Local Date form only; the
-other three date/time forms don't map cleanly onto an existing Okkama value
-yet. Dotted-path lookup could not be built as a tree of nested `TomlTable`
-values descended one segment at a time: once an intermediate value comes
-back as the role-typed `TomlValue`, nothing lets it be treated as a
-`TomlTable` again to keep descending, since Okkama has no runtime
-role-to-concrete downcast. The parser instead emits a flat list of
-fully-expanded `(header, key, value)` records — used directly for `.value()`
-lookup by path equality — while `.string()` groups that same list by header
-to render `[table]` sections, so descending through an opaque `TomlValue`
-is never needed.
-
-Cryptographic randomness is exposed as an injectable capability rather than
-an object that stores one request size:
-
-```okkama
-import "crypto/random" take
-    SecureByteSource, SecureRandom,
-    InvalidSecureRandomSize, UnavailableSecureRandom;
-
-main() is int {
-    let source is SecureByteSource = SecureRandom();
-
-    try {
-        source.bytes(32); // exact OS-CSPRNG bytes
-    }
-    catch error is InvalidSecureRandomSize {
-        error.requested();
-    }
-    catch error is UnavailableSecureRandom {
-        error.text();
-    }
-    return 0;
-}
-```
-
-Each `bytes(size)` call is independent. The portable range is zero through
-16 MiB; zero needs no entropy device, while an invalid request fails before
-native dispatch. Provider failures are sanitized to one
-`UnavailableSecureRandom` object, and no language PRNG is used as a fallback.
-In test mode `SecureByteSource.fake()` returns an exact, predictable sequence
-of zero bytes, making dependency injection explicit without pretending the
-fake is secure.
-
-`crypto/digest` hashes bytes or a full `Input` stream over the reviewed
-SHA-2 primitive:
-
-```okkama
-import "crypto/digest" take
-    Digest, Sha256, Sha384, Sha512, DigestMismatch, UnsupportedDigest;
-
-main() is int {
-    let digest is Digest = Sha256([byte(1), byte(2), byte(3)]);
-    digest.bytes();  // exact 32-byte SHA-256 output
-    digest.hex();    // lowercase canonical hexadecimal
-    digest.base64(); // RFC 4648 padded base64
-
-    let expected is @byte = [];
-    try {
-        confirm digest.bytes() == expected else throw DigestMismatch();
-    }
-    catch error is DigestMismatch {
-        error.text();
-    }
-    return 0;
-}
-```
-
-`Sha256`, `Sha384` and `Sha512` compute their result once at construction and
-implement `Digest` identically from there; `hex()` and `base64()` compose the
-existing `encoding/hex`/`encoding/base64` codecs rather than reimplementing
-either alphabet. Each also has a streaming constructor,
-`Sha256(source is Input, chunk_size is int)`, that reads the input to
-completion in `chunk_size`-sized reads before hashing — the reviewed
-`runtime/crypto` ABI is one-shot, so there is no incremental digest handle to
-update as bytes arrive. The explicit chunk size doubles as the reason the
-streaming constructor can coexist with the bytes constructor at all: Okkama
-constructor overload resolution is arity-based, not type-based, so two
-same-arity constructors of different parameter types are always ambiguous.
-
-Every native digest-provider failure is translated to one
-`UnsupportedDigest()` without leaking a native code or message, mirroring how
-`crypto/random` sanitizes provider failures. `DigestMismatch` is exported
-verification vocabulary rather than something the module throws itself:
-comparing digest bytes needs no dedicated action, since `@byte == @byte` is
-already structural equality, so callers use `confirm ... else throw
-DigestMismatch();` directly, as shown above.
-
-`crypto/hmac` adds a keyed variant with constant-time verification:
-
-```okkama
-import "crypto/hmac" take HmacSha256, InvalidMacKey;
-
-main() is int {
-    let mac is HmacSha256 = HmacSha256(
-        [byte(1), byte(2), byte(3)], // key
-        [byte(4), byte(5), byte(6)], // message
-    );
-    mac.bytes();
-    mac.hex();
-    mac.matches(mac.bytes()); // true
-
-    try {
-        HmacSha256([], [byte(1)]);
-    }
-    catch error is InvalidMacKey {
-        error.text(); // empty keys are rejected before native dispatch
-    }
-    return 0;
-}
-```
-
-`matches` calls `runtime/crypto.secure_equal`, not `==`: unlike a plain
-digest, a MAC is verified against a value an attacker may have crafted, and
-a length/timing-leaking comparison could help forge one byte at a time.
-`HmacSha256`/`384`/`512` reuse `crypto/digest`'s `UnsupportedDigest` for
-native failure translation rather than declaring a duplicate — they call
-`runtime/crypto.hmac` with one of their own three fixed algorithm strings
-exactly the way `crypto/digest`'s objects do, so the same "any native
-failure here is a provider invariant, not a caller mistake" reasoning
-applies unchanged.
-
-`socket/socket` is pure shared vocabulary ahead of the concrete socket
-resources (`socket/tcp`/`udp`/`unix`) that will depend on it: the `Socket`
-role (`local() is SocketAddress`), three explicit option enums in place of
-boolean toggles —
-
-```okkama
-import "socket/socket" take
-    AddressReuse, KeepAlivePolicy, PacketDelay, SocketOptions, SocketTimeout;
-import "time/duration" take Seconds;
-
-main() is int {
-    let options is SocketOptions = SocketOptions(
-        AddressReuse.enabled,
-        KeepAlivePolicy.enabled,
-        PacketDelay.disabled, // TCP_NODELAY
-    );
-    let timeout is SocketTimeout = SocketTimeout(
-        duration Seconds(5), duration Seconds(30), duration Seconds(30),
-    );
-    return 0;
-}
-```
-
-— plus `SocketClosed` (fixed text) and `SocketFailure(reason)` for
-`socket/tcp`/`udp`/`unix` to throw once they exist. It has no native
-surface of its own.
-
-`sql/value` is the same kind of pure vocabulary module ahead of
-`sql/statement`/`sql/query`: eight thin `SqlValue` wrappers (`SqlInt`,
-`SqlFloat`, `SqlString`, `SqlBytes`, `SqlBool`, `SqlDate`, `SqlDateTime`,
-`SqlNull`), each reporting its own fixed `SqlType`, plus `SqlValues` to
-hold a mixed, role-typed bound-parameter list —
-
-```okkama
-import "sql/value" take SqlType, SqlValue, SqlInt, SqlString, SqlNull, SqlValues;
-
-main() is int {
-    let bound is @SqlValue = [SqlInt(42), SqlString("Ada"), SqlNull()];
-    let params = SqlValues(bound);
-
-    let final_value = params.values()[params.values().size() - 1];
-    if final_value.sql_type() == SqlType.null_value {
-        "last bound parameter is an explicit SQL NULL";
-    }
-    else {
-        "unexpected";
-    }
-    return 0;
-}
-```
-
-`SqlNull` is a real, explicit database value a caller constructs and
-matches on deliberately — never Okkama's own (nonexistent) implicit null.
-`SqlType`'s eighth member is named `null_value` rather than the draft's
-`null`, since `null` is a reserved keyword in this null-free language.
-
-`http/status` validates an HTTP status code/reason pair and classifies it
-by numeric range, with named shortcuts for the handful of statuses used
-everywhere:
-
-```okkama
-import "http/status" take Status, Ok, NotFoundStatus, InvalidHttpStatus;
-
-main() is int {
-    let found is Status = status Ok();
-    let missing is Status = status NotFoundStatus();
-
-    if found.successful() && missing.client_error() {
-        "both classified correctly";
-    }
-    else {
-        "unexpected";
-    }
-    return 0;
-}
-```
-
-`Ok`, `Created`, `BadRequest`, `NotFoundStatus` and `InternalServerError`
-are zero-argument objects, each projecting (`status Ok()`, `status NotFoundStatus()`,
-...) into a full `Status` — the same named-constructor projection `time/duration`
-uses for `duration Seconds(5)`/`duration Hours(5)`, just with no argument to carry. Any
-other status code is `Status(code, reason)` directly; the constructor
-rejects a code outside `100..599` or an empty reason with one
-`InvalidHttpStatus`.
-
-`http/headers` is an immutable, case-insensitive header collection that
-never loses a header's original spelling, plus a small add/remove
-composition pair:
-
-```okkama
-import "http/headers" take HeaderName, Header, Headers, ExtendedHeaders, FilteredHeaders;
-
-main() is int {
-    let base is Headers = Headers([
-        Header(HeaderName("Content-Type"), "text/html"),
-        Header(HeaderName("X-Request-Id"), "abc123"),
-    ]);
-
-    let with_auth is Headers = headers ExtendedHeaders(
-        base,
-        Header(HeaderName("Authorization"), "Bearer token"),
-    );
-    let redacted is Headers = headers FilteredHeaders(with_auth, HeaderName("authorization"));
-
-    redacted.has(HeaderName("Authorization")); // false — filtered out
-    redacted.first(HeaderName("content-type")); // "text/html" — untouched
-    return 0;
-}
-```
-
-Lookups (`has`/`first`/`all`) compare `HeaderName`s case-insensitively, but
-`entries()` always reports each header's original spelling: `Headers`
-never compares two `HeaderName`s with `==` directly (Okkama's default
-object equality is deep-structural over every field, so two names that
-only differ by case aren't `==`) — it folds both sides to lowercase first.
-`Header`'s constructor trims a value's surrounding whitespace and rejects
-any `\r`/`\n` it still contains as `InvalidHeaderValue`, closing off
-classic HTTP header/response-splitting injection. `ExtendedHeaders` adds
-one header to the end; `FilteredHeaders` removes every header matching a
-given name — both return a fresh `Headers` and never modify their source.
-
-`log/event` is the simplest module in this whole stdlib: an immutable
-structured log event with no validation beyond one non-empty field name:
-
-```okkama
-import "log/event" take LogLevel, LogField, LogEvent;
-import "time/instant" take Instant, ClockIdentity;
-
-main() is int {
-    let fields is @LogField = [LogField("user", "ada"), LogField("attempt", "3")];
-    let event = LogEvent(
-        LogLevel.warning,
-        "retrying request",
-        fields,
-        Instant(0, ClockIdentity.system),
-    );
-
-    event.level();    // LogLevel.warning
-    event.message();  // "retrying request"
-    return 0;
-}
-```
-
-`LogEvent`'s constructor stores its four values verbatim — an empty
-`message` or an empty `fields` array are both legitimate events, and every
-`LogLevel` (`trace`/`debug`/`info`/`warning`/`error`/`fatal`) is already an
-exhaustive, closed set, so there is nothing left to validate at this
-layer. Only `LogField` rejects anything, and only an empty `name` (with
-`InvalidLogField`) — a nameless field would be useless for structured
-lookup by the `log/formatter` this module is designed to feed.
-
-`db/result` is the outcome of a non-row-producing statement
-(`INSERT`/`UPDATE`/`DELETE`), and uses arity to encode whether a last
-insert id even exists rather than a nullable field:
-
-```okkama
-import "db/result" take DbResult, MissingLastId;
-
-main() is int {
-    let inserted = DbResult(1, 42); // affected rows, last insert id
-    let updated = DbResult(3);      // affected rows only — no last id here
-
-    inserted.last_id();      // 42
-    updated.has_last_id();   // false
-
-    try {
-        updated.last_id();
-    }
-    catch error is MissingLastId {
-        error.text(); // "this statement did not produce a last insert id"
-    }
-    return 0;
-}
-```
-
-The two-argument constructor is for statements that produce a real last
-id; the one-argument constructor is for the ones that never do (`UPDATE`,
-`DELETE`). `has_last_id()` reports which shape built the value, and
-`last_id()` throws `MissingLastId` rather than silently returning `0` when
-called on a result that never had one — the same explicit-over-implicit
-choice already used for `SqlNull` and `fs/meta.MissingPath`.
-
-`db/row` closes out this phase of the stdlib: name/index access to one
-query-result row's `SqlValue`s —
-
-```okkama
-import "db/row" take Row, MissingColumn;
-import "sql/value" take SqlValue, SqlInt, SqlString, SqlType;
-
-main() is int {
-    let row = Row(["id", "name"], [SqlInt(1), SqlString("Ada")]);
-
-    row.value("id").sql_type();  // SqlType.integer
-    row.at(1).sql_type();        // SqlType.string
-
-    try {
-        row.value("missing");
-    }
-    catch error is MissingColumn {
-        error.text(); // "missing column: missing"
-    }
-    return 0;
-}
-```
-
-`Row.value()`/`at()` return the `SqlValue` role, not a concrete
-`SqlInt`/`SqlString` — Okkama has no runtime downcast from a role back to
-a concrete type, so `Row` can inspect no more than `sql_type()`. This is
-exactly why the module also exports `InvalidColumnType`: not something
-`Row` ever throws itself, but ready-made vocabulary for a domain adapter
-built on top (the kind of `UserRow(row).user()` wrapper this module
-deliberately leaves to callers) to throw once *it* checks a looked-up
-value's `sql_type()` against what it expected — the same "exported, not
-internally thrown" shape `crypto/digest.DigestMismatch` already uses.
-
-`fs/file` is the first module to touch real file I/O rather than pure
-in-memory vocabulary — a whole-file convenience object plus a streaming
-handle:
-
-```okkama
-import "fs/file" take File, OpenedFile, MissingFile;
-import "fs/path" take Path;
-import "encoding/utf8" take Utf8Encoded, Utf8Decoded;
-
-main() is int {
-    let file = File(Path("notes.txt"));
-    file.write_string("Hello, Okkama!");
-    file.string();     // "Hello, Okkama!"
-    file.exists();     // true
-    file.remove();
-
-    let opened = OpenedFile(Path("stream.bin"));
-    opened.write(bytes Utf8Encoded("streamed"));
-    opened.seek(0);
-    string Utf8Decoded(opened.bytes(64));  // "streamed"
-    opened.close();
-    return 0;
-}
-```
-
-`File.bytes()` reads a whole file in one native call sized exactly by
-`Meta(path).size()`, rather than looping and concatenating chunks — arrays
-have no append, so merging several would need the same
-`List<T>`-building idiom used elsewhere, and doing that byte-by-byte for
-an entire file's contents would be far too slow. A real local read
-essentially always returns the full requested size or genuine EOF, never
-an arbitrary short read, so a mismatch panics as a provider-invariant
-violation instead of silently returning truncated content.
-`OpenedFile.bytes(limit)` needs none of this: `Input`'s own contract is
-already "at most `limit` bytes, EOF means empty," exactly what one native
-read call provides directly.
-
-`OpenedFile`'s `closed()` has no native counterpart to query — a
-`FileHandle` only knows how to open/read/write/seek/flush/close, never
-"am I closed?" — so it's backed by a `runtime/memory.ByteMemoryHandle`
-sentinel, the same technique `test/fake_clock` uses for mutable state
-outside a constructor. Both the real native `close()` and the sentinel's
-own close are already idempotent, so calling `OpenedFile.close()` twice is
-harmless.
-
-`fs/dir` rounds out Phase 6's filesystem work with creation, listing,
-recursive walking and removal:
-
-```okkama
-import "fs/dir" take Dir, DirEntry, DirectoryWalk;
-import "fs/file" take File;
-import "fs/path" take Path;
-
-main() is int {
-    let dir = Dir(Path("project/nested"));
-    dir.create_all();
-    File(Path("project/a.txt")).write_string("a");
-    File(Path("project/nested/b.txt")).write_string("b");
-
-    let walked is @DirEntry = DirectoryWalk(Path("project")).entries();
-    walked.size(); // 3 — the file, the nested directory, and its file
-
-    Dir(Path("project")).remove_all();
-    return 0;
-}
-```
-
-Both `remove_all()` and `DirectoryWalk` classify every entry through
-`Meta`'s `lstat`-backed `kind()`, never `stat` — a symlink pointing at a
-directory always reports `FileKind.link`, never `FileKind.directory`, so
-it is always treated as a leaf (deleted or listed, never descended into).
-Recursion happens once per directory *nesting level* (realistically single
-digits), never once per *entry* (which can be arbitrarily large) — breadth
-at each level is handled iteratively, not recursively.
-
-Building this module surfaced a genuine, previously unknown **quadratic
-performance bug in the interpreter itself**: any `let` statement executed
-while a large persistent structure (like a growing `List<T>`) is in scope
-pays a cost proportional to that structure's current size, because the
-interpreter's ownership-tracking machinery re-walks every live variable's
-entire reachable object graph on every single `let`, without pruning
-already-accounted-for subgraphs. Over a loop, that's O(n²). It reproduces
-for `int`, `string`, and `@byte` alike (composite types cost more per
-node, but the same shape) — it is not specific to generics or to
-`collections/list`. `fs/dir.ok` routes around it by keeping loop bodies
-free of intermediate `let`s while an accumulator is in scope (confirmed
-directly: 500/1000/2000-file directory listings now cost
-3.57s/7.67s/16.6s — genuinely linear). The bug itself was root-caused to
-specific lines in `Interpreter.pm` but deliberately left unfixed here —
-patching core ownership/lifetime semantics is a different kind of change
-than shipping a stdlib module.
-
-`socket/tcp` is the first module to touch real network I/O — a client
-socket, a listener, and a DNS-driven ordered-address-attempt helper, all
-exercised in this session's tests over real loopback TCP connections:
-
-```okkama
-import "socket/tcp" take TcpSocket, TcpListener;
-import "net/address" take AddressFamily, IpAddress, SocketAddress;
-
-main() is int {
-    let listener = TcpListener(SocketAddress(IpAddress(AddressFamily.ipv4, "127.0.0.1"), 0));
-    let bound is SocketAddress = listener.address(); // the real OS-assigned port
-
-    let client = TcpSocket(SocketAddress(IpAddress(AddressFamily.ipv4, "127.0.0.1"), bound.port()));
-    client.connect();
-    let server_side = listener.socket(); // blocks until accept() returns
-
-    server_side.write([byte(72), byte(105)]);
-    client.bytes(2); // [byte(72), byte(105)]
-
-    client.close();
-    server_side.close();
-    listener.close();
-    return 0;
-}
-```
-
-Requesting port `0` means "OS, pick a free port" — `TcpListener.address()`
-queries the real bound address once at construction time rather than
-echoing back the constructor's request, so a caller can always discover
-which port was actually assigned. `TcpConnection(resolver, host)` resolves
-`host` through any `Resolver` (the real `Dns` or the injectable
-`FixedDns`) and tries each candidate address in order, moving on past a
-refused one — confirmed directly with two loopback addresses, one
-refused, one reachable. It deliberately does **not** accept a connection
-timeout: the underlying native surface has no way to make a socket
-non-blocking before `connect()`, so there's no way to bound an individual
-blocking attempt from Okkama code — a real substrate gap, documented
-rather than silently unenforced.
-
-`socket/udp` mirrors `socket/tcp`'s shape for datagrams — send to an
-explicit target, receive with genuine sender identity:
-
-```okkama
-import "socket/udp" take UdpSocket, Datagram;
-import "net/address" take AddressFamily, IpAddress, SocketAddress;
-
-main() is int {
-    let receiver = UdpSocket(SocketAddress(IpAddress(AddressFamily.ipv4, "127.0.0.1"), 0));
-    let receiver_address is SocketAddress = receiver.local();
-
-    let sender = UdpSocket(SocketAddress(IpAddress(AddressFamily.ipv4, "127.0.0.1"), 0));
-    sender.send(receiver_address, [byte(72), byte(105)]);
-
-    let received is Datagram = receiver.datagram(64);
-    received.bytes();          // [byte(72), byte(105)]
-    received.source().port();  // the real sender socket's own bound port
-
-    sender.close();
-    receiver.close();
-    return 0;
-}
-```
-
-`connect(peer)` sets the socket's OS-level default peer, but it's a
-separate, independent capability from `send()` — confirmed directly (a
-raw native-level probe, bypassing this module) that calling `connect()`
-and then explicit-target `send()` to that *same* already-connected peer
-fails with a real, platform-specific errno. A caller uses one or the
-other on a given socket, not both.
-
-`socket/unix` turned out to be entirely about honest failure: the current
-native provider has **zero** `AF_UNIX` support at all — confirmed directly
-by reading `Okkama::Runtime::Native::Core::Net` and by a real probe
-(`socket(3, 1, 0)` cleanly returns `unsupported`, not a crash):
-
-```okkama
-import "socket/unix" take UnixSocket, UnsupportedUnixSocket;
-import "fs/path" take Path;
-
-main() is int {
-    try {
-        UnixSocket(Path("/tmp/app.sock"));
-    }
-    catch error is UnsupportedUnixSocket {
-        error.text(); // "Unix-domain sockets are not supported by this native provider"
-    }
-    return 0;
-}
-```
-
-Both constructors attempt the real native call rather than refusing
-pre-emptively, so a future native provider update adding `AF_UNIX` support
-would very likely make this module work with no changes at all. Since
-both constructors always throw, no instance can ever exist — every other
-action (`connect()`, `bytes()`, `write()`, `socket()`, `path()`) still has
-a type-correct body to satisfy its role, but each one is confirmed,
-provably unreachable dead code, not an untested guess: Okkama allows a
-constructor that always throws without ever assigning its declared
-fields, verified directly before relying on that shape.
-
-`crypto/tls` closes out Phase 6: TLS policy, an encrypted client socket,
-and peer certificate inspection.
-
-```okkama
-import "crypto/tls" take
-    CertificateAuthority, ServerIdentity, TlsPolicy, PeerVerification,
-    TlsSocket, TlsFailure;
-import "net/address" take AddressFamily, IpAddress, SocketAddress;
-import "fs/path" take Path;
-
-main() is int {
-    let policy = TlsPolicy(
-        CertificateAuthority(Path("/etc/ssl/cert.pem")),
-        ServerIdentity("example.test"),
-        PeerVerification.required,
-    );
-
-    let socket = TlsSocket(
-        SocketAddress(IpAddress(AddressFamily.ipv4, "203.0.113.1"), 443),
-        policy,
-    );
-    socket.handshake();
-    socket.peer_certificate().subject();
-    socket.close();
-    return 0;
-}
-```
-
-`TlsSocket` connects its own raw TCP socket directly (via `runtime/net`)
-rather than wrapping an existing `socket/tcp.TcpSocket` — that object's
-underlying handle is intentionally never exposed publicly, matching this
-stdlib's "no raw native handle leaks out" rule everywhere else.
-`CertificateAuthority.path()` is passed straight through as a
-byte-encoded *file path* to the native TLS layer (confirmed by reading
-the native handler directly), not inline certificate content; an empty
-path falls back to the system's default CA bundle.
-`peer_certificate()` throws a typed `CertificateFailure` if called before
-`handshake()` completes. The current native TLS layer needs
-`IO::Socket::SSL`, which this development environment doesn't have
-installed — every real TLS attempt cleanly reports `TlsFailure` rather
-than crashing (confirmed directly), the same pre-existing, environment-
-only gap the native TLS test suite already lives with.
-
-`sql/dialect` covers the three points where SQL engines actually differ
-at the syntax level:
-
-```okkama
-import "sql/dialect" take Dialect, SqliteDialect, PostgresDialect, MysqlDialect;
-
-main() is int {
-    let sqlite is Dialect = SqliteDialect();
-    let postgres is Dialect = PostgresDialect();
-
-    sqlite.placeholder(1);              // "?"
-    postgres.placeholder(1);            // "$1"
-    sqlite.identifier("user name");     // "\"user name\""
-    postgres.boolean(true);             // "TRUE"
-    return 0;
-}
-```
-
-SQLite and MySQL both use a plain `?` placeholder (position is implicit);
-Postgres numbers them (`$1`, `$2`, ...). SQLite and Postgres double-quote
-identifiers; MySQL backtick-quotes them — both escape an embedded quote
-by doubling it. Postgres has a real boolean type (`TRUE`/`FALSE`); SQLite
-and MySQL don't, and render `1`/`0`. All three throw `UnsupportedSqlFeature`
-for a non-positive placeholder index — the one real, universal SQL rule
-none of them relax.
-
-`sql/statement` renders data-changing statements through any `Dialect`:
-
-```okkama
-import "sql/statement" take Statement, Insert;
-import "sql/value" take SqlValues, SqlString, SqlInt;
-import "sql/dialect" take Dialect, SqliteDialect, PostgresDialect;
-
-main() is int {
-    let insert is Statement = Insert(
-        "users",
-        ["name", "age"],
-        SqlValues([SqlString("Ada"), SqlInt(36)]),
-    );
-
-    insert.sql(SqliteDialect());
-    // INSERT INTO "users" ("name", "age") VALUES (?, ?)
-    insert.sql(PostgresDialect());
-    // INSERT INTO "users" ("name", "age") VALUES ($1, $2)
-    return 0;
-}
-```
-
-`Insert`/`Update` validate that `columns.size()` matches the bound
-`SqlValues`' count *at construction*, not at render time — a caller who
-mismatches gets `InvalidStatement` immediately. `Update`/`Delete` are
-deliberately unconditional (no `WHERE` clause): no predicate/condition
-abstraction exists anywhere in this stdlib yet (`sql/query`'s `Select`
-only ever takes the single `EveryRow` predicate value), so row-level
-filtering for data-changing statements is out of scope until one does.
-`RawStatement` is the escape hatch — it returns its stored SQL verbatim
-regardless of which `Dialect` is passed, confirmed directly.
-
-`sql/query` completes the `sql/*` namespace with row-producing `SELECT`:
-
-```okkama
-import "sql/query" take Query, Select, EveryRow, RowWindow, TableName, ColumnName;
-import "sql/dialect" take Dialect, SqliteDialect;
-
-main() is int {
-    let query is Query = Select(
-        [ColumnName("id"), ColumnName("name")],
-        TableName("users"),
-        EveryRow(),
-        RowWindow(10, 20),
-    );
-
-    query.sql(SqliteDialect());
-    // SELECT "id", "name" FROM "users" LIMIT 10 OFFSET 20
-    return 0;
-}
-```
-
-`EveryRow` is `Select`'s only concrete predicate value in this whole
-stdlib — there's no `WHERE`/condition abstraction defined anywhere yet,
-so it's a plain concrete type, not a role, matching `sql/statement`'s
-`Update`/`Delete` being unconditional for the same reason. `UnlimitedRows`
-and `RowWindow` share a small internal `Rows` role (`clause() is
-string`) so `Select` never has to branch on which one it was given — an
-`UnlimitedRows` renders no `LIMIT`/`OFFSET` suffix at all.
-
-`http/request` is an immutable HTTP request — method, URL, headers, and
-body — plus the five most common method shortcuts:
-
-```okkama
-import "http/request" take Method, Request, Get;
-import "http/headers" take Headers;
-import "net/url" take Url;
-import "io/buffer" take BufferAllocation;
-
-main() is int {
-    let request is Request = Get(
-        Url("https://example.test/search?q=ada"),
-        Headers([]),
-        buffer BufferAllocation([]),
-    );
-
-    request.method();       // Method.get
-    request.url().string(); // "https://example.test/search?q=ada"
-    return 0;
-}
-```
-
-`Get`/`Post`/`Put`/`Patch`/`Delete` each fix their own `Method` and
-delegate everything else to one internally held `HttpRequest` — the
-actual field-holding logic lives in exactly one place, not duplicated
-five times. `InvalidRequest` is exported vocabulary with no internal
-throw site in this module: neither `HttpRequest` nor any named
-constructor validates anything (any method/URL/headers/body combination
-is accepted) — it exists for a future `http/client`/`http/server` module
-to throw once it has enough context to judge a request malformed, the
-same "exported, not necessarily thrown here" shape used for
-`sql/dialect.UnsupportedSqlFeature` and `crypto/digest.DigestMismatch`.
-
-`http/response` is the other half: a streamed response plus explicit
-body materialization —
-
-```okkama
-import "http/response" take Response, HttpResponse, ResponseJson;
-import "http/status" take Ok;
-import "http/headers" take Headers;
-import "io/buffer" take BufferAllocation;
-import "encoding/utf8" take Utf8Encoded;
-import "encoding/json" take Json;
-
-main() is int {
-    let response is Response = HttpResponse(
-        status Ok(),
-        Headers([]),
-        buffer BufferAllocation(bytes Utf8Encoded("{\"ok\":true}")),
-    );
-
-    let parsed is Json = json ResponseJson(response);
-    return 0;
-}
-```
-
-Materialization is explicit (`ResponseBytes`/`ResponseString`/
-`ResponseJson`, each a `&`-projectable one-shot reader) because it may
-consume a stream and allocate a large value — draining an arbitrary
-`Input` can't reuse the same bounded-window-retry trick `fs/dir` used for
-directory listings, since a single `bytes(limit)` call can already return
-up to `limit` bytes (unlike one-entry-per-call `readdir()`) and a stream
-can't be rewound the way a directory can. `ResponseBytes` instead does
-exactly two reads — one bounded at 16 MiB (the same cap
-`runtime/tls`'s native provider already uses for `tls_read`), then one
-confirming the stream is now empty — throwing `InvalidResponseBody`
-rather than silently truncating if the body turns out to be larger.
-`ResponseString`/`ResponseJson` build on `ResponseBytes`/`ResponseString`
-by calling their marked actions as plain, ordinary methods internally
-(`&`-projection is sugar for exactly that call, never required to invoke
-it).
-
-`log/formatter` renders a `LogEvent` two ways — a human line, and a
-complete machine-readable JSON record:
-
-```okkama
-import "log/formatter" take LogFormatter, LineFormatter, JsonFormatter;
-import "log/event" take LogLevel, LogField, LogEvent;
-import "time/instant" take Instant, ClockIdentity;
-
-main() is int {
-    let event = LogEvent(
-        LogLevel.warning,
-        "retrying request",
-        [LogField("attempt", "3")],
-        Instant(0, ClockIdentity.system),
-    );
-
-    LineFormatter().format(event);
-    // [warning] retrying request attempt=3
-
-    JsonFormatter().format(event);
-    // {"level":"warning","message":"retrying request","instant":0,"fields":{"attempt":"3"}}
-    return 0;
-}
-```
-
-`LineFormatter` deliberately omits the instant (a line is for humans; most
-destinations already timestamp on their own) while `JsonFormatter`
-includes everything, since a JSON record's whole point is complete,
-machine-readable data — `fields` always renders as its own nested JSON
-object, empty rather than absent when there are none. Two fields sharing
-a name surface as `encoding/json.DuplicateJsonMember` when `JsonFormatter`
-encodes them — this module adds no duplicate check of its own, reusing
-the JSON encoder's existing one instead.
-
-The top-level `random` module builds domain-level random values without
-introducing another native boundary:
-
-```okkama
-import "random" take
-    RandomSource, Random, SeededRandom, Choice, Shuffled,
-    InvalidRandomRange;
-
-main() is int {
-    let secure is RandomSource = Random();
-    let repeatable is RandomSource = SeededRandom(42);
-
-    let roll is int = secure.int(1, 6);       // both endpoints included
-    let flag is bool = secure.bool();
-    let ratio is float = secure.float();      // 0.0 <= ratio < 1.0
-    let color is string = value Choice(
-        ["red", "green", "blue"],
-        repeatable,
-    );
-    let order is @int = values Shuffled([1, 2, 3, 4], repeatable);
-    return 0;
-}
-```
-
-`Random` implements every `RandomSource` action from secure bytes. Integer
-sampling is unbiased and inclusive across the complete signed 64-bit domain;
-it does not convert bounds through `float`. Equal endpoints need no entropy.
-`bool()` selects equally between false and true, and `float()` produces one of
-the exactly representable 53-bit fractions in `[0.0, 1.0)`.
-
-`SeededRandom(seed)` is deliberately non-cryptographic. It is a pure query
-object, not a mutable stream: the same seed, action and arguments always give
-the same value, and `bytes(4)` is the prefix of `bytes(12)`. Sequential state
-would require a future explicit successor contract. `Choice<T>` and
-`Shuffled<T>` use `Random()` by default or retain an explicit source through
-constructor overloading. Their constructors only bind state; projection does
-the selection. Empty choice and reversed ranges throw `InvalidRandomRange`,
-while singleton choice/shuffle do not query the source. Shuffling creates a
-new array and never changes the candidates.
-
-Network addresses are validated values before they reach DNS or sockets:
-
-```okkama
-import "net/address" take
-    AddressFamily, IpAddress, SocketAddress, HostPort,
-    InvalidAddress, InvalidPort;
-
-main() is int {
-    let ip = IpAddress(AddressFamily.ipv6, "0:0:0:0:0:0:0:1");
-    let local = SocketAddress(ip, 8080);
-    let upstream = HostPort("api.example.test", 443);
-
-    local.string();  // "[::1]:8080"
-    ip.bytes();      // exactly sixteen address octets
-    upstream.host(); // no DNS query has happened
-    return 0;
-}
-```
-
-These constructors only retain their arguments; they do no parsing,
-normalization, validation or native calls. The actions perform that work.
-`IpAddress.string()` is canonical. Its `bytes()` omits the native magic,
-version, family and port fields. Ports range from zero through 65535;
-`SocketAddress` brackets IPv6 to keep the port boundary unambiguous.
-`HostPort` deliberately retains an unresolved host, so name lookup policy
-stays in `net/dns`. Invalid input is reported as `InvalidAddress` or
-`InvalidPort`, never as a raw native failure. `AddressFamily.unix` is reserved
-for a future Unix-domain address object and cannot construct an `IpAddress`.
-
-URLs and DNS keep syntax, naming and transport as three separate concerns:
-
-```okkama
-import "net/address" take HostPort;
-import "net/dns" take Resolver, Dns;
-import "net/url" take Url, UrlReference, QueryParameter, QueryParameters;
-
-main() is int {
-    let url = Url("HTTPS://Example.COM:443/a/b?q=one&q=two");
-    let target = url.resolved(UrlReference("../report#latest"));
-    let resolver is Resolver = Dns();
-    let endpoints = resolver.addresses(
-        HostPort(url.authority().host(), url.authority().port())
-    );
-    let query = QueryParameters([
-        QueryParameter("name", "Ada Lovelace"),
-        QueryParameter("tag", "one"),
-        QueryParameter("tag", "two"),
-    ]);
-
-    target.string();     // "https://example.com:443/report#latest"
-    query.all("tag");    // ["one", "two"]
-    query.string();      // "name=Ada%20Lovelace&tag=one&tag=two"
-    endpoints[0].port(); // 443
-}
-```
-
-`Url`, `UrlReference`, `Authority`, `QueryParameter` and `QueryParameters`
-constructors retain source state only. Their actions perform strict parsing,
-UTF-8 percent conversion and canonical rendering. `Url` represents an
-absolute network URL with `scheme://authority`; `UrlReference` owns relative
-input. Resolution follows RFC 3986 dot-segment rules. Query parameters remain
-ordered and duplicate-preserving. A plus is a literal plus, not a form-space;
-a programmatic space renders as `%20`. Missing explicit ports raise
-`MissingUrlPort` rather than producing a sentinel integer.
-
-`Resolver` keeps name service injectable. `Dns` performs transport-neutral
-lookup and returns validated `SocketAddress` values carrying the requested
-port; it does not decide TCP versus UDP. `FixedDns` holds immutable maps for
-deterministic tests. Host resolver details are normalized to `UnresolvedHost`
-and `MissingReverseName`.
-
-`strings/parse` uses object projections, so construction and conversion are
-one expression:
-
-```okkama
-module app v1.0.0;
-
-import "strings/parse" take
-    ParsedInt, ParsedFloat, ParsedBool, ParsedByte,
-    InvalidInteger, InvalidFloat, InvalidBoolean, InvalidByte;
-
-main() is int {
-    let count is int = value ParsedInt("-42");
-    let ratio is float = value ParsedFloat("3.0");
-    let enabled is bool = value ParsedBool("true");
-    let octet is byte = value ParsedByte("255");
-
-    try {
-        value ParsedInt(" 42");
-    }
-    catch error is InvalidInteger {
-        error.source(); // the unchanged input: " 42"
-    }
-    return 0;
-}
-```
-
-The parsers accept only ASCII scalar spellings: `-?[0-9]+` for `int`,
-`-?[0-9]+\.[0-9]+` for `float`, exactly `true` or `false` for `bool`, and an
-unsigned decimal value in `0..255` for `byte`. They do not trim, recognize a
-leading `+`, use locale digits, or accept exponent/`NaN`/`Inf` float forms.
-Each failure is a typed `Error` carrying the original string.
-
-The I/O roles follow the Elegant Objects naming rule: a query names the value
-it returns, while a command uses a verb and exposes no infrastructure result.
-Lifecycle ownership is independent from transport:
-
-```okkama
-module app v1.0.0;
-
-import "io/input" take StringInput, EndOfInput;
-import "io/output" take StringOutput;
-
-object CopyOneLine {
-    has source is StringInput;
-    has target is StringOutput;
-
-    CopyOneLine(:source, :target);
-
-    copy() is void {
-        try {
-            target.writeln(source.line());
-            target.flush();
-        }
-        catch error is EndOfInput {
-            target.flush();
-        }
-    }
-}
-```
-
-`Input.bytes(limit)` requires a positive byte maximum; an empty result means
-EOF. `StringInput.line()` distinguishes EOF from an empty line by throwing
-`EndOfInput`. `Output.write(bytes)`, `StringOutput.write(values...)`,
-`writeln(values...)`, `writef(pattern, values...)`, and `flush()` are
-commands declared `is void`; invoke them separately. `writef` emits no implicit newline. They do not return
-native write counts. A partial failure is `IncompleteWrite`, whose noun
-`written()` reports the accepted prefix. Owned files, sockets and pipes may
-also implement `Closeable`; borrowed standard streams do not. Every role has
-a deterministic fake, and `Closeable.fake()` uses identity-local
-`fake.storage` for an idempotent lifecycle.
-
-Memory buffers are acquired explicitly from state-only descriptions:
-
-```okkama
-module app v1.0.0;
-
-import "io/buffer" take StringBuffer, StringBufferAllocation;
-
-main() is int {
-    let buffer is StringBuffer = buffer StringBufferAllocation("first\nsecond");
-    buffer.line();        // "first"
-    buffer.writeln("!", 3);
-    buffer.string();      // "second!3\n"
-    return 0;
-}
-```
-
-`Buffer` consumes unread bytes through `bytes(limit)` while its zero-argument
-`bytes()` is a snapshot. `StringBuffer.line()` returns the final unterminated
-tail once and then throws `EndOfInput`. `BufferedInput` prefetches only into an
-empty private cache; `BufferedOutput` drains at its capacity and on
-`flush()`/`close()`. Decorators own that cache, not the wrapped source or
-target. A partial output failure retains the exact unwritten suffix for retry.
-
-Concrete standard streams are ordinary objects:
-
-```okkama
-module app v1.0.0;
-
-import "io/input" take EndOfInput;
-import "io/stdin" take Stdin;
-import "io/stdout" take Stdout;
-import "io/stderr" take Stderr;
-
-main() is int {
-    Stdout().write("name: ");
-    try {
-        Stdout().writeln("hello, ", Stdin().line());
-    }
-    catch error is EndOfInput {
-        Stderr().writeln(error.text());
-    }
-    return 0;
-}
-```
-
-`Stdin.line()` strictly decodes UTF-8 and removes one LF, CRLF, or CR ending.
-`StdinBytes.bytes(limit)` exposes raw octets. `StdoutBytes` and `StderrBytes`
-write raw octets; formatted `Stdout` and `Stderr` concatenate display forms,
-encode UTF-8, and keep the native counters private to `runtime/stdio`.
+### 26.5 The standard library
+
+The library is the root `std/` tree. In 0.5.4 it was reviewed module by
+module (#352) against the [std principles](std-principles.md): objects are
+mechanisms, not records; an object answers in the form people use; APIs are
+flat; sequences are walked with `for`; and a computation names its answer.
+Each area is described below. The guides for std's domains are in okkama-docs
+(`docs/std/`), and its migration guide (`docs/std/stdlib-v4-migration.md`)
+lists the removed APIs.
+
+`json` is one immutable `Json` for a value, parsed by `ParsedJson(text).root()`
+or built from `JsonField`s. Strict readers (`int("id")`, `get("customer")`)
+throw; `maybe(name)` reads an absent or null member as a fallback
+(`body.maybe("age").int() else 18`), and `presence(name)` tells absent from
+null. Objects are walked by name, `for doc.names() -> name { doc.get(name) }`, and joined with `merged`. Everything
+that goes wrong is one `JsonError`, whose reading cases carry the RFC 6901
+pointer of the value: `catch JsonError.missing(pointer)`. The guide is
+`docs/std/json.md` in okkama-docs.
+
+`fs/file` makes a file a resource read through two symmetric views; the first
+one used picks the mode. `File(path: Path("notes.txt"))` opens for reading;
+`for file.text() -> line` walks the lines in batches, `lines()` and
+`content()` give the rest at once, and `writeln`, `write` and `rewrite`
+write. `file.binary()` gives bytes: `for`, `byte()`, `bytes(n)`, `bytes()`,
+`seek`, `truncate`. `file.lock(FileLockMode.exclusive)` is a `Maybe` — a lock
+in the way is `Maybe.none` — and `file.locked(mode)` tells what holds the
+file. Every fs failure is one `FileError` from `fs/error`; `FileEntry` (a
+path on disk) lives in `fs/entry`. `examples/fs/file/` shows each task as a
+program.
+
+The rest of `fs` names a path and acts on it. `Path` is lexical and never
+touches the disk: `Path("var").child("log")`, `parent()`, `absolute()`, and
+`Path("etc", "app", "config.toml")` to join parts. The host's grammar is
+part of its value (`path::Grammar::style`). A foreign one is named
+explicitly, as in `Path("C:\\x", PathStyle.windows)`. A root is its own
+parent, and the paths it makes are tidy: `.` and repeated separators go
+away, and `..` stays. `FileEntry(path:)` answers `existence()`, `stat()`,
+`move(to)` and `remove()`. A stat shows `stat::Shape::kind` and `::size`,
+and its `mode()` and `times()` answer objects. `Directory(path:)` creates,
+removes and moves one level. `DirectoryEntries(origin:)` walks one level
+sorted by name, `Descendants(origin:)` walks a tree in preorder, and
+`DirectoryTree(origin:).remove()` deletes one. A directory symlink is a
+leaf: it is listed but never entered. `MatchingPaths(root:, pattern:)`
+globs (`*`, `?`, classes, `**`). `SymbolicLink(path:)` and
+`HardLink(source:, destination:)` are commands. `TemporaryFile` and
+`TemporaryDirectory` delete themselves on `close()`. `FileWatch(path:)`
+answers `await watch.event()` with a `FileEvent`, whose kind is in
+`event::Change::kind`. `examples/fs/directory/` shows each task as a
+program.
+
+`os` runs programs and reads the system without a shell. `Command(program:,
+environment:, directory:, arguments: = [])` keeps an explicit context, while
+`InheritedCommand(program:, arguments: = [])` takes the process's own. Each
+argument reaches the program as one exact string. `await
+CommandCapture(origin:, limit:).completion()` collects the output: the text
+of `done::Captured::output` and `::errors` (UTF-8), the exact bytes of
+`done::Bytes::output` and `::errors`, and `done.exit()`, which answers
+`success()`, `code()` and `exit::Status::kind`. `text:` or `input:` gives it
+standard input. `PipelineCapture(commands:, …)` chains commands.
+`Process(command:)` talks to a running program: `process.input().write("…")`,
+`process.output().text(limit:)`, `errors()` and `signal()`.
+`Environment()` is a snapshot, and `Environment(values:)` an isolated one.
+Both answer `variable(name)`, `home()`, `addition()` and `difference()`;
+`SearchPath(environment:)` walks PATH. `Platform()`, `Host()`, `User()`,
+`Group(name:)`, `WorkingDirectory()` and `Storage(path:).usage()` answer
+when asked. `examples/os/` shows each task as a program.
+
+`toml` reads TOML 1.0. `ParsedToml(text).root()` is the document's
+`TomlTable`, and `InvalidToml.located(offset, line, column, message)` names
+what is wrong. A table answers `membership(name)` and `value(name)`, and a
+value is read through a `TomlVisitor`: `text`, `integer`, `real`,
+`boolean`, `elements`, `members` and the four date and time kinds. Those
+keep what was written: `date::Calendar::year`, `time::Clock::second` (60
+stays 60) and `offset::Offset::known` (`-00:00` is not UTC).
+`examples/toml/` shows a whole document walked.
+
+`plist` reads and writes Apple property lists, XML or binary.
+`ParsedPlist(bytes).root()` is the root `PlistValue`, whose `kind()` tells
+which value it is: `PlistString(…).string()`, `PlistInteger.integer()`
+(a `BigInt`), `PlistReal.float()`, `PlistBoolean.bool()`, `PlistData.bytes()`,
+`PlistDate.instant()`, `PlistUid.number()`, `PlistArray.values()` and
+`PlistDictionary.value(name)`. `EncodedPlist(origin:, format:).bytes()`
+writes one.
+
+`xml` builds XML 1.0 and writes it; it does not parse.
+`XmlElement(name: XmlName(…), attributes: […], children: […])` takes
+`XmlText`, `XmlComment`, `XmlProcessingInstruction` and other elements.
+`XmlName(namespace:, local:, prefix:)` binds a namespace. A node refuses bad
+names and characters when made, and an element writes itself on the first
+`xml()`. `XmlDocument(root).xml()` adds the declaration. `html/events` reads
+HTML as a stream of events (`for HtmlEvents(origin: page) -> event`), and
+`event.dispatch(handler)` sends each to its `handle`. Text, comments and
+declarations answer `text()`. `EscapedHtml` and `UnescapedHtml` cover the
+character references.
+
+`csv` reads and writes RFC 4180 text. `for CsvRows(text) -> row` walks the
+rows (`@string`), checking the whole document on each walk.
+`CsvString(rows).string()` writes rows back, and `CsvRecord(fields:)`
+writes one. `CsvDialect(";", "'", "\n")` changes the separator, the quote
+and the line ending. `CsvStream(reading).row()` reads one row at a time from
+a byte source, until `EndOfCsv`. Every limit (input, field, rows, columns,
+output) is a named argument, and `InvalidCsv.at(offset)` names the first
+bad character. `examples/csv/` shows each task.
+
+`archive` builds and reads TAR in memory. An entry is a value:
+`ArchiveFile(path:, metadata:, data:)`, `ArchiveDirectory`, links and
+devices. `TarArchive(entries).bytes()` writes, and `TarWriting(sink)`
+streams. `ParsedTar(origin:, limits: ArchiveLimits(entries:, entry_size:,
+total_size:, path_length:)).entries()` reads within limits, which show
+through `limits::Limits`. `ArchivePath` refuses `..`, absolute and other
+unsafe paths. `compression` wraps a `Compressing` or `Decompressing` codec as
+a reading stream: `CompressedReading(origin:, compressor:)`.
+`examples/archive/` shows a round trip.
+
+`statistics` describes floats. `Sample(values:)` answers `mean()`,
+`median()`, `median_low()`, `median_high()`, `geometric_mean()`,
+`harmonic_mean()`, `variance()` and `deviation()` (n − 1), and
+`quantiles(4)` or `quantiles(count:, method: QuantileMethod.inclusive)`.
+`Population(values:)` answers `variance()` and `deviation()` divided by n.
+`Pairs(left:, right:)` answers `covariance()`, `correlation()` and `line()`,
+a `FittedLine` with `prediction(at:)` and `fit::Line::slope`. `Modes(values:)`
+lists the most frequent values in first-seen order. Too few values throw
+`StatisticsError`. `examples/statistics/` shows each.
+
+`diff` compares two sequences of lines once. `Diff(left:, right:)` answers
+`unified()` or `unified(context)`, `contextual()` (the older context format),
+`ratio()` (0.0 to 1.0, as difflib computes it) and `edits()`. Each edit
+shows `edit::Line::kind` (equal, removed or added), `::text`, and its index
+on each side. `examples/diff/` shows each.
+
+`uuid` makes UUIDs, and each maker is a `Uuid` that answers `string()`,
+`bytes()`, `version()`, `variant()` and `order()`. `UuidText(origin:)`
+reads canonical text strictly, and `UuidBytes(origin:)` reads sixteen bytes.
+`Uuid3`/`Uuid5(namespace:, name:)` hash a name, `Uuid8(high:, middle:,
+low:)` packs custom bits, and `Uuid4s(random:).sample()` draws a random one.
+Compare two UUIDs by `bytes()` or `order()`. `examples/uuid/` shows each.
+
+`calendar` lays out Gregorian months. `YearMonth(year:, month:)` shows
+`month::Calendar::year` and `::month`. `MonthDates(origin:)` walks the month's
+dates, and `CalendarMonth(origin:, first_weekday:)` walks whole seven-day rows
+for a wall calendar. `IsoWeek(year:, week:)` refuses a week its year does not
+have, shows `week::Calendar::week`, and answers `first()` and `last()`.
+`Year(2028).leap()` tells a leap year. `examples/calendar/` prints a month.
+
+`cli` declares a command line and reads it.
+`CliCommand(name:, summary:, options: [Option(name: "name", short: "n", value:
+"NAME", help: "…")], flags: [Flag(name: "help", short: "h")], operands:
+[Operand(name: "FILE", count: OperandCount.repeated)], commands: [ … ])` is
+data, with no callbacks. `command.invocation(ProcessArguments().strings())`
+reads the arguments, and a bad one throws `CliFailure.detailed(index, token,
+message)`. The `Invocation` answers by name:
+- `call.text("name") else "world"` (absent is `Maybe.none`);
+- `call.int("count")`, `float` and `bool`, where a malformed value throws a
+  `CliFailure` that names the option;
+- `call.texts("tag")`, `call.flag("help")` and `call.operands()`;
+- `call.command()`, the selected subcommand, compared as the declared
+  object: `if call.command() == add`.
+
+`command.usage(program:)` and `command.completion(program:, shell:)` write
+the help text and bash/zsh/fish completion. `call.settings()` layers the
+command line over configuration. `examples/cli/` shows a tool with
+subcommands.
+
+`digest` and `crypto` work on bytes, through the host's vetted
+implementations.
+- A digest is a running state: `Sha256(bytes).bytes()`, or
+  `Sha256().state(part).state(part)`, which continues without changing the
+  original. SHA-2, SHA-3, SHAKE, BLAKE2, MD5 and SHA-1 are there.
+- Keys live in `SecretBytes`, which compares itself in constant time:
+  `stored.matches(supplied)`. Entropy, nonces and trust are explicit values.
+- `Hmac(hash:, key:, origin:)` answers `bytes()` and `matches(signature)`,
+  in constant time.
+- `PasswordHash(password:, policy: Argon2Policy(), entropy:)` stores a
+  password, and `PasswordCheck(stored:, password:).matches()` checks it.
+- An AEAD such as `ChaCha20Poly1305(key)` answers `sealed(nonce, header,
+  text)` and `opened(…)`. The latter throws `AuthenticationFailed` on any
+  change.
+- `ParsedCertificate(der).certificate()` reads X.509, and the trust module
+  verifies chains.
+
+`examples/digest/` and `examples/crypto/` show each task.
+
+`net` keeps addresses, names and transport apart. `IpAddress(text)` parses
+strictly and classifies (`properties()`). `IpNetwork(address:, prefix:)`
+tests membership. `IpEndpoint(address:, port:)` shows `::Parts::port`.
+`FixedResolution`/`SystemResolution` resolve names. TCP and UDP sockets are
+async:
+- `await TcpListening(port: 0).listener()` listens, on loopback unless
+  `address:` is given, and `listener::Local::port` is the port it got;
+- `await TcpConnecting(host: "example.com", port: 443).connection()` resolves
+  the name and races its addresses (RFC 8305), and
+  `TcpConnecting(address:, port:, no_delay:)` connects to one address;
+- `UdpBinding(port:, broadcast:).socket()` binds a UDP socket;
+- `input()`/`output()` stream bytes.
+
+TLS connections show the agreed `details()::Session::protocol`.
+`examples/net/` has an address tour and a loopback echo.
+
+`logging` sends records through writers. `NamedLogging(name: "shop",
+destination: logs)` logs with `log(LogLevel.info, "started")`. Its clock is
+the system's unless `clock:` is given, and `fields:` adds fields to every
+record. A call adds fields and a cause, and `child("db")` makes a child. A record
+shows `record::Entry::level` and `::message`. Writers compose:
+- `AllowedLogs(origin:, level: LogLevel.info, overrides: ["shop.db":
+  LogLevel.debug])` filters by level per dotted name;
+- `RedactedLogs(origin:, names: ["card"])` writes those fields as
+  `"[redacted]"`;
+- `TextStreamLogs(origin:)` (UTC unless `zone:`) and `JsonStreamLogs` write lines, and `BroadcastLogs`,
+  `FallbackLogs`, `CollectedLogs` fan out, fall back and keep records;
+- `QueuedLogs`, `LogFile`, `RotatingLogFile` and `SyslogLogs` queue, append,
+  rotate and send RFC 5424 datagrams.
+
+`config` layers settings. `Settings`, `IniSettings`, `JsonSettings`,
+`TomlSettings`, `EnvironmentSettings` and `call.settings()` from `cli` are
+layers. `LayeredSettings(defaults, file, environment, line)` lets a later
+layer win key by key. Values are read by their dotted name:
+`settings.int("server.port") else 8080`, `text`, `float` and `bool` answer a
+`Maybe`, `texts("cors.origins")` a list, and `source(name)` where the value came
+from. A value that is there but malformed throws `MalformedSetting` naming the
+key.
+
+`template` fills text. `TextTemplate("Hello, {{user.name}}").string(["user.name":
+"Ada"])` takes texts by dotted path. `TemplateLibrary(["item": TextTemplate(…)])`
+names templates. `SectionTemplate(source:, partials:)` walks JSON with `{{#list}}`, `{{^list}}`
+and `{{>partial}}`. `HtmlTemplate` escapes each value for where it lands and
+refuses event attributes.
+
+`terminal` decides how many colors a terminal shows, from what it reports,
+`NO_COLOR`, `TERM`, `COLORTERM` and a `ColorPolicy`. It shows the answer as
+`capabilities::Support::colors`. `StyledText(origin:, style:)` renders for
+that depth, and `DisplayWidth(text).columns()` measures text.
+
+`db` talks to SQLite and PostgreSQL through one set of roles. `await
+SqliteMemory().connection()` opens a database. `await db.execution(sql,
+[DbInteger(7), DbText("Ada")])` runs SQL with bound values, and `db.query(sql, values)` answers
+`one()`, `maybe()` or `all(limit)`; transactions do the same.
+`row.int("id")` and `row.maybe("body").text()` read by column name, and
+`Query(origin:, statement:).rows()` streams. `prepared()`, `transaction()`
+with `TransactionOptions::Mode`, blobs, scripts and an online backup
+(`SqliteBackup(…).report()`) complete it, and `DbPool` shares connections.
+
+`locale` and `i18n` write values the way a language expects, from CLDR data.
+- `LookedUpLocale(requested:, available:, fallback:).locale()` picks the
+  locale.
+- `LocalizedDecimal`, `LocalizedCurrency`, `LocalizedDate` and
+  `LocalizedList` write numbers, money, dates and lists, and
+  `LocalizedDecimalFromString` reads a number back.
+- `PluralCategoryOf` picks the plural category. `MessageCatalog` answers
+  messages by `MessageKey(context:, identity:)`, with plural forms, and
+  `ParsedPo` reads gettext files.
+
+`examples/logging/`, `config/`, `template/`, `terminal/`, `db/`, `locale/` and
+`i18n/` show each area.
+
+`http/client` sends requests with `HttpClient()`. By default it uses the system's DNS and trusted roots, reaches public endpoints only and speaks HTTP/1.1. Every other part is a named argument: `endpoints`, `protocols`, `timeouts`, `redirects: Redirects(limit: 5)` and `cookies: MemoryCookieJar()`. Every REST method has a shortcut: `get(url)`, `head`, `options`, `delete`, and `post(url:, body:)`, `put`, `patch` with a `Content` such as `JsonBody(json)`. Anything else is `client.response(Request(url:, method:, headers:, body:))`. A reply shows its head through the cap `Head` (`page::Head::status`, `::class`, `::headers`) and reads its body with `await page.text()`, `bytes()`, `json()` or `reading()`. `Status` and `Method` are enums: `Status.ok`, `Status.not_found`, `Status.other(299)`, `Method.put`. `StatusCode` and `MethodName` turn them into wire numbers and tokens and back. `examples/http/client/` shows each task as a program.
+
+`http/server` serves HTTP/1.1, or HTTP/2 by prior knowledge, on a listener.
+A `Handling` object answers `handling(request, context)` with
+`ResponseHandling(Response(status:, content: TextBody(text: "hi")))`, which
+sets the body and its Content-Type, or with
+`WebSocketHandlingResult(origin: WebSocketUpgrade(…), application:)` to switch
+to WebSocket. `HttpServer(listener:, handling:, tls: TlsServerPolicy(identity: TlsIdentity(certificates:, key:)))`
+speaks HTTPS, offering h2 and HTTP/1.1 by ALPN as its policy allows.
+`HttpServer(listener:, handling:)` serves with `serve()` under
+`ServerPolicy()` and the system clock unless `policy:` and `clock:` are given,
+and `await server.drain(limit:)` stops accepting, lets requests in flight
+finish and closes. A WebSocket server also takes `url:`, its own URL, to check
+the `Origin` against. Over HTTP/1.1 and HTTP/2 alike, a handler reads
+`request::Head::target.path()` and `query()`.
+
+`web` puts routes on top: `WebRoutes(Scope("/api", Get(path: "/notes/:id",
+endpoint: notes.one), Post(…)), Fallback(notes.missing))`. Without a
+`Fallback`, a request no route matches gets a 404 problem. An endpoint gets a
+`WebRequest` whose values read in the json style, a missing or malformed
+one being a 400 that names it: `request.path().int("id")`,
+`request.query().maybe("page").int() else 1`,
+`request.header().maybe("X-Request-Id").text() else ""`,
+`request.cookies().text("sid")`; the body is `await json(limit)` or
+`await text(limit)`. It answers
+anything `Responding`: a reply with defaults, `TextReply("hi")`, `HtmlReply(…)`,
+`JsonReply(value)`, `CreatedReply(location:, value:)`, `RedirectReply("/notes")`,
+`NoContentReply()`, `BytesReply(bytes:, media_type:)`, `StreamReply(body:, media_type:)`,
+`EventsReply(channel.receiving())` for server-sent events or
+`ProblemReply(status:, detail:)`, each taking `status:`
+and `headers:` for what differs, or a `Response` built in full. Headers are
+fields one by one: `Headers(Header(name: "Cache-Control", value: "no-store"),
+SetCookie(name: "sid", value: token), ExpiredCookie("old"))`, where a
+`SetCookie` defaults to Path=/, Secure, HttpOnly and SameSite=Lax.
+`Files(path: "/assets", root:, cache:, tags:)` serves files under a path and
+`FileReply(request:, root:, path:)` one file from an endpoint, both with ranges
+and validators. `WebSocket(path:, application:)` routes a WebSocket, whose application walks
+the connection with `for await connection -> message` and answers with
+`send_text`, `send_bytes` or `send_json`.
+`Resource("/notes", Get(notes.list), Post(notes.add))` writes a path once for
+several methods; `Route(method: Method.options, path:, endpoint:)` routes any
+one method and `Any(path:, endpoint:)` every method. A route takes `name:`,
+and an endpoint builds its path with `request.link(name, RouteParameter(name:,
+value:))`; `/notes/` is redirected to a declared `/notes`. When patterns overlap,
+the most specific wins: `/notes/new` before `/notes/:id` before `/notes/*rest`.
+`Around(AccessLog(Stdout()))` or `Around(BearerAuth(token: secret))` in a table,
+a `Scope` or a `Resource` wraps its routes (`web/around`); an application's own
+around-handler does `Surrounding`.
+`Around(Compression())` gzips text and JSON replies for clients that accept it,
+and `HttpClient` asks for gzip and decodes it by itself. `web/session` keeps sessions: `Sessions(key:, store: MemorySessions())`,
+`await sessions.started(SessionValue(name:, value:))` and its `cookie()`,
+`await sessions.session(request)` (401 without one), and
+`Around(CsrfProtection(sessions))` for the token of `session.csrf()`.
+`WebApplication(routes).listen(address, port)` serves it, and with
+`tls: TlsIdentity(certificates:, key:)` it serves HTTPS with HTTP/2 and
+HTTP/1.1 by ALPN. On SIGTERM or SIGINT it stops accepting, gives the
+requests in flight 10 seconds and returns; a second signal ends the
+process at once. In tests
+`await WebTestClient(routes).get("/notes/7")` sends a request through the
+routes without a network and answers the `ClientResponse` a real client gets.
+
+`Caching(origin: client, cache: MemoryHttpCache(clock:, maximum:), clock:)`
+answers fresh responses from memory, and `Proxied(proxy: ProxyPolicy(…), …)`
+sends requests through a forward proxy. Both are `Exchanging`, like
+`HttpClient`. `WebSocketConnecting(url:, …).connection()` opens a WebSocket
+client, and `mime` parses and renders media types, multipart bodies and
+encoded words. `examples/web/` and `examples/http/websocket/` show a JSON
+service and a WebSocket echo.
+
+`mail` composes, stores and reads e-mail. `MailMessage(from:, to: […],
+subject:, text:)` adds the Date, a fresh Message-ID and the Content-Type, and
+renders RFC 5322 bytes with `bytes()`. `ParsedMail(bytes).message()` reads them
+back. `Maildir(path).created()` and `Mbox(path)` keep messages on disk.
+SMTP has its wire pieces (`PreparedSmtpData`, `SmtpReply`,
+`SmtpCapabilities`) but no client yet. `ImapSession` selects mailboxes and
+searches with `UnseenMail()`, `SinceMail(date)`, `AndMail` and `OrMail`. A
+selected mailbox answers `await box.copied(uids, to:)`, `moved` and
+`expunged`, the session answers `created`, `renamed`, `deleted` and
+`appended`, and `MailboxEvents` follows changes. `PopSession().mailbox()`
+downloads. `examples/mail/` composes a message and keeps it in a Maildir.
+
+`strings/parse` reads text as the type asked for: `Number("42").int()`,
+`Number("ff").int(16)`, `Number("6/8").rat()`, `Number("3.0").float()`,
+`Number("255").byte()` and `Truth("true").bool()`. Nothing is trimmed and a
+leading `+` is refused; each failure (`InvalidInteger`, …) carries the exact
+text.
+
+`encoding` crosses between bytes and text explicitly.
+`Utf8Encoded(origin: text).bytes()` and `Utf8Decoded(origin: bytes).string()`
+convert UTF-8; UTF-16 and UTF-32 take a `ByteOrder`. Base64 (standard or
+URL-safe), Base32, Base85, hex, quoted-printable, ASCII and Latin-1 follow the
+same `…Encoded`/`…Decoded` shape. Decoders are strict and name the offset of
+the first error: `catch InvalidBase64.at(offset)`. `Binary(bytes:, order:)`
+reads `.int(signedness)` or `.float(width)`, and `IntegerBytes` and
+`FloatBytes` write; host byte order is never used.
+
+`collections` are persistent: a change returns a new value. A `Deque` reads
+and changes its own ends (`first()`, `last()`, `prefix(x)`, `suffix(x)`,
+`tail()`, `body()`), and a set answers `membership(x)`. `Sorted(xs)` and
+`SortedBy(origin:, key:)` order stably; `LowerBound`, `UpperBound` and
+`PositionOf` answer `index()`. Views (`Mapped`, `Filtered`, `Taken`,
+`Chunked`, `Pairwise`, `Reversed`, `Sliced`, …) are lazy and walked with
+`for`, and `Reduced(…).total()` folds.
+
+`math`, `numbers` and `checksum`: `PI`, `TAU` and `E` are module constants;
+`Extremes(xs).minimum()`, `Numbers(xs).sum()` and
+`Vectors(left:, right:).dot()` aggregate. A `BigRational` computes with
+`a.plus(b)`, `a.minus(b)`, `a.times(b)` and `a.divided(b)`, and
+`ShortestFloat(x).decimal()` is the shortest decimal that reads back as the
+same float. `Crc32(bytes).checksum()`, `Adler32` and `Crc16Ccitt` checksum.
+
+`time` keeps durations, instants, dates and zones apart. `Duration(seconds:
+90)` and `Duration(milliseconds: 250)` take whole amounts, and `Duration(value:,
+unit:)` any rational one; arithmetic is exact (`d.times(f)`). A date counts
+its own days: `date.shifted(days)`, `release.days_until(deadline)`,
+`date.day_number()` and `Date(day_number: n)`. Values write themselves:
+`date.string()` and `local.string()` in ISO 8601, `instant.string()` in RFC
+3339 UTC. Readers answer with what they read, and each formatter reads its own
+text back: `IsoText(t).date()`, `Rfc3339(t).instant()`,
+`FormattedDate(text:, pattern:).date()`. `Zone("Europe/Berlin")` uses the
+bundled tzdata. `berlin.instant(local)` resolves a local time: a gap throws
+`MissingLocalTime`, and a repeated hour takes the earlier instant unless
+`fold: Fold.later` asks for the other. `ZonedDateTime(instant:, zone:)` shows
+an instant there: `local_datetime()`, `offset()`, `abbreviation()`. The guide
+is `docs/time-guide.md` in okkama-docs.
+
+`async` composes futures: `await Within(origin:, limit:, clock:).outcome()`
+and `Before(…)` bound one by time and throw `TimedOut`;
+`AllFutures(origins:).results()`, `Raced(origins:).winner()`,
+`FirstSuccessful(origins:).outcome()` and `FutureCompletions` combine several;
+`FutureGroup` and `FutureScope(action:).outcome()` keep children inside one
+lifetime. Channels, events, locks, semaphores, barriers and cancellation are
+the other `async/*` modules.
+
+`random` has one capability, `Randomizing`: `SecureRandom()` reads the
+operating system's entropy, and `PcgRandom(seed)` is reproducible, with its
+PCG32 sequence part of the contract. Distributions take the source by name and
+answer `sample()`: `UniformIntegers(random:, start:, stop:)`,
+`NormalDistribution`, `Choices`, `Samples`, `PermutationSamples`, …
+Integer ranges are half-open.
+
+`regex` is a portable dialect without backreferences or lookaround:
+`FirstRegexMatch(origin: text, regex: Regex("\\d+")).text()`,
+`for RegexMatches(origin: text, regex: pattern) -> found`, `RegexParts` to split, and
+`RegexSubstitution` with `ExpandedRegexReplacement("${last}, ${first}")` to
+replace. Offsets count Unicode scalars.
+
+`io`, `text` and `unicode`: `Stdout().writeln(…)`, `Stdin().line()` and
+`for Stdin() -> line` (#221);
+`Indented`, `Dedented`, `Wrapped` and `Shortened` lay out text;
+`Normalized(origin:, form:)` and `UnicodeCharacter(c).name()` follow
+Unicode 16.0.0.
 
 ### URL and cookie policy in the active v4 stdlib
 
-Active v4 uses `url/value`, superseding historical `net/url` examples above.
-ParsedUrl(source).value() and ParsedUrlReference(source).value() defer parsing;
-Url(parts)/UrlReference(parts) accept validated coordinates. base.url(reference)
-resolves RFC 3986 references. Typed authority distinguishes DNS/IP/IPvFuture,
-empty hosts and absent/empty ports and userinfo. Query and fragment preserve
-absence separately from explicit emptiness. There is no DNS or transport I/O.
+The current std uses `url/value`, superseding the historical `net/url`
+examples above. `ParsedUrl(source).parts()` parses a URL or a relative
+reference into one `UrlParts`, whose cap `Parts` holds `scheme`, `userinfo`,
+`host`, `port`, `path`, `query` and `fragment`. Optional parts are `Maybe`,
+so an absent query is told apart from an empty one. `parts.absolute()` tells
+whether it has a scheme, and `base.resolved(reference)` resolves by RFC 3986.
+`host_kind()`, `host_name()` and `host_address()` read the host as DNS, IP or
+IPvFuture, and `ParsedQuery(text).parameters()` reads a query. There is no
+DNS or transport I/O.
 HostName uses bounded UTS46/IDNA; PublicSuffixList represents pinned ICANN+PRIVATE
-policy. [Current URL contract](std/url-value.md),
-[executable example](../examples/std-v4/url-resolution.ok).
+policy. Current URL contract (okkama-docs `docs/std/url-value.md`),
+executable example (okkama-docs `examples/std-v4/url-resolution.ok`).
 
 Cookie values remain immutable. CookieExpiry() means session, never an epoch
 sentinel. Cookie/Attributes validate grammar, prefixes and Secure/SameSite/
@@ -5463,9 +4110,9 @@ import "time/clock" take SystemClock;
 import "io/stdout" take Stdout;
 main() is int {
     let jar=MemoryCookieJar(SystemClock());defer jar.close();
-    let origin=ParsedUrl("https://example.com/a/b").value();
-    let context=CookieContext(origin,true,Method("GET"));
-    jar.store(origin,Headers([Header(HeaderName("Set-Cookie"),"session=opaque; Secure; HttpOnly; SameSite=Lax; Path=/")]),context);
+    let origin=ParsedUrl("https://example.com/a/b").parts();
+    let context=CookieContext(site: origin,top_level: true,method: Method.get);
+    jar.store(origin,Headers(Header(name: HeaderName("Set-Cookie"),value: "session=opaque; Secure; HttpOnly; SameSite=Lax; Path=/")),context);
     let cookies=jar.cookies(origin,context);confirm cookies.size()==1;
     Stdout().writeln(cookies.item(0).diagnostic());
     0;
@@ -5481,8 +4128,8 @@ LoadedCookieJar(file,clock).result() perform explicit filesystem effects: a
 versioned private snapshot, exact deadlines/partition keys and session exclusion.
 The file is a distinct protocol boundary, without arbitrary private-field reflection.
 
-[Cookie contract](std/http-cookie.md),
-[persistence example](../examples/std-v4/http-cookie-persistence.ok).
+Cookie contract (okkama-docs `docs/std/http-cookie.md`),
+persistence example (okkama-docs `examples/std-v4/http-cookie-persistence.ok`).
 Full HTTP transport/client/server remains subsequent roadmap work; these examples
 verify policy/storage and do not perform a network request.
 
@@ -5490,15 +4137,15 @@ HTTP/1 heads can now be read asynchronously with
 `Http1ResponseHeadReading(stream).result()`. The result retains typed head(),
 exact binary remainder() and consumed() count. The session owns the borrowed
 stream; cancellation drains child Future cleanup. See the
-[contract](std/http1-framing.md) and [example](../examples/std-v4/http1-reading.ok).
+contract (okkama-docs `docs/std/http1-framing.md`) and example (okkama-docs `examples/std-v4/http1-reading.ok`).
 
 
 `Http1BodyReading(source, owner, plan, prefix, headers)` consumes the typed framing
 plan and adopts an explicit Closing owner. Fixed/chunked/close-delimited payload
 is bounded; trailers require clean EOF. `Http1IncomingBody(reader)` supplies the
 one-shot BodyOpening role. The owner closes on EOF or abort; pool reuse requires
-a separate lease. See [contract](std/http1-body-reading.md) and
-[stream example](../examples/std-v4/http1-body.ok).
+a separate lease. See contract (okkama-docs `docs/std/http1-body-reading.md`) and
+stream example (okkama-docs `examples/std-v4/http1-body.ok`).
 
 
 `Http1RequestWriting(output, request).result()` and
@@ -5506,71 +4153,71 @@ a separate lease. See [contract](std/http1-body-reading.md) and
 messages. Known body contradictions fail before any head byte. Constructors
 leave body roles unobserved; started futures own opened-reader/sink cleanup.
 These operate on supplied streams; network connection and pooling are separate.
-[Contract](std/http1-message-writing.md),
-[example](../examples/std-v4/http1-message-writing.ok).
+Contract (okkama-docs `docs/std/http1-message-writing.md`),
+example (okkama-docs `examples/std-v4/http1-message-writing.ok`).
 
 
-`TcpListening(IpEndpoint(..., 0)).acceptance()` acquires a listener with an actual
-OS-selected port. `TcpConnecting(listener.local_endpoint()).connection()` acquires
-a numeric connection without DNS. The Closing owner exposes async input/output;
+`TcpListening(port: 0).listener()` acquires a listener with an actual
+OS-selected port. `TcpConnecting(address: IpAddress("127.0.0.1"), port:
+listener::Local::port).connection()` acquires a numeric connection without DNS. The Closing owner exposes async input/output;
 closing output drains started writes and shuts down only that direction. Reads
 may be short: accumulate the logical payload rather than expecting packet-sized
-reads. [Ownership contract](std/tcp-stream.md),
-[loopback example](../examples/std-v4/tcp-stream.ok).
+reads. Ownership contract (okkama-docs `docs/std/tcp-stream.md`),
+loopback example (okkama-docs `examples/std-v4/tcp-stream.ok`).
 
 `Resolving` separates name lookup from numeric connection. `FixedResolution`
 snapshots typed HostAddresses/AddressName records; `SystemResolution` uses async
 host-resolver workers. Both preserve first-occurrence address order and attach
 the requested port. Cancelling a system lookup stops waiting and publishing;
 a libc call already running in its worker may finish later.
-[Configured resolution](std/fixed-resolution.md),
-[system resolution](std/system-resolution.md).
+Configured resolution (okkama-docs `docs/std/fixed-resolution.md`),
+system resolution (okkama-docs `docs/std/system-resolution.md`).
 
 `Http1Session(input, output, owner).exchange(request)` owns a supplied connection.
 Its one-shot response body holds admission until verified EOF; early close or
 cancellation discards the connection. An old completed reader cannot close a
 later exchange. Empty responses release admission before publication.
-[Session contract](std/http1-session.md),
-[two TCP exchanges](../examples/std-v4/http1-session.ok).
+Session contract (okkama-docs `docs/std/http1-session.md`),
+two TCP exchanges (okkama-docs `examples/std-v4/http1-session.ok`).
 
 With `Expect: 100-continue`, the session writes headers before opening the body.
 A 100 reply permits upload; an early final reply leaves the source unopened and
 discards reuse. One absolute waiting deadline spans intermediate replies;
-timeout/cancellation drains reading. [Contract](std/http1-continue.md),
-[TCP handshake](../examples/std-v4/http1-continue.ok).
+timeout/cancellation drains reading. Contract (okkama-docs `docs/std/http1-continue.md`),
+TCP handshake (okkama-docs `examples/std-v4/http1-continue.ok`).
 
 Certificate metadata keeps exact wall-clock validity and distinguishes absent CA
 path depth from present zero. Distinguished names keep ordered RDN groups and
 repeated identifiers; a flat display/hash cannot replace those coordinates.
-These values do not establish trust. [Values](std/x509-values.md),
-[grouped names](std/x509-name.md).
+These values do not establish trust. Values (okkama-docs `docs/std/x509-values.md`),
+grouped names (okkama-docs `docs/std/x509-name.md`).
 
-`ParsedCertificate(bytes).value()` now reads a bounded DER envelope and asks the
+`ParsedCertificate(bytes).certificate()` now reads a bounded DER envelope and asks the
 host provider to decode the certificate/public key. Certificate retains exact
 DER and exposes grouped subject/issuer names, wall-clock validity and PublicKey
 as complete SPKI bytes. Repeated parsing preserves structural identity; host
 pointers are freed before publication. Unsupported name encodings fail explicitly
 when observed. Parsing establishes no signature, hostname or chain trust.
-[Contract](std/x509-certificate.md), [example](../examples/std-v4/x509-certificate.ok).
+Contract (okkama-docs `docs/std/x509-certificate.md`), example (okkama-docs `examples/std-v4/x509-certificate.ok`).
 
 CertificateNames projects SAN DNS strings and nominal IP addresses separately,
 without CN fallback or matching. CertificateChain snapshots supplied untrusted
 certificates; TrustedCertificates/PemTrustStore select explicit roots. Empty roots
 mean no anchors and never select defaults. PEM cursor successors share a source
 snapshot. Verification and system-root acquisition remain separate operations.
-[Contract](std/certificate-observers.md), [example](../examples/std-v4/certificate-observers.ok).
+Contract (okkama-docs `docs/std/certificate-observers.md`), example (okkama-docs `examples/std-v4/certificate-observers.ok`).
 
 CertificateExtensions decodes CA/depth, the nine named key-usage bits and EKU
 purpose OIDs. Unknown extensions retain their identifier, critical flag and exact
 payload; unknown purposes remain OID objects. Metadata observation grants no
-verified permission. [Contract](std/certificate-extensions.md),
-[example](../examples/std-v4/certificate-extensions.ok).
+verified permission. Contract (okkama-docs `docs/std/certificate-extensions.md`),
+example (okkama-docs `examples/std-v4/certificate-extensions.ok`).
 
 SystemTrustStore() creates a request; result() explicitly reads linked OpenSSL CA
 sources and returns an immutable TrustStore. Keep that snapshot for the lifetime
 of a client policy. Each acquisition reads actual sources again and reports typed
-failures; it does not verify a peer. [Contract](std/system-trust-store.md),
-[example](../examples/std-v4/system-trust-store.ok).
+failures; it does not verify a peer. Contract (okkama-docs `docs/std/system-trust-store.md`),
+example (okkama-docs `examples/std-v4/system-trust-store.ok`).
 
 VerifiedCertificateChain snapshots explicit roots and takes a nominal certificate
 identity, Instant and purpose. result() returns the verified leaf; path() returns the
@@ -5578,14 +4225,14 @@ selected leaf-to-anchor sequence. DNS uses DnsCertificateIdentity(HostName), IP
 uses IpCertificateIdentity(IpAddress). Time is exact and inclusive; SAN matching,
 signatures and path constraints are verified together. Path search is bounded
 (1024 steps); ambiguous issuers past it raise CertificateLimitExceeded. Trust-anchor payload policy
-stays separate from wire-certificate syntax. [Contract](std/certificate-verification.md),
-[example](../examples/std-v4/certificate-verification.ok).
+stays separate from wire-certificate syntax. Contract (okkama-docs `docs/std/certificate-verification.md`),
+example (okkama-docs `examples/std-v4/certificate-verification.ok`).
 
 TlsClientPolicy keeps explicit root, TLS-version and ALPN preference snapshots.
 Defaults enable TLS 1.2/1.3 and advertise nothing. Protocol names preserve opaque
 8-bit values through Latin-1 strings; the policy never acquires roots or performs
-a handshake. [Contract](std/tls-client-policy.md),
-[example](../examples/std-v4/tls-client-policy.ok).
+a handshake. Contract (okkama-docs `docs/std/tls-client-policy.md`),
+example (okkama-docs `examples/std-v4/tls-client-policy.ok`).
 
 TlsClientHandshake consumes supplied managed TCP when its Future starts and
 publishes a TlsConnection only after verifying the actual peer against explicit
@@ -5593,30 +4240,30 @@ roots, nominal DNS/IP reference and current clock instant. The connection owns
 AsyncReading/AsyncWriting halves and immutable TLS metadata. Read cancellation
 preserves the owner; cancelled partial output aborts it. Empty input requires
 close_notify. close() aborts immediately; async shutdown() performs orderly TLS
-closure and disposes the descriptor. [Contract](std/tls-client-transport.md),
-[actual HTTPS example](../examples/std-v4/https-session.ok).
+closure and disposes the descriptor. Contract (okkama-docs `docs/std/tls-client-transport.md`),
+actual HTTPS example (okkama-docs `examples/std-v4/https-session.ok`).
 
 Http1TlsSession adopts verified TLS only for exact http/1.1 or absent ALPN.
 h2 and other selections fail before HTTP bytes and retain caller ownership.
 Successful exchange/body leases use the existing session contract.
-[Contract](std/http1-tls-session.md).
+Contract (okkama-docs `docs/std/http1-tls-session.md`).
 
 HttpEndpointSelection validates an HTTP/HTTPS URL, resolves a name once and
 checks every exact numeric endpoint through EndpointAllowing. Numeric hosts skip
 DNS; selected ports cannot be replaced by the resolver. Explicit CIDR lists are
 immutable; PublicEndpoints uses pinned affirmative global IP properties. The
-result acquires no socket. [Contract](std/http-endpoints.md).
+result acquires no socket. Contract (okkama-docs `docs/std/http-endpoints.md`).
 
 Http1Connecting opens a conversation using only a checked route's numeric
 endpoints. HTTPS verifies that URL's DNS/IP reference and negotiated HTTP1 ALPN;
 ready unclaimed and unpublished results are disposed. Bounded connection racing is now implemented; shared pools remain separate work.
-[Contract](std/http1-connecting.md).
+Contract (okkama-docs `docs/std/http1-connecting.md`).
 
 TcpRacing removes checked-address head-of-line waiting: it interleaves families,
 staggers relative starts and advances after failure. It cancels pending attempts
 and closes ready losers before handing out a connection. Http1Connecting now
 uses it; DNS streaming and strict resolver policy remain separate.
-[Contract](std/tcp-racing.md).
+Contract (okkama-docs `docs/std/tcp-racing.md`).
 
 ## Chapter 27. The Native Runtime Boundary (Overview)
 
@@ -5674,7 +4321,7 @@ uncatchable. Filesystem diagnostics retain the failed operation, exact path
 operands and available native code/reason internally, including through cause
 chains and cleanup failures. The canonical symbol remains `native_symbol` in
 diagnostics and the result of public `operation()`. Host codes and localized OS
-messages are diagnostic only. See [filesystem errors](std/filesystem-errors.md).
+messages are diagnostic only. See filesystem errors (okkama-docs `docs/std/filesystem-errors.md`).
 
 ### 27.3 Opaque handles
 
@@ -5778,7 +4425,7 @@ Runtime error at line 4: Undefined variable "missing"
 Runtime error at line 7: Object "Box" has no action "missing"
 Runtime error at line 10: Duplicate construction field "digit"
 Object "Cash" field "cents" was not initialized
-Action "secret" on object "Cash" is private
+Action "secret" on object "Cash" is hidden
 Cannot rebind variable "n": type "int" has no successor actions
 Cannot rebind variable "counter" of type Counter with int
 ```
@@ -5795,11 +4442,67 @@ what was meant:
 |---|---|
 | `unused-import` | a `take` name or alias is never used |
 | `unused-let` | a `let` value is never read (`_name` and objects with `destroy` are exempt) |
-| `unused-private` | a private action is never called |
+| `unused-hidden` | a hidden action is never called |
 | `unreachable` | a statement after `return`, `throw`, `next`, `last` |
 | `snake-case` | a local, parameter, field or action is not `snake_case` |
 | `non-exhaustive-match` | a `match` over a payload-free enum misses cases |
 | `hidden-error` | a public action throws a hidden error enum |
+
+### 28.4 `okkama man`
+
+A module documents itself in ordinary `//` comments, and `okkama man` reads
+them (#512):
+
+```text
+okkama man                          the index of std, by area
+okkama man io/stdout                a module (std/io/stdout: std only)
+okkama man io/stdout Stdout         one declaration
+okkama man io/stdout Stdout.write   one action, every overload
+okkama man ./src/app.ok             a file of your own
+okkama man --format markdown json   the page as Markdown
+```
+
+A page has the sections NAME, VERSION, SYNOPSIS, DESCRIPTION, PUBLIC API,
+ERRORS, ENGINE NOTES and SEE ALSO, each only when there is something to say.
+Signatures come from the declarations themselves; hidden declarations, fields
+and tests never appear. Enums that are `Error` go under ERRORS.
+
+Where a comment belongs:
+- The comment right after the `module` line documents the module. An older
+  overview after the imports counts too.
+- The comment right above a declaration, with no blank line between,
+  documents that declaration. This holds for the members of objects and roles
+  as well.
+- A comment that a blank line separates from everything documents nothing.
+
+```okkama
+module shop/cart v1.0.0;
+
+// A shopping cart: lines of goods and their total.
+//
+//     let cart = Cart();
+//     cart.added(sku: "tea", quantity: 2).total();
+
+import "math/decimal" take Decimal;
+
+// The lines so far; empty when made.
+object Cart {
+    // The total of all lines, exact.
+    total() is Decimal { … }
+}
+```
+
+The text of a comment is a CommonMark subset:
+- paragraphs and headings;
+- lists;
+- inline code;
+- fenced or indented code blocks;
+- links and simple tables.
+
+A heading named Synopsis, Errors, Engine notes or See also in a module overview
+fills that section. Otherwise the first code block is the synopsis. On a
+terminal the page is wrapped to its width, headings are bold unless `NO_COLOR`
+is set, and `$PAGER` shows it when set. Through a pipe it is plain text.
 
 ## Chapter 29. What Okkama Deliberately Leaves Out
 
@@ -5954,9 +4657,8 @@ hidden object Payment does Created, Authorized, Captured, Refunded, Declined {
     }
     // ... authorize(), refund(), reason(), id()
 
-    private:
-    approved() is ^Payment { ^stage = Stage.authorized; }
-    rejected(reason is string) is ^Payment { ^stage = Stage.declined(reason); }
+    hidden approved() is ^Payment { ^stage = Stage.authorized; }
+    hidden rejected(reason is string) is ^Payment { ^stage = Stage.declined(reason); }
 }
 
 // 5. Callers start from a view and only ever hold views.
@@ -5982,13 +4684,13 @@ the new immutable object. What the compiler rejects:
 | `let a is Authorized = created;` | `Cannot initialize variable "a" of type Authorized with Created` |
 | a `match` without `declined` | `Non-exhaustive match: missing declined` |
 | `payments.Payment(key: "x")` in another module | `Type "payments.Payment" is hidden in module "payments"` |
-| `Payment(key: "x").approved()` | `Action "approved" on object "Payment" is private` |
+| `Payment(key: "x").approved()` | `Action "approved" on object "Payment" is hidden` |
 
 What it deliberately does not do: an old immutable state stays valid, so
 "authorize twice" is a job for durable state and idempotency, not for the type
 system. Inside the defining module the class can still be named; the runtime
 `confirm` in each transition is the second line of defence. The full program
-is [examples/showcase/state-views.ok](../examples/showcase/state-views.ok); the
+is examples/showcase/state-views.ok (okkama-docs `examples/showcase/state-views.ok`); the
 analysis behind it is in
 [role-oriented typestate](research/role-oriented-typestate.md).
 
@@ -6016,10 +4718,14 @@ let names = ["first": "Ada", "last": "L"];   // exact %string:string
 The fixed rules follow the language's existing philosophy:
 
 - **Exactness, not widening.** Inference only recognizes one identical exact
-  element type. `[1, 2.0]` stays untagged — no `@number`, no union, no
-  automatic `@any`.
-- **Heterogeneous collections stay legal and untagged.** `[1, "two", 3.0]`
-  keeps concrete elements; `@any` remains an explicit boundary.
+  element type. `[1, 2.0]` has none — no `@number`, no union, no automatic
+  `@any` — so without a boundary it is an error.
+- **Heterogeneous collections need an explicit boundary.**
+  `let mixed is @any = [1, "two", 3.0];` boxes each element and
+  `let row is %string:any = ["id": 7, "name": "Ada"];` each value; without the
+  declared type the compiler reports "Array elements have incompatible types
+  int and string; declare an explicit @any boundary to allow heterogeneous
+  values". `any` is never inferred.
 - **Empty collections stay untagged without context.** `[]` and `[:]` still
   take their tag from the first explicit boundary; emptiness proves nothing.
 - Inference is recursive through nesting, and the exact identity becomes
@@ -6128,8 +4834,8 @@ await, and await is valid only inside an async action. Local variables and
 ordinary lexical scopes remain available across suspension.
 
 Async does not imply a thread or make CPU-bound work nonblocking. One
-`IO::Async::Loop` is used by an async program; synchronous main follows the
-unchanged synchronous path. Use `spawn` for the restricted process-parallel
+cooperative scheduler belongs to a run: `async main` drives it, a synchronous
+main does not. Use `spawn` for the restricted process-parallel
 contract. Future cancellation and the std `async/*` modules provide structured
 cleanup and composition. Spawning an async action instead starts cooperative
 work in the current runtime; it does not move that work to a process.
@@ -6141,6 +4847,19 @@ cleanup included; then its own `await` throws `Cancelled`. A future that
 another task still awaits is left running: the cancelled awaiter only stops
 waiting for it. One awaited child therefore needs no group; `FutureGroup` and
 `FutureScope` are for real fan-out.
+
+Scheduling is cooperative (#340). One task runs at a time, until it suspends
+at an `await` of a future that has not settled, or until it ends. Waking a
+task — a future that completes, `Event.set()`, `cancel()`, a value handed over
+a channel, a returned permit — makes it ready. Ready tasks run in the order
+they were woken, after the current task suspends or ends, never inside the
+call that woke them, so the code of a task between two suspension points is
+not interleaved with another task's code. `spawn` and the first `await` of a
+cold future still run the body at once, until its first suspension; awaiting
+a settled future does not suspend. `cancel()` does not run the cancelled
+task's cleanup; awaiting that task observes it settled, cleanup done. This is
+not a thread-safety or transaction guarantee: every suspension point lets
+other tasks run.
 
 ### 31.5.1 Process-parallel `spawn`
 
@@ -6175,23 +4894,64 @@ primitive values plus recursively transferable
 arrays and maps. Objects, Futures, closures and native handles cannot cross the
 boundary. Workers have no shared mutable state.
 
-Cancelling a process worker requests termination. Its Future remains pending
-until the child has exited, has been reaped and its streams have closed; only
-then does await observe Cancelled. Repeated cancel requests are idempotent, and
-cancelling an already settled result or failure leaves it unchanged. Structured
-groups and root shutdown await that same completion. The current Perl runtime
-sends TERM, then KILL after 250 ms if needed. This waits for the worker itself,
-not arbitrary descendants; forced process termination cannot guarantee execution
-of the worker's Okkama defers.
+Cancelling a process worker kills it. Its Future remains pending until the
+child has exited, has been reaped and its streams have closed; only then does
+await observe Cancelled, so the code after that await never runs beside the
+worker. Repeated cancel requests are idempotent, and cancelling an already
+settled result or failure leaves it unchanged. A worker cancelled before its
+process started never starts. Structured groups and root shutdown await that
+same completion. The kill is immediate (SIGKILL), so the worker's Okkama
+defers and `destroy` blocks do not run. A worker leads its own process group on
+Tomato and the IR engine, and the whole group is killed, so processes the
+worker started go with it; the JVM, which has no process groups, kills the
+worker and the descendants it has at that moment (#359).
 
-The CLI uses a separate process for a single source file and passes an explicit
-working directory to it. Source filenames are made absolute in the parent before
-the worker changes directory, so relative CLI source paths work too.
-Embedded and multi-file programs currently retain the
-local executor. The protocol is versioned JSON, but that is an implementation
-detail: a future Rust VM can use its native child-process runtime while keeping
-the same source syntax and value contract. This is process isolation, not
-exposed POSIX `fork` semantics.
+The worker is the same program run again by the same engine: Tomato runs its
+`.spb` (one compiled in memory is written to a temporary file first), the IR
+engine its source files, multi-file programs included, and the JVM its
+classes. It gets an explicit working directory; source filenames are made
+absolute in the parent before the worker changes directory, so relative CLI
+source paths work too. An embedder that runs programs which `spawn` must pass
+Tomato the worker command, and a `spawn` without one fails with
+`process workers require an explicit worker command`. Arguments and results
+cross as binary `OKW1` frames, an implementation detail rather than part of the
+language. This is process isolation, not exposed POSIX `fork` semantics.
+
+### 31.5.2 Bounded typed channels
+
+`async/channel` exports invariant `Channel<T>`, `Sending<T>` and
+`Receiving<T>`, and the errors `ChannelClosed` and `InvalidChannelCapacity`.
+`Sending` and `Receiving` are narrow capabilities over one shared channel
+state:
+
+```okkama
+import "async/channel" take Channel, Sending, Receiving;
+
+let channel is Channel<int> = Channel(capacity: 16);
+let sending is Sending<int> = channel.sending();
+let receiving is Receiving<int> = channel.receiving();
+
+await sending.send(42);
+let answer = await receiving.item();
+sending.close();
+answer;
+```
+
+A positive capacity buffers that many values; capacity 0 is a rendezvous
+without a buffer, where `send` completes only when a receiver takes the value;
+a negative capacity throws `InvalidChannelCapacity`. Messages, blocked senders
+and waiting receivers are served FIFO. `close()` is explicit, idempotent and
+works through either endpoint: new and blocked sends throw `ChannelClosed`,
+buffered messages stay receivable, and once they are drained `item()` throws
+`ChannelClosed`. Cancelling a blocked operation removes it from the waiters; a
+completed handoff is never undone or repeated.
+
+A state owner is one async task that alone owns a local, rebindable binding to
+immutable state. Clients hold only a `Sending<Command>`, and request-response
+puts a capacity-one reply channel in the command. A task's failure does not
+close its channels: the owner registers `defer ...close()`, and callers use an
+explicit stop protocol and await the owner's Future. Executable examples are
+in `okkama-rs/examples/channels`.
 
 ### 31.6 Decimal (deferred) and exact money
 
@@ -6241,7 +5001,8 @@ runtime foundations so that stdlib APIs are not grown around temporary
 interpreter shortcuts. The defined minimum for examples is:
 
 - intrinsic test assertions are implemented as contextual `test.is`,
-  `test.isnt`, `test.ok`, and `test.fail`; bundled `test/more` provides the
+  `test.isnt`, `test.ok`, `test.close`, `test.text`, `test.bytes` and
+  `test.fail`; bundled `test/more` provides the
   reusable object facade;
 - simple string behaviors such as `.uppercase()` / `.lower()`;
 - array helpers only if 1.0 examples keep needing them.
@@ -6288,7 +5049,7 @@ a value dynamically. The runtime validates the actual action result.
 runs tests. Consecutive .ok files can form one module. Production main returns
 an exit code0..255; executable diagnostics and failed tests yield failure.
 The test runner supports report, workers, seed, filter, timeout and capture-limit
-options; see [testing](std/testing.md). Parse/AST-print modes and a usable
+options; see testing (okkama-docs `docs/std/testing.md`). Parse/AST-print modes and a usable
 interactive prompt remain future work. Source: Okkama.pm and cli/01,02,04,07 tests.
 
 ### 31.11 Functional collections, next steps
@@ -6327,9 +5088,9 @@ and `try?` / `try!` are prefix forms written without a space.
 Keyword inventory in active use: `module`, `import`, `as`, `take`, `object`,
 `role`, `enum`, `has`, `is`, `does`, `self`, `let`, `if`, `else`, `match`,
 `case`, `for`, `loop`, `next`, `last`, `return`, `confirm`, `throw`, `panic`, `try`, `catch`, `defer`,
-`test`, `fake`, `destroy`, `private`, `native`, `async`,
+`test`, `fake`, `destroy`, `native`, `async`,
 `await`, `spawn`, `const`, `true`, `false`, `main` (contextually), `hidden`
-(contextually, before `object`, `role`, `enum` or `const`).
+(contextually, before `object`, `role`, `enum`, `const` or an action).
 
 Contextual namespace names (not ordinary identifiers) include keyword-shaped
 module path segments such as `test` in `test/more`, declared action labels such
@@ -6356,7 +5117,7 @@ Runtime-supported and covered by tests (`okkama-pl/t/interpreter`,
 - mandatory explicit constructors: full (exact arity), field shorthand
   (named-only), variadic; field defaults; object projections;
 - actions: typed parameters, named arguments, return checks, `self`
-  chaining default, private sections, typed overload resolution with
+  chaining default, hidden actions, typed overload resolution with
   specificity dominance, variadic tails with `values...` unpack;
 - anonymous action expressions, lexical capture, action-value calls, exact
   `(T, ...) is R` signatures, explicit parameter/result declarations, and
@@ -6368,7 +5129,7 @@ Runtime-supported and covered by tests (`okkama-pl/t/interpreter`,
   `else` and `fold()`, compact choices `?? … !!`;
 - error enums (`enum E is Error`), catch patterns and type lists, `try?` /
   `try!`;
-- private successor actions; `hidden` declarations with the public-signature
+- hidden successor actions; `hidden` declarations with the public-signature
   leak check;
 - enums; roles, conformance, role-typed dispatch; role fakes in test mode;
 - exact generics on objects and roles, construction inference, generic
@@ -6384,8 +5145,8 @@ Runtime-supported and covered by tests (`okkama-pl/t/interpreter`,
   and the bundled `runtime/*` verticals (time, fs, process, net, poll,
   environment, system, debug, regex) plus `okkama.Dump` and the high-level
   immutable `regex.Regex` object;
-- pure-Okkama exact `encoding/json` values, recursive parsing, deterministic
-  compact encoding and located source failures.
+- exact `json` values, strict parsing and writing in the runtime, readers
+  with RFC 6901 pointers and one `JsonError`.
 
 Not implemented in the runtime:
 
@@ -6399,7 +5160,7 @@ inspect an `any` box. Still planned: explicit `any` narrowing, decimal literal
 semantics, completeness of matches over arbitrary values, and `throws` in
 signatures (on hold). Parse/AST-print modes and the REPL exist in the Rust
 toolchain (`okkama ast`, `okkama repl`). Production/debug/test runner modes already work. Active stdlib scope
-and remaining work are tracked in the [v4 roadmap](std/stdlib-roadmap-v4.md),
+and remaining work are tracked in the v4 roadmap (okkama-docs `docs/std/stdlib-roadmap-v4.md`),
 not the historical MVP milestone.
 
 ## Appendix C. Quick Reference Card
@@ -6432,8 +5193,7 @@ object Cash {
 
     destroy { digit; }                // deterministic scope cleanup
 
-    private:
-    fee() is int { 10; }              // self.fee() only
+    hidden fee() is int { 10; }       // self.fee() only
 }
 
 // ---- contracts ----
@@ -6505,86 +5265,86 @@ invoice adapter.
 
 ### Explicit HTTP client policy
 
-HttpLimits, ClientTimeouts and ClientPolicy collect bounded reusable inputs without opening sockets. Each timeout is independent: negative rejects, zero disables. The HTTP1 protocol adapter rejects H2-only/mixed policies and incompatible ALPN before acquisition. See [contract](std/http-client-policy.md). Enforcement belongs to the consuming client.
+HttpLimits, ClientTimeouts and ClientPolicy collect bounded reusable inputs without opening sockets. Each timeout is independent: negative rejects, zero disables. The HTTP1 protocol adapter rejects H2-only/mixed policies and incompatible ALPN before acquisition. See contract (okkama-docs `docs/std/http-client-policy.md`). Enforcement belongs to the consuming client.
 
 ### A direct HTTP client owns response lifetimes
 
-HttpClient sends an absolute HTTP(S) Request through checked numeric endpoints and returns ClientResponse at final headers. HttpDirectRequest derives origin-form and Host without observing the body. Read a nonempty body to verified EOF to enable reuse; closing or dropping it discards transport. Empty responses release admission immediately. An explicit async owner retains idle sessions across caller scopes: borrowed Atomic storage alone cannot do this. Client close cancels queued requests before releasing permits. Independent deadlines cover connection acquisition, exchange through headers, and each body read; zero disables a stage. [Contract and executable HTTPS example](std/http-client.md), [example](../examples/std-v4/http-client.ok).
+HttpClient sends an absolute HTTP(S) Request through checked numeric endpoints and returns ClientResponse at final headers. HttpDirectRequest derives origin-form and Host without observing the body. Read a nonempty body to verified EOF to enable reuse; closing or dropping it discards transport. Empty responses release admission immediately. An explicit async owner retains idle sessions across caller scopes: borrowed Atomic storage alone cannot do this. Client close cancels queued requests before releasing permits. Independent deadlines cover connection acquisition, exchange through headers, and each body read; zero disables a stage. Contract and executable HTTPS example (okkama-docs `docs/std/http-client.md`), example (okkama-docs `examples/std-v4/http-client.ok`).
 
 ### Redirects are an explicit exchange capability
 
-Wrap HttpClient with Redirecting(client,RedirectPolicy()) to enable bounded follows. 303 changes POST to GET; 307/308 require a replayable preserved body. Each Location resolves against the effective URL; cross-origin credentials are removed and every new route is checked, even on an idle connection. Intermediate bodies are closed and their metadata appears in history; the final body remains owned by the caller. [Contract](std/http-redirect.md), [real loopback example](../examples/std-v4/http-redirect.ok).
+Wrap HttpClient with Redirecting(client,RedirectPolicy()) to enable bounded follows. 303 changes POST to GET; 307/308 require a replayable preserved body. Each Location resolves against the effective URL; cross-origin credentials are removed and every new route is checked, even on an idle connection. Intermediate bodies are closed and their metadata appears in history; the final body remains owned by the caller. Contract (okkama-docs `docs/std/http-redirect.md`), real loopback example (okkama-docs `examples/std-v4/http-redirect.ok`).
 
 ### Cookie policy is an explicit adapter
 
-Use Redirecting(CookieExchanging(client,jar,FirstPartyCookies()),policy) for fresh cookies on each redirect hop. FirstPartyCookies deliberately chooses top-level first-party context for the current method. A caller Cookie is rejected by default; preserve/replace are explicit policies, and duplicates never merge. Capture context once, store each Set-Cookie separately, and keep generated jar headers internal to the hop. On storage failure, dispose the acquired response body. The jar remains caller-owned. [Contract](std/http-cookie-client.md), [real loopback example](../examples/std-v4/http-cookie-client.ok).
+Use Redirecting(CookieExchanging(client,jar,FirstPartyCookies()),policy) for fresh cookies on each redirect hop. FirstPartyCookies deliberately chooses top-level first-party context for the current method. A caller Cookie is rejected by default; preserve/replace are explicit policies, and duplicates never merge. Capture context once, store each Set-Cookie separately, and keep generated jar headers internal to the hop. On storage failure, dispose the acquired response body. The jar remains caller-owned. Contract (okkama-docs `docs/std/http-cookie-client.md`), real loopback example (okkama-docs `examples/std-v4/http-cookie-client.ok`).
 
 ### Secret capabilities and scoped HTTP auth
 
-SecretBytes owns opaque native memory and exposes size/close metadata. ExportedSecret explicitly copies bytes and retains its owner across scopes. Ordinary byte/text/equality observations are unavailable. Basic/Bearer restrict preemptive credentials to verified HTTPS consumers and normalized origin/path. Redirecting belongs outside the auth adapter. [Secret contract](std/secret-bytes.md), [auth profile](std/http-auth.md). Full frozen-source provider regression: 672 files / 12185 assertions PASS.
+SecretBytes owns opaque native memory and exposes size/close metadata. ExportedSecret explicitly copies bytes and retains its owner across scopes. Ordinary byte/text/equality observations are unavailable. Basic/Bearer restrict preemptive credentials to verified HTTPS consumers and normalized origin/path. Redirecting belongs outside the auth adapter. Secret contract (okkama-docs `docs/std/secret-bytes.md`), auth profile (okkama-docs `docs/std/http-auth.md`). Full frozen-source provider regression: 672 files / 12185 assertions PASS.
 
 ### HTTP2 starts at a bounded wire boundary
 
-Http2Settings describes local advertised table/window/frame/stream capacities; zero window/table/streams is meaningful. Internal framing checks a nine-byte header before requesting payload. Connection faults abort immediately; stream faults consume their bounded payload so the following frame remains aligned. A memoized frame reader borrows transport and drains cancelled reads with one group at a time. [Contract](std/http2-wire-foundation.md). The negotiated H2 engine and HPACK remain open.
+Http2Settings describes local advertised table/window/frame/stream capacities; zero window/table/streams is meaningful. Internal framing checks a nine-byte header before requesting payload. Connection faults abort immediately; stream faults consume their bounded payload so the following frame remains aligned. A memoized frame reader borrows transport and drains cancelled reads with one group at a time. Contract (okkama-docs `docs/std/http2-wire-foundation.md`). The negotiated H2 engine and HPACK remain open.
 
 ### HTTP2 preface and peer settings
 
-[Client preface and peer SETTINGS](std/http2-preface.md) verified with lazy exact wire emission, sequential peer observations, ACK, cancellation cleanup and one real loopback TCP example. Focused 477/478/479: six/ten/three assertions. Std-only; no repeat full regression. Public H2 exchanges, live streams/HPACK/flow and outgoing settings ACK tracking remain open.
+Client preface and peer SETTINGS (okkama-docs `docs/std/http2-preface.md`) verified with lazy exact wire emission, sequential peer observations, ACK, cancellation cleanup and one real loopback TCP example. Focused 477/478/479: six/ten/three assertions. Std-only; no repeat full regression. Public H2 exchanges, live streams/HPACK/flow and outgoing settings ACK tracking remain open.
 
 ### HPACK bounded wire primitives
 
-[Integer/string/Huffman primitives](std/hpack-primitives.md) verified with all RFC octet codes and provider bounds: 480/runtime53 eight/thirteen assertions, inline/example PASS. Measured slow per-bit std decoding moved to a narrow native bulk provider (PERF-22). Full regression PASS: 680 files / 12,266 assertions / 1084 seconds; table/block/header semantics remain the next slice.
+Integer/string/Huffman primitives (okkama-docs `docs/std/hpack-primitives.md`) verified with all RFC octet codes and provider bounds: 480/runtime53 eight/thirteen assertions, inline/example PASS. Measured slow per-bit std decoding moved to a narrow native bulk provider (PERF-22). Full regression PASS: 680 files / 12,266 assertions / 1084 seconds; table/block/header semantics remain the next slice.
 
 ### HPACK tables and compression contexts
 
-[Bounded tables and blocks](std/hpack-blocks.md) verified: complete static/dynamic decoding, exact context across RFC request/response sequences, minimum table shrink and conservative never-indexed encoder. 481/482 four/ten assertions; combined compatibility thirty-five PASS, inline/example PASS. Std-only after native full gate; no repeat full run. Live H2 transport remains open.
+Bounded tables and blocks (okkama-docs `docs/std/hpack-blocks.md`) verified: complete static/dynamic decoding, exact context across RFC request/response sequences, minimum table shrink and conservative never-indexed encoder. 481/482 four/ten assertions; combined compatibility thirty-five PASS, inline/example PASS. Std-only after native full gate; no repeat full run. Live H2 transport remains open.
 
 ### HTTP2 HEADERS and typed field metadata
 
-[Block and field mapping](std/http2-headers.md) verified: exact continuation sequence, cancellation, preflighted fragmentation, pseudo-field validation and normalized Host/authority agreement on input/output without body observations. 483/484/485 nine/nine/three assertions; combined 480..485 six files / forty-three PASS, inline/real TCP example PASS. Std-only; no repeat full gate. Live flow/streams/ALPN remain open.
+Block and field mapping (okkama-docs `docs/std/http2-headers.md`) verified: exact continuation sequence, cancellation, preflighted fragmentation, pseudo-field validation and normalized Host/authority agreement on input/output without body observations. 483/484/485 nine/nine/three assertions; combined 480..485 six files / forty-three PASS, inline/real TCP example PASS. Std-only; no repeat full gate. Live flow/streams/ALPN remain open.
 
 ### HTTP2 flow accounting
 
-[Signed window/DATA accounting](std/http2-flow.md) verified: padded payload charge, negative SETTINGS credit, scoped overflow, dual-window send preflight and retained connection charge on stream error. 486 eight cases; compatibility twenty-one PASS, inline/example PASS. Std-only, no full rerun. Async credit/scheduler/deadlock prevention remain open.
+Signed window/DATA accounting (okkama-docs `docs/std/http2-flow.md`) verified: padded payload charge, negative SETTINGS credit, scoped overflow, dual-window send preflight and retained connection charge on stream error. 486 eight cases; compatibility twenty-one PASS, inline/example PASS. Std-only, no full rerun. Async credit/scheduler/deadlock prevention remain open.
 
 ### HTTP2 control values
 
-[Reset/PING/GOAWAY metadata](std/http2-controls.md) verified: exact unknown codes, no ACK echo loop, monotone admission stop and explicitly opaque diagnostics. 487 five cases; compatibility twelve PASS, inline/example PASS. Std-only, no full rerun. Live stream/connection effects and retry remain open.
+Reset/PING/GOAWAY metadata (okkama-docs `docs/std/http2-controls.md`) verified: exact unknown codes, no ACK echo loop, monotone admission stop and explicitly opaque diagnostics. 487 five cases; compatibility twelve PASS, inline/example PASS. Std-only, no full rerun. Live stream/connection effects and retry remain open.
 
 ### HTTP wire byte serialization
 
-[Bounded internal bulk joins](std/http-wire-bytes.md) replace per-byte maps through the existing buffer provider; exact 16 KiB DATA/HPACK payloads verified. PERF-23 records about 2.59x fixture improvement with residual VM traversal open. Std-only; no full rerun.
+Bounded internal bulk joins (okkama-docs `docs/std/http-wire-bytes.md`) replace per-byte maps through the existing buffer provider; exact 16 KiB DATA/HPACK payloads verified. PERF-23 records about 2.59x fixture improvement with residual VM traversal open. Std-only; no full rerun.
 
 ### HTTP2 stream lifecycle
 
-[Half-close/reset/ID state](std/http2-stream-life.md) verified: independent stream states, final accepted payload distinction, minimal late-frame processing and odd uint31 exhaustion. 489 five cases; compatibility ten PASS, inline/example PASS. Std-only, no full rerun. Actual multiplexing/sibling physical reset remains open.
+Half-close/reset/ID state (okkama-docs `docs/std/http2-stream-life.md`) verified: independent stream states, final accepted payload distinction, minimal late-frame processing and odd uint31 exhaustion. 489 five cases; compatibility ten PASS, inline/example PASS. Std-only, no full rerun. Actual multiplexing/sibling physical reset remains open.
 
 ### HTTP2 consuming connection reader
 
-[Internal input loop](std/http2-input.md) routes complete fields/DATA/control frames, retains HPACK before stream validation, tracks initial local ACK and queues replies without blocking on output. 490 eight plus 483 nine assertions PASS; nested continuation cancellation settles. Std-only, no full rerun. Owning writer/flow/public H2 client remain open.
+Internal input loop (okkama-docs `docs/std/http2-input.md`) routes complete fields/DATA/control frames, retains HPACK before stream validation, tracks initial local ACK and queues replies without blocking on output. 490 eight plus 483 nine assertions PASS; nested continuation cancellation settles. Std-only, no full rerun. Owning writer/flow/public H2 client remain open.
 
 ### HTTP2 connection writer
 
-[Bounded output and tickets](std/http2-output.md) serialize whole header blocks and isolate producer cancellation from physical writes. 491 eight cases; 483/490/491 compatibility 25 PASS after common preflight refactor. Std-only, no full rerun. Fair DATA/flow scheduling and physical session integration remain open.
+Bounded output and tickets (okkama-docs `docs/std/http2-output.md`) serialize whole header blocks and isolate producer cancellation from physical writes. 491 eight cases; 483/490/491 compatibility 25 PASS after common preflight refactor. Std-only, no full rerun. Fair DATA/flow scheduling and physical session integration remain open.
 
 HTTP2 duplex: `examples/std-v4/http2-duplex.ok` verifies concurrent reader/writer, sibling responses in reverse order, padded DATA and PING ACK on one real socket. 492 three assertions PASS; live body/flow/public client still follow.
 
 ### HTTP2 outbound DATA
 
-[Sender scheduler](std/http2-sending.md) separates reservation/wire debit, waits outside the writer, queues one frame per producer, handles SETTINGS/credit notifications and retires closed slots. 493 eleven cases; flow/writer/actual TCP compatibility 30 PASS after cleanup refactor. Std-only, no full rerun. Incoming body flow and public session remain open.
+Sender scheduler (okkama-docs `docs/std/http2-sending.md`) separates reservation/wire debit, waits outside the writer, queues one frame per producer, handles SETTINGS/credit notifications and retires closed slots. 493 eleven cases; flow/writer/actual TCP compatibility 30 PASS after cleanup refactor. Std-only, no full rerun. Incoming body flow and public session remain open.
 
 ### HTTP2 incoming body buffer
 
-[Body storage/reading](std/http2-body.md) bounds storage, credits padding/consumption separately, preserves final DATA and validates length/trailers. 494 eleven PASS; shared trailer refactor compatibility 76 PASS. No runtime changes/full rerun. Aggregate receiver/session ownership follow. Fresh probe startup measured separately in PERF-24.
+Body storage/reading (okkama-docs `docs/std/http2-body.md`) bounds storage, credits padding/consumption separately, preserves final DATA and validates length/trailers. 494 eleven PASS; shared trailer refactor compatibility 76 PASS. No runtime changes/full rerun. Aggregate receiver/session ownership follow. Fresh probe startup measured separately in PERF-24.
 
 ### HTTP2 aggregate incoming flow
 
-[Receive ledger](std/http2-receiving.md) preserves connection debit on stream failure, credits discard once, separates request registration/response attachment and retires body storage at application EOF. 494/495/496: 22 PASS, including real TCP WINDOW_UPDATE after app reads. Std-only, no full rerun; full owned session/client/ALPN remain open.
+Receive ledger (okkama-docs `docs/std/http2-receiving.md`) preserves connection debit on stream failure, credits discard once, separates request registration/response attachment and retires body storage at application EOF. 494/495/496: 22 PASS, including real TCP WINDOW_UPDATE after app reads. Std-only, no full rerun; full owned session/client/ALPN remain open.
 
 
 ### Owned HTTP2 session
 
-[Owned session](std/http2-session.md): `Http2Session(input,output,owner,local,peer,limits)` performs typed exchanges on one previously selected H2 transport. Supervised stream holders preserve native bodies across reverse response arrival, per-stream cancellation/reset, GOAWAY and physical close. Completed buffered bodies remain readable until application EOF/close/drop. Final compatibility: nine files / 79 assertions PASS, including actual multiplexed TCP with PING and exact consumption credit. Interpreter cancellation races have independent red/green evidence; the required frozen-source full regression passed: 699 files / 12455 assertions, 1125 seconds, unchanged 1324-file source inventory. H2 HTTPS/opening/client policy and the remaining HTTP roadmap are still open.
+Owned session (okkama-docs `docs/std/http2-session.md`): `Http2Session(input,output,owner,local,peer,limits)` performs typed exchanges on one previously selected H2 transport. Supervised stream holders preserve native bodies across reverse response arrival, per-stream cancellation/reset, GOAWAY and physical close. Completed buffered bodies remain readable until application EOF/close/drop. Final compatibility: nine files / 79 assertions PASS, including actual multiplexed TCP with PING and exact consumption credit. Interpreter cancellation races have independent red/green evidence; the required frozen-source full regression passed: 699 files / 12455 assertions, 1125 seconds, unchanged 1324-file source inventory. H2 HTTPS/opening/client policy and the remaining HTTP roadmap are still open.
 
 
 ### Ownership after an async continuation
@@ -6594,17 +5354,17 @@ An owned result created by a nested if/match/try/functional block after await tr
 
 ### HTTP2 verified HTTPS and shared client pool
 
-[Opening](std/http2-connecting.md) verifies URL-derived certificate identity/SNI and actual h2 ALPN before preface. An explicit H2 policy in the normal [HttpClient](std/http2-client.md) enables shared physical owners, multiplexed leases, stream-local abandonment/body deadlines, checked-peer reuse and GOAWAY replacement. Final root H2 ten files /83 assertions PASS; unchanged H1 client/decorator compatibility eleven files /89 PASS. Interpreter ownership correction full gate: 700/12465 PASS; std-only client changes use focused gates. Mixed ALPN, replay-safe retry and remaining HTTP modules stay open. The recorded PERF-25 warnings were later fixed by the completion trampoline.
+Opening (okkama-docs `docs/std/http2-connecting.md`) verifies URL-derived certificate identity/SNI and actual h2 ALPN before preface. An explicit H2 policy in the normal HttpClient (okkama-docs `docs/std/http2-client.md`) enables shared physical owners, multiplexed leases, stream-local abandonment/body deadlines, checked-peer reuse and GOAWAY replacement. Final root H2 ten files /83 assertions PASS; unchanged H1 client/decorator compatibility eleven files /89 PASS. Interpreter ownership correction full gate: 700/12465 PASS; std-only client changes use focused gates. Mixed ALPN, replay-safe retry and remaining HTTP modules stay open. The recorded PERF-25 warnings were later fixed by the completion trampoline.
 
 
 ### Mixed HTTP1/H2 ALPN and shared conversation admission
 
-[Negotiation contract](std/http-alpn.md): HttpClientProtocols validates exact enabled/advertised agreement; HttpSelectedConnecting adopts one checked verified transport according to actual ALPN. HttpClient supports a mixed H1.1/H2 policy; absent ALPN selects enabled H1, ordinary cleartext uses H1, H2-only remains explicit prior knowledge. The common physical pool serializes actual H1 body leases and multiplexes H2. Unsent queued requests are re-admitted after conversation retirement; emitted requests are not replayed. Whole admission tasks are supervised so client close cancels queues before releasing references. Final H1/H2/decorator/mixed compatibility: 28 files /240 assertions PASS. Std-only; the last interpreter full gate stays 700/12465 PASS. Replay-safe stale retry and remaining HTTP modules follow.
+Negotiation contract (okkama-docs `docs/std/http-alpn.md`): HttpClientProtocols validates exact enabled/advertised agreement; HttpSelectedConnecting adopts one checked verified transport according to actual ALPN. HttpClient supports a mixed H1.1/H2 policy; absent ALPN selects enabled H1, ordinary cleartext uses H1, H2-only remains explicit prior knowledge. The common physical pool serializes actual H1 body leases and multiplexes H2. Unsent queued requests are re-admitted after conversation retirement; emitted requests are not replayed. Whole admission tasks are supervised so client close cancels queues before releasing references. Final H1/H2/decorator/mixed compatibility: 28 files /240 assertions PASS. Std-only; the last interpreter full gate stays 700/12465 PASS. Replay-safe stale retry and remaining HTTP modules follow.
 
 
 ### Replay-safe stale HTTP1 retry
 
-[Optional Retrying](std/http-retry.md) performs at most one replacement exchange for
+Optional Retrying (okkama-docs `docs/std/http-retry.md`) performs at most one replacement exchange for
 an idempotent request with a replayable body after zero-response-byte failure on
 a reused H1 conversation. Partial/1xx bytes, fresh errors, POST, one-shot bodies,
 timeout/cancellation and broad TLS failures do not qualify. Direct session errors
@@ -6616,7 +5376,7 @@ open.
 
 ### Scoped Digest SHA-256
 
-[Digest profile](std/http-digest.md) supports SHA-256/SHA-256-sess, qop=auth, userhash,
+Digest profile (okkama-docs `docs/std/http-digest.md`) supports SHA-256/SHA-256-sess, qop=auth, userhash,
 fresh secure cnonce, atomic bounded nonce counts, direct HTTPS scope, one bounded
 stale refresh and optional header/trailer rspauth verification. Generic received
 challenge parsing handles combined schemes, token68, quoted commas and bounded
@@ -6628,7 +5388,7 @@ credentials, auth-int and preemptive nonce caching remain open.
 
 ### Digest SHA-512/256 and UTF-8/NFC
 
-[Modern Digest profile](std/http-digest.md) adds SHA-512-256/-sess, explicit UTF-8
+Modern Digest profile (okkama-docs `docs/std/http-digest.md`) adds SHA-512-256/-sess, explicit UTF-8
 credential NFC normalization, userhash/username* and exact UTF-8 realm wire
 handling. Existing ASCII profiles remain covered. Correct algorithm vectors
 agree with independent OpenSSL; RFC7616's truncated-SHA-512 example has a
@@ -6648,11 +5408,11 @@ handshake follow separately. Evidence and performance finding.
 Handshake validation binds the nonce/accept and offered subprotocol. Server
 Origin approval precedes 101; compare against a trusted configured destination,
 not the caller's Host. Fragmented text is decoded only at message completion.
-[Protocol contracts](std/websocket.md); actual owned connection follows.
+Protocol contracts (okkama-docs `docs/std/websocket.md`); actual owned connection follows.
 
 ### Owned WebSocket connections
 
-[WebSocketConnecting](std/websocket.md) opens checked direct ws/wss with explicit
+WebSocketConnecting (okkama-docs `docs/std/websocket.md`) opens checked direct ws/wss with explicit
 resolver, endpoint access, trust and deadlines. Await every send/close. A single
 writer preserves fragment ordering; close releases receive backpressure, waits
 for actual wire close and peer reply, then drains tasks before socket disposal.
@@ -6661,7 +5421,7 @@ focused checks pass. Compression, H2 CONNECT and complete server remain open.
 
 ### Server handling capabilities
 
-[Server contexts and handling results](std/http-server.md) preserve observed peer/
+Server contexts and handling results (okkama-docs `docs/std/http-server.md`) preserve observed peer/
 TLS facts and restricted cancellation. Routing parameters are successors. A
 normal response and a WebSocket upgrade/application are distinct result variants.
 Zero disables a deadline, while connection/range budgets must remain positive.
@@ -6669,7 +5429,7 @@ Concrete server lifetime follows these configuration contracts.
 
 ### Serving and draining HTTP1.1
 
-[HttpServer](std/http-server.md) adopts a plaintext listener, validates request
+HttpServer (okkama-docs `docs/std/http-server.md`) adopts a plaintext listener, validates request
 framing and preserves pipeline order. Header/body-idle/keep-alive/application
 deadlines are independent. close cancels; ServerDrain closes idle peers while
 finishing active responses, then cancels at its deadline. Never drain an unsent
@@ -6680,7 +5440,7 @@ body after deciding to close. Trusted WebSocket origin is configured explicitly.
 The internal H2 server preface now verifies exact client magic/SETTINGS and acknowledges without consuming the next frame. The direction-aware reader can await owned body acquisition before DATA; foundation tests pass 35 assertions. This foundation alone does not provide a server session.
 
 
-[Http2ServerSession](std/http2-server.md) now owns independent H2 request tasks, body buffers and shared flow control. RST/EOF cancel handlers; streaming response trailers retain END_STREAM ordering. A Perl TCP peer independently verifies SETTINGS, HPACK and exact DATA. The listener/TLS/full timeout profile remains separate work.
+Http2ServerSession (okkama-docs `docs/std/http2-server.md`) now owns independent H2 request tasks, body buffers and shared flow control. RST/EOF cancel handlers; streaming response trailers retain END_STREAM ordering. A Perl TCP peer independently verifies SETTINGS, HPACK and exact DATA. The listener/TLS/full timeout profile remains separate work.
 
 
 `HttpServer` now also composes an explicit H2-only plaintext listener with `ServerDrain`; 14 listener/H1 compatibility checks pass. TLS/mixed selection and full H2 idle policy remain open.
@@ -6689,16 +5449,16 @@ The internal H2 server preface now verifies exact client magic/SETTINGS and ackn
 H2 server supervision now covers shared HEADERS/CONTINUATION deadlines, physical DATA idle budgets, inactivity after the last handler, bounded protocol GOAWAY and unexpected task failures. 11 files /47 checks pass. Normal zero-disabled deadlines remain independent; failure GOAWAY cleanup has a separate one-second bound.
 
 
-[Immutable Routes](std/http-routing.md) compile literal/named/final-wildcard patterns, reject same-method intersections, route HEAD through GET and produce405 Allow. Raw segments decode once; encoded slash remains a parameter coordinate. Successor contexts preserve transport/cancellation facts. Actual H1/H2 HEAD tests verify body suppression; PERF-31 records constructor cost.
+Immutable Routes (okkama-docs `docs/std/http-routing.md`) compile literal/named/final-wildcard patterns into a segment tree and send a request to the most specific pattern: segment by segment a literal before a parameter before a wildcard (#103). Only two routes of one method with the same shape are refused; finding a route costs one step per segment, whatever the number of routes (#104). HEAD goes through GET, and a known path with another method gets 405 with Allow. Raw segments decode once; encoded slash remains a parameter coordinate. Successor contexts preserve transport/cancellation facts. Actual H1/H2 HEAD tests verify body suppression.
 
 
 `runtime/collections.string_map_snapshot`: required native-change full gate 779files /13,120checks PASS; frozen2172inputs and root runtime are byte-verified. Later std-only changes use separate focused gates.
 
 
-[HTTP forms](std/http-form.md) own an HTTP-delimited body and expose one streaming part at a time. Read to EOF before advancing; early close aborts and settled joins cancellation. UTF-8 metadata uses HTTP octet headers. Text projection, bounded URL-encoded decoding and caller-selected temporary spooling are explicit; filenames never choose paths.
+HTTP forms (okkama-docs `docs/std/http-form.md`) own an HTTP-delimited body and expose one streaming part at a time. Read to EOF before advancing; early close aborts and settled joins cancellation. UTF-8 metadata uses HTTP octet headers. Text projection, bounded URL-encoded decoding and caller-selected temporary spooling are explicit; filenames never choose paths.
 
 
-[SSE](std/http-sse.md) uses one-shot EventBody over a bounded channel and owned ServerEvents parsing. Keepalive comments are explicit; incomplete EOF blocks are discarded. UTF-8 replacement, CRLF/CR/LF and persistent id/retry are tested on real H1. Metadata/size limits are explicit; reconnect remains client policy.
+SSE (okkama-docs `docs/std/http-sse.md`) uses one-shot EventBody over a bounded channel and owned ServerEvents parsing. Keepalive comments are explicit; incomplete EOF blocks are discarded. UTF-8 replacement, CRLF/CR/LF and persistent id/retry are tested on real H1. Metadata/size limits are explicit; reconnect remains client policy.
 
 
 Routing validation also partitions larger families on later common literal
@@ -6706,18 +5466,18 @@ positions, retaining exact pair checks when no safe separator exists. An explici
 worklist handles maximum depth; separate name sorting preserves capture grammar
 and original parts. These validation indexes do not reorder request dispatch.
 
-[Robots policy](std/http-robots.md) compiles bounded groups and wildcard rules, preserves reserved percent escapes and chooses allow on a specificity tie. Lazy FetchedRobots owns response reading and cancellation; redirect/cache behavior belongs to the supplied exchange. Crawl-delay is explicit coordination, never authorization.
+Robots policy (okkama-docs `docs/std/http-robots.md`) compiles bounded groups and wildcard rules, preserves reserved percent escapes and chooses allow on a specificity tie. Lazy FetchedRobots owns response reading and cancellation; redirect/cache behavior belongs to the supplied exchange. Crawl-delay is explicit coordination, never authorization.
 
 RobotsPolicy.allowed() selects indexed rule ranges for each chosen agent group; repeated selected ids do not repeat rule matching. The public selected() result keeps its original records, and wildcard budgets remain unchanged. Each agent record is scored once per selection; parsed Crawl-delay values and indexed group ranges are reused while preserving zero, maximum-delay and absence behavior. Wildcard rules use a bounded scalar star primitive with byte cursors, preserving exact retries and the original logical-step quota; literal matching retains its cached prefix/equality path.
 
 
-[XML-RPC](std/http-xmlrpc.md) passes typed values through a one-event printing capability, preserving role confinement. Immutable member sequences, typed faults, strict XML1/Base64 and explicit budgets/nil compose with supplied HTTP exchange/handler. Parsed doubles preserve decimal wire values; bodies are bounded snapshots. Real H1 and cancellation checks pass.
+XML-RPC (okkama-docs `docs/std/http-xmlrpc.md`) passes typed values through a one-event printing capability, preserving role confinement. Immutable member sequences, typed faults, strict XML1/Base64 and explicit budgets/nil compose with supplied HTTP exchange/handler. Parsed doubles preserve decimal wire values; bodies are bounded snapshots. Real H1 and cancellation checks pass.
 
-[Rooted filesystem access](std/fs-root.md) starts from an explicitly acquired directory descriptor. Each decoded coordinate is opened relative to the retained parent without following symlinks; regular-file entries own independent descriptors. This closes the path-validation/open race for static HTTP files. A descriptor remains valid after root closure, but it does not freeze mutable file contents.
+Rooted filesystem access (okkama-docs `docs/std/fs-root.md`) starts from an explicitly acquired directory descriptor. Each decoded coordinate is opened relative to the retained parent without following symlinks; regular-file entries own independent descriptors. This closes the path-validation/open race for static HTTP files. A descriptor remains valid after root closure, but it does not freeze mutable file contents.
 
-[Static HTTP files](std/http-static.md) borrow a descriptor root and hand each response its own one-shot reader. Preconditions and HEAD decide from metadata before content reads; byte ranges have exact framing. Listing and precompressed artifacts require explicit policy. The metadata ETag is weak and file contents can still change in place.
+Static HTTP files (okkama-docs `docs/std/http-static.md`) borrow a descriptor root and hand each response its own one-shot reader. Preconditions and HEAD decide from metadata before content reads; byte ranges have exact framing. Listing and precompressed artifacts require explicit policy. The metadata ETag is weak and file contents can still change in place.
 
-[Portable database values](std/db-values.md) print exactly one typed event through a confined role. NULL stays distinct; Statement snapshots bindings separately from SQL and leaves parsing to the backend. Ordered Row observations preserve duplicate names and fail ambiguous lookup. Captured printers are sealed before publishing; the [owned SQLite layer](std/db-sqlite.md) supplies asynchronous readers, transactions, prepared statements, BLOB, scripts and backup. [DbPool](std/db-pool.md) supplies FIFO leases and asynchronous reset/shutdown. Domain objects need no embedded infrastructure dependency.
+Portable database values (okkama-docs `docs/std/db-values.md`) print exactly one typed event through a confined role. NULL stays distinct; Statement snapshots bindings separately from SQL and leaves parsing to the backend. Ordered Row observations preserve duplicate names and fail ambiguous lookup. Captured printers are sealed before publishing; the owned SQLite layer (okkama-docs `docs/std/db-sqlite.md`) supplies asynchronous readers, transactions, prepared statements, BLOB, scripts and backup. DbPool (okkama-docs `docs/std/db-pool.md`) supplies FIFO leases and asynchronous reset/shutdown. Domain objects need no embedded infrastructure dependency.
 
 
 ### Owned database work
@@ -6729,13 +5489,14 @@ are separate capabilities available on concrete acquisitions.
 
 ```okkama
 let transaction=await connection.transaction(TransactionOptions());
-await transaction.execution(Statement("INSERT INTO customers VALUES(?,?)",
-    [Param(7),Param("Ada")]));
+await transaction.execution("INSERT INTO customers VALUES(?,?)",[DbInteger(7),DbText("Ada")]);
 await transaction.commit();
 ```
 
-Use `Param` from `db/param` for scalars and `Maybe<T>` parameters. `Query` from
-`db/query` accepts either `(connection, Statement(...))` or `(prepared, parameters)`;
+Bind values with the typed objects from `db/value` (#188): `DbInteger(7)`,
+`DbText("Ada")`, `DbBoolean`, `DbFloating`, `DbDecimal`, `DbBytes` and
+`DbNull()`; each also takes a `Maybe`, whose `none` binds NULL. `Query` from
+`db/query` accepts either `(origin: connection, statement: Statement(...))` or `(prepared:, values:)`;
 `one()`, `maybe()`, `all(limit)` and `rows()` share the same result contract.
 Read columns directly with `row.text(name)` or `row.maybe(name).text() else fallback`.
 `Execution.affected()` returns `Maybe<BigInt>`: unknown is distinct from zero.
@@ -6749,24 +5510,25 @@ own a bounded live cursor and return immutable Row copies; close them before
 another incompatible operation. For pooled work, lease close revokes readers,
 rolls back an active transaction and releases its FIFO slot after reset. Explicit
 close schedules cleanup; settled joins it. The complete
-[database example](../examples/std-v4/database-stack.ok) also demonstrates native
+database example (okkama-docs `examples/std-v4/database-stack.ok`) also demonstrates native
 prepared reuse, incremental BLOB, script parsing and a bounded online backup.
 
 ### Application arguments, settings and terminals
 
-The [application/CLI contract](std/application-cli.md) keeps application policy
-in std objects. `ProcessArguments()` observes the runner's exact remaining argv;
-`Utf8Arguments` decodes each argument separately without interpreting shell text.
-`ParsedCommand` validates an explicit command tree and returns an `Invocation`.
-It never prints help or exits; the application handles `CliFailure` and declared
-help/version flags itself. [Executable example](../examples/std-v4/application-cli.ok).
+The application/CLI contract (okkama-docs `docs/std/application-cli.md`) keeps application policy
+in std objects. `ProcessArguments()` observes the runner's exact remaining argv,
+and `strings()` decodes each argument separately, without interpreting shell
+text. `command.invocation(arguments)` reads them against an explicit
+`CliCommand` tree and returns an `Invocation`. It never prints help or exits:
+the application handles `CliFailure` and its declared help/version flags
+itself. Executable example (okkama-docs `examples/std-v4/application-cli.ok`).
 
 Settings retains an index of actual segment keys for binary lookup. keys() keeps
 source order and DuplicateSetting keeps the earliest original repeated key.
 Child command validation sorts auxiliary names while retaining children order.
 Layering finds and copies one balanced index path in a single traversal per update and publishes original
 insertion order once. CLI reads this validated overlay directly for value
-options. Maximum cardinality is not a latency guarantee; CommandSyntax prepares exact alias and segment-key indexes while retaining
+options. Maximum cardinality is not a latency guarantee; CliCommand prepares exact alias and segment-key indexes while retaining
 first-error priority. Parser alias queries use binary lookup and return original
 positions; options, flags and operands keep declaration order.
 
@@ -6776,11 +5538,11 @@ apply only to absence. Environment mappings and JSON/TOML/INI adapters are expli
 These objects represent configuration entities; they do not inspect domain fields.
 
 ```okkama
-let key=SettingKey(["greeting","name"]);
-let defaults=Settings([SettingEntry(key,["world"],
-    SettingSource(SettingSourceKind.defaults,"application"))]);
-let settings=LayeredSettings([defaults,invocation.settings()]);
-let name=ScalarSetting(settings,key).value();
+let key=SettingKey("greeting","name");
+let defaults=Settings(SettingEntry(key: key,values: ["world"],
+    source: SettingSource(kind: SettingSourceKind.defaults,name: "application")));
+let settings=LayeredSettings(defaults,invocation.settings());
+let name=settings.text("greeting.name") else "world";
 ```
 
 An async terminal acquisition returns one owned session. Its child input/output,
@@ -6791,7 +5553,7 @@ terminal is opened independently of redirection, and secret prompts require it.
 
 ```okkama
 let session=await OpenedStandardTerminal(
-    TerminalOutputKind.standard_output,ColorPolicy.automatic).session();
+    output: TerminalOutputKind.standard_output,policy: ColorPolicy.automatic).session();
 defer session.close();
 session.output().writeln("Hello, ",name,"!");
 ```
@@ -6815,8 +5577,7 @@ is installed. A destination receives one LogRecord and propagates failures;
 BestEffort and Fallback make loss/alternate delivery explicit.
 
 ```okkama
-let logger=NamedLogging(LogName(["service"]),JsonStreamLogs(Stdout()),
-    SystemClock(),EmptyLogFields().value());
+let logger=NamedLogging(name: "service",destination: JsonStreamLogs(Stdout()));
 logger.log(LogLevel.info,"started");
 ```
 
@@ -6825,8 +5586,8 @@ line contains reserved metadata and nested application fields; terminal styling
 uses explicit LogStyle entries and ColorPolicy. Files append lazily and have
 explicit close/reopen; one record is never divided by rotation. Only one process
 may own rotation of a path. Fallback can duplicate a partially delivered record.
-See the [complete contract](std/logging.md),
-[example](../examples/std-v4/logging-stack.ok) and
+See the complete contract (okkama-docs `docs/std/logging.md`),
+example (okkama-docs `examples/std-v4/logging-stack.ok`) and
 measured limitations.
 
 QueuedLogs keeps a bounded persistent FIFO and starts one worker in a supplied
@@ -6837,7 +5598,7 @@ is reject/drop_newest/drop_oldest with a BigInt loss count. An eager scope/Event
 can run formatting or synchronous I/O in write(); the queue promises no capacity
 wait, not a caller latency bound. SyslogLogs borrows a connected UDP owner and
 reuses this lifecycle. Successful drain is local send completion, not delivery
-acknowledgment. See [logging queue and syslog](std/logging.md).
+acknowledgment. See logging queue and syslog (okkama-docs `docs/std/logging.md`).
 
 ### Locales and message catalogs
 
@@ -6866,12 +5627,12 @@ let catalog = MessageCatalog(Locale("en"), [
 catalog.plural(key, PluralNumber("1.0")); // "files"
 ```
 
-[Contract and pinned-data evidence](std/locale-i18n.md).
+Contract and pinned-data evidence (okkama-docs `docs/std/locale-i18n.md`).
 
 `LocalizedList(values,locale,ListKind.conjunction,ListStyle.long).string()`
 formats literal items through pinned CLDR list patterns. Choose disjunction/unit
 and short/narrow explicitly; regional patterns and root fallback are deterministic.
-[Contract and bounds](std/locale-list.md).
+Contract and bounds (okkama-docs `docs/std/locale-list.md`).
 
 
 ### Checks, manual time and properties
@@ -6904,13 +5665,13 @@ explicit random stream in order. Reductions shorten prefixes and simplify one
 element at a time, retaining reproduction text. Candidate sequences are built
 only when requested; use `Property<Sequencing<T>>` for sequence invariants.
 
-[Contracts, result models and TAP/JSON reports](std/testing.md).
+Contracts, result models and TAP/JSON reports (okkama-docs `docs/std/testing.md`).
 
 
 `JUnitTestReport(report,suite).string()` builds XML values and preserves exact
 nanosecond durations, case order, seed and byte captures (Base64). Timeout/crash
-are errors; failed assertions are failures. The [documented JUnit dialect](std/testing.md)
-uses suite/case properties. [XML values](std/xml-values.md) also preserve mixed
+are errors; failed assertions are failures. The documented JUnit dialect (okkama-docs `docs/std/testing.md`)
+uses suite/case properties. XML values (okkama-docs `docs/std/xml-values.md`) also preserve mixed
 content and namespace coordinates; source XML parsing remains a separate task.
 
 
@@ -6918,13 +5679,13 @@ Locale now supports complete bounded BCP 47 syntax and pinned IANA preferred
 values: Locale("iw-IL").string() is "he-IL". LocaleExtensions exposes Unicode
 attributes/keywords, transformed and private-use coordinates without discarding
 identity. CLDR fallback removes the suffix; LikelyLocale preserves it.
-[Complete tag contract](std/locale-tag-guide.md).
+Complete tag contract (okkama-docs `docs/std/locale-tag-guide.md`).
 
 
 When Decimal must retain a float's binary64 identity, use
-ShortestFloat(value).value() from numbers/float; the builtin float.string() does
+ShortestFloat(value).decimal() from numbers/float; the builtin float.string() does
 not guarantee that roundtrip. negative() retains negative zero separately.
-[Exact conversion contract](std/shortest-float.md).
+Exact conversion contract (okkama-docs `docs/std/shortest-float.md`).
 
 
 Localized numeric text represents a value together with an explicit Locale and
@@ -6933,14 +5694,14 @@ substitution; LocalizedFloat uses verified ShortestFloat and retains negative ze
 Scientific, engineering, compact and percent representations share precision/sign
 policies. LocalizedDecimalFromString and LocalizedIntegerFromString are strict
 bounded inverses for ordinary/scientific values; compact text has no inverse.
-[Contract and example](std/locale-number.md).
+Contract and example (okkama-docs `docs/std/locale-number.md`).
 
 
 Currency("USD") identifies an explicit pinned ISO currency; Locale never chooses
 it. LocalizedCurrency(amount,currency,locale,CurrencyFormat(...)) rounds Decimal
 exactly and applies CLDR symbols, names, plural rules and accounting. Undefined
 ISO minor units are typed; explicit precision can still format those identities.
-[Currency contract and example](std/locale-currency.md).
+Currency contract and example (okkama-docs `docs/std/locale-currency.md`).
 
 
 LocalizedDate/LocalizedTime/LocalizedLocalDateTime select pinned Gregorian CLDR
@@ -6948,7 +5709,7 @@ styles for immutable wall values. LocalizedInstant additionally requires an
 explicit TimeZone; Locale never supplies one. Unsupported calendars fail rather
 than changing years. Wall full/long time omits zone fields; instant output uses
 compatible localized names or localized GMT, preserving offset seconds.
-[Date/time contract and example](std/locale-date-time.md).
+Date/time contract and example (okkama-docs `docs/std/locale-date-time.md`).
 
 
 Localized ordering is explicit: wrap each string in CollatedString with Locale
@@ -6956,61 +5717,44 @@ and CollationOptions, then use its Comparing role. Numeric ordering can place
 file2 before file10 while builtin string order remains locale-independent.
 Keys compare only within the same locale, policy and pinned ICU data version;
 they are ephemeral representations, not persisted identities.
-[Collation contract and example](std/locale-collation.md).
+Collation contract and example (okkama-docs `docs/std/locale-collation.md`).
 
 
 GNU catalogs select indexed plural forms through their own parsed formula.
 GettextCatalog receives MO bytes and an explicit locale; GettextTranslation
 adapts it to Translating. ParsedPo and PoString represent ordered active source
 without installing global translation functions. MessageKey("",id,true) keeps
-an explicit empty context distinct from absence. [Contract/example](std/gettext.md).
+an explicit empty context distinct from absence. Contract/example (okkama-docs `docs/std/gettext.md`).
 
 
-### Completed test execution and snapshots
+### Test execution and snapshots
 
-Test blocks now support `test.skip("reason")`. Assertions keep their external
-source position, and a mismatched error assertion retains the original typed
-cause. Private actions remain available to the declaring async body after await
-and in deferred cleanup. Cancelling an owned awaited call waits for its cleanup
-before unwinding its caller.
+`test.skip("reason")` ends a test and reports it as skipped; `okkama run -t
+--filter TEXT` runs only the tests whose names contain TEXT. Tests run in
+declaration order, in the process of the run, and print `=== RUN`, then
+`--- PASS`, `--- FAIL` or `--- SKIP`; the run exits 1 when a test failed.
+Report formats, a seed, process workers and deadlines are not part of the
+runner yet.
 
 ```sh
-OKKAMA_STDLIB_DIR=std okkama-pl/bin/okkama -t examples/std-v4/testing-values.ok --workers 2 --seed 42 --report junit
+okkama run -t --filter snapshot path/to/module.ok
 ```
-
-Explicit runner options use fresh process workers, bounded byte capture, literal
-name filters and deadlines. Human, TAP, JSON and JUnit render the same nominal
-TestReport, in declaration order. The seed controls execution order; it does not
-replace a property's own PCG seed. The legacy -t invocation remains available.
 
 Snapshot checking and updating are separate commands:
 
 ```okkama
-import "testing/snapshot" take SnapshotFile,TextSnapshot,Snapshot,SnapshotUpdate;
+import "testing/snapshot" take SnapshotFile, TextSnapshot, Snapshot, SnapshotUpdate;
 // directory is an explicit DirectoryLocating capability.
-let expected=SnapshotFile(directory,"invoice.txt");
-let actual=TextSnapshot("invoice\r\n");
-Snapshot(actual,expected,4096).check();
+let expected = SnapshotFile(directory, "invoice.txt");
+let actual = TextSnapshot("invoice\r\n");
+Snapshot(actual, expected, 4096).check();
 // Use only when intentionally accepting new expected data:
-SnapshotUpdate(actual,expected,4096).update();
+SnapshotUpdate(actual, expected, 4096).update();
 ```
 
 TextSnapshot chooses UTF-8/LF normalization; RawSnapshot keeps exact bytes and
-JsonSnapshot prints explicit ordered JSON values. Checks never create missing
-files. Updates use a no-follow root descriptor and atomic sibling replacement.
-Different ManualClock owners carry distinct monotonic domains, so accidental
-cross-clock subtraction or comparison raises IncompatibleClock.
-
-Inside role fakes use fake.reading.get/has/size and fake.writing.set/remove/clear.
-The writing commands do not return a storage object; remove returns whether a
-key existed. Neither contextual capability can escape as a value. Existing
-fake.storage is deprecated but compatible.
-
-[Full testing contract](std/testing.md) specifies limits, cleanup grace, backend
-requirements and report cause projections. [Line diffs](std/diff.md) use bounded
-LCS matching and immutable std representations. LocaleDataVersion publishes the
-separate ISO snapshot, ICU, UCA and collation-CLDR coordinates in addition to
-ordinary CLDR/Unicode/IANA data versions.
+JsonSnapshot prints explicit ordered JSON values. A check never creates a
+missing file: it fails the test.
 
 ### Keep a parsed MIME result for navigation
 
@@ -7028,7 +5772,7 @@ serializing or parsing bodies. Each new ParsedMime.result() call parses again;
 the existing part() delegates to result().part(). The result retains parser
 nodes()/decoded() accounting and checked limits. SMTP DATA walks this tree for
 8bit/binary CTE inspection; MimeBody still exposes bytes()/validate().
-See the [MIME contract](std/mime-part.md) for limits and navigation boundaries.
+See the MIME contract (okkama-docs `docs/std/mime-part.md`) for limits and navigation boundaries.
 
 ### Separate work guards from elapsed-time measurements
 
@@ -7038,7 +5782,7 @@ warnings, interpreter call counts and depth. A separate sequential job, run as
 10/25-second budgets using one warmup and five fresh-VM samples and their median.
 Measurements include parsing/imports/execution. Use an idle fixed machine for
 comparative baselines; ordinary parallel regression retains structural guards.
-See the [testing contract](std/testing.md).
+See the testing contract (okkama-docs `docs/std/testing.md`).
 
 ### Grant structured MIME rendering explicitly
 
@@ -7059,4 +5803,4 @@ replacing public headers immutably.
 
 Compact byte arrays retain fresh immutable wrappers across any boxing and strict
 array equality without reconstructing every Byte. Any remains opaque; explicit
-elements()/iteration may still materialize data. See the [MIME contract](std/mime-part.md).
+elements()/iteration may still materialize data. See the MIME contract (okkama-docs `docs/std/mime-part.md`).

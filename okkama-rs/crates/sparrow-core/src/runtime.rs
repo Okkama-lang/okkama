@@ -223,6 +223,8 @@ impl Runtime {
             return;
         }
         self.count(|_| "gc collection".into());
+        let started = self.heap.allocations.is_some().then(std::time::Instant::now);
+        self.prune_spawned();
         let jit = &self.jit;
         let constants = &self.constants;
         let roots = &self.roots;
@@ -236,9 +238,13 @@ impl Runtime {
             .copied()
             .collect();
         let states = &self.states;
-        self.heap.collect(|visit| {
+        self.heap.collect_with(|visit| {
+            // A group's tasks are kept only while the group is reachable some
+            // other way (#503); running and parked tasks are roots of their own.
             for state in states.values() {
-                state.trace(visit);
+                if !matches!(state, crate::primitives::State::Group(_)) {
+                    state.trace(visit);
+                }
             }
             // SAFETY: frame records above a helper called from machine code
             // lead through JIT frames to the Rust entry.
@@ -250,6 +256,12 @@ impl Runtime {
             for &task in &tasks {
                 visit(task, Repr::Ref);
             }
+        }, |marked, visit| {
+            for (&object, state) in states.iter() {
+                if matches!(state, crate::primitives::State::Group(_)) && marked(object) {
+                    state.trace(visit);
+                }
+            }
         });
         let released = self.heap.take_released();
         self.resources.forget(&released);
@@ -258,6 +270,9 @@ impl Runtime {
         }
         if let Some(host) = &mut self.host {
             host.released(&released);
+        }
+        if let (Some(allocations), Some(started)) = (&mut self.heap.allocations, started) {
+            allocations.around_nanos += started.elapsed().as_nanos() as u64;
         }
     }
 
@@ -279,6 +294,11 @@ impl Runtime {
         let extra = [
             ("heap bytes allocated".to_string(), heap.allocated_bytes as u64),
             ("heap live bytes, mean after collection".to_string(), (heap.live_sum / heap.collections.max(1)) as u64),
+            ("collections".to_string(), heap.collections as u64),
+            // Rust memory owned by heap objects, estimated (#331).
+            ("owned Rust bytes charged, estimate".to_string(), heap.external_allocated_bytes as u64),
+            ("owned Rust bytes live after the last collection, estimate".to_string(), heap.external_live_bytes as u64),
+            ("collections triggered by owned Rust memory".to_string(), heap.external_collections as u64),
         ];
         let helpers = self.jit.helper_calls();
         // Runtime allocations by kind (objects by type) and collection time.
@@ -298,8 +318,21 @@ impl Runtime {
                         };
                         [(format!("alloc runtime {what}, count"), count), (format!("alloc runtime {what}, bytes"), bytes)]
                     })
+                    .chain(allocations.live.iter().flat_map(|(&(kind, descriptor), &(count, bytes))| {
+                        let what = match kind {
+                            "object" => format!("object {}", program.objects.get(descriptor as usize).map_or("?", |object| object.name.as_str())),
+                            other => other.to_string(),
+                        };
+                        [(format!("live after the last collection {what}, count"), count), (format!("live after the last collection {what}, bytes"), bytes)]
+                    }))
                     .chain([
                         ("collection, microseconds".to_string(), allocations.collection_nanos / 1000),
+                        ("collection marking, microseconds".to_string(), allocations.mark_nanos / 1000),
+                        ("collection sweep, microseconds".to_string(), allocations.sweep_nanos / 1000),
+                        (
+                            "collection around it in the runtime, microseconds".to_string(),
+                            allocations.around_nanos.saturating_sub(allocations.collection_nanos) / 1000,
+                        ),
                         ("run, microseconds".to_string(), self.created.elapsed().as_micros() as u64),
                     ])
             })
@@ -370,13 +403,13 @@ pub extern "C" fn rt_allocate(ctx: *mut Ctx, words: u64) -> Word {
     let frame = frame_pointer!();
     let (ctx, runtime) = unsafe { runtime(ctx) };
     runtime.count(|_| "allocation slow path".into());
-    if let (Some(limit), Some(meter)) = (runtime.limits.memory, &runtime.budget.meter) {
+    if let (Some(limit), Some(used)) = (runtime.limits.memory, runtime.memory_used()) {
         // A small cell comes from a new page when its free list is empty.
         let bytes = match Heap::class_of(words as usize) {
             Some(_) => crate::heap::PAGE_BYTES,
             None => words as usize * 8,
         };
-        if meter.used().saturating_add(bytes as isize) > limit as isize {
+        if used.saturating_add(bytes as isize) > limit as isize {
             return runtime.exhaust(ctx, Exhausted::Memory);
         }
     }
@@ -418,10 +451,20 @@ impl Runtime {
         self.budget.fuel.set(0);
     }
 
+    /// What the memory budget measures now (#269): the process allocator's
+    /// bytes beyond the start of the run, or this runtime's heap.
+    pub(crate) fn memory_used(&self) -> Option<isize> {
+        self.limits.memory?;
+        match self.limits.memory_scope {
+            crate::budget::MemoryScope::Process => self.budget.meter.as_ref().map(crate::budget::Meter::used),
+            crate::budget::MemoryScope::Runtime => Some(self.heap.held_bytes() as isize),
+        }
+    }
+
     /// Would `bytes` more cross the memory budget?
     pub(crate) fn would_exceed(&self, bytes: u64) -> bool {
-        match (self.limits.memory, &self.budget.meter) {
-            (Some(limit), Some(meter)) => meter.used().saturating_add(bytes.min(isize::MAX as u64) as isize) > limit as isize,
+        match (self.limits.memory, self.memory_used()) {
+            (Some(limit), Some(used)) => used.saturating_add(bytes.min(isize::MAX as u64) as isize) > limit as isize,
             _ => false,
         }
     }
@@ -434,8 +477,8 @@ impl Runtime {
         if self.limits.interrupted() {
             return Some(Exhausted::Interrupted);
         }
-        match (self.limits.memory, &self.budget.meter) {
-            (Some(limit), Some(meter)) if meter.used() > limit as isize => Some(Exhausted::Memory),
+        match (self.limits.memory, self.memory_used()) {
+            (Some(limit), Some(used)) if used > limit as isize => Some(Exhausted::Memory),
             _ => None,
         }
     }
@@ -457,10 +500,16 @@ impl Runtime {
     /// Start the budgets of a run: the first slice of steps.
     fn start_budget(&mut self) -> Result<i64, Error> {
         if let Some(limit) = self.limits.memory {
-            let probe = crate::budget::memory_probe().ok_or_else(|| {
-                Error("a memory budget needs a memory probe (sparrow_core::budget::set_memory_probe)".into())
-            })?;
-            let meter = *self.budget.meter.get_or_insert_with(|| crate::budget::Meter::start(probe));
+            // A budget of the runtime reads its heap and needs no probe.
+            let meter = match self.limits.memory_scope {
+                crate::budget::MemoryScope::Process => {
+                    let probe = crate::budget::memory_probe().ok_or_else(|| {
+                        Error("a memory budget needs a memory probe (sparrow_core::budget::set_memory_probe)".into())
+                    })?;
+                    Some(*self.budget.meter.get_or_insert_with(|| crate::budget::Meter::start(probe)))
+                }
+                crate::budget::MemoryScope::Runtime => None,
+            };
             self.heap.watch = Some(crate::budget::Watch::new(meter, limit, &self.budget.fuel));
         }
         Ok(match self.limits.steps {
@@ -548,15 +597,11 @@ pub extern "C" fn rt_int_order(ctx: *mut Ctx, left: Word, right: Word) -> i64 {
 pub extern "C" fn rt_concat(ctx: *mut Ctx, left: Word, right: Word) -> Word {
     let frame = frame_pointer!();
     let (ctx, runtime) = unsafe { runtime(ctx) };
-    // The size is known before the copy (#72): a memory budget stops it here.
-    let size = runtime.heap.text(left).len() + runtime.heap.text(right).len();
-    if runtime.would_exceed(size as u64) {
+    // The size of what is allocated is known before the copy (#72): a
+    // memory budget stops it here.
+    let Some(word) = crate::ops::concat_text(runtime, left, right, |runtime, bytes| !runtime.would_exceed(bytes as u64)) else {
         return runtime.exhaust(ctx, Exhausted::Memory);
-    }
-    let mut text = String::with_capacity(size);
-    text.push_str(runtime.heap.text(left));
-    text.push_str(runtime.heap.text(right));
-    let word = runtime.heap.allocate_text(&text);
+    };
     runtime.safepoint(frame, ctx, &[(word, Repr::Ref)]);
     word
 }

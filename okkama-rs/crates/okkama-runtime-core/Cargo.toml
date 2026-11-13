@@ -19,6 +19,8 @@ no-regions-bench = []
 [dependencies]
 okkama-allocation-counter = { path = "../../tools/allocation-counter", optional = true }
 okkama-runtime-abi = { path = "../okkama-runtime-abi" }
+# Tries for chains of `replaced` (#335), as on Tomato.
+okkama-persistent = { path = "../okkama-persistent" }
 # Длинная арифметика `int` (Karatsuba/Toom-3, двоичные разряды).
 num-bigint = "0.4"
 num-integer = "0.1"
@@ -32,6 +34,9 @@ corosensei = "0.3.4"
 libc = "0.2"
 # Распаковка gzip-таблиц рантайма (unicode.dat и др., общие с JVM).
 miniz_oxide = "0.8"
+# zstd and Brotli codecs (#184).
+zstd = { version = "0.13", default-features = false }
+brotli = { version = "8", default-features = false, features = ["std"] }
 # Нормализация Unicode (NFC/NFD/NFKC/NFKD), как java.text.Normalizer.
 unicode-normalization = "0.1"
 # Сокеты с опциями (reuse, dual stack, multicast), как NIO JVM.
@@ -46,7 +51,7 @@ unicode-segmentation = "1"
 md-5 = "0.10"
 sha1 = "0.10"
 # Owned SQLite statements/rows; bundle SQLite so the Rust provider has one ABI.
-rusqlite = { version = "0.37", features = ["bundled", "column_decltype"] }
+rusqlite = { version = "0.41", features = ["bundled", "column_decltype"] }
 # A movable worker cursor must not retag its borrowed statement as a unique Box.
 aliasable = "0.1"
 fallible-iterator = "0.3"

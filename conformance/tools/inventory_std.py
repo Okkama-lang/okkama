@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Inventory the public surface of an Okkama standard library tree.
 
-Usage: tools/inventory_std.py [STD_ROOT] [--write]
+Usage: tools/inventory_std.py [STD_ROOT] [--write | --check]
+
+--check exits 1 when contracts/stdlib.json is not what --write would write
+(the release gate runs it, #282).
 
 Writes contracts/stdlib.json: one STD.* coverage contract per module, built
 from a scan of every module's directly owned declarations and public actions. The scanner is a small token-level
@@ -105,17 +108,12 @@ def skip_block(toks, j):
 
 def scan_body(toks, j, owner_name):
     """Scan an object/role body starting at '{'. Returns (members, end)."""
-    members = {"actions": [], "private_actions": [], "constructors": [], "fields": [], "caps": [], "has_fake": False,
+    members = {"actions": [], "hidden_actions": [], "constructors": [], "fields": [], "caps": [], "has_fake": False,
                "has_destroy": False, "tests": 0}
     end = skip_block(toks, j)
     j += 1
-    private = False
     while j < end - 1:
         k, v, line = toks[j]
-        if v == "private" and j + 1 < end and toks[j + 1][1] == ":":
-            private = True
-            j += 2
-            continue
         if v == "has" and j + 1 < end and toks[j + 1][0] == "ident" and toks[j + 1][1] != "(":
             names = []
             j += 1
@@ -165,6 +163,13 @@ def scan_body(toks, j, owner_name):
                     j += 1
                 j += 1
             continue
+        # `hidden` before an action keeps it out of the public contract (#365);
+        # `hidden(` is an action named `hidden`.
+        hidden = False
+        if v == "hidden" and j + 1 < end and toks[j + 1][0] == "ident":
+            hidden = True
+            j += 1
+            k, v, line = toks[j]
         is_async = False
         if v == "async":
             is_async = True
@@ -176,7 +181,7 @@ def scan_body(toks, j, owner_name):
                 members["constructors"].append({"params": params, "line": line})
             else:
                 entry = {"name": v, "params": params, "result": result, "async": is_async, "line": line}
-                (members["private_actions"] if private else members["actions"]).append(entry)
+                (members["hidden_actions"] if hidden else members["actions"]).append(entry)
             j = nj
             if j < end and toks[j][1] == "{":
                 j = skip_block(toks, j)
@@ -210,8 +215,14 @@ def scan_module(path):
             i += 1
         mod["version"] = "".join(ver)
         i += 1
+    hidden = False
     while i < len(toks):
         k, v, line = toks[i]
+        # A hidden declaration is not visible outside its module.
+        if v == "hidden" and i + 1 < len(toks) and toks[i + 1][1] in ("object", "role", "enum", "const"):
+            hidden = True
+            i += 1
+            continue
         if v == "import":
             j = i + 1
             path_tok = toks[j][1].strip('"') if j < len(toks) else ""
@@ -267,9 +278,10 @@ def scan_module(path):
             while j < len(toks) and toks[j][1] != "{":
                 j += 1
             members, end = scan_body(toks, j, name)
-            decl = {"kind": v, "name": name, "line": line, "generics": generics, "does": does}
+            decl = {"kind": v, "name": name, "line": line, "generics": generics, "does": does, "hidden": hidden}
             decl.update(members)
             mod["declarations"].append(decl)
+            hidden = False
             i = end
             continue
         if v == "enum" and i + 1 < len(toks):
@@ -280,9 +292,11 @@ def scan_module(path):
                 if toks[j][0] == "ident":
                     cases.append(toks[j][1])
                 j += 1
-            mod["declarations"].append({"kind": "enum", "name": name, "line": line, "cases": cases})
+            mod["declarations"].append({"kind": "enum", "name": name, "line": line, "cases": cases, "hidden": hidden})
+            hidden = False
             i = j + 1
             continue
+        hidden = False
         if v == "native":
             j = i + 1
             if toks[j][1] == "object":
@@ -333,6 +347,7 @@ def contract_id(module):
 
 def main(argv):
     write = "--write" in argv
+    check = "--check" in argv
     args = [a for a in argv if not a.startswith("--")]
     root = os.path.abspath(args[0] if args else os.path.join(SUITE, "..", "std"))
     modules = []
@@ -353,10 +368,10 @@ def main(argv):
             m["class"] = "substrate" if expected.startswith("runtime/") else "public"
             public = 0
             for d in m["declarations"]:
-                if d["kind"] in ("object", "role", "enum", "action", "external-cap"):
+                if d["kind"] in ("object", "role", "enum", "action", "external-cap") and not d.get("hidden"):
                     public += 1
             m["public_declarations"] = public
-            m["public_actions"] = sum(len(d.get("actions", [])) for d in m["declarations"]) + \
+            m["public_actions"] = sum(len(d.get("actions", [])) for d in m["declarations"] if not d.get("hidden")) + \
                 sum(1 for d in m["declarations"] if d["kind"] == "action")
             modules.append(m)
     inv = {
@@ -382,7 +397,7 @@ def main(argv):
             status = "mandatory"
             notes = None
         decls = ", ".join(sorted(d["name"] for d in m["declarations"]
-                                 if d["kind"] in ("object", "role", "enum", "action")))[:400]
+                                 if d["kind"] in ("object", "role", "enum", "action") and not d.get("hidden")))[:400]
         c = {
             "id": contract_id(m["import_path"]),
             "title": "std %s public contract (%s)" % (m["import_path"], decls or "no public declarations"),
@@ -409,11 +424,19 @@ def main(argv):
     print("modules: %(modules)d (public %(public_modules)d, substrate %(substrate_modules)d), declarations %(declarations)d, public actions %(public_actions)d" % inv["totals"])
     for p in problems:
         print("problem: " + p)
+    target = os.path.join(SUITE, "contracts", "stdlib.json")
+    text = json.dumps(doc, indent=2) + "\n"
     if write:
-        with open(os.path.join(SUITE, "contracts", "stdlib.json"), "w") as fh:
-            json.dump(doc, fh, indent=2)
-            fh.write("\n")
+        with open(target, "w") as fh:
+            fh.write(text)
         print("written contracts/stdlib.json")
+    if check:
+        with open(target) as fh:
+            current = fh.read()
+        if current != text or problems:
+            print("contracts/stdlib.json is stale: run tools/inventory_std.py ../std --write")
+            return 1
+        print("contracts/stdlib.json is current")
     return 0
 
 

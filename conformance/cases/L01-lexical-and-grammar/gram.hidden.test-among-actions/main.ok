@@ -1,0 +1,30 @@
+module app v1.0.0;
+
+object Account {
+    has balance is int;
+
+    Account(balance is int) {
+        self.balance = balance;
+    }
+
+    total() is int {
+        self.doubled();
+    }
+
+    hidden doubled() is int {
+        balance * 2;
+    }
+
+    test "among hidden actions" {
+        test.is(Account(2).total(), 4);
+        test.fail("ran");
+    }
+
+    hidden decreased() is int {
+        balance - 1;
+    }
+}
+
+main() is int {
+    0;
+}

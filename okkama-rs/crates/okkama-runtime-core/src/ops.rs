@@ -424,17 +424,19 @@ pub fn string(op: StrOp, args: &[&Value]) -> Result<Value> {
     }
 }
 
-/// `a + b + ...` над массивами: результат выделяется один раз под сумму длин.
+/// `a + b + ...` над массивами: продолжение цепочки добавлений пишет в
+/// общий буфер (#335), иначе результат выделяется один раз под сумму длин.
 pub fn array_concat(parts: &[&Value]) -> Result<Value> {
-    let mut size = 0;
-    for part in parts {
-        size += ArrayHeap.elements(part)?.len();
+    let arrays = parts.iter().map(|part| ArrayHeap.array(part)).collect::<std::result::Result<Vec<_>, _>>()?;
+    let size = arrays.iter().map(|array| array.len()).sum();
+    if let Some(shared) = crate::heap::concat_shared(&arrays, size) {
+        return Ok(shared);
     }
     let mut items = Vec::with_capacity(size);
-    for part in parts {
-        items.extend_from_slice(ArrayHeap.elements(part)?);
+    for array in &arrays {
+        items.extend_from_slice(&array.items());
     }
-    Ok(ArrayHeap.allocate(items))
+    Ok(crate::heap::concat_flat(&arrays, items))
 }
 
 /// `a - b - ...` над массивами: элементы `array`, не равные ни одному
@@ -443,13 +445,13 @@ pub fn array_concat(parts: &[&Value]) -> Result<Value> {
 pub fn array_difference(array: &Value, removed: &[&Value]) -> Result<Value> {
     let mut excluded = Vec::new();
     for part in removed {
-        excluded.extend_from_slice(ArrayHeap.elements(part)?);
+        excluded.extend_from_slice(&ArrayHeap.elements(part)?);
     }
     let keys: Option<std::collections::BTreeSet<crate::heap::MapKey>> =
         excluded.iter().map(|item| crate::heap::MapKey::from_value(item).ok()).collect();
     let items = ArrayHeap.elements(array)?;
     let mut kept = Vec::with_capacity(items.len());
-    for item in items {
+    for item in items.iter() {
         let present = match (&keys, crate::heap::MapKey::from_value(item)) {
             (Some(keys), Ok(key)) => keys.contains(&key),
             _ => {
@@ -472,24 +474,12 @@ pub fn array_difference(array: &Value, removed: &[&Value]) -> Result<Value> {
 
 /// `a + b + ...` над словарями; повтор ключа — значение правой части.
 pub fn map_merge(parts: &[&Value]) -> Result<Value> {
-    let mut entries = std::collections::BTreeMap::new();
-    for part in parts {
-        for (key, value) in maps::entries(part)? {
-            entries.insert(key.clone(), value.clone());
-        }
-    }
-    Ok(Value::Map(Rc::new(crate::heap::Map(entries))))
+    Ok(Value::Map(Rc::new(crate::heap::Map::merge(&maps::maps(parts)?))))
 }
 
 /// `a - b - ...` над словарями: записи `map`, ключей которых нет в `removed`.
 pub fn map_difference(map: &Value, removed: &[&Value]) -> Result<Value> {
-    let mut entries = maps::entries(map)?.clone();
-    for part in removed {
-        for key in maps::entries(part)?.keys() {
-            entries.remove(key);
-        }
-    }
-    Ok(Value::Map(Rc::new(crate::heap::Map(entries))))
+    Ok(Value::Map(Rc::new(maps::map(map)?.difference(&maps::maps(removed)?))))
 }
 
 pub fn map_new(entries: impl IntoIterator<Item = (Value, Value)>) -> Result<Value> {
@@ -497,10 +487,10 @@ pub fn map_new(entries: impl IntoIterator<Item = (Value, Value)>) -> Result<Valu
 }
 
 pub fn map_len(map: &Value) -> Result<Value> {
-    Ok(Value::Int(IntValue::from_u128(maps::entries(map)?.len() as u128)))
+    Ok(Value::Int(IntValue::from_u128(maps::map(map)?.len() as u128)))
 }
 
-pub fn map_lookup<'a>(map: &'a Value, key: &Value) -> Result<Option<&'a Value>> {
+pub fn map_lookup(map: &Value, key: &Value) -> Result<Option<Value>> {
     Ok(maps::get(map, key)?)
 }
 
@@ -508,7 +498,7 @@ pub fn map_lookup<'a>(map: &'a Value, key: &Value) -> Result<Option<&'a Value>> 
 /// `case_name` даёт имя case ключа-enum.
 pub fn map_get(map: &Value, key: &Value, case_name: &dyn Fn(usize, usize) -> String) -> Result<Value> {
     match map_lookup(map, key)? {
-        Some(value) => Ok(value.clone()),
+        Some(value) => Ok(value),
         None => Err(trap(format!("Map key not found: {}", key_text(key, case_name)))),
     }
 }
@@ -522,6 +512,7 @@ fn key_text(key: &Value, case_name: &dyn Fn(usize, usize) -> String) -> String {
         Value::Char(value) => format!("\"{value}\""),
         Value::Enum { declaration, case } => format!("\"{}\"", case_name(*declaration, *case)),
         Value::Int(value) => value.to_string(),
+        Value::Rat(value) => value.to_string(),
         other => format!("{other:?}"),
     }
 }
@@ -545,9 +536,12 @@ pub fn map_builder_finish(builder: &Value) -> Result<Value> {
 // ---- массивы и сборщики ----
 
 pub fn array_slice(array: &Value, start: &IntValue, end: &IntValue) -> Result<Value> {
-    let elements = ArrayHeap.elements(array)?;
-    let range = integer::slice_range(elements.len(), start, end).map_err(trap)?;
-    Ok(ArrayHeap.allocate(elements[range].to_vec()))
+    let array = ArrayHeap.array(array)?;
+    let range = integer::slice_range(array.len(), start, end).map_err(trap)?;
+    if let Some(shared) = crate::heap::slice_shared(array, range.clone()) {
+        return Ok(shared);
+    }
+    Ok(ArrayHeap.allocate(array.items()[range].to_vec()))
 }
 
 pub fn array_join(array: &Value, separator: &str) -> Result<Value> {
@@ -555,16 +549,15 @@ pub fn array_join(array: &Value, separator: &str) -> Result<Value> {
 }
 
 pub fn array_len(array: &Value) -> Result<Value> {
-    Ok(Value::Int(IntValue::from_u128(ArrayHeap.elements(array)?.len() as u128)))
+    Ok(Value::Int(IntValue::from_u128(ArrayHeap.array(array)?.len() as u128)))
 }
 
-pub fn array_lookup<'a>(array: &'a Value, index: &IntValue) -> Result<Option<&'a Value>> {
-    let elements = ArrayHeap.elements(array)?;
-    Ok(index.to_i64().and_then(|i| usize::try_from(i).ok()).and_then(|i| elements.get(i)))
+pub fn array_lookup(array: &Value, index: &IntValue) -> Result<Option<Value>> {
+    Ok(ArrayHeap.lookup(array, index)?)
 }
 
 pub fn array_get(array: &Value, index: &IntValue) -> Result<Value> {
-    array_lookup(array, index)?.cloned().ok_or_else(|| trap("Array index out of bounds"))
+    array_lookup(array, index)?.ok_or_else(|| trap("Array index out of bounds"))
 }
 
 pub fn builder_range(builder: &Value, start: &IntValue, end: &IntValue, inclusive: bool) -> Result<Value> {

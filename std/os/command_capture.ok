@@ -1,17 +1,16 @@
 module os/command_capture v1.0.0;
 
-import "os/command" take Commanding;
-import "os/process" take Exit, ExitKind, ProcessFailure;
-import "runtime/process" take
-    ProcessState,
-    CapturedProcess,
-    process_state_create,
-    process_state_start,
-    process_state_capture,
-    captured_process_status,
-    captured_process_overflow,
-    captured_process_output,
-    captured_process_errors;
+import "encoding/utf" take Utf8Decoded, Utf8Encoded;
+import "io/stream" take ByteSource;
+import "io/decorators" take ByteSnapshot;
+import "fs/path" take Path;
+import "os/command" take Command, Commanding, InheritedCommand;
+import "os/directory" take WorkingDirectory;
+import "os/environment" take Environment;
+import "os/process" take Exit, ExitKind, MissingExitCode, ProcessFailure;
+import "runtime/process" take ProcessState, CapturedProcess, process_state_create,
+    process_state_start, process_state_capture, captured_process_status, captured_process_overflow,
+    captured_process_output, captured_process_errors;
 
 // CommandCapture is the safe bounded alternative to manually coordinating
 // ProcessInput, ProcessOutput and ProcessErrors. completion() starts the child,
@@ -36,28 +35,44 @@ import "runtime/process" take
 // output() and errors() remain bytes. Decode them explicitly with the selected
 // encoding module. The limit applies independently to each stream.
 
+// Which stream went over its limit.
 enum CapturedStream = (output, errors);
 
+// Runs a command to its end and keeps what it printed, at most limit bytes of
+// each stream.
 object CommandCapture {
     has command is Commanding;
-    has input is @byte;
+    has input is ByteSource;
     has limit is int;
     has state is ProcessState;
 
+    // Runs origin with an empty input.
     CommandCapture(origin is Commanding, limit is int) {
         command = origin;
-        input = [];
+        let empty is @byte = [];
+        input = ByteSnapshot(empty);
         self.limit = limit;
         state = process_state_create();
     }
 
+    // Runs origin with input written to it and then closed.
     CommandCapture(origin is Commanding, input is @byte, limit is int) {
         command = origin;
-        self.input = input;
+        self.input = ByteSnapshot(input);
         self.limit = limit;
         state = process_state_create();
     }
 
+    // Standard input as UTF-8 text: CommandCapture(…, text: "b\na\n", limit: 1024).
+    CommandCapture(origin is Commanding, text is string, limit is int) {
+        command = origin;
+        input = Utf8Encoded(text);
+        self.limit = limit;
+        state = process_state_create();
+    }
+
+    // Starts the command, feeds it, reads both outputs at once and waits for
+    // its end; more than limit bytes on a stream is CaptureLimitExceeded.
     async completion() is CompletedCommand {
         confirm limit > 0 else throw InvalidCaptureLimit.limit(limit);
 
@@ -71,7 +86,7 @@ object CommandCapture {
             );
             let captured is CapturedProcess = await process_state_capture(
                 state,
-                input,
+                input.bytes(),
                 limit,
             );
             let overflow is int = captured_process_overflow(captured);
@@ -96,40 +111,165 @@ object CommandCapture {
         }
     }
 
-    private:
-    exit_kind(status is %string:int) is ExitKind {
+    hidden exit_kind(status is %string:int) is ExitKind {
         if status["state"] == 1 {
             ExitKind.exited;
         }
         else {
             match status["code"] {
-                case 1 { ExitKind.terminated; }
-                case 2 { ExitKind.killed; }
-                case 3 { ExitKind.interrupted; }
-                else { ExitKind.other; }
+                case 1 {
+                    ExitKind.terminated;
+                }
+                case 2 {
+                    ExitKind.killed;
+                }
+                case 3 {
+                    ExitKind.interrupted;
+                }
+                else {
+                    ExitKind.other;
+                }
             }
         }
     }
 }
 
+// How a captured command ended and what it printed, as bytes.
 object CompletedCommand {
     has completed_exit is Exit;
     has captured_output is @byte;
     has captured_errors is @byte;
 
+    // A result as given.
     CompletedCommand(exit is Exit, output is @byte, errors is @byte) {
         completed_exit = exit;
         captured_output = output;
         captured_errors = errors;
     }
 
-    exit() is Exit { completed_exit; }
+    // How it ended.
+    exit() is Exit {
+        completed_exit;
+    }
 
-    output() is @byte { captured_output; }
+    // What the process wrote to stdout and stderr, as UTF-8 text. Output that
+    // is not UTF-8 throws InvalidUtf8 here; ::Bytes keeps it exact.
+    cap Captured {
+        output is string {
+            Utf8Decoded(captured_output).string();
+        }
 
-    errors() is @byte { captured_errors; }
+        errors is string {
+            Utf8Decoded(captured_errors).string();
+        }
+    }
+
+    // The exact bytes of stdout and stderr.
+    cap Bytes {
+        output is @byte {
+            captured_output;
+        }
+
+        errors is @byte {
+            captured_errors;
+        }
+    }
 }
 
+// A limit below one.
 enum InvalidCaptureLimit is Error = (limit(limit is int));
 
+// A stream printed more than the limit.
 enum CaptureLimitExceeded is Error = (detailed(stream is CapturedStream, limit is int));
+
+async test "output, errors and the exit are captured" {
+    let shell = Command(
+        program: Path("sh"),
+        arguments: ["-c", "printf out; printf err >&2; exit 3"],
+        environment: Environment(),
+        directory: WorkingDirectory(),
+    );
+    let done = await CommandCapture(origin: shell, limit: 1024).completion();
+    test.is(done::Captured::output, "out");
+    test.is(done::Captured::errors, "err");
+    test.ok(done.exit()::Status::kind == ExitKind.exited);
+    test.is(done.exit().code(), 3);
+    test.ok(!done.exit().success());
+}
+
+async test "input is written whole and closed; arguments are never split" {
+    let echo = Command(
+        program: Path("printf"),
+        arguments: ["%s|%s", "a b", "c;d"],
+        environment: Environment(),
+        directory: WorkingDirectory(),
+    );
+    let printed = await CommandCapture(origin: echo, limit: 64).completion();
+    test.is(printed::Captured::output, "a b|c;d");
+    test.ok(printed.exit().success());
+    let cat = Command(program: Path("cat"), arguments: [], environment: Environment(), directory: WorkingDirectory());
+    let copied = await CommandCapture(origin: cat, input: [byte(104), byte(105)], limit: 64).completion();
+    test.is(copied::Bytes::output, [byte(104), byte(105)]);
+}
+
+async test "limits are checked: zero is refused, more output than allowed fails" {
+    let yes = Command(
+        program: Path("sh"),
+        arguments: ["-c", "printf 0123456789"],
+        environment: Environment(),
+        directory: WorkingDirectory(),
+    );
+    let refused = try {
+        await CommandCapture(origin: yes, limit: 0).completion();
+        false;
+    }
+    catch InvalidCaptureLimit.limit(limit) {
+        limit == 0;
+    };
+    test.ok(refused);
+    let exceeded = try {
+        await CommandCapture(origin: yes, limit: 4).completion();
+        false;
+    }
+    catch CaptureLimitExceeded.detailed(stream, limit) {
+        stream == CapturedStream.output && limit == 4;
+    };
+    test.ok(exceeded);
+}
+
+async test "a missing program fails; a killed one has no exit code" {
+    let missing = Command(
+        program: Path("okkama-no-such-program-7f3a"),
+        arguments: [],
+        environment: Environment(),
+        directory: WorkingDirectory(),
+    );
+    let failed = try {
+        await CommandCapture(origin: missing, limit: 16).completion();
+        false;
+    }
+    catch failure is ProcessFailure {
+        true;
+    };
+    test.ok(failed);
+    let killed = Command(
+        program: Path("sh"),
+        arguments: ["-c", "kill -9 $$"],
+        environment: Environment(),
+        directory: WorkingDirectory(),
+    );
+    let done = await CommandCapture(origin: killed, limit: 16).completion();
+    test.ok(done.exit()::Status::kind == ExitKind.killed);
+    test.ok(!done.exit().success());
+    test.throws(MissingExitCode) {
+        done.exit().code();
+    };
+}
+
+async test "standard input can be text" {
+    let cat = InheritedCommand(program: Path("cat"));
+    let copied = await CommandCapture(origin: cat, text: "hé\n", limit: 64).completion();
+    test.is(copied::Captured::output, "hé\n");
+    test.is(copied::Bytes::output, [byte(104), byte(195), byte(169), byte(10)]);
+}
+

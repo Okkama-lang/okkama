@@ -1,0 +1,56 @@
+module examples/csv/rows v1.0.0;
+
+import "csv" take CsvDialect, CsvRecord, CsvRecords, CsvRows, CsvString, InvalidCsv;
+import "csv/stream" take CsvStream, EndOfCsv;
+import "io/stdout" take Stdout;
+import "strings/format" take Formatted;
+
+// Read CSV text row by row, read records by column name, write rows back as
+// CSV, use another dialect, and read a source one row at a time without
+// holding all of it. Quotes and separators inside fields survive the round
+// trip. CsvRows never guesses a header; CsvRecords takes the first row as one.
+
+main() is int {
+    let out = Stdout();
+    let text = "name,city\r\n\"Ada, Countess\",London\r\n\"say \"\"hi\"\"\",Paris\r\n";
+
+    for CsvRows(text) -> row {
+        out.writeln(row.size(), " fields: ", row.join(" | "));
+    }
+
+    let orders = "id,total,note\r\n1,10,gift\r\n2,32,\r\n";
+    for CsvRecords(orders) -> record {
+        let note = record.maybe("note").text() else "none";
+        out.writeln(Formatted("order {}: total {}, note {}", record.text("id"), record.int("total"), note));
+    }
+
+    let rows is @@string = CsvRows(text).map() -> row { row; };
+    out.writeln("same text again: ", CsvString(rows).string() == text);
+
+    let semicolons = CsvDialect(delimiter: ";", quote: "'", line_ending: "\n");
+    out.write(CsvString(rows: [["a;b", "c"], ["d", "it's"]], dialect: semicolons).string());
+    out.write(CsvRecord(fields: ["one", "two words", "3,5"]).string());
+
+    let stream = CsvStream(text: "id,total\r\n1,10\r\n2,32\r\n");
+    let header = stream.row();
+    let first = stream.row();
+    let second = stream.row();
+    let ended = try {
+        stream.row();
+        "more";
+    }
+    catch end is EndOfCsv {
+        "end";
+    };
+    out.writeln(Formatted("streamed {}: {}, {}, then {}", header.join(","), first[1], second[1], ended));
+
+    let broken = try {
+        CsvRows("a,\"b\r\n").map() -> row { row; };
+        "parsed";
+    }
+    catch InvalidCsv.at(offset) {
+        "invalid at " + offset.string();
+    };
+    out.writeln(broken);
+    0;
+}

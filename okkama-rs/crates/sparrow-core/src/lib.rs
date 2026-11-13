@@ -34,6 +34,7 @@ pub mod io;
 pub mod intrinsics;
 pub mod jit;
 pub mod natives;
+pub mod maps;
 pub mod ops;
 pub mod primitives;
 pub mod program;
@@ -114,6 +115,8 @@ pub fn run_described(
         }
         let result = runtime.run_entry(STACK_BYTES);
         if let Some(report) = runtime.stats_report() {
+            // The program's buffered output goes first (#132).
+            let _ = okkama_runtime_core::stdout::flush();
             eprint!("{report}");
         }
         Ok(result.map_err(|error| (error, runtime.uncaught.take())))
@@ -134,6 +137,7 @@ pub struct Uncaught {
 }
 
 pub use okkama_runtime_core::failure::Site;
+pub use okkama_runtime_core::stdout;
 
 /// The call stack of an uncaught failure in Sparrow terms: function, number
 /// and text of the instruction of each frame. Empty for an empty stack.
@@ -168,7 +172,7 @@ pub fn run_reported(
 }
 
 /// Run the module's test profile and write the standard textual report;
-/// true when every test passed. Each test runs on a fresh runtime.
+/// true when no test failed. Each test runs on a fresh runtime.
 pub fn run_tests(bytes: Vec<u8>, out: Box<dyn std::io::Write + Send>) -> Result<bool, Error> {
     on_vm_thread(move || {
         let mut out = out;
@@ -183,28 +187,36 @@ pub fn run_tests(bytes: Vec<u8>, out: Box<dyn std::io::Write + Send>) -> Result<
             writeln!(out, "=== RUN   {name}").map_err(io)?;
             out.flush().map_err(io)?;
             let declaration = &program.functions[function.0 as usize];
-            let failures = if !declaration.params.is_empty() || declaration.result.is_some() {
-                vec!["invalid test entry signature".to_owned()]
+            let (failures, skipped) = if !declaration.params.is_empty() || declaration.result.is_some() {
+                (vec!["invalid test entry signature".to_owned()], None)
             } else {
                 let mut runtime = Box::new(runtime::Runtime::new(program::Loaded::new(program.clone()))?);
                 if let Some(host) = &mut runtime.host {
                     host.test_failures = Some(Vec::new());
                 }
                 let outcome = runtime.run_function(function.0 as usize, STACK_BYTES);
-                let mut failures = runtime.host.as_mut().and_then(|h| h.test_failures.take()).unwrap_or_default();
-                if let Err(error) = outcome {
+                let host = runtime.host.as_mut();
+                let (mut failures, skipped) =
+                    host.map(|h| (h.test_failures.take().unwrap_or_default(), h.test_skipped.take())).unwrap_or_default();
+                // A skipped test ends with the failure of its `test.skip`.
+                if let (Err(error), None) = (outcome, &skipped) {
                     failures.push(error.0);
                 }
-                failures
+                (failures, skipped)
             };
-            if failures.is_empty() {
-                writeln!(out, "--- PASS: {name}").map_err(io)?;
-            } else {
+            if !failures.is_empty() {
                 passed = false;
                 writeln!(out, "--- FAIL: {name}").map_err(io)?;
                 for failure in failures {
                     writeln!(out, "    {}", failure.replace('\n', "\n    ")).map_err(io)?;
                 }
+            } else if let Some(reason) = skipped {
+                writeln!(out, "--- SKIP: {name}").map_err(io)?;
+                if !reason.is_empty() {
+                    writeln!(out, "    {}", reason.replace('\n', "\n    ")).map_err(io)?;
+                }
+            } else {
+                writeln!(out, "--- PASS: {name}").map_err(io)?;
             }
             out.flush().map_err(io)?;
         }

@@ -57,8 +57,11 @@ impl WorkDir {
         path
     }
 
+    /// The failure report without its place and stack: the tests compare
+    /// messages; `uncaught_failures_report_causes_place_and_stack` the rest.
     fn java(&self, class: &str, args: &[&str]) -> Output {
         Command::new("java")
+            .env("OKKAMA_TRACE", "off")
             .arg("-Xverify:all")
             .arg("-cp")
             .arg(&self.0)
@@ -338,8 +341,7 @@ object C {
     add(value is int) is int { n + value; }
     add(value is string) is int { n; }
     twice() is int { self.helper() * 2; }
-    private:
-    helper() is int { n; }
+    hidden helper() is int { n; }
 }
 object Pair {
     has left is C;
@@ -547,6 +549,24 @@ main() is int { throw Boom.failed(7); }",
     assert_eq!(
         String::from_utf8_lossy(&output.stderr).trim_end(),
         "Boom: Boom.failed(7)"
+    );
+}
+
+#[test]
+fn an_uncaught_error_text_escapes_its_string_payload() {
+    // #306: the payload is an Okkama literal; the report stays one line.
+    let dir = WorkDir::new();
+    dir.build_source(
+        "Escaped",
+        "module app v1.0.0;
+enum Ferr is Error = (text(s is string));
+main() is int { throw Ferr.text(\"line1\\nline2 \\\"q\\\"\"); }",
+    );
+    let output = dir.java("Escaped", &[]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr).trim_end(),
+        "Ferr: Ferr.text(\"line1\\nline2 \\\"q\\\"\")"
     );
 }
 
@@ -1075,15 +1095,15 @@ fn ownership_cleanup_order_matches_the_interpreter() {
             "let r = try { let x = [Fragile(code: 3), Fragile(code: 4)]; 0; }",
             4,
         ),
-        // Значение ветви `if`/`match`/`try` принадлежит внешнему блоку.
+        // Ветвь `if`/`match`, как и блок, уничтожает свои `let` при выходе (#308).
         (
             "let r = try { if true { let f = Fragile(code: 2); } throw Boom.failed(1); }",
-            1,
+            2,
         ),
         (
             "let n = 1; let r = try { match n { case 1 { let f = Fragile(code: 2); } else { 0; } } \
              throw Boom.failed(1); }",
-            1,
+            2,
         ),
         (
             "let r = try { { let f = Fragile(code: 2); } throw Boom.failed(1); }",
@@ -1180,6 +1200,68 @@ impl WorkDir {
             .output()
             .unwrap()
     }
+}
+
+/// The channel examples of the channel guide (#341) print what their
+/// `.expected` files say on the JVM too.
+#[test]
+fn channel_examples_print_their_expected_output_on_the_jvm() {
+    let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/channels");
+    for name in ["buffered", "rendezvous", "closing", "lifecycle", "state-owner"] {
+        let dir = WorkDir::new();
+        let source = std::fs::read_to_string(examples.join(format!("{name}.ok"))).unwrap();
+        let build = dir.build_files(&[("main.ok", source.as_str())], "main.ok", "Example");
+        assert!(build.status.success(), "{name}: {}", String::from_utf8_lossy(&build.stderr));
+        let output = dir.java("Example", &[]);
+        assert_eq!(output.status.code(), Some(0), "{name}: {}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            std::fs::read_to_string(examples.join(format!("{name}.expected"))).unwrap(),
+            "{name}"
+        );
+    }
+}
+
+/// Waking a task makes it ready; it runs after the waker suspends, not
+/// inside `set()` or `cancel()` (#340), as on the other engines.
+#[test]
+fn woken_tasks_run_after_the_waker_suspends() {
+    let dir = WorkDir::new();
+    let build = dir.build_files(
+        &[(
+            "main.ok",
+            "module app v1.0.0;\n\
+             import \"io/stdout\" take Stdout;\n\
+             import \"async/event\" take Event;\n\
+             object Waiter {\n\
+                 has gate is Event;\n\
+                 Waiter(:gate);\n\
+                 async run() is int { defer Stdout().writeln(\"waiter: cleanup\"); await gate.wait(); Stdout().writeln(\"waiter: woke\"); 1; }\n\
+             }\n\
+             async main() is int {\n\
+                 let gate = Event();\n\
+                 let woken = spawn Waiter(gate: gate).run();\n\
+                 gate.set();\n\
+                 Stdout().writeln(\"main: after set\");\n\
+                 await woken;\n\
+                 let cancelled = spawn Waiter(gate: Event()).run();\n\
+                 cancelled.cancel();\n\
+                 Stdout().writeln(\"main: after cancel\");\n\
+                 let outcome = try { await cancelled; } catch e is Cancelled { -1; };\n\
+                 Stdout().writeln(\"main: \" + outcome.string());\n\
+                 0;\n\
+             }\n",
+        )],
+        "main.ok",
+        "Wake",
+    );
+    assert!(build.status.success(), "{}", String::from_utf8_lossy(&build.stderr));
+    let output = dir.java("Wake", &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "main: after set\nwaiter: woke\nwaiter: cleanup\nmain: after cancel\nwaiter: cleanup\nmain: -1\n"
+    );
 }
 
 #[test]
@@ -1619,7 +1701,7 @@ fn native_failures_are_catchable_system_objects() {
     );
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
-        "NativeError: BigInt division by zero\ncode: invalid_input\ndomain: core.bigint\n\
+        "NativeFailure: BigInt division by zero\ncode: invalid_input\ndomain: core.bigint\n\
          operation: runtime/bigint@1::bigint_quotient/2\n"
     );
     let build = dir.build_files(
@@ -1749,7 +1831,7 @@ fn any_values_are_opaque_boxes() {
              object Holder { has value is any; Holder(:value); }\n\
              object Relay { Relay(); count(values is @any) is int { values.size(); } echo(value is any) is any { value; } }\n\
              main() is int {\n\
-                 let mixed = [1, \"two\", 3.0];\n\
+                 let mixed is @any = [1, \"two\", 3.0];\n\
                  let row is %string:any = [\"id\": 7, \"name\": \"Ada\"];\n\
                  let echoed = Relay().echo(Holder(value: 1));\n\
                  Stdout().writeln(Relay().count(mixed).string(), \" \", row.size().string());\n\
@@ -2097,6 +2179,7 @@ fn test_mode_runs_tests_with_fakes_and_reports_failures() {
          }\n\
          async test \"async\" { test.is(await Worker().value(), 7); }\n\
          test \"wrong\" { test.is(1 + 1, 3); test.ok(true); }\n\
+         test \"skipped\" { try { test.skip(\"later\"); } catch e is Denied { test.fail(\"caught\"); } test.ok(false); }\n\
          test \"throws\" { throw Denied.denied; }\n\
          main() is int { panic \"main does not run in test mode\"; }\n",
     )
@@ -2122,6 +2205,7 @@ fn test_mode_runs_tests_with_fakes_and_reports_failures() {
          === RUN   fakes keep state\n--- PASS: fakes keep state\n\
          === RUN   async\n--- PASS: async\n\
          === RUN   wrong\n--- FAIL: wrong\n    expected 3, got 2\n\
+         === RUN   skipped\n--- SKIP: skipped\n    later\n\
          === RUN   throws\n--- FAIL: throws\n    Denied: Denied.denied\nFAIL\n"
     );
 }
@@ -2208,7 +2292,7 @@ fn bound_role_actions_and_future_selectors_run_on_the_jvm() {
                  let r is Valued = Fixed(n: 4);\n\
                  let read is () is int = r.value;\n\
                  let selector is FirstSuccessful<int> = FirstSuccessful(origins: [Task(n: 1).run(), Task(n: 5).run()]);\n\
-                 let first = await selector.result();\n\
+                 let first = await selector.outcome();\n\
                  let stream is FutureCompletions<int> = FutureCompletions(origins: [Task(n: 2).run(), Task(n: 3).run()]);\n\
                  let total = (await await stream.completion()) + (await await stream.completion());\n\
                  read() + first + total + stream.remaining_count();\n\
@@ -2293,7 +2377,7 @@ fn child_exit_codes_and_signals_are_exact() {
                  Run();\n\
                  async code(script is string) is string {\n\
                      let exit = (await CommandCapture(InheritedCommand(program: Path(\"/bin/sh\"), arguments: [\"-c\", script]), 64).completion()).exit();\n\
-                     match exit.kind() { case ExitKind.exited { exit.code().string(); } case ExitKind.interrupted { \"INT\"; } case ExitKind.terminated { \"TERM\"; } case ExitKind.killed { \"KILL\"; } case ExitKind.other { \"other\"; } }\n\
+                     match exit::Status::kind { case ExitKind.exited { exit.code().string(); } case ExitKind.interrupted { \"INT\"; } case ExitKind.terminated { \"TERM\"; } case ExitKind.killed { \"KILL\"; } case ExitKind.other { \"other\"; } }\n\
                  }\n\
              }\n\
              async main() is int {\n\
@@ -2335,6 +2419,7 @@ fn worker_receivers_are_destroyed_and_cancelled_workers_stop() {
                  W(:n);\n\
                  f(x is int) is int { n + x; }\n\
                  slow(count is int) is int { (0..count).reduce(0) -> total, i { total + i; }; }\n\
+                 noisy() is int { Stdout().writeln(\"worker ran\"); n; }\n\
                  destroy { Stdout().writeln(\"destroy \" + n.string()); }\n\
              }\n\
              async main() is int {\n\
@@ -2342,7 +2427,13 @@ fn worker_receivers_are_destroyed_and_cancelled_workers_stop() {
                  let job = spawn W(n: 7).slow(count: 1000000000);\n\
                  await SystemClock().wait(Duration(1.rat(), DurationUnit.second));\n\
                  job.cancel();\n\
-                 Stdout().writeln(job.cancelled().string());\n\
+                 let r = try { await job; } catch e is Cancelled { -1; };\n\
+                 Stdout().writeln(r.string() + \" \" + job.cancelled().string());\n\
+                 let early = spawn W(n: 9).noisy();\n\
+                 early.cancel();\n\
+                 let stopped = try { await early; } catch e is Cancelled { -1; };\n\
+                 await SystemClock().wait(Duration(2.rat(), DurationUnit.second));\n\
+                 Stdout().writeln(stopped.string() + \" \" + early.cancelled().string());\n\
                  0;\n\
              }\n",
         )],
@@ -2364,7 +2455,9 @@ fn worker_receivers_are_destroyed_and_cancelled_workers_stop() {
     );
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "destroy 1\n3\ntrue\n"
+        // Cancelled Futures settle after their workers stop (#359); one
+        // cancelled before its process started never runs.
+        "destroy 1\n3\n-1 true\n-1 true\n"
     );
     assert!(started.elapsed() < std::time::Duration::from_secs(20));
 }
@@ -2415,4 +2508,26 @@ fn variant_payloads_optional_fallback_and_presence_run_on_jvm() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn uncaught_failures_report_causes_place_and_stack() {
+    // #270: the JVM prints the report of the Sparrow core — causes, secondary
+    // cleanup failures, the place and the Okkama stack, not the JVM's frames.
+    for name in ["recursion", "closure", "rethrow", "task", "cause", "chain", "cleanup", "deep"] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/traces/{name}.ok"));
+        let run = |engine: &str| {
+            Command::new(env!("CARGO_BIN_EXE_okkama"))
+                .args(["run", "--engine", engine])
+                .arg(&path)
+                .env_remove("OKKAMA_TRACE")
+                .output()
+                .unwrap()
+        };
+        let (jvm, core) = (run("jvm"), run("sparrow"));
+        assert_eq!(jvm.status.code(), Some(1), "{name}");
+        let (jvm, core) = (String::from_utf8(jvm.stderr).unwrap(), String::from_utf8(core.stderr).unwrap());
+        assert!(jvm.contains("Stack trace (most recent call first):\n"), "{name}:\n{jvm}");
+        assert_eq!(jvm, core, "{name}");
+    }
 }

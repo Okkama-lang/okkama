@@ -1,149 +1,777 @@
 module net/tls v1.0.0;
-import "crypto/x509/trust" take TrustStore,TrustedCertificates;
-import "collections/set" take Set,OrderedSet;
+
+// TLS 1.2 and 1.3 over a TCP connection, client and server.
+//
+//     let plain = await TcpConnecting(address: address, port: 443).connection();
+//     let secure = await TlsClientHandshake(
+//         origin: plain,
+//         server: DnsCertificateIdentity(HostName("example.org")),
+//         policy: TlsClientPolicy(trust: SystemTrustStore()),
+//     ).connection();
+//     defer secure.close();
+//     await secure.output().write(request);
+//
+// A server takes a TlsIdentity (PEM certificates and key) in a TlsServerPolicy.
+// ALPN protocols are offered in the policy; details() tells what was agreed.
+
+import "crypto/x509/trust" take TrustStore, TrustedCertificates;
+import "collections/set" take Set, OrderedSet;
 import "collections/sequence" take Sequencing;
-import "encoding/single_byte" take Latin1Encoded,UnrepresentableLatin1Character;
+import "encoding/single_byte" take Latin1Encoded, UnrepresentableLatin1Character;
 import "runtime/tls_transport" as tls;
 import "net/tcp" take TcpConnection;
-import "net/stream" take TlsTcpOrigin,ConnectionEndpoints,StreamWriteCleanup;
+import "net/stream" take TlsTcpOrigin, ConnectionEndpoints, StreamWriteCleanup;
 import "net/endpoint" take IpEndpoint;
-import "crypto/x509/trust" take CertificateIdentity,CertificateIdentityKind,CertificateFailureCode,CertificateVerificationFailed;
-import "crypto/x509/certificate" take Certificate,CertificateChain;
-import "time/clock" take Timing,SystemClock;
+import "crypto/x509/trust" take CertificateIdentity, CertificateIdentityKind,
+    CertificateFailureCode, CertificateVerificationFailed;
+import "crypto/x509/certificate" take Certificate, CertificateChain;
+import "time/clock" take Timing, SystemClock;
 import "async/event" take Event;
 import "async/atomic" take Atomic;
-import "async/lock" take Lock,LockGuard;
+import "async/lock" take Lock, LockGuard;
 import "async/scope" take FutureGroup;
-import "io/stream" take AsyncReading,AsyncWriting,Closing,ByteSource,InvalidReadLimit;
+import "io/stream" take AsyncReading, AsyncWriting, Closing, ByteSource, InvalidReadLimit;
 import "error" take InvalidState;
+import "encoding/pem" take PemBlocks, PemBlock, InvalidPem;
+import "crypto/secret" take SecretBytes;
+import "crypto/x509/value" take InvalidCertificate;
+import "crypto/x509/trust" as roots take PemTrustStore, IpCertificateIdentity;
+import "net/tcp" as tcp take TcpListening, TcpConnecting, TcpListener;
+import "net/ip" take IpAddress;
+import "io/decorators" take ByteSnapshot;
+import "encoding/utf" take Utf8Encoded, Utf8Decoded;
 
-enum TlsVersion=(tls1_2,tls1_3);
+// TLS 1.2 or 1.3.
+enum TlsVersion = (tls1_2, tls1_3);
 
 // Reusable immutable inputs, without a server identity, clock, filesystem
 // acquisition or handshake effect. Empty explicit roots remain empty.
 object TlsClientPolicy {
-    has roots is TrustedCertificates;has enabled is Set<TlsVersion>;
+    has roots is TrustedCertificates;
+    has enabled is Set<TlsVersion>;
     has advertised is @string;
-    TlsClientPolicy(trust is TrustStore){
-        roots=TrustedCertificates(trust.certificates());
-        let defaults is Set<TlsVersion>=OrderedSet([TlsVersion.tls1_2,TlsVersion.tls1_3]);
-        enabled=defaults;advertised=[];
+
+    // Trusts trust; TLS 1.2 and 1.3, no ALPN.
+    TlsClientPolicy(trust is TrustStore) {
+        roots = TrustedCertificates(trust.certificates());
+        let defaults is Set<TlsVersion> = OrderedSet([TlsVersion.tls1_2, TlsVersion.tls1_3]);
+        enabled = defaults;
+        advertised = [];
     }
-    TlsClientPolicy(trust is TrustStore,versions is Set<TlsVersion>,protocols is Sequencing<string>){
-        let count=versions.size();
-        confirm count>=1 && count<=2 else throw InvalidTlsPolicy.because("enabled versions");
-        let selected is @TlsVersion=[TlsVersion.tls1_2,TlsVersion.tls1_3].filter()->version{versions.membership(version);};
-        confirm selected.size()==count else throw InvalidTlsPolicy.because("inconsistent version set");
-        let snapshot is Set<TlsVersion>=OrderedSet(selected);enabled=snapshot;
-        let names=protocols.size();confirm names>=0 && names<=16 else throw InvalidTlsPolicy.because("protocol count");
-        let values is @string=(0..names).map()->index{
-            let value=protocols.item(index);
-            confirm value.length()>=1 && value.length()<=255 else throw InvalidTlsPolicy.because("protocol width");
-            try{Latin1Encoded(value).bytes();}catch e is UnrepresentableLatin1Character{throw InvalidTlsPolicy.because("protocol octets");}
+
+    // Trusts trust with these versions and ALPN protocols.
+    TlsClientPolicy(
+        trust is TrustStore,
+        versions is Set<TlsVersion>,
+        protocols is Sequencing<string>
+    ) {
+        let count = versions.size();
+        confirm count >= 1 && count <= 2 else throw InvalidTlsPolicy.because("enabled versions");
+        let selected is @TlsVersion = [TlsVersion.tls1_2, TlsVersion.tls1_3].filter() -> version {
+            versions.membership(version);
+        };
+        confirm selected.size() == count
+            else throw InvalidTlsPolicy.because("inconsistent version set");
+        let snapshot is Set<TlsVersion> = OrderedSet(selected);
+        enabled = snapshot;
+        let names = protocols.size();
+        confirm names >= 0 && names <= 16 else throw InvalidTlsPolicy.because("protocol count");
+        let values is @string = (0..names).map() -> index {
+            let value = protocols.item(index);
+            confirm value.length() >= 1 && value.length() <= 255
+                else throw InvalidTlsPolicy.because("protocol width");
+            try {
+                Latin1Encoded(value).bytes();
+            }
+            catch e is UnrepresentableLatin1Character {
+                throw InvalidTlsPolicy.because("protocol octets");
+            }
             value;
         };
-        let distinct is Set<string>=OrderedSet(values);
-        confirm distinct.size()==values.size() else throw InvalidTlsPolicy.because("duplicate protocol");
-        roots=TrustedCertificates(trust.certificates());advertised=values;
+        let distinct is Set<string> = OrderedSet(values);
+        confirm distinct.size() == values.size()
+            else throw InvalidTlsPolicy.because("duplicate protocol");
+        roots = TrustedCertificates(trust.certificates());
+        advertised = values;
     }
-    trust() is TrustStore{roots;}versions() is Set<TlsVersion>{enabled;}
-    protocols() is Sequencing<string>{advertised;}
+
+    // The trusted roots.
+    trust() is TrustStore {
+        roots;
+    }
+
+    // The versions offered.
+    versions() is Set<TlsVersion> {
+        enabled;
+    }
+
+    // The ALPN protocols offered, such as `http/1.1`.
+    protocols() is Sequencing<string> {
+        advertised;
+    }
 }
+
+// A policy with no versions or a bad protocol name.
 enum InvalidTlsPolicy is Error = (because(reason is string));
-enum TlsPhase=(handshaking,verifying,reading,writing,closing);
+
+// A server's certificate chain and private key, from PEM text (#209):
+//
+//     let identity = TlsIdentity(
+//         certificates: File(path: Path("cert.pem")).text().content(),
+//         key: File(path: Path("key.pem")).text().content(),
+//     );
+//
+// certificates holds one or more CERTIFICATE blocks, the server's own first;
+// key holds one PRIVATE KEY block (PKCS #8, as openssl genpkey writes it).
+// Anything else is InvalidTlsIdentity; an "EC PRIVATE KEY" or "RSA PRIVATE
+// KEY" converts with openssl pkcs8 -topk8 -nocrypt.
+object TlsIdentity {
+    has certificates is string;
+    has key is string;
+
+    // A certificate chain and its private key, both PEM.
+    TlsIdentity(certificates is string, key is string) {
+        TlsIdentityText(certificates: certificates, key: key).check();
+        self.certificates = certificates;
+        self.key = key;
+    }
+
+    // The certificates as DER, the server's own first.
+    chain() is @@byte {
+        TlsIdentityText(certificates: certificates, key: key).chain();
+    }
+
+    // The private key as PKCS #8 DER.
+    secret() is SecretBytes {
+        SecretBytes(TlsIdentityText(certificates: certificates, key: key).key());
+    }
+}
+
+// What a TLS server offers (#209): its identity and the versions it accepts,
+// TLS 1.2 and 1.3 unless told. No client certificate is asked for.
+object TlsServerPolicy {
+    has own is TlsIdentity;
+    has enabled is Set<TlsVersion>;
+
+    // Serves identity with versions, TLS 1.2 and 1.3 unless told.
+    TlsServerPolicy(
+        identity is TlsIdentity,
+        versions is Set<TlsVersion> = OrderedSet([TlsVersion.tls1_2, TlsVersion.tls1_3])
+    ) {
+        let count = versions.size();
+        confirm count >= 1 && count <= 2 else throw InvalidTlsPolicy.because("enabled versions");
+        own = identity;
+        enabled = versions;
+    }
+
+    // The identity.
+    identity() is TlsIdentity {
+        own;
+    }
+
+    // The versions accepted.
+    versions() is Set<TlsVersion> {
+        enabled;
+    }
+}
+
+// The server side of a handshake over an accepted connection: protocols are
+// the ALPN names it offers, most preferred first (h2, http/1.1 for a server of
+// both).
+object TlsServerHandshake {
+    has origin is TlsTcpOrigin;
+    has ends is ConnectionEndpoints<IpEndpoint>;
+    has policy is TlsServerPolicy;
+    has protocols is @string;
+
+    // A server handshake on origin, choosing among protocols.
+    TlsServerHandshake(
+        origin is TcpConnection,
+        policy is TlsServerPolicy,
+        protocols is Sequencing<string>
+    ) {
+        self.origin = TlsTcpOrigin(origin.input());
+        ends = origin.endpoints();
+        self.policy = policy;
+        let names is @string = (0..protocols.size()).map() -> index {
+            protocols.item(index);
+        };
+        self.protocols = names;
+    }
+
+    // Completes the handshake; TlsFailure when it fails.
+    async connection() is TlsConnection {
+        let mask = if policy.versions().membership(TlsVersion.tls1_2) {
+            1;
+        }
+        else {
+            0;
+        } + if policy.versions().membership(TlsVersion.tls1_3) {
+            2;
+        }
+        else {
+            0;
+        };
+        let identity = policy.identity();
+        let state = try {
+            origin.server(mask, protocols, identity.chain(), identity.secret().export_bytes());
+        }
+        catch e is NativeFailure {
+            throw TlsFailure.detailed(TlsPhase.handshaking, e.code());
+        };
+        let published = Event();
+        let anchor = TlsUnpublished(state: state, published: published);
+        defer anchor.close();
+        try {
+            let pending = tls.handshake(state);
+            await pending;
+        }
+        catch e is NativeFailure {
+            throw TlsFailure.detailed(TlsPhase.handshaking, e.code());
+        }
+        let connection = TlsConnection(state: state, ends: ends);
+        published.set();
+        connection;
+    }
+}
+
+// Certificates or a key that cannot be read.
+enum InvalidTlsIdentity is Error = (because(reason is string));
+
+// The DER inside the PEM text of an identity.
+hidden object TlsIdentityText {
+    has certificates is string;
+    has key is string;
+
+    TlsIdentityText(certificates is string, key is string) {
+        self.certificates = certificates;
+        self.key = key;
+    }
+
+    check() is void {
+        self.chain();
+        self.key();
+    }
+
+    chain() is @@byte {
+        let blocks = try {
+            let found is @PemBlock = PemBlocks(certificates).map() -> block {
+                block;
+            };
+            found;
+        }
+        catch failure is InvalidPem {
+            throw InvalidTlsIdentity.because("the certificates are not PEM");
+        };
+        confirm blocks.size() > 0 && blocks.size() <= 16
+            else throw InvalidTlsIdentity.because("one to sixteen certificates are needed");
+        blocks.map() -> block {
+            confirm block.kind() == "CERTIFICATE"
+                else throw InvalidTlsIdentity.because(
+                    "a " + block.kind() + " block is not a certificate"
+                );
+            block.bytes();
+        };
+    }
+
+    key() is @byte {
+        let block = try {
+            PemBlock(key);
+        }
+        catch failure is InvalidPem {
+            throw InvalidTlsIdentity.because("the key is not one PEM block");
+        };
+        confirm block.kind() == "PRIVATE KEY"
+            else throw InvalidTlsIdentity.because(
+                "the key must be PKCS #8 (BEGIN PRIVATE KEY), not " + block.kind() +
+                    "; openssl pkcs8 -topk8 -nocrypt converts it"
+            );
+        block.bytes();
+    }
+}
+
+// Where a TLS failure happened.
+enum TlsPhase = (handshaking, verifying, reading, writing, closing);
+
+// The handshake or a record failed; phase and reason say where and why.
 enum TlsFailure is Error = (detailed(phase is TlsPhase, reason is string));
+
+// A client handshake to be made.
 object TlsClientHandshake {
-    has origin is TlsTcpOrigin;has ends is ConnectionEndpoints<IpEndpoint>;
-    has server is CertificateIdentity;has policy is TlsClientPolicy;has clock is Timing;
-    TlsClientHandshake(origin is TcpConnection,server is CertificateIdentity,policy is TlsClientPolicy){
-        self.origin=TlsTcpOrigin(origin.input());ends=origin.endpoints();self.server=server;self.policy=policy;clock=SystemClock();
+    has origin is TlsTcpOrigin;
+    has ends is ConnectionEndpoints<IpEndpoint>;
+    has server is CertificateIdentity;
+    has policy is TlsClientPolicy;
+    has clock is Timing;
+
+    // A handshake on origin that checks the server is server.
+    TlsClientHandshake(
+        origin is TcpConnection,
+        server is CertificateIdentity,
+        policy is TlsClientPolicy
+    ) {
+        self.origin = TlsTcpOrigin(origin.input());
+        ends = origin.endpoints();
+        self.server = server;
+        self.policy = policy;
+        clock = SystemClock();
     }
-    TlsClientHandshake(origin is TcpConnection,server is CertificateIdentity,policy is TlsClientPolicy,clock is Timing){
-        self.origin=TlsTcpOrigin(origin.input());ends=origin.endpoints();self.server=server;self.policy=policy;self.clock=clock;
+
+    // The same, checking certificate dates on clock.
+    TlsClientHandshake(
+        origin is TcpConnection,
+        server is CertificateIdentity,
+        policy is TlsClientPolicy,
+        clock is Timing
+    ) {
+        self.origin = TlsTcpOrigin(origin.input());
+        ends = origin.endpoints();
+        self.server = server;
+        self.policy = policy;
+        self.clock = clock;
     }
-    async connection() is TlsConnection{
-        let mask=if policy.versions().membership(TlsVersion.tls1_2){1;}else{0;}+if policy.versions().membership(TlsVersion.tls1_3){2;}else{0;};
-        let protocols is @string=policy.protocols().map()->value{value;};
-        let kind=if server.kind()==CertificateIdentityKind.dns{"DNS";}else{"IP";};let identity=server.string();
-        let unrooted=if identity.length()>0 && identity.slice(identity.length()-1,identity.length())=="."{identity.slice(0,identity.length()-1);}else{identity;};
-        let sni=if kind=="DNS"{unrooted;}else{"";};
-        let state=try{origin.client(mask,protocols,sni);}catch e is NativeFailure{throw TlsFailure.detailed(TlsPhase.handshaking, e.code());};
-        let published=Event();let anchor=TlsUnpublished(state,published);defer anchor.close();
-        let group is FutureGroup<bool>=FutureGroup();let cleanup=TlsTaskCleanup(group);defer await cleanup.close();
-        try{let pending=tls.handshake(state);group.start(pending);await pending;}catch e is NativeFailure{throw TlsFailure.detailed(TlsPhase.handshaking, e.code());}
-        let roots is @@byte=policy.trust().certificates().map()->certificate{certificate.der();};
-        try{tls.authorize(state,roots,kind,identity,clock.instant().unix_duration().seconds().string());}catch e is NativeFailure{
-            if e.domain()=="core.x509.verify" && e.code()=="permission_denied"{throw CertificateVerificationFailed.because(CertificateFailureCode(e.message()).value());}
+
+    // Completes the handshake; TlsFailure when it or the certificate check
+    // fails.
+    async connection() is TlsConnection {
+        let mask = if policy.versions().membership(TlsVersion.tls1_2) {
+            1;
+        }
+        else {
+            0;
+        } + if policy.versions().membership(TlsVersion.tls1_3) {
+            2;
+        }
+        else {
+            0;
+        };
+        let protocols is @string = policy.protocols().map() -> value {
+            value;
+        };
+        let kind = if server.kind() == CertificateIdentityKind.dns {
+            "DNS";
+        }
+        else {
+            "IP";
+        };
+        let identity = server.string();
+        let unrooted = if identity.length() > 0
+            && identity.slice(identity.length() - 1, identity.length()) == "." {
+                identity.slice(0, identity.length() - 1);
+            }
+            else {
+                identity;
+            };
+        let sni = if kind == "DNS" {
+            unrooted;
+        }
+        else {
+            "";
+        };
+        let state = try {
+            origin.client(mask, protocols, sni);
+        }
+        catch e is NativeFailure {
+            throw TlsFailure.detailed(TlsPhase.handshaking, e.code());
+        };
+        let published = Event();
+        let anchor = TlsUnpublished(state: state, published: published);
+        defer anchor.close();
+        try {
+            let pending = tls.handshake(state);
+            await pending;
+        }
+        catch e is NativeFailure {
+            throw TlsFailure.detailed(TlsPhase.handshaking, e.code());
+        }
+        let roots is @@byte = policy.trust().certificates().map() -> certificate {
+            certificate.der();
+        };
+        try {
+            tls.authorize(
+                state,
+                roots,
+                kind,
+                identity,
+                clock.instant().unix_duration()::Span::seconds.string()
+            );
+        }
+        catch e is NativeFailure {
+            if e.domain() == "core.x509.verify" && e.code() == "permission_denied" {
+                throw CertificateVerificationFailed.because(
+                    CertificateFailureCode(e.message()).failure()
+                );
+            }
             throw TlsFailure.detailed(TlsPhase.verifying, e.code());
         }
-        let connection=TlsConnection(state,ends);published.set();connection;
+        let connection = TlsConnection(state: state, ends: ends);
+        published.set();
+        connection;
     }
 }
-object TlsUnpublished {
-    has state is tls.TlsState;has published is Event;TlsUnpublished(state is tls.TlsState,published is Event){self.state=state;self.published=published;}
-    close() is void{if !published.ready(){tls.close(state);}}
+
+hidden object TlsUnpublished {
+    has state is tls.TlsState;
+    has published is Event;
+
+    TlsUnpublished(state is tls.TlsState, published is Event) {
+        self.state = state;
+        self.published = published;
+    }
+
+    close() is void {
+        if !published.ready() {
+            tls.close(state);
+        }
+    }
 }
-object TlsTaskCleanup<T> {
-    has group is FutureGroup<T>;TlsTaskCleanup(group is FutureGroup<T>){self.group=group;}
-    async close() is void{if group.active()>0{group.cancel();await group.wait();}}
-}
+
+// An open TLS connection.
 object TlsConnection does Closing {
-    has state is tls.TlsState;has info is TlsDetails;has busy is Atomic<bool>;has lock is Lock;
+    has state is tls.TlsState;
+    has info is TlsDetails;
+    has busy is Atomic<bool>;
+    has lock is Lock;
 
-    TlsConnection(state is tls.TlsState,ends is ConnectionEndpoints<IpEndpoint>){
-        self.state=state;busy=Atomic(false);lock=Lock();
-        let certificates is @Certificate=tls.peer(state).map()->source{Certificate(source);};
-        let version=if tls.version(state)=="TLSv1_3"{TlsVersion.tls1_3;}else{TlsVersion.tls1_2;};
-        info=TlsDetails(ends,CertificateChain(certificates),version,tls.cipher(state),tls.protocol(state));
-    }
-    input() is TlsReading{TlsReading(self);}output() is TlsWriting{TlsWriting(self);}details() is TlsDetails{info;}
-    closed() is bool{tls.closed(state);}close() is void{tls.close(state);}destroy{tls.close(state);}
-    async shutdown() is void{
-        let group is FutureGroup<bool>=FutureGroup();let cleanup=TlsTaskCleanup(group);defer await cleanup.close();
-        try{let pending=tls.shutdown(state);group.start(pending);await pending;}catch e is NativeFailure{throw TlsFailure.detailed(TlsPhase.closing, e.code());}
+    // Made by the handshakes; not constructed directly.
+    TlsConnection(state is tls.TlsState, ends is ConnectionEndpoints<IpEndpoint>) {
+        self.state = state;
+        busy = Atomic(false);
+        lock = Lock();
+        let certificates is @Certificate = tls.peer(state).map() -> source {
+            Certificate(source);
+        };
+        let version = if tls.version(state) == "TLSv1_3" {
+            TlsVersion.tls1_3;
+        }
+        else {
+            TlsVersion.tls1_2;
+        };
+        // A server that asks for no client certificate has no peer chain.
+        info = if certificates.size() == 0 {
+            TlsDetails(
+                ends: ends,
+                version: version,
+                cipher: tls.cipher(state),
+                protocol: tls.protocol(state)
+            );
+        }
+        else {
+            TlsDetails(
+                ends: ends,
+                peer: CertificateChain(certificates),
+                version: version,
+                cipher: tls.cipher(state),
+                protocol: tls.protocol(state)
+            );
+        };
     }
 
-    async read_bytes(limit is int) is @byte{
-        confirm limit>0 else throw InvalidReadLimit.limit(limit);
-        confirm busy.compare_and_replace(false,true) else throw InvalidState.because("TLS already has a pending read");
-        let ticket=TlsReadTicket(busy);defer ticket.close();
-        let group is FutureGroup<@byte>=FutureGroup();let cleanup=TlsTaskCleanup(group);defer await cleanup.close();
-        try{let pending=tls.read(state,limit);group.start(pending);await pending;}catch e is NativeFailure{throw TlsFailure.detailed(TlsPhase.reading, e.code());}
+    // The reading side.
+    input() is TlsReading {
+        TlsReading(self);
     }
-    async write_bytes(source is ByteSource) is bool{
-        let guards is FutureGroup<LockGuard>=FutureGroup();let writing is FutureGroup<bool>=FutureGroup();
-        let empty is @Future<LockGuard>=[];let pending_guard=Atomic(empty);let taken=Event();
-        let cleanup=StreamWriteCleanup(guards,writing,pending_guard,taken);defer await cleanup.close();
-        let waiting=lock.guard();pending_guard.replace([waiting]);guards.start(waiting);let guard=await waiting;taken.set();defer guard.close();
+
+    // The writing side.
+    output() is TlsWriting {
+        TlsWriting(self);
+    }
+
+    // What was agreed: version, cipher, protocol and the peer's chain.
+    details() is TlsDetails {
+        info;
+    }
+
+    // Whether the connection is closed.
+    closed() is bool {
+        tls.closed(state);
+    }
+
+    // Closes the connection; closing again does nothing.
+    close() is void {
+        tls.close(state);
+    }
+
+    destroy {
+        tls.close(state);
+    }
+
+    // Sends close_notify and closes the writing side.
+    async shutdown() is void {
+        try {
+            let pending = tls.shutdown(state);
+            await pending;
+        }
+        catch e is NativeFailure {
+            throw TlsFailure.detailed(TlsPhase.closing, e.code());
+        }
+    }
+
+    // Used by input() and output(); programs read and write through those.
+    async read_bytes(limit is int) is @byte {
+        confirm limit > 0 else throw InvalidReadLimit.limit(limit);
+        confirm busy.compare_and_replace(false, true)
+            else throw InvalidState.because("TLS already has a pending read");
+        let ticket = TlsReadTicket(busy);
+        defer ticket.close();
+        try {
+            let pending = tls.read(state, limit);
+            await pending;
+        }
+        catch e is NativeFailure {
+            throw TlsFailure.detailed(TlsPhase.reading, e.code());
+        }
+    }
+
+    // Used by input() and output(); programs read and write through those.
+    async write_bytes(source is ByteSource) is bool {
+        let guards is FutureGroup<LockGuard> = FutureGroup();
+        let writing is FutureGroup<bool> = FutureGroup();
+        let empty is @Future<LockGuard> = [];
+        let pending_guard = Atomic(empty);
+        let taken = Event();
+        let cleanup = StreamWriteCleanup(
+            guards: guards,
+            writing: writing,
+            pending: pending_guard,
+            taken: taken
+        );
+        defer await cleanup.close();
+        let waiting = lock.guard();
+        pending_guard.replace([waiting]);
+        guards.start(waiting);
+        let guard = await waiting;
+        taken.set();
+        defer guard.close();
         confirm !self.closed() else throw TlsFailure.detailed(TlsPhase.writing, "already_closed");
-        let bytes=source.bytes();
-        try{let pending=tls.write(state,bytes);writing.start(pending);await pending;true;}catch e is NativeFailure{throw TlsFailure.detailed(TlsPhase.writing, e.code());}
+        let bytes = source.bytes();
+        try {
+            let pending = tls.write(state, bytes);
+            writing.start(pending);
+            await pending;
+            true;
+        }
+        catch e is NativeFailure {
+            throw TlsFailure.detailed(TlsPhase.writing, e.code());
+        }
     }
 }
+
+// What a TLS handshake agreed.
 object TlsDetails {
-    has ends is ConnectionEndpoints<IpEndpoint>;has certificates is CertificateChain;has version is TlsVersion;has cipher,protocol is string;
-    TlsDetails(ends is ConnectionEndpoints<IpEndpoint>,peer is CertificateChain,version is TlsVersion,cipher is string,protocol is string){self.ends=ends;certificates=peer;self.version=version;self.cipher=cipher;self.protocol=protocol;}
-    endpoints() is ConnectionEndpoints<IpEndpoint>{ends;}peer() is CertificateChain{certificates;}version() is TlsVersion{version;}
-    cipher() is string{cipher;}protocol() is string{protocol;}
+    has ends is ConnectionEndpoints<IpEndpoint>;
+    has certificates is @CertificateChain;
+    has version is TlsVersion;
+    has cipher, protocol is string;
+
+    // Details as given.
+    TlsDetails(
+        ends is ConnectionEndpoints<IpEndpoint>,
+        peer is CertificateChain,
+        version is TlsVersion,
+        cipher is string,
+        protocol is string
+    ) {
+        self.ends = ends;
+        certificates = [peer];
+        self.version = version;
+        self.cipher = cipher;
+        self.protocol = protocol;
+    }
+
+    // A server's side of a connection whose client presented no certificate.
+    TlsDetails(
+        ends is ConnectionEndpoints<IpEndpoint>,
+        version is TlsVersion,
+        cipher is string,
+        protocol is string
+    ) {
+        self.ends = ends;
+        let none_presented is @CertificateChain = [];
+        certificates = none_presented;
+        self.version = version;
+        self.cipher = cipher;
+        self.protocol = protocol;
+    }
+
+    // The connection's two ends.
+    endpoints() is ConnectionEndpoints<IpEndpoint> {
+        ends;
+    }
+
+    // The chain the peer presented; InvalidCertificate when it presented none,
+    // as a client of a server that asks for none.
+    peer() is CertificateChain {
+        confirm certificates.size() == 1
+            else throw InvalidCertificate.because("the peer presented no certificate");
+        certificates[0];
+    }
+
+    // What the handshake agreed on.
+    cap Session {
+        version is TlsVersion {
+            version;
+        }
+
+        cipher is string {
+            cipher;
+        }
+
+        protocol is string {
+            protocol;
+        }
+    }
 }
-object TlsReading does AsyncReading,Closing {
+
+// The reading side of a TLS connection.
+object TlsReading does AsyncReading, Closing {
     has owner is TlsConnection;
-    TlsReading(owner is TlsConnection){self.owner=owner;}
-    closed() is bool{owner.closed();}close() is void{owner.close();}
-    async bytes(limit is int) is @byte{ await owner.read_bytes(limit); }
+
+    // Made by input(); not constructed directly.
+    TlsReading(owner is TlsConnection) {
+        self.owner = owner;
+    }
+
+    // Whether the reading side is closed.
+    closed() is bool {
+        owner.closed();
+    }
+
+    // Closes the reading side; closing again does nothing.
+    close() is void {
+        owner.close();
+    }
+
+    // At most limit decrypted bytes; [] at the end.
+    async bytes(limit is int) is @byte {
+        await owner.read_bytes(limit);
+    }
 }
-object TlsReadTicket {
-    has busy is Atomic<bool>;TlsReadTicket(busy is Atomic<bool>){self.busy=busy;}close() is void{busy.replace(false);}
+
+hidden object TlsReadTicket {
+    has busy is Atomic<bool>;
+
+    TlsReadTicket(busy is Atomic<bool>) {
+        self.busy = busy;
+    }
+
+    close() is void {
+        busy.replace(false);
+    }
 }
-object TlsWriting does AsyncWriting,Closing {
+
+// The writing side of a TLS connection.
+object TlsWriting does AsyncWriting, Closing {
     has owner is TlsConnection;
-    TlsWriting(owner is TlsConnection){self.owner=owner;}
-    closed() is bool{owner.closed();}close() is void{owner.close();}
-    async write(source is ByteSource) is AsyncWriting{ await owner.write_bytes(source);self; }
+
+    // Made by output(); not constructed directly.
+    TlsWriting(owner is TlsConnection) {
+        self.owner = owner;
+    }
+
+    // Whether the writing side is closed.
+    closed() is bool {
+        owner.closed();
+    }
+
+    // Closes the writing side; closing again does nothing.
+    close() is void {
+        owner.close();
+    }
+
+    // Encrypts and writes the bytes of source.
+    async write(source is ByteSource) is AsyncWriting {
+        await owner.write_bytes(source);
+        self;
+    }
+
+    // Encrypts and writes the bytes.
+    async write(bytes is @byte) is AsyncWriting {
+        await owner.write_bytes(ByteSnapshot(bytes));
+        self;
+    }
 }
+
 test "client defaults retain only modern versions and explicit empty trust" {
-    let policy=TlsClientPolicy(TrustedCertificates([]));
-    test.is(policy.trust().certificates().size(),0);
-    test.ok(policy.versions().membership(TlsVersion.tls1_2) && policy.versions().membership(TlsVersion.tls1_3));
-    test.is(policy.protocols().size(),0);
+    let policy = TlsClientPolicy(TrustedCertificates());
+    test.is(policy.trust().certificates().size(), 0);
+    test.ok(
+        policy.versions().membership(TlsVersion.tls1_2)
+            && policy.versions().membership(TlsVersion.tls1_3)
+    );
+    test.is(policy.protocols().size(), 0);
+}
+
+// A local CA and a server certificate for 127.0.0.1 and localhost (P-256, until
+// 2048), for the tests below; openssl made them.
+hidden const TLS_TEST_CA = "-----BEGIN CERTIFICATE-----\nMIIBdjCCARygAwIBAgIUZys025uW0l2NKLRJhlj/e/NZtfIwCgYIKoZIzj0EAwIw\nGTEXMBUGA1UEAwwOT2trYW1hIFRlc3QgQ0EwHhcNMjYxMTEyMTE0MjA0WhcNNDgx\nMDA3MTE0MjA0WjAZMRcwFQYDVQQDDA5Pa2thbWEgVGVzdCBDQTBZMBMGByqGSM49\nAgEGCCqGSM49AwEHA0IABBFw/aXocscUbo6jObHs1PCN29BcRR+2K50QaEkwFdOx\nkiif5hQH5S72ksR2gL1PtbmPVLJv9kGhSjylkFnWMFujQjBAMA8GA1UdEwEB/wQF\nMAMBAf8wDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBR73vV9mqv7stVB91GaNnLI\n3GuydzAKBggqhkjOPQQDAgNIADBFAiAufmQhdmE0TO2RfIcZRNt/ucAEPVLBW03q\nIRbruIX6KgIhAJsOnAIaGBgywbvntzwVyjTtIurUqVEB8oy03JNCKmNx\n-----END CERTIFICATE-----\n";
+
+hidden const TLS_TEST_CERTIFICATE = "-----BEGIN CERTIFICATE-----\nMIIBwzCCAWigAwIBAgIUG8NUjoqvvLFxqO/t7iv/3Auy2PgwCgYIKoZIzj0EAwIw\nGTEXMBUGA1UEAwwOT2trYW1hIFRlc3QgQ0EwHhcNMjYxMTEyMTE0MjA0WhcNNDgx\nMDA3MTE0MjA0WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwWTATBgcqhkjOPQIBBggq\nhkjOPQMBBwNCAAQaMDVadj3Njz0QDGkIC6mwMvsIrcKEgNpBpZ4p9lZl/U7IZOja\nGwl/oQS67X/YHf5rcfdxvcb70003NsmoexTLo4GSMIGPMBoGA1UdEQQTMBGCCWxv\nY2FsaG9zdIcEfwAAATAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDATBgNV\nHSUEDDAKBggrBgEFBQcDATAdBgNVHQ4EFgQU/R0ad9cojv2dRtb8rSPoG2ncsPsw\nHwYDVR0jBBgwFoAUe971fZqr+7LVQfdRmjZyyNxrsncwCgYIKoZIzj0EAwIDSQAw\nRgIhANTVp7yf3QQovicpuurIeJL4z3SWS68504anbBieM2edAiEA7ypMFNH5e/jc\nmX+bVt3dCMxTaQwVY8/loOQTp0PWQLg=\n-----END CERTIFICATE-----\n";
+
+hidden const TLS_TEST_KEY = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgooq/y5Wqru57uZ/f\nLtDqQBGy63m5uDllm9k87Q2FqQuhRANCAAQaMDVadj3Njz0QDGkIC6mwMvsIrcKE\ngNpBpZ4p9lZl/U7IZOjaGwl/oQS67X/YHf5rcfdxvcb70003NsmoexTL\n-----END PRIVATE KEY-----\n";
+
+// Accepts one connection, reads what the client says and answers pong.
+hidden object TlsTestServer {
+    has listener is tcp.TcpListener;
+    has policy is TlsServerPolicy;
+
+    TlsTestServer(listener is tcp.TcpListener, policy is TlsServerPolicy) {
+        self.listener = listener;
+        self.policy = policy;
+    }
+
+    async serve() is string {
+        let accepted = await listener.connection();
+        let secure = await TlsServerHandshake(
+            origin: accepted,
+            policy: policy,
+            protocols: ["h2", "http/1.1"]
+        ).connection();
+        defer secure.close();
+        let heard = Utf8Decoded(await secure.read_bytes(1024)).string();
+        await secure.write_bytes(ByteSnapshot(Utf8Encoded("pong").bytes()));
+        heard + " " + secure.details()::Session::protocol;
+    }
+}
+
+async test "a TLS server answers a client that trusts its CA" {
+    let identity = TlsIdentity(certificates: TLS_TEST_CERTIFICATE, key: TLS_TEST_KEY);
+    let listener = await tcp.TcpListening(port: 0).listener();
+    defer listener.close();
+    let server = TlsTestServer(listener: listener, policy: TlsServerPolicy(identity: identity));
+    let serve is async () is string = server.serve;
+    let serving = spawn serve();
+    let plain = await tcp.TcpConnecting(
+        address: IpAddress("127.0.0.1"),
+        port: listener::Local::port
+    ).connection();
+    let versions is Set<TlsVersion> = OrderedSet([TlsVersion.tls1_2, TlsVersion.tls1_3]);
+    let client = await TlsClientHandshake(
+        origin: plain,
+        server: roots.IpCertificateIdentity(IpAddress("127.0.0.1")),
+        policy: TlsClientPolicy(
+            trust: roots.PemTrustStore(TLS_TEST_CA),
+            versions: versions,
+            protocols: ["http/1.1"]
+        )
+    ).connection();
+    defer client.close();
+    await client.write_bytes(ByteSnapshot(Utf8Encoded("ping").bytes()));
+    test.is(Utf8Decoded(await client.read_bytes(1024)).string(), "pong");
+    test.is(client.details()::Session::protocol, "http/1.1");
+    test.is(await serving, "ping http/1.1");
+}
+
+test "a TLS identity takes PEM certificates and a PKCS #8 key" {
+    let identity = TlsIdentity(certificates: TLS_TEST_CERTIFICATE + TLS_TEST_CA, key: TLS_TEST_KEY);
+    test.is(identity.chain().size(), 2);
+    test.throws(InvalidTlsIdentity) {
+        TlsIdentity(certificates: TLS_TEST_KEY, key: TLS_TEST_KEY);
+    };
+    test.throws(InvalidTlsIdentity) {
+        TlsIdentity(certificates: TLS_TEST_CERTIFICATE, key: TLS_TEST_CERTIFICATE);
+    };
+    test.throws(InvalidTlsIdentity) {
+        TlsIdentity(certificates: "", key: TLS_TEST_KEY);
+    };
 }

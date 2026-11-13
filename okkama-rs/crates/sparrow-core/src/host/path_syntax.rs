@@ -97,7 +97,7 @@ fn win32_canon_cat(parts: &[String]) -> String {
 }
 
 impl Spec {
-    fn canonpath(self, path: &str) -> String {
+    pub(crate) fn canonpath(self, path: &str) -> String {
         match self {
             Spec::Unix => unix_canonpath(path),
             Spec::Win32 => {
@@ -258,6 +258,20 @@ impl Spec {
     }
 }
 
+/// The anchor of a path (its volume and root, `""` for a relative path), then
+/// its names: `.` and repeated separators go away, `..` stays (#124).
+pub(crate) fn path_parts(spec: Spec, path: &str) -> Vec<String> {
+    let canonical = spec.canonpath(path);
+    let [volume, directory, file] = spec.splitpath(&canonical);
+    let rooted = directory.starts_with('/') || (matches!(spec, Spec::Win32) && directory.starts_with('\\'));
+    let mut parts = vec![format!("{volume}{}", if rooted { spec.rootdir() } else { "" })];
+    parts.extend(spec.splitdir(&directory).into_iter().filter(|name| !name.is_empty() && name != "."));
+    if !file.is_empty() && file != "." {
+        parts.push(file);
+    }
+    parts
+}
+
 pub(crate) fn joined(spec: Spec, parts: &[String]) -> String {
     let mut joined = parts[0].clone();
     for part in &parts[1..] {
@@ -277,12 +291,14 @@ pub(crate) fn path_parent(spec: Spec, path: &str) -> String {
         return spec.canonpath(if parent.is_empty() { "." } else { &parent });
     }
     let mut segments = spec.splitdir(&split[1]);
+    let rooted = segments.len() > 1 && segments[0].is_empty();
     while segments.len() > 1 && segments.last().is_some_and(String::is_empty) {
         segments.pop();
     }
     segments.pop();
+    // The parent of a root is the root itself, also behind a volume (`C:\`).
     let directory = if segments.is_empty() {
-        String::new()
+        if rooted { spec.rootdir().to_string() } else { String::new() }
     } else {
         spec.catdir(&segments)
     };

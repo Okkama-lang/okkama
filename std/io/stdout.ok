@@ -1,40 +1,56 @@
 module io/stdout v1.0.0;
 
-import "io/stream" take
-    Writing,
-    WritingText,
-    ByteSource,
-    IncompleteWrite;
-import "encoding/utf" take Utf8Encoded;
-import "runtime/stdio" take stdout_write, stderr_write;
-
-// Process standard output capabilities.
+// The process's standard output and standard error.
 //
-//     Stdout().write("answer: ", answer.string());
 //     Stdout().writeln("ready");
+//     Stdout().write("answer: ", answer.string());
 //     Stdout() <- "raw UTF-8 text" <- packet <- "\n";
-//
 //     Stderr().writeln("cannot continue");
 //
-// ByteSource writes preserve the exact source octets. Text writes encode every
-// string as strict UTF-8, concatenate only by writing arguments in order, and
-// add no separators. writeln appends exactly one LF after all arguments. Empty
-// write() emits nothing; empty writeln() emits one LF. No method formats
-// arbitrary values: callers use explicit .string() or strings/format objects.
+// Both are Writing (bytes) and WritingText (text). Text is written as strict
+// UTF-8, arguments in order with no separators; writeln adds one LF after them.
+// Nothing formats values on its own: write `.string()` or use strings/format.
+// Byte writes keep the exact octets of a ByteSource or an @byte.
 //
-// The raw runtime boundary reports an accepted prefix length. A short count is
-// exposed as IncompleteWrite; errors are never retried here. flush() is a no-op
-// because these unbuffered capabilities retain no pending user-space bytes.
+// Standard output is buffered by the runtime, for every Stdout value at once: a
+// terminal gets each line as it ends, a pipe or a file gets the bytes in
+// blocks. Stdout().flush() writes out what is pending; the runtime also does
+// that before anything goes to standard error, before standard input is read
+// from a terminal, before a child process starts and when the program ends.
+// Standard error is not buffered.
+//
+// # Errors
+//
+// A write the system takes only in part throws IncompleteWrite.after(written)
+// with the bytes taken; nothing is retried.
 
+import "io/stream" take Writing, WritingText, ByteSource, IncompleteWrite;
+import "encoding/utf" take Utf8Encoded;
+import "runtime/stdio" take stdout_write, stderr_write, stdout_flush;
+
+// Standard output. Every Stdout value writes to the same buffered stream.
 object Stdout does Writing, WritingText {
+    // The process's standard output.
     Stdout();
 
+    // Writes the bytes of a ByteSource exactly, for example
+    // `Utf8Encoded(text)`.
     write(source is ByteSource) is void {
         self.write_bytes(source.bytes());
     }
 
-    flush() is void {}
+    // Writes the bytes as they are.
+    write(bytes is @byte) is void {
+        self.write_bytes(bytes);
+    }
 
+    // Writes out what the buffer holds.
+    flush() is void {
+        stdout_flush();
+    }
+
+    // Writes the strings as UTF-8, one after another, with nothing between
+    // them.
     write(values is ...string) is void {
         let data is @string = values...;
         for data -> value {
@@ -42,6 +58,8 @@ object Stdout does Writing, WritingText {
         }
     }
 
+    // Writes the strings as UTF-8 and then one LF: `Stdout().writeln("total: ",
+    // total.string())`.
     writeln(values is ...string) is void {
         let data is @string = values...;
         for data -> value {
@@ -50,27 +68,37 @@ object Stdout does Writing, WritingText {
         self.write_text("\n");
     }
 
-    private:
-
-    write_text(value is string) is void {
+    hidden write_text(value is string) is void {
         self.write_bytes(Utf8Encoded(origin: value).bytes());
     }
 
-    write_bytes(value is @byte) is void {
+    hidden write_bytes(value is @byte) is void {
         let written is int = stdout_write(value);
         confirm written == value.size() else throw IncompleteWrite.after(written);
     }
 }
 
+// Standard error. It is not buffered; whatever Stdout holds goes out first, so
+// the two keep their order.
 object Stderr does Writing, WritingText {
+    // The process's standard error.
     Stderr();
 
+    // Writes the bytes of a ByteSource exactly.
     write(source is ByteSource) is void {
         self.write_bytes(source.bytes());
     }
 
+    // Writes the bytes as they are.
+    write(bytes is @byte) is void {
+        self.write_bytes(bytes);
+    }
+
+    // Nothing to do: standard error is not buffered.
     flush() is void {}
 
+    // Writes the strings as UTF-8, one after another, with nothing between
+    // them.
     write(values is ...string) is void {
         let data is @string = values...;
         for data -> value {
@@ -78,6 +106,7 @@ object Stderr does Writing, WritingText {
         }
     }
 
+    // Writes the strings as UTF-8 and then one LF.
     writeln(values is ...string) is void {
         let data is @string = values...;
         for data -> value {
@@ -86,14 +115,20 @@ object Stderr does Writing, WritingText {
         self.write_text("\n");
     }
 
-    private:
-
-    write_text(value is string) is void {
+    hidden write_text(value is string) is void {
         self.write_bytes(Utf8Encoded(origin: value).bytes());
     }
 
-    write_bytes(value is @byte) is void {
+    hidden write_bytes(value is @byte) is void {
         let written is int = stderr_write(value);
         confirm written == value.size() else throw IncompleteWrite.after(written);
     }
+}
+
+test "empty writes emit nothing and flush is a no-op" {
+    Stdout().write();
+    Stdout().flush();
+    Stderr().write();
+    Stderr().flush();
+    test.ok(true);
 }

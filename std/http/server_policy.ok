@@ -1,23 +1,196 @@
 module http/server_policy v1.0.0;
+
+// What a server allows itself: protocols, limits, timeouts, connections and
+// ranges per request.
+//
+//     HttpServer(listener: listener, handling: app, policy: ServerPolicy(
+//         protocols: OrderedSet([HttpVersion.http_1_1, HttpVersion.http_2]),
+//         limits: HttpLimits(),
+//         timeouts: ServerTimeouts(),
+//         connections: 256,
+//         ranges: 16,
+//     ));
+//
+// By default: HTTP/1.1, the default HttpLimits, 64 connections, 16 ranges per
+// request, 30 seconds for the head, each pause in a body and a handler, and 5
+// seconds of keep-alive.
+
 import "http/client_policy" take HttpLimits;
 import "http/version" take HttpVersion;
-import "collections/set" take Set,OrderedSet;
-import "time/duration" take Duration,DurationUnit;
+import "collections/set" take Set, OrderedSet;
+import "time/duration" take Duration, DurationUnit;
 
+// How long a server waits.
 object ServerTimeouts {
-    has headers,body_idle,keep_alive,handling is Duration;
-    ServerTimeouts(){headers=Duration(30.rat(),DurationUnit.second);body_idle=Duration(30.rat(),DurationUnit.second);keep_alive=Duration(5.rat(),DurationUnit.second);handling=Duration(30.rat(),DurationUnit.second);}
-    ServerTimeouts(headers is Duration,body_idle is Duration,keep_alive is Duration,handling is Duration){confirm headers.seconds()>=0.rat() && body_idle.seconds()>=0.rat() && keep_alive.seconds()>=0.rat() && handling.seconds()>=0.rat() else throw InvalidServerPolicy.because("negative deadline");self.headers=headers;self.body_idle=body_idle;self.keep_alive=keep_alive;self.handling=handling;}
-    headers_timeout() is Duration{headers;}body_idle_timeout() is Duration{body_idle;}keep_alive_timeout() is Duration{keep_alive;}handling_timeout() is Duration{handling;}
-}
-object ServerPolicy {
-    has protocols is Set<HttpVersion>;has limits is HttpLimits;has timeouts is ServerTimeouts;has connections,ranges is int;
-    ServerPolicy(){let enabled is Set<HttpVersion>=OrderedSet([HttpVersion.http_1_1]);protocols=enabled;limits=HttpLimits();timeouts=ServerTimeouts();connections=64;ranges=16;}
-    ServerPolicy(protocols is Set<HttpVersion>,limits is HttpLimits,timeouts is ServerTimeouts,connections is int,ranges is int){
-        let count=protocols.size();confirm count>=1 && count<=2 && connections>0 && connections<=1024 && ranges>0 && ranges<=128 else throw InvalidServerPolicy.because("protocol or resource budget");
-        let selected is @HttpVersion=[HttpVersion.http_1_1,HttpVersion.http_2].filter()->value{protocols.membership(value);};confirm selected.size()==count else throw InvalidServerPolicy.because("unsupported protocol identity");
-        let snapshot is Set<HttpVersion>=OrderedSet(selected);self.protocols=snapshot;self.limits=limits;self.timeouts=timeouts;self.connections=connections;self.ranges=ranges;
+    has headers, body_idle, keep_alive, handling is Duration;
+
+    // 30 seconds for the head, a body pause and a handler; 5 seconds of
+    // keep-alive.
+    ServerTimeouts() {
+        headers = Duration(seconds: 30);
+        body_idle = Duration(seconds: 30);
+        keep_alive = Duration(seconds: 5);
+        handling = Duration(seconds: 30);
     }
-    protocols() is Set<HttpVersion>{protocols;}limits() is HttpLimits{limits;}timeouts() is ServerTimeouts{timeouts;}connections() is int{connections;}ranges() is int{ranges;}
+
+    // The timeouts as given.
+    ServerTimeouts(
+        headers is Duration,
+        body_idle is Duration,
+        keep_alive is Duration,
+        handling is Duration
+    ) {
+        confirm headers::Span::seconds >= 0.rat()
+            && body_idle::Span::seconds >= 0.rat()
+            && keep_alive::Span::seconds >= 0.rat()
+            && handling::Span::seconds >= 0.rat()
+            else throw InvalidServerPolicy.because("negative deadline");
+        self.headers = headers;
+        self.body_idle = body_idle;
+        self.keep_alive = keep_alive;
+        self.handling = handling;
+    }
+
+    // For a request head to arrive.
+    headers_timeout() is Duration {
+        headers;
+    }
+
+    // For each pause while a body is read.
+    body_idle_timeout() is Duration {
+        body_idle;
+    }
+
+    // For the next request on an idle connection.
+    keep_alive_timeout() is Duration {
+        keep_alive;
+    }
+
+    // For a handler to answer.
+    handling_timeout() is Duration {
+        handling;
+    }
 }
+
+// Everything a server needs besides a listener and a handler.
+object ServerPolicy {
+    has protocols is Set<HttpVersion>;
+    has limits is HttpLimits;
+    has timeouts is ServerTimeouts;
+    has connections, ranges is int;
+
+    // HTTP/1.1, the default limits and timeouts, 64 connections, 16 ranges.
+    ServerPolicy() {
+        let enabled is Set<HttpVersion> = OrderedSet([HttpVersion.http_1_1]);
+        protocols = enabled;
+        limits = HttpLimits();
+        timeouts = ServerTimeouts();
+        connections = 64;
+        ranges = 16;
+    }
+
+    // The policy as given; InvalidServerPolicy unless it has 1 or 2 protocols,
+    // 1..1024 connections and 1..128 ranges.
+    ServerPolicy(
+        protocols is Set<HttpVersion>,
+        limits is HttpLimits,
+        timeouts is ServerTimeouts,
+        connections is int,
+        ranges is int
+    ) {
+        let count = protocols.size();
+        confirm count >= 1
+            && count <= 2
+            && connections > 0
+            && connections <= 1024
+            && ranges > 0
+            && ranges <= 128
+            else throw InvalidServerPolicy.because("protocol or resource budget");
+        let selected is @HttpVersion = [HttpVersion.http_1_1, HttpVersion.http_2].filter() -> value {
+            protocols.membership(value);
+        };
+        confirm selected.size() == count
+            else throw InvalidServerPolicy.because("unsupported protocol identity");
+        let snapshot is Set<HttpVersion> = OrderedSet(selected);
+        self.protocols = snapshot;
+        self.limits = limits;
+        self.timeouts = timeouts;
+        self.connections = connections;
+        self.ranges = ranges;
+    }
+
+    // The versions it speaks.
+    protocols() is Set<HttpVersion> {
+        protocols;
+    }
+
+    // The limits of a request.
+    limits() is HttpLimits {
+        limits;
+    }
+
+    // The timeouts.
+    timeouts() is ServerTimeouts {
+        timeouts;
+    }
+
+    // How many connections it serves at once.
+    connections() is int {
+        connections;
+    }
+
+    // How many ranges one request may ask for.
+    ranges() is int {
+        ranges;
+    }
+}
+
+// A policy that cannot be used; reason says why.
 enum InvalidServerPolicy is Error = (because(reason is string));
+
+test "server policy has bounded defaults and refuses unsupported budgets" {
+    let policy = ServerPolicy();
+    test.is(policy.connections(), 64);
+    test.is(policy.ranges(), 16);
+    test.is(policy.protocols().membership(HttpVersion.http_1_1), true);
+    test.is(policy.protocols().membership(HttpVersion.http_2), false);
+    test.is(policy.timeouts().keep_alive_timeout()::Span::seconds, 5.rat());
+    test.is(policy.timeouts().headers_timeout()::Span::seconds, 30.rat());
+    let both is Set<HttpVersion> = OrderedSet([HttpVersion.http_1_1, HttpVersion.http_2]);
+    let custom = ServerPolicy(
+        protocols: both,
+        limits: HttpLimits(),
+        timeouts: ServerTimeouts(),
+        connections: 1,
+        ranges: 128
+    );
+    test.is(custom.protocols().size(), 2);
+    test.throws(InvalidServerPolicy) {
+        ServerPolicy(
+            protocols: both,
+            limits: HttpLimits(),
+            timeouts: ServerTimeouts(),
+            connections: 0,
+            ranges: 16
+        );
+    };
+    let ancient is Set<HttpVersion> = OrderedSet([HttpVersion.http_1_0]);
+    test.throws(InvalidServerPolicy) {
+        ServerPolicy(
+            protocols: ancient,
+            limits: HttpLimits(),
+            timeouts: ServerTimeouts(),
+            connections: 8,
+            ranges: 16
+        );
+    };
+    let second = Duration(seconds: 1);
+    test.throws(InvalidServerPolicy) {
+        ServerTimeouts(
+            headers: second,
+            body_idle: second,
+            keep_alive: Duration(seconds: -1),
+            handling: second
+        );
+    };
+}

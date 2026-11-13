@@ -22,7 +22,7 @@ async main() is int {
     let out = session.output();
     let resizes = await session.resizes();
     let timed = try {
-        await Within(Reader(input: session.input()).line(), Duration(1.rat() / 5.rat(), DurationUnit.second), SystemClock()).result();
+        await Within(Reader(input: session.input()).line(), Duration(1.rat() / 5.rat(), DurationUnit.second), SystemClock()).outcome();
         "read early";
     } catch TimedOut.elapsed { "timed out"; };
     out.writeln(timed);
@@ -34,9 +34,9 @@ async main() is int {
     let line = await Reader(input: session.input()).line();
     out.writeln("line: " + line);
     let initial = await resizes.size();
-    out.writeln("initial: " + initial.columns().string() + "x" + initial.rows().string());
+    out.writeln("initial: " + initial::Size::columns.string() + "x" + initial::Size::rows.string());
     out.writeln("waiting for a resize");
     let size = await resizes.size();
-    out.writeln("size: " + size.columns().string() + "x" + size.rows().string());
+    out.writeln("size: " + size::Size::columns.string() + "x" + size::Size::rows.string());
     0;
 }

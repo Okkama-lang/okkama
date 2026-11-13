@@ -1,15 +1,7 @@
 module random/source v1.0.0;
 
-import "runtime/random" take
-    PcgState,
-    pcg_state,
-    pcg_integer,
-    pcg_float,
-    pcg_bytes,
-    random_sample_accepted,
-    random_integer_from_sample,
-    random_float_from_sample;
-import "runtime/system" take secure_random;
+import "runtime/random" take PcgState, pcg_state, pcg_integer, pcg_float, pcg_bytes;
+import "runtime/system" take secure_random, secure_integer, secure_float;
 
 // Stateful random sources with one compact capability.
 //
@@ -25,7 +17,9 @@ import "runtime/system" take secure_random;
 // 6364136223846793005 and fixed stream increment 1442695040888963407.
 // Construction performs the standard zero-state advance, adds the signed seed
 // modulo 2^64, then advances again. Each integer consumes pairs of 32-bit
-// outputs until rejection sampling accepts one. float consumes two outputs and
+// outputs until rejection sampling accepts one: a sample is one pair (high
+// output first) per 64-bit word that stop - start - 1 needs, the first pair
+// most significant, so a range up to 2^64 takes one pair per sample. float consumes two outputs and
 // forms 53 random bits. bytes emits each 32-bit output little-endian; an
 // incomplete final word discards its unused bytes. This sequence is part of the
 // public reproducibility contract.
@@ -33,32 +27,47 @@ import "runtime/system" take secure_random;
 // PcgRandom owns an opaque mutable stream. Copies of the object share that
 // stream, just as copies of a reading capability share their underlying input.
 // It is reproducible, not cryptographically secure. SecureRandom has no seed
-// constructor and reads fresh operating-system entropy for every operation.
+// constructor and draws from the operating system's cryptographic generator:
+// arc4random on Apple systems, getrandom elsewhere (served from the vDSO by
+// glibc 2.41 on Linux 6.11 and later, one system call on older systems), and
+// java.security.SecureRandom on the JVM. Its integers take as many 64-bit
+// samples as the range needs, so any non-empty range is accepted.
 // Integer ranges are always non-empty and half-open [start, stop). Random byte
 // requests are capped at 16 MiB per call.
 
+// A source of random numbers and bytes; pass one in, so tests can use a seeded
+// one.
 role Randomizing {
+    // An int from start up to, not including, stop.
     integer(start is int, stop is int) is int;
+    // A float from 0.0 up to, not including, 1.0.
     float() is float;
+    // size random bytes, at most 16 MiB at once.
     bytes(size is int) is @byte;
 }
 
+// A seeded, reproducible PCG32 generator; not for secrets.
 object PcgRandom does Randomizing {
     has state is PcgState;
 
+    // The generator for seed; the same seed gives the same numbers on every
+    // engine.
     PcgRandom(seed is int) {
         state = pcg_state(seed);
     }
 
+    // An int from start up to, not including, stop.
     integer(start is int, stop is int) is int {
         confirm start < stop else throw InvalidRandomRange.detailed(start, stop);
         pcg_integer(state, start, stop);
     }
 
+    // A float from 0.0 up to, not including, 1.0.
     float() is float {
         pcg_float(state);
     }
 
+    // size random bytes.
     bytes(size is int) is @byte {
         confirm size >= 0 && size <= 16777216
             else throw InvalidRandomSize.detailed(size, 16777216);
@@ -66,18 +75,33 @@ object PcgRandom does Randomizing {
     }
 }
 
+// The operating system's cryptographic generator: for keys, tokens and nonces.
 object SecureRandom does Randomizing {
+    // The system generator.
     SecureRandom();
 
+    // An int from start up to, not including, stop.
     integer(start is int, stop is int) is int {
         confirm start < stop else throw InvalidRandomRange.detailed(start, stop);
-        SecureInteger(start: start, stop: stop).value();
+        try {
+            secure_integer(start, stop);
+        }
+        catch failure is NativeFailure {
+            throw UnavailableRandom.unavailable;
+        }
     }
 
+    // A float from 0.0 up to, not including, 1.0.
     float() is float {
-        random_float_from_sample(SecureBytes(size: 7).bytes());
+        try {
+            secure_float();
+        }
+        catch failure is NativeFailure {
+            throw UnavailableRandom.unavailable;
+        }
     }
 
+    // size secure random bytes.
     bytes(size is int) is @byte {
         confirm size >= 0 && size <= 16777216
             else throw InvalidRandomSize.detailed(size, 16777216);
@@ -85,33 +109,16 @@ object SecureRandom does Randomizing {
     }
 }
 
-object SecureInteger {
-    has beginning is int;
-    has ending is int;
-
-    SecureInteger(start is int, stop is int) {
-        beginning = start;
-        ending = stop;
-    }
-
-    value() is int {
-        let sample is @byte = SecureBytes(size: 8).bytes();
-        if random_sample_accepted(sample, beginning, ending) {
-            random_integer_from_sample(sample, beginning, ending);
-        }
-        else {
-            self.value();
-        }
-    }
-}
-
+// Secure random bytes in one call: `SecureBytes(32).bytes()`.
 object SecureBytes {
     has amount is int;
 
+    // size bytes, at most 16 MiB.
     SecureBytes(size is int) {
         amount = size;
     }
 
+    // The bytes, drawn once.
     bytes() is @byte {
         if amount == 0 {
             [];
@@ -130,8 +137,108 @@ object SecureBytes {
     }
 }
 
+// An empty range: stop is not above start.
 enum InvalidRandomRange is Error = (detailed(start is int, stop is int));
 
+// A size below zero or above the maximum.
 enum InvalidRandomSize is Error = (detailed(requested is int, maximum is int));
 
+// The system generator could not answer.
 enum UnavailableRandom is Error = (unavailable);
+
+test "a seeded source repeats the published PCG32 sequence" {
+    // The first two pcg32 outputs for seed 42, little-endian; checked
+    // against an independent implementation of the stated algorithm.
+    test.is(
+        PcgRandom(42).bytes(8),
+        [byte(214), byte(123), byte(245), byte(194), byte(169), byte(196), byte(7), byte(107)]
+    );
+    let random = PcgRandom(42);
+    test.is(random.integer(0, 100), 5);
+    test.is(random.integer(0, 100), 15);
+    test.is(random.integer(-5, 5), 3);
+    test.is(random.float(), 0.7960081833279878);
+    // Copies share one stream: a draw through either advances both.
+    let shared = PcgRandom(9);
+    let copy = shared;
+    let first = shared.integer(0, 1000000);
+    let second = copy.integer(0, 1000000);
+    let fresh = PcgRandom(9);
+    test.is(fresh.integer(0, 1000000), first);
+    test.is(fresh.integer(0, 1000000), second);
+    test.is(PcgRandom(7).bytes(3), PcgRandom(7).bytes(3));
+    test.is(PcgRandom(7).bytes(0).size(), 0);
+}
+
+test "ranges are half-open and never empty" {
+    let random is Randomizing = PcgRandom(1);
+    for (0..200) -> index {
+        let roll = random.integer(1, 7);
+        test.ok(roll >= 1 && roll < 7);
+        let fraction = random.float();
+        test.ok(fraction >= 0.0 && fraction < 1.0);
+    }
+    test.is(random.integer(3, 4), 3);
+    test.is(
+        try {
+            random.integer(4, 4);
+        }
+        catch InvalidRandomRange.detailed(start, stop) {
+            start * 10 + stop;
+        },
+        44
+    );
+    test.is(
+        try {
+            random.bytes(-1).size();
+        }
+        catch InvalidRandomSize.detailed(requested, _maximum) {
+            requested;
+        },
+        -1
+    );
+}
+
+test "ranges wider than one 64-bit sample take whole words" {
+    // #507: such ranges used to loop forever.
+    let wide = 1180591620717411303424;
+    let spans = [18446744073709551615, 18446744073709551616, 18446744073709551617, wide];
+    let random is Randomizing = PcgRandom(3);
+    for spans -> span {
+        let value = random.integer(-span, span);
+        test.ok(value >= -span && value < span);
+    }
+    // A range up to 2^64 takes one pair of outputs, as it always did.
+    test.is(PcgRandom(11).integer(0, 18446744073709551616), 2065675223944926949);
+    test.is(PcgRandom(11).integer(0, 18446744073709551615), 2065675223944926949);
+    // A wider one takes two pairs per sample here, the first most significant.
+    let seeded = PcgRandom(11);
+    test.is(seeded.integer(0, wide), 693650027885558685440);
+    test.is(seeded.integer(0, 100), 67);
+}
+
+test "secure source answers within the same contract" {
+    let secure is Randomizing = SecureRandom();
+    test.is(secure.bytes(24).size(), 24);
+    for (0..50) -> index {
+        let roll = secure.integer(-3, 3);
+        test.ok(roll >= -3 && roll < 3);
+        let fraction = secure.float();
+        test.ok(fraction >= 0.0 && fraction < 1.0);
+    }
+    test.is(SecureBytes(size: 5).bytes().size(), 5);
+    // Ranges at and past one 64-bit sample (#507).
+    let wide = 1180591620717411303424;
+    let spans = [18446744073709551615, 18446744073709551616, 18446744073709551617, wide];
+    for spans -> span {
+        let value = secure.integer(-span, span);
+        test.ok(value >= -span && value < span);
+    }
+    let picks is @int = (0..64).map() -> index {
+        secure.integer(0, wide);
+    };
+    // 64 draws over 2^70 values: at least one lands above 2^64.
+    test.ok(picks.reduce(false) -> found, pick {
+        found || pick >= 18446744073709551616;
+    });
+}

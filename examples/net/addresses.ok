@@ -1,0 +1,47 @@
+module examples/net/addresses v1.0.0;
+
+import "io/stdout" take Stdout;
+import "net/dns" take FixedResolution, UnknownHost;
+import "net/endpoint" take HostEndpoint, IpEndpoint;
+import "net/ip" take InvalidIpAddress, IpAddress, IpNetwork, IpProperty, IpVersion;
+
+// Addresses are checked values before they reach DNS or a socket: parse and
+// classify IP addresses, test network membership, write endpoints, and
+// resolve names through a fixed table, as tests do instead of real DNS.
+
+async main() is int {
+    let out = Stdout();
+    let v6 = IpAddress("2001:0DB8:0:0::1");
+    out.writeln(v6, " is IPv6: ", v6.version() == IpVersion.v6);
+    out.writeln("10.1.2.3 private: ", IpAddress("10.1.2.3").properties().membership(IpProperty.private_network));
+    out.writeln("127.0.0.1 loopback: ", IpAddress("127.0.0.1").properties().membership(IpProperty.loopback));
+
+    let office = IpNetwork(address: IpAddress("192.168.10.0"), prefix: 24);
+    out.writeln("office /", office::Mask::prefix, " has ", office.size(), " addresses, broadcast ", office.broadcast());
+    out.writeln("192.168.10.77 inside: ", office.membership(IpAddress("192.168.10.77")));
+
+    let endpoint = IpEndpoint(address: IpAddress("fe80::1"), port: 443, zone: "eth0");
+    out.writeln(endpoint, " port ", endpoint::Parts::port);
+
+    let refused = try {
+        IpAddress("10.1.2").string();
+    }
+    catch failure is InvalidIpAddress {
+        "refused 10.1.2";
+    };
+    out.writeln(refused);
+
+    let dns = FixedResolution(["api.example.test": ["192.0.2.10", "2001:db8::10"]]);
+    let found = await dns.addresses(HostEndpoint(host: "API.example.test", port: 443));
+    for found -> address {
+        out.writeln("api.example.test -> ", address);
+    }
+    let missing = try {
+        (await dns.addresses(HostEndpoint(host: "other.test", port: 80))).size().string();
+    }
+    catch UnknownHost.host(name) {
+        "unknown " + name;
+    };
+    out.writeln(missing);
+    0;
+}

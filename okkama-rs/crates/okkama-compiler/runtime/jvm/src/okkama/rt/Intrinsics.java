@@ -8,7 +8,6 @@ import java.math.BigInteger;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 
 /**
  * Intrinsics std {@code async/*} (OIR-1 §14.2): действия объектов, чьё
@@ -377,7 +376,7 @@ public final class Intrinsics {
     public static Object atomic_Atomic_compare_and_replace(
         Object closed, Object self, Object expected, Object revised) {
         AtomicState state = open(closed, self);
-        if (!Objects.equals(state.value, expected)) {
+        if (!Rt.equal(state.value, expected)) {
             return Boolean.FALSE;
         }
         state.value = revised;
@@ -703,7 +702,7 @@ public final class Intrinsics {
         return cancelled;
     }
 
-    public static Object collect_Raced_result(Object none, Object self) {
+    public static Object collect_Raced_winner(Object none, Object self) {
         Retained state = retained(self);
         if (state.result == null) {
             state.result = op(() -> raced(none, self), self);
@@ -734,7 +733,7 @@ public final class Intrinsics {
         return Scheduler.await(done);
     }
 
-    public static Object collect_FirstSuccessful_result(Object none, Object self) {
+    public static Object collect_FirstSuccessful_outcome(Object none, Object self) {
         Retained state = retained(self);
         if (state.result == null) {
             state.result = op(() -> firstSuccessful(none, self), self);
@@ -909,8 +908,177 @@ public final class Intrinsics {
         }
     }
 
+    // ----- float and int functions (#192): as okkama-runtime-core/src/float.rs -----
+
+    public static Object float_floor(Object x) { return Floats.finite(Math.floor((Double) x)); }
+    public static Object float_ceil(Object x) { return Floats.finite(Math.ceil((Double) x)); }
+
+    /** Half away from zero, as Rust's f64::round. */
+    public static Object float_round(Object x) {
+        double value = (Double) x;
+        double whole = Math.floor(Math.abs(value));
+        if (Math.abs(value) - whole >= 0.5) {
+            whole += 1.0;
+        }
+        return Floats.finite(Math.copySign(whole, value));
+    }
+
+    public static Object float_trunc(Object x) {
+        double value = (Double) x;
+        return Floats.finite(value < 0 ? Math.ceil(value) : Math.floor(value));
+    }
+
+    public static Object float_exp(Object x) { return Floats.finite(Math.exp((Double) x)); }
+    public static Object float_ln(Object x) { return Floats.finite(Math.log((Double) x)); }
+    public static Object float_log2(Object x) {
+        double value = (Double) x;
+        // Exact for powers of two, as log2 is in Rust.
+        double result = Math.log(value) / Math.log(2.0);
+        if (value > 0 && Double.isFinite(value)) {
+            long bits = Double.doubleToRawLongBits(value);
+            if ((bits & 0x000fffffffffffffL) == 0 && Math.getExponent(value) >= Double.MIN_EXPONENT) {
+                result = Math.getExponent(value);
+            }
+        }
+        return Floats.finite(result);
+    }
+    public static Object float_log10(Object x) { return Floats.finite(Math.log10((Double) x)); }
+    public static Object float_sin(Object x) { return Floats.finite(Math.sin((Double) x)); }
+    public static Object float_cos(Object x) { return Floats.finite(Math.cos((Double) x)); }
+    public static Object float_tan(Object x) { return Floats.finite(Math.tan((Double) x)); }
+
+    /** x.atan2(y): the angle of the point (x, y). */
+    public static Object float_atan2(Object x, Object y) { return Floats.finite(Math.atan2((Double) y, (Double) x)); }
+
+    public static Object float_min(Object value, Object other) {
+        return (Double) other < (Double) value ? other : value;
+    }
+
+    public static Object float_max(Object value, Object other) {
+        return (Double) other > (Double) value ? other : value;
+    }
+
+    public static Object float_clamp(Object value, Object low, Object high) {
+        double v = (Double) value;
+        double l = (Double) low;
+        double h = (Double) high;
+        if (l > h) {
+            throw Rt.trap("clamp: low " + Floats.text((Double) low) + " is above high " + Floats.text((Double) high));
+        }
+        return v < l ? low : v > h ? high : value;
+    }
+
+    public static Object float_finite(Object x) { return Double.isFinite((Double) x); }
+    public static Object float_nan(Object x) { return Double.isNaN((Double) x); }
+
+    public static Object int_min(Object value, Object other) {
+        return ((java.math.BigInteger) other).compareTo((java.math.BigInteger) value) < 0 ? other : value;
+    }
+
+    public static Object int_max(Object value, Object other) {
+        return ((java.math.BigInteger) other).compareTo((java.math.BigInteger) value) > 0 ? other : value;
+    }
+
+    public static Object int_clamp(Object value, Object low, Object high) {
+        java.math.BigInteger v = (java.math.BigInteger) value;
+        java.math.BigInteger l = (java.math.BigInteger) low;
+        java.math.BigInteger h = (java.math.BigInteger) high;
+        if (l.compareTo(h) > 0) {
+            throw Rt.trap("clamp: low " + l + " is above high " + h);
+        }
+        return v.compareTo(l) < 0 ? low : v.compareTo(h) > 0 ? high : value;
+    }
+
+    // test.close, test.text, test.bytes (#187): the messages of
+    // okkama-runtime-core/src/testing.rs.
+    public static void test_close(Object actual, Object expected, Object tolerance) {
+        double a = (Double) actual;
+        double e = (Double) expected;
+        double t = (Double) tolerance;
+        if (Double.isNaN(t) || t < 0.0) {
+            Tests.fail("tolerance must be zero or more, got " + Tests.show(tolerance));
+            return;
+        }
+        if (a == e || Math.abs(a - e) <= t) {
+            return;
+        }
+        Tests.fail("expected " + Tests.show(expected) + " within " + Tests.show(tolerance) + ", got "
+            + Tests.show(actual) + " (off by " + Tests.show(Math.abs(a - e)) + ")");
+    }
+
+    public static void test_text(Object actual, Object expected) {
+        String a = (String) actual;
+        String e = (String) expected;
+        if (a.equals(e)) {
+            return;
+        }
+        int[] left = a.codePoints().toArray();
+        int[] right = e.codePoints().toArray();
+        int at = 0;
+        while (at < left.length && at < right.length && left[at] == right[at]) {
+            at++;
+        }
+        int line = 1;
+        int lineStart = 0;
+        for (int i = 0; i < at; i++) {
+            if (right[i] == '\n') {
+                line++;
+                lineStart = i + 1;
+            }
+        }
+        int start = Math.max(0, at - 8);
+        Tests.fail("text differs at scalar " + at + " (line " + line + ", column " + (at - lineStart + 1)
+            + "): expected " + quoted(right, start, at + 8) + ", got " + quoted(left, start, at + 8)
+            + "; lengths " + right.length + " and " + left.length);
+    }
+
+    private static String quoted(int[] scalars, int start, int stop) {
+        StringBuilder out = new StringBuilder("\"");
+        for (int i = Math.min(start, scalars.length); i < Math.min(stop, scalars.length); i++) {
+            int c = scalars[i];
+            switch (c) {
+                case '\\' -> out.append("\\\\");
+                case '"' -> out.append("\\\"");
+                case '\n' -> out.append("\\n");
+                case '\r' -> out.append("\\r");
+                case '\t' -> out.append("\\t");
+                default -> {
+                    if (c < 0x20 || c == 0x7f) {
+                        out.append("\\u{").append(Integer.toHexString(c)).append('}');
+                    } else {
+                        out.appendCodePoint(c);
+                    }
+                }
+            }
+        }
+        return out.append('"').toString();
+    }
+
+    public static void test_bytes(Object actual, Object expected) {
+        byte[] a = Natives.toBytes((java.util.List<?>) actual);
+        byte[] e = Natives.toBytes((java.util.List<?>) expected);
+        if (java.util.Arrays.equals(a, e)) {
+            return;
+        }
+        int at = 0;
+        while (at < a.length && at < e.length && a[at] == e[at]) {
+            at++;
+        }
+        if (at < a.length && at < e.length) {
+            Tests.fail(String.format("bytes differ at offset %d: expected 0x%02x, got 0x%02x; sizes %d and %d",
+                at, e[at] & 0xff, a[at] & 0xff, e.length, a.length));
+        } else {
+            Tests.fail("bytes differ in size: expected " + e.length + ", got " + a.length
+                + "; equal up to offset " + at);
+        }
+    }
+
     public static void test_fail(Object message) {
         Tests.fail((String) message);
+    }
+
+    public static void test_skip(Object reason) {
+        throw Tests.skip((String) reason);
     }
 
     /** Хранилище экземпляра fake: ключи — значения рантайма. */
@@ -1273,10 +1441,10 @@ public final class Intrinsics {
     // ----- async/scope: FutureScope -----
 
     /**
-     * {@code FutureScope.result()}: группа задач для {@code action}, тело,
+     * {@code FutureScope.outcome()}: группа задач для {@code action}, тело,
      * затем ожидание группы; отказ тела отменяет группу и остаётся первичным.
      */
-    public static Object scope_FutureScope_result(Object groupType, Object self) {
+    public static Object scope_FutureScope_outcome(Object groupType, Object self) {
         Retained state = retained(self);
         if (state.result == null) {
             state.result = op(() -> {
@@ -1454,7 +1622,7 @@ public final class Intrinsics {
         return origin.value;
     }
 
-    public static Object timeout_Within_result(Object timedOut, Object seconds, Object wait, final Object self) {
+    public static Object timeout_Within_outcome(Object timedOut, Object seconds, Object wait, final Object self) {
         return timeoutResult(timedOut, self, new DurationSource() {
             public Object duration(Object clock) {
                 return field(self, "limit");
@@ -1462,7 +1630,7 @@ public final class Intrinsics {
         }, (Fn) seconds, (Fn) wait);
     }
 
-    public static Object timeout_Before_result(Object timedOut, final Object now, final Object minus,
+    public static Object timeout_Before_outcome(Object timedOut, final Object now, final Object minus,
             Object seconds, Object wait, final Object self) {
         return timeoutResult(timedOut, self, new DurationSource() {
             public Object duration(Object clock) {

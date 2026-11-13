@@ -56,6 +56,9 @@ let checks = 0;
   check('view()', 0, 'view', 'keyword.declaration.okkama', true);
   check('cap()', 0, 'cap', 'keyword.declaration.cap.okkama', true);
   check('test.skip("later")', 0, 'skip', 'support.function.assertion.okkama');
+  check('test.close(a, b, 0.001)', 0, 'close', 'support.function.assertion.okkama');
+  check('test.text(a, b)', 0, 'text', 'support.function.assertion.okkama');
+  check('test.bytes(a, b)', 0, 'bytes', 'support.function.assertion.okkama');
   check('fake.writing.remove("key")', 0, 'remove', 'support.function.fake-state.okkama');
   for (const declaration of ['cap Card {', 'cap Customer::Card {', 'cap Box::lowercase {', 'cap\nCustomer::Card\n{']) {
     const source = declaration + '\n label is string { "}"; }\n}';
@@ -86,6 +89,17 @@ let checks = 0;
   check('hidden object Payment does Created {', 0, 'hidden', 'storage.modifier.hidden.okkama');
   check('hidden enum Stage = (created, done);', 0, 'hidden', 'storage.modifier.hidden.okkama');
   check('object Tag { has hidden is int; }', 0, 'hidden', 'storage.modifier.hidden.okkama', true);
+  check('hidden const LIMIT is int = 3;', 0, 'hidden', 'storage.modifier.hidden.okkama');
+  // once let (#491): `once` is a modifier only right before `let`.
+  check('        once let kept = source.items();', 0, 'once', 'storage.modifier.once.okkama');
+  check('    let once = 1;', 0, 'once', 'storage.modifier.once.okkama', true);
+  // hidden actions (#365): the modifier, and the action name stays a function
+  check('    hidden secret() is int {', 0, 'hidden', 'storage.modifier.hidden.okkama');
+  check('    hidden secret() is int {', 0, 'secret', 'entity.name.function.okkama');
+  check('    hidden async later() is int {', 0, 'hidden', 'storage.modifier.hidden.okkama');
+  check('    hidden() is int {', 0, 'hidden', 'storage.modifier.hidden.okkama', true);
+  check('    let hidden = 1;', 0, 'hidden', 'storage.modifier.hidden.okkama', true);
+  check('    let private = 1;', 0, 'private', 'keyword.declaration.okkama', true);
   // try? / try!
   check('let rows = try? db.query(sql) else 0;', 0, 'try', 'keyword.control.exception.okkama');
   check('let rows = try? db.query(sql) else 0;', 0, '?', 'keyword.operator.try-mark.okkama');
@@ -108,11 +122,11 @@ let checks = 0;
   check('let package is Package = Package.fake();', 0, 'fake', 'constant.other.enum.okkama', true);
   check('Stdout().writeln(text);', 0, 'writeln', 'constant.other.enum.okkama', true);
   check('for 1..10 -> i { i; }', 0, '10', 'constant.numeric.integer.okkama');
-  for (const file of ['examples/object-caps.ok',
-    'examples/choices.ok', 'examples/variants.ok',
-    'examples/showcase/checkout.ok', 'examples/showcase/errors.ok',
-    'examples/showcase/absence.ok', 'examples/showcase/shapes.ok',
-    'examples/showcase/state-views.ok']) {
+  // Whole std modules close every context they open: caps, catch patterns,
+  // hidden objects and actions, raw strings, choices.
+  for (const file of ['std/json.ok', 'std/web/request.ok', 'std/config/ini.ok',
+    'std/config/document.ok', 'std/logging/field.ok', 'std/net/tcp_racing.ok',
+    'std/time/iso.ok', 'std/template/sections.ok', 'std/url/query.ok']) {
     const source = fs.readFileSync(path.join(root, '..', file), 'utf8');
     const rows = tokenize(source + '\n__okkama_end__');
     checks++;

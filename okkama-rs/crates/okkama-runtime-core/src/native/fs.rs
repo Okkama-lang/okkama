@@ -6,7 +6,7 @@
 
 use super::jre;
 use super::support::{
-    byte_array, bytes, failure, handle, int, int_map, int_value, items, new_handle, string,
+    boolean, byte_array, bytes, failure, handle, int, int_map, int_value, items, new_handle, string,
     string_array, string_map, text,
 };
 use super::Error;
@@ -330,12 +330,14 @@ fn path_parent(spec: Spec, path: &str) -> String {
         return spec.canonpath(if parent.is_empty() { "." } else { &parent });
     }
     let mut segments = spec.splitdir(&split[1]);
+    let rooted = segments.len() > 1 && segments[0].is_empty();
     while segments.len() > 1 && segments.last().is_some_and(String::is_empty) {
         segments.pop();
     }
     segments.pop();
+    // The parent of a root is the root itself, also behind a volume (`C:\`).
     let directory = if segments.is_empty() {
-        String::new()
+        if rooted { spec.rootdir().to_string() } else { String::new() }
     } else {
         spec.catdir(&segments)
     };
@@ -349,6 +351,99 @@ fn path_parent(spec: Spec, path: &str) -> String {
     spec.canonpath(&parent)
 }
 
+/// The anchor of a path (its volume and root, `""` for a relative path), then
+/// its names: `.` and repeated separators go away, `..` stays (#124).
+fn path_parts(spec: Spec, path: &str) -> Vec<String> {
+    let canonical = spec.canonpath(path);
+    let [volume, directory, file] = spec.splitpath(&canonical);
+    let rooted = directory.starts_with('/') || (matches!(spec, Spec::Win32) && directory.starts_with('\\'));
+    let mut parts = vec![format!("{volume}{}", if rooted { spec.rootdir() } else { "" })];
+    parts.extend(spec.splitdir(&directory).into_iter().filter(|name| !name.is_empty() && name != "."));
+    if !file.is_empty() && file != "." {
+        parts.push(file);
+    }
+    parts
+}
+
+/// `rename` that refuses an existing target with `AlreadyExists` instead of
+/// replacing it (#126): `renameat2(RENAME_NOREPLACE)` on Linux,
+/// `renamex_np(RENAME_EXCL)` on macOS. Where neither works, a file moves by
+/// link and unlink, which refuse an existing target too, and a directory is
+/// checked first.
+pub fn rename_noreplace(source: &std::path::Path, target: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let c_path = |path: &std::path::Path| {
+        std::ffi::CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "path holds NUL"))
+    };
+    let (from, to) = (c_path(source)?, c_path(target)?);
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: both paths are NUL-terminated strings that outlive the call.
+        let result = unsafe {
+            libc::renameat2(libc::AT_FDCWD, from.as_ptr(), libc::AT_FDCWD, to.as_ptr(), libc::RENAME_NOREPLACE)
+        };
+        if result == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if !matches!(error.raw_os_error(), Some(libc::EINVAL | libc::ENOSYS)) {
+            return Err(error);
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // SAFETY: both paths are NUL-terminated strings that outlive the call.
+        let result = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) };
+        if result == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if !matches!(error.raw_os_error(), Some(libc::EINVAL | libc::ENOTSUP)) {
+            return Err(error);
+        }
+    }
+    let _ = (from, to);
+    if !std::fs::symlink_metadata(source)?.is_dir() {
+        std::fs::hard_link(source, target)?;
+        return std::fs::remove_file(source);
+    }
+    if std::fs::symlink_metadata(target).is_ok() {
+        return Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists));
+    }
+    std::fs::rename(source, target)
+}
+
+/// A copy of the file at `source` as `target`, with its permission bits
+/// (#126). An existing target is `AlreadyExists` unless `replace`; then the
+/// copy goes to a fresh sibling first and is renamed over the target, so a
+/// failed copy leaves the old file whole. A failed copy leaves no new file.
+pub fn copy_file(source: &std::path::Path, target: &std::path::Path, replace: bool) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut from = std::fs::File::open(source)?;
+    let metadata = from.metadata()?;
+    if metadata.is_dir() {
+        return Err(std::io::Error::new(std::io::ErrorKind::IsADirectory, "a directory is not copied as a file"));
+    }
+    let written = if replace {
+        static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let name = target.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        let serial = SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        target.with_file_name(format!(".{name}.{}-{serial}.copy", std::process::id()))
+    } else {
+        target.to_path_buf()
+    };
+    let mut to = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&written)?;
+    let copied = std::io::copy(&mut from, &mut to)
+        .and_then(|_| to.set_permissions(metadata.permissions()))
+        .and_then(|()| if replace { std::fs::rename(&written, target) } else { Ok(()) });
+    if copied.is_err() {
+        drop(to);
+        let _ = std::fs::remove_file(&written);
+    }
+    copied
+}
+
 /// Путь потомка как `File::Spec->catfile`.
 fn child(path: &str, name: &str) -> String {
     Spec::Unix.catfile(&[path.to_string(), name.to_string()])
@@ -359,7 +454,8 @@ fn child(path: &str, name: &str) -> String {
 type FileKey = (u64, u64);
 
 thread_local! {
-    static LOCKS: RefCell<HashMap<FileKey, usize>> = RefCell::new(HashMap::new());
+    /// The locks of this process: how many, and whether they are shared.
+    static LOCKS: RefCell<HashMap<FileKey, (usize, bool)>> = RefCell::new(HashMap::new());
 }
 
 /// Блокировка файла (`fcntl`); `Err(None)` — пересечение с блокировкой этого
@@ -387,8 +483,33 @@ fn lock_fd(file: &File, shared: bool, wait: bool) -> Result<bool, Option<std::io
         }
         return Err(Some(error));
     }
-    LOCKS.with(|locks| *locks.borrow_mut().entry(key).or_insert(0) += 1);
+    LOCKS.with(|locks| locks.borrow_mut().entry(key).or_insert((0, shared)).0 += 1);
     Ok(true)
+}
+
+/// Whether `file` is locked now, `shared` or exclusively: this process's
+/// locks come from LOCKS, another process's from F_GETLK, which reports the
+/// kind of the lock in the way and never the caller's own.
+// F_RDLCK and F_WRLCK are c_short on macOS and c_int on Linux.
+#[allow(clippy::unnecessary_cast)]
+fn locked_fd(file: &File, shared: bool) -> std::io::Result<bool> {
+    use std::os::fd::AsRawFd;
+    let meta = file.metadata()?;
+    let key = (meta.dev(), meta.ino());
+    if let Some((_, own)) = LOCKS.with(|locks| locks.borrow().get(&key).copied()) {
+        return Ok(own == shared);
+    }
+    // SAFETY: as in lock_fd.
+    let mut lock: libc::flock = unsafe { std::mem::zeroed() };
+    lock.l_type = libc::F_WRLCK as _;
+    lock.l_whence = libc::SEEK_SET as _;
+    // SAFETY: the descriptor is open and the pointer valid; F_GETLK writes into lock.
+    let result = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETLK, &mut lock) };
+    if result == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let held = i32::from(lock.l_type);
+    Ok(if shared { held == libc::F_RDLCK as i32 } else { held == libc::F_WRLCK as i32 })
 }
 
 fn unlock_fd(file: &File) -> std::io::Result<()> {
@@ -761,6 +882,8 @@ struct FileState {
     mode: i64,
     flags: i64,
     binary: bool,
+    /// `file_state_open`: the first text or byte operation picks `binary`.
+    undecided: bool,
     encoding: String,
     channel: Option<Channel>,
     buffer: Vec<u8>,
@@ -821,16 +944,26 @@ fn appending(state: &FileState) -> bool {
     state.flags & APPEND != 0
 }
 
+/// Picks the mode of an undecided state; then fails an operation of the other kind.
+fn settle_mode(native: Native, state: &mut FileState, textual: bool) -> Result<(), Error> {
+    if state.undecided {
+        state.binary = !textual;
+        state.undecided = false;
+    }
+    if textual && state.binary {
+        return Err(fail(native, "invalid_input", "The file is open as bytes"));
+    }
+    if !textual && !state.binary {
+        return Err(fail(native, "invalid_input", "The file is open as text"));
+    }
+    Ok(())
+}
+
 fn prepare_read(native: Native, state: &mut FileState, textual: bool) -> Result<(), Error> {
     if !readable(state) {
         return Err(fail(native, "invalid_input", "File mode does not permit reading"));
     }
-    if textual && state.binary {
-        return Err(fail(native, "invalid_input", "Text operation required"));
-    }
-    if !textual && !state.binary {
-        return Err(fail(native, "invalid_input", "Binary operation required"));
-    }
+    settle_mode(native, state, textual)?;
     state_open(native, state)?;
     state.last = Some("read");
     Ok(())
@@ -840,12 +973,7 @@ fn prepare_write(native: Native, state: &mut FileState, textual: bool) -> Result
     if !writable(state) {
         return Err(fail(native, "invalid_input", "File mode does not permit writing"));
     }
-    if textual && state.binary {
-        return Err(fail(native, "invalid_input", "Text operation required"));
-    }
-    if !textual && !state.binary {
-        return Err(fail(native, "invalid_input", "Binary operation required"));
-    }
+    settle_mode(native, state, textual)?;
     state_open(native, state)?;
     if state.last == Some("read") && !state.buffer.is_empty() {
         let back = state.buffer.len() as i64;
@@ -890,6 +1018,19 @@ fn line_offset(buffer: &[u8], needle: &[u8]) -> Option<usize> {
     (0..=buffer.len().saturating_sub(unit))
         .filter(|offset| offset + unit <= buffer.len())
         .find(|offset| buffer[*offset..*offset + unit] == *needle && offset % unit == 0)
+}
+
+/// The end of the last whole line in `buffer`, after its newline.
+fn last_line_end(buffer: &[u8], needle: &[u8]) -> Option<usize> {
+    let unit = needle.len();
+    let mut offset = buffer.len() / unit * unit;
+    while offset >= unit {
+        offset -= unit;
+        if buffer[offset..offset + unit] == *needle {
+            return Some(offset + unit);
+        }
+    }
+    None
 }
 
 fn release_lock(state: &mut FileState) {
@@ -1216,6 +1357,14 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             }
             Ok(text(joined(spec, &[path.to_string(), part.to_string()])))
         }
+        "path_parts" => {
+            let spec = spec(native, int(&args[1])?)?;
+            let path = string(&args[0])?;
+            if path.is_empty() || path.contains('\0') {
+                return Err(fail(native, "invalid_input", "Invalid lexical path"));
+            }
+            Ok(string_array(path_parts(spec, path)))
+        }
         "path_absolute" => {
             let spec = spec(native, int(&args[1])?)?;
             let path = string(&args[0])?;
@@ -1366,6 +1515,18 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
                 .map_err(|error| host_error(native, &error, "Cannot create directory"))?;
             ok
         }
+        "mkdir_all" => {
+            let path = path(native, &args[0])?;
+            let mode = valid_mode(int(&args[1])?).ok_or_else(|| fail(native, "invalid_input", "Invalid directory mode"))?;
+            use std::os::unix::fs::DirBuilderExt;
+            // Every missing parent too; an existing directory is no failure (#125).
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(mode)
+                .create(host::path(&path))
+                .map_err(|error| host_error(native, &error, "Cannot create directory"))?;
+            ok
+        }
         "rmdir" => {
             let path = host::path(&path(native, &args[0])?);
             if !directory(&path) && exists(&path) {
@@ -1392,6 +1553,18 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             let (source, target) = (path(native, &args[0])?, path(native, &args[1])?);
             std::fs::rename(host::path(&source), host::path(&target))
                 .map_err(|error| host_error(native, &error, "Cannot rename path"))?;
+            ok
+        }
+        "rename_noreplace" => {
+            let (source, target) = (path(native, &args[0])?, path(native, &args[1])?);
+            rename_noreplace(&host::path(&source), &host::path(&target))
+                .map_err(|error| host_error(native, &error, "Cannot rename path"))?;
+            ok
+        }
+        "copy_file" => {
+            let (source, target) = (path(native, &args[0])?, path(native, &args[1])?);
+            copy_file(&host::path(&source), &host::path(&target), boolean(&args[2])?)
+                .map_err(|error| host_error(native, &error, "Cannot copy file"))?;
             ok
         }
         "link" => {
@@ -1540,6 +1713,22 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             Ok(string_array(matches))
         }
         // ---- FileState ----
+        "file_state_open" => {
+            let path = path(native, &args[0])?;
+            let flags = state_flags(int(&args[1])?).ok_or_else(|| fail(native, "invalid_input", "Invalid file mode"))?;
+            let encoding = string(&args[2])?;
+            if !known_encoding(encoding) {
+                return Err(fail(native, "unsupported", "Unsupported file encoding"));
+            }
+            Ok(new_handle(Rc::new(RefCell::new(FileState {
+                path,
+                mode: int(&args[1])?.to_i64().expect("valid mode"),
+                flags,
+                undecided: true,
+                encoding: encoding.to_string(),
+                ..FileState::default()
+            }))))
+        }
         "file_state_create" => {
             let path = path(native, &args[0])?;
             let flags = state_flags(int(&args[1])?).ok_or_else(|| fail(native, "invalid_input", "Invalid file mode"))?;
@@ -1604,6 +1793,30 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
                 fill(native, &mut state)?;
             }
         }
+        "file_state_read_lines" => {
+            let state = file_state(native, &args[0])?;
+            let mut state = state.borrow_mut();
+            prepare_read(native, &mut state, true)?;
+            let target = int(&args[1])?.to_i64().map_or(1 << 26, |limit| limit.clamp(1, 1 << 26)) as usize;
+            let needle = newline(&state.encoding);
+            while state.buffer.len() < target && !state.eof {
+                fill(native, &mut state)?;
+            }
+            // The batch ends after its last whole line; a longer line is read whole.
+            let mut end = last_line_end(&state.buffer, needle);
+            while end.is_none() && !state.eof {
+                fill(native, &mut state)?;
+                end = last_line_end(&state.buffer, needle);
+            }
+            let end = end.unwrap_or(state.buffer.len());
+            if end == 0 {
+                return Ok(string_array(Vec::<String>::new()));
+            }
+            let data: Vec<u8> = state.buffer.drain(..end).collect();
+            let decoded = decode_text(native, &state, &data)?;
+            let body = decoded.strip_suffix('\n').unwrap_or(&decoded);
+            Ok(string_array(body.split('\n').map(|line| line.strip_suffix('\r').unwrap_or(line))))
+        }
         "file_state_write" => {
             let state = file_state(native, &args[0])?;
             let mut state = state.borrow_mut();
@@ -1635,6 +1848,22 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             file.write_all(&encoded).map_err(|error| host_error(native, &error, "Cannot write file"))?;
             Ok(int_value(encoded.len() as i64))
         }
+        "file_state_rewrite_text" => {
+            let state = file_state(native, &args[0])?;
+            let mut state = state.borrow_mut();
+            prepare_write(native, &mut state, true)?;
+            let content: String = paths(native, &args[1])?.concat();
+            let encoded =
+                jre::encode(&content, &state.encoding).ok_or_else(|| fail(native, "invalid_data", "Text cannot be encoded"))?;
+            state.buffer.clear();
+            state.eof = false;
+            state.last = None;
+            let file = &mut state.channel.as_mut().expect("opened").file;
+            file.set_len(0).map_err(|error| host_error(native, &error, "Cannot write file"))?;
+            file.seek(SeekFrom::Start(0)).map_err(|error| host_error(native, &error, "Cannot write file"))?;
+            file.write_all(&encoded).map_err(|error| host_error(native, &error, "Cannot write file"))?;
+            Ok(int_value(encoded.len() as i64))
+        }
         "file_state_flush" => {
             let state = file_state(native, &args[0])?;
             let mut state = state.borrow_mut();
@@ -1662,9 +1891,7 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
         "file_state_position" => {
             let state = file_state(native, &args[0])?;
             let mut state = state.borrow_mut();
-            if !state.binary {
-                return Err(fail(native, "invalid_input", "Byte position is unavailable in text mode"));
-            }
+            settle_mode(native, &mut state, false)?;
             state_open(native, &mut state)?;
             let file = &mut state.channel.as_mut().expect("opened").file;
             let position = file
@@ -1675,9 +1902,7 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
         "file_state_seek" => {
             let state = file_state(native, &args[0])?;
             let mut state = state.borrow_mut();
-            if !state.binary {
-                return Err(fail(native, "invalid_input", "Byte seeking is unavailable in text mode"));
-            }
+            settle_mode(native, &mut state, false)?;
             if !int(&args[2])?.to_i64().is_some_and(|origin| (0..=2).contains(&origin)) {
                 return Err(fail(native, "invalid_input", "Invalid seek origin"));
             }
@@ -1692,9 +1917,7 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
         "file_state_truncate" => {
             let state = file_state(native, &args[0])?;
             let mut state = state.borrow_mut();
-            if !state.binary {
-                return Err(fail(native, "invalid_input", "Truncation is unavailable in text mode"));
-            }
+            settle_mode(native, &mut state, false)?;
             if !writable(&state) {
                 return Err(fail(native, "invalid_input", "File mode does not permit writing"));
             }
@@ -1744,6 +1967,18 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             state.lock = Some(lock.clone());
             Ok(new_handle(lock))
         }
+        "file_state_locked" => {
+            let state = file_state(native, &args[0])?;
+            let mut state = state.borrow_mut();
+            let mode = int(&args[1])?.to_i64().filter(|mode| (0..=1).contains(mode));
+            let Some(mode) = mode else {
+                return Err(fail(native, "invalid_input", "Invalid file lock mode"));
+            };
+            state_open(native, &mut state)?;
+            let file = &state.channel.as_ref().expect("opened").file;
+            let locked = locked_fd(file, mode == 0).map_err(|error| host_error(native, &error, "Cannot inspect file lock"))?;
+            Ok(Value::Bool(locked))
+        }
         "file_lock_closed" => Ok(Value::Bool(handle::<Rc<RefCell<LockState>>>(&args[0])?.borrow().closed)),
         "file_lock_close" => {
             let lock = handle::<Rc<RefCell<LockState>>>(&args[0])?.clone();
@@ -1768,7 +2003,7 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             let directory = path(native, &args[0])?;
             let prefix = prefix(native, string(&args[1])?)?;
             for _ in 0..100 {
-                let path = child(&directory, &temporary_name(prefix));
+                let path = Spec::Unix.canonpath(&child(&directory, &temporary_name(prefix)));
                 match open_channel(&path, READ | WRITE | CREATE | EXCLUSIVE, 0o600) {
                     Ok(channel) => {
                         return Ok(new_handle(Rc::new(RefCell::new(FileState {
@@ -1826,7 +2061,7 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             let prefix = prefix(native, string(&args[1])?)?;
             use std::os::unix::fs::DirBuilderExt;
             for _ in 0..100 {
-                let path = child(&parent, &temporary_name(prefix));
+                let path = Spec::Unix.canonpath(&child(&parent, &temporary_name(prefix)));
                 match std::fs::DirBuilder::new().mode(0o700).create(host::path(&path)) {
                     Ok(()) => {
                         return Ok(new_handle(TemporaryDirectory {

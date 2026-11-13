@@ -1,130 +1,352 @@
 module mail/imap_search v1.0.0;
 
+// What to search for, as values: never as raw SEARCH text.
+//
+//     let uids = await SearchedMail(origin: inbox, matching: AndMail(UnseenMail(), SinceMail(Date(2026, 11, 1)))).uids();
+//     NotMail(OrMail(left: a, right: b));
+//
+// SINCE compares INTERNALDATE's day, inclusive, without time zones. A key is
+// bounded: 256 nodes, depth 32 and 8 KiB by default.
+
 import "collections/sequence" take Sequencing;
 import "time/date" take Date;
 import "encoding/utf" take Utf8Encoded;
 import "io/stream" take ByteSource;
 import "error" take InvalidArgument;
 
-// A matching supplies a validated nominal key, never an arbitrary wire string.
-// Keys snapshot their children once. Limits apply before concatenating output.
-// SINCE uses INTERNALDATE's calendar day, inclusive, without time/zone conversion.
+// Something that says what to search for.
 role MailMatching {
+    // The search key.
     key() is ImapSearchKey;
 }
+
+// ALL or UNSEEN.
 enum ImapSearchAtom = (all, unseen);
+
+// AND, OR or NOT.
 enum ImapSearchOperator = (conjunction, disjunction, negation);
+
+// How large a search key may be.
 object ImapSearchLimits {
     has nodes, depth, wire_bytes is int;
-    ImapSearchLimits() {nodes=256;depth=32;wire_bytes=8192;}
+
+    // 256 nodes, depth 32, 8 KiB.
+    ImapSearchLimits() {
+        nodes = 256;
+        depth = 32;
+        wire_bytes = 8192;
+    }
+
+    // The limits as given.
     ImapSearchLimits(nodes is int, depth is int, wire_bytes is int) {
-        confirm nodes>=0 && depth>=0 && wire_bytes>=0 else throw InvalidArgument.because("IMAP search limits must be nonnegative");
-        self.nodes=nodes;self.depth=depth;self.wire_bytes=wire_bytes;
+        confirm nodes >= 0 && depth >= 0 && wire_bytes >= 0
+            else throw InvalidArgument.because("IMAP search limits must be nonnegative");
+        self.nodes = nodes;
+        self.depth = depth;
+        self.wire_bytes = wire_bytes;
     }
-    nodes() is int {nodes;}
-    depth() is int {depth;}
-    wire_bytes() is int {wire_bytes;}
-}
-enum ImapSearchLimitExceeded is Error = (kind(kind is string));
-object ImapSearchKey does ByteSource {
-    has value is string;has count, height is int;
-    // The leaf constructors require named arguments to distinguish equal arity.
-    ImapSearchKey(atom is ImapSearchAtom, limits is ImapSearchLimits) {
-        let text=if atom==ImapSearchAtom.all {"ALL";} else {"UNSEEN";};
-        ImapSearchBound(limits).check(1,1,text.length());value=text;count=1;height=1;
-    }
-    ImapSearchKey(date is Date, limits is ImapSearchLimits) {
-        let text="SINCE "+ImapSearchDate(date).string();
-        ImapSearchBound(limits).check(1,1,text.length());value=text;count=1;height=1;
-    }
-    ImapSearchKey(operation is ImapSearchOperator, children is Sequencing<ImapSearchKey>, limits is ImapSearchLimits) {
-        let size=children.size();let unary=operation==ImapSearchOperator.negation;
-        confirm size==(if unary {1;} else {2;}) else throw InvalidArgument.because("IMAP search operator arity mismatch");
-        let left=children.item(0);
-        let extra=if unary {6;} else {if operation==ImapSearchOperator.conjunction {3;} else {8;}};
-        confirm left.nodes()<limits.nodes() else throw ImapSearchLimitExceeded.kind("nodes");
-        confirm left.depth()<limits.depth() else throw ImapSearchLimitExceeded.kind("depth");
-        confirm extra<=limits.wire_bytes() && left.string().length()<=limits.wire_bytes()-extra
-            else throw ImapSearchLimitExceeded.kind("wire_bytes");
-        if unary {
-            value="NOT ("+left.string()+")";count=left.nodes()+1;height=left.depth()+1;
-        } else {
-            let right=children.item(1);
-            confirm right.nodes()<=limits.nodes()-left.nodes()-1 else throw ImapSearchLimitExceeded.kind("nodes");
-            confirm right.depth()<limits.depth() else throw ImapSearchLimitExceeded.kind("depth");
-            confirm right.string().length()<=limits.wire_bytes()-extra-left.string().length()
-                else throw ImapSearchLimitExceeded.kind("wire_bytes");
-            value=if operation==ImapSearchOperator.conjunction {"("+left.string()+" "+right.string()+")";}
-                else {"OR ("+left.string()+") ("+right.string()+")";};
-            count=left.nodes()+right.nodes()+1;
-            height=1+(if left.depth()>right.depth() {left.depth();} else {right.depth();});
+
+    // Nodes, depth and bytes.
+    cap Limits {
+        nodes is int {
+            nodes;
+        }
+
+        depth is int {
+            depth;
+        }
+
+        wire_bytes is int {
+            wire_bytes;
         }
     }
-    string() is string {value;}
-    bytes() is @byte {Utf8Encoded(value).bytes();}
-    nodes() is int {count;}
-    depth() is int {height;}
 }
+
+// A key over a limit; kind says which.
+enum ImapSearchLimitExceeded is Error = (kind(kind is string));
+
+// A search key.
+object ImapSearchKey does ByteSource {
+    has value is string;
+    has count, height is int;
+
+    // The leaf constructors require named arguments to distinguish equal arity.
+    ImapSearchKey(atom is ImapSearchAtom, limits is ImapSearchLimits) {
+        let text = if atom == ImapSearchAtom.all {
+            "ALL";
+        }
+        else {
+            "UNSEEN";
+        };
+        ImapSearchBound(limits).check(1, 1, text.length());
+        value = text;
+        count = 1;
+        height = 1;
+    }
+
+    // SINCE date.
+    ImapSearchKey(date is Date, limits is ImapSearchLimits) {
+        let text = "SINCE " + ImapSearchDate(date).string();
+        ImapSearchBound(limits).check(1, 1, text.length());
+        value = text;
+        count = 1;
+        height = 1;
+    }
+
+    // operation over children; NOT takes one.
+    ImapSearchKey(
+        operation is ImapSearchOperator,
+        children is Sequencing<ImapSearchKey>,
+        limits is ImapSearchLimits
+    ) {
+        let size = children.size();
+        let unary = operation == ImapSearchOperator.negation;
+        confirm size == (if unary {
+            1;
+        }
+        else {
+            2;
+        })
+            else throw InvalidArgument.because("IMAP search operator arity mismatch");
+        let left = children.item(0);
+        let extra = if unary {
+            6;
+        }
+        else {
+            if operation == ImapSearchOperator.conjunction {
+                3;
+            }
+            else {
+                8;
+            }
+        };
+        confirm left.nodes() < limits::Limits::nodes
+            else throw ImapSearchLimitExceeded.kind("nodes");
+        confirm left.depth() < limits::Limits::depth
+            else throw ImapSearchLimitExceeded.kind("depth");
+        confirm extra <= limits::Limits::wire_bytes
+            && left.string().length() <= limits::Limits::wire_bytes - extra
+            else throw ImapSearchLimitExceeded.kind("wire_bytes");
+        if unary {
+            value = "NOT (" + left.string() + ")";
+            count = left.nodes() + 1;
+            height = left.depth() + 1;
+        }
+        else {
+            let right = children.item(1);
+            confirm right.nodes() <= limits::Limits::nodes - left.nodes() - 1
+                else throw ImapSearchLimitExceeded.kind("nodes");
+            confirm right.depth() < limits::Limits::depth
+                else throw ImapSearchLimitExceeded.kind("depth");
+            confirm right.string().length() <= limits::Limits::wire_bytes - extra - left.string().length()
+                else throw ImapSearchLimitExceeded.kind("wire_bytes");
+            value = if operation == ImapSearchOperator.conjunction {
+                "(" + left.string() + " " + right.string() + ")";
+            }
+            else {
+                "OR (" + left.string() + ") (" + right.string() + ")";
+            };
+            count = left.nodes() + right.nodes() + 1;
+            height = 1 + (if left.depth() > right.depth() {
+                left.depth();
+            }
+            else {
+                right.depth();
+            });
+        }
+    }
+
+    // The key as SEARCH writes it.
+    string() is string {
+        value;
+    }
+
+    // The same as bytes.
+    bytes() is @byte {
+        Utf8Encoded(value).bytes();
+    }
+
+    // How many nodes.
+    nodes() is int {
+        count;
+    }
+
+    // How deep it goes.
+    depth() is int {
+        height;
+    }
+}
+
+// Every message.
 object AllMail does MailMatching {
+    // The matching.
     AllMail();
-    key() is ImapSearchKey {ImapSearchKey(atom:ImapSearchAtom.all,limits:ImapSearchLimits());}
+
+    // ALL.
+    key() is ImapSearchKey {
+        ImapSearchKey(atom: ImapSearchAtom.all, limits: ImapSearchLimits());
+    }
 }
+
+// Messages without \Seen.
 object UnseenMail does MailMatching {
+    // The matching.
     UnseenMail();
-    key() is ImapSearchKey {ImapSearchKey(atom:ImapSearchAtom.unseen,limits:ImapSearchLimits());}
+
+    // UNSEEN.
+    key() is ImapSearchKey {
+        ImapSearchKey(atom: ImapSearchAtom.unseen, limits: ImapSearchLimits());
+    }
 }
+
+// Messages received on or after a day.
 object SinceMail does MailMatching {
     has origin is Date;
-    SinceMail(origin is Date) {self.origin=origin;}
-    key() is ImapSearchKey {ImapSearchKey(date:origin,limits:ImapSearchLimits());}
+
+    // On or after origin.
+    SinceMail(origin is Date) {
+        self.origin = origin;
+    }
+
+    // SINCE the day.
+    key() is ImapSearchKey {
+        ImapSearchKey(date: origin, limits: ImapSearchLimits());
+    }
 }
+
+// Messages both match.
 object AndMail does MailMatching {
     has value is ImapSearchKey;
+
+    // left and right.
     AndMail(left is MailMatching, right is MailMatching) {
-        value=ImapSearchKey(ImapSearchOperator.conjunction,[left.key(),right.key()],ImapSearchLimits());
+        value = ImapSearchKey(
+            operation: ImapSearchOperator.conjunction,
+            children: [left.key(), right.key()],
+            limits: ImapSearchLimits()
+        );
     }
+
+    // The same within limits.
     AndMail(left is MailMatching, right is MailMatching, limits is ImapSearchLimits) {
-        value=ImapSearchKey(ImapSearchOperator.conjunction,[left.key(),right.key()],limits);
+        value = ImapSearchKey(
+            operation: ImapSearchOperator.conjunction,
+            children: [left.key(), right.key()],
+            limits: limits
+        );
     }
-    key() is ImapSearchKey {value;}
+
+    // The two keys together.
+    key() is ImapSearchKey {
+        value;
+    }
 }
+
+// Messages either matches.
 object OrMail does MailMatching {
     has value is ImapSearchKey;
+
+    // left or right.
     OrMail(left is MailMatching, right is MailMatching) {
-        value=ImapSearchKey(ImapSearchOperator.disjunction,[left.key(),right.key()],ImapSearchLimits());
+        value = ImapSearchKey(
+            operation: ImapSearchOperator.disjunction,
+            children: [left.key(), right.key()],
+            limits: ImapSearchLimits()
+        );
     }
+
+    // The same within limits.
     OrMail(left is MailMatching, right is MailMatching, limits is ImapSearchLimits) {
-        value=ImapSearchKey(ImapSearchOperator.disjunction,[left.key(),right.key()],limits);
+        value = ImapSearchKey(
+            operation: ImapSearchOperator.disjunction,
+            children: [left.key(), right.key()],
+            limits: limits
+        );
     }
-    key() is ImapSearchKey {value;}
+
+    // OR of the two keys.
+    key() is ImapSearchKey {
+        value;
+    }
 }
+
+// Messages that do not match.
 object NotMail does MailMatching {
     has value is ImapSearchKey;
-    NotMail(origin is MailMatching) {value=ImapSearchKey(ImapSearchOperator.negation,[origin.key()],ImapSearchLimits());}
-    NotMail(origin is MailMatching, limits is ImapSearchLimits) {value=ImapSearchKey(ImapSearchOperator.negation,[origin.key()],limits);}
-    key() is ImapSearchKey {value;}
-}
-object ImapSearchBound {
-    has limits is ImapSearchLimits;
-    ImapSearchBound(limits is ImapSearchLimits) {self.limits=limits;}
-    check(nodes is int, depth is int, wire_bytes is int) is void {
-        confirm nodes<=limits.nodes() else throw ImapSearchLimitExceeded.kind("nodes");
-        confirm depth<=limits.depth() else throw ImapSearchLimitExceeded.kind("depth");
-        confirm wire_bytes<=limits.wire_bytes() else throw ImapSearchLimitExceeded.kind("wire_bytes");
+
+    // Not origin.
+    NotMail(origin is MailMatching) {
+        value = ImapSearchKey(
+            operation: ImapSearchOperator.negation,
+            children: [origin.key()],
+            limits: ImapSearchLimits()
+        );
+    }
+
+    // The same within limits.
+    NotMail(origin is MailMatching, limits is ImapSearchLimits) {
+        value = ImapSearchKey(
+            operation: ImapSearchOperator.negation,
+            children: [origin.key()],
+            limits: limits
+        );
+    }
+
+    // NOT of the key.
+    key() is ImapSearchKey {
+        value;
     }
 }
-object ImapSearchDate {
+
+hidden object ImapSearchBound {
+    has limits is ImapSearchLimits;
+
+    ImapSearchBound(limits is ImapSearchLimits) {
+        self.limits = limits;
+    }
+
+    check(nodes is int, depth is int, wire_bytes is int) is void {
+        confirm nodes <= limits::Limits::nodes else throw ImapSearchLimitExceeded.kind("nodes");
+        confirm depth <= limits::Limits::depth else throw ImapSearchLimitExceeded.kind("depth");
+        confirm wire_bytes <= limits::Limits::wire_bytes
+            else throw ImapSearchLimitExceeded.kind("wire_bytes");
+    }
+}
+
+hidden object ImapSearchDate {
     has origin is Date;
-    ImapSearchDate(origin is Date) {self.origin=origin;}
+
+    ImapSearchDate(origin is Date) {
+        self.origin = origin;
+    }
+
     string() is string {
-        let months=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-        let year=origin.year().string();let padding="0000".slice(0,4-year.length());
-        origin.day().string()+"-"+months[origin.month()-1]+"-"+padding+year;
+        let months = [
+            "Jan",
+            "Feb",
+            "Mar",
+            "Apr",
+            "May",
+            "Jun",
+            "Jul",
+            "Aug",
+            "Sep",
+            "Oct",
+            "Nov",
+            "Dec"
+        ];
+        let year = origin::Calendar::year.string();
+        let padding = "0000".slice(0, 4 - year.length());
+        origin::Calendar::day.string() + "-" + months[origin::Calendar::month - 1] + "-" + padding + year;
     }
 }
 
 test "IMAP search preserves grouping and uses internal date" {
-    let search=OrMail(AndMail(UnseenMail(),SinceMail(Date(2026,9,27))),NotMail(AllMail()));
-    test.is(search.key().string(),"OR ((UNSEEN SINCE 27-Sep-2026)) (NOT (ALL))");
-    test.is(search.key().nodes(),6);test.is(search.key().depth(),3);
+    let search = OrMail(
+        left: AndMail(UnseenMail(), SinceMail(Date(year: 2026, month: 9, day: 27))),
+        right: NotMail(AllMail())
+    );
+    test.is(search.key().string(), "OR ((UNSEEN SINCE 27-Sep-2026)) (NOT (ALL))");
+    test.is(search.key().nodes(), 6);
+    test.is(search.key().depth(), 3);
 }

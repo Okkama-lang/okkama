@@ -49,7 +49,8 @@ fn contract(intrinsic: Intrinsic) -> Contract {
         CancellationNew | TokenNew | LockNew | GroupNew | EventNew => (false, "", 'P'),
         Cancelling | ChannelEndpoint => (false, "P", 'P'),
         EndpointNew => (false, "*", 'P'),
-        Cancel | EventSet | GrantClose | EndpointClose | GroupCancel | FakeClear | TestFail => (false, "P", '-'),
+        Cancel | EventSet | GrantClose | EndpointClose | GroupCancel | FakeClear | TestFail
+        | TestSkip => (false, "P", '-'),
         TokenRequested | LockLocked | GrantClosed => (false, "P", 'R'),
         TokenCheck => (false, "P", '-'),
         TokenWait | EventWait | LockGuard | GroupWait => (true, "P", 'P'),
@@ -77,6 +78,14 @@ fn contract(intrinsic: Intrinsic) -> Contract {
         FakeRemove => (false, "P*", '-'),
         TestOk => (false, "R", '-'),
         TestIs | TestIsnt => (false, "**", '-'),
+        TestClose => (false, "FFF", '-'),
+        FloatFunction(_) => (false, "F", 'F'),
+        FloatAtan2 | FloatMin | FloatMax => (false, "FF", 'F'),
+        FloatClamp => (false, "FFF", 'F'),
+        FloatFinite | FloatNan => (false, "F", 'R'),
+        IntMin | IntMax => (false, "II", 'I'),
+        IntClamp => (false, "III", 'I'),
+        TestText | TestBytes => (false, "PP", '-'),
     };
     Contract { asynchronous, params, result }
 }
@@ -488,6 +497,14 @@ impl Check<'_> {
 
 /// Check every intrinsic function and cell use of `loaded`.
 pub fn check(loaded: &Loaded) -> Result<(), Error> {
+    // The cases of a variant are consecutive objects: the JIT reads a case
+    // number as the difference of descriptors (#290).
+    for variant in &loaded.program.variants {
+        let first = variant.cases[0].1.0;
+        if variant.cases.iter().enumerate().any(|(case, (_, object))| object.0 != first + case as u32) {
+            return Err(Error(format!("Sparrow: variant {} has cases that are not consecutive objects", variant.name)));
+        }
+    }
     let check = Check { loaded, program: &loaded.program };
     check.channels().map_err(|message| Error(format!("Sparrow: intrinsic contract: {message}")))?;
     for function in &loaded.program.functions {

@@ -2,15 +2,9 @@ module encoding/binary v1.0.0;
 
 import "encoding/utf" take ByteOrder;
 import "error" take InvalidArgument;
-import "runtime/binary" take
-    binary_integer_fits,
-    binary_integer_bytes,
-    binary_integer_from_bytes_fits,
-    binary_integer_from_bytes,
-    binary_float_fits,
-    binary_float_bytes,
-    binary_float_finite,
-    binary_float_from_bytes;
+import "runtime/binary" take binary_integer_fits, binary_integer_bytes,
+    binary_integer_from_bytes_fits, binary_integer_from_bytes, binary_float_fits,
+    binary_float_bytes, binary_float_finite, binary_float_from_bytes;
 
 // Explicit fixed-width numeric binary representations.
 //
@@ -21,11 +15,11 @@ import "runtime/binary" take
 //         order: ByteOrder.big,
 //     ).bytes(); // [255, 254]
 //
-//     let measurement is float = FloatFromBytes(
-//         origin: [byte(64), byte(32), byte(0), byte(0)],
-//         width: FloatWidth.bits32,
+//     let measurement is float = Binary(
+//         bytes: [byte(64), byte(32), byte(0), byte(0)],
 //         order: ByteOrder.big,
-//     ).value(); // 2.5
+//     ).float(FloatWidth.bits32); // 2.5
+//     let port is int = Binary(bytes: header, order: ByteOrder.big).int(Signedness.unsigned);
 //
 // Signed integers use two's complement; unsigned integers use ordinary
 // magnitude. Encoding is exact and never truncates, wraps or saturates.
@@ -42,47 +36,76 @@ import "runtime/binary" take
 // either an untyped value bag or a string format DSL. Callers compose these
 // typed scalar representations into protocol-specific objects instead.
 
+// Whether the bytes hold a two's-complement signed number.
 enum Signedness = (signed, unsigned);
+
+// A 4-byte or an 8-byte IEEE 754 float.
 enum FloatWidth = (bits32, bits64);
 
-object IntegerFromBytes {
+// Bytes read as a number in a byte order: an integer of their width, or an
+// IEEE 754 float of the width given.
+object Binary {
     has origin is @byte;
-    has signedness is Signedness;
     has order is ByteOrder;
 
-    IntegerFromBytes(origin is @byte, signedness is Signedness, order is ByteOrder) {
-        self.origin = origin;
-        self.signedness = signedness;
+    // Bytes read in order.
+    Binary(bytes is @byte, order is ByteOrder) {
+        origin = bytes;
         self.order = order;
     }
 
-    value() is int {
+    // The bytes as an integer of their width.
+    int(signedness is Signedness) is int {
         confirm origin.size() > 0
             else throw InvalidArgument.because("integer input width must be positive");
-        let sign is string = self.signedness_name();
+        let sign is string = if signedness == Signedness.signed {
+            "signed";
+        }
+        else {
+            "unsigned";
+        };
         let order_name is string = self.order_name();
         confirm binary_integer_from_bytes_fits(origin, sign, order_name)
             else throw InvalidArgument.because("decoded integer is outside the int range");
         binary_integer_from_bytes(origin, sign, order_name);
     }
 
-    private:
-
-    signedness_name() is string {
-        if signedness == Signedness.signed { "signed"; } else { "unsigned"; }
+    // The bytes as a float of width.
+    float(width is FloatWidth) is float {
+        let bits is int = if width == FloatWidth.bits32 {
+            32;
+        }
+        else {
+            64;
+        };
+        confirm origin.size() * 8 == bits
+            else throw InvalidArgument.because(
+                "floating-point input width does not match FloatWidth"
+            );
+        let order_name is string = self.order_name();
+        confirm binary_float_finite(origin, bits, order_name)
+            else throw InvalidArgument.because("binary floating-point value must be finite");
+        binary_float_from_bytes(origin, bits, order_name);
     }
 
-    order_name() is string {
-        if order == ByteOrder.big { "big"; } else { "little"; }
+    hidden order_name() is string {
+        if order == ByteOrder.big {
+            "big";
+        }
+        else {
+            "little";
+        }
     }
 }
 
+// An integer as size bytes in a byte order.
 object IntegerBytes {
     has origin is int;
     has size is int;
     has signedness is Signedness;
     has order is ByteOrder;
 
+    // value as size bytes; a value that does not fit is OutOfRange.
     IntegerBytes(value is int, size is int, signedness is Signedness, order is ByteOrder) {
         origin = value;
         self.size = size;
@@ -90,6 +113,7 @@ object IntegerBytes {
         self.order = order;
     }
 
+    // The bytes.
     bytes() is @byte {
         confirm size > 0
             else throw InvalidArgument.because("integer byte size must be positive");
@@ -99,64 +123,39 @@ object IntegerBytes {
         binary_integer_bytes(origin, size, sign, self.order_name());
     }
 
-    private:
-
-    signedness_name() is string {
-        if signedness == Signedness.signed { "signed"; } else { "unsigned"; }
+    hidden signedness_name() is string {
+        if signedness == Signedness.signed {
+            "signed";
+        }
+        else {
+            "unsigned";
+        }
     }
 
-    order_name() is string {
-        if order == ByteOrder.big { "big"; } else { "little"; }
-    }
-}
-
-object FloatFromBytes {
-    has origin is @byte;
-    has width is FloatWidth;
-    has order is ByteOrder;
-
-    FloatFromBytes(origin is @byte, width is FloatWidth, order is ByteOrder) {
-        self.origin = origin;
-        self.width = width;
-        self.order = order;
-    }
-
-    value() is float {
-        let bits is int = self.width_bits();
-        confirm origin.size() == self.width_size()
-            else throw InvalidArgument.because("floating-point input width does not match FloatWidth");
-        let order_name is string = self.order_name();
-        confirm binary_float_finite(origin, bits, order_name)
-            else throw InvalidArgument.because("binary floating-point value must be finite");
-        binary_float_from_bytes(origin, bits, order_name);
-    }
-
-    private:
-
-    width_bits() is int {
-        if width == FloatWidth.bits32 { 32; } else { 64; }
-    }
-
-    width_size() is int {
-        if width == FloatWidth.bits32 { 4; } else { 8; }
-    }
-
-    order_name() is string {
-        if order == ByteOrder.big { "big"; } else { "little"; }
+    hidden order_name() is string {
+        if order == ByteOrder.big {
+            "big";
+        }
+        else {
+            "little";
+        }
     }
 }
 
+// A float as 4 or 8 bytes in a byte order.
 object FloatBytes {
     has origin is float;
     has width is FloatWidth;
     has order is ByteOrder;
 
+    // value as width bytes.
     FloatBytes(value is float, width is FloatWidth, order is ByteOrder) {
         origin = value;
         self.width = width;
         self.order = order;
     }
 
+    // The bytes.
     bytes() is @byte {
         let bits is int = self.width_bits();
         confirm binary_float_fits(origin, bits)
@@ -164,13 +163,99 @@ object FloatBytes {
         binary_float_bytes(origin, bits, self.order_name());
     }
 
-    private:
-
-    width_bits() is int {
-        if width == FloatWidth.bits32 { 32; } else { 64; }
+    hidden width_bits() is int {
+        if width == FloatWidth.bits32 {
+            32;
+        }
+        else {
+            64;
+        }
     }
 
-    order_name() is string {
-        if order == ByteOrder.big { "big"; } else { "little"; }
+    hidden order_name() is string {
+        if order == ByteOrder.big {
+            "big";
+        }
+        else {
+            "little";
+        }
     }
+}
+
+test "integers round-trip through both byte orders" {
+    let big = IntegerBytes(value: -2, size: 2, signedness: Signedness.signed, order: ByteOrder.big).bytes();
+    test.is(big, [byte(255), byte(254)]);
+    test.is(Binary(bytes: big, order: ByteOrder.big).int(Signedness.signed), -2);
+    test.is(Binary(bytes: big, order: ByteOrder.big).int(Signedness.unsigned), 65534);
+    let little = IntegerBytes(value: 258, size: 4, signedness: Signedness.unsigned, order: ByteOrder.little).bytes();
+    test.is(little, [byte(2), byte(1), byte(0), byte(0)]);
+    test.is(Binary(bytes: little, order: ByteOrder.little).int(Signedness.unsigned), 258);
+    test.is(Binary(bytes: [byte(0), byte(0), byte(0), byte(1)], order: ByteOrder.big).int(Signedness.signed), 1);
+}
+
+test "integer widths and ranges are refused, never wrapped" {
+    let refused = (work is () is @byte) is string {
+        try {
+            work();
+            "accepted";
+        }
+        catch error is InvalidArgument {
+            "refused";
+        }
+    };
+    test.is(refused(() is @byte {
+        IntegerBytes(value: 256, size: 1, signedness: Signedness.unsigned, order: ByteOrder.big).bytes();
+    }), "refused");
+    test.is(refused(() is @byte {
+        IntegerBytes(value: -1, size: 2, signedness: Signedness.unsigned, order: ByteOrder.big).bytes();
+    }), "refused");
+    test.is(refused(() is @byte {
+        IntegerBytes(value: 1, size: 0, signedness: Signedness.signed, order: ByteOrder.big).bytes();
+    }), "refused");
+    let empty is @byte = [];
+    test.is(
+        try {
+            Binary(bytes: empty, order: ByteOrder.big).int(Signedness.signed);
+        }
+        catch error is InvalidArgument {
+            -1;
+        },
+        -1
+    );
+    let wide is @byte = [byte(1), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0), byte(0)];
+    test.is(
+        try {
+            Binary(bytes: wide, order: ByteOrder.big).int(Signedness.unsigned);
+        }
+        catch error is InvalidArgument {
+            -1;
+        },
+        -1
+    );
+}
+
+test "floats keep their IEEE 754 form" {
+    test.is(Binary(bytes: [byte(64), byte(32), byte(0), byte(0)], order: ByteOrder.big).float(FloatWidth.bits32), 2.5);
+    let encoded = FloatBytes(value: -0.75, width: FloatWidth.bits64, order: ByteOrder.little).bytes();
+    test.is(encoded.size(), 8);
+    test.is(Binary(bytes: encoded, order: ByteOrder.little).float(FloatWidth.bits64), -0.75);
+    test.is(
+        try {
+            Binary(bytes: encoded, order: ByteOrder.little).float(FloatWidth.bits32);
+        }
+        catch error is InvalidArgument {
+            1.0;
+        },
+        1.0
+    );
+    let infinity = [byte(127), byte(128), byte(0), byte(0)];
+    test.is(
+        try {
+            Binary(bytes: infinity, order: ByteOrder.big).float(FloatWidth.bits32);
+        }
+        catch error is InvalidArgument {
+            1.0;
+        },
+        1.0
+    );
 }

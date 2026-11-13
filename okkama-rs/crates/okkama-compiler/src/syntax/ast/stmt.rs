@@ -19,11 +19,13 @@ pub struct Stmt {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum StmtKind {
-    /// `let name is Type = value;`
+    /// `let name is Type = value;`, or `once let …;` (#491): computed once
+    /// per object and kept in a hidden slot.
     Let {
         name: Name,
         ty: Option<TypeExpr>,
         value: Expr,
+        once: bool,
     },
     /// `defer expr;`
     Defer { value: Expr },

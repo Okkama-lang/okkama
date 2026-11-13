@@ -521,19 +521,20 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                 let drop = *op == Builtin::ArrayDrop;
                 return Ok(Out::Value(self.array_take(&target, ids[0], drop, span)));
             }
-            // Сравнение строк по длине, как в Perl-интерпретаторе.
-            Builtin::StrCompare(compare) => {
-                let left = self.emit(str_op(StrOp::Len, receiver_id, &[]), Type::Int, span);
-                let right = self.emit(str_op(StrOp::Len, ids[0], &[]), Type::Int, span);
-                (
-                    InstKind::IntCompare {
-                        op: ir_compare(*compare),
-                        left: left.value,
-                        right: right.value,
-                    },
-                    Type::Bool,
-                )
-            }
+            Builtin::ArrayReplaced => (
+                InstKind::ArrayReplace { array: receiver_id, index: ids[0], value: ids[1] },
+                target.ty.clone(),
+            ),
+            Builtin::ArrayRemovedAt => (InstKind::ArrayRemove { array: receiver_id, index: ids[0] }, target.ty.clone()),
+            // Лексикографически по code point, как `order()` (#281).
+            Builtin::StrCompare(compare) => (
+                InstKind::StrCompare {
+                    op: ir_compare(*compare),
+                    left: receiver_id,
+                    right: ids[0],
+                },
+                Type::Bool,
+            ),
             Builtin::MapSize => (InstKind::MapLen(receiver_id), Type::Int),
             Builtin::MapHas => match &target.ty {
                 // У `[:]` нет ключей: `has` — всегда `false` (ключ уже вычислен).
@@ -696,6 +697,16 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                     ));
                 };
                 return self.order(*kind, receiver_id, ids[0], order, span);
+            }
+            Builtin::Math(name) => {
+                let mut values = vec![receiver_id];
+                values.extend(ids.iter().copied());
+                let types = values.iter().map(|value| self.b.value_type(*value).clone()).collect();
+                let result = self.expr_type(expr)?;
+                let func = self
+                    .ctx
+                    .runtime_intrinsic(name, types, ir::ResultType::Value(result.clone()));
+                (InstKind::Call { func, args: values }, result)
             }
             Builtin::Numerator | Builtin::Denominator => (
                 InstKind::RatPart {

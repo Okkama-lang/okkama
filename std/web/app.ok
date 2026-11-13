@@ -1,48 +1,333 @@
 module web/app v1.0.0;
+
 import "http/server" take HttpServer;
 import "http/server_policy" take ServerPolicy;
 import "net/tcp" take TcpListening;
-import "net/endpoint" take IpEndpoint;
-import "net/ip" take IpAddress;
-import "time/clock" take Timing,SystemClock;
-import "web/routing" take WebRoutes;
+import "net/ip" take IpAddress, IpVersion;
+import "url/value" take ParsedUrl;
+import "time/clock" take Timing, SystemClock;
+import "web/routing" take WebRoutes, Get, Post, Scope, Fallback, WebSocket, Around;
+import "web/around" take Compression;
+import "compression/gzip" take GzipDecompressed;
+import "encoding/utf" take Utf8Decoded;
+import "web/request" take WebRequest;
+import "http/method" take MethodName;
+import "web/reply" take TextReply;
+import "http/message" take Responding, Request;
+import "http/handler" take WebSocketHandling;
+import "http/request_context" take HttpRequestContext;
+import "http/header" take Headers, Header, HeaderName;
+import "http/websocket" take WebSocketConnection, WebSocketLimits, TextWebSocketMessage;
+import "json" take Json, JsonField;
+import "http/websocket_client" take WebSocketConnecting, WebSocketPolicy;
+import "net/dns" take FixedResolution;
+import "http/client" take HttpClient;
+import "http/endpoint" take LoopbackEndpoints;
+import "http/body" take TextBody;
+import "http/status" take Status;
+import "time/duration" take Duration;
+import "runtime/signal" take signal_wait;
+import "net/tls" take TlsIdentity, TlsServerPolicy;
+import "http/version" take HttpVersion;
+import "collections/set" take Set, OrderedSet;
+import "async/scope" take FutureGroup;
+import "crypto/x509/trust" take PemTrustStore;
 
-// Binds a route table to a plaintext HTTP/1.1 listener.
+// Binds a route table to a listener: HTTP/1.1 in cleartext, or HTTPS with
+// HTTP/2 and HTTP/1.1 offered by ALPN (#80).
 //
-//     await WebApplication(routes).listen("127.0.0.1", 8000);
+//     await WebApplication(routes).listen(address: "127.0.0.1", port: 8000);
+//     await WebApplication(routes).listen(address: "0.0.0.0", port: 8443, tls: identity);
 //
-// The address is an IP literal; no name resolution happens here. listen()
-// serves until the server is closed. server() binds and returns the std
+// listen() serves until SIGTERM or SIGINT: then the server stops accepting,
+// gives the requests in flight 10 seconds to finish, closes, and listen()
+// returns; a second signal ends the process at once. The address is an IP
+// literal; no name resolution happens here. server() binds and returns the std
 // HttpServer without serving, for callers that own the lifetime themselves:
-// port 0 picks a free port, local_endpoint() reports it, and ServerDrain
+// port 0 picks a free port, local_endpoint() reports it, and server.drain(limit:)
 // drains it.
 
+// A route table served on an address and port.
 object WebApplication {
     has routes is WebRoutes;
     has policy is ServerPolicy;
     has clock is Timing;
 
+    // Serves routes with the default policy.
     WebApplication(routes is WebRoutes) {
         self.routes = routes;
         policy = ServerPolicy();
         clock = SystemClock();
     }
 
+    // Serves routes with policy, on clock.
     WebApplication(routes is WebRoutes, policy is ServerPolicy, clock is Timing) {
         self.routes = routes;
         self.policy = policy;
         self.clock = clock;
     }
 
+    // The server knows its own URL, so a WebSocket route can check the Origin
+    // of an upgrade against it.
     async server(address is string, port is int) is HttpServer {
-        let listener = await TcpListening(IpEndpoint(IpAddress(address), port)).acceptance();
-        HttpServer(listener, routes.table(), policy, clock);
+        let host = IpAddress(address);
+        let listener = await TcpListening(port: port, address: host).listener();
+        let literal = if host.version() == IpVersion.v6 {
+            "[" + host.string() + "]";
+        }
+        else {
+            host.string();
+        };
+        let own = ParsedUrl("http://" + literal + ":" + listener::Local::port.string() + "/").parts();
+        HttpServer(
+            listener: listener,
+            handling: routes.table(),
+            url: own,
+            policy: policy,
+            clock: clock
+        );
     }
 
+    // Serves on address and port until the process stops.
     async listen(address is string, port is int) is void {
-        let server = await self.server(address, port);
+        let stopping = AppStopping();
+        defer await stopping.close();
+        await stopping.serve(await self.server(address, port));
+    }
+
+    // HTTPS: the identity's certificate and key, HTTP/2 and HTTP/1.1 by ALPN.
+    async listen(address is string, port is int, tls is TlsIdentity) is void {
+        let stopping = AppStopping();
+        defer await stopping.close();
+        await stopping.serve(await self.server(address, port, tls));
+    }
+
+    // The HTTPS server, bound and not serving; its own URL is https.
+    async server(address is string, port is int, tls is TlsIdentity) is HttpServer {
+        let host = IpAddress(address);
+        let listener = await TcpListening(port: port, address: host).listener();
+        let literal = if host.version() == IpVersion.v6 {
+            "[" + host.string() + "]";
+        }
+        else {
+            host.string();
+        };
+        let own = ParsedUrl("https://" + literal + ":" + listener::Local::port.string() + "/").parts();
+        let both is Set<HttpVersion> = OrderedSet([HttpVersion.http_1_1, HttpVersion.http_2]);
+        let secured = ServerPolicy(
+            protocols: both,
+            limits: policy.limits(),
+            timeouts: policy.timeouts(),
+            connections: policy.connections(),
+            ranges: policy.ranges()
+        );
+        HttpServer(
+            listener: listener,
+            handling: routes.table(),
+            url: own,
+            tls: TlsServerPolicy(identity: tls),
+            policy: secured,
+            clock: clock
+        );
+    }
+}
+
+// Serving that stops on SIGTERM or SIGINT. The wait for the signal begins when
+// the object is made, before the port is bound: signal_wait installs its
+// handlers when called, so a signal that comes as soon as the port accepts
+// finds them. On the signal the server stops accepting, the requests in flight
+// get 10 seconds, and the server closes, which ends serve(). close() cancels
+// the wait if no signal came, which gives the signals their earlier actions
+// back.
+hidden object AppStopping {
+    has signals is FutureGroup<string>;
+    has draining is FutureGroup<bool>;
+
+    AppStopping() {
+        let waiting is FutureGroup<string> = FutureGroup();
+        waiting.start(signal_wait(["TERM", "INT"]));
+        signals = waiting;
+        draining = FutureGroup();
+    }
+
+    async serve(server is HttpServer) is void {
+        draining.start(self.drained(server));
         defer await server.settled();
         defer server.close();
         await server.serve();
     }
+
+    async drained(server is HttpServer) is bool {
+        await signals.wait();
+        await server.drain(limit: Duration(seconds: 10));
+        true;
+    }
+
+    async close() is void {
+        signals.cancel();
+        draining.cancel();
+        try {
+            await draining.wait();
+        }
+        catch e is Cancelled {}
+        try {
+            await signals.wait();
+        }
+        catch e is Cancelled {}
+    }
+}
+
+hidden object Greetings {
+    Greetings();
+
+    async hello(request is WebRequest) is Responding {
+        TextReply(
+            "Hello, " + request.path().text("name") + (request.query().maybe("mark").text() else "") + "!"
+        );
+    }
+
+    async echo(request is WebRequest) is Responding {
+        TextReply(text: (await request.text(1024)).upper(), status: Status.created);
+    }
+
+    async long(request is WebRequest) is Responding {
+        TextReply("tea ".repeat(2000));
+    }
+
+    async missing(request is WebRequest) is Responding {
+        TextReply(
+            text: "no " + MethodName(request.method()).string() + " here",
+            status: Status.not_found
+        );
+    }
+}
+
+hidden object Shouting does WebSocketHandling {
+    Shouting();
+
+    async handle(
+        connection is WebSocketConnection,
+        request is Request,
+        context is HttpRequestContext
+    ) is WebSocketHandling {
+        for await connection -> message {
+            if message.text().starts_with("{") {
+                await connection.send_json(
+                    Json(JsonField("shout", message.json().text("say").upper()))
+                );
+            }
+            else {
+                await connection.send_text(message.text().upper());
+            }
+        }
+        self;
+    }
+}
+
+async test "a web application routes requests over loopback and drains" {
+    let greetings = Greetings();
+    let routes = WebRoutes(
+        Scope(
+            "/api",
+            Get(path: "/hello/:name", endpoint: greetings.hello),
+            Post(path: "/echo", endpoint: greetings.echo),
+        ),
+        WebSocket(path: "/shout", application: Shouting()),
+        Fallback(greetings.missing),
+    );
+    let server = (await WebApplication(routes).server("127.0.0.1", 0)).started();
+    let base = "http://127.0.0.1:" + server::Local::port.string();
+    let client = HttpClient(endpoints: LoopbackEndpoints());
+    test.is(await (await client.get(base + "/api/hello/Ada?mark=%21")).text(), "Hello, Ada!!");
+    let created = await client.post(url: base + "/api/echo", body: TextBody(text: "quiet"));
+    test.is(created::Head::status, Status.created);
+    test.is(await created.text(), "QUIET");
+    let lost = await client.get(base + "/nowhere");
+    test.is(lost::Head::status, Status.not_found);
+    test.is(await lost.text(), "no GET here");
+    let socket = await WebSocketConnecting(
+        url: ParsedUrl("ws://127.0.0.1:" + server::Local::port.string() + "/shout").parts(),
+        headers: Headers(Header(name: "Origin", value: base)),
+        resolver: FixedResolution(),
+        policy: WebSocketPolicy(
+            limits: WebSocketLimits(),
+            opening: Duration(seconds: 5),
+            closing: Duration(seconds: 2),
+            access: LoopbackEndpoints(),
+        ),
+    ).connection();
+    await socket.send(TextWebSocketMessage("hey"));
+    test.is((await socket.message()).text(), "HEY");
+    await socket.send_json(Json(JsonField("say", "hi")));
+    let answer = await socket.next();
+    test.is(
+        match answer {
+            case Maybe.some(message) {
+                message.json().text("shout");
+            }
+            else {
+                "closed";
+            }
+        },
+        "HI"
+    );
+    await socket.close(1000, "bye");
+    client.close();
+    await server.drain(limit: Duration(seconds: 5));
+}
+
+async test "a compressed reply reaches the client decoded" {
+    let greetings = Greetings();
+    let routes = WebRoutes(Around(Compression()), Get(path: "/long", endpoint: greetings.long));
+    let server = (await WebApplication(routes).server("127.0.0.1", 0)).started();
+    let base = "http://127.0.0.1:" + server::Local::port.string();
+    let client = HttpClient(endpoints: LoopbackEndpoints());
+    let page = await client.get(base + "/long");
+    test.ok(!page::Head::headers.membership(HeaderName("Content-Encoding")));
+    test.is(await page.text(), "tea ".repeat(2000));
+    let raw = await client.response(
+        Request(
+            url: base + "/long",
+            headers: Headers(Header(name: "Accept-Encoding", value: "gzip"))
+        )
+    );
+    test.is(raw::Head::headers.text("Content-Encoding"), "gzip");
+    test.is(
+        Utf8Decoded(GzipDecompressed(origin: await raw.bytes(), limit: 100000).bytes()).string(),
+        "tea ".repeat(2000)
+    );
+    client.close();
+    await server.drain(limit: Duration(seconds: 5));
+}
+
+// The test CA and its certificate for 127.0.0.1 and localhost, as in http/server.
+hidden const HTTPS_TEST_CA = "-----BEGIN CERTIFICATE-----\nMIIBdjCCARygAwIBAgIUZys025uW0l2NKLRJhlj/e/NZtfIwCgYIKoZIzj0EAwIw\nGTEXMBUGA1UEAwwOT2trYW1hIFRlc3QgQ0EwHhcNMjYxMTEyMTE0MjA0WhcNNDgx\nMDA3MTE0MjA0WjAZMRcwFQYDVQQDDA5Pa2thbWEgVGVzdCBDQTBZMBMGByqGSM49\nAgEGCCqGSM49AwEHA0IABBFw/aXocscUbo6jObHs1PCN29BcRR+2K50QaEkwFdOx\nkiif5hQH5S72ksR2gL1PtbmPVLJv9kGhSjylkFnWMFujQjBAMA8GA1UdEwEB/wQF\nMAMBAf8wDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBR73vV9mqv7stVB91GaNnLI\n3GuydzAKBggqhkjOPQQDAgNIADBFAiAufmQhdmE0TO2RfIcZRNt/ucAEPVLBW03q\nIRbruIX6KgIhAJsOnAIaGBgywbvntzwVyjTtIurUqVEB8oy03JNCKmNx\n-----END CERTIFICATE-----\n";
+
+hidden const HTTPS_TEST_CERTIFICATE = "-----BEGIN CERTIFICATE-----\nMIIBwzCCAWigAwIBAgIUG8NUjoqvvLFxqO/t7iv/3Auy2PgwCgYIKoZIzj0EAwIw\nGTEXMBUGA1UEAwwOT2trYW1hIFRlc3QgQ0EwHhcNMjYxMTEyMTE0MjA0WhcNNDgx\nMDA3MTE0MjA0WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwWTATBgcqhkjOPQIBBggq\nhkjOPQMBBwNCAAQaMDVadj3Njz0QDGkIC6mwMvsIrcKEgNpBpZ4p9lZl/U7IZOja\nGwl/oQS67X/YHf5rcfdxvcb70003NsmoexTLo4GSMIGPMBoGA1UdEQQTMBGCCWxv\nY2FsaG9zdIcEfwAAATAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDATBgNV\nHSUEDDAKBggrBgEFBQcDATAdBgNVHQ4EFgQU/R0ad9cojv2dRtb8rSPoG2ncsPsw\nHwYDVR0jBBgwFoAUe971fZqr+7LVQfdRmjZyyNxrsncwCgYIKoZIzj0EAwIDSQAw\nRgIhANTVp7yf3QQovicpuurIeJL4z3SWS68504anbBieM2edAiEA7ypMFNH5e/jc\nmX+bVt3dCMxTaQwVY8/loOQTp0PWQLg=\n-----END CERTIFICATE-----\n";
+
+hidden const HTTPS_TEST_KEY = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgooq/y5Wqru57uZ/f\nLtDqQBGy63m5uDllm9k87Q2FqQuhRANCAAQaMDVadj3Njz0QDGkIC6mwMvsIrcKE\ngNpBpZ4p9lZl/U7IZOjaGwl/oQS67X/YHf5rcfdxvcb70003NsmoexTL\n-----END PRIVATE KEY-----\n";
+
+async test "a web application serves HTTPS with HTTP/2 and HTTP/1.1 by ALPN" {
+    let greetings = Greetings();
+    let routes = WebRoutes(Get(path: "/hello/:name", endpoint: greetings.hello));
+    let identity = TlsIdentity(certificates: HTTPS_TEST_CERTIFICATE, key: HTTPS_TEST_KEY);
+    let server = (await WebApplication(routes).server("127.0.0.1", 0, identity)).started();
+    let base = "https://127.0.0.1:" + server::Local::port.string();
+    let both is Set<HttpVersion> = OrderedSet([HttpVersion.http_1_1, HttpVersion.http_2]);
+    let modern = HttpClient(
+        trust: PemTrustStore(HTTPS_TEST_CA),
+        endpoints: LoopbackEndpoints(),
+        protocols: both
+    );
+    let page = await modern.get(base + "/hello/Ada");
+    test.is(page::Head::version == HttpVersion.http_2, true);
+    test.is(await page.text(), "Hello, Ada!");
+    modern.close();
+    let older = HttpClient(trust: PemTrustStore(HTTPS_TEST_CA), endpoints: LoopbackEndpoints());
+    let plain = await older.get(base + "/hello/Bo");
+    test.is(plain::Head::version == HttpVersion.http_1_1, true);
+    test.is(await plain.text(), "Hello, Bo!");
+    older.close();
+    await server.drain(limit: Duration(seconds: 5));
+    test.is(server.closed(), true);
 }

@@ -98,7 +98,7 @@ fn run_inner(
     };
     let prefix = format!("{keeper}<");
     items
-        .0
+        .items()
         .iter()
         .map(|item| {
             let Value::Object(object) = plain(item) else {
@@ -131,8 +131,8 @@ fn portable(value: &Value) -> bool {
     match value {
         Value::Fn(_) | Value::Future(_) | Value::Builder(_) | Value::MapBuilder(_) | Value::Region(_) => false,
         Value::Any(inner) => portable(inner),
-        Value::Array(array) => array.0.iter().all(portable),
-        Value::Map(map) => map.0.values().all(portable),
+        Value::Array(array) => array.items().iter().all(portable),
+        Value::Map(map) => map.entries().values().all(portable),
         Value::Object(object) => object.values().iter().all(portable),
         _ => true,
     }
@@ -177,11 +177,11 @@ fn remap(value: &Value, old: &Names, new: &Lookup) -> Option<Value> {
             case: *case,
         },
         Value::Array(array) => {
-            ArrayHeap.allocate(array.0.iter().map(|item| remap(item, old, new)).collect::<Option<Vec<_>>>()?)
+            ArrayHeap.allocate(array.items().iter().map(|item| remap(item, old, new)).collect::<Option<Vec<_>>>()?)
         }
         Value::Map(map) => {
             let mut entries = BTreeMap::new();
-            for (key, item) in &map.0 {
+            for (key, item) in map.entries().iter() {
                 let key = match key {
                     MapKey::Enum { declaration, case } => MapKey::Enum {
                         declaration: *new.enums.get(old.enums.get(*declaration)?)?,
@@ -191,7 +191,7 @@ fn remap(value: &Value, old: &Names, new: &Lookup) -> Option<Value> {
                 };
                 entries.insert(key, remap(item, old, new)?);
             }
-            Value::Map(Rc::new(Map(entries)))
+            Value::Map(Rc::new(Map::new(entries)))
         }
         Value::Any(inner) => Value::Any(Rc::new(remap(inner, old, new)?)),
         Value::Fn(_) | Value::Future(_) | Value::Builder(_) | Value::MapBuilder(_) | Value::Region(_) => return None,

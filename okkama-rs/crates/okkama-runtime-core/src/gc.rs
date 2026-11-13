@@ -33,7 +33,7 @@
 //! сборщик мог очистить живой узел.
 use crate::Value;
 use crate::failure::{Failure, Kind};
-use crate::heap::{Array, ArrayBuilder, Closure, Map, MapBuilder, Object};
+use crate::heap::{Array, ArrayBuilder, Buffer, Closure, Map, MapBuilder, Object, Storage};
 use crate::sched::FutureCell;
 use std::any::Any;
 use std::cell::{Cell, RefCell};
@@ -59,12 +59,15 @@ impl Hasher for Address {
 
 type Index = HashMap<usize, usize, BuildHasherDefault<Address>>;
 
-/// Наименьший порог новых кандидатов между сборками.
-const MIN_THRESHOLD: usize = 4096;
+/// Наименьший порог новых кандидатов между сборками. Под Miri порог мал:
+/// тесты доходят до сборок на сотнях узлов, а не на тысячах (#43).
+const MIN_THRESHOLD: usize = if cfg!(miri) { 64 } else { 4096 };
 
 enum Candidate {
     Object(Weak<Object>),
     Future(Weak<FutureCell>),
+    /// Буфер массивов, записанный на месте (#335).
+    Buffer(Weak<Buffer>),
 }
 
 struct Collector {
@@ -121,6 +124,11 @@ pub fn track_future(future: &Rc<FutureCell>) {
     track(Candidate::Future(Rc::downgrade(future)));
 }
 
+/// Буфер массивов получил значение после создания (#335).
+pub fn track_buffer(buffer: &Rc<Buffer>) {
+    track(Candidate::Buffer(Rc::downgrade(buffer)));
+}
+
 /// Включить или выключить сборщик (`OKKAMA_GC=off` выключает его при старте).
 pub fn set_enabled(enabled: bool) {
     GC.with(|gc| {
@@ -147,6 +155,7 @@ pub fn stats() -> (u64, u64) {
 pub(crate) enum Node {
     Object(Rc<Object>),
     Array(Rc<Array>),
+    Buffer(Rc<Buffer>),
     Map(Rc<Map>),
     Fn(Rc<Closure>),
     Any(Rc<Value>),
@@ -161,8 +170,10 @@ impl Node {
     fn of(value: &Value) -> Option<Self> {
         Some(match value {
             Value::Object(object) => Self::Object(object.clone()),
-            Value::Array(array) if !array.0.is_empty() => Self::Array(array.clone()),
-            Value::Map(map) if !map.0.is_empty() => Self::Map(map.clone()),
+            // Массив простых значений цикла не замкнёт (#335).
+            Value::Array(array) if array.holds_nodes() => Self::Array(array.clone()),
+            // Словарь простых ключей и значений — тоже (#335).
+            Value::Map(map) if map.holds_nodes() => Self::Map(map.clone()),
             Value::Fn(closure) => Self::Fn(closure.clone()),
             Value::Any(inner) => Self::Any(inner.clone()),
             Value::Future(future) => Self::Future(future.clone()),
@@ -177,6 +188,7 @@ impl Node {
         match self {
             Self::Object(rc) => Rc::as_ptr(rc) as *const () as usize,
             Self::Array(rc) => Rc::as_ptr(rc) as *const () as usize,
+            Self::Buffer(rc) => Rc::as_ptr(rc) as *const () as usize,
             Self::Map(rc) => Rc::as_ptr(rc) as *const () as usize,
             Self::Fn(rc) => Rc::as_ptr(rc) as *const () as usize,
             Self::Any(rc) => Rc::as_ptr(rc) as *const () as usize,
@@ -192,6 +204,7 @@ impl Node {
         match self {
             Self::Object(rc) => Rc::strong_count(rc),
             Self::Array(rc) => Rc::strong_count(rc),
+            Self::Buffer(rc) => Rc::strong_count(rc),
             Self::Map(rc) => Rc::strong_count(rc),
             Self::Fn(rc) => Rc::strong_count(rc),
             Self::Any(rc) => Rc::strong_count(rc),
@@ -213,15 +226,30 @@ impl Node {
                 };
                 if let Some(extra) = extra.as_ref() {
                     extra.late.iter().for_each(|(_, value)| out.value(value));
+                    extra.once.iter().for_each(|(_, value)| out.value(value));
                     if let Some(state) = &extra.intrinsic {
                         out.0.push(Self::State(state.clone()));
                     }
                 }
             }
-            Self::Array(array) => array.0.iter().for_each(|value| out.value(value)),
+            // Версия держит свой буфер, срез — источник: ровно одно ребро.
+            Self::Array(array) => match array.storage() {
+                Storage::Items(items) => items.iter().for_each(|value| out.value(value)),
+                Storage::Buffer(buffer) => out.0.push(Self::Buffer(buffer.clone())),
+                Storage::Origin(origin) => out.0.push(Self::Array(origin.clone())),
+            },
+            Self::Buffer(buffer) => {
+                let Some(written) = buffer.written() else {
+                    return false;
+                };
+                written.iter().for_each(|value| out.value(value));
+            }
             Self::Map(map) => {
+                let Some(entries) = map.try_entries() else {
+                    return false;
+                };
                 // Ключ-объект держит объект (#212).
-                for (key, value) in map.0.iter() {
+                for (key, value) in entries.iter() {
                     if let crate::heap::MapKey::Object { object, .. } = key {
                         out.object(object);
                     }
@@ -272,6 +300,7 @@ impl Node {
                     && let Some(extra) = extra.take()
                 {
                     sink.extend(extra.late.into_iter().map(|(_, value)| value));
+                    sink.extend(extra.once.into_iter().map(|(_, value)| value));
                     states.extend(extra.intrinsic);
                 }
             }
@@ -289,6 +318,8 @@ impl Node {
                     sink.append(&mut values);
                 }
             }
+            // Записанное после создания буфера — поздние рёбра.
+            Self::Buffer(buffer) => buffer.clear(sink),
             Self::MapBuilder(builder) => {
                 if let Ok(mut values) = builder.try_borrow_mut() {
                     sink.extend(std::mem::take(&mut *values).into_values());
@@ -304,6 +335,7 @@ impl Node {
 enum Freed {
     Object(Weak<Object>),
     Array(Weak<Array>),
+    Buffer(Weak<Buffer>),
     Map(Weak<Map>),
     Fn(Weak<Closure>),
     Any(Weak<Value>),
@@ -320,6 +352,7 @@ impl Freed {
         match node {
             Node::Object(rc) => Self::Object(Rc::downgrade(rc)),
             Node::Array(rc) => Self::Array(Rc::downgrade(rc)),
+            Node::Buffer(rc) => Self::Buffer(Rc::downgrade(rc)),
             Node::Map(rc) => Self::Map(Rc::downgrade(rc)),
             Node::Fn(rc) => Self::Fn(Rc::downgrade(rc)),
             Node::Any(rc) => Self::Any(Rc::downgrade(rc)),
@@ -335,6 +368,7 @@ impl Freed {
         match self {
             Self::Object(weak) => weak.strong_count() > 0,
             Self::Array(weak) => weak.strong_count() > 0,
+            Self::Buffer(weak) => weak.strong_count() > 0,
             Self::Map(weak) => weak.strong_count() > 0,
             Self::Fn(weak) => weak.strong_count() > 0,
             Self::Any(weak) => weak.strong_count() > 0,
@@ -406,6 +440,7 @@ fn sweep(candidates: Vec<Candidate>) -> (usize, usize, Vec<Candidate>) {
         let node = match candidate {
             Candidate::Object(weak) => weak.upgrade().map(Node::Object),
             Candidate::Future(weak) => weak.upgrade().map(Node::Future),
+            Candidate::Buffer(weak) => weak.upgrade().map(Node::Buffer),
         };
         let Some(node) = node else { continue };
         let key = node.key();
@@ -473,7 +508,8 @@ fn sweep(candidates: Vec<Candidate>) -> (usize, usize, Vec<Candidate>) {
         .map(|&at| match &nodes[at] {
             Node::Object(object) => Candidate::Object(Rc::downgrade(object)),
             Node::Future(future) => Candidate::Future(Rc::downgrade(future)),
-            _ => unreachable!("candidates are objects and futures"),
+            Node::Buffer(buffer) => Candidate::Buffer(Rc::downgrade(buffer)),
+            _ => unreachable!("candidates are objects, futures and buffers"),
         })
         .collect();
 
@@ -509,7 +545,7 @@ fn sweep(candidates: Vec<Candidate>) -> (usize, usize, Vec<Candidate>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::heap::ObjectHeap;
+    use crate::heap::{ArrayHeap, ObjectHeap};
 
     fn pair() -> (Value, Rc<Object>) {
         // Owner(child: Child(owner: self)): поле owner связано позже.
@@ -536,6 +572,64 @@ mod tests {
             panic!("live cycle lost its field")
         };
         assert!(matches!(child.field(0), Some(Value::Object(back)) if Rc::ptr_eq(&back, owner)));
+        // Garbage once dropped: collected, so nothing outlives the test (Miri checks leaks).
+        drop(child);
+        drop(live);
+        collect();
+    }
+
+    /// An append written in place gives an old buffer a new edge (#335): the
+    /// element can hold a version of that buffer, a cycle no flat copy makes.
+    #[test]
+    fn a_cycle_through_a_buffer_written_in_place_is_freed() {
+        use crate::ops::array_concat;
+        let start: Vec<Value> = (0..40).map(|i| Value::Int(crate::IntValue::from_i64(i))).collect();
+        let first = array_concat(&[&ArrayHeap.allocate(start), &ArrayHeap.allocate(vec![])]).unwrap();
+        // Two appends: a buffer, then a version written in place.
+        let second = array_concat(&[&first, &ArrayHeap.allocate(vec![Value::Undef])]).unwrap();
+        let (holder, object) = object(1);
+        let third = array_concat(&[&second, &ArrayHeap.allocate(vec![holder.clone()])]).unwrap();
+        // The object holds the version before it: holder -> second -> buffer -> holder.
+        ObjectHeap.init(&holder, 0, second.clone()).unwrap();
+        let weak = Rc::downgrade(&object);
+        drop((first, second, third, holder, object));
+        assert!(weak.upgrade().is_some(), "the cycle survives plain reference counting");
+        collect();
+        assert!(weak.upgrade().is_none(), "the cycle through the buffer is freed");
+    }
+
+    /// Maps in cycles (#335): a large map that holds an object stays a
+    /// copied tree and a node, so a cycle through its versions is freed; a
+    /// persistent version beside the cycle is no node and is freed with it.
+    #[test]
+    fn cycles_through_large_map_versions_are_freed() {
+        use crate::heap::maps;
+        use crate::ops::map_merge;
+        let int = |i: i64| Value::Int(crate::IntValue::from_i64(i));
+        for stress in [false, true] {
+            set_stress(stress);
+            collect();
+            let base = live_objects();
+            let plain = maps::from_entries((0..100).map(|i| (int(i), int(i)))).unwrap();
+            let shared = map_merge(&[&plain, &maps::from_entries([(int(1000), int(1))]).unwrap()]).unwrap();
+            assert!(!traced(&shared) && !traced(&plain), "persistent versions of plain values are no nodes");
+            let Value::Map(shared_map) = &shared else { unreachable!() };
+            let weak_map = Rc::downgrade(shared_map);
+            let (holder, object) = object(1);
+            let holding = map_merge(&[&plain, &maps::from_entries([(int(-1), holder.clone())]).unwrap()]).unwrap();
+            let version = map_merge(&[&holding, &maps::from_entries([(int(-2), shared.clone())]).unwrap()]).unwrap();
+            assert!(traced(&holding) && traced(&version));
+            // holder -> version -> holder, with the persistent map hanging off it.
+            ObjectHeap.init(&holder, 0, version).unwrap();
+            let weak = Rc::downgrade(&object);
+            drop((shared, holding, holder, object, plain));
+            assert!(weak.upgrade().is_some(), "the cycle survives plain reference counting");
+            collect();
+            assert!(weak.upgrade().is_none(), "the cycle through the map version is freed");
+            assert!(weak_map.upgrade().is_none(), "and the persistent map beside it");
+            assert_eq!(live_objects(), base);
+        }
+        set_stress(false);
     }
 
     #[test]
@@ -688,6 +782,8 @@ mod tests {
             let Value::Object(object) = value else { unreachable!() };
             assert!(matches!(object.field(0), Some(Value::Object(back)) if Rc::ptr_eq(&back, object)));
         }
+        drop(kept);
+        collect();
     }
 
     #[test]
@@ -701,5 +797,7 @@ mod tests {
         }
         assert!(stats().0 > before);
         assert!(probe.unwrap().upgrade().is_none());
+        // The cycles since the last threshold are still garbage.
+        collect();
     }
 }

@@ -5,22 +5,17 @@ import "time/clock" take Instant;
 import "time/date" take Date;
 import "time/day" take TimeOfDay;
 import "time/local_datetime" take LocalDateTime;
-import "time/iso" take
-    IsoLocalDateTime,
-    LocalDateTimeFromIso,
-    InvalidIsoLocalDateTime;
-import "strings/parse" take ParsedInt, InvalidInteger;
+import "time/iso" take IsoText, InvalidIsoLocalDateTime;
+import "strings/parse" take Number, InvalidInteger;
 
 // Strict nanosecond-resolution RFC 3339 timestamps.
 //
 //     Rfc3339(
 //         origin: clock.instant(),
-//         offset: Duration(value: 0.rat(), unit: DurationUnit.second),
+//         offset: Duration(seconds: 0),
 //     ).string(); // ...Z
 //
-//     let instant = value InstantFromRfc3339(
-//         origin: "2026-08-11T12:30:45.125+05:00",
-//     );
+//     let instant = Rfc3339("2026-08-11T12:30:45.125+05:00").instant();
 //
 // This profile requires uppercase T/Z, seconds and either Z or ±HH:MM.
 // Fractions contain one through nine digits and are never rounded. Numeric
@@ -28,23 +23,53 @@ import "strings/parse" take ParsedInt, InvalidInteger;
 // accepts RFC 3339 `-00:00` as a zero displacement with unknown local-offset
 // provenance; formatting canonicalizes every zero displacement to `Z`.
 
+// An instant as RFC 3339 text at an offset: `2026-11-13T10:00:00Z`.
 object Rfc3339 {
     has origin is Instant;
     has offset is Duration;
+    has source is string;
+    has reading is bool;
 
+    // origin at offset from UTC, a whole number of minutes below 24 hours.
     Rfc3339(origin is Instant, offset is Duration) {
-        confirm offset.seconds().denominator() == "1"
+        confirm offset::Span::seconds.denominator() == "1"
             else throw InvalidRfc3339Offset.because("RFC 3339 offset must contain whole seconds");
-        let seconds is int = offset.seconds().int();
+        let seconds is int = offset::Span::seconds.int();
         confirm seconds % 60 == 0
             else throw InvalidRfc3339Offset.because("RFC 3339 offset must contain whole minutes");
         confirm seconds > -86400 && seconds < 86400
-            else throw InvalidRfc3339Offset.because("RFC 3339 offset magnitude must be below 24 hours");
+            else throw InvalidRfc3339Offset.because(
+                "RFC 3339 offset magnitude must be below 24 hours"
+            );
         self.origin = origin;
         self.offset = offset;
+        source = "";
+        reading = false;
     }
 
+    // Keeps a timestamp to read; instant() and string() read it.
+    Rfc3339(text is string) {
+        origin = Instant(origin: Duration(seconds: 0));
+        offset = Duration(seconds: 0);
+        source = text;
+        reading = true;
+    }
+
+    // The instant.
+    instant() is Instant {
+        if reading {
+            self.parsed().instant();
+        }
+        else {
+            origin;
+        }
+    }
+
+    // The text, with nanoseconds when there are any.
     string() is string {
+        if reading {
+            return self.parsed().string();
+        }
         let epoch is LocalDateTime = LocalDateTime(
             date: Date(year: 1970, month: 1, day: 1),
             time: TimeOfDay(hour: 0, minute: 0, second: 0, nanosecond: 0),
@@ -52,69 +77,68 @@ object Rfc3339 {
         let local is LocalDateTime = epoch
             .plus(origin.unix_duration())
             .plus(offset);
-        let seconds is int = offset.seconds().int();
+        let seconds is int = offset::Span::seconds.int();
         let suffix is string = if seconds == 0 {
             "Z";
         }
         else {
-            let sign is string = if seconds < 0 { "-"; } else { "+"; };
-            let magnitude is int = if seconds < 0 { -seconds; } else { seconds; };
+            let sign is string = if seconds < 0 {
+                "-";
+            }
+            else {
+                "+";
+            };
+            let magnitude is int = if seconds < 0 {
+                -seconds;
+            }
+            else {
+                seconds;
+            };
             let hour is string = (magnitude / 3600).int().string();
             let minute is string = ((magnitude % 3600) / 60).int().string();
-            sign
-                + ("00" + hour).slice(hour.length(), hour.length() + 2)
-                + ":"
-                + ("00" + minute).slice(minute.length(), minute.length() + 2);
+            sign +
+                ("00" + hour).slice(hour.length(), hour.length() + 2) +
+                ":" +
+                ("00" + minute).slice(minute.length(), minute.length() + 2);
         };
-        IsoLocalDateTime(origin: local).string() + suffix;
-    }
-}
-
-object InstantFromRfc3339 {
-    has origin is string;
-
-    InstantFromRfc3339(origin is string) {
-        self.origin = origin;
+        local.string() + suffix;
     }
 
-    value() is Instant {
-        let length is int = origin.length();
-        confirm length >= 20 else throw InvalidRfc3339.origin(origin);
+    // The formatter of the timestamp read from the source.
+    hidden parsed() is Rfc3339 {
+        let length is int = source.length();
+        confirm length >= 20 else throw InvalidRfc3339.origin(source);
 
-        let utc is bool = origin.slice(length - 1, length) == "Z";
+        let utc is bool = source.slice(length - 1, length) == "Z";
         let numeric is bool = length >= 25
-            && (origin.slice(length - 6, length - 5) == "+"
-                || origin.slice(length - 6, length - 5) == "-")
-            && origin.slice(length - 3, length - 2) == ":";
-        confirm utc || numeric else throw InvalidRfc3339.origin(origin);
+            && (source.slice(length - 6, length - 5) == "+"
+            || source.slice(length - 6, length - 5) == "-")
+            && source.slice(length - 3, length - 2) == ":";
+        confirm utc || numeric else throw InvalidRfc3339.origin(source);
 
         let local_source is string = if utc {
-            origin.slice(0, length - 1);
+            source.slice(0, length - 1);
         }
         else {
-            origin.slice(0, length - 6);
+            source.slice(0, length - 6);
         };
         let local is LocalDateTime = try {
-            LocalDateTimeFromIso(origin: local_source).value();
+            IsoText(local_source).local_date_time();
         }
         catch error is InvalidIsoLocalDateTime {
-            throw InvalidRfc3339.origin(origin);
+            throw InvalidRfc3339.origin(source);
         };
 
         let offset is Duration = if utc {
-            Duration(value: 0.rat(), unit: DurationUnit.second);
+            Duration(seconds: 0);
         }
         else {
             try {
-                let hour is int = ParsedInt(
-                    origin.slice(length - 5, length - 3)
-                ).value();
-                let minute is int = ParsedInt(
-                    origin.slice(length - 2, length)
-                ).value();
+                let hour is int = Number(source.slice(length - 5, length - 3)).int();
+                let minute is int = Number(source.slice(length - 2, length)).int();
                 confirm hour <= 23 && minute <= 59
-                    else throw InvalidRfc3339.origin(origin);
-                let sign is int = if origin.slice(length - 6, length - 5) == "-" {
+                    else throw InvalidRfc3339.origin(source);
+                let sign is int = if source.slice(length - 6, length - 5) == "-" {
                     -1;
                 }
                 else {
@@ -126,7 +150,7 @@ object InstantFromRfc3339 {
                 );
             }
             catch error is InvalidInteger {
-                throw InvalidRfc3339.origin(origin);
+                throw InvalidRfc3339.origin(source);
             }
         };
 
@@ -134,10 +158,35 @@ object InstantFromRfc3339 {
             date: Date(year: 1970, month: 1, day: 1),
             time: TimeOfDay(hour: 0, minute: 0, second: 0, nanosecond: 0),
         );
-        Instant(origin: local.minus(epoch).minus(offset));
+        Rfc3339(origin: Instant(origin: local.minus(epoch).minus(offset)), offset: offset);
     }
 }
 
+// Text that is not an RFC 3339 timestamp.
 enum InvalidRfc3339 is Error = (origin(origin is string));
 
+// An offset RFC 3339 cannot write.
 enum InvalidRfc3339Offset is Error = (because(message is string));
+
+test "RFC 3339 text reads an instant and keeps its offset" {
+    let read = Rfc3339("2026-08-11T12:30:45.125+05:00");
+    test.is(read.string(), "2026-08-11T12:30:45.125+05:00");
+    let utc = Rfc3339(
+        origin: read.instant(),
+        offset: Duration(seconds: 0)
+    );
+    test.is(utc.string(), "2026-08-11T07:30:45.125Z");
+    test.is(Rfc3339("1970-01-01T00:00:00Z").instant().unix_duration()::Span::seconds.string(), "0");
+    for ["2026-08-11t12:30:45Z", "2026-08-11T12:30:45", "2026-08-11T12:30:45+5:00"] -> bad {
+        test.is(
+            try {
+                Rfc3339(bad).instant();
+                "accepted";
+            }
+            catch InvalidRfc3339.origin(given) {
+                given;
+            },
+            bad
+        );
+    }
+}

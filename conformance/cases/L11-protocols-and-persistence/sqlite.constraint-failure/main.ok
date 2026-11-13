@@ -6,7 +6,6 @@ import "db/transaction" take TransactionOptions;
 import "db/statement" take Statement;
 import "db/value" take DbInteger, DbText, DbDecimal, DbNull, ObservedDbValue;
 import "db/row" take RowsEnded;
-import "db/read" take RowReader;
 import "db/error" take DbFailure;
 import "numbers/bigint" take BigInt;
 import "math/decimal" take Decimal;
@@ -18,9 +17,9 @@ async main() is int {
     defer await connection.settled();
     defer connection.close();
     await connection.execution(Statement("CREATE TABLE users(email TEXT UNIQUE)"));
-    await connection.execution(Statement("INSERT INTO users VALUES(?)", [DbText("a@example.test")]));
+    await connection.execution(Statement(text: "INSERT INTO users VALUES(?)", values: [DbText("a@example.test")]));
     let outcome = try {
-        await connection.execution(Statement("INSERT INTO users VALUES(?)", [DbText("a@example.test")]));
+        await connection.execution(Statement(text: "INSERT INTO users VALUES(?)", values: [DbText("a@example.test")]));
         "inserted twice";
     } catch e is DbFailure {
         "constraint rejected";
@@ -29,6 +28,6 @@ async main() is int {
     let rows = await connection.rows(Statement("SELECT COUNT(*) AS c FROM users"));
     let row = await rows.row();
     rows.close();
-    out.writeln(RowReader(origin: row).int("c").string());
+    out.writeln(row.int("c").string());
     0;
 }

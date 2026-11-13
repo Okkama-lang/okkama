@@ -1,0 +1,25 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "fs/file" take File, FileMode;
+import "fs/entry" take FileEntry;
+import "fs/error" take FileError;
+import "fs/path" take Path;
+
+main() is int {
+    let out = Stdout();
+    // The whole failure text, not only its code: every engine says the same (#319).
+    let whole = try {
+        File(path: Path("does-not-exist.txt")).binary().bytes().size().string();
+    } catch e is FileError {
+        e.text();
+    };
+    let opened = try {
+        File(path: Path("does-not-exist.txt")).text().content();
+    } catch e is FileError {
+        e.text();
+    };
+    out.writeln(whole);
+    out.writeln(opened);
+    0;
+}

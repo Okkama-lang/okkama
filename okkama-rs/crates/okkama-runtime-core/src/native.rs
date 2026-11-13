@@ -8,7 +8,9 @@ use std::rc::Rc;
 pub mod application;
 pub mod buffer;
 pub mod bytes;
+pub mod cldr;
 pub mod collation;
+pub mod compression;
 pub mod encoding;
 pub mod formats;
 pub mod fs;
@@ -18,6 +20,7 @@ pub mod idna;
 pub mod input;
 pub mod jre;
 pub mod json;
+pub mod json_split;
 pub mod db;
 pub mod markup;
 pub mod math;
@@ -28,6 +31,7 @@ pub mod numbers;
 pub mod postgres;
 pub mod process;
 pub mod regex;
+pub mod signal;
 pub mod sqlite;
 pub mod stdio;
 pub mod text;
@@ -36,6 +40,7 @@ pub mod tls;
 pub mod unicode;
 pub mod value;
 pub mod x509;
+pub mod xml;
 
 pub mod inspect;
 pub mod support;
@@ -86,9 +91,10 @@ pub fn execute(
         Provider::Postgres => postgres::execute(native, args),
         Provider::Misc => misc::execute(native, args, context),
         Provider::Idna => idna::execute(native, args),
-        Provider::Json => json::execute(native, args),
+        Provider::Json => json::execute(native, args, arrays),
         Provider::Db => db::execute(native, args),
         Provider::Markup => markup::execute(native, args),
+        Provider::Xml => xml::execute(native, args),
         Provider::Math => math::execute(native, args, context),
         Provider::Host => host::execute(native, args),
         Provider::Value => value::execute(native, args),
@@ -111,12 +117,16 @@ pub fn execute(
         Provider::Encoding => encoding::execute(native, args, arrays),
         Provider::Numbers => numbers::execute(native, args),
         Provider::Buffer => buffer::execute(native, args, arrays),
+        Provider::Compression => compression::execute(native, args, arrays),
+        Provider::Signal => signal::execute(native, args),
+        Provider::Cldr => cldr::execute(native, args),
         Provider::Streams => context.streams.execute(
             native,
             args,
             arrays,
             &mut std::io::stdin().lock(),
-            &mut std::io::stdout().lock(),
+            // The process buffer (#132), shared with the test report.
+            &mut crate::stdout::Buffered,
             &mut std::io::stderr().lock(),
         ),
         Provider::Utf => unicode_text(native, args, arrays),
@@ -134,6 +144,7 @@ enum Provider {
     Json,
     Db,
     Markup,
+    Xml,
     Math,
     Host,
     Value,
@@ -156,6 +167,9 @@ enum Provider {
     Encoding,
     Numbers,
     Buffer,
+    Compression,
+    Signal,
+    Cldr,
     Streams,
     /// UTF-8/16/32 и всё, чего нет у других providers (там — `Unsupported`).
     Utf,
@@ -192,6 +206,7 @@ fn route(native: Native) -> Provider {
         "runtime/json" => return Provider::Json,
         "runtime/db" => return Provider::Db,
         "runtime/toml" | "runtime/html" => return Provider::Markup,
+        "runtime/xml" => return Provider::Xml,
         "runtime/format" | "runtime/statistics" | "runtime/random_distribution" => {
             return Provider::Math;
         }
@@ -244,9 +259,22 @@ fn route(native: Native) -> Provider {
     if buffer::handles(native) {
         return Provider::Buffer;
     }
+    if compression::handles(native) {
+        return Provider::Compression;
+    }
+    if signal::handles(native) {
+        return Provider::Signal;
+    }
+    if cldr::handles(native) {
+        return Provider::Cldr;
+    }
     if matches!(
         native,
-        Native::StdoutWrite | Native::StderrWrite | Native::StdinRead | Native::StdinReadLine
+        Native::StdoutWrite
+            | Native::StderrWrite
+            | Native::StdoutFlush
+            | Native::StdinRead
+            | Native::StdinReadLine
     ) {
         return Provider::Streams;
     }

@@ -43,46 +43,59 @@ import "size" take Sizing;
 // language supports role composition, the shared signatures are stated here
 // and concrete lists explicitly implement all three roles.
 role List<T> {
+    // Walks from the first item.
     cursor() is Cursor<T>;
+    // How many items; counting walks the list.
     size() is int;
+    // The first item; EmptyListAccess when empty.
     first() is T;
+    // The list after its first item; EmptyListAccess when empty.
     tail() is List<T>;
+    // This list with value in front; the old list is shared, not copied.
     prefix(value is T) is List<T>;
 }
 
+// The list with no items; type it to start one: `let empty is List<string> =
+// EmptyList();`.
 object EmptyList<T> does List<T>, Iterating<T>, Sizing {
+    // An empty list.
     EmptyList();
 
+    // A cursor at the end.
     cursor() is Cursor<T> {
         EmptyListCursor(origin: self);
     }
 
+    // 0.
     size() is int {
         0;
     }
 
+    // EmptyListAccess: an empty list has no first item.
     first() is T {
         throw EmptyListAccess.operation("first");
     }
 
+    // EmptyListAccess: an empty list has no tail.
     tail() is List<T> {
         throw EmptyListAccess.operation("tail");
     }
 
+    // The list of value alone.
     prefix(value is T) is List<T> {
-        LinkedList(value: value, following: self);
+        LinkedList(value: value, following: self, size: 1);
     }
 }
 
-object LinkedList<T> does List<T>, Iterating<T>, Sizing {
+hidden object LinkedList<T> does List<T>, Iterating<T>, Sizing {
     has origin is T;
     has following is List<T>;
     has amount is int;
 
-    LinkedList(value is T, following is List<T>) {
+    LinkedList(value is T, following is List<T>, size is int) {
         origin = value;
         self.following = following;
-        amount = following.size() + 1;
+        amount = size;
     }
 
     cursor() is Cursor<T> {
@@ -102,11 +115,11 @@ object LinkedList<T> does List<T>, Iterating<T>, Sizing {
     }
 
     prefix(value is T) is List<T> {
-        LinkedList(value: value, following: self);
+        LinkedList(value: value, following: self, size: amount + 1);
     }
 }
 
-object EmptyListCursor<T> does Cursor<T> {
+hidden object EmptyListCursor<T> does Cursor<T> {
     has origin is List<T>;
 
     EmptyListCursor(:origin);
@@ -124,7 +137,7 @@ object EmptyListCursor<T> does Cursor<T> {
     }
 }
 
-object LinkedListCursor<T> does Cursor<T> {
+hidden object LinkedListCursor<T> does Cursor<T> {
     has origin is T;
     has following is List<T>;
 
@@ -146,4 +159,39 @@ object LinkedListCursor<T> does Cursor<T> {
     }
 }
 
+// first() or tail() on an empty list; operation names the call.
 enum EmptyListAccess is Error = (operation(operation is string));
+
+test "a list is built by prefixing and shares its tail" {
+    let empty is List<string> = EmptyList();
+    let one = empty.prefix("one");
+    let two = one.prefix("two");
+    test.is(empty.size(), 0);
+    test.is(one.size(), 1);
+    test.is(two.size(), 2);
+    test.is(two.first(), "two");
+    test.is(two.tail().first(), "one");
+    test.is(one.first(), "one");
+    test.is(two.map() -> name {
+        name;
+    }.join(","), "two,one");
+    test.is(LinkedList(value: "x", following: empty, size: 1).first(), "x");
+    test.is(
+        try {
+            empty.first();
+        }
+        catch EmptyListAccess.operation(operation) {
+            operation;
+        },
+        "first"
+    );
+    test.is(
+        try {
+            empty.tail().size().string();
+        }
+        catch EmptyListAccess.operation(operation) {
+            operation;
+        },
+        "tail"
+    );
+}

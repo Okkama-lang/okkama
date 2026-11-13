@@ -182,7 +182,11 @@
       "patterns": [
         {
           "name": "storage.modifier.hidden.okkama",
-          "match": "\\bhidden\\b(?=\\s+(?:object|role|enum)\\b)"
+          "match": "\\bhidden\\b(?=\\s+(?:object|role|enum|const)\\b|\\s+(?:async\\s+)?[a-z_][A-Za-z0-9_]*\\s*\\()"
+        },
+        {
+          "name": "storage.modifier.once.okkama",
+          "match": "\\bonce\\b(?=\\s+let\\b)"
         },
         {
           "name": "meta.declaration.cap.okkama",
@@ -323,7 +327,7 @@
         },
         {
           "name": "keyword.declaration.okkama",
-          "match": "\\b(module|import|take|as|native|object|role|does|enum|has|is|private|test|fake|destroy|let|const)\\b"
+          "match": "\\b(module|import|take|as|native|object|role|does|enum|has|is|test|fake|destroy|let|const)\\b"
         },
         {
           "name": "storage.modifier.async.okkama",
@@ -466,7 +470,7 @@
     "contextualCapabilities": {
       "patterns": [
         {
-          "match": "\\b(test)\\s*(\\.)\\s*(ok|is|isnt|fail|skip)\\b",
+          "match": "\\b(test)\\s*(\\.)\\s*(ok|is|isnt|close|text|bytes|throws|fail|skip)\\b",
           "captures": {
             "1": {
               "name": "variable.language.test.okkama"

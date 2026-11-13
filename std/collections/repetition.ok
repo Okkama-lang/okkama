@@ -36,19 +36,22 @@ import "size" take Sizing;
 // Cycling an empty sequence is finite and immediately exhausted. Cycling a
 // non-empty sequence is infinite. Every cursor is immutable.
 
+// One value over and over, without end; take some with Taken.
 object Repeating<T> does Iterating<T> {
     has origin is T;
 
+    // Repeats value forever.
     Repeating(value is T) {
         origin = value;
     }
 
+    // Walks the items.
     cursor() is Cursor<T> {
         RepeatingCursor(value: origin);
     }
 }
 
-object RepeatingCursor<T> does Cursor<T> {
+hidden object RepeatingCursor<T> does Cursor<T> {
     has origin is T;
 
     RepeatingCursor(value is T) {
@@ -68,10 +71,12 @@ object RepeatingCursor<T> does Cursor<T> {
     }
 }
 
+// One value count times.
 object Repeated<T> does Sequencing<T>, Iterating<T>, Sizing {
     has origin is T;
     has amount is int;
 
+    // value count times; count must not be negative.
     Repeated(value is T, count is int) {
         confirm count >= 0
             else throw InvalidArgument.because("repeat count cannot be negative");
@@ -79,32 +84,37 @@ object Repeated<T> does Sequencing<T>, Iterating<T>, Sizing {
         amount = count;
     }
 
+    // Walks the items.
     cursor() is Cursor<T> {
         RepeatedCursor(value: origin, position: 0, count: amount);
     }
 
+    // count.
     size() is int {
         amount;
     }
 
+    // The value, for any index below count.
     item(index is int) is T {
         confirm index >= 0 && index < amount
             else throw OutOfRange.because("repeat index is outside the sequence");
         origin;
     }
 
+    // The value; EmptySequence when count is 0.
     first() is T {
         confirm amount > 0 else throw EmptySequence.empty;
         origin;
     }
 
+    // The value; EmptySequence when count is 0.
     last() is T {
         confirm amount > 0 else throw EmptySequence.empty;
         origin;
     }
 }
 
-object RepeatedCursor<T> does Cursor<T> {
+hidden object RepeatedCursor<T> does Cursor<T> {
     has origin is T;
     has position is int;
     has amount is int;
@@ -138,11 +148,14 @@ object RepeatedCursor<T> does Cursor<T> {
     }
 }
 
+// The items of origin over and over, without end.
 object Cycled<T> does Iterating<T> {
     has origin is Sequencing<T>;
 
+    // Cycles origin.
     Cycled(:origin);
 
+    // Walks the items.
     cursor() is Cursor<T> {
         if origin.size() == 0 {
             EmptyCycleCursor(origin: origin);
@@ -153,7 +166,7 @@ object Cycled<T> does Iterating<T> {
     }
 }
 
-object CycledCursor<T> does Cursor<T> {
+hidden object CycledCursor<T> does Cursor<T> {
     has origin is Sequencing<T>;
     has position is int;
 
@@ -187,12 +200,14 @@ object CycledCursor<T> does Cursor<T> {
     }
 }
 
-object EmptyCycleCursor<T> does Cursor<T> {
+hidden object EmptyCycleCursor<T> does Cursor<T> {
     has origin is Sequencing<T>;
 
     EmptyCycleCursor(origin is Sequencing<T>) {
         confirm origin.size() == 0
-            else throw InvalidArgument.because("cannot create an empty cursor for a non-empty cycle");
+            else throw InvalidArgument.because(
+                "cannot create an empty cursor for a non-empty cycle"
+            );
         self.origin = origin;
     }
 
@@ -207,4 +222,51 @@ object EmptyCycleCursor<T> does Cursor<T> {
     successor() is Cursor<T> {
         throw IterationEnded.ended;
     }
+}
+
+test "repeating is endless, repeated is finite, cycled goes round" {
+    let step = (cursor is Cursor<string>, count is int) is Cursor<string> {
+        (0..count).reduce(cursor) -> current, index {
+            current.successor();
+        };
+    };
+    test.is(step(Repeating(value: "tick").cursor(), 1000).item(), "tick");
+    let padding = Repeated(value: " ", count: 4);
+    test.is(padding.size(), 4);
+    test.is(padding.item(2), " ");
+    test.is(padding.map() -> value {
+        "[" + value + "]";
+    }.join(""), "[ ][ ][ ][ ]");
+    test.is(
+        try {
+            Repeated(value: 1, count: 0).first();
+        }
+        catch error is EmptySequence {
+            -1;
+        },
+        -1
+    );
+    test.is(
+        try {
+            Repeated(value: 1, count: -1).size();
+        }
+        catch error is InvalidArgument {
+            -1;
+        },
+        -1
+    );
+    test.is(
+        try {
+            Repeated(value: 1, count: 2).item(2);
+        }
+        catch error is OutOfRange {
+            -1;
+        },
+        -1
+    );
+    let turns = Cycled(origin: ["a", "b"]).cursor();
+    test.is(step(turns, 4).item(), "a");
+    test.is(step(turns, 5).item(), "b");
+    let nothing is @string = [];
+    test.ok(!Cycled(origin: nothing).cursor().available());
 }

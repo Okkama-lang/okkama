@@ -1,125 +1,155 @@
 module async/collect v1.0.0;
 
 import "collections/sequence" take Sequencing;
+import "async/event" take Event;
 
-/*
-=head1 NAME
+// Structured collection of futures.
+//
+// `AllFutures<T>` starts every supplied future and publishes results in input
+// order only after every future succeeds. The input may be any `Sequencing`
+// object; it is read when `results()` starts, not during construction.
+//
+//     let pending is @Future<int> = [
+//         Worker(id: 1).run(),
+//         Worker(id: 2).run(),
+//         Worker(id: 3).run(),
+//     ];
+//     let collected is AllFutures<int> = AllFutures(origins: pending);
+//     let values is Sequencing<int> = await collected.results();
+//
+// The returned sequence preserves input order rather than completion order. An
+// empty input completes immediately with an empty sequence.
+//
+// If one future fails, unfinished siblings are cancelled and their cleanup is
+// awaited. The observed failure remains primary; failures raised by sibling
+// cleanup remain ordered secondary diagnostics. Cancelling `results()` applies
+// the same structured cleanup rule. Repeated calls return the same future and
+// never restart the inputs.
+//
+// `Raced<T>` returns the value of the first settled input. A failing first
+// settlement remains a failure; the race does not wait for a later success.
+// Every loser is cancelled and fully cleaned before the result settles:
+//
+//     let race is Raced<Response> = Raced(origins: requests);
+//     let response = await race.winner();
+//
+// `FirstSuccessful<T>` instead ignores failed attempts while success is still
+// possible. If all inputs fail, the first failure in completion order remains
+// primary and later failures become ordered secondary diagnostics:
+//
+//     let attempts is FirstSuccessful<Response> = FirstSuccessful(
+//         origins: requests,
+//     );
+//     let response = await attempts.outcome();
+//
+// Neither selector accepts an empty input; both throw `NoFutures`. A successful
+// winner is not published when cancelling a loser exposes a cleanup failure.
+//
+// `FutureCompletions<T>` exposes settlement order without turning a suspending
+// operation into a synchronous cursor. `completion()` returns the original,
+// already-settled `Future<T>` rather than extracting its value or failure:
+//
+//     let stream is FutureCompletions<Response> = FutureCompletions(
+//         origins: requests,
+//     );
+//
+//     loop {
+//         last if stream.remaining_count() == 0;
+//         let completed = await stream.completion();
+//         try {
+//             let response = await completed;
+//             responses.write(response);
+//         }
+//         catch error is RequestFailed {
+//             failures.write(error);
+//         }
+//     }
+//
+// Every input position is returned once, including duplicate future identities.
+// Concurrent completion requests and simultaneous settlements are paired FIFO;
+// already-settled inputs are ordered by their input positions. Calling
+// `completion()` after exhaustion throws `NoFutures`. Cancelling a pending
+// completion request cancels the stream's unfinished inputs and waits for their
+// cleanup.
 
-async/collect - structured collection of futures
-
-=head1 DESCRIPTION
-
-C<AllFutures<T>> starts every supplied future and publishes results in input
-order only after every future succeeds. The input may be any C<Sequencing>
-object; it is read when C<results()> starts, not during construction.
-
-    let pending is @Future<int> = [
-        Worker(id: 1).run(),
-        Worker(id: 2).run(),
-        Worker(id: 3).run(),
-    ];
-    let collected is AllFutures<int> = AllFutures(origins: pending);
-    let values is Sequencing<int> = await collected.results();
-
-The returned sequence preserves input order rather than completion order. An
-empty input completes immediately with an empty sequence.
-
-If one future fails, unfinished siblings are cancelled and their cleanup is
-awaited. The observed failure remains primary; failures raised by sibling
-cleanup remain ordered secondary diagnostics. Cancelling C<results()> applies
-the same structured cleanup rule. Repeated calls return the same future and
-never restart the inputs.
-
-C<Raced<T>> returns the value of the first settled input. A failing first
-settlement remains a failure; the race does not wait for a later success.
-Every loser is cancelled and fully cleaned before the result settles:
-
-    let race is Raced<Response> = Raced(origins: requests);
-    let response = await race.result();
-
-C<FirstSuccessful<T>> instead ignores failed attempts while success is still
-possible. If all inputs fail, the first failure in completion order remains
-primary and later failures become ordered secondary diagnostics:
-
-    let attempts is FirstSuccessful<Response> = FirstSuccessful(
-        origins: requests,
-    );
-    let response = await attempts.result();
-
-Neither selector accepts an empty input; both throw C<NoFutures>. A successful
-winner is not published when cancelling a loser exposes a cleanup failure.
-
-C<FutureCompletions<T>> exposes settlement order without turning a suspending
-operation into a synchronous cursor. C<completion()> returns the original,
-already-settled C<Future<T>> rather than extracting its value or failure:
-
-    let stream is FutureCompletions<Response> = FutureCompletions(
-        origins: requests,
-    );
-
-    while stream.remaining_count() > 0 {
-        let completed = await stream.completion();
-        try {
-            let response = await completed;
-            responses.write(response);
-        }
-        catch error is RequestFailed {
-            failures.write(error);
-        }
-    }
-
-Every input position is returned once, including duplicate future identities.
-Concurrent completion requests and simultaneous settlements are paired FIFO;
-already-settled inputs are ordered by their input positions. Calling
-C<completion()> after exhaustion throws C<NoFutures>. Cancelling a pending
-completion request cancels the stream's unfinished inputs and waits for their
-cleanup.
-
-=cut
-*/
-
+// Every future's result, in input order, once all succeed; the first failure
+// cancels the rest.
 object AllFutures<T> {
     has origins is Sequencing<Future<T>>;
 
+    // Runs origins.
     AllFutures(:origins);
 
+    // The results in input order.
     async results() is Sequencing<T> {
         panic "AllFutures.results is a VM intrinsic";
     }
 }
 
+// The result of whichever future settles first; the others are cancelled.
 object Raced<T> {
     has origins is Sequencing<Future<T>>;
 
+    // Races origins; an empty list is NoFutures.
     Raced(:origins);
 
-    async result() is T {
+    // The first result, or the first failure.
+    async winner() is T {
         throw NoFutures.none;
     }
 }
 
+// The result of the first future to succeed; failures wait for the others.
 object FirstSuccessful<T> {
     has origins is Sequencing<Future<T>>;
 
+    // Runs origins.
     FirstSuccessful(:origins);
 
-    async result() is T {
+    // The first success; when all fail, the first failure.
+    async outcome() is T {
         throw NoFutures.none;
     }
 }
 
+// Futures handed out in the order they finish.
 object FutureCompletions<T> {
     has origins is Sequencing<Future<T>>;
 
+    // Watches origins.
     FutureCompletions(:origins);
 
+    // How many have not been handed out.
     remaining_count() is int {
         panic "FutureCompletions.remaining_count is a VM intrinsic";
     }
 
+    // The next future to finish.
     async completion() is Future<T> {
         throw NoFutures.none;
     }
 }
 
+// There were no futures to race.
 enum NoFutures is Error = (none);
+
+async test "all futures, races and first successes" {
+    let events is @Future<Event> = [Event(ready: true).wait(), Event(ready: true).wait()];
+    let all = await AllFutures(origins: events).results();
+    test.is(all.size(), 2);
+    let never = Event();
+    let race is @Future<Event> = [never.wait(), Event(ready: true).wait()];
+    test.ok((await Raced(origins: race).winner()).ready());
+    let nothing is @Future<Event> = [];
+    test.is(
+        try {
+            await Raced(origins: nothing).winner();
+            "won";
+        }
+        catch error is NoFutures {
+            "none";
+        },
+        "none"
+    );
+    test.ok(!never.ready());
+}

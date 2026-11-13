@@ -430,7 +430,7 @@ impl Payload for GroupWait {
     }
 }
 
-/// `FutureGroup.wait` and `FutureScope.result`: run the scope body (scope
+/// `FutureGroup.wait` and `FutureScope.outcome`: run the scope body (scope
 /// only), then wait for every member; a failure from outside (the body's, a
 /// cancellation) cancels the group and is reported after it.
 fn group_wait(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize, scope: bool, deliver: bool) -> Step {
@@ -824,8 +824,7 @@ fn timeout_start(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: us
         runtime.roots.push((limit, Repr::Ref));
         let amount = call_function(ctx, runtime, helpers[offset], &[limit]);
         let result = amount.and_then(|amount| {
-            use num_traits::Signed;
-            if runtime.rational(amount).is_positive() {
+            if runtime.rational(amount).sign() > 0 {
                 call_function(ctx, runtime, helpers[offset + 1], &[clock, limit]).map(Some)
             } else {
                 Some(None)

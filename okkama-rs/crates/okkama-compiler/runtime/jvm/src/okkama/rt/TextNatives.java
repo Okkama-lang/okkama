@@ -40,6 +40,20 @@ public final class TextNatives {
         return state;
     }
 
+    /** Текст, собираемый по кускам (#139): добавление не копирует уже собранное. */
+    public static Object runtime_buffer__text_buffer_create() {
+        return new StringBuilder();
+    }
+
+    public static boolean runtime_buffer__text_buffer_append(Object handle, String text) {
+        ((StringBuilder) handle).append(text);
+        return true;
+    }
+
+    public static String runtime_buffer__text_buffer_text(Object handle) {
+        return ((StringBuilder) handle).toString();
+    }
+
     public static Object runtime_buffer__buffer_state_create(List<?> initial) {
         BufferState state = new BufferState();
         state.bytes = Natives.toBytes(initial);
@@ -500,6 +514,42 @@ public final class TextNatives {
         }
         BigInteger magnitude = new BigInteger(digits, base);
         return negative ? magnitude.negate() : magnitude;
+    }
+
+    /** Decimal float spelling of strings/parse::Number.float (#170), or null. */
+    private static Double floatParse(String text) {
+        String unsigned = text.startsWith("-") ? text.substring(1) : text;
+        int dot = unsigned.indexOf('.');
+        if (dot < 0 || !decimalDigits(unsigned.substring(0, dot)) || !decimalDigits(unsigned.substring(dot + 1))) {
+            return null;
+        }
+        return Double.parseDouble(text);
+    }
+
+    private static boolean decimalDigits(String part) {
+        if (part.isEmpty()) {
+            return false;
+        }
+        for (int index = 0; index < part.length(); index++) {
+            char symbol = part.charAt(index);
+            if (symbol < '0' || symbol > '9') {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public static boolean runtime_number_text__float_parse_valid(String text) {
+        return floatParse(text) != null;
+    }
+
+    public static Double runtime_number_text__float_parse(String text) {
+        Double value = floatParse(text);
+        if (value == null) {
+            throw failure("core.number_text", "invalid_input", "runtime/number_text@1::float_parse/1",
+                    "invalid float spelling");
+        }
+        return value;
     }
 
     public static boolean runtime_number_text__int_parse_valid(String text, BigInteger radix) {

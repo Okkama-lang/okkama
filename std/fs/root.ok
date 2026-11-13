@@ -1,35 +1,220 @@
 module fs/root v1.0.0;
-import "fs/directory" take DirectoryLocating,Directory;
+
+// Reads below one directory that cannot be led out of it: entries are reached
+// by names, one at a time, and links are never followed.
+//
+//     let root = FileRoot(directory: Directory(path: Path("public")));
+//     defer root.close();
+//     let page = root.entry(["docs", "index.html"]);
+//     defer page.close();
+//     let head = page.bytes_at(0, 4096);
+//     let names = root.entry(["docs"]).names(100);
+//
+// Each name must be a plain name, without `/` or `..`, so a request for
+// `../secret` is refused rather than resolved. An entry must be a regular file
+// or a directory. Entries keep their own descriptors and stay usable after the
+// root is closed. http/static serves files this way.
+
+import "fs/directory" take DirectoryLocating, Directory;
 import "fs/path" take Path;
-import "fs/stat" take FileStat,FileStatFromMap;
-import "fs/file" take FileSystemFailure;
+import "fs/stat" take FileStat, FileStatFromMap;
+import "fs/error" take FileError, FileFailure;
 import "runtime/fs" take path_encode;
 import "runtime/fs_root" as rooted;
-import "io/stream" take Closing,InvalidReadLimit;
+import "io/stream" take Closing, InvalidReadLimit;
+import "fs/temp" take TemporaryDirectory;
+import "fs/file" take File, FileMode;
+import "encoding/utf" take Utf8Decoded;
 
 // Eager explicit root acquisition. Children own independent descriptors and
 // remain valid after root close; coordinates never become joined ambient paths.
 object FileRoot does Closing {
     has state is rooted.FileRootState;
-    FileRoot(directory is DirectoryLocating){state=try{rooted.file_root_open(path_encode(directory.path().string()));}catch e is NativeFailure{throw FileSystemFailure.detailed(e.code(), e.message());};}
-    entry(segments is @string) is RootedEntry{let state=try{rooted.file_root_entry(self.state,segments);}catch e is NativeFailure{throw FileSystemFailure.detailed(e.code(), e.message());};RootedEntry(state);}
-    closed() is bool{rooted.file_root_closed(state);}
-    close() is void{try{rooted.file_root_close(state);}catch e is NativeFailure{throw FileSystemFailure.detailed(e.code(), e.message());}}
-    destroy{self.close();}
+
+    // Opens directory now; FileError when it cannot.
+    FileRoot(directory is DirectoryLocating) {
+        state = try {
+            rooted.file_root_open(path_encode(directory.path().string()));
+        }
+        catch e is NativeFailure {
+            throw FileFailure(failure: e, path: directory.path().string()).error();
+        };
+    }
+
+    // The file or directory at these names below the root, opened without
+    // following links; at most 256 names.
+    entry(segments is @string) is RootedEntry {
+        let state = try {
+            rooted.file_root_entry(self.state, segments);
+        }
+        catch e is NativeFailure {
+            throw FileFailure(e).error();
+        };
+        RootedEntry(state);
+    }
+
+    // Whether the root is closed.
+    closed() is bool {
+        rooted.file_root_closed(state);
+    }
+
+    // Closes the root; entries already opened stay usable.
+    close() is void {
+        try {
+            rooted.file_root_close(state);
+        }
+        catch e is NativeFailure {
+            throw FileFailure(e).error();
+        }
+    }
+
+    destroy {
+        self.close();
+    }
 }
+
+// A file or directory opened below a FileRoot.
 object RootedEntry does Closing {
     has state is rooted.RootedEntryState;
-    RootedEntry(state is rooted.RootedEntryState){self.state=state;}
-    stat() is FileStat{let metadata=try{rooted.rooted_entry_stat(state);}catch e is NativeFailure{throw FileSystemFailure.detailed(e.code(), e.message());};FileStatFromMap(origin:metadata).value();}
-    bytes_at(offset is int,limit is int) is @byte{confirm limit>0 else throw InvalidReadLimit.limit(limit);try{rooted.rooted_entry_read(state,offset,limit);}catch e is NativeFailure{throw FileSystemFailure.detailed(e.code(), e.message());}}
-    names(maximum is int) is @string{try{rooted.rooted_entry_names(state,maximum);}catch e is NativeFailure{throw FileSystemFailure.detailed(e.code(), e.message());}}
-    closed() is bool{rooted.rooted_entry_closed(state);}
-    close() is void{try{rooted.rooted_entry_close(state);}catch e is NativeFailure{throw FileSystemFailure.detailed(e.code(), e.message());}}
-    destroy{self.close();}
+
+    // Made by FileRoot.entry(); not constructed directly.
+    RootedEntry(state is rooted.RootedEntryState) {
+        self.state = state;
+    }
+
+    // Its metadata.
+    stat() is FileStat {
+        let metadata = try {
+            rooted.rooted_entry_stat(state);
+        }
+        catch e is NativeFailure {
+            throw FileFailure(e).error();
+        };
+        FileStatFromMap(origin: metadata).stat();
+    }
+
+    // At most limit bytes (1 to 1048576) from offset of a regular file; [] past
+    // its end.
+    bytes_at(offset is int, limit is int) is @byte {
+        confirm limit > 0 else throw InvalidReadLimit.limit(limit);
+        try {
+            rooted.rooted_entry_read(state, offset, limit);
+        }
+        catch e is NativeFailure {
+            throw FileFailure(e).error();
+        }
+    }
+
+    // The bytes from offset on, at most limit of them, read off the program's
+    // thread (#121): a slow disk holds up only the task that awaits it. Past
+    // the end of the file the piece is empty.
+    async piece(offset is int, limit is int) is @byte {
+        confirm limit > 0 else throw InvalidReadLimit.limit(limit);
+        try {
+            await rooted.rooted_entry_piece(state, offset, limit);
+        }
+        catch e is NativeFailure {
+            throw FileFailure(e).error();
+        }
+    }
+
+    // The names in a directory, at most maximum of them.
+    names(maximum is int) is @string {
+        try {
+            rooted.rooted_entry_names(state, maximum);
+        }
+        catch e is NativeFailure {
+            throw FileFailure(e).error();
+        }
+    }
+
+    // Whether it is closed.
+    closed() is bool {
+        rooted.rooted_entry_closed(state);
+    }
+
+    // Closes it.
+    close() is void {
+        try {
+            rooted.rooted_entry_close(state);
+        }
+        catch e is NativeFailure {
+            throw FileFailure(e).error();
+        }
+    }
+
+    destroy {
+        self.close();
+    }
 }
+
 test "explicit root close is idempotent and child descriptor is independent" {
-    let roots is @FileRoot=try{[FileRoot(directory:Directory(path:Path(".")))];}
-        catch e is FileSystemFailure{match e{case FileSystemFailure.detailed(code,_){if code=="unsupported"{[];}else{throw e;}}}};
-    if roots.size()==1{let root=roots[0];let entry=root.entry([]);root.close();root.close();test.ok(root.closed() && !entry.closed());entry.close();test.ok(entry.closed());}
-    else{test.ok(true);}
+    let roots is @FileRoot = try {
+        [FileRoot(directory: Directory(path: Path(".")))];
+    }
+    catch FileError.failed(code, message) {
+        confirm code == "unsupported" else throw FileError.failed(code, message);
+        [];
+    };
+    if roots.size() == 1 {
+        let root = roots[0];
+        let entry = root.entry([]);
+        root.close();
+        root.close();
+        test.ok(root.closed() && !entry.closed());
+        entry.close();
+        test.ok(entry.closed());
+    }
+    else {
+        test.ok(true);
+    }
+}
+
+async test "a rooted piece is read off the program's thread" {
+    let scratch = TemporaryDirectory(parent: Directory(path: Path(".")), prefix: "fs-root-test-");
+    let written = File(path: scratch.path().child("notes.txt"), mode: FileMode.writing);
+    written.text().write("hello, pieces");
+    written.close();
+    let root = FileRoot(directory: Directory(path: scratch.path()));
+    let entry = root.entry(["notes.txt"]);
+    test.is(Utf8Decoded(await entry.piece(offset: 0, limit: 5)).string(), "hello");
+    test.is(Utf8Decoded(await entry.piece(offset: 7, limit: 100)).string(), "pieces");
+    test.is(Utf8Decoded(entry.bytes_at(7, 6)).string(), "pieces");
+    test.is((await entry.piece(offset: 13, limit: 4)).size(), 0);
+    let reading is async (int, int) is @byte = entry.piece;
+    let first = spawn reading(0, 6);
+    let second = spawn reading(7, 6);
+    test.is(Utf8Decoded(await second).string() + Utf8Decoded(await first).string(), "pieceshello,");
+    test.ok(
+        try {
+            await entry.piece(offset: 0, limit: 0);
+            false;
+        }
+        catch e is InvalidReadLimit {
+            true;
+        }
+    );
+    let directory = root.entry([]);
+    test.ok(
+        try {
+            await directory.piece(offset: 0, limit: 1);
+            false;
+        }
+        catch e is FileError {
+            true;
+        }
+    );
+    entry.close();
+    test.ok(
+        try {
+            await entry.piece(offset: 0, limit: 1);
+            false;
+        }
+        catch e is FileError {
+            true;
+        }
+    );
+    directory.close();
+    root.close();
+    scratch.close();
 }

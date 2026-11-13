@@ -18,7 +18,7 @@ mod verify;
 
 pub use asm::{AsmError, assemble, disassemble};
 pub use codec::{CodecError, MAX_FILE_BYTES, VERSION, decode, encode};
-pub use liveness::{MAX_LIVENESS_BYTES, live_counts, live_weight};
+pub use liveness::{MAX_LIVENESS_BYTES, live_counts, live_sets, live_weight, written};
 pub use okkama_runtime_abi as abi;
 pub use operand::{Access, Operand};
 
@@ -43,6 +43,8 @@ pub struct RoleRef(pub u32);
 pub struct EnumRef(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CapRef(pub u32);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct VariantRef(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeRef(pub u32);
 
@@ -143,7 +145,7 @@ op_enum! {
 
 op_enum! {
     /// Вид типа в `catch`.
-    CatchKind { Object = 0, "object", Role = 1, "role" }
+    CatchKind { Object = 0, "object", Role = 1, "role", Variant = 2, "variant" }
 }
 
 op_enum! {
@@ -325,10 +327,25 @@ instructions! {
     /// Ссылка роли → ссылка другой роли; иначе программная ошибка `message`.
     RoleNarrow = 95, "role.narrow" { dst: Dst, source: Register, role: RoleRef, message: String }
 
+    /// Значение варианта (#290): объект случая `case` из полей.
+    VariantNew = 151, "variant.new" { dst: Dst, variant: VariantRef, case: u32, fields: Vec<Register> }
+    /// Номер активного случая (`int`).
+    VariantTag = 152, "variant.tag" { dst: Dst, value: Register }
+    /// Поле `field` случая `case`; другой активный случай — программная ошибка.
+    VariantGet = 153, "variant.get" { dst: Dst, value: Register, case: u32, field: u32 }
+    /// Объект случая → значение варианта.
+    VariantOf = 154, "variant.of" { dst: Dst, source: Register, variant: VariantRef }
+
     ArrayNew = 100, "arr.new" { dst: Dst, elements: Vec<Register> }
     ArrayLen = 101, "arr.len" { dst: Dst, array: Register }
     ArrayGet = 102, "arr.get" { dst: Dst, array: Register, index: Register }
     ArraySlice = 103, "arr.slice" { dst: Dst, array: Register, start: Register, end: Register }
+    /// `array.replaced(index, value)` (#250): a copy with one element
+    /// replaced; out of bounds is a program error, as for `arr.get`.
+    ArrayReplace = 155, "arr.replace" { dst: Dst, array: Register, index: Register, value: Register }
+    /// `array.removed_at(index)` (#251): a copy without one element; out of
+    /// bounds is a program error, as for `arr.get`.
+    ArrayRemove = 156, "arr.remove" { dst: Dst, array: Register, index: Register }
     ArrayJoin = 104, "arr.join" { dst: Dst, array: Register, separator: Register }
     /// `a + b + ...`: один массив под сумму длин частей.
     ArrayConcat = 96, "arr.concat" { dst: Dst, parts: Vec<Register> }
@@ -438,6 +455,8 @@ pub enum Type {
     Successor(ObjectRef),
     Role(RoleRef),
     Enum(EnumRef),
+    /// Значение варианта: ссылка на объект одного из его случаев (#290).
+    Variant(VariantRef),
     Failure,
     Array(TypeRef),
     Never,
@@ -487,6 +506,13 @@ pub struct Witness {
     pub slots: Vec<FuncRef>,
 }
 
+/// Вариант (#290): у каждого случая свой объект раскладки с полями payload.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VariantDecl {
+    pub name: String,
+    pub cases: Vec<(String, ObjectRef)>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObjectDecl {
     pub name: String,
@@ -509,6 +535,23 @@ impl ObjectDecl {
 pub struct GlobalDecl {
     pub ty: TypeRef,
     pub init: FuncRef,
+    /// Значение, записанное данными (#506): рантайм строит его при первом
+    /// чтении сам, без вызова `init`; `init` тогда только читает global.
+    pub data: Option<Data>,
+}
+
+/// Значение константы модуля данными (#506): скаляр, массив или словарь из
+/// таких же значений; форма совпадает с типом global.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Data {
+    Scalar(Constant),
+    Array(Vec<Data>),
+    Map(Vec<(Data, Data)>),
+}
+
+impl Data {
+    /// Наибольшая вложенность массивов и словарей в данных.
+    pub const MAX_DEPTH: usize = 64;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -573,6 +616,7 @@ pub struct Program {
     pub enums: Vec<EnumDecl>,
     pub roles: Vec<RoleDecl>,
     pub objects: Vec<ObjectDecl>,
+    pub variants: Vec<VariantDecl>,
     pub handles: Vec<String>,
     pub caps: Vec<CapDecl>,
     pub globals: Vec<GlobalDecl>,

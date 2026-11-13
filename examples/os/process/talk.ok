@@ -1,0 +1,32 @@
+module examples/os/process/talk v1.0.0;
+
+import "fs/path" take Path;
+import "os/command" take InheritedCommand;
+import "os/process" take ExitKind, Process, Signal;
+import "io/stdout" take Stdout;
+
+// Talk to a running program: write to its input, close it to send EOF, read
+// its output, wait for its exit. Nothing starts until the first question.
+// A long-running program is stopped with a signal.
+
+async main() is int {
+    let out = Stdout();
+
+    let upper = Process(command: InheritedCommand(program: Path("tr"), arguments: ["a-z", "A-Z"]));
+    let input = upper.input();
+    input.write("quiet words\n");
+    input.close();
+    let heard = upper.output().text(limit: 64);
+    out.write("heard: " + heard);
+    out.writeln("exit: ", (await upper.exit()).success());
+    upper.close();
+
+    let sleeper = Process(command: InheritedCommand(program: Path("sleep"), arguments: ["60"]));
+    out.writeln("running: ", sleeper.running());
+    sleeper.signal(Signal.terminate);
+    let ended = await sleeper.exit();
+    out.writeln("terminated: ", ended::Status::kind == ExitKind.terminated);
+    out.writeln("running: ", sleeper.running());
+    sleeper.close();
+    0;
+}

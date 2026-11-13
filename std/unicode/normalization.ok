@@ -10,37 +10,63 @@ import "runtime/unicode_normalization" take normalized_text;
 //     string Normalized(origin: "é", form: NormalizationForm.nfc);
 //     // "é"
 //
-//     string Normalized(origin: "ﬃ", form: NormalizationForm.nfkc);
+//     Normalized(origin: "ﬃ", form: NormalizationForm.nfkc).string();
 //     // "ffi"
 //
 // Normalization never trims, case-folds or otherwise rewrites text beyond the
 // selected Unicode normalization algorithm. The source string remains
 // unchanged and normalizing an already normalized result is idempotent.
 
+// NFC and NFD compose and decompose; NFKC and NFKD also fold compatibility
+// forms such as `ﬁ`.
 enum NormalizationForm = (nfc, nfd, nfkc, nfkd);
 
+// Text in a Unicode normalization form.
 object Normalized {
     has origin is string;
     has form is NormalizationForm;
 
+    // origin in form.
     Normalized(origin is string, form is NormalizationForm) {
         self.origin = origin;
         self.form = form;
     }
 
+    // The normalized text.
     string() is string {
         normalized_text(origin, self.form_name());
     }
 
-    private:
-
-    form_name() is string {
+    hidden form_name() is string {
         match form {
-            case NormalizationForm.nfc { "NFC"; }
-            case NormalizationForm.nfd { "NFD"; }
-            case NormalizationForm.nfkc { "NFKC"; }
-            case NormalizationForm.nfkd { "NFKD"; }
-            else { "NFC"; }
+            case NormalizationForm.nfc {
+                "NFC";
+            }
+            case NormalizationForm.nfd {
+                "NFD";
+            }
+            case NormalizationForm.nfkc {
+                "NFKC";
+            }
+            case NormalizationForm.nfkd {
+                "NFKD";
+            }
+            else {
+                "NFC";
+            }
         }
     }
+}
+
+test "the four forms" {
+    let composed = "\u{00E9}";
+    let decomposed = "e\u{0301}";
+    test.is(Normalized(origin: decomposed, form: NormalizationForm.nfc).string(), composed);
+    test.is(Normalized(origin: composed, form: NormalizationForm.nfd).string(), decomposed);
+    test.is(Normalized(origin: "ﬃ", form: NormalizationForm.nfkc).string(), "ffi");
+    test.is(Normalized(origin: "ﬃ", form: NormalizationForm.nfc).string(), "ﬃ");
+    test.is(Normalized(origin: "\u{1E9B}\u{0323}", form: NormalizationForm.nfkd).string(), "s\u{0323}\u{0307}");
+    let once = Normalized(origin: decomposed, form: NormalizationForm.nfc).string();
+    test.is(Normalized(origin: once, form: NormalizationForm.nfc).string(), once);
+    test.is(Normalized(origin: " a ", form: NormalizationForm.nfkc).string(), " a ");
 }

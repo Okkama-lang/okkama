@@ -17,8 +17,7 @@ object C {
     add(value is int) is int { n + value; }
     add(value is string) is int { n; }
     twice() is int { self.helper() * 2; }
-    private:
-    helper() is int { n; }
+    hidden helper() is int { n; }
 }
 ";
 
@@ -130,7 +129,7 @@ fn rebinding_in_loops_and_branches_threads_values_through_parameters() {
         main.contains("%7: ^C = call @C.inc(%5)\n    %8: C = succ.take %7\n"),
         "{main}"
     );
-    assert!(main.contains("br ^b2(%11, %9)"), "{main}");
+    assert!(main.contains("br ^b2(%10, %8)"), "{main}");
     // Обе ветви `if` перепривязывают `c`: значение приходит параметром.
     assert!(main.matches("succ.take").count() >= 3, "{main}");
     assert!(main.contains("(%"), "{main}");
@@ -242,16 +241,16 @@ fn construction_and_access_errors_use_okkama_messages() {
     for (body, expected) in [
         (
             "C(1, 2).value();",
-            "No constructor of \"C\" accepts (int, int)",
+            "No constructor of \"C\" accepts (int, int)\nAvailable: C(); C(n is int)",
         ),
         ("C().missing();", "Object \"C\" has no action \"missing\""),
         (
             "C().add(true);",
-            "No action \"add\" on object \"C\" accepts (bool)",
+            "No action \"add\" on object \"C\" accepts (bool)\nAvailable: add(value is int); add(value is string)",
         ),
         (
             "C().helper();",
-            "Action \"helper\" on object \"C\" is private",
+            "Action \"helper\" on object \"C\" is hidden",
         ),
         (
             "let c = C(); c.n;",

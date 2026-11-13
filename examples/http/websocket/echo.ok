@@ -1,0 +1,74 @@
+module examples/http/websocket/echo v1.0.0;
+
+import "http/server" take HttpServer;
+import "http/handler" take Handling, HandlingResult, WebSocketHandling, WebSocketHandlingResult;
+import "http/request_context" take HttpRequestContext;
+import "http/message" take Request;
+import "http/header" take Headers, Header, HeaderName;
+import "http/websocket" take WebSocketConnection, WebSocketLimits;
+import "http/websocket_server" take WebSocketUpgrade;
+import "http/websocket_origin" take SameOriginWebSockets;
+import "http/websocket_client" take WebSocketConnecting, WebSocketPolicy;
+import "http/endpoint" take LoopbackEndpoints;
+import "net/tcp" take TcpListening;
+import "net/dns" take FixedResolution;
+import "url/value" take ParsedUrl;
+import "time/duration" take Duration;
+import "io/stdout" take Stdout;
+
+// A WebSocket server and client in one program. The handler answers an
+// upgrade with a WebSocketUpgrade and an application object; the application
+// then talks over the connection until the client closes. The server checks
+// the Origin against its own URL, so the client sends one.
+
+object Shouting does Handling, WebSocketHandling {
+    Shouting();
+
+    async handling(request is Request, context is HttpRequestContext) is HandlingResult {
+        WebSocketHandlingResult(
+            origin: WebSocketUpgrade(
+                protocols: [],
+                limits: WebSocketLimits(),
+                access: SameOriginWebSockets(),
+                deadline: Duration(seconds: 5),
+            ),
+            application: self,
+        );
+    }
+
+    async handle(connection is WebSocketConnection, request is Request, context is HttpRequestContext) is WebSocketHandling {
+        // The walk ends when the client closes the connection.
+        for await connection -> message {
+            await connection.send_text(message.text().upper() + "!");
+        }
+        self;
+    }
+}
+
+async main() is int {
+    let out = Stdout();
+    let listener = await TcpListening(port: 0).listener();
+    let site = "http://127.0.0.1:" + listener::Local::port.string();
+    let server = HttpServer(listener: listener, handling: Shouting(), url: ParsedUrl(site + "/").parts()).started();
+    
+    let connection = await WebSocketConnecting(
+        url: ParsedUrl("ws://127.0.0.1:" + server::Local::port.string() + "/shout").parts(),
+        headers: Headers(Header(name: HeaderName("Origin"), value: site)),
+        resolver: FixedResolution(),
+        policy: WebSocketPolicy(
+            limits: WebSocketLimits(),
+            opening: Duration(seconds: 5),
+            closing: Duration(seconds: 2),
+            access: LoopbackEndpoints(),
+        ),
+    ).connection();
+    for ["hello", "how are you"] -> text {
+        await connection.send_text(text);
+        out.writeln(text + " -> " + (await connection.message()).text());
+    }
+    await connection.close(1000, "bye");
+    out.writeln("closed: ", connection.closed());
+
+    await server.drain(limit: Duration(seconds: 5));
+    0;
+}

@@ -5,7 +5,15 @@
 use std::process::{Command, Output};
 
 fn run(engine: &str, source: &str, budget: &[&str]) -> Output {
-    let path = std::env::temp_dir().join(format!("budgets-{}-{engine}-{}.ok", std::process::id(), budget.join("_").replace(['-', '/'], "")));
+    // One file per run: tests run in parallel, and two of them may run the
+    // same engine with the same budget.
+    static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let run = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "budgets-{}-{run}-{engine}-{}.ok",
+        std::process::id(),
+        budget.join("_").replace(['-', '/'], "")
+    ));
     std::fs::write(&path, source).unwrap();
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let output = Command::new(env!("CARGO_BIN_EXE_okkama"))
@@ -184,3 +192,42 @@ fn long_host_operations_stop_for_the_timeout() {
         }
     }
 }
+
+/// Finished tasks are not kept (#503): each step starts a task in its own
+/// FutureGroup, awaits it and drops the group. The core kept every spawned
+/// task as a root and every group's tasks as roots, so memory grew with the
+/// steps until the budget stopped it; now it stays flat on every engine.
+const WORKERS: &str = "module app v1.0.0;
+import \"async/scope\" take FutureGroup;
+import \"async/event\" take Event;
+import \"async/atomic\" take Atomic;
+import \"io/stdout\" take Stdout;
+object Worker {
+    has group is FutureGroup<bool>;
+    has done is Event;
+    Worker() { group = FutureGroup(); done = Event(); }
+    start() is void { group.start(self.run()); }
+    async run() is bool { defer done.set(); true; }
+    async settled() is bool { await group.wait(); true; }
+}
+async main() is int {
+    let count = Atomic(0);
+    loop {
+        last if count.value() == 500000;
+        let worker = Worker();
+        worker.start();
+        await worker.settled();
+        count.replace(count.value() + 1);
+    }
+    Stdout().writeln(count.value().string());
+    0;
+}
+";
+
+#[test]
+fn finished_tasks_and_their_groups_are_collected() {
+    let output = run("sparrow", WORKERS, &["--max-memory", "64M", "--timeout", "120"]);
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim_end(), "500000", "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(output.status.code(), Some(0));
+}
+

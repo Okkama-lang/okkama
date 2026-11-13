@@ -161,8 +161,23 @@
       "family": "Objects, roles, caps and successors"
     },
     {
-      "id": "OBJ.PRIVATE-ACTIONS",
-      "title": "Private actions are callable only through self of the same object",
+      "id": "OBJ.ONCE-LET",
+      "title": "once let computes a value once per object; slots stay out of equality and reset in successors",
+      "spec_refs": [
+        "docs/OkkamaBook.md#186-once-let"
+      ],
+      "status": "mandatory",
+      "aspects": {
+        "normal": "required",
+        "boundary": "required",
+        "invalid": "required",
+        "interaction": "required"
+      },
+      "family": "Objects, roles, caps and successors"
+    },
+    {
+      "id": "OBJ.HIDDEN-ACTIONS",
+      "title": "Hidden actions are callable only through self of the same object",
       "spec_refs": [
         "docs/okkama-spec-11072026.md#11.7"
       ],

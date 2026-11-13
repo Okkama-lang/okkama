@@ -1,7 +1,6 @@
 module encoding/base64 v1.0.0;
 
-import "runtime/base64" take
-    base64_encode, base64_invalid_offset, base64_decode;
+import "runtime/base64" take base64_encode, base64_invalid_offset, base64_decode;
 
 // Strict RFC 4648 Base64 with explicit standard and URL-safe alphabets.
 //
@@ -22,47 +21,59 @@ import "runtime/base64" take
 // Empty input is valid. InvalidBase64.offset() is a Unicode-scalar offset; a
 // structurally incomplete final quantum reports origin.length().
 
+// standard uses `+` and `/`; url uses `-` and `_`.
 enum Base64Alphabet = (standard, url);
 
+// Bytes as RFC 4648 Base64 text, padded.
 object Base64Encoded {
     has origin is @byte;
     has alphabet is Base64Alphabet;
 
+    // Encodes origin with the standard alphabet.
     Base64Encoded(origin is @byte) {
         self.origin = origin;
         alphabet = Base64Alphabet.standard;
     }
 
+    // Encodes origin with alphabet.
     Base64Encoded(origin is @byte, alphabet is Base64Alphabet) {
         self.origin = origin;
         self.alphabet = alphabet;
     }
 
+    // The text.
     string() is string {
         base64_encode(origin, self.alphabet_name());
     }
 
-    private:
-
-    alphabet_name() is string {
-        if alphabet == Base64Alphabet.standard { "standard"; } else { "url"; }
+    hidden alphabet_name() is string {
+        if alphabet == Base64Alphabet.standard {
+            "standard";
+        }
+        else {
+            "url";
+        }
     }
 }
 
+// RFC 4648 Base64 text back to bytes; anything else is InvalidBase64.
 object Base64Decoded {
     has origin is string;
     has alphabet is Base64Alphabet;
 
+    // Decodes the standard alphabet.
     Base64Decoded(origin is string) {
         self.origin = origin;
         alphabet = Base64Alphabet.standard;
     }
 
+    // Decodes alphabet.
     Base64Decoded(origin is string, alphabet is Base64Alphabet) {
         self.origin = origin;
         self.alphabet = alphabet;
     }
 
+    // The bytes.
     bytes() is @byte {
         let name is string = self.alphabet_name();
         let offset is int = base64_invalid_offset(origin, name);
@@ -70,11 +81,42 @@ object Base64Decoded {
         base64_decode(origin, name);
     }
 
-    private:
-
-    alphabet_name() is string {
-        if alphabet == Base64Alphabet.standard { "standard"; } else { "url"; }
+    hidden alphabet_name() is string {
+        if alphabet == Base64Alphabet.standard {
+            "standard";
+        }
+        else {
+            "url";
+        }
     }
 }
 
+// Text that is not strict Base64; offset says where.
 enum InvalidBase64 is Error = (at(offset is int));
+
+test "base64 round-trips in both alphabets" {
+    let foob = [byte(102), byte(111), byte(111), byte(98)];
+    test.is(Base64Encoded(origin: foob).string(), "Zm9vYg==");
+    test.is(Base64Decoded(origin: "Zm9vYg==").bytes(), foob);
+    let high = [byte(251), byte(255)];
+    test.is(Base64Encoded(origin: high).string(), "+/8=");
+    test.is(Base64Encoded(origin: high, alphabet: Base64Alphabet.url).string(), "-_8=");
+    test.is(Base64Decoded(origin: "-_8=", alphabet: Base64Alphabet.url).bytes(), high);
+}
+
+test "base64 refuses the other alphabet and loose padding" {
+    let offset = (text is string, alphabet is Base64Alphabet) is int {
+        try {
+            Base64Decoded(origin: text, alphabet: alphabet).bytes();
+            -1;
+        }
+        catch InvalidBase64.at(offset) {
+            offset;
+        }
+    };
+    test.is(offset("-_8=", Base64Alphabet.standard), 0);
+    test.is(offset("+/8=", Base64Alphabet.url), 0);
+    test.is(offset("Zm9vYg=", Base64Alphabet.standard), 7);
+    test.is(offset("Zm9v Yg==", Base64Alphabet.standard), 4);
+    test.is(offset("Zm9vYh==", Base64Alphabet.standard) >= 0, true);
+}

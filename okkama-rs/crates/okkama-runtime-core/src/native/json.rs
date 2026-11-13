@@ -2,9 +2,11 @@
 //! `JsonNatives` JVM. Смещения, строки и столбцы — в символах (code points),
 //! тексты отказов — как у Perl-provider.
 use super::Error;
+use super::json_split::{SplitState, Splitter, Step};
 use super::support::{failure, handle, int, int_value, items, new_handle, string, text};
-use crate::{IntValue, Value, abi::Native};
-use std::cell::RefCell;
+use crate::{IntValue, Value, abi::Native, heap::ArrayHeap};
+use std::cell::{OnceCell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 /// Глубина рекурсии разбора, на которой JVM теряет стек (`StackOverflowError`).
@@ -18,7 +20,51 @@ enum Node {
     Number(Rc<str>),
     Text(Rc<str>),
     Array(Vec<Rc<Node>>),
-    Object(Vec<Rc<str>>, Vec<Rc<Node>>),
+    Object(Names, Vec<Rc<Node>>),
+}
+
+/// Объект меньше этого ищет член перебором: так быстрее, чем хешировать.
+const INDEXED_OBJECT: usize = 16;
+
+/// Имена членов объекта в порядке документа. Большой объект ищет имя по
+/// индексу, построенному при первом поиске: иначе обход `names()` и `get()`
+/// квадратичен (#352).
+#[derive(Debug)]
+struct Names {
+    list: Vec<Rc<str>>,
+    // Box: индекс есть у немногих объектов, а размер `Node` — у каждого узла.
+    #[allow(clippy::box_collection)]
+    index: OnceCell<Box<HashMap<Rc<str>, usize>>>,
+}
+
+impl Names {
+    fn position(&self, sought: &str) -> Option<usize> {
+        if self.list.len() < INDEXED_OBJECT {
+            return self.list.iter().position(|name| &**name == sought);
+        }
+        let index = self.index.get_or_init(|| {
+            let mut index = HashMap::with_capacity(self.list.len());
+            for (at, name) in self.list.iter().enumerate() {
+                index.entry(name.clone()).or_insert(at);
+            }
+            Box::new(index)
+        });
+        index.get(sought).copied()
+    }
+}
+
+impl From<Vec<Rc<str>>> for Names {
+    fn from(list: Vec<Rc<str>>) -> Self {
+        Names { list, index: OnceCell::new() }
+    }
+}
+
+impl std::ops::Deref for Names {
+    type Target = [Rc<str>];
+
+    fn deref(&self) -> &[Rc<str>] {
+        &self.list
+    }
 }
 
 impl Node {
@@ -307,7 +353,7 @@ impl Parser<'_> {
         let mut seen: std::collections::HashSet<Rc<str>> = std::collections::HashSet::new();
         if self.at(self.position) == Some('}') {
             self.position += 1;
-            return Ok(Node::Object(names, values));
+            return Ok(Node::Object(names.into(), values));
         }
         loop {
             let name_offset = self.position;
@@ -338,7 +384,7 @@ impl Parser<'_> {
             match self.at(self.position) {
                 Some('}') => {
                     self.position += 1;
-                    return Ok(Node::Object(names, values));
+                    return Ok(Node::Object(names.into(), values));
                 }
                 Some(',') => {}
                 _ => return Err(self.error("expected comma or closing brace in JSON object")),
@@ -405,26 +451,7 @@ fn parsed(value: &Value) -> Result<Rc<Outcome>, Error> {
             duplicate: None,
         },
         Err(error) => {
-            let (mut line, mut column, mut position) = (1, 1, 0);
-            while position < error.offset {
-                let character = state.source[position];
-                if character == '\r' {
-                    position += 1;
-                    if position < error.offset && state.source[position] == '\n' {
-                        position += 1;
-                    }
-                    line += 1;
-                    column = 1;
-                    continue;
-                }
-                if character == '\n' {
-                    line += 1;
-                    column = 1;
-                } else {
-                    column += 1;
-                }
-                position += 1;
-            }
+            let (line, column) = located(&state.source, error.offset);
             Outcome {
                 root: None,
                 offset: error.offset as i64,
@@ -438,6 +465,62 @@ fn parsed(value: &Value) -> Result<Rc<Outcome>, Error> {
     let outcome = Rc::new(outcome);
     *state.outcome.borrow_mut() = Some(outcome.clone());
     Ok(outcome)
+}
+
+/// Line and column of `offset` in `source`, from 1; CR LF is one line break.
+fn located(source: &[char], offset: usize) -> (i64, i64) {
+    let (mut line, mut column, mut position) = (1, 1, 0);
+    while position < offset {
+        let character = source[position];
+        if character == '\r' {
+            position += 1;
+            if position < offset && source[position] == '\n' {
+                position += 1;
+            }
+            line += 1;
+            column = 1;
+            continue;
+        }
+        if character == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+        position += 1;
+    }
+    (line, column)
+}
+
+/// JSON as UTF-8 bytes (#135): the parser reads the decoded characters, with
+/// no text in between. Bytes that are not UTF-8 fail where the valid prefix
+/// ends, as a parse error there would.
+fn bytes_state(bytes: &[u8], maximum_depth: IntValue) -> ParseState {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => ParseState {
+            source: text.chars().collect(),
+            maximum_depth,
+            outcome: RefCell::new(None),
+        },
+        Err(error) => {
+            let valid = std::str::from_utf8(&bytes[..error.valid_up_to()]).unwrap_or_default();
+            let source: Vec<char> = valid.chars().collect();
+            let (line, column) = located(&source, source.len());
+            let outcome = Outcome {
+                root: None,
+                offset: source.len() as i64,
+                line,
+                column,
+                message: "invalid UTF-8".into(),
+                duplicate: None,
+            };
+            ParseState {
+                source,
+                maximum_depth,
+                outcome: RefCell::new(Some(Rc::new(outcome))),
+            }
+        }
+    }
 }
 
 /// JSON text being written: appends go to the end, and every append answers
@@ -609,7 +692,7 @@ fn node_value(node: Rc<Node>) -> Value {
     new_handle(node)
 }
 
-pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
+pub fn execute(native: Native, args: &[Value], arrays: &ArrayHeap) -> Result<Value, Error> {
     let invalid = |message: &str| failure("core.json", "invalid_input", native, message);
     match native {
         Native::JsonJsonParseState => Ok(new_handle(ParseState {
@@ -617,6 +700,47 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             maximum_depth: int(&args[1])?.clone(),
             outcome: RefCell::new(None),
         })),
+        // Items cut from a stream (#136).
+        Native::JsonJsonSplitState => {
+            let maximum = int(&args[0])?.to_i64().filter(|n| *n >= 0).ok_or_else(|| invalid("maximum item size"))?;
+            Ok(new_handle(SplitState(RefCell::new(Splitter::new(maximum as usize)))))
+        }
+        Native::JsonJsonSplitFeed => {
+            let elements = arrays.elements(&args[1])?;
+            let bytes = elements.iter().map(Value::as_byte).collect::<Result<Vec<_>, _>>()?;
+            handle::<SplitState>(&args[0])?.0.borrow_mut().feed(&bytes);
+            Ok(Value::Bool(true))
+        }
+        Native::JsonJsonSplitFinish => {
+            handle::<SplitState>(&args[0])?.0.borrow_mut().finish();
+            Ok(Value::Bool(true))
+        }
+        Native::JsonJsonSplitNext => {
+            let step = handle::<SplitState>(&args[0])?.0.borrow_mut().advance();
+            Ok(text(match step {
+                Step::Item => "item",
+                Step::More => "more",
+                Step::End => "end",
+                Step::Error => "error",
+            }))
+        }
+        Native::JsonJsonSplitItem => {
+            let state = handle::<SplitState>(&args[0])?.0.borrow();
+            Ok(super::support::byte_array(state.item().iter().copied()))
+        }
+        Native::JsonJsonSplitError => {
+            let state = handle::<SplitState>(&args[0])?.0.borrow();
+            Ok(text(state.error().map(|(_, message)| message.clone()).unwrap_or_default()))
+        }
+        Native::JsonJsonSplitOffset => {
+            let state = handle::<SplitState>(&args[0])?.0.borrow();
+            Ok(int_value(state.error().map_or(0, |(offset, _)| *offset as i64)))
+        }
+        Native::JsonJsonParseBytesState => {
+            let elements = arrays.elements(&args[0])?;
+            let bytes = elements.iter().map(Value::as_byte).collect::<Result<Vec<_>, _>>()?;
+            Ok(new_handle(bytes_state(&bytes, int(&args[1])?.clone())))
+        }
         Native::JsonJsonParseValid => Ok(Value::Bool(parsed(&args[0])?.root.is_some())),
         Native::JsonJsonParseHasDuplicate => Ok(Value::Bool(parsed(&args[0])?.duplicate.is_some())),
         Native::JsonJsonParseOffset => Ok(int_value(parsed(&args[0])?.offset)),
@@ -673,7 +797,7 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
         Native::JsonJsonMemberPosition => match node(&args[0])?.as_ref() {
             Node::Object(names, _) => {
                 let sought = string(&args[1])?;
-                Ok(int_value(names.iter().position(|name| &**name == sought).map_or(-1, |at| at as i64)))
+                Ok(int_value(names.position(sought).map_or(-1, |at| at as i64)))
             }
             _ => Err(invalid("JSON node is not an object")),
         },
@@ -752,7 +876,7 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             if !names.iter().all(|name| seen.insert(&**name)) {
                 return Err(invalid("duplicate JSON member name"));
             }
-            Ok(node_value(Rc::new(Node::Object(names, values))))
+            Ok(node_value(Rc::new(Node::Object(names.into(), values))))
         }
         Native::JsonJsonNodeWrite => {
             let indentation = int(&args[1])?.to_i64().ok_or_else(|| invalid("JSON indentation is out of range"))?;

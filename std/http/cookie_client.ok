@@ -1,9 +1,18 @@
 module http/cookie_client v1.0.0;
-import "http/client" take Exchanging;
-import "http/exchange" take ClientResponse;
+
+// Sending and keeping cookies around a client.
+//
+//     let client = CookieExchanging(origin: HttpClient(), jar: MemoryCookieJar(), contexts: FirstPartyCookies());
+//     await client.response(Request(url: "https://example.com/"));
+//
+// HttpClient(cookies: jar) does this for you. The jar's cookies go out in one
+// Cookie field; the Set-Cookie fields of every hop are kept. A Cookie field the
+// caller set is refused unless CallerCookiePolicy says to keep or replace it.
+
+import "http/exchange" take ClientResponse, Exchanging;
 import "http/message" take Request;
 import "http/target" take RequestTargetKind;
-import "http/header" take Header,HeaderName,HeadersWithout;
+import "http/header" take Header, HeaderName, HeadersWithout;
 import "http/cookie_jar" take CookieStoring;
 import "http/cookie_policy" take CookieContext;
 import "http/cookie" take Cookie;
@@ -17,62 +26,179 @@ import "http/method" take Method;
 import "http/header" take Headers;
 import "url/value" take ParsedUrl;
 
-role CookieContextualizing {context(request is Request) is CookieContext;}
+// What decides the cookie context of a request.
+role CookieContextualizing {
+    // The context of request.
+    context(request is Request) is CookieContext;
+}
+
+// Every request is first-party and top-level, as for a plain HTTP client.
 object FirstPartyCookies does CookieContextualizing {
+    // The policy.
     FirstPartyCookies();
-    context(request is Request) is CookieContext{
-        confirm request.target().kind()==RequestTargetKind.absolute else throw InvalidArgument.because("absolute cookie request required");
-        CookieContext(request.target().url(),true,request.method());
+
+    // The request's own site, top-level; the target must be absolute.
+    context(request is Request) is CookieContext {
+        confirm request::Head::target.kind() == RequestTargetKind.absolute
+            else throw InvalidArgument.because("absolute cookie request required");
+        CookieContext(
+            site: request::Head::target.url(),
+            top_level: true,
+            method: request::Head::method
+        );
     }
 }
-enum CallerCookiePolicy=(reject,preserve,replace);
+
+// What to do with a Cookie field the caller set: refuse it, send it instead of
+// the jar's, or replace it with the jar's.
+enum CallerCookiePolicy = (reject, preserve, replace);
+
+// A client that sends and keeps cookies.
 object CookieExchanging does Exchanging {
-    has origin is Exchanging;has jar is CookieStoring;has contexts is CookieContextualizing;has conflict is CallerCookiePolicy;
-    CookieExchanging(origin is Exchanging,jar is CookieStoring,contexts is CookieContextualizing){self.origin=origin;self.jar=jar;self.contexts=contexts;conflict=CallerCookiePolicy.reject;}
-    CookieExchanging(origin is Exchanging,jar is CookieStoring,contexts is CookieContextualizing,conflict is CallerCookiePolicy){self.origin=origin;self.jar=jar;self.contexts=contexts;self.conflict=conflict;}
-    async response(request is Request) is ClientResponse{
-        confirm request.target().kind()==RequestTargetKind.absolute else throw InvalidArgument.because("absolute cookie request required");
-        let supplied=request.headers().values(HeaderName("Cookie"));
-        confirm supplied.size()<=1 && (supplied.size()==0 || conflict!=CallerCookiePolicy.reject) else throw CallerCookieConflict.conflict;
-        let context=contexts.context(request);
-        let fields=if supplied.size()==1 && conflict==CallerCookiePolicy.preserve{request.headers();}else{
-            let selected=CookieRequestPairs(jar.cookies(request.target().url(),context)).string();
-            let clean=HeadersWithout(request.headers(),[HeaderName("Cookie")]).result();
-            if selected==""{clean;}else{clean.addition(Header(HeaderName("Cookie"),selected));}
+    has origin is Exchanging;
+    has jar is CookieStoring;
+    has contexts is CookieContextualizing;
+    has conflict is CallerCookiePolicy;
+
+    // Sends through origin with jar; a caller's Cookie field is
+    // CallerCookieConflict.
+    CookieExchanging(origin is Exchanging, jar is CookieStoring, contexts is CookieContextualizing) {
+        self.origin = origin;
+        self.jar = jar;
+        self.contexts = contexts;
+        conflict = CallerCookiePolicy.reject;
+    }
+
+    // The same, with conflict deciding about a caller's Cookie field.
+    CookieExchanging(
+        origin is Exchanging,
+        jar is CookieStoring,
+        contexts is CookieContextualizing,
+        conflict is CallerCookiePolicy
+    ) {
+        self.origin = origin;
+        self.jar = jar;
+        self.contexts = contexts;
+        self.conflict = conflict;
+    }
+
+    // Sends request with the jar's cookies and keeps what came back.
+    async response(request is Request) is ClientResponse {
+        confirm request::Head::target.kind() == RequestTargetKind.absolute
+            else throw InvalidArgument.because("absolute cookie request required");
+        let supplied = request::Head::headers.values(HeaderName("Cookie"));
+        confirm supplied.size() <= 1
+            && (supplied.size() == 0 || conflict != CallerCookiePolicy.reject)
+            else throw CallerCookieConflict.conflict;
+        let context = contexts.context(request);
+        let fields = if supplied.size() == 1 && conflict == CallerCookiePolicy.preserve {
+            request::Head::headers;
+        }
+        else {
+            let selected = CookieRequestPairs(jar.cookies(request::Head::target.url(), context)).string();
+            let clean = HeadersWithout(
+                origin: request::Head::headers,
+                names: [HeaderName("Cookie")]
+            ).headers();
+            if selected == "" {
+                clean;
+            }
+            else {
+                clean.addition(Header(name: HeaderName("Cookie"), value: selected));
+            }
         };
-        let outgoing=Request(request.method(),request.target(),fields,request.body(),request.version());
-        let result=await origin.response(outgoing);let retained=Event();let cleanup=RedirectResponseCleanup(result.response(),retained);defer cleanup.close();
+        let outgoing = Request(
+            method: request::Head::method,
+            target: request::Head::target,
+            headers: fields,
+            body: request.body(),
+            version: request::Head::version
+        );
+        let result = await origin.response(outgoing);
+        let retained = Event();
+        let cleanup = RedirectResponseCleanup(
+            response: result::Exchange::response,
+            retained: retained
+        );
+        defer cleanup.close();
         // Storage is correct even if a caller places this outside Redirecting,
         // but selection per hop requires Redirecting(CookieExchanging(...)).
-        for result.history()->hop{jar.store(hop.request().target().url(),hop.response().headers(),contexts.context(hop.request()));}
-        let same_hop=result.history().size()==0 && result.request().target().url().string()==request.target().url().string();
-        let effective_context=if same_hop{context;}else{contexts.context(result.request());};
-        jar.store(result.request().target().url(),result.response().headers(),effective_context);
+        for result::Exchange::history -> hop {
+            jar.store(
+                hop::Exchange::request::Head::target.url(),
+                hop::Exchange::response::Head::headers,
+                contexts.context(hop::Exchange::request)
+            );
+        }
+        let same_hop = result::Exchange::history.size() == 0
+            && result::Exchange::request::Head::target.url().string() == request::Head::target.url().string();
+        let effective_context = if same_hop {
+            context;
+        }
+        else {
+            contexts.context(result::Exchange::request);
+        };
+        jar.store(
+            result::Exchange::request::Head::target.url(),
+            result::Head::headers,
+            effective_context
+        );
         // Generated jar headers are internal to this hop. Returning the caller's
         // coordinates prevents the next redirect from treating them as explicit
         // caller Cookie fields. Preserve an origin's actual multi-hop result.
-        let reported=if same_hop{ClientResponse(request,result.response(),result.details());}else{result;};
-        retained.set();reported;
-    }
-}
-object CookieRequestPairs {
-    has text is string;
-    CookieRequestPairs(cookies is Sequencing<Cookie>){
-        let count=cookies.size();confirm count>=0 && count<=256 else throw CookieExchangeLimit.because("cookie count");
-        let used=Atomic(0);
-        let pairs is @string=(0..count).map()->index{
-            let pair=cookies.item(index).pair();let size=used.value()+pair.length()+2;
-            confirm size<=65536 else throw CookieExchangeLimit.because("cookie bytes");used.replace(size);pair;
+        let reported = if same_hop {
+            ClientResponse(
+                request: request,
+                response: result::Exchange::response,
+                details: result::Exchange::details
+            );
+        }
+        else {
+            result;
         };
-        text=pairs.join("; ");
+        retained.set();
+        reported;
     }
-    string() is string{text;}
 }
+
+hidden object CookieRequestPairs {
+    has text is string;
+
+    CookieRequestPairs(cookies is Sequencing<Cookie>) {
+        let count = cookies.size();
+        confirm count >= 0 && count <= 256 else throw CookieExchangeLimit.because("cookie count");
+        let used = Atomic(0);
+        let pairs is @string = (0..count).map() -> index {
+            let pair = cookies.item(index).pair();
+            let size = used.value() + pair.length() + 2;
+            confirm size <= 65536 else throw CookieExchangeLimit.because("cookie bytes");
+            used.replace(size);
+            pair;
+        };
+        text = pairs.join("; ");
+    }
+
+    string() is string {
+        text;
+    }
+}
+
+// The request already had a Cookie field.
 enum CallerCookieConflict is Error = (conflict);
+
+// A cookie exchange went over a limit; reason says which.
 enum CookieExchangeLimit is Error = (because(reason is string));
+
 test "first-party cookies use the current request site and method" {
-    let request=Request(Method("POST"),AbsoluteTarget(ParsedUrl("https://example.com/path").value()),Headers([]));
-    let context=FirstPartyCookies().context(request);
-    test.ok(context.top_level() && context.method().string()=="POST" && context.site().string()=="https://example.com/path");
-    test.ok(CookieRequestPairs([]).string()=="");
+    let request = Request(
+        method: Method.post,
+        target: AbsoluteTarget(ParsedUrl("https://example.com/path").parts())
+    );
+    let context = FirstPartyCookies().context(request);
+    test.ok(
+        context::Context::top_level
+            && context::Context::method == Method.post
+            && context.site().string() == "https://example.com/path"
+    );
+    test.ok(CookieRequestPairs([]).string() == "");
 }

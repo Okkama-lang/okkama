@@ -996,10 +996,10 @@ pub fn same(host: &dyn Host, left: &Value, right: &Value) -> Result<bool> {
     match (left, right) {
         (Value::Any(a), Value::Any(b)) => same(host, a, b),
         (Value::Array(a), Value::Array(b)) => {
-            if a.0.len() != b.0.len() {
+            if a.len() != b.len() {
                 return Ok(false);
             }
-            for (x, y) in a.0.iter().zip(&b.0) {
+            for (x, y) in a.items().iter().zip(b.items().iter()) {
                 if !same(host, x, y)? {
                     return Ok(false);
                 }
@@ -1007,10 +1007,11 @@ pub fn same(host: &dyn Host, left: &Value, right: &Value) -> Result<bool> {
             Ok(true)
         }
         (Value::Map(a), Value::Map(b)) => {
-            if a.0.len() != b.0.len() || a.0.keys().zip(b.0.keys()).any(|(x, y)| x != y) {
+            let (a, b) = (a.entries(), b.entries());
+            if a.iter().len() != b.iter().len() || a.keys().zip(b.keys()).any(|(x, y)| x != y) {
                 return Ok(false);
             }
-            for (x, y) in a.0.values().zip(b.0.values()) {
+            for (x, y) in a.values().zip(b.values()) {
                 if !same(host, x, y)? {
                     return Ok(false);
                 }
@@ -1362,7 +1363,7 @@ pub fn call_borrowed(
             unit
         }
         "scope.FutureGroup.wait" => Ok(group_wait(arg(0)?)),
-        "scope.FutureScope.result" => {
+        "scope.FutureScope.outcome" => {
             let (group_type, receiver) = (kind(0)?, arg(0)?);
             let body_receiver = receiver.clone();
             cached(&receiver, move || {
@@ -1409,14 +1410,14 @@ pub fn call_borrowed(
                 })
             })
         }
-        "collect.Raced.result" => {
+        "collect.Raced.winner" => {
             let (none, receiver) = (kind(0)?, arg(0)?);
             let body_receiver = receiver.clone();
             cached(&receiver, move || {
                 op(vec![body_receiver.clone()], move || raced(&host, none, &body_receiver))
             })
         }
-        "collect.FirstSuccessful.result" => {
+        "collect.FirstSuccessful.outcome" => {
             let (none, receiver) = (kind(0)?, arg(0)?);
             let body_receiver = receiver.clone();
             cached(&receiver, move || {
@@ -1555,7 +1556,7 @@ pub fn call_borrowed(
         "barrier.BarrierState.generation" => Ok(int(snapshot(&arg(0)?)?.generation)),
         "barrier.BarrierState.broken" => Ok(Value::Bool(snapshot(&arg(0)?)?.broken)),
         // ----- timeout -----
-        "timeout.Within.result" => {
+        "timeout.Within.outcome" => {
             let (timed_out, receiver) = (kind(0)?, arg(0)?);
             let (seconds, wait) = (helper(helpers, 0)?, helper(helpers, 1)?);
             let body_host = host.clone();
@@ -1573,7 +1574,7 @@ pub fn call_borrowed(
                 )
             })
         }
-        "timeout.Before.result" => {
+        "timeout.Before.outcome" => {
             let (timed_out, receiver) = (kind(0)?, arg(0)?);
             let (now, minus) = (helper(helpers, 0)?, helper(helpers, 1)?);
             let (seconds, wait) = (helper(helpers, 2)?, helper(helpers, 3)?);
@@ -1624,9 +1625,99 @@ pub fn call_borrowed(
             }
             unit
         }
+        // ----- float and int functions (#192) -----
+        "float.floor" | "float.ceil" | "float.round" | "float.trunc" | "float.exp" | "float.ln"
+        | "float.log2" | "float.log10" | "float.sin" | "float.cos" | "float.tan" => {
+            let value = arg(0)?.as_float().map_err(|e| trap(e.message))?;
+            crate::float::function(&name["float.".len()..], value)
+                .map(Value::Float)
+                .map_err(trap)
+        }
+        "float.atan2" | "float.min" | "float.max" => {
+            let value = arg(0)?.as_float().map_err(|e| trap(e.message))?;
+            let other = arg(1)?.as_float().map_err(|e| trap(e.message))?;
+            match name {
+                "float.atan2" => crate::float::atan2(value, other).map(Value::Float).map_err(trap),
+                "float.min" => Ok(Value::Float(crate::float::min(value, other))),
+                _ => Ok(Value::Float(crate::float::max(value, other))),
+            }
+        }
+        "float.clamp" => {
+            let number = |index: usize| -> Result<f64> { arg(index)?.as_float().map_err(|e| trap(e.message)) };
+            crate::float::clamp(number(0)?, number(1)?, number(2)?)
+                .map(Value::Float)
+                .map_err(trap)
+        }
+        "float.finite" | "float.nan" => {
+            let value = arg(0)?.as_float().map_err(|e| trap(e.message))?;
+            Ok(Value::Bool(if name == "float.finite" { value.is_finite() } else { value.is_nan() }))
+        }
+        "int.min" | "int.max" | "int.clamp" => {
+            use std::cmp::Ordering::{Greater, Less};
+            let (value, other) = (arg(0)?, arg(1)?);
+            let a = value.as_int().map_err(|e| trap(e.message))?;
+            let b = other.as_int().map_err(|e| trap(e.message))?;
+            match name {
+                // The other value only when it is strictly beyond the receiver.
+                "int.min" => Ok(if crate::integer::compare(b, a) == Less { other.clone() } else { value.clone() }),
+                "int.max" => Ok(if crate::integer::compare(b, a) == Greater { other.clone() } else { value.clone() }),
+                _ => {
+                    let high_value = arg(2)?;
+                    let high = high_value.as_int().map_err(|e| trap(e.message))?;
+                    if crate::integer::compare(b, high) == Greater {
+                        return Err(trap(format!("clamp: low {b} is above high {high}")));
+                    }
+                    Ok(if crate::integer::compare(a, b) == Less {
+                        other.clone()
+                    } else if crate::integer::compare(a, high) == Greater {
+                        high_value.clone()
+                    } else {
+                        value.clone()
+                    })
+                }
+            }
+        }
+        "test.close" => {
+            let number = |index: usize| -> Result<f64> { arg(index)?.as_float().map_err(|e| trap(e.message)) };
+            let (actual, expected, tolerance) = (number(0)?, number(1)?, number(2)?);
+            let text = |value: f64| host.show(&Value::Float(value));
+            if let Some(message) = crate::testing::close_failure(actual, expected, tolerance, text) {
+                host.test_failure(message)?;
+            }
+            unit
+        }
+        "test.text" => {
+            let (actual, expected) = (arg(0)?, arg(1)?);
+            let actual = actual.as_string().map_err(|e| trap(e.message))?;
+            let expected = expected.as_string().map_err(|e| trap(e.message))?;
+            if let Some(message) = crate::testing::text_failure(actual, expected) {
+                host.test_failure(message)?;
+            }
+            unit
+        }
+        "test.bytes" => {
+            let bytes = |index: usize| -> Result<Vec<u8>> {
+                let value = arg(index)?;
+                crate::heap::ArrayHeap
+                    .elements(&value)
+                    .map_err(|e| trap(e.message))?
+                    .iter()
+                    .map(|byte| byte.as_byte().map_err(|e| trap(e.message)))
+                    .collect()
+            };
+            if let Some(message) = crate::testing::bytes_failure(&bytes(0)?, &bytes(1)?) {
+                host.test_failure(message)?;
+            }
+            unit
+        }
         "test.fail" => {
             let message = arg(0)?;
             host.test_failure(message.as_string().map_err(|e| trap(e.message))?.to_owned())?;
+            unit
+        }
+        "test.skip" => {
+            let reason = arg(0)?;
+            crate::testing::skip(reason.as_string().map_err(|e| trap(e.message))?.to_owned())?;
             unit
         }
         "fake.storage.set" => {

@@ -1,4 +1,4 @@
-//! `runtime/tls_transport`: a rustls client over a TCP stream taken from
+//! `runtime/tls_transport`: a rustls client, and a server (#209), over a TCP stream taken from
 //! `runtime/network`, driven by the core's Tokio readiness like the stream
 //! itself. Behaviour, limits and failures follow the origin provider: the
 //! engine checks handshake signatures but not the peer chain, which
@@ -8,13 +8,15 @@
 //!
 //! All state lives on the VM thread. Received ciphertext and plaintext go to
 //! the shared buffers in the same poll that reads them, and outgoing records
-//! queue in wire order, so a cancelled operation loses no bytes.
+//! queue in wire order, so a cancelled operation loses no bytes. A read that
+//! completed but is cancelled before its result reaches the program puts
+//! its plaintext back (`Received`).
 use crate::host::native_network::Transport;
 use crate::host::*;
 use okkama_runtime_abi::{Native, NativeFailure};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{ClientConnection, DigitallySignedStruct, SignatureScheme};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
+use rustls::{ClientConnection, Connection, DigitallySignedStruct, ServerConnection, SignatureScheme};
 use std::cell::{Cell, RefCell};
 use std::io::Read;
 use std::rc::Rc;
@@ -124,7 +126,9 @@ enum Stop {
 
 #[derive(Debug)]
 pub(crate) struct Tls {
-    connection: RefCell<ClientConnection>,
+    connection: RefCell<Connection>,
+    /// A server asks for no client certificate: its peer is settled by the handshake.
+    server: bool,
     socket: RefCell<Option<Rc<Transport>>>,
     /// Ciphertext received but not yet fed to the engine.
     incoming: RefCell<Vec<u8>>,
@@ -243,6 +247,14 @@ impl Tls {
         Ok(())
     }
 
+    /// Plaintext that a read took but could not deliver goes back in front.
+    fn return_plain(&self, bytes: Vec<u8>) {
+        let mut plain = self.plain.borrow_mut();
+        let rest = std::mem::take(&mut *plain);
+        plain.extend(bytes);
+        plain.extend(rest);
+    }
+
     fn take_plain(&self, limit: usize) -> Option<Vec<u8>> {
         let mut plain = self.plain.borrow_mut();
         if plain.is_empty() {
@@ -325,6 +337,28 @@ impl Tls {
             }
         }
         Ok(())
+    }
+}
+
+/// The plaintext of one read. A cancellation after the read completed and
+/// before the program got its result drops the result unpublished: the bytes
+/// then go back to the front of the plaintext buffer for the next read.
+struct Received {
+    bytes: Option<Vec<u8>>,
+    state: Rc<Tls>,
+}
+
+impl Output for Received {
+    fn publish(mut self: Box<Self>, heap: &mut Heap) -> Result<Slot, Error> {
+        heap.native_byte_array(self.bytes.take().unwrap_or_default())
+    }
+}
+
+impl Drop for Received {
+    fn drop(&mut self) {
+        if let Some(bytes) = self.bytes.take() {
+            self.state.return_plain(bytes);
+        }
     }
 }
 
@@ -455,6 +489,7 @@ impl Heap {
         use Native::*;
         match n {
             TlsTransportClient => self.tls_client(n, a),
+            TlsTransportServer => self.tls_server(n, a),
             TlsTransportClose => {
                 let state = self.tls_state(a[0])?;
                 state.abort();
@@ -477,13 +512,16 @@ impl Heap {
                             if state.closed() {
                                 fail(n, "already_closed", "TLS handshake readiness closed")
                             } else {
-                                fail(n, "invalid_data", "TLS client handshake failed")
+                                fail(n, "invalid_data", "TLS handshake failed")
                             }
                         })
                     })
                     .await;
                     if result.is_ok() {
                         state.negotiated.set(true);
+                        if state.server {
+                            state.authorized.set(true);
+                        }
                         guard.complete = true;
                     }
                     result.map(|()| true)
@@ -512,11 +550,12 @@ impl Heap {
                     return Ok(self.future_with_state(State::Ready(Ok(ready)))?);
                 }
                 let changed = state.changed.subscribe();
+                let keeper = state.clone();
                 Ok(self.native_io(async move {
                     let _busy = busy;
                     interruptible(changed, async {
                         // A failed read closes the state; a cancelled one does not.
-                        state.receive(limit).await.map_err(|stop| {
+                        state.receive(limit).await.map(|bytes| Received { bytes: Some(bytes), state: keeper }).map_err(|stop| {
                             let failure = match stop {
                                 Stop::Truncated => fail(n, "invalid_data", "TLS peer truncated input"),
                                 Stop::Io => io_failure(&state, n),
@@ -655,7 +694,78 @@ impl Heap {
         let name = server_name(&server).ok_or_else(unavailable)?;
         let connection = ClientConnection::new(Arc::new(config), name).map_err(|_| unavailable())?;
         let state = Tls {
-            connection: RefCell::new(connection),
+            connection: RefCell::new(Connection::Client(connection)),
+            server: false,
+            socket: RefCell::new(Some(socket)),
+            incoming: RefCell::default(),
+            plain: RefCell::default(),
+            outgoing: RefCell::default(),
+            changed: tokio::sync::watch::channel(()).0,
+            negotiated: Cell::new(false),
+            authorized: Cell::new(false),
+            closing: Cell::new(false),
+            eof: Cell::new(false),
+            handshaking: Rc::default(),
+            reading: Rc::default(),
+            writing: Rc::default(),
+            shutting: Rc::default(),
+            peer: RefCell::default(),
+        };
+        Ok(Slot { tag: HANDLE, bits: self.handles.allocate(Handle::Tls(Rc::new(state)))? })
+    }
+
+    /// A TLS server over an accepted stream (#209): the certificate chain (DER,
+    /// the server's own first) and a PKCS #8 key (DER); no client certificate
+    /// is asked for.
+    fn tls_server(&mut self, n: Native, a: &[Slot]) -> Result<Slot, ProviderError> {
+        let socket = self.network_stream(a[0])?.take_for_tls(n)?;
+        let choice = match self.integer(a[1])? {
+            Integer::Small(v) => v,
+            Integer::Big(_) => 0,
+        };
+        if !(1..=3).contains(&choice) {
+            return Err(fail(n, "invalid_input", "invalid TLS version selection").into());
+        }
+        let protocols = self.elements(a[2])?;
+        let mut valid = protocols.len() <= 16;
+        let mut names: Vec<String> = Vec::new();
+        for protocol in protocols {
+            let name = self.text(protocol)?.to_string();
+            if name.is_empty()
+                || name.encode_utf16().count() > 255
+                || name.chars().any(|c| u32::from(c) >= 256)
+                || names.contains(&name)
+            {
+                valid = false;
+            }
+            names.push(name);
+        }
+        let mut chain: Vec<CertificateDer<'static>> = Vec::new();
+        for source in self.elements(a[3])? {
+            chain.push(CertificateDer::from(self.byte_slice(source)?.into_owned()));
+        }
+        let key = self.byte_slice(a[4])?.into_owned();
+        if !valid || chain.is_empty() || chain.len() > 16 || key.is_empty() {
+            return Err(fail(n, "invalid_input", "invalid TLS server configuration").into());
+        }
+        let unavailable = || ProviderError::from(fail(n, "unsupported", "required TLS engine policy unavailable"));
+        let provider = Arc::new(provider());
+        let versions: &[&'static rustls::SupportedProtocolVersion] = match choice {
+            1 => &[&rustls::version::TLS12],
+            2 => &[&rustls::version::TLS13],
+            _ => &[&rustls::version::TLS13, &rustls::version::TLS12],
+        };
+        let mut config = rustls::ServerConfig::builder_with_provider(provider)
+            .with_protocol_versions(versions)
+            .map_err(|_| unavailable())?
+            .with_no_client_auth()
+            .with_single_cert(chain, PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key)))
+            .map_err(|_| ProviderError::from(fail(n, "invalid_input", "invalid TLS server identity")))?;
+        config.alpn_protocols = names.iter().map(|name| name.chars().map(|c| c as u8).collect()).collect();
+        let connection = ServerConnection::new(Arc::new(config)).map_err(|_| unavailable())?;
+        let state = Tls {
+            connection: RefCell::new(Connection::Server(connection)),
+            server: true,
             socket: RefCell::new(Some(socket)),
             incoming: RefCell::default(),
             plain: RefCell::default(),

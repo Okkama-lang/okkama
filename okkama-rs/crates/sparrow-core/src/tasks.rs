@@ -334,8 +334,11 @@ impl Runtime {
                 if self.wait_external() {
                     continue;
                 }
+                // A runtime failure of the run, worded as the IR engine and
+                // the JVM report it (#342).
                 let ctx = unsafe { &mut *ctx };
-                crate::runtime::fatal(ctx, self, "all tasks are waiting: the program cannot make progress".into());
+                ctx.failure = self.failure_new(FailureKind::Program("async main cannot complete: no task can make progress".into()));
+                ctx.status = FAILED;
                 return;
             };
             if get(frame, STATE) != RUNNING {
@@ -377,6 +380,29 @@ impl Runtime {
             self.spawned.push(future);
             self.run_body(ctx, future);
         }
+    }
+
+    /// Drop finished spawned tasks that shutdown no longer needs (#503): it
+    /// cancels running ones and reports unobserved failures. A long-running
+    /// program (a server) otherwise kept every task it ever spawned, with
+    /// everything its frame refers to, as a root of every collection.
+    pub(crate) fn prune_spawned(&mut self) {
+        let mut kept = Vec::with_capacity(self.spawned.len());
+        for &task in &self.spawned {
+            let state = get(task, STATE);
+            let needed = match state {
+                COLD | RUNNING => true,
+                FAILURE_STATE => {
+                    get(task, FLAGS) & OBSERVED == 0
+                        && !matches!(self.failure(get(task, FAILURE)).map(|f| &f.kind), Some(FailureKind::Cancelled))
+                }
+                _ => false,
+            };
+            if needed {
+                kept.push(task);
+            }
+        }
+        self.spawned = kept;
     }
 
     pub(crate) fn observe(future: Word) {

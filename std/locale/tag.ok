@@ -1,27 +1,39 @@
 module locale/tag v1.0.0;
 
+// Locales: BCP 47 language tags (RFC 5646), checked and canonical.
+//
+//     let locale = Locale("de-CH");
+//     locale.language();                          // "de"
+//     locale.region();                            // "CH"
+//     Locale(language: "zh", script: "Hant", region: "TW", variants: []).string();   // "zh-Hant-TW"
+//     LocaleExtensions(Locale("th-TH-u-nu-thai")).unicode();
+//
+// Tags are case-normalized and replaced by their IANA preferred values (`iw`
+// becomes `he`). Bad tags are InvalidLocale with the offset.
+
 import "compare" take Comparing, Order;
 import "collections/sequence" take Sequencing;
 import "collections/ordering" take SortedBy;
 import "locale/internal/iana" take IanaLanguages;
 
-// Immutable bounded BCP 47 tags with pinned IANA preferred values. Coordinate
-// constructors preserve their arities; the one-argument form also accepts a
-// complete tag. LocaleFromLanguageTag remains a lazy binding.
+// A language tag.
 object Locale does Comparing<Locale> {
     has tag is LanguageTagValue;
 
+    // A language, or a whole tag such as `de-CH`; InvalidLocale otherwise.
     Locale(language is string) {
-        tag = CompleteLanguageTag(language).value();
+        tag = CompleteLanguageTag(language).tag();
     }
 
+    // language in region.
     Locale(language is string, region is string) {
         confirm LocaleSubtag(language).language()
             else throw InvalidLocale.located(0, "invalid primary language");
         confirm LocaleSubtag(region).region() else throw InvalidLocale.located(0, "invalid region");
-        tag = CompleteLanguageTag(language + "-" + region).value();
+        tag = CompleteLanguageTag(language + "-" + region).tag();
     }
 
+    // language in script and region, with variants.
     Locale(language is string, script is string, region is string, variants is Sequencing<string>) {
         confirm LocaleSubtag(language).language()
             else throw InvalidLocale.located(0, "invalid primary language");
@@ -46,40 +58,48 @@ object Locale does Comparing<Locale> {
         else {
             "-" + items.join("-");
         });
-        tag = CompleteLanguageTag(source).value();
+        tag = CompleteLanguageTag(source).tag();
     }
 
+    // The language subtag, lowercase.
     language() is string {
         confirm tag.language() != "" else throw MissingLocaleSubtag.kind("language");
         tag.language();
     }
 
+    // The script subtag, title case, or "".
     script() is string {
         confirm tag.script() != "" else throw MissingLocaleSubtag.kind("script");
         tag.script();
     }
 
+    // The region subtag, uppercase, or "".
     region() is string {
         confirm tag.region() != "" else throw MissingLocaleSubtag.kind("region");
         tag.region();
     }
 
+    // The variant subtags.
     variants() is Sequencing<string> {
         tag.variants();
     }
 
+    // The extended language subtags.
     extlangs() is Sequencing<string> {
         tag.extlangs();
     }
 
+    // The extensions, such as `u-ca-buddhist`.
     extensions() is Sequencing<LanguageExtension> {
         tag.extensions();
     }
 
+    // The private-use subtags after `x-`.
     private_use() is Sequencing<string> {
         tag.private_use();
     }
 
+    // Language, script, region and variants: the tag without extensions.
     base_tag() is string {
         if tag.language() == "" {
             "und";
@@ -89,34 +109,40 @@ object Locale does Comparing<Locale> {
         }
     }
 
+    // The extensions and private use, as written after the base tag.
     suffix() is string {
         tag.suffix();
     }
 
+    // The whole tag in canonical form.
     string() is string {
         tag.string();
     }
 
+    // Orders by canonical tag.
     order(other is Locale) is Order {
         self.string().order(other.string());
     }
 }
 
+// A locale read from a tag.
 object LocaleFromLanguageTag {
     has origin is string;
 
+    // The tag.
     LocaleFromLanguageTag(origin is string) {
         self.origin = origin;
     }
 
-    value() is Locale {
+    // The locale; InvalidLocale for a tag that is not valid.
+    locale() is Locale {
         Locale(origin);
     }
 }
 
 // Internal bounded nominal source snapshot. No cursor/first/last calls and no
 // later source reads. Duplicate comparison uses the normalized complete spelling.
-object LocaleVariantSnapshot {
+hidden object LocaleVariantSnapshot {
     has origin is @string;
 
     LocaleVariantSnapshot(source is Sequencing<string>) {
@@ -148,69 +174,83 @@ object LocaleVariantSnapshot {
 object LocaleSubtag {
     has origin is string;
 
+    // One subtag, to classify.
     LocaleSubtag(origin is string) {
         self.origin = origin;
     }
 
+    // Whether it can be a language.
     language() is bool {
         origin.length() >= 2 && origin.length() <= 8 && self.alphabetic();
     }
 
+    // Whether it can be a script.
     script() is bool {
         origin.length() == 4 && self.alphabetic();
     }
 
+    // Whether it can be a region.
     region() is bool {
         (origin.length() == 2 && self.alphabetic()) || (origin.length() == 3 && self.numeric());
     }
 
+    // Whether it can be a variant.
     variant() is bool {
         ((origin.length() >= 5 && origin.length() <= 8)
             || (origin.length() == 4 && "0123456789".split(origin.slice(0, 1)).size() == 2))
             && self.characters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
     }
 
+    // Whether it can be an extended language.
     extlang() is bool {
         origin.length() == 3 && self.alphabetic();
     }
 
+    // Whether it can be an extension subtag.
     extension() is bool {
         origin.length() >= 2
             && origin.length() <= 8
             && self.characters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
     }
 
+    // Whether it can be a private-use subtag.
     private_use() is bool {
         origin.length() >= 1
             && origin.length() <= 8
             && self.characters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
     }
 
+    // Whether it is a singleton such as `u` or `x`.
     singleton() is bool {
         origin.length() == 1
             && self.characters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
     }
 
+    // Whether it can be a `u` extension key.
     unicode_key() is bool {
         origin.length() == 2
             && LocaleSubtag(origin.slice(0, 1)).singleton()
             && "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".split(origin.slice(1, 2)).size() == 2;
     }
 
+    // Whether it can be a `t` extension key.
     transform_key() is bool {
         origin.length() == 2
             && "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".split(origin.slice(0, 1)).size() == 2
             && "0123456789".split(origin.slice(1, 2)).size() == 2;
     }
 
+    // It in lowercase.
     lower() is string {
         self.translated("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz");
     }
 
+    // It in uppercase.
     upper() is string {
         self.translated("abcdefghijklmnopqrstuvwxyz", "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
     }
 
+    // It in title case.
     title() is string {
         let lowered = self.lower();
         if lowered == "" {
@@ -221,24 +261,22 @@ object LocaleSubtag {
         }
     }
 
-    private:
-
-    alphabetic() is bool {
+    hidden alphabetic() is bool {
         self.characters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ");
     }
 
-    numeric() is bool {
+    hidden numeric() is bool {
         self.characters("0123456789");
     }
 
-    characters(alphabet is string) is bool {
+    hidden characters(alphabet is string) is bool {
         let valid = (0..origin.length()).reduce(true) -> previous, index {
             previous && alphabet.split(origin.slice(index, index + 1)).size() == 2;
         };
         origin != "" && valid;
     }
 
-    translated(from is string, to is string) is string {
+    hidden translated(from is string, to is string) is string {
         let parts is @string = (0..origin.length()).map() -> index {
             let char = origin.slice(index, index + 1);
             let split = from.split(char);
@@ -253,15 +291,19 @@ object LocaleSubtag {
     }
 }
 
+// A tag that is not valid; offset and reason say where and why.
 enum InvalidLocale is Error = (located(offset is int, reason is string));
 
+// The locale has no subtag of that kind.
 enum MissingLocaleSubtag is Error = (kind(kind is string));
 
+// The parts of a parsed tag.
 object LanguageTagValue {
     has language, script, region, opaque is string;
     has extlangs, variants, private_use is @string;
     has extensions is @LanguageExtension;
 
+    // As given.
     LanguageTagValue(
         language is string,
         extlangs is @string,
@@ -282,34 +324,42 @@ object LanguageTagValue {
         self.opaque = opaque;
     }
 
+    // The language subtag, lowercase.
     language() is string {
         language;
     }
 
+    // The script subtag, title case, or "".
     script() is string {
         script;
     }
 
+    // The region subtag, uppercase, or "".
     region() is string {
         region;
     }
 
+    // The extended language subtags.
     extlangs() is @string {
         extlangs;
     }
 
+    // The variant subtags.
     variants() is @string {
         variants;
     }
 
+    // The extensions, such as `u-ca-buddhist`.
     extensions() is @LanguageExtension {
         extensions;
     }
 
+    // The private-use subtags after `x-`.
     private_use() is @string {
         private_use;
     }
 
+    // Language, script, region and variants: the tag without extensions.
     base_tag() is string {
         language + (if extlangs.size() == 0 {
             "";
@@ -334,6 +384,7 @@ object LanguageTagValue {
         });
     }
 
+    // The extensions and private use, as written after the base tag.
     suffix() is string {
         let pieces is @string = extensions.map() -> extension {
             extension.string();
@@ -351,6 +402,7 @@ object LanguageTagValue {
         });
     }
 
+    // The whole tag in canonical form.
     string() is string {
         if opaque != "" {
             opaque;
@@ -366,29 +418,34 @@ object LanguageTagValue {
     }
 }
 
+// One extension: a singleton key and its subtags.
 object LanguageExtension {
     has key is string;
     has values is @string;
 
+    // key with values.
     LanguageExtension(key is string, values is @string) {
         self.key = key;
         self.values = values;
     }
 
+    // The singleton.
     key() is string {
         key;
     }
 
+    // Its subtags.
     values() is @string {
         values;
     }
 
+    // `key-value-…`.
     string() is string {
         key + "-" + values.join("-");
     }
 }
 
-object LanguageTagParts {
+hidden object LanguageTagParts {
     has values is @string;
 
     LanguageTagParts(values is @string) {
@@ -402,23 +459,24 @@ object LanguageTagParts {
     }
 }
 
+// A whole tag parsed and canonicalized.
 object CompleteLanguageTag {
     has origin is string;
 
+    // The tag.
     CompleteLanguageTag(origin is string) {
         self.origin = origin;
     }
 
-    value() is LanguageTagValue {
+    // Its parts; InvalidLocale for a tag that is not valid.
+    tag() is LanguageTagValue {
         let parsed = self.parse(origin, IanaLanguages(), 0);
         confirm parsed.string().length() <= 255
             else throw InvalidLocale.located(255, "canonical tag length");
         parsed;
     }
 
-    private:
-
-    parse(origin is string, registry is IanaLanguages, depth is int) is LanguageTagValue {
+    hidden parse(origin is string, registry is IanaLanguages, depth is int) is LanguageTagValue {
         let length_offset = if origin.length() > 255 {
             255;
         }
@@ -434,7 +492,16 @@ object CompleteLanguageTag {
             return self.parse(preferred, registry, depth + 1);
         }
         if registry.grandfathered(lower) {
-            return LanguageTagValue("", [], "", "", [], [], [], lower);
+            return LanguageTagValue(
+                language: "",
+                extlangs: [],
+                script: "",
+                region: "",
+                variants: [],
+                extensions: [],
+                private_use: [],
+                opaque: lower
+            );
         }
         let parts = lower.split("-");
         let source = LanguageTagParts(parts);
@@ -446,7 +513,16 @@ object CompleteLanguageTag {
                     else throw InvalidLocale.located(source.offset(index), "private-use subtag");
                 parts[index];
             };
-            return LanguageTagValue("", [], "", "", [], [], private_use, "");
+            return LanguageTagValue(
+                language: "",
+                extlangs: [],
+                script: "",
+                region: "",
+                variants: [],
+                extensions: [],
+                private_use: private_use,
+                opaque: ""
+            );
         }
         confirm LocaleSubtag(parts[0]).language()
             else throw InvalidLocale.located(0, "primary language");
@@ -540,29 +616,29 @@ object CompleteLanguageTag {
             sorted.item(index);
         };
         LanguageTagValue(
-            LocaleSubtag(language).lower(),
-            kept,
-            if has_script {
+            language: LocaleSubtag(language).lower(),
+            extlangs: kept,
+            script: if has_script {
                 LocaleSubtag(registry.alias("script", parts[script_at])).title();
             }
             else {
                 "";
             },
-            if has_region {
+            region: if has_region {
                 LocaleSubtag(registry.alias("region", parts[region_at])).upper();
             }
             else {
                 "";
             },
-            canonical,
-            extensions,
-            suffix.private_use(),
-            ""
+            variants: canonical,
+            extensions: extensions,
+            private_use: suffix.private_use(),
+            opaque: ""
         );
     }
 }
 
-object LanguageTagSuffixValue {
+hidden object LanguageTagSuffixValue {
     has extensions is @LanguageExtension;
     has private_use is @string;
 
@@ -580,7 +656,7 @@ object LanguageTagSuffixValue {
     }
 }
 
-object LanguageTagSuffix {
+hidden object LanguageTagSuffix {
     has parts is @string;
 
     LanguageTagSuffix(parts is @string) {
@@ -589,7 +665,7 @@ object LanguageTagSuffix {
 
     parsed(start is int, seen is @string) is LanguageTagSuffixValue {
         if start == parts.size() {
-            return LanguageTagSuffixValue([], []);
+            return LanguageTagSuffixValue(extensions: [], private_use: []);
         }
         let source = LanguageTagParts(parts);
         let key = parts[start];
@@ -603,7 +679,7 @@ object LanguageTagSuffix {
                     else throw InvalidLocale.located(source.offset(index), "private-use subtag");
                 parts[index];
             };
-            return LanguageTagSuffixValue([], values);
+            return LanguageTagSuffixValue(extensions: [], private_use: values);
         }
         let duplicate = seen.reduce(false) -> found, item {
             found || item == key;
@@ -644,45 +720,36 @@ object LanguageTagSuffix {
                 "invalid " + key + " extension: " + reason
             );
         };
-        let keys is @string = (0..seen.size() + 1).map() -> index {
-            if index == seen.size() {
-                key;
-            }
-            else {
-                seen[index];
-            }
-        };
+        let keys is @string = seen + [key];
         let remaining = self.parsed(stop, keys);
         let tail = remaining.extensions();
-        let extensions is @LanguageExtension = (0..tail.size() + 1).map() -> index {
-            if index == 0 {
-                LanguageExtension(key, values);
-            }
-            else {
-                tail[index - 1];
-            }
-        };
-        LanguageTagSuffixValue(extensions, remaining.private_use());
+        let extensions is @LanguageExtension = [LanguageExtension(key: key, values: values)] + tail;
+        LanguageTagSuffixValue(extensions: extensions, private_use: remaining.private_use());
     }
 }
 
+// A `u` extension keyword such as `ca-buddhist`.
 object UnicodeLocaleKeyword {
     has key is string;
     has values is @string;
 
+    // key with values.
     UnicodeLocaleKeyword(key is string, values is @string) {
         self.key = key;
         self.values = values;
     }
 
+    // The key.
     key() is string {
         key;
     }
 
+    // Its values.
     values() is Sequencing<string> {
         values;
     }
 
+    // `key-value`.
     string() is string {
         key + (if values.size() == 0 {
             "";
@@ -693,11 +760,13 @@ object UnicodeLocaleKeyword {
     }
 }
 
+// A `u` extension: attributes and keywords.
 object UnicodeLocaleExtension {
     has attributes is @string;
     has keywords is @UnicodeLocaleKeyword;
     has parts is @string;
 
+    // Its subtags.
     UnicodeLocaleExtension(origin is @string) {
         let start = (0..origin.size()).reduce(origin.size()) -> first, index {
             if first == origin.size() && origin[index].length() == 2 {
@@ -756,7 +825,7 @@ object UnicodeLocaleExtension {
             let values is @string = (at + 1..stop).map() -> position {
                 origin[position];
             };
-            UnicodeLocaleKeyword(key, values);
+            UnicodeLocaleKeyword(key: key, values: values);
         };
         let ordered is SortedBy<UnicodeLocaleKeyword, string> = SortedBy(
             origin: keywords,
@@ -790,22 +859,27 @@ object UnicodeLocaleExtension {
         parts = combined.split("-");
     }
 
+    // The attributes.
     attributes() is @string {
         attributes;
     }
 
+    // The keywords.
     keywords() is @UnicodeLocaleKeyword {
         keywords;
     }
 
+    // The subtags.
     parts() is @string {
         parts;
     }
 }
 
+// A `t` extension.
 object TransformedLocaleExtension {
     has parts is @string;
 
+    // Its subtags.
     TransformedLocaleExtension(origin is @string) {
         let keys is @int = (0..origin.size()).filter() -> index {
             LocaleSubtag(origin[index]).transform_key();
@@ -823,7 +897,7 @@ object TransformedLocaleExtension {
             "";
         }
         else {
-            let tag = CompleteLanguageTag(language.join("-")).value();
+            let tag = CompleteLanguageTag(language.join("-")).tag();
             confirm tag.language() != ""
                 && tag.extensions().size() == 0
                 && tag.private_use().size() == 0
@@ -877,15 +951,18 @@ object TransformedLocaleExtension {
         }) + ordered.join("-")).split("-");
     }
 
+    // The subtags.
     parts() is @string {
         parts;
     }
 }
 
+// The extensions of a locale, by kind.
 object LocaleExtensions {
     has extensions is @LanguageExtension;
     has private_use is @string;
 
+    // Of origin.
     LocaleExtensions(origin is Locale) {
         let source = origin.extensions();
         let extensions is @LanguageExtension = (0..source.size()).map() -> index {
@@ -899,6 +976,7 @@ object LocaleExtensions {
         self.private_use = private_use;
     }
 
+    // The `u` keywords.
     unicode() is Sequencing<UnicodeLocaleKeyword> {
         for extensions -> extension {
             if extension.key() == "u" {
@@ -909,6 +987,7 @@ object LocaleExtensions {
         empty;
     }
 
+    // The `u` attributes.
     attributes() is Sequencing<string> {
         for extensions -> extension {
             if extension.key() == "u" {
@@ -919,6 +998,7 @@ object LocaleExtensions {
         empty;
     }
 
+    // The `t` subtags.
     transformations() is Sequencing<string> {
         for extensions -> extension {
             if extension.key() == "t" {
@@ -929,16 +1009,20 @@ object LocaleExtensions {
         empty;
     }
 
+    // The private-use subtags.
     private_use() is Sequencing<string> {
         private_use;
     }
 }
 
 test "locale normalizes complete coordinates and parses variants" {
-    test.is(Locale("EN", "us").string(), "en-US");
-    test.is(LocaleFromLanguageTag("sR-lATN-rs").value().string(), "sr-Latn-RS");
-    test.is(LocaleFromLanguageTag("de-1996").value().variants().item(0), "1996");
-    test.is(Locale("sl", "", "", ["ROZAJ", "BISKE"]).string(), "sl-rozaj-biske");
+    test.is(Locale(language: "EN", region: "us").string(), "en-US");
+    test.is(LocaleFromLanguageTag("sR-lATN-rs").locale().string(), "sr-Latn-RS");
+    test.is(LocaleFromLanguageTag("de-1996").locale().variants().item(0), "1996");
+    test.is(
+        Locale(language: "sl", script: "", region: "", variants: ["ROZAJ", "BISKE"]).string(),
+        "sl-rozaj-biske"
+    );
 }
 
 test "locale absence and duplicate spelling have typed diagnostics" {
@@ -954,7 +1038,7 @@ test "locale absence and duplicate spelling have typed diagnostics" {
     );
     test.is(
         try {
-            LocaleFromLanguageTag("sl-rozaj-ROZAJ").value();
+            LocaleFromLanguageTag("sl-rozaj-ROZAJ").locale();
             -1;
         }
         catch InvalidLocale.located(offset, _) {
@@ -967,7 +1051,7 @@ test "locale absence and duplicate spelling have typed diagnostics" {
 test "POSIX forms stay separate from BCP 47" {
     for ["en_US", "en.UTF-8", "de@euro"] -> source {
         test.ok(try {
-            LocaleFromLanguageTag(source).value();
+            LocaleFromLanguageTag(source).locale();
             false;
         }
         catch e is InvalidLocale {

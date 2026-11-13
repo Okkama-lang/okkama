@@ -2,7 +2,7 @@ module time/local_datetime v1.0.0;
 
 import "compare" take Comparing, Order;
 import "time/duration" take Duration, DurationUnit;
-import "time/date" take Date, ShiftedDate, DaysBetween, DateOrdinal, InvalidDate;
+import "time/date" take Date, DaysBetween, GregorianDay, InvalidDate;
 import "time/day" take TimeOfDay;
 
 // A local calendar date and wall-clock time without an offset or time zone.
@@ -11,59 +11,60 @@ import "time/day" take TimeOfDay;
 //         date: Date(year: 2026, month: 8, day: 11),
 //         time: TimeOfDay(hour: 23, minute: 30, second: 0, nanosecond: 0),
 //     );
-//     let finish = start.plus(Duration(
-//         value: 2.rat(),
-//         unit: DurationUnit.hour,
-//     )); // 2026-08-12 01:30
+//     let finish = start.plus(Duration(hours: 2)); // 2026-08-12T01:30:00
 //
 // Arithmetic treats every civil day as exactly 86,400 seconds. This object
 // does not model daylight-saving transitions, offsets, leap seconds or an
 // instant on a global timeline. Those interpretations require an explicit
 // time-zone object. Results outside Date years 1..9999 throw InvalidDate.
 
+// A date and a wall-clock time with no zone: what a calendar or a form shows.
 object LocalDateTime does Comparing<LocalDateTime> {
     has date_value is Date;
     has time_value is TimeOfDay;
 
+    // date at time.
     LocalDateTime(date is Date, time is TimeOfDay) {
         date_value = date;
         time_value = time;
     }
 
+    // The date.
     date() is Date {
         date_value;
     }
 
+    // The time of day.
     time() is TimeOfDay {
         time_value;
     }
 
-    plus(duration is Duration) is LocalDateTime {
-        let ordinal is int = DateOrdinal(origin: date_value).value();
-        let day_seconds is rat = (
-            time_value.hour() * 3600
-                + time_value.minute() * 60
-                + time_value.second()
-        ).rat() + rat(time_value.nanosecond(), 1000000000);
+    // ISO 8601: "2026-08-11T12:30:45.125".
+    string() is string {
+        date_value.string() + "T" + time_value.string();
+    }
 
-        let earliest is rat = -(
-            ((ordinal - 1) * 86400).rat() + day_seconds
-        );
-        let latest is rat = (
-            (3652059 - ordinal) * 86400
-        ).rat() + rat(86399999999999, 1000000000) - day_seconds;
-        confirm duration.seconds() >= earliest && duration.seconds() <= latest
+    // duration later, by the calendar.
+    plus(duration is Duration) is LocalDateTime {
+        let ordinal is int = GregorianDay(date_value).number();
+        let day_seconds is rat = (time_value::Clock::hour * 3600 +
+            time_value::Clock::minute * 60 +
+            time_value::Clock::second).rat() + rat(time_value::Clock::nanosecond, 1000000000);
+
+        let earliest is rat = -(((ordinal - 1) * 86400).rat() + day_seconds);
+        let latest is rat = ((3652059 - ordinal) * 86400).rat() + rat(86399999999999, 1000000000) - day_seconds;
+        confirm duration::Span::seconds >= earliest && duration::Span::seconds <= latest
             else throw InvalidDate.because("local date-time arithmetic is outside years 1..9999");
 
-        let shifted is rat = day_seconds + duration.seconds();
+        let shifted is rat = day_seconds + duration::Span::seconds;
         let truncated_days is int = (shifted / 86400.rat()).int();
         let days is int = if shifted < 0.rat()
             && shifted != (truncated_days * 86400).rat() {
-            truncated_days - 1;
-        }
-        else {
-            truncated_days;
-        };
+                truncated_days - 1;
+            }
+            else {
+                truncated_days;
+            };
         let within_day is rat = shifted - (days * 86400).rat();
         let nanoseconds is int = (within_day * 1000000000.rat()).int();
 
@@ -75,7 +76,7 @@ object LocalDateTime does Comparing<LocalDateTime> {
         let nano is int = after_minute - second * 1000000000;
 
         LocalDateTime(
-            date: ShiftedDate(origin: date_value, days: days).value(),
+            date: date_value.shifted(days),
             time: TimeOfDay(
                 hour: hour,
                 minute: minute,
@@ -85,22 +86,16 @@ object LocalDateTime does Comparing<LocalDateTime> {
         );
     }
 
+    // The time from other to this.
     minus(other is LocalDateTime) is Duration {
-        let days is int = DaysBetween(
-            left: other.date(),
-            right: date_value,
-        ).value();
-        let own_seconds is rat = (
-            time_value.hour() * 3600
-                + time_value.minute() * 60
-                + time_value.second()
-        ).rat() + rat(time_value.nanosecond(), 1000000000);
+        let days is int = DaysBetween(left: other.date(), right: date_value).count();
+        let own_seconds is rat = (time_value::Clock::hour * 3600 +
+            time_value::Clock::minute * 60 +
+            time_value::Clock::second).rat() + rat(time_value::Clock::nanosecond, 1000000000);
         let other_time is TimeOfDay = other.time();
-        let other_seconds is rat = (
-            other_time.hour() * 3600
-                + other_time.minute() * 60
-                + other_time.second()
-        ).rat() + rat(other_time.nanosecond(), 1000000000);
+        let other_seconds is rat = (other_time::Clock::hour * 3600 +
+            other_time::Clock::minute * 60 +
+            other_time::Clock::second).rat() + rat(other_time::Clock::nanosecond, 1000000000);
 
         Duration(
             value: (days * 86400).rat() + own_seconds - other_seconds,
@@ -108,6 +103,7 @@ object LocalDateTime does Comparing<LocalDateTime> {
         );
     }
 
+    // Earlier date-times come first.
     order(other is LocalDateTime) is Order {
         let dates is Order = date_value.order(other.date());
         if dates != Order.equal {
@@ -117,4 +113,44 @@ object LocalDateTime does Comparing<LocalDateTime> {
             time_value.order(other.time());
         }
     }
+}
+
+test "local date-times add whole civil days" {
+    let start = LocalDateTime(
+        date: Date(year: 2026, month: 8, day: 11),
+        time: TimeOfDay(hour: 23, minute: 30, second: 0, nanosecond: 0),
+    );
+    let finish = start.plus(Duration(hours: 2));
+    test.is(finish.date()::Calendar::day, 12);
+    test.is(finish.time()::Clock::hour, 1);
+    test.is(finish.time()::Clock::minute, 30);
+    test.is(finish.minus(start)::Span::seconds, 7200.rat());
+    test.is(start.order(finish), Order.less);
+    let year_end = LocalDateTime(
+        date: Date(year: 2026, month: 12, day: 31),
+        time: TimeOfDay(hour: 12, minute: 0, second: 0, nanosecond: 0),
+    );
+    test.is(year_end.plus(Duration(days: 1)).date()::Calendar::year, 2027);
+    test.is(start.plus(Duration(days: -1)).date()::Calendar::day, 10);
+    let final = LocalDateTime(
+        date: Date(year: 9999, month: 12, day: 31),
+        time: TimeOfDay(hour: 23, minute: 0, second: 0, nanosecond: 0),
+    );
+    test.is(
+        try {
+            final.plus(Duration(hours: 2)).date()::Calendar::year;
+        }
+        catch error is InvalidDate {
+            -1;
+        },
+        -1
+    );
+}
+
+test "a local date-time writes itself in ISO 8601" {
+    let local = LocalDateTime(
+        date: Date(year: 2026, month: 8, day: 11),
+        time: TimeOfDay(hour: 12, minute: 30, second: 45, nanosecond: 125000000),
+    );
+    test.is(local.string(), "2026-08-11T12:30:45.125");
 }

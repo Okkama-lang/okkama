@@ -1,49 +1,66 @@
 module digest/host v1.0.0;
 
+// Infrastructure: the runtime digest state behind digest/sha2, sha3, shake,
+// blake2 and legacy. Use those modules, not this.
+
 import "runtime/host_crypto" take DigestState, digest_create, digest_update, digest_bytes;
 import "crypto/error" take InvalidCryptoInput, CryptoUnavailable;
 
-// Internal immutable host digest state shared by digest/sha2, digest/sha3,
-// digest/shake, digest/blake2 and crypto/hmac. appended() returns a new state
-// over a host clone; the receiver, its earlier bytes() and other branches are
-// unchanged. bytes() finalizes a clone, so observation never prevents append.
-// width is the XOF output length (0 for fixed-width algorithms).
+// A runtime digest state; the digest objects keep one.
 object HostDigest {
     has handle is DigestState;
     has width is int;
 
+    // A new state of algorithm, keyed by key (empty when not keyed), width
+    // bytes long.
     HostDigest(algorithm is string, key is @byte, width is int) {
         handle = try {
             digest_create(algorithm, key, width);
-        } catch failure is NativeFailure {
-            if failure.code() == "invalid_input" { throw InvalidCryptoInput.because(failure.message()); }
+        }
+        catch failure is NativeFailure {
+            if failure.code() == "invalid_input" {
+                throw InvalidCryptoInput.because(failure.message());
+            }
             throw CryptoUnavailable.because(failure.message());
         };
         self.width = width;
     }
 
+    // A state from the runtime.
     HostDigest(handle is DigestState, width is int) {
         self.handle = handle;
         self.width = width;
     }
 
+    // The state continued with origin.
     appended(origin is @byte) is HostDigest {
-        if origin.size() == 0 { self; } else { HostDigest(digest_update(handle, origin), width); }
+        if origin.size() == 0 {
+            self;
+        }
+        else {
+            HostDigest(handle: digest_update(handle, origin), width: width);
+        }
     }
 
+    // The digest.
     bytes() is @byte {
         try {
             digest_bytes(handle, width);
-        } catch failure is NativeFailure {
-            if failure.code() == "invalid_input" { throw InvalidCryptoInput.because(failure.message()); }
+        }
+        catch failure is NativeFailure {
+            if failure.code() == "invalid_input" {
+                throw InvalidCryptoInput.because(failure.message());
+            }
             throw CryptoUnavailable.because(failure.message());
         }
     }
 }
 
 test "host digest states branch and reject unknown algorithms" {
-    let origin = HostDigest("sha256", [], 0).appended([1.byte()]);
+    let origin = HostDigest(algorithm: "sha256", key: [], width: 0).appended([1.byte()]);
     test.ok(origin.appended([2.byte()]).bytes() != origin.bytes());
     test.is(origin.appended([]).bytes(), origin.bytes());
-    test.throws(CryptoUnavailable) { HostDigest("md4", [], 0); };
+    test.throws(CryptoUnavailable) {
+        HostDigest(algorithm: "md4", key: [], width: 0);
+    };
 }

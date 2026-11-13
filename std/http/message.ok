@@ -1,53 +1,362 @@
 module http/message v1.0.0;
-import "http/method" take Method;
-import "http/status" take Status;
-import "http/header" take Headers;
-import "http/body" take BodyOpening, EmptyBody;
-import "http/version" take HttpVersion;
-import "http/target" take RequestTarget, RequestTargetSnapshot, RequestTargetMethod;
 
-// Immutable message metadata retains the body opening's declared capability.
-// It never opens, measures, closes or queries replayability during construction.
-// Connection/framing consumers own body consumption and transport validation.
+// Requests and responses: a head (method, target, status, fields, version) and
+// a body.
+//
+//     let request = Request(url: "https://example.com/", headers: Headers(Header(name: "Accept", value: "text/html")));
+//     request::Head::method;                                   // Method.get
+//     request::Head::target.path();                            // "/"
+//     let body = await request.text(limit: 65536);
+//
+//     Response(status: Status.ok, content: TextBody(text: "hi"));
+//     Response(status: Status.no_content);
+//
+// Unless told, a request is a GET with no fields, an empty body and HTTP/1.1; a
+// response has no fields, an empty body and HTTP/1.1. A message never reads its
+// body itself: the connection or the handler does. A Responding is anything
+// that builds a Response, such as the replies in web/reply.
+//
+// # Errors
+//
+// - BodyLimitExceeded: a body read whole was longer than the limit.
+// - InvalidHttpMessage: a head that does not fit together.
+
+import "http/method" take Method, MethodName;
+import "http/status" take Status, StatusCode, StatusClass;
+import "http/header" take Headers, Header, HeaderName;
+import "http/body" take BodyOpening, BodyReading, EmptyBody, Content, TextBody, UnknownBodyLength;
+import "http/version" take HttpVersion;
+import "http/target" take RequestTarget, RequestTargetSnapshot, RequestTargetMethod, AbsoluteTarget;
+import "url/value" take ParsedUrl;
+import "encoding/utf" take Utf8Decoded;
+import "io/stream" take AsyncReading;
+import "io/transfer" take ReadUntilEnd, ReadLimitExceeded;
+import "numbers/bigint" take BigInt;
+import "compare" take Order;
+
+// An HTTP request: its head through the cap `Head`, and its body.
 object Request {
-    has method is Method;has target is RequestTarget;has headers is Headers;
-    has body is BodyOpening;has version is HttpVersion;
-    Request(method is Method, target is RequestTarget, headers is Headers) {
-        let checked=RequestCoordinates(method,target).target();self.method=method;self.target=checked;
-        self.headers=headers;body=EmptyBody();version=HttpVersion.http_1_1;
+    has method is Method;
+    has target is RequestTarget;
+    has headers is Headers;
+    has body is BodyOpening;
+    has version is HttpVersion;
+
+    // A request for target; WrongRequestTargetKind or InvalidRequestTarget when
+    // the target does not suit the method.
+    Request(
+        target is RequestTarget,
+        method is Method = Method.get,
+        headers is Headers = Headers(),
+        body is BodyOpening = EmptyBody(),
+        version is HttpVersion = HttpVersion.http_1_1
+    ) {
+        self.target = RequestCoordinates(method: method, target: target).target();
+        self.method = method;
+        self.headers = headers;
+        self.body = body;
+        self.version = version;
     }
-    Request(method is Method, target is RequestTarget, headers is Headers, body is BodyOpening) {
-        let checked=RequestCoordinates(method,target).target();self.method=method;self.target=checked;
-        self.headers=headers;self.body=body;version=HttpVersion.http_1_1;
+
+    // A client request to an absolute http or https URL.
+    Request(
+        url is string,
+        method is Method = Method.get,
+        headers is Headers = Headers(),
+        body is BodyOpening = EmptyBody(),
+        version is HttpVersion = HttpVersion.http_1_1
+    ) {
+        self.target = RequestCoordinates(
+            method: method,
+            target: AbsoluteTarget(ParsedUrl(url).parts())
+        ).target();
+        self.method = method;
+        self.headers = headers;
+        self.body = body;
+        self.version = version;
     }
-    Request(method is Method, target is RequestTarget, headers is Headers, body is BodyOpening, version is HttpVersion) {
-        let checked=RequestCoordinates(method,target).target();self.method=method;self.target=checked;
-        self.headers=headers;self.body=body;self.version=version;
+
+    // The method, target, fields and version.
+    cap Head {
+        method is Method {
+            method;
+        }
+
+        target is RequestTarget {
+            target;
+        }
+
+        headers is Headers {
+            headers;
+        }
+
+        version is HttpVersion {
+            version;
+        }
     }
-    method() is Method{method;}target() is RequestTarget{target;}headers() is Headers{headers;}
-    body() is BodyOpening{body;}version() is HttpVersion{version;}
+
+    // The body opening.
+    body() is BodyOpening {
+        body;
+    }
+
+    // The whole body, at most limit bytes: await request.bytes(limit: 65536).
+    // A longer body throws BodyLimitExceeded, without being read when it
+    // declares its length (#76). A body in memory is handed out as it is;
+    // a streamed one is copied once, when its chunks are joined.
+    async bytes(limit is int) is @byte {
+        confirm limit >= 0 else throw BodyLimitExceeded.limit(limit);
+        let declared is @BigInt = try {
+            [body.length()];
+        }
+        catch e is UnknownBodyLength {
+            let unknown is @BigInt = [];
+            unknown;
+        };
+        confirm declared.size() == 0 || declared[0].order(BigInt(limit)) != Order.greater
+            else throw BodyLimitExceeded.limit(limit);
+        match body.contained() {
+            case Maybe.some(whole) {
+                confirm whole.size() <= limit else throw BodyLimitExceeded.limit(limit);
+                whole;
+            }
+            else {
+                await self.streamed(body.reading(), limit);
+            }
+        }
+    }
+
+    hidden async streamed(input is BodyReading, limit is int) is @byte {
+        defer input.close();
+        try {
+            await ReadUntilEnd(origin: MessageBodyBytes(input), limit: limit).bytes();
+        }
+        catch failure is ReadLimitExceeded {
+            throw BodyLimitExceeded.limit(limit);
+        };
+    }
+
+    // The whole body as UTF-8 text, at most limit bytes.
+    async text(limit is int) is string {
+        Utf8Decoded(await self.bytes(limit)).string();
+    }
 }
-object Response {
-    has status is Status;has headers is Headers;has body is BodyOpening;has version is HttpVersion;
-    Response(status is Status, headers is Headers){self.status=status;self.headers=headers;body=EmptyBody();version=HttpVersion.http_1_1;}
-    Response(status is Status, headers is Headers, body is BodyOpening){self.status=status;self.headers=headers;self.body=body;version=HttpVersion.http_1_1;}
-    Response(status is Status, headers is Headers, body is BodyOpening, version is HttpVersion) {
-        self.status=status;self.headers=headers;self.body=body;self.version=version;
+
+// A body reading seen as an AsyncReading, for io/transfer.
+hidden object MessageBodyBytes does AsyncReading {
+    has input is BodyReading;
+
+    MessageBodyBytes(input is BodyReading) {
+        self.input = input;
     }
-    status() is Status{status;}headers() is Headers{headers;}body() is BodyOpening{body;}version() is HttpVersion{version;}
+
+    async bytes(limit is int) is @byte {
+        await input.bytes(limit);
+    }
 }
+
+// What an endpoint answers: a Response, or a reply that builds one with its
+// defaults (TextReply, JsonReply and the others in web/reply).
+role Responding {
+    // The response.
+    response() is Response;
+}
+
+// A response shows its head through the cap `Head`; `body()` is the opening
+// to read. Unless told, it has no fields, an empty body and HTTP/1.1.
+object Response does Responding {
+    has status is Status;
+    has headers is Headers;
+    has body is BodyOpening;
+    has version is HttpVersion;
+
+    // A response with status and the body as given.
+    Response(
+        status is Status,
+        headers is Headers = Headers(),
+        body is BodyOpening = EmptyBody(),
+        version is HttpVersion = HttpVersion.http_1_1
+    ) {
+        self.status = status;
+        self.headers = headers;
+        self.body = body;
+        self.version = version;
+    }
+
+    // Response(status: Status.ok, content: TextBody(text: "hi")): the body and
+    // its Content-Type come from the content, unless headers name one.
+    Response(
+        status is Status,
+        content is Content,
+        headers is Headers = Headers(),
+        version is HttpVersion = HttpVersion.http_1_1
+    ) {
+        self.status = status;
+        self.headers = if headers.membership(HeaderName("Content-Type")) {
+            headers;
+        }
+        else {
+            headers.addition(Header(name: HeaderName("Content-Type"), value: content.media_type()));
+        };
+        body = content.opening();
+        self.version = version;
+    }
+
+    // The status, its code and class, the fields and the version.
+    cap Head {
+        status is Status {
+            status;
+        }
+
+        // The status as a number: 200, 404, or the code of Status.other.
+        code is int {
+            StatusCode(status).number();
+        }
+
+        class is StatusClass {
+            StatusCode(status).class();
+        }
+
+        headers is Headers {
+            headers;
+        }
+
+        version is HttpVersion {
+            version;
+        }
+    }
+
+    // The body opening.
+    body() is BodyOpening {
+        body;
+    }
+
+    // This response.
+    response() is Response {
+        self;
+    }
+}
+
+// A method and a target checked to fit together.
 object RequestCoordinates {
     has target is RequestTarget;
+
+    // method with target.
     RequestCoordinates(method is Method, target is RequestTarget) {
-        confirm method.string().length()<=8192 else throw InvalidHttpMessage.because("method source limit exceeded");
-        let checked=RequestTargetSnapshot(target).value();
-        confirm RequestTargetMethod(method,checked.kind()).valid() else throw InvalidHttpMessage.because("method does not permit target form");self.target=checked;
+        confirm MethodName(method).string().length() <= 8192
+            else throw InvalidHttpMessage.because("method source limit exceeded");
+        let checked = RequestTargetSnapshot(target).target();
+        confirm RequestTargetMethod(method: method, kind: checked.kind()).valid()
+            else throw InvalidHttpMessage.because("method does not permit target form");
+        self.target = checked;
     }
-    target() is RequestTarget{target;}
+
+    // The target; InvalidRequestTarget when the method does not allow its form.
+    target() is RequestTarget {
+        target;
+    }
 }
+
+// A head that does not fit together; reason says why.
 enum InvalidHttpMessage is Error = (because(reason is string));
+
+// A body was longer than limit.
+enum BodyLimitExceeded is Error = (limit(limit is int));
+
 test "message metadata does not open its empty body" {
-    let response=Response(Status(299),Headers([]));
-    test.ok(response.status().code()==299 && response.version()==HttpVersion.http_1_1);
-    test.ok(response.body().replayable() && response.body().length().string()=="0");
+    let response = Response(status: StatusCode(299).status());
+    test.ok(
+        response::Head::status == Status.other(299)
+            && response::Head::version == HttpVersion.http_1_1
+    );
+    test.ok(response.body().replayable() && response.body().length().string() == "0");
+}
+
+test "a request to a URL is a GET with no fields unless told" {
+    let request = Request(url: "https://example.com/a?b=1");
+    test.is(request::Head::method, Method.get);
+    test.is(request::Head::target.string(), "https://example.com/a?b=1");
+    test.is(request::Head::headers.entries().size(), 0);
+    let put = Request(url: "https://example.com/a", method: Method.put);
+    test.is(put::Head::method, Method.put);
+}
+
+test "a response takes content and its media type" {
+    let response = Response(status: Status.ok, content: TextBody(text: "hi"));
+    test.is(
+        response::Head::headers.values(HeaderName("Content-Type")).item(0),
+        "text/plain; charset=utf-8"
+    );
+    test.is(response.body().length().string(), "2");
+    let typed = Response(
+        status: Status.created,
+        content: TextBody(text: "{}"),
+        headers: Headers(Header(name: HeaderName("Content-Type"), value: "application/json")),
+    );
+    test.is(typed::Head::headers.values(HeaderName("Content-Type")).size(), 1);
+    test.is(typed::Head::headers.values(HeaderName("Content-Type")).item(0), "application/json");
+}
+
+async test "a request reads its whole body within a limit" {
+    let request = Request(
+        url: "http://example.test/notes",
+        method: Method.post,
+        body: TextBody(text: "héllo").opening()
+    );
+    test.is(await request.text(limit: 64), "héllo");
+    let again = Request(
+        url: "http://example.test/notes",
+        method: Method.post,
+        body: TextBody(text: "héllo").opening()
+    );
+    test.throws(BodyLimitExceeded) {
+        await again.bytes(limit: 3);
+    };
+}
+
+// Declares a million bytes and has none to read: a body that must be refused
+// by its declared length alone.
+hidden object DeclaredBody does BodyOpening {
+    DeclaredBody();
+
+    length() is BigInt {
+        BigInt(1000000);
+    }
+
+    replayable() is bool {
+        false;
+    }
+
+    contained() is Maybe<@byte> {
+        Maybe<@byte>.none;
+    }
+
+    reading() is BodyReading {
+        throw InvalidHttpMessage.because("the body was read");
+    }
+}
+
+async test "a declared length over the limit is refused before reading" {
+    let declared = Request(
+        url: "http://example.test/upload",
+        method: Method.post,
+        body: DeclaredBody()
+    );
+    let refusal = try {
+        await declared.bytes(limit: 1024);
+        "read";
+    }
+    catch BodyLimitExceeded.limit(limit) {
+        "refused at " + limit.string();
+    }
+    catch failure is InvalidHttpMessage {
+        "read";
+    };
+    test.is(refusal, "refused at 1024");
+    let streamed = Request(
+        url: "http://example.test/notes",
+        method: Method.post,
+        body: TextBody(text: "two words").opening()
+    );
+    test.is(await streamed.text(limit: 9), "two words");
 }

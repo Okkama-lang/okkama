@@ -1,5 +1,14 @@
 module url/form v1.0.0;
 
+// HTML forms as `application/x-www-form-urlencoded`.
+//
+//     let body = FormUrlEncoded(parameters).bytes();
+//     let fields = ParsedForm(body).parameters();
+//     fields.text("name");
+//
+// Spaces are `+`; everything else outside the unreserved set is
+// percent-encoded.
+
 import "url/query" take QueryParameters, ParameterParsing, InvalidQueryEncoding;
 import "url/percent" take PercentEncoded, UrlComponent;
 import "encoding/utf" take Utf8Encoded;
@@ -8,19 +17,32 @@ import "error" take InvalidArgument;
 // Explicit form serialization: every entry is assigned; * is safe, ~ is not.
 object FormUrlEncoded {
     has origin is QueryParameters;
-    FormUrlEncoded(origin is QueryParameters) {self.origin=origin;}
+
+    // Encodes origin as a form body.
+    FormUrlEncoded(origin is QueryParameters) {
+        self.origin = origin;
+    }
+
+    // The encoded text.
     string() is string {
-        let entries=origin.entries();
-        let parts is @string=(0..entries.size()).map() -> index {
-            let entry=entries.item(index);
-            self.field(entry.name())+"="+self.field(entry.value());
+        let entries = origin.entries();
+        let parts is @string = (0..entries.size()).map() -> index {
+            let entry = entries.item(index);
+            self.field(entry.name()) + "=" + self.field(entry.value());
         };
         parts.join("&");
     }
-    bytes() is @byte {Utf8Encoded(self.string()).bytes();}
-    private:
-    field(text is string) is string {
-        PercentEncoded(text,UrlComponent.data).string().replace("%20","+").replace("%2A","*").replace("~","%7E");
+
+    // The encoded text as bytes, for a request body.
+    bytes() is @byte {
+        Utf8Encoded(self.string()).bytes();
+    }
+
+    hidden field(text is string) is string {
+        PercentEncoded(origin: text, component: UrlComponent.data).string().replace("%20", "+").replace("%2A", "*").replace(
+            "~",
+            "%7E"
+        );
     }
 }
 
@@ -28,20 +50,39 @@ object FormUrlEncoded {
 object ParsedForm {
     has origin is @byte;
     has maximum_parameters, maximum_bytes is int;
-    ParsedForm(origin is @byte) {self.origin=origin;maximum_parameters=10000;maximum_bytes=1048576;}
-    ParsedForm(origin is @byte, maximum_parameters is int, maximum_bytes is int) {
-        confirm maximum_parameters>=0 && maximum_bytes>=0 else throw InvalidArgument.because("form limits must be nonnegative");
-        self.origin=origin;self.maximum_parameters=maximum_parameters;self.maximum_bytes=maximum_bytes;
+
+    // Reads a form body, at most 10000 fields and 1 MiB.
+    ParsedForm(origin is @byte) {
+        self.origin = origin;
+        maximum_parameters = 10000;
+        maximum_bytes = 1048576;
     }
+
+    // Reads a form body within these limits.
+    ParsedForm(origin is @byte, maximum_parameters is int, maximum_bytes is int) {
+        confirm maximum_parameters >= 0 && maximum_bytes >= 0
+            else throw InvalidArgument.because("form limits must be nonnegative");
+        self.origin = origin;
+        self.maximum_parameters = maximum_parameters;
+        self.maximum_bytes = maximum_bytes;
+    }
+
+    // The fields; InvalidFormEncoding when the body is not a form.
     parameters() is QueryParameters {
-        try {ParameterParsing(origin,true,maximum_parameters,maximum_bytes).parameters();}
-        catch InvalidQueryEncoding.located(offset, _) {throw InvalidFormEncoding.at(offset);}
+        try {
+            ParameterParsing(origin: origin, form: true, maximum_parameters: maximum_parameters, maximum_bytes: maximum_bytes).parameters();
+        }
+        catch InvalidQueryEncoding.located(offset, _) {
+            throw InvalidFormEncoding.at(offset);
+        }
     }
 }
+
+// A body that is not form-encoded; offset says where.
 enum InvalidFormEncoding is Error = (at(offset is int));
 
 test "form plus and literal plus have different encodings" {
-    let parsed=ParsedForm(Utf8Encoded("a=+%2B").bytes()).parameters();
-    test.is(parsed.first("a")," +");
-    test.is(FormUrlEncoded(parsed).string(),"a=+%2B");
+    let parsed = ParsedForm(Utf8Encoded("a=+%2B").bytes()).parameters();
+    test.is(parsed.text("a"), " +");
+    test.is(FormUrlEncoded(parsed).string(), "a=+%2B");
 }

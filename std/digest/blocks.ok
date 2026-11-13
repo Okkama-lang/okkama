@@ -1,20 +1,26 @@
 module digest/blocks v1.0.0;
 
-// Internal infrastructure for digests with 64-byte blocks and a 64-bit length
-// trailer. Compression is an immutable collaborator, not an algorithm enum.
-// block() accepts exactly 64 bytes and returns an unfinalized successor.
-// bytes() encodes the chaining words in the algorithm's specified byte order.
-// No collaborator is owned or closed. Errors propagate unchanged.
+// Infrastructure for digests of 64-byte blocks with a 64-bit length trailer, as
+// MD5 and SHA-1 are built. Use the digests themselves, not this.
+
+// One step of a block digest: it takes a block.
 role DigestCompression64 {
+    // The state after one 64-byte block.
     block(origin is @byte) is ^DigestCompression64;
+    // The digest of the state.
     bytes() is @byte;
+
     fake {
         has count is int = 0;
+
         block(origin is @byte) is ^DigestCompression64 {
             confirm origin.size() == 64 else throw InvalidDigestBlock.invalid;
             ^count = count + 1;
         }
-        bytes() is @byte { [byte(count % 256)]; }
+
+        bytes() is @byte {
+            [byte(count % 256)];
+        }
     }
 }
 
@@ -39,6 +45,8 @@ object DigestBlocks64 {
     has length is int;
     has little_endian is bool;
 
+    // Blocks of origin through compression, with the length written little- or
+    // big-endian.
     DigestBlocks64(compression is DigestCompression64, origin is @byte, little_endian is bool) {
         confirm origin.size() <= 2305843009213693951 else throw DigestInputTooLong.too_long;
         self.compression = compression;
@@ -48,40 +56,53 @@ object DigestBlocks64 {
         self.little_endian = little_endian;
     }
 
+    // Continued with origin.
     state(origin is @byte) is ^DigestBlocks64 {
-        confirm origin.size() <= 2305843009213693951 - length else throw DigestInputTooLong.too_long;
+        confirm origin.size() <= 2305843009213693951 - length
+            else throw DigestInputTooLong.too_long;
         ^compression = self.completed();
         ^prefix = self.remainder();
         ^origin = origin;
         ^length = length + origin.size();
     }
 
+    // The digest after padding.
     bytes() is @byte {
-        let padding = DigestPadding64(self.remainder(), length, little_endian).bytes();
+        let padding = DigestPadding64(tail: self.remainder(), length: length, little_endian: little_endian).bytes();
         let completed = self.completed();
         let final = (0..(padding.size() / 64).int()).reduce(completed) -> current, index {
-            let block is @byte = (0..64).map() -> i { padding[index * 64 + i]; };
+            let block is @byte = (0..64).map() -> i {
+                padding[index * 64 + i];
+            };
             let result = current.block(block);
             result;
         };
         final.bytes();
     }
 
-    private:
-
-    octet(index is int) is byte {
-        if index < prefix.size() { prefix[index]; }
-        else { origin[index - prefix.size()]; }
+    hidden octet(index is int) is byte {
+        if index < prefix.size() {
+            prefix[index];
+        }
+        else {
+            origin[index - prefix.size()];
+        }
     }
-    remainder() is @byte {
+
+    hidden remainder() is @byte {
         let size = prefix.size() + origin.size();
         let start = size - (size % 64);
-        let result is @byte = (start..size).map() -> i { self.octet(i); };
+        let result is @byte = (start..size).map() -> i {
+            self.octet(i);
+        };
         result;
     }
-    completed() is DigestCompression64 {
+
+    hidden completed() is DigestCompression64 {
         (0..((prefix.size() + origin.size()) / 64).int()).reduce(compression) -> current, index {
-            let block is @byte = (0..64).map() -> i { self.octet(index * 64 + i); };
+            let block is @byte = (0..64).map() -> i {
+                self.octet(index * 64 + i);
+            };
             let result = current.block(block);
             result;
         };
@@ -91,62 +112,109 @@ object DigestBlocks64 {
 // Final one/two blocks: tail, 0x80, zeros, then 64-bit message length in bits.
 // tail must have length % 64 bytes and be shorter than 64. Invalid coordinates
 // fail at construction. For example, the empty message is 0x80 plus 63 zeros.
-object DigestPadding64 {
+hidden object DigestPadding64 {
     has tail is @byte;
     has length is int;
     has little_endian is bool;
+
     DigestPadding64(tail is @byte, length is int, little_endian is bool) {
         confirm length >= 0 && length <= 2305843009213693951 else throw DigestInputTooLong.too_long;
-        confirm tail.size() < 64 && tail.size() == length % 64 else throw InvalidDigestPadding.invalid;
+        confirm tail.size() < 64 && tail.size() == length % 64
+            else throw InvalidDigestPadding.invalid;
         self.tail = tail;
         self.length = length;
         self.little_endian = little_endian;
     }
+
     bytes() is @byte {
-        let size = if tail.size() < 56 {64;} else {128;};
+        let size = if tail.size() < 56 {
+            64;
+        }
+        else {
+            128;
+        };
         (0..size).map() -> index {
-            if index < tail.size() { tail[index]; }
-            else if index == tail.size() { byte(128); }
-            else if index < size - 8 { byte(0); }
+            if index < tail.size() {
+                tail[index];
+            }
+            else if index == tail.size() {
+                byte(128);
+            }
+            else if index < size - 8 {
+                byte(0);
+            }
             else {
                 let position = index - (size - 8);
-                let shift = if little_endian {position * 8;} else {(7 - position) * 8;};
+                let shift = if little_endian {
+                    position * 8;
+                }
+                else {
+                    (7 - position) * 8;
+                };
                 byte(((length << 3) >>> shift) & 255);
             }
         };
     }
 }
 
+// More input than a 64-bit length can count.
 enum DigestInputTooLong is Error = (too_long);
+
+// Padding that does not fit the block rules.
 enum InvalidDigestPadding is Error = (invalid);
+
+// A block that is not 64 bytes.
 enum InvalidDigestBlock is Error = (invalid);
 
 test "digest padding has exact one and two block boundaries" {
-    let empty = DigestPadding64([], 0, true).bytes();
+    let empty = DigestPadding64(tail: [], length: 0, little_endian: true).bytes();
     test.is(empty.size(), 64);
     test.is(empty[0].int(), 128);
     test.is(empty[63].int(), 0);
-    let tail is @byte = (0..56).map() -> i {byte(0);};
-    let padded = DigestPadding64(tail, 56, false).bytes();
+    let tail is @byte = (0..56).map() -> i {
+        byte(0);
+    };
+    let padded = DigestPadding64(tail: tail, length: 56, little_endian: false).bytes();
     test.is(padded.size(), 128);
     test.is(padded[56].int(), 128);
     test.is(padded[126].int(), 1);
     test.is(padded[127].int(), 192);
 }
+
 test "digest block fake counts final padding without changing history" {
-    let empty = DigestBlocks64(DigestCompression64.fake(), [], false);
+    let empty = DigestBlocks64(compression: DigestCompression64.fake(), origin: [], little_endian: false);
     test.is(empty.bytes(), [byte(1)]);
     test.is(empty.state([]).bytes(), [byte(1)]);
-    let input is @byte = (0..65).map() -> i {byte(i);};
-    let origin = DigestBlocks64(DigestCompression64.fake(), input, false);
+    let input is @byte = (0..65).map() -> i {
+        byte(i);
+    };
+    let origin = DigestBlocks64(compression: DigestCompression64.fake(), origin: input, little_endian: false);
     let child = origin.state([byte(7)]);
     test.is(origin.bytes(), [byte(2)]);
     test.is(child.bytes(), [byte(2)]);
     test.is(origin.state([]).bytes(), [byte(2)]);
     test.is(origin.bytes(), [byte(2)]);
 }
+
 test "digest padding and block failures are typed" {
-    test.ok(try {DigestPadding64([], -1, true);false;} catch e is DigestInputTooLong {true;});
-    test.ok(try {DigestPadding64([], 1, true);false;} catch e is InvalidDigestPadding {true;});
-    test.ok(try {DigestCompression64.fake().block([]).bytes().size()<0;} catch e is InvalidDigestBlock {true;});
+    test.ok(try {
+        DigestPadding64(tail: [], length: -1, little_endian: true);
+        false;
+    }
+    catch e is DigestInputTooLong {
+        true;
+    });
+    test.ok(try {
+        DigestPadding64(tail: [], length: 1, little_endian: true);
+        false;
+    }
+    catch e is InvalidDigestPadding {
+        true;
+    });
+    test.ok(try {
+        DigestCompression64.fake().block([]).bytes().size() < 0;
+    }
+    catch e is InvalidDigestBlock {
+        true;
+    });
 }

@@ -1,10 +1,5 @@
 module digest/read v1.0.0;
 
-import "digest/state" take Digesting;
-import "io/stream" take AsyncReading,Reading;
-import "error" take InvalidArgument;
-import "io/buffer" take ByteBuffer;
-
 // Digests of byte streams. ReadDigest consumes a borrowed synchronous Reading
 // until its empty end-of-stream chunk and returns the successor of the given
 // digest over everything read; AsyncReadDigest does the same over AsyncReading.
@@ -14,17 +9,26 @@ import "io/buffer" take ByteBuffer;
 // is. Neither object closes the source. Source errors propagate unchanged.
 //
 //     let digest = ReadDigest(file.reading(), Sha256()).result();
+
+import "digest/state" take Digesting;
+import "io/stream" take AsyncReading, Reading;
+import "error" take InvalidArgument;
+import "io/buffer" take ByteBuffer;
+
+// The digest of everything a Reading gives, read in pieces.
 object ReadDigest {
     has origin is Reading;
     has digest is Digesting;
     has chunk is int;
 
+    // Reads origin into digest 65536 bytes at a time.
     ReadDigest(origin is Reading, digest is Digesting) {
         self.origin = origin;
         self.digest = digest;
         chunk = 65536;
     }
 
+    // Reads origin into digest chunk bytes at a time.
     ReadDigest(origin is Reading, digest is Digesting, chunk is int) {
         confirm chunk > 0 else throw InvalidArgument.because("digest read chunk must be positive");
         self.origin = origin;
@@ -32,25 +36,37 @@ object ReadDigest {
         self.chunk = chunk;
     }
 
-    result() is Digesting { self.continued(digest); }
+    // Reads origin to its end and gives the digest.
+    digest() is Digesting {
+        self.continued(digest);
+    }
 
+    // Reads origin to its end into current.
     continued(current is Digesting) is Digesting {
         let bytes = origin.bytes(chunk);
-        if bytes.size() == 0 { current; } else { self.continued(current.state(bytes)); }
+        if bytes.size() == 0 {
+            current;
+        }
+        else {
+            self.continued(current.state(bytes));
+        }
     }
 }
 
+// The digest of everything an AsyncReading gives.
 object AsyncReadDigest {
     has origin is AsyncReading;
     has digest is Digesting;
     has chunk is int;
 
+    // Reads origin into digest 65536 bytes at a time.
     AsyncReadDigest(origin is AsyncReading, digest is Digesting) {
         self.origin = origin;
         self.digest = digest;
         chunk = 65536;
     }
 
+    // Reads origin into digest chunk bytes at a time.
     AsyncReadDigest(origin is AsyncReading, digest is Digesting, chunk is int) {
         confirm chunk > 0 else throw InvalidArgument.because("digest read chunk must be positive");
         self.origin = origin;
@@ -58,18 +74,31 @@ object AsyncReadDigest {
         self.chunk = chunk;
     }
 
-    async result() is Digesting { await self.continued(digest); }
+    // Reads origin to its end and gives the digest.
+    async result() is Digesting {
+        await self.continued(digest);
+    }
 
+    // Reads origin to its end into current.
     async continued(current is Digesting) is Digesting {
         let bytes = await origin.bytes(chunk);
-        if bytes.size() == 0 { current; } else { await self.continued(current.state(bytes)); }
+        if bytes.size() == 0 {
+            current;
+        }
+        else {
+            await self.continued(current.state(bytes));
+        }
     }
 }
 
 test "stream digests equal digests of the whole input" {
-    let input is @byte = (0..1000).map() -> i { (i % 256).byte(); };
+    let input is @byte = (0..1000).map() -> i {
+        (i % 256).byte();
+    };
     let whole = Digesting.fake().state(input).bytes();
-    test.is(ReadDigest(ByteBuffer(input).reading(), Digesting.fake(), 7).result().bytes(), whole);
-    test.is(ReadDigest(ByteBuffer().reading(), Digesting.fake()).result().bytes().size(), 0);
-    test.throws(InvalidArgument) { ReadDigest(ByteBuffer().reading(), Digesting.fake(), 0); };
+    test.is(ReadDigest(origin: ByteBuffer(input).reading(), digest: Digesting.fake(), chunk: 7).digest().bytes(), whole);
+    test.is(ReadDigest(origin: ByteBuffer().reading(), digest: Digesting.fake()).digest().bytes().size(), 0);
+    test.throws(InvalidArgument) {
+        ReadDigest(origin: ByteBuffer().reading(), digest: Digesting.fake(), chunk: 0);
+    };
 }

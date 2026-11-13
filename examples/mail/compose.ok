@@ -1,0 +1,59 @@
+module examples/mail/compose v1.0.0;
+
+import "mail/message" take MailMessage, ParsedMail;
+import "mail/mailbox" take Maildir;
+import "fs/temp" take TemporaryDirectory;
+import "random/source" take PcgRandom;
+import "time/clock" take Timing, Instant, MonotonicInstant;
+import "time/duration" take Duration;
+import "io/stdout" take Stdout;
+
+// An e-mail from its fields: MailMessage(from:, to:, subject:, text:) adds
+// the Date, a fresh Message-ID, MIME-Version and the Content-Type. Render it
+// as RFC 5322 bytes, parse the bytes back, and keep the message in a Maildir,
+// a directory where each message is one file, delivered atomically.
+// A real program leaves clock: and random: out; this one fixes both, so its
+// output is the same on every run.
+
+object FixedClock does Timing {
+    FixedClock();
+
+    instant() is Instant {
+        Instant(Duration(seconds: 1700000000));
+    }
+
+    monotonic_instant() is MonotonicInstant {
+        MonotonicInstant(Duration(seconds: 0));
+    }
+
+    async wait(duration is Duration) is void {}
+}
+
+main() is int {
+    let out = Stdout();
+    let message = MailMessage(
+        from: "Ada <ada@example.test>",
+        to: ["Grace <grace@example.test>"],
+        subject: "Lunch on Thursday?",
+        text: "Shall we try the new place?\r\n",
+        clock: FixedClock(),
+        random: PcgRandom(7),
+    );
+    out.write(message.string());
+    out.writeln("---");
+
+    let back = ParsedMail(message.bytes()).message();
+    out.writeln("subject: ", back.headers().first("Subject"));
+    out.writeln("from: ", back.headers().first("From"));
+
+    let scratch = TemporaryDirectory(prefix: "maildir-");
+    let box = Maildir(scratch.path().child("inbox")).created();
+    box.add(message);
+    box.add(back);
+    out.writeln("maildir holds ", box.messages().size(), " messages");
+    for box.messages() -> stored {
+        out.writeln("  ", stored.message().headers().first("Subject"));
+    }
+    scratch.close();
+    0;
+}

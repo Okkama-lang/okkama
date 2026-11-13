@@ -41,6 +41,8 @@ pub(super) struct Instance {
     /// Номер скрытого поля `$pending`, если конструктор отдаёт `self`
     /// значением: пока создание не завершено, действия отвергаются (#271).
     pub pending: Option<usize>,
+    /// Слоты `once let` (#491): (action, локальная, номер поля).
+    pub once_slots: Vec<(usize, thir::LocalId, usize)>,
     pub span: Span,
 }
 
@@ -87,19 +89,20 @@ pub(super) enum Task {
     AdapterNew {
         object: ObjectId,
     },
-    VariantGet {
-        object: ObjectId,
-        field: usize,
-    },
-    /// Текст значения варианта `Enum.case(payload, ...)`; у error enum — слот
-    /// `text()` роли Error.
+    /// Текст значения варианта `Enum.case(payload, ...)` (#290).
     VariantText {
+        variant: ir::VariantId,
+    },
+    /// Слот `text()` роли Error у случая error enum: текст его варианта.
+    CaseText {
         object: ObjectId,
     },
     /// Текст `bool` или case enum без payload внутри текста варианта.
     Describe {
         ty: Ty,
     },
+    /// Строка payload ошибки в синтаксисе литерала Okkama (#306).
+    EscapeText,
     /// Тело анонимного action: `Ctx::closures[index]`.
     Closure {
         index: usize,
@@ -192,7 +195,11 @@ pub(super) struct Ctx<'r, 'a> {
     body_index: HashMap<BodyOwner, usize>,
     pub objects: Vec<Instance>,
     object_map: HashMap<(DeclObject, Vec<Ty>), ObjectId>,
-    variant_map: HashMap<Ty, ObjectId>,
+    variant_map: HashMap<Ty, ir::VariantId>,
+    /// Варианты по `ir::VariantId`: случаи — объекты из `objects` (#290).
+    pub variants: Vec<ir::Variant>,
+    /// Модуль объявления каждого варианта.
+    variant_modules: Vec<usize>,
     pub roles: Vec<RoleInstance>,
     role_map: HashMap<(DeclRole, Vec<Ty>), RoleId>,
     /// Функции в порядке выделения: задача и символ.
@@ -215,9 +222,22 @@ pub(super) struct Ctx<'r, 'a> {
     /// В программе есть `destroy`: lowering выпускает регионы владения (§7).
     pub ownership: bool,
     /// В программе есть `async destroy`: области async-функций закрываются
-    /// `region.settle` (#154).
+    /// `region.settle` (#154), если в них может попасть значение, которое
+    /// достаёт объект с асинхронным destroy (#328).
     pub settles: bool,
     plain_objects: Vec<bool>,
+    /// Специализации объектов и ролей, чьи значения могут достать объект с
+    /// `async destroy` (#328): неподвижная точка, как у plain-ности, по
+    /// всем специализациям программы, когда тела уже опущены.
+    async_objects: Vec<bool>,
+    async_roles: Vec<bool>,
+    /// Типы значений, принятых областями каждой задачи, чьи области
+    /// закрываются `region.settle` (#328); решение — после всех тел.
+    pub settle_types: Vec<Option<Vec<Type>>>,
+    /// Some value that may reach an object with an `async destroy` is boxed
+    /// as `any`, captured by a function value or owns a capability somewhere
+    /// in the program (#328): then values of those types may too.
+    pub dynamic_async: bool,
     plain_roles: Vec<bool>,
     /// Plain-ность объявлений ролей по всем объявлениям объектов программы
     /// (не только уже специализированным): роль, которую делает объект с
@@ -259,6 +279,8 @@ impl<'r, 'a> Ctx<'r, 'a> {
             objects: Vec::new(),
             object_map: HashMap::new(),
             variant_map: HashMap::new(),
+            variants: Vec::new(),
+            variant_modules: Vec::new(),
             roles: Vec::new(),
             role_map: HashMap::new(),
             tasks: Vec::new(),
@@ -278,6 +300,10 @@ impl<'r, 'a> Ctx<'r, 'a> {
             plain_roles: Vec::new(),
             decl_plain_roles,
             decl_plain_objects,
+            async_objects: Vec::new(),
+            async_roles: Vec::new(),
+            settle_types: Vec::new(),
+            dynamic_async: false,
         }
     }
 
@@ -472,7 +498,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
             return false;
         };
         // `panic "… is a VM intrinsic";` — первым (за ним бывает `self;`
-        // ради типа) или последним (у FutureScope.result — после подготовки).
+        // ради типа) или последним (у FutureScope.outcome — после подготовки).
         let marks = |stmt: &ast::Stmt| {
             matches!(
                 &stmt.kind,
@@ -500,15 +526,17 @@ impl<'r, 'a> Ctx<'r, 'a> {
             | Task::Default { object, .. }
             | Task::Destroy { object }
             | Task::AdapterNew { object }
-            | Task::VariantGet { object, .. }
-            | Task::VariantText { object }
+            | Task::CaseText { object }
             | Task::Witness { object, .. }
             | Task::WorkerEntry { object, .. }
             | Task::WorkerBind { object, .. }
             | Task::CapField { object, .. } => self.objects[object.0].module,
+            Task::VariantText { variant } => self.variant_modules[variant.0],
             Task::Closure { index } => self.closures[*index].body.module,
             Task::Test { index } => self.reg.tests[*index].module,
-            Task::Runtime { .. } | Task::Member { .. } | Task::Describe { .. } => self.reg.root(),
+            Task::Runtime { .. } | Task::Member { .. } | Task::Describe { .. } | Task::EscapeText => {
+                self.reg.root()
+            }
             Task::Native { native } => self.reg.natives[*native].module,
             Task::Global { constant } => self.reg.consts[*constant].module,
         }
@@ -795,44 +823,34 @@ impl<'r, 'a> Ctx<'r, 'a> {
         )
     }
 
-    pub fn variant_field_case(&self, object: ObjectId, field: usize) -> Option<usize> {
-        if field == 0 {
-            return None;
-        }
-        let (Ty::Variant(id, _), _) = self
-            .variant_map
-            .iter()
-            .find(|(_, value)| **value == object)?
-        else {
-            return None;
-        };
-        let mut offset = 1;
-        for (case, fields) in self.reg.enums[id.0].payloads.iter().enumerate() {
-            if field < offset + fields.len() {
-                return Some(case);
-            }
-            offset += fields.len();
-        }
-        None
-    }
-
-    pub fn variant_getter(&mut self, object: ObjectId, field: usize) -> FuncId {
-        let task = Task::VariantGet { object, field };
+    /// Функция текста значения варианта: `(variant) -> str`.
+    pub fn variant_text(&mut self, variant: ir::VariantId) -> FuncId {
+        let task = Task::VariantText { variant };
         if let Some(func) = self.task_map.get(&task) {
             return *func;
         }
-        self.allocate(task, self.symbol(object, &format!(".$field{field}")))
+        let symbol = format!("{}.$text", self.variants[variant.0].name);
+        self.allocate(task, symbol)
     }
 
-    pub fn variant_text(&mut self, object: ObjectId) -> FuncId {
-        let task = Task::VariantText { object };
+    /// Слот `text()` роли Error у объекта случая error enum.
+    fn case_text(&mut self, object: ObjectId, symbol: String) -> FuncId {
+        let task = Task::CaseText { object };
         if let Some(func) = self.task_map.get(&task) {
             return *func;
         }
-        self.allocate(task, self.symbol(object, ".text"))
+        self.allocate(task, symbol)
     }
 
     /// Функция текста `bool` (`true`/`false`) или case enum без payload.
+    /// `(str) -> str`: экранирование строки payload для `text()` ошибки.
+    pub fn escape_text(&mut self) -> FuncId {
+        if let Some(func) = self.task_map.get(&Task::EscapeText) {
+            return *func;
+        }
+        self.allocate(Task::EscapeText, "$escape.text".to_string())
+    }
+
     pub fn describe(&mut self, ty: &Ty) -> FuncId {
         let task = Task::Describe { ty: ty.clone() };
         if let Some(func) = self.task_map.get(&task) {
@@ -845,15 +863,26 @@ impl<'r, 'a> Ctx<'r, 'a> {
         self.allocate(task, symbol)
     }
 
-    /// Тип анализа объекта варианта.
-    pub fn variant_ty(&self, object: ObjectId) -> Option<Ty> {
+    /// Тип анализа варианта.
+    pub fn variant_ty(&self, variant: ir::VariantId) -> Option<Ty> {
         self.variant_map
             .iter()
-            .find(|(_, value)| **value == object)
+            .find(|(_, value)| **value == variant)
             .map(|(ty, _)| ty.clone())
     }
 
-    fn variant_instance(&mut self, ty: &Ty, span: Span) -> Result<ObjectId> {
+    /// Вариант и номер случая объекта `object`, если это раскладка случая.
+    pub fn case_of(&self, object: ObjectId) -> Option<(ir::VariantId, usize)> {
+        self.variants.iter().enumerate().find_map(|(id, variant)| {
+            let case = variant.cases.iter().position(|(_, case)| *case == object)?;
+            Some((ir::VariantId(id), case))
+        })
+    }
+
+    /// Вариант (#290): по объекту раскладки на каждый случай, поля объекта —
+    /// payload этого случая. Значение создаёт `variant.new`, поэтому у
+    /// объектов случаев нет конструкторов.
+    fn variant_instance(&mut self, ty: &Ty, span: Span) -> Result<ir::VariantId> {
         if let Some(id) = self.variant_map.get(ty) {
             return Ok(*id);
         }
@@ -864,43 +893,53 @@ impl<'r, 'a> Ctx<'r, 'a> {
         let decl = &reg.enums[decl_id.0];
         let env: Vec<_> = decl.params.iter().copied().zip(args.clone()).collect();
         let module = decl.module;
-        let payloads = decl.payloads.clone();
         let error = decl.error;
-        let id = ObjectId(self.objects.len());
+        let id = ir::VariantId(self.variants.len());
         self.variant_map.insert(ty.clone(), id);
-        self.objects.push(Instance {
-            decl: DeclObject(usize::MAX),
-            env: env.clone(),
-            // Error enum не generic: одно объявление — одна специализация, и имя
-            // объекта — имя типа ошибки в сообщениях о неперехваченном отказе.
-            name: if error {
-                decl.name.clone()
-            } else {
-                format!("$variant_{}_{}", decl.name, id.0)
-            },
-            module,
-            fields: Vec::new(),
-            methods: Vec::new(),
-            pending: None,
-            destroy: None,
-            does: Vec::new(),
+        // Error enum не generic: одно объявление — одна специализация, и имя
+        // объекта случая — имя типа ошибки в сообщениях о неперехваченном отказе.
+        let name = if error {
+            decl.name.clone()
+        } else {
+            format!("$variant_{}_{}", decl.name, id.0)
+        };
+        self.variants.push(ir::Variant {
+            name: format!("{}{name}", self.prefixes[module]),
+            cases: Vec::new(),
             span,
         });
-        let mut fields = vec![("$tag".into(), Type::Int, None)];
-        for (case, payload) in payloads.iter().enumerate() {
-            for (name, ty) in payload {
-                fields.push((
-                    format!("${case}_{name}"),
-                    Type::Array(Box::new(self.ir_type(&ty.subst(&env), span)?)),
-                    None,
-                ));
-            }
+        self.variant_modules.push(module);
+        let mut cases = Vec::new();
+        for case in &decl.cases {
+            let object = ObjectId(self.objects.len());
+            self.objects.push(Instance {
+                decl: DeclObject(usize::MAX),
+                env: env.clone(),
+                name: if error { name.clone() } else { format!("{name}.{case}") },
+                module,
+                fields: Vec::new(),
+                methods: Vec::new(),
+                pending: None,
+                once_slots: Vec::new(),
+                destroy: None,
+                does: Vec::new(),
+                span,
+            });
+            cases.push((case.clone(), object));
         }
-        self.objects[id.0].fields = fields;
-        if error {
-            let text = self.variant_text(id);
-            let role = self.role_instance(self.reg.system.error, Vec::new(), span)?;
-            self.objects[id.0].does = vec![(role, vec![text])];
+        self.variants[id.0].cases = cases.clone();
+        for ((case, object), payload) in cases.iter().zip(&decl.payloads) {
+            let mut fields = Vec::new();
+            for (field, field_ty) in payload {
+                fields.push((field.clone(), self.ir_type(&field_ty.subst(&env), span)?, None));
+            }
+            self.objects[object.0].fields = fields;
+            if error {
+                let symbol = format!("{}{name}.{case}.text", self.prefixes[module]);
+                let text = self.case_text(*object, symbol);
+                let role = self.role_instance(self.reg.system.error, Vec::new(), span)?;
+                self.objects[object.0].does = vec![(role, vec![text])];
+            }
         }
         // A payload may own resources. Publish its plainness before callers emit
         // region keep/track operations for the returned variant value.
@@ -930,7 +969,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
             Ty::Object(id, args) => Type::Object(self.object_instance(*id, args.clone(), span)?),
             Ty::Role(id, args) => Type::Role(self.role_instance(*id, args.clone(), span)?),
             Ty::Enum(id) => Type::Enum(self.enum_id(*id)),
-            Ty::Variant(..) => Type::Object(self.variant_instance(ty, span)?),
+            Ty::Variant(..) => Type::Variant(self.variant_instance(ty, span)?),
             Ty::Successor(inner) => match self.ir_type(inner, span)? {
                 Type::Object(object) => Type::Successor(object),
                 // `^R` роли: обязательство проверил анализ; в OIR — ссылка роли.
@@ -973,7 +1012,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
                     span,
                     format!(
                         "internal compiler error: type {} reached lowering",
-                        self.reg.type_name(ty)
+                        self.reg.plain_type_name(ty)
                     ),
                 ));
             }
@@ -1064,7 +1103,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
         let name = if args.is_empty() {
             info.name.clone()
         } else {
-            self.reg.type_name(&Ty::Object(decl, args.clone()))
+            self.reg.plain_type_name(&Ty::Object(decl, args.clone()))
         };
         let module = info.module;
         let id = ObjectId(self.objects.len());
@@ -1078,6 +1117,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
             destroy: None,
             does: Vec::new(),
             pending: None,
+            once_slots: Vec::new(),
             span: info.decl.map_or(span, |decl| decl.span),
         });
         self.object_map.insert((decl, args), id);
@@ -1142,7 +1182,41 @@ impl<'r, 'a> Ctx<'r, 'a> {
             instance.pending = Some(instance.fields.len());
             instance.fields.push((PENDING_FIELD.to_string(), Type::Bool, None));
         }
+        // Слоты `once let` (#491): по скрытому полю `Maybe<T>` на каждый
+        // `once let` верхнего уровня тел действий объявления.
+        let mut sites = Vec::new();
+        for body in self.bodies.iter() {
+            let BodyOwner::Method { object, method } = body.owner else {
+                continue;
+            };
+            if object != decl {
+                continue;
+            }
+            for stmt in &body.block.stmts {
+                if let thir::StmtKind::Let { local, once: true, .. } = &stmt.kind {
+                    sites.push((method, *local, body.locals[local.0].ty.clone(), stmt.span));
+                }
+            }
+        }
+        let env = self.objects[id.0].env.clone();
+        for (method, local, ty, span) in sites {
+            let maybe = Ty::Variant(crate::analysis::ty::EnumId(0), vec![ty.subst(&env)]);
+            let slot = self.ir_type(&maybe, span)?;
+            let instance = &mut self.objects[id.0];
+            let field = instance.fields.len();
+            instance.fields.push((format!("$once{}", instance.once_slots.len()), slot, None));
+            instance.once_slots.push((method, local, field));
+        }
         Ok(())
+    }
+
+    /// Поле слота `once let` локальной `local` действия `method` (#491).
+    pub fn once_field(&self, object: ObjectId, method: usize, local: thir::LocalId) -> Option<usize> {
+        self.objects[object.0]
+            .once_slots
+            .iter()
+            .find(|(m, l, _)| *m == method && *l == local)
+            .map(|(_, _, field)| *field)
     }
 
     /// Конструктор объявления отдаёт `self` значением (§11.4): сотрудник может
@@ -1187,7 +1261,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
                             .iter()
                             .zip(&params)
                             .all(|((_, left), right)| left.subst(&env) == *right)
-                        && !candidate.private
+                        && !candidate.hidden
                 });
                 let Some(found) = found else {
                     return Err(LoweringError::unsupported(
@@ -1255,7 +1329,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
         let name = if args.is_empty() {
             info.name.clone()
         } else {
-            reg.type_name(&Ty::Role(decl, args.clone()))
+            reg.plain_type_name(&Ty::Role(decl, args.clone()))
         };
         let id = RoleId(self.roles.len());
         self.roles.push(RoleInstance {
@@ -1341,6 +1415,70 @@ impl<'r, 'a> Ctx<'r, 'a> {
         }
     }
 
+    /// Какие специализации могут достать объект с `async destroy` (#328):
+    /// объект — свой асинхронный destroy или такое поле; роль — её делает
+    /// такой объект. Считается, когда все тела опущены: значение роли
+    /// держит только объект, чья специализация уже есть.
+    pub fn compute_async(&mut self) {
+        self.async_objects = vec![false; self.objects.len()];
+        self.async_roles = vec![false; self.roles.len()];
+        if !self.settles {
+            return;
+        }
+        loop {
+            let mut changed = false;
+            for index in 0..self.objects.len() {
+                // System objects (`Cancelled`, `NativeFailure`) have no destroy.
+                let own = self.reg.objects.get(self.objects[index].decl.0)
+                    .is_some_and(|info| info.destroy.is_some_and(|destroy| destroy.is_async));
+                let reaching = own || self.objects[index].fields.iter().any(|(_, ty, _)| self.may_async_destroy(ty));
+                if !self.async_objects[index] && reaching {
+                    self.async_objects[index] = true;
+                    changed = true;
+                }
+            }
+            for index in 0..self.objects.len() {
+                if self.async_objects[index] {
+                    for (role, _) in &self.objects[index].does {
+                        if !self.async_roles[role.0] {
+                            self.async_roles[role.0] = true;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+
+    /// Значение типа может достать объект с `async destroy`, так что
+    /// область, которая им владеет, закрывается `region.settle` (#328).
+    /// Ошибка в сторону `true` стоит только лишней точки ожидания, в
+    /// сторону `false` — пропущенного destroy, поэтому всё, что не доказано,
+    /// — может: неизвестные специализации, и `any`, замыкания и cap, если в
+    /// программе в них попадает хоть одно такое значение.
+    pub fn may_async_destroy(&self, ty: &Type) -> bool {
+        if !self.settles {
+            return false;
+        }
+        match ty {
+            Type::Object(object) | Type::Successor(object) => self.async_objects.get(object.0).copied().unwrap_or(true),
+            Type::Role(role) => self.async_roles.get(role.0).copied().unwrap_or(true),
+            Type::Variant(id) => self.variants.get(id.0).is_none_or(|variant| {
+                variant
+                    .cases
+                    .iter()
+                    .any(|(_, object)| self.async_objects.get(object.0).copied().unwrap_or(true))
+            }),
+            Type::Array(element) | Type::Builder(element) => self.may_async_destroy(element),
+            Type::Map(_, value) | Type::MapBuilder(_, value) => self.may_async_destroy(value),
+            Type::Any | Type::Fn(_) | Type::Cap(_) => self.dynamic_async,
+            _ => false,
+        }
+    }
+
     /// Значение типа не достигает идентичностей с `destroy` (§3.3).
     pub fn is_plain(&self, ty: &Type) -> bool {
         match ty {
@@ -1356,6 +1494,12 @@ impl<'r, 'a> Ctx<'r, 'a> {
                             })
                     })
             }
+            Type::Variant(id) => self.variants.get(id.0).is_none_or(|variant| {
+                variant
+                    .cases
+                    .iter()
+                    .all(|(_, object)| self.plain_objects.get(object.0).copied().unwrap_or(true))
+            }),
             Type::Array(element) | Type::Builder(element) => self.is_plain(element),
             Type::Map(_, value) | Type::MapBuilder(_, value) => self.is_plain(value),
             // В box и в захватах может лежать объект: владение отслеживается.
@@ -1384,10 +1528,12 @@ impl<'r, 'a> Ctx<'r, 'a> {
                 fields: object
                     .fields
                     .iter()
-                    .map(|(name, ty, default)| ir::Field {
+                    .enumerate()
+                    .map(|(index, (name, ty, default))| ir::Field {
                         name: name.clone(),
                         ty: ty.clone(),
                         default: *default,
+                        once: object.once_slots.iter().any(|(_, _, field)| *field == index),
                     })
                     .collect(),
                 does: object
@@ -1466,6 +1612,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
             enums,
             roles,
             objects,
+            variants: self.variants.clone(),
             handles,
             caps,
             globals: self.globals.clone(),

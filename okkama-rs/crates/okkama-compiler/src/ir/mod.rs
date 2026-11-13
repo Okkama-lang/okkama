@@ -45,6 +45,8 @@ pub enum Type {
     Role(RoleId),
     /// Значение enum модуля.
     Enum(EnumId),
+    /// Значение варианта (#290): ровно один из его случаев.
+    Variant(VariantId),
     /// Служебный: активный отказ (§6).
     Failure,
     /// Неизменяемый массив (§12.1).
@@ -76,10 +78,10 @@ pub enum Type {
 
 /// Закрытый перечень intrinsics `okkama-rs` (§14.2): действия объектов std
 /// `async/*`, чьё состояние держит рантайм.
-pub const INTRINSICS: [&str; 68] = [
-    "okkama.timeout.Within.result",
-    "okkama.timeout.Before.result",
-    "okkama.scope.FutureScope.result",
+pub const INTRINSICS: [&str; 92] = [
+    "okkama.timeout.Within.outcome",
+    "okkama.timeout.Before.outcome",
+    "okkama.scope.FutureScope.outcome",
     "okkama.lock.Lock.new",
     "okkama.lock.Lock.guard",
     "okkama.lock.Lock.locked",
@@ -101,7 +103,31 @@ pub const INTRINSICS: [&str; 68] = [
     "okkama.test.ok",
     "okkama.test.is",
     "okkama.test.isnt",
+    "okkama.test.close",
+    "okkama.test.text",
+    "okkama.test.bytes",
+    "okkama.float.floor",
+    "okkama.float.ceil",
+    "okkama.float.round",
+    "okkama.float.trunc",
+    "okkama.float.exp",
+    "okkama.float.ln",
+    "okkama.float.log2",
+    "okkama.float.log10",
+    "okkama.float.sin",
+    "okkama.float.cos",
+    "okkama.float.tan",
+    "okkama.float.atan2",
+    "okkama.float.finite",
+    "okkama.float.nan",
+    "okkama.float.min",
+    "okkama.float.max",
+    "okkama.float.clamp",
+    "okkama.int.min",
+    "okkama.int.max",
+    "okkama.int.clamp",
     "okkama.test.fail",
+    "okkama.test.skip",
     "okkama.fake.storage.set",
     "okkama.fake.storage.get",
     "okkama.fake.storage.has",
@@ -138,8 +164,8 @@ pub const INTRINSICS: [&str; 68] = [
     "okkama.scope.FutureGroup.cancel",
     "okkama.scope.FutureGroup.wait",
     "okkama.collect.AllFutures.results",
-    "okkama.collect.Raced.result",
-    "okkama.collect.FirstSuccessful.result",
+    "okkama.collect.Raced.winner",
+    "okkama.collect.FirstSuccessful.outcome",
     "okkama.collect.FutureCompletions.remaining_count",
     "okkama.collect.FutureCompletions.completion",
     "okkama.channel.Sending.new",
@@ -173,6 +199,37 @@ pub struct FnSig {
 }
 
 impl Type {
+    /// Подходит ли тип к `target`, отличаясь от него только местами `never`
+    /// нетегированных пустых коллекций: `array<array<never>>` к
+    /// `array<array<int>>` (#297). Такое значение перетегируется без затрат.
+    pub fn fits_untagged(&self, target: &Type) -> bool {
+        match (self, target) {
+            _ if self == target => true,
+            (Type::Never, _) => true,
+            (Type::Array(a), Type::Array(b)) => a.fits_untagged(b),
+            (Type::Map(k1, v1), Type::Map(k2, v2)) => k1.fits_untagged(k2) && v1.fits_untagged(v2),
+            _ => false,
+        }
+    }
+
+    /// Общий тип двух значений, к которому оба подходят перетегированием.
+    pub fn unify_untagged(&self, other: &Type) -> Option<Type> {
+        if self.fits_untagged(other) {
+            return Some(other.clone());
+        }
+        if other.fits_untagged(self) {
+            return Some(self.clone());
+        }
+        match (self, other) {
+            (Type::Array(a), Type::Array(b)) => Some(Type::Array(Box::new(a.unify_untagged(b)?))),
+            (Type::Map(k1, v1), Type::Map(k2, v2)) => Some(Type::Map(
+                Box::new(k1.unify_untagged(k2)?),
+                Box::new(v1.unify_untagged(v2)?),
+            )),
+            _ => None,
+        }
+    }
+
     /// Тип значения после погашения обязательства `^C` → `C`.
     pub fn taken(&self) -> Type {
         match self {
@@ -196,6 +253,7 @@ impl Type {
                 | Type::Byte
                 | Type::Char
                 | Type::Float
+                | Type::Rat
                 | Type::Str
                 | Type::Enum(_)
                 | Type::Object(_)
@@ -222,6 +280,8 @@ pub struct Module {
     pub enums: Vec<Enum>,
     pub roles: Vec<Role>,
     pub objects: Vec<Object>,
+    /// Варианты — enum с payload (#290).
+    pub variants: Vec<Variant>,
     /// Native objects (`native object H`, §14.1).
     pub handles: Vec<Handle>,
     /// Caps объектов (§8.5).
@@ -349,6 +409,9 @@ pub struct Field {
     pub ty: Type,
     /// Функция `[default C.f]`, вычисляющая значение по умолчанию.
     pub default: Option<FuncId>,
+    /// Слот `once let` (#491): `Maybe` значения, посчитанного один раз.
+    /// Не участвует в `==`, хэше, Dumper и сохранении; наследник получает `none`.
+    pub once: bool,
 }
 
 impl Module {
@@ -373,6 +436,18 @@ impl Module {
     }
 
     /// Делает ли объект роль (по объявлению `does`).
+    pub fn variant(&self, id: VariantId) -> Option<&Variant> {
+        self.variants.get(id.0)
+    }
+
+    /// Вариант и номер случая, раскладка которого — `object`.
+    pub fn variant_case(&self, object: ObjectId) -> Option<(VariantId, usize)> {
+        self.variants.iter().enumerate().find_map(|(id, variant)| {
+            let case = variant.cases.iter().position(|(_, case)| *case == object)?;
+            Some((VariantId(id), case))
+        })
+    }
+
     pub fn does(&self, object: ObjectId, role: RoleId) -> bool {
         self.object(object)
             .is_some_and(|object| object.does.iter().any(|witness| witness.role == role))
@@ -388,6 +463,12 @@ impl Module {
                     .any(|witness| self.role(witness.role).is_some_and(Role::is_error))
             }),
             Type::Role(role) => self.role(*role).is_some_and(Role::is_error),
+            Type::Variant(id) => self.variant(*id).is_some_and(|variant| {
+                variant
+                    .cases
+                    .iter()
+                    .all(|(_, case)| self.throwable(&Type::Object(*case)))
+            }),
             _ => false,
         }
     }
@@ -408,6 +489,22 @@ pub struct EnumId(pub usize);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct HandleId(pub usize);
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct VariantId(pub usize);
+
+/// Вариант — enum с payload (#290): значение — ровно один из случаев. У
+/// каждого случая своя раскладка — объект модуля, поля которого — payload
+/// этого случая, и только они: ни тега, ни полей других случаев. Создание,
+/// номер случая и чтение payload — инструкции `variant.new`, `variant.tag`,
+/// `variant.get`; как хранить значение, решает бэкенд.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Variant {
+    pub name: String,
+    /// Случаи в порядке объявления: имя и объект раскладки.
+    pub cases: Vec<(String, ObjectId)>,
+    pub span: Span,
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CapId(pub usize);
@@ -471,8 +568,8 @@ pub enum Attr {
     /// `native`: тела нет, функцию с этим символом даёт рантайм backend
     /// (`runtime/stdio::stdout_write`, §14.1). Отказ provider — throwing.
     Extern(String),
-    /// Вызов разрешён только функциям того же владельца.
-    Private,
+    /// `hidden` (#365): вызов разрешён только функциям того же владельца.
+    Hidden,
     /// Intrinsic (§14.2): тела нет, его даёт рантайм. `objects` — объекты
     /// модуля, которые рантайм создаёт (результаты, Error std); `helpers` —
     /// функции программы, которые рантайм вызывает (действия значений
@@ -531,7 +628,7 @@ impl Function {
             | Attr::Destroy(object) => Some(*object),
             Attr::Lambda { owner, .. } => *owner,
             Attr::Entry
-            | Attr::Private
+            | Attr::Hidden
             | Attr::Extern(_)
             | Attr::Async
             | Attr::Intrinsic { .. } => None,
@@ -565,8 +662,8 @@ impl Function {
         })
     }
 
-    pub fn is_private(&self) -> bool {
-        self.attrs.contains(&Attr::Private)
+    pub fn is_hidden(&self) -> bool {
+        self.attrs.contains(&Attr::Hidden)
     }
 }
 
@@ -923,6 +1020,18 @@ pub enum InstKind {
         field: usize,
         value: ValueId,
     },
+    /// Слот `once let` (#491): `Maybe` значения; `none`, пока оно не посчитано.
+    OnceLoad {
+        object: ValueId,
+        field: usize,
+    },
+    /// Запомнить значение `once let` (#491) в слоте `field` уже построенного
+    /// объекта; `value` — `Maybe.some` значения.
+    OnceStore {
+        object: ValueId,
+        field: usize,
+        value: ValueId,
+    },
     /// Чтение поля по индексу.
     ObjGet {
         object: ValueId,
@@ -1002,6 +1111,23 @@ pub enum InstKind {
     /// Произвольное значение типа результата: заглушка поля на пути, где оно
     /// не связано; читать его можно только под проверкой признака связывания.
     Undef,
+    /// Значение варианта (тип — из результата, #290): случай `case`, поля —
+    /// по порядку полей его объекта.
+    VariantNew {
+        case: usize,
+        fields: Vec<ValueId>,
+    },
+    /// Номер активного случая варианта (`int`).
+    VariantTag(ValueId),
+    /// Поле `field` случая `case`. Другой активный случай — ошибка программы:
+    /// поле не читается.
+    VariantGet {
+        value: ValueId,
+        case: usize,
+        field: usize,
+    },
+    /// Объект случая → значение его варианта (тип — из результата).
+    VariantOf(ValueId),
     /// Ссылка роли → ссылка другой роли (тип — из результата); если исходное
     /// значение её не делает — программная ошибка с текстом `message` (§9).
     RoleNarrow {
@@ -1032,6 +1158,19 @@ pub enum InstKind {
         array: ValueId,
         start: ValueId,
         end: ValueId,
+    },
+    /// A copy of `array` with element `index` replaced by `value` (#250);
+    /// out of bounds is a program error, as for `ArrayGet`.
+    ArrayReplace {
+        array: ValueId,
+        index: ValueId,
+        value: ValueId,
+    },
+    /// A copy of `array` without element `index` (#251); out of bounds is a
+    /// program error, as for `ArrayGet`.
+    ArrayRemove {
+        array: ValueId,
+        index: ValueId,
     },
     /// `a + b + ...` над массивами одного типа: результат выделяется один раз
     /// под сумму длин частей (цепочка `+` — одна инструкция).
@@ -1348,12 +1487,19 @@ impl InstKind {
             | InstKind::RoleWrap(operand)
             | InstKind::AnyBox(operand)
             | InstKind::RoleNarrow { value: operand, .. }
+            | InstKind::VariantTag(operand)
+            | InstKind::VariantOf(operand)
+            | InstKind::VariantGet { value: operand, .. }
             | InstKind::ObjGet {
                 object: operand, ..
             }
             | InstKind::ObjPending {
                 object: operand, ..
+            }
+            | InstKind::OnceLoad {
+                object: operand, ..
             } => vec![*operand],
+            InstKind::VariantNew { fields, .. } => fields.clone(),
             InstKind::CallRole { receiver, args, .. } => std::iter::once(*receiver)
                 .chain(args.iter().copied())
                 .collect(),
@@ -1366,6 +1512,8 @@ impl InstKind {
             | InstKind::IntSign(value) => vec![*value],
             InstKind::ArrayGet { array, index } => vec![*array, *index],
             InstKind::ArraySlice { array, start, end } => vec![*array, *start, *end],
+            InstKind::ArrayReplace { array, index, value } => vec![*array, *index, *value],
+            InstKind::ArrayRemove { array, index } => vec![*array, *index],
             InstKind::ArrayJoin { array, separator } => vec![*array, *separator],
             InstKind::ArrayConcat(parts) | InstKind::MapMerge(parts) => parts.clone(),
             InstKind::ArrayDifference { array: base, removed }
@@ -1404,7 +1552,7 @@ impl InstKind {
                 vec![*future]
             }
             InstKind::CapMake(owner) | InstKind::CallCap { cap: owner, .. } => vec![*owner],
-            InstKind::ObjInit { object, value, .. } => vec![*object, *value],
+            InstKind::ObjInit { object, value, .. } | InstKind::OnceStore { object, value, .. } => vec![*object, *value],
             InstKind::CallFn { callee, args }
             | InstKind::WorkerSpawn {
                 entry: callee,
@@ -1468,12 +1616,19 @@ impl InstKind {
             | InstKind::RoleWrap(operand)
             | InstKind::AnyBox(operand)
             | InstKind::RoleNarrow { value: operand, .. }
+            | InstKind::VariantTag(operand)
+            | InstKind::VariantOf(operand)
+            | InstKind::VariantGet { value: operand, .. }
             | InstKind::ObjGet {
                 object: operand, ..
             }
             | InstKind::ObjPending {
                 object: operand, ..
+            }
+            | InstKind::OnceLoad {
+                object: operand, ..
             } => vec![operand],
+            InstKind::VariantNew { fields, .. } => fields.iter_mut().collect(),
             InstKind::CallRole { receiver, args, .. } => {
                 std::iter::once(receiver).chain(args.iter_mut()).collect()
             }
@@ -1486,6 +1641,8 @@ impl InstKind {
             | InstKind::IntSign(value) => vec![value],
             InstKind::ArrayGet { array, index } => vec![array, index],
             InstKind::ArraySlice { array, start, end } => vec![array, start, end],
+            InstKind::ArrayReplace { array, index, value } => vec![array, index, value],
+            InstKind::ArrayRemove { array, index } => vec![array, index],
             InstKind::ArrayJoin { array, separator } => vec![array, separator],
             InstKind::ArrayConcat(parts) | InstKind::MapMerge(parts) => parts.iter_mut().collect(),
             InstKind::ArrayDifference { array: base, removed }
@@ -1524,7 +1681,7 @@ impl InstKind {
                 vec![future]
             }
             InstKind::CapMake(owner) | InstKind::CallCap { cap: owner, .. } => vec![owner],
-            InstKind::ObjInit { object, value, .. } => vec![object, value],
+            InstKind::ObjInit { object, value, .. } | InstKind::OnceStore { object, value, .. } => vec![object, value],
             InstKind::CallFn { callee, args }
             | InstKind::WorkerSpawn {
                 entry: callee,
@@ -1658,6 +1815,8 @@ pub enum TermKind {
 pub enum CatchType {
     Object(ObjectId),
     Role(RoleId),
+    /// Значение error enum с payload: любой его случай (#290).
+    Variant(VariantId),
 }
 
 impl CatchType {
@@ -1665,6 +1824,7 @@ impl CatchType {
         match self {
             CatchType::Object(object) => Type::Object(object),
             CatchType::Role(role) => Type::Role(role),
+            CatchType::Variant(id) => Type::Variant(id),
         }
     }
 }

@@ -7,7 +7,7 @@ import "numbers/bigint" take BigInt;
 // Exact immutable durations with nanosecond resolution.
 //
 //     let delay = Duration(value: rat(3, 2), unit: DurationUnit.second);
-//     delay.seconds();               // rat(3, 2)
+//     delay::Span::seconds;          // rat(3, 2)
 //     delay.nanoseconds().string();  // "1500000000"
 //     DurationString(origin: delay).string(); // "3/2s"
 //
@@ -20,54 +20,109 @@ import "numbers/bigint" take BigInt;
 // numbers deliberately have no `.duration()` or unit conversion methods: a
 // stdlib type is always introduced through its explicit constructor.
 
-enum DurationUnit = (
-    nanosecond,
-    microsecond,
-    millisecond,
-    second,
-    minute,
-    hour,
-    day
-);
+// The unit of a Duration made from a rat.
+enum DurationUnit = (nanosecond, microsecond, millisecond, second, minute, hour, day);
 
+// An exact length of time, nanosecond resolution: `Duration(seconds: 30)`.
 object Duration does Comparing<Duration>, Adding<Duration, Duration>, Subtracting<Duration, Duration>, Negating<Duration> {
     has origin is rat;
 
+    // value units, which must come to whole nanoseconds: `Duration(3/2,
+    // DurationUnit.second)`.
     Duration(value is rat, unit is DurationUnit) {
         let multiplier is rat = match unit {
-            case DurationUnit.nanosecond { rat(1, 1000000000); }
-            case DurationUnit.microsecond { rat(1, 1000000); }
-            case DurationUnit.millisecond { rat(1, 1000); }
-            case DurationUnit.second { 1.rat(); }
-            case DurationUnit.minute { 60.rat(); }
-            case DurationUnit.hour { 3600.rat(); }
-            case DurationUnit.day { 86400.rat(); }
-            else { 1.rat(); }
+            case DurationUnit.nanosecond {
+                rat(1, 1000000000);
+            }
+            case DurationUnit.microsecond {
+                rat(1, 1000000);
+            }
+            case DurationUnit.millisecond {
+                rat(1, 1000);
+            }
+            case DurationUnit.second {
+                1.rat();
+            }
+            case DurationUnit.minute {
+                60.rat();
+            }
+            case DurationUnit.hour {
+                3600.rat();
+            }
+            case DurationUnit.day {
+                86400.rat();
+            }
+            else {
+                1.rat();
+            }
         };
         let seconds is rat = value * multiplier;
         confirm (seconds * 1000000000.rat()).denominator() == "1"
-            else throw InvalidDuration.because("duration must contain an integral number of nanoseconds");
+            else throw InvalidDuration.because(
+                "duration must contain an integral number of nanoseconds"
+            );
         origin = seconds;
     }
 
-    seconds() is rat {
-        origin;
+    // Whole amounts of one unit: Duration(seconds: 5), Duration(milliseconds: 250).
+    Duration(days is int) {
+        origin = days.rat() * 86400.rat();
     }
 
+    // That many hours.
+    Duration(hours is int) {
+        origin = hours.rat() * 3600.rat();
+    }
+
+    // That many minutes.
+    Duration(minutes is int) {
+        origin = minutes.rat() * 60.rat();
+    }
+
+    // That many seconds.
+    Duration(seconds is int) {
+        origin = seconds.rat();
+    }
+
+    // That many milliseconds.
+    Duration(milliseconds is int) {
+        origin = rat(milliseconds, 1000);
+    }
+
+    // That many microseconds.
+    Duration(microseconds is int) {
+        origin = rat(microseconds, 1000000);
+    }
+
+    // That many nanoseconds.
+    Duration(nanoseconds is int) {
+        origin = rat(nanoseconds, 1000000000);
+    }
+
+    // The exact length in seconds, normalised by the constructor.
+    cap Span {
+        seconds is rat {
+            origin;
+        }
+    }
+
+    // The length in nanoseconds.
     nanoseconds() is BigInt {
         BigInt(origin: (origin * 1000000000.rat()).numerator());
     }
 
+    // The sum.
     plus(other is Duration) is Duration {
         Duration(
-            value: origin + other.seconds(),
+            value: origin + other::Span::seconds,
             unit: DurationUnit.second,
         );
     }
 
+    // The difference.
     minus(other is Duration) is Duration {
         Duration(
-            value: origin - other.seconds(),
+            value: origin - other::Span::seconds,
             unit: DurationUnit.second,
         );
     }
@@ -77,38 +132,49 @@ object Duration does Comparing<Duration>, Adding<Duration, Duration>, Subtractin
         Duration(value: -origin, unit: DurationUnit.second);
     }
 
+    // This duration scaled by `factor`.
+    times(factor is rat) is Duration {
+        Duration(value: origin * factor, unit: DurationUnit.second);
+    }
+
+    // Shorter durations come first.
     order(other is Duration) is Order {
-        origin.order(other.seconds());
+        origin.order(other::Span::seconds);
     }
 }
 
-object ScaledDuration {
-    has origin is Duration;
-    has factor is rat;
-
-    ScaledDuration(origin is Duration, factor is rat) {
-        self.origin = origin;
-        self.factor = factor;
-    }
-
-    value() is Duration {
-        Duration(
-            value: origin.seconds() * factor,
-            unit: DurationUnit.second,
-        );
-    }
-}
-
+// A duration as exact text in seconds: "3/2s".
 object DurationString {
     has origin is Duration;
 
+    // The text of origin.
     DurationString(origin is Duration) {
         self.origin = origin;
     }
 
+    // The seconds as an exact rat, then `s`.
     string() is string {
-        origin.seconds().string() + "s";
+        origin::Span::seconds.string() + "s";
     }
 }
 
+// A duration that is not whole nanoseconds.
 enum InvalidDuration is Error = (because(message is string));
+
+test "durations scale exactly" {
+    let minute = Duration(minutes: 1);
+    test.is(minute.times(rat(3, 2))::Span::seconds.string(), "90");
+    test.is(minute.times(0.rat())::Span::seconds.string(), "0");
+    test.is(minute.times(-2.rat())::Span::seconds.string(), "-120");
+}
+
+test "whole amounts of one unit" {
+    test.is(Duration(seconds: 5) == Duration(value: 5.rat(), unit: DurationUnit.second), true);
+    test.is(Duration(milliseconds: 250)::Span::seconds, rat(1, 4));
+    test.is(Duration(minutes: 2)::Span::seconds, 120.rat());
+    test.is(Duration(hours: 1) == Duration(minutes: 60), true);
+    test.is(Duration(days: 1)::Span::seconds, 86400.rat());
+    test.is(Duration(microseconds: 1500)::Span::seconds, rat(3, 2000));
+    test.is(Duration(nanoseconds: 1).nanoseconds().string(), "1");
+    test.is(Duration(seconds: -3)::Span::seconds, -3.rat());
+}

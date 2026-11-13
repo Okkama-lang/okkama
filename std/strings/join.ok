@@ -1,25 +1,55 @@
 module strings/join v1.0.0;
 
+// Strings joined with a separator, within limits.
+//
+//     Joined(separator: ", ", values: names).string();      // "Ada, Grace"
+//
+//     let parts = JoinedParts(separator: "/", maximum_items: 64, maximum_length: 4096)
+//         .following("usr")
+//         .following("local");
+//     parts.string();                                        // "usr/local"
+//
+// Without limits, Joined takes up to 10000 items and 1048576 characters. Past a
+// limit, JoinLimitExceeded says which.
+
 import "collections/iteration" take Iterating;
 import "collections/list" take List, EmptyList;
 
-// A bounded snapshot of strings and their literal separator.
-// Construction traverses the source once; string() observes only the snapshot.
+// Strings joined by a literal separator, within limits on the number of
+// strings and the length of the result. string() walks the source.
 object Joined {
-    has snapshot is JoinedParts;
+    has separator is string;
+    has values is Iterating<string>;
+    has maximum_items, maximum_length is int;
+
+    // values with separator between them.
     Joined(separator is string, values is Iterating<string>) {
-        snapshot = values.reduce(JoinedParts(separator, 10000, 1048576)) -> parts, value {
-            parts.following(value);
-        };
+        self.separator = separator;
+        self.values = values;
+        maximum_items = 10000;
+        maximum_length = 1048576;
     }
-    Joined(separator is string, values is Iterating<string>, maximum_items is int,
-        maximum_length is int) {
+
+    // values with separator between them, within these limits.
+    Joined(
+        separator is string,
+        values is Iterating<string>,
+        maximum_items is int,
+        maximum_length is int
+    ) {
         confirm maximum_items >= 0 && maximum_length >= 0 else throw InvalidJoinLimits.invalid;
-        snapshot = values.reduce(JoinedParts(separator, maximum_items, maximum_length)) -> parts, value {
-            parts.following(value);
-        };
+        self.separator = separator;
+        self.values = values;
+        self.maximum_items = maximum_items;
+        self.maximum_length = maximum_length;
     }
-    string() is string { snapshot.string(); }
+
+    // The joined text.
+    string() is string {
+        values.reduce(JoinedParts(separator: separator, maximum_items: maximum_items, maximum_length: maximum_length)) -> parts, value {
+            parts.following(value);
+        }.string();
+    }
 }
 
 // Importable immutable snapshot collaborator; no module-private declarations.
@@ -28,6 +58,8 @@ object JoinedParts {
     has maximum_items, maximum_length is int;
     has used is int = 0;
     has values is List<string>;
+
+    // No parts yet, within these limits.
     JoinedParts(separator is string, maximum_items is int, maximum_length is int) {
         confirm maximum_items >= 0 && maximum_length >= 0 else throw InvalidJoinLimits.invalid;
         self.separator = separator;
@@ -36,17 +68,28 @@ object JoinedParts {
         let empty is List<string> = EmptyList();
         values = empty;
     }
+
+    // These parts and value after them.
     following(value is string) is ^JoinedParts {
         confirm values.size() < maximum_items else throw JoinLimitExceeded.kind(JoinLimit.items);
-        let gap = if values.size() > 0 { separator.length(); } else { 0; };
+        let gap = if values.size() > 0 {
+            separator.length();
+        }
+        else {
+            0;
+        };
         confirm gap <= maximum_length - used else throw JoinLimitExceeded.kind(JoinLimit.length);
         confirm value.length() <= maximum_length - used - gap
             else throw JoinLimitExceeded.kind(JoinLimit.length);
         ^used = used + gap + value.length();
         ^values = values.prefix(value);
     }
+
+    // The parts joined.
     string() is string {
-        let backwards is @string = values.map() -> value { value; };
+        let backwards is @string = values.map() -> value {
+            value;
+        };
         let ordered is @string = (0..backwards.size()).map() -> index {
             backwards[backwards.size() - 1 - index];
         };
@@ -54,6 +97,49 @@ object JoinedParts {
     }
 }
 
+// Which limit was passed: the number of items or the length.
 enum JoinLimit = (items, length);
+
+// A negative limit.
 enum InvalidJoinLimits is Error = (invalid);
+
+// Too many items or too long a result.
 enum JoinLimitExceeded is Error = (kind(kind is JoinLimit));
+
+test "joined keeps order and its separator" {
+    test.is(Joined(separator: ", ", values: ["a", "b", "c"]).string(), "a, b, c");
+    test.is(Joined(separator: "-", values: ["only"]).string(), "only");
+    let nothing is @string = [];
+    test.is(Joined(separator: "-", values: nothing).string(), "");
+    test.is(Joined(separator: "", values: ["a", "", "b"]).string(), "ab");
+}
+
+test "limits bound the items and the length" {
+    test.is(Joined(separator: ",", values: ["ab", "cd"], maximum_items: 2, maximum_length: 5).string(), "ab,cd");
+    let refused = (values is @string, items is int, length is int) is string {
+        try {
+            Joined(separator: ",", values: values, maximum_items: items, maximum_length: length).string();
+        }
+        catch JoinLimitExceeded.kind(kind) {
+            if kind == JoinLimit.items {
+                "items";
+            }
+            else {
+                "length";
+            }
+        }
+    };
+    test.is(refused(["a", "b", "c"], 2, 100), "items");
+    test.is(refused(["ab", "cd"], 5, 4), "length");
+    test.is(
+        try {
+            Joined(separator: ",", values: ["a"], maximum_items: -1, maximum_length: 10).string();
+        }
+        catch error is InvalidJoinLimits {
+            "invalid";
+        },
+        "invalid"
+    );
+    let parts = JoinedParts(separator: " ", maximum_items: 3, maximum_length: 20).following("x").following("y");
+    test.is(parts.string(), "x y");
+}

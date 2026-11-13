@@ -49,6 +49,25 @@ impl Checker<'_, '_> {
             })
     }
 
+    /// Элемент пачечного обхода `collections/iteration.Batching<T>` (#465): сама
+    /// роль или тип, который её делает. Пачки быстрее курсора, поэтому тип,
+    /// который делает обе роли, обходится пачками.
+    pub(super) fn batching_item(&self, ty: &Ty) -> Option<Ty> {
+        let batching = self.reg.standard.batching?;
+        if let Ty::Role(role, args) = ty
+            && *role == batching
+        {
+            return args.first().cloned();
+        }
+        self.reg
+            .roles_of(ty)
+            .into_iter()
+            .find_map(|role| match role {
+                Ty::Role(id, args) if id == batching => args.into_iter().next(),
+                _ => None,
+            })
+    }
+
     fn source(&mut self, expr: &ast::Expr, allow_map: bool) -> Option<Checked> {
         let inner = strip_grouping(expr);
         if let ast::ExprKind::Range {
@@ -137,6 +156,19 @@ impl Checker<'_, '_> {
                 None
             }
             Ty::Error => None,
+            other if self.batching_item(other).is_some() => {
+                let item = self.batching_item(other).expect("checked above");
+                let batching = self.reg.standard.batching.expect("found an item");
+                let target = Ty::Role(batching, vec![item.clone()]);
+                let value = self.coerce(value, &target, expr.span, "Iteration source");
+                Some(Checked {
+                    items: vec![item],
+                    source: Source::Batching(Box::new(value)),
+                    name: "Batching",
+                    untagged: false,
+                    diverges,
+                })
+            }
             other => match self.iterating_item(other) {
                 Some(item) => {
                     let iterating = self.reg.standard.iterating.expect("found an item");
@@ -153,12 +185,12 @@ impl Checker<'_, '_> {
                 None => {
                     let message = if allow_map {
                         format!(
-                            "Functional operations require an array, range, typed map, or Iterating receiver, got {}",
+                            "Functional operations require an array, range, typed map, Iterating or Batching receiver, got {}",
                             self.type_name(other)
                         )
                     } else {
                         format!(
-                            "For source must be an array, range, or Iterating, got {}",
+                            "For source must be an array, range, Iterating or Batching, got {}",
                             self.type_name(other)
                         )
                     };
@@ -229,7 +261,7 @@ impl Checker<'_, '_> {
         let block = ast::Block {
             stmts: vec![
                 ast::Stmt { kind: ast::StmtKind::Let {
-                    name: temporary, ty: None, value: source.clone(),
+                    name: temporary, ty: None, value: source.clone(), once: false,
                 }, span: source.span },
                 ast::Stmt { kind: ast::StmtKind::Expr {
                     expr: expr(ast::ExprKind::Loop { body: ast::Block { stmts: vec![matched], span } }),
@@ -494,7 +526,7 @@ impl Checker<'_, '_> {
                     }
                     _ => {
                         if is_map {
-                            self.error(span, "`find` works on arrays, ranges and Iterating values; on a map use filter");
+                            self.error(span, "`find` works on arrays, ranges, Iterating and Batching values; on a map use filter");
                             return Self::poisoned(span);
                         }
                         let maybe = crate::analysis::ty::EnumId(0);
@@ -535,7 +567,18 @@ impl Checker<'_, '_> {
                 types.extend(item_types.iter().cloned());
                 let (locals, out) =
                     self.functional_body(bindings, &types, body, Some(&accumulator));
-                let out = if out.ty.is_some() && !out.diverges {
+                // An empty `[]` or `[:]` names no element type, and a block
+                // that gives a typed collection cannot supply one: say what to
+                // write instead of "must be [], got @int" (#295).
+                let typed_block = out
+                    .ty
+                    .clone()
+                    .filter(|ty| accumulator.is_untagged() && !out.diverges && !ty.is_untagged() && !ty.is_error());
+                let out = if let Some(block) = typed_block {
+                    let message = self.untyped_accumulator(&accumulator, &block);
+                    self.error(args[0].value.span, message);
+                    out
+                } else if out.ty.is_some() && !out.diverges {
                     self.coerce(out, &accumulator, body.span, "Reduce accumulator")
                 } else {
                     out
@@ -583,7 +626,7 @@ fn iterations(source: &Source) -> Option<bool> {
             })
         }
         Source::Array(value) | Source::Map(value) => literal_size(value),
-        Source::Varargs(_) | Source::Iterating(_) => None,
+        Source::Varargs(_) | Source::Iterating(_) | Source::Batching(_) => None,
     }
 }
 
@@ -644,5 +687,25 @@ fn literal_size(expr: &Expr) -> Option<bool> {
             }
         }
         _ => None,
+    }
+}
+
+impl Checker<'_, '_> {
+    /// `reduce([])` or `reduce([:])` with no declared target: the initial
+    /// value has no element type, and the block's result says which one to
+    /// write (#295).
+    fn untyped_accumulator(&self, accumulator: &Ty, block: &Ty) -> String {
+        let name = self.type_name(block);
+        match (accumulator, block) {
+            (Ty::Array(_), Ty::Array(_)) => format!(
+                "Reduce starts from [], which has no element type, and its block gives {name}: start from {name}() or declare the result type (let name is {name} = …)"
+            ),
+            (Ty::Map(..), _) => format!(
+                "Reduce starts from [:], which has no key or value type, and its block gives {name}: declare the result type (let name is {name} = …)"
+            ),
+            _ => format!(
+                "Reduce starts from [], which has no element type, and its block gives {name}: declare the result type (let name is {name} = …)"
+            ),
+        }
     }
 }

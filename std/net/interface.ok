@@ -1,10 +1,5 @@
 module net/interface v1.0.0;
 
-import "net/ip" take IpInterface;
-import "collections/sequence" take Sequencing;
-import "encoding/utf" take Utf8Decoded;
-import "error" take InvalidArgument;
-
 // Immutable observation of one interface, supplied by a provider or a fixture.
 // Construction performs no device enumeration, existence check or configuration.
 // Name is exact nonempty text without NUL; index is a positive system identity.
@@ -17,6 +12,13 @@ import "error" take InvalidArgument;
 //     interface.addresses().first().string(); // "192.0.2.7/24"
 //
 // SystemInterfaces is a separate, still-unimplemented enumeration capability.
+
+import "net/ip" take IpInterface;
+import "collections/sequence" take Sequencing;
+import "encoding/utf" take Utf8Decoded;
+import "error" take InvalidArgument;
+
+// A network interface of this host, as seen when asked.
 object NetworkInterface {
     has label is string;
     has identity is int;
@@ -24,27 +26,62 @@ object NetworkInterface {
     has active is bool;
     has local is bool;
 
-    NetworkInterface(name is string, index is int, addresses is @IpInterface,
-        up is bool, loopback is bool) {
-        let nul=Utf8Decoded([byte(0)]).string();
-        confirm name!="" && name.split(nul).size()==1
-            else throw InvalidArgument.because("network interface name must be nonempty and contain no NUL");
-        confirm index>0 else throw InvalidArgument.because("network interface index must be positive: "+index.string());
-        label=name;identity=index;assigned=addresses;active=up;local=loopback;
+    // An interface as given.
+    NetworkInterface(
+        name is string,
+        index is int,
+        addresses is @IpInterface,
+        up is bool,
+        loopback is bool
+    ) {
+        let nul = Utf8Decoded([byte(0)]).string();
+        confirm name != "" && name.split(nul).size() == 1
+            else throw InvalidArgument.because(
+                "network interface name must be nonempty and contain no NUL"
+            );
+        confirm index > 0
+            else throw InvalidArgument.because(
+                "network interface index must be positive: " + index.string()
+            );
+        label = name;
+        identity = index;
+        assigned = addresses;
+        active = up;
+        local = loopback;
     }
-    name() is string {label;}
-    index() is int {identity;}
-    addresses() is Sequencing<IpInterface> {assigned;}
-    up() is bool {active;}
-    loopback() is bool {local;}
+
+    // Its name, such as `eth0`.
+    name() is string {
+        label;
+    }
+
+    // Its index.
+    index() is int {
+        identity;
+    }
+
+    // Its addresses with their prefixes.
+    addresses() is Sequencing<IpInterface> {
+        assigned;
+    }
+
+    // Whether it is up.
+    up() is bool {
+        active;
+    }
+
+    // Whether it is the loopback.
+    loopback() is bool {
+        local;
+    }
 }
 
 test "empty interface snapshot retains independent flags" {
-    let addresses is @IpInterface=[];
-    let interface=NetworkInterface("lo",1,addresses,false,true);
-    test.is(interface.name(),"lo");
-    test.is(interface.index(),1);
-    test.is(interface.addresses().size(),0);
+    let addresses is @IpInterface = [];
+    let interface = NetworkInterface(name: "lo", index: 1, addresses: addresses, up: false, loopback: true);
+    test.is(interface.name(), "lo");
+    test.is(interface.index(), 1);
+    test.is(interface.addresses().size(), 0);
     test.ok(!interface.up());
     test.ok(interface.loopback());
 }

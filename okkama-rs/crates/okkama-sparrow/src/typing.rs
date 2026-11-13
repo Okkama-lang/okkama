@@ -5,10 +5,35 @@
 //! параметров. Ядро Sparrow выбирает машинное представление регистра по его
 //! типу, поэтому программа с ложными типами отвергается до исполнения.
 use crate::{
-    CatchKind, Constant, FutOp, Function, Instruction, Program, Register, StrFn, Target, Type, TypeRef,
+    CatchKind, Constant, Data, FutOp, Function, Instruction, Program, Register, StrFn, Target, Type, TypeRef,
 };
 
 type Rule = Result<(), String>;
+
+/// Данные константы (#506) той же формы, что её тип: скаляр своего типа,
+/// массив подходящих элементов, словарь подходящих ключей и значений.
+fn fits(typing: &Typing<'_>, data: &Data, ty: &Type) -> bool {
+    match (data, ty) {
+        (Data::Scalar(constant), _) => matches!(
+            (constant, ty),
+            (Constant::Int(_), Type::Int)
+                | (Constant::Bool(_), Type::Bool)
+                | (Constant::Byte(_), Type::Byte)
+                | (Constant::Float(_), Type::Float)
+                | (Constant::Char(_), Type::Char)
+                | (Constant::Str(_), Type::Str)
+        ),
+        (Data::Array(items), Type::Array(element)) => {
+            let element = typing.resolve(*element);
+            items.iter().all(|item| fits(typing, item, element))
+        }
+        (Data::Map(entries), Type::Map(key, value)) => {
+            let (key, value) = (typing.resolve(*key), typing.resolve(*value));
+            entries.iter().all(|(k, v)| fits(typing, k, key) && fits(typing, v, value))
+        }
+        _ => false,
+    }
+}
 
 pub(crate) struct Typing<'a> {
     program: &'a Program,
@@ -60,6 +85,18 @@ impl<'a> Typing<'a> {
             ),
             Type::Future(result) => format!("future<{}>", result.as_ref().map(r).unwrap_or_else(|| "void".into())),
             Type::Cap(c) => self.program.caps.get(c.0 as usize).map_or("cap".into(), |d| d.name.clone()),
+            Type::Variant(v) => self.program.variants.get(v.0 as usize).map_or("variant".into(), |d| d.name.clone()),
+        }
+    }
+
+    /// Отличается ли `from` от `to` только местами `never`.
+    fn fits_untagged(&self, from: &Type, to: &Type) -> bool {
+        let refs = |x: &TypeRef, y: &TypeRef| self.fits_untagged(self.resolve(*x), self.resolve(*y));
+        match (from, to) {
+            (Type::Never, _) => true,
+            (Type::Array(a), Type::Array(b)) => refs(a, b),
+            (Type::Map(k1, v1), Type::Map(k2, v2)) => refs(k1, k2) && refs(v1, v2),
+            _ => self.equal(from, to),
         }
     }
 
@@ -125,6 +162,23 @@ impl<'a> Typing<'a> {
         }
     }
 
+    fn variant(&self, register: Register) -> Result<crate::VariantRef, String> {
+        match self.ty(register) {
+            Type::Variant(v) => Ok(*v),
+            other => Err(format!("r{} has type {}, expected a variant", register.0, self.name(other))),
+        }
+    }
+
+    /// Объект раскладки случая `case` варианта.
+    fn case_object(&self, variant: crate::VariantRef, case: u32) -> Result<crate::ObjectRef, String> {
+        self.program
+            .variants
+            .get(variant.0 as usize)
+            .and_then(|declared| declared.cases.get(case as usize))
+            .map(|(_, object)| *object)
+            .ok_or_else(|| format!("variant variant{} has no case {case}", variant.0))
+    }
+
     fn object(&self, register: Register) -> Result<crate::ObjectRef, String> {
         match self.ty(register) {
             Type::Object(o) => Ok(*o),
@@ -169,6 +223,9 @@ impl<'a> Typing<'a> {
                 .get(o.0 as usize)
                 .is_some_and(|d| d.does.iter().any(|w| error_role(&w.role))),
             Type::Role(r) => error_role(r),
+            Type::Variant(v) => self.program.variants.get(v.0 as usize).is_some_and(|declared| {
+                declared.cases.iter().all(|(_, o)| self.throwable(&Type::Object(*o)))
+            }),
             _ => false,
         }
     }
@@ -239,8 +296,8 @@ impl<'a> Typing<'a> {
                 let (from, to) = (self.ty(*source), self.ty(dst.0));
                 let renamed = match (from, to) {
                     (Type::Successor(a), Type::Object(b)) => a == b,
-                    (Type::Array(e), Type::Array(_)) => *self.resolve(*e) == Type::Never,
-                    (Type::Map(k, v), Type::Map(..)) => *self.resolve(*k) == Type::Never && *self.resolve(*v) == Type::Never,
+                    // Only `never` parts of an untagged literal change, at any depth (#297).
+                    (Type::Array(_), Type::Array(_)) | (Type::Map(..), Type::Map(..)) => self.fits_untagged(from, to),
                     (Type::Object(o), Type::Cap(c)) => self.program.caps.get(c.0 as usize).is_some_and(|cap| cap.owner == *o),
                     _ => false,
                 };
@@ -550,12 +607,46 @@ impl<'a> Typing<'a> {
                 self.define(dst.0, &Type::Object(owner), "obj.next")
             }
             I::RoleWrap { dst, source, role } => {
-                let object = self.object(*source)?;
-                let does = self.program.objects[object.0 as usize].does.iter().any(|w| w.role == *role);
-                if !does {
-                    return Err(format!("object obj{} does not do role role{}", object.0, role.0));
+                // Вариант делает роль, если её делает объект каждого случая.
+                let objects: Vec<crate::ObjectRef> = match self.ty(*source) {
+                    Type::Variant(v) => self.program.variants[v.0 as usize].cases.iter().map(|(_, o)| *o).collect(),
+                    _ => vec![self.object(*source)?],
+                };
+                for object in objects {
+                    let does = self.program.objects[object.0 as usize].does.iter().any(|w| w.role == *role);
+                    if !does {
+                        return Err(format!("object obj{} does not do role role{}", object.0, role.0));
+                    }
                 }
                 self.define(dst.0, &Type::Role(*role), "role.wrap")
+            }
+            I::VariantNew { dst, variant, case, fields } => {
+                let object = self.case_object(*variant, *case)?;
+                let declared = &self.program.objects[object.0 as usize];
+                if declared.fields.len() != fields.len() {
+                    return Err(format!("variant.new case {case} lists {} fields, the case has {}", fields.len(), declared.fields.len()));
+                }
+                for (value, (_, ty)) in fields.iter().zip(&declared.fields) {
+                    self.expect_ref(*value, *ty)?;
+                }
+                self.define(dst.0, &Type::Variant(*variant), "variant.new")
+            }
+            I::VariantTag { dst, value } => {
+                self.variant(*value)?;
+                self.define(dst.0, &Type::Int, "variant.tag")
+            }
+            I::VariantGet { dst, value, case, field } => {
+                let variant = self.variant(*value)?;
+                let object = self.case_object(variant, *case)?;
+                self.define_ref(dst.0, self.field(object, *field)?, "variant.get")
+            }
+            I::VariantOf { dst, source, variant } => {
+                let object = self.object(*source)?;
+                let case = self.program.variants[variant.0 as usize].cases.iter().any(|(_, o)| *o == object);
+                if !case {
+                    return Err(format!("object obj{} is not a case of variant variant{}", object.0, variant.0));
+                }
+                self.define(dst.0, &Type::Variant(*variant), "variant.of")
             }
             I::RoleNarrow { dst, source, role, .. } => {
                 if !matches!(self.ty(*source), Type::Role(_)) {
@@ -592,6 +683,18 @@ impl<'a> Typing<'a> {
                     return Err(format!("arr.slice of non-array r{}", array.0));
                 }
                 self.define(dst.0, self.ty(*array), "arr.slice")
+            }
+            I::ArrayRemove { dst, array, index } => {
+                self.expect(*index, &int)?;
+                if !matches!(self.ty(*array), Type::Array(_)) {
+                    return Err(format!("arr.remove of non-array r{}", array.0));
+                }
+                self.define(dst.0, self.ty(*array), "arr.remove")
+            }
+            I::ArrayReplace { dst, array, index, value } => {
+                self.expect(*index, &int)?;
+                self.expect_ref(*value, self.element(*array)?)?;
+                self.define(dst.0, self.ty(*array), "arr.replace")
             }
             I::ArrayJoin { dst, array, separator } => {
                 match self.ty(*array) {
@@ -910,6 +1013,7 @@ impl<'a> Typing<'a> {
                 let caught = match kind {
                     CatchKind::Object => Type::Object(crate::ObjectRef(*ty)),
                     CatchKind::Role => Type::Role(crate::RoleRef(*ty)),
+                    CatchKind::Variant => Type::Variant(crate::VariantRef(*ty)),
                 };
                 self.define(value.0, &caught, "catch")?;
                 self.target(handler)?;
@@ -1051,6 +1155,9 @@ pub(crate) fn tables(program: &Program) -> Result<(), String> {
         let ty = typing.resolve(global.ty).clone();
         if !params.is_empty() || function.is_async || !result.is_some_and(|result| typing.equal(&result, &ty)) {
             return Err(format!("@{} is not the init of global g{index}", function.symbol));
+        }
+        if global.data.as_ref().is_some_and(|data| !fits(&typing, data, &ty)) {
+            return Err(format!("the data of global g{index} does not have its type"));
         }
     }
     for function in &program.functions {

@@ -5,10 +5,7 @@ import "collections/sequence" take Sequencing, EmptySequence;
 import "error" take OutOfRange;
 import "fs/directory" take Directory;
 import "fs/path" take Path;
-import "runtime/account" take
-    account_current_user,
-    account_user_named,
-    account_group_named,
+import "runtime/account" take account_current_user, account_user_named, account_group_named,
     account_group_users;
 import "size" take Sizing;
 
@@ -26,28 +23,37 @@ import "size" take Sizing;
 // stores it only as a string. home() comes from the account database, not from
 // HOME, USERPROFILE or another process-environment variable.
 
+// An account: the process's own with User(), or a named one; asked about only
+// when read.
 object User {
     has selected_name is string;
     has current is bool;
 
+    // The account the process runs as.
     User() {
         selected_name = "";
         current = true;
     }
 
+    // The account called name; MissingUser when it is read and there is none.
     User(name is string) {
         selected_name = name;
         current = false;
     }
 
+    // The account name.
     name() is string {
         self.record()["name"];
     }
 
+    // A stable identifier: a decimal UID, a Windows SID or another; compare and
+    // store it only as text.
     identity() is string {
         self.record()["identity"];
     }
 
+    // The home directory from the account database, never from HOME;
+    // MissingUserHome when it has none.
     home() is Directory {
         let record is %string:string = self.record();
         confirm !record["home"].empty()
@@ -55,14 +61,15 @@ object User {
         Directory(path: Path(record["home"]));
     }
 
-    private:
-    record() is %string:string {
+    hidden record() is %string:string {
         if current {
             try {
                 account_current_user();
             }
             catch failure is NativeFailure {
-                throw UnavailableAccountInformation.because("current user information is unavailable");
+                throw UnavailableAccountInformation.because(
+                    "current user information is unavailable"
+                );
             }
         }
         else {
@@ -73,12 +80,16 @@ object User {
             }
             catch failure is NativeFailure {
                 match failure.code() {
-                    case "not_found" { throw MissingUser.name(selected_name); }
+                    case "not_found" {
+                        throw MissingUser.name(selected_name);
+                    }
                     case "invalid_input" {
                         throw InvalidAccountName.origin(selected_name);
                     }
                     else {
-                        throw UnavailableAccountInformation.because("user information is unavailable");
+                        throw UnavailableAccountInformation.because(
+                            "user information is unavailable"
+                        );
                     }
                 }
             }
@@ -96,27 +107,31 @@ object User {
 //         output.writeln(user.name());
 //     }
 
+// A named group of accounts.
 object Group {
     has selected_name is string;
 
+    // The group called name; MissingGroup when it is read and there is none.
     Group(name is string) {
         selected_name = name;
     }
 
+    // The group name.
     name() is string {
         self.record()["name"];
     }
 
+    // A stable identifier, such as a decimal GID.
     identity() is string {
         self.record()["identity"];
     }
 
+    // The accounts that belong to it.
     users() is Sequencing<User> {
         GroupUsers(name: selected_name);
     }
 
-    private:
-    record() is %string:string {
+    hidden record() is %string:string {
         confirm !selected_name.empty()
             else throw InvalidAccountName.origin(selected_name);
         try {
@@ -124,7 +139,9 @@ object Group {
         }
         catch failure is NativeFailure {
             match failure.code() {
-                case "not_found" { throw MissingGroup.name(selected_name); }
+                case "not_found" {
+                    throw MissingGroup.name(selected_name);
+                }
                 case "invalid_input" {
                     throw InvalidAccountName.origin(selected_name);
                 }
@@ -136,7 +153,7 @@ object Group {
     }
 }
 
-object GroupUsers does Sequencing<User>, Iterating<User>, Sizing {
+hidden object GroupUsers does Sequencing<User>, Iterating<User>, Sizing {
     has group_name is string;
 
     GroupUsers(name is string) {
@@ -170,15 +187,16 @@ object GroupUsers does Sequencing<User>, Iterating<User>, Sizing {
         User(name: names[names.size() - 1]);
     }
 
-    private:
-    names() is @string {
+    hidden names() is @string {
         confirm !group_name.empty() else throw InvalidAccountName.origin(group_name);
         try {
             account_group_users(group_name);
         }
         catch failure is NativeFailure {
             match failure.code() {
-                case "not_found" { throw MissingGroup.name(group_name); }
+                case "not_found" {
+                    throw MissingGroup.name(group_name);
+                }
                 case "invalid_input" {
                     throw InvalidAccountName.origin(group_name);
                 }
@@ -190,7 +208,7 @@ object GroupUsers does Sequencing<User>, Iterating<User>, Sizing {
     }
 }
 
-object GroupUserCursor does Cursor<User> {
+hidden object GroupUserCursor does Cursor<User> {
     has origin is @string;
     has position is int;
 
@@ -214,12 +232,64 @@ object GroupUserCursor does Cursor<User> {
     }
 }
 
+// No account has that name.
 enum MissingUser is Error = (name(name is string));
 
+// No group has that name.
 enum MissingGroup is Error = (name(name is string));
 
+// The account has no home directory.
 enum MissingUserHome is Error = (name(name is string));
 
+// An empty name or one with characters no account can have.
 enum InvalidAccountName is Error = (origin(origin is string));
 
+// The system could not answer; message says why.
 enum UnavailableAccountInformation is Error = (because(message is string));
+
+test "the current user is found again by name, with the same identity" {
+    let current = User();
+    test.ok(!current.name().empty());
+    test.ok(!current.identity().empty());
+    let again = User(name: current.name());
+    test.is(again.identity(), current.identity());
+    test.is(again.home().path(), current.home().path());
+}
+
+test "unknown and malformed names are told apart" {
+    test.ok(try {
+        User(name: "okkama-no-such-user-7f3a").identity();
+        false;
+    }
+    catch MissingUser.name(name) {
+        name == "okkama-no-such-user-7f3a";
+    });
+    test.throws(InvalidAccountName) {
+        User(name: "").identity();
+    };
+    test.ok(try {
+        Group(name: "okkama-no-such-group-7f3a").identity();
+        false;
+    }
+    catch MissingGroup.name(name) {
+        name == "okkama-no-such-group-7f3a";
+    });
+    test.throws(InvalidAccountName) {
+        Group(name: "").users().size();
+    };
+}
+
+test "a group lists its members as users" {
+    if User().name() == "root" {
+        let root = Group(name: "root");
+        test.is(root.name(), "root");
+        test.ok(!root.identity().empty());
+        let members is @string = root.users().map() -> user {
+            user.name();
+        };
+        test.is(members.size(), root.users().size());
+    }
+    else {
+        test.ok(true);
+    }
+}

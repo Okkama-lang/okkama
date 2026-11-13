@@ -1,0 +1,40 @@
+module examples/fs/temp/scratch v1.0.0;
+
+import "fs/directory" take Directory, DirectoryEntries;
+import "fs/entry" take FileEntry;
+import "fs/temp" take TemporaryDirectory;
+import "io/stdout" take Stdout;
+
+// Scratch space with unpredictable names: a temporary directory removes its
+// whole tree on close, and a temporary file is deleted on close unless it
+// was preserved under a name of your choosing first.
+
+main() is int {
+    let out = Stdout();
+    let scratch = TemporaryDirectory(prefix: "build-");
+    let root = scratch.path();
+    out.writeln("named build-: ", root.name().starts_with("build-"));
+
+    let upload = scratch.file(prefix: "upload-");
+    upload.write([byte(1), byte(2), byte(3)]);
+    upload.flush();
+    out.writeln("inside: ", upload.path().parent() == root);
+    out.writeln("bytes: ", upload.size());
+
+    let report = root.child("report.bin");
+    upload.preserve(report);
+    upload.close();
+    let names is @string = DirectoryEntries(origin: scratch).map() -> entry {
+        entry.path().name();
+    };
+    out.writeln("kept: " + names[0]);
+
+    let throwaway = scratch.file(prefix: "tmp-");
+    let gone = throwaway.path();
+    throwaway.close();
+    out.writeln("deleted: ", !FileEntry(path: gone).existence());
+
+    scratch.close();
+    out.writeln("tree removed: ", !Directory(path: root).existence());
+    0;
+}

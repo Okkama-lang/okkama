@@ -1,30 +1,120 @@
 module config/environment v1.0.0;
+
+// Settings read from environment variables, each bound to a key.
+//
+//     let settings = EnvironmentSettings(
+//         environment: Environment(),
+//         names: [EnvironmentBinding(name: "APP_PORT", key: SettingKey("server", "port"))],
+//         source: SettingSource(kind: SettingSourceKind.environment, name: "environment"),
+//     );
+//
+// Only the variables that are bound are read.
+
 import "collections/sequence" take Sequencing;
 import "compare" take Order;
 import "config/key" take SettingKey;
-import "config/source" take SettingReading,SettingEntry,SettingSource,Settings,DuplicateSetting,SettingLimitExceeded,SettingKeyIndex;
+import "config/source" take SettingReading, SettingEntry, SettingSource, Settings, DuplicateSetting,
+    SettingLimitExceeded, SettingKeyIndex;
 import "os/environment" take Environment;
-object EnvironmentBinding{
+import "config/source" take SettingSourceKind;
+import "config/value" take ScalarSetting;
+
+// Which variable gives which setting.
+object EnvironmentBinding {
     has label is string;
     has identity is SettingKey;
-    EnvironmentBinding(name is string,key is SettingKey){label=name;identity=key;}
-    name() is string{label;}
-    key() is SettingKey{identity;}
-}
-object EnvironmentSettings does SettingReading{
-    has origin is Settings;
-    EnvironmentSettings(environment is Environment,names is Sequencing<EnvironmentBinding>,source is SettingSource){
-        let size=names.size();
-        confirm size>=0 && size<=4096 else throw SettingLimitExceeded.exceeded;
-        let mapping is @EnvironmentBinding=(0..size).map()->index{names.item(index);};
-        let keys is @SettingKey=mapping.map()->binding{binding.key();};
-        SettingKeyIndex(keys).valid();
-        let entries is @SettingEntry=mapping.filter()->binding{environment.membership(binding.name());}.map()->binding{
-            SettingEntry(binding.key(),[environment.variable(binding.name())],source);
-        };
-        origin=Settings(entries);
+
+    // Variable name gives key.
+    EnvironmentBinding(name is string, key is SettingKey) {
+        label = name;
+        identity = key;
     }
-    membership(key is SettingKey) is bool{origin.membership(key);}
-    entry(key is SettingKey) is SettingEntry{origin.entry(key);}
-    keys() is Sequencing<SettingKey>{origin.keys();}
+
+    // The key.
+    key() is SettingKey {
+        identity;
+    }
+
+    // The variable name.
+    cap Binding {
+        name is string {
+            label;
+        }
+    }
+}
+
+// Settings from bound environment variables.
+object EnvironmentSettings does SettingReading {
+    has origin is Settings;
+
+    // Reads the bound names of environment.
+    EnvironmentSettings(
+        environment is Environment,
+        names is Sequencing<EnvironmentBinding>,
+        source is SettingSource
+    ) {
+        let size = names.size();
+        confirm size >= 0 && size <= 4096 else throw SettingLimitExceeded.exceeded;
+        let mapping is @EnvironmentBinding = (0..size).map() -> index {
+            names.item(index);
+        };
+        let keys is @SettingKey = mapping.map() -> binding {
+            binding.key();
+        };
+        SettingKeyIndex(keys).valid();
+        let entries is @SettingEntry = mapping.filter() -> binding {
+            environment.membership(binding::Binding::name);
+        }.map() -> binding {
+            SettingEntry(
+                key: binding.key(),
+                values: [environment.text(binding::Binding::name)],
+                source: source
+            );
+        };
+        origin = Settings(entries);
+    }
+
+    // Whether the environment has the key.
+    membership(key is SettingKey) is bool {
+        origin.membership(key);
+    }
+
+    // The entry of key; MissingSetting when there is none.
+    entry(key is SettingKey) is SettingEntry {
+        origin.entry(key);
+    }
+
+    // Every key, in order.
+    keys() is Sequencing<SettingKey> {
+        origin.keys();
+    }
+}
+
+test "environment variables become settings through explicit bindings" {
+    let environment = Environment(values: ["APP_PORT": "8080", "HOME": "/home/ada"]);
+    let port = SettingKey("server", "port");
+    let host = SettingKey("server", "host");
+    let settings = EnvironmentSettings(
+        environment: environment,
+        names: [
+            EnvironmentBinding(name: "APP_PORT", key: port),
+            EnvironmentBinding(name: "APP_HOST", key: host)
+        ],
+        source: SettingSource(kind: SettingSourceKind.environment, name: "env"),
+    );
+    test.is(settings.membership(port), true);
+    test.is(settings.membership(host), false);
+    test.is(ScalarSetting(origin: settings, key: port).text(), "8080");
+    test.is(settings.keys().size(), 1);
+    test.is(EnvironmentBinding(name: "APP_PORT", key: port)::Binding::name, "APP_PORT");
+    test.throws(DuplicateSetting) {
+        EnvironmentSettings(
+            environment: environment,
+            names: [
+                EnvironmentBinding(name: "A", key: port),
+                EnvironmentBinding(name: "B", key: port)
+            ],
+            source: SettingSource(kind: SettingSourceKind.environment, name: "env"),
+        );
+    };
 }
