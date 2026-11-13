@@ -264,6 +264,8 @@
   - [22.4 Flat, short, one way](#224-flat-short-one-way)
   - [22.5 Readable and efficient](#225-readable-and-efficient)
   - [22.6 Explicit authority, no global state](#226-explicit-authority-no-global-state)
+  - [22.7 Failures and asynchrony](#227-failures-and-asynchrony)
+  - [22.8 Tests](#228-tests)
 
 # Part I. The Razor
 
@@ -14808,6 +14810,59 @@ spell.
 The rule is the library's, not the language's (Section 21.4): a program
 can still construct a `SystemClock()` anywhere it likes. What the rule
 buys is that the library itself never does so behind its caller's back.
+
+## 22.7 Failures and asynchrony
+
+A library speaks to its caller twice: in what it returns and in what it
+throws. The second voice gets the same care as the first.
+
+**One error type per domain.** Each domain has one error enum, declared as
+`enum X is Error = (…)`, whose cases say what went wrong: a missing file is
+`FileError.not_found(path)`, a JSON value of the wrong kind is
+`JsonError.wrong_kind(pointer, …)`, a status number with a registered name
+given as `other` is `InvalidStatus.named(code)`. The cases carry what the
+caller needs to act — the path, the pointer, the refused value — and never
+only a message to be parsed. The enum lives in a module below everything
+that throws it, `fs/error` below `fs/file` and `fs/directory`, so throwing
+it never creates an import cycle.
+
+**Natives are translated at the border.** The runtime reports a failed
+host call as a `NativeFailure` with a short code such as `"not_found"` or
+`"would_block"`. That type never leaves a module: the module that called
+the native catches it and throws its own domain's error, or, when the code
+means something ordinary, turns it into an ordinary answer. `File.lock`
+does both: `"would_block"`, another lock in the way, becomes `Maybe.none`;
+anything else goes through `FileFailure`, in `fs/error`, which turns it into
+the `FileError` that names the path.
+
+**Async only where something waits.** An action is `async` when it waits
+for I/O, a timer or another task, and only then; a parser or a formatter is
+never `async`, however large its input. Releasing a resource at the end of
+a scope is still written `defer await guard.close()` where the close
+waits; whether those guards become `async destroy` is an open question of
+its own (issue #329), to be decided when `async destroy` costs no more than
+the deferred close.
+
+## 22.8 Tests
+
+The library is tested where it is written. Every public object has at
+least one inline `test` next to it (chapter 15), and the std tests run on
+both engines, the IR engine and Sparrow, in every gate. A module is not
+changed until tests pin what it does now: the review of 0.5.4 wrote such
+*characterization* tests first and changed code second, so that a
+simplification which altered behaviour showed up as a failing test, not as
+a surprise in a program.
+
+Network and asynchronous code is tested against itself rather than against
+the outside world: a test opens a `TcpListening` on 127.0.0.1, port 0, and
+plays the peer in the same program. Such tests run in a container, like the
+gate, so that a test that misbehaves cannot reach the machine around it.
+
+Finally, the modules people use directly have examples: 70 small programs
+under `examples/`, one per task, each with the output it must print, run on
+both engines by `examples/check.py`. A test checks that the library is
+right; an example checks that it is usable, and that the way the
+documentation says to use it still works.
 
 # References
 
