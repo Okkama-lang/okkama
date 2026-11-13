@@ -269,6 +269,7 @@
   - [22.9 Scope: what the library holds](#229-scope-what-the-library-holds)
   - [22.10 Reading like json, everywhere](#2210-reading-like-json-everywhere)
   - [22.11 Whole or in pieces](#2211-whole-or-in-pieces)
+  - [22.12 `okkama man`: the reference lives in the source](#2212-okkama-man-the-reference-lives-in-the-source)
 
 # Part I. The Razor
 
@@ -14969,6 +14970,44 @@ it; a chain such as `writer <- "header: " <- payload <- "\n"` reads left
 to right and stops at the first failed write. A write takes the whole
 source or throws `IncompleteWrite.after(written)` with the number of bytes
 taken; it never retries, flushes or closes behind the caller's back.
+
+## 22.12 `okkama man`: the reference lives in the source
+
+The library is documented where it is written. A module's comments are
+plain `//` lines in CommonMark, placed above what they describe: the
+module's opening comment explains what it is for and shows the common use,
+and each public object and action carries a sentence or two of its own.
+There is no second copy of the reference to keep in step. `okkama man`
+reads the comments and the declarations together and prints a page (#512):
+
+```text
+$ okkama man json
+NAME
+    json - JSON values: one immutable Json, parsed or built in code, read
+    without casts and written by the runtime in one call.
+
+SYNOPSIS
+    let order = ParsedJson(text).root();
+    order.int("id");                                // 4711
+    order.maybe("note").text() else "";             // "" when absent or null
+    …
+```
+
+A page has the parts a Unix manual page has: the name and its one-line
+summary, the version, a synopsis taken from the module's own example, the
+description, the public API — every object, role and action with its
+signature, defaults included — and the errors the module throws. `okkama
+man json Json.int` narrows the page to one action; `okkama man` alone lists
+std; `--format markdown` gives the same page as Markdown, and a module of
+the program's own, `okkama man ./src/app.ok`, is documented the same way.
+The language server shows the same text on hover, from the same comments,
+so a programmer meets one description of an action whether they read the
+source, the terminal or the editor.
+
+The rule this sets for the library is short: a public name without a
+comment is a defect, and an example in a comment is code that must
+compile. Section 22.5 asked for both; `okkama man` is what makes the asking
+worth it.
 
 # References
 
