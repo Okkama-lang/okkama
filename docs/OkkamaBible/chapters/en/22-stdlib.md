@@ -326,3 +326,33 @@ everything else. Two modules that did the same thing were merged, keeping
 what each could do. A program written against std before the review finds
 every capability it used still there, under the shape this chapter
 describes.
+
+## 22.10 Reading like json, everywhere
+
+The `json` reference of Section 22.2 did more than fix one module. Its way
+of reading — ask a value for a member by name, get back an Okkama value of
+the kind you asked for, with `maybe(name)` for what may be absent — became
+the vocabulary of every structured source in std.
+
+| source | a required value | an optional one | when it is missing |
+|---|---|---|---|
+| JSON | `doc.int("id")` | `doc.maybe("note").text() else "none"` | `JsonError.missing` |
+| URL query (#134) | `query.int("page")` | `query.maybe("limit").int() else 20` | `MissingQueryParameter` |
+| TOML (#140) | `config.get("server").int("port")` | `config.maybe("debug").boolean() else false` | `MissingTomlMember` |
+| plist (#141) | `info.text("CFBundleIdentifier")` | `info.maybe("LSUIElement").boolean() else false` | `MissingPlistMember` |
+| CSV (#202) | `record.int("age")` | `record.maybe("note").text() else ""` | `MissingCsvValue` |
+| environment | `env.text("HOME")` | `env.maybe("PORT").int() else 8080` | `MissingEnvironmentVariable` |
+
+The readers have the same names and the same meanings in all six: `text`,
+`int` and `boolean` read one typed value and throw the domain's own error
+when it is not there or is not of that kind; `list` reads all values of a
+name; `get` steps into a nested value; `maybe` turns the question into a
+`Maybe`, so the default sits where the value is used. Each domain keeps
+what is its own — a query parameter may be given twice and `list` reads
+every occurrence, a CSV field that is empty reads as absent, TOML has
+arrays of tables walked with `for config.tables("replica")` — but none of
+them invents a second word for the same act.
+
+The payoff is the one Section 22.4 promised. A reader who has seen
+`doc.maybe("note").text() else "none"` reads a configuration file, a query
+string and an environment the same way, without opening a manual.
