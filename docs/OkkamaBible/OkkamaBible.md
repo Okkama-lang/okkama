@@ -261,6 +261,7 @@
   - [22.1 Why a library needs a style](#221-why-a-library-needs-a-style)
   - [22.2 The reference: `json`](#222-the-reference-json)
   - [22.3 Objects are mechanisms, not records](#223-objects-are-mechanisms-not-records)
+  - [22.4 Flat, short, one way](#224-flat-short-one-way)
 
 # Part I. The Razor
 
@@ -14675,6 +14676,65 @@ Five rules follow from it.
 Data that really is data still answers questions rather than exposing
 columns: a parsed `Accept-Encoding` header answers
 `header.allows("gzip")`, not a list of tokens and their weights.
+
+## 22.4 Flat, short, one way
+
+The second principle is about how much the caller writes. A common task
+takes one to three lines; if it takes more, the module is missing an entry
+point. Before 0.5.4, reading an integer argument took four constructors
+nested in one expression:
+
+```okkama
+Number(Utf8Arguments(ProcessArguments()).item(0)).int()
+```
+
+After the review the command-line module hands the program a parsed call,
+and the same question is one action, `call.int("port")`, which answers
+`Maybe<int>`. Three or more constructors nested to do one thing is what the
+principles call a matryoshka, and it is treated as a missing object, not as
+a style to put up with.
+
+Several rules keep the surface flat.
+
+- **One way to do each thing.** A second way needs a reason written in the
+  module's comment. The one second way allowed everywhere is a shortcut for
+  a common verb, and a shortcut builds the general form and nothing else:
+  `client.get(url)` is `client.response(Request(url: url))`.
+- **Fold what only forwards.** An object that only passes calls on, or a
+  view with two actions, joins its neighbour, and one constructor with
+  defaults replaces a family of overloads. The rule has a limit: an object
+  with twenty-five actions is no improvement.
+- **Named arguments and safe defaults.** Constructors in std take named
+  arguments, `File(path: Path("notes.txt"), mode: FileMode.appending)`,
+  except a constructor of a single value, where a name adds nothing:
+  `Path("notes.txt")`. Every part with a sensible default has one, and the
+  defaults are the safe ones. `HttpClient()` works as written, reaches only
+  public endpoints and follows no redirects; a special case names only what
+  differs.
+- **Named numbers are enums.** An HTTP status with a registered name is a
+  case, `Status.not_found`; the rest of 100–599 is `Status.other(418)`. One
+  converter, `StatusCode`, goes to and from the wire, and it refuses `other`
+  for a number that has a name, so every status has exactly one spelling.
+- **`for`, not closures.** A sequence is walked with `for source -> item`.
+  There is no `each(fn)`: a JSON object is walked by its names,
+  `for doc.names() -> name { … }`, and rebuilt with `map`.
+- **One name, one meaning.** An action never returns an iterator in one
+  module and an array under the same name in another. Actions that answer
+  are nouns, `lines()`, `content()`; verbs are commands that answer
+  nothing, `write`, `close`. An object that computes one thing has no
+  `value()` or `result()`: its action names the answer,
+  `DaysBetween(left: a, right: b).count()`, `Crc32(bytes).checksum()`, or is
+  an adjective when the answer is yes or no, `FileEncoding(name).supported()`.
+  When the review started, 406 actions answered under a generic name; they
+  were renamed module by module.
+- **No dependency cycles.** A domain's errors live in a module below
+  everything that throws them, such as `fs/error`, and a lower concept never
+  imports a higher one.
+
+Each of these rules alone would be a matter of taste. Together they make
+the library predictable: a reader who has met `json` can guess the shape of
+`http` or `time` before opening them, which is the reason to have a style at
+all.
 
 # References
 
