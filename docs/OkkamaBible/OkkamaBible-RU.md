@@ -257,6 +257,10 @@
   - [21.7 Командная строка сохраняет полномочия пользователя](#217-командная-строка-сохраняет-полномочия-пользователя)
   - [21.8 Ограничения](#218-ограничения)
   - [21.9 Чего стоит такой замысел](#219-чего-стоит-такой-замысел)
+- [Глава 22. Стандартная библиотека и её стиль](#глава-22-стандартная-библиотека-и-её-стиль)
+  - [22.1 Зачем библиотеке стиль](#221-зачем-библиотеке-стиль)
+  - [22.2 Эталон: `json`](#222-эталон-json)
+  - [22.3 Объекты — механизмы, а не записи](#223-объекты--механизмы-а-не-записи)
 
 # Часть I. Бритва
 
@@ -14691,6 +14695,175 @@ fn run_plugin(spb: Vec<u8>, arguments: Vec<Vec<u8>>, stop: Arc<AtomicBool>)
 разрешил её хост. Этот ответ помещается на одной странице, и все движки дают
 один и тот же.
 
+# Глава 22. Стандартная библиотека и её стиль
+
+Язык учат по грамматике, а живут в нём через библиотеку. Большая часть кода,
+который программист читает на Okkama, — не `match` и `once let`, а вызовы
+`std`: открыть файл, ответить на запрос, напечатать дату. Если эти вызовы
+расходятся по форме, каждый модуль приходится учить заново, и экономия,
+купленная маленькой грамматикой, снова тратится в библиотеке. Эта глава — о
+форме, которую принимает библиотека Okkama, почему она такая и чего это
+стоит.
+
+## 22.1 Зачем библиотеке стиль
+
+К концу 0.5.3 `std` выросла до 537 модулей и 6,7 МБ исходников. Из них 404 —
+обычный код, 64 — слой, который говорит с рантаймом (`std/runtime` и
+нативы), и 69 — сгенерированные таблицы данных локалей. Библиотека работала,
+у каждого модуля были тесты, но вердикт её владельца перед ревизией 0.5.4
+был прямым: ей неудобно пользоваться — объекты вложены «матрёшками», их
+трудно читать и ещё труднее в них ориентироваться, — и она неэффективна:
+странные структуры и обходные пути.
+
+Последовавшая ревизия (тикет #352) не добавляла возможностей. Она прочитала
+каждый модуль по одному записанному набору принципов,
+`docs/std-principles.md`, и оставила, упростила или переписала его на месте;
+ничего не было удалено из библиотеки или вынесено в пакет. Эти принципы и
+есть предмет главы. Это не руководство по стилю в смысле расстановки
+скобок: они говорят, для чего объект в библиотеке, как он отвечает и
+сколько должен написать вызывающий.
+
+Библиотеки всегда были местом, где проверяются идеи языка. Smalltalk-80
+поставлял библиотеку классов как часть системы и учил языку через неё
+[[Goldberg 1983](#ref-goldberg1983)]. Первые коллекции Java — `Vector`, `Hashtable` и
+`Enumeration` в 1996 году — через два года получили соседа, Collections
+Framework, спроектированный как одно целое, и с тех пор два стиля живут бок о
+бок. Python закрепил тон своей библиотеки в коротком списке афоризмов
+[[Peters 2004](#ref-peters2004)], а основная книга о Go учит языку во многом через его
+стандартные пакеты [[Donovan 2015](#ref-donovan2015)]. Принципы Okkama — свои, но задача, на
+которую они отвечают, стара: библиотека, растущая модуль за модулем разными
+руками, расползается на множество маленьких диалектов, если её что-то не
+держит вместе.
+
+## 22.2 Эталон: `json`
+
+Первыми как образцы для остальных были переписаны три модуля: `json`,
+`fs/file` и HTTP-клиент. К `json` эта глава будет возвращаться: он достаточно
+мал, чтобы прочитать его целиком, и касается каждого принципа.
+
+```okkama
+module bible/json_reference v1.0.0;
+
+import "io/stdout" take Stdout;
+import "json" take Json, JsonField, ParsedJson, JsonError;
+
+// An order arrives as text, is read without casts, and a reply is built and
+// written by the runtime in one call.
+object Line {
+    has sku is string;
+    has qty is int;
+    Line(:sku, :qty);
+
+    string() is string {
+        sku + " x" + qty.string();
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let order = ParsedJson("{\"id\": 4711, \"customer\": {\"name\": \"Ada\"}, \"items\": [{\"sku\": \"tea\", \"qty\": 2}, {\"sku\": \"cake\", \"qty\": 1}]}").root();
+    out.writeln("order ", order.int("id"), " for ", order.get("customer").text("name"));
+    out.writeln("note: ", order.maybe("note").text() else "none");
+    let lines = order.list("items").map() -> item { Line(sku: item.text("sku"), qty: item.int("qty")); };
+    for lines -> line {
+        out.writeln("  ", line.string());
+    }
+
+    let reply = Json(JsonField("id", 4711), JsonField("state", "accepted"), JsonField("lines", lines.size()));
+    out.writeln(reply.string());
+
+    let refused = try {
+        order.text("id");
+    }
+    catch JsonError.wrong_kind(pointer, expected, actual) {
+        "wrong kind at " + pointer;
+    };
+    out.writeln(refused);
+    0;
+}
+```
+
+Вывод:
+
+```text
+order 4711 for Ada
+note: none
+  tea x2
+  cake x1
+{"id":4711,"state":"accepted","lines":2}
+wrong kind at /id
+```
+
+Всё, что вызывающий делает с JSON-документом, уложилось в эти двадцать строк.
+`ParsedJson(text).root()` разбирает один раз; результат — `Json`, одно
+неизменяемое значение любого вида. Чтение задаёт значению вопрос и получает
+обратно значение Okkama: `order.int("id")` — это `int`,
+`order.get("customer")` — другой `Json`, `order.list("items")` — массив из
+них. Никаких приведений и никакого промежуточного объекта-«узла», который
+надо разворачивать. Необязательный член читается через `maybe(name)`,
+отвечающий `Maybe` для каждого вида, поэтому значение по умолчанию пишется
+там, где значение используется: `order.maybe("note").text() else "none"`.
+
+Запись — тот же объект, собранный в коде: `Json(JsonField("id", 4711), …)`
+хранит свои члены по порядку, а `string()` за один вызов просит у рантайма
+компактный текст; `pretty(2)` делает отступы. Числа точные, никогда не
+`float`: число JSON читается обратно как `int`, `BigInt` или `Decimal`.
+
+Всё, что идёт не так, — это `JsonError`, и каждый вариант называет значение,
+о котором речь, его указателем RFC 6901 [[RFC 6901](#ref-rfc6901)]. Попросить текст там, где
+в документе число, — `JsonError.wrong_kind("/id", …)`; отсутствующий член —
+`JsonError.missing`; число, не помещающееся в запрошенное целое, —
+`JsonError.invalid_number`. Разбор строгий, по RFC 8259 [[RFC 8259](#ref-rfc8259)]: порядок
+членов сохраняется, повторённое имя — ошибка, а не тихая перезапись, а
+вложенность останавливается на 128 уровнях, если вызывающий не разрешил
+больше.
+
+## 22.3 Объекты — механизмы, а не записи
+
+Первый принцип записан словами владельца в документе, который управляет
+библиотекой: «мы пишем объектный код, поэтому избегать как можно сильнее
+всяких аксессоров и мутаторов… делегировать объекту его действия… не
+превращать объект просто в номинальную структуру данных. Это должен быть
+действительно какой-то рабочий механизм — коробка, которая что-то делает и
+даёт наружу результат».
+
+Из него следуют пять правил.
+
+- **Говори, а не спрашивай.** Код, который читает три поля объекта и что-то
+  из них вычисляет, принадлежит самому объекту как действие. Идея старше
+  Okkama: это «закон Деметры» Либерхерра и Холланд [[Lieberherr 1989](#ref-lieberherr1989)] и
+  сердцевина объектного стиля, который язык берёт у Elegant Objects
+  [[Bugayenko 2016](#ref-bugayenko2016)].
+- **Объект сам знает, что и в каком виде отдать.** Вызывающий никогда не
+  оборачивает ответ в декодер или форматтер, чтобы им воспользоваться.
+  Захваченный процесс отдаёт свой вывод текстом через капу,
+  `done::Captured::output`, и точными байтами через другую,
+  `done::Bytes::output`; момент времени отвечает `instant.string()`; дата —
+  `date.days_until(other)`. Декодеры и форматтеры остаются для редкого явного
+  случая, и объект пользуется ими внутри своих действий.
+- **Объект раскрывает себя через капу.** То, что вызывающий может видеть в
+  объекте, — капа вычисленных полей, названная по части, которую она
+  показывает: `page::Head::status`, `date::Calendar::year`,
+  `range::Bounds::start`. В капе только то, что уже вычислено или вычисляется
+  тривиально; работа — открыть поток, разобрать тело — остаётся действием:
+  `file.text()`, `response.body()`.
+- **Конструктор связывает, действия вычисляют.** Конструктор проверяет
+  аргументы через `confirm`, чтобы неправильный объект никогда не
+  существовал, и связывает их. Сортировка, разбор и подсчёт уходят в скрытое
+  действие, чей `once let` хранит ответ (глава 13): `Sorted(xs)` связывает
+  `xs` и сортирует при первом вопросе. Конструктор никогда не вызывает
+  другие объекты и не трогает внешний мир.
+- **Ни мутаторов, ни записей.** Действие «with», меняющее одно поле, —
+  переодетый мутатор; библиотека предпочитает действие, ради которого
+  изменение затевалось: `money.plus(other)`, а не `money.with_cents(…)`.
+  Объект, чьи действия в основном аксессоры, — запись с конструктором, и
+  ревизия либо давала ему поведение, либо вливала его в объект, который им
+  пользовался.
+
+Данные, которые действительно данные, всё равно отвечают на вопросы, а не
+выставляют колонки: разобранный заголовок `Accept-Encoding` отвечает
+`header.allows("gzip")`, а не списком токенов с весами.
+
 # Литература
 
 - <a id="ref-amin2016"></a>Nada Amin, Ross Tate (2016). Java and Scala's Type Systems are Unsound: The Existential Crisis of Null Pointers. In *Proceedings of OOPSLA 2016*: 838–848. ACM. https://doi.org/10.1145/2983990.2984004
@@ -14726,6 +14899,7 @@ fn run_plugin(spb: Vec<u8>, arguments: Vec<Vec<u8>>, stop: Arc<AtomicBool>)
 - <a id="ref-dijkstra1972"></a>Edsger W. Dijkstra (1972). The Humble Programmer. *Communications of the ACM* 15(10): 859–866. https://doi.org/10.1145/355604.361591
 - <a id="ref-nodeexit"></a>OpenJS Foundation. Node.js documentation, Process: exit codes (code 13, unsettled top-level await). https://nodejs.org/api/process.html#exit-codes
 - <a id="ref-deno"></a>Deno documentation (2024). Security and permissions: `--allow-read`, `--allow-net` and the other permission flags. https://docs.deno.com/runtime/fundamentals/security/
+- <a id="ref-donovan2015"></a>Alan A. A. Donovan, Brian W. Kernighan (2015). *The Go Programming Language*. Addison-Wesley. ISBN 978-0134190440.
 - <a id="ref-duffy2016"></a>Joe Duffy (2016). The Error Model. Blog post, 7 February 2016. http://joeduffyblog.com/2016/02/07/the-error-model/
 - <a id="ref-elizarov2018"></a>Roman Elizarov (2018). Structured concurrency. Blog post, 12 September 2018. https://medium.com/@elizarov/structured-concurrency-722d765aa952
 - <a id="ref-se0304"></a>Swift Evolution (2021). SE-0304: Structured Concurrency. https://github.com/swiftlang/swift-evolution/blob/main/proposals/0304-structured-concurrency.md
@@ -14766,6 +14940,7 @@ fn run_plugin(spb: Vec<u8>, arguments: Vec<Vec<u8>>, stop: Arc<AtomicBool>)
 - <a id="ref-landin1966"></a>P. J. Landin (1966). The Next 700 Programming Languages. *Communications of the ACM* 9(3): 157–166. https://doi.org/10.1145/365230.365257
 - <a id="ref-langley2014"></a>Adam Langley (2014). Apple's SSL/TLS bug. *ImperialViolet*, 22 February 2014. https://www.imperialviolet.org/2014/02/22/applebug.html
 - <a id="ref-li2019"></a>Ming Li, Paul Vitányi (2019). *An Introduction to Kolmogorov Complexity and Its Applications*, 4th edition. Springer. https://doi.org/10.1007/978-3-030-11298-1
+- <a id="ref-lieberherr1989"></a>Karl J. Lieberherr, Ian M. Holland (1989). *Assuring Good Style for Object-Oriented Programs*. IEEE Software 6(5): 38–48. https://doi.org/10.1109/52.35588
 - <a id="ref-liskov1977"></a>Barbara Liskov, Alan Snyder, Russell Atkinson, Craig Schaffert (1977). Abstraction Mechanisms in CLU. *Communications of the ACM* 20(8): 564–576. https://doi.org/10.1145/359763.359789
 - <a id="ref-liskov1979"></a>Barbara H. Liskov, Alan Snyder (1979). Exception Handling in CLU. *IEEE Transactions on Software Engineering* SE-5(6): 546–558. https://doi.org/10.1109/TSE.1979.230191
 - <a id="ref-liskov1988"></a>Barbara Liskov and Liuba Shrira (1988). Promises: Linguistic Support for Efficient Asynchronous Procedure Calls in Distributed Systems. *Proceedings of PLDI '88*, 260–267. https://doi.org/10.1145/53990.54016
@@ -14792,6 +14967,7 @@ fn run_plugin(spb: Vec<u8>, arguments: Vec<Vec<u8>>, stop: Arc<AtomicBool>)
 - <a id="ref-ousterhout2018"></a>John Ousterhout (2018). *A Philosophy of Software Design*. Yaknyam Press.
 - <a id="ref-parnas1972"></a>David L. Parnas (1972). On the Criteria To Be Used in Decomposing Systems into Modules. *Communications of the ACM* 15(12): 1053–1058. https://doi.org/10.1145/361598.361623
 - <a id="ref-pep237"></a>Moshe Zadka, Guido van Rossum (2001). PEP 237 — Unifying Long Integers and Integers. Python Enhancement Proposals. https://peps.python.org/pep-0237/
+- <a id="ref-peters2004"></a>Tim Peters (2004). *PEP 20 — The Zen of Python*. https://peps.python.org/pep-0020/
 - <a id="ref-pierce2002"></a>Benjamin C. Pierce (2002). *Types and Programming Languages*. MIT Press.
 - <a id="ref-pike2015"></a>Rob Pike (2015). Errors are values. *The Go Blog*, 12 January 2015. https://go.dev/blog/errors-are-values
 - <a id="ref-hyperspec"></a>Kent M. Pitman (1996). *Common Lisp HyperSpec*, Chapter 9: Conditions. Harlequin; now LispWorks. https://www.lispworks.com/documentation/HyperSpec/Body/09_.htm
@@ -14799,6 +14975,7 @@ fn run_plugin(spb: Vec<u8>, arguments: Vec<Vec<u8>>, stop: Arc<AtomicBool>)
 - <a id="ref-promisesaplus"></a>Promises/A+ organization. Promises/A+, rule 2.2.4 and note 3.1. https://promisesaplus.com/
 - <a id="ref-r7rs2013"></a>Alex Shinn, John Cowan, Arthur A. Gleckler (eds.) (2013). *Revised⁷ Report on the Algorithmic Language Scheme*. https://small.r7rs.org/attachment/r7rs.pdf
 - <a id="ref-rfc3629"></a>François Yergeau (2003). *UTF-8, a Transformation Format of ISO 10646*. RFC 3629, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc3629
+- <a id="ref-rfc6901"></a>Paul C. Bryan, Kris Zyp, Mark Nottingham (eds.) (2013). *JavaScript Object Notation (JSON) Pointer*. RFC 6901, IETF. https://www.rfc-editor.org/rfc/rfc6901
 - <a id="ref-rfc7396"></a>Paul Hoffman, James Snell (2014). *JSON Merge Patch*. RFC 7396, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc7396
 - <a id="ref-rfc8259"></a>Tim Bray (ed.) (2017). *The JavaScript Object Notation (JSON) Data Interchange Format*. RFC 8259, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc8259
 - <a id="ref-rice1953"></a>H. Gordon Rice (1953). Classes of Recursively Enumerable Sets and Their Decision Problems. *Transactions of the American Mathematical Society* 74(2): 358–366. https://doi.org/10.1090/S0002-9947-1953-0053041-6

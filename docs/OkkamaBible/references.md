@@ -31,6 +31,7 @@ bibliographic data were checked are listed.
 - [@deno] Deno documentation (2024). Security and permissions: `--allow-read`, `--allow-net` and the other permission flags. https://docs.deno.com/runtime/fundamentals/security/
 - [@dijkstra1968] Edsger W. Dijkstra (1968). Go To Statement Considered Harmful. *Communications of the ACM* 11(3): 147–148. https://doi.org/10.1145/362929.362947
 - [@dijkstra1972] Edsger W. Dijkstra (1972). The Humble Programmer. *Communications of the ACM* 15(10): 859–866. https://doi.org/10.1145/355604.361591
+- [@donovan2015] Alan A. A. Donovan, Brian W. Kernighan (2015). *The Go Programming Language*. Addison-Wesley. ISBN 978-0134190440.
 - [@duffy2016] Joe Duffy (2016). The Error Model. Blog post, 7 February 2016. http://joeduffyblog.com/2016/02/07/the-error-model/
 - [@elizarov2018] Roman Elizarov (2018). Structured concurrency. Blog post, 12 September 2018. https://medium.com/@elizarov/structured-concurrency-722d765aa952
 - [@fahndrich2003] Manuel Fähndrich, K. Rustan M. Leino (2003). Declaring and Checking Non-null Types in an Object-Oriented Language. In *Proceedings of OOPSLA 2003*: 302–312. ACM. https://doi.org/10.1145/949305.949332
@@ -78,6 +79,7 @@ bibliographic data were checked are listed.
 - [@landin1966] P. J. Landin (1966). The Next 700 Programming Languages. *Communications of the ACM* 9(3): 157–166. https://doi.org/10.1145/365230.365257
 - [@langley2014] Adam Langley (2014). Apple's SSL/TLS bug. *ImperialViolet*, 22 February 2014. https://www.imperialviolet.org/2014/02/22/applebug.html
 - [@li2019] Ming Li, Paul Vitányi (2019). *An Introduction to Kolmogorov Complexity and Its Applications*, 4th edition. Springer. https://doi.org/10.1007/978-3-030-11298-1
+- [@lieberherr1989] Karl J. Lieberherr, Ian M. Holland (1989). *Assuring Good Style for Object-Oriented Programs*. IEEE Software 6(5): 38–48. https://doi.org/10.1109/52.35588
 - [@lions1996] Jacques-Louis Lions et al. (1996). *ARIANE 5 Flight 501 Failure: Report by the Inquiry Board*. European Space Agency, Paris, 19 July 1996. https://www.esa.int/Newsroom/Press_Releases/Ariane_501_-_Presentation_of_Inquiry_Board_report {label: Ariane 501 Inquiry Board 1996}
 - [@liskov1977] Barbara Liskov, Alan Snyder, Russell Atkinson, Craig Schaffert (1977). Abstraction Mechanisms in CLU. *Communications of the ACM* 20(8): 564–576. https://doi.org/10.1145/359763.359789
 - [@liskov1979] Barbara H. Liskov, Alan Snyder (1979). Exception Handling in CLU. *IEEE Transactions on Software Engineering* SE-5(6): 546–558. https://doi.org/10.1109/TSE.1979.230191
@@ -105,12 +107,14 @@ bibliographic data were checked are listed.
 - [@parnas1972] David L. Parnas (1972). On the Criteria To Be Used in Decomposing Systems into Modules. *Communications of the ACM* 15(12): 1053–1058. https://doi.org/10.1145/361598.361623
 - [@pep237] Moshe Zadka, Guido van Rossum (2001). PEP 237 — Unifying Long Integers and Integers. Python Enhancement Proposals. https://peps.python.org/pep-0237/ {label: PEP 237}
 - [@pep343] Guido van Rossum, Nick Coghlan (2005). PEP 343 — The "with" Statement. Python Enhancement Proposals. https://peps.python.org/pep-0343/
+- [@peters2004] Tim Peters (2004). *PEP 20 — The Zen of Python*. https://peps.python.org/pep-0020/
 - [@pierce2002] Benjamin C. Pierce (2002). *Types and Programming Languages*. MIT Press.
 - [@pike2015] Rob Pike (2015). Errors are values. *The Go Blog*, 12 January 2015. https://go.dev/blog/errors-are-values
 - [@poletto1999] Massimiliano Poletto, Vivek Sarkar (1999). Linear Scan Register Allocation. *ACM TOPLAS* 21(5): 895–913. https://doi.org/10.1145/330249.330250
 - [@promisesaplus] Promises/A+ organization. Promises/A+, rule 2.2.4 and note 3.1. https://promisesaplus.com/
 - [@r7rs2013] Alex Shinn, John Cowan, Arthur A. Gleckler (eds.) (2013). *Revised⁷ Report on the Algorithmic Language Scheme*. https://small.r7rs.org/attachment/r7rs.pdf {label: R7RS}
 - [@rfc3629] François Yergeau (2003). *UTF-8, a Transformation Format of ISO 10646*. RFC 3629, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc3629 {label: RFC 3629}
+- [@rfc6901] Paul C. Bryan, Kris Zyp, Mark Nottingham (eds.) (2013). *JavaScript Object Notation (JSON) Pointer*. RFC 6901, IETF. https://www.rfc-editor.org/rfc/rfc6901 {label: RFC 6901}
 - [@rfc7396] Paul Hoffman, James Snell (2014). *JSON Merge Patch*. RFC 7396, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc7396 {label: RFC 7396}
 - [@rfc8259] Tim Bray (ed.) (2017). *The JavaScript Object Notation (JSON) Data Interchange Format*. RFC 8259, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc8259 {label: RFC 8259}
 - [@rice1953] H. Gordon Rice (1953). Classes of Recursively Enumerable Sets and Their Decision Problems. *Transactions of the American Mathematical Society* 74(2): 358–366. https://doi.org/10.1090/S0002-9947-1953-0053041-6

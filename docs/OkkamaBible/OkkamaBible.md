@@ -257,6 +257,10 @@
   - [21.7 The command line keeps the user's authority](#217-the-command-line-keeps-the-users-authority)
   - [21.8 Limits](#218-limits)
   - [21.9 What this design costs](#219-what-this-design-costs)
+- [Chapter 22. The standard library and its style](#chapter-22-the-standard-library-and-its-style)
+  - [22.1 Why a library needs a style](#221-why-a-library-needs-a-style)
+  - [22.2 The reference: `json`](#222-the-reference-json)
+  - [22.3 Objects are mechanisms, not records](#223-objects-are-mechanisms-not-records)
 
 # Part I. The Razor
 
@@ -14508,6 +14512,170 @@ What the design buys is a short answer to "what can this program do":
 the natives its imports reach, filtered by the groups its host allows.
 That answer fits on one page, and every engine gives the same one.
 
+# Chapter 22. The standard library and its style
+
+A language is learned from its grammar and lived in through its library.
+Most of the code a programmer reads in Okkama is not `match` and `once let`
+but calls into `std`: a file opened, a request answered, a date printed. If
+those calls disagree with each other in shape, every module has to be learned
+from scratch, and the economy the language bought with its small grammar is
+spent again in the library. This chapter is about the shape the Okkama
+library takes, why, and what it costs.
+
+## 22.1 Why a library needs a style
+
+By the end of 0.5.3, `std` had grown to 537 modules and 6.7 MB of source. Of
+those, 404 were ordinary code, 64 were the substrate that talks to the
+runtime (`std/runtime` and the natives), and 69 were generated tables of
+locale data. The library worked, and every module had tests, but its owner's
+verdict before the 0.5.4 review was blunt: it was awkward to use, with
+objects nested in "matryoshkas" that were hard to read and harder to find
+one's way in, and it was inefficient, with odd structures and detours.
+
+The review that followed (issue #352) did not add features. It read every
+module against one written set of principles, `docs/std-principles.md`, and
+kept, simplified or rewrote it in place; nothing was removed from the
+library or moved into a package. The principles are the subject of this
+chapter. They are not a style guide in the sense of where braces go; they
+say what an object in the library is for, how it answers, and how much a
+caller should have to write.
+
+Libraries have always been where a language's ideas are tested. Smalltalk-80
+shipped its class library as part of the system and taught the language
+through it [[Goldberg 1983](#ref-goldberg1983)]. Java's first collections, `Vector`, `Hashtable`
+and `Enumeration` in 1996, were joined two years later by a Collections
+Framework designed as one piece, and the two styles have lived side by side
+ever since. Python codified the tone of its library in a short list of
+aphorisms [[Peters 2004](#ref-peters2004)], and the standard book on Go teaches the language
+largely through its standard packages [[Donovan 2015](#ref-donovan2015)]. Okkama's principles are its own, but the problem they answer
+is old: a library that grows module by module, by different hands, drifts
+into many small dialects unless something holds it together.
+
+## 22.2 The reference: `json`
+
+Three modules were rewritten first, as exemplars for the rest: `json`,
+`fs/file` and the HTTP client. `json` is the one this chapter returns to,
+because it is small enough to read in full and touches every principle.
+
+```okkama
+module bible/json_reference v1.0.0;
+
+import "io/stdout" take Stdout;
+import "json" take Json, JsonField, ParsedJson, JsonError;
+
+// An order arrives as text, is read without casts, and a reply is built and
+// written by the runtime in one call.
+object Line {
+    has sku is string;
+    has qty is int;
+    Line(:sku, :qty);
+
+    string() is string {
+        sku + " x" + qty.string();
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let order = ParsedJson("{\"id\": 4711, \"customer\": {\"name\": \"Ada\"}, \"items\": [{\"sku\": \"tea\", \"qty\": 2}, {\"sku\": \"cake\", \"qty\": 1}]}").root();
+    out.writeln("order ", order.int("id"), " for ", order.get("customer").text("name"));
+    out.writeln("note: ", order.maybe("note").text() else "none");
+    let lines = order.list("items").map() -> item { Line(sku: item.text("sku"), qty: item.int("qty")); };
+    for lines -> line {
+        out.writeln("  ", line.string());
+    }
+
+    let reply = Json(JsonField("id", 4711), JsonField("state", "accepted"), JsonField("lines", lines.size()));
+    out.writeln(reply.string());
+
+    let refused = try {
+        order.text("id");
+    }
+    catch JsonError.wrong_kind(pointer, expected, actual) {
+        "wrong kind at " + pointer;
+    };
+    out.writeln(refused);
+    0;
+}
+```
+
+Output:
+
+```text
+order 4711 for Ada
+note: none
+  tea x2
+  cake x1
+{"id":4711,"state":"accepted","lines":2}
+wrong kind at /id
+```
+
+Everything a caller does with a JSON document is in those twenty lines.
+`ParsedJson(text).root()` parses once; the result is a `Json`, one immutable
+value whatever its kind. Reading asks the value a question and gets an
+Okkama value back: `order.int("id")` is an `int`, `order.get("customer")` is
+another `Json`, `order.list("items")` an array of them. There is no cast and
+no intermediate "node" object to unwrap. An optional member is read with
+`maybe(name)`, which answers a `Maybe` for each kind, so the default is
+written where the value is used: `order.maybe("note").text() else "none"`.
+
+Writing is the same object built in code: `Json(JsonField("id", 4711), …)`
+holds its members in order, and `string()` asks the runtime for the compact
+text in one call; `pretty(2)` indents it. Numbers are exact, never `float`:
+a JSON number reads back as an `int`, a `BigInt` or a `Decimal`.
+
+Everything that goes wrong is a `JsonError`, and every case names the value
+it is about by its RFC 6901 pointer [[RFC 6901](#ref-rfc6901)]. Asking for text where the
+document has a number is `JsonError.wrong_kind("/id", …)`, a missing member
+is `JsonError.missing`, a number that does not fit the integer asked for is
+`JsonError.invalid_number`. Parsing is strict RFC 8259 [[RFC 8259](#ref-rfc8259)]: member
+order is kept, a repeated name is an error rather than a silent overwrite,
+and nesting stops at 128 levels unless the caller allows more.
+
+## 22.3 Objects are mechanisms, not records
+
+The first principle is stated in the owner's own words in the document that
+governs the library: write object code, avoid accessors and mutators,
+delegate to an object its own actions, and do not turn an object into a
+nominal structure of data; it should be a working mechanism, a box that does
+something and hands out a result.
+
+Five rules follow from it.
+
+- **Tell, don't ask.** Code that reads three fields of an object and
+  computes something from them belongs inside that object, as an action.
+  The idea is older than Okkama: it is the "Law of Demeter" of Lieberherr
+  and Holland [[Lieberherr 1989](#ref-lieberherr1989)], and the core of the object style the
+  language takes from Elegant Objects [[Bugayenko 2016](#ref-bugayenko2016)].
+- **An object knows what it gives, and in what form.** A caller never wraps
+  an answer in a decoder or a formatter to use it. A captured process
+  answers its output as text through a cap, `done::Captured::output`, and
+  as exact bytes through another, `done::Bytes::output`; an instant answers
+  `instant.string()`; a date answers `date.days_until(other)`. Decoders and
+  formatters still exist for the rare explicit case, and the object uses
+  them inside its own actions.
+- **An object reveals itself through a cap.** What callers may see of an
+  object is a cap of computed fields, named for the part it shows:
+  `page::Head::status`, `date::Calendar::year`, `range::Bounds::start`. A
+  cap holds only what is already computed or trivially computable; work —
+  opening a stream, parsing a body — stays an action: `file.text()`,
+  `response.body()`.
+- **Constructors bind; actions compute.** A constructor checks its
+  arguments with `confirm`, so that an invalid object never exists, and
+  binds them. Sorting, parsing and counting move into a hidden action whose
+  `once let` keeps the answer (Chapter 13): `Sorted(xs)` binds `xs` and
+  sorts on the first question. A constructor never calls other objects or
+  touches the outside world.
+- **No mutators, no records.** A "with" action that changes one field is a
+  mutator in disguise; the library prefers the action the change was for,
+  `money.plus(other)` rather than `money.with_cents(…)`. An object whose
+  actions are mostly accessors is a record with a constructor, and the
+  review either gave it behaviour or folded it into the object that used it.
+
+Data that really is data still answers questions rather than exposing
+columns: a parsed `Accept-Encoding` header answers
+`header.allows("gzip")`, not a list of tokens and their weights.
+
 # References
 
 - <a id="ref-amin2016"></a>Nada Amin, Ross Tate (2016). Java and Scala's Type Systems are Unsound: The Existential Crisis of Null Pointers. In *Proceedings of OOPSLA 2016*: 838–848. ACM. https://doi.org/10.1145/2983990.2984004
@@ -14543,6 +14711,7 @@ That answer fits on one page, and every engine gives the same one.
 - <a id="ref-dijkstra1972"></a>Edsger W. Dijkstra (1972). The Humble Programmer. *Communications of the ACM* 15(10): 859–866. https://doi.org/10.1145/355604.361591
 - <a id="ref-nodeexit"></a>OpenJS Foundation. Node.js documentation, Process: exit codes (code 13, unsettled top-level await). https://nodejs.org/api/process.html#exit-codes
 - <a id="ref-deno"></a>Deno documentation (2024). Security and permissions: `--allow-read`, `--allow-net` and the other permission flags. https://docs.deno.com/runtime/fundamentals/security/
+- <a id="ref-donovan2015"></a>Alan A. A. Donovan, Brian W. Kernighan (2015). *The Go Programming Language*. Addison-Wesley. ISBN 978-0134190440.
 - <a id="ref-duffy2016"></a>Joe Duffy (2016). The Error Model. Blog post, 7 February 2016. http://joeduffyblog.com/2016/02/07/the-error-model/
 - <a id="ref-elizarov2018"></a>Roman Elizarov (2018). Structured concurrency. Blog post, 12 September 2018. https://medium.com/@elizarov/structured-concurrency-722d765aa952
 - <a id="ref-se0304"></a>Swift Evolution (2021). SE-0304: Structured Concurrency. https://github.com/swiftlang/swift-evolution/blob/main/proposals/0304-structured-concurrency.md
@@ -14583,6 +14752,7 @@ That answer fits on one page, and every engine gives the same one.
 - <a id="ref-landin1966"></a>P. J. Landin (1966). The Next 700 Programming Languages. *Communications of the ACM* 9(3): 157–166. https://doi.org/10.1145/365230.365257
 - <a id="ref-langley2014"></a>Adam Langley (2014). Apple's SSL/TLS bug. *ImperialViolet*, 22 February 2014. https://www.imperialviolet.org/2014/02/22/applebug.html
 - <a id="ref-li2019"></a>Ming Li, Paul Vitányi (2019). *An Introduction to Kolmogorov Complexity and Its Applications*, 4th edition. Springer. https://doi.org/10.1007/978-3-030-11298-1
+- <a id="ref-lieberherr1989"></a>Karl J. Lieberherr, Ian M. Holland (1989). *Assuring Good Style for Object-Oriented Programs*. IEEE Software 6(5): 38–48. https://doi.org/10.1109/52.35588
 - <a id="ref-liskov1977"></a>Barbara Liskov, Alan Snyder, Russell Atkinson, Craig Schaffert (1977). Abstraction Mechanisms in CLU. *Communications of the ACM* 20(8): 564–576. https://doi.org/10.1145/359763.359789
 - <a id="ref-liskov1979"></a>Barbara H. Liskov, Alan Snyder (1979). Exception Handling in CLU. *IEEE Transactions on Software Engineering* SE-5(6): 546–558. https://doi.org/10.1109/TSE.1979.230191
 - <a id="ref-liskov1988"></a>Barbara Liskov and Liuba Shrira (1988). Promises: Linguistic Support for Efficient Asynchronous Procedure Calls in Distributed Systems. *Proceedings of PLDI '88*, 260–267. https://doi.org/10.1145/53990.54016
@@ -14609,6 +14779,7 @@ That answer fits on one page, and every engine gives the same one.
 - <a id="ref-ousterhout2018"></a>John Ousterhout (2018). *A Philosophy of Software Design*. Yaknyam Press.
 - <a id="ref-parnas1972"></a>David L. Parnas (1972). On the Criteria To Be Used in Decomposing Systems into Modules. *Communications of the ACM* 15(12): 1053–1058. https://doi.org/10.1145/361598.361623
 - <a id="ref-pep237"></a>Moshe Zadka, Guido van Rossum (2001). PEP 237 — Unifying Long Integers and Integers. Python Enhancement Proposals. https://peps.python.org/pep-0237/
+- <a id="ref-peters2004"></a>Tim Peters (2004). *PEP 20 — The Zen of Python*. https://peps.python.org/pep-0020/
 - <a id="ref-pierce2002"></a>Benjamin C. Pierce (2002). *Types and Programming Languages*. MIT Press.
 - <a id="ref-pike2015"></a>Rob Pike (2015). Errors are values. *The Go Blog*, 12 January 2015. https://go.dev/blog/errors-are-values
 - <a id="ref-hyperspec"></a>Kent M. Pitman (1996). *Common Lisp HyperSpec*, Chapter 9: Conditions. Harlequin; now LispWorks. https://www.lispworks.com/documentation/HyperSpec/Body/09_.htm
@@ -14616,6 +14787,7 @@ That answer fits on one page, and every engine gives the same one.
 - <a id="ref-promisesaplus"></a>Promises/A+ organization. Promises/A+, rule 2.2.4 and note 3.1. https://promisesaplus.com/
 - <a id="ref-r7rs2013"></a>Alex Shinn, John Cowan, Arthur A. Gleckler (eds.) (2013). *Revised⁷ Report on the Algorithmic Language Scheme*. https://small.r7rs.org/attachment/r7rs.pdf
 - <a id="ref-rfc3629"></a>François Yergeau (2003). *UTF-8, a Transformation Format of ISO 10646*. RFC 3629, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc3629
+- <a id="ref-rfc6901"></a>Paul C. Bryan, Kris Zyp, Mark Nottingham (eds.) (2013). *JavaScript Object Notation (JSON) Pointer*. RFC 6901, IETF. https://www.rfc-editor.org/rfc/rfc6901
 - <a id="ref-rfc7396"></a>Paul Hoffman, James Snell (2014). *JSON Merge Patch*. RFC 7396, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc7396
 - <a id="ref-rfc8259"></a>Tim Bray (ed.) (2017). *The JavaScript Object Notation (JSON) Data Interchange Format*. RFC 8259, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc8259
 - <a id="ref-rice1953"></a>H. Gordon Rice (1953). Classes of Recursively Enumerable Sets and Their Decision Problems. *Transactions of the American Mathematical Society* 74(2): 358–366. https://doi.org/10.1090/S0002-9947-1953-0053041-6
