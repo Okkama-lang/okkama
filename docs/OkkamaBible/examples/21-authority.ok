@@ -30,7 +30,7 @@ object Greeting {
     Greeting(:environment, :clock);
 
     text() is string {
-        let name = if environment.membership("USER") { environment.variable("USER"); } else { "stranger"; };
+        let name = environment.maybe("USER").text() else "stranger";
         "hello, " + name + ", at " + clock.instant().unix_duration()::Span::seconds.string() + " s";
     }
 }

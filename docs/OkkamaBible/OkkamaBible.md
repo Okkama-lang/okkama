@@ -14044,10 +14044,14 @@ does to the process can change what it says. `Environment(values: …)` makes
 one that never looked at the process at all. `addition(name, value)` and
 `difference(name)` return new snapshots and leave the receiver as it was,
 which is how a child process gets an environment of its own (Section 21.5)
-without the parent's changing. A variable that is missing and one that is
-empty are different answers: `membership` asks the first question,
-`variable` the second, and a name with `=` or NUL in it is refused before
-any snapshot can hold it.
+without the parent's changing. A variable is read like a json value (#134):
+`text(name)` gives it as a string and throws `MissingEnvironmentVariable`
+when it is not set, `int`, `boolean` and `list` read it typed (`list`
+splits `PATH`-like values at the platform's separator), and
+`maybe(name).text() else "stranger"` reads an optional one in one line. A
+variable that is missing and one that is empty are different answers:
+`membership` asks the first question, `text` the second. A name with `=`
+or NUL in it is refused before any snapshot can hold it.
 
 Time comes through a role. `Timing` has three actions — the wall-clock
 `instant()`, the `monotonic_instant()` that only moves forward, and an
@@ -14089,7 +14093,7 @@ object Greeting {
     Greeting(:environment, :clock);
 
     text() is string {
-        let name = if environment.membership("USER") { environment.variable("USER"); } else { "stranger"; };
+        let name = environment.maybe("USER").text() else "stranger";
         "hello, " + name + ", at " + clock.instant().unix_duration()::Span::seconds.string() + " s";
     }
 }

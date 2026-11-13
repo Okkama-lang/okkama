@@ -14221,10 +14221,14 @@ main() is int {
 ответов. `Environment(values: …)` создаёт снимок, который на процесс вовсе не
 смотрел. `addition(name, value)` и `difference(name)` возвращают новые снимки
 и оставляют получателя как был — так дочерний процесс получает собственное
-окружение (раздел 21.5), а окружение родителя не меняется. Отсутствующая
-переменная и пустая — разные ответы: первый вопрос задаёт `membership`,
-второй — `variable`; имя с `=` или NUL отвергается раньше, чем его сможет
-содержать хоть один снимок.
+окружение (раздел 21.5), а окружение родителя не меняется. Переменная читается
+как значение json (#134): `text(name)` отдаёт её строкой и бросает
+`MissingEnvironmentVariable`, если её нет; `int`, `boolean` и `list` читают её
+с типом (`list` режет значения вроде `PATH` по разделителю платформы), а
+`maybe(name).text() else "stranger"` читает необязательную одной строкой.
+Отсутствующая переменная и пустая — разные ответы: первый вопрос задаёт
+`membership`, второй — `text`. Имя с `=` или NUL отвергается раньше, чем его
+сможет содержать хоть один снимок.
 
 Время приходит через роль. У `Timing` три действия — `instant()` по
 настенным часам, `monotonic_instant()`, который движется только вперёд, и
@@ -14266,7 +14270,7 @@ object Greeting {
     Greeting(:environment, :clock);
 
     text() is string {
-        let name = if environment.membership("USER") { environment.variable("USER"); } else { "stranger"; };
+        let name = environment.maybe("USER").text() else "stranger";
         "hello, " + name + ", at " + clock.instant().unix_duration()::Span::seconds.string() + " s";
     }
 }
