@@ -270,6 +270,8 @@
   - [22.10 Reading like json, everywhere](#2210-reading-like-json-everywhere)
   - [22.11 Whole or in pieces](#2211-whole-or-in-pieces)
   - [22.12 `okkama man`: the reference lives in the source](#2212-okkama-man-the-reference-lives-in-the-source)
+  - [22.13 Other libraries, other answers](#2213-other-libraries-other-answers)
+  - [22.14 What the style costs](#2214-what-the-style-costs)
 
 # Part I. The Razor
 
@@ -15008,6 +15010,77 @@ The rule this sets for the library is short: a public name without a
 comment is a defect, and an example in a comment is code that must
 compile. Section 22.5 asked for both; `okkama man` is what makes the asking
 worth it.
+
+## 22.13 Other libraries, other answers
+
+Every library answers the same few questions, and comparing the answers
+shows what Okkama's are for.
+
+*How does a caller read structured data?* Go's `encoding/json` decodes
+into a struct whose fields carry tags, so the shape of the data is declared
+once, as a type, before the data arrives [[Donovan 2015](#ref-donovan2015)]. Python's `json`
+returns dictionaries and lists, so the shape is never declared and every
+read is a lookup that may fail anywhere. Okkama sits between: `Json` is one
+value of any kind, and the caller declares the shape at the point of each
+read — `int("id")`, `list("items")` — with the error naming the pointer
+where the shape did not hold. There is no struct to keep in step with the
+data, and no untyped dictionary to cast.
+
+*Where do defaults live?* Java's libraries long answered with overloads
+and, later, builders [[Bloch 2018](#ref-bloch2018)]; Python with keyword arguments and
+defaults in the signature. Okkama took Python's answer and made it the
+rule: named arguments with defaults, so the common case is the empty
+constructor and a special case names only what differs (Section 22.4).
+
+*How does the library reach the world?* Most libraries reach it directly:
+`time.Now()` in Go, `datetime.now()` in Python, `System.currentTimeMillis()`
+in Java. Testing such code means patching the world. Okkama's library asks
+for the world as a value (Section 22.6), which is the object-capability
+answer, and it is the one place where std is stricter than all three.
+
+*How many ways are there to do a thing?* "There should be one — and
+preferably only one — obvious way to do it" is a line of the Zen of Python
+[[Peters 2004](#ref-peters2004)], which the Python library itself does not always keep.
+Okkama writes the rule into the library's principles and makes a second
+way justify itself in the module's comment, which turns a slogan into a
+review checklist.
+
+*What is an object for?* Here Okkama is furthest from the mainstream and
+closest to Smalltalk [[Goldberg 1983](#ref-goldberg1983)] and to Elegant Objects
+[[Bugayenko 2016](#ref-bugayenko2016)]: an object is a mechanism that answers questions, not a
+record with getters (Section 22.3). The mainstream libraries are full of
+data carriers, and they work; Okkama's bet is that a library without them
+reads better and changes more safely, and the review of 0.5.4 was the
+first large test of that bet.
+
+## 22.14 What the style costs
+
+A style that removes accessors, overloads and second ways has costs, and
+they should be named.
+
+- **More objects.** A question that another library answers with a field
+  read becomes an object with an action: `DaysBetween(left: a, right: b)`
+  where Python writes `(b - a).days`. Each is small, but there are more of
+  them to name and to find, and `okkama man` is part of the answer to the
+  finding.
+- **Less familiar shapes.** A programmer arriving from Java looks for
+  `getStatus()` and finds a cap, `page::Head::status`, or an action named
+  for its answer. The shape is learnt once, but it is learnt.
+- **Renames have a price.** Making one name mean one thing renamed 406
+  actions across std in one review. Programs written before 0.5.4 had to
+  follow; the library pays this kind of cost in bursts rather than in
+  small drifts, and it is why the review happened before a 1.0 that would
+  have frozen the names.
+- **The rules are a discipline, not a proof.** The compiler enforces the
+  language — private fields, no downcasts, typed failures — but not that a
+  module asks for its clock or reads like `json`. Those hold because the
+  library is reviewed against written principles, and a module written
+  outside std can ignore them.
+
+None of these costs is large next to the alternative, a library that every
+programmer has to learn one module at a time. But they are the reason the
+principles are written down: a style that is only remembered drifts, and a
+library of 499 modules drifts fast.
 
 # References
 
