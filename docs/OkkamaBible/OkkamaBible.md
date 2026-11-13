@@ -266,6 +266,7 @@
   - [22.6 Explicit authority, no global state](#226-explicit-authority-no-global-state)
   - [22.7 Failures and asynchrony](#227-failures-and-asynchrony)
   - [22.8 Tests](#228-tests)
+  - [22.9 Scope: what the library holds](#229-scope-what-the-library-holds)
 
 # Part I. The Razor
 
@@ -14863,6 +14864,39 @@ under `examples/`, one per task, each with the output it must print, run on
 both engines by `examples/check.py`. A test checks that the library is
 right; an example checks that it is usable, and that the way the
 documentation says to use it still works.
+
+## 22.9 Scope: what the library holds
+
+The standard library of Okkama is large on purpose. It holds an HTTP client
+and server, a mail stack, TLS, SQLite and PostgreSQL, templates, archives,
+locales and a terminal toolkit, beside the collections and the text. A
+language this young could have kept its library small and left the rest to
+packages; Okkama decided the other way, for a reason specific to it. The
+style of this chapter is only worth something if it holds across the code
+a program actually calls, and a library that stops at `json` would leave
+most of that code to be written in whatever style its authors chose.
+
+The modules fall into two layers.
+
+- **The foundation** is what everything stands on: `encoding`, `io`,
+  `collections`, `compare`, `error`, `async`, `numbers`, `strings`, `time`,
+  `fs`, `os`, `cli`, `url`, `json` and `regex`. It is imported most: in
+  the release this book describes, `encoding/utf` is imported by 148 of
+  std's 499 modules and `collections/sequence` by 113. A mistake here is
+  everyone's mistake, so the foundation was reviewed first.
+- **The domains** are the large areas built on it: `http`, `mail`, `mime`,
+  `i18n`, `cli`, `testing`, `db` and the rest. Before the review they were
+  in the worst shape: `http` alone had 102 modules and 543 accessors, `mail`
+  236.
+
+One decision shapes the whole review, and it was the owner's, made at its
+start: nothing leaves std. No module was deleted or moved into a package;
+the long tail — `mail`, `plist`, `xmlrpc`, `archive`, `xml`, `html`,
+`template`, `diff`, `statistics`, `calendar` — was improved in place like
+everything else. Two modules that did the same thing were merged, keeping
+what each could do. A program written against std before the review finds
+every capability it used still there, under the shape this chapter
+describes.
 
 # References
 
