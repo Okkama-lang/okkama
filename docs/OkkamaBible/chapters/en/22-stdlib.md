@@ -505,3 +505,33 @@ None of these costs is large next to the alternative, a library that every
 programmer has to learn one module at a time. But they are the reason the
 principles are written down: a style that is only remembered drifts, and a
 library of 499 modules drifts fast.
+
+## 22.15 Codecs: one object per direction
+
+The encoding modules show the style at its smallest. Every codec is two
+objects, named for what they hold once the work is done:
+`Base64Encoded(origin: bytes).string()` is the text, and
+`Base64Decoded(origin: text).bytes()` the bytes; `Utf8Encoded`,
+`Utf8Decoded`, `QuotedPrintableEncoded`, `Base85Decoded` and the rest
+follow the same shape. Choices that vary — an alphabet, a byte order — are
+named arguments with a default (`Base64Alphabet.url`, `ByteOrder.little`),
+never a second family of objects.
+
+Decoding is strict. Input that is not exactly the encoding fails with the
+domain's error, carrying the offset of the first violation:
+`InvalidBase64.at(offset)`, `InvalidUtf8.at(offset)`. Offsets count Unicode
+scalars for text inputs and bytes for byte inputs, so they point at what a
+person sees in the input. There is no "lenient" mode that repairs, skips or
+replaces: a decoder that guesses produces data nobody asked for.
+
+The objects are thin; the work is done by natives, and how well it is done
+is not part of the API. 0.5.8 rewrote most of them without changing a
+single result: base64 and base32 decode through a lookup table in one pass
+instead of a linear search of the alphabet per character (64 base64
+characters: 4.2 → 0.37 µs), base85 likewise (64 KiB: 3.4 → 0.29 ms),
+quoted-printable encodes in one pass instead of moving every token of a
+line (one 64 KiB line: 1.18 s → 0.3 ms), and the validity checks no longer
+decode into a buffer they throw away. Each rewrite was first pinned by
+tests that pass on the old code — the published behaviour, byte for byte,
+was the specification — and then measured. That is the library's
+efficiency principle at work: the surface stays put while the cost moves.
