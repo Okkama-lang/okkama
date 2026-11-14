@@ -1,0 +1,16 @@
+oir 2 high
+// expect OIR2-T1 Type(TypeId(2))
+module keys
+object Key {
+    destroy @destroy
+}
+scope SD action in @destroy
+func @destroy(%self: Key) -> void [destroy Key] {
+^entry in SD:
+    ret
+}
+scope S action in @f
+func @f(%map: map<Key,int>) -> void {
+^entry in S:
+    ret
+}

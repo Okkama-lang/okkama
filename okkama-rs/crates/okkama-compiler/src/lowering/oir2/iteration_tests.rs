@@ -177,17 +177,6 @@ fn oir2_c6_structural_protocol_is_rejected_by_frontend() {
 }
 
 #[test]
-fn oir2_c6_object_key_keeps_existing_verifier_boundary() {
-    with_analysis(include_str!("fixtures/p2_3/traversal-object-key-unsupported.ok"), |analysis| {
-        let module = super::lower_to_oir2(analysis).unwrap();
-        let report = ir::verify::verify_high(&module).unwrap_err();
-        assert!(report.diagnostics.iter().any(|diagnostic| {
-            diagnostic.rule == ir::verify::RuleId::T1 && diagnostic.message == "map key type is not permitted"
-        }));
-    });
-}
-
-#[test]
 fn oir2_c6_protocol_without_witness_is_unsupported() {
     with_analysis(concat!(
         "module app; import \"collections/iteration\" take Iterating; ",
@@ -254,6 +243,7 @@ const GOLDENS: &[&str] = &[
     "cursor-value-next",
     "cursor-valued-last",
     "map-keys",
+    "map-object-key",
     "map-resolved-empty",
     "map-resolved-failure",
     "map-resolved-last",

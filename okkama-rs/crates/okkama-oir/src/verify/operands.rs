@@ -818,7 +818,8 @@ impl Checker<'_, '_> {
                 self.packet(*packet)?;
             }
             CollectionOp::MapBuilderNew { key, value } => {
-                self.require(map_key(self.module.types.get(*key)?), "invalid map key type");
+                let valid = map_key(self.module, *key, self.state)?;
+                self.require(valid, "invalid map key type");
                 let valid = language_type(self.module, *value, self.state)?;
                 self.require(valid, "map builder value must be a language type");
             }

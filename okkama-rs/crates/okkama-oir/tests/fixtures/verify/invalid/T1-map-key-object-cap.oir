@@ -1,0 +1,15 @@
+oir 2 high
+// expect OIR2-T1 Type(TypeId(4))
+module keys
+object Owner {
+}
+cap Owner :: View {
+}
+object Key {
+    field view: View
+}
+scope S action in @f
+func @f(%map: map<Key,int>) -> void {
+^entry in S:
+    ret
+}
