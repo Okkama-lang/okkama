@@ -332,6 +332,7 @@ fn body_structure<'a>(module: &'a Module, function: FuncId, data: &Function, bod
         if !state.step(1) { return; }
         references(module, Some(body), Some(function), selection, state);
     }
+    references(module, Some(body), Some(function), &body.cleanup, state);
     references(module, Some(body), Some(function), &body.high_results, state);
     references(module, Some(body), Some(function), &body.high_effects, state);
     references(module, Some(body), Some(function), &body.descriptor_bindings, state);
@@ -411,6 +412,10 @@ pub(super) fn targets(block: &Block) -> Vec<BlockId> {
     let mut targets = Vec::new();
     if let Some(unwind) = &block.unwind { targets.push(unwind.target.block); }
     match &block.term.kind {
+        TermKind::CleanupNext { .. } | TermKind::ExitDispatch { .. } | TermKind::FailureDispatch { .. } => {
+            if let TermKind::FailureDispatch { none, .. } = &block.term.kind { targets.push(none.block); }
+            targets.extend(dispatch_edges(&block.term.kind).iter().map(|(_, edge)| edge.block));
+        }
         TermKind::Br(target) => targets.push(target.block),
         TermKind::Cond { yes, no, .. } => targets.extend([yes.block, no.block]),
         TermKind::Switch { cases, default, .. } => {
