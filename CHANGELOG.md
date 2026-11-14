@@ -124,6 +124,19 @@ fake fields; role fakes and their ordinary typed fields remain available.
   Constructs outside the slice get an explicit "unsupported" diagnostic
   rather than a fallback. Every lowering golden passes `verify_high`.
 
+- **OIR-2 ownership elaboration, synchronous part (#565).** A pass from
+  `high` to `own` makes ownership explicit for synchronous code. It covers:
+  - scope ends, call conventions and per-scope exits with the reserve;
+  - defer registration and replacement;
+  - successors and construction stages;
+  - partitions of accepted inputs.
+
+  Seventeen own goldens verify with `verify_own`. The pass changed some
+  verifier rules, so an independent audit checked them. It found three
+  rules that accepted a borrow outliving its owner. Each is now rejected,
+  and each has an invalid fixture that the earlier verifier accepted.
+  Closures, `any`, the dynamic fallback and async are still to come.
+
 - **OIR-2 cleanup specialization (#591).** A pass from `own` to `low`
   expands scope closes into an explicit cleanup automaton: one plan in
   serial order across static, journal and protocol entries, the reserve
