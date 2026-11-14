@@ -177,9 +177,14 @@ impl Universe {
         }
         for (site, op) in operations {
             budget.work(1)?;
-            if module.profile == Profile::High && matches!(op,
+            let partitions_inputs = self.call_summary(function, site).is_some_and(|summary| {
+                summary.entry_kind != EntryKind::ObservationAdmissionStaysCaller
+            });
+            // P1.3 §3.4: include failures introduced by elaboration. Offering
+            // managed call inputs emits scope.split even for a scalar result.
+            if module.profile == Profile::High && (partitions_inputs || matches!(op,
                 Operation::Lexical(LexicalOp::Bind { .. } | LexicalOp::Rebind { .. } | LexicalOp::Stage { .. })
-                    | Operation::Exit(ExitOp::Prepare { .. }))
+                    | Operation::Exit(ExitOp::Prepare { .. })))
                 && cfg::operation_uses(op, body).is_ok_and(|uses| uses.iter().any(|operand| {
                     body.values.get(operand.value).is_ok_and(|value| types[&value.ty].may_own())
                 })) {

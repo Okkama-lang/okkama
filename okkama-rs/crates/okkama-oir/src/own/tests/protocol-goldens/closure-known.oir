@@ -17,17 +17,17 @@ summary M1 call-boundary results [result_relation(fresh=[0],
 summary M2 call-boundary parameters [parameter_effect(convention=borrow,
         destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
         publication=atomic)
-summary M3 call-boundary parameters [parameter_effect(convention=borrow,
-        destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
-        publication=atomic)
+summary M3 call-boundary parameters [parameter_effect(convention=borrow, destination=none)]
+    results [result_relation(provenance=unbound_result)]
+    contract call_contract(results=[int], failures=[program], publication=atomic)
 summary M4 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
         failures=[program], publication=atomic)
-summary M5 call-boundary parameters [parameter_effect(convention=borrow,
-        destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
-        publication=atomic)
-summary M6 call-boundary parameters [parameter_effect(convention=borrow,
-        destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
-        publication=atomic)
+summary M5 call-boundary parameters [parameter_effect(convention=borrow, destination=none)]
+    results [result_relation(provenance=unbound_result)]
+    contract call_contract(results=[int], failures=[program], publication=atomic)
+summary M6 call-boundary parameters [parameter_effect(convention=borrow, destination=none)]
+    results [result_relation(provenance=unbound_result)]
+    contract call_contract(results=[int], failures=[program], publication=atomic)
 summary M7 observation parameters [parameter_effect(convention=borrow,
         destination=none)] contract call_contract(publication=atomic)
 
@@ -145,14 +145,20 @@ func @f(%0: own) -> (int, own) abi explicit(input_packet=0, output_packet=1) sum
     %19: fn() -> int facts(managed(deps=d2)) = fn.closure @lambda.__own_entry_1, [%16], ty fn() -> int
     %20: deps = deps.of %19
     %21: own = own.empty
-    (%22: int, %23: own, %24: deps) = fn.call %19(; %21) deps [%20] summary(M6)
-    %25: scope<S2> = own.admit %18, %23
-    %26: closed = scope.end %25, effects scope_effects(failures=[], suspends=false, cancel=false)
-    %27: own = own.empty
-    ret %22, %27
-    ^b5(%28: scope<S2>, %29: failure) in S2:
-    %30: failure = scope.unwind %28, %29, effects scope_effects(failures=[], suspends=false, cancel=false)
-    raise %30
+    invoke.own fn.call %19(; %21) deps [%20] summary(M6)
+        normal ^b6($value, $packet, $deps, %18)
+        unwind ^b7($failure, %18)
+    ^b5(%22: scope<S2>, %23: failure) in S2:
+    %24: failure = scope.unwind %22, %23, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %24
+    ^b6(%25: int, %26: own, %27: deps, %28: scope<S2>) in S2:
+    %29: scope<S2> = own.admit %28, %26
+    %30: closed = scope.end %29, effects scope_effects(failures=[], suspends=false, cancel=false)
+    %31: own = own.empty
+    ret %25, %31
+    ^b7(%32: failure, %33: scope<S2>) in S2:
+    %34: failure = scope.unwind %33, %32, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %34
 }
 
 func @lambda.__own_entry_1(%0: R facts(managed(deps=d1)); %1: deps, %2: own) -> (int, own) [lambda captures

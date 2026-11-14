@@ -1,0 +1,73 @@
+oir 2 own
+module managed_call_effects
+
+object R {
+    destroy @destroy
+}
+scope S0 action in @destroy
+scope S1 action in @read
+scope S2 action in @main
+summary M0 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract
+    call_contract(publication=atomic)
+summary M1 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results
+    [result_relation(provenance=unbound_result)] contract call_contract(results=[int], publication=atomic)
+summary M2 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results
+    [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[program],
+    publication=atomic)
+summary M3 observation parameters [parameter_effect(convention=borrow, destination=none)] contract
+    call_contract(publication=atomic)
+
+func @destroy(%0: R facts(managed(deps=d1))) -> void [destroy R] abi observation summary(M3) {
+    dependency d0: dependency = from_ssa(%3)
+    dependency d1: dependency = retention(value=%0, selection=selection(%0))
+    ^b0 in S0:
+    %1: deps = deps.of %0
+    br ^b1(%0, %1)
+    ^b1(%2: R facts(managed(deps=d0)), %3: deps) in S0:
+    ret
+}
+
+func @read(%0: R facts(managed(deps=d1)); %1: deps, %2: own) -> (int, own) abi explicit(input_packet=2,
+    output_packet=1) summary(M1) {
+    boundary B0 lexical in S1
+    dependency d0: dependency = from_ssa(%6)
+    dependency d1: dependency = from_ssa(%1)
+    ^b0 in S1:
+    %3: scope<S1> = scope.begin S1
+    %4: scope<S1> = own.accept %3, %2
+    br ^b1(%0, %1, %4)
+    ^b1(%5: R facts(managed(deps=d0)), %6: deps, %7: scope<S1>) in S1:
+    %8: int = const 0
+    %9: closed = scope.end %7, effects scope_effects(failures=[], suspends=false, cancel=false)
+    %10: own = own.empty
+    ret %8, %10
+}
+
+func @main(%0: R facts(managed(deps=d1)); %1: deps, %2: own) -> (int, own) abi explicit(input_packet=2,
+    output_packet=1) summary(M2) {
+    boundary B0 lexical in S2
+    dependency d0: dependency = from_ssa(%6)
+    dependency d1: dependency = from_ssa(%1)
+    dependency d2: dependency = from_ssa(%12)
+    dependency d3: dependency = from_ssa(%23)
+    selection s0: selection = union([selection(%5)])
+    selection s1: selection = admissible(s0)
+    ^b0 in S2:
+    %3: scope<S2> = scope.begin S2
+    %4: scope<S2> = own.accept %3, %2
+    br ^b1(%0, %1, %4)
+    ^b1(%5: R facts(managed(deps=d0)), %6: deps, %7: scope<S2>) in S2:
+    invoke.own scope.split %7, s1
+        normal ^b2($state, $selected, $external_deps, %5, %6)
+        unwind ^b3($state, $failure, %5, %6)
+    ^b2(%8: scope<S2>, %9: own, %10: deps, %11: R facts(managed(deps=d2)), %12: deps) in S2:
+    %13: own = own.join [%9]
+    (%14: int, %15: own, %16: deps) = call @read(%11; %13) deps [%12]
+    %17: scope<S2> = own.admit %8, %15
+    %18: closed = scope.end %17, effects scope_effects(failures=[], suspends=false, cancel=false)
+    %19: own = own.empty
+    ret %14, %19
+    ^b3(%20: scope<S2>, %21: failure, %22: R facts(managed(deps=d3)), %23: deps) in S2:
+    %24: failure = scope.unwind %20, %21, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %24
+}
