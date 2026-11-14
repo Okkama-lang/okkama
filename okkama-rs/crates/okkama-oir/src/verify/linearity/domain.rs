@@ -1,6 +1,7 @@
 use crate::*;
 use super::per_value::{AllocationSize, PerValue};
 use std::rc::Rc;
+use super::shared::SharedSet;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) const ABSENT: u8 = 1;
@@ -47,7 +48,7 @@ pub(super) struct Filter {
     pub keys: BTreeSet<Origin>,
     pub fresh: bool,
     pub possible: BTreeSet<Origin>,
-    pub labels: BTreeSet<ValueId>,
+    pub labels: SharedSet<ValueId>,
     pub stale: bool,
     pub whole_future: bool,
     pub state: u8,
@@ -124,7 +125,7 @@ pub(super) struct Token {
     pub scope: Option<ScopeId>,
     pub reserve: BTreeSet<ScopeId>,
     pub destinations: BTreeSet<ScopeId>,
-    pub sources: BTreeSet<ValueId>,
+    pub sources: SharedSet<ValueId>,
     pub selected_scope: Option<ScopeId>,
     pub selection: Option<SelectionId>,
     pub bound_admission: bool,
@@ -174,8 +175,8 @@ pub(super) struct Flow {
     pub latest_failure: u8,
     pub latest_failure_origin: Option<Origin>,
     pub fields: Fields,
-    pub aliases: PerValue<BTreeSet<ValueId>>,
-    pub contained: PerValue<BTreeSet<ValueId>>,
+    pub aliases: PerValue<SharedSet<ValueId>>,
+    pub contained: PerValue<SharedSet<ValueId>>,
     pub views: BTreeMap<Origin, BTreeSet<Origin>>,
     pub witnesses: Rc<Vec<bool>>,
     pub frames: BTreeMap<Origin, BTreeMap<u32, super::Slot>>,
@@ -204,8 +205,8 @@ impl Flow {
             latest_failure: 0,
             latest_failure_origin: None,
             fields: BTreeMap::new(),
-            aliases: PerValue::new(values, BTreeSet::new()),
-            contained: PerValue::new(values, BTreeSet::new()),
+            aliases: PerValue::new(values, SharedSet::new()),
+            contained: PerValue::new(values, SharedSet::new()),
             views: BTreeMap::new(),
             witnesses,
             frames: BTreeMap::new(),
@@ -328,7 +329,7 @@ impl Flow {
     pub fn normalize_token(&self, mut token: Token, state: &mut super::State<'_>) -> Token {
         token.pieces = token.pieces.into_iter().map(|mut piece| {
             piece.predicates = piece.predicates.into_iter().map(|(mut filter, selected)| {
-                let mut labels = BTreeSet::new();
+                let mut labels = SharedSet::new();
                 for value in &filter.labels {
                     let aliases = &self.aliases[value.as_u32() as usize];
                     if !state.step(aliases.len().saturating_add(1)) {
@@ -360,12 +361,12 @@ impl Flow {
         }).collect();
         token
     }
-    pub fn remap_aliases(&mut self, classes: &BTreeMap<BTreeSet<ValueId>, BTreeSet<ValueId>>) {
+    pub fn remap_aliases(&mut self, classes: &BTreeMap<SharedSet<ValueId>, SharedSet<ValueId>>) {
         let old = self.aliases.clone();
         let rewrite = |piece: &Piece| {
             let mut piece = piece.clone();
             piece.predicates = piece.predicates.into_iter().map(|(mut filter, selected)| {
-                let mut labels = BTreeSet::new();
+                let mut labels = SharedSet::new();
                 for label in &filter.labels {
                     if let Some(members) = classes.get(&old[label.as_u32() as usize]) {
                         labels.extend(members);
@@ -377,28 +378,35 @@ impl Flow {
             }).collect();
             piece
         };
-        for token in self.tokens.stored_mut().chain(self.journals.stored_mut()) {
-            token.pieces = token.pieces.iter().map(rewrite).collect();
-        }
+        let rewrite_token = |token: &Token| {
+            let mut next = token.clone();
+            next.pieces = token.pieces.iter().map(rewrite).collect();
+            next
+        };
+        self.tokens.rewrite_stored(rewrite_token);
+        self.journals.rewrite_stored(rewrite_token);
         self.closed_inputs = self.closed_inputs.iter().map(rewrite).collect();
-        for contained in self.contained.stored_mut() {
-            *contained = contained.iter().flat_map(|label| {
+        self.contained.rewrite_stored(|contained| {
+            contained.rewritten(contained.iter().flat_map(|label| {
                 classes.get(&old[label.as_u32() as usize]).into_iter().flatten().copied()
-            }).collect();
-        }
-        self.aliases.fill(BTreeSet::new());
+            }))
+        });
+        let mut aliases = PerValue::new(self.availability.len(), SharedSet::new());
         for members in classes.values() {
             for member in members {
-                self.aliases[member.as_u32() as usize] = members.clone();
+                aliases[member.as_u32() as usize] = members.clone();
             }
         }
+        self.aliases.assign(aliases);
     }
-    pub fn add_contained(&mut self, roots: &BTreeSet<ValueId>, child: &BTreeSet<ValueId>) {
-        for contained in self.contained.stored_mut() {
+    pub fn add_contained(&mut self, roots: &SharedSet<ValueId>, child: &SharedSet<ValueId>) {
+        self.contained.rewrite_stored(|contained| {
+            let mut next = contained.clone();
             if !contained.is_disjoint(roots) {
-                contained.extend(child);
+                next.extend(child);
             }
-        }
+            next
+        });
         let add = |piece: &Piece| {
             let mut piece = piece.clone();
             piece.predicates = piece.predicates.into_iter().map(|(mut filter, selected)| {
@@ -409,12 +417,16 @@ impl Flow {
             }).collect();
             piece
         };
-        for token in self.tokens.stored_mut().chain(self.journals.stored_mut()) {
-            token.pieces = token.pieces.iter().map(add).collect();
-        }
+        let add_token = |token: &Token| {
+            let mut next = token.clone();
+            next.pieces = token.pieces.iter().map(add).collect();
+            next
+        };
+        self.tokens.rewrite_stored(add_token);
+        self.journals.rewrite_stored(add_token);
         self.closed_inputs = self.closed_inputs.iter().map(add).collect();
     }
-    pub fn replace_aliases(&mut self, old: &BTreeSet<ValueId>, new: &BTreeSet<ValueId>) {
+    pub fn replace_aliases(&mut self, old: &SharedSet<ValueId>, new: &SharedSet<ValueId>) {
         let rewrite = |piece: &Piece| {
             let mut piece = piece.clone();
             piece.predicates = piece.predicates.into_iter().map(|(mut filter, selected)| {
@@ -426,17 +438,24 @@ impl Flow {
             }).collect();
             piece
         };
-        for token in self.tokens.stored_mut().chain(self.journals.stored_mut()) {
-            token.pieces = token.pieces.iter().map(rewrite).collect();
-        }
+        let rewrite_token = |token: &Token| {
+            let mut next = token.clone();
+            next.pieces = token.pieces.iter().map(rewrite).collect();
+            next
+        };
+        self.tokens.rewrite_stored(rewrite_token);
+        self.journals.rewrite_stored(rewrite_token);
         self.closed_inputs = self.closed_inputs.iter().map(rewrite).collect();
-        for contained in self.contained.stored_mut() {
+        self.contained.rewrite_stored(|contained| {
+            let mut next = contained.clone();
             if !contained.is_disjoint(old) {
-                *contained = contained.difference(old).copied().chain(new.iter().copied()).collect();
+                next = next.without(old);
+                next.extend(new);
             }
-        }
+            next
+        });
         for alias in old.union(new) {
-            self.aliases[alias.as_u32() as usize] = new.clone();
+            self.aliases.set(alias.as_u32() as usize, new.clone());
         }
     }
     pub fn projection_keys(&self) -> BTreeSet<Origin> {
@@ -639,12 +658,28 @@ impl AllocationSize for DeclId {}
 impl AllocationSize for u32 {}
 impl<A: AllocationSize, B: AllocationSize> AllocationSize for (A, B) {
     fn heap_bytes(&self) -> usize { self.0.heap_bytes().saturating_add(self.1.heap_bytes()) }
+    fn unshared_bytes(&self) -> usize { self.0.unshared_bytes().saturating_add(self.1.unshared_bytes()) }
+    fn charge_shared(&self) -> usize { self.0.charge_shared().saturating_add(self.1.charge_shared()) }
+    fn pending_shared(&self) -> usize { self.0.pending_shared().saturating_add(self.1.pending_shared()) }
+    fn temporary_bytes(&self) -> usize { self.0.temporary_bytes().saturating_add(self.1.temporary_bytes()) }
     fn work(&self) -> usize { self.0.work().saturating_add(self.1.work()) }
 }
 impl<A: AllocationSize, B: AllocationSize, C: AllocationSize> AllocationSize for (A, B, C) {
     fn work(&self) -> usize { self.0.work().saturating_add(self.1.work()).saturating_add(self.2.work()) }
     fn heap_bytes(&self) -> usize {
         self.0.heap_bytes().saturating_add(self.1.heap_bytes()).saturating_add(self.2.heap_bytes())
+    }
+    fn unshared_bytes(&self) -> usize {
+        self.0.unshared_bytes().saturating_add(self.1.unshared_bytes()).saturating_add(self.2.unshared_bytes())
+    }
+    fn charge_shared(&self) -> usize {
+        self.0.charge_shared().saturating_add(self.1.charge_shared()).saturating_add(self.2.charge_shared())
+    }
+    fn pending_shared(&self) -> usize {
+        self.0.pending_shared().saturating_add(self.1.pending_shared()).saturating_add(self.2.pending_shared())
+    }
+    fn temporary_bytes(&self) -> usize {
+        self.0.temporary_bytes().saturating_add(self.1.temporary_bytes()).saturating_add(self.2.temporary_bytes())
     }
 }
 impl AllocationSize for Filter {
@@ -654,12 +689,32 @@ impl AllocationSize for Filter {
     fn heap_bytes(&self) -> usize {
         self.keys.heap_bytes().saturating_add(self.possible.heap_bytes()).saturating_add(self.labels.heap_bytes())
     }
+    fn unshared_bytes(&self) -> usize {
+        self.keys.unshared_bytes().saturating_add(self.possible.unshared_bytes())
+            .saturating_add(self.labels.unshared_bytes())
+    }
+    fn charge_shared(&self) -> usize {
+        self.keys.charge_shared().saturating_add(self.possible.charge_shared())
+            .saturating_add(self.labels.charge_shared())
+    }
+    fn pending_shared(&self) -> usize {
+        self.keys.pending_shared().saturating_add(self.possible.pending_shared())
+            .saturating_add(self.labels.pending_shared())
+    }
+    fn temporary_bytes(&self) -> usize {
+        self.keys.temporary_bytes().saturating_add(self.possible.temporary_bytes())
+            .saturating_add(self.labels.temporary_bytes())
+    }
 }
 impl AllocationSize for Piece {
     fn work(&self) -> usize {
         1 + self.predicates.work()
     }
     fn heap_bytes(&self) -> usize { self.predicates.heap_bytes() }
+    fn unshared_bytes(&self) -> usize { self.predicates.unshared_bytes() }
+    fn charge_shared(&self) -> usize { self.predicates.charge_shared() }
+    fn pending_shared(&self) -> usize { self.predicates.pending_shared() }
+    fn temporary_bytes(&self) -> usize { self.predicates.temporary_bytes() }
 }
 impl AllocationSize for CleanupFact {
     fn work(&self) -> usize {
@@ -668,6 +723,22 @@ impl AllocationSize for CleanupFact {
     fn heap_bytes(&self) -> usize {
         self.reserve.heap_bytes().saturating_add(self.inventory.heap_bytes())
             .saturating_add(self.executed.heap_bytes()).saturating_add(self.services.heap_bytes())
+    }
+    fn unshared_bytes(&self) -> usize {
+        self.reserve.unshared_bytes().saturating_add(self.inventory.unshared_bytes())
+            .saturating_add(self.executed.unshared_bytes()).saturating_add(self.services.unshared_bytes())
+    }
+    fn charge_shared(&self) -> usize {
+        self.reserve.charge_shared().saturating_add(self.inventory.charge_shared())
+            .saturating_add(self.executed.charge_shared()).saturating_add(self.services.charge_shared())
+    }
+    fn pending_shared(&self) -> usize {
+        self.reserve.pending_shared().saturating_add(self.inventory.pending_shared())
+            .saturating_add(self.executed.pending_shared()).saturating_add(self.services.pending_shared())
+    }
+    fn temporary_bytes(&self) -> usize {
+        self.reserve.temporary_bytes().saturating_add(self.inventory.temporary_bytes())
+            .saturating_add(self.executed.temporary_bytes()).saturating_add(self.services.temporary_bytes())
     }
 }
 impl AllocationSize for Token {
@@ -680,6 +751,30 @@ impl AllocationSize for Token {
             .saturating_add(self.destinations.heap_bytes()).saturating_add(self.sources.heap_bytes())
             .saturating_add(self.unique_region.heap_bytes()).saturating_add(self.pin_deps.heap_bytes())
             .saturating_add(self.cleanup.heap_bytes()).saturating_add(self.snapshot.heap_bytes())
+    }
+    fn unshared_bytes(&self) -> usize {
+        self.pieces.unshared_bytes().saturating_add(self.reserve.unshared_bytes())
+            .saturating_add(self.destinations.unshared_bytes()).saturating_add(self.sources.unshared_bytes())
+            .saturating_add(self.unique_region.unshared_bytes()).saturating_add(self.pin_deps.unshared_bytes())
+            .saturating_add(self.cleanup.unshared_bytes()).saturating_add(self.snapshot.unshared_bytes())
+    }
+    fn charge_shared(&self) -> usize {
+        self.pieces.charge_shared().saturating_add(self.reserve.charge_shared())
+            .saturating_add(self.destinations.charge_shared()).saturating_add(self.sources.charge_shared())
+            .saturating_add(self.unique_region.charge_shared()).saturating_add(self.pin_deps.charge_shared())
+            .saturating_add(self.cleanup.charge_shared()).saturating_add(self.snapshot.charge_shared())
+    }
+    fn pending_shared(&self) -> usize {
+        self.pieces.pending_shared().saturating_add(self.reserve.pending_shared())
+            .saturating_add(self.destinations.pending_shared()).saturating_add(self.sources.pending_shared())
+            .saturating_add(self.unique_region.pending_shared()).saturating_add(self.pin_deps.pending_shared())
+            .saturating_add(self.cleanup.pending_shared()).saturating_add(self.snapshot.pending_shared())
+    }
+    fn temporary_bytes(&self) -> usize {
+        self.pieces.temporary_bytes().saturating_add(self.reserve.temporary_bytes())
+            .saturating_add(self.destinations.temporary_bytes()).saturating_add(self.sources.temporary_bytes())
+            .saturating_add(self.unique_region.temporary_bytes()).saturating_add(self.pin_deps.temporary_bytes())
+            .saturating_add(self.cleanup.temporary_bytes()).saturating_add(self.snapshot.temporary_bytes())
     }
 }
 impl Flow {
@@ -699,6 +794,7 @@ impl Flow {
             + self.ended.work() + self.closed_inputs.work() + self.fields.work() + self.views.work()
             + self.frames.work() + self.cells.work()
     }
+    #[cfg(any(test, feature = "verifier-differential"))]
     fn global_bytes(&self) -> usize {
         self.availability.capacity()
             + self.dead.heap_bytes() + self.taken_caches.heap_bytes() + self.cache_keys.heap_bytes()
@@ -706,6 +802,41 @@ impl Flow {
             + self.ended.heap_bytes() + self.closed_inputs.heap_bytes() + self.fields.heap_bytes()
             + self.views.heap_bytes() + self.frames.heap_bytes() + self.cells.heap_bytes()
     }
+    fn global_retained_bytes(&self) -> usize {
+        self.availability.capacity()
+            + self.dead.unshared_bytes() + self.taken_caches.unshared_bytes() + self.cache_keys.unshared_bytes()
+            + self.provenance.unshared_bytes() + self.scopes.unshared_bytes() + self.bindings.unshared_bytes()
+            + self.ended.unshared_bytes() + self.closed_inputs.unshared_bytes() + self.fields.unshared_bytes()
+            + self.views.unshared_bytes() + self.frames.unshared_bytes() + self.cells.unshared_bytes()
+    }
+    fn charge_global_shared(&self) -> usize {
+        self.dead.charge_shared() + self.taken_caches.charge_shared() + self.cache_keys.charge_shared()
+            + self.provenance.charge_shared() + self.scopes.charge_shared() + self.bindings.charge_shared()
+            + self.ended.charge_shared() + self.closed_inputs.charge_shared() + self.fields.charge_shared()
+            + self.views.charge_shared() + self.frames.charge_shared() + self.cells.charge_shared()
+    }
+    fn pending_global_shared(&self) -> usize {
+        self.dead.pending_shared() + self.taken_caches.pending_shared() + self.cache_keys.pending_shared()
+            + self.provenance.pending_shared() + self.scopes.pending_shared() + self.bindings.pending_shared()
+            + self.ended.pending_shared() + self.closed_inputs.pending_shared() + self.fields.pending_shared()
+            + self.views.pending_shared() + self.frames.pending_shared() + self.cells.pending_shared()
+    }
+    fn global_temporary_bytes(&self) -> usize {
+        self.dead.temporary_bytes() + self.taken_caches.temporary_bytes() + self.cache_keys.temporary_bytes()
+            + self.provenance.temporary_bytes() + self.scopes.temporary_bytes() + self.bindings.temporary_bytes()
+            + self.ended.temporary_bytes() + self.closed_inputs.temporary_bytes() + self.fields.temporary_bytes()
+            + self.views.temporary_bytes() + self.frames.temporary_bytes() + self.cells.temporary_bytes()
+    }
+    pub fn scratch_bytes(&self) -> usize {
+        // Eight transient flows plus iterator/retain directories are bounded by
+        // charge_flow_work. Already retained nodes are immutable shared inputs.
+        self.global_retained_bytes() + self.pending_global_shared() + self.global_temporary_bytes()
+            + self.tokens.scratch_bytes() + self.journals.scratch_bytes()
+            + self.refs.scratch_bytes() + self.full_deps.scratch_bytes() + self.lifetimes.scratch_bytes()
+            + self.identities.scratch_bytes() + self.must_use.scratch_bytes() + self.failures.scratch_bytes()
+            + self.aliases.scratch_bytes() + self.contained.scratch_bytes()
+    }
+    #[cfg(any(test, feature = "verifier-differential"))]
     pub fn allocation_bytes(&self) -> usize {
         self.global_bytes() + self.tokens.allocation_bytes() + self.journals.allocation_bytes()
             + self.refs.allocation_bytes() + self.full_deps.allocation_bytes() + self.lifetimes.allocation_bytes()
@@ -715,10 +846,14 @@ impl Flow {
     pub fn charge_retained(&self) -> usize {
         // Incoming vectors reserve exactly one slot for each retained state.
         // Inline Flow storage is charged here, not as eight heap scratch clones.
-        size_of::<Self>() + 16 + self.global_bytes() + self.tokens.charge_new() + self.journals.charge_new()
-            + self.refs.charge_new() + self.full_deps.charge_new() + self.lifetimes.charge_new()
-            + self.identities.charge_new() + self.must_use.charge_new() + self.failures.charge_new()
-            + self.aliases.charge_new() + self.contained.charge_new()
+        let parts = [size_of::<Self>() + 16 + self.global_retained_bytes() + self.charge_global_shared(),
+            self.tokens.charge_new(), self.journals.charge_new(), self.refs.charge_new(),
+            self.full_deps.charge_new(), self.lifetimes.charge_new(), self.identities.charge_new(),
+            self.must_use.charge_new(), self.failures.charge_new(), self.aliases.charge_new(),
+            self.contained.charge_new()];
+        #[cfg(any(test, feature = "verifier-differential"))]
+        super::super::differential::record_allocations(&parts);
+        parts.iter().sum()
     }
 }
 impl AllocationSize for super::Slot {
@@ -730,6 +865,26 @@ impl AllocationSize for super::Slot {
         self.token.heap_bytes() + self.journal.heap_bytes() + self.refs.heap_bytes()
             + self.aliases.heap_bytes() + self.contained.heap_bytes() + self.bases.heap_bytes()
             + self.requirements.heap_bytes()
+    }
+    fn unshared_bytes(&self) -> usize {
+        self.token.unshared_bytes() + self.journal.unshared_bytes() + self.refs.unshared_bytes()
+            + self.aliases.unshared_bytes() + self.contained.unshared_bytes() + self.bases.unshared_bytes()
+            + self.requirements.unshared_bytes()
+    }
+    fn charge_shared(&self) -> usize {
+        self.token.charge_shared() + self.journal.charge_shared() + self.refs.charge_shared()
+            + self.aliases.charge_shared() + self.contained.charge_shared() + self.bases.charge_shared()
+            + self.requirements.charge_shared()
+    }
+    fn pending_shared(&self) -> usize {
+        self.token.pending_shared() + self.journal.pending_shared() + self.refs.pending_shared()
+            + self.aliases.pending_shared() + self.contained.pending_shared() + self.bases.pending_shared()
+            + self.requirements.pending_shared()
+    }
+    fn temporary_bytes(&self) -> usize {
+        self.token.temporary_bytes() + self.journal.temporary_bytes() + self.refs.temporary_bytes()
+            + self.aliases.temporary_bytes() + self.contained.temporary_bytes() + self.bases.temporary_bytes()
+            + self.requirements.temporary_bytes()
     }
 }
 

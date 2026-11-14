@@ -1,7 +1,11 @@
 //! Bounded relational worklist. Diagnostics are emitted only by replaying the
 //! fixed point; solver visits never turn a temporary absence into a rejection.
+// Ordered keys contain accounting Cells only. Eq/Ord read logical labels;
+// changing labels copies Rc paths and cannot mutate another ordered key.
+#![allow(clippy::mutable_key_type)]
 mod domain;
 mod per_value;
+mod shared;
 mod metadata;
 mod packets;
 mod scopes;
@@ -16,6 +20,7 @@ mod history;
 use super::{EntityLocation as L, RuleId as R, State};
 use crate::*;
 use domain::*;
+use shared::SharedSet;
 use metadata::*;
 use std::collections::{BTreeSet, VecDeque};
 
@@ -66,9 +71,9 @@ struct Slot {
     journal: Token,
     refs: BTreeSet<Origin>,
     identity: Option<Origin>,
-    aliases: BTreeSet<ValueId>,
-    contained: BTreeSet<ValueId>,
-    bases: BTreeSet<ValueId>,
+    aliases: SharedSet<ValueId>,
+    contained: SharedSet<ValueId>,
+    bases: SharedSet<ValueId>,
     requirements: BTreeSet<Origin>,
     lifetime: u8,
     must_use: u8,
@@ -80,9 +85,9 @@ impl Default for Slot {
     fn default() -> Self {
         Self {
             token: Token::default(), journal: Token::default(), refs: BTreeSet::new(),
-            identity: None, aliases: BTreeSet::new(),
+            identity: None, aliases: SharedSet::new(),
             requirements: BTreeSet::new(), lifetime: 1, must_use: 0, failures: 0,
-            contained: BTreeSet::new(), bases: BTreeSet::new(), redefine: true,
+            contained: SharedSet::new(), bases: SharedSet::new(), redefine: true,
         }
     }
 }
@@ -197,8 +202,25 @@ impl Engine<'_, '_> {
             self.state.error(rule, message);
         }
     }
+    fn retain_flow(&mut self, flow: &Flow) -> bool {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let measurement = std::env::var_os("OKKAMA_634_RETAINED").map(|_| {
+            flow.allocation_bytes()
+        });
+        #[cfg(any(test, feature = "verifier-differential"))]
+        shared::retention_counts();
+        let bytes = flow.charge_retained();
+        #[cfg(any(test, feature = "verifier-differential"))]
+        if let Some(logical) = measurement {
+            let (shared, nodes) = shared::retention_counts();
+            super::differential::record_retained(
+                self.module.profile, &self.declaration.symbol, bytes, shared, nodes, logical,
+            );
+        }
+        self.state.memory(bytes.saturating_add(1))
+    }
     fn flow_bytes(&self, flow: &Flow) -> usize {
-        flow.allocation_bytes()
+        flow.scratch_bytes()
     }
     fn charge_flow(&mut self, flow: &Flow) -> bool {
         self.charge_flow_work(flow, flow.work())
@@ -307,7 +329,7 @@ impl Engine<'_, '_> {
             if keys.is_empty() {
                 flow.entry_accepted = true;
             }
-            let input_labels: BTreeSet<_> = entry.params.iter().copied().filter(|value| {
+            let input_labels: SharedSet<_> = entry.params.iter().copied().filter(|value| {
                 flow.witnesses[value.as_u32() as usize] && !flow.refs[value.as_u32() as usize].is_empty()
             }).collect();
             for &value in &entry.params {
@@ -379,7 +401,7 @@ impl Engine<'_, '_> {
         if let Some(history) = &history {
             history.normalize(self.body.entry, &mut initial, self.state);
         }
-        if !self.charge_flow(&initial) || !self.state.memory(initial.charge_retained()) {
+        if !self.charge_flow(&initial) || !self.retain_flow(&initial) {
             return;
         }
         incoming[self.body.entry.as_u32() as usize].reserve_exact(1);
@@ -434,7 +456,7 @@ impl Engine<'_, '_> {
                     }
                     (id, states[id].join_masks(&flow))
                 } else {
-                    if !self.state.memory(flow.charge_retained().saturating_add(1)) {
+                    if !self.retain_flow(&flow) {
                         return;
                     }
                     #[cfg(any(test, feature = "verifier-differential"))]
@@ -527,14 +549,17 @@ impl Engine<'_, '_> {
         }
         if slot.aliases != flow.aliases[i] || !slot.aliases.contains(&value) {
             let old = flow.aliases[i].clone();
-            let retained: BTreeSet<_> = old.iter().copied().filter(|v| *v != value).collect();
+            let mut retained = old.clone();
+            retained.remove(&value);
             flow.replace_aliases(&old, &retained);
         }
         let source = slot.aliases.clone();
-        let aliases: BTreeSet<_> = source.iter().copied().chain(std::iter::once(value)).collect();
+        let mut aliases = source.clone();
+        aliases.insert(value);
         flow.replace_aliases(&source, &aliases);
         flow.aliases[i] = aliases.clone();
-        flow.contained[i] = slot.contained.union(&aliases).copied().collect();
+        flow.contained[i] = slot.contained.clone();
+        flow.contained[i].extend(&aliases);
         for base in &slot.bases {
             let roots = flow.aliases[base.as_u32() as usize].clone();
             flow.add_contained(&roots, &aliases);
@@ -690,7 +715,7 @@ impl Engine<'_, '_> {
                 let mut found_flow = flow.clone();
                 found_flow.views.insert(view, flow.refs[collection.as_u32() as usize].clone());
                 let slot = Slot {
-                    refs: BTreeSet::from([view]), bases: BTreeSet::from([*collection]),
+                    refs: BTreeSet::from([view]), bases: SharedSet::from([*collection]),
                     lifetime: flow.lifetimes[collection.as_u32() as usize], ..Slot::default()
                 };
                 outgoing.push(self.edge(&found_flow, found.block, &found.args, &[slot], R::B21));
@@ -743,7 +768,7 @@ impl Engine<'_, '_> {
                         refs: flow.refs[i].clone(), must_use: flow.must_use[i],
                         failures: flow.failures[i], identity: flow.identities[i], aliases: flow.aliases[i].clone(),
                         requirements: flow.full_deps[i].clone(), lifetime: flow.lifetimes[i],
-                        contained: flow.contained[i].clone(), bases: BTreeSet::new(), redefine: true,
+                        contained: flow.contained[i].clone(), bases: SharedSet::new(), redefine: true,
                     };
                     self.use_value(&mut next, *value, OperandMode::Forward, rule);
                     next.must_use[i] = 0;
@@ -762,12 +787,12 @@ impl Engine<'_, '_> {
             for (index, slot) in saved.iter_mut().enumerate() {
                 slot.redefine = args.get(index) != block.params.get(index).map(|value| EdgeArg::Value(*value)).as_ref();
             }
-            let replaced: BTreeSet<_> = block.params.iter().copied().collect();
+            let replaced: SharedSet<_> = block.params.iter().copied().collect();
             let originals: Vec<_> = saved.iter().map(|slot| slot.aliases.clone()).collect();
             let classes: BTreeSet<_> = next.aliases.stored().filter(|aliases| !aliases.is_empty()).cloned().collect();
             let mut remapped = std::collections::BTreeMap::new();
             for class in classes {
-                let mut members: BTreeSet<_> = class.difference(&replaced).copied().collect();
+                let mut members = class.without(&replaced);
                 for (index, aliases) in originals.iter().enumerate() {
                     if aliases == &class {
                         members.insert(block.params[index]);
@@ -785,7 +810,7 @@ impl Engine<'_, '_> {
                 }).collect();
                 slot.token.pieces = slot.token.pieces.iter().cloned().map(|mut piece| {
                     piece.predicates = piece.predicates.into_iter().map(|(mut filter, selected)| {
-                        let mut labels = BTreeSet::new();
+                        let mut labels = SharedSet::new();
                         for label in &filter.labels {
                             let class = &flow.aliases[label.as_u32() as usize];
                             if let Some(members) = remapped.get(class) {

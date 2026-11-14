@@ -111,6 +111,10 @@ pub(super) fn record_function(
         stats.memory_bytes - before.0, stats.steps - before.1,
     );
     append_record("OKKAMA_634_FUNCTIONS", &record);
+    let end = format!("{test}\t{profile:?}\t{symbol}\tend\t{}\t{}\t{scratch}\t{incomplete}\n",
+        stats.memory_bytes - before.0, stats.steps - before.1,
+    );
+    append_record("OKKAMA_634_RETAINED", &end);
 }
 
 pub(super) fn record_limit(
@@ -132,4 +136,19 @@ pub(super) fn record_schedule(visits: usize, alternatives: usize, comparisons: u
     let test = thread.name().unwrap_or("unnamed");
     let record = format!("{test}\t{visits}\t{alternatives}\t{comparisons}\n");
     append_record("OKKAMA_634_SCHEDULE", &record);
+}
+
+pub(super) fn record_retained(
+    profile: Profile, symbol: &str, bytes: usize, shared: usize, nodes: usize, logical: usize,
+) {
+    let thread = std::thread::current();
+    let test = thread.name().unwrap_or("unnamed");
+    let record = format!("{test}\t{profile:?}\t{symbol}\t{bytes}\t{shared}\t{nodes}\t{logical}\n");
+    append_record("OKKAMA_634_RETAINED", &record);
+}
+
+pub(super) fn record_allocations(parts: &[usize]) {
+    if std::env::var_os("OKKAMA_634_RELATIONS").is_some() {
+        append_record("OKKAMA_634_RELATIONS", &format!("{parts:?}\n"));
+    }
 }

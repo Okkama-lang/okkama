@@ -183,7 +183,7 @@ impl Engine<'_, '_> {
         let witnesses = self.defer_cache.get(&function).cloned().unwrap_or_default();
         let mut refs = BTreeSet::new();
         let mut deps = BTreeSet::new();
-        let mut contained = BTreeSet::new();
+        let mut contained = SharedSet::new();
         let mut packet = Token::default();
         for witness in witnesses.iter().filter(|item| {
             matches!(&item.tag, DeferReturnTag::Replace(returned) if returned == label)
@@ -267,7 +267,7 @@ impl Engine<'_, '_> {
                         piece.family = true;
                         piece.predicates.insert(Filter {
                             keys: BTreeSet::from([key]), fresh: false, possible: BTreeSet::new(),
-                            labels: BTreeSet::new(), stale: false, whole_future: false, state: 0,
+                            labels: SharedSet::new(), stale: false, whole_future: false, state: 0,
                         }, true);
                         packet.pieces.insert(piece);
                     }

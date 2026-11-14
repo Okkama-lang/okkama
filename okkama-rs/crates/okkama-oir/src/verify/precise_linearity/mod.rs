@@ -23,6 +23,8 @@ mod descriptors;
 use super::{EntityLocation as L, RuleId as R, State};
 use crate::*;
 use domain::*;
+// Shared transfer modules retain the dense oracle's original set representation.
+type SharedSet<T> = BTreeSet<T>;
 use metadata::*;
 use std::collections::{BTreeSet, VecDeque};
 

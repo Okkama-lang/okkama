@@ -449,7 +449,7 @@ func @f() -> void {
         let mut piece = Piece::new(Origin::Input(value(3)), AdmissionProvenance::Bound);
         piece.predicates.insert(Filter {
             keys: BTreeSet::new(), fresh: false, possible: BTreeSet::new(),
-            labels: BTreeSet::from([value(2)]), stale: false, whole_future: false, state: 0,
+            labels: SharedSet::from([value(2)]), stale: false, whole_future: false, state: 0,
         }, true);
         flow.closed_inputs.insert(piece);
         let globals = flow.closed_inputs.clone();

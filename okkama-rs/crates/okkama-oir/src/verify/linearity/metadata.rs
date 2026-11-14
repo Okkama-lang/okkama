@@ -277,7 +277,7 @@ impl Engine<'_, '_> {
     }
     pub(super) fn selection_terms(
         &mut self, flow: &Flow, root: SelectionId,
-    ) -> Vec<(BTreeSet<Origin>, bool, BTreeSet<ValueId>)> {
+    ) -> Vec<(BTreeSet<Origin>, bool, SharedSet<ValueId>)> {
         let mut terms = Vec::new();
         let mut seen = BTreeSet::new();
         let mut pending = vec![(root, false)];
@@ -298,7 +298,7 @@ impl Engine<'_, '_> {
                         | SelectionExpr::ViewOwner(value) | SelectionExpr::Descriptor { value, .. } => {
                             flow.contained[value.as_u32() as usize].clone()
                         }
-                        _ => BTreeSet::new(),
+                        _ => SharedSet::new(),
                     };
                     terms.push((keys, fresh, labels));
                 }
@@ -389,7 +389,7 @@ impl Engine<'_, '_> {
             &flow.aliases[value.as_u32() as usize], pieces)
     }
     pub(super) fn keys_invalidated(
-        &mut self, flow: &Flow, refs: &BTreeSet<Origin>, aliases: &BTreeSet<ValueId>, pieces: &[Piece],
+        &mut self, flow: &Flow, refs: &BTreeSet<Origin>, aliases: &SharedSet<ValueId>, pieces: &[Piece],
     ) -> bool {
         refs.iter().any(|key| {
             pieces.iter().any(|piece| {

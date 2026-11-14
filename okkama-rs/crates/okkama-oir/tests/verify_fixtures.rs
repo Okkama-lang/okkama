@@ -499,8 +499,9 @@ fn malformed_cleanup_proof_arenas_are_rejected_without_panics() {
 fn exponentially_many_relational_states_still_exhaust_default_work() {
     // Each phi independently aliases x or y. Eighteen tiny blocks represent
     // 2^18 correlated histories; a large SSA universe is not the workload.
-    // Dense: 49999274 work / 254140328 bytes; candidate: 49999990 / 20223097.
-    // Both hit default work; the candidate does so with only about 20 MB charged.
+    // Dense: 49999274 work / 254140328 bytes; step 2: 49999990 / 20223097.
+    // Step 1.6: 50000000 work / 11444314 bytes. Keep both thresholds unchanged:
+    // structural sharing saves memory, while this history explosion still hits default work.
     fn diamonds(count: usize) -> okkama_oir::Module {
         let mut source = String::from(
             "oir 2 high\nmodule explosion\nrequires core\nscope S action in @f\n\
