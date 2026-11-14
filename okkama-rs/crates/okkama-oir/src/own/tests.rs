@@ -802,3 +802,5 @@ mod machinery;
 mod synchronous;
 
 mod protocols;
+
+mod arrays;

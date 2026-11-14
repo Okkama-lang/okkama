@@ -18,4 +18,4 @@ adapters.materialized=1
 joins.incompatible_publication=0
 joins.incompatible_protocol=0
 work.charged=2326
-memory.peak_auxiliary_bytes=448311
+memory.peak_auxiliary_bytes=75351

@@ -20,6 +20,7 @@ mod origins;
 mod entries;
 mod census;
 mod routing;
+mod arrays;
 mod construction;
 
 use crate::*;
@@ -215,11 +216,12 @@ pub struct OwnOutput {
 pub(super) struct Budget<'a> {
     options: &'a OwnOptions,
     pub stats: OwnStats,
+    live_bytes: usize,
 }
 
 impl<'a> Budget<'a> {
     fn new(options: &'a OwnOptions) -> Self {
-        Self { options, stats: OwnStats::default() }
+        Self { options, stats: OwnStats::default(), live_bytes: 0 }
     }
     pub fn work(&mut self, count: usize) -> Result<(), OwnError> {
         let next = self.stats.charged_work.checked_add(count);
@@ -232,13 +234,25 @@ impl<'a> Budget<'a> {
         Ok(())
     }
     pub fn memory(&mut self, bytes: usize) -> Result<(), OwnError> {
-        let next = self.stats.peak_auxiliary_bytes.checked_add(bytes);
+        let next = self.live_bytes.checked_add(bytes);
         if next.is_none_or(|next| next > self.options.memory_limit) {
             let mut stats = self.stats.clone();
             stats.exhausted_limit = Some(OwnLimit::Memory);
             return Err(OwnError::Incomplete { stats: Box::new(stats) });
         }
-        self.stats.peak_auxiliary_bytes = next.unwrap();
+        self.live_bytes = next.unwrap();
+        self.stats.peak_auxiliary_bytes = self.stats.peak_auxiliary_bytes.max(self.live_bytes);
+        Ok(())
+    }
+    pub fn release(&mut self, bytes: usize) {
+        self.live_bytes = self.live_bytes.checked_sub(bytes).expect("balanced ownership memory accounting");
+    }
+    pub fn resize(&mut self, old: usize, new: usize) -> Result<(), OwnError> {
+        if new > old {
+            self.memory(new - old)?;
+        } else {
+            self.release(old - new);
+        }
         Ok(())
     }
     pub fn fail(&self, kind: OwnDiagnosticKind, message: impl Into<String>) -> OwnError {

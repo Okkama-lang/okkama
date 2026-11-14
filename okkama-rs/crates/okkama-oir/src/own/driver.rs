@@ -52,7 +52,10 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
     let mut flows = BTreeMap::new();
     for function in &functions {
         let flow = analyze_function(&output.module, *function, &output.analysis, options)?;
-        emitter.charge(flow.stats.charged_work, flow.stats.peak_auxiliary_bytes)?;
+        let retained = flow.allocated_bytes() + 128;
+        let peak = flow.stats.peak_auxiliary_bytes.max(retained);
+        emitter.charge(flow.stats.charged_work, peak)?;
+        emitter.budget_ref().release(peak - retained);
         flows.insert(*function, flow);
     }
     // Decide empty entry specializations before rewriting any caller, including
@@ -519,6 +522,8 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
         }
         driver.compact()?;
         driver.module.functions.get_mut(function).map_err(arena)?.body = Some(driver.body);
+        let flow = flows.remove(&function).unwrap();
+        emitter.budget_ref().release(flow.allocated_bytes() + 128);
     }
     super::entries::role_signatures(&mut output.module)?;
     output.stats.emitted_checked_splits += emitter.stats().emitted_checked_splits;
@@ -696,6 +701,7 @@ impl Driver<'_, '_> {
                 | CoreOp::SuccTake { .. }) => {
                 return self.construct(point, instruction);
             }
+            Operation::Collection(_) if arrays::supported(self.module, self.high, self.analysis, &instruction.op) => {}
             Operation::Const(_) | Operation::Core(CoreOp::Undef { .. }) => {}
             Operation::Core(_) if instruction.results.iter().all(|value| {
                 !self.managed(self.high.values.get(*value).unwrap().ty)

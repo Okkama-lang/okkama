@@ -118,6 +118,12 @@ impl Equations {
         self.interned.insert(shape, id);
         Ok(id)
     }
+    pub(super) fn allocated_bytes(&self) -> usize {
+        self.nodes.capacity() * size_of::<Shape>()
+            + self.inputs.capacity() * size_of::<BTreeSet<ShapeId>>()
+            + self.inputs.iter().map(|inputs| inputs.len() * (size_of::<ShapeId>() + 64)).sum::<usize>()
+            + self.interned.len() * (size_of::<(Shape, ShapeId)>() + 64)
+    }
     pub fn freeze(&mut self) {
         self.frozen = true;
     }
@@ -254,6 +260,24 @@ impl FlowState {
                 *self.provenance.entry((owner, Atom::current(origin).history())).or_default() |= mask;
             }
         }
+    }
+    /// Conservative allocation bound for the materialized sparse state, including
+    /// B-tree node slack/links and vector spare capacity. This is independent of
+    /// the number of possible equations and of unrelated module scopes.
+    pub fn allocated_bytes(&self) -> usize {
+        let trees = self.values.iter().map(|value| value.deps.len() * (size_of::<Atom>() + 64)).sum::<usize>()
+            + self.journals.len() * (size_of::<((ScopeId, Atom), Quantity)>() + 64)
+            + self.provenance.len() * (size_of::<((ScopeId, Atom), u8)>() + 64)
+            + self.latest.len() * (size_of::<(BindingId, BTreeSet<ValueId>)>() + 64)
+            + self.latest.values().map(|values| values.len() * (size_of::<ValueId>() + 64)).sum::<usize>()
+            + self.binding_deps.len() * (size_of::<(BindingId, BTreeSet<Atom>)>() + 64)
+            + self.binding_deps.values().map(|deps| deps.len() * (size_of::<Atom>() + 64)).sum::<usize>()
+            + self.defers.len() * (size_of::<(ScopeId, Vec<InstId>)>() + 64);
+        size_of::<Self>() + self.values.capacity() * size_of::<ValueState>() + trees
+            + self.defers.values().map(|prefix| prefix.capacity() * size_of::<InstId>()).sum::<usize>()
+    }
+    pub(super) fn sparse_bytes(&self) -> usize {
+        self.allocated_bytes() - size_of::<Self>() - self.values.capacity() * size_of::<ValueState>()
     }
     pub fn stored_facts(&self) -> usize {
         self.values.iter().map(|value| value.deps.len() + 8).sum::<usize>()

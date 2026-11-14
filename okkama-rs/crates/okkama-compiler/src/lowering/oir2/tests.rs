@@ -1348,3 +1348,58 @@ fn oir2_high_observation_requires_a_trusted_external() {
     module.functions.get_mut(function).unwrap().signature.results.clear();
     assert!(super::native_summaries::P1NativeSummaries::for_module(&module).is_err());
 }
+
+#[test]
+fn oir2_p1_followup_own_from_593_sources() {
+    use ir::own::{OwnOptions, analyze::analyze_function, elaborate_ownership, rewrite_subset};
+    let root = std::path::Path::new("/Volumes/SamsungSSD/stuff/okkama-work/593");
+    let sources = root.join("tests/ownership-corpus/p1");
+    if !sources.exists() {
+        eprintln!("P1 integration checkout is unavailable: {}", sources.display());
+        return;
+    }
+    let mut paths: Vec<_> = std::fs::read_dir(sources).unwrap().map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "ok")).collect();
+    paths.sort();
+    assert_eq!(paths.len(), 25);
+    let mut rows = Vec::new();
+    for path in paths {
+        let name = path.file_stem().unwrap().to_str().unwrap();
+        let source = std::fs::read_to_string(&path).unwrap();
+        let module = lower_std(&source).unwrap_or_else(|error| panic!("{name}: {error}"));
+        verify_high(&module, name);
+        let catalog = super::native_summaries::P1NativeSummaries::for_module(&module).unwrap();
+        let options = OwnOptions::default();
+        let inferred = elaborate_ownership(module, &catalog, &options).unwrap();
+        let main = inferred.module.functions.iter().find(|(_, function)| function.symbol == "main").unwrap().0;
+        let flow = analyze_function(&inferred.module, main, &inferred.analysis, &options)
+            .unwrap_or_else(|error| panic!("{name} main analysis: {error:#?}"));
+        assert!(flow.stats.peak_auxiliary_bytes < options.memory_limit / 16, "{name}");
+        let (stage, error) = match rewrite_subset(inferred, &options) {
+            Ok(output) => match ir::verify_own(&output.module) {
+                Ok(_) => ("pass", None),
+                Err(error) => ("verify_own", Some(format!("{error:#?}"))),
+            },
+            Err(error) => ("own", Some(format!("{error:#?}"))),
+        };
+        if let Some(error) = &error {
+            let expected = if name == "successor-staging" {
+                "failure operand has no reaching definition"
+            } else {
+                "call output packet has no lexical owner"
+            };
+            assert_eq!(stage, "own", "{name}: {error}");
+            assert!(error.contains(expected), "{name}: unexpected stop: {error}");
+        }
+        rows.push(format!("{name}\t{stage}\t{}\t{}\t{}\t{error:?}\n",
+            flow.stats.peak_auxiliary_bytes, flow.stats.charged_work, flow.equations.nodes.len()));
+    }
+    assert_eq!(rows.len(), 25);
+    let report = rows.concat();
+    if let Some(path) = std::env::var_os("OKKAMA_P1_OWN_FOLLOWUP_REPORT") {
+        std::fs::write(path, &report).unwrap();
+    }
+    eprintln!("{report}");
+    // Known later stops are asserted above. Reaching output requires independent verification;
+    // earlier array/memory regressions cannot silently replace a recorded stop.
+}

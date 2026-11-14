@@ -4,6 +4,7 @@ use super::*;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Handling {
     Scalar,
+    PlainArray,
     Construction,
     Snapshot,
     Once,
@@ -188,7 +189,9 @@ pub(super) fn handling(operation: &Operation) -> Handling {
         },
         Operation::Collection(op) => match op {
             CollectionOp::ArrayNew { .. }
-            | CollectionOp::ArraySlice { .. }
+            | CollectionOp::ArrayLen { .. }
+            | CollectionOp::ArrayGet { .. } => Handling::PlainArray,
+            CollectionOp::ArraySlice { .. }
             | CollectionOp::ArrayConcat { .. }
             | CollectionOp::ArrayReplace { .. }
             | CollectionOp::ArrayRemove { .. }
@@ -196,8 +199,6 @@ pub(super) fn handling(operation: &Operation) -> Handling {
             | CollectionOp::MapNew { .. }
             | CollectionOp::MapMerge { .. }
             | CollectionOp::MapDifference { .. }
-            | CollectionOp::ArrayLen { .. }
-            | CollectionOp::ArrayGet { .. }
             | CollectionOp::ArrayJoin { .. }
             | CollectionOp::ArrayRetag { .. }
             | CollectionOp::MapLen { .. }
