@@ -1,0 +1,87 @@
+oir 2 high
+module app
+requires core
+entry @main
+scope S0 action in @main
+
+func @main() -> int [entry] {
+    binding b0 "a": array<never> in S0
+    binding b1 "m": map<never, never> in S0
+    binding b2 "ints": array<int> in S0
+    binding b3 "maps": map<str, array<int>> in S0
+    binding b4 "nested": array<array<int>> in S0
+    binding b5 "deep": map<str, map<str, array<int>>> in S0
+    binding b6 "typed": array<int> in S0
+    binding b7 "spread": array<int> in S0
+    binding b8 "copy": array<int> in S0
+    binding b9 "same": array<int> in S0
+    boundary B0 lexical in S0
+    ^b0 in S0 unwind ^b1:
+    %0: array<never> = array.new ty array<never>
+    bind %0, binding b0
+    %1: map<never, never> = map.new ty map<never, never>
+    bind %1, binding b1
+    %2: array<int> = array.new ty array<int>
+    bind %2, binding b2
+    %3: map<str, array<int>> = map.new ty map<str, array<int>>
+    bind %3, binding b3
+    %4: int = const 1
+    %5: array<int> = array.new [%4], ty array<int>
+    %6: array<int> = array.new ty array<int>
+    %7: int = const 2
+    %8: int = const 3
+    %9: array<int> = array.new [%7, %8], ty array<int>
+    %10: array<array<int>> = array.new [%5, %6, %9], ty array<array<int>>
+    bind %10, binding b4
+    %11: str = const "x"
+    %12: str = const "y"
+    %13: int = const 4
+    %14: array<int> = array.new [%13], ty array<int>
+    %15: map<str, array<int>> = map.new entries [(%12, %14)], ty map<str, array<int>>
+    %16: map<str, map<str, array<int>>> = map.new entries [(%11, %15)], ty map<str, map<str, array<int>>>
+    bind %16, binding b5
+    %17: int = const 1
+    %18: int = const 2
+    %19: int = const 3
+    %20: array<int> = array.new ty array<int>
+    %21: array<int> = array.new [%17], ty array<int>
+    %22: array<int> = array.concat [%20, %21], ty array<int>
+    %23: array<int> = array.new [%18], ty array<int>
+    %24: array<int> = array.concat [%22, %23], ty array<int>
+    %25: array<int> = array.new [%19], ty array<int>
+    %26: array<int> = array.concat [%24, %25], ty array<int>
+    bind %26, binding b6
+    %27: int = const 1
+    %28: int = const 2
+    %29: array<int> = array.new [%27, %28], ty array<int>
+    %30: array<int> = array.new ty array<int>
+    %31: int = array.len %29
+    %32: array<int> = array.new ty array<int>
+    %33: int = const 0
+    br ^b2(%33, %32)
+    ^b1(%34: failure) in S0:
+    raise %34
+    ^b2(%35: int, %36: array<int>) in S0 unwind ^b1:
+    %37: bool = int.lt %35, %31
+    cond %37, ^b3, ^b4
+    ^b3 in S0 unwind ^b1:
+    %38: int = const 1
+    %39: int = array.get %29, %35
+    %40: array<int> = array.new [%39], ty array<int>
+    %41: array<int> = array.concat [%36, %40], ty array<int>
+    %42: int = int.add %35, %38
+    br ^b2(%42, %41)
+    ^b4 in S0 unwind ^b1:
+    %43: array<int> = array.concat [%30, %36], ty array<int>
+    bind %43, binding b7
+    bind %26, binding b8
+    bind %26, binding b9
+    %44: int = const 0
+    %45: array<int> = array.get %10, %44
+    %46: int = const 0
+    %47: int = array.get %45, %46
+    want %47
+    [i56] exit.prepare return %47 at B0
+    result.exit edge normal(0), value %47, demand want, prepare #56
+    ret %47
+}

@@ -1,0 +1,20 @@
+module app;
+object Res {
+    has n is int;
+    Res(n is int) {
+        self.n = n;
+    }
+    destroy {
+        n;
+    }
+}
+main() is int {
+    let a = [Res(1)];
+    let m = ["a": Res(2)];
+    let hit = m["a"] else Res(3);
+    let miss = m["absent"] else Res(4);
+    let item = a[0] else Res(5);
+    let absent = a[7] else Res(6);
+    let empty = [:]["a"] else Res(7);
+    0;
+}

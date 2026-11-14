@@ -153,6 +153,45 @@ impl Declarations {
                 variants.push((id, enumeration));
             }
         }
+        // Nominal identities are reserved. Intern concrete collection shapes before
+        // resolving fields/signatures, including recursive nominal payloads.
+        let mut requested = vec![];
+        for body in &analysis.bodies {
+            requested.extend(body.locals.iter().map(|local| (local.ty.clone(), body.span)));
+            super::walk::block(&body.block, &mut |expr| {
+                if let Some(ty) = &expr.ty {
+                    requested.push((ty.clone(), expr.span));
+                }
+            });
+        }
+        for object in &reg.objects {
+            if object.decl.is_none() || !object.params.is_empty() {
+                continue;
+            }
+            requested.extend(object.fields.iter().map(|field| (field.ty.clone(), field.span)));
+            for method in &object.methods {
+                requested.extend(method.params.iter().map(|(_, ty)| (ty.clone(), source.program.module.span)));
+                requested.extend(method.result.iter().map(|ty| (ty.clone(), source.program.module.span)));
+            }
+        }
+        for role in &reg.roles {
+            if let Some(declaration) = role.decl {
+                for method in &role.methods {
+                    requested.extend(method.params.iter().map(|(_, ty)| (ty.clone(), declaration.span)));
+                    requested.extend(method.result.iter().map(|ty| (ty.clone(), declaration.span)));
+                }
+            }
+        }
+        for enumeration in &reg.enums {
+            if enumeration.span.is_empty() || !enumeration.params.is_empty() {
+                continue;
+            }
+            requested.extend(enumeration.payloads.iter().flatten()
+                .map(|(_, ty)| (ty.clone(), enumeration.span)));
+        }
+        for (ty, span) in requested {
+            this.collection_type(&ty, span)?;
+        }
         for (id, enumeration) in variants {
             let mut cases = vec![];
             let name = this.builder.module().declarations.get(id)?.name.clone();
@@ -508,6 +547,32 @@ impl Declarations {
             type_params: vec![], body: None, loc: None,
             async_creation_summary: None, async_body_summary: None,
         })?)
+    }
+
+    fn collection_type(&mut self, ty: &ty::Ty, span: Span) -> Result<()> {
+        use ty::Ty as T;
+        if self.types.contains_key(ty) {
+            return Ok(());
+        }
+        let lowered = match ty {
+            T::Never => ir::Type::Never,
+            T::Float => ir::Type::Float,
+            T::Rat => ir::Type::Rat,
+            T::Char => ir::Type::Char,
+            T::Array(element) | T::Varargs(element) => {
+                self.collection_type(element, span)?;
+                ir::Type::Array(self.ty(element, span)?)
+            }
+            T::Map(key, value) => {
+                self.collection_type(key, span)?;
+                self.collection_type(value, span)?;
+                ir::Type::Map(self.ty(key, span)?, self.ty(value, span)?)
+            }
+            _ => return Ok(()),
+        };
+        let lowered = self.builder.intern_type(lowered)?;
+        self.types.insert(ty.clone(), lowered);
+        Ok(())
     }
 
     pub(super) fn ty(&self, ty: &ty::Ty, span: Span) -> Result<ir::TypeId> {

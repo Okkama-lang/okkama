@@ -1,0 +1,79 @@
+oir 2 high
+module app
+requires core
+entry @main
+scope S0 action in @main
+
+func @main() -> int [entry] {
+    binding b0 "a": array<int> in S0
+    binding b1 "b": array<int> in S0
+    binding b2 "c": array<int> in S0
+    binding b3 "m": map<str, int> in S0
+    binding b4 "n": map<str, int> in S0
+    binding b5 "o": map<str, int> in S0
+    boundary B0 lexical in S0
+    ^b0 in S0 unwind ^b1:
+    %0: array<never> = array.new ty array<never>
+    %1: int = const 1
+    %2: array<int> = array.new [%1], ty array<int>
+    %3: array<never> = array.new ty array<never>
+    %4: array<int> = array.retag %0, ty array<int>
+    %5: array<int> = array.retag %3, ty array<int>
+    %6: array<int> = array.concat [%4, %2, %5], ty array<int>
+    bind %6, binding b0
+    %7: array<never> = array.new ty array<never>
+    %8: int = const 1
+    %9: array<int> = array.new [%8], ty array<int>
+    %10: int = const 2
+    %11: array<int> = array.new [%10], ty array<int>
+    %12: array<int> = array.retag %7, ty array<int>
+    %13: array<int> = array.difference %12, [%9, %11]
+    bind %13, binding b1
+    %14: int = const 1
+    %15: array<int> = array.new [%14], ty array<int>
+    %16: int = const 2
+    %17: array<int> = array.new [%16], ty array<int>
+    %18: int = const 3
+    %19: array<int> = array.new [%18], ty array<int>
+    %20: array<int> = array.difference %17, [%19]
+    %21: array<int> = array.difference %15, [%20]
+    bind %21, binding b2
+    %22: map<never, never> = map.new ty map<never, never>
+    %23: str = const "x"
+    %24: int = const 1
+    %25: map<str, int> = map.new entries [(%23, %24)], ty map<str, int>
+    %26: map<never, never> = map.new ty map<never, never>
+    %27: map<str, int> = map.retag %22, ty map<str, int>
+    %28: map<str, int> = map.retag %26, ty map<str, int>
+    %29: map<str, int> = map.merge [%27, %25, %28], ty map<str, int>
+    bind %29, binding b3
+    %30: map<never, never> = map.new ty map<never, never>
+    %31: str = const "x"
+    %32: int = const 1
+    %33: map<str, int> = map.new entries [(%31, %32)], ty map<str, int>
+    %34: str = const "y"
+    %35: int = const 2
+    %36: map<str, int> = map.new entries [(%34, %35)], ty map<str, int>
+    %37: map<str, int> = map.retag %30, ty map<str, int>
+    %38: map<str, int> = map.difference %37, [%33, %36]
+    bind %38, binding b4
+    %39: str = const "x"
+    %40: int = const 1
+    %41: map<str, int> = map.new entries [(%39, %40)], ty map<str, int>
+    %42: str = const "x"
+    %43: int = const 2
+    %44: map<str, int> = map.new entries [(%42, %43)], ty map<str, int>
+    %45: str = const "y"
+    %46: int = const 3
+    %47: map<str, int> = map.new entries [(%45, %46)], ty map<str, int>
+    %48: map<str, int> = map.difference %44, [%47]
+    %49: map<str, int> = map.difference %41, [%48]
+    bind %49, binding b5
+    %50: int = array.len %6
+    want %50
+    [i58] exit.prepare return %50 at B0
+    result.exit edge normal(0), value %50, demand want, prepare #58
+    ret %50
+    ^b1(%51: failure) in S0:
+    raise %51
+}

@@ -1,0 +1,59 @@
+oir 2 high
+module app
+requires core
+entry @main
+
+role Error [builtin] {
+    text() -> str
+}
+scope S0 action in @main
+scope S1 try in @main parent S0
+scope S2 catch in @main parent S0
+
+func @main() -> int [entry] {
+    binding b0 "a": array<int> in S0
+    binding b1 "e": Error in S2
+    boundary B0 lexical in S0
+    boundary B1 lexical in S1
+    boundary B2 lexical in S2
+    ^b0 in S0 unwind ^b1:
+    %0: array<int> = array.new ty array<int>
+    bind %0, binding b0
+    br ^b4(%0)
+    ^b1(%1: failure) in S0:
+    raise %1
+    ^b2(%2: array<int>) in S0 unwind ^b1:
+    %3: int = const 0
+    want %3
+    [i4] exit.prepare return %3 at B0
+    result.exit edge normal(0), value %3, demand want, prepare #4
+    ret %3
+    ^b3(%4: array<int>, %5: failure) in S0 unwind ^b1:
+    catch %5 is Error, ^b5(%4, %5, $value), ^b6(%4, %5)
+    ^b4(%6: array<int>) in S1 unwind ^b3(%6):
+    %7: int = const 0
+    %8: int = const 7
+    %9: array<int> = array.replace %6, %7, %8
+    discard %9
+    want %6
+    [i10] exit.prepare fallthrough %6 at B1
+    result.exit edge normal(0), value %9, demand discard, prepare none
+    result.exit edge normal(0), value %6, demand want, prepare #10
+    br ^b2(%6)
+    ^b5(%10: array<int>, %11: failure, %12: Error) in S2 unwind ^b1:
+    bind %12, binding b1
+    br ^b8(%10, %11)
+    ^b6(%13: array<int>, %14: failure) in S0 unwind ^b1:
+    raise %14
+    ^b7(%15: array<int>, %16: failure, %17: failure) in S0 unwind ^b1:
+    %18: failure = fail.caused %17, %16
+    raise %18
+    ^b8(%19: array<int>, %20: failure) in S2 unwind ^b7(%19, %20):
+    %21: int = const 0
+    discard %21
+    want %19
+    [i16] exit.prepare fallthrough %19 at B2
+    result.exit edge normal(0), value %21, demand discard, prepare none
+    result.exit edge normal(0), value %19, demand want, prepare #16
+    br ^b2(%19)
+}

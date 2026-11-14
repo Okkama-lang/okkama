@@ -1,0 +1,18 @@
+module app;
+enum Color = (red, blue);
+main() is int {
+    let ints = [1: "one", 2: "two"];
+    let bools = [false: 1, true: 2];
+    let chars = ['b': 2, 'a': 1];
+    let strings = ["z": 1, "a": 2];
+    let floats = [1.5: 1, 2.5: 2];
+    let rats = [rat(1, 2): 1, 2 / 4: 2];
+    let enums = [Color.red: 1, Color.blue: 2];
+    ints[1];
+    bools[true];
+    chars['b'];
+    strings["a"];
+    floats[1.5];
+    rats[rat(2, 4)];
+    enums[Color.red];
+}

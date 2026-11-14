@@ -26,7 +26,6 @@ impl BodyLowerer<'_, '_> {
     }
 
     pub(super) fn collection(&mut self, op: ir::CollectionOp) -> Result<ir::ValueId> {
-        // Only std support arrays of plain strings/bytes are interned by declarations.
         self.sync_failure()?;
         Ok(self.b.emit_schema(ir::Operation::Collection(op))?[0])
     }
@@ -38,13 +37,15 @@ impl BodyLowerer<'_, '_> {
     pub(super) fn scalar(&mut self, expr: &thir::Expr) -> Result<Option<ir::ValueId>> {
         use thir::ExprKind as E;
         let result = match &expr.kind {
-            E::Constant(constant) => self.constant(literal(constant, expr.span)?)?,
+            E::Constant(constant) => self.constant(literal(constant))?,
             E::Global(_) => return Err(LowerError::unsupported(expr.span, "module constant reference")),
             E::Unary { op, operand } => {
                 let value = value!(self, operand);
                 let op = match op {
                     UnaryOp::Not => ir::CoreOp::BoolNot { value },
                     UnaryOp::Negate(NumericKind::Int) => ir::CoreOp::IntNeg { value },
+                    UnaryOp::Negate(NumericKind::Float) => ir::CoreOp::FloatNeg { value },
+                    UnaryOp::Negate(NumericKind::Rat) => ir::CoreOp::RatNeg { value },
                     _ => return Err(LowerError::unsupported(expr.span, format!("unary {op:?}"))),
                 };
                 self.core(op)?
@@ -56,6 +57,7 @@ impl BodyLowerer<'_, '_> {
                     BinaryOp::Arith(NumericKind::Int, ArithOp::Add) => ir::CoreOp::IntAdd { left, right },
                     BinaryOp::Arith(NumericKind::Int, ArithOp::Sub) => ir::CoreOp::IntSub { left, right },
                     BinaryOp::Arith(NumericKind::Int, ArithOp::Mul) => ir::CoreOp::IntMul { left, right },
+                    BinaryOp::Arith(NumericKind::Int, ArithOp::Div) => ir::CoreOp::IntDiv { left, right },
                     BinaryOp::Arith(NumericKind::Int, ArithOp::Mod) => ir::CoreOp::IntMod { left, right },
                     BinaryOp::Concat => ir::CoreOp::StrConcat { left, right },
                     BinaryOp::Compare(kind, op) => compare(*kind, *op, left, right, expr.span)?,
@@ -65,12 +67,7 @@ impl BodyLowerer<'_, '_> {
             }
             E::Cast { target, value, .. } => {
                 let value = value!(self, value);
-                let to = match target {
-                    CastTarget::Int => ir::NumericType::Int,
-                    CastTarget::Str => ir::NumericType::Str,
-                    _ => return Err(LowerError::unsupported(expr.span, format!("cast {target:?}"))),
-                };
-                self.convert(value, to, expr.span)?
+                self.cast_scalar(value, *target, expr.span)?
             }
             E::Call { callee: thir::Callee::Builtin { receiver, op }, args } => {
                 let value = value!(self, receiver);
@@ -80,12 +77,7 @@ impl BodyLowerer<'_, '_> {
                     }
                     (thir::Builtin::StrLength, []) => self.core(ir::CoreOp::StrLen { value })?,
                     (thir::Builtin::Convert(target), []) => {
-                        let to = match target {
-                            CastTarget::Int => ir::NumericType::Int,
-                            CastTarget::Str => ir::NumericType::Str,
-                            _ => return Err(LowerError::unsupported(expr.span, format!("conversion {target:?}"))),
-                        };
-                        self.convert(value, to, expr.span)?
+                        self.cast_scalar(value, *target, expr.span)?
                     }
                     (thir::Builtin::Compare(kind, op), [other]) => {
                         let right = value!(self, other);
@@ -98,6 +90,11 @@ impl BodyLowerer<'_, '_> {
                     _ => return Err(LowerError::unsupported(expr.span, format!("builtin {op:?}"))),
                 }
             }
+            E::RatNew { numerator, denominator } => {
+                let numerator = value!(self, numerator);
+                let denominator = value!(self, denominator);
+                self.core(ir::CoreOp::RatNew { numerator, denominator })?
+            }
             E::Range { start, end, inclusive } => {
                 let start = value!(self, start);
                 let end = value!(self, end);
@@ -108,16 +105,41 @@ impl BodyLowerer<'_, '_> {
         Ok(Some(result))
     }
 
+    pub(super) fn cast_scalar(&mut self, value: ir::ValueId, target: CastTarget, span: Span)
+        -> Result<ir::ValueId> {
+        let to = match target {
+            CastTarget::Int => ir::NumericType::Int,
+            CastTarget::Byte => ir::NumericType::Byte,
+            CastTarget::Float => ir::NumericType::Float,
+            CastTarget::Rat => ir::NumericType::Rat,
+            CastTarget::Str => ir::NumericType::Str,
+            CastTarget::Char => {
+                let ty = self.b.body().values.get(value)?.ty;
+                if matches!(self.b.module().types.get(ty)?, ir::Type::Char) {
+                    return Ok(value);
+                }
+                return Err(LowerError::unsupported(span, "char conversion"));
+            }
+        };
+        self.convert(value, to, span)
+    }
+
     fn convert(&mut self, value: ir::ValueId, to: ir::NumericType, span: Span) -> Result<ir::ValueId> {
         let ty = self.b.body().values.get(value)?.ty;
         let from = match self.b.module().types.get(ty)? {
             ir::Type::Int => ir::NumericType::Int,
             ir::Type::Bool => ir::NumericType::Bool,
+            ir::Type::Byte => ir::NumericType::Byte,
+            ir::Type::Float => ir::NumericType::Float,
+            ir::Type::Rat => ir::NumericType::Rat,
             ir::Type::Str => ir::NumericType::Str,
             _ => return Err(LowerError::unsupported(span, "conversion from a non-S1 type")),
         };
         if from == to {
             return Ok(value);
+        }
+        if from == ir::NumericType::Str {
+            return Err(LowerError::unsupported(span, "string-to-number conversion (#567)"));
         }
         self.core(ir::CoreOp::Convert { value, from, to })
     }
@@ -134,12 +156,14 @@ impl BodyLowerer<'_, '_> {
     }
 }
 
-fn literal(constant: &thir::Constant, span: Span) -> Result<ir::Literal> {
+fn literal(constant: &thir::Constant) -> ir::Literal {
     match constant {
-        thir::Constant::Int(value) => Ok(ir::Literal::Int(value.clone())),
-        thir::Constant::Bool(value) => Ok(ir::Literal::Bool(*value)),
-        thir::Constant::Str(value) => Ok(ir::Literal::Str(value.clone())),
-        _ => Err(LowerError::unsupported(span, format!("constant {constant:?}"))),
+        thir::Constant::Int(value) => ir::Literal::Int(value.clone()),
+        thir::Constant::Bool(value) => ir::Literal::Bool(*value),
+        thir::Constant::Str(value) => ir::Literal::Str(value.clone()),
+        thir::Constant::Byte(value) => ir::Literal::Byte(*value),
+        thir::Constant::Float(value) => ir::Literal::Float(*value),
+        thir::Constant::Char(value) => ir::Literal::Char(*value),
     }
 }
 
@@ -157,7 +181,7 @@ fn construct(expr: &thir::ExprKind) -> &'static str {
     }
 }
 
-fn compare(
+pub(super) fn compare(
     kind: CompareKind,
     op: CompareOp,
     left: ir::ValueId,
@@ -182,6 +206,34 @@ fn compare(
         (K::Str, O::Le) => C::StrLe { left, right },
         (K::Str, O::Gt) => C::StrGt { left, right },
         (K::Str, O::Ge) => C::StrGe { left, right },
+        (K::Byte, O::Eq) => C::ByteEq { left, right },
+        (K::Byte, O::Ne) => C::ByteNe { left, right },
+        (K::Byte, O::Lt) => C::ByteLt { left, right },
+        (K::Byte, O::Le) => C::ByteLe { left, right },
+        (K::Byte, O::Gt) => C::ByteGt { left, right },
+        (K::Byte, O::Ge) => C::ByteGe { left, right },
+        (K::Float, O::Eq) => C::FloatEq { left, right },
+        (K::Float, O::Ne) => C::FloatNe { left, right },
+        (K::Float, O::Lt) => C::FloatLt { left, right },
+        (K::Float, O::Le) => C::FloatLe { left, right },
+        (K::Float, O::Gt) => C::FloatGt { left, right },
+        (K::Float, O::Ge) => C::FloatGe { left, right },
+        (K::Rat, O::Eq) => C::RatEq { left, right },
+        (K::Rat, O::Ne) => C::RatNe { left, right },
+        (K::Rat, O::Lt) => C::RatLt { left, right },
+        (K::Rat, O::Le) => C::RatLe { left, right },
+        (K::Rat, O::Gt) => C::RatGt { left, right },
+        (K::Rat, O::Ge) => C::RatGe { left, right },
+        (K::Char, O::Eq) => C::CharEq { left, right },
+        (K::Char, O::Ne) => C::CharNe { left, right },
+        (K::Char, O::Lt) => C::CharLt { left, right },
+        (K::Char, O::Le) => C::CharLe { left, right },
+        (K::Char, O::Gt) => C::CharGt { left, right },
+        (K::Char, O::Ge) => C::CharGe { left, right },
+        (K::Enum, O::Eq) => C::EnumEq { left, right },
+        (K::Enum, O::Ne) => C::EnumNe { left, right },
+        (K::Value, O::Eq) => C::ValEq { left, right },
+        (K::Value, O::Ne) => C::ValNe { left, right },
         _ => return Err(LowerError::unsupported(span, format!("comparison {kind:?} {op:?}"))),
     })
 }

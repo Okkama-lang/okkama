@@ -1,0 +1,45 @@
+module app;
+object Res {
+    has n is int;
+    Res(n is int) {
+        self.n = n;
+    }
+    destroy {
+        n;
+    }
+}
+object Box {
+    has item is Res;
+    Box(item is Res) {
+        self.item = item;
+    }
+    get() is Res {
+        item;
+    }
+}
+object Outer {
+    has inner is Box;
+    Outer(inner is Box) {
+        self.inner = inner;
+    }
+    get() is Res {
+        inner.get();
+    }
+}
+main() is int {
+    let a = Res(1);
+    let b = Res(2);
+    let xs = [a, a, b];
+    let one = xs[0];
+    let slice = xs.slice(0, 1);
+    let removed = xs.removed_at(1);
+    let replaced = xs.replaced(1, Res(3));
+    let m = ["a": a, "b": a, "c": b];
+    let entry = m["b"];
+    let keys = m.keys();
+    let values = m.values();
+    let nested = [[a], [b]];
+    let path = nested[0][0];
+    let field = Outer(Box(a)).get();
+    0;
+}

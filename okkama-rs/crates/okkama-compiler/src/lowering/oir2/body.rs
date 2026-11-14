@@ -9,6 +9,7 @@ pub(super) struct BodyContext<'t> {
     pub natives: &'t HashMap<usize, ir::FuncId>,
     pub builtin_adapters: &'t HashMap<(ir::TypeId, ir::TypeId), ir::FuncId>,
     pub error_text: Option<ir::FuncId>,
+    pub std_array_for: bool,
     pub objects: &'t HashMap<ObjectId, ir::DeclId>,
     pub constructors: &'t HashMap<(ObjectId, usize, Vec<usize>), ir::FuncId>,
     pub given: Vec<usize>,
@@ -485,6 +486,13 @@ impl<'a, 't> BodyLowerer<'a, 't> {
         use thir::ExprKind as E;
         let result_ty = expr.ty.as_ref().filter(|ty| **ty != Ty::Never);
         match &expr.kind {
+            E::Array(_) | E::Map(_) | E::Index { .. } | E::ArrayCast { .. }
+            | E::Coerce { coercion: thir::Coercion::Retag, .. } => self.collection_expr(expr),
+            E::Binary { op: thir::BinaryOp::ArrayConcat | thir::BinaryOp::ArrayDifference
+                | thir::BinaryOp::MapMerge | thir::BinaryOp::MapDifference, .. } => self.collection_expr(expr),
+            E::Call { callee: thir::Callee::Builtin { op, .. }, .. }
+                if super::collections::is_builtin(op) => self.collection_expr(expr),
+            E::Functional(_) => Err(LowerError::unsupported(expr.span, "functional block (C7)")),
             E::Local(local) => Ok(self.env[local.0]),
             E::SelfValue => self.self_value().map(Some),
             E::Field(field) => self.read_field(*field).map(Some),
@@ -842,6 +850,9 @@ impl<'a, 't> BodyLowerer<'a, 't> {
                 (start, end, false)
             }
             thir::Source::Array(expr) if matches!(expr.ty, Some(Ty::Array(_))) => {
+                if !self.context.std_array_for {
+                    return Err(LowerError::unsupported(block.span, "array for traversal (C6)"));
+                }
                 let Some(value) = self.value(expr)? else {
                     return Ok(None);
                 };

@@ -1,0 +1,99 @@
+oir 2 high
+module app
+requires core
+entry @main
+
+enum app.Color = (red, blue)
+scope S0 action in @main
+
+func @main() -> int [entry] {
+    binding b0 "ints": map<int, str> in S0
+    binding b1 "bools": map<bool, int> in S0
+    binding b2 "chars": map<char, int> in S0
+    binding b3 "strings": map<str, int> in S0
+    binding b4 "floats": map<float, int> in S0
+    binding b5 "rats": map<rat, int> in S0
+    binding b6 "enums": map<app.Color, int> in S0
+    boundary B0 lexical in S0
+    ^b0 in S0 unwind ^b1:
+    %0: int = const 1
+    %1: str = const "one"
+    %2: int = const 2
+    %3: str = const "two"
+    %4: map<int, str> = map.new entries [(%0, %1), (%2, %3)], ty map<int, str>
+    bind %4, binding b0
+    %5: bool = const false
+    %6: int = const 1
+    %7: bool = const true
+    %8: int = const 2
+    %9: map<bool, int> = map.new entries [(%5, %6), (%7, %8)], ty map<bool, int>
+    bind %9, binding b1
+    %10: char = const 'b'
+    %11: int = const 2
+    %12: char = const 'a'
+    %13: int = const 1
+    %14: map<char, int> = map.new entries [(%10, %11), (%12, %13)], ty map<char, int>
+    bind %14, binding b2
+    %15: str = const "z"
+    %16: int = const 1
+    %17: str = const "a"
+    %18: int = const 2
+    %19: map<str, int> = map.new entries [(%15, %16), (%17, %18)], ty map<str, int>
+    bind %19, binding b3
+    %20: float = const 1.5
+    %21: int = const 1
+    %22: float = const 2.5
+    %23: int = const 2
+    %24: map<float, int> = map.new entries [(%20, %21), (%22, %23)], ty map<float, int>
+    bind %24, binding b4
+    %25: int = const 1
+    %26: int = const 2
+    %27: rat = rat.new %25, %26
+    %28: int = const 1
+    %29: int = const 2
+    %30: int = const 4
+    %31: rat = int.div %29, %30
+    %32: int = const 2
+    %33: map<rat, int> = map.new entries [(%27, %28), (%31, %32)], ty map<rat, int>
+    bind %33, binding b5
+    %34: app.Color = enum.case app.Color, case 0
+    %35: int = const 1
+    %36: app.Color = enum.case app.Color, case 1
+    %37: int = const 2
+    %38: map<app.Color, int> = map.new entries [(%34, %35), (%36, %37)], ty map<app.Color, int>
+    bind %38, binding b6
+    %39: int = const 1
+    %40: str = map.get %4, %39
+    discard %40
+    %41: bool = const true
+    %42: int = map.get %9, %41
+    discard %42
+    %43: char = const 'b'
+    %44: int = map.get %14, %43
+    discard %44
+    %45: str = const "a"
+    %46: int = map.get %19, %45
+    discard %46
+    %47: float = const 1.5
+    %48: int = map.get %24, %47
+    discard %48
+    %49: int = const 2
+    %50: int = const 4
+    %51: rat = rat.new %49, %50
+    %52: int = map.get %33, %51
+    discard %52
+    %53: app.Color = enum.case app.Color, case 0
+    %54: int = map.get %38, %53
+    want %54
+    [i69] exit.prepare return %54 at B0
+    result.exit edge normal(0), value %40, demand discard, prepare none
+    result.exit edge normal(0), value %42, demand discard, prepare none
+    result.exit edge normal(0), value %44, demand discard, prepare none
+    result.exit edge normal(0), value %46, demand discard, prepare none
+    result.exit edge normal(0), value %48, demand discard, prepare none
+    result.exit edge normal(0), value %52, demand discard, prepare none
+    result.exit edge normal(0), value %54, demand want, prepare #69
+    ret %54
+    ^b1(%55: failure) in S0:
+    raise %55
+}

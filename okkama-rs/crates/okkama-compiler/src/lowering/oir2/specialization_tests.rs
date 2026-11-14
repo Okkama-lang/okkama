@@ -217,7 +217,7 @@ fn oir2_generic_later_constructs_keep_source_diagnostics() {
         concat!("module app; object Box<T> { has value is T; Box(:value); } ",
             "main() is int { Box(value: () is int { 1; }); 0; }"),
         concat!("module app; object Box<T> { has value is T; Box(:value); } ",
-            "main() is int { let values = [Box(value: 1)]; 0; }"),
+            "main() is int { let values = [Box(value: 1)].map() -> x { x; }; 0; }"),
         concat!("module app; object Box<T> { has value is T; Box(:value); ",
             "async get() is T { value; } } main() is int { Box(value: 1).get(); 0; }"),
     ] {

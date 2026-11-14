@@ -1,0 +1,18 @@
+module app;
+main() is int {
+    let a is @int = [];
+    let m is %string:int = [:];
+    a.slice(0, 0);
+    a.take(0);
+    a.drop(4);
+    a.reversed();
+    (a - a);
+    (m - m);
+    m.keys();
+    m.values();
+    let untyped = [];
+    untyped.reversed();
+    untyped.contains(1);
+    untyped.index_of(1);
+    0;
+}

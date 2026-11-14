@@ -18,7 +18,7 @@ no extracted fixture or acceptance of the whole source file is implied.
 | `Role`, `Coerce(RoleWrap/RoleNarrow)`, role call | Concrete role declarations, `Object.witnesses`, `role.wrap/narrow`, `call.role` | C3: ten role goldens and three diagnostic goldens in `goldens/p2_3/roles/` |
 | `Successor(Object/Role)`, role result adapter | `role.wrap ^Object → ^Role`, `succ.take ^Role → Role`; one must-use obligation | C3: `role-successor`; canonical verifier B8 successor-role ± fixtures |
 | `Array/Map/Range`, literals, collection builtins | `array.*`, `map.*`, `range.*`, lazy lookup CFG | C4: array/map/literal/typed-identity rows |
-| Large/range-expanded literal | Linear `builder.*` / `mbuilder.*`, unwind/abandon | C5: builder producer fixtures; prerequisites of reduce-builder |
+| Range-expanded / large literal | Scalar loop + `array.new/concat` / direct `array.new` | C4: `range-expansion`, `large-literal`; streaming builders remain C5 |
 | `For`, array/range/map/Iterating/Batching sources | Loop CFG, iteration/cursor/batch scopes and result exits | C6: iterable/batching, ownership loops subcases |
 | `Functional(map/filter/reduce/any/all/find)` | Enclosing action CFG, builders, short circuit | C7: early-exit, accumulator, reduce-builder |
 | Imported source calls, plain `once let` | Reachable concrete source bodies, checked cache plumbing | C8: all four L09 collections; once negatives |
@@ -144,3 +144,129 @@ declarations, including unused `Taker.anything`: the producer checks these bodie
 | #570 | 0 |
 | #593 | 82 |
 | backend | 82 |
+
+## C4 implementation and High evidence
+
+C4 implements concrete arrays, maps and ranges in the independent producer.
+It does not run ownership elaboration or change the verifier/own implementation.
+All 143 statuses, including the 56 C4 rows, remain `planned`. `producer=` and
+`C4-partial=` identify structural evidence; they do not accept the original
+conformance files or their runtime output. Existing dependency classifications
+remain in force, including `any`, functional formatting and the #593/backend gates.
+
+- [x] Empty, typed, nested and role-bearing literals; concrete generic collections.
+- [x] Ordered evaluation of elements and map key/value pairs, including duplicate keys.
+- [x] Range expansion after operand evaluation; inclusive/exclusive validation.
+- [x] Large literals use `array.new` directly; no streaming builder is emitted.
+- [x] Indexed reads, lazy lookup/fallback, sizes and array first/last/item.
+- [x] Slice, take/drop, reversed, contains/index_of and string-array join.
+- [x] Concat/merge/difference, replaced/removed_at, map has/keys/values.
+- [x] First-boundary retags and typed empty results, including operator operands.
+- [x] Int, float, rat, bool, char, string and enum key categories; byte keys retain
+      the frontend rejection. The untyped `map<never,never>` sentinel is permitted
+      only as an empty map, without relaxing concrete key constraints.
+- [x] H5 unwind and D11 result exits; deterministic verification and codec round trips.
+- [x] 37 High fixtures and four frontend diagnostic fixtures in
+      `fixtures/p2_3/collections/` and `goldens/p2_3/collections/`.
+
+### Operations and exact relations
+
+High emits operations with Unelaborated ABI and no packets/deps. The existing
+public `Retention` contracts and codec express the relations below; expanding
+`Projection` is unnecessary. No new runtime intrinsic or substitute OwnerGraph
+selection was introduced.
+
+| Source / resolved form | High form | Relation in public contracts |
+|---|---|---|
+| `[a,b]`, `[k:v]` | `array.new`, `map.new` | `Union`, `Entries`, in evaluation order |
+| `start..end`, `start..=end` | `range.new`, `range.len` | Scalar; failing range validation keeps unwind |
+| Range part in array | Evaluate operands, range validation, counted scalar CFG, `array.new/concat` | Composed `Union` |
+| `xs[i]`, `item`, successful array lookup | `array.get` / `array.lookup` found edge | `Index` |
+| `m[k]`, successful map lookup | `map.get` / `map.lookup` found edge | `MapEntry` / internal `Map` |
+| `m[k] else fallback` | Lookup found/missing branches, D11 join | Found `Map`; fallback evaluated only on missing |
+| `first/last` | Array lookup, missing `trap empty` | `Index`; trap retains H5 unwind |
+| Slice/take/drop | `array.slice`, scalar count validation/clamp CFG | `Slice` |
+| `m.keys()[i]`, `m.values()[i]` | `map.key_at/value_at` | `MapPosition(index,key)` / internal `MapIndex` |
+| `m.keys()`, `m.values()` | `map.keys/values` | `Keys`, `Values` |
+| `removed_at`, `replaced` | `array.remove/replace` | `ArrayRemove` / internal `Remove`; `ArrayReplace` composes old Remove + new value |
+| `+`, `-` | `array.concat/difference`, `map.merge/difference` | `Union`, `MapMerge`, `Difference`; displaced obligations stay with their owner |
+| Nested getters | `obj.get` and calls to concrete getter bodies | Exact `Field` edges compose paths; existing `SummarySelection::Path` is the call-summary representation |
+| Retag | `array.retag`, `map.retag` | `Value`, preserving the resolved concrete tag |
+| Reversed | Counted CFG, `array.get/new/concat` | `Index` + `Union` |
+| Contains/index_of | Short-circuit CFG, get/compare, concrete Maybe cases | `Index`; scalar result / concrete variant |
+| Size/has/join | `array.len`, `map.len/has`, `array.join` | Scalar result; join observes string elements |
+
+Concat/merge flatten both sides, difference only its left chain, matching the
+current pipeline. All operands are evaluated before the combined operation;
+untagged empty operands are retagged to the resolved concrete result type.
+Map positional projections evaluate the map receiver before the index and
+select the requested key/value side without retaining the other side.
+
+### Golden inventory and audit staging
+
+The exact 37-name source inventory is checked by `GOLDENS` in
+`collection_tests.rs`. Every module is independently verified before printing,
+after parsing, and as stored expected text; a second lowering is independently
+verified and compared byte for byte.
+
+| Requirement | Fixtures |
+|---|---|
+| Literals, tags, nesting, large construction | `literals`, `large-literal`, `empty-results`, `generic-collections`, `role-elements` |
+| Evaluation order, duplicate map keys, expansion | `evaluation-order`, `range-expansion`, `scalar-keys` |
+| Lazy hits/misses, resource fallback | `lookup-lazy` |
+| H5 failures including catches | `bounds`, `bounds-{first,last,map,take,drop,remove,replace}` |
+| Persistent operators and empty operands | `array-ops`, `map-ops`, `operators-empty-chain`, `resource-projections` |
+| Derived search/shape CFG | `search-{contains,index}`, `shape-{take,drop,reversed}`, `resource-reversed` |
+| Index/Slice/Map/MapIndex/Keys/Values/Remove/Path | Nine `projection-*` relation fixtures plus `projection-control` |
+
+The relation fixtures each include fresh local resources and borrowed parameters;
+duplicated array elements/map values are intentional. They cross block parameters
+and return boundaries with D11 preparations. `projection-control` carries aliases
+through a loop and branch/lookup joins, and produces empty selections from
+resource-bearing sources. `projection-keys` and `projection-map-key-index` use
+resource values with plain keys. Nested getters preserve exact field edges for
+later Path summary inference. `resource-reversed` carries resource aggregates
+through the primitive shape loop.
+
+These are High inputs for the §7.3 audit. Own accept/reject pairs, selected/full
+and external dependency proofs, stable view-key/token move checks, actual owner
+invalidation and forged-key rejection remain with #565. Packets, view-key service
+moves and computed deps are forbidden in High, so none are fabricated in these
+fixtures. Hidden-owner cursor/cap views remain gated by C6/#569/#565.
+
+`oir2_c4_frontend_negatives` checks stage and diagnostic text for wrong key and
+wrong element types, byte keys, and the original
+`tests/ownership-corpus/rejected/map-resource-key.ok`. The stored diagnostic
+names are `wrong-key`, `wrong-element`, `byte-key`, `resource-key`.
+
+### Remaining boundaries
+
+Streaming builders are C5; ordinary application array traversal is explicitly
+Unsupported (C6); functional blocks remain Unsupported (C7). Existing P1 integer
+range traversal and imported std support-array loops are preserved. Cursor,
+ordering and general iterable support are not added here. Any/closures/capability
+and async dependencies remain #569/#570. General scalar conversions from string
+and int-to-char are outside this slice and produce explicit Unsupported; typed
+identity and numeric conversions supported by existing contracts are retained.
+
+The verifier uses bounded relational exploration. Initial combined fixtures with
+many sequential branching operations/catches reached its default memory budget
+(`Incomplete`); operation/failure goldens are isolated to identify individual
+contracts. No verifier limit or rule was changed, and no incomplete verification
+is counted as a passing golden. Managed semantic and executable acceptance still
+requires #565 audit fixes and #593 with the executable backend.
+
+### Final C4 verification
+
+Run from `okkama-rs/`, offline with four jobs; the final compiler test run used
+stored fixtures without the update environment variable.
+
+| Command | Result |
+|---|---|
+| `cargo check --offline -j 4 --workspace --all-targets` | exit 0 |
+| `cargo clippy --offline -j 4 --workspace --all-targets -- -D warnings` | exit 0, no warnings |
+| `cargo test --offline -j 4 -p okkama-compiler --lib oir2` | exit 0; 118 passed, 118 filtered |
+| `cargo test --offline -j 4 -p okkama-oir` | exit 0; 178 unit + 29 integration passed; 0 doc tests |
+
+`git diff --check` passes. New Rust/source fixture lines are at most 120 characters.
+No verifier/own source changes, frontend changes, new intrinsics or git commit.

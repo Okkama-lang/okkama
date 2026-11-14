@@ -1,0 +1,11 @@
+module app;
+main() is int {
+    let a is @int = [];
+    try {
+        a.first();
+    }
+    catch e is Error {
+        0;
+    }
+    0;
+}

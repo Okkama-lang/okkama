@@ -433,7 +433,8 @@ impl Specializer<'_, '_> {
             T::Role(role, args) => T::role(self.role(*role, args, span)?),
             T::Array(inner) => T::array(self.ty(inner, span)?),
             T::Map(key, value) => {
-                if let Some(problem) = self.input.registry.key_problem(key) {
+                let untyped_empty = **key == T::Never && **value == T::Never;
+                if !untyped_empty && let Some(problem) = self.input.registry.key_problem(key) {
                     return Err(LowerError::invalid(span, problem));
                 }
                 T::map(self.ty(key, span)?, self.ty(value, span)?)
@@ -483,7 +484,6 @@ impl Specializer<'_, '_> {
     fn expr(&mut self, expr: &mut thir::Expr, env: &[(ty::ParamId, ty::Ty)]) -> Result<()> {
         use thir::ExprKind as E;
         let unsupported = match &expr.kind {
-            E::Array(_) | E::Map(_) | E::ArrayCast { .. } | E::Index { .. } => Some("collection operation (C4)"),
             E::Functional(_) => Some("functional collection operation (C7)"),
             E::Closure { .. } | E::BoundAction { .. } | E::BoundRoleAction { .. }
             | E::CallValue { .. } | E::CapSelect { .. } | E::CapRead { .. } => Some("closure or capability (#569)"),
@@ -572,6 +572,40 @@ impl Specializer<'_, '_> {
             | E::Range { start: left, end: right, .. } => {
                 self.expr(left, env)?;
                 self.expr(right, env)?;
+            }
+            E::Array(parts) => {
+                for part in parts {
+                    match part {
+                        thir::ArrayPart::Value(value) => self.expr(value, env)?,
+                        thir::ArrayPart::Range { start, end, .. } => {
+                            self.expr(start, env)?;
+                            self.expr(end, env)?;
+                        }
+                    }
+                }
+            }
+            E::Map(entries) => {
+                for (key, value) in entries {
+                    self.expr(key, env)?;
+                    self.expr(value, env)?;
+                }
+            }
+            E::ArrayCast { parts, .. } => {
+                for part in parts {
+                    let (thir::CastPart::One(value) | thir::CastPart::Spread(value)) = part;
+                    self.expr(value, env)?;
+                }
+            }
+            E::Index { object, index, fallback } => {
+                self.expr(object, env)?;
+                self.expr(index, env)?;
+                if let Some(value) = fallback {
+                    self.expr(value, env)?;
+                }
+            }
+            E::RatNew { numerator, denominator } => {
+                self.expr(numerator, env)?;
+                self.expr(denominator, env)?;
             }
             E::If { condition, then_block, else_block } => {
                 self.expr(condition, env)?;

@@ -1,0 +1,29 @@
+module app;
+object Res {
+    has n is int;
+    Res(n is int) {
+        self.n = n;
+    }
+    destroy {
+        n;
+    }
+}
+object Select {
+    Select();
+    fresh() is Res {
+        let a = Res(1);
+        let b = Res(2);
+        let xs = [a, a, b];
+        {
+            xs[0];
+        }
+    }
+    borrowed(xs is @Res, i is int) is Res {
+        {
+            xs[i];
+        }
+    }
+}
+main() is int {
+    0;
+}

@@ -7,6 +7,9 @@
 //! are centralized in `BodyLowerer` and call envelopes are emitted at their instruction sites.
 
 mod body;
+mod collections;
+#[cfg(test)]
+mod collection_tests;
 mod specialize;
 mod native_summaries;
 mod construction;
@@ -133,6 +136,7 @@ pub(crate) fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
                 functions: &declarations.functions,
                 natives: &declarations.natives,
                 error_text: declarations.error_text,
+                std_array_for: body.module < analysis.registry.root_start,
                 builtin_adapters: &declarations.builtin_adapters,
                 objects: &declarations.objects,
                 constructors: &declarations.constructors,
@@ -157,6 +161,7 @@ pub(crate) fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
             functions: &declarations.functions,
             natives: &declarations.natives,
             error_text: declarations.error_text,
+            std_array_for: deferred.source.module < analysis.registry.root_start,
             builtin_adapters: &declarations.builtin_adapters,
             objects: &declarations.objects,
             constructors: &declarations.constructors,
