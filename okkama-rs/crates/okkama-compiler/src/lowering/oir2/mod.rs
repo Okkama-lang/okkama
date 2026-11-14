@@ -19,6 +19,8 @@ mod iteration_tests;
 mod functional_tests;
 mod specialize;
 mod callables;
+mod anonymous;
+mod known_calls;
 #[cfg(test)]
 mod callable_tests;
 mod native_summaries;
@@ -108,14 +110,14 @@ type Result<T> = std::result::Result<T, LowerError>;
 /// No CLI routing, ownership elaboration or semantic verifier is invoked here.
 pub(crate) fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
     let prepared = specialize::prepare(analysis)?;
-    // C2a discovers callable bodies/types but cannot publish callable IR yet.
+    // Open callable contracts and bound/capability operations remain separate reviewed steps.
     for entry in &prepared.callables.bodies {
         if matches!(entry.body.owner, thir::BodyOwner::Test(_) | thir::BodyOwner::CapField { .. }) {
             return Err(LowerError::unsupported(entry.body.span, "test or capability body (#569 C5/C8)"));
         }
         let pending = thir::first_expr(&entry.body.block, &|expr| matches!(expr.kind,
-            thir::ExprKind::Closure { .. } | thir::ExprKind::BoundAction { .. }
-            | thir::ExprKind::BoundRoleAction { .. } | thir::ExprKind::CallValue { .. }
+            thir::ExprKind::BoundAction { .. }
+            | thir::ExprKind::BoundRoleAction { .. }
             | thir::ExprKind::CapSelect { .. } | thir::ExprKind::CapRead { .. }
             | thir::ExprKind::TestCapability
             | thir::ExprKind::Call { callee: thir::Callee::Test(_), .. }
@@ -126,6 +128,8 @@ pub(crate) fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
     }
     let analysis = &prepared.analysis;
     let mut declarations = declarations::Declarations::new(analysis)?;
+    declarations.declare_lambdas(&prepared.callables)?;
+    let calls = std::cell::RefCell::new(known_calls::CallSpans::new());
     // Check ordinary/default/cleanup bodies before constructor specializations.
     let mut bodies: Vec<_> = analysis.bodies.iter().collect();
     bodies.sort_by_key(|body| matches!(body.owner, thir::BodyOwner::Ctor { .. }));
@@ -174,11 +178,34 @@ pub(crate) fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
                 listed,
                 defers: &declarations.defers,
                 deferred: None,
+                key: callables::BodyKey { root: body.owner.clone(), path: vec![] },
+                lambdas: &declarations.lambdas, calls: &calls,
             };
             let lowered = body::BodyLowerer::lower(builder, body, root, &declarations.types, context)
                 .map_err(|error| error.in_function(&symbol))?;
             declarations.builder.define_function(function, lowered)?;
         }
+    }
+    for lambda in &declarations.lambdas {
+        let function = lambda.function;
+        let root = declarations.builder.declare_scope(ir::ScopeDecl {
+            function, parent: None, kind: ir::ScopeKind::Action, loc: None,
+        })?;
+        let symbol = declarations.builder.module().functions.get(function)?.symbol.clone();
+        let builder = declarations.builder.function_builder(function, root)?;
+        let context = body::BodyContext {
+            functions: &declarations.functions,
+            natives: &declarations.natives,
+            error_text: declarations.error_text,
+            builtin_adapters: &declarations.builtin_adapters,
+            objects: &declarations.objects,
+            constructors: &declarations.constructors,
+            given: vec![], listed: None, defers: &declarations.defers, deferred: None,
+            key: lambda.source.key.clone(), lambdas: &declarations.lambdas, calls: &calls,
+        };
+        let lowered = body::BodyLowerer::lower(builder, &lambda.source.body, root, &declarations.types, context)
+            .map_err(|error| error.in_function(&symbol))?;
+        declarations.builder.define_function(function, lowered)?;
     }
     for deferred in &declarations.defers {
         let function = deferred.function;
@@ -196,6 +223,7 @@ pub(crate) fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
             constructors: &declarations.constructors,
             given: vec![], listed: None, defers: &declarations.defers,
             deferred: Some(deferred.receiver),
+            key: deferred.key.clone(), lambdas: &declarations.lambdas, calls: &calls,
         };
         let lowered = body::BodyLowerer::lower(builder, &deferred.source, root, &declarations.types, context)
             .map_err(|error| error.in_function(&symbol))?;
@@ -203,6 +231,7 @@ pub(crate) fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
     }
     let mut module = declarations.builder.finish()?;
     structure::finish(&mut module)?;
+    known_calls::check(&module, &calls.into_inner())?;
     structure::check(&module)?;
     once::check(&module)?;
     Ok(module)

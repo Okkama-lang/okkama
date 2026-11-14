@@ -193,3 +193,11 @@ role-bound borrow/take; cap result-view; opaque borrow после inner close; e
 See [c2a.md](c2a.md) for concrete action types, the lexical body worklist, snapshot layouts,
 test-mode preservation and the producer-only open-call inventory. The C2-owned manifest rows
 remain `planned`. No callable IR operations, summaries, descriptors or verifier rules are added.
+
+## C3a anonymous High evidence (#641)
+
+See [c3a.md](c3a.md) for 20 verified source High goldens, snapshot/known-call forms,
+actual commit-4 op/ABI/retention comparisons and remaining gates. C3-owned TSV rows
+remain `planned`. The broader C1 mapping above still describes full C2–C9 targets;
+in particular the actual C3a join uses two lambdas, and bound-method joins await C4.
+Open invocation remains explicit Unsupported until the independently audited O1 step.

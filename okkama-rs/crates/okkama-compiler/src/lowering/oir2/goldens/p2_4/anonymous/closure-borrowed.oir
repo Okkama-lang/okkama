@@ -1,0 +1,123 @@
+oir 2 high
+module app
+requires core
+entry @main
+
+object app.R {
+    destroy @app.R.destroy
+}
+scope S0 action in @app.R.read#0
+scope S1 action in @app.R.destroy
+scope S2 action in @main
+scope S3 branch in @main parent S2
+scope S4 branch in @main parent S2
+scope S5 action in @app.R.new#0
+scope S6 action in @main.lambda#0
+scope S7 action in @main.lambda#1
+
+func @app.R.new#0() -> app.R [ctor app.R] {
+    boundary B0 lexical in S5
+    ^b0 in S5 unwind ^b1:
+    %0: app.R = obj.new app.R { }
+    want %0
+    [i2] exit.prepare return %0 at B0
+    result.exit edge normal(0), value %0, demand want, prepare #2
+    ret %0
+    ^b1(%1: failure) in S5:
+    raise %1
+}
+
+func @app.R.read#0(%0: app.R) -> int [method app.R] {
+    boundary B0 lexical in S0
+    ^b0 in S0 unwind ^b1:
+    %1: int = const 7
+    want %1
+    [i2] exit.prepare return %1 at B0
+    result.exit edge normal(0), value %1, demand want, prepare #2
+    ret %1
+    ^b1(%2: failure) in S0:
+    raise %2
+}
+
+func @app.R.destroy(%0: app.R) -> void [destroy app.R] {
+    boundary B0 lexical in S1
+    selection s0: selection = union([])
+    ^b0 in S1 unwind ^b1:
+    exit.prepare return select s0 at B0
+    ret
+    ^b1(%1: failure) in S1:
+    raise %1
+}
+
+func @main() -> int [entry] {
+    binding b0 "r": app.R in S2
+    binding b1 "f": fn() -> int in S2
+    boundary B0 lexical in S2
+    boundary B1 lexical in S3
+    boundary B2 lexical in S4
+    ^b0 in S2 unwind ^b1:
+    [i0] %0: app.R = call @app.R.new#0()
+    bind %0, binding b0
+    %1: bool = const true
+    high.effects at #0 failures [thrown, program, panic, native, cancelled], suspends true
+    cond %1, ^b3(%0), ^b4(%0)
+    ^b1(%2: failure) in S2:
+    raise %2
+    ^b2(%3: fn() -> int, %4: app.R) in S2 unwind ^b1:
+    bind %3, binding b1
+    [i4] %5: int = fn.call %3()
+    discard %5
+    [i6] %6: int = call @app.R.read#0(%4)
+    want %6
+    [i8] exit.prepare return %6 at B0
+    result.exit edge normal(0), value %5, demand discard, prepare none
+    result.exit edge normal(0), value %6, demand want, prepare #8
+    high.effects at #4 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #6 failures [thrown, program, panic, native, cancelled], suspends true
+    ret %6
+    ^b3(%7: app.R) in S3 unwind ^b1:
+    %8: fn() -> int = fn.closure @main.lambda#0, [%7], ty fn() -> int
+    want %8
+    [i11] exit.prepare fallthrough %8 at B1
+    want %7
+    [i13] exit.prepare fallthrough %7 at B1
+    result.exit edge normal(0), value %8, demand want, prepare #11
+    result.exit edge normal(0), value %7, demand want, prepare #13
+    br ^b2(%8, %7)
+    ^b4(%9: app.R) in S4 unwind ^b1:
+    %10: fn() -> int = fn.closure @main.lambda#1, ty fn() -> int
+    want %10
+    [i16] exit.prepare fallthrough %10 at B2
+    want %9
+    [i18] exit.prepare fallthrough %9 at B2
+    result.exit edge normal(0), value %10, demand want, prepare #16
+    result.exit edge normal(0), value %9, demand want, prepare #18
+    br ^b2(%10, %9)
+}
+
+func @main.lambda#0(%0: app.R) -> int [lambda captures 1] {
+    binding b0 "r": app.R in S6
+    boundary B0 lexical in S6
+    ^b0 in S6 unwind ^b1:
+    bind %0, binding b0
+    [i1] %1: int = call @app.R.read#0(%0)
+    want %1
+    [i3] exit.prepare return %1 at B0
+    result.exit edge normal(0), value %1, demand want, prepare #3
+    high.effects at #1 failures [thrown, program, panic, native, cancelled], suspends true
+    ret %1
+    ^b1(%2: failure) in S6:
+    raise %2
+}
+
+func @main.lambda#1() -> int [lambda] {
+    boundary B0 lexical in S7
+    ^b0 in S7 unwind ^b1:
+    %0: int = const 0
+    want %0
+    [i2] exit.prepare return %0 at B0
+    result.exit edge normal(0), value %0, demand want, prepare #2
+    ret %0
+    ^b1(%1: failure) in S7:
+    raise %1
+}

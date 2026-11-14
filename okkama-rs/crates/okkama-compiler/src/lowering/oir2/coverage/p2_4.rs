@@ -107,7 +107,7 @@ fn oir2_p2_4_manifest_schema_paths_and_case_contracts() {
         assert!(!row_dependencies.contains("none") || row_dependencies.len() == 1);
         assert_eq!(row_dependencies.contains("#565-c5"), row_dependencies.contains("#570"), "{id}");
         assert_eq!(row_dependencies.contains("#593"), row_dependencies.contains("backend"), "{id}");
-        assert_eq!(row[5], "planned", "C1/C2a has no complete source acceptance: {id}");
+        assert_eq!(row[5], "planned", "C1/C2a/C3a has no complete source acceptance: {id}");
         assert!(["parse", "check", "run", "test"].contains(&row[6]));
         assert!(["success", "error", "failure", "reject"].contains(&row[7]));
         assert!(row[8] == "-" || row[8].parse::<u8>().is_ok());

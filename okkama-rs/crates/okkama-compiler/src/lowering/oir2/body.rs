@@ -21,6 +21,9 @@ pub(super) struct BodyContext<'t> {
     pub defers: &'t [super::defer::Deferred],
     // Some(receiver snapshot present) denotes a lazy helper rather than its source action.
     pub deferred: Option<bool>,
+    pub key: super::callables::BodyKey,
+    pub calls: &'t std::cell::RefCell<super::known_calls::CallSpans>,
+    pub lambdas: &'t [super::anonymous::Lambda],
 }
 
 pub(super) struct BodyLowerer<'a, 't> {
@@ -105,7 +108,10 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             failure_frames: vec![], caught: vec![], rethrows: HashMap::new(), rethrow_inputs: HashMap::new(),
             receiver: None, early_self: None, field_base, field_end: count,
         };
-        let receiver = usize::from(this.context.deferred.unwrap_or(matches!(source.owner,
+        let lambda = this.context.lambdas.iter().find(|lambda| lambda.source.key == this.context.key);
+        let layout = lambda.map(|lambda| lambda.source.captures.clone()).unwrap_or_default();
+        let captured_receiver = layout.iter().any(|capture| capture.source == super::callables::Snapshot::Receiver);
+        let receiver = usize::from(this.context.deferred.unwrap_or(captured_receiver || matches!(source.owner,
             thir::BodyOwner::Method { .. } | thir::BodyOwner::Destroy { .. })));
         if receiver == 1 {
             this.receiver = params.first().copied();
@@ -116,7 +122,15 @@ impl<'a, 't> BodyLowerer<'a, 't> {
         if this.is_constructor() {
             this.initialize_constructor(&params)?;
         } else {
-            for (local, value) in source.params.iter().zip(params.into_iter().skip(receiver)) {
+            let offset = if this.context.deferred.is_none() { layout.len().max(receiver) } else { receiver };
+            if this.context.deferred.is_none() {
+                for (capture, &value) in layout.iter().zip(&params) {
+                    if let Some(local) = capture.target {
+                        this.bind(local, value)?;
+                    }
+                }
+            }
+            for (local, value) in source.params.iter().zip(params.into_iter().skip(offset)) {
                 this.bind(*local, value)?;
             }
         }
@@ -509,6 +523,8 @@ impl<'a, 't> BodyLowerer<'a, 't> {
         use thir::ExprKind as E;
         let result_ty = expr.ty.as_ref().filter(|ty| **ty != Ty::Never);
         match &expr.kind {
+            E::Closure { .. } => self.anonymous(expr),
+            E::CallValue { .. } => self.invoke_anonymous(expr),
             E::Array(_) | E::Map(_) | E::Index { .. } | E::ArrayCast { .. }
             | E::Coerce { coercion: thir::Coercion::Retag, .. } => self.collection_expr(expr),
             E::Binary { op: thir::BinaryOp::ArrayConcat | thir::BinaryOp::ArrayDifference

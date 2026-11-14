@@ -1,0 +1,22 @@
+module app;
+object R {
+    R();
+    read() is int {
+        7;
+    }
+    destroy {
+    }
+}
+object Make {
+    Make();
+    make() is () is int {
+        let r = R();
+        () is int {
+            r.read();
+        };
+    }
+}
+main() is int {
+    let f = Make().make();
+    f();
+}

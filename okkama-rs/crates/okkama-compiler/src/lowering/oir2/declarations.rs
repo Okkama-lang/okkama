@@ -16,6 +16,7 @@ pub(super) struct Declarations {
     pub objects: HashMap<ty::ObjectId, ir::DeclId>,
     pub constructors: HashMap<(ty::ObjectId, usize, Vec<usize>), ir::FuncId>,
     pub defers: Vec<super::defer::Deferred>,
+    pub lambdas: Vec<super::anonymous::Lambda>,
     pub builtin_adapters: HashMap<(ir::TypeId, ir::TypeId), ir::FuncId>,
     pub ctor_fields: HashMap<ir::FuncId, Vec<usize>>,
 }
@@ -40,6 +41,7 @@ impl Declarations {
             ctor_fields: HashMap::new(),
             builtin_adapters: HashMap::new(),
             defers: vec![],
+            lambdas: vec![],
         };
         for (ty, lowered) in [
             (ty::Ty::Int, ir::Type::Int),
@@ -241,9 +243,13 @@ impl Declarations {
                 methods, builtin: false,
             };
         }
+        let mut all_bodies = vec![];
+        for root in &analysis.bodies {
+            super::walk::bodies(root, &mut |body| all_bodies.push(body.clone()));
+        }
         let error = ty::Ty::role(reg.system.error);
-        let mut uses_error = analysis.bodies.iter().any(|body| body.locals.iter().any(|local| local.ty == error));
-        for body in &analysis.bodies {
+        let mut uses_error = all_bodies.iter().any(|body| body.locals.iter().any(|local| local.ty == error));
+        for body in &all_bodies {
             super::walk::block(&body.block, &mut |expr| uses_error |= expr.ty.as_ref() == Some(&error));
         }
         if uses_error {
@@ -263,7 +269,7 @@ impl Declarations {
             let lowered = this.builder.intern_type(ir::Type::Role { decl: declaration, args: vec![] })?;
             this.types.insert(error, lowered);
             let mut calls_text = false;
-            for body in &analysis.bodies {
+            for body in &all_bodies {
                 super::walk::block(&body.block, &mut |expr| {
                     calls_text |= matches!(expr.kind, thir::ExprKind::Call {
                         callee: thir::Callee::Role { role, slot: 0, .. }, ..
@@ -276,7 +282,7 @@ impl Declarations {
             }
         }
         let mut requested_ctors = HashMap::new();
-        for body in &analysis.bodies {
+        for body in &all_bodies {
             super::walk::block(&body.block, &mut |expr| {
                 if let thir::ExprKind::Call {
                     callee: thir::Callee::Ctor { object, ctor, given, .. }, ..
@@ -464,7 +470,7 @@ impl Declarations {
         // Shorthand omissions change the language signature, so each supplied-field
         // set gets a finite direct-call specialization. Defaults still run in it.
         let mut calls = Vec::new();
-        for body in &analysis.bodies {
+        for body in &all_bodies {
             super::walk::block(&body.block, &mut |expr| {
                 if let thir::ExprKind::Call {
                     callee: thir::Callee::Ctor { object, ctor, given, .. }, ..
@@ -502,13 +508,16 @@ impl Declarations {
             this.ctor_fields.insert(id, given);
         }
         let mut native_calls = vec![];
-        for body in &analysis.bodies {
+        for body in &all_bodies {
             super::walk::block(&body.block, &mut |expr| {
                 if let thir::ExprKind::Call { callee: thir::Callee::Native(index), .. } = expr.kind {
                     native_calls.push(index);
                 }
             });
-            this.declare_defers(body)?;
+        }
+        for body in &analysis.bodies {
+            let key = super::callables::BodyKey { root: body.owner.clone(), path: vec![] };
+            this.declare_defers(body, this.functions[&body.owner], &key)?;
         }
         native_calls.sort();
         native_calls.dedup();

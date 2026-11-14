@@ -1,0 +1,34 @@
+oir 2 high
+module app
+requires core
+entry @main
+scope S0 action in @main
+scope S1 action in @main.lambda#0
+
+func @main() -> int [entry] {
+    binding b0 "f": fn() -> int in S0
+    boundary B0 lexical in S0
+    ^b0 in S0 unwind ^b1:
+    %0: fn() -> int = fn.closure @main.lambda#0, ty fn() -> int
+    bind %0, binding b0
+    [i2] %1: int = fn.call %0()
+    want %1
+    [i4] exit.prepare return %1 at B0
+    result.exit edge normal(0), value %1, demand want, prepare #4
+    high.effects at #2 failures [thrown, program, panic, native, cancelled], suspends true
+    ret %1
+    ^b1(%2: failure) in S0:
+    raise %2
+}
+
+func @main.lambda#0() -> int [lambda] {
+    boundary B0 lexical in S1
+    ^b0 in S1 unwind ^b1:
+    %0: int = const 7
+    want %0
+    [i2] exit.prepare return %0 at B0
+    result.exit edge normal(0), value %0, demand want, prepare #2
+    ret %0
+    ^b1(%1: failure) in S1:
+    raise %1
+}

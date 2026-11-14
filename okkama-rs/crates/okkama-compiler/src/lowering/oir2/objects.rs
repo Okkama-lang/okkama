@@ -21,7 +21,7 @@ impl BodyLowerer<'_, '_> {
     }
 
     fn declaration(&self) -> Result<ir::DeclId> {
-        let object = match self.source.owner {
+        let object = match self.context.key.root {
             thir::BodyOwner::Ctor { object, .. } | thir::BodyOwner::Method { object, .. }
             | thir::BodyOwner::Destroy { object } => object,
             _ => return Err(LowerError::invalid(self.source.span, "object operation without an owner")),

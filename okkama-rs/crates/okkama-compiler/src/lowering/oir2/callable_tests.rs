@@ -18,8 +18,8 @@ fn with_prepared(text: &str, test_mode: bool, test: impl FnOnce(callables::Prepa
     let first = specialize::prepare(&analysis).unwrap();
     let second = specialize::prepare(&analysis).unwrap();
     assert_eq!(format!("{:?}", first.callables), format!("{:?}", second.callables));
-    if first.callables.bodies.iter().any(|entry| !entry.key.path.is_empty()
-        || matches!(entry.body.owner, thir::BodyOwner::Test(_) | thir::BodyOwner::CapField { .. })) {
+    if first.callables.bodies.iter().any(|entry| matches!(entry.body.owner,
+        thir::BodyOwner::Test(_) | thir::BodyOwner::CapField { .. })) {
         let error = super::lower_to_oir2(&analysis).unwrap_err();
         assert!(matches!(error, super::LowerError::Unsupported { span, .. } if !span.is_empty()));
     }

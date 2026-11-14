@@ -1,0 +1,12 @@
+module app;
+enum Stop is Error = (now);
+main() is int {
+    let fail = () is int {
+        throw Stop.now;
+    };
+    try {
+        fail();
+    } catch e is Stop {
+        7;
+    }
+}

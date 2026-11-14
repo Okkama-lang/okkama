@@ -1,3 +1,6 @@
+#[path = "anonymous_tests.rs"]
+mod anonymous_tests;
+
 use super::{LowerError, lower_to_oir2};
 use crate::analysis::{self, thir};
 use crate::oir2 as ir;
@@ -1243,7 +1246,6 @@ fn oir2_std_rejects_other_intrinsics_resources_and_async() {
         "let a = Atomic(1); a.compare_and_replace(1, 2); 0;",
         "let a = Atomic(R()); 0;",
         "let a = Cell(R()); 0;",
-        "let action = () is int { 1; }; 0;",
     ] {
         let source = format!("module app; import \"async/atomic\" take Atomic; import \"cell\" take Cell; \
             object R {{ R(); destroy {{ }} }} main() is int {{ {body} }}");
