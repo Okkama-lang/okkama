@@ -57,7 +57,7 @@ one at a time.
   memory today and a database tomorrow are two implementations of one
   contract (Section 26.5).
 - **`MemoryStore`** keeps every note in one `Shelf` value inside an `Atomic`.
-  Section 25.5 explains why it is built that way.
+  Section 25.6 explains why it is built that way.
 - **`NotesApi`** is the controller. Each endpoint reads what it needs from
   the request, asks the store, and returns a reply.
 - **`NotesService.routes()`** is the route table: one place that says which
@@ -122,7 +122,37 @@ boundary in HTTP form.
 500 without a body. The client learns that the request failed and nothing
 about why, which is both the safe answer and the honest one.
 
-## 25.5 State shared between requests
+## 25.5 Code around endpoints
+
+Some concerns belong to every request rather than to one endpoint: an access
+log, authentication, a maintenance switch, headers that every reply carries.
+`web/routing` puts them in the table with `Around`, at the level they apply
+to: the whole table, a `Scope`, or a `Resource`. An around is any object that
+does `Surrounding`: it receives the request and the rest of the chain as
+`inner`, and may call it, work with its reply, or answer by itself.
+
+The standard library brings `AccessLog`, `BearerAuth` and `Cors`. The example
+below makes reading public and changing guarded, and adds its own around:
+
+{{example:25-guarded-tests}}
+
+- `Around(BearerAuth(token: …))` sits on the inner `Scope("/notes", …)` that
+  holds only `POST` and `DELETE`, so the `GET` routes beside it are untouched.
+  A request without `Authorization: Bearer s3cret` gets 401 with
+  `WWW-Authenticate: Bearer`; the token is compared in constant time.
+- `Maintenance` is the application's own around. While its switch is on it
+  answers 503 itself and never calls `inner`, so no endpoint runs. The switch
+  is an `Atomic<bool>`: an operator can flip it from another task, and every
+  request sees one consistent value.
+- Arounds run outer before inner, in the order they are written, so
+  maintenance is decided before authentication, and authentication before
+  the endpoint.
+
+An around is where cross-cutting code goes, and only there. An endpoint that
+checks a token itself, or writes its own log line, is the "same `defer` around
+every use" smell of Section 26.6 in HTTP form.
+
+## 25.6 State shared between requests
 
 Requests are served concurrently, so the store is shared by every task that
 serves a request. Okkama does not let objects change in place, and a `Cell`
@@ -145,7 +175,7 @@ writing to a file in order. A store that already lives elsewhere, a
 database, needs neither: it is a role whose implementation sends queries, and
 the database is the owner.
 
-## 25.6 Testing without a network
+## 25.7 Testing without a network
 
 `web/testing` gives `WebTestClient`, which calls a route table the way a real
 HTTP client calls a server, without a socket. A request goes through the
@@ -163,7 +193,7 @@ routes, their arounds and exception scopes, and comes back as the same
 - Nothing here listens on a port, so the tests run in parallel with others,
   in the book's sandbox, and in CI without a network.
 
-## 25.7 Running it
+## 25.8 Running it
 
 The program that serves the API for real is short:
 
@@ -188,7 +218,7 @@ the address and other settings come in the same layers as a tool's
 and passed down. HTTPS takes a TLS identity, `listen(address:, port:, tls:)`,
 and then offers HTTP/2 and HTTP/1.1 to clients.
 
-## 25.8 What the design costs
+## 25.9 What the design costs
 
 The service is longer than a script that would answer the same four requests
 with a mutable dictionary and a handler per URL. What the extra length buys:
@@ -208,3 +238,4 @@ thousand notes it is invisible; for millions, the store belongs in a
 database behind the same role, and the copy disappears. The `async`
 endpoints cost a little per request compared to synchronous ones; Chapter 20
 explains what that buys, and Chapter 23 what it costs.
+

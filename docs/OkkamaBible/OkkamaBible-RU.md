@@ -281,10 +281,11 @@
   - [25.2 Сервис](#252-сервис)
   - [25.3 Endpoints](#253-endpoints)
   - [25.4 Отказы становятся статусами](#254-отказы-становятся-статусами)
-  - [25.5 Состояние, общее для запросов](#255-состояние-общее-для-запросов)
-  - [25.6 Тесты без сети](#256-тесты-без-сети)
-  - [25.7 Запуск](#257-запуск)
-  - [25.8 Во что обходится такой дизайн](#258-во-что-обходится-такой-дизайн)
+  - [25.5 Код вокруг endpoints](#255-код-вокруг-endpoints)
+  - [25.6 Состояние, общее для запросов](#256-состояние-общее-для-запросов)
+  - [25.7 Тесты без сети](#257-тесты-без-сети)
+  - [25.8 Запуск](#258-запуск)
+  - [25.9 Во что обходится такой дизайн](#259-во-что-обходится-такой-дизайн)
 - [Глава 26. Паттерны и антипаттерны](#глава-26-паттерны-и-антипаттерны)
   - [26.1 Что такое паттерн и что с ним делает язык](#261-что-такое-паттерн-и-что-с-ним-делает-язык)
   - [26.2 Поведение через композицию, а не через флаги](#262-поведение-через-композицию-а-не-через-флаги)
@@ -15090,7 +15091,7 @@ object NotesService {
   сегодня и база данных завтра — две реализации одного контракта
   (раздел 26.5).
 - **`MemoryStore`** хранит все заметки в одном значении `Shelf` внутри
-  `Atomic`. Почему именно так, объясняет раздел 25.5.
+  `Atomic`. Почему именно так, объясняет раздел 25.6.
 - **`NotesApi`** — контроллер. Каждый endpoint читает из запроса то, что ему
   нужно, спрашивает хранилище и возвращает ответ.
 - **`NotesService.routes()`** — таблица маршрутов: одно место, где сказано,
@@ -15153,7 +15154,152 @@ Content-Type: application/problem+json
 который отвечает 500 без тела. Клиент узнаёт, что запрос не удался, и ничего
 о причине — это и безопасный ответ, и честный.
 
-## 25.5 Состояние, общее для запросов
+## 25.5 Код вокруг endpoints
+
+Некоторые заботы принадлежат каждому запросу, а не одному endpoint: лог
+доступа, аутентификация, режим обслуживания, заголовки, которые несёт каждый
+ответ. `web/routing` кладёт их в таблицу через `Around`, на том уровне, к
+которому они относятся: вся таблица, `Scope` или `Resource`. Обёртка — любой
+объект, исполняющий `Surrounding`: она получает запрос и остаток цепочки как
+`inner` и может вызвать его, поработать с его ответом или ответить сама.
+
+Стандартная библиотека приносит `AccessLog`, `BearerAuth` и `Cors`. Пример
+ниже делает чтение публичным, изменение — защищённым и добавляет собственную
+обёртку:
+
+```okkama
+module bible/notes_guarded v1.0.0;
+
+import "async/atomic" take Atomic;
+import "json" take Json, JsonField;
+import "http/body" take JsonBody;
+import "http/header" take Headers, Header;
+import "http/message" take Responding;
+import "http/status" take Status;
+import "web/request" take WebRequest;
+import "web/exception" take ProblemReply;
+import "web/routing" take WebRoutes, Scope, Resource, Get, Post, Delete, Around, Surrounding;
+import "web/around" take BearerAuth;
+import "web/testing" take WebTestClient;
+import "notes/api" take NotesApi, MemoryStore;
+
+// An around that may answer by itself: while the switch is on, every request
+// gets 503 and no endpoint runs.
+object Maintenance does Surrounding {
+    has on is Atomic<bool>;
+
+    Maintenance(:on);
+
+    async around(request is WebRequest, inner is async (WebRequest) is Responding) is Responding {
+        if on.value() {
+            ProblemReply(status: Status.service_unavailable, detail: "down for maintenance");
+        } else {
+            await inner(request);
+        }
+    }
+}
+
+// Reading is public; changing needs the token.
+object Guarded {
+    has api is NotesApi;
+    has switch is Atomic<bool>;
+
+    Guarded(:api, :switch);
+
+    routes() is WebRoutes {
+        WebRoutes(
+            Around(Maintenance(on: switch)),
+            Scope("/api",
+                Resource("/notes", Get(api.list)),
+                Resource("/notes/:id", Get(api.show)),
+                Scope("/notes", Around(BearerAuth(token: "s3cret")),
+                    Post(path: "", endpoint: api.add),
+                    Delete(path: "/:id", endpoint: api.remove),
+                ),
+            ),
+        );
+    }
+}
+
+object Setup {
+    has switch is Atomic<bool>;
+
+    Setup() {
+        switch = Atomic(false);
+    }
+
+    client() is WebTestClient {
+        WebTestClient(Guarded(api: NotesApi(store: MemoryStore()), switch: switch).routes());
+    }
+
+    switch() is Atomic<bool> { switch; }
+}
+
+object Token {
+    Token();
+
+    headers() is Headers {
+        Headers(Header(name: "Authorization", value: "Bearer s3cret"));
+    }
+}
+
+async test "reading needs no token" {
+    test.is((await Setup().client().get("/api/notes"))::Head::code, 200);
+}
+
+async test "changing without the token is a 401" {
+    let reply = await Setup().client().post("/api/notes", JsonBody(Json(JsonField("title", "x"))));
+    test.is(reply::Head::code, 401);
+}
+
+async test "changing with the token works" {
+    let body = JsonBody(Json(JsonField("title", "tea")));
+    let reply = await Setup().client().post(target: "/api/notes", body: body, headers: Token().headers());
+    test.is(reply::Head::code, 201);
+}
+
+async test "maintenance answers before any endpoint" {
+    let setup = Setup();
+    let client = setup.client();
+    setup.switch().replace(true);
+    test.is((await client.get("/api/notes"))::Head::code, 503);
+    setup.switch().replace(false);
+    test.is((await client.get("/api/notes"))::Head::code, 200);
+}
+```
+
+Вывод:
+
+```text
+=== RUN   reading needs no token
+--- PASS: reading needs no token
+=== RUN   changing without the token is a 401
+--- PASS: changing without the token is a 401
+=== RUN   changing with the token works
+--- PASS: changing with the token works
+=== RUN   maintenance answers before any endpoint
+--- PASS: maintenance answers before any endpoint
+PASS
+```
+
+- `Around(BearerAuth(token: …))` стоит на внутреннем `Scope("/notes", …)`, где
+  лежат только `POST` и `DELETE`, так что маршруты `GET` рядом не затронуты.
+  Запрос без `Authorization: Bearer s3cret` получает 401 с
+  `WWW-Authenticate: Bearer`; токен сравнивается за постоянное время.
+- `Maintenance` — собственная обёртка приложения. Пока переключатель
+  включён, она сама отвечает 503 и никогда не вызывает `inner`, так что ни
+  один endpoint не выполняется. Переключатель — `Atomic<bool>`: оператор
+  может переключить его из другой задачи, и каждый запрос видит одно
+  согласованное значение.
+- Обёртки выполняются от внешней к внутренней, в порядке записи, так что
+  обслуживание решается раньше аутентификации, а аутентификация — раньше
+  endpoint.
+
+Обёртка — место для сквозного кода, и только она. Endpoint, который сам
+проверяет токен или сам пишет строку лога, — это запах «один и тот же `defer`
+вокруг каждого использования» из раздела 26.6 в форме HTTP.
+
+## 25.6 Состояние, общее для запросов
 
 Запросы обслуживаются конкурентно, так что хранилище общее для всех задач,
 обслуживающих запросы. Okkama не даёт объектам меняться на месте, а `Cell` не
@@ -15176,7 +15322,7 @@ Content-Type: application/problem+json
 живёт в другом месте, — базе данных — не нужна ни та, ни другая: это роль,
 реализация которой отправляет запросы, а владелец — сама база.
 
-## 25.6 Тесты без сети
+## 25.7 Тесты без сети
 
 `web/testing` даёт `WebTestClient`, который вызывает таблицу маршрутов так
 же, как настоящий HTTP-клиент вызывает сервер, но без сокета. Запрос
@@ -15259,7 +15405,7 @@ PASS
 - Здесь ничто не слушает порт, так что тесты идут параллельно с другими, в
   песочнице книги и в CI без сети.
 
-## 25.7 Запуск
+## 25.8 Запуск
 
 Программа, которая обслуживает API по-настоящему, коротка:
 
@@ -15284,7 +15430,7 @@ async main() is int {
 вниз. HTTPS принимает TLS-идентичность, `listen(address:, port:, tls:)`, и
 тогда предлагает клиентам HTTP/2 и HTTP/1.1.
 
-## 25.8 Во что обходится такой дизайн
+## 25.9 Во что обходится такой дизайн
 
 Сервис длиннее скрипта, который отвечал бы на те же четыре запроса
 изменяемым словарём и обработчиком на каждый URL. Что покупает лишняя длина:

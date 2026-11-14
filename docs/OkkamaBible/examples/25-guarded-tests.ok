@@ -1,0 +1,98 @@
+module bible/notes_guarded v1.0.0;
+
+import "async/atomic" take Atomic;
+import "json" take Json, JsonField;
+import "http/body" take JsonBody;
+import "http/header" take Headers, Header;
+import "http/message" take Responding;
+import "http/status" take Status;
+import "web/request" take WebRequest;
+import "web/exception" take ProblemReply;
+import "web/routing" take WebRoutes, Scope, Resource, Get, Post, Delete, Around, Surrounding;
+import "web/around" take BearerAuth;
+import "web/testing" take WebTestClient;
+import "notes/api" take NotesApi, MemoryStore;
+
+// An around that may answer by itself: while the switch is on, every request
+// gets 503 and no endpoint runs.
+object Maintenance does Surrounding {
+    has on is Atomic<bool>;
+
+    Maintenance(:on);
+
+    async around(request is WebRequest, inner is async (WebRequest) is Responding) is Responding {
+        if on.value() {
+            ProblemReply(status: Status.service_unavailable, detail: "down for maintenance");
+        } else {
+            await inner(request);
+        }
+    }
+}
+
+// Reading is public; changing needs the token.
+object Guarded {
+    has api is NotesApi;
+    has switch is Atomic<bool>;
+
+    Guarded(:api, :switch);
+
+    routes() is WebRoutes {
+        WebRoutes(
+            Around(Maintenance(on: switch)),
+            Scope("/api",
+                Resource("/notes", Get(api.list)),
+                Resource("/notes/:id", Get(api.show)),
+                Scope("/notes", Around(BearerAuth(token: "s3cret")),
+                    Post(path: "", endpoint: api.add),
+                    Delete(path: "/:id", endpoint: api.remove),
+                ),
+            ),
+        );
+    }
+}
+
+object Setup {
+    has switch is Atomic<bool>;
+
+    Setup() {
+        switch = Atomic(false);
+    }
+
+    client() is WebTestClient {
+        WebTestClient(Guarded(api: NotesApi(store: MemoryStore()), switch: switch).routes());
+    }
+
+    switch() is Atomic<bool> { switch; }
+}
+
+object Token {
+    Token();
+
+    headers() is Headers {
+        Headers(Header(name: "Authorization", value: "Bearer s3cret"));
+    }
+}
+
+async test "reading needs no token" {
+    test.is((await Setup().client().get("/api/notes"))::Head::code, 200);
+}
+
+async test "changing without the token is a 401" {
+    let reply = await Setup().client().post("/api/notes", JsonBody(Json(JsonField("title", "x"))));
+    test.is(reply::Head::code, 401);
+}
+
+async test "changing with the token works" {
+    let body = JsonBody(Json(JsonField("title", "tea")));
+    let reply = await Setup().client().post(target: "/api/notes", body: body, headers: Token().headers());
+    test.is(reply::Head::code, 201);
+}
+
+async test "maintenance answers before any endpoint" {
+    let setup = Setup();
+    let client = setup.client();
+    setup.switch().replace(true);
+    test.is((await client.get("/api/notes"))::Head::code, 503);
+    setup.switch().replace(false);
+    test.is((await client.get("/api/notes"))::Head::code, 200);
+}

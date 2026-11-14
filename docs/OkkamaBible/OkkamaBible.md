@@ -281,10 +281,11 @@
   - [25.2 The service](#252-the-service)
   - [25.3 Endpoints](#253-endpoints)
   - [25.4 Failures become statuses](#254-failures-become-statuses)
-  - [25.5 State shared between requests](#255-state-shared-between-requests)
-  - [25.6 Testing without a network](#256-testing-without-a-network)
-  - [25.7 Running it](#257-running-it)
-  - [25.8 What the design costs](#258-what-the-design-costs)
+  - [25.5 Code around endpoints](#255-code-around-endpoints)
+  - [25.6 State shared between requests](#256-state-shared-between-requests)
+  - [25.7 Testing without a network](#257-testing-without-a-network)
+  - [25.8 Running it](#258-running-it)
+  - [25.9 What the design costs](#259-what-the-design-costs)
 - [Chapter 26. Patterns and anti-patterns](#chapter-26-patterns-and-anti-patterns)
   - [26.1 What a pattern is, and what a language does to it](#261-what-a-pattern-is-and-what-a-language-does-to-it)
   - [26.2 Behaviour by composition, not by flags](#262-behaviour-by-composition-not-by-flags)
@@ -14920,7 +14921,7 @@ object NotesService {
   memory today and a database tomorrow are two implementations of one
   contract (Section 26.5).
 - **`MemoryStore`** keeps every note in one `Shelf` value inside an `Atomic`.
-  Section 25.5 explains why it is built that way.
+  Section 25.6 explains why it is built that way.
 - **`NotesApi`** is the controller. Each endpoint reads what it needs from
   the request, asks the store, and returns a reply.
 - **`NotesService.routes()`** is the route table: one place that says which
@@ -14985,7 +14986,150 @@ boundary in HTTP form.
 500 without a body. The client learns that the request failed and nothing
 about why, which is both the safe answer and the honest one.
 
-## 25.5 State shared between requests
+## 25.5 Code around endpoints
+
+Some concerns belong to every request rather than to one endpoint: an access
+log, authentication, a maintenance switch, headers that every reply carries.
+`web/routing` puts them in the table with `Around`, at the level they apply
+to: the whole table, a `Scope`, or a `Resource`. An around is any object that
+does `Surrounding`: it receives the request and the rest of the chain as
+`inner`, and may call it, work with its reply, or answer by itself.
+
+The standard library brings `AccessLog`, `BearerAuth` and `Cors`. The example
+below makes reading public and changing guarded, and adds its own around:
+
+```okkama
+module bible/notes_guarded v1.0.0;
+
+import "async/atomic" take Atomic;
+import "json" take Json, JsonField;
+import "http/body" take JsonBody;
+import "http/header" take Headers, Header;
+import "http/message" take Responding;
+import "http/status" take Status;
+import "web/request" take WebRequest;
+import "web/exception" take ProblemReply;
+import "web/routing" take WebRoutes, Scope, Resource, Get, Post, Delete, Around, Surrounding;
+import "web/around" take BearerAuth;
+import "web/testing" take WebTestClient;
+import "notes/api" take NotesApi, MemoryStore;
+
+// An around that may answer by itself: while the switch is on, every request
+// gets 503 and no endpoint runs.
+object Maintenance does Surrounding {
+    has on is Atomic<bool>;
+
+    Maintenance(:on);
+
+    async around(request is WebRequest, inner is async (WebRequest) is Responding) is Responding {
+        if on.value() {
+            ProblemReply(status: Status.service_unavailable, detail: "down for maintenance");
+        } else {
+            await inner(request);
+        }
+    }
+}
+
+// Reading is public; changing needs the token.
+object Guarded {
+    has api is NotesApi;
+    has switch is Atomic<bool>;
+
+    Guarded(:api, :switch);
+
+    routes() is WebRoutes {
+        WebRoutes(
+            Around(Maintenance(on: switch)),
+            Scope("/api",
+                Resource("/notes", Get(api.list)),
+                Resource("/notes/:id", Get(api.show)),
+                Scope("/notes", Around(BearerAuth(token: "s3cret")),
+                    Post(path: "", endpoint: api.add),
+                    Delete(path: "/:id", endpoint: api.remove),
+                ),
+            ),
+        );
+    }
+}
+
+object Setup {
+    has switch is Atomic<bool>;
+
+    Setup() {
+        switch = Atomic(false);
+    }
+
+    client() is WebTestClient {
+        WebTestClient(Guarded(api: NotesApi(store: MemoryStore()), switch: switch).routes());
+    }
+
+    switch() is Atomic<bool> { switch; }
+}
+
+object Token {
+    Token();
+
+    headers() is Headers {
+        Headers(Header(name: "Authorization", value: "Bearer s3cret"));
+    }
+}
+
+async test "reading needs no token" {
+    test.is((await Setup().client().get("/api/notes"))::Head::code, 200);
+}
+
+async test "changing without the token is a 401" {
+    let reply = await Setup().client().post("/api/notes", JsonBody(Json(JsonField("title", "x"))));
+    test.is(reply::Head::code, 401);
+}
+
+async test "changing with the token works" {
+    let body = JsonBody(Json(JsonField("title", "tea")));
+    let reply = await Setup().client().post(target: "/api/notes", body: body, headers: Token().headers());
+    test.is(reply::Head::code, 201);
+}
+
+async test "maintenance answers before any endpoint" {
+    let setup = Setup();
+    let client = setup.client();
+    setup.switch().replace(true);
+    test.is((await client.get("/api/notes"))::Head::code, 503);
+    setup.switch().replace(false);
+    test.is((await client.get("/api/notes"))::Head::code, 200);
+}
+```
+
+Output:
+
+```text
+=== RUN   reading needs no token
+--- PASS: reading needs no token
+=== RUN   changing without the token is a 401
+--- PASS: changing without the token is a 401
+=== RUN   changing with the token works
+--- PASS: changing with the token works
+=== RUN   maintenance answers before any endpoint
+--- PASS: maintenance answers before any endpoint
+PASS
+```
+
+- `Around(BearerAuth(token: …))` sits on the inner `Scope("/notes", …)` that
+  holds only `POST` and `DELETE`, so the `GET` routes beside it are untouched.
+  A request without `Authorization: Bearer s3cret` gets 401 with
+  `WWW-Authenticate: Bearer`; the token is compared in constant time.
+- `Maintenance` is the application's own around. While its switch is on it
+  answers 503 itself and never calls `inner`, so no endpoint runs. The switch
+  is an `Atomic<bool>`: an operator can flip it from another task, and every
+  request sees one consistent value.
+- Arounds run outer before inner, in the order they are written, so
+  maintenance is decided before authentication, and authentication before
+  the endpoint.
+
+An around is where cross-cutting code goes, and only there. An endpoint that
+checks a token itself, or writes its own log line, is the "same `defer` around
+every use" smell of Section 26.6 in HTTP form.
+
+## 25.6 State shared between requests
 
 Requests are served concurrently, so the store is shared by every task that
 serves a request. Okkama does not let objects change in place, and a `Cell`
@@ -15008,7 +15152,7 @@ writing to a file in order. A store that already lives elsewhere, a
 database, needs neither: it is a role whose implementation sends queries, and
 the database is the owner.
 
-## 25.6 Testing without a network
+## 25.7 Testing without a network
 
 `web/testing` gives `WebTestClient`, which calls a route table the way a real
 HTTP client calls a server, without a socket. A request goes through the
@@ -15091,7 +15235,7 @@ PASS
 - Nothing here listens on a port, so the tests run in parallel with others,
   in the book's sandbox, and in CI without a network.
 
-## 25.7 Running it
+## 25.8 Running it
 
 The program that serves the API for real is short:
 
@@ -15116,7 +15260,7 @@ the address and other settings come in the same layers as a tool's
 and passed down. HTTPS takes a TLS identity, `listen(address:, port:, tls:)`,
 and then offers HTTP/2 and HTTP/1.1 to clients.
 
-## 25.8 What the design costs
+## 25.9 What the design costs
 
 The service is longer than a script that would answer the same four requests
 with a mutable dictionary and a handler per URL. What the extra length buys:
