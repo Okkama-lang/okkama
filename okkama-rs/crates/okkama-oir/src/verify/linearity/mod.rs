@@ -18,6 +18,26 @@ use domain::*;
 use metadata::*;
 use std::collections::{BTreeSet, VecDeque};
 
+#[cfg(any(test, feature = "verifier-differential"))]
+#[derive(Default)]
+struct ScheduleWork {
+    visits: usize,
+    alternatives: usize,
+    comparisons: usize,
+}
+#[cfg(test)]
+thread_local! {
+    static LAST_SCHEDULE: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+#[cfg(any(test, feature = "verifier-differential"))]
+impl Drop for ScheduleWork {
+    fn drop(&mut self) {
+        super::differential::record_schedule(self.visits, self.alternatives, self.comparisons);
+        #[cfg(test)]
+        LAST_SCHEDULE.set((self.visits, self.alternatives));
+    }
+}
+
 struct Engine<'m, 's> {
     module: &'m Module,
     function: FuncId,
@@ -28,6 +48,7 @@ struct Engine<'m, 's> {
     reported: BTreeSet<(L, R)>,
     managed: &'s [bool],
     flow_memory: usize,
+    materialized_scopes: Option<BTreeSet<ScopeId>>,
     witnesses: std::rc::Rc<Vec<bool>>,
     diagnose: bool,
     collecting: bool,
@@ -116,7 +137,7 @@ pub(super) fn check<'m>(module: &'m Module, selected: Option<FuncId>, state: &mu
         let mut engine = Engine {
             module, function, declaration, body, state, emit: false,
             reported: BTreeSet::new(),
-            managed: &managed, flow_memory: 0,
+            managed: &managed, flow_memory: 0, materialized_scopes: None,
             witnesses: witnesses(module, body), diagnose: true, collecting: false,
             capture_returns: false, contract_invalid: false,
             defer_stack: vec![function], defer_outputs: vec![], defer_cache: Default::default(),
@@ -126,6 +147,39 @@ pub(super) fn check<'m>(module: &'m Module, selected: Option<FuncId>, state: &mu
 }
 
 impl Engine<'_, '_> {
+    fn has_closing_token(&self, flow: &Flow) -> bool {
+        flow.tokens.indexed().any(|(index, token)| {
+            flow.availability[index] == AVAILABLE && token.cleanup.is_some()
+        })
+    }
+    fn materialized_scope(&mut self, ancestor: ScopeId) -> Option<bool> {
+        if self.materialized_scopes.is_none() {
+            if !self.state.step(self.body.values.len()) || !self.state.array(self.body.values.len(), 64) {
+                return None;
+            }
+            self.materialized_scopes = Some(self.body.values.iter().filter_map(|(value, _)| {
+                metadata::scope(self.module, self.body, value)
+            }).collect());
+        }
+        if !self.state.step(1) {
+            return None;
+        }
+        Some(self.materialized_scopes.as_ref().unwrap().contains(&ancestor))
+    }
+    fn clear_finish_generation(&self, branch: &mut Flow, generation: Option<Origin>) {
+        // Defaults have no failure evidence. Clearing them must not materialize
+        // a token and a failure entry for every SSA value on every dispatch.
+        for (index, failure) in branch.failures.indexed_mut() {
+            if branch.tokens[index].finish_origin == generation {
+                *failure = 0;
+            }
+        }
+        for (_, token) in branch.tokens.indexed_mut() {
+            if token.finish_origin == generation {
+                token.failure_origin = None;
+            }
+        }
+    }
     fn empty_ctor_packet(&self, value: ValueId) -> bool {
         self.declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Ctor(_)))
             && super::later::value_type(self.module, self.body, value)
@@ -142,45 +196,17 @@ impl Engine<'_, '_> {
             self.state.error(rule, message);
         }
     }
-    fn flow_entries(&self, flow: &Flow) -> usize {
-        let tokens = flow.tokens.iter().chain(&flow.journals)
-            .chain(flow.frames.values().flat_map(|layout| layout.values().map(|slot| &slot.token)))
-            .chain(flow.cells.values().map(|slot| &slot.token));
-        let mut entries = tokens.clone().map(|token| token.destinations.len()).sum::<usize>();
-        let pieces = tokens.flat_map(|token| &token.pieces).chain(&flow.closed_inputs);
-        for piece in pieces {
-            entries = entries.saturating_add(1);
-            for filter in piece.predicates.keys() {
-                entries = entries.saturating_add(1 + filter.keys.len() + filter.possible.len() + filter.labels.len());
-            }
-        }
-        for refs in flow.refs.iter().chain(&flow.full_deps) {
-            entries = entries.saturating_add(refs.len());
-        }
-        for labels in flow.aliases.iter().chain(&flow.contained) {
-            entries = entries.saturating_add(labels.len());
-        }
-        for refs in flow.views.values() {
-            entries = entries.saturating_add(1 + refs.len());
-        }
-        for (refs, _) in flow.fields.values() {
-            entries = entries.saturating_add(1 + refs.len());
-        }
-        for token in &flow.tokens {
-            entries = entries.saturating_add(token.unique_region.len() + token.pin_deps.len());
-            if let Some(fact) = &token.cleanup {
-                entries = entries.saturating_add(fact.reserve.len() + fact.inventory.len()
-                    + fact.services.len() + fact.executed.len());
-            }
-        }
-        entries = entries.saturating_add(flow.dead.len() + flow.bindings.len() + flow.provenance.len());
-        entries = entries.saturating_add(flow.frames.values().map(|slots| slots.len()).sum::<usize>());
-        entries
-    }
     fn flow_bytes(&self, flow: &Flow) -> usize {
         flow.allocation_bytes()
     }
     fn charge_flow(&mut self, flow: &Flow) -> bool {
+        self.charge_flow_work(flow, flow.work())
+    }
+    fn charge_relations(&mut self, flow: &Flow) -> bool {
+        // Origin retirement rewrites sparse relations without copying masks.
+        self.charge_flow_work(flow, flow.relation_work())
+    }
+    fn charge_flow_work(&mut self, flow: &Flow, work: usize) -> bool {
         // Scratch clones are released after each transfer. Charge their peak,
         // and account retained alternatives separately when inserting them.
         let bytes = self.flow_bytes(flow).saturating_mul(8);
@@ -190,7 +216,7 @@ impl Engine<'_, '_> {
             }
             self.flow_memory = bytes;
         }
-        self.state.step(self.flow_entries(flow).saturating_add(flow.availability.len()))
+        self.state.step(work)
     }
 
     fn initial(&mut self) -> Flow {
@@ -339,69 +365,80 @@ impl Engine<'_, '_> {
         if !self.state.array(outgoing_capacity, size_of::<(BlockId, Flow)>()) {
             return;
         }
-        let mut input_headers = 0;
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let mut schedule = ScheduleWork { alternatives: 1, ..ScheduleWork::default() };
         let initial = self.initial();
-        if !self.charge_flow(&initial) {
-            return;
-        }
-        if !self.state.memory(initial.charge_retained()) {
+        if !self.charge_flow(&initial) || !self.state.memory(initial.charge_retained()) {
             return;
         }
         incoming[self.body.entry.as_u32() as usize].reserve_exact(1);
         incoming[self.body.entry.as_u32() as usize].push(initial);
-        let mut queue = VecDeque::from([self.body.entry]);
-        let mut queued = vec![false; self.body.blocks.len()];
-        queued[self.body.entry.as_u32() as usize] = true;
-        while let Some(block) = queue.pop_front() {
+        // State indices are stable: alternatives are appended and only masks
+        // are joined in place. One dirty bit coalesces versions awaiting a visit.
+        let mut dirty = vec![Vec::new(); self.body.blocks.len()];
+        dirty[self.body.entry.as_u32() as usize].reserve_exact(1);
+        dirty[self.body.entry.as_u32() as usize].push(true);
+        let mut queue = VecDeque::from([(self.body.entry, 0)]);
+        let mut queue_peak = 1;
+        if !self.state.array(queue_peak, size_of::<(BlockId, usize)>()) {
+            return;
+        }
+        while let Some((block, state_id)) = queue.pop_front() {
             let index = block.as_u32() as usize;
-            queued[index] = false;
-            if !self.state.step(1) {
+            dirty[index][state_id] = false;
+            #[cfg(any(test, feature = "verifier-differential"))]
+            { schedule.visits += 1; }
+            if !self.state.step(1) || !self.charge_flow(&incoming[index][state_id]) {
                 return;
             }
-            let headers = incoming[index].len().saturating_mul(size_of::<Flow>());
-            if headers > input_headers {
-                if !self.state.memory(headers - input_headers) {
-                    return;
-                }
-                input_headers = headers;
-            }
-            let scratch = incoming[index].iter().map(|flow| self.flow_bytes(flow)).sum::<usize>();
-            if scratch > self.flow_memory {
-                if !self.state.memory(scratch - self.flow_memory) {
-                    return;
-                }
-                self.flow_memory = scratch;
-            }
-            let inputs = incoming[index].clone();
-            for flow in inputs {
+            let input = incoming[index][state_id].clone();
+            for (target, flow) in self.block(block, input) {
                 if !self.charge_flow(&flow) {
                     return;
                 }
-                for (target, flow) in self.block(block, flow) {
-                    if !self.charge_flow(&flow) {
+                let index = target.as_u32() as usize;
+                let Some(states) = incoming.get_mut(index) else {
+                    continue;
+                };
+                let mut found = None;
+                for (id, old) in states.iter().enumerate() {
+                    #[cfg(any(test, feature = "verifier-differential"))]
+                    { schedule.comparisons += 1; }
+                    if old.same_relations(&flow, self.state) {
+                        found = Some(id);
+                        break;
+                    }
+                }
+                if self.state.incomplete {
+                    return;
+                }
+                let (id, changed) = if let Some(id) = found {
+                    if !self.state.step(flow.mask_work()) {
                         return;
                     }
-                    let index = target.as_u32() as usize;
-                    let Some(states) = incoming.get_mut(index) else {
-                        continue;
-                    };
-                    if !self.state.step(states.len().saturating_mul(self.body.values.len())) {
+                    (id, states[id].join_masks(&flow))
+                } else {
+                    if !self.state.memory(flow.charge_retained().saturating_add(1)) {
                         return;
                     }
-                    let changed = if let Some(old) = states.iter_mut().find(|old| old.same_relations(&flow)) {
-                        old.join_masks(&flow)
-                    } else {
-                        if !self.state.memory(flow.charge_retained()) {
+                    #[cfg(any(test, feature = "verifier-differential"))]
+                    { schedule.alternatives += 1; }
+                    let id = states.len();
+                    states.reserve_exact(1);
+                    states.push(flow);
+                    dirty[index].reserve_exact(1);
+                    dirty[index].push(false);
+                    (id, true)
+                };
+                if changed && !dirty[index][id] {
+                    dirty[index][id] = true;
+                    if queue.len() == queue_peak {
+                        if !self.state.array(queue_peak, size_of::<(BlockId, usize)>()) {
                             return;
                         }
-                        states.reserve_exact(1);
-                        states.push(flow);
-                        true
-                    };
-                    if changed && !queued[index] {
-                        queued[index] = true;
-                        queue.push_back(target);
+                        queue_peak = queue_peak.saturating_mul(2);
                     }
+                    queue.push_back((target, id));
                 }
             }
         }
@@ -487,8 +524,8 @@ impl Engine<'_, '_> {
             flow.add_contained(&roots, &aliases);
         }
         flow.availability[i] = AVAILABLE;
-        flow.tokens[i] = flow.normalize_token(slot.token);
-        flow.journals[i] = flow.normalize_token(slot.journal);
+        flow.tokens[i] = flow.normalize_token(slot.token, self.state);
+        flow.journals[i] = flow.normalize_token(slot.journal, self.state);
         let service_deps = self.body.values.get(value).ok().and_then(|v| self.module.types.get(v.ty).ok())
             .is_some_and(|ty| matches!(ty, Type::Service(ServiceType::Deps | ServiceType::Pending
                 | ServiceType::StableKey
@@ -674,7 +711,7 @@ impl Engine<'_, '_> {
             return (target, flow.clone());
         }
         let mut next = flow.clone();
-        for (index, token) in flow.tokens.iter().enumerate() {
+        for (index, token) in flow.tokens.indexed() {
             if flow.availability[index] == AVAILABLE && token.unique.is_some()
                 && !token.unique_region.contains(&target) {
                 self.error(R::B92, "unique capability leaves its proved CFG region");
@@ -711,7 +748,7 @@ impl Engine<'_, '_> {
             }
             let replaced: BTreeSet<_> = block.params.iter().copied().collect();
             let originals: Vec<_> = saved.iter().map(|slot| slot.aliases.clone()).collect();
-            let classes: BTreeSet<_> = next.aliases.iter().filter(|aliases| !aliases.is_empty()).cloned().collect();
+            let classes: BTreeSet<_> = next.aliases.stored().filter(|aliases| !aliases.is_empty()).cloned().collect();
             let mut remapped = std::collections::BTreeMap::new();
             for class in classes {
                 let mut members: BTreeSet<_> = class.difference(&replaced).copied().collect();
@@ -749,8 +786,10 @@ impl Engine<'_, '_> {
             for (&param, slot) in block.params.iter().zip(saved) {
                 self.define(&mut next, param, slot);
             }
-            for index in 0..next.tokens.len() {
-                let token = next.normalize_token(next.tokens[index].clone());
+            let normalized: Vec<_> = next.tokens.indexed().map(|(index, token)| {
+                (index, next.normalize_token(token.clone(), self.state))
+            }).collect();
+            for (index, token) in normalized {
                 next.tokens.set(index, token);
             }
             for &param in &block.params {
@@ -827,4 +866,38 @@ fn witnesses(module: &Module, body: &Body) -> std::rc::Rc<Vec<bool>> {
                 | Type::Builder(_) | Type::MapBuilder(..))
         })
     }).collect())
+}
+
+#[cfg(test)]
+mod scheduling_tests {
+    use super::*;
+
+    #[test]
+    fn delayed_alternative_does_not_replay_unchanged_block_inputs() {
+        let module = text::parse(
+            "oir 2 high
+module schedule
+requires core
+scope S action in @f
+func @f(%c: bool, %x: int, %y: int) -> void {
+^entry in S:
+    cond %c, ^join(%x), ^delay
+^delay in S:
+    br ^tail
+^tail in S:
+    br ^join(%y)
+^join(%p: int) in S:
+    br ^end(%p)
+^end(%q: int) in S:
+    ret
+}",
+        ).unwrap();
+        let options = super::super::VerifyOptions::default();
+        super::super::run_mode(
+            &module, &options, super::super::VerifyContext::default(), None, None, false,
+        ).unwrap();
+        // Entry, delay and tail once; join and end once per distinct input.
+        // The old block queue revisited the first join/end alternatives too.
+        assert_eq!(LAST_SCHEDULE.get(), (7, 7));
+    }
 }

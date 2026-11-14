@@ -152,9 +152,10 @@ fn verify_function_limits_analysis_to_the_selected_body() {
 
 #[test]
 fn graph_and_high_analysis_budgets_never_produce_a_certificate() {
-    // #634 dense -> compact default memory charges, in fixture order:
-    // 140092 -> 102244, 27844 -> 43224, 304418 -> 162748 bytes.
-    // Derive each compact threshold from its own charge: enough completes,
+    // #634 step 1 -> 1.5 charges, in fixture order (memory bytes; work):
+    // 102244 -> 99627; 1507 -> 4336. 43224 -> 41483; 477 -> 1179.
+    // 162748 -> 161025; 3551 -> 7182. Sparse bookkeeping is real work too.
+    // Derive each threshold from its own charge: enough completes,
     // one byte/step below must remain Incomplete.
     for source in [
         include_str!("fixtures/verify/valid/SSA2-irreducible-CFG.oir"),
@@ -343,6 +344,8 @@ fn ownership_verdicts_survive_codec_and_arena_permutations() {
 
 #[test]
 fn ownership_fixpoint_limits_are_incomplete() {
+    // #634 step 1 -> 1.5: memory 781523 -> 772761, work 23807 -> 36692.
+    // The old merge charge omitted nested comparisons; account them as well.
     let source = include_str!("fixtures/verify/valid/B4-rebind-loop-and-staging.oir");
     let module = text::parse(source).unwrap();
     let stats = verify(&module).unwrap().stats().clone();
@@ -399,8 +402,8 @@ fn opaque_cleanup_verdicts_survive_function_order_permutations() {
 
 #[test]
 fn opaque_origin_index_obeys_verification_budgets() {
-    // #634 dense -> compact memory charge: 163028 -> 266753 bytes.
-    // The conservative sparse B-tree charge is larger for this small body.
+    // #634 step 1 -> 1.5: memory 266753 -> 264113, work 1319 -> 3203.
+    // The sparse B-tree charge still exceeds the old dense 163028-byte bound.
     // Enough completes; one byte/step below its own charge is Incomplete.
     let module = text::parse(include_str!("fixtures/verify/valid/B11-indexed-origins.oir")).unwrap();
     let options = VerifyOptions { execution: ExecutionMode::Tests, ..VerifyOptions::default() };
@@ -490,4 +493,34 @@ fn malformed_cleanup_proof_arenas_are_rejected_without_panics() {
         assert_eq!(report.failure, VerifyFailure::Rejected);
         assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::S3));
     }
+}
+
+#[test]
+fn exponentially_many_relational_states_still_exhaust_default_work() {
+    // Each phi independently aliases x or y. Eighteen tiny blocks represent
+    // 2^18 correlated histories; a large SSA universe is not the workload.
+    // Dense: 49999274 work / 254140328 bytes; candidate: 49999990 / 20223097.
+    // Both hit default work; the candidate does so with only about 20 MB charged.
+    fn diamonds(count: usize) -> okkama_oir::Module {
+        let mut source = String::from(
+            "oir 2 high\nmodule explosion\nrequires core\nscope S action in @f\n\
+             func @f(%c: bool, %x: int, %y: int) -> void {\n^entry in S:\n",
+        );
+        for index in 0..count {
+            source.push_str(&format!(
+                "    cond %c, ^b{index}(%x), ^b{index}(%y)\n^b{index}(%p{index}: int) in S:\n",
+            ));
+        }
+        source.push_str("    ret\n}\n");
+        text::parse(&source).unwrap()
+    }
+    verify(&diamonds(4)).unwrap();
+    let module = diamonds(18);
+    let body = module.functions.iter().next().unwrap().1.body.as_ref().unwrap();
+    assert_eq!(body.blocks.len(), 19);
+    assert_eq!(body.values.len(), 21);
+    let report = verify(&module).unwrap_err();
+    assert_eq!(report.failure, VerifyFailure::Incomplete, "{report:?}");
+    assert!(report.stats.steps > 45_000_000, "{report:?}");
+    assert!(report.stats.memory_bytes < VerifyLimits::default().memory_bytes, "{report:?}");
 }

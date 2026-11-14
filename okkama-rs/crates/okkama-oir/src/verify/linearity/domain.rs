@@ -215,41 +215,140 @@ impl Flow {
     }
     /// Only availability is joined independently. All relational components
     /// stay together, so a phi cannot pair one edge's owner with another's packet.
-    pub fn same_relations(&self, other: &Self) -> bool {
-        self.cells == other.cells && self.frame_conflict == other.frame_conflict
-            && self.frames == other.frames && self.tokens == other.tokens && self.journals == other.journals
-            && self.refs == other.refs && self.full_deps == other.full_deps
-            && self.lifetimes == other.lifetimes && self.identities == other.identities
-            && self.dead == other.dead && self.taken_caches == other.taken_caches && self.cache_keys == other.cache_keys
-            && self.provenance == other.provenance && self.scopes == other.scopes
-            && self.bindings == other.bindings && self.must_use == other.must_use
-            && self.entry_accepted == other.entry_accepted && self.ended == other.ended
-            && self.closed_inputs == other.closed_inputs && self.failures == other.failures
-            && self.active_failure == other.active_failure && self.active_failure_origin == other.active_failure_origin
-            && self.latest_failure == other.latest_failure && self.latest_failure_origin == other.latest_failure_origin
-            && self.fields == other.fields
-            && self.aliases == other.aliases && self.contained == other.contained && self.views == other.views
+    pub fn same_relations(&self, other: &Self, state: &mut super::State<'_>) -> bool {
+        if !state.step(self.cells.work().saturating_add(other.cells.work())) || self.cells != other.cells {
+            return false;
+        }
+        if !state.step(1) || self.frame_conflict != other.frame_conflict {
+            return false;
+        }
+        if !state.step(self.frames.work().saturating_add(other.frames.work())) || self.frames != other.frames {
+            return false;
+        }
+        if !self.tokens.equal(&other.tokens, |work| state.step(work), AllocationSize::work) {
+            return false;
+        }
+        if !self.journals.equal(&other.journals, |work| state.step(work), AllocationSize::work) {
+            return false;
+        }
+        if !self.refs.equal(&other.refs, |work| state.step(work), AllocationSize::work) {
+            return false;
+        }
+        if !self.full_deps.equal(&other.full_deps, |work| state.step(work), AllocationSize::work) {
+            return false;
+        }
+        if !self.lifetimes.equal(&other.lifetimes, |work| state.step(work), AllocationSize::work) {
+            return false;
+        }
+        if !self.identities.equal(&other.identities, |work| state.step(work), AllocationSize::work) {
+            return false;
+        }
+        if !state.step(self.dead.work().saturating_add(other.dead.work())) || self.dead != other.dead {
+            return false;
+        }
+        if !state.step(self.taken_caches.work().saturating_add(other.taken_caches.work()))
+            || self.taken_caches != other.taken_caches {
+            return false;
+        }
+        if !state.step(self.cache_keys.work().saturating_add(other.cache_keys.work()))
+            || self.cache_keys != other.cache_keys {
+            return false;
+        }
+        if !state.step(self.provenance.work().saturating_add(other.provenance.work()))
+            || self.provenance != other.provenance {
+            return false;
+        }
+        if !state.step(self.scopes.work().saturating_add(other.scopes.work())) || self.scopes != other.scopes {
+            return false;
+        }
+        if !state.step(self.bindings.work().saturating_add(other.bindings.work())) || self.bindings != other.bindings {
+            return false;
+        }
+        if !self.must_use.equal(&other.must_use, |work| state.step(work), AllocationSize::work) {
+            return false;
+        }
+        if !state.step(1) || self.entry_accepted != other.entry_accepted {
+            return false;
+        }
+        if !state.step(self.ended.work().saturating_add(other.ended.work())) || self.ended != other.ended {
+            return false;
+        }
+        if !state.step(self.closed_inputs.work().saturating_add(other.closed_inputs.work()))
+            || self.closed_inputs != other.closed_inputs {
+            return false;
+        }
+        if !self.failures.equal(&other.failures, |work| state.step(work), AllocationSize::work) {
+            return false;
+        }
+        if !state.step(1) || self.active_failure != other.active_failure {
+            return false;
+        }
+        if !state.step(1) || self.active_failure_origin != other.active_failure_origin {
+            return false;
+        }
+        if !state.step(1) || self.latest_failure != other.latest_failure {
+            return false;
+        }
+        if !state.step(1) || self.latest_failure_origin != other.latest_failure_origin {
+            return false;
+        }
+        if !state.step(self.fields.work().saturating_add(other.fields.work())) || self.fields != other.fields {
+            return false;
+        }
+        if !self.aliases.equal(&other.aliases, |work| state.step(work), AllocationSize::work) {
+            return false;
+        }
+        if !self.contained.equal(&other.contained, |work| state.step(work), AllocationSize::work) {
+            return false;
+        }
+        if !state.step(self.views.work().saturating_add(other.views.work())) || self.views != other.views {
+            return false;
+        }
+        true
     }
     pub fn join_masks(&mut self, other: &Self) -> bool {
+        // The join is still bytewise OR. Process eight independent masks per
+        // word so its work charge follows the loads, stores and comparisons.
         let mut changed = false;
-        for (mask, incoming) in self.availability.iter_mut().zip(&other.availability) {
+        let mut masks = self.availability.chunks_exact_mut(8);
+        let mut incoming = other.availability.chunks_exact(8);
+        for (mask, incoming) in masks.by_ref().zip(incoming.by_ref()) {
+            let old = u64::from_ne_bytes((&*mask).try_into().unwrap());
+            let next = old | u64::from_ne_bytes(incoming.try_into().unwrap());
+            changed |= old != next;
+            mask.copy_from_slice(&next.to_ne_bytes());
+        }
+        for (mask, incoming) in masks.into_remainder().iter_mut().zip(incoming.remainder()) {
             let next = *mask | incoming;
             changed |= *mask != next;
             *mask = next;
         }
         changed
     }
-    pub fn normalize_token(&self, mut token: Token) -> Token {
+    pub fn normalize_token(&self, mut token: Token, state: &mut super::State<'_>) -> Token {
         token.pieces = token.pieces.into_iter().map(|mut piece| {
             piece.predicates = piece.predicates.into_iter().map(|(mut filter, selected)| {
-                filter.labels = filter.labels.iter().flat_map(|value| {
-                    self.aliases[value.as_u32() as usize].iter().copied()
-                }).collect();
+                let mut labels = BTreeSet::new();
+                for value in &filter.labels {
+                    let aliases = &self.aliases[value.as_u32() as usize];
+                    if !state.step(aliases.len().saturating_add(1)) {
+                        break;
+                    }
+                    labels.extend(aliases);
+                }
+                filter.labels = labels;
+                if !state.step(filter.keys.len().saturating_add(1)) {
+                    return (filter, selected);
+                }
                 let current = filter.keys.iter().all(|key| !matches!(key, Origin::RetiredInstruction(..)
                     | Origin::RetiredInvoke(..) | Origin::RetiredProjection(..)
                     | Origin::RetiredViewInstruction(..) | Origin::RetiredViewInvoke(..)));
                 if current {
-                    for (index, refs) in self.refs.iter().enumerate() {
+                    for (index, refs) in self.refs.indexed() {
+                        let contained = &self.contained[index];
+                        if !state.step(1 + refs.len() + contained.len()) {
+                            break;
+                        }
                         if self.witnesses[index] && !refs.is_empty() && refs.is_subset(&filter.keys) {
                             filter.labels.extend(&self.contained[index]);
                         }
@@ -342,11 +441,11 @@ impl Flow {
     }
     pub fn projection_keys(&self) -> BTreeSet<Origin> {
         let mut keys = BTreeSet::new();
-        for refs in self.refs.iter().chain(&self.full_deps).chain(self.views.values()) {
+        for refs in self.refs.stored().chain(self.full_deps.stored()).chain(self.views.values()) {
             keys.extend(refs.iter().filter(|key| matches!(key, Origin::Projection(..))).copied());
         }
         keys.extend(self.views.keys().filter(|key| matches!(key, Origin::Projection(..))).copied());
-        for token in self.tokens.iter().chain(&self.journals) {
+        for token in self.tokens.stored().chain(self.journals.stored()) {
             for piece in &token.pieces {
                 for filter in piece.predicates.keys() {
                     keys.extend(filter.keys.iter().chain(&filter.possible)
@@ -540,27 +639,42 @@ impl AllocationSize for DeclId {}
 impl AllocationSize for u32 {}
 impl<A: AllocationSize, B: AllocationSize> AllocationSize for (A, B) {
     fn heap_bytes(&self) -> usize { self.0.heap_bytes().saturating_add(self.1.heap_bytes()) }
+    fn work(&self) -> usize { self.0.work().saturating_add(self.1.work()) }
 }
 impl<A: AllocationSize, B: AllocationSize, C: AllocationSize> AllocationSize for (A, B, C) {
+    fn work(&self) -> usize { self.0.work().saturating_add(self.1.work()).saturating_add(self.2.work()) }
     fn heap_bytes(&self) -> usize {
         self.0.heap_bytes().saturating_add(self.1.heap_bytes()).saturating_add(self.2.heap_bytes())
     }
 }
 impl AllocationSize for Filter {
+    fn work(&self) -> usize {
+        self.keys.work() + self.possible.work() + self.labels.work()
+    }
     fn heap_bytes(&self) -> usize {
         self.keys.heap_bytes().saturating_add(self.possible.heap_bytes()).saturating_add(self.labels.heap_bytes())
     }
 }
 impl AllocationSize for Piece {
+    fn work(&self) -> usize {
+        1 + self.predicates.work()
+    }
     fn heap_bytes(&self) -> usize { self.predicates.heap_bytes() }
 }
 impl AllocationSize for CleanupFact {
+    fn work(&self) -> usize {
+        1 + self.reserve.work() + self.inventory.work() + self.executed.work() + self.services.work()
+    }
     fn heap_bytes(&self) -> usize {
         self.reserve.heap_bytes().saturating_add(self.inventory.heap_bytes())
             .saturating_add(self.executed.heap_bytes()).saturating_add(self.services.heap_bytes())
     }
 }
 impl AllocationSize for Token {
+    fn work(&self) -> usize {
+        1 + self.pieces.work() + self.reserve.work() + self.destinations.work() + self.sources.work()
+            + self.unique_region.work() + self.pin_deps.work() + self.cleanup.work() + self.snapshot.work()
+    }
     fn heap_bytes(&self) -> usize {
         self.pieces.heap_bytes().saturating_add(self.reserve.heap_bytes())
             .saturating_add(self.destinations.heap_bytes()).saturating_add(self.sources.heap_bytes())
@@ -569,6 +683,22 @@ impl AllocationSize for Token {
     }
 }
 impl Flow {
+    /// Copy/scan bound in stored entries and nested relations. Mask copies and
+    /// joins process words, rather than dense per-value relational records.
+    pub fn work(&self) -> usize {
+        self.mask_work() + self.relation_work()
+    }
+    pub fn mask_work(&self) -> usize {
+        self.availability.len() / 8 + self.availability.len() % 8
+    }
+    pub fn relation_work(&self) -> usize {
+        1 + self.tokens.work() + self.journals.work() + self.refs.work() + self.full_deps.work()
+            + self.lifetimes.work() + self.identities.work() + self.must_use.work() + self.failures.work()
+            + self.aliases.work() + self.contained.work() + self.dead.work() + self.taken_caches.work()
+            + self.cache_keys.work() + self.provenance.work() + self.scopes.work() + self.bindings.work()
+            + self.ended.work() + self.closed_inputs.work() + self.fields.work() + self.views.work()
+            + self.frames.work() + self.cells.work()
+    }
     fn global_bytes(&self) -> usize {
         self.availability.capacity()
             + self.dead.heap_bytes() + self.taken_caches.heap_bytes() + self.cache_keys.heap_bytes()
@@ -592,6 +722,10 @@ impl Flow {
     }
 }
 impl AllocationSize for super::Slot {
+    fn work(&self) -> usize {
+        1 + self.token.work() + self.journal.work() + self.refs.work() + self.aliases.work()
+            + self.contained.work() + self.bases.work() + self.requirements.work()
+    }
     fn heap_bytes(&self) -> usize {
         self.token.heap_bytes() + self.journal.heap_bytes() + self.refs.heap_bytes()
             + self.aliases.heap_bytes() + self.contained.heap_bytes() + self.bases.heap_bytes()
@@ -602,6 +736,26 @@ impl AllocationSize for super::Slot {
 #[cfg(test)]
 mod memory_tests {
     use super::*;
+
+    #[test]
+    fn word_mask_join_matches_each_byte_including_unaligned_tails() {
+        for len in 0..40 {
+            for seed in 0..16 {
+                let mut left = Flow::new(len, Rc::new(vec![true; len]));
+                let mut right = left.clone();
+                for index in 0..len {
+                    left.availability[index] = ((index + seed) % 8) as u8;
+                    right.availability[index] = ((index * 3 + seed) % 8) as u8;
+                }
+                let expected: Vec<_> = left.availability.iter().zip(&right.availability)
+                    .map(|(left, right)| left | right).collect();
+                let changed = expected != left.availability;
+                assert_eq!(left.join_masks(&right), changed);
+                assert_eq!(left.availability, expected);
+                assert!(!left.join_masks(&right));
+            }
+        }
+    }
 
     #[test]
     fn large_ssa_universe_keeps_implicit_defaults_and_shared_relations_compact() {

@@ -7,11 +7,13 @@ use std::rc::Rc;
 
 pub(super) trait AllocationSize {
     fn heap_bytes(&self) -> usize { 0 }
+    fn work(&self) -> usize { 1 }
 }
 impl AllocationSize for u8 {}
 impl AllocationSize for bool {}
 impl<T: AllocationSize> AllocationSize for Option<T> {
     fn heap_bytes(&self) -> usize { self.as_ref().map_or(0, AllocationSize::heap_bytes) }
+    fn work(&self) -> usize { self.as_ref().map_or(1, AllocationSize::work) }
 }
 
 // A B-tree node reserves eleven entries and up to twelve child pointers.
@@ -21,6 +23,9 @@ fn tree_bytes<T>(len: usize) -> usize {
     len.div_ceil(5).saturating_mul(32 + 11 * size_of::<T>() + 12 * size_of::<usize>())
 }
 impl<T: AllocationSize> AllocationSize for BTreeSet<T> {
+    fn work(&self) -> usize {
+        self.iter().fold(1usize, |work, value| work.saturating_add(value.work()))
+    }
     fn heap_bytes(&self) -> usize {
         self.iter().fold(tree_bytes::<T>(self.len()), |bytes, value| {
             bytes.saturating_add(value.heap_bytes())
@@ -28,6 +33,11 @@ impl<T: AllocationSize> AllocationSize for BTreeSet<T> {
     }
 }
 impl<K: AllocationSize, V: AllocationSize> AllocationSize for BTreeMap<K, V> {
+    fn work(&self) -> usize {
+        self.iter().fold(1usize, |work, (key, value)| {
+            work.saturating_add(key.work()).saturating_add(value.work())
+        })
+    }
     fn heap_bytes(&self) -> usize {
         self.iter().fold(tree_bytes::<(K, V)>(self.len()), |bytes, (key, value)| {
             bytes.saturating_add(key.heap_bytes()).saturating_add(value.heap_bytes())
@@ -66,11 +76,45 @@ impl<T: Clone + Eq> Clone for PerValue<T> {
 }
 impl<T: Clone + Eq> PartialEq for PerValue<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.len == other.len && self.iter().eq(other.iter())
+        self.equal(other, |_| true, |_| 0)
     }
 }
 impl<T: Clone + Eq> Eq for PerValue<T> {}
 impl<T: Clone + Eq> PerValue<T> {
+    pub fn equal(
+        &self, other: &Self, mut charge: impl FnMut(usize) -> bool, cost: impl Fn(&T) -> usize,
+    ) -> bool {
+        if !charge(1) || self.len != other.len {
+            return false;
+        }
+        let mut left = self.entries.iter().peekable();
+        let mut right = other.entries.iter().peekable();
+        let mut covered = 0;
+        while left.peek().is_some() || right.peek().is_some() {
+            let index = left.peek().map(|(index, _)| *index).unwrap_or(usize::MAX)
+                .min(right.peek().map(|(index, _)| *index).unwrap_or(usize::MAX));
+            let a = if left.peek().is_some_and(|(stored, _)| *stored == index) {
+                &left.next().unwrap().1
+            } else {
+                self.default.as_ref().unwrap()
+            };
+            let b = if right.peek().is_some_and(|(stored, _)| *stored == index) {
+                &right.next().unwrap().1
+            } else {
+                other.default.as_ref().unwrap()
+            };
+            if !charge(1) {
+                return false;
+            }
+            if !Rc::ptr_eq(a, b) && (!charge(cost(&a.value).saturating_add(cost(&b.value)))
+                || a.value != b.value) {
+                return false;
+            }
+            covered += 1;
+        }
+        covered == self.len || (charge(1) && self.default.as_ref().map(|entry| &entry.value)
+            == other.default.as_ref().map(|entry| &entry.value))
+    }
     pub fn new(len: usize, default: T) -> Self {
         Self {
             len,
@@ -79,7 +123,13 @@ impl<T: Clone + Eq> PerValue<T> {
             directory_charged: Cell::new(0),
         }
     }
-    pub fn len(&self) -> usize { self.len }
+    /// Stored slots include explicit defaults; callers must preserve their neutral meaning.
+    pub fn indexed(&self) -> impl Iterator<Item = (usize, &T)> + Clone {
+        self.entries.iter().map(|(index, entry)| (*index, &entry.value))
+    }
+    pub fn stored(&self) -> impl Iterator<Item = &T> + Clone {
+        self.indexed().map(|(_, value)| value)
+    }
     pub fn get(&self, index: usize) -> Option<&T> {
         (index < self.len).then(|| &self[index])
     }
@@ -109,6 +159,9 @@ impl<T: Clone + Eq> PerValue<T> {
     }
 }
 impl<T: Clone + Eq + AllocationSize> PerValue<T> {
+    pub fn work(&self) -> usize {
+        self.entries.iter().fold(1usize, |work, (_, entry)| work.saturating_add(entry.value.work()))
+    }
     pub fn allocation_bytes(&self) -> usize {
         let initial = self.directory_bytes()
             + self.default.as_ref().map_or(0, |entry| Self::entry_bytes(entry));
@@ -205,6 +258,49 @@ mod tests {
         assert_eq!(values.iter().enumerate().filter(|(_, value)| !value.is_empty())
             .map(|(index, _)| index).collect::<Vec<_>>(), vec![3, 90]);
         assert_eq!(values.indexed_mut().map(|(index, _)| index).collect::<Vec<_>>(), vec![3, 70, 90]);
+    }
+
+    #[test]
+    fn sparse_equality_matches_logical_equality_with_distinct_defaults() {
+        for len in 0..8 {
+            for mask in 0..(1 << len) {
+                let mut left = PerValue::new(len, 0u8);
+                let mut right = PerValue::new(len, 1u8);
+                for index in 0..len {
+                    let value = u8::from(mask & (1 << index) != 0);
+                    left[index] = value;
+                    right[index] = value;
+                }
+                assert_eq!(left, right);
+                for index in 0..len {
+                    let mut changed = right.clone();
+                    changed[index] ^= 1;
+                    assert_ne!(left, changed);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sparse_comparison_work_tracks_stored_entries_and_shared_values() {
+        let mut left = PerValue::new(1_000_000, BTreeSet::new());
+        left[999_999].insert(7u8);
+        let right = left.clone();
+        let mut shared_work = 0;
+        assert!(left.equal(&right, |work| {
+            shared_work += work;
+            true
+        }, AllocationSize::work));
+        assert!(shared_work < 10);
+        let mut copied = right.clone();
+        copied[999_999].insert(8);
+        let mut copied_work = 0;
+        assert!(!left.equal(&copied, |work| {
+            copied_work += work;
+            true
+        }, AllocationSize::work));
+        assert!(copied_work > shared_work);
+        assert!(copied_work < 20);
     }
 
     #[test]

@@ -72,6 +72,26 @@ pub(super) fn compare(
         );
         append_record("OKKAMA_634_RESULTS", &record);
         assert!(!mismatch, "#634 differential mismatch: {record}");
+        if !complete && verdict(compact) != Some(VerifyFailure::Incomplete) {
+            // Only the oracle gets extra headroom. Production limits stay fixed.
+            // Low P1 exceeds 8x dense memory before its fixed point; allow 64x.
+            precise_options.limits.steps = precise_options.limits.steps.saturating_mul(20);
+            precise_options.limits.memory_bytes = precise_options.limits.memory_bytes.saturating_mul(64);
+            let raised = run_mode(module, &precise_options, context, profile, function, true);
+            let confirmed = verdict(&raised) != Some(VerifyFailure::Incomplete)
+                && verdict(compact) == verdict(&raised)
+                && diagnostics(compact) == diagnostics(&raised)
+                && (errors != ErrorPolicy::First
+                    || compact.as_ref().err().map(|report| report.diagnostics.first())
+                        == raised.as_ref().err().map(|report| report.diagnostics.first()));
+            let raised_stats = stats(&raised);
+            let confirmation = format!(
+                "{test}\t{:?}\t{function:?}\t{errors:?}\t{:?}\t{}\t{}\t{confirmed}\n",
+                module.profile, verdict(&raised), raised_stats.memory_bytes, raised_stats.steps,
+            );
+            append_record("OKKAMA_634_RAISED", &confirmation);
+            assert!(confirmed, "#634 raised-limit oracle mismatch: {record}{confirmation}");
+        }
     }
 }
 
@@ -105,4 +125,11 @@ pub(super) fn record_limit(
         stats.memory_bytes, stats.steps,
     );
     append_record("OKKAMA_634_LIMITS", &record);
+}
+
+pub(super) fn record_schedule(visits: usize, alternatives: usize, comparisons: usize) {
+    let thread = std::thread::current();
+    let test = thread.name().unwrap_or("unnamed");
+    let record = format!("{test}\t{visits}\t{alternatives}\t{comparisons}\n");
+    append_record("OKKAMA_634_SCHEDULE", &record);
 }

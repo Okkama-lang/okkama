@@ -7,9 +7,7 @@ impl Engine<'_, '_> {
         if outcome != Outcome::Normal {
             return;
         }
-        let closing = before.tokens.iter().enumerate().any(|(index, token)| {
-            before.availability[index] == AVAILABLE && token.cleanup.is_some()
-        });
+        let closing = self.has_closing_token(before);
         if closing && !matches!(op, Operation::Cleanup(_) | Operation::Exit(ExitOp::Abort { .. })
             | Operation::Async(AsyncOp::FrameCancel { .. })
             | Operation::Const(_) | Operation::Core(CoreOp::FailSecondary { .. } | CoreOp::FailCaused { .. })) {
@@ -71,12 +69,9 @@ impl Engine<'_, '_> {
                         .and_then(|scope| scope.parent);
                     let mut nearest = None;
                     while let Some(ancestor) = parent {
-                        if !self.state.step(self.body.values.len().saturating_add(1)) {
+                        let Some(materialized) = self.materialized_scope(ancestor) else {
                             return;
-                        }
-                        let materialized = self.body.values.iter().any(|(value, _)| {
-                            super::metadata::scope(self.module, self.body, value) == Some(ancestor)
-                        });
+                        };
                         if materialized {
                             nearest = Some(ancestor);
                             break;
@@ -105,12 +100,9 @@ impl Engine<'_, '_> {
             }
             let mut parent = self.module.scopes.get(*scope).ok().and_then(|scope| scope.parent);
             while let Some(ancestor) = parent {
-                if !self.state.step(self.body.values.len().saturating_add(1)) {
+                let Some(materialized) = self.materialized_scope(ancestor) else {
                     return;
-                }
-                let materialized = self.body.values.iter().any(|(value, _)| {
-                    super::metadata::scope(self.module, self.body, value) == Some(ancestor)
-                });
+                };
                 if materialized && flow.scopes.get(&ancestor) != Some(&1) {
                     self.error(R::B41, "nested scope opened without its materialized lexical ancestor");
                 }

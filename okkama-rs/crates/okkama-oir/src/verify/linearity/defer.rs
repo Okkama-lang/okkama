@@ -34,6 +34,7 @@ impl Engine<'_, '_> {
             let mut helper = Engine {
                 module: self.module, function, declaration, body, state: self.state,
                 emit: false, reported: BTreeSet::new(), managed: self.managed, flow_memory: 0,
+                materialized_scopes: None,
                 diagnose: false, collecting: false, capture_returns: true, contract_invalid: false,
                 witnesses: witnesses(self.module, body),
                 defer_stack: stack, defer_outputs: vec![],

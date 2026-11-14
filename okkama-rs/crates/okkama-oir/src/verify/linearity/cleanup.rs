@@ -944,14 +944,7 @@ impl Engine<'_, '_> {
             let mut branch = flow.clone();
             if exit.is_some() && matches!(arm.kind, DispatchKind::Success | DispatchKind::Pending) {
                 let generation = before.tokens[failure.as_u32() as usize].finish_origin;
-                for index in 0..branch.tokens.len() {
-                    if branch.tokens[index].finish_origin == generation {
-                        branch.failures[index] = 0;
-                        if branch.tokens[index].failure_origin.is_some() {
-                            branch.tokens[index].failure_origin = None;
-                        }
-                    }
-                }
+                self.clear_finish_generation(&mut branch, generation);
             }
             if arm.kind == DispatchKind::Failure && let Some(fact) = &fact {
                 let reserve: Vec<_> = fact.reserve.iter().cloned().collect();

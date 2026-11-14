@@ -36,6 +36,7 @@ struct Engine<'m, 's> {
     reported: BTreeSet<(L, R)>,
     managed: &'s [bool],
     flow_memory: usize,
+    materialized_scopes: Option<BTreeSet<ScopeId>>,
     #[allow(dead_code)]
     witnesses: std::rc::Rc<Vec<bool>>,
     diagnose: bool,
@@ -125,7 +126,7 @@ pub(super) fn check<'m>(module: &'m Module, selected: Option<FuncId>, state: &mu
         let mut engine = Engine {
             module, function, declaration, body, state, emit: false,
             reported: BTreeSet::new(),
-            managed: &managed, flow_memory: 0,
+            managed: &managed, flow_memory: 0, materialized_scopes: None,
             witnesses: witnesses(module, body), diagnose: true, collecting: false,
             capture_returns: false, contract_invalid: false,
             defer_stack: vec![function], defer_outputs: vec![], defer_cache: Default::default(),
@@ -135,6 +136,30 @@ pub(super) fn check<'m>(module: &'m Module, selected: Option<FuncId>, state: &mu
 }
 
 impl Engine<'_, '_> {
+    fn has_closing_token(&self, flow: &Flow) -> bool {
+        flow.tokens.iter().enumerate().any(|(index, token)| {
+            flow.availability[index] == AVAILABLE && token.cleanup.is_some()
+        })
+    }
+    fn materialized_scope(&mut self, ancestor: ScopeId) -> Option<bool> {
+        debug_assert!(self.materialized_scopes.is_none());
+        if !self.state.step(self.body.values.len().saturating_add(1)) {
+            return None;
+        }
+        Some(self.body.values.iter().any(|(value, _)| {
+            metadata::scope(self.module, self.body, value) == Some(ancestor)
+        }))
+    }
+    fn clear_finish_generation(&self, branch: &mut Flow, generation: Option<Origin>) {
+        for index in 0..branch.tokens.len() {
+            if branch.tokens[index].finish_origin == generation {
+                branch.failures[index] = 0;
+                if branch.tokens[index].failure_origin.is_some() {
+                    branch.tokens[index].failure_origin = None;
+                }
+            }
+        }
+    }
     fn empty_ctor_packet(&self, value: ValueId) -> bool {
         self.declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Ctor(_)))
             && super::later::value_type(self.module, self.body, value)
@@ -189,6 +214,9 @@ impl Engine<'_, '_> {
     fn flow_bytes(&self, flow: &Flow) -> usize {
         flow.availability.len().saturating_mul(1536)
             .saturating_add(self.flow_entries(flow).saturating_mul(128))
+    }
+    fn charge_relations(&mut self, flow: &Flow) -> bool {
+        self.charge_flow(flow)
     }
     fn charge_flow(&mut self, flow: &Flow) -> bool {
         // Scratch clones are released after each transfer. Charge their peak,

@@ -124,7 +124,7 @@ impl Engine<'_, '_> {
         if outcome == Outcome::Normal {
             if super::super::summaries::call(op).is_none() {
                 for slot in 0..schema.results.len() {
-                    if !self.charge_flow(flow) {
+                    if !self.charge_relations(flow) {
                         return Vec::new();
                     }
                     flow.retire_origin(view_origin(origin, slot));
@@ -139,7 +139,7 @@ impl Engine<'_, '_> {
                 && let Some(summary) = call.summary.and_then(|id| self.module.summaries.get(id).ok()) {
                 let sites: BTreeSet<_> = summary.results.iter().flat_map(|relation| &relation.fresh).copied().collect();
                 for site in sites {
-                    if !self.charge_flow(flow) {
+                    if !self.charge_relations(flow) {
                         return Vec::new();
                     }
                     flow.retire_origin(creation(origin, site));
@@ -150,7 +150,7 @@ impl Engine<'_, '_> {
                         Origin::Invoke(block, _) => Origin::ViewInvoke(block, index as u16),
                         _ => origin,
                     };
-                    if !self.charge_flow(flow) {
+                    if !self.charge_relations(flow) {
                         return Vec::new();
                     }
                     flow.retire_origin(view);
