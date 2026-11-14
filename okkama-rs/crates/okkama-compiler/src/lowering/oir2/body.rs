@@ -23,6 +23,7 @@ pub(super) struct BodyContext<'t> {
     pub deferred: Option<bool>,
     pub key: super::callables::BodyKey,
     pub calls: &'t std::cell::RefCell<super::known_calls::CallSpans>,
+    pub bound_entries: &'t std::collections::HashSet<ir::FuncId>,
     pub lambdas: &'t [super::anonymous::Lambda],
 }
 
@@ -115,6 +116,10 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             thir::BodyOwner::Method { .. } | thir::BodyOwner::Destroy { .. })));
         if receiver == 1 {
             this.receiver = params.first().copied();
+        }
+        if this.context.deferred.is_none() && this.context.bound_entries.contains(&this.function()) {
+            let object = owner.expect("bound method owner");
+            this.check_pending(this.receiver.expect("bound method receiver"), this.context.objects[&object])?;
         }
         if this.context.deferred.is_none() {
             this.initialize_fields()?;
@@ -523,6 +528,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
         use thir::ExprKind as E;
         let result_ty = expr.ty.as_ref().filter(|ty| **ty != Ty::Never);
         match &expr.kind {
+            E::BoundAction { .. } | E::BoundRoleAction { .. } => self.bound(expr),
             E::Closure { .. } => self.anonymous(expr),
             E::CallValue { .. } => self.invoke_anonymous(expr),
             E::Array(_) | E::Map(_) | E::Index { .. } | E::ArrayCast { .. }

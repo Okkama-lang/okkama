@@ -1,5 +1,7 @@
 #[path = "anonymous_tests.rs"]
 mod anonymous_tests;
+#[path = "bound_tests.rs"]
+mod bound_tests;
 
 use super::{LowerError, lower_to_oir2};
 use crate::analysis::{self, thir};

@@ -1,0 +1,17 @@
+module app;
+role Readable<T> {
+    read(value is int) is T;
+    read(value is string) is T;
+}
+object Box<T> does Readable<T> {
+    has value is T;
+    Box(:value);
+    read(value is int) is T { self.value; }
+    read(value is string) is T { self.value; }
+}
+main() is int {
+    let item is Readable<int> = Box(value: 7);
+    let number is (int) is int = item.read;
+    let text is (string) is int = item.read;
+    number(1) + text("a");
+}

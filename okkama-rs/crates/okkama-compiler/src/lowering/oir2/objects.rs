@@ -336,7 +336,7 @@ impl BodyLowerer<'_, '_> {
         self.call(function, values)
     }
 
-    fn check_pending(&mut self, object: ir::ValueId, declaration: ir::DeclId) -> Result<()> {
+    pub(super) fn check_pending(&mut self, object: ir::ValueId, declaration: ir::DeclId) -> Result<()> {
         let ir::DeclarationKind::Object { fields, .. } = &self.b.module().declarations.get(declaration)?.kind else {
             unreachable!("method owner");
         };

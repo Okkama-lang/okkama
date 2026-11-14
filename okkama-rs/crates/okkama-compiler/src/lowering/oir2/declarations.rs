@@ -226,12 +226,14 @@ impl Declarations {
                 unreachable!("reserved role");
             };
             let span = role.decl.expect("source role").span;
-            let methods = role.methods.iter().map(|method| {
+            let methods = role.methods.iter().enumerate().map(|(slot, method)| {
                 if method.is_async || method.variadic {
                     return Err(LowerError::unsupported(span, "async or variadic role slot"));
                 }
+                let overloaded = role.methods.iter().filter(|other| other.name == method.name).count() > 1;
+                let name = if overloaded { format!("{}#slot{slot}", method.name) } else { method.name.clone() };
                 Ok(ir::RoleMethod {
-                    name: method.name.clone(),
+                    name,
                     signature: ir::Signature {
                         params: method.params.iter().map(|(_, ty)| this.ty(ty, span)).collect::<Result<_>>()?,
                         results: method.result.iter().map(|ty| this.ty(ty, span)).collect::<Result<_>>()?,

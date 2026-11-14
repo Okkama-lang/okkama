@@ -35,10 +35,10 @@ fn oir2_c3a_open_invocations_remain_explicit() {
     for source in [
         "module app; object Apply { Apply(); call(f is () is int) is int { f(); } } main() is int { 0; }",
         concat!("module app; object Hold { has f is () is int; Hold(:f); call() is int { f(); } } ",
-            "main() is int { Hold(f: () is int { 1; }).call(); }"),
+            "object Apply { Apply(); call(f is () is int) is int { Hold(f: f).call(); } } main() is int { 0; }"),
         concat!("module app; object Hold { has f is () is int; Hold(:f); ",
             "call() is int { let g = if true { () is int { 1; }; } else { f; }; g(); } } ",
-            "main() is int { Hold(f: () is int { 1; }).call(); }"),
+            "object Apply { Apply(); call(f is () is int) is int { Hold(f: f).call(); } } main() is int { 0; }"),
     ] {
         let error = super::print_oir2(source).unwrap_err();
         assert!(matches!(error, super::LowerError::Unsupported { span, .. } if !span.is_empty()), "{error}");

@@ -1,0 +1,16 @@
+module app;
+object Child {
+    has seen is int;
+    Child(ask is () is int) { seen = ask(); }
+}
+object Parent {
+    has n is int;
+    has child is Child;
+    Parent(n is int) {
+        self.n = n;
+        let me = self;
+        child = Child(me.read);
+    }
+    read() is int { n; }
+}
+main() is int { Parent(n: 7).read(); }

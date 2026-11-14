@@ -1,0 +1,9 @@
+module app;
+import "collections/list" take List, EmptyList;
+import "collections/set" take OrderedSet, Intersection;
+main() is int {
+    let empty is List<int> = EmptyList();
+    let left = OrderedSet(values: empty.prefix(1));
+    let right = OrderedSet(values: empty.prefix(1));
+    Intersection(left: left, right: right).size();
+}

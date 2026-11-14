@@ -20,6 +20,7 @@ mod functional_tests;
 mod specialize;
 mod callables;
 mod anonymous;
+mod bound;
 mod known_calls;
 #[cfg(test)]
 mod callable_tests;
@@ -110,15 +111,13 @@ type Result<T> = std::result::Result<T, LowerError>;
 /// No CLI routing, ownership elaboration or semantic verifier is invoked here.
 pub(crate) fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
     let prepared = specialize::prepare(analysis)?;
-    // Open callable contracts and bound/capability operations remain separate reviewed steps.
+    // Open callable contracts and capability operations remain separate reviewed steps.
     for entry in &prepared.callables.bodies {
         if matches!(entry.body.owner, thir::BodyOwner::Test(_) | thir::BodyOwner::CapField { .. }) {
             return Err(LowerError::unsupported(entry.body.span, "test or capability body (#569 C5/C8)"));
         }
         let pending = thir::first_expr(&entry.body.block, &|expr| matches!(expr.kind,
-            thir::ExprKind::BoundAction { .. }
-            | thir::ExprKind::BoundRoleAction { .. }
-            | thir::ExprKind::CapSelect { .. } | thir::ExprKind::CapRead { .. }
+            thir::ExprKind::CapSelect { .. } | thir::ExprKind::CapRead { .. }
             | thir::ExprKind::TestCapability
             | thir::ExprKind::Call { callee: thir::Callee::Test(_), .. }
         ));
@@ -129,6 +128,8 @@ pub(crate) fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
     let analysis = &prepared.analysis;
     let mut declarations = declarations::Declarations::new(analysis)?;
     declarations.declare_lambdas(&prepared.callables)?;
+    let bound_entries = bound::entries(declarations.builder.module(), &prepared.callables,
+        &declarations.functions, &declarations.types)?;
     let calls = std::cell::RefCell::new(known_calls::CallSpans::new());
     // Check ordinary/default/cleanup bodies before constructor specializations.
     let mut bodies: Vec<_> = analysis.bodies.iter().collect();
@@ -179,7 +180,7 @@ pub(crate) fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
                 defers: &declarations.defers,
                 deferred: None,
                 key: callables::BodyKey { root: body.owner.clone(), path: vec![] },
-                lambdas: &declarations.lambdas, calls: &calls,
+                lambdas: &declarations.lambdas, calls: &calls, bound_entries: &bound_entries,
             };
             let lowered = body::BodyLowerer::lower(builder, body, root, &declarations.types, context)
                 .map_err(|error| error.in_function(&symbol))?;
@@ -201,7 +202,8 @@ pub(crate) fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
             objects: &declarations.objects,
             constructors: &declarations.constructors,
             given: vec![], listed: None, defers: &declarations.defers, deferred: None,
-            key: lambda.source.key.clone(), lambdas: &declarations.lambdas, calls: &calls,
+            key: lambda.source.key.clone(), lambdas: &declarations.lambdas,
+            calls: &calls, bound_entries: &bound_entries,
         };
         let lowered = body::BodyLowerer::lower(builder, &lambda.source.body, root, &declarations.types, context)
             .map_err(|error| error.in_function(&symbol))?;
@@ -223,7 +225,7 @@ pub(crate) fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
             constructors: &declarations.constructors,
             given: vec![], listed: None, defers: &declarations.defers,
             deferred: Some(deferred.receiver),
-            key: deferred.key.clone(), lambdas: &declarations.lambdas, calls: &calls,
+            key: deferred.key.clone(), lambdas: &declarations.lambdas, calls: &calls, bound_entries: &bound_entries,
         };
         let lowered = body::BodyLowerer::lower(builder, &deferred.source, root, &declarations.types, context)
             .map_err(|error| error.in_function(&symbol))?;

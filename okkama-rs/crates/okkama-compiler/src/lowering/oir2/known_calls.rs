@@ -1,17 +1,25 @@
 //! Conservative producer gate only: finite origins through SSA, snapshots and closed entries.
 //! Unknown boundaries poison joins; unseeded cycles never establish a known callable.
+//! Immutable fields use the union of all construction/update inputs in this closed module.
+//! This proves admission only; ownership origins, contracts and adapters still belong to own.
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use super::{LowerError, Result};
 use crate::oir2 as ir;
 use crate::source::Span;
 
+type Field = (ir::DeclId, u32);
+
+fn field_key(field: ir::FieldRef) -> Field {
+    (field.declaration, field.index)
+}
+
 type Value = (ir::FuncId, ir::ValueId);
 pub(super) type CallSpans = HashMap<(ir::FuncId, ir::InstId), Span>;
 
 #[derive(Clone, Default)]
 struct Origins {
-    targets: BTreeSet<ir::FuncId>,
+    targets: BTreeSet<(ir::FuncId, usize)>,
     open: bool,
 }
 
@@ -49,6 +57,9 @@ pub(super) fn check(module: &ir::Module, spans: &CallSpans) -> Result<()> {
     let mut copies = vec![];
     let mut supplied = HashSet::new();
     let mut invocations = vec![];
+    let mut field_reads = vec![];
+    let mut field_writes = HashMap::<Field, Vec<Value>>::new();
+    let mut open_fields = HashSet::new();
     for (function, data) in module.functions.iter() {
         let Some(body) = &data.body else {
             continue;
@@ -61,7 +72,25 @@ pub(super) fn check(module: &ir::Module, spans: &CallSpans) -> Result<()> {
             if let ir::Definition::InstResult { inst, .. } = data.def {
                 match &body.insts.get(inst)?.op {
                     ir::Operation::Core(ir::CoreOp::FnClosure { function: target, .. }) => {
-                        origins.targets.insert(*target);
+                        let captures = module.functions.get(*target)?.attrs.iter().find_map(|attr| {
+                            if let ir::FunctionAttr::Lambda { captures, .. } = attr {
+                                Some(*captures as usize)
+                            } else {
+                                None
+                            }
+                        }).unwrap_or(0);
+                        origins.targets.insert((*target, captures));
+                    }
+                    ir::Operation::Core(ir::CoreOp::FnBind { function: target, .. }) => {
+                        origins.targets.insert((*target, 1));
+                        supplied.insert(*target);
+                    }
+                    ir::Operation::Core(ir::CoreOp::FnBindRole { role, slot, .. }) => {
+                        for target in super::bound::role_targets(module, *role, *slot)? {
+                            origins.targets.insert((target, 1));
+                            supplied.insert(target);
+                        }
+                        origins.open = origins.targets.is_empty();
                     }
                     ir::Operation::Core(ir::CoreOp::Retag { value: source, .. }) => {
                         copies.push(((function, *source), (function, value)));
@@ -70,6 +99,16 @@ pub(super) fn check(module: &ir::Module, spans: &CallSpans) -> Result<()> {
                         if module.functions.get(*target)?.body.is_some() => {
                         for source in returns(module, *target)? {
                             copies.push(((*target, source), (function, value)));
+                        }
+                    }
+                    ir::Operation::Core(ir::CoreOp::ObjGet { field, .. }) => {
+                        field_reads.push((field_key(*field), (function, value)));
+                    }
+                    ir::Operation::Call(ir::CallOp::Role { role, slot, .. }) => {
+                        for target in super::bound::role_targets(module, *role, *slot)? {
+                            for source in returns(module, target)? {
+                                copies.push(((target, source), (function, value)));
+                            }
                         }
                     }
                     ir::Operation::Call(ir::CallOp::Closure { .. }) => {}
@@ -129,6 +168,28 @@ pub(super) fn check(module: &ir::Module, spans: &CallSpans) -> Result<()> {
         }
         for (inst, data) in body.insts.iter() {
             match &data.op {
+                ir::Operation::Core(ir::CoreOp::ObjNew { declaration, fields, .. }) => {
+                    for (index, &source) in fields.iter().enumerate() {
+                        let field = ir::FieldRef { declaration: *declaration, index: index as u32 };
+                        field_writes.entry(field_key(field)).or_default().push((function, source));
+                    }
+                }
+                ir::Operation::Core(ir::CoreOp::ObjNext { updates, .. }) => {
+                    for update in updates {
+                        field_writes.entry(field_key(update.field)).or_default().push((function, update.value));
+                    }
+                }
+                ir::Operation::Core(ir::CoreOp::ObjInit { field, value, .. }) => {
+                    field_writes.entry(field_key(*field)).or_default().push((function, *value));
+                }
+                ir::Operation::Call(ir::CallOp::Role { role, slot, call, .. }) => {
+                    for target in super::bound::role_targets(module, *role, *slot)? {
+                        supplied.insert(target);
+                        for (source, dest) in call.args.iter().zip(entry(module, target)?.into_iter().skip(1)) {
+                            copies.push(((function, source.value), (target, dest)));
+                        }
+                    }
+                }
                 ir::Operation::Core(ir::CoreOp::FnClosure { function: target, captures, .. }) => {
                     supplied.insert(*target);
                     for (&source, dest) in captures.iter().zip(entry(module, *target)?) {
@@ -162,15 +223,32 @@ pub(super) fn check(module: &ir::Module, spans: &CallSpans) -> Result<()> {
             }
         }
     }
-    // Uncalled ordinary declarations still require checking; their inputs have no known caller.
+    // Uncalled ordinary declarations still require checking; explicit inputs have no known caller.
+    // An implicit receiver comes from this closed module's construction sites, rather than a
+    // separate external input for every unused method in a concrete witness inventory.
     for (function, data) in module.functions.iter() {
         let lambda = data.attrs.iter().any(|attr| matches!(attr, ir::FunctionAttr::Lambda { .. }));
         if !supplied.contains(&function) && !lambda {
-            for param in entry(module, function)? {
+            let receiver = usize::from(data.attrs.iter().any(|attr| matches!(attr,
+                ir::FunctionAttr::Method(_) | ir::FunctionAttr::Successor(_) | ir::FunctionAttr::Destroy(_))));
+            for param in entry(module, function)?.into_iter().skip(receiver) {
                 if let Some(origins) = facts.get_mut(&(function, param)) {
                     origins.open = true;
                 }
+                let body = data.body.as_ref().expect("entry body");
+                let ty = body.values.get(param)?.ty;
+                unknown_fields(module, ty, &mut HashSet::new(), &mut open_fields)?;
             }
+        }
+    }
+    for (field, dest) in field_reads {
+        if let Some(sources) = field_writes.get(&field) {
+            for &source in sources {
+                copies.push((source, dest));
+            }
+        }
+        if open_fields.contains(&field) && let Some(origins) = facts.get_mut(&dest) {
+            origins.open = true;
         }
     }
     let mut completed = false;
@@ -187,10 +265,7 @@ pub(super) fn check(module: &ir::Module, spans: &CallSpans) -> Result<()> {
             if origins.open && let Some(result) = result && let Some(output) = facts.get_mut(&(function, result)) {
                 changed |= output.merge(&Origins { open: true, ..Default::default() });
             }
-            for target in origins.targets {
-                let captures = module.functions.get(target)?.attrs.iter().find_map(|attr| {
-                    if let ir::FunctionAttr::Lambda { captures, .. } = attr { Some(*captures as usize) } else { None }
-                }).unwrap_or(0);
+            for (target, captures) in origins.targets {
                 for (arg, dest) in call.args.iter().zip(entry(module, target)?.into_iter().skip(captures)) {
                     if let Some(input) = facts.get(&(function, arg.value)).cloned()
                         && let Some(output) = facts.get_mut(&(target, dest)) {
@@ -225,6 +300,56 @@ pub(super) fn check(module: &ir::Module, spans: &CallSpans) -> Result<()> {
             let error = LowerError::unsupported(span, "open action invocation (pending audited O1 contract)");
             return Err(error.in_function(&module.functions.get(function)?.symbol));
         }
+    }
+    Ok(())
+}
+
+// A field union is closed only when every construction/update input is known and no
+// unsupplied ordinary entry can introduce an external object containing that field.
+fn unknown_fields(module: &ir::Module, ty: ir::TypeId, seen: &mut HashSet<ir::TypeId>,
+    fields: &mut HashSet<Field>) -> Result<()> {
+    if !seen.insert(ty) {
+        return Ok(());
+    }
+    match module.types.get(ty)? {
+        ir::Type::Object { decl, .. } => {
+            if let ir::DeclarationKind::Object { fields: layout, .. } = &module.declarations.get(*decl)?.kind {
+                for (index, field) in layout.iter().enumerate() {
+                    fields.insert((*decl, index as u32));
+                    unknown_fields(module, field.ty, seen, fields)?;
+                }
+            }
+        }
+        ir::Type::Role { .. } => {
+            for (decl, declaration) in module.declarations.iter() {
+                if let ir::DeclarationKind::Object { witnesses, fields: layout, .. } = &declaration.kind
+                    && witnesses.iter().any(|witness| witness.role == ty) {
+                    for (index, field) in layout.iter().enumerate() {
+                        fields.insert((decl, index as u32));
+                        unknown_fields(module, field.ty, seen, fields)?;
+                    }
+                }
+            }
+        }
+        ir::Type::Variant(decl) => {
+            if let ir::DeclarationKind::Variant { cases, .. } = &module.declarations.get(*decl)?.kind {
+                for case in cases {
+                    if let ir::DeclarationKind::Object { fields: layout, .. } = &module.declarations
+                        .get(case.layout)?.kind {
+                        for (index, field) in layout.iter().enumerate() {
+                            fields.insert((case.layout, index as u32));
+                            unknown_fields(module, field.ty, seen, fields)?;
+                        }
+                    }
+                }
+            }
+        }
+        ir::Type::Successor(inner) | ir::Type::Array(inner) => unknown_fields(module, *inner, seen, fields)?,
+        ir::Type::Map(key, value) => {
+            unknown_fields(module, *key, seen, fields)?;
+            unknown_fields(module, *value, seen, fields)?;
+        }
+        _ => {}
     }
     Ok(())
 }

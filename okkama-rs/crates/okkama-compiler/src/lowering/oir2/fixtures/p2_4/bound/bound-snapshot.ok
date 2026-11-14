@@ -1,0 +1,14 @@
+module app;
+object Counter {
+    has n is int;
+    Counter(:n);
+    read() is int { n; }
+    destroy { }
+    bumped() is ^Counter { ^n = n + 1; }
+}
+main() is int {
+    let owner = Counter(n: 7);
+    let read is () is int = owner.read;
+    owner = Counter(n: 9);
+    read();
+}
