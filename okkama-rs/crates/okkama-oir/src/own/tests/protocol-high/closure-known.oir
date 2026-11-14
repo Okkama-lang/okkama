@@ -1,0 +1,58 @@
+oir 2 high
+module sync
+object R {
+    destroy @destroy
+}
+scope SD action in @destroy
+scope SC action in @make
+scope S action in @f
+func @destroy(%self: R) -> void [destroy R] {
+    ^entry in SD:
+    ret
+}
+func @make() -> R [ctor R] {
+    boundary BC lexical in SC
+    ^entry in SC unwind ^failed:
+    %r: R = obj.new R { }
+    want %r
+    [iprep0] exit.prepare return %r at BC
+    result.exit edge normal(0), value %r, demand want, prepare iprep0
+    ret %r
+    ^failed(%failure: failure) in SC:
+    raise %failure
+}
+scope SR action in @read
+func @read(%self: R) -> int [method R] {
+    boundary Bauto lexical in SR
+    ^entry in SR:
+    %n: int = const 7
+    want %n
+    [iprep1] exit.prepare return %n at Bauto
+    result.exit edge normal(0), value %n, demand want, prepare iprep1
+    ret %n
+}
+scope SL action in @lambda
+func @lambda(%captured: R) -> int [lambda captures 1] {
+    boundary BL lexical in SL
+    ^entry in SL unwind ^failed:
+    %n: int = call @read(%captured)
+    [ip] exit.prepare return %n at BL
+    result.exit edge normal(0), value %n, demand want, prepare ip
+    ret %n
+    ^failed(%failure: failure) in SL:
+    raise %failure
+}
+func @f() -> int {
+    boundary BF lexical in S
+    binding b0 "r": R in S
+    ^entry in S unwind ^failed:
+    %r: R = call @make()
+    bind %r, binding b0
+    %closure: fn() -> int = fn.closure @lambda, [%r], ty fn() -> int
+    %result: int = fn.call %closure()
+    [ip] exit.prepare return %result at BF
+    result.exit edge normal(0), value %result, demand want, prepare ip
+    ret %result
+    ^failed(%failure: failure) in S:
+    raise %failure
+}

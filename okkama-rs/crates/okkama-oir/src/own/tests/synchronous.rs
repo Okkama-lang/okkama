@@ -1,7 +1,7 @@
 use super::*;
 use std::path::{Path, PathBuf};
 
-fn fixtures(directory: &str) -> Vec<PathBuf> {
+pub(super) fn fixtures(directory: &str) -> Vec<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/own/tests").join(directory);
     let mut paths: Vec<_> = std::fs::read_dir(root).unwrap().map(|entry| entry.unwrap().path()).collect();
     paths.sort();
@@ -15,7 +15,7 @@ fn rewrite_source(source: &str) -> Result<OwnOutput, String> {
     rewrite_subset(output, &OwnOptions::default()).map_err(|error| format!("rewrite: {error}"))
 }
 
-fn roundtrip(module: &Module) -> Module {
+pub(super) fn roundtrip(module: &Module) -> Module {
     let printed = crate::text::print(module).unwrap();
     let parsed = crate::text::parse(&printed).unwrap();
     assert_eq!(crate::text::print(&parsed).unwrap(), printed);
@@ -189,10 +189,10 @@ fn checked_entry_point_certifies_projection_escape() {
     rewrite_synchronous(output, &OwnOptions::default()).unwrap();
 }
 
-struct TrustedNative {
-    name: &'static str,
-    signature: Signature,
-    summary: Summary,
+pub(super) struct TrustedNative {
+    pub(super) name: &'static str,
+    pub(super) signature: Signature,
+    pub(super) summary: Summary,
 }
 impl ExternalContracts for TrustedNative {
     fn native(&self, name: &str) -> Option<&Signature> {
@@ -206,6 +206,9 @@ impl ExternalContracts for TrustedNative {
     }
     fn intrinsic_summary(&self, name: &str) -> Option<&Summary> {
         (name == self.name).then_some(&self.summary)
+    }
+    fn descriptor_cleanup(&self, name: &str) -> Option<&Summary> {
+        (name == "oir.sync_closure.cleanup" && name == self.name).then_some(&self.summary)
     }
 }
 

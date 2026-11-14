@@ -68,7 +68,7 @@ impl Site {
 enum Equation {
     Body(FuncId),
     External,
-    Dispatch { targets: Vec<usize>, captures: Option<usize> },
+    Dispatch { targets: Vec<usize>, captures: BTreeMap<usize, usize> },
 }
 struct Node {
     equation: Equation,
@@ -268,27 +268,28 @@ impl Universe {
                 continue;
             };
             budget.memory((body.insts.len() + body.blocks.len()) * 32)?;
+            let origins = origins::callable_origins(module, body, budget)?;
             for (site, op) in operations(body) {
                 budget.work(1)?;
                 let Some((call, receiver)) = call(op) else {
                     continue;
                 };
-                let targets = targets(module, body, op, budget)?;
+                let mut targets = targets(module, body, op, budget)?;
+                let mut captures_by_target = BTreeMap::new();
+                if let Operation::Call(CallOp::Closure { callee, .. }) = op {
+                    let origin = &origins[&callee.value];
+                    if !origin.open && !origin.entries.is_empty() {
+                        targets = origin.entries.iter().map(|(target, _)| target.as_u32() as usize).collect();
+                        captures_by_target = origin.entries.iter().map(|(target, captures)| {
+                            (target.as_u32() as usize, *captures)
+                        }).collect();
+                    } else {
+                        targets.clear();
+                    }
+                }
                 let direct = matches!(op, Operation::Call(CallOp::Direct { .. } | CallOp::Native { .. }
                     | CallOp::Intrinsic { .. } | CallOp::Resume { .. } | CallOp::Cap { .. }));
-                let captures = match op {
-                    Operation::Call(CallOp::Closure { callee, .. }) => {
-                        match body.values.get(callee.value).map_err(arena)?.def {
-                            Definition::InstResult { inst, .. } => match &body.insts.get(inst).map_err(arena)?.op {
-                                Operation::Core(CoreOp::FnClosure { captures, .. }) => Some(captures.len()),
-                                Operation::Core(CoreOp::FnBind { .. }) => Some(1),
-                                _ => None,
-                            },
-                            _ => None,
-                        }
-                    }
-                    _ => None,
-                };
+                let captures = captures_by_target;
                 let kind = match op {
                     Operation::Call(CallOp::Role { .. }) => 0,
                     Operation::Call(CallOp::Closure { callee, .. }) => {
@@ -311,13 +312,14 @@ impl Universe {
                     body.descriptor_bindings.iter().find(|binding| binding.dictionary == *value)
                         .map(|binding| format!("{:?}", binding.contract))
                 }).collect();
-                let key = (kind, targets.clone(), captures, call.type_args.clone(), public_types, dictionaries);
+                let key = (kind, targets.clone(), captures.clone(), call.type_args.clone(), public_types, dictionaries);
                 let node = if direct && targets.len() == 1 {
                     targets[0]
                 } else if let Some(node) = adapters.get(&key) {
                     *node
                 } else if !targets.is_empty() {
-                    let summary = adapt(&universe.nodes[targets[0]].summary, captures, budget)?;
+                    let summary = adapt(&universe.nodes[targets[0]].summary,
+                        captures.get(&targets[0]).copied(), budget)?;
                     let dependencies = targets.iter().copied().collect();
                     let node = universe.nodes.len();
                     budget.memory(256 + normal::size(&summary) + targets.len() * 64)?;
@@ -339,6 +341,18 @@ impl Universe {
                         let message = format!("{function:?} {site:?}: {}", error.message);
                         budget.fail(OwnDiagnosticKind::MissingBoundary, message)
                     })?.summary;
+                    if summary.contract.publication != Publication::Atomic || summary.contract.suspends
+                        || summary.contract.async_destroy {
+                        return Err(budget.fail(OwnDiagnosticKind::UnsupportedAsync,
+                            "open callable task/receipt settlement requires commit 5"));
+                    }
+                    if matches!(op, Operation::Call(CallOp::Closure { .. }))
+                        && (summary.entry_kind != EntryKind::CallBoundary
+                            || summary.contract.protocol.and_then(|id| module.protocols.get(id).ok())
+                                .is_none_or(|protocol| protocol.kind != ProtocolKind::Closure)) {
+                        return Err(budget.fail(OwnDiagnosticKind::MissingBoundary,
+                            "open closure requires a checked call-boundary Closure family"));
+                    }
                     normal::normalize(&mut summary, budget)?;
                     let node = universe.nodes.len();
                     budget.memory(256 + normal::size(&summary))?;
@@ -513,9 +527,11 @@ impl Universe {
                             inferred.summary
                         }
                         Equation::Dispatch { targets, captures } => {
-                            let mut summary = adapt(&self.nodes[targets[0]].summary, *captures, budget)?;
+                            let mut summary = adapt(&self.nodes[targets[0]].summary,
+                                captures.get(&targets[0]).copied(), budget)?;
                             for target in &targets[1..] {
-                                let source = adapt(&self.nodes[*target].summary, *captures, budget)?;
+                                let source = adapt(&self.nodes[*target].summary,
+                                    captures.get(target).copied(), budget)?;
                                 if let Err(mut error) = normal::join(&mut summary, &source, budget) {
                                     self.locate(index, &mut error, module);
                                     return Err(error);

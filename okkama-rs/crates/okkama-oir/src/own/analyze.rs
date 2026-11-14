@@ -9,6 +9,7 @@ pub struct FunctionAnalysis {
     pub equations: Equations,
     pub value_shapes: BTreeMap<ValueId, ShapeId>,
     pub entries: BTreeMap<BlockId, FlowState>,
+    pub before_instructions: BTreeMap<InstId, FlowState>,
     pub before_edges: BTreeMap<BlockId, FlowState>,
     /// Possible original admission owners of a pre-accept construction packet.
     pub constructor_inputs: BTreeMap<InstId, BTreeSet<ScopeId>>,
@@ -102,7 +103,7 @@ pub fn analyze_function(
         budget.work(1)?;
         evaluations += 1;
         let outgoing = transfer(module, body, block, entries[&block].clone(), &graph,
-            &value_shapes, classification, &mut budget, None, None)?;
+            &value_shapes, classification, &mut budget, None, None, None)?;
         for (edge, state) in outgoing {
             budget.work(state.stored_facts())?;
             let changed = if let Some(previous) = entries.get_mut(&edge.target) {
@@ -132,10 +133,12 @@ pub fn analyze_function(
     let mut outcomes = vec![];
     let mut before_edges = BTreeMap::new();
     let mut constructor_inputs = BTreeMap::new();
+    let mut before_instructions = BTreeMap::new();
     for block in &graph.rpo {
         if let Some(entry) = entries.get(block) {
             outcomes.extend(transfer(module, body, *block, entry.clone(), &graph,
-                &value_shapes, classification, &mut budget, Some(&mut before_edges), Some(&mut constructor_inputs))?);
+                &value_shapes, classification, &mut budget, Some(&mut before_edges),
+                Some(&mut constructor_inputs), Some(&mut before_instructions))?);
         }
     }
     for (edge, state) in &outcomes {
@@ -153,7 +156,7 @@ pub fn analyze_function(
         }
     }
     Ok(FunctionAnalysis {
-        equations, value_shapes, entries, before_edges, constructor_inputs, outcomes, evaluations,
+        equations, value_shapes, entries, before_instructions, before_edges, constructor_inputs, outcomes, evaluations,
         height_bound, stats: budget.stats,
     })
 }
@@ -222,12 +225,17 @@ fn transfer(
     budget: &mut Budget<'_>,
     snapshots: Option<&mut BTreeMap<BlockId, FlowState>>,
     mut constructor_inputs: Option<&mut BTreeMap<InstId, BTreeSet<ScopeId>>>,
+    mut before_instructions: Option<&mut BTreeMap<InstId, FlowState>>,
 ) -> Result<Vec<(SemanticEdge, FlowState)>, OwnError> {
     let data = body.blocks.get(block).map_err(arena)?;
     let edges: Vec<_> = graph.outgoing[block.as_u32() as usize].iter().map(|index| &graph.edges[*index]).collect();
     let mut outcomes = vec![];
     for inst in &data.insts {
         budget.work(state.stored_facts() + 1)?;
+        if let Some(snapshots) = before_instructions.as_deref_mut() {
+            budget.memory(state.stored_facts() * 64)?;
+            snapshots.insert(*inst, state.clone());
+        }
         for edge in edges.iter().filter(|edge| edge.failure_point == Some(*inst)) {
             outcomes.push(((*edge).clone(), edge_state(module, body, edge, state.clone())?));
         }
@@ -276,6 +284,28 @@ fn transfer(
                     value.deps.insert(atom);
                     state.journals.insert((data.lexical_scope, atom), Quantity::ONE);
                     state.provenance.insert((data.lexical_scope, atom), 1);
+                }
+            }
+            Operation::Core(CoreOp::FnClosure { .. } | CoreOp::FnBind { .. } | CoreOp::FnBindRole { .. }
+                | CoreOp::CapMake { .. } | CoreOp::AnyBox { .. } | CoreOp::RoleWrap { .. }
+                | CoreOp::RoleNarrow { .. } | CoreOp::OnceLoad { .. }) => {
+                // Wrapping snapshots references and their full dependencies. It
+                // neither creates an identity nor promotes borrowed admission.
+                let mut deps = BTreeSet::new();
+                for operand in cfg::operation_uses(&instruction.op, body)
+                    .map_err(|error| flow_error(format!("operands: {error}")))? {
+                    deps.extend(&state.values[operand.value.as_u32() as usize].deps);
+                }
+                for result in &instruction.results {
+                    if managed(body, *result, classification)? {
+                        state.values[result.as_u32() as usize].deps = deps.clone();
+                    }
+                }
+            }
+            Operation::Core(CoreOp::OnceStore { value, .. }) => {
+                let ty = body.values.get(*value).map_err(arena)?.ty;
+                if classification.types[&ty].certificate.is_none() {
+                    return Err(flow_error("once.store requires a full-graph plain certificate"));
                 }
             }
             Operation::Lexical(LexicalOp::Bind { binding, value }

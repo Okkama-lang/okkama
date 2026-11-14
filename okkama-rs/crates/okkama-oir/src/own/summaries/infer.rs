@@ -11,6 +11,11 @@ impl Universe {
         let declaration = module.functions.get(function).map_err(arena)?;
         let body = declaration.body.as_ref().unwrap();
         let mut summary = bottom(module, declaration);
+        if module.profile == Profile::High && summary.contract.protocol.is_some() {
+            normal::failures(&mut summary.contract.failures, &[
+                FailureKind::Thrown, FailureKind::Program, FailureKind::Panic, FailureKind::Native,
+            ]);
+        }
         let mut replacements = BTreeMap::new();
         budget.memory(body.values.len() * 256 + (body.insts.len() + body.blocks.len()) * 64)?;
         let mut values = vec![normal::empty_relation(); body.values.len()];

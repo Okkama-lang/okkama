@@ -98,7 +98,7 @@ fn verify_types(module: &Module) -> Result<(), VerifyReport> {
         stats: VerifyStats::default(), incomplete: false, suppressed: 0,
         location: EntityLocation::Module, source_loc: None,
         poisoned: std::collections::BTreeSet::new(), positions: std::collections::BTreeMap::new(),
-        edge_positions: std::collections::BTreeMap::new(),
+        edge_positions: std::collections::BTreeMap::new(), cleanup_origins: None,
     };
     structure::check(module, None, &mut state);
     types::check(module, None, &mut state);

@@ -4,6 +4,21 @@ use crate::own::emit::{AdmissionComponent, ScopeExtraction};
 impl Driver<'_, '_> {
     /// Extract one selection from each accessible admission component. Aliases
     /// occur once in the selection; bound journals never become call inputs.
+    pub(super) fn may_offer(&self, point: &Landing, original: ValueId) -> bool {
+        if !self.managed(self.high.values.get(original).unwrap().ty) {
+            return false;
+        }
+        let flow = self.current_instruction.and_then(|inst| self.flow.before_instructions.get(&inst));
+        flow.is_none_or(|flow| {
+            let deps = &flow.values[original.as_u32() as usize].deps;
+            flow.journals.iter().any(|((owner, atom), quantity)| {
+                point.env.scopes.contains_key(owner) && deps.contains(atom)
+                    && !matches!(quantity.presence, domain::Presence::Bottom | domain::Presence::Absent)
+                    && flow.provenance.get(&(*owner, *atom)).is_some_and(|mask| mask & 1 != 0)
+            })
+        })
+    }
+
     pub(super) fn offered(
         &mut self,
         point: Landing,
@@ -11,9 +26,17 @@ impl Driver<'_, '_> {
     ) -> Result<(Landing, ValueId), OwnError> {
         let mut values = BTreeSet::new();
         for original in originals {
+            if self.elide_offers && !self.may_offer(&point, *original) {
+                continue;
+            }
             if self.managed(self.high.values.get(*original).map_err(arena)?.ty) {
                 values.insert(point.env.value(*original)?.value);
             }
+        }
+        if values.is_empty() && originals.iter().any(|original| {
+            self.managed(self.high.values.get(*original).unwrap().ty)
+        }) {
+            self.emitter.budget_ref().stats.splits_elided += point.env.scopes.len();
         }
         self.offered_values(point, values.into_iter().collect())
     }
@@ -75,7 +98,7 @@ impl Driver<'_, '_> {
 
     pub(super) fn call(
         &mut self,
-        mut point: Landing,
+        point: Landing,
         instruction: &Instruction,
         function: FuncId,
     ) -> Result<Landing, OwnError> {
@@ -85,12 +108,31 @@ impl Driver<'_, '_> {
                 | CallOp::Intrinsic { call, .. }) => call,
             _ => return Err(flow_error("expected direct call")),
         };
-        let originals: Vec<_> = call.args.iter().map(|arg| arg.value).collect();
-        let summary = self.module.functions.get(function).map_err(arena)?.summary
-            .ok_or_else(|| flow_error("call has no inferred summary"))?;
-        call.summary = Some(summary);
+        call.summary = self.module.functions.get(function).map_err(arena)?.summary;
+        self.emit_call(point, instruction, op)
+    }
+
+    pub(super) fn emit_call(
+        &mut self,
+        mut point: Landing,
+        instruction: &Instruction,
+        mut op: Operation,
+    ) -> Result<Landing, OwnError> {
+        let (call, receiver) = summaries::call(&op).ok_or_else(|| flow_error("expected call"))?;
+        let originals: Vec<_> = receiver.iter().chain(&call.args).map(|arg| arg.value).collect();
+        let summary = call.summary.ok_or_else(|| flow_error("call has no inferred summary"))?;
         let observation = self.module.summaries.get(summary).map_err(arena)?.entry_kind
             == EntryKind::ObservationAdmissionStaysCaller;
+        let open_protocol = if let Operation::Call(CallOp::Closure { callee, .. }) = &op {
+            let origin = &self.origins[&callee.value];
+            if origin.open || origin.entries.is_empty() {
+                self.module.summaries.get(summary).map_err(arena)?.contract.protocol
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let packet = if observation {
             None
         } else {
@@ -103,13 +145,29 @@ impl Driver<'_, '_> {
         if missing {
             return Err(flow_error("call operand has no reaching SSA definition"));
         }
+        let witness = match &op {
+            Operation::Call(CallOp::Direct { function, .. } | CallOp::Native { function, .. }
+                | CallOp::Intrinsic { function, .. }) => self.witnesses.contains(function),
+            _ => false,
+        };
+        let mut deps = vec![];
+        for (index, original) in originals.iter().enumerate() {
+            let latest = point.env.value(*original)?;
+            if self.managed(self.high.values.get(*original).map_err(arena)?.ty) {
+                deps.push(latest.deps.ok_or_else(|| flow_error("call argument omits full deps"))?);
+            } else if witness && index == 0 {
+                point = self.emit(point, Operation::Ownership(OwnershipOp::Dependencies { value: latest.value }))?;
+                deps.push(point.result(SlotName::Value)?);
+            }
+        }
         let call = match &mut op {
             Operation::Call(CallOp::Direct { call, .. } | CallOp::Native { call, .. }
-                | CallOp::Intrinsic { call, .. }) => call,
+                | CallOp::Intrinsic { call, .. } | CallOp::Closure { call, .. }
+                | CallOp::Cap { call, .. } | CallOp::Role { call, .. }) => call,
             _ => unreachable!(),
         };
         call.packet = packet;
-        call.deps = originals.iter().filter_map(|value| point.env.values[value].deps).collect();
+        call.deps = deps;
         self.prune(&mut point);
         point = self.emit(point, op)?;
         let output_packet = point.results.iter().find(|(name, _)| *name == SlotName::Packet).map(|(_, value)| *value);
@@ -131,7 +189,13 @@ impl Driver<'_, '_> {
             let scope = self.body.blocks.get(point.block).map_err(arena)?.lexical_scope;
             let state = point.env.scopes.get(&scope).copied()
                 .ok_or_else(|| flow_error("call output packet has no lexical owner"))?;
-            point = self.emit(point, Operation::Ownership(OwnershipOp::Admit { state, packet }))?;
+            point = if let Some(protocol) = open_protocol {
+                self.emit(point, Operation::Ownership(OwnershipOp::Dynamic {
+                    state, packet, target: scope, reason: DynamicReason::Closure, protocol,
+                }))?
+            } else {
+                self.emit(point, Operation::Ownership(OwnershipOp::Admit { state, packet }))?
+            };
         }
         Ok(point)
     }

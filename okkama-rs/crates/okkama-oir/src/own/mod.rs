@@ -1,23 +1,25 @@
 //! Ownership elaboration, independent of the verifier's implementation.
 //!
-//! Classification and summary inference preserve the input profile. Commit 2
-//! adds a finite forward domain, sealed SSA, lexical edges and an outcome emitter.
-//! `rewrite_synchronous` normalizes the synchronous High slice and independently
-//! verifies its output. `rewrite_subset` exposes the raw rewrite for diagnostic
-//! fixtures, including witnesses blocked by the independent verifier. D8/D17/D18
-//! semantic certification still requires the #564 commit-4 gate.
+//! Classification freezes source and memoized entry equations before solving.
+//! The synchronous rewrite preserves lexical cleanup, snapshot dependencies and
+//! checked callable/storage ABIs through the shared outcome emitter. Its public
+//! checked entry points certify output with the independent semantic verifier.
 pub mod domain;
 pub mod analyze;
 pub mod bindings;
 pub mod edges;
 pub mod emit;
 mod driver;
-pub use driver::{rewrite_subset, rewrite_synchronous};
+pub use driver::{rewrite_subset, rewrite_synchronous, rewrite_synchronous_with};
 mod classify;
 mod normal;
 mod summaries;
 mod scopes;
 mod inventory;
+mod origins;
+mod entries;
+mod census;
+mod routing;
 mod construction;
 
 use crate::*;
@@ -89,14 +91,22 @@ pub enum OwnLimit {
     Memory,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OwnStats {
+    pub schema_version: u32,
     pub active_function: Option<FuncId>,
     pub exhausted_limit: Option<OwnLimit>,
     pub functions: usize,
     pub emitted_checked_splits: usize,
+    pub splits_considered: usize,
+    pub splits_elided: usize,
+    pub splits_left_unelided: usize,
+    pub checked_partitions: usize,
+    pub known_owner_journals: usize,
+    pub emitted_dynamic_sites: u64,
     pub universe_nodes: usize,
     pub adapter_equations: usize,
+    pub materialized_adapters: usize,
     pub implicit_destroy_edges: usize,
     pub sccs: usize,
     pub cyclic_sccs: usize,
@@ -108,6 +118,37 @@ pub struct OwnStats {
     pub incompatible_protocol_joins: usize,
     pub charged_work: usize,
     pub peak_auxiliary_bytes: usize,
+}
+
+impl Default for OwnStats {
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            active_function: None,
+            exhausted_limit: None,
+            functions: 0,
+            emitted_checked_splits: 0,
+            splits_considered: 0,
+            splits_elided: 0,
+            splits_left_unelided: 0,
+            checked_partitions: 0,
+            known_owner_journals: 0,
+            emitted_dynamic_sites: 0,
+            universe_nodes: 0,
+            adapter_equations: 0,
+            materialized_adapters: 0,
+            implicit_destroy_edges: 0,
+            sccs: 0,
+            cyclic_sccs: 0,
+            equation_evaluations: 0,
+            empty_scope_candidates: 0,
+            elided_lexical_scopes: 0,
+            incompatible_publication_joins: 0,
+            incompatible_protocol_joins: 0,
+            charged_work: 0,
+            peak_auxiliary_bytes: 0,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,7 +166,6 @@ pub enum OwnDiagnosticKind {
     InvalidEquation,
     InvalidFlow,
     UnsupportedConstruct,
-    Commit4,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -155,6 +195,7 @@ impl std::error::Error for OwnError {}
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OwnAnalysis {
     pub types: BTreeMap<TypeId, TypeClassification>,
+    pub managed_references: std::collections::BTreeSet<TypeId>,
     /// Final projections for bound cleanup graphs. Unbound, unowned service
     /// types have no entry; absence never means an empty cleanup effect.
     pub cleanup_effects: BTreeMap<TypeId, ScopeEffectEnvelope>,
@@ -164,7 +205,7 @@ pub struct OwnAnalysis {
 #[derive(Debug)]
 pub struct OwnOutput {
     pub module: Module,
-    /// Emitted sites only; commit 1 emits no dynamic operations.
+    /// Emitted sites only; collected after unreachable landings are removed.
     pub census: DynamicCensus,
     pub stats: OwnStats,
     pub analysis: OwnAnalysis,
@@ -277,14 +318,11 @@ fn external_substitutions(
 
 /// Infer final summaries, cleanup projections and per-scope D18 envelopes.
 ///
-/// This commit runs classification and inference only: the returned module
-/// keeps its input profile and ownership ABI. No cleanup, pending reservation,
-/// adapter body or paired dependency SSA is fabricated. `analysis.scopes`
-/// supplies eligibility facts for the later rewrite, not an elision claim.
-/// The caller verifies input and annotated output independently. Narrowing an
-/// existing Own fixture may require a later CFG rewrite; inference does not edit
-/// outcome edges or certify the returned module.
-/// Exhaustion returns `Incomplete`, with no certified or partial module.
+/// Classification and inference materialize memoized High callable entries,
+/// then freeze their equations. The returned module retains its input profile;
+/// cleanup, paired dependency SSA and ownership transport are emitted by
+/// `rewrite_synchronous`. This intermediate result is not a certificate.
+/// Exhaustion returns `Incomplete` without a partial module.
 pub fn elaborate_ownership(
     mut module: Module,
     natives: &dyn NativeSummaries,
@@ -326,12 +364,19 @@ pub fn elaborate_ownership(
         budget.memory(512 + normal::size(&summary))?;
         external.insert(id, summary);
     }
+    if module.profile == Profile::High {
+        entries::witness_entries(&mut module, &mut budget)?;
+        entries::materialize(&mut module, &mut budget)?;
+    }
     let types = classify::classify(&module, options, &mut budget)?;
     let mut universe = summaries::Universe::build(&module, &types, external, natives, &mut budget)?;
     universe.solve(&module, &types, &mut budget)?;
     let mut analysis = scopes::analyze(&module, &types, &universe, &mut budget)?;
     universe.annotate(&mut module, &analysis.scopes, &mut budget)?;
     analysis.types = types;
+    analysis.managed_references = module.types.iter().filter_map(|(id, ty)| {
+        matches!(ty, Type::Fn(_) | Type::Cap { .. } | Type::Role { .. } | Type::Any).then_some(id)
+    }).collect();
     Ok(OwnOutput {
         module,
         census: DynamicCensus::default(),
@@ -350,10 +395,8 @@ fn flow_error(message: impl Into<String>) -> OwnError {
 fn unsupported(operation: &Operation) -> OwnError {
     let (kind, phase) = match operation {
         Operation::Async(_) => (OwnDiagnosticKind::UnsupportedAsync, "commit 5"),
-        Operation::Core(CoreOp::FnClosure { .. } | CoreOp::FnBind { .. } | CoreOp::FnBindRole { .. }
-            | CoreOp::CapMake { .. } | CoreOp::AnyBox { .. })
-        | Operation::Call(CallOp::Closure { .. } | CallOp::Cap { .. } | CallOp::Role { .. })
-        | Operation::Carrier(_) => (OwnDiagnosticKind::Commit4, "commit 4"),
+        Operation::Carrier(_) => (OwnDiagnosticKind::UnsupportedConstruct,
+            "owned failure carriers are excluded from 0.6.0"),
         _ => (OwnDiagnosticKind::UnsupportedConstruct, "outside the synchronous P1 producer"),
     };
     phase_error(kind, format!("{phase}: {}", operation.opcode()))

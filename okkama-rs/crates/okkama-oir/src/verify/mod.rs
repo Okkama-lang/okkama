@@ -45,6 +45,8 @@ pub trait ExternalContracts {
     fn intrinsic(&self, name: &str) -> Option<&Signature>;
     fn native_summary(&self, _: &str) -> Option<&Summary> { None }
     fn intrinsic_summary(&self, _: &str) -> Option<&Summary> { None }
+    /// Runtime entries authorized to destroy a descriptor's complete owner graph.
+    fn descriptor_cleanup(&self, _: &str) -> Option<&Summary> { None }
 }
 #[derive(Debug)]
 pub struct NoExternalContracts;
@@ -141,6 +143,7 @@ struct State<'a> {
     poisoned: std::collections::BTreeSet<EntityLocation>,
     positions: std::collections::BTreeMap<(FuncId, InstId), (BlockId, usize)>,
     edge_positions: std::collections::BTreeMap<(FuncId, VerifyEdgeId), BlockId>,
+    cleanup_origins: Option<effects::OriginIndex>,
 }
 impl State<'_> {
     fn at(&mut self, location: EntityLocation, source: Option<DebugLoc>) {
@@ -217,7 +220,7 @@ fn run<'m>(
         module, options, context, diagnostics: vec![], stats: VerifyStats::default(),
         incomplete: false, suppressed: 0, location: EntityLocation::Module, source_loc: None,
         poisoned: std::collections::BTreeSet::new(), positions: std::collections::BTreeMap::new(),
-        edge_positions: std::collections::BTreeMap::new(),
+        edge_positions: std::collections::BTreeMap::new(), cleanup_origins: None,
     };
     if profile.is_some_and(|expected| expected != module.profile) {
         state.error(RuleId::S1, "module profile does not match the requested verifier");

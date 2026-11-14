@@ -353,6 +353,89 @@ fn ownership_fixpoint_limits_are_incomplete() {
 }
 
 #[test]
+fn opaque_cleanup_verdicts_survive_function_order_permutations() {
+    use std::collections::BTreeSet;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/verify");
+    for class in ["valid", "invalid"] {
+        for name in ["B11-foreign-generic-box", "B11-generic-fn-origin"] {
+            let module = fixture_module(&root, &format!("{class}/{name}.oir"));
+            let verdict = |module: &okkama_oir::Module| match fixture_result(module, ErrorPolicy::All) {
+                Ok(()) => (None, BTreeSet::new()),
+                Err(report) => (Some(report.failure), report.diagnostics.into_iter().map(|diagnostic| {
+                    let site = match diagnostic.primary.entity {
+                        EntityLocation::Instruction { function, instruction } => {
+                            format!("{}:{}", module.functions.get(function).unwrap().symbol, instruction.as_u32())
+                        }
+                        other => format!("{other:?}"),
+                    };
+                    (diagnostic.rule, site)
+                }).collect()),
+            };
+            let expected = verdict(&module);
+            assert_eq!(expected.0.is_some(), class == "invalid", "{name}");
+            let canonical = text::print(&module).unwrap();
+            let mut parts = canonical.split("\nfunc ");
+            let prefix = parts.next().unwrap();
+            let mut functions: Vec<_> = parts.collect();
+            for _ in 0..functions.len() {
+                functions.rotate_left(1);
+                for reverse in [false, true] {
+                    let mut order = functions.clone();
+                    if reverse {
+                        order.reverse();
+                    }
+                    let source = format!("{prefix}\nfunc {}", order.join("\nfunc "));
+                    let permuted = text::parse(&source).unwrap();
+                    assert_eq!(verdict(&permuted), expected, "{class}/{name}: {source}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn opaque_origin_index_obeys_verification_budgets() {
+    let module = text::parse(include_str!("fixtures/verify/valid/B11-indexed-origins.oir")).unwrap();
+    let options = VerifyOptions { execution: ExecutionMode::Tests, ..VerifyOptions::default() };
+    let catalog = FixtureContracts(&module);
+    let context = VerifyContext { external_contracts: &catalog, ..VerifyContext::default() };
+    let stats = verify_with(&module, &options, context).unwrap().stats().clone();
+    for limits in [
+        VerifyLimits { steps: stats.steps - 1, ..VerifyLimits::default() },
+        VerifyLimits { memory_bytes: stats.memory_bytes - 1, ..VerifyLimits::default() },
+    ] {
+        let options = VerifyOptions { limits, ..options.clone() };
+        let report = verify_with(&module, &options, context).unwrap_err();
+        assert_eq!(report.failure, VerifyFailure::Incomplete, "{report:?}");
+    }
+}
+
+#[test]
+fn opaque_cleanup_pairs_reject_only_cleanup_effects() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/verify");
+    let mut failures = Vec::new();
+    for name in [
+        "generic-fn-origin", "generic-fn-query", "closed-fn-origin", "foreign-generic-box",
+        "local-declaration-parameter", "conflicting-opaque-typeof", "bodyless-opaque-result",
+        "dictionary-catalogue-role", "dictionary-take-convention", "generic-role-declaration",
+        "uninterned-role-declaration", "indexed-origins",
+    ] {
+        for class in ["valid", "invalid"] {
+            let path = format!("{class}/B11-{name}.oir");
+            let module = fixture_module(&root, &path);
+            match fixture_result(&module, ErrorPolicy::All) {
+                Ok(()) if class == "invalid" => failures.push(format!("{path}: accepted")),
+                Err(report) if class == "valid" || report.diagnostics.iter().any(|diagnostic| {
+                    !matches!(diagnostic.rule, RuleId::B112 | RuleId::B104)
+                }) => failures.push(format!("{path}: {report:?}")),
+                _ => {}
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
 fn absent_call_summaries_are_specific_to_high() {
     use okkama_oir::Profile;
     let source = include_str!("fixtures/verify/valid/B5-high-optional-summary.oir");

@@ -1,0 +1,108 @@
+oir 2 own
+module sync
+
+role Readable {
+    label(deps, own) -> (int, own) abi explicit(input_packet=1, output_packet=1)
+}
+
+object R {
+    does Readable {label = @own_witness_entry_4}
+}
+scope S0 action in @destroy
+scope S1 action in @make
+scope S2 action in @f
+scope S3 action in @read
+scope S4 action in @own_witness_entry_4
+summary M0 call-boundary parameters [parameter_effect(convention=borrow,
+        destination=none)] contract call_contract(publication=atomic)
+summary M1 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[R],
+        failures=[program], publication=atomic)
+summary M2 call-boundary parameters [parameter_effect(convention=borrow,
+        destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
+        publication=atomic)
+summary M3 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
+        failures=[program], publication=atomic)
+summary M4 call-boundary parameters [parameter_effect(convention=borrow,
+        destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
+        publication=atomic)
+summary M5 call-boundary parameters [parameter_effect(convention=borrow,
+        destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
+        publication=atomic)
+summary M6 observation parameters [parameter_effect(convention=borrow,
+        destination=none)] contract call_contract(publication=atomic)
+summary M7 observation results [result_relation(provenance=unbound_result)] contract call_contract(results=[R],
+        failures=[program], publication=atomic)
+summary M8 observation parameters [parameter_effect(convention=borrow,
+        destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
+        publication=atomic)
+
+func @destroy(%0: R facts(plain(certificate=closed_graph(ty=R)))) -> void abi observation summary(M6) {
+    ^b0 in S0:
+    br ^b1(%0)
+    ^b1(%1: R facts(plain(certificate=closed_graph(ty=R)))) in S0:
+    ret
+}
+
+func @make() -> R [ctor R] abi observation summary(M7) {
+    boundary B0 lexical in S1
+    ^b0 in S1:
+    br ^b1
+    ^b1 in S1:
+    invoke.own obj.new R { }
+        normal ^b2($value)
+        unwind ^b3($failure)
+    ^b2(%0: R facts(plain(certificate=closed_graph(ty=R)))) in S1:
+    ret %0
+    ^b3(%1: failure) in S1:
+    raise %1
+}
+
+func @read(%0: R facts(plain(certificate=closed_graph(ty=R)))) -> int [method R] abi observation summary(M8) {
+    boundary B0 lexical in S3
+    ^b0 in S3:
+    br ^b1(%0)
+    ^b1(%1: R facts(plain(certificate=closed_graph(ty=R)))) in S3:
+    %2: int = const 7
+    ret %2
+}
+
+func @f(%0: own) -> (int, own) abi explicit(input_packet=0, output_packet=1) summary(M3) {
+    binding b0 "r": R in S2
+    boundary B0 lexical in S2
+    dependency d0: dependency = empty
+    ^b0 in S2:
+    %1: scope<S2> = scope.begin S2
+    %2: scope<S2> = own.accept %1, %0
+    br ^b1(%2)
+    ^b1(%3: scope<S2>) in S2:
+    invoke.own call @make()
+        normal ^b2($value, %3)
+        unwind ^b3($failure, %3)
+    ^b2(%4: R facts(plain(certificate=closed_graph(ty=R))), %5: scope<S2>) in S2:
+    %6: Readable facts(managed(deps=d0)) = role.wrap %4, ty Readable
+    %7: deps = deps.of %6
+    %8: own = own.empty
+    (%9: int, %10: own, %11: deps) = call.role %6, Readable slot 0(; %8) deps [%7] summary(M5)
+    %12: scope<S2> = own.admit %5, %10
+    %13: closed = scope.end %12, effects scope_effects(failures=[], suspends=false, cancel=false)
+    %14: own = own.empty
+    ret %9, %14
+    ^b3(%15: failure, %16: scope<S2>) in S2:
+    %17: failure = scope.unwind %16, %15, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %17
+}
+
+func @own_witness_entry_4(%0: R facts(managed(deps=d0)); %1: deps, %2: own) -> (int, own) [method
+        R] abi explicit(input_packet=2, output_packet=1) summary(M4) {
+    boundary B0 lexical in S4
+    dependency d0: dependency = from_ssa(%1)
+    ^b0 in S4:
+    %3: scope<S4> = scope.begin S4
+    %4: scope<S4> = own.accept %3, %2
+    br ^b1(%0, %4)
+    ^b1(%5: R facts(plain(certificate=closed_graph(ty=R))), %6: scope<S4>) in S4:
+    %7: int = const 7
+    %8: closed = scope.end %6, effects scope_effects(failures=[], suspends=false, cancel=false)
+    %9: own = own.empty
+    ret %7, %9
+}

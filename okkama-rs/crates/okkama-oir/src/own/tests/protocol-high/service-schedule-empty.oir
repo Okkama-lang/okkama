@@ -1,0 +1,9 @@
+oir 2 high
+module empty_service_inventory
+protocol Services kind services holders [scope] rules [] roots [operands]
+scope S action in @f
+func @f() -> void {
+    service.schedule Schedule0 owner S, protocol Services
+    ^entry in S:
+    ret
+}

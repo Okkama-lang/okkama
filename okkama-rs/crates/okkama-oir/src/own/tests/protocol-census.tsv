@@ -1,0 +1,35 @@
+# OwnStats version=1. Static emitted sites across independent fixtures; peak bytes is a charged bound, not RSS.
+# a=Atomic ce=Cell ch=Channel gr=Group cl=Closure m=Merge; Any is separate.
+# c/e/u=splits considered/elided/left-unelided; chk=checked partitions; jrn=known-owner journals; elid=elided scopes.
+# ae/am=adapter equations/materialized; ip/ir=incompatible publication/protocol joins; aggregate bytes=max.
+fixture	a	ce	ch	gr	any	cl	m	total	c/e/u	chk	jrn	elid	ae/am	ip/ir	work	bytes
+any-borrowed	0	0	0	0	0	0	0	0	5/3/2	2	1	1	0/0	0/0	2805	925152
+any-fresh	0	0	0	0	0	0	0	0	3/0/3	3	0	1	0/0	0/0	1661	246272
+any-known-plain	0	0	0	0	0	0	0	0	0/0/0	0	0	1	0/0	0/0	240	18380
+bound-role	0	0	0	0	0	0	0	0	4/2/2	2	1	1	1/1	0/0	2629	526287
+bound-snapshot	0	0	0	0	0	0	0	0	5/2/3	3	1	1	1/1	0/0	3021	671950
+cap-call	0	0	0	0	0	0	0	0	4/2/2	2	1	1	0/0	0/0	2014	370168
+cap-hidden	0	0	0	0	0	0	0	0	5/0/5	5	0	1	0/0	0/0	2980	563636
+cap-parameter	0	0	0	0	0	0	0	0	2/1/1	1	0	1	0/0	0/0	1367	217408
+closure-borrowed	0	0	0	0	0	0	0	0	8/6/2	2	1	1	1/1	0/0	4410	1865884
+closure-empty	0	0	0	0	0	0	0	0	2/1/1	1	0	2	1/1	0/0	1675	328140
+closure-fresh	0	0	0	0	0	0	0	0	5/2/3	3	0	1	0/1	0/0	2520	521188
+closure-known-join	0	0	0	0	0	0	0	0	4/2/2	2	1	2	1/2	0/0	4159	1551410
+closure-known-loop	0	0	0	0	0	0	0	0	8/6/2	2	1	1	1/1	0/0	9918	5230300
+closure-known-phi	0	0	0	0	0	0	0	0	6/4/2	2	1	1	1/1	0/0	3857	1275044
+closure-known	0	0	0	0	0	0	0	0	6/4/2	2	1	1	1/1	0/0	2880	678540
+closure-open	0	0	0	0	0	1	0	1	3/0/3	3	0	1	1/0	0/0	2211	355880
+descriptor-binding	0	0	0	0	0	0	0	0	0/0/0	0	0	2	0/0	0/0	181	19784
+descriptor-plain-parameter	0	0	0	0	0	0	0	0	0/0/0	0	0	2	0/0	0/0	165	16888
+dynamic-any	0	0	0	0	1	0	0	1	2/0/2	2	0	1	0/0	0/0	1407	200600
+dynamic-atomic	1	0	0	0	0	0	0	1	1/0/1	1	0	1	0/0	0/0	1366	197624
+dynamic-cell	0	1	0	0	0	0	0	1	1/0/1	1	0	1	0/0	0/0	1366	197624
+dynamic-channel	0	0	1	0	0	0	0	1	2/0/2	2	0	1	0/0	0/0	1407	200600
+dynamic-closure	0	0	0	0	0	1	0	1	2/0/2	2	0	1	0/0	0/0	1407	200600
+dynamic-group	0	0	0	1	0	0	0	1	2/0/2	2	0	1	0/0	0/0	1407	200600
+once-plain	0	0	0	0	0	0	0	0	0/0/0	0	0	1	0/0	0/0	309	24380
+role-call	0	0	0	0	0	0	0	0	3/1/2	2	1	1	1/1	0/0	2326	448311
+role-parameter	0	0	0	0	0	0	0	0	2/1/1	1	0	1	1/1	0/0	1680	277695
+role-plain	0	0	0	0	0	0	0	0	1/1/0	0	0	3	1/1	0/0	1789	424535
+service-schedule-empty	0	0	0	0	0	0	0	0	0/0/0	0	0	0	0/0	0/0	61	4860
+TOTAL_peak_max	1	1	1	1	1	2	0	7	86/38/48	48	10	34	12/13	0/0	63218	5230300
