@@ -528,7 +528,11 @@ impl Engine<'_, '_> {
                 }
                 self.body.blocks.get(block).ok()
                 .and_then(|block| if let TermKind::InvokeOwn { normal, .. } = &block.term.kind {
-                    self.body.blocks.get(normal.block).ok().map(|block| block.params.clone())
+                    self.body.blocks.get(normal.block).ok().map(|target| {
+                        target.params.iter().zip(&normal.args).filter_map(|(value, arg)| {
+                            matches!(arg, EdgeArg::Produced(_)).then_some(*value)
+                        }).collect()
+                    })
                 } else { None }).unwrap_or_default()
             }
             _ => Vec::new(),

@@ -65,7 +65,10 @@ impl Engine<'_, '_> {
                     token.pending_boundary == Some(*boundary)
                 }
                 (Some(ExitKind::Fallthrough), ExitDestination::Scope(scope)) => token.pending_boundary
-                    .and_then(|id| self.body.boundaries.get(id).ok()).is_some_and(|boundary| boundary.scope == *scope),
+                    .and_then(|id| self.body.boundaries.get(id).ok()).is_some_and(|boundary| {
+                        boundary.scope != *scope
+                            && super::super::high::inside(self.module, boundary.scope, *scope, self.state)
+                    }),
                 _ => false,
             };
             if !destination_ok {

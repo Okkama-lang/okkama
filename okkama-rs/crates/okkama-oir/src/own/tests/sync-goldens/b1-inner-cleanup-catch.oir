@@ -168,7 +168,7 @@ func @f(%0: own) -> (int, own) abi explicit(input_packet=0, output_packet=1) sum
     br ^b24
     ^b13(%56: closed, %57: R facts(managed(deps=d9)), %58: deps, %59: scope<S2>) in S4:
     br ^b15
-    ^b14(%60: closed, %61: failure, %62: R facts(managed(deps=d10)), %63: deps, %64: scope<S2>) in S4:
+    ^b14(%60: closed, %61: failure, %62: R facts(managed(deps=d10)), %63: deps, %64: scope<S2>) in S2:
     br ^b3(%62, %63, %61, %64)
     ^b15 in S2:
     br ^b6(%57, %58, %59)

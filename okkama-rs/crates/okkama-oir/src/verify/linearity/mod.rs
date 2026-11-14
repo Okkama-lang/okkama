@@ -26,6 +26,14 @@ struct Engine<'m, 's> {
     emit: bool,
     reported: BTreeSet<(L, R)>,
     managed: &'s [bool],
+    flow_memory: usize,
+    diagnose: bool,
+    collecting: bool,
+    capture_returns: bool,
+    contract_invalid: bool,
+    defer_stack: Vec<FuncId>,
+    defer_outputs: Vec<defer::ReturnWitness>,
+    defer_cache: std::collections::BTreeMap<FuncId, Vec<defer::ReturnWitness>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,7 +114,9 @@ pub(super) fn check<'m>(module: &'m Module, selected: Option<FuncId>, state: &mu
         let mut engine = Engine {
             module, function, declaration, body, state, emit: false,
             reported: BTreeSet::new(),
-            managed: &managed,
+            managed: &managed, flow_memory: 0, diagnose: true, collecting: false,
+            capture_returns: false, contract_invalid: false,
+            defer_stack: vec![function], defer_outputs: vec![], defer_cache: Default::default(),
         };
         engine.solve();
     }
@@ -122,11 +132,14 @@ impl Engine<'_, '_> {
             })
     }
     fn error(&mut self, rule: R, message: &str) {
+        if self.collecting && !self.diagnose {
+            self.contract_invalid = true;
+        }
         if self.emit && self.reported.insert((self.state.location.clone(), rule)) {
             self.state.error(rule, message);
         }
     }
-    fn charge_flow(&mut self, flow: &Flow) -> bool {
+    fn flow_entries(&self, flow: &Flow) -> usize {
         let tokens = flow.tokens.iter().chain(&flow.journals)
             .chain(flow.frames.values().flat_map(|layout| layout.values().map(|slot| &slot.token)))
             .chain(flow.cells.values().map(|slot| &slot.token));
@@ -159,8 +172,23 @@ impl Engine<'_, '_> {
         }
         entries = entries.saturating_add(flow.dead.len() + flow.bindings.len() + flow.provenance.len());
         entries = entries.saturating_add(flow.frames.values().map(|slots| slots.len()).sum::<usize>());
-        self.state.step(entries.saturating_add(flow.availability.len()))
-            && self.state.array(flow.availability.len(), 1536) && self.state.array(entries, 128)
+        entries
+    }
+    fn flow_bytes(&self, flow: &Flow) -> usize {
+        flow.availability.len().saturating_mul(1536)
+            .saturating_add(self.flow_entries(flow).saturating_mul(128))
+    }
+    fn charge_flow(&mut self, flow: &Flow) -> bool {
+        // Scratch clones are released after each transfer. Charge their peak,
+        // and account retained alternatives separately when inserting them.
+        let bytes = self.flow_bytes(flow).saturating_mul(8);
+        if bytes > self.flow_memory {
+            if !self.state.memory(bytes - self.flow_memory) {
+                return false;
+            }
+            self.flow_memory = bytes;
+        }
+        self.state.step(self.flow_entries(flow).saturating_add(flow.availability.len()))
     }
 
     fn initial(&mut self) -> Flow {
@@ -302,6 +330,9 @@ impl Engine<'_, '_> {
         if !self.charge_flow(&initial) {
             return;
         }
+        if !self.state.memory(self.flow_bytes(&initial)) {
+            return;
+        }
         incoming[self.body.entry.as_u32() as usize].push(initial);
         let mut queue = VecDeque::from([self.body.entry]);
         let mut queued = vec![false; self.body.blocks.len()];
@@ -311,6 +342,13 @@ impl Engine<'_, '_> {
             queued[index] = false;
             if !self.state.step(1) {
                 return;
+            }
+            let scratch = incoming[index].iter().map(|flow| self.flow_bytes(flow)).sum::<usize>();
+            if scratch > self.flow_memory {
+                if !self.state.memory(scratch - self.flow_memory) {
+                    return;
+                }
+                self.flow_memory = scratch;
             }
             let inputs = incoming[index].clone();
             for flow in inputs {
@@ -331,6 +369,9 @@ impl Engine<'_, '_> {
                     let changed = if let Some(old) = states.iter_mut().find(|old| old.same_relations(&flow)) {
                         old.join_masks(&flow)
                     } else {
+                        if !self.state.memory(self.flow_bytes(&flow)) {
+                            return;
+                        }
                         states.push(flow);
                         true
                     };
@@ -341,7 +382,8 @@ impl Engine<'_, '_> {
                 }
             }
         }
-        self.emit = true;
+        self.emit = self.diagnose;
+        self.collecting = self.capture_returns;
         self.initial();
         for (block, _) in self.body.blocks.iter() {
             for flow in &incoming[block.as_u32() as usize] {
@@ -506,6 +548,14 @@ impl Engine<'_, '_> {
                     &flow, &mut outgoing);
             }
             TermKind::RetDefer { tag, values } => {
+                if self.collecting {
+                    if !self.state.memory(self.flow_bytes(&flow)) {
+                        return outgoing;
+                    }
+                    self.defer_outputs.push(defer::ReturnWitness {
+                        tag: tag.clone(), values: values.clone(), flow: flow.clone(),
+                    });
+                }
                 self.defer_return(tag, values, &flow);
                 let normal = !matches!(tag, DeferReturnTag::Continue) || values.is_empty();
                 self.finish(&mut flow, normal, values);
@@ -536,7 +586,20 @@ impl Engine<'_, '_> {
                         &unwind.target.args.iter().copied().map(EdgeArg::Value).collect::<Vec<_>>(), &[], R::B63));
                 } else { self.finish(&mut flow, false, &[]); }
             }
-            TermKind::Trap { .. } | TermKind::Unreachable => {
+            TermKind::Trap { .. } => {
+                // Spec §9.2: program failure follows the ordinary unwind continuation.
+                flow.active_failure = failure_bit(FailureKind::Program);
+                flow.active_failure_origin = Some(Origin::Invoke(id, u32::MAX));
+                flow.latest_failure = flow.active_failure;
+                flow.latest_failure_origin = flow.active_failure_origin;
+                if let Some(unwind) = &block.unwind {
+                    let args = unwind.target.args.iter().copied().map(EdgeArg::Value).collect::<Vec<_>>();
+                    outgoing.push(self.edge(&flow, unwind.target.block, &args, &[], R::B63));
+                } else {
+                    self.finish(&mut flow, false, &[]);
+                }
+            }
+            TermKind::Unreachable => {
                 flow.active_failure = failure_bit(FailureKind::Program);
                 self.finish(&mut flow, false, &[]);
             }

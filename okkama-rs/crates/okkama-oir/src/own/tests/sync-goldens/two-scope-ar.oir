@@ -137,7 +137,7 @@ func @f(%0: own) -> (R, own) abi explicit(input_packet=0, output_packet=1) summa
     br ^b18
     ^b11(%51: closed, %52: pending, %53: R facts(managed(deps=d4)), %54: deps, %55: scope<S2>) in S3:
     br ^b13
-    ^b12(%56: closed, %57: failure, %58: scope<S2>) in S3:
+    ^b12(%56: closed, %57: failure, %58: scope<S2>) in S2:
     %59: failure = scope.unwind %58, %57, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
     raise %59
     ^b13 in S2:

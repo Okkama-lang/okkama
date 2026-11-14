@@ -119,6 +119,22 @@ impl Driver<'_, '_> {
                             value, deps: result.filter(|ty| self.managed(*ty)).map(|_| deps),
                         });
                         replaced.env.cleanup.returning = true;
+                        // The replaced fallthrough continuation is abandoned. Retain
+                        // only references needed by remaining defers or an outer catch.
+                        let mut needed: BTreeSet<ValueId> = BTreeSet::new();
+                        if let Some(target) = &self.current_unwind {
+                            needed.extend(&target.args);
+                            needed.extend(&self.failure_live[&target.block]);
+                        }
+                        for prefix in replaced.env.cleanup.defers.values() {
+                            for registration in prefix {
+                                if let Operation::Lexical(LexicalOp::DeferRegister { action, .. }) =
+                                    &self.high.insts.get(*registration).map_err(arena)?.op {
+                                    needed.extend(&action.captures);
+                                }
+                            }
+                        }
+                        replaced.env.values.retain(|value, _| needed.contains(value));
                         self.replacement_returns.push(ReplacementReturn {
                             point: replaced, target: self.current_unwind.clone(), source: self.current_high, result,
                         });

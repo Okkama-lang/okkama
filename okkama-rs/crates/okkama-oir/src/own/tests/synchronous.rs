@@ -63,65 +63,50 @@ fn synchronous_lowering_inputs() {
     assert!(errors.is_empty(), "{}", errors.join("\n"));
 }
 
-// These are reviewed expectations, with no regeneration/blessing path. A
-// blocked entry is a regression witness, NOT semantic acceptance. #564 must
-// remove these failures before the corresponding positive acceptance gate.
-const WITNESSES: &[(&str, &[RuleId])] = &[
-    ("b1-inner-cleanup-catch", &[]),
-    ("b2-bound-replacement", &[]),
-    ("construction-completion", &[]),
-    ("construction-failure", &[]),
-    ("construction-stage-overwrite", &[RuleId::B51]),
-    ("late-argument-before-call", &[]),
-    ("same-alias-replacement", &[]),
-    ("resource-panic", &[]),
-    // The core engine finishes Trap directly instead of following block.unwind.
-    ("resource-trap", &[RuleId::B41]),
-    ("spec16-1-bound-call", &[]),
-    ("spec16-2-temporary-call", &[]),
-    // B5.1 loses the accepted field's containment witness across pending/commit.
-    ("spec16-3-serial-order", &[RuleId::B51]),
-    ("spec16-4-defer-prefix", &[]),
-    // B5.1 does not prove the checked field partition within the accepted input.
-    ("spec16-5-projection-escape", &[RuleId::B51]),
-    // Pending does not discharge/restore the successor's independent must-use.
-    ("spec16-6-rebind-history", &[RuleId::B51, RuleId::B82]),
-    ("two-scope-ar", &[]),
-    ("two-scope-ra", &[]),
+// Reviewed expectations; changes require an explanation of the semantic difference.
+const WITNESSES: &[&str] = &[
+    "b1-inner-cleanup-catch",
+    "b2-bound-replacement",
+    "construction-completion",
+    "construction-failure",
+    "construction-stage-overwrite",
+    "late-argument-before-call",
+    "same-alias-replacement",
+    "resource-panic",
+    "resource-trap",
+    "spec16-1-bound-call",
+    "spec16-2-temporary-call",
+    "spec16-3-serial-order",
+    "spec16-4-defer-prefix",
+    "spec16-5-projection-escape",
+    "spec16-6-rebind-history",
+    "two-scope-ar",
+    "two-scope-ra",
 ];
 
-fn acceptance(module: &Module, expected: &[RuleId]) {
-    if expected.is_empty() {
-        verify_own(module).unwrap_or_else(|error| panic!("{error:?}"));
-    } else {
-        let error = verify_own(module).unwrap_err();
-        assert_eq!(error.failure, VerifyFailure::Rejected);
-        let rules: BTreeSet<_> = error.diagnostics.iter().map(|diagnostic| diagnostic.rule).collect();
-        assert_eq!(rules, expected.iter().copied().collect());
-        assert!(error.diagnostics.iter().all(|diagnostic| {
-            matches!(diagnostic.primary.entity, EntityLocation::Terminator { .. })
-        }));
-    }
-}
-
 #[test]
-fn reviewed_synchronous_goldens_and_explicit_verifier_blockers() {
+fn reviewed_synchronous_goldens_verify() {
     let inputs = fixtures("sync-high");
     assert_eq!(inputs.len(), WITNESSES.len());
     assert_eq!(fixtures("sync-goldens").len(), WITNESSES.len());
     let expected = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/own/tests/sync-goldens");
-
-    for (name, blocked_rules) in WITNESSES {
+    let mut errors = vec![];
+    for name in WITNESSES {
         let source = inputs.iter().find(|path| path.file_stem().unwrap() == *name).unwrap();
         let output = rewrite_source(&std::fs::read_to_string(source).unwrap())
             .unwrap_or_else(|error| panic!("{name}: {error}"));
         let printed = crate::text::print(&output.module).unwrap();
         let golden = std::fs::read_to_string(expected.join(format!("{name}.oir"))).unwrap();
         assert_eq!(printed, golden, "review the {name} difference; never auto-bless it");
-        acceptance(&output.module, blocked_rules);
-        acceptance(&roundtrip(&output.module), blocked_rules);
+        for module in [&output.module, &roundtrip(&output.module)] {
+            if let Err(error) = verify_own(module) {
+                errors.push(format!("{name}: {error:?}"));
+                break;
+            }
+        }
         protocol_invariants(name, &output.module);
     }
+    assert!(errors.is_empty(), "{}", errors.join("\n"));
 }
 
 fn protocol_invariants(name: &str, module: &Module) {
@@ -197,11 +182,11 @@ fn early_cleanup_reopened_scope_and_exceptional_pending_are_rejected() {
 }
 
 #[test]
-fn checked_entry_point_refuses_to_certify_a_known_verifier_blocker() {
+fn checked_entry_point_certifies_projection_escape() {
     let source = include_str!("sync-high/spec16-5-projection-escape.oir");
     let module = crate::text::parse(source).unwrap();
     let output = elaborate_ownership(module, &TestNatives::default(), &OwnOptions::default()).unwrap();
-    assert!(matches!(rewrite_synchronous(output, &OwnOptions::default()), Err(OwnError::InvalidOutput(_))));
+    rewrite_synchronous(output, &OwnOptions::default()).unwrap();
 }
 
 struct TrustedNative {
@@ -213,10 +198,13 @@ impl ExternalContracts for TrustedNative {
     fn native(&self, name: &str) -> Option<&Signature> {
         (name == self.name).then_some(&self.signature)
     }
-    fn intrinsic(&self, _: &str) -> Option<&Signature> {
-        None
+    fn intrinsic(&self, name: &str) -> Option<&Signature> {
+        (name == self.name).then_some(&self.signature)
     }
     fn native_summary(&self, name: &str) -> Option<&Summary> {
+        (name == self.name).then_some(&self.summary)
+    }
+    fn intrinsic_summary(&self, name: &str) -> Option<&Summary> {
         (name == self.name).then_some(&self.summary)
     }
 }
@@ -234,7 +222,11 @@ fn observation_borrowed_result_and_explicit_empty_native_transport() {
         let result = if observation { resource } else { int };
         let name = if observation { "host.observe" } else { "host.scalar" };
         let mut external = function("native", parameters.clone(), vec![result]);
-        external.attrs.push(FunctionAttr::Extern(name.into()));
+        if observation {
+            external.attrs.push(FunctionAttr::Intrinsic { name: name.into(), objects: vec![], helpers: vec![] });
+        } else {
+            external.attrs.push(FunctionAttr::Extern(name.into()));
+        }
         let summary = Summary {
             entry_kind: if observation { EntryKind::ObservationAdmissionStaysCaller } else { EntryKind::CallBoundary },
             parameters: if observation { vec![ParameterEffect {
@@ -262,7 +254,12 @@ fn observation_borrowed_result_and_explicit_empty_native_transport() {
             call.args.push(CallArgument { value: builder.block_params(builder.entry()).unwrap()[0],
                 convention: OperandConvention::Borrow });
         }
-        let value = builder.emit_schema(Operation::Call(CallOp::Native { function: native, call })).unwrap()[0];
+        let operation = if observation {
+            CallOp::Direct { function: native, call }
+        } else {
+            CallOp::Native { function: native, call }
+        };
+        let value = builder.emit_schema(Operation::Call(operation)).unwrap()[0];
         builder.terminate(TermKind::Ret { values: if observation { vec![] } else { vec![value] } }).unwrap();
         let body = builder.finish().unwrap();
         module.define_function(caller, body).unwrap();
@@ -282,7 +279,7 @@ fn observation_borrowed_result_and_explicit_empty_native_transport() {
         verify_with(&output.module, &VerifyOptions::default(), context).unwrap();
         let body = output.module.functions.get(caller).unwrap().body.as_ref().unwrap();
         let call = body.insts.iter().find_map(|(_, instruction)| match &instruction.op {
-            Operation::Call(CallOp::Native { call, .. }) => Some(call),
+            Operation::Call(CallOp::Native { call, .. } | CallOp::Direct { call, .. }) => Some(call),
             _ => None,
         }).unwrap();
         assert_eq!(call.packet.is_none(), observation);
@@ -295,19 +292,10 @@ fn observation_borrowed_result_and_explicit_empty_native_transport() {
 }
 
 #[test]
-fn hand_inputs_respect_high_contract_except_the_transportless_d8_schema() {
+fn hand_inputs_respect_high_contract() {
     for path in fixtures("sync-high") {
         let module = crate::text::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        if let Err(report) = verify_high(&module) {
-            let name = path.file_stem().unwrap().to_str().unwrap();
-            assert!(matches!(name, "b2-bound-replacement" | "same-alias-replacement"), "{name}: {report:?}");
-            assert!(report.diagnostics.iter().all(|diagnostic| {
-                (diagnostic.rule == RuleId::T1 && diagnostic.message == "tagged defer return arity mismatch")
-                    || (diagnostic.rule == RuleId::H4 && matches!(diagnostic.message.as_str(),
-                        "result.exit selector does not name an outgoing normal edge"
-                            | "wanted result record requires matching preparation and exited boundary"))
-            }), "{name}: {report:?}");
-        }
+        verify_high(&module).unwrap_or_else(|report| panic!("{}: {report:?}", path.display()));
     }
 }
 

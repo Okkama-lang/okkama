@@ -333,7 +333,8 @@ fn result_records(
             HighEdgeSelector::Unwind => None,
         };
         let target = index.and_then(|index| outgoing.get(index)).map(|edge| edge.target);
-        let terminal = matches!(block.term.kind, TermKind::Ret { .. }) && index == Some(0);
+        let terminal = matches!(block.term.kind, TermKind::Ret { .. }
+            | TermKind::RetDefer { tag: DeferReturnTag::Replace(_), .. }) && index == Some(0);
         if !terminal && target.is_none() {
             state.error(R::H4, "result.exit selector does not name an outgoing normal edge");
         }
@@ -351,6 +352,7 @@ fn result_records(
                     if let Operation::Exit(ExitOp::Prepare { exit }) = &inst.op { Some(exit) } else { None }
                 });
                 let carried = terminal && matches!(&block.term.kind, TermKind::Ret { values }
+                    | TermKind::RetDefer { tag: DeferReturnTag::Replace(_), values }
                     if values.contains(&record.value))
                     || index.and_then(|index| outgoing.get(index)).is_some_and(|edge| {
                         edge.args.contains(&EdgeArg::Value(record.value))
@@ -380,7 +382,8 @@ fn result_records(
             state.error(R::H4, "High result intent requires an explicit result.exit record");
         }
     }
-    if let TermKind::Ret { values } = &block.term.kind {
+    if let TermKind::Ret { values }
+        | TermKind::RetDefer { tag: DeferReturnTag::Replace(_), values } = &block.term.kind {
         for value in values {
             if !body.high_results.iter().any(|record| record.block == id && record.value == *value
                 && record.demand == ResultDemand::Want && record.edge == HighEdgeSelector::Normal(0)) {

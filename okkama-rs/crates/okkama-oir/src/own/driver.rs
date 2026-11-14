@@ -111,7 +111,7 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                 high_results: vec![], high_effects: vec![], descriptor_bindings: vec![], service_schedules: vec![],
                 entry: BlockId::from_u32(0), values: Arena::new(), blocks: Arena::new(), insts: Arena::new(),
                 bindings: high.bindings.clone(), boundaries: high.boundaries.clone(), deps: Arena::new(),
-                keys: Arena::new(), selections: Arena::new(),
+                keys: Arena::new(), selections: Arena::new(), cleanup: Default::default(),
             },
             retained, blocks: BTreeMap::new(), entries: BTreeMap::new(), ssa: SealedSsa::default(),
             failures: vec![], current_unwind: None, predecessors: BTreeMap::new(), ordinal: 0,
@@ -474,8 +474,21 @@ impl Driver<'_, '_> {
             }
         }
         point.env.unwind_values = Some(needed);
+        let closed_parent = match &op {
+            Operation::Ownership(OwnershipOp::ScopeEnd { state, .. }) => {
+                match self.module.types.get(self.body.values.get(*state).map_err(arena)?.ty).map_err(arena)? {
+                    Type::Service(ServiceType::Scope(scope)) => self.module.scopes.get(*scope).map_err(arena)?.parent,
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
         let emission = self.emitter.emit(self.module, &mut self.body, point.block, point.env, op)?;
         if let Some(unwind) = emission.unwind {
+            // A failed close has already left the child scope before outer defers run.
+            if let Some(parent) = closed_parent {
+                self.body.blocks.get_mut(unwind.block).map_err(arena)?.lexical_scope = parent;
+            }
             let target = self.current_unwind.clone().filter(|target| {
                 let lexical = self.high.blocks.get(target.block).unwrap().lexical_scope;
                 !self.retained.contains(&lexical) || unwind.env.scopes.contains_key(&lexical)

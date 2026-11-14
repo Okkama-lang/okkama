@@ -46,7 +46,16 @@ impl Engine<'_, '_> {
                 || possible.contains(&piece.origin);
             let provenance = piece.provenance;
             let eligible = !*fresh || provenance & FRESH != 0;
-            let related = matches!(piece.origin, Origin::Input(_))
+            // An accepted input cannot contain a distinct later creation.
+            // Positive partition predicates bound its possible retention graph.
+            let input_related = matches!(piece.origin, Origin::Input(_))
+                && piece.predicates.iter().filter(|(_, selected)| **selected).all(|(filter, _)| {
+                    filter.keys.iter().any(|old| keys.iter().any(|key| {
+                        old == key || possible.contains(old) || filter.possible.contains(key)
+                            || (matches!(old, Origin::External(_)) && matches!(key, Origin::External(_)))
+                    }))
+                });
+            let related = input_related
                 || keys.contains(&piece.origin) || possible.contains(&piece.origin)
                 || piece.holder.is_some_and(|holder| keys.contains(&holder));
             if related && eligible && !keys.is_empty() && piece.holder.is_some() && !base.whole_future {
@@ -57,7 +66,7 @@ impl Engine<'_, '_> {
             }
             if !eligible || keys.is_empty() || !related {
                 rest.pieces.insert(piece.clone());
-            } else if !unknown {
+            } else if !unknown || (self.subset(piece, keys, labels) && (!*fresh || admits_all)) {
                 selected.pieces.insert(piece.clone());
             } else {
                 let mut yes = piece.clone();
@@ -205,6 +214,8 @@ impl Engine<'_, '_> {
                         slots[i].refs = before.refs[input.as_u32() as usize].clone();
                         slots[i].identity = before.identities[input.as_u32() as usize];
                         slots[i].aliases = before.aliases[input.as_u32() as usize].clone();
+                        slots[i].contained = before.contained[input.as_u32() as usize].clone();
+                        slots[i].must_use = before.must_use[input.as_u32() as usize];
                         slots[i].requirements = before.full_deps[input.as_u32() as usize].clone();
                         slots[i].lifetime = before.lifetimes[input.as_u32() as usize];
                     }
@@ -394,6 +405,8 @@ impl Engine<'_, '_> {
                             slots[i].refs = before.refs[index].clone();
                             slots[i].identity = before.identities[index];
                             slots[i].aliases = before.aliases[index].clone();
+                            slots[i].contained = before.contained[index].clone();
+                            slots[i].must_use = before.must_use[index];
                             slots[i].requirements = before.full_deps[index].clone();
                             slots[i].lifetime = flow.lifetimes[index];
                         }
@@ -439,6 +452,14 @@ impl Engine<'_, '_> {
                             slots[i].token = next;
                             slots[i].refs = replacement.value.map(|value| before.refs[value.as_u32() as usize].clone())
                                 .unwrap_or_default();
+                            slots[i].contained = replacement.value.map(|value| {
+                                before.contained[value.as_u32() as usize].clone()
+                            }).unwrap_or_default();
+                            slots[i].aliases = replacement.value.map(|value| {
+                                before.aliases[value.as_u32() as usize].clone()
+                            }).unwrap_or_default();
+                            slots[i].identity = replacement.value
+                                .and_then(|value| before.identities[value.as_u32() as usize]);
                             slots[i].requirements = replacement.deps.map(|deps| before.refs[deps.as_u32() as
                                 usize].clone())
                                 .unwrap_or_default();
@@ -475,6 +496,8 @@ impl Engine<'_, '_> {
                         slots[i].refs = before.refs[index].clone();
                         slots[i].identity = before.identities[index];
                         slots[i].aliases = before.aliases[index].clone();
+                        slots[i].contained = before.contained[index].clone();
+                        slots[i].must_use = before.must_use[index];
                         slots[i].requirements = before.full_deps[index].clone();
                         slots[i].lifetime = before.lifetimes[index];
                     }
@@ -626,6 +649,7 @@ impl Engine<'_, '_> {
             if let Some(i) = schema.results.iter().position(|s| s.name == retention.result) {
                 slots[i].refs.extend(&deps);
                 for value in retention_values(&retention.selection) {
+                    slots[i].contained.extend(&before.contained[value.as_u32() as usize]);
                     slots[i].requirements.extend(before.full_deps[value.as_u32() as usize]
                         .difference(&before.refs[value.as_u32() as usize]).copied());
                     slots[i].lifetime |= before.lifetimes[value.as_u32() as usize] & 2;
@@ -639,6 +663,7 @@ impl Engine<'_, '_> {
                 if let Retention::Value(value) = retention.selection {
                     slots[i].identity = before.identities[value.as_u32() as usize];
                     slots[i].aliases = before.aliases[value.as_u32() as usize].clone();
+                    slots[i].contained = before.contained[value.as_u32() as usize].clone();
                     slots[i].requirements = before.full_deps[value.as_u32() as usize].clone();
                 }
             }
@@ -696,6 +721,7 @@ impl Engine<'_, '_> {
                     slot.refs.extend(&before.full_deps[pending.as_u32() as usize]);
                     if schema.name == SlotName::Value {
                         slot.aliases = before.aliases[pending.as_u32() as usize].clone();
+                        slot.contained = before.contained[pending.as_u32() as usize].clone();
                         slot.identity = before.identities[pending.as_u32() as usize];
                         slot.requirements = before.full_deps[pending.as_u32() as usize].clone();
                         slot.lifetime = before.lifetimes[pending.as_u32() as usize];
@@ -717,6 +743,10 @@ impl Engine<'_, '_> {
                 slot.refs = before.refs[value.as_u32() as usize].clone();
                 slot.identity = before.identities[value.as_u32() as usize];
                 slot.aliases = before.aliases[value.as_u32() as usize].clone();
+                slot.contained = before.contained[value.as_u32() as usize].clone();
+                if successor(self.module, self.body, value) {
+                    flow.must_use[value.as_u32() as usize] = 2;
+                }
                 slot.requirements = before.full_deps[value.as_u32() as usize].clone();
                 slot.lifetime = before.lifetimes[value.as_u32() as usize];
             }

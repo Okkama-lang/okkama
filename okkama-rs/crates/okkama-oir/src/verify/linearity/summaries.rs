@@ -130,7 +130,10 @@ impl Engine<'_, '_> {
         }
         piece.predicates.iter().any(|(filter, selected)| {
             *selected && !filter.stale && filter.keys.is_subset(graph)
-                && (filter.labels.is_empty() || filter.labels.is_subset(labels))
+                && (filter.keys.iter().all(|key| !matches!(key,
+                    Origin::RetiredInstruction(..) | Origin::RetiredInvoke(..) | Origin::RetiredProjection(..)
+                    | Origin::RetiredViewInstruction(..) | Origin::RetiredViewInvoke(..)))
+                    || filter.labels.is_subset(labels))
         })
     }
     #[allow(clippy::too_many_arguments)]
@@ -489,8 +492,9 @@ impl Engine<'_, '_> {
                 }
             }
             let refs = &flow.full_deps[value.as_u32() as usize];
-            let mut keys = refs.clone();
-            keys.extend(self.possible(flow, refs));
+            // Possible aliases guide checked partitioning; they are not extra
+            // dependencies of a projected value (spec §4.2).
+            let keys = refs.clone();
             for key in keys {
                 if allowed.contains(&key) {
                     continue;
