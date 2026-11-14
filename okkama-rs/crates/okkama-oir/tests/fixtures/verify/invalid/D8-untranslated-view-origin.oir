@@ -1,0 +1,110 @@
+oir 2 own
+// expect OIR2-B3.1 instruction:4:9
+// W1: defer returns a borrowed element; the caller reads it after closing its owner.
+module defer_element
+requires core
+object R {
+    field label: str
+    destroy @destroy
+}
+scope SD action in @destroy
+scope SP action in @pick
+scope S action in @f
+scope SI block in @f parent S
+summary MD observation parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(
+        publication=atomic)
+summary MP call-boundary parameters [parameter_effect(convention=take, retention=some(parameter(0)), deps=[0],
+        destination=result)] contract call_contract(failures=[program], publication=atomic)
+summary MF call-boundary contract call_contract(
+        failures=[program], publication=atomic)
+func @destroy(%0: R facts(managed(deps=d0))) -> void [destroy R] abi observation summary(MD) {
+    dependency d0: dependency = retention(value=%0, selection=selection(%0))
+    ^b0 in SD:
+    ret
+}
+summary MC observation parameters [parameter_effect(convention=borrow, destination=none),
+        parameter_effect(convention=borrow, destination=none)] results [result_relation(
+        aliases=[parameter(0), parameter(1)], external_deps=[0, 1], provenance=bound)] contract call_contract(
+        results=[R], publication=atomic)
+func @choose(%a: array<R>, %b: array<R>) -> R [extern "fixture.choose"] abi observation summary(MC);
+func @pick(%0: array<R> facts(managed(deps=d0)); %1: deps, %2:
+        own) -> own [defer(replacements=[defer_label(label="return",
+        result=some(R))])] abi explicit(input_packet=2, output_packet=0) summary(MP) {
+    boundary B0 lexical in SP
+    dependency d0: dependency = from_ssa(%1)
+    dependency de: dependency = retention(value=%e, selection=selection(%e))
+    dependency dv: dependency = from_ssa(%vd)
+    dependency dv2: dependency = from_ssa(%vd2)
+    ^entry in SP:
+    %q0: scope<SP> = scope.begin SP
+    %q1: scope<SP> = own.accept %q0, %2
+    br ^body(%q1)
+    ^body(%open: scope<SP>) in SP unwind ^trapped(%open):
+    %i: int = const 0
+    %e: R facts(managed(deps=de)) = call @choose(%0, %0) summary(MC)
+    %ed: deps = deps.of %e
+    br ^exit(%open, %e, %ed)
+    ^exit(%q: scope<SP>, %v: R facts(managed(deps=dv)), %vd: deps) in SP:
+    %none: own = own.empty
+    %p: pending = exit.prepare return %v, %none, deps(%vd) at B0
+    invoke.own scope.split %q, selection(%v)
+        normal ^split($state, $selected, $external_deps, %v, %vd, %p)
+        unwind ^failed($state, $failure, %p)
+    ^split(%rest: scope<SP>, %part: own, %ext: deps, %v2: R facts(managed(deps=dv2)), %vd2: deps, %p2: pending) in SP:
+    %p3: pending = exit.extend %p2, %part
+    (%closed: closed, %p4: pending) = scope.end %rest, reserve %p3, effects scope_effects(failures=[], suspends=false,
+        cancel=false)
+    (%out: R facts(managed(deps=dv2)), %packet: own, %deps: deps) = exit.commit %p4, destination caller, result R
+    ret defer replace return, %out, %packet, %deps
+    ^failed(%fs: scope<SP>, %ff: failure, %fp: pending) in SP:
+    %f1: failure = scope.unwind %fs, %ff, reserve %fp, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %f1
+    ^trapped(%ts: scope<SP>, %tf: failure) in SP:
+    %f2: failure = scope.unwind %ts, %tf, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %f2
+}
+summary MA call-boundary results [result_relation(fresh=[0], provenance=unbound_result)] contract call_contract(
+        results=[array<R>], failures=[program], publication=atomic)
+func @make(%input: own) -> (array<R>, own, deps) [extern "fixture.array.new"] summary(MA);
+func @f(%in: own) -> own [lambda owner R] abi explicit(input_packet=0, output_packet=0) summary(MF) {
+    binding bx "xs": array<R> in SI
+    dependency dx: dependency = from_ssa(%xd)
+    dependency dr: dependency = from_ssa(%rd)
+    ^entry in S:
+    %q0: scope<S> = scope.begin S
+    %q1: scope<S> = own.accept %q0, %in
+    %i0: scope<SI> = scope.begin SI
+    br ^inner
+    ^inner in SI:
+    invoke.own call @make(; own.empty) summary(MA)
+        normal ^made($value, $packet, $deps, %i0)
+        unwind ^failed($failure, %i0)
+    ^made(%xs: array<R> facts(managed(deps=dx)), %xp: own, %xd: deps, %qi: scope<SI>) in SI:
+    %i1: scope<SI> = own.bind binding elaborated_binding(binding=bx,
+        resource=resource_value(value=%xs, packet=%xp), state=%qi, original_scope=SI)
+    %o: own = own.empty
+    invoke.defer @pick(consume %xs; %o) deps [%xd] summary(MP)
+        continue ^plain(%i1)
+        replace return ^replaced($value, $packet, $deps, %i1)
+        unwind ^failed($failure, %i1)
+    ^plain(%qa: scope<SI>) in SI:
+    %ca: closed = scope.end %qa, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^done
+    ^replaced(%r: R facts(managed(deps=dr)), %rp: own, %rd: deps, %qb: scope<SI>) in SI:
+    %qc: scope<SI> = own.accept %qb, %rp
+    %cb: closed = scope.end %qc, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^after
+    ^after in S:
+    %label: str = obj.get %r, label
+    br ^done
+    ^done in S:
+    %closed: closed = scope.end %q1, effects scope_effects(failures=[], suspends=false, cancel=false)
+    %empty: own = own.empty
+    ret %empty
+    ^failed(%f: failure, %qf: scope<SI>) in SI:
+    %final: failure = scope.unwind %qf, %f, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^outer_failed
+    ^outer_failed in S:
+    %outer: failure = scope.unwind %q1, %final, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %outer
+}

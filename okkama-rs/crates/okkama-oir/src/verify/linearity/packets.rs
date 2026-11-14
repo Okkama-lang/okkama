@@ -33,7 +33,8 @@ impl Engine<'_, '_> {
         let mut rest = Token {
             scope: token.scope, sources: token.sources.clone(), ..Token::default()
         };
-        let mut selected = Token::default();
+        let mut selected = Token { destinations: token.destinations.clone(), ..Token::default() };
+        rest.destinations = token.destinations.clone();
         for piece in &token.pieces {
             let admits_all = piece.provenance & !FRESH == 0;
             let filter = Filter {
@@ -66,7 +67,7 @@ impl Engine<'_, '_> {
             }
             if !eligible || keys.is_empty() || !related {
                 rest.pieces.insert(piece.clone());
-            } else if !unknown || (self.subset(piece, keys, labels) && (!*fresh || admits_all)) {
+            } else if !unknown {
                 selected.pieces.insert(piece.clone());
             } else {
                 let mut yes = piece.clone();
@@ -97,6 +98,7 @@ impl Engine<'_, '_> {
             }
             result.scope = result.scope.or(part.scope);
             result.reserve.extend(part.reserve);
+            result.destinations.extend(part.destinations);
             result.sources.extend(part.sources);
             result.pieces.extend(part.pieces);
         }
@@ -268,6 +270,10 @@ impl Engine<'_, '_> {
                         self.error(R::B101, "discarded replacement reserve requires bound own.accept");
                     }
                     let mut incoming = before.tokens[packet.as_u32() as usize].clone();
+                    if incoming.destinations.iter().any(|destination| Some(*destination) != owner) {
+                        self.error(R::B101, "committed packet must be admitted into its declared destination");
+                    }
+                    incoming.destinations.clear();
                     incoming.pieces = incoming.pieces.into_iter().map(|mut piece| {
                         let restored = matches!(op, Operation::Ownership(OwnershipOp::Accept { .. }))
                             && incoming.scope == owner
@@ -716,8 +722,12 @@ impl Engine<'_, '_> {
                 && let Some(slot) = slots.first_mut() {
                 slot.token.scope = Some(*scope);
             }
-            if let Operation::Exit(ExitOp::Commit { pending, .. }) = op {
+            if let Operation::Exit(ExitOp::Commit { pending, destination, .. }) = op {
                 for (schema, slot) in schema.results.iter().zip(slots.iter_mut()) {
+                    if schema.name == SlotName::Packet
+                        && let ExitDestination::Scope(scope) = destination {
+                        slot.token.destinations.insert(*scope);
+                    }
                     slot.refs.extend(&before.full_deps[pending.as_u32() as usize]);
                     if schema.name == SlotName::Value {
                         slot.aliases = before.aliases[pending.as_u32() as usize].clone();

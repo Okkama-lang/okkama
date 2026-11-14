@@ -118,6 +118,46 @@ impl Engine<'_, '_> {
         }
     }
 
+    fn defer_projection_bound(
+        &mut self, witness: &Flow, base: ValueId, actual: &impl Fn(ValueId) -> Option<ValueId>, flow: &Flow,
+    ) -> Option<BTreeSet<Origin>> {
+        let mut pending = vec![base];
+        let mut seen = BTreeSet::new();
+        let mut bound = BTreeSet::new();
+        let mut resolved = false;
+        while let Some(value) = pending.pop() {
+            if !self.state.step(1) {
+                return None;
+            }
+            if !seen.insert(value) {
+                continue;
+            }
+            if let Some(value) = actual(value) {
+                resolved = true;
+                bound.extend(&flow.refs[value.as_u32() as usize]);
+                bound.extend(&flow.full_deps[value.as_u32() as usize]);
+                continue;
+            }
+            let refs = &witness.refs[value.as_u32() as usize];
+            if refs.is_empty() {
+                return None;
+            }
+            for origin in refs {
+                match origin {
+                    Origin::External(parameter) => {
+                        let value = actual(*parameter)?;
+                        resolved = true;
+                        bound.extend(&flow.refs[value.as_u32() as usize]);
+                        bound.extend(&flow.full_deps[value.as_u32() as usize]);
+                    }
+                    Origin::Projection(base, _) => pending.push(*base),
+                    _ => return None,
+                }
+            }
+        }
+        resolved.then_some(bound)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn defer_replacement(
         &mut self, function: FuncId, label: &str, schema: &OutcomeContract, key: Origin,
@@ -133,6 +173,11 @@ impl Engine<'_, '_> {
         }).collect();
         let actual = |value: ValueId| parameters.iter().position(|parameter| *parameter == value)
             .and_then(|index| call.args.get(index)).map(|arg| arg.value);
+        // Unknown callee-local origins still carry every caller dependency.
+        // D8 changes ownership only for the actual packet (design §10.4).
+        let external: BTreeSet<_> = call.args.iter().flat_map(|arg| {
+            flow.full_deps[arg.value.as_u32() as usize].iter().copied()
+        }).collect();
         let witnesses = self.defer_cache.get(&function).cloned().unwrap_or_default();
         let mut refs = BTreeSet::new();
         let mut deps = BTreeSet::new();
@@ -148,28 +193,49 @@ impl Engine<'_, '_> {
                     }))
                 })).collect();
             let translated: std::collections::BTreeMap<_, _> = origins.into_iter().map(|origin| {
-                let refs = match &origin {
-                    Origin::External(value) => actual(*value).map(|value| flow.refs[value.as_u32() as usize].clone())
-                        .unwrap_or_else(|| BTreeSet::from([key])),
-                    Origin::Projection(value, ProjectionKind::Field(decl, index)) => {
+                let bound = match origin {
+                    Origin::External(value) => actual(value).map(|value| {
+                        flow.full_deps[value.as_u32() as usize].clone()
+                    }),
+                    Origin::Projection(value, kind) => {
                         let identity = witness.flow.identities[value.as_u32() as usize];
-                        let base = match identity { Some(Origin::External(base)) => base, _ => *value };
-                        actual(base).map(|value| self.field(flow, value, FieldRef {
-                            declaration: *decl, index: *index,
-                        })).unwrap_or_else(|| BTreeSet::from([key]))
+                        let base = match identity {
+                            Some(Origin::External(base)) => base,
+                            _ => value,
+                        };
+                        if let Some(value) = actual(base) {
+                            Some(match kind {
+                                ProjectionKind::Field(declaration, index) => {
+                                    self.field(flow, value, FieldRef { declaration, index })
+                                }
+                                _ => flow.refs[value.as_u32() as usize].union(
+                                    &flow.full_deps[value.as_u32() as usize]).copied().collect(),
+                            })
+                        } else {
+                            // Nested projections may use an intermediate SSA base.
+                            // Follow its graph back to formals; unknown roots use
+                            // the full call-argument bound below.
+                            self.defer_projection_bound(&witness.flow, value, &actual, flow)
+                        }
                     }
-                    _ => BTreeSet::from([key]),
+                    _ => None,
                 };
+                let mut refs = bound.unwrap_or_else(|| {
+                    let mut refs = external.clone();
+                    refs.insert(key);
+                    refs
+                });
+                if let Origin::External(parameter) = origin
+                    && let Some(value) = actual(parameter) {
+                    refs.extend(&flow.refs[value.as_u32() as usize]);
+                }
                 (origin, refs)
             }).collect();
-            let translate = |origin: &Origin| translated.get(origin).cloned().unwrap_or_default();
-            let translate_full = |origin: &Origin| {
-                if let Origin::External(parameter) = origin && let Some(value) = actual(*parameter) {
-                    flow.full_deps[value.as_u32() as usize].clone()
-                } else {
-                    translate(origin)
-                }
-            };
+            let translate = |origin: &Origin| translated.get(origin).cloned().unwrap_or_else(|| {
+                let mut refs = external.clone();
+                refs.insert(key);
+                refs
+            });
             for value in &witness.values {
                 let index = value.as_u32() as usize;
                 let ty = body.values.get(*value).unwrap().ty;
@@ -204,10 +270,10 @@ impl Engine<'_, '_> {
                         packet.pieces.insert(piece);
                     }
                 } else if self.module.types.get(ty) == Ok(&Type::Service(ServiceType::Deps)) {
-                    deps.extend(witness.flow.refs[index].iter().flat_map(&translate_full));
+                    deps.extend(witness.flow.refs[index].iter().flat_map(&translate));
                 } else {
                     refs.extend(witness.flow.refs[index].iter().flat_map(&translate));
-                    deps.extend(witness.flow.full_deps[index].iter().flat_map(&translate_full));
+                    deps.extend(witness.flow.full_deps[index].iter().flat_map(&translate));
                     for origin in &witness.flow.refs[index] {
                         if let Origin::External(parameter) = origin && let Some(value) = actual(*parameter) {
                             contained.extend(&flow.contained[value.as_u32() as usize]);

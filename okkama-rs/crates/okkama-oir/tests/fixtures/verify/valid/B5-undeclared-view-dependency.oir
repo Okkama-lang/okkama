@@ -1,0 +1,143 @@
+oir 2 own
+// W2: @wrap returns a Holder that keeps %1, but its summary declares only parameter(0).
+module undeclared_view
+requires core
+object Res {
+    field label: str
+    destroy @destroy
+}
+object Holder {
+    field res: Res
+    destroy @destroy_holder
+}
+scope SW action in @wrap
+scope S action in @main
+scope SI block in @main parent S
+summary M0 call-boundary parameters [parameter_effect(convention=borrow,
+        destination=none)] results [result_relation(fresh=[0],
+        provenance=unbound_result)] contract call_contract(results=[Res], failures=[thrown, program, panic,
+        native, cancelled], publication=atomic)
+summary Mverify2 call-boundary parameters [parameter_effect(convention=borrow,
+        destination=none)] results [] contract call_contract(results=[], failures=[thrown, program, panic,
+        native, cancelled], publication=atomic)
+summary Mverify3 call-boundary parameters [parameter_effect(convention=borrow,
+        destination=none)] results [] contract call_contract(results=[], failures=[thrown, program, panic,
+        native, cancelled], publication=atomic)
+summary Mholder call-boundary parameters [parameter_effect(convention=take, retention=some(parameter(0)),
+        destination=result), parameter_effect(convention=borrow,
+        destination=none)] results [result_relation(fresh=[0], aliases=[parameter(0), parameter(1)],
+        external_deps=[0, 1], provenance=unbound_result)] contract call_contract(results=[Holder],
+        failures=[thrown], publication=atomic)
+summary Mwrap call-boundary parameters [parameter_effect(convention=take, retention=some(parameter(0)),
+        deps=[0], destination=result), parameter_effect(convention=take, retention=some(parameter(1)), deps=[1],
+        destination=result)] results [result_relation(fresh=[0], aliases=[parameter(0), parameter(1)],
+        external_deps=[0, 1], provenance=unbound_result)] contract call_contract(results=[Holder],
+        failures=[thrown, program, panic, native, cancelled], publication=atomic)
+summary Mmain call-boundary parameters [] results [] contract call_contract(results=[], failures=[thrown,
+        program, panic, native, cancelled], publication=atomic)
+func @Res.new(%name: str; %input: own) -> (Res, own, deps) [extern "fixture.Res.new"] summary(M0);
+func @destroy(%self: Res) -> void [extern "fixture.destroy", destroy Res] summary(Mverify2);
+func @destroy_holder(%self: Holder) -> void [extern "fixture.destroy_holder", destroy Holder] summary(Mverify3);
+func @Holder.new(%res: Res, %borrowed: Res; %input: own) -> (Holder, own, deps) [extern "fixture.Holder.new",
+        ctor Holder] summary(Mholder);
+func @wrap(%0: Res facts(managed(deps=d0)), %1: Res facts(managed(deps=d1)); %2: deps, %3: deps, %4:
+        own) -> (Holder, own) abi explicit(input_packet=4, output_packet=1) summary(Mwrap) {
+    boundary B0 lexical in SW
+    dependency d0: dependency = from_ssa(%2)
+    dependency d1: dependency = from_ssa(%3)
+    dependency dh: dependency = retention(value=%h, selection=selection(%h))
+    dependency dh2: dependency = from_ssa(%hd2)
+    dependency dh3: dependency = from_ssa(%hd3)
+^entry in SW:
+    %q0: scope<SW> = scope.begin SW
+    %q1: scope<SW> = own.accept %q0, %4
+    invoke.own call @Holder.new(consume %0, %1; own.empty)
+        normal ^made($value, $packet, %q1)
+        unwind ^failed($failure, %q1)
+^made(%h: Holder facts(managed(deps=dh)), %hp: own, %q2: scope<SW>) in SW:
+    %hd: deps = deps.of %h
+    %q3: scope<SW> = own.admit %q2, %hp
+    %none: own = own.empty
+    %p0: pending = exit.prepare return %h, %none, deps(%hd) at B0
+    invoke.own scope.split %q3, selection(%h)
+        normal ^split($state, $selected, $external_deps, %h, %hd, %p0)
+        unwind ^split_failed($state, $failure, %p0)
+^split(%rest: scope<SW>, %part: own, %ext: deps, %h2: Holder facts(managed(deps=dh2)), %hd2: deps, %p1: pending) in SW:
+    %p2: pending = exit.extend %p1, %part
+    invoke.own scope.end %rest, reserve %p2, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=false)
+        normal ^closed($closed, $pending, %h2, %hd2)
+        unwind ^close_failed($closed, $failure)
+^closed(%c: closed, %p3: pending, %h3: Holder facts(managed(deps=dh3)), %hd3: deps) in SW:
+    (%out: Holder facts(managed(deps=dh3)), %packet: own,
+        %deps: deps) = exit.commit %p3, destination caller, result Holder
+    ret %out, %packet
+^failed(%f0: failure, %qf: scope<SW>) in SW:
+    %f1: failure = scope.unwind %qf, %f0, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=false)
+    raise %f1
+^split_failed(%qs: scope<SW>, %f2: failure, %ps: pending) in SW:
+    %f3: failure = scope.unwind %qs, %f2, reserve %ps, effects scope_effects(failures=[thrown, program, panic,
+        native], suspends=true, cancel=false)
+    raise %f3
+^close_failed(%cf: closed, %f4: failure) in SW:
+    raise %f4
+}
+func @main() -> void [lambda owner Holder] summary(Mmain) {
+    dependency dres: dependency = retention(value=%res, selection=selection(%res))
+    binding ba "a": Res in S
+    binding bb "b": Res in SI
+    dependency da: dependency = retention(value=%a, selection=selection(%a))
+    dependency db: dependency = retention(value=%b, selection=selection(%b))
+    dependency dh: dependency = retention(value=%h, selection=selection(%h))
+^entry in S:
+    %q0: scope<S> = scope.begin S
+    invoke.own call @Res.new("a"; own.empty)
+        normal ^a($value, $packet, $deps, %q0)
+        unwind ^outer_failed($failure, %q0)
+^a(%a: Res facts(managed(deps=da)), %pa: own, %ad: deps, %q1: scope<S>) in S:
+    %q2: scope<S> = own.bind binding elaborated_binding(binding=ba, resource=resource_value(value=%a, packet=%pa),
+        state=%q1, original_scope=S)
+    %i0: scope<SI> = scope.begin SI
+    br ^inner(%q2, %i0)
+^inner(%q3: scope<S>, %i1: scope<SI>) in SI:
+    invoke.own call @Res.new("b"; own.empty)
+        normal ^b($value, $packet, $deps, %q3, %i1)
+        unwind ^inner_failed($failure, %q3, %i1)
+^b(%b: Res facts(managed(deps=db)), %pb: own, %bd: deps, %q4: scope<S>, %i2: scope<SI>) in SI:
+    %i3: scope<SI> = own.bind binding elaborated_binding(binding=bb, resource=resource_value(value=%b, packet=%pb),
+        state=%i2, original_scope=SI)
+    invoke.own call @wrap(consume %a, consume %b; own.empty) deps [%ad, %bd] summary(Mwrap)
+        normal ^h($value, $packet, $deps, %q4, %i3)
+        unwind ^inner_failed($failure, %q4, %i3)
+^h(%h: Holder facts(managed(deps=dh)), %ph: own, %hd: deps, %q5: scope<S>, %i4: scope<SI>) in SI:
+    %res: Res facts(managed(deps=dres)) = obj.get %h, res
+    %q6: scope<S> = own.admit %q5, %ph
+    invoke.own scope.end %i4, effects scope_effects(failures=[thrown, program, panic, native], suspends=true,
+        cancel=false)
+        normal ^after($closed, %q6)
+        unwind ^inner_close_failed($closed, $failure, %q6)
+^after(%ci: closed, %q7: scope<S>) in S:
+    invoke.own scope.end %q7, effects scope_effects(failures=[thrown, program, panic, native], suspends=true,
+        cancel=false)
+        normal ^done($closed)
+        unwind ^closed_failed($closed, $failure)
+^done(%c2: closed) in S:
+    ret
+^inner_failed(%f0: failure, %qa: scope<S>, %ia: scope<SI>) in SI:
+    %f1: failure = scope.unwind %ia, %f0, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=false)
+    %f2: failure = scope.unwind %qa, %f1, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=false)
+    raise %f2
+^inner_close_failed(%c3: closed, %f3: failure, %qb: scope<S>) in S:
+    %f4: failure = scope.unwind %qb, %f3, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=false)
+    raise %f4
+^outer_failed(%f5: failure, %qc: scope<S>) in S:
+    %f6: failure = scope.unwind %qc, %f5, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=false)
+    raise %f6
+^closed_failed(%c4: closed, %f7: failure) in S:
+    raise %f7
+}

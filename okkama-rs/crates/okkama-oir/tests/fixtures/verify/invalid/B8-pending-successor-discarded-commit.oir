@@ -1,0 +1,32 @@
+oir 2 own
+// expect OIR2-B8.2 terminator:0:1
+// Spec §8: preparing the source does not discharge a discarded committed successor.
+module pending_successor
+object C {
+}
+scope S action in @f
+summary M0 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(
+        provenance=unbound_result)] contract call_contract(results=[^C], failures=[program], publication=atomic)
+func @f(%self: C facts(plain(certificate=closed_graph(ty=C))), %input: own) -> (^C, own) [successor C] abi explicit(
+        input_packet=1, output_packet=1) summary(M0) {
+    boundary B0 lexical in S
+    ^entry in S:
+    %q: scope<S> = scope.begin S
+    %accepted: scope<S> = own.accept %q, %input
+    invoke.own obj.next %self { }
+        normal ^ready($value, %accepted)
+        unwind ^failed(%accepted, $failure)
+    ^ready(%next: ^C facts(plain(certificate=closed_graph(ty=^C))), %open: scope<S>) in S unwind ^failed(%open):
+    %full: deps = deps.of %next
+    %p: pending = exit.prepare return %next, own.empty, deps(%full) at B0
+    %extended: pending = exit.extend %p, own.empty
+    (%closed: closed, %reserved: pending) = scope.end %open, reserve %extended, effects scope_effects(failures=[],
+        suspends=false, cancel=false)
+    (%returned: ^C facts(plain(certificate=closed_graph(ty=^C))), %packet: own,
+        %deps: deps) = exit.commit %reserved, destination caller, result ^C
+    ret %next, %packet
+    ^failed(%failed_state: scope<S>, %failure: failure) in S:
+    %final: failure = scope.unwind %failed_state, %failure, effects scope_effects(failures=[], suspends=false,
+        cancel=false)
+    raise %final
+}

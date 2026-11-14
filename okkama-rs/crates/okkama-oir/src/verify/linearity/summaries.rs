@@ -124,6 +124,9 @@ impl Engine<'_, '_> {
             }
         }
     }
+    // Spec §4.2 defines inclusion by retained identities, not container SSA names.
+    // Current keys identify the same immutable graph across field projections.
+    // Retired families can denote several incarnations, so they also need labels.
     pub(super) fn subset(&self, piece: &Piece, graph: &BTreeSet<Origin>, labels: &BTreeSet<ValueId>) -> bool {
         if !piece.family && graph.contains(&piece.origin) {
             return true;
@@ -492,9 +495,13 @@ impl Engine<'_, '_> {
                 }
             }
             let refs = &flow.full_deps[value.as_u32() as usize];
-            // Possible aliases guide checked partitioning; they are not extra
-            // dependencies of a projected value (spec §4.2).
-            let keys = refs.clone();
+            // Fields do not retain their container (§4.1). Owner-dependent
+            // views must expose their carried dependencies to summary checks (§4.2/§6.2).
+            let mut keys = refs.clone();
+            let views = refs.iter().copied().filter(|key| matches!(key,
+                Origin::ViewInstruction(..) | Origin::ViewInvoke(..)
+                | Origin::RetiredViewInstruction(..) | Origin::RetiredViewInvoke(..))).collect();
+            keys.extend(self.possible(flow, &views));
             for key in keys {
                 if allowed.contains(&key) {
                     continue;

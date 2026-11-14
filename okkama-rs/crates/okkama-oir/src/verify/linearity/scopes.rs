@@ -64,11 +64,27 @@ impl Engine<'_, '_> {
                 (Some(ExitKind::Last | ExitKind::Next), ExitDestination::Loop(boundary)) => {
                     token.pending_boundary == Some(*boundary)
                 }
-                (Some(ExitKind::Fallthrough), ExitDestination::Scope(scope)) => token.pending_boundary
-                    .and_then(|id| self.body.boundaries.get(id).ok()).is_some_and(|boundary| {
-                        boundary.scope != *scope
-                            && super::super::high::inside(self.module, boundary.scope, *scope, self.state)
-                    }),
+                (Some(ExitKind::Fallthrough), ExitDestination::Scope(scope)) => {
+                    let mut parent = token.pending_boundary
+                        .and_then(|id| self.body.boundaries.get(id).ok())
+                        .and_then(|boundary| self.module.scopes.get(boundary.scope).ok())
+                        .and_then(|scope| scope.parent);
+                    let mut nearest = None;
+                    while let Some(ancestor) = parent {
+                        if !self.state.step(self.body.values.len().saturating_add(1)) {
+                            return;
+                        }
+                        let materialized = self.body.values.iter().any(|(value, _)| {
+                            super::metadata::scope(self.module, self.body, value) == Some(ancestor)
+                        });
+                        if materialized {
+                            nearest = Some(ancestor);
+                            break;
+                        }
+                        parent = self.module.scopes.get(ancestor).ok().and_then(|scope| scope.parent);
+                    }
+                    nearest == Some(*scope) && before.scopes.get(scope) == Some(&1)
+                }
                 _ => false,
             };
             if !destination_ok {

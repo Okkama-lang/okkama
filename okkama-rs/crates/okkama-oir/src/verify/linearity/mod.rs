@@ -143,8 +143,8 @@ impl Engine<'_, '_> {
         let tokens = flow.tokens.iter().chain(&flow.journals)
             .chain(flow.frames.values().flat_map(|layout| layout.values().map(|slot| &slot.token)))
             .chain(flow.cells.values().map(|slot| &slot.token));
+        let mut entries = tokens.clone().map(|token| token.destinations.len()).sum::<usize>();
         let pieces = tokens.flat_map(|token| &token.pieces).chain(&flow.closed_inputs);
-        let mut entries = 0usize;
         for piece in pieces {
             entries = entries.saturating_add(1);
             for filter in piece.predicates.keys() {

@@ -1,4 +1,5 @@
 oir 2 own
+// Spec §4.2: live field keys prove subset without retaining container SSA labels.
 // expect OIR2-B5.1 terminator:2:2
 // Spec §§4.2/6.1/16.5: accepted field partitions survive pending/commit.
 module sync
