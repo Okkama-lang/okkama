@@ -220,9 +220,16 @@ fn static_selection(runtime: &Runtime, packet: &Packet, plan: PlanId) -> Result<
 fn checked_selection(runtime: &Runtime, packet: &Packet, selection: &Selection) -> Result<HashSet<Word>, Error> {
     selection_walk(runtime, packet, selection, true)
 }
+#[cfg(test)]
+thread_local! {
+    pub(crate) static GRAPH_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn selection_walk(runtime: &Runtime, packet: &Packet, selection: &Selection, strict: bool)
     -> Result<HashSet<Word>, Error>
 {
+    #[cfg(test)]
+    GRAPH_WALKS.with(|count| count.set(count.get() + 1));
     validate(runtime, packet)?;
     let available: HashSet<_> = packet.words().collect();
     let mut work = if selection.count == 0 {
@@ -697,7 +704,9 @@ pub extern "C" fn rt_scope_split(ctx: *mut Ctx, input: *mut ScopeSlot,
         }
         let mut scope = scope(runtime, original)?;
         let all = scope.all();
-        let selected = checked_selection(runtime, &all, unsafe { &*selection })?;
+        let selected = // Borrowed external dependencies have no obligation in this boundary. The SPB proof
+        // retains them; the runtime packet contains only this scope's selected identities.
+        selection_walk(runtime, &all, unsafe { &*selection }, false)?;
         let (_, output) = split(runtime, &all, &selected)?;
         scope_partition(runtime, &mut scope, &selected);
         let output = store(runtime, Data::Packet(output));

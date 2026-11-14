@@ -780,6 +780,12 @@ impl Runtime {
         if self.poisoned {
             return Err(Error("internal error: the runtime is unusable after a panic in a native".into()));
         }
+        #[cfg(feature = "champ-abi")]
+        if let Some(machine) = &self.champ.machine
+            && machine.source.functions[entry].entry_abi != okkama_sparrow::spb17::EntryAbi::Observation
+        {
+            return Err(Error("owning Champ entry requires CallOwn transport".into()));
+        }
         let function = &self.loaded.program.functions[entry];
         if function.params.len() != arguments.len() {
             return Err(Error("argument count mismatch".into()));

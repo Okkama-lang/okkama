@@ -13,8 +13,9 @@ pub use automaton::infer_plan_reserves;
 
 pub use allocation::{AllocatedRoot, Allocation, Copy, CopySource, allocate, check_allocation, live_locations};
 pub use codec::{assemble, decode, disassemble, encode};
-pub use registry::{CallAbi, CleanupAbi, MachineArgument, Opcode, ProducedType, ResultContext, Tag};
-pub use verify::verify;
+pub use registry::{CallAbi, CleanupAbi, Helper, MachineArgument, Opcode, ProducedType, ResultContext, Tag};
+pub use registry::{helper, HELPER_TABLE, HELPER_ALLOCATES, HELPER_COLLECTS, HELPER_REENTERS, HELPER_UNWINDS, HELPER_STOPS};
+pub use verify::{verify, result_context};
 pub use load::{ExternalContracts, NoExternalContracts, verify_load, service_states};
 
 pub const VERSION: u16 = 17;

@@ -201,7 +201,7 @@ fn check_proofs(p: &Program, f: &Function) -> Check {
     Ok(())
 }
 
-pub(crate) fn context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) -> Result<ResultContext, Error> {
+pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) -> Result<ResultContext, Error> {
     let mut ctx = ResultContext::default();
     let mut flags = Vec::new();
     for arg in args {
@@ -585,7 +585,7 @@ pub(crate) fn checked_edges<'a>(p: &Program, f: &Function, inst: &'a Instruction
     -> Result<Vec<(&'a Edge, Vec<ProducedType>)>, Error>
 {
     if let Instruction::Champ { op, arguments, flow } = inst {
-        let ctx = context(p, f, *op, arguments)?;
+        let ctx = result_context(p, f, *op, arguments)?;
         let tags = op.tags(&ctx);
         match flow {
             Flow::Next(destinations) => {

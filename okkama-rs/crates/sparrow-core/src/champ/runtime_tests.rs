@@ -114,7 +114,7 @@ fn champ_s2_registry_layouts_effects_and_single_outcome_channel() {
     assert_eq!(size_of::<KeyRef>(), 16);
     assert_eq!(size_of::<PacketSlot>(), 8);
     let helpers: Vec<_> = crate::jit::HELPERS.iter().filter(|(name, _)| name.starts_with("champ_")).collect();
-    assert_eq!(helpers.len(), 35);
+    assert_eq!(helpers.len(), 45);
     for &(name, effects) in helpers {
         let abi = helper_abi(name).unwrap();
         let class = abi.class;

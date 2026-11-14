@@ -46,6 +46,24 @@ pub enum Effect {
     Suspends,
 }
 
+const fn registered_effects(name: &str, legacy: &'static [Effect]) -> &'static [Effect] {
+    #[cfg(feature = "champ-abi")]
+    if let Some(helper) = okkama_sparrow::spb17::helper(name) {
+        return match helper.effects {
+            0 => &[],
+            1 => &[Effect::Allocates],
+            16 => &[Effect::Stops],
+            17 => &[Effect::Allocates, Effect::Stops],
+            25 => &[Effect::Allocates, Effect::Fails, Effect::Stops],
+            23 => &[Effect::Allocates, Effect::Collects, Effect::Reenters, Effect::Stops],
+            31 => &[Effect::Allocates, Effect::Collects, Effect::Reenters, Effect::Fails, Effect::Stops],
+            _ => panic!("unsupported shared helper effects"),
+        };
+    }
+    let _ = name;
+    legacy
+}
+
 /// One description per helper (H-06): its Rust signature, checked at compile
 /// time (the function must coerce to exactly that `extern "C"` pointer type;
 /// each scalar is 8 bytes), the Cranelift signature derived from it, and its
@@ -60,7 +78,7 @@ macro_rules! helpers {
         struct Helpers { $($(#[$meta])* $field: FuncId,)* }
 
         /// Every helper and its effects, in declaration order.
-        pub const HELPERS: &[(&str, &[Effect])] = &[$($(#[$meta])* (stringify!($field), &[$(Effect::$effect),*]),)*];
+        pub const HELPERS: &[(&str, &[Effect])] = &[$($(#[$meta])* (stringify!($field), registered_effects(stringify!($field), &[$(Effect::$effect),*])),)*];
 
         #[cfg(all(test, feature = "champ-abi"))]
         pub(crate) const HELPER_ARGUMENT_TYPES: &[(&str, &[&str])] = &[
@@ -146,6 +164,32 @@ helpers! {
     complete = crate::tasks::rt_complete as (ctx, frame: Word, value: Word); [Collects, Reenters];
     spawn = crate::tasks::rt_spawn as (ctx, future: Word) -> Word; [Reenters, Fails];
     fut = crate::tasks::rt_fut as (ctx, op: u64, future: Word) -> Word; [Reenters, Fails];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_secondary = crate::champ::machine::rt_machine_secondary as (ctx,
+        primary: Word, secondary: Word) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_external = crate::champ::machine::rt_machine_external as (ctx,
+        function: u64, io: *mut crate::champ::CallOwn, args: *const Word, count: u64) -> u64;
+        [Allocates, Collects, Reenters, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_roots = crate::champ::machine::rt_machine_roots as (ctx,
+        function: u64, storage: *const Word) -> u64; [Allocates];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_unroot = crate::champ::machine::rt_machine_unroot as (ctx, base: u64); [];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_scope = crate::champ::machine::rt_machine_scope as (ctx,
+        function: u64, scope: u64, parent: Word, post: *mut crate::champ::ScopeSlot) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_invalid = crate::champ::machine::rt_machine_invalid as (ctx) -> u64; [Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_destination = crate::champ::machine::rt_machine_destination as (ctx,
+        state: Word, post: *mut crate::champ::ExitDestination) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_serial = crate::champ::machine::rt_machine_serial as (ctx, object: Word) -> u64; [];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_fatal_stack = crate::champ::machine::rt_machine_fatal_stack as (ctx) -> u64; [Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_cleanup_mode = crate::champ::machine::rt_machine_cleanup_mode as (ctx) -> u64; [];
     #[cfg(feature = "champ-abi")]
     champ_scope_begin = crate::champ::rt_scope_begin as (ctx,
         instance: *const crate::champ::ScopeInstance,
@@ -629,7 +673,14 @@ fn leaders(source: &okkama_sparrow::Function) -> Vec<bool> {
     leaders
 }
 
+#[cfg(feature = "champ-abi")]
+mod champ;
+
 pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
+    #[cfg(feature = "champ-abi")]
+    if runtime.champ.machine.is_some() {
+        return champ::compile(runtime, function);
+    }
     if runtime.invocations[function].code != 0 {
         return Ok(runtime.invocations[function].code);
     }
@@ -1470,6 +1521,18 @@ impl Emitter<'_, '_> {
             self.resume_dispatch(start);
         }
         self.builder.switch_to_block(overflow);
+        #[cfg(feature = "champ-abi")]
+        {
+            let cleanup = self.helper(|h| h.champ_machine_cleanup_mode, &[ctx]).unwrap();
+            let fatal = self.builder.create_block();
+            let ordinary = self.builder.create_block();
+            self.builder.ins().brif(cleanup, fatal, &[], ordinary, &[]);
+            self.builder.switch_to_block(fatal);
+            self.helper(|h| h.champ_machine_fatal_stack, &[ctx]);
+            let zero = self.iconst(0);
+            self.builder.ins().return_(&[zero]);
+            self.builder.switch_to_block(ordinary);
+        }
         self.helper(|h| h.stack_overflow, &[ctx]);
         let zero = self.iconst(0);
         self.builder.ins().return_(&[zero]);

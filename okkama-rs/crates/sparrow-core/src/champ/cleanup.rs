@@ -450,7 +450,10 @@ pub extern "C" fn rt_destroy_invoke(ctx: *mut Ctx, state: *mut CleanupSlot, borr
         runtime.roots.push((record, Repr::Ref));
         runtime.safepoint(frame, unsafe { &*ctx }, &[]);
         // The active self and remainder live in the rooted cleanup record during all callbacks.
+        let saved_limit = super::machine::enter_cleanup(ctx);
         unsafe { crate::jit::invoke(code, ctx, &[borrow.object]) };
+        super::machine::leave_cleanup(ctx, saved_limit);
+        let runtime = unsafe { &mut *(*ctx).runtime };
         if unsafe { (*ctx).status } == FAILED {
             let failure = unsafe { (*ctx).failure };
             runtime.heap.payload_mut::<runtime::Failure>(failure).expect("bridge failure").cleanup_origin = true;

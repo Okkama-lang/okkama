@@ -173,8 +173,11 @@ pub fn helper_abi(name: &str) -> Option<HelperAbi> {
         "champ_destroy_claim" => ("DestroyBorrow", None),
         "champ_destroy_invoke" => ("DestroyPost", None),
         "champ_destroy_finish" | "champ_failure_capture" => ("", None),
+        _ if okkama_sparrow::spb17::helper(name).is_some() => ("", None),
         _ => return None,
     };
+    let shared = okkama_sparrow::spb17::helper(name)?;
+    assert_eq!(opcode, shared.opcode);
     Some(HelperAbi {
         name,
         class: helper_class(name)?,
@@ -333,5 +336,66 @@ mod emission_abi_tests {
             &ResultContext::default()).unwrap(), vec![None, Some(8), Some(16)], "ABI_CLOSED");
         assert_eq!(service_layout(ServiceKind::StableKey).words as usize * 8, size_of::<KeyRef>());
         assert_eq!(service_layout(ServiceKind::DestroyBorrow).words as usize * 8, size_of::<DestroyBorrow>());
+    }
+}
+
+#[cfg(test)]
+mod shared_registry_tests {
+    use super::*;
+    use okkama_sparrow::spb17::{self as s, MachineArgument as M};
+
+    fn validate(shared: s::Helper) -> Result<(), &'static str> {
+        let (_, types) = crate::jit::HELPER_ARGUMENT_TYPES.iter()
+            .find(|(name, _)| *name == shared.name).ok_or("HELPER_MISSING")?;
+        let mut arguments = vec![M::Context];
+        arguments.extend(types.iter().map(|ty| {
+            if ty.contains("KeyRef") { M::KeyRef }
+            else if ty.starts_with('*') { M::Pointer }
+            else { M::Word }
+        }));
+        if shared.arguments != arguments { return Err("HELPER_SIGNATURE"); }
+        let (_, effects) = HELPERS.iter().find(|(name, _)| *name == shared.name).unwrap();
+        let flags = effects.iter().fold(0, |flags, effect| flags | match effect {
+            Effect::Allocates => s::HELPER_ALLOCATES,
+            Effect::Collects => s::HELPER_COLLECTS,
+            Effect::Reenters => s::HELPER_REENTERS,
+            Effect::Fails => s::HELPER_UNWINDS,
+            Effect::Stops => s::HELPER_STOPS,
+            Effect::Suspends => panic!("P1 helper suspends"),
+        });
+        if flags != shared.effects { return Err("HELPER_EFFECTS"); }
+        Ok(())
+    }
+
+    #[test]
+    fn champ_j1_shared_helper_signatures_effects_schemas_and_mismatch_rejection() {
+        for &shared in s::HELPER_TABLE {
+            validate(shared).unwrap();
+        }
+        for &(name, _) in HELPERS.iter().filter(|(name, _)| name.starts_with("champ_")) {
+            let shared = s::helper(name).expect("every Champ helper has a shared contract");
+            validate(shared).unwrap();
+            let mut wrong = shared;
+            wrong.arguments = &[];
+            assert_eq!(validate(wrong), Err("HELPER_SIGNATURE"));
+            wrong = shared;
+            wrong.effects ^= s::HELPER_COLLECTS;
+            assert_eq!(validate(wrong), Err("HELPER_EFFECTS"));
+            let runtime = helper_abi(name).unwrap();
+            assert_eq!(runtime.opcode, shared.opcode);
+            if let Some(opcode) = shared.opcode {
+                let context = s::ResultContext::default();
+                for tag in opcode.tags(&context) {
+                    assert_eq!(runtime.schemas(&context).unwrap().iter().find(|(kind, _)| *kind == tag)
+                        .unwrap().1, opcode.results(tag, &context).unwrap());
+                }
+                if let Some(cleanup) = opcode.cleanup_abi() {
+                    // settle.packet is an internal S3 extension, not P1's empty settle opcode.
+                    if name == cleanup.helper {
+                        assert_eq!(shared.arguments, cleanup.arguments);
+                    }
+                }
+            }
+        }
     }
 }

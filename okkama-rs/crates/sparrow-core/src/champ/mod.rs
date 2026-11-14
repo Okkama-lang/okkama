@@ -7,6 +7,8 @@ mod layout;
 mod records;
 mod abi;
 pub use abi::*;
+pub(crate) mod machine;
+pub use machine::{ExternalEntry, PlainEntry};
 mod helpers;
 pub mod cleanup;
 pub use cleanup::rt_exit_abort;
@@ -84,6 +86,10 @@ pub struct Identity {
 /// State belongs to a Runtime, persists across invocations and never wraps.
 #[derive(Debug, Default)]
 pub(crate) struct State {
+    pub(crate) machine: Option<machine::Program>,
+    #[cfg(test)]
+    pub(crate) destroy_events: Vec<u64>,
+    cleanup_floor: Option<u64>,
     serial: u64,
     holder: u64,
     owner: u64,
@@ -227,6 +233,8 @@ impl Runtime {
     pub fn champ_begin_destroy(&mut self, key: KeyRef, holder: HolderId, owner: OwnerId) -> Result<(), Error> {
         self.champ_check_key(key, holder, owner, Life::Live)?;
         self.heap.identity_life(key.object, Life::Destroying);
+        #[cfg(test)]
+        self.champ.destroy_events.push(key.serial);
         if let Some(mut trace) = self.champ.trace.take() {
             let _ = self.champ_trace_destroy(key, &mut trace);
             self.champ.trace = Some(trace);

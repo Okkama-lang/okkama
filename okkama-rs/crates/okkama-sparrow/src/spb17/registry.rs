@@ -298,3 +298,136 @@ impl Opcode {
         }).collect()
     }
 }
+
+/// The executable helper contract. Rust checks its extern signature against this shared transport;
+/// the JIT derives effects from it. Neither an SPB artifact nor a host entry can redefine this table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Helper {
+    pub name: &'static str,
+    pub arguments: &'static [MachineArgument],
+    pub effects: u8,
+    pub opcode: Option<Opcode>,
+}
+
+pub const HELPER_ALLOCATES: u8 = 1;
+pub const HELPER_COLLECTS: u8 = 2;
+pub const HELPER_REENTERS: u8 = 4;
+pub const HELPER_UNWINDS: u8 = 8;
+pub const HELPER_STOPS: u8 = 16;
+
+impl Opcode {
+    pub const fn helper(self) -> Option<Helper> {
+        let name = if let Some(abi) = self.cleanup_abi() {
+            abi.helper
+        } else if let Some(abi) = self.call_abi() {
+            abi.helper
+        } else {
+            match self {
+                Self::ScopeBegin => "champ_scope_begin",
+                Self::OwnEmpty => "champ_own_empty",
+                Self::OwnMove => "champ_own_move",
+                Self::OwnJoin => "champ_own_join",
+                Self::OwnAdmit => "champ_own_admit",
+                Self::OwnAccept => "champ_own_accept",
+                Self::OwnBind => "champ_own_bind",
+                Self::OwnRebind => "champ_own_rebind",
+                Self::OwnStage => "champ_own_stage",
+                Self::OwnSplit => "champ_own_split_static",
+                Self::OwnSplitChecked => "champ_own_split_checked",
+                Self::ScopeSplit => "champ_scope_split",
+                Self::ScopeTransfer => "champ_scope_transfer",
+                Self::OwnCreateCommit => "champ_own_create_commit",
+                // These forms lower to CFG, return transport, or parallel slot moves.
+                _ => return None,
+            }
+        };
+        helper(name)
+    }
+}
+
+use MachineArgument::{Context as C, Pointer as P, Word as W, KeyRef as K};
+const L: u8 = HELPER_ALLOCATES | HELPER_STOPS;
+const G: u8 = L | HELPER_UNWINDS;
+const X: u8 = L | HELPER_COLLECTS | HELPER_REENTERS;
+
+macro_rules! helper_registry {
+    ($( $name:literal => $args:expr, $effects:expr, $op:expr; )*) => {
+        pub const HELPER_TABLE: &[Helper] = &[$(Helper {
+            name: $name, arguments: $args, effects: $effects, opcode: $op,
+        }),*];
+    };
+}
+use Opcode as O;
+helper_registry! {
+        "champ_scope_begin" => &[C, P, P], L, Some(O::ScopeBegin);
+        "champ_own_empty" => &[C, P], L, Some(O::OwnEmpty);
+        "champ_own_move" => &[C, P, P], L, Some(O::OwnMove);
+        "champ_own_join" => &[C, P, W, P], L, Some(O::OwnJoin);
+        "champ_own_create_commit" => &[C, W, W, W, P], L, Some(O::OwnCreateCommit);
+        "champ_own_admit" => &[C, P, P, P], L, Some(O::OwnAdmit);
+        "champ_own_accept" => &[C, P, P, P], L, Some(O::OwnAccept);
+        "champ_own_bind" => &[C, P, W, W, P, P], L, Some(O::OwnBind);
+        "champ_own_rebind" => &[C, P, W, W, P, P], L, Some(O::OwnRebind);
+        "champ_own_stage" => &[C, P, P], L, Some(O::OwnStage);
+        "champ_own_split_static" => &[C, P, W, P], L, Some(O::OwnSplit);
+        "champ_own_split_checked" => &[C, P, P, P], G, Some(O::OwnSplitChecked);
+        "champ_scope_split" => &[C, P, P, P], G, Some(O::ScopeSplit);
+        "champ_scope_transfer" => &[C, P, P, P], G, Some(O::ScopeTransfer);
+        "champ_exit_prepare" => &[C, P, P], L, Some(O::ExitPrepare);
+        "champ_exit_extend" => &[C, P, P, P], L, Some(O::ExitExtend);
+        "champ_exit_replace" => &[C, P, P, P], L, Some(O::ExitReplace);
+        "champ_exit_commit" => &[C, P, P, P], L, Some(O::ExitCommit);
+        "champ_exit_abort" => &[C, P, P, P], L, Some(O::ExitAbort);
+        "champ_cleanup_begin" => &[C, P, P], L, Some(O::CleanupBegin);
+        "champ_cleanup_settle_empty" => &[C, P, P], HELPER_STOPS, Some(O::CleanupSettle);
+        "champ_cleanup_settle_packet" => &[C, P, P, W, P], L, Some(O::CleanupSettle);
+        "champ_cleanup_plan" => &[C, P, W, P], L, Some(O::CleanupPlan);
+        "champ_cleanup_next" => &[C, P, P], HELPER_STOPS, Some(O::CleanupNext);
+        "champ_cleanup_destroy" => &[C, P, K, P], X, Some(O::CleanupDestroy);
+        "champ_destroy_direct" => &[C, P, K, W, P], X, Some(O::DestroyDirect);
+        "champ_cleanup_failure" => &[C, P, W, P], L, Some(O::CleanupFailure);
+        "champ_cleanup_finish" => &[C, P, P], L, Some(O::CleanupFinish);
+        "champ_call_owned" => &[C, W, P, W, P, P], X | HELPER_UNWINDS, Some(O::InvokeCallOwn);
+        "champ_invoke_defer" => &[C, W, P, W, P, P, P], X | HELPER_UNWINDS, Some(O::InvokeDefer);
+        "champ_entry_reject" => &[C, P], X | HELPER_UNWINDS, None;
+        "champ_destroy_claim" => &[C, P, K, W, W, P], L, None;
+        "champ_destroy_invoke" => &[C, P, P, W, P], X, None;
+        "champ_destroy_finish" => &[C, P, P], HELPER_STOPS, None;
+        "champ_failure_capture" => &[C, P], HELPER_STOPS, None;
+        "champ_machine_secondary" => &[C, W, W], L, None;
+        "champ_machine_external" => &[C, W, P, P, W], X | HELPER_UNWINDS, None;
+        "champ_machine_roots" => &[C, W, P], HELPER_ALLOCATES, None;
+        "champ_machine_unroot" => &[C, W], 0, None;
+        "champ_machine_scope" => &[C, W, W, W, P], L, None;
+        "champ_machine_invalid" => &[C], HELPER_STOPS, None;
+        "champ_machine_destination" => &[C, W, P], L, None;
+        "champ_machine_serial" => &[C, W], 0, None;
+        "champ_machine_fatal_stack" => &[C], HELPER_STOPS, None;
+        "champ_machine_cleanup_mode" => &[C], 0, None;
+}
+
+pub const fn helper(name: &str) -> Option<Helper> {
+    let mut index = 0;
+    while index < HELPER_TABLE.len() {
+        let entry = HELPER_TABLE[index];
+        if equal(name.as_bytes(), entry.name.as_bytes()) {
+            return Some(entry);
+        }
+        index += 1;
+    }
+    None
+}
+
+const fn equal(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut index = 0;
+    while index < left.len() {
+        if left[index] != right[index] {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
