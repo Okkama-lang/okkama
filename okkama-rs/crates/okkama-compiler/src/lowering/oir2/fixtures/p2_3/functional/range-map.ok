@@ -1,0 +1,7 @@
+module app;
+main() is int {
+    (1..=2).map() -> x {
+        x + 1;
+    };
+    0;
+}

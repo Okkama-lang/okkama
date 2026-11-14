@@ -1,0 +1,94 @@
+oir 2 high
+module app
+requires core
+entry @main
+scope S0 action in @main
+scope S1 iteration in @main parent S0
+scope S2 block in @main parent S1
+
+func @main() -> int [entry] {
+    binding b0 "xs": map<int, int> in S0
+    binding b1 "key": int in S1
+    binding b2 "value": int in S1
+    boundary B0 lexical in S0
+    boundary B1 loop in S1
+    boundary B2 lexical in S2
+    ^b0 in S0 unwind ^b1:
+    %0: int = const 1
+    %1: int = const 2
+    %2: int = const 3
+    %3: int = const 4
+    %4: map<int, int> = map.new entries [(%0, %1), (%2, %3)], ty map<int, int>
+    bind %4, binding b0
+    %5: int = const 0
+    %6: int = map.len %4
+    %7: range = range.new %5, %6
+    %8: mbuilder<int, int> = mbuilder.new key int, value int
+    br ^b3(%5, %4, %8)
+    ^b1(%9: failure) in S0:
+    raise %9
+    ^b2(%10: map<int, int>, %11: mbuilder<int, int>) in S0 unwind ^b16(%11):
+    %12: map<int, int> = mbuilder.finish %11
+    discard %12
+    %13: int = const 0
+    want %13
+    [i14] exit.prepare return %13 at B0
+    result.exit edge normal(0), value %12, demand discard, prepare none
+    result.exit edge normal(0), value %13, demand want, prepare #14
+    ret %13
+    ^b3(%14: int, %15: map<int, int>, %16: mbuilder<int, int>) in S0 unwind ^b1:
+    %17: bool = int.lt %14, %6
+    cond %17, ^b4, ^b5
+    ^b4 in S1 unwind ^b1:
+    br ^b7(%15, %16)
+    ^b5 in S0 unwind ^b1:
+    br ^b2(%15, %16)
+    ^b6(%18: map<int, int>, %19: mbuilder<int, int>) in S0 unwind ^b1:
+    %20: int = const 1
+    %21: int = int.add %14, %20
+    br ^b3(%21, %18, %19)
+    ^b7(%22: map<int, int>, %23: mbuilder<int, int>) in S1 unwind ^b8(%23):
+    %24: int = map.key_at %4, %14
+    %25: int = map.value_at %4, %14
+    bind %24, binding b1
+    bind %25, binding b2
+    br ^b10
+    ^b8(%26: mbuilder<int, int>, %27: failure) in S1 unwind ^b1:
+    mbuilder.abandon %26
+    raise %27
+    ^b9(%28: bool, %29: map<int, int>, %30: int, %31: int, %32: mbuilder<int, int>) in S1 unwind ^b1:
+    cond %28, ^b12, ^b13
+    ^b10 in S2 unwind ^b1:
+    %33: bool = int.lt %24, %25
+    want %33
+    [i25] exit.prepare fallthrough %33 at B2
+    want %22
+    [i27] exit.prepare fallthrough %22 at B2
+    want %24
+    [i29] exit.prepare fallthrough %24 at B2
+    want %25
+    [i31] exit.prepare fallthrough %25 at B2
+    result.exit edge normal(0), value %33, demand want, prepare #25
+    result.exit edge normal(0), value %22, demand want, prepare #27
+    result.exit edge normal(0), value %24, demand want, prepare #29
+    result.exit edge normal(0), value %25, demand want, prepare #31
+    br ^b9(%33, %22, %24, %25, %23)
+    ^b11(%34: map<int, int>, %35: int, %36: int, %37: mbuilder<int, int>) in S1 unwind ^b1:
+    want %34
+    [i33] exit.prepare fallthrough %34 at B1
+    result.exit edge normal(0), value %34, demand want, prepare #33
+    br ^b6(%34, %37)
+    ^b12 in S1 unwind ^b1:
+    br ^b14(%29, %30, %31, %32)
+    ^b13 in S1 unwind ^b1:
+    br ^b11(%29, %30, %31, %32)
+    ^b14(%38: map<int, int>, %39: int, %40: int, %41: mbuilder<int, int>) in S1 unwind ^b15(%41):
+    %42: mbuilder<int, int> = mbuilder.put %41, %24, %25
+    br ^b11(%38, %39, %40, %42)
+    ^b15(%43: mbuilder<int, int>, %44: failure) in S1 unwind ^b1:
+    mbuilder.abandon %43
+    raise %44
+    ^b16(%45: mbuilder<int, int>, %46: failure) in S0 unwind ^b1:
+    mbuilder.abandon %45
+    raise %46
+}

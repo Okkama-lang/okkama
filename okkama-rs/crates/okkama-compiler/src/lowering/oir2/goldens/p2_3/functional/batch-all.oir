@@ -1,0 +1,132 @@
+oir 2 high
+module app
+requires core
+entry @main
+
+object app.Walk {
+    does "collections/iteration::Batching<int>" {batch = @app.Walk.batch#0}
+}
+
+role "collections/iteration::Batching<int>" {
+    batch() -> array<int>
+}
+scope S0 action in @app.Walk.batch#0
+scope S1 action in @main
+scope S2 iteration in @main parent S1
+scope S3 iteration in @main parent S2
+scope S4 block in @main parent S3
+scope S5 action in @app.Walk.new#0
+
+func @app.Walk.new#0() -> app.Walk [ctor app.Walk] {
+    boundary B0 lexical in S5
+    ^b0 in S5 unwind ^b1:
+    %0: app.Walk = obj.new app.Walk { }
+    want %0
+    [i2] exit.prepare return %0 at B0
+    result.exit edge normal(0), value %0, demand want, prepare #2
+    ret %0
+    ^b1(%1: failure) in S5:
+    raise %1
+}
+
+func @app.Walk.batch#0(%0: app.Walk) -> array<int> [method app.Walk] {
+    boundary B0 lexical in S0
+    ^b0 in S0 unwind ^b1:
+    %1: int = const 1
+    %2: int = const 2
+    %3: array<int> = array.new [%1, %2], ty array<int>
+    want %3
+    [i4] exit.prepare return %3 at B0
+    result.exit edge normal(0), value %3, demand want, prepare #4
+    ret %3
+    ^b1(%4: failure) in S0:
+    raise %4
+}
+
+func @main() -> int [entry] {
+    binding b0 "$source": "collections/iteration::Batching<int>" in S1
+    binding b1 "$batch": array<int> in S2
+    binding b2 "x": int in S3
+    boundary B0 lexical in S1
+    boundary B1 lexical in S2
+    boundary B2 lexical in S2
+    boundary B3 loop in S3
+    boundary B4 lexical in S4
+    boundary B5 lexical in S3
+    ^b0 in S1 unwind ^b1:
+    [i0] %0: app.Walk = call @app.Walk.new#0()
+    %1: "collections/iteration::Batching<int>" = role.wrap %0, ty "collections/iteration::Batching<int>"
+    bind %1, binding b0
+    %2: bool = const true
+    high.effects at #0 failures [thrown, program, panic, native, cancelled], suspends true
+    br ^b3(%2)
+    ^b1(%3: failure) in S1:
+    raise %3
+    ^b2(%4: bool) in S1 unwind ^b1:
+    discard %4
+    %5: int = const 0
+    want %5
+    [i7] exit.prepare return %5 at B0
+    result.exit edge normal(0), value %4, demand discard, prepare none
+    result.exit edge normal(0), value %5, demand want, prepare #7
+    ret %5
+    ^b3(%6: bool) in S1 unwind ^b1:
+    br ^b4(%6)
+    ^b4(%7: bool) in S2 unwind ^b1:
+    [i8] %8: array<int> = call.role %1, "collections/iteration::Batching<int>" slot 0()
+    bind %8, binding b1
+    %9: int = array.len %8
+    %10: int = const 0
+    %11: bool = int.lt %10, %9
+    high.effects at #8 failures [thrown, program, panic, native, cancelled], suspends true
+    cond %11, ^b5, ^b6
+    ^b5 in S2 unwind ^b1:
+    br ^b7(%10, %7)
+    ^b6 in S2 unwind ^b1:
+    want %7
+    [i14] exit.prepare fallthrough %7 at B1
+    result.exit edge normal(0), value %7, demand want, prepare #14
+    br ^b2(%7)
+    ^b7(%12: int, %13: bool) in S2 unwind ^b1:
+    %14: bool = int.lt %12, %9
+    cond %14, ^b8, ^b9
+    ^b8 in S3 unwind ^b1:
+    %15: int = array.get %8, %12
+    bind %15, binding b2
+    br ^b12
+    ^b9 in S2 unwind ^b1:
+    want %13
+    [i19] exit.prepare fallthrough %13 at B2
+    result.exit edge normal(0), value %13, demand want, prepare #19
+    br ^b3(%13)
+    ^b10(%16: bool) in S2 unwind ^b1:
+    %17: int = const 1
+    %18: int = int.add %12, %17
+    br ^b7(%18, %16)
+    ^b11(%19: bool, %20: int, %21: bool) in S3 unwind ^b1:
+    cond %19, ^b14, ^b13
+    ^b12 in S4 unwind ^b1:
+    %22: int = const 0
+    %23: bool = int.lt %15, %22
+    want %23
+    [i25] exit.prepare fallthrough %23 at B4
+    want %15
+    [i27] exit.prepare fallthrough %15 at B4
+    want %13
+    [i29] exit.prepare fallthrough %13 at B4
+    result.exit edge normal(0), value %23, demand want, prepare #25
+    result.exit edge normal(0), value %15, demand want, prepare #27
+    result.exit edge normal(0), value %13, demand want, prepare #29
+    br ^b11(%23, %15, %13)
+    ^b13 in S3 unwind ^b1:
+    %24: bool = const false
+    want %24
+    [i32] exit.prepare fallthrough %24 at B5
+    result.exit edge normal(0), value %24, demand want, prepare #32
+    br ^b2(%24)
+    ^b14 in S3 unwind ^b1:
+    want %21
+    [i34] exit.prepare fallthrough %21 at B3
+    result.exit edge normal(0), value %21, demand want, prepare #34
+    br ^b10(%21)
+}

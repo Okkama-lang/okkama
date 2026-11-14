@@ -1,0 +1,8 @@
+module app;
+main() is int {
+    let xs = 0..0;
+    xs.map() -> x {
+        x + 1;
+    };
+    0;
+}

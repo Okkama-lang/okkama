@@ -110,7 +110,7 @@ impl BodyLowerer<'_, '_> {
         Ok(())
     }
 
-    fn start_buffer(&mut self, ty: ir::TypeId) -> Result<usize> {
+    pub(super) fn start_buffer(&mut self, ty: ir::TypeId) -> Result<usize> {
         let op = match *self.b.module().types.get(ty)? {
             ir::Type::Array(element) => ir::CollectionOp::BuilderNew { element },
             ir::Type::Map(key, value) => ir::CollectionOp::MapBuilderNew { key, value },
@@ -125,7 +125,8 @@ impl BodyLowerer<'_, '_> {
         Ok(slot)
     }
 
-    fn update_buffer(&mut self, slot: usize, op: impl FnOnce(ir::ValueId) -> ir::CollectionOp) -> Result<()> {
+    pub(super) fn update_buffer(&mut self, slot: usize, op: impl FnOnce(ir::ValueId) -> ir::CollectionOp)
+        -> Result<()> {
         self.sync_failure()?;
         let buffer = self.env[slot].expect("current buffer");
         let next = self.b.emit_schema(ir::Operation::Collection(op(buffer)))?[0];
@@ -133,7 +134,7 @@ impl BodyLowerer<'_, '_> {
         Ok(())
     }
 
-    fn finish_buffer(&mut self, slot: usize, map: bool) -> Result<ir::ValueId> {
+    pub(super) fn finish_buffer(&mut self, slot: usize, map: bool) -> Result<ir::ValueId> {
         self.sync_failure()?;
         let buffer = self.env[slot].take().expect("current buffer");
         let op = if map {

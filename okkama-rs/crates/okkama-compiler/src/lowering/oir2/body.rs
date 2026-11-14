@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 #[path = "iteration.rs"]
 mod iteration;
+#[path = "functional.rs"]
+mod functional;
 
 use super::{LowerError, Result};
 use crate::analysis::{thir, ty::{Ty, ObjectId}};
@@ -502,7 +504,9 @@ impl<'a, 't> BodyLowerer<'a, 't> {
                 | thir::BinaryOp::MapMerge | thir::BinaryOp::MapDifference, .. } => self.collection_expr(expr),
             E::Call { callee: thir::Callee::Builtin { op, .. }, .. }
                 if super::collections::is_builtin(op) => self.collection_expr(expr),
-            E::Functional(_) => Err(LowerError::unsupported(expr.span, "functional block (C7)")),
+            E::Functional(functional) => {
+                self.functional_expr(functional, result_ty.expect("typed functional block"))
+            }
             E::Local(local) => Ok(self.env[local.0]),
             E::SelfValue => self.self_value().map(Some),
             E::Field(field) => self.read_field(*field).map(Some),

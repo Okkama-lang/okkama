@@ -1,0 +1,7 @@
+module app;
+main() is int {
+    (0..0).filter() -> x {
+        x > 0;
+    };
+    0;
+}

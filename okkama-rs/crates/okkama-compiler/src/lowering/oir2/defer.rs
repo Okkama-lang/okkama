@@ -36,6 +36,9 @@ impl super::declarations::Declarations {
                 if let thir::ExprKind::For { binding, .. } = expr.kind {
                     defined.insert(binding);
                 }
+                if let thir::ExprKind::Functional(functional) = &expr.kind {
+                    defined.extend(functional.bindings.iter().copied());
+                }
                 if let thir::ExprKind::Try(found) = &expr.kind {
                     for catch in &found.catches {
                         defined.insert(catch.local);
@@ -177,6 +180,24 @@ fn scan_expr(expr: &thir::Expr, visit: &mut impl FnMut(&thir::Stmt)) {
             scan_block(&found.body, visit);
             for catch in &found.catches {
                 scan_block(&catch.body, visit);
+            }
+        }
+        E::Functional(functional) => {
+            match &functional.source {
+                thir::Source::Range { start, end, .. } => {
+                    scan_expr(start, visit);
+                    scan_expr(end, visit);
+                }
+                thir::Source::Array(expr) | thir::Source::Map(expr) | thir::Source::Iterating(expr)
+                | thir::Source::Batching(expr) => scan_expr(expr, visit),
+                thir::Source::Varargs(_) => {}
+            }
+            if let Some(initial) = &functional.initial {
+                scan_expr(initial, visit);
+            }
+            scan_block(&functional.body, visit);
+            if let Some(found) = &functional.found {
+                scan_expr(found, visit);
             }
         }
         E::For { source, body, .. } => {

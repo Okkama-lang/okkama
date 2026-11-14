@@ -484,7 +484,6 @@ impl Specializer<'_, '_> {
     fn expr(&mut self, expr: &mut thir::Expr, env: &[(ty::ParamId, ty::Ty)]) -> Result<()> {
         use thir::ExprKind as E;
         let unsupported = match &expr.kind {
-            E::Functional(_) => Some("functional collection operation (C7)"),
             E::Closure { .. } | E::BoundAction { .. } | E::BoundRoleAction { .. }
             | E::CallValue { .. } | E::CapSelect { .. } | E::CapRead { .. } => Some("closure or capability (#569)"),
             E::Await(_) | E::Spawn(_) => Some("async operation (#570)"),
@@ -615,6 +614,24 @@ impl Specializer<'_, '_> {
                 }
             }
             E::Block(block) | E::Loop(block) => self.block(block, env)?,
+            E::Functional(functional) => {
+                match &mut functional.source {
+                    thir::Source::Range { start, end, .. } => {
+                        self.expr(start, env)?;
+                        self.expr(end, env)?;
+                    }
+                    thir::Source::Array(value) | thir::Source::Map(value)
+                    | thir::Source::Iterating(value) | thir::Source::Batching(value) => self.expr(value, env)?,
+                    thir::Source::Varargs(_) => {}
+                }
+                if let Some(initial) = &mut functional.initial {
+                    self.expr(initial, env)?;
+                }
+                if let Some(found) = &mut functional.found {
+                    self.expr(found, env)?;
+                }
+                self.block(&mut functional.body, env)?;
+            }
             E::For { source, body, .. } => {
                 match source {
                     thir::Source::Range { start, end, .. } => {

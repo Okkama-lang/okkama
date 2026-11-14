@@ -1,0 +1,14 @@
+module app;
+import "collections/iteration" take Batching;
+object Walk does Batching<int> {
+    Walk();
+    batch() is @int {
+        [];
+    }
+}
+main() is int {
+    Walk().reduce(0) -> acc, x {
+        acc + x;
+    };
+    0;
+}

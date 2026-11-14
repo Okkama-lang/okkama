@@ -1,0 +1,139 @@
+oir 2 high
+module app
+requires core
+entry @main
+
+object app.Walk {
+    does "collections/iteration::Batching<int>" {batch = @app.Walk.batch#0}
+}
+
+role "collections/iteration::Batching<int>" {
+    batch() -> array<int>
+}
+scope S0 action in @app.Walk.batch#0
+scope S1 action in @main
+scope S2 iteration in @main parent S1
+scope S3 iteration in @main parent S2
+scope S4 block in @main parent S3
+scope S5 action in @app.Walk.new#0
+
+func @app.Walk.new#0() -> app.Walk [ctor app.Walk] {
+    boundary B0 lexical in S5
+    ^b0 in S5 unwind ^b1:
+    %0: app.Walk = obj.new app.Walk { }
+    want %0
+    [i2] exit.prepare return %0 at B0
+    result.exit edge normal(0), value %0, demand want, prepare #2
+    ret %0
+    ^b1(%1: failure) in S5:
+    raise %1
+}
+
+func @app.Walk.batch#0(%0: app.Walk) -> array<int> [method app.Walk] {
+    boundary B0 lexical in S0
+    ^b0 in S0 unwind ^b1:
+    %1: array<int> = array.new ty array<int>
+    want %1
+    [i2] exit.prepare return %1 at B0
+    result.exit edge normal(0), value %1, demand want, prepare #2
+    ret %1
+    ^b1(%2: failure) in S0:
+    raise %2
+}
+
+func @main() -> int [entry] {
+    binding b0 "$source": "collections/iteration::Batching<int>" in S1
+    binding b1 "$batch": array<int> in S2
+    binding b2 "x": int in S3
+    boundary B0 lexical in S1
+    boundary B1 lexical in S2
+    boundary B2 lexical in S2
+    boundary B3 loop in S3
+    boundary B4 lexical in S4
+    selection s0: selection = union([])
+    selection s1: selection = union([])
+    selection s2: selection = union([])
+    ^b0 in S1 unwind ^b1:
+    [i0] %0: app.Walk = call @app.Walk.new#0()
+    %1: "collections/iteration::Batching<int>" = role.wrap %0, ty "collections/iteration::Batching<int>"
+    bind %1, binding b0
+    %2: builder<int> = builder.new element int
+    high.effects at #0 failures [thrown, program, panic, native, cancelled], suspends true
+    br ^b3(%2)
+    ^b1(%3: failure) in S1:
+    raise %3
+    ^b2(%4: builder<int>) in S1 unwind ^b21(%4):
+    %5: array<int> = builder.finish %4
+    discard %5
+    %6: int = const 0
+    want %6
+    [i8] exit.prepare return %6 at B0
+    result.exit edge normal(0), value %5, demand discard, prepare none
+    result.exit edge normal(0), value %6, demand want, prepare #8
+    ret %6
+    ^b3(%7: builder<int>) in S1 unwind ^b1:
+    br ^b4(%7)
+    ^b4(%8: builder<int>) in S2 unwind ^b5(%8):
+    [i9] %9: array<int> = call.role %1, "collections/iteration::Batching<int>" slot 0()
+    bind %9, binding b1
+    %10: int = array.len %9
+    %11: int = const 0
+    %12: bool = int.lt %11, %10
+    high.effects at #9 failures [thrown, program, panic, native, cancelled], suspends true
+    cond %12, ^b6, ^b7
+    ^b5(%13: builder<int>, %14: failure) in S2 unwind ^b1:
+    builder.abandon %13
+    raise %14
+    ^b6 in S2 unwind ^b1:
+    br ^b8(%11, %8)
+    ^b7 in S2 unwind ^b1:
+    exit.prepare fallthrough select s0 at B1
+    br ^b2(%8)
+    ^b8(%15: int, %16: builder<int>) in S2 unwind ^b1:
+    %17: bool = int.lt %15, %10
+    cond %17, ^b9, ^b10
+    ^b9 in S3 unwind ^b1:
+    br ^b12(%16)
+    ^b10 in S2 unwind ^b1:
+    exit.prepare fallthrough select s1 at B2
+    br ^b3(%16)
+    ^b11(%18: builder<int>) in S2 unwind ^b1:
+    %19: int = const 1
+    %20: int = int.add %15, %19
+    br ^b8(%20, %18)
+    ^b12(%21: builder<int>) in S3 unwind ^b13(%21):
+    %22: int = array.get %9, %15
+    bind %22, binding b2
+    br ^b15
+    ^b13(%23: builder<int>, %24: failure) in S3 unwind ^b1:
+    builder.abandon %23
+    raise %24
+    ^b14(%25: bool, %26: int, %27: builder<int>) in S3 unwind ^b1:
+    cond %25, ^b17, ^b18
+    ^b15 in S4 unwind ^b1:
+    %28: int = const 0
+    %29: bool = int.gt %22, %28
+    want %29
+    [i26] exit.prepare fallthrough %29 at B4
+    want %22
+    [i28] exit.prepare fallthrough %22 at B4
+    result.exit edge normal(0), value %29, demand want, prepare #26
+    result.exit edge normal(0), value %22, demand want, prepare #28
+    br ^b14(%29, %22, %21)
+    ^b16(%30: int, %31: builder<int>) in S3 unwind ^b1:
+    exit.prepare fallthrough select s2 at B3
+    br ^b11(%31)
+    ^b17 in S3 unwind ^b1:
+    br ^b19(%26, %27)
+    ^b18 in S3 unwind ^b1:
+    br ^b16(%26, %27)
+    ^b19(%32: int, %33: builder<int>) in S3 unwind ^b20(%33):
+    %34: builder<int> = builder.push %33, %22
+    br ^b16(%32, %34)
+    ^b20(%35: builder<int>, %36: failure) in S3 unwind ^b1:
+    builder.abandon %35
+    raise %36
+    ^b21(%37: builder<int>, %38: failure) in S1 unwind ^b1:
+    builder.abandon %37
+    raise %38
+}

@@ -1,0 +1,79 @@
+oir 2 high
+module app
+requires core
+entry @main
+scope S0 action in @main
+scope S1 iteration in @main parent S0
+scope S2 block in @main parent S1
+
+func @main() -> int [entry] {
+    binding b0 "initial": array<int> in S0
+    binding b1 "acc": array<int> in S1
+    binding b2 "x": int in S1
+    binding b3 "observed": array<int> in S2
+    boundary B0 lexical in S0
+    boundary B1 loop in S1
+    boundary B2 lexical in S2
+    ^b0 in S0 unwind ^b1:
+    %0: array<int> = array.new ty array<int>
+    bind %0, binding b0
+    %1: int = const 1
+    %2: int = const 2
+    %3: array<int> = array.new [%1, %2], ty array<int>
+    %4: int = const 0
+    %5: int = array.len %3
+    %6: range = range.new %4, %5
+    br ^b3(%4, %0, %0)
+    ^b1(%7: failure) in S0:
+    raise %7
+    ^b2(%8: array<int>, %9: array<int>) in S0 unwind ^b1:
+    discard %9
+    %10: int = const 0
+    want %10
+    [i11] exit.prepare return %10 at B0
+    result.exit edge normal(0), value %9, demand discard, prepare none
+    result.exit edge normal(0), value %10, demand want, prepare #11
+    ret %10
+    ^b3(%11: int, %12: array<int>, %13: array<int>) in S0 unwind ^b1:
+    %14: bool = int.lt %11, %5
+    cond %14, ^b4, ^b5
+    ^b4 in S1 unwind ^b1:
+    %15: int = array.get %3, %11
+    bind %13, binding b1
+    bind %15, binding b2
+    br ^b8
+    ^b5 in S0 unwind ^b1:
+    br ^b2(%12, %13)
+    ^b6(%16: array<int>, %17: array<int>) in S0 unwind ^b1:
+    %18: int = const 1
+    %19: int = int.add %11, %18
+    br ^b3(%19, %16, %17)
+    ^b7(%20: array<int>, %21: array<int>, %22: array<int>, %23: int, %24: array<int>) in S1 unwind ^b1:
+    want %21
+    [i19] exit.prepare fallthrough %21 at B1
+    want %20
+    [i21] exit.prepare fallthrough %20 at B1
+    result.exit edge normal(0), value %21, demand want, prepare #19
+    result.exit edge normal(0), value %20, demand want, prepare #21
+    br ^b6(%21, %20)
+    ^b8 in S2 unwind ^b1:
+    bind %13, binding b3
+    %25: int = array.len %13
+    discard %25
+    %26: array<int> = array.new [%15], ty array<int>
+    %27: array<int> = array.concat [%13, %26], ty array<int>
+    want %27
+    [i28] exit.prepare fallthrough %27 at B2
+    want %12
+    [i30] exit.prepare fallthrough %12 at B2
+    want %13
+    [i32] exit.prepare fallthrough %13 at B2
+    want %15
+    [i34] exit.prepare fallthrough %15 at B2
+    result.exit edge normal(0), value %25, demand discard, prepare none
+    result.exit edge normal(0), value %27, demand want, prepare #28
+    result.exit edge normal(0), value %12, demand want, prepare #30
+    result.exit edge normal(0), value %13, demand want, prepare #32
+    result.exit edge normal(0), value %15, demand want, prepare #34
+    br ^b7(%27, %12, %13, %15, %13)
+}

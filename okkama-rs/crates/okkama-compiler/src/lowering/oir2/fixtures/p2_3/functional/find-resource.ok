@@ -1,0 +1,16 @@
+module app;
+object Res {
+    has n is int;
+    Res(:n);
+    destroy {
+        n;
+    }
+}
+main() is int {
+    let outer = Res(n: 1);
+    [outer].find() -> x {
+        true;
+    };
+    outer;
+    0;
+}

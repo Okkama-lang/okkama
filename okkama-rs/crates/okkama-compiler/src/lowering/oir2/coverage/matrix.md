@@ -20,7 +20,7 @@ no extracted fixture or acceptance of the whole source file is implied.
 | `Array/Map/Range`, literals, collection builtins | `array.*`, `map.*`, `range.*`, lazy lookup CFG | C4: array/map/literal/typed-identity rows |
 | Range-expanded / large literal | Linear `builder.push/append/append.range`, `finish`, failure `abandon` | C5: `builders/`; migrated C4 `range-expansion`, `large-literal` |
 | `For`, array/range/map/varargs/Iterating/Batching | Parent headers, scoped iterations, D11 state and exits | C6: `traversal/`; [scope and fixture evidence](c6.md) |
-| `Functional(map/filter/reduce/any/all/find)` | Enclosing action CFG, builders, short circuit | C7: early-exit, accumulator, reduce-builder |
+| `Functional(map/filter/reduce/any/all/find)` | Enclosing action CFG, builders, short circuit | C7 High: [functional fixtures](../fixtures/p2_3/functional), [c7.md](c7.md); status `planned` |
 | Imported source calls, plain `once let` | Reachable concrete source bodies, checked cache plumbing | C8: all four L09 collections; once negatives |
 | Closures / bound actions / any / caps | Explicit source-span Unsupported until #569/#565-c4 | C9 integration: any rows, ordered-sets |
 | Async body / await / future | Explicit source-span Unsupported until #570/#565-c5 | C9 integration boundary; no async case in this inventory |
@@ -249,8 +249,9 @@ names are `wrong-key`, `wrong-element`, `byte-key`, `resource-key`.
 
 Streaming builders are implemented in C5. C6 now implements application array,
 range, resolved map, variadic, cursor and synchronous batch traversal; see [c6.md](c6.md).
-The original P1 range golden text is preserved. Functional blocks remain
-Unsupported (C7); ordering and general builtin iterable adapters remain outside C6. Any/closures/capability
+The original P1 range golden text is preserved. C7 functional blocks now use the
+same traversal; see [c7.md](c7.md). Accumulator optimization is deferred. Ordering
+and general builtin iterable adapters remain outside this slice. Any/closures/capability
 and async dependencies remain #569/#570. General scalar conversions from string
 and int-to-char are outside this slice and produce explicit Unsupported; typed
 identity and numeric conversions supported by existing contracts are retained.

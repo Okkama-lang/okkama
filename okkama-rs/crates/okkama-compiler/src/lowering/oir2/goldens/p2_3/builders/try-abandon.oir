@@ -45,7 +45,7 @@ func @app.Build.run#0(%0: app.Build, %1: int) -> int [method app.Build] {
     result.exit edge normal(0), value %3, demand want, prepare #2
     ret %3
     ^b3(%5: int, %6: failure) in S0 unwind ^b1:
-    catch %6 is Error, ^b19(%5, %6, $value), ^b20(%5, %6)
+    catch %6 is Error, ^b13(%5, %6, $value), ^b14(%5, %6)
     ^b4(%7: int) in S1 unwind ^b3(%7):
     %8: builder<int> = builder.new element int
     %9: int = const 9
@@ -53,69 +53,56 @@ func @app.Build.run#0(%0: app.Build, %1: int) -> int [method app.Build] {
     ^b5(%10: int, %11: builder<int>) in S1 unwind ^b6(%10, %11):
     %12: builder<int> = builder.push %11, %9
     %13: int = const 10
-    br ^b7(%10)
+    br ^b7(%10, %12)
     ^b6(%14: int, %15: builder<int>, %16: failure) in S1 unwind ^b3(%14):
     builder.abandon %15
     raise %16
-    ^b7(%17: int) in S1 unwind ^b3(%17):
-    br ^b8(%17, %12)
-    ^b8(%18: int, %19: builder<int>) in S1 unwind ^b9(%18, %19):
-    %20: int = int.mod %13, %10
-    br ^b10(%18)
-    ^b9(%21: int, %22: builder<int>, %23: failure) in S1 unwind ^b3(%21):
-    builder.abandon %22
-    raise %23
-    ^b10(%24: int) in S1 unwind ^b3(%24):
-    br ^b11(%24, %19)
-    ^b11(%25: int, %26: builder<int>) in S1 unwind ^b12(%25, %26):
-    %27: builder<int> = builder.push %26, %20
-    %28: int = const 2
-    %29: int = const 4
-    br ^b13(%25)
-    ^b12(%30: int, %31: builder<int>, %32: failure) in S1 unwind ^b3(%30):
-    builder.abandon %31
-    raise %32
-    ^b13(%33: int) in S1 unwind ^b3(%33):
-    br ^b14(%33, %27)
-    ^b14(%34: int, %35: builder<int>) in S1 unwind ^b15(%34, %35):
-    %36: builder<int> = builder.append.range %35, %28, %29, inclusive true
-    br ^b16(%34)
-    ^b15(%37: int, %38: builder<int>, %39: failure) in S1 unwind ^b3(%37):
-    builder.abandon %38
-    raise %39
-    ^b16(%40: int) in S1 unwind ^b3(%40):
-    br ^b17(%40, %36)
-    ^b17(%41: int, %42: builder<int>) in S1 unwind ^b18(%41, %42):
-    %43: array<int> = builder.finish %42
-    bind %43, binding b1
-    %44: int = array.len %43
-    want %44
-    [i20] exit.prepare fallthrough %44 at B1
-    want %41
-    [i22] exit.prepare fallthrough %41 at B1
-    result.exit edge normal(0), value %44, demand want, prepare #20
-    result.exit edge normal(0), value %41, demand want, prepare #22
-    br ^b2(%44, %41)
-    ^b18(%45: int, %46: builder<int>, %47: failure) in S1 unwind ^b3(%45):
-    builder.abandon %46
+    ^b7(%17: int, %18: builder<int>) in S1 unwind ^b8(%17, %18):
+    %19: int = int.mod %13, %10
+    %20: builder<int> = builder.push %18, %19
+    %21: int = const 2
+    %22: int = const 4
+    br ^b9(%17, %20)
+    ^b8(%23: int, %24: builder<int>, %25: failure) in S1 unwind ^b3(%23):
+    builder.abandon %24
+    raise %25
+    ^b9(%26: int, %27: builder<int>) in S1 unwind ^b10(%26, %27):
+    %28: builder<int> = builder.append.range %27, %21, %22, inclusive true
+    br ^b11(%26, %28)
+    ^b10(%29: int, %30: builder<int>, %31: failure) in S1 unwind ^b3(%29):
+    builder.abandon %30
+    raise %31
+    ^b11(%32: int, %33: builder<int>) in S1 unwind ^b12(%32, %33):
+    %34: array<int> = builder.finish %33
+    bind %34, binding b1
+    %35: int = array.len %34
+    want %35
+    [i19] exit.prepare fallthrough %35 at B1
+    want %32
+    [i21] exit.prepare fallthrough %32 at B1
+    result.exit edge normal(0), value %35, demand want, prepare #19
+    result.exit edge normal(0), value %32, demand want, prepare #21
+    br ^b2(%35, %32)
+    ^b12(%36: int, %37: builder<int>, %38: failure) in S1 unwind ^b3(%36):
+    builder.abandon %37
+    raise %38
+    ^b13(%39: int, %40: failure, %41: Error) in S2 unwind ^b1:
+    bind %41, binding b2
+    br ^b16(%39, %40)
+    ^b14(%42: int, %43: failure) in S0 unwind ^b1:
+    raise %43
+    ^b15(%44: int, %45: failure, %46: failure) in S0 unwind ^b1:
+    %47: failure = fail.caused %46, %45
     raise %47
-    ^b19(%48: int, %49: failure, %50: Error) in S2 unwind ^b1:
-    bind %50, binding b2
-    br ^b22(%48, %49)
-    ^b20(%51: int, %52: failure) in S0 unwind ^b1:
-    raise %52
-    ^b21(%53: int, %54: failure, %55: failure) in S0 unwind ^b1:
-    %56: failure = fail.caused %55, %54
-    raise %56
-    ^b22(%57: int, %58: failure) in S2 unwind ^b21(%57, %58):
-    %59: int = const 0
-    want %59
-    [i28] exit.prepare fallthrough %59 at B2
-    want %57
-    [i30] exit.prepare fallthrough %57 at B2
-    result.exit edge normal(0), value %59, demand want, prepare #28
-    result.exit edge normal(0), value %57, demand want, prepare #30
-    br ^b2(%59, %57)
+    ^b16(%48: int, %49: failure) in S2 unwind ^b15(%48, %49):
+    %50: int = const 0
+    want %50
+    [i27] exit.prepare fallthrough %50 at B2
+    want %48
+    [i29] exit.prepare fallthrough %48 at B2
+    result.exit edge normal(0), value %50, demand want, prepare #27
+    result.exit edge normal(0), value %48, demand want, prepare #29
+    br ^b2(%50, %48)
 }
 
 func @main() -> int [entry] {

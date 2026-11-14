@@ -30,7 +30,11 @@ impl BodyLowerer<'_, '_> {
         let mut args = self.args(&frame.locals);
         let data = self.b.body().blocks.get(block)?;
         if let Some(unwind) = &data.unwind
-            && unwind.target.block == frame.target
+            // A buffer cleanup wraps this same catch edge. Preserve it while
+            // its entry arguments still agree, rather than orphaning the old
+            // abandonment block on every observation in a functional body.
+            && (unwind.target.block == frame.target
+                || self.buffer_unwinds.get(&unwind.target.block) == Some(&(frame.target, frame.locals.len())))
             && unwind.target.args[..frame.locals.len()] == args
             && unwind.target.args.iter().all(|arg| data.params.contains(arg)) {
             return Ok(());

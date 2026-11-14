@@ -15,6 +15,8 @@ mod collection_tests;
 mod builder_tests;
 #[cfg(test)]
 mod iteration_tests;
+#[cfg(test)]
+mod functional_tests;
 mod specialize;
 mod native_summaries;
 mod construction;

@@ -1,0 +1,8 @@
+module app;
+main() is int {
+    let xs is @int = [];
+    xs.filter() -> x {
+        x > 0;
+    };
+    0;
+}

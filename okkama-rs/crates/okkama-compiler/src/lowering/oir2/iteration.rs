@@ -8,11 +8,13 @@ enum Indexed {
     Map(ir::ValueId),
 }
 
-struct Traversal {
+struct Traversal<'f> {
     exit: Join,
     state: Vec<ir::ValueId>,
     // Non-scalar results use an empty/singleton array, never a fabricated resource or undef.
     packed: bool,
+    functional: Option<&'f thir::Functional>,
+    slot: Option<usize>,
 }
 
 impl BodyLowerer<'_, '_> {
@@ -23,6 +25,17 @@ impl BodyLowerer<'_, '_> {
         block: &thir::Block,
         ty: Option<&Ty>,
     ) -> Result<Option<ir::ValueId>> {
+        self.traverse(source, binding, block, ty, None)
+    }
+
+    pub(super) fn traverse(
+        &mut self,
+        source: &thir::Source,
+        binding: thir::LocalId,
+        block: &thir::Block,
+        ty: Option<&Ty>,
+        functional: Option<&thir::Functional>,
+    ) -> Result<Option<ir::ValueId>> {
         if let thir::Source::Iterating(expr) | thir::Source::Batching(expr) = source {
             let Some(value) = self.value(expr)? else {
                 return Ok(None);
@@ -30,13 +43,22 @@ impl BodyLowerer<'_, '_> {
             let value = self.take(value)?;
             // As with a let, the source belongs to the enclosing traversal, not a cursor/batch.
             self.bind_internal("$source", value)?;
-            let traversal = self.traversal(ty, block.span)?;
+            // Cursor creation is part of source evaluation in the current pipeline,
+            // and therefore precedes a functional initializer (also on empty input).
+            let cursor = if functional.is_some() && matches!(source, thir::Source::Iterating(_)) {
+                Some(self.protocol_call(value, "cursor")?)
+            } else {
+                None
+            };
+            let Some(traversal) = self.traversal(ty, block.span, functional)? else {
+                return Ok(None);
+            };
             if matches!(source, thir::Source::Batching(_)) {
                 self.batch_for(value, binding, block, &traversal)?;
             } else {
-                self.cursor_for(value, binding, block, &traversal)?;
+                self.cursor_for(value, cursor, binding, block, &traversal)?;
             }
-            return self.finish_join(&traversal.exit);
+            return self.finish_traversal(&traversal);
         }
         let (source, start, end, inclusive) = match source {
             thir::Source::Range { start, end, inclusive } => {
@@ -82,12 +104,31 @@ impl BodyLowerer<'_, '_> {
         };
         // Preserve the P1 range validation and its failure edge.
         self.core(ir::CoreOp::RangeNew { start, end, inclusive })?;
-        let traversal = self.traversal(ty, block.span)?;
+        if let Some(functional) = functional
+            && matches!(&functional.source, thir::Source::Array(expr)
+                if expr.ty.as_ref().is_some_and(Ty::is_untagged_array)) {
+            // An uninhabited element type proves emptiness, but the source has
+            // already run. Never invent an array.get/binding of type never.
+            return self.empty_functional(functional, ty.expect("functional result"));
+        }
+        let Some(traversal) = self.traversal(ty, block.span, functional)? else {
+            return Ok(None);
+        };
         self.indexed_for(source, (start, end, inclusive), binding, block, &traversal, None)?;
-        self.finish_join(&traversal.exit)
+        self.finish_traversal(&traversal)
     }
 
-    fn traversal(&mut self, ty: Option<&Ty>, span: crate::source::Span) -> Result<Traversal> {
+    fn traversal<'f>(&mut self, ty: Option<&Ty>, span: crate::source::Span,
+        functional: Option<&'f thir::Functional>) -> Result<Option<Traversal<'f>>> {
+        if let Some(functional) = functional {
+            let Some(slot) = self.functional_initial(functional, ty.expect("functional result"))? else {
+                return Ok(None);
+            };
+            let exit = self.join(self.scope(), None)?;
+            return Ok(Some(Traversal {
+                exit, state: vec![], packed: false, functional: Some(functional), slot: Some(slot),
+            }));
+        }
         let value_ty = ty.map(|ty| self.ty(ty, span)).transpose()?;
         let exit = self.join(self.scope(), value_ty)?;
         let mut state = vec![];
@@ -110,10 +151,18 @@ impl BodyLowerer<'_, '_> {
             };
             state.push(initial);
         }
-        Ok(Traversal { exit, state, packed })
+        Ok(Some(Traversal { exit, state, packed, functional: None, slot: None }))
     }
 
-    fn iteration_state(&mut self, out: Option<ir::ValueId>, traversal: &Traversal,
+    fn finish_traversal(&mut self, traversal: &Traversal<'_>) -> Result<Option<ir::ValueId>> {
+        let value = self.finish_join(&traversal.exit)?;
+        if let Some(functional) = traversal.functional {
+            return self.functional_result(functional, traversal.slot.expect("functional slot")).map(Some);
+        }
+        Ok(value)
+    }
+
+    fn iteration_state(&mut self, out: Option<ir::ValueId>, traversal: &Traversal<'_>,
         span: crate::source::Span) -> Result<Vec<ir::ValueId>> {
         if !traversal.exit.value {
             return Ok(vec![]);
@@ -145,6 +194,15 @@ impl BodyLowerer<'_, '_> {
         Ok(Some(value))
     }
 
+    fn traversal_body(&mut self, traversal: &Traversal<'_>, items: Vec<ir::ValueId>, block: &thir::Block)
+        -> Result<Option<ir::ValueId>> {
+        if let Some(functional) = traversal.functional {
+            self.functional_body(functional, items, traversal.slot.expect("functional slot"), &traversal.exit)?;
+            return Ok(None);
+        }
+        self.block(block, traversal.exit.value)
+    }
+
     fn bind_internal(&mut self, name: &str, value: ir::ValueId) -> Result<()> {
         let ty = self.b.body().values.get(value)?.ty;
         let binding = self.b.declare_binding(ir::BindingDecl {
@@ -155,7 +213,7 @@ impl BodyLowerer<'_, '_> {
     }
 
     fn indexed_for(&mut self, source: Indexed, bounds: (ir::ValueId, ir::ValueId, bool),
-        binding: thir::LocalId, block: &thir::Block, traversal: &Traversal,
+        binding: thir::LocalId, block: &thir::Block, traversal: &Traversal<'_>,
         refill: Option<ir::BlockId>) -> Result<()> {
         let (start, end, inclusive) = bounds;
         let parent = self.scope();
@@ -202,22 +260,34 @@ impl BodyLowerer<'_, '_> {
         let step = self.new_block(parent, &step_types)?;
         self.env = head_env;
         self.switch(iteration)?;
+        let mut items = vec![];
+        if traversal.functional.is_some()
+            && let Indexed::Map(map) = source {
+            items.push(self.collection(ir::CollectionOp::MapKeyAt { map, index })?);
+        }
         let element = match source {
             Indexed::Array(array) => self.collection(ir::CollectionOp::ArrayGet { array, index })?,
             Indexed::Map(map) => self.collection(ir::CollectionOp::MapValueAt { map, index })?,
             Indexed::Range => index,
         };
-        self.bind(binding, element)?;
+        items.push(element);
+        if traversal.functional.is_none() {
+            self.bind(binding, element)?;
+        }
         let boundary = self.boundary(scope, ir::BoundaryKind::Loop)?;
-        self.loops.push(LoopFrame { next: step, exit: exit.clone(), boundary, state: state.clone(),
-            packed: traversal.packed });
-        let out = self.block(block, exit.value)?;
+        if traversal.functional.is_none() {
+            self.loops.push(LoopFrame { next: step, exit: exit.clone(), boundary, state: state.clone(),
+                packed: traversal.packed });
+        }
+        let out = self.traversal_body(traversal, items, block)?;
         if self.current.is_some() {
             let mut args = self.iteration_state(out, traversal, block.span)?;
             args.extend(self.args(&exit.locals));
             self.edge(step, args, ir::ExitKind::Fallthrough, Some(boundary))?;
         }
-        self.loops.pop();
+        if traversal.functional.is_none() {
+            self.loops.pop();
+        }
         let has_step = self.b.body().blocks.iter().any(|(_, block)| {
             matches!(&block.term.kind, ir::TermKind::Br(target) if target.block == step)
         });
@@ -263,9 +333,12 @@ impl BodyLowerer<'_, '_> {
         values.first().copied().ok_or_else(|| LowerError::invalid(self.source.span, "void protocol slot"))
     }
 
-    fn cursor_for(&mut self, source: ir::ValueId, binding: thir::LocalId, block: &thir::Block,
-        traversal: &Traversal) -> Result<()> {
-        let cursor = self.protocol_call(source, "cursor")?;
+    fn cursor_for(&mut self, source: ir::ValueId, cursor: Option<ir::ValueId>, binding: thir::LocalId,
+        block: &thir::Block, traversal: &Traversal<'_>) -> Result<()> {
+        let cursor = match cursor {
+            Some(cursor) => cursor,
+            None => self.protocol_call(source, "cursor")?,
+        };
         let parent = self.scope();
         let exit = &traversal.exit;
         let mut types = vec![self.b.body().values.get(cursor)?.ty];
@@ -305,18 +378,24 @@ impl BodyLowerer<'_, '_> {
         self.env = step_env;
         self.switch(iteration)?;
         let item = self.protocol_call(cursor, "item")?;
-        self.bind(binding, item)?;
+        if traversal.functional.is_none() {
+            self.bind(binding, item)?;
+        }
         let boundary = self.boundary(body_scope, ir::BoundaryKind::Loop)?;
-        self.loops.push(LoopFrame {
-            next: advance, exit: exit.clone(), boundary, state, packed: traversal.packed,
-        });
-        let out = self.block(block, exit.value)?;
+        if traversal.functional.is_none() {
+            self.loops.push(LoopFrame {
+                next: advance, exit: exit.clone(), boundary, state, packed: traversal.packed,
+            });
+        }
+        let out = self.traversal_body(traversal, vec![item], block)?;
         if self.current.is_some() {
             let mut args = self.iteration_state(out, traversal, block.span)?;
             args.extend(self.args(&exit.locals));
             self.edge(advance, args, ir::ExitKind::Fallthrough, Some(boundary))?;
         }
-        self.loops.pop();
+        if traversal.functional.is_none() {
+            self.loops.pop();
+        }
         let reaches = self.b.body().blocks.iter().any(|(_, data)| {
             matches!(&data.term.kind, ir::TermKind::Br(target) if target.block == advance)
         });
@@ -336,14 +415,19 @@ impl BodyLowerer<'_, '_> {
     }
 
     fn batch_for(&mut self, source: ir::ValueId, binding: thir::LocalId, block: &thir::Block,
-        traversal: &Traversal) -> Result<()> {
+        traversal: &Traversal<'_>) -> Result<()> {
         let parent = self.scope();
         let exit = &traversal.exit;
         let mut types: Vec<_> = traversal.state.iter().map(|value| self.b.body().values.get(*value).unwrap().ty)
             .collect();
         types.extend(self.local_types(&exit.locals));
         let refill = self.new_block(parent, &types)?;
-        let batch_scope = self.b.declare_scope(parent, ir::ScopeKind::Block)?;
+        let kind = if traversal.functional.is_some() {
+            ir::ScopeKind::Iteration
+        } else {
+            ir::ScopeKind::Block
+        };
+        let batch_scope = self.b.declare_scope(parent, kind)?;
         let entry = self.new_block(batch_scope, &types)?;
         let mut args = traversal.state.clone();
         args.extend(self.args(&exit.locals));
@@ -371,7 +455,10 @@ impl BodyLowerer<'_, '_> {
         self.branch_join(exit, result, ir::ExitKind::Fallthrough)?;
         self.env = batch_env;
         self.switch(started)?;
-        let inner = Traversal { exit: exit.clone(), state, packed: traversal.packed };
+        let inner = Traversal {
+            exit: exit.clone(), state, packed: traversal.packed,
+            functional: traversal.functional, slot: traversal.slot,
+        };
         self.indexed_for(Indexed::Array(batch), (zero, size, false), binding, block, &inner, Some(refill))
     }
 }

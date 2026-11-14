@@ -1,0 +1,12 @@
+module app;
+main() is int {
+    try {
+        [1, 2].map() -> x {
+            x % 0;
+        };
+        0;
+    }
+    catch failure is Error {
+        9;
+    };
+}

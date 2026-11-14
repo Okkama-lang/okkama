@@ -1,0 +1,8 @@
+module app;
+main() is int {
+    let xs is %int:int = [1: 2, 3: 4];
+    xs.all() -> key, value {
+        value < 0;
+    };
+    0;
+}
