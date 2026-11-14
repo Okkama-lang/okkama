@@ -20,6 +20,7 @@ mod history;
 use super::{EntityLocation as L, RuleId as R, State};
 use crate::*;
 use domain::*;
+use per_value::AllocationSize;
 use shared::SharedSet;
 use metadata::*;
 use std::collections::{BTreeSet, VecDeque};
@@ -94,6 +95,8 @@ impl Default for Slot {
 
 impl Slot {
     fn rename(&mut self, old: Origin, new: Origin) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::rename");
         let rename = |key| if key == old { new } else { key };
         self.refs = self.refs.iter().copied().map(rename).collect();
         self.requirements = self.requirements.iter().copied().map(rename).collect();
@@ -153,12 +156,19 @@ pub(super) fn check<'m>(module: &'m Module, selected: Option<FuncId>, state: &mu
 }
 
 impl Engine<'_, '_> {
+    fn scan_work(&mut self, work: usize) -> bool {
+        self.state.step(work)
+    }
     fn has_closing_token(&self, flow: &Flow) -> bool {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::has_closing_token");
         flow.tokens.indexed().any(|(index, token)| {
             flow.availability[index] == AVAILABLE && token.cleanup.is_some()
         })
     }
     fn materialized_scope(&mut self, ancestor: ScopeId) -> Option<bool> {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::materialized_scope");
         if self.materialized_scopes.is_none() {
             if !self.state.step(self.body.values.len()) || !self.state.array(self.body.values.len(), 64) {
                 return None;
@@ -173,6 +183,8 @@ impl Engine<'_, '_> {
         Some(self.materialized_scopes.as_ref().unwrap().contains(&ancestor))
     }
     fn clear_finish_generation(&self, branch: &mut Flow, generation: Option<Origin>) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::clear_finish_generation");
         // Defaults have no failure evidence. Clearing them must not materialize
         // a token and a failure entry for every SSA value on every dispatch.
         for (index, failure) in branch.failures.indexed_mut() {
@@ -187,6 +199,8 @@ impl Engine<'_, '_> {
         }
     }
     fn empty_ctor_packet(&self, value: ValueId) -> bool {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::empty_ctor_packet");
         self.declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Ctor(_)))
             && super::later::value_type(self.module, self.body, value)
                 == Some(&Type::Service(ServiceType::Own))
@@ -223,11 +237,13 @@ impl Engine<'_, '_> {
         flow.scratch_bytes()
     }
     fn charge_flow(&mut self, flow: &Flow) -> bool {
-        self.charge_flow_work(flow, flow.work())
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::charge_flow");
+        self.charge_flow_work(flow, flow.clone_work())
     }
-    fn charge_relations(&mut self, flow: &Flow) -> bool {
-        // Origin retirement rewrites sparse relations without copying masks.
-        self.charge_flow_work(flow, flow.relation_work())
+    fn retire_origin(&mut self, flow: &mut Flow, origin: Origin, _charged: bool) -> bool {
+        flow.retire_origin(origin, self.state);
+        !self.state.incomplete
     }
     fn charge_flow_work(&mut self, flow: &Flow, work: usize) -> bool {
         // Scratch clones are released after each transfer. Charge their peak,
@@ -243,6 +259,8 @@ impl Engine<'_, '_> {
     }
 
     fn initial(&mut self) -> Flow {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::initial");
         let mut flow = Flow::new(self.body.values.len(), self.witnesses.clone());
         let defer_entry = self.declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. }));
         let call_boundary = defer_entry || self.declaration.summary.and_then(|id| self.module.summaries.get(id).ok())
@@ -366,7 +384,11 @@ impl Engine<'_, '_> {
     fn solve(&mut self) {
         #[cfg(any(test, feature = "verifier-differential"))]
         let before = (self.state.stats.memory_bytes, self.state.stats.steps);
+        #[cfg(any(test, feature = "verifier-differential"))]
+        super::work_profile::begin();
         self.solve_inner();
+        #[cfg(any(test, feature = "verifier-differential"))]
+        super::work_profile::finish(self.module.profile, &self.declaration.symbol);
         #[cfg(any(test, feature = "verifier-differential"))]
         super::differential::record_function(
             self.module.profile, &self.declaration.symbol, false, before,
@@ -374,6 +396,8 @@ impl Engine<'_, '_> {
         );
     }
     fn solve_inner(&mut self) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::solve_inner");
         // ReturnWitness translation inspects the entire callee Flow. Keep that
         // history intact until a separate proof covers the cross-body observer.
         let history = if self.capture_returns { None }
@@ -493,6 +517,8 @@ impl Engine<'_, '_> {
         }
     }
     fn use_value(&mut self, flow: &mut Flow, value: ValueId, mode: OperandMode, rule: R) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::use_value");
         let index = value.as_u32() as usize;
         if flow.tokens[index].pin_deps.iter().any(|key| flow.dead.contains(key)) {
             self.error(R::B96, "retained view pin outlives its stable owner");
@@ -519,8 +545,16 @@ impl Engine<'_, '_> {
         }
     }
     fn define(&mut self, flow: &mut Flow, value: ValueId, mut slot: Slot) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::define");
+        if !self.state.step(32 * (2 + self.body.values.len().max(1).ilog2() as usize)) {
+            return;
+        }
         let i = value.as_u32() as usize;
         if slot.redefine && flow.availability[i] != ABSENT {
+            if !self.state.step(flow.relation_work()) {
+                return;
+            }
             for key in flow.projection_keys() {
                 let Origin::Projection(base, kind) = key else {
                     continue;
@@ -534,7 +568,7 @@ impl Engine<'_, '_> {
                     _ => false,
                 };
                 if changes {
-                    flow.retire_origin(key);
+                    flow.retire_origin(key, self.state);
                     slot.rename(key, Origin::RetiredProjection(base, kind));
                 }
             }
@@ -551,18 +585,25 @@ impl Engine<'_, '_> {
             let old = flow.aliases[i].clone();
             let mut retained = old.clone();
             retained.remove(&value);
-            flow.replace_aliases(&old, &retained);
+            flow.replace_aliases(&old, &retained, self.state);
         }
         let source = slot.aliases.clone();
         let mut aliases = source.clone();
         aliases.insert(value);
-        flow.replace_aliases(&source, &aliases);
+        flow.replace_aliases(&source, &aliases, self.state);
         flow.aliases[i] = aliases.clone();
-        flow.contained[i] = slot.contained.clone();
-        flow.contained[i].extend(&aliases);
+        if !self.state.step(slot.contained.comparison_work(&source)) {
+            return;
+        }
+        if slot.contained == source {
+            flow.contained.set(i, aliases.clone());
+        } else {
+            flow.contained[i] = slot.contained.clone();
+            flow.contained[i].extend(&aliases);
+        }
         for base in &slot.bases {
             let roots = flow.aliases[base.as_u32() as usize].clone();
-            flow.add_contained(&roots, &aliases);
+            flow.add_contained(&roots, &aliases, self.state);
         }
         flow.availability[i] = AVAILABLE;
         flow.tokens[i] = flow.normalize_token(slot.token, self.state);
@@ -581,6 +622,8 @@ impl Engine<'_, '_> {
             else { slot.must_use };
     }
     fn block(&mut self, id: BlockId, mut flow: Flow) -> Vec<(BlockId, Flow)> {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::block");
         let Ok(block) = self.body.blocks.get(id) else {
             return Vec::new();
         };
@@ -748,10 +791,15 @@ impl Engine<'_, '_> {
         outgoing
     }
     fn edge(&mut self, flow: &Flow, target: BlockId, args: &[EdgeArg], slots: &[Slot], rule: R) -> (BlockId, Flow) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::edge");
         if !self.charge_flow(flow) {
             return (target, flow.clone());
         }
         let mut next = flow.clone();
+        if !self.state.step(flow.tokens.stored_len()) {
+            return (target, flow.clone());
+        }
         for (index, token) in flow.tokens.indexed() {
             if flow.availability[index] == AVAILABLE && token.unique.is_some()
                 && !token.unique_region.contains(&target) {
@@ -789,7 +837,22 @@ impl Engine<'_, '_> {
             }
             let replaced: SharedSet<_> = block.params.iter().copied().collect();
             let originals: Vec<_> = saved.iter().map(|slot| slot.aliases.clone()).collect();
-            let classes: BTreeSet<_> = next.aliases.stored().filter(|aliases| !aliases.is_empty()).cloned().collect();
+            let mut roots = BTreeSet::new();
+            let mut classes = BTreeSet::new();
+            for aliases in next.aliases.stored() {
+                if !self.state.step(2 + next.aliases.stored_len().max(1).ilog2() as usize) {
+                    break;
+                }
+                if !aliases.is_empty() && roots.insert(aliases.root_id()) {
+                    if !self.state.step(aliases.len() * (2 + classes.len().max(1).ilog2() as usize)) {
+                        break;
+                    }
+                    classes.insert(aliases.clone());
+                }
+            }
+            if self.state.incomplete {
+                return (target, next);
+            }
             let mut remapped = std::collections::BTreeMap::new();
             for class in classes {
                 let mut members = class.without(&replaced);
@@ -800,7 +863,7 @@ impl Engine<'_, '_> {
                 }
                 remapped.insert(class, members);
             }
-            next.remap_aliases(&remapped);
+            next.remap_aliases(&remapped, self.state);
             for (index, slot) in saved.iter_mut().enumerate() {
                 if let Some(members) = remapped.get(&originals[index]) {
                     slot.aliases = members.clone();
@@ -827,6 +890,9 @@ impl Engine<'_, '_> {
             for (&param, slot) in block.params.iter().zip(saved) {
                 self.define(&mut next, param, slot);
             }
+            if !self.state.step(next.tokens.work()) {
+                return (target, next);
+            }
             let normalized: Vec<_> = next.tokens.indexed().map(|(index, token)| {
                 (index, next.normalize_token(token.clone(), self.state))
             }).collect();
@@ -841,6 +907,8 @@ impl Engine<'_, '_> {
         (target, next)
     }
     fn finish(&mut self, flow: &mut Flow, normal: bool, values: &[ValueId]) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::finish");
         if !self.declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. })) {
             self.body_summary(flow, normal, values);
         }
@@ -866,6 +934,9 @@ impl Engine<'_, '_> {
             }
             self.use_value(flow, value, OperandMode::Forward, R::B21);
             flow.must_use[value.as_u32() as usize] = 0;
+        }
+        if !self.state.step(self.body.values.len()) {
+            return;
         }
         for (value, _) in self.body.values.iter() {
             let i = value.as_u32() as usize;

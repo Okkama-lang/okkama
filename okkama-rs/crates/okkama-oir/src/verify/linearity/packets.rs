@@ -2,6 +2,8 @@ use super::*;
 
 impl Engine<'_, '_> {
     pub(super) fn partition(&mut self, flow: &Flow, token: &Token, selection: SelectionId) -> (Token, Token) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("packets::partition");
         let mut pending = vec![selection];
         let mut whole_future = false;
         let mut seen = BTreeSet::new();
@@ -29,6 +31,8 @@ impl Engine<'_, '_> {
         (rest, selected)
     }
     pub(super) fn partition_filter(&mut self, token: &Token, base: Filter) -> (Token, Token) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("packets::partition_filter");
         let Filter { keys, fresh, possible, labels, .. } = &base;
         let mut rest = Token {
             scope: token.scope, sources: token.sources.clone(), ..Token::default()
@@ -88,6 +92,8 @@ impl Engine<'_, '_> {
         (rest, selected)
     }
     pub(super) fn union(&mut self, parts: impl IntoIterator<Item = Token>, disjoint: bool) -> Token {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("packets::union");
         let mut result = Token::default();
         for part in parts {
             if !self.state.step(part.pieces.len().saturating_mul(result.pieces.len()).saturating_add(1)) {
@@ -109,40 +115,40 @@ impl Engine<'_, '_> {
         &mut self, block: BlockId, op: &Operation, schema: &OutcomeContract, outcome: Outcome,
         origin: Origin, flow: &mut Flow,
     ) -> Vec<Slot> {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("packets::operation");
         if !self.charge_flow(flow) {
             return Vec::new();
         }
-        flow.retire_origin(view_origin(origin, u16::MAX as usize));
+        self.retire_origin(flow, view_origin(origin, u16::MAX as usize), false);
         for index in 0..schema.results.len() {
             let key = match origin {
                 Origin::Instruction(inst, _) => Origin::Instruction(inst, 0x8000_0000 + index as u32),
                 Origin::Invoke(block, _) => Origin::Invoke(block, 0x8000_0000 + index as u32),
                 _ => origin,
             };
-            flow.retire_origin(key);
+            self.retire_origin(flow, key, false);
         }
         if outcome == Outcome::Normal {
             if super::super::summaries::call(op).is_none() {
                 for slot in 0..schema.results.len() {
-                    if !self.charge_relations(flow) {
+                    if !self.retire_origin(flow, view_origin(origin, slot), true) {
                         return Vec::new();
                     }
-                    flow.retire_origin(view_origin(origin, slot));
                 }
             }
             if matches!(op, Operation::Core(CoreOp::ObjNew { .. } | CoreOp::ObjNext { .. })
                 | Operation::Async(AsyncOp::FutureNew { .. } | AsyncOp::FrameAlloc { .. })
                 | Operation::Cleanup(CleanupOp::CellNew { .. })) {
-                flow.retire_origin(origin);
+                self.retire_origin(flow, origin, false);
             }
             if let Some((call, _, _)) = super::super::summaries::call(op)
                 && let Some(summary) = call.summary.and_then(|id| self.module.summaries.get(id).ok()) {
                 let sites: BTreeSet<_> = summary.results.iter().flat_map(|relation| &relation.fresh).copied().collect();
                 for site in sites {
-                    if !self.charge_relations(flow) {
+                    if !self.retire_origin(flow, creation(origin, site), true) {
                         return Vec::new();
                     }
-                    flow.retire_origin(creation(origin, site));
                 }
                 for (index, _) in summary.results.iter().enumerate() {
                     let view = match origin {
@@ -150,10 +156,9 @@ impl Engine<'_, '_> {
                         Origin::Invoke(block, _) => Origin::ViewInvoke(block, index as u16),
                         _ => origin,
                     };
-                    if !self.charge_relations(flow) {
+                    if !self.retire_origin(flow, view, true) {
                         return Vec::new();
                     }
-                    flow.retire_origin(view);
                 }
             }
         }
@@ -606,6 +611,8 @@ impl Engine<'_, '_> {
         &mut self, op: &Operation, outcome: Outcome, before: &Flow,
         schema: &OutcomeContract, slots: &mut [Slot],
     ) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("packets::buffer");
         let Operation::Collection(op) = op else {
             return;
         };
@@ -648,6 +655,8 @@ impl Engine<'_, '_> {
         &mut self, op: &Operation, schema: &OutcomeContract, outcome: Outcome, origin: Origin,
         before: &Flow, flow: &mut Flow, slots: &mut [Slot],
     ) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("packets::results");
         let normal = outcome == Outcome::Normal;
         let mut retained = BTreeSet::new();
         for retention in &schema.retention {
@@ -839,6 +848,8 @@ impl Engine<'_, '_> {
     pub(super) fn facts(
         &mut self, flow: &Flow, op: &Operation, facts: &InstructionFacts, values: &[ValueId],
     ) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("packets::facts");
         for (index, dep) in &facts.result_deps {
             if let Some(value) = values.get(usize::from(*index)) {
                 let stated = self.dependencies(flow, *dep);
@@ -852,7 +863,10 @@ impl Engine<'_, '_> {
         for fact in &facts.provenance {
             let allowed = provenance_bit(fact.state);
             let mut found = false;
-            for (value, _) in self.body.values.iter() {
+            for value in flow.token_values() {
+                if !self.scan_work(1) {
+                    return;
+                }
                 if flow.availability[value.as_u32() as usize] != AVAILABLE {
                     continue;
                 }
@@ -877,6 +891,8 @@ impl Engine<'_, '_> {
         }
     }
     fn object_fields(&mut self, op: &Operation, origin: Origin, before: &Flow, flow: &mut Flow) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("packets::object_fields");
         let mut entries = Vec::new();
         match op {
             Operation::Core(CoreOp::ObjNew { declaration, fields, .. }) => {
@@ -906,6 +922,8 @@ impl Engine<'_, '_> {
         }
     }
     fn retention(&mut self, flow: &Flow, retention: &Retention) -> BTreeSet<Origin> {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("packets::retention");
         if let Retention::FullDeps(value) = retention {
             return flow.full_deps[value.as_u32() as usize].clone();
         }

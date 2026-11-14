@@ -138,6 +138,9 @@ pub(super) fn check<'m>(module: &'m Module, selected: Option<FuncId>, state: &mu
 }
 
 impl Engine<'_, '_> {
+    fn scan_work(&mut self, _work: usize) -> bool {
+        true
+    }
     fn has_closing_token(&self, flow: &Flow) -> bool {
         flow.tokens.iter().enumerate().any(|(index, token)| {
             flow.availability[index] == AVAILABLE && token.cleanup.is_some()
@@ -216,6 +219,13 @@ impl Engine<'_, '_> {
     fn flow_bytes(&self, flow: &Flow) -> usize {
         flow.availability.len().saturating_mul(1536)
             .saturating_add(self.flow_entries(flow).saturating_mul(128))
+    }
+    fn retire_origin(&mut self, flow: &mut Flow, origin: Origin, charged: bool) -> bool {
+        if charged && !self.charge_relations(flow) {
+            return false;
+        }
+        flow.retire_origin(origin);
+        true
     }
     fn charge_relations(&mut self, flow: &Flow) -> bool {
         self.charge_flow(flow)

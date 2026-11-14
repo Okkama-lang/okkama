@@ -6,6 +6,8 @@ impl Engine<'_, '_> {
         &mut self, block: BlockId, op: &Operation, outcome: Outcome, origin: Origin, before: &Flow,
         flow: &mut Flow, schema: &OutcomeContract, slots: &mut [Slot],
     ) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("async_rules::async_operation");
         if let Operation::Ownership(OwnershipOp::DynamicCheck { key, snapshot }) = op {
             let keys = &before.refs[key.as_u32() as usize];
             if before.tokens[snapshot.as_u32() as usize].snapshot.as_ref()
@@ -386,6 +388,8 @@ impl Engine<'_, '_> {
     }
 
     fn unique_proof(&mut self, block: BlockId, proof: &UniqueCacheProof, before: &Flow) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("async_rules::unique_proof");
         let evidence = &proof.evidence;
         if !proof.region.contains(&block) || !evidence.no_external_storage || !evidence.no_other_waiters
             || !evidence.no_live_views || !evidence.no_collector_retention || !evidence.scheduler_cannot_publish {

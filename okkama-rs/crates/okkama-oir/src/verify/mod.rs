@@ -3,6 +3,8 @@
 //! ownership/lifetime conservation, represented async protocols and lowered cleanup.
 //! `VerifyStats::structural_checks` names producer-metadata gaps; these are not
 //! certificates for frame layouts, continuation graphs or suspension root maps.
+#[cfg(any(test, feature = "verifier-differential"))]
+mod work_profile;
 mod diagnostic;
 mod limits;
 mod index;
@@ -197,6 +199,10 @@ impl State<'_> {
             #[cfg(any(test, feature = "verifier-differential"))]
             self.exhausted_limit.get_or_insert("steps");
             self.incomplete = true;
+        }
+        #[cfg(any(test, feature = "verifier-differential"))]
+        if !self.incomplete {
+            work_profile::charge(count);
         }
         !self.incomplete
     }

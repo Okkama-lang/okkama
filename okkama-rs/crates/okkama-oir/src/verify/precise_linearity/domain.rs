@@ -181,6 +181,12 @@ pub(super) struct Flow {
     pub cells: BTreeMap<Origin, super::Slot>,
 }
 impl Flow {
+    pub fn token_values(&self) -> impl Iterator<Item = ValueId> + '_ {
+        (0..self.tokens.len()).map(|index| ValueId::from_u32(index as u32))
+    }
+    pub fn dependency_values(&self) -> impl Iterator<Item = ValueId> + '_ {
+        self.token_values()
+    }
     pub fn new(values: usize) -> Self {
         Self {
             availability: vec![ABSENT; values], tokens: vec![Token::default(); values],

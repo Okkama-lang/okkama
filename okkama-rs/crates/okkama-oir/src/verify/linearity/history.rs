@@ -17,22 +17,34 @@ struct ObservedValues {
 }
 impl Reader for ObservedValues {
     fn sequence(&mut self, _: usize, _: usize) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("history::sequence");
         self.work = self.work.saturating_add(1);
     }
     fn value(&mut self, value: &ValueId) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("history::value");
         self.work = self.work.saturating_add(1);
         self.used[value.as_u32() as usize] = true;
     }
     fn dependency(&mut self, _: &DepExprId) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("history::dependency");
         self.work = self.work.saturating_add(1);
     }
     fn key(&mut self, _: &KeyExprId) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("history::key");
         self.work = self.work.saturating_add(1);
     }
     fn selection(&mut self, _: &SelectionId) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("history::selection");
         self.work = self.work.saturating_add(1);
     }
     fn ty(&mut self, _: &TypeId) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("history::ty");
         self.work = self.work.saturating_add(1);
     }
 }
@@ -193,6 +205,8 @@ impl BoundaryHistory {
     }
 
     pub fn normalize(&self, block: BlockId, flow: &mut Flow, state: &mut State<'_>) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("history::normalize");
         // Start with a sparse shortlist. Most loop boundaries cannot erase any
         // old scalar: its definition is reachable again. Do not scan the entire
         // relational state at those boundaries just to discover this fact.
@@ -315,19 +329,27 @@ struct Roots {
 }
 impl Roots {
     fn value(&mut self, value: ValueId) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("history::value");
         self.keep[value.as_u32() as usize] = true;
     }
     fn origins(&mut self, origins: &BTreeSet<Origin>) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("history::origins");
         for origin in origins {
             self.origin(*origin);
         }
     }
     fn optional(&mut self, origin: Option<Origin>) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("history::optional");
         if let Some(origin) = origin {
             self.origin(origin);
         }
     }
     fn origin(&mut self, origin: Origin) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("history::origin");
         match origin {
             Origin::Input(value) | Origin::External(value) => self.value(value),
             Origin::Projection(value, kind) | Origin::RetiredProjection(value, kind) => {
@@ -346,6 +368,8 @@ impl Roots {
         }
     }
     fn piece(&mut self, piece: &Piece) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("history::piece");
         self.origin(piece.origin);
         self.optional(piece.holder);
         for filter in piece.predicates.keys() {
@@ -357,6 +381,8 @@ impl Roots {
         }
     }
     fn token(&mut self, token: &Token) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("history::token");
         for value in &token.sources {
             self.value(*value);
         }
@@ -389,6 +415,8 @@ impl Roots {
         }
     }
     fn slot(&mut self, slot: &Slot) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("history::slot");
         self.token(&slot.token);
         self.token(&slot.journal);
         self.origins(&slot.refs);
@@ -433,6 +461,22 @@ func @f() -> void {
 ^done in S:
     ret
 }").unwrap()
+    }
+
+    #[test]
+    fn absent_origin_retirement_still_materializes_projection_views() {
+        let module = module();
+        let body = module.functions.get(FuncId::from_u32(0)).unwrap().body.as_ref().unwrap();
+        let base = ValueId::from_u32(1);
+        let key = Origin::Projection(base, ProjectionKind::Keys);
+        let mut flow = Flow::new(4, witnesses(&module, body));
+        flow.refs[1].insert(Origin::External(base));
+        flow.refs[2].insert(key);
+        with_state(&module, |state| {
+            flow.retire_origin(Origin::Instruction(InstId::from_u32(1000), 0), state);
+        });
+        assert_eq!(flow.views.get(&key), Some(&BTreeSet::from([Origin::External(base)])));
+        assert_eq!(flow.refs[2], BTreeSet::from([key]));
     }
 
     #[test]
@@ -496,11 +540,11 @@ func @f() -> void {
             history.normalize(BlockId::from_u32(1), &mut flow, state);
             assert_eq!(flow.availability[0], AVAILABLE);
             assert_eq!(flow.aliases[0], precise.aliases[0]);
-            for state in [&mut precise, &mut flow] {
+            for branch in [&mut precise, &mut flow] {
                 // These are the two history observers called by define and by
                 // repeated execution of the same creation site, respectively.
-                state.retire_origin(projection);
-                state.retire_origin(created);
+                branch.retire_origin(projection, state);
+                branch.retire_origin(created, state);
             }
             assert_eq!(flow.refs[2], precise.refs[2]);
             assert_eq!(flow.full_deps[2], precise.full_deps[2]);

@@ -1,5 +1,5 @@
 use crate::*;
-use super::per_value::{AllocationSize, PerValue};
+use super::per_value::{AllocationSize, OriginBounds, PerValue};
 use std::rc::Rc;
 use super::shared::SharedSet;
 use std::collections::{BTreeMap, BTreeSet};
@@ -184,6 +184,13 @@ pub(super) struct Flow {
     pub cells: BTreeMap<Origin, super::Slot>,
 }
 impl Flow {
+    pub fn token_values(&self) -> impl Iterator<Item = ValueId> + '_ {
+        self.tokens.indexed().map(|(index, _)| ValueId::from_u32(index as u32))
+    }
+    pub fn dependency_values(&self) -> impl Iterator<Item = ValueId> + '_ {
+        self.full_deps.indexed().filter(|(_, refs)| !refs.is_empty())
+            .map(|(index, _)| ValueId::from_u32(index as u32))
+    }
     pub fn new(values: usize, witnesses: Rc<Vec<bool>>) -> Self {
         Self {
             availability: vec![ABSENT; values], tokens: PerValue::new(values, Token::default()),
@@ -217,6 +224,8 @@ impl Flow {
     /// Only availability is joined independently. All relational components
     /// stay together, so a phi cannot pair one edge's owner with another's packet.
     pub fn same_relations(&self, other: &Self, state: &mut super::State<'_>) -> bool {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("domain::same_relations");
         if !state.step(self.cells.work().saturating_add(other.cells.work())) || self.cells != other.cells {
             return false;
         }
@@ -327,6 +336,8 @@ impl Flow {
         changed
     }
     pub fn normalize_token(&self, mut token: Token, state: &mut super::State<'_>) -> Token {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("domain::normalize_token");
         token.pieces = token.pieces.into_iter().map(|mut piece| {
             piece.predicates = piece.predicates.into_iter().map(|(mut filter, selected)| {
                 let mut labels = SharedSet::new();
@@ -361,7 +372,14 @@ impl Flow {
         }).collect();
         token
     }
-    pub fn remap_aliases(&mut self, classes: &BTreeMap<SharedSet<ValueId>, SharedSet<ValueId>>) {
+    pub fn remap_aliases(
+        &mut self, classes: &BTreeMap<SharedSet<ValueId>, SharedSet<ValueId>>, state: &mut super::State<'_>,
+    ) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("domain::remap_aliases");
+        if !state.step(self.aliases.clone_work()) {
+            return;
+        }
         let old = self.aliases.clone();
         let rewrite = |piece: &Piece| {
             let mut piece = piece.clone();
@@ -378,28 +396,101 @@ impl Flow {
             }).collect();
             piece
         };
-        let rewrite_token = |token: &Token| {
-            let mut next = token.clone();
-            next.pieces = token.pieces.iter().map(rewrite).collect();
-            next
-        };
-        self.tokens.rewrite_stored(rewrite_token);
-        self.journals.rewrite_stored(rewrite_token);
-        self.closed_inputs = self.closed_inputs.iter().map(rewrite).collect();
-        self.contained.rewrite_stored(|contained| {
-            contained.rewritten(contained.iter().flat_map(|label| {
-                classes.get(&old[label.as_u32() as usize]).into_iter().flatten().copied()
-            }))
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let token_work = super::super::work_profile::Operation::new("remap::tokens");
+        for tokens in [&mut self.tokens, &mut self.journals] {
+            let work = tokens.rewrite_changed(|token| {
+                if !state.step(1 + token.pieces.len())
+                    || !token.pieces.iter().any(|piece| !piece.predicates.is_empty()) {
+                    return None;
+                }
+                if !state.step(2 * token.work()) {
+                    return None;
+                }
+                let mut next = token.clone();
+                next.pieces = token.pieces.iter().map(rewrite).collect();
+                (next != *token).then_some(next)
+            });
+            state.step(work);
+        }
+        #[cfg(any(test, feature = "verifier-differential"))]
+        drop(token_work);
+        if self.closed_inputs.iter().any(|piece| !piece.predicates.is_empty()) {
+            if !state.step(self.closed_inputs.work()) {
+                return;
+            }
+            self.closed_inputs = self.closed_inputs.iter().map(rewrite).collect();
+        }
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let contained_work = super::super::work_profile::Operation::new("remap::contained");
+        let mut contained_cache = BTreeMap::new();
+        let work = self.contained.rewrite_changed(|contained| {
+            if !state.step(2 + contained_cache.len().max(1).ilog2() as usize) {
+                return None;
+            }
+            let next = contained_cache.entry(contained.root_id()).or_insert_with(|| {
+                state.step(1 + contained.len());
+                if let Some(label) = contained.iter().next() {
+                    let class = &old[label.as_u32() as usize];
+                    state.step(contained.comparison_work(class));
+                    if contained == class {
+                        let desired = classes.get(class).cloned().unwrap_or_default();
+                        return (desired.root_id() != contained.root_id()).then_some(desired);
+                    }
+                }
+                let mut expanded = BTreeSet::new();
+                let mut desired = SharedSet::new();
+                for label in contained {
+                    let class = &old[label.as_u32() as usize];
+                    state.step(2 + expanded.len().max(1).ilog2() as usize);
+                    if !expanded.insert(class.root_id()) {
+                        continue;
+                    }
+                    if let Some(members) = classes.get(class) {
+                        if desired.is_empty() {
+                            // A one-class union is already represented by this root.
+                            desired = members.clone();
+                            state.step(1);
+                        } else {
+                            let (union, work) = desired.difference_union(&SharedSet::new(), members);
+                            state.step(work);
+                            desired = union;
+                        }
+                    }
+                }
+                state.step(1);
+                (desired.root_id() != contained.root_id()).then_some(desired)
+            });
+            next.clone()
         });
-        let mut aliases = PerValue::new(self.availability.len(), SharedSet::new());
+        state.step(work);
+        #[cfg(any(test, feature = "verifier-differential"))]
+        drop(contained_work);
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _directory_work = super::super::work_profile::Operation::new("remap::directory");
+        let mut aliases = Vec::new();
         for members in classes.values() {
             for member in members {
-                aliases[member.as_u32() as usize] = members.clone();
+                if !state.step(1) {
+                    return;
+                }
+                aliases.push((member.as_u32() as usize, members.clone()));
             }
         }
-        self.aliases.assign(aliases);
+        self.aliases.assign_entries(aliases, |work| state.step(work));
     }
-    pub fn add_contained(&mut self, roots: &SharedSet<ValueId>, child: &SharedSet<ValueId>) {
+    pub fn add_contained(
+        &mut self, roots: &SharedSet<ValueId>, child: &SharedSet<ValueId>, state: &mut super::State<'_>,
+    ) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("domain::add_contained");
+        if roots.is_empty() || child.is_empty() {
+            state.step(1);
+            return;
+        }
+        if !state.step(self.relation_work()) {
+            return;
+        }
         self.contained.rewrite_stored(|contained| {
             let mut next = contained.clone();
             if !contained.is_disjoint(roots) {
@@ -426,7 +517,23 @@ impl Flow {
         self.journals.rewrite_stored(add_token);
         self.closed_inputs = self.closed_inputs.iter().map(add).collect();
     }
-    pub fn replace_aliases(&mut self, old: &SharedSet<ValueId>, new: &SharedSet<ValueId>) {
+    pub fn replace_aliases(
+        &mut self, old: &SharedSet<ValueId>, new: &SharedSet<ValueId>, state: &mut super::State<'_>,
+    ) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("domain::replace_aliases");
+        if !state.step(1) {
+            return;
+        }
+        if old.is_empty() {
+            for alias in new {
+                if !state.step(2 + self.availability.len().max(1).ilog2() as usize) {
+                    return;
+                }
+                self.aliases.set(alias.as_u32() as usize, new.clone());
+            }
+            return;
+        }
         let rewrite = |piece: &Piece| {
             let mut piece = piece.clone();
             piece.predicates = piece.predicates.into_iter().map(|(mut filter, selected)| {
@@ -438,25 +545,88 @@ impl Flow {
             }).collect();
             piece
         };
-        let rewrite_token = |token: &Token| {
-            let mut next = token.clone();
-            next.pieces = token.pieces.iter().map(rewrite).collect();
-            next
+        let affected = |piece: &Piece, state: &mut super::State<'_>| {
+            piece.predicates.keys().any(|filter| {
+                let (disjoint, work) = filter.labels.disjoint_work(old);
+                state.step(work);
+                !disjoint
+            })
         };
-        self.tokens.rewrite_stored(rewrite_token);
-        self.journals.rewrite_stored(rewrite_token);
-        self.closed_inputs = self.closed_inputs.iter().map(rewrite).collect();
-        self.contained.rewrite_stored(|contained| {
-            let mut next = contained.clone();
-            if !contained.is_disjoint(old) {
-                next = next.without(old);
-                next.extend(new);
-            }
-            next
-        });
-        for alias in old.union(new) {
-            self.aliases.set(alias.as_u32() as usize, new.clone());
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let token_work = super::super::work_profile::Operation::new("aliases::tokens");
+        for tokens in [&mut self.tokens, &mut self.journals] {
+            let work = tokens.rewrite_changed(|token| {
+                if !state.step(1) || !token.pieces.iter().any(|piece| {
+                    state.step(1);
+                    affected(piece, state)
+                }) {
+                    return None;
+                }
+                if !state.step(2 * token.work()) {
+                    return None;
+                }
+                let mut next = token.clone();
+                next.pieces = token.pieces.iter().map(rewrite).collect();
+                (next != *token).then_some(next)
+            });
+            state.step(work);
         }
+        #[cfg(any(test, feature = "verifier-differential"))]
+        drop(token_work);
+        if self.closed_inputs.iter().any(|piece| {
+            state.step(1);
+            affected(piece, state)
+        }) && state.step(self.closed_inputs.work()) {
+            self.closed_inputs = self.closed_inputs.iter().map(rewrite).collect();
+        }
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let contained_work = super::super::work_profile::Operation::new("aliases::contained");
+        let (removed_labels, removed_work) = old.difference_union(new, &SharedSet::new());
+        let (added_labels, added_work) = new.difference_union(old, &SharedSet::new());
+        if !state.step(removed_work + added_work) {
+            return;
+        }
+        let mut contained_cache = BTreeMap::new();
+        let work = self.contained.rewrite_changed(|contained| {
+            if !state.step(2 + contained_cache.len().max(1).ilog2() as usize) {
+                return None;
+            }
+            contained_cache.entry(contained.root_id()).or_insert_with(|| {
+                let (includes_old, work) = old.subset_work(contained);
+                if !state.step(work) {
+                    return None;
+                }
+                if includes_old {
+                    let (next, work) = contained.difference_union(&removed_labels, &added_labels);
+                    if !state.step(work) {
+                        return None;
+                    }
+                    return (next.root_id() != contained.root_id()).then_some(next);
+                }
+                let (disjoint, work) = contained.disjoint_work(old);
+                if !state.step(work) || disjoint {
+                    return None;
+                }
+                let (next, work) = contained.difference_union(old, new);
+                if !state.step(work) {
+                    return None;
+                }
+                (next.root_id() != contained.root_id()).then_some(next)
+            }).clone()
+        });
+        state.step(work);
+        #[cfg(any(test, feature = "verifier-differential"))]
+        drop(contained_work);
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _directory_work = super::super::work_profile::Operation::new("aliases::directory");
+        let mut aliases = Vec::new();
+        for alias in old.union(new) {
+            if !state.step(1) {
+                return;
+            }
+            aliases.push((alias.as_u32() as usize, new.clone()));
+        }
+        self.aliases.update_entries(aliases, |work| state.step(work));
     }
     pub fn projection_keys(&self) -> BTreeSet<Origin> {
         let mut keys = BTreeSet::new();
@@ -474,7 +644,42 @@ impl Flow {
         }
         keys
     }
-    pub fn retire_origin(&mut self, origin: Origin) {
+    fn origin_bounds(&self, state: &mut super::State<'_>) -> OriginBounds {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("domain::origin_bounds");
+        let mut ranges = OriginBounds::EMPTY;
+        ranges.include(self.tokens.origin_bounds(&mut |work| state.step(work)));
+        ranges.include(self.journals.origin_bounds(&mut |work| state.step(work)));
+        ranges.include(self.refs.origin_bounds(&mut |work| state.step(work)));
+        ranges.include(self.full_deps.origin_bounds(&mut |work| state.step(work)));
+        ranges.include(self.identities.origin_bounds(&mut |work| state.step(work)));
+        state.step(self.dead.work());
+        ranges.include(self.dead.origin_bounds());
+        state.step(self.taken_caches.work());
+        ranges.include(self.taken_caches.origin_bounds());
+        state.step(self.cache_keys.work());
+        ranges.include(self.cache_keys.origin_bounds());
+        state.step(self.provenance.work());
+        ranges.include(self.provenance.origin_bounds());
+        state.step(self.closed_inputs.work());
+        ranges.include(self.closed_inputs.origin_bounds());
+        state.step(self.fields.work());
+        ranges.include(self.fields.origin_bounds());
+        state.step(self.views.work());
+        ranges.include(self.views.origin_bounds());
+        state.step(self.frames.work());
+        ranges.include(self.frames.origin_bounds());
+        state.step(self.cells.work());
+        ranges.include(self.cells.origin_bounds());
+        state.step(self.active_failure_origin.work());
+        ranges.include(self.active_failure_origin.origin_bounds());
+        state.step(self.latest_failure_origin.work());
+        ranges.include(self.latest_failure_origin.origin_bounds());
+        ranges
+    }
+    pub fn retire_origin(&mut self, origin: Origin, state: &mut super::State<'_>) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("domain::retire_origin");
         let retired = match origin {
             Origin::Instruction(inst, slot) => Origin::RetiredInstruction(inst, slot),
             Origin::Invoke(block, slot) => Origin::RetiredInvoke(block, slot),
@@ -483,10 +688,26 @@ impl Flow {
             Origin::ViewInvoke(block, slot) => Origin::RetiredViewInvoke(block, slot),
             _ => return,
         };
-        for key in self.projection_keys() {
-            if let Origin::Projection(value, _) = key {
-                self.views.entry(key).or_insert_with(|| self.refs[value.as_u32() as usize].clone());
+        let ranges = self.origin_bounds(state);
+        if state.incomplete {
+            return;
+        }
+        if ranges.0[4] != 0 {
+            if !state.step(self.origin_work()) {
+                return;
             }
+            for key in self.projection_keys() {
+                if let Origin::Projection(value, _) = key {
+                    self.views.entry(key).or_insert_with(|| self.refs[value.as_u32() as usize].clone());
+                }
+            }
+        }
+        if let Some((kind, id)) = origin.indexed_id()
+            && (ranges.0[kind] == 0 || ranges.0[kind] < id.saturating_add(1)) {
+            return;
+        }
+        if !state.step(self.origin_work()) {
+            return;
         }
         let identities = self.identities.clone();
         let rename = |key: Origin| {
@@ -649,7 +870,27 @@ pub(super) fn view_origin(origin: Origin, slot: usize) -> Origin {
     }
 }
 
-impl AllocationSize for Origin {}
+impl Origin {
+    fn indexed_id(self) -> Option<(usize, u32)> {
+        match self {
+            Self::Instruction(id, _) => Some((0, id.as_u32())),
+            Self::Invoke(id, _) => Some((1, id.as_u32())),
+            Self::ViewInstruction(id, _) => Some((2, id.as_u32())),
+            Self::ViewInvoke(id, _) => Some((3, id.as_u32())),
+            Self::Projection(id, _) => Some((4, id.as_u32())),
+            _ => None,
+        }
+    }
+}
+impl AllocationSize for Origin {
+    fn origin_bounds(&self) -> OriginBounds {
+        let mut ranges = OriginBounds::EMPTY;
+        if let Some((kind, id)) = self.indexed_id() {
+            ranges.0[kind] = id.saturating_add(1);
+        }
+        ranges
+    }
+}
 impl AllocationSize for ValueId {}
 impl AllocationSize for ScopeId {}
 impl AllocationSize for BlockId {}
@@ -657,6 +898,12 @@ impl AllocationSize for BindingId {}
 impl AllocationSize for DeclId {}
 impl AllocationSize for u32 {}
 impl<A: AllocationSize, B: AllocationSize> AllocationSize for (A, B) {
+    fn origin_bounds(&self) -> OriginBounds {
+        let mut ranges = OriginBounds::EMPTY;
+        ranges.include(self.0.origin_bounds());
+        ranges.include(self.1.origin_bounds());
+        ranges
+    }
     fn heap_bytes(&self) -> usize { self.0.heap_bytes().saturating_add(self.1.heap_bytes()) }
     fn unshared_bytes(&self) -> usize { self.0.unshared_bytes().saturating_add(self.1.unshared_bytes()) }
     fn charge_shared(&self) -> usize { self.0.charge_shared().saturating_add(self.1.charge_shared()) }
@@ -665,6 +912,13 @@ impl<A: AllocationSize, B: AllocationSize> AllocationSize for (A, B) {
     fn work(&self) -> usize { self.0.work().saturating_add(self.1.work()) }
 }
 impl<A: AllocationSize, B: AllocationSize, C: AllocationSize> AllocationSize for (A, B, C) {
+    fn origin_bounds(&self) -> OriginBounds {
+        let mut ranges = OriginBounds::EMPTY;
+        ranges.include(self.0.origin_bounds());
+        ranges.include(self.1.origin_bounds());
+        ranges.include(self.2.origin_bounds());
+        ranges
+    }
     fn work(&self) -> usize { self.0.work().saturating_add(self.1.work()).saturating_add(self.2.work()) }
     fn heap_bytes(&self) -> usize {
         self.0.heap_bytes().saturating_add(self.1.heap_bytes()).saturating_add(self.2.heap_bytes())
@@ -683,6 +937,12 @@ impl<A: AllocationSize, B: AllocationSize, C: AllocationSize> AllocationSize for
     }
 }
 impl AllocationSize for Filter {
+    fn origin_bounds(&self) -> OriginBounds {
+        let mut ranges = OriginBounds::EMPTY;
+        ranges.include(self.keys.origin_bounds());
+        ranges.include(self.possible.origin_bounds());
+        ranges
+    }
     fn work(&self) -> usize {
         self.keys.work() + self.possible.work() + self.labels.work()
     }
@@ -707,6 +967,13 @@ impl AllocationSize for Filter {
     }
 }
 impl AllocationSize for Piece {
+    fn origin_bounds(&self) -> OriginBounds {
+        let mut ranges = OriginBounds::EMPTY;
+        ranges.include(self.origin.origin_bounds());
+        ranges.include(self.holder.origin_bounds());
+        ranges.include(self.predicates.origin_bounds());
+        ranges
+    }
     fn work(&self) -> usize {
         1 + self.predicates.work()
     }
@@ -717,6 +984,17 @@ impl AllocationSize for Piece {
     fn temporary_bytes(&self) -> usize { self.predicates.temporary_bytes() }
 }
 impl AllocationSize for CleanupFact {
+    fn origin_bounds(&self) -> OriginBounds {
+        let mut ranges = OriginBounds::EMPTY;
+        ranges.include(self.reserve.origin_bounds());
+        ranges.include(self.inventory.origin_bounds());
+        ranges.include(self.failure_origin.origin_bounds());
+        ranges.include(self.awaiting_origin.origin_bounds());
+        ranges.include(self.selected.origin_bounds());
+        ranges.include(self.executed.origin_bounds());
+        ranges.include(self.services.origin_bounds());
+        ranges
+    }
     fn work(&self) -> usize {
         1 + self.reserve.work() + self.inventory.work() + self.executed.work() + self.services.work()
     }
@@ -742,6 +1020,31 @@ impl AllocationSize for CleanupFact {
     }
 }
 impl AllocationSize for Token {
+    fn comparison_work(&self, other: &Self) -> usize {
+        if self.pieces.len() != other.pieces.len() {
+            1
+        } else if self.pieces.is_empty() && self.scope != other.scope {
+            2
+        } else {
+            self.work().saturating_add(other.work())
+        }
+    }
+
+    fn origin_bounds(&self) -> OriginBounds {
+        let mut ranges = OriginBounds::EMPTY;
+        ranges.include(self.pieces.origin_bounds());
+        ranges.include(self.service.origin_bounds());
+        ranges.include(self.cell.origin_bounds());
+        ranges.include(self.unique.origin_bounds());
+        ranges.include(self.frame.origin_bounds());
+        ranges.include(self.cache.origin_bounds());
+        ranges.include(self.pin_deps.origin_bounds());
+        ranges.include(self.finish_origin.origin_bounds());
+        ranges.include(self.failure_origin.origin_bounds());
+        ranges.include(self.cleanup.origin_bounds());
+        ranges.include(self.snapshot.origin_bounds());
+        ranges
+    }
     fn work(&self) -> usize {
         1 + self.pieces.work() + self.reserve.work() + self.destinations.work() + self.sources.work()
             + self.unique_region.work() + self.pin_deps.work() + self.cleanup.work() + self.snapshot.work()
@@ -780,11 +1083,27 @@ impl AllocationSize for Token {
 impl Flow {
     /// Copy/scan bound in stored entries and nested relations. Mask copies and
     /// joins process words, rather than dense per-value relational records.
+    pub fn clone_work(&self) -> usize {
+        self.mask_work() + self.tokens.clone_work() + self.journals.clone_work() + self.refs.clone_work()
+            + self.full_deps.clone_work() + self.lifetimes.clone_work() + self.identities.clone_work()
+            + self.must_use.clone_work() + self.failures.clone_work() + self.aliases.clone_work()
+            + self.contained.clone_work() + self.dead.work() + self.taken_caches.work() + self.cache_keys.work()
+            + self.provenance.work() + self.scopes.work() + self.bindings.work() + self.ended.work()
+            + self.closed_inputs.work() + self.fields.work() + self.views.work() + self.frames.work()
+            + self.cells.work()
+    }
     pub fn work(&self) -> usize {
         self.mask_work() + self.relation_work()
     }
     pub fn mask_work(&self) -> usize {
         self.availability.len() / 8 + self.availability.len() % 8
+    }
+    pub fn origin_work(&self) -> usize {
+        // Retirement never scans SSA alias/contained label directories.
+        1 + self.tokens.work() + self.journals.work() + self.refs.work() + self.full_deps.work()
+            + self.identities.work() + self.dead.work() + self.taken_caches.work() + self.cache_keys.work()
+            + self.provenance.work() + self.closed_inputs.work() + self.fields.work() + self.views.work()
+            + self.frames.work() + self.cells.work()
     }
     pub fn relation_work(&self) -> usize {
         1 + self.tokens.work() + self.journals.work() + self.refs.work() + self.full_deps.work()
@@ -857,6 +1176,15 @@ impl Flow {
     }
 }
 impl AllocationSize for super::Slot {
+    fn origin_bounds(&self) -> OriginBounds {
+        let mut ranges = OriginBounds::EMPTY;
+        ranges.include(self.token.origin_bounds());
+        ranges.include(self.journal.origin_bounds());
+        ranges.include(self.refs.origin_bounds());
+        ranges.include(self.identity.origin_bounds());
+        ranges.include(self.requirements.origin_bounds());
+        ranges
+    }
     fn work(&self) -> usize {
         1 + self.token.work() + self.journal.work() + self.refs.work() + self.aliases.work()
             + self.contained.work() + self.bases.work() + self.requirements.work()

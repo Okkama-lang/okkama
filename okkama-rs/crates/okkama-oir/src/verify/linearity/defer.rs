@@ -14,6 +14,8 @@ impl Engine<'_, '_> {
         replacements: &[DeferReplaceEdge], unwind: Option<&InvokeEdge>, before: &Flow,
         outgoing: &mut Vec<(BlockId, Flow)>,
     ) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("defer::defer_invoke");
         if !replacements.is_empty() && !self.defer_cache.contains_key(&function) {
             if self.defer_stack.contains(&function)
                 || self.defer_stack.len() >= self.state.options.limits.expression_depth {
@@ -79,7 +81,7 @@ impl Engine<'_, '_> {
                 Some(Origin::Invoke(block, u32::MAX - u32::from(index)))
             } else { None };
             if let Some(origin) = opaque {
-                branch.retire_origin(origin);
+                self.retire_origin(&mut branch, origin, false);
             }
             let normal = if outcome == Outcome::Unwind { Outcome::Unwind } else { Outcome::Normal };
             let mut slots = self.operation(block, &op, &schema, normal, Origin::Invoke(block, 0), &mut branch);
@@ -101,6 +103,8 @@ impl Engine<'_, '_> {
 
 impl Engine<'_, '_> {
     pub(super) fn defer_return(&mut self, tag: &DeferReturnTag, values: &[ValueId], flow: &Flow) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("defer::defer_return");
         if matches!(tag, DeferReturnTag::Continue) {
             return;
         }
@@ -123,6 +127,8 @@ impl Engine<'_, '_> {
     fn defer_projection_bound(
         &mut self, witness: &Flow, base: ValueId, actual: &impl Fn(ValueId) -> Option<ValueId>, flow: &Flow,
     ) -> Option<BTreeSet<Origin>> {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("defer::defer_projection_bound");
         let mut pending = vec![base];
         let mut seen = BTreeSet::new();
         let mut bound = BTreeSet::new();
@@ -165,6 +171,8 @@ impl Engine<'_, '_> {
         &mut self, function: FuncId, label: &str, schema: &OutcomeContract, key: Origin,
         call: &CallSite, flow: &Flow, slots: &mut [Slot],
     ) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("defer::defer_replacement");
         // D8 exports the actual packet. Derive each tagged return independently
         // with the verifier engine; a borrowed replacement never creates ownership.
         let declaration = self.module.functions.get(function).unwrap();

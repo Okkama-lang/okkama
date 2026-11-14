@@ -6,7 +6,24 @@ use std::ops::{Index, IndexMut};
 use super::shared::{Iter as StoredIter, SharedMap};
 use std::rc::Rc;
 
+/// Conservative upper bounds of current origin IDs, partitioned by kind.
+/// Zero means absent; otherwise the bound is the largest ID plus one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct OriginBounds(pub [u32; 5]);
+impl OriginBounds {
+    pub const EMPTY: Self = Self([0; 5]);
+    pub fn include(&mut self, other: Self) {
+        for (bound, incoming) in self.0.iter_mut().zip(other.0) {
+            *bound = (*bound).max(incoming);
+        }
+    }
+}
 pub(super) trait AllocationSize {
+    fn shared_id(&self) -> Option<usize> { None }
+    fn origin_bounds(&self) -> OriginBounds { OriginBounds::EMPTY }
+    fn comparison_work(&self, other: &Self) -> usize {
+        self.work().saturating_add(other.work())
+    }
     fn heap_bytes(&self) -> usize { 0 }
     fn work(&self) -> usize { 1 }
     fn unshared_bytes(&self) -> usize { self.heap_bytes() }
@@ -18,6 +35,9 @@ impl AllocationSize for usize {}
 impl AllocationSize for u8 {}
 impl AllocationSize for bool {}
 impl<T: AllocationSize> AllocationSize for Option<T> {
+    fn origin_bounds(&self) -> OriginBounds {
+        self.as_ref().map_or(OriginBounds::EMPTY, AllocationSize::origin_bounds)
+    }
     fn heap_bytes(&self) -> usize { self.as_ref().map_or(0, AllocationSize::heap_bytes) }
     fn work(&self) -> usize { self.as_ref().map_or(1, AllocationSize::work) }
     fn unshared_bytes(&self) -> usize { self.as_ref().map_or(0, AllocationSize::unshared_bytes) }
@@ -33,6 +53,16 @@ pub(super) fn tree_bytes<T>(len: usize) -> usize {
     len.div_ceil(5).saturating_mul(32 + 11 * size_of::<T>() + 12 * size_of::<usize>())
 }
 impl<T: AllocationSize> AllocationSize for BTreeSet<T> {
+    fn comparison_work(&self, other: &Self) -> usize {
+        if self.len() != other.len() { 1 } else { self.work().saturating_add(other.work()) }
+    }
+    fn origin_bounds(&self) -> OriginBounds {
+        let mut ranges = OriginBounds::EMPTY;
+        for value in self {
+            ranges.include(value.origin_bounds());
+        }
+        ranges
+    }
     fn work(&self) -> usize {
         self.iter().fold(1usize, |work, value| work.saturating_add(value.work()))
     }
@@ -63,6 +93,14 @@ impl<T: AllocationSize> AllocationSize for BTreeSet<T> {
     }
 }
 impl<K: AllocationSize, V: AllocationSize> AllocationSize for BTreeMap<K, V> {
+    fn origin_bounds(&self) -> OriginBounds {
+        let mut ranges = OriginBounds::EMPTY;
+        for (key, value) in self {
+            ranges.include(key.origin_bounds());
+            ranges.include(value.origin_bounds());
+        }
+        ranges
+    }
     fn work(&self) -> usize {
         self.iter().fold(1usize, |work, (key, value)| {
             work.saturating_add(key.work()).saturating_add(value.work())
@@ -100,14 +138,24 @@ pub(super) struct PerValue<T> {
     len: usize,
     default: Option<Rc<DefaultEntry<T>>>,
     entries: SharedMap<usize, T>,
+    // Only mutable borrows can leave an explicit default behind. Cloning
+    // checks those slots, rather than rechecking every immutable shared entry.
+    dirty: Vec<usize>,
+    dirty_charged: Cell<usize>,
 }
 impl<T: Clone + Eq> Clone for PerValue<T> {
     fn clone(&self) -> Self {
         let mut entries = self.entries.clone();
         if let Some(default) = &self.default {
-            entries.retain(|_, value| *value != default.value);
+            for index in &self.dirty {
+                if entries.get(index).is_some_and(|value| *value == default.value) {
+                    entries.remove(index);
+                }
+            }
         }
-        Self { len: self.len, default: self.default.clone(), entries }
+        Self {
+            len: self.len, default: self.default.clone(), entries, dirty: Vec::new(), dirty_charged: Cell::new(0),
+        }
     }
 }
 #[derive(Debug)]
@@ -161,12 +209,15 @@ impl<T: Clone + Eq> PerValue<T> {
         Self {
             len,
             default: (len != 0).then(|| Rc::new(DefaultEntry { value: default, charged: Cell::new(0) })),
-            entries: SharedMap::new(),
+            entries: SharedMap::new(), dirty: Vec::new(), dirty_charged: Cell::new(0),
         }
     }
     /// Stored slots include explicit defaults; callers must preserve their neutral meaning.
     pub fn indexed(&self) -> impl Iterator<Item = (usize, &T)> + Clone {
         self.entries.iter().map(|(index, value)| (*index, value))
+    }
+    pub fn stored_len(&self) -> usize {
+        self.entries.len()
     }
     pub fn stored(&self) -> impl Iterator<Item = &T> + Clone {
         self.entries.values()
@@ -182,9 +233,11 @@ impl<T: Clone + Eq> PerValue<T> {
         }
     }
     pub fn indexed_mut(&mut self) -> impl Iterator<Item = (usize, &mut T)> {
+        self.dirty.extend(self.entries.keys().copied());
         self.entries.iter_mut().map(|(index, value)| (*index, value))
     }
     pub fn stored_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.dirty.extend(self.entries.keys().copied());
         self.entries.values_mut()
     }
     /// Bulk rewrites may touch only a few logical slots. Do not detach the
@@ -198,30 +251,35 @@ impl<T: Clone + Eq> PerValue<T> {
             self.set(index, value);
         }
     }
-    pub fn assign(&mut self, other: Self) {
-        assert_eq!(self.len, other.len);
-        assert!(self.default.as_ref().map(|entry| &entry.value)
-            == other.default.as_ref().map(|entry| &entry.value));
-        let removed: Vec<_> = self.entries.keys().filter(|index| other.entries.get(index).is_none())
-            .copied().collect();
-        for index in removed {
-            self.entries.remove(&index);
+    /// The callback proves unaffected entries unchanged before cloning them.
+    pub fn rewrite_changed(&mut self, mut rewrite: impl FnMut(&T) -> Option<T>) -> usize
+    where T: AllocationSize {
+        let mut work = 1;
+        let changed: Vec<_> = self.indexed().filter_map(|(index, value)| {
+            let next = rewrite(value)?;
+            Some((index, next))
+        }).collect();
+        for (index, value) in &changed {
+            let default = &self.default.as_ref().unwrap().value;
+            work += value.comparison_work(default);
+            if value == default {
+                self.dirty.push(*index);
+            }
         }
-        for (index, value) in other.entries {
-            self.set(index, value);
-        }
+        work + self.entries.replace_values(changed)
     }
     #[cfg(test)]
     pub fn fill(&mut self, value: T) {
         self.default = (self.len != 0).then(|| Rc::new(DefaultEntry { value, charged: Cell::new(0) }));
         self.entries.clear();
+        self.dirty.clear();
     }
     pub fn set(&mut self, index: usize, value: T) {
         if self.default.as_ref().is_some_and(|entry| entry.value == value) {
             assert!(index < self.len);
             self.entries.remove(&index);
         } else if self[index] != value {
-            self[index] = value;
+            self.entries.insert(index, value);
         }
     }
     pub fn retain_indices(&mut self, keep: &[bool]) {
@@ -229,17 +287,125 @@ impl<T: Clone + Eq> PerValue<T> {
     }
 }
 impl<T: Clone + Eq + AllocationSize> PerValue<T> {
+    /// Stable last-write-wins assignment, merged with the old sorted directory.
+    /// Unchanged entries need neither a search nor a new persistent path.
+    pub fn assign_entries(&mut self, desired: Vec<(usize, T)>, charge: impl FnMut(usize) -> bool) {
+        self.merge_entries(desired, true, charge);
+    }
+    pub fn update_entries(&mut self, desired: Vec<(usize, T)>, charge: impl FnMut(usize) -> bool) {
+        self.merge_entries(desired, false, charge);
+    }
+    fn merge_entries(
+        &mut self, mut desired: Vec<(usize, T)>, clear_missing: bool, mut charge: impl FnMut(usize) -> bool,
+    ) {
+        desired.sort_by(|left, right| {
+            charge(1);
+            left.0.cmp(&right.0)
+        });
+        let mut incoming = desired.into_iter().peekable();
+        let mut current = self.indexed().peekable();
+        let mut changed = Vec::new();
+        let mut inserted = Vec::new();
+        let mut removed = Vec::new();
+        let mut equal_cache = BTreeMap::new();
+        while current.peek().is_some() || incoming.peek().is_some() {
+            if !charge(1) {
+                return;
+            }
+            let left = current.peek().map_or(usize::MAX, |(index, _)| *index);
+            let right = incoming.peek().map_or(usize::MAX, |(index, _)| *index);
+            if left < right {
+                current.next();
+                if clear_missing {
+                    removed.push(left);
+                }
+                continue;
+            }
+            let (index, mut value) = incoming.next().unwrap();
+            assert!(index < self.len);
+            while incoming.peek().is_some_and(|(next, _)| *next == index) {
+                charge(1);
+                value = incoming.next().unwrap().1;
+            }
+            if left == index {
+                let (_, old) = current.next().unwrap();
+                let equal = if let (Some(a), Some(b)) = (old.shared_id(), value.shared_id()) {
+                    if !charge(2 + equal_cache.len().max(1).ilog2() as usize) {
+                        return;
+                    }
+                    let (_, _, equal) = equal_cache.entry((a, b)).or_insert_with(|| {
+                        charge(old.comparison_work(&value));
+                        // Hold both roots while their addresses are cache keys.
+                        (old.clone(), value.clone(), old == &value)
+                    });
+                    *equal
+                } else {
+                    if !charge(old.comparison_work(&value)) {
+                        return;
+                    }
+                    old == &value
+                };
+                if equal {
+                    continue;
+                }
+            }
+            let default = &self.default.as_ref().unwrap().value;
+            if !charge(value.comparison_work(default)) {
+                return;
+            }
+            if value == *default {
+                removed.push(index);
+            } else if left == index {
+                changed.push((index, value));
+            } else {
+                inserted.push((index, value));
+            }
+        }
+        drop(current);
+        if !charge(self.entries.replace_values(changed)) {
+            return;
+        }
+        let path = 2 + self.entries.len().max(1).ilog2() as usize;
+        for index in removed {
+            if !charge(path) {
+                return;
+            }
+            self.entries.remove(&index);
+        }
+        for (index, value) in inserted {
+            if !charge(path) {
+                return;
+            }
+            self.entries.insert(index, value);
+        }
+    }
+    pub fn clone_work(&self) -> usize {
+        let path = 2 + self.len.max(1).ilog2() as usize;
+        self.dirty.iter().fold(1usize, |work, index| {
+            work + 2 * path + self.entries.get(index).map_or(1, |value| {
+                value.comparison_work(&self.default.as_ref().unwrap().value)
+            })
+        })
+    }
+    pub fn origin_bounds(&self, charge: &mut impl FnMut(usize) -> bool) -> OriginBounds {
+        // Defaults are neutral in Flow. Stored explicit defaults are neutral too.
+        self.entries.origin_bounds(charge)
+    }
+
     pub fn work(&self) -> usize {
         self.entries.values().fold(1usize, |work, value| work.saturating_add(value.work()))
     }
     #[cfg(any(test, feature = "verifier-differential"))]
     pub fn allocation_bytes(&self) -> usize {
-        self.entries.allocation_bytes() + self.default.as_ref().map_or(0, |entry| {
+        self.dirty.capacity() * size_of::<usize>() + self.entries.allocation_bytes()
+            + self.default.as_ref().map_or(0, |entry| {
             32 + size_of::<DefaultEntry<T>>() + entry.value.heap_bytes()
         })
     }
     pub fn charge_new(&self) -> usize {
-        let mut bytes = self.entries.charge_new();
+        let dirty_bytes = self.dirty.capacity() * size_of::<usize>();
+        let mut bytes = dirty_bytes.saturating_sub(self.dirty_charged.get()) + self.entries.charge_new();
+        self.dirty_charged.set(dirty_bytes.max(self.dirty_charged.get()));
         if let Some(entry) = &self.default {
             let allocation = 32 + size_of::<DefaultEntry<T>>() + entry.value.unshared_bytes();
             bytes += allocation.saturating_sub(entry.charged.get()) + entry.value.charge_shared();
@@ -257,7 +423,8 @@ impl<T: Clone + Eq + AllocationSize> PerValue<T> {
             let allocation = 32 + size_of::<DefaultEntry<T>>() + entry.value.unshared_bytes();
             allocation.saturating_sub(entry.charged.get()) + entry.value.pending_shared()
         });
-        self.entries.new_bytes(false) + directory + default + private + rewrite
+        self.dirty.capacity() * size_of::<usize>()
+            + self.entries.new_bytes(false) + directory + default + private + rewrite
     }
 
 }
@@ -271,6 +438,7 @@ impl<T: Clone + Eq> Index<usize> for PerValue<T> {
 impl<T: Clone + Eq> IndexMut<usize> for PerValue<T> {
     fn index_mut(&mut self, index: usize) -> &mut T {
         assert!(index < self.len);
+        self.dirty.push(index);
         self.entries.entry(index).or_insert_with(|| self.default.as_ref().unwrap().value.clone())
     }
 }
@@ -302,6 +470,45 @@ impl<'a, T: Clone + Eq> IntoIterator for &'a PerValue<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bulk_assignment_matches_last_write_wins_and_preserves_the_old_version() {
+        let mut values = PerValue::new(8, 0u8);
+        values.set(1, 9);
+        values.set(2, 8);
+        values.set(7, 7);
+        let old = values.clone();
+        values.assign_entries(vec![(5, 4), (1, 2), (5, 6), (3, 0)], |_| true);
+        assert_eq!(values.iter().copied().collect::<Vec<_>>(), vec![0, 2, 0, 0, 0, 6, 0, 0]);
+        assert_eq!(old.iter().copied().collect::<Vec<_>>(), vec![0, 9, 8, 0, 0, 0, 0, 7]);
+        values.update_entries(vec![(4, 5), (1, 3), (4, 6)], |_| true);
+        assert_eq!(values.iter().copied().collect::<Vec<_>>(), vec![0, 3, 0, 0, 6, 6, 0, 0]);
+        values.assign_entries(Vec::new(), |_| true);
+        assert_eq!(values.indexed().count(), 0);
+    }
+
+    #[test]
+    fn cloning_prunes_only_mutably_borrowed_slots() {
+        let mut values = PerValue::new(100_000, 0u8);
+        for index in 0..10_000 {
+            values.set(index, 1);
+        }
+        let original = values.clone();
+        assert_eq!(values.clone_work(), 1);
+        values[321] = 0;
+        values[40_000] = 0;
+        let copied = values.clone();
+        assert_eq!(copied.indexed().count(), 9_999);
+        assert_eq!(copied[321], 0);
+        assert_eq!(original[321], 1);
+        assert!(values.clone_work() < 100);
+        assert_eq!(copied.clone_work(), 1);
+        // Bulk mutable access must mark every borrowed slot too.
+        for (_, value) in values.indexed_mut() {
+            *value = 0;
+        }
+        assert_eq!(values.clone().indexed().count(), 0);
+    }
 
     #[test]
     fn logical_defaults_and_indices_survive_sharing_and_explicit_empty_entries() {
