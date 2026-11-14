@@ -145,6 +145,33 @@ fake fields; role fakes and their ordinary typed fields remain available.
   with checked order evidence, and only when cleanup cannot fail or the
   reserve is empty; otherwise the common runtime merge runs.
 
+- **Sparrow Champ: the new runtime, behind the cargo feature `champ-abi`
+  (#571, #572, #573).** Champ destroys every object exactly once without
+  identity tables. It is built as a candidate toolchain; the default build
+  and the CLI are unchanged.
+  - **Bytecode and loader (#571).** SPB 17 bytecode is emitted from OIR-2
+    `low`. Before anything runs, a load-time verifier checks:
+    - types, including pending values;
+    - linear services and cleanup phases;
+    - serial order and the direct-plan restriction;
+    - failure masks computed from bodies;
+    - root maps before and after helpers.
+
+    It compares the compiler's evidence and never repairs it. Every rule
+    has a negative test with a stable code.
+  - **Runtime (#572).** Object layouts with an identity tail only for
+    objects that have their own destroy. Packets, scopes, journals and
+    owned calls with one outcome channel. A common cleanup executor runs
+    the reserve and suffix merge and keeps failure links.
+  - **JIT (#573).** Cranelift lowering of every P1 operation with a shared
+    helper registry, precise stack maps, and the rule that a helper's
+    result words are written last and never kept in the map. Owning-entry
+    rejection settles the input exactly once. All cleanup runs within the
+    stack headroom.
+
+  All eleven reference programs run under the JIT, also with a collection
+  at every safepoint, and give the expected destroy order.
+
 - **Register-colouring diagnostics (#540).** `OKKAMA_PROFILE_REGISTERS=1`
   reports compiler phase times, busy-set cloning work, conflict-list capacity,
   edge moves and assigned registers. Bounded, opt-in large-function fixtures
