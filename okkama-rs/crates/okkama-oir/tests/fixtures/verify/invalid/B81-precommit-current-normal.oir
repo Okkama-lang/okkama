@@ -1,0 +1,20 @@
+oir 2 high
+// expect OIR2-B8.1 instruction:0:4
+module c5-precommit
+requires core
+scope S action in @build
+
+func @build() -> void {
+    ^entry in S:
+    %initial: builder<int> = builder.new element int
+    br ^update(%initial)
+    ^update(%current: builder<int>) in S unwind ^failed(%current):
+    %item: int = const 1
+    %next: builder<int> = builder.push %current, %item
+    builder.abandon %next
+    builder.abandon %current
+    ret
+    ^failed(%restored: builder<int>, %failure: failure) in S:
+    builder.abandon %restored
+    raise %failure
+}

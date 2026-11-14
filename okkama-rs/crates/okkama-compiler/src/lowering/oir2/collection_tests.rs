@@ -4,7 +4,7 @@ use crate::oir2 as ir;
 use crate::syntax::{self, ParseOptions};
 use crate::SourceFile;
 
-fn with_analysis<T>(text: &str, test: impl FnOnce(&analysis::Analysis<'_>) -> T) -> T {
+pub(super) fn with_analysis<T>(text: &str, test: impl FnOnce(&analysis::Analysis<'_>) -> T) -> T {
     let source = SourceFile::new("oir2-collections.ok", text).unwrap();
     let program = syntax::parse(&source, &ParseOptions::default()).unwrap();
     let analysis = analysis::analyze(vec![analysis::SourceModule {

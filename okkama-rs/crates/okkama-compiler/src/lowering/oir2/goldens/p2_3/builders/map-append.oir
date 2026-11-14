@@ -1,0 +1,98 @@
+oir 2 high
+module app
+requires core
+entry @main
+scope S0 action in @main
+
+func @main() -> int [entry] {
+    binding b0 "a": map<int, int> in S0
+    boundary B0 lexical in S0
+    ^b0 in S0 unwind ^b1:
+    %0: mbuilder<int, int> = mbuilder.new key int, value int
+    %1: int = const 0
+    %2: int = const 0
+    %3: map<int, int> = map.new entries [(%1, %2)], ty map<int, int>
+    br ^b2(%0)
+    ^b1(%4: failure) in S0:
+    raise %4
+    ^b2(%5: mbuilder<int, int>) in S0 unwind ^b3(%5):
+    %6: mbuilder<int, int> = mbuilder.append %5, %3
+    %7: int = const 1
+    %8: int = const 1
+    %9: map<int, int> = map.new entries [(%7, %8)], ty map<int, int>
+    br ^b4(%6)
+    ^b3(%10: mbuilder<int, int>, %11: failure) in S0 unwind ^b1:
+    mbuilder.abandon %10
+    raise %11
+    ^b4(%12: mbuilder<int, int>) in S0 unwind ^b5(%12):
+    %13: mbuilder<int, int> = mbuilder.append %12, %9
+    %14: int = const 2
+    %15: int = const 2
+    %16: map<int, int> = map.new entries [(%14, %15)], ty map<int, int>
+    br ^b6(%13)
+    ^b5(%17: mbuilder<int, int>, %18: failure) in S0 unwind ^b1:
+    mbuilder.abandon %17
+    raise %18
+    ^b6(%19: mbuilder<int, int>) in S0 unwind ^b7(%19):
+    %20: mbuilder<int, int> = mbuilder.append %19, %16
+    %21: int = const 3
+    %22: int = const 3
+    %23: map<int, int> = map.new entries [(%21, %22)], ty map<int, int>
+    br ^b8(%20)
+    ^b7(%24: mbuilder<int, int>, %25: failure) in S0 unwind ^b1:
+    mbuilder.abandon %24
+    raise %25
+    ^b8(%26: mbuilder<int, int>) in S0 unwind ^b9(%26):
+    %27: mbuilder<int, int> = mbuilder.append %26, %23
+    %28: int = const 4
+    %29: int = const 4
+    %30: map<int, int> = map.new entries [(%28, %29)], ty map<int, int>
+    br ^b10(%27)
+    ^b9(%31: mbuilder<int, int>, %32: failure) in S0 unwind ^b1:
+    mbuilder.abandon %31
+    raise %32
+    ^b10(%33: mbuilder<int, int>) in S0 unwind ^b11(%33):
+    %34: mbuilder<int, int> = mbuilder.append %33, %30
+    %35: int = const 5
+    %36: int = const 5
+    %37: map<int, int> = map.new entries [(%35, %36)], ty map<int, int>
+    br ^b12(%34)
+    ^b11(%38: mbuilder<int, int>, %39: failure) in S0 unwind ^b1:
+    mbuilder.abandon %38
+    raise %39
+    ^b12(%40: mbuilder<int, int>) in S0 unwind ^b13(%40):
+    %41: mbuilder<int, int> = mbuilder.append %40, %37
+    %42: int = const 6
+    %43: int = const 6
+    %44: map<int, int> = map.new entries [(%42, %43)], ty map<int, int>
+    br ^b14(%41)
+    ^b13(%45: mbuilder<int, int>, %46: failure) in S0 unwind ^b1:
+    mbuilder.abandon %45
+    raise %46
+    ^b14(%47: mbuilder<int, int>) in S0 unwind ^b15(%47):
+    %48: mbuilder<int, int> = mbuilder.append %47, %44
+    %49: int = const 7
+    %50: int = const 7
+    %51: map<int, int> = map.new entries [(%49, %50)], ty map<int, int>
+    br ^b16(%48)
+    ^b15(%52: mbuilder<int, int>, %53: failure) in S0 unwind ^b1:
+    mbuilder.abandon %52
+    raise %53
+    ^b16(%54: mbuilder<int, int>) in S0 unwind ^b17(%54):
+    %55: mbuilder<int, int> = mbuilder.append %54, %51
+    br ^b18(%55)
+    ^b17(%56: mbuilder<int, int>, %57: failure) in S0 unwind ^b1:
+    mbuilder.abandon %56
+    raise %57
+    ^b18(%58: mbuilder<int, int>) in S0 unwind ^b19(%58):
+    %59: map<int, int> = mbuilder.finish %58
+    bind %59, binding b0
+    %60: int = map.len %59
+    want %60
+    [i45] exit.prepare return %60 at B0
+    result.exit edge normal(0), value %60, demand want, prepare #45
+    ret %60
+    ^b19(%61: mbuilder<int, int>, %62: failure) in S0 unwind ^b1:
+    mbuilder.abandon %61
+    raise %62
+}

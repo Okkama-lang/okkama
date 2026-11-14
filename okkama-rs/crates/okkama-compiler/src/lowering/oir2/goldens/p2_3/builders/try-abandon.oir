@@ -1,0 +1,131 @@
+oir 2 high
+module app
+requires core
+entry @main
+
+object app.Build {
+}
+
+role Error [builtin] {
+    text() -> str
+}
+scope S0 action in @app.Build.run#0
+scope S1 try in @app.Build.run#0 parent S0
+scope S2 catch in @app.Build.run#0 parent S0
+scope S3 action in @main
+scope S4 action in @app.Build.new#0
+
+func @app.Build.new#0() -> app.Build [ctor app.Build] {
+    boundary B0 lexical in S4
+    ^b0 in S4 unwind ^b1:
+    %0: app.Build = obj.new app.Build { }
+    want %0
+    [i2] exit.prepare return %0 at B0
+    result.exit edge normal(0), value %0, demand want, prepare #2
+    ret %0
+    ^b1(%1: failure) in S4:
+    raise %1
+}
+
+func @app.Build.run#0(%0: app.Build, %1: int) -> int [method app.Build] {
+    binding b0 "n": int in S0
+    binding b1 "a": array<int> in S1
+    binding b2 "e": Error in S2
+    boundary B0 lexical in S0
+    boundary B1 lexical in S1
+    boundary B2 lexical in S2
+    ^b0 in S0 unwind ^b1:
+    bind %1, binding b0
+    br ^b4(%1)
+    ^b1(%2: failure) in S0:
+    raise %2
+    ^b2(%3: int, %4: int) in S0 unwind ^b1:
+    want %3
+    [i2] exit.prepare return %3 at B0
+    result.exit edge normal(0), value %3, demand want, prepare #2
+    ret %3
+    ^b3(%5: int, %6: failure) in S0 unwind ^b1:
+    catch %6 is Error, ^b19(%5, %6, $value), ^b20(%5, %6)
+    ^b4(%7: int) in S1 unwind ^b3(%7):
+    %8: builder<int> = builder.new element int
+    %9: int = const 9
+    br ^b5(%7, %8)
+    ^b5(%10: int, %11: builder<int>) in S1 unwind ^b6(%10, %11):
+    %12: builder<int> = builder.push %11, %9
+    %13: int = const 10
+    br ^b7(%10)
+    ^b6(%14: int, %15: builder<int>, %16: failure) in S1 unwind ^b3(%14):
+    builder.abandon %15
+    raise %16
+    ^b7(%17: int) in S1 unwind ^b3(%17):
+    br ^b8(%17, %12)
+    ^b8(%18: int, %19: builder<int>) in S1 unwind ^b9(%18, %19):
+    %20: int = int.mod %13, %10
+    br ^b10(%18)
+    ^b9(%21: int, %22: builder<int>, %23: failure) in S1 unwind ^b3(%21):
+    builder.abandon %22
+    raise %23
+    ^b10(%24: int) in S1 unwind ^b3(%24):
+    br ^b11(%24, %19)
+    ^b11(%25: int, %26: builder<int>) in S1 unwind ^b12(%25, %26):
+    %27: builder<int> = builder.push %26, %20
+    %28: int = const 2
+    %29: int = const 4
+    br ^b13(%25)
+    ^b12(%30: int, %31: builder<int>, %32: failure) in S1 unwind ^b3(%30):
+    builder.abandon %31
+    raise %32
+    ^b13(%33: int) in S1 unwind ^b3(%33):
+    br ^b14(%33, %27)
+    ^b14(%34: int, %35: builder<int>) in S1 unwind ^b15(%34, %35):
+    %36: builder<int> = builder.append.range %35, %28, %29, inclusive true
+    br ^b16(%34)
+    ^b15(%37: int, %38: builder<int>, %39: failure) in S1 unwind ^b3(%37):
+    builder.abandon %38
+    raise %39
+    ^b16(%40: int) in S1 unwind ^b3(%40):
+    br ^b17(%40, %36)
+    ^b17(%41: int, %42: builder<int>) in S1 unwind ^b18(%41, %42):
+    %43: array<int> = builder.finish %42
+    bind %43, binding b1
+    %44: int = array.len %43
+    want %44
+    [i20] exit.prepare fallthrough %44 at B1
+    want %41
+    [i22] exit.prepare fallthrough %41 at B1
+    result.exit edge normal(0), value %44, demand want, prepare #20
+    result.exit edge normal(0), value %41, demand want, prepare #22
+    br ^b2(%44, %41)
+    ^b18(%45: int, %46: builder<int>, %47: failure) in S1 unwind ^b3(%45):
+    builder.abandon %46
+    raise %47
+    ^b19(%48: int, %49: failure, %50: Error) in S2 unwind ^b1:
+    bind %50, binding b2
+    br ^b22(%48, %49)
+    ^b20(%51: int, %52: failure) in S0 unwind ^b1:
+    raise %52
+    ^b21(%53: int, %54: failure, %55: failure) in S0 unwind ^b1:
+    %56: failure = fail.caused %55, %54
+    raise %56
+    ^b22(%57: int, %58: failure) in S2 unwind ^b21(%57, %58):
+    %59: int = const 0
+    want %59
+    [i28] exit.prepare fallthrough %59 at B2
+    want %57
+    [i30] exit.prepare fallthrough %57 at B2
+    result.exit edge normal(0), value %59, demand want, prepare #28
+    result.exit edge normal(0), value %57, demand want, prepare #30
+    br ^b2(%59, %57)
+}
+
+func @main() -> int [entry] {
+    boundary B0 lexical in S3
+    ^b0 in S3 unwind ^b1:
+    %0: int = const 0
+    want %0
+    [i2] exit.prepare return %0 at B0
+    result.exit edge normal(0), value %0, demand want, prepare #2
+    ret %0
+    ^b1(%1: failure) in S3:
+    raise %1
+}

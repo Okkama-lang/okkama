@@ -1,0 +1,17 @@
+module app;
+object Build {
+    Build();
+    run(flag is bool, n is int) is @int {
+        [9, if flag {
+            2;
+        } else {
+            3;
+        }, loop {
+            next if flag;
+            last n;
+        }, 2..=4];
+    }
+}
+main() is int {
+    0;
+}

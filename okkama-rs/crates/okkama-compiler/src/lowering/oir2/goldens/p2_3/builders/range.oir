@@ -1,0 +1,41 @@
+oir 2 high
+module app
+requires core
+entry @main
+scope S0 action in @main
+
+func @main() -> int [entry] {
+    binding b0 "a": array<int> in S0
+    boundary B0 lexical in S0
+    ^b0 in S0 unwind ^b1:
+    %0: builder<int> = builder.new element int
+    %1: int = const 9
+    br ^b2(%0)
+    ^b1(%2: failure) in S0:
+    raise %2
+    ^b2(%3: builder<int>) in S0 unwind ^b3(%3):
+    %4: builder<int> = builder.push %3, %1
+    %5: int = const 2
+    %6: int = const 4
+    br ^b4(%4)
+    ^b3(%7: builder<int>, %8: failure) in S0 unwind ^b1:
+    builder.abandon %7
+    raise %8
+    ^b4(%9: builder<int>) in S0 unwind ^b5(%9):
+    %10: builder<int> = builder.append.range %9, %5, %6, inclusive true
+    br ^b6(%10)
+    ^b5(%11: builder<int>, %12: failure) in S0 unwind ^b1:
+    builder.abandon %11
+    raise %12
+    ^b6(%13: builder<int>) in S0 unwind ^b7(%13):
+    %14: array<int> = builder.finish %13
+    bind %14, binding b0
+    %15: int = array.len %14
+    want %15
+    [i12] exit.prepare return %15 at B0
+    result.exit edge normal(0), value %15, demand want, prepare #12
+    ret %15
+    ^b7(%16: builder<int>, %17: failure) in S0 unwind ^b1:
+    builder.abandon %16
+    raise %17
+}

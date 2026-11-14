@@ -1,0 +1,56 @@
+oir 2 high
+module app
+requires core
+entry @main
+scope S0 action in @main
+
+func @main() -> int [entry] {
+    binding b0 "a": array<int> in S0
+    boundary B0 lexical in S0
+    ^b0 in S0 unwind ^b1:
+    %0: builder<int> = builder.new element int
+    %1: int = const 0
+    %2: int = const 1
+    %3: int = const 2
+    %4: int = const 3
+    %5: int = const 4
+    %6: int = const 5
+    %7: int = const 6
+    %8: int = const 7
+    %9: array<int> = array.new [%1, %2, %3, %4, %5, %6, %7, %8], ty array<int>
+    br ^b2(%0)
+    ^b1(%10: failure) in S0:
+    raise %10
+    ^b2(%11: builder<int>) in S0 unwind ^b3(%11):
+    %12: builder<int> = builder.append %11, %9
+    %13: int = const 8
+    %14: int = const 9
+    %15: int = const 10
+    %16: int = const 11
+    %17: int = const 12
+    %18: int = const 13
+    %19: int = const 14
+    %20: int = const 15
+    %21: array<int> = array.new [%13, %14, %15, %16, %17, %18, %19, %20], ty array<int>
+    br ^b4(%12)
+    ^b3(%22: builder<int>, %23: failure) in S0 unwind ^b1:
+    builder.abandon %22
+    raise %23
+    ^b4(%24: builder<int>) in S0 unwind ^b5(%24):
+    %25: builder<int> = builder.append %24, %21
+    br ^b6(%25)
+    ^b5(%26: builder<int>, %27: failure) in S0 unwind ^b1:
+    builder.abandon %26
+    raise %27
+    ^b6(%28: builder<int>) in S0 unwind ^b7(%28):
+    %29: array<int> = builder.finish %28
+    bind %29, binding b0
+    %30: int = array.len %29
+    want %30
+    [i27] exit.prepare return %30 at B0
+    result.exit edge normal(0), value %30, demand want, prepare #27
+    ret %30
+    ^b7(%31: builder<int>, %32: failure) in S0 unwind ^b1:
+    builder.abandon %31
+    raise %32
+}

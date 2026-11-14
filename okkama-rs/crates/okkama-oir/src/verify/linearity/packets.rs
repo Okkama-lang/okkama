@@ -193,11 +193,24 @@ impl Engine<'_, '_> {
             }
             else if let Ok(children) = cfg::expression_children(reference, self.body) { metadata.extend(children); }
         }
+        // High has no named exceptional results (H2). Rule::Buffer restores
+        // precommit inputs under their entry SSA names; own/low still consume
+        // them and name the Preserve slots with invoke.own.
+        let high_preserve = self.module.profile == Profile::High
+            && outcome == Outcome::Unwind
+            && matches!(op.spec().rule, crate::contracts::Rule::Buffer { .. });
+        let preserved: BTreeSet<_> = schema.transfers.iter().filter_map(|transfer| {
+            match transfer {
+                TransferRule::Preserve { input, .. } if high_preserve => Some(*input),
+                _ => None,
+            }
+        }).collect();
         for operand in refs {
             if let OperandRef::Value(value) = operand.reference {
                 let rule = if matches!(op, Operation::Ownership(OwnershipOp::ScopeEnd { .. }
                     | OwnershipOp::ScopeUnwind { .. })) { R::B41 } else { R::B21 };
-                self.use_value(flow, value, operand.mode, rule);
+                let mode = if preserved.contains(&value) { OperandMode::Borrow } else { operand.mode };
+                self.use_value(flow, value, mode, rule);
             }
         }
         self.scope_operation(block, op, outcome, &before, flow);
@@ -210,6 +223,9 @@ impl Engine<'_, '_> {
             }
             match transfer {
                 TransferRule::Preserve { input, output } => {
+                    if preserved.contains(input) {
+                        continue;
+                    }
                     if let Some(i) = slot_index(*output) {
                         slots[i].token = before.tokens[input.as_u32() as usize].clone();
                         slots[i].journal = before.journals[input.as_u32() as usize].clone();

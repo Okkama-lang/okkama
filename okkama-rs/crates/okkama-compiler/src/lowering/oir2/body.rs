@@ -29,7 +29,7 @@ pub(super) struct BodyLowerer<'a, 't> {
     pub early_self: Option<ir::ValueId>,
     pub field_base: usize,
     pub field_end: usize,
-    // Locals, field slots, then active catch failure views are forwarded at joins/backedges.
+    // Locals, field slots, active catch failures and builder versions cross joins/backedges.
     // A scope exit restores the outer set; shadowed locals have distinct IDs.
     pub env: Vec<Option<ir::ValueId>>,
     pub bindings: Vec<Option<ir::BindingId>>,
@@ -42,6 +42,8 @@ pub(super) struct BodyLowerer<'a, 't> {
     failures: HashMap<Vec<(ir::ScopeId, ir::FuncId)>, ir::BlockId>,
     pub registrations: HashMap<ir::ScopeId, Vec<ir::FuncId>>,
     loops: Vec<LoopFrame>,
+    pub buffers: Vec<usize>,
+    pub buffer_unwinds: HashMap<ir::BlockId, (ir::BlockId, usize)>,
 }
 
 #[derive(Clone)]
@@ -94,6 +96,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             b, source, types, current: Some(entry), env: vec![None; count], bindings: vec![None; count],
             root, return_boundary, failures: HashMap::from([(vec![], failure)]),
             registrations: HashMap::new(), loops: vec![], context,
+            buffers: vec![], buffer_unwinds: HashMap::new(),
             failure_frames: vec![], caught: vec![], rethrows: HashMap::new(), rethrow_inputs: HashMap::new(),
             receiver: None, early_self: None, field_base, field_end: count,
         };
@@ -270,6 +273,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             args.push(value.ok_or_else(|| LowerError::invalid(self.source.span, "valued arm has no value"))?);
         }
         args.extend(self.args(&join.locals));
+        self.abandon_except(&join.locals)?;
         self.edge(join.block, args, kind, boundary)
     }
 
@@ -334,7 +338,9 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             for &value in &args {
                 let ty = self.b.body().values.get(value)?.ty;
                 // Active catch failures are forwarded context, not semantic language results.
-                if !matches!(self.b.module().types.get(ty)?, ir::Type::Service(_)) && prepared.insert(value) {
+                if !matches!(self.b.module().types.get(ty)?,
+                    ir::Type::Service(_) | ir::Type::Builder(_) | ir::Type::MapBuilder(..))
+                    && prepared.insert(value) {
                     self.prepare(Some(value), kind, boundary)?;
                 }
             }
@@ -346,6 +352,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
     }
 
     pub fn return_value(&mut self, value: Option<ir::ValueId>) -> Result<()> {
+        self.abandon_except(&[])?;
         self.separate_discarded(&value.into_iter().collect::<Vec<_>>())?;
         self.prepare(value, ir::ExitKind::Return, self.return_boundary)?;
         self.terminate(ir::TermKind::Ret { values: value.into_iter().collect() })
@@ -783,6 +790,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             LowerError::invalid(self.source.span, "loop exit outside loop")
         })?;
         if next {
+            self.abandon_except(&frame.exit.locals)?;
             let mut args = frame.state.clone();
             args.extend(self.args(&frame.exit.locals));
             return self.edge(frame.next, args, ir::ExitKind::Next, Some(frame.boundary));

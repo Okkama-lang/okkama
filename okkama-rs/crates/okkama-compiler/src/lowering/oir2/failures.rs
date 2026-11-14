@@ -18,6 +18,11 @@ pub(super) struct Caught {
 impl BodyLowerer<'_, '_> {
     /// Ordinary unwind observes block entry, never an instruction-local value.
     pub fn sync_failure(&mut self) -> Result<()> {
+        self.sync_failure_frame()?;
+        self.sync_buffer_failure()
+    }
+
+    fn sync_failure_frame(&mut self) -> Result<()> {
         let Some(frame) = self.failure_frames.last().cloned() else {
             return Ok(());
         };
@@ -280,6 +285,9 @@ impl BodyLowerer<'_, '_> {
             self.caught.pop();
             self.enter(caused, &locals, 0)?;
             let params = self.b.block_params(caused)?.to_vec();
+            // This is an unwind destination: keep its Raise in this block.
+            // Install buffer cleanup before emitting the non-failing cause link.
+            self.sync_buffer_failure()?;
             let chained = self.core(ir::CoreOp::FailCaused {
                 new: params[locals.len() + 1], handled: params[locals.len()],
             })?;

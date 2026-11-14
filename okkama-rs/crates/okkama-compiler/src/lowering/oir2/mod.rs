@@ -8,8 +8,11 @@
 
 mod body;
 mod collections;
+mod builders;
 #[cfg(test)]
 mod collection_tests;
+#[cfg(test)]
+mod builder_tests;
 mod specialize;
 mod native_summaries;
 mod construction;

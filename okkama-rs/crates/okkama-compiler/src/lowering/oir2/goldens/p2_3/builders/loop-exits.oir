@@ -1,0 +1,83 @@
+oir 2 high
+module app
+requires core
+entry @main
+
+object app.Build {
+}
+scope S0 action in @app.Build.run#0
+scope S1 iteration in @app.Build.run#0 parent S0
+scope S2 branch in @app.Build.run#0 parent S1
+scope S3 branch in @app.Build.run#0 parent S1
+scope S4 action in @main
+scope S5 action in @app.Build.new#0
+
+func @app.Build.new#0() -> app.Build [ctor app.Build] {
+    boundary B0 lexical in S5
+    ^b0 in S5 unwind ^b1:
+    %0: app.Build = obj.new app.Build { }
+    want %0
+    [i2] exit.prepare return %0 at B0
+    result.exit edge normal(0), value %0, demand want, prepare #2
+    ret %0
+    ^b1(%1: failure) in S5:
+    raise %1
+}
+
+func @app.Build.run#0(%0: app.Build, %1: bool) -> array<int> [method app.Build] {
+    binding b0 "flag": bool in S0
+    boundary B0 lexical in S0
+    boundary B1 loop in S1
+    ^b0 in S0 unwind ^b1:
+    bind %1, binding b0
+    br ^b3(%1)
+    ^b1(%2: failure) in S0:
+    raise %2
+    ^b2(%3: array<int>, %4: bool) in S0 unwind ^b1:
+    want %3
+    [i2] exit.prepare return %3 at B0
+    result.exit edge normal(0), value %3, demand want, prepare #2
+    ret %3
+    ^b3(%5: bool) in S0 unwind ^b1:
+    br ^b4(%5)
+    ^b4(%6: bool) in S1 unwind ^b1:
+    %7: builder<int> = builder.new element int
+    %8: int = const 9
+    br ^b5(%6, %7)
+    ^b5(%9: bool, %10: builder<int>) in S1 unwind ^b6(%10):
+    %11: builder<int> = builder.push %10, %8
+    cond %9, ^b8(%9, %11), ^b9(%9, %11)
+    ^b6(%12: builder<int>, %13: failure) in S1 unwind ^b1:
+    builder.abandon %12
+    raise %13
+    ^b7 in S1:
+    unreachable
+    ^b8(%14: bool, %15: builder<int>) in S2 unwind ^b1:
+    builder.abandon %15
+    want %14
+    [i9] exit.prepare next %14 at B1
+    result.exit edge normal(0), value %14, demand want, prepare #9
+    br ^b3(%14)
+    ^b9(%16: bool, %17: builder<int>) in S3 unwind ^b1:
+    %18: array<int> = array.new ty array<int>
+    builder.abandon %17
+    want %18
+    [i13] exit.prepare last %18 at B1
+    want %16
+    [i15] exit.prepare last %16 at B1
+    result.exit edge normal(0), value %18, demand want, prepare #13
+    result.exit edge normal(0), value %16, demand want, prepare #15
+    br ^b2(%18, %16)
+}
+
+func @main() -> int [entry] {
+    boundary B0 lexical in S4
+    ^b0 in S4 unwind ^b1:
+    %0: int = const 0
+    want %0
+    [i2] exit.prepare return %0 at B0
+    result.exit edge normal(0), value %0, demand want, prepare #2
+    ret %0
+    ^b1(%1: failure) in S4:
+    raise %1
+}

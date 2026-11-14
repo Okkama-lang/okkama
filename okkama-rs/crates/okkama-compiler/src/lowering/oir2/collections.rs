@@ -43,36 +43,22 @@ impl BodyLowerer<'_, '_> {
         use thir::ExprKind as E;
         let ty = self.ty(expr.ty.as_ref().expect("typed collection expression"), expr.span)?;
         let result = match &expr.kind {
+            E::Array(parts) if parts.len() >= super::builders::STREAM_LIMIT
+                || parts.iter().any(|part| matches!(part, thir::ArrayPart::Range { .. })) => {
+                return self.stream_array(parts, ty);
+            }
+            E::Map(entries) if entries.len() >= super::builders::STREAM_LIMIT => {
+                return self.stream_map(entries, ty);
+            }
             E::Array(parts) => {
-                // The pipeline evaluates every operand before expansion/validation.
-                let mut operands = vec![];
+                let mut values = vec![];
                 for part in parts {
-                    operands.push(match part {
-                        thir::ArrayPart::Value(expr) => (value!(self, expr), None),
-                        thir::ArrayPart::Range { start, end, inclusive } => {
-                            let start = value!(self, start);
-                            let end = value!(self, end);
-                            (start, Some((end, *inclusive)))
-                        }
-                    });
+                    let thir::ArrayPart::Value(expr) = part else {
+                        unreachable!("range-expanded literals use a builder");
+                    };
+                    values.push(value!(self, expr));
                 }
-                if operands.iter().all(|(_, range)| range.is_none()) {
-                    let values = operands.into_iter().map(|(value, _)| value).collect();
-                    self.collection(ir::CollectionOp::ArrayNew { values, ty, packet: None })?
-                } else {
-                    let mut array = self.empty_array(ty)?;
-                    for (value, range) in operands {
-                        if let Some((end, inclusive)) = range {
-                            let range = self.core(ir::CoreOp::RangeNew { start: value, end, inclusive })?;
-                            let len = self.core(ir::CoreOp::RangeLen { value: range })?;
-                            array = self.array_shape(array, ty, len, Shape::Range(value))?;
-                        } else {
-                            let one = self.singleton(value, ty)?;
-                            array = self.append_array(array, one, ty)?;
-                        }
-                    }
-                    array
-                }
+                self.collection(ir::CollectionOp::ArrayNew { values, ty, packet: None })?
             }
             E::Map(entries) => {
                 let mut values = vec![];
@@ -111,6 +97,10 @@ impl BodyLowerer<'_, '_> {
                     removed.reverse();
                     parts.push(base);
                     parts.extend(removed);
+                }
+                if parts.len() >= super::builders::STREAM_LIMIT
+                    && matches!(op, thir::BinaryOp::ArrayConcat | thir::BinaryOp::MapMerge) {
+                    return self.stream_collections(&parts, ty, *op == thir::BinaryOp::MapMerge);
                 }
                 let mut values = vec![];
                 for part in parts {
@@ -395,15 +385,14 @@ impl BodyLowerer<'_, '_> {
         Ok(self.b.block_params(done)?[0])
     }
 
-    // C4 materializes with array.new/concat. Linear streaming belongs to C5.
+    // Persistent reversed/cast shapes retain the C4 scalar traversal.
     fn array_shape(&mut self, initial: ir::ValueId, ty: ir::TypeId, len: ir::ValueId,
         shape: Shape) -> Result<ir::ValueId> {
-        if let Shape::Reverse(array) | Shape::Cast(array, _, _) = shape {
-            let array_ty = self.b.body().values.get(array)?.ty;
-            if let ir::Type::Array(element) = self.b.module().types.get(array_ty)?
-                && matches!(self.b.module().types.get(*element)?, ir::Type::Never) {
-                return Ok(initial);
-            }
+        let (Shape::Reverse(array) | Shape::Cast(array, _, _)) = shape;
+        let array_ty = self.b.body().values.get(array)?.ty;
+        if let ir::Type::Array(element) = self.b.module().types.get(array_ty)?
+            && matches!(self.b.module().types.get(*element)?, ir::Type::Never) {
+            return Ok(initial);
         }
         let scope = self.scope();
         let zero = self.int(0)?;
@@ -422,7 +411,6 @@ impl BodyLowerer<'_, '_> {
         self.switch(body)?;
         let one = self.int(1)?;
         let item = match shape {
-            Shape::Range(start) => self.core(ir::CoreOp::IntAdd { left: start, right: index })?,
             Shape::Reverse(array) => {
                 let remaining = self.core(ir::CoreOp::IntSub { left: len, right: index })?;
                 let index = self.core(ir::CoreOp::IntSub { left: remaining, right: one })?;
@@ -445,7 +433,6 @@ impl BodyLowerer<'_, '_> {
 
 #[derive(Clone, Copy)]
 enum Shape {
-    Range(ir::ValueId),
     Reverse(ir::ValueId),
     Cast(ir::ValueId, thir::CastTarget, crate::source::Span),
 }

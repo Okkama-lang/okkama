@@ -1,0 +1,16 @@
+module app;
+object Build {
+    Build();
+    run(n is int) is int {
+        try {
+            let a = [9, 10 % n, 2..=4];
+            a.size();
+        }
+        catch e is Error {
+            0;
+        }
+    }
+}
+main() is int {
+    0;
+}

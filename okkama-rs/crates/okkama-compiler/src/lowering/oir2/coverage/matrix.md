@@ -18,7 +18,7 @@ no extracted fixture or acceptance of the whole source file is implied.
 | `Role`, `Coerce(RoleWrap/RoleNarrow)`, role call | Concrete role declarations, `Object.witnesses`, `role.wrap/narrow`, `call.role` | C3: ten role goldens and three diagnostic goldens in `goldens/p2_3/roles/` |
 | `Successor(Object/Role)`, role result adapter | `role.wrap ^Object → ^Role`, `succ.take ^Role → Role`; one must-use obligation | C3: `role-successor`; canonical verifier B8 successor-role ± fixtures |
 | `Array/Map/Range`, literals, collection builtins | `array.*`, `map.*`, `range.*`, lazy lookup CFG | C4: array/map/literal/typed-identity rows |
-| Range-expanded / large literal | Scalar loop + `array.new/concat` / direct `array.new` | C4: `range-expansion`, `large-literal`; streaming builders remain C5 |
+| Range-expanded / large literal | Linear `builder.push/append/append.range`, `finish`, failure `abandon` | C5: `builders/`; migrated C4 `range-expansion`, `large-literal` |
 | `For`, array/range/map/Iterating/Batching sources | Loop CFG, iteration/cursor/batch scopes and result exits | C6: iterable/batching, ownership loops subcases |
 | `Functional(map/filter/reduce/any/all/find)` | Enclosing action CFG, builders, short circuit | C7: early-exit, accumulator, reduce-builder |
 | Imported source calls, plain `once let` | Reachable concrete source bodies, checked cache plumbing | C8: all four L09 collections; once negatives |
@@ -30,6 +30,10 @@ Families describe the tested contract, while the owning commit is the last produ
 feature needed by the actual source (for example array formatting through `map` is C7).
 C5 has no standalone original case: builder coverage comes from dedicated producer
 fixtures and C7 accumulator cases. General `any` is C9 integration owned by #569.
+
+C5 implementation and §4.2 evidence are tracked in [c5.md](c5.md). The former
+precommit blocker is a positive regression and canonical High fixture. Structural
+producer coverage does not change any conformance row from `planned`.
 
 C1 files: this table, `p2_3.tsv`, `tests.rs`, and the two-line module registration
 at the end of the existing producer `tests.rs`. C2 tests use a separate module.
@@ -180,7 +184,7 @@ selection was introduced.
 |---|---|---|
 | `[a,b]`, `[k:v]` | `array.new`, `map.new` | `Union`, `Entries`, in evaluation order |
 | `start..end`, `start..=end` | `range.new`, `range.len` | Scalar; failing range validation keeps unwind |
-| Range part in array | Evaluate operands, range validation, counted scalar CFG, `array.new/concat` | Composed `Union` |
+| Range part in array | C5 ordered `builder.push/append.range`, `finish` | Existing buffer/element contract |
 | `xs[i]`, `item`, successful array lookup | `array.get` / `array.lookup` found edge | `Index` |
 | `m[k]`, successful map lookup | `map.get` / `map.lookup` found edge | `MapEntry` / internal `Map` |
 | `m[k] else fallback` | Lookup found/missing branches, D11 join | Found `Map`; fallback evaluated only on missing |
@@ -197,8 +201,9 @@ selection was introduced.
 | Size/has/join | `array.len`, `map.len/has`, `array.join` | Scalar result; join observes string elements |
 
 Concat/merge flatten both sides, difference only its left chain, matching the
-current pipeline. All operands are evaluated before the combined operation;
-untagged empty operands are retagged to the resolved concrete result type.
+current pipeline. Small persistent forms evaluate operands before the combined
+operation. C5 streams large concat/merge chains in source order through buffer
+updates; untagged empties retain the resolved concrete result type.
 Map positional projections evaluate the map receiver before the index and
 select the requested key/value side without retaining the other side.
 
@@ -241,8 +246,8 @@ names are `wrong-key`, `wrong-element`, `byte-key`, `resource-key`.
 
 ### Remaining boundaries
 
-Streaming builders are C5; ordinary application array traversal is explicitly
-Unsupported (C6); functional blocks remain Unsupported (C7). Existing P1 integer
+Streaming builders are implemented in C5; ordinary application array traversal
+is explicitly Unsupported (C6); functional blocks remain Unsupported (C7). Existing P1 integer
 range traversal and imported std support-array loops are preserved. Cursor,
 ordering and general iterable support are not added here. Any/closures/capability
 and async dependencies remain #569/#570. General scalar conversions from string
