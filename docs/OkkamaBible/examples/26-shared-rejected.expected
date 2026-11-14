@@ -1,0 +1,1 @@
+26-shared-rejected.ok:7:9: semantic error: Field "count" cannot hold a Cell: a cell stays in synchronous code; state an object shares with tasks is an Atomic

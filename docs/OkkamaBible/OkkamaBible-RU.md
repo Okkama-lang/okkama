@@ -14058,17 +14058,102 @@ cups of 2: 300
 gift of 2: 540
 ```
 
-```text
-tea: 300
-cups of 2: 300
-gift of 2: 540
-```
-
 `Bundle` складывает части через `Cell` внутри одного синхронного действия —
 ровно для такого локального применения ячейки и существуют — и поверх
 применяет свою скидку. Подарок содержит товар и набор и оценивает их
 одинаково. Два конструктора дают скидке значение по умолчанию без флага,
 который пришлось бы передавать каждому набору.
+
+### Strategy: роль или значение-действие
+
+У Strategy, поведения, которое выбирает вызывающий, в Okkama две формы, и
+выбор между ними каждый раз один и тот же. Поведение, у которого есть имя,
+которое используется в нескольких местах или подменяется в тестах, — это
+роль и объекты, которые её исполняют. Вопрос, который задаёт один
+вызывающий один раз, — это значение-действие, переданное в вызов (глава 18).
+
+```okkama
+module bible/strategy v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Player {
+    has name is string;
+    has score is int;
+    has seconds is int;
+
+    Player(:name, :score, :seconds);
+
+    name() is string { name; }
+    score() is int { score; }
+    seconds() is int { seconds; }
+}
+
+// A named policy that several places use, and that tests replace, is a role.
+role Ranking {
+    better(a is Player, b is Player) is bool;
+}
+
+object ByScore does Ranking {
+    ByScore();
+
+    better(a is Player, b is Player) is bool {
+        a.score() > b.score();
+    }
+}
+
+object Board {
+    has players is @Player;
+    has ranking is Ranking;
+
+    Board(:players, :ranking);
+
+    leader() is string {
+        players.reduce(players.first()) -> best, player {
+            if ranking.better(player, best) { player; } else { best; }
+        }.name();
+    }
+
+    // A one-off question, asked once by one caller, takes an action value.
+    first(where is (Player) is bool) is string {
+        let found = players.filter() -> player { where(player); };
+        if found.size() > 0 { found.first().name(); } else { "nobody"; }
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let board = Board(
+        players: [
+            Player(name: "ada", score: 90, seconds: 41),
+            Player(name: "alan", score: 95, seconds: 58),
+            Player(name: "grace", score: 95, seconds: 37),
+        ],
+        ranking: ByScore(),
+    );
+    out.writeln("leader: " + board.leader());
+    out.writeln("under 40 s: " + board.first((player is Player) is bool { player.seconds() < 40; }));
+    out.writeln("over 100: " + board.first((player is Player) is bool { player.score() > 100; }));
+    0;
+}
+```
+
+Вывод:
+
+```text
+leader: alan
+under 40 s: grace
+over 100: nobody
+```
+
+- `Ranking` — политика доски. Доска хранит её, каждый запрос лидера ею
+  пользуется, а тест может дать доске другой `Ranking`. При равенстве
+  `ByScore` оставляет более раннего игрока, потому что `better` строгое.
+- `first` задаёт один вопрос с условием, которое вызывающий пишет на месте.
+  Роль для «меньше 40 секунд» была бы объявлением, использованным один раз.
+- Когда то же анонимное действие появляется во втором месте вызова, оно
+  стало политикой, и ему нужно имя: роль или хотя бы объект, который это
+  действие хранит.
 
 ## 26.3 Изменение как значение: цепочки successor
 
@@ -14148,14 +14233,6 @@ main() is int {
 OrderError.closed
 ```
 
-```text
-0 lines, due 0, open
-2 lines, due 500, open
-2 lines, due 450, open
-2 lines, due 450, closed
-OrderError.closed
-```
-
 Каждая стадия — значение. `empty`, `basket`, `offer` и `paid` можно
 напечатать, сравнить, положить в коллекцию или передать другой задаче, и ни
 одно из них не изменит позднейший шаг. Правило «закрытый заказ ничего больше
@@ -14185,6 +14262,73 @@ Field "count" cannot be assigned after construction: objects are immutable; retu
 ```text
 Field "reading" cannot hold a Cell: a cell stays in synchronous code; state an object shares with tasks is an Atomic
 ```
+
+### Builder: опции — это именованные аргументы
+
+Блох советует builder для конструктора с множеством параметров, большинство
+из которых необязательны [[Bloch 2018](#ref-bloch2018)]. Позиционный конструктор с дюжиной
+аргументов нечитаем там, где его вызывают, а конструкторы на каждую
+комбинацию опций множатся. Именованные аргументы со значениями по умолчанию
+снимают обе проблемы, а вместе с ними и builder.
+
+```okkama
+module bible/options v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum BadFetch is Error = (timeout(seconds is int), retries(count is int));
+
+// Every option has a name and a default; a call names only what differs.
+object Fetch {
+    has url is string;
+    has timeout is int = 30;
+    has retries is int = 0;
+    has redirects is bool = true;
+
+    Fetch(:url, :timeout, :retries, :redirects) {
+        confirm timeout > 0 else throw BadFetch.timeout(timeout);
+        confirm retries >= 0 else throw BadFetch.retries(retries);
+    }
+
+    shown() is string {
+        let follow = if redirects { "follows redirects" } else { "stays put" };
+        url + ": " + timeout.string() + " s, " + retries.string() + " retries, " + follow;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    out.writeln(Fetch(url: "/status").shown());
+    out.writeln(Fetch(url: "/report", retries: 3).shown());
+    out.writeln(Fetch(redirects: false, url: "/login", timeout: 5).shown());
+    let refused = try {
+        Fetch(url: "/slow", timeout: 0).shown();
+    }
+    catch e is BadFetch {
+        "refused: " + e.text();
+    };
+    out.writeln(refused);
+    0;
+}
+```
+
+Вывод:
+
+```text
+/status: 30 s, 0 retries, follows redirects
+/report: 30 s, 3 retries, follows redirects
+/login: 5 s, 0 retries, stays put
+refused: BadFetch.timeout(0)
+```
+
+- Каждая опция — поле со значением по умолчанию. Вызов называет те, что
+  отличаются, в любом порядке, остальные остаются по умолчанию (раздел 12.4).
+- Тело конструктора проверяет комбинацию один раз. Существующий `Fetch`
+  корректен, а builder гарантирует это, только если его `build()` повторяет
+  проверки.
+- Когда опции собираются в несколько шагов, скажем из файла, а потом из
+  командной строки, сбор делает цепочка successor-ов из этого раздела:
+  каждый шаг возвращает объект, в котором принято на одно решение больше.
 
 ### Typestate: когда неверный шаг не должен компилироваться
 
@@ -14272,11 +14416,6 @@ p-17 captured 250
 p-17 refunded
 ```
 
-```text
-p-17 captured 250
-p-17 refunded
-```
-
 Каждый объект исполняет ровно одну роль, и переменная с типом роли видит
 только шаги этого состояния. Гарантия держится, даже если у самого объекта
 больше действий, чем открывает его роль. В следующей программе у
@@ -14310,15 +14449,100 @@ main() is int {
 26-typestate-rejected.ok:16:13: semantic error: Role "Created" has no action "refunded"
 ```
 
-```text
-Role "Created" has no action "refunded"
-```
-
 Typestate стоит роли и объекта на состояние, а переходы строят новые объекты,
 а не successor, потому что следующее состояние — другой тип. Он окупается
 там, где неверный шаг дорог: платежи, соединения, документы, проходящие
 согласование. Где состояний много, а переходов мало, легче successor с
 проверками `confirm`, как `Order` из раздела 26.3.
+
+
+### Memento: прошлое — это список значений
+
+В большинстве языков undo — паттерн, потому что хранить прошлое трудно:
+состояние надо скопировать до изменения, или каждое изменение должно уметь
+себя отменить [[Gamma 1994](#ref-gamma1994)]. В Okkama successor оставляет прежнее значение
+таким, каким оно было, и изменить его потом нечем. Хранить прошлое значит
+хранить прежние значения.
+
+```okkama
+module bible/undo v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Undo is Error = (nothing);
+
+object Draft {
+    has text is string;
+
+    Draft(:text);
+
+    typed(more is string) is ^Draft {
+        ^text = text + more;
+    }
+
+    text() is string {
+        text;
+    }
+}
+
+// The past is a list of earlier values. Nothing is copied to keep it:
+// a value that cannot change is its own snapshot.
+object Editor {
+    has draft is Draft;
+    has past is @Draft;
+
+    Editor(:draft, :past);
+
+    typed(more is string) is ^Editor {
+        ^draft = draft.typed(more);
+        ^past = past + [draft];
+    }
+
+    undone() is ^Editor {
+        confirm past.size() > 0 else throw Undo.nothing;
+        ^draft = past.last();
+        ^past = past.take(past.size() - 1);
+    }
+
+    text() is string {
+        draft.text() + " (" + past.size().string() + " back)";
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let editor = Editor(draft: Draft(text: ""), past: []);
+    editor = editor.typed("Dear Ada");
+    editor = editor.typed(", thanks");
+    out.writeln(editor.text());
+    editor = editor.undone();
+    out.writeln(editor.text());
+    editor = editor.typed(", welcome");
+    out.writeln(editor.text());
+    editor = editor.undone();
+    editor = editor.undone();
+    let refused = try { editor.undone().text(); } catch e is Undo { "refused: " + e.text(); };
+    out.writeln(refused);
+    0;
+}
+```
+
+Вывод:
+
+```text
+Dear Ada, thanks (2 back)
+Dear Ada (1 back)
+Dear Ada, welcome (2 back)
+refused: Undo.nothing
+```
+
+- `typed` создаёт новый `Draft` и кладёт старый в `past`. Копировать ничего
+  не нужно: значение, которое не меняется, само себе снимок.
+- `undone` возвращает последний сохранённый черновик и убирает его из
+  списка. Если отменять нечего, оно отказывает по имени, а не возвращает
+  редактор без изменений.
+- Redo устроен зеркально: второй список для черновиков, которые убрал undo,
+  и следующий `typed` его опустошает.
 
 ## 26.4 У отказов есть имена
 
@@ -14389,12 +14613,6 @@ main() is int {
 150 -> refused: Refusal.insufficient(100, 150)
 ```
 
-```text
-30 -> balance 70
-0 -> refused: Refusal.non_positive(0)
-150 -> refused: Refusal.insufficient(100, 150)
-```
-
 Кассир превращает отказы в ответ, потому что отвечать — его работа.
 Программный отказ вроде нарушенного инварианта или отказ из другого модуля
 проходит сквозь `catch` нетронутым, потому что клауза называет `Refusal` и
@@ -14410,6 +14628,11 @@ main() is int {
 действие, возвращающее значение по умолчанию, когда оно не может выполнить
 работу. Когда отсутствие — законный ответ, для него в языке есть тип
 (раздел 26.7); когда нет, действие должно отказать.
+
+В масштабе модуля то же правило заставляет отказы менять имена на границе.
+Слой ловит те отказы нижнего слоя, которые понимает, и отказывает в своих
+терминах, так что вызывающие никогда не называют нижний слой и не меняются,
+когда его заменяют (раздел 10.12).
 
 ## 26.5 Каждая зависимость — роль, у каждой роли есть fake
 
@@ -14495,14 +14718,6 @@ main() is int {
 PASS
 ```
 
-```text
-=== RUN   every member gets one welcome mail
---- PASS: every member gets one welcome mail
-=== RUN   the first signup is untouched by its successors
---- PASS: the first signup is untouched by its successors
-PASS
-```
-
 Fake записывает, что произошло, в собственные поля, через successor — так
 же, как рабочие объекты. Тест не настраивает ожидания, как это делает
 фреймворк моков; он пользуется fake, а затем спрашивает, что тот видел. Это
@@ -14532,6 +14747,124 @@ Successor action "sent" on object "PrintedMailer" must return ^PrintedMailer; de
 конструирует сам, и стандартная библиотека по привычке так не делает
 (раздел 22.6).
 
+### Сначала реши, потом сделай
+
+Роль и её fake делают зависимость заменяемой. Следующий шаг убирает
+зависимость из логики совсем: логика принимает решения и возвращает их как
+значения, а тонкий внешний слой их исполняет. Гэри Бернхардт назвал эту
+форму функциональным ядром в императивной оболочке [[Bernhardt 2012](#ref-bernhardt2012)]. Для
+Okkama, с её неизменяемыми объектами и перечислениями с данными, это
+естественная форма.
+
+```okkama
+module bible/decide v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// What the core decided. Nothing has happened yet.
+enum Effect = (
+    charge(customer is string, cents is int),
+    reorder(item is string, count is int),
+    receipt(customer is string, text is string)
+);
+
+object Line {
+    has item is string;
+    has count is int;
+    has price is int;
+    has stock is int;
+
+    Line(:item, :count, :price, :stock);
+
+    cost() is int {
+        count * price;
+    }
+
+    missing() is int {
+        if stock < count { count - stock; } else { 0; }
+    }
+
+    item() is string {
+        item;
+    }
+}
+
+// The core decides and returns its decisions as values. It writes nothing,
+// sends nothing and reads no clock.
+object Checkout {
+    has customer is string;
+    has lines is @Line;
+
+    Checkout(:customer, :lines);
+
+    effects() is @Effect {
+        let total = lines.reduce(0) -> sum, line { sum + line.cost(); };
+        let short = lines.filter() -> line { line.missing() > 0; };
+        let reorders = short.map() -> line { Effect.reorder(line.item(), line.missing()); };
+        [Effect.charge(customer, total)] + reorders + [Effect.receipt(customer, "paid " + total.string())];
+    }
+}
+
+// The shell performs decisions and makes none.
+object Shell {
+    has out is Stdout;
+
+    Shell(:out);
+
+    performed(effect is Effect) is void {
+        match effect {
+            case Effect.charge(customer, cents) {
+                out.writeln("charge " + customer + " " + cents.string());
+            }
+            case Effect.reorder(item, count) {
+                out.writeln("reorder " + count.string() + " x " + item);
+            }
+            case Effect.receipt(customer, text) {
+                out.writeln("mail " + customer + ": " + text);
+            }
+        }
+    }
+}
+
+main() is int {
+    let checkout = Checkout(customer: "ada", lines: [
+        Line(item: "tea", count: 2, price: 450, stock: 10),
+        Line(item: "cups", count: 6, price: 120, stock: 4),
+    ]);
+    let effects = checkout.effects();
+    let charged = effects.first() == Effect.charge("ada", 1620);
+    Stdout().writeln(effects.size().string() + " effects, charge first: " + charged.string());
+    let shell = Shell(out: Stdout());
+    for effects -> effect {
+        shell.performed(effect);
+    }
+    0;
+}
+```
+
+Вывод:
+
+```text
+3 effects, charge first: true
+charge ada 1620
+reorder 2 x cups
+mail ada: paid 1620
+```
+
+- `Checkout.effects()` читает только собственные поля. Она ничего не пишет,
+  ничего не отправляет и не смотрит на часы, поэтому один и тот же заказ
+  всегда даёт одни и те же решения.
+- Решения — это перечисление. `match` оболочки покрывает каждый случай, а
+  новый вид эффекта заставит компилятор указать на оболочку.
+- Тест ядра сравнивает значения, как `main` делает с первым эффектом. Fake
+  ему не нужен, потому что у ядра нет зависимости, которую надо заменять, а
+  в оболочке почти не остаётся логики, которую надо проверять.
+
+Та же форма отвечает на Observer в языке, где объекты не меняются. Действие
+не оповещает слушателей, а возвращает то, что произошло, и вызывающий
+передаёт это дальше. Если слушатели — задачи, значения идут по каналу к их
+владельцу (раздел 26.8).
+
 ## 26.6 Ресурсы принадлежат областям
 
 Ресурс — объект с блоком `destroy`. Область, которая им владеет, уничтожает
@@ -14550,6 +14883,81 @@ Successor action "sent" on object "PrintedMailer" must return ^PrintedMailer; de
 возвращённый из действия, уносит свои ресурсы в область вызывающего, так что
 вызывающий владеет тем, что ему дали (глава 11).
 
+```okkama
+module bible/section v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Bad is Error = (row(value is int));
+
+// The pair "begin" / "end" belongs to an object, not to every caller:
+// the end is written when the section's scope ends, however it ends.
+object Section {
+    has name is string;
+
+    Section(:name) {
+        Stdout().writeln("begin " + name);
+    }
+
+    destroy {
+        Stdout().writeln("end " + name);
+    }
+}
+
+object Importer {
+    Importer();
+
+    imported(rows is @int) is int {
+        let section = Section(name: "import");
+        for rows -> row {
+            let step = Section(name: "row " + row.string());
+            confirm row >= 0 else throw Bad.row(row);
+        }
+        rows.size();
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    out.writeln("imported " + Importer().imported([1, 2]).string());
+    let outcome = try {
+        Importer().imported([3, -1, 4]).string();
+    }
+    catch e is Bad {
+        "refused: " + e.text();
+    };
+    out.writeln(outcome);
+    0;
+}
+```
+
+Вывод:
+
+```text
+begin import
+begin row 1
+end row 1
+begin row 2
+end row 2
+end import
+imported 2
+begin import
+begin row 3
+end row 3
+begin row -1
+end row -1
+end import
+refused: Bad.row(-1)
+```
+
+- `Section` пишет `begin` в конструкторе и `end` в `destroy`. Вызывающий
+  пишет один `let`, и помнить ему нечего.
+- Каждый проход цикла — область: секция одной строки заканчивается раньше,
+  чем начинается секция следующей.
+- Отказ на строке −1 покидает обе области. Оба `end` записываются,
+  начиная с внутреннего, до того как вызывающий обработает отказ. До
+  строки 4 дело не доходит.
+
 `defer` покрывает случаи, которые действия, а не объекты: вернуть
 настройку, записать последнюю строку в журнал, освободить то, что программа
 не создавала. Он выполняется в конце области, читает привязки такими, какие
@@ -14566,6 +14974,82 @@ Successor action "sent" on object "PrintedMailer" must return ^PrintedMailer; de
 может его породить, и больше никуда. Поиск, который может не найти,
 возвращает `Maybe`; поиск, который обязан найти, отказывает типизированной
 ошибкой.
+
+Тот же паттерн работает для целой программы: отсутствие решается на
+границе, там, где данные входят, а объекты внутри держат значения, которые
+есть.
+
+```okkama
+module bible/edge v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Missing is Error = (setting(name is string));
+
+// What a settings file gave: any key may be missing.
+object RawSettings {
+    has values is %string:string;
+
+    RawSettings(:values);
+
+    setting(name is string) is Maybe<string> {
+        if values.has(name) { Maybe.some(values[name]); } else { Maybe.none; }
+    }
+
+    required(name is string) is string {
+        confirm values.has(name) else throw Missing.setting(name);
+        values[name];
+    }
+}
+
+// What the program runs with: absence was decided once, at the edge.
+object Settings {
+    has host is string;
+    has user is string;
+
+    Settings(raw is RawSettings) {
+        host = raw.setting("host") else "localhost";
+        user = raw.required("user");
+    }
+
+    address() is string {
+        user + "@" + host;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let full = Settings(RawSettings(values: ["host": "db.local", "user": "ada"]));
+    out.writeln(full.address());
+    let partial = Settings(RawSettings(values: ["user": "grace"]));
+    out.writeln(partial.address());
+    let refused = try {
+        Settings(RawSettings(values: ["host": "db.local"])).address();
+    }
+    catch e is Missing {
+        "refused: " + e.text();
+    };
+    out.writeln(refused);
+    0;
+}
+```
+
+Вывод:
+
+```text
+ada@db.local
+grace@localhost
+refused: Missing.setting("user")
+```
+
+- `RawSettings` — граница. Там, где ключа может не быть, она отвечает
+  `Maybe`, а там, где программе без него не продолжить, отказывает
+  типизированной ошибкой.
+- `Settings` принимает оба решения один раз, в конструкторе: без хоста
+  берётся `localhost`, без пользователя — отказ. Её поля — обычные строки,
+  и никто из читающих их больше не проверяет отсутствие.
+- Отказ в конструировании не даёт объекта. Недостроенной `Settings` с
+  пустым пользователем, которую можно передать дальше, не существует.
 
 По ту сторону — антипаттерны «сигнального значения» и «пустого объекта»:
 `-1` вместо «не найдено», `""` вместо «нет имени», объект, у которого каждое
@@ -14586,7 +15070,114 @@ Okkama структурный: состояние, общее для задач,
 флага, `Atomic` даёт небольшой набор операций, безопасных между задачами.
 Журнал счетов из раздела 20.6 — этот паттерн целиком: перечисление команд,
 одна задача, которая владеет балансом и обслуживает команды в цикле, и
-ответы, отправляемые по каналу, который даёт вызывающий.
+ответы, отправляемые по каналу, который даёт вызывающий. В следующем
+примере пишущих несколько, а не один.
+
+```okkama
+module bible/owner v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/channel" take Channel, Sending, Receiving;
+import "async/collect" take AllFutures;
+import "collections/sequence" take Sequencing;
+
+// State that several tasks update lives in one task, its owner. The others
+// hold only the sending end of the owner's inbox.
+enum Visit = (page(path is string), summary(reply is Sending<string>), stop);
+
+object Tally {
+    has total is int;
+    has home is int;
+
+    Tally(:total, :home);
+
+    counted(path is string) is ^Tally {
+        ^total = total + 1;
+        ^home = if path == "/" { home + 1; } else { home; };
+    }
+
+    summary() is string {
+        total.string() + " pages, " + home.string() + " home";
+    }
+
+    total() is int {
+        total;
+    }
+}
+
+object Visits {
+    has inbox is Receiving<Visit>;
+
+    Visits(:inbox);
+
+    async run() is int {
+        let tally = Tally(total: 0, home: 0);
+        loop {
+            let visit = await inbox.item();
+            match visit {
+                case Visit.page(path) {
+                    tally = tally.counted(path);
+                }
+                case Visit.summary(reply) {
+                    await reply.send(tally.summary());
+                }
+                case Visit.stop {
+                    last;
+                }
+            }
+        }
+        tally.total();
+    }
+}
+
+object Reader {
+    has paths is @string;
+    has out is Sending<Visit>;
+
+    Reader(:paths, :out);
+
+    async read() is int {
+        for paths -> path {
+            await out.send(Visit.page(path));
+        }
+        paths.size();
+    }
+}
+
+async main() is int {
+    let inbox is Channel<Visit> = Channel(capacity: 4);
+    let owner = spawn Visits(inbox: inbox.receiving()).run();
+    let readers is @Future<int> = [
+        spawn Reader(paths: ["/", "/news", "/"], out: inbox.sending()).read(),
+        spawn Reader(paths: ["/about", "/"], out: inbox.sending()).read(),
+    ];
+    let all is AllFutures<int> = AllFutures(origins: readers);
+    let sent is Sequencing<int> = await all.results();
+    let replies is Channel<string> = Channel(capacity: 1);
+    let desk = inbox.sending();
+    await desk.send(Visit.summary(replies.sending()));
+    Stdout().writeln("summary: " + (await replies.receiving().item()));
+    await desk.send(Visit.stop);
+    Stdout().writeln("owner: " + (await owner).string() + " pages from " + sent.size().string() + " readers");
+    0;
+}
+```
+
+Вывод:
+
+```text
+summary: 5 pages, 3 home
+owner: 5 pages from 2 readers
+```
+
+- Счёт живёт в `Tally`, локальной привязке `Visits.run()`. Читатели до неё
+  не дотягиваются: у каждого есть `Sending<Visit>`, и больше ничего.
+- Владелец меняет своё состояние через successor,
+  `tally = tally.counted(path)`, по одному сообщению. Два читателя никогда
+  не обновляют счёт одновременно, потому что обновляет его только одна
+  задача.
+- Вопрос — тоже сообщение. `summary` несёт канал для ответа, так что ответ
+  уходит тому, кто спросил, а состояние не покидает владельца.
 
 Это заменяет самый дорогой антипаттерн конкурентного программирования —
 объект, разделённый многими потоками и охраняемый замками, которые по
@@ -14594,6 +15185,33 @@ Okkama структурный: состояние, общее для задач,
 асинхронный контекст, и объект не может её держать, так что изменяемое
 состояние, разделяемое задачами, по построению находится либо внутри своего
 владельца, либо в `Atomic`.
+
+```okkama
+module bible/shared_rejected v1.0.0;
+
+import "cell" take Cell;
+
+// A visit counter that tasks would share and mutate in place.
+object Hits {
+    has count is Cell<int>;
+
+    Hits(:count);
+}
+
+main() is int {
+    let hits = Hits(count: Cell(0));
+    0;
+}
+```
+
+Ответ компилятора:
+
+```text
+26-shared-rejected.ok:7:9: semantic error: Field "count" cannot hold a Cell: a cell stays in synchronous code; state an object shares with tasks is an Atomic
+```
+
+Диагностика называет выход: состояние, которое объект делит с задачами, —
+это `Atomic`. Состояние сложнее счётчика или флага уходит к владельцу.
 
 Структурные правила главы 20 добавляют вторую половину паттерна: отмена
 задачи отменяет то, чего она ждёт, а когда `async main` возвращается,
@@ -14714,11 +15332,6 @@ main() is int {
   wifi
 ```
 
-```text
-! printer
-  wifi
-```
-
 Она работает, и это именно тот код, который правила языка не запрещают.
 Рефакторинг разбирает её по одному запаху за раз, не меняя того, что она
 печатает.
@@ -14794,11 +15407,6 @@ main() is int {
   wifi
 ```
 
-```text
-! printer
-  wifi
-```
-
 Вывод тот же, и вторая программа длиннее. Купили этим место, где живёт
 каждое решение. Смысл «открыта» — в перечислении; строка заявки — в заявке;
 пометка срочности — в `Urgent`; `main` только печатает. Новый вид пометки,
@@ -14813,15 +15421,16 @@ main() is int {
 
 | Паттерн | В Okkama |
 |---|---|
-| Strategy | Роль и исполняющие её объекты; анонимное действие для разового случая (глава 18) |
+| Strategy | Роль и исполняющие её объекты; анонимное действие для разового случая (раздел 26.2) |
 | Decorator | Роль, реализованная объектами, которые держат другую её реализацию (раздел 26.2) |
 | Composite | Роль, которую исполняют и лист, и контейнер, держащий коллекцию этой роли |
-| Builder | Цепочка successor или конструктор с именованными полями и значениями по умолчанию |
+| Builder | Цепочка successor или конструктор с именованными полями и значениями по умолчанию (раздел 26.3) |
 | Prototype | Не нужен: объекты неизменяемы, поэтому разделить объект — то же, что скопировать |
 | Singleton | Невыразим: нет глобального состояния и статических полей; один экземпляр создаётся в `main` и передаётся вниз |
 | Factory method | Несколько конструкторов, по одному на форму (глава 12), или действие, возвращающее роль |
 | Template method | Наследования нет; декоратор или объект, принимающий изменяемый шаг как роль |
-| Observer | Канал к задаче-владельцу или событие, которого ждут (глава 20) |
+| Observer | События, возвращённые как значения (раздел 26.5); канал к задаче-владельцу или событие, которого ждут (глава 20) |
+| Memento | Как механизм не нужен: прежние значения остаются в силе, а undo — их список (раздел 26.3) |
 | Iterator | `for` по коллекциям, диапазонам и асинхронным потокам (`for await`) |
 | State | Typestate: роль на состояние, переходы — successor (раздел 26.3) |
 | Command | Вариант перечисления на команду и `match`, который его исполняет; или значение-действие |
@@ -14869,6 +15478,7 @@ main() is int {
 - <a id="ref-aycock2003"></a>John Aycock (2003). A Brief History of Just-In-Time. *ACM Computing Surveys* 35(2): 97–113. https://doi.org/10.1145/857076.857077
 - <a id="ref-bagwell2001"></a>Phil Bagwell (2001). *Ideal Hash Trees*. Technical report, École Polytechnique Fédérale de Lausanne. https://infoscience.epfl.ch/record/64398
 - <a id="ref-baker-sep"></a>Alan Baker (2022). Simplicity. In *The Stanford Encyclopedia of Philosophy* (Summer 2022 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/simplicity/
+- <a id="ref-bernhardt2012"></a>Gary Bernhardt (2012). Boundaries. Talk at SCNA 2012. https://www.destroyallsoftware.com/talks/boundaries
 - <a id="ref-jep395"></a>Gavin Bierman (2021). JEP 395: Records. OpenJDK. https://openjdk.org/jeps/395
 - <a id="ref-jep409"></a>Gavin Bierman (2021). JEP 409: Sealed Classes. OpenJDK. https://openjdk.org/jeps/409
 - <a id="ref-jep441"></a>Gavin Bierman (2023). JEP 441: Pattern Matching for switch. OpenJDK. https://openjdk.org/jeps/441

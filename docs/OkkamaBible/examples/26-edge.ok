@@ -1,0 +1,52 @@
+module bible/edge v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Missing is Error = (setting(name is string));
+
+// What a settings file gave: any key may be missing.
+object RawSettings {
+    has values is %string:string;
+
+    RawSettings(:values);
+
+    setting(name is string) is Maybe<string> {
+        if values.has(name) { Maybe.some(values[name]); } else { Maybe.none; }
+    }
+
+    required(name is string) is string {
+        confirm values.has(name) else throw Missing.setting(name);
+        values[name];
+    }
+}
+
+// What the program runs with: absence was decided once, at the edge.
+object Settings {
+    has host is string;
+    has user is string;
+
+    Settings(raw is RawSettings) {
+        host = raw.setting("host") else "localhost";
+        user = raw.required("user");
+    }
+
+    address() is string {
+        user + "@" + host;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let full = Settings(RawSettings(values: ["host": "db.local", "user": "ada"]));
+    out.writeln(full.address());
+    let partial = Settings(RawSettings(values: ["user": "grace"]));
+    out.writeln(partial.address());
+    let refused = try {
+        Settings(RawSettings(values: ["host": "db.local"])).address();
+    }
+    catch e is Missing {
+        "refused: " + e.text();
+    };
+    out.writeln(refused);
+    0;
+}

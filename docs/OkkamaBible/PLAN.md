@@ -275,22 +275,32 @@ Updated with each chapter: `build.py --stats`.
   commit, local changes kept); 19.4 and 19.11 the diagnostics of #338. Still
   no real project example: installing runs git, which the cage forbids.
 
-- Chapter 26 (patterns and anti-patterns), 2026-11-14: 9.2 pages (EN), 9.3
-  (RU) of its floor of 14. Written:
+- Chapter 26 (patterns and anti-patterns), 2026-11-14: 12.8 pages (EN and
+  RU) of its floor of 14. Written:
   - patterns and what a language does to them (Alexander, GoF, Norvig;
     antipatterns after Koenig and Brown);
-  - composition instead of flags (`26-flags`);
-  - successor pipelines and typestate (`26-pipeline`);
-  - named refusals (`26-refusals`);
-  - every dependency a role with its fake (`26-signup-tests`);
-  - resources in scopes, absence as a type, one owner for shared state;
-  - the anti-patterns the compiler refuses, quoting its diagnostics;
-  - the ones it allows;
-  - the GoF catalogue read in Okkama, and costs.
+  - composition instead of flags (`26-flags`), Composite (`26-composite`),
+    Strategy as a role or an action value (`26-strategy`);
+  - successor pipelines (`26-pipeline`), Builder as named options
+    (`26-options`, Bloch), typestate (`26-typestate`, `-rejected`), Memento
+    as a list of values (`26-undo`);
+  - named refusals (`26-refusals`), renamed at a layer boundary (→ 10.12);
+  - every dependency a role with its fake (`26-signup-tests`); decide, then
+    do (`26-decide`, Bernhardt's functional core);
+  - resources in scopes (`26-section`), absence decided at the edge
+    (`26-edge`), one owner for shared state (`26-owner`,
+    `26-shared-rejected`);
+  - the anti-patterns the compiler refuses and the ones it allows;
+  - a worked refactoring (`26-before`, `26-after`), the GoF catalogue read
+    in Okkama, and costs.
 
-  To add: a runnable typestate example (one role per state); Composite; a
-  worked refactoring of a flag object; an async state owner with a
-  channel.
+  Fixed 2026-11-14: the chapter repeated each example's output in a manual
+  `text` block after `{{example}}`, which already appends it.
+
+  Left for the floor: 26.13 (costs) and 26.1 are thin; candidates are a
+  pattern for tests (tables of cases) and the expression problem in
+  practice. Found while writing: #594 (an enum case list rejects a trailing
+  comma).
 
 ## Naming (owner, 2026-11-10)
 

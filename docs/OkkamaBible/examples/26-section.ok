@@ -1,0 +1,45 @@
+module bible/section v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Bad is Error = (row(value is int));
+
+// The pair "begin" / "end" belongs to an object, not to every caller:
+// the end is written when the section's scope ends, however it ends.
+object Section {
+    has name is string;
+
+    Section(:name) {
+        Stdout().writeln("begin " + name);
+    }
+
+    destroy {
+        Stdout().writeln("end " + name);
+    }
+}
+
+object Importer {
+    Importer();
+
+    imported(rows is @int) is int {
+        let section = Section(name: "import");
+        for rows -> row {
+            let step = Section(name: "row " + row.string());
+            confirm row >= 0 else throw Bad.row(row);
+        }
+        rows.size();
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    out.writeln("imported " + Importer().imported([1, 2]).string());
+    let outcome = try {
+        Importer().imported([3, -1, 4]).string();
+    }
+    catch e is Bad {
+        "refused: " + e.text();
+    };
+    out.writeln(outcome);
+    0;
+}

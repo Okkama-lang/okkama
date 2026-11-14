@@ -13890,17 +13890,102 @@ cups of 2: 300
 gift of 2: 540
 ```
 
-```text
-tea: 300
-cups of 2: 300
-gift of 2: 540
-```
-
 `Bundle` sums its parts with a `Cell` inside one synchronous action, which is
 exactly the local use cells are for, and applies its own discount on top.
 The gift contains an item and a bundle and prices both the same way. Two
 constructors give the discount a default without a flag that every bundle
 must pass.
+
+### Strategy: a role, or an action value
+
+Strategy, a behaviour the caller chooses, has two forms in Okkama, and the
+choice between them is the same each time. A behaviour that has a name, is
+used in several places or is replaced in tests is a role with objects that
+do it. A question asked once, by one caller, is an action value passed to
+the call (Chapter 18).
+
+```okkama
+module bible/strategy v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Player {
+    has name is string;
+    has score is int;
+    has seconds is int;
+
+    Player(:name, :score, :seconds);
+
+    name() is string { name; }
+    score() is int { score; }
+    seconds() is int { seconds; }
+}
+
+// A named policy that several places use, and that tests replace, is a role.
+role Ranking {
+    better(a is Player, b is Player) is bool;
+}
+
+object ByScore does Ranking {
+    ByScore();
+
+    better(a is Player, b is Player) is bool {
+        a.score() > b.score();
+    }
+}
+
+object Board {
+    has players is @Player;
+    has ranking is Ranking;
+
+    Board(:players, :ranking);
+
+    leader() is string {
+        players.reduce(players.first()) -> best, player {
+            if ranking.better(player, best) { player; } else { best; }
+        }.name();
+    }
+
+    // A one-off question, asked once by one caller, takes an action value.
+    first(where is (Player) is bool) is string {
+        let found = players.filter() -> player { where(player); };
+        if found.size() > 0 { found.first().name(); } else { "nobody"; }
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let board = Board(
+        players: [
+            Player(name: "ada", score: 90, seconds: 41),
+            Player(name: "alan", score: 95, seconds: 58),
+            Player(name: "grace", score: 95, seconds: 37),
+        ],
+        ranking: ByScore(),
+    );
+    out.writeln("leader: " + board.leader());
+    out.writeln("under 40 s: " + board.first((player is Player) is bool { player.seconds() < 40; }));
+    out.writeln("over 100: " + board.first((player is Player) is bool { player.score() > 100; }));
+    0;
+}
+```
+
+Output:
+
+```text
+leader: alan
+under 40 s: grace
+over 100: nobody
+```
+
+- `Ranking` is a policy of the board. The board keeps it, every leader
+  query uses it, and a test can give the board another `Ranking`. `ByScore`
+  keeps the earlier player on a tie, because `better` is strict.
+- `first` asks one question, with a condition the caller writes in place. A
+  role for "under 40 seconds" would be a declaration used once.
+- When the same anonymous action appears at a second call site, it has
+  become a policy and wants a name: a role, or at least an object that holds
+  the action.
 
 ## 26.3 Change as a value: successor pipelines
 
@@ -13979,14 +14064,6 @@ Output:
 OrderError.closed
 ```
 
-```text
-0 lines, due 0, open
-2 lines, due 500, open
-2 lines, due 450, open
-2 lines, due 450, closed
-OrderError.closed
-```
-
 Each stage is a value. `empty`, `basket`, `offer` and `paid` can be printed,
 compared, stored in a collection or passed to another task, and none of them
 can be changed by a later step. The rule that a closed order accepts nothing
@@ -14017,6 +14094,73 @@ hidden mutable state of one.
 ```text
 Field "reading" cannot hold a Cell: a cell stays in synchronous code; state an object shares with tasks is an Atomic
 ```
+
+### Builder: options are named arguments
+
+Bloch recommends a builder for a constructor with many parameters, most of
+them optional [[Bloch 2018](#ref-bloch2018)]. A positional constructor with a dozen arguments
+is unreadable where it is called, and one constructor per combination of
+options multiplies. Named arguments with defaults remove both problems, and
+the builder with them.
+
+```okkama
+module bible/options v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum BadFetch is Error = (timeout(seconds is int), retries(count is int));
+
+// Every option has a name and a default; a call names only what differs.
+object Fetch {
+    has url is string;
+    has timeout is int = 30;
+    has retries is int = 0;
+    has redirects is bool = true;
+
+    Fetch(:url, :timeout, :retries, :redirects) {
+        confirm timeout > 0 else throw BadFetch.timeout(timeout);
+        confirm retries >= 0 else throw BadFetch.retries(retries);
+    }
+
+    shown() is string {
+        let follow = if redirects { "follows redirects" } else { "stays put" };
+        url + ": " + timeout.string() + " s, " + retries.string() + " retries, " + follow;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    out.writeln(Fetch(url: "/status").shown());
+    out.writeln(Fetch(url: "/report", retries: 3).shown());
+    out.writeln(Fetch(redirects: false, url: "/login", timeout: 5).shown());
+    let refused = try {
+        Fetch(url: "/slow", timeout: 0).shown();
+    }
+    catch e is BadFetch {
+        "refused: " + e.text();
+    };
+    out.writeln(refused);
+    0;
+}
+```
+
+Output:
+
+```text
+/status: 30 s, 0 retries, follows redirects
+/report: 30 s, 3 retries, follows redirects
+/login: 5 s, 0 retries, stays put
+refused: BadFetch.timeout(0)
+```
+
+- Every option is a field with a default. A call names the ones that
+  differ, in any order, and the rest keep their defaults (Section 12.4).
+- The constructor body checks the combination once. A `Fetch` that exists
+  is valid, which a builder guarantees only if its `build()` repeats the
+  checks.
+- When options are gathered in several steps, say from a file and then from
+  the command line, the successor chain of this section does the gathering:
+  each step returns an object with one more decision made.
 
 ### Typestate: when an invalid step should not compile
 
@@ -14104,11 +14248,6 @@ p-17 captured 250
 p-17 refunded
 ```
 
-```text
-p-17 captured 250
-p-17 refunded
-```
-
 Each object does exactly one role, and a variable typed by the role sees only
 the steps of that state. The guarantee holds even when the object itself
 has more actions than its role exposes. In the next program `NewPayment`
@@ -14141,16 +14280,100 @@ The compiler answers:
 26-typestate-rejected.ok:16:13: semantic error: Role "Created" has no action "refunded"
 ```
 
-```text
-Role "Created" has no action "refunded"
-```
-
 Typestate costs one role and one object per state, and transitions that
 build new objects rather than successors, because the next state is a
 different type. It is worth it where a wrong step is expensive: payments,
 connections, documents that move through approval. Where the states are many
 and the transitions few, a successor with `confirm` checks (Section 26.3's
 `Order`) is the lighter tool.
+
+### Memento: the past is a list of values
+
+Undo is a pattern in most languages because keeping the past takes work: the
+state must be copied before it changes, or every change must know how to
+reverse itself [[Gamma 1994](#ref-gamma1994)]. In Okkama a successor leaves the earlier value
+as it was, and nothing can change it later. Keeping the past means keeping
+the earlier values.
+
+```okkama
+module bible/undo v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Undo is Error = (nothing);
+
+object Draft {
+    has text is string;
+
+    Draft(:text);
+
+    typed(more is string) is ^Draft {
+        ^text = text + more;
+    }
+
+    text() is string {
+        text;
+    }
+}
+
+// The past is a list of earlier values. Nothing is copied to keep it:
+// a value that cannot change is its own snapshot.
+object Editor {
+    has draft is Draft;
+    has past is @Draft;
+
+    Editor(:draft, :past);
+
+    typed(more is string) is ^Editor {
+        ^draft = draft.typed(more);
+        ^past = past + [draft];
+    }
+
+    undone() is ^Editor {
+        confirm past.size() > 0 else throw Undo.nothing;
+        ^draft = past.last();
+        ^past = past.take(past.size() - 1);
+    }
+
+    text() is string {
+        draft.text() + " (" + past.size().string() + " back)";
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let editor = Editor(draft: Draft(text: ""), past: []);
+    editor = editor.typed("Dear Ada");
+    editor = editor.typed(", thanks");
+    out.writeln(editor.text());
+    editor = editor.undone();
+    out.writeln(editor.text());
+    editor = editor.typed(", welcome");
+    out.writeln(editor.text());
+    editor = editor.undone();
+    editor = editor.undone();
+    let refused = try { editor.undone().text(); } catch e is Undo { "refused: " + e.text(); };
+    out.writeln(refused);
+    0;
+}
+```
+
+Output:
+
+```text
+Dear Ada, thanks (2 back)
+Dear Ada (1 back)
+Dear Ada, welcome (2 back)
+refused: Undo.nothing
+```
+
+- `typed` makes a new `Draft` and keeps the old one in `past`. Nothing has
+  to be copied: a value that cannot change is its own snapshot.
+- `undone` takes the last kept draft back and drops it from the list. With
+  nothing to undo it refuses by name, instead of returning the editor
+  unchanged.
+- Redo has the same shape mirrored: a second list for the drafts that undo
+  dropped, emptied by the next `typed`.
 
 ## 26.4 Refusals have names
 
@@ -14220,12 +14443,6 @@ Output:
 150 -> refused: Refusal.insufficient(100, 150)
 ```
 
-```text
-30 -> balance 70
-0 -> refused: Refusal.non_positive(0)
-150 -> refused: Refusal.insufficient(100, 150)
-```
-
 The teller turns refusals into a reply because replying is its job. A
 `Program` failure such as a broken invariant, or a refusal from some other
 module, passes through the `catch` untouched, because the clause names
@@ -14241,6 +14458,11 @@ at all, so they cannot be caught as one (Chapter 10). The other is the
 refusal that is not a refusal: an action that returns a default when it
 cannot do its work. When absence is a legitimate answer, the language has a
 type for it (Section 26.7); when it is not, the action should refuse.
+
+At the scale of a module, the same rule makes refusals change their names at
+the boundary. A layer catches the refusals of the layer below that it
+understands and refuses in its own terms, so its callers never name the
+layer below and do not change when it is replaced (Section 10.12).
 
 ## 26.5 Every dependency is a role, every role has a fake
 
@@ -14326,14 +14548,6 @@ Output:
 PASS
 ```
 
-```text
-=== RUN   every member gets one welcome mail
---- PASS: every member gets one welcome mail
-=== RUN   the first signup is untouched by its successors
---- PASS: the first signup is untouched by its successors
-PASS
-```
-
 The fake records what happened in its own fields, through successors, the
 same way production objects do. A test does not configure expectations the
 way a mock framework would; it uses the fake and then asks it what it saw.
@@ -14361,6 +14575,124 @@ it. In Okkama such an object cannot exist for clocks and loggers, because
 there is no world to reach into; it can exist for objects it constructs
 itself, and the habit of the standard library is not to (Section 22.6).
 
+### Decide, then do
+
+A role and its fake make a dependency replaceable. One step further takes
+the dependency out of the logic altogether: the logic decides and returns
+its decisions as values, and a thin outer layer carries them out. Gary
+Bernhardt called this shape a functional core in an imperative shell
+[[Bernhardt 2012](#ref-bernhardt2012)]. Immutable objects and enums with payloads make it the
+natural shape in Okkama.
+
+```okkama
+module bible/decide v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// What the core decided. Nothing has happened yet.
+enum Effect = (
+    charge(customer is string, cents is int),
+    reorder(item is string, count is int),
+    receipt(customer is string, text is string)
+);
+
+object Line {
+    has item is string;
+    has count is int;
+    has price is int;
+    has stock is int;
+
+    Line(:item, :count, :price, :stock);
+
+    cost() is int {
+        count * price;
+    }
+
+    missing() is int {
+        if stock < count { count - stock; } else { 0; }
+    }
+
+    item() is string {
+        item;
+    }
+}
+
+// The core decides and returns its decisions as values. It writes nothing,
+// sends nothing and reads no clock.
+object Checkout {
+    has customer is string;
+    has lines is @Line;
+
+    Checkout(:customer, :lines);
+
+    effects() is @Effect {
+        let total = lines.reduce(0) -> sum, line { sum + line.cost(); };
+        let short = lines.filter() -> line { line.missing() > 0; };
+        let reorders = short.map() -> line { Effect.reorder(line.item(), line.missing()); };
+        [Effect.charge(customer, total)] + reorders + [Effect.receipt(customer, "paid " + total.string())];
+    }
+}
+
+// The shell performs decisions and makes none.
+object Shell {
+    has out is Stdout;
+
+    Shell(:out);
+
+    performed(effect is Effect) is void {
+        match effect {
+            case Effect.charge(customer, cents) {
+                out.writeln("charge " + customer + " " + cents.string());
+            }
+            case Effect.reorder(item, count) {
+                out.writeln("reorder " + count.string() + " x " + item);
+            }
+            case Effect.receipt(customer, text) {
+                out.writeln("mail " + customer + ": " + text);
+            }
+        }
+    }
+}
+
+main() is int {
+    let checkout = Checkout(customer: "ada", lines: [
+        Line(item: "tea", count: 2, price: 450, stock: 10),
+        Line(item: "cups", count: 6, price: 120, stock: 4),
+    ]);
+    let effects = checkout.effects();
+    let charged = effects.first() == Effect.charge("ada", 1620);
+    Stdout().writeln(effects.size().string() + " effects, charge first: " + charged.string());
+    let shell = Shell(out: Stdout());
+    for effects -> effect {
+        shell.performed(effect);
+    }
+    0;
+}
+```
+
+Output:
+
+```text
+3 effects, charge first: true
+charge ada 1620
+reorder 2 x cups
+mail ada: paid 1620
+```
+
+- `Checkout.effects()` reads only its own fields. It writes nothing, sends
+  nothing and reads no clock, so the same order always gives the same
+  decisions.
+- The decisions are an enum. The shell's `match` covers every case, and a
+  new kind of effect makes the compiler point at the shell.
+- A test of the core compares values, as `main` does with the first effect.
+  It needs no fake, because the core has no dependency to replace, and the
+  shell has almost no logic left to test.
+
+The same shape answers Observer in a language where objects do not change.
+An action does not notify listeners; it returns what happened, and its
+caller passes that on. Where the listeners are tasks, the values travel over
+a channel to their owner (Section 26.8).
+
 ## 26.6 Resources belong to scopes
 
 A resource is an object with a `destroy` block. The scope that owns it
@@ -14379,6 +14711,81 @@ is complete when the constructor returns; the end of its scope is the only
 cleanup point; and a result returned from an action carries its resources
 to the caller's scope, so the caller owns what it was given (Chapter 11).
 
+```okkama
+module bible/section v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Bad is Error = (row(value is int));
+
+// The pair "begin" / "end" belongs to an object, not to every caller:
+// the end is written when the section's scope ends, however it ends.
+object Section {
+    has name is string;
+
+    Section(:name) {
+        Stdout().writeln("begin " + name);
+    }
+
+    destroy {
+        Stdout().writeln("end " + name);
+    }
+}
+
+object Importer {
+    Importer();
+
+    imported(rows is @int) is int {
+        let section = Section(name: "import");
+        for rows -> row {
+            let step = Section(name: "row " + row.string());
+            confirm row >= 0 else throw Bad.row(row);
+        }
+        rows.size();
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    out.writeln("imported " + Importer().imported([1, 2]).string());
+    let outcome = try {
+        Importer().imported([3, -1, 4]).string();
+    }
+    catch e is Bad {
+        "refused: " + e.text();
+    };
+    out.writeln(outcome);
+    0;
+}
+```
+
+Output:
+
+```text
+begin import
+begin row 1
+end row 1
+begin row 2
+end row 2
+end import
+imported 2
+begin import
+begin row 3
+end row 3
+begin row -1
+end row -1
+end import
+refused: Bad.row(-1)
+```
+
+- `Section` writes `begin` in its constructor and `end` in its `destroy`.
+  A caller writes one `let` and has nothing to remember.
+- Each pass of the loop is a scope: one row's section ends before the next
+  row's begins.
+- The refusal of row −1 leaves both scopes. Both ends are written, the
+  innermost first, before the caller handles the refusal. Row 4 is never
+  reached.
+
 `defer` covers the cases that are actions rather than objects: restoring a
 setting, writing a final line to a log, releasing something the program did
 not create. It runs at the end of the scope, reads the bindings as they are
@@ -14394,6 +14801,81 @@ the type system makes the caller decide what absence means: a fallback with
 pattern is to put absence in the signature of the action that can produce
 it, and nowhere else. A lookup that can fail to find returns `Maybe`; a
 lookup that must find refuses with a typed error.
+
+The same pattern works for a whole program: decide absence at the edge,
+where data comes in, and let the objects inside hold values that are there.
+
+```okkama
+module bible/edge v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Missing is Error = (setting(name is string));
+
+// What a settings file gave: any key may be missing.
+object RawSettings {
+    has values is %string:string;
+
+    RawSettings(:values);
+
+    setting(name is string) is Maybe<string> {
+        if values.has(name) { Maybe.some(values[name]); } else { Maybe.none; }
+    }
+
+    required(name is string) is string {
+        confirm values.has(name) else throw Missing.setting(name);
+        values[name];
+    }
+}
+
+// What the program runs with: absence was decided once, at the edge.
+object Settings {
+    has host is string;
+    has user is string;
+
+    Settings(raw is RawSettings) {
+        host = raw.setting("host") else "localhost";
+        user = raw.required("user");
+    }
+
+    address() is string {
+        user + "@" + host;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let full = Settings(RawSettings(values: ["host": "db.local", "user": "ada"]));
+    out.writeln(full.address());
+    let partial = Settings(RawSettings(values: ["user": "grace"]));
+    out.writeln(partial.address());
+    let refused = try {
+        Settings(RawSettings(values: ["host": "db.local"])).address();
+    }
+    catch e is Missing {
+        "refused: " + e.text();
+    };
+    out.writeln(refused);
+    0;
+}
+```
+
+Output:
+
+```text
+ada@db.local
+grace@localhost
+refused: Missing.setting("user")
+```
+
+- `RawSettings` is the edge. It answers with `Maybe` where a key may be
+  missing, and refuses with a typed error where the program cannot go on
+  without one.
+- `Settings` makes both decisions once, in its constructor: a missing host
+  falls back to `localhost`, a missing user is refused. Its fields are plain
+  strings, and nothing that reads them checks for absence again.
+- A refused construction produces no object. There is no half-built
+  `Settings` with an empty user to pass on.
 
 The antipatterns on the other side are the sentinel value and the "empty
 object": `-1` for "not found", `""` for "no name", an object whose every
@@ -14414,13 +14896,146 @@ values that really are shared, such as a counter or a flag, `Atomic` gives a
 small set of operations that are safe across tasks. The ledger of
 Section 20.6 is the pattern in full: an enum of commands, one task that owns
 the balance and serves them in a loop, and replies sent back over a channel
-the caller provides.
+the caller provides. The next example has several writers instead of one.
+
+```okkama
+module bible/owner v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/channel" take Channel, Sending, Receiving;
+import "async/collect" take AllFutures;
+import "collections/sequence" take Sequencing;
+
+// State that several tasks update lives in one task, its owner. The others
+// hold only the sending end of the owner's inbox.
+enum Visit = (page(path is string), summary(reply is Sending<string>), stop);
+
+object Tally {
+    has total is int;
+    has home is int;
+
+    Tally(:total, :home);
+
+    counted(path is string) is ^Tally {
+        ^total = total + 1;
+        ^home = if path == "/" { home + 1; } else { home; };
+    }
+
+    summary() is string {
+        total.string() + " pages, " + home.string() + " home";
+    }
+
+    total() is int {
+        total;
+    }
+}
+
+object Visits {
+    has inbox is Receiving<Visit>;
+
+    Visits(:inbox);
+
+    async run() is int {
+        let tally = Tally(total: 0, home: 0);
+        loop {
+            let visit = await inbox.item();
+            match visit {
+                case Visit.page(path) {
+                    tally = tally.counted(path);
+                }
+                case Visit.summary(reply) {
+                    await reply.send(tally.summary());
+                }
+                case Visit.stop {
+                    last;
+                }
+            }
+        }
+        tally.total();
+    }
+}
+
+object Reader {
+    has paths is @string;
+    has out is Sending<Visit>;
+
+    Reader(:paths, :out);
+
+    async read() is int {
+        for paths -> path {
+            await out.send(Visit.page(path));
+        }
+        paths.size();
+    }
+}
+
+async main() is int {
+    let inbox is Channel<Visit> = Channel(capacity: 4);
+    let owner = spawn Visits(inbox: inbox.receiving()).run();
+    let readers is @Future<int> = [
+        spawn Reader(paths: ["/", "/news", "/"], out: inbox.sending()).read(),
+        spawn Reader(paths: ["/about", "/"], out: inbox.sending()).read(),
+    ];
+    let all is AllFutures<int> = AllFutures(origins: readers);
+    let sent is Sequencing<int> = await all.results();
+    let replies is Channel<string> = Channel(capacity: 1);
+    let desk = inbox.sending();
+    await desk.send(Visit.summary(replies.sending()));
+    Stdout().writeln("summary: " + (await replies.receiving().item()));
+    await desk.send(Visit.stop);
+    Stdout().writeln("owner: " + (await owner).string() + " pages from " + sent.size().string() + " readers");
+    0;
+}
+```
+
+Output:
+
+```text
+summary: 5 pages, 3 home
+owner: 5 pages from 2 readers
+```
+
+- The count lives in `Tally`, a local of `Visits.run()`. The readers cannot
+  reach it. Each holds a `Sending<Visit>` and nothing else.
+- The owner changes its state by successor, `tally = tally.counted(path)`,
+  one message at a time. Two readers never update the count at once,
+  because only one task updates it.
+- A question is a message too. `summary` carries the channel for the
+  answer, so the reply goes to whoever asked, and the state never leaves its
+  owner.
 
 This replaces the most expensive antipattern of concurrent programming, the
 object shared by many threads and guarded by locks taken in the right order
 by convention. In Okkama a `Cell` cannot cross into an async context and an
 object cannot hold one, so mutable state that tasks share is either inside
 its owner or in an `Atomic`, by construction.
+
+```okkama
+module bible/shared_rejected v1.0.0;
+
+import "cell" take Cell;
+
+// A visit counter that tasks would share and mutate in place.
+object Hits {
+    has count is Cell<int>;
+
+    Hits(:count);
+}
+
+main() is int {
+    let hits = Hits(count: Cell(0));
+    0;
+}
+```
+
+The compiler answers:
+
+```text
+26-shared-rejected.ok:7:9: semantic error: Field "count" cannot hold a Cell: a cell stays in synchronous code; state an object shares with tasks is an Atomic
+```
+
+The diagnostic names the way out: state an object shares with tasks is an
+`Atomic`. State that is more than a counter or a flag goes to an owner.
 
 The structured rules of Chapter 20 add the second half of the pattern:
 cancelling a task cancels what it waits for, and when `async main` returns,
@@ -14541,11 +15156,6 @@ Output:
   wifi
 ```
 
-```text
-! printer
-  wifi
-```
-
 It works, and it is the kind of code the rules of the language do not
 prevent. The refactoring takes it apart one smell at a time, without
 changing what it prints.
@@ -14620,11 +15230,6 @@ Output:
   wifi
 ```
 
-```text
-! printer
-  wifi
-```
-
 The output is the same, and the second program is longer. What it buys is
 the place where each decision lives. The meaning of "open" is in the enum;
 the line of a ticket is in the ticket; the mark of urgency is in `Urgent`;
@@ -14640,15 +15245,16 @@ through the ones that change most.
 
 | Pattern | In Okkama |
 |---|---|
-| Strategy | A role and the objects that do it; an anonymous action for a one-off (Chapter 18) |
+| Strategy | A role and the objects that do it; an anonymous action for a one-off (Section 26.2) |
 | Decorator | A role, implemented by objects that hold another implementation (Section 26.2) |
 | Composite | A role done by both the leaf and the container, which holds a collection of the role |
-| Builder | A chain of successors, or a constructor with named and defaulted fields |
+| Builder | A chain of successors, or a constructor with named and defaulted fields (Section 26.3) |
 | Prototype | Unneeded: objects are immutable, so sharing one is copying it |
 | Singleton | Not expressible: no global state and no static fields; one instance made in `main` and passed down |
 | Factory method | Several constructors, one per form (Chapter 12), or an action that returns a role |
 | Template method | No inheritance; a decorator, or an object that takes the varying step as a role |
-| Observer | A channel to an owning task, or an event that waiters await (Chapter 20) |
+| Observer | Events returned as values (Section 26.5); a channel to an owning task, or an event that waiters await (Chapter 20) |
+| Memento | Unneeded as a mechanism: earlier values stay valid, and undo is a list of them (Section 26.3) |
 | Iterator | `for` over collections, ranges and async streams (`for await`) |
 | State | Typestate: a role per state, transitions as successors (Section 26.3) |
 | Command | An enum case per command, with a `match` that interprets it; or an action value |
@@ -14695,6 +15301,7 @@ limits are deliberate, and Chapter 28 discusses the ones that are not.
 - <a id="ref-aycock2003"></a>John Aycock (2003). A Brief History of Just-In-Time. *ACM Computing Surveys* 35(2): 97–113. https://doi.org/10.1145/857076.857077
 - <a id="ref-bagwell2001"></a>Phil Bagwell (2001). *Ideal Hash Trees*. Technical report, École Polytechnique Fédérale de Lausanne. https://infoscience.epfl.ch/record/64398
 - <a id="ref-baker-sep"></a>Alan Baker (2022). Simplicity. In *The Stanford Encyclopedia of Philosophy* (Summer 2022 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/simplicity/
+- <a id="ref-bernhardt2012"></a>Gary Bernhardt (2012). Boundaries. Talk at SCNA 2012. https://www.destroyallsoftware.com/talks/boundaries
 - <a id="ref-jep395"></a>Gavin Bierman (2021). JEP 395: Records. OpenJDK. https://openjdk.org/jeps/395
 - <a id="ref-jep409"></a>Gavin Bierman (2021). JEP 409: Sealed Classes. OpenJDK. https://openjdk.org/jeps/409
 - <a id="ref-jep441"></a>Gavin Bierman (2023). JEP 441: Pattern Matching for switch. OpenJDK. https://openjdk.org/jeps/441

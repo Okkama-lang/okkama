@@ -93,17 +93,30 @@ container object whose field is an array of the role.
 
 {{example:26-composite}}
 
-```text
-tea: 300
-cups of 2: 300
-gift of 2: 540
-```
-
 `Bundle` sums its parts with a `Cell` inside one synchronous action, which is
 exactly the local use cells are for, and applies its own discount on top.
 The gift contains an item and a bundle and prices both the same way. Two
 constructors give the discount a default without a flag that every bundle
 must pass.
+
+### Strategy: a role, or an action value
+
+Strategy, a behaviour the caller chooses, has two forms in Okkama, and the
+choice between them is the same each time. A behaviour that has a name, is
+used in several places or is replaced in tests is a role with objects that
+do it. A question asked once, by one caller, is an action value passed to
+the call (Chapter 18).
+
+{{example:26-strategy}}
+
+- `Ranking` is a policy of the board. The board keeps it, every leader
+  query uses it, and a test can give the board another `Ranking`. `ByScore`
+  keeps the earlier player on a tie, because `better` is strict.
+- `first` asks one question, with a condition the caller writes in place. A
+  role for "under 40 seconds" would be a declaration used once.
+- When the same anonymous action appears at a second call site, it has
+  become a policy and wants a name: a role, or at least an object that holds
+  the action.
 
 ## 26.3 Change as a value: successor pipelines
 
@@ -119,14 +132,6 @@ snapshot before a risky step is a variable that is not touched. The next
 example takes an order through four stages and keeps all of them.
 
 {{example:26-pipeline}}
-
-```text
-0 lines, due 0, open
-2 lines, due 500, open
-2 lines, due 450, open
-2 lines, due 450, closed
-OrderError.closed
-```
 
 Each stage is a value. `empty`, `basket`, `offer` and `paid` can be printed,
 compared, stored in a collection or passed to another task, and none of them
@@ -159,6 +164,25 @@ hidden mutable state of one.
 Field "reading" cannot hold a Cell: a cell stays in synchronous code; state an object shares with tasks is an Atomic
 ```
 
+### Builder: options are named arguments
+
+Bloch recommends a builder for a constructor with many parameters, most of
+them optional [@bloch2018]. A positional constructor with a dozen arguments
+is unreadable where it is called, and one constructor per combination of
+options multiplies. Named arguments with defaults remove both problems, and
+the builder with them.
+
+{{example:26-options}}
+
+- Every option is a field with a default. A call names the ones that
+  differ, in any order, and the rest keep their defaults (Section 12.4).
+- The constructor body checks the combination once. A `Fetch` that exists
+  is valid, which a builder guarantees only if its `build()` repeats the
+  checks.
+- When options are gathered in several steps, say from a file and then from
+  the command line, the successor chain of this section does the gathering:
+  each step returns an object with one more decision made.
+
 ### Typestate: when an invalid step should not compile
 
 A successor chain checks at run time that a step is allowed. When a protocol
@@ -173,11 +197,6 @@ ordinary actions.
 
 {{example:26-typestate}}
 
-```text
-p-17 captured 250
-p-17 refunded
-```
-
 Each object does exactly one role, and a variable typed by the role sees only
 the steps of that state. The guarantee holds even when the object itself
 has more actions than its role exposes. In the next program `NewPayment`
@@ -185,16 +204,30 @@ does have a `refunded` action, but a value typed `Created` cannot reach it:
 
 {{example:26-typestate-rejected}}
 
-```text
-Role "Created" has no action "refunded"
-```
-
 Typestate costs one role and one object per state, and transitions that
 build new objects rather than successors, because the next state is a
 different type. It is worth it where a wrong step is expensive: payments,
 connections, documents that move through approval. Where the states are many
 and the transitions few, a successor with `confirm` checks (Section 26.3's
 `Order`) is the lighter tool.
+
+### Memento: the past is a list of values
+
+Undo is a pattern in most languages because keeping the past takes work: the
+state must be copied before it changes, or every change must know how to
+reverse itself [@gamma1994]. In Okkama a successor leaves the earlier value
+as it was, and nothing can change it later. Keeping the past means keeping
+the earlier values.
+
+{{example:26-undo}}
+
+- `typed` makes a new `Draft` and keeps the old one in `past`. Nothing has
+  to be copied: a value that cannot change is its own snapshot.
+- `undone` takes the last kept draft back and drops it from the list. With
+  nothing to undo it refuses by name, instead of returning the editor
+  unchanged.
+- Redo has the same shape mirrored: a second list for the drafts that undo
+  dropped, emptied by the next `typed`.
 
 ## 26.4 Refusals have names
 
@@ -216,12 +249,6 @@ answer, letting everything else go up.
 
 {{example:26-refusals}}
 
-```text
-30 -> balance 70
-0 -> refused: Refusal.non_positive(0)
-150 -> refused: Refusal.insufficient(100, 150)
-```
-
 The teller turns refusals into a reply because replying is its job. A
 `Program` failure such as a broken invariant, or a refusal from some other
 module, passes through the `catch` untouched, because the clause names
@@ -238,6 +265,11 @@ refusal that is not a refusal: an action that returns a default when it
 cannot do its work. When absence is a legitimate answer, the language has a
 type for it (Section 26.7); when it is not, the action should refuse.
 
+At the scale of a module, the same rule makes refusals change their names at
+the boundary. A layer catches the refusals of the layer below that it
+understands and refuses in its own terms, so its callers never name the
+layer below and do not change when it is replaced (Section 10.12).
+
 ## 26.5 Every dependency is a role, every role has a fake
 
 Objects in Okkama reach the outside world through the objects they are given:
@@ -249,14 +281,6 @@ every role may declare a `fake`, a test-only implementation that the
 compiler keeps out of production code (Chapter 15).
 
 {{example:26-signup-tests}}
-
-```text
-=== RUN   every member gets one welcome mail
---- PASS: every member gets one welcome mail
-=== RUN   the first signup is untouched by its successors
---- PASS: the first signup is untouched by its successors
-PASS
-```
 
 The fake records what happened in its own fields, through successors, the
 same way production objects do. A test does not configure expectations the
@@ -285,6 +309,31 @@ it. In Okkama such an object cannot exist for clocks and loggers, because
 there is no world to reach into; it can exist for objects it constructs
 itself, and the habit of the standard library is not to (Section 22.6).
 
+### Decide, then do
+
+A role and its fake make a dependency replaceable. One step further takes
+the dependency out of the logic altogether: the logic decides and returns
+its decisions as values, and a thin outer layer carries them out. Gary
+Bernhardt called this shape a functional core in an imperative shell
+[@bernhardt2012]. Immutable objects and enums with payloads make it the
+natural shape in Okkama.
+
+{{example:26-decide}}
+
+- `Checkout.effects()` reads only its own fields. It writes nothing, sends
+  nothing and reads no clock, so the same order always gives the same
+  decisions.
+- The decisions are an enum. The shell's `match` covers every case, and a
+  new kind of effect makes the compiler point at the shell.
+- A test of the core compares values, as `main` does with the first effect.
+  It needs no fake, because the core has no dependency to replace, and the
+  shell has almost no logic left to test.
+
+The same shape answers Observer in a language where objects do not change.
+An action does not notify listeners; it returns what happened, and its
+caller passes that on. Where the listeners are tasks, the values travel over
+a channel to their owner (Section 26.8).
+
 ## 26.6 Resources belong to scopes
 
 A resource is an object with a `destroy` block. The scope that owns it
@@ -303,6 +352,16 @@ is complete when the constructor returns; the end of its scope is the only
 cleanup point; and a result returned from an action carries its resources
 to the caller's scope, so the caller owns what it was given (Chapter 11).
 
+{{example:26-section}}
+
+- `Section` writes `begin` in its constructor and `end` in its `destroy`.
+  A caller writes one `let` and has nothing to remember.
+- Each pass of the loop is a scope: one row's section ends before the next
+  row's begins.
+- The refusal of row −1 leaves both scopes. Both ends are written, the
+  innermost first, before the caller handles the refusal. Row 4 is never
+  reached.
+
 `defer` covers the cases that are actions rather than objects: restoring a
 setting, writing a final line to a log, releasing something the program did
 not create. It runs at the end of the scope, reads the bindings as they are
@@ -318,6 +377,20 @@ the type system makes the caller decide what absence means: a fallback with
 pattern is to put absence in the signature of the action that can produce
 it, and nowhere else. A lookup that can fail to find returns `Maybe`; a
 lookup that must find refuses with a typed error.
+
+The same pattern works for a whole program: decide absence at the edge,
+where data comes in, and let the objects inside hold values that are there.
+
+{{example:26-edge}}
+
+- `RawSettings` is the edge. It answers with `Maybe` where a key may be
+  missing, and refuses with a typed error where the program cannot go on
+  without one.
+- `Settings` makes both decisions once, in its constructor: a missing host
+  falls back to `localhost`, a missing user is refused. Its fields are plain
+  strings, and nothing that reads them checks for absence again.
+- A refused construction produces no object. There is no half-built
+  `Settings` with an empty user to pass on.
 
 The antipatterns on the other side are the sentinel value and the "empty
 object": `-1` for "not found", `""` for "no name", an object whose every
@@ -338,13 +411,29 @@ values that really are shared, such as a counter or a flag, `Atomic` gives a
 small set of operations that are safe across tasks. The ledger of
 Section 20.6 is the pattern in full: an enum of commands, one task that owns
 the balance and serves them in a loop, and replies sent back over a channel
-the caller provides.
+the caller provides. The next example has several writers instead of one.
+
+{{example:26-owner}}
+
+- The count lives in `Tally`, a local of `Visits.run()`. The readers cannot
+  reach it. Each holds a `Sending<Visit>` and nothing else.
+- The owner changes its state by successor, `tally = tally.counted(path)`,
+  one message at a time. Two readers never update the count at once,
+  because only one task updates it.
+- A question is a message too. `summary` carries the channel for the
+  answer, so the reply goes to whoever asked, and the state never leaves its
+  owner.
 
 This replaces the most expensive antipattern of concurrent programming, the
 object shared by many threads and guarded by locks taken in the right order
 by convention. In Okkama a `Cell` cannot cross into an async context and an
 object cannot hold one, so mutable state that tasks share is either inside
 its owner or in an `Atomic`, by construction.
+
+{{example:26-shared-rejected}}
+
+The diagnostic names the way out: state an object shares with tasks is an
+`Atomic`. State that is more than a counter or a flag goes to an owner.
 
 The structured rules of Chapter 20 add the second half of the pattern:
 cancelling a task cancels what it waits for, and when `async main` returns,
@@ -426,11 +515,6 @@ what to print.
 
 {{example:26-before}}
 
-```text
-! printer
-  wifi
-```
-
 It works, and it is the kind of code the rules of the language do not
 prevent. The refactoring takes it apart one smell at a time, without
 changing what it prints.
@@ -450,11 +534,6 @@ changing what it prints.
 
 {{example:26-after}}
 
-```text
-! printer
-  wifi
-```
-
 The output is the same, and the second program is longer. What it buys is
 the place where each decision lives. The meaning of "open" is in the enum;
 the line of a ticket is in the ticket; the mark of urgency is in `Urgent`;
@@ -470,15 +549,16 @@ through the ones that change most.
 
 | Pattern | In Okkama |
 |---|---|
-| Strategy | A role and the objects that do it; an anonymous action for a one-off (Chapter 18) |
+| Strategy | A role and the objects that do it; an anonymous action for a one-off (Section 26.2) |
 | Decorator | A role, implemented by objects that hold another implementation (Section 26.2) |
 | Composite | A role done by both the leaf and the container, which holds a collection of the role |
-| Builder | A chain of successors, or a constructor with named and defaulted fields |
+| Builder | A chain of successors, or a constructor with named and defaulted fields (Section 26.3) |
 | Prototype | Unneeded: objects are immutable, so sharing one is copying it |
 | Singleton | Not expressible: no global state and no static fields; one instance made in `main` and passed down |
 | Factory method | Several constructors, one per form (Chapter 12), or an action that returns a role |
 | Template method | No inheritance; a decorator, or an object that takes the varying step as a role |
-| Observer | A channel to an owning task, or an event that waiters await (Chapter 20) |
+| Observer | Events returned as values (Section 26.5); a channel to an owning task, or an event that waiters await (Chapter 20) |
+| Memento | Unneeded as a mechanism: earlier values stay valid, and undo is a list of them (Section 26.3) |
 | Iterator | `for` over collections, ranges and async streams (`for await`) |
 | State | Typestate: a role per state, transitions as successors (Section 26.3) |
 | Command | An enum case per command, with a `match` that interprets it; or an action value |

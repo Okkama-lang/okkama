@@ -1,0 +1,15 @@
+module bible/shared_rejected v1.0.0;
+
+import "cell" take Cell;
+
+// A visit counter that tasks would share and mutate in place.
+object Hits {
+    has count is Cell<int>;
+
+    Hits(:count);
+}
+
+main() is int {
+    let hits = Hits(count: Cell(0));
+    0;
+}

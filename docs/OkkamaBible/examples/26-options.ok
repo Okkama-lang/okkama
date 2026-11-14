@@ -1,0 +1,38 @@
+module bible/options v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum BadFetch is Error = (timeout(seconds is int), retries(count is int));
+
+// Every option has a name and a default; a call names only what differs.
+object Fetch {
+    has url is string;
+    has timeout is int = 30;
+    has retries is int = 0;
+    has redirects is bool = true;
+
+    Fetch(:url, :timeout, :retries, :redirects) {
+        confirm timeout > 0 else throw BadFetch.timeout(timeout);
+        confirm retries >= 0 else throw BadFetch.retries(retries);
+    }
+
+    shown() is string {
+        let follow = if redirects { "follows redirects" } else { "stays put" };
+        url + ": " + timeout.string() + " s, " + retries.string() + " retries, " + follow;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    out.writeln(Fetch(url: "/status").shown());
+    out.writeln(Fetch(url: "/report", retries: 3).shown());
+    out.writeln(Fetch(redirects: false, url: "/login", timeout: 5).shown());
+    let refused = try {
+        Fetch(url: "/slow", timeout: 0).shown();
+    }
+    catch e is BadFetch {
+        "refused: " + e.text();
+    };
+    out.writeln(refused);
+    0;
+}
