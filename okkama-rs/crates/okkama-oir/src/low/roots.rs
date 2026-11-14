@@ -76,6 +76,9 @@ pub(super) fn collect(module: &Module, body: &mut Body, budget: &mut Budget<'_>)
                 budget.step(incoming[successor.as_u32() as usize].len())?;
                 live.extend(incoming[successor.as_u32() as usize].iter().copied());
             }
+            if let Some(unwind) = &data.unwind {
+                live.extend(unwind.target.args.iter().copied());
+            }
             outgoing[id.as_u32() as usize] = live.clone();
             for instruction in data.insts.iter().rev() {
                 let inst = body.insts.get(*instruction)?;
@@ -84,11 +87,10 @@ pub(super) fn collect(module: &Module, body: &mut Body, budget: &mut Budget<'_>)
                 }
                 live.extend(graph::operation(body, &inst.op, budget)?);
             }
+            // Unwind operands are uses inside this block. Its parameters are
+            // defined here and must not leak into predecessor root maps.
             for param in &data.params {
                 live.remove(param);
-            }
-            if let Some(unwind) = &data.unwind {
-                live.extend(unwind.target.args.iter().copied());
             }
             budget.step(live.len())?;
             if incoming[id.as_u32() as usize] != live {

@@ -18,18 +18,18 @@ summary M1 call-boundary results [result_relation(fresh=[0],
 summary M2 call-boundary parameters [parameter_effect(convention=borrow,
         destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
         publication=atomic)
-summary M3 call-boundary parameters [parameter_effect(convention=borrow,
-        destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
-        publication=atomic)
+summary M3 call-boundary parameters [parameter_effect(convention=borrow, destination=none)]
+    results [result_relation(provenance=unbound_result)]
+    contract call_contract(results=[int], failures=[program], publication=atomic)
 summary M4 call-boundary parameters [parameter_effect(convention=borrow,
         destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
         failures=[program], publication=atomic)
-summary M5 call-boundary parameters [parameter_effect(convention=borrow,
-        destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
-        publication=atomic)
-summary M6 call-boundary parameters [parameter_effect(convention=borrow,
-        destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
-        publication=atomic)
+summary M5 call-boundary parameters [parameter_effect(convention=borrow, destination=none)]
+    results [result_relation(provenance=unbound_result)]
+    contract call_contract(results=[int], failures=[program], publication=atomic)
+summary M6 call-boundary parameters [parameter_effect(convention=borrow, destination=none)]
+    results [result_relation(provenance=unbound_result)]
+    contract call_contract(results=[int], failures=[program], publication=atomic)
 summary M7 observation parameters [parameter_effect(convention=borrow,
         destination=none)] contract call_contract(publication=atomic)
 
@@ -126,12 +126,14 @@ func @f(%0: int; %1: own) -> (int, own) abi explicit(input_packet=1, output_pack
     dependency d2: dependency = from_ssa(%17)
     dependency d3: dependency = from_ssa(%28)
     dependency d4: dependency = from_ssa(%31)
-    dependency d5: dependency = from_ssa(%44)
-    dependency d6: dependency = from_ssa(%47)
-    dependency d7: dependency = from_ssa(%52)
-    dependency d8: dependency = from_ssa(%63)
+    dependency d5: dependency = from_ssa(%38)
+    dependency d6: dependency = from_ssa(%41)
+    dependency d7: dependency = from_ssa(%46)
+    dependency d8: dependency = from_ssa(%57)
     dependency d9: dependency = union([d8])
-    selection s0: selection = admissible(selection(%50))
+    dependency d10: dependency = from_ssa(%73)
+    dependency d11: dependency = from_ssa(%76)
+    selection s0: selection = admissible(selection(%44))
     ^b0 in S2:
     %2: scope<S2> = scope.begin S2
     %3: scope<S2> = own.accept %2, %1
@@ -141,8 +143,8 @@ func @f(%0: int; %1: own) -> (int, own) abi explicit(input_packet=1, output_pack
     invoke.own call @make(; %6)
         normal ^b6($value, $packet, $deps, %4, %5)
         unwind ^b7($failure, %5)
-    ^b2(%7: int, %8: R facts(managed(deps=d0)), %9: deps, %10: int, %11: fn() -> int facts(managed(deps=d1)), %12: deps,
-        %13: int, %14: scope<S2>) in S2:
+    ^b2(%7: int, %8: R facts(managed(deps=d0)), %9: deps, %10: int, %11: fn() -> int facts(managed(deps=d1)), %12:
+        deps, %13: int, %14: scope<S2>) in S2:
     %15: bool = int.lt %13, %7
     cond %15, ^b10, ^b11
     ^b3(%16: R facts(managed(deps=d2)), %17: deps, %18: scope<S2>) in S2:
@@ -152,43 +154,53 @@ func @f(%0: int; %1: own) -> (int, own) abi explicit(input_packet=1, output_pack
     %24: closed = scope.end %23, effects scope_effects(failures=[], suspends=false, cancel=false)
     %25: own = own.empty
     ret %20, %25
-    ^b4(%26: int, %27: R facts(managed(deps=d3)), %28: deps, %29: int, %30: fn() -> int facts(managed(deps=d4)), %31:
-        deps, %32: int, %33: scope<S2>, %34: scope<S5>) in S5:
+    ^b4(%26: int, %27: R facts(managed(deps=d3)), %28: deps, %29: int, %30: fn() -> int facts(managed(deps=d4)),
+        %31: deps, %32: int, %33: scope<S2>, %34: scope<S5>) in S5:
     %35: own = own.empty
-    (%36: int, %37: own, %38: deps) = fn.call %30(; %35) deps [%31] summary(M6)
-    %39: scope<S5> = own.admit %34, %37
-    %40: int = int.add %32, %29
-    %41: closed = scope.end %39, effects scope_effects(failures=[], suspends=false, cancel=false)
-    br ^b12
-    ^b5(%42: int, %43: R facts(managed(deps=d5)), %44: deps, %45: int, %46: fn() -> int facts(managed(deps=d6)), %47:
-        deps, %48: int, %49: scope<S2>) in S2:
-    br ^b2(%42, %43, %44, %45, %46, %47, %48, %49)
-    ^b6(%50: R facts(managed(deps=d7)), %51: own, %52: deps, %53: int, %54: scope<S2>) in S2:
-    %55: scope<S2> = own.admit %54, %51
-    invoke.own scope.split %55, s0
-        normal ^b8($state, $selected, $external_deps, %50, %52, %53)
+    invoke.own fn.call %30(; %35) deps [%31] summary(M6)
+        normal ^b12($value, $packet, $deps, %26, %27, %28, %29, %30, %31, %32, %33, %34)
+        unwind ^b13($failure, %33, %34)
+    ^b5(%36: int, %37: R facts(managed(deps=d5)), %38: deps, %39: int, %40: fn() -> int facts(managed(deps=d6)),
+        %41: deps, %42: int, %43: scope<S2>) in S2:
+    br ^b2(%36, %37, %38, %39, %40, %41, %42, %43)
+    ^b6(%44: R facts(managed(deps=d7)), %45: own, %46: deps, %47: int, %48: scope<S2>) in S2:
+    %49: scope<S2> = own.admit %48, %45
+    invoke.own scope.split %49, s0
+        normal ^b8($state, $selected, $external_deps, %44, %46, %47)
         unwind ^b9($state, $failure)
-    ^b7(%56: failure, %57: scope<S2>) in S2:
-    %58: failure = scope.unwind %57, %56, effects scope_effects(failures=[], suspends=false, cancel=false)
-    raise %58
-    ^b8(%59: scope<S2>, %60: own, %61: deps, %62: R facts(managed(deps=d8)), %63: deps, %64: int) in S2:
-    %65: scope<S2> = own.bind binding elaborated_binding(binding=b0, resource=resource_value(value=%62, packet=%60),
-        state=%59, original_scope=S2)
-    %66: fn() -> int facts(managed(deps=d9)) = fn.closure @lambda.__own_entry_1, [%62], ty fn() -> int
-    %67: deps = deps.of %66
-    %68: int = const 0
-    %69: int = const 1
-    br ^b2(%64, %62, %63, %69, %66, %67, %68, %65)
-    ^b9(%70: scope<S2>, %71: failure) in S2:
-    %72: failure = scope.unwind %70, %71, effects scope_effects(failures=[], suspends=false, cancel=false)
-    raise %72
+    ^b7(%50: failure, %51: scope<S2>) in S2:
+    %52: failure = scope.unwind %51, %50, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %52
+    ^b8(%53: scope<S2>, %54: own, %55: deps, %56: R facts(managed(deps=d8)), %57: deps, %58: int) in S2:
+    %59: scope<S2> = own.bind binding elaborated_binding(binding=b0, resource=resource_value(value=%56, packet=%54),
+        state=%53, original_scope=S2)
+    %60: fn() -> int facts(managed(deps=d9)) = fn.closure @lambda.__own_entry_1, [%56], ty fn() -> int
+    %61: deps = deps.of %60
+    %62: int = const 0
+    %63: int = const 1
+    br ^b2(%58, %56, %57, %63, %60, %61, %62, %59)
+    ^b9(%64: scope<S2>, %65: failure) in S2:
+    %66: failure = scope.unwind %64, %65, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %66
     ^b10 in S2:
-    %73: scope<S5> = scope.begin S5
-    br ^b4(%7, %8, %9, %10, %11, %12, %13, %14, %73)
+    %67: scope<S5> = scope.begin S5
+    br ^b4(%7, %8, %9, %10, %11, %12, %13, %14, %67)
     ^b11 in S2:
     br ^b3(%8, %9, %14)
-    ^b12 in S2:
-    br ^b5(%26, %27, %28, %29, %30, %31, %40, %33)
+    ^b12(%68: int, %69: own, %70: deps, %71: int, %72: R facts(managed(deps=d10)), %73: deps, %74: int, %75: fn() ->
+        int facts(managed(deps=d11)), %76: deps, %77: int, %78: scope<S2>, %79: scope<S5>) in S5:
+    %80: scope<S5> = own.admit %79, %69
+    %81: int = int.add %77, %74
+    %82: closed = scope.end %80, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b14
+    ^b13(%83: failure, %84: scope<S2>, %85: scope<S5>) in S5:
+    %86: failure = scope.unwind %85, %83, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b15
+    ^b14 in S2:
+    br ^b5(%71, %72, %73, %74, %75, %76, %81, %78)
+    ^b15 in S2:
+    %87: failure = scope.unwind %84, %86, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %87
 }
 
 func @lambda.__own_entry_1(%0: R facts(managed(deps=d1)); %1: deps, %2: own) -> (int, own) [lambda captures

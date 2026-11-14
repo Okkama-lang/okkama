@@ -19,9 +19,9 @@ summary M1 call-boundary results [result_relation(fresh=[0],
 summary M2 call-boundary parameters [parameter_effect(convention=borrow,
         destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
         publication=atomic)
-summary M3 call-boundary parameters [parameter_effect(convention=borrow,
-        destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
-        publication=atomic)
+summary M3 call-boundary parameters [parameter_effect(convention=borrow, destination=none)]
+    results [result_relation(provenance=unbound_result)]
+    contract call_contract(results=[int], failures=[program], publication=atomic)
 summary M4 observation parameters [parameter_effect(convention=borrow,
         destination=none)] contract call_contract(publication=atomic)
 

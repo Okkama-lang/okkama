@@ -1373,6 +1373,60 @@ fn p1_function_charges(name: &str, module: &ir::Module, context: ir::verify::Ver
     }
 }
 
+fn p1_rejection_dump(name: &str, module: &ir::Module, report: &ir::verify::VerifyReport) {
+    let Some(directory) = std::env::var_os("OKKAMA_P1_OWN_DUMP") else {
+        return;
+    };
+    let mut details = String::new();
+    for diagnostic in &report.diagnostics {
+        details.push_str(&format!("{diagnostic:#?}\n"));
+        if let ir::verify::EntityLocation::Instruction { function, instruction } = diagnostic.primary.entity {
+            let body = module.functions.get(function).unwrap().body.as_ref().unwrap();
+            details.push_str(&format!("{:#?}\n", body.insts.get(instruction).unwrap()));
+            for (_, map) in body.cleanup.roots.iter().filter(|(_, map)| {
+                map.boundary == ir::RootBoundary::BeforeInstruction(instruction)
+            }) {
+                details.push_str(&format!("{map:#?}\n"));
+                for binding in &map.bindings {
+                    details.push_str(&format!("{:?}: {:#?}\n", binding.value,
+                        body.values.get(binding.value).unwrap()));
+                }
+            }
+        }
+    }
+    let path = std::path::Path::new(&directory).join(format!("{name}.{:?}.rejections", module.profile));
+    std::fs::write(path, details).unwrap();
+}
+
+fn p1_verify(
+    module: &ir::Module,
+    options: &ir::verify::VerifyOptions,
+    context: ir::verify::VerifyContext<'_>,
+) -> Result<(), ir::verify::VerifyReport> {
+    let Ok(selected) = std::env::var("OKKAMA_P1_VERIFY_FUNCTIONS") else {
+        return ir::verify::verify_with(module, options, context).map(|_| ());
+    };
+    let mut checked = 0;
+    for (function, declaration) in module.functions.iter() {
+        if !selected.split(',').any(|item| item == declaration.symbol || item == function.as_u32().to_string()) {
+            continue;
+        }
+        checked += 1;
+        let report = ir::verify::verify_function(module, function, context, options);
+        eprintln!("{:?} {}: {report:#?}", module.profile, declaration.symbol);
+        if let Some(failure) = report.failure {
+            return Err(ir::verify::VerifyReport {
+                failure,
+                diagnostics: report.diagnostics,
+                suppressed: report.suppressed,
+                stats: report.stats,
+            });
+        }
+    }
+    assert!(checked > 0, "no matching P1 functions: {selected}");
+    Ok(())
+}
+
 #[test]
 fn oir2_p1_followup_own_from_593_sources() {
     use ir::own::{OwnOptions, analyze::analyze_function, elaborate_ownership, rewrite_subset};
@@ -1389,7 +1443,7 @@ fn oir2_p1_followup_own_from_593_sources() {
     let mut rows = Vec::new();
     for path in paths {
         let name = path.file_stem().unwrap().to_str().unwrap();
-        if std::env::var("OKKAMA_P1_OWN_ONLY").is_ok_and(|selected| selected != name) {
+        if std::env::var("OKKAMA_P1_OWN_ONLY").is_ok_and(|selected| !selected.split(',').any(|item| item == name)) {
             continue;
         }
         let source = std::fs::read_to_string(&path).unwrap();
@@ -1405,7 +1459,11 @@ fn oir2_p1_followup_own_from_593_sources() {
                 ir::text::print(&module).unwrap()).unwrap();
         }
         let catalog = super::native_summaries::P1NativeSummaries::for_module(&module).unwrap();
-        let options = OwnOptions::default();
+        let mut options = OwnOptions::default();
+        if std::env::var_os("OKKAMA_P1_RAISED_LIMITS").is_some() {
+            options.verify.limits.memory_bytes = 2 << 30;
+            options.verify.limits.steps = 500_000_000;
+        }
         let inferred = elaborate_ownership(module, &catalog, &options).unwrap();
         let main = inferred.module.functions.iter().find(|(_, function)| function.symbol == "main").unwrap().0;
         let flow = analyze_function(&inferred.module, main, &inferred.analysis, &options)
@@ -1421,22 +1479,32 @@ fn oir2_p1_followup_own_from_593_sources() {
                 let catalog = OwnP1Contracts::new(&output.module);
                 let context = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
                 p1_function_charges(name, &output.module, context);
-                match ir::verify::verify_with(&output.module, &options.verify, context) {
+                match p1_verify(&output.module, &options.verify, context) {
                     Ok(_) => match ir::low::lower_cleanup(output.module, &ir::low::LowOptions::default()) {
                         Ok(module) => {
+                            if let Some(directory) = std::env::var_os("OKKAMA_P1_OWN_DUMP") {
+                                let path = std::path::Path::new(&directory).join(format!("{name}.low.oir"));
+                                std::fs::write(path, ir::text::print(&module).unwrap()).unwrap();
+                            }
                             let catalog = OwnP1Contracts::new(&module);
                             let context = ir::verify::VerifyContext {
                                 text_locations: None, external_contracts: &catalog,
                             };
                             p1_function_charges(name, &module, context);
-                            match ir::verify::verify_with(&module, &options.verify, context) {
+                            match p1_verify(&module, &options.verify, context) {
                                 Ok(_) => ("beyond", None),
-                                Err(error) => ("low", Some(format!("verify_low: {error:#?}"))),
+                                Err(error) => {
+                                    p1_rejection_dump(name, &module, &error);
+                                    ("low", Some(format!("verify_low: {error:#?}")))
+                                }
                             }
                         },
                         Err(error) => ("low", Some(format!("{error:#?}"))),
                     },
-                    Err(error) => ("verify_own", Some(format!("{error:#?}"))),
+                    Err(error) => {
+                        p1_rejection_dump(name, &output.module, &error);
+                        ("verify_own", Some(format!("{error:#?}")))
+                    }
                 }
             },
             Err(error) => ("own", Some(format!("{error:#?}"))),

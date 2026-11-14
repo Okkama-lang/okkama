@@ -157,6 +157,9 @@ pub(super) fn check(module: &Module, selected: Option<FuncId>, state: &mut State
                 for target in &successors[id.as_u32() as usize] {
                     live.extend(&incoming[target.as_u32() as usize]);
                 }
+                if let Some(unwind) = &block.unwind {
+                    live.extend(&unwind.target.args);
+                }
                 outgoing[id.as_u32() as usize] = live.clone();
                 for instruction in block.insts.iter().rev() {
                     let inst = body.insts.get(*instruction).unwrap();
@@ -165,11 +168,10 @@ pub(super) fn check(module: &Module, selected: Option<FuncId>, state: &mut State
                     }
                     live.extend(&inst_uses[instruction]);
                 }
+                // Implicit unwind arguments are local uses, so kill this
+                // block's definitions after collecting those arguments.
                 for param in &block.params {
                     live.remove(param);
-                }
-                if let Some(unwind) = &block.unwind {
-                    live.extend(&unwind.target.args);
                 }
                 if !state.array(live.len(), 48) {
                     return;
