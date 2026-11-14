@@ -38,38 +38,54 @@ pub enum Effect {
     /// May set a failure status, which machine code reads after the call or
     /// returns to its caller.
     Fails,
+    /// Terminal engine/budget exit, never an application outcome.
+    #[cfg(feature = "champ-abi")]
+    Stops,
+    /// Suspension (forbidden for Champ P1).
+    #[cfg(feature = "champ-abi")]
+    Suspends,
 }
 
 /// One description per helper (H-06): its Rust signature, checked at compile
 /// time (the function must coerce to exactly that `extern "C"` pointer type;
-/// every word is 8 bytes), the Cranelift signature derived from it, and its
+/// each scalar is 8 bytes), the Cranelift signature derived from it, and its
 /// effects. A panic inside a helper aborts with its message at the `extern
 /// "C"` boundary and never unwinds through machine code.
 macro_rules! helpers {
-    ($($field:ident = $function:path as ($ctx:ident $(, $arg:ident: $ty:ty)*) $(-> $ret:ty)? ; [$($effect:ident),*];)*) => {
+    ($(
+        $(#[$meta:meta])* $field:ident = $function:path
+        as ($ctx:ident $(, $arg:ident: $ty:ty)*) $(-> $ret:ty)? ; [$($effect:ident),*];
+    )*) => {
         #[derive(Debug)]
-        struct Helpers { $($field: FuncId,)* }
+        struct Helpers { $($(#[$meta])* $field: FuncId,)* }
 
         /// Every helper and its effects, in declaration order.
-        pub const HELPERS: &[(&str, &[Effect])] = &[$((stringify!($field), &[$(Effect::$effect),*]),)*];
+        pub const HELPERS: &[(&str, &[Effect])] = &[$($(#[$meta])* (stringify!($field), &[$(Effect::$effect),*]),)*];
 
         $(
+            $(#[$meta])*
             const _: () = {
-                $(assert!(std::mem::size_of::<$ty>() == 8);)*
+                $(assert!(std::mem::size_of::<$ty>() == 8
+                    || (std::mem::size_of::<$ty>() == 16 && std::mem::align_of::<$ty>() == 8));)*
                 $(assert!(std::mem::size_of::<$ret>() == 8);)?
             };
+            $(#[$meta])*
             const _: extern "C" fn(*mut Ctx $(, $ty)*) $(-> $ret)? = $function;
         )*
 
         fn declare_helpers(builder: &mut JITBuilder) {
-            $(builder.symbol(concat!("sparrow_core_", stringify!($field)), $function as *const u8);)*
+            $($(#[$meta])* builder.symbol(concat!("sparrow_core_", stringify!($field)), $function as *const u8);)*
         }
 
         fn import_helpers(module: &mut JITModule) -> Result<Helpers, Error> {
-            Ok(Helpers { $($field: {
+            Ok(Helpers { $($(#[$meta])* $field: {
                 let mut signature = module.make_signature();
                 signature.params.push(AbiParam::new(types::I64));
-                $(let _ = stringify!($arg); signature.params.push(AbiParam::new(types::I64));)*
+                $(let _ = stringify!($arg);
+                    for _ in 0..std::mem::size_of::<$ty>() / 8 {
+                        signature.params.push(AbiParam::new(types::I64));
+                    }
+                )*
                 $(let _ = stringify!($ret); signature.returns.push(AbiParam::new(types::I64));)?
                 module
                     .declare_function(concat!("sparrow_core_", stringify!($field)), Linkage::Import, &signature)
@@ -80,7 +96,7 @@ macro_rules! helpers {
         impl Helpers {
             /// The ids in `HELPERS` order.
             fn ids(&self) -> Vec<FuncId> {
-                vec![$(self.$field),*]
+                vec![$($(#[$meta])* self.$field),*]
             }
         }
     };
@@ -125,6 +141,143 @@ helpers! {
     complete = crate::tasks::rt_complete as (ctx, frame: Word, value: Word); [Collects, Reenters];
     spawn = crate::tasks::rt_spawn as (ctx, future: Word) -> Word; [Reenters, Fails];
     fut = crate::tasks::rt_fut as (ctx, op: u64, future: Word) -> Word; [Reenters, Fails];
+    #[cfg(feature = "champ-abi")]
+    champ_scope_begin = crate::champ::rt_scope_begin as (ctx,
+        instance: *const crate::champ::ScopeInstance,
+        post: *mut crate::champ::ScopeSlot) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_own_empty = crate::champ::rt_own_empty as (ctx,
+        post: *mut crate::champ::PacketSlot) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_own_move = crate::champ::rt_own_move as (ctx,
+        input: *mut crate::champ::PacketSlot,
+        post: *mut crate::champ::PacketSlot) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_own_join = crate::champ::rt_own_join as (ctx,
+        inputs: *mut crate::champ::PacketSlot,
+        count: u64,
+        post: *mut crate::champ::PacketSlot) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_own_create_commit = crate::champ::rt_own_create_commit as (ctx,
+        object: Word,
+        descriptor: u64,
+        owner: u64,
+        post: *mut crate::champ::PacketSlot) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_own_admit = crate::champ::rt_own_admit as (ctx,
+        state: *mut crate::champ::ScopeSlot,
+        input: *mut crate::champ::PacketSlot,
+        post: *mut crate::champ::ScopeSlot) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_own_accept = crate::champ::rt_own_accept as (ctx,
+        state: *mut crate::champ::ScopeSlot,
+        input: *mut crate::champ::PacketSlot,
+        post: *mut crate::champ::ScopeSlot) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_own_bind = crate::champ::rt_own_bind as (ctx,
+        state: *mut crate::champ::ScopeSlot,
+        binding: u64,
+        value: Word,
+        input: *mut crate::champ::PacketSlot,
+        post: *mut crate::champ::ScopeSlot) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_own_rebind = crate::champ::rt_own_rebind as (ctx,
+        state: *mut crate::champ::ScopeSlot,
+        binding: u64,
+        value: Word,
+        input: *mut crate::champ::PacketSlot,
+        post: *mut crate::champ::ScopeSlot) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_own_stage = crate::champ::rt_own_stage as (ctx,
+        inputs: *const crate::champ::StageInputs,
+        post: *mut crate::champ::StagePost) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_own_split_static = crate::champ::rt_own_split_static as (ctx,
+        input: *mut crate::champ::PacketSlot,
+        plan: u64,
+        post: *mut crate::champ::SplitPost) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_own_split_checked = crate::champ::rt_own_split_checked as (ctx,
+        input: *mut crate::champ::PacketSlot,
+        selection: *const crate::champ::Selection,
+        post: *mut crate::champ::SplitPost) -> u64; [Allocates, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_scope_split = crate::champ::rt_scope_split as (ctx,
+        input: *mut crate::champ::ScopeSlot,
+        selection: *const crate::champ::Selection,
+        post: *mut crate::champ::ScopeSplitPost) -> u64; [Allocates, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_scope_transfer = crate::champ::rt_scope_transfer as (ctx,
+        inputs: *const crate::champ::TransferInputs,
+        selection: *const crate::champ::Selection,
+        post: *mut crate::champ::TransferPost) -> u64; [Allocates, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_exit_prepare = crate::champ::rt_exit_prepare as (ctx,
+        inputs: *const crate::champ::ExitInputs,
+        post: *mut crate::champ::PendingSlot) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_exit_extend = crate::champ::rt_exit_extend as (ctx,
+        input: *mut crate::champ::PendingSlot,
+        part: *mut crate::champ::PacketSlot,
+        post: *mut crate::champ::PendingSlot) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_exit_replace = crate::champ::rt_exit_replace as (ctx,
+        input: *mut crate::champ::PendingSlot,
+        replacement: *const crate::champ::StaticReplacement,
+        post: *mut crate::champ::ReplacePost) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_exit_commit = crate::champ::rt_exit_commit as (ctx,
+        input: *mut crate::champ::PendingSlot,
+        destination: *const crate::champ::ExitDestination,
+        post: *mut crate::champ::CommitPost) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_exit_abort = crate::champ::rt_exit_abort as (ctx,
+        input: *mut crate::champ::PendingSlot,
+        state: *mut crate::champ::CleanupSlot,
+        post: *mut crate::champ::CleanupSlot) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_call_owned = crate::champ::cleanup::rt_call_owned as (ctx,
+        entry: u64,
+        args: *const Word,
+        argc: u64,
+        io: *mut crate::champ::CallOwn,
+        post: *mut crate::champ::CallPost) -> u64; [Allocates, Collects, Reenters, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_invoke_defer = crate::champ::cleanup::rt_invoke_defer as (ctx,
+        entry: u64,
+        args: *const Word,
+        argc: u64,
+        io: *mut crate::champ::CallOwn,
+        registration: *const crate::champ::RegistrationMap,
+        post: *mut crate::champ::DeferPost) -> u64; [Allocates, Collects, Reenters, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_entry_reject = crate::champ::cleanup::rt_entry_reject as (ctx,
+        io: *mut crate::champ::CallOwn) -> u64; [Allocates, Collects, Reenters, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_destroy_claim = crate::champ::cleanup::rt_destroy_claim as (ctx,
+        state: *mut crate::champ::CleanupSlot,
+        key: crate::champ::KeyRef,
+        holder: u64,
+        owner: u64,
+        post: *mut crate::champ::DestroyBorrow) -> u64; [Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_destroy_invoke = crate::champ::cleanup::rt_destroy_invoke as (ctx,
+        state: *mut crate::champ::CleanupSlot,
+        borrow: *const crate::champ::DestroyBorrow,
+        entry: u64,
+        post: *mut crate::champ::DestroyPost) -> u64; [Allocates, Collects, Reenters, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_destroy_finish = crate::champ::cleanup::rt_destroy_finish as (ctx,
+        state: *mut crate::champ::CleanupSlot,
+        borrow: *mut crate::champ::DestroyBorrow) -> u64; [Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_failure_capture = crate::champ::cleanup::rt_failure_capture as (ctx,
+        destination: *mut Word) -> u64; [Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_cleanup_failure = crate::champ::cleanup::rt_cleanup_failure as (ctx,
+        input: *mut crate::champ::CleanupSlot,
+        failure: Word,
+        post: *mut crate::champ::CleanupSlot) -> u64; [Allocates, Stops];
 }
 
 const COMPILE_HEADER: &str = "; compile\tfunction\tinstructions\tregisters\tsuspensions\tclif blocks\tclif instructions\tsafepoints\tcode bytes\tframe bytes\tdeclare\tliveness\temit\tfinalize\tcodegen\tmaps\tdefinitions\ttables (microseconds)";

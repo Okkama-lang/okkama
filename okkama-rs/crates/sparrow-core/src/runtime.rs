@@ -48,6 +48,9 @@ pub struct Ctx {
 #[derive(Debug)]
 pub struct Failure {
     pub kind: FailureKind,
+    /// Cleanup origin is orthogonal to kind/catchability; capturing keeps the exact carrier.
+    #[cfg(feature = "champ-abi")]
+    pub cleanup_origin: bool,
     /// (function, pc) of each activation it unwound through, innermost first.
     pub trace: Vec<(u32, u32)>,
     pub cause: Option<Word>,
@@ -389,6 +392,8 @@ impl Runtime {
     pub fn failure_new(&mut self, kind: FailureKind) -> Word {
         self.heap.allocate_payload(Box::new(Failure {
             kind,
+            #[cfg(feature = "champ-abi")]
+            cleanup_origin: false,
             trace: Vec::new(),
             cause: None,
             secondary: Vec::new(),

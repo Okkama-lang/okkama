@@ -1,9 +1,16 @@
-//! Champ G1 identity primitives. Packet publication and cleanup authority arrive in S2.
-//! No operation here collects or calls application code. Callers keep object refs in
-//! existing stack maps/Runtime.roots; neither a Rust local nor a serial is a GC root.
+//! Champ G1 identity, packet/journal ABI and S2 ownership helpers.
+//! Identity primitives below do not collect or call application code; X helpers declare those effects.
+//! Callers keep refs in stack maps/Runtime.roots; neither a Rust local nor a serial is a GC root.
 #![allow(unsafe_code)]
 
 mod layout;
+mod records;
+mod abi;
+pub use abi::*;
+mod helpers;
+pub mod cleanup;
+pub use records::*;
+pub use helpers::*;
 pub use okkama_sparrow::spb17::layout::{LayoutFacts, ObjectRuntimeLayout, RuntimeLayoutRegistry};
 
 use crate::heap::{self, Heap};
@@ -80,6 +87,9 @@ pub(crate) struct State {
     holder: u64,
     owner: u64,
     trace: Option<std::fs::File>,
+    selections: Vec<Vec<usize>>,
+    entries: Vec<EntryContract>,
+    value_reprs: std::collections::BTreeMap<(u64, u64, bool), crate::word::Repr>,
 }
 
 impl State {
@@ -243,3 +253,6 @@ pub(crate) fn check_sweep(header: u64, stress: bool) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod runtime_tests;
