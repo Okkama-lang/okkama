@@ -9,6 +9,8 @@
 //! нужен исходник. Бинарная форма — [`encode`]/[`decode`], текстовая
 //! (ассемблер) — [`assemble`]/[`disassemble`]; обе однозначны и обратимы.
 
+pub mod spb17;
+
 mod asm;
 mod codec;
 mod liveness;
