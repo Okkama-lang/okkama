@@ -1,0 +1,19 @@
+module app;
+object Res {
+    has n is int;
+    Res(:n);
+    read() is int {
+        n;
+    }
+    destroy {
+        n;
+    }
+}
+main() is int {
+    for [1, 2] -> n {
+        let resource = Res(n: n);
+        next if n == 1;
+        resource.read();
+    }
+    0;
+}

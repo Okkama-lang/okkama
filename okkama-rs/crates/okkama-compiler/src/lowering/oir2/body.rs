@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 
+#[path = "iteration.rs"]
+mod iteration;
+
 use super::{LowerError, Result};
 use crate::analysis::{thir, ty::{Ty, ObjectId}};
 use crate::oir2 as ir;
@@ -9,7 +12,6 @@ pub(super) struct BodyContext<'t> {
     pub natives: &'t HashMap<usize, ir::FuncId>,
     pub builtin_adapters: &'t HashMap<(ir::TypeId, ir::TypeId), ir::FuncId>,
     pub error_text: Option<ir::FuncId>,
-    pub std_array_for: bool,
     pub objects: &'t HashMap<ObjectId, ir::DeclId>,
     pub constructors: &'t HashMap<(ObjectId, usize, Vec<usize>), ir::FuncId>,
     pub given: Vec<usize>,
@@ -59,6 +61,7 @@ struct LoopFrame {
     exit: Join,
     boundary: ir::BoundaryId,
     state: Vec<ir::ValueId>,
+    packed: bool,
 }
 
 impl<'a, 't> BodyLowerer<'a, 't> {
@@ -768,7 +771,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
         self.terminate(ir::TermKind::Br(ir::Target { block: iteration, args }))?;
         self.enter(iteration, &exit.locals, 0)?;
         let boundary = self.boundary(scope, ir::BoundaryKind::Loop)?;
-        self.loops.push(LoopFrame { next: head, exit: exit.clone(), boundary, state: vec![] });
+        self.loops.push(LoopFrame { next: head, exit: exit.clone(), boundary, state: vec![], packed: false });
         self.block(block, false)?;
         if self.current.is_some() {
             let args = self.args(&exit.locals);
@@ -804,8 +807,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
                 value.filter(|_| frame.exit.value)
             }
             None if frame.exit.value && !frame.state.is_empty() => {
-                self.require_iteration(frame.state[0])?;
-                Some(frame.state[1])
+                self.iteration_result(&frame.state, frame.packed)?
             }
             None => None,
         };
@@ -828,146 +830,5 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             code: ir::TrapCode::Empty, message: "A void result cannot be used as a value".into(),
         })?;
         self.switch(yes)
-    }
-
-    fn for_expr(
-        &mut self,
-        source: &thir::Source,
-        binding: thir::LocalId,
-        block: &thir::Block,
-        ty: Option<&Ty>,
-    ) -> Result<Option<ir::ValueId>> {
-        let mut array = None;
-        let (start, end, inclusive) = match source {
-            thir::Source::Range { start, end, inclusive } => {
-                let Some(start) = self.value(start)? else {
-                    return Ok(None);
-                };
-                let Some(end) = self.value(end)? else {
-                    return Ok(None);
-                };
-                (start, end, *inclusive)
-            }
-            thir::Source::Array(expr) if expr.ty == Some(Ty::Range) => {
-                let Some(range) = self.value(expr)? else {
-                    return Ok(None);
-                };
-                let start = self.core(ir::CoreOp::RangeStart { value: range })?;
-                let len = self.core(ir::CoreOp::RangeLen { value: range })?;
-                let end = self.core(ir::CoreOp::IntAdd { left: start, right: len })?;
-                (start, end, false)
-            }
-            thir::Source::Array(expr) if matches!(expr.ty, Some(Ty::Array(_))) => {
-                if !self.context.std_array_for {
-                    return Err(LowerError::unsupported(block.span, "array for traversal (C6)"));
-                }
-                let Some(value) = self.value(expr)? else {
-                    return Ok(None);
-                };
-                array = Some(value);
-                let start = self.constant(ir::Literal::Int("0".into()))?;
-                let end = self.collection(ir::CollectionOp::ArrayLen { array: value })?;
-                (start, end, false)
-            }
-            _ => return Err(LowerError::unsupported(block.span, "for source other than integer range or std array")),
-        };
-        // Keep range validation even when traversal needs only integer endpoints.
-        self.core(ir::CoreOp::RangeNew { start, end, inclusive })?;
-        let parent = self.scope();
-        let value_ty = ty.map(|ty| self.ty(ty, block.span)).transpose()?;
-        let exit = self.join(parent, value_ty)?;
-        let mut state = vec![];
-        if let Some(ty) = ty {
-            state.push(self.constant(ir::Literal::Bool(false))?);
-            // Plain placeholders are never observed before `ran` is true.
-            // This avoids undef, which S1 reserves for S2 construction layouts.
-            let initial = match ty {
-                Ty::Int => self.constant(ir::Literal::Int("0".into()))?,
-                Ty::Bool => self.constant(ir::Literal::Bool(false))?,
-                Ty::Str => self.constant(ir::Literal::Str(String::new()))?,
-                Ty::Range => {
-                    let zero = self.constant(ir::Literal::Int("0".into()))?;
-                    self.core(ir::CoreOp::RangeNew { start: zero, end: zero, inclusive: false })?
-                }
-                _ => return Err(LowerError::unsupported(block.span, "non-scalar valued for")),
-            };
-            state.push(initial);
-        }
-        let state_types: Vec<_> = state.iter().map(|v| self.b.body().values.get(*v).expect("state value").ty).collect();
-        let int_ty = self.ty(&Ty::Int, block.span)?;
-        let mut head_types = vec![int_ty];
-        head_types.extend(&state_types);
-        head_types.extend(self.local_types(&exit.locals));
-        let head = self.new_block(parent, &head_types)?;
-        let mut initial = vec![start];
-        initial.extend(&state);
-        initial.extend(self.args(&exit.locals));
-        self.terminate(ir::TermKind::Br(ir::Target { block: head, args: initial }))?;
-        self.enter(head, &exit.locals, 1 + state.len())?;
-        let head_params = self.b.block_params(head)?.to_vec();
-        let index = head_params[0];
-        let state = head_params[1..1 + state.len()].to_vec();
-        let more = if inclusive {
-            self.core(ir::CoreOp::IntLe { left: index, right: end })?
-        } else {
-            self.core(ir::CoreOp::IntLt { left: index, right: end })?
-        };
-        let scope = self.b.declare_scope(parent, ir::ScopeKind::Iteration)?;
-        let iteration = self.new_block(scope, &[])?;
-        let exhausted = self.new_block(parent, &[])?;
-        self.terminate(ir::TermKind::Cond {
-            condition: more, yes: ir::Target { block: iteration, args: vec![] },
-            no: ir::Target { block: exhausted, args: vec![] },
-        })?;
-        let head_env = self.env.clone();
-        self.switch(exhausted)?;
-        let result = if exit.value {
-            self.require_iteration(state[0])?;
-            Some(state[1])
-        } else {
-            None
-        };
-        self.branch_join(&exit, result, ir::ExitKind::Fallthrough)?;
-        let mut step_types = state_types;
-        step_types.extend(self.local_types(&exit.locals));
-        let step = self.new_block(parent, &step_types)?;
-        self.env = head_env;
-        self.switch(iteration)?;
-        let element = if let Some(array) = array {
-            self.collection(ir::CollectionOp::ArrayGet { array, index })?
-        } else {
-            index
-        };
-        self.bind(binding, element)?;
-        let boundary = self.boundary(scope, ir::BoundaryKind::Loop)?;
-        self.loops.push(LoopFrame { next: step, exit: exit.clone(), boundary, state: state.clone() });
-        let out = self.block(block, exit.value)?;
-        if self.current.is_some() {
-            let mut args = vec![];
-            if exit.value {
-                args.push(self.constant(ir::Literal::Bool(true))?);
-                args.push(out.ok_or_else(|| LowerError::invalid(block.span, "valued for body is void"))?);
-            }
-            args.extend(self.args(&exit.locals));
-            self.edge(step, args, ir::ExitKind::Fallthrough, Some(boundary))?;
-        }
-        self.loops.pop();
-        let has_step = self.b.body().blocks.iter().any(|(_, block)| {
-            matches!(&block.term.kind, ir::TermKind::Br(target) if target.block == step)
-        });
-        if has_step {
-            self.enter(step, &exit.locals, state.len())?;
-            let step_state = self.b.block_params(step)?[..state.len()].to_vec();
-            let one = self.constant(ir::Literal::Int("1".into()))?;
-            let advanced = self.core(ir::CoreOp::IntAdd { left: index, right: one })?;
-            let mut args = vec![advanced];
-            args.extend(step_state);
-            args.extend(self.args(&exit.locals));
-            self.edge(head, args, ir::ExitKind::Next, None)?;
-        } else {
-            // No body continuation: an unreachable step has no header value.
-            self.dead_block(step)?;
-        }
-        self.finish_join(&exit)
     }
 }

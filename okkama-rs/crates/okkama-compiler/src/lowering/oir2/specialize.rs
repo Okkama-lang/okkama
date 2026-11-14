@@ -621,8 +621,9 @@ impl Specializer<'_, '_> {
                         self.expr(start, env)?;
                         self.expr(end, env)?;
                     }
-                    thir::Source::Array(value) => self.expr(value, env)?,
-                    _ => {}
+                    thir::Source::Array(value) | thir::Source::Map(value)
+                    | thir::Source::Iterating(value) | thir::Source::Batching(value) => self.expr(value, env)?,
+                    thir::Source::Varargs(_) => {}
                 }
                 self.block(body, env)?;
             }

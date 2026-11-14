@@ -1,0 +1,46 @@
+oir 2 high
+module app
+requires core
+entry @main
+scope S0 action in @main
+scope S1 iteration in @main parent S0
+
+func @main() -> int [entry] {
+    binding b0 "m": map<str, int> in S0
+    binding b1 "x": int in S1
+    boundary B0 lexical in S0
+    boundary B1 loop in S1
+    ^b0 in S0 unwind ^b1:
+    %0: str = const "z"
+    %1: int = const 1
+    %2: str = const "a"
+    %3: int = const 2
+    %4: map<str, int> = map.new entries [(%0, %1), (%2, %3)], ty map<str, int>
+    bind %4, binding b0
+    %5: int = const 0
+    %6: int = map.len %4
+    %7: range = range.new %5, %6
+    br ^b3(%5, %4)
+    ^b1(%8: failure) in S0:
+    raise %8
+    ^b2(%9: map<str, int>) in S0 unwind ^b1:
+    %10: int = const 0
+    want %10
+    [i11] exit.prepare return %10 at B0
+    result.exit edge normal(0), value %10, demand want, prepare #11
+    ret %10
+    ^b3(%11: int, %12: map<str, int>) in S0 unwind ^b1:
+    %13: bool = int.lt %11, %6
+    cond %13, ^b4, ^b5
+    ^b4 in S1 unwind ^b1:
+    %14: int = map.value_at %4, %11
+    bind %14, binding b1
+    want %14
+    [i16] exit.prepare return %14 at B0
+    result.exit edge normal(0), value %14, demand want, prepare #16
+    ret %14
+    ^b5 in S0 unwind ^b1:
+    br ^b2(%12)
+    ^b6 in S0:
+    unreachable
+}

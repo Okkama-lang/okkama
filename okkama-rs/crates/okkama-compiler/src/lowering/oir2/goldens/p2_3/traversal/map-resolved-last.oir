@@ -1,0 +1,70 @@
+oir 2 high
+module app
+requires core
+entry @main
+scope S0 action in @main
+scope S1 iteration in @main parent S0
+scope S2 branch in @main parent S1
+scope S3 branch in @main parent S1
+
+func @main() -> int [entry] {
+    binding b0 "m": map<str, int> in S0
+    binding b1 "x": int in S1
+    boundary B0 lexical in S0
+    boundary B1 loop in S1
+    boundary B2 lexical in S3
+    ^b0 in S0 unwind ^b1:
+    %0: str = const "z"
+    %1: int = const 1
+    %2: str = const "a"
+    %3: int = const 2
+    %4: map<str, int> = map.new entries [(%0, %1), (%2, %3)], ty map<str, int>
+    bind %4, binding b0
+    %5: int = const 0
+    %6: int = map.len %4
+    %7: range = range.new %5, %6
+    br ^b3(%5, %4)
+    ^b1(%8: failure) in S0:
+    raise %8
+    ^b2(%9: map<str, int>) in S0 unwind ^b1:
+    %10: int = const 0
+    want %10
+    [i11] exit.prepare return %10 at B0
+    result.exit edge normal(0), value %10, demand want, prepare #11
+    ret %10
+    ^b3(%11: int, %12: map<str, int>) in S0 unwind ^b1:
+    %13: bool = int.lt %11, %6
+    cond %13, ^b4, ^b5
+    ^b4 in S1 unwind ^b1:
+    %14: int = map.value_at %4, %11
+    bind %14, binding b1
+    %15: int = const 1
+    %16: bool = int.eq %14, %15
+    cond %16, ^b8(%12, %14), ^b9(%12, %14)
+    ^b5 in S0 unwind ^b1:
+    br ^b2(%12)
+    ^b6(%17: map<str, int>) in S0 unwind ^b1:
+    %18: int = const 1
+    %19: int = int.add %11, %18
+    br ^b3(%19, %17)
+    ^b7(%20: map<str, int>, %21: int) in S1 unwind ^b1:
+    discard %21
+    want %20
+    [i21] exit.prepare fallthrough %20 at B1
+    result.exit edge normal(0), value %21, demand discard, prepare none
+    result.exit edge normal(0), value %20, demand want, prepare #21
+    br ^b6(%20)
+    ^b8(%22: map<str, int>, %23: int) in S2 unwind ^b1:
+    want %22
+    [i23] exit.prepare last %22 at B1
+    result.exit edge normal(0), value %22, demand want, prepare #23
+    br ^b2(%22)
+    ^b9(%24: map<str, int>, %25: int) in S3 unwind ^b1:
+    want %24
+    [i25] exit.prepare fallthrough %24 at B2
+    want %25
+    [i27] exit.prepare fallthrough %25 at B2
+    result.exit edge normal(0), value %24, demand want, prepare #25
+    result.exit edge normal(0), value %25, demand want, prepare #27
+    br ^b7(%24, %25)
+}

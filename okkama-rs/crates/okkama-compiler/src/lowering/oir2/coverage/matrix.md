@@ -19,7 +19,7 @@ no extracted fixture or acceptance of the whole source file is implied.
 | `Successor(Object/Role)`, role result adapter | `role.wrap ^Object → ^Role`, `succ.take ^Role → Role`; one must-use obligation | C3: `role-successor`; canonical verifier B8 successor-role ± fixtures |
 | `Array/Map/Range`, literals, collection builtins | `array.*`, `map.*`, `range.*`, lazy lookup CFG | C4: array/map/literal/typed-identity rows |
 | Range-expanded / large literal | Linear `builder.push/append/append.range`, `finish`, failure `abandon` | C5: `builders/`; migrated C4 `range-expansion`, `large-literal` |
-| `For`, array/range/map/Iterating/Batching sources | Loop CFG, iteration/cursor/batch scopes and result exits | C6: iterable/batching, ownership loops subcases |
+| `For`, array/range/map/varargs/Iterating/Batching | Parent headers, scoped iterations, D11 state and exits | C6: `traversal/`; [scope and fixture evidence](c6.md) |
 | `Functional(map/filter/reduce/any/all/find)` | Enclosing action CFG, builders, short circuit | C7: early-exit, accumulator, reduce-builder |
 | Imported source calls, plain `once let` | Reachable concrete source bodies, checked cache plumbing | C8: all four L09 collections; once negatives |
 | Closures / bound actions / any / caps | Explicit source-span Unsupported until #569/#565-c4 | C9 integration: any rows, ordered-sets |
@@ -34,6 +34,7 @@ fixtures and C7 accumulator cases. General `any` is C9 integration owned by #569
 C5 implementation and §4.2 evidence are tracked in [c5.md](c5.md). The former
 precommit blocker is a positive regression and canonical High fixture. Structural
 producer coverage does not change any conformance row from `planned`.
+C6 traversal evidence and its remaining integration gates are tracked in [c6.md](c6.md).
 
 C1 files: this table, `p2_3.tsv`, `tests.rs`, and the two-line module registration
 at the end of the existing producer `tests.rs`. C2 tests use a separate module.
@@ -246,10 +247,10 @@ names are `wrong-key`, `wrong-element`, `byte-key`, `resource-key`.
 
 ### Remaining boundaries
 
-Streaming builders are implemented in C5; ordinary application array traversal
-is explicitly Unsupported (C6); functional blocks remain Unsupported (C7). Existing P1 integer
-range traversal and imported std support-array loops are preserved. Cursor,
-ordering and general iterable support are not added here. Any/closures/capability
+Streaming builders are implemented in C5. C6 now implements application array,
+range, resolved map, variadic, cursor and synchronous batch traversal; see [c6.md](c6.md).
+The original P1 range golden text is preserved. Functional blocks remain
+Unsupported (C7); ordering and general builtin iterable adapters remain outside C6. Any/closures/capability
 and async dependencies remain #569/#570. General scalar conversions from string
 and int-to-char are outside this slice and produce explicit Unsupported; typed
 identity and numeric conversions supported by existing contracts are retained.

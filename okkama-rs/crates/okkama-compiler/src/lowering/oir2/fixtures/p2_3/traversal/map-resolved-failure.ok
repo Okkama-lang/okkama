@@ -1,0 +1,8 @@
+module app;
+main() is int {
+    let m = ["z": 1, "a": 2];
+    for m.values() -> x {
+        panic "body";
+    }
+    0;
+}

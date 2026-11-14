@@ -1,0 +1,28 @@
+module app;
+import "collections/iteration" take Cursor, Iterating, Batching;
+object Step does Cursor<int> {
+    Step();
+    available() is bool {
+        false;
+    }
+    item() is int {
+        0;
+    }
+    successor() is Cursor<int> {
+        self;
+    }
+}
+object Both does Batching<int>, Iterating<int> {
+    Both();
+    batch() is @int {
+        [7, 8];
+    }
+    cursor() is Cursor<int> {
+        Step();
+    }
+}
+main() is int {
+    for Both() -> x {
+        last x;
+    }
+}

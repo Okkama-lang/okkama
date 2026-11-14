@@ -1,0 +1,53 @@
+oir 2 high
+module app
+requires core
+entry @main
+scope S0 action in @main
+scope S1 iteration in @main parent S0
+
+func @main() -> int [entry] {
+    binding b0 "xs": array<int> in S0
+    binding b1 "x": int in S1
+    boundary B0 lexical in S0
+    boundary B1 loop in S1
+    ^b0 in S0 unwind ^b1:
+    %0: int = const 1
+    %1: int = const 2
+    %2: array<int> = array.new [%0, %1], ty array<int>
+    bind %2, binding b0
+    %3: int = const 0
+    %4: int = array.len %2
+    %5: range = range.new %3, %4
+    %6: bool = const false
+    %7: int = const 0
+    br ^b3(%3, %6, %7, %2)
+    ^b1(%8: failure) in S0:
+    raise %8
+    ^b2(%9: int, %10: array<int>) in S0 unwind ^b1:
+    want %9
+    [i10] exit.prepare return %9 at B0
+    result.exit edge normal(0), value %9, demand want, prepare #10
+    ret %9
+    ^b3(%11: int, %12: bool, %13: int, %14: array<int>) in S0 unwind ^b1:
+    %15: bool = int.lt %11, %4
+    cond %15, ^b4, ^b5
+    ^b4 in S1 unwind ^b1:
+    %16: int = array.get %2, %11
+    bind %16, binding b1
+    %17: int = const 9
+    want %17
+    [i16] exit.prepare last %17 at B1
+    want %14
+    [i18] exit.prepare last %14 at B1
+    result.exit edge normal(0), value %17, demand want, prepare #16
+    result.exit edge normal(0), value %14, demand want, prepare #18
+    br ^b2(%17, %14)
+    ^b5 in S0 unwind ^b1:
+    cond %12, ^b6, ^b7
+    ^b6 in S0 unwind ^b1:
+    br ^b2(%13, %14)
+    ^b7 in S0 unwind ^b1:
+    trap empty "A void result cannot be used as a value"
+    ^b8 in S0:
+    unreachable
+}

@@ -1,0 +1,56 @@
+oir 2 high
+module app
+requires core
+entry @main
+scope S0 action in @main
+scope S1 iteration in @main parent S0
+
+func @main() -> int [entry] {
+    binding b0 "m": map<str, int> in S0
+    binding b1 "x": int in S1
+    boundary B0 lexical in S0
+    boundary B1 loop in S1
+    ^b0 in S0 unwind ^b1:
+    %0: map<str, int> = map.new ty map<str, int>
+    bind %0, binding b0
+    %1: int = const 0
+    %2: int = map.len %0
+    %3: range = range.new %1, %2
+    %4: bool = const false
+    %5: int = const 0
+    br ^b3(%1, %4, %5, %0)
+    ^b1(%6: failure) in S0:
+    raise %6
+    ^b2(%7: int, %8: map<str, int>) in S0 unwind ^b1:
+    want %7
+    [i8] exit.prepare return %7 at B0
+    result.exit edge normal(0), value %7, demand want, prepare #8
+    ret %7
+    ^b3(%9: int, %10: bool, %11: int, %12: map<str, int>) in S0 unwind ^b1:
+    %13: bool = int.lt %9, %2
+    cond %13, ^b4, ^b5
+    ^b4 in S1 unwind ^b1:
+    %14: int = map.value_at %0, %9
+    bind %14, binding b1
+    %15: bool = const true
+    want %15
+    [i14] exit.prepare fallthrough %15 at B1
+    want %14
+    [i16] exit.prepare fallthrough %14 at B1
+    want %12
+    [i18] exit.prepare fallthrough %12 at B1
+    result.exit edge normal(0), value %15, demand want, prepare #14
+    result.exit edge normal(0), value %14, demand want, prepare #16
+    result.exit edge normal(0), value %12, demand want, prepare #18
+    br ^b8(%15, %14, %12)
+    ^b5 in S0 unwind ^b1:
+    cond %10, ^b6, ^b7
+    ^b6 in S0 unwind ^b1:
+    br ^b2(%11, %12)
+    ^b7 in S0 unwind ^b1:
+    trap empty "A void result cannot be used as a value"
+    ^b8(%16: bool, %17: int, %18: map<str, int>) in S0 unwind ^b1:
+    %19: int = const 1
+    %20: int = int.add %9, %19
+    br ^b3(%20, %16, %17, %18)
+}

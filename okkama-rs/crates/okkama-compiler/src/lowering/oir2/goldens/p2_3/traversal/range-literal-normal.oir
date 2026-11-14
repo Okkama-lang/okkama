@@ -1,0 +1,49 @@
+oir 2 high
+module app
+requires core
+entry @main
+scope S0 action in @main
+scope S1 iteration in @main parent S0
+
+func @main() -> int [entry] {
+    binding b0 "x": int in S1
+    boundary B0 lexical in S0
+    boundary B1 loop in S1
+    ^b0 in S0 unwind ^b1:
+    %0: int = const 1
+    %1: int = const 2
+    %2: range = range.new %0, %1, inclusive true
+    %3: bool = const false
+    %4: int = const 0
+    br ^b3(%0, %3, %4)
+    ^b1(%5: failure) in S0:
+    raise %5
+    ^b2(%6: int) in S0 unwind ^b1:
+    want %6
+    [i6] exit.prepare return %6 at B0
+    result.exit edge normal(0), value %6, demand want, prepare #6
+    ret %6
+    ^b3(%7: int, %8: bool, %9: int) in S0 unwind ^b1:
+    %10: bool = int.le %7, %1
+    cond %10, ^b4, ^b5
+    ^b4 in S1 unwind ^b1:
+    bind %7, binding b0
+    %11: bool = const true
+    want %11
+    [i11] exit.prepare fallthrough %11 at B1
+    want %7
+    [i13] exit.prepare fallthrough %7 at B1
+    result.exit edge normal(0), value %11, demand want, prepare #11
+    result.exit edge normal(0), value %7, demand want, prepare #13
+    br ^b8(%11, %7)
+    ^b5 in S0 unwind ^b1:
+    cond %8, ^b6, ^b7
+    ^b6 in S0 unwind ^b1:
+    br ^b2(%9)
+    ^b7 in S0 unwind ^b1:
+    trap empty "A void result cannot be used as a value"
+    ^b8(%12: bool, %13: int) in S0 unwind ^b1:
+    %14: int = const 1
+    %15: int = int.add %7, %14
+    br ^b3(%15, %12, %13)
+}

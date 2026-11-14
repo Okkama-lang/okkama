@@ -1,0 +1,29 @@
+module app;
+import "collections/iteration" take Cursor, Iterating, Batching;
+object Res {
+    has n is int;
+    Res(:n);
+    read() is int {
+        n;
+    }
+    destroy {
+        n;
+    }
+}
+object Walk does Batching<Res> {
+    Walk();
+    batch() is @Res {
+        [Res(n: 1), Res(n: 2)];
+    }
+}
+object Run {
+    Run();
+    run() is Res {
+        for Walk() -> x {
+            last x;
+        }
+    }
+}
+main() is int {
+    0;
+}

@@ -1,0 +1,7 @@
+module app;
+main() is int {
+    let end = 0;
+    for 0..end -> x {
+        x;
+    }
+}

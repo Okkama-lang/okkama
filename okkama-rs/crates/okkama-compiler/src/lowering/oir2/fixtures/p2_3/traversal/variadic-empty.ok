@@ -1,0 +1,12 @@
+module app;
+object Walk {
+    Walk();
+    run(xs is ...int) is int {
+        for xs... -> x {
+            x;
+        }
+    }
+}
+main() is int {
+    Walk().run();
+}

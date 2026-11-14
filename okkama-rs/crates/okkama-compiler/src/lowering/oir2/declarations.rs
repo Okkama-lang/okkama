@@ -297,9 +297,6 @@ impl Declarations {
                     let info = &reg.objects[object.0];
                     let decl = this.objects[&object];
                     let method_info = &info.methods[method];
-                    if method_info.variadic && info.module >= reg.root_start {
-                        return Err(LowerError::unsupported(body.span, "variadic action"));
-                    }
                     params.push(this.ty(&ty::Ty::object(object), body.span)?);
                     let attr = if method_info.successor {
                         ir::FunctionAttr::Successor(decl)
@@ -350,9 +347,6 @@ impl Declarations {
             };
             for param in &body.params {
                 let local = &body.locals[param.0];
-                if local.variadic && body.module >= reg.root_start {
-                    return Err(LowerError::unsupported(local.span, "variadic parameter"));
-                }
                 params.push(this.ty(&local.ty, local.span)?);
             }
             if let Some(given) = &primary_given

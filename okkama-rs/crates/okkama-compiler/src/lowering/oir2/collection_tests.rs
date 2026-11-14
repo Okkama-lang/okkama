@@ -84,8 +84,12 @@ fn oir2_c4_frontend_negatives() {
 #[test]
 fn oir2_c4_later_collection_features_remain_unsupported() {
     for (body, message) in [
-        ("for [1, 2] -> x { x; } 0;", "C6"),
         ("[1, 2].map() -> x { x; }; 0;", "C7"),
+        ("[1, 2].filter() -> x { x > 0; }; 0;", "C7"),
+        ("[1, 2].reduce(0) -> acc, x { acc + x; }; 0;", "C7"),
+        ("[1, 2].any() -> x { x > 0; }; 0;", "C7"),
+        ("[1, 2].all() -> x { x > 0; }; 0;", "C7"),
+        ("[1, 2].find() -> x { x > 0; }; 0;", "C7"),
     ] {
         let source = format!("module app; main() is int {{ {body} }}");
         with_analysis(&source, |analysis| {

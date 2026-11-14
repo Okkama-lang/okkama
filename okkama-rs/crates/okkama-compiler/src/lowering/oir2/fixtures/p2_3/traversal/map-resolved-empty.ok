@@ -1,0 +1,7 @@
+module app;
+main() is int {
+    let m is %string:int = [:];
+    for m.values() -> x {
+        x;
+    }
+}
