@@ -187,3 +187,9 @@ C8: audited S1 transport step до skip readiness; production/test pair, state d
 C9: полные inputs, inherited gates, census и #593/backend evidence. C1 не закрывает acceptance #569.
 Дополнительные corpus regressions §7.4 ещё предстоит создать: late arguments A d / d A; fresh/capture result;
 role-bound borrow/take; cap result-view; opaque borrow после inner close; expired storage; cleanup/skip/next case.
+
+## C2a discovery evidence (#640)
+
+See [c2a.md](c2a.md) for concrete action types, the lexical body worklist, snapshot layouts,
+test-mode preservation and the producer-only open-call inventory. The C2-owned manifest rows
+remain `planned`. No callable IR operations, summaries, descriptors or verifier rules are added.

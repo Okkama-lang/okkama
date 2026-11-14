@@ -251,7 +251,7 @@ close/text/bytes — exact typed registered test intrinsics; throws — frontend
 - [x] Дополнительный Atomic<bool> dependency #568 записан явно; статус planned сохранён.
 - [x] O1/D1/B1/N1/S1/F1 описаны как предложения с границами audit и concrete acceptance requirements.
 - [x] Проверки C1: workspace check, strict clippy, разрешённый compiler lib oir2 suite.
-- [ ] Claude reviewed C1 proposals — внешний review, не утверждается выполненным Codex.
+- [x] Claude accepted C1 decisions O1/D1/B1/N1/S1/F1, as recorded in the C2a task instructions.
 - [ ] O1/S1 audited implementation, source goldens и C2–C9 acceptance — будущая работа #569.
 
 Проверки выполнены из `okkama-rs/`, offline, с четырьмя build jobs:

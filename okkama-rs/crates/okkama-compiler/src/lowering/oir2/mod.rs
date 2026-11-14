@@ -18,6 +18,9 @@ mod iteration_tests;
 #[cfg(test)]
 mod functional_tests;
 mod specialize;
+mod callables;
+#[cfg(test)]
+mod callable_tests;
 mod native_summaries;
 mod construction;
 mod declarations;
@@ -105,7 +108,23 @@ type Result<T> = std::result::Result<T, LowerError>;
 /// No CLI routing, ownership elaboration or semantic verifier is invoked here.
 pub(crate) fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
     let prepared = specialize::prepare(analysis)?;
-    let analysis = &prepared;
+    // C2a discovers callable bodies/types but cannot publish callable IR yet.
+    for entry in &prepared.callables.bodies {
+        if matches!(entry.body.owner, thir::BodyOwner::Test(_) | thir::BodyOwner::CapField { .. }) {
+            return Err(LowerError::unsupported(entry.body.span, "test or capability body (#569 C5/C8)"));
+        }
+        let pending = thir::first_expr(&entry.body.block, &|expr| matches!(expr.kind,
+            thir::ExprKind::Closure { .. } | thir::ExprKind::BoundAction { .. }
+            | thir::ExprKind::BoundRoleAction { .. } | thir::ExprKind::CallValue { .. }
+            | thir::ExprKind::CapSelect { .. } | thir::ExprKind::CapRead { .. }
+            | thir::ExprKind::TestCapability
+            | thir::ExprKind::Call { callee: thir::Callee::Test(_), .. }
+        ));
+        if let Some(span) = pending {
+            return Err(LowerError::unsupported(span, "closure or capability (#569)"));
+        }
+    }
+    let analysis = &prepared.analysis;
     let mut declarations = declarations::Declarations::new(analysis)?;
     // Check ordinary/default/cleanup bodies before constructor specializations.
     let mut bodies: Vec<_> = analysis.bodies.iter().collect();

@@ -1,0 +1,28 @@
+test-mode false
+body Entry/[]
+  local a: action<sync;()->int>
+  local b: action<sync;()->int>
+body Ctor { object: ObjectId(3), ctor: 0 }/[]
+  receiver object(app::Box<int>)
+  local value: int
+body Method { object: ObjectId(3), method: 0 }/[]
+  receiver object(app::Box<int>)
+body Ctor { object: ObjectId(4), ctor: 0 }/[]
+  receiver object(app::Box<string>)
+  local value: string
+body Method { object: ObjectId(4), method: 0 }/[]
+  receiver object(app::Box<string>)
+body Entry/[0]
+body Entry/[1]
+body Method { object: ObjectId(3), method: 0 }/[0]
+  receiver object(app::Box<int>)
+  snapshot Receiver -> None: object(app::Box<int>)
+body Method { object: ObjectId(4), method: 0 }/[0]
+  receiver object(app::Box<string>)
+  snapshot Receiver -> None: object(app::Box<string>)
+body Method { object: ObjectId(3), method: 0 }/[0, 0]
+  receiver object(app::Box<int>)
+  snapshot Receiver -> None: object(app::Box<int>)
+body Method { object: ObjectId(4), method: 0 }/[0, 0]
+  receiver object(app::Box<string>)
+  snapshot Receiver -> None: object(app::Box<string>)

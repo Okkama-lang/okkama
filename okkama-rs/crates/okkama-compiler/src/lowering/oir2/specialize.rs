@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use crate::analysis::{Analysis, Registry, SourceModule, registry, thir, ty};
 use crate::source::Span;
 use super::{LowerError, Result};
+use super::callables::{self, BodyKey, Capture, Snapshot};
 
 #[derive(Clone, Copy)]
 pub(super) struct Limits {
@@ -18,17 +19,19 @@ impl Default for Limits {
     }
 }
 
-pub(super) fn prepare<'a>(input: &Analysis<'a>) -> Result<Analysis<'a>> {
+pub(super) fn prepare<'a>(input: &Analysis<'a>) -> Result<callables::Prepared<'a>> {
     prepare_with_limits(input, Limits::default())
 }
 
-pub(super) fn prepare_with_limits<'a>(input: &Analysis<'a>, limits: Limits) -> Result<Analysis<'a>> {
+pub(super) fn prepare_with_limits<'a>(input: &Analysis<'a>, limits: Limits) -> Result<callables::Prepared<'a>> {
     let sources = input.registry.modules.iter().map(|module| SourceModule {
         path: module.path.clone(),
         program: module.program,
         imports: module.imports.clone(),
     }).collect();
-    let mut registry = Registry::build_files(sources, input.registry.modules.len() - input.registry.root_start);
+    let mut registry = Registry::build_mode(
+        sources, input.registry.modules.len() - input.registry.root_start, input.registry.test_mode,
+    );
     for object in &mut registry.objects {
         if object.module < registry.root_start || !object.params.is_empty() {
             object.decl = None;
@@ -57,6 +60,9 @@ pub(super) fn prepare_with_limits<'a>(input: &Analysis<'a>, limits: Limits) -> R
         queued: HashSet::new(),
         pending: VecDeque::new(),
         bodies: vec![],
+        inventory: callables::Inventory { test_mode: input.registry.test_mode, ..Default::default() },
+        lexical: None,
+        nested: HashSet::new(),
     };
     for body in &input.bodies {
         let generic = owner_object(&body.owner).is_some_and(|object| {
@@ -72,6 +78,11 @@ pub(super) fn prepare_with_limits<'a>(input: &Analysis<'a>, limits: Limits) -> R
         }
         for (field, info) in source.fields.iter().enumerate() {
             slice.registry.objects[index].fields[field].ty = slice.ty(&info.ty, info.span)?;
+        }
+        for (cap, info) in source.caps.iter().enumerate() {
+            for (field, (_, ty, _)) in info.fields.iter().enumerate() {
+                slice.registry.objects[index].caps[cap].fields[field].1 = slice.ty(ty, info.span)?;
+            }
         }
         for (method, info) in source.methods.iter().enumerate() {
             for (param, (_, ty)) in info.params.iter().enumerate() {
@@ -99,12 +110,21 @@ pub(super) fn prepare_with_limits<'a>(input: &Analysis<'a>, limits: Limits) -> R
             slice.enumeration(ty::EnumId(index), &[], info.span)?;
         }
     }
-    while let Some(BodyInstance { source: owner, target, substitution: env, chain, span }) = slice.pending.pop_front() {
+    while let Some(job) = slice.pending.pop_front() {
+        let BodyInstance { source: owner, target, substitution: env, chain, span, nested } = job;
         slice.chain = chain;
-        let mut body = input.bodies.iter().find(|body| body.owner == owner).cloned().ok_or_else(|| {
-            LowerError::unsupported(span, format!("missing source body for {}",
-                slice.chain.last().expect("request chain")))
-        })?;
+        let (nested_body, key, receiver, captures) = match nested {
+            Some(context) => (Some(context.body), context.key, context.receiver, context.captures),
+            None => {
+                let receiver = owner_object(&target).map(ty::Ty::object);
+                (None, BodyKey { root: target.clone(), path: vec![] }, receiver, vec![])
+            }
+        };
+        let mut body = nested_body.or_else(|| input.bodies.iter().find(|body| body.owner == owner).cloned())
+            .ok_or_else(|| {
+                LowerError::unsupported(span, format!("missing source body for {}",
+                    slice.chain.last().expect("request chain")))
+            })?;
         if let thir::BodyOwner::Method { object, method } = target {
             let original = owner_object(&owner).expect("method owner");
             let source = &input.registry.objects[original.0].methods[method];
@@ -134,11 +154,20 @@ pub(super) fn prepare_with_limits<'a>(input: &Analysis<'a>, limits: Limits) -> R
         for local in &mut body.locals {
             local.ty = slice.ty(&local.ty.subst(&env), local.span)?;
         }
+        slice.lexical = Some(Lexical {
+            key: key.clone(), receiver: receiver.clone(), locals: body.locals.clone(), params: body.params.clone(),
+            module: body.module, next_closure: 0, next_open_call: 0,
+        });
         slice.block(&mut body.block, &env)
             .map_err(|error| error.in_function(&slice.body_name(&body.owner)))?;
-        slice.bodies.push(body);
+        slice.inventory.bodies.push(callables::DiscoveredBody { key, receiver, captures, body: body.clone() });
+        if body.owner != thir::BodyOwner::Closure {
+            slice.bodies.push(body);
+        }
     }
-    Ok(Analysis { registry: slice.registry, bodies: slice.bodies, warnings: input.warnings.clone() })
+    slice.inventory.attach(&mut slice.bodies);
+    let analysis = Analysis { registry: slice.registry, bodies: slice.bodies, warnings: input.warnings.clone() };
+    Ok(callables::Prepared { analysis, callables: slice.inventory })
 }
 
 struct Specializer<'a, 'b> {
@@ -154,6 +183,26 @@ struct Specializer<'a, 'b> {
     queued: HashSet<thir::BodyOwner>,
     pending: VecDeque<BodyInstance>,
     bodies: Vec<thir::Body>,
+    inventory: callables::Inventory,
+    lexical: Option<Lexical>,
+    nested: HashSet<BodyKey>,
+}
+
+struct Lexical {
+    key: BodyKey,
+    receiver: Option<ty::Ty>,
+    locals: Vec<thir::Local>,
+    params: Vec<thir::LocalId>,
+    module: usize,
+    next_closure: usize,
+    next_open_call: usize,
+}
+
+struct NestedBody {
+    key: BodyKey,
+    body: thir::Body,
+    receiver: Option<ty::Ty>,
+    captures: Vec<Capture>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -169,12 +218,14 @@ struct BodyInstance {
     substitution: Vec<(ty::ParamId, ty::Ty)>,
     chain: Vec<String>,
     span: Span,
+    nested: Option<NestedBody>,
 }
 
 pub(super) fn owner_object(owner: &thir::BodyOwner) -> Option<ty::ObjectId> {
     match owner {
         thir::BodyOwner::Method { object, .. } | thir::BodyOwner::Ctor { object, .. }
-        | thir::BodyOwner::Default { object, .. } | thir::BodyOwner::Destroy { object } => Some(*object),
+        | thir::BodyOwner::Default { object, .. } | thir::BodyOwner::Destroy { object }
+        | thir::BodyOwner::CapField { object, .. } => Some(*object),
         _ => None,
     }
 }
@@ -211,13 +262,18 @@ impl Specializer<'_, '_> {
         }
         let mut chain = self.chain.clone();
         chain.push(name);
-        self.pending.push_back(BodyInstance { source: owner, target, substitution: env, chain, span });
+        self.pending.push_back(BodyInstance { source: owner, target, substitution: env, chain, span, nested: None });
         Ok(())
     }
 
     fn body_name(&self, owner: &thir::BodyOwner) -> String {
         let Some(object) = owner_object(owner) else {
-            return "main".into();
+            return match owner {
+                thir::BodyOwner::Entry => "main".into(),
+                thir::BodyOwner::Test(index) => format!("test.{}", self.registry.tests[*index].name),
+                thir::BodyOwner::Closure => "closure".into(),
+                _ => unreachable!("nominal body"),
+            };
         };
         let info = &self.registry.objects[object.0];
         let member = match owner {
@@ -225,6 +281,9 @@ impl Specializer<'_, '_> {
             thir::BodyOwner::Ctor { .. } => "new".into(),
             thir::BodyOwner::Default { field, .. } => format!("default.{}", info.fields[*field].name),
             thir::BodyOwner::Destroy { .. } => "destroy".into(),
+            thir::BodyOwner::CapField { cap, field, .. } => {
+                format!("cap.{}.{}", info.caps[*cap].name, info.caps[*cap].fields[*field].0)
+            }
             _ => unreachable!(),
         };
         format!("{}::{}.{member}", self.registry.modules[info.module].name, info.name)
@@ -270,9 +329,6 @@ impl Specializer<'_, '_> {
         if source.module >= self.registry.root_start && source.params.is_empty() {
             return Ok(object);
         }
-        if !source.caps.is_empty() {
-            return Err(LowerError::unsupported(span, "capability specialization (#569)"));
-        }
         let module = self.input.registry.modules[source.module].name.as_str();
         let generic = matches!((module, source.name.as_str()), ("async/atomic", "Atomic") | ("cell", "Cell"));
         let ordinary = matches!((module, source.name.as_str()),
@@ -314,7 +370,7 @@ impl Specializer<'_, '_> {
             // existing direct-call ABI; their unused std witnesses are not requested.
             does: if imported && (generic || ordinary) { vec![] } else { source.does.clone() },
             destroy: source.destroy,
-            caps: vec![],
+            caps: source.caps.clone(),
             decl: source.decl,
         };
         if specialized {
@@ -328,9 +384,20 @@ impl Specializer<'_, '_> {
         for field in &mut info.fields {
             field.ty = self.ty(&field.ty.subst(&env), field.span)?;
         }
+        for cap in &mut info.caps {
+            for (_, ty, _) in &mut cap.fields {
+                *ty = self.ty(&ty.subst(&env), cap.span)?;
+            }
+        }
         // Method signatures are substituted when their body is requested. This
         // avoids discovering an infinite family through an unused method result.
         self.registry.objects[instance.0] = info;
+        for (cap, info) in source.caps.iter().enumerate() {
+            for field in 0..info.fields.len() {
+                self.queue(thir::BodyOwner::CapField { object, cap, field },
+                    thir::BodyOwner::CapField { object: instance, cap, field }, env.clone(), None, info.span)?;
+            }
+        }
         if !self.registry.objects[instance.0].does.is_empty() {
             self.witnesses(object, instance, &env, span)?;
         }
@@ -458,6 +525,12 @@ impl Specializer<'_, '_> {
         Ok(match value {
             T::Object(object, args) => T::object(self.instance(*object, args, span)?),
             T::Role(role, args) => T::role(self.role(*role, args, span)?),
+            T::Cap(object, args, cap) => T::Cap(self.instance(*object, args, span)?, vec![], *cap),
+            T::Action(action) => T::Action(Box::new(ty::ActionTy {
+                is_async: action.is_async,
+                params: action.params.iter().map(|ty| self.ty(ty, span)).collect::<Result<_>>()?,
+                result: action.result.as_ref().map(|ty| self.ty(ty, span)).transpose()?,
+            })),
             T::Array(inner) => T::array(self.ty(inner, span)?),
             T::Map(key, value) => {
                 let untyped_empty = **key == T::Never && **value == T::Never;
@@ -474,6 +547,50 @@ impl Specializer<'_, '_> {
                 "reachable generic is not closed after substitution")),
             _ => value.clone(),
         })
+    }
+
+    fn bound(&mut self, receiver: &thir::Expr, target: callables::BoundTarget, span: Span) -> Result<()> {
+        let receiver = receiver.ty.clone().ok_or_else(|| LowerError::invalid(span, "untyped bound receiver"))?;
+        self.inventory.bound.push(callables::BoundAction {
+            body: self.lexical.as_ref().expect("lexical body").key.clone(), span, receiver, target,
+        });
+        Ok(())
+    }
+
+    fn closure(&mut self, body: &thir::Body, captures: &[(thir::LocalId, thir::LocalId)],
+        env: &[(ty::ParamId, ty::Ty)], span: Span) -> Result<()> {
+        let lexical = self.lexical.as_mut().expect("lexical body");
+        let mut key = lexical.key.clone();
+        key.path.push(lexical.next_closure);
+        lexical.next_closure += 1;
+        if !self.nested.insert(key.clone()) {
+            return Ok(());
+        }
+        let receiver = lexical.receiver.clone();
+        let mut layout = vec![];
+        if thir::uses_receiver(body) {
+            let ty = receiver.clone().ok_or_else(|| LowerError::invalid(span, "closure lacks lexical receiver"))?;
+            layout.push(Capture { source: Snapshot::Receiver, target: None, ty });
+        }
+        for (outer, inner) in captures {
+            let source = if lexical.params.contains(outer) {
+                Snapshot::Parameter(*outer)
+            } else {
+                Snapshot::Local(*outer)
+            };
+            let ty = lexical.locals[outer.0].ty.clone();
+            layout.push(Capture { source, target: Some(*inner), ty });
+        }
+        let name = format!("{}::closure{:?}", self.body_name(&key.root), key.path);
+        self.request(name.clone(), span)?;
+        let mut chain = self.chain.clone();
+        chain.push(name);
+        let nested = NestedBody { key, body: body.clone(), receiver, captures: layout };
+        self.pending.push_back(BodyInstance {
+            source: thir::BodyOwner::Closure, target: thir::BodyOwner::Closure,
+            substitution: env.to_vec(), chain, span, nested: Some(nested),
+        });
+        Ok(())
     }
 
     fn block(&mut self, block: &mut thir::Block, env: &[(ty::ParamId, ty::Ty)]) -> Result<()> {
@@ -511,8 +628,6 @@ impl Specializer<'_, '_> {
     fn expr(&mut self, expr: &mut thir::Expr, env: &[(ty::ParamId, ty::Ty)]) -> Result<()> {
         use thir::ExprKind as E;
         let unsupported = match &expr.kind {
-            E::Closure { .. } | E::BoundAction { .. } | E::BoundRoleAction { .. }
-            | E::CallValue { .. } | E::CapSelect { .. } | E::CapRead { .. } => Some("closure or capability (#569)"),
             E::Await(_) | E::Spawn(_) => Some("async operation (#570)"),
             E::StreamWrite { .. } => Some("stream operation (#569)"),
             _ => None,
@@ -522,6 +637,65 @@ impl Specializer<'_, '_> {
         }
         expr.ty = expr.ty.as_ref().map(|ty| self.ty(&ty.subst(env), expr.span)).transpose()?;
         match &mut expr.kind {
+            E::Closure { body, captures } => self.closure(body, captures, env, expr.span)?,
+            E::BoundAction { receiver, object, method } => {
+                let original = *object;
+                let args = match receiver.ty.as_ref().map(|ty| ty.taken().subst(env)) {
+                    Some(ty::Ty::Object(_, args)) => args,
+                    _ => vec![],
+                };
+                *object = self.instance(original, &args, expr.span)?;
+                self.expr(receiver, env)?;
+                let source = &self.input.registry.objects[original.0];
+                let subst = source.params.iter().copied().zip(args).collect();
+                self.queue(thir::BodyOwner::Method { object: original, method: *method },
+                    thir::BodyOwner::Method { object: *object, method: *method }, subst, None, expr.span)?;
+                self.bound(receiver, callables::BoundTarget::Method { object: *object, method: *method }, expr.span)?;
+            }
+            E::BoundRoleAction { receiver, role, slot } => {
+                let args = match receiver.ty.as_ref().map(|ty| ty.taken().subst(env)) {
+                    Some(ty::Ty::Role(_, args)) => args,
+                    Some(receiver) => self.input.registry.roles_of(&receiver).into_iter().find_map(|ty| match ty {
+                        ty::Ty::Role(id, args) if id == *role => Some(args),
+                        _ => None,
+                    }).unwrap_or_default(),
+                    None => vec![],
+                };
+                *role = self.role(*role, &args, expr.span)?;
+                self.expr(receiver, env)?;
+                self.bound(receiver, callables::BoundTarget::Role { role: *role, slot: *slot }, expr.span)?;
+            }
+            E::CallValue { callee, args } => {
+                self.expr(callee, env)?;
+                let ty = callee.ty.clone().ok_or_else(|| LowerError::invalid(expr.span, "untyped open call"))?;
+                if !matches!(ty, ty::Ty::Action(_)) || ty.mentions_param() {
+                    return Err(LowerError::invalid(expr.span, "non-concrete open callable type"));
+                }
+                let lexical = self.lexical.as_mut().expect("lexical body");
+                let site = callables::OpenCallSite {
+                    body: lexical.key.clone(), module: lexical.module, span: expr.span,
+                    ordinal: lexical.next_open_call,
+                };
+                lexical.next_open_call += 1;
+                self.inventory.open_call(ty, site);
+                for arg in args {
+                    self.expr(arg, env)?;
+                }
+            }
+            E::CapSelect { owner, object, .. } => {
+                self.expr(owner, env)?;
+                let Some(ty::Ty::Object(concrete, _)) = owner.ty.as_ref().map(ty::Ty::taken) else {
+                    return Err(LowerError::invalid(expr.span, "non-object cap owner"));
+                };
+                *object = concrete;
+            }
+            E::CapRead { cap, object, .. } => {
+                self.expr(cap, env)?;
+                let Some(ty::Ty::Cap(concrete, _, _)) = cap.ty.as_ref() else {
+                    return Err(LowerError::invalid(expr.span, "non-cap computed field"));
+                };
+                *object = *concrete;
+            }
             E::Call { callee, args } => {
                 match callee {
                     thir::Callee::Method { receiver, object, method } => {
@@ -689,7 +863,15 @@ impl Specializer<'_, '_> {
                     self.block(block, env)?;
                 }
             }
-            E::VariantNew { values, .. } | E::Pack { items: values, spread: None } => {
+            E::Pack { items, spread } => {
+                for value in items {
+                    self.expr(value, env)?;
+                }
+                if let Some(value) = spread {
+                    self.expr(value, env)?;
+                }
+            }
+            E::VariantNew { values, .. } => {
                 for value in values {
                     self.expr(value, env)?;
                 }

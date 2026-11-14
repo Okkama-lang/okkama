@@ -156,12 +156,14 @@ impl Declarations {
         // Nominal identities are reserved. Intern concrete collection shapes before
         // resolving fields/signatures, including recursive nominal payloads.
         let mut requested = vec![];
-        for body in &analysis.bodies {
-            requested.extend(body.locals.iter().map(|local| (local.ty.clone(), body.span)));
-            super::walk::block(&body.block, &mut |expr| {
-                if let Some(ty) = &expr.ty {
-                    requested.push((ty.clone(), expr.span));
-                }
+        for root in &analysis.bodies {
+            super::walk::bodies(root, &mut |body| {
+                requested.extend(body.locals.iter().map(|local| (local.ty.clone(), body.span)));
+                super::walk::block(&body.block, &mut |expr| {
+                    if let Some(ty) = &expr.ty {
+                        requested.push((ty.clone(), expr.span));
+                    }
+                });
             });
         }
         for (index, object) in reg.objects.iter().enumerate() {
@@ -561,6 +563,19 @@ impl Declarations {
             T::Array(element) | T::Varargs(element) => {
                 self.collection_type(element, span)?;
                 ir::Type::Array(self.ty(element, span)?)
+            }
+            T::Action(action) => {
+                if action.is_async {
+                    return Err(LowerError::unsupported(span, "async action type (#570)"));
+                }
+                for ty in action.params.iter().chain(action.result.iter()) {
+                    self.collection_type(ty, span)?;
+                }
+                ir::Type::Fn(ir::FnType {
+                    params: action.params.iter().map(|ty| self.ty(ty, span)).collect::<Result<_>>()?,
+                    result: action.result.as_ref().map(|ty| self.ty(ty, span)).transpose()?,
+                    is_async: false,
+                })
             }
             T::Map(key, value) => {
                 self.collection_type(key, span)?;
