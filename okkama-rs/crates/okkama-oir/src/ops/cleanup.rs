@@ -38,6 +38,9 @@ operation_group! { ExitOp {
         => ("exit.replace", [pending: Consume, replacement: Borrow], Rule::Replace { pending: *pending, replacement: replacement.clone() });
     Commit { pending: ValueId, destination: ExitDestination, result: Option<TypeId> }
         => ("exit.commit", [pending: Consume], Rule::Commit { pending: *pending, result: *result });
+    Extend { pending: ValueId, packet: ValueId }
+        => ("exit.extend", [pending: Consume, packet: Consume], Rule::ExtendReservation { pending: *pending,
+            packet: *packet });
     Abort { pending: ValueId, cleanup: ValueId, phase: AbortPhase }
         => ("exit.abort", [pending: Consume, cleanup: Consume], Rule::Abort { pending: *pending, cleanup: *cleanup, phase: *phase });
 } }
