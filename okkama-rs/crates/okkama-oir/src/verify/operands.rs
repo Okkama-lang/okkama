@@ -1325,7 +1325,10 @@ impl Checker<'_, '_> {
                     if close.reserve {
                         expected.push(MergeSource::WholeReserveOnFailure);
                     }
-                    self.require(plan.sources == expected,
+                    let aborted_reserve = !close.reserve && plan.sources == [expected.clone(),
+                        vec![MergeSource::WholeReserveOnFailure]].concat();
+                    // The linearity automaton verifies the explicit-abort alternative at this activation.
+                    self.require(plan.sources == expected || aborted_reserve,
                         "merge plan must cover its complete close and reserve sources");
 
                 } else {

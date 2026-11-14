@@ -1,5 +1,5 @@
-//! Low OIR-2 → SPB 17, S1 scalar/object/control and S2 owning/defer calls.
-//! Always compiled, independent of runtime features. Full Low cleanup emission is S3.
+//! Low OIR-2 → SPB 17: scalar/object/control, owning calls and the cleanup automaton.
+//! Always compiled, independent of runtime features. compile_low is the executable semantic driver.
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -38,8 +38,8 @@ fn unsupported(name: &str) -> GenerateError {
 
 pub use s::layout::{LayoutRegistry, ObjectLayout};
 
-/// Structural/type checks and independently checked allocation for the S1/S2 Low subset.
-/// Complete ownership/protocol verification and Low cleanup emission are S3.
+/// Data transformation with structural checks and independently checked allocation.
+/// Executable inputs must use compile_low, which also requires semantic Low and loader checks.
 pub fn generate(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<s::Program, GenerateError> {
     Ok(generate_with_allocation(module, layouts)?.program)
 }
@@ -75,10 +75,13 @@ pub fn generate_with_allocation(module: &o::Module, layouts: &dyn LayoutRegistry
         let o::DeclarationKind::Object { fields, witnesses, destroy, .. } = &declaration.kind else {
             return Err(unsupported("non-object declaration"));
         };
-        if !witnesses.is_empty() || destroy.is_some() {
-            return Err(unsupported("object witnesses/destroy entries"));
+        if !witnesses.is_empty() {
+            return Err(unsupported("object witnesses"));
         }
         let layout = layouts.object_layout(id.as_u32())?;
+        if layout.runtime.has_destroy != destroy.is_some() {
+            return Err(GenerateError("descriptor destroy/layout mismatch".into()));
+        }
         if fields.len() != layout.source_fields.len() {
             return Err(GenerateError("layout registry field mapping arity mismatch".into()));
         }
@@ -113,8 +116,9 @@ pub fn generate_with_allocation(module: &o::Module, layouts: &dyn LayoutRegistry
         };
         p.functions.push(translated);
     }
+    s::verify(&p)?;
     for function in &mut p.functions {
-        function.proofs.states.extend(calls::service_states(function)?);
+        complete_codegen_roots(function)?;
     }
     s::verify(&p)?;
     let mut allocations = Vec::new();
@@ -129,6 +133,7 @@ pub fn generate_with_allocation(module: &o::Module, layouts: &dyn LayoutRegistry
 fn translate_type(module: &o::Module, id: o::TypeId) -> Result<s::Type, GenerateError> {
     Ok(match module.types.get(id)? {
         o::Type::Int => s::Type::Int,
+        o::Type::Descriptor => s::Type::Descriptor,
         o::Type::Bool => s::Type::Bool,
         o::Type::Str => s::Type::Str,
         o::Type::Range => s::Type::Range,
@@ -371,6 +376,7 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
             (D::Const, vec![])
         }
         o::Operation::Core(core) => match core {
+            C::FailSecondary { primary, cleanup } => (D::FailSecondary, vec![reg(*primary), reg(*cleanup)]),
             C::IntAdd { left, right } => (D::IntAdd, vec![reg(*left), reg(*right)]),
             C::IntSub { left, right } => (D::IntSub, vec![reg(*left), reg(*right)]),
             C::IntMul { left, right } => (D::IntMul, vec![reg(*left), reg(*right)]),
@@ -517,3 +523,124 @@ fn data(op: s::DataOp, inputs: Vec<u32>, output: u32, immediate: s::Immediate) -
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod cleanup_tests;
+
+/// Mandatory semantic gate for executable Low. External contracts come from the caller's backend catalog.
+/// This path cannot be selected by a file flag; external artifacts always pass verify_load independently.
+pub fn compile_low(module: &o::Module, layouts: &dyn LayoutRegistry,
+    context: o::VerifyContext<'_>, contracts: &dyn s::ExternalContracts)
+    -> Result<AllocatedProgram, GenerateError>
+{
+    if module.profile != o::Profile::Low {
+        return Err(GenerateError("expected Low profile".into()));
+    }
+    o::verify_with(module, &o::VerifyOptions::default(), context)
+        .map_err(|report| GenerateError(format!("verify_low: {report:?}")))?;
+    let output = generate_with_allocation(module, layouts)?;
+    s::verify_load(&output.program, contracts)?;
+    Ok(output)
+}
+
+/// Relocated Low roots remain authoritative for services. Scalar register liveness fills the gaps
+/// introduced by machine expansion (range.len, switch, construction); it never synthesizes Low proofs.
+fn complete_codegen_roots(function: &mut s::Function) -> Result<(), GenerateError> {
+    let mut roots = BTreeMap::<u32, BTreeSet<s::Location>>::new();
+    for root in &function.proofs.roots {
+        roots.entry(root.pc).or_default().extend(&root.locations);
+    }
+    for state in &function.proofs.states {
+        roots.entry(state.pc).or_default().extend(&state.locations);
+    }
+    if !function.proofs.closes.is_empty() || !function.proofs.post_roots.is_empty() {
+        // Cleanup-bearing Low has complete #591 roots. Never repair a missing Low root here.
+        // Only the explicitly recorded machine-expansion boundaries were added by the emitter.
+        function.proofs.roots = roots.into_iter().map(|(pc, locations)| s::RootRequirement {
+            pc, locations: locations.into_iter().collect(),
+        }).collect();
+        return Ok(());
+    }
+    let mut live = vec![BTreeSet::<u32>::new(); function.code.len()];
+    loop {
+        let mut changed = false;
+        for (pc, instruction) in function.code.iter().enumerate().rev() {
+            let mut next = BTreeSet::new();
+            let edges = match instruction {
+                s::Instruction::Br(edge) => vec![edge],
+                s::Instruction::Cond { yes, no, .. } => vec![yes, no],
+                s::Instruction::Champ { flow: s::Flow::Outcomes(outcomes), .. } => {
+                    outcomes.iter().map(|outcome| &outcome.edge).collect()
+                }
+                _ => vec![],
+            };
+            for edge in edges {
+                let mut branch = live[edge.target_pc as usize].clone();
+                for assignment in &edge.assignments {
+                    if let s::Location::Register(id) = assignment.destination { branch.remove(&id); }
+                }
+                for assignment in &edge.assignments {
+                    if let s::Source::Location(s::Location::Register(id)) = assignment.source { branch.insert(id); }
+                }
+                next.extend(branch);
+            }
+            if matches!(instruction, s::Instruction::Data { .. }
+                | s::Instruction::Champ { flow: s::Flow::Next(_), .. })
+                && !matches!(instruction, s::Instruction::Champ { op: s::Opcode::RetOwn | s::Opcode::RetDefer, .. })
+            {
+                next.extend(live.get(pc + 1).into_iter().flatten());
+            }
+            match instruction {
+                s::Instruction::Data { inputs, output, .. } => {
+                    if let Some(output) = output { next.remove(output); }
+                    next.extend(inputs);
+                }
+                s::Instruction::Ret(inputs) => next.extend(inputs),
+                s::Instruction::Raise(id) | s::Instruction::Cond { condition: id, .. } => { next.insert(*id); }
+                s::Instruction::Champ { arguments, flow, .. } => {
+                    if let s::Flow::Next(outputs) = flow {
+                        for output in outputs {
+                            if let s::Location::Register(id) = output { next.remove(id); }
+                        }
+                    }
+                    for argument in arguments {
+                        match argument {
+                            s::Argument::Location(s::Location::Register(id)) => { next.insert(*id); }
+                            s::Argument::Selection(id) => {
+                                next.extend(function.proofs.selections[*id as usize].locations.iter()
+                                    .filter_map(|loc| match loc { s::Location::Register(id) => Some(*id), _ => None }));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+            for location in function.proofs.post_roots.iter().filter(|root| root.pc as usize == pc)
+                .flat_map(|root| &root.locations)
+            {
+                if let s::Location::Register(id) = location { next.insert(*id); }
+            }
+            if let s::Instruction::Data { output: Some(id), .. } = instruction { next.remove(id); }
+            if let s::Instruction::Champ { flow: s::Flow::Next(outputs), .. } = instruction {
+                for output in outputs {
+                    if let s::Location::Register(id) = output { next.remove(id); }
+                }
+            }
+            for location in roots.get(&(pc as u32)).into_iter().flatten() {
+                if let s::Location::Register(id) = location { next.insert(*id); }
+            }
+            if next != live[pc] {
+                live[pc] = next;
+                changed = true;
+            }
+        }
+        if !changed { break; }
+    }
+    for (pc, live) in live.into_iter().enumerate() {
+        roots.entry(pc as u32).or_default().extend(live.into_iter().map(s::Location::Register));
+    }
+    function.proofs.roots = roots.into_iter().map(|(pc, locations)| s::RootRequirement {
+        pc, locations: locations.into_iter().collect(),
+    }).collect();
+    Ok(())
+}

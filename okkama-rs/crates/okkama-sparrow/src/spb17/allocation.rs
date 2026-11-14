@@ -36,6 +36,7 @@ pub(crate) fn direct_uses(f: &Function, pc: usize) -> Set {
             used.extend(inputs.iter().copied().map(Location::Register));
         }
         Instruction::Cond { condition, .. } => { used.insert(Location::Register(*condition)); }
+        Instruction::Raise(value) => { used.insert(Location::Register(*value)); }
         Instruction::Champ { arguments, .. } => {
             for arg in arguments {
                 match *arg {
@@ -52,13 +53,20 @@ pub(crate) fn direct_uses(f: &Function, pc: usize) -> Set {
         }
         _ => {}
     }
-    for root in f.proofs.roots.iter().filter(|root| root.pc as usize == pc) {
-        used.extend(&root.locations);
-    }
-    for state in f.proofs.states.iter().filter(|state| state.pc as usize == pc) {
-        used.extend(&state.locations);
-    }
     used
+}
+
+pub(crate) fn metadata_uses(f: &Function) -> Vec<Set> {
+    let mut sites = vec![Set::new(); f.code.len()];
+    for root in &f.proofs.roots { sites[root.pc as usize].extend(&root.locations); }
+    for state in &f.proofs.states { sites[state.pc as usize].extend(&state.locations); }
+    sites
+}
+
+fn post_uses(f: &Function) -> Vec<Set> {
+    let mut sites = vec![Set::new(); f.code.len()];
+    for root in &f.proofs.post_roots { sites[root.pc as usize].extend(&root.locations); }
+    sites
 }
 
 pub(crate) fn close_dependencies(f: &Function, live: &mut Set) {
@@ -87,6 +95,8 @@ pub fn live_locations(f: &Function) -> Result<Vec<Set>, Error> {
     if count.saturating_mul(f.code.len()) > 8 * 1024 * 1024 {
         return Err(error("allocation liveness budget exceeded"));
     }
+    let metadata = metadata_uses(f);
+    let post = post_uses(f);
     let mut before = vec![Set::new(); f.code.len()];
     loop {
         let mut changed = false;
@@ -112,7 +122,12 @@ pub fn live_locations(f: &Function) -> Result<Vec<Set>, Error> {
             for definition in definitions(inst) {
                 live.remove(&definition);
             }
+            live.extend(&post[pc]);
+            for definition in definitions(inst) {
+                live.remove(&definition);
+            }
             live.extend(direct_uses(f, pc));
+            live.extend(&metadata[pc]);
             close_dependencies(f, &mut live);
             if before[pc] != live {
                 before[pc] = live;
@@ -144,6 +159,15 @@ pub struct Allocation {
     pub slots: Vec<ProducedType>,
     /// (instruction PC, outgoing edge ordinal) → sequential copies, including typed cycle scratch.
     pub edges: BTreeMap<(u32, u32), Vec<Copy>>,
+    /// (PC, after instruction) → traced words in typed frame slots. No Post belongs to a call map.
+    pub roots: BTreeMap<(u32, bool), Vec<AllocatedRoot>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AllocatedRoot {
+    pub slot: u32,
+    pub offset: u32,
+    pub tagged_int: bool,
 }
 
 fn clique(graph: &mut BTreeMap<Location, Set>, locations: impl IntoIterator<Item = Location>) {
@@ -155,6 +179,7 @@ fn clique(graph: &mut BTreeMap<Location, Set>, locations: impl IntoIterator<Item
 
 pub fn allocate(f: &Function) -> Result<Allocation, Error> {
     let live = live_locations(f)?;
+    let post = post_uses(f);
     let mut graph = BTreeMap::new();
     for set in &live {
         clique(&mut graph, set.iter().copied());
@@ -164,11 +189,15 @@ pub fn allocate(f: &Function) -> Result<Allocation, Error> {
     }
     for (pc, inst) in f.code.iter().enumerate() {
         if !terminal(inst) {
+            clique(&mut graph, definitions(inst).into_iter().chain(post[pc].iter().copied())
+                .chain(live.get(pc + 1).into_iter().flatten().copied()));
             clique(&mut graph, definitions(inst).into_iter()
                 .chain(live.get(pc + 1).into_iter().flatten().copied()));
         }
     }
-    let mut allocation = Allocation { locations: BTreeMap::new(), slots: vec![], edges: BTreeMap::new() };
+    let mut allocation = Allocation {
+        locations: BTreeMap::new(), slots: vec![], edges: BTreeMap::new(), roots: BTreeMap::new(),
+    };
     let locations = (0..f.registers.len() as u32).map(Location::Register)
         .chain((0..f.services.len() as u32).map(Location::Service));
     for location in locations {
@@ -213,6 +242,7 @@ pub fn allocate(f: &Function) -> Result<Allocation, Error> {
             allocation.edges.insert((pc as u32, ordinal as u32), copies);
         }
     }
+    allocation.roots = allocated_roots(f, &allocation)?;
     Ok(allocation)
 }
 
@@ -220,6 +250,9 @@ pub fn allocate(f: &Function) -> Result<Allocation, Error> {
 /// Joins intersect known contents; loops run to a fixed point. Copies execute sequentially and are
 /// compared against the original parallel edge, so stale, clobbered and wrong-outcome values fail.
 pub fn check_allocation(f: &Function, allocation: &Allocation) -> Result<(), Error> {
+    if allocation.roots != allocated_roots(f, allocation)? {
+        return Err(error("allocation clobbered concrete roots"));
+    }
     type State = Vec<BTreeSet<Location>>;
     let slot = |location: Location| -> Result<usize, Error> {
         let index = *allocation.locations.get(&location).ok_or_else(|| error("allocation missing location"))?;
@@ -244,13 +277,19 @@ pub fn check_allocation(f: &Function, allocation: &Allocation) -> Result<(), Err
     }
     let mut incoming: Vec<Option<State>> = vec![None; f.code.len()];
     if incoming.is_empty() {
+        if f.proofs.entry.as_ref().is_some_and(|entry| entry.external.is_some()) {
+            return Ok(());
+        }
         return Err(error("allocation requires code"));
     }
     incoming[0] = Some(entry);
+    let metadata = metadata_uses(f);
+    let post = post_uses(f);
     let mut work = vec![0];
     while let Some(pc) = work.pop() {
         let mut state = incoming[pc].as_ref().ok_or_else(|| error("allocation worklist state"))?.clone();
         let mut used = direct_uses(f, pc);
+        used.extend(&metadata[pc]);
         // This is a forward availability check, independent of the backward live set computation.
         for edge in outgoing(&f.code[pc]) {
             for assignment in &edge.assignments {
@@ -270,6 +309,11 @@ pub fn check_allocation(f: &Function, allocation: &Allocation) -> Result<(), Err
                 contents.remove(&definition);
             }
             state[slot(definition)?] = Set::from([definition]);
+        }
+        for &location in &post[pc] {
+            if !state[slot(location)?].contains(&location) {
+                return Err(error(format!("allocation clobbered post root at pc {pc}")));
+            }
         }
         let mut successors = Vec::new();
         for (ordinal, edge) in outgoing(&f.code[pc]).into_iter().enumerate() {
@@ -334,4 +378,32 @@ pub fn check_allocation(f: &Function, allocation: &Allocation) -> Result<(), Err
         }
     }
     Ok(())
+}
+
+fn allocated_roots(f: &Function, allocation: &Allocation)
+    -> Result<BTreeMap<(u32, bool), Vec<AllocatedRoot>>, Error>
+{
+    let mut maps: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
+    for (after, requirements) in [(false, &f.proofs.roots), (true, &f.proofs.post_roots)] {
+        for root in requirements {
+            let mut locations = root.locations.iter().copied().collect();
+            close_dependencies(f, &mut locations);
+            let map = maps.entry((root.pc, after)).or_default();
+            for location in locations {
+                let slot = *allocation.locations.get(&location).ok_or_else(|| error("missing root location"))?;
+                match location_type(f, location)? {
+                    ProducedType::Service(kind) => {
+                        for &offset in layout::service_layout(kind).references {
+                            map.insert(AllocatedRoot { slot, offset, tagged_int: false });
+                        }
+                    }
+                    ProducedType::Value(Type::Bool | Type::Never | Type::Descriptor) => {}
+                    ProducedType::Value(ty) => {
+                        map.insert(AllocatedRoot { slot, offset: 0, tagged_int: ty == Type::Int });
+                    }
+                }
+            }
+        }
+    }
+    Ok(maps.into_iter().map(|(site, roots)| (site, roots.into_iter().collect())).collect())
 }

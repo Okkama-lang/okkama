@@ -1,5 +1,7 @@
 //! S2 transport. Machine payloads and outcome ordinals come from the shared SPB registry.
 use super::*;
+#[path = "cleanup.rs"]
+mod cleanup;
 use s::{Argument as A, Location as L, Opcode as O, ProducedType as P, ServiceKind as K};
 
 fn error(message: impl Into<String>) -> GenerateError {
@@ -17,7 +19,13 @@ fn kind(module: &o::Module, ty: o::TypeId) -> Result<P, GenerateError> {
             o::ServiceType::Deps => P::Service(K::Deps),
             o::ServiceType::Scope(_) => P::Service(K::ScopeState),
             o::ServiceType::Failure => P::Value(s::Type::Failure),
-            _ => return Err(later("cleanup/pending service type")),
+            o::ServiceType::Pending => P::Service(K::Pending),
+            o::ServiceType::CleanupState => P::Service(K::Cleanup),
+            o::ServiceType::FailureState => P::Service(K::FailureState),
+            o::ServiceType::ExitState => P::Service(K::ExitState),
+            o::ServiceType::StableKey => P::Service(K::StableKey),
+            o::ServiceType::Closed => P::Service(K::Closed),
+            _ => return Err(later("async service type")),
         },
         _ => P::Value(translate_type(module, ty)?),
     })
@@ -30,7 +38,8 @@ pub(super) fn needs_s2(module: &o::Module, function: &o::Function) -> Result<boo
     let Some(body) = &function.body else { return Ok(false) };
     if !body.deps.is_empty() || !body.keys.is_empty() || !body.selections.is_empty()
         || function.attrs.iter().any(|attr| matches!(attr,
-            o::FunctionAttr::Cleanup | o::FunctionAttr::DeferEntry { .. }))
+            o::FunctionAttr::Cleanup | o::FunctionAttr::DeferEntry { .. } | o::FunctionAttr::Ctor(_)
+            | o::FunctionAttr::Destroy(_)))
     {
         return Ok(true);
     }
@@ -64,6 +73,7 @@ struct Emitter<'a> {
     module: &'a o::Module,
     function: &'a o::Function,
     body: &'a o::Body,
+    objects: &'a [s::Object],
     locations: Vec<L>,
     pcs: BTreeMap<o::BlockId, u32>,
     summaries: &'a mut Vec<s::Summary>,
@@ -325,11 +335,14 @@ impl Emitter<'_> {
 pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Function, objects: &[s::Object],
     summaries: &mut Vec<s::Summary>) -> Result<s::Function, GenerateError>
 {
+    if function.body.is_none() {
+        return cleanup::external(module, function);
+    }
     if !function.type_params.is_empty() || function.async_creation_summary.is_some()
         || function.async_body_summary.is_some()
         || function.attrs.iter().any(|attr| !matches!(attr,
             o::FunctionAttr::Entry | o::FunctionAttr::Hidden | o::FunctionAttr::Cleanup
-            | o::FunctionAttr::DeferEntry { .. }))
+            | o::FunctionAttr::DeferEntry { .. } | o::FunctionAttr::Ctor(_) | o::FunctionAttr::Destroy(_)))
     {
         return Err(later("generic/async/native entry"));
     }
@@ -360,6 +373,13 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                     return Err(error("entry packet position/type mismatch"));
                 }
                 s::EntryAbi::Owned
+            }
+            o::OwnershipAbi::Unelaborated if function.summary.is_some() => {
+                if function.signature.results.iter().any(|&ty| kind(module, ty) == Ok(P::Service(K::Packet))) {
+                    s::EntryAbi::Owned
+                } else {
+                    s::EntryAbi::Observation
+                }
             }
             _ => return Err(error("unelaborated entry ABI")),
         }
@@ -433,6 +453,8 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
         }
         term_pcs.insert(block_id, pc);
         let size = match &block.term.kind {
+            o::TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(),
+                o::Operation::Core(o::CoreOp::ObjNew { .. })) => 4,
             o::TermKind::Switch { cases, .. } => cases.len() * 3 + 1,
             _ => 1,
         };
@@ -443,8 +465,9 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
         return Err(error("orphan SSA value or instruction"));
     }
     let mut emitter = Emitter {
-        module, function, body, locations, pcs, summaries, scope: entry.lexical_scope, result,
+        module, function, body, objects, locations, pcs, summaries, scope: entry.lexical_scope, result,
     };
+    emitter.result.proofs.entry = Some(cleanup::entry_contract(module, function)?);
     emitter.result.params = entry.params.iter().map(|&value| emitter.loc(value)).collect::<Result<_, _>>()?;
     // Expand proof DAG leaves through the OIR visitor. Value dependencies remain conditional on the
     // value's liveness; site metadata is attached exactly where it is used, including erased deps.
@@ -476,6 +499,7 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
             o::cfg::UseSite::BlockUnwind(_) => return Err(later("implicit unwind metadata")),
         }
     }
+    emitter.cleanup_metadata(&inst_pcs, &term_pcs)?;
     for &block_id in &order {
         let block = body.blocks.get(block_id)?;
         emitter.scope = block.lexical_scope;
@@ -503,10 +527,28 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                             };
                             (opcode, vec![A::Location(emitter.loc(*state)?), A::Location(emitter.loc(*packet)?)])
                         }
-                        _ => return Err(later(inst.op.opcode())),
+                        _ => emitter.ownership(op)?,
                     };
                     s::Instruction::Champ { op, arguments, flow: s::Flow::Next(inst.results.iter()
                         .map(|&value| emitter.loc(value)).collect::<Result<_, _>>()?) }
+                }
+                o::Operation::Cleanup(op) => emitter.cleanup_instruction(op, &inst.results)?,
+                o::Operation::Exit(op) => emitter.exit_instruction(op, &inst.results)?,
+                o::Operation::Core(o::CoreOp::TypeOf { ty, .. }) => {
+                    let o::Type::Object { decl, .. } = module.types.get(*ty)? else {
+                        return Err(error("descriptor is not an object"));
+                    };
+                    data(s::DataOp::Const, vec![], emitter.reg(inst.results[0])?,
+                        s::Immediate::Constant(s::Constant::Descriptor(decl.as_u32())))
+                }
+                o::Operation::Call(o::CallOp::Direct { function, call }) => {
+                    let (arguments, context) = emitter.call(*function, call, false)?;
+                    if context.may_fail {
+                        return Err(error("fallible call requires explicit outcomes"));
+                    }
+                    s::Instruction::Champ { op: O::InvokeCallOwn, arguments,
+                        flow: s::Flow::Next(inst.results.iter().map(|&v| emitter.loc(v))
+                            .collect::<Result<_, _>>()?) }
                 }
                 o::Operation::Lexical(o::LexicalOp::DeferRegister { .. }) => {
                     if !inst.results.is_empty() {
@@ -522,6 +564,17 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                     let dst = emitter.reg(inst.results[0])?;
                     let start = fresh(&mut emitter.result, s::Type::Int)?;
                     let end = fresh(&mut emitter.result, s::Type::Int)?;
+                    let pc = emitter.result.code.len() as u32;
+                    let mut roots = emitter.result.proofs.roots.iter().filter(|root| root.pc == pc)
+                        .flat_map(|root| root.locations.iter().copied()).collect::<BTreeSet<_>>();
+                    roots.insert(L::Register(start));
+                    emitter.result.proofs.roots.push(s::RootRequirement {
+                        pc: pc + 1, locations: roots.iter().copied().collect(),
+                    });
+                    roots.insert(L::Register(end));
+                    emitter.result.proofs.roots.push(s::RootRequirement {
+                        pc: pc + 2, locations: roots.into_iter().collect(),
+                    });
                     emitter.result.code.extend([
                         data(s::DataOp::RangeStart, vec![value], start, s::Immediate::None),
                         data(s::DataOp::RangeEnd, vec![value], end, s::Immediate::None),
@@ -545,6 +598,17 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
             emitter.result.code.push(translated);
         }
         let term = match &block.term.kind {
+            o::TermKind::InvokeOwn { op, normal, .. }
+                if matches!(op.as_ref(), o::Operation::Core(o::CoreOp::ObjNew { .. })) => {
+                emitter.construction(op, normal)?
+            }
+            o::TermKind::InvokeOwn { op, normal, unwind }
+                if matches!(op.as_ref(), o::Operation::Ownership(_)) => {
+                emitter.ownership_invoke(op, normal, unwind)?
+            }
+            o::TermKind::CleanupNext { .. } | o::TermKind::ExitDispatch { .. }
+                | o::TermKind::FailureDispatch { .. } => emitter.cleanup_term(&block.term.kind)?,
+            o::TermKind::Raise(failure) => s::Instruction::Raise(emitter.reg(*failure)?),
             o::TermKind::InvokeOwn { .. } | o::TermKind::InvokeDefer { .. } => emitter.invocation(&block.term.kind)?,
             o::TermKind::Br(target) => s::Instruction::Br(emitter.branch(target)?),
             o::TermKind::Cond { condition, yes, no } => s::Instruction::Cond {
@@ -581,7 +645,7 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                 if actual != function.signature.results {
                     return Err(error("return signature/type mismatch"));
                 }
-                if function.signature.ownership_abi == o::OwnershipAbi::Observation {
+                if emitter.result.entry_abi == s::EntryAbi::Observation {
                     s::Instruction::Ret(values.iter().map(|&value| emitter.reg(value))
                         .collect::<Result<_, _>>()?)
                 } else {
@@ -624,113 +688,6 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
         };
         emitter.result.code.push(term);
     }
+    emitter.finish_evidence(&inst_pcs, &term_pcs)?;
     Ok(emitter.result)
-}
-
-/// S2 linear service lifetime, independent of language uses. The full Low consume/restore maps
-/// belong to S3; only the emitted S2 opcodes are interpreted here.
-pub(super) fn service_states(function: &s::Function) -> Result<Vec<s::StateRecord>, GenerateError> {
-    type Active = BTreeSet<L>;
-    let linear = |location: L| match location {
-        L::Service(id) => matches!(function.services[id as usize], K::Packet | K::ScopeState),
-        _ => false,
-    };
-    let mut incoming: Vec<Option<Active>> = vec![None; function.code.len()];
-    incoming[0] = Some(function.params.iter().copied().filter(|&location| linear(location)).collect());
-    let mut work = vec![0];
-    while let Some(pc) = work.pop() {
-        let mut active = incoming[pc].as_ref().ok_or_else(|| error("service state worklist"))?.clone();
-        let inst = &function.code[pc];
-        let mut terminal = false;
-        if let s::Instruction::Champ { op, arguments, flow } = inst {
-            let consumed = arguments.iter().filter_map(|argument| match argument {
-                A::Location(location) if linear(*location) => Some(*location),
-                _ => None,
-            }).collect::<Vec<_>>();
-            for location in consumed {
-                if !active.remove(&location) {
-                    return Err(error("linear service used twice or after consumption"));
-                }
-            }
-            if let s::Flow::Next(outputs) = flow {
-                for &location in outputs.iter().filter(|&&location| linear(location)) {
-                    if !active.insert(location) {
-                        return Err(error("linear service overwritten"));
-                    }
-                }
-            }
-            terminal = matches!(op, O::RetOwn | O::RetDefer);
-        }
-        if matches!(inst, s::Instruction::Ret(_) | s::Instruction::Unreachable) {
-            terminal = true;
-        }
-        if terminal && !active.is_empty() {
-            return Err(error("return loses live packet/scope state; cleanup is not yet in S2"));
-        }
-        let edges = match inst {
-            s::Instruction::Br(edge) => vec![edge],
-            s::Instruction::Cond { yes, no, .. } => vec![yes, no],
-            s::Instruction::Champ { flow: s::Flow::Outcomes(outcomes), .. } => {
-                outcomes.iter().map(|outcome| &outcome.edge).collect()
-            }
-            _ => vec![],
-        };
-        let mut successors = Vec::new();
-        for edge in &edges {
-            let mut next = active.clone();
-            let mut destinations = Vec::new();
-            let mut produced = BTreeSet::new();
-            for assignment in &edge.assignments {
-                if !linear(assignment.destination) {
-                    continue;
-                }
-                match assignment.source {
-                    s::Source::Location(source) => {
-                        if !next.remove(&source) {
-                            return Err(error("edge duplicates or forwards a consumed service"));
-                        }
-                    }
-                    s::Source::ProducedSlot(slot) => {
-                        if !produced.insert(slot) {
-                            return Err(error("edge duplicates produced packet"));
-                        }
-                    }
-                }
-                destinations.push(assignment.destination);
-            }
-            for destination in destinations {
-                if !next.insert(destination) {
-                    return Err(error("edge overwrites live service"));
-                }
-            }
-            if let s::Instruction::Champ { op: O::InvokeCallOwn | O::InvokeDefer,
-                flow: s::Flow::Outcomes(outcomes), .. } = inst
-            {
-                let outcome = outcomes.iter().find(|outcome| std::ptr::eq(&outcome.edge, *edge))
-                    .ok_or_else(|| error("missing service outcome"))?;
-                if matches!(outcome.tag, s::Tag::Normal | s::Tag::Replace(_)) && produced.len() != 1 {
-                    return Err(error("call outcome loses produced packet"));
-                }
-            }
-            successors.push((edge.target_pc as usize, next));
-        }
-        if edges.is_empty() && !terminal {
-            successors.push((pc + 1, active));
-        }
-        for (target, next) in successors {
-            let previous = incoming.get_mut(target).ok_or_else(|| error("service state target outside code"))?;
-            if let Some(previous) = previous {
-                if previous != &next {
-                    return Err(error("inconsistent live services at CFG join"));
-                }
-            } else {
-                *previous = Some(next);
-                work.push(target);
-            }
-        }
-    }
-    Ok(incoming.into_iter().enumerate().filter_map(|(pc, active)| {
-        let locations = active?.into_iter().collect::<Vec<_>>();
-        (!locations.is_empty()).then_some(s::StateRecord { pc: pc as u32, locations })
-    }).collect())
 }

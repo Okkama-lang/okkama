@@ -102,11 +102,14 @@ impl HelperAbi {
     {
         use okkama_sparrow::spb17::{Opcode as O, ProducedType, ServiceKind, Tag};
         let invalid = || okkama_sparrow::spb17::Error {
-            offset: None, message: format!("{}: no payload schema for {tag:?}", self.name),
+            offset: None, message: format!("{}: no payload schema for {tag:?}", self.name), rule: "ABI_SCHEMA",
         };
         let opcode = self.opcode.ok_or_else(invalid)?;
         if opcode.call_abi().is_some() {
             return opcode.call_post_offsets(tag, context);
+        }
+        if opcode.cleanup_abi().is_some() {
+            return runtime_cleanup_offsets(opcode, tag, context);
         }
         let schema = opcode.results(tag, context)?;
         let erased = |slot: &ProducedType| matches!(slot, ProducedType::Service(ServiceKind::Deps));
@@ -181,6 +184,45 @@ pub fn helper_abi(name: &str) -> Option<HelperAbi> {
     })
 }
 
+/// Independent runtime record view; never delegates to SPB's offset implementation.
+fn runtime_cleanup_layout(op: okkama_sparrow::spb17::Opcode) -> Option<(usize, Vec<usize>)> {
+    use okkama_sparrow::spb17::Opcode as O;
+    macro_rules! layout {
+        ($ty:ty; $($field:ident),+) => {
+            (size_of::<$ty>(), vec![$(std::mem::offset_of!($ty, $field)),+])
+        };
+    }
+    Some(match op {
+        O::CleanupBegin | O::CleanupSettle | O::CleanupPlan | O::CleanupFailure | O::ExitAbort => {
+            layout!(CleanupSlot; record)
+        }
+        O::ExitPrepare | O::ExitExtend => layout!(PendingSlot; record),
+        O::ExitReplace => layout!(ReplacePost; pending, rest),
+        O::ExitCommit => layout!(CommitPost; value, packet),
+        O::CleanupNext => layout!(NextPost; state, key),
+        O::CleanupDestroy | O::DestroyDirect => layout!(DestroyPost; state, failure),
+        O::CleanupFinish => layout!(FinishPost; closed, failure, pending),
+        _ => return None,
+    })
+}
+
+fn runtime_cleanup_offsets(op: okkama_sparrow::spb17::Opcode, tag: okkama_sparrow::spb17::Tag,
+    context: &okkama_sparrow::spb17::ResultContext) -> Result<Vec<Option<usize>>, okkama_sparrow::spb17::Error>
+{
+    use okkama_sparrow::spb17::{Opcode as O, ProducedType as P, ServiceKind as S};
+    let (_, offsets) = runtime_cleanup_layout(op).expect("registered cleanup record");
+    let schema = op.results(tag, context)?;
+    if op == O::ExitCommit {
+        let mut result = Vec::new();
+        if context.value.is_some() { result.push(Some(std::mem::offset_of!(CommitPost, value))); }
+        result.extend([Some(std::mem::offset_of!(CommitPost, packet)), None]);
+        return Ok(result);
+    }
+    Ok(schema.iter().enumerate().map(|(index, slot)| {
+        if matches!(slot, P::Service(S::Deps | S::Closed)) { None } else { Some(offsets[index]) }
+    }).collect())
+}
+
 // Keep the always-built SPB transport registry mechanically tied to the actual #572 records.
 const _: () = {
     use okkama_sparrow::spb17::Opcode;
@@ -207,3 +249,89 @@ const _: () = {
     assert!(std::mem::offset_of!(CallPost, packet) == abi.post_packet_offset);
     assert!(std::mem::offset_of!(CallPost, failure) == abi.post_failure_offset);
 };
+
+// Relocation transport is checked against the repr(C) records used by #572, including the two-word key.
+const _: () = {
+    use okkama_sparrow::spb17::Opcode;
+    let Some(next) = Opcode::CleanupNext.cleanup_abi() else { panic!("missing next ABI") };
+    assert!(next.post_size == size_of::<NextPost>());
+    assert!(next.post_offsets[0] == std::mem::offset_of!(NextPost, state));
+    assert!(next.post_offsets[1] == std::mem::offset_of!(NextPost, key));
+    let Some(destroy) = Opcode::CleanupDestroy.cleanup_abi() else { panic!("missing destroy ABI") };
+    assert!(destroy.post_size == size_of::<DestroyPost>());
+    assert!(destroy.post_offsets[1] == std::mem::offset_of!(DestroyPost, failure));
+    let Some(finish) = Opcode::CleanupFinish.cleanup_abi() else { panic!("missing finish ABI") };
+    assert!(finish.post_size == size_of::<FinishPost>());
+    assert!(finish.post_offsets[2] == std::mem::offset_of!(FinishPost, pending));
+    let Some(commit) = Opcode::ExitCommit.cleanup_abi() else { panic!("missing commit ABI") };
+    assert!(commit.post_size == size_of::<CommitPost>());
+    assert!(commit.post_offsets[0] == std::mem::offset_of!(CommitPost, value));
+    assert!(commit.post_offsets[1] == std::mem::offset_of!(CommitPost, packet));
+};
+
+#[cfg(test)]
+mod emission_abi_tests {
+    use super::*;
+
+    fn validate(op: okkama_sparrow::spb17::Opcode, shared: okkama_sparrow::spb17::CleanupAbi)
+        -> Result<(), &'static str>
+    {
+        use okkama_sparrow::spb17::MachineArgument as M;
+        let (size, offsets) = runtime_cleanup_layout(op).unwrap();
+        if shared.post_size != size || shared.post_offsets != offsets { return Err("ABI_RECORD"); }
+        let (_, types) = crate::jit::HELPER_ARGUMENT_TYPES.iter()
+            .find(|(name, _)| *name == shared.helper).unwrap();
+        let mut arguments = vec![M::Context];
+        arguments.extend(types.iter().map(|ty| {
+            if ty.contains("KeyRef") { M::KeyRef }
+            else if ty.starts_with('*') { M::Pointer }
+            else { M::Word }
+        }));
+        if shared.arguments != arguments { return Err("ABI_ARGUMENTS"); }
+        Ok(())
+    }
+
+    #[test]
+    fn champ_cleanup_abi_rejects_record_and_argument_disagreement() {
+        use okkama_sparrow::spb17::{MachineArgument as M, Opcode as O};
+        for &op in O::ALL {
+            let Some(shared) = op.cleanup_abi() else { continue };
+            let mut wrong = shared;
+            wrong.post_size += 8;
+            assert_eq!(validate(op, wrong), Err("ABI_RECORD"));
+            wrong = shared;
+            wrong.post_offsets = &[usize::MAX];
+            assert_eq!(validate(op, wrong), Err("ABI_RECORD"));
+            wrong = shared;
+            wrong.arguments = &[M::Context];
+            assert_eq!(validate(op, wrong), Err("ABI_ARGUMENTS"));
+        }
+    }
+
+    #[test]
+    fn champ_cleanup_transport_matches_registered_records() {
+        use okkama_sparrow::spb17::{Opcode, ResultContext, ServiceKind, Type};
+        use okkama_sparrow::spb17::layout::service_layout;
+        for &op in Opcode::ALL {
+            let Some(shared) = op.cleanup_abi() else { continue };
+            let runtime = helper_abi(shared.helper).expect("registered #572 helper");
+            assert_eq!(runtime.opcode, Some(op));
+            let (size, offsets) = runtime_cleanup_layout(op).unwrap();
+            assert_eq!(shared.post_size, size, "{}", op.name());
+            assert_eq!(shared.post_offsets, offsets, "{}", op.name());
+            validate(op, shared).unwrap();
+            for value in [None, Some(Type::Int), Some(Type::Object(0))] {
+                let context = ResultContext { value, ..ResultContext::default() };
+                for tag in op.tags(&context) {
+                    assert_eq!(op.cleanup_post_offsets(tag, &context).unwrap(),
+                        runtime_cleanup_offsets(op, tag, &context).unwrap(), "{} {tag:?}", op.name());
+                }
+            }
+        }
+        assert_eq!(service_layout(ServiceKind::Closed).words, 0);
+        assert_eq!(Opcode::CleanupFinish.cleanup_post_offsets(okkama_sparrow::spb17::Tag::Normal,
+            &ResultContext::default()).unwrap(), vec![None, Some(8), Some(16)], "ABI_CLOSED");
+        assert_eq!(service_layout(ServiceKind::StableKey).words as usize * 8, size_of::<KeyRef>());
+        assert_eq!(service_layout(ServiceKind::DestroyBorrow).words as usize * 8, size_of::<DestroyBorrow>());
+    }
+}

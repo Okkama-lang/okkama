@@ -196,7 +196,7 @@ impl ObjectRuntimeLayout {
 fn repr(ty: s::Type) -> Repr {
     match ty {
         s::Type::Int => Repr::Int,
-        s::Type::Bool | s::Type::Never => Repr::Raw,
+        s::Type::Bool | s::Type::Never | s::Type::Descriptor => Repr::Raw,
         _ => Repr::Ref,
     }
 }
@@ -259,5 +259,22 @@ impl LayoutRegistry for RuntimeLayoutRegistry {
             runtime: entry.runtime.spb17(&entry.types),
             source_fields: entry.source_fields.clone(),
         })
+    }
+}
+
+/// Frame storage shape from #572 repr(C) records. Offsets are bytes; record addresses are not roots.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ServiceLayout {
+    pub words: u32,
+    pub references: &'static [u32],
+}
+
+pub const fn service_layout(kind: s::ServiceKind) -> ServiceLayout {
+    use s::ServiceKind::*;
+    match kind {
+        Deps | Closed => ServiceLayout { words: 0, references: &[] },
+        StableKey => ServiceLayout { words: 2, references: &[0] },
+        DestroyBorrow => ServiceLayout { words: 5, references: &[0, 32] },
+        _ => ServiceLayout { words: 1, references: &[0] },
     }
 }

@@ -457,7 +457,7 @@ fn s2_metadata_only_dependencies_survive_allocation_and_roundtrip() {
 }
 
 #[test]
-fn s2_low_cleanup_and_pending_are_explicitly_deferred_to_s3() {
+fn s3_malformed_cleanup_and_wrong_pending_operands_are_rejected() {
     let mut module = parse(include_str!("fixtures/owned-call.oir"));
     let body = module.functions.get_mut(o::FuncId::from_u32(0)).unwrap().body.as_mut().unwrap();
     let id = body.insts.alloc(o::Instruction {
@@ -468,9 +468,9 @@ fn s2_low_cleanup_and_pending_are_explicitly_deferred_to_s3() {
         facts: o::InstructionFacts::default(), loc: None,
     }).unwrap();
     body.blocks.get_mut(body.entry).unwrap().insts.push(id);
-    assert!(generate(&module, &layouts()).unwrap_err().0.contains("cleanup.plan: not yet in S2"));
+    assert!(generate(&module, &layouts()).is_err());
     let pending = include_str!("fixtures/owned-call.oir").replace("%full: deps", "%full: pending");
-    assert!(generate(&parse(&pending), &layouts()).unwrap_err().0.contains("not yet in S2"));
+    assert!(generate(&parse(&pending), &layouts()).is_err());
 }
 
 #[test]
@@ -493,7 +493,7 @@ fn s2_packet_lifetime_is_explicit_and_leaked_packet_is_rejected() {
     assert!(caller.proofs.states.iter().any(|state| state.pc == 1
         && state.locations.contains(&s::Location::Service(0))));
     let leaked = source.replace("%joined: own = own.join [%original, %packet]", "%joined: own = own.move %packet");
-    assert!(generate(&parse(&leaked), &layouts()).unwrap_err().0.contains("loses live packet"));
+    assert!(generate(&parse(&leaked), &layouts()).unwrap_err().0.contains("loses live service"));
 }
 
 #[test]

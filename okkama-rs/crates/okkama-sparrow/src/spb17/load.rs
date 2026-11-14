@@ -1,0 +1,493 @@
+//! Executable load gate. Structural verification is always performed first.
+use super::*;
+use std::collections::{BTreeMap, BTreeSet};
+
+type Check = Result<(), Error>;
+type Active = BTreeSet<Location>;
+
+/// The artifact cannot add contracts to this catalog.
+pub trait ExternalContracts {
+    fn entry(&self, name: &str) -> Option<&Function>;
+}
+#[derive(Debug)]
+pub struct NoExternalContracts;
+impl ExternalContracts for NoExternalContracts {
+    fn entry(&self, _: &str) -> Option<&Function> { None }
+}
+
+fn require(condition: bool, message: &str) -> Check {
+    if condition { Ok(()) } else { Err(error(message)) }
+}
+
+fn linear(f: &Function, location: Location) -> bool {
+    matches!(location, Location::Service(id) if matches!(f.services[id as usize],
+        ServiceKind::Packet | ServiceKind::ScopeState | ServiceKind::Pending | ServiceKind::Cleanup
+        | ServiceKind::StableKey | ServiceKind::FailureState | ServiceKind::ExitState))
+}
+
+/// Operand consumption table. Language values, captures, selections and erased proofs never consume services.
+/// context() checks each operand kind before this table is used by the executable gate.
+pub(super) fn consumed(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<Location> {
+    use Opcode::*;
+    let locations = arguments.iter().filter_map(|arg| match arg {
+        Argument::Location(location) => Some(*location), _ => None,
+    }).collect::<Vec<_>>();
+    let between = arguments.first() == Some(&Argument::Flag(true));
+    locations.iter().copied().enumerate().filter_map(|(index, location)| {
+        let consume = match op {
+            ScopeBegin | OwnEmpty | OwnCreateCommit => false,
+            OwnMove | OwnJoin | OwnAdmit | OwnAccept | CleanupBegin | ExitAbort | ExitDispatch => true,
+            OwnBind | OwnRebind => index == 0 || index == 2,
+            OwnStage => index < 1 + usize::from(between) || index + 1 == locations.len(),
+            ScopeTransfer => index < 1 + usize::from(between),
+            OwnSplit | OwnSplitChecked | ScopeSplit | DeferRegister | ExitCommit | CleanupSettle
+                | CleanupPlan | CleanupNext | CleanupFinish | CleanupFailure | DestroyDirect | FailureDispatch => {
+                    index == 0
+                }
+            CleanupDestroy | ExitExtend => true,
+            ExitPrepare => index + 1 == locations.len(),
+            ExitReplace => index == 0 || index + 1 == locations.len(),
+            InvokeCallOwn | InvokeDefer | RetOwn | RetDefer => matches!(verify::loc_type(f, location),
+                Ok(ProducedType::Service(ServiceKind::Packet))),
+        };
+        (consume && linear(f, location)).then_some(location)
+    }).collect()
+}
+
+/// Reconstruct service lifetimes from instructions and parallel edges, never from supplied StateRecords.
+pub fn service_states(f: &Function) -> Result<Vec<StateRecord>, Error> {
+    if f.code.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut incoming: Vec<Option<Active>> = vec![None; f.code.len()];
+    incoming[0] = Some(f.params.iter().copied().filter(|&loc| linear(f, loc)).collect());
+    let mut work = vec![0];
+    while let Some(pc) = work.pop() {
+        let mut active = incoming[pc].as_ref().ok_or_else(|| error("service worklist"))?.clone();
+        let inst = &f.code[pc];
+        let mut terminal = matches!(inst, Instruction::Ret(_) | Instruction::Raise(_) | Instruction::Unreachable);
+        if let Instruction::Champ { op, arguments, flow } = inst {
+            for location in consumed(f, *op, arguments) {
+                enforce(active.remove(&location), "LINEAR_CONSUME", "linear service consumed twice")?;
+            }
+            if let Flow::Next(outputs) = flow {
+                for &location in outputs.iter().filter(|&&location| linear(f, location)) {
+                    require(active.insert(location), "linear service overwritten")?;
+                }
+            }
+            terminal = matches!(op, Opcode::RetOwn | Opcode::RetDefer);
+        }
+        if terminal {
+            require(active.is_empty(), "terminal loses live service state")?;
+        }
+        let edges = allocation::outgoing(inst);
+        let mut successors = Vec::new();
+        for edge in &edges {
+            let mut next = active.clone();
+            let mut destinations = Vec::new();
+            let mut consumed = Active::new();
+            let mut produced = BTreeSet::new();
+            for assignment in &edge.assignments {
+                if !linear(f, assignment.destination) {
+                    continue;
+                }
+                match assignment.source {
+                    Source::Location(source) => {
+                        require(active.contains(&source) && consumed.insert(source),
+                            "edge duplicates or forwards a consumed service")?;
+                    }
+                    Source::ProducedSlot(slot) => {
+                        require(produced.insert(slot), "edge duplicates produced service")?;
+                    }
+                }
+                destinations.push(assignment.destination);
+            }
+            for location in consumed {
+                next.remove(&location);
+            }
+            for destination in destinations {
+                require(next.insert(destination), "edge overwrites live service")?;
+            }
+            successors.push((edge.target_pc as usize, next));
+        }
+        if edges.is_empty() && !terminal {
+            successors.push((pc + 1, active));
+        }
+        for (target, next) in successors {
+            let previous = incoming.get_mut(target).ok_or_else(|| error("service target outside code"))?;
+            if let Some(previous) = previous {
+                require(*previous == next, "inconsistent live services at CFG join")?;
+            } else {
+                *previous = Some(next);
+                work.push(target);
+            }
+        }
+    }
+    Ok(incoming.into_iter().enumerate().filter_map(|(pc, active)| {
+        let locations = active?.into_iter().collect::<Vec<_>>();
+        (!locations.is_empty()).then_some(StateRecord { pc: pc as u32, locations })
+    }).collect())
+}
+
+pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
+    for function in &p.functions {
+        enforce(function.code.len() <= 65_536
+            && function.code.len().saturating_mul(function.registers.len() + function.services.len())
+                <= 8 * 1024 * 1024, "LOAD_WORK_BUDGET", "function exceeds verification work budget")?;
+    }
+    verify(p)?;
+    for (id, object) in p.objects.iter().enumerate() {
+        let entries = p.functions.iter().filter(|function| function.proofs.entry.as_ref()
+            .is_some_and(|entry| entry.destroy == Some(id as u32))).collect::<Vec<_>>();
+        require(entries.len() == usize::from(object.layout.has_destroy),
+            "descriptor destroy entry inventory mismatch")?;
+        for entry in entries {
+            require(entry.entry_abi == EntryAbi::Observation && entry.results.is_empty()
+                && entry.params.len() == 1
+                && verify::loc_type(entry, entry.params[0]) == Ok(ProducedType::Value(Type::Object(id as u32))),
+                "destroy entry signature mismatch")?;
+        }
+    }
+    for f in &p.functions {
+        if matches!(f.entry_abi, EntryAbi::Owned | EntryAbi::Defer { .. }) {
+            require(f.params.iter().filter(|&&location| verify::loc_type(f, location)
+                == Ok(ProducedType::Service(ServiceKind::Packet))).count() == 1,
+                "owning entry requires one input packet")?;
+        }
+        enforce(f.params.iter().all(|&location| !matches!(verify::loc_type(f, location),
+            Ok(ProducedType::Service(ServiceKind::Pending | ServiceKind::Cleanup | ServiceKind::ExitState
+                | ServiceKind::StableKey | ServiceKind::DestroyBorrow | ServiceKind::ScopeState
+                | ServiceKind::FailureState)))),
+            "ENTRY_PRIVATE_SERVICE", "private service contents cannot be entry arguments")?;
+        if let Some(entry) = &f.proofs.entry
+            && let Some(name) = &entry.external
+        {
+            let trusted = contracts.entry(name).ok_or_else(|| error(format!("unregistered external {name}")))?;
+            require(f.entry_abi == trusted.entry_abi && f.registers == trusted.registers
+                && f.services == trusted.services && f.params == trusted.params && f.results == trusted.results
+                && f.proofs.entry == trusted.proofs.entry, "external signature/summary mismatch")?;
+            continue;
+        }
+        check_failure_mask(p, f)?;
+        check_call_contracts(p, f)?;
+        check_service_results(p, f)?;
+        let states = service_states(f)?;
+        enforce(f.proofs.states == states, "EVIDENCE_STATES",
+            "service maps differ from reconstructed lifetimes")?;
+        check_roots(f)?;
+        let mut reconstructed = evidence::Evidence::new(p, f);
+        let destroy_masks = (0..f.proofs.closes.len()).map(|close| {
+            visible_destroy_failures(p, f, close as u32, &mut reconstructed)
+        }).collect::<Result<Vec<_>, _>>()?;
+        check_plans(p, f, &mut reconstructed, &destroy_masks)?;
+        check_fresh(f, &mut reconstructed)?;
+        enforce(f.proofs.static_selections == evidence::static_selections_with(p, f, &mut reconstructed)?,
+            "EVIDENCE_SELECTIONS", "static selection relocation mismatch")?;
+        reconstructed.check_budget()?;
+        automaton::check(p, f, &destroy_masks)?;
+        let allocation = allocate(f)?;
+        check_allocation(f, &allocation)?;
+    }
+    Ok(())
+}
+
+fn traced(f: &Function, location: Location) -> bool {
+    match location {
+        Location::Register(id) => !matches!(f.registers[id as usize], Type::Bool | Type::Never | Type::Descriptor),
+        Location::Service(id) => !matches!(f.services[id as usize], ServiceKind::Deps | ServiceKind::Closed),
+    }
+}
+
+fn root_index(roots: &[RootRequirement]) -> BTreeMap<u32, Active> {
+    let mut index = BTreeMap::<u32, Active>::new();
+    for root in roots { index.entry(root.pc).or_default().extend(&root.locations); }
+    index
+}
+
+fn check_roots(f: &Function) -> Check {
+    let mut bare = f.clone();
+    bare.proofs.roots.clear();
+    bare.proofs.post_roots.clear();
+    // State maps were reconstructed above; dependencies keep zero-word deps leaves alive.
+    let live = live_locations(&bare)?;
+    let supplied = root_index(&f.proofs.roots);
+    let post = root_index(&f.proofs.post_roots);
+    for (pc, required) in live.iter().enumerate() {
+        let roots = supplied.get(&(pc as u32));
+        enforce(required.iter().filter(|&&loc| traced(f, loc))
+            .all(|loc| roots.is_some_and(|roots| roots.contains(loc))),
+            "ROOTS_BEFORE", &format!("missing abstract reference root at pc {pc}"))?;
+        // J1/J2 consume both maps. Post is after the helper, before the next instruction/edge copy.
+        // Outcome payloads live in the destination block maps; Post records themselves are never roots (§8).
+        if matches!(f.code[pc], Instruction::Champ { flow: Flow::Next(_), .. })
+            && !matches!(f.code[pc], Instruction::Champ { op: Opcode::RetOwn | Opcode::RetDefer, .. })
+        {
+            let after = live.get(pc + 1).into_iter().flatten().filter(|&&loc| traced(f, loc));
+            enforce(after.clone().all(|loc| post.get(&(pc as u32)).is_some_and(|roots| roots.contains(loc))),
+                "ROOTS_AFTER", &format!("missing traced live-out at pc {pc}: {:?}",
+                    after.filter(|loc| !post.get(&(pc as u32)).is_some_and(|roots| roots.contains(loc)))
+                        .collect::<Vec<_>>()))?;
+        }
+    }
+    Ok(())
+}
+
+/// A proved empty inventory sees no descriptor. Opaque packets/journals conservatively see all
+/// registered destroys, including descriptors reachable through fields and an aborted reserve.
+pub(super) fn visible_destroy_failures(p: &Program, f: &Function, close: u32,
+    evidence: &mut evidence::Evidence<'_>) -> Result<u32, Error>
+{
+    let contract = &f.proofs.closes[close as usize];
+    let Instruction::Champ { op: Opcode::CleanupBegin, arguments, .. } = &f.code[contract.begin_pc as usize]
+        else { return Err(violation("CLOSE_TAIL", "close is not cleanup.begin")); };
+    let locations = arguments.iter().filter_map(|arg| match arg {
+        Argument::Location(location) => Some(*location), _ => None,
+    }).collect::<Vec<_>>();
+    let reserve = f.proofs.cleanup_plans.iter().any(|plan| plan.close == close && plan.reserve);
+    let empty_source = locations.first()
+        .is_some_and(|&loc| evidence.inventory(loc).is_some_and(|keys| keys.is_empty()));
+    let empty_reserve = !reserve || contract.reserve && locations.get(1)
+        .is_some_and(|&loc| evidence.inventory(loc).is_some_and(|keys| keys.is_empty()));
+    evidence.check_budget()?;
+    if empty_source && empty_reserve { return Ok(0); }
+    Ok(p.functions.iter().filter_map(|function| function.proofs.entry.as_ref())
+        .filter(|entry| entry.destroy.is_some()).fold(0, |mask, entry| mask | entry.failures))
+}
+
+fn check_plans(p: &Program, f: &Function, reconstructed: &mut evidence::Evidence<'_>, destroy_masks: &[u32])
+    -> Check
+{
+    for (id, _) in f.proofs.plans.iter().enumerate() {
+        require(f.proofs.cleanup_plans.iter().filter(|evidence| evidence.plan == id as u32).count() == 1,
+            "missing or duplicate cleanup plan evidence")?;
+    }
+    for evidence in &f.proofs.cleanup_plans {
+        let plan = f.proofs.plans.get(evidence.plan as usize).ok_or_else(|| error("invalid plan relocation"))?;
+        let close = f.proofs.closes.get(evidence.close as usize).ok_or_else(|| error("invalid close relocation"))?;
+        let envelope = f.proofs.envelopes.get(close.envelope as usize).ok_or_else(|| error("invalid D18"))?;
+        let mut sources = vec![if matches!(&f.code[close.begin_pc as usize],
+            Instruction::Champ { arguments, .. } if matches!(arguments.first(),
+                Some(Argument::Location(Location::Service(id))) if f.services[*id as usize] == ServiceKind::Packet))
+        { MergeSource::Packet } else { MergeSource::Scope }];
+        if evidence.reserve {
+            sources.push(MergeSource::Reserve);
+        }
+        enforce(evidence.sources == sources, "EVIDENCE_SOURCES", "plan omits inventory or reserve")?;
+
+        let Instruction::Champ { op: Opcode::CleanupBegin, arguments: begin, .. }
+            = &f.code[close.begin_pc as usize] else { return Err(error("close is not cleanup.begin")) };
+        let source = begin.iter().filter_map(|argument| match argument {
+            Argument::Location(location) => Some(*location), _ => None,
+        }).collect::<Vec<_>>();
+        let reserve_empty = !evidence.reserve || close.reserve && source.get(1)
+            .is_some_and(|&pending| reconstructed.inventory(pending).is_some_and(|keys| keys.is_empty()));
+        enforce(!evidence.reserve || close.reserve || plan.merge, "ABORT_MERGE",
+            "an explicitly aborted reserve requires merge")?;
+        if plan.merge {
+            enforce(evidence.slots.is_empty() && evidence.suffixes.is_empty()
+                && f.proofs.selections[plan.selection as usize].locations.is_empty()
+                && f.proofs.order_witnesses[plan.order_witness as usize].creation_pcs.is_empty()
+                && !evidence.reserve_empty, "MERGE_EVIDENCE", "merge carries direct evidence")?;
+            let failures = destroy_masks[evidence.close as usize];
+            enforce(failures & !envelope.failures == 0, "D18_EXECUTOR", "merge envelope omits destroy failures")?;
+            continue;
+        }
+        require(evidence.reserve_empty == reserve_empty, "forged empty-reserve proof (B2)")?;
+        require(envelope.failures == 0 || reserve_empty, "direct plan violates B2")?;
+        require(!close.active_failure || reserve_empty, "active failure requires whole-reserve executor")?;
+        require(evidence.suffixes.len() == evidence.slots.len(), "incomplete direct suffixes")?;
+        let mut seen = Active::new();
+        let mut creation_pcs = Vec::new();
+        for (index, slot) in evidence.slots.iter().enumerate() {
+            require(seen.insert(slot.identity), "duplicate direct identity")?;
+            require(f.blocks.iter().any(|block| block.pc == slot.active_pc)
+                && (slot.active_pc == close.begin_pc || evidence::precedes(f, slot.active_pc, close.begin_pc)),
+                "direct active-slot witness does not reach close")?;
+            let ty = verify::loc_type(f, slot.identity)?;
+            let ProducedType::Value(Type::Object(object)) = ty else { return Err(error("direct identity type")) };
+            require(matches!(slot.descriptor, Location::Register(id) if f.code.iter().any(|instruction| {
+                matches!(instruction, Instruction::Data { op: DataOp::Const, output: Some(output),
+                    immediate: Immediate::Constant(Constant::Descriptor(descriptor)), .. }
+                    if *output == id && *descriptor == object)
+            })), "direct descriptor witness does not match identity")?;
+            require(p.functions.get(slot.destroy as usize).and_then(|f| f.proofs.entry.as_ref())
+                .is_some_and(|entry| entry.destroy == Some(object)), "direct destroy descriptor/entry mismatch")?;
+            let actual = reconstructed.identity(slot.identity).ok_or_else(|| error("unknown direct identity origin"))?;
+            match slot.origin {
+                CreationOrigin::Singleton => require(evidence.slots.len() <= 1, "singleton proves no serial order")?,
+                CreationOrigin::Create(pc) => {
+                    require(matches!(f.code.get(pc as usize), Some(Instruction::Champ {
+                        op: Opcode::OwnCreateCommit, .. })), "forged local creation witness")?;
+                    require(actual == (pc, None), "creation witness belongs to another identity")?;
+                    creation_pcs.push(pc);
+                }
+                CreationOrigin::FreshResult { pc, callee } => {
+                    require(matches!(f.code.get(pc as usize), Some(Instruction::Champ {
+                        op: Opcode::InvokeCallOwn, arguments, .. }) if arguments.contains(&Argument::Entry(callee))),
+                        "fresh witness is not its owning call")?;
+                    require(p.functions.get(callee as usize).and_then(|f| f.proofs.entry.as_ref())
+                        .is_some_and(|entry| entry.fresh_singleton), "forged fresh-result witness")?;
+                    require(actual == (pc, Some(callee)), "fresh-result witness is not on its successful value")?;
+                    creation_pcs.push(pc);
+                }
+            }
+            let suffix = &evidence.suffixes[index];
+            let remaining = evidence.slots[index + 1..].iter().map(|slot| slot.identity).collect::<Vec<_>>();
+            require(suffix.completed == index as u32 + 1 && suffix.remaining == remaining,
+                "direct suffix repeats current or loses remainder")?;
+            let roots = evidence.slots[index + 1..].iter().flat_map(|slot| [slot.identity, slot.descriptor])
+                .collect::<Vec<_>>();
+            require(suffix.roots == roots, "missing direct suffix roots")?;
+        }
+        let expected = evidence.slots.iter().map(|slot| reconstructed.identity(slot.identity))
+            .collect::<Option<BTreeSet<_>>>().ok_or_else(|| error("unknown direct slots"))?;
+        require(reconstructed.inventory(source[0]) == Some(expected), "direct plan loses owner inventory")?;
+        require(creation_pcs.windows(2).all(|pcs| evidence::precedes(f, pcs[1], pcs[0])),
+            "direct order is not descending creation on every CFG path")?;
+        require(f.proofs.order_witnesses[plan.order_witness as usize].creation_pcs == creation_pcs,
+            "order witness relocation mismatch")?;
+        require(f.proofs.selections[plan.selection as usize].locations
+            == evidence.slots.iter().map(|slot| slot.identity).collect::<Vec<_>>(), "direct inventory mismatch")?;
+    }
+    Ok(())
+}
+
+fn check_fresh(f: &Function, evidence: &mut evidence::Evidence<'_>) -> Check {
+    if !f.proofs.entry.as_ref().is_some_and(|entry| entry.fresh_singleton) {
+        return Ok(());
+    }
+    let mut returns = 0;
+    let reachable = reachable(f);
+    for (pc, instruction) in f.code.iter().enumerate().filter(|(pc, _)| reachable.contains(pc)) {
+        let _ = pc;
+        let Instruction::Champ { op: Opcode::RetOwn, arguments, .. } = instruction else { continue };
+        returns += 1;
+        let locations = arguments.iter().filter_map(|argument| match *argument {
+            Argument::Location(location) => Some(location), _ => None,
+        }).collect::<Vec<_>>();
+        require(locations.len() >= 2, "fresh singleton needs value and packet")?;
+        let key = evidence.identity(locations[0])
+            .ok_or_else(|| violation("FRESH_ORIGIN", "fresh result has no successful creation"))?;
+        enforce(evidence.inventory(locations[1]) == Some(BTreeSet::from([key])),
+            "FRESH_PACKET", "fresh summary not supported by every reachable return packet")?;
+    }
+    enforce(returns != 0, "FRESH_REACHABLE_RETURN", "fresh summary has no reachable return evidence")
+}
+
+fn check_service_results(p: &Program, f: &Function) -> Check {
+    for instruction in &f.code {
+        for (edge, schema) in verify::checked_edges(p, f, instruction)? {
+            for (index, ty) in schema.iter().enumerate() {
+                if matches!(ty, ProducedType::Service(kind)
+                    if !matches!(kind, ServiceKind::Closed | ServiceKind::Deps))
+                {
+                    require(edge.assignments.iter().filter(|assignment| {
+                        assignment.source == Source::ProducedSlot(index as u32)
+                    }).count() == 1, "outcome loses or duplicates linear result schema slot")?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_call_contracts(p: &Program, f: &Function) -> Check {
+    for instruction in &f.code {
+        let Instruction::Champ { op: Opcode::InvokeCallOwn | Opcode::InvokeDefer, arguments, .. } = instruction
+            else { continue };
+        let summary = arguments.iter().find_map(|arg| match *arg {
+            Argument::Summary(id) => p.tables.summaries.get(id as usize), _ => None,
+        }).ok_or_else(|| error("call has no summary"))?;
+        let contract = p.functions[summary.entry as usize].proofs.entry.as_ref()
+            .ok_or_else(|| error("callee has no verified entry contract"))?;
+        require(summary.may_fail == (contract.failures != 0) && summary.retained_params == contract.retained_params,
+            "call summary disagrees with verified entry contract")?;
+    }
+    Ok(())
+}
+
+pub(super) fn reachable(f: &Function) -> BTreeSet<usize> {
+    let mut result = BTreeSet::new();
+    let mut work = if f.code.is_empty() { vec![] } else { vec![0] };
+    while let Some(pc) = work.pop() {
+        if !result.insert(pc) { continue; }
+        let inst = &f.code[pc];
+        work.extend(allocation::outgoing(inst).iter().map(|edge| edge.target_pc as usize));
+        if matches!(inst, Instruction::Data { .. } | Instruction::Champ { flow: Flow::Next(_), .. })
+            && !matches!(inst, Instruction::Champ { op: Opcode::RetOwn | Opcode::RetDefer, .. })
+            && pc + 1 < f.code.len()
+        {
+            work.push(pc + 1);
+        }
+    }
+    result
+}
+
+/// Failure views follow SSA, including handled Unwind edges. Only escaping raise or implicit scalar
+/// failure contributes to the entry mask. Catching an Unwind does not itself add a failure.
+fn check_failure_mask(p: &Program, f: &Function) -> Check {
+    let reachable = reachable(f);
+    let mut masks = BTreeMap::<Location, u32>::new();
+    for &param in &f.params {
+        if verify::loc_type(f, param)? == ProducedType::Value(Type::Failure) {
+            masks.insert(param, 15);
+        }
+    }
+    let destroy_mask = p.functions.iter().filter_map(|f| f.proofs.entry.as_ref())
+        .filter(|entry| entry.destroy.is_some()).fold(0, |mask, entry| mask | entry.failures);
+    loop {
+        let mut changed = false;
+        for &pc in &reachable {
+            let inst = &f.code[pc];
+            if let Instruction::Data { op: DataOp::Move | DataOp::FailSecondary, inputs,
+                output: Some(output), .. } = inst
+            {
+                let mask = inputs.iter().fold(0, |mask, &id| mask | masks.get(&Location::Register(id)).copied()
+                    .unwrap_or(0));
+                let entry = masks.entry(Location::Register(*output)).or_default();
+                changed |= *entry | mask != *entry;
+                *entry |= mask;
+            }
+            for (ordinal, edge) in allocation::outgoing(inst).iter().enumerate() {
+                let produced = if let Instruction::Champ { op, arguments, flow: Flow::Outcomes(outcomes) } = inst {
+                    match (op, outcomes[ordinal].tag) {
+                        (Opcode::InvokeCallOwn | Opcode::InvokeDefer, Tag::Unwind) => arguments.iter()
+                            .find_map(|arg| match arg {
+                                Argument::Entry(id) => Some(p.functions[*id as usize].proofs.entry.as_ref()
+                                    .map_or(15, |entry| entry.failures)), _ => None,
+                            }).unwrap_or(15),
+                        (Opcode::ExitDispatch, Tag::Failure) => f.proofs.envelopes.iter()
+                            .fold(0, |mask, envelope| mask | envelope.failures)
+                            | masks.values().fold(0, |mask, value| mask | value),
+                        (Opcode::FailureDispatch, Tag::Some) => destroy_mask,
+                        (_, Tag::Unwind) => 2,
+                        _ => 0,
+                    }
+                } else { 0 };
+                for assignment in &edge.assignments {
+                    if verify::loc_type(f, assignment.destination)? != ProducedType::Value(Type::Failure) {
+                        continue;
+                    }
+                    let mask = match assignment.source {
+                        Source::Location(source) => masks.get(&source).copied().unwrap_or(0),
+                        Source::ProducedSlot(_) => produced,
+                    };
+                    let entry = masks.entry(assignment.destination).or_default();
+                    changed |= *entry | mask != *entry;
+                    *entry |= mask;
+                }
+            }
+        }
+        if !changed { break; }
+    }
+    let mut computed = 0;
+    for pc in reachable {
+        match &f.code[pc] {
+            Instruction::Raise(id) => computed |= masks.get(&Location::Register(*id)).copied().unwrap_or(15),
+            Instruction::Data { op: DataOp::IntMod | DataOp::Convert | DataOp::RangeNew, .. } => computed |= 2,
+            _ => {}
+        }
+    }
+    enforce(computed & !f.proofs.entry.as_ref().map_or(0, |entry| entry.failures) == 0,
+        "ENTRY_FAILURE_MASK", "body failures exceed declared entry mask")
+}

@@ -190,6 +190,8 @@ pub struct NextPost {
 #[derive(Debug, Default)]
 #[repr(C)]
 pub struct FinishPost {
+    /// Transport completion marker, not storage for the zero-word abstract Closed proof.
+    /// J1 erases Closed and never copies this word into a service frame slot.
     pub closed: u64,
     pub failure: Word,
     /// Zero means no pending, including every failed close.

@@ -446,7 +446,8 @@ fn decode_runtime(bytes: &[u8]) -> Result<okkama_sparrow::Program, okkama_sparro
     }
     #[cfg(feature = "champ-abi")]
     {
-        okkama_sparrow::spb17::decode(bytes)?;
+        let program = okkama_sparrow::spb17::decode(bytes)?;
+        okkama_sparrow::spb17::verify_load(&program, &okkama_sparrow::spb17::NoExternalContracts)?;
         Err(okkama_sparrow::CodecError {
             offset: None,
             message: "Champ runtime is not yet available: requires #572 and #573-P1".into(),

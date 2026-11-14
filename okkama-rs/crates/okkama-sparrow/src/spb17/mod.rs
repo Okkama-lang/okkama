@@ -5,17 +5,48 @@ mod codec;
 pub mod layout;
 mod registry;
 mod verify;
+mod load;
+mod evidence;
+pub use evidence::static_selections;
+mod automaton;
+pub use automaton::infer_plan_reserves;
 
-pub use allocation::{Allocation, Copy, CopySource, allocate, check_allocation, live_locations};
+pub use allocation::{AllocatedRoot, Allocation, Copy, CopySource, allocate, check_allocation, live_locations};
 pub use codec::{assemble, decode, disassemble, encode};
-pub use registry::{CallAbi, Opcode, ProducedType, ResultContext, Tag};
+pub use registry::{CallAbi, CleanupAbi, MachineArgument, Opcode, ProducedType, ResultContext, Tag};
 pub use verify::verify;
+pub use load::{ExternalContracts, NoExternalContracts, verify_load, service_states};
 
 pub const VERSION: u16 = 17;
-pub use crate::CodecError as Error;
+/// Stable load-gate diagnostics; prose can change without breaking consumers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Error {
+    pub offset: Option<usize>,
+    pub message: String,
+    pub rule: &'static str,
+}
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.rule, self.message)
+    }
+}
+impl std::error::Error for Error {}
+impl From<Error> for crate::CodecError {
+    fn from(error: Error) -> Self {
+        Self { offset: error.offset, message: error.to_string() }
+    }
+}
+
+pub(crate) fn violation(rule: &'static str, message: impl Into<String>) -> Error {
+    Error { offset: None, message: message.into(), rule }
+}
+
+pub(crate) fn enforce(condition: bool, rule: &'static str, message: &str) -> Result<(), Error> {
+    if condition { Ok(()) } else { Err(violation(rule, message)) }
+}
 
 pub(crate) fn error(message: impl Into<String>) -> Error {
-    Error { offset: None, message: message.into() }
+    violation("SPB_STRUCTURE", message)
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -73,6 +104,7 @@ pub enum Type {
     Object(u32),
     Successor(u32),
     Never,
+    Descriptor,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -185,6 +217,7 @@ pub enum Constant {
     Int(String),
     Bool(bool),
     Str(String),
+    Descriptor(u32),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -216,6 +249,7 @@ pub enum Argument {
     Flag(bool),
     Kind(ExitKind),
     Registration(u32),
+    Destination(ExitDestination),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -230,6 +264,7 @@ pub enum Instruction {
     Cond { condition: u32, yes: Edge, no: Edge },
     Ret(Vec<u32>),
     Unreachable,
+    Raise(u32),
     Champ { op: Opcode, arguments: Vec<Argument>, flow: Flow },
 }
 
@@ -271,6 +306,7 @@ pub enum DataOp {
     ObjInit,
     ObjGet,
     ObjNext,
+    FailSecondary,
 }
 
 /// Shared declarations. Function-local proof references never index these
@@ -303,7 +339,16 @@ pub struct Summary {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FunctionProofs {
+    pub entry: Option<EntryContract>,
+    pub static_selections: Vec<StaticSelection>,
+    pub closes: Vec<CloseContract>,
+    pub cleanup_plans: Vec<CleanupPlan>,
+    pub post_roots: Vec<RootRequirement>,
     pub selections: Vec<Selection>,
+    /// Conservative extra liveness edges only. Never authorize ownership transfer or omit a root.
+    /// The loader reconstructs service lifetimes, inventory and origin independently. Actual operand
+    /// liveness always participates in before/after root checking, even when no dependency is supplied.
+    /// Extra edges can only retain storage longer; ordinary SSA availability is checked independently.
     pub dependencies: Vec<Dependency>,
     pub registrations: Vec<RegistrationMap>,
     pub plans: Vec<Plan>,
@@ -367,3 +412,82 @@ mod tests;
 
 #[cfg(test)]
 mod layout_tests;
+
+/// Function contracts are verified against bodies or a trusted external catalog at load time.
+/// In particular, escaping body failures (not just fresh_singleton) must fit the declared mask.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EntryContract {
+    pub external: Option<String>,
+    pub retained_params: Vec<u32>,
+    pub fresh_singleton: bool,
+    pub failures: u32,
+    pub destroy: Option<u32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CloseContract {
+    pub begin_pc: u32,
+    pub boundary: u32,
+    pub reserve: bool,
+    pub active_failure: bool,
+    pub envelope: u32,
+}
+
+/// Function-local IDs are relocated separately from runtime PlanId (which starts at one).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CleanupPlan {
+    pub plan: u32,
+    pub reserve: bool,
+    pub close: u32,
+    pub reserve_empty: bool,
+    pub sources: Vec<MergeSource>,
+    pub slots: Vec<DirectSlot>,
+    /// Diagnostic Low relocation only; runtime/JIT must never use these as ownership/order authority.
+    /// The loader derives inventory and creation origins from instructions and all incoming edges.
+    pub preserves: Vec<Dependency>,
+    /// Diagnostic Low relocation only, with the same non-authoritative status as preserves.
+    pub joins: Vec<Dependency>,
+    pub suffixes: Vec<CleanupSuffix>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MergeSource { Scope, Packet, Reserve }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectSlot {
+    pub identity: Location,
+    pub descriptor: Location,
+    pub destroy: u32,
+    pub origin: CreationOrigin,
+    /// Diagnostic source anchor, checked for CFG reachability only. Presence and identity are proved
+    /// independently from the close inventory; J1/J2 may not use this as an active-slot certificate.
+    pub active_pc: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CreationOrigin {
+    Singleton,
+    Create(u32),
+    FreshResult { pc: u32, callee: u32 },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CleanupSuffix {
+    pub completed: u32,
+    pub remaining: Vec<Location>,
+    pub roots: Vec<Location>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExitDestination { Caller, Loop(u32), Scope(u32) }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StaticSelection {
+    pub pc: u32,
+    pub selection: u32,
+    pub input: Location,
+    pub indices: Vec<u32>,
+}
+
+#[cfg(test)]
+mod load_tests;

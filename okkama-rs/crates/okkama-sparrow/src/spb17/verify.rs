@@ -1,6 +1,5 @@
-//! S1 structural, type, SSA/CFG and registry result-schema verification.
-//! Ownership conservation, order and root sufficiency are S2/S3 dependencies;
-//! this data verifier is not permission to execute a Champ artifact.
+//! Structural, type, SSA/CFG and registry result-schema verification.
+//! Executable artifacts additionally pass verify_load: service lifetimes, cleanup phases, order and roots.
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
@@ -22,7 +21,7 @@ fn ty_valid(ty: Type, p: &Program) -> Check {
     Ok(())
 }
 
-fn loc_type(f: &Function, location: Location) -> Result<ProducedType, Error> {
+pub(crate) fn loc_type(f: &Function, location: Location) -> Result<ProducedType, Error> {
     match location {
         Location::Register(id) => Ok(ProducedType::Value(*at(&f.registers, id)?)),
         Location::Service(id) => Ok(ProducedType::Service(*at(&f.services, id)?)),
@@ -39,6 +38,7 @@ fn constant_type(value: &Constant) -> Result<Type, Error> {
             Ok(Type::Int)
         }
         Constant::Bool(_) => Ok(Type::Bool),
+        Constant::Descriptor(_) => Ok(Type::Descriptor),
         Constant::Str(_) => Ok(Type::Str),
     }
 }
@@ -95,7 +95,7 @@ pub fn verify(p: &Program) -> Check {
         }
     }
     for f in &p.functions {
-        verify_function(p, f).map_err(|e| error(format!("{}: {e}", f.symbol)))?;
+        verify_function(p, f).map_err(|e| Error { message: format!("{}: {}", f.symbol, e.message), ..e })?;
     }
     Ok(())
 }
@@ -117,6 +117,43 @@ fn check_proofs(p: &Program, f: &Function) -> Check {
             if let Some(ty) = label.result {
                 ty_valid(ty, p)?;
             }
+        }
+    }
+    if let Some(entry) = &f.proofs.entry {
+        require(entry.failures & !15 == 0, "invalid entry failure mask")?;
+        if let Some(object) = entry.destroy { at(&p.objects, object)?; }
+    }
+    let mut begins = BTreeSet::new();
+    for close in &f.proofs.closes {
+        at(&f.code, close.begin_pc)?;
+        at(&p.tables.boundaries, close.boundary)?;
+        at(&f.proofs.envelopes, close.envelope)?;
+        require(begins.insert(close.begin_pc), "duplicate close descriptor")?;
+    }
+    for evidence in &f.proofs.cleanup_plans {
+        at(&f.proofs.plans, evidence.plan)?;
+        at(&f.proofs.closes, evidence.close)?;
+        for slot in &evidence.slots {
+            loc_type(f, slot.identity)?;
+            loc_type(f, slot.descriptor)?;
+            at(&p.functions, slot.destroy)?;
+            at(&f.code, slot.active_pc)?;
+            match slot.origin {
+                CreationOrigin::Singleton => {}
+                CreationOrigin::Create(pc) => { at(&f.code, pc)?; }
+                CreationOrigin::FreshResult { pc, callee } => {
+                    at(&f.code, pc)?;
+                    at(&p.functions, callee)?;
+                }
+            }
+        }
+        for suffix in &evidence.suffixes {
+            locations(&suffix.remaining)?;
+            locations(&suffix.roots)?;
+        }
+        for proof in evidence.preserves.iter().chain(&evidence.joins) {
+            loc_type(f, proof.value)?;
+            locations(&proof.obligations)?;
         }
     }
     for dependency in &f.proofs.dependencies {
@@ -157,14 +194,14 @@ fn check_proofs(p: &Program, f: &Function) -> Check {
         at(&f.code, state.pc)?;
         locations(&state.locations)?;
     }
-    for root in &f.proofs.roots {
+    for root in f.proofs.roots.iter().chain(&f.proofs.post_roots) {
         at(&f.code, root.pc)?;
         locations(&root.locations)?;
     }
     Ok(())
 }
 
-fn context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) -> Result<ResultContext, Error> {
+pub(crate) fn context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) -> Result<ResultContext, Error> {
     let mut ctx = ResultContext::default();
     let mut flags = Vec::new();
     for arg in args {
@@ -177,7 +214,12 @@ fn context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) -> Result<R
                 ctx.may_fail = summary.may_fail;
                 ctx.value = at(&p.functions, summary.entry)?.results.first().copied();
             }
-            Argument::Selection(id) => { at(&f.proofs.selections, id)?; }
+            Argument::Selection(id) => {
+                for &location in &at(&f.proofs.selections, id)?.locations {
+                    enforce(matches!(loc_type(f, location)?, ProducedType::Value(_)),
+                        "OPERAND_VALUE", "selection must contain language values")?;
+                }
+            }
             Argument::Plan(id) => { at(&f.proofs.plans, id)?; }
             Argument::Schedule(id) => { at(&f.proofs.schedules, id)?; }
             Argument::Envelope(id) => { at(&f.proofs.envelopes, id)?; }
@@ -189,6 +231,9 @@ fn context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) -> Result<R
                 }
             }
             Argument::Object(id) => { at(&p.objects, id)?; }
+            Argument::Destination(ExitDestination::Caller) => {}
+            Argument::Destination(ExitDestination::Loop(id)) => { at(&p.tables.boundaries, id)?; }
+            Argument::Destination(ExitDestination::Scope(id)) => { at(&p.tables.scopes, id)?; }
             Argument::Flag(flag) => flags.push(flag),
             Argument::Registration(id) => { at(&f.proofs.registrations, id)?; }
             Argument::Binding(_) | Argument::Field(_) | Argument::Label(_) | Argument::Kind(_) => {}
@@ -203,8 +248,12 @@ fn context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) -> Result<R
         ctx.active_failure = flags[1];
         ctx.may_fail = flags[2];
     }
-    if matches!(op, Opcode::InvokeCallOwn | Opcode::InvokeDefer | Opcode::ExitCommit) {
+    if matches!(op, Opcode::InvokeCallOwn | Opcode::InvokeDefer) {
         require(args.iter().any(|arg| matches!(arg, Argument::Summary(_))), "missing result contract summary")?;
+    }
+    if op == Opcode::ExitCommit {
+        // The load gate checks this schema against the typed pending, including through closes/edges.
+        ctx.value = f.results.first().copied();
     }
     check_arguments(op, args)?;
     let locations = args.iter().filter_map(|arg| match arg {
@@ -217,18 +266,33 @@ fn context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) -> Result<R
     };
     use Opcode::*;
     use ServiceKind::*;
+    let value = |index: usize| -> Check {
+        enforce(locations.get(index).is_some_and(|&loc| matches!(loc_type(f, loc), Ok(ProducedType::Value(_)))),
+            "OPERAND_VALUE", "value operand cannot contain a service")
+    };
     match op {
         OwnMove | OwnJoin => {
             for index in 0..locations.len() {
                 input(index, Packet)?;
             }
         }
-        OwnSplit | OwnSplitChecked => input(0, Packet)?,
+        OwnSplit | OwnSplitChecked => {
+            input(0, Packet)?;
+            for index in 1..locations.len() { value(index)?; }
+        }
         OwnAdmit | OwnAccept | OwnBind | OwnRebind => {
             input(0, ScopeState)?;
             input(locations.len() - 1, Packet)?;
+            if matches!(op, OwnBind | OwnRebind) {
+                value(1)?;
+            }
         }
-        ScopeSplit | DeferRegister => input(0, ScopeState)?,
+        ScopeSplit | DeferRegister => {
+            input(0, ScopeState)?;
+            for index in 1..locations.len() {
+                value(index)?;
+            }
+        }
         ScopeTransfer | OwnStage => {
             let states = if ctx.between { 2 } else { 1 };
             let extra = if op == OwnStage { 2 } else { 0 };
@@ -239,13 +303,47 @@ fn context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) -> Result<R
             }
             if op == OwnStage {
                 input(locations.len() - 1, Packet)?;
+                value(states)?;
+                let object = args.iter().find_map(|arg| match arg {
+                    Argument::Object(id) => Some(*id), _ => None,
+                }).ok_or_else(|| violation("STAGE_FIELD_TYPE", "missing staging descriptor"))?;
+                let field = args.iter().find_map(|arg| match arg {
+                    Argument::Field(id) => Some(*id), _ => None,
+                }).ok_or_else(|| violation("STAGE_FIELD_TYPE", "missing staging field"))?;
+                let expected = at(&at(&p.objects, object)?.layout.storage_fields, field)?;
+                enforce(loc_type(f, locations[states])? == ProducedType::Value(*expected),
+                    "STAGE_FIELD_TYPE", "staged value differs from physical field type")?;
             }
         }
         ExitExtend => {
             input(0, Pending)?;
             input(1, Packet)?;
         }
-        ExitReplace | ExitCommit => input(0, Pending)?,
+        ExitPrepare => {
+            input(locations.len() - 1, Packet)?;
+            if locations.len() == 2 { value(0)?; }
+        }
+        ExitReplace => {
+            input(0, Pending)?;
+            input(locations.len() - 1, Packet)?;
+            if locations.len() == 3 { value(1)?; }
+        }
+        ExitCommit => input(0, Pending)?,
+        OwnCreateCommit => {
+            let object = args.iter().find_map(|arg| match arg { Argument::Object(id) => Some(*id), _ => None })
+                .ok_or_else(|| error("create_commit requires descriptor"))?;
+            require(loc_type(f, locations[0])? == ProducedType::Value(Type::Object(object)),
+                "create_commit identity/descriptor mismatch")?;
+        }
+        CleanupBegin => {
+            require(matches!(loc_type(f, locations[0])?, ProducedType::Service(Packet | ScopeState)),
+                "cleanup.begin source must be packet or scope state")?;
+            let rest = locations[1..].iter().map(|&loc| loc_type(f, loc)).collect::<Result<Vec<_>, _>>()?;
+            require(matches!(rest.as_slice(), [] | [ProducedType::Service(Pending)]
+                | [ProducedType::Value(Type::Failure)]
+                | [ProducedType::Service(Pending), ProducedType::Value(Type::Failure)]),
+                "cleanup.begin pending/failure types or ordering mismatch")?;
+        }
         ExitAbort => {
             input(0, Pending)?;
             input(1, Cleanup)?;
@@ -255,9 +353,16 @@ fn context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) -> Result<R
             input(0, Cleanup)?;
             require(loc_type(f, locations[1])? == ProducedType::Value(Type::Failure), "expected failure view")?;
         }
-        DestroyDirect | CleanupDestroy => {
+        CleanupDestroy => {
             input(0, Cleanup)?;
             input(1, StableKey)?;
+        }
+        DestroyDirect => {
+            input(0, Cleanup)?;
+            let object = args.iter().find_map(|arg| match arg { Argument::Object(id) => Some(*id), _ => None })
+                .ok_or_else(|| error("direct destroy requires descriptor"))?;
+            require(loc_type(f, locations[1])? == ProducedType::Value(Type::Object(object)),
+                "direct destroy identity/descriptor mismatch")?;
         }
         ExitDispatch => {
             input(0, Closed)?;
@@ -344,7 +449,7 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
             Location(_) => 'l', Scope(_) => 's', Boundary(_) => 'b', Summary(_) => 'u',
             Selection(_) => 'e', Plan(_) => 'p', Schedule(_) => 'd', Envelope(_) => 'v',
             Entry(_) => 'f', Object(_) => 'o', Binding(_) => 'i', Field(_) => 't',
-            Label(_) => 'a', Flag(_) => '?', Kind(_) => 'k', Registration(_) => 'm',
+            Label(_) => 'a', Flag(_) => '?', Kind(_) => 'k', Registration(_) => 'm', Destination(_) => 'x',
         }
     };
     let shape: String = args.iter().map(kind).collect();
@@ -355,16 +460,16 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         OwnJoin => !shape.is_empty() && shape.chars().all(|ch| ch == 'l'),
         OwnAdmit | OwnAccept => shape == "ll",
         OwnBind | OwnRebind => shape == "lisll",
-        OwnStage => shape == "?ltll" || shape == "?lltll",
+        OwnStage => shape == "?lotll" || shape == "?llotll",
         OwnSplit => shape == "le",
         OwnSplitChecked | ScopeSplit => shape.starts_with("le") && shape[2..].chars().all(|ch| ch == 'l'),
         ScopeTransfer => shape == "?le" || shape == "?lle",
         DeferRegister => shape.starts_with("lm") && shape[2..].chars().all(|ch| ch == 'l' || ch == 'i'),
         ExitPrepare => shape == "kble" || shape == "kblle",
         ExitExtend | ExitAbort | CleanupFailure | CleanupDestroy => shape == "ll",
-        ExitReplace => shape.starts_with('l') && shape.contains('b') && shape.contains('e'),
-        ExitCommit => shape == "lbu",
-        CleanupBegin => shape.starts_with('l') && shape.ends_with("bv"),
+        ExitReplace => shape == "lkble" || shape == "lkblle",
+        ExitCommit => shape == "lx" || shape == "lb",
+        CleanupBegin => matches!(shape.as_str(), "lbv" | "llbv" | "lllbv"),
         CleanupSettle => shape == "ld",
         CleanupPlan => shape == "lp",
         CleanupNext | CleanupFinish | FailureDispatch => shape == "l",
@@ -392,8 +497,12 @@ fn check_data(p: &Program, f: &Function, op: DataOp, inputs: &[u32], output: Opt
     match op {
         Const => {
             let Immediate::Constant(value) = imm else { return Err(error("missing constant")); };
+            if let Constant::Descriptor(id) = value {
+                at(&p.objects, *id)?;
+            }
             expect(&[], Some(constant_type(value)?))
         }
+        FailSecondary => expect(&[Type::Failure, Type::Failure], Some(Type::Failure)),
         IntAdd | IntSub | IntMul | IntMod => expect(&[Type::Int, Type::Int], Some(Type::Int)),
         IntNeg => expect(&[Type::Int], Some(Type::Int)),
         IntEq | IntNe | IntLt | IntLe | IntGt | IntGe => expect(&[Type::Int, Type::Int], Some(Type::Bool)),
@@ -458,7 +567,8 @@ fn check_data(p: &Program, f: &Function, op: DataOp, inputs: &[u32], output: Opt
 fn terminates(inst: &Instruction) -> bool {
     match inst {
         Instruction::Data { .. } => false,
-        Instruction::Champ { op, flow, .. } => op.is_terminator() || matches!(flow, Flow::Outcomes(_)),
+        Instruction::Champ { op, flow, .. } => matches!(op, Opcode::RetOwn | Opcode::RetDefer)
+            || matches!(flow, Flow::Outcomes(_)),
         _ => true,
     }
 }
@@ -471,7 +581,7 @@ fn edges(inst: &Instruction) -> Vec<(&Edge, Vec<ProducedType>)> {
     }
 }
 
-fn checked_edges<'a>(p: &Program, f: &Function, inst: &'a Instruction)
+pub(crate) fn checked_edges<'a>(p: &Program, f: &Function, inst: &'a Instruction)
     -> Result<Vec<(&'a Edge, Vec<ProducedType>)>, Error>
 {
     if let Instruction::Champ { op, arguments, flow } = inst {
@@ -479,7 +589,8 @@ fn checked_edges<'a>(p: &Program, f: &Function, inst: &'a Instruction)
         let tags = op.tags(&ctx);
         match flow {
             Flow::Next(destinations) => {
-                require(!op.is_terminator() || matches!(op, Opcode::RetOwn | Opcode::RetDefer),
+                require(!op.is_terminator() || matches!(op, Opcode::RetOwn | Opcode::RetDefer)
+                    || *op == Opcode::InvokeCallOwn && !ctx.may_fail,
                     "terminator requires outcomes")?;
                 let results = op.results(Tag::Normal, &ctx)?;
                 require(destinations.len() == results.len(), "bad multi-result arity")?;
@@ -506,6 +617,7 @@ fn uses(inst: &Instruction) -> Vec<Location> {
         Instruction::Data { inputs, .. } | Instruction::Ret(inputs) =>
             inputs.iter().copied().map(Location::Register).collect(),
         Instruction::Cond { condition, .. } => vec![Location::Register(*condition)],
+        Instruction::Raise(value) => vec![Location::Register(*value)],
         Instruction::Champ { arguments, .. } => arguments.iter().filter_map(|arg| match arg {
             Argument::Location(location) => Some(*location),
             _ => None,
@@ -529,6 +641,13 @@ fn uses(inst: &Instruction) -> Vec<Location> {
 
 fn verify_function(p: &Program, f: &Function) -> Check {
     check_proofs(p, f)?;
+    if f.proofs.entry.as_ref().is_some_and(|entry| entry.external.is_some()) {
+        require(f.code.is_empty() && f.blocks.is_empty(), "external entry cannot carry code")?;
+        for &param in &f.params {
+            loc_type(f, param)?;
+        }
+        return Ok(());
+    }
     require(f.results.len() <= 1, "P1 entry has at most one language result")?;
     require(!f.blocks.is_empty() && !f.code.is_empty(), "function needs a body")?;
     require(f.blocks[0].pc == 0 && f.blocks[0].params == f.params, "invalid entry block")?;
@@ -545,6 +664,7 @@ fn verify_function(p: &Program, f: &Function) -> Check {
             require(definitions.insert(param, (index, None)).is_none(), "duplicate block parameter")?;
         }
     }
+    let metadata = allocation::metadata_uses(f);
     let mut predecessors = vec![Vec::new(); f.blocks.len()];
     for (block_index, block) in f.blocks.iter().enumerate() {
         let end = f.blocks.get(block_index + 1).map_or(f.code.len(), |block| block.pc as usize);
@@ -562,7 +682,12 @@ fn verify_function(p: &Program, f: &Function) -> Check {
                 Instruction::Cond { condition, .. } => {
                     require(*at(&f.registers, *condition)? == Type::Bool, "condition must be bool")?;
                 }
+                Instruction::Raise(value) => {
+                    require(at(&f.registers, *value)? == &Type::Failure, "raise needs failure")?;
+                }
                 Instruction::Ret(values) => {
+                    enforce(f.entry_abi == EntryAbi::Observation, "ENTRY_RETURN_ABI",
+                        "owning entries must return through ret.own/ret.defer")?;
                     let types = values.iter().map(|&id| at(&f.registers, id).copied())
                         .collect::<Result<Vec<_>, _>>()?;
                     require(types == f.results, "return type/arity mismatch")?;
@@ -642,9 +767,10 @@ fn verify_function(p: &Program, f: &Function) -> Check {
     }
     for (block_index, block) in f.blocks.iter().enumerate() {
         let end = f.blocks.get(block_index + 1).map_or(f.code.len(), |block| block.pc as usize);
-        for pc in block.pc as usize..end {
+        for (pc, metadata) in metadata.iter().enumerate().take(end).skip(block.pc as usize) {
             let mut used = allocation::direct_uses(f, pc);
             used.extend(uses(&f.code[pc]));
+            used.extend(metadata);
             allocation::close_dependencies(f, &mut used);
             for used in used {
                 let &(def_block, def_pc) = definitions.get(&used).ok_or_else(|| error("undefined location"))?;

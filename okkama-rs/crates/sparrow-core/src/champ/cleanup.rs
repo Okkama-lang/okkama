@@ -797,3 +797,29 @@ pub extern "C" fn rt_invoke_defer(ctx: *mut Ctx, entry: EntryId, args: *const Wo
 {
     invoke_owned(ctx, entry, (args, argc), io, unsafe { (*registration).replacements }, true, post)
 }
+
+impl Runtime {
+    /// Verify before mutation, then relocate function-local plan indices to runtime-local nonzero IDs.
+    /// No constructor, native entry or machine code is entered during this operation.
+    pub fn champ_load_cleanup_plans(&mut self, program: &okkama_sparrow::spb17::Program,
+        contracts: &dyn okkama_sparrow::spb17::ExternalContracts) -> Result<Vec<Vec<PlanId>>, Error>
+    {
+        okkama_sparrow::spb17::verify_load(program, contracts).map_err(|failure| error(&failure.to_string()))?;
+        let mut relocated = Vec::new();
+        for function in &program.functions {
+            let mut plans = vec![0; function.proofs.plans.len()];
+            for evidence in &function.proofs.cleanup_plans {
+                let close = &function.proofs.closes[evidence.close as usize];
+                let envelope = &function.proofs.envelopes[close.envelope as usize];
+                let plan = CleanupPlan {
+                    reserve: evidence.reserve,
+                    direct: !function.proofs.plans[evidence.plan as usize].merge,
+                    may_fail: envelope.failures != 0,
+                };
+                plans[evidence.plan as usize] = self.champ_register_cleanup_plan(plan);
+            }
+            relocated.push(plans);
+        }
+        Ok(relocated)
+    }
+}

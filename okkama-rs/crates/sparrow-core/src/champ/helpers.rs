@@ -842,6 +842,8 @@ leaf_helper!(rt_exit_commit(ctx, input: *mut PendingSlot, destination: *const Ex
     let record = store(runtime, Data::Packet(packet));
     consume(runtime, (*input).record);
     (*input).record = 0;
+    // The executable load gate proves the pending's recorded language type equals this result schema.
+    // No Summary operand is allowed to reinterpret this word at commit.
     post.write(CommitPost { value: pending.value, packet: PacketSlot { record } });
     Ok(())
 });

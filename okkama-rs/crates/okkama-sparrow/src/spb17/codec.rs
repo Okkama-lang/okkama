@@ -14,6 +14,10 @@ struct Writer {
 impl Writer {
     fn label(&mut self, label: &str) {
         if let Some(text) = &mut self.text {
+            let column = text.rsplit('\n').next().map_or(0, str::len);
+            if label != "\n" && column + label.len() + 1 > 120 {
+                text.push('\n');
+            }
             text.push_str(label);
             text.push(' ');
         }
@@ -43,7 +47,8 @@ impl Writer {
     }
 
     fn string(&mut self, value: &str) {
-        if let Some(text) = &mut self.text {
+        if self.text.is_some() {
+            let mut text = String::new();
             text.push('"');
             for ch in value.chars() {
                 match ch {
@@ -55,7 +60,8 @@ impl Writer {
                     _ => text.push(ch),
                 }
             }
-            text.push_str("\" ");
+            text.push('"');
+            self.label(&text);
         } else {
             self.number(value.len() as u32);
             self.bytes.extend_from_slice(value.as_bytes());
@@ -90,7 +96,7 @@ impl<'a> Reader<'a> {
     }
 
     fn fail(&self, message: impl Into<String>) -> Error {
-        Error { offset: Some(self.at), message: message.into() }
+        Error { offset: Some(self.at), message: message.into(), rule: "SPB_DECODE" }
     }
 
     fn take(&mut self, size: usize) -> Result<&'a [u8], Error> {
@@ -334,6 +340,7 @@ record! { Summary {
 } }
 
 record! { FunctionProofs {
+    entry, static_selections, closes, cleanup_plans, post_roots,
     selections, dependencies, registrations, plans, order_witnesses, schedules, envelopes, states, roots,
 } }
 
@@ -392,7 +399,7 @@ macro_rules! tagged {
 
 tagged! { Type {
     0 => Int, 1 => Bool, 6 => Str, 20 => Range, 11 => Failure,
-    7 => Object(id: u32), 8 => Successor(id: u32), 13 => Never,
+    7 => Object(id: u32), 8 => Successor(id: u32), 13 => Never, 9 => Descriptor,
 } }
 tagged! { ServiceKind {
     0 => Packet, 1 => ScopeState, 2 => Pending, 3 => Cleanup, 4 => StableKey,
@@ -402,7 +409,8 @@ tagged! { ExitKind { 0 => Return, 1 => Last, 2 => Next, 3 => Fallthrough } }
 tagged! { Location { 0 => Register(id: u32), 1 => Service(id: u32) } }
 tagged! { Source { 0 => Location(loc: Location), 1 => ProducedSlot(slot: u32) } }
 tagged! { Flow { 0 => Next(locations: Vec<Location>), 1 => Outcomes(outcomes: Vec<Outcome>) } }
-tagged! { Constant { 0 => Int(value: String), 1 => Bool(value: bool), 2 => Str(value: String) } }
+tagged! { Constant { 0 => Int(value: String), 1 => Bool(value: bool), 2 => Str(value: String),
+    3 => Descriptor(id: u32) } }
 tagged! { Immediate {
     0 => None, 1 => Constant(value: Constant), 2 => Inclusive(flag: bool),
     3 => Object(id: u32), 4 => Field(index: u32), 5 => Updates(indices: Vec<u32>),
@@ -416,6 +424,7 @@ tagged! { Argument {
     4 => Selection(id: u32), 5 => Plan(id: u32), 6 => Schedule(id: u32), 7 => Envelope(id: u32),
     8 => Entry(id: u32), 9 => Object(id: u32), 10 => Binding(id: u32), 11 => Field(id: u32),
     12 => Label(id: u32), 13 => Flag(flag: bool), 14 => Kind(kind: ExitKind), 15 => Registration(id: u32),
+    16 => Destination(destination: ExitDestination),
 } }
 
 impl Wire for EntryAbi {
@@ -466,6 +475,8 @@ fn opcode_name(code: u8) -> Option<&'static str> {
         141 => Some("cond"),
         142 => Some("ret"),
         145 => Some("unreachable"),
+        147 => Some("raise"),
+        136 => Some("fail.secondary"),
         255 => Some("champ"),
         _ => None,
     }
@@ -507,6 +518,7 @@ impl DataOp {
             Self::ObjInit => (91, None),
             Self::ObjGet => (92, None),
             Self::ObjNext => (93, None),
+            Self::FailSecondary => (136, None),
         }
     }
 
@@ -546,6 +558,7 @@ impl DataOp {
             (91, None) => Ok(Self::ObjInit),
             (92, None) => Ok(Self::ObjGet),
             (93, None) => Ok(Self::ObjNext),
+            (136, None) => Ok(Self::FailSecondary),
             _ => Err(r.fail(format!("unknown scalar opcode {code}/{sub:?}"))),
         }
     }
@@ -578,6 +591,10 @@ impl Wire for Instruction {
                 w.opcode(142, "ret");
                 values.put(w);
             }
+            Self::Raise(value) => {
+                w.opcode(147, "raise");
+                value.put(w);
+            }
             Self::Unreachable => w.opcode(145, "unreachable"),
             Self::Champ { op, arguments, flow } => {
                 w.opcode(255, "champ");
@@ -600,6 +617,7 @@ impl Wire for Instruction {
             141 => Self::Cond { condition: u32::get(r)?, yes: Edge::get(r)?, no: Edge::get(r)? },
             142 => Self::Ret(Vec::get(r)?),
             145 => Self::Unreachable,
+            147 => Self::Raise(u32::get(r)?),
             255 => Self::Champ {
                 op: if r.tokens.is_some() {
                     let name = r.word()?;
@@ -755,3 +773,38 @@ mod tests {
         assert!(r.count::<u8>().unwrap_err().message.contains("remaining"));
     }
 }
+
+record! { EntryContract { external, retained_params, fresh_singleton, failures, destroy } }
+record! { CloseContract { begin_pc, boundary, reserve, active_failure, envelope } }
+record! { CleanupPlan { plan, reserve, close, reserve_empty, sources, slots, preserves, joins, suffixes } }
+record! { DirectSlot { identity, descriptor, destroy, origin, active_pc } }
+record! { CleanupSuffix { completed, remaining, roots } }
+tagged! { MergeSource { 0 => Scope, 1 => Packet, 2 => Reserve } }
+impl Wire for CreationOrigin {
+    fn put(&self, w: &mut Writer) {
+        match self {
+            Self::Singleton => w.number(0),
+            Self::Create(pc) => {
+                w.number(1);
+                pc.put(w);
+            }
+            Self::FreshResult { pc, callee } => {
+                w.number(2);
+                pc.put(w);
+                callee.put(w);
+            }
+        }
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, Error> {
+        match r.number()? {
+            0 => Ok(Self::Singleton),
+            1 => Ok(Self::Create(u32::get(r)?)),
+            2 => Ok(Self::FreshResult { pc: u32::get(r)?, callee: u32::get(r)? }),
+            _ => Err(r.fail("unknown creation origin")),
+        }
+    }
+}
+
+tagged! { ExitDestination { 0 => Caller, 1 => Loop(id: u32), 2 => Scope(id: u32) } }
+
+record! { StaticSelection { pc, selection, input, indices } }

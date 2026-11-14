@@ -1,6 +1,6 @@
 use super::*;
 
-fn empty_function() -> Function {
+pub(super) fn empty_function() -> Function {
     Function {
         symbol: "main".into(),
         entry_abi: EntryAbi::Observation,
@@ -30,7 +30,7 @@ fn produced(destination: u32, slot: u32) -> Assignment {
 fn multi_result() -> Program {
     let mut p = plain();
     let f = &mut p.functions[0];
-    f.entry_abi = EntryAbi::Owned;
+    f.entry_abi = EntryAbi::Observation;
     f.services = vec![ServiceKind::Packet, ServiceKind::Packet, ServiceKind::Packet,
         ServiceKind::Deps, ServiceKind::Packet];
     f.registers = vec![Type::Failure];
@@ -40,7 +40,7 @@ fn multi_result() -> Program {
         Block { pc: 1, params: vec![Location::Service(1), Location::Service(2), Location::Service(3)] },
         Block { pc: 2, params: vec![Location::Service(4), Location::Register(0)] },
     ];
-    f.proofs.selections.push(Selection { locations: vec![Location::Service(0)] });
+    f.proofs.selections.push(Selection { locations: vec![] });
     f.proofs.order_witnesses.push(OrderWitness { creation_pcs: vec![0] });
     f.proofs.plans.push(Plan { merge: true, selection: 0, order_witness: 0 });
     f.proofs.schedules.push(Schedule { services: vec![] });

@@ -727,3 +727,32 @@ fn champ_s3_nonthrowing_direct_forwards_reserve_until_the_callers_packet_close()
     assert_eq!(f.trace(), "12");
     f.assert_once();
 }
+
+#[test]
+fn champ_s3_spb_plan_relocation_is_nonzero_runtime_local_and_checked_before_mutation() {
+    use okkama_sparrow::spb17 as s;
+    struct Catalog<'a>(&'a s::Program);
+    impl s::ExternalContracts for Catalog<'_> {
+        fn entry(&self, name: &str) -> Option<&s::Function> {
+            self.0.functions.iter().find(|function| function.proofs.entry.as_ref()
+                .and_then(|entry| entry.external.as_deref()) == Some(name))
+        }
+    }
+    let program = s::assemble(include_str!(
+        "../../../okkama-compiler/src/codegen/sparrow_oir2/fixtures/unwind-reserve.spb17"
+    )).unwrap();
+    let mut harness = Harness::new();
+    let catalog = Catalog(&program);
+    let first = harness.runtime.champ_load_cleanup_plans(&program, &catalog).unwrap();
+    let second = harness.runtime.champ_load_cleanup_plans(&program, &catalog).unwrap();
+    let first = first.into_iter().flatten().collect::<Vec<_>>();
+    let second = second.into_iter().flatten().collect::<Vec<_>>();
+    assert!(!first.is_empty());
+    assert!(first.iter().all(|&id| id != 0));
+    assert!(second.iter().all(|id| *id > *first.last().unwrap()));
+    let mut invalid = program.clone();
+    invalid.functions.iter_mut().find(|function| function.symbol == "main").unwrap().proofs.roots.clear();
+    let before = harness.runtime.champ.cleanup_plans.len();
+    assert!(harness.runtime.champ_load_cleanup_plans(&invalid, &catalog).is_err());
+    assert_eq!(harness.runtime.champ.cleanup_plans.len(), before);
+}

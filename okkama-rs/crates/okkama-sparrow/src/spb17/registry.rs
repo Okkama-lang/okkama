@@ -245,3 +245,56 @@ impl Opcode {
         })).collect()
     }
 }
+
+/// Fixed #572 machine ABI. KeyRef is passed as two words, never a pointer-sized surrogate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MachineArgument { Context, Pointer, Word, KeyRef }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CleanupAbi {
+    pub helper: &'static str,
+    pub arguments: &'static [MachineArgument],
+    pub post_size: usize,
+    pub post_offsets: &'static [usize],
+}
+
+impl Opcode {
+    pub const fn cleanup_abi(self) -> Option<CleanupAbi> {
+        use MachineArgument::{Context as C, KeyRef as K, Pointer as P, Word as W};
+        let (helper, arguments, post_size, post_offsets): (_, &[_], _, &[_]) = match self {
+            Self::CleanupBegin => ("champ_cleanup_begin", &[C, P, P], 8, &[0]),
+            Self::CleanupSettle => ("champ_cleanup_settle_empty", &[C, P, P], 8, &[0]),
+            Self::CleanupPlan => ("champ_cleanup_plan", &[C, P, W, P], 8, &[0]),
+            Self::CleanupNext => ("champ_cleanup_next", &[C, P, P], 24, &[0, 8]),
+            Self::CleanupDestroy => ("champ_cleanup_destroy", &[C, P, K, P], 16, &[0, 8]),
+            Self::DestroyDirect => ("champ_destroy_direct", &[C, P, K, W, P], 16, &[0, 8]),
+            Self::CleanupFailure => ("champ_cleanup_failure", &[C, P, W, P], 8, &[0]),
+            Self::CleanupFinish => ("champ_cleanup_finish", &[C, P, P], 24, &[0, 8, 16]),
+            Self::ExitPrepare => ("champ_exit_prepare", &[C, P, P], 8, &[0]),
+            Self::ExitCommit => ("champ_exit_commit", &[C, P, P, P], 16, &[0, 8]),
+            Self::ExitExtend => ("champ_exit_extend", &[C, P, P, P], 8, &[0]),
+            Self::ExitReplace => ("champ_exit_replace", &[C, P, P, P], 16, &[0, 8]),
+            Self::ExitAbort => ("champ_exit_abort", &[C, P, P, P], 8, &[0]),
+            _ => return None,
+        };
+        Some(CleanupAbi { helper, arguments, post_size, post_offsets })
+    }
+}
+
+impl Opcode {
+    /// Operation-specific Post payloads. Proof-only deps retain their abstract ordinal without a word.
+    pub fn cleanup_post_offsets(self, tag: Tag, context: &ResultContext) -> Result<Vec<Option<usize>>, Error> {
+        let abi = self.cleanup_abi().ok_or_else(|| error("operation has no cleanup ABI"))?;
+        let schema = self.results(tag, context)?;
+        if self == Self::ExitCommit {
+            return Ok(if context.value.is_some() { vec![Some(0), Some(8), None] } else { vec![Some(8), None] });
+        }
+        schema.iter().enumerate().map(|(index, ty)| {
+            if matches!(ty, ProducedType::Service(ServiceKind::Deps | ServiceKind::Closed)) {
+                Ok(None)
+            } else {
+                abi.post_offsets.get(index).copied().map(Some).ok_or_else(|| error("missing Post offset"))
+            }
+        }).collect()
+    }
+}

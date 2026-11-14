@@ -62,6 +62,11 @@ macro_rules! helpers {
         /// Every helper and its effects, in declaration order.
         pub const HELPERS: &[(&str, &[Effect])] = &[$($(#[$meta])* (stringify!($field), &[$(Effect::$effect),*]),)*];
 
+        #[cfg(all(test, feature = "champ-abi"))]
+        pub(crate) const HELPER_ARGUMENT_TYPES: &[(&str, &[&str])] = &[
+            $($(#[$meta])* (stringify!($field), &[$(stringify!($ty)),*]),)*
+        ];
+
         $(
             $(#[$meta])*
             const _: () = {
