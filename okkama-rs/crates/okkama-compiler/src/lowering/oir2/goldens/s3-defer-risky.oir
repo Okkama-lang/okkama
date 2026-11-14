@@ -114,16 +114,14 @@ func @main() -> int [entry] {
     raise %6
 }
 
-func @main.defer#0() -> void {
+func @main.defer#0() -> void [defer()] {
     boundary B0 lexical in S7
-    selection s0: selection = union([])
     ^b0 in S7 unwind ^b1:
     [i0] %0: app.Work = call @app.Work.new#0()
     [i1] call @app.Work.log#1(%0)
-    exit.prepare return select s0 at B0
     high.effects at #0 failures [thrown, program, panic, native, cancelled], suspends true
     high.effects at #1 failures [thrown, program, panic, native, cancelled], suspends true
-    ret
+    ret defer continue
     ^b1(%1: failure) in S7:
     raise %1
 }

@@ -84,35 +84,35 @@ func @main() -> int [entry] {
     raise %7
 }
 
-func @main.defer#0(%0: app.Res) -> void {
+func @main.defer#0(%0: app.Res) -> void [defer()] {
     binding b0 "r": app.Res in S4
     boundary B0 lexical in S4
-    selection s0: selection = union([])
     ^b0 in S4 unwind ^b1:
     bind %0, binding b0
     [i1] %1: str = call @app.Res.label#0(%0)
     discard %1
-    exit.prepare return select s0 at B0
     result.exit edge normal(0), value %1, demand discard, prepare none
     high.effects at #1 failures [thrown, program, panic, native, cancelled], suspends true
-    ret
+    br ^b2
     ^b1(%2: failure) in S4:
     raise %2
+    ^b2 in S4 unwind ^b1:
+    ret defer continue
 }
 
-func @main.defer#1() -> void {
+func @main.defer#1() -> void [defer()] {
     boundary B0 lexical in S5
-    selection s0: selection = union([])
     ^b0 in S5 unwind ^b1:
     %0: str = const "second"
     [i1] %1: app.Res = call @app.Res.new#0(%0)
     [i2] %2: str = call @app.Res.label#0(%1)
     discard %2
-    exit.prepare return select s0 at B0
     result.exit edge normal(0), value %2, demand discard, prepare none
     high.effects at #1 failures [thrown, program, panic, native, cancelled], suspends true
     high.effects at #2 failures [thrown, program, panic, native, cancelled], suspends true
-    ret
+    br ^b2
     ^b1(%3: failure) in S5:
     raise %3
+    ^b2 in S5 unwind ^b1:
+    ret defer continue
 }

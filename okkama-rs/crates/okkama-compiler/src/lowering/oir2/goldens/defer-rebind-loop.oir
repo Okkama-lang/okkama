@@ -106,18 +106,18 @@ func @main() -> int [entry] {
     br ^b5(%18, %16)
 }
 
-func @main.defer#0(%0: app.Res) -> void {
+func @main.defer#0(%0: app.Res) -> void [defer()] {
     binding b0 "r": app.Res in S5
     boundary B0 lexical in S5
-    selection s0: selection = union([])
     ^b0 in S5 unwind ^b1:
     bind %0, binding b0
     [i1] %1: str = call @app.Res.label#0(%0)
     discard %1
-    exit.prepare return select s0 at B0
     result.exit edge normal(0), value %1, demand discard, prepare none
     high.effects at #1 failures [thrown, program, panic, native, cancelled], suspends true
-    ret
+    br ^b2
     ^b1(%2: failure) in S5:
     raise %2
+    ^b2 in S5 unwind ^b1:
+    ret defer continue
 }

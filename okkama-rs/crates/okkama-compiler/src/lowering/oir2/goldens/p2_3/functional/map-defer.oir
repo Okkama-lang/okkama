@@ -78,18 +78,18 @@ func @main() -> int [entry] {
     raise %33
 }
 
-func @main.defer#0(%0: int) -> void {
+func @main.defer#0(%0: int) -> void [defer()] {
     binding b0 "x": int in S3
     boundary B0 lexical in S3
-    selection s0: selection = union([])
     ^b0 in S3 unwind ^b1:
     bind %0, binding b0
     %1: int = const 1
     %2: int = int.mod %0, %1
     discard %2
-    exit.prepare return select s0 at B0
     result.exit edge normal(0), value %2, demand discard, prepare none
-    ret
+    br ^b2
     ^b1(%3: failure) in S3:
     raise %3
+    ^b2 in S3 unwind ^b1:
+    ret defer continue
 }

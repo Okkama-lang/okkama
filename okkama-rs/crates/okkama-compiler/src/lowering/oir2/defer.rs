@@ -23,10 +23,13 @@ impl super::declarations::Declarations {
         let symbol = self.builder.module().functions.get(owner)?.symbol.clone();
         for (number, expr) in expressions.into_iter().enumerate() {
             let mut defined = HashSet::new();
+            let mut returns = false;
             scan_expr(&expr, &mut |stmt| {
                 if let thir::StmtKind::Let { local, .. } = stmt.kind {
                     defined.insert(local);
                 }
+                // Include nested defers: their replacement must leave this helper too.
+                returns |= matches!(stmt.kind, thir::StmtKind::Return(_));
             });
             let block = thir::Block {
                 stmts: vec![thir::Stmt { span: expr.span, kind: thir::StmtKind::Expr(expr.clone()) }],
@@ -56,7 +59,15 @@ impl super::declarations::Declarations {
             body.span = expr.span;
             let receiver = thir::uses_receiver(&body);
             let mut types = vec![];
-            let mut attrs = vec![];
+            let replacements = if returns {
+                vec![ir::DeferLabel {
+                    label: "return".into(),
+                    result: self.builder.module().functions.get(owner)?.signature.results.first().copied(),
+                }]
+            } else {
+                vec![]
+            };
+            let mut attrs = vec![ir::FunctionAttr::DeferEntry { replacements }];
             if receiver {
                 let object = match source.owner {
                     thir::BodyOwner::Method { object, .. } | thir::BodyOwner::Ctor { object, .. }
@@ -102,10 +113,17 @@ impl super::body::BodyLowerer<'_, '_> {
             })?);
         }
         let scope = self.scope();
-        // D8 maps labels to caller boundaries. This slice supports only Continue,
-        // so its helpers declare no replacement labels and the registration map is empty.
+        let replacements = self.b.module().functions.get(function)?.attrs.iter().find_map(|attr| {
+            if let ir::FunctionAttr::DeferEntry { replacements } = attr {
+                Some(replacements.iter().map(|label| ir::DeferRegistration {
+                    label: label.label.clone(), kind: ir::ExitKind::Return, boundary: self.return_boundary,
+                }).collect())
+            } else {
+                None
+            }
+        }).ok_or_else(|| LowerError::invalid(expr.span, "defer helper without tagged entry"))?;
         self.b.emit(ir::Operation::Lexical(ir::LexicalOp::DeferRegister {
-            scope, action: ir::DeferAction { function, captures, bindings, replacements: vec![] },
+            scope, action: ir::DeferAction { function, captures, bindings, replacements },
         }), &[])?;
         self.registrations.entry(scope).or_default().push(function);
         // Before/after registration have distinct failure points and entry-visible environments.

@@ -33,6 +33,9 @@ fn golden(source: &str, expected: &str) {
         let directory = format!("{}/src/lowering/oir2/goldens", env!("CARGO_MANIFEST_DIR"));
         for entry in std::fs::read_dir(directory).expect("golden directory") {
             let path = entry.expect("golden entry").path();
+            if !path.is_file() {
+                continue;
+            }
             if expected == std::fs::read_to_string(&path).expect("existing golden") {
                 std::fs::write(path, &actual).expect("regenerated golden");
                 return;
@@ -622,7 +625,6 @@ fn oir2_defer_lexical_captures_roundtrip() {
 #[test]
 fn oir2_outside_s3_constructs_report_unsupported() {
     for body in [
-        "defer if true { return 1; } else { 0; }; 0;",
         "let n = try? 1; 0;",
         "try { throw Stop.now; } catch Stop.now { 0; }",
     ] {
@@ -1349,3 +1351,6 @@ fn oir2_high_observation_requires_a_trusted_external() {
 
 #[path = "coverage/tests.rs"]
 mod coverage;
+
+#[path = "defer_tests.rs"]
+mod defer_tests;

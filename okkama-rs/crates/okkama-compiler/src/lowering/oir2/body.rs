@@ -38,7 +38,7 @@ pub(super) struct BodyLowerer<'a, 't> {
     pub env: Vec<Option<ir::ValueId>>,
     pub bindings: Vec<Option<ir::BindingId>>,
     pub root: ir::ScopeId,
-    return_boundary: ir::BoundaryId,
+    pub(super) return_boundary: ir::BoundaryId,
     pub failure_frames: Vec<super::failures::FailureFrame>,
     pub caught: Vec<super::failures::Caught>,
     pub rethrows: HashMap<ir::ValueId, ir::ValueId>,
@@ -124,7 +124,14 @@ impl<'a, 't> BodyLowerer<'a, 't> {
         let special = this.is_constructor() || this.is_successor();
         let out = this.block(&source.block, want && !special)?;
         if this.current.is_some() {
-            this.finish_action(out)?;
+            if this.context.deferred.is_some() {
+                this.abandon_except(&[])?;
+                this.terminate(ir::TermKind::RetDefer {
+                    tag: ir::DeferReturnTag::Continue, values: vec![],
+                })?;
+            } else {
+                this.finish_action(out)?;
+            }
         }
         Ok(this.b.finish()?)
     }
@@ -197,7 +204,8 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             record.block == block && record.demand == ir::ResultDemand::Discard
         }).map(|record| record.value).collect();
         let edges = match &term {
-            ir::TermKind::Br(_) | ir::TermKind::Ret { .. } => 1,
+            ir::TermKind::Br(_) | ir::TermKind::Ret { .. }
+            | ir::TermKind::RetDefer { tag: ir::DeferReturnTag::Replace(_), .. } => 1,
             ir::TermKind::Cond { .. } => 2,
             ir::TermKind::Switch { cases, .. } => cases.len() + 1,
             _ => 0,
@@ -360,7 +368,13 @@ impl<'a, 't> BodyLowerer<'a, 't> {
         self.abandon_except(&[])?;
         self.separate_discarded(&value.into_iter().collect::<Vec<_>>())?;
         self.prepare(value, ir::ExitKind::Return, self.return_boundary)?;
-        self.terminate(ir::TermKind::Ret { values: value.into_iter().collect() })
+        let values = value.into_iter().collect();
+        let term = if self.context.deferred.is_some() {
+            ir::TermKind::RetDefer { tag: ir::DeferReturnTag::Replace("return".into()), values }
+        } else {
+            ir::TermKind::Ret { values }
+        };
+        self.terminate(term)
     }
 
     pub fn bind(&mut self, local: thir::LocalId, value: ir::ValueId) -> Result<()> {
@@ -452,9 +466,6 @@ impl<'a, 't> BodyLowerer<'a, 't> {
                 }
             }
             S::Return(expr) => {
-                if self.context.deferred.is_some() {
-                    return Err(LowerError::unsupported(stmt.span, "return from defer (#567 S3/D8)"));
-                }
                 let value = match expr {
                     Some(expr) => self.value(expr)?,
                     None => None,

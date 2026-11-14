@@ -27,13 +27,12 @@ func @main() -> int [entry] {
     raise %4
 }
 
-func @main.defer#0(%0: int) -> void {
+func @main.defer#0(%0: int) -> void [defer()] {
     binding b0 "offset": int in S1
     binding b1 "x": int in S2
     boundary B0 lexical in S1
     boundary B1 loop in S2
     boundary B2 lexical in S3
-    selection s0: selection = union([])
     ^b0 in S1 unwind ^b1:
     bind %0, binding b0
     %1: int = const 1
@@ -49,9 +48,8 @@ func @main.defer#0(%0: int) -> void {
     ^b2(%9: int, %10: builder<int>) in S1 unwind ^b12(%10):
     %11: array<int> = builder.finish %10
     discard %11
-    exit.prepare return select s0 at B0
     result.exit edge normal(0), value %11, demand discard, prepare none
-    ret
+    br ^b13
     ^b3(%12: int, %13: int, %14: builder<int>) in S1 unwind ^b1:
     %15: bool = int.lt %12, %5
     cond %15, ^b4, ^b5
@@ -73,20 +71,20 @@ func @main.defer#0(%0: int) -> void {
     ^b9(%25: int, %26: int, %27: int, %28: builder<int>) in S2 unwind ^b11(%28):
     %29: builder<int> = builder.push %28, %25
     want %26
-    [i19] exit.prepare fallthrough %26 at B1
-    result.exit edge normal(0), value %26, demand want, prepare #19
+    [i18] exit.prepare fallthrough %26 at B1
+    result.exit edge normal(0), value %26, demand want, prepare #18
     br ^b6(%26, %29)
     ^b10 in S3 unwind ^b1:
     %30: int = int.add %22, %20
     want %30
-    [i22] exit.prepare fallthrough %30 at B2
+    [i21] exit.prepare fallthrough %30 at B2
     want %20
-    [i24] exit.prepare fallthrough %20 at B2
+    [i23] exit.prepare fallthrough %20 at B2
     want %22
-    [i26] exit.prepare fallthrough %22 at B2
-    result.exit edge normal(0), value %30, demand want, prepare #22
-    result.exit edge normal(0), value %20, demand want, prepare #24
-    result.exit edge normal(0), value %22, demand want, prepare #26
+    [i25] exit.prepare fallthrough %22 at B2
+    result.exit edge normal(0), value %30, demand want, prepare #21
+    result.exit edge normal(0), value %20, demand want, prepare #23
+    result.exit edge normal(0), value %22, demand want, prepare #25
     br ^b9(%30, %20, %22, %21)
     ^b11(%31: builder<int>, %32: failure) in S2 unwind ^b1:
     builder.abandon %31
@@ -94,4 +92,6 @@ func @main.defer#0(%0: int) -> void {
     ^b12(%33: builder<int>, %34: failure) in S1 unwind ^b1:
     builder.abandon %33
     raise %34
+    ^b13 in S1 unwind ^b1:
+    ret defer continue
 }

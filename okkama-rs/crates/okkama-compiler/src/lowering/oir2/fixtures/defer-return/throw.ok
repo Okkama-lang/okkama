@@ -1,0 +1,16 @@
+module app;
+enum Stop is Error = (now);
+main() is int {
+    let fails = true;
+    defer if true {
+        return 9;
+    } else { };
+    defer if true {
+        defer 1;
+        if fails {
+            throw Stop.now;
+        }
+        return 7;
+    } else { };
+    return 1;
+}
