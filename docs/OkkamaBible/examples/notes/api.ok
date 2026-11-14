@@ -1,0 +1,132 @@
+module notes/api v1.0.0;
+
+// A small JSON API for notes: list, show, create, remove.
+import "async/atomic" take Atomic;
+import "json" take Json, JsonField;
+import "http/message" take Responding;
+import "web/request" take WebRequest;
+import "web/reply" take JsonReply, CreatedReply, NoContentReply;
+import "web/exception" take Exception;
+import "web/routing" take WebRoutes, Scope, Resource, Get, Post, Delete;
+
+object Note {
+    has id is int;
+    has title is string;
+
+    Note(:id, :title);
+
+    id() is int { id; }
+
+    json() is Json {
+        Json(JsonField("id", id), JsonField("title", title));
+    }
+}
+
+// Where notes live. The API sees a role; memory and a database are two doers.
+role NoteStore {
+    all() is @Note;
+    find(id is int) is Maybe<Note>;
+    added(title is string) is Note;
+    removed(id is int) is bool;
+}
+
+// Everything the store holds, as one value: replaced whole, never edited.
+object Shelf {
+    has upcoming is int = 1;
+    has notes is %int:Note = [:];
+
+    Shelf(:upcoming, :notes);
+
+    upcoming() is int { upcoming; }
+    notes() is %int:Note { notes; }
+}
+
+object MemoryStore does NoteStore {
+    has shelf is Atomic<Shelf>;
+
+    MemoryStore() {
+        shelf = Atomic(Shelf());
+    }
+
+    all() is @Note {
+        shelf.value().notes().values();
+    }
+
+    find(id is int) is Maybe<Note> {
+        let notes = shelf.value().notes();
+        if notes.has(id) { Maybe.some(notes[id]); } else { Maybe.none; }
+    }
+
+    // Read, decide, publish only if nobody published in between.
+    added(title is string) is Note {
+        loop {
+            let current = shelf.value();
+            let note = Note(id: current.upcoming(), title: title);
+            let revised = Shelf(upcoming: current.upcoming() + 1, notes: current.notes() + [note.id(): note]);
+            if shelf.compare_and_replace(expected: current, revised: revised) {
+                last note;
+            }
+        };
+    }
+
+    removed(id is int) is bool {
+        loop {
+            let current = shelf.value();
+            if !current.notes().has(id) {
+                last false;
+            }
+            let revised = Shelf(upcoming: current.upcoming(), notes: current.notes() - [id: current.notes()[id]]);
+            if shelf.compare_and_replace(expected: current, revised: revised) {
+                last true;
+            }
+        };
+    }
+}
+
+object NotesApi {
+    has store is NoteStore;
+
+    NotesApi(:store);
+
+    async list(request is WebRequest) is Responding {
+        JsonReply(value: Json(items: store.all().map() -> note { note.json(); }));
+    }
+
+    async show(request is WebRequest) is Responding {
+        let id = request.path().int("id");
+        match store.find(id) {
+            case Maybe.some(note) { JsonReply(value: note.json()); }
+            case Maybe.none { throw Exception.status(404, "no note " + id.string()); }
+        };
+    }
+
+    async add(request is WebRequest) is Responding {
+        let body = await request.json(4096);
+        let title = body.text("title").trim();
+        confirm !title.empty() else throw Exception.status(422, "title is empty");
+        let note = store.added(title);
+        CreatedReply(location: "/api/notes/" + note.id().string(), value: note.json());
+    }
+
+    async remove(request is WebRequest) is Responding {
+        let id = request.path().int("id");
+        confirm store.removed(id) else throw Exception.status(404, "no note " + id.string());
+        NoContentReply();
+    }
+}
+
+// The route table: one place that says which URL reaches which action.
+object NotesService {
+    has api is NotesApi;
+
+    NotesService(:api);
+
+    routes() is WebRoutes {
+        WebRoutes(
+            Scope("/api",
+                Resource("/notes", Get(api.list), Post(api.add)),
+                Resource("/notes/:id", Get(api.show), Delete(api.remove)),
+            ),
+        );
+    }
+}

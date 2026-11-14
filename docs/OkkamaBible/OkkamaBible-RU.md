@@ -276,6 +276,15 @@
   - [24.11 Рост: подкоманды](#2411-рост-подкоманды)
   - [24.12 Как это отдать пользователям](#2412-как-это-отдать-пользователям)
   - [24.13 Во что обходится такой дизайн](#2413-во-что-обходится-такой-дизайн)
+- [Глава 25. Пишем веб-сервис](#глава-25-пишем-веб-сервис)
+  - [25.1 Из чего состоит сервис](#251-из-чего-состоит-сервис)
+  - [25.2 Сервис](#252-сервис)
+  - [25.3 Endpoints](#253-endpoints)
+  - [25.4 Отказы становятся статусами](#254-отказы-становятся-статусами)
+  - [25.5 Состояние, общее для запросов](#255-состояние-общее-для-запросов)
+  - [25.6 Тесты без сети](#256-тесты-без-сети)
+  - [25.7 Запуск](#257-запуск)
+  - [25.8 Во что обходится такой дизайн](#258-во-что-обходится-такой-дизайн)
 - [Глава 26. Паттерны и антипаттерны](#глава-26-паттерны-и-антипаттерны)
   - [26.1 Что такое паттерн и что с ним делает язык](#261-что-такое-паттерн-и-что-с-ним-делает-язык)
   - [26.2 Поведение через композицию, а не через флаги](#262-поведение-через-композицию-а-не-через-флаги)
@@ -14889,6 +14898,413 @@ successor-ов перестраивает `Tally` на каждую строку
 шагами или потоком, храня только счётчики и по-прежнему ничего общего не
 изменяя.
 
+# Глава 25. Пишем веб-сервис
+
+Утилита командной строки запускается один раз и завершается. Веб-сервис
+запускается и продолжает отвечать, на много запросов сразу, пока его не
+остановят. Эта глава строит небольшой сервис: JSON API для заметок с
+четырьмя операциями, с которых начинается большинство сервисов, — список,
+чтение, создание и удаление:
+
+```text
+GET    /api/notes        заметки, массивом JSON
+POST   /api/notes        создать из {"title": "…"}; 201 и адрес
+GET    /api/notes/:id    одна заметка или 404
+DELETE /api/notes/:id    удалить; 204 или 404
+```
+
+Привычки прошлой главы переносятся: решения — значениями, внешний мир — за
+ролью, тесты — без настоящего мира. Новое — конкурентность. Запросы
+перекрываются, так что у общего между ними состояния должен быть владелец
+(раздел 26.8), а каждый endpoint — действие `async` (глава 20).
+
+## 25.1 Из чего состоит сервис
+
+HTTP — протокол сообщений. Запрос несёт метод, цель, поля заголовка и,
+возможно, тело; ответ несёт статус, поля заголовка и, возможно, тело
+[[RFC 9110](#ref-rfc9110)]. Сервис — функция из запросов в ответы, которая хранит между ними
+какое-то состояние. Модули `web` стандартной библиотеки придают этой функции
+форму из четырёх частей, и каждая — значение:
+
+- **Таблица маршрутов** (`web/routing`) говорит, какой метод и путь ведут к
+  какому endpoint. Она объявляется, как команды `cli/command` в главе 24, и
+  проверяется при построении: два маршрута одной формы отвергаются,
+  известный путь с неверным методом отвечает 405 с `Allow`, а `HEAD` следует
+  за `GET`.
+- **Endpoint** — любое привязанное действие типа
+  `async (WebRequest) is Responding`. Объект-контроллер держит зависимости в
+  своих полях и даёт по действию на операцию.
+- **Запрос** (`web/request`) отдаёт параметры маршрута, query, поля заголовка
+  и тело, прочитанное с ограничением размера, — всё типизировано.
+- **Ответ** (`web/reply`) — значение, которое знает, как стать ответом
+  сервера: `JsonReply`, `CreatedReply`, `NoContentReply`, `TextReply` и
+  другие, каждый со значениями по умолчанию своего рода.
+
+Сам сервер (`web/app`) привязывает таблицу к адресу и обслуживает её. Это
+единственная часть, которая касается сети, и тесты этой главы её никогда не
+запускают.
+
+## 25.2 Сервис
+
+Сервис заметок — один модуль. Его части показаны вместе, потом разобраны по
+одной.
+
+```okkama
+module notes/api v1.0.0;
+
+// A small JSON API for notes: list, show, create, remove.
+import "async/atomic" take Atomic;
+import "json" take Json, JsonField;
+import "http/message" take Responding;
+import "web/request" take WebRequest;
+import "web/reply" take JsonReply, CreatedReply, NoContentReply;
+import "web/exception" take Exception;
+import "web/routing" take WebRoutes, Scope, Resource, Get, Post, Delete;
+
+object Note {
+    has id is int;
+    has title is string;
+
+    Note(:id, :title);
+
+    id() is int { id; }
+
+    json() is Json {
+        Json(JsonField("id", id), JsonField("title", title));
+    }
+}
+
+// Where notes live. The API sees a role; memory and a database are two doers.
+role NoteStore {
+    all() is @Note;
+    find(id is int) is Maybe<Note>;
+    added(title is string) is Note;
+    removed(id is int) is bool;
+}
+
+// Everything the store holds, as one value: replaced whole, never edited.
+object Shelf {
+    has upcoming is int = 1;
+    has notes is %int:Note = [:];
+
+    Shelf(:upcoming, :notes);
+
+    upcoming() is int { upcoming; }
+    notes() is %int:Note { notes; }
+}
+
+object MemoryStore does NoteStore {
+    has shelf is Atomic<Shelf>;
+
+    MemoryStore() {
+        shelf = Atomic(Shelf());
+    }
+
+    all() is @Note {
+        shelf.value().notes().values();
+    }
+
+    find(id is int) is Maybe<Note> {
+        let notes = shelf.value().notes();
+        if notes.has(id) { Maybe.some(notes[id]); } else { Maybe.none; }
+    }
+
+    // Read, decide, publish only if nobody published in between.
+    added(title is string) is Note {
+        loop {
+            let current = shelf.value();
+            let note = Note(id: current.upcoming(), title: title);
+            let revised = Shelf(upcoming: current.upcoming() + 1, notes: current.notes() + [note.id(): note]);
+            if shelf.compare_and_replace(expected: current, revised: revised) {
+                last note;
+            }
+        };
+    }
+
+    removed(id is int) is bool {
+        loop {
+            let current = shelf.value();
+            if !current.notes().has(id) {
+                last false;
+            }
+            let revised = Shelf(upcoming: current.upcoming(), notes: current.notes() - [id: current.notes()[id]]);
+            if shelf.compare_and_replace(expected: current, revised: revised) {
+                last true;
+            }
+        };
+    }
+}
+
+object NotesApi {
+    has store is NoteStore;
+
+    NotesApi(:store);
+
+    async list(request is WebRequest) is Responding {
+        JsonReply(value: Json(items: store.all().map() -> note { note.json(); }));
+    }
+
+    async show(request is WebRequest) is Responding {
+        let id = request.path().int("id");
+        match store.find(id) {
+            case Maybe.some(note) { JsonReply(value: note.json()); }
+            case Maybe.none { throw Exception.status(404, "no note " + id.string()); }
+        };
+    }
+
+    async add(request is WebRequest) is Responding {
+        let body = await request.json(4096);
+        let title = body.text("title").trim();
+        confirm !title.empty() else throw Exception.status(422, "title is empty");
+        let note = store.added(title);
+        CreatedReply(location: "/api/notes/" + note.id().string(), value: note.json());
+    }
+
+    async remove(request is WebRequest) is Responding {
+        let id = request.path().int("id");
+        confirm store.removed(id) else throw Exception.status(404, "no note " + id.string());
+        NoContentReply();
+    }
+}
+
+// The route table: one place that says which URL reaches which action.
+object NotesService {
+    has api is NotesApi;
+
+    NotesService(:api);
+
+    routes() is WebRoutes {
+        WebRoutes(
+            Scope("/api",
+                Resource("/notes", Get(api.list), Post(api.add)),
+                Resource("/notes/:id", Get(api.show), Delete(api.remove)),
+            ),
+        );
+    }
+}
+```
+
+- **`Note`** — значение с идентификатором и заголовком, знающее свою форму в
+  JSON.
+- **`NoteStore`** — роль хранилища. API зависит от роли, так что память
+  сегодня и база данных завтра — две реализации одного контракта
+  (раздел 26.5).
+- **`MemoryStore`** хранит все заметки в одном значении `Shelf` внутри
+  `Atomic`. Почему именно так, объясняет раздел 25.5.
+- **`NotesApi`** — контроллер. Каждый endpoint читает из запроса то, что ему
+  нужно, спрашивает хранилище и возвращает ответ.
+- **`NotesService.routes()`** — таблица маршрутов: одно место, где сказано,
+  какой URL ведёт к какому действию. `Scope("/api", …)` пишет префикс один
+  раз, а `Resource` — путь один раз для нескольких методов.
+
+## 25.3 Endpoints
+
+Endpoint читает запрос через типизированные методы.
+`request.path().int("id")` читает `:id` шаблона как `int`; значение, которое
+не является числом, получает ответ 400 от фреймворка, прежде чем endpoint
+продолжит, так что `/api/notes/seven` до хранилища не доходит. Query и поля
+заголовка читаются так же, с `maybe` для значений, которых может не быть
+(глава 7).
+
+Тело читается с ограничением: `await request.json(4096)` принимает не больше
+4096 байт, требует медиатип JSON и разбирает документ сразу. Слишком большое
+тело — это 413, тело не того типа — 415, синтаксическая ошибка — 400, а
+отсутствующий член или член не того вида, прочитанный позже из полученного
+`RequestJson`, — 422 с указателем JSON. Ничто из этого не требует ни строки в
+endpoint. Чтения без ограничения не предлагается: сервис, принимающий любое
+тело, примет тело больше своей памяти.
+
+Ответы — значения. `JsonReply(value:)` — это 200 с `application/json`;
+`CreatedReply(location:, value:)` — 201 с полем `Location` и новым ресурсом;
+`NoContentReply()` — 204 совсем без тела. Каждый принимает только то, что
+отличается от его умолчаний, так что endpoint называет свой исход, а не
+обрамление. Противоречивый ответ построить нельзя: `TextReply(text: "",
+status: Status.no_content)` отвергается с `InvalidReply`, потому что 204 не
+может нести тело, даже пустое. Сказать «ничего» — это `NoContentReply`.
+
+## 25.4 Отказы становятся статусами
+
+У сервиса те же три рода отказов, что у утилиты (раздел 24.5), и HTTP даёт
+каждому своё место.
+
+**Ошибки клиента** — статусы 4xx. Endpoint называет свои через
+`throw Exception.status(404, "no note 9")`, а `confirm … else throw`
+превращает предусловие в такую ошибку (`confirm store.removed(id) else throw
+…`). На брошенный `Exception` фреймворк отвечает телом problem details —
+стандартной формой ошибок в JSON из RFC 9457 [[RFC 9457](#ref-rfc9457)]:
+
+```text
+HTTP/1.1 404 Not Found
+Content-Type: application/problem+json
+
+{"type":"about:blank","title":"Not Found","status":404,"detail":"no note 9"}
+```
+
+Клиенты получают одну форму для любой ошибки, а `detail` уходит к ним, так
+что в нём никогда не должно быть внутренней диагностики.
+
+**Переведённые отказы** нижних слоёв — база данных отвергла повторяющийся
+ключ, превышена квота — превращает в статусы область исключений вокруг
+маршрутов, которые о них знают: `Scope` или таблица принимает
+`ExceptionScope`, который ловит известные ему ошибки и отвечает на них, а
+остальные пропускает наружу. Это граница раздела 10.12 в форме HTTP.
+
+**Ошибки в программе** не ловятся. Любая другая ошибка доходит до сервера,
+который отвечает 500 без тела. Клиент узнаёт, что запрос не удался, и ничего
+о причине — это и безопасный ответ, и честный.
+
+## 25.5 Состояние, общее для запросов
+
+Запросы обслуживаются конкурентно, так что хранилище общее для всех задач,
+обслуживающих запросы. Okkama не даёт объектам меняться на месте, а `Cell` не
+переходит в асинхронный код (раздел 26.8). Остаются две формы: задача-владелец,
+принимающая сообщения, или `Atomic` — одно значение, которое задачи делят и
+заменяют целиком.
+
+`MemoryStore` использует `Atomic` и держит всё своё в одном значении, `Shelf`:
+следующий идентификатор и словарь заметок. Добавление заметки читает полку,
+строит новую с добавленной заметкой и публикует её через
+`compare_and_replace(expected:, revised:)`, который удаётся, только если с
+момента чтения никакая другая задача ничего не опубликовала. Если
+опубликовала, цикл читает заново и повторяет. Удаление устроено так же.
+Каждая операция — одна атомарная публикация целого, согласованного значения,
+так что читатель никогда не увидит заметку без учтённого идентификатора, а
+два конкурентных создания никогда не получат один идентификатор.
+
+Форма задачи-владельца из раздела 26.8 подходит хранилищам, которые делают
+медленную работу, например пишут в файл по порядку. Хранилищу, которое уже
+живёт в другом месте, — базе данных — не нужна ни та, ни другая: это роль,
+реализация которой отправляет запросы, а владелец — сама база.
+
+## 25.6 Тесты без сети
+
+`web/testing` даёт `WebTestClient`, который вызывает таблицу маршрутов так
+же, как настоящий HTTP-клиент вызывает сервер, но без сокета. Запрос
+проходит через маршруты, их обёртки и области исключений и возвращается тем
+же `ClientResponse`, который читает настоящий клиент:
+
+```okkama
+module bible/notes_tests v1.0.0;
+
+import "json" take Json, JsonField;
+import "http/body" take JsonBody;
+import "web/testing" take WebTestClient;
+import "notes/api" take NotesService, NotesApi, MemoryStore;
+
+object Fresh {
+    Fresh();
+
+    client() is WebTestClient {
+        WebTestClient(NotesService(api: NotesApi(store: MemoryStore())).routes());
+    }
+}
+
+async test "a created note can be listed and read" {
+    let client = Fresh().client();
+    let created = await client.post("/api/notes", JsonBody(Json(JsonField("title", "buy tea"))));
+    test.is(created::Head::code, 201);
+    let page = await client.get("/api/notes/1");
+    test.is(page::Head::code, 200);
+    test.is((await page.json()).text("title"), "buy tea");
+    let all = await client.get("/api/notes");
+    test.is((await all.json()).size(), 1);
+}
+
+async test "a missing note is a 404 problem" {
+    let page = await Fresh().client().get("/api/notes/9");
+    test.is(page::Head::code, 404);
+    test.is((await page.json()).text("detail"), "no note 9");
+}
+
+async test "an empty title is refused with 422" {
+    let reply = await Fresh().client().post("/api/notes", JsonBody(Json(JsonField("title", "  "))));
+    test.is(reply::Head::code, 422);
+}
+
+async test "a removed note is gone" {
+    let client = Fresh().client();
+    await client.post("/api/notes", JsonBody(Json(JsonField("title", "call Ada"))));
+    test.is((await client.delete("/api/notes/1"))::Head::code, 204);
+    test.is((await client.get("/api/notes/1"))::Head::code, 404);
+    test.is((await client.delete("/api/notes/1"))::Head::code, 404);
+}
+
+async test "a non-number id is a 400" {
+    test.is((await Fresh().client().get("/api/notes/seven"))::Head::code, 400);
+}
+```
+
+Вывод:
+
+```text
+=== RUN   a created note can be listed and read
+--- PASS: a created note can be listed and read
+=== RUN   a missing note is a 404 problem
+--- PASS: a missing note is a 404 problem
+=== RUN   an empty title is refused with 422
+--- PASS: an empty title is refused with 422
+=== RUN   a removed note is gone
+--- PASS: a removed note is gone
+=== RUN   a non-number id is a 400
+--- PASS: a non-number id is a 400
+PASS
+```
+
+- `Fresh().client()` строит весь сервис над пустым `MemoryStore`, так что
+  каждый тест начинает с нуля и тесты не видят заметок друг друга.
+- Тесты проверяют то, что видит клиент: статусы (`::Head::code`), тела JSON
+  и `detail` проблемы. Они проверяют и собственные ответы фреймворка: 400 на
+  нечисловой идентификатор и 404 на отсутствующую заметку.
+- Тесты — `async test`, потому что endpoints — действия `async`.
+- Здесь ничто не слушает порт, так что тесты идут параллельно с другими, в
+  песочнице книги и в CI без сети.
+
+## 25.7 Запуск
+
+Программа, которая обслуживает API по-настоящему, коротка:
+
+```okkama
+async main() is int {
+    let service = NotesService(api: NotesApi(store: MemoryStore()));
+    await WebApplication(service.routes()).listen(address: "127.0.0.1", port: 8000);
+    0;
+}
+```
+
+`listen` обслуживает, пока процесс не получит SIGTERM или SIGINT. Тогда
+сервер перестаёт принимать соединения, даёт запросам в работе десять секунд
+на завершение, закрывается, и `listen` возвращается, так что `main` может
+закончить собственную очистку. Второй сигнал завершает процесс сразу.
+Развёртывание, которое останавливает сервис через SIGTERM, получает плавную
+остановку без единой строки в сервисе.
+
+Адрес — IP-литерал; `web/app` имена не разрешает. Порт, адрес и прочие
+настройки приходят теми же слоями, что у утилиты (раздел 24.8): флаг, затем
+окружение, затем значение по умолчанию, прочитанные в `main` и переданные
+вниз. HTTPS принимает TLS-идентичность, `listen(address:, port:, tls:)`, и
+тогда предлагает клиентам HTTP/2 и HTTP/1.1.
+
+## 25.8 Во что обходится такой дизайн
+
+Сервис длиннее скрипта, который отвечал бы на те же четыре запроса
+изменяемым словарём и обработчиком на каждый URL. Что покупает лишняя длина:
+
+- **Каждый запрос проверен до того, как дошёл до endpoint:** маршрут, метод,
+  параметры пути, медиатип и размер тела. Endpoint начинает со значений,
+  которые уже осмысленны.
+- **У ошибок одна форма** (RFC 9457) и верный статус, а ошибки программы не
+  выдаются за ошибки клиента.
+- **Общее состояние нельзя разорвать.** Хранилище публикует целые значения,
+  а язык не даёт способа разделить изменяемый объект между задачами.
+- **Сервис проверяется так, как его видят клиенты,** без сети и без
+  запущенного сервера.
+
+Цена — копия полки при каждом изменении. Для хранилища на несколько тысяч
+заметок она незаметна; для миллионов хранилище переезжает в базу данных за
+той же ролью, и копия исчезает. Endpoints `async` стоят на запрос немного
+больше синхронных; что это покупает, объясняет глава 20, а во что обходится
+— глава 23.
+
 # Глава 26. Паттерны и антипаттерны
 
 У каждого языка есть вторая грамматика, которую не проверяет ни один
@@ -16632,6 +17048,8 @@ main() is int {
 - <a id="ref-rfc6901"></a>Paul C. Bryan, Kris Zyp, Mark Nottingham (eds.) (2013). *JavaScript Object Notation (JSON) Pointer*. RFC 6901, IETF. https://www.rfc-editor.org/rfc/rfc6901
 - <a id="ref-rfc7396"></a>Paul Hoffman, James Snell (2014). *JSON Merge Patch*. RFC 7396, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc7396
 - <a id="ref-rfc8259"></a>Tim Bray (ed.) (2017). *The JavaScript Object Notation (JSON) Data Interchange Format*. RFC 8259, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc8259
+- <a id="ref-rfc9110"></a>Roy T. Fielding, Mark Nottingham, Julian Reschke (eds.) (2022). *HTTP Semantics*. RFC 9110 (STD 97), IETF. https://www.rfc-editor.org/rfc/rfc9110
+- <a id="ref-rfc9457"></a>Mark Nottingham, Erik Wilde, Sanjay Dalal (2023). *Problem Details for HTTP APIs*. RFC 9457, IETF. https://www.rfc-editor.org/rfc/rfc9457
 - <a id="ref-rice1953"></a>H. Gordon Rice (1953). Classes of Recursively Enumerable Sets and Their Decision Problems. *Transactions of the American Mathematical Society* 74(2): 358–366. https://doi.org/10.1090/S0002-9947-1953-0053041-6
 - <a id="ref-rissanen1978"></a>Jorma Rissanen (1978). Modeling by Shortest Data Description. *Automatica* 14(5): 465–471. https://doi.org/10.1016/0005-1098(78)90005-5
 - <a id="ref-ritchie1993"></a>Dennis M. Ritchie (1993). The Development of the C Language. *HOPL-II: The Second ACM SIGPLAN Conference on History of Programming Languages*: 201–208. https://doi.org/10.1145/154766.155580

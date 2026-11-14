@@ -125,6 +125,8 @@ bibliographic data were checked are listed.
 - [@rfc6901] Paul C. Bryan, Kris Zyp, Mark Nottingham (eds.) (2013). *JavaScript Object Notation (JSON) Pointer*. RFC 6901, IETF. https://www.rfc-editor.org/rfc/rfc6901 {label: RFC 6901}
 - [@rfc7396] Paul Hoffman, James Snell (2014). *JSON Merge Patch*. RFC 7396, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc7396 {label: RFC 7396}
 - [@rfc8259] Tim Bray (ed.) (2017). *The JavaScript Object Notation (JSON) Data Interchange Format*. RFC 8259, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc8259 {label: RFC 8259}
+- [@rfc9110] Roy T. Fielding, Mark Nottingham, Julian Reschke (eds.) (2022). *HTTP Semantics*. RFC 9110 (STD 97), IETF. https://www.rfc-editor.org/rfc/rfc9110 {label: RFC 9110}
+- [@rfc9457] Mark Nottingham, Erik Wilde, Sanjay Dalal (2023). *Problem Details for HTTP APIs*. RFC 9457, IETF. https://www.rfc-editor.org/rfc/rfc9457 {label: RFC 9457}
 - [@rice1953] H. Gordon Rice (1953). Classes of Recursively Enumerable Sets and Their Decision Problems. *Transactions of the American Mathematical Society* 74(2): 358–366. https://doi.org/10.1090/S0002-9947-1953-0053041-6
 - [@rissanen1978] Jorma Rissanen (1978). Modeling by Shortest Data Description. *Automatica* 14(5): 465–471. https://doi.org/10.1016/0005-1098(78)90005-5
 - [@ritchie1993] Dennis M. Ritchie (1993). The Development of the C Language. *HOPL-II: The Second ACM SIGPLAN Conference on History of Programming Languages*: 201–208. https://doi.org/10.1145/154766.155580

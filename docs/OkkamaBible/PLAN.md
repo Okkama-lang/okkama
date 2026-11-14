@@ -409,3 +409,23 @@ Left out on purpose: interruption (Ctrl-C). The std has no public signal API for
 To add for the floor:
 - a longer case study: grow `tally` into a two-subcommand tool end to end;
 - or move material from 24.3 into a guided walkthrough.
+
+## Chapter 25 notes (2026-11-15)
+
+First draft, 4.0 pages (EN and RU) of 16. The service is a notes JSON API (examples/notes/api.ok): NoteStore role, MemoryStore over Atomic<Shelf> with compare_and_replace, NotesApi controller, NotesService routes. Tests are `25-notes-tests` with WebTestClient, no network. Sources: RFC 9110, RFC 9457.
+
+Written:
+- what a service is made of;
+- the service, endpoints, failures as statuses (problem details);
+- shared state (Atomic plus a whole-value shelf);
+- tests without a network;
+- running (listen, graceful shutdown on SIGTERM/SIGINT);
+- costs.
+
+To add:
+- an Around: an access log, and authentication with web/session;
+- an exception scope translating a store error;
+- a database behind NoteStore (Postgres; db/postgres), tested through the role, with no network in the book's sandbox;
+- query parameters and pagination;
+- a concurrency test (many creations, distinct ids);
+- the server-perf notes, only with measured numbers.

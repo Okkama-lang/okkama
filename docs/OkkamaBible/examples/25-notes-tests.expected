@@ -1,0 +1,11 @@
+=== RUN   a created note can be listed and read
+--- PASS: a created note can be listed and read
+=== RUN   a missing note is a 404 problem
+--- PASS: a missing note is a 404 problem
+=== RUN   an empty title is refused with 422
+--- PASS: an empty title is refused with 422
+=== RUN   a removed note is gone
+--- PASS: a removed note is gone
+=== RUN   a non-number id is a 400
+--- PASS: a non-number id is a 400
+PASS
