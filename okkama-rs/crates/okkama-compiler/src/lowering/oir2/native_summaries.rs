@@ -6,12 +6,13 @@
 //! obligation. Consequently all parameter retention, result aliases and deps are empty.
 //! - `new_value(T) -> Atomic<T>`: call boundary, no semantic failure.
 //! - `value(Atomic<T>) -> T`: observation, may throw AtomicClosed.
-//! - `replace(Atomic<T>, T) -> void`: observation, may throw AtomicClosed before storing.
+//! - `replace(Atomic<T>, T) -> void`: call boundary, may throw AtomicClosed before storing.
 //! - `close(Atomic<T>) -> void`: observation, idempotent, no semantic failure.
 //!
-//! These registered observations keep admission at the caller. Atomic.replace is
-//! temporarily an observation for plain T; OIR-2 §7.2 requires a call boundary.
-//! Moving it changes the catalog's entry kind and packet ABI, not the cell stores.
+//! OIR-2 §7.2 closes unretained fresh publication inputs at the call boundary.
+//! Reading copies the stored borrow without changing its external lifetime
+//! (P1.3 elaboration §12). Close ends the capability, not its borrowed values.
+//! The value/close observations therefore keep admission at the caller.
 //!
 //! `Error.text(Error) -> string` observes the builtin plain Error view without failure.
 //! `utf8_encode` and `stdout_write` are native call boundaries. Their results are a
@@ -208,7 +209,6 @@ pub(super) fn contract(module: &ir::Module, name: &str, native: bool, signature:
                     (vec![object], vec![value])
                 }
                 "replace" => {
-                    kind = ir::EntryKind::ObservationAdmissionStaysCaller;
                     failures.push(ir::FailureKind::Thrown);
                     (vec![object, value], vec![])
                 }

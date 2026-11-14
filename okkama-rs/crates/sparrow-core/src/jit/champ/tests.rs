@@ -911,8 +911,13 @@ fn champ_p1_atomic_specializations_closed_failure_and_gc() {
         let object = post.value;
         runtime.roots.push((object, Repr::Ref));
         assert!(runtime.champ_packet_keys(&post.packet).unwrap().is_empty());
-        p1_call(&mut runtime, &mut ctx, &format!("okkama.atomic.Atomic.replace${suffix}"), &[object, second]);
-        let (value, _) = p1_call(&mut runtime, &mut ctx, &format!("okkama.atomic.Atomic.value${suffix}"), &[object]);
+        let (outcome, post) = p1_call(&mut runtime, &mut ctx,
+            &format!("okkama.atomic.Atomic.replace${suffix}"), &[object, second]);
+        assert_eq!(outcome, c::NORMAL);
+        assert!(runtime.champ_packet_keys(&post.unwrap().packet).unwrap().is_empty());
+        let (value, post) = p1_call(&mut runtime, &mut ctx,
+            &format!("okkama.atomic.Atomic.value${suffix}"), &[object]);
+        assert!(post.is_none(), "value remains a borrowed observation");
         assert_eq!(value, second);
         runtime.roots.clear();
         runtime.roots.push((object, Repr::Ref));
@@ -921,7 +926,9 @@ fn champ_p1_atomic_specializations_closed_failure_and_gc() {
             assert_eq!(runtime.heap.text(runtime.heap.field(object, 0)), "новое");
         }
         for _ in 0..2 {
-            p1_call(&mut runtime, &mut ctx, &format!("okkama.atomic.Atomic.close${suffix}"), &[object]);
+            let (_, post) = p1_call(&mut runtime, &mut ctx,
+                &format!("okkama.atomic.Atomic.close${suffix}"), &[object]);
+            assert!(post.is_none(), "close does not accept ownership of the borrowed value");
             assert_eq!(ctx.status, OK);
         }
         let replacement = if suffix == "int" {
@@ -933,8 +940,17 @@ fn champ_p1_atomic_specializations_closed_failure_and_gc() {
         for op in ["value", "replace"] {
             let args = [object, replacement];
             let count = 1 + usize::from(op == "replace");
-            p1_call(&mut runtime, &mut ctx, &format!("okkama.atomic.Atomic.{op}${suffix}"), &args[..count]);
+            let (outcome, post) = p1_call(&mut runtime, &mut ctx,
+                &format!("okkama.atomic.Atomic.{op}${suffix}"), &args[..count]);
             assert_eq!(ctx.status, FAILED);
+            if op == "replace" {
+                assert_eq!(outcome, c::UNWIND);
+                let post = post.unwrap();
+                assert_eq!(post.failure, ctx.failure);
+                assert_eq!(post.packet.record, 0, "accepted input is settled before unwind");
+            } else {
+                assert!(post.is_none());
+            }
             let FailureKind::Thrown(error) = runtime.failure(ctx.failure).unwrap().kind else { panic!("typed error") };
             runtime.roots.push((error, Repr::Ref));
             ctx.status = OK;
@@ -944,6 +960,34 @@ fn champ_p1_atomic_specializations_closed_failure_and_gc() {
             assert_eq!(runtime.heap.field(object, 0), word::UNBOUND);
         }
     }
+}
+
+#[test]
+fn champ_p1_atomic_replace_preserves_old_string_borrow() {
+    let mut runtime = p1_runtime();
+    let mut ctx = context(&mut runtime);
+    let old = runtime.heap.allocate_text("old");
+    runtime.roots.push((old, Repr::Ref));
+    let (_, post) = p1_call(&mut runtime, &mut ctx, "okkama.atomic.Atomic.new_value$string", &[old]);
+    let object = post.unwrap().value;
+    runtime.roots.push((object, Repr::Ref));
+    let (borrow, _) = p1_call(&mut runtime, &mut ctx, "okkama.atomic.Atomic.value$string", &[object]);
+    assert_eq!(borrow, old);
+    let fresh = runtime.heap.allocate_text("new");
+    runtime.roots.push((fresh, Repr::Ref));
+    let (outcome, post) = p1_call(&mut runtime, &mut ctx,
+        "okkama.atomic.Atomic.replace$string", &[object, fresh]);
+    assert_eq!(outcome, c::NORMAL);
+    assert!(runtime.champ_packet_keys(&post.unwrap().packet).unwrap().is_empty());
+    runtime.heap.collect(|visit| {
+        visit(object, Repr::Ref);
+        visit(borrow, Repr::Ref);
+    });
+    assert_eq!(runtime.heap.text(borrow), "old");
+    assert_eq!(runtime.heap.text(runtime.heap.field(object, 0)), "new");
+    p1_call(&mut runtime, &mut ctx, "okkama.atomic.Atomic.close$string", &[object]);
+    runtime.heap.collect(|visit| visit(borrow, Repr::Ref));
+    assert_eq!(runtime.heap.text(borrow), "old");
 }
 
 #[test]

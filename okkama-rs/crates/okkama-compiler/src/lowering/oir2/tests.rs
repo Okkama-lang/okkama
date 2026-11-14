@@ -1053,7 +1053,7 @@ fn oir2_all_stored_goldens_pass_verify_high() {
         verify_high(&module, path.to_str().expect("golden path"));
         count += 1;
     }
-    assert_eq!(count, 44, "every lowering golden must be verified");
+    assert_eq!(count, 45, "every lowering golden must be verified");
 }
 
 fn check_verified(module: &ir::Module) -> Result<(), LowerError> {
@@ -1177,10 +1177,12 @@ fn lower_std(source: &str) -> Result<ir::Module, LowerError> {
     lower_to_oir2(&analysis)
 }
 
-const STD_SOURCES: [(&str, &str, &str); 3] = [
+const STD_SOURCES: [(&str, &str, &str); 4] = [
     ("std-log", include_str!("fixtures/std-log.ok"), include_str!("goldens/std-log.oir")),
     ("std-cell", include_str!("fixtures/std-cell.ok"), include_str!("goldens/std-cell.oir")),
     ("std-error", include_str!("fixtures/std-error.ok"), include_str!("goldens/std-error.oir")),
+    ("atomic-replace-fresh", include_str!("fixtures/atomic-replace-fresh.ok"),
+        include_str!("goldens/atomic-replace-fresh.oir")),
 ];
 
 #[test]
@@ -1556,4 +1558,97 @@ fn oir2_pipeline_p1_atomic_contracts() {
         external.proofs.entry.as_mut().unwrap().retained_params.push(0);
         assert!(okkama_sparrow::spb17::verify_load(&forged, &catalog).is_err());
     }
+}
+
+#[test]
+fn oir2_p1_compiler_and_trusted_entry_kinds_agree() {
+    use okkama_sparrow::spb17::{self as s, ExternalContracts};
+    let source = concat!("module app; import \"async/atomic\" take Atomic; ",
+        "main() is int { let a = Atomic(1); let b = Atomic(\"a\"); ",
+        "a.replace(a.value() + 1); b.replace(b.value() + \"b\"); a.close(); b.close(); 0; }");
+    let program = s::decode(&compile_p1_source(source).unwrap()).unwrap();
+    let trusted = s::p1::P1Contracts::new(&program.objects).unwrap();
+    let mut checked = std::collections::BTreeSet::new();
+    for source in [source, include_str!("fixtures/std-error.ok"), include_str!("fixtures/std-log.ok")] {
+        let high = lower_std(source).unwrap();
+        for (_, function) in high.functions.iter() {
+            let name = function.attrs.iter().find_map(|attr| match attr {
+                ir::FunctionAttr::Intrinsic { name, .. } | ir::FunctionAttr::Extern(name) => Some(name),
+                _ => None,
+            });
+            let Some(name) = name else {
+                continue;
+            };
+            let summary = high.summaries.get(function.summary.unwrap()).unwrap();
+            let expected = if name.starts_with("okkama.atomic.Atomic.value$")
+                || name.starts_with("okkama.atomic.Atomic.close$") || name == "okkama.Error.text"
+            {
+                ir::EntryKind::ObservationAdmissionStaysCaller
+            } else {
+                ir::EntryKind::CallBoundary
+            };
+            assert_eq!(summary.entry_kind, expected, "{name}");
+            let abi = match summary.entry_kind {
+                ir::EntryKind::CallBoundary => s::EntryAbi::Owned,
+                ir::EntryKind::ObservationAdmissionStaysCaller => s::EntryAbi::Observation,
+                kind => panic!("unexpected P1 entry kind {kind:?}: {name}"),
+            };
+            assert_eq!(trusted.entry(name).unwrap().entry_abi, abi, "{name}");
+            checked.insert(name.clone());
+        }
+    }
+    assert_eq!(checked.len(), 11, "eight Atomic entries, Error.text and two natives");
+}
+
+#[test]
+fn oir2_p1_rejects_observation_declared_replace() {
+    use okkama_sparrow::spb17 as s;
+    let source = include_str!("fixtures/atomic-replace-fresh.ok");
+    let mut high = lower_std(source).unwrap();
+    let catalog = super::native_summaries::P1NativeSummaries::for_module(&high).unwrap();
+    let replace = high.functions.iter().find_map(|(_, function)| {
+        (function.symbol == "okkama.atomic.Atomic.replace#string").then(|| function.summary.unwrap())
+    }).unwrap();
+    high.summaries.get_mut(replace).unwrap().entry_kind = ir::EntryKind::ObservationAdmissionStaysCaller;
+    let context = ir::VerifyContext { external_contracts: &catalog, ..ir::VerifyContext::default() };
+    let report = ir::verify_with(&high, &ir::VerifyOptions::default(), context).unwrap_err();
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == ir::verify::RuleId::B51
+        && diagnostic.message.contains("entry kind differs")), "{report:?}");
+
+    let program = s::decode(&compile_p1_source(source).unwrap()).unwrap();
+    let trusted = s::p1::P1Contracts::new(&program.objects).unwrap();
+    let mut replace = program.functions.iter().find(|function| {
+        function.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref())
+            == Some("okkama.atomic.Atomic.replace$string")
+    }).unwrap().clone();
+    // Isolate the old observation declaration so caller ABI checks cannot mask
+    // the independent trusted-catalog consistency check.
+    replace.entry_abi = s::EntryAbi::Observation;
+    replace.params.pop();
+    assert_eq!(replace.services.pop(), Some(s::ServiceKind::Packet));
+    let forged = s::Program { objects: program.objects, functions: vec![replace], ..s::Program::default() };
+    s::verify(&forged).unwrap();
+    let error = s::verify_load(&forged, &trusted).unwrap_err();
+    assert!(error.to_string().contains("external signature/summary mismatch"), "{error}");
+}
+
+#[test]
+fn oir2_pipeline_atomic_replace_fresh_golden() {
+    use okkama_sparrow::spb17 as s;
+    let bytes = compile_p1_source(include_str!("fixtures/atomic-replace-fresh.ok")).unwrap();
+    let program = s::decode(&bytes).unwrap();
+    let replace = program.functions.iter().position(|function| {
+        function.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref())
+            == Some("okkama.atomic.Atomic.replace$string")
+    }).unwrap() as u32;
+    assert!(program.functions.iter().flat_map(|function| &function.code).any(|inst| matches!(inst,
+        s::Instruction::Champ { op: s::Opcode::InvokeCallOwn, arguments, .. }
+            if arguments.contains(&s::Argument::Entry(replace)))));
+    let actual = s::disassemble(&program).unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/codegen/sparrow_oir2/fixtures/atomic-replace-fresh.spb17");
+    if std::env::var_os("OKKAMA_UPDATE_S3_GOLDENS").is_some() {
+        std::fs::write(&path, &actual).unwrap();
+    }
+    assert_eq!(actual, std::fs::read_to_string(path).unwrap());
 }

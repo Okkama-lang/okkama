@@ -7,7 +7,7 @@ pub(super) fn invoke(ctx: *mut Ctx, function: usize, io: *mut CallOwn, args: &[W
     let runtime = unsafe { &mut *(*ctx).runtime };
     let source = runtime.champ.machine.as_ref().expect("Champ program").source.clone();
     let name = source.functions[function].proofs.entry.as_ref().unwrap().external.as_deref().unwrap();
-    // Acceptance is about transport, independent of whether this entry is currently an observation.
+    // Acceptance follows the packet ABI for every call-boundary entry, including replace.
     let mut post = CallPost::default();
     if !io.is_null() {
         let input = unsafe { &mut (*io).input };

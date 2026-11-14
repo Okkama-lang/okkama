@@ -147,3 +147,14 @@ fn p1_pipeline_atomic_run() {
         assert_eq!(run.result.unwrap(), 7);
     }
 }
+
+#[test]
+fn p1_pipeline_atomic_replace_fresh_preserves_old_value() {
+    let bytes = compile(include_str!(
+        "../../okkama-compiler/src/lowering/oir2/fixtures/atomic-replace-fresh.ok"
+    )).unwrap();
+    let run = sparrow_core::run_captured(bytes, sparrow_core::budget::Limits::default()).unwrap();
+    assert_eq!(run.result.unwrap(), 7);
+    assert_eq!(String::from_utf8(run.stdout).unwrap(), "oldnew");
+    assert!(run.destroy_trace.is_empty(), "plain strings have no resource obligations");
+}

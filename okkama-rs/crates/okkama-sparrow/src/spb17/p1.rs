@@ -36,10 +36,12 @@ impl P1Contracts {
             }
             let suffix = if value == Type::Int { "int" } else { "string" };
             let atomic = Type::Object(id as u32);
+            // OIR-2 §7.2: publication closes fresh inputs with the call; reads
+            // and close preserve the external lifetime of borrowed values.
             for (op, params, results, owned, failures) in [
                 ("new_value", vec![value], vec![atomic], true, 0),
                 ("value", vec![atomic], vec![value], false, 1),
-                ("replace", vec![atomic, value], vec![], false, 1),
+                ("replace", vec![atomic, value], vec![], true, 1),
                 ("close", vec![atomic], vec![], false, 0),
             ] {
                 if failures != 0 && !closed {
