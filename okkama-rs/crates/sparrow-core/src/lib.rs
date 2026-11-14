@@ -23,6 +23,8 @@
 // the context as a raw pointer and are sound for the code that calls them.
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
+#[cfg(feature = "champ-abi")]
+pub mod champ;
 pub mod budget;
 mod code_memory;
 mod contracts;

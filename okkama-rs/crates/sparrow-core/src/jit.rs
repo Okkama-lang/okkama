@@ -437,7 +437,9 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
     if runtime.invocations[function].code != 0 {
         return Ok(runtime.invocations[function].code);
     }
-    let Runtime { heap, loaded, jit, invocations, constants, resources, limits, budget, stats, .. } = runtime;
+    let Runtime { heap, loaded, jit, invocations, constants, limits, budget, stats, .. } = runtime;
+    #[cfg(not(feature = "champ-abi"))]
+    let resources = &runtime.resources;
     let started = stats.is_some().then(std::time::Instant::now);
     // Stage boundaries under `SPARROW_CORE_PROFILE_COMPILE` (#345).
     let profiling = jit.profile.is_some();
@@ -510,6 +512,7 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
             invocations,
             late_bound,
             constants,
+            #[cfg(not(feature = "champ-abi"))]
             resources,
             function,
             kinds: &loaded.functions[function].kinds,
@@ -688,6 +691,7 @@ struct Emitter<'a, 'b> {
     /// Emitted ready-static, lazy-static and dynamic sites (`--stats`).
     call_sites: [u64; 3],
     constants: &'a mut Vec<(Word, Repr)>,
+    #[cfg(not(feature = "champ-abi"))]
     resources: &'a crate::failures::Resources,
     function: usize,
     kinds: &'a [Kind],
@@ -1629,10 +1633,16 @@ impl Emitter<'_, '_> {
                 self.set_word(&dst.0, value);
             }
             I::ObjNew { dst, object, fields } => {
-                let words = fields.len().max(1) + 1;
-                let pointer = self.allocate(words);
-                let header = self.iconst(heap::header(heap::OBJECT, Repr::Raw, object.0) as i64);
-                self.builder.ins().store(MEMORY, header, pointer, 0);
+                #[cfg(not(feature = "champ-abi"))]
+                let pointer = {
+                    let words = fields.len().max(1) + 1;
+                    let pointer = self.allocate(words);
+                    let header = self.iconst(heap::header(heap::OBJECT, Repr::Raw, object.0) as i64);
+                    self.builder.ins().store(MEMORY, header, pointer, 0);
+                    pointer
+                };
+                #[cfg(feature = "champ-abi")]
+                let pointer = self.champ_allocate_object(object.0);
                 for (i, field) in fields.iter().enumerate() {
                     let value = self.word(field);
                     self.builder.ins().store(MEMORY, value, pointer, ((i + 1) * 8) as i32);
@@ -1655,16 +1665,37 @@ impl Emitter<'_, '_> {
                     Some(Type::Object(o) | Type::Successor(o)) => o.0 as usize,
                     _ => return Err(unsupported()),
                 };
-                let count = program.objects[declared].fields.len();
-                let pointer = self.allocate(count.max(1) + 1);
-                let source_object = self.get(object);
-                for word_index in 0..=count {
-                    let value = match updates.iter().find(|(f, _)| *f as usize + 1 == word_index) {
-                        Some((_, register)) => self.word(register),
-                        None => self.builder.ins().load(types::I64, MEMORY, source_object, (word_index * 8) as i32),
-                    };
-                    self.builder.ins().store(MEMORY, value, pointer, (word_index * 8) as i32);
-                }
+                #[cfg(not(feature = "champ-abi"))]
+                let pointer = {
+                    let count = program.objects[declared].fields.len();
+                    let pointer = self.allocate(count.max(1) + 1);
+                    let source_object = self.get(object);
+                    for word_index in 0..=count {
+                        let value = match updates.iter().find(|(f, _)| *f as usize + 1 == word_index) {
+                            Some((_, register)) => self.word(register),
+                            None => self.builder.ins().load(types::I64, MEMORY, source_object, (word_index * 8) as i32),
+                        };
+                        self.builder.ins().store(MEMORY, value, pointer, (word_index * 8) as i32);
+                    }
+                    pointer
+                };
+                #[cfg(feature = "champ-abi")]
+                let pointer = {
+                    let count = self.heap.object_runtime_layout(declared as u32).storage_field_count();
+                    let pointer = self.champ_allocate_object(declared as u32);
+                    let source_object = self.get(object);
+                    for index in 0..count {
+                        let value = match updates.iter().find(|(field, _)| *field as usize == index) {
+                            Some((_, register)) => self.word(register),
+                            None => {
+                                let offset = ((index + 1) * 8) as i32;
+                                self.builder.ins().load(types::I64, MEMORY, source_object, offset)
+                            }
+                        };
+                        self.builder.ins().store(MEMORY, value, pointer, ((index + 1) * 8) as i32);
+                    }
+                    pointer
+                };
                 self.set(&dst.0, pointer);
                 self.created(declared, pointer);
             }
@@ -1677,10 +1708,16 @@ impl Emitter<'_, '_> {
             // номер случая — разность дескрипторов.
             I::VariantNew { dst, variant, case, fields } => {
                 let object = program.variants[variant.0 as usize].cases[*case as usize].1;
-                let words = fields.len().max(1) + 1;
-                let pointer = self.allocate(words);
-                let header = self.iconst(heap::header(heap::OBJECT, Repr::Raw, object.0) as i64);
-                self.builder.ins().store(MEMORY, header, pointer, 0);
+                #[cfg(not(feature = "champ-abi"))]
+                let pointer = {
+                    let words = fields.len().max(1) + 1;
+                    let pointer = self.allocate(words);
+                    let header = self.iconst(heap::header(heap::OBJECT, Repr::Raw, object.0) as i64);
+                    self.builder.ins().store(MEMORY, header, pointer, 0);
+                    pointer
+                };
+                #[cfg(feature = "champ-abi")]
+                let pointer = self.champ_allocate_object(object.0);
                 for (i, field) in fields.iter().enumerate() {
                     let value = self.word(field);
                     self.builder.ins().store(MEMORY, value, pointer, ((i + 1) * 8) as i32);
@@ -2519,7 +2556,27 @@ impl Emitter<'_, '_> {
         result
     }
 
+    /// Shared feature-only initialization for OBJECT, successor and variant allocation.
+    #[cfg(feature = "champ-abi")]
+    fn champ_allocate_object(&mut self, descriptor: u32) -> Value {
+        let layout = self.heap.object_runtime_layout(descriptor);
+        let words = layout.allocation_words();
+        let header = layout.header(descriptor);
+        let pointer = self.allocate(words);
+        let zero = self.iconst(0);
+        for index in 1..words {
+            self.builder.ins().store(MEMORY, zero, pointer, (index * 8) as i32);
+        }
+        let header = self.iconst(header as i64);
+        self.builder.ins().store(MEMORY, header, pointer, 0);
+        pointer
+    }
+
+    #[cfg(feature = "champ-abi")]
+    fn created(&mut self, _descriptor: usize, _object: Value) {}
+
     /// Give a new object a resource identity when its type can reach a destroy.
+    #[cfg(not(feature = "champ-abi"))]
     fn created(&mut self, descriptor: usize, object: Value) {
         let resources = &self.resources;
         if resources.enabled && resources.flags[descriptor] {
@@ -2738,3 +2795,6 @@ mod profile_tests {
 
 #[cfg(test)]
 mod ready_callees_tests;
+
+#[cfg(all(test, feature = "champ-abi"))]
+mod champ_tests;

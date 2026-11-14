@@ -125,6 +125,8 @@ pub struct Runtime {
     /// The last failure `describe` reported, as the OCS protocol sees it.
     pub uncaught: Option<crate::Uncaught>,
     pub resources: crate::failures::Resources,
+    #[cfg(feature = "champ-abi")]
+    pub(crate) champ: crate::champ::State,
     /// Async frames ready to resume; spawned tasks; frames running on the
     /// machine stack (innermost last). All are roots.
     pub ready: std::collections::VecDeque<Word>,
@@ -192,7 +194,14 @@ macro_rules! frame_pointer {
 impl Runtime {
     pub fn new(loaded: Loaded) -> Result<Self, Error> {
         crate::contracts::check(&loaded)?;
+        #[cfg(not(feature = "champ-abi"))]
         let mut heap = Heap::new(loaded.layouts());
+        #[cfg(feature = "champ-abi")]
+        let mut heap = {
+            let layouts = loaded.layouts();
+            let objects = loaded.champ_object_layouts(&layouts)?;
+            Heap::new_champ(layouts, objects)
+        };
         heap.set_stress(std::env::var_os("SPARROW_CORE_GC_STRESS").is_some_and(|value| value == "1"));
         if std::env::var_os("SPARROW_CORE_STATS").is_some() {
             heap.allocations = Some(Box::default());
@@ -212,6 +221,8 @@ impl Runtime {
             .map(|f| f.intrinsic.as_ref().and_then(|i| crate::intrinsics::Intrinsic::resolve(&i.name)))
             .collect();
         Ok(Self {
+            #[cfg(feature = "champ-abi")]
+            champ: crate::champ::State::new(),
             resources,
             ready: std::collections::VecDeque::new(),
             spawned: Vec::new(),

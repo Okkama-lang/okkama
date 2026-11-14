@@ -8,8 +8,8 @@ fn parse(text: &str) -> o::Module {
     o::text::parse(text).unwrap_or_else(|error| panic!("{error}"))
 }
 
-fn layouts() -> BTreeMap<o::DeclId, ObjectLayout> {
-    BTreeMap::from([(o::DeclId::from_u32(0), ObjectLayout {
+fn layouts() -> BTreeMap<u32, ObjectLayout> {
+    BTreeMap::from([(0, ObjectLayout {
         // Deliberate runtime override: source field 0 lives at physical slot 1.
         // This tests the registry seam, including a hidden construction slot.
         runtime: s::ObjectRuntimeLayout {
@@ -149,7 +149,7 @@ fn s1_scalar_allowlist_and_plain_object_operations() {
         .get_mut(o::DeclId::from_u32(0)).unwrap().kind else { panic!("fixture"); };
     fields[1].name = "$pending".into();
     let mut registry = layouts();
-    registry.get_mut(&o::DeclId::from_u32(0)).unwrap().source_fields = vec![1, 0];
+    registry.get_mut(&0).unwrap().source_fields = vec![1, 0];
     let value = o::ValueId::from_u32;
     let (a, b, flag, text, range, object) = (value(0), value(1), value(2), value(3), value(4), value(5));
     use o::CoreOp as C;
@@ -294,4 +294,35 @@ fn s1_rejects_cleanup_defer_and_lost_or_duplicate_successor_permissions() {
     assert!(generate(&m, &layouts()).is_ok());
     append(&mut m, o::Operation::Core(o::CoreOp::SuccTake { value: successor, ty }), Some(object_type));
     assert!(generate(&m, &layouts()).unwrap_err().0.contains("already taken"));
+}
+
+#[test]
+fn champ_registry_reemits_571_object_read_golden() {
+    use s::layout::{LayoutFacts, ObjectRuntimeLayout, RuntimeLayoutRegistry};
+    use okkama_sparrow::spb17 as s;
+    let module = okkama_oir::text::parse(include_str!(
+        "fixtures/object-read.oir"
+    )).unwrap();
+    let declaration = 0;
+    let mut registry = RuntimeLayoutRegistry::default();
+    registry.register(declaration, vec![s::Type::Bool, s::Type::Int], vec![1], LayoutFacts::default(), vec![]).unwrap();
+    let layout = registry.object_layout(declaration).unwrap();
+    assert_eq!(layout.runtime.allocation_words, 3);
+    assert_eq!(layout.source_fields, vec![1]);
+    let frozen = ObjectRuntimeLayout::from_spb17(&layout.runtime).unwrap();
+    assert_eq!(frozen.storage_fields(), &[s::layout::Repr::Raw, s::layout::Repr::Int]);
+    assert_eq!(frozen.field_offset(1), 16);
+    let program = generate(&module, &registry).unwrap();
+    let mut snapshot = String::new();
+    for (pc, instruction) in program.functions[0].code.iter().enumerate() {
+        snapshot.push_str(&format!("{pc}: {instruction:?}\n"));
+    }
+    assert_eq!(snapshot, include_str!(
+        "fixtures/object-read.golden"
+    ));
+    let bytes = s::encode(&program).unwrap();
+    assert_eq!(s::decode(&bytes).unwrap(), program);
+    assert_eq!(s::assemble(&s::disassemble(&program).unwrap()).unwrap(), program);
+    assert!(registry.object_layout(1).is_err());
+    assert!(registry.register(declaration, vec![], vec![], LayoutFacts::default(), vec![]).is_err());
 }

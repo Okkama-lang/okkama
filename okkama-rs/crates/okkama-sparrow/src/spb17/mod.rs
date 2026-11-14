@@ -1,6 +1,7 @@
 //! Champ SPB 17 data transformations. Never selected by the default runtime.
 //! Wire format and P1 IDs follow Champ G1 revision 2, §§4 and 9.
 mod codec;
+pub mod layout;
 mod registry;
 mod verify;
 
@@ -361,3 +362,6 @@ pub struct RootRequirement {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod layout_tests;

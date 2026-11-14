@@ -28,24 +28,7 @@ fn unsupported(name: &str) -> GenerateError {
     GenerateError(format!("{name}: not yet in S1"))
 }
 
-/// Final layout includes runtime overrides and hidden physical fields (§2.7).
-/// The compiler never derives allocation size from source ObjectDecl fields.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ObjectLayout {
-    pub runtime: s::ObjectRuntimeLayout,
-    pub source_fields: Vec<u32>,
-}
-
-pub trait LayoutRegistry {
-    fn object_layout(&self, declaration: o::DeclId) -> Result<ObjectLayout, GenerateError>;
-}
-
-impl LayoutRegistry for BTreeMap<o::DeclId, ObjectLayout> {
-    fn object_layout(&self, declaration: o::DeclId) -> Result<ObjectLayout, GenerateError> {
-        self.get(&declaration).cloned().ok_or_else(|| GenerateError(format!(
-            "missing final runtime layout for object {}", declaration.as_u32())))
-    }
-}
+pub use s::layout::{LayoutRegistry, ObjectLayout};
 
 /// Mandatory input and output checks. Only plain scalar/object/control Low is
 /// accepted here; services, ownership facts and failure/defer CFG wait for S2/S3.
@@ -74,7 +57,7 @@ pub fn generate(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<s::P
         if !witnesses.is_empty() || destroy.is_some() {
             return Err(unsupported("object witnesses/destroy entries"));
         }
-        let layout = layouts.object_layout(id)?;
+        let layout = layouts.object_layout(id.as_u32())?;
         if fields.len() != layout.source_fields.len() {
             return Err(GenerateError("layout registry field mapping arity mismatch".into()));
         }
