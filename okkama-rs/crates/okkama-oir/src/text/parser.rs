@@ -217,7 +217,9 @@ impl<'a> Reader<'a> {
                     || prefix == "@" && ".#:".contains(c)
             })
         });
-        if token.quoted || !valid {
+        let quoted_name = token.quoted && !token.character && matches!(prefix, "" | "@")
+            && rest.is_some_and(|name| !name.is_empty());
+        if !quoted_name && (token.quoted || !valid) {
             return Err(self.at(&token, DiagnosticKind::Syntax, "invalid entity name"));
         }
         Ok(token)

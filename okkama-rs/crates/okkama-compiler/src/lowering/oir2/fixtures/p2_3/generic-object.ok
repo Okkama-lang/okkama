@@ -1,0 +1,12 @@
+module app;
+object Box<T> {
+    has value is T;
+    Box(:value);
+    get() is T { value; }
+}
+main() is int {
+    let a = Box(value: 1);
+    let b = Box(value: "s");
+    b.get();
+    a.get();
+}

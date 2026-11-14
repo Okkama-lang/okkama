@@ -1,0 +1,16 @@
+module app;
+enum Slot<T> = (empty, full(value is T), pair(left is T, right is T));
+main() is int {
+    let a = Slot.full(7);
+    let b = Slot.pair("x", "y");
+    match b {
+        case Slot.empty { ""; }
+        case Slot.full(v) { v; }
+        case Slot.pair(left, right) { left + right; }
+    }
+    match a {
+        case Slot.empty { 0; }
+        case Slot.full(v) { v; }
+        case Slot.pair(left, right) { left + right; }
+    }
+}

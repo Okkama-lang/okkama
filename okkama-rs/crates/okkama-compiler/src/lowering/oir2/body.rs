@@ -502,6 +502,44 @@ impl<'a, 't> BodyLowerer<'a, 't> {
                 }
                 self.core(ir::CoreOp::VariantNew { ty, case: *case as u32, fields, packet: None }).map(Some)
             }
+            E::VariantTag(value) => {
+                let Some(value) = self.value(value)? else {
+                    return Ok(None);
+                };
+                self.core(ir::CoreOp::VariantTag { value }).map(Some)
+            }
+            E::VariantGet { value, field } => {
+                let Some(value) = self.value(value)? else {
+                    return Ok(None);
+                };
+                let ty = self.b.body().values.get(value)?.ty;
+                let ir::Type::Variant(declaration) = *self.b.module().types.get(ty)? else {
+                    return Err(LowerError::invalid(expr.span, "payload read without concrete variant"));
+                };
+                let ir::DeclarationKind::Variant { cases, .. } = &self.b.module().declarations.get(declaration)?.kind
+                else {
+                    return Err(LowerError::invalid(expr.span, "payload read without case layouts"));
+                };
+                let mut offset = field.checked_sub(1)
+                    .ok_or_else(|| LowerError::invalid(expr.span, "payload index zero is the tag"))?;
+                let mut selected = None;
+                for (case, entry) in cases.iter().enumerate() {
+                    let layout = &self.b.module().declarations.get(entry.layout)?.kind;
+                    let ir::DeclarationKind::Object { fields, .. } = layout
+                    else {
+                        return Err(LowerError::invalid(expr.span, "payload layout is not an object"));
+                    };
+                    if offset < fields.len() {
+                        selected = Some((case as u32, ir::FieldRef {
+                            declaration: entry.layout, index: offset as u32,
+                        }));
+                        break;
+                    }
+                    offset -= fields.len();
+                }
+                let (case, field) = selected.ok_or_else(|| LowerError::invalid(expr.span, "payload field index"))?;
+                self.core(ir::CoreOp::VariantGet { value, case, field }).map(Some)
+            }
             E::Pack { items, spread: None } => {
                 let ty = self.ty(expr.ty.as_ref().expect("typed pack"), expr.span)?;
                 let mut values = vec![];

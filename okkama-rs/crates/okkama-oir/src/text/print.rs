@@ -293,17 +293,28 @@ impl Writer<'_> {
             if !decl_names.insert(&decl.name) {
                 return Err(PrintError::new("duplicate declaration name"));
             }
-            self.bind(0, "decl", id.as_u32(), decl.name.clone())?;
+            let name = if decl.name.chars().all(|c| c.is_alphanumeric() || "_./:#-".contains(c)) {
+                decl.name.clone()
+            } else {
+                format!("{:?}", decl.name)
+            };
+            self.bind(0, "decl", id.as_u32(), name)?;
         }
         let mut symbols = HashSet::new();
         for (id, f) in module.functions.iter() {
-            if f.symbol.is_empty() || !f.symbol.chars().all(|c| c.is_alphanumeric()
-                || "_.#:".contains(c)) { return Err(PrintError::new("unrepresentable function symbol"));
+            if f.symbol.is_empty() {
+                return Err(PrintError::new("unrepresentable function symbol"));
             }
             if !symbols.insert(f.symbol.as_str()) {
                 return Err(PrintError::new("duplicate function symbol"));
             }
-            self.bind(0, "func", id.as_u32(), format!("@{}", f.symbol))?;
+            let name = format!("@{}", f.symbol);
+            let name = if f.symbol.chars().all(|c| c.is_alphanumeric() || "_.#:".contains(c)) {
+                name
+            } else {
+                format!("{name:?}")
+            };
+            self.bind(0, "func", id.as_u32(), name)?;
         }
         Ok(())
     }

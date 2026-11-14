@@ -1,0 +1,225 @@
+oir 2 high
+module app
+requires core
+entry @main
+
+object "app::Box<int>" {
+    field value: int
+    field n: int = "@app::Box<int>.default#n"
+}
+
+object "app::Box<string>" {
+    field value: str
+    field n: int = "@app::Box<string>.default#n"
+}
+
+object "app::Full<string>" {
+    field value: str
+    field n: int
+}
+scope S0 action in @main
+scope S1 action in "@app::Box<int>.default#n"
+scope S2 action in "@app::Box<string>.default#n"
+scope S3 action in "@app::Box<int>.get#overload()"
+scope S4 action in "@app::Box<string>.get#overload()"
+scope S5 action in "@app::Full<string>.number#overload()"
+scope S6 action in "@app::Box<int>.new#ctor(value:int,n:int).given_value"
+scope S7 action in "@app::Box<int>.new#ctor(value:int,n:int).given_value.n"
+scope S8 action in "@app::Box<string>.new#ctor(value:string,n:int)"
+scope S9 action in "@app::Full<string>.new#ctor(value:string,n:int)"
+
+func @main() -> int [entry] {
+    binding b0 "a": "app::Box<int>" in S0
+    binding b1 "b": "app::Box<string>" in S0
+    binding b2 "supplied": "app::Box<int>" in S0
+    binding b3 "c": "app::Full<string>" in S0
+    boundary B0 lexical in S0
+    ^b0 in S0 unwind ^b1:
+    %0: int = const 1
+    [i1] %1: "app::Box<int>" = call "@app::Box<int>.new#ctor(value:int,n:int).given_value"(%0)
+    bind %1, binding b0
+    %2: str = const "s"
+    %3: int = const 2
+    [i5] %4: "app::Box<string>" = call "@app::Box<string>.new#ctor(value:string,n:int)"(%2, %3)
+    bind %4, binding b1
+    %5: int = const 2
+    %6: int = const 3
+    [i9] %7: "app::Box<int>" = call "@app::Box<int>.new#ctor(value:int,n:int).given_value.n"(%5, %6)
+    bind %7, binding b2
+    [i11] %8: int = call "@app::Box<int>.get#overload()"(%7)
+    discard %8
+    %9: str = const "full"
+    %10: int = const 9
+    [i15] %11: "app::Full<string>" = call "@app::Full<string>.new#ctor(value:string,n:int)"(%9, %10)
+    bind %11, binding b3
+    [i17] %12: str = call "@app::Box<string>.get#overload()"(%4)
+    discard %12
+    [i19] %13: int = call "@app::Full<string>.number#overload()"(%11)
+    discard %13
+    [i21] %14: int = call "@app::Box<int>.get#overload()"(%1)
+    want %14
+    [i23] exit.prepare return %14 at B0
+    result.exit edge normal(0), value %8, demand discard, prepare none
+    result.exit edge normal(0), value %12, demand discard, prepare none
+    result.exit edge normal(0), value %13, demand discard, prepare none
+    result.exit edge normal(0), value %14, demand want, prepare #23
+    high.effects at #1 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #5 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #9 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #11 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #15 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #17 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #19 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #21 failures [thrown, program, panic, native, cancelled], suspends true
+    ret %14
+    ^b1(%15: failure) in S0:
+    raise %15
+}
+
+func "@app::Box<int>.default#n"() -> int [default "app::Box<int>.n"] {
+    boundary B0 lexical in S1
+    ^b0 in S1 unwind ^b1:
+    %0: int = const 7
+    want %0
+    [i2] exit.prepare return %0 at B0
+    result.exit edge normal(0), value %0, demand want, prepare #2
+    ret %0
+    ^b1(%1: failure) in S1:
+    raise %1
+}
+
+func "@app::Box<string>.default#n"() -> int [default "app::Box<string>.n"] {
+    boundary B0 lexical in S2
+    ^b0 in S2 unwind ^b1:
+    %0: int = const 7
+    want %0
+    [i2] exit.prepare return %0 at B0
+    result.exit edge normal(0), value %0, demand want, prepare #2
+    ret %0
+    ^b1(%1: failure) in S2:
+    raise %1
+}
+
+func "@app::Box<int>.new#ctor(value:int,n:int).given_value"(%0: int) -> "app::Box<int>" [ctor "app::Box<int>"] {
+    binding b0 "value": int in S6
+    binding b1 "n": int in S6
+    boundary B0 lexical in S6
+    ^b0 in S6 unwind ^b1:
+    %1: int = undef ty int
+    %2: int = undef ty int
+    [i2] %3: int = call "@app::Box<int>.default#n"()
+    stage %3, action S6, field field_ref(declaration="app::Box<int>", index=1)
+    stage %0, action S6, field field_ref(declaration="app::Box<int>", index=0)
+    bind %0, binding b0
+    bind %3, binding b1
+    %4: "app::Box<int>" = obj.new "app::Box<int>" { value: %0, n: %3 }
+    want %4
+    [i9] exit.prepare return %4 at B0
+    result.exit edge normal(0), value %4, demand want, prepare #9
+    high.effects at #2 failures [thrown, program, panic, native, cancelled], suspends true
+    ret %4
+    ^b1(%5: failure) in S6:
+    raise %5
+}
+
+func "@app::Box<string>.new#ctor(value:string,n:int)"(%0: str, %1: int) -> "app::Box<string>" [ctor "app::Box<string>"] {
+    binding b0 "value": str in S8
+    binding b1 "n": int in S8
+    boundary B0 lexical in S8
+    ^b0 in S8 unwind ^b1:
+    %2: str = undef ty str
+    %3: int = undef ty int
+    [i2] %4: int = call "@app::Box<string>.default#n"()
+    stage %4, action S8, field field_ref(declaration="app::Box<string>", index=1)
+    stage %0, action S8, field field_ref(declaration="app::Box<string>", index=0)
+    stage %1, action S8, field field_ref(declaration="app::Box<string>", index=1)
+    bind %0, binding b0
+    bind %1, binding b1
+    %5: "app::Box<string>" = obj.new "app::Box<string>" { value: %0, n: %1 }
+    want %5
+    [i10] exit.prepare return %5 at B0
+    result.exit edge normal(0), value %5, demand want, prepare #10
+    high.effects at #2 failures [thrown, program, panic, native, cancelled], suspends true
+    ret %5
+    ^b1(%6: failure) in S8:
+    raise %6
+}
+
+func "@app::Box<int>.get#overload()"(%0: "app::Box<int>") -> int [method "app::Box<int>"] {
+    boundary B0 lexical in S3
+    ^b0 in S3 unwind ^b1:
+    %1: int = obj.get %0, value
+    want %1
+    [i2] exit.prepare return %1 at B0
+    result.exit edge normal(0), value %1, demand want, prepare #2
+    ret %1
+    ^b1(%2: failure) in S3:
+    raise %2
+}
+
+func "@app::Full<string>.new#ctor(value:string,n:int)"(%0: str, %1: int) -> "app::Full<string>" [ctor "app::Full<string>"] {
+    binding b0 "value": str in S9
+    binding b1 "n": int in S9
+    boundary B0 lexical in S9
+    ^b0 in S9 unwind ^b1:
+    %2: str = undef ty str
+    %3: int = undef ty int
+    bind %0, binding b0
+    bind %1, binding b1
+    stage %0, action S9, field field_ref(declaration="app::Full<string>", index=0)
+    stage %1, action S9, field field_ref(declaration="app::Full<string>", index=1)
+    %4: "app::Full<string>" = obj.new "app::Full<string>" { value: %0, n: %1 }
+    want %4
+    [i8] exit.prepare return %4 at B0
+    result.exit edge normal(0), value %4, demand want, prepare #8
+    ret %4
+    ^b1(%5: failure) in S9:
+    raise %5
+}
+
+func "@app::Box<string>.get#overload()"(%0: "app::Box<string>") -> str [method "app::Box<string>"] {
+    boundary B0 lexical in S4
+    ^b0 in S4 unwind ^b1:
+    %1: str = obj.get %0, value
+    want %1
+    [i2] exit.prepare return %1 at B0
+    result.exit edge normal(0), value %1, demand want, prepare #2
+    ret %1
+    ^b1(%2: failure) in S4:
+    raise %2
+}
+
+func "@app::Full<string>.number#overload()"(%0: "app::Full<string>") -> int [method "app::Full<string>"] {
+    boundary B0 lexical in S5
+    ^b0 in S5 unwind ^b1:
+    %1: int = obj.get %0, n
+    want %1
+    [i2] exit.prepare return %1 at B0
+    result.exit edge normal(0), value %1, demand want, prepare #2
+    ret %1
+    ^b1(%2: failure) in S5:
+    raise %2
+}
+
+func "@app::Box<int>.new#ctor(value:int,n:int).given_value.n"(%0: int, %1: int) -> "app::Box<int>" [ctor "app::Box<int>"] {
+    binding b0 "value": int in S7
+    binding b1 "n": int in S7
+    boundary B0 lexical in S7
+    ^b0 in S7 unwind ^b1:
+    %2: int = undef ty int
+    %3: int = undef ty int
+    [i2] %4: int = call "@app::Box<int>.default#n"()
+    stage %4, action S7, field field_ref(declaration="app::Box<int>", index=1)
+    stage %0, action S7, field field_ref(declaration="app::Box<int>", index=0)
+    stage %1, action S7, field field_ref(declaration="app::Box<int>", index=1)
+    bind %0, binding b0
+    bind %1, binding b1
+    %5: "app::Box<int>" = obj.new "app::Box<int>" { value: %0, n: %1 }
+    want %5
+    [i10] exit.prepare return %5 at B0
+    result.exit edge normal(0), value %5, demand want, prepare #10
+    high.effects at #2 failures [thrown, program, panic, native, cancelled], suspends true
+    ret %5
+    ^b1(%6: failure) in S7:
+    raise %6
+}

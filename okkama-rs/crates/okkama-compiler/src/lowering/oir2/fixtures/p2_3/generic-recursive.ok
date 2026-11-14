@@ -1,0 +1,8 @@
+module app;
+object Node<T> {
+    has value is T;
+    has tail is Maybe<Node<T>>;
+    Node(value is T) { self.value = value; tail = Maybe<Node<T>>.none; }
+    get() is T { value; }
+}
+main() is int { Node(1).get(); }

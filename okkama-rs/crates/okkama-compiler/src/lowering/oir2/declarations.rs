@@ -70,7 +70,11 @@ impl Declarations {
                 return Err(LowerError::unsupported(decl.span, "generic object, capability or role witness"));
             }
             let id = this.builder.declare(ir::Declaration {
-                name: format!("{}.{}", reg.modules[object.module].name.replace('/', "."), object.name),
+                name: if object.name.contains('<') {
+                    format!("{}::{}", reg.modules[object.module].name, object.name)
+                } else {
+                    format!("{}.{}", reg.modules[object.module].name.replace('/', "."), object.name)
+                },
                 type_params: vec![],
                 kind: ir::DeclarationKind::Object {
                     fields: vec![], witnesses: vec![], destroy: None,
@@ -84,6 +88,8 @@ impl Declarations {
             let successor = this.builder.intern_type(ir::Type::Successor(lowered))?;
             this.types.insert(ty::Ty::Successor(Box::new(ty::Ty::object(ty::ObjectId(index)))), successor);
         }
+        // Reserve nominal types before resolving potentially recursive payloads.
+        let mut variants = vec![];
         for (index, enumeration) in reg.enums.iter().enumerate() {
             if enumeration.span.is_empty() {
                 continue;
@@ -92,31 +98,33 @@ impl Declarations {
                 return Err(LowerError::unsupported(enumeration.span, "generic enum"));
             }
             let payload = enumeration.payloads.iter().any(|payload| !payload.is_empty());
-            let mut cases = vec![];
-            if payload {
-                if !enumeration.error || enumeration.payloads.iter().flatten().any(|(_, ty)| {
-                    !matches!(ty, ty::Ty::Int | ty::Ty::Str | ty::Ty::Bool)
-                }) {
-                    return Err(LowerError::unsupported(enumeration.span, "non-plain Error payload"));
-                }
-                for (name, fields) in enumeration.cases.iter().zip(&enumeration.payloads) {
+            let name = if enumeration.name.contains('<') {
+                format!("{}::{}", reg.modules[enumeration.module].name, enumeration.name)
+            } else {
+                format!("{}.{}", reg.modules[enumeration.module].name.replace('/', "."), enumeration.name)
+            };
+            let mut early_cases = vec![];
+            let plain_error = enumeration.error && enumeration.payloads.iter().flatten().all(|(_, ty)| {
+                matches!(ty, ty::Ty::Int | ty::Ty::Str | ty::Ty::Bool)
+            });
+            if payload && enumeration.module < reg.root_start && plain_error {
+                for (case, fields) in enumeration.cases.iter().zip(&enumeration.payloads) {
                     let fields = fields.iter().map(|(name, ty)| Ok(ir::Field {
                         name: name.clone(), ty: this.ty(ty, enumeration.span)?, default: None, once: false,
                     })).collect::<Result<_>>()?;
                     let layout = this.builder.declare(ir::Declaration {
-                        name: format!("{}.{}.{}", reg.modules[enumeration.module].name.replace('/', "."),
-                            enumeration.name, name),
-                        type_params: vec![], loc: None,
+                        name: format!("{name}.{case}"), type_params: vec![], loc: None,
                         kind: ir::DeclarationKind::Object { fields, witnesses: vec![], destroy: None, builtin: false },
                     })?;
-                    cases.push(ir::VariantCase { name: name.clone(), layout });
+                    early_cases.push(ir::VariantCase { name: case.clone(), layout });
                 }
             }
+            let early = !early_cases.is_empty();
             let id = this.builder.declare(ir::Declaration {
-                name: format!("{}.{}", reg.modules[enumeration.module].name.replace('/', "."), enumeration.name),
+                name,
                 type_params: vec![],
                 kind: if payload {
-                    ir::DeclarationKind::Variant { cases, is_error: true }
+                    ir::DeclarationKind::Variant { cases: early_cases, is_error: enumeration.error }
                 } else {
                     ir::DeclarationKind::Enum { cases: enumeration.cases.clone(), is_error: enumeration.error }
                 },
@@ -125,6 +133,26 @@ impl Declarations {
             let lowered = this.builder.intern_type(if payload { ir::Type::Variant(id) } else { ir::Type::Enum(id) })?;
             this.types.insert(ty::Ty::Enum(ty::EnumId(index)), lowered);
             this.types.insert(ty::Ty::Variant(ty::EnumId(index), vec![]), lowered);
+            if payload && !early {
+                variants.push((id, enumeration));
+            }
+        }
+        for (id, enumeration) in variants {
+            let mut cases = vec![];
+            let name = this.builder.module().declarations.get(id)?.name.clone();
+            for (case, fields) in enumeration.cases.iter().zip(&enumeration.payloads) {
+                let fields = fields.iter().map(|(name, ty)| Ok(ir::Field {
+                    name: name.clone(), ty: this.ty(ty, enumeration.span)?, default: None, once: false,
+                })).collect::<Result<_>>()?;
+                let layout = this.builder.declare(ir::Declaration {
+                    name: format!("{name}.{case}"), type_params: vec![], loc: None,
+                    kind: ir::DeclarationKind::Object { fields, witnesses: vec![], destroy: None, builtin: false },
+                })?;
+                cases.push(ir::VariantCase { name: case.clone(), layout });
+            }
+            this.builder.raw_mut().declarations.get_mut(id)?.kind = ir::DeclarationKind::Variant {
+                cases, is_error: enumeration.error,
+            };
         }
         let error = ty::Ty::role(reg.system.error);
         let mut uses_error = analysis.bodies.iter().any(|body| body.locals.iter().any(|local| local.ty == error));
@@ -159,6 +187,16 @@ impl Declarations {
                 this.error_text = Some(this.external("okkama.Error.text", false, vec![lowered],
                     vec![this.types[&ty::Ty::Str]], vec![], source.program.module.span)?);
             }
+        }
+        let mut requested_ctors = HashMap::new();
+        for body in &analysis.bodies {
+            super::walk::block(&body.block, &mut |expr| {
+                if let thir::ExprKind::Call {
+                    callee: thir::Callee::Ctor { object, ctor, given, .. }, ..
+                } = &expr.kind {
+                    requested_ctors.entry((*object, *ctor)).or_insert_with(|| given.clone());
+                }
+            });
         }
         // Declare all symbols before bodies: forward references and stable field/default links.
         for body in &analysis.bodies {
@@ -224,6 +262,12 @@ impl Declarations {
                 }
                 _ => None,
             };
+            let primary_given = if let thir::BodyOwner::Ctor { object, ctor } = body.owner
+                && reg.objects[object.0].name.contains('<') && shorthand.is_some() {
+                requested_ctors.get(&(object, ctor)).cloned()
+            } else {
+                None
+            };
             for param in &body.params {
                 let local = &body.locals[param.0];
                 if local.variadic && body.module >= reg.root_start {
@@ -231,6 +275,43 @@ impl Declarations {
                 }
                 params.push(this.ty(&local.ty, local.span)?);
             }
+            if let Some(given) = &primary_given
+                && let thir::BodyOwner::Ctor { object, .. } = body.owner {
+                params = given.iter().map(|&field| {
+                    let field = &reg.objects[object.0].fields[field];
+                    this.ty(&field.ty, field.span)
+                }).collect::<Result<_>>()?;
+            }
+            let symbol = if let Some(object) = super::specialize::owner_object(&body.owner)
+                && reg.objects[object.0].name.contains('<') {
+                let info = &reg.objects[object.0];
+                let name = format!("{}::{}", reg.modules[info.module].name, info.name);
+                let shape = body.params.iter().map(|param| {
+                    let local = &body.locals[param.0];
+                    Ok(format!("{}:{}", local.name, super::specialize::type_name(reg, &local.ty)?))
+                }).collect::<Result<Vec<_>>>()?.join(",");
+                match body.owner {
+                    thir::BodyOwner::Method { method, .. } => {
+                        let member = &info.methods[method].name;
+                        format!("{name}.{member}#overload({shape})")
+                    }
+                    thir::BodyOwner::Ctor { .. } => format!("{name}.new#ctor({shape})"),
+                    thir::BodyOwner::Default { field, .. } => format!("{name}.default#{}", info.fields[field].name),
+                    thir::BodyOwner::Destroy { .. } => format!("{name}.destroy"),
+                    _ => symbol,
+                }
+            } else {
+                symbol
+            };
+            let symbol = if let Some(given) = &primary_given
+                && shorthand.as_ref() != Some(given)
+                && let thir::BodyOwner::Ctor { object, .. } = body.owner {
+                let names = given.iter().map(|&field| reg.objects[object.0].fields[field].name.clone())
+                    .collect::<Vec<_>>().join(".");
+                format!("{symbol}.given_{names}")
+            } else {
+                symbol
+            };
             let results = result.as_ref().map(|ty| this.ty(ty, body.span)).transpose()?.into_iter().collect();
             let atomic = match body.owner {
                 thir::BodyOwner::Ctor { object, .. } | thir::BodyOwner::Method { object, .. }
@@ -266,12 +347,14 @@ impl Declarations {
             }
             this.functions.insert(body.owner.clone(), function);
             if let thir::BodyOwner::Ctor { object, ctor } = body.owner {
-                let given = shorthand.unwrap_or_default();
+                let given = primary_given.or(shorthand).unwrap_or_default();
                 this.constructors.insert((object, ctor, given.clone()), function);
                 this.ctor_fields.insert(function, given);
             }
         }
-        for (&object, &decl) in &this.objects {
+        let mut object_ids: Vec<_> = this.objects.iter().map(|(&object, &decl)| (object, decl)).collect();
+        object_ids.sort_by_key(|(object, _)| *object);
+        for (object, decl) in object_ids {
             let info = &reg.objects[object.0];
             let mut fields = vec![];
             for (index, field) in info.fields.iter().enumerate() {
@@ -314,10 +397,22 @@ impl Declarations {
             if this.constructors.contains_key(&key) {
                 continue;
             }
-            let original = this.functions[&thir::BodyOwner::Ctor { object, ctor }];
+            let original = this.functions.get(&thir::BodyOwner::Ctor { object, ctor }).copied()
+                .ok_or_else(|| LowerError::unsupported(reg.objects[object.0].ctors[ctor].span,
+                    "constructor source body was not discovered"))?;
             let mut function = this.builder.module().functions.get(original)?.clone();
-            let suffix = given.iter().map(usize::to_string).collect::<Vec<_>>().join(".");
-            function.symbol = format!("{}.given_{suffix}", function.symbol);
+            let suffix = if reg.objects[object.0].name.contains('<') {
+                given.iter().map(|&field| reg.objects[object.0].fields[field].name.clone())
+                    .collect::<Vec<_>>().join(".")
+            } else {
+                given.iter().map(usize::to_string).collect::<Vec<_>>().join(".")
+            };
+            let symbol = if reg.objects[object.0].name.contains('<') {
+                function.symbol.split(".given_").next().expect("constructor symbol")
+            } else {
+                &function.symbol
+            };
+            function.symbol = format!("{symbol}.given_{suffix}");
             function.signature.params = given.iter().map(|&field| {
                 this.ty(&reg.objects[object.0].fields[field].ty, reg.objects[object.0].fields[field].span)
             }).collect::<Result<_>>()?;
