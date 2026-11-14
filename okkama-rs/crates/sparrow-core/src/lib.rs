@@ -509,7 +509,8 @@ fn decode_runtime(bytes: &[u8]) -> Result<DecodedProgram, okkama_sparrow::CodecE
     #[cfg(feature = "champ-abi")]
     if bytes.get(..6) == Some(&[b'S', b'P', b'R', b'W', 0, 17]) {
         let program = okkama_sparrow::spb17::decode(bytes)?;
-        okkama_sparrow::spb17::verify_load(&program, &okkama_sparrow::spb17::NoExternalContracts)?;
+        let contracts = okkama_sparrow::spb17::p1::P1Contracts::new(&program.objects)?;
+        okkama_sparrow::spb17::verify_load(&program, &contracts)?;
         return Ok(DecodedProgram::Champ(program));
     }
     okkama_sparrow::decode(bytes).map(DecodedProgram::Legacy)

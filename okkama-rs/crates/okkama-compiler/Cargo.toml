@@ -15,6 +15,7 @@ okkama-sparrow = { path = "../okkama-sparrow" }
 pulldown-cmark = { version = "0.13", default-features = false }
 
 [dev-dependencies]
+serde_json = "1"
 # Compiler → verified SPB → runtime integration fixtures.
 sparrow-core = { path = "../sparrow-core" }
 

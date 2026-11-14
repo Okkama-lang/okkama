@@ -126,3 +126,24 @@ fixture!(late_old_identity, "late-old-identity");
 fixture!(mixed_merge, "mixed-merge");
 fixture!(reserve_r_a, "reserve-r-a");
 fixture!(reserve_a_r, "reserve-a-r");
+
+#[test]
+fn p1_pipeline_deps_run() {
+    let bytes = compile("module app; object R { R(); destroy { } } main() is int { let r = R(); 7; }").unwrap();
+    let run = sparrow_core::run_captured(bytes, sparrow_core::budget::Limits::default()).unwrap();
+    assert_eq!(run.result.unwrap(), 7);
+    assert_eq!(String::from_utf8(run.destroy_trace).unwrap(), "app.R 1\n");
+}
+
+#[test]
+fn p1_pipeline_atomic_run() {
+    for body in [
+        "let a = Atomic(2); a.replace(7); a.value();",
+        "let a = Atomic(\"a\"); a.replace(\"b\"); a.close(); 7;",
+    ] {
+        let source = format!("module app; import \"async/atomic\" take Atomic; main() is int {{ {body} }}");
+        let bytes = compile(&source).unwrap();
+        let run = sparrow_core::run_captured(bytes, sparrow_core::budget::Limits::default()).unwrap();
+        assert_eq!(run.result.unwrap(), 7);
+    }
+}

@@ -9,7 +9,9 @@
 //! - `replace(Atomic<T>, T) -> void`: observation, may throw AtomicClosed before storing.
 //! - `close(Atomic<T>) -> void`: observation, idempotent, no semantic failure.
 //!
-//! These registered observations keep admission at the caller.
+//! These registered observations keep admission at the caller. Atomic.replace is
+//! temporarily an observation for plain T; OIR-2 §7.2 requires a call boundary.
+//! Moving it changes the catalog's entry kind and packet ABI, not the cell stores.
 //!
 //! `Error.text(Error) -> string` observes the builtin plain Error view without failure.
 //! `utf8_encode` and `stdout_write` are native call boundaries. Their results are a
@@ -41,9 +43,44 @@ impl P1NativeSummaries {
                     ir::FunctionAttr::Intrinsic { name, .. } => (false, name),
                     _ => continue,
                 };
-                let summary = contract(module, name, native, &function.signature)?;
+                let mut language = function.signature.clone();
+                if module.profile != ir::Profile::High {
+                    language.params.retain(|ty| !matches!(module.types.get(*ty),
+                        Ok(ir::Type::Service(ir::ServiceType::Own | ir::ServiceType::Deps))));
+                    language.results.retain(|ty| !matches!(module.types.get(*ty),
+                        Ok(ir::Type::Service(ir::ServiceType::Own | ir::ServiceType::Deps))));
+                    language.ownership_abi = ir::OwnershipAbi::Unelaborated;
+                }
+                let summary = contract(module, name, native, &language)?;
+                if module.profile != ir::Profile::High {
+                    let mut expected = language.clone();
+                    let managed = language.params.iter().filter(|ty| matches!(module.types.get(**ty),
+                        Ok(ir::Type::Object { .. } | ir::Type::Role { .. }))).count();
+                    if managed != 0 {
+                        let deps = module.types.iter().find_map(|(id, ty)| {
+                            (*ty == ir::Type::Service(ir::ServiceType::Deps)).then_some(id)
+                        }).ok_or_else(|| error("missing external deps type"))?;
+                        expected.params.extend(std::iter::repeat_n(deps, managed));
+                    }
+                    if summary.entry_kind == ir::EntryKind::ObservationAdmissionStaysCaller {
+                        expected.ownership_abi = ir::OwnershipAbi::Observation;
+                    } else {
+                        let own = module.types.iter().find_map(|(id, ty)| {
+                            (*ty == ir::Type::Service(ir::ServiceType::Own)).then_some(id)
+                        }).ok_or_else(|| error("missing external packet type"))?;
+                        expected.ownership_abi = ir::OwnershipAbi::Explicit {
+                            input_packet: expected.params.len() as u16,
+                            output_packet: expected.results.len() as u16,
+                        };
+                        expected.params.push(own);
+                        expected.results.push(own);
+                    }
+                    if expected != function.signature {
+                        return Err(error(format!("invalid elaborated P1 ABI {name}")));
+                    }
+                }
                 if let ir::FunctionAttr::Intrinsic { objects, helpers, .. } = attr
-                    && (*objects != intrinsic_objects(module, name, &function.signature)? || !helpers.is_empty()) {
+                    && (*objects != intrinsic_objects(module, name, &language)? || !helpers.is_empty()) {
                     return Err(error(format!("invalid P1 intrinsic descriptors for {name}")));
                 }
                 let entries = if native { &mut catalog.natives } else { &mut catalog.intrinsics };

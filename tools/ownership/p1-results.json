@@ -3,9 +3,11 @@
   "gate": "failed",
   "source_entries": 25,
   "tests": {
-    "passed": 3,
+    "passed": 5,
     "failed": 25,
-    "ignored": 0
+    "ignored": 0,
+    "source_fixtures_passed": 0,
+    "smoke_and_inventory_passed": 5
   },
   "results": [
     {
@@ -285,10 +287,8 @@
     }
   ],
   "blockers": [
-    "Own rejects array.new emitted by the finite Stdout source path.",
-    "Own analysis reaches its conservative 256 MiB budget on several source CFGs.",
-    "Without Stdout, resource source reaches compile_low, which rejects deps.of.",
-    "SPB emission/load/runtime still need closed Atomic/Stdout/Error external contracts and layouts."
+    "A: own rejects plain array.new (and array.len/array.get in the linked Stdout bodies).",
+    "M: OwnOptions.memory_limit (268435456 bytes) rejects the dense pre-worklist estimate in main of 10 fixtures."
   ],
   "phase_failures": {
     "memory-limit": 10,
@@ -314,23 +314,58 @@
     {
       "command": "cargo test --offline -j 4 -p okkama-compiler --lib oir2",
       "code": 0,
-      "passed": 94
+      "passed": 97
     },
     {
       "command": "cargo test --offline -j 4 -p sparrow-core --features champ-abi --lib champ",
       "code": 0,
-      "passed": 76
+      "passed": 80
     },
     {
       "command": "cargo test --offline -j 4 -p okkama-cli --features champ-abi --test p1_pipeline -- --nocapture --test-threads=4",
       "code": 101,
-      "passed": 3,
+      "passed": 5,
       "failed": 25
     },
     {
-      "command": "python3 -I tools/ownership/test_oracle_two.py",
+      "command": "python3 -I ../tools/ownership/test_oracle_two.py",
       "code": 0,
       "passed": 24
+    },
+    {
+      "command": "cargo test --offline -j 4 -p okkama-sparrow --lib spb17",
+      "code": 0,
+      "passed": 40
     }
-  ]
+  ],
+  "resolved_blockers": [
+    {
+      "id": "deps.of",
+      "state": "verified",
+      "evidence": [
+        "oir2_pipeline_deps_golden",
+        "p1_pipeline_deps_run"
+      ]
+    },
+    {
+      "id": "p1-native-contracts-and-runtime",
+      "state": "verified-in-isolation",
+      "evidence": [
+        "oir2_pipeline_p1_atomic_contracts",
+        "p1_pipeline_atomic_run",
+        "champ_p1_atomic_specializations_closed_failure_and_gc",
+        "champ_p1_utf8_stdout_and_output_budget",
+        "champ_p1_error_text_payload_is_plain_and_rooted",
+        "champ_p1_observation_outcomes_and_gc"
+      ]
+    }
+  ],
+  "diagnostics": {
+    "report": "tools/ownership/p1-followup.md",
+    "measurements": "tools/ownership/p1-own-diagnostics.json",
+    "memory_failures_observed": 10,
+    "memory_failures_in_task_description": 11,
+    "own_and_oir_verify_modified": false,
+    "full_std_fixture_execution": "blocked by A/M; smoke/native tests do not certify the 25 fixtures"
+  }
 }

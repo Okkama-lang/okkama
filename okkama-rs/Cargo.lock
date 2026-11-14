@@ -1203,6 +1203,7 @@ dependencies = [
  "okkama-runtime-core",
  "okkama-sparrow",
  "pulldown-cmark",
+ "serde_json",
  "sparrow-core",
 ]
 

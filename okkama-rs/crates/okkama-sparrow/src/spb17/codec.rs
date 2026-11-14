@@ -300,7 +300,7 @@ record! { ObjectRuntimeLayout {
 
 record! { Field { name, storage, once } }
 record! { Object {
-    name, fields, layout,
+    name, fields, layout, error_cases,
 } }
 
 record! { Assignment {
@@ -398,7 +398,7 @@ macro_rules! tagged {
 }
 
 tagged! { Type {
-    0 => Int, 1 => Bool, 6 => Str, 20 => Range, 11 => Failure,
+    0 => Int, 1 => Bool, 6 => Str, 20 => Range, 11 => Failure, 21 => Bytes, 22 => Error,
     7 => Object(id: u32), 8 => Successor(id: u32), 13 => Never, 9 => Descriptor,
 } }
 tagged! { ServiceKind {

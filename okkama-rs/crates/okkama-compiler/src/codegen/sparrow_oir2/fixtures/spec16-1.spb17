@@ -2,11 +2,11 @@ sparrow 17
 Program { module "resource" version "" objects 2 Object { name "File" fields 1 Field { name "path" storage 0 once 0 }
  layout ObjectRuntimeLayout { storage_fields 1 6 allocation_words 6 identity_offset 1 16 has_destroy 1 
 may_reach_resource 1 may_async_destroy 0 trace_layout 1 0 selection_layout 1 0 }
- }
+ error_cases 0 }
  Object { name "FileText" fields 1 Field { name "file" storage 0 once 0 }
  layout ObjectRuntimeLayout { storage_fields 1 7 0 allocation_words 2 identity_offset 0 has_destroy 0 
 may_reach_resource 1 may_async_destroy 0 trace_layout 1 0 selection_layout 1 0 }
- }
+ error_cases 0 }
  tables ChampTables { scopes 1 Scope { function 4 parent 0 boundary 0 }
  boundaries 1 Boundary { scope 0 }
  summaries 3 Summary { entry 0 may_fail 1 retained_params 0 }

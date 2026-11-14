@@ -1397,3 +1397,163 @@ fn oir2_p1_excluded_defer_replacement() {
     assert!(matches!(error, LowerError::Unsupported { .. }));
     assert!(error.to_string().contains("return from defer (#567 S3/D8)"), "{error}");
 }
+
+#[test]
+fn oir2_p1_own_diagnostics() {
+    use ir::own::{OwnError, OwnOptions, elaborate_ownership};
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("tools/ownership/p1-manifest.json")).unwrap(),
+    ).unwrap();
+    let mut rows = Vec::new();
+    for entry in manifest["entries"].as_array().unwrap() {
+        let text = std::fs::read_to_string(root.join(entry["source"].as_str().unwrap())).unwrap();
+        let module = lower_std(&text).unwrap();
+        let catalog = super::native_summaries::P1NativeSummaries::for_module(&module).unwrap();
+        let options = OwnOptions::default();
+        let inferred = elaborate_ownership(module, &catalog, &options).unwrap();
+        let mut functions = Vec::new();
+        let mut arrays = Vec::new();
+        for (id, function) in inferred.module.functions.iter() {
+            let Some(body) = &function.body else {
+                continue;
+            };
+            for (inst, data) in body.insts.iter() {
+                if data.op.opcode().starts_with("array.") {
+                    arrays.push(serde_json::json!({
+                        "function": function.symbol,
+                        "instruction": inst.as_u32(),
+                        "op": data.op.opcode(),
+                        "operation": format!("{:?}", data.op),
+                        "inputs": ir::cfg::operation_uses(&data.op, body).unwrap().iter().map(|operand| {
+                            let ty = body.values.get(operand.value).unwrap().ty;
+                            match inferred.module.types.get(ty).unwrap() {
+                                ir::Type::Array(element) => {
+                                    format!("array<{:?}>", inferred.module.types.get(*element).unwrap())
+                                }
+                                ty => format!("{ty:?}"),
+                            }
+                        }).collect::<Vec<_>>(),
+                        "results": data.results.iter().map(|value| {
+                            let data = body.values.get(*value).unwrap();
+                            format!("{:?}: {:?}", inferred.module.types.get(data.ty).unwrap(),
+                                inferred.analysis.types.get(&data.ty))
+                        }).collect::<Vec<_>>(),
+                    }));
+                }
+            }
+            let analyzed = ir::own::analyze::analyze_function(&inferred.module, id, &inferred.analysis, &options);
+            let (stats, equations, evaluations, error) = match analyzed {
+                Ok(flow) => (flow.stats, Some(flow.equations.nodes.len()), Some(flow.evaluations), None),
+                Err(OwnError::Incomplete { stats }) => (*stats, None, None, Some("incomplete".to_string())),
+                Err(error) => (ir::own::OwnStats::default(), None, None, Some(format!("{error:?}"))),
+            };
+            let mut edges = 0usize;
+            for (_, block) in body.blocks.iter() {
+                edges += match &block.term.kind {
+                    ir::TermKind::Br(_) => 1,
+                    ir::TermKind::Cond { .. } | ir::TermKind::Catch { .. } => 2,
+                    ir::TermKind::Switch { cases, .. } => 1 + cases.len(),
+                    ir::TermKind::Throw(_) | ir::TermKind::Panic(_) | ir::TermKind::Trap { .. } => {
+                        usize::from(block.unwind.is_some())
+                    }
+                    _ => 0,
+                };
+                if block.unwind.is_some() {
+                    edges += 1;
+                    for inst in &block.insts {
+                        let operation = &body.insts.get(*inst).unwrap().op;
+                        let schema = ir::ContractRegistry::new(&inferred.module).high_site_schema(
+                            operation, body, ir::HighOperationSite::Instruction(*inst),
+                        ).unwrap();
+                        edges += usize::from(schema.unwind.is_some() || matches!(operation,
+                            ir::Operation::Call(_) | ir::Operation::Lexical(ir::LexicalOp::Bind { .. }
+                                | ir::LexicalOp::Rebind { .. } | ir::LexicalOp::Stage { .. })));
+                    }
+                }
+            }
+            let function_scopes = inferred.module.scopes.iter().filter(|(_, scope)| scope.function == id).count();
+            let origins = 1 + body.values.len() + 2 * body.insts.len() + function_scopes * body.values.len();
+            let facts = body.values.len() * (2 * origins + 8)
+                + inferred.module.scopes.len() * origins * 4
+                + body.bindings.len() * (body.values.len() + 2 * origins);
+            let dense_charge = (body.blocks.len() + edges) * facts * 64;
+            functions.push(serde_json::json!({
+                "id": id.as_u32(), "function": function.symbol, "blocks": body.blocks.len(),
+                "values": body.values.len(), "instructions": body.insts.len(),
+                "module_scopes": inferred.module.scopes.len(),
+                "function_scopes": inferred.module.scopes.iter().filter(|(_, s)| s.function == id).count(),
+                "bindings": body.bindings.len(), "equations": equations, "indexed_equations": origins,
+                "edges": edges, "dense_charge": dense_charge, "evaluations": evaluations,
+                "charged_work": stats.charged_work, "charged_bytes": stats.peak_auxiliary_bytes,
+                "limit": format!("{:?}", stats.exhausted_limit), "error": error,
+            }));
+        }
+        rows.push(serde_json::json!({"id": entry["id"], "functions": functions, "arrays": arrays}));
+    }
+    if let Some(path) = std::env::var_os("OKKAMA_P1_DIAGNOSTICS") {
+        std::fs::write(path, serde_json::to_string_pretty(&rows).unwrap() + "\n").unwrap();
+    }
+    assert_eq!(rows.len(), 25);
+}
+
+fn compile_p1_source(text: &str) -> Result<Vec<u8>, super::PipelineError> {
+    let source = SourceFile::new("app.ok", text).unwrap();
+    let program = syntax::parse(&source, &ParseOptions::default()).unwrap();
+    let roots = [crate::lowering::RootFile { source: &source, program: &program }];
+    super::compile_linked(&roots, &mut StdLoader)
+}
+
+#[test]
+fn oir2_pipeline_deps_golden() {
+    let bytes = compile_p1_source(
+        "module app; object R { R(); destroy { } } main() is int { let r = R(); 0; }",
+    ).unwrap();
+    let program = okkama_sparrow::spb17::decode(&bytes).unwrap();
+    let deps = program.functions.iter().flat_map(|function| &function.code).filter(|inst| {
+        matches!(inst, okkama_sparrow::spb17::Instruction::Champ {
+            op: okkama_sparrow::spb17::Opcode::DepsOf, ..
+        })
+    }).count();
+    assert!(deps > 0);
+    assert_eq!(okkama_sparrow::spb17::layout::service_layout(
+        okkama_sparrow::spb17::ServiceKind::Deps,
+    ).words, 0);
+    let mut missing = program.clone();
+    for function in &mut missing.functions {
+        function.proofs.dependencies.retain(|dependency| !matches!(dependency.value,
+            okkama_sparrow::spb17::Location::Service(id)
+                if function.services[id as usize] == okkama_sparrow::spb17::ServiceKind::Deps));
+    }
+    let failure = okkama_sparrow::spb17::verify_load(&missing, &okkama_sparrow::spb17::NoExternalContracts)
+        .unwrap_err();
+    assert!(failure.to_string().contains("deps.of must retain"));
+    let actual = okkama_sparrow::spb17::disassemble(&program).unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/codegen/sparrow_oir2/fixtures/deps.spb17");
+    if std::env::var_os("OKKAMA_UPDATE_S3_GOLDENS").is_some() {
+        std::fs::write(&path, &actual).unwrap();
+    }
+    assert_eq!(actual, std::fs::read_to_string(path).unwrap());
+}
+
+#[test]
+fn oir2_pipeline_p1_atomic_contracts() {
+    for source in [
+        concat!("module app; import \"async/atomic\" take Atomic; ",
+            "main() is int { let a = Atomic(2); a.replace(7); a.value(); }"),
+        concat!("module app; import \"async/atomic\" take Atomic; ",
+            "main() is int { let a = Atomic(\"a\"); a.replace(\"b\"); a.close(); 0; }"),
+    ] {
+        let bytes = compile_p1_source(source).unwrap();
+        let program = okkama_sparrow::spb17::decode(&bytes).unwrap();
+        let catalog = okkama_sparrow::spb17::p1::P1Contracts::new(&program.objects).unwrap();
+        okkama_sparrow::spb17::verify_load(&program, &catalog).unwrap();
+        let mut forged = program.clone();
+        let external = forged.functions.iter_mut().find(|function| {
+            function.proofs.entry.as_ref().is_some_and(|entry| entry.external.is_some())
+        }).unwrap();
+        external.proofs.entry.as_mut().unwrap().retained_params.push(0);
+        assert!(okkama_sparrow::spb17::verify_load(&forged, &catalog).is_err());
+    }
+}

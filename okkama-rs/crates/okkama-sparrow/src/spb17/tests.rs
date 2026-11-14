@@ -105,7 +105,7 @@ fn s1_truncation_and_malformed_inputs_never_panic() {
     let bytes = encode(&p).unwrap();
     assert_eq!(&bytes[bytes.len() - 3..], &[142, 0, 0]);
     let prefix = &bytes[..bytes.len() - 3];
-    for id in [0, 19, 25, 34, 35, 36, 40, 127, 128, u32::MAX] {
+    for id in [0, 19, 25, 34, 35, 36, 42, 127, 128, u32::MAX] {
         let mut malformed = prefix.to_vec();
         malformed.push(255);
         let mut number = id;
@@ -167,8 +167,8 @@ fn s1_edges_reject_bad_arity_schema_and_cross_outcome_slots() {
 #[test]
 fn s1_registry_has_exact_p1_ids_and_normative_schemas() {
     let reserved = [0, 19, 25, 34, 35, 36];
-    assert_eq!(Opcode::ALL.len(), 34);
-    for id in 0..40 {
+    assert_eq!(Opcode::ALL.len(), 36);
+    for id in 0..42 {
         assert_eq!(Opcode::from_id(id).is_err(), reserved.contains(&id));
     }
     for &op in Opcode::ALL {
@@ -180,6 +180,11 @@ fn s1_registry_has_exact_p1_ids_and_normative_schemas() {
     let ctx = ResultContext { value: Some(Type::Int), between: true, may_fail: true,
         labels: vec![DeferLabel { label: 9, result: Some(Type::Int) }, DeferLabel { label: 10, result: None }],
         reserve: true, active_failure: false };
+    assert_eq!(Opcode::DepsOf.id(), 40);
+    assert_eq!(Opcode::InvokeObserve.id(), 41);
+    assert_eq!(Opcode::DepsOf.results(Tag::Normal, &ctx).unwrap(), vec![S(Deps)]);
+    assert_eq!(Opcode::InvokeObserve.results(Tag::Normal, &ctx).unwrap(), vec![Value(Type::Int)]);
+    assert_eq!(Opcode::InvokeObserve.results(Tag::Unwind, &ctx).unwrap(), vec![Value(Type::Failure)]);
     assert_eq!(Opcode::OwnSplitChecked.results(Tag::Normal, &ctx).unwrap(), vec![S(Packet), S(Packet), S(Deps)]);
     assert_eq!(Opcode::OwnSplitChecked.results(Tag::Unwind, &ctx).unwrap(), vec![S(Packet), Value(Type::Failure)]);
     assert_eq!(Opcode::ScopeSplit.results(Tag::Unwind, &ctx).unwrap(), vec![S(ScopeState), Value(Type::Failure)]);
@@ -219,6 +224,7 @@ fn s1_mutated_binary_corpus_does_not_panic() {
 fn s1_plain_and_identity_layouts_round_trip_and_reject_bad_offsets() {
     let mut p = plain();
     p.objects.push(Object {
+        error_cases: vec![],
         name: "Plain".into(),
         fields: vec![Field { name: "text".into(), storage: 0, once: false }],
         layout: ObjectRuntimeLayout {
