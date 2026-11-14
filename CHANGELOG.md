@@ -124,6 +124,22 @@ fake fields; role fakes and their ordinary typed fields remain available.
   Constructs outside the slice get an explicit "unsupported" diagnostic
   rather than a fallback. Every lowering golden passes `verify_high`.
 
+- **OIR-2 lowering of collections, roles and generics, first part (#568).**
+  - **Generics.** A demand-driven specializer turns generic declarations
+    into concrete ones before lowering, so OIR-2 never sees an open
+    generic. It has growth limits and reports the request chain.
+  - **Roles.** Static and dynamic calls, narrowing, return adapters, and
+    a successor of a role (`^Package`), which keeps its must-use
+    obligation.
+  - **Collections.** Literals and operations on arrays, maps and ranges.
+    Every read names its projection (index, slice, map entry, keys,
+    values, removal, path), so ownership follows exactly what is taken.
+  - **Builders.** Streaming builders for large literals.
+
+  A coverage manifest classifies all 143 conformance and corpus cases it
+  answers for. Traversal, functional blocks and std collections are still
+  to come.
+
 - **OIR-2 ownership elaboration, synchronous part (#565).** A pass from
   `high` to `own` makes ownership explicit for synchronous code. It covers:
   - scope ends, call conventions and per-scope exits with the reserve;
