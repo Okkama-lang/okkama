@@ -18,10 +18,6 @@ fn with_prepared(text: &str, test_mode: bool, test: impl FnOnce(callables::Prepa
     let first = specialize::prepare(&analysis).unwrap();
     let second = specialize::prepare(&analysis).unwrap();
     assert_eq!(format!("{:?}", first.callables), format!("{:?}", second.callables));
-    if first.callables.bodies.iter().any(|entry| matches!(entry.body.owner, thir::BodyOwner::Test(_))) {
-        let error = super::lower_to_oir2(&analysis).unwrap_err();
-        assert!(matches!(error, super::LowerError::Unsupported { span, .. } if !span.is_empty()));
-    }
     test(first);
 }
 
@@ -140,7 +136,8 @@ fn oir2_callable_production_test_isolation() {
         assert!(thir::first_expr(&entry.body.block, &|expr| matches!(&expr.kind,
             thir::ExprKind::Call { callee: thir::Callee::Test(name), .. } if name == "is")).is_some());
         assert_eq!(prepared.callables.open_calls[0].sites[0].body.root, thir::BodyOwner::Test(0));
-        assert!(matches!(super::lower_to_oir2(&prepared.analysis), Err(super::LowerError::Unsupported { .. })));
+        let module = super::lower_to_oir2(&prepared.analysis).unwrap();
+        super::test_profile_tests::verify(&module, "C2 test profile preservation");
     });
 }
 

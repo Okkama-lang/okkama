@@ -528,6 +528,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
         use thir::ExprKind as E;
         let result_ty = expr.ty.as_ref().filter(|ty| **ty != Ty::Never);
         match &expr.kind {
+            E::Call { callee: thir::Callee::Test(name), args } => self.test_call(name, args, expr.span),
             E::CapSelect { .. } | E::CapRead { .. } => self.cap_expr(expr),
             E::BoundAction { .. } | E::BoundRoleAction { .. } => self.bound(expr),
             E::Closure { .. } => self.anonymous(expr),

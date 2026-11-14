@@ -23,6 +23,9 @@ mod anonymous;
 mod bound;
 mod caps;
 mod known_calls;
+mod test_profile;
+#[cfg(test)]
+mod test_profile_tests;
 #[cfg(test)]
 mod callable_tests;
 mod native_summaries;
@@ -112,19 +115,6 @@ type Result<T> = std::result::Result<T, LowerError>;
 /// No CLI routing, ownership elaboration or semantic verifier is invoked here.
 pub(crate) fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
     let prepared = specialize::prepare(analysis)?;
-    // Test-profile lowering remains a separate reviewed step.
-    for entry in &prepared.callables.bodies {
-        if matches!(entry.body.owner, thir::BodyOwner::Test(_)) {
-            return Err(LowerError::unsupported(entry.body.span, "test body (#569 C8)"));
-        }
-        let pending = thir::first_expr(&entry.body.block, &|expr| matches!(expr.kind,
-            thir::ExprKind::TestCapability
-            | thir::ExprKind::Call { callee: thir::Callee::Test(_), .. }
-        ));
-        if let Some(span) = pending {
-            return Err(LowerError::unsupported(span, "test capability (#569 C8)"));
-        }
-    }
     let analysis = &prepared.analysis;
     let mut declarations = declarations::Declarations::new(analysis)?;
     declarations.declare_lambdas(&prepared.callables)?;
@@ -233,6 +223,7 @@ pub(crate) fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
     }
     let mut module = declarations.builder.finish()?;
     structure::finish(&mut module)?;
+    test_profile::check(&module)?;
     known_calls::check(&module, &calls.into_inner())?;
     structure::check(&module)?;
     once::check(&module)?;

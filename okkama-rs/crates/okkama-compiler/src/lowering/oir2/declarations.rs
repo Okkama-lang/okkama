@@ -27,6 +27,10 @@ impl Declarations {
         let source = &reg.modules[reg.entry_module];
         let mut builder = ir::ModuleBuilder::new(&source.name, ir::Profile::High);
         builder.raw_mut().requires.push(ir::Feature::Core);
+        if reg.test_mode {
+            builder.raw_mut().requires.push(ir::Feature::Test);
+            builder.raw_mut().tests = Some(vec![]);
+        }
         builder.raw_mut().version = source.program.module.version.as_ref().map(|v| {
             format!("{}.{}.{}", v.major, v.minor, v.patch)
         });
@@ -299,7 +303,7 @@ impl Declarations {
         }
         // Declare all symbols before bodies: forward references and stable field/default links.
         for body in &analysis.bodies {
-            if body.is_async {
+            if body.is_async && !matches!(body.owner, thir::BodyOwner::Test(_)) {
                 return Err(LowerError::unsupported(body.span, "async action or cleanup"));
             }
             let mut params = vec![];
@@ -311,6 +315,10 @@ impl Declarations {
                         _ => Some(ty::Ty::Int),
                     };
                     ("main".into(), vec![ir::FunctionAttr::Entry], result)
+                }
+                thir::BodyOwner::Test(index) => {
+                    let attrs = if body.is_async { vec![ir::FunctionAttr::Async] } else { vec![] };
+                    (format!("$test{index}"), attrs, None)
                 }
                 thir::BodyOwner::Method { object, method } => {
                     let info = &reg.objects[object.0];
@@ -448,12 +456,23 @@ impl Declarations {
             if body.owner == thir::BodyOwner::Entry {
                 this.builder.raw_mut().entry = Some(function);
             }
+            if let thir::BodyOwner::Test(index) = body.owner {
+                super::test_profile::declare(&mut this.builder, function, &reg.tests[index])?;
+            }
             this.functions.insert(body.owner.clone(), function);
             if let thir::BodyOwner::Ctor { object, ctor } = body.owner {
                 let given = primary_given.or(shorthand).unwrap_or_default();
                 this.constructors.insert((object, ctor, given.clone()), function);
                 this.ctor_fields.insert(function, given);
             }
+        }
+        if reg.test_mode {
+            let tests = reg.tests.iter().enumerate().map(|(index, test)| {
+                let function = this.functions.get(&thir::BodyOwner::Test(index)).copied()
+                    .ok_or_else(|| LowerError::invalid(test.span, "missing test body"))?;
+                Ok(ir::TestDecl { name: test.name.clone(), function })
+            }).collect::<Result<Vec<_>>>()?;
+            this.builder.raw_mut().tests = Some(tests);
         }
         this.define_caps(analysis)?;
         let mut object_ids: Vec<_> = this.objects.iter().map(|(&object, &decl)| (object, decl)).collect();

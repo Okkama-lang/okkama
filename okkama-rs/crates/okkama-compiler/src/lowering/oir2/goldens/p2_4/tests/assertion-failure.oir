@@ -1,0 +1,84 @@
+oir 2 high
+module app
+requires core, test
+entry @main
+test "assertions continue" = "@$test0"
+test "argument failure" = "@$test1"
+
+object app.Check {
+}
+scope S0 action in @app.Check.check#0
+scope S1 action in "@$test0"
+scope S2 action in "@$test1"
+scope S3 action in @main
+scope S4 action in @app.Check.new#0
+
+func @app.Check.new#0() -> app.Check [ctor app.Check] {
+    boundary B0 lexical in S4
+    ^b0 in S4 unwind ^b1:
+    %0: app.Check = obj.new app.Check { }
+    want %0
+    [i2] exit.prepare return %0 at B0
+    result.exit edge normal(0), value %0, demand want, prepare #2
+    ret %0
+    ^b1(%1: failure) in S4:
+    raise %1
+}
+
+func @app.Check.check#0(%0: app.Check) -> void [method app.Check] {
+    boundary B0 lexical in S0
+    selection s0: selection = union([])
+    ^b0 in S0 unwind ^b1:
+    %1: int = const 1
+    %2: int = const 2
+    test.is %1, %2
+    exit.prepare return select s0 at B0
+    ret
+    ^b1(%3: failure) in S0:
+    raise %3
+}
+
+func "@$test0"() -> void {
+    boundary B0 lexical in S1
+    selection s0: selection = union([])
+    ^b0 in S1 unwind ^b1:
+    [i0] %0: app.Check = call @app.Check.new#0()
+    [i1] call @app.Check.check#0(%0)
+    %1: int = const 1
+    %2: int = const 1
+    test.isnt %1, %2
+    %3: str = const "deliberate failure"
+    test.fail %3
+    %4: bool = const true
+    test.ok %4
+    exit.prepare return select s0 at B0
+    high.effects at #0 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #1 failures [thrown, program, panic, native, cancelled], suspends true
+    ret
+    ^b1(%5: failure) in S1:
+    raise %5
+}
+
+func "@$test1"() -> void {
+    boundary B0 lexical in S2
+    selection s0: selection = union([])
+    ^b0 in S2 unwind ^b1:
+    %0: int = const 1
+    %1: int = const 0
+    %2: int = int.mod %0, %1
+    %3: int = const 0
+    test.is %2, %3
+    exit.prepare return select s0 at B0
+    ret
+    ^b1(%4: failure) in S2:
+    raise %4
+}
+
+func @main() -> int [entry] {
+    boundary B0 lexical in S3
+    ^b0 in S3 unwind ^b1:
+    %0: str = const "main must not run"
+    panic %0
+    ^b1(%1: failure) in S3:
+    raise %1
+}

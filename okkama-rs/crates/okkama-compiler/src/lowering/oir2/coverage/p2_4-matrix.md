@@ -69,9 +69,9 @@ D11 result demand, D8 prepare/exit, H5 unwind и реальные locations. Own
 | `CapRead` | `call.cap cap, field_ref(decl,index)()` | `p2_4/caps/cap-{call,parameter,recompute,field,generic-transport,body}` C5 High |
 | `OwnerField` | `obj.get owner0, field` | `p2_4/caps/cap-external-internal` C5 High |
 | `Coercion::Box` | `any.box value, ty any` | `p2_4/any-{plain,resource,boundary,nested}` C6 |
-| `BodyOwner::Test` | `Module.tests`, `Feature::Test`, `() -> void` body | `p2_4/test-{roots,names,empty}` C8 |
-| `Callee::Test` | `test.ok/is/isnt/fail`; typed intrinsics | `p2_4/test-{assertions,skip,successor}` C8 |
-| fakes after desugaring | ordinary ctor/defaults/object/role.wrap | `p2_4/fake-{state,defaults,generic}` C8 |
+| `BodyOwner::Test` | `Module.tests`, `Feature::Test`, `() -> void` body | `p2_4/tests/{async,isolation,empty,production}` C8a High; `coverage/c8a-tests.md` |
+| `Callee::Test` | `test.ok/is/isnt/fail`; typed intrinsics | `p2_4/tests/assertion-failure` C8a High; skip S1 and typed assertions Unsupported |
+| fakes after desugaring | ordinary ctor/defaults/object/role.wrap | `p2_4/tests/{fake-successor,isolation}` C8a High; generic witness regression |
 | native callee/declaration | handle, extern symbol, `call.native` | `p2_4/native-{data,handle,missing}` C7 |
 | trusted native with any | exact registered `call.intrinsic` bridge | `p2_4/opaque-{inspect,items,format}` C6/C7 |
 | Cell/Atomic concrete calls | std Cell body + registered Atomic intrinsics | `p2_4/storage-{read,replace,cas}` C7 |
