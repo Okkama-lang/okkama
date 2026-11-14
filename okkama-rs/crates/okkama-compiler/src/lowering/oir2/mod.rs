@@ -15,6 +15,7 @@ mod defer;
 mod high;
 mod failures;
 mod objects;
+mod roles;
 mod walk;
 mod scalar;
 mod structure;
@@ -22,6 +23,8 @@ mod structure;
 mod tests;
 #[cfg(test)]
 mod specialization_tests;
+#[cfg(test)]
+mod role_tests;
 
 use crate::analysis::{Analysis, thir};
 use crate::oir2 as ir;
@@ -130,6 +133,7 @@ pub(crate) fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
                 functions: &declarations.functions,
                 natives: &declarations.natives,
                 error_text: declarations.error_text,
+                builtin_adapters: &declarations.builtin_adapters,
                 objects: &declarations.objects,
                 constructors: &declarations.constructors,
                 given: declarations.ctor_fields.get(&function).cloned().unwrap_or_default(),
@@ -153,6 +157,7 @@ pub(crate) fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
             functions: &declarations.functions,
             natives: &declarations.natives,
             error_text: declarations.error_text,
+            builtin_adapters: &declarations.builtin_adapters,
             objects: &declarations.objects,
             constructors: &declarations.constructors,
             given: vec![], listed: None, defers: &declarations.defers,

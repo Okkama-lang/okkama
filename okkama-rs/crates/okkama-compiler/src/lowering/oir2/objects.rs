@@ -200,7 +200,7 @@ impl BodyLowerer<'_, '_> {
         }
     }
 
-    fn call(&mut self, function: ir::FuncId, values: Vec<ir::ValueId>) -> Result<Option<ir::ValueId>> {
+    pub(super) fn call(&mut self, function: ir::FuncId, values: Vec<ir::ValueId>) -> Result<Option<ir::ValueId>> {
         let args = values.into_iter().map(|value| ir::CallArgument {
             value, convention: ir::OperandConvention::Borrow,
         }).collect();
@@ -246,6 +246,44 @@ impl BodyLowerer<'_, '_> {
         let thir::ExprKind::Call { callee, args } = &expr.kind else {
             unreachable!("direct call dispatch");
         };
+        if let thir::Callee::Role { receiver, role, slot } = callee
+            && !(self.context.error_text.is_some() && *role == crate::analysis::ty::RoleId(0)) {
+            let Some(receiver) = self.value(receiver)? else {
+                return Ok(None);
+            };
+            let receiver = self.take(receiver)?;
+            let ty = self.b.body().values.get(receiver)?.ty;
+            let ir::Type::Role { decl, .. } = *self.b.module().types.get(ty)? else {
+                return Err(LowerError::invalid(expr.span, "role call receiver is not a role"));
+            };
+            let ir::DeclarationKind::Role { methods, .. } = &self.b.module().declarations.get(decl)?.kind else {
+                unreachable!("role declaration");
+            };
+            if *slot >= methods.len() {
+                return Err(LowerError::invalid(expr.span, "unknown role slot"));
+            }
+            let reachable = self.b.module().declarations.iter().any(|(_, declaration)| {
+                matches!(&declaration.kind, ir::DeclarationKind::Object { witnesses, .. }
+                    if witnesses.iter().any(|witness| witness.role == ty))
+            });
+            if !reachable {
+                return Err(LowerError::unsupported(expr.span, "role has no reachable implementation"));
+            }
+            let mut values = vec![];
+            for arg in args {
+                let Some(value) = self.value(arg)? else {
+                    return Ok(None);
+                };
+                values.push(ir::CallArgument { value, convention: ir::OperandConvention::Borrow });
+            }
+            self.sync_failure()?;
+            let values = self.b.emit_schema(ir::Operation::Call(ir::CallOp::Role {
+                receiver: ir::CallArgument { value: receiver, convention: ir::OperandConvention::Borrow },
+                role: decl, slot: *slot as u32, call: super::roles::call_site(values),
+            }))?;
+            super::roles::record_call_effect(&mut self.b, self.current.expect("open role call"))?;
+            return Ok(values.first().copied());
+        }
         let mut values = vec![];
         let function = match callee {
             thir::Callee::Method { receiver, object, method } => {

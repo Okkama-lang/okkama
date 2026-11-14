@@ -164,6 +164,7 @@ pub(super) struct Flow {
     pub scopes: BTreeMap<ScopeId, u8>,
     pub bindings: BTreeSet<BindingId>,
     pub must_use: Vec<u8>,
+    pub must_use_aliases: Vec<BTreeSet<ValueId>>,
     pub entry_accepted: bool,
     pub ended: BTreeSet<ScopeId>,
     pub closed_inputs: BTreeSet<Piece>,
@@ -194,6 +195,7 @@ impl Flow {
             cache_keys: BTreeSet::new(),
             provenance: BTreeMap::new(),
             scopes: BTreeMap::new(), bindings: BTreeSet::new(), must_use: vec![0; values], entry_accepted: true,
+            must_use_aliases: vec![BTreeSet::new(); values],
             ended: BTreeSet::new(),
             closed_inputs: BTreeSet::new(),
             failures: vec![0; values],
@@ -221,6 +223,7 @@ impl Flow {
             && self.dead == other.dead && self.taken_caches == other.taken_caches && self.cache_keys == other.cache_keys
             && self.provenance == other.provenance && self.scopes == other.scopes
             && self.bindings == other.bindings && self.must_use == other.must_use
+            && self.must_use_aliases == other.must_use_aliases
             && self.entry_accepted == other.entry_accepted && self.ended == other.ended
             && self.closed_inputs == other.closed_inputs && self.failures == other.failures
             && self.active_failure == other.active_failure && self.active_failure_origin == other.active_failure_origin

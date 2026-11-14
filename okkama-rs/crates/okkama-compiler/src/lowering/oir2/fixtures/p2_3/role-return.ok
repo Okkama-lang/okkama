@@ -1,0 +1,6 @@
+module app;
+role Label { label() is int; }
+object Box does Label { Box(); label() is int { 1; } }
+role Factory { make() is Label; }
+object Source does Factory { Source(); make() is Label { Box(); } }
+main() is int { let factory is Factory = Source(); factory.make().label(); }

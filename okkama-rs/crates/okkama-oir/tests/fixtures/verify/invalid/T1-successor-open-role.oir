@@ -1,0 +1,6 @@
+oir 2 high
+// expect OIR2-T1 Type(TypeId(2))
+module bad
+role R<T> {
+    next() -> ^R<T>
+}

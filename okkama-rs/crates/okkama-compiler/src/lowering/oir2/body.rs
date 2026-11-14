@@ -7,6 +7,7 @@ use crate::oir2 as ir;
 pub(super) struct BodyContext<'t> {
     pub functions: &'t HashMap<thir::BodyOwner, ir::FuncId>,
     pub natives: &'t HashMap<usize, ir::FuncId>,
+    pub builtin_adapters: &'t HashMap<(ir::TypeId, ir::TypeId), ir::FuncId>,
     pub error_text: Option<ir::FuncId>,
     pub objects: &'t HashMap<ObjectId, ir::DeclId>,
     pub constructors: &'t HashMap<(ObjectId, usize, Vec<usize>), ir::FuncId>,
@@ -611,6 +612,14 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             }
             E::Coerce { coercion: thir::Coercion::RoleWrap, value } => {
                 self.error_wrap(expr, value)
+            }
+            E::Coerce { coercion: thir::Coercion::RoleNarrow { .. }, value } => {
+                let ty = self.ty(expr.ty.as_ref().expect("typed narrowing"), expr.span)?;
+                let Some(value) = self.value(value)? else {
+                    return Ok(None);
+                };
+                self.sync_failure()?;
+                self.core(ir::CoreOp::RoleNarrow { value, ty }).map(Some)
             }
             E::Match(matching) => self.match_expr(matching, result_ty, want),
             E::Loop(block) => self.loop_expr(block, result_ty.filter(|_| want)),

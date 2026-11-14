@@ -16,6 +16,7 @@ pub(super) struct Declarations {
     pub objects: HashMap<ty::ObjectId, ir::DeclId>,
     pub constructors: HashMap<(ty::ObjectId, usize, Vec<usize>), ir::FuncId>,
     pub defers: Vec<super::defer::Deferred>,
+    pub builtin_adapters: HashMap<(ir::TypeId, ir::TypeId), ir::FuncId>,
     pub ctor_fields: HashMap<ir::FuncId, Vec<usize>>,
 }
 
@@ -37,6 +38,7 @@ impl Declarations {
             objects: HashMap::new(),
             constructors: HashMap::new(),
             ctor_fields: HashMap::new(),
+            builtin_adapters: HashMap::new(),
             defers: vec![],
         };
         for (ty, lowered) in [
@@ -46,11 +48,6 @@ impl Declarations {
             (ty::Ty::Range, ir::Type::Range),
         ] {
             this.types.insert(ty, this.builder.intern_type(lowered)?);
-        }
-        for role in &reg.roles {
-            if let Some(decl) = role.decl {
-                return Err(LowerError::unsupported(decl.span, "role declaration"));
-            }
         }
         if let Some(handle) = reg.handles.first() {
             return Err(LowerError::unsupported(handle.span, "native object declaration"));
@@ -66,7 +63,7 @@ impl Declarations {
             let Some(decl) = object.decl else {
                 continue;
             };
-            if !object.params.is_empty() || !object.caps.is_empty() || !object.does.is_empty() {
+            if !object.params.is_empty() || !object.caps.is_empty() {
                 return Err(LowerError::unsupported(decl.span, "generic object, capability or role witness"));
             }
             let id = this.builder.declare(ir::Declaration {
@@ -87,6 +84,25 @@ impl Declarations {
             this.types.insert(ty::Ty::object(ty::ObjectId(index)), lowered);
             let successor = this.builder.intern_type(ir::Type::Successor(lowered))?;
             this.types.insert(ty::Ty::Successor(Box::new(ty::Ty::object(ty::ObjectId(index)))), successor);
+        }
+        for (index, role) in reg.roles.iter().enumerate() {
+            if role.decl.is_none() || !role.params.is_empty() {
+                continue;
+            }
+            let name = if role.name.contains('<') {
+                format!("{}::{}", reg.modules[role.module].name, role.name)
+            } else {
+                format!("{}.{}", reg.modules[role.module].name.replace('/', "."), role.name)
+            };
+            let declaration = this.builder.declare(ir::Declaration {
+                name, type_params: vec![], loc: None,
+                kind: ir::DeclarationKind::Role { methods: vec![], builtin: false },
+            })?;
+            let lowered = this.builder.intern_type(ir::Type::Role { decl: declaration, args: vec![] })?;
+            let source = ty::Ty::role(ty::RoleId(index));
+            this.types.insert(source.clone(), lowered);
+            let successor = this.builder.intern_type(ir::Type::Successor(lowered))?;
+            this.types.insert(ty::Ty::Successor(Box::new(source)), successor);
         }
         // Reserve nominal types before resolving potentially recursive payloads.
         let mut variants = vec![];
@@ -152,6 +168,31 @@ impl Declarations {
             }
             this.builder.raw_mut().declarations.get_mut(id)?.kind = ir::DeclarationKind::Variant {
                 cases, is_error: enumeration.error,
+            };
+        }
+        for (index, role) in reg.roles.iter().enumerate() {
+            let Some(&ty) = this.types.get(&ty::Ty::role(ty::RoleId(index))) else {
+                continue;
+            };
+            let ir::Type::Role { decl, .. } = *this.builder.module().types.get(ty)? else {
+                unreachable!("reserved role");
+            };
+            let span = role.decl.expect("source role").span;
+            let methods = role.methods.iter().map(|method| {
+                if method.is_async || method.variadic {
+                    return Err(LowerError::unsupported(span, "async or variadic role slot"));
+                }
+                Ok(ir::RoleMethod {
+                    name: method.name.clone(),
+                    signature: ir::Signature {
+                        params: method.params.iter().map(|(_, ty)| this.ty(ty, span)).collect::<Result<_>>()?,
+                        results: method.result.iter().map(|ty| this.ty(ty, span)).collect::<Result<_>>()?,
+                        ownership_abi: ir::OwnershipAbi::Unelaborated,
+                    },
+                })
+            }).collect::<Result<_>>()?;
+            this.builder.raw_mut().declarations.get_mut(decl)?.kind = ir::DeclarationKind::Role {
+                methods, builtin: false,
             };
         }
         let error = ty::Ty::role(reg.system.error);
@@ -444,6 +485,8 @@ impl Declarations {
             let function = this.external(&name, true, params, results, vec![], native.decl.span)?;
             this.natives.insert(index, function);
         }
+        super::roles::declare_witnesses(&mut this, analysis)?;
+        super::roles::declare_builtins(&mut this, analysis)?;
         Ok(this)
     }
 
@@ -467,7 +510,7 @@ impl Declarations {
         })?)
     }
 
-    fn ty(&self, ty: &ty::Ty, span: Span) -> Result<ir::TypeId> {
+    pub(super) fn ty(&self, ty: &ty::Ty, span: Span) -> Result<ir::TypeId> {
         self.types.get(ty).copied().ok_or_else(|| LowerError::unsupported(span, format!("type {ty:?}")))
     }
 }

@@ -1,0 +1,3 @@
+module app;
+import "io/stream" take ByteSource;
+main() is int { let source is ByteSource = "hello"; source.bytes().size(); }

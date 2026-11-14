@@ -535,14 +535,29 @@ impl Checker<'_, '_> {
             }
             CoreOp::SuccTake { value, ty } => {
                 let valid = matches!(self.ty(*value)?, Type::Successor(inner) if inner == ty);
-                self.require(valid, "succ.take result differs from the wrapped object");
+                self.require(valid, "succ.take result differs from the wrapped type");
             }
             CoreOp::RoleWrap { value, ty } | CoreOp::RoleNarrow { value, ty } => {
-                let valid = matches!(self.module.types.get(*ty)?, Type::Role { .. });
-                self.require(valid, "role conversion requires a role destination");
                 let input = value_type(self.body, *value)?;
-                let valid = implements(self.module, input, *ty, &self.substitution, self.state)?
-                    || matches!(op, CoreOp::RoleNarrow { .. }) && matches!(self.ty(*value)?, Type::Role { .. });
+                let successor_form = matches!(self.module.types.get(input)?, Type::Successor(_));
+                let (input, destination) = match (self.module.types.get(input)?, self.module.types.get(*ty)?) {
+                    (Type::Successor(source), Type::Successor(target)) => (*source, *target),
+                    (Type::Successor(_), _) | (_, Type::Successor(_)) => {
+                        self.require(false, "role conversion must preserve the successor obligation");
+                        return Ok(());
+                    }
+                    _ => (input, *ty),
+                };
+                let narrow = matches!(op, CoreOp::RoleNarrow { .. });
+                let valid_destination = matches!(self.module.types.get(destination)?, Type::Role { .. })
+                    || narrow && successor_form && matches!(self.module.types.get(destination)?, Type::Object { .. });
+                self.require(valid_destination, "role conversion requires a matching nominal destination");
+                let valid = if narrow && matches!(self.module.types.get(input)?, Type::Role { .. }) {
+                    matches!(self.module.types.get(destination)?, Type::Role { .. })
+                        || implements(self.module, destination, input, &self.substitution, self.state)?
+                } else {
+                    implements(self.module, input, destination, &self.substitution, self.state)?
+                };
                 self.require(valid, "receiver has no matching role witness");
             }
             CoreOp::VariantOf { value, ty } => {

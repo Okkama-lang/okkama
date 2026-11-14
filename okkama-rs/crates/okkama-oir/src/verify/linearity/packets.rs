@@ -589,14 +589,27 @@ impl Engine<'_, '_> {
         }
         for postcondition in &schema.postconditions {
             if let Postcondition::DischargeMustUse(value) = postcondition {
-                flow.must_use[value.as_u32() as usize] = 2;
+                self.discharge_must_use(flow, *value);
             }
+        }
+        // A conversion renames the single must-use obligation on its normal outcome.
+        // Failure keeps the source obligation in the pre-operation state.
+        if outcome == Outcome::Normal
+            && let Operation::Core(CoreOp::RoleWrap { value, .. } | CoreOp::RoleNarrow { value, .. }) = op
+            && successor(self.module, self.body, *value) {
+            let aliases = &before.must_use_aliases[value.as_u32() as usize];
+            let pending = aliases.iter().any(|alias| before.must_use[alias.as_u32() as usize] == 1);
+            if let Some(slot) = slots.first_mut() {
+                slot.must_use = if pending { 1 } else { before.must_use[value.as_u32() as usize] };
+                slot.must_use_aliases = aliases.clone();
+            }
+            self.discharge_must_use(flow, *value);
         }
         if matches!(op, Operation::Call(_)) {
             for operand in op.operand_refs() {
                 if let OperandRef::Value(value) = operand.reference
                     && successor(self.module, self.body, value) {
-                    flow.must_use[value.as_u32() as usize] = 2;
+                    self.discharge_must_use(flow, value);
                 }
             }
         }
@@ -755,7 +768,7 @@ impl Engine<'_, '_> {
                 slot.aliases = before.aliases[value.as_u32() as usize].clone();
                 slot.contained = before.contained[value.as_u32() as usize].clone();
                 if successor(self.module, self.body, value) {
-                    flow.must_use[value.as_u32() as usize] = 2;
+                    self.discharge_must_use(flow, value);
                 }
                 slot.requirements = before.full_deps[value.as_u32() as usize].clone();
                 slot.lifetime = before.lifetimes[value.as_u32() as usize];

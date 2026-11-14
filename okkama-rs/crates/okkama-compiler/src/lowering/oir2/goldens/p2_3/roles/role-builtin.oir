@@ -1,0 +1,59 @@
+oir 2 high
+module app
+requires core
+entry @main
+
+role io.stream.ByteSource {
+    bytes() -> array<byte>
+}
+
+object core.StringSource [builtin] {
+    field value: str
+    does io.stream.ByteSource {bytes = @core.StringSource.bytes}
+}
+scope S0 action in @core.StringSource.bytes
+scope S1 action in @core.StringSource.new
+scope S2 action in @main
+
+func @main() -> int [entry] {
+    binding b0 "source": io.stream.ByteSource in S2
+    boundary B0 lexical in S2
+    ^b0 in S2 unwind ^b1:
+    %0: str = const "hello"
+    [i1] %1: core.StringSource = call @core.StringSource.new(%0)
+    %2: io.stream.ByteSource = role.wrap %1, ty io.stream.ByteSource
+    bind %2, binding b0
+    [i4] %3: array<byte> = call.role %2, io.stream.ByteSource slot 0()
+    %4: int = array.len %3
+    want %4
+    [i7] exit.prepare return %4 at B0
+    result.exit edge normal(0), value %4, demand want, prepare #7
+    high.effects at #1 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #4 failures [thrown, program, panic, native, cancelled], suspends true
+    ret %4
+    ^b1(%5: failure) in S2:
+    raise %5
+}
+
+func @core.StringSource.bytes(%0: core.StringSource) -> array<byte> [method core.StringSource] {
+    boundary B0 lexical in S0
+    ^b0 in S0:
+    %1: str = obj.get %0, value
+    %2: array<byte> = str.utf8 %1
+    want %2
+    [i3] exit.prepare return %2 at B0
+    result.exit edge normal(0), value %2, demand want, prepare #3
+    ret %2
+}
+
+func @core.StringSource.new(%0: str) -> core.StringSource [ctor core.StringSource] {
+    boundary B0 lexical in S1
+    ^b0 in S1 unwind ^b1:
+    %1: core.StringSource = obj.new core.StringSource { value: %0 }
+    want %1
+    [i2] exit.prepare return %1 at B0
+    result.exit edge normal(0), value %1, demand want, prepare #2
+    ret %1
+    ^b1(%2: failure) in S1:
+    raise %2
+}

@@ -1,0 +1,1 @@
+frontend: Cannot initialize variable "b" of type B with A

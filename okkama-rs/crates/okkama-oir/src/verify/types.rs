@@ -502,13 +502,41 @@ fn type_valid(module: &Module, ty: &Type, state: &mut State<'_>) -> Checked<()> 
                 if !language_type(module, ty, state)? { state.error(R::T1, "fn ABI contains an internal value"); }
             }
         }
-        Type::Successor(inner) if !matches!(module.types.get(*inner)?, Type::Object { .. }) => {
-            state.error(R::T1, "successor must wrap an object type");
+        Type::Successor(inner) => {
+            let valid = match module.types.get(*inner)? {
+                Type::Object { .. } => true,
+                Type::Role { .. } => concrete_successor_role(module, *inner, state)?,
+                _ => false,
+            };
+            if !valid {
+                state.error(R::T1, "successor must wrap an object or concrete role type");
+            }
         }
         _ => {}
     }
     Ok(())
 }
+fn concrete_successor_role(module: &Module, root: TypeId, state: &mut State<'_>) -> Checked<bool> {
+    let mut pending = vec![root];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        if !state.step(1) || !state.memory(64) { return Err(TypeCheckError); }
+        let ty = module.types.get(id)?;
+        if matches!(ty, Type::Parameter(_)) {
+            return Ok(false);
+        }
+        if let Type::Role { decl, args } | Type::Object { decl, args } | Type::Cap { decl, args } = ty
+            && module.declarations.get(*decl)?.type_params.len() != args.len() {
+            return Ok(false);
+        }
+        pending.extend(children(ty));
+    }
+    Ok(true)
+}
+
 fn map_key(ty: &Type) -> bool {
     matches!(ty, Type::Int | Type::Bool | Type::Byte | Type::Float | Type::Rat | Type::Char | Type::Str
         | Type::Enum(_) | Type::Parameter(_) | Type::Never)

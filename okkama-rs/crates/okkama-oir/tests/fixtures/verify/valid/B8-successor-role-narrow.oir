@@ -1,0 +1,40 @@
+oir 2 high
+module successor
+role Package {
+    label() -> int
+}
+object Box {
+    field x: int
+    does Package { label=@label }
+}
+scope S action in @f
+scope Sn action in @next
+func @f(%self: Box) -> void {
+^entry in S unwind ^failed:
+    %next: ^Box = call @next(%self)
+    %view: ^Package = role.wrap %next, ty ^Package
+    %back: ^Box = role.narrow %view, ty ^Box
+    %plain: Box = succ.take %back, ty Box
+    ret
+^failed(%failure: failure) in S:
+    raise %failure
+}
+func @next(%self: Box) -> ^Box [successor Box] {
+    boundary B0 lexical in Sn
+^entry in Sn unwind ^failed:
+    %next: ^Box = obj.next %self { x: 1 }
+    [iprep0] exit.prepare return %next at B0
+    result.exit edge normal(0), value %next, demand want, prepare iprep0
+    ret %next
+^failed(%failure: failure) in Sn:
+    raise %failure
+}
+scope Sl action in @label
+func @label(%self: Box) -> int [method Box] {
+    boundary Bl lexical in Sl
+^entry in Sl:
+    %n: int = obj.get %self, x
+    [iprepl] exit.prepare return %n at Bl
+    result.exit edge normal(0), value %n, demand want, prepare iprepl
+    ret %n
+}

@@ -35,7 +35,7 @@ pub(super) fn prepare_with_limits<'a>(input: &Analysis<'a>, limits: Limits) -> R
         }
     }
     for role in &mut registry.roles {
-        if role.module < registry.root_start {
+        if role.module < registry.root_start || !role.params.is_empty() {
             role.decl = None;
         }
     }
@@ -49,6 +49,7 @@ pub(super) fn prepare_with_limits<'a>(input: &Analysis<'a>, limits: Limits) -> R
         registry,
         instances: HashMap::new(),
         enums: HashMap::new(),
+        roles: HashMap::new(),
         limits,
         chain: vec![],
         requests: 0,
@@ -79,6 +80,18 @@ pub(super) fn prepare_with_limits<'a>(input: &Analysis<'a>, limits: Limits) -> R
             }
             slice.registry.objects[index].methods[method].result = info.result.as_ref()
                 .map(|ty| slice.ty(ty, source.decl.expect("source object").span)).transpose()?;
+        }
+    }
+    for (index, role) in input.registry.roles.iter().enumerate() {
+        if role.module >= input.registry.root_start && role.params.is_empty()
+            && let Some(declaration) = role.decl {
+            slice.role(ty::RoleId(index), &[], declaration.span)?;
+        }
+    }
+    for (index, object) in input.registry.objects.iter().enumerate() {
+        if object.module >= input.registry.root_start && object.params.is_empty()
+            && let Some(declaration) = object.decl {
+            slice.witnesses(ty::ObjectId(index), ty::ObjectId(index), &[], declaration.span)?;
         }
     }
     for (index, info) in input.registry.enums.iter().enumerate() {
@@ -113,6 +126,7 @@ struct Specializer<'a, 'b> {
     registry: Registry<'a>,
     instances: HashMap<(ty::ObjectId, Vec<ty::Ty>), ty::ObjectId>,
     enums: HashMap<(ty::EnumId, Vec<ty::Ty>), ty::EnumId>,
+    roles: HashMap<(ty::RoleId, Vec<ty::Ty>), ty::RoleId>,
     limits: Limits,
     chain: Vec<String>,
     requests: usize,
@@ -276,8 +290,8 @@ impl Specializer<'_, '_> {
             fields: source.fields.clone(),
             ctors: source.ctors.clone(),
             methods: source.methods.clone(),
-            // Only direct calls of this finite slice are emitted. Unused std
-            // role witnesses are omitted; role dispatch stays unsupported.
+            // Registered Atomic/Cell and finite P1 std boundaries retain their
+            // existing direct-call ABI; their unused std witnesses are not requested.
             does: if imported && (generic || ordinary) { vec![] } else { source.does.clone() },
             destroy: source.destroy,
             caps: vec![],
@@ -297,6 +311,9 @@ impl Specializer<'_, '_> {
         // Method signatures are substituted when their body is requested. This
         // avoids discovering an infinite family through an unused method result.
         self.registry.objects[instance.0] = info;
+        if !self.registry.objects[instance.0].does.is_empty() {
+            self.witnesses(object, instance, &env, span)?;
+        }
         for (field, info) in source.fields.iter().enumerate() {
             if info.default.is_some() {
                 self.queue(thir::BodyOwner::Default { object, field },
@@ -309,6 +326,70 @@ impl Specializer<'_, '_> {
         }
         self.chain.pop();
         Ok(instance)
+    }
+
+    fn role(&mut self, role: ty::RoleId, args: &[ty::Ty], span: Span) -> Result<ty::RoleId> {
+        if let Some(&target) = self.roles.get(&(role, args.to_vec())) {
+            return Ok(target);
+        }
+        let source = &self.input.registry.roles[role.0];
+        self.check_arguments(&source.params, args, span)?;
+        let target = if args.is_empty() { role } else { ty::RoleId(self.registry.roles.len()) };
+        let names = args.iter().map(|ty| self.encode(ty)).collect::<Result<Vec<_>>>()?;
+        let name = if args.is_empty() { source.name.clone() } else {
+            format!("{}<{}>", source.name, names.join(","))
+        };
+        let request = format!("{}::{name}", self.registry.modules[source.module].name);
+        self.request(request.clone(), span)?;
+        self.roles.insert((role, args.to_vec()), target);
+        self.chain.push(request);
+        let info = registry::RoleInfo {
+            name, module: source.module, params: vec![], methods: source.methods.clone(), decl: source.decl,
+        };
+        if target != role {
+            self.registry.roles.push(info);
+        } else {
+            self.registry.roles[target.0] = info;
+        }
+        let env: Vec<_> = source.params.iter().copied().zip(args.iter().cloned()).collect();
+        let mut methods = source.methods.clone();
+        for method in &mut methods {
+            for (_, ty) in &mut method.params {
+                *ty = self.ty(&ty.subst(&env), span)?;
+            }
+            method.result = method.result.as_ref().map(|ty| self.ty(&ty.subst(&env), span)).transpose()?;
+        }
+        self.registry.roles[target.0].methods = methods;
+        self.chain.pop();
+        Ok(target)
+    }
+
+    fn witnesses(&mut self, source: ty::ObjectId, target: ty::ObjectId,
+        env: &[(ty::ParamId, ty::Ty)], span: Span) -> Result<()> {
+        let info = &self.input.registry.objects[source.0];
+        let mut witnesses = vec![];
+        for (role, args) in &info.does {
+            let args: Vec<_> = args.iter().map(|ty| ty.subst(env)).collect();
+            let specialized = self.role(*role, &args, span)?;
+            witnesses.push((specialized, vec![]));
+            for slot in &self.input.registry.roles[role.0].methods {
+                let role_info = &self.input.registry.roles[role.0];
+                let role_env: Vec<_> = role_info.params.iter().copied().zip(args.iter().cloned()).collect();
+                let method = info.methods.iter().position(|method| {
+                    method.name == slot.name && method.params.len() == slot.params.len()
+                        && method.params.iter().zip(&slot.params)
+                            .all(|((_, a), (_, b))| a.subst(env) == b.subst(&role_env))
+                }).ok_or_else(|| LowerError::invalid(span, format!("missing implementation of {}", slot.name)))?;
+                self.queue(thir::BodyOwner::Method { object: source, method },
+                    thir::BodyOwner::Method { object: target, method }, env.to_vec(), None, span)?;
+                let params = info.methods[method].params.iter().map(|(name, ty)| {
+                    Ok((name.clone(), self.ty(&ty.subst(env), span)?))
+                }).collect::<Result<_>>()?;
+                self.registry.objects[target.0].methods[method].params = params;
+            }
+        }
+        self.registry.objects[target.0].does = witnesses;
+        Ok(())
     }
 
     fn enumeration(&mut self, id: ty::EnumId, args: &[ty::Ty], span: Span) -> Result<ty::EnumId> {
@@ -349,6 +430,7 @@ impl Specializer<'_, '_> {
         }
         Ok(match value {
             T::Object(object, args) => T::object(self.instance(*object, args, span)?),
+            T::Role(role, args) => T::role(self.role(*role, args, span)?),
             T::Array(inner) => T::array(self.ty(inner, span)?),
             T::Map(key, value) => {
                 if let Some(problem) = self.input.registry.key_problem(key) {
@@ -442,9 +524,40 @@ impl Specializer<'_, '_> {
                             thir::BodyOwner::Ctor { object: instance, ctor: *ctor },
                             subst, Some(given.clone()), expr.span)?;
                     }
-                    thir::Callee::Builtin { receiver, .. } | thir::Callee::Role { receiver, .. } => {
+                    thir::Callee::Role { receiver, role, .. } => {
+                        let args = match receiver.ty.as_ref().map(|ty| ty.taken().subst(env)) {
+                            Some(ty::Ty::Role(_, args)) => args,
+                            Some(receiver) => self.input.registry.roles_of(&receiver).into_iter().find_map(|ty| {
+                                match ty {
+                                    ty::Ty::Role(id, args) if id == *role => Some(args),
+                                    _ => None,
+                                }
+                            }).unwrap_or_default(),
+                            None => vec![],
+                        };
+                        *role = self.role(*role, &args, expr.span)?;
                         self.expr(receiver, env)?;
+                        if let Some(ty::Ty::Object(object, _)) = receiver.ty.as_ref().map(ty::Ty::taken) {
+                            let role_info = &self.registry.roles[role.0];
+                            let thir::Callee::Role { slot, .. } = callee else {
+                                unreachable!("role callee");
+                            };
+                            let action = role_info.methods.get(*slot).ok_or_else(|| {
+                                LowerError::invalid(expr.span, "unknown role slot")
+                            })?;
+                            let method = self.registry.objects[object.0].methods.iter().position(|method| {
+                                method.name == action.name && method.params.iter().map(|(_, ty)| ty)
+                                    .eq(action.params.iter().map(|(_, ty)| ty))
+                            }).ok_or_else(|| {
+                                LowerError::invalid(expr.span, "missing specialized role implementation")
+                            })?;
+                            let thir::Callee::Role { receiver, .. } = callee else {
+                                unreachable!("role receiver");
+                            };
+                            *callee = thir::Callee::Method { receiver: receiver.clone(), object, method };
+                        }
                     }
+                    thir::Callee::Builtin { receiver, .. } => self.expr(receiver, env)?,
                     _ => {}
                 }
                 for arg in args {
