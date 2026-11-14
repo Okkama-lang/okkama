@@ -275,6 +275,23 @@ Updated with each chapter: `build.py --stats`.
   commit, local changes kept); 19.4 and 19.11 the diagnostics of #338. Still
   no real project example: installing runs git, which the cage forbids.
 
+- Chapter 26 (patterns and anti-patterns), 2026-11-14: 9.2 pages (EN), 9.3
+  (RU) of its floor of 14. Written:
+  - patterns and what a language does to them (Alexander, GoF, Norvig;
+    antipatterns after Koenig and Brown);
+  - composition instead of flags (`26-flags`);
+  - successor pipelines and typestate (`26-pipeline`);
+  - named refusals (`26-refusals`);
+  - every dependency a role with its fake (`26-signup-tests`);
+  - resources in scopes, absence as a type, one owner for shared state;
+  - the anti-patterns the compiler refuses, quoting its diagnostics;
+  - the ones it allows;
+  - the GoF catalogue read in Okkama, and costs.
+
+  To add: a runnable typestate example (one role per state); Composite; a
+  worked refactoring of a flag object; an async state owner with a
+  channel.
+
 ## Naming (owner, 2026-11-10)
 
 The virtual machine is **Sparrow**. **Tomato** is the name of its current

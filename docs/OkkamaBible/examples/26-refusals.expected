@@ -1,0 +1,3 @@
+30 -> balance 70
+0 -> refused: Refusal.non_positive(0)
+150 -> refused: Refusal.insufficient(100, 150)
