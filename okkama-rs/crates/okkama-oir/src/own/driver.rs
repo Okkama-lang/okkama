@@ -362,7 +362,9 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                 driver.current_instruction = Some(*instruction);
                 driver.live_after = continuations[instruction].clone();
                 let instruction = high.insts.get(*instruction).map_err(arena)?;
-                point = driver.instruction(point, instruction)?;
+                point = driver.instruction(point, instruction).map_err(|error| {
+                    at_high_site(error, function, HighOperationSite::Instruction(driver.current_instruction.unwrap()))
+                })?;
                 for original in &instruction.results {
                     if let Some(latest) = point.env.values.get(original) {
                         driver.definitions.insert(*original, latest.value);
@@ -370,79 +372,84 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                 }
                 driver.prune(&mut point);
             }
-            match &data.term.kind {
-                TermKind::Br(target) => driver.connect(point, target, false, false, 0)?,
-                TermKind::Cond { condition, yes, no } => {
-                    let condition = point.env.value(*condition)?.value;
-                    let left = block(&mut driver.body, data.lexical_scope)?;
-                    let right = block(&mut driver.body, data.lexical_scope)?;
-                    driver.body.blocks.get_mut(point.block).map_err(arena)?.term.kind = TermKind::Cond {
-                        condition, yes: Target { block: left, args: vec![] }, no: Target { block: right, args: vec![] },
-                    };
-                    let mut left_point = point.clone();
-                    left_point.block = left;
-                    let mut right_point = point;
-                    right_point.block = right;
-                    driver.connect(left_point, yes, false, false, 0)?;
-                    driver.connect(right_point, no, false, false, 1)?;
-                }
-                TermKind::Switch { value, cases, default } => {
-                    driver.switch(point, *value, cases, default)?;
-                }
-                TermKind::Ret { values } | TermKind::RetDefer { values, .. } => {
-                    let tag = match &data.term.kind {
-                        TermKind::RetDefer { tag, .. } => Some(tag.clone()),
-                        _ if helpers.contains(&function) => Some(DeferReturnTag::Continue),
-                        _ => None,
-                    };
-                    point = driver.prepare(point, values.first().copied(), None)?;
-                    point = driver.close_all(point, false)?;
-                    let committed = if point.env.cleanup.pending.is_some() {
-                        let result = values.first().map(|value| high.values.get(*value).unwrap().ty);
-                        point = driver.commit(point, ExitDestination::Caller, result)?;
-                        let value = point.results.iter().find(|(name, _)| *name == SlotName::Value)
-                            .map(|(_, value)| *value);
-                        Some((value, point.result(SlotName::Packet)?, point.result(SlotName::Deps)?))
-                    } else {
-                        None
-                    };
-                    let mut values = values.iter().map(|value| point.env.value(*value).map(|latest| latest.value))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    if let Some((value, packet, deps)) = committed {
-                        values = value.into_iter().chain([packet]).collect();
-                        if matches!(tag, Some(DeferReturnTag::Replace(_))) {
-                            values.push(deps);
+            driver.current_instruction = None;
+            (|| -> Result<(), OwnError> {
+                match &data.term.kind {
+                    TermKind::Br(target) => driver.connect(point, target, false, false, 0)?,
+                    TermKind::Cond { condition, yes, no } => {
+                        let condition = point.env.value(*condition)?.value;
+                        let left = block(&mut driver.body, data.lexical_scope)?;
+                        let right = block(&mut driver.body, data.lexical_scope)?;
+                        driver.body.blocks.get_mut(point.block).map_err(arena)?.term.kind = TermKind::Cond {
+                            condition, yes: Target { block: left, args: vec![] },
+                            no: Target { block: right, args: vec![] },
+                        };
+                        let mut left_point = point.clone();
+                        left_point.block = left;
+                        let mut right_point = point;
+                        right_point.block = right;
+                        driver.connect(left_point, yes, false, false, 0)?;
+                        driver.connect(right_point, no, false, false, 1)?;
+                    }
+                    TermKind::Switch { value, cases, default } => {
+                        driver.switch(point, *value, cases, default)?;
+                    }
+                    TermKind::Ret { values } | TermKind::RetDefer { values, .. } => {
+                        let tag = match &data.term.kind {
+                            TermKind::RetDefer { tag, .. } => Some(tag.clone()),
+                            _ if helpers.contains(&function) => Some(DeferReturnTag::Continue),
+                            _ => None,
+                        };
+                        point = driver.prepare(point, values.first().copied(), None)?;
+                        point = driver.close_all(point, false)?;
+                        let committed = if point.env.cleanup.pending.is_some() {
+                            let result = values.first().map(|value| high.values.get(*value).unwrap().ty);
+                            point = driver.commit(point, ExitDestination::Caller, result)?;
+                            let value = point.results.iter().find(|(name, _)| *name == SlotName::Value)
+                                .map(|(_, value)| *value);
+                            Some((value, point.result(SlotName::Packet)?, point.result(SlotName::Deps)?))
+                        } else {
+                            None
+                        };
+                        let mut values = values.iter().map(|value| point.env.value(*value).map(|latest| latest.value))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        if let Some((value, packet, deps)) = committed {
+                            values = value.into_iter().chain([packet]).collect();
+                            if matches!(tag, Some(DeferReturnTag::Replace(_))) {
+                                values.push(deps);
+                            }
+                            point.env.linear.remove(&packet);
+                        } else if explicit && !helpers.contains(&function) {
+                            point = driver.emit(point, Operation::Ownership(OwnershipOp::Empty {}))?;
+                            values.push(point.result(SlotName::Packet)?);
                         }
-                        point.env.linear.remove(&packet);
-                    } else if explicit && !helpers.contains(&function) {
-                        point = driver.emit(point, Operation::Ownership(OwnershipOp::Empty {}))?;
-                        values.push(point.result(SlotName::Packet)?);
+                        driver.body.blocks.get_mut(point.block).map_err(arena)?.term.kind = match tag {
+                            Some(DeferReturnTag::Continue) => TermKind::RetDefer {
+                                tag: DeferReturnTag::Continue, values: vec![],
+                            },
+                            Some(tag) => TermKind::RetDefer { tag, values },
+                            None => TermKind::Ret { values },
+                        };
                     }
-                    driver.body.blocks.get_mut(point.block).map_err(arena)?.term.kind = match tag {
-                        Some(DeferReturnTag::Continue) => TermKind::RetDefer {
-                            tag: DeferReturnTag::Continue, values: vec![],
-                        },
-                        Some(tag) => TermKind::RetDefer { tag, values },
-                        None => TermKind::Ret { values },
-                    };
-                }
-                TermKind::Raise(failure) => {
-                    point.env.cleanup.failure = Some(point.env.value(*failure)?.value);
-                    driver.failures.push(FailureRoute { point, target: None });
-                }
-                TermKind::Unreachable => {
-                    if !point.env.all_linear().is_empty() {
-                        return Err(flow_error("unreachable tombstone contains live ownership"));
+                    TermKind::Raise(failure) => {
+                        point.env.cleanup.failure = Some(point.env.value(*failure)?.value);
+                        driver.failures.push(FailureRoute { point, target: None });
                     }
+                    TermKind::Unreachable => {
+                        if !point.env.all_linear().is_empty() {
+                            return Err(flow_error("unreachable tombstone contains live ownership"));
+                        }
+                    }
+                    TermKind::Throw(_) | TermKind::Panic(_) | TermKind::Trap { .. } => {
+                        driver.failure_term(point, &data.term.kind)?;
+                    }
+                    TermKind::Catch { failure, ty, handler, next } => {
+                        driver.catch(point, *failure, *ty, handler, next)?;
+                    }
+                    _ => return Err(flow_error("unsupported High terminator")),
                 }
-                TermKind::Throw(_) | TermKind::Panic(_) | TermKind::Trap { .. } => {
-                    driver.failure_term(point, &data.term.kind)?;
-                }
-                TermKind::Catch { failure, ty, handler, next } => {
-                    driver.catch(point, *failure, *ty, handler, next)?;
-                }
-                _ => return Err(flow_error("unsupported High terminator")),
-            }
+                Ok(())
+            })().map_err(|error| at_high_site(error, function, HighOperationSite::Terminator(*original)))?;
         }
         // Iterative cleanup queue: failed closes never recursively emit cleanup.
         driver.current_unwind = None;
@@ -892,13 +899,7 @@ fn live_in(
         let mut changed = false;
         for block in graph.rpo.iter().rev() {
             let data = body.blocks.get(*block).map_err(arena)?;
-            let mut values = BTreeSet::new();
-            match &data.term.kind {
-                TermKind::Cond { condition, .. } => { values.insert(*condition); }
-                TermKind::Ret { values: results } => values.extend(results),
-                TermKind::Raise(value) => { values.insert(*value); }
-                _ => {}
-            }
+            let mut values = control::term_values(&data.term.kind);
             for edge in graph.edges.iter().filter(|edge| edge.source == *block) {
                 values.extend(&edge.args);
                 values.extend(live[&edge.target].iter().filter(|value| {
@@ -951,4 +952,14 @@ pub fn rewrite_synchronous_with(
         return Err(OwnError::InvalidOutput(Box::new(report)));
     }
     Ok(output)
+}
+
+fn at_high_site(mut error: OwnError, function: FuncId, site: HighOperationSite) -> OwnError {
+    if let OwnError::Diagnostics { diagnostics, .. } = &mut error {
+        for diagnostic in diagnostics {
+            diagnostic.function.get_or_insert(function);
+            diagnostic.site.get_or_insert(site);
+        }
+    }
+    error
 }

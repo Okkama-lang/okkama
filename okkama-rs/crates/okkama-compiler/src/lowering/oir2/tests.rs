@@ -1365,9 +1365,17 @@ fn oir2_p1_followup_own_from_593_sources() {
     let mut rows = Vec::new();
     for path in paths {
         let name = path.file_stem().unwrap().to_str().unwrap();
+        if std::env::var("OKKAMA_P1_OWN_ONLY").is_ok_and(|selected| selected != name) {
+            continue;
+        }
         let source = std::fs::read_to_string(&path).unwrap();
+        eprintln!("{name}: high");
         let module = lower_std(&source).unwrap_or_else(|error| panic!("{name}: {error}"));
         verify_high(&module, name);
+        if let Some(directory) = std::env::var_os("OKKAMA_P1_OWN_DUMP") {
+            std::fs::write(std::path::Path::new(&directory).join(format!("{name}.high.oir")),
+                ir::text::print(&module).unwrap()).unwrap();
+        }
         let catalog = super::native_summaries::P1NativeSummaries::for_module(&module).unwrap();
         let options = OwnOptions::default();
         let inferred = elaborate_ownership(module, &catalog, &options).unwrap();
@@ -1376,30 +1384,196 @@ fn oir2_p1_followup_own_from_593_sources() {
             .unwrap_or_else(|error| panic!("{name} main analysis: {error:#?}"));
         assert!(flow.stats.peak_auxiliary_bytes < options.memory_limit / 16, "{name}");
         let (stage, error) = match rewrite_subset(inferred, &options) {
-            Ok(output) => match ir::verify_own(&output.module) {
-                Ok(_) => ("pass", None),
-                Err(error) => ("verify_own", Some(format!("{error:#?}"))),
+            Ok(output) => {
+                eprintln!("{name}: own completed");
+                if let Some(directory) = std::env::var_os("OKKAMA_P1_OWN_DUMP") {
+                    std::fs::write(std::path::Path::new(&directory).join(format!("{name}.own.oir")),
+                        ir::text::print(&output.module).unwrap()).unwrap();
+                }
+                let catalog = OwnP1Contracts::new(&output.module);
+                let context = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
+                match ir::verify::verify_with(&output.module, &options.verify, context) {
+                    Ok(_) => match ir::low::lower_cleanup(output.module, &ir::low::LowOptions::default()) {
+                        Ok(module) => {
+                            let catalog = OwnP1Contracts::new(&module);
+                            let context = ir::verify::VerifyContext {
+                                text_locations: None, external_contracts: &catalog,
+                            };
+                            match ir::verify::verify_with(&module, &options.verify, context) {
+                                Ok(_) => ("beyond", None),
+                                Err(error) => ("low", Some(format!("verify_low: {error:#?}"))),
+                            }
+                        },
+                        Err(error) => ("low", Some(format!("{error:#?}"))),
+                    },
+                    Err(error) => {
+                        assert_eq!(error.failure, ir::verify::VerifyFailure::Incomplete, "{name}: {error:#?}");
+                        assert!(error.diagnostics.iter().all(|diagnostic| diagnostic.rule == ir::verify::RuleId::B51),
+                            "{name}: {error:#?}");
+                        assert!(error.stats.memory_bytes > options.verify.limits.memory_bytes * 15 / 16,
+                            "{name}: {error:#?}");
+                        ("verify_own", Some(format!("{error:#?}")))
+                    },
+                }
             },
             Err(error) => ("own", Some(format!("{error:#?}"))),
         };
-        if let Some(error) = &error {
-            let expected = if name == "successor-staging" {
-                "failure operand has no reaching definition"
-            } else {
-                "call output packet has no lexical owner"
-            };
-            assert_eq!(stage, "own", "{name}: {error}");
-            assert!(error.contains(expected), "{name}: unexpected stop: {error}");
-        }
+        eprintln!("{name}: {stage}");
         rows.push(format!("{name}\t{stage}\t{}\t{}\t{}\t{error:?}\n",
             flow.stats.peak_auxiliary_bytes, flow.stats.charged_work, flow.equations.nodes.len()));
     }
-    assert_eq!(rows.len(), 25);
+    if std::env::var_os("OKKAMA_P1_OWN_ONLY").is_none() {
+        assert_eq!(rows.len(), 25);
+    }
     let report = rows.concat();
     if let Some(path) = std::env::var_os("OKKAMA_P1_OWN_FOLLOWUP_REPORT") {
         std::fs::write(path, &report).unwrap();
     }
     eprintln!("{report}");
-    // Known later stops are asserted above. Reaching output requires independent verification;
-    // earlier array/memory regressions cannot silently replace a recorded stop.
+    // These are stops, not successful verification certificates. Keep them
+    // explicit so a regression back into own cannot be recorded as a pass.
+    for row in &rows {
+        let mut fields = row.split('\t');
+        let name = fields.next().unwrap();
+        let stage = fields.next().unwrap();
+        match name {
+            "direct-singleton" | "panic-unwind" | "secondary-failures" => {
+                assert!(matches!(stage, "low" | "beyond"), "{row}");
+            }
+            _ => assert_eq!(stage, "verify_own", "{row}"),
+        }
+        if stage == "verify_own" {
+            assert!(row.contains("failure: Incomplete"), "{row}");
+            assert!(!row.contains("function: None"), "{row}");
+        }
+    }
+}
+
+#[test]
+fn oir2_own_plain_call_packet_golden() {
+    own_regression_golden("own-plain-call-packet", concat!(
+        "module app; import \"encoding/utf\" take Utf8Encoded; ",
+        "main() is int { Utf8Encoded(origin: \"\").bytes(); 0; }",
+    ));
+}
+
+#[test]
+fn oir2_own_throw_live_golden() {
+    own_regression_golden("own-throw-live", concat!(
+        "module app; enum Stop is Error = (now); ",
+        "object O { has n is int = 0; O(); ",
+        "staged() is ^O { try { ^n = 1; throw Stop.now; } catch e is Stop {} } } ",
+        "main() is int { let o = O(); o = o.staged(); 0; }",
+    ));
+}
+
+fn own_regression_golden(name: &str, source: &str) {
+    let module = lower_std(source).unwrap();
+    verify_high(&module, source);
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lowering/oir2/own-goldens");
+    let high_path = directory.join(format!("{name}.high.oir"));
+    let high = ir::text::print(&module).unwrap();
+    assert_eq!(high, std::fs::read_to_string(high_path).unwrap());
+    let catalog = super::native_summaries::P1NativeSummaries::for_module(&module).unwrap();
+    let options = ir::own::OwnOptions::default();
+    let inferred = ir::own::elaborate_ownership(module, &catalog, &options).unwrap();
+    let output = ir::own::rewrite_subset(inferred, &options).unwrap();
+    let catalog = OwnP1Contracts::new(&output.module);
+    ir::verify::verify_with(&output.module, &options.verify,
+        ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog }).unwrap();
+    let actual = ir::text::print(&output.module).unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/lowering/oir2/own-goldens").join(format!("{name}.oir"));
+    assert_eq!(actual, std::fs::read_to_string(path).unwrap());
+    let parsed = ir::text::parse(&actual).unwrap();
+    assert_eq!(ir::text::print(&parsed).unwrap(), actual);
+    let catalog = OwnP1Contracts::new(&parsed);
+    ir::verify::verify_with(&parsed, &options.verify,
+        ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog }).unwrap();
+}
+
+// The finite backend contracts stay authoritative. Rebuild only their service
+// ABI for the current module's TypeIds, including after canonical text parsing.
+struct OwnP1Contracts {
+    high: super::native_summaries::P1NativeSummaries,
+    natives: std::collections::BTreeMap<String, ir::Signature>,
+    intrinsics: std::collections::BTreeMap<String, ir::Signature>,
+}
+
+impl OwnP1Contracts {
+    fn new(module: &ir::Module) -> Self {
+        use ir::verify::ExternalContracts;
+        let mut high = module.clone();
+        for (_, function) in high.functions.iter_mut() {
+            if function.body.is_some() {
+                continue;
+            }
+            function.signature.params.retain(|ty| !matches!(module.types.get(*ty), Ok(ir::Type::Service(_))));
+            function.signature.results.retain(|ty| !matches!(module.types.get(*ty), Ok(ir::Type::Service(_))));
+            function.signature.ownership_abi = ir::OwnershipAbi::Unelaborated;
+        }
+        let high = super::native_summaries::P1NativeSummaries::for_module(&high).unwrap();
+        let mut contracts = Self {
+            high, natives: Default::default(), intrinsics: Default::default(),
+        };
+        for (_, function) in module.functions.iter() {
+            for attr in &function.attrs {
+                let entries = match attr {
+                    ir::FunctionAttr::Extern(name) => Some((&mut contracts.natives, name)),
+                    ir::FunctionAttr::Intrinsic { name, .. } => Some((&mut contracts.intrinsics, name)),
+                    _ => None,
+                };
+                if let Some((entries, name)) = entries {
+                    let mut signature = function.signature.clone();
+                    signature.params.retain(|ty| !matches!(module.types.get(*ty), Ok(ir::Type::Service(_))));
+                    signature.results.retain(|ty| !matches!(module.types.get(*ty), Ok(ir::Type::Service(_))));
+                    let deps = module.types.iter().find_map(|(id, ty)| {
+                        matches!(ty, ir::Type::Service(ir::ServiceType::Deps)).then_some(id)
+                    });
+                    let managed = signature.params.iter().filter(|ty| {
+                        matches!(module.types.get(**ty), Ok(ir::Type::Object { decl, .. })
+                            if module.declarations.get(*decl).unwrap().name.starts_with("async.atomic.Atomic_"))
+                            || matches!(module.types.get(**ty), Ok(ir::Type::Role { .. }))
+                    }).count();
+                    if managed != 0 {
+                        let deps = deps.expect("managed boundary parameter requires deps");
+                        signature.params.extend(std::iter::repeat_n(deps, managed));
+                    }
+                    let summary = match attr {
+                        ir::FunctionAttr::Extern(_) => contracts.high.native_summary(name).unwrap(),
+                        _ => contracts.high.intrinsic_summary(name).unwrap(),
+                    };
+                    if summary.entry_kind == ir::EntryKind::ObservationAdmissionStaysCaller {
+                        signature.ownership_abi = ir::OwnershipAbi::Observation;
+                    } else {
+                        let input_packet = u16::try_from(signature.params.len()).unwrap();
+                        let output_packet = u16::try_from(signature.results.len()).unwrap();
+                        let own = module.types.iter().find_map(|(id, ty)| {
+                            matches!(ty, ir::Type::Service(ir::ServiceType::Own)).then_some(id)
+                        }).unwrap();
+                        signature.params.push(own);
+                        signature.results.push(own);
+                        signature.ownership_abi = ir::OwnershipAbi::Explicit { input_packet, output_packet };
+                    }
+                    entries.insert(name.clone(), signature);
+                }
+            }
+        }
+        contracts
+    }
+}
+
+impl ir::verify::ExternalContracts for OwnP1Contracts {
+    fn native(&self, name: &str) -> Option<&ir::Signature> {
+        self.natives.get(name)
+    }
+    fn intrinsic(&self, name: &str) -> Option<&ir::Signature> {
+        self.intrinsics.get(name)
+    }
+    fn native_summary(&self, name: &str) -> Option<&ir::Summary> {
+        self.high.native_summary(name)
+    }
+    fn intrinsic_summary(&self, name: &str) -> Option<&ir::Summary> {
+        self.high.intrinsic_summary(name)
+    }
 }

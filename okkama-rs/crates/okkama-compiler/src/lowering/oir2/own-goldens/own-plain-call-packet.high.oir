@@ -1,0 +1,63 @@
+oir 2 high
+module app
+requires core
+entry @main
+
+object encoding.utf.Utf8Encoded {
+    field origin: str
+}
+scope S0 action in @main
+scope S1 action in @encoding.utf.Utf8Encoded.bytes#0
+scope S2 action in @encoding.utf.Utf8Encoded.new#0
+summary M0 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[array<byte>], failures=[native], publication=atomic)
+
+func @main() -> int [entry] {
+    boundary B0 lexical in S0
+    ^b0 in S0 unwind ^b1:
+    %0: str = const ""
+    [i1] %1: encoding.utf.Utf8Encoded = call @encoding.utf.Utf8Encoded.new#0(%0)
+    [i2] %2: array<byte> = call @encoding.utf.Utf8Encoded.bytes#0(%1)
+    discard %2
+    %3: int = const 0
+    want %3
+    [i6] exit.prepare return %3 at B0
+    result.exit edge normal(0), value %2, demand discard, prepare none
+    result.exit edge normal(0), value %3, demand want, prepare #6
+    high.effects at #1 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #2 failures [thrown, program, panic, native, cancelled], suspends true
+    ret %3
+    ^b1(%4: failure) in S0:
+    raise %4
+}
+
+func @encoding.utf.Utf8Encoded.new#0(%0: str) -> encoding.utf.Utf8Encoded [ctor encoding.utf.Utf8Encoded] {
+    binding b0 "origin": str in S2
+    boundary B0 lexical in S2
+    ^b0 in S2 unwind ^b1:
+    %1: str = undef ty str
+    bind %0, binding b0
+    stage %0, action S2, field field_ref(declaration=encoding.utf.Utf8Encoded, index=0)
+    %2: encoding.utf.Utf8Encoded = obj.new encoding.utf.Utf8Encoded { origin: %0 }
+    want %2
+    [i5] exit.prepare return %2 at B0
+    result.exit edge normal(0), value %2, demand want, prepare #5
+    ret %2
+    ^b1(%3: failure) in S2:
+    raise %3
+}
+
+func @encoding.utf.Utf8Encoded.bytes#0(%0: encoding.utf.Utf8Encoded) -> array<byte> [method encoding.utf.Utf8Encoded] {
+    boundary B0 lexical in S1
+    ^b0 in S1 unwind ^b1:
+    %1: str = obj.get %0, origin
+    [i1] %2: array<byte> = call.native @runtime.utf.v1::utf8_encode.1(%1)
+    want %2
+    [i3] exit.prepare return %2 at B0
+    result.exit edge normal(0), value %2, demand want, prepare #3
+    high.effects at #1 failures [native], suspends false
+    ret %2
+    ^b1(%3: failure) in S1:
+    raise %3
+}
+
+extern @runtime.utf.v1::utf8_encode.1(%arg0: str) -> array<byte> summary(M0) = "runtime/utf@1::utf8_encode/1"

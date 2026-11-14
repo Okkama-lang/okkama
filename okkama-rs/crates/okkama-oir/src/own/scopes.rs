@@ -265,6 +265,43 @@ pub(super) fn inventory(
             facts.service_protocols.insert(schedule.protocol);
         }
     }
+    // A retained callee root uses the explicit packet ABI even when its
+    // language result is plain or void. Its caller must consume that output;
+    // the absence of a managed result does not erase the linear packet.
+    loop {
+        let mut changed = false;
+        for (_, function) in module.functions.iter() {
+            let Some(body) = &function.body else {
+                continue;
+            };
+            for (_, block) in body.blocks.iter() {
+                for instruction in &block.insts {
+                    budget.work(1)?;
+                    let op = &body.insts.get(*instruction).map_err(arena)?.op;
+                    let Operation::Call(CallOp::Direct { function: target, .. }) = op else {
+                        continue;
+                    };
+                    let callee = module.functions.get(*target).map_err(arena)?;
+                    let Some(callee_body) = &callee.body else {
+                        continue;
+                    };
+                    if module.entry == Some(*target)
+                        || callee.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Destroy(_))) {
+                        continue;
+                    }
+                    let root = callee_body.blocks.get(callee_body.entry).map_err(arena)?.lexical_scope;
+                    let facts = &scopes[&root];
+                    if !facts.blockers.is_empty() || !facts.potential_owned_types.is_empty() {
+                        changed |= scopes.get_mut(&block.lexical_scope).unwrap().blockers
+                            .insert(ElisionBlocker::ExplicitTransport);
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
     // Until commit 2 partitions packet equations, explicit packet/reserve
     // transport uses the complete function inventory. This includes obligations
     // no longer reachable from a current SSA reference and closed-inner reserve.
