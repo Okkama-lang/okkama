@@ -49,6 +49,14 @@ fn returns(module: &ir::Module, function: ir::FuncId) -> Result<Vec<ir::ValueId>
     }).collect())
 }
 
+fn cap_target(module: &ir::Module, field: ir::FieldRef) -> Result<ir::FuncId> {
+    let ir::DeclarationKind::Cap { fields, .. } = &module.declarations.get(field.declaration)?.kind else {
+        return Err(LowerError::invalid(Span::default(), "computed call without cap declaration"));
+    };
+    fields.get(field.index as usize).map(|field| field.function)
+        .ok_or_else(|| LowerError::invalid(Span::default(), "computed call field index"))
+}
+
 pub(super) fn check(module: &ir::Module, spans: &CallSpans) -> Result<()> {
     if spans.is_empty() {
         return Ok(());
@@ -112,6 +120,12 @@ pub(super) fn check(module: &ir::Module, spans: &CallSpans) -> Result<()> {
                         }
                     }
                     ir::Operation::Call(ir::CallOp::Closure { .. }) => {}
+                    ir::Operation::Call(ir::CallOp::Cap { field, .. }) => {
+                        let target = cap_target(module, *field)?;
+                        for source in returns(module, target)? {
+                            copies.push(((target, source), (function, value)));
+                        }
+                    }
                     _ => origins.open = true,
                 }
             }
@@ -190,6 +204,9 @@ pub(super) fn check(module: &ir::Module, spans: &CallSpans) -> Result<()> {
                         }
                     }
                 }
+                ir::Operation::Call(ir::CallOp::Cap { field, .. }) => {
+                    supplied.insert(cap_target(module, *field)?);
+                }
                 ir::Operation::Core(ir::CoreOp::FnClosure { function: target, captures, .. }) => {
                     supplied.insert(*target);
                     for (&source, dest) in captures.iter().zip(entry(module, *target)?) {
@@ -226,10 +243,16 @@ pub(super) fn check(module: &ir::Module, spans: &CallSpans) -> Result<()> {
     // Uncalled ordinary declarations still require checking; explicit inputs have no known caller.
     // An implicit receiver comes from this closed module's construction sites, rather than a
     // separate external input for every unused method in a concrete witness inventory.
+    let computed: HashSet<_> = module.declarations.iter().flat_map(|(_, declaration)| {
+        match &declaration.kind {
+            ir::DeclarationKind::Cap { fields, .. } => fields.iter().map(|field| field.function).collect(),
+            _ => vec![],
+        }
+    }).collect();
     for (function, data) in module.functions.iter() {
         let lambda = data.attrs.iter().any(|attr| matches!(attr, ir::FunctionAttr::Lambda { .. }));
         if !supplied.contains(&function) && !lambda {
-            let receiver = usize::from(data.attrs.iter().any(|attr| matches!(attr,
+            let receiver = usize::from(computed.contains(&function) || data.attrs.iter().any(|attr| matches!(attr,
                 ir::FunctionAttr::Method(_) | ir::FunctionAttr::Successor(_) | ir::FunctionAttr::Destroy(_))));
             for param in entry(module, function)?.into_iter().skip(receiver) {
                 if let Some(origins) = facts.get_mut(&(function, param)) {
@@ -312,6 +335,11 @@ fn unknown_fields(module: &ir::Module, ty: ir::TypeId, seen: &mut HashSet<ir::Ty
         return Ok(());
     }
     match module.types.get(ty)? {
+        ir::Type::Cap { decl, .. } => {
+            if let ir::DeclarationKind::Cap { owner, .. } = &module.declarations.get(*decl)?.kind {
+                unknown_fields(module, *owner, seen, fields)?;
+            }
+        }
         ir::Type::Object { decl, .. } => {
             if let ir::DeclarationKind::Object { fields: layout, .. } = &module.declarations.get(*decl)?.kind {
                 for (index, field) in layout.iter().enumerate() {

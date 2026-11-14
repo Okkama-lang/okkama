@@ -65,9 +65,9 @@ D11 result demand, D8 prepare/exit, H5 unwind и реальные locations. Own
 | `BoundAction` | `fn.bind receiver, @method, ty fn` | `p2_4/bound-{snapshot,fresh,pending}` C4 |
 | `BoundRoleAction` | `fn.bind.role receiver, role R, slot N` | `p2_4/bound-role-{overload,generic}` C4 |
 | `CallValue` | `fn.call callable(args)` | `p2_4/call-{known,join,loop,open,late-failure}` C3 |
-| `CapSelect` | `cap.make owner, ty Cap` | `p2_4/cap-{hidden,external,generic,snapshot}` C5 |
-| `CapRead` | `call.cap cap, field_ref(decl,index)()` | `p2_4/cap-{parameter,recompute,result-view}` C5 |
-| `OwnerField` | `obj.get owner0, field` | `p2_4/cap-owner-field` C5 |
+| `CapSelect` | `cap.make owner, ty Cap` | `p2_4/caps/cap-{hidden,external-internal,generic,snapshot}` C5 High; `coverage/c5-caps.md` |
+| `CapRead` | `call.cap cap, field_ref(decl,index)()` | `p2_4/caps/cap-{call,parameter,recompute,field,generic-transport,body}` C5 High |
+| `OwnerField` | `obj.get owner0, field` | `p2_4/caps/cap-external-internal` C5 High |
 | `Coercion::Box` | `any.box value, ty any` | `p2_4/any-{plain,resource,boundary,nested}` C6 |
 | `BodyOwner::Test` | `Module.tests`, `Feature::Test`, `() -> void` body | `p2_4/test-{roots,names,empty}` C8 |
 | `Callee::Test` | `test.ok/is/isnt/fail`; typed intrinsics | `p2_4/test-{assertions,skip,successor}` C8 |

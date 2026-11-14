@@ -113,7 +113,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
         let layout = lambda.map(|lambda| lambda.source.captures.clone()).unwrap_or_default();
         let captured_receiver = layout.iter().any(|capture| capture.source == super::callables::Snapshot::Receiver);
         let receiver = usize::from(this.context.deferred.unwrap_or(captured_receiver || matches!(source.owner,
-            thir::BodyOwner::Method { .. } | thir::BodyOwner::Destroy { .. })));
+            thir::BodyOwner::Method { .. } | thir::BodyOwner::Destroy { .. } | thir::BodyOwner::CapField { .. })));
         if receiver == 1 {
             this.receiver = params.first().copied();
         }
@@ -528,6 +528,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
         use thir::ExprKind as E;
         let result_ty = expr.ty.as_ref().filter(|ty| **ty != Ty::Never);
         match &expr.kind {
+            E::CapSelect { .. } | E::CapRead { .. } => self.cap_expr(expr),
             E::BoundAction { .. } | E::BoundRoleAction { .. } => self.bound(expr),
             E::Closure { .. } => self.anonymous(expr),
             E::CallValue { .. } => self.invoke_anonymous(expr),
@@ -542,7 +543,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             }
             E::Local(local) => Ok(self.env[local.0]),
             E::SelfValue => self.self_value().map(Some),
-            E::Field(field) => self.read_field(*field).map(Some),
+            E::Field(field) | E::OwnerField(field) => self.read_field(*field).map(Some),
             E::PendingField(field) => self.pending_field(*field).map(Some),
             E::VariantNew { case, values } => {
                 let ty = self.ty(expr.ty.as_ref().expect("typed variant"), expr.span)?;

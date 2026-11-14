@@ -23,7 +23,7 @@ impl BodyLowerer<'_, '_> {
     fn declaration(&self) -> Result<ir::DeclId> {
         let object = match self.context.key.root {
             thir::BodyOwner::Ctor { object, .. } | thir::BodyOwner::Method { object, .. }
-            | thir::BodyOwner::Destroy { object } => object,
+            | thir::BodyOwner::Destroy { object } | thir::BodyOwner::CapField { object, .. } => object,
             _ => return Err(LowerError::invalid(self.source.span, "object operation without an owner")),
         };
         Ok(self.context.objects[&object])
@@ -218,7 +218,6 @@ impl BodyLowerer<'_, '_> {
             args, packet: None, deps: vec![], descriptors: vec![], type_args: vec![], summary,
             cleanup: ir::CallCleanupMode::Ordinary,
         };
-        self.sync_failure()?;
         let op = if native {
             ir::CallOp::Native { function, call }
         } else if intrinsic {
@@ -226,6 +225,12 @@ impl BodyLowerer<'_, '_> {
         } else {
             ir::CallOp::Direct { function, call }
         };
+        self.emit_high_call(op, summary)
+    }
+
+    pub(super) fn emit_high_call(&mut self, op: ir::CallOp, summary: Option<ir::SummaryId>)
+        -> Result<Option<ir::ValueId>> {
+        self.sync_failure()?;
         let values = self.b.emit_schema(ir::Operation::Call(op))?;
         let block = self.current.expect("open call block");
         let instruction = *self.b.body().blocks.get(block)?.insts.last().expect("emitted call");

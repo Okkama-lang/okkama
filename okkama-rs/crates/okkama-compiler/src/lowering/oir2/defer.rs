@@ -72,7 +72,8 @@ impl super::declarations::Declarations {
             if receiver {
                 let object = match key.root {
                     thir::BodyOwner::Method { object, .. } | thir::BodyOwner::Ctor { object, .. }
-                    | thir::BodyOwner::Default { object, .. } | thir::BodyOwner::Destroy { object } => object,
+                    | thir::BodyOwner::Default { object, .. } | thir::BodyOwner::Destroy { object }
+                    | thir::BodyOwner::CapField { object, .. } => object,
                     _ => return Err(LowerError::unsupported(expr.span, "defer receiver without object owner")),
                 };
                 types.push(self.types[&Ty::object(object)]);

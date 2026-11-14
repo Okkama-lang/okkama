@@ -1,0 +1,19 @@
+module app;
+object Owner<T> {
+    has value is T;
+    Owner(:value);
+    cap View {
+        item is T { value; }
+    }
+}
+object Box<T> {
+    has item is T;
+    Box(:item);
+    echo(value is T) is T { value; }
+    get() is T { item; }
+}
+main() is int {
+    let view = Owner(value: 4)::View;
+    let box = Box(item: view);
+    box.echo(box.get())::item;
+}

@@ -65,8 +65,8 @@ impl Declarations {
             let Some(decl) = object.decl else {
                 continue;
             };
-            if !object.params.is_empty() || !object.caps.is_empty() {
-                return Err(LowerError::unsupported(decl.span, "generic object, capability or role witness"));
+            if !object.params.is_empty() {
+                return Err(LowerError::unsupported(decl.span, "generic object"));
             }
             let id = this.builder.declare(ir::Declaration {
                 name: if object.name.contains('<') {
@@ -87,6 +87,7 @@ impl Declarations {
             let successor = this.builder.intern_type(ir::Type::Successor(lowered))?;
             this.types.insert(ty::Ty::Successor(Box::new(ty::Ty::object(ty::ObjectId(index)))), successor);
         }
+        this.reserve_caps(analysis)?;
         for (index, role) in reg.roles.iter().enumerate() {
             if role.decl.is_none() || !role.params.is_empty() {
                 continue;
@@ -173,6 +174,9 @@ impl Declarations {
                 continue;
             }
             requested.extend(object.fields.iter().map(|field| (field.ty.clone(), field.span)));
+            for cap in &object.caps {
+                requested.extend(cap.fields.iter().map(|(_, ty, _)| (ty.clone(), cap.span)));
+            }
             for (method_index, method) in object.methods.iter().enumerate() {
                 if !analysis.bodies.iter().any(|body| body.owner == thir::BodyOwner::Method {
                     object: ty::ObjectId(index), method: method_index,
@@ -343,6 +347,16 @@ impl Declarations {
                     let name = &this.builder.module().declarations.get(decl)?.name;
                     (format!("{name}.destroy"), vec![ir::FunctionAttr::Destroy(decl)], None)
                 }
+                thir::BodyOwner::CapField { object, cap, field } => {
+                    let info = &reg.objects[object.0];
+                    let decl = this.objects[&object];
+                    let name = &this.builder.module().declarations.get(decl)?.name;
+                    let capability = &info.caps[cap];
+                    let (field_name, result, _) = &capability.fields[field];
+                    let symbol = format!("{name}.cap.{}.{field_name}#{field}", capability.name);
+                    params.push(this.ty(&ty::Ty::object(object), body.span)?);
+                    (symbol, vec![], Some(result.clone()))
+                }
                 _ => return Err(LowerError::unsupported(body.span, "test, closure or capability body")),
             };
             let shorthand = match body.owner {
@@ -441,6 +455,7 @@ impl Declarations {
                 this.ctor_fields.insert(function, given);
             }
         }
+        this.define_caps(analysis)?;
         let mut object_ids: Vec<_> = this.objects.iter().map(|(&object, &decl)| (object, decl)).collect();
         object_ids.sort_by_key(|(object, _)| *object);
         for (object, decl) in object_ids {
