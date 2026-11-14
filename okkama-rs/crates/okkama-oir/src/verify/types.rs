@@ -882,8 +882,12 @@ fn terminator<'a>(
                             .and_then(|index| u16::try_from(index).ok()).map(Outcome::DeferReplace),
                     };
                     if let Some(outcome) = outcome {
-                        let slots = ContractRegistry::new(module).defer_results(function, outcome)
+                        let mut slots = ContractRegistry::new(module).defer_results(function, outcome)
                             .map_err(|_| TypeCheckError)?;
+                        // High D8 carries only the language result (H2); own adds packet/deps.
+                        if module.profile == Profile::High {
+                            slots.retain(|slot| !matches!(slot.ty, ResultType::Service(_)));
+                        }
                         checker.require(values.len() == slots.len(), "tagged defer return arity mismatch");
                         for (value, slot) in values.iter().zip(slots) {
                             let actual = value_type(body, *value)?;

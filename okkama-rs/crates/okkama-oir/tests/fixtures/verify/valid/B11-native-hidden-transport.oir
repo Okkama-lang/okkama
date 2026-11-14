@@ -1,0 +1,15 @@
+oir 2 own
+// Spec §6.5: hidden ownership transport is independent of native language argument/result restrictions.
+module native_transport
+scope S action in @f
+summary MN call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
+        publication=atomic)
+summary MF internal contract call_contract(failures=[thrown, program, panic, native, cancelled], publication=atomic)
+func @n(%input: own) -> (int, own) [extern "fixture.scalar"] abi explicit(input_packet=0, output_packet=1) summary(MN);
+func @f() -> void summary(MF) {
+    boundary B0 call in S
+    ^entry in S:
+    (%value: int, %packet: own, %deps: deps) = call.native @n(; own.empty) summary(MN)
+    %closed: closed = end %packet, boundary B0
+    ret
+}

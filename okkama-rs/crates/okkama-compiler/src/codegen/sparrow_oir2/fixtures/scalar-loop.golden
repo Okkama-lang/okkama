@@ -1,0 +1,11 @@
+0: Data { op: Const, inputs: [], output: Some(1), immediate: Constant(Int("0")) }
+1: Data { op: Const, inputs: [], output: Some(2), immediate: Constant(Int("1")) }
+2: br @3 [r3<-r1, r4<-r1]
+3: Data { op: IntLt, inputs: [3, 0], output: Some(5), immediate: None }
+4: cond r5
+  yes @5 []
+  no @8 [r8<-r4]
+5: Data { op: IntAdd, inputs: [3, 2], output: Some(6), immediate: None }
+6: Data { op: IntAdd, inputs: [4, 3], output: Some(7), immediate: None }
+7: br @3 [r3<-r6, r4<-r7]
+8: Ret([8])

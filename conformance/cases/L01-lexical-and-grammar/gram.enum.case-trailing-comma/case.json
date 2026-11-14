@@ -1,0 +1,40 @@
+{
+  "schema": "ocs-case/2",
+  "id": "L01.gram.enum.case-trailing-comma",
+  "title": "enum case lists accept a trailing comma",
+  "purpose": "Syntax acceptance of the construct.",
+  "level": "L01",
+  "contracts": [
+    {
+      "contract": "GRAM.ENUM-DECL",
+      "aspects": [
+        "boundary"
+      ]
+    },
+    {
+      "contract": "GRAM.TRAILING-COMMA",
+      "aspects": [
+        "normal"
+      ]
+    }
+  ],
+  "mode": "parse",
+  "sources": [
+    "main.ok"
+  ],
+  "entry": "main.ok",
+  "expect": {
+    "outcome": "success"
+  },
+  "spec_refs": [
+    "docs/okkama-grammar-1.0.ebnf"
+  ],
+  "budget": {
+    "timeout_s": 30
+  },
+  "provenance": {
+    "origin": "authored for #594 from the grammar text",
+    "expected_basis": "grammar: enum_cases = enum_case (\",\" enum_case)* trailing_comma?."
+  },
+  "status": "mandatory"
+}

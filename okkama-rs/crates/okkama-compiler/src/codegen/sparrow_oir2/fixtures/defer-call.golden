@@ -1,0 +1,242 @@
+caller Owned
+registers [Int, Int, Failure]
+services [Packet, Deps, Packet, Packet, Deps, Packet, Deps, Packet]
+0: Champ {
+    op: InvokeDefer,
+    arguments: [
+        Entry(
+            1,
+        ),
+        Summary(
+            0,
+        ),
+        Registration(
+            0,
+        ),
+        Location(
+            Register(
+                0,
+            ),
+        ),
+        Location(
+            Service(
+                0,
+            ),
+        ),
+        Location(
+            Service(
+                1,
+            ),
+        ),
+    ],
+    flow: Outcomes(
+        [
+            Outcome {
+                tag: Continue,
+                edge: Edge {
+                    target_pc: 1,
+                    assignments: [],
+                },
+            },
+            Outcome {
+                tag: Replace(
+                    0,
+                ),
+                edge: Edge {
+                    target_pc: 3,
+                    assignments: [
+                        Assignment {
+                            destination: Register(
+                                1,
+                            ),
+                            source: ProducedSlot(
+                                0,
+                            ),
+                        },
+                        Assignment {
+                            destination: Service(
+                                3,
+                            ),
+                            source: ProducedSlot(
+                                1,
+                            ),
+                        },
+                        Assignment {
+                            destination: Service(
+                                4,
+                            ),
+                            source: ProducedSlot(
+                                2,
+                            ),
+                        },
+                    ],
+                },
+            },
+            Outcome {
+                tag: Replace(
+                    1,
+                ),
+                edge: Edge {
+                    target_pc: 4,
+                    assignments: [
+                        Assignment {
+                            destination: Service(
+                                5,
+                            ),
+                            source: ProducedSlot(
+                                0,
+                            ),
+                        },
+                        Assignment {
+                            destination: Service(
+                                6,
+                            ),
+                            source: ProducedSlot(
+                                1,
+                            ),
+                        },
+                    ],
+                },
+            },
+            Outcome {
+                tag: Unwind,
+                edge: Edge {
+                    target_pc: 5,
+                    assignments: [
+                        Assignment {
+                            destination: Register(
+                                2,
+                            ),
+                            source: ProducedSlot(
+                                0,
+                            ),
+                        },
+                    ],
+                },
+            },
+        ],
+    ),
+}
+1: Champ {
+    op: OwnEmpty,
+    arguments: [],
+    flow: Next(
+        [
+            Service(
+                2,
+            ),
+        ],
+    ),
+}
+2: Champ {
+    op: RetOwn,
+    arguments: [
+        Location(
+            Service(
+                2,
+            ),
+        ),
+        Location(
+            Service(
+                1,
+            ),
+        ),
+    ],
+    flow: Next(
+        [],
+    ),
+}
+3: Champ {
+    op: RetOwn,
+    arguments: [
+        Location(
+            Service(
+                3,
+            ),
+        ),
+        Location(
+            Service(
+                4,
+            ),
+        ),
+    ],
+    flow: Next(
+        [],
+    ),
+}
+4: Champ {
+    op: RetOwn,
+    arguments: [
+        Location(
+            Service(
+                5,
+            ),
+        ),
+        Location(
+            Service(
+                6,
+            ),
+        ),
+    ],
+    flow: Next(
+        [],
+    ),
+}
+5: Champ {
+    op: OwnEmpty,
+    arguments: [],
+    flow: Next(
+        [
+            Service(
+                7,
+            ),
+        ],
+    ),
+}
+6: Champ {
+    op: RetOwn,
+    arguments: [
+        Location(
+            Service(
+                7,
+            ),
+        ),
+        Location(
+            Service(
+                1,
+            ),
+        ),
+    ],
+    flow: Next(
+        [],
+    ),
+}
+deferred Defer { labels: [DeferLabel { label: 0, result: Some(Int) }, DeferLabel { label: 1, result: None }] }
+registers [Int]
+services [Packet, Deps]
+0: Champ {
+    op: RetDefer,
+    arguments: [
+        Label(
+            0,
+        ),
+        Location(
+            Register(
+                0,
+            ),
+        ),
+        Location(
+            Service(
+                0,
+            ),
+        ),
+        Location(
+            Service(
+                1,
+            ),
+        ),
+    ],
+    flow: Next(
+        [],
+    ),
+}

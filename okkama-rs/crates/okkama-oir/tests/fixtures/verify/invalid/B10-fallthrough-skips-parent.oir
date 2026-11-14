@@ -1,0 +1,33 @@
+oir 2 own
+// expect OIR2-B10.1 instruction:0:8
+// W3: the value of SI falls through past its still-open parent SM straight into S.
+module fallthrough_skips_parent
+scope S action in @f
+scope SM block in @f parent S
+scope SI block in @f parent SM
+summary M0 internal contract call_contract(publication=atomic)
+func @f() -> void summary(M0) {
+    boundary BI lexical in SI
+    selection sEmpty: selection = union([])
+    ^entry in S:
+    %outer: scope<S> = scope.begin S
+    br ^middle
+    ^middle in SM:
+    %mid: scope<SM> = scope.begin SM
+    br ^inner
+    ^inner in SI:
+    %q: scope<SI> = scope.begin SI
+    %full: deps = deps.of 0
+    %p: pending = exit.prepare fallthrough packet own.empty, deps(%full) select sEmpty at BI
+    (%closed: closed, %reserved: pending) = scope.end %q, reserve %p, effects scope_effects(failures=[], suspends=false,
+        cancel=false)
+    br ^parent
+    ^parent in SM:
+    (%packet: own, %deps: deps) = exit.commit %reserved, destination scope(S)
+    %restored: scope<S> = own.admit %outer, %packet
+    %mclosed: closed = scope.end %mid, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^tail
+    ^tail in S:
+    %done: closed = scope.end %restored, effects scope_effects(failures=[], suspends=false, cancel=false)
+    ret
+}

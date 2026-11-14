@@ -33,6 +33,13 @@ pub(super) fn may_offer(
             for instruction in &block.insts {
                 budget.work(1)?;
                 let instruction = body.insts.get(*instruction).map_err(arena)?;
+                if let Operation::Core(CoreOp::ObjInit { object, field, .. }) = &instruction.op
+                    && module.declarations.get(field.declaration).is_ok_and(|declaration| {
+                        matches!(&declaration.kind, DeclarationKind::Object { fields, .. }
+                            if fields[field.index as usize].name == "$pending")
+                    }) {
+                    changed |= admit(body, types, &mut offered, *object, true)?;
+                }
                 let possible = operation(module, &instruction.op, &offered, external);
                 for value in &instruction.results {
                     changed |= admit(body, types, &mut offered, *value, possible)?;

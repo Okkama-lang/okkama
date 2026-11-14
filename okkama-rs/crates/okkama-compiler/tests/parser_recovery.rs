@@ -45,7 +45,7 @@ object Clean {{
     Clean(:b);
 }}
 
-enum Second = (one, two,);
+enum Second = (one, Two);
 
 main() is int {{ 0; }}
 "

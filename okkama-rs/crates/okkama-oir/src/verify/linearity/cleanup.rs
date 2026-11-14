@@ -54,6 +54,7 @@ impl Engine<'_, '_> {
                 fact.inventory.extend(incoming.iter().cloned());
                 fact.phase = 1;
                 fact.plan = None;
+                fact.aborted = true;
             } else { self.error(R::B101, "exit.abort needs a live cleanup automaton"); }
             if let Some(slot) = slots.first_mut() {
                 slot.token = token;
@@ -72,6 +73,7 @@ impl Engine<'_, '_> {
                 self.error(R::B104, "cleanup.begin dropped or substituted the active primary failure/Error");
             }
             let mut fact = CleanupFact {
+                aborted: false,
                 // G1 P1 carries D9 shielding in begin; general suspending/cancellation cleanup
                 // retains the explicit shield transition checked by the coroutine automaton.
                 phase: 0,
@@ -334,6 +336,7 @@ impl Engine<'_, '_> {
                 flow.active_failure_origin = fact.failure_origin;
                 fact.phase = 1;
                 fact.plan = None;
+                fact.aborted = true;
                 token.pieces.extend(fact.reserve.iter().cloned());
                 fact.reserve.clear();
                 fact.pending = false;
@@ -528,7 +531,11 @@ impl Engine<'_, '_> {
                 }
                 self.body.blocks.get(block).ok()
                 .and_then(|block| if let TermKind::InvokeOwn { normal, .. } = &block.term.kind {
-                    self.body.blocks.get(normal.block).ok().map(|block| block.params.clone())
+                    self.body.blocks.get(normal.block).ok().map(|target| {
+                        target.params.iter().zip(&normal.args).filter_map(|(value, arg)| {
+                            matches!(arg, EdgeArg::Produced(_)).then_some(*value)
+                        }).collect()
+                    })
                 } else { None }).unwrap_or_default()
             }
             _ => Vec::new(),
@@ -561,6 +568,15 @@ impl Engine<'_, '_> {
         };
         if plan.close != fact.close {
             self.error(R::B102, "cleanup plan belongs to a different close");
+        }
+        // G1 rev 2 §§6.3–6.6: an explicit abort contributes the entire reserve just like begin's reserve.
+        let mut sources = vec![match close.source {
+            CleanupSource::Scope(_) => MergeSource::ScopeInventory,
+            CleanupSource::Packet(_) => MergeSource::PacketInventory,
+        }];
+        if close.reserve || fact.aborted { sources.push(MergeSource::WholeReserveOnFailure); }
+        if plan.sources != sources || fact.aborted && plan.direct.is_some() {
+            self.error(R::B101, "plan must cover the whole explicitly aborted reserve through merge");
         }
         let envelope = &close.effects;
         if envelope.cancel {

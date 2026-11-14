@@ -124,6 +124,19 @@ fake fields; role fakes and their ordinary typed fields remain available.
   Constructs outside the slice get an explicit "unsupported" diagnostic
   rather than a fallback. Every lowering golden passes `verify_high`.
 
+- **OIR-2 ownership elaboration, synchronous part (#565).** A pass from
+  `high` to `own` makes ownership explicit for synchronous code. It covers:
+  - scope ends, call conventions and per-scope exits with the reserve;
+  - defer registration and replacement;
+  - successors and construction stages;
+  - partitions of accepted inputs.
+
+  Seventeen own goldens verify with `verify_own`. The pass changed some
+  verifier rules, so an independent audit checked them. It found three
+  rules that accepted a borrow outliving its owner. Each is now rejected,
+  and each has an invalid fixture that the earlier verifier accepted.
+  Closures, `any`, the dynamic fallback and async are still to come.
+
 - **OIR-2 cleanup specialization (#591).** A pass from `own` to `low`
   expands scope closes into an explicit cleanup automaton: one plan in
   serial order across static, journal and protocol entries, the reserve
@@ -131,6 +144,33 @@ fake fields; role fakes and their ordinary typed fields remain available.
   requirements at every boundary. A compiled direct plan is used only
   with checked order evidence, and only when cleanup cannot fail or the
   reserve is empty; otherwise the common runtime merge runs.
+
+- **Sparrow Champ: the new runtime, behind the cargo feature `champ-abi`
+  (#571, #572, #573).** Champ destroys every object exactly once without
+  identity tables. It is built as a candidate toolchain; the default build
+  and the CLI are unchanged.
+  - **Bytecode and loader (#571).** SPB 17 bytecode is emitted from OIR-2
+    `low`. Before anything runs, a load-time verifier checks:
+    - types, including pending values;
+    - linear services and cleanup phases;
+    - serial order and the direct-plan restriction;
+    - failure masks computed from bodies;
+    - root maps before and after helpers.
+
+    It compares the compiler's evidence and never repairs it. Every rule
+    has a negative test with a stable code.
+  - **Runtime (#572).** Object layouts with an identity tail only for
+    objects that have their own destroy. Packets, scopes, journals and
+    owned calls with one outcome channel. A common cleanup executor runs
+    the reserve and suffix merge and keeps failure links.
+  - **JIT (#573).** Cranelift lowering of every P1 operation with a shared
+    helper registry, precise stack maps, and the rule that a helper's
+    result words are written last and never kept in the map. Owning-entry
+    rejection settles the input exactly once. All cleanup runs within the
+    stack headroom.
+
+  All eleven reference programs run under the JIT, also with a collection
+  at every safepoint, and give the expected destroy order.
 
 - **Register-colouring diagnostics (#540).** `OKKAMA_PROFILE_REGISTERS=1`
   reports compiler phase times, busy-set cloning work, conflict-list capacity,
@@ -156,6 +196,20 @@ fake fields; role fakes and their ordinary typed fields remain available.
     engines (#561).
 
 ### Changed
+
+- **Enum declarations accept a trailing comma after the last case (#594).**
+  Parameter, argument and literal lists already accepted one. The case list
+  now follows the same rule (`enum_cases … trailing_comma?`), so an enum
+  written one case per line can end with a comma. `okkama fmt` treats the
+  case list like any other list:
+  - it stays on one line when it fits;
+  - it goes one case per line when the author broke it, wrote a trailing
+    comma, or it does not fit;
+  - a payload keeps its own trailing comma (before, the formatter dropped
+    it).
+
+  Anonymous action parameters still reject a trailing comma, as the
+  specification requires (§8.10.2).
 
 - **Faster Sparrow: the 0.6.0 perf wave.** Micro A/B against the previous
   0.6.0 state: geometric mean −7.0% over 69 benchmarks (Docker, fat LTO, five

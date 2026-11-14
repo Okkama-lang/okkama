@@ -84,6 +84,13 @@ pub(super) struct Universe {
     pub services: BTreeMap<TypeId, usize>,
     pub protocol_services: BTreeMap<ProtocolId, usize>,
     pub descriptors: BTreeMap<TypeId, Vec<DescriptorContract>>,
+    /// Frozen tagged result equations, separate from the ordinary void ABI.
+    replacements: BTreeMap<(FuncId, String), ResultRelation>,
+}
+
+struct BodyInference {
+    summary: Summary,
+    replacements: BTreeMap<String, ResultRelation>,
 }
 
 pub(super) fn bottom(module: &Module, function: &Function) -> Summary {
@@ -221,6 +228,7 @@ impl Universe {
         let mut universe = Self {
             nodes: vec![], calls: BTreeMap::new(), strides: BTreeMap::new(), inventories,
             services: BTreeMap::new(), protocol_services: BTreeMap::new(), descriptors: BTreeMap::new(),
+            replacements: BTreeMap::new(),
         };
         let result_bound = module.functions.iter().map(|(_, function)| function.signature.results.len())
             .max().unwrap_or(0).saturating_add(16);
@@ -230,6 +238,14 @@ impl Universe {
             let equation = if data.body.is_some() { Equation::Body(function) } else { Equation::External };
             budget.memory(normal::size(&summary) + 256)?;
             universe.nodes.push(Node { equation, summary, dependencies: BTreeSet::new() });
+            for attr in &data.attrs {
+                if let FunctionAttr::DeferEntry { replacements } = attr {
+                    for label in replacements {
+                        budget.memory(128 + label.label.len())?;
+                        universe.replacements.insert((function, label.label.clone()), normal::empty_relation());
+                    }
+                }
+            }
             if let Some(body) = &data.body {
                 let slots = body.values.len().saturating_add(result_bound);
                 universe.strides.insert(function, slots);
@@ -463,7 +479,7 @@ impl Universe {
         let components = components(&graph, budget)?;
         budget.stats.sccs = components.len();
         // With A canonical selections, C creation sites, P parameters and R
-        // results, each node has at most P*(A+P+2) + R*(C+A+P+1) + 7
+        // results (ordinary and D8 labels), each node has at most P*(A+P+2) + R*(C+A+P+1) + 7
         // strict lattice increases. A is finite (field paths of depth <= 4).
         // One nonfinal sweep makes an increase, so sum(height)+1 bounds SCC
         // sweeps. Work/memory limits may stop earlier, always without output.
@@ -478,7 +494,24 @@ impl Universe {
                     budget.stats.equation_evaluations += 1;
                     let inferred = match &self.nodes[index].equation {
                         Equation::External => continue,
-                        Equation::Body(function) => self.infer_body(module, *function, types, budget)?,
+                        Equation::Body(function) => {
+                            let function = *function;
+                            let inferred = self.infer_body(module, function, types, budget)?;
+                            for (label, relation) in inferred.replacements {
+                                let key = (function, label);
+                                let Some(previous) = self.replacements.get_mut(&key) else {
+                                    return Err(budget.fail(OwnDiagnosticKind::InvalidEquation,
+                                        "D8 tagged return has no declared replacement equation"));
+                                };
+                                let before = previous.clone();
+                                normal::relation(previous, &relation, budget)?;
+                                if *previous != before {
+                                    budget.memory(128 + previous.aliases.len() * 128 + previous.fresh.len() * 4)?;
+                                    changed = true;
+                                }
+                            }
+                            inferred.summary
+                        }
                         Equation::Dispatch { targets, captures } => {
                             let mut summary = adapt(&self.nodes[targets[0]].summary, *captures, budget)?;
                             for target in &targets[1..] {

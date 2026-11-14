@@ -795,3 +795,7 @@ fn native_lookup_receives_the_actual_substitution_before_the_universe_is_frozen(
     assert_eq!(catalog.seen.borrow().as_slice(), &[Substitution { types: vec![int], descriptors: vec![] }]);
     assert_eq!(output.stats.universe_nodes, 2);
 }
+
+mod machinery;
+
+mod synchronous;

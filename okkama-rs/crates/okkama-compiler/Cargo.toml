@@ -14,5 +14,9 @@ okkama-sparrow = { path = "../okkama-sparrow" }
 # Doc comments are a CommonMark subset (#512).
 pulldown-cmark = { version = "0.13", default-features = false }
 
+[dev-dependencies]
+# Compiler → verified SPB → runtime integration fixtures.
+sparrow-core = { path = "../sparrow-core" }
+
 [lints]
 workspace = true

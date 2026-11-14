@@ -23,6 +23,8 @@
 // the context as a raw pointer and are sound for the code that calls them.
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
+#[cfg(feature = "champ-abi")]
+pub mod champ;
 pub mod budget;
 mod code_memory;
 mod contracts;
@@ -63,7 +65,7 @@ pub fn run_with(bytes: Vec<u8>, arguments: Vec<Vec<u8>>) -> Result<i64, Error> {
 /// Everything loading checks before a program runs: the SPB verifier and
 /// the intrinsic contracts of the core (`sparrow check`).
 pub fn check(bytes: &[u8]) -> Result<(), Error> {
-    let program = okkama_sparrow::decode(bytes).map_err(|e| Error(e.to_string()))?;
+    let program = decode_runtime(bytes).map_err(|e| Error(e.to_string()))?;
     contracts::check(&program::Loaded::new(program))
 }
 
@@ -103,7 +105,7 @@ pub fn run_described(
     limits: budget::Limits,
 ) -> Result<Result<i64, (Error, Option<Uncaught>)>, Error> {
     on_vm_thread(move || {
-        let program = okkama_sparrow::decode(&bytes).map_err(|e| Error(e.to_string()))?;
+        let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
         let mut runtime = configured_runtime(program, arguments, stats, worker_command, limits)?;
         Ok(execute(&mut runtime).map_err(|failure| *failure))
     })
@@ -156,7 +158,7 @@ pub fn run_executable(
     options: ExecutionOptions,
 ) -> Result<Execution, ExecutionError> {
     on_vm_thread(move || {
-        let program = match okkama_sparrow::decode(&bytes) {
+        let program = match decode_runtime(&bytes) {
             Ok(program) => program,
             Err(error) => return Ok(Err(ExecutionError::Load(Error(error.to_string())))),
         };
@@ -321,7 +323,7 @@ pub fn run_reported(
 /// true when no test failed. Each test runs on a fresh runtime.
 pub fn run_tests(bytes: Vec<u8>, out: Box<dyn std::io::Write + Send>) -> Result<bool, Error> {
     on_vm_thread(move || {
-        let program = okkama_sparrow::decode(&bytes).map_err(|e| Error(e.to_string()))?;
+        let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
         test_program(program, out)
     })
 }
@@ -388,7 +390,7 @@ fn test_program(program: okkama_sparrow::Program, mut out: Box<dyn std::io::Writ
 #[doc(hidden)]
 pub fn run_worker(bytes: Vec<u8>, request: Vec<u8>, worker_command: Vec<std::ffi::OsString>) -> Result<Vec<u8>, Error> {
     on_vm_thread(move || {
-        let program = okkama_sparrow::decode(&bytes).map_err(|e| Error(e.to_string()))?;
+        let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
         let mut runtime = Box::new(runtime::Runtime::new(program::Loaded::new(program))?);
         runtime.worker_command = worker_command;
         Ok(worker::respond(&mut runtime, &request, STACK_BYTES))
@@ -434,3 +436,21 @@ impl std::fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+/// Until #572/#573 provide the candidate runtime, no public execution entry
+/// can accidentally load or execute an SPB 16 artifact with `champ-abi`.
+fn decode_runtime(bytes: &[u8]) -> Result<okkama_sparrow::Program, okkama_sparrow::CodecError> {
+    #[cfg(not(feature = "champ-abi"))]
+    {
+        okkama_sparrow::decode(bytes)
+    }
+    #[cfg(feature = "champ-abi")]
+    {
+        let program = okkama_sparrow::spb17::decode(bytes)?;
+        okkama_sparrow::spb17::verify_load(&program, &okkama_sparrow::spb17::NoExternalContracts)?;
+        Err(okkama_sparrow::CodecError {
+            offset: None,
+            message: "Champ runtime is not yet available: requires #572 and #573-P1".into(),
+        })
+    }
+}

@@ -410,6 +410,15 @@ fn run(args: &[String]) -> Outcome {
         return Outcome::failure(HELP.to_string(), EXIT_USAGE);
     };
     let rest = &args[1..];
+    if cfg!(feature = "champ-abi") && matches!(command.as_str(), "build" | "run" | "exec" | "ir") {
+        return Outcome::failure(
+            "Champ OIR-2 driver is not yet available: requires #572 and #573-P1\n".into(),
+            EXIT_DIAGNOSTICS,
+        );
+    }
+    if cfg!(feature = "champ-abi") && command.ends_with(".ok") {
+        return Outcome::failure("Champ driver requires #572 and #573-P1\n".into(), EXIT_DIAGNOSTICS);
+    }
     match command.as_str() {
         "-h" | "--help" => Outcome::success(HELP.to_string()),
         "help" => match rest.first().map(String::as_str) {
