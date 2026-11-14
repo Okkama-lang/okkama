@@ -396,8 +396,6 @@ helper_registry! {
         "champ_failure_capture" => &[C, P], HELPER_STOPS, None;
         "champ_machine_secondary" => &[C, W, W], L, None;
         "champ_machine_external" => &[C, W, P, P, W], X | HELPER_UNWINDS, None;
-        "champ_machine_roots" => &[C, W, P], HELPER_ALLOCATES, None;
-        "champ_machine_unroot" => &[C, W], 0, None;
         "champ_machine_scope" => &[C, W, W, W, P], L, None;
         "champ_machine_invalid" => &[C], HELPER_STOPS, None;
         "champ_machine_destination" => &[C, W, P], L, None;

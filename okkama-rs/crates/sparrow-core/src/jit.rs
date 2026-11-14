@@ -171,11 +171,8 @@ helpers! {
     champ_machine_external = crate::champ::machine::rt_machine_external as (ctx,
         function: u64, io: *mut crate::champ::CallOwn, args: *const Word, count: u64) -> u64;
         [Allocates, Collects, Reenters, Fails, Stops];
-    #[cfg(feature = "champ-abi")]
-    champ_machine_roots = crate::champ::machine::rt_machine_roots as (ctx,
-        function: u64, storage: *const Word) -> u64; [Allocates];
-    #[cfg(feature = "champ-abi")]
-    champ_machine_unroot = crate::champ::machine::rt_machine_unroot as (ctx, base: u64); [];
+    #[cfg(all(test, feature = "champ-abi"))]
+    test_champ_safepoint = crate::champ::machine::rt_machine_safepoint as (ctx); [Collects];
     #[cfg(feature = "champ-abi")]
     champ_machine_scope = crate::champ::machine::rt_machine_scope as (ctx,
         function: u64, scope: u64, parent: Word, post: *mut crate::champ::ScopeSlot) -> u64; [Allocates, Stops];
@@ -468,7 +465,11 @@ fn target(opt_level: &str) -> Result<std::sync::Arc<dyn cranelift_codegen::isa::
     // of the compile time of a large async program (#345). Debug builds,
     // and so the gate's debug tests, keep it; `SPARROW_CORE_VERIFY=1` turns
     // it on in a release build.
-    let verify = cfg!(debug_assertions) || std::env::var("SPARROW_CORE_VERIFY").is_ok_and(|value| value == "1");
+    let verify = cfg!(debug_assertions)
+        || cfg!(all(test, feature = "champ-abi"))
+        || std::env::var("SPARROW_CORE_VERIFY").is_ok_and(|value| value == "1");
+    #[cfg(all(test, feature = "champ-abi"))]
+    set(&mut flags, "regalloc_checker", "true")?;
     set(&mut flags, "enable_verifier", if verify { "true" } else { "false" })?;
     cranelift_native::builder()
         .map_err(|e| Error(format!("JIT target: {e}")))?

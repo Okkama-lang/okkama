@@ -1,9 +1,12 @@
-//! J1 SPB 17 lowering into the existing Cranelift module. No bytecode execution loop.
-//! Service handles use a temporary addressable word area. J2 owns allocation/liveness stack maps.
+//! SPB 17 lowering with typed frame slots and precise liveness maps.
+//! Post has call-local storage and never belongs to the helper call map.
 use super::*;
 use crate::champ::{self as c, machine};
 use okkama_sparrow::spb17::{self as s, Argument as A, Location as L, Opcode as O};
 use cranelift_codegen::ir::StackSlot;
+
+mod roots;
+use roots::Frame;
 
 pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error> {
     if runtime.invocations[index].code != 0 {
@@ -12,6 +15,7 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
     let machine = runtime.champ.machine.as_ref().expect("Champ program");
     let program = machine.source.clone();
     let source = &program.functions[index];
+    let frame = Frame::new(source)?;
     let owned = source.entry_abi != s::EntryAbi::Observation;
     let params = if owned { 3 } else { source.params.len() };
     let signature = runtime.jit.signature(params);
@@ -29,15 +33,15 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
         let ctx = builder.block_params(entry)[0];
         let zero = builder.ins().iconst(types::I64, 0);
         let io = if owned { builder.block_params(entry)[1] } else { zero };
-        let (offsets, scope_base) = machine::offsets(source);
+        let scope_base = frame.bytes;
         let bytes = scope_base + program.tables.scopes.len() * 16;
         if bytes as u64 > MAX_FRAME / 2 {
-            return Err(Error("Champ service area exceeds J1 frame budget".into()));
+            return Err(Error("Champ service area exceeds frame budget".into()));
         }
         let storage = builder.create_sized_stack_slot(StackSlotData::new(
             StackSlotKind::ExplicitSlot, bytes as u32, 3,
         ));
-        // Only the temporary conservative snapshot requires initialized words. J2 replaces this area.
+        // All slots, including late-branch services and edge scratch, are safe before entry rejection.
         for offset in (0..bytes).step_by(8) {
             builder.ins().stack_store(types::I64, zero, storage, offset as i32);
         }
@@ -46,7 +50,7 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
         let stop = builder.create_block();
         let mut emit = Emit {
             builder: &mut builder, jit: &mut runtime.jit, program: &program, source, index,
-            ctx, io, storage, offsets, scope_base, post, blocks, stop, pc: 0,
+            ctx, io, storage, frame: &frame, scope_base, post, blocks, stop, pc: None,
             plans: &machine.plans[index], selections: &machine.selections[index], entries: &machine.entries,
             shielded_entries: &machine.shielded_entries,
             constants: &mut runtime.constants, heap: &mut runtime.heap,
@@ -102,14 +106,13 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
             };
             let argc = emit.iconst(language as u64);
             let function = emit.iconst(index as u64);
-            let base = emit.pin();
             let result = emit.call("champ_machine_external", &[ctx, function, io, argv, argc]).unwrap();
-            emit.unpin(base);
             emit.builder.ins().return_(&[result]);
         } else {
             for (pc, instruction) in source.code.iter().enumerate() {
-                emit.pc = pc;
+                emit.pc = Some(pc);
                 emit.builder.switch_to_block(emit.blocks[pc]);
+                emit.enter_roots();
                 emit.instruction(instruction)?;
             }
         }
@@ -120,10 +123,17 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
         builder.finalize(config);
     }
     #[cfg(test)]
-    runtime.jit.emitted.insert(index, context.func.clone());
+    {
+        cranelift_codegen::verify_function(&context.func, runtime.jit.module.isa())
+            .map_err(|error| Error(format!("Champ IR verification: {error}")))?;
+        runtime.jit.emitted.insert(index, context.func.clone());
+    }
     runtime.jit.module.define_function(id, &mut context)
         .map_err(|error| Error(format!("{}: {error:?}", source.symbol)))?;
     let compiled = context.compiled_code().expect("compiled Champ");
+    let maps: Vec<_> = compiled.buffer.user_stack_maps().iter().map(|(ret, _, map)| {
+        (*ret, map.entries().map(|(_, offset)| offset).collect::<Vec<_>>())
+    }).collect();
     let frame = compiled.buffer.frame_layout().map_or(0, |layout| layout.frame_to_fp_offset);
     if u64::from(frame) > MAX_FRAME {
         return Err(Error("Champ machine frame exceeds headroom".into()));
@@ -131,6 +141,10 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
     let size = compiled.code_info().total_size;
     runtime.jit.module.finalize_definitions().map_err(|error| Error(format!("Champ finalize: {error}")))?;
     let address = runtime.jit.module.get_finalized_function(id) as u64;
+    for (ret, offsets) in maps {
+        runtime.jit.maps.push((address + u64::from(ret), frame, offsets));
+    }
+    runtime.jit.maps.sort_by_key(|(address, _, _)| *address);
     runtime.jit.ranges.push((address, address + u64::from(size)));
     runtime.jit.ranges.sort_unstable();
     runtime.jit.largest_frame = runtime.jit.largest_frame.max(frame);
@@ -147,12 +161,12 @@ struct Emit<'a, 'b> {
     ctx: Value,
     io: Value,
     storage: StackSlot,
-    offsets: Vec<usize>,
+    frame: &'a Frame,
     scope_base: usize,
     post: StackSlot,
     blocks: Vec<Block>,
     stop: Block,
-    pc: usize,
+    pc: Option<usize>,
     plans: &'a [u64],
     selections: &'a [(u32, u64)],
     entries: &'a [u64],
@@ -175,10 +189,7 @@ impl Emit<'_, '_> {
     }
 
     fn offset(&self, location: L) -> usize {
-        match location {
-            L::Register(id) => id as usize * 8,
-            L::Service(id) => self.offsets[id as usize],
-        }
+        self.frame.offsets[self.frame.allocation.locations[&location] as usize] as usize
     }
 
     fn width(&self, location: L) -> usize {
@@ -228,29 +239,38 @@ impl Emit<'_, '_> {
     fn call(&mut self, name: &str, arguments: &[Value]) -> Option<Value> {
         let index = HELPERS.iter().position(|(helper, _)| *helper == name).expect("registered helper");
         let id = self.jit.helpers.ids()[index];
+        let collects = HELPERS[index].1.iter()
+            .any(|effect| matches!(effect, Effect::Collects | Effect::Reenters));
+        #[cfg(test)]
+        if collects && name != "test_champ_safepoint" {
+            self.call("test_champ_safepoint", &[self.ctx]);
+        }
         let reference = self.jit.module.declare_func_in_func(id, self.builder.func);
         let instruction = self.builder.ins().call(reference, arguments);
+        if collects {
+            self.report_roots(instruction);
+        }
         self.builder.inst_results(instruction).first().copied()
     }
 
-    fn pin(&mut self) -> Value {
-        let function = self.iconst(self.index as u64);
-        let storage = self.builder.ins().stack_addr(types::I64, self.storage, 0);
-        self.call("champ_machine_roots", &[self.ctx, function, storage]).unwrap()
+    fn enter_roots(&mut self) {
+        let live = self.frame.before(self.source, self.pc);
+        let zero = self.iconst(0);
+        for offset in self.frame.traced.iter().filter(|offset| !live.contains(offset)) {
+            self.builder.ins().stack_store(types::I64, zero, self.storage, *offset as i32);
+        }
     }
 
-    fn unpin(&mut self, base: Value) {
-        self.call("champ_machine_unroot", &[self.ctx, base]);
+    fn report_roots(&mut self, call: cranelift_codegen::ir::Inst) {
+        for offset in self.frame.before(self.source, self.pc) {
+            self.builder.func.dfg.append_user_stack_map_entry(call, cranelift_codegen::ir::UserStackMapEntry {
+                ty: types::I64, slot: self.storage, offset,
+            });
+        }
     }
 
     fn checked(&mut self, name: &str, args: &[Value]) -> Value {
-        let effects = HELPERS.iter().find(|(helper, _)| *helper == name).unwrap().1;
-        let base = effects.iter().any(|effect| matches!(effect, Effect::Collects | Effect::Reenters))
-            .then(|| self.pin());
         let ordinal = self.call(name, args).expect("outcome helper");
-        if let Some(base) = base {
-            self.unpin(base);
-        }
         let stopped = self.builder.ins().icmp_imm_s(IntCC::Equal, ordinal, -1);
         let returned = self.builder.create_block();
         self.builder.ins().brif(stopped, self.stop, &[], returned, &[]);
@@ -259,19 +279,28 @@ impl Emit<'_, '_> {
     }
 
     fn next(&mut self) {
-        self.builder.ins().jump(self.blocks[self.pc + 1], &[]);
+        self.builder.ins().jump(self.blocks[self.pc.unwrap() + 1], &[]);
     }
 
     fn edge(&mut self, edge: &s::Edge, produced: &[Vec<Value>]) {
-        let copies: Vec<_> = edge.assignments.iter().map(|assignment| {
-            let values = match assignment.source {
-                s::Source::Location(location) => self.read(location),
-                s::Source::ProducedSlot(slot) => produced[slot as usize].clone(),
+        let pc = self.pc.expect("edge PC");
+        let ordinal = roots::outgoing(&self.source.code[pc]).iter()
+            .position(|candidate| std::ptr::eq(*candidate, edge)).expect("source edge");
+        for copy in &self.frame.allocation.edges[&(pc as u32, ordinal as u32)] {
+            let values = match copy.source {
+                s::CopySource::Slot(slot) => {
+                    let offset = self.frame.offsets[slot as usize];
+                    (0..self.frame.words[slot as usize]).map(|word| {
+                        self.builder.ins().stack_load(types::I64, types::I64, self.storage,
+                            (offset + word * 8) as i32)
+                    }).collect::<Vec<_>>()
+                }
+                s::CopySource::Produced(slot) => produced[slot as usize].clone(),
             };
-            (assignment.destination, values)
-        }).collect();
-        for (destination, values) in copies {
-            self.write(destination, &values);
+            let offset = self.frame.offsets[copy.destination as usize];
+            for (word, value) in values.into_iter().enumerate() {
+                self.builder.ins().stack_store(types::I64, value, self.storage, (offset + word as u32 * 8) as i32);
+            }
         }
         self.builder.ins().jump(self.blocks[edge.target_pc as usize], &[]);
     }
@@ -324,7 +353,7 @@ impl Emit<'_, '_> {
                     if outcome.tag == s::Tag::Unwind {
                         // Trace before capture, then make failure ordinary rooted data on the explicit edge.
                         let function = self.iconst(self.index as u64);
-                        let pc = self.iconst(self.pc as u64);
+                        let pc = self.iconst(self.pc.unwrap() as u64);
                         let frame = self.builder.ins().get_frame_pointer(types::I64);
                         self.call("trace", &[self.ctx, function, pc, frame]);
                         let zero = self.iconst(0);
@@ -402,6 +431,14 @@ impl Emit<'_, '_> {
         }).collect();
         let zero = self.iconst(0);
         let post = self.post();
+        // A mapped Post would make forced GC read an invalid pointer before the helper writes it.
+        #[cfg(test)]
+        {
+            let poison = self.iconst(0xdead_beef_0000);
+            for offset in (0..64).step_by(8) {
+                self.store(post, offset, poison);
+            }
+        }
         let ctx = self.ctx;
         let helper;
         let mut args = vec![ctx];
@@ -695,7 +732,7 @@ impl Emit<'_, '_> {
         }
         args.push(post);
         let ordinal = self.checked(helper, &args);
-        // Retire copied inputs before the next conservative snapshot. CallOwn owns its packet now.
+        // Retire copied inputs before the next safepoint. CallOwn owns its packet now.
         if matches!(op, O::InvokeCallOwn | O::InvokeDefer | O::OwnJoin) {
             for &location in &locations {
                 if matches!(location, L::Service(id) if self.source.services[id as usize] == s::ServiceKind::Packet) {
@@ -729,8 +766,10 @@ impl Emit<'_, '_> {
     }
 
     fn static_selection(&mut self) -> Result<Value, Error> {
-        let id = self.selections.iter().find(|(pc, _)| *pc as usize == self.pc)
-            .ok_or_else(|| Error(format!("missing static selection at {}:{}", self.source.symbol, self.pc)))?.1;
+        let id = self.selections.iter().find(|(pc, _)| Some(*pc as usize) == self.pc)
+            .ok_or_else(|| {
+                Error(format!("missing static selection at {}:{}", self.source.symbol, self.pc.unwrap()))
+            })?.1;
         Ok(self.iconst(id))
     }
 
@@ -781,9 +820,7 @@ impl Emit<'_, '_> {
                 let s::Immediate::Object(descriptor) = immediate else { unreachable!() };
                 let layout = self.heap.object_runtime_layout(*descriptor).clone();
                 let count = self.iconst(layout.allocation_words() as u64);
-                let base = self.pin();
                 let pointer = self.call("allocate", &[self.ctx, count]).unwrap();
-                self.unpin(base);
                 let null = self.builder.ins().icmp_imm_s(IntCC::Equal, pointer, 0);
                 let allocated = self.builder.create_block();
                 self.builder.ins().brif(null, self.stop, &[], allocated, &[]);
@@ -823,10 +860,7 @@ impl Emit<'_, '_> {
                 } else {
                     (words[0], right)
                 };
-                let base = self.pin();
-                let result = self.call("int", &[self.ctx, opcode, left, right]).unwrap();
-                self.unpin(base);
-                result
+                self.call("int", &[self.ctx, opcode, left, right]).unwrap()
             }
             D::BoolNot => self.builder.ins().bxor_imm_s(words[0], 1),
             D::BoolEq | D::BoolNe => {

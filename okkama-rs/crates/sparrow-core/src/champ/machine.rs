@@ -1,6 +1,5 @@
 //! Verified SPB 17 loading and small machine-ABI adapters. Control flow stays in Cranelift.
-//! J1 conservatively pins initialized service/value storage through Runtime.roots at X calls.
-//! J2 replaces these snapshots with live physical stack maps. Post is deliberately excluded.
+//! Machine frames use precise stack maps; Rust executor temporaries use Runtime.roots.
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 use super::*;
 use super::helpers::{data, error, stop};
@@ -51,16 +50,6 @@ pub(crate) fn repr(ty: s::Type) -> Repr {
         s::Type::Bool | s::Type::Descriptor | s::Type::Never => Repr::Raw,
         _ => Repr::Ref,
     }
-}
-
-pub(crate) fn offsets(function: &s::Function) -> (Vec<usize>, usize) {
-    let mut size = function.registers.len() * 8;
-    let mut offsets = Vec::new();
-    for &kind in &function.services {
-        offsets.push(size);
-        size += s::layout::service_layout(kind).words as usize * 8;
-    }
-    (offsets, size.max(8))
 }
 
 impl Runtime {
@@ -216,25 +205,11 @@ pub extern "C" fn rt_machine_external(ctx: *mut Ctx, function: u64, io: *mut Cal
     }
 }
 
-pub extern "C" fn rt_machine_roots(ctx: *mut Ctx, function: u64, storage: *const Word) -> u64 {
-    let runtime = unsafe { &mut *(*ctx).runtime };
-    let base = runtime.roots.len();
-    let function = &runtime.champ.machine.as_ref().expect("Champ program").source.functions[function as usize];
-    for (index, &ty) in function.registers.iter().enumerate() {
-        runtime.roots.push((unsafe { *storage.add(index) }, repr(ty)));
-    }
-    let (offsets, _) = offsets(function);
-    for (&kind, offset) in function.services.iter().zip(offsets) {
-        let layout = s::layout::service_layout(kind);
-        for &word in layout.references {
-            runtime.roots.push((unsafe { *storage.add((offset + word as usize) / 8) }, Repr::Ref));
-        }
-    }
-    base as u64
-}
-
-pub extern "C" fn rt_machine_unroot(ctx: *mut Ctx, base: u64) {
-    unsafe { &mut *(*ctx).runtime }.roots.truncate(base as usize);
+/// Test-only collection at each collecting/reentrant machine call, before Post publication.
+#[cfg(test)]
+pub extern "C" fn rt_machine_safepoint(ctx: *mut Ctx) {
+    let frame = runtime::frame_pointer!();
+    unsafe { &mut *(*ctx).runtime }.safepoint(frame, unsafe { &*ctx }, &[]);
 }
 
 pub extern "C" fn rt_machine_scope(ctx: *mut Ctx, function: u64, scope_id: u64,

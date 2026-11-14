@@ -181,6 +181,8 @@ pub fn allocate(f: &Function) -> Result<Allocation, Error> {
     let live = live_locations(f)?;
     let post = post_uses(f);
     let mut graph = BTreeMap::new();
+    // Entry adapters store every parameter before their first collecting call, including externals.
+    clique(&mut graph, f.params.iter().copied());
     for set in &live {
         clique(&mut graph, set.iter().copied());
     }

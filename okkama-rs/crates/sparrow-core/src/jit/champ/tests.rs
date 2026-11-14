@@ -6,11 +6,13 @@ use std::cell::RefCell;
 #[derive(Default)]
 struct Scenario {
     fail_destroy: Vec<u64>,
+    destroy_calls: Vec<u64>,
     risky: bool,
     defer: bool,
     defer_calls: usize,
     stop: bool,
     replacement: u64,
+    collect_post: bool,
 }
 thread_local! {
     static SCENARIO: RefCell<Scenario> = RefCell::new(Scenario::default());
@@ -34,6 +36,7 @@ extern "C" fn destroy(ctx: *mut Ctx, args: *const Word, count: u64) -> Word {
     let object = unsafe { *args };
     let identity = runtime.heap.champ_identity(object).unwrap();
     assert_eq!(identity.life, c::Life::Destroying);
+    SCENARIO.with(|state| state.borrow_mut().destroy_calls.push(identity.serial));
     if SCENARIO.with(|state| state.borrow().fail_destroy.contains(&identity.serial)) {
         failure(ctx, &format!("destroy {}", identity.serial));
     }
@@ -98,6 +101,16 @@ extern "C" fn external(ctx: *mut Ctx, io: *mut CallOwn, args: *const Word, count
         post.value = runtime.heap.int(7);
         assert_eq!(c::rt_own_empty(ctx, &mut post.packet), 0);
     }
+    if SCENARIO.with(|state| state.borrow().collect_post) {
+        let base = runtime.roots.len();
+        let repr = function.results.first().copied().map_or(Repr::Raw, machine::repr);
+        runtime.roots.push((post.value, repr));
+        runtime.roots.push((post.packet.record, Repr::Ref));
+        let frame = runtime::frame_pointer!();
+        runtime.safepoint(frame, unsafe { &*ctx }, &[]);
+        runtime.roots.truncate(base);
+    }
+    // The future result stays in Rust roots through the last safepoint, then Post is published.
     unsafe { (*io).output.write(post) };
     0
 }
@@ -111,7 +124,9 @@ fn load(text: &str) -> Box<Runtime> {
             plain: (function.entry_abi == s::EntryAbi::Observation).then_some(destroy as c::PlainEntry),
         }
     }).collect();
-    Runtime::new_champ(program, external).unwrap()
+    let mut runtime = Runtime::new_champ(program, external).unwrap();
+    runtime.heap.set_stress(true);
+    runtime
 }
 
 fn context(runtime: &mut Runtime) -> Ctx {
@@ -129,6 +144,7 @@ fn run(text: &str, scenario: Scenario) -> (Box<Runtime>, Ctx, CallPost, Word) {
     }
     let function = &source.functions[index];
     let mut ctx = context(&mut runtime);
+    ctx.entry_frame = runtime::frame_pointer!();
     let mut input = PacketSlot::default();
     c::rt_own_empty(&mut ctx, &mut input);
     let mut args = Vec::new();
@@ -160,6 +176,8 @@ fn run(text: &str, scenario: Scenario) -> (Box<Runtime>, Ctx, CallPost, Word) {
         assert_eq!(io.input.record, 0);
         result
     };
+    assert!((1..512).contains(&runtime.heap.stats().collections));
+    SCENARIO.with(|state| assert_eq!(state.borrow().destroy_calls, runtime.champ.destroy_events));
     assert_eq!(runtime.fatal.is_some(), expected_stop, "{:?}", runtime.fatal);
     (runtime, ctx, post, result)
 }
@@ -194,6 +212,7 @@ const RESERVE: &str = include_str!(
 );
 
 fn settle(ctx: &mut Ctx, packet: &mut PacketSlot) -> u64 {
+    ctx.entry_frame = runtime::frame_pointer!();
     use c::cleanup::*;
     let mut state = c::CleanupSlot::default();
     let inputs = c::CloseInputs {
@@ -307,7 +326,9 @@ fn champ_j1_owning_entry_overflow_settles_once_before_accept_including_defer() {
         let index = source.functions.iter().position(|function| function.symbol == symbol).unwrap();
         compile(&mut runtime, index).unwrap();
         let mut ctx = context(&mut runtime);
+        ctx.entry_frame = runtime::frame_pointer!();
         let (value, input) = two_inputs(&mut runtime, &mut ctx);
+        runtime.roots.push((value, Repr::Ref));
         let entry = runtime.champ.machine.as_ref().unwrap().entries[index];
         let mut post = CallPost::default();
         let mut io = CallOwn {
@@ -340,6 +361,7 @@ fn champ_j1_owning_entry_overflow_settles_once_before_accept_including_defer() {
             assert_eq!(runtime.heap.text(payload), format!("destroy {serial}"));
         }
         assert_eq!(runtime.heap.champ_identity(value).unwrap().life, c::Life::Dead);
+        SCENARIO.with(|state| assert_eq!(state.borrow().destroy_calls, vec![2, 1]));
         SCENARIO.with(|state| assert_eq!(state.borrow().defer_calls, 0));
     }
 }
@@ -349,8 +371,10 @@ fn champ_j1_d1_cleanup_limit_is_fatal_for_direct_and_executor() {
     use c::cleanup::*;
     let text = include_str!("../../../../okkama-compiler/src/codegen/sparrow_oir2/fixtures/local-pair.spb17");
     for direct in [false, true] {
+        SCENARIO.with(|state| *state.borrow_mut() = Scenario::default());
         let mut runtime = load(text);
         let mut ctx = context(&mut runtime);
+        ctx.entry_frame = runtime::frame_pointer!();
         let (_, mut packet) = two_inputs(&mut runtime, &mut ctx);
         let key = runtime.champ_packet_keys(&packet).unwrap().into_iter().max_by_key(|key| key.serial()).unwrap();
         let mut state = c::CleanupSlot::default();
@@ -383,6 +407,9 @@ fn champ_j1_d1_cleanup_limit_is_fatal_for_direct_and_executor() {
         assert_eq!(ctx.failure, 0, "D1 must not manufacture a catchable stack-overflow failure");
         assert_eq!(post.failure, 0);
         assert!(runtime.fatal.as_ref().unwrap().contains("headroom"));
+        assert_eq!(runtime.champ.destroy_events, vec![2], "the newest identity was claimed");
+        SCENARIO.with(|state| assert!(state.borrow().destroy_calls.is_empty()));
+        assert!((1..512).contains(&runtime.heap.stats().collections));
     }
 }
 
@@ -498,6 +525,7 @@ fn champ_j1_owning_budget_overflow_preserves_stop_and_does_not_publish_post() {
         .position(|function| function.symbol == "main").unwrap();
     compile(&mut runtime, index).unwrap();
     let mut ctx = context(&mut runtime);
+    ctx.entry_frame = runtime::frame_pointer!();
     let (value, packet) = two_inputs(&mut runtime, &mut ctx);
     let original = packet.record;
     let entry = runtime.champ_entry_id(index).unwrap();
@@ -538,10 +566,12 @@ fn champ_j1_compiled_defer_preserves_declaration_ordinals_and_payload_schemas() 
     let program = s::Program { functions: vec![function.clone()], ..s::Program::default() };
     let binding = c::ExternalEntry { declaration: function, owned: Some(external), plain: None };
     let mut runtime = Runtime::new_champ(program, vec![binding]).unwrap();
+    runtime.heap.set_stress(true);
     compile(&mut runtime, 0).unwrap();
     for ordinal in 0..4 {
         SCENARIO.with(|state| *state.borrow_mut() = Scenario { replacement: ordinal, ..Scenario::default() });
         let mut ctx = context(&mut runtime);
+        ctx.entry_frame = runtime::frame_pointer!();
         let mut input = PacketSlot::default();
         assert_eq!(c::rt_own_empty(&mut ctx, &mut input), 0);
         let entry = runtime.champ_entry_id(0).unwrap();
@@ -571,6 +601,7 @@ fn champ_j1_owned_span_adapter_accepts_shielded_call_contract() {
         .position(|function| function.symbol == "main").unwrap();
     compile(&mut runtime, index).unwrap();
     let mut ctx = context(&mut runtime);
+    ctx.entry_frame = runtime::frame_pointer!();
     let (value, input) = two_inputs(&mut runtime, &mut ctx);
     let entry = runtime.champ.machine.as_ref().unwrap().shielded_entries[index];
     assert_ne!(Some(entry), runtime.champ_entry_id(index));
@@ -585,4 +616,227 @@ fn champ_j1_owned_span_adapter_accepts_shielded_call_contract() {
     assert_eq!(runtime.champ_packet_keys(&post.packet).unwrap().len(), 1);
     assert_eq!(settle(&mut ctx, &mut post.packet), 0);
     assert_eq!(runtime.champ.destroy_events, vec![1, 2]);
+}
+
+fn merge_pair() -> String {
+    let text = include_str!("../../../../okkama-compiler/src/codegen/sparrow_oir2/fixtures/local-pair.spb17");
+    let mut program = s::assemble(text).unwrap();
+    let function = &mut program.functions[1];
+    // Use the same source inventory and return value, routing both closes through the executor CFG.
+    function.proofs.plans[0].merge = true;
+    function.proofs.selections[0].locations.clear();
+    function.proofs.order_witnesses[0].creation_pcs.clear();
+    let evidence = &mut function.proofs.cleanup_plans[0];
+    evidence.slots.clear();
+    evidence.suffixes.clear();
+    evidence.preserves.clear();
+    evidence.reserve_empty = false;
+    function.code[17] = s::Instruction::Br(s::Edge {
+        target_pc: 38,
+        assignments: vec![s::Assignment { destination: L::Service(36), source: s::Source::Location(L::Service(11)) }],
+    });
+    let success = s::Outcome {
+        tag: s::Tag::Success,
+        edge: s::Edge {
+            target_pc: 23,
+            assignments: vec![s::Assignment { destination: L::Service(18), source: s::Source::ProducedSlot(0) }],
+        },
+    };
+    let failure = s::Outcome {
+        tag: s::Tag::Failure,
+        edge: s::Edge {
+            target_pc: 24,
+            assignments: vec![
+                s::Assignment { destination: L::Service(19), source: s::Source::ProducedSlot(0) },
+                s::Assignment { destination: L::Register(5), source: s::Source::ProducedSlot(1) },
+            ],
+        },
+    };
+    let s::Instruction::Champ { arguments, flow, .. } = &mut function.code[44] else { unreachable!() };
+    arguments[4] = A::Flag(false);
+    *flow = s::Flow::Outcomes(vec![success, failure]);
+    function.proofs.closes.truncate(1);
+    function.proofs.cleanup_plans.truncate(1);
+    function.proofs.plans.truncate(1);
+    // Drop the now unreachable direct plan, retaining the original instruction order for relocation.
+    let retained = (0..function.code.len()).filter(|pc| !matches!(pc, 18..=22 | 25..=37)).collect::<Vec<_>>();
+    let relocate = |pc: u32| retained.iter().position(|&old| old == pc as usize).map(|pc| pc as u32);
+    function.code = retained.iter().map(|&pc| function.code[pc].clone()).collect();
+    for instruction in &mut function.code {
+        let edges = match instruction {
+            s::Instruction::Br(edge) => vec![edge],
+            s::Instruction::Cond { yes, no, .. } => vec![yes, no],
+            s::Instruction::Champ { flow: s::Flow::Outcomes(outcomes), .. } => {
+                outcomes.iter_mut().map(|outcome| &mut outcome.edge).collect()
+            }
+            _ => vec![],
+        };
+        for edge in edges {
+            edge.target_pc = relocate(edge.target_pc).unwrap();
+        }
+    }
+    function.blocks.retain_mut(|block| {
+        let Some(pc) = relocate(block.pc) else { return false };
+        block.pc = pc;
+        true
+    });
+    for close in &mut function.proofs.closes {
+        close.begin_pc = relocate(close.begin_pc).unwrap();
+    }
+    for roots in [&mut function.proofs.roots, &mut function.proofs.post_roots] {
+        roots.retain_mut(|root| {
+            let Some(pc) = relocate(root.pc) else { return false };
+            let executor = root.pc >= 38;
+            root.pc = pc;
+            if executor && !root.locations.contains(&L::Register(0)) {
+                root.locations.push(L::Register(0));
+            }
+            true
+        });
+    }
+    function.proofs.states = s::service_states(function).unwrap();
+    s::disassemble(&program).unwrap()
+}
+
+#[test]
+fn champ_j2_same_close_direct_and_merge_under_forced_gc() {
+    let direct = include_str!("../../../../okkama-compiler/src/codegen/sparrow_oir2/fixtures/local-pair.spb17");
+    let merge = merge_pair();
+    for fail_destroy in [vec![], vec![2, 1]] {
+        let mut traces = Vec::new();
+        for text in [direct, &merge] {
+            let scenario = Scenario { fail_destroy: fail_destroy.clone(), ..Scenario::default() };
+            let (runtime, ctx, _, _) = run(text, scenario);
+            assert!(runtime.heap.stats().collections > 0);
+            traces.push((runtime.champ.destroy_events.clone(), ctx.status,
+                (ctx.failure != 0).then(|| runtime.failure(ctx.failure).unwrap().secondary.len())));
+        }
+        assert_eq!(traces[0], traces[1]);
+        assert_eq!(traces[0].0, vec![2, 1]);
+    }
+}
+
+#[test]
+fn champ_j2_gc_precedes_late_scope_on_both_branches() {
+    for branch in [false, true] {
+        let mut program = s::assemble(&merge_pair()).unwrap();
+        let mut plain = program.objects[0].clone();
+        plain.name = "Plain".into();
+        plain.layout.has_destroy = false;
+        plain.layout.may_reach_resource = false;
+        plain.layout.identity_offset = None;
+        plain.layout.allocation_words = 2;
+        program.objects.push(plain);
+        let function = &mut program.functions[1];
+        let condition = function.registers.len() as u32;
+        function.registers.extend([s::Type::Bool, s::Type::Object(1), s::Type::Object(1)]);
+        for instruction in &mut function.code {
+            let edges = match instruction {
+                s::Instruction::Br(edge) => vec![edge],
+                s::Instruction::Champ { flow: s::Flow::Outcomes(outcomes), .. } => {
+                    outcomes.iter_mut().map(|outcome| &mut outcome.edge).collect()
+                }
+                _ => vec![],
+            };
+            for edge in edges {
+                edge.target_pc += 6;
+            }
+        }
+        function.blocks[0].params.clear();
+        for block in &mut function.blocks {
+            block.pc += 6;
+        }
+        let mut blocks = vec![
+            s::Block { pc: 0, params: function.params.clone() },
+            s::Block { pc: 2, params: vec![] },
+            s::Block { pc: 4, params: vec![] },
+        ];
+        blocks.append(&mut function.blocks);
+        function.blocks = blocks;
+        for close in &mut function.proofs.closes {
+            close.begin_pc += 6;
+        }
+        for root in function.proofs.roots.iter_mut().chain(&mut function.proofs.post_roots) {
+            root.pc += 6;
+        }
+        for pc in 0..6 {
+            function.proofs.roots.push(s::RootRequirement { pc, locations: vec![L::Register(0)] });
+        }
+        let allocate = |output| s::Instruction::Data {
+            op: s::DataOp::ObjNew, inputs: vec![], output: Some(output), immediate: s::Immediate::Object(1),
+        };
+        let prefix = vec![
+            s::Instruction::Data {
+                op: s::DataOp::Const, inputs: vec![], output: Some(condition),
+                immediate: s::Immediate::Constant(s::Constant::Bool(branch)),
+            },
+            s::Instruction::Cond {
+                condition,
+                yes: s::Edge { target_pc: 2, assignments: vec![] },
+                no: s::Edge { target_pc: 4, assignments: vec![] },
+            },
+            allocate(condition + 1),
+            s::Instruction::Br(s::Edge { target_pc: 6, assignments: vec![] }),
+            allocate(condition + 2),
+            s::Instruction::Br(s::Edge { target_pc: 6, assignments: vec![] }),
+        ];
+        function.code.splice(0..0, prefix);
+        function.proofs.states = s::service_states(function).unwrap();
+        let text = s::disassemble(&program).unwrap();
+        let (runtime, ctx, _, _) = run(&text, Scenario::default());
+        assert_eq!(ctx.status, OK);
+        assert_eq!(runtime.champ.destroy_events, vec![2, 1]);
+    }
+}
+
+#[test]
+fn champ_j2_future_result_survives_last_gc_inside_reentrant_helper() {
+    let text = include_str!("../../../../okkama-compiler/src/codegen/sparrow_oir2/fixtures/fresh-call.spb17");
+    let (runtime, ctx, _, _) = run(text, Scenario { collect_post: true, ..Scenario::default() });
+    assert_eq!(ctx.status, OK);
+    assert_eq!(runtime.champ.destroy_events, vec![2, 1]);
+    assert!(runtime.roots.is_empty(), "nested Rust temporary roots must be retired");
+}
+
+#[test]
+fn champ_j2_external_parameters_have_distinct_live_slots() {
+    let function = s::Function {
+        symbol: "two_strings".into(),
+        entry_abi: s::EntryAbi::Observation,
+        registers: vec![s::Type::Str, s::Type::Str], services: vec![],
+        params: vec![L::Register(0), L::Register(1)], results: vec![], blocks: vec![],
+        proofs: s::FunctionProofs {
+            entry: Some(s::EntryContract {
+                external: Some("fixture.two_strings".into()), ..s::EntryContract::default()
+            }),
+            ..s::FunctionProofs::default()
+        },
+        code: vec![],
+    };
+    let frame = Frame::new(&function).unwrap();
+    assert_ne!(frame.allocation.locations[&L::Register(0)], frame.allocation.locations[&L::Register(1)]);
+    assert_eq!(frame.before(&function, None).len(), 2);
+}
+
+#[test]
+fn champ_j2_ir_maps_exclude_post_and_metadata_words() {
+    use cranelift_codegen::ir::StackSlot;
+    let text = include_str!("../../../../okkama-compiler/src/codegen/sparrow_oir2/fixtures/local-pair.spb17");
+    let (runtime, _, _, _) = run(text, Scenario::default());
+    for (&index, function) in &runtime.jit.emitted {
+        let source = &runtime.champ.machine.as_ref().unwrap().source.functions[index];
+        let frame = Frame::new(source).unwrap();
+        let mut maps = 0;
+        for block in function.layout.blocks() {
+            for instruction in function.layout.block_insts(block) {
+                for entry in function.dfg.user_stack_map_entries(instruction).into_iter().flatten() {
+                    assert_eq!(entry.slot, StackSlot::from_u32(0), "Post and argument records are never roots");
+                    assert!(frame.traced.contains(&entry.offset));
+                    maps += 1;
+                }
+            }
+        }
+        assert!(maps > 0);
+    }
+    assert!(!runtime.jit.maps.is_empty(), "machine maps must be published to the existing frame walker");
 }
