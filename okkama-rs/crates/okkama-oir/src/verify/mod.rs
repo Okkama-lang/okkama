@@ -15,6 +15,12 @@ mod effects;
 mod low_phases;
 mod low_roots;
 mod linearity;
+// Instantiate the same transfers over two domains so the oracle cannot drift.
+#[cfg(any(test, feature = "verifier-differential"))]
+#[allow(clippy::duplicate_mod)]
+mod precise_linearity;
+#[cfg(any(test, feature = "verifier-differential"))]
+mod differential;
 mod graph;
 mod dominance;
 mod contracts;
@@ -137,6 +143,8 @@ struct State<'a> {
     diagnostics: Vec<VerifyDiagnostic>,
     stats: VerifyStats,
     incomplete: bool,
+    #[cfg(any(test, feature = "verifier-differential"))]
+    exhausted_limit: Option<&'static str>,
     suppressed: usize,
     location: EntityLocation,
     source_loc: Option<DebugLoc>,
@@ -186,12 +194,16 @@ impl State<'_> {
     fn step(&mut self, count: usize) -> bool {
         if self.incomplete { return false; }
         if !limits::add(&mut self.stats.steps, count, self.options.limits.steps) {
+            #[cfg(any(test, feature = "verifier-differential"))]
+            self.exhausted_limit.get_or_insert("steps");
             self.incomplete = true;
         }
         !self.incomplete
     }
     fn memory(&mut self, bytes: usize) -> bool {
         if !limits::add(&mut self.stats.memory_bytes, bytes, self.options.limits.memory_bytes) {
+            #[cfg(any(test, feature = "verifier-differential"))]
+            self.exhausted_limit.get_or_insert("memory");
             self.incomplete = true;
         }
         !self.incomplete
@@ -209,16 +221,20 @@ impl State<'_> {
     }
 }
 
-fn run<'m>(
+fn run_mode<'m>(
     module: &'m Module,
     options: &VerifyOptions,
     context: VerifyContext<'_>,
     profile: Option<Profile>,
     function: Option<FuncId>,
+    _precise: bool,
 ) -> Result<VerifiedModule<'m>, VerifyReport> {
     let mut state = State {
         module, options, context, diagnostics: vec![], stats: VerifyStats::default(),
-        incomplete: false, suppressed: 0, location: EntityLocation::Module, source_loc: None,
+        incomplete: false,
+        #[cfg(any(test, feature = "verifier-differential"))]
+        exhausted_limit: None,
+        suppressed: 0, location: EntityLocation::Module, source_loc: None,
         poisoned: std::collections::BTreeSet::new(), positions: std::collections::BTreeMap::new(),
         edge_positions: std::collections::BTreeMap::new(), cleanup_origins: None,
     };
@@ -232,6 +248,13 @@ fn run<'m>(
     authority::check(module, function, &mut state);
     summaries::check(module, function, &mut state);
     high::check(module, function, &mut state);
+    #[cfg(any(test, feature = "verifier-differential"))]
+    if _precise {
+        precise_linearity::check(module, function, &mut state);
+    } else {
+        linearity::check(module, function, &mut state);
+    }
+    #[cfg(not(any(test, feature = "verifier-differential")))]
     linearity::check(module, function, &mut state);
     low_phases::check(module, function, &mut state);
     low_roots::check(module, function, &mut state);
@@ -243,6 +266,12 @@ fn run<'m>(
         if options.errors == ErrorPolicy::First && state.diagnostics.len() > 1 {
             state.suppressed = state.suppressed.saturating_add(state.diagnostics.len() - 1);
             state.diagnostics.truncate(1);
+        }
+        #[cfg(any(test, feature = "verifier-differential"))]
+        if state.incomplete {
+            differential::record_limit(
+                module.profile, function, options.errors, _precise, &state.stats, state.exhausted_limit,
+            );
         }
         return Err(VerifyReport {
             failure: if state.incomplete { VerifyFailure::Incomplete } else { VerifyFailure::Rejected },
@@ -363,4 +392,19 @@ fn diagnostic_key(
         _ => 6,
     };
     (pass, class, entity, function.map_or(0, FuncId::as_u32), block, position, minor, path, rule)
+}
+
+fn run<'m>(
+    module: &'m Module,
+    options: &VerifyOptions,
+    context: VerifyContext<'_>,
+    profile: Option<Profile>,
+    function: Option<FuncId>,
+) -> Result<VerifiedModule<'m>, VerifyReport> {
+    let candidate = run_mode(module, options, context, profile, function, false);
+    #[cfg(any(test, feature = "verifier-differential"))]
+    if std::env::var_os("OKKAMA_634_DIFFERENTIAL").is_some() {
+        differential::compare(module, options, context, profile, function, &candidate);
+    }
+    candidate
 }

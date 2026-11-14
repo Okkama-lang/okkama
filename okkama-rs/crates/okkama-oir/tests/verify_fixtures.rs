@@ -152,6 +152,10 @@ fn verify_function_limits_analysis_to_the_selected_body() {
 
 #[test]
 fn graph_and_high_analysis_budgets_never_produce_a_certificate() {
+    // #634 dense -> compact default memory charges, in fixture order:
+    // 140092 -> 102244, 27844 -> 43224, 304418 -> 162748 bytes.
+    // Derive each compact threshold from its own charge: enough completes,
+    // one byte/step below must remain Incomplete.
     for source in [
         include_str!("fixtures/verify/valid/SSA2-irreducible-CFG.oir"),
         include_str!("fixtures/verify/valid/H3-dominating-defer-prefix.oir"),
@@ -395,6 +399,9 @@ fn opaque_cleanup_verdicts_survive_function_order_permutations() {
 
 #[test]
 fn opaque_origin_index_obeys_verification_budgets() {
+    // #634 dense -> compact memory charge: 163028 -> 266753 bytes.
+    // The conservative sparse B-tree charge is larger for this small body.
+    // Enough completes; one byte/step below its own charge is Incomplete.
     let module = text::parse(include_str!("fixtures/verify/valid/B11-indexed-origins.oir")).unwrap();
     let options = VerifyOptions { execution: ExecutionMode::Tests, ..VerifyOptions::default() };
     let catalog = FixtureContracts(&module);

@@ -35,6 +35,7 @@ impl Engine<'_, '_> {
                 module: self.module, function, declaration, body, state: self.state,
                 emit: false, reported: BTreeSet::new(), managed: self.managed, flow_memory: 0,
                 diagnose: false, collecting: false, capture_returns: true, contract_invalid: false,
+                witnesses: witnesses(self.module, body),
                 defer_stack: stack, defer_outputs: vec![],
                 defer_cache: Default::default(),
             };

@@ -53,7 +53,7 @@ impl Engine<'_, '_> {
                         old.origin == piece.origin && old.owner != piece.owner
                     })
                 }).map(|piece| piece.origin)).collect();
-                for token in &mut flow.tokens {
+                for token in flow.tokens.stored_mut() {
                     if let Some((keys, stale)) = &mut token.snapshot {
                         *stale |= !keys.is_disjoint(&moved);
                     }
@@ -97,7 +97,7 @@ impl Engine<'_, '_> {
                     self.error(R::B94, "cache rehome requires a live sufficient target boundary");
                 }
                 if let Some(key) = token.cache.filter(|_| changed) {
-                    for (index, holder) in flow.tokens.iter_mut().enumerate() {
+                    for (index, holder) in flow.tokens.indexed_mut() {
                         if flow.availability[index] != AVAILABLE {
                             continue;
                         }
@@ -142,7 +142,7 @@ impl Engine<'_, '_> {
                     self.error(R::B92, "await.take capability must prove this exact Future/cache and region");
                 }
                 let mut extracted = Token::default();
-                for (index, token) in flow.tokens.iter_mut().enumerate() {
+                for (index, token) in flow.tokens.indexed_mut() {
                     if flow.availability[index] != AVAILABLE {
                         continue;
                     }

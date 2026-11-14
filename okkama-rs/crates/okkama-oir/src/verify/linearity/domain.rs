@@ -1,4 +1,6 @@
 use crate::*;
+use super::per_value::{AllocationSize, PerValue};
+use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) const ABSENT: u8 = 1;
@@ -150,61 +152,62 @@ pub(super) struct Token {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Flow {
     pub availability: Vec<u8>,
-    pub tokens: Vec<Token>,
-    pub journals: Vec<Token>,
-    pub refs: Vec<BTreeSet<Origin>>,
-    pub full_deps: Vec<BTreeSet<Origin>>,
-    pub lifetimes: Vec<u8>,
-    pub identities: Vec<Option<Origin>>,
+    pub tokens: PerValue<Token>,
+    pub journals: PerValue<Token>,
+    pub refs: PerValue<BTreeSet<Origin>>,
+    pub full_deps: PerValue<BTreeSet<Origin>>,
+    pub lifetimes: PerValue<u8>,
+    pub identities: PerValue<Option<Origin>>,
     pub dead: BTreeSet<Origin>,
     pub taken_caches: BTreeSet<Origin>,
     pub cache_keys: BTreeSet<Origin>,
     pub provenance: BTreeMap<Origin, u8>,
     pub scopes: BTreeMap<ScopeId, u8>,
     pub bindings: BTreeSet<BindingId>,
-    pub must_use: Vec<u8>,
+    pub must_use: PerValue<u8>,
     pub entry_accepted: bool,
     pub ended: BTreeSet<ScopeId>,
     pub closed_inputs: BTreeSet<Piece>,
-    pub failures: Vec<u8>,
+    pub failures: PerValue<u8>,
     pub active_failure: u8,
     pub active_failure_origin: Option<Origin>,
     pub latest_failure: u8,
     pub latest_failure_origin: Option<Origin>,
     pub fields: Fields,
-    pub aliases: Vec<BTreeSet<ValueId>>,
-    pub contained: Vec<BTreeSet<ValueId>>,
+    pub aliases: PerValue<BTreeSet<ValueId>>,
+    pub contained: PerValue<BTreeSet<ValueId>>,
     pub views: BTreeMap<Origin, BTreeSet<Origin>>,
-    pub witnesses: Vec<bool>,
+    pub witnesses: Rc<Vec<bool>>,
     pub frames: BTreeMap<Origin, BTreeMap<u32, super::Slot>>,
     pub frame_conflict: bool,
     pub cells: BTreeMap<Origin, super::Slot>,
 }
 impl Flow {
-    pub fn new(values: usize) -> Self {
+    pub fn new(values: usize, witnesses: Rc<Vec<bool>>) -> Self {
         Self {
-            availability: vec![ABSENT; values], tokens: vec![Token::default(); values],
-            journals: vec![Token::default(); values],
-            refs: vec![BTreeSet::new(); values], full_deps: vec![BTreeSet::new(); values],
-            lifetimes: vec![1; values],
-            identities: vec![None; values],
+            availability: vec![ABSENT; values], tokens: PerValue::new(values, Token::default()),
+            journals: PerValue::new(values, Token::default()),
+            refs: PerValue::new(values, BTreeSet::new()), full_deps: PerValue::new(values, BTreeSet::new()),
+            lifetimes: PerValue::new(values, 1),
+            identities: PerValue::new(values, None),
             dead: BTreeSet::new(),
             taken_caches: BTreeSet::new(),
             cache_keys: BTreeSet::new(),
             provenance: BTreeMap::new(),
-            scopes: BTreeMap::new(), bindings: BTreeSet::new(), must_use: vec![0; values], entry_accepted: true,
+            scopes: BTreeMap::new(), bindings: BTreeSet::new(),
+            must_use: PerValue::new(values, 0), entry_accepted: true,
             ended: BTreeSet::new(),
             closed_inputs: BTreeSet::new(),
-            failures: vec![0; values],
+            failures: PerValue::new(values, 0),
             active_failure: 0,
             active_failure_origin: None,
             latest_failure: 0,
             latest_failure_origin: None,
             fields: BTreeMap::new(),
-            aliases: vec![BTreeSet::new(); values],
-            contained: vec![BTreeSet::new(); values],
+            aliases: PerValue::new(values, BTreeSet::new()),
+            contained: PerValue::new(values, BTreeSet::new()),
             views: BTreeMap::new(),
-            witnesses: vec![true; values],
+            witnesses,
             frames: BTreeMap::new(),
             frame_conflict: false,
             cells: BTreeMap::new(),
@@ -275,11 +278,11 @@ impl Flow {
             }).collect();
             piece
         };
-        for token in self.tokens.iter_mut().chain(&mut self.journals) {
+        for token in self.tokens.stored_mut().chain(self.journals.stored_mut()) {
             token.pieces = token.pieces.iter().map(rewrite).collect();
         }
         self.closed_inputs = self.closed_inputs.iter().map(rewrite).collect();
-        for contained in &mut self.contained {
+        for contained in self.contained.stored_mut() {
             *contained = contained.iter().flat_map(|label| {
                 classes.get(&old[label.as_u32() as usize]).into_iter().flatten().copied()
             }).collect();
@@ -292,7 +295,7 @@ impl Flow {
         }
     }
     pub fn add_contained(&mut self, roots: &BTreeSet<ValueId>, child: &BTreeSet<ValueId>) {
-        for contained in &mut self.contained {
+        for contained in self.contained.stored_mut() {
             if !contained.is_disjoint(roots) {
                 contained.extend(child);
             }
@@ -307,7 +310,7 @@ impl Flow {
             }).collect();
             piece
         };
-        for token in self.tokens.iter_mut().chain(&mut self.journals) {
+        for token in self.tokens.stored_mut().chain(self.journals.stored_mut()) {
             token.pieces = token.pieces.iter().map(add).collect();
         }
         self.closed_inputs = self.closed_inputs.iter().map(add).collect();
@@ -324,11 +327,11 @@ impl Flow {
             }).collect();
             piece
         };
-        for token in self.tokens.iter_mut().chain(&mut self.journals) {
+        for token in self.tokens.stored_mut().chain(self.journals.stored_mut()) {
             token.pieces = token.pieces.iter().map(rewrite).collect();
         }
         self.closed_inputs = self.closed_inputs.iter().map(rewrite).collect();
-        for contained in &mut self.contained {
+        for contained in self.contained.stored_mut() {
             if !contained.is_disjoint(old) {
                 *contained = contained.difference(old).copied().chain(new.iter().copied()).collect();
             }
@@ -378,13 +381,13 @@ impl Flow {
             }
             key
         };
-        for refs in self.refs.iter_mut().chain(&mut self.full_deps) {
+        for refs in self.refs.stored_mut().chain(self.full_deps.stored_mut()) {
             *refs = refs.iter().copied().map(rename).collect();
         }
-        for identity in &mut self.identities {
+        for identity in self.identities.stored_mut() {
             *identity = identity.map(rename);
         }
-        for token in self.tokens.iter_mut().chain(&mut self.journals)
+        for token in self.tokens.stored_mut().chain(self.journals.stored_mut())
             .chain(self.frames.values_mut().flat_map(|layout| layout.values_mut().map(|slot| &mut slot.token)))
             .chain(self.cells.values_mut().map(|slot| &mut slot.token)) {
             token.pieces = token.pieces.iter().cloned().map(|mut piece| {
@@ -400,7 +403,7 @@ impl Flow {
                 piece
             }).collect();
         }
-        for token in self.tokens.iter_mut().chain(&mut self.journals)
+        for token in self.tokens.stored_mut().chain(self.journals.stored_mut())
             .chain(self.frames.values_mut().flat_map(|layout| layout.values_mut().map(|slot| &mut slot.token)))
             .chain(self.cells.values_mut().map(|slot| &mut slot.token)) {
             token.unique = token.unique.map(rename);
@@ -525,5 +528,96 @@ pub(super) fn view_origin(origin: Origin, slot: usize) -> Origin {
         Origin::Instruction(inst, _) => Origin::ViewInstruction(inst, slot as u16),
         Origin::Invoke(block, _) => Origin::ViewInvoke(block, slot as u16),
         _ => origin,
+    }
+}
+
+impl AllocationSize for Origin {}
+impl AllocationSize for ValueId {}
+impl AllocationSize for ScopeId {}
+impl AllocationSize for BlockId {}
+impl AllocationSize for BindingId {}
+impl AllocationSize for DeclId {}
+impl AllocationSize for u32 {}
+impl<A: AllocationSize, B: AllocationSize> AllocationSize for (A, B) {
+    fn heap_bytes(&self) -> usize { self.0.heap_bytes().saturating_add(self.1.heap_bytes()) }
+}
+impl<A: AllocationSize, B: AllocationSize, C: AllocationSize> AllocationSize for (A, B, C) {
+    fn heap_bytes(&self) -> usize {
+        self.0.heap_bytes().saturating_add(self.1.heap_bytes()).saturating_add(self.2.heap_bytes())
+    }
+}
+impl AllocationSize for Filter {
+    fn heap_bytes(&self) -> usize {
+        self.keys.heap_bytes().saturating_add(self.possible.heap_bytes()).saturating_add(self.labels.heap_bytes())
+    }
+}
+impl AllocationSize for Piece {
+    fn heap_bytes(&self) -> usize { self.predicates.heap_bytes() }
+}
+impl AllocationSize for CleanupFact {
+    fn heap_bytes(&self) -> usize {
+        self.reserve.heap_bytes().saturating_add(self.inventory.heap_bytes())
+            .saturating_add(self.executed.heap_bytes()).saturating_add(self.services.heap_bytes())
+    }
+}
+impl AllocationSize for Token {
+    fn heap_bytes(&self) -> usize {
+        self.pieces.heap_bytes().saturating_add(self.reserve.heap_bytes())
+            .saturating_add(self.destinations.heap_bytes()).saturating_add(self.sources.heap_bytes())
+            .saturating_add(self.unique_region.heap_bytes()).saturating_add(self.pin_deps.heap_bytes())
+            .saturating_add(self.cleanup.heap_bytes()).saturating_add(self.snapshot.heap_bytes())
+    }
+}
+impl Flow {
+    fn global_bytes(&self) -> usize {
+        self.availability.capacity()
+            + self.dead.heap_bytes() + self.taken_caches.heap_bytes() + self.cache_keys.heap_bytes()
+            + self.provenance.heap_bytes() + self.scopes.heap_bytes() + self.bindings.heap_bytes()
+            + self.ended.heap_bytes() + self.closed_inputs.heap_bytes() + self.fields.heap_bytes()
+            + self.views.heap_bytes() + self.frames.heap_bytes() + self.cells.heap_bytes()
+    }
+    pub fn allocation_bytes(&self) -> usize {
+        self.global_bytes() + self.tokens.allocation_bytes() + self.journals.allocation_bytes()
+            + self.refs.allocation_bytes() + self.full_deps.allocation_bytes() + self.lifetimes.allocation_bytes()
+            + self.identities.allocation_bytes() + self.must_use.allocation_bytes() + self.failures.allocation_bytes()
+            + self.aliases.allocation_bytes() + self.contained.allocation_bytes()
+    }
+    pub fn charge_retained(&self) -> usize {
+        // Incoming vectors reserve exactly one slot for each retained state.
+        // Inline Flow storage is charged here, not as eight heap scratch clones.
+        size_of::<Self>() + 16 + self.global_bytes() + self.tokens.charge_new() + self.journals.charge_new()
+            + self.refs.charge_new() + self.full_deps.charge_new() + self.lifetimes.charge_new()
+            + self.identities.charge_new() + self.must_use.charge_new() + self.failures.charge_new()
+            + self.aliases.charge_new() + self.contained.charge_new()
+    }
+}
+impl AllocationSize for super::Slot {
+    fn heap_bytes(&self) -> usize {
+        self.token.heap_bytes() + self.journal.heap_bytes() + self.refs.heap_bytes()
+            + self.aliases.heap_bytes() + self.contained.heap_bytes() + self.bases.heap_bytes()
+            + self.requirements.heap_bytes()
+    }
+}
+
+#[cfg(test)]
+mod memory_tests {
+    use super::*;
+
+    #[test]
+    fn large_ssa_universe_keeps_implicit_defaults_and_shared_relations_compact() {
+        let values = 10_000;
+        let mut flow = Flow::new(values, Rc::new(vec![true; values]));
+        flow.availability[values - 1] = AVAILABLE;
+        flow.tokens[values - 1].private = true;
+        let first = flow.charge_retained();
+        let mut copied = flow.clone();
+        copied.tokens[values - 1].settled = true;
+        let copied_bytes = copied.charge_retained();
+        // The precise solver's unchanged dense per-state charge, before scratch.
+        let dense = values * 1536;
+        assert!(first < dense / 100, "{first} vs {dense}");
+        assert!(copied_bytes < dense / 100, "{copied_bytes} vs {dense}");
+        assert!(!flow.tokens[values - 1].settled);
+        assert!(copied.tokens[values - 1].settled);
     }
 }

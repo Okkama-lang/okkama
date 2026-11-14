@@ -95,7 +95,7 @@ fn verify_types(module: &Module) -> Result<(), VerifyReport> {
     let options = VerifyOptions::default();
     let mut state = State {
         module, options: &options, context: VerifyContext::default(), diagnostics: vec![],
-        stats: VerifyStats::default(), incomplete: false, suppressed: 0,
+        stats: VerifyStats::default(), incomplete: false, exhausted_limit: None, suppressed: 0,
         location: EntityLocation::Module, source_loc: None,
         poisoned: std::collections::BTreeSet::new(), positions: std::collections::BTreeMap::new(),
         edge_positions: std::collections::BTreeMap::new(), cleanup_origins: None,

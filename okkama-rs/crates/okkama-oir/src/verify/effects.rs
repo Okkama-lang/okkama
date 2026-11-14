@@ -439,7 +439,7 @@ mod tests {
         let ty = data.signature.params[0];
         let mut state = State {
             module: &module, options: &options, context: VerifyContext::default(), diagnostics: vec![],
-            stats: VerifyStats::default(), incomplete: false, suppressed: 0,
+            stats: VerifyStats::default(), incomplete: false, exhausted_limit: None, suppressed: 0,
             location: EntityLocation::Instruction { function, instruction: InstId::from_u32(2) },
             source_loc: None, poisoned: BTreeSet::new(), positions: BTreeMap::new(),
             edge_positions: BTreeMap::new(), cleanup_origins: None,

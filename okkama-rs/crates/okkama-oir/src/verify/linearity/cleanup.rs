@@ -944,10 +944,12 @@ impl Engine<'_, '_> {
             let mut branch = flow.clone();
             if exit.is_some() && matches!(arm.kind, DispatchKind::Success | DispatchKind::Pending) {
                 let generation = before.tokens[failure.as_u32() as usize].finish_origin;
-                for (index, token) in branch.tokens.iter_mut().enumerate() {
-                    if token.finish_origin == generation {
+                for index in 0..branch.tokens.len() {
+                    if branch.tokens[index].finish_origin == generation {
                         branch.failures[index] = 0;
-                        token.failure_origin = None;
+                        if branch.tokens[index].failure_origin.is_some() {
+                            branch.tokens[index].failure_origin = None;
+                        }
                     }
                 }
             }
@@ -983,7 +985,7 @@ impl Engine<'_, '_> {
             } else {
                 // Copyable FailureState is not a linear permission. Its association
                 // with the current cleanup token prevents skipping a failed step.
-                for token in &mut branch.tokens {
+                for token in branch.tokens.stored_mut() {
                     if let Some(fact) = &mut token.cleanup
                         && fact.awaiting_failure && arm.kind == DispatchKind::None
                             && fact.awaiting_source.is_some_and(|source| {

@@ -1,6 +1,7 @@
 //! Bounded relational worklist. Diagnostics are emitted only by replaying the
 //! fixed point; solver visits never turn a temporary absence into a rejection.
 mod domain;
+mod per_value;
 mod metadata;
 mod packets;
 mod scopes;
@@ -27,6 +28,7 @@ struct Engine<'m, 's> {
     reported: BTreeSet<(L, R)>,
     managed: &'s [bool],
     flow_memory: usize,
+    witnesses: std::rc::Rc<Vec<bool>>,
     diagnose: bool,
     collecting: bool,
     capture_returns: bool,
@@ -114,7 +116,8 @@ pub(super) fn check<'m>(module: &'m Module, selected: Option<FuncId>, state: &mu
         let mut engine = Engine {
             module, function, declaration, body, state, emit: false,
             reported: BTreeSet::new(),
-            managed: &managed, flow_memory: 0, diagnose: true, collecting: false,
+            managed: &managed, flow_memory: 0,
+            witnesses: witnesses(module, body), diagnose: true, collecting: false,
             capture_returns: false, contract_invalid: false,
             defer_stack: vec![function], defer_outputs: vec![], defer_cache: Default::default(),
         };
@@ -175,8 +178,7 @@ impl Engine<'_, '_> {
         entries
     }
     fn flow_bytes(&self, flow: &Flow) -> usize {
-        flow.availability.len().saturating_mul(1536)
-            .saturating_add(self.flow_entries(flow).saturating_mul(128))
+        flow.allocation_bytes()
     }
     fn charge_flow(&mut self, flow: &Flow) -> bool {
         // Scratch clones are released after each transfer. Charge their peak,
@@ -192,13 +194,7 @@ impl Engine<'_, '_> {
     }
 
     fn initial(&mut self) -> Flow {
-        let mut flow = Flow::new(self.body.values.len());
-        for (value, data) in self.body.values.iter() {
-            flow.witnesses[value.as_u32() as usize] = self.module.types.get(data.ty).is_ok_and(|ty| {
-                !matches!(ty, Type::Service(_) | Type::Descriptor | Type::Frame(_)
-                    | Type::Builder(_) | Type::MapBuilder(..))
-            });
-        }
+        let mut flow = Flow::new(self.body.values.len(), self.witnesses.clone());
         let defer_entry = self.declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. }));
         let call_boundary = defer_entry || self.declaration.summary.and_then(|id| self.module.summaries.get(id).ok())
             .is_some_and(|s| s.entry_kind == EntryKind::CallBoundary);
@@ -319,6 +315,16 @@ impl Engine<'_, '_> {
             || self.managed.get(v.ty.as_u32() as usize).copied().unwrap_or(true)))
     }
     fn solve(&mut self) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let before = (self.state.stats.memory_bytes, self.state.stats.steps);
+        self.solve_inner();
+        #[cfg(any(test, feature = "verifier-differential"))]
+        super::differential::record_function(
+            self.module.profile, &self.declaration.symbol, false, before,
+            &self.state.stats, self.flow_memory, self.state.incomplete,
+        );
+    }
+    fn solve_inner(&mut self) {
         if !self.state.array(self.body.blocks.len(), 64) {
             return;
         }
@@ -326,13 +332,22 @@ impl Engine<'_, '_> {
         if !self.state.array(self.body.values.len(), 320) {
             return;
         }
+        // Flow locals live on the stack. Only vectors of Flow allocate their
+        // inline headers on the heap; charge their capacities separately.
+        let outgoing = self.body.blocks.iter().map(|(_, block)| targets(&block.term.kind).len()).max().unwrap_or(0);
+        let outgoing_capacity = if outgoing == 0 { 0 } else { outgoing.next_power_of_two().max(4) };
+        if !self.state.array(outgoing_capacity, size_of::<(BlockId, Flow)>()) {
+            return;
+        }
+        let mut input_headers = 0;
         let initial = self.initial();
         if !self.charge_flow(&initial) {
             return;
         }
-        if !self.state.memory(self.flow_bytes(&initial)) {
+        if !self.state.memory(initial.charge_retained()) {
             return;
         }
+        incoming[self.body.entry.as_u32() as usize].reserve_exact(1);
         incoming[self.body.entry.as_u32() as usize].push(initial);
         let mut queue = VecDeque::from([self.body.entry]);
         let mut queued = vec![false; self.body.blocks.len()];
@@ -342,6 +357,13 @@ impl Engine<'_, '_> {
             queued[index] = false;
             if !self.state.step(1) {
                 return;
+            }
+            let headers = incoming[index].len().saturating_mul(size_of::<Flow>());
+            if headers > input_headers {
+                if !self.state.memory(headers - input_headers) {
+                    return;
+                }
+                input_headers = headers;
             }
             let scratch = incoming[index].iter().map(|flow| self.flow_bytes(flow)).sum::<usize>();
             if scratch > self.flow_memory {
@@ -369,9 +391,10 @@ impl Engine<'_, '_> {
                     let changed = if let Some(old) = states.iter_mut().find(|old| old.same_relations(&flow)) {
                         old.join_masks(&flow)
                     } else {
-                        if !self.state.memory(self.flow_bytes(&flow)) {
+                        if !self.state.memory(flow.charge_retained()) {
                             return;
                         }
+                        states.reserve_exact(1);
                         states.push(flow);
                         true
                     };
@@ -549,7 +572,7 @@ impl Engine<'_, '_> {
             }
             TermKind::RetDefer { tag, values } => {
                 if self.collecting {
-                    if !self.state.memory(self.flow_bytes(&flow)) {
+                    if !self.state.memory(flow.charge_retained()) {
                         return outgoing;
                     }
                     self.defer_outputs.push(defer::ReturnWitness {
@@ -727,7 +750,8 @@ impl Engine<'_, '_> {
                 self.define(&mut next, param, slot);
             }
             for index in 0..next.tokens.len() {
-                next.tokens[index] = next.normalize_token(next.tokens[index].clone());
+                let token = next.normalize_token(next.tokens[index].clone());
+                next.tokens.set(index, token);
             }
             for &param in &block.params {
                 let expected = next.full_deps[param.as_u32() as usize].clone();
@@ -794,4 +818,13 @@ fn targets(term: &TermKind) -> Vec<(BlockId, Vec<EdgeArg>)> {
         TermKind::Lookup { found, missing, .. } => vec![(found.block, found.args.clone()), target(missing)],
         _ => Vec::new(),
     }
+}
+
+fn witnesses(module: &Module, body: &Body) -> std::rc::Rc<Vec<bool>> {
+    std::rc::Rc::new(body.values.iter().map(|(_, data)| {
+        module.types.get(data.ty).is_ok_and(|ty| {
+            !matches!(ty, Type::Service(_) | Type::Descriptor | Type::Frame(_)
+                | Type::Builder(_) | Type::MapBuilder(..))
+        })
+    }).collect())
 }
