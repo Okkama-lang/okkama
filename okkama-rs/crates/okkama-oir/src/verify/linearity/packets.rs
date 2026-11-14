@@ -669,6 +669,9 @@ impl Engine<'_, '_> {
         }
     }
     fn retention(&mut self, flow: &Flow, retention: &Retention) -> BTreeSet<Origin> {
+        if let Retention::FullDeps(value) = retention {
+            return flow.full_deps[value.as_u32() as usize].clone();
+        }
         let projection = match retention {
             Retention::Field { base, field } => return self.field(flow, *base, *field),
             Retention::Index { base, index } => Some((*base, ProjectionKind::Index(*index))),
@@ -724,8 +727,8 @@ impl Engine<'_, '_> {
 
 fn retention_values(retention: &Retention) -> Vec<ValueId> {
     match retention {
-        Retention::Value(v) | Retention::OwnerGraph(v) | Retention::ViewOwner(v) | Retention::Cache(v)
-        | Retention::Keys(v) | Retention::Values(v) => vec![*v],
+        Retention::FullDeps(v) | Retention::Value(v) | Retention::OwnerGraph(v)
+        | Retention::ViewOwner(v) | Retention::Cache(v) | Retention::Keys(v) | Retention::Values(v) => vec![*v],
         Retention::Field { base, .. } | Retention::Index { base, .. } | Retention::Slice { base, .. }
         | Retention::Difference { base, .. } => vec![*base],
         Retention::MapEntry { map, .. } | Retention::MapPosition { map, .. } => vec![*map],

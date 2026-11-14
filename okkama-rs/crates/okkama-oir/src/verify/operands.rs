@@ -861,6 +861,12 @@ impl Checker<'_, '_> {
     }
     fn ownership(&mut self, op: &OwnershipOp) -> Checked<()> {
         match op {
+            OwnershipOp::Dependencies { value } => {
+                let ty = self.module.types.get(value_type(self.body, *value)?)?;
+                self.require(!matches!(ty, Type::Builder(_) | Type::MapBuilder(..) | Type::Frame(_))
+                    && !matches!(ty, Type::Service(service) if service.is_linear()),
+                    "deps.of cannot anchor a linear packet");
+            }
             OwnershipOp::Empty {} | OwnershipOp::ScopeBegin { .. } => {}
             OwnershipOp::Move { packet } | OwnershipOp::Split { packet, .. }
             | OwnershipOp::SplitChecked { packet, .. } | OwnershipOp::End { packet, .. } => {

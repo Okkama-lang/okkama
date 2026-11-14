@@ -1,9 +1,17 @@
 //! Ownership elaboration, independent of the verifier's implementation.
 //!
-//! Commit 1 implements classification and summary/effect inference only. It
-//! preserves the input profile, ABI, instruction layout and lexical boundaries; it
-//! does not rewrite High into Own or certify an ownership transformation.
-//! Commits 2–3 consume the returned analysis to build dependencies and cleanup.
+//! Classification and summary inference preserve the input profile. Commit 2
+//! adds a finite forward domain, sealed SSA, lexical edges and an outcome emitter.
+//! `rewrite_subset` exercises these on a deliberately limited High slice. The
+//! complete synchronous elaborator remains commit 3. Verification is a caller
+//! prerequisite and independent postcondition, never an implementation oracle.
+pub mod domain;
+pub mod analyze;
+pub mod bindings;
+pub mod edges;
+pub mod emit;
+mod driver;
+pub use driver::rewrite_subset;
 mod classify;
 mod normal;
 mod summaries;
@@ -73,9 +81,18 @@ impl Default for OwnOptions {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OwnLimit {
+    Work,
+    Memory,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OwnStats {
+    pub active_function: Option<FuncId>,
+    pub exhausted_limit: Option<OwnLimit>,
     pub functions: usize,
+    pub emitted_checked_splits: usize,
     pub universe_nodes: usize,
     pub adapter_equations: usize,
     pub implicit_destroy_edges: usize,
@@ -83,7 +100,7 @@ pub struct OwnStats {
     pub cyclic_sccs: usize,
     pub equation_evaluations: usize,
     pub empty_scope_candidates: usize,
-    /// Commit 1 emits no scopes, splits or adapters, so emitted counters are zero.
+    /// Counts actual emitted lexical elisions in the partial driver.
     pub elided_lexical_scopes: usize,
     pub incompatible_publication_joins: usize,
     pub incompatible_protocol_joins: usize,
@@ -104,6 +121,8 @@ pub enum OwnDiagnosticKind {
     UnsupportedAsync,
     MissingBoundary,
     InvalidEquation,
+    InvalidFlow,
+    Commit3,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -147,6 +166,7 @@ pub struct OwnOutput {
     pub analysis: OwnAnalysis,
 }
 
+#[derive(Debug)]
 pub(super) struct Budget<'a> {
     options: &'a OwnOptions,
     pub stats: OwnStats,
@@ -159,7 +179,9 @@ impl<'a> Budget<'a> {
     pub fn work(&mut self, count: usize) -> Result<(), OwnError> {
         let next = self.stats.charged_work.checked_add(count);
         if next.is_none_or(|next| next > self.options.work_limit) {
-            return Err(OwnError::Incomplete { stats: Box::new(self.stats.clone()) });
+            let mut stats = self.stats.clone();
+            stats.exhausted_limit = Some(OwnLimit::Work);
+            return Err(OwnError::Incomplete { stats: Box::new(stats) });
         }
         self.stats.charged_work = next.unwrap();
         Ok(())
@@ -167,7 +189,9 @@ impl<'a> Budget<'a> {
     pub fn memory(&mut self, bytes: usize) -> Result<(), OwnError> {
         let next = self.stats.peak_auxiliary_bytes.checked_add(bytes);
         if next.is_none_or(|next| next > self.options.memory_limit) {
-            return Err(OwnError::Incomplete { stats: Box::new(self.stats.clone()) });
+            let mut stats = self.stats.clone();
+            stats.exhausted_limit = Some(OwnLimit::Memory);
+            return Err(OwnError::Incomplete { stats: Box::new(stats) });
         }
         self.stats.peak_auxiliary_bytes = next.unwrap();
         Ok(())
@@ -196,26 +220,6 @@ pub(super) fn language(module: &Module, types: &[TypeId]) -> Vec<TypeId> {
     types.iter().copied().filter(|ty| module.types.get(*ty).is_ok_and(|ty| {
         !matches!(ty, Type::Service(_) | Type::Descriptor)
     })).collect()
-}
-
-#[derive(Default)]
-struct Catalog {
-    natives: BTreeMap<String, (Signature, Summary)>,
-    intrinsics: BTreeMap<String, (Signature, Summary)>,
-}
-impl ExternalContracts for Catalog {
-    fn native(&self, name: &str) -> Option<&Signature> {
-        self.natives.get(name).map(|entry| &entry.0)
-    }
-    fn intrinsic(&self, name: &str) -> Option<&Signature> {
-        self.intrinsics.get(name).map(|entry| &entry.0)
-    }
-    fn native_summary(&self, name: &str) -> Option<&Summary> {
-        self.natives.get(name).map(|entry| &entry.1)
-    }
-    fn intrinsic_summary(&self, name: &str) -> Option<&Summary> {
-        self.intrinsics.get(name).map(|entry| &entry.1)
-    }
 }
 
 fn external_substitutions(
@@ -273,9 +277,9 @@ fn external_substitutions(
 /// keeps its input profile and ownership ABI. No cleanup, pending reservation,
 /// adapter body or paired dependency SSA is fabricated. `analysis.scopes`
 /// supplies eligibility facts for the later rewrite, not an elision claim.
-/// Input and annotated output are checked by the independent verifier. On an
-/// existing Own fixture, narrowing that needs a CFG rewrite is `InvalidOutput`;
-/// this partial entry does not edit outcome edges to conceal that requirement.
+/// The caller verifies input and annotated output independently. Narrowing an
+/// existing Own fixture may require a later CFG rewrite; inference does not edit
+/// outcome edges or certify the returned module.
 /// Exhaustion returns `Incomplete`, with no certified or partial module.
 pub fn elaborate_ownership(
     mut module: Module,
@@ -287,7 +291,6 @@ pub fn elaborate_ownership(
         return Err(budget.fail(OwnDiagnosticKind::InvalidEquation,
             "classification/summary elaboration requires High or an existing Own fixture"));
     }
-    let mut catalog = Catalog::default();
     let mut external = BTreeMap::new();
     for (id, function) in module.functions.iter() {
         budget.work(1)?;
@@ -317,26 +320,14 @@ pub fn elaborate_ownership(
         }
         let summary = joined.unwrap();
         budget.memory(512 + normal::size(&summary))?;
-        let target = match boundary {
-            ExternalBoundary::Native(_) => &mut catalog.natives,
-            _ => &mut catalog.intrinsics,
-        };
-        let name = match boundary {
-            ExternalBoundary::Native(name) | ExternalBoundary::Intrinsic(name) => name,
-            _ => unreachable!(),
-        };
-        target.insert(name.into(), (function.signature.clone(), summary.clone()));
         external.insert(id, summary);
     }
-    let context = VerifyContext { text_locations: None, external_contracts: &catalog };
-    verify_with(&module, &options.verify, context).map_err(|report| OwnError::InvalidInput(Box::new(report)))?;
     let types = classify::classify(&module, options, &mut budget)?;
     let mut universe = summaries::Universe::build(&module, &types, external, natives, &mut budget)?;
     universe.solve(&module, &types, &mut budget)?;
     let mut analysis = scopes::analyze(&module, &types, &universe, &mut budget)?;
     universe.annotate(&mut module, &analysis.scopes, &mut budget)?;
     analysis.types = types;
-    verify_with(&module, &options.verify, context).map_err(|report| OwnError::InvalidOutput(Box::new(report)))?;
     Ok(OwnOutput {
         module,
         census: DynamicCensus::default(),
@@ -347,3 +338,18 @@ pub fn elaborate_ownership(
 
 #[cfg(test)]
 mod tests;
+
+fn flow_error(message: impl Into<String>) -> OwnError {
+    phase_error(OwnDiagnosticKind::InvalidFlow, message)
+}
+
+fn commit3(operation: impl AsRef<str>) -> OwnError {
+    phase_error(OwnDiagnosticKind::Commit3, format!("commit 3: {} rewrite is not implemented", operation.as_ref()))
+}
+
+fn phase_error(kind: OwnDiagnosticKind, message: impl Into<String>) -> OwnError {
+    OwnError::Diagnostics {
+        diagnostics: vec![OwnDiagnostic { kind, function: None, site: None, message: message.into() }],
+        stats: Box::default(),
+    }
+}

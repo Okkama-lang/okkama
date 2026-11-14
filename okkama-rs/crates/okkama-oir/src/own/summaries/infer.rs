@@ -475,7 +475,7 @@ fn retention(
     let mut owner = false;
     let inputs: Vec<_> = match retention {
         Retention::Global(_) => vec![],
-        Retention::Value(value) | Retention::Index { base: value, .. }
+        Retention::FullDeps(value) | Retention::Value(value) | Retention::Index { base: value, .. }
         | Retention::Slice { base: value, .. } | Retention::Keys(value) | Retention::Values(value)
         | Retention::MapEntry { map: value, .. } | Retention::MapPosition { map: value, .. }
         | Retention::ArrayRemove { array: value, .. } | Retention::Difference { base: value, .. }

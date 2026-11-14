@@ -80,7 +80,7 @@ fn every_opcode_builder_roundtrips_and_every_invoke_slot_is_preserved() {
         roundtrip(&module);
     }
     assert_eq!(seen, Operation::opcode_inventory().into_iter().collect(), "opcode missing a builder round-trip case");
-    assert_eq!(seen.len(), 269);
+    assert_eq!(seen.len(), 270);
 }
 
 #[test]
@@ -628,6 +628,7 @@ fn every_typed_payload_enum_branch_roundtrips() {
     let cases = vec![
         Retention::Global(cs::<DeclId>()),
         Retention::Value(cs::<ValueId>()),
+        Retention::FullDeps(cs::<ValueId>()),
         Retention::Field { base: cs::<ValueId>(), field: cs::<FieldRef>() },
         Retention::Index { base: cs::<ValueId>(), index: cs::<ValueId>() },
         Retention::Slice { base: cs::<ValueId>(), start: cs::<ValueId>(), end: cs::<ValueId>() },
