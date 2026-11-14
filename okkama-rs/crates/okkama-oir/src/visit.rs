@@ -3,6 +3,11 @@
 use crate::*;
 
 pub trait VisitorMut {
+    fn cleanup_close(&mut self, _: &mut CleanupCloseId) {}
+    fn cleanup_order_proof(&mut self, _: &mut CleanupOrderProofId) {}
+    fn cleanup_plan(&mut self, _: &mut CleanupPlanId) {}
+    fn cleanup_schedule(&mut self, _: &mut CleanupScheduleId) {}
+    fn root_map(&mut self, _: &mut RootMapId) {}
     fn value(&mut self, _: &mut ValueId) {}
     fn instruction(&mut self, _: &mut InstId) {}
     fn block(&mut self, _: &mut BlockId) {}
@@ -33,7 +38,9 @@ macro_rules! leaf {
         }
     )*};
 }
-leaf!(ValueId => value, InstId => instruction, BlockId => block, BindingId => binding,
+leaf!(CleanupOrderProofId => cleanup_order_proof, CleanupCloseId => cleanup_close, CleanupPlanId => cleanup_plan,
+    CleanupScheduleId => cleanup_schedule, RootMapId => root_map, ValueId => value, InstId => instruction,
+    BlockId => block, BindingId => binding,
     BoundaryId => boundary, DepExprId => dependency, KeyExprId => key,
     SelectionId => selection, CreationSiteId => creation_site, TypeId => ty,
     DeclId => declaration, FuncId => function, ScopeId => scope, SummaryId => summary,
@@ -41,8 +48,8 @@ leaf!(ValueId => value, InstId => instruction, BlockId => block, BindingId => bi
 macro_rules! inert {
     ($($ty:ty),* $(,)?) => {$(impl Rewrite for $ty { fn rewrite(&mut self, _: &mut impl VisitorMut) {} })*};
 }
-inert!(u16, u32, bool, String, NumericType, ConstructionStatus, OperandMode,
-    OperandConvention, DynamicReason, ExitKind, AbortPhase, DescriptorManaged,
+inert!(MergeSource, u16, u32, bool, String, NumericType, ConstructionStatus, OperandMode,
+    OperandConvention, DynamicReason, ExitKind, DescriptorManaged,
     AdmissionProvenance, ServiceKeyKind, BoundaryKind, ScopeEffectEnvelope, CallCleanupMode,
     HighEffectEnvelope, HighEdgeSelector, DeferReturnTag);
 impl<T: Rewrite> Rewrite for Vec<T> {
@@ -69,7 +76,7 @@ macro_rules! fields {
 }
 fields!(
     DeferLabel { result }, DeferRegistration { boundary },
-    DescriptorBinding { dictionary, contract }, ServiceSchedule { owner, protocol },
+    DescriptorBinding { dictionary, contract }, ServiceSchedule { owner, protocol, dictionary, duties },
     HighResultExit { block, value, prepared }, HighEffectRecord { site },
     DeferReplaceEdge { edge },
     FieldRef { declaration }, FieldValue { field, value }, ConstructionCompletion { state },
@@ -88,7 +95,7 @@ fields!(
     Target { block, args }, InvokeEdge { block, args }, BlockUnwind { target },
     Block { lexical_scope, params, unwind, insts, term },
     Terminator { kind, loc }, SwitchCase { value, target },
-    Body { entry, values, blocks, insts, bindings, boundaries, deps, keys, selections,
+    Body { cleanup, entry, values, blocks, insts, bindings, boundaries, deps, keys, selections,
         high_results, high_effects, descriptor_bindings, service_schedules }
 );
 impl Rewrite for DebugLoc {
@@ -124,6 +131,26 @@ impl Rewrite for EdgeArg {
 impl Rewrite for TermKind {
     fn rewrite(&mut self, visitor: &mut impl VisitorMut) {
         match self {
+            Self::CleanupNext { cleanup, selected, done } => {
+                cleanup.rewrite(visitor);
+                selected.rewrite(visitor);
+                done.rewrite(visitor);
+            }
+            Self::ExitDispatch { close, closed, failure, exit, success, pending, failed } => {
+                close.rewrite(visitor);
+                closed.rewrite(visitor);
+                failure.rewrite(visitor);
+                exit.rewrite(visitor);
+                success.rewrite(visitor);
+                pending.rewrite(visitor);
+                failed.rewrite(visitor);
+            }
+            Self::FailureDispatch { failure, none, some } => {
+                failure.rewrite(visitor);
+                none.rewrite(visitor);
+                some.rewrite(visitor);
+            }
+
             Self::Br(target) => target.rewrite(visitor),
             Self::Cond { condition, yes, no } => { condition.rewrite(visitor); yes.rewrite(visitor); no.rewrite(visitor); }
             Self::Switch { value, cases, default } => { value.rewrite(visitor); cases.rewrite(visitor); default.rewrite(visitor); }
@@ -219,6 +246,7 @@ impl Rewrite for Projection {
 /// Visit every use (including unused declarations and facts), without changing
 /// SSA definitions, block parameter/result lists or arena keys.
 pub fn rewrite_uses(body: &mut Body, visitor: &mut impl VisitorMut) {
+    body.cleanup.rewrite(visitor);
     body.high_results.rewrite(visitor);
     body.high_effects.rewrite(visitor);
     body.descriptor_bindings.rewrite(visitor);
@@ -249,6 +277,58 @@ impl Rewrite for HighOperationSite {
         match self {
             Self::Instruction(instruction) => instruction.rewrite(visitor),
             Self::Terminator(block) => block.rewrite(visitor),
+        }
+    }
+}
+
+fields!(
+    CleanupMetadata { closes, schedules, plans, roots, proofs },
+    CleanupClose { source, after_defers, effects }, CleanupSchedule { close, holders, dictionary, protocol },
+    CleanupPlan { close, sources, direct }, RootRequirement { boundary, bindings }, RootBinding { value, trace }
+);
+impl Rewrite for CleanupSource {
+    fn rewrite(&mut self, visitor: &mut impl VisitorMut) {
+        match self {
+            Self::Scope(value) => value.rewrite(visitor),
+            Self::Packet(value) => value.rewrite(visitor),
+        }
+    }
+}
+impl Rewrite for RootBoundary {
+    fn rewrite(&mut self, visitor: &mut impl VisitorMut) {
+        match self {
+            Self::BeforeInstruction(value) => value.rewrite(visitor),
+            Self::AfterInstruction(value) => value.rewrite(visitor),
+            Self::Terminator(value) => value.rewrite(visitor),
+            Self::Entry(value) => value.rewrite(visitor),
+        }
+    }
+}
+impl Rewrite for RootTrace {
+    fn rewrite(&mut self, visitor: &mut impl VisitorMut) {
+        match self {
+            Self::Value(value) => value.rewrite(visitor),
+            Self::Descriptor(value) => value.rewrite(visitor),
+            _ => {},
+        }
+    }
+}
+
+fields!(
+    DirectSlot { identity, descriptor, destroy, origin, active_at },
+    PreserveWitness { from, to }, JoinWitness { state, predecessors }, CleanupSuffix { completed, remaining, roots },
+    CleanupOrderProof { state, slots, preserves, joins, suffixes, reserve_empty }
+);
+impl Rewrite for CreationWitness {
+    fn rewrite(&mut self, visitor: &mut impl VisitorMut) {
+        match self {
+            Self::Singleton => {},
+            Self::Create { site } => site.rewrite(visitor),
+            Self::FreshResult { site, callee, summary } => {
+                site.rewrite(visitor);
+                callee.rewrite(visitor);
+                summary.rewrite(visitor);
+            }
         }
     }
 }

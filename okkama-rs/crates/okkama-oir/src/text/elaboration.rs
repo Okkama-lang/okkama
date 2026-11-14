@@ -58,6 +58,14 @@ impl Writer<'_> {
             schedule.owner.write(self)?;
             self.push(", protocol ");
             schedule.protocol.write(self)?;
+            if let Some(dictionary) = schedule.dictionary {
+                self.push(", dictionary ");
+                dictionary.write(self)?;
+            }
+            if !schedule.duties.is_empty() {
+                self.push(", duties ");
+                schedule.duties.write(self)?;
+            }
             self.push("\n");
         }
         Ok(())

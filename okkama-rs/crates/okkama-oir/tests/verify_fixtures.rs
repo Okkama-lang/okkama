@@ -68,9 +68,12 @@ fn canonical_verifier_fixtures() {
             }
         }
     }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
     for rule in [
         "B1.1", "B1.2", "B2.1", "B2.2", "B2.3", "B3.1", "B3.2", "B4.1", "B4.2", "B4.3",
         "B5.1", "B5.2", "B5.3", "B5.4", "B6.3", "B8.1", "B8.2", "B10.1",
+        "B7.1", "B7.2", "B7.3", "B7.4", "B7.5", "B9.1", "B9.2", "B9.3", "B9.4", "B9.5", "B9.6",
+        "B10.2", "B10.3", "B10.4", "B10.5", "B10.6", "B11.1", "B11.2", "B11.3", "B11.4",
     ] {
         assert!(covered.contains(&format!("OIR2-{rule}")), "missing canonical negative for {rule}");
     }
@@ -234,7 +237,8 @@ fn ownership_verdicts_survive_codec_and_arena_permutations() {
         let mut paths: Vec<_> = fs::read_dir(root.join(class)).unwrap().map(|e| e.unwrap().path()).collect();
         paths.sort();
         for path in paths {
-            let original = text::parse(&fs::read_to_string(&path).unwrap()).unwrap();
+            let original = text::parse(&fs::read_to_string(&path).unwrap())
+                .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
             let expected = verdict(&original);
             let printed = text::print(&original).unwrap();
             let renamed = text::parse(&printed.replace('%', "%renamed_")).unwrap();
@@ -253,6 +257,31 @@ fn ownership_verdicts_survive_codec_and_arena_permutations() {
                 for (old, inst) in body.insts.iter().collect::<Vec<_>>().into_iter().rev() {
                     remap.instructions.insert(old, instructions.alloc(inst.clone()).unwrap());
                 }
+                let mut closes = Arena::new();
+                for (old, item) in body.cleanup.closes.iter().collect::<Vec<_>>().into_iter().rev() {
+                    remap.cleanup_closes.insert(old, closes.alloc(item.clone()).unwrap());
+                }
+                body.cleanup.closes = closes;
+                let mut schedules = Arena::new();
+                for (old, item) in body.cleanup.schedules.iter().collect::<Vec<_>>().into_iter().rev() {
+                    remap.cleanup_schedules.insert(old, schedules.alloc(item.clone()).unwrap());
+                }
+                body.cleanup.schedules = schedules;
+                let mut plans = Arena::new();
+                for (old, item) in body.cleanup.plans.iter().collect::<Vec<_>>().into_iter().rev() {
+                    remap.cleanup_plans.insert(old, plans.alloc(item.clone()).unwrap());
+                }
+                body.cleanup.plans = plans;
+                let mut proofs = Arena::new();
+                for (old, item) in body.cleanup.proofs.iter().collect::<Vec<_>>().into_iter().rev() {
+                    remap.cleanup_proofs.insert(old, proofs.alloc(item.clone()).unwrap());
+                }
+                body.cleanup.proofs = proofs;
+                let mut roots = Arena::new();
+                for (old, item) in body.cleanup.roots.iter().collect::<Vec<_>>().into_iter().rev() {
+                    remap.root_maps.insert(old, roots.alloc(item.clone()).unwrap());
+                }
+                body.cleanup.roots = roots;
                 body.values = values;
                 body.insts = instructions;
                 body.rewrite(&mut remap);
@@ -287,5 +316,42 @@ fn absent_call_summaries_are_specific_to_high() {
         module.profile = profile;
         let report = verify(&module).unwrap_err();
         assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::B51), "{report:?}");
+    }
+}
+
+#[test]
+fn protocol_census_and_structural_gaps_are_explicit() {
+    use okkama_oir::*;
+    let module = text::parse(include_str!("fixtures/verify/valid/B7-any-family.oir")).unwrap();
+    let verified = verify(&module).unwrap();
+    assert_eq!(verified.stats().dynamic.sites.len(), 1);
+    assert_eq!(verified.stats().dynamic.census.module_count(DynamicReason::Any), 1);
+    assert_eq!(verified.stats().dynamic.census.module_count(DynamicReason::Merge), 0);
+    assert!(matches!(verified.stats().dynamic.sites[0].site, OperationSite::Terminator { .. }));
+    let module = text::parse(include_str!("fixtures/verify/valid/B9-frame-save-resume-cancel.oir")).unwrap();
+    assert!(verify_coro(&module).unwrap().stats().structural_checks
+        .contains(&StructuralCheck::B95FrameLayoutAndContinuations));
+    let module = text::parse(include_str!("fixtures/verify/valid/B9-duplicate-positions-shared-outcome.oir")).unwrap();
+    assert!(verify_own(&module).unwrap().stats().structural_checks
+        .contains(&StructuralCheck::B96CollectorPositions));
+}
+
+#[test]
+fn malformed_cleanup_proof_arenas_are_rejected_without_panics() {
+    use okkama_oir::*;
+    for corruption in 0..3 {
+        let mut module = text::parse(include_str!("fixtures/verify/valid/B10-common-cleanup-plan.oir")).unwrap();
+        let body = module.functions.get_mut(FuncId::from_u32(0)).unwrap().body.as_mut().unwrap();
+        match corruption {
+            0 => body.cleanup.plans.get_mut(CleanupPlanId::from_u32(0)).unwrap().close =
+                CleanupCloseId::from_u32(u32::MAX),
+            1 => body.cleanup.roots.get_mut(RootMapId::from_u32(0)).unwrap().bindings =
+                vec![RootBinding { value: ValueId::from_u32(u32::MAX), trace: RootTrace::CleanupActivation }],
+            _ => body.cleanup.roots.get_mut(RootMapId::from_u32(0)).unwrap().boundary =
+                RootBoundary::BeforeInstruction(InstId::from_u32(u32::MAX)),
+        }
+        let report = verify_low(&module).unwrap_err();
+        assert_eq!(report.failure, VerifyFailure::Rejected);
+        assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::S3));
     }
 }
