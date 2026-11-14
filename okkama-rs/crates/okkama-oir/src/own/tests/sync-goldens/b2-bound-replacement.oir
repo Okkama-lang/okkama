@@ -1,0 +1,281 @@
+oir 2 own
+module sync
+
+object R {
+    destroy @destroy
+}
+scope S0 action in @destroy
+scope S1 action in @make
+scope S2 action in @f
+scope S3 action in @replace
+scope S4 block in @f parent S2
+summary M0 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(publication=atomic)
+summary M1 call-boundary results [result_relation(fresh=[0], provenance=unbound_result)] contract call_contract(results=[R], failures=[program], publication=atomic)
+summary M2 call-boundary parameters [parameter_effect(convention=take, retention=some(parameter(0)), deps=[0], destination=result)] contract call_contract(failures=[program], publication=atomic)
+summary M3 call-boundary results [result_relation(fresh=[0, 84], provenance=unbound_result)] contract call_contract(results=[R], failures=[program], publication=atomic)
+summary M4 observation parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(publication=atomic)
+
+func @destroy(%0: R facts(managed(deps=d1))) -> void [destroy R] abi observation summary(M4) {
+    dependency d0: dependency = from_ssa(%3)
+    dependency d1: dependency = retention(value=%0, selection=selection(%0))
+    ^b0 in S0:
+    %1: deps = deps.of %0
+    br ^b1(%0, %1)
+    ^b1(%2: R facts(managed(deps=d0)), %3: deps) in S0:
+    ret
+}
+
+func @make(%0: own) -> (R, own) [ctor R] abi explicit(input_packet=0, output_packet=1) summary(M1) {
+    boundary B0 lexical in S1
+    boundary B1 lexical in S1
+    key k0: key = created(site=7, instance=%5)
+    dependency d0: dependency = key(k0)
+    dependency d1: dependency = union([d0])
+    dependency d2: dependency = from_ssa(%21)
+    dependency d3: dependency = from_ssa(%21)
+    ^b0 in S1:
+    %1: scope<S1> = scope.begin S1
+    %2: scope<S1> = own.accept %1, %0
+    br ^b1(%2)
+    ^b1(%3: scope<S1>) in S1:
+    %4: own = own.empty
+    invoke.own obj.new R {; %4 }
+        normal ^b2($value, $packet, %3)
+        unwind ^b3($packet, $failure, %3)
+    ^b2(%5: R facts(managed(deps=d1)), %6: own, %7: scope<S1>) in S1:
+    %8: deps = deps.of %5
+    %9: scope<S1> = own.admit %7, %6
+    %10: own = own.empty
+    %11: pending = exit.prepare return %5, %10, deps(%8) at B1
+    invoke.own scope.split %9, selection(%5)
+        normal ^b4($state, $selected, $external_deps, %5, %8, %11)
+        unwind ^b5($state, $failure, %11)
+    ^b3(%12: own, %13: failure, %14: scope<S1>) in S1:
+    %15: scope<S1> = own.admit %14, %12
+    %16: failure = scope.unwind %15, %13, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %16
+    ^b4(%17: scope<S1>, %18: own, %19: deps, %20: R facts(managed(deps=d2)), %21: deps, %22: pending) in S1:
+    %23: pending = exit.extend %22, %18
+    (%24: closed, %25: pending) = scope.end %17, reserve %23, effects scope_effects(failures=[], suspends=false, cancel=false)
+    (%26: R facts(managed(deps=d3)), %27: own, %28: deps) = exit.commit %25, destination caller, result R
+    ret %26, %27
+    ^b5(%29: scope<S1>, %30: failure, %31: pending) in S1:
+    %32: failure = scope.unwind %29, %30, reserve %31, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %32
+}
+
+func @replace(%0: R facts(managed(deps=d1)); %1: deps, %2: own) -> own [defer(replacements=[defer_label(label="return", result=some(R))])] abi explicit(input_packet=2, output_packet=0) summary(M2) {
+    boundary B0 lexical in S3
+    boundary B1 lexical in S3
+    dependency d0: dependency = from_ssa(%6)
+    dependency d1: dependency = from_ssa(%1)
+    dependency d2: dependency = from_ssa(%14)
+    dependency d3: dependency = from_ssa(%14)
+    ^b0 in S3:
+    %3: scope<S3> = scope.begin S3
+    %4: scope<S3> = own.accept %3, %2
+    br ^b1(%0, %1, %4)
+    ^b1(%5: R facts(managed(deps=d0)), %6: deps, %7: scope<S3>) in S3:
+    %8: own = own.empty
+    %9: pending = exit.prepare return %5, %8, deps(%6) at B1
+    invoke.own scope.split %7, selection(%5)
+        normal ^b2($state, $selected, $external_deps, %5, %6, %9)
+        unwind ^b3($state, $failure, %9)
+    ^b2(%10: scope<S3>, %11: own, %12: deps, %13: R facts(managed(deps=d2)), %14: deps, %15: pending) in S3:
+    %16: pending = exit.extend %15, %11
+    (%17: closed, %18: pending) = scope.end %10, reserve %16, effects scope_effects(failures=[], suspends=false, cancel=false)
+    (%19: R facts(managed(deps=d3)), %20: own, %21: deps) = exit.commit %18, destination caller, result R
+    ret defer replace return, %19, %20, %21
+    ^b3(%22: scope<S3>, %23: failure, %24: pending) in S3:
+    %25: failure = scope.unwind %22, %23, reserve %24, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %25
+}
+
+func @f(%0: own) -> (R, own) abi explicit(input_packet=0, output_packet=1) summary(M3) {
+    binding b0 "b0": R in S2
+    boundary B0 lexical in S2
+    boundary B1 lexical in S2
+    dependency d0: dependency = from_ssa(%6)
+    dependency d1: dependency = from_ssa(%12)
+    dependency d2: dependency = from_ssa(%22)
+    dependency d3: dependency = from_ssa(%32)
+    dependency d4: dependency = from_ssa(%30)
+    dependency d5: dependency = from_ssa(%40)
+    dependency d6: dependency = from_ssa(%48)
+    dependency d7: dependency = from_ssa(%50)
+    dependency d8: dependency = from_ssa(%59)
+    dependency d9: dependency = from_ssa(%67)
+    dependency d10: dependency = from_ssa(%69)
+    dependency d11: dependency = from_ssa(%75)
+    dependency d12: dependency = from_ssa(%80)
+    dependency d13: dependency = from_ssa(%82)
+    dependency d14: dependency = from_ssa(%89)
+    dependency d15: dependency = from_ssa(%91)
+    dependency d16: dependency = from_ssa(%86)
+    dependency d17: dependency = from_ssa(%99)
+    dependency d18: dependency = from_ssa(%105)
+    dependency d19: dependency = from_ssa(%107)
+    dependency d20: dependency = from_ssa(%115)
+    dependency d21: dependency = from_ssa(%113)
+    dependency d22: dependency = from_ssa(%121)
+    dependency d23: dependency = from_ssa(%126)
+    dependency d24: dependency = from_ssa(%126)
+    dependency d25: dependency = from_ssa(%136)
+    dependency d26: dependency = from_ssa(%142)
+    dependency d27: dependency = from_ssa(%148)
+    dependency d28: dependency = from_ssa(%155)
+    dependency d29: dependency = from_ssa(%152)
+    dependency d30: dependency = from_ssa(%161)
+    dependency d31: dependency = from_ssa(%168)
+    dependency d32: dependency = from_ssa(%174)
+    dependency d33: dependency = from_ssa(%180)
+    dependency d34: dependency = from_ssa(%186)
+    dependency d35: dependency = from_ssa(%193)
+    dependency d36: dependency = from_ssa(%190)
+    dependency d37: dependency = from_ssa(%199)
+    dependency d38: dependency = from_ssa(%206)
+    selection s0: selection = admissible(selection(%10))
+    selection s1: selection = union([selection(%49)])
+    selection s2: selection = admissible(s1)
+    selection s3: selection = union([selection(%58)])
+    selection s4: selection = admissible(s3)
+    selection s5: selection = union([selection(%39)])
+    selection s6: selection = admissible(s5)
+    ^b0 in S2:
+    %1: scope<S2> = scope.begin S2
+    %2: scope<S2> = own.accept %1, %0
+    br ^b1(%2)
+    ^b1(%3: scope<S2>) in S2:
+    %4: own = own.empty
+    invoke.own call @make(; %4)
+        normal ^b3($value, $packet, $deps, %3)
+        unwind ^b4($failure, %3)
+    ^b2(%5: R facts(managed(deps=d0)), %6: deps, %7: scope<S2>, %8: scope<S4>) in S4:
+    %9: own = own.empty
+    invoke.own call @make(; %9)
+        normal ^b7($value, $packet, $deps, %5, %6, %7, %8)
+        unwind ^b8($failure, %5, %6, %7, %8)
+    ^b3(%10: R facts(managed(deps=d1)), %11: own, %12: deps, %13: scope<S2>) in S2:
+    %14: scope<S2> = own.admit %13, %11
+    invoke.own scope.split %14, s0
+        normal ^b5($state, $selected, $external_deps, %10, %12)
+        unwind ^b6($state, $failure)
+    ^b4(%15: failure, %16: scope<S2>) in S2:
+    %17: failure = scope.unwind %16, %15, effects scope_effects(failures=[program], suspends=false, cancel=false)
+    raise %17
+    ^b5(%18: scope<S2>, %19: own, %20: deps, %21: R facts(managed(deps=d2)), %22: deps) in S2:
+    %23: scope<S2> = own.bind binding elaborated_binding(binding=b0, resource=resource_value(value=%21, packet=%19), state=%18, original_scope=S2)
+    %24: scope<S4> = scope.begin S4
+    br ^b2(%21, %22, %23, %24)
+    ^b6(%25: scope<S2>, %26: failure) in S2:
+    %27: failure = scope.unwind %25, %26, effects scope_effects(failures=[program], suspends=false, cancel=false)
+    raise %27
+    ^b7(%28: R facts(managed(deps=d4)), %29: own, %30: deps, %31: R facts(managed(deps=d3)), %32: deps, %33: scope<S2>, %34: scope<S4>) in S4:
+    %35: scope<S4> = own.admit %34, %29
+    %36: own = own.empty
+    %37: pending = exit.prepare return %28, %36, deps(%30) at B1
+    invoke.own scope.split %35, selection(%28)
+        normal ^b9($state, $selected, $external_deps, %28, %30, %31, %32, %33, %37)
+        unwind ^b10($state, $failure, %31, %32, %33, %37)
+    ^b8(%38: failure, %39: R facts(managed(deps=d5)), %40: deps, %41: scope<S2>, %42: scope<S4>) in S4:
+    %43: failure = scope.unwind %42, %38, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b29
+    ^b9(%44: scope<S4>, %45: own, %46: deps, %47: R facts(managed(deps=d6)), %48: deps, %49: R facts(managed(deps=d7)), %50: deps, %51: scope<S2>, %52: pending) in S4:
+    %53: pending = exit.extend %52, %45
+    (%54: closed, %55: pending) = scope.end %44, reserve %53, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b11
+    ^b10(%56: scope<S4>, %57: failure, %58: R facts(managed(deps=d8)), %59: deps, %60: scope<S2>, %61: pending) in S4:
+    %62: failure = scope.unwind %56, %57, reserve %61, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b22
+    ^b11 in S2:
+    invoke.own scope.split %51, s2
+        normal ^b12($state, $selected, $external_deps, %47, %48, %49, %50, %55)
+        unwind ^b13($state, $failure, %49, %50, %55)
+    ^b12(%63: scope<S2>, %64: own, %65: deps, %66: R facts(managed(deps=d9)), %67: deps, %68: R facts(managed(deps=d10)), %69: deps, %70: pending) in S2:
+    %71: own = own.join [%64]
+    invoke.defer @replace(consume %49; %71) deps [%50] summary(M2)
+        continue ^b14(%63, %66, %67, %68, %69, %70)
+        replace return ^b15($value, $packet, $deps, %63, %66, %67, %68, %69, %70)
+        unwind ^b16($failure, %63, %68, %69, %70)
+    ^b13(%72: scope<S2>, %73: failure, %74: R facts(managed(deps=d11)), %75: deps, %76: pending) in S2:
+    %77: failure = scope.unwind %72, %73, reserve %76, effects scope_effects(failures=[program], suspends=false, cancel=false)
+    raise %77
+    ^b14(%78: scope<S2>, %79: R facts(managed(deps=d12)), %80: deps, %81: R facts(managed(deps=d13)), %82: deps, %83: pending) in S2:
+    br ^b17(%78, %83, %81, %82, %79, %80)
+    ^b15(%84: R facts(managed(deps=d16)), %85: own, %86: deps, %87: scope<S2>, %88: R facts(managed(deps=d14)), %89: deps, %90: R facts(managed(deps=d15)), %91: deps, %92: pending) in S2:
+    (%93: pending, %94: own) = exit.replace %92, replacement prepared_exit(kind=return, value=some(%84), packet=some(%85), deps=some(%86), selection=selection(%84), boundary=B0)
+    %95: scope<S2> = own.accept %87, %94
+    br ^b17(%95, %93, %90, %91, %84, %86)
+    ^b16(%96: failure, %97: scope<S2>, %98: R facts(managed(deps=d17)), %99: deps, %100: pending) in S2:
+    %101: failure = scope.unwind %97, %96, reserve %100, effects scope_effects(failures=[program], suspends=false, cancel=false)
+    raise %101
+    ^b17(%102: scope<S2>, %103: pending, %104: R facts(managed(deps=d18)), %105: deps, %106: R facts(managed(deps=d19)), %107: deps) in S2:
+    invoke.own scope.split %102, selection(%106)
+        normal ^b18($state, $selected, $external_deps, %103, %104, %105, %106, %107)
+        unwind ^b19($state, $failure, %103, %104, %105)
+    ^b18(%108: scope<S2>, %109: own, %110: deps, %111: pending, %112: R facts(managed(deps=d21)), %113: deps, %114: R facts(managed(deps=d20)), %115: deps) in S2:
+    %116: pending = exit.extend %111, %109
+    invoke.own scope.end %108, reserve %116, effects scope_effects(failures=[program], suspends=false, cancel=false)
+        normal ^b20($closed, $pending, %114, %115)
+        unwind ^b21($closed, $failure)
+    ^b19(%117: scope<S2>, %118: failure, %119: pending, %120: R facts(managed(deps=d22)), %121: deps) in S2:
+    %122: failure = scope.unwind %117, %118, reserve %119, effects scope_effects(failures=[program], suspends=false, cancel=false)
+    raise %122
+    ^b20(%123: closed, %124: pending, %125: R facts(managed(deps=d23)), %126: deps) in S2:
+    (%127: R facts(managed(deps=d24)), %128: own, %129: deps) = exit.commit %124, destination caller, result R
+    ret %127, %128
+    ^b21(%130: closed, %131: failure) in S2:
+    raise %131
+    ^b22 in S2:
+    invoke.own scope.split %60, s4
+        normal ^b23($state, $selected, $external_deps, %58, %59, %62)
+        unwind ^b24($state, $failure, %58, %59, %62)
+    ^b23(%132: scope<S2>, %133: own, %134: deps, %135: R facts(managed(deps=d25)), %136: deps, %137: failure) in S2:
+    %138: own = own.join [%133]
+    invoke.defer @replace(consume %58; %138) deps [%59] summary(M2)
+        continue ^b25(%132, %135, %136, %137)
+        replace return ^b26($value, $packet, $deps, %132, %135, %136, %137)
+        unwind ^b27($failure, %132, %135, %136, %137)
+    ^b24(%139: scope<S2>, %140: failure, %141: R facts(managed(deps=d26)), %142: deps, %143: failure) in S2:
+    %144: failure = fail.secondary %143, %140
+    %145: failure = scope.unwind %139, %144, effects scope_effects(failures=[program], suspends=false, cancel=false)
+    raise %145
+    ^b25(%146: scope<S2>, %147: R facts(managed(deps=d27)), %148: deps, %149: failure) in S2:
+    br ^b28(%146, %149, %147, %148)
+    ^b26(%150: R facts(managed(deps=d29)), %151: own, %152: deps, %153: scope<S2>, %154: R facts(managed(deps=d28)), %155: deps, %156: failure) in S2:
+    %157: scope<S2> = own.accept %153, %151
+    br ^b28(%157, %156, %154, %155)
+    ^b27(%158: failure, %159: scope<S2>, %160: R facts(managed(deps=d30)), %161: deps, %162: failure) in S2:
+    %163: failure = fail.secondary %162, %158
+    %164: failure = scope.unwind %159, %163, effects scope_effects(failures=[program], suspends=false, cancel=false)
+    raise %164
+    ^b28(%165: scope<S2>, %166: failure, %167: R facts(managed(deps=d31)), %168: deps) in S2:
+    %169: failure = scope.unwind %165, %166, effects scope_effects(failures=[program], suspends=false, cancel=false)
+    raise %169
+    ^b29 in S2:
+    invoke.own scope.split %41, s6
+        normal ^b30($state, $selected, $external_deps, %39, %40, %43)
+        unwind ^b31($state, $failure, %39, %40, %43)
+    ^b30(%170: scope<S2>, %171: own, %172: deps, %173: R facts(managed(deps=d32)), %174: deps, %175: failure) in S2:
+    %176: own = own.join [%171]
+    invoke.defer @replace(consume %39; %176) deps [%40] summary(M2)
+        continue ^b32(%170, %173, %174, %175)
+        replace return ^b33($value, $packet, $deps, %170, %173, %174, %175)
+        unwind ^b34($failure, %170, %173, %174, %175)
+    ^b31(%177: scope<S2>, %178: failure, %179: R facts(managed(deps=d33)), %180: deps, %181: failure) in S2:
+    %182: failure = fail.secondary %181, %178
+    %183: failure = scope.unwind %177, %182, effects scope_effects(failures=[program], suspends=false, cancel=false)
+    raise %183
+    ^b32(%184: scope<S2>, %185: R facts(managed(deps=d34)), %186: deps, %187: failure) in S2:
+    br ^b35(%184, %187, %185, %186)
+    ^b33(%188: R facts(managed(deps=d36)), %189: own, %190: deps, %191: scope<S2>, %192: R facts(managed(deps=d35)), %193: deps, %194: failure) in S2:
+    %195: scope<S2> = own.accept %191, %189
+    br ^b35(%195, %194, %192, %193)
+    ^b34(%196: failure, %197: scope<S2>, %198: R facts(managed(deps=d37)), %199: deps, %200: failure) in S2:
+    %201: failure = fail.secondary %200, %196
+    %202: failure = scope.unwind %197, %201, effects scope_effects(failures=[program], suspends=false, cancel=false)
+    raise %202
+    ^b35(%203: scope<S2>, %204: failure, %205: R facts(managed(deps=d38)), %206: deps) in S2:
+    %207: failure = scope.unwind %203, %204, effects scope_effects(failures=[program], suspends=false, cancel=false)
+    raise %207
+}

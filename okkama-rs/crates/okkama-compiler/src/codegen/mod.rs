@@ -6,6 +6,7 @@
 //! Запись файлов и параметры командной строки остаются в CLI.
 
 pub mod sparrow;
+pub mod sparrow_oir2;
 
 use std::fmt;
 

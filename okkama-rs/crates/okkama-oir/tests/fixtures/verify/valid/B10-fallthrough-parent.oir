@@ -1,0 +1,25 @@
+oir 2 own
+// Spec §9.1, design §10.7: a fallthrough boundary is exited before commit to its parent.
+module fallthrough_boundary
+scope S action in @f
+scope SI block in @f parent S
+summary M0 internal contract call_contract(publication=atomic)
+func @f() -> void summary(M0) {
+    boundary BI lexical in SI
+    selection sEmpty: selection = union([])
+    ^entry in S:
+    %outer: scope<S> = scope.begin S
+    br ^inner
+    ^inner in SI:
+    %q: scope<SI> = scope.begin SI
+    %full: deps = deps.of 0
+    %p: pending = exit.prepare fallthrough packet own.empty, deps(%full) select sEmpty at BI
+    (%closed: closed, %reserved: pending) = scope.end %q, reserve %p, effects scope_effects(failures=[], suspends=false,
+        cancel=false)
+    br ^parent
+    ^parent in S:
+    (%packet: own, %deps: deps) = exit.commit %reserved, destination scope(S)
+    %restored: scope<S> = own.admit %outer, %packet
+    %done: closed = scope.end %restored, effects scope_effects(failures=[], suspends=false, cancel=false)
+    ret
+}

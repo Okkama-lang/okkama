@@ -8,6 +8,8 @@ license.workspace = true
 publish.workspace = true
 
 [features]
+# Candidate layout/JIT/runtime only. Data transformations remain unconditional.
+champ-abi = []
 # `budget::mimalloc_committed`: a memory probe for processes whose allocator
 # is mimalloc (the CLIs); it links against mimalloc's C library.
 mimalloc = []
@@ -42,10 +44,6 @@ cranelift-jit = "0.137"
 cranelift-module = "0.137"
 cranelift-native = "0.137"
 wasmtime-jit-icache-coherence = { package = "wasmtime-internal-jit-icache-coherence", version = "50.0.0" }
-
-[dev-dependencies]
-# End-to-end compiler → verified SPB → Sparrow fixtures (#540 and others).
-okkama-compiler = { path = "../okkama-compiler" }
 
 [lints.rust]
 # Machine code, frame walking and the heap need unsafe; each module that uses

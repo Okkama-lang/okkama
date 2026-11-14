@@ -48,6 +48,9 @@ pub struct Ctx {
 #[derive(Debug)]
 pub struct Failure {
     pub kind: FailureKind,
+    /// Cleanup origin is orthogonal to kind/catchability; capturing keeps the exact carrier.
+    #[cfg(feature = "champ-abi")]
+    pub cleanup_origin: bool,
     /// (function, pc) of each activation it unwound through, innermost first.
     pub trace: Vec<(u32, u32)>,
     pub cause: Option<Word>,
@@ -125,6 +128,8 @@ pub struct Runtime {
     /// The last failure `describe` reported, as the OCS protocol sees it.
     pub uncaught: Option<crate::Uncaught>,
     pub resources: crate::failures::Resources,
+    #[cfg(feature = "champ-abi")]
+    pub(crate) champ: crate::champ::State,
     /// Async frames ready to resume; spawned tasks; frames running on the
     /// machine stack (innermost last). All are roots.
     pub ready: std::collections::VecDeque<Word>,
@@ -192,7 +197,14 @@ macro_rules! frame_pointer {
 impl Runtime {
     pub fn new(loaded: Loaded) -> Result<Self, Error> {
         crate::contracts::check(&loaded)?;
+        #[cfg(not(feature = "champ-abi"))]
         let mut heap = Heap::new(loaded.layouts());
+        #[cfg(feature = "champ-abi")]
+        let mut heap = {
+            let layouts = loaded.layouts();
+            let objects = loaded.champ_object_layouts(&layouts)?;
+            Heap::new_champ(layouts, objects)
+        };
         heap.set_stress(std::env::var_os("SPARROW_CORE_GC_STRESS").is_some_and(|value| value == "1"));
         if std::env::var_os("SPARROW_CORE_STATS").is_some() {
             heap.allocations = Some(Box::default());
@@ -212,6 +224,8 @@ impl Runtime {
             .map(|f| f.intrinsic.as_ref().and_then(|i| crate::intrinsics::Intrinsic::resolve(&i.name)))
             .collect();
         Ok(Self {
+            #[cfg(feature = "champ-abi")]
+            champ: crate::champ::State::new(),
             resources,
             ready: std::collections::VecDeque::new(),
             spawned: Vec::new(),
@@ -378,6 +392,8 @@ impl Runtime {
     pub fn failure_new(&mut self, kind: FailureKind) -> Word {
         self.heap.allocate_payload(Box::new(Failure {
             kind,
+            #[cfg(feature = "champ-abi")]
+            cleanup_origin: false,
             trace: Vec::new(),
             cause: None,
             secondary: Vec::new(),
@@ -763,6 +779,12 @@ impl Runtime {
     pub fn run_function_with(self: &mut Box<Self>, entry: usize, arguments: &[Word], stack: u64) -> Result<Word, Error> {
         if self.poisoned {
             return Err(Error("internal error: the runtime is unusable after a panic in a native".into()));
+        }
+        #[cfg(feature = "champ-abi")]
+        if let Some(machine) = &self.champ.machine
+            && machine.source.functions[entry].entry_abi != okkama_sparrow::spb17::EntryAbi::Observation
+        {
+            return Err(Error("owning Champ entry requires CallOwn transport".into()));
         }
         let function = &self.loaded.program.functions[entry];
         if function.params.len() != arguments.len() {

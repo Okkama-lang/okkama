@@ -4338,8 +4338,12 @@
   {
    "aspects": {
     "boundary": {
-     "cases": [],
-     "mandatory_cases": [],
+     "cases": [
+      "L01.gram.enum.case-trailing-comma"
+     ],
+     "mandatory_cases": [
+      "L01.gram.enum.case-trailing-comma"
+     ],
      "requirement": "n/a: the contract defines no boundary values distinct from its normal behaviour"
     },
     "interaction": {
@@ -5380,11 +5384,13 @@
      "cases": [
       "L01.gram.action.param-trailing-comma",
       "L01.gram.collections.literals",
+      "L01.gram.enum.case-trailing-comma",
       "L01.gram.object.generic-trailing-comma"
      ],
      "mandatory_cases": [
       "L01.gram.action.param-trailing-comma",
       "L01.gram.collections.literals",
+      "L01.gram.enum.case-trailing-comma",
       "L01.gram.object.generic-trailing-comma"
      ],
      "requirement": "required"
@@ -31214,5 +31220,5 @@
  },
  "results_from": [],
  "schema": "ocs-coverage/2",
- "suite_tree_sha256": "00a3971255d769be16ff583444fdbbdf0f77f6afa0b4515abeff572ba7506736"
+ "suite_tree_sha256": "07a1cd887f47cc3c220c02f39ccbb230cc3195b79791dccc84403a751feabe07"
 }

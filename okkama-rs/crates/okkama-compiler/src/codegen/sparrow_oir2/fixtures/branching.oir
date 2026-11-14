@@ -1,0 +1,17 @@
+oir 2 low
+module branching
+scope S action in @choose
+func @choose(%flag: bool, %value: int) -> int abi observation {
+^entry in S:
+    cond %flag, ^yes, ^no
+^yes in S:
+    %one: int = const 1
+    %a: int = int.add %value, %one
+    br ^join(%a)
+^no in S:
+    %two: int = const 2
+    %b: int = int.sub %value, %two
+    br ^join(%b)
+^join(%result: int) in S:
+    ret %result
+}

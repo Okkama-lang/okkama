@@ -67,15 +67,17 @@ char.ne
 cleanup.begin
 cleanup.defer
 cleanup.deliver_cancel
+cleanup.destroy
 cleanup.failure
 cleanup.finish
-cleanup.next
 cleanup.plan
 cleanup.settle
+cleanup.settle.empty
 cleanup.shield
 const
 cvt
 defer.register
+deps.of
 destroy.direct
 discard
 dynamic.check
@@ -86,6 +88,7 @@ enum.eq
 enum.ne
 exit.abort
 exit.commit
+exit.extend
 exit.prepare
 exit.replace
 fail.caused

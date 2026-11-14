@@ -1,0 +1,67 @@
+oir 2 high
+module sync
+object R {
+    destroy @destroy
+}
+enum Stop is Error = (now)
+scope SD action in @destroy
+scope SC action in @make
+scope S action in @f
+func @destroy(%self: R) -> void [destroy R] {
+    ^entry in SD unwind ^failed:
+    %error: Stop = enum.case Stop, case 0
+    throw %error
+    ^failed(%failure: failure) in SD:
+    raise %failure
+}
+func @make() -> R [ctor R] {
+    boundary BC lexical in SC
+    ^entry in SC unwind ^failed:
+    %r: R = obj.new R { }
+    want %r
+    [iprep0] exit.prepare return %r at BC
+    result.exit edge normal(0), value %r, demand want, prepare iprep0
+    ret %r
+    ^failed(%failure: failure) in SC:
+    raise %failure
+}
+scope SR action in @read
+func @read(%self: R) -> int [method R] {
+    boundary Bauto lexical in SR
+    ^entry in SR:
+    %n: int = const 7
+    want %n
+    [iprep1] exit.prepare return %n at Bauto
+    result.exit edge normal(0), value %n, demand want, prepare iprep1
+    ret %n
+}
+scope SI try in @f parent S
+scope SK catch in @f parent S
+func @f() -> int {
+    boundary Bauto lexical in S
+    binding bx "x": R in S
+    ^entry in S unwind ^failed:
+    %x: R = call @make()
+    bind %x, binding bx
+    br ^inner(%x)
+    ^inner(%outer: R) in SI unwind ^select(%outer):
+    %a: R = call @make()
+    temp %a, SI
+    discard %a
+    result.exit edge normal(0), value %a, demand discard, prepare none
+    br ^done(%outer)
+    ^select(%kept: R, %failure: failure) in S unwind ^failed:
+    catch %failure is Stop, ^caught(%kept, $value), ^unmatched(%failure)
+    ^caught(%alive: R, %error: Stop) in SK unwind ^failed:
+    br ^done(%alive)
+    ^done(%live: R) in S unwind ^failed:
+    %n: int = call @read(%live)
+    want %n
+    [iprep2] exit.prepare return %n at Bauto
+    result.exit edge normal(0), value %n, demand want, prepare iprep2
+    ret %n
+    ^unmatched(%unhandled: failure) in S:
+    raise %unhandled
+    ^failed(%outer_failure: failure) in S:
+    raise %outer_failure
+}
