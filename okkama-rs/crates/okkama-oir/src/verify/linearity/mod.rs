@@ -11,6 +11,7 @@ mod async_rules;
 mod defer;
 mod storage;
 mod descriptors;
+mod history;
 
 use super::{EntityLocation as L, RuleId as R, State};
 use crate::*;
@@ -351,6 +352,13 @@ impl Engine<'_, '_> {
         );
     }
     fn solve_inner(&mut self) {
+        // ReturnWitness translation inspects the entire callee Flow. Keep that
+        // history intact until a separate proof covers the cross-body observer.
+        let history = if self.capture_returns { None }
+            else { history::BoundaryHistory::new(self.module, self.body, self.state) };
+        if self.state.incomplete {
+            return;
+        }
         if !self.state.array(self.body.blocks.len(), 64) {
             return;
         }
@@ -367,7 +375,10 @@ impl Engine<'_, '_> {
         }
         #[cfg(any(test, feature = "verifier-differential"))]
         let mut schedule = ScheduleWork { alternatives: 1, ..ScheduleWork::default() };
-        let initial = self.initial();
+        let mut initial = self.initial();
+        if let Some(history) = &history {
+            history.normalize(self.body.entry, &mut initial, self.state);
+        }
         if !self.charge_flow(&initial) || !self.state.memory(initial.charge_retained()) {
             return;
         }
@@ -392,9 +403,14 @@ impl Engine<'_, '_> {
                 return;
             }
             let input = incoming[index][state_id].clone();
-            for (target, flow) in self.block(block, input) {
+            for (target, mut flow) in self.block(block, input) {
+                // The outgoing clone existed before pruning. Reserve its
+                // unpruned scratch bound before deleting any slots.
                 if !self.charge_flow(&flow) {
                     return;
+                }
+                if let Some(history) = &history {
+                    history.normalize(target, &mut flow, self.state);
                 }
                 let index = target.as_u32() as usize;
                 let Some(states) = incoming.get_mut(index) else {

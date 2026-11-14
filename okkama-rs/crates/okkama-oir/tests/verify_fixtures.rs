@@ -524,3 +524,162 @@ fn exponentially_many_relational_states_still_exhaust_default_work() {
     assert!(report.stats.steps > 45_000_000, "{report:?}");
     assert!(report.stats.memory_bytes < VerifyLimits::default().memory_bytes, "{report:?}");
 }
+
+// #634: mutations change heap/SSA history while preserving every diagnostic.
+// The feature oracle also compares All and First against the untouched solver
+// for each mutated module, rather than just comparing accepted/rejected counts.
+#[test]
+fn normalization_preserves_rejections_under_dead_prefixes_and_ssa_permutations() {
+    use okkama_oir::*;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn evidence(module: &Module, inverse: &BTreeMap<(FuncId, ValueId), ValueId>)
+        -> (Option<VerifyFailure>, BTreeSet<(RuleId, EntityLocation)>) {
+        match fixture_result(module, ErrorPolicy::All) {
+            Ok(()) => (None, BTreeSet::new()),
+            Err(report) => (Some(report.failure), report.diagnostics.into_iter().map(|diagnostic| {
+                let mut entity = diagnostic.primary.entity;
+                if let EntityLocation::Value { function, value } = &mut entity {
+                    *value = inverse.get(&(*function, *value)).copied().unwrap_or(*value);
+                }
+                (diagnostic.rule, entity)
+            }).collect()),
+        }
+    }
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/verify");
+    for class in ["valid", "invalid"] {
+        let mut paths: Vec<_> = fs::read_dir(root.join(class)).unwrap()
+            .map(|entry| entry.unwrap().path()).collect();
+        paths.sort();
+        for path in paths {
+            let original = text::parse(&fs::read_to_string(&path).unwrap()).unwrap();
+            let expected = evidence(&original, &BTreeMap::new());
+            assert_ne!(expected.0, Some(VerifyFailure::Incomplete), "{}", path.display());
+            for reverse_prefix in [false, true] {
+                let mut changed = original.clone();
+                let scalar = changed.types.intern(Type::Bool).unwrap();
+                let profile = changed.profile;
+                let types = &changed.types;
+                let mut inverse = BTreeMap::new();
+                for (function_id, function) in changed.functions.iter_mut() {
+                    let Some(body) = &mut function.body else {
+                        continue;
+                    };
+                    // Low has independent root-map obligations at every added
+                    // instruction. Its SSA permutation still runs below.
+                    let input_packet = body.blocks.get(body.entry).unwrap().params.iter().any(|value| {
+                        types.get(body.values.get(*value).unwrap().ty) == Ok(&Type::Service(ServiceType::Own))
+                    });
+                    // An explicit packet ABI forbids body evaluation before
+                    // own.accept. Do not turn a dead prefix into an ABI error.
+                    if profile != Profile::Low && !input_packet {
+                        let mut prefix = Vec::new();
+                        for bit in 0..8 {
+                            let inst = InstId::from_u32(body.insts.len() as u32);
+                            let value = body.values.alloc(ValueData {
+                                ty: scalar,
+                                def: Definition::InstResult { inst, index: 0 },
+                                facts: ValueFacts::Plain { certificate: PlainCertificate::Scalar },
+                            }).unwrap();
+                            prefix.push(body.insts.alloc(Instruction {
+                                results: vec![value], op: Operation::Const(Literal::Bool(bit % 2 == 0)),
+                                facts: InstructionFacts::default(), loc: None,
+                            }).unwrap());
+                        }
+                        if reverse_prefix {
+                            prefix.reverse();
+                        }
+                        let entry = body.blocks.get_mut(body.entry).unwrap();
+                        prefix.append(&mut entry.insts);
+                        entry.insts = prefix;
+                    }
+                    let mut values = Arena::new();
+                    let mut remap = IdRemap::default();
+                    for (old, data) in body.values.iter().collect::<Vec<_>>().into_iter().rev() {
+                        let new = values.alloc(data.clone()).unwrap();
+                        remap.values.insert(old, new);
+                        inverse.insert((function_id, new), old);
+                    }
+                    body.values = values;
+                    body.rewrite(&mut remap);
+                }
+                assert_eq!(evidence(&changed, &inverse), expected, "{}", path.display());
+                // Exercise diagnostic ordering as well as the complete set.
+                let all = fixture_result(&changed, ErrorPolicy::All);
+                let first = fixture_result(&changed, ErrorPolicy::First);
+                if let (Err(all), Err(first)) = (all, first) {
+                    assert_eq!(first.diagnostics, all.diagnostics[..1], "{}", path.display());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn normalization_keeps_first_backedge_and_reset_scope_rejections() {
+    use std::collections::BTreeSet;
+    let source = include_str!("fixtures/verify/valid/B4-inner-admission-rebind-loop.oir");
+    fixture_result(&text::parse(source).unwrap(), ErrorPolicy::All).unwrap();
+    // The first iteration has no closed SI history. Backedges do; resetting SI
+    // while lexically inside SI still observes that history and must emit B42.
+    let rejected = source.replace("^loop(%current: scope<S>) in S:", "^loop(%current: scope<S>) in SI:");
+    let module = text::parse(&rejected).unwrap();
+    let report = fixture_result(&module, ErrorPolicy::All).unwrap_err();
+    assert_eq!(report.failure, VerifyFailure::Rejected);
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::B42));
+    let evidence = |report: VerifyReport| report.diagnostics.into_iter()
+        .map(|diagnostic| (diagnostic.rule, diagnostic.primary.entity)).collect::<BTreeSet<_>>();
+    // Add the dead prefix through the arena so original instruction locations
+    // remain stable, including both first-iteration and backedge diagnostics.
+    let mut changed = module.clone();
+    let ty = changed.types.intern(okkama_oir::Type::Bool).unwrap();
+    let function = changed.functions.iter_mut().find(|(_, function)| function.symbol == "f").unwrap().1;
+    let body = function.body.as_mut().unwrap();
+    let inst = okkama_oir::InstId::from_u32(body.insts.len() as u32);
+    let value = body.values.alloc(okkama_oir::ValueData {
+        ty, def: okkama_oir::Definition::InstResult { inst, index: 0 },
+        facts: okkama_oir::ValueFacts::Plain { certificate: okkama_oir::PlainCertificate::Scalar },
+    }).unwrap();
+    body.insts.alloc(okkama_oir::Instruction {
+        results: vec![value], op: okkama_oir::Operation::Const(okkama_oir::Literal::Bool(false)),
+        facts: Default::default(), loc: None,
+    }).unwrap();
+    body.blocks.get_mut(body.entry).unwrap().insts.insert(0, inst);
+    assert_eq!(evidence(fixture_result(&changed, ErrorPolicy::All).unwrap_err()), evidence(report));
+}
+
+#[test]
+fn normalization_keeps_a_successor_unused_on_only_one_branch() {
+    let source = "oir 2 high
+module unused
+requires core
+object C {
+}
+scope S action in @f
+scope Ss action in @sink
+func @f(%again: bool, %next: ^C) -> void {
+^entry in S:
+    %dead: int facts(plain(certificate=scalar)) = const 1
+    cond %again, ^used, ^unused
+^used in S:
+    call @sink(%next)
+    br ^done
+^unused in S:
+    br ^done
+^done in S:
+    ret
+}
+func @sink(%self: C) -> void {
+^entry in Ss:
+    ret
+}";
+    for source in [source.to_owned(), source.replace('%', "%alpha_")] {
+        let module = text::parse(&source).unwrap();
+        let report = fixture_result(&module, ErrorPolicy::All).unwrap_err();
+        assert_eq!(report.failure, VerifyFailure::Rejected);
+        assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::B82), "{report:?}");
+        let first = fixture_result(&module, ErrorPolicy::First).unwrap_err();
+        assert_eq!(first.diagnostics, report.diagnostics[..1]);
+    }
+}

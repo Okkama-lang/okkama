@@ -157,6 +157,10 @@ impl<T: Clone + Eq> PerValue<T> {
             self[index] = value;
         }
     }
+    /// Erase unreachable slots without materializing defaults or copying values.
+    pub fn retain_indices(&mut self, keep: &[bool]) {
+        self.entries.retain(|(index, _)| keep[*index]);
+    }
 }
 impl<T: Clone + Eq + AllocationSize> PerValue<T> {
     pub fn work(&self) -> usize {

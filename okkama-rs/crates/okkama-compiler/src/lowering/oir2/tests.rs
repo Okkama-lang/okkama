@@ -1373,6 +1373,28 @@ fn p1_function_charges(name: &str, module: &ir::Module, context: ir::verify::Ver
     }
 }
 
+// An opt-in diagnostic probe also measures Low when default Own verification
+// is incomplete/rejected. These results never authorize the production path.
+fn p1_unchecked_low_probe(name: &str, own: &ir::Module) {
+    let Some(path) = std::env::var_os("OKKAMA_634_P1_LOW_RESULTS") else {
+        return;
+    };
+    let low = ir::low::lower_cleanup(own.clone(), &ir::low::LowOptions::default()).unwrap();
+    let catalog = OwnP1Contracts::new(&low);
+    let context = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
+    p1_function_charges(name, &low, context);
+    let result = ir::verify::verify_with(&low, &ir::verify::VerifyOptions::default(), context);
+    let (failure, stats, diagnostics) = match &result {
+        Ok(verified) => (None, verified.stats(), Vec::new()),
+        Err(report) => (Some(report.failure), &report.stats, report.diagnostics.iter()
+            .map(|diagnostic| (diagnostic.rule, &diagnostic.primary.entity)).collect()),
+    };
+    let record = format!("{name}\t{failure:?}\t{}\t{}\t{diagnostics:?}\n", stats.memory_bytes, stats.steps);
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path).unwrap();
+    file.write_all(record.as_bytes()).unwrap();
+}
+
 #[test]
 fn oir2_p1_followup_own_from_593_sources() {
     use ir::own::{OwnOptions, analyze::analyze_function, elaborate_ownership, rewrite_subset};
@@ -1421,6 +1443,7 @@ fn oir2_p1_followup_own_from_593_sources() {
                 let catalog = OwnP1Contracts::new(&output.module);
                 let context = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
                 p1_function_charges(name, &output.module, context);
+                p1_unchecked_low_probe(name, &output.module);
                 match ir::verify::verify_with(&output.module, &options.verify, context) {
                     Ok(_) => match ir::low::lower_cleanup(output.module, &ir::low::LowOptions::default()) {
                         Ok(module) => {
@@ -1428,7 +1451,9 @@ fn oir2_p1_followup_own_from_593_sources() {
                             let context = ir::verify::VerifyContext {
                                 text_locations: None, external_contracts: &catalog,
                             };
-                            p1_function_charges(name, &module, context);
+                            if std::env::var_os("OKKAMA_634_P1_LOW_RESULTS").is_none() {
+                                p1_function_charges(name, &module, context);
+                            }
                             match ir::verify::verify_with(&module, &options.verify, context) {
                                 Ok(_) => ("beyond", None),
                                 Err(error) => ("low", Some(format!("verify_low: {error:#?}"))),
