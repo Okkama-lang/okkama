@@ -266,6 +266,20 @@ The core then becomes a value that takes one line and returns the lines to
 print for it, and the shell prints them as it goes. The decide-then-do split
 survives, at the granularity of a line.
 
+{{example:24-filter}}
+
+- `Matcher` is the core. `shown(line)` says what to print for one line and
+  `after(line)` returns the matcher for the next one, with the count of
+  matches so far. It keeps only what the end of the run needs, never the
+  text.
+- `Filter.run` is the shell. It walks the lines, prints what `shown` returns
+  and rebinds `current` to its successor. In a real tool the loop is
+  `for Stdin() -> line`, and nothing else changes.
+- `status()` follows `grep`'s convention: 0 when something matched, 1 when
+  nothing did. A tool's exit status is part of its contract, and scripts
+  test it (`if tally-filter error log; then …`), so the convention is chosen
+  once and documented in the help.
+
 `cli/arguments` sets its own limits. By default it reads at most 4,096
 arguments and 1 MiB of them, and refuses more with `ArgumentLimitExceeded`
 instead of growing without bound. A tool that is meant to take huge argument
@@ -286,6 +300,19 @@ A tool takes an environment snapshot in `main` and passes it, or the one
 setting it needs, to the code that uses it. Nothing deep in the program
 reads a variable behind its caller's back, and a test passes a prepared
 environment the same way `tally`'s tests pass prepared sources.
+
+{{example:24-settings}}
+
+- `Environment(values: …)` is a snapshot that contains exactly the given
+  variables and nothing of the process, so each case in the example is
+  isolated. A real program passes `Environment()`, read once in `main`.
+- The precedence is one expression: `call.int("top") else
+  (environment.maybe("TALLY_TOP").int() else 3)`. Each `else` is the next
+  layer down, and the order can be read off the line.
+- A malformed value is not silently skipped. `--top many` is a
+  `CliFailure`, and `TALLY_TOP=many` is an `InvalidEnvironmentValue` naming
+  the variable. A layer that is present but wrong is an error, not a reason
+  to fall through to the next layer.
 
 The second is `Invocation.settings()`, which returns every value read from
 the command line keyed by `SettingKey`. A configuration file read through
@@ -312,7 +339,32 @@ tally.ok --target sparrow -o tally.spb` compiles it into a bytecode file that
 and their versions). The program is the same either way. Its behaviour does
 not depend on how it was started.
 
-## 24.10 What the design costs
+## 24.10 Growing: subcommands
+
+Tools grow by verbs. `git` has `commit` and `log`, `cargo` has `build` and
+`test`, and a tool that started with one job often gains a second. In
+`cli/command` a subcommand is a `CliCommand` listed in its parent's
+`commands`. Each declares only the options it takes, and the root can
+declare options shared by all of them. Reading the arguments selects one
+command, and `call.command()` returns the declared object, so the program
+compares objects rather than strings:
+
+{{example:24-subcommands}}
+
+- `top --n 5` selects `top` and reads its own option. `top` alone takes
+  the default with `else`.
+- A root with subcommands is a branch. It expects one of its children, so an
+  empty command line and an unknown verb are both a `CliFailure` naming the
+  argument, which the tool answers with status 2 as in Section 24.5.
+- `call.path()` gives the names from the root to the selected command, for
+  messages such as `tally top: …`. The usage text of a subcommand comes from
+  its own declaration, so `tally top --help` can show only what `top` takes.
+
+The objects in `Commands` are the same values the program later compares
+against. A subcommand is renamed in one place, and a typo in a comparison is
+a compile error, not a branch that is never taken.
+
+## 24.11 What the design costs
 
 The tool in this chapter is longer than the shortest program that would
 print the same counts. A twenty-line script with a loop over the arguments,

@@ -385,7 +385,7 @@ Examples cannot fork or reach the network in the cage, so process and network co
 
 ## Chapter 24 notes (2026-11-15)
 
-6.8 pages (EN and RU) of its floor of 14. The tool is `tally` (examples/tally/tool.ok, a module). The run example is `24-tally` over tally/sample.txt; the tests are `24-tally-tests`, with a Given implementation of Sources. Sources: McIlroy 1978, POSIX Utility Conventions, CLI Guidelines.
+7.8 pages (EN and RU) of its floor of 14. The tool is `tally` (examples/tally/tool.ok, a module). The run example is `24-tally` over tally/sample.txt; the tests are `24-tally-tests`, with a Given implementation of Sources. Sources: McIlroy 1978, POSIX Utility Conventions, CLI Guidelines.
 
 Written:
 - what a tool owes its user (five rules);
@@ -398,8 +398,9 @@ Written:
 - shipping (help, completion, build/exec);
 - costs.
 
+Added: subcommands (`24-subcommands`), a streaming filter with grep's exit status (`24-filter`), and flag > environment > default precedence (`24-settings`). Found while writing: #637, a branch command refuses its own --help.
+
 To add for the floor:
-- subcommands (a `tally words` / `tally lines` split, Invocation.command());
-- a completion example;
-- a streaming filter variant as a runnable example;
-- the environment as a value, with a prepared snapshot in a test.
+- output for people and for programs (--json, terminal detection);
+- interruption (Ctrl-C) and its exit status;
+- tools that change files safely (write and rename, --dry-run).

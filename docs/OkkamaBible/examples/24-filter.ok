@@ -1,0 +1,60 @@
+module bible/filter v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// A filter decides one line at a time. It keeps what the end of the run
+// needs (here the number of matches) and returns what to print now.
+object Matcher {
+    has needle is string;
+    has fold is bool = false;
+    has matched is int = 0;
+
+    Matcher(:needle, :fold);
+
+    hit(line is string) is bool {
+        if fold { line.lower().contains(needle.lower()); } else { line.contains(needle); }
+    }
+
+    // The lines to print for this input line.
+    shown(line is string) is @string {
+        if self.hit(line) { [line]; } else { []; }
+    }
+
+    // The matcher after this line.
+    after(line is string) is ^Matcher {
+        ^matched = if self.hit(line) { matched + 1; } else { matched; };
+    }
+
+    // As grep: 0 when something matched, 1 when nothing did.
+    status() is int {
+        if matched > 0 { 0; } else { 1; }
+    }
+}
+
+// The shell: in a real tool the lines come from `for Stdin() -> line`.
+object Filter {
+    has input is @string;
+
+    Filter(:input);
+
+    run(matcher is Matcher) is int {
+        let out = Stdout();
+        let current = matcher;
+        for input -> line {
+            for current.shown(line) -> printed { out.writeln(printed); }
+            current = current.after(line);
+        }
+        current.status();
+    }
+}
+
+main() is int {
+    let filter = Filter(input: ["Error: disk full", "ok", "error: retry", "ok"]);
+    let first = filter.run(Matcher(needle: "error"));
+    Stdout().writeln("status " + first.string());
+    let second = filter.run(Matcher(needle: "error", fold: true));
+    Stdout().writeln("status " + second.string());
+    let third = filter.run(Matcher(needle: "panic"));
+    Stdout().writeln("status " + third.string());
+    0;
+}

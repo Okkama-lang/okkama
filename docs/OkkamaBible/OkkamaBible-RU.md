@@ -272,7 +272,8 @@
   - [24.7 Ввод: целиком или потоком](#247-ввод-целиком-или-потоком)
   - [24.8 Конфигурация и окружение](#248-конфигурация-и-окружение)
   - [24.9 Как это отдать пользователям](#249-как-это-отдать-пользователям)
-  - [24.10 Во что обходится такой дизайн](#2410-во-что-обходится-такой-дизайн)
+  - [24.10 Рост: подкоманды](#2410-рост-подкоманды)
+  - [24.11 Во что обходится такой дизайн](#2411-во-что-обходится-такой-дизайн)
 - [Глава 26. Паттерны и антипаттерны](#глава-26-паттерны-и-антипаттерны)
   - [26.1 Что такое паттерн и что с ним делает язык](#261-что-такое-паттерн-и-что-с-ним-делает-язык)
   - [26.2 Поведение через композицию, а не через флаги](#262-поведение-через-композицию-а-не-через-флаги)
@@ -14376,6 +14377,92 @@ PASS
 напечатать для неё, а оболочка печатает их по ходу. Разделение «реши, потом
 сделай» сохраняется, только с шагом в строку.
 
+```okkama
+module bible/filter v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// A filter decides one line at a time. It keeps what the end of the run
+// needs (here the number of matches) and returns what to print now.
+object Matcher {
+    has needle is string;
+    has fold is bool = false;
+    has matched is int = 0;
+
+    Matcher(:needle, :fold);
+
+    hit(line is string) is bool {
+        if fold { line.lower().contains(needle.lower()); } else { line.contains(needle); }
+    }
+
+    // The lines to print for this input line.
+    shown(line is string) is @string {
+        if self.hit(line) { [line]; } else { []; }
+    }
+
+    // The matcher after this line.
+    after(line is string) is ^Matcher {
+        ^matched = if self.hit(line) { matched + 1; } else { matched; };
+    }
+
+    // As grep: 0 when something matched, 1 when nothing did.
+    status() is int {
+        if matched > 0 { 0; } else { 1; }
+    }
+}
+
+// The shell: in a real tool the lines come from `for Stdin() -> line`.
+object Filter {
+    has input is @string;
+
+    Filter(:input);
+
+    run(matcher is Matcher) is int {
+        let out = Stdout();
+        let current = matcher;
+        for input -> line {
+            for current.shown(line) -> printed { out.writeln(printed); }
+            current = current.after(line);
+        }
+        current.status();
+    }
+}
+
+main() is int {
+    let filter = Filter(input: ["Error: disk full", "ok", "error: retry", "ok"]);
+    let first = filter.run(Matcher(needle: "error"));
+    Stdout().writeln("status " + first.string());
+    let second = filter.run(Matcher(needle: "error", fold: true));
+    Stdout().writeln("status " + second.string());
+    let third = filter.run(Matcher(needle: "panic"));
+    Stdout().writeln("status " + third.string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+error: retry
+status 0
+Error: disk full
+error: retry
+status 0
+status 1
+```
+
+- `Matcher` — ядро. `shown(line)` говорит, что напечатать для одной строки, а
+  `after(line)` возвращает сопоставитель для следующей, с числом совпадений
+  на этот момент. Он хранит только то, что нужно к концу запуска, и никогда
+  — сам текст.
+- `Filter.run` — оболочка. Она идёт по строкам, печатает то, что вернул
+  `shown`, и перепривязывает `current` к его successor-у. В настоящей
+  утилите цикл — это `for Stdin() -> line`, и больше ничего не меняется.
+- `status()` следует соглашению `grep`: 0, если что-то совпало, 1, если нет.
+  Код завершения — часть контракта утилиты, скрипты его проверяют
+  (`if tally-filter error log; then …`), поэтому соглашение выбирают один раз
+  и описывают в справке.
+
 У `cli/arguments` свои пределы. По умолчанию он читает не больше 4096
 аргументов и 1 МиБ их общего объёма и отказывает за этими пределами с
 `ArgumentLimitExceeded`, а не растёт без границ. Утилита, которой положено
@@ -14396,6 +14483,59 @@ Interface Guidelines* дают обычный порядок старшинст�
 настройку — коду, который её использует. Ничто в глубине программы не читает
 переменную за спиной вызывающего, а тест передаёт заготовленное окружение
 так же, как тесты `tally` передают заготовленные источники.
+
+```okkama
+module bible/tally_settings v1.0.0;
+
+import "io/stdout" take Stdout;
+import "os/environment" take Environment;
+import "cli/command" take CliCommand, Option;
+
+// The order of precedence: a flag, then the environment, then the default.
+// The environment is a value given to the object, never read behind its back.
+object TopSetting {
+    has command is CliCommand;
+    has environment is Environment;
+
+    TopSetting(:environment) {
+        command = CliCommand(name: "tally", options: [Option(name: "top", short: "n", value: "N")]);
+    }
+
+    top(arguments is @string) is int {
+        let call = command.invocation(arguments);
+        call.int("top") else (environment.maybe("TALLY_TOP").int() else 3);
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let plain = TopSetting(environment: Environment(values: [:]));
+    let configured = TopSetting(environment: Environment(values: ["TALLY_TOP": "10"]));
+    out.writeln("default: " + plain.top([]).string());
+    out.writeln("environment: " + configured.top([]).string());
+    out.writeln("flag: " + configured.top(["-n", "2"]).string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+default: 3
+environment: 10
+flag: 2
+```
+
+- `Environment(values: …)` — снимок, в котором ровно данные переменные и
+  ничего от процесса, так что каждый случай в примере изолирован. Настоящая
+  программа передаёт `Environment()`, прочитанный один раз в `main`.
+- Старшинство — одно выражение:
+  `call.int("top") else (environment.maybe("TALLY_TOP").int() else 3)`.
+  Каждый `else` — следующий слой вниз, и порядок читается прямо из строки.
+- Испорченное значение не пропускается молча. `--top many` — это
+  `CliFailure`, а `TALLY_TOP=many` — `InvalidEnvironmentValue` с именем
+  переменной. Слой, который есть, но неверен, — ошибка, а не повод перейти к
+  следующему слою.
 
 Вторая: `Invocation.settings()` возвращает каждое прочитанное из командной
 строки значение по ключу `SettingKey`. Файл конфигурации, прочитанный через
@@ -14423,7 +14563,99 @@ Interface Guidelines* дают обычный порядок старшинст�
 пакеты и их версии описаны в главе 19). Программа в обоих случаях одна и та
 же. Её поведение не зависит от того, как её запустили.
 
-## 24.10 Во что обходится такой дизайн
+## 24.10 Рост: подкоманды
+
+Утилиты растут глаголами. У `git` есть `commit` и `log`, у `cargo` — `build`
+и `test`, а утилита, начавшая с одной работы, часто обзаводится второй. В
+`cli/command` подкоманда — это `CliCommand`, перечисленный в `commands`
+родителя. Каждая объявляет только свои опции, а корень может объявить общие
+для всех. Чтение аргументов выбирает одну команду, и `call.command()`
+возвращает объявленный объект, так что программа сравнивает объекты, а не
+строки:
+
+```okkama
+module bible/tally_commands v1.0.0;
+
+import "io/stdout" take Stdout;
+import "cli/command" take CliCommand, Option, Flag, CliFailure;
+
+// Two subcommands under one root. Each declares only what it takes.
+object Commands {
+    has count is CliCommand;
+    has top is CliCommand;
+    has root is CliCommand;
+
+    Commands() {
+        let counting = CliCommand(name: "count", summary: "Count lines and words");
+        let ranking = CliCommand(
+            name: "top",
+            summary: "List the most frequent words",
+            options: [Option(name: "n", value: "N", help: "How many words")],
+        );
+        count = counting;
+        top = ranking;
+        root = CliCommand(
+            name: "tally",
+            flags: [Flag(name: "help", short: "h", help: "Show this help")],
+            commands: [counting, ranking],
+        );
+    }
+
+    // What the arguments select, as text the example can print.
+    selected(arguments is @string) is string {
+        try {
+            let call = root.invocation(arguments);
+            if call.command() == top {
+                "top, n = " + (call.int("n") else 3).string();
+            } else if call.command() == count {
+                "count";
+            } else {
+                "root only, path " + call.path().join(" ");
+            }
+        }
+        catch e is CliFailure {
+            "refused: " + e.text();
+        };
+    }
+}
+
+main() is int {
+    let commands = Commands();
+    let out = Stdout();
+    out.writeln(commands.selected(["count"]));
+    out.writeln(commands.selected(["top", "--n", "5"]));
+    out.writeln(commands.selected(["top"]));
+    out.writeln(commands.selected([]));
+    out.writeln(commands.selected(["sort"]));
+    0;
+}
+```
+
+Вывод:
+
+```text
+count
+top, n = 5
+top, n = 3
+refused: CliFailure.detailed(0, "", "child command required")
+refused: CliFailure.detailed(0, "sort", "unknown child command")
+```
+
+- `top --n 5` выбирает `top` и читает его собственную опцию. `top` без
+  опции берёт значение по умолчанию через `else`.
+- Корень с подкомандами — ветвь. Он ждёт одного из своих детей, поэтому
+  пустая командная строка и неизвестный глагол — оба `CliFailure` с номером
+  аргумента, и утилита отвечает на них кодом 2, как в разделе 24.5.
+- `call.path()` даёт имена от корня до выбранной команды — для сообщений
+  вида `tally top: …`. Текст справки подкоманды строится из её собственного
+  объявления, так что `tally top --help` может показать только то, что
+  принимает `top`.
+
+Объекты в `Commands` — те же значения, с которыми программа потом
+сравнивает. Подкоманда переименовывается в одном месте, а опечатка в
+сравнении — ошибка компиляции, а не ветка, которая никогда не выполнится.
+
+## 24.11 Во что обходится такой дизайн
 
 Утилита этой главы длиннее самой короткой программы, которая напечатала бы
 те же числа. Скрипт строк на двадцать с циклом по аргументам, изменяемым

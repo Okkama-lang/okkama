@@ -272,7 +272,8 @@
   - [24.7 Input: whole or streamed](#247-input-whole-or-streamed)
   - [24.8 Configuration and the environment](#248-configuration-and-the-environment)
   - [24.9 Shipping it](#249-shipping-it)
-  - [24.10 What the design costs](#2410-what-the-design-costs)
+  - [24.10 Growing: subcommands](#2410-growing-subcommands)
+  - [24.11 What the design costs](#2411-what-the-design-costs)
 - [Chapter 26. Patterns and anti-patterns](#chapter-26-patterns-and-anti-patterns)
   - [26.1 What a pattern is, and what a language does to it](#261-what-a-pattern-is-and-what-a-language-does-to-it)
   - [26.2 Behaviour by composition, not by flags](#262-behaviour-by-composition-not-by-flags)
@@ -14211,6 +14212,92 @@ The core then becomes a value that takes one line and returns the lines to
 print for it, and the shell prints them as it goes. The decide-then-do split
 survives, at the granularity of a line.
 
+```okkama
+module bible/filter v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// A filter decides one line at a time. It keeps what the end of the run
+// needs (here the number of matches) and returns what to print now.
+object Matcher {
+    has needle is string;
+    has fold is bool = false;
+    has matched is int = 0;
+
+    Matcher(:needle, :fold);
+
+    hit(line is string) is bool {
+        if fold { line.lower().contains(needle.lower()); } else { line.contains(needle); }
+    }
+
+    // The lines to print for this input line.
+    shown(line is string) is @string {
+        if self.hit(line) { [line]; } else { []; }
+    }
+
+    // The matcher after this line.
+    after(line is string) is ^Matcher {
+        ^matched = if self.hit(line) { matched + 1; } else { matched; };
+    }
+
+    // As grep: 0 when something matched, 1 when nothing did.
+    status() is int {
+        if matched > 0 { 0; } else { 1; }
+    }
+}
+
+// The shell: in a real tool the lines come from `for Stdin() -> line`.
+object Filter {
+    has input is @string;
+
+    Filter(:input);
+
+    run(matcher is Matcher) is int {
+        let out = Stdout();
+        let current = matcher;
+        for input -> line {
+            for current.shown(line) -> printed { out.writeln(printed); }
+            current = current.after(line);
+        }
+        current.status();
+    }
+}
+
+main() is int {
+    let filter = Filter(input: ["Error: disk full", "ok", "error: retry", "ok"]);
+    let first = filter.run(Matcher(needle: "error"));
+    Stdout().writeln("status " + first.string());
+    let second = filter.run(Matcher(needle: "error", fold: true));
+    Stdout().writeln("status " + second.string());
+    let third = filter.run(Matcher(needle: "panic"));
+    Stdout().writeln("status " + third.string());
+    0;
+}
+```
+
+Output:
+
+```text
+error: retry
+status 0
+Error: disk full
+error: retry
+status 0
+status 1
+```
+
+- `Matcher` is the core. `shown(line)` says what to print for one line and
+  `after(line)` returns the matcher for the next one, with the count of
+  matches so far. It keeps only what the end of the run needs, never the
+  text.
+- `Filter.run` is the shell. It walks the lines, prints what `shown` returns
+  and rebinds `current` to its successor. In a real tool the loop is
+  `for Stdin() -> line`, and nothing else changes.
+- `status()` follows `grep`'s convention: 0 when something matched, 1 when
+  nothing did. A tool's exit status is part of its contract, and scripts
+  test it (`if tally-filter error log; then …`), so the convention is chosen
+  once and documented in the help.
+
 `cli/arguments` sets its own limits. By default it reads at most 4,096
 arguments and 1 MiB of them, and refuses more with `ArgumentLimitExceeded`
 instead of growing without bound. A tool that is meant to take huge argument
@@ -14231,6 +14318,59 @@ A tool takes an environment snapshot in `main` and passes it, or the one
 setting it needs, to the code that uses it. Nothing deep in the program
 reads a variable behind its caller's back, and a test passes a prepared
 environment the same way `tally`'s tests pass prepared sources.
+
+```okkama
+module bible/tally_settings v1.0.0;
+
+import "io/stdout" take Stdout;
+import "os/environment" take Environment;
+import "cli/command" take CliCommand, Option;
+
+// The order of precedence: a flag, then the environment, then the default.
+// The environment is a value given to the object, never read behind its back.
+object TopSetting {
+    has command is CliCommand;
+    has environment is Environment;
+
+    TopSetting(:environment) {
+        command = CliCommand(name: "tally", options: [Option(name: "top", short: "n", value: "N")]);
+    }
+
+    top(arguments is @string) is int {
+        let call = command.invocation(arguments);
+        call.int("top") else (environment.maybe("TALLY_TOP").int() else 3);
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let plain = TopSetting(environment: Environment(values: [:]));
+    let configured = TopSetting(environment: Environment(values: ["TALLY_TOP": "10"]));
+    out.writeln("default: " + plain.top([]).string());
+    out.writeln("environment: " + configured.top([]).string());
+    out.writeln("flag: " + configured.top(["-n", "2"]).string());
+    0;
+}
+```
+
+Output:
+
+```text
+default: 3
+environment: 10
+flag: 2
+```
+
+- `Environment(values: …)` is a snapshot that contains exactly the given
+  variables and nothing of the process, so each case in the example is
+  isolated. A real program passes `Environment()`, read once in `main`.
+- The precedence is one expression: `call.int("top") else
+  (environment.maybe("TALLY_TOP").int() else 3)`. Each `else` is the next
+  layer down, and the order can be read off the line.
+- A malformed value is not silently skipped. `--top many` is a
+  `CliFailure`, and `TALLY_TOP=many` is an `InvalidEnvironmentValue` naming
+  the variable. A layer that is present but wrong is an error, not a reason
+  to fall through to the next layer.
 
 The second is `Invocation.settings()`, which returns every value read from
 the command line keyed by `SettingKey`. A configuration file read through
@@ -14257,7 +14397,98 @@ tally.ok --target sparrow -o tally.spb` compiles it into a bytecode file that
 and their versions). The program is the same either way. Its behaviour does
 not depend on how it was started.
 
-## 24.10 What the design costs
+## 24.10 Growing: subcommands
+
+Tools grow by verbs. `git` has `commit` and `log`, `cargo` has `build` and
+`test`, and a tool that started with one job often gains a second. In
+`cli/command` a subcommand is a `CliCommand` listed in its parent's
+`commands`. Each declares only the options it takes, and the root can
+declare options shared by all of them. Reading the arguments selects one
+command, and `call.command()` returns the declared object, so the program
+compares objects rather than strings:
+
+```okkama
+module bible/tally_commands v1.0.0;
+
+import "io/stdout" take Stdout;
+import "cli/command" take CliCommand, Option, Flag, CliFailure;
+
+// Two subcommands under one root. Each declares only what it takes.
+object Commands {
+    has count is CliCommand;
+    has top is CliCommand;
+    has root is CliCommand;
+
+    Commands() {
+        let counting = CliCommand(name: "count", summary: "Count lines and words");
+        let ranking = CliCommand(
+            name: "top",
+            summary: "List the most frequent words",
+            options: [Option(name: "n", value: "N", help: "How many words")],
+        );
+        count = counting;
+        top = ranking;
+        root = CliCommand(
+            name: "tally",
+            flags: [Flag(name: "help", short: "h", help: "Show this help")],
+            commands: [counting, ranking],
+        );
+    }
+
+    // What the arguments select, as text the example can print.
+    selected(arguments is @string) is string {
+        try {
+            let call = root.invocation(arguments);
+            if call.command() == top {
+                "top, n = " + (call.int("n") else 3).string();
+            } else if call.command() == count {
+                "count";
+            } else {
+                "root only, path " + call.path().join(" ");
+            }
+        }
+        catch e is CliFailure {
+            "refused: " + e.text();
+        };
+    }
+}
+
+main() is int {
+    let commands = Commands();
+    let out = Stdout();
+    out.writeln(commands.selected(["count"]));
+    out.writeln(commands.selected(["top", "--n", "5"]));
+    out.writeln(commands.selected(["top"]));
+    out.writeln(commands.selected([]));
+    out.writeln(commands.selected(["sort"]));
+    0;
+}
+```
+
+Output:
+
+```text
+count
+top, n = 5
+top, n = 3
+refused: CliFailure.detailed(0, "", "child command required")
+refused: CliFailure.detailed(0, "sort", "unknown child command")
+```
+
+- `top --n 5` selects `top` and reads its own option. `top` alone takes
+  the default with `else`.
+- A root with subcommands is a branch. It expects one of its children, so an
+  empty command line and an unknown verb are both a `CliFailure` naming the
+  argument, which the tool answers with status 2 as in Section 24.5.
+- `call.path()` gives the names from the root to the selected command, for
+  messages such as `tally top: …`. The usage text of a subcommand comes from
+  its own declaration, so `tally top --help` can show only what `top` takes.
+
+The objects in `Commands` are the same values the program later compares
+against. A subcommand is renamed in one place, and a typo in a comparison is
+a compile error, not a branch that is never taken.
+
+## 24.11 What the design costs
 
 The tool in this chapter is longer than the shortest program that would
 print the same counts. A twenty-line script with a loop over the arguments,
