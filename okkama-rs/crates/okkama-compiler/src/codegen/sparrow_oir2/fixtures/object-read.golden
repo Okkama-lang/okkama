@@ -1,0 +1,2 @@
+0: Data { op: ObjGet, inputs: [0], output: Some(1), immediate: Field(1) }
+1: Ret([1])

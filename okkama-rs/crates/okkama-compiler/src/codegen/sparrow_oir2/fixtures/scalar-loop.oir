@@ -1,0 +1,18 @@
+oir 2 low
+module scalar_loop
+scope S action in @main
+func @main(%limit: int) -> int abi observation {
+^entry in S:
+    %zero: int = const 0
+    %one: int = const 1
+    br ^loop(%zero, %zero)
+^loop(%i: int, %sum: int) in S:
+    %test: bool = int.lt %i, %limit
+    cond %test, ^body, ^done(%sum)
+^body in S:
+    %next: int = int.add %i, %one
+    %total: int = int.add %sum, %i
+    br ^loop(%next, %total)
+^done(%result: int) in S:
+    ret %result
+}

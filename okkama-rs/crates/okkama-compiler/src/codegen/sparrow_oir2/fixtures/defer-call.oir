@@ -1,0 +1,32 @@
+oir 2 low
+module defer_calls
+scope S action in @caller
+scope SD action in @deferred
+summary Md call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract
+    call_contract(failures=[thrown], publication=atomic)
+func @caller(%value: int, %offered: own, %full: deps) -> (own, deps) abi explicit(input_packet=1, output_packet=0) {
+    boundary B0 lexical in S
+^entry in S:
+    defer.register S, action defer_action(function=@deferred, replacements=[defer_registration(label="return",
+    kind=return, boundary=B0), defer_registration(label="last", kind=last, boundary=B0)])
+    invoke.defer @deferred(%value; %offered) deps [%full] summary(Md)
+        continue ^next()
+        replace return ^replace($value, $packet, $deps)
+        replace last ^void_replace($packet, $deps)
+        unwind ^failed($failure)
+^next in S:
+    %empty_continue: own = own.empty
+    ret %empty_continue, %full
+^replace(%replacement: int, %packet: own, %deps: deps) in S:
+    ret %packet, %deps
+^void_replace(%packet2: own, %deps2: deps) in S:
+    ret %packet2, %deps2
+^failed(%failure: failure) in S:
+    %empty_failure: own = own.empty
+    ret %empty_failure, %full
+}
+func @deferred(%value: int, %input: own, %full: deps) -> void [defer(replacements=[defer_label(label="return",
+    result=some(int)), defer_label(label="last")])] summary(Md) {
+^entry in SD:
+    ret defer replace return, %value, %input, %full
+}

@@ -1,0 +1,283 @@
+sparrow 17
+Program { module "local_pair" version "" objects 1 Object { name "Res" fields 0 layout ObjectRuntimeLayout { 
+storage_fields 0 allocation_words 5 identity_offset 1 8 has_destroy 1 may_reach_resource 1 may_async_destroy 0 
+trace_layout 0 selection_layout 0 }
+ }
+ tables ChampTables { scopes 1 Scope { function 1 parent 0 boundary 0 }
+ boundaries 1 Boundary { scope 0 }
+ summaries 0 }
+ functions 2 Function { symbol "destroy" entry_abi 0 registers 1 7 0 services 0 params 1 0 0 results 0 blocks 0 proofs 
+FunctionProofs { entry 1 EntryContract { external 1 "fixture.destroy" retained_params 0 fresh_singleton 0 failures 1 
+destroy 1 0 }
+ static_selections 0 closes 0 cleanup_plans 0 post_roots 0 selections 0 dependencies 0 registrations 0 plans 0 
+order_witnesses 0 schedules 0 envelopes 0 states 0 roots 0 }
+ code 0 }
+ Function { symbol "main" entry_abi 0 registers 12 7 0 9 7 0 7 0 11 11 11 11 11 11 7 0 7 0 services 51 1 0 0 1 1 0 0 1 
+1 3 3 3 0 1 1 3 3 3 7 7 3 7 5 6 3 3 5 3 3 3 3 3 5 3 3 3 3 3 4 3 5 3 3 3 7 5 6 0 0 0 0 params 1 0 0 results 1 7 0 blocks 
+18 Block { pc 0 params 1 0 0 }
+ Block { pc 7 params 3 0 2 1 2 1 3 }
+ Block { pc 13 params 3 0 3 1 6 1 7 }
+ Block { pc 18 params 3 1 12 0 4 1 13 }
+ Block { pc 23 params 1 1 18 }
+ Block { pc 24 params 2 1 19 0 5 }
+ Block { pc 25 params 1 1 20 }
+ Block { pc 27 params 1 1 24 }
+ Block { pc 29 params 2 1 27 0 6 }
+ Block { pc 31 params 1 1 29 }
+ Block { pc 32 params 1 1 30 }
+ Block { pc 34 params 2 1 33 0 7 }
+ Block { pc 36 params 1 1 35 }
+ Block { pc 37 params 1 0 8 }
+ Block { pc 38 params 1 1 36 }
+ Block { pc 39 params 2 1 37 1 38 }
+ Block { pc 41 params 2 1 41 0 9 }
+ Block { pc 43 params 1 1 43 }
+ proofs FunctionProofs { entry 1 EntryContract { external 0 retained_params 1 0 fresh_singleton 0 failures 15 destroy 0 
+}
+ static_selections 0 closes 2 CloseContract { begin_pc 14 boundary 0 reserve 0 active_failure 0 envelope 0 }
+ CloseContract { begin_pc 19 boundary 0 reserve 0 active_failure 1 envelope 1 }
+ cleanup_plans 2 CleanupPlan { plan 0 reserve 0 close 0 reserve_empty 1 sources 1 0 slots 2 DirectSlot { identity 0 3 
+descriptor 0 1 destroy 0 origin 1 10 active_pc 13 }
+ DirectSlot { identity 0 2 descriptor 0 1 destroy 0 origin 1 4 active_pc 13 }
+ preserves 8 Dependency { value 1 3 obligations 1 1 0 }
+ Dependency { value 1 4 obligations 1 1 3 }
+ Dependency { value 1 2 obligations 1 1 1 }
+ Dependency { value 1 4 obligations 1 1 2 }
+ Dependency { value 1 7 obligations 1 1 4 }
+ Dependency { value 1 8 obligations 1 1 7 }
+ Dependency { value 1 6 obligations 1 1 5 }
+ Dependency { value 1 8 obligations 1 1 6 }
+ joins 0 suffixes 2 CleanupSuffix { completed 1 remaining 1 0 2 roots 2 0 2 0 1 }
+ CleanupSuffix { completed 2 remaining 0 roots 0 }
+ }
+ CleanupPlan { plan 1 reserve 0 close 1 reserve_empty 0 sources 1 0 slots 0 preserves 0 joins 0 suffixes 0 }
+ post_roots 25 RootRequirement { pc 2 locations 4 0 0 1 0 0 1 1 1 }
+ RootRequirement { pc 1 locations 3 0 0 1 0 0 1 }
+ RootRequirement { pc 0 locations 2 0 0 1 0 }
+ RootRequirement { pc 8 locations 5 0 0 0 1 0 2 1 4 1 5 }
+ RootRequirement { pc 7 locations 4 0 0 0 1 0 2 1 4 }
+ RootRequirement { pc 16 locations 5 0 0 0 1 0 2 0 3 1 11 }
+ RootRequirement { pc 15 locations 5 0 0 0 1 0 2 0 3 1 10 }
+ RootRequirement { pc 14 locations 5 0 0 0 1 0 2 0 3 1 9 }
+ RootRequirement { pc 13 locations 5 0 0 0 1 0 2 0 3 1 8 }
+ RootRequirement { pc 21 locations 1 1 17 }
+ RootRequirement { pc 20 locations 1 1 16 }
+ RootRequirement { pc 19 locations 1 1 15 }
+ RootRequirement { pc 18 locations 2 0 4 1 14 }
+ RootRequirement { pc 25 locations 3 0 0 1 22 1 23 }
+ RootRequirement { pc 27 locations 5 0 0 0 1 0 2 1 25 1 26 }
+ RootRequirement { pc 29 locations 4 0 0 0 1 0 2 1 28 }
+ RootRequirement { pc 32 locations 3 0 0 1 31 1 32 }
+ RootRequirement { pc 34 locations 2 0 0 1 34 }
+ RootRequirement { pc 39 locations 2 1 39 1 40 }
+ RootRequirement { pc 41 locations 1 1 42 }
+ RootRequirement { pc 43 locations 2 1 45 1 46 }
+ RootRequirement { pc 4 locations 6 0 0 0 1 0 10 1 0 1 1 1 47 }
+ RootRequirement { pc 5 locations 5 0 0 0 1 0 10 1 0 1 48 }
+ RootRequirement { pc 10 locations 7 0 0 0 1 0 2 0 11 1 4 1 5 1 49 }
+ RootRequirement { pc 11 locations 6 0 0 0 1 0 2 0 11 1 4 1 50 }
+ selections 2 Selection { locations 2 0 3 0 2 }
+ Selection { locations 0 }
+ dependencies 6 Dependency { value 0 0 obligations 1 0 0 }
+ Dependency { value 0 0 obligations 1 0 0 }
+ Dependency { value 0 2 obligations 1 0 2 }
+ Dependency { value 0 2 obligations 1 0 2 }
+ Dependency { value 0 3 obligations 1 0 3 }
+ Dependency { value 0 3 obligations 1 0 3 }
+ registrations 0 plans 2 Plan { merge 0 selection 0 order_witness 0 }
+ Plan { merge 1 selection 1 order_witness 1 }
+ order_witnesses 2 OrderWitness { creation_pcs 2 10 4 }
+ OrderWitness { creation_pcs 0 }
+ schedules 2 Schedule { services 0 }
+ Schedule { services 0 }
+ envelopes 2 Envelope { failures 1 }
+ Envelope { failures 1 }
+ states 29 StateRecord { pc 1 locations 1 1 0 }
+ StateRecord { pc 2 locations 1 1 0 }
+ StateRecord { pc 3 locations 2 1 0 1 1 }
+ StateRecord { pc 4 locations 2 1 0 1 1 }
+ StateRecord { pc 5 locations 3 1 0 1 1 1 47 }
+ StateRecord { pc 6 locations 2 1 0 1 48 }
+ StateRecord { pc 7 locations 2 1 2 1 3 }
+ StateRecord { pc 8 locations 1 1 4 }
+ StateRecord { pc 9 locations 2 1 4 1 5 }
+ StateRecord { pc 10 locations 2 1 4 1 5 }
+ StateRecord { pc 11 locations 3 1 4 1 5 1 49 }
+ StateRecord { pc 12 locations 2 1 4 1 50 }
+ StateRecord { pc 13 locations 2 1 6 1 7 }
+ StateRecord { pc 14 locations 1 1 8 }
+ StateRecord { pc 15 locations 1 1 9 }
+ StateRecord { pc 16 locations 1 1 10 }
+ StateRecord { pc 17 locations 1 1 11 }
+ StateRecord { pc 25 locations 1 1 20 }
+ StateRecord { pc 26 locations 2 1 22 1 23 }
+ StateRecord { pc 27 locations 1 1 24 }
+ StateRecord { pc 28 locations 2 1 25 1 26 }
+ StateRecord { pc 29 locations 1 1 27 }
+ StateRecord { pc 30 locations 1 1 28 }
+ StateRecord { pc 31 locations 1 1 29 }
+ StateRecord { pc 32 locations 1 1 30 }
+ StateRecord { pc 33 locations 2 1 31 1 32 }
+ StateRecord { pc 34 locations 1 1 33 }
+ StateRecord { pc 35 locations 1 1 34 }
+ StateRecord { pc 36 locations 1 1 35 }
+ roots 45 RootRequirement { pc 0 locations 1 0 0 }
+ RootRequirement { pc 1 locations 2 0 0 1 0 }
+ RootRequirement { pc 2 locations 3 0 0 0 1 1 0 }
+ RootRequirement { pc 3 locations 4 0 0 0 1 1 0 1 1 }
+ RootRequirement { pc 4 locations 5 0 0 0 1 0 10 1 0 1 1 }
+ RootRequirement { pc 5 locations 6 0 0 0 1 0 10 1 0 1 1 1 47 }
+ RootRequirement { pc 6 locations 5 0 0 0 1 0 10 1 0 1 48 }
+ RootRequirement { pc 7 locations 5 0 0 0 1 0 2 1 2 1 3 }
+ RootRequirement { pc 8 locations 4 0 0 0 1 0 2 1 4 }
+ RootRequirement { pc 9 locations 5 0 0 0 1 0 2 1 4 1 5 }
+ RootRequirement { pc 10 locations 6 0 0 0 1 0 2 0 11 1 4 1 5 }
+ RootRequirement { pc 11 locations 7 0 0 0 1 0 2 0 11 1 4 1 5 1 49 }
+ RootRequirement { pc 12 locations 6 0 0 0 1 0 2 0 11 1 4 1 50 }
+ RootRequirement { pc 13 locations 6 0 0 0 1 0 2 0 3 1 6 1 7 }
+ RootRequirement { pc 14 locations 5 0 0 0 1 0 2 0 3 1 8 }
+ RootRequirement { pc 15 locations 5 0 0 0 1 0 2 0 3 1 9 }
+ RootRequirement { pc 16 locations 5 0 0 0 1 0 2 0 3 1 10 }
+ RootRequirement { pc 17 locations 5 0 0 0 1 0 2 0 3 1 11 }
+ RootRequirement { pc 18 locations 3 0 4 1 12 1 13 }
+ RootRequirement { pc 19 locations 2 0 4 1 14 }
+ RootRequirement { pc 20 locations 1 1 15 }
+ RootRequirement { pc 21 locations 1 1 16 }
+ RootRequirement { pc 22 locations 1 1 17 }
+ RootRequirement { pc 23 locations 1 0 0 }
+ RootRequirement { pc 24 locations 1 0 5 }
+ RootRequirement { pc 25 locations 2 0 0 1 20 }
+ RootRequirement { pc 26 locations 4 0 0 1 21 1 22 1 23 }
+ RootRequirement { pc 27 locations 5 0 0 0 1 0 2 0 3 1 24 }
+ RootRequirement { pc 28 locations 5 0 0 0 1 0 2 1 25 1 26 }
+ RootRequirement { pc 29 locations 5 0 0 0 1 0 2 0 6 1 27 }
+ RootRequirement { pc 30 locations 4 0 0 0 1 0 2 1 28 }
+ RootRequirement { pc 31 locations 4 0 0 0 1 0 2 1 29 }
+ RootRequirement { pc 32 locations 4 0 0 0 1 0 2 1 30 }
+ RootRequirement { pc 33 locations 3 0 0 1 31 1 32 }
+ RootRequirement { pc 34 locations 3 0 0 0 7 1 33 }
+ RootRequirement { pc 35 locations 2 0 0 1 34 }
+ RootRequirement { pc 36 locations 2 0 0 1 35 }
+ RootRequirement { pc 37 locations 1 0 8 }
+ RootRequirement { pc 38 locations 1 1 36 }
+ RootRequirement { pc 39 locations 2 1 37 1 38 }
+ RootRequirement { pc 40 locations 2 1 39 1 40 }
+ RootRequirement { pc 41 locations 2 0 9 1 41 }
+ RootRequirement { pc 42 locations 1 1 42 }
+ RootRequirement { pc 43 locations 1 1 43 }
+ RootRequirement { pc 44 locations 3 1 44 1 45 1 46 }
+ }
+ code 45 champ scope.begin 2 1 0 2 0 0 1 1 0 
+ const 0 1 1 1 3 0 
+ champ own.empty 0 0 1 1 1 
+ obj.new 0 1 10 3 0 
+ champ own.create_commit 3 0 0 10 9 0 2 0 0 1 1 47 
+ champ own.join 2 0 1 1 0 1 47 0 1 1 48 
+ br Edge { target_pc 7 assignments 3 Assignment { destination 0 2 source 0 0 10 }
+ Assignment { destination 1 2 source 0 1 48 }
+ Assignment { destination 1 3 source 0 1 0 }
+ }
+ 
+ champ own.admit 2 0 1 3 0 1 2 0 1 1 4 
+ champ own.empty 0 0 1 1 5 
+ obj.new 0 1 11 3 0 
+ champ own.create_commit 3 0 0 11 9 0 2 0 0 1 1 49 
+ champ own.join 2 0 1 5 0 1 49 0 1 1 50 
+ br Edge { target_pc 13 assignments 3 Assignment { destination 0 3 source 0 0 11 }
+ Assignment { destination 1 6 source 0 1 50 }
+ Assignment { destination 1 7 source 0 1 4 }
+ }
+ 
+ champ own.admit 2 0 1 7 0 1 6 0 1 1 8 
+ champ cleanup.begin 3 0 1 8 2 0 7 0 0 1 1 9 
+ champ cleanup.settle 2 0 1 9 6 0 0 1 1 10 
+ champ cleanup.plan 2 0 1 10 5 0 0 1 1 11 
+ br Edge { target_pc 27 assignments 1 Assignment { destination 1 24 source 0 1 11 }
+ }
+ 
+ champ own.admit 2 0 1 13 0 1 12 0 1 1 14 
+ champ cleanup.begin 4 0 1 14 0 0 4 2 0 7 1 0 1 1 15 
+ champ cleanup.settle 2 0 1 15 6 1 0 1 1 16 
+ champ cleanup.plan 2 0 1 16 5 1 0 1 1 17 
+ br Edge { target_pc 38 assignments 1 Assignment { destination 1 36 source 0 1 17 }
+ }
+ 
+ ret 1 0 
+ raise 5 
+ champ cleanup.finish 1 0 1 20 0 3 1 21 1 22 1 23 
+ champ exit.dispatch 6 0 1 21 0 1 22 0 1 23 13 0 13 0 13 1 1 2 Outcome { tag 6 edge Edge { target_pc 23 assignments 1 
+Assignment { destination 1 18 source 1 0 }
+ }
+ }
+ Outcome { tag 8 edge Edge { target_pc 24 assignments 2 Assignment { destination 1 19 source 1 0 }
+ Assignment { destination 0 5 source 1 1 }
+ }
+ }
+ 
+ champ destroy.direct 4 0 1 24 0 0 3 9 0 8 0 0 2 1 25 1 26 
+ champ failure.dispatch 1 0 1 26 1 2 Outcome { tag 9 edge Edge { target_pc 31 assignments 1 Assignment { destination 1 
+29 source 0 1 25 }
+ }
+ }
+ Outcome { tag 10 edge Edge { target_pc 29 assignments 2 Assignment { destination 1 27 source 0 1 25 }
+ Assignment { destination 0 6 source 1 0 }
+ }
+ }
+ 
+ champ cleanup.failure 2 0 1 27 0 0 6 0 1 1 28 
+ br Edge { target_pc 31 assignments 1 Assignment { destination 1 29 source 0 1 28 }
+ }
+ 
+ br Edge { target_pc 32 assignments 1 Assignment { destination 1 30 source 0 1 29 }
+ }
+ 
+ champ destroy.direct 4 0 1 30 0 0 2 9 0 8 0 0 2 1 31 1 32 
+ champ failure.dispatch 1 0 1 32 1 2 Outcome { tag 9 edge Edge { target_pc 36 assignments 1 Assignment { destination 1 
+35 source 0 1 31 }
+ }
+ }
+ Outcome { tag 10 edge Edge { target_pc 34 assignments 2 Assignment { destination 1 33 source 0 1 31 }
+ Assignment { destination 0 7 source 1 0 }
+ }
+ }
+ 
+ champ cleanup.failure 2 0 1 33 0 0 7 0 1 1 34 
+ br Edge { target_pc 36 assignments 1 Assignment { destination 1 35 source 0 1 34 }
+ }
+ 
+ br Edge { target_pc 25 assignments 1 Assignment { destination 1 20 source 0 1 35 }
+ }
+ 
+ raise 8 
+ champ cleanup.next 1 0 1 36 1 2 Outcome { tag 2 edge Edge { target_pc 39 assignments 2 Assignment { destination 1 37 
+source 1 0 }
+ Assignment { destination 1 38 source 1 1 }
+ }
+ }
+ Outcome { tag 3 edge Edge { target_pc 43 assignments 1 Assignment { destination 1 43 source 1 0 }
+ }
+ }
+ 
+ champ cleanup.destroy 2 0 1 37 0 1 38 0 2 1 39 1 40 
+ champ failure.dispatch 1 0 1 40 1 2 Outcome { tag 9 edge Edge { target_pc 38 assignments 1 Assignment { destination 1 
+36 source 0 1 39 }
+ }
+ }
+ Outcome { tag 10 edge Edge { target_pc 41 assignments 2 Assignment { destination 1 41 source 0 1 39 }
+ Assignment { destination 0 9 source 1 0 }
+ }
+ }
+ 
+ champ cleanup.failure 2 0 1 41 0 0 9 0 1 1 42 
+ br Edge { target_pc 38 assignments 1 Assignment { destination 1 36 source 0 1 42 }
+ }
+ 
+ champ cleanup.finish 1 0 1 43 0 3 1 44 1 45 1 46 
+ champ exit.dispatch 6 0 1 44 0 1 45 0 1 46 13 0 13 1 13 1 1 1 Outcome { tag 8 edge Edge { target_pc 37 assignments 1 
+Assignment { destination 0 8 source 1 1 }
+ }
+ }
+ 
+ }
+ entry 0 }
+ 

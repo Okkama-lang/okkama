@@ -144,7 +144,7 @@ impl Resources {
 
 /// Closed-world reachability of destroy-bearing objects through declared
 /// types; a role reaches what the objects doing it reach.
-fn descriptor_flags(program: &Program) -> Vec<bool> {
+pub(crate) fn descriptor_flags(program: &Program) -> Vec<bool> {
     let offset = program.types.len();
     let mut parents = vec![Vec::new(); offset + program.objects.len()];
     let mut reachable = vec![false; parents.len()];
@@ -223,6 +223,7 @@ fn descriptor_flags(program: &Program) -> Vec<bool> {
 
 impl Runtime {
     /// A new object of `descriptor` gets a resource identity if it can matter.
+    #[cfg(not(feature = "champ-abi"))]
     pub fn created(&mut self, descriptor: usize, object: Word) {
         let resources = &mut self.resources;
         if resources.enabled && resources.flags[descriptor] {
@@ -231,6 +232,10 @@ impl Runtime {
             self.heap.watch(object);
         }
     }
+
+    /// Legacy allocation hooks must not commit incomplete Champ construction.
+    #[cfg(feature = "champ-abi")]
+    pub fn created(&mut self, _descriptor: usize, _object: Word) {}
 
     /// A Future must be tracked even before its result exists.
     pub(crate) fn future_created(&mut self, frame: Word) {
