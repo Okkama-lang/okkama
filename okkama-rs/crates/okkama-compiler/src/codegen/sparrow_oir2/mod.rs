@@ -1,11 +1,12 @@
-//! Verified S1 Low OIR-2 → SPB 17. Always compiled, independent of runtime features.
-//! This verifier covers the plain S1 subset; #564's ownership gate is still a
-//! prerequisite for S2/S3. Unsupported operations never fall back to OIR-1.
+//! Low OIR-2 → SPB 17, S1 scalar/object/control and S2 owning/defer calls.
+//! Always compiled, independent of runtime features. Full Low cleanup emission is S3.
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use okkama_oir as o;
 use okkama_sparrow::spb17 as s;
+
+mod calls;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GenerateError(pub String);
@@ -25,18 +26,38 @@ impl From<s::Error> for GenerateError {
 }
 
 fn unsupported(name: &str) -> GenerateError {
-    GenerateError(format!("{name}: not yet in S1"))
+    let stage = if name.starts_with("cleanup.") || name.starts_with("exit.")
+        || matches!(name, "destroy.direct" | "scope.end" | "scope.unwind" | "end")
+    {
+        "S2"
+    } else {
+        "S1"
+    };
+    GenerateError(format!("{name}: not yet in {stage}"))
 }
 
 pub use s::layout::{LayoutRegistry, ObjectLayout};
 
-/// Mandatory input and output checks. Only plain scalar/object/control Low is
-/// accepted here; services, ownership facts and failure/defer CFG wait for S2/S3.
+/// Structural/type checks and independently checked allocation for the S1/S2 Low subset.
+/// Complete ownership/protocol verification and Low cleanup emission are S3.
 pub fn generate(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<s::Program, GenerateError> {
+    Ok(generate_with_allocation(module, layouts)?.program)
+}
+
+#[derive(Clone, Debug)]
+pub struct AllocatedProgram {
+    pub program: s::Program,
+    pub allocations: Vec<s::Allocation>,
+}
+
+/// Keep the checked frame/copy plans available to the later JIT lowering without changing SPB's SSA form.
+pub fn generate_with_allocation(module: &o::Module, layouts: &dyn LayoutRegistry)
+    -> Result<AllocatedProgram, GenerateError>
+{
     if module.profile != o::Profile::Low {
         return Err(GenerateError("expected verified low profile".into()));
     }
-    if !module.imports.is_empty() || !module.protocols.is_empty() || !module.summaries.is_empty()
+    if !module.imports.is_empty() || !module.protocols.is_empty()
         || module.tests.is_some() || module.requires.iter().any(|feature| *feature != o::Feature::Core)
     {
         return Err(unsupported("unresolved declarations, protocols or service metadata"));
@@ -85,10 +106,24 @@ pub fn generate(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<s::P
         p.tables.boundaries.push(s::Boundary { scope: id.as_u32() });
     }
     for (id, function) in module.functions.iter() {
-        p.functions.push(translate_function(module, id, function, &p.objects)?);
+        let translated = if calls::needs_s2(module, function)? {
+            calls::translate(module, id, function, &p.objects, &mut p.tables.summaries)?
+        } else {
+            translate_function(module, id, function, &p.objects)?
+        };
+        p.functions.push(translated);
+    }
+    for function in &mut p.functions {
+        function.proofs.states.extend(calls::service_states(function)?);
     }
     s::verify(&p)?;
-    Ok(p)
+    let mut allocations = Vec::new();
+    for function in &p.functions {
+        let allocation = s::allocate(function)?;
+        s::check_allocation(function, &allocation)?;
+        allocations.push(allocation);
+    }
+    Ok(AllocatedProgram { program: p, allocations })
 }
 
 fn translate_type(module: &o::Module, id: o::TypeId) -> Result<s::Type, GenerateError> {
@@ -98,6 +133,7 @@ fn translate_type(module: &o::Module, id: o::TypeId) -> Result<s::Type, Generate
         o::Type::Str => s::Type::Str,
         o::Type::Range => s::Type::Range,
         o::Type::Never => s::Type::Never,
+        o::Type::Service(o::ServiceType::Failure) => s::Type::Failure,
         o::Type::Object { decl, args } if args.is_empty() => {
             if !matches!(module.declarations.get(*decl)?.kind, o::DeclarationKind::Object { .. }) {
                 return Err(GenerateError("object type references non-object declaration".into()));

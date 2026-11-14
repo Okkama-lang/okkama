@@ -1,12 +1,14 @@
 //! Champ SPB 17 data transformations. Never selected by the default runtime.
 //! Wire format and P1 IDs follow Champ G1 revision 2, §§4 and 9.
+mod allocation;
 mod codec;
 pub mod layout;
 mod registry;
 mod verify;
 
+pub use allocation::{Allocation, Copy, CopySource, allocate, check_allocation, live_locations};
 pub use codec::{assemble, decode, disassemble, encode};
-pub use registry::{Opcode, ProducedType, ResultContext, Tag};
+pub use registry::{CallAbi, Opcode, ProducedType, ResultContext, Tag};
 pub use verify::verify;
 
 pub const VERSION: u16 = 17;

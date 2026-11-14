@@ -102,6 +102,9 @@ impl HelperAbi {
             offset: None, message: format!("{}: no payload schema for {tag:?}", self.name),
         };
         let opcode = self.opcode.ok_or_else(invalid)?;
+        if opcode.call_abi().is_some() {
+            return opcode.call_post_offsets(tag, context);
+        }
         let schema = opcode.results(tag, context)?;
         let erased = |slot: &ProducedType| matches!(slot, ProducedType::Service(ServiceKind::Deps));
         let count = schema.iter().filter(|slot| !erased(slot)).count();
@@ -110,9 +113,7 @@ impl HelperAbi {
             (O::ScopeTransfer, Tag::Unwind) => {
                 if context.between { vec![0, 8, 16] } else { vec![0, 16] }
             }
-            (O::InvokeCallOwn | O::InvokeDefer, Tag::Unwind) => vec![16],
-            (O::InvokeCallOwn, Tag::Normal) | (O::InvokeDefer, Tag::Replace(_))
-            | (O::ExitCommit, Tag::Normal) => {
+            (O::ExitCommit, Tag::Normal) => {
                 if count == 1 { vec![8] } else { vec![0, 8] }
             }
             _ => (0..count).map(|index| index * 8).collect(),
@@ -169,3 +170,20 @@ pub fn helper_abi(name: &str) -> Option<HelperAbi> {
         opcode,
     })
 }
+
+// Keep the always-built SPB transport registry mechanically tied to the actual #572 records.
+const _: () = {
+    use okkama_sparrow::spb17::Opcode;
+    // call_abi is also consumed by codegen; offsets below are checked against repr(C), never inferred.
+    let Some(abi) = Opcode::InvokeCallOwn.call_abi() else { panic!("missing call ABI") };
+    assert!(size_of::<CallOwn>() == abi.call_own_size);
+    assert!(std::mem::offset_of!(CallOwn, input) == abi.input_offset);
+    assert!(std::mem::offset_of!(CallOwn, entry_abi) == abi.entry_offset);
+    assert!(std::mem::offset_of!(CallOwn, output) == abi.output_offset);
+    assert!(std::mem::offset_of!(CallOwn, context) == abi.context_offset);
+    assert!(std::mem::offset_of!(CallOwn, cleanup_mode) == abi.cleanup_offset);
+    assert!(size_of::<CallPost>() == abi.post_size);
+    assert!(std::mem::offset_of!(CallPost, value) == abi.post_value_offset);
+    assert!(std::mem::offset_of!(CallPost, packet) == abi.post_packet_offset);
+    assert!(std::mem::offset_of!(CallPost, failure) == abi.post_failure_offset);
+};

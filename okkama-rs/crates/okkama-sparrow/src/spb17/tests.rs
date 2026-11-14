@@ -266,3 +266,57 @@ fn s1_multi_destination_normal_poststate_round_trip() {
     destinations.swap(1, 2);
     assert!(decode(&codec::encode_unchecked(&p)).unwrap_err().message.contains("multi-result type"));
 }
+
+#[test]
+fn s2_call_transport_uses_runtime_post_positions_without_machine_deps() {
+    let context = ResultContext {
+        value: Some(Type::Int), may_fail: true,
+        labels: vec![DeferLabel { label: 17, result: Some(Type::Str) }, DeferLabel { label: 9, result: None }],
+        ..ResultContext::default()
+    };
+    assert_eq!(Opcode::InvokeCallOwn.call_abi().unwrap().helper, "champ_call_owned");
+    assert_eq!(Opcode::InvokeDefer.call_abi().unwrap().helper, "champ_invoke_defer");
+    assert_eq!(Opcode::InvokeCallOwn.call_post_offsets(Tag::Normal, &context).unwrap(),
+        [Some(0), Some(8), None]);
+    assert_eq!(Opcode::InvokeCallOwn.call_post_offsets(Tag::Unwind, &context).unwrap(), [Some(16)]);
+    assert_eq!(Opcode::InvokeDefer.tags(&context),
+        [Tag::Continue, Tag::Replace(17), Tag::Replace(9), Tag::Unwind]);
+    assert_eq!(Opcode::InvokeDefer.call_post_offsets(Tag::Continue, &context).unwrap(), []);
+    assert_eq!(Opcode::InvokeDefer.call_post_offsets(Tag::Replace(9), &context).unwrap(), [Some(8), None]);
+    assert!(Opcode::InvokeDefer.call_post_offsets(Tag::Replace(2), &context).is_err());
+}
+
+#[test]
+fn s2_liveness_preserves_proof_and_state_only_roots() {
+    let function = Function {
+        symbol: "metadata".into(), entry_abi: EntryAbi::Observation,
+        registers: vec![Type::Str, Type::Str, Type::Str], services: vec![ServiceKind::Packet],
+        params: vec![Location::Register(0), Location::Register(1), Location::Service(0)],
+        results: vec![Type::Str],
+        blocks: vec![Block { pc: 0, params: vec![Location::Register(0), Location::Register(1),
+            Location::Service(0)] }],
+        proofs: FunctionProofs {
+            dependencies: vec![Dependency { value: Location::Register(0), obligations: vec![Location::Register(1)] }],
+            states: vec![StateRecord { pc: 1, locations: vec![Location::Service(0)] }],
+            roots: vec![RootRequirement { pc: 1, locations: vec![Location::Register(2)] }],
+            ..FunctionProofs::default()
+        },
+        code: vec![
+            Instruction::Data { op: DataOp::Const, inputs: vec![], output: Some(2),
+                immediate: Immediate::Constant(Constant::Str("temporary".into())) },
+            Instruction::Ret(vec![0]),
+        ],
+    };
+    let live = live_locations(&function).unwrap();
+    assert!(live[0].contains(&Location::Register(1)));
+    assert!(live[0].contains(&Location::Service(0)));
+    let allocation = allocate(&function).unwrap();
+    check_allocation(&function, &allocation).unwrap();
+    assert_ne!(allocation.locations[&Location::Register(0)], allocation.locations[&Location::Register(1)]);
+    let mut clobbered = allocation.clone();
+    clobbered.locations.insert(Location::Register(1), clobbered.locations[&Location::Register(0)]);
+    assert!(check_allocation(&function, &clobbered).is_err());
+    let mut clobbered = allocation.clone();
+    clobbered.locations.insert(Location::Register(2), clobbered.locations[&Location::Register(0)]);
+    assert!(check_allocation(&function, &clobbered).unwrap_err().message.contains("clobbered"));
+}

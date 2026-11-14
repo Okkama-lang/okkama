@@ -281,6 +281,53 @@ fn context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) -> Result<R
             let abi = &at(&p.functions, entry)?.entry_abi;
             require(matches!((op, abi), (InvokeCallOwn, EntryAbi::Owned) | (InvokeDefer, EntryAbi::Defer { .. })),
                 "invoke entry ABI mismatch")?;
+            let callee = at(&p.functions, entry)?;
+            let language = callee.params.iter().map(|&location| loc_type(callee, location))
+                .collect::<Result<Vec<_>, _>>()?.into_iter()
+                .filter(|ty| matches!(ty, ProducedType::Value(_))).collect::<Vec<_>>();
+            require(locations.len() > language.len(), "owning call requires input packet")?;
+            for (&location, expected) in locations.iter().zip(&language) {
+                require(loc_type(f, location)? == *expected, "owning call language argument type mismatch")?;
+            }
+            input(language.len(), Packet)?;
+            for &location in &locations[language.len() + 1..] {
+                require(loc_type(f, location)? == ProducedType::Service(Deps), "expected proof-only call deps")?;
+            }
+            require(callee.params.iter().filter(|&&location| {
+                loc_type(callee, location) == Ok(ProducedType::Service(Packet))
+            }).count() == 1, "owning entry requires exactly one input packet")?;
+            if op == InvokeCallOwn {
+                require(flags.len() == 1, "owned call requires explicit cleanup mode")?;
+            }
+        }
+        RetOwn => {
+            require(f.entry_abi == EntryAbi::Owned, "ret.own requires owned entry")?;
+            let mut expected = f.results.iter().copied().map(ProducedType::Value).collect::<Vec<_>>();
+            expected.push(ProducedType::Service(Packet));
+            let actual = locations.iter().map(|&location| loc_type(f, location)).collect::<Result<Vec<_>, _>>()?;
+            // ret.own's runtime payload is value?, packet; explicit deps is optional proof metadata.
+            if actual.last() == Some(&ProducedType::Service(Deps)) {
+                expected.push(ProducedType::Service(Deps));
+            }
+            require(actual == expected, "ret.own result schema mismatch")?;
+        }
+        RetDefer => {
+            let EntryAbi::Defer { labels } = &f.entry_abi else {
+                return Err(error("ret.defer requires defer entry"));
+            };
+            let returned = args.iter().filter_map(|arg| match arg {
+                Argument::Label(label) => Some(*label), _ => None,
+            }).collect::<Vec<_>>();
+            require(returned.len() <= 1, "ret.defer needs one tag")?;
+            let expected = if let Some(&label) = returned.first() {
+                Opcode::InvokeDefer.results(Tag::Replace(label), &ResultContext {
+                    labels: labels.clone(), ..ResultContext::default()
+                })?
+            } else {
+                vec![]
+            };
+            let actual = locations.iter().map(|&location| loc_type(f, location)).collect::<Result<Vec<_>, _>>()?;
+            require(actual == expected, "ret.defer result schema mismatch")?;
         }
         _ => {}
     }
@@ -596,7 +643,10 @@ fn verify_function(p: &Program, f: &Function) -> Check {
     for (block_index, block) in f.blocks.iter().enumerate() {
         let end = f.blocks.get(block_index + 1).map_or(f.code.len(), |block| block.pc as usize);
         for pc in block.pc as usize..end {
-            for used in uses(&f.code[pc]) {
+            let mut used = allocation::direct_uses(f, pc);
+            used.extend(uses(&f.code[pc]));
+            allocation::close_dependencies(f, &mut used);
+            for used in used {
                 let &(def_block, def_pc) = definitions.get(&used).ok_or_else(|| error("undefined location"))?;
                 require(dom[block_index][def_block / 64] & (1 << (def_block % 64)) != 0,
                     "definition does not dominate use")?;

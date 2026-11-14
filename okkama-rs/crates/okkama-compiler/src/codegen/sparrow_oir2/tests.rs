@@ -270,7 +270,12 @@ fn s1_rejects_cleanup_defer_and_lost_or_duplicate_successor_permissions() {
         o::Operation::Cleanup(o::CleanupOp::Plan { cleanup: o::ValueId::from_u32(0) }),
         o::Operation::Lexical(o::LexicalOp::DeferRegister {
             scope: o::ScopeId::from_u32(0),
-            action: o::DeferAction { function: o::FuncId::from_u32(0), captures: vec![], bindings: vec![] },
+            action: o::DeferAction {
+                function: o::FuncId::from_u32(0),
+                captures: vec![],
+                bindings: vec![],
+                replacements: vec![],
+            },
         }),
     ] {
         let name = op.opcode();
@@ -279,7 +284,8 @@ fn s1_rejects_cleanup_defer_and_lost_or_duplicate_successor_permissions() {
         let inst = body.blocks.get(body.entry).unwrap().insts[0];
         body.insts.get_mut(inst).unwrap().op = op;
         let error = generate(&m, &layouts()).unwrap_err();
-        assert!(error.0.contains(&format!("{name}: not yet in S1")), "{error}");
+        let stage = if name.starts_with("cleanup.") { "S2" } else { "S1" };
+        assert!(error.0.contains(&format!("{name}: not yet in {stage}")), "{error}");
     }
     let mut m = parse(OBJECT);
     let decl = o::DeclId::from_u32(0);
@@ -325,4 +331,225 @@ fn champ_registry_reemits_571_object_read_golden() {
     assert_eq!(s::assemble(&s::disassemble(&program).unwrap()).unwrap(), program);
     assert!(registry.object_layout(1).is_err());
     assert!(registry.register(declaration, vec![], vec![], LayoutFacts::default(), vec![]).is_err());
+}
+
+fn s2_golden(source: &str, expected: &str) -> s::Program {
+    let module = parse(source);
+    let generated = generate_with_allocation(&module, &layouts()).unwrap();
+    assert_eq!(generated.allocations.len(), generated.program.functions.len());
+    let program = generated.program;
+    s::verify(&program).unwrap();
+    assert_eq!(s::decode(&s::encode(&program).unwrap()).unwrap(), program);
+    assert_eq!(s::assemble(&s::disassemble(&program).unwrap()).unwrap(), program);
+    let mut actual = String::new();
+    for function in &program.functions {
+        actual.push_str(&format!("{} {:?}\n", function.symbol, function.entry_abi));
+        actual.push_str(&format!("registers {:?}\nservices {:?}\n", function.registers, function.services));
+        for (pc, instruction) in function.code.iter().enumerate() {
+            actual.push_str(&format!("{pc}: {instruction:#?}\n"));
+        }
+        let allocation = s::allocate(function).unwrap();
+        s::check_allocation(function, &allocation).unwrap();
+    }
+    assert_eq!(actual, expected);
+    program
+}
+
+#[test]
+fn s2_owned_call_outcomes_and_unwind_only_liveness() {
+    // The fixture entry supplies the fresh offered packet. Its contents are opaque to codegen.
+    let program = s2_golden(include_str!("fixtures/owned-call.oir"), include_str!("fixtures/owned-call.golden"));
+    let function = &program.functions[0];
+    let mut without_metadata = function.clone();
+    without_metadata.proofs.roots.clear();
+    let live = s::live_locations(&without_metadata).unwrap();
+    assert!(live[0].contains(&s::Location::Register(2)));
+    assert!(!live[0].contains(&s::Location::Register(3)), "Post is not a call input root");
+    let s::Instruction::Champ { op: s::Opcode::InvokeCallOwn, flow: s::Flow::Outcomes(outcomes), .. }
+        = &function.code[0] else { panic!("owned call") };
+    assert_eq!(outcomes.iter().map(|outcome| outcome.tag).collect::<Vec<_>>(), [s::Tag::Normal, s::Tag::Unwind]);
+    assert_eq!(outcomes[0].edge.assignments[2].source, s::Source::ProducedSlot(2));
+}
+
+#[test]
+fn s2_empty_input_packet_and_void_results() {
+    s2_golden(include_str!("fixtures/empty-call.oir"), include_str!("fixtures/empty-call.golden"));
+}
+
+#[test]
+fn s2_defer_continue_replace_and_unwind() {
+    let program = s2_golden(include_str!("fixtures/defer-call.oir"), include_str!("fixtures/defer-call.golden"));
+    let s::Instruction::Champ { flow: s::Flow::Outcomes(outcomes), .. } = &program.functions[0].code[0]
+        else { panic!("defer call") };
+    assert_eq!(outcomes.iter().map(|outcome| outcome.tag).collect::<Vec<_>>(),
+        [s::Tag::Continue, s::Tag::Replace(0), s::Tag::Replace(1), s::Tag::Unwind]);
+    assert_eq!(program.functions[0].proofs.registrations[0].labels.len(), 2);
+}
+
+#[test]
+fn s2_shielded_preserves_application_unwind_without_cancel() {
+    let program = s2_golden(include_str!("fixtures/shielded-call.oir"),
+        include_str!("fixtures/shielded-call.golden"));
+    let s::Instruction::Champ { arguments, flow: s::Flow::Outcomes(outcomes), .. } = &program.functions[0].code[0]
+        else { panic!("shielded call") };
+    assert!(arguments.contains(&s::Argument::Flag(true)));
+    assert_eq!(outcomes.len(), 2);
+}
+
+#[test]
+fn s2_checker_rejects_a_clobbered_parallel_cycle() {
+    let mut module = parse(LOOP);
+    let body = module.functions.get_mut(o::FuncId::from_u32(0)).unwrap().body.as_mut().unwrap();
+    let loop_id = o::BlockId::from_u32(1);
+    let params = body.blocks.get(loop_id).unwrap().params.clone();
+    body.blocks.get_mut(o::BlockId::from_u32(2)).unwrap().term.kind = o::TermKind::Br(o::Target {
+        block: loop_id, args: vec![params[1], params[0]],
+    });
+    let program = generate(&module, &layouts()).unwrap();
+    let function = &program.functions[0];
+    let allocation = s::allocate(function).unwrap();
+    s::check_allocation(function, &allocation).unwrap();
+    let mut clobbered = allocation.clone();
+    let copies = clobbered.edges.get_mut(&(7, 0)).unwrap();
+    assert_eq!(copies.len(), 3, "cycle needs scratch before the two assignments");
+    copies.remove(0);
+    assert!(s::check_allocation(function, &clobbered).unwrap_err().message.contains("clobbered"));
+}
+
+#[test]
+fn s2_rejects_foreign_slots_missing_packet_and_shield_outside_cleanup() {
+    let source = include_str!("fixtures/owned-call.oir");
+    let mut module = parse(source);
+    let body = module.functions.get_mut(o::FuncId::from_u32(0)).unwrap().body.as_mut().unwrap();
+    let o::TermKind::InvokeOwn { normal, .. } = &mut body.blocks.get_mut(body.entry).unwrap().term.kind
+        else { panic!("call fixture") };
+    normal.args[0] = o::EdgeArg::Produced(o::EdgeResult { outcome: o::Outcome::Unwind, slot: 0 });
+    assert!(generate(&module, &layouts()).unwrap_err().0.contains("another outcome"));
+    let mut module = parse(source);
+    let body = module.functions.get_mut(o::FuncId::from_u32(0)).unwrap().body.as_mut().unwrap();
+    let o::TermKind::InvokeOwn { op, .. } = &mut body.blocks.get_mut(body.entry).unwrap().term.kind
+        else { panic!("call fixture") };
+    let o::Operation::Call(o::CallOp::Direct { call, .. }) = op.as_mut() else { panic!("direct call") };
+    call.packet = None;
+    assert!(generate(&module, &layouts()).unwrap_err().0.contains("input packet"));
+    let source = include_str!("fixtures/shielded-call.oir").replace(" [cleanup]", "");
+    assert!(generate(&parse(&source), &layouts()).unwrap_err().0.contains("outside cleanup"));
+}
+
+#[test]
+fn s2_metadata_only_dependencies_survive_allocation_and_roundtrip() {
+    let mut module = parse(include_str!("fixtures/owned-call.oir"));
+    let body = module.functions.get_mut(o::FuncId::from_u32(0)).unwrap().body.as_mut().unwrap();
+    let owner = body.blocks.get(body.entry).unwrap().params[0];
+    let dependency = body.blocks.get(body.entry).unwrap().params[4];
+    let deps = body.deps.alloc(o::DepExpr::FromSsa(dependency)).unwrap();
+    body.values.get_mut(owner).unwrap().facts = o::ValueFacts::Managed { deps };
+    let program = generate(&module, &layouts()).unwrap();
+    let function = &program.functions[0];
+    assert!(function.proofs.dependencies.contains(&s::Dependency {
+        value: s::Location::Register(0), obligations: vec![s::Location::Register(2)],
+    }));
+    assert!(s::live_locations(function).unwrap()[0].contains(&s::Location::Register(2)));
+    assert_eq!(s::decode(&s::encode(&program).unwrap()).unwrap(), program);
+    s::verify(&program).unwrap();
+}
+
+#[test]
+fn s2_low_cleanup_and_pending_are_explicitly_deferred_to_s3() {
+    let mut module = parse(include_str!("fixtures/owned-call.oir"));
+    let body = module.functions.get_mut(o::FuncId::from_u32(0)).unwrap().body.as_mut().unwrap();
+    let id = body.insts.alloc(o::Instruction {
+        results: vec![],
+        op: o::Operation::Cleanup(o::CleanupOp::Plan { cleanup: o::ValueId::from_u32(0) }),
+        facts: o::InstructionFacts::default(), loc: None,
+    }).unwrap();
+    body.blocks.get_mut(body.entry).unwrap().insts.push(id);
+    assert!(generate(&module, &layouts()).unwrap_err().0.contains("cleanup.plan: not yet in S2"));
+    let pending = include_str!("fixtures/owned-call.oir").replace("%full: deps", "%full: pending");
+    assert!(generate(&parse(&pending), &layouts()).unwrap_err().0.contains("not yet in S2"));
+}
+
+#[test]
+fn s2_registration_order_does_not_reorder_outcomes() {
+    let mut module = parse(include_str!("fixtures/defer-call.oir"));
+    let expected = generate(&module, &layouts()).unwrap();
+    let body = module.functions.get_mut(o::FuncId::from_u32(0)).unwrap().body.as_mut().unwrap();
+    let o::TermKind::InvokeDefer { replacements, .. } = &mut body.blocks.get_mut(body.entry).unwrap().term.kind
+        else { panic!("defer fixture") };
+    replacements.reverse();
+    assert_eq!(generate(&module, &layouts()).unwrap(), expected);
+}
+
+#[test]
+fn s2_packet_lifetime_is_explicit_and_leaked_packet_is_rejected() {
+    let source = include_str!("fixtures/empty-call.oir");
+    let program = generate(&parse(source), &layouts()).unwrap();
+    let caller = &program.functions[0];
+    // The original input is not a language argument of the nested call, but remains an active holder.
+    assert!(caller.proofs.states.iter().any(|state| state.pc == 1
+        && state.locations.contains(&s::Location::Service(0))));
+    let leaked = source.replace("%joined: own = own.join [%original, %packet]", "%joined: own = own.move %packet");
+    assert!(generate(&parse(&leaked), &layouts()).unwrap_err().0.contains("loses live packet"));
+}
+
+#[test]
+fn s2_checker_rejects_wrong_produced_slot_copy() {
+    let module = parse(include_str!("fixtures/owned-call.oir"));
+    let generated = generate_with_allocation(&module, &layouts()).unwrap();
+    let mut allocation = generated.allocations[0].clone();
+    let copies = allocation.edges.get_mut(&(0, 0)).unwrap();
+    let copy = copies.iter_mut().find(|copy| copy.source == s::CopySource::Produced(1)).unwrap();
+    copy.source = s::CopySource::Produced(0);
+    assert!(s::check_allocation(&generated.program.functions[0], &allocation).is_err());
+}
+
+#[test]
+fn s2_multi_result_outcome_with_parallel_cycle_golden() {
+    let program = s2_golden(include_str!("fixtures/multi-result-cycle.oir"),
+        include_str!("fixtures/multi-result-cycle.golden"));
+    let caller = &program.functions[0];
+    let mut allocation = s::allocate(caller).unwrap();
+    let copies = allocation.edges.get_mut(&(1, 0)).unwrap();
+    let scratch = copies.iter().position(|copy| {
+        !allocation.locations.values().any(|&slot| slot == copy.destination)
+    }).expect("multi-result normal edge must save the cycle source");
+    copies.remove(scratch);
+    assert!(s::check_allocation(caller, &allocation).is_err());
+}
+
+#[test]
+fn s2_instruction_metadata_only_value_is_live_across_call() {
+    let source = include_str!("fixtures/owned-call.oir")
+        .replace("%unwind_only: str)", "%unwind_only: str, %metadata_only: str)");
+    let mut module = parse(&source);
+    let body = module.functions.get_mut(o::FuncId::from_u32(0)).unwrap().body.as_mut().unwrap();
+    let value = body.blocks.get(body.entry).unwrap().params[5];
+    let selection = body.selections.alloc(o::SelectionExpr::Value(value)).unwrap();
+    let inst = body.blocks.get(o::BlockId::from_u32(3)).unwrap().insts[0];
+    body.insts.get_mut(inst).unwrap().facts.retention.push(selection);
+    let program = generate(&module, &layouts()).unwrap();
+    let caller = &program.functions[0];
+    assert!(s::live_locations(caller).unwrap()[0].contains(&s::Location::Register(3)));
+    s::verify(&program).unwrap();
+    assert_eq!(s::decode(&s::encode(&program).unwrap()).unwrap(), program);
+}
+
+#[test]
+fn s2_summary_retention_keeps_language_parameter_positions() {
+    let mut module = parse(include_str!("fixtures/owned-call.oir"));
+    let callee = module.functions.get_mut(o::FuncId::from_u32(1)).unwrap();
+    callee.signature.params[..3].rotate_right(1);
+    callee.signature.ownership_abi = o::OwnershipAbi::Explicit { input_packet: 0, output_packet: 1 };
+    let body = callee.body.as_mut().unwrap();
+    body.blocks.get_mut(body.entry).unwrap().params[..3].rotate_right(1);
+    let params = body.blocks.get(body.entry).unwrap().params.clone();
+    for (index, value) in params.into_iter().enumerate() {
+        body.values.get_mut(value).unwrap().def = o::Definition::BlockParam { block: body.entry, index: index as u32 };
+    }
+    let summary = module.summaries.get_mut(o::SummaryId::from_u32(0)).unwrap();
+    summary.parameters[0].retention = Some(o::SummarySelection::Parameter(1));
+    let program = generate(&module, &layouts()).unwrap();
+    assert_eq!(program.tables.summaries[0].retained_params, [2]);
+    s::verify(&program).unwrap();
+    assert_eq!(s::decode(&s::encode(&program).unwrap()).unwrap(), program);
 }

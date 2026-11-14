@@ -201,3 +201,47 @@ impl Opcode {
             Self::FailureDispatch | Self::RetOwn | Self::RetDefer)
     }
 }
+
+/// Shared machine transport for #572 S2 CallOwn/CallPost. No runtime deps and no second outcome tag.
+/// Runtime repr(C) records assert these offsets; codegen/JIT consume this registry, not a local ABI.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CallAbi {
+    pub helper: &'static str,
+    pub input_offset: usize,
+    pub entry_offset: usize,
+    pub output_offset: usize,
+    pub context_offset: usize,
+    pub cleanup_offset: usize,
+    pub call_own_size: usize,
+    pub post_size: usize,
+    pub post_value_offset: usize,
+    pub post_packet_offset: usize,
+    pub post_failure_offset: usize,
+}
+
+impl Opcode {
+    pub const fn call_abi(self) -> Option<CallAbi> {
+        let helper = match self {
+            Self::InvokeCallOwn => "champ_call_owned",
+            Self::InvokeDefer => "champ_invoke_defer",
+            _ => return None,
+        };
+        Some(CallAbi {
+            helper, input_offset: 0, entry_offset: 8, output_offset: 16,
+            context_offset: 24, cleanup_offset: 32, call_own_size: 40, post_size: 24,
+            post_value_offset: 0, post_packet_offset: 8, post_failure_offset: 16,
+        })
+    }
+
+    /// Abstract slot → CallPost byte offset. None is erased deps; Post is never a helper-call root.
+    pub fn call_post_offsets(self, tag: Tag, context: &ResultContext) -> Result<Vec<Option<usize>>, Error> {
+        let abi = self.call_abi().ok_or_else(|| error("operation does not use CallOwn"))?;
+        self.results(tag, context)?.into_iter().map(|slot| Ok(match slot {
+            ProducedType::Service(ServiceKind::Deps) => None,
+            ProducedType::Service(ServiceKind::Packet) => Some(abi.post_packet_offset),
+            ProducedType::Value(Type::Failure) if tag == Tag::Unwind => Some(abi.post_failure_offset),
+            ProducedType::Value(_) => Some(abi.post_value_offset),
+            _ => return Err(error("invalid CallPost slot")),
+        })).collect()
+    }
+}
