@@ -32,7 +32,9 @@ capitalised, like every type; the cases are lower-case identifiers
 (`enum Status = (Ready, failed)` is a syntax error: `Expect enum case
 name`). A case is always written with its type, `Priority.urgent`. There is no
 bare `urgent` in scope, so two enums can share a case name without conflict. A
-duplicate case is an error: `Enum "Status" already has case "ready"`.
+duplicate case is an error: `Enum "Status" already has case "ready"`. A long
+enum is written one case per line, and, as in any list of parameters,
+arguments or literals, a trailing comma after the last case is allowed.
 
 What an Okkama enum value *does not* have is as important as what it has:
 
