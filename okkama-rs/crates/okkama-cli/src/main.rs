@@ -45,6 +45,28 @@ use okkama_compiler::syntax::{self, ParseMode, ParseOptions, ast, lexer, prune};
 const EXIT_DIAGNOSTICS: u8 = 1;
 const EXIT_USAGE: u8 = 2;
 const EXIT_IO: u8 = 3;
+#[cfg(feature = "champ-abi")]
+const EXIT_OIR2_UNSUPPORTED: u8 = 4;
+
+#[cfg(feature = "champ-abi")]
+fn oir2_selected() -> bool {
+    std::env::var_os("OKKAMA_PIPELINE").is_some_and(|value| value == "oir2")
+}
+
+#[cfg(feature = "champ-abi")]
+fn compile_oir2(sources: &[SourceFile], tests: bool) -> Result<Vec<u8>, Outcome> {
+    if tests {
+        return Err(Outcome::failure(
+            "okkama: unsupported in OIR-2 lowering: test profile\n".into(), EXIT_OIR2_UNSUPPORTED,
+        ));
+    }
+    let programs = parse_all(sources, false)?;
+    let roots = root_files(sources, &programs);
+    lowering::oir2::compile_linked(&roots, &mut loader(false)).map_err(|error| {
+        let code = if error.is_unsupported() { EXIT_OIR2_UNSUPPORTED } else { EXIT_DIAGNOSTICS };
+        Outcome::failure(format!("okkama: {error}\n"), code)
+    })
+}
 
 const HELP: &str = "\
 okkama — Okkama language front end and IR
@@ -1291,6 +1313,17 @@ fn build_command(args: &[String]) -> Outcome {
         Ok(sources) => sources,
         Err(outcome) => return outcome,
     };
+    #[cfg(feature = "champ-abi")]
+    if oir2_selected() {
+        let bytes = match compile_oir2(&sources, line.tests) {
+            Ok(bytes) => bytes,
+            Err(outcome) => return outcome,
+        };
+        return match std::fs::write(output, bytes) {
+            Ok(()) => Outcome::success(String::new()),
+            Err(error) => Outcome::failure(format!("okkama: cannot write `{output}`: {error}\n"), EXIT_IO),
+        };
+    }
     let (module, warnings) = match lower_source(&sources, line.tests) {
         Ok(lowered) => lowered,
         Err(outcome) => return outcome,
@@ -1441,6 +1474,21 @@ fn run_command(args: &[String]) -> Outcome {
         Ok(sources) => sources,
         Err(outcome) => return outcome,
     };
+    #[cfg(feature = "champ-abi")]
+    if oir2_selected() {
+        let bytes = match compile_oir2(&sources, line.tests) {
+            Ok(bytes) => bytes,
+            Err(outcome) => return outcome,
+        };
+        let arguments = program_args.iter().map(|argument| argument.clone().into_bytes()).collect();
+        if let Some(flag) = &limits.interrupt {
+            watchdog(flag.clone());
+        }
+        let (outcome, _) = core_described(sparrow_core::run_described(
+            bytes, arguments, false, Vec::new(), limits,
+        ));
+        return outcome;
+    }
     let (mut module, warnings) = match lower_source(&sources, line.tests) {
         Ok(lowered) => lowered,
         Err(outcome) => return outcome,

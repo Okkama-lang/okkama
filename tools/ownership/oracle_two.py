@@ -55,7 +55,7 @@ def load_manifest(path, root, selected):
         if not isinstance(entry['id'], str) or not entry['id'] or entry['id'] in ids:
             raise ValueError('empty or duplicate manifest ID')
         ids.append(entry['id'])
-        for key in ('source', 'rule', 'model_fixture'):
+        for key in ('source', 'rule'):
             if not isinstance(entry[key], str) or not entry[key]:
                 raise ValueError(f'{key} must be a nonempty string')
         for key in ('features', 'checkpoints', 'destroy'):
@@ -81,7 +81,12 @@ def load_manifest(path, root, selected):
             raise ValueError('expected must be supported or unsupported')
         if entry['cleanup'] not in ('static', 'journal', 'dynamic'):
             raise ValueError('invalid cleanup path')
+        if entry['model_fixture'] is not None and (
+                not isinstance(entry['model_fixture'], str) or not entry['model_fixture']):
+            raise ValueError('model_fixture must be null or a nonempty string')
         for key in ('source', 'model_fixture'):
+            if entry[key] is None:
+                continue
             resolved = (root / entry[key]).resolve()
             resolved.relative_to(root)
             if not resolved.is_file():
@@ -199,7 +204,7 @@ def process(entry, args, output, chains):
     source = args.root / entry['source']
     result = dict(id=entry['id'], manifest=entry, artifacts=str(folder),
                   inputs={key: oracle.fingerprint(args.root / entry[key])
-                          for key in ('source', 'model_fixture')},
+                          for key in ('source', 'model_fixture') if entry[key] is not None},
                   builds={}, runs={}, binaries={}, differences=[], determinism_diff=[],
                   problems=[], status='same')
     if entry['expected'] == 'unsupported':
@@ -210,6 +215,8 @@ def process(entry, args, output, chains):
     for side in ('A', 'B'):
         chain = chains[side]
         env = {k: v for k, v in os.environ.items() if k not in oracle.INSTRUMENTATION}
+        # An inherited developer switch must never select the candidate pipeline for A.
+        env.pop('OKKAMA_PIPELINE', None)
         env.update(dict(getattr(args, side.lower() + '_env')))
         env.update(OKKAMA_STDLIB_DIR=str(Path(chain['prefix']) / 'lib/okkama/std'),
                    OKKAMA_IMPORT_DIRS=str(args.root / 't/support'))
@@ -289,6 +296,9 @@ def run_suite(args):
         raise ValueError('two-toolchains uses manifest selection and --a/--b-toolchain')
     entries = load_manifest(args.manifest, args.root, args.filter)
     chains = toolchains(args)
+    for entry in entries:
+        if entry['expected'] == 'supported' and entry['baseline']['revision'] != chains['A']['revision']:
+            raise ValueError(f'{entry["id"]}: baseline revision differs from the manifest contract')
     args.out.mkdir(parents=True, exist_ok=True)
     output = Path(tempfile.mkdtemp(prefix='two-toolchains-', dir=args.out.resolve()))
     # Deliberately serial A/A/B/B: no interference between repeated invocations.

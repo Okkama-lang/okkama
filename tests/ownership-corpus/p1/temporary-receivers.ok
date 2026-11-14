@@ -1,0 +1,35 @@
+// Extracted from temporary-receivers; checkpoints use the plain P1 test log.
+module app;
+import "async/atomic" take Atomic;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    has log is Atomic<string>;
+    Res(name is string, log is Atomic<string>) {
+        self.name = name;
+        self.log = log;
+    }
+    label() is string {
+        name;
+    }
+    destroy {
+        log.replace(log.value() + name);
+    }
+}
+main() is int {
+    let log = Atomic("");
+    defer log.close();
+    {
+        Res("A", log).label();
+        confirm log.value() == "A";
+        Stdout().writeln(log.value());
+        let b = Res("B", log);
+        b.label();
+        b.label();
+        confirm log.value() == "A";
+        Stdout().writeln(log.value());
+    }
+    confirm log.value() == "AB";
+    Stdout().writeln(log.value());
+    0;
+}

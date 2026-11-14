@@ -157,7 +157,7 @@ impl Emitter<'_> {
                 arguments.push(A::Selection(self.selection(*selection)?));
                 (O::ScopeTransfer, arguments)
             }
-            _ => return Err(later("ownership operation outside synchronous P1 transport")),
+            _ => return Err(later(&format!("ownership operation {op:?} outside synchronous P1 transport"))),
         })
     }
 

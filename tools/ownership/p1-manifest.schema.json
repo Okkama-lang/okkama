@@ -33,6 +33,7 @@
       "properties": {
         "id": {"type": "string", "minLength": 1},
         "source": {"type": "string", "minLength": 1},
+        "rust_test": {"type": "string", "minLength": 1},
         "checks": {"type": "array", "items": {"type": "integer", "minimum": 1}, "uniqueItems": true},
         "rule": {"type": "string", "minLength": 1},
         "features": {"type": "array", "items": {"type": "string"}},
@@ -47,7 +48,7 @@
           "type": "object", "required": ["revision", "toolchain"],
           "properties": {"revision": {"type": "string", "minLength": 1}, "toolchain": {"type": "string", "minLength": 1}}
         },
-        "model_fixture": {"type": "string", "minLength": 1},
+        "model_fixture": {"type": ["string", "null"], "minLength": 1},
         "cleanup": {"enum": ["static", "journal", "dynamic"]},
         "expected": {"enum": ["supported", "unsupported"]},
         "reason": {"type": "string", "minLength": 1},

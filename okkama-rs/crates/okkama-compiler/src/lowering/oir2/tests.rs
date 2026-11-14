@@ -1348,3 +1348,52 @@ fn oir2_high_observation_requires_a_trusted_external() {
     module.functions.get_mut(function).unwrap().signature.results.clear();
     assert!(super::native_summaries::P1NativeSummaries::for_module(&module).is_err());
 }
+
+#[test]
+fn oir2_pipeline_scalar() {
+    let source = SourceFile::new("app.ok", "module app; main() is int { 7; }").unwrap();
+    let program = syntax::parse(&source, &ParseOptions::default()).unwrap();
+    let roots = [crate::lowering::RootFile { source: &source, program: &program }];
+    let bytes = super::compile_linked(&roots, &mut StdLoader).unwrap();
+    let loaded = okkama_sparrow::spb17::decode(&bytes).unwrap();
+    okkama_sparrow::spb17::verify_load(&loaded, &okkama_sparrow::spb17::NoExternalContracts).unwrap();
+}
+
+#[test]
+fn oir2_p1_sources() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/ownership-corpus/p1");
+    let mut paths = std::fs::read_dir(root).unwrap().map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "ok")).collect::<Vec<_>>();
+    paths.sort();
+    let mut failures = Vec::new();
+    for path in paths {
+        let text = std::fs::read_to_string(&path).unwrap();
+        let source = SourceFile::new(path.to_string_lossy(), text).unwrap();
+        let program = match syntax::parse(&source, &ParseOptions::default()) {
+            Ok(program) => program,
+            Err(error) => {
+                failures.push(format!("{}: {error:?}", path.display()));
+                continue;
+            }
+        };
+        let roots = [crate::lowering::RootFile { source: &source, program: &program }];
+        match super::lower_linked_high(&roots, &mut StdLoader) {
+            Ok(module) => {
+                verify_high(&module, path.to_str().unwrap());
+                println!("SUPPORTED {}", path.file_stem().unwrap().to_str().unwrap());
+            }
+            Err(error) => failures.push(format!("{}: {error}", path.display())),
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn oir2_p1_excluded_defer_replacement() {
+    let text = include_str!(
+        "../../../../../../tests/ownership-corpus/p1/excluded/defer-return-replacement.ok"
+    );
+    let error = lower_std(text).unwrap_err();
+    assert!(matches!(error, LowerError::Unsupported { .. }));
+    assert!(error.to_string().contains("return from defer (#567 S3/D8)"), "{error}");
+}

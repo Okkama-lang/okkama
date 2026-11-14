@@ -1,0 +1,336 @@
+{
+  "schema": "okkama-p1-in-process-results/1",
+  "gate": "failed",
+  "source_entries": 25,
+  "tests": {
+    "passed": 3,
+    "failed": 25,
+    "ignored": 0
+  },
+  "results": [
+    {
+      "id": "scopes-nested-shadowing",
+      "rust_test": "scopes_nested_shadowing",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "memory-limit",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "scopes-temporary-tail",
+      "rust_test": "scopes_temporary_tail",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "unsupported-array.new",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "branches-discarded-if-308",
+      "rust_test": "branches_discarded_if_308",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "unsupported-array.new",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "branches-wanted-match",
+      "rust_test": "branches_wanted_match",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "memory-limit",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "temporary-arguments",
+      "rust_test": "temporary_arguments",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "unsupported-array.new",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "temporary-receivers",
+      "rust_test": "temporary_receivers",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "unsupported-array.new",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "call-results",
+      "rust_test": "call_results",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "unsupported-array.new",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "call-chains",
+      "rust_test": "call_chains",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "memory-limit",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "rebind-history-defer",
+      "rust_test": "rebind_history_defer",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "memory-limit",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "successor-staging",
+      "rust_test": "successor_staging",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "memory-limit",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "loops-next-last",
+      "rust_test": "loops_next_last",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "memory-limit",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "loops-valued-nested",
+      "rust_test": "loops_valued_nested",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "memory-limit",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "defer-order",
+      "rust_test": "defer_order",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "memory-limit",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "unwind-late-argument",
+      "rust_test": "unwind_late_argument",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "unsupported-array.new",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "unwind-nested",
+      "rust_test": "unwind_nested",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "memory-limit",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "destroy-failures",
+      "rust_test": "destroy_failures",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "unsupported-array.new",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "try-resource-results",
+      "rust_test": "try_resource_results",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "memory-limit",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "partial-construction",
+      "rust_test": "partial_construction",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "unsupported-array.new",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "secondary-failures",
+      "rust_test": "secondary_failures",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "unsupported-array.new",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "panic-unwind",
+      "rust_test": "panic_unwind",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "unsupported-array.new",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "direct-singleton",
+      "rust_test": "direct_singleton",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "unsupported-array.new",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "late-old-identity",
+      "rust_test": "late_old_identity",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "unsupported-array.new",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "mixed-merge",
+      "rust_test": "mixed_merge",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "unsupported-array.new",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "reserve-r-a",
+      "rust_test": "reserve_r_a",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "unsupported-array.new",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    },
+    {
+      "id": "reserve-a-r",
+      "rust_test": "reserve_a_r",
+      "high": "passed",
+      "pipeline": "failed",
+      "stage": "own",
+      "reason": "unsupported-array.new",
+      "stdout": null,
+      "checkpoints": null,
+      "destroy_trace": null
+    }
+  ],
+  "blockers": [
+    "Own rejects array.new emitted by the finite Stdout source path.",
+    "Own analysis reaches its conservative 256 MiB budget on several source CFGs.",
+    "Without Stdout, resource source reaches compile_low, which rejects deps.of.",
+    "SPB emission/load/runtime still need closed Atomic/Stdout/Error external contracts and layouts."
+  ],
+  "phase_failures": {
+    "memory-limit": 10,
+    "unsupported-array.new": 15
+  },
+  "commands": [
+    {
+      "command": "cargo check --offline -j 4 --workspace --all-targets",
+      "code": 0
+    },
+    {
+      "command": "cargo check --offline -j 4 -p okkama-cli --features champ-abi --all-targets",
+      "code": 0
+    },
+    {
+      "command": "cargo clippy --offline -j 4 --workspace --all-targets -- -D warnings",
+      "code": 0
+    },
+    {
+      "command": "cargo clippy --offline -j 4 --workspace --all-targets --features okkama-cli/champ-abi,sparrow-cli/champ-abi -- -D warnings",
+      "code": 0
+    },
+    {
+      "command": "cargo test --offline -j 4 -p okkama-compiler --lib oir2",
+      "code": 0,
+      "passed": 94
+    },
+    {
+      "command": "cargo test --offline -j 4 -p sparrow-core --features champ-abi --lib champ",
+      "code": 0,
+      "passed": 76
+    },
+    {
+      "command": "cargo test --offline -j 4 -p okkama-cli --features champ-abi --test p1_pipeline -- --nocapture --test-threads=4",
+      "code": 101,
+      "passed": 3,
+      "failed": 25
+    },
+    {
+      "command": "python3 -I tools/ownership/test_oracle_two.py",
+      "code": 0,
+      "passed": 24
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+// Extracted from call-results; checkpoints use the plain P1 test log.
+module app;
+import "async/atomic" take Atomic;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    has log is Atomic<string>;
+    Res(name is string, log is Atomic<string>) {
+        self.name = name;
+        self.log = log;
+    }
+    label() is string {
+        name;
+    }
+    destroy {
+        log.replace(log.value() + name);
+    }
+}
+object Factory {
+    Factory();
+    make(name is string, log is Atomic<string>) is Res {
+        Res(name, log);
+    }
+    nested(log is Atomic<string>) is Res {
+        self.make("N", log);
+    }
+}
+main() is int {
+    let log = Atomic("");
+    defer log.close();
+    {
+        let kept = Factory().nested(log);
+        Factory().make("D", log);
+        confirm log.value() == "";
+        Stdout().writeln(log.value());
+        kept.label();
+    }
+    confirm log.value() == "DN";
+    Stdout().writeln(log.value());
+    0;
+}

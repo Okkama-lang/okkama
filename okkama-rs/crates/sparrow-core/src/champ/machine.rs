@@ -53,6 +53,41 @@ pub(crate) fn repr(ty: s::Type) -> Repr {
 }
 
 impl Runtime {
+    /// A source main offers an empty packet. Resource parameters need an explicit host transport.
+    pub(crate) fn champ_run_owned(&mut self, ctx: &mut Ctx, function: usize, arguments: &[Word])
+        -> Result<Word, Error>
+    {
+        if !arguments.is_empty() {
+            return Err(error("parameterized owning entry requires CallOwn transport"));
+        }
+        let entry = self.champ_entry_id(function).ok_or_else(|| error("missing Champ entry"))?;
+        let mut input = PacketSlot::default();
+        if rt_own_empty(ctx, &mut input) != 0 {
+            return Err(error("cannot initialize entry packet"));
+        }
+        let mut post = CallPost::default();
+        let mut io = CallOwn { input, entry_abi: entry, output: &mut post, context: 0, cleanup_mode: 0 };
+        let outcome = cleanup::rt_call_owned(ctx, entry, arguments.as_ptr(), 0, &mut io, &mut post);
+        if ctx.status != runtime::OK {
+            return Ok(0);
+        }
+        match outcome {
+            0 => {
+                if !self.champ_packet_keys(&post.packet)?.is_empty() {
+                    return Err(error("main returned an ownership packet"));
+                }
+                post.packet.record = 0;
+                Ok(post.value)
+            }
+            1 => {
+                ctx.failure = post.failure;
+                ctx.status = runtime::FAILED;
+                Ok(0)
+            }
+            _ => Err(error("invalid main outcome")),
+        }
+    }
+
     /// Runtime-local CallOwn entry ID for a verified SPB function index.
     pub fn champ_entry_id(&self, function: usize) -> Option<EntryId> {
         self.champ.machine.as_ref()?.entries.get(function).copied()

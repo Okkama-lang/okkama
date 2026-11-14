@@ -8,6 +8,9 @@ import sys
 import tempfile
 import unittest
 
+# Python -I omits the script directory; load only this checkout's runner modules.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 import oracle
 import oracle_two
 
@@ -17,6 +20,8 @@ from pathlib import Path
 import sys
 kind, source, binary, config_path = sys.argv[1:]
 config = __import__('json').loads(Path(config_path).read_text())
+if 'pipeline' in config and os.environ.get('OKKAMA_PIPELINE') != config['pipeline']:
+    sys.exit(66)
 if kind == 'build':
     if config.get('build_fail'):
         sys.exit(1)
@@ -54,7 +59,7 @@ class TwoToolchainTests(unittest.TestCase):
         self.entry = dict(id='nested', source='source.ok', checks=[1], rule='Book 20.2',
                           features=['object-destroy'], checkpoints=['checkpoint'],
                           stdout='checkpoint\n', failure=dict(code=0, stderr=''),
-                          destroy=['create-A', 'create-B'], baseline=dict(revision='frozen', toolchain='A'),
+                          destroy=['create-A', 'create-B'], baseline=dict(revision='A-frozen-revision', toolchain='A'),
                           model_fixture='model.oir', cleanup='static', expected='supported',
                           identities=[dict(event='create-A', A=dict(block=0, serial=4, type='Res'),
                                            B=dict(block=0, serial=1, type='Res')),
@@ -216,7 +221,33 @@ class TwoToolchainTests(unittest.TestCase):
         root = Path(oracle.__file__).resolve().parents[2]
         entries = oracle_two.load_manifest(Path(oracle.__file__).with_name('p1-manifest.json'), root, [])
         self.assertTrue(entries)
-        self.assertTrue(all(e['expected'] == 'unsupported' for e in entries))
+        self.assertEqual(len(entries), 25)
+        self.assertTrue(all(e['expected'] == 'supported' for e in entries))
+        self.assertTrue(all(e['source'].startswith('tests/ownership-corpus/p1/') for e in entries))
+        self.assertTrue(all(e['baseline']['revision'] == '34342aa698e80d9e9d3d98d3e49a6c5e55842b2e' for e in entries))
+        tests = (root / 'okkama-rs/crates/okkama-cli/tests/p1_pipeline.rs').read_text()
+        for entry in entries:
+            self.assertIn(f'fixture!({entry["rust_test"]}, "{entry["id"]}");', tests)
+
+    def test_baseline_revision_matches_manifest(self):
+        self.entry['baseline']['revision'] = 'another-revision'
+        with self.assertRaisesRegex(ValueError, 'baseline revision differs'):
+            self.run_suite()
+
+    def test_missing_model_link_is_explicit(self):
+        self.entry['model_fixture'] = None
+        code, report = self.run_suite()
+        self.assertEqual(code, 0)
+        self.assertEqual(set(report['programs'][0]['inputs']), {'source'})
+
+    def test_pipeline_switch_is_explicit_and_side_local(self):
+        from unittest.mock import patch
+        self.configs['A']['pipeline'] = None
+        self.configs['B']['pipeline'] = 'oir2'
+        with patch.dict('os.environ', {'OKKAMA_PIPELINE': 'oir2'}):
+            code, report = self.run_suite(['--b-env', 'OKKAMA_PIPELINE=oir2'])
+        self.assertEqual(code, 0)
+        self.assertEqual(report['overrides']['B']['OKKAMA_PIPELINE'], 'oir2')
 
     def test_legacy_cli_and_required_toolchain(self):
         for mode in ('engines', 'ab', 'stats', 'tap'):

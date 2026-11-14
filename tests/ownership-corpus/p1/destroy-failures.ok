@@ -1,0 +1,48 @@
+// Extracted from destroy-failures; checkpoints use the plain P1 test log.
+module app;
+import "async/atomic" take Atomic;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    has log is Atomic<string>;
+    Res(name is string, log is Atomic<string>) {
+        self.name = name;
+        self.log = log;
+    }
+    label() is string {
+        name;
+    }
+    destroy {
+        log.replace(log.value() + name);
+    }
+}
+enum Cleanup is Error = (failed);
+object Bomb {
+    has name is string;
+    has log is Atomic<string>;
+    Bomb(name is string, log is Atomic<string>) {
+        self.name = name;
+        self.log = log;
+    }
+    destroy {
+        let alias = self;
+        log.replace(log.value() + name);
+        throw Cleanup.failed;
+    }
+}
+main() is int {
+    let log = Atomic("");
+    defer log.close();
+    try {
+        let a = Res("A", log);
+        let b = Bomb("B", log);
+        let alias = b;
+    }
+    catch e is Cleanup {
+        confirm log.value() == "BA";
+        Stdout().writeln(log.value());
+    }
+    confirm log.value() == "BA";
+    Stdout().writeln(log.value());
+    0;
+}

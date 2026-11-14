@@ -3,35 +3,2075 @@
   "entries": [
     {
       "id": "scopes-nested-shadowing",
-      "source": "tests/ownership-corpus/scopes.ok",
-      "checks": [1, 2, 3],
-      "rule": "Book 12.2, 20.1–20.3; P1 plan 9.2 scopes",
-      "features": ["nested-scope", "shadowing", "object-destroy", "Atomic<string>", "TAP"],
-      "checkpoints": ["CB", "CBS", "CBSA"],
-      "failure": {"code": 0, "stderr": ""},
-      "destroy": ["inner-C", "middle-B", "shadow-S", "outer-A"],
-      "baseline": {"revision": "release/0.6.0 (resolve to immutable revision before enabling)", "toolchain": "OIR-1 / SPB 16"},
+      "source": "tests/ownership-corpus/p1/scopes-nested-shadowing.ok",
+      "origin": "scopes.ok",
+      "checks": [
+        1,
+        2,
+        3
+      ],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 scopes",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "scopes"
+      ],
+      "checkpoints": [
+        "CB",
+        "CBS",
+        "CBSA"
+      ],
+      "stdout": "CB\nCBS\nCBSA\n",
+      "failure": {
+        "code": 0,
+        "stderr": ""
+      },
+      "destroy": [
+        "inner-C",
+        "middle-B",
+        "shadow-S",
+        "outer-A"
+      ],
+      "identities": [
+        {
+          "event": "outer-A",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "middle-B",
+          "A": {
+            "block": 0,
+            "serial": 2,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 2,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "inner-C",
+          "A": {
+            "block": 0,
+            "serial": 3,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 3,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "shadow-S",
+          "A": {
+            "block": 0,
+            "serial": 4,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 4,
+            "type": "app.Res"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
       "model_fixture": "tools/ownership/model/fixtures/corpus/scopes.oir",
-      "cleanup": "static",
-      "expected": "unsupported",
-      "reason": "Coverage reference only: extract checks 1–3 into a standalone P1 fixture without general TAP/IO; freeze creation-event serial maps for both toolchains before enabling. The complete corpus file is not claimed as P1-supported.",
-      "identities": []
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "scopes_nested_shadowing"
+    },
+    {
+      "id": "scopes-temporary-tail",
+      "source": "tests/ownership-corpus/p1/scopes-temporary-tail.ok",
+      "origin": "scopes.ok",
+      "checks": [
+        4,
+        5,
+        6
+      ],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 scopes",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "scopes"
+      ],
+      "checkpoints": [
+        "",
+        "X",
+        "Y"
+      ],
+      "stdout": "\nX\nY\n",
+      "failure": {
+        "code": 0,
+        "stderr": ""
+      },
+      "destroy": [
+        "temporary-X",
+        "tail-Y"
+      ],
+      "identities": [
+        {
+          "event": "temporary-X",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "tail-Y",
+          "A": {
+            "block": 0,
+            "serial": 2,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 2,
+            "type": "app.Res"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
+      "model_fixture": "tools/ownership/model/fixtures/corpus/scopes.oir",
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "scopes_temporary_tail"
     },
     {
       "id": "branches-discarded-if-308",
-      "source": "tests/ownership-corpus/branches.ok",
-      "checks": [3, 4],
-      "rule": "Issue #308; Book 11.6, 12.3–12.4, 20.2; P1 plan 9.2 branches",
-      "features": ["discarded-if", "object-destroy", "Atomic<string>", "TAP"],
-      "checkpoints": ["B", "B"],
-      "failure": {"code": 0, "stderr": ""},
-      "destroy": ["selected-B"],
-      "baseline": {"revision": "release/0.6.0 (resolve to immutable revision before enabling)", "toolchain": "OIR-1 / SPB 16"},
+      "source": "tests/ownership-corpus/p1/branches-discarded-if-308.ok",
+      "origin": "branches.ok",
+      "checks": [
+        3,
+        4
+      ],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 branches",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "branches"
+      ],
+      "checkpoints": [
+        "B",
+        "B"
+      ],
+      "stdout": "B\nB\n",
+      "failure": {
+        "code": 0,
+        "stderr": ""
+      },
+      "destroy": [
+        "selected-B"
+      ],
+      "identities": [
+        {
+          "event": "selected-B",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Res"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
       "model_fixture": "tools/ownership/model/fixtures/corpus/branches.oir",
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "branches_discarded_if_308"
+    },
+    {
+      "id": "branches-wanted-match",
+      "source": "tests/ownership-corpus/p1/branches-wanted-match.ok",
+      "origin": "branches.ok",
+      "checks": [
+        1,
+        2,
+        5,
+        6,
+        7,
+        8
+      ],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 branches",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "branches"
+      ],
+      "checkpoints": [
+        "L",
+        "LA",
+        "L",
+        "LM",
+        "D",
+        "D"
+      ],
+      "stdout": "L\nLA\nL\nLM\nD\nD\n",
+      "failure": {
+        "code": 0,
+        "stderr": ""
+      },
+      "destroy": [
+        "if-local-L",
+        "if-result-A",
+        "match-local-L",
+        "match-result-M",
+        "discard-D"
+      ],
+      "identities": [
+        {
+          "event": "if-local-L",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "if-result-A",
+          "A": {
+            "block": 0,
+            "serial": 2,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 2,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "match-local-L",
+          "A": {
+            "block": 0,
+            "serial": 3,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 3,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "match-result-M",
+          "A": {
+            "block": 0,
+            "serial": 4,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 4,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "discard-D",
+          "A": {
+            "block": 0,
+            "serial": 5,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 5,
+            "type": "app.Res"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
+      "model_fixture": "tools/ownership/model/fixtures/corpus/branches.oir",
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "branches_wanted_match"
+    },
+    {
+      "id": "temporary-arguments",
+      "source": "tests/ownership-corpus/p1/temporary-arguments.ok",
+      "origin": "temporary-arguments.ok",
+      "checks": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 temporary-arguments",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "temporary-arguments"
+      ],
+      "checkpoints": [
+        "BA",
+        "B",
+        "B",
+        "BA"
+      ],
+      "stdout": "BA\nB\nB\nBA\n",
+      "failure": {
+        "code": 0,
+        "stderr": ""
+      },
+      "destroy": [
+        "fresh-B",
+        "fresh-A",
+        "mixed-B",
+        "bound-A"
+      ],
+      "identities": [
+        {
+          "event": "fresh-A",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "fresh-B",
+          "A": {
+            "block": 0,
+            "serial": 2,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 2,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "bound-A",
+          "A": {
+            "block": 0,
+            "serial": 3,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 3,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "mixed-B",
+          "A": {
+            "block": 0,
+            "serial": 4,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 4,
+            "type": "app.Res"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
+      "model_fixture": "tools/ownership/model/fixtures/corpus/temporary-arguments.oir",
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "temporary_arguments"
+    },
+    {
+      "id": "temporary-receivers",
+      "source": "tests/ownership-corpus/p1/temporary-receivers.ok",
+      "origin": "temporary-receivers.ok",
+      "checks": [
+        1,
+        2,
+        4
+      ],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 temporary-receivers",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "temporary-receivers"
+      ],
+      "checkpoints": [
+        "A",
+        "A",
+        "AB"
+      ],
+      "stdout": "A\nA\nAB\n",
+      "failure": {
+        "code": 0,
+        "stderr": ""
+      },
+      "destroy": [
+        "fresh-A",
+        "bound-B"
+      ],
+      "identities": [
+        {
+          "event": "fresh-A",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "bound-B",
+          "A": {
+            "block": 0,
+            "serial": 2,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 2,
+            "type": "app.Res"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
+      "model_fixture": "tools/ownership/model/fixtures/corpus/temporary-receivers.oir",
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "temporary_receivers"
+    },
+    {
+      "id": "call-results",
+      "source": "tests/ownership-corpus/p1/call-results.ok",
+      "origin": "call-results.ok",
+      "checks": [
+        1,
+        2
+      ],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 call-results",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "call-results"
+      ],
+      "checkpoints": [
+        "",
+        "DN"
+      ],
+      "stdout": "\nDN\n",
+      "failure": {
+        "code": 0,
+        "stderr": ""
+      },
+      "destroy": [
+        "discarded-D",
+        "kept-N"
+      ],
+      "identities": [
+        {
+          "event": "kept-N",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "discarded-D",
+          "A": {
+            "block": 0,
+            "serial": 2,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 2,
+            "type": "app.Res"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
+      "model_fixture": "tools/ownership/model/fixtures/corpus/call-results.oir",
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "call_results"
+    },
+    {
+      "id": "call-chains",
+      "source": "tests/ownership-corpus/p1/call-chains.ok",
+      "origin": "call-chains.ok",
+      "checks": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 call-chains",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "call-chains"
+      ],
+      "checkpoints": [
+        "",
+        "A",
+        "B",
+        "",
+        "C"
+      ],
+      "stdout": "\nA\nB\n\nC\n",
+      "failure": {
+        "code": 0,
+        "stderr": ""
+      },
+      "destroy": [
+        "returned-A",
+        "consumed-B",
+        "borrowed-C"
+      ],
+      "identities": [
+        {
+          "event": "returned-A",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "consumed-B",
+          "A": {
+            "block": 0,
+            "serial": 2,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 2,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "borrowed-C",
+          "A": {
+            "block": 0,
+            "serial": 3,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 3,
+            "type": "app.Res"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
+      "model_fixture": "tools/ownership/model/fixtures/corpus/call-chains.oir",
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "call_chains"
+    },
+    {
+      "id": "rebind-history-defer",
+      "source": "tests/ownership-corpus/p1/rebind-history-defer.ok",
+      "origin": "rebinds.ok",
+      "checks": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 rebinds",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "rebinds"
+      ],
+      "checkpoints": [
+        "",
+        "",
+        "",
+        "CCBA"
+      ],
+      "stdout": "\n\n\nCCBA\n",
+      "failure": {
+        "code": 0,
+        "stderr": ""
+      },
+      "destroy": [
+        "successor-C",
+        "successor-B",
+        "initial-A"
+      ],
+      "identities": [
+        {
+          "event": "initial-A",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "successor-B",
+          "A": {
+            "block": 0,
+            "serial": 2,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 2,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "successor-C",
+          "A": {
+            "block": 0,
+            "serial": 3,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 3,
+            "type": "app.Res"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
+      "model_fixture": "tools/ownership/model/fixtures/corpus/rebinds.oir",
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "rebind_history_defer"
+    },
+    {
+      "id": "successor-staging",
+      "source": "tests/ownership-corpus/p1/successor-staging.ok",
+      "origin": "successor-staging.ok",
+      "checks": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 successor-staging",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "successor-staging"
+      ],
+      "checkpoints": [
+        "c",
+        "cB",
+        "cBF",
+        "cBFA"
+      ],
+      "stdout": "c\ncB\ncBF\ncBFA\n",
+      "failure": {
+        "code": 0,
+        "stderr": ""
+      },
+      "destroy": [
+        "staged-B",
+        "failed-F",
+        "original-A"
+      ],
+      "identities": [
+        {
+          "event": "original-A",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "staged-B",
+          "A": {
+            "block": 0,
+            "serial": 3,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 2,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "failed-F",
+          "A": {
+            "block": 0,
+            "serial": 5,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 3,
+            "type": "app.Res"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
+      "model_fixture": "tools/ownership/model/fixtures/corpus/successor-staging.oir",
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "successor_staging"
+    },
+    {
+      "id": "loops-next-last",
+      "source": "tests/ownership-corpus/p1/loops-next-last.ok",
+      "origin": "loops.ok",
+      "checks": [
+        1,
+        6
+      ],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 loops",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "loops"
+      ],
+      "checkpoints": [
+        "dAdB"
+      ],
+      "stdout": "dAdB\n",
+      "failure": {
+        "code": 0,
+        "stderr": ""
+      },
+      "destroy": [
+        "iteration-A",
+        "iteration-B"
+      ],
+      "identities": [
+        {
+          "event": "iteration-A",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "iteration-B",
+          "A": {
+            "block": 0,
+            "serial": 2,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 2,
+            "type": "app.Res"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
+      "model_fixture": "tools/ownership/model/fixtures/corpus/loops.oir",
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "loops_next_last"
+    },
+    {
+      "id": "loops-valued-nested",
+      "source": "tests/ownership-corpus/p1/loops-valued-nested.ok",
+      "origin": "loops.ok",
+      "checks": [
+        2,
+        3,
+        4,
+        5
+      ],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 loops",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "loops"
+      ],
+      "checkpoints": [
+        "L",
+        "LR",
+        "IO",
+        "iAiA"
+      ],
+      "stdout": "L\nLR\nIO\niAiA\n",
+      "failure": {
+        "code": 0,
+        "stderr": ""
+      },
+      "destroy": [
+        "local-L",
+        "result-R",
+        "inner-I",
+        "outer-O",
+        "iter-0-i",
+        "iter-0-A",
+        "iter-1-i",
+        "iter-1-A"
+      ],
+      "identities": [
+        {
+          "event": "local-L",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "result-R",
+          "A": {
+            "block": 0,
+            "serial": 2,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 2,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "outer-O",
+          "A": {
+            "block": 0,
+            "serial": 3,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 3,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "inner-I",
+          "A": {
+            "block": 0,
+            "serial": 4,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 4,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "iter-0-A",
+          "A": {
+            "block": 0,
+            "serial": 5,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 5,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "iter-0-i",
+          "A": {
+            "block": 0,
+            "serial": 6,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 6,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "iter-1-A",
+          "A": {
+            "block": 0,
+            "serial": 7,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 7,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "iter-1-i",
+          "A": {
+            "block": 0,
+            "serial": 8,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 8,
+            "type": "app.Res"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
+      "model_fixture": "tools/ownership/model/fixtures/corpus/loops.oir",
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "loops_valued_nested"
+    },
+    {
+      "id": "defer-order",
+      "source": "tests/ownership-corpus/p1/defer-order.ok",
+      "origin": "defer-order.ok",
+      "checks": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 defer-order",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "defer-order"
+      ],
+      "checkpoints": [
+        "2A1BA",
+        "",
+        "DA",
+        "dL",
+        "dLR"
+      ],
+      "stdout": "2A1BA\n\nDA\ndL\ndLR\n",
+      "failure": {
+        "code": 0,
+        "stderr": ""
+      },
+      "destroy": [
+        "first-B",
+        "first-A",
+        "deferred-D",
+        "second-A",
+        "local-L",
+        "return-R"
+      ],
+      "identities": [
+        {
+          "event": "first-A",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "first-B",
+          "A": {
+            "block": 0,
+            "serial": 2,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 2,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "second-A",
+          "A": {
+            "block": 0,
+            "serial": 3,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 3,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "deferred-D",
+          "A": {
+            "block": 0,
+            "serial": 4,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 4,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "local-L",
+          "A": {
+            "block": 0,
+            "serial": 5,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 5,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "return-R",
+          "A": {
+            "block": 0,
+            "serial": 6,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 6,
+            "type": "app.Res"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
+      "model_fixture": "tools/ownership/model/fixtures/corpus/defer-order.oir",
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "defer_order"
+    },
+    {
+      "id": "unwind-late-argument",
+      "source": "tests/ownership-corpus/p1/unwind-late-argument.ok",
+      "origin": "partial-construction.ok",
+      "checks": [
+        1
+      ],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 partial-construction",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "partial-construction"
+      ],
+      "checkpoints": [
+        "A"
+      ],
+      "stdout": "A\n",
+      "failure": {
+        "code": 0,
+        "stderr": ""
+      },
+      "destroy": [
+        "early-A"
+      ],
+      "identities": [
+        {
+          "event": "early-A",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Res"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
+      "model_fixture": "tools/ownership/model/fixtures/corpus/partial-construction.oir",
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "unwind_late_argument"
+    },
+    {
+      "id": "unwind-nested",
+      "source": "tests/ownership-corpus/p1/unwind-nested.ok",
+      "origin": "unwind.ok",
+      "checks": [
+        1,
+        2,
+        3
+      ],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 unwind",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "unwind"
+      ],
+      "checkpoints": [
+        "BA",
+        "BAH",
+        "BAHO"
+      ],
+      "stdout": "BA\nBAH\nBAHO\n",
+      "failure": {
+        "code": 0,
+        "stderr": ""
+      },
+      "destroy": [
+        "try-B",
+        "try-A",
+        "handler-H",
+        "outer-O"
+      ],
+      "identities": [
+        {
+          "event": "outer-O",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "try-A",
+          "A": {
+            "block": 0,
+            "serial": 2,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 2,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "try-B",
+          "A": {
+            "block": 0,
+            "serial": 3,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 3,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "handler-H",
+          "A": {
+            "block": 0,
+            "serial": 4,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 4,
+            "type": "app.Res"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
+      "model_fixture": "tools/ownership/model/fixtures/corpus/unwind.oir",
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "unwind_nested"
+    },
+    {
+      "id": "destroy-failures",
+      "source": "tests/ownership-corpus/p1/destroy-failures.ok",
+      "origin": "destroy-failures.ok",
+      "checks": [
+        1,
+        2
+      ],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 destroy-failures",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "destroy-failures"
+      ],
+      "checkpoints": [
+        "BA",
+        "BA"
+      ],
+      "stdout": "BA\nBA\n",
+      "failure": {
+        "code": 0,
+        "stderr": ""
+      },
+      "destroy": [
+        "bomb-B",
+        "older-A"
+      ],
+      "identities": [
+        {
+          "event": "older-A",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "bomb-B",
+          "A": {
+            "block": 0,
+            "serial": 2,
+            "type": "Bomb"
+          },
+          "B": {
+            "block": 0,
+            "serial": 2,
+            "type": "app.Bomb"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
+      "model_fixture": "tools/ownership/model/fixtures/corpus/destroy-failures.oir",
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "destroy_failures"
+    },
+    {
+      "id": "try-resource-results",
+      "source": "tests/ownership-corpus/p1/try-resource-results.ok",
+      "origin": "try-results.ok",
+      "checks": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 try-results",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "try-results"
+      ],
+      "checkpoints": [
+        "L",
+        "LT",
+        "LH",
+        "LHC"
+      ],
+      "stdout": "L\nLT\nLH\nLHC\n",
+      "failure": {
+        "code": 0,
+        "stderr": ""
+      },
+      "destroy": [
+        "try-local-L",
+        "try-result-T",
+        "failed-local-L",
+        "handler-local-H",
+        "handler-result-C"
+      ],
+      "identities": [
+        {
+          "event": "try-local-L",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "try-result-T",
+          "A": {
+            "block": 0,
+            "serial": 2,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 2,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "failed-local-L",
+          "A": {
+            "block": 0,
+            "serial": 3,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 3,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "handler-local-H",
+          "A": {
+            "block": 0,
+            "serial": 4,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 4,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "handler-result-C",
+          "A": {
+            "block": 0,
+            "serial": 5,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 5,
+            "type": "app.Res"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
+      "model_fixture": "tools/ownership/model/fixtures/corpus/try-results.oir",
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "try_resource_results"
+    },
+    {
+      "id": "partial-construction",
+      "source": "tests/ownership-corpus/p1/partial-construction.ok",
+      "origin": "partial-construction.ok",
+      "checks": [
+        4
+      ],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 partial-construction",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "partial-construction"
+      ],
+      "checkpoints": [
+        "I"
+      ],
+      "stdout": "I\n",
+      "failure": {
+        "code": 0,
+        "stderr": ""
+      },
+      "destroy": [
+        "completed-field-I"
+      ],
+      "identities": [
+        {
+          "event": "completed-field-I",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Res"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
+      "model_fixture": "tools/ownership/model/fixtures/corpus/partial-construction.oir",
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "partial_construction"
+    },
+    {
+      "id": "secondary-failures",
+      "source": "tests/ownership-corpus/p1/secondary-failures.ok",
+      "origin": "secondary-failures.ok",
+      "checks": [
+        1,
+        2
+      ],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 secondary-failures",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "secondary-failures"
+      ],
+      "checkpoints": [
+        "BA",
+        "BAC"
+      ],
+      "stdout": "BA\nBAC\n",
+      "failure": {
+        "code": 1,
+        "stderr": "Body: Body.failed\nSecondary cleanup failure:\n  Cleanup: Cleanup.second\nSecondary cleanup failure:\n  Cleanup: Cleanup.first\n"
+      },
+      "destroy": [
+        "bomb-B",
+        "bomb-A",
+        "observer",
+        "cleanup-C"
+      ],
+      "identities": [
+        {
+          "event": "observer",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Observer"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Observer"
+          }
+        },
+        {
+          "event": "bomb-A",
+          "A": {
+            "block": 0,
+            "serial": 2,
+            "type": "Bomb"
+          },
+          "B": {
+            "block": 0,
+            "serial": 2,
+            "type": "app.Bomb"
+          }
+        },
+        {
+          "event": "bomb-B",
+          "A": {
+            "block": 0,
+            "serial": 3,
+            "type": "Bomb"
+          },
+          "B": {
+            "block": 0,
+            "serial": 3,
+            "type": "app.Bomb"
+          }
+        },
+        {
+          "event": "cleanup-C",
+          "A": {
+            "block": 0,
+            "serial": 4,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 4,
+            "type": "app.Res"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
+      "model_fixture": "tools/ownership/model/fixtures/corpus/secondary-failures.oir",
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "secondary_failures"
+    },
+    {
+      "id": "panic-unwind",
+      "source": "tests/ownership-corpus/p1/panic-unwind.ok",
+      "origin": "panic-unwind.ok",
+      "checks": [
+        1,
+        2
+      ],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 panic-unwind",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "panic-unwind"
+      ],
+      "checkpoints": [
+        "dBA",
+        "dBAP"
+      ],
+      "stdout": "dBA\ndBAP\n",
+      "failure": {
+        "code": 1,
+        "stderr": "Panic: ownership corpus deliberate panic\n"
+      },
+      "destroy": [
+        "local-B",
+        "local-A",
+        "observer",
+        "cleanup-P"
+      ],
+      "identities": [
+        {
+          "event": "observer",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Observer"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Observer"
+          }
+        },
+        {
+          "event": "local-A",
+          "A": {
+            "block": 0,
+            "serial": 2,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 2,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "local-B",
+          "A": {
+            "block": 0,
+            "serial": 3,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 3,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "cleanup-P",
+          "A": {
+            "block": 0,
+            "serial": 4,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 4,
+            "type": "app.Res"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
+      "model_fixture": "tools/ownership/model/fixtures/corpus/panic-unwind.oir",
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "panic_unwind"
+    },
+    {
+      "id": "direct-singleton",
+      "source": "tests/ownership-corpus/p1/direct-singleton.ok",
+      "origin": "new-direct-singleton.ok",
+      "checks": [],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 new-direct-singleton",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "new-direct-singleton"
+      ],
+      "checkpoints": [
+        "A"
+      ],
+      "stdout": "A\n",
+      "failure": {
+        "code": 0,
+        "stderr": ""
+      },
+      "destroy": [
+        "singleton-A"
+      ],
+      "identities": [
+        {
+          "event": "singleton-A",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Res"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
+      "model_fixture": null,
       "cleanup": "static",
-      "expected": "unsupported",
-      "reason": "Coverage reference only: extract checks 3–4 with the checkpoint before outer scope exit; OIR-2 object/log pipeline and reviewed creation-event serial maps are not yet available. Do not run the whole corpus file as this subcase.",
-      "identities": []
+      "expected": "supported",
+      "rust_test": "direct_singleton"
+    },
+    {
+      "id": "late-old-identity",
+      "source": "tests/ownership-corpus/p1/late-old-identity.ok",
+      "origin": "new-late-old-identity.ok",
+      "checks": [],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 new-late-old-identity",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "new-late-old-identity"
+      ],
+      "checkpoints": [
+        "",
+        "BA"
+      ],
+      "stdout": "\nBA\n",
+      "failure": {
+        "code": 0,
+        "stderr": ""
+      },
+      "destroy": [
+        "newer-B",
+        "old-A"
+      ],
+      "identities": [
+        {
+          "event": "old-A",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "newer-B",
+          "A": {
+            "block": 0,
+            "serial": 2,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 2,
+            "type": "app.Res"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
+      "model_fixture": null,
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "late_old_identity"
+    },
+    {
+      "id": "mixed-merge",
+      "source": "tests/ownership-corpus/p1/mixed-merge.ok",
+      "origin": "new-mixed-merge.ok",
+      "checks": [],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 new-mixed-merge",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "new-mixed-merge"
+      ],
+      "checkpoints": [
+        "",
+        "CBA"
+      ],
+      "stdout": "\nCBA\n",
+      "failure": {
+        "code": 0,
+        "stderr": ""
+      },
+      "destroy": [
+        "successor-C",
+        "local-B",
+        "initial-A"
+      ],
+      "identities": [
+        {
+          "event": "initial-A",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "local-B",
+          "A": {
+            "block": 0,
+            "serial": 2,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 2,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "successor-C",
+          "A": {
+            "block": 0,
+            "serial": 3,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 3,
+            "type": "app.Res"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
+      "model_fixture": null,
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "mixed_merge"
+    },
+    {
+      "id": "reserve-r-a",
+      "source": "tests/ownership-corpus/p1/reserve-r-a.ok",
+      "origin": "new-reserve-r-a.ok",
+      "checks": [],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 new-reserve-r-a",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "new-reserve-r-a"
+      ],
+      "checkpoints": [
+        "CRA"
+      ],
+      "stdout": "CRA\n",
+      "failure": {
+        "code": 0,
+        "stderr": ""
+      },
+      "destroy": [
+        "C",
+        "R",
+        "A"
+      ],
+      "identities": [
+        {
+          "event": "A",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "R",
+          "A": {
+            "block": 0,
+            "serial": 2,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 2,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "C",
+          "A": {
+            "block": 0,
+            "serial": 3,
+            "type": "Bomb"
+          },
+          "B": {
+            "block": 0,
+            "serial": 3,
+            "type": "app.Bomb"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
+      "model_fixture": null,
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "reserve_r_a"
+    },
+    {
+      "id": "reserve-a-r",
+      "source": "tests/ownership-corpus/p1/reserve-a-r.ok",
+      "origin": "new-reserve-a-r.ok",
+      "checks": [],
+      "rule": "OIR-2 \u00a717; Book 20.2\u201320.3; P1 plan \u00a79.2 new-reserve-a-r",
+      "features": [
+        "object-destroy",
+        "Atomic<string>",
+        "Stdout",
+        "new-reserve-a-r"
+      ],
+      "checkpoints": [
+        "CAR"
+      ],
+      "stdout": "CAR\n",
+      "failure": {
+        "code": 0,
+        "stderr": ""
+      },
+      "destroy": [
+        "C",
+        "A",
+        "R"
+      ],
+      "identities": [
+        {
+          "event": "R",
+          "A": {
+            "block": 0,
+            "serial": 1,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 1,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "A",
+          "A": {
+            "block": 0,
+            "serial": 2,
+            "type": "Res"
+          },
+          "B": {
+            "block": 0,
+            "serial": 2,
+            "type": "app.Res"
+          }
+        },
+        {
+          "event": "C",
+          "A": {
+            "block": 0,
+            "serial": 3,
+            "type": "Bomb"
+          },
+          "B": {
+            "block": 0,
+            "serial": 3,
+            "type": "app.Bomb"
+          }
+        }
+      ],
+      "baseline": {
+        "revision": "34342aa698e80d9e9d3d98d3e49a6c5e55842b2e",
+        "toolchain": "default features; OIR-1 / SPB 16"
+      },
+      "model_fixture": null,
+      "cleanup": "journal",
+      "expected": "supported",
+      "rust_test": "reserve_a_r"
     }
-  ]
+  ],
+  "exclusions": [
+    {
+      "id": "defer-return-replacement",
+      "source": "tests/ownership-corpus/p1/excluded/defer-return-replacement.ok",
+      "reason": "Producer rejects return from defer (#567 S3/D8); cannot rewrite without removing replacement semantics."
+    },
+    {
+      "id": "temporary-arguments-anonymous",
+      "reason": "General anonymous actions are outside P1."
+    },
+    {
+      "id": "rebind-closure-snapshot",
+      "reason": "Closure capture is outside P1; latest defer capture is retained."
+    },
+    {
+      "id": "try-optional",
+      "reason": "try? is outside P1; explicit try/catch resource results are retained."
+    },
+    {
+      "id": "resource-collections",
+      "reason": "Array/map construction and traversal excluded; loops use bounded integer ranges."
+    }
+  ],
+  "evidence": "High producer verified; executable pipeline gate is pending. Expected contracts are not observed results.",
+  "test_inventory": {
+    "target": "p1_pipeline",
+    "feature": "champ-abi",
+    "accepted_entries": 25,
+    "selection": "cargo test -p okkama-cli --features champ-abi --test p1_pipeline"
+  }
 }

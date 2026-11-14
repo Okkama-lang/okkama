@@ -248,18 +248,101 @@ unknown, missing, duplicate or wrongly typed identities. The result must equal
 the normative `destroy` sequence and the other pipeline's mapped trace.
 **No sorting, renumbering by destruction order, or raw-trace rewriting occurs.**
 
-The initial manifest records two small §9.2 subcases: nested scopes/shadowing
-(`scopes.ok`, checks 1–3) and discarded if/#308 (`branches.ok`, checks 3–4).
-They are explicitly `expected: unsupported` with reasons: they still need
-standalone source extraction, the candidate object/log path and reviewed
-creation maps. Full TAP corpus files are reference inputs, not silently
-claimed P1 coverage. Unsupported entries are **not executed**; they appear in
-`gate.unsupported` with a reason and do not fail the gate. A report with
-`gate.executed: 0` supplies no runtime acceptance evidence. To enable an entry,
-extract the fixture preserving its intermediate checkpoints, update `source`,
-freeze the baseline revision and both serial maps, fill exact stdout/failure
-contracts, and change `expected` to `supported`. New model evidence must obey
-Review 2's ban on owned carriers; existing model results alone do not close G0.
+The manifest now selects 25 standalone fixtures in `tests/ownership-corpus/p1/`,
+with 68 checkpoints and 78 creation-event identities. All 25 pass the High
+producer and `verify_high`. This is **not executable P1 acceptance**: the
+in-process source pipeline currently fails for all 25 entries. The gate keeps
+`expected: supported` so these failures cannot become silent coverage skips.
+`p1-results.json` records the observed phase failures; its null output/trace
+fields mean execution was never reached. Expected stdout, diagnostics, maps and
+cleanup paths in the manifest remain contracts awaiting executable validation.
+
+`defer-return-replacement` is excluded explicitly: the producer rejects
+`return from defer (#567 S3/D8)`. Its source is retained under `p1/excluded/`
+and a negative producer test checks the diagnostic. Anonymous actions, closure
+snapshots, `try?`, resource collections and array traversal are excluded by the
+P1 plan. The retained cases use direct calls, latest defer capture, explicit
+try/catch and bounded integer ranges. Missing model links are explicit JSON
+`null`, never fabricated model evidence.
+
+### Hidden source pipeline and current integration blockers
+
+Only `okkama-cli/champ-abi` builds read `OKKAMA_PIPELINE=oir2`. The exact value
+selects the independent source pipeline for both `run` and `build`; there is
+no public help option. Other values, an absent variable, or a build without
+the feature use the existing OIR-1 path. No phase error retries OIR-1.
+Producer-unsupported input (including test profiles) exits 4 with
+`unsupported in OIR-2 lowering`; analysis, verifier and downstream integration
+failures exit 1. Build writes its artifact only after every gate succeeds.
+
+The driver resolves/analyzes source directly, lowers High, verifies High,
+elaborates and rewrites Own, verifies Own, lowers and verifies Low, calls
+`compile_low`, then verifies and encodes SPB 17. The candidate runtime dispatches
+by the explicit version header and verifies SPB 17 before JIT execution. SPB 16
+continues through its existing reader/runtime so feature builds without the
+source switch preserve the existing CLI path. A reader never retries another
+ABI after an error. Test profiles/workers are not P1 source features.
+
+Observed blockers in the merged prerequisites:
+
+- Own rejects `array.new` reached through the finite Stdout source body (15 cases).
+- Own's conservative analysis bound exceeds its 256 MiB limit (10 cases).
+  The limit is not raised to mask the failed gate.
+- A separate minimal resource source without imports passes Own/Low but
+  `compile_low` rejects `OwnershipOp::Dependencies` (`deps.of`). Erasing it was
+  tried and rejected by the SPB verifier as `undefined location`; no such
+  verifier bypass is retained.
+- Closed Atomic/Stdout/Error SPB declarations, final builtin layout overrides
+  and independently registered executable external contracts are still needed.
+  The driver/loader keep `NoExternalContracts` until those implementations
+  exist; they do not trust contracts copied from the input artifact.
+- Source `return` from defer remains an explicit producer exclusion.
+
+The 28 in-process tests comprise the 25 source cases plus inventory, scalar
+JIT execution and unsupported/no-fallback gates. Only the latter three pass.
+Every source case has a named Rust test in `rust_test`; the accepted inventory
+is 25 and both Rust/Python checks detect missing entries. Output capture lives
+on the VM thread and uses the real stdout formatter. Destroy capture and the
+file trace share `champ_trace_destroy`: `TYPE SERIAL\n`, using runtime-local
+creation serials. The existing reverse-destroy trace check yields
+`Resource 2\nResource 1\n` on two independent runtimes.
+
+### Building both toolchains in Docker
+
+Claude can build the frozen default-feature baseline and the current candidate
+and run the manifest with:
+
+```sh
+tools/ownership/oracle-p1-docker.sh
+```
+
+This sibling wrapper uses the existing `okkama-dev` image and populated offline
+registry volume. It freezes baseline `34342aa698e80d9e9d3d98d3e49a6c5e55842b2e`,
+builds both CLIs with `cargo build --offline -j 4` in separate source/target
+roots and installs separate std snapshots. Only B has `champ-abi` and
+`OKKAMA_PIPELINE=oir2`; both have `OKKAMA_TRACE=off` for exact failure contracts.
+The candidate source snapshot (including untracked implementation files) and
+its SHA-256 are retained beside the report. The runner clears an inherited pipeline variable before applying side-local
+overrides. Network is disabled; CPU, memory, PIDs, build and run time are
+bounded. `--filter ID` may select one case, but does not close the complete gate.
+The existing `oracle-docker.sh two-toolchains` still accepts installed prefixes.
+Docker and CLI binaries were not run during this integration work.
+
+Integration tracker:
+
+- [x] Hidden feature-gated CLI routing, independent phase gates and scalar JIT execution.
+- [x] Destroy formatter/capture and creation-event mapping validation.
+- [x] Standalone source extraction, 25 High-verified cases and explicit exclusions.
+- [x] Manifest-linked Rust test inventory and two-toolchain offline Docker builder.
+- [x] Default/candidate check and clippy; 94 compiler, 76 Champ and 24 oracle unit tests.
+- [ ] Own/Stdout integration and bounded analysis of the selected source CFGs.
+- [ ] `deps.of`, final builtin layouts and closed executable std contracts through SPB/JIT.
+- [ ] All 25 source runs, observed checkpoints/traces and cleanup-path execution evidence.
+- [ ] Source/model/oracle acceptance and CI runtime gate; no G1/G2 completion claim.
+
+**G1 is blocked, not complete.** The current wrapper/oracle should return 1
+for the selected source build failures. Neither this manifest nor passing
+handwritten Champ fixtures supplies source runtime acceptance or G2 evidence.
 
 ### Report and gate
 
@@ -280,10 +363,10 @@ inspect the explicit unsupported count before claiming coverage. Exit **2**
 means invalid configuration. Legacy modes retain their documented schema and
 coverage-gap policy.
 
-Verification for #593 (no real compiler/runtime, Docker or network):
+Oracle unit checks (fake toolchains only; no Docker or network):
 
 ```sh
-python3 -B -m unittest discover -s tools/ownership -v
+python3 -I tools/ownership/test_oracle_two.py
 ```
 
 Fake Python toolchains cover A/A and B/B nondeterminism, equal raw traces,

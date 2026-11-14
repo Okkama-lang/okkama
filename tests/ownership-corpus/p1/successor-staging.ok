@@ -1,0 +1,68 @@
+// Extracted from successor-staging; checkpoints use the plain P1 test log.
+module app;
+import "async/atomic" take Atomic;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    has log is Atomic<string>;
+    Res(name is string, log is Atomic<string>) {
+        self.name = name;
+        self.log = log;
+    }
+    label() is string {
+        name;
+    }
+    destroy {
+        log.replace(log.value() + name);
+    }
+}
+enum Stop is Error = (now);
+object Holder {
+    has item is Res;
+    Holder(item is Res) {
+        self.item = item;
+    }
+    label() is string {
+        item.label();
+    }
+    staged(log is Atomic<string>) is ^Holder {
+        try {
+            ^item = Res("B", log);
+            throw Stop.now;
+        }
+        catch e is Stop {
+            log.replace(log.value() + "c");
+        }
+    }
+    failed(log is Atomic<string>) is ^Holder {
+        ^item = Res("F", log);
+        throw Stop.now;
+    }
+}
+main() is int {
+    let log = Atomic("");
+    defer log.close();
+    {
+        let original = Holder(Res("A", log));
+        {
+            let updated = original.staged(log);
+            updated.label();
+            confirm log.value() == "c";
+            Stdout().writeln(log.value());
+        }
+        confirm log.value() == "cB";
+        Stdout().writeln(log.value());
+        try {
+            let failed = original.failed(log);
+            failed.label();
+        }
+        catch e is Stop {
+            confirm log.value() == "cBF";
+            Stdout().writeln(log.value());
+        }
+        original.label();
+    }
+    confirm log.value() == "cBFA";
+    Stdout().writeln(log.value());
+    0;
+}

@@ -1,0 +1,47 @@
+// Extracted from panic-unwind; checkpoints use the plain P1 test log.
+module app;
+import "async/atomic" take Atomic;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    has log is Atomic<string>;
+    Res(name is string, log is Atomic<string>) {
+        self.name = name;
+        self.log = log;
+    }
+    label() is string {
+        name;
+    }
+    destroy {
+        log.replace(log.value() + name);
+    }
+}
+object Observer {
+    has log is Atomic<string>;
+    Observer(log is Atomic<string>) {
+        self.log = log;
+    }
+    destroy {
+        confirm log.value() == "dBA";
+        Stdout().writeln(log.value());
+        {
+            let cleanupResource = Res("P", log);
+        }
+        confirm log.value() == "dBAP";
+        Stdout().writeln(log.value());
+        log.close();
+    }
+}
+main() is int {
+    let log = Atomic("");
+    let observer = Observer(log);
+    {
+        let a = Res("A", log);
+        {
+            let b = Res("B", log);
+            defer log.replace(log.value() + "d");
+            panic "ownership corpus deliberate panic";
+        }
+    }
+    0;
+}

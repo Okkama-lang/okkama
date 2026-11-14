@@ -130,7 +130,7 @@ pub fn generate_with_allocation(module: &o::Module, layouts: &dyn LayoutRegistry
     Ok(AllocatedProgram { program: p, allocations })
 }
 
-fn translate_type(module: &o::Module, id: o::TypeId) -> Result<s::Type, GenerateError> {
+pub(crate) fn translate_type(module: &o::Module, id: o::TypeId) -> Result<s::Type, GenerateError> {
     Ok(match module.types.get(id)? {
         o::Type::Int => s::Type::Int,
         o::Type::Descriptor => s::Type::Descriptor,
