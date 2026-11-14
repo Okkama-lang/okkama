@@ -162,6 +162,32 @@ main() is int {
 }
 
 #[test]
+fn enum_cases_format_like_any_other_list() {
+    // #594: a trailing comma or the author's line breaks keep the cases one per
+    // line; a short enum stays inline; a payload keeps its own trailing comma.
+    let text = "module app v1.0.0;\nenum State = (open, closed);\nenum Effect = (charge(cents is int), receipt(text is string),);\nenum Note = (\n    seen(word is string,),\n    stop\n);\n";
+    assert_eq!(
+        fmt(text),
+        "module app v1.0.0;
+
+enum State = (open, closed);
+
+enum Effect = (
+    charge(cents is int),
+    receipt(text is string),
+);
+
+enum Note = (
+    seen(
+        word is string,
+    ),
+    stop
+);
+"
+    );
+}
+
+#[test]
 fn closures_hug_the_call_and_logical_chains_break_before_operators() {
     let text = "module app v1.0.0;\nmain() is int { let all = xs.map() -> x { x + 1; }; confirm first_condition_value && second_condition_value && third_condition_value_that_is_long && fourth else throw Failure(); return 0; }\n";
     assert_eq!(
