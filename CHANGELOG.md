@@ -170,6 +170,20 @@ fake fields; role fakes and their ordinary typed fields remain available.
 
 ### Changed
 
+- **Enum declarations accept a trailing comma after the last case (#594).**
+  Parameter, argument and literal lists already accepted one. The case list
+  now follows the same rule (`enum_cases … trailing_comma?`), so an enum
+  written one case per line can end with a comma. `okkama fmt` treats the
+  case list like any other list:
+  - it stays on one line when it fits;
+  - it goes one case per line when the author broke it, wrote a trailing
+    comma, or it does not fit;
+  - a payload keeps its own trailing comma (before, the formatter dropped
+    it).
+
+  Anonymous action parameters still reject a trailing comma, as the
+  specification requires (§8.10.2).
+
 - **Faster Sparrow: the 0.6.0 perf wave.** Micro A/B against the previous
   0.6.0 state: geometric mean −7.0% over 69 benchmarks (Docker, fat LTO, five
   runs). `float` −70%, `rat` operations −13…−26%, `try-catch` −24%, and calls,

@@ -398,17 +398,24 @@ impl<'s> Printer<'s> {
                     self.word(" is ");
                     self.word(&role.text);
                 }
-                self.word(" = (");
-                for (index, case) in decl.cases.iter().enumerate() {
-                    if index > 0 {
-                        self.word(", ");
-                    }
-                    self.word(&case.text);
-                    if !decl.payloads[index].is_empty() {
-                        self.params(&decl.payloads[index], case.span.end);
-                    }
-                }
-                self.word(");");
+                // Cases are a list like any other (#594): one per line when the
+                // author broke them, wrote a trailing comma, or they do not fit.
+                let cases: Vec<usize> = (0..decl.cases.len()).collect();
+                self.word(" = ");
+                self.list(
+                    "(",
+                    ")",
+                    &cases,
+                    decl.span.end,
+                    |p, &index| {
+                        p.word(&decl.cases[index].text);
+                        if !decl.payloads[index].is_empty() {
+                            p.params(&decl.payloads[index], decl.case_spans[index].end);
+                        }
+                    },
+                    |&index| decl.case_spans[index],
+                );
+                self.word(";");
             }
             Item::Test(test) => self.test(test),
             Item::NativeAction(decl) => {

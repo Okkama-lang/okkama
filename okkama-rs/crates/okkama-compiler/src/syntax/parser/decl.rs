@@ -886,15 +886,23 @@ impl Parser<'_> {
         self.consume(TokenKind::LeftParen, "Expect \"(\" before enum cases.")?;
         let mut cases = Vec::new();
         let mut payloads = Vec::new();
+        let mut case_spans = Vec::new();
         if !self.check(TokenKind::RightParen) {
             loop {
-                cases.push(self.consume_identifier("Expect enum case name.")?);
+                let case = self.consume_identifier("Expect enum case name.")?;
                 payloads.push(if self.check(TokenKind::LeftParen) {
                     self.parameter_list(ParamContext::Signature)?
                 } else {
                     Vec::new()
                 });
+                case_spans.push(case.span.to(self.previous().span));
+                cases.push(case);
                 if !self.eat(TokenKind::Comma) {
+                    break;
+                }
+                // `enum_cases = enum_case ("," enum_case)* trailing_comma?`, as
+                // for parameters, arguments and literals (#594).
+                if self.check(TokenKind::RightParen) {
                     break;
                 }
             }
@@ -909,6 +917,7 @@ impl Parser<'_> {
             role,
             payloads,
             cases,
+            case_spans,
             span: keyword.to(semicolon.span),
         })
     }
