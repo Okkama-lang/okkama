@@ -46,7 +46,7 @@ PASS
   them. Test-only code cannot affect a production program, and it costs
   nothing there.
 
-Tests run in the same process, on the engine chosen with `--engine`.
+Tests run in the same process.
 `okkama run -t --filter TEXT` runs only the tests whose names contain
 `TEXT`; with several `--filter`s, those that contain any of them. A test
 may stand anywhere among an object's members, between hidden actions too;
@@ -236,7 +236,7 @@ input to a minimal one before reporting it [@claessen2000].
 - `IntegerGeneration(-100000, 100001)` produces integers from −100000 up
   to, but not including, 100001.
 - `42` is the seed of the property's own PCG random stream. The same seed
-  produces the same inputs on every engine and every run.
+  produces the same inputs and every run.
 - `200` cases, with a size that grows from 0 to `1000` across them, so the
   early cases are small.
 - When a case fails, up to `64` reductions are tried, and the smallest
@@ -313,4 +313,4 @@ In return:
 - every role has a double, maintained with the role and checked by the
   compiler;
 - a failed property comes back as a seed and a minimal input that
-  reproduce it on any engine.
+  reproduce it.

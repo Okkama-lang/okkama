@@ -200,14 +200,7 @@ made them less simple, less consistent or less correct to use. He called this
 "worse is better": implementation simplicity first, then interface
 simplicity, with correctness and completeness negotiable.
 
-Gabriel's essay is not a rejection of the razor; it is a dispute about *whose*
-simplicity counts. Worse-is-better shaves the implementation and lets the
-user carry the complexity; the "right thing" shaves the user's model and lets
-the implementation carry it. Okkama sits firmly on the second side: the
-compiler, the verifier and the runtime do a great deal of work — exact
-numbers that promote to big integers, precise garbage collection with
-deterministic destruction, a bytecode verifier — so that the program text can
-stay small and the set of things a reader must consider stays small.
+Gabriel’s essay asks whose simplicity counts: the implementation’s or the user’s. Okkama chooses a small user model: exact numbers promote to big integers, and resources are released deterministically, so program text and the set of things a reader must consider stay small.
 
 The price is real. A language that refuses conveniences is harder to adopt.
 Programmers arrive with habits from languages that have null, mutable fields
@@ -244,12 +237,7 @@ so that a program using them fails to parse with a message instead of meaning
 something else. The language does not just leave the door open with nothing
 behind it; it bricks the door up and puts a sign on it.
 
-Notice what the table does *not* contain. Okkama is not a minimal language in
-the sense of Scheme or Forth. It has exact rationals and big integers, a
-standard library that speaks HTTP/2 and PostgreSQL, structured concurrency,
-precise collection, and a JIT compiler. The razor is applied to *kinds of
-entities in a program*, not to the size of the toolbox. A language may have
-many tools and few kinds of things; Okkama aims to be such a language.
+Okkama is not minimal in the sense of Scheme or Forth. It has exact rationals and big integers, a standard library that speaks HTTP/2 and PostgreSQL, and structured concurrency. The razor applies to kinds of entities in a program, not to the size of the toolbox.
 
 ## 1.7 A first taste
 
@@ -285,10 +273,8 @@ the main ones; later chapters return to each.
   would read better (issue #190 proposes exactly that).
 - **Performance of immutable updates.** A new object per change costs
   allocations; collection updates without in-place mutation cost copies.
-  Sparrow makes allocation cheap and the compiler
-  removes much of it, but some idioms are quadratic today — arrays have no
-  append, so building one element by element copies it each time
-  (issue #145). The razor removed
+  Repeatedly rebuilding a collection with `map` can be quadratic; use
+  the construction operations of Chapter 8. The razor removed
   mutation; it must not remove efficiency, and the remedy is to add the right
   *operation*, not the mutable entity.
 - **Unlearning.** Most programmers think with null, inheritance and mutable
@@ -303,22 +289,9 @@ the main ones; later chapters return to each.
 
 ## 1.9 How to read this book
 
-The book has seven parts. Part I, which you are reading, gives the
-philosophy and the history that shaped Okkama. Parts II–V teach the language
-from values to whole programs; each chapter explains a construct, shows it
-working in examples you can run, cites the research and practice it builds
-on, and ends with its limits. Part VI opens the implementation: the compiler,
-the three engines, Sparrow with its JIT and garbage collector, and
-the machinery that keeps it safe and fast. Part VII is about judgement —
-building real programs, comparing Okkama with other languages, and the open
-problems.
+The book has seven parts. Part I gives the philosophy and history of Okkama. Parts II–V teach the language from values to whole programs, with runnable examples, sources and limits. Part VI describes the language’s cost model, measured from the outside. Part VII covers practice and judgement: real programs, comparisons with other languages and open problems.
 
-Every program in the book is in `docs/OkkamaBible/examples`, and every one is
-checked: `build.py --check` runs it on the IR interpreter and on Sparrow and
-compares the output with the text you read. Tables of builtin
-behaviour and of the standard library are generated from the code. If the
-book and the implementation ever disagree, the implementation is right and
-the book has a bug — please report it.
+Every program in the book lives in `docs/OkkamaBible/examples`, with expected output checked by `build.py --check`. Tables of builtin behaviour and the standard library are generated from code. A disagreement between the book and verified language behaviour is a book bug; please report it.
 
 A note on citations: claims about the design are backed by references to the
 work of other authors, listed in the bibliography at the end. They are there

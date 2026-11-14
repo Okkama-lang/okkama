@@ -54,8 +54,7 @@
   - [5.4 Floating point, kept finite](#54-floating-point-kept-finite)
   - [5.5 Bytes](#55-bytes)
   - [5.6 Conversions](#56-conversions)
-  - [5.7 What exactness costs](#57-what-exactness-costs)
-  - [5.8 Limits](#58-limits)
+  - [5.7 Limits](#57-limits)
 - [Chapter 6. Text](#chapter-6-text)
   - [6.1 Three layers of text](#61-three-layers-of-text)
   - [6.2 Okkama's choice: immutable code points](#62-okkamas-choice-immutable-code-points)
@@ -108,12 +107,11 @@
   - [10.13 Budgets are not failures](#1013-budgets-are-not-failures)
   - [10.14 Failures across tasks](#1014-failures-across-tasks)
   - [10.15 What reaches the top](#1015-what-reaches-the-top)
-  - [10.16 How the engines carry a failure](#1016-how-the-engines-carry-a-failure)
-  - [10.17 Designing an error vocabulary](#1017-designing-an-error-vocabulary)
-  - [10.18 Testing failures](#1018-testing-failures)
-  - [10.19 Okkama among other languages](#1019-okkama-among-other-languages)
-  - [10.20 What this design costs](#1020-what-this-design-costs)
-- [Chapter 11. defer, destroy, regions: deterministic resources](#chapter-11-defer-destroy-regions-deterministic-resources)
+  - [10.16 Designing an error vocabulary](#1016-designing-an-error-vocabulary)
+  - [10.17 Testing failures](#1017-testing-failures)
+  - [10.18 Okkama among other languages](#1018-okkama-among-other-languages)
+  - [10.19 What this design costs](#1019-what-this-design-costs)
+- [Chapter 11. defer and destroy: deterministic resources](#chapter-11-defer-and-destroy-deterministic-resources)
   - [11.1 Memory and resources are different problems](#111-memory-and-resources-are-different-problems)
   - [11.2 The lineage](#112-the-lineage)
   - [11.3 defer](#113-defer)
@@ -124,10 +122,8 @@
   - [11.8 async destroy](#118-async-destroy)
   - [11.9 Resources and tasks](#119-resources-and-tasks)
   - [11.10 Close early, destroy anyway](#1110-close-early-destroy-anyway)
-  - [11.11 Regions: how ownership runs](#1111-regions-how-ownership-runs)
-  - [11.12 The cost of a walk](#1112-the-cost-of-a-walk)
-  - [11.13 What is not promised](#1113-what-is-not-promised)
-  - [11.14 What this design costs](#1114-what-this-design-costs)
+  - [11.11 What is not promised](#1111-what-is-not-promised)
+  - [11.12 What this design costs](#1112-what-this-design-costs)
 - [Chapter 12. Objects, fields and constructors](#chapter-12-objects-fields-and-constructors)
   - [12.1 Declaring an object](#121-declaring-an-object)
   - [12.2 Fields are private and permanent](#122-fields-are-private-and-permanent)
@@ -138,11 +134,9 @@
   - [12.7 Actions and hidden actions](#127-actions-and-hidden-actions)
   - [12.8 Caps: a read-only view of an object](#128-caps-a-read-only-view-of-an-object)
   - [12.9 Objects are values](#129-objects-are-values)
-  - [12.10 What a constructor compiles to](#1210-what-a-constructor-compiles-to)
-  - [12.11 Handing `self` out of a constructor](#1211-handing-self-out-of-a-constructor)
-  - [12.12 How the engines store an object](#1212-how-the-engines-store-an-object)
-  - [12.13 Objects elsewhere](#1213-objects-elsewhere)
-  - [12.14 What this design costs](#1214-what-this-design-costs)
+  - [12.10 Handing `self` out of a constructor](#1210-handing-self-out-of-a-constructor)
+  - [12.11 Objects elsewhere](#1211-objects-elsewhere)
+  - [12.12 What this design costs](#1212-what-this-design-costs)
 - [Chapter 13. Actions, successors and immutability](#chapter-13-actions-successors-and-immutability)
   - [13.1 An action is a typed request](#131-an-action-is-a-typed-request)
   - [13.2 Parameters and calls](#132-parameters-and-calls)
@@ -166,10 +160,9 @@
   - [14.4 Moving between roles](#144-moving-between-roles)
   - [14.5 Successors through a role](#145-successors-through-a-role)
   - [14.6 Composition instead of inheritance](#146-composition-instead-of-inheritance)
-  - [14.7 How a role call runs](#147-how-a-role-call-runs)
-  - [14.8 Operators are roles](#148-operators-are-roles)
-  - [14.9 Roles elsewhere](#149-roles-elsewhere)
-  - [14.10 What this design costs](#1410-what-this-design-costs)
+  - [14.7 Operators are roles](#147-operators-are-roles)
+  - [14.8 Roles elsewhere](#148-roles-elsewhere)
+  - [14.9 What this design costs](#149-what-this-design-costs)
 - [Chapter 15. Fakes, tests and properties](#chapter-15-fakes-tests-and-properties)
   - [15.1 Tests live next to the code](#151-tests-live-next-to-the-code)
   - [15.2 The `test` binding](#152-the-test-binding)
@@ -186,10 +179,9 @@
   - [16.3 `match`](#163-match)
   - [16.4 Compact choices](#164-compact-choices)
   - [16.5 Closed or open: enums and roles](#165-closed-or-open-enums-and-roles)
-  - [16.6 How enums run](#166-how-enums-run)
-  - [16.7 Enums elsewhere](#167-enums-elsewhere)
-  - [16.8 Limits](#168-limits)
-  - [16.9 What this design costs](#169-what-this-design-costs)
+  - [16.6 Enums elsewhere](#166-enums-elsewhere)
+  - [16.7 Limits](#167-limits)
+  - [16.8 What this design costs](#168-what-this-design-costs)
 - [Chapter 17. Generics](#chapter-17-generics)
   - [17.1 Parameters on objects, roles and enums](#171-parameters-on-objects-roles-and-enums)
   - [17.2 One `T`, one type](#172-one-t-one-type)
@@ -197,20 +189,19 @@
   - [17.4 Bounds](#174-bounds)
   - [17.5 Parameters used as map keys](#175-parameters-used-as-map-keys)
   - [17.6 A specialization is a type](#176-a-specialization-is-a-type)
-  - [17.7 How generics run: one copy per specialization](#177-how-generics-run-one-copy-per-specialization)
-  - [17.8 A parameter or a role?](#178-a-parameter-or-a-role)
-  - [17.9 A worked example: the best N](#179-a-worked-example-the-best-n)
-  - [17.10 Generics in the standard library](#1710-generics-in-the-standard-library)
-  - [17.11 Okkama among other languages](#1711-okkama-among-other-languages)
-  - [17.12 Limits](#1712-limits)
-  - [17.13 What this design costs](#1713-what-this-design-costs)
+  - [17.7 A parameter or a role?](#177-a-parameter-or-a-role)
+  - [17.8 A worked example: the best N](#178-a-worked-example-the-best-n)
+  - [17.9 Generics in the standard library](#179-generics-in-the-standard-library)
+  - [17.10 Okkama among other languages](#1710-okkama-among-other-languages)
+  - [17.11 Limits](#1711-limits)
+  - [17.12 What this design costs](#1712-what-this-design-costs)
 - [Chapter 18. Anonymous actions and closures](#chapter-18-anonymous-actions-and-closures)
   - [18.1 Writing an anonymous action](#181-writing-an-anonymous-action)
   - [18.2 What a closure remembers](#182-what-a-closure-remembers)
   - [18.3 Types are exact](#183-types-are-exact)
   - [18.4 Action values as data](#184-action-values-as-data)
   - [18.5 Closures or objects](#185-closures-or-objects)
-  - [18.6 How closures run](#186-how-closures-run)
+  - [18.6 Resources and failure reports](#186-resources-and-failure-reports)
   - [18.7 Where closures came from](#187-where-closures-came-from)
   - [18.8 Okkama among other languages](#188-okkama-among-other-languages)
   - [18.9 Limits](#189-limits)
@@ -223,7 +214,7 @@
   - [19.5 Hidden declarations](#195-hidden-declarations)
   - [19.6 Module constants](#196-module-constants)
   - [19.7 Packages and blade](#197-packages-and-blade)
-  - [19.8 How modules become one program](#198-how-modules-become-one-program)
+  - [19.8 A program and its dependencies](#198-a-program-and-its-dependencies)
   - [19.9 Where modules came from](#199-where-modules-came-from)
   - [19.10 Okkama among other languages](#1910-okkama-among-other-languages)
   - [19.11 Limits](#1911-limits)
@@ -271,6 +262,19 @@
   - [22.13 Other libraries, other answers](#2213-other-libraries-other-answers)
   - [22.14 What the style costs](#2214-what-the-style-costs)
   - [22.15 Codecs: one object per direction](#2215-codecs-one-object-per-direction)
+- [Chapter 26. Patterns and anti-patterns](#chapter-26-patterns-and-anti-patterns)
+  - [26.1 What a pattern is, and what a language does to it](#261-what-a-pattern-is-and-what-a-language-does-to-it)
+  - [26.2 Behaviour by composition, not by flags](#262-behaviour-by-composition-not-by-flags)
+  - [26.3 Change as a value: successor pipelines](#263-change-as-a-value-successor-pipelines)
+  - [26.4 Refusals have names](#264-refusals-have-names)
+  - [26.5 Every dependency is a role, every role has a fake](#265-every-dependency-is-a-role-every-role-has-a-fake)
+  - [26.6 Resources belong to scopes](#266-resources-belong-to-scopes)
+  - [26.7 Absence is a type](#267-absence-is-a-type)
+  - [26.8 Shared state has one owner](#268-shared-state-has-one-owner)
+  - [26.9 Anti-patterns the compiler refuses](#269-anti-patterns-the-compiler-refuses)
+  - [26.10 Anti-patterns the compiler allows](#2610-anti-patterns-the-compiler-allows)
+  - [26.11 The classic catalogue, read in Okkama](#2611-the-classic-catalogue-read-in-okkama)
+  - [26.12 What the patterns cost](#2612-what-the-patterns-cost)
 
 # Part I. The Razor
 
@@ -476,14 +480,7 @@ made them less simple, less consistent or less correct to use. He called this
 "worse is better": implementation simplicity first, then interface
 simplicity, with correctness and completeness negotiable.
 
-Gabriel's essay is not a rejection of the razor; it is a dispute about *whose*
-simplicity counts. Worse-is-better shaves the implementation and lets the
-user carry the complexity; the "right thing" shaves the user's model and lets
-the implementation carry it. Okkama sits firmly on the second side: the
-compiler, the verifier and the runtime do a great deal of work — exact
-numbers that promote to big integers, precise garbage collection with
-deterministic destruction, a bytecode verifier — so that the program text can
-stay small and the set of things a reader must consider stays small.
+Gabriel’s essay asks whose simplicity counts: the implementation’s or the user’s. Okkama chooses a small user model: exact numbers promote to big integers, and resources are released deterministically, so program text and the set of things a reader must consider stay small.
 
 The price is real. A language that refuses conveniences is harder to adopt.
 Programmers arrive with habits from languages that have null, mutable fields
@@ -520,12 +517,7 @@ so that a program using them fails to parse with a message instead of meaning
 something else. The language does not just leave the door open with nothing
 behind it; it bricks the door up and puts a sign on it.
 
-Notice what the table does *not* contain. Okkama is not a minimal language in
-the sense of Scheme or Forth. It has exact rationals and big integers, a
-standard library that speaks HTTP/2 and PostgreSQL, structured concurrency,
-precise collection, and a JIT compiler. The razor is applied to *kinds of
-entities in a program*, not to the size of the toolbox. A language may have
-many tools and few kinds of things; Okkama aims to be such a language.
+Okkama is not minimal in the sense of Scheme or Forth. It has exact rationals and big integers, a standard library that speaks HTTP/2 and PostgreSQL, and structured concurrency. The razor applies to kinds of entities in a program, not to the size of the toolbox.
 
 ## 1.7 A first taste
 
@@ -597,10 +589,8 @@ the main ones; later chapters return to each.
   would read better (issue #190 proposes exactly that).
 - **Performance of immutable updates.** A new object per change costs
   allocations; collection updates without in-place mutation cost copies.
-  Sparrow makes allocation cheap and the compiler
-  removes much of it, but some idioms are quadratic today — arrays have no
-  append, so building one element by element copies it each time
-  (issue #145). The razor removed
+  Repeatedly rebuilding a collection with `map` can be quadratic; use
+  the construction operations of Chapter 8. The razor removed
   mutation; it must not remove efficiency, and the remedy is to add the right
   *operation*, not the mutable entity.
 - **Unlearning.** Most programmers think with null, inheritance and mutable
@@ -615,22 +605,9 @@ the main ones; later chapters return to each.
 
 ## 1.9 How to read this book
 
-The book has seven parts. Part I, which you are reading, gives the
-philosophy and the history that shaped Okkama. Parts II–V teach the language
-from values to whole programs; each chapter explains a construct, shows it
-working in examples you can run, cites the research and practice it builds
-on, and ends with its limits. Part VI opens the implementation: the compiler,
-the three engines, Sparrow with its JIT and garbage collector, and
-the machinery that keeps it safe and fast. Part VII is about judgement —
-building real programs, comparing Okkama with other languages, and the open
-problems.
+The book has seven parts. Part I gives the philosophy and history of Okkama. Parts II–V teach the language from values to whole programs, with runnable examples, sources and limits. Part VI describes the language’s cost model, measured from the outside. Part VII covers practice and judgement: real programs, comparisons with other languages and open problems.
 
-Every program in the book is in `docs/OkkamaBible/examples`, and every one is
-checked: `build.py --check` runs it on the IR interpreter and on Sparrow and
-compares the output with the text you read. Tables of builtin
-behaviour and of the standard library are generated from the code. If the
-book and the implementation ever disagree, the implementation is right and
-the book has a bug — please report it.
+Every program in the book lives in `docs/OkkamaBible/examples`, with expected output checked by `build.py --check`. Tables of builtin behaviour and the standard library are generated from code. A disagreement between the book and verified language behaviour is a book bug; please report it.
 
 A note on citations: claims about the design are backed by references to the
 work of other authors, listed in the bibliography at the end. They are there
@@ -1075,12 +1052,7 @@ Purely functional data structures show that this need not be slow: persistent
 lists, trees and maps share most of their structure between versions, so a
 "new" version costs logarithmic work, not a full copy [[Okasaki 1998](#ref-okasaki1998)].
 
-**Cost.** Performance and vocabulary. A new object per change costs an
-allocation; Sparrow makes small allocations cheap, and the compiler
-removes many, but arrays and maps without efficient persistent updates make
-some idioms quadratic today (issues #145 and #151). And every state a program
-cares about must be named and returned, which makes long chains of updates
-more verbose than assignments.
+**Cost.** Performance and vocabulary. A new object per change costs an allocation; repeatedly rebuilding a collection can be quadratic (Chapter 8). Every state the program cares about must be named and returned, so long update chains are more verbose than assignments.
 
 ## 3.4 Rule four: there is no null
 
@@ -1231,11 +1203,7 @@ wants — physics, graphics, statistics — and makes the exact categories the
 default for counting and money. Mixing them is a decision the programmer
 writes down: `int(x)`, `x.float()`, `x.rat()`.
 
-**Cost.** Speed and ceremony. Exact integers need an overflow check on every
-operation (Sparrow makes it one branch); rationals are slower than
-floats; and the explicit casts that Chapter 2's decorator needed —
-`int(amount * percent / 100)` — are characters other languages do not ask
-for. Chapter 5 measures the cost.
+**Cost.** Speed and ceremony. Exact integer arithmetic must preserve results beyond fixed-width bounds; rationals are slower than floats. Explicit casts such as `int(amount * percent / 100)` take characters other languages do not ask for. Chapter 5 explains these costs.
 
 ## 3.7 Rule seven: roles instead of inheritance
 
@@ -1294,15 +1262,7 @@ created them, and `destroy` runs when that scope exits — normally, by
 cleanup for the current block. There are no finalizers and nothing to forget
 in a `finally`.
 
-**Why.** Stroustrup's RAII — resource acquisition is initialisation — made
-object lifetime the lifetime of the resource it owns, so that release cannot
-be forgotten [[Stroustrup 1994](#ref-stroustrup1994)]. Garbage-collected languages lost this,
-because objects die whenever the collector decides, and they compensated with
-`try/finally`, `using` and `with` blocks that programmers must remember to
-write. Okkama has both a precise garbage collector for memory and
-deterministic destruction for resources. Its ownership regions are related to
-Tofte and Talpin's region-based memory management, in which the lifetimes of
-groups of objects are tied to the program's block structure [[Tofte 1997](#ref-tofte1997)].
+Stroustrup’s RAII ties resource release to scope exit [[Stroustrup 1994](#ref-stroustrup1994)]. Automatic memory management alone does not guarantee timely release of files or connections. Okkama guarantees deterministic destruction of resources (Chapter 11).
 
 **Cost.** A resource must have a clear owner. Programs that share a resource
 between independent owners must make one of them responsible, or use the
@@ -1401,10 +1361,6 @@ Okkama uses its type system for three jobs:
   were all rejected this way.
 - **To document intent.** A signature such as `share(people is int) is rat`
   tells a reader what goes in and what comes out without reading the body.
-- **To make the runtime fast.** Sparrow chooses a machine
-  representation for every register from its type — a raw 64-bit integer, a
-  double, a pointer the garbage collector traces — which is only safe because
-  the types are checked (Chapter 25).
 
 ## 4.2 The inventory
 
@@ -1609,10 +1565,7 @@ float result that stays finite. These are *runtime failures* (Chapter 10):
 precise, located errors that stop the program — or, in the case of typed
 errors, that a caller may catch.
 
-The boundary between the two lists has moved over time. The first Okkama
-implementation, an interpreter in Perl, checked most types while running;
-the Rust compiler checks most of them statically, and the remaining dynamic
-checks are concentrated where values, not types, decide.
+Types are checked before execution; the remaining dynamic checks concern values, such as bounds and divisors.
 
 ## 4.8 Limits
 
@@ -1714,10 +1667,7 @@ gives `2`). `int(-3.9)` truncates toward zero.
 
 ## 5.2 Exact integers
 
-An Okkama `int` behaves as a mathematical integer. Internally the
-implementations keep small values in a machine word and switch to an
-arbitrary-precision representation when a result does not fit; the program
-cannot observe the switch except by the time it takes.
+An Okkama `int` behaves as a mathematical integer: results do not wrap at a fixed-width boundary. Larger results take more time and memory as their digit count grows.
 
 **Why.** Overflow is a correctness failure that type checking does not catch.
 The loss of the first Ariane 5 in 1996 came from converting a value into a
@@ -1729,20 +1679,9 @@ a change completed in Python 3 [[PEP 237](#ref-pep237)], Scheme has long disting
 numeric tower [[R7RS](#ref-r7rs2013)], and Rust panics on overflow in debug builds. Okkama
 goes all the way: there is no wrapping integer type to choose by mistake.
 
-The algorithms behind big-integer arithmetic — schoolbook and Karatsuba
-multiplication, long division, conversion to decimal — are the classical ones
-of Knuth's *Seminumerical Algorithms* [[Knuth 1997](#ref-knuth1997)]. A product whose result
-cannot fit in the run's memory budget is refused before it is computed, so a
-program cannot exhaust memory with one multiplication (Chapter 26). Powers are
-exact too: `(2).pow(100)` is `1267650600228229401496703205376`; an `int`
-cannot be raised to a negative power — that result is not an integer — while
-`rat.pow` takes one and inverts (issue #228).
+A product that cannot fit in the run’s memory budget is refused before computation. Powers are exact too: `(2).pow(100)` is `1267650600228229401496703205376`. An `int` cannot be raised to a negative power; `rat.pow` accepts one and inverts (issue #228).
 
-**Cost.** Each integer operation must check for overflow. On Sparrow
-this is one compare-and-branch after the machine instruction, taken almost
-never; Figure 5.1 shows that integer-heavy code is still several times faster
-than in the dynamic languages Okkama is usually compared with. Where results
-do become big, they cost what big integers cost in any language.
+**Cost.** Exact arithmetic must preserve results beyond fixed-width bounds. Once results become big, their cost grows with the number of digits.
 
 ## 5.3 Exact rationals
 
@@ -1886,27 +1825,7 @@ decimal is what the programmer wrote and meant. And float-to-text produces
 the shortest string that reads back as the same float, so printing never
 invents digits.
 
-## 5.7 What exactness costs
-
-Figure 5.1 compares three numeric benchmarks of the Okkama benchmark suite —
-integer arithmetic, floating-point arithmetic and big-integer arithmetic — on
-Sparrow, on the JVM backend, and in Python, Ruby and Perl, measured
-for the 0.4.0 release.
-
-![Figure 5.1. Wall-clock time of three numeric benchmarks (logarithmic scale). Data: data/benchmarks-0.4.0.json.](figures/numbers-cost.svg)
-
-*Figure 5.1. Wall-clock time of three numeric benchmarks (logarithmic scale). Data: data/benchmarks-0.4.0.json.*
-
-On Sparrow, exact integer arithmetic takes 0.043 s where Python
-takes 0.52 s and Ruby 0.19 s: the overflow check costs little next to
-dynamic dispatch. Floating point is fastest (0.026 s), as expected of one
-machine instruction per operation. Big integers cost what big integers cost —
-0.23 s on Sparrow against 0.36 s in Python and 0.40 s in Ruby, which use
-mature C libraries; Perl's pure-Perl big integers take 24 s. The lesson of the
-figure is not that Okkama is the fastest — it is not, against C or Rust — but
-that making the default numbers exact did not make them slow.
-
-## 5.8 Limits
+## 5.7 Limits
 
 - **No non-finite floats.** Code that relies on IEEE infinities and NaN must
   be restructured (Section 5.4).
@@ -2053,15 +1972,7 @@ points are not what a reader calls a character in every case, and
 Section 6.8 shows the price; but they are the largest unit an operation can
 rely on without consulting tables that change every year.
 
-**Why immutable.** Every argument of Chapter 3 applies, and text adds one
-more: an immutable string can be shared between objects, threads and the
-garbage collector without copying, and a substring can share its parent's
-storage. Java made strings immutable in 1995 for the same reasons, and
-`StringBuilder` for the cases where text is assembled piece by piece
-[[Gosling 2023](#ref-gosling2023)]. Okkama has both. The second is `TextBuffer` from
-`strings/buffer` (issue #139, since 0.5.5): it keeps the text in the runtime,
-each `write` appends without copying what is there, and `string()` hands out
-the finished, immutable result.
+**Why immutable.** A string passed to another object keeps its code points. To assemble text piece by piece, use `TextBuffer` from `strings/buffer`: each `write` appends without copying all preceding text, and `string()` returns the finished immutable result [[Gosling 2023](#ref-gosling2023)].
 
 ```okkama
 module bible/text_buffer v1.0.0;
@@ -2245,35 +2156,9 @@ things — one is a number with a name, the other a sequence.
 
 ## 6.8 What text costs
 
-Code-point indexing has a cost that byte indexing does not: finding the 1000th
-code point of a UTF-8 string means walking the first 999, because code points
-have different byte lengths. Sparrow keeps a fast path — a string
-known to be ASCII has one byte per code point, so `length()` and `slice()` are
-constant-time — and walks otherwise.
+Code-point indexing has a cost: code points have different byte lengths in UTF-8, so an arbitrary position can require a walk. ASCII positions are constant-time. A sequential scan of non-ASCII text is linear; arbitrary indexing can cost up to a linear walk.
 
-The walk is cheap once and expensive in a loop. A program that visits every
-character of a string with `slice(i, i + 1)` walked from the start at each
-visit, so its total cost was quadratic in the length of non-ASCII text.
-Figure 6.1 measures that program on Sparrow before and after the
-fix.
-
-![Figure 6.1. Visiting each Cyrillic character with slice(i, i + 1): quadratic before issue #52, linear after it. Data: data/slice-cost.json.](figures/slice-cost.svg)
-
-*Figure 6.1. Visiting each Cyrillic character with slice(i, i + 1): quadratic before issue #52, linear after it. Data: data/slice-cost.json.*
-
-Before the fix, 32,000 Cyrillic letters took 2.6 s, and doubling the text
-quadrupled the time; ASCII text was already constant per character. After
-it, the same program takes 0.13 s — the process start. The fix keeps strings
-indexed by code point and remembers, for the four most recently indexed long
-strings, the last position reached (its code point and byte offset); every
-lookup walks from the nearest of the start, the end and that position. A
-sequential scan therefore walks the text once, and random access costs the
-distance from the nearest known point. Every engine does the same (issue
-#52).
-
-`characters()` needs no cache at all: it walks the string once and returns
-every code point. On the same 32,000 letters it also takes 0.13 s, and it is
-the loop to write when the program wants characters rather than positions.
+`characters()` walks a string once and returns its code points. Use it when a loop needs characters rather than positions.
 
 The standard library audit of November 2026 found the same pattern —
 character-by-character slicing — in about forty modules, from MIME header
@@ -2284,13 +2169,7 @@ right operation.
 
 ## 6.9 Limits
 
-- **`+` shares on every engine, but says less than a buffer.** Since 0.4.3
-  on Sparrow (issue #255) and 0.5.3 on the IR engine and the JVM (issues
-  #335, #336), a chain `text + piece` writes into a text buffer the versions
-  share: a long text assembled from many pieces costs a constant per piece,
-  not a copy of everything so far. When a loop builds one result, a
-  `TextBuffer` (issue #139) says so in the code instead of relying on that
-  sharing.
+- **Text assembly.** Extending a chain with `text + piece` costs the appended text rather than a copy of everything so far. A `TextBuffer` makes the intention to build one result explicit.
 - **Case conversion has no locale.** `lower()` and `upper()` follow the
   Unicode default; Turkish, Azeri and Lithuanian rules are missing
   (issue #261).
@@ -2735,15 +2614,7 @@ value`. The operations are **eager**: each produces a complete array (or, for
 order — exactly once, and the first failure inside a block stops the
 operation.
 
-Why only three, and why a special syntax? `map`, `filter` and `reduce` are the
-classical trio from which most collection algorithms are built, and they cover
-the overwhelming majority of loops that produce a value. A dedicated syntax
-makes the block a part of the call rather than an ordinary argument: it may
-use the surrounding names, it cannot be stored or passed on, and the compiler
-can lower it to a plain loop without allocating a closure. Lazy views —
-`Taken`, `Filtered`, `Chunked` and friends — live in
-`collections/views` for the cases where materialising every step would be
-wasteful (Chapter 22).
+`map`, `filter` and `reduce` cover most loops that produce a value. Their blocks are part of the call: they may use surrounding names but cannot be stored or passed on. Lazy views — `Taken`, `Filtered`, `Chunked` and friends — live in `collections/views` when materialising every step would be wasteful (Chapter 22).
 
 There is no `last` inside a functional block: `reduce` always visits every
 element. Searches therefore have their own operations, which stop at the
@@ -2772,7 +2643,7 @@ field in declaration order. `keys()` and
 `values()` return arrays in that order, and every functional operation visits
 entries in it. Iteration order therefore never depends on hashing, insertion
 history or the memory layout of a run: the same program prints the same output
-every time, on every engine. Python made its dictionaries keep insertion order
+every time. Python made its dictionaries keep insertion order
 in version 3.7 for the same reason — predictability — and many test suites
 in languages with unordered maps contain workarounds for nondeterministic
 output.
@@ -2822,43 +2693,9 @@ The language's answer today has three parts.
    explicit mutable container, which the compiler keeps out of async actions
    and object fields (issue #152).
 
-The most common operations — appending to an array, setting or removing one
-key of a map — are `+` and `-` (issue #145): `items + [item]`, `a + b + c`,
-`prices + ["fig": 90]`, `prices - ["pear": 0]`. A chain is one allocation of
-the result, never a series of intermediate arrays. Inside `reduce` the
-accumulator also grows in place when nothing else sees it (issue #243): a
-block that only returns `acc` or `acc + [item]` appends in amortized constant
-time, the way a mutable vector would, because no one can observe the
-intermediate arrays.
+Use `+` and `-` to append array elements or set and remove map entries: `items + [item]`, `a + b + c`, `prices + ["fig": 90]`, `prices - ["pear": 0]`. A concatenation chain costs the size of its result. Inside `reduce`, a block that returns only `acc` or `acc + [item]` appends in amortized constant time; earlier observable values remain unchanged.
 
-Elsewhere `+` used to copy. Until 0.4.3 the result was a fresh copy, so code
-that built an array step by step through an object's fields or a shared cell
-copied the whole array at each step.
-
-Since 0.4.3, Sparrow gives these operations representations that share
-structure between versions (issues #246–#255). Not a line of the programs
-that use them changes.
-- **Appends and prepends.** A chain of `items + [x]` or `[x] + items` on an
-  array of 32 elements or more writes into a buffer the versions share: at
-  its end, or before its start, when the version being extended ends (or
-  starts) there. Every older version keeps its elements. A second version
-  made from the same one copies, as before.
-- **Slices.** `slice`, `take` and `drop` share their origin's storage when
-  they keep at least half of it, so a slice keeps alive at most twice what it
-  holds.
-- **Replacements.** A chain of `replaced` on an array of 64 elements or more
-  turns it into a 32-way trie, so a replacement copies one path from the
-  root. A trie that is only read rewrites itself flat after two passes.
-- **Maps.** A map of more than 64 entries turns into a persistent B+ tree the
-  first time a version is made from it. Later versions share its nodes.
-- **Strings.** Chains of `+` on strings share text buffers the same way
-  (Chapter 6).
-
-Arrays and maps that are built once and then only read stay flat, so reading
-them costs what it did.
-
-One idiom still copies on every engine, because it builds a new array with
-`map` at each step. The standard library used it before `+` existed:
+One idiom still copies: it builds a new array with `map` at each step. Repeating it to grow a collection gives quadratic total work:
 
 ```okkama
 let following = (0..old.size() + 1).map() -> index {
@@ -2866,44 +2703,9 @@ let following = (0..old.size() + 1).map() -> index {
 };
 ```
 
-Since 0.5.3 the IR engine and the JVM keep chains the same way (issues #335,
-#336). The rules are Tomato's, adapted to their memory: reference counts
-with a cycle collector on the IR engine, the JVM's own collector and
-`java.util.List` on the JVM. A step of an append chain at 100 000 elements
-costs 200–400 ns on the IR engine and 45–70 ns on the JVM, where each was a
-copy of the whole array. Figure 8.1 measures the difference on Sparrow.
-
-![Figure 8.1. Building an array of n integers on Sparrow: one map() stays flat; the map() idiom and items + [x] by copying (0.4.2) are quadratic; items + [x] over the shared buffers of 0.4.3 stays flat (issues #145, #246). Data: data/append-cost.json.](figures/append-cost.svg)
-
-*Figure 8.1. Building an array of n integers on Sparrow: one map() stays flat; the map() idiom and items + [x] by copying (0.4.2) are quadratic; items + [x] over the shared buffers of 0.4.3 stays flat (issues #145, #246). Data: data/append-cost.json.*
-
-One `map()` builds 64,000 elements in the time it takes to start the process,
-about 11 milliseconds. Appending them one at a time with `+` took 1.1 seconds
-when every step copied, and doubling the size roughly quadrupled the time. On
-0.4.3 it takes 15 milliseconds. The idiom, which builds a new array at each
-step, still takes 0.85 seconds for 16,000 elements and 3.4 for 32,000.
-
 This is the clearest case in the language of the rule from Chapter 1:
 removing mutation must not remove efficiency, and the cure is an operation,
 not a mutable entity.
-
-The cure is well known. Persistent vectors and hash maps give immutable
-collections effectively constant-time append and update, by sharing all but
-a logarithmic path of their structure between versions. Examples are
-Bagwell's hash array mapped tries [[Bagwell 2001](#ref-bagwell2001)], as used by Clojure
-[[Hickey 2008](#ref-hickey2008)], and the structures in Okasaki's book [[Okasaki 1998](#ref-okasaki1998)].
-
-Okkama took the step in 0.4.3 without a new operation: `+` and `-` stayed,
-and only their representation changed. It took the cure piecemeal rather
-than wholesale.
-- **Tries only where they pay.** Measured on Sparrow, a trie read in an index
-  loop costs 45–75% more than a flat array, and programs read far more than
-  they write. So tries serve only chains of `replaced`, and flatten
-  themselves back once they are only read.
-- **Buffers for appends.** Appends get a flat buffer with a frontier instead,
-  which reads like any flat array.
-- **An ordered tree for maps.** Maps get an ordered B+ tree rather than a
-  hash trie, because Okkama's maps are ordered.
 
 ## 8.6 Iterating user collections
 
@@ -2938,35 +2740,13 @@ role Batching<T> {
 }
 ```
 
-`for file.text() -> line { … }` asks for a batch, walks it
-as an array and asks again; `next`, `last` and `return` work as in any loop,
-and `map`, `filter`, `reduce` take such a source too. The reason is cost. A
-cursor is an object and three role calls per item, about 0.7 µs on Tomato; a
-batch is one call per batch and then the array loop, about 0.09 µs per line
-of a file whose batches the runtime cuts in Rust (#465). A source that does
-both roles is walked in batches.
+`for file.text() -> line { … }` asks for a batch, walks it as an array and asks again. `next`, `last` and `return` work as in any loop; `map`, `filter` and `reduce` accept such sources too. Batches amortize the cost of requesting items over several values. A source that does both roles is walked in batches.
 
 ## 8.7 Limits
 
-- **What still copies.** Two things copy on every engine: the `map()` idiom,
-  and `a + b` of two large arrays (issue #248 was declined). Chains of `+` on
-  strings copy on the IR engine and the JVM, which keep `Rc<str>` and
-  `java.lang.String` (issue #357, and the JVM's phase D of #336, on hold).
-  On the IR engine only arrays and maps of plain values (numbers, strings,
-  and collections of them) share their nodes, because its cycle collector
-  counts every edge as one strong reference; arrays and maps that hold
-  objects are copied as before. On the JVM, tries for chains of `replaced`
-  are built but off by default (`OKKAMA_ARRAYS=trie`): the JIT needs some
-  fifteen passes over a flattened trie to read it as fast as an `ArrayList`.
-- **A large map's first version copies.** A map of more than 64 entries
-  becomes persistent at the first version made from it: that version costs
-  one copy, and the later ones a path. Maps of 64 entries or fewer are
-  copied whole, which is cheaper at that size.
+- **What still copies.** The `map()` idiom and `a + b` of two large arrays cost the full result.
+- **A large map’s first update costs a copy.** Subsequent updates can be cheaper; do not assume every update has the same cost.
 - **`ordering()` needs `compare.Comparing` in scope** (issue #233).
-
-The first two are what is left of the gap that the milestone "Persistence
-Operations" tracked. Okkama had the immutability and the operators. Since
-0.4.3 Sparrow has the representations, and the other engines follow.
 
 # Chapter 9. Expressions and Control Flow
 
@@ -3178,7 +2958,7 @@ Every operator requires operands of the right category and converts nothing:
   written with `pow` (Chapter 5).
 - An object takes part in arithmetic and ordering only through roles it
   declares: `a + b` is `a.plus(b)` when the type of `a` does `Adding`, and
-  `a < b` asks `a.order(b)` through `Comparing` (§14.8). An object without
+  `a < b` asks `a.order(b)` through `Comparing` (§14.7). An object without
   those roles has no operators.
 
 ## 9.4 Choosing
@@ -3388,10 +3168,7 @@ compile time, even in code that never runs.
 
 ### Unbounded loops and budgets
 
-A `loop` without a `last` runs until something stops it. The step budget
-(Chapter 26) counts every branch back to an earlier point of the program. So
-`okkama run --max-steps N` stops any loop, on every engine, with the same
-report.
+A `loop` without a `last` runs until something stops it. The step budget counts function entries and loop iterations. `okkama run --max-steps N` therefore stops an unbounded loop with a budget report.
 
 ## 9.6 `return`
 
@@ -3488,11 +3265,6 @@ C leaves the order of operands and arguments unspecified. `f() + g()` may call
 either function first, and a program whose output depends on the order is
 legal and unpredictable. Java fixed the order as left to right [[Gosling 2023](#ref-gosling2023)],
 and Okkama does the same.
-
-Okkama has a second reason as well. Three engines run the same program — the
-IR interpreter, the JVM and Sparrow — and the conformance suite
-compares their outputs byte for byte. With an unspecified order, the expected
-answer for a test would be a set of outputs instead of one.
 
 ## 9.8 What is not there
 
@@ -3660,8 +3432,7 @@ The rest of the chapter takes the pieces apart:
 - failures from the host;
 - what reaches the top of the program.
 
-Cleanup — `defer`, `destroy`, regions — runs on every one of these paths;
-Chapter 11 describes it.
+Cleanup — `defer` and `destroy` — runs on these failure paths; Chapter 11 describes it. Budget stops have a separate rule (§10.13).
 
 ## 10.1 Who should hear about a failure
 
@@ -3858,8 +3629,7 @@ These end the run, whatever `catch` clauses surround them:
   a fixed sentence, not data.
 - A bare `confirm condition;` whose condition is false (§10.9).
 - **Runtime errors.** An index or slice out of bounds, division or modulo by
-  zero, a failed narrowing of a role or `any` value. Each is detected by the
-  engine and reported as `RuntimeError: …`.
+  zero, a failed narrowing of a role or `any` value. Each is detected during execution and reported as `RuntimeError: …`.
 
 The run does not simply stop. It *unwinds*: every scope between the failure
 and the top runs its `defer` blocks and destroys the resources it owns, in
@@ -3988,7 +3758,7 @@ someone needed once. An error enum is a closed list, visible in one
 declaration. Adding a case is a change every exhaustive `match` notices.
 Grouping is explicit, because a component that wraps another component's
 failures says so with a payload, not with a superclass. And since the value
-is data, two errors compare by value and print the same on every engine.
+is data, two errors compare by value and print the same.
 
 One enum per component is the intended granularity. `LineError` is
 everything the line parser can report, and `LedgerError` everything the
@@ -4123,7 +3893,7 @@ in two ways.
 decide, put it in the error:
 `enum OrderError is Error = (storage(cause is StoreError), …)`. The cause is
 then an ordinary value. The caller can match on it, `text()` prints it, and
-it means the same on every engine.
+it means the same.
 
 ```okkama
 module bible/cause v1.0.0;
@@ -4187,8 +3957,7 @@ handling another one keeps the handled error as its *cause*, with its value,
 origin and stack. This happens whether or not the new error mentions the old
 one, so a `catch` that throws a less detailed error does not lose the
 evidence. It also holds after an `await`. The link is diagnostic: the
-program cannot read it, but the report of an uncaught failure prints it. On
-Sparrow:
+program cannot read it, but the report of an uncaught failure prints it:
 
 ```text
 OrderError: OrderError.failed(7)
@@ -4323,7 +4092,7 @@ catch failure is NativeFailure {
 
 Code should branch on `domain` and `code` only. Raw `errno` values, host
 exception classes and localized OS messages never become language values,
-so a program behaves the same on macOS, Linux and the JVM.
+so a program behaves the same on macOS and Linux.
 
 Most programs never see a `NativeFailure` directly. The standard library
 catches it at the boundary and rethrows a typed error that belongs to the
@@ -4448,7 +4217,7 @@ continue. The run ends with `Execution budget exhausted: steps` (`memory`,
 not even `catch e is Error`, and `destroy` does not run, because the
 budget would be spent again by the cleanup.
 
-The stop happens at the next point where the engine looks at the budget:
+Budget stops are observed at these points:
 
 - every step, function entry and loop iteration;
 - inside a long sort;
@@ -4540,58 +4309,7 @@ Stack trace (most recent call first):
 int in 0..255, got N`, so the success channel and the failure channel stay
 apart here too.
 
-## 10.16 How the engines carry a failure
-
-The two channels exist in the compiled program, not only in the source. In
-OIR, the compiler's intermediate form (Chapter 23), every basic block may
-name an *unwind target*: the block that receives a failure raised by any of
-its instructions, as its last parameter. Here is the end of a small method
-that owns a resource region:
-
-```text
-^b1 unwind ^b4:
-    region.adopt %1, %0
-    br ^b2
-...
-^b4(%6: failure):
-    %7: failure = region.unwind %1, %6
-    raise %7
-```
-
-`^b4` is the landing block. It closes the method's region on the failure
-path, which runs `defer` blocks and destroys what the region owns, and
-passes the failure on with `raise`. A `try` lowers the same way: the body's
-blocks unwind to a landing block that closes the body's scopes and then
-tests the `catch` types in order. A panic travels the same edges, but no
-clause accepts it.
-
-Each engine carries the failure along those edges in its own way.
-
-- **The IR engine** interprets the blocks. A failure is the error branch of
-  a Rust result, which travels up through the interpreter's frames.
-- **Sparrow** compiles to machine code. A failing helper sets the
-  `status` and `failure` fields of the run's context, and every caller
-  checks `status` after each call or helper and branches to its landing
-  block. A failure thus crosses machine frames without Rust unwinding and
-  without `setjmp`. A `try` that does not throw costs nothing beyond those
-  checks.
-- **The JVM** throws a Java exception, `okkama.rt.Failure`, a
-  `RuntimeException` that keeps the JVM's stack from where it was created.
-  Each method of the program numbers its source places in its
-  LineNumberTable, and a table next to the classes, `okkama-debug.tsv`,
-  maps those numbers back to files, lines and columns, so the uncaught
-  report shows the Okkama stack and never Java frames. Remembering the stack
-  is the price of a throw: a loop that throws 500 000 failures twelve calls
-  deep takes 0.48 s instead of 0.27 s, the same as Sparrow.
-  Regions close in Java `catch` blocks.
-
-The conformance suite runs the same programs on all three and requires the
-same output, exit status and `catch` behaviour. Since 0.4.2 the uncaught
-report is the same too, byte for byte: the failure, its secondary cleanup
-failures and its causes, the place and the stack (#270). Chapters 24 and 25
-return to the engines.
-
-## 10.17 Designing an error vocabulary
+## 10.16 Designing an error vocabulary
 
 A module's error enums are part of its public API, as much as its actions.
 The standard library follows a handful of rules, and they work outside it
@@ -4620,7 +4338,7 @@ too.
   returns `Maybe` (Chapter 7), not an error. An error says the operation
   could not do what it promised. A missing optional value is not that.
 
-## 10.18 Testing failures
+## 10.17 Testing failures
 
 A failure is part of an action's contract, so it gets tests like the
 successful path. The test runner (`okkama run -t`) provides
@@ -4645,7 +4363,7 @@ Error handlers are rarely exercised in production, and that is where
 Yuan et al. found the catastrophic bugs. A failure path that a test has
 never run is a guess. Chapter 15 returns to tests, fakes and properties.
 
-## 10.19 Okkama among other languages
+## 10.18 Okkama among other languages
 
 | Language | Expected failure | Bug | Forced to handle? | Catch everything | Cleanup |
 |---|---|---|---|---|---|
@@ -4663,7 +4381,7 @@ everything. Okkama is weaker in the "forced to handle" column: nothing makes
 a caller deal with an error, and the compiler does not know which errors an
 action can throw.
 
-## 10.20 What this design costs
+## 10.19 What this design costs
 
 The two channels are a strong opinion, and opinions cost something.
 
@@ -4688,10 +4406,6 @@ The two channels are a strong opinion, and opinions cost something.
   `match` in the clause body.
 - **The runtime cause chain is for reports only.** A program cannot walk
   it. A cause the program must inspect has to be a payload.
-- **The JVM keeps at most 1 024 frames of a stack.** A failure deeper than
-  that reports the most recent frames and says that older ones are missing;
-  the other engines show the whole stack, compressed
-  ([#270](https://github.com/shootnix/okkama/issues/270)).
 - **No named handlers yet.** A handler shared by several `try` blocks has to
   be an action called from each clause. Named catch handlers were proposed
   and postponed as too magical for 0.4.1
@@ -4708,15 +4422,9 @@ Against these costs stands what the design removes:
 The next chapter takes up the other half of the story: what runs when a
 scope ends, on success or failure.
 
-# Chapter 11. defer, destroy, regions: deterministic resources
+# Chapter 11. defer and destroy: deterministic resources
 
-Memory is not the only thing a program borrows from the system. A file
-descriptor, a socket, a database transaction, a lock, a temporary directory
-and a child process all have to be given back, and given back at a
-predictable moment: before the next request reuses the port, before the
-transaction times out, before the disk fills with temporary files. Okkama
-manages memory for the programmer, with a collector or reference counts
-depending on the engine. It does not leave resources to the collector.
+Memory is not the only thing a program borrows. Files, sockets, transactions, locks, temporary directories and child processes need timely release. Okkama manages memory automatically and guarantees resource release at scope exit.
 
 Two constructs give resources back:
 
@@ -4811,17 +4519,11 @@ The output reads like a contract.
   handle it returns lives on in `main` until `main` ends.
 - Each loop iteration closes its own handle before the next begins.
 
-This chapter explains each of those rules: where they come from, how the
-compiler and the engines implement them, and what they cost.
+This chapter explains those rules, their origins and their costs.
 
 ## 11.1 Memory and resources are different problems
 
-Garbage collection solved memory well, because memory has a property other
-resources lack: running out of it is the collector's signal to act. The
-collector runs when memory is short, and that is exactly when memory needs
-reclaiming. No such signal exists for file descriptors or database
-connections. A program can run out of descriptors with plenty of free
-memory, and the collector, which is not short of anything, does nothing.
+Automatic memory management alone does not promise timely resource release. A program can exhaust file descriptors or database connections while still having plenty of memory; these resources need an explicit lifetime tied to scopes.
 
 *Finalizers*, code the collector runs when it reclaims an object, were the
 first answer, and they failed. Hans Boehm showed that a finalizer runs at
@@ -4832,11 +4534,7 @@ deprecated `Object.finalize` and then marked finalization for removal
 [[Christian 2021](#ref-jep421)]. Its replacement is explicit: `try`-with-resources, which closes
 an `AutoCloseable` at the end of a block.
 
-Okkama never ties a resource to the collector. When a `destroy` runs is a
-property of the program text, the same on every engine and for every heap
-size. Sparrow has a precise, non-moving collector, the IR engine
-counts references, and the JVM has its own collector. All three run the
-same `destroy`s in the same order.
+When a `destroy` runs is determined by the program’s scopes and ownership, independently of memory pressure.
 
 ## 11.2 The lineage
 
@@ -4904,7 +4602,7 @@ object Handle {
 ```
 
 An object has at most one `destroy` block. It is not an action: nothing can
-call it. The engine runs it once, when the scope that owns the object ends.
+call it. It runs once, when the scope that owns the object ends.
 It may read `self` and the fields, and call actions. It cannot assign fields
 through a successor: the object is being released, not updated.
 
@@ -4968,12 +4666,7 @@ identities, not names.
 
 The conformance suite pins these rules:
 
-- `L07.ownership.alias-borrows`;
-- `L07.ownership.returned-object-survives`;
-- `L07.ownership.successor-independent`;
-- `L07.destroy.branch-scope`;
-- the region cases added with #9 and #266, among them
-  `L07.ownership.reduce-builder`, whose resources are gathered by `reduce`.
+The conformance suite checks alias borrowing, returned resources, independent successors, branch scopes and resources gathered by `reduce`.
 
 ## 11.6 Resources in collections and closures
 
@@ -5377,105 +5070,7 @@ The pattern costs one rule for authors of resource objects: `close()` must
 be idempotent, and every other action of a closed resource should fail with
 a catchable `already_closed`, not misbehave.
 
-## 11.11 Regions: how ownership runs
-
-The compiler implements ownership with **regions**: run-time sets of
-identities, one per scope that may own a resource. It decides at compile
-time which scopes need one, and that decision is most of the cost model.
-
-A type is **plain** when none of its values can reach an object with a
-`destroy`. Most types are plain: numbers, text, records of plain fields,
-arrays and maps of plain values. Plain values never touch a region. Here
-are two actions that differ only in the type they create:
-
-```text
-func @Use.plain(%0: Use, %1: int) -> int [method Use] {
-^b0:
-    br ^b1
-^b1:
-    br ^b2
-^b2:
-    %2: Point = call @Point.new#0(%1)
-    %3: int = call @Point.value(%2)
-    %4: int = const 1
-    %5: int = int.add %3, %4
-    br ^b3
-^b3:
-    ret %5
-}
-func @Use.owned(%0: Use, %1: int) -> int [method Use] {
-^b0:
-    br ^b1
-^b1:
-    %2: region = region.enter
-    br ^b2
-^b2 unwind ^b5:
-    %3: Handle = call @Handle.new#0(%1)
-    region.track %2, %3
-    region.adopt %2, %3
-    %4: int = call @Handle.value(%3)
-    %5: int = const 1
-    %6: int = int.add %4, %5
-    br ^b3
-^b3:
-    region.leave %2
-    br ^b4
-^b4:
-    ret %6
-^b5(%7: failure):
-    %8: failure = region.unwind %2, %7
-    raise %8
-}
-```
-
-`Point` has no `destroy`, so `plain` has no region at all. `Handle` has
-one, so `owned` gets the full set. The instructions are a small vocabulary.
-
-| Instruction | Meaning |
-|---|---|
-| `region.enter` | a new, empty region for this scope |
-| `region.track r, v` | remember the free identities `v` reaches; do not own them yet (a call result, a temporary) |
-| `region.adopt r, v` | own the free identities `v` reaches (`let`, a fresh argument) |
-| `region.transfer from, to, v` | move what `from` owns of `v` to `to` (a value leaving a nested scope) |
-| `region.leave r [, keep v]` | close: run destroys, newest first; what `keep` reaches becomes free again (a result) |
-| `region.unwind r, f` | close on the failure path; cleanup failures join `f` as secondaries |
-| `region.settle`, `region.settle_unwind` | the same in async functions, awaiting async destroys (#154) |
-
-An optimization pass removes regions that provably stay empty. The
-compiler's plainness is per declaration. One role implemented by one object
-with a `destroy` makes every value of that role non-plain, even where no
-such object is ever built ([#268](https://github.com/shootnix/okkama/issues/268)
-would refine that).
-
-Regions are named after, but are not, the regions of Tofte and Talpin's
-region-based memory management [[Tofte 1997](#ref-tofte1997)]. Those hold memory and free it
-all at once. Okkama's regions hold *identities to release*. Memory stays
-with the collector, and a region only decides when each `destroy` runs.
-
-## 11.12 The cost of a walk
-
-To track or adopt a value, the engine walks what the value reaches. It
-looks for identities that are still free, owned by nobody. The walk stops
-at objects owned by another scope, at plain values and at objects without
-an identity. Until 0.4.1 it did not stop at arrays, maps and closures,
-which have no owner. A fresh value pointing at a large owned structure cost
-a walk over the whole structure, on every track and every close. A loop
-building such values was quadratic.
-
-Since #9 the engines remember containers whose walk met no free identity.
-Containers are immutable, so what one reaches is at most as old as the
-container. A remembered container is skipped until an identity at least as
-old becomes free again, which happens when a scope returns it. Then all
-the summaries are dropped. On the benchmark built for this
-(`11-ownership`: 100 000 records in an array and a map, 300 rounds), the
-change made Sparrow 85% faster, the IR engine 86% and the JVM 75%.
-
-The lesson for program design is modest. Ownership costs nothing for plain
-data. Non-plain data costs a walk the first time a structure is seen and
-almost nothing after that. A program that keeps a million records reaching
-a socket pays once, not once per request.
-
-## 11.13 What is not promised
+## 11.11 What is not promised
 
 Deterministic cleanup has limits, and they are worth knowing.
 
@@ -5492,7 +5087,7 @@ Deterministic cleanup has limits, and they are worth knowing.
 - **A `destroy` cannot be retried.** It runs at most once. If it fails, the
   failure is reported and the identity is considered released.
 
-## 11.14 What this design costs
+## 11.12 What this design costs
 
 - **Ownership is checked at run time, not at compile time.** Rust rejects a
   program that would release a value twice or use it after release. Okkama
@@ -5500,9 +5095,6 @@ Deterministic cleanup has limits, and they are worth knowing.
   but a program can still use a closed resource. The `Closing` objects of
   the standard library answer that with a catchable `already_closed`
   failure, not with undefined behaviour.
-- **Non-plain values cost a walk.** Small since #9, but not zero, and
-  per-declaration plainness makes more values non-plain than strictly need
-  to be (#268).
 - **Async destroy constrains the owner.** A synchronous library cannot own
   a resource whose release must wait. It has to borrow one or become
   async.
@@ -5925,85 +5517,7 @@ rejected: `Map key type Tagged cannot be a key: field "tags" is @string`.
 Objects that should compare by something else, such as a business key,
 expose an action for it, and the map keys on that action's result instead.
 
-## 12.10 What a constructor compiles to
-
-The compiler turns each constructor into an IR function marked `[ctor]`.
-`okkama ir` prints them. For a `Point` with a checked full constructor and
-a shorthand:
-
-```okkama
-object Point {
-    has x is int;
-    has y is int = 0;
-
-    Point(x is int, y is int) {
-        self.x = x;
-        self.y = y;
-        confirm x >= 0 else throw InvalidPoint.negative(x);
-    }
-    Point(:x);
-
-    sum() is int { x + y; }
-}
-```
-
-the two constructors come out as follows:
-
-```text
-func @Point.new#0(%0: int, %1: int) -> Point [ctor Point] {
-^b0:
-    %2: int = call @Point.default.y()
-    %3: int = const 0
-    %4: bool = int.ge %0, %3
-    cond %4, ^b1, ^b2
-^b1:
-    %5: Point = obj.new Point { x: %0, y: %1 }
-    ret %5
-^b2:
-    %6: int = const 0
-    %7: array<int> = array.new [%0]
-    %8: InvalidPoint = call @InvalidPoint.new(%6, %7)
-    throw %8
-}
-func @Point.new#1(%0: int) -> Point [ctor Point] {
-^b0:
-    %1: int = call @Point.default.y()
-    %2: Point = obj.new Point { x: %0, y: %1 }
-    ret %2
-}
-```
-
-Four things are visible here.
-
-- **Overloads are separate functions.** `new#0` and `new#1` are the two
-  constructors. The overload was chosen at compile time, so a call site
-  names one of them directly: `call @Point.new#0(%1, %2)`.
-- **A field bind is not a store.** `self.x = x` emits no instruction. The
-  compiler keeps the bound value in a register, and the object is made by
-  one `obj.new` with every field at once. That is how "each field is bound
-  once" is enforced cheaply: there is no half-filled object to write into.
-- **The object exists only after the checks.** `obj.new` sits in the branch
-  where `confirm` held. On the other branch there is no `Point` at all, only
-  the `InvalidPoint` being thrown. "No `Cash` is ever made" (§12.6) is meant
-  literally.
-- **Defaults are functions.** `@Point.default.y` is called on each
-  construction, before the body, as §12.2 says. The full constructor calls it
-  too, although its body binds `y` itself.
-
-Reading a field is `obj.get %0, x`. The action `sum` is a function that takes
-the object as its first parameter:
-
-```text
-func @Point.sum(%0: Point) -> int [method Point] {
-^b0:
-    %1: int = obj.get %0, x
-    %2: int = obj.get %0, y
-    %3: int = int.add %1, %2
-    ret %3
-}
-```
-
-## 12.11 Handing `self` out of a constructor
+## 12.10 Handing `self` out of a constructor
 
 A constructor cannot call its own actions. `self.initials()` inside the
 constructor is rejected, even after the fields that `initials` reads are
@@ -6085,34 +5599,13 @@ Output:
 oak has a leaf of oak
 ```
 
-`Leaf(up: self)` receives a `Tree` whose `leaf` field is not bound yet. The
-compiler handles this with a second form of construction. When `self` is
-used as a value, the object is created at that point, with the unbound
-fields left undefined. Each later bind becomes an `obj.init` of the same
-object:
-
-```text
-func @Tree.new#0(%0: str) -> Tree [ctor Tree] {
-^b0:
-    %1: int = const 0
-    %2: $variant_Maybe_2 = undef
-    %3: Tree = obj.new Tree { name: %0, leaf: %2 }
-    %4: Leaf = call @Leaf.new#0(%3)
-    %5: array<Leaf> = array.new [%4]
-    %6: $variant_Maybe_2 = call @$variant_Maybe_2.new(%1, %5)
-    obj.init %3, leaf, %6
-    ret %3
-}
-```
-
 The collaborator holds an unfinished object, and the rule from the start of
 this section follows it there. The specification forbids calling *any*
 action on a receiver whose construction is pending, "through aliases, role
 references, bound actions and collaborators", and requires the run time to
 reject such a call before evaluating its arguments. `Leaf` above only
 stores `up`; calling `up.describe()` in `Leaf`'s constructor would break
-the rule. The compiler catches the direct `self.` call, and every engine
-catches the rest at run time:
+the rule. The compiler catches the direct `self.` call, and indirect calls are rejected at run time:
 
 ```okkama
 module bible/escape_call v1.0.0;
@@ -6158,19 +5651,9 @@ The compiler answers:
 RuntimeError: Action "greeted" on object "Tree" was called before its construction completed
 ```
 
-The call fails before `Echo().said("argument")` is evaluated, as the
-specification requires, and the same holds through a role or a bound action.
-Until 0.4.1 there was no such check: a call that read a field not yet bound
-failed differently on each engine, and on Sparrow it crashed the process
-(#271). If a constructor fails after `self` escaped, the escaped object
-never completes, and every later call on it is rejected the same way.
+The call fails before `Echo().said("argument")` is evaluated, also through a role or bound action. If a constructor fails after `self` escaped, the object never completes and every later call on it is rejected.
 
-The first `self` may sit anywhere in a statement: inside a `map`,
-`filter` or `reduce` block, in a nested block or in one branch of an `if`.
-The object is built once, just before the constructor statement that holds
-that first use, so every leaf made in a loop points at the same object.
-Until 0.4.2 such a constructor crashed the compiler, and the workaround was
-to name `self` first with `let me = self;` (#279).
+The first use of `self` may occur inside a functional block, a nested block or a conditional branch. Every collaborator receives the same object identity, including collaborators created in a loop.
 
 The problem is old. Java lets `this` escape from a constructor and leaves
 the consequences to the programmer. A non-null field of an object under
@@ -6181,59 +5664,7 @@ which may still be "free", with few annotations [[Summers 2011](#ref-summers2011
 takes the cheaper road: one static rule for `self`, and a run-time check
 for the indirect cases.
 
-## 12.12 How the engines store an object
-
-The three engines keep the same object in three different shapes. A
-program cannot tell them apart; the costs differ.
-
-**The IR engine** (`okkama-runtime-core`) keeps an object as a
-reference-counted Rust struct:
-
-- the number of its declaration;
-- a vector of field values;
-- a serial number, the identity's place in creation order;
-- an owner cell, the region that will destroy it (Chapter 11);
-- an optional side part, allocated only when needed.
-
-The side part holds fields bound by `obj.init` and the run-time state of
-std objects with built-in actions, such as channels. An object whose
-constructor hands out `self` has one more field than it declares: a hidden
-`$pending`, left unbound until the constructor returns. The check of §12.11
-reads it with `obj.pending`. Objects whose constructor never hands out
-`self` have neither the field nor the check. The field vector is
-never written after `obj.new`. An `undef` field bound later is looked up in
-the side part. Most objects never allocate one.
-
-**Sparrow** keeps an object in its own non-moving heap. The object
-is one header word followed by one 8-byte word per field. The header holds
-the kind (`OBJECT`), a mark bit for the collector, a few flags, and the
-object's descriptor number in its upper 32 bits. Each field word has a
-representation fixed by the descriptor:
-
-- `Int`: a tagged small integer, or a pointer to a big one;
-- `Raw`: the bits of a float, `bool`, byte or char;
-- `Ref`: a pointer to another heap cell.
-
-The collector follows `Ref` words and the `Int` words that point to big
-integers; it never looks inside `Raw` words.
-`Point(3, 4)` is three words, 24 bytes, with both integers stored inline.
-Small cells come from per-size free lists in 64 KiB pages: 2, 3, 4, 5, 6,
-8 … 128 words. Machine code produced by the JIT can pop a cell from its
-list without calling into the runtime. A field read is one load at
-`object + 8 + 8 × index`.
-
-**The JVM backend** makes every object a `final` class that extends the
-runtime's `okkama.rt.Obj`. `Obj` holds the serial number, the owning region
-and the slot for built-in state. Each role the object plays becomes a Java
-interface it implements. Fields become instance fields. They are not
-`final` in the class file, because `obj.init` must still be able to bind
-them after an early `self`. The language guarantees immutability; the class
-file does not. The class gets generated `equals` and `hashCode`, field by
-field and consistent with each other, so the runtime's Java collections
-see the same structural equality as the program. The JIT of the JVM then
-treats the object like any other small Java object.
-
-## 12.13 Objects elsewhere
+## 12.11 Objects elsewhere
 
 Most languages that took immutability seriously added a shorthand for "an
 object that is its fields". Comparing them shows what Okkama chose to
@@ -6263,7 +5694,7 @@ and its fields are nobody else's business. Bloch's advice for Java,
 "minimize mutability" and "favor composition over inheritance", needs no
 discipline here: the language allows nothing else [[Bloch 2018](#ref-bloch2018)].
 
-## 12.14 What this design costs
+## 12.12 What this design costs
 
 - **More objects.** Without free functions, a small computation that would
   be a function elsewhere becomes an object with one action, or an action
@@ -6523,7 +5954,7 @@ The rules are short, and they never guess:
 6. Overloads of one name and arity may declare different results when
    their parameter types differ. A call gets the result of the overload it
    selects: `minus(duration is Duration) is Instant` and
-   `minus(other is Instant) is Duration` sit side by side (§14.8).
+   `minus(other is Instant) is Duration` sit side by side (§14.7).
 
 Rule 4 makes `(int, any)` and `(any, int)` ambiguous for a call with two
 integers. Each is better in one position and worse in the other:
@@ -6554,12 +5985,7 @@ fix is visible: convert one argument, or narrow one overload. Until 0.4.2
 it named neither (#273). The no-match message lists the types too:
 `No action "joined" on object "Pairing" accepts (string, string)`.
 
-Overloading is resolved at compile time from static types. A value typed
-`any` is not narrowed back to what it holds when an overload is chosen.
-The IR shows the result: each overload is its own function, `@Greeter.describe#0`,
-`#1`, `#2`, and a call names one of them directly. Okkama has no dynamic
-dispatch on argument types (multiple dispatch). Dispatch on the receiver
-happens only through roles (Chapter 14).
+Overloading is resolved before execution from static types. A value typed `any` is not narrowed to its contents to choose an overload. Okkama has no dispatch on argument types at run time; dispatch on the receiver happens through roles (Chapter 14).
 
 ## 13.4 Variadic actions
 
@@ -6664,25 +6090,7 @@ The compiler answers:
 
 Two details matter when a body stages several fields.
 
-**Reads see the receiver, not the staged values.** After `^items = items + 1;`
-the name `items` still means the receiver's field. The compiled code makes
-this plain: every read is `obj.get` on the receiver, and the staged values
-wait in registers.
-
-```text
-func @Tab.ordered(%0: Tab, %1: int) -> ^Tab [successor Tab] {
-    …
-^b2:
-    %7: int = obj.get %0, items
-    %8: int = const 1
-    %9: int = int.add %7, %8
-    %10: int = obj.get %0, total
-    %11: int = int.add %10, %1
-    %12: Tab = obj.next %0 { items: %9, total: %11 }
-    ret %12
-    …
-}
-```
+**Reads see the receiver, not the staged values.** After `^items = items + 1;`, the name `items` still means the receiver’s original field.
 
 A successor that stages `^count = count + 1; ^twice = count * 2;` sets
 `twice` from the *old* count. The order of the staging statements does not
@@ -6691,9 +6099,6 @@ change what the reads see.
 **The last stage wins.** `^count = 10; ^count = 20;` makes a successor with
 `count` 20. Each staging statement replaces the value staged before it;
 there is no error.
-
-`obj.next` is the IR instruction for "copy with these fields replaced".
-`Tab.closed` compiles to two instructions, a constant and one `obj.next`.
 
 ## 13.6 The result must be used
 
@@ -6995,15 +6400,7 @@ the `Atomic` changes.
 
 ## 13.12 What a successor costs
 
-A successor is a shallow copy. `obj.next` allocates an object of the same
-size and copies every field. Fields that hold other objects copy the
-reference, not the object. On Sparrow the JIT unrolls the copy
-into one store per word, the header included. Unchanged words are loaded
-from the receiver; staged words come straight from registers. For `Tab`,
-with four fields, `ordered` is an allocation, three loads and five
-stores. On the IR engine it is a new vector of
-field values. On the JVM it is a constructor call with the old fields and
-the new ones.
+A successor keeps unchanged fields and replaces the fields named by the transition. Objects held in unchanged fields retain their identities; a transition does not duplicate everything the receiver reaches.
 
 So the cost of a transition is proportional to the number of fields of the
 object being copied, not to the size of everything it reaches. A change
@@ -7015,16 +6412,8 @@ the new version shares every untouched branch with the old one
 
 Two consequences for design:
 
-- **A wide object makes every transition expensive.** An object with
-  thirty fields copies thirty words for each change to one of them.
-  Grouping fields that change together into a part keeps transitions small,
-  and that grouping is usually also a better model.
-- **A long loop of successors allocates once per step.** For thousands of
-  steps that is cheap. The allocation fast path on Sparrow is a free-list
-  pop, and a successor replaced on the next step is garbage at once: the
-  collector never marks it. For a
-  hot inner loop over a large count, `reduce` over a range or a `Cell` of a
-  scalar avoids the objects entirely.
+- **Wide objects make transitions more expensive.** Group fields that change together into a part to keep transitions small.
+- **A long successor loop creates a value per step.** For a hot loop over a large count, consider `reduce` over a range or a scalar `Cell`.
 
 ## 13.13 A value computed once: `once let`
 
@@ -7040,27 +6429,13 @@ hidden values() is @int {
 }
 ```
 
-The first run computes the value and stores it in a hidden slot of `self`;
-every later run reads the slot (#491). Several actions share one result by
-calling one hidden action. The compiler keeps the stored value honest:
+The first successful evaluation is remembered for that object; later calls reuse it (#491). Several actions can share a result by calling one hidden action. The following restrictions apply:
 
-- the value reads only fields, `self`, constants and earlier `once let`s,
-  never a parameter, so it cannot belong to one call;
-- it reaches no effect: no clock, file, network, process or randomness, no
-  `Cell`, `async` object, `await` or `spawn`, followed through the actions of
-  concrete objects. A call through a role is trusted, as the object's
-  contract with its input;
-- it holds no resource. A function value or a role value counts as one only
-  if it can hold one in this program: a function type when some closure of
-  that type captures a resource, a role when some object that does it has a
-  `destroy`. The compiler decides this over the whole program, after every
-  specialization exists, so a generic library may keep a closure in a
-  `once let` for every caller that passes a plain one (issue #520).
+- A `once let` reads fields, `self`, constants and earlier `once let`s, never a call parameter.
+- It must be free of effects: no clock, file, network, process, randomness, `Cell`, async object, `await` or `spawn`. Calls through roles rely on their contracts.
+- Its value must not retain a resource. A closure or role value is allowed only when it cannot retain a resource in this program (issue #520).
 
-The slot is not part of the value. `==`, map keys and `Dumper` leave it out,
-so an object is equal to itself before and after its first answer. A
-successor starts with empty slots, because its fields changed. A value that
-throws leaves the slot empty for the next call.
+The remembered result does not participate in `==`, map keys or `Dumper`. A successor computes its own result on first use. If evaluation throws, the next call tries again.
 
 `once let` is the reason a constructor in the standard library never does
 work: an object binds its input when it is made, and computes from it on
@@ -7771,43 +7146,7 @@ Okkama has no delegation shorthand ("implement `Pricing` by forwarding to
 Keeping roles small keeps it short: a role with one or two actions is the
 common case in the standard library.
 
-## 14.7 How a role call runs
-
-A role boundary and a role call are explicit in the IR:
-
-```text
-%19: Bottle = call @Bottle.new#0(%18)
-%20: Package = role.wrap %19
-%21: Package = call.role %20, Package.opened()
-%22: str = call.role %21, Package.label()
-```
-
-`role.wrap` marks the boundary where a `Bottle` becomes a `Package`.
-`call.role` calls slot `opened` of `Package` on whatever object is behind
-the reference. Each object's declaration lists, for every role it does, the
-function that fills each slot:
-`does Package { label = @Bottle.label, opened = @Bottle.opened }`.
-
-The engines differ in how they find that function:
-
-- **The IR engine** reads the receiver's declaration and looks up its
-  witness for the role on each call.
-- **Sparrow** compiles `role.wrap` to nothing: a role reference is
-  the same pointer. `call.role` loads the object's header, shifts out the
-  descriptor number, and indexes a table built once per role slot. The
-  table holds one function per object type. Then it calls that function.
-  Compared with a direct call, that is a few loads and an indirect call.
-- **The JVM backend** turns each role into a Java interface. The classes of
-  objects that do it implement the interface, `role.wrap` is again a no-op,
-  and `call.role` is an `invokeinterface`. The JVM's inline caches and
-  speculative inlining then treat a call site that sees one or two object
-  types like a direct call.
-
-In none of them does the restriction cost anything at run time. It is
-checked when the program is compiled and verified, and the reference is
-the plain object.
-
-## 14.8 Operators are roles
+## 14.7 Operators are roles
 
 Arithmetic on objects goes through roles as well. The standard module
 `operators` declares one role per operator (#215). The first type parameter
@@ -7862,13 +7201,7 @@ Output:
 ordered
 ```
 
-With an object on the left, `a + b` is the call `a.plus(b)` and nothing
-more. The compiler rewrites the operator into that call and checks it like
-any other call: the right operand gets no conversion, and the overload it
-selects must be a role instance the type declares. The engines never see an
-operator on an object. The orderings `<`, `<=`, `>` and `>=` use the role
-that already existed for them, `compare.Comparing<T>`: `a < b` is
-`a.order(b) == Order.less`. `==` stays structural (Chapter 12).
+With an object on the left, `a + b` means `a.plus(b)` through its declared role. The right operand gets no implicit conversion. Ordering uses `compare.Comparing<T>`: `a < b` means `a.order(b) == Order.less`. `==` stays structural (Chapter 12).
 
 The roles are nominal, like every role (§14.2). An action named `plus` does
 not give an object `+`:
@@ -7916,7 +7249,7 @@ nothing in a name says that `plus` means addition, which is the argument
 of §14.2. One class for all arithmetic was ruled out because a contract
 should not ask for actions the object cannot keep.
 
-## 14.9 Roles elsewhere
+## 14.8 Roles elsewhere
 
 | | Okkama role | Java interface | Go interface | Rust trait |
 |---|---|---|---|---|
@@ -7936,7 +7269,7 @@ the table has a way back from the contract to the concrete type. Okkama
 has none, and that is what makes a role reference a capability rather than
 a type annotation.
 
-## 14.10 What this design costs
+## 14.9 What this design costs
 
 - **Forwarding code.** Decorators repeat every action of the role. No
   delegation syntax shortens it (§14.6).
@@ -7951,9 +7284,6 @@ a type annotation.
   not, because `int` cannot be given a role. Python asks the right operand
   through `__rmul__`, and Rust allows `impl Mul<Money> for i64` in Money's
   crate. Okkama has neither (no retroactive conformance, above).
-- **One dispatch per call.** A role call is an indirect call. In hot loops
-  over a single type, holding the concrete type avoids it; the JVM and its
-  inline caches recover most of the difference.
 
 In return:
 
@@ -8092,7 +7422,7 @@ PASS
   them. Test-only code cannot affect a production program, and it costs
   nothing there.
 
-Tests run in the same process, on the engine chosen with `--engine`.
+Tests run in the same process.
 `okkama run -t --filter TEXT` runs only the tests whose names contain
 `TEXT`; with several `--filter`s, those that contain any of them. A test
 may stand anywhere among an object's members, between hidden actions too;
@@ -8388,7 +7718,7 @@ exit 1
 - `IntegerGeneration(-100000, 100001)` produces integers from −100000 up
   to, but not including, 100001.
 - `42` is the seed of the property's own PCG random stream. The same seed
-  produces the same inputs on every engine and every run.
+  produces the same inputs and every run.
 - `200` cases, with a size that grows from 0 to `1000` across them, so the
   early cases are small.
 - When a case fails, up to `64` reductions are tried, and the smallest
@@ -8465,7 +7795,7 @@ In return:
 - every role has a double, maintained with the role and checked by the
   compiler;
 - a failed property comes back as a seed and a minimal input that
-  reproduce it on any engine.
+  reproduce it.
 
 # Chapter 16. Enums and pattern matching
 
@@ -8610,9 +7940,7 @@ goes for text. The word printed for a case is a presentation decision. It
 depends on the audience and the language. A `string()` on the enum would pick
 one silently. A `?? !!` or a `match` makes the choice where it is used.
 
-The order of a declaration is not entirely invisible. A map keeps its keys
-sorted, and enum keys sort by their position in the declaration, on every
-engine:
+Declaration order is visible in maps: enum keys sort by their position in the declaration:
 
 ```okkama
 enum Unit = (celsius, kelvin, fahrenheit);
@@ -8942,144 +8270,7 @@ its own methods, which a `switch` can also take apart [[Bierman 2021](#ref-jep40
 Okkama has no single construct for this, but the effect is reachable: a
 variant enum whose payloads are objects.
 
-## 16.6 How enums run
-
-The two kinds of enum compile differently, and the difference shows in what
-they cost.
-
-A **payload-free enum** is a value of its own category in OIR. A case is
-`enum.case`, and comparison is `enum.eq`:
-
-```text
-func @Probe.code(%0: Probe, %1: Status) -> int [method Probe] {
-^b0:
-    %2: Status = enum.case Status.ready
-    %3: bool = enum.eq %1, %2
-    cond %3, ^b1, ^b2
-^b1:
-    %4: int = const 1
-    br ^b3(%4)
-^b2:
-    %5: int = const 2
-    br ^b3(%5)
-^b3(%6: int):
-    ret %6
-}
-```
-
-The source was `match s { case Status.ready { 1; } case Status.failed,
-Status.done { 2; } }`. The last case is not tested at all: the match is
-exhaustive, so whatever is not `ready` must be `failed` or `done`. On
-Sparrow an enum value is an immediate 64-bit word, with the enum's number
-in the high half and the case's in the low half. Building one allocates
-nothing, and comparing two compares two words. On the JVM each case is a
-singleton object of the runtime class `okkama.rt.Case`, held in a static field
-of a class generated for the enum. Equality is identity, and map keys sort by
-the case number.
-
-A **variant** is a type of its own in OIR, and each of its cases is an
-object. For
-
-```okkama
-enum Reading = (empty, value(item is int), pair(left is int, right is int));
-```
-
-OIR declares
-
-```text
-variant $variant_Reading_0 = (empty: $variant_Reading_0.empty, value: $variant_Reading_0.value, pair: $variant_Reading_0.pair)
-
-object $variant_Reading_0.empty {
-}
-
-object $variant_Reading_0.value {
-    field item: int
-}
-
-object $variant_Reading_0.pair {
-    field left: int
-    field right: int
-}
-```
-
-A case holds only its own payload, so `Reading.pair(1, 2)` is one allocation
-with two fields. Four instructions work on variants: `variant.new` builds a
-case, `variant.tag` gives its number, `variant.get` reads a field of one
-case, and `variant.of` views a case object as the whole variant (the
-generated `text()` of an error enum uses it). A `match` that adds up a
-`Reading` compiles to
-
-```text
-func @Probe.sum(%0: Probe, %1: $variant_Reading_0) -> int [method Probe] {
-^b0:
-    %2: int = variant.tag %1
-    %3: int = const 0
-    %4: bool = int.eq %2, %3
-    cond %4, ^b1, ^b2
-^b1:
-    %5: int = const 0
-    br ^b5(%5)
-^b2:
-    %6: int = const 1
-    %7: bool = int.eq %2, %6
-    cond %7, ^b3, ^b4
-^b3:
-    %8: int = variant.get %1, 1.0
-    br ^b5(%8)
-^b4:
-    %9: int = variant.get %1, 2.0
-    %10: int = variant.get %1, 2.1
-    %11: int = int.add %9, %10
-    br ^b5(%11)
-^b5(%12: int):
-    ret %12
-}
-```
-
-`variant.get` names the case it expects (`2.1` is the second field of case
-2) and traps with "Variant payload of an inactive case" when another case is
-active. After a `match` has tested the tag the trap cannot fire, and the
-check is one comparison.
-
-Each engine keeps a case as one of its own objects. On Sparrow the
-cases of a variant get consecutive object descriptors, so `variant.tag` is
-the descriptor in the object's header minus that of the first case: a load,
-a shift and a subtraction, with no field for the tag. The IR engine finds
-the case from the object's declaration. The JVM generates an abstract class
-for the variant, which holds the tag, and a subclass for each case with its
-payload in ordinary fields.
-
-Until 0.4.2 a variant was a single generated object with a slot for every
-field of every case. Each slot was a one-element array, empty when its case
-was not active, so `Reading.pair(1, 2)` built three arrays and an object, and
-every read went through an accessor that checked the tag (issue #290). Below
-is a loop of ten million steps (one million on the IR engine) on an Apple M2
-Max. Each step builds one value and takes it apart: a case of a payload-free
-enum, an object with two fields, a `value`/`pair` of `Reading`, or a case of
-`Wide`, a variant of thirteen cases with two fields each. The times are the
-wall time of `okkama run`, compilation included, best of three. The JVM runs
-a jar built beforehand, so its time includes the start of the JVM (about
-0.4 s) but not the build.
-
-| | payload-free enum | object with two fields | `Reading` | `Wide` |
-|---|---:|---:|---:|---:|
-| Sparrow, before #290 | 0.44 s | 0.73 s | 2.41 s | 12.64 s |
-| Sparrow, 0.4.2 | 0.41 s | 0.73 s | 0.69 s | 0.87 s |
-| IR engine, before #290 | 1.71 s | 2.25 s | 5.59 s | 12.50 s |
-| IR engine, 0.4.2 | 1.59 s | 2.35 s | 2.52 s | 2.53 s |
-| JVM, before #290 | 0.40 s | 0.40 s | 0.74 s | 0.98 s |
-| JVM, 0.4.2 | 0.41 s | 0.40 s | 0.52 s | 0.57 s |
-
-A variant now costs about what an object with the same data costs, on every
-engine. On Sparrow it is even a little cheaper, because the loop over
-objects also calls `sum()`. The old cost grew with the fields of all cases
-together: `Wide` built 26 arrays for every value, and ten million values on
-Sparrow allocated 260 million arrays and 117 MB. Now they allocate no array
-and 22 MB. Nothing a program can observe changed. Equality, `text()`,
-catching an error enum and the report of an uncaught one behave as before,
-and the conformance suite kept its expected outputs.
-
-## 16.7 Enums elsewhere
+## 16.6 Enums elsewhere
 
 | | Okkama | C | Pascal | Java | Rust | Haskell | Go |
 |---|---|---|---|---|---|---|---|
@@ -9096,7 +8287,7 @@ out what those languages build on top of it: nested patterns, recursion,
 derived orderings and methods. The first two are missing for now. The last
 two are left out on purpose, for the reasons in §16.1.
 
-## 16.8 Limits
+## 16.7 Limits
 
 - **No recursive variants.** A case cannot carry its own enum, directly or
   indirectly:
@@ -9125,7 +8316,7 @@ The compiler answers:
 - **Redundant cases pass silently.** A repeated payload-free case, a repeated
   literal, or an `else` that can never run is accepted (issue #286).
 
-## 16.9 What this design costs
+## 16.8 What this design costs
 
 - **Text and order are written out.** Printing a case or sorting by
   priority takes a `match` or a `?? !!`. A language with `toString` and
@@ -9147,8 +8338,6 @@ In return:
 - a forgotten case is a compile error, not a run-time surprise;
 - a value cannot be read through the wrong case;
 - equality is exact, and two enums can never be compared by accident;
-- a payload-free enum costs no allocation on Sparrow and a pointer
-  comparison on the JVM.
 
 # Chapter 17. Generics
 
@@ -9221,13 +8410,9 @@ apple
 - No call names a type. `Pair(key: "answer", value: 42)` is a
   `Pair<string, int>` and `Least(3, 9, 1, 4)` is a `Least<int>`: the compiler
   works out the arguments from the values.
-- `Least(2.5, -0.5)` is a third specialization, `Least<float>`. Each one is
-  compiled separately, so none of them pays for the others.
+- `Least(2.5, -0.5)` is a third specialization, `Least<float>`. The type arguments distinguish these types.
 
-This chapter covers what can be generic, the one rule that inference follows,
-bounds, parameters used as map keys, and why a specialization is a type of its
-own. It then shows what the compiler does with generic code and compares the
-result with Java, C#, Go, Rust, Haskell and OCaml.
+This chapter covers what can be generic, inference, bounds, map-key parameters and specialization identity, then compares these language rules with Java, C#, Go, Rust, Haskell and OCaml.
 
 ## 17.1 Parameters on objects, roles and enums
 
@@ -9285,11 +8470,7 @@ that knows its inputs and computes its answer on request, the style that
 *Elegant Objects* recommends in place of static methods and utility classes
 [[Bugayenko 2016](#ref-bugayenko2016)].
 
-The cost is an allocation per call, since `Least(3, 9, 1, 4)` builds an object
-before `value()` reads it: one small heap object, cheap next to the work of
-most algorithms. The gain is that inference has one home. Every generic
-argument in Okkama is inferred at a constructor call, by one procedure, with
-one set of error messages.
+`Least(3, 9, 1, 4)` constructs an object before `value()` reads it, so the algorithm pays for constructing that value. Inference has one home: the constructor call, with one set of error messages.
 
 ### Where the idea comes from
 
@@ -9501,7 +8682,7 @@ array declared `@Echo<string>` each element is expected to be an
 `Echo<string>`, and `Same<T> does Echo<T>` matches that only with
 `T = string`. A builtin value can be evidence for a role parameter too:
 arrays are `Iterating<T>` and `Sequencing<T>`, so `Sorted([5, 3, 8])` in
-Section 17.10 gets `T = int` from the array's elements.
+Section 17.9 gets `T = int` from the array's elements.
 
 When one equation gives a role and another gives an object that implements
 it, the role stays. A `List<Json>` that has a `JsonBool` prepended is still a
@@ -9613,7 +8794,7 @@ What bounds cannot do is as deliberate as what they can:
 - **No category bounds.** There is no `T: number`. Numbers in Okkama do not
   share a supertype, and arithmetic between categories needs explicit
   conversion. Generic arithmetic is written with the operator roles of
-  Section 14.8, `Adding<T, R>` and its siblings, which an object implements per
+  Section 14.7, `Adding<T, R>` and its siblings, which an object implements per
   operand type.
 - **No bounds on role parameters** yet, no defaults, no variance annotations.
 
@@ -9650,14 +8831,7 @@ The compiler answers:
 17-key-rejected.ok:15:31: semantic error: Generic parameter "T" for object "Tally" is a map key: Map key type @int is not a scalar key type
 ```
 
-`Tally<string>` is fine. `Tally<@int>` would need arrays as keys, and the
-compiler rejects it at the place that asks for it, naming the parameter that
-made it a key. The property propagates: in `Wrap<U> { has inner is
-Tally<U>; }`, `U` is a key parameter too, because it becomes `Tally`'s `T`. The
-check runs after every body is typed, so it sees uses deep inside actions. An
-engine that met a non-key under a key parameter anyway, through a path the
-analysis missed, would fail at run time rather than compare keys by identity
-(#242).
+`Tally<string>` is valid; `Tally<@int>` is rejected because arrays cannot be keys. In `Wrap<U> { has inner is Tally<U>; }`, `U` must satisfy the same key rule. Violating the key rule is never a request to compare keys by identity (#242).
 
 ## 17.6 A specialization is a type
 
@@ -9711,171 +8885,7 @@ Every generic error comes from one of a few checks, and its message says which:
 | `A type is not a value` | an attempt to specialize at the call, `Box<int>(…)` | move the type to the binding |
 | `The program requests a chain of more than 256 generic specializations …` | polymorphic recursion | stop growing the type in the recursive call |
 
-## 17.7 How generics run: one copy per specialization
-
-The compiler turns generic code into ordinary code before any engine sees it.
-Lowering (Chapter 23) walks the program from `main`. Each time it reaches a
-generic declaration with concrete arguments, it requests that specialization:
-a new object type with the parameters substituted, and new copies of the
-actions that are actually called on it. Here is the OIR of a program that uses
-`Box<T>` with two types:
-
-```text
-object Box<int> {
-    field value: int
-}
-
-object Box<string> {
-    field value: str
-}
-
-func @main() -> int [entry] {
-^b0:
-    %0: int = const 7
-    %1: Box<int> = call @Box<int>.new#0(%0)
-    %2: str = const "seven"
-    %3: Box<string> = call @Box<string>.new#0(%2)
-    %4: int = call @Box<int>.get(%1)
-    %5: str = call @Box<string>.get(%3)
-    %6: int = str.len %5
-    %7: int = int.add %4, %6
-    ret %7
-}
-
-func @Box<int>.get(%0: Box<int>) -> int [method Box<int>] {
-^b0:
-    %1: int = obj.get %0, value
-    ret %1
-}
-
-func @Box<string>.get(%0: Box<string>) -> str [method Box<string>] {
-^b0:
-    %1: str = obj.get %0, value
-    ret %1
-}
-```
-
-No `T` survives. `Box<int>.get` is exactly the function that a hand-written
-`IntBox.get` would be. The IR engine, Sparrow and the JVM back end
-receive only concrete objects and concrete functions. On the JVM each
-specialization becomes its own class (`box$Box$int$.class` and
-`box$Box$string$.class` in the jar) whose field has its exact type, a
-`BigInteger` in one and a `String` in the other, so nothing is cast when it is
-read. This strategy is called *monomorphization*.
-
-### What it costs
-
-The price of monomorphization is code. Every specialization is a copy, and a
-generic object pulls in the specializations of everything it uses. The
-standard library's `Sorted<T: Comparing<T>>` shows the scale: a program that
-sorts one array and reads its first element, then the same program with arrays
-of more element types:
-
-| Element types sorted | OIR functions | OIR objects | OIR lines |
-|---|---:|---:|---:|
-| `int` | 46 | 12 | 738 |
-| `int`, `string` | 69 | 17 | 1063 |
-| `int`, `string`, `float` | 92 | 22 | 1389 |
-| `int`, `string`, `float`, `byte` | 115 | 27 | 1714 |
-
-Each new element type adds 23 functions and 5 objects: `Sorted` itself, its
-cursor, the bulk ordering that sorts it, and the adapter and cursor through
-which a plain array becomes an `Iterating<T>`. The
-growth is linear and bounded by what the program uses, because lowering
-requests only reachable code. In practice the numbers are small. The
-benchmark application `10-app` has one generic specialization, `Atomic<…>`,
-among 22 objects and 85 functions, and the INI benchmark has 14 among 61
-objects and 206 functions.
-
-Monomorphization has one hard limit. A generic action that constructs a
-*larger* specialization of its own object would need infinitely many copies:
-
-```okkama
-module bible/grow v1.0.0;
-
-object Box<T> {
-    has value is T;
-    Box(:value);
-    get() is T { value; }
-}
-
-object Grow<T> {
-    has value is T;
-    Grow(:value);
-    deeper(depth is int) is int {
-        if depth == 0 { return 0; }
-        Grow(value: Box(value: value)).deeper(depth - 1) + 1;
-    }
-}
-
-main() is int {
-    Grow(value: 1).deeper(3);
-}
-```
-
-The compiler answers:
-
-```text
-17-grow-rejected.ok:12:5: semantic error: The program requests a chain of more than 256 generic specializations, each asking for the next: Box<Box<Box<Box<Box<Box<Box<Box<Box<Box<…>>>>>>>>>>>>>>>>>>>>>>>>.new#0 <- Grow<Box<Box<Box<Box<Box<Box<Box<Box<Box…>>>>>>>>>>>>>>>>>>>>>>>.deeper <- Grow<Box<Box<Box<Box<Box<Box<Box<Box<Box…>>>>>>>>>>>>>>>>>>>>>>>.deeper <- Grow<Box<Box<Box<Box<Box<Box<Box<Box<Box…>>>>>>>>>>>>>>>>>>>>>>>.deeper <- Grow<Box<Box<Box<Box<Box<Box<Box<Box<Box…>>>>>>>>>>>>>>>>>>>>>>>.deeper <- Grow<Box<Box<Box<Box<Box<Box<Box<Box<Box…>>>>>>>>>>>>>>>>>>>>>>>.deeper <- …
-```
-
-`Grow<int>.deeper` asks for `Grow<Box<int>>.deeper`, which asks for
-`Grow<Box<Box<int>>>.deeper`, and so on. The depth of this *polymorphic
-recursion* depends on a run-time value, so no finite set of copies covers it.
-Lowering stops at a chain of 256 requests, or at 2^18 specializations in
-total, and names the chain (H-15). Languages that compile generics to one
-shared copy accept such programs; Okkama, like Rust and C++, rejects them.
-The check happens in lowering, and since 0.4.2 `okkama check` lowers the
-program too, so it reports this error like any other (#317).
-
-### The alternatives
-
-Monomorphization is one of four strategies in use.
-
-**Erasure.** Java compiles `List<Integer>` and `List<String>` to one class
-that holds `Object`s, and inserts casts where values come out. The design
-came from GJ, whose stated aim was to add generics without changing the
-virtual machine or breaking existing class files [[Bracha 1998](#ref-bracha1998)]. The cost
-shows in three places. Primitives must be boxed, since there is no
-`List<int>`. A cast can fail at run time when unchecked conversions were
-allowed at compile time. And `T` does not exist at run time, so `new T()` and
-`instanceof List<String>` are impossible. Java's wildcards and inference later
-grew complex enough that subtyping between generic types became undecidable
-[[Grigore 2017](#ref-grigore2017)], and that the combination of wildcards and `null` made the type
-system unsound [[Amin 2016](#ref-amin2016)].
-
-**Reification with run-time specialization.** C# keeps type arguments at run
-time. The .NET runtime shares one compiled copy of a generic method among all
-reference types, and the JIT compiler produces a specialized copy for each
-value type, so a `List<int>` stores unboxed `int`s [[Kennedy 2001](#ref-kennedy2001)]. This is
-monomorphization for the cases where data layout differs and sharing for the
-rest, done lazily by the JIT.
-
-**Dictionaries.** Haskell compiles a function with a class constraint, such
-as `Ord a => [a] -> a`, to a function that takes an extra argument, a
-dictionary of the `Ord` operations for the actual type [[Wadler 1989](#ref-wadlerblott1989)]. One
-copy of the code serves every type, at the price of an indirect call for each
-operation and a uniform boxed representation of values. Go 1.18 mixes the two
-approaches. Types with the same *GC shape* (roughly, the same layout for the
-garbage collector) share one compiled copy, which also receives a dictionary
-for what differs between them [[Scales 2022](#ref-scales2022)]. The formal model behind Go's
-generics, Featherweight Go, gives a translation of generic programs into a
-non-generic core by monomorphization [[Griesemer 2020](#ref-griesemer2020)].
-
-**Monomorphization.** C++ templates make a copy per instantiation
-[[Stroustrup 1994](#ref-stroustrup1994)], and so does Rust for generic functions and types
-[[Klabnik 2023](#ref-klabnik2023)]. Generic code then runs at the speed of hand-written code, and
-the cost is paid in compile time and binary size.
-
-Okkama chose monomorphization because its compiler sees the whole program. A
-package is compiled from source together with its dependencies (Chapter 19),
-so there is no separately compiled generic library that would have to work for
-types it has never seen. Every engine then gets the simplest possible input.
-The IR engine needs no dictionaries, the Sparrow JIT compiles each copy with
-its exact register kinds (an `int` is a tagged word, a `float` the raw bits
-of a double), and the JVM back end needs no casts.
-
-## 17.8 A parameter or a role?
+## 17.7 A parameter or a role?
 
 Roles (Chapter 14) and type parameters both let one piece of code work with
 many types, and a design often has to choose between them. Compare a total of
@@ -9911,27 +8921,7 @@ values through the role's actions, a role-typed field is simpler and admits
 mixtures. If it hands values back, or builds new containers of them, or uses
 them as map keys, a parameter preserves their exact type for the caller.
 
-Monomorphization does not make the parameter version faster at the call. Inside
-`Total<Square>`, `item.area()` is a call through the bound, and lowering
-emits it as one:
-
-```text
-%10: Square = array.get %7, %9
-%11: Shape = role.wrap %10
-%12: int = call.role %11, Shape.area()
-```
-
-`role.wrap` costs nothing on Sparrow and the JVM, and `call.role` is a
-lookup in a table per role slot followed by an indirect call (Section 14.7).
-Measured on a loop of ten million `area()` calls (best of five on an Apple M2
-Max, including compilation), `Total<Square>` and a `Total<Shape>` over a mix
-of squares and strips take the same time: 0.375 s and 0.378 s on Sparrow,
-and 1.21 s and 1.18 s for a million calls on the IR engine. What a
-specialization changes is the data and what flows out: a `Total<Square>`
-tells its caller that it holds squares, and a `Box<float>` keeps its field as
-the raw bits of a double, where a field of type `any` would hold a box.
-
-## 17.9 A worked example: the best N
+## 17.8 A worked example: the best N
 
 A leaderboard, a list of the most expensive orders, the three slowest
 requests: keeping the best `N` items of a stream is the same algorithm for
@@ -10009,8 +8999,7 @@ The pieces of the chapter meet here.
   empty top after the loop. The successor-style value of Chapter 13 needs no
   special form here: the result type is the same specialization, `Top<T>`.
 - **Three specializations.** The program uses `Top<int>`, `Top<string>` and
-  `Top<Bid>`. Each is compiled separately, so the comparison inside
-  `offered` is the builtin integer order in the first, the code-point order of
+  `Top<Bid>`. The comparison inside `offered` follows its element type: the builtin integer order in the first, the code-point order of
   strings in the second, and `Bid.order` in the third.
 
 A role field could not replace the parameter here. `Comparing<T>` takes the
@@ -10019,7 +9008,7 @@ would have to name that type and the object would work for one type only. The
 parameter is what lets one declaration say "items that can be compared with
 each other".
 
-## 17.10 Generics in the standard library
+## 17.9 Generics in the standard library
 
 The standard library is the largest user of generics: 195 generic object
 declarations and 17 generic roles. Most of them fall into four groups.
@@ -10076,17 +9065,17 @@ result. Every element type `T` has to implement `Comparing<T>`, and every key
 type `K` has to implement `Comparing<K>`, and the compiler checks both at the
 call.
 
-## 17.11 Okkama among other languages
+## 17.10 Okkama among other languages
 
-| | What can be generic | How it runs | Bounds | Variance | Type arguments |
-|---|---|---|---|---|---|
-| Java | classes, interfaces, methods | erasure, casts, boxed primitives | `extends`, several with `&` | at the use site, wildcards | inferred for methods, `<>` |
-| C# | classes, interfaces, methods, delegates | reified; shared for references, JIT-specialized for value types | `where`, several | declared on interfaces and delegates | inferred for methods |
-| Go | functions, types | GC-shape stenciling with dictionaries | interfaces with type sets | none | inferred for functions |
-| Rust | functions, types, traits | monomorphization | trait bounds, several | inferred; matters for lifetimes | inferred |
-| Haskell | functions, types, classes | dictionary passing, uniform values | class constraints, several | none (no subtyping) | inferred (Hindley–Milner) |
-| OCaml | functions, types, modules (functors) | uniform values, one copy | through modules and signatures | declared (`+'a`, `-'a`) | inferred (Hindley–Milner) |
-| Okkama | objects, roles, enums | whole-program monomorphization | one role, F-bounded allowed | none | inferred at construction, exact |
+| | What can be generic | Bounds | Variance | Type arguments |
+|---|---|---|---|---|
+| Java | classes, interfaces, methods | `extends`, several with `&` | at the use site, wildcards | inferred for methods, `<>` |
+| C# | classes, interfaces, methods, delegates | `where`, several | declared on interfaces and delegates | inferred for methods |
+| Go | functions, types | interfaces with type sets | none | inferred for functions |
+| Rust | functions, types, traits | trait bounds, several | inferred; matters for lifetimes | inferred |
+| Haskell | functions, types, classes | class constraints, several | none (no subtyping) | inferred (Hindley–Milner) |
+| OCaml | functions, types, modules (functors) | through modules and signatures | declared (`+'a`, `-'a`) | inferred (Hindley–Milner) |
+| Okkama | objects, roles, enums | one role, F-bounded allowed | none | inferred at construction, exact |
 
 Okkama sits at the conservative end on almost every column. It infers less
 than Haskell or OCaml, which find types for whole functions [[Milner 1978](#ref-milner1978)]. It
@@ -10096,7 +9085,7 @@ constructor call, from the values in front of it. A reader can do the same
 inference by looking at the call, and an error message names the two types
 that disagree.
 
-## 17.12 Limits
+## 17.11 Limits
 
 - **No generic actions.** An algorithm generic in its inputs is written as a
   generic object (Section 17.1).
@@ -10107,28 +9096,42 @@ that disagree.
   no higher-kinded parameters.
 - **No call-site specialization.** `Box<int>(…)` is not valid source; the
   specialization comes from the arguments or from a declared target.
-- **Code size grows with specializations.** Each element type of `Sorted`
-  adds 23 functions (Section 17.7).
-- **Polymorphic recursion is rejected,** at compile time on every engine.
-- **Role plainness is per declaration.** One implementation of `Cursor` that
-  holds a resource makes the compiler track every `Cursor<T>` in regions
-  (Chapter 11), not only the instances that can reach one (#268).
+- **Polymorphic recursion requiring unbounded specializations is rejected.**
 
-## 17.13 What this design costs
+```okkama
+module bible/grow v1.0.0;
 
-Exact identity makes some programs longer. Mixed numbers need explicit
-conversions, empty collections need a declared type, and a function over
-`T` becomes an object with a constructor. Whole-program monomorphization makes
-compilation do more work and produces more code for programs that use one
-generic object with many types. It also rules out polymorphic recursion, which
-erased or dictionary-based implementations allow.
+object Box<T> {
+    has value is T;
+    Box(:value);
+    get() is T { value; }
+}
 
-What the design buys is that generic code is not a separate world. After
-inference, a `Least<int>` is checked, lowered and executed as a plain object
-over `int`: no casts, no boxes, no dictionaries, and the same speed on every
-engine as the code a programmer would have written by hand for that one type.
-Inference has one rule that a reader can apply in their head, and when it
-fails the message names the two types that disagree.
+object Grow<T> {
+    has value is T;
+    Grow(:value);
+    deeper(depth is int) is int {
+        if depth == 0 { return 0; }
+        Grow(value: Box(value: value)).deeper(depth - 1) + 1;
+    }
+}
+
+main() is int {
+    Grow(value: 1).deeper(3);
+}
+```
+
+The compiler answers:
+
+```text
+17-grow-rejected.ok:12:5: semantic error: The program requests a chain of more than 256 generic specializations, each asking for the next: Box<Box<Box<Box<Box<Box<Box<Box<Box<Box<…>>>>>>>>>>>>>>>>>>>>>>>>.new#0 <- Grow<Box<Box<Box<Box<Box<Box<Box<Box<Box…>>>>>>>>>>>>>>>>>>>>>>>.deeper <- Grow<Box<Box<Box<Box<Box<Box<Box<Box<Box…>>>>>>>>>>>>>>>>>>>>>>>.deeper <- Grow<Box<Box<Box<Box<Box<Box<Box<Box<Box…>>>>>>>>>>>>>>>>>>>>>>>.deeper <- Grow<Box<Box<Box<Box<Box<Box<Box<Box<Box…>>>>>>>>>>>>>>>>>>>>>>>.deeper <- Grow<Box<Box<Box<Box<Box<Box<Box<Box<Box…>>>>>>>>>>>>>>>>>>>>>>>.deeper <- …
+```
+
+## 17.12 What this design costs
+
+Exact identity makes some programs longer. Mixed numbers need explicit conversions, empty collections need a declared type, and an algorithm over `T` becomes an object with a constructor. Polymorphic recursion that requires an unbounded succession of distinct specializations is rejected.
+
+Generic code follows the ordinary object rules: `Least<int>` works with `int`, and a parameter preserves its exact type. Inference has one rule a reader can apply, and a failed inference names the types that disagree.
 
 # Chapter 18. Anonymous actions and closures
 
@@ -10188,11 +9191,7 @@ Output:
   like any other argument.
 - `Pipeline` stores a list of actions of one type and applies them in order.
 
-This chapter covers how anonymous actions are written and typed, what a
-closure remembers and what it does not, why Okkama's closures are values
-and not variables, how they compare for equality, how they serve as data,
-how the engines run them, where the idea came from, and how they compare
-with lambdas in other languages.
+This chapter covers the syntax and types of anonymous actions, captures, equality, action values as data, resources, failure reports, history and comparisons with other languages.
 
 ## 18.1 Writing an anonymous action
 
@@ -10245,14 +9244,7 @@ The compiler answers:
 
 ### Not the blocks of `map` and `for`
 
-The arrows in `values.map() -> value { … }` and `for values -> value { … }`
-belong to other constructs. Those blocks are not values; they cannot be
-stored or returned, and they run inside the expression that holds them. The
-compiler lowers them to loops in the enclosing function. An anonymous action,
-by contrast, is a value with its own frame. That difference shows in control
-flow: `next` and `last` in a `for` block continue or leave the loop, but
-inside an anonymous action they have no loop to act on, even when the action
-is created inside one:
+The arrows in `map` and `for` belong to other constructs. Their blocks cannot be stored or returned. An anonymous action is a value with its own call boundary: `next` and `last` cannot leave a surrounding loop from inside it, even when it is created there:
 
 ```okkama
 module bible/escape v1.0.0;
@@ -10588,14 +9580,7 @@ object that holds an action in a field compares that field by identity too:
 two objects holding the same closure are equal, two holding different but
 identical-looking closures are not.
 
-Futures follow the same rule, for the same reason: there is no useful
-structural equality to offer. Whether two functions give the same result for
-every argument cannot be decided in general, by Rice's theorem [[Rice 1953](#ref-rice1953)].
-Comparing their code and captured values instead would make equality depend
-on how an engine compiles an action, which Okkama does not let into a
-program's behaviour. Identity is cheap, predictable and the same on every
-engine. An action value is not a map key either: keys are scalars and value
-objects (Chapter 8).
+Futures follow the same identity rule. Whether two functions return the same result for every argument is undecidable in general [[Rice 1953](#ref-rice1953)]. Action values are not map keys: keys are scalars and value objects (Chapter 8).
 
 ## 18.4 Action values as data
 
@@ -10807,88 +9792,11 @@ does not suspend. Kotlin draws the same line in its types with `suspend`
 function types, and JavaScript with `async` functions, but both also allow
 anonymous functions that suspend; Okkama does not.
 
-## 18.6 How closures run
-
-In the IR a closure is two instructions. `fn.closure` builds the value from a
-function and its captured values; `call.fn` calls it:
-
-```text
-func @main() -> int [entry] {
-^b0:
-    %0: fn(int) -> fn(int) -> int = fn.closure @lambda#0 []
-    %1: int = const 10
-    %2: fn(int) -> int = call.fn %0(%1)
-    %3: int = const 5
-    %4: int = call.fn %2(%3)
-    ret %4
-}
-
-func @lambda#0(%0: int) -> fn(int) -> int [lambda 0] {
-^b0:
-    %1: fn(int) -> int = fn.closure @lambda#1 [%0]
-    ret %1
-}
-
-func @lambda#1(%0: int, %1: int) -> int [lambda 1] {
-^b0:
-    %2: int = int.add %1, %0
-    ret %2
-}
-```
-
-The body of each anonymous action is a function of its own, `@lambda#N`. Its
-first parameters are the captured values, then the declared parameters:
-`@lambda#1` gets `amount` as `%0` and `value` as `%1`. A closure is the
-function and those first arguments, packed when the closure is created.
-
-- **The IR engine** stores a closure as a reference-counted value holding
-  the function and the captured values.
-- **Sparrow** allocates a heap object laid out like the function's
-  parameters, whose first words hold the captured values, so the GC knows
-  which words are references. Creating a closure and calling one both go through a
-  runtime helper: the arguments are spilled to memory and the helper
-  dispatches to the function's machine code.
-- **The JVM** gets one class per anonymous action, implementing
-  `okkama.rt.Fn`; its fields hold the captured values, and `call.fn` is an
-  interface call that the JVM's JIT can inline.
-
-On a loop of ten million calls that add a captured number (best of five on
-an Apple M2 Max, including compilation), calling a closure and calling an
-action of an object that holds the same number compare as follows:
-
-| | object action | closure |
-|---|---:|---:|
-| Sparrow | 0.31 s | 0.41 s |
-| IR engine (1 million calls) | 0.97 s | 0.93 s |
-| JVM | 0.59 s | 0.49 s |
-
-On Sparrow the helper costs about ten nanoseconds per call over a direct
-call. On the JVM the closure is slightly faster: the class of each anonymous
-action has one implementation of `call`, which the JIT inlines.
-
-The micro-benchmarks of 0.4.2 (#244) isolate the creation. Net of an empty
-loop, median of five runs on the same machine, creating a closure that
-captures a loop variable and calling it once costs 17 ns on Sparrow, 155 ns on
-the IR engine and 6 ns on the JVM. Constructing an object with two fields
-costs 4, 271 and 9 ns. On the JVM a closure costs no more than a small
-object; on Sparrow it costs four times as much, because creating and calling
-it both go through the runtime helper, while an object is allocated inline
-in the compiled code.
+## 18.6 Resources and failure reports
 
 ### Closures and resources
 
-A closure that captures a resource, such as an open file, owns it the way an
-object field would (Chapter 11): returning the closure moves the file out of
-the scope that created it, and the file is closed when the region that ends
-up owning the closure ends. To know which closures can own a resource, the compiler
-looks at what each anonymous action captures across the whole program. Until
-0.4.1 it did not: in a program with a `destroy` anywhere, every function
-value was assumed to own one and paid for region tracking. A program as
-small as `benchmarks/09-closures` with `os/environment` imported ran 6×
-slower on the JVM than without that import (#292). Since 0.4.1 a closure
-that captures only plain values is treated as plain, and that benchmark runs
-at the same speed with or without the import (IR 1.02 s, Sparrow 0.10 s, JVM
-0.22 s).
+A closure capturing a resource carries its ownership (Chapter 11). Returning the closure moves the resource out of the creating scope; it is released when the scope that owns the closure ends. Capturing plain values does not create resources to release.
 
 ### In a failure report
 
@@ -10927,14 +9835,7 @@ Stack trace (most recent call first):
   at main (report.ok:15:5)
 ```
 
-The anonymous action has no name, so its frame carries the name of its
-function in the IR, `lambda#0`, and the location points into its body. The
-three engines print the same report since 0.4.2 (#270): the JVM maps its own
-stack frames back to the IR functions through a table the compiler writes
-into the jar. The frame does not say which action created the closure. In
-the IR the closure and its creator are separate functions, and the creating
-call may have returned long before the closure fails; the source location is
-what identifies it.
+The report identifies the anonymous action as `lambda#0` and points into its body. It shows where the failure occurred, not where the closure was created; the creating call may have returned long before.
 
 ## 18.7 Where closures came from
 
@@ -11004,8 +9905,6 @@ signature, and nothing converts it to a role or to a wider function type.
 - **No async anonymous actions.** An action that awaits must be a named
   `async` action, passed as an object that does a role.
 - **No `any`, no native ABI, no conversion to a role.**
-- **One helper call per closure call on Sparrow**, about ten
-  nanoseconds.
 
 ## 18.10 What this design costs
 
@@ -11153,15 +10052,7 @@ before the imports, and the imports must come before every other
 declaration. That order is fixed so that a reader learns what a file is and
 what it depends on from its first lines.
 
-The name a module declares and the path other files import it by are two
-different things. An import names a *file*: `import "shop/money"` is
-`shop/money.ok`, found by the rules of 19.3. The declaration names the
-*module*: `shop/money` with major version 1. The two usually agree, and
-nothing forces them to. What matters is the declaration, because it is part
-of every type the module declares. Inside the runtime, `Money` from this
-module is `shop/money#1::Money`: the module, its major version and the
-declared name. The prefix appears in no ordinary output and no diagnostic,
-but it decides which types are the same (19.4).
+An import names a file, such as `shop/money.ok`; its declaration names the module and major version. These usually agree but need not. Type identity follows the declared module, major version and type name (19.4), not the path used to find the file.
 
 ### What a version means
 
@@ -11824,10 +10715,7 @@ The compiler answers:
 19-const-call-rejected.ok:5:15: semantic error: Constant "WIDTH" cannot be computed by the compiler: it calls an action or a constructor; a constant is made of literals, operators and other constants
 ```
 
-A constant is public like an object: `take LANG` or `settings.LANG` reaches
-it, and `hidden const` keeps it in its module. A scalar constant becomes a
-literal wherever it is used. An array or a map is built once per run and
-shared without copies, and read like any flat collection (Chapter 8).
+A constant is public like an object: `take LANG` or `settings.LANG` reaches it, and `hidden const` keeps it in its module. Repeated uses of an array or map constant do not copy the whole collection.
 
 Constants are not a way to share objects. There is no module-level `let`,
 no static field and no singleton: an expensive object such as a compiled
@@ -11861,11 +10749,8 @@ version = "1.0.0"
 
 [build]
 entry = "src/main.ok"
-target = "sparrow"
-output = "target/demo.spb"
 
 [run]
-engine = "sparrow"
 args = []
 env = {}
 
@@ -11964,22 +10849,7 @@ rule. It is Go's *minimal version selection* [[Cox 2018](#ref-cox2018)], and it 
 consequences that the other common rule, "the highest version that
 satisfies all requirements", does not have.
 
-First, a build depends only on manifests. A new release of `json` upstream
-changes nothing in any project until some `blade.toml` raises its minimum;
-the same manifests give the same versions on every machine, on every day,
-with or without a lock. Second, a version a project gets has been asked for
-by name: 1.4.2 is installed because some manifest says `1.4.2`, so somebody
-built and tested against at least that version. Under "highest" a project
-gets 1.9.0 the morning it is published, tested by nobody who depends on it.
-Third, the resolution is cheap and its failures are legible. Blade walks the
-requirement graph twice. The first walk finds the largest minimum of each
-package and major, reading the manifest of every version it reaches, so a
-minimum raised by one requirement brings that version's own requirements.
-The second walk goes from the project through the selected versions only,
-and what it reaches is installed: a requirement of a version that lost
-cannot cause an error, and packages only it needed are not installed. There
-is no search and no backtracking, so there is no satisfiability problem to
-time out on.
+Minimal version selection has three consequences. A release upstream changes nothing until a manifest raises a minimum. Every selected version is explicitly required by some manifest. Only dependencies reachable through the selected versions are installed; dependencies unique to a version not selected cannot cause an error.
 
 The price is the one Go pays. An upgrade is a decision somebody makes:
 `blade add json URL 1.5.0` raises the minimum, and `blade update json`
@@ -12085,47 +10955,9 @@ repositories whose code does not run at install, imports by explicit `pkg/`
 paths, one version per package, the lowest version that satisfies everyone,
 and no command that overwrites what a programmer wrote.
 
-## 19.8 How modules become one program
+## 19.8 A program and its dependencies
 
-An import is resolved when the program is compiled, not when it runs. The
-compiler starts from the files it is given, reads their import lines,
-finds each imported file by the rules of 19.3, and repeats until the graph
-is closed. A missing file, a missing `take` name, a hidden declaration, a
-cycle or a crossed bound stops it there. A program that compiles has found
-every module it will ever use.
-
-`okkama build` then writes the whole program into one file: an SPB for
-Sparrow, or a JAR for the JVM. Every imported module is in it, the standard
-library modules the program uses included, and nothing else. The shop
-program above builds into an SPB of 2.4 KB, and `sparrow shop.spb` runs it
-in an empty directory, with no sources, no standard library and no
-`OKKAMA_STDLIB_DIR`. Inside, each declaration keeps its module-qualified
-name (`shop.money::Money`), which is how two `Money`s from two modules stay
-two types after compilation. A module reached through two branches of the
-graph is compiled and registered once.
-
-Several consequences follow from building the whole program at once.
-- **No version skew at run time.** The program that was compiled is the
-  program that runs. There is no class path to assemble, no `node_modules`
-  to resolve, and no shared library whose newer version a deployment picks
-  up by accident. Updating a dependency means building again.
-- **Nothing is loaded at run time.** No `dlopen`, no `importlib`, no class
-  loader. It is the other side of 19.11's "no dynamic import": a plug-in is
-  a value passed in, not a file found later.
-- **The standard library travels with the program.** A program built
-  against one library runs with that library, whichever version is
-  installed where it runs. The cost is size: every program carries its own
-  copy of the modules it uses. For the ladder's programs an SPB is 1.4 to
-  13 KB. A JAR is about 1.3 MB, because it also carries the JVM runtime
-  `okkama.rt`.
-- **The IR interpreter compiles from source each time.** It runs the same
-  graph from the source files, which is why `okkama run` needs the
-  standard library and `sparrow file.spb` does not.
-
-Whole-program compilation is also what lets the compiler check what the
-module rules promise. Every `take`, every hidden boundary and every type
-identity is known before the first instruction runs, so none of these rules
-costs anything at run time.
+Imports are resolved before execution, following the lookup rules of 19.3. A missing file or name, a hidden declaration, a cycle or a crossed bound rejects the program before it starts. A valid program has found every module it will use.
 
 ## 19.9 Where modules came from
 
@@ -13760,7 +12592,7 @@ Everything the earlier chapters built computes. An object holds values, an
 action derives new ones, a future waits for a result that another part of
 the program will produce. None of it reaches outside the program. The world
 outside — files, sockets, clocks, other processes, the terminal — is reached
-in one way only: through a *native*, a function the engine provides and the
+in one way only: through a *native*, a function supplied by the host and the
 program declares. This chapter is about that boundary: how a native is
 declared and answered, what a program holds when it holds a file or a
 socket, how authority over the host is passed around as an ordinary value,
@@ -13777,13 +12609,7 @@ declaration such as this one from `runtime/time`:
 native monotonic_clock() is int;
 ```
 
-A native declaration has a signature and no body. It is a request: when the
-program calls `monotonic_clock()`, the engine looks up a provider registered
-under that module and name and runs it. The provider is Rust on the IR
-engine and on Sparrow, Java on the JVM, and the three are tested to give the
-same results (Chapter 26). The `runtime/*` modules are the only place in the
-standard library where natives are declared; everything above them is
-ordinary Okkama that can be read, tested and faked.
+A native declaration has a signature and no body. Calling it requests the provider registered for that module and name. The `runtime/*` modules are where the standard library declares natives; the layers above them are ordinary Okkama that can be read, tested and faked.
 
 Any module may declare a native. Declaring one does not create it:
 
@@ -13816,8 +12642,7 @@ fails with `RuntimeError: Native symbol "bible/unregistered@1::vault_open/1"
 is not registered`, and the run ends with status 1. A native's name is its
 module, the module's major version, its own name and its arity, and only a
 provider registered under exactly that name answers it. A program cannot
-reach the host by inventing a declaration: the set of doors is the set the
-engine was built with, plus whatever an embedder adds (Section 21.7).
+reach the host by inventing a declaration: the set of doors is the set the host provides (Section 21.7).
 
 The rule has a cost that the next sections pay off. Every effect a program
 can have outside itself has a name in `runtime/*`, so the list of what a
@@ -13842,8 +12667,7 @@ native async dns_addresses(host is string, port is int) is @@string;
 native async udp_receive(origin is SocketState, limit is int) is @byte;
 ```
 
-A call returns a future like any async action. The engine starts the host
-operation without blocking the scheduler, other tasks run meanwhile, and
+A call returns a future like any async action. The host operation starts without blocking the scheduler, other tasks run meanwhile, and
 the future settles when the host reports (Chapter 20). The program never
 sees the host's threads or callbacks.
 
@@ -13871,8 +12695,7 @@ compared, used as a map key, put into `any`, printed or taken apart. What
 stands behind it — a file descriptor, a socket, a Java channel — never
 becomes a value the program can see.
 
-The provider keeps every handle it issued in a table, with a generation and
-an open or closed state, and checks the table on every call:
+Closing a handle is idempotent, and using a closed handle fails safely:
 
 ```okkama
 module bible/handle v1.0.0;
@@ -13914,14 +12737,9 @@ write after close: already_closed
   crash: it fails with a `NativeFailure` whose code is `already_closed`,
   which an ordinary `catch` takes.
 - If the program forgot `close`, the runtime would close every remaining
-  handle when the run ends, however it ends, without waiting for a garbage
-  collector.
+  handle when the run ends, however it ends, at the end of the run.
 
-The same three engines print the same four lines. Programs rarely hold
-handles directly: std wraps each in an object with a `destroy` (Chapter 11),
-so `FileRoot`, `TcpConnection` and the database connections close their
-handles when their owner's scope ends, and the handle is a field nobody
-else can reach.
+Programs rarely hold handles directly. std wraps each in an object with a `destroy` (Chapter 11), so files and connections close when their owner’s scope ends; the handle is a private field.
 
 ## 21.4 Authority is a value
 
@@ -14151,7 +12969,7 @@ sets the input, the directory and the limit.
 A child that has to be talked to rather than waited for is driven through
 `Process.streams()` (issue #196). Its input does `AsyncWriting` and
 `Closing`; its outputs do `AsyncReading`, with `lines()` for `for await`.
-A slow child then holds up only the task that talks to it, on every engine:
+A slow child then holds up only the task that talks to it:
 
 ```okkama
 let child = Process(command: InheritedCommand(program: Path("sort")));
@@ -14170,20 +12988,9 @@ built from values carries exactly what it was given.
 
 ### 21.5.1 Process workers
 
-Section 20.4 introduced the other way an Okkama program starts a process:
-`spawn` of a *synchronous* action runs that action in a worker process, in
-parallel with the program. Seen from this chapter, a worker is a command the
-runtime builds itself, and each of its properties follows from that.
+Section 20.4 introduced process workers: `spawn` of a synchronous action runs it in another process, in parallel with the program. The process boundary determines what it can receive and return.
 
-**The worker is the same program.** The runtime starts the program again,
-with the same engine, in a mode that runs one action instead of `main`:
-Tomato its `.spb` (a program compiled in memory is first written to a
-temporary file), the IR engine its source files, the JVM its classes. The
-child gets the parent's environment and working directory as the parent's
-runtime sees them, so a relative path means in the worker what it meant in
-the parent. It does not get the parent's heap, its open handles or its
-tasks. There is no fork and no copy of memory: the worker starts empty,
-loads the same code, and is handed a receiver and arguments.
+**The worker runs the same program.** It runs one action instead of `main`, with the parent’s environment and working directory. It receives a receiver and arguments but no objects, open handles or tasks from the parent.
 
 **Only values cross.** The receiver's fields and the arguments are encoded in
 the parent and decoded in the child: `int`, `float`, `string`, `char`,
@@ -14203,18 +13010,7 @@ in a worker. This is the same rule seen from the other side: the error
 object is an identity too. A worker that should report several kinds of
 outcome returns them as data, an enum of results, which does cross.
 
-**Cancellation is a kill.** Section 20.5's cancellation is cooperative: it
-reaches a task at its suspension point and unwinds it, defers and `destroy`s
-included. A worker is a synchronous action with no suspension points, so
-there is nothing to cooperate with. Cancelling its future kills the process
-(SIGKILL): on Tomato and the IR engine the worker leads its own process group
-and the whole group goes, so processes the worker started go with it. The
-future settles `Cancelled` only after the child has been reaped, so the code
-after `await` never runs beside a worker that is still writing. A worker
-cancelled before its process started is never started. Its defers do not
-run, and a worker that must clean up after itself must not be cancelled; it
-should be given a deadline among its arguments instead. (Until 0.5.3 the IR
-engine and the JVM sent TERM and settled the future at once; issue #359.)
+**Cancellation kills the worker.** Unlike an async task, a synchronous worker has no suspension points for cooperative cancellation. Cancelling its future kills it; the future settles as `Cancelled` only after the worker has ended. A worker cancelled before starting is never started. Its `defer`s and `destroy`s do not run. If cleanup matters, pass it a deadline and let it finish cooperatively instead.
 
 **Output is passed on whole.** What the action prints reaches the parent's
 standard output and error when the worker reports back, before its result,
@@ -14238,15 +13034,7 @@ another core.
 The streams a program is born with are handles too, and two of their
 defaults changed in 0.5.5.
 
-Standard output is buffered (issue #132). A terminal receives each line as
-it ends; a pipe or a file receives blocks of 64 KiB; `Stdout().flush()`
-writes out what is pending. The order of what a reader sees survives,
-because the runtimes flush before standard error is written, before
-standard input is read from a terminal, before a child process starts,
-before the terminal is written to, and when the program ends. The reason is
-plain arithmetic: writing 200 000 lines into a pipe took Sparrow 155 ms and
-the IR engine 1 084 ms when every line was its own system call, and 56 ms
-and 590 ms after. The JVM still flushes every write.
+Standard output is buffered (issue #132). A terminal receives complete lines; pipes and files receive blocks of 64 KiB. `Stdout().flush()` writes pending output. Pending output is also flushed before writing standard error, reading terminal input, starting a child process, writing to the terminal and ending the program. Use `flush()` when a reader must see a partial line promptly.
 
 Standard input is read by lines (issue #221):
 
@@ -14257,21 +13045,11 @@ for Stdin() -> line {
 }
 ```
 
-A line loses its LF and the one CR before it, so a file written on Windows
-reads the same as one written on Unix. Input that is not valid UTF-8 is a
-failure by default; `Stdin(decoding: InputDecoding.lenient)` puts U+FFFD in
-place of each bad sequence instead, as browsers do, and
-`Stdin().chunks(size: 65536)` walks bytes. Every `Stdin()` reads through the
-one buffer the runtime keeps, so a program can read a header line by line
-and the rest as bytes without losing what sat between them.
+A line loses its LF and the one CR before it. Invalid UTF-8 fails by default; `Stdin(decoding: InputDecoding.lenient)` replaces bad sequences with U+FFFD. `Stdin().chunks(size: 65536)` reads bytes. All `Stdin()` values share one input position, so a program may read a header by lines and then the remaining bytes without losing intervening data.
 
 ## 21.6 What an embedder can deny
 
-A program run by `okkama run` may use every native. A program run by a
-host — an application that embeds `sparrow-core` to run plug-ins, or a
-service that runs users' scripts — usually should not. The embedding entry
-point takes `budget::Limits`, and `Limits::natives` lists the *native
-groups* the program may use:
+A program run by `okkama run` may use every native. A host running plug-ins or user scripts may restrict the native groups available to a run:
 
 | group | what it reaches |
 |---|---|
@@ -14294,78 +13072,9 @@ the whole list of what the program can do outside itself; an embedder that
 allows only `Clock` has a program that can read the time and print, and
 nothing else.
 
-The same `Limits` carries the budgets of the security model: steps, memory,
-output and an interrupt flag the host may raise from any thread. Running
-out stops the run with its own report, which no `catch` intercepts
-(Chapter 10). Since 0.5.1 the memory budget can measure one runtime
-instead of the whole process (`MemoryScope::Runtime`, issue #269): on
-Sparrow it reads the runtime's own heap, so a host can run several
-programs side by side, and the one that grows past its budget stops while
-the others go on.
+A host may also set step, memory and output budgets and interrupt a run. Exhaustion or interruption stops it with an uncatchable report (Chapter 10); cleanup does not run after a budget stop.
 
-### 21.6.1 An embedder, written out
-
-A host that runs a plug-in it did not write states the whole contract in one
-value. In Rust, against `sparrow-core`:
-
-```rust
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use sparrow_core::budget::{Limits, MemoryScope, NativeGroup};
-
-fn run_plugin(spb: Vec<u8>, arguments: Vec<Vec<u8>>, stop: Arc<AtomicBool>)
-    -> Result<i64, sparrow_core::Error>
-{
-    let limits = Limits {
-        steps: Some(200_000_000),          // function entries and loop back-edges
-        memory: Some(64 << 20),            // 64 MiB of this runtime's own heap
-        memory_scope: MemoryScope::Runtime,
-        output: Some(1 << 20),             // 1 MiB of stdout and stderr
-        interrupt: Some(stop),             // any thread may raise it
-        natives: Some(vec![NativeGroup::Clock]),
-    };
-    // No worker command: `spawn` of a synchronous action fails here.
-    sparrow_core::run_limited(spb, arguments, false, Vec::new(), limits)
-}
-```
-
-Each field is one line of the host's policy, and no field has a default
-that grants something. `natives: Some(vec![NativeGroup::Clock])` is the
-answer to "what may this program do outside itself?": read the clocks, and
-the computation and printing every program may do. A plug-in that opens a
-file fails at that call with a report that names the group it lacked. A
-plug-in that loops forever runs out of steps; one that builds an unbounded
-list runs out of its 64 MiB; one that prints in a loop runs out of output.
-The host's watchdog thread can end any of them early with
-`stop.store(true, Ordering::Relaxed)`. Each of these ends the run with its
-own message (`Execution budget exhausted: steps`, `… memory`, `… output`,
-`Execution interrupted`), which no `catch` in the plug-in intercepts and
-after which no `destroy` runs: the runtime is discarded with its heap.
-
-`MemoryScope::Runtime` is the reason one host process can run many such
-plug-ins at once. The default scope, `Process`, reads the process allocator
-through a probe the embedder installs, which is right for the CLIs (one run
-per process) and wrong for a server, where one plug-in's memory would be
-charged to all of them. With `Runtime`, Sparrow reads the bytes its own heap
-holds, its pages and large objects and the Rust memory its objects own, so
-every runtime keeps a budget of its own and no probe is needed.
-
-The empty worker command is a decision too. Process workers (21.5.1) start
-the same program again as a child process, so a host that allows them hands
-the plug-in a way to create processes. The core refuses a `spawn` of a
-synchronous action when the host gave it no command to run, and a host that
-does give one should also allow `NativeGroup::Process`, which says so.
-
-The guarantees hold only as far as the classification of the natives does.
-Every native of `runtime/*` must be named either in a group or among the
-pure ones. A native that is in neither is refused whenever the host
-restricts the groups, and a test fails the build when a module is left
-unnamed. Until 0.5.3 the table failed open: a module it did not name counted
-as pure, and two natives that read host facts, the preferred languages and
-the system's trusted certificates, passed a host that had denied `Env`
-(issue #361). What a group cannot express, such as "files, but only under
-this directory", is expressed in the program's own terms: the host passes a
-`FileRoot` as an argument (21.4), and the program can name nothing outside it.
+A host restricting native groups refuses unclassified natives too. Finer authority, such as access only below one directory, is expressed by passing a `FileRoot` (21.4).
 
 ## 21.7 The command line keeps the user's authority
 
@@ -14387,7 +13096,7 @@ sits between them. Inside the language, std passes authority as values
 Below that, the operating system does the isolating: a container, a jail,
 a user without rights. The boundary is drawn there because an
 interpreter-level sandbox is only as strong as its least careful native,
-and the runtime modules declare 653 of them.
+and each native must respect the host’s policy.
 
 ## 21.8 Limits
 
@@ -14405,17 +13114,9 @@ and the runtime modules declare 653 of them.
 
 ## 21.9 What this design costs
 
-The narrow native ABI costs copies: a string or a byte array crosses by
-value, and a large one is copied each time it crosses. The opaque handles
-cost a table lookup and a generation check on every call. Explicit
-authority costs parameters: a function that reads one file takes an
-object that names where it may read, where another language would let it
-open a path. The command line's full authority costs isolation that a
-host must provide itself.
+The narrow native boundary costs copies when large strings or byte arrays cross by value. Explicit authority costs parameters: code reading a file takes an object that names where it may read. The command line’s full authority leaves isolation to the host.
 
-What the design buys is a short answer to "what can this program do":
-the natives its imports reach, filtered by the groups its host allows.
-That answer fits on one page, and every engine gives the same one.
+The design gives a short answer to “what can this program do”: the natives its imports reach, filtered by the groups its host allows.
 
 # Chapter 22. The standard library and its style
 
@@ -14524,10 +13225,7 @@ no intermediate "node" object to unwrap. An optional member is read with
 `maybe(name)`, which answers a `Maybe` for each kind, so the default is
 written where the value is used: `order.maybe("note").text() else "none"`.
 
-Writing is the same object built in code: `Json(JsonField("id", 4711), …)`
-holds its members in order, and `string()` asks the runtime for the compact
-text in one call; `pretty(2)` indents it. Numbers are exact, never `float`:
-a JSON number reads back as an `int`, a `BigInt` or a `Decimal`.
+Writing uses the same object built in code: `Json(JsonField("id", 4711), …)` holds members in order; `string()` returns compact text and `pretty(2)` indents it. Numbers are exact, never `float`: a JSON number reads as an `int`, a `BigInt` or a `Decimal`.
 
 Everything that goes wrong is a `JsonError`, and every case names the value
 it is about by its RFC 6901 pointer [[RFC 6901](#ref-rfc6901)]. Asking for text where the
@@ -14658,26 +13356,10 @@ module that is documented in its source is documented everywhere.
 **Efficient.** The library is the code most programs spend their time in,
 so its costs are everyone's costs. Four rules govern them.
 
-- *No quadratic growth.* Collections are built with builders, `reduce`
-  accumulators or the persistent arrays and maps, never by copying in a
-  loop. The runtime makes `acc + [x]` inside `reduce` grow in place
-  (section 8.5), but a module does not rely on a reader knowing that.
-- *Measured.* A hot path has a micro-benchmark, and a change is judged on
-  the release build, not on a debug or gate profile whose code layout
-  exaggerates small differences.
-- *Natives only where measured,* or for what Okkama cannot do itself:
-  cryptography, TLS, X.509 and PEM stay native; a parser written in Okkama
-  stays in Okkama unless a measurement says otherwise.
-- *No fixed cost per call.* A table, a pattern or a template is parsed
-  once, when its object is built, not every time an action uses it.
-
-The two principles meet in the runtime underneath. The 0.5.7 release, for
-instance, changed no public API of `std`, yet it
-made `join`, ranges in array literals, map literals and the future
-collections of `async/collect` several times faster on large inputs: the
-library's shape stayed put while its cost moved. A style that keeps the
-surface small is what lets that happen without breaking the programs above
-it.
+- *No quadratic growth.* Build collections with builders or `reduce`; `acc + [x]` in the supported accumulator pattern has amortized constant append cost (Section 8.5).
+- *Measured.* Measure hot paths on release builds.
+- *Natives where needed.* Use them for host services or demonstrated performance needs; keep ordinary parsing in Okkama unless measurements justify otherwise.
+- *No fixed cost per call.* Parse a table, pattern or template once when its object is built, not at every use.
 
 ## 22.6 Explicit authority, no global state
 
@@ -14745,24 +13427,14 @@ the deferred close.
 
 ## 22.8 Tests
 
-The library is tested where it is written. Every public object has at
-least one inline `test` next to it (chapter 15), and the std tests run on
-both engines, the IR engine and Sparrow, in every gate. A module is not
-changed until tests pin what it does now: the review of 0.5.4 wrote such
-*characterization* tests first and changed code second, so that a
-simplification which altered behaviour showed up as a failing test, not as
-a surprise in a program.
+The library is tested where it is written. Every public object has at least one inline `test` (Chapter 15). Before a module changes, characterization tests pin its current behaviour, so a simplification that changes a public result is caught by a test.
 
 Network and asynchronous code is tested against itself rather than against
 the outside world: a test opens a `TcpListening` on 127.0.0.1, port 0, and
 plays the peer in the same program. Such tests run in a container, like the
 gate, so that a test that misbehaves cannot reach the machine around it.
 
-Finally, the modules people use directly have examples: 70 small programs
-under `examples/`, one per task, each with the output it must print, run on
-both engines by `examples/check.py`. A test checks that the library is
-right; an example checks that it is usable, and that the way the
-documentation says to use it still works.
+Modules people use directly also have small task examples under `examples/`, each with expected output checked by `examples/check.py`. A test checks correctness; an example checks usability and the documented way to use the library.
 
 ## 22.9 Scope: what the library holds
 
@@ -14880,7 +13552,7 @@ reads the comments and the declarations together and prints a page (#512):
 $ okkama man json
 NAME
     json - JSON values: one immutable Json, parsed or built in code, read
-    without casts and written by the runtime in one call.
+    without casts and serialized as compact text.
 
 SYNOPSIS
     let order = ParsedJson(text).root();
@@ -15006,8 +13678,671 @@ tests that pass on the old code — the published behaviour, byte for byte,
 was the specification — and then measured. That is the library's
 efficiency principle at work: the surface stays put while the cost moves.
 
+# Chapter 26. Patterns and anti-patterns
+
+Every language comes with a second grammar that no parser checks: the shapes
+experienced programmers reach for when a problem has a familiar outline. Some
+of those shapes exist because the language makes the direct solution
+awkward; some exist because the direct solution is wrong and the shape is
+how people learned to avoid it. This chapter collects the shapes Okkama
+programs take, the ones it makes unnecessary, and the ones it forbids. Most
+of them have appeared already, one chapter at a time; here they are put side
+by side, with the reasons that connect them.
+
+## 26.1 What a pattern is, and what a language does to it
+
+The word comes from architecture. Christopher Alexander and his colleagues
+described a *pattern* as a problem that occurs over and over in an
+environment, together with the core of a solution that can be used a
+million times without being done the same way twice, and they wrote 253 of
+them, from the shape of a region down to the height of a window sill
+[[Alexander 1977](#ref-alexander1977)]. The idea crossed into software in 1994, when Gamma, Helm,
+Johnson and Vlissides catalogued 23 patterns of object-oriented design:
+Strategy, Decorator, Observer, Builder, Singleton and the rest
+[[Gamma 1994](#ref-gamma1994)]. The book gave a generation of programmers a shared vocabulary.
+
+It also gave critics a target. Two years later Peter Norvig showed that 16 of
+the 23 patterns become invisible or much simpler in a language with
+first-class functions, dynamic types and macros: a Strategy is a function, a
+Command is a closure, a Visitor is a generic function [[Norvig 1996](#ref-norvig1996)]. His
+point was not that the patterns were wrong but that a pattern is often the
+shadow of a missing feature. Where the language has the feature, the
+pattern disappears into it.
+
+The opposite shadow has a name too. Andrew Koenig called an *antipattern* a
+solution that looks like a pattern but makes things worse [[Koenig 1995](#ref-koenig1995)], and
+Brown and his co-authors built a catalogue of them, from the Blob to Lava
+Flow [[Brown 1998](#ref-brown1998)]. An antipattern is a pattern a language allows and
+should not.
+
+Okkama sits at a particular point between the two. It removes several
+features whose absence creates patterns elsewhere: there is no inheritance,
+no null, no mutable field, no global state, no getter syntax. And it adds
+rules that turn some well-known antipatterns into compile errors. The result
+is a language in which a handful of shapes are not patterns at all but the
+only way to write the program, and in which the remaining judgement is
+narrower than in Java or Kotlin, though not absent.
+
+## 26.2 Behaviour by composition, not by flags
+
+A common way to make an object do several related things is to give it
+switches. A label that can be prefixed and framed gets a `prefix` field and
+a `framed` flag, and its one action reads them on every call. Adding a third
+option means touching the constructor, the fields and every branch of the
+action; combining options means testing every combination of flags.
+
+Okkama has no inheritance to tempt a programmer into a subclass per option,
+so the alternative the language offers is the one Elegant Objects argues
+for: one small object per behaviour, each holding the object it decorates,
+all doing the same role [[Bugayenko 2016](#ref-bugayenko2016)]. Chapter 14 showed the technique on
+prices; here it is applied to the flags it replaces.
+
+```okkama
+module bible/flags v1.0.0;
+
+// Anti-pattern: one object that reads its flags on every call. Pattern: one
+// small object per behaviour, composed through a role.
+import "io/stdout" take Stdout;
+
+object FlagLabel {
+    has text is string;
+    has prefix is string;
+    has framed is bool;
+    FlagLabel(:text, :prefix, :framed);
+    shown() is string {
+        let body = prefix + text;
+        if framed { "[" + body + "]"; } else { body; }
+    }
+}
+
+role Label {
+    shown() is string;
+}
+
+object Plain does Label {
+    has text is string;
+    Plain(:text);
+    shown() is string { text; }
+}
+
+object Prefixed does Label {
+    has origin is Label;
+    has prefix is string;
+    Prefixed(:origin, :prefix);
+    shown() is string { prefix + origin.shown(); }
+}
+
+object Framed does Label {
+    has origin is Label;
+    Framed(:origin);
+    shown() is string { "[" + origin.shown() + "]"; }
+}
+
+main() is int {
+    let out = Stdout();
+    out.writeln(FlagLabel(text: "draft", prefix: "! ", framed: true).shown());
+    let inner is Label = Framed(origin: Prefixed(origin: Plain(text: "draft"), prefix: "! "));
+    let outer is Label = Prefixed(origin: Framed(origin: Plain(text: "draft")), prefix: "! ");
+    out.writeln(inner.shown());
+    out.writeln(outer.shown());
+    0;
+}
+```
+
+Output:
+
+```text
+[! draft]
+[! draft]
+! [draft]
+```
+
+The program prints:
+
+```text
+[! draft]
+[! draft]
+! [draft]
+```
+
+The first line comes from `FlagLabel`, whose one action decides everything.
+The second and third come from compositions of three objects that each do
+one thing, and they differ only in the order of composition. That order is
+a decision `FlagLabel` cannot express without another flag: it hard-codes
+"prefix inside the frame". With decorators, both orders are available, and a
+new behaviour, a `Truncated` or an `Upper`, is a new object of a few lines
+that no existing object has to know about.
+
+The decorators pay for this freedom with one indirection per layer and with
+more declarations than the flag version. For a label with two options the
+flag version is shorter, and nothing in the language forbids it. The rule of
+thumb that Okkama code follows is about change, not about size: as soon as
+an option interacts with another, or a second caller wants a different
+combination, the flags become a small interpreter of their own, and the
+composition is the cheaper program to keep.
+
+## 26.3 Change as a value: successor pipelines
+
+Builders, setters and mutable "state" objects exist in other languages
+because an object there can change in place. In Okkama it cannot. A field is
+bound once, by the constructor; an action that changes state is declared
+`is ^Type`, stages new field values with `^field = …`, and returns a new
+object, the successor (Chapter 13). The old object stays as it was.
+
+This one rule turns several patterns into ordinary code. A builder is a
+chain of successor calls. An undo stack is a list of earlier values. A
+snapshot before a risky step is a variable that is not touched. The next
+example takes an order through four stages and keeps all of them.
+
+```okkama
+module bible/pipeline v1.0.0;
+
+// Pattern: each change of state is a successor, so every stage of a
+// pipeline is a value that can be kept, compared and reused.
+import "io/stdout" take Stdout;
+
+enum OrderError is Error = (closed, empty);
+
+object Order {
+    has lines is int = 0;
+    has total is int = 0;
+    has percent is int = 0;
+    has open is bool = true;
+    Order();
+
+    added(price is int) is ^Order {
+        confirm open else throw OrderError.closed;
+        ^lines = lines + 1;
+        ^total = total + price;
+    }
+
+    discounted(by is int) is ^Order {
+        confirm open else throw OrderError.closed;
+        ^percent = by;
+    }
+
+    closed() is ^Order {
+        confirm lines > 0 else throw OrderError.empty;
+        ^open = false;
+    }
+
+    due() is int { total - (total * percent / 100).int(); }
+
+    summary() is string {
+        lines.string() + " lines, due " + self.due().string() + (if open { ", open"; } else { ", closed"; });
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let empty = Order();
+    let basket = empty.added(300).added(200);
+    let offer = basket.discounted(10);
+    let paid = offer.closed();
+    for [empty, basket, offer, paid] -> stage {
+        out.writeln(stage.summary());
+    }
+    let late = try { paid.added(50).summary(); } catch e is OrderError { e.text(); };
+    out.writeln(late);
+    0;
+}
+```
+
+Output:
+
+```text
+0 lines, due 0, open
+2 lines, due 500, open
+2 lines, due 450, open
+2 lines, due 450, closed
+OrderError.closed
+```
+
+```text
+0 lines, due 0, open
+2 lines, due 500, open
+2 lines, due 450, open
+2 lines, due 450, closed
+OrderError.closed
+```
+
+Each stage is a value. `empty`, `basket`, `offer` and `paid` can be printed,
+compared, stored in a collection or passed to another task, and none of them
+can be changed by a later step. The rule that a closed order accepts nothing
+more is checked where the change is asked for, by `confirm` in the
+successor, and the refusal is a typed error rather than a silent no-op.
+
+Two details of the example are deliberate. The successor stages only the
+fields it changes; the others carry over from the original. And the object
+calls its own query through `self.due()`: inside an object, its actions are
+reached through `self`, its fields by name.
+
+The antipattern this replaces is the object with a "current state" that
+every action updates, where the order of calls matters and nothing records
+it. Okkama refuses it at the level of the language: assigning a field after
+construction is a compile error, with a diagnostic that names the
+alternative:
+
+```text
+Field "count" cannot be assigned after construction: objects are immutable; return a successor instead (`is ^Counter` and `^count = …`)
+```
+
+What the language does not refuse is a value that changes over time inside
+one piece of synchronous code, such as a running total in a loop. For that
+it has `Cell`, a box with `value()` and `replace()` (Chapter 13). A cell is a
+local tool: it cannot be a field of an object, so it cannot become the
+hidden mutable state of one.
+
+```text
+Field "reading" cannot hold a Cell: a cell stays in synchronous code; state an object shares with tasks is an Atomic
+```
+
+### Typestate: when an invalid step should not compile
+
+A successor chain checks at run time that a step is allowed. When a protocol
+has a few well-known states, the check can move into the types. Each state
+becomes a role that exposes only the actions valid in it, and each transition
+returns the role of the next state. A created payment offers `authorize`; an
+authorized one offers `capture`; a captured one offers `refund`; and calling
+`refund` on a created payment does not type-check, because the role
+`Created` has no such action. The pattern is old: Strom and Yemini called
+it *typestate* in 1986 [[Strom 1986](#ref-strom1986)]. In Okkama it needs nothing beyond roles and
+successors. It costs one role per state and is worth it where a wrong step
+is expensive: payments, connections, documents that move through approval.
+
+## 26.4 Refusals have names
+
+A function that cannot do what was asked has three classic ways to say so: a
+special value (`-1`, `""`, `null`), an untyped exception carrying a message,
+or a typed failure the caller can match. Okkama keeps only the third. There
+is no null to return, an object cannot be an error, and a failure that
+carries information is a case of an `Error` enum (Chapter 10):
+
+```text
+Object "Failure" cannot do Error: errors are enums, declare `enum Failure is Error = (...)`
+```
+
+The pattern built on this rule has three parts. A module names all its
+refusals in one enum, with the data that explains each in its payload. Every
+precondition is checked at the boundary, where the bad input arrives, with
+`confirm … else throw`. And a caller catches only the refusals it can
+answer, letting everything else go up.
+
+```okkama
+module bible/refusals v1.0.0;
+
+// Pattern: the module names its refusals in one Error enum and checks them
+// with confirm at the boundary; a caller catches only what it can answer.
+import "io/stdout" take Stdout;
+
+enum Refusal is Error = (non_positive(amount is int), insufficient(balance is int, amount is int));
+
+object Account {
+    has balance is int;
+    Account(:balance);
+
+    withdrawn(amount is int) is ^Account {
+        confirm amount > 0 else throw Refusal.non_positive(amount);
+        confirm amount <= balance else throw Refusal.insufficient(balance, amount);
+        ^balance = balance - amount;
+    }
+
+    shown() is string { "balance " + balance.string(); }
+}
+
+object Teller {
+    has account is Account;
+    Teller(:account);
+
+    answer(amount is int) is string {
+        let reply = try { account.withdrawn(amount).shown(); } catch e is Refusal { "refused: " + e.text(); };
+        reply;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let teller = Teller(account: Account(balance: 100));
+    for [30, 0, 150] -> amount {
+        out.writeln(amount.string() + " -> " + teller.answer(amount));
+    }
+    0;
+}
+```
+
+Output:
+
+```text
+30 -> balance 70
+0 -> refused: Refusal.non_positive(0)
+150 -> refused: Refusal.insufficient(100, 150)
+```
+
+```text
+30 -> balance 70
+0 -> refused: Refusal.non_positive(0)
+150 -> refused: Refusal.insufficient(100, 150)
+```
+
+The teller turns refusals into a reply because replying is its job. A
+`Program` failure such as a broken invariant, or a refusal from some other
+module, passes through the `catch` untouched, because the clause names
+`Refusal` and nothing else. A `catch` can also name a single case and bind
+its payload, `catch Refusal.insufficient(balance, amount) { … }`, which is
+how a caller answers one refusal and leaves the rest to someone else.
+
+Two antipatterns are on the other side of this rule. One is the catch-all:
+catching every failure to keep a loop running, which also catches the
+failures that mean the program is broken. Okkama makes it hard: a typed
+`catch` names a type, and panics and program failures are not typed throws
+at all, so they cannot be caught as one (Chapter 10). The other is the
+refusal that is not a refusal: an action that returns a default when it
+cannot do its work. When absence is a legitimate answer, the language has a
+type for it (Section 26.7); when it is not, the action should refuse.
+
+## 26.5 Every dependency is a role, every role has a fake
+
+Objects in Okkama reach the outside world through the objects they are given:
+there is no global state and no static field (Chapter 22). An object that
+sends mail holds a mailer; an object that reads time holds a clock. When the
+held object's type is a role rather than a concrete object, the dependency
+can be replaced, and the replacement for tests comes with the role itself:
+every role may declare a `fake`, a test-only implementation that the
+compiler keeps out of production code (Chapter 15).
+
+```okkama
+module bible/signup v1.0.0;
+
+// Pattern: every dependency is a role, every role ships a fake, and the
+// fake records what happened in its own fields, through successors.
+import "io/stdout" take Stdout;
+
+role Mailer {
+    sent(to is string) is ^Mailer;
+    count() is int;
+
+    fake {
+        has total is int = 0;
+        has latest is string = "";
+        sent(to is string) is ^Mailer {
+            ^total = total + 1;
+            ^latest = to;
+        }
+        count() is int { total; }
+    }
+}
+
+object PrintedMailer does Mailer {
+    has total is int = 0;
+    PrintedMailer();
+    sent(to is string) is ^PrintedMailer {
+        Stdout().writeln("mail to " + to);
+        ^total = total + 1;
+    }
+    count() is int { total; }
+}
+
+object Signup {
+    has mailer is Mailer;
+    has members is int = 0;
+    Signup(:mailer);
+
+    joined(name is string) is ^Signup {
+        ^members = members + 1;
+        ^mailer = mailer.sent(name);
+    }
+
+    mails() is int { mailer.count(); }
+}
+
+test "every member gets one welcome mail" {
+    let signup = Signup(mailer: Mailer.fake()).joined("ada").joined("grace");
+    test.is(signup.mails(), 2);
+}
+
+test "the first signup is untouched by its successors" {
+    let first = Signup(mailer: Mailer.fake());
+    let later = first.joined("ada");
+    test.is(first.mails(), 0);
+    test.is(later.mails(), 1);
+}
+
+main() is int {
+    let signup = Signup(mailer: PrintedMailer()).joined("ada");
+    Stdout().writeln(signup.mails().string() + " mail sent");
+    0;
+}
+```
+
+Output:
+
+```text
+=== RUN   every member gets one welcome mail
+--- PASS: every member gets one welcome mail
+=== RUN   the first signup is untouched by its successors
+--- PASS: the first signup is untouched by its successors
+PASS
+```
+
+```text
+=== RUN   every member gets one welcome mail
+--- PASS: every member gets one welcome mail
+=== RUN   the first signup is untouched by its successors
+--- PASS: the first signup is untouched by its successors
+PASS
+```
+
+The fake records what happened in its own fields, through successors, the
+same way production objects do. A test does not configure expectations the
+way a mock framework would; it uses the fake and then asks it what it saw.
+This is the distinction Martin Fowler drew between state verification with
+stubs and behaviour verification with mocks [[Fowler 2007](#ref-fowler2007)], and the one
+Meszaros's catalogue of test doubles calls a fake object: a working
+implementation, simpler than the real one [[Meszaros 2007](#ref-meszaros2007)]. Because the fake
+lives next to the role, every implementation of the role and every test of
+its users agree on what the role means.
+
+The example shows one more consequence of successors. Sending mail is a
+state change of the mailer, so `sent` returns a successor, and `Signup`
+stages it: `^mailer = mailer.sent(name)`. A production mailer that only
+prints still returns a successor of its own type, `^PrintedMailer`; the
+compiler insists on that, and its diagnostic says how:
+
+```text
+Successor action "sent" on object "PrintedMailer" must return ^PrintedMailer; declare ^Mailer in a role signature and implement it as ^PrintedMailer
+```
+
+The antipattern this replaces is the hidden collaborator: an object that
+creates its own database connection, reads the clock directly or writes to
+a global logger, and so can be tested only by replacing the world around
+it. In Okkama such an object cannot exist for clocks and loggers, because
+there is no world to reach into; it can exist for objects it constructs
+itself, and the habit of the standard library is not to (Section 22.6).
+
+## 26.6 Resources belong to scopes
+
+A resource is an object with a `destroy` block. The scope that owns it
+destroys it when the scope ends, whatever way it ends, in reverse order of
+creation, after the scope's `defer` blocks have run (Chapter 11). The
+pattern that follows is simple to state: open a resource where it is needed,
+bind it with `let` in the narrowest block that uses it, and put its cleanup
+in `destroy`, not in an action a caller must remember to call.
+
+The antipatterns it replaces are familiar from languages with explicit
+cleanup: the `close()` that is skipped on an early return, the `dispose()`
+called twice, the object that is "opened" in a second step after
+construction and is unusable in between. In Okkama none of them is
+necessary. An object that needs a resource takes it in its constructor and
+is complete when the constructor returns; the end of its scope is the only
+cleanup point; and a result returned from an action carries its resources
+to the caller's scope, so the caller owns what it was given (Chapter 11).
+
+`defer` covers the cases that are actions rather than objects: restoring a
+setting, writing a final line to a log, releasing something the program did
+not create. It runs at the end of the scope, reads the bindings as they are
+then, and runs before the scope's resources are destroyed. A rule of thumb
+from code review: if the same `defer` appears around every use of an object,
+the object wants a `destroy`.
+
+## 26.7 Absence is a type
+
+Okkama has no null. A value that may be missing has the type `Maybe<T>`, and
+the type system makes the caller decide what absence means: a fallback with
+`else`, a compact choice with `??`/`!!`, or a `match` (Chapter 7). The
+pattern is to put absence in the signature of the action that can produce
+it, and nowhere else. A lookup that can fail to find returns `Maybe`; a
+lookup that must find refuses with a typed error.
+
+The antipatterns on the other side are the sentinel value and the "empty
+object": `-1` for "not found", `""` for "no name", an object whose every
+field is a default. They survive in Okkama only if a programmer writes them,
+since the language provides no null to tempt anyone and an explicit type for
+the honest answer. When a value is optional for a while and then becomes
+required, the change is visible in the types, and the compiler finds every
+caller that has to decide.
+
+## 26.8 Shared state has one owner
+
+Asynchronous code needs state that more than one task can see. Okkama's
+answer is structural: state shared between tasks lives in one task, the
+owner, and others talk to it through channels (Chapter 20). A ledger that
+several workers update is one object in one task, receiving messages; the
+workers hold the sending end of a channel, not the ledger. For the few
+values that really are shared, such as a counter or a flag, `Atomic` gives a
+small set of operations that are safe across tasks.
+
+This replaces the most expensive antipattern of concurrent programming, the
+object shared by many threads and guarded by locks taken in the right order
+by convention. In Okkama a `Cell` cannot cross into an async context and an
+object cannot hold one, so mutable state that tasks share is either inside
+its owner or in an `Atomic`, by construction.
+
+The structured rules of Chapter 20 add the second half of the pattern:
+cancelling a task cancels what it waits for, and when `async main` returns,
+the tasks still running are cancelled and their cleanup is awaited before
+the run ends. Work that runs "in the background, somewhere", outliving the
+program that started it, is not a shape the language provides.
+
+## 26.9 Anti-patterns the compiler refuses
+
+Several shapes that code review catches in other languages are diagnostics
+in Okkama. The table collects the ones the earlier chapters showed, with the
+compiler's words.
+
+| Anti-pattern | Diagnostic |
+|---|---|
+| Setter, mutable field | `Field "count" cannot be assigned after construction: objects are immutable; return a successor instead` |
+| Staging outside a successor | `` `^field = value` is allowed only in successor actions `` |
+| Getter for raw state | `Field "cents" of object "Cash" is private; call an action instead` |
+| Hidden mutable box in an object | `Field "reading" cannot hold a Cell: a cell stays in synchronous code; state an object shares with tasks is an Atomic` |
+| Using an object before it exists | `Cannot call actions on self before construction completes` |
+| Error as an object with a message | `Object "Failure" cannot do Error: errors are enums, declare `enum Failure is Error = (...)`` |
+| Downcast from a role to a concrete object | `Cannot initialize variable "customer" of type Customer with Presentation` |
+| Rebinding a value that has no successors | `Cannot rebind variable "n": type "int" has no successor actions` |
+| Treating "present or absent" as optional with a fallback | `Optional fallback requires Maybe<T>; fold Presence explicitly` |
+| Discarding a successor | must-use: a successor that is not used is an error (Chapter 13) |
+
+Each line closes a door that an elegant-objects code review would otherwise
+have to watch [[Bugayenko 2016](#ref-bugayenko2016); [Bugayenko 2017](#ref-bugayenko2017)]. The language cannot tell
+good design from bad, but it can make some bad designs impossible to write,
+and Okkama spends its rules there.
+
+## 26.10 Anti-patterns the compiler allows
+
+The rest is judgement. These are the shapes that compile and still make a
+program worse, and the reasons Okkama code avoids them.
+
+- **The flag object.** Section 26.2: an object whose actions branch on its
+  own fields to choose a behaviour. Decorators through a role replace it
+  once the options interact.
+- **The data bag.** An object that is a list of fields and one action per
+  field returning it. Fields are private, so the getters must be written by
+  hand, and writing them is the warning. An object should answer questions
+  about what it is for, not hand out its parts: `invoice.total()`, not
+  `invoice.lines()` added up by the caller.
+- **The matryoshka.** Objects nested several layers deep only to reach a
+  value, `Report(Section(Table(Rows(Source(...)))))`, where each layer adds
+  no behaviour. The standard library's review rejected exactly this shape
+  (Chapter 22): one object that knows how to answer, with its parts as named
+  arguments, reads better and runs faster.
+- **The god object.** One object that holds every dependency of a program
+  and offers an action for every operation. Composition through roles
+  splits it naturally: an object for each responsibility, wired together
+  in `main`.
+- **Stringly typed protocols.** Messages, states or commands encoded as
+  strings and compared with `==`. An enum names the cases, carries their
+  data, and makes `match` exhaustive (Chapter 16).
+- **Catching to continue.** A `catch` for a broad type around a loop body,
+  so that a failure becomes a skipped iteration. If an iteration may refuse,
+  the refusal has a name and the loop catches that name.
+- **The cell as a field substitute.** A `Cell` threaded through many
+  actions to simulate a mutable object. A successor chain says the same
+  thing with values that can be inspected afterwards.
+- **Spawn and forget.** Starting tasks whose results nobody awaits.
+  Structured concurrency limits the damage, since tasks still running when
+  `async main` returns are cancelled and their cleanup is awaited, but a
+  task nobody awaits is a task whose result nobody checks.
+
+None of these is forbidden, and some are the right answer in small
+programs. They are listed because each of them was found in real Okkama
+code, and each was replaced, in the standard library review or in the
+examples of this book, by one of the patterns above.
+
+## 26.11 The classic catalogue, read in Okkama
+
+The 23 patterns of Gamma and his co-authors are a useful checklist of what a
+language makes easy, hard or unnecessary [[Gamma 1994](#ref-gamma1994)]. The table goes
+through the ones that change most.
+
+| Pattern | In Okkama |
+|---|---|
+| Strategy | A role and the objects that do it; an anonymous action for a one-off (Chapter 18) |
+| Decorator | A role, implemented by objects that hold another implementation (Section 26.2) |
+| Composite | A role done by both the leaf and the container, which holds a collection of the role |
+| Builder | A chain of successors, or a constructor with named and defaulted fields |
+| Prototype | Unneeded: objects are immutable, so sharing one is copying it |
+| Singleton | Not expressible: no global state and no static fields; one instance made in `main` and passed down |
+| Factory method | Several constructors, one per form (Chapter 12), or an action that returns a role |
+| Template method | No inheritance; a decorator, or an object that takes the varying step as a role |
+| Observer | A channel to an owning task, or an event that waiters await (Chapter 20) |
+| Iterator | `for` over collections, ranges and async streams (`for await`) |
+| State | Typestate: a role per state, transitions as successors (Section 26.3) |
+| Command | An enum case per command, with a `match` that interprets it; or an action value |
+| Visitor | `match` over an enum; across roles, the expression problem stands (Chapter 16) |
+| Null object | Unneeded as a workaround: absence is `Maybe`; still useful as a real "do nothing" implementation of a role |
+
+Norvig's observation holds in Okkama too, in its own way. Patterns that
+exist to work around mutable shared state, such as Prototype and the
+defensive copies of Builder, disappear because the state cannot be
+mutated. Patterns that exist to work around inheritance, Template Method
+first among them, are replaced by composition because there is no
+inheritance to work around. And Singleton, a pattern for global state, has
+no expression at all.
+
+## 26.12 What the patterns cost
+
+The patterns of this chapter trade size for change. A decorator chain has
+more declarations than a flag object; a role and its fake are more text than
+a concrete dependency; a successor allocates a new object where a setter
+would write one word; a typestate needs a role per state. For a short script
+these costs are real, and an Okkama programmer who writes a fifty-line tool
+with two flags and one concrete dependency is not wrong.
+
+The costs pay back as a program grows and as it is changed by people who
+did not write it. Values that cannot change can be shared without fear and
+reasoned about locally; dependencies that are roles can be replaced in a
+test without a framework; refusals that are names can be handled exactly;
+resources that belong to scopes are released on every path. The rules that
+make some antipatterns into compile errors also make some useful shapes
+impossible: there is no way to cache a value inside an object after
+construction other than `once let` (Chapter 13), no way to share a mutable
+counter between objects other than an `Atomic` or an owning task, and no way
+to write the small mutable helper object other languages reach for. Those
+limits are deliberate, and Chapter 28 discusses the ones that are not.
+
 # References
 
+- <a id="ref-alexander1977"></a>Christopher Alexander, Sara Ishikawa, Murray Silverstein (1977). *A Pattern Language: Towns, Buildings, Construction*. Oxford University Press.
 - <a id="ref-amin2016"></a>Nada Amin, Ross Tate (2016). Java and Scala's Type Systems are Unsound: The Existential Crisis of Null Pointers. In *Proceedings of OOPSLA 2016*: 838–848. ACM. https://doi.org/10.1145/2983990.2984004
 - <a id="ref-lions1996"></a>Jacques-Louis Lions et al. (1996). *ARIANE 5 Flight 501 Failure: Report by the Inquiry Board*. European Space Agency, Paris, 19 July 1996. https://www.esa.int/Newsroom/Press_Releases/Ariane_501_-_Presentation_of_Inquiry_Board_report
 - <a id="ref-armstrong2003"></a>Joe Armstrong (2003). *Making Reliable Distributed Systems in the Presence of Software Errors*. PhD thesis, Royal Institute of Technology (KTH), Stockholm.
@@ -15024,6 +14359,7 @@ efficiency principle at work: the surface stays put while the cost moves.
 - <a id="ref-bracha1998"></a>Gilad Bracha, Martin Odersky, David Stoutamire, Philip Wadler (1998). Making the Future Safe for the Past: Adding Genericity to the Java Programming Language. In *Proceedings of OOPSLA 1998*: 183–200. ACM. https://doi.org/10.1145/286936.286957
 - <a id="ref-braun2013"></a>Matthias Braun, Sebastian Buchwald, Sebastian Hack, Roland Leißa, Christoph Mallon, Andreas Zwinkau (2013). Simple and Efficient Construction of Static Single Assignment Form. In *Compiler Construction (CC 2013)*, LNCS 7791: 102–122. Springer. https://doi.org/10.1007/978-3-642-37051-9_6
 - <a id="ref-brooks1987"></a>Frederick P. Brooks, Jr. (1987). No Silver Bullet — Essence and Accidents of Software Engineering. *Computer* 20(4): 10–19. https://doi.org/10.1109/MC.1987.1663532
+- <a id="ref-brown1998"></a>William J. Brown, Raphael C. Malveau, Hays W. McCormick III, Thomas J. Mowbray (1998). *AntiPatterns: Refactoring Software, Architectures, and Projects in Crisis*. Wiley.
 - <a id="ref-bugayenko2016"></a>Yegor Bugayenko (2016). *Elegant Objects*, Volume 1. Self-published (CreateSpace).
 - <a id="ref-bugayenko2017"></a>Yegor Bugayenko (2017). *Elegant Objects*, Volume 2. Self-published (CreateSpace).
 - <a id="ref-burstall1980"></a>Rod M. Burstall, David B. MacQueen, Donald T. Sannella (1980). HOPE: An Experimental Applicative Language. In *Proceedings of the 1980 ACM Conference on LISP and Functional Programming*: 136–143. ACM. https://doi.org/10.1145/800087.802799
@@ -15076,6 +14412,7 @@ efficiency principle at work: the surface stays put while the cost moves.
 - <a id="ref-klabnik2023"></a>Steve Klabnik, Carol Nichols (2023). *The Rust Programming Language*, 2nd edition. No Starch Press. https://doc.rust-lang.org/book/
 - <a id="ref-knuth1974"></a>Donald E. Knuth (1974). Structured Programming with go to Statements. *ACM Computing Surveys* 6(4): 261–301. https://doi.org/10.1145/356635.356640
 - <a id="ref-knuth1997"></a>Donald E. Knuth (1997). *The Art of Computer Programming, Volume 2: Seminumerical Algorithms*, 3rd edition. Addison-Wesley.
+- <a id="ref-koenig1995"></a>Andrew Koenig (1995). Patterns and Antipatterns. *Journal of Object-Oriented Programming* 8(1): 46–48.
 - <a id="ref-kotlindata"></a>JetBrains (2024). Data classes. *Kotlin documentation*. https://kotlinlang.org/docs/data-classes.html
 - <a id="ref-kotlinspec"></a>JetBrains (2024). *Kotlin Language Specification*, chapter Type System: Nullable Types. https://kotlinlang.org/spec/type-system.html
 - <a id="ref-landin1964"></a>Peter J. Landin (1964). The Mechanical Evaluation of Expressions. *The Computer Journal* 6(4): 308–320. https://doi.org/10.1093/comjnl/6.4.308
@@ -15101,6 +14438,7 @@ efficiency principle at work: the surface stays put while the cost moves.
 - <a id="ref-milner1997"></a>Robin Milner, Mads Tofte, Robert Harper, David MacQueen (1997). *The Definition of Standard ML (Revised)*. MIT Press.
 - <a id="ref-moseley2006"></a>Ben Moseley, Peter Marks (2006). Out of the Tar Pit. Software Practice Advancement (SPA) 2006. https://curtclifton.net/papers/MoseleyMarks06a.pdf
 - <a id="ref-moses1970"></a>Joel Moses (1970). The Function of FUNCTION in LISP, or Why the FUNARG Problem Should Be Called the Environment Problem. *ACM SIGSAM Bulletin* 15: 13–27. https://doi.org/10.1145/1093410.1093411
+- <a id="ref-norvig1996"></a>Peter Norvig (1996). Design Patterns in Dynamic Programming. Presentation at Object World, Boston, May 1996. https://norvig.com/design-patterns/
 - <a id="ref-nygaard1978"></a>Kristen Nygaard, Ole-Johan Dahl (1978). The Development of the SIMULA Languages. *ACM SIGPLAN Notices* 13(8): 245–272 (HOPL I). https://doi.org/10.1145/960118.808391
 - <a id="ref-nystrom2015"></a>Bob Nystrom (2015). What Color is Your Function? Blog post, 1 February 2015. https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/
 - <a id="ref-okasaki1998"></a>Chris Okasaki (1998). *Purely Functional Data Structures*. Cambridge University Press. https://doi.org/10.1017/CBO9780511530104

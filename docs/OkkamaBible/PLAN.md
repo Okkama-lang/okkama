@@ -59,7 +59,7 @@ least 600 pages per language, and more is better — it is a Bible.
 | | **Part III. Behaviour** | |
 | 9 | Expressions and control flow | 14 |
 | 10 | Failure: throw, panic, try/catch, causes, confirm | 22 |
-| 11 | defer, destroy, regions: deterministic resources | 20 |
+| 11 | defer and destroy: deterministic resources | 20 |
 | | **Part IV. Objects** | |
 | 12 | Objects, fields and constructors | 18 |
 | 13 | Actions, successors and immutability | 18 |
@@ -144,6 +144,19 @@ language.
   needs no group (compare Trio nurseries, Kotlin structured concurrency).
 
 ## Progress
+
+- Editorial pass (2026-11-14): applied “The language, not its organs” to
+  all 21 remaining existing chapter pairs (1–19, 21–22); Chapter 20 was
+  used as the reference and left unchanged. Removed and rewritten source
+  passages are preserved verbatim in 19 new EN/RU pairs under `internals/`,
+  with source section headings and `described 0.5.x`. Chapter 11 is now
+  “defer and destroy: deterministic resources”. Renumbered Chapters 5,
+  10–12, 14, 16–17 and updated chapter cross-references in both languages.
+  Removed figure references: `numbers-cost`, `slice-cost`, `append-cost`;
+  no example files or figure files were deleted. `17-grow-rejected` remains
+  as a language-limit example. Verified paired section structure and asset
+  references, verbatim archive coverage, absence of old engine-chapter
+  references, and successful `python3 build.py`; `--check` was not run.
 
 Updated with each chapter: `build.py --stats`.
 

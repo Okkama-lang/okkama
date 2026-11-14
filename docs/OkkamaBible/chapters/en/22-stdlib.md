@@ -54,10 +54,7 @@ no intermediate "node" object to unwrap. An optional member is read with
 `maybe(name)`, which answers a `Maybe` for each kind, so the default is
 written where the value is used: `order.maybe("note").text() else "none"`.
 
-Writing is the same object built in code: `Json(JsonField("id", 4711), …)`
-holds its members in order, and `string()` asks the runtime for the compact
-text in one call; `pretty(2)` indents it. Numbers are exact, never `float`:
-a JSON number reads back as an `int`, a `BigInt` or a `Decimal`.
+Writing uses the same object built in code: `Json(JsonField("id", 4711), …)` holds members in order; `string()` returns compact text and `pretty(2)` indents it. Numbers are exact, never `float`: a JSON number reads as an `int`, a `BigInt` or a `Decimal`.
 
 Everything that goes wrong is a `JsonError`, and every case names the value
 it is about by its RFC 6901 pointer [@rfc6901]. Asking for text where the
@@ -188,26 +185,10 @@ module that is documented in its source is documented everywhere.
 **Efficient.** The library is the code most programs spend their time in,
 so its costs are everyone's costs. Four rules govern them.
 
-- *No quadratic growth.* Collections are built with builders, `reduce`
-  accumulators or the persistent arrays and maps, never by copying in a
-  loop. The runtime makes `acc + [x]` inside `reduce` grow in place
-  (section 8.5), but a module does not rely on a reader knowing that.
-- *Measured.* A hot path has a micro-benchmark, and a change is judged on
-  the release build, not on a debug or gate profile whose code layout
-  exaggerates small differences.
-- *Natives only where measured,* or for what Okkama cannot do itself:
-  cryptography, TLS, X.509 and PEM stay native; a parser written in Okkama
-  stays in Okkama unless a measurement says otherwise.
-- *No fixed cost per call.* A table, a pattern or a template is parsed
-  once, when its object is built, not every time an action uses it.
-
-The two principles meet in the runtime underneath. The 0.5.7 release, for
-instance, changed no public API of `std`, yet it
-made `join`, ranges in array literals, map literals and the future
-collections of `async/collect` several times faster on large inputs: the
-library's shape stayed put while its cost moved. A style that keeps the
-surface small is what lets that happen without breaking the programs above
-it.
+- *No quadratic growth.* Build collections with builders or `reduce`; `acc + [x]` in the supported accumulator pattern has amortized constant append cost (Section 8.5).
+- *Measured.* Measure hot paths on release builds.
+- *Natives where needed.* Use them for host services or demonstrated performance needs; keep ordinary parsing in Okkama unless measurements justify otherwise.
+- *No fixed cost per call.* Parse a table, pattern or template once when its object is built, not at every use.
 
 ## 22.6 Explicit authority, no global state
 
@@ -275,24 +256,14 @@ the deferred close.
 
 ## 22.8 Tests
 
-The library is tested where it is written. Every public object has at
-least one inline `test` next to it (chapter 15), and the std tests run on
-both engines, the IR engine and Sparrow, in every gate. A module is not
-changed until tests pin what it does now: the review of 0.5.4 wrote such
-*characterization* tests first and changed code second, so that a
-simplification which altered behaviour showed up as a failing test, not as
-a surprise in a program.
+The library is tested where it is written. Every public object has at least one inline `test` (Chapter 15). Before a module changes, characterization tests pin its current behaviour, so a simplification that changes a public result is caught by a test.
 
 Network and asynchronous code is tested against itself rather than against
 the outside world: a test opens a `TcpListening` on 127.0.0.1, port 0, and
 plays the peer in the same program. Such tests run in a container, like the
 gate, so that a test that misbehaves cannot reach the machine around it.
 
-Finally, the modules people use directly have examples: 70 small programs
-under `examples/`, one per task, each with the output it must print, run on
-both engines by `examples/check.py`. A test checks that the library is
-right; an example checks that it is usable, and that the way the
-documentation says to use it still works.
+Modules people use directly also have small task examples under `examples/`, each with expected output checked by `examples/check.py`. A test checks correctness; an example checks usability and the documented way to use the library.
 
 ## 22.9 Scope: what the library holds
 
@@ -410,7 +381,7 @@ reads the comments and the declarations together and prints a page (#512):
 $ okkama man json
 NAME
     json - JSON values: one immutable Json, parsed or built in code, read
-    without casts and written by the runtime in one call.
+    without casts and serialized as compact text.
 
 SYNOPSIS
     let order = ParsedJson(text).root();

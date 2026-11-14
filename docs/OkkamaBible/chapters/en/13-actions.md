@@ -111,7 +111,7 @@ The rules are short, and they never guess:
 6. Overloads of one name and arity may declare different results when
    their parameter types differ. A call gets the result of the overload it
    selects: `minus(duration is Duration) is Instant` and
-   `minus(other is Instant) is Duration` sit side by side (§14.8).
+   `minus(other is Instant) is Duration` sit side by side (§14.7).
 
 Rule 4 makes `(int, any)` and `(any, int)` ambiguous for a call with two
 integers. Each is better in one position and worse in the other:
@@ -123,12 +123,7 @@ fix is visible: convert one argument, or narrow one overload. Until 0.4.2
 it named neither (#273). The no-match message lists the types too:
 `No action "joined" on object "Pairing" accepts (string, string)`.
 
-Overloading is resolved at compile time from static types. A value typed
-`any` is not narrowed back to what it holds when an overload is chosen.
-The IR shows the result: each overload is its own function, `@Greeter.describe#0`,
-`#1`, `#2`, and a call names one of them directly. Okkama has no dynamic
-dispatch on argument types (multiple dispatch). Dispatch on the receiver
-happens only through roles (Chapter 14).
+Overloading is resolved before execution from static types. A value typed `any` is not narrowed to its contents to choose an overload. Okkama has no dispatch on argument types at run time; dispatch on the receiver happens through roles (Chapter 14).
 
 ## 13.4 Variadic actions
 
@@ -196,25 +191,7 @@ ordered(price is int) is ^Tab {
 
 Two details matter when a body stages several fields.
 
-**Reads see the receiver, not the staged values.** After `^items = items + 1;`
-the name `items` still means the receiver's field. The compiled code makes
-this plain: every read is `obj.get` on the receiver, and the staged values
-wait in registers.
-
-```text
-func @Tab.ordered(%0: Tab, %1: int) -> ^Tab [successor Tab] {
-    …
-^b2:
-    %7: int = obj.get %0, items
-    %8: int = const 1
-    %9: int = int.add %7, %8
-    %10: int = obj.get %0, total
-    %11: int = int.add %10, %1
-    %12: Tab = obj.next %0 { items: %9, total: %11 }
-    ret %12
-    …
-}
-```
+**Reads see the receiver, not the staged values.** After `^items = items + 1;`, the name `items` still means the receiver’s original field.
 
 A successor that stages `^count = count + 1; ^twice = count * 2;` sets
 `twice` from the *old* count. The order of the staging statements does not
@@ -223,9 +200,6 @@ change what the reads see.
 **The last stage wins.** `^count = 10; ^count = 20;` makes a successor with
 `count` 20. Each staging statement replaces the value staged before it;
 there is no error.
-
-`obj.next` is the IR instruction for "copy with these fields replaced".
-`Tab.closed` compiles to two instructions, a constant and one `obj.next`.
 
 ## 13.6 The result must be used
 
@@ -401,15 +375,7 @@ the `Atomic` changes.
 
 ## 13.12 What a successor costs
 
-A successor is a shallow copy. `obj.next` allocates an object of the same
-size and copies every field. Fields that hold other objects copy the
-reference, not the object. On Sparrow the JIT unrolls the copy
-into one store per word, the header included. Unchanged words are loaded
-from the receiver; staged words come straight from registers. For `Tab`,
-with four fields, `ordered` is an allocation, three loads and five
-stores. On the IR engine it is a new vector of
-field values. On the JVM it is a constructor call with the old fields and
-the new ones.
+A successor keeps unchanged fields and replaces the fields named by the transition. Objects held in unchanged fields retain their identities; a transition does not duplicate everything the receiver reaches.
 
 So the cost of a transition is proportional to the number of fields of the
 object being copied, not to the size of everything it reaches. A change
@@ -421,16 +387,8 @@ the new version shares every untouched branch with the old one
 
 Two consequences for design:
 
-- **A wide object makes every transition expensive.** An object with
-  thirty fields copies thirty words for each change to one of them.
-  Grouping fields that change together into a part keeps transitions small,
-  and that grouping is usually also a better model.
-- **A long loop of successors allocates once per step.** For thousands of
-  steps that is cheap. The allocation fast path on Sparrow is a free-list
-  pop, and a successor replaced on the next step is garbage at once: the
-  collector never marks it. For a
-  hot inner loop over a large count, `reduce` over a range or a `Cell` of a
-  scalar avoids the objects entirely.
+- **Wide objects make transitions more expensive.** Group fields that change together into a part to keep transitions small.
+- **A long successor loop creates a value per step.** For a hot loop over a large count, consider `reduce` over a range or a scalar `Cell`.
 
 ## 13.13 A value computed once: `once let`
 
@@ -446,27 +404,13 @@ hidden values() is @int {
 }
 ```
 
-The first run computes the value and stores it in a hidden slot of `self`;
-every later run reads the slot (#491). Several actions share one result by
-calling one hidden action. The compiler keeps the stored value honest:
+The first successful evaluation is remembered for that object; later calls reuse it (#491). Several actions can share a result by calling one hidden action. The following restrictions apply:
 
-- the value reads only fields, `self`, constants and earlier `once let`s,
-  never a parameter, so it cannot belong to one call;
-- it reaches no effect: no clock, file, network, process or randomness, no
-  `Cell`, `async` object, `await` or `spawn`, followed through the actions of
-  concrete objects. A call through a role is trusted, as the object's
-  contract with its input;
-- it holds no resource. A function value or a role value counts as one only
-  if it can hold one in this program: a function type when some closure of
-  that type captures a resource, a role when some object that does it has a
-  `destroy`. The compiler decides this over the whole program, after every
-  specialization exists, so a generic library may keep a closure in a
-  `once let` for every caller that passes a plain one (issue #520).
+- A `once let` reads fields, `self`, constants and earlier `once let`s, never a call parameter.
+- It must be free of effects: no clock, file, network, process, randomness, `Cell`, async object, `await` or `spawn`. Calls through roles rely on their contracts.
+- Its value must not retain a resource. A closure or role value is allowed only when it cannot retain a resource in this program (issue #520).
 
-The slot is not part of the value. `==`, map keys and `Dumper` leave it out,
-so an object is equal to itself before and after its first answer. A
-successor starts with empty slots, because its fields changed. A value that
-throws leaves the slot empty for the next call.
+The remembered result does not participate in `==`, map keys or `Dumper`. A successor computes its own result on first use. If evaluation throws, the next call tries again.
 
 `once let` is the reason a constructor in the standard library never does
 work: an object binds its input when it is made, and computes from it on

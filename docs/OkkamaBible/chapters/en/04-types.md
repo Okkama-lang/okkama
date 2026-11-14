@@ -25,10 +25,6 @@ Okkama uses its type system for three jobs:
   were all rejected this way.
 - **To document intent.** A signature such as `share(people is int) is rat`
   tells a reader what goes in and what comes out without reading the body.
-- **To make the runtime fast.** Sparrow chooses a machine
-  representation for every register from its type — a raw 64-bit integer, a
-  double, a pointer the garbage collector traces — which is only safe because
-  the types are checked (Chapter 25).
 
 ## 4.2 The inventory
 
@@ -177,10 +173,7 @@ float result that stays finite. These are *runtime failures* (Chapter 10):
 precise, located errors that stop the program — or, in the case of typed
 errors, that a caller may catch.
 
-The boundary between the two lists has moved over time. The first Okkama
-implementation, an interpreter in Perl, checked most types while running;
-the Rust compiler checks most of them statically, and the remaining dynamic
-checks are concentrated where values, not types, decide.
+Types are checked before execution; the remaining dynamic checks concern values, such as bounds and divisors.
 
 ## 4.8 Limits
 

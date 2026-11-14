@@ -250,43 +250,7 @@ Okkama has no delegation shorthand ("implement `Pricing` by forwarding to
 Keeping roles small keeps it short: a role with one or two actions is the
 common case in the standard library.
 
-## 14.7 How a role call runs
-
-A role boundary and a role call are explicit in the IR:
-
-```text
-%19: Bottle = call @Bottle.new#0(%18)
-%20: Package = role.wrap %19
-%21: Package = call.role %20, Package.opened()
-%22: str = call.role %21, Package.label()
-```
-
-`role.wrap` marks the boundary where a `Bottle` becomes a `Package`.
-`call.role` calls slot `opened` of `Package` on whatever object is behind
-the reference. Each object's declaration lists, for every role it does, the
-function that fills each slot:
-`does Package { label = @Bottle.label, opened = @Bottle.opened }`.
-
-The engines differ in how they find that function:
-
-- **The IR engine** reads the receiver's declaration and looks up its
-  witness for the role on each call.
-- **Sparrow** compiles `role.wrap` to nothing: a role reference is
-  the same pointer. `call.role` loads the object's header, shifts out the
-  descriptor number, and indexes a table built once per role slot. The
-  table holds one function per object type. Then it calls that function.
-  Compared with a direct call, that is a few loads and an indirect call.
-- **The JVM backend** turns each role into a Java interface. The classes of
-  objects that do it implement the interface, `role.wrap` is again a no-op,
-  and `call.role` is an `invokeinterface`. The JVM's inline caches and
-  speculative inlining then treat a call site that sees one or two object
-  types like a direct call.
-
-In none of them does the restriction cost anything at run time. It is
-checked when the program is compiled and verified, and the reference is
-the plain object.
-
-## 14.8 Operators are roles
+## 14.7 Operators are roles
 
 Arithmetic on objects goes through roles as well. The standard module
 `operators` declares one role per operator (#215). The first type parameter
@@ -303,13 +267,7 @@ is the right operand, the second the result:
 
 {{example:14-operators}}
 
-With an object on the left, `a + b` is the call `a.plus(b)` and nothing
-more. The compiler rewrites the operator into that call and checks it like
-any other call: the right operand gets no conversion, and the overload it
-selects must be a role instance the type declares. The engines never see an
-operator on an object. The orderings `<`, `<=`, `>` and `>=` use the role
-that already existed for them, `compare.Comparing<T>`: `a < b` is
-`a.order(b) == Order.less`. `==` stays structural (Chapter 12).
+With an object on the left, `a + b` means `a.plus(b)` through its declared role. The right operand gets no implicit conversion. Ordering uses `compare.Comparing<T>`: `a < b` means `a.order(b) == Order.less`. `==` stays structural (Chapter 12).
 
 The roles are nominal, like every role (§14.2). An action named `plus` does
 not give an object `+`:
@@ -337,7 +295,7 @@ nothing in a name says that `plus` means addition, which is the argument
 of §14.2. One class for all arithmetic was ruled out because a contract
 should not ask for actions the object cannot keep.
 
-## 14.9 Roles elsewhere
+## 14.8 Roles elsewhere
 
 | | Okkama role | Java interface | Go interface | Rust trait |
 |---|---|---|---|---|
@@ -357,7 +315,7 @@ the table has a way back from the contract to the concrete type. Okkama
 has none, and that is what makes a role reference a capability rather than
 a type annotation.
 
-## 14.10 What this design costs
+## 14.9 What this design costs
 
 - **Forwarding code.** Decorators repeat every action of the role. No
   delegation syntax shortens it (§14.6).
@@ -372,9 +330,6 @@ a type annotation.
   not, because `int` cannot be given a role. Python asks the right operand
   through `__rmul__`, and Rust allows `impl Mul<Money> for i64` in Money's
   crate. Okkama has neither (no retroactive conformance, above).
-- **One dispatch per call.** A role call is an indirect call. In hot loops
-  over a single type, holding the concrete type avoids it; the JVM and its
-  inline caches recover most of the difference.
 
 In return:
 

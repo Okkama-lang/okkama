@@ -122,7 +122,7 @@ Every operator requires operands of the right category and converts nothing:
   written with `pow` (Chapter 5).
 - An object takes part in arithmetic and ordering only through roles it
   declares: `a + b` is `a.plus(b)` when the type of `a` does `Adding`, and
-  `a < b` asks `a.order(b)` through `Comparing` (§14.8). An object without
+  `a < b` asks `a.order(b)` through `Comparing` (§14.7). An object without
   those roles has no operators.
 
 ## 9.4 Choosing
@@ -266,10 +266,7 @@ compile time, even in code that never runs.
 
 ### Unbounded loops and budgets
 
-A `loop` without a `last` runs until something stops it. The step budget
-(Chapter 26) counts every branch back to an earlier point of the program. So
-`okkama run --max-steps N` stops any loop, on every engine, with the same
-report.
+A `loop` without a `last` runs until something stops it. The step budget counts function entries and loop iterations. `okkama run --max-steps N` therefore stops an unbounded loop with a budget report.
 
 ## 9.6 `return`
 
@@ -303,11 +300,6 @@ C leaves the order of operands and arguments unspecified. `f() + g()` may call
 either function first, and a program whose output depends on the order is
 legal and unpredictable. Java fixed the order as left to right [@gosling2023],
 and Okkama does the same.
-
-Okkama has a second reason as well. Three engines run the same program — the
-IR interpreter, the JVM and Sparrow — and the conformance suite
-compares their outputs byte for byte. With an unspecified order, the expected
-answer for a test would be a set of outputs instead of one.
 
 ## 9.8 What is not there
 

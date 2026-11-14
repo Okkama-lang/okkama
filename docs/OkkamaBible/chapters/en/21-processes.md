@@ -4,7 +4,7 @@ Everything the earlier chapters built computes. An object holds values, an
 action derives new ones, a future waits for a result that another part of
 the program will produce. None of it reaches outside the program. The world
 outside — files, sockets, clocks, other processes, the terminal — is reached
-in one way only: through a *native*, a function the engine provides and the
+in one way only: through a *native*, a function supplied by the host and the
 program declares. This chapter is about that boundary: how a native is
 declared and answered, what a program holds when it holds a file or a
 socket, how authority over the host is passed around as an ordinary value,
@@ -21,13 +21,7 @@ declaration such as this one from `runtime/time`:
 native monotonic_clock() is int;
 ```
 
-A native declaration has a signature and no body. It is a request: when the
-program calls `monotonic_clock()`, the engine looks up a provider registered
-under that module and name and runs it. The provider is Rust on the IR
-engine and on Sparrow, Java on the JVM, and the three are tested to give the
-same results (Chapter 26). The `runtime/*` modules are the only place in the
-standard library where natives are declared; everything above them is
-ordinary Okkama that can be read, tested and faked.
+A native declaration has a signature and no body. Calling it requests the provider registered for that module and name. The `runtime/*` modules are where the standard library declares natives; the layers above them are ordinary Okkama that can be read, tested and faked.
 
 Any module may declare a native. Declaring one does not create it:
 
@@ -38,8 +32,7 @@ fails with `RuntimeError: Native symbol "bible/unregistered@1::vault_open/1"
 is not registered`, and the run ends with status 1. A native's name is its
 module, the module's major version, its own name and its arity, and only a
 provider registered under exactly that name answers it. A program cannot
-reach the host by inventing a declaration: the set of doors is the set the
-engine was built with, plus whatever an embedder adds (Section 21.7).
+reach the host by inventing a declaration: the set of doors is the set the host provides (Section 21.7).
 
 The rule has a cost that the next sections pay off. Every effect a program
 can have outside itself has a name in `runtime/*`, so the list of what a
@@ -64,8 +57,7 @@ native async dns_addresses(host is string, port is int) is @@string;
 native async udp_receive(origin is SocketState, limit is int) is @byte;
 ```
 
-A call returns a future like any async action. The engine starts the host
-operation without blocking the scheduler, other tasks run meanwhile, and
+A call returns a future like any async action. The host operation starts without blocking the scheduler, other tasks run meanwhile, and
 the future settles when the host reports (Chapter 20). The program never
 sees the host's threads or callbacks.
 
@@ -93,8 +85,7 @@ compared, used as a map key, put into `any`, printed or taken apart. What
 stands behind it — a file descriptor, a socket, a Java channel — never
 becomes a value the program can see.
 
-The provider keeps every handle it issued in a table, with a generation and
-an open or closed state, and checks the table on every call:
+Closing a handle is idempotent, and using a closed handle fails safely:
 
 {{example:21-handle}}
 
@@ -104,14 +95,9 @@ an open or closed state, and checks the table on every call:
   crash: it fails with a `NativeFailure` whose code is `already_closed`,
   which an ordinary `catch` takes.
 - If the program forgot `close`, the runtime would close every remaining
-  handle when the run ends, however it ends, without waiting for a garbage
-  collector.
+  handle when the run ends, however it ends, at the end of the run.
 
-The same three engines print the same four lines. Programs rarely hold
-handles directly: std wraps each in an object with a `destroy` (Chapter 11),
-so `FileRoot`, `TcpConnection` and the database connections close their
-handles when their owner's scope ends, and the handle is a field nobody
-else can reach.
+Programs rarely hold handles directly. std wraps each in an object with a `destroy` (Chapter 11), so files and connections close when their owner’s scope ends; the handle is a private field.
 
 ## 21.4 Authority is a value
 
@@ -255,7 +241,7 @@ sets the input, the directory and the limit.
 A child that has to be talked to rather than waited for is driven through
 `Process.streams()` (issue #196). Its input does `AsyncWriting` and
 `Closing`; its outputs do `AsyncReading`, with `lines()` for `for await`.
-A slow child then holds up only the task that talks to it, on every engine:
+A slow child then holds up only the task that talks to it:
 
 ```okkama
 let child = Process(command: InheritedCommand(program: Path("sort")));
@@ -274,20 +260,9 @@ built from values carries exactly what it was given.
 
 ### 21.5.1 Process workers
 
-Section 20.4 introduced the other way an Okkama program starts a process:
-`spawn` of a *synchronous* action runs that action in a worker process, in
-parallel with the program. Seen from this chapter, a worker is a command the
-runtime builds itself, and each of its properties follows from that.
+Section 20.4 introduced process workers: `spawn` of a synchronous action runs it in another process, in parallel with the program. The process boundary determines what it can receive and return.
 
-**The worker is the same program.** The runtime starts the program again,
-with the same engine, in a mode that runs one action instead of `main`:
-Tomato its `.spb` (a program compiled in memory is first written to a
-temporary file), the IR engine its source files, the JVM its classes. The
-child gets the parent's environment and working directory as the parent's
-runtime sees them, so a relative path means in the worker what it meant in
-the parent. It does not get the parent's heap, its open handles or its
-tasks. There is no fork and no copy of memory: the worker starts empty,
-loads the same code, and is handed a receiver and arguments.
+**The worker runs the same program.** It runs one action instead of `main`, with the parent’s environment and working directory. It receives a receiver and arguments but no objects, open handles or tasks from the parent.
 
 **Only values cross.** The receiver's fields and the arguments are encoded in
 the parent and decoded in the child: `int`, `float`, `string`, `char`,
@@ -307,18 +282,7 @@ in a worker. This is the same rule seen from the other side: the error
 object is an identity too. A worker that should report several kinds of
 outcome returns them as data, an enum of results, which does cross.
 
-**Cancellation is a kill.** Section 20.5's cancellation is cooperative: it
-reaches a task at its suspension point and unwinds it, defers and `destroy`s
-included. A worker is a synchronous action with no suspension points, so
-there is nothing to cooperate with. Cancelling its future kills the process
-(SIGKILL): on Tomato and the IR engine the worker leads its own process group
-and the whole group goes, so processes the worker started go with it. The
-future settles `Cancelled` only after the child has been reaped, so the code
-after `await` never runs beside a worker that is still writing. A worker
-cancelled before its process started is never started. Its defers do not
-run, and a worker that must clean up after itself must not be cancelled; it
-should be given a deadline among its arguments instead. (Until 0.5.3 the IR
-engine and the JVM sent TERM and settled the future at once; issue #359.)
+**Cancellation kills the worker.** Unlike an async task, a synchronous worker has no suspension points for cooperative cancellation. Cancelling its future kills it; the future settles as `Cancelled` only after the worker has ended. A worker cancelled before starting is never started. Its `defer`s and `destroy`s do not run. If cleanup matters, pass it a deadline and let it finish cooperatively instead.
 
 **Output is passed on whole.** What the action prints reaches the parent's
 standard output and error when the worker reports back, before its result,
@@ -342,15 +306,7 @@ another core.
 The streams a program is born with are handles too, and two of their
 defaults changed in 0.5.5.
 
-Standard output is buffered (issue #132). A terminal receives each line as
-it ends; a pipe or a file receives blocks of 64 KiB; `Stdout().flush()`
-writes out what is pending. The order of what a reader sees survives,
-because the runtimes flush before standard error is written, before
-standard input is read from a terminal, before a child process starts,
-before the terminal is written to, and when the program ends. The reason is
-plain arithmetic: writing 200 000 lines into a pipe took Sparrow 155 ms and
-the IR engine 1 084 ms when every line was its own system call, and 56 ms
-and 590 ms after. The JVM still flushes every write.
+Standard output is buffered (issue #132). A terminal receives complete lines; pipes and files receive blocks of 64 KiB. `Stdout().flush()` writes pending output. Pending output is also flushed before writing standard error, reading terminal input, starting a child process, writing to the terminal and ending the program. Use `flush()` when a reader must see a partial line promptly.
 
 Standard input is read by lines (issue #221):
 
@@ -361,21 +317,11 @@ for Stdin() -> line {
 }
 ```
 
-A line loses its LF and the one CR before it, so a file written on Windows
-reads the same as one written on Unix. Input that is not valid UTF-8 is a
-failure by default; `Stdin(decoding: InputDecoding.lenient)` puts U+FFFD in
-place of each bad sequence instead, as browsers do, and
-`Stdin().chunks(size: 65536)` walks bytes. Every `Stdin()` reads through the
-one buffer the runtime keeps, so a program can read a header line by line
-and the rest as bytes without losing what sat between them.
+A line loses its LF and the one CR before it. Invalid UTF-8 fails by default; `Stdin(decoding: InputDecoding.lenient)` replaces bad sequences with U+FFFD. `Stdin().chunks(size: 65536)` reads bytes. All `Stdin()` values share one input position, so a program may read a header by lines and then the remaining bytes without losing intervening data.
 
 ## 21.6 What an embedder can deny
 
-A program run by `okkama run` may use every native. A program run by a
-host — an application that embeds `sparrow-core` to run plug-ins, or a
-service that runs users' scripts — usually should not. The embedding entry
-point takes `budget::Limits`, and `Limits::natives` lists the *native
-groups* the program may use:
+A program run by `okkama run` may use every native. A host running plug-ins or user scripts may restrict the native groups available to a run:
 
 | group | what it reaches |
 |---|---|
@@ -398,78 +344,9 @@ the whole list of what the program can do outside itself; an embedder that
 allows only `Clock` has a program that can read the time and print, and
 nothing else.
 
-The same `Limits` carries the budgets of the security model: steps, memory,
-output and an interrupt flag the host may raise from any thread. Running
-out stops the run with its own report, which no `catch` intercepts
-(Chapter 10). Since 0.5.1 the memory budget can measure one runtime
-instead of the whole process (`MemoryScope::Runtime`, issue #269): on
-Sparrow it reads the runtime's own heap, so a host can run several
-programs side by side, and the one that grows past its budget stops while
-the others go on.
+A host may also set step, memory and output budgets and interrupt a run. Exhaustion or interruption stops it with an uncatchable report (Chapter 10); cleanup does not run after a budget stop.
 
-### 21.6.1 An embedder, written out
-
-A host that runs a plug-in it did not write states the whole contract in one
-value. In Rust, against `sparrow-core`:
-
-```rust
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use sparrow_core::budget::{Limits, MemoryScope, NativeGroup};
-
-fn run_plugin(spb: Vec<u8>, arguments: Vec<Vec<u8>>, stop: Arc<AtomicBool>)
-    -> Result<i64, sparrow_core::Error>
-{
-    let limits = Limits {
-        steps: Some(200_000_000),          // function entries and loop back-edges
-        memory: Some(64 << 20),            // 64 MiB of this runtime's own heap
-        memory_scope: MemoryScope::Runtime,
-        output: Some(1 << 20),             // 1 MiB of stdout and stderr
-        interrupt: Some(stop),             // any thread may raise it
-        natives: Some(vec![NativeGroup::Clock]),
-    };
-    // No worker command: `spawn` of a synchronous action fails here.
-    sparrow_core::run_limited(spb, arguments, false, Vec::new(), limits)
-}
-```
-
-Each field is one line of the host's policy, and no field has a default
-that grants something. `natives: Some(vec![NativeGroup::Clock])` is the
-answer to "what may this program do outside itself?": read the clocks, and
-the computation and printing every program may do. A plug-in that opens a
-file fails at that call with a report that names the group it lacked. A
-plug-in that loops forever runs out of steps; one that builds an unbounded
-list runs out of its 64 MiB; one that prints in a loop runs out of output.
-The host's watchdog thread can end any of them early with
-`stop.store(true, Ordering::Relaxed)`. Each of these ends the run with its
-own message (`Execution budget exhausted: steps`, `… memory`, `… output`,
-`Execution interrupted`), which no `catch` in the plug-in intercepts and
-after which no `destroy` runs: the runtime is discarded with its heap.
-
-`MemoryScope::Runtime` is the reason one host process can run many such
-plug-ins at once. The default scope, `Process`, reads the process allocator
-through a probe the embedder installs, which is right for the CLIs (one run
-per process) and wrong for a server, where one plug-in's memory would be
-charged to all of them. With `Runtime`, Sparrow reads the bytes its own heap
-holds, its pages and large objects and the Rust memory its objects own, so
-every runtime keeps a budget of its own and no probe is needed.
-
-The empty worker command is a decision too. Process workers (21.5.1) start
-the same program again as a child process, so a host that allows them hands
-the plug-in a way to create processes. The core refuses a `spawn` of a
-synchronous action when the host gave it no command to run, and a host that
-does give one should also allow `NativeGroup::Process`, which says so.
-
-The guarantees hold only as far as the classification of the natives does.
-Every native of `runtime/*` must be named either in a group or among the
-pure ones. A native that is in neither is refused whenever the host
-restricts the groups, and a test fails the build when a module is left
-unnamed. Until 0.5.3 the table failed open: a module it did not name counted
-as pure, and two natives that read host facts, the preferred languages and
-the system's trusted certificates, passed a host that had denied `Env`
-(issue #361). What a group cannot express, such as "files, but only under
-this directory", is expressed in the program's own terms: the host passes a
-`FileRoot` as an argument (21.4), and the program can name nothing outside it.
+A host restricting native groups refuses unclassified natives too. Finer authority, such as access only below one directory, is expressed by passing a `FileRoot` (21.4).
 
 ## 21.7 The command line keeps the user's authority
 
@@ -491,7 +368,7 @@ sits between them. Inside the language, std passes authority as values
 Below that, the operating system does the isolating: a container, a jail,
 a user without rights. The boundary is drawn there because an
 interpreter-level sandbox is only as strong as its least careful native,
-and the runtime modules declare 653 of them.
+and each native must respect the host’s policy.
 
 ## 21.8 Limits
 
@@ -509,14 +386,6 @@ and the runtime modules declare 653 of them.
 
 ## 21.9 What this design costs
 
-The narrow native ABI costs copies: a string or a byte array crosses by
-value, and a large one is copied each time it crosses. The opaque handles
-cost a table lookup and a generation check on every call. Explicit
-authority costs parameters: a function that reads one file takes an
-object that names where it may read, where another language would let it
-open a path. The command line's full authority costs isolation that a
-host must provide itself.
+The narrow native boundary costs copies when large strings or byte arrays cross by value. Explicit authority costs parameters: code reading a file takes an object that names where it may read. The command line’s full authority leaves isolation to the host.
 
-What the design buys is a short answer to "what can this program do":
-the natives its imports reach, filtered by the groups its host allows.
-That answer fits on one page, and every engine gives the same one.
+The design gives a short answer to “what can this program do”: the natives its imports reach, filtered by the groups its host allows.

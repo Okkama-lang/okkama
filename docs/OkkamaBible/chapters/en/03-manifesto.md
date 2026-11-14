@@ -93,12 +93,7 @@ Purely functional data structures show that this need not be slow: persistent
 lists, trees and maps share most of their structure between versions, so a
 "new" version costs logarithmic work, not a full copy [@okasaki1998].
 
-**Cost.** Performance and vocabulary. A new object per change costs an
-allocation; Sparrow makes small allocations cheap, and the compiler
-removes many, but arrays and maps without efficient persistent updates make
-some idioms quadratic today (issues #145 and #151). And every state a program
-cares about must be named and returned, which makes long chains of updates
-more verbose than assignments.
+**Cost.** Performance and vocabulary. A new object per change costs an allocation; repeatedly rebuilding a collection can be quadratic (Chapter 8). Every state the program cares about must be named and returned, so long update chains are more verbose than assignments.
 
 ## 3.4 Rule four: there is no null
 
@@ -170,11 +165,7 @@ wants — physics, graphics, statistics — and makes the exact categories the
 default for counting and money. Mixing them is a decision the programmer
 writes down: `int(x)`, `x.float()`, `x.rat()`.
 
-**Cost.** Speed and ceremony. Exact integers need an overflow check on every
-operation (Sparrow makes it one branch); rationals are slower than
-floats; and the explicit casts that Chapter 2's decorator needed —
-`int(amount * percent / 100)` — are characters other languages do not ask
-for. Chapter 5 measures the cost.
+**Cost.** Speed and ceremony. Exact integer arithmetic must preserve results beyond fixed-width bounds; rationals are slower than floats. Explicit casts such as `int(amount * percent / 100)` take characters other languages do not ask for. Chapter 5 explains these costs.
 
 ## 3.7 Rule seven: roles instead of inheritance
 
@@ -233,15 +224,7 @@ created them, and `destroy` runs when that scope exits — normally, by
 cleanup for the current block. There are no finalizers and nothing to forget
 in a `finally`.
 
-**Why.** Stroustrup's RAII — resource acquisition is initialisation — made
-object lifetime the lifetime of the resource it owns, so that release cannot
-be forgotten [@stroustrup1994]. Garbage-collected languages lost this,
-because objects die whenever the collector decides, and they compensated with
-`try/finally`, `using` and `with` blocks that programmers must remember to
-write. Okkama has both a precise garbage collector for memory and
-deterministic destruction for resources. Its ownership regions are related to
-Tofte and Talpin's region-based memory management, in which the lifetimes of
-groups of objects are tied to the program's block structure [@tofte1997].
+Stroustrup’s RAII ties resource release to scope exit [@stroustrup1994]. Automatic memory management alone does not guarantee timely release of files or connections. Okkama guarantees deterministic destruction of resources (Chapter 11).
 
 **Cost.** A resource must have a clear owner. Programs that share a resource
 between independent owners must make one of them responsible, or use the
