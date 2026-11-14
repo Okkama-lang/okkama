@@ -286,7 +286,57 @@ instead of growing without bound. A tool that is meant to take huge argument
 lists, for example from `xargs`, can set other limits through the
 constructor that takes them.
 
-## 24.8 Configuration and the environment
+## 24.8 Output for people and for programs
+
+A tool's output has two readers. A person at a terminal wants alignment,
+emphasis and perhaps colour. A program reading a pipe wants a stable,
+parseable format and no escape codes. The *Command Line Interface
+Guidelines* recommend detecting which one is there, and offering `--json`
+when the output is likely to be consumed by another program [@prasad2020].
+
+The decision belongs at the edge, made once, from facts the program is given:
+
+{{example:24-output}}
+
+- `DetectedTerminalCapabilities` decides the colour depth from whether the
+  output is a terminal, the environment (`NO_COLOR`, `TERM`) and a policy
+  (`automatic`, `never`, `always`). A pipe and `NO_COLOR=1` both give no
+  colour. A terminal gives what it supports.
+- The report is rendered for a depth, so the same `Report` gives plain text,
+  coloured text or JSON. The counting code never sees any of this.
+- The facts are passed in. In a real run they come from the terminal session
+  and `Environment()`. In the example they are fixed, which is why the
+  example can check what each case prints.
+
+The JSON form is built with the `json` module's `Json` and `JsonField`, not by
+concatenating strings, so quoting and escaping are always right. A field
+added later does not break readers that ignore it, which is the usual reason
+to prefer an object over an array at the top level.
+## 24.9 Changing files safely
+
+A tool that only reads cannot damage anything. A tool that rewrites files —
+a formatter, a migration, a bulk rename — can, and its users expect two
+things from it: a way to see what it would do before it does it, and an
+original that survives if the run is interrupted halfway.
+
+Both follow from the decide-then-do shape. The change is a value first, and
+writing it is a separate step:
+
+{{example:24-rewrite}}
+
+- `Tidy.planned` reads a file and returns a `Change` that holds the lines
+  before and after. Nothing is written. `--dry-run` is simply "print the
+  plan and stop", and costs no extra code in the core.
+- `Tidy.applied` writes the new text to a sibling file and then moves it over
+  the original with `FileEntry.move(destination:, overwrite: true)`, which
+  replaces the destination in one step. If the run fails while writing, the
+  original is untouched and only the sibling is left behind. A tool that
+  must never leave even that writes through `TemporaryFile` in the same
+  directory, which removes itself on close.
+- The example works inside a `TemporaryDirectory` made in the current
+  directory, and `defer scratch.close()` removes it with everything in it, so
+  the run leaves nothing behind.
+## 24.10 Configuration and the environment
 
 `tally` has two options and no configuration, and many tools should stay
 that way. When a tool does grow settings, the *Command Line Interface
@@ -321,25 +371,7 @@ precedence becomes a sequence of layers, each laid over the one before. An
 option declared with an explicit `key` is stored under that key, which lets
 `--top` on the command line and `top = 5` in a file mean the same setting.
 
-## 24.9 Shipping it
-
-A tool is used through its help text more than through its documentation.
-`tally --help` prints `command.usage(program: "tally")`: the summary, the
-usage line, and the options, flags and operands with their help, wrapped to
-80 columns or to the width given. Because it is generated from the
-declaration, adding an option to `CliCommand` adds it to the help.
-`command.completion(program: "tally", shell: CompletionShell.zsh)` gives a
-completion script for the shell, and a tool often offers it as a hidden
-subcommand that users run once and save.
-
-During development a tool runs from source, with its arguments after the
-file: `okkama run tally.ok --top 5 notes.txt`. To ship it, `okkama build
-tally.ok --target sparrow -o tally.spb` compiles it into a bytecode file that
-`okkama exec` runs without recompiling (Chapter 19 covers modules, packages
-and their versions). The program is the same either way. Its behaviour does
-not depend on how it was started.
-
-## 24.10 Growing: subcommands
+## 24.11 Growing: subcommands
 
 Tools grow by verbs. `git` has `commit` and `log`, `cargo` has `build` and
 `test`, and a tool that started with one job often gains a second. In
@@ -364,7 +396,25 @@ The objects in `Commands` are the same values the program later compares
 against. A subcommand is renamed in one place, and a typo in a comparison is
 a compile error, not a branch that is never taken.
 
-## 24.11 What the design costs
+## 24.12 Shipping it
+
+A tool is used through its help text more than through its documentation.
+`tally --help` prints `command.usage(program: "tally")`: the summary, the
+usage line, and the options, flags and operands with their help, wrapped to
+80 columns or to the width given. Because it is generated from the
+declaration, adding an option to `CliCommand` adds it to the help.
+`command.completion(program: "tally", shell: CompletionShell.zsh)` gives a
+completion script for the shell, and a tool often offers it as a hidden
+subcommand that users run once and save.
+
+During development a tool runs from source, with its arguments after the
+file: `okkama run tally.ok --top 5 notes.txt`. To ship it, `okkama build
+tally.ok --target sparrow -o tally.spb` compiles it into a bytecode file that
+`okkama exec` runs without recompiling (Chapter 19 covers modules, packages
+and their versions). The program is the same either way. Its behaviour does
+not depend on how it was started.
+
+## 24.13 What the design costs
 
 The tool in this chapter is longer than the shortest program that would
 print the same counts. A twenty-line script with a loop over the arguments,

@@ -270,10 +270,12 @@
   - [24.5 Failures at the edge](#245-failures-at-the-edge)
   - [24.6 Testing a tool without a terminal](#246-testing-a-tool-without-a-terminal)
   - [24.7 Input: whole or streamed](#247-input-whole-or-streamed)
-  - [24.8 Configuration and the environment](#248-configuration-and-the-environment)
-  - [24.9 Shipping it](#249-shipping-it)
-  - [24.10 Growing: subcommands](#2410-growing-subcommands)
-  - [24.11 What the design costs](#2411-what-the-design-costs)
+  - [24.8 Output for people and for programs](#248-output-for-people-and-for-programs)
+  - [24.9 Changing files safely](#249-changing-files-safely)
+  - [24.10 Configuration and the environment](#2410-configuration-and-the-environment)
+  - [24.11 Growing: subcommands](#2411-growing-subcommands)
+  - [24.12 Shipping it](#2412-shipping-it)
+  - [24.13 What the design costs](#2413-what-the-design-costs)
 - [Chapter 26. Patterns and anti-patterns](#chapter-26-patterns-and-anti-patterns)
   - [26.1 What a pattern is, and what a language does to it](#261-what-a-pattern-is-and-what-a-language-does-to-it)
   - [26.2 Behaviour by composition, not by flags](#262-behaviour-by-composition-not-by-flags)
@@ -14304,7 +14306,212 @@ instead of growing without bound. A tool that is meant to take huge argument
 lists, for example from `xargs`, can set other limits through the
 constructor that takes them.
 
-## 24.8 Configuration and the environment
+## 24.8 Output for people and for programs
+
+A tool's output has two readers. A person at a terminal wants alignment,
+emphasis and perhaps colour. A program reading a pipe wants a stable,
+parseable format and no escape codes. The *Command Line Interface
+Guidelines* recommend detecting which one is there, and offering `--json`
+when the output is likely to be consumed by another program [[Prasad 2020](#ref-prasad2020)].
+
+The decision belongs at the edge, made once, from facts the program is given:
+
+```okkama
+module bible/tally_output v1.0.0;
+
+import "io/stdout" take Stdout;
+import "os/environment" take Environment;
+import "terminal/capability" take DetectedTerminalCapabilities, ColorPolicy, TerminalColorDepth;
+import "terminal/style" take TextStyle, StyledText, DefaultColor, TextAttribute;
+import "json" take Json, JsonField;
+
+// What the tool found, rendered for people or for programs.
+object Report {
+    has lines is int;
+    has words is int;
+    has top is @string;
+
+    Report(:lines, :words, :top);
+
+    text(depth is TerminalColorDepth) is @string {
+        let bold = TextStyle(foreground: DefaultColor(), background: DefaultColor(), attributes: [TextAttribute.bold]);
+        let header = lines.string() + " lines, " + words.string() + " words";
+        [StyledText(origin: header, style: bold).rendered(depth)] + top;
+    }
+
+    json() is string {
+        let words_json = top.map() -> word { Json(word); };
+        Json(JsonField("lines", lines), JsonField("words", words), JsonField("top", Json(items: words_json))).string();
+    }
+}
+
+// Colours are decided once, from the facts a real run reads: whether the
+// output is a terminal, the environment (NO_COLOR, TERM) and a policy.
+object Display {
+    has depth is TerminalColorDepth;
+
+    Display(terminal is bool, environment is Environment) {
+        let detected = DetectedTerminalCapabilities(
+            input: false,
+            output: terminal,
+            native_depth: TerminalColorDepth.basic,
+            columns: 80,
+            rows: 24,
+            environment: environment,
+            policy: ColorPolicy.automatic,
+        );
+        depth = detected.capabilities()::Support::colors;
+    }
+
+    depth() is TerminalColorDepth { depth; }
+
+    named() is string {
+        match depth {
+            case TerminalColorDepth.disabled { "no colour"; }
+            case TerminalColorDepth.basic { "8 colours"; }
+            case TerminalColorDepth.indexed { "256 colours"; }
+            case TerminalColorDepth.true_color { "true colour"; }
+        };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let report = Report(lines: 2, words: 12, top: ["the", "on"]);
+    let piped = Display(terminal: false, environment: Environment(values: [:]));
+    let muted = Display(terminal: true, environment: Environment(values: ["NO_COLOR": "1"]));
+    let shown = Display(terminal: true, environment: Environment(values: ["TERM": "xterm"]));
+    for [piped, muted, shown] -> display {
+        let first = report.text(display.depth()).first().replace("\u{1b}", "ESC");
+        out.writeln(display.named() + ": " + first);
+    }
+    out.writeln(report.json());
+    0;
+}
+```
+
+Output:
+
+```text
+no colour: 2 lines, 12 words
+no colour: 2 lines, 12 words
+8 colours: ESC[1;39;49m2 lines, 12 wordsESC[0m
+{"lines":2,"words":12,"top":["the","on"]}
+```
+
+- `DetectedTerminalCapabilities` decides the colour depth from whether the
+  output is a terminal, the environment (`NO_COLOR`, `TERM`) and a policy
+  (`automatic`, `never`, `always`). A pipe and `NO_COLOR=1` both give no
+  colour. A terminal gives what it supports.
+- The report is rendered for a depth, so the same `Report` gives plain text,
+  coloured text or JSON. The counting code never sees any of this.
+- The facts are passed in. In a real run they come from the terminal session
+  and `Environment()`. In the example they are fixed, which is why the
+  example can check what each case prints.
+
+The JSON form is built with the `json` module's `Json` and `JsonField`, not by
+concatenating strings, so quoting and escaping are always right. A field
+added later does not break readers that ignore it, which is the usual reason
+to prefer an object over an array at the top level.
+## 24.9 Changing files safely
+
+A tool that only reads cannot damage anything. A tool that rewrites files —
+a formatter, a migration, a bulk rename — can, and its users expect two
+things from it: a way to see what it would do before it does it, and an
+original that survives if the run is interrupted halfway.
+
+Both follow from the decide-then-do shape. The change is a value first, and
+writing it is a separate step:
+
+```okkama
+module bible/tidy v1.0.0;
+
+import "io/stdout" take Stdout;
+import "fs/path" take Path;
+import "fs/file" take File, FileMode;
+import "fs/entry" take FileEntry;
+import "fs/directory" take Directory;
+import "fs/temp" take TemporaryDirectory;
+
+// What tidying one file would do: a value, decided before anything is written.
+object Change {
+    has path is Path;
+    has before is @string;
+    has after is @string;
+
+    Change(:path, :before, :after);
+
+    // How many lines differ.
+    edits() is int {
+        (0..before.size()).filter() -> index { before[index] != after[index]; }.size();
+    }
+
+    path() is Path { path; }
+    after() is @string { after; }
+}
+
+object Tidy {
+    Tidy();
+
+    // The decision: trailing spaces removed from every line.
+    planned(path is Path) is Change {
+        let file = File(path: path);
+        defer file.close();
+        let before = file.text().lines();
+        Change(path: path, before: before, after: before.map() -> line { line.trim_end(); });
+    }
+
+    // Doing it safely: write a sibling file, then move it over the original
+    // in one step. A failure before the move leaves the original whole.
+    applied(change is Change) is void {
+        let sibling = Path(change.path().string() + ".tidy");
+        let file = File(path: sibling, mode: FileMode.writing);
+        for change.after() -> line { file.text().writeln(line); }
+        file.close();
+        FileEntry(sibling).move(destination: change.path(), overwrite: true);
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let scratch = TemporaryDirectory(parent: Directory(Path(".")), prefix: "tidy-");
+    defer scratch.close();
+    let notes = scratch.path().child("notes.txt");
+    let seed = File(path: notes, mode: FileMode.writing);
+    seed.text().writeln("buy milk   ");
+    seed.text().writeln("call Ada");
+    seed.text().writeln("fix the gate  ");
+    seed.close();
+
+    let tidy = Tidy();
+    let change = tidy.planned(notes);
+    out.writeln("--dry-run: would change " + change.edits().string() + " of 3 lines");
+    tidy.applied(change);
+    out.writeln("after: " + tidy.planned(notes).edits().string() + " lines to change");
+    0;
+}
+```
+
+Output:
+
+```text
+--dry-run: would change 2 of 3 lines
+after: 0 lines to change
+```
+
+- `Tidy.planned` reads a file and returns a `Change` that holds the lines
+  before and after. Nothing is written. `--dry-run` is simply "print the
+  plan and stop", and costs no extra code in the core.
+- `Tidy.applied` writes the new text to a sibling file and then moves it over
+  the original with `FileEntry.move(destination:, overwrite: true)`, which
+  replaces the destination in one step. If the run fails while writing, the
+  original is untouched and only the sibling is left behind. A tool that
+  must never leave even that writes through `TemporaryFile` in the same
+  directory, which removes itself on close.
+- The example works inside a `TemporaryDirectory` made in the current
+  directory, and `defer scratch.close()` removes it with everything in it, so
+  the run leaves nothing behind.
+## 24.10 Configuration and the environment
 
 `tally` has two options and no configuration, and many tools should stay
 that way. When a tool does grow settings, the *Command Line Interface
@@ -14379,25 +14586,7 @@ precedence becomes a sequence of layers, each laid over the one before. An
 option declared with an explicit `key` is stored under that key, which lets
 `--top` on the command line and `top = 5` in a file mean the same setting.
 
-## 24.9 Shipping it
-
-A tool is used through its help text more than through its documentation.
-`tally --help` prints `command.usage(program: "tally")`: the summary, the
-usage line, and the options, flags and operands with their help, wrapped to
-80 columns or to the width given. Because it is generated from the
-declaration, adding an option to `CliCommand` adds it to the help.
-`command.completion(program: "tally", shell: CompletionShell.zsh)` gives a
-completion script for the shell, and a tool often offers it as a hidden
-subcommand that users run once and save.
-
-During development a tool runs from source, with its arguments after the
-file: `okkama run tally.ok --top 5 notes.txt`. To ship it, `okkama build
-tally.ok --target sparrow -o tally.spb` compiles it into a bytecode file that
-`okkama exec` runs without recompiling (Chapter 19 covers modules, packages
-and their versions). The program is the same either way. Its behaviour does
-not depend on how it was started.
-
-## 24.10 Growing: subcommands
+## 24.11 Growing: subcommands
 
 Tools grow by verbs. `git` has `commit` and `log`, `cargo` has `build` and
 `test`, and a tool that started with one job often gains a second. In
@@ -14488,7 +14677,25 @@ The objects in `Commands` are the same values the program later compares
 against. A subcommand is renamed in one place, and a typo in a comparison is
 a compile error, not a branch that is never taken.
 
-## 24.11 What the design costs
+## 24.12 Shipping it
+
+A tool is used through its help text more than through its documentation.
+`tally --help` prints `command.usage(program: "tally")`: the summary, the
+usage line, and the options, flags and operands with their help, wrapped to
+80 columns or to the width given. Because it is generated from the
+declaration, adding an option to `CliCommand` adds it to the help.
+`command.completion(program: "tally", shell: CompletionShell.zsh)` gives a
+completion script for the shell, and a tool often offers it as a hidden
+subcommand that users run once and save.
+
+During development a tool runs from source, with its arguments after the
+file: `okkama run tally.ok --top 5 notes.txt`. To ship it, `okkama build
+tally.ok --target sparrow -o tally.spb` compiles it into a bytecode file that
+`okkama exec` runs without recompiling (Chapter 19 covers modules, packages
+and their versions). The program is the same either way. Its behaviour does
+not depend on how it was started.
+
+## 24.13 What the design costs
 
 The tool in this chapter is longer than the shortest program that would
 print the same counts. A twenty-line script with a loop over the arguments,

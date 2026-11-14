@@ -385,7 +385,7 @@ Examples cannot fork or reach the network in the cage, so process and network co
 
 ## Chapter 24 notes (2026-11-15)
 
-7.8 pages (EN and RU) of its floor of 14. The tool is `tally` (examples/tally/tool.ok, a module). The run example is `24-tally` over tally/sample.txt; the tests are `24-tally-tests`, with a Given implementation of Sources. Sources: McIlroy 1978, POSIX Utility Conventions, CLI Guidelines.
+8.9 pages (EN and RU) of its floor of 14. The tool is `tally` (examples/tally/tool.ok, a module). The run example is `24-tally` over tally/sample.txt; the tests are `24-tally-tests`, with a Given implementation of Sources. Sources: McIlroy 1978, POSIX Utility Conventions, CLI Guidelines.
 
 Written:
 - what a tool owes its user (five rules);
@@ -400,7 +400,12 @@ Written:
 
 Added: subcommands (`24-subcommands`), a streaming filter with grep's exit status (`24-filter`), and flag > environment > default precedence (`24-settings`). Found while writing: #637, a branch command refuses its own --help.
 
+Added 2026-11-15:
+- output for people and programs (`24-output`: DetectedTerminalCapabilities, NO_COLOR, JSON);
+- changing files safely (`24-rewrite`: a Change value, --dry-run, sibling write + move).
+
+Left out on purpose: interruption (Ctrl-C). The std has no public signal API for synchronous tools (only the internal runtime/signal used by web/app), and the book makes no unverified claim about Ctrl-C.
+
 To add for the floor:
-- output for people and for programs (--json, terminal detection);
-- interruption (Ctrl-C) and its exit status;
-- tools that change files safely (write and rename, --dry-run).
+- a longer case study: grow `tally` into a two-subcommand tool end to end;
+- or move material from 24.3 into a guided walkthrough.

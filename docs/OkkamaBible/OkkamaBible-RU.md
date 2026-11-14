@@ -270,10 +270,12 @@
   - [24.5 Отказы на границе](#245-отказы-на-границе)
   - [24.6 Тесты без терминала](#246-тесты-без-терминала)
   - [24.7 Ввод: целиком или потоком](#247-ввод-целиком-или-потоком)
-  - [24.8 Конфигурация и окружение](#248-конфигурация-и-окружение)
-  - [24.9 Как это отдать пользователям](#249-как-это-отдать-пользователям)
-  - [24.10 Рост: подкоманды](#2410-рост-подкоманды)
-  - [24.11 Во что обходится такой дизайн](#2411-во-что-обходится-такой-дизайн)
+  - [24.8 Вывод для людей и для программ](#248-вывод-для-людей-и-для-программ)
+  - [24.9 Безопасное изменение файлов](#249-безопасное-изменение-файлов)
+  - [24.10 Конфигурация и окружение](#2410-конфигурация-и-окружение)
+  - [24.11 Рост: подкоманды](#2411-рост-подкоманды)
+  - [24.12 Как это отдать пользователям](#2412-как-это-отдать-пользователям)
+  - [24.13 Во что обходится такой дизайн](#2413-во-что-обходится-такой-дизайн)
 - [Глава 26. Паттерны и антипаттерны](#глава-26-паттерны-и-антипаттерны)
   - [26.1 Что такое паттерн и что с ним делает язык](#261-что-такое-паттерн-и-что-с-ним-делает-язык)
   - [26.2 Поведение через композицию, а не через флаги](#262-поведение-через-композицию-а-не-через-флаги)
@@ -14469,7 +14471,216 @@ status 1
 принимать огромные списки аргументов, например от `xargs`, может задать
 другие пределы через конструктор, принимающий их.
 
-## 24.8 Конфигурация и окружение
+## 24.8 Вывод для людей и для программ
+
+У вывода утилиты два читателя. Человеку у терминала нужны выравнивание,
+выделение и, возможно, цвет. Программе, читающей конвейер, нужен
+устойчивый, разбираемый формат без управляющих последовательностей.
+*Command Line Interface Guidelines* советуют определять, кто на другом конце,
+и предлагать `--json`, когда вывод, скорее всего, прочтёт другая программа
+[[Prasad 2020](#ref-prasad2020)].
+
+Решение принимается на границе, один раз, из фактов, которые программе
+передали:
+
+```okkama
+module bible/tally_output v1.0.0;
+
+import "io/stdout" take Stdout;
+import "os/environment" take Environment;
+import "terminal/capability" take DetectedTerminalCapabilities, ColorPolicy, TerminalColorDepth;
+import "terminal/style" take TextStyle, StyledText, DefaultColor, TextAttribute;
+import "json" take Json, JsonField;
+
+// What the tool found, rendered for people or for programs.
+object Report {
+    has lines is int;
+    has words is int;
+    has top is @string;
+
+    Report(:lines, :words, :top);
+
+    text(depth is TerminalColorDepth) is @string {
+        let bold = TextStyle(foreground: DefaultColor(), background: DefaultColor(), attributes: [TextAttribute.bold]);
+        let header = lines.string() + " lines, " + words.string() + " words";
+        [StyledText(origin: header, style: bold).rendered(depth)] + top;
+    }
+
+    json() is string {
+        let words_json = top.map() -> word { Json(word); };
+        Json(JsonField("lines", lines), JsonField("words", words), JsonField("top", Json(items: words_json))).string();
+    }
+}
+
+// Colours are decided once, from the facts a real run reads: whether the
+// output is a terminal, the environment (NO_COLOR, TERM) and a policy.
+object Display {
+    has depth is TerminalColorDepth;
+
+    Display(terminal is bool, environment is Environment) {
+        let detected = DetectedTerminalCapabilities(
+            input: false,
+            output: terminal,
+            native_depth: TerminalColorDepth.basic,
+            columns: 80,
+            rows: 24,
+            environment: environment,
+            policy: ColorPolicy.automatic,
+        );
+        depth = detected.capabilities()::Support::colors;
+    }
+
+    depth() is TerminalColorDepth { depth; }
+
+    named() is string {
+        match depth {
+            case TerminalColorDepth.disabled { "no colour"; }
+            case TerminalColorDepth.basic { "8 colours"; }
+            case TerminalColorDepth.indexed { "256 colours"; }
+            case TerminalColorDepth.true_color { "true colour"; }
+        };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let report = Report(lines: 2, words: 12, top: ["the", "on"]);
+    let piped = Display(terminal: false, environment: Environment(values: [:]));
+    let muted = Display(terminal: true, environment: Environment(values: ["NO_COLOR": "1"]));
+    let shown = Display(terminal: true, environment: Environment(values: ["TERM": "xterm"]));
+    for [piped, muted, shown] -> display {
+        let first = report.text(display.depth()).first().replace("\u{1b}", "ESC");
+        out.writeln(display.named() + ": " + first);
+    }
+    out.writeln(report.json());
+    0;
+}
+```
+
+Вывод:
+
+```text
+no colour: 2 lines, 12 words
+no colour: 2 lines, 12 words
+8 colours: ESC[1;39;49m2 lines, 12 wordsESC[0m
+{"lines":2,"words":12,"top":["the","on"]}
+```
+
+- `DetectedTerminalCapabilities` выбирает глубину цвета по тому, терминал ли
+  на выводе, по окружению (`NO_COLOR`, `TERM`) и по политике (`automatic`,
+  `never`, `always`). Конвейер и `NO_COLOR=1` дают вывод без цвета. Терминал
+  даёт то, что умеет.
+- Отчёт отрисовывается для заданной глубины, так что один и тот же `Report`
+  даёт простой текст, цветной текст или JSON. Код подсчёта ничего из этого
+  не видит.
+- Факты передаются снаружи. В настоящем запуске они берутся из сессии
+  терминала и `Environment()`. В примере они зафиксированы, поэтому пример
+  может проверить, что печатает каждый случай.
+
+JSON строится через `Json` и `JsonField` модуля `json`, а не склейкой строк,
+так что кавычки и экранирование всегда верны. Поле, добавленное позже, не
+ломает читателей, которые его не знают, — обычная причина предпочесть объект
+массиву на верхнем уровне.
+## 24.9 Безопасное изменение файлов
+
+Утилита, которая только читает, ничего не может испортить. Утилита, которая
+переписывает файлы, — форматтер, миграция, массовое переименование — может,
+и пользователи ждут от неё двух вещей: возможности увидеть, что она сделает,
+до того как сделает, и оригинала, который переживёт прерванный посередине
+запуск.
+
+Обе вытекают из формы «реши, потом сделай». Изменение сначала — значение, а
+запись — отдельный шаг:
+
+```okkama
+module bible/tidy v1.0.0;
+
+import "io/stdout" take Stdout;
+import "fs/path" take Path;
+import "fs/file" take File, FileMode;
+import "fs/entry" take FileEntry;
+import "fs/directory" take Directory;
+import "fs/temp" take TemporaryDirectory;
+
+// What tidying one file would do: a value, decided before anything is written.
+object Change {
+    has path is Path;
+    has before is @string;
+    has after is @string;
+
+    Change(:path, :before, :after);
+
+    // How many lines differ.
+    edits() is int {
+        (0..before.size()).filter() -> index { before[index] != after[index]; }.size();
+    }
+
+    path() is Path { path; }
+    after() is @string { after; }
+}
+
+object Tidy {
+    Tidy();
+
+    // The decision: trailing spaces removed from every line.
+    planned(path is Path) is Change {
+        let file = File(path: path);
+        defer file.close();
+        let before = file.text().lines();
+        Change(path: path, before: before, after: before.map() -> line { line.trim_end(); });
+    }
+
+    // Doing it safely: write a sibling file, then move it over the original
+    // in one step. A failure before the move leaves the original whole.
+    applied(change is Change) is void {
+        let sibling = Path(change.path().string() + ".tidy");
+        let file = File(path: sibling, mode: FileMode.writing);
+        for change.after() -> line { file.text().writeln(line); }
+        file.close();
+        FileEntry(sibling).move(destination: change.path(), overwrite: true);
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let scratch = TemporaryDirectory(parent: Directory(Path(".")), prefix: "tidy-");
+    defer scratch.close();
+    let notes = scratch.path().child("notes.txt");
+    let seed = File(path: notes, mode: FileMode.writing);
+    seed.text().writeln("buy milk   ");
+    seed.text().writeln("call Ada");
+    seed.text().writeln("fix the gate  ");
+    seed.close();
+
+    let tidy = Tidy();
+    let change = tidy.planned(notes);
+    out.writeln("--dry-run: would change " + change.edits().string() + " of 3 lines");
+    tidy.applied(change);
+    out.writeln("after: " + tidy.planned(notes).edits().string() + " lines to change");
+    0;
+}
+```
+
+Вывод:
+
+```text
+--dry-run: would change 2 of 3 lines
+after: 0 lines to change
+```
+
+- `Tidy.planned` читает файл и возвращает `Change` со строками до и после.
+  Ничего не пишется. `--dry-run` — это просто «напечатать план и
+  остановиться», и в ядре он не стоит ни строки.
+- `Tidy.applied` пишет новый текст в соседний файл и затем переносит его
+  поверх оригинала через `FileEntry.move(destination:, overwrite: true)`,
+  который заменяет назначение одним шагом. Если запуск упадёт во время
+  записи, оригинал не тронут, а остаётся только соседний файл. Утилита,
+  которая не должна оставлять даже его, пишет через `TemporaryFile` в том
+  же каталоге — он удаляет себя при закрытии.
+- Пример работает внутри `TemporaryDirectory`, созданного в текущем
+  каталоге, и `defer scratch.close()` удаляет его вместе со всем
+  содержимым, так что запуск ничего после себя не оставляет.
+## 24.10 Конфигурация и окружение
 
 У `tally` две опции и никакой конфигурации, и многим утилитам стоит
 оставаться такими. Когда у утилиты всё же появляются настройки, *Command Line
@@ -14545,25 +14756,7 @@ flag: 2
 этим ключом, и тогда `--top` в командной строке и `top = 5` в файле означают
 одну настройку.
 
-## 24.9 Как это отдать пользователям
-
-Утилитой пользуются через её справку чаще, чем через документацию.
-`tally --help` печатает `command.usage(program: "tally")`: краткое описание,
-строку использования и опции, флаги и операнды с их справкой, перенесённые по
-80 колонкам или по заданной ширине. Раз справка порождается из объявления,
-опция, добавленная в `CliCommand`, появляется и в справке.
-`command.completion(program: "tally", shell: CompletionShell.zsh)` даёт
-скрипт автодополнения для оболочки, и утилита часто предлагает его скрытой
-подкомандой, которую пользователь запускает один раз и сохраняет.
-
-Во время разработки утилита запускается из исходника, с аргументами после
-файла: `okkama run tally.ok --top 5 notes.txt`. Чтобы её отдать,
-`okkama build tally.ok --target sparrow -o tally.spb` компилирует её в файл
-байткода, который `okkama exec` запускает без повторной компиляции (модули,
-пакеты и их версии описаны в главе 19). Программа в обоих случаях одна и та
-же. Её поведение не зависит от того, как её запустили.
-
-## 24.10 Рост: подкоманды
+## 24.11 Рост: подкоманды
 
 Утилиты растут глаголами. У `git` есть `commit` и `log`, у `cargo` — `build`
 и `test`, а утилита, начавшая с одной работы, часто обзаводится второй. В
@@ -14655,7 +14848,25 @@ refused: CliFailure.detailed(0, "sort", "unknown child command")
 сравнивает. Подкоманда переименовывается в одном месте, а опечатка в
 сравнении — ошибка компиляции, а не ветка, которая никогда не выполнится.
 
-## 24.11 Во что обходится такой дизайн
+## 24.12 Как это отдать пользователям
+
+Утилитой пользуются через её справку чаще, чем через документацию.
+`tally --help` печатает `command.usage(program: "tally")`: краткое описание,
+строку использования и опции, флаги и операнды с их справкой, перенесённые по
+80 колонкам или по заданной ширине. Раз справка порождается из объявления,
+опция, добавленная в `CliCommand`, появляется и в справке.
+`command.completion(program: "tally", shell: CompletionShell.zsh)` даёт
+скрипт автодополнения для оболочки, и утилита часто предлагает его скрытой
+подкомандой, которую пользователь запускает один раз и сохраняет.
+
+Во время разработки утилита запускается из исходника, с аргументами после
+файла: `okkama run tally.ok --top 5 notes.txt`. Чтобы её отдать,
+`okkama build tally.ok --target sparrow -o tally.spb` компилирует её в файл
+байткода, который `okkama exec` запускает без повторной компиляции (модули,
+пакеты и их версии описаны в главе 19). Программа в обоих случаях одна и та
+же. Её поведение не зависит от того, как её запустили.
+
+## 24.13 Во что обходится такой дизайн
 
 Утилита этой главы длиннее самой короткой программы, которая напечатала бы
 те же числа. Скрипт строк на двадцать с циклом по аргументам, изменяемым
