@@ -7,7 +7,13 @@
 //! are centralized in `BodyLowerer` and call envelopes are emitted at their instruction sites.
 
 mod body;
-mod std_slice;
+mod collections;
+mod builders;
+#[cfg(test)]
+mod collection_tests;
+#[cfg(test)]
+mod builder_tests;
+mod specialize;
 mod native_summaries;
 mod construction;
 mod declarations;
@@ -15,11 +21,16 @@ mod defer;
 mod high;
 mod failures;
 mod objects;
+mod roles;
 mod walk;
 mod scalar;
 mod structure;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod specialization_tests;
+#[cfg(test)]
+mod role_tests;
 
 use crate::analysis::{Analysis, thir};
 use crate::oir2 as ir;
@@ -84,7 +95,7 @@ type Result<T> = std::result::Result<T, LowerError>;
 /// Independent developer entry: analysis supplies resolved THIR and declarations.
 /// No CLI routing, ownership elaboration or semantic verifier is invoked here.
 pub(crate) fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
-    let prepared = std_slice::prepare(analysis)?;
+    let prepared = specialize::prepare(analysis)?;
     let analysis = &prepared;
     let mut declarations = declarations::Declarations::new(analysis)?;
     // Check ordinary/default/cleanup bodies before constructor specializations.
@@ -128,6 +139,8 @@ pub(crate) fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
                 functions: &declarations.functions,
                 natives: &declarations.natives,
                 error_text: declarations.error_text,
+                std_array_for: body.module < analysis.registry.root_start,
+                builtin_adapters: &declarations.builtin_adapters,
                 objects: &declarations.objects,
                 constructors: &declarations.constructors,
                 given: declarations.ctor_fields.get(&function).cloned().unwrap_or_default(),
@@ -151,6 +164,8 @@ pub(crate) fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
             functions: &declarations.functions,
             natives: &declarations.natives,
             error_text: declarations.error_text,
+            std_array_for: deferred.source.module < analysis.registry.root_start,
+            builtin_adapters: &declarations.builtin_adapters,
             objects: &declarations.objects,
             constructors: &declarations.constructors,
             given: vec![], listed: None, defers: &declarations.defers,

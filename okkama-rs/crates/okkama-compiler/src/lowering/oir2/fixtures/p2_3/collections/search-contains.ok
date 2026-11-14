@@ -1,0 +1,6 @@
+module app;
+main() is int {
+    let a = [1, 2, 3];
+    a.contains(2);
+    0;
+}

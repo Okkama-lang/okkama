@@ -545,16 +545,18 @@ impl Writer<'_> {
                 }
                 FunctionAttr::Default { object, field } => {
                     self.push("default ");
-                    object.write(self)?;
-                    self.push(".");
-                    let name = self.module.declarations.get(*object).ok().and_then(|decl| match &decl.kind {
-                        DeclarationKind::Object { fields, .. } => fields.get(*field as usize).map(|f| f.name.as_str()),
-                        _ => None,
-                    });
-                    if let Some(name) = name {
-                        self.word(name)?;
+                    let decl = self.module.declarations.get(*object)
+                        .map_err(|error| PrintError::new(error.to_string()))?;
+                    let member = match &decl.kind {
+                        DeclarationKind::Object { fields, .. } => fields.get(*field as usize)
+                            .map(|field| field.name.clone()).unwrap_or_else(|| field.to_string()),
+                        _ => field.to_string(),
+                    };
+                    let name = format!("{}.{member}", decl.name);
+                    if name.chars().all(|c| c.is_alphanumeric() || "_./:#-".contains(c)) {
+                        self.push(&name);
                     } else {
-                        field.write(self)?;
+                        name.write(self)?;
                     }
                 }
                 FunctionAttr::Extern(name) => {

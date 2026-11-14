@@ -1,0 +1,233 @@
+//! Concrete role signatures, ordered witness targets and result adapters.
+use super::{LowerError, Result, declarations::Declarations};
+use crate::analysis::{Analysis, thir, ty};
+use crate::oir2 as ir;
+
+pub(super) fn declare_witnesses(declarations: &mut Declarations, analysis: &Analysis<'_>) -> Result<()> {
+    let mut objects: Vec<_> = declarations.objects.iter().map(|(&id, &decl)| (id, decl)).collect();
+    objects.sort_by_key(|(id, _)| *id);
+    for (object, declaration) in objects {
+        let info = &analysis.registry.objects[object.0];
+        let span = info.decl.expect("concrete object").span;
+        let mut witnesses = vec![];
+        for (role, _) in &info.does {
+            let role_type = declarations.ty(&ty::Ty::role(*role), span)?;
+            let ir::Type::Role { decl: role_decl, .. } = *declarations.builder.module().types.get(role_type)? else {
+                unreachable!("concrete role");
+            };
+            let ir::DeclarationKind::Role { methods, .. } = &declarations.builder.module()
+                .declarations.get(role_decl)?.kind else {
+                unreachable!("role declaration");
+            };
+            let methods = methods.clone();
+            let mut slots = vec![];
+            for (slot, method) in methods.iter().enumerate() {
+                let index = info.methods.iter().position(|candidate| {
+                    candidate.name == method.name && candidate.params.len() == method.signature.params.len()
+                        && candidate.params.iter().zip(&method.signature.params)
+                            .all(|((_, ty), lowered)| declarations.types.get(ty) == Some(lowered))
+                }).ok_or_else(|| LowerError::invalid(span, format!("unknown role slot {}", method.name)))?;
+                let target = declarations.functions.get(&thir::BodyOwner::Method { object, method: index })
+                    .copied().ok_or_else(|| {
+                        LowerError::unsupported(span, "role slot has no reachable implementation")
+                    })?;
+                let function = declarations.builder.module().functions.get(target)?;
+                if function.signature.results == method.signature.results
+                    && function.attrs.contains(&ir::FunctionAttr::Method(declaration)) {
+                    slots.push(target);
+                    continue;
+                }
+                let mut signature = method.signature.clone();
+                signature.params.insert(0, declarations.types[&ty::Ty::object(object)]);
+                let symbol = format!("{}.witness.{}.slot{slot}",
+                    declarations.builder.module().declarations.get(declaration)?.name,
+                    declarations.builder.module().declarations.get(role_decl)?.name);
+                let adapter = declarations.builder.declare_function(ir::Function {
+                    symbol, signature, attrs: vec![ir::FunctionAttr::Method(declaration)], type_params: vec![],
+                    summary: None, async_creation_summary: None, async_body_summary: None, body: None, loc: None,
+                })?;
+                let root = declarations.builder.declare_scope(ir::ScopeDecl {
+                    function: adapter, parent: None, kind: ir::ScopeKind::Action, loc: None,
+                })?;
+                let result = method.signature.results.first().copied();
+                let mut builder = declarations.builder.function_builder(adapter, root)?;
+                let entry = builder.entry();
+                let failure_ty = builder.intern_type(ir::Type::Service(ir::ServiceType::Failure))?;
+                let failure = builder.create_block(root, &[ir::ParamSpec::new(failure_ty)])?;
+                builder.switch_to(failure)?;
+                builder.terminate(ir::TermKind::Raise(builder.block_params(failure)?[0]))?;
+                builder.switch_to(entry)?;
+                builder.set_unwind(Some(ir::BlockUnwind {
+                    target: ir::Target { block: failure, args: vec![] },
+                }))?;
+                let args = builder.block_params(entry)?.iter().map(|&value| ir::CallArgument {
+                    value, convention: ir::OperandConvention::Borrow,
+                }).collect();
+                let values = builder.emit_schema(ir::Operation::Call(ir::CallOp::Direct {
+                    function: target, call: call_site(args),
+                }))?;
+                record_call_effect(&mut builder, entry)?;
+                let value = match (values.first().copied(), result) {
+                    (Some(value), Some(ty)) => {
+                        let input = builder.body().values.get(value)?.ty;
+                        let value = if matches!(builder.module().types.get(input)?, ir::Type::Successor(_))
+                            && !matches!(builder.module().types.get(ty)?, ir::Type::Successor(_)) {
+                            let ir::Type::Successor(inner) = *builder.module().types.get(input)? else {
+                                unreachable!("successor result");
+                            };
+                            builder.emit_schema(ir::Operation::Core(ir::CoreOp::SuccTake { value, ty: inner }))?[0]
+                        } else {
+                            value
+                        };
+                        if builder.body().values.get(value)?.ty == ty {
+                            Some(value)
+                        } else {
+                            Some(builder.emit_schema(ir::Operation::Core(ir::CoreOp::RoleWrap { value, ty }))?[0])
+                        }
+                    }
+                    (None, None) => None,
+                    _ => return Err(LowerError::invalid(span, "role adapter result arity")),
+                };
+                finish_adapter(&mut builder, root, entry, value)?;
+                let body = builder.finish()?;
+                declarations.builder.define_function(adapter, body)?;
+                slots.push(adapter);
+            }
+            witnesses.push(ir::Witness { role: role_type, slots });
+        }
+        if let ir::DeclarationKind::Object { witnesses: destination, .. } = &mut declarations.builder.raw_mut()
+            .declarations.get_mut(declaration)?.kind {
+            *destination = witnesses;
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn call_site(args: Vec<ir::CallArgument>) -> ir::CallSite {
+    ir::CallSite {
+        args, packet: None, deps: vec![], descriptors: vec![], type_args: vec![], summary: None,
+        cleanup: ir::CallCleanupMode::Ordinary,
+    }
+}
+
+pub(super) fn record_call_effect(builder: &mut ir::FunctionBuilder<'_>, block: ir::BlockId) -> Result<()> {
+    let instruction = *builder.body().blocks.get(block)?.insts.last().expect("emitted call");
+    builder.add_high_effect(ir::HighEffectRecord {
+        site: ir::HighOperationSite::Instruction(instruction),
+        effects: ir::HighEffectEnvelope {
+            failures: vec![ir::FailureKind::Thrown, ir::FailureKind::Program, ir::FailureKind::Panic,
+                ir::FailureKind::Native, ir::FailureKind::Cancelled],
+            may_suspend: true,
+        },
+    })?;
+    Ok(())
+}
+
+fn finish_adapter(builder: &mut ir::FunctionBuilder<'_>, root: ir::ScopeId,
+    block: ir::BlockId, value: Option<ir::ValueId>) -> Result<()> {
+    let boundary = builder.declare_boundary(ir::Boundary { scope: root, kind: ir::BoundaryKind::Lexical })?;
+    let selection = builder.declare_selection(match value {
+        Some(value) => ir::SelectionExpr::Value(value),
+        None => ir::SelectionExpr::Union(vec![]),
+    })?;
+    if let Some(value) = value {
+        builder.emit(ir::Operation::Lexical(ir::LexicalOp::Want { value }), &[])?;
+    }
+    builder.emit(ir::Operation::Exit(ir::ExitOp::Prepare {
+        exit: ir::PreparedExit {
+            kind: ir::ExitKind::Return, value, packet: None, deps: None, selection, boundary,
+        },
+    }), &[])?;
+    if let Some(value) = value {
+        let prepared = builder.body().blocks.get(block)?.insts.last().copied();
+        builder.add_high_result(ir::HighResultExit {
+            block, edge: ir::HighEdgeSelector::Normal(0), value, demand: ir::ResultDemand::Want, prepared,
+        })?;
+    }
+    builder.terminate(ir::TermKind::Ret { values: value.into_iter().collect() })?;
+    Ok(())
+}
+
+/// The ByteSource bridge used by the C3 builtin golden. Other adapters keep a diagnostic.
+pub(super) fn declare_builtins(declarations: &mut Declarations, analysis: &Analysis<'_>) -> Result<()> {
+    let Some(role) = analysis.registry.standard.byte_source else {
+        return Ok(());
+    };
+    let mut requested = false;
+    for body in &analysis.bodies {
+        super::walk::block(&body.block, &mut |expr| {
+            if let thir::ExprKind::Coerce { coercion: thir::Coercion::RoleWrap, value } = &expr.kind {
+                requested |= value.ty == Some(ty::Ty::Str) && expr.ty == Some(ty::Ty::role(role));
+            }
+        });
+    }
+    if !requested {
+        return Ok(());
+    }
+    let span = crate::source::Span::default();
+    let role_type = declarations.ty(&ty::Ty::role(role), span)?;
+    let string = declarations.types[&ty::Ty::Str];
+    let bytes = declarations.types[&ty::Ty::array(ty::Ty::Byte)];
+    let declaration = declarations.builder.declare(ir::Declaration {
+        name: "core.StringSource".into(), type_params: vec![], loc: None,
+        kind: ir::DeclarationKind::Object {
+            fields: vec![ir::Field { name: "value".into(), ty: string, default: None, once: false }],
+            witnesses: vec![], destroy: None, builtin: true,
+        },
+    })?;
+    let object = declarations.builder.intern_type(ir::Type::Object { decl: declaration, args: vec![] })?;
+    let function = declarations.builder.declare_function(ir::Function {
+        symbol: "core.StringSource.bytes".into(),
+        signature: ir::Signature {
+            params: vec![object], results: vec![bytes], ownership_abi: ir::OwnershipAbi::Unelaborated,
+        },
+        attrs: vec![ir::FunctionAttr::Method(declaration)], type_params: vec![], summary: None,
+        async_creation_summary: None, async_body_summary: None, body: None, loc: None,
+    })?;
+    let root = declarations.builder.declare_scope(ir::ScopeDecl {
+        function, parent: None, kind: ir::ScopeKind::Action, loc: None,
+    })?;
+    let mut builder = declarations.builder.function_builder(function, root)?;
+    let entry = builder.entry();
+    let receiver = builder.block_params(entry)?[0];
+    let value = builder.emit_schema(ir::Operation::Core(ir::CoreOp::ObjGet {
+        object: receiver, field: ir::FieldRef { declaration, index: 0 },
+    }))?[0];
+    let bytes = builder.emit_schema(ir::Operation::Core(ir::CoreOp::StrUtf8 { value }))?[0];
+    finish_adapter(&mut builder, root, entry, Some(bytes))?;
+    let body = builder.finish()?;
+    declarations.builder.define_function(function, body)?;
+    if let ir::DeclarationKind::Object { witnesses, .. } = &mut declarations.builder.raw_mut()
+        .declarations.get_mut(declaration)?.kind {
+        witnesses.push(ir::Witness { role: role_type, slots: vec![function] });
+    }
+    let constructor = declarations.builder.declare_function(ir::Function {
+        symbol: "core.StringSource.new".into(),
+        signature: ir::Signature {
+            params: vec![string], results: vec![object], ownership_abi: ir::OwnershipAbi::Unelaborated,
+        },
+        attrs: vec![ir::FunctionAttr::Ctor(declaration)], type_params: vec![], summary: None,
+        async_creation_summary: None, async_body_summary: None, body: None, loc: None,
+    })?;
+    let root = declarations.builder.declare_scope(ir::ScopeDecl {
+        function: constructor, parent: None, kind: ir::ScopeKind::Action, loc: None,
+    })?;
+    let mut builder = declarations.builder.function_builder(constructor, root)?;
+    let entry = builder.entry();
+    let failure_ty = builder.intern_type(ir::Type::Service(ir::ServiceType::Failure))?;
+    let failure = builder.create_block(root, &[ir::ParamSpec::new(failure_ty)])?;
+    builder.switch_to(failure)?;
+    builder.terminate(ir::TermKind::Raise(builder.block_params(failure)?[0]))?;
+    builder.switch_to(entry)?;
+    builder.set_unwind(Some(ir::BlockUnwind { target: ir::Target { block: failure, args: vec![] } }))?;
+    let value = builder.block_params(entry)?[0];
+    let value = builder.emit_schema(ir::Operation::Core(ir::CoreOp::ObjNew {
+        declaration, type_args: vec![], fields: vec![value], packet: None,
+        construction: ir::ConstructionStatus::Complete,
+    }))?[0];
+    finish_adapter(&mut builder, root, entry, Some(value))?;
+    let body = builder.finish()?;
+    declarations.builder.define_function(constructor, body)?;
+    declarations.builtin_adapters.insert((string, role_type), constructor);
+    Ok(())
+}

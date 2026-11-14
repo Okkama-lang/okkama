@@ -1,0 +1,4 @@
+module app;
+role Empty { read() is int; }
+object Reader { Reader(); read(value is Empty) is int { value.read(); } }
+main() is int { 0; }

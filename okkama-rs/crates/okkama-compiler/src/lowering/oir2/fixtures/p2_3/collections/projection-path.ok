@@ -1,0 +1,40 @@
+module app;
+object Res {
+    Res();
+    destroy {
+    }
+}
+object Leaf {
+    has item is Res;
+    Leaf(item is Res) {
+        self.item = item;
+    }
+    get() is Res {
+        item;
+    }
+}
+object Node {
+    has leaf is Leaf;
+    Node(leaf is Leaf) {
+        self.leaf = leaf;
+    }
+    get() is Res {
+        leaf.get();
+    }
+}
+object Select {
+    Select();
+    fresh() is Res {
+        {
+            Node(Leaf(Res())).get();
+        }
+    }
+    borrowed(node is Node) is Res {
+        {
+            node.get();
+        }
+    }
+}
+main() is int {
+    0;
+}

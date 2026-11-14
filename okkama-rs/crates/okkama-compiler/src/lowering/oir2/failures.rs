@@ -18,6 +18,11 @@ pub(super) struct Caught {
 impl BodyLowerer<'_, '_> {
     /// Ordinary unwind observes block entry, never an instruction-local value.
     pub fn sync_failure(&mut self) -> Result<()> {
+        self.sync_failure_frame()?;
+        self.sync_buffer_failure()
+    }
+
+    fn sync_failure_frame(&mut self) -> Result<()> {
         let Some(frame) = self.failure_frames.last().cloned() else {
             return Ok(());
         };
@@ -81,14 +86,25 @@ impl BodyLowerer<'_, '_> {
 
     pub fn error_wrap(&mut self, expr: &thir::Expr, inner: &thir::Expr) -> Result<Option<ir::ValueId>> {
         let ty = self.ty(expr.ty.as_ref().expect("typed Error adapter"), expr.span)?;
-        if !matches!(self.b.module().types.get(ty)?, ir::Type::Role { decl, .. }
-            if self.b.module().declarations.get(*decl)?.name == "Error") {
-            return Err(LowerError::unsupported(expr.span, "role adapter outside plain Error"));
-        }
         let Some(value) = self.value(inner)? else {
             return Ok(None);
         };
-        let wrapped = self.core(ir::CoreOp::RoleWrap { value, ty })?;
+        let input = self.b.body().values.get(value)?.ty;
+        let value = if let Some(&constructor) = self.context.builtin_adapters.get(&(input, ty)) {
+            self.call(constructor, vec![value])?.expect("builtin constructor result")
+        } else {
+            value
+        };
+        if !matches!(self.b.module().types.get(input)?, ir::Type::Object { .. } | ir::Type::Role { .. }
+            | ir::Type::Successor(_) | ir::Type::Enum(_) | ir::Type::Variant(_))
+            && !self.context.builtin_adapters.contains_key(&(input, ty)) {
+            return Err(LowerError::unsupported(expr.span, "builtin role adapter outside the C3 ByteSource bridge"));
+        }
+        let wrapped = if matches!(self.b.module().types.get(input)?, ir::Type::Role { .. }) && input != ty {
+            self.core(ir::CoreOp::RoleNarrow { value, ty })?
+        } else {
+            self.core(ir::CoreOp::RoleWrap { value, ty })?
+        };
         if let Some(&failure) = self.rethrows.get(&value) {
             self.rethrows.insert(wrapped, failure);
         }
@@ -269,6 +285,9 @@ impl BodyLowerer<'_, '_> {
             self.caught.pop();
             self.enter(caused, &locals, 0)?;
             let params = self.b.block_params(caused)?.to_vec();
+            // This is an unwind destination: keep its Raise in this block.
+            // Install buffer cleanup before emitting the non-failing cause link.
+            self.sync_buffer_failure()?;
             let chained = self.core(ir::CoreOp::FailCaused {
                 new: params[locals.len() + 1], handled: params[locals.len()],
             })?;

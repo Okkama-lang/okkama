@@ -1,0 +1,11 @@
+module app;
+main() is int {
+    let m is %string:int = [:];
+    try {
+        m["missing"];
+    }
+    catch e is Error {
+        0;
+    }
+    0;
+}

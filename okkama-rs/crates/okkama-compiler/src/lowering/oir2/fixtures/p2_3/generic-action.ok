@@ -1,0 +1,15 @@
+module app;
+object Echo<T> {
+    has seed is T;
+    Echo(:seed);
+    echo(value is T) is T { value; }
+    echo() is T { seed; }
+}
+main() is int {
+    let a = Echo(seed: 1);
+    let b = Echo(seed: "s");
+    b.echo("value");
+    b.echo();
+    a.echo();
+    a.echo(9);
+}

@@ -109,12 +109,8 @@ fn oir2_scalar_builtins_golden() {
 #[test]
 fn oir2_unsupported_source_constructs_are_diagnostics() {
     for (body, expected) in [
-        ("let a = [1]; 0;", "collection"),
-        ("defer [1]; 0;", "collection"),
         ("let n = try? 1; 0;", "try?"),
-        ("1.5; 0;", "constant"),
         ("1 & 2;", "binary"),
-        ("1 / 2; 0;", "binary"),
     ] {
         let source = format!("module app; main() is int {{ {body} }}");
         let error = print_oir2(&source).expect_err("unsupported program must stop");
@@ -1348,3 +1344,6 @@ fn oir2_high_observation_requires_a_trusted_external() {
     module.functions.get_mut(function).unwrap().signature.results.clear();
     assert!(super::native_summaries::P1NativeSummaries::for_module(&module).is_err());
 }
+
+#[path = "coverage/tests.rs"]
+mod coverage;

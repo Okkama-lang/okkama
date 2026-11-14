@@ -16,6 +16,7 @@ pub(super) struct Declarations {
     pub objects: HashMap<ty::ObjectId, ir::DeclId>,
     pub constructors: HashMap<(ty::ObjectId, usize, Vec<usize>), ir::FuncId>,
     pub defers: Vec<super::defer::Deferred>,
+    pub builtin_adapters: HashMap<(ir::TypeId, ir::TypeId), ir::FuncId>,
     pub ctor_fields: HashMap<ir::FuncId, Vec<usize>>,
 }
 
@@ -37,6 +38,7 @@ impl Declarations {
             objects: HashMap::new(),
             constructors: HashMap::new(),
             ctor_fields: HashMap::new(),
+            builtin_adapters: HashMap::new(),
             defers: vec![],
         };
         for (ty, lowered) in [
@@ -46,11 +48,6 @@ impl Declarations {
             (ty::Ty::Range, ir::Type::Range),
         ] {
             this.types.insert(ty, this.builder.intern_type(lowered)?);
-        }
-        for role in &reg.roles {
-            if let Some(decl) = role.decl {
-                return Err(LowerError::unsupported(decl.span, "role declaration"));
-            }
         }
         if let Some(handle) = reg.handles.first() {
             return Err(LowerError::unsupported(handle.span, "native object declaration"));
@@ -66,11 +63,15 @@ impl Declarations {
             let Some(decl) = object.decl else {
                 continue;
             };
-            if !object.params.is_empty() || !object.caps.is_empty() || !object.does.is_empty() {
+            if !object.params.is_empty() || !object.caps.is_empty() {
                 return Err(LowerError::unsupported(decl.span, "generic object, capability or role witness"));
             }
             let id = this.builder.declare(ir::Declaration {
-                name: format!("{}.{}", reg.modules[object.module].name.replace('/', "."), object.name),
+                name: if object.name.contains('<') {
+                    format!("{}::{}", reg.modules[object.module].name, object.name)
+                } else {
+                    format!("{}.{}", reg.modules[object.module].name.replace('/', "."), object.name)
+                },
                 type_params: vec![],
                 kind: ir::DeclarationKind::Object {
                     fields: vec![], witnesses: vec![], destroy: None,
@@ -84,6 +85,27 @@ impl Declarations {
             let successor = this.builder.intern_type(ir::Type::Successor(lowered))?;
             this.types.insert(ty::Ty::Successor(Box::new(ty::Ty::object(ty::ObjectId(index)))), successor);
         }
+        for (index, role) in reg.roles.iter().enumerate() {
+            if role.decl.is_none() || !role.params.is_empty() {
+                continue;
+            }
+            let name = if role.name.contains('<') {
+                format!("{}::{}", reg.modules[role.module].name, role.name)
+            } else {
+                format!("{}.{}", reg.modules[role.module].name.replace('/', "."), role.name)
+            };
+            let declaration = this.builder.declare(ir::Declaration {
+                name, type_params: vec![], loc: None,
+                kind: ir::DeclarationKind::Role { methods: vec![], builtin: false },
+            })?;
+            let lowered = this.builder.intern_type(ir::Type::Role { decl: declaration, args: vec![] })?;
+            let source = ty::Ty::role(ty::RoleId(index));
+            this.types.insert(source.clone(), lowered);
+            let successor = this.builder.intern_type(ir::Type::Successor(lowered))?;
+            this.types.insert(ty::Ty::Successor(Box::new(source)), successor);
+        }
+        // Reserve nominal types before resolving potentially recursive payloads.
+        let mut variants = vec![];
         for (index, enumeration) in reg.enums.iter().enumerate() {
             if enumeration.span.is_empty() {
                 continue;
@@ -92,31 +114,33 @@ impl Declarations {
                 return Err(LowerError::unsupported(enumeration.span, "generic enum"));
             }
             let payload = enumeration.payloads.iter().any(|payload| !payload.is_empty());
-            let mut cases = vec![];
-            if payload {
-                if !enumeration.error || enumeration.payloads.iter().flatten().any(|(_, ty)| {
-                    !matches!(ty, ty::Ty::Int | ty::Ty::Str | ty::Ty::Bool)
-                }) {
-                    return Err(LowerError::unsupported(enumeration.span, "non-plain Error payload"));
-                }
-                for (name, fields) in enumeration.cases.iter().zip(&enumeration.payloads) {
+            let name = if enumeration.name.contains('<') {
+                format!("{}::{}", reg.modules[enumeration.module].name, enumeration.name)
+            } else {
+                format!("{}.{}", reg.modules[enumeration.module].name.replace('/', "."), enumeration.name)
+            };
+            let mut early_cases = vec![];
+            let plain_error = enumeration.error && enumeration.payloads.iter().flatten().all(|(_, ty)| {
+                matches!(ty, ty::Ty::Int | ty::Ty::Str | ty::Ty::Bool)
+            });
+            if payload && enumeration.module < reg.root_start && plain_error {
+                for (case, fields) in enumeration.cases.iter().zip(&enumeration.payloads) {
                     let fields = fields.iter().map(|(name, ty)| Ok(ir::Field {
                         name: name.clone(), ty: this.ty(ty, enumeration.span)?, default: None, once: false,
                     })).collect::<Result<_>>()?;
                     let layout = this.builder.declare(ir::Declaration {
-                        name: format!("{}.{}.{}", reg.modules[enumeration.module].name.replace('/', "."),
-                            enumeration.name, name),
-                        type_params: vec![], loc: None,
+                        name: format!("{name}.{case}"), type_params: vec![], loc: None,
                         kind: ir::DeclarationKind::Object { fields, witnesses: vec![], destroy: None, builtin: false },
                     })?;
-                    cases.push(ir::VariantCase { name: name.clone(), layout });
+                    early_cases.push(ir::VariantCase { name: case.clone(), layout });
                 }
             }
+            let early = !early_cases.is_empty();
             let id = this.builder.declare(ir::Declaration {
-                name: format!("{}.{}", reg.modules[enumeration.module].name.replace('/', "."), enumeration.name),
+                name,
                 type_params: vec![],
                 kind: if payload {
-                    ir::DeclarationKind::Variant { cases, is_error: true }
+                    ir::DeclarationKind::Variant { cases: early_cases, is_error: enumeration.error }
                 } else {
                     ir::DeclarationKind::Enum { cases: enumeration.cases.clone(), is_error: enumeration.error }
                 },
@@ -125,6 +149,90 @@ impl Declarations {
             let lowered = this.builder.intern_type(if payload { ir::Type::Variant(id) } else { ir::Type::Enum(id) })?;
             this.types.insert(ty::Ty::Enum(ty::EnumId(index)), lowered);
             this.types.insert(ty::Ty::Variant(ty::EnumId(index), vec![]), lowered);
+            if payload && !early {
+                variants.push((id, enumeration));
+            }
+        }
+        // Nominal identities are reserved. Intern concrete collection shapes before
+        // resolving fields/signatures, including recursive nominal payloads.
+        let mut requested = vec![];
+        for body in &analysis.bodies {
+            requested.extend(body.locals.iter().map(|local| (local.ty.clone(), body.span)));
+            super::walk::block(&body.block, &mut |expr| {
+                if let Some(ty) = &expr.ty {
+                    requested.push((ty.clone(), expr.span));
+                }
+            });
+        }
+        for object in &reg.objects {
+            if object.decl.is_none() || !object.params.is_empty() {
+                continue;
+            }
+            requested.extend(object.fields.iter().map(|field| (field.ty.clone(), field.span)));
+            for method in &object.methods {
+                requested.extend(method.params.iter().map(|(_, ty)| (ty.clone(), source.program.module.span)));
+                requested.extend(method.result.iter().map(|ty| (ty.clone(), source.program.module.span)));
+            }
+        }
+        for role in &reg.roles {
+            if let Some(declaration) = role.decl {
+                for method in &role.methods {
+                    requested.extend(method.params.iter().map(|(_, ty)| (ty.clone(), declaration.span)));
+                    requested.extend(method.result.iter().map(|ty| (ty.clone(), declaration.span)));
+                }
+            }
+        }
+        for enumeration in &reg.enums {
+            if enumeration.span.is_empty() || !enumeration.params.is_empty() {
+                continue;
+            }
+            requested.extend(enumeration.payloads.iter().flatten()
+                .map(|(_, ty)| (ty.clone(), enumeration.span)));
+        }
+        for (ty, span) in requested {
+            this.collection_type(&ty, span)?;
+        }
+        for (id, enumeration) in variants {
+            let mut cases = vec![];
+            let name = this.builder.module().declarations.get(id)?.name.clone();
+            for (case, fields) in enumeration.cases.iter().zip(&enumeration.payloads) {
+                let fields = fields.iter().map(|(name, ty)| Ok(ir::Field {
+                    name: name.clone(), ty: this.ty(ty, enumeration.span)?, default: None, once: false,
+                })).collect::<Result<_>>()?;
+                let layout = this.builder.declare(ir::Declaration {
+                    name: format!("{name}.{case}"), type_params: vec![], loc: None,
+                    kind: ir::DeclarationKind::Object { fields, witnesses: vec![], destroy: None, builtin: false },
+                })?;
+                cases.push(ir::VariantCase { name: case.clone(), layout });
+            }
+            this.builder.raw_mut().declarations.get_mut(id)?.kind = ir::DeclarationKind::Variant {
+                cases, is_error: enumeration.error,
+            };
+        }
+        for (index, role) in reg.roles.iter().enumerate() {
+            let Some(&ty) = this.types.get(&ty::Ty::role(ty::RoleId(index))) else {
+                continue;
+            };
+            let ir::Type::Role { decl, .. } = *this.builder.module().types.get(ty)? else {
+                unreachable!("reserved role");
+            };
+            let span = role.decl.expect("source role").span;
+            let methods = role.methods.iter().map(|method| {
+                if method.is_async || method.variadic {
+                    return Err(LowerError::unsupported(span, "async or variadic role slot"));
+                }
+                Ok(ir::RoleMethod {
+                    name: method.name.clone(),
+                    signature: ir::Signature {
+                        params: method.params.iter().map(|(_, ty)| this.ty(ty, span)).collect::<Result<_>>()?,
+                        results: method.result.iter().map(|ty| this.ty(ty, span)).collect::<Result<_>>()?,
+                        ownership_abi: ir::OwnershipAbi::Unelaborated,
+                    },
+                })
+            }).collect::<Result<_>>()?;
+            this.builder.raw_mut().declarations.get_mut(decl)?.kind = ir::DeclarationKind::Role {
+                methods, builtin: false,
+            };
         }
         let error = ty::Ty::role(reg.system.error);
         let mut uses_error = analysis.bodies.iter().any(|body| body.locals.iter().any(|local| local.ty == error));
@@ -159,6 +267,16 @@ impl Declarations {
                 this.error_text = Some(this.external("okkama.Error.text", false, vec![lowered],
                     vec![this.types[&ty::Ty::Str]], vec![], source.program.module.span)?);
             }
+        }
+        let mut requested_ctors = HashMap::new();
+        for body in &analysis.bodies {
+            super::walk::block(&body.block, &mut |expr| {
+                if let thir::ExprKind::Call {
+                    callee: thir::Callee::Ctor { object, ctor, given, .. }, ..
+                } = &expr.kind {
+                    requested_ctors.entry((*object, *ctor)).or_insert_with(|| given.clone());
+                }
+            });
         }
         // Declare all symbols before bodies: forward references and stable field/default links.
         for body in &analysis.bodies {
@@ -224,6 +342,12 @@ impl Declarations {
                 }
                 _ => None,
             };
+            let primary_given = if let thir::BodyOwner::Ctor { object, ctor } = body.owner
+                && reg.objects[object.0].name.contains('<') && shorthand.is_some() {
+                requested_ctors.get(&(object, ctor)).cloned()
+            } else {
+                None
+            };
             for param in &body.params {
                 let local = &body.locals[param.0];
                 if local.variadic && body.module >= reg.root_start {
@@ -231,6 +355,43 @@ impl Declarations {
                 }
                 params.push(this.ty(&local.ty, local.span)?);
             }
+            if let Some(given) = &primary_given
+                && let thir::BodyOwner::Ctor { object, .. } = body.owner {
+                params = given.iter().map(|&field| {
+                    let field = &reg.objects[object.0].fields[field];
+                    this.ty(&field.ty, field.span)
+                }).collect::<Result<_>>()?;
+            }
+            let symbol = if let Some(object) = super::specialize::owner_object(&body.owner)
+                && reg.objects[object.0].name.contains('<') {
+                let info = &reg.objects[object.0];
+                let name = format!("{}::{}", reg.modules[info.module].name, info.name);
+                let shape = body.params.iter().map(|param| {
+                    let local = &body.locals[param.0];
+                    Ok(format!("{}:{}", local.name, super::specialize::type_name(reg, &local.ty)?))
+                }).collect::<Result<Vec<_>>>()?.join(",");
+                match body.owner {
+                    thir::BodyOwner::Method { method, .. } => {
+                        let member = &info.methods[method].name;
+                        format!("{name}.{member}#overload({shape})")
+                    }
+                    thir::BodyOwner::Ctor { .. } => format!("{name}.new#ctor({shape})"),
+                    thir::BodyOwner::Default { field, .. } => format!("{name}.default#{}", info.fields[field].name),
+                    thir::BodyOwner::Destroy { .. } => format!("{name}.destroy"),
+                    _ => symbol,
+                }
+            } else {
+                symbol
+            };
+            let symbol = if let Some(given) = &primary_given
+                && shorthand.as_ref() != Some(given)
+                && let thir::BodyOwner::Ctor { object, .. } = body.owner {
+                let names = given.iter().map(|&field| reg.objects[object.0].fields[field].name.clone())
+                    .collect::<Vec<_>>().join(".");
+                format!("{symbol}.given_{names}")
+            } else {
+                symbol
+            };
             let results = result.as_ref().map(|ty| this.ty(ty, body.span)).transpose()?.into_iter().collect();
             let atomic = match body.owner {
                 thir::BodyOwner::Ctor { object, .. } | thir::BodyOwner::Method { object, .. }
@@ -266,12 +427,14 @@ impl Declarations {
             }
             this.functions.insert(body.owner.clone(), function);
             if let thir::BodyOwner::Ctor { object, ctor } = body.owner {
-                let given = shorthand.unwrap_or_default();
+                let given = primary_given.or(shorthand).unwrap_or_default();
                 this.constructors.insert((object, ctor, given.clone()), function);
                 this.ctor_fields.insert(function, given);
             }
         }
-        for (&object, &decl) in &this.objects {
+        let mut object_ids: Vec<_> = this.objects.iter().map(|(&object, &decl)| (object, decl)).collect();
+        object_ids.sort_by_key(|(object, _)| *object);
+        for (object, decl) in object_ids {
             let info = &reg.objects[object.0];
             let mut fields = vec![];
             for (index, field) in info.fields.iter().enumerate() {
@@ -314,10 +477,22 @@ impl Declarations {
             if this.constructors.contains_key(&key) {
                 continue;
             }
-            let original = this.functions[&thir::BodyOwner::Ctor { object, ctor }];
+            let original = this.functions.get(&thir::BodyOwner::Ctor { object, ctor }).copied()
+                .ok_or_else(|| LowerError::unsupported(reg.objects[object.0].ctors[ctor].span,
+                    "constructor source body was not discovered"))?;
             let mut function = this.builder.module().functions.get(original)?.clone();
-            let suffix = given.iter().map(usize::to_string).collect::<Vec<_>>().join(".");
-            function.symbol = format!("{}.given_{suffix}", function.symbol);
+            let suffix = if reg.objects[object.0].name.contains('<') {
+                given.iter().map(|&field| reg.objects[object.0].fields[field].name.clone())
+                    .collect::<Vec<_>>().join(".")
+            } else {
+                given.iter().map(usize::to_string).collect::<Vec<_>>().join(".")
+            };
+            let symbol = if reg.objects[object.0].name.contains('<') {
+                function.symbol.split(".given_").next().expect("constructor symbol")
+            } else {
+                &function.symbol
+            };
+            function.symbol = format!("{symbol}.given_{suffix}");
             function.signature.params = given.iter().map(|&field| {
                 this.ty(&reg.objects[object.0].fields[field].ty, reg.objects[object.0].fields[field].span)
             }).collect::<Result<_>>()?;
@@ -349,6 +524,8 @@ impl Declarations {
             let function = this.external(&name, true, params, results, vec![], native.decl.span)?;
             this.natives.insert(index, function);
         }
+        super::roles::declare_witnesses(&mut this, analysis)?;
+        super::roles::declare_builtins(&mut this, analysis)?;
         Ok(this)
     }
 
@@ -372,7 +549,33 @@ impl Declarations {
         })?)
     }
 
-    fn ty(&self, ty: &ty::Ty, span: Span) -> Result<ir::TypeId> {
+    fn collection_type(&mut self, ty: &ty::Ty, span: Span) -> Result<()> {
+        use ty::Ty as T;
+        if self.types.contains_key(ty) {
+            return Ok(());
+        }
+        let lowered = match ty {
+            T::Never => ir::Type::Never,
+            T::Float => ir::Type::Float,
+            T::Rat => ir::Type::Rat,
+            T::Char => ir::Type::Char,
+            T::Array(element) | T::Varargs(element) => {
+                self.collection_type(element, span)?;
+                ir::Type::Array(self.ty(element, span)?)
+            }
+            T::Map(key, value) => {
+                self.collection_type(key, span)?;
+                self.collection_type(value, span)?;
+                ir::Type::Map(self.ty(key, span)?, self.ty(value, span)?)
+            }
+            _ => return Ok(()),
+        };
+        let lowered = self.builder.intern_type(lowered)?;
+        self.types.insert(ty.clone(), lowered);
+        Ok(())
+    }
+
+    pub(super) fn ty(&self, ty: &ty::Ty, span: Span) -> Result<ir::TypeId> {
         self.types.get(ty).copied().ok_or_else(|| LowerError::unsupported(span, format!("type {ty:?}")))
     }
 }

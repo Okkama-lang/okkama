@@ -1,0 +1,17 @@
+oir 2 high
+module c5-precommit
+requires core
+scope S action in @build
+
+func @build() -> void {
+    ^entry in S:
+    %initial: builder<int> = builder.new element int
+    br ^update(%initial)
+    ^update(%current: builder<int>) in S unwind ^failed(%current):
+    %item: int = const 1
+    %next: array<int> = builder.finish %current
+    ret
+    ^failed(%restored: builder<int>, %failure: failure) in S:
+    builder.abandon %restored
+    raise %failure
+}

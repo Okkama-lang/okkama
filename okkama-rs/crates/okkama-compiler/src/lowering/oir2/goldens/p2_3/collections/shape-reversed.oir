@@ -1,0 +1,40 @@
+oir 2 high
+module app
+requires core
+entry @main
+scope S0 action in @main
+
+func @main() -> int [entry] {
+    binding b0 "a": array<int> in S0
+    boundary B0 lexical in S0
+    ^b0 in S0 unwind ^b1:
+    %0: int = const 1
+    %1: int = const 2
+    %2: int = const 3
+    %3: array<int> = array.new [%0, %1, %2], ty array<int>
+    bind %3, binding b0
+    %4: int = array.len %3
+    %5: array<int> = array.new ty array<int>
+    %6: int = const 0
+    br ^b2(%6, %5)
+    ^b1(%7: failure) in S0:
+    raise %7
+    ^b2(%8: int, %9: array<int>) in S0 unwind ^b1:
+    %10: bool = int.lt %8, %4
+    cond %10, ^b3, ^b4
+    ^b3 in S0 unwind ^b1:
+    %11: int = const 1
+    %12: int = int.sub %4, %8
+    %13: int = int.sub %12, %11
+    %14: int = array.get %3, %13
+    %15: array<int> = array.new [%14], ty array<int>
+    %16: array<int> = array.concat [%9, %15], ty array<int>
+    %17: int = int.add %8, %11
+    br ^b2(%17, %16)
+    ^b4 in S0 unwind ^b1:
+    %18: int = array.len %9
+    want %18
+    [i18] exit.prepare return %18 at B0
+    result.exit edge normal(0), value %18, demand want, prepare #18
+    ret %18
+}

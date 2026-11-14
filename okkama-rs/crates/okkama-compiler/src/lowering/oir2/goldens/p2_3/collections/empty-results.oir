@@ -1,0 +1,132 @@
+oir 2 high
+module app
+requires core
+entry @main
+
+variant "app::Maybe<int>" = (some: "app::Maybe<int>.some", none: "app::Maybe<int>.none")
+
+object "app::Maybe<int>.some" {
+    field value: int
+}
+
+object "app::Maybe<int>.none" {
+}
+scope S0 action in @main
+
+func @main() -> int [entry] {
+    binding b0 "a": array<int> in S0
+    binding b1 "m": map<str, int> in S0
+    binding b2 "untyped": array<never> in S0
+    boundary B0 lexical in S0
+    ^b0 in S0 unwind ^b1:
+    %0: array<int> = array.new ty array<int>
+    bind %0, binding b0
+    %1: map<str, int> = map.new ty map<str, int>
+    bind %1, binding b1
+    %2: int = const 0
+    %3: int = const 0
+    %4: array<int> = array.slice %0, %2, %3
+    discard %4
+    %5: int = const 0
+    %6: int = const 0
+    %7: bool = int.lt %5, %6
+    result.exit edge normal(0), value %4, demand discard, prepare none
+    result.exit edge normal(1), value %4, demand discard, prepare none
+    cond %7, ^b2, ^b3
+    ^b1(%8: failure) in S0:
+    raise %8
+    ^b2 in S0 unwind ^b1:
+    trap range "take needs a non-negative count"
+    ^b3 in S0 unwind ^b1:
+    %9: int = array.len %0
+    %10: bool = int.lt %5, %9
+    cond %10, ^b4(%5), ^b4(%9)
+    ^b4(%11: int) in S0 unwind ^b1:
+    %12: array<int> = array.slice %0, %6, %11
+    discard %12
+    %13: int = const 4
+    %14: int = const 0
+    %15: bool = int.lt %13, %14
+    result.exit edge normal(0), value %12, demand discard, prepare none
+    result.exit edge normal(1), value %12, demand discard, prepare none
+    cond %15, ^b5, ^b6
+    ^b5 in S0 unwind ^b1:
+    trap range "drop needs a non-negative count"
+    ^b6 in S0 unwind ^b1:
+    %16: int = array.len %0
+    %17: bool = int.lt %13, %16
+    cond %17, ^b7(%13), ^b7(%16)
+    ^b7(%18: int) in S0 unwind ^b1:
+    %19: array<int> = array.slice %0, %18, %16
+    discard %19
+    %20: int = array.len %0
+    %21: array<int> = array.new ty array<int>
+    %22: int = const 0
+    result.exit edge normal(0), value %19, demand discard, prepare none
+    br ^b8(%22, %21)
+    ^b8(%23: int, %24: array<int>) in S0 unwind ^b1:
+    %25: bool = int.lt %23, %20
+    cond %25, ^b9, ^b10
+    ^b9 in S0 unwind ^b1:
+    %26: int = const 1
+    %27: int = int.sub %20, %23
+    %28: int = int.sub %27, %26
+    %29: int = array.get %0, %28
+    %30: array<int> = array.new [%29], ty array<int>
+    %31: array<int> = array.concat [%24, %30], ty array<int>
+    %32: int = int.add %23, %26
+    br ^b8(%32, %31)
+    ^b10 in S0 unwind ^b1:
+    discard %24
+    %33: array<int> = array.difference %0, [%0]
+    discard %33
+    %34: map<str, int> = map.difference %1, [%1]
+    discard %34
+    %35: array<str> = map.keys %1
+    discard %35
+    %36: array<int> = map.values %1
+    discard %36
+    %37: array<never> = array.new ty array<never>
+    bind %37, binding b2
+    %38: int = array.len %37
+    %39: array<never> = array.new ty array<never>
+    discard %39
+    %40: int = const 1
+    %41: int = const -1
+    %42: int = const 0
+    %43: bool = int.ge %41, %42
+    discard %43
+    %44: int = const 1
+    %45: int = const -1
+    %46: int = const 0
+    %47: bool = int.ge %45, %46
+    result.exit edge normal(0), value %24, demand discard, prepare none
+    result.exit edge normal(0), value %33, demand discard, prepare none
+    result.exit edge normal(0), value %34, demand discard, prepare none
+    result.exit edge normal(0), value %35, demand discard, prepare none
+    result.exit edge normal(0), value %36, demand discard, prepare none
+    result.exit edge normal(0), value %39, demand discard, prepare none
+    result.exit edge normal(0), value %43, demand discard, prepare none
+    result.exit edge normal(1), value %24, demand discard, prepare none
+    result.exit edge normal(1), value %33, demand discard, prepare none
+    result.exit edge normal(1), value %34, demand discard, prepare none
+    result.exit edge normal(1), value %35, demand discard, prepare none
+    result.exit edge normal(1), value %36, demand discard, prepare none
+    result.exit edge normal(1), value %39, demand discard, prepare none
+    result.exit edge normal(1), value %43, demand discard, prepare none
+    cond %47, ^b11, ^b12
+    ^b11 in S0 unwind ^b1:
+    %48: "app::Maybe<int>" = variant.new [%45], ty "app::Maybe<int>", case 0
+    br ^b13(%48, %0, %1, %37)
+    ^b12 in S0 unwind ^b1:
+    %49: "app::Maybe<int>" = variant.new ty "app::Maybe<int>", case 1
+    br ^b13(%49, %0, %1, %37)
+    ^b13(%50: "app::Maybe<int>", %51: array<int>, %52: map<str, int>, %53: array<never>) in S0 unwind ^b1:
+    discard %50
+    %54: int = const 0
+    want %54
+    [i61] exit.prepare return %54 at B0
+    result.exit edge normal(0), value %50, demand discard, prepare none
+    result.exit edge normal(0), value %54, demand want, prepare #61
+    ret %54
+}

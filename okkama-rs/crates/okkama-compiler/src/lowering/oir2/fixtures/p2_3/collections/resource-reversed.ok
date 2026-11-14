@@ -1,0 +1,20 @@
+module app;
+object Res {
+    Res();
+    destroy {
+    }
+}
+object Select {
+    Select();
+    fresh() is @Res {
+        let a = Res();
+        let xs = [a, a, Res()];
+        xs.reversed();
+    }
+    borrowed(xs is @Res) is @Res {
+        xs.reversed();
+    }
+}
+main() is int {
+    0;
+}

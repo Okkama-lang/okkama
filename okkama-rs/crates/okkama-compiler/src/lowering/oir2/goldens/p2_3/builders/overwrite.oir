@@ -1,0 +1,126 @@
+oir 2 high
+module app
+requires core
+entry @main
+
+object app.Res {
+    destroy @app.Res.destroy
+}
+scope S0 action in @app.Res.destroy
+scope S1 action in @main
+scope S2 action in @app.Res.new#0
+
+func @app.Res.new#0() -> app.Res [ctor app.Res] {
+    boundary B0 lexical in S2
+    ^b0 in S2 unwind ^b1:
+    %0: app.Res = obj.new app.Res { }
+    want %0
+    [i2] exit.prepare return %0 at B0
+    result.exit edge normal(0), value %0, demand want, prepare #2
+    ret %0
+    ^b1(%1: failure) in S2:
+    raise %1
+}
+
+func @app.Res.destroy(%0: app.Res) -> void [destroy app.Res] {
+    boundary B0 lexical in S0
+    selection s0: selection = union([])
+    ^b0 in S0 unwind ^b1:
+    exit.prepare return select s0 at B0
+    ret
+    ^b1(%1: failure) in S0:
+    raise %1
+}
+
+func @main() -> int [entry] {
+    binding b0 "a": map<int, app.Res> in S1
+    boundary B0 lexical in S1
+    ^b0 in S1 unwind ^b1:
+    %0: mbuilder<int, app.Res> = mbuilder.new key int, value app.Res
+    %1: int = const 0
+    br ^b2(%0)
+    ^b1(%2: failure) in S1:
+    raise %2
+    ^b2(%3: mbuilder<int, app.Res>) in S1 unwind ^b3(%3):
+    [i2] %4: app.Res = call @app.Res.new#0()
+    %5: mbuilder<int, app.Res> = mbuilder.put %3, %1, %4
+    %6: int = const 0
+    high.effects at #2 failures [thrown, program, panic, native, cancelled], suspends true
+    br ^b4(%5)
+    ^b3(%7: mbuilder<int, app.Res>, %8: failure) in S1 unwind ^b1:
+    mbuilder.abandon %7
+    raise %8
+    ^b4(%9: mbuilder<int, app.Res>) in S1 unwind ^b5(%9):
+    [i6] %10: app.Res = call @app.Res.new#0()
+    %11: mbuilder<int, app.Res> = mbuilder.put %9, %6, %10
+    %12: int = const 1
+    high.effects at #6 failures [thrown, program, panic, native, cancelled], suspends true
+    br ^b6(%11)
+    ^b5(%13: mbuilder<int, app.Res>, %14: failure) in S1 unwind ^b1:
+    mbuilder.abandon %13
+    raise %14
+    ^b6(%15: mbuilder<int, app.Res>) in S1 unwind ^b7(%15):
+    [i10] %16: app.Res = call @app.Res.new#0()
+    %17: mbuilder<int, app.Res> = mbuilder.put %15, %12, %16
+    %18: int = const 2
+    high.effects at #10 failures [thrown, program, panic, native, cancelled], suspends true
+    br ^b8(%17)
+    ^b7(%19: mbuilder<int, app.Res>, %20: failure) in S1 unwind ^b1:
+    mbuilder.abandon %19
+    raise %20
+    ^b8(%21: mbuilder<int, app.Res>) in S1 unwind ^b9(%21):
+    [i14] %22: app.Res = call @app.Res.new#0()
+    %23: mbuilder<int, app.Res> = mbuilder.put %21, %18, %22
+    %24: int = const 3
+    high.effects at #14 failures [thrown, program, panic, native, cancelled], suspends true
+    br ^b10(%23)
+    ^b9(%25: mbuilder<int, app.Res>, %26: failure) in S1 unwind ^b1:
+    mbuilder.abandon %25
+    raise %26
+    ^b10(%27: mbuilder<int, app.Res>) in S1 unwind ^b11(%27):
+    [i18] %28: app.Res = call @app.Res.new#0()
+    %29: mbuilder<int, app.Res> = mbuilder.put %27, %24, %28
+    %30: int = const 4
+    high.effects at #18 failures [thrown, program, panic, native, cancelled], suspends true
+    br ^b12(%29)
+    ^b11(%31: mbuilder<int, app.Res>, %32: failure) in S1 unwind ^b1:
+    mbuilder.abandon %31
+    raise %32
+    ^b12(%33: mbuilder<int, app.Res>) in S1 unwind ^b13(%33):
+    [i22] %34: app.Res = call @app.Res.new#0()
+    %35: mbuilder<int, app.Res> = mbuilder.put %33, %30, %34
+    %36: int = const 5
+    high.effects at #22 failures [thrown, program, panic, native, cancelled], suspends true
+    br ^b14(%35)
+    ^b13(%37: mbuilder<int, app.Res>, %38: failure) in S1 unwind ^b1:
+    mbuilder.abandon %37
+    raise %38
+    ^b14(%39: mbuilder<int, app.Res>) in S1 unwind ^b15(%39):
+    [i26] %40: app.Res = call @app.Res.new#0()
+    %41: mbuilder<int, app.Res> = mbuilder.put %39, %36, %40
+    %42: int = const 6
+    high.effects at #26 failures [thrown, program, panic, native, cancelled], suspends true
+    br ^b16(%41)
+    ^b15(%43: mbuilder<int, app.Res>, %44: failure) in S1 unwind ^b1:
+    mbuilder.abandon %43
+    raise %44
+    ^b16(%45: mbuilder<int, app.Res>) in S1 unwind ^b17(%45):
+    [i30] %46: app.Res = call @app.Res.new#0()
+    %47: mbuilder<int, app.Res> = mbuilder.put %45, %42, %46
+    high.effects at #30 failures [thrown, program, panic, native, cancelled], suspends true
+    br ^b18(%47)
+    ^b17(%48: mbuilder<int, app.Res>, %49: failure) in S1 unwind ^b1:
+    mbuilder.abandon %48
+    raise %49
+    ^b18(%50: mbuilder<int, app.Res>) in S1 unwind ^b19(%50):
+    %51: map<int, app.Res> = mbuilder.finish %50
+    bind %51, binding b0
+    %52: int = map.len %51
+    want %52
+    [i37] exit.prepare return %52 at B0
+    result.exit edge normal(0), value %52, demand want, prepare #37
+    ret %52
+    ^b19(%53: mbuilder<int, app.Res>, %54: failure) in S1 unwind ^b1:
+    mbuilder.abandon %53
+    raise %54
+}

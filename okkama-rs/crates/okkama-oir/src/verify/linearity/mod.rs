@@ -48,6 +48,7 @@ struct Slot {
     requirements: BTreeSet<Origin>,
     lifetime: u8,
     must_use: u8,
+    must_use_aliases: BTreeSet<ValueId>,
     failures: u8,
     redefine: bool,
 }
@@ -59,6 +60,7 @@ impl Default for Slot {
             identity: None, aliases: BTreeSet::new(),
             requirements: BTreeSet::new(), lifetime: 1, must_use: 0, failures: 0,
             contained: BTreeSet::new(), bases: BTreeSet::new(), redefine: true,
+            must_use_aliases: BTreeSet::new(),
         }
     }
 }
@@ -257,6 +259,7 @@ impl Engine<'_, '_> {
             }
             if successor(self.module, self.body, value) {
                 flow.must_use[i] = 1;
+                flow.must_use_aliases[i].insert(value);
             }
             if self.body.values.get(value).ok().and_then(|v| self.module.types.get(v.ty).ok())
                 == Some(&Type::Service(ServiceType::Failure)) {
@@ -476,6 +479,21 @@ impl Engine<'_, '_> {
         flow.lifetimes[i] = slot.lifetime;
         flow.failures[i] = slot.failures;
         flow.identities[i] = slot.identity;
+        // Must-use aliases only cross SSA forwarding and role conversions. An
+        // exit.commit creates a new obligation even when ownership identity aliases.
+        let mut previous = flow.must_use_aliases[i].clone();
+        previous.remove(&value);
+        for &alias in &previous {
+            flow.must_use_aliases[alias.as_u32() as usize] = previous.clone();
+        }
+        let mut aliases = slot.must_use_aliases;
+        if successor(self.module, self.body, value) {
+            aliases.insert(value);
+        }
+        for &alias in &aliases {
+            flow.must_use_aliases[alias.as_u32() as usize] = aliases.clone();
+        }
+        flow.must_use_aliases[i] = aliases;
         flow.must_use[i] = if successor(self.module, self.body, value) && slot.must_use == 0 { 1 }
             else { slot.must_use };
     }
@@ -665,6 +683,7 @@ impl Engine<'_, '_> {
                     let slot = Slot {
                         token: flow.tokens[i].clone(), journal: flow.journals[i].clone(),
                         refs: flow.refs[i].clone(), must_use: flow.must_use[i],
+                        must_use_aliases: flow.must_use_aliases[i].clone(),
                         failures: flow.failures[i], identity: flow.identities[i], aliases: flow.aliases[i].clone(),
                         requirements: flow.full_deps[i].clone(), lifetime: flow.lifetimes[i],
                         contained: flow.contained[i].clone(), bases: BTreeSet::new(), redefine: true,
@@ -736,6 +755,12 @@ impl Engine<'_, '_> {
         }
         (target, next)
     }
+    fn discharge_must_use(&self, flow: &mut Flow, value: ValueId) {
+        flow.must_use[value.as_u32() as usize] = 2;
+        for alias in &flow.must_use_aliases[value.as_u32() as usize] {
+            flow.must_use[alias.as_u32() as usize] = 2;
+        }
+    }
     fn finish(&mut self, flow: &mut Flow, normal: bool, values: &[ValueId]) {
         if !self.declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. })) {
             self.body_summary(flow, normal, values);
@@ -761,7 +786,7 @@ impl Engine<'_, '_> {
                 self.error(R::B32, "escaped value lacks ownership or a sufficient external lifetime boundary");
             }
             self.use_value(flow, value, OperandMode::Forward, R::B21);
-            flow.must_use[value.as_u32() as usize] = 0;
+            self.discharge_must_use(flow, value);
         }
         for (value, _) in self.body.values.iter() {
             let i = value.as_u32() as usize;

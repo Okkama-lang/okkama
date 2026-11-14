@@ -1,0 +1,6 @@
+module app;
+main() is int {
+    let a = [1, 2, 3];
+    a.index_of(4);
+    0;
+}

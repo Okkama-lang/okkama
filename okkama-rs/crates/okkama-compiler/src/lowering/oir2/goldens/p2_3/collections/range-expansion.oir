@@ -1,0 +1,105 @@
+oir 2 high
+module app
+requires core
+entry @main
+
+object app.Mark {
+}
+scope S0 action in @app.Mark.at#0
+scope S1 action in @main
+scope S2 action in @app.Mark.new#0
+
+func @app.Mark.new#0() -> app.Mark [ctor app.Mark] {
+    boundary B0 lexical in S2
+    ^b0 in S2 unwind ^b1:
+    %0: app.Mark = obj.new app.Mark { }
+    want %0
+    [i2] exit.prepare return %0 at B0
+    result.exit edge normal(0), value %0, demand want, prepare #2
+    ret %0
+    ^b1(%1: failure) in S2:
+    raise %1
+}
+
+func @app.Mark.at#0(%0: app.Mark, %1: int) -> int [method app.Mark] {
+    binding b0 "n": int in S0
+    boundary B0 lexical in S0
+    ^b0 in S0 unwind ^b1:
+    bind %1, binding b0
+    want %1
+    [i2] exit.prepare return %1 at B0
+    result.exit edge normal(0), value %1, demand want, prepare #2
+    ret %1
+    ^b1(%2: failure) in S0:
+    raise %2
+}
+
+func @main() -> int [entry] {
+    binding b0 "mark": app.Mark in S1
+    binding b1 "a": array<int> in S1
+    binding b2 "r": range in S1
+    boundary B0 lexical in S1
+    ^b0 in S1 unwind ^b1:
+    [i0] %0: app.Mark = call @app.Mark.new#0()
+    bind %0, binding b0
+    %1: builder<int> = builder.new element int
+    %2: int = const 9
+    high.effects at #0 failures [thrown, program, panic, native, cancelled], suspends true
+    br ^b2(%0, %1)
+    ^b1(%3: failure) in S1:
+    raise %3
+    ^b2(%4: app.Mark, %5: builder<int>) in S1 unwind ^b3(%5):
+    [i4] %6: int = call @app.Mark.at#0(%0, %2)
+    %7: builder<int> = builder.push %5, %6
+    %8: int = const 2
+    high.effects at #4 failures [thrown, program, panic, native, cancelled], suspends true
+    br ^b4(%4, %7)
+    ^b3(%9: builder<int>, %10: failure) in S1 unwind ^b1:
+    builder.abandon %9
+    raise %10
+    ^b4(%11: app.Mark, %12: builder<int>) in S1 unwind ^b5(%12):
+    [i8] %13: int = call @app.Mark.at#0(%4, %8)
+    %14: int = const 4
+    [i10] %15: int = call @app.Mark.at#0(%11, %14)
+    %16: builder<int> = builder.append.range %12, %13, %15, inclusive true
+    %17: int = const 8
+    high.effects at #8 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #10 failures [thrown, program, panic, native, cancelled], suspends true
+    br ^b6(%11, %16)
+    ^b5(%18: builder<int>, %19: failure) in S1 unwind ^b1:
+    builder.abandon %18
+    raise %19
+    ^b6(%20: app.Mark, %21: builder<int>) in S1 unwind ^b7(%21):
+    [i14] %22: int = call @app.Mark.at#0(%11, %17)
+    %23: builder<int> = builder.push %21, %22
+    %24: int = const 7
+    %25: int = const 7
+    high.effects at #14 failures [thrown, program, panic, native, cancelled], suspends true
+    br ^b8(%20, %23)
+    ^b7(%26: builder<int>, %27: failure) in S1 unwind ^b1:
+    builder.abandon %26
+    raise %27
+    ^b8(%28: app.Mark, %29: builder<int>) in S1 unwind ^b9(%29):
+    %30: builder<int> = builder.append.range %29, %24, %25
+    br ^b10(%28, %30)
+    ^b9(%31: builder<int>, %32: failure) in S1 unwind ^b1:
+    builder.abandon %31
+    raise %32
+    ^b10(%33: app.Mark, %34: builder<int>) in S1 unwind ^b11(%34):
+    %35: array<int> = builder.finish %34
+    bind %35, binding b1
+    %36: int = const 2
+    %37: int = const 4
+    br ^b12(%33, %35)
+    ^b11(%38: builder<int>, %39: failure) in S1 unwind ^b1:
+    builder.abandon %38
+    raise %39
+    ^b12(%40: app.Mark, %41: array<int>) in S1 unwind ^b1:
+    %42: range = range.new %36, %37, inclusive true
+    bind %42, binding b2
+    %43: int = array.len %41
+    want %43
+    [i30] exit.prepare return %43 at B0
+    result.exit edge normal(0), value %43, demand want, prepare #30
+    ret %43
+}

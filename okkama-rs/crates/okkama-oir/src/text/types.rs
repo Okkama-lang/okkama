@@ -25,7 +25,19 @@ impl Codec for Type {
     fn read(r: &mut Reader<'_>) -> Result<Self, Diagnostic> {
         let t = r.next()?;
         if t.quoted {
-            return Err(r.at(&t, DiagnosticKind::Syntax, "expected type"));
+            if t.character {
+                return Err(r.at(&t, DiagnosticKind::Syntax, "expected type"));
+            }
+            let decl = DeclId::from_u32(r.named_reference("decl", &t, false)?);
+            let args = r.type_arguments()?;
+            return Ok(match r.declaration_kind(&t.text) {
+                1 => Self::Role { decl, args },
+                2 => Self::Enum(decl),
+                3 => Self::Variant(decl),
+                4 => Self::Handle(decl),
+                5 => Self::Cap { decl, args },
+                _ => Self::Object { decl, args },
+            });
         }
         let ty = match t.text.as_str() {
             "int" => Self::Int,

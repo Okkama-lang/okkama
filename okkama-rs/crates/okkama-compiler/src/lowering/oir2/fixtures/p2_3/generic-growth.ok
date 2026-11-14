@@ -1,0 +1,7 @@
+module app;
+object Box<T> {
+    has value is T;
+    Box(:value);
+    grow() is int { Box(value: self).grow(); }
+}
+main() is int { Box(value: 1).grow(); }

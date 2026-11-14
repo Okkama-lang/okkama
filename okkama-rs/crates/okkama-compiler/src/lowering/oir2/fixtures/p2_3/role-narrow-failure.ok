@@ -1,0 +1,6 @@
+module app;
+role Named { name() is int; }
+role Labeled { name() is int; label() is int; }
+object Both does Named, Labeled { Both(); name() is int { 1; } label() is int { 2; } }
+object Only does Labeled { Only(); name() is int { 3; } label() is int { 4; } }
+main() is int { let full is Labeled = Only(); let view is Named = full; view.name(); }

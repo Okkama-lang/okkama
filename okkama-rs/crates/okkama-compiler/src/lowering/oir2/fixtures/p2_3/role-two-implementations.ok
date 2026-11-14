@@ -1,0 +1,5 @@
+module app;
+role Label { label() is int; }
+object Box does Label { Box(); label() is int { 1; } }
+object Other does Label { Other(); label() is int { 2; } }
+main() is int { let a is Label = Box(); let b is Label = Other(); a.label() + b.label(); }

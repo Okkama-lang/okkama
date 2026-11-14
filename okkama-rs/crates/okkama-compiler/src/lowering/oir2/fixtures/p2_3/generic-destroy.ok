@@ -1,0 +1,15 @@
+module app;
+object R {
+    R();
+    destroy { 1; }
+}
+object Box<T> {
+    has value is T;
+    Box(:value);
+    destroy { value; }
+}
+main() is int {
+    Box(value: R());
+    Box(value: 1);
+    0;
+}

@@ -1,0 +1,17 @@
+module app;
+object Build {
+    Build();
+    run(flag is bool) is @int {
+        loop {
+            let a = [9, if flag {
+                next;
+            } else {
+                last [];
+            }, 2..=4];
+            last a;
+        }
+    }
+}
+main() is int {
+    0;
+}

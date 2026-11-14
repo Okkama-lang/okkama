@@ -7,7 +7,9 @@ use crate::oir2 as ir;
 pub(super) struct BodyContext<'t> {
     pub functions: &'t HashMap<thir::BodyOwner, ir::FuncId>,
     pub natives: &'t HashMap<usize, ir::FuncId>,
+    pub builtin_adapters: &'t HashMap<(ir::TypeId, ir::TypeId), ir::FuncId>,
     pub error_text: Option<ir::FuncId>,
+    pub std_array_for: bool,
     pub objects: &'t HashMap<ObjectId, ir::DeclId>,
     pub constructors: &'t HashMap<(ObjectId, usize, Vec<usize>), ir::FuncId>,
     pub given: Vec<usize>,
@@ -27,7 +29,7 @@ pub(super) struct BodyLowerer<'a, 't> {
     pub early_self: Option<ir::ValueId>,
     pub field_base: usize,
     pub field_end: usize,
-    // Locals, field slots, then active catch failure views are forwarded at joins/backedges.
+    // Locals, field slots, active catch failures and builder versions cross joins/backedges.
     // A scope exit restores the outer set; shadowed locals have distinct IDs.
     pub env: Vec<Option<ir::ValueId>>,
     pub bindings: Vec<Option<ir::BindingId>>,
@@ -40,6 +42,8 @@ pub(super) struct BodyLowerer<'a, 't> {
     failures: HashMap<Vec<(ir::ScopeId, ir::FuncId)>, ir::BlockId>,
     pub registrations: HashMap<ir::ScopeId, Vec<ir::FuncId>>,
     loops: Vec<LoopFrame>,
+    pub buffers: Vec<usize>,
+    pub buffer_unwinds: HashMap<ir::BlockId, (ir::BlockId, usize)>,
 }
 
 #[derive(Clone)]
@@ -92,6 +96,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             b, source, types, current: Some(entry), env: vec![None; count], bindings: vec![None; count],
             root, return_boundary, failures: HashMap::from([(vec![], failure)]),
             registrations: HashMap::new(), loops: vec![], context,
+            buffers: vec![], buffer_unwinds: HashMap::new(),
             failure_frames: vec![], caught: vec![], rethrows: HashMap::new(), rethrow_inputs: HashMap::new(),
             receiver: None, early_self: None, field_base, field_end: count,
         };
@@ -268,6 +273,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             args.push(value.ok_or_else(|| LowerError::invalid(self.source.span, "valued arm has no value"))?);
         }
         args.extend(self.args(&join.locals));
+        self.abandon_except(&join.locals)?;
         self.edge(join.block, args, kind, boundary)
     }
 
@@ -332,7 +338,9 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             for &value in &args {
                 let ty = self.b.body().values.get(value)?.ty;
                 // Active catch failures are forwarded context, not semantic language results.
-                if !matches!(self.b.module().types.get(ty)?, ir::Type::Service(_)) && prepared.insert(value) {
+                if !matches!(self.b.module().types.get(ty)?,
+                    ir::Type::Service(_) | ir::Type::Builder(_) | ir::Type::MapBuilder(..))
+                    && prepared.insert(value) {
                     self.prepare(Some(value), kind, boundary)?;
                 }
             }
@@ -344,6 +352,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
     }
 
     pub fn return_value(&mut self, value: Option<ir::ValueId>) -> Result<()> {
+        self.abandon_except(&[])?;
         self.separate_discarded(&value.into_iter().collect::<Vec<_>>())?;
         self.prepare(value, ir::ExitKind::Return, self.return_boundary)?;
         self.terminate(ir::TermKind::Ret { values: value.into_iter().collect() })
@@ -484,6 +493,13 @@ impl<'a, 't> BodyLowerer<'a, 't> {
         use thir::ExprKind as E;
         let result_ty = expr.ty.as_ref().filter(|ty| **ty != Ty::Never);
         match &expr.kind {
+            E::Array(_) | E::Map(_) | E::Index { .. } | E::ArrayCast { .. }
+            | E::Coerce { coercion: thir::Coercion::Retag, .. } => self.collection_expr(expr),
+            E::Binary { op: thir::BinaryOp::ArrayConcat | thir::BinaryOp::ArrayDifference
+                | thir::BinaryOp::MapMerge | thir::BinaryOp::MapDifference, .. } => self.collection_expr(expr),
+            E::Call { callee: thir::Callee::Builtin { op, .. }, .. }
+                if super::collections::is_builtin(op) => self.collection_expr(expr),
+            E::Functional(_) => Err(LowerError::unsupported(expr.span, "functional block (C7)")),
             E::Local(local) => Ok(self.env[local.0]),
             E::SelfValue => self.self_value().map(Some),
             E::Field(field) => self.read_field(*field).map(Some),
@@ -501,6 +517,44 @@ impl<'a, 't> BodyLowerer<'a, 't> {
                     fields.push(value);
                 }
                 self.core(ir::CoreOp::VariantNew { ty, case: *case as u32, fields, packet: None }).map(Some)
+            }
+            E::VariantTag(value) => {
+                let Some(value) = self.value(value)? else {
+                    return Ok(None);
+                };
+                self.core(ir::CoreOp::VariantTag { value }).map(Some)
+            }
+            E::VariantGet { value, field } => {
+                let Some(value) = self.value(value)? else {
+                    return Ok(None);
+                };
+                let ty = self.b.body().values.get(value)?.ty;
+                let ir::Type::Variant(declaration) = *self.b.module().types.get(ty)? else {
+                    return Err(LowerError::invalid(expr.span, "payload read without concrete variant"));
+                };
+                let ir::DeclarationKind::Variant { cases, .. } = &self.b.module().declarations.get(declaration)?.kind
+                else {
+                    return Err(LowerError::invalid(expr.span, "payload read without case layouts"));
+                };
+                let mut offset = field.checked_sub(1)
+                    .ok_or_else(|| LowerError::invalid(expr.span, "payload index zero is the tag"))?;
+                let mut selected = None;
+                for (case, entry) in cases.iter().enumerate() {
+                    let layout = &self.b.module().declarations.get(entry.layout)?.kind;
+                    let ir::DeclarationKind::Object { fields, .. } = layout
+                    else {
+                        return Err(LowerError::invalid(expr.span, "payload layout is not an object"));
+                    };
+                    if offset < fields.len() {
+                        selected = Some((case as u32, ir::FieldRef {
+                            declaration: entry.layout, index: offset as u32,
+                        }));
+                        break;
+                    }
+                    offset -= fields.len();
+                }
+                let (case, field) = selected.ok_or_else(|| LowerError::invalid(expr.span, "payload field index"))?;
+                self.core(ir::CoreOp::VariantGet { value, case, field }).map(Some)
             }
             E::Pack { items, spread: None } => {
                 let ty = self.ty(expr.ty.as_ref().expect("typed pack"), expr.span)?;
@@ -573,6 +627,14 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             }
             E::Coerce { coercion: thir::Coercion::RoleWrap, value } => {
                 self.error_wrap(expr, value)
+            }
+            E::Coerce { coercion: thir::Coercion::RoleNarrow { .. }, value } => {
+                let ty = self.ty(expr.ty.as_ref().expect("typed narrowing"), expr.span)?;
+                let Some(value) = self.value(value)? else {
+                    return Ok(None);
+                };
+                self.sync_failure()?;
+                self.core(ir::CoreOp::RoleNarrow { value, ty }).map(Some)
             }
             E::Match(matching) => self.match_expr(matching, result_ty, want),
             E::Loop(block) => self.loop_expr(block, result_ty.filter(|_| want)),
@@ -728,6 +790,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             LowerError::invalid(self.source.span, "loop exit outside loop")
         })?;
         if next {
+            self.abandon_except(&frame.exit.locals)?;
             let mut args = frame.state.clone();
             args.extend(self.args(&frame.exit.locals));
             return self.edge(frame.next, args, ir::ExitKind::Next, Some(frame.boundary));
@@ -795,6 +858,9 @@ impl<'a, 't> BodyLowerer<'a, 't> {
                 (start, end, false)
             }
             thir::Source::Array(expr) if matches!(expr.ty, Some(Ty::Array(_))) => {
+                if !self.context.std_array_for {
+                    return Err(LowerError::unsupported(block.span, "array for traversal (C6)"));
+                }
                 let Some(value) = self.value(expr)? else {
                     return Ok(None);
                 };

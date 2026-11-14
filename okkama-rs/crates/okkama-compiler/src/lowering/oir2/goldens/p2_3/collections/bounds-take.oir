@@ -1,0 +1,75 @@
+oir 2 high
+module app
+requires core
+entry @main
+
+role Error [builtin] {
+    text() -> str
+}
+scope S0 action in @main
+scope S1 try in @main parent S0
+scope S2 catch in @main parent S0
+
+func @main() -> int [entry] {
+    binding b0 "a": array<int> in S0
+    binding b1 "e": Error in S2
+    boundary B0 lexical in S0
+    boundary B1 lexical in S1
+    boundary B2 lexical in S2
+    ^b0 in S0 unwind ^b1:
+    %0: int = const 1
+    %1: array<int> = array.new [%0], ty array<int>
+    bind %1, binding b0
+    br ^b4(%1)
+    ^b1(%2: failure) in S0:
+    raise %2
+    ^b2(%3: array<int>) in S0 unwind ^b1:
+    %4: int = const 0
+    want %4
+    [i5] exit.prepare return %4 at B0
+    result.exit edge normal(0), value %4, demand want, prepare #5
+    ret %4
+    ^b3(%5: array<int>, %6: failure) in S0 unwind ^b1:
+    catch %6 is Error, ^b11(%5, %6, $value), ^b12(%5, %6)
+    ^b4(%7: array<int>) in S1 unwind ^b3(%7):
+    %8: int = const -1
+    %9: int = const 0
+    %10: bool = int.lt %8, %9
+    cond %10, ^b5, ^b6
+    ^b5 in S1:
+    br ^b7(%7)
+    ^b6 in S1:
+    br ^b8(%7)
+    ^b7(%11: array<int>) in S1 unwind ^b3(%11):
+    trap range "take needs a non-negative count"
+    ^b8(%12: array<int>) in S1 unwind ^b3(%12):
+    %13: int = array.len %7
+    %14: bool = int.lt %8, %13
+    cond %14, ^b9(%8), ^b9(%13)
+    ^b9(%15: int) in S1:
+    br ^b10(%12)
+    ^b10(%16: array<int>) in S1 unwind ^b3(%16):
+    %17: array<int> = array.slice %7, %9, %15
+    discard %17
+    want %16
+    [i14] exit.prepare fallthrough %16 at B1
+    result.exit edge normal(0), value %17, demand discard, prepare none
+    result.exit edge normal(0), value %16, demand want, prepare #14
+    br ^b2(%16)
+    ^b11(%18: array<int>, %19: failure, %20: Error) in S2 unwind ^b1:
+    bind %20, binding b1
+    br ^b14(%18, %19)
+    ^b12(%21: array<int>, %22: failure) in S0 unwind ^b1:
+    raise %22
+    ^b13(%23: array<int>, %24: failure, %25: failure) in S0 unwind ^b1:
+    %26: failure = fail.caused %25, %24
+    raise %26
+    ^b14(%27: array<int>, %28: failure) in S2 unwind ^b13(%27, %28):
+    %29: int = const 0
+    discard %29
+    want %27
+    [i20] exit.prepare fallthrough %27 at B2
+    result.exit edge normal(0), value %29, demand discard, prepare none
+    result.exit edge normal(0), value %27, demand want, prepare #20
+    br ^b2(%27)
+}
