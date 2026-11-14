@@ -273,8 +273,9 @@
   - [26.8 У общего состояния один владелец](#268-у-общего-состояния-один-владелец)
   - [26.9 Антипаттерны, которые отвергает компилятор](#269-антипаттерны-которые-отвергает-компилятор)
   - [26.10 Антипаттерны, которые компилятор пропускает](#2610-антипаттерны-которые-компилятор-пропускает)
-  - [26.11 Классический каталог, прочитанный в Okkama](#2611-классический-каталог-прочитанный-в-okkama)
-  - [26.12 Чего стоят паттерны](#2612-чего-стоят-паттерны)
+  - [26.11 Рефакторинг шаг за шагом](#2611-рефакторинг-шаг-за-шагом)
+  - [26.12 Классический каталог, прочитанный в Okkama](#2612-классический-каталог-прочитанный-в-okkama)
+  - [26.13 Чего стоят паттерны](#2613-чего-стоят-паттерны)
 
 # Часть I. Бритва
 
@@ -14666,7 +14667,145 @@ Okkama структурный: состояние, общее для задач,
 коде на Okkama и каждая была заменена — при ревизии стандартной библиотеки
 или в примерах этой книги — одним из паттернов выше.
 
-## 26.11 Классический каталог, прочитанный в Okkama
+## 26.11 Рефакторинг шаг за шагом
+
+Антипаттерны предыдущего раздела редко ходят поодиночке. В следующей
+программе их три: статус — строка, срочность — флаг, а заявка раздаёт свои
+поля, чтобы вызывающий решал, что печатать.
+
+```okkama
+module bible/before v1.0.0;
+
+// Before: the status is a string, urgency is a flag, and the object hands
+// out its parts so that the caller can decide everything.
+import "io/stdout" take Stdout;
+
+object Ticket {
+    has title is string;
+    has status is string;
+    has urgent is bool;
+    Ticket(:title, :status, :urgent);
+    title() is string { title; }
+    status() is string { status; }
+    urgent() is bool { urgent; }
+}
+
+main() is int {
+    let out = Stdout();
+    let tickets = [
+        Ticket(title: "printer", status: "open", urgent: true),
+        Ticket(title: "coffee", status: "closed", urgent: false),
+        Ticket(title: "wifi", status: "open", urgent: false)
+    ];
+    for tickets -> ticket {
+        if ticket.status() == "open" {
+            let mark = if ticket.urgent() { "!"; } else { " "; };
+            out.writeln(mark + " " + ticket.title());
+        }
+    }
+    0;
+}
+```
+
+Вывод:
+
+```text
+! printer
+  wifi
+```
+
+```text
+! printer
+  wifi
+```
+
+Она работает, и это именно тот код, который правила языка не запрещают.
+Рефакторинг разбирает её по одному запаху за раз, не меняя того, что она
+печатает.
+
+1. **Строка становится перечислением.** `status == "open"` компилируется для
+   любой строки, включая `"opne"`. `enum Status = (open, closed)` называет
+   два состояния, а `match` по нему исчерпывающий: третье состояние,
+   добавленное позже, станет ошибкой компиляции в каждом месте, которое
+   должно о нём решить (глава 16).
+2. **Геттеры становятся вопросом.** Вызывающему нужно от каждой заявки одно:
+   её строка в очереди, если она есть. Поэтому заявка отвечает именно на
+   это, `line() is Maybe<string>`, а `title()`, `status()` и `urgent()`
+   исчезают. Отсутствие — в типе: у закрытой заявки строки нет.
+3. **Флаг становится декоратором.** Срочность меняет вид строки, значит, это
+   объект, который держит заявку и помечает её строку, исполняя ту же роль
+   `Queued`. Заявка, переставшая быть срочной, — это заявка без обёртки;
+   сбрасывать никакое поле не нужно.
+
+```okkama
+module bible/after v1.0.0;
+
+// After: the status is an enum, urgency is a decorator, and each ticket
+// answers the one question the caller has: how it shows in the queue.
+import "io/stdout" take Stdout;
+
+enum Status = (open, closed);
+
+role Queued {
+    line() is Maybe<string>;
+}
+
+object Ticket does Queued {
+    has title is string;
+    has status is Status;
+    Ticket(:title, :status);
+    line() is Maybe<string> {
+        match status {
+            case Status.open { Maybe.some("  " + title); }
+            case Status.closed { Maybe.none; }
+        }
+    }
+}
+
+object Urgent does Queued {
+    has origin is Queued;
+    Urgent(:origin);
+    line() is Maybe<string> {
+        origin.line() ?? .some(text): Maybe.some("!" + text.slice(1, text.length())) !! .none: Maybe.none;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let queue is @Queued = [
+        Urgent(origin: Ticket(title: "printer", status: Status.open)),
+        Ticket(title: "coffee", status: Status.closed),
+        Ticket(title: "wifi", status: Status.open)
+    ];
+    for queue -> ticket {
+        match ticket.line() {
+            case Maybe.some(text) { out.writeln(text); }
+            case Maybe.none { }
+        }
+    }
+    0;
+}
+```
+
+Вывод:
+
+```text
+! printer
+  wifi
+```
+
+```text
+! printer
+  wifi
+```
+
+Вывод тот же, и вторая программа длиннее. Купили этим место, где живёт
+каждое решение. Смысл «открыта» — в перечислении; строка заявки — в заявке;
+пометка срочности — в `Urgent`; `main` только печатает. Новый вид пометки,
+новое состояние или другой формат очереди — изменение в одном объекте, а
+каждое место, где новое состояние нужно обработать, найдёт компилятор.
+
+## 26.12 Классический каталог, прочитанный в Okkama
 
 23 паттерна Гаммы с соавторами — полезный список проверки того, что язык
 делает лёгким, трудным или ненужным [[Gamma 1994](#ref-gamma1994)]. В таблице — те, что
@@ -14696,7 +14835,7 @@ Okkama структурный: состояние, общее для задач,
 заменяет композиция, потому что обходить нечего. А у Singleton, паттерна
 глобального состояния, вовсе нет выражения.
 
-## 26.12 Чего стоят паттерны
+## 26.13 Чего стоят паттерны
 
 Паттерны этой главы обменивают размер на изменяемость. В цепочке
 декораторов больше объявлений, чем в объекте с флагами; роль со своим fake —

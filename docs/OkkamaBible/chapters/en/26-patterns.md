@@ -417,7 +417,52 @@ programs. They are listed because each of them was found in real Okkama
 code, and each was replaced, in the standard library review or in the
 examples of this book, by one of the patterns above.
 
-## 26.11 The classic catalogue, read in Okkama
+## 26.11 A refactoring, step by step
+
+The anti-patterns of the previous section rarely come alone. The next
+program has three of them: a status that is a string, an urgency that is a
+flag, and a ticket that hands out its fields so that the caller can decide
+what to print.
+
+{{example:26-before}}
+
+```text
+! printer
+  wifi
+```
+
+It works, and it is the kind of code the rules of the language do not
+prevent. The refactoring takes it apart one smell at a time, without
+changing what it prints.
+
+1. **The string becomes an enum.** `status == "open"` compiles for any
+   string, including `"opne"`. `enum Status = (open, closed)` names the two
+   states, and a `match` over it is exhaustive: a third state added later is
+   a compile error at every place that has to decide about it (Chapter 16).
+2. **The getters become a question.** The caller wanted one thing from each
+   ticket: its line in the queue, if it has one. So the ticket answers that,
+   `line() is Maybe<string>`, and `title()`, `status()` and `urgent()`
+   disappear. Absence is in the type: a closed ticket has no line.
+3. **The flag becomes a decorator.** Urgency changes how a line looks, so it
+   is an object that holds a ticket and marks its line, doing the same role
+   `Queued`. A ticket that stops being urgent is the ticket without the
+   wrapper; no field has to be reset.
+
+{{example:26-after}}
+
+```text
+! printer
+  wifi
+```
+
+The output is the same, and the second program is longer. What it buys is
+the place where each decision lives. The meaning of "open" is in the enum;
+the line of a ticket is in the ticket; the mark of urgency is in `Urgent`;
+`main` only prints. A new kind of mark, a new state or a different queue
+format is a change in one object, and the compiler finds every place a new
+state has to be handled.
+
+## 26.12 The classic catalogue, read in Okkama
 
 The 23 patterns of Gamma and his co-authors are a useful checklist of what a
 language makes easy, hard or unnecessary [@gamma1994]. The table goes
@@ -448,7 +493,7 @@ first among them, are replaced by composition because there is no
 inheritance to work around. And Singleton, a pattern for global state, has
 no expression at all.
 
-## 26.12 What the patterns cost
+## 26.13 What the patterns cost
 
 The patterns of this chapter trade size for change. A decorator chain has
 more declarations than a flag object; a role and its fake are more text than

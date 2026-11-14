@@ -273,8 +273,9 @@
   - [26.8 Shared state has one owner](#268-shared-state-has-one-owner)
   - [26.9 Anti-patterns the compiler refuses](#269-anti-patterns-the-compiler-refuses)
   - [26.10 Anti-patterns the compiler allows](#2610-anti-patterns-the-compiler-allows)
-  - [26.11 The classic catalogue, read in Okkama](#2611-the-classic-catalogue-read-in-okkama)
-  - [26.12 What the patterns cost](#2612-what-the-patterns-cost)
+  - [26.11 A refactoring, step by step](#2611-a-refactoring-step-by-step)
+  - [26.12 The classic catalogue, read in Okkama](#2612-the-classic-catalogue-read-in-okkama)
+  - [26.13 What the patterns cost](#2613-what-the-patterns-cost)
 
 # Part I. The Razor
 
@@ -14492,7 +14493,146 @@ programs. They are listed because each of them was found in real Okkama
 code, and each was replaced, in the standard library review or in the
 examples of this book, by one of the patterns above.
 
-## 26.11 The classic catalogue, read in Okkama
+## 26.11 A refactoring, step by step
+
+The anti-patterns of the previous section rarely come alone. The next
+program has three of them: a status that is a string, an urgency that is a
+flag, and a ticket that hands out its fields so that the caller can decide
+what to print.
+
+```okkama
+module bible/before v1.0.0;
+
+// Before: the status is a string, urgency is a flag, and the object hands
+// out its parts so that the caller can decide everything.
+import "io/stdout" take Stdout;
+
+object Ticket {
+    has title is string;
+    has status is string;
+    has urgent is bool;
+    Ticket(:title, :status, :urgent);
+    title() is string { title; }
+    status() is string { status; }
+    urgent() is bool { urgent; }
+}
+
+main() is int {
+    let out = Stdout();
+    let tickets = [
+        Ticket(title: "printer", status: "open", urgent: true),
+        Ticket(title: "coffee", status: "closed", urgent: false),
+        Ticket(title: "wifi", status: "open", urgent: false)
+    ];
+    for tickets -> ticket {
+        if ticket.status() == "open" {
+            let mark = if ticket.urgent() { "!"; } else { " "; };
+            out.writeln(mark + " " + ticket.title());
+        }
+    }
+    0;
+}
+```
+
+Output:
+
+```text
+! printer
+  wifi
+```
+
+```text
+! printer
+  wifi
+```
+
+It works, and it is the kind of code the rules of the language do not
+prevent. The refactoring takes it apart one smell at a time, without
+changing what it prints.
+
+1. **The string becomes an enum.** `status == "open"` compiles for any
+   string, including `"opne"`. `enum Status = (open, closed)` names the two
+   states, and a `match` over it is exhaustive: a third state added later is
+   a compile error at every place that has to decide about it (Chapter 16).
+2. **The getters become a question.** The caller wanted one thing from each
+   ticket: its line in the queue, if it has one. So the ticket answers that,
+   `line() is Maybe<string>`, and `title()`, `status()` and `urgent()`
+   disappear. Absence is in the type: a closed ticket has no line.
+3. **The flag becomes a decorator.** Urgency changes how a line looks, so it
+   is an object that holds a ticket and marks its line, doing the same role
+   `Queued`. A ticket that stops being urgent is the ticket without the
+   wrapper; no field has to be reset.
+
+```okkama
+module bible/after v1.0.0;
+
+// After: the status is an enum, urgency is a decorator, and each ticket
+// answers the one question the caller has: how it shows in the queue.
+import "io/stdout" take Stdout;
+
+enum Status = (open, closed);
+
+role Queued {
+    line() is Maybe<string>;
+}
+
+object Ticket does Queued {
+    has title is string;
+    has status is Status;
+    Ticket(:title, :status);
+    line() is Maybe<string> {
+        match status {
+            case Status.open { Maybe.some("  " + title); }
+            case Status.closed { Maybe.none; }
+        }
+    }
+}
+
+object Urgent does Queued {
+    has origin is Queued;
+    Urgent(:origin);
+    line() is Maybe<string> {
+        origin.line() ?? .some(text): Maybe.some("!" + text.slice(1, text.length())) !! .none: Maybe.none;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let queue is @Queued = [
+        Urgent(origin: Ticket(title: "printer", status: Status.open)),
+        Ticket(title: "coffee", status: Status.closed),
+        Ticket(title: "wifi", status: Status.open)
+    ];
+    for queue -> ticket {
+        match ticket.line() {
+            case Maybe.some(text) { out.writeln(text); }
+            case Maybe.none { }
+        }
+    }
+    0;
+}
+```
+
+Output:
+
+```text
+! printer
+  wifi
+```
+
+```text
+! printer
+  wifi
+```
+
+The output is the same, and the second program is longer. What it buys is
+the place where each decision lives. The meaning of "open" is in the enum;
+the line of a ticket is in the ticket; the mark of urgency is in `Urgent`;
+`main` only prints. A new kind of mark, a new state or a different queue
+format is a change in one object, and the compiler finds every place a new
+state has to be handled.
+
+## 26.12 The classic catalogue, read in Okkama
 
 The 23 patterns of Gamma and his co-authors are a useful checklist of what a
 language makes easy, hard or unnecessary [[Gamma 1994](#ref-gamma1994)]. The table goes
@@ -14523,7 +14663,7 @@ first among them, are replaced by composition because there is no
 inheritance to work around. And Singleton, a pattern for global state, has
 no expression at all.
 
-## 26.12 What the patterns cost
+## 26.13 What the patterns cost
 
 The patterns of this chapter trade size for change. A decorator chain has
 more declarations than a flag object; a role and its fake are more text than
