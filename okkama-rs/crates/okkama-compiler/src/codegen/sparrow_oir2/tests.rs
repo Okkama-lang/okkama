@@ -267,7 +267,9 @@ fn s1_switch_expansion_and_parallel_edge_cycle() {
 #[test]
 fn s1_rejects_cleanup_defer_and_lost_or_duplicate_successor_permissions() {
     for op in [
-        o::Operation::Cleanup(o::CleanupOp::Plan { cleanup: o::ValueId::from_u32(0) }),
+        o::Operation::Cleanup(o::CleanupOp::Plan {
+            cleanup: o::ValueId::from_u32(0), plan: o::CleanupPlanId::from_u32(0),
+        }),
         o::Operation::Lexical(o::LexicalOp::DeferRegister {
             scope: o::ScopeId::from_u32(0),
             action: o::DeferAction {
@@ -460,7 +462,9 @@ fn s2_low_cleanup_and_pending_are_explicitly_deferred_to_s3() {
     let body = module.functions.get_mut(o::FuncId::from_u32(0)).unwrap().body.as_mut().unwrap();
     let id = body.insts.alloc(o::Instruction {
         results: vec![],
-        op: o::Operation::Cleanup(o::CleanupOp::Plan { cleanup: o::ValueId::from_u32(0) }),
+        op: o::Operation::Cleanup(o::CleanupOp::Plan {
+            cleanup: o::ValueId::from_u32(0), plan: o::CleanupPlanId::from_u32(0),
+        }),
         facts: o::InstructionFacts::default(), loc: None,
     }).unwrap();
     body.blocks.get_mut(body.entry).unwrap().insts.push(id);

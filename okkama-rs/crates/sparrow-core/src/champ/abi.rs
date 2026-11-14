@@ -70,7 +70,10 @@ pub const RECORD_LAYOUTS: &[RecordLayout] = &[
     record!(CallOwn; [input]; []),
     record!(RegistrationMap; []; []),
     record!(DestroyBorrow; [object, activation]; []),
-    record!(DestroyPost; [failure]; []),
+    record!(DestroyPost; [state, failure]; []),
+    record!(CloseInputs; [failure]; []),
+    record!(NextPost; [state, key]; []),
+    record!(FinishPost; [failure, pending]; []),
 ];
 
 /// One view of signatures/effects (JIT), machine records (above), and abstract outcome schemas (SPB 17).
@@ -153,6 +156,13 @@ pub fn helper_abi(name: &str) -> Option<HelperAbi> {
         "champ_exit_replace" => ("ReplacePost", Some(O::ExitReplace)),
         "champ_exit_commit" => ("CommitPost", Some(O::ExitCommit)),
         "champ_exit_abort" => ("CleanupSlot", Some(O::ExitAbort)),
+        "champ_cleanup_begin" => ("CleanupSlot", Some(O::CleanupBegin)),
+        "champ_cleanup_settle_empty" | "champ_cleanup_settle_packet" => ("CleanupSlot", Some(O::CleanupSettle)),
+        "champ_cleanup_plan" => ("CleanupSlot", Some(O::CleanupPlan)),
+        "champ_cleanup_next" => ("NextPost", Some(O::CleanupNext)),
+        "champ_cleanup_destroy" => ("DestroyPost", Some(O::CleanupDestroy)),
+        "champ_destroy_direct" => ("DestroyPost", Some(O::DestroyDirect)),
+        "champ_cleanup_finish" => ("FinishPost", Some(O::CleanupFinish)),
         "champ_cleanup_failure" => ("CleanupSlot", Some(O::CleanupFailure)),
         "champ_call_owned" => ("CallPost", Some(O::InvokeCallOwn)),
         "champ_invoke_defer" => ("CallPost", Some(O::InvokeDefer)),
@@ -174,6 +184,16 @@ pub fn helper_abi(name: &str) -> Option<HelperAbi> {
 // Keep the always-built SPB transport registry mechanically tied to the actual #572 records.
 const _: () = {
     use okkama_sparrow::spb17::Opcode;
+    assert!(size_of::<NextPost>() == 24);
+    assert!(std::mem::offset_of!(NextPost, state) == 0);
+    assert!(std::mem::offset_of!(NextPost, key) == 8);
+    assert!(size_of::<DestroyPost>() == 16);
+    assert!(std::mem::offset_of!(DestroyPost, state) == 0);
+    assert!(std::mem::offset_of!(DestroyPost, failure) == 8);
+    assert!(size_of::<FinishPost>() == 24);
+    assert!(std::mem::offset_of!(FinishPost, closed) == 0);
+    assert!(std::mem::offset_of!(FinishPost, failure) == 8);
+    assert!(std::mem::offset_of!(FinishPost, pending) == 16);
     // call_abi is also consumed by codegen; offsets below are checked against repr(C), never inferred.
     let Some(abi) = Opcode::InvokeCallOwn.call_abi() else { panic!("missing call ABI") };
     assert!(size_of::<CallOwn>() == abi.call_own_size);

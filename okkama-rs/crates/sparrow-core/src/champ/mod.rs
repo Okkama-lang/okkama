@@ -1,4 +1,4 @@
-//! Champ G1 identity, packet/journal ABI and S2 ownership helpers.
+//! Champ G1 identity, packet/journal ABI and common cleanup executor.
 //! Identity primitives below do not collect or call application code; X helpers declare those effects.
 //! Callers keep refs in stack maps/Runtime.roots; neither a Rust local nor a serial is a GC root.
 #![allow(unsafe_code)]
@@ -9,6 +9,7 @@ mod abi;
 pub use abi::*;
 mod helpers;
 pub mod cleanup;
+pub use cleanup::rt_exit_abort;
 pub use records::*;
 pub use helpers::*;
 pub use okkama_sparrow::spb17::layout::{LayoutFacts, ObjectRuntimeLayout, RuntimeLayoutRegistry};
@@ -52,7 +53,7 @@ impl OwnerId {
 
 /// Materialized key. Its object word MUST remain rooted while this key is used.
 /// S2 packets/services trace object(), never serial(); no unrooted address lookup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct KeyRef {
     object: Word,
@@ -89,6 +90,9 @@ pub(crate) struct State {
     trace: Option<std::fs::File>,
     selections: Vec<Vec<usize>>,
     entries: Vec<EntryContract>,
+    cleanup_plans: Vec<CleanupPlan>,
+    rejection_floor: Option<u64>,
+    rejection_plan: Option<PlanId>,
     value_reprs: std::collections::BTreeMap<(u64, u64, bool), crate::word::Repr>,
 }
 
@@ -256,3 +260,6 @@ mod tests;
 
 #[cfg(test)]
 mod runtime_tests;
+
+#[cfg(test)]
+mod executor_tests;

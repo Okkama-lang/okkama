@@ -1,6 +1,6 @@
-//! Shared S2 claim/invoke/finish and packet rejection close. S3 adds the full pending/suffix executor.
+//! One serial-ordered cleanup executor for static, journal, settled and rejection packets.
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
-use super::helpers::{cleanup as read_cleanup, consume, error, packet, replace, scope, stop, store, validate};
+use super::helpers::{consume, data, error, packet, pending, replace, scope, stop, store, validate};
 use super::records::*;
 use super::{HolderId, KeyRef, OwnerId};
 use crate::runtime::{self, frame_pointer, Ctx, Runtime, EXHAUSTED, FAILED, FATAL, OK};
@@ -11,7 +11,7 @@ impl Runtime {
     pub fn champ_cleanup_from_packet(&mut self, input: &mut PacketSlot) -> Result<CleanupSlot, Error> {
         let remainder = packet(self, input.record)?;
         validate(self, &remainder)?;
-        let record = store(self, Data::Cleanup(Cleanup { remainder, ..Cleanup::default() }));
+        let record = store(self, Data::Cleanup(Cleanup { remainder, settled: true, ..Cleanup::default() }));
         consume(self, input.record);
         input.record = 0;
         Ok(CleanupSlot { record })
@@ -19,11 +19,319 @@ impl Runtime {
     pub fn champ_cleanup_from_scope(&mut self, input: &mut ScopeSlot) -> Result<CleanupSlot, Error> {
         let remainder = scope(self, input.record)?.all();
         validate(self, &remainder)?;
-        let record = store(self, Data::Cleanup(Cleanup { remainder, ..Cleanup::default() }));
+        let record = store(self, Data::Cleanup(Cleanup { remainder, settled: true, ..Cleanup::default() }));
         consume(self, input.record);
         input.record = 0;
         Ok(CleanupSlot { record })
     }
+}
+
+fn read_cleanup(runtime: &Runtime, record: Word) -> Result<&Cleanup, Error> {
+    match data(runtime, record)? {
+        Data::Cleanup(cleanup) => Ok(cleanup),
+        _ => Err(error("expected cleanup")),
+    }
+}
+/// L-only transaction: move service storage out and back without cloning its live suffix.
+/// No safepoint, callback or application failure may run inside body.
+fn edit<T>(runtime: &mut Runtime, record: Word,
+    body: impl FnOnce(&mut Runtime, &mut Cleanup) -> Result<T, Error>) -> Result<T, Error>
+{
+    read_cleanup(runtime, record)?;
+    let data = &mut runtime.heap.payload_mut::<Record>(record).expect("cleanup record").0;
+    let Data::Cleanup(mut cleanup) = std::mem::replace(data, Data::Consumed) else { unreachable!() };
+    let result = body(runtime, &mut cleanup);
+    replace(runtime, record, Data::Cleanup(cleanup));
+    result
+}
+fn ready(cleanup: &Cleanup) -> Result<(), Error> {
+    if cleanup.active.is_some() || cleanup.selected.is_some() || cleanup.captured != 0 || cleanup.done {
+        return Err(error("cleanup step before current/failure was consumed"));
+    }
+    Ok(())
+}
+fn stream_append(runtime: &Runtime, stream: &mut Stream, packet: Packet) {
+    for run in packet.journals.into_iter().flatten() {
+        if let Some(object) = run.front() {
+            let serial = runtime.heap.champ_identity(object).expect("validated identity").serial;
+            stream.heads.push((serial, stream.runs.len()));
+            stream.runs.push(run);
+        }
+    }
+}
+fn abort(runtime: &Runtime, cleanup: &mut Cleanup) {
+    if let Some(pending) = cleanup.pending.take() {
+        if cleanup.planned {
+            stream_append(runtime, &mut cleanup.stream, pending.reserve);
+        } else {
+            cleanup.remainder.append(pending.reserve);
+        }
+        cleanup.aborted = true;
+    }
+}
+fn record_failure(runtime: &mut Runtime, cleanup: &mut Cleanup, failure: Word) -> Result<(), Error> {
+    ready(cleanup)?;
+    if runtime.failure(failure).is_none() {
+        return Err(error("invalid failure carrier"));
+    }
+    if cleanup.failure == 0 {
+        cleanup.failure = failure;
+    } else {
+        if cleanup.failure == failure {
+            return Err(error("duplicate cleanup failure"));
+        }
+        runtime.failure_link(cleanup.failure, failure, true);
+    }
+    abort(runtime, cleanup);
+    Ok(())
+}
+impl Runtime {
+    pub fn champ_register_cleanup_plan(&mut self, plan: CleanupPlan) -> PlanId {
+        self.champ.cleanup_plans.push(plan);
+        self.champ.cleanup_plans.len() as u64
+    }
+}
+fn leaf(ctx: *mut Ctx, body: impl FnOnce(&mut Runtime) -> Result<(), Error>) -> Outcome {
+    if unsafe { (*ctx).status } != OK || unsafe { (*ctx).failure } != 0 {
+        return stop(ctx, error("cleanup helper entered with active bridge failure"));
+    }
+    match body(unsafe { &mut *(*ctx).runtime }) {
+        Ok(()) => NORMAL,
+        Err(failure) => stop(ctx, failure),
+    }
+}
+pub extern "C" fn rt_cleanup_begin(ctx: *mut Ctx, inputs: *const CloseInputs,
+    post: *mut CleanupSlot) -> Outcome
+{
+    leaf(ctx, |runtime| {
+        let inputs = unsafe { &*inputs };
+        if inputs.scope.is_null() == inputs.packet.is_null() {
+            return Err(error("close requires exactly one inventory"));
+        }
+        let source = if inputs.scope.is_null() {
+            unsafe { (*inputs.packet).record }
+        } else {
+            unsafe { (*inputs.scope).record }
+        };
+        let remainder = if inputs.scope.is_null() {
+            packet(runtime, source)?
+        } else {
+            scope(runtime, source)?.all()
+        };
+        let pending_record = if inputs.pending.is_null() { 0 } else { unsafe { (*inputs.pending).record } };
+        let pending = if inputs.pending.is_null() {
+            None
+        } else {
+            Some(pending(runtime, pending_record)?)
+        };
+        let mut inventory = remainder.clone();
+        if let Some(pending) = &pending {
+            inventory.append(pending.reserve.clone());
+        }
+        validate(runtime, &inventory)?;
+        let mut cleanup = Cleanup { remainder, pending, settlements: inputs.settlements, ..Cleanup::default() };
+        if inputs.failure != 0 {
+            record_failure(runtime, &mut cleanup, inputs.failure)?;
+        }
+        let record = store(runtime, Data::Cleanup(cleanup));
+        consume(runtime, source);
+        unsafe {
+            if inputs.scope.is_null() {
+                (*inputs.packet).record = 0;
+            } else {
+                (*inputs.scope).record = 0;
+            }
+            if !inputs.pending.is_null() {
+                if pending_record != 0 {
+                    consume(runtime, pending_record);
+                }
+                (*inputs.pending).record = 0;
+            }
+            post.write(CleanupSlot { record });
+        }
+        Ok(())
+    })
+}
+pub extern "C" fn rt_cleanup_settle_empty(ctx: *mut Ctx, input: *mut CleanupSlot,
+    post: *mut CleanupSlot) -> Outcome
+{
+    leaf(ctx, |runtime| {
+        let record = unsafe { (*input).record };
+        edit(runtime, record, |_, cleanup| {
+            ready(cleanup)?;
+            if cleanup.settled || cleanup.settlements != 0 || cleanup.planned {
+                return Err(error("nonempty or repeated empty settlement"));
+            }
+            cleanup.settled = true;
+            Ok(())
+        })?;
+        unsafe {
+            (*input).record = 0;
+            post.write(CleanupSlot { record });
+        }
+        Ok(())
+    })
+}
+/// Protocol adapters settle their duties before selection and hand off the actual packet, even on failure.
+/// No runtime defer runner or asynchronous protocol is hidden here.
+pub extern "C" fn rt_cleanup_settle_packet(ctx: *mut Ctx, input: *mut CleanupSlot,
+    settled: *mut PacketSlot, failure: Word, post: *mut CleanupSlot) -> Outcome
+{
+    leaf(ctx, |runtime| {
+        let record = unsafe { (*input).record };
+        let packet_record = unsafe { (*settled).record };
+        let packet = packet(runtime, packet_record)?;
+        edit(runtime, record, |runtime, cleanup| {
+            ready(cleanup)?;
+            if cleanup.settlements == 0 || cleanup.settled || cleanup.planned {
+                return Err(error("unexpected protocol settlement"));
+            }
+            let mut all = cleanup.remainder.clone();
+            all.append(packet.clone());
+            if let Some(pending) = &cleanup.pending {
+                all.append(pending.reserve.clone());
+            }
+            validate(runtime, &all)?;
+            if failure != 0 && runtime.failure(failure).is_none() {
+                return Err(error("invalid settlement failure"));
+            }
+            cleanup.remainder.append(packet);
+            cleanup.settlements -= 1;
+            cleanup.settled = cleanup.settlements == 0;
+            if failure != 0 {
+                runtime.heap.payload_mut::<runtime::Failure>(failure).expect("failure").cleanup_origin = true;
+                record_failure(runtime, cleanup, failure)?;
+            }
+            Ok(())
+        })?;
+        consume(runtime, packet_record);
+        unsafe {
+            (*settled).record = 0;
+            (*input).record = 0;
+            post.write(CleanupSlot { record });
+        }
+        Ok(())
+    })
+}
+/// The one explicit abort operation, for pending not consumed by begin. No phase flag.
+pub extern "C" fn rt_exit_abort(ctx: *mut Ctx, input: *mut PendingSlot, state: *mut CleanupSlot,
+    post: *mut CleanupSlot) -> Outcome
+{
+    leaf(ctx, |runtime| {
+        let record = unsafe { (*state).record };
+        let pending_record = unsafe { (*input).record };
+        let pending = pending(runtime, pending_record)?;
+        edit(runtime, record, |runtime, cleanup| {
+            ready(cleanup)?;
+            if cleanup.aborted || cleanup.pending.is_some() {
+                return Err(error("reserve already attached or aborted"));
+            }
+            let mut all = cleanup.remainder.clone();
+            for run in &cleanup.stream.runs {
+                all.append(Packet::from_run(run.clone()));
+            }
+            all.append(pending.reserve.clone());
+            validate(runtime, &all)?;
+            cleanup.pending = Some(pending);
+            abort(runtime, cleanup);
+            Ok(())
+        })?;
+        consume(runtime, pending_record);
+        unsafe {
+            (*input).record = 0;
+            (*state).record = 0;
+            post.write(CleanupSlot { record });
+        }
+        Ok(())
+    })
+}
+pub extern "C" fn rt_cleanup_plan(ctx: *mut Ctx, input: *mut CleanupSlot, plan: PlanId,
+    post: *mut CleanupSlot) -> Outcome
+{
+    leaf(ctx, |runtime| {
+        let plan = *runtime.champ.cleanup_plans.get(plan.wrapping_sub(1) as usize)
+            .ok_or_else(|| error("unknown cleanup plan"))?;
+        let record = unsafe { (*input).record };
+        edit(runtime, record, |runtime, cleanup| {
+            ready(cleanup)?;
+            if !cleanup.settled || cleanup.planned || plan.reserve != (cleanup.pending.is_some() || cleanup.aborted) {
+                return Err(error("cleanup plan inventory/settlement mismatch"));
+            }
+            let reserve_empty = cleanup.pending.as_ref().is_none_or(|pending| pending.reserve.words().next().is_none());
+            if plan.direct && plan.may_fail && !reserve_empty {
+                return Err(error("B2: fallible direct plan with nonempty reserve"));
+            }
+            stream_append(runtime, &mut cleanup.stream, std::mem::take(&mut cleanup.remainder));
+            cleanup.planned = true;
+            Ok(())
+        })?;
+        unsafe {
+            (*input).record = 0;
+            post.write(CleanupSlot { record });
+        }
+        Ok(())
+    })
+}
+fn select(runtime: &Runtime, cleanup: &mut Cleanup) -> Option<(Word, u64, HolderId, OwnerId)> {
+    let (serial, index) = cleanup.stream.heads.pop()?;
+    let run = &mut cleanup.stream.runs[index];
+    let object = run.pop_front().expect("active stream head");
+    if let Some(next) = run.front() {
+        let serial = runtime.heap.champ_identity(next).expect("validated identity").serial;
+        cleanup.stream.heads.push((serial, index));
+    }
+    Some((object, serial, run.holder, run.owner))
+}
+/// Ordinals follow Low selected/done order. The key has a two-word machine representation.
+pub extern "C" fn rt_cleanup_next(ctx: *mut Ctx, input: *mut CleanupSlot, post: *mut NextPost) -> Outcome {
+    let mut ordinal = 0;
+    let outcome = leaf(ctx, |runtime| {
+        let record = unsafe { (*input).record };
+        let key = edit(runtime, record, |runtime, cleanup| {
+            ready(cleanup)?;
+            if !cleanup.planned {
+                return Err(error("next before plan"));
+            }
+            cleanup.selected = select(runtime, cleanup);
+            if let Some((object, serial, _, _)) = cleanup.selected {
+                Ok(KeyRef { object, serial })
+            } else {
+                cleanup.done = true;
+                ordinal = 1;
+                Ok(KeyRef::default())
+            }
+        })?;
+        unsafe {
+            (*input).record = 0;
+            post.write(NextPost { state: CleanupSlot { record }, key });
+        }
+        Ok(())
+    });
+    if outcome == OUTCOME_STOP { outcome } else { ordinal }
+}
+pub extern "C" fn rt_cleanup_finish(ctx: *mut Ctx, input: *mut CleanupSlot,
+    post: *mut FinishPost) -> Outcome
+{
+    leaf(ctx, |runtime| {
+        let record = unsafe { (*input).record };
+        let output = edit(runtime, record, |runtime, cleanup| {
+            if !cleanup.planned || !cleanup.settled || cleanup.active.is_some()
+                || cleanup.selected.is_some() || cleanup.captured != 0
+                || !cleanup.stream.heads.is_empty() || cleanup.remainder.words().next().is_some()
+                || (cleanup.failure != 0 && cleanup.pending.is_some())
+            {
+                return Err(error("finish before complete cleanup"));
+            }
+            let pending = cleanup.pending.take().map_or(0, |pending| store(runtime, Data::Pending(pending)));
+            Ok(FinishPost { closed: 1, failure: cleanup.failure, pending: PendingSlot { record: pending } })
+        })?;
+        consume(runtime, record);
+        unsafe {
+            (*input).record = 0;
+            post.write(output);
+        }
+        Ok(())
+    })
 }
 
 /// Capture is one noncollecting publication batch. The rooted destination is written before bridge reset.
@@ -49,32 +357,50 @@ pub extern "C" fn rt_destroy_claim(ctx: *mut Ctx, state: *mut CleanupSlot, key: 
     let runtime = unsafe { &mut *(*ctx).runtime };
     let record = unsafe { (*state).record };
     let result = (|| {
-        let mut cleanup = read_cleanup(runtime, record)?;
-        if cleanup.active.is_some() || cleanup.captured != 0 {
-            return Err(error("destroy already active"));
-        }
-        let mut found = 0;
-        for run in cleanup.remainder.runs_mut() {
-            for chunk in &mut run.chunks {
-                if chunk.contains(&key.object()) {
-                    if run.holder.0 != expected_holder || run.owner.0 != expected_owner {
-                        return Err(error("claim authority mismatch"));
+        edit(runtime, record, |runtime, cleanup| {
+            if !cleanup.settled || cleanup.active.is_some() || cleanup.captured != 0 || cleanup.done {
+                return Err(error("destroy already active"));
+            }
+            let holder = HolderId(expected_holder);
+            let owner = OwnerId(expected_owner);
+            runtime.champ_check_key(key, holder, owner, super::Life::Live)?;
+            if let Some(selected) = cleanup.selected {
+                if selected != (key.object(), key.serial(), holder, owner) {
+                    return Err(error("claim differs from selected identity"));
+                }
+                cleanup.selected = None;
+            } else if cleanup.planned {
+                let (serial, index) = *cleanup.stream.heads.peek().ok_or_else(|| error("empty stream"))?;
+                let run = &cleanup.stream.runs[index];
+                if serial != key.serial() || run.front() != Some(key.object())
+                    || run.holder != holder || run.owner != owner
+                {
+                    return Err(error("direct claim violates serial order"));
+                }
+                select(runtime, cleanup);
+            } else {
+                let run = cleanup.remainder.runs_mut().find(|run| run.words().any(|object| object == key.object()))
+                    .ok_or_else(|| error("claim not in consumed cleanup state"))?;
+                if run.holder != holder || run.owner != owner {
+                    return Err(error("claim authority mismatch"));
+                }
+                if run.front() == Some(key.object()) {
+                    run.pop_front();
+                } else if run.back() == Some(key.object()) {
+                    run.pop_back();
+                } else {
+                    for chunk in &mut run.chunks {
+                        chunk.retain(|object| *object != key.object());
                     }
-                    found += 1;
-                    chunk.retain(|object| *object != key.object());
+                    run.chunks.retain(|chunk| !chunk.is_empty());
+                    run.length -= 1;
                 }
             }
-            run.chunks.retain(|chunk| !chunk.is_empty());
-        }
-        if found != 1 {
-            return Err(error("claim not in consumed cleanup state"));
-        }
-        let holder = HolderId(expected_holder);
-        let owner = OwnerId(expected_owner);
-        runtime.champ_begin_destroy(key, holder, owner)?;
-        cleanup.active = Some((key.object(), key.serial(), holder, owner));
-        cleanup.invoked = false;
-        replace(runtime, record, Data::Cleanup(cleanup));
+            runtime.champ_begin_destroy(key, holder, owner)?;
+            cleanup.active = Some((key.object(), key.serial(), holder, owner));
+            cleanup.invoked = false;
+            Ok(())
+        })?;
         Ok(DestroyBorrow {
             object: key.object(), serial: key.serial(), holder: expected_holder,
             owner: expected_owner, activation: record,
@@ -88,7 +414,7 @@ pub extern "C" fn rt_destroy_claim(ctx: *mut Ctx, state: *mut CleanupSlot, key: 
         Err(error) => stop(ctx, error),
     }
 }
-fn check_borrow(runtime: &Runtime, record: Word, borrow: &DestroyBorrow) -> Result<Cleanup, Error> {
+fn check_borrow<'a>(runtime: &'a Runtime, record: Word, borrow: &DestroyBorrow) -> Result<&'a Cleanup, Error> {
     let cleanup = read_cleanup(runtime, record)?;
     let expected = Some((borrow.object, borrow.serial, HolderId(borrow.holder), OwnerId(borrow.owner)));
     if borrow.activation != record || cleanup.active != expected {
@@ -105,7 +431,7 @@ pub extern "C" fn rt_destroy_invoke(ctx: *mut Ctx, state: *mut CleanupSlot, borr
     let record = unsafe { (*state).record };
     let borrow = unsafe { &*borrow };
     let result = (|| {
-        let mut cleanup = check_borrow(runtime, record, borrow)?;
+        let cleanup = check_borrow(runtime, record, borrow)?;
         if cleanup.invoked || unsafe { (*ctx).status } != OK || unsafe { (*ctx).failure } != 0 {
             return Err(error("destroy invoke repeated or bridge not reset"));
         }
@@ -116,8 +442,10 @@ pub extern "C" fn rt_destroy_invoke(ctx: *mut Ctx, state: *mut CleanupSlot, borr
             return Err(error("destroy entry contract"));
         }
         let code = crate::jit::compile(runtime, target.0 as usize)?;
-        cleanup.invoked = true;
-        replace(runtime, record, Data::Cleanup(cleanup));
+        edit(runtime, record, |_, cleanup| {
+            cleanup.invoked = true;
+            Ok(())
+        })?;
         let roots = runtime.roots.len();
         runtime.roots.push((record, Repr::Ref));
         runtime.safepoint(frame, unsafe { &*ctx }, &[]);
@@ -125,10 +453,11 @@ pub extern "C" fn rt_destroy_invoke(ctx: *mut Ctx, state: *mut CleanupSlot, borr
         unsafe { crate::jit::invoke(code, ctx, &[borrow.object]) };
         if unsafe { (*ctx).status } == FAILED {
             let failure = unsafe { (*ctx).failure };
-            let mut cleanup = read_cleanup(runtime, record)?;
             runtime.heap.payload_mut::<runtime::Failure>(failure).expect("bridge failure").cleanup_origin = true;
-            cleanup.captured = failure;
-            replace(runtime, record, Data::Cleanup(cleanup));
+            edit(runtime, record, |_, cleanup| {
+                cleanup.captured = failure;
+                Ok(())
+            })?;
             // The rooted record already owns the exact carrier before clearing the bridge.
             unsafe {
                 (*ctx).failure = crate::word::UNBOUND;
@@ -143,7 +472,7 @@ pub extern "C" fn rt_destroy_invoke(ctx: *mut Ctx, state: *mut CleanupSlot, borr
             if unsafe { (*ctx).status } != OK {
                 return OUTCOME_STOP;
             }
-            unsafe { post.write(DestroyPost { failure }) };
+            unsafe { post.write(DestroyPost { state: CleanupSlot::default(), failure }) };
             NORMAL
         }
         Err(error) => stop(ctx, error),
@@ -159,15 +488,17 @@ pub extern "C" fn rt_destroy_finish(ctx: *mut Ctx, state: *mut CleanupSlot,
     let record = unsafe { (*state).record };
     let borrow_ref = unsafe { &*borrow };
     let result = (|| {
-        let mut cleanup = check_borrow(runtime, record, borrow_ref)?;
+        let cleanup = check_borrow(runtime, record, borrow_ref)?;
         if !cleanup.invoked {
             return Err(error("finish before invoke"));
         }
         runtime.champ_finish_destroy(KeyRef { object: borrow_ref.object, serial: borrow_ref.serial },
             HolderId(borrow_ref.holder), OwnerId(borrow_ref.owner))?;
-        cleanup.active = None;
-        cleanup.invoked = false;
-        replace(runtime, record, Data::Cleanup(cleanup));
+        edit(runtime, record, |_, cleanup| {
+            cleanup.active = None;
+            cleanup.invoked = false;
+            Ok(())
+        })?;
         Ok::<_, Error>(())
     })();
     match result {
@@ -183,73 +514,146 @@ pub extern "C" fn rt_destroy_finish(ctx: *mut Ctx, state: *mut CleanupSlot,
 pub extern "C" fn rt_cleanup_failure(ctx: *mut Ctx, input: *mut CleanupSlot, failure: Word,
     post: *mut CleanupSlot) -> Outcome
 {
-    let runtime = unsafe { &mut *(*ctx).runtime };
-    let record = unsafe { (*input).record };
-    let result = (|| {
-        let mut cleanup = read_cleanup(runtime, record)?;
-        if cleanup.captured != failure || failure == 0 || unsafe { (*ctx).status } != OK {
-            return Err(error("cleanup failure must consume captured carrier once"));
-        }
-        cleanup.failure = if cleanup.failure == 0 {
-            failure
-        } else {
-            runtime.failure_link(cleanup.failure, failure, true)
-        };
-        cleanup.captured = 0;
-        replace(runtime, record, Data::Cleanup(cleanup));
-        Ok::<_, Error>(())
-    })();
-    match result {
-        Ok(()) => {
-            unsafe {
-                (*input).record = 0;
-                post.write(CleanupSlot { record });
+    leaf(ctx, |runtime| {
+        let record = unsafe { (*input).record };
+        edit(runtime, record, |runtime, cleanup| {
+            if failure == 0 || cleanup.active.is_some() || cleanup.selected.is_some()
+                || (cleanup.captured != failure && (cleanup.planned || cleanup.captured != 0))
+            {
+                return Err(error("cleanup failure must consume captured carrier after Dead"));
             }
-            NORMAL
+            if runtime.failure(failure).is_none() {
+                return Err(error("invalid cleanup failure"));
+            }
+            runtime.heap.payload_mut::<runtime::Failure>(failure).expect("failure").cleanup_origin = true;
+            cleanup.captured = 0;
+            record_failure(runtime, cleanup, failure)
+        })?;
+        unsafe {
+            (*input).record = 0;
+            post.write(CleanupSlot { record });
         }
-        Err(error) => stop(ctx, error),
-    }
+        Ok(())
+    })
 }
 
-/// S2 packet close only: no pending, reserve, defer runner, prefix or plan executor.
-/// Entry rejection shares the exact claim/invoke/finish implementation used by Rust direct tests.
-fn close_packet(ctx: *mut Ctx, input: &mut PacketSlot, primary: Word) -> Result<Word, Error> {
+/// Descriptor-selected and direct calls share claim/invoke/finish; failure is data until cleanup.failure.
+pub extern "C" fn rt_cleanup_destroy(ctx: *mut Ctx, state: *mut CleanupSlot, key: KeyRef,
+    post: *mut DestroyPost) -> Outcome
+{
     let runtime = unsafe { &mut *(*ctx).runtime };
-    let mut state = runtime.champ_cleanup_from_packet(input)?;
-    let mut initial = read_cleanup(runtime, state.record)?;
-    initial.failure = primary;
-    replace(runtime, state.record, Data::Cleanup(initial));
+    let result = (|| {
+        let cleanup = read_cleanup(runtime, unsafe { (*state).record })?;
+        let Some((object, serial, holder, owner)) = cleanup.selected else {
+            return Err(error("destroy without selected key"));
+        };
+        if key != (KeyRef { object, serial }) {
+            return Err(error("destroy selected key mismatch"));
+        }
+        let descriptor = crate::heap::payload(runtime.heap.header_of(object)) as usize;
+        let entry = runtime.loaded.program.objects[descriptor].destroy.ok_or_else(|| error("no destroy"))?.0;
+        Ok((holder, owner, entry))
+    })();
+    let (holder, owner, entry) = match result {
+        Ok(selected) => selected,
+        Err(error) => return stop(ctx, error),
+    };
+    let mut borrow = DestroyBorrow::default();
+    let mut output = DestroyPost::default();
+    if rt_destroy_claim(ctx, state, key, holder.0, owner.0, &mut borrow) == OUTCOME_STOP
+        || rt_destroy_invoke(ctx, state, &borrow, entry as u64, &mut output) == OUTCOME_STOP
+        || rt_destroy_finish(ctx, state, &mut borrow) == OUTCOME_STOP
+    {
+        return OUTCOME_STOP;
+    }
+    let record = unsafe { (*state).record };
+    output.state = CleanupSlot { record };
+    unsafe {
+        (*state).record = 0;
+        post.write(output);
+    }
+    NORMAL
+}
+
+pub extern "C" fn rt_destroy_direct(ctx: *mut Ctx, state: *mut CleanupSlot, key: KeyRef,
+    entry: EntryId, post: *mut DestroyPost) -> Outcome
+{
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    if !matches!(read_cleanup(runtime, unsafe { (*state).record }), Ok(cleanup) if cleanup.planned) {
+        return stop(ctx, error("direct destroy before plan"));
+    }
+    let Some(identity) = runtime.heap.champ_identity(key.object()) else {
+        return stop(ctx, error("direct identity"));
+    };
+    let mut borrow = DestroyBorrow::default();
+    let mut output = DestroyPost::default();
+    if rt_destroy_claim(ctx, state, key, identity.holder_id, identity.owner_id, &mut borrow) == OUTCOME_STOP
+        || rt_destroy_invoke(ctx, state, &borrow, entry, &mut output) == OUTCOME_STOP
+        || rt_destroy_finish(ctx, state, &mut borrow) == OUTCOME_STOP
+    {
+        return OUTCOME_STOP;
+    }
+    let record = unsafe { (*state).record };
+    output.state = CleanupSlot { record };
+    unsafe {
+        (*state).record = 0;
+        post.write(output);
+    }
+    NORMAL
+}
+
+/// Internal X runner, also used by entry rejection. Compiled Low may drive the same steps explicitly.
+fn close_packet(ctx: *mut Ctx, input: &mut PacketSlot, primary: Word) -> Result<Word, Error> {
+    let inputs = CloseInputs {
+        scope: std::ptr::null_mut(), packet: input, pending: std::ptr::null_mut(),
+        failure: primary, settlements: 0,
+    };
+    let mut state = CleanupSlot::default();
+    if rt_cleanup_begin(ctx, &inputs, &mut state) == OUTCOME_STOP
+        || rt_cleanup_settle_empty(ctx, &mut state, &mut state) == OUTCOME_STOP
+    {
+        return Err(error("rejection cleanup begin stopped"));
+    }
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    let plan = if let Some(plan) = runtime.champ.rejection_plan {
+        plan
+    } else {
+        let plan = runtime.champ_register_cleanup_plan(CleanupPlan { reserve: false, direct: false, may_fail: true });
+        runtime.champ.rejection_plan = Some(plan);
+        plan
+    };
+    if rt_cleanup_plan(ctx, &mut state, plan, &mut state) == OUTCOME_STOP {
+        return Err(error("rejection cleanup plan stopped"));
+    }
     let roots = runtime.roots.len();
     runtime.roots.push((state.record, Repr::Ref));
-    runtime.roots.push((primary, Repr::Ref));
-    let mut result = Ok(primary);
-    loop {
-        let runtime = unsafe { &mut *(*ctx).runtime };
-        let cleanup = read_cleanup(runtime, state.record)?;
-        let selected = cleanup.remainder.runs().flat_map(|run| {
-            run.words().map(move |object| (object, run.holder, run.owner))
-        }).max_by_key(|(object, _, _)| runtime.heap.champ_identity(*object).unwrap().serial);
-        let Some((object, holder, owner)) = selected else { break };
-        let key = KeyRef { object, serial: runtime.heap.champ_identity(object).unwrap().serial };
-        let entry = runtime.loaded.program.objects[crate::heap::payload(runtime.heap.header_of(object)) as usize]
-            .destroy.ok_or_else(|| error("no destroy"))?.0 as u64;
-        let mut borrow = DestroyBorrow::default();
-        let mut post = DestroyPost::default();
-        if rt_destroy_claim(ctx, &mut state, key, holder.0, owner.0, &mut borrow) == OUTCOME_STOP
-            || rt_destroy_invoke(ctx, &mut state, &borrow, entry, &mut post) == OUTCOME_STOP
-        {
-            result = Err(error("rejection cleanup stopped"));
-            break;
+    let result = (|| {
+        loop {
+            let mut next = NextPost::default();
+            match rt_cleanup_next(ctx, &mut state, &mut next) {
+                NORMAL => {}
+                1 => {
+                    state = next.state;
+                    break;
+                }
+                _ => return Err(error("rejection selector stopped")),
+            }
+            state = next.state;
+            let mut output = DestroyPost::default();
+            if rt_cleanup_destroy(ctx, &mut state, next.key, &mut output) == OUTCOME_STOP {
+                return Err(error("rejection destroy stopped"));
+            }
+            state = output.state;
+            if output.failure != 0 && rt_cleanup_failure(ctx, &mut state, output.failure, &mut state) == OUTCOME_STOP {
+                return Err(error("rejection failure capture stopped"));
+            }
         }
-        if rt_destroy_finish(ctx, &mut state, &mut borrow) == OUTCOME_STOP {
-            result = Err(error("rejection finish stopped"));
-            break;
+        let mut output = FinishPost::default();
+        if rt_cleanup_finish(ctx, &mut state, &mut output) == OUTCOME_STOP {
+            return Err(error("rejection finish stopped"));
         }
-        if post.failure != 0 && rt_cleanup_failure(ctx, &mut state, post.failure, &mut state) == OUTCOME_STOP {
-            result = Err(error("rejection failure capture stopped"));
-            break;
-        }
-    }
+        Ok(output.failure)
+    })();
     unsafe { &mut *(*ctx).runtime }.roots.truncate(roots);
     result
 }
@@ -283,13 +687,17 @@ pub extern "C" fn rt_entry_reject(ctx: *mut Ctx, io: *mut CallOwn) -> Outcome {
     }
     // Rejection may use the reserved Rust/machine headroom, never below the hard stack boundary.
     let old_limit = unsafe { (*ctx).stack_limit };
-    let hard_limit = old_limit.saturating_sub(runtime::STACK_HEADROOM);
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    let previous_floor = runtime.champ.rejection_floor;
+    let hard_limit = previous_floor.unwrap_or_else(|| old_limit.saturating_sub(runtime::STACK_HEADROOM));
+    runtime.champ.rejection_floor = Some(hard_limit);
     let usable_limit = hard_limit.saturating_add(crate::jit::MAX_FRAME);
     unsafe { (*ctx).stack_limit = old_limit.min(usable_limit) };
     unsafe { &mut *(*ctx).runtime }.safepoint(frame, unsafe { &*ctx }, &[]);
     let result = close_packet(ctx, &mut io.input, primary);
     unsafe { (*ctx).stack_limit = old_limit };
     let runtime = unsafe { &mut *(*ctx).runtime };
+    runtime.champ.rejection_floor = previous_floor;
     runtime.roots.truncate(roots);
     match result {
         Ok(failure) => {

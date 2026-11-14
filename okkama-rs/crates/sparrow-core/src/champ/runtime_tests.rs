@@ -9,12 +9,12 @@ use okkama_sparrow::{Constant, Dst, FuncRef, Function, Instruction as I, ObjectD
 use okkama_sparrow::{Program, Register as R, Type, TypeRef};
 use std::collections::HashSet;
 
-struct Harness {
-    runtime: Box<Runtime>,
-    ctx: Ctx,
+pub(super) struct Harness {
+    pub(super) runtime: Box<Runtime>,
+    pub(super) ctx: Ctx,
 }
 impl Harness {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let mut program = Program {
             types: vec![Type::Int, Type::Str, Type::Object(ObjectRef(0)), Type::Object(ObjectRef(1)), Type::Byte],
             ..Program::default()
@@ -53,13 +53,13 @@ impl Harness {
         };
         Self { runtime, ctx }
     }
-    fn fresh(&mut self, descriptor: u64, owner: OwnerId) -> (Word, PacketSlot) {
+    pub(super) fn fresh(&mut self, descriptor: u64, owner: OwnerId) -> (Word, PacketSlot) {
         let object = self.runtime.heap.object_new(descriptor as u32, &[word::small(7).unwrap()]);
         let mut slot = PacketSlot::default();
         assert_eq!(rt_own_create_commit(&mut self.ctx, object, descriptor, owner.get(), &mut slot), NORMAL);
         (object, slot)
     }
-    fn scope(&mut self) -> ScopeSlot {
+    pub(super) fn scope(&mut self) -> ScopeSlot {
         let holder = self.runtime.champ_new_holder().unwrap();
         let owner = self.runtime.champ_new_owner().unwrap();
         self.runtime.champ_register_value_repr(owner, 0, false, Repr::Ref);
@@ -69,15 +69,15 @@ impl Harness {
         assert_eq!(rt_scope_begin(&mut self.ctx, &instance, &mut slot), NORMAL);
         slot
     }
-    fn empty(&mut self) -> PacketSlot {
+    pub(super) fn empty(&mut self) -> PacketSlot {
         let mut packet = PacketSlot::default();
         assert_eq!(rt_own_empty(&mut self.ctx, &mut packet), NORMAL);
         packet
     }
-    fn identity(&self, object: Word) -> Identity {
+    pub(super) fn identity(&self, object: Word) -> Identity {
         self.runtime.heap.champ_identity(object).unwrap()
     }
-    fn gc(&mut self, records: &[Word]) {
+    pub(super) fn gc(&mut self, records: &[Word]) {
         let roots = &self.runtime.roots;
         let constants = &self.runtime.constants;
         let failure = self.ctx.failure;
@@ -91,7 +91,7 @@ impl Harness {
             }
         });
     }
-    fn reset_fatal(&mut self) {
+    pub(super) fn reset_fatal(&mut self) {
         self.ctx.status = OK;
         self.ctx.failure = 0;
         self.runtime.fatal = None;
@@ -114,7 +114,7 @@ fn champ_s2_registry_layouts_effects_and_single_outcome_channel() {
     assert_eq!(size_of::<KeyRef>(), 16);
     assert_eq!(size_of::<PacketSlot>(), 8);
     let helpers: Vec<_> = crate::jit::HELPERS.iter().filter(|(name, _)| name.starts_with("champ_")).collect();
-    assert_eq!(helpers.len(), 27);
+    assert_eq!(helpers.len(), 35);
     for &(name, effects) in helpers {
         let abi = helper_abi(name).unwrap();
         let class = abi.class;
@@ -672,7 +672,8 @@ fn champ_s2_static_guards_chunk_runs_and_whole_batch_overflow() {
     let mut input = h.runtime.champ_packet_from_static(&mut entries, holder, owner).unwrap();
     assert!(entries.iter().all(|entry| entry.object == 0 && entry.active == 0));
     let packet = super::helpers::packet(&h.runtime, input.record).unwrap();
-    assert_eq!(packet.journals[0][0].chunks.iter().map(Vec::len).collect::<Vec<_>>(), vec![32, 32, 1]);
+    let chunk_lengths: Vec<_> = packet.journals[0][0].chunks.iter().map(std::collections::VecDeque::len).collect();
+    assert_eq!(chunk_lengths, vec![32, 32, 1]);
     let objects: Vec<_> = packet.words().collect();
     let selected = [objects[0], objects[64]];
     let before = h.identity(selected[0]);

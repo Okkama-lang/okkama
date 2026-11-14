@@ -236,6 +236,44 @@ helpers! {
         state: *mut crate::champ::CleanupSlot,
         post: *mut crate::champ::CleanupSlot) -> u64; [Allocates, Stops];
     #[cfg(feature = "champ-abi")]
+    champ_cleanup_begin = crate::champ::cleanup::rt_cleanup_begin as (ctx,
+        inputs: *const crate::champ::CloseInputs,
+        post: *mut crate::champ::CleanupSlot) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_cleanup_settle_empty = crate::champ::cleanup::rt_cleanup_settle_empty as (ctx,
+        input: *mut crate::champ::CleanupSlot,
+        post: *mut crate::champ::CleanupSlot) -> u64; [Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_cleanup_settle_packet = crate::champ::cleanup::rt_cleanup_settle_packet as (ctx,
+        input: *mut crate::champ::CleanupSlot,
+        settled: *mut crate::champ::PacketSlot,
+        failure: Word,
+        post: *mut crate::champ::CleanupSlot) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_cleanup_plan = crate::champ::cleanup::rt_cleanup_plan as (ctx,
+        input: *mut crate::champ::CleanupSlot,
+        plan: u64,
+        post: *mut crate::champ::CleanupSlot) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_cleanup_next = crate::champ::cleanup::rt_cleanup_next as (ctx,
+        input: *mut crate::champ::CleanupSlot,
+        post: *mut crate::champ::NextPost) -> u64; [Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_cleanup_destroy = crate::champ::cleanup::rt_cleanup_destroy as (ctx,
+        input: *mut crate::champ::CleanupSlot,
+        key: crate::champ::KeyRef,
+        post: *mut crate::champ::DestroyPost) -> u64; [Allocates, Collects, Reenters, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_destroy_direct = crate::champ::cleanup::rt_destroy_direct as (ctx,
+        input: *mut crate::champ::CleanupSlot,
+        key: crate::champ::KeyRef,
+        entry: u64,
+        post: *mut crate::champ::DestroyPost) -> u64; [Allocates, Collects, Reenters, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_cleanup_finish = crate::champ::cleanup::rt_cleanup_finish as (ctx,
+        input: *mut crate::champ::CleanupSlot,
+        post: *mut crate::champ::FinishPost) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
     champ_call_owned = crate::champ::cleanup::rt_call_owned as (ctx,
         entry: u64,
         args: *const Word,
@@ -259,7 +297,7 @@ helpers! {
         key: crate::champ::KeyRef,
         holder: u64,
         owner: u64,
-        post: *mut crate::champ::DestroyBorrow) -> u64; [Stops];
+        post: *mut crate::champ::DestroyBorrow) -> u64; [Allocates, Stops];
     #[cfg(feature = "champ-abi")]
     champ_destroy_invoke = crate::champ::cleanup::rt_destroy_invoke as (ctx,
         state: *mut crate::champ::CleanupSlot,

@@ -6,7 +6,7 @@ use crate::heap;
 use crate::runtime::{self, Ctx, FailureKind, Runtime, FAILED};
 use crate::word::{Repr, Word};
 use crate::Error;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 
 pub(super) fn error(message: &str) -> Error {
     Error(format!("Champ: {message}"))
@@ -35,12 +35,13 @@ pub(super) fn scope(runtime: &Runtime, record: Word) -> Result<Scope, Error> {
         _ => Err(error("expected scope")),
     }
 }
-fn pending(runtime: &Runtime, record: Word) -> Result<Pending, Error> {
+pub(super) fn pending(runtime: &Runtime, record: Word) -> Result<Pending, Error> {
     match data(runtime, record)? {
         Data::Pending(pending) => Ok(pending.clone()),
         _ => Err(error("expected pending")),
     }
 }
+#[cfg(test)]
 pub(super) fn cleanup(runtime: &Runtime, record: Word) -> Result<Cleanup, Error> {
     match data(runtime, record)? {
         Data::Cleanup(cleanup) => Ok(cleanup.clone()),
@@ -144,8 +145,12 @@ pub(super) fn validate(runtime: &Runtime, packet: &Packet) -> Result<(), Error> 
 }
 pub(super) fn run(runtime: &Runtime, mut words: Vec<Word>, holder: HolderId, owner: OwnerId) -> Packet {
     words.sort_unstable_by_key(|object| std::cmp::Reverse(runtime.heap.champ_identity(*object).unwrap().serial));
-    let chunks = words.chunks(CHUNK_ENTRIES).map(<[Word]>::to_vec).collect();
-    Packet::from_run(Run { holder, owner, chunks })
+    ordered_run(words, holder, owner)
+}
+fn ordered_run(words: Vec<Word>, holder: HolderId, owner: OwnerId) -> Packet {
+    let length = words.len();
+    let chunks = words.chunks(CHUNK_ENTRIES).map(|chunk| chunk.iter().copied().collect()).collect();
+    Packet::from_run(Run { holder, owner, chunks, length })
 }
 /// All epochs are checked before the first store. A no-op writes no tail words.
 pub(super) fn preflight(runtime: &Runtime, packet: &Packet, holder: HolderId, owner: OwnerId)
@@ -163,39 +168,38 @@ pub(super) fn preflight(runtime: &Runtime, packet: &Packet, holder: HolderId, ow
     }
     Ok(())
 }
-pub(super) fn transition(runtime: &mut Runtime, packet: Packet, holder: HolderId, owner: OwnerId) -> Packet {
-    let words: Vec<_> = packet.words().collect();
-    for &object in &words {
-        let identity = runtime.heap.champ_identity(object).unwrap();
-        if identity.holder_id != holder.0 || identity.owner_id != owner.0 {
-            // Only changed tail words are written; serial and life are untouched.
-            let address = runtime.heap.identity_address(object).unwrap() as *mut u64;
-            unsafe {
-                if identity.holder_id != holder.0 {
-                    address.add(1).write(holder.0);
+pub(super) fn transition(runtime: &mut Runtime, mut packet: Packet, holder: HolderId, owner: OwnerId) -> Packet {
+    // Each input run is already ordered. A metadata transition neither sorts nor rewrites its Ref slots.
+    for run in packet.runs_mut() {
+        for object in run.words() {
+            let identity = runtime.heap.champ_identity(object).unwrap();
+            if identity.holder_id != holder.0 || identity.owner_id != owner.0 {
+                let address = runtime.heap.identity_address(object).unwrap() as *mut u64;
+                // SAFETY: preflight checked the entire mutation batch, including epoch overflow.
+                unsafe {
+                    if identity.holder_id != holder.0 {
+                        address.add(1).write(holder.0);
+                    }
+                    if identity.owner_id != owner.0 {
+                        address.add(2).write(owner.0);
+                    }
+                    address.add(3).write(identity.epoch + 1);
                 }
-                if identity.owner_id != owner.0 {
-                    address.add(2).write(owner.0);
-                }
-                address.add(3).write(identity.epoch + 1);
             }
         }
+        run.holder = holder;
+        run.owner = owner;
     }
-    let mut result = Packet::default();
-    for (index, runs) in packet.journals.into_iter().enumerate() {
-        let words = runs.iter().flat_map(Run::words).collect();
-        result.journals[index] = run(runtime, words, holder, owner).journals[0].clone();
-    }
-    result
+    packet
 }
-fn partition(runtime: &Runtime, packet: &Packet, selected: &HashSet<Word>) -> (Packet, Packet) {
+fn partition(_runtime: &Runtime, packet: &Packet, selected: &HashSet<Word>) -> (Packet, Packet) {
     let mut rest = Packet::default();
     let mut picked = Packet::default();
     for (index, runs) in packet.journals.iter().enumerate() {
         for source in runs {
             let (yes, no): (Vec<_>, Vec<_>) = source.words().partition(|word| selected.contains(word));
-            picked.journals[index].append(&mut run(runtime, yes, source.holder, source.owner).journals[0]);
-            rest.journals[index].append(&mut run(runtime, no, source.holder, source.owner).journals[0]);
+            picked.journals[index].append(&mut ordered_run(yes, source.holder, source.owner).journals[0]);
+            rest.journals[index].append(&mut ordered_run(no, source.holder, source.owner).journals[0]);
         }
     }
     (rest, picked)
@@ -336,8 +340,8 @@ fn admit(runtime: &mut Runtime, state: Word, input: Word, bound: bool) -> Result
     } else {
         let [admission, mut bound, mut staging] = packet.journals;
         bound.append(&mut staging);
-        scope.admission.append(Packet { journals: [admission, Vec::new(), Vec::new()] });
-        scope.bound.append(Packet { journals: [Vec::new(), bound, Vec::new()] });
+        scope.admission.append(Packet { journals: [admission, VecDeque::new(), VecDeque::new()] });
+        scope.bound.append(Packet { journals: [VecDeque::new(), bound, VecDeque::new()] });
     }
     let record = store(runtime, Data::Scope(scope));
     consume(runtime, state);
@@ -467,7 +471,144 @@ fn split(runtime: &mut Runtime, original: &Packet, selected: &HashSet<Word>) -> 
     }
     Ok((rest, output))
 }
+fn endpoint_authority(runtime: &Runtime, record: Word, object: Word)
+    -> Result<Option<(HolderId, OwnerId, usize)>, Error>
+{
+    let find = |packet: &Packet, classification: Option<usize>| {
+        packet.journals.iter().enumerate().find_map(|(index, runs)| {
+            [runs.front(), runs.back()].into_iter().flatten()
+                .find(|run| run.front() == Some(object) || run.back() == Some(object))
+                .map(|run| (run.holder, run.owner, classification.unwrap_or(index)))
+        })
+    };
+    let authority = match data(runtime, record)? {
+        Data::Packet(packet) => find(packet, None),
+        Data::Scope(scope) => find(&scope.admission, Some(0)).or_else(|| find(&scope.bound, Some(1)))
+            .or_else(|| find(&scope.staging, Some(2))),
+        _ => return Err(error("expected endpoint inventory")),
+    };
+    if let Some((holder, owner, _)) = authority {
+        let identity = runtime.heap.champ_identity(object).ok_or_else(|| error("identity"))?;
+        runtime.champ_check_key(KeyRef { object, serial: identity.serial }, holder, owner, Life::Live)?;
+    }
+    Ok(authority)
+}
+fn pop_endpoint(runtime: &mut Runtime, record: Word, object: Word) {
+    let pop = |packet: &mut Packet| {
+        for runs in &mut packet.journals {
+            let front = runs.front().is_some_and(|run| run.front() == Some(object) || run.back() == Some(object));
+            let back = runs.back().is_some_and(|run| run.front() == Some(object) || run.back() == Some(object));
+            if !front && !back {
+                continue;
+            }
+            let run = if front { runs.front_mut() } else { runs.back_mut() }.expect("endpoint run");
+            if run.front() == Some(object) {
+                run.pop_front();
+            } else {
+                run.pop_back();
+            }
+            if run.length == 0 {
+                if front {
+                    runs.pop_front();
+                } else {
+                    runs.pop_back();
+                }
+            }
+            return true;
+        }
+        false
+    };
+    let removed = match &mut runtime.heap.payload_mut::<Record>(record).expect("inventory").0 {
+        Data::Packet(packet) => pop(packet),
+        Data::Scope(scope) => pop(&mut scope.admission) || pop(&mut scope.bound) || pop(&mut scope.staging),
+        _ => unreachable!(),
+    };
+    assert!(removed, "preflighted endpoint");
+}
+/// A leaf identity needs no graph walk. Nontrivial selections keep the general checked path.
+fn checked_endpoint(runtime: &Runtime, record: Word, selection: &Selection, scope: bool)
+    -> Result<Option<Word>, Error>
+{
+    match data(runtime, record)? {
+        Data::Scope(_) if scope => {}
+        Data::Packet(_) if !scope => {}
+        _ => return Err(error("incorrect endpoint inventory type")),
+    }
+    if selection.count != 1 {
+        return Ok(None);
+    }
+    let object = unsafe { *selection.roots };
+    if object == 0 || object & 1 != 0 {
+        return Ok(None);
+    }
+    let header = runtime.heap.header_of(object);
+    if heap::kind(header) != heap::OBJECT || runtime.heap.champ_identity(object).is_none() {
+        return Ok(None);
+    }
+    let layout = runtime.heap.object_runtime_layout(heap::payload(header));
+    if layout.selection_layout().iter().any(|&field| runtime.heap.field(object, field) != 0) {
+        return Ok(None);
+    }
+    Ok(endpoint_authority(runtime, record, object)?.map(|_| object))
+}
+fn extract_endpoint(runtime: &mut Runtime, record: Word, object: Word) -> Result<Word, Error> {
+    let authority = endpoint_authority(runtime, record, object)?.expect("checked endpoint");
+    let (source_holder, owner, classification) = authority;
+    let holder = runtime.champ_new_holder()?;
+    let mut selected = ordered_run(vec![object], source_holder, owner);
+    selected.journals.swap(0, classification);
+    preflight(runtime, &selected, holder, owner)?;
+    pop_endpoint(runtime, record, object);
+    let selected = transition(runtime, selected, holder, owner);
+    Ok(store(runtime, Data::Packet(selected)))
+}
+fn transfer_endpoint(runtime: &mut Runtime, from: Word, to: Word, object: Word) -> Result<(), Error> {
+    if from == to {
+        return Err(error("aliased scope states"));
+    }
+    let (source_holder, source_owner, _) = endpoint_authority(runtime, from, object)?.expect("checked endpoint");
+    let Data::Scope(target) = data(runtime, to)? else {
+        return Err(error("expected scope"));
+    };
+    let holder = target.holder;
+    let owner = target.owner;
+    let selected = ordered_run(vec![object], source_holder, source_owner);
+    preflight(runtime, &selected, holder, owner)?;
+    // Authority is exclusive: a valid destination cannot already own this source identity.
+    pop_endpoint(runtime, from, object);
+    let selected = transition(runtime, selected, holder, owner);
+    let Data::Scope(target) = &mut runtime.heap.payload_mut::<Record>(to).expect("scope").0 else { unreachable!() };
+    target.bound.append(selected);
+    Ok(())
+}
+/// Directed head/tail extraction from one ordered journal. Preflight touches only the selected identity;
+/// the unchanged inventory already passed admission validation. No cloning, sorting or suffix walk.
+fn split_endpoint(runtime: &mut Runtime, record: Word, plan: PlanId) -> Result<Option<SplitPost>, Error> {
+    let indices = runtime.champ.selections.get(plan.wrapping_sub(1) as usize)
+        .ok_or_else(|| error("unknown static selection"))?;
+    if indices.len() != 1 {
+        return Ok(None);
+    }
+    let index = indices[0];
+    let Data::Packet(packet) = data(runtime, record)? else {
+        return Err(error("expected packet"));
+    };
+    let mut runs = packet.runs().filter(|run| run.length != 0);
+    let Some(run) = runs.next() else { return Ok(None) };
+    if runs.next().is_some() || (index != 0 && index != run.length - 1) {
+        return Ok(None);
+    }
+    let object = if index == 0 { run.front() } else { run.back() }.expect("nonempty run");
+    drop(runs);
+    let selected = extract_endpoint(runtime, record, object)?;
+    Ok(Some(SplitPost { rest: PacketSlot { record }, selected: PacketSlot { record: selected }, failure: 0 }))
+}
 leaf_helper!(rt_own_split_static(ctx, input: *mut PacketSlot, plan: PlanId, post: *mut SplitPost) |runtime| {
+    if let Some(output) = split_endpoint(runtime, (*input).record, plan)? {
+        (*input).record = 0;
+        post.write(output);
+        return Ok(());
+    }
     let packet = packet(runtime, (*input).record)?;
     let selected = static_selection(runtime, &packet, plan)?;
     let (rest, selected) = split(runtime, &packet, &selected)?;
@@ -486,6 +627,28 @@ pub extern "C" fn rt_own_split_checked(ctx: *mut Ctx, input: *mut PacketSlot,
     }
     let runtime = unsafe { &mut *(*ctx).runtime };
     let original = unsafe { (*input).record };
+    let endpoint = checked_endpoint(runtime, original, unsafe { &*selection }, false)
+        .and_then(|object| object.map(|object| extract_endpoint(runtime, original, object)).transpose());
+    match endpoint {
+        Ok(Some(selected)) => {
+            unsafe {
+                (*input).record = 0;
+                post.write(SplitPost { rest: PacketSlot { record: original },
+                    selected: PacketSlot { record: selected }, failure: 0 });
+            }
+            return NORMAL;
+        }
+        Err(error) => {
+            let failure = fail(ctx, error);
+            unsafe {
+                (*input).record = 0;
+                post.write(SplitPost { rest: PacketSlot { record: original },
+                    selected: PacketSlot::default(), failure });
+            }
+            return UNWIND;
+        }
+        Ok(None) => {}
+    }
     let result = (|| {
         let packet = packet(runtime, original)?;
         let selected = checked_selection(runtime, &packet, unsafe { &*selection })?;
@@ -528,6 +691,10 @@ pub extern "C" fn rt_scope_split(ctx: *mut Ctx, input: *mut ScopeSlot,
     let runtime = unsafe { &mut *(*ctx).runtime };
     let original = unsafe { (*input).record };
     let result = (|| {
+        if let Some(object) = checked_endpoint(runtime, original, unsafe { &*selection }, true)? {
+            let selected = extract_endpoint(runtime, original, object)?;
+            return Ok((original, selected));
+        }
         let mut scope = scope(runtime, original)?;
         let all = scope.all();
         let selected = checked_selection(runtime, &all, unsafe { &*selection })?;
@@ -538,7 +705,9 @@ pub extern "C" fn rt_scope_split(ctx: *mut Ctx, input: *mut ScopeSlot,
     })();
     let (outcome, output) = match result {
         Ok((state, selected)) => {
-            consume(runtime, original);
+            if state != original {
+                consume(runtime, original);
+            }
             (NORMAL, ScopeSplitPost {
                 state: ScopeSlot { record: state }, selected: PacketSlot { record: selected }, failure: 0,
             })
@@ -565,6 +734,13 @@ pub extern "C" fn rt_scope_transfer(ctx: *mut Ctx, inputs: *const TransferInputs
     let to = unsafe { (*inputs.to).record };
     let same = inputs.from == inputs.to;
     let result = (|| {
+        if let Some(object) = checked_endpoint(runtime, from, unsafe { &*selection }, true)? {
+            if same {
+                return Ok((from, 0));
+            }
+            transfer_endpoint(runtime, from, to, object)?;
+            return Ok((from, to));
+        }
         let mut source = scope(runtime, from)?;
         let all = source.all();
         let selected = checked_selection(runtime, &all, unsafe { &*selection })?;
@@ -586,7 +762,7 @@ pub extern "C" fn rt_scope_transfer(ctx: *mut Ctx, inputs: *const TransferInputs
     })();
     let (outcome, output) = match result {
         Ok((source, target)) => {
-            if !same {
+            if !same && source != from {
                 consume(runtime, from);
                 consume(runtime, to);
             }
@@ -667,19 +843,5 @@ leaf_helper!(rt_exit_commit(ctx, input: *mut PendingSlot, destination: *const Ex
     consume(runtime, (*input).record);
     (*input).record = 0;
     post.write(CommitPost { value: pending.value, packet: PacketSlot { record } });
-    Ok(())
-});
-leaf_helper!(rt_exit_abort(ctx, input: *mut PendingSlot, state: *mut CleanupSlot,
-    post: *mut CleanupSlot) |runtime| {
-    let pending = pending(runtime, (*input).record)?;
-    let mut cleanup = cleanup(runtime, (*state).record)?;
-    cleanup.remainder.append(pending.reserve);
-    validate(runtime, &cleanup.remainder)?;
-    let record = store(runtime, Data::Cleanup(cleanup));
-    consume(runtime, (*input).record);
-    consume(runtime, (*state).record);
-    (*input).record = 0;
-    (*state).record = 0;
-    post.write(CleanupSlot { record });
     Ok(())
 });
