@@ -13821,6 +13821,86 @@ an option interacts with another, or a second caller wants a different
 combination, the flags become a small interpreter of their own, and the
 composition is the cheaper program to keep.
 
+### Composite: a container that does its parts' role
+
+The same idea covers trees. When a container does the role of the things it
+holds, a caller cannot tell one item from a bundle of them, and a bundle of
+bundles needs no special case. Gamma and his co-authors called this
+Composite [[Gamma 1994](#ref-gamma1994)]; in Okkama it is a role, a leaf object and a
+container object whose field is an array of the role.
+
+```okkama
+module bible/composite v1.0.0;
+
+// Composite: the leaf and the container do the same role, so a bundle of
+// bundles is priced the same way as one item.
+import "io/stdout" take Stdout;
+import "cell" take Cell;
+
+role Priced {
+    total() is int;
+    label() is string;
+}
+
+object Item does Priced {
+    has name is string;
+    has price is int;
+    Item(:name, :price);
+    total() is int { price; }
+    label() is string { name; }
+}
+
+object Bundle does Priced {
+    has name is string;
+    has parts is @Priced;
+    has percent is int = 0;
+    Bundle(:name, :parts);
+    Bundle(:name, :parts, :percent);
+
+    total() is int {
+        let sum = Cell(0);
+        for parts -> part {
+            sum.replace(sum.value() + part.total());
+        }
+        let full = sum.value();
+        full - (full * percent / 100).int();
+    }
+
+    label() is string { name + " of " + parts.size().string(); }
+}
+
+main() is int {
+    let out = Stdout();
+    let tea is Priced = Item(name: "tea", price: 300);
+    let cups is Priced = Bundle(name: "cups", parts: [Item(name: "cup", price: 150), Item(name: "cup", price: 150)]);
+    let gift is Priced = Bundle(name: "gift", parts: [tea, cups], percent: 10);
+    for [tea, cups, gift] -> priced {
+        out.writeln(priced.label() + ": " + priced.total().string());
+    }
+    0;
+}
+```
+
+Output:
+
+```text
+tea: 300
+cups of 2: 300
+gift of 2: 540
+```
+
+```text
+tea: 300
+cups of 2: 300
+gift of 2: 540
+```
+
+`Bundle` sums its parts with a `Cell` inside one synchronous action, which is
+exactly the local use cells are for, and applies its own discount on top.
+The gift contains an item and a bundle and prices both the same way. Two
+constructors give the discount a default without a flag that every bundle
+must pass.
+
 ## 26.3 Change as a value: successor pipelines
 
 Builders, setters and mutable "state" objects exist in other languages
@@ -13947,8 +14027,129 @@ authorized one offers `capture`; a captured one offers `refund`; and calling
 `refund` on a created payment does not type-check, because the role
 `Created` has no such action. The pattern is old: Strom and Yemini called
 it *typestate* in 1986 [[Strom 1986](#ref-strom1986)]. In Okkama it needs nothing beyond roles and
-successors. It costs one role per state and is worth it where a wrong step
-is expensive: payments, connections, documents that move through approval.
+ordinary actions.
+
+```okkama
+module bible/typestate v1.0.0;
+
+// Typestate: one role per state of a payment. A role offers only the steps
+// valid in its state, and each step returns the role of the next state.
+import "io/stdout" take Stdout;
+
+role Created {
+    id() is string;
+    authorized() is Authorized;
+}
+
+role Authorized {
+    id() is string;
+    captured(amount is int) is Captured;
+}
+
+role Captured {
+    id() is string;
+    amount() is int;
+    refunded() is Refunded;
+}
+
+role Refunded {
+    id() is string;
+}
+
+object NewPayment does Created {
+    has number is string;
+    NewPayment(:number);
+    id() is string { number; }
+    authorized() is Authorized { AuthorizedPayment(number: number); }
+}
+
+object AuthorizedPayment does Authorized {
+    has number is string;
+    AuthorizedPayment(:number);
+    id() is string { number; }
+    captured(amount is int) is Captured { CapturedPayment(number: number, total: amount); }
+}
+
+object CapturedPayment does Captured {
+    has number is string;
+    has total is int;
+    CapturedPayment(:number, :total);
+    id() is string { number; }
+    amount() is int { total; }
+    refunded() is Refunded { RefundedPayment(number: number); }
+}
+
+object RefundedPayment does Refunded {
+    has number is string;
+    RefundedPayment(:number);
+    id() is string { number; }
+}
+
+main() is int {
+    let out = Stdout();
+    let created is Created = NewPayment(number: "p-17");
+    let captured = created.authorized().captured(250);
+    out.writeln(captured.id() + " captured " + captured.amount().string());
+    let refunded = captured.refunded();
+    out.writeln(refunded.id() + " refunded");
+    0;
+}
+```
+
+Output:
+
+```text
+p-17 captured 250
+p-17 refunded
+```
+
+```text
+p-17 captured 250
+p-17 refunded
+```
+
+Each object does exactly one role, and a variable typed by the role sees only
+the steps of that state. The guarantee holds even when the object itself
+has more actions than its role exposes. In the next program `NewPayment`
+does have a `refunded` action, but a value typed `Created` cannot reach it:
+
+```okkama
+module bible/typestate_rejected v1.0.0;
+
+role Created {
+    id() is string;
+}
+
+object NewPayment does Created {
+    has number is string;
+    NewPayment(:number);
+    id() is string { number; }
+    refunded() is string { "refunded " + number; }
+}
+
+main() is int {
+    let created is Created = NewPayment(number: "p-17");
+    created.refunded();
+    0;
+}
+```
+
+The compiler answers:
+
+```text
+26-typestate-rejected.ok:16:13: semantic error: Role "Created" has no action "refunded"
+```
+
+```text
+Role "Created" has no action "refunded"
+```
+
+Typestate costs one role and one object per state, and transitions that
+build new objects rather than successors, because the next state is a
+different type. It is worth it where a wrong step is expensive: payments,
+connections, documents that move through approval. Where the states are many
+and the transitions few, a successor with `confirm` checks (Section 26.3's
+`Order`) is the lighter tool.
 
 ## 26.4 Refusals have names
 
@@ -14209,7 +14410,10 @@ owner, and others talk to it through channels (Chapter 20). A ledger that
 several workers update is one object in one task, receiving messages; the
 workers hold the sending end of a channel, not the ledger. For the few
 values that really are shared, such as a counter or a flag, `Atomic` gives a
-small set of operations that are safe across tasks.
+small set of operations that are safe across tasks. The ledger of
+Section 20.6 is the pattern in full: an enum of commands, one task that owns
+the balance and serves them in a loop, and replies sent back over a channel
+the caller provides.
 
 This replaces the most expensive antipattern of concurrent programming, the
 object shared by many threads and guarded by locks taken in the right order

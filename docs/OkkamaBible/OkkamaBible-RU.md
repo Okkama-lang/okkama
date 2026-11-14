@@ -13989,6 +13989,86 @@ main() is int {
 флаги превращаются в маленький интерпретатор, и композицию дешевле
 сопровождать.
 
+### Composite: контейнер, исполняющий роль своих частей
+
+Та же идея покрывает деревья. Когда контейнер исполняет роль того, что
+содержит, вызывающий не отличит один товар от набора, а набору наборов не
+нужен особый случай. Гамма с соавторами назвали это Composite [[Gamma 1994](#ref-gamma1994)];
+в Okkama это роль, объект-лист и объект-контейнер, у которого поле — массив
+этой роли.
+
+```okkama
+module bible/composite v1.0.0;
+
+// Composite: the leaf and the container do the same role, so a bundle of
+// bundles is priced the same way as one item.
+import "io/stdout" take Stdout;
+import "cell" take Cell;
+
+role Priced {
+    total() is int;
+    label() is string;
+}
+
+object Item does Priced {
+    has name is string;
+    has price is int;
+    Item(:name, :price);
+    total() is int { price; }
+    label() is string { name; }
+}
+
+object Bundle does Priced {
+    has name is string;
+    has parts is @Priced;
+    has percent is int = 0;
+    Bundle(:name, :parts);
+    Bundle(:name, :parts, :percent);
+
+    total() is int {
+        let sum = Cell(0);
+        for parts -> part {
+            sum.replace(sum.value() + part.total());
+        }
+        let full = sum.value();
+        full - (full * percent / 100).int();
+    }
+
+    label() is string { name + " of " + parts.size().string(); }
+}
+
+main() is int {
+    let out = Stdout();
+    let tea is Priced = Item(name: "tea", price: 300);
+    let cups is Priced = Bundle(name: "cups", parts: [Item(name: "cup", price: 150), Item(name: "cup", price: 150)]);
+    let gift is Priced = Bundle(name: "gift", parts: [tea, cups], percent: 10);
+    for [tea, cups, gift] -> priced {
+        out.writeln(priced.label() + ": " + priced.total().string());
+    }
+    0;
+}
+```
+
+Вывод:
+
+```text
+tea: 300
+cups of 2: 300
+gift of 2: 540
+```
+
+```text
+tea: 300
+cups of 2: 300
+gift of 2: 540
+```
+
+`Bundle` складывает части через `Cell` внутри одного синхронного действия —
+ровно для такого локального применения ячейки и существуют — и поверх
+применяет свою скидку. Подарок содержит товар и набор и оценивает их
+одинаково. Два конструктора дают скидке значение по умолчанию без флага,
+который пришлось бы передавать каждому набору.
+
 ## 26.3 Изменение как значение: цепочки successor
 
 Строители, сеттеры и изменяемые объекты-«состояния» существуют в других
@@ -14115,9 +14195,129 @@ Field "reading" cannot hold a Cell: a cell stays in synchronous code; state an o
 `capture`, проведённый — `refund`; вызов `refund` у созданного платежа не
 проходит проверку типов, потому что у роли `Created` такого действия нет.
 Паттерн давний: Стром и Йемини назвали его *typestate* в 1986 году
-[[Strom 1986](#ref-strom1986)]. В Okkama ему не нужно ничего, кроме ролей и successor. Он
-стоит по роли на состояние и окупается там, где неверный шаг дорог: платежи,
-соединения, документы, проходящие согласование.
+[[Strom 1986](#ref-strom1986)]. В Okkama ему не нужно ничего, кроме ролей и обычных действий.
+
+```okkama
+module bible/typestate v1.0.0;
+
+// Typestate: one role per state of a payment. A role offers only the steps
+// valid in its state, and each step returns the role of the next state.
+import "io/stdout" take Stdout;
+
+role Created {
+    id() is string;
+    authorized() is Authorized;
+}
+
+role Authorized {
+    id() is string;
+    captured(amount is int) is Captured;
+}
+
+role Captured {
+    id() is string;
+    amount() is int;
+    refunded() is Refunded;
+}
+
+role Refunded {
+    id() is string;
+}
+
+object NewPayment does Created {
+    has number is string;
+    NewPayment(:number);
+    id() is string { number; }
+    authorized() is Authorized { AuthorizedPayment(number: number); }
+}
+
+object AuthorizedPayment does Authorized {
+    has number is string;
+    AuthorizedPayment(:number);
+    id() is string { number; }
+    captured(amount is int) is Captured { CapturedPayment(number: number, total: amount); }
+}
+
+object CapturedPayment does Captured {
+    has number is string;
+    has total is int;
+    CapturedPayment(:number, :total);
+    id() is string { number; }
+    amount() is int { total; }
+    refunded() is Refunded { RefundedPayment(number: number); }
+}
+
+object RefundedPayment does Refunded {
+    has number is string;
+    RefundedPayment(:number);
+    id() is string { number; }
+}
+
+main() is int {
+    let out = Stdout();
+    let created is Created = NewPayment(number: "p-17");
+    let captured = created.authorized().captured(250);
+    out.writeln(captured.id() + " captured " + captured.amount().string());
+    let refunded = captured.refunded();
+    out.writeln(refunded.id() + " refunded");
+    0;
+}
+```
+
+Вывод:
+
+```text
+p-17 captured 250
+p-17 refunded
+```
+
+```text
+p-17 captured 250
+p-17 refunded
+```
+
+Каждый объект исполняет ровно одну роль, и переменная с типом роли видит
+только шаги этого состояния. Гарантия держится, даже если у самого объекта
+больше действий, чем открывает его роль. В следующей программе у
+`NewPayment` действие `refunded` есть, но значение типа `Created` до него не
+дотягивается:
+
+```okkama
+module bible/typestate_rejected v1.0.0;
+
+role Created {
+    id() is string;
+}
+
+object NewPayment does Created {
+    has number is string;
+    NewPayment(:number);
+    id() is string { number; }
+    refunded() is string { "refunded " + number; }
+}
+
+main() is int {
+    let created is Created = NewPayment(number: "p-17");
+    created.refunded();
+    0;
+}
+```
+
+Ответ компилятора:
+
+```text
+26-typestate-rejected.ok:16:13: semantic error: Role "Created" has no action "refunded"
+```
+
+```text
+Role "Created" has no action "refunded"
+```
+
+Typestate стоит роли и объекта на состояние, а переходы строят новые объекты,
+а не successor, потому что следующее состояние — другой тип. Он окупается
+там, где неверный шаг дорог: платежи, соединения, документы, проходящие
+согласование. Где состояний много, а переходов мало, легче successor с
+проверками `confirm`, как `Order` из раздела 26.3.
 
 ## 26.4 У отказов есть имена
 
@@ -14383,6 +14583,9 @@ Okkama структурный: состояние, общее для задач,
 задаче, принимающей сообщения; работники держат передающий конец канала, а
 не журнал. Для немногих по-настоящему общих значений, вроде счётчика или
 флага, `Atomic` даёт небольшой набор операций, безопасных между задачами.
+Журнал счетов из раздела 20.6 — этот паттерн целиком: перечисление команд,
+одна задача, которая владеет балансом и обслуживает команды в цикле, и
+ответы, отправляемые по каналу, который даёт вызывающий.
 
 Это заменяет самый дорогой антипаттерн конкурентного программирования —
 объект, разделённый многими потоками и охраняемый замками, которые по

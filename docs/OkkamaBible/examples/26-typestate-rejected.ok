@@ -1,0 +1,18 @@
+module bible/typestate_rejected v1.0.0;
+
+role Created {
+    id() is string;
+}
+
+object NewPayment does Created {
+    has number is string;
+    NewPayment(:number);
+    id() is string { number; }
+    refunded() is string { "refunded " + number; }
+}
+
+main() is int {
+    let created is Created = NewPayment(number: "p-17");
+    created.refunded();
+    0;
+}

@@ -1,0 +1,64 @@
+module bible/typestate v1.0.0;
+
+// Typestate: one role per state of a payment. A role offers only the steps
+// valid in its state, and each step returns the role of the next state.
+import "io/stdout" take Stdout;
+
+role Created {
+    id() is string;
+    authorized() is Authorized;
+}
+
+role Authorized {
+    id() is string;
+    captured(amount is int) is Captured;
+}
+
+role Captured {
+    id() is string;
+    amount() is int;
+    refunded() is Refunded;
+}
+
+role Refunded {
+    id() is string;
+}
+
+object NewPayment does Created {
+    has number is string;
+    NewPayment(:number);
+    id() is string { number; }
+    authorized() is Authorized { AuthorizedPayment(number: number); }
+}
+
+object AuthorizedPayment does Authorized {
+    has number is string;
+    AuthorizedPayment(:number);
+    id() is string { number; }
+    captured(amount is int) is Captured { CapturedPayment(number: number, total: amount); }
+}
+
+object CapturedPayment does Captured {
+    has number is string;
+    has total is int;
+    CapturedPayment(:number, :total);
+    id() is string { number; }
+    amount() is int { total; }
+    refunded() is Refunded { RefundedPayment(number: number); }
+}
+
+object RefundedPayment does Refunded {
+    has number is string;
+    RefundedPayment(:number);
+    id() is string { number; }
+}
+
+main() is int {
+    let out = Stdout();
+    let created is Created = NewPayment(number: "p-17");
+    let captured = created.authorized().captured(250);
+    out.writeln(captured.id() + " captured " + captured.amount().string());
+    let refunded = captured.refunded();
+    out.writeln(refunded.id() + " refunded");
+    0;
+}

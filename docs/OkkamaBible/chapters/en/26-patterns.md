@@ -83,6 +83,28 @@ an option interacts with another, or a second caller wants a different
 combination, the flags become a small interpreter of their own, and the
 composition is the cheaper program to keep.
 
+### Composite: a container that does its parts' role
+
+The same idea covers trees. When a container does the role of the things it
+holds, a caller cannot tell one item from a bundle of them, and a bundle of
+bundles needs no special case. Gamma and his co-authors called this
+Composite [@gamma1994]; in Okkama it is a role, a leaf object and a
+container object whose field is an array of the role.
+
+{{example:26-composite}}
+
+```text
+tea: 300
+cups of 2: 300
+gift of 2: 540
+```
+
+`Bundle` sums its parts with a `Cell` inside one synchronous action, which is
+exactly the local use cells are for, and applies its own discount on top.
+The gift contains an item and a bundle and prices both the same way. Two
+constructors give the discount a default without a flag that every bundle
+must pass.
+
 ## 26.3 Change as a value: successor pipelines
 
 Builders, setters and mutable "state" objects exist in other languages
@@ -147,8 +169,32 @@ authorized one offers `capture`; a captured one offers `refund`; and calling
 `refund` on a created payment does not type-check, because the role
 `Created` has no such action. The pattern is old: Strom and Yemini called
 it *typestate* in 1986 [@strom1986]. In Okkama it needs nothing beyond roles and
-successors. It costs one role per state and is worth it where a wrong step
-is expensive: payments, connections, documents that move through approval.
+ordinary actions.
+
+{{example:26-typestate}}
+
+```text
+p-17 captured 250
+p-17 refunded
+```
+
+Each object does exactly one role, and a variable typed by the role sees only
+the steps of that state. The guarantee holds even when the object itself
+has more actions than its role exposes. In the next program `NewPayment`
+does have a `refunded` action, but a value typed `Created` cannot reach it:
+
+{{example:26-typestate-rejected}}
+
+```text
+Role "Created" has no action "refunded"
+```
+
+Typestate costs one role and one object per state, and transitions that
+build new objects rather than successors, because the next state is a
+different type. It is worth it where a wrong step is expensive: payments,
+connections, documents that move through approval. Where the states are many
+and the transitions few, a successor with `confirm` checks (Section 26.3's
+`Order`) is the lighter tool.
 
 ## 26.4 Refusals have names
 
@@ -289,7 +335,10 @@ owner, and others talk to it through channels (Chapter 20). A ledger that
 several workers update is one object in one task, receiving messages; the
 workers hold the sending end of a channel, not the ledger. For the few
 values that really are shared, such as a counter or a flag, `Atomic` gives a
-small set of operations that are safe across tasks.
+small set of operations that are safe across tasks. The ledger of
+Section 20.6 is the pattern in full: an enum of commands, one task that owns
+the balance and serves them in a loop, and replies sent back over a channel
+the caller provides.
 
 This replaces the most expensive antipattern of concurrent programming, the
 object shared by many threads and guarded by locks taken in the right order

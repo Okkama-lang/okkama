@@ -1,0 +1,1 @@
+26-typestate-rejected.ok:16:13: semantic error: Role "Created" has no action "refunded"
