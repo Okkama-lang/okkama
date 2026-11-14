@@ -1348,3 +1348,6 @@ fn oir2_high_observation_requires_a_trusted_external() {
     module.functions.get_mut(function).unwrap().signature.results.clear();
     assert!(super::native_summaries::P1NativeSummaries::for_module(&module).is_err());
 }
+
+#[path = "coverage/tests.rs"]
+mod coverage;
