@@ -1,0 +1,32 @@
+oir 2 high
+module sync
+object R {
+    destroy @destroy
+}
+scope SD action in @destroy
+scope SC action in @make
+scope S action in @f
+func @destroy(%self: R) -> void [destroy R] {
+    ^entry in SD:
+    ret
+}
+func @make() -> R [ctor R] {
+    boundary BC lexical in SC
+    ^entry in SC unwind ^failed:
+    %r: R = obj.new R { }
+    want %r
+    [iprep0] exit.prepare return %r at BC
+    result.exit edge normal(0), value %r, demand want, prepare iprep0
+    ret %r
+    ^failed(%failure: failure) in SC:
+    raise %failure
+}
+func @f() -> void {
+    binding b0 "r": R in S
+    ^entry in S unwind ^failed:
+    %r: R = call @make()
+    bind %r, binding b0
+    trap confirm "resource trap"
+    ^failed(%failure: failure) in S:
+    raise %failure
+}

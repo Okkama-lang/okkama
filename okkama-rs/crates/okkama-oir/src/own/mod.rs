@@ -2,21 +2,23 @@
 //!
 //! Classification and summary inference preserve the input profile. Commit 2
 //! adds a finite forward domain, sealed SSA, lexical edges and an outcome emitter.
-//! `rewrite_subset` exercises these on a deliberately limited High slice. The
-//! complete synchronous elaborator remains commit 3. Verification is a caller
-//! prerequisite and independent postcondition, never an implementation oracle.
+//! `rewrite_synchronous` normalizes the synchronous High slice and independently
+//! verifies its output. `rewrite_subset` exposes the raw rewrite for diagnostic
+//! fixtures, including witnesses blocked by the independent verifier. D8/D17/D18
+//! semantic certification still requires the #564 commit-4 gate.
 pub mod domain;
 pub mod analyze;
 pub mod bindings;
 pub mod edges;
 pub mod emit;
 mod driver;
-pub use driver::rewrite_subset;
+pub use driver::{rewrite_subset, rewrite_synchronous};
 mod classify;
 mod normal;
 mod summaries;
 mod scopes;
 mod inventory;
+mod construction;
 
 use crate::*;
 use std::collections::BTreeMap;
@@ -122,7 +124,8 @@ pub enum OwnDiagnosticKind {
     MissingBoundary,
     InvalidEquation,
     InvalidFlow,
-    Commit3,
+    UnsupportedConstruct,
+    Commit4,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -139,6 +142,7 @@ pub enum OwnError {
     InvalidOutput(Box<VerifyReport>),
     Diagnostics { diagnostics: Vec<OwnDiagnostic>, stats: Box<OwnStats> },
     Incomplete { stats: Box<OwnStats> },
+    IncompleteVerification { report: Box<VerifyReport>, stats: Box<OwnStats> },
 }
 
 impl std::fmt::Display for OwnError {
@@ -343,8 +347,16 @@ fn flow_error(message: impl Into<String>) -> OwnError {
     phase_error(OwnDiagnosticKind::InvalidFlow, message)
 }
 
-fn commit3(operation: impl AsRef<str>) -> OwnError {
-    phase_error(OwnDiagnosticKind::Commit3, format!("commit 3: {} rewrite is not implemented", operation.as_ref()))
+fn unsupported(operation: &Operation) -> OwnError {
+    let (kind, phase) = match operation {
+        Operation::Async(_) => (OwnDiagnosticKind::UnsupportedAsync, "commit 5"),
+        Operation::Core(CoreOp::FnClosure { .. } | CoreOp::FnBind { .. } | CoreOp::FnBindRole { .. }
+            | CoreOp::CapMake { .. } | CoreOp::AnyBox { .. })
+        | Operation::Call(CallOp::Closure { .. } | CallOp::Cap { .. } | CallOp::Role { .. })
+        | Operation::Carrier(_) => (OwnDiagnosticKind::Commit4, "commit 4"),
+        _ => (OwnDiagnosticKind::UnsupportedConstruct, "outside the synchronous P1 producer"),
+    };
+    phase_error(kind, format!("{phase}: {}", operation.opcode()))
 }
 
 fn phase_error(kind: OwnDiagnosticKind, message: impl Into<String>) -> OwnError {

@@ -1,5 +1,10 @@
-//! Deliberately partial driver for commit-2 fixtures. This is not the commit-3
-//! function elaborator: unsupported intents and managed escapes are diagnosed.
+//! Synchronous High normalization through the contract-driven outcome emitter.
+mod calls;
+mod exits;
+mod construction;
+mod control;
+mod finalize;
+mod defers;
 use super::*;
 use super::analyze::analyze_function;
 use super::bindings::{block, parameter, plain_or_service, LatestValue, SealedSsa, SsaSlot};
@@ -8,13 +13,29 @@ use super::emit::{Landing, LiveEnv, OutcomeEmitter};
 use crate::visit::{Rewrite, VisitorMut};
 use std::collections::BTreeSet;
 
+/// Raw synchronous rewrite. The caller must independently verify the result.
+/// This entry point also preserves output for #564 diagnostic witnesses.
 pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<OwnOutput, OwnError> {
     if output.module.profile != Profile::High {
-        return Err(flow_error("partial driver requires High"));
+        return Err(flow_error("synchronous driver requires High"));
     }
     let functions: Vec<_> = output.module.functions.iter().filter_map(|(id, function)| {
         function.body.is_some().then_some(id)
     }).collect();
+    let mut helpers: BTreeSet<_> = output.module.functions.iter().filter_map(|(_, function)| function.body.as_ref())
+        .flat_map(|body| body.insts.iter().filter_map(|(_, instruction)| match &instruction.op {
+            Operation::Lexical(LexicalOp::DeferRegister { action, .. }) => Some(action.function),
+            _ => None,
+        })).collect();
+    helpers.extend(output.module.functions.iter().filter_map(|(id, data)| {
+        data.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. })).then_some(id)
+    }));
+    for helper in &helpers {
+        let data = output.module.functions.get_mut(*helper).map_err(arena)?;
+        if !data.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. })) {
+            data.attrs.push(FunctionAttr::DeferEntry { replacements: vec![] });
+        }
+    }
     let mut emitter = OutcomeEmitter::new(&output.analysis, options);
     emitter.charge(output.stats.charged_work, output.stats.peak_auxiliary_bytes)?;
     let mut flows = BTreeMap::new();
@@ -23,14 +44,62 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
         emitter.charge(flow.stats.charged_work, flow.stats.peak_auxiliary_bytes)?;
         flows.insert(*function, flow);
     }
+    // Decide empty entry specializations before rewriting any caller, including
+    // recursive calls and functions declared after their callers.
+    for function in &functions {
+        let data = output.module.functions.get(*function).map_err(arena)?;
+        let body = data.body.as_ref().unwrap();
+        let root = body.blocks.get(body.entry).map_err(arena)?.lexical_scope;
+        let fixed_observation = output.module.entry == Some(*function)
+            || data.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Destroy(_)));
+        if (output.analysis.scopes[&root].empty_scope_eligible || fixed_observation) && !helpers.contains(function) {
+            let mut summary = output.module.summaries.get(data.summary.unwrap()).map_err(arena)?.clone();
+            summary.entry_kind = EntryKind::ObservationAdmissionStaysCaller;
+            let summary = output.module.summaries.alloc(summary).map_err(arena)?;
+            output.module.functions.get_mut(*function).map_err(arena)?.summary = Some(summary);
+        }
+    }
+    let external: Vec<_> = output.module.functions.iter().filter_map(|(id, data)| {
+        data.body.is_none().then_some(id)
+    }).collect();
+    for function in external {
+        let declaration = output.module.functions.get(function).map_err(arena)?.clone();
+        let summary = output.module.summaries.get(declaration.summary.unwrap()).map_err(arena)?;
+        let observation = summary.entry_kind == EntryKind::ObservationAdmissionStaysCaller;
+        let mut signature = declaration.signature;
+        let deps = output.module.types.intern(Type::Service(ServiceType::Deps)).map_err(arena)?;
+        let managed = signature.params.iter().filter(|ty| {
+            output.analysis.types.get(ty).is_some_and(TypeClassification::may_own)
+                && !matches!(output.module.types.get(**ty), Ok(Type::Service(_) | Type::Descriptor))
+        }).count();
+        signature.params.extend(std::iter::repeat_n(deps, managed));
+        if observation {
+            signature.ownership_abi = OwnershipAbi::Observation;
+        } else {
+            let own = output.module.types.intern(Type::Service(ServiceType::Own)).map_err(arena)?;
+            let input_packet = u16::try_from(signature.params.len()).map_err(|_| flow_error("external ABI too large"))?;
+            let output_packet = u16::try_from(signature.results.len())
+                .map_err(|_| flow_error("external ABI too large"))?;
+            signature.params.push(own);
+            signature.results.push(own);
+            signature.ownership_abi = OwnershipAbi::Explicit { input_packet, output_packet };
+        }
+        output.module.functions.get_mut(function).map_err(arena)?.signature = signature;
+    }
     output.module.profile = Profile::Own;
     for function in functions {
         let high = output.module.functions.get_mut(function).map_err(arena)?.body.take().unwrap();
         let graph = Graph::index(&output.module, &high, emitter.budget_ref())?;
         let root = high.blocks.get(high.entry).map_err(arena)?.lexical_scope;
-        let retained: BTreeSet<_> = output.analysis.scopes.iter().filter_map(|(scope, facts)| {
+        let mut retained: BTreeSet<_> = output.analysis.scopes.iter().filter_map(|(scope, facts)| {
             (!facts.empty_scope_eligible).then_some(*scope)
         }).collect();
+        let empty_reserves = exits::empty_reserve_scopes(&output.module, &high, &graph, &flows[&function],
+            &output.analysis, emitter.budget_ref())?;
+        retained.retain(|scope| !empty_reserves.contains(scope));
+        if helpers.contains(&function) {
+            retained.insert(root);
+        }
         for (scope, declaration) in output.module.scopes.iter() {
             if declaration.function == function && !retained.contains(&scope) {
                 output.stats.elided_lexical_scopes += 1;
@@ -46,17 +115,59 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
             },
             retained, blocks: BTreeMap::new(), entries: BTreeMap::new(), ssa: SealedSsa::default(),
             failures: vec![], current_unwind: None, predecessors: BTreeMap::new(), ordinal: 0,
+            live_after: BTreeSet::new(), captured: BTreeSet::new(), failure_live: BTreeMap::new(),
+            current_high: high.entry, current_instruction: None, escaping: BTreeMap::new(),
+            incomplete: BTreeMap::new(),
+            replacement_returns: vec![],
+            constructor_inputs: flows[&function].constructor_inputs.clone(),
         };
-        if !high.high_results.is_empty() || !high.descriptor_bindings.is_empty() || !high.service_schedules.is_empty() {
-            return Err(commit3("result, descriptor or service metadata"));
+        if !high.descriptor_bindings.is_empty() || !high.service_schedules.is_empty() {
+            return Err(phase_error(OwnDiagnosticKind::Commit4, "commit 4: descriptor or service metadata"));
+        }
+        let captured: BTreeSet<_> = high.insts.iter().flat_map(|(_, instruction)| match &instruction.op {
+            Operation::Lexical(LexicalOp::DeferRegister { action, .. }) => action.bindings.clone(),
+            _ => vec![],
+        }).collect();
+        driver.captured = captured.clone();
+        driver.incomplete = super::construction::incomplete_aliases(&high, &graph, driver.emitter.budget_ref())?;
+        for edge in graph.edges.iter().filter(|edge| !edge.unwind && !edge.plan.close.is_empty()) {
+            let Some(flow) = flows[&function].before_edges.get(&edge.source) else { continue };
+            let wanted = edges::wanted(&high, edge)?;
+            let mut values = BTreeSet::new();
+            for value in &edge.args {
+                if !wanted.contains(value) {
+                    continue;
+                }
+                let deps = &flow.values[value.as_u32() as usize].deps;
+                if flow.journals.iter().any(|((scope, atom), quantity)| {
+                    edge.plan.close.contains(scope) && deps.contains(atom)
+                        && quantity.presence != domain::Presence::Absent
+                        && quantity.presence != domain::Presence::Bottom
+                }) {
+                    values.insert(*value);
+                }
+            }
+            driver.escaping.insert((edge.source, edge.ordinal), values);
         }
         let liveness = live_in(&high, &graph, driver.emitter.budget_ref())?;
+        driver.failure_live = liveness.clone();
+        let continuations = control::continuations(&high, &graph, &liveness, driver.emitter.budget_ref())?;
         for original in &graph.rpo {
             let data = high.blocks.get(*original).map_err(arena)?;
             let next = block(&mut driver.body, data.lexical_scope)?;
             driver.blocks.insert(*original, next);
             let mut env = LiveEnv::default();
-            let values: BTreeSet<_> = liveness[original].iter().chain(&data.params).copied().collect();
+            let mut values: BTreeSet<_> = liveness[original].iter().chain(&data.params).copied().collect();
+            if let Some(flow) = flows[&function].entries.get(original) {
+                for prefix in flow.defers.values() {
+                    for registration in prefix {
+                        if let Operation::Lexical(LexicalOp::DeferRegister { action, .. }) =
+                            &high.insts.get(*registration).map_err(arena)?.op {
+                            values.extend(&action.captures);
+                        }
+                    }
+                }
+            }
             for value in values {
                 let ty = high.values.get(value).map_err(arena)?.ty;
                 let managed = driver.managed(ty);
@@ -64,9 +175,9 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                     SsaSlot::Value(value), ty, managed)?;
                 env.values.insert(value, latest);
             }
-            if !matches!(data.term.kind, TermKind::Raise(_))
-                && let Some(flow) = flows[&function].entries.get(original) {
-                for binding in flow.latest.keys() {
+            if let Some(flow) = flows[&function].entries.get(original) {
+                env.cleanup.defers = flow.defers.clone();
+                for binding in flow.latest.keys().filter(|binding| captured.contains(binding)) {
                     let ty = high.bindings.get(*binding).map_err(arena)?.ty;
                     let managed = driver.managed(ty);
                     let latest = driver.ssa.declare(driver.module, &mut driver.body, next,
@@ -130,7 +241,7 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                 env.values.get_mut(&original).unwrap().deps = Some(deps);
             }
         }
-        let explicit = driver.retained.contains(&root);
+        let explicit = driver.retained.contains(&root) && !destroy && driver.module.entry != Some(function);
         let mut signature = driver.module.functions.get(function).map_err(arena)?.signature.clone();
         let mut point = Landing { block: prologue, env, results: vec![], forwarded: BTreeMap::new() };
         if explicit {
@@ -147,30 +258,31 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
             point = driver.emit(point, Operation::Ownership(OwnershipOp::Accept { state, packet }))?;
         } else {
             signature.ownership_abi = OwnershipAbi::Observation;
-            let summary = driver.module.functions.get(function).map_err(arena)?.summary
-                .ok_or_else(|| flow_error("partial driver requires inferred summaries"))?;
-            let mut specialized = driver.module.summaries.get(summary).map_err(arena)?.clone();
-            specialized.entry_kind = EntryKind::ObservationAdmissionStaysCaller;
-            let summary = driver.module.summaries.alloc(specialized).map_err(arena)?;
-            driver.module.functions.get_mut(function).map_err(arena)?.summary = Some(summary);
+            if driver.retained.contains(&root) {
+                point = driver.emit(point, Operation::Ownership(OwnershipOp::ScopeBegin { scope: root }))?;
+            }
         }
         signature.params = params;
         driver.module.functions.get_mut(function).map_err(arena)?.signature = signature;
         driver.connect(point, &Target { block: high.entry, args: high.blocks.get(high.entry)
-            .map_err(arena)?.params.clone() }, true, false)?;
+            .map_err(arena)?.params.clone() }, true, false, 0)?;
         for original in &graph.rpo {
             let data = high.blocks.get(*original).map_err(arena)?;
+            driver.current_high = *original;
             driver.current_unwind = data.unwind.as_ref().map(|unwind| unwind.target.clone());
             let mut point = Landing {
                 block: driver.blocks[original], env: driver.entries[original].clone(),
                 results: vec![], forwarded: BTreeMap::new(),
             };
             for instruction in &data.insts {
+                driver.current_instruction = Some(*instruction);
+                driver.live_after = continuations[instruction].clone();
                 let instruction = high.insts.get(*instruction).map_err(arena)?;
                 point = driver.instruction(point, instruction)?;
+                driver.prune(&mut point);
             }
             match &data.term.kind {
-                TermKind::Br(target) => driver.connect(point, target, false, false)?,
+                TermKind::Br(target) => driver.connect(point, target, false, false, 0)?,
                 TermKind::Cond { condition, yes, no } => {
                     let condition = point.env.value(*condition)?.value;
                     let left = block(&mut driver.body, data.lexical_scope)?;
@@ -182,21 +294,48 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                     left_point.block = left;
                     let mut right_point = point;
                     right_point.block = right;
-                    driver.connect(left_point, yes, false, false)?;
-                    driver.connect(right_point, no, false, false)?;
+                    driver.connect(left_point, yes, false, false, 0)?;
+                    driver.connect(right_point, no, false, false, 1)?;
                 }
-                TermKind::Ret { values } => {
-                    if values.iter().any(|value| driver.managed(high.values.get(*value).unwrap().ty)) {
-                        return Err(commit3("managed return/reservation"));
-                    }
+                TermKind::Switch { value, cases, default } => {
+                    driver.switch(point, *value, cases, default)?;
+                }
+                TermKind::Ret { values } | TermKind::RetDefer { values, .. } => {
+                    let tag = match &data.term.kind {
+                        TermKind::RetDefer { tag, .. } => Some(tag.clone()),
+                        _ if helpers.contains(&function) => Some(DeferReturnTag::Continue),
+                        _ => None,
+                    };
+                    point = driver.prepare(point, values.first().copied(), None)?;
                     point = driver.close_all(point, false)?;
+                    let committed = if point.env.cleanup.pending.is_some() {
+                        let result = values.first().map(|value| high.values.get(*value).unwrap().ty);
+                        point = driver.commit(point, ExitDestination::Caller, result)?;
+                        let value = point.results.iter().find(|(name, _)| *name == SlotName::Value)
+                            .map(|(_, value)| *value);
+                        Some((value, point.result(SlotName::Packet)?, point.result(SlotName::Deps)?))
+                    } else {
+                        None
+                    };
                     let mut values = values.iter().map(|value| point.env.value(*value).map(|latest| latest.value))
                         .collect::<Result<Vec<_>, _>>()?;
-                    if explicit {
+                    if let Some((value, packet, deps)) = committed {
+                        values = value.into_iter().chain([packet]).collect();
+                        if matches!(tag, Some(DeferReturnTag::Replace(_))) {
+                            values.push(deps);
+                        }
+                        point.env.linear.remove(&packet);
+                    } else if explicit && !helpers.contains(&function) {
                         point = driver.emit(point, Operation::Ownership(OwnershipOp::Empty {}))?;
                         values.push(point.result(SlotName::Packet)?);
                     }
-                    driver.body.blocks.get_mut(point.block).map_err(arena)?.term.kind = TermKind::Ret { values };
+                    driver.body.blocks.get_mut(point.block).map_err(arena)?.term.kind = match tag {
+                        Some(DeferReturnTag::Continue) => TermKind::RetDefer {
+                            tag: DeferReturnTag::Continue, values: vec![],
+                        },
+                        Some(tag) => TermKind::RetDefer { tag, values },
+                        None => TermKind::Ret { values },
+                    };
                 }
                 TermKind::Raise(failure) => {
                     point.env.cleanup.failure = Some(point.env.value(*failure)?.value);
@@ -204,32 +343,63 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                 }
                 TermKind::Unreachable => {
                     if !point.env.all_linear().is_empty() {
-                        return Err(commit3("unreachable with live ownership"));
+                        return Err(flow_error("unreachable tombstone contains live ownership"));
                     }
                 }
-                _ => return Err(commit3("terminator")),
+                TermKind::Throw(_) | TermKind::Panic(_) | TermKind::Trap { .. } => {
+                    driver.failure_term(point, &data.term.kind)?;
+                }
+                TermKind::Catch { failure, ty, handler, next } => {
+                    driver.catch(point, *failure, *ty, handler, next)?;
+                }
+                _ => return Err(flow_error("unsupported High terminator")),
             }
         }
         // Iterative cleanup queue: failed closes never recursively emit cleanup.
         driver.current_unwind = None;
-        while let Some(FailureRoute { mut point, target }) = driver.failures.pop() {
-            // This subset restores only empty constructor input packets. Their
-            // admission component is known from construction, not nonemptiness.
+        while !driver.failures.is_empty() || !driver.replacement_returns.is_empty() {
+            if let Some(ReplacementReturn { point, target, source, result }) = driver.replacement_returns.pop() {
+                driver.current_high = source;
+                driver.current_unwind = target;
+                let point = driver.close_all(point, false)?;
+                let point = driver.commit(point, ExitDestination::Caller, result)?;
+                let mut values = point.results.iter().find(|(name, _)| *name == SlotName::Value)
+                    .map(|(_, value)| *value).into_iter().collect::<Vec<_>>();
+                values.push(point.result(SlotName::Packet)?);
+                driver.body.blocks.get_mut(point.block).map_err(arena)?.term.kind = TermKind::Ret { values };
+                continue;
+            }
+            let FailureRoute { mut point, target } = driver.failures.pop().unwrap();
+            let target = target.filter(|target| {
+                let data = high.blocks.get(target.block).unwrap();
+                !data.insts.is_empty() || !matches!(data.term.kind, TermKind::Raise(value)
+                    if data.params.last() == Some(&value) && target.args.is_empty())
+            });
+            // Pre-accept failure restores fresh parts to their proven original
+            // admission. P1 staging proves constructor-root input packets empty.
             let packets: Vec<_> = point.env.linear.iter().copied().collect();
             for packet in packets {
-                let owner = stack(driver.module, driver.body.blocks.get(point.block).map_err(arena)?.lexical_scope)?
-                    .into_iter().rev().find(|scope| point.env.scopes.contains_key(scope))
-                    .ok_or_else(|| commit3("packet restoration without a retained scope"))?;
+                if Some(packet) == point.env.cleanup.pending {
+                    continue;
+                }
+                let owner = if let Some(owner) = point.env.restore_to.get(&packet) {
+                    *owner
+                } else {
+                    stack(driver.module, driver.body.blocks.get(point.block).map_err(arena)?.lexical_scope)?
+                        .into_iter().rev().find(|scope| point.env.scopes.contains_key(scope))
+                        .ok_or_else(|| flow_error("packet restoration without a retained scope"))?
+                };
                 let state = point.env.scopes[&owner];
                 point = driver.emit(point, Operation::Ownership(OwnershipOp::Admit { state, packet }))?;
             }
+            driver.current_unwind = target.clone();
             if let Some(mut target) = target {
                 let parameter = *high.blocks.get(target.block).map_err(arena)?.params.last()
                     .ok_or_else(|| flow_error("unwind handler has no failure parameter"))?;
                 let failure = point.env.cleanup.failure.ok_or_else(|| flow_error("missing outcome failure"))?;
                 point.env.values.insert(parameter, LatestValue { value: failure, deps: None });
                 target.args.push(parameter);
-                driver.connect(point, &target, false, true)?;
+                driver.connect(point, &target, false, true, 0)?;
                 continue;
             }
             let point = driver.close_all(point, true)?;
@@ -239,6 +409,7 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
         for block in driver.blocks.values() {
             driver.ssa.seal(*block, driver.predecessors.get(block).copied().unwrap_or(0))?;
         }
+        driver.compact()?;
         driver.module.functions.get_mut(function).map_err(arena)?.body = Some(driver.body);
     }
     output.stats.emitted_checked_splits += emitter.stats().emitted_checked_splits;
@@ -250,6 +421,13 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
 struct FailureRoute {
     point: Landing,
     target: Option<Target>,
+}
+
+struct ReplacementReturn {
+    point: Landing,
+    target: Option<Target>,
+    source: BlockId,
+    result: Option<TypeId>,
 }
 
 struct Driver<'a, 'o> {
@@ -266,23 +444,53 @@ struct Driver<'a, 'o> {
     current_unwind: Option<Target>,
     predecessors: BTreeMap<BlockId, usize>,
     ordinal: usize,
+    live_after: BTreeSet<ValueId>,
+    captured: BTreeSet<BindingId>,
+    failure_live: BTreeMap<BlockId, BTreeSet<ValueId>>,
+    current_high: BlockId,
+    current_instruction: Option<InstId>,
+    escaping: BTreeMap<(BlockId, usize), BTreeSet<ValueId>>,
+    incomplete: BTreeMap<ValueId, BTreeSet<ValueId>>,
+    replacement_returns: Vec<ReplacementReturn>,
+    constructor_inputs: BTreeMap<InstId, BTreeSet<ScopeId>>,
 }
 impl Driver<'_, '_> {
     fn managed(&self, ty: TypeId) -> bool {
         self.analysis.types.get(&ty).is_some_and(TypeClassification::may_own)
+            && !matches!(self.module.types.get(ty), Ok(Type::Service(_) | Type::Descriptor))
     }
-    fn emit(&mut self, point: Landing, op: Operation) -> Result<Landing, OwnError> {
+    fn emit(&mut self, mut point: Landing, op: Operation) -> Result<Landing, OwnError> {
+        let mut needed: BTreeSet<ValueId> = BTreeSet::new();
+        if let Some(target) = &self.current_unwind {
+            needed.extend(&target.args);
+            needed.extend(&self.failure_live[&target.block]);
+        }
+        for prefix in point.env.cleanup.defers.values() {
+            for registration in prefix {
+                if let Operation::Lexical(LexicalOp::DeferRegister { action, .. }) =
+                    &self.high.insts.get(*registration).unwrap().op {
+                    needed.extend(&action.captures);
+                }
+            }
+        }
+        point.env.unwind_values = Some(needed);
         let emission = self.emitter.emit(self.module, &mut self.body, point.block, point.env, op)?;
         if let Some(unwind) = emission.unwind {
             let target = self.current_unwind.clone().filter(|target| {
                 let lexical = self.high.blocks.get(target.block).unwrap().lexical_scope;
                 !self.retained.contains(&lexical) || unwind.env.scopes.contains_key(&lexical)
             });
-            self.failures.push(FailureRoute { point: unwind, target });
+            self.record_failure(unwind, target)?;
         }
-        Ok(emission.normal)
+        let mut normal = emission.normal;
+        normal.env.cleanup.primary_before_failure = None;
+        Ok(normal)
     }
     fn instruction(&mut self, mut point: Landing, instruction: &Instruction) -> Result<Landing, OwnError> {
+        if matches!(instruction.op, Operation::Lexical(LexicalOp::Temp { .. } | LexicalOp::Want { .. }
+            | LexicalOp::Discard { .. }) | Operation::Exit(ExitOp::Prepare { .. })) {
+            return Ok(point);
+        }
         let mut op = instruction.op.clone();
         let mut missing = false;
         op.rewrite(&mut Rename { env: &point.env, missing: &mut missing });
@@ -297,15 +505,23 @@ impl Driver<'_, '_> {
                     _ => unreachable!(),
                 };
                 let latest = point.env.value(original)?;
-                if self.managed(self.body.values.get(value).map_err(arena)?.ty) {
-                    let owner = self.high.bindings.get(binding).map_err(arena)?.scope;
-                    let current = self.body.blocks.get(point.block).map_err(arena)?.lexical_scope;
-                    let state = point.env.scopes[&current];
-                    let selection = self.body.selections.alloc(SelectionExpr::Value(value)).map_err(arena)?;
-                    let selection = self.body.selections.alloc(SelectionExpr::Admissible(selection)).map_err(arena)?;
-                    point = self.emit(point, Operation::Ownership(OwnershipOp::ScopeSplit { state, selection }))?;
+                let owner = self.high.bindings.get(binding).map_err(arena)?.scope;
+                if self.managed(self.body.values.get(value).map_err(arena)?.ty)
+                    && point.env.scopes.contains_key(&owner) {
+                    let packet;
+                    if point.env.scopes.len() == 1 {
+                        let state = *point.env.scopes.values().next().unwrap();
+                        let selection = self.body.selections.alloc(SelectionExpr::Value(value)).map_err(arena)?;
+                        let selection = self.body.selections.alloc(SelectionExpr::Admissible(selection))
+                            .map_err(arena)?;
+                        point = self.emit(point, Operation::Ownership(OwnershipOp::ScopeSplit { state, selection }))?;
+                        packet = point.result(SlotName::Selected)?;
+                    } else {
+                        let (next, selected) = self.offered(point, &[original])?;
+                        point = next;
+                        packet = selected;
+                    }
                     let resource = point.env.value(original)?.value;
-                    let packet = point.result(SlotName::Selected)?;
                     let binding = ElaboratedBinding {
                         binding, resource: ResourceValue { value: resource, packet },
                         state: point.env.scopes[&owner], original_scope: owner,
@@ -321,36 +537,47 @@ impl Driver<'_, '_> {
                 point.env.bindings.insert(binding, latest);
                 return Ok(point);
             }
-            Operation::Lexical(LexicalOp::Temp { .. }) => return Ok(point),
-            Operation::Core(CoreOp::ObjNew { ref fields, .. }) if !fields.is_empty() => {
-                return Err(commit3("constructor fields"));
+            Operation::Lexical(LexicalOp::Temp { .. } | LexicalOp::Want { .. } | LexicalOp::Discard { .. })
+            | Operation::Exit(ExitOp::Prepare { .. }) => return Ok(point),
+            Operation::Lexical(LexicalOp::DeferRegister { scope, .. }) => {
+                let inst = self.current_instruction.ok_or_else(|| flow_error("registration is not in High"))?;
+                point.env.cleanup.defers.entry(scope).or_default().push(inst);
+                return Ok(point);
             }
-            Operation::Core(CoreOp::ObjNew { ref mut packet, .. }) => {
-                if instruction.results.iter().any(|value| self.managed(self.high.values.get(*value).unwrap().ty)) {
-                    point = self.emit(point, Operation::Ownership(OwnershipOp::Empty {}))?;
-                    *packet = Some(point.result(SlotName::Packet)?);
-                }
+            Operation::Call(CallOp::Direct { function, .. } | CallOp::Native { function, .. }
+                | CallOp::Intrinsic { function, .. }) => return self.call(point, instruction, function),
+            Operation::Lexical(LexicalOp::Stage { action, field, .. }) => {
+                let Operation::Lexical(LexicalOp::Stage { value, .. }) = instruction.op else { unreachable!() };
+                return self.stage(point, action, field, value);
             }
-            Operation::Const(_) => {}
+            Operation::Core(CoreOp::ObjNew { .. } | CoreOp::ObjNext { .. }
+                | CoreOp::ObjInit { .. } | CoreOp::ObjGet { .. } | CoreOp::ObjPending { .. }
+                | CoreOp::SuccTake { .. }) => {
+                return self.construct(point, instruction);
+            }
+            Operation::Const(_) | Operation::Core(CoreOp::Undef { .. }) => {}
             Operation::Core(_) if instruction.results.iter().all(|value| {
                 !self.managed(self.high.values.get(*value).unwrap().ty)
             }) && op.operand_refs().iter().all(|operand| match operand.reference {
                 OperandRef::Value(value) => !self.managed(self.body.values.get(value).unwrap().ty),
                 _ => false,
             }) => {}
-            _ => return Err(commit3(op.opcode())),
+            _ => return Err(unsupported(&op)),
         }
         point = self.emit(point, op)?;
         let results = point.results.clone();
         for (original, (_, value)) in instruction.results.iter().zip(&results) {
             let mut latest = LatestValue { value: *value, deps: None };
             if self.managed(self.body.values.get(*value).map_err(arena)?.ty) {
-                let packet = point.result(SlotName::Packet)?;
+                let packet = point.results.iter().find(|(name, _)| *name == SlotName::Packet)
+                    .map(|(_, packet)| *packet);
                 let scope = self.body.blocks.get(point.block).map_err(arena)?.lexical_scope;
-                let state = point.env.scopes[&scope];
+                let state = point.env.scopes.get(&scope).copied();
                 point = self.emit(point, Operation::Ownership(OwnershipOp::Dependencies { value: *value }))?;
                 latest.deps = Some(point.result(SlotName::Value)?);
-                point = self.emit(point, Operation::Ownership(OwnershipOp::Admit { state, packet }))?;
+                if let (Some(state), Some(packet)) = (state, packet) {
+                    point = self.emit(point, Operation::Ownership(OwnershipOp::Admit { state, packet }))?;
+                }
             }
             point.env.values.insert(*original, latest);
         }
@@ -366,20 +593,47 @@ impl Driver<'_, '_> {
         }
         Ok(point)
     }
-    fn close_one(&mut self, point: Landing, scope: ScopeId, unwind: bool) -> Result<Landing, OwnError> {
+    fn close_one(&mut self, mut point: Landing, scope: ScopeId, unwind: bool) -> Result<Landing, OwnError> {
+        point = self.run_defers(point, scope)?;
+        if !unwind && point.env.cleanup.pending.is_some() {
+            point = self.extend(point, scope)?;
+        }
         let state = point.env.scopes[&scope];
+        let reserve = point.env.cleanup.pending;
+        point.env.bindings.retain(|binding, _| self.high.bindings.get(*binding)
+            .is_ok_and(|binding| binding.scope != scope));
+        if unwind {
+            point.env.cleanup.wanted = None;
+            point.env.cleanup.carried.clear();
+            point.env.cleanup.replacement = None;
+            let mut needed: BTreeSet<ValueId> = BTreeSet::new();
+            if let Some(target) = &self.current_unwind {
+                needed.extend(&target.args);
+                needed.extend(&self.failure_live[&target.block]);
+            }
+            point.env.values.retain(|value, _| needed.contains(value));
+        }
         let effects = self.analysis.scopes[&scope].effects.clone();
         let op = if unwind {
             OwnershipOp::ScopeUnwind {
                 state, failure: point.env.cleanup.failure.ok_or_else(|| flow_error("missing active failure"))?,
-                reserve: None, effects,
+                reserve, effects,
             }
         } else {
-            OwnershipOp::ScopeEnd { state, reserve: None, effects }
+            OwnershipOp::ScopeEnd { state, reserve, effects }
         };
         let point = self.emit(point, Operation::Ownership(op))?;
         let parent = self.module.scopes.get(scope).map_err(arena)?.parent;
         if let Some(parent) = parent {
+            let reached_handler = self.current_unwind.as_ref().is_none_or(|target| {
+                self.high.blocks.get(target.block).is_ok_and(|block| block.lexical_scope == parent)
+            });
+            if reached_handler {
+                self.current_unwind = self.high.blocks.iter().find_map(|(_, block)| {
+                    (block.lexical_scope == parent).then_some(block.unwind.as_ref())
+                        .flatten().map(|unwind| unwind.target.clone())
+                });
+            }
             let next = block(&mut self.body, parent)?;
             self.body.blocks.get_mut(point.block).map_err(arena)?.term.kind = TermKind::Br(Target {
                 block: next, args: vec![],
@@ -395,10 +649,21 @@ impl Driver<'_, '_> {
         target: &Target,
         prologue: bool,
         unwind: bool,
+        ordinal: usize,
     ) -> Result<(), OwnError> {
         let original = self.high.blocks.get(target.block).map_err(arena)?;
         let from = self.body.blocks.get(point.block).map_err(arena)?.lexical_scope;
         let plan = edges::EdgePlan::between(self.module, from, Some(original.lexical_scope))?;
+        let closing = plan.close.iter().rev().find(|scope| point.env.scopes.contains_key(scope)).copied();
+        let escaped: Vec<_> = if !prologue && !unwind && closing.is_some() {
+            target.args.iter().filter(|value| self.escaping.get(&(self.current_high, ordinal))
+                .is_some_and(|values| values.contains(value))).copied().collect()
+        } else {
+            vec![]
+        };
+        if !prologue && !unwind && let Some(closing) = closing {
+            point = self.prepare_edge(point, &escaped, closing)?;
+        }
         if !prologue {
             for scope in plan.close {
                 if point.env.scopes.contains_key(&scope) {
@@ -410,6 +675,28 @@ impl Driver<'_, '_> {
                     point = self.emit(point, Operation::Ownership(OwnershipOp::ScopeBegin { scope }))?;
                 }
             }
+        }
+        if !unwind && point.env.cleanup.pending.is_some() {
+            let result = if escaped.len() == 1 {
+                Some(self.high.values.get(escaped[0]).map_err(arena)?.ty)
+            } else {
+                None
+            };
+            let destination = match point.env.cleanup.destination {
+                Some(ExitDestination::Loop(boundary)) => ExitDestination::Loop(boundary),
+                _ => ExitDestination::Scope(original.lexical_scope),
+            };
+            point = self.commit(point, destination, result)?;
+            if let Some(value) = escaped.first().filter(|_| escaped.len() == 1) {
+                point.env.values.insert(*value, LatestValue {
+                    value: point.result(SlotName::Value)?, deps: Some(point.result(SlotName::Deps)?),
+                });
+            }
+            let packet = point.result(SlotName::Packet)?;
+            let state = point.env.scopes[&original.lexical_scope];
+            point = self.emit(point, Operation::Ownership(OwnershipOp::Admit { state, packet }))?;
+            point.env.cleanup.wanted = None;
+            point.env.cleanup.carried.clear();
         }
         if unwind
             && let (Some(parameter), Some(failure)) = (original.params.last(), point.env.cleanup.failure) {
@@ -494,4 +781,18 @@ fn live_in(
             return Ok(live);
         }
     }
+}
+
+/// Rewrite and run the independent Own postcondition. This certifies only the
+/// implemented verifier checks; #564's D8/D17/D18 semantic gate remains external.
+pub fn rewrite_synchronous(output: OwnOutput, options: &OwnOptions) -> Result<OwnOutput, OwnError> {
+    let output = rewrite_subset(output, options)?;
+    if let Err(mut report) = verify_with(&output.module, &options.verify, VerifyContext::default()) {
+        if report.failure == VerifyFailure::Incomplete {
+            return Err(OwnError::IncompleteVerification { report: Box::new(report), stats: Box::new(output.stats) });
+        }
+        finalize::label_borrowed_rebind(&output.module, &mut report);
+        return Err(OwnError::InvalidOutput(Box::new(report)));
+    }
+    Ok(output)
 }

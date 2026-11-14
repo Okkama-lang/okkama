@@ -196,6 +196,7 @@ pub struct FlowState {
     pub provenance: BTreeMap<(ScopeId, Atom), u8>,
     pub latest: BTreeMap<BindingId, BTreeSet<ValueId>>,
     pub binding_deps: BTreeMap<BindingId, BTreeSet<Atom>>,
+    pub defers: BTreeMap<ScopeId, Vec<InstId>>,
 }
 impl FlowState {
     pub fn join(&mut self, other: &Self) -> bool {
@@ -218,6 +219,14 @@ impl FlowState {
         }
         for (binding, deps) in &other.binding_deps {
             self.binding_deps.entry(*binding).or_default().extend(deps);
+        }
+        for (scope, prefix) in &other.defers {
+            let target = self.defers.entry(*scope).or_default();
+            for registration in prefix {
+                if !target.contains(registration) {
+                    target.push(*registration);
+                }
+            }
         }
         *self != old
     }
@@ -251,5 +260,6 @@ impl FlowState {
             + self.journals.len() * 2 + self.provenance.len()
             + self.latest.values().map(BTreeSet::len).sum::<usize>()
             + self.binding_deps.values().map(BTreeSet::len).sum::<usize>()
+            + self.defers.values().map(Vec::len).sum::<usize>()
     }
 }

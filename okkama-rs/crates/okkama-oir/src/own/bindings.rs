@@ -10,6 +10,7 @@ pub enum SsaSlot {
     Linear(u32),
     Binding(BindingId),
     Value(ValueId),
+    ExitValue,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LatestValue {

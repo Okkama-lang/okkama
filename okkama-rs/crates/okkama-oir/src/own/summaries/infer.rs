@@ -7,10 +7,11 @@ impl Universe {
         function: FuncId,
         types: &BTreeMap<TypeId, TypeClassification>,
         budget: &mut Budget<'_>,
-    ) -> Result<Summary, OwnError> {
+    ) -> Result<BodyInference, OwnError> {
         let declaration = module.functions.get(function).map_err(arena)?;
         let body = declaration.body.as_ref().unwrap();
         let mut summary = bottom(module, declaration);
+        let mut replacements = BTreeMap::new();
         budget.memory(body.values.len() * 256 + (body.insts.len() + body.blocks.len()) * 64)?;
         let mut values = vec![normal::empty_relation(); body.values.len()];
         let entry = body.blocks.get(body.entry).map_err(arena)?;
@@ -29,10 +30,32 @@ impl Universe {
             }
         }
         let operations = operations(body);
+        let fields = if module.profile == Profile::High {
+            let graph = super::super::edges::Graph::index(module, body, budget)?;
+            super::super::construction::completion_fields(module, body, &graph, budget)?
+        } else {
+            BTreeMap::new()
+        };
         loop {
             let mut changed = false;
             for (site, op) in &operations {
                 budget.work(1)?;
+                if let Operation::Core(CoreOp::ObjInit { object, field, .. }) = op
+                    && types[&body.values.get(*object).map_err(arena)?.ty].may_own()
+                    && module.declarations.get(field.declaration).is_ok_and(|declaration| {
+                        matches!(&declaration.kind, DeclarationKind::Object { fields, .. }
+                            if fields[field.index as usize].name == "$pending")
+                    }) {
+                    let mut completed = values[object.as_u32() as usize].clone();
+                    if let Site::Instruction(inst) = site
+                        && let Some(fields) = fields.get(inst) {
+                        for value in fields {
+                            normal::relation(&mut completed, &values[value.as_u32() as usize], budget)?;
+                        }
+                    }
+                    completed.fresh.push(site.origin(body, 0, self.strides[&function]));
+                    changed |= join_value(&mut values, *object, &completed, budget)?;
+                }
                 let output = self.operation_relations(module, function, body, *site, op, &values, types, budget)?;
                 if let Site::Instruction(instruction) = site {
                     for (result, relation) in body.insts.get(*instruction).map_err(arena)?.results.iter().zip(&output) {
@@ -71,15 +94,34 @@ impl Universe {
                     produced = self.operation_relations(module, function, body, Site::Terminator(block_id),
                         op, &values, types, budget)?;
                 }
-                let mut invoke = |target: &InvokeEdge, normal: bool| -> Result<(), OwnError> {
+                let mut deferred = vec![];
+                if let TermKind::InvokeDefer { function: callee, call, replacements, .. } = &block.term.kind {
+                    let actuals: Vec<_> = call.args.iter().map(|arg| values[arg.value.as_u32() as usize].clone())
+                        .collect();
+                    for replacement in replacements {
+                        let relation = self.replacement_relation(function, body, Site::Terminator(block_id),
+                            *callee, &replacement.label, &actuals, budget)?;
+                        let labels = module.functions.get(*callee).map_err(arena)?.attrs.iter().find_map(|attr| {
+                            if let FunctionAttr::DeferEntry { replacements } = attr { Some(replacements) } else { None }
+                        }).ok_or_else(|| budget.fail(OwnDiagnosticKind::MissingBoundary, "D8 entry has no labels"))?;
+                        let has_value = labels.iter().find(|label| label.label == replacement.label)
+                            .is_some_and(|label| label.result.is_some());
+                        let mut slots = vec![];
+                        if has_value {
+                            slots.push(relation);
+                        }
+                        slots.extend([normal::empty_relation(), normal::empty_relation()]);
+                        deferred.push(slots);
+                    }
+                }
+                let mut invoke = |target: &InvokeEdge, produced: &[ResultRelation]| -> Result<(), OwnError> {
                     for (parameter, argument) in body.blocks.get(target.block).map_err(arena)?.params.iter()
                         .zip(&target.args) {
                         let relation = match argument {
                             EdgeArg::Value(value) => values[value.as_u32() as usize].clone(),
-                            EdgeArg::Produced(result) if normal => {
+                            EdgeArg::Produced(result) => {
                                 produced.get(usize::from(result.slot)).cloned().unwrap_or_else(normal::empty_relation)
                             }
-                            _ => normal::empty_relation(),
                         };
                         changed |= join_value(&mut values, *parameter, &relation, budget)?;
                     }
@@ -87,19 +129,19 @@ impl Universe {
                 };
                 match &block.term.kind {
                     TermKind::InvokeOwn { normal, unwind, .. } => {
-                        invoke(normal, true)?;
-                        invoke(unwind, false)?;
+                        invoke(normal, &produced)?;
+                        invoke(unwind, &[])?;
                     }
                     TermKind::InvokeDefer { continue_edge, replacements, unwind, .. } => {
-                        invoke(continue_edge, false)?;
-                        for replacement in replacements {
-                            invoke(&replacement.edge, false)?;
+                        invoke(continue_edge, &[])?;
+                        for (replacement, produced) in replacements.iter().zip(&deferred) {
+                            invoke(&replacement.edge, produced)?;
                         }
                         if let Some(unwind) = unwind {
-                            invoke(unwind, false)?;
+                            invoke(unwind, &[])?;
                         }
                     }
-                    TermKind::Catch { handler, .. } => invoke(handler, false)?,
+                    TermKind::Catch { handler, .. } => invoke(handler, &[])?,
                     TermKind::Lookup { .. } => {
                         // Lookup projections select elements, preserving full
                         // actual deps. Its one produced slot is handled below.
@@ -130,6 +172,14 @@ impl Universe {
         }
         for (site, op) in operations {
             budget.work(1)?;
+            if module.profile == Profile::High && matches!(op,
+                Operation::Lexical(LexicalOp::Bind { .. } | LexicalOp::Rebind { .. } | LexicalOp::Stage { .. })
+                    | Operation::Exit(ExitOp::Prepare { .. }))
+                && cfg::operation_uses(op, body).is_ok_and(|uses| uses.iter().any(|operand| {
+                    body.values.get(operand.value).is_ok_and(|value| types[&value.ty].may_own())
+                })) {
+                normal::failures(&mut summary.contract.failures, &[FailureKind::Program]);
+            }
             if let Some(callee) = self.call_summary(function, site) {
                 normal::failures(&mut summary.contract.failures, &callee.contract.failures);
                 summary.contract.suspends |= callee.contract.suspends;
@@ -163,6 +213,18 @@ impl Universe {
         }
         for (block_id, block) in body.blocks.iter() {
             match &block.term.kind {
+                TermKind::RetDefer { tag: DeferReturnTag::Replace(label), values: returned } => {
+                    // The tagged ABI's ordinary result is void. Replacement
+                    // values still retain inputs at the declared label outcome.
+                    for value in returned.iter().filter(|value| body.values.get(**value).is_ok_and(|value| {
+                        !language(module, &[value.ty]).is_empty()
+                    })) {
+                        let relation = replacements.entry(label.clone()).or_insert_with(normal::empty_relation);
+                        normal::relation(relation, &values[value.as_u32() as usize], budget)?;
+                        retain_inputs(&mut summary, &values[value.as_u32() as usize],
+                            TransferDestination::Result, budget)?;
+                    }
+                }
                 TermKind::Ret { values: returned } | TermKind::RetDefer { values: returned, .. } => {
                     let returned = returned.iter().filter(|value| body.values.get(**value).is_ok_and(|value| {
                         !language(module, &[value.ty]).is_empty()
@@ -186,6 +248,36 @@ impl Universe {
                     }
                 }
                 _ => {}
+            }
+        }
+        if module.profile == Profile::High {
+            let mut bindings: BTreeMap<BindingId, ResultRelation> = BTreeMap::new();
+            for (_, instruction) in body.insts.iter() {
+                if let Operation::Lexical(LexicalOp::Bind { binding, value }
+                    | LexicalOp::Rebind { binding, value, .. }) = instruction.op {
+                    let relation = bindings.entry(binding).or_insert_with(normal::empty_relation);
+                    normal::relation(relation, &values[value.as_u32() as usize], budget)?;
+                }
+            }
+            for (inst, instruction) in body.insts.iter() {
+                if let Operation::Lexical(LexicalOp::DeferRegister { action, .. }) = &instruction.op {
+                    let mut actuals: Vec<_> = action.captures.iter().map(|value| {
+                        values[value.as_u32() as usize].clone()
+                    }).collect();
+                    for binding in &action.bindings {
+                        actuals.push(bindings.get(binding).cloned().unwrap_or_else(normal::empty_relation));
+                    }
+                    for mapping in &action.replacements {
+                        if mapping.kind != ExitKind::Return {
+                            continue;
+                        }
+                        let relation = self.replacement_relation(function, body, Site::Instruction(inst),
+                            action.function, &mapping.label, &actuals, budget)?;
+                        if let Some(result) = summary.results.first_mut() {
+                            normal::relation(result, &relation, budget)?;
+                        }
+                    }
+                }
             }
         }
         if summary.entry_kind == EntryKind::CallBoundary {
@@ -222,7 +314,40 @@ impl Universe {
             }
         }
         normal::normalize(&mut summary, budget)?;
-        Ok(summary)
+        Ok(BodyInference { summary, replacements })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn replacement_relation(
+        &self,
+        function: FuncId,
+        body: &Body,
+        site: Site,
+        callee: FuncId,
+        label: &str,
+        actuals: &[ResultRelation],
+        budget: &mut Budget<'_>,
+    ) -> Result<ResultRelation, OwnError> {
+        let source = self.replacements.get(&(callee, label.to_owned())).ok_or_else(|| {
+            budget.fail(OwnDiagnosticKind::MissingBoundary, "D8 replacement has no local tagged result equation")
+        })?;
+        let arguments: Vec<_> = (0..actuals.len()).map(|index| ValueId::from_u32(index as u32)).collect();
+        let mut result = normal::empty_relation();
+        for selection in &source.aliases {
+            let selected = instantiate(selection, &arguments, actuals, budget)?;
+            normal::relation(&mut result, &selected, budget)?;
+        }
+        for dep in &source.external_deps {
+            if let Some(actual) = actuals.get(usize::from(*dep)) {
+                result.external_deps.extend_from_slice(&actual.external_deps);
+            }
+        }
+        if !source.fresh.is_empty() {
+            budget.work(body.keys.len() + body.insts.len() + body.blocks.len())?;
+            result.fresh.push(site.origin(body, 0, self.strides[&function]));
+            result.provenance = source.provenance;
+        }
+        Ok(result)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -278,7 +403,7 @@ impl Universe {
         let mut results = vec![normal::empty_relation(); contract.normal.results.len()];
         for rule in &contract.normal.retention {
             if let Some(index) = contract.normal.results.iter().position(|slot| slot.name == rule.result) {
-                let retained = retention(&rule.selection, values, budget)?;
+                let retained = retention(module, body, &rule.selection, values, budget)?;
                 normal::relation(&mut results[index], &retained, budget)?;
             }
         }
@@ -408,6 +533,11 @@ fn project_relation(
     budget: &mut Budget<'_>,
 ) -> Result<ResultRelation, OwnError> {
     let mut result = relation.clone();
+    if field.is_some() {
+        // A field selection retains its own graph. Whole-parameter external
+        // deps would also retain the container's identity at an escape.
+        result.external_deps.clear();
+    }
     result.aliases.clear();
     for selection in normal::selections(&relation.aliases, budget)? {
         let parameter = normal::parameter(&selection);
@@ -467,6 +597,8 @@ fn instantiate(
 }
 
 fn retention(
+    module: &Module,
+    body: &Body,
     retention: &Retention,
     values: &[ResultRelation],
     budget: &mut Budget<'_>,
@@ -493,9 +625,24 @@ fn retention(
         Retention::ArrayReplace { array, value, .. } => vec![*array, *value],
         Retention::MapMerge(inputs) | Retention::Union(inputs) | Retention::CarrierGraph(inputs) => inputs.clone(),
         Retention::ObjectFields { object, updates } => {
-            let mut inputs = vec![*object];
-            inputs.extend(updates.iter().map(|update| update.value));
-            inputs
+            let ty = body.values.get(*object).map_err(arena)?.ty;
+            let Type::Object { decl, .. } = module.types.get(ty).map_err(arena)? else {
+                return Err(flow_error("successor receiver is not an object"));
+            };
+            let DeclarationKind::Object { fields, .. } = &module.declarations.get(*decl).map_err(arena)?.kind else {
+                return Err(flow_error("successor receiver has no field layout"));
+            };
+            let mut result = normal::empty_relation();
+            for index in 0..fields.len() {
+                let field = FieldRef { declaration: *decl, index: index as u32 };
+                let actual = if let Some(update) = updates.iter().find(|update| update.field == field) {
+                    values[update.value.as_u32() as usize].clone()
+                } else {
+                    project_relation(&values[object.as_u32() as usize], Some(field), false, budget)?
+                };
+                normal::relation(&mut result, &actual, budget)?;
+            }
+            return Ok(result);
         }
         Retention::Entries(entries) => entries.iter().flat_map(|(key, value)| [*key, *value]).collect(),
     };

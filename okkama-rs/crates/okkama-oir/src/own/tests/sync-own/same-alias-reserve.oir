@@ -1,0 +1,39 @@
+oir 2 own
+module same_alias_reserve
+object R {
+    destroy @destroy
+}
+scope SD action in @destroy
+scope S action in @f
+scope SI block in @f parent S
+summary MD observation parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(publication=atomic)
+summary MF internal parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(failures=[program], publication=atomic)
+func @destroy(%self: R facts(managed(deps=dD))) -> void [destroy R] abi observation summary(MD) {
+    dependency dD: dependency = retention(value=%self, selection=selection(%self))
+    ^entry in SD:
+    ret
+}
+func @f(%r: R facts(managed(deps=dR)), %input: own, %failure: failure) -> failure summary(MF) {
+    dependency dR: dependency = retention(value=%r, selection=selection(%r))
+    boundary B0 lexical in S
+    ^entry in S:
+    %outer: scope<S> = scope.begin S
+    %inner: scope<SI> = scope.begin SI
+    %bound: scope<SI> = own.accept %inner, %input
+    invoke.own scope.split %bound, selection(%r)
+        normal ^prepare($state, $selected, $external_deps, %outer)
+        unwind ^split_failed($state, $failure, %outer)
+    ^prepare(%qi: scope<SI>, %part: own, %full: deps, %qo: scope<S>) in S:
+    %pending: pending = exit.prepare return %r, %part, deps(%full) at B0
+    (%closed: closed, %reserved: pending) = scope.end %qi, reserve %pending, effects scope_effects(failures=[], suspends=false, cancel=false)
+    %empty: own = own.empty
+    %deps: deps = deps.of %r
+    (%next: pending, %rest: own) = exit.replace %reserved, replacement prepared_exit(kind=return, value=some(%r), packet=some(%empty), deps=some(%deps), selection=selection(%r), boundary=B0)
+    %restored: scope<S> = own.accept %qo, %rest
+    %final: failure = scope.unwind %restored, %failure, reserve %next, effects scope_effects(failures=[], suspends=false, cancel=false)
+    ret %final
+    ^split_failed(%qi_error: scope<SI>, %split_error: failure, %qo_error: scope<S>) in S:
+    %inner_failure: failure = scope.unwind %qi_error, %split_error, effects scope_effects(failures=[], suspends=false, cancel=false)
+    %propagated: failure = scope.unwind %qo_error, %inner_failure, effects scope_effects(failures=[], suspends=false, cancel=false)
+    ret %propagated
+}

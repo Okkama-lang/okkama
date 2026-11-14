@@ -47,6 +47,27 @@ pub struct SemanticEdge {
     pub plan: EdgePlan,
 }
 
+/// D11 is authoritative when present. Legacy lowering copies have preparation
+/// intents instead; ordinary SSA forwarding alone never authorizes an escape.
+pub(super) fn wanted(body: &Body, edge: &SemanticEdge) -> Result<BTreeSet<ValueId>, OwnError> {
+    let ordinal = u16::try_from(edge.ordinal).ok();
+    let records: Vec<_> = body.high_results.iter().filter(|record| record.block == edge.source
+        && ordinal.is_some_and(|ordinal| record.edge == HighEdgeSelector::Normal(ordinal))).collect();
+    if !records.is_empty() {
+        return Ok(records.into_iter().filter(|record| record.demand == ResultDemand::Want)
+            .map(|record| record.value).collect());
+    }
+    let mut result = BTreeSet::new();
+    for inst in &body.blocks.get(edge.source).map_err(arena)?.insts {
+        if let Operation::Exit(ExitOp::Prepare { exit }) = &body.insts.get(*inst).map_err(arena)?.op
+            && let Some(value) = exit.value
+            && edge.plan.close.contains(&body.boundaries.get(exit.boundary).map_err(arena)?.scope) {
+            result.insert(value);
+        }
+    }
+    Ok(result)
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct Graph {
     pub edges: Vec<SemanticEdge>,
@@ -68,27 +89,50 @@ impl Graph {
                     targets.extend(cases.iter().map(|case| (&case.target, false, None)));
                     targets.push((default, false, None));
                 }
-                TermKind::Ret { .. } | TermKind::Raise(_) | TermKind::Trap { .. } | TermKind::Unreachable => {}
-                _ => return Err(commit3("CFG terminator")),
+                TermKind::Catch { handler, next, .. } => {
+                    let args = handler.args.iter().filter_map(|arg| match arg {
+                        EdgeArg::Value(value) => Some(*value),
+                        EdgeArg::Produced(_) => None,
+                    }).collect();
+                    let destination = body.blocks.get(handler.block).map_err(arena)?.lexical_scope;
+                    edges.push(SemanticEdge {
+                        source, target: handler.block, ordinal: 0, failure_point: None, args,
+                        unwind: false, plan: EdgePlan::between(module, block.lexical_scope, Some(destination))?,
+                    });
+                    targets.push((next, false, None));
+                }
+                TermKind::Ret { .. } | TermKind::RetDefer { .. } | TermKind::Raise(_) => {}
+                TermKind::Throw(_) | TermKind::Panic(_) | TermKind::Trap { .. } => {
+                    if let Some(unwind) = &block.unwind {
+                        targets.push((&unwind.target, true, None));
+                    }
+                }
+                TermKind::Unreachable => {}
+                _ => return Err(flow_error("High CFG contains an unsupported terminator")),
             }
             if let Some(unwind) = &block.unwind {
+                targets.push((&unwind.target, true, None));
                 for inst in &block.insts {
                     let operation = &body.insts.get(*inst).map_err(arena)?.op;
                     let schema = ContractRegistry::new(module)
                         .high_site_schema(operation, body, HighOperationSite::Instruction(*inst))
                         .map_err(|error| flow_error(format!("contract: {error}")))?;
-                    if schema.unwind.is_some() {
+                    if schema.unwind.is_some() || matches!(operation, Operation::Call(_)
+                        | Operation::Lexical(LexicalOp::Bind { .. } | LexicalOp::Rebind { .. }
+                            | LexicalOp::Stage { .. })) {
                         targets.push((&unwind.target, true, Some(*inst)));
                     }
                 }
             }
+            let offset = usize::from(matches!(block.term.kind, TermKind::Catch { .. }));
             for (ordinal, (target, unwind, failure_point)) in targets.into_iter().enumerate() {
                 budget.work(1 + target.args.len())?;
                 let destination = body.blocks.get(target.block).map_err(arena)?.lexical_scope;
                 let plan = EdgePlan::between(module, block.lexical_scope, Some(destination))?;
                 budget.memory(128 + target.args.len() * 4 + (plan.close.len() + plan.begin.len()) * 4)?;
                 edges.push(SemanticEdge {
-                    source, target: target.block, ordinal, failure_point, args: target.args.clone(), unwind, plan,
+                    source, target: target.block, ordinal: ordinal + offset, failure_point,
+                    args: target.args.clone(), unwind, plan,
                 });
             }
         }

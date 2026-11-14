@@ -9,6 +9,9 @@ pub struct FunctionAnalysis {
     pub equations: Equations,
     pub value_shapes: BTreeMap<ValueId, ShapeId>,
     pub entries: BTreeMap<BlockId, FlowState>,
+    pub before_edges: BTreeMap<BlockId, FlowState>,
+    /// Possible original admission owners of a pre-accept construction packet.
+    pub constructor_inputs: BTreeMap<InstId, BTreeSet<ScopeId>>,
     pub outcomes: Vec<(SemanticEdge, FlowState)>,
     pub evaluations: usize,
     /// Upper bound on strict product ascents per program point. Set membership
@@ -99,7 +102,7 @@ pub fn analyze_function(
         budget.work(1)?;
         evaluations += 1;
         let outgoing = transfer(module, body, block, entries[&block].clone(), &graph,
-            &value_shapes, classification, &mut budget)?;
+            &value_shapes, classification, &mut budget, None, None)?;
         for (edge, state) in outgoing {
             budget.work(state.stored_facts())?;
             let changed = if let Some(previous) = entries.get_mut(&edge.target) {
@@ -127,14 +130,31 @@ pub fn analyze_function(
     }
     // Replay once at the fixed point. No provisional diagnostics or output.
     let mut outcomes = vec![];
+    let mut before_edges = BTreeMap::new();
+    let mut constructor_inputs = BTreeMap::new();
     for block in &graph.rpo {
         if let Some(entry) = entries.get(block) {
             outcomes.extend(transfer(module, body, *block, entry.clone(), &graph,
-                &value_shapes, classification, &mut budget)?);
+                &value_shapes, classification, &mut budget, Some(&mut before_edges), Some(&mut constructor_inputs))?);
+        }
+    }
+    for (edge, state) in &outcomes {
+        let target = body.blocks.get(edge.target).map_err(arena)?;
+        let incoming = &entries[&edge.target].defers;
+        budget.work(1 + state.defers.values().map(Vec::len).sum::<usize>()
+            + incoming.values().map(Vec::len).sum::<usize>())?;
+        let terminal_handler = target.insts.is_empty() && edge.args.is_empty()
+            && matches!(target.term.kind, TermKind::Raise(value) if target.params.last() == Some(&value));
+        if !terminal_handler && &state.defers != incoming {
+            return Err(flow_error(format!(
+                "defer prefixes differ at live join {:?}; conditional registration needs CFG specialization",
+                edge.target,
+            )));
         }
     }
     Ok(FunctionAnalysis {
-        equations, value_shapes, entries, outcomes, evaluations, height_bound, stats: budget.stats,
+        equations, value_shapes, entries, before_edges, constructor_inputs, outcomes, evaluations,
+        height_bound, stats: budget.stats,
     })
 }
 
@@ -147,10 +167,20 @@ fn managed(body: &Body, value: ValueId, classification: &OwnAnalysis) -> Result<
 /// singleton current admission permits a strong source update. Otherwise both
 /// possible locations retain Maybe facts; runtime scope.split chooses contents.
 fn bind_admission(state: &mut FlowState, owner: ScopeId, deps: &BTreeSet<Atom>) {
+    transfer_selected(state, owner, deps, true, 2);
+}
+
+fn transfer_selected(
+    state: &mut FlowState,
+    owner: ScopeId,
+    deps: &BTreeSet<Atom>,
+    admissible: bool,
+    provenance: u8,
+) {
     let moving: Vec<_> = state.journals.keys().filter(|(scope, atom)| {
         *scope != owner && deps.contains(atom)
             && state.journals[&(*scope, *atom)].multiplicity != Multiplicity::Bottom
-            && state.provenance.get(&(*scope, *atom)).is_some_and(|mask| mask & 1 != 0)
+            && (!admissible || state.provenance.get(&(*scope, *atom)).is_some_and(|mask| mask & 1 != 0))
     }).copied().collect();
     for key in moving {
         let quantity = state.journals[&key];
@@ -172,9 +202,9 @@ fn bind_admission(state: &mut FlowState, owner: ScopeId, deps: &BTreeSet<Atom>) 
         if let Some(quantity) = state.journals.get(&(owner, *atom)) {
             let mask = state.provenance.entry((owner, *atom)).or_default();
             if deps.len() == 1 && atom.incarnation == Incarnation::Current && *quantity == Quantity::ONE {
-                *mask = 2;
+                *mask = provenance;
             } else {
-                *mask |= 2;
+                *mask |= provenance;
             }
         }
     }
@@ -190,6 +220,8 @@ fn transfer(
     shapes: &BTreeMap<ValueId, ShapeId>,
     classification: &OwnAnalysis,
     budget: &mut Budget<'_>,
+    snapshots: Option<&mut BTreeMap<BlockId, FlowState>>,
+    mut constructor_inputs: Option<&mut BTreeMap<InstId, BTreeSet<ScopeId>>>,
 ) -> Result<Vec<(SemanticEdge, FlowState)>, OwnError> {
     let data = body.blocks.get(block).map_err(arena)?;
     let edges: Vec<_> = graph.outgoing[block.as_u32() as usize].iter().map(|index| &graph.edges[*index]).collect();
@@ -200,6 +232,29 @@ fn transfer(
             outcomes.push(((*edge).clone(), edge_state(module, body, edge, state.clone())?));
         }
         let instruction = body.insts.get(*inst).map_err(arena)?;
+        if let Some(inputs) = constructor_inputs.as_deref_mut() {
+            let fields = match &instruction.op {
+                Operation::Core(CoreOp::ObjNew { fields, construction: ConstructionStatus::Complete, .. }) => {
+                    Some(fields.clone())
+                }
+                Operation::Core(CoreOp::ObjNext { updates, .. }) => {
+                    Some(updates.iter().map(|field| field.value).collect())
+                }
+                _ => None,
+            };
+            if let Some(fields) = fields {
+                let deps: BTreeSet<_> = fields.iter().flat_map(|value| {
+                    state.values[value.as_u32() as usize].deps.iter().copied()
+                }).collect();
+                let owners: BTreeSet<_> = state.journals.iter().filter(|((scope, atom), quantity)| {
+                    deps.contains(atom) && !matches!(quantity.presence, Presence::Absent | Presence::Bottom)
+                        && state.provenance.get(&(*scope, *atom)).is_some_and(|mask| mask & 1 != 0)
+                }).map(|((scope, _), _)| *scope).collect();
+                budget.work(1 + deps.len() + state.journals.len())?;
+                budget.memory(32 + owners.len() * 16)?;
+                inputs.insert(*inst, owners);
+            }
+        }
         match &instruction.op {
             Operation::Const(_) => {}
             Operation::Core(CoreOp::RangeNew { .. } | CoreOp::Undef { .. }) => {}
@@ -239,7 +294,58 @@ fn transfer(
                 bind_admission(&mut state, owner, &deps);
                 state.latest.insert(*binding, BTreeSet::from([*value]));
             }
-            Operation::Lexical(LexicalOp::Temp { .. }) => {}
+            Operation::Lexical(LexicalOp::Temp { .. } | LexicalOp::Want { .. }
+                | LexicalOp::Discard { .. })
+            | Operation::Exit(ExitOp::Prepare { .. }) => {}
+            Operation::Lexical(LexicalOp::DeferRegister { scope, .. }) => {
+                let prefix = state.defers.entry(*scope).or_default();
+                if !prefix.contains(inst) {
+                    prefix.push(*inst);
+                }
+            }
+            Operation::Lexical(LexicalOp::Stage { action, value, .. }) => {
+                let deps = state.values[value.as_u32() as usize].deps.clone();
+                transfer_selected(&mut state, *action, &deps, false, 4);
+            }
+            Operation::Core(CoreOp::ObjNew { construction: ConstructionStatus::Incomplete, .. }) => {
+                for result in &instruction.results {
+                    if managed(body, *result, classification)? {
+                        state.values[result.as_u32() as usize].deps.insert(Atom::current(shapes[result]));
+                    }
+                }
+            }
+            Operation::Core(CoreOp::ObjInit { object, field, value, .. }) => {
+                let incoming = state.values[value.as_u32() as usize].deps.clone();
+                state.values[object.as_u32() as usize].deps.extend(incoming);
+                if module.declarations.get(field.declaration).is_ok_and(|declaration| {
+                    matches!(&declaration.kind, DeclarationKind::Object { fields, .. }
+                        if fields[field.index as usize].name == "$pending")
+                }) {
+                    let owner = super::edges::stack(module, data.lexical_scope)?[0];
+                    let atom = Atom::current(shapes[object]);
+                    state.journals.insert((owner, atom), Quantity::ONE);
+                    state.provenance.insert((owner, atom), 1);
+                }
+            }
+            Operation::Call(_) | Operation::Core(CoreOp::ObjNext { .. }
+                | CoreOp::ObjGet { .. } | CoreOp::ObjPending { .. } | CoreOp::SuccTake { .. }) => {
+                let mut deps = BTreeSet::new();
+                for operand in cfg::operation_uses(&instruction.op, body)
+                    .map_err(|error| flow_error(format!("operands: {error}")))? {
+                    deps.extend(&state.values[operand.value.as_u32() as usize].deps);
+                }
+                for result in &instruction.results {
+                    if managed(body, *result, classification)? {
+                        let origin = shapes[result];
+                        state.retire(origin);
+                        let atom = Atom::current(origin);
+                        state.values[result.as_u32() as usize].deps = deps.clone();
+                        state.values[result.as_u32() as usize].deps.insert(atom);
+                        state.journals.insert((data.lexical_scope, atom), Quantity::ONE);
+                        state.provenance.insert((data.lexical_scope, atom), 1);
+                    }
+                }
+            }
             Operation::Core(_) if instruction.results.iter().all(|value| {
                 !classification.types.get(&body.values.get(*value).unwrap().ty)
                     .is_some_and(TypeClassification::may_own)
@@ -248,7 +354,7 @@ fn transfer(
                     .is_some_and(TypeClassification::may_own),
                 _ => false,
             }) => {}
-            _ => return Err(commit3(instruction.op.opcode())),
+            _ => return Err(unsupported(&instruction.op)),
         }
         for value in &instruction.results {
             let masks = &mut state.values[value.as_u32() as usize].masks;
@@ -258,6 +364,11 @@ fn transfer(
                 masks.must_use = 2;
             }
         }
+    }
+    if let Some(snapshots) = snapshots {
+        budget.work(state.stored_facts())?;
+        budget.memory(state.stored_facts() * 64)?;
+        snapshots.insert(block, state.clone());
     }
     for edge in edges.iter().filter(|edge| edge.failure_point.is_none()) {
         outcomes.push(((*edge).clone(), edge_state(module, body, edge, state.clone())?));
@@ -273,7 +384,22 @@ fn edge_state(
 ) -> Result<FlowState, OwnError> {
     // Read all outgoing references first, then bind every phi simultaneously.
     let arguments: Vec<_> = edge.args.iter().map(|value| state.values[value.as_u32() as usize].clone()).collect();
+    if !edge.unwind && !edge.plan.close.is_empty() {
+        let wanted = super::edges::wanted(body, edge)?;
+        let deps: BTreeSet<_> = edge.args.iter().zip(&arguments).filter(|(value, _)| wanted.contains(value))
+            .flat_map(|(_, value)| value.deps.iter().copied()).collect();
+        let destination = body.blocks.get(edge.target).map_err(arena)?.lexical_scope;
+        let moving: Vec<_> = state.journals.iter().filter(|((scope, atom), _)| {
+            edge.plan.close.contains(scope) && deps.contains(atom)
+        }).map(|(key, quantity)| (*key, *quantity)).collect();
+        for ((_, atom), quantity) in moving {
+            let target = state.journals.entry((destination, atom)).or_default();
+            *target = target.append(quantity);
+            state.provenance.insert((destination, atom), 1);
+        }
+    }
     for scope in &edge.plan.close {
+        state.defers.remove(scope);
         state.journals.retain(|(owner, _), _| owner != scope);
         state.provenance.retain(|(owner, _), _| owner != scope);
         state.latest.retain(|binding, _| body.bindings.get(*binding).is_ok_and(|decl| decl.scope != *scope));

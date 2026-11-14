@@ -382,7 +382,7 @@ fn h1_rejects_internal_edge_to_iteration_entry_before_analysis() {
 }
 
 #[test]
-fn unsupported_subset_is_a_commit3_error_and_budget_boundaries_are_exact() {
+fn scalar_preparation_is_erased_and_budget_boundaries_are_exact() {
     let (module, _, _, _, _) = loop_input(true);
     let output = analyzed(module);
     let high = output.module.clone();
@@ -410,8 +410,7 @@ fn unsupported_subset_is_a_commit3_error_and_budget_boundaries_are_exact() {
     builder.terminate(TermKind::Ret { values: vec![value] }).unwrap();
     let body = builder.finish().unwrap();
     module.define_function(function, body).unwrap();
-    let error = rewrite_subset(analyzed(module.finish().unwrap()), &OwnOptions::default()).unwrap_err();
-    assert!(error.to_string().contains("commit 3"));
+    checked(analyzed(module.finish().unwrap()));
 }
 
 #[test]

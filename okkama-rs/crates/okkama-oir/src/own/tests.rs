@@ -797,3 +797,5 @@ fn native_lookup_receives_the_actual_substitution_before_the_universe_is_frozen(
 }
 
 mod machinery;
+
+mod synchronous;

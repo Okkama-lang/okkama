@@ -108,6 +108,12 @@ pub(super) fn inventory(
                         }
                     }
                 }
+                if let Operation::Call(CallOp::Direct { function, .. } | CallOp::Native { function, .. }
+                    | CallOp::Intrinsic { function, .. }) = op
+                    && module.functions.get(*function).is_ok_and(|function| function.body.is_none())
+                    && external.get(function).is_some_and(|summary| summary.entry_kind == EntryKind::CallBoundary) {
+                    scopes.get_mut(&block.lexical_scope).unwrap().blockers.insert(ElisionBlocker::ExplicitTransport);
+                }
                 match op {
                     Operation::Core(CoreOp::ObjInit { object, field, .. }) => {
                         if module.declarations.get(field.declaration).is_ok_and(|declaration| {
@@ -115,7 +121,11 @@ pub(super) fn inventory(
                                 if fields.get(field.index as usize).is_some_and(|field| field.name == "$pending"))
                         }) {
                             let ty = body.values.get(*object).map_err(arena)?.ty;
-                            add_type(&mut scopes, block.lexical_scope, ty, types, ElisionBlocker::Obligation);
+                            let mut owner = block.lexical_scope;
+                            while let Some(parent) = module.scopes.get(owner).map_err(arena)?.parent {
+                                owner = parent;
+                            }
+                            add_type(&mut scopes, owner, ty, types, ElisionBlocker::Obligation);
                         }
                     }
                     Operation::Lexical(LexicalOp::Bind { binding, value }) => {
@@ -196,6 +206,27 @@ pub(super) fn inventory(
                         }
                     }
                     _ => {}
+                }
+            }
+            let targets: Vec<_> = match &block.term.kind {
+                TermKind::Br(target) => vec![target],
+                TermKind::Cond { yes, no, .. } => vec![yes, no],
+                TermKind::Switch { cases, default, .. } => cases.iter().map(|case| &case.target)
+                    .chain(std::iter::once(default)).collect(),
+                _ => vec![],
+            };
+            for target in targets {
+                let destination = body.blocks.get(target.block).map_err(arena)?.lexical_scope;
+                let plan = edges::EdgePlan::between(module, block.lexical_scope, Some(destination))?;
+                if plan.close.is_empty() {
+                    continue;
+                }
+                for value in &target.args {
+                    budget.work(1)?;
+                    if offered[value.as_u32() as usize] {
+                        let ty = body.values.get(*value).map_err(arena)?.ty;
+                        add_type(&mut scopes, destination, ty, types, ElisionBlocker::Obligation);
+                    }
                 }
             }
         }

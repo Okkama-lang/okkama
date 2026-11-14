@@ -6,7 +6,17 @@ use std::collections::BTreeSet;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CleanupContext {
     pub failure: Option<ValueId>,
+    pub primary_before_failure: Option<ValueId>,
     pub pending: Option<ValueId>,
+    /// High identity of the current reserved result.
+    pub wanted: Option<ValueId>,
+    /// Simultaneous language values crossing a CFG edge, selected as one union.
+    pub carried: Vec<ValueId>,
+    /// A replacement return can abandon a void or differently typed edge.
+    pub replacement: Option<LatestValue>,
+    pub returning: bool,
+    pub destination: Option<ExitDestination>,
+    pub defers: BTreeMap<ScopeId, Vec<InstId>>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LiveEnv {
@@ -16,6 +26,10 @@ pub struct LiveEnv {
     /// Source names map to their current SSA references and complete deps.
     pub values: BTreeMap<ValueId, LatestValue>,
     pub cleanup: CleanupContext,
+    /// High references needed by the original exceptional continuation.
+    pub unwind_values: Option<BTreeSet<ValueId>>,
+    /// A returned pre-accept construction packet keeps its original admission.
+    pub restore_to: BTreeMap<ValueId, ScopeId>,
 }
 impl LiveEnv {
     pub fn all_linear(&self) -> BTreeSet<ValueId> {
@@ -200,7 +214,7 @@ impl<'a> OutcomeEmitter<'a> {
             .map_err(|error| flow_error(format!("outcome type: {error}")))).collect()
     }
     #[allow(clippy::too_many_arguments)]
-    fn landing(
+    pub(super) fn landing(
         &mut self,
         module: &mut Module,
         body: &mut Body,
@@ -212,6 +226,25 @@ impl<'a> OutcomeEmitter<'a> {
         op: &Operation,
         result_deps: &[(SlotName, DepExprId)],
     ) -> Result<(Landing, InvokeEdge), OwnError> {
+        let filtered;
+        let env = if outcome == Outcome::Unwind && env.unwind_values.is_some() {
+            let mut next = env.clone();
+            next.values.retain(|value, _| next.unwind_values.as_ref().unwrap().contains(value));
+            if let Operation::Ownership(OwnershipOp::ScopeEnd { state, .. }) = op {
+                let ty = body.values.get(*state).map_err(arena)?.ty;
+                if let Type::Service(ServiceType::Scope(owner)) = module.types.get(ty).map_err(arena)? {
+                    next.bindings.retain(|binding, _| body.bindings.get(*binding)
+                        .is_ok_and(|binding| binding.scope != *owner));
+                }
+                next.cleanup.wanted = None;
+                next.cleanup.carried.clear();
+                next.cleanup.replacement = None;
+            }
+            filtered = next;
+            &filtered
+        } else {
+            env
+        };
         let target = block(body, scope)?;
         let mut results = vec![];
         let mut args = vec![];
@@ -222,7 +255,7 @@ impl<'a> OutcomeEmitter<'a> {
             args.push(EdgeArg::Produced(EdgeResult { outcome, slot }));
         }
         let mut carry: BTreeSet<_> = env.all_linear().difference(consumed).copied().collect();
-        for latest in env.values.values().chain(env.bindings.values()) {
+        for latest in env.values.values().chain(env.bindings.values()).chain(env.cleanup.replacement.iter()) {
             if consumed.contains(&latest.value) {
                 return Err(flow_error("consumed linear value used as a copyable binding"));
             }
@@ -230,6 +263,7 @@ impl<'a> OutcomeEmitter<'a> {
             carry.extend(latest.deps);
         }
         carry.extend(env.cleanup.failure);
+        carry.extend(env.cleanup.primary_before_failure);
         if let Some(pending) = env.cleanup.pending
             && !consumed.contains(&pending) {
             carry.insert(pending);
@@ -241,7 +275,7 @@ impl<'a> OutcomeEmitter<'a> {
             forwarded.insert(*value, next);
             args.push(EdgeArg::Value(*value));
         }
-        for latest in env.values.values().chain(env.bindings.values()) {
+        for latest in env.values.values().chain(env.bindings.values()).chain(env.cleanup.replacement.iter()) {
             if let Some(deps) = latest.deps {
                 let value = forwarded[&latest.value];
                 let expression = body.deps.alloc(DepExpr::FromSsa(forwarded[&deps])).map_err(arena)?;
@@ -264,7 +298,8 @@ impl<'a> OutcomeEmitter<'a> {
         let deps_ssa = results.iter().find(|(slot, _)| *slot == SlotName::Deps).map(|(_, value)| *value);
         for (slot, value) in results {
             let ty = body.values.get(*value).map_err(arena)?.ty;
-            if !self.managed.contains(&ty) {
+            if !self.managed.contains(&ty)
+                || matches!(module.types.get(ty).map_err(arena)?, Type::Service(_) | Type::Descriptor) {
                 continue;
             }
             let deps = if let Some((_, deps)) = result_deps.iter().find(|(name, _)| name == slot) {
@@ -272,21 +307,37 @@ impl<'a> OutcomeEmitter<'a> {
                 *deps
             } else if let Some(deps) = deps_ssa {
                 body.deps.alloc(DepExpr::FromSsa(deps)).map_err(arena)?
-            } else if *slot == SlotName::Value && matches!(op,
-                Operation::Core(CoreOp::ObjNew { .. } | CoreOp::ObjNext { .. })) {
+            } else if *slot == SlotName::Value && matches!(op, Operation::Core(CoreOp::ObjNext { .. })) {
+                // The substituted ObjectFields contract supplies exactly the
+                // final fields and the new identity, excluding the old self.
+                let selection = body.selections.alloc(SelectionExpr::Value(*value)).map_err(arena)?;
+                body.deps.alloc(DepExpr::Retention { value: *value, selection }).map_err(arena)?
+            } else if *slot == SlotName::Value && matches!(op, Operation::Core(CoreOp::ObjNew { .. })) {
                 let site = CreationSiteId::from_u32(value.as_u32());
                 let key = body.keys.alloc(KeyExpr::Created { site, instance: *value }).map_err(arena)?;
                 let key_deps = body.deps.alloc(DepExpr::Key(key)).map_err(arena)?;
                 let mut deps = vec![key_deps];
-                for operand in cfg::operation_uses(op, body)
-                    .map_err(|error| flow_error(format!("constructor deps: {error}")))? {
-                    if let ValueFacts::Managed { deps: input } = body.values.get(operand.value).map_err(arena)?.facts {
+                let inputs = match op {
+                    Operation::Core(CoreOp::ObjNew { fields, .. }) => fields.clone(),
+                    _ => unreachable!(),
+                };
+                for input in inputs {
+                    if let ValueFacts::Managed { deps: input } = body.values.get(input).map_err(arena)?.facts {
                         deps.push(input);
                     }
                 }
                 body.deps.alloc(DepExpr::Union(deps)).map_err(arena)?
+            } else if matches!(op, Operation::Call(_)
+                | Operation::Core(CoreOp::ObjGet { .. } | CoreOp::Undef { .. })) {
+                let expression = if matches!(op, Operation::Core(CoreOp::Undef { .. })) {
+                    DepExpr::Empty
+                } else {
+                    let selection = body.selections.alloc(SelectionExpr::Value(*value)).map_err(arena)?;
+                    DepExpr::Retention { value: *value, selection }
+                };
+                body.deps.alloc(expression).map_err(arena)?
             } else {
-                return Err(commit3("managed result without a complete deps recipe"));
+                return Err(flow_error("managed result without a complete deps recipe"));
             };
             body.values.get_mut(*value).map_err(arena)?.facts = ValueFacts::Managed { deps };
         }
@@ -311,12 +362,16 @@ impl<'a> OutcomeEmitter<'a> {
         for state in env.scopes.values_mut() {
             *state = remap(*state);
         }
-        for latest in env.values.values_mut().chain(env.bindings.values_mut()) {
+        for latest in env.values.values_mut().chain(env.bindings.values_mut())
+            .chain(env.cleanup.replacement.iter_mut()) {
             latest.value = remap(latest.value);
             latest.deps = latest.deps.map(remap);
         }
         env.cleanup.failure = env.cleanup.failure.map(remap);
+        env.cleanup.primary_before_failure = env.cleanup.primary_before_failure.map(remap);
         env.cleanup.pending = env.cleanup.pending.filter(|value| !consumed.contains(value)).map(remap);
+        env.restore_to = env.restore_to.into_iter().filter(|(value, _)| !consumed.contains(value))
+            .map(|(value, owner)| (remap(value), owner)).collect();
         for (name, value) in results {
             match module.types.get(body.values.get(*value).map_err(arena)?.ty).map_err(arena)? {
                 Type::Service(ServiceType::Pending) => {
@@ -334,6 +389,9 @@ impl<'a> OutcomeEmitter<'a> {
                 _ => {}
             }
             if *name == SlotName::Failure {
+                if let Some(primary) = env.cleanup.failure {
+                    env.cleanup.primary_before_failure = Some(primary);
+                }
                 env.cleanup.failure = Some(*value);
             }
         }
@@ -378,6 +436,9 @@ fn transfer_inputs(transfer: &TransferRule) -> Vec<ValueId> {
 pub enum AdmissionComponent {
     Admission,
     Bound,
+    /// A constructor stage can select a mixture of local admission and bound
+    /// history. Restoration preserves each part's existing component.
+    Preserve,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScopeExtraction {
@@ -428,7 +489,9 @@ impl OutcomeEmitter<'_> {
                     .ok_or_else(|| flow_error("exceptional extraction omits an earlier packet"))?;
                 let state = restored.env.scopes[&earlier.owner];
                 let op = match earlier.component {
-                    AdmissionComponent::Admission => OwnershipOp::Admit { state, packet },
+                    AdmissionComponent::Admission | AdmissionComponent::Preserve => {
+                        OwnershipOp::Admit { state, packet }
+                    }
                     AdmissionComponent::Bound => OwnershipOp::Accept { state, packet },
                 };
                 restored = self.emit(module, body, restored.block, restored.env,
