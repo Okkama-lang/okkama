@@ -191,7 +191,7 @@ checks are concentrated where values, not types, decide.
 - **Annotation of empty and anonymous things.** Empty collections and some
   anonymous actions need declared types (issue #214).
 - **No explicit narrowing of `any` yet.** Opaque values can only be passed
-  on (Chapter 32).
+  on (Chapter 28).
 
 None of these is an accident. Each would add a kind of entity; the razor asks
 for the work each would do, and so far the answer has been "it saves an

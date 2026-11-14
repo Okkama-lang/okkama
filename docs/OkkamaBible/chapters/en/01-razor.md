@@ -299,7 +299,7 @@ the main ones; later chapters return to each.
   filed more than a hundred issues where the language or library lacks an
   operation that a smaller design needs — string searching, hashing for
   object keys, default parameters (issues #145–#155, #210–#216). The razor is
-  not an excuse for those gaps; Chapter 32 lists them openly.
+  not an excuse for those gaps; Chapter 28 lists them openly.
 
 ## 1.9 How to read this book
 

@@ -28,6 +28,14 @@ least 600 pages per language, and more is better — it is a Bible.
   for simple flow diagrams.
 - **Honest.** Each part ends with what Okkama does badly or not yet, linked to
   its issue.
+- **The language, not its organs (owner, 2026-11-14).** The Bible describes
+  the language: semantics, observable behaviour, costs as the language defines
+  them, and guidance. Implementation internals do not belong here: compiler
+  phases, OIR, engines, Sparrow, the JIT, GC, stack maps, SPB, regions as a
+  mechanism, and which engine does what. They date the book with every
+  release, and they get a book of their own later (working title, from the
+  owner's joke: «Библия сатаниста»). Passages taken out of existing chapters
+  are kept in `internals/` for that book, never deleted.
 - **Two formats.** The finished book ships as Markdown (`OkkamaBible.md`,
   `OkkamaBible-RU.md`) and as PDF in both languages, with highlighted code.
   Okkama code is coloured from the compiler's own lexer
@@ -65,30 +73,39 @@ least 600 pages per language, and more is better — it is a Bible.
 | 20 | Async, futures and structured concurrency | 22 |
 | 21 | Processes, natives and capabilities | 14 |
 | 22 | The standard library and its style (the json reference) | 24 |
-| | **Part VI. Under the hood** | |
-| 23 | The compiler: lexer to OIR | 20 |
-| 24 | Three engines: IR interpreter, JVM, Sparrow | 16 |
-| 25 | Sparrow: JIT, precise GC, stack maps | 20 |
-| 26 | Safety by construction: verification, budgets, fuzzing, conformance | 18 |
-| 27 | Performance: measurements and what they mean | 16 |
+| | **Part VI. Costs** | |
+| 23 | What things cost: the language's cost model, measured from the outside | 16 |
 | | **Part VII. Practice and judgement** | |
-| 28 | Building a CLI tool | 12 |
-| 29 | Building a web service | 16 |
-| 30 | Patterns and anti-patterns | 14 |
-| 31 | Okkama among languages: Java, Kotlin, Go, Rust, Haskell, OCaml | 16 |
-| 32 | Weaknesses, open problems and the road ahead | 14 |
+| 24 | Building a CLI tool | 12 |
+| 25 | Building a web service | 16 |
+| 26 | Patterns and anti-patterns | 14 |
+| 27 | Okkama among languages: Java, Kotlin, Go, Rust, Haskell, OCaml | 16 |
+| 28 | Weaknesses, open problems and the road ahead | 14 |
 | | **Appendices** | |
 | A | Grammar | 8 |
 | B | Builtin behaviour (generated) | 6 |
 | C | Standard library index (generated) | 12 |
 | D | Glossary | 6 |
 | E | References | 10 |
-| | **Total** | **≈ 552** |
+| | **Total** | **≈ 478** |
+
+The former Part VI (the compiler, the engines, Sparrow, safety by
+construction) moved to the separate internals book on 2026-11-14.
 
 The page counts are a floor, not a ceiling: a chapter is written to its
 substance and grows with it. The planned floors add up to about 552 pages, so
 chapters are expected to exceed them until the whole book passes 600 pages per
 language.
+
+## Language changes to reflect (0.6.0)
+
+- Chapter 15 (fakes): `fake.storage` was removed in 0.6.0 (#583). A fake's
+  mutable test state is a Cell or an Atomic, as in production code. The
+  example `15-library-tests` uses `fake.storage` and must be rewritten when
+  the Bible is checked against 0.6.0.
+- The check runs every example on the IR engine and Sparrow. 0.6.0 has only
+  Sparrow (#584, #585), so `build.py --check` drops the IR engine when it
+  moves to a 0.6.0 toolchain.
 
 ## Notes for unwritten chapters
 

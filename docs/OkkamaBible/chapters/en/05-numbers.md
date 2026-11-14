@@ -136,7 +136,7 @@ This is a trade-off, not a free win. Numerical code that relies on IEEE
 special values — for example, using ∞ as an initial minimum — must be written
 differently, and a single overflow stops the computation instead of letting
 the program inspect a partial result. Such code can check magnitudes before
-the operation; Chapter 32 discusses whether an explicit non-finite type should
+the operation; Chapter 28 discusses whether an explicit non-finite type should
 exist.
 
 **Literals.** A float literal has a fraction, an exponent or both: `3.14`,
