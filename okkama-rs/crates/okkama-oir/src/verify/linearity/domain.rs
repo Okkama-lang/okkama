@@ -121,6 +121,7 @@ pub(super) struct Token {
     pub pieces: BTreeSet<Piece>,
     pub scope: Option<ScopeId>,
     pub reserve: BTreeSet<ScopeId>,
+    pub destinations: BTreeSet<ScopeId>,
     pub sources: BTreeSet<ValueId>,
     pub selected_scope: Option<ScopeId>,
     pub selection: Option<SelectionId>,

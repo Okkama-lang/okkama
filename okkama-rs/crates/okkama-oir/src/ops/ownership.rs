@@ -29,6 +29,9 @@ impl OperandSource for ElaboratedStage {
 }
 
 operation_group! { OwnershipOp {
+    Dependencies { value: ValueId }
+        => ("deps.of", [value: Borrow], Rule::Data { ty: ResultType::Service(ServiceType::Deps), trap: false }
+            .retains(Retention::FullDeps(*value)));
     Empty {  }
         => ("own.empty", [], Rule::Empty);
     Move { packet: ValueId }

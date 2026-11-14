@@ -1,0 +1,96 @@
+oir 2 own
+module overlapping_reserve
+object R {
+    destroy @destroy
+}
+scope SD action in @destroy
+scope SM action in @make
+scope S action in @f
+scope SI block in @f parent S
+summary MD observation parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(
+        publication=atomic)
+summary MF internal contract call_contract(failures=[program], publication=atomic)
+func @destroy(%self: R facts(managed(deps=dD))) -> void [destroy R] abi observation summary(MD) {
+    dependency dD: dependency = retention(value=%self, selection=selection(%self))
+    ^entry in SD:
+    ret
+}
+summary MM call-boundary results [result_relation(fresh=[0], provenance=unbound_result)] contract call_contract(
+        results=[R], failures=[program], publication=atomic)
+func @make(%input: own) -> (R, own) [ctor R] abi explicit(input_packet=0, output_packet=1) summary(MM) {
+    key km: key = created(site=0, instance=%made)
+    dependency dm: dependency = key(km)
+    boundary BM call in SM
+    ^entry in SM:
+    invoke.own obj.new R {; %input }
+        normal ^made($value, $packet)
+        unwind ^bad($packet, $failure)
+    ^made(%made: R facts(managed(deps=dm)), %packet: own) in SM:
+    ret %made, %packet
+    ^bad(%rest: own, %failure: failure) in SM:
+    %closed: closed = end %rest, boundary BM
+    raise %failure
+}
+func @f(%failure: failure) -> failure summary(MF) {
+    dependency dR: dependency = retention(value=%r, selection=selection(%r))
+    dependency dA: dependency = retention(value=%a, selection=selection(%a))
+    dependency dOld: dependency = union([dR, dA])
+    dependency dNew: dependency = union([dR])
+    selection sold: selection = union([selection(%r), selection(%a)])
+    selection snew: selection = union([selection(%r), selection(%r)])
+    boundary B0 lexical in S
+    ^entry in S:
+    %outer: scope<S> = scope.begin S
+    %inner: scope<SI> = scope.begin SI
+    br ^create
+    ^create in SI:
+    invoke.own call @make(; own.empty) summary(MM)
+        normal ^first($value, $packet)
+        unwind ^make_failed($failure)
+    ^first(%r: R facts(managed(deps=dR)), %rp: own) in SI:
+    %first: scope<SI> = own.accept %inner, %rp
+    invoke.own call @make(; own.empty) summary(MM)
+        normal ^second($value, $packet)
+        unwind ^second_failed($failure)
+    ^second(%a: R facts(managed(deps=dA)), %ap: own) in SI:
+    %bound: scope<SI> = own.accept %first, %ap
+    %old: array<R> facts(managed(deps=dOld)) = array.new [%r, %a], ty array<R>
+    invoke.own scope.split %bound, sold
+        normal ^prepare($state, $selected, $external_deps, %outer)
+        unwind ^split_failed($state, $failure, %outer)
+    ^prepare(%qi: scope<SI>, %part: own, %full: deps, %qo: scope<S>) in SI:
+    %old_deps: deps = deps.of %old
+    %pending: pending = exit.prepare return %old, %part, deps(%old_deps) at B0
+    (%closed: closed, %reserved: pending) = scope.end %qi, reserve %pending, effects scope_effects(failures=[],
+        suspends=false, cancel=false)
+    br ^replace
+    ^replace in S:
+    %new: own = own.empty
+    %replacement: array<R> facts(managed(deps=dNew)) = array.new [%r, %r], ty array<R>
+    %deps: deps = deps.of %replacement
+    (%next: pending, %rest: own) = exit.replace %reserved, replacement prepared_exit(kind=return, value=some(
+        %replacement), packet=some(%new), deps=some(%deps), selection=snew, boundary=B0)
+    %restored: scope<S> = own.accept %qo, %rest
+    %final: failure = scope.unwind %restored, %failure, reserve %next, effects scope_effects(failures=[],
+        suspends=false, cancel=false)
+    ret %final
+    ^split_failed(%qi_error: scope<SI>, %split_error: failure, %qo_error: scope<S>) in S:
+    %inner_failure: failure = scope.unwind %qi_error, %split_error, effects scope_effects(failures=[], suspends=false,
+        cancel=false)
+    %propagated: failure = scope.unwind %qo_error, %inner_failure, effects scope_effects(failures=[], suspends=false,
+        cancel=false)
+    ret %propagated
+    ^make_failed(%make_error: failure) in SI:
+    %inner_error: failure = scope.unwind %inner, %make_error, effects scope_effects(failures=[], suspends=false,
+        cancel=false)
+    %outer_error: failure = scope.unwind %outer, %inner_error, effects scope_effects(failures=[], suspends=false,
+        cancel=false)
+    ret %outer_error
+    ^second_failed(%second_error: failure) in SI:
+    %inner_error2: failure = scope.unwind %first, %second_error, effects scope_effects(failures=[], suspends=false,
+        cancel=false)
+    %outer_error2: failure = scope.unwind %outer, %inner_error2, effects scope_effects(failures=[], suspends=false,
+        cancel=false)
+    ret %outer_error2
+
+}

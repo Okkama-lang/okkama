@@ -1,0 +1,56 @@
+oir 2 high
+module sync
+object R {
+    destroy @destroy
+}
+scope SD action in @destroy
+scope SC action in @make
+scope S action in @f
+func @destroy(%self: R) -> void [destroy R] {
+    ^entry in SD:
+    ret
+}
+func @make() -> R [ctor R] {
+    boundary BC lexical in SC
+    ^entry in SC unwind ^failed:
+    %r: R = obj.new R { }
+    want %r
+    [iprep0] exit.prepare return %r at BC
+    result.exit edge normal(0), value %r, demand want, prepare iprep0
+    ret %r
+    ^failed(%failure: failure) in SC:
+    raise %failure
+}
+enum Stop is Error = (now)
+scope SX action in @risky
+scope ST action in @take
+scope SL action in @deferred
+func @risky() -> int {
+    ^entry in SX unwind ^failed:
+    %error: Stop = enum.case Stop, case 0
+    throw %error
+    ^failed(%failure: failure) in SX:
+    raise %failure
+}
+func @take(%r: R, %n: int) -> void {
+    ^entry in ST:
+    ret
+}
+func @deferred() -> void {
+    ^entry in SL:
+    ret
+}
+func @f() -> void {
+    ^entry in S unwind ^failed:
+    defer.register S, action defer_action(function=@deferred)
+    br ^body
+    ^body in S unwind ^failed_after:
+    %r: R = call @make()
+    %n: int = call @risky()
+    call @take(%r, %n)
+    ret
+    ^failed(%failure: failure) in S:
+    raise %failure
+    ^failed_after(%later: failure) in S:
+    raise %later
+}

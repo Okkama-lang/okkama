@@ -99,7 +99,7 @@ pub struct ResultSlot { pub name: SlotName, pub ty: ResultType }
 /// owner-dependent views must additionally name ViewOwner or Descriptor.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Retention {
-    Global(DeclId), Value(ValueId), Field { base: ValueId, field: FieldRef },
+    Global(DeclId), Value(ValueId), FullDeps(ValueId), Field { base: ValueId, field: FieldRef },
     Index { base: ValueId, index: ValueId },
     Slice { base: ValueId, start: ValueId, end: ValueId },
     MapEntry { map: ValueId, key: ValueId },

@@ -1,0 +1,30 @@
+oir 2 own
+// Spec §5.2; design §5.3: skip SM only because it has no materialized scope state.
+module fallthrough_skips_parent
+scope S action in @f
+scope SM block in @f parent S
+scope SI block in @f parent SM
+summary M0 internal contract call_contract(publication=atomic)
+func @f() -> void summary(M0) {
+    boundary BI lexical in SI
+    selection sEmpty: selection = union([])
+    ^entry in S:
+    %outer: scope<S> = scope.begin S
+    br ^middle
+    ^middle in SM:
+    br ^inner
+    ^inner in SI:
+    %q: scope<SI> = scope.begin SI
+    %full: deps = deps.of 0
+    %p: pending = exit.prepare fallthrough packet own.empty, deps(%full) select sEmpty at BI
+    (%closed: closed, %reserved: pending) = scope.end %q, reserve %p, effects scope_effects(failures=[], suspends=false,
+        cancel=false)
+    br ^parent
+    ^parent in SM:
+    (%packet: own, %deps: deps) = exit.commit %reserved, destination scope(S)
+    %restored: scope<S> = own.admit %outer, %packet
+    br ^tail
+    ^tail in S:
+    %done: closed = scope.end %restored, effects scope_effects(failures=[], suspends=false, cancel=false)
+    ret
+}

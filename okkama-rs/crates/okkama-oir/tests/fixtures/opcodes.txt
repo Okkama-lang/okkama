@@ -77,6 +77,7 @@ cleanup.shield
 const
 cvt
 defer.register
+deps.of
 destroy.direct
 discard
 dynamic.check

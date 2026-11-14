@@ -762,6 +762,7 @@ record!(ResultSlot, "result_slot", { name, ty });
 variants!(Retention {
     Global(x0) => "global",
     Value(x0) => "value",
+    FullDeps(x0) => "full_deps",
     Field { base, field } => "field",
     Index { base, index } => "index",
     Slice { base, start, end } => "slice",
@@ -1301,6 +1302,7 @@ opcodes!(LexicalOp {
     Discard { value } => "discard",
 });
 opcodes!(OwnershipOp {
+    Dependencies { value } => "deps.of",
     Empty {  } => "own.empty",
     Move { packet } => "own.move",
     Join { packets } => "own.join",

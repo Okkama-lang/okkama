@@ -1,0 +1,57 @@
+oir 2 high
+module sync
+object R {
+    destroy @destroy
+}
+scope SD action in @destroy
+scope SC action in @make
+scope S action in @f
+func @destroy(%self: R) -> void [destroy R] {
+    ^entry in SD:
+    ret
+}
+func @make() -> R [ctor R] {
+    boundary BC lexical in SC
+    ^entry in SC unwind ^failed:
+    %r: R = obj.new R { }
+    want %r
+    [iprep0] exit.prepare return %r at BC
+    result.exit edge normal(0), value %r, demand want, prepare iprep0
+    ret %r
+    ^failed(%failure: failure) in SC:
+    raise %failure
+}
+scope SL action in @label
+func @label(%r: R) -> void {
+    ^entry in SL:
+    ret
+}
+scope SN action in @next
+func @next(%self: R) -> ^R [successor R] {
+    boundary BN lexical in SN
+    ^entry in SN unwind ^failed:
+    %next: ^R = obj.next %self { }
+    want %next
+    [iprep1] exit.prepare return %next at BN
+    result.exit edge normal(0), value %next, demand want, prepare iprep1
+    ret %next
+    ^failed(%failure: failure) in SN:
+    raise %failure
+}
+func @f() -> void {
+    binding b0 "r": R in S
+    ^entry in S unwind ^failed:
+    %a: R = call @make()
+    bind %a, binding b0
+    defer.register S, action defer_action(function=@label, bindings=[b0])
+    br ^next(%a)
+    ^next(%old: R) in S unwind ^failed2:
+    %successor: ^R = call @next(%old)
+    %r: R = succ.take %successor, ty R
+    rebind %r, binding b0, target S
+    ret
+    ^failed(%failure: failure) in S:
+    raise %failure
+    ^failed2(%failure2: failure) in S:
+    raise %failure2
+}

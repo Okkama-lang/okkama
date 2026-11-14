@@ -123,7 +123,13 @@ fn operation(module: &Module, function: &Function, body: &Body, op: &Operation, 
             }
         }
         if let Ok(target) = module.functions.get(*target) {
-            for &ty in &target.signature.results {
+            for (index, &ty) in target.signature.results.iter().enumerate() {
+                // The explicit packet slot is hidden transport, not a language result (§6.5).
+                let packet = matches!(target.signature.ownership_abi,
+                    OwnershipAbi::Explicit { output_packet, .. } if usize::from(output_packet) == index);
+                if packet && module.types.get(ty) == Ok(&Type::Service(ServiceType::Own)) {
+                    continue;
+                }
                 if !native_type(module, ty, state) {
                     state.error(R::B113, "native ABI cannot return a language ownership graph");
                 }

@@ -1,0 +1,59 @@
+oir 2 high
+module sync
+object R {
+    destroy @destroy
+}
+scope SD action in @destroy
+scope SC action in @make
+scope S action in @f
+func @destroy(%self: R) -> void [destroy R] {
+    ^entry in SD:
+    ret
+}
+func @make() -> R [ctor R] {
+    boundary BC lexical in SC
+    ^entry in SC unwind ^failed:
+    %r: R = obj.new R { }
+    want %r
+    [iprep0] exit.prepare return %r at BC
+    result.exit edge normal(0), value %r, demand want, prepare iprep0
+    ret %r
+    ^failed(%failure: failure) in SC:
+    raise %failure
+}
+object Built {
+    field child: R
+    field $pending: bool
+}
+scope SB action in @build
+func @build(%input: R) -> Built [ctor Built] {
+    boundary B0 lexical in SB
+    ^entry in SB unwind ^failed:
+    %slot: R = undef ty R
+    %pending: bool = undef ty bool
+    %self: Built = obj.new Built { child: %slot, $pending: %pending } construction incomplete
+    stage %input, action SB, field field_ref(declaration=Built, index=0)
+    %replacement: R = call @make()
+    stage %replacement, action SB, field field_ref(declaration=Built, index=0)
+    obj.init %self, %replacement, field field_ref(declaration=Built, index=0)
+    %done: bool = const false
+    obj.init %self, %done, field field_ref(declaration=Built, index=1)
+    want %self
+    [iprep1] exit.prepare return %self at B0
+    result.exit edge normal(0), value %self, demand want, prepare iprep1
+    ret %self
+    ^failed(%failure: failure) in SB:
+    raise %failure
+}
+func @f() -> Built {
+    boundary Bauto lexical in S
+    ^entry in S unwind ^failed:
+    %a: R = call @make()
+    %built: Built = call @build(%a)
+    want %built
+    [iprep2] exit.prepare return %built at Bauto
+    result.exit edge normal(0), value %built, demand want, prepare iprep2
+    ret %built
+    ^failed(%failure: failure) in S:
+    raise %failure
+}
