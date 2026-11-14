@@ -262,6 +262,17 @@
   - [22.13 Другие библиотеки, другие ответы](#2213-другие-библиотеки-другие-ответы)
   - [22.14 Чего стоит стиль](#2214-чего-стоит-стиль)
   - [22.15 Кодеки: по объекту на направление](#2215-кодеки-по-объекту-на-направление)
+- [Глава 24. Пишем утилиту командной строки](#глава-24-пишем-утилиту-командной-строки)
+  - [24.1 Чем утилита обязана пользователю](#241-чем-утилита-обязана-пользователю)
+  - [24.2 Командная строка как данные](#242-командная-строка-как-данные)
+  - [24.3 Утилита](#243-утилита)
+  - [24.4 Сначала решить, потом напечатать](#244-сначала-решить-потом-напечатать)
+  - [24.5 Отказы на границе](#245-отказы-на-границе)
+  - [24.6 Тесты без терминала](#246-тесты-без-терминала)
+  - [24.7 Ввод: целиком или потоком](#247-ввод-целиком-или-потоком)
+  - [24.8 Конфигурация и окружение](#248-конфигурация-и-окружение)
+  - [24.9 Как это отдать пользователям](#249-как-это-отдать-пользователям)
+  - [24.10 Во что обходится такой дизайн](#2410-во-что-обходится-такой-дизайн)
 - [Глава 26. Паттерны и антипаттерны](#глава-26-паттерны-и-антипаттерны)
   - [26.1 Что такое паттерн и что с ним делает язык](#261-что-такое-паттерн-и-что-с-ним-делает-язык)
   - [26.2 Поведение через композицию, а не через флаги](#262-поведение-через-композицию-а-не-через-флаги)
@@ -13848,6 +13859,593 @@ quoted-printable кодируется за один проход вместо п
 измеряли. Это принцип эффективности библиотеки в действии: поверхность
 остаётся на месте, а цена сдвигается.
 
+# Глава 24. Пишем утилиту командной строки
+
+Предыдущие главы описывают язык по частям. Эта и следующая собирают части в
+программы того рода, какие пишут на самом деле. Первая из них — утилита
+командной строки: программа, которую запускают из оболочки, дают ей
+аргументы и, возможно, поток текста, а она делает одну работу и сообщает,
+как та прошла.
+
+Утилита называется `tally`. Она считает строки и слова текста — файлов,
+названных в командной строке, или своего стандартного ввода — и выводит
+самые частые слова:
+
+```text
+$ okkama run tally.ok --top 2 notes.txt
+2 lines, 12 words, 8 distinct
+3 the
+2 on
+```
+
+Программа маленькая, но касается почти всего, что настоящая утилита должна
+сделать правильно: аргументов и ошибок в них, отсутствующих файлов, разницы
+между выводом и сообщениями, кода завершения, справки и тестов. Глава
+строит её в том порядке, в каком читатель встретит эти вопросы, и каждый
+раздел опирается на одну из прежних глав: роли (глава 14), отказы
+(глава 10), ресурсы (глава 11) и форму «сначала реши, потом сделай» из
+раздела 26.5.
+
+## 24.1 Чем утилита обязана пользователю
+
+Соглашения, которым следует утилита командной строки, старше большинства
+используемых сегодня языков. В предисловии к выпуску *Bell System Technical
+Journal* 1978 года, посвящённому Unix, Дуг Макилрой и его соавторы свели
+стиль к нескольким правилам: пусть каждая программа хорошо делает одно дело,
+и рассчитывайте, что вывод любой программы станет вводом другой, пока
+неизвестной [[McIlroy 1978](#ref-mcilroy1978)]. POSIX позже записал форму самой командной строки:
+опции перед операндами, однобуквенные опции через дефис и `--` в конце
+опций, чтобы операнд мог начинаться с дефиса [[POSIX](#ref-posix2017)]. А *Command Line
+Interface Guidelines* Прасада и соавторов пересказывают старые правила для
+программ, которыми пользуются люди не меньше, чем скрипты: справка, до
+которой легко дотянуться, ошибки, которые говорят, что делать дальше, и вывод
+для людей отдельно от вывода для программ [[Prasad 2020](#ref-prasad2020)].
+
+Из этих источников и из устройства языка `tally` берёт пять правил:
+
+1. **Данные идут в стандартный вывод, сообщения — в стандартный поток
+   ошибок.** Скрипт, передающий вывод `tally` другой программе по конвейеру,
+   никогда не должен получить предупреждение вместо числа.
+2. **Код завершения говорит, как всё прошло.** POSIX закрепляет только то, что
+   ноль означает успех. `tally` добавляет распространённое деление: 1 —
+   работа не удалась (файл не прочитать), 2 — неверна командная строка.
+3. **Нет файлов — значит, стандартный ввод.** Тогда `tally` работает на любом
+   конце конвейера.
+4. **`--help` есть всегда,** печатает в стандартный вывод и завершается с 0:
+   попросить справку — не ошибка.
+5. **На неверную командную строку отвечают причиной и подсказкой,** а не
+   трассировкой.
+
+Ничего из этого не специфично для Okkama. Okkama меняет другое: сколько из
+этого программе приходится делать вручную.
+
+## 24.2 Командная строка как данные
+
+Обычный способ прочитать командную строку — цикл по аргументам с растущим
+набором флагов: переменная на каждую опцию, ветка на каждое написание,
+счётчик операндов и написанный руками текст справки, который постепенно
+расходится с тем, что цикл действительно принимает. Модуль стандартной
+библиотеки `cli/command` превращает командную строку в объявление. Команда —
+это объект, перечисляющий свои опции, флаги, операнды и подкоманды; чтение
+аргументов — действие этого объекта; текст справки — другое его действие:
+
+```okkama
+let command = CliCommand(
+    name: "tally",
+    summary: "Count lines and words, and list the most frequent words",
+    options: [Option(name: "top", short: "n", value: "N", help: "How many words to list (default 3)")],
+    flags: [
+        Flag(name: "ignore-case", short: "i", help: "Count Word and word as one word"),
+        Flag(name: "help", short: "h", help: "Show this help"),
+    ],
+    operands: [Operand(name: "FILE", count: OperandCount.repeated, help: "Files to read; none reads the input")],
+);
+let call = command.invocation(arguments);
+```
+
+Одно объявление даёт три вещи, которые стиль «цикл и флаги» держит в трёх
+местах:
+
+- **Разбор.** `invocation(arguments)` читает список аргументов в
+  `Invocation`: выбранную подкоманду, операнды и каждое значение по имени его
+  опции. Чтение чистое: без побочных эффектов, повторяемое и не смотрит на
+  процесс, так что тест может вызвать его с любым списком.
+- **Справка.** `usage(program:)` пишет текст справки из того же объявления,
+  перенося строки по ширине. Разойтись с разбором он не может.
+- **Дополнение.** `completion(program:, shell:)` пишет скрипт автодополнения
+  для bash, zsh или fish — снова из того же объявления.
+
+Значения выходят типизированными, а отсутствие названо явно.
+`call.text("name")` — это `Maybe<string>`, поэтому значение по умолчанию
+пишется там, где значение используется: `call.int("top") else 3`. Значение,
+которое есть, но испорчено, как `--top many`, даёт `CliFailure` с индексом
+аргумента. Флаги — это `bool`. Повторяемые опции возвращаются массивом.
+Запрос имени, которого не объявляет ни одна команда, `call.flag("verbos")`,
+бросает `UndeclaredCliName`: это ошибка программы, а не аргументов
+пользователя, и модуль держит эти два рода ошибок раздельно.
+
+Сами аргументы приходят из `cli/arguments`.
+`ProcessArguments().strings()` — список аргументов процесса как текст, без
+имени программы, прочитанный как строгий UTF-8. Аргумент, который не
+является корректным UTF-8, отвергается с его индексом и смещением байта,
+а не угадывается. Аргументы — это то, что передала операционная система, а не
+текст оболочки, так что нет кавычек, которые надо снимать, и разбиения на
+слова, о котором надо беспокоиться.
+
+## 24.3 Утилита
+
+Весь `tally` — один модуль. Здесь он показан целиком, а потом разобран.
+
+```okkama
+module tally/tool v1.0.0;
+
+// tally: counts lines and words in files or in the standard input and
+// lists the most frequent words. The tool decides; main only prints.
+import "io/stdin" take Stdin, Utf8Input;
+import "fs/path" take Path;
+import "fs/file" take File;
+import "fs/error" take FileError;
+import "cli/command" take CliCommand, Option, Flag, Operand, OperandCount, CliFailure;
+import "compare" take Comparing, Order;
+
+// The tool's own refusal, beside the command line's CliFailure.
+enum TallyError is Error = (negative_top(value is int));
+
+// Where text comes from: the disk and the standard input in a real run,
+// prepared lines in a test.
+role Sources {
+    file(path is string) is @string;
+    input() is @string;
+}
+
+object Disk does Sources {
+    Disk();
+
+    file(path is string) is @string {
+        let file = File(path: Path(path));
+        defer file.close();
+        file.text().lines();
+    }
+
+    input() is @string {
+        let input = Utf8Input(origin: Stdin());
+        defer input.close();
+        let text = input.content();
+        if text.empty() { []; } else { text.chomp().split("\n"); }
+    }
+}
+
+// One word and how often it occurs. More frequent words come first;
+// words with the same count are in alphabetical order.
+object WordCount does Comparing<WordCount> {
+    has word is string;
+    has count is int;
+
+    WordCount(:word, :count);
+
+    word() is string { word; }
+    count() is int { count; }
+
+    order(other is WordCount) is Order {
+        if count > other.count() { Order.less; }
+        else if count < other.count() { Order.greater; }
+        else { word.order(other.word()); }
+    }
+
+    shown() is string {
+        count.string() + " " + word;
+    }
+}
+
+// The counts so far. Reading a line returns a successor.
+object Tally {
+    has lines is int = 0;
+    has words is %string:int = [:];
+    has fold is bool = false;
+
+    Tally(:fold);
+
+    read(line is string) is ^Tally {
+        ^lines = lines + 1;
+        ^words = line.split(" ").filter() -> part { !part.trim().empty(); }.reduce(words) -> counts, part {
+            let word = if fold { part.trim().lower(); } else { part.trim(); };
+            counts + [word: (counts[word] else 0) + 1];
+        };
+    }
+
+    summary() is string {
+        let total = words.values().reduce(0) -> sum, count { sum + count; };
+        lines.string() + " lines, " + total.string() + " words, " + words.size().string() + " distinct";
+    }
+
+    top(limit is int) is @string {
+        let ranked = words.keys().map() -> word { WordCount(word: word, count: words[word]); }.ordering();
+        ranked.take(limit).map() -> entry { entry.shown(); };
+    }
+}
+
+// What a run gives back: lines for each stream and the exit status.
+object Outcome {
+    has out is @string = [];
+    has err is @string = [];
+    has code is int = 0;
+
+    Outcome(:out, :err, :code);
+
+    out() is @string { out; }
+    err() is @string { err; }
+    code() is int { code; }
+}
+
+object Tool {
+    has command is CliCommand;
+
+    Tool() {
+        command = CliCommand(
+            name: "tally",
+            summary: "Count lines and words, and list the most frequent words",
+            options: [Option(name: "top", short: "n", value: "N", help: "How many words to list (default 3)")],
+            flags: [
+                Flag(name: "ignore-case", short: "i", help: "Count Word and word as one word"),
+                Flag(name: "help", short: "h", help: "Show this help"),
+            ],
+            operands: [Operand(name: "FILE", count: OperandCount.repeated, help: "Files to read; none reads the input")],
+        );
+    }
+
+    outcome(arguments is @string, sources is Sources) is Outcome {
+        try {
+            let call = command.invocation(arguments);
+            if call.flag("help") {
+                Outcome(out: command.usage(program: "tally").chomp().split("\n"));
+            } else {
+                let top = call.int("top") else 3;
+                confirm top >= 0 else throw TallyError.negative_top(top);
+                let files = call.operands();
+                let texts = if files.size() == 0 { [sources.input()]; } else { files.map() -> path { sources.file(path); }; };
+                let tally = texts.reduce(Tally(fold: call.flag("ignore-case"))) -> counts, text {
+                    text.reduce(counts) -> current, line { current.read(line); };
+                };
+                Outcome(out: [tally.summary()] + tally.top(top));
+            }
+        }
+        catch e is CliFailure {
+            Outcome(err: ["tally: " + e.text(), "Try 'tally --help'."], code: 2);
+        }
+        catch e is TallyError {
+            Outcome(err: ["tally: " + e.text(), "Try 'tally --help'."], code: 2);
+        }
+        catch e is FileError {
+            Outcome(err: ["tally: " + e.text()], code: 1);
+        };
+    }
+}
+```
+
+В модуле пять частей, и каждая — паттерн из прежней главы.
+
+**`Sources`** — роль «откуда берётся текст» (глава 14). Настоящий запуск
+использует `Disk`: он читает файл через `fs/file` и закрывает его через
+`defer` (глава 11), а стандартный ввод читает через `Utf8Input`. Тест даёт
+свою реализацию с заготовленными строками (раздел 24.6). Роль — единственное
+место, где утилита касается внешнего мира на входе. Всё, что после неё,
+работает с массивами строк.
+
+**`WordCount`** — значение с собственным порядком. Оно исполняет
+`Comparing<WordCount>`, и его `order` ставит более частые слова раньше, а
+при равенстве — по алфавиту. После этого встроенный `ordering()` сортирует
+массив счётчиков, и объект-компаратор не нужен (модуль `compare` прямо
+советует его не заводить).
+
+**`Tally`** хранит счётчики и меняется через successor (глава 13). `read`
+возвращает новый `Tally` с ещё одной строкой и её словами, добавленными в
+словарь, так что подсчёт всего текста — это `reduce` по его строкам. `top`
+строит счётчики, сортирует их и оставляет первые несколько. Ничто в `Tally`
+не знает о файлах, аргументах или выводе.
+
+**`Outcome`** — то, что решил запуск: строки для стандартного вывода, строки
+для стандартного потока ошибок и код завершения. Это простое значение с
+тремя полями.
+
+**`Tool`** их соединяет. Его конструктор один раз строит объявление команды.
+`outcome(arguments, sources)` читает аргументы, выбирает источники, считает и
+возвращает `Outcome`. Отказы, на которые он может ответить, он ловит и
+превращает в сообщения и коды (раздел 24.5).
+
+## 24.4 Сначала решить, потом напечатать
+
+`Tool.outcome` ничего не пишет. Он возвращает свои решения как значение, а
+отдельная, очень маленькая оболочка их исполняет. Это форма «сначала реши,
+потом сделай» из раздела 26.5, и для утилиты командной строки она окупается
+сразу: часть, в которой есть логика, проверяется сравнением значений, а в
+части, которая занимается вводом и выводом, логики для проверки не остаётся.
+
+Программа, которую запускает пользователь, — три строки поверх модуля:
+
+```okkama
+main() is int {
+    Shell().printed(Tool().outcome(ProcessArguments().strings(), Disk()));
+}
+```
+
+`main` возвращает код завершения, и среда исполнения передаёт его
+операционной системе. Пример ниже запускает ту же утилиту дважды изнутри
+программы, с фиксированными аргументами над маленьким файлом
+`tally/sample.txt`, чтобы её вывод можно было проверить:
+
+```okkama
+module bible/tally_run v1.0.0;
+
+import "io/stdout" take Stdout, Stderr;
+import "tally/tool" take Tool, Disk, Outcome;
+
+// The shell: run the tool, print what it decided, return its status.
+object Shell {
+    Shell();
+
+    printed(outcome is Outcome) is int {
+        for outcome.out() -> line { Stdout().writeln(line); }
+        for outcome.err() -> line { Stderr().writeln(line); }
+        outcome.code();
+    }
+}
+
+main() is int {
+    let tool = Tool();
+    let shell = Shell();
+    let first = shell.printed(tool.outcome(["--top", "2", "tally/sample.txt"], Disk()));
+    Stdout().writeln("exit " + first.string());
+    let second = shell.printed(tool.outcome(["-i", "-n", "2", "tally/sample.txt"], Disk()));
+    Stdout().writeln("exit " + second.string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+2 lines, 12 words, 8 distinct
+3 the
+2 on
+exit 0
+2 lines, 12 words, 7 distinct
+4 the
+2 on
+exit 0
+```
+
+- Первый запуск выводит два самых частых слова. «the» и «The» считаются
+  разными словами.
+- Второй запуск добавляет `-i`, короткую форму `--ignore-case`, и `-n 2`,
+  короткую форму `--top`. Число различных слов падает с 8 до 7, а «the»
+  доходит до 4.
+- `Shell.printed` по порядку отправляет `out` в `Stdout`, а `err` — в
+  `Stderr` и возвращает код. Настоящая программа возвращает этот код из
+  `main`.
+
+Разделение на `Tool` и `Shell` заодно решает, куда пойдёт будущее
+изменение. Цветной вывод для терминала, флаг `--json` или строка прогресса в
+потоке ошибок — изменения того, как печатаются решения, и они остаются в
+оболочке. Считать по-другому — изменение решений, и оно остаётся в `Tally`.
+
+## 24.5 Отказы на границе
+
+Утилита встречает три рода отказов, и они заслуживают трёх разных ответов.
+
+**Неверная командная строка** — ошибка пользователя, сделанная только что и
+легко исправимая. `cli/command` сообщает о ней как
+`CliFailure.detailed(index, token, message)`. `tally` добавляет один
+собственный отказ для отрицательного `--top` — вариант своего перечисления
+`TallyError` (глава 10). На оба отвечают в поток ошибок причиной и
+подсказкой `Try 'tally --help'.` с кодом 2. Трассировки нет: пользователю
+нужно знать, что набрать, а не где была программа.
+
+**Отказ работы** — здесь файл, которого нет или который нельзя прочитать, —
+получает собственное описание файловой системы и код 1. `fs/file` уже
+превратил ошибку хоста в вариант `FileError` (раздел 10.11), так что утилита
+никогда не видит кодов операционной системы и ведёт себя одинаково на любой
+платформе.
+
+**Ошибка в программе** не ловится вообще. Индекс за границей, нарушенный
+инвариант или `UndeclaredCliName` завершают запуск отчётом языка об отказе, и
+код завершения говорит, что запуск не удался. Это довод раздела 10.4,
+применённый к утилите. `catch`, достаточно широкий, чтобы превратить ошибки
+в дружелюбное «что-то пошло не так», спрятал бы единственный отчёт, по
+которому программу можно исправить.
+
+Поэтому `try` в `Tool.outcome` называет ровно те отказы, на которые утилита
+может ответить, — `CliFailure`, `TallyError` и `FileError` — и ничего больше.
+Каждый `catch` даёт `Outcome`, так что пути ошибок — тоже значения и
+проверяются так же, как успешный путь.
+
+## 24.6 Тесты без терминала
+
+Утилиту командной строки часто проверяют последней и хуже всего: запускают в
+оболочке и смотрят на вывод, потому что её ввод и вывод принадлежат
+процессу. `tally` всё это не нужно. Его аргументы — параметр, источники —
+роль, вывод — значение. Тест даёт все три:
+
+```okkama
+module bible/tally_tests v1.0.0;
+
+import "fs/error" take FileError;
+import "tally/tool" take Tool, Sources;
+
+// Prepared text instead of the disk and the terminal.
+object Given does Sources {
+    has files is %string:@string;
+    has typed is @string;
+
+    Given(:files, :typed);
+
+    file(path is string) is @string {
+        confirm files.has(path) else throw FileError.not_found(path);
+        files[path];
+    }
+
+    input() is @string { typed; }
+}
+
+test "files are read in order and counted together" {
+    let sources = Given(files: ["a": ["red blue"], "b": ["blue"]], typed: []);
+    let outcome = Tool().outcome(["a", "b"], sources);
+    test.is(outcome.code(), 0);
+    test.is(outcome.out(), ["2 lines, 3 words, 2 distinct", "2 blue", "1 red"]);
+}
+
+test "no file means the standard input" {
+    let sources = Given(files: [:], typed: ["one two", "two"]);
+    let outcome = Tool().outcome(["-n", "1"], sources);
+    test.is(outcome.out(), ["2 lines, 3 words, 2 distinct", "2 two"]);
+}
+
+test "a missing file is an error with status 1" {
+    let outcome = Tool().outcome(["nowhere"], Given(files: [:], typed: []));
+    test.is(outcome.code(), 1);
+    test.is(outcome.err(), ["tally: FileError.not_found(\"nowhere\")"]);
+    test.is(outcome.out(), []);
+}
+
+test "a bad argument is a usage error with status 2" {
+    let outcome = Tool().outcome(["--top", "many"], Given(files: [:], typed: []));
+    test.is(outcome.code(), 2);
+    test.is(outcome.err().size(), 2);
+}
+
+test "help goes to the standard output with status 0" {
+    let outcome = Tool().outcome(["--help"], Given(files: [:], typed: []));
+    test.is(outcome.code(), 0);
+    test.is(outcome.out().first().starts_with("Usage:"), true);
+}
+```
+
+Вывод:
+
+```text
+=== RUN   files are read in order and counted together
+--- PASS: files are read in order and counted together
+=== RUN   no file means the standard input
+--- PASS: no file means the standard input
+=== RUN   a missing file is an error with status 1
+--- PASS: a missing file is an error with status 1
+=== RUN   a bad argument is a usage error with status 2
+--- PASS: a bad argument is a usage error with status 2
+=== RUN   help goes to the standard output with status 0
+--- PASS: help goes to the standard output with status 0
+PASS
+```
+
+- `Given` реализует `Sources` словарём имён файлов в строки и списком строк
+  для стандартного ввода. Отсутствующее имя бросает тот же
+  `FileError.not_found`, что бросил бы диск, так что путь ошибки настоящий.
+- Каждый тест вызывает `Tool().outcome` со списком аргументов и сравнивает
+  `Outcome`: код, строки вывода и строки сообщений. Тесты читаются как
+  спецификация командной строки: что будет с двумя файлами, без файлов, с
+  отсутствующим файлом, с плохим значением и с `--help`.
+- Внутри утилиты ничего не подменено. `Tally` и `WordCount` покрыты через
+  поведение самой утилиты, и, если они усложнятся, их можно проверять
+  напрямую как значения.
+
+Код, который сам читает аргументы процесса, а не берёт их параметром, тоже
+можно проверить: `ProcessArguments(arguments: …)` строит тот же объект из
+заготовленного списка. Брать аргументы параметром проще, и эта глава
+советует именно такую форму.
+
+## 24.7 Ввод: целиком или потоком
+
+`Disk` читает файл целиком, `file.text().lines()`, и стандартный ввод тоже
+целиком, через `Utf8Input(origin: Stdin()).content()`. Для утилиты, которая
+считает, это простой и честный выбор: результату всё равно нужна каждая
+строка, а счётчики гораздо меньше текста. Два свойства стандартной
+библиотеки делают его безопасным:
+
+- **Декодирование строгое.** Файл или ввод, не являющийся корректным UTF-8,
+  отвергается с позицией первого плохого байта. Утилита, которая должна
+  читать что угодно, может попросить `Stdin(decoding: InputDecoding.lenient)`,
+  заменяющий плохие байты на U+FFFD, и сказать об этом в справке.
+- **Ресурсы закрываются на любом пути.** Файл закрывается через `defer`,
+  успешно ли отработал `lines()` или бросил, и `Utf8Input` закрывается так
+  же (глава 11).
+
+Утилита, которая фильтрует, а не считает, и печатает каждую строку по мере
+поступления, как `grep`, должна читать потоком. `for Stdin() -> line { … }`
+читает по строке, пакетами, а `for file.text() -> line { … }` делает то же
+для файла. Потоковое чтение меняет скорее форму утилиты, чем её код: решения
+уже нельзя собрать в один `Outcome` в конце. Ядро тогда становится
+значением, которое принимает одну строку и возвращает строки, которые нужно
+напечатать для неё, а оболочка печатает их по ходу. Разделение «реши, потом
+сделай» сохраняется, только с шагом в строку.
+
+У `cli/arguments` свои пределы. По умолчанию он читает не больше 4096
+аргументов и 1 МиБ их общего объёма и отказывает за этими пределами с
+`ArgumentLimitExceeded`, а не растёт без границ. Утилита, которой положено
+принимать огромные списки аргументов, например от `xargs`, может задать
+другие пределы через конструктор, принимающий их.
+
+## 24.8 Конфигурация и окружение
+
+У `tally` две опции и никакой конфигурации, и многим утилитам стоит
+оставаться такими. Когда у утилиты всё же появляются настройки, *Command Line
+Interface Guidelines* дают обычный порядок старшинства: флаги главнее
+переменных окружения, те главнее файла конфигурации, а он главнее встроенных
+значений по умолчанию [[Prasad 2020](#ref-prasad2020)]. Две стороны языка помогают держать этот
+порядок честным.
+
+Первая: окружение — значение, а не глобальное состояние (раздел 21.4).
+Утилита берёт снимок окружения в `main` и передаёт его — или одну нужную
+настройку — коду, который её использует. Ничто в глубине программы не читает
+переменную за спиной вызывающего, а тест передаёт заготовленное окружение
+так же, как тесты `tally` передают заготовленные источники.
+
+Вторая: `Invocation.settings()` возвращает каждое прочитанное из командной
+строки значение по ключу `SettingKey`. Файл конфигурации, прочитанный через
+модули `config`, даёт настройки с теми же ключами, так что порядок
+старшинства становится последовательностью слоёв, каждый из которых
+накладывается на предыдущий. Опция, объявленная с явным `key`, хранится под
+этим ключом, и тогда `--top` в командной строке и `top = 5` в файле означают
+одну настройку.
+
+## 24.9 Как это отдать пользователям
+
+Утилитой пользуются через её справку чаще, чем через документацию.
+`tally --help` печатает `command.usage(program: "tally")`: краткое описание,
+строку использования и опции, флаги и операнды с их справкой, перенесённые по
+80 колонкам или по заданной ширине. Раз справка порождается из объявления,
+опция, добавленная в `CliCommand`, появляется и в справке.
+`command.completion(program: "tally", shell: CompletionShell.zsh)` даёт
+скрипт автодополнения для оболочки, и утилита часто предлагает его скрытой
+подкомандой, которую пользователь запускает один раз и сохраняет.
+
+Во время разработки утилита запускается из исходника, с аргументами после
+файла: `okkama run tally.ok --top 5 notes.txt`. Чтобы её отдать,
+`okkama build tally.ok --target sparrow -o tally.spb` компилирует её в файл
+байткода, который `okkama exec` запускает без повторной компиляции (модули,
+пакеты и их версии описаны в главе 19). Программа в обоих случаях одна и та
+же. Её поведение не зависит от того, как её запустили.
+
+## 24.10 Во что обходится такой дизайн
+
+Утилита этой главы длиннее самой короткой программы, которая напечатала бы
+те же числа. Скрипт строк на двадцать с циклом по аргументам, изменяемым
+словарём и вызовами `print` справился бы с работой для своего автора. Разница
+в том, что покупают лишние строки:
+
+- **Командная строка объявлена один раз.** Разбор, справка и дополнение
+  следуют из объявления, и справка не может разойтись с разбором.
+- **Каждый исход — значение.** Пути ошибок проверяются так же легко, как
+  обычный, а изменение формата вывода не может изменить то, что считается.
+- **Отказы разобраны по родам.** Ошибка пользователя получает подсказку и
+  код 2, неудачный файл — код 1, а ошибка программы сохраняет свой отчёт.
+- **Внешний мир входит через одну роль.** Тестам не нужны ни терминал, ни
+  файлы, ни процесс.
+
+Остаются две цены. Чтение файлов целиком держит текст в памяти; для
+счётчика это верный обмен, для фильтра — неверный (раздел 24.7). И стиль
+successor-ов перестраивает `Tally` на каждую строку. Для текста в мегабайты
+этого достаточно быстро. Для гигабайтов утилита считала бы более крупными
+шагами или потоком, храня только счётчики и по-прежнему ничего общего не
+изменяя.
+
 # Глава 26. Паттерны и антипаттерны
 
 У каждого языка есть вторая грамматика, которую не проверяет ни один
@@ -15558,6 +16156,7 @@ main() is int {
 - <a id="ref-macqueen1984"></a>David MacQueen (1984). Modules for Standard ML. In *Proceedings of the 1984 ACM Symposium on LISP and Functional Programming*: 198–207. ACM. https://doi.org/10.1145/800055.802036
 - <a id="ref-maranget2007"></a>Luc Maranget (2007). Warnings for Pattern Matching. *Journal of Functional Programming* 17(3): 387–421. https://doi.org/10.1017/S0956796807006223
 - <a id="ref-mccarthy1960"></a>John McCarthy (1960). Recursive Functions of Symbolic Expressions and Their Computation by Machine, Part I. *Communications of the ACM* 3(4): 184–195. https://doi.org/10.1145/367177.367199
+- <a id="ref-mcilroy1978"></a>M. Douglas McIlroy, Elliot N. Pinson, Berkley A. Tague (1978). UNIX Time-Sharing System: Foreword. *The Bell System Technical Journal* 57(6): 1899–1904. https://archive.org/details/bstj57-6-1899
 - <a id="ref-meszaros2007"></a>Gerard Meszaros (2007). *xUnit Test Patterns: Refactoring Test Code*. Addison-Wesley.
 - <a id="ref-meyer1992"></a>Bertrand Meyer (1992). Applying "Design by Contract". *Computer* 25(10): 40–51. https://doi.org/10.1109/2.161279
 - <a id="ref-meyer1997"></a>Bertrand Meyer (1997). *Object-Oriented Software Construction*, 2nd edition. Prentice Hall.
@@ -15582,6 +16181,8 @@ main() is int {
 - <a id="ref-pike2015"></a>Rob Pike (2015). Errors are values. *The Go Blog*, 12 January 2015. https://go.dev/blog/errors-are-values
 - <a id="ref-hyperspec"></a>Kent M. Pitman (1996). *Common Lisp HyperSpec*, Chapter 9: Conditions. Harlequin; now LispWorks. https://www.lispworks.com/documentation/HyperSpec/Body/09_.htm
 - <a id="ref-poletto1999"></a>Massimiliano Poletto, Vivek Sarkar (1999). Linear Scan Register Allocation. *ACM TOPLAS* 21(5): 895–913. https://doi.org/10.1145/330249.330250
+- <a id="ref-posix2017"></a>IEEE and The Open Group (2018). Utility Conventions. In *The Open Group Base Specifications Issue 7, 2018 edition* (IEEE Std 1003.1-2017), Base Definitions, Chapter 12. https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap12.html
+- <a id="ref-prasad2020"></a>Aanand Prasad, Ben Firshman, Carl Tashian, Eva Parish (2020). *Command Line Interface Guidelines*. https://clig.dev/
 - <a id="ref-promisesaplus"></a>Promises/A+ organization. Promises/A+, rule 2.2.4 and note 3.1. https://promisesaplus.com/
 - <a id="ref-r7rs2013"></a>Alex Shinn, John Cowan, Arthur A. Gleckler (eds.) (2013). *Revised⁷ Report on the Algorithmic Language Scheme*. https://small.r7rs.org/attachment/r7rs.pdf
 - <a id="ref-rfc3629"></a>François Yergeau (2003). *UTF-8, a Transformation Format of ISO 10646*. RFC 3629, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc3629

@@ -16,7 +16,8 @@ least 600 pages per language, and more is better — it is a Bible.
   typed by hand. Where the older Okkama Book disagrees, the code wins.
 - **Every example runs.** Programs live in `examples/NN-name.ok`; a chapter
   includes one with `{{example:NN-name}}`, and `build.py --check` runs each
-  on the IR engine and on Sparrow and compares stdout and exit code
+  on Sparrow, the only engine (the IR engine was removed in 0.6.0, #584),
+  and compares stdout and exit code
   with `examples/NN-name.expected`.
 - **Every claim about design is sourced.** Arguments cite published work by
   key, `[@hoare1981]`; `references.md` lists every key with authors, title,
@@ -103,9 +104,10 @@ language.
   mutable test state is a Cell or an Atomic, as in production code. The
   example `15-library-tests` uses `fake.storage` and must be rewritten when
   the Bible is checked against 0.6.0.
-- The check runs every example on the IR engine and Sparrow. 0.6.0 has only
-  Sparrow (#584, #585), so `build.py --check` drops the IR engine when it
-  moves to a 0.6.0 toolchain.
+- Since 2026-11-15 `build.py --check` runs every example on Sparrow only,
+  with `--engine sparrow`, which both the 0.5.8 and the 0.6.0 toolchains
+  accept. The IR engine was removed in 0.6.0 (#584, owner's decision on
+  #574), and the JVM backend too (#585).
 
 ## Notes for unwritten chapters
 
@@ -380,3 +382,24 @@ previous Sparrow, `sparrow-origin`).
 - a history of FFIs (JNI, ctypes, Rust FFI) and why Okkama has none for users.
 
 Examples cannot fork or reach the network in the cage, so process and network code stays in plain code blocks.
+
+## Chapter 24 notes (2026-11-15)
+
+6.8 pages (EN and RU) of its floor of 14. The tool is `tally` (examples/tally/tool.ok, a module). The run example is `24-tally` over tally/sample.txt; the tests are `24-tally-tests`, with a Given implementation of Sources. Sources: McIlroy 1978, POSIX Utility Conventions, CLI Guidelines.
+
+Written:
+- what a tool owes its user (five rules);
+- the command line as data (cli/command);
+- the tool, deciding then printing (Outcome, Shell);
+- failures at the edge (codes 0, 1, 2; bugs are not caught);
+- tests without a terminal;
+- whole or streamed input;
+- configuration and the environment;
+- shipping (help, completion, build/exec);
+- costs.
+
+To add for the floor:
+- subcommands (a `tally words` / `tally lines` split, Invocation.command());
+- a completion example;
+- a streaming filter variant as a runnable example;
+- the environment as a value, with a prepared snapshot in a test.

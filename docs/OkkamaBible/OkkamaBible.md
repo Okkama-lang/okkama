@@ -262,6 +262,17 @@
   - [22.13 Other libraries, other answers](#2213-other-libraries-other-answers)
   - [22.14 What the style costs](#2214-what-the-style-costs)
   - [22.15 Codecs: one object per direction](#2215-codecs-one-object-per-direction)
+- [Chapter 24. Building a CLI tool](#chapter-24-building-a-cli-tool)
+  - [24.1 What a tool owes its user](#241-what-a-tool-owes-its-user)
+  - [24.2 The command line as data](#242-the-command-line-as-data)
+  - [24.3 The tool](#243-the-tool)
+  - [24.4 Deciding, then printing](#244-deciding-then-printing)
+  - [24.5 Failures at the edge](#245-failures-at-the-edge)
+  - [24.6 Testing a tool without a terminal](#246-testing-a-tool-without-a-terminal)
+  - [24.7 Input: whole or streamed](#247-input-whole-or-streamed)
+  - [24.8 Configuration and the environment](#248-configuration-and-the-environment)
+  - [24.9 Shipping it](#249-shipping-it)
+  - [24.10 What the design costs](#2410-what-the-design-costs)
 - [Chapter 26. Patterns and anti-patterns](#chapter-26-patterns-and-anti-patterns)
   - [26.1 What a pattern is, and what a language does to it](#261-what-a-pattern-is-and-what-a-language-does-to-it)
   - [26.2 Behaviour by composition, not by flags](#262-behaviour-by-composition-not-by-flags)
@@ -13681,6 +13692,595 @@ tests that pass on the old code — the published behaviour, byte for byte,
 was the specification — and then measured. That is the library's
 efficiency principle at work: the surface stays put while the cost moves.
 
+# Chapter 24. Building a CLI tool
+
+The chapters before this one describe the language a piece at a time. This
+one and the next put the pieces together into programs of the kind people
+actually write. The first is a command-line tool: a program started from a
+shell, given arguments and perhaps a stream of text, which does one job and
+reports how it went.
+
+The tool is `tally`. It counts the lines and words of some text, either the
+files named on its command line or its standard input, and lists the words
+that occur most often:
+
+```text
+$ okkama run tally.ok --top 2 notes.txt
+2 lines, 12 words, 8 distinct
+3 the
+2 on
+```
+
+The program is small, but it touches most of what a real tool has to get
+right: arguments and their mistakes, files that are missing, the difference
+between output and messages, exit status, help text and tests. The chapter
+builds it in the order a reader would meet those questions, and each section
+leans on an earlier chapter: roles (Chapter 14), failures (Chapter 10),
+resources (Chapter 11) and the decide-then-do shape of Section 26.5.
+
+## 24.1 What a tool owes its user
+
+The conventions a command-line tool follows are older than most languages in
+use today. In the foreword to the 1978 issue of the *Bell System Technical
+Journal* devoted to Unix, Doug McIlroy and his co-authors summed up the style
+in a few maxims: make each program do one thing well, and expect the output
+of every program to become the input to another, as yet unknown, program
+[[McIlroy 1978](#ref-mcilroy1978)]. POSIX later wrote down the shape of the command line itself:
+options before operands, single-letter options introduced by a hyphen, and
+`--` to end the options so that an operand may start with a hyphen
+[[POSIX](#ref-posix2017)]. And the *Command Line Interface Guidelines* of Prasad and his
+co-authors restate the old rules for programs that people use as much as
+scripts do: help that is easy to reach, errors that say what to do next, and
+output meant for people kept apart from output meant for programs
+[[Prasad 2020](#ref-prasad2020)].
+
+From these sources, and from the shape of the language, `tally` takes five
+rules:
+
+1. **Data goes to the standard output, messages to the standard error.** A
+   script that pipes `tally` into another program must never receive a
+   warning in place of a count.
+2. **The exit status says how it went.** POSIX fixes only that zero means
+   success. `tally` adds a common split: 1 when the work failed (a file could
+   not be read), 2 when the command line was wrong.
+3. **No files means the standard input.** Then `tally` works at either end of
+   a pipe.
+4. **`--help` is always there,** prints to the standard output and exits
+   with 0, because asking for help is not an error.
+5. **A wrong command line is answered with a reason and a hint,** not with a
+   trace.
+
+None of this is specific to Okkama. What Okkama changes is how much of it the
+program has to do by hand.
+
+## 24.2 The command line as data
+
+The usual way to read a command line is a loop over the arguments with a
+growing set of flags: a variable for each option, a branch for each
+spelling, a counter for operands, and a hand-written usage text that slowly
+drifts away from what the loop actually accepts. The standard library's
+`cli/command` module turns the command line into a declaration. A command is
+an object that lists its options, flags, operands and subcommands; reading
+arguments is an action on that object; the usage text is another:
+
+```okkama
+let command = CliCommand(
+    name: "tally",
+    summary: "Count lines and words, and list the most frequent words",
+    options: [Option(name: "top", short: "n", value: "N", help: "How many words to list (default 3)")],
+    flags: [
+        Flag(name: "ignore-case", short: "i", help: "Count Word and word as one word"),
+        Flag(name: "help", short: "h", help: "Show this help"),
+    ],
+    operands: [Operand(name: "FILE", count: OperandCount.repeated, help: "Files to read; none reads the input")],
+);
+let call = command.invocation(arguments);
+```
+
+One declaration gives three things that the loop-and-flags style keeps in
+three places:
+
+- **Parsing.** `invocation(arguments)` reads an argument list into an
+  `Invocation`: the selected subcommand, the operands, and every value by
+  the name of its option. Reading is pure. It has no side effects, can be
+  repeated, and does not look at the process, so a test can call it with any
+  list it likes.
+- **Help.** `usage(program:)` writes the usage text from the same
+  declaration, wrapped to a width. It cannot disagree with the parser.
+- **Completion.** `completion(program:, shell:)` writes a completion script
+  for bash, zsh or fish, again from the same declaration.
+
+Values come out typed and with absence spelled out. `call.text("name")` is a
+`Maybe<string>`, so the default is written where the value is used,
+`call.int("top") else 3`, and a value that is present but malformed, such as
+`--top many`, is a `CliFailure` naming the argument's index. Flags are
+`bool`. Repeated options come back as an array. Asking for a name that no
+command declares, `call.flag("verbos")`, throws `UndeclaredCliName`: that is
+a mistake in the program, not in the user's arguments, and the module keeps
+the two kinds of error apart.
+
+The arguments themselves come from `cli/arguments`.
+`ProcessArguments().strings()` is the process's argument list as text,
+without the program name, read as strict UTF-8. An argument that is not
+valid UTF-8 is refused with its index and byte offset rather than guessed
+at. Arguments are what the operating system passed, never shell text, so
+there is no quoting to undo and no word splitting to worry about.
+
+## 24.3 The tool
+
+The whole of `tally` is one module. It is shown here entire and then taken
+apart.
+
+```okkama
+module tally/tool v1.0.0;
+
+// tally: counts lines and words in files or in the standard input and
+// lists the most frequent words. The tool decides; main only prints.
+import "io/stdin" take Stdin, Utf8Input;
+import "fs/path" take Path;
+import "fs/file" take File;
+import "fs/error" take FileError;
+import "cli/command" take CliCommand, Option, Flag, Operand, OperandCount, CliFailure;
+import "compare" take Comparing, Order;
+
+// The tool's own refusal, beside the command line's CliFailure.
+enum TallyError is Error = (negative_top(value is int));
+
+// Where text comes from: the disk and the standard input in a real run,
+// prepared lines in a test.
+role Sources {
+    file(path is string) is @string;
+    input() is @string;
+}
+
+object Disk does Sources {
+    Disk();
+
+    file(path is string) is @string {
+        let file = File(path: Path(path));
+        defer file.close();
+        file.text().lines();
+    }
+
+    input() is @string {
+        let input = Utf8Input(origin: Stdin());
+        defer input.close();
+        let text = input.content();
+        if text.empty() { []; } else { text.chomp().split("\n"); }
+    }
+}
+
+// One word and how often it occurs. More frequent words come first;
+// words with the same count are in alphabetical order.
+object WordCount does Comparing<WordCount> {
+    has word is string;
+    has count is int;
+
+    WordCount(:word, :count);
+
+    word() is string { word; }
+    count() is int { count; }
+
+    order(other is WordCount) is Order {
+        if count > other.count() { Order.less; }
+        else if count < other.count() { Order.greater; }
+        else { word.order(other.word()); }
+    }
+
+    shown() is string {
+        count.string() + " " + word;
+    }
+}
+
+// The counts so far. Reading a line returns a successor.
+object Tally {
+    has lines is int = 0;
+    has words is %string:int = [:];
+    has fold is bool = false;
+
+    Tally(:fold);
+
+    read(line is string) is ^Tally {
+        ^lines = lines + 1;
+        ^words = line.split(" ").filter() -> part { !part.trim().empty(); }.reduce(words) -> counts, part {
+            let word = if fold { part.trim().lower(); } else { part.trim(); };
+            counts + [word: (counts[word] else 0) + 1];
+        };
+    }
+
+    summary() is string {
+        let total = words.values().reduce(0) -> sum, count { sum + count; };
+        lines.string() + " lines, " + total.string() + " words, " + words.size().string() + " distinct";
+    }
+
+    top(limit is int) is @string {
+        let ranked = words.keys().map() -> word { WordCount(word: word, count: words[word]); }.ordering();
+        ranked.take(limit).map() -> entry { entry.shown(); };
+    }
+}
+
+// What a run gives back: lines for each stream and the exit status.
+object Outcome {
+    has out is @string = [];
+    has err is @string = [];
+    has code is int = 0;
+
+    Outcome(:out, :err, :code);
+
+    out() is @string { out; }
+    err() is @string { err; }
+    code() is int { code; }
+}
+
+object Tool {
+    has command is CliCommand;
+
+    Tool() {
+        command = CliCommand(
+            name: "tally",
+            summary: "Count lines and words, and list the most frequent words",
+            options: [Option(name: "top", short: "n", value: "N", help: "How many words to list (default 3)")],
+            flags: [
+                Flag(name: "ignore-case", short: "i", help: "Count Word and word as one word"),
+                Flag(name: "help", short: "h", help: "Show this help"),
+            ],
+            operands: [Operand(name: "FILE", count: OperandCount.repeated, help: "Files to read; none reads the input")],
+        );
+    }
+
+    outcome(arguments is @string, sources is Sources) is Outcome {
+        try {
+            let call = command.invocation(arguments);
+            if call.flag("help") {
+                Outcome(out: command.usage(program: "tally").chomp().split("\n"));
+            } else {
+                let top = call.int("top") else 3;
+                confirm top >= 0 else throw TallyError.negative_top(top);
+                let files = call.operands();
+                let texts = if files.size() == 0 { [sources.input()]; } else { files.map() -> path { sources.file(path); }; };
+                let tally = texts.reduce(Tally(fold: call.flag("ignore-case"))) -> counts, text {
+                    text.reduce(counts) -> current, line { current.read(line); };
+                };
+                Outcome(out: [tally.summary()] + tally.top(top));
+            }
+        }
+        catch e is CliFailure {
+            Outcome(err: ["tally: " + e.text(), "Try 'tally --help'."], code: 2);
+        }
+        catch e is TallyError {
+            Outcome(err: ["tally: " + e.text(), "Try 'tally --help'."], code: 2);
+        }
+        catch e is FileError {
+            Outcome(err: ["tally: " + e.text()], code: 1);
+        };
+    }
+}
+```
+
+The module has five parts, and each is a pattern from an earlier chapter.
+
+**`Sources`** is the role for "where text comes from" (Chapter 14). A real
+run uses `Disk`, which reads a file through `fs/file` and closes it with
+`defer` (Chapter 11), and reads the standard input through `Utf8Input`. A
+test gives its own implementation with prepared lines (Section 24.6). The
+role is the only place where the tool touches the outside world on the way
+in. Everything after it works on arrays of strings.
+
+**`WordCount`** is a value with an order of its own. It does
+`Comparing<WordCount>`, and its `order` puts more frequent words first and
+breaks ties alphabetically. With that, the built-in `ordering()` sorts an
+array of counts, and no comparator object is needed (the `compare` module
+advises against one).
+
+**`Tally`** holds the counts and changes by successor (Chapter 13). `read`
+returns a new `Tally` with one more line and the line's words added to the
+map, so counting a whole text is a `reduce` over its lines. `top` builds the
+counts, sorts them and keeps the first few. Nothing in `Tally` knows about
+files, arguments or output.
+
+**`Outcome`** is what a run decides: the lines meant for the standard output,
+the lines meant for the standard error, and the exit status. It is a plain
+value with three fields.
+
+**`Tool`** connects them. Its constructor builds the command declaration
+once. `outcome(arguments, sources)` reads the arguments, picks the sources,
+runs the counts and returns an `Outcome`. It catches the failures it can
+answer and turns them into messages and statuses (Section 24.5).
+
+## 24.4 Deciding, then printing
+
+`Tool.outcome` writes nothing. It returns its decisions as a value, and a
+separate, very small shell carries them out. This is the decide-then-do
+shape of Section 26.5, and for a command-line tool it pays off at once: the
+part that has logic can be tested by comparing values, and the part that
+does input and output has no logic left to test.
+
+The program a user runs is three lines on top of the module:
+
+```okkama
+main() is int {
+    Shell().printed(Tool().outcome(ProcessArguments().strings(), Disk()));
+}
+```
+
+`main` returns the exit status, and the runtime hands it to the operating
+system. The example below runs the same tool twice from inside a program,
+with fixed arguments over a small file, `tally/sample.txt`, so that its output
+can be checked:
+
+```okkama
+module bible/tally_run v1.0.0;
+
+import "io/stdout" take Stdout, Stderr;
+import "tally/tool" take Tool, Disk, Outcome;
+
+// The shell: run the tool, print what it decided, return its status.
+object Shell {
+    Shell();
+
+    printed(outcome is Outcome) is int {
+        for outcome.out() -> line { Stdout().writeln(line); }
+        for outcome.err() -> line { Stderr().writeln(line); }
+        outcome.code();
+    }
+}
+
+main() is int {
+    let tool = Tool();
+    let shell = Shell();
+    let first = shell.printed(tool.outcome(["--top", "2", "tally/sample.txt"], Disk()));
+    Stdout().writeln("exit " + first.string());
+    let second = shell.printed(tool.outcome(["-i", "-n", "2", "tally/sample.txt"], Disk()));
+    Stdout().writeln("exit " + second.string());
+    0;
+}
+```
+
+Output:
+
+```text
+2 lines, 12 words, 8 distinct
+3 the
+2 on
+exit 0
+2 lines, 12 words, 7 distinct
+4 the
+2 on
+exit 0
+```
+
+- The first run lists the two most frequent words. "the" and "The" count
+  as different words.
+- The second run adds `-i`, short for `--ignore-case`, and `-n 2`, the short
+  form of `--top`. The distinct count drops from 8 to 7 and "the" reaches 4.
+- `Shell.printed` sends `out` to `Stdout` and `err` to `Stderr` in order, and
+  returns the code. A real program returns that code from `main`.
+
+The split between `Tool` and `Shell` also decides where a future change
+goes. Coloured output for a terminal, a `--json` flag or a progress line on
+the standard error are changes to how decisions are printed, and they stay
+in the shell. Counting differently is a change to the decisions, and it
+stays in `Tally`.
+
+## 24.5 Failures at the edge
+
+A tool meets three kinds of failure, and they deserve three different
+answers.
+
+**A wrong command line** is the user's mistake, made a moment ago and easy to
+fix. `cli/command` reports it as `CliFailure.detailed(index, token, message)`.
+`tally` adds one refusal of its own for a negative `--top`, as a case of its
+own `TallyError` enum (Chapter 10). Both are answered on the standard error
+with the reason and a hint, `Try 'tally --help'.`, and exit status 2. No
+trace is shown: the user needs to know what to type, not where the
+program was.
+
+**A failure of the work**, here a file that does not exist or cannot be
+read, is answered with the file system's own description and exit status 1.
+`fs/file` has already turned the host's error into a case of `FileError`
+(Section 10.11), so the tool never sees an operating-system code and behaves
+the same on every platform.
+
+**A bug in the program** is not caught at all. An index out of range, a
+broken invariant or an `UndeclaredCliName` ends the run with the language's
+failure report, and the exit status says the run failed. This is the
+argument of Section 10.4 applied to a tool. A `catch` broad enough to turn
+bugs into a friendly "something went wrong" would hide the one report that
+lets someone fix the program.
+
+The `try` in `Tool.outcome` therefore names exactly the failures the tool
+can answer, `CliFailure`, `TallyError` and `FileError`, and nothing else.
+Each `catch` produces an `Outcome`, so the error paths are values too and are
+tested the same way as the happy path.
+
+## 24.6 Testing a tool without a terminal
+
+A command-line tool is often tested last and worst, by running it in a shell
+and looking at the output, because its inputs and outputs are the process's
+own. `tally` needs none of that. Its arguments are a parameter, its sources
+are a role, and its output is a value. A test gives all three:
+
+```okkama
+module bible/tally_tests v1.0.0;
+
+import "fs/error" take FileError;
+import "tally/tool" take Tool, Sources;
+
+// Prepared text instead of the disk and the terminal.
+object Given does Sources {
+    has files is %string:@string;
+    has typed is @string;
+
+    Given(:files, :typed);
+
+    file(path is string) is @string {
+        confirm files.has(path) else throw FileError.not_found(path);
+        files[path];
+    }
+
+    input() is @string { typed; }
+}
+
+test "files are read in order and counted together" {
+    let sources = Given(files: ["a": ["red blue"], "b": ["blue"]], typed: []);
+    let outcome = Tool().outcome(["a", "b"], sources);
+    test.is(outcome.code(), 0);
+    test.is(outcome.out(), ["2 lines, 3 words, 2 distinct", "2 blue", "1 red"]);
+}
+
+test "no file means the standard input" {
+    let sources = Given(files: [:], typed: ["one two", "two"]);
+    let outcome = Tool().outcome(["-n", "1"], sources);
+    test.is(outcome.out(), ["2 lines, 3 words, 2 distinct", "2 two"]);
+}
+
+test "a missing file is an error with status 1" {
+    let outcome = Tool().outcome(["nowhere"], Given(files: [:], typed: []));
+    test.is(outcome.code(), 1);
+    test.is(outcome.err(), ["tally: FileError.not_found(\"nowhere\")"]);
+    test.is(outcome.out(), []);
+}
+
+test "a bad argument is a usage error with status 2" {
+    let outcome = Tool().outcome(["--top", "many"], Given(files: [:], typed: []));
+    test.is(outcome.code(), 2);
+    test.is(outcome.err().size(), 2);
+}
+
+test "help goes to the standard output with status 0" {
+    let outcome = Tool().outcome(["--help"], Given(files: [:], typed: []));
+    test.is(outcome.code(), 0);
+    test.is(outcome.out().first().starts_with("Usage:"), true);
+}
+```
+
+Output:
+
+```text
+=== RUN   files are read in order and counted together
+--- PASS: files are read in order and counted together
+=== RUN   no file means the standard input
+--- PASS: no file means the standard input
+=== RUN   a missing file is an error with status 1
+--- PASS: a missing file is an error with status 1
+=== RUN   a bad argument is a usage error with status 2
+--- PASS: a bad argument is a usage error with status 2
+=== RUN   help goes to the standard output with status 0
+--- PASS: help goes to the standard output with status 0
+PASS
+```
+
+- `Given` implements `Sources` with a map of file names to lines and a list
+  of lines for the standard input. A missing name throws the same
+  `FileError.not_found` the disk would throw, so the error path is real.
+- Each test calls `Tool().outcome` with an argument list and compares the
+  `Outcome`: the status, the output lines and the message lines. The tests
+  read like a specification of the command line: what happens with two
+  files, with none, with a missing one, with a bad value and with `--help`.
+- Nothing is mocked inside the tool. `Tally` and `WordCount` are covered
+  through the tool's own behaviour, and they could be tested directly as
+  values if they grew more complex.
+
+Code that reads the process's arguments itself, instead of taking them as a
+parameter, can still be tested: `ProcessArguments(arguments: …)` builds the
+same object from a prepared list. Taking arguments as a parameter is
+simpler, and is the shape this chapter recommends.
+
+## 24.7 Input: whole or streamed
+
+`Disk` reads a file whole, `file.text().lines()`, and reads the standard
+input whole too, through `Utf8Input(origin: Stdin()).content()`. For a tool
+that counts, this is the simple and honest choice: the result needs every
+line anyway, and the counts are much smaller than the text. Two properties
+of the standard library make it safe:
+
+- **Decoding is strict.** A file or an input that is not valid UTF-8 is
+  refused with the position of the first bad byte. A tool that should read
+  anything can ask for `Stdin(decoding: InputDecoding.lenient)`, which
+  replaces bad bytes with U+FFFD, and say so in its help.
+- **Resources close on every path.** The file is closed by `defer` whether
+  `lines()` succeeds or throws, and `Utf8Input` is closed the same way
+  (Chapter 11).
+
+A tool that filters rather than counts, printing each line as it arrives the
+way `grep` does, should stream instead. `for Stdin() -> line { … }` reads one
+line at a time in batches, and `for file.text() -> line { … }` does the same
+for a file. Streaming changes the shape of the tool more than its code:
+the decisions can no longer be collected into one `Outcome` at the end.
+The core then becomes a value that takes one line and returns the lines to
+print for it, and the shell prints them as it goes. The decide-then-do split
+survives, at the granularity of a line.
+
+`cli/arguments` sets its own limits. By default it reads at most 4,096
+arguments and 1 MiB of them, and refuses more with `ArgumentLimitExceeded`
+instead of growing without bound. A tool that is meant to take huge argument
+lists, for example from `xargs`, can set other limits through the
+constructor that takes them.
+
+## 24.8 Configuration and the environment
+
+`tally` has two options and no configuration, and many tools should stay
+that way. When a tool does grow settings, the *Command Line Interface
+Guidelines* give the usual order of precedence: flags override environment
+variables, which override a configuration file, which overrides the built-in
+defaults [[Prasad 2020](#ref-prasad2020)]. Two parts of the language help to keep that order
+honest.
+
+The first is that the environment is a value, not a global (Section 21.4).
+A tool takes an environment snapshot in `main` and passes it, or the one
+setting it needs, to the code that uses it. Nothing deep in the program
+reads a variable behind its caller's back, and a test passes a prepared
+environment the same way `tally`'s tests pass prepared sources.
+
+The second is `Invocation.settings()`, which returns every value read from
+the command line keyed by `SettingKey`. A configuration file read through
+the `config` modules gives settings with the same keys, so the order of
+precedence becomes a sequence of layers, each laid over the one before. An
+option declared with an explicit `key` is stored under that key, which lets
+`--top` on the command line and `top = 5` in a file mean the same setting.
+
+## 24.9 Shipping it
+
+A tool is used through its help text more than through its documentation.
+`tally --help` prints `command.usage(program: "tally")`: the summary, the
+usage line, and the options, flags and operands with their help, wrapped to
+80 columns or to the width given. Because it is generated from the
+declaration, adding an option to `CliCommand` adds it to the help.
+`command.completion(program: "tally", shell: CompletionShell.zsh)` gives a
+completion script for the shell, and a tool often offers it as a hidden
+subcommand that users run once and save.
+
+During development a tool runs from source, with its arguments after the
+file: `okkama run tally.ok --top 5 notes.txt`. To ship it, `okkama build
+tally.ok --target sparrow -o tally.spb` compiles it into a bytecode file that
+`okkama exec` runs without recompiling (Chapter 19 covers modules, packages
+and their versions). The program is the same either way. Its behaviour does
+not depend on how it was started.
+
+## 24.10 What the design costs
+
+The tool in this chapter is longer than the shortest program that would
+print the same counts. A twenty-line script with a loop over the arguments,
+a mutable map and `print` calls would do the job for its author. The
+difference is in what the extra lines buy:
+
+- **The command line is declared once.** Parsing, help and completion follow
+  from it, and the usage text cannot drift away from the parser.
+- **Every outcome is a value.** The error paths are tested as easily as the
+  normal one, and a change to output formatting cannot change what is
+  counted.
+- **Failures are sorted by kind.** A user mistake gets a hint and status 2, a
+  failed file gets status 1, and a bug keeps its report.
+- **The outside world enters through one role.** Tests need no terminal, no
+  files and no process.
+
+Two costs remain. Reading whole files holds the text in memory, which is the
+right trade for a counter and the wrong one for a filter (Section 24.7). And
+the successor style rebuilds a `Tally` for every line. For text in the
+megabytes this is fast enough. For gigabytes, a tool would count in larger
+steps or stream and keep only the counts, still without mutating anything it
+shares.
+
 # Chapter 26. Patterns and anti-patterns
 
 Every language comes with a second grammar that no parser checks: the shapes
@@ -15381,6 +15981,7 @@ limits are deliberate, and Chapter 28 discusses the ones that are not.
 - <a id="ref-macqueen1984"></a>David MacQueen (1984). Modules for Standard ML. In *Proceedings of the 1984 ACM Symposium on LISP and Functional Programming*: 198–207. ACM. https://doi.org/10.1145/800055.802036
 - <a id="ref-maranget2007"></a>Luc Maranget (2007). Warnings for Pattern Matching. *Journal of Functional Programming* 17(3): 387–421. https://doi.org/10.1017/S0956796807006223
 - <a id="ref-mccarthy1960"></a>John McCarthy (1960). Recursive Functions of Symbolic Expressions and Their Computation by Machine, Part I. *Communications of the ACM* 3(4): 184–195. https://doi.org/10.1145/367177.367199
+- <a id="ref-mcilroy1978"></a>M. Douglas McIlroy, Elliot N. Pinson, Berkley A. Tague (1978). UNIX Time-Sharing System: Foreword. *The Bell System Technical Journal* 57(6): 1899–1904. https://archive.org/details/bstj57-6-1899
 - <a id="ref-meszaros2007"></a>Gerard Meszaros (2007). *xUnit Test Patterns: Refactoring Test Code*. Addison-Wesley.
 - <a id="ref-meyer1992"></a>Bertrand Meyer (1992). Applying "Design by Contract". *Computer* 25(10): 40–51. https://doi.org/10.1109/2.161279
 - <a id="ref-meyer1997"></a>Bertrand Meyer (1997). *Object-Oriented Software Construction*, 2nd edition. Prentice Hall.
@@ -15405,6 +16006,8 @@ limits are deliberate, and Chapter 28 discusses the ones that are not.
 - <a id="ref-pike2015"></a>Rob Pike (2015). Errors are values. *The Go Blog*, 12 January 2015. https://go.dev/blog/errors-are-values
 - <a id="ref-hyperspec"></a>Kent M. Pitman (1996). *Common Lisp HyperSpec*, Chapter 9: Conditions. Harlequin; now LispWorks. https://www.lispworks.com/documentation/HyperSpec/Body/09_.htm
 - <a id="ref-poletto1999"></a>Massimiliano Poletto, Vivek Sarkar (1999). Linear Scan Register Allocation. *ACM TOPLAS* 21(5): 895–913. https://doi.org/10.1145/330249.330250
+- <a id="ref-posix2017"></a>IEEE and The Open Group (2018). Utility Conventions. In *The Open Group Base Specifications Issue 7, 2018 edition* (IEEE Std 1003.1-2017), Base Definitions, Chapter 12. https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap12.html
+- <a id="ref-prasad2020"></a>Aanand Prasad, Ben Firshman, Carl Tashian, Eva Parish (2020). *Command Line Interface Guidelines*. https://clig.dev/
 - <a id="ref-promisesaplus"></a>Promises/A+ organization. Promises/A+, rule 2.2.4 and note 3.1. https://promisesaplus.com/
 - <a id="ref-r7rs2013"></a>Alex Shinn, John Cowan, Arthur A. Gleckler (eds.) (2013). *Revised⁷ Report on the Algorithmic Language Scheme*. https://small.r7rs.org/attachment/r7rs.pdf
 - <a id="ref-rfc3629"></a>François Yergeau (2003). *UTF-8, a Transformation Format of ISO 10646*. RFC 3629, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc3629

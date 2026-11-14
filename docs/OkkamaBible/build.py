@@ -13,8 +13,8 @@ contents. Placeholders in a chapter:
     {{table:builtins}}          builtin behaviour, from the compiler's table
     [@key]                      a citation of references.md
 
---figures runs figures/src/*.py first; --check runs every example on the IR
-engine and on the Sparrow core (OKKAMA, default the release build) and
+--figures runs figures/src/*.py first; --check runs every example on Sparrow,
+the only Okkama engine since 0.6.0 (#584) (OKKAMA, default the release build), and
 compares stdout plus a final "exit N" line with examples/NAME.expected (for
 NAME-rejected, the compiler's diagnostic on stderr; NAME-tests runs as a test
 suite with -t);
@@ -150,7 +150,7 @@ def check():
         stem = name[:-3]
         expected_path = os.path.join(examples, stem + ".expected")
         expected = open(expected_path).read().rstrip("\n").splitlines() if os.path.exists(expected_path) else None
-        for engine in ("ir", "sparrow"):
+        for engine in ("sparrow",):
             # Examples run in the repository's cage: no forks, network or
             # writes outside examples/, bounded CPU and memory.
             cage = [sys.executable, os.path.join(ROOT, "okkama-rs", "tools", "new-runtime", "caged.py"),
