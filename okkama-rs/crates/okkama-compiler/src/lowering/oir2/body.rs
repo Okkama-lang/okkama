@@ -424,7 +424,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
     fn stmt(&mut self, stmt: &thir::Stmt) -> Result<()> {
         use thir::StmtKind as S;
         match &stmt.kind {
-            S::Let { once: true, .. } => return Err(LowerError::unsupported(stmt.span, "once let")),
+            S::Let { local, value, once: true } => self.once_let(*local, value)?,
             S::Let { local, value, .. } => {
                 if let Some(value) = self.value(value)? {
                     self.bind(*local, value)?;

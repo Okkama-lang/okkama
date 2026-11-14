@@ -1,0 +1,22 @@
+module app;
+object Cache {
+    has seed is int;
+    Cache(:seed);
+    answer() is int {
+        once let answer = seed + 1;
+        answer;
+    }
+    label() is string {
+        once let text = seed.string();
+        text;
+    }
+    changed() is ^Cache {
+        ^seed = seed + 1;
+    }
+}
+main() is int {
+    let cache = Cache(seed: 4);
+    cache.answer();
+    cache.label();
+    cache.changed().answer();
+}

@@ -1,0 +1,160 @@
+oir 2 high
+module app
+requires core
+entry @main
+
+object app.Cache {
+    field seed: int
+    field $once0_0: "app::Maybe<int>" once
+    field $once1_0: "app::Maybe<string>" once
+}
+
+variant "app::Maybe<int>" = (some: "app::Maybe<int>.some", none: "app::Maybe<int>.none")
+
+variant "app::Maybe<string>" = (some: "app::Maybe<string>.some", none: "app::Maybe<string>.none")
+
+object "app::Maybe<int>.some" {
+    field value: int
+}
+
+object "app::Maybe<int>.none" {
+}
+
+object "app::Maybe<string>.some" {
+    field value: str
+}
+
+object "app::Maybe<string>.none" {
+}
+scope S0 action in @app.Cache.answer#0
+scope S1 action in @app.Cache.label#1
+scope S2 action in @app.Cache.changed#2
+scope S3 action in @main
+scope S4 action in @app.Cache.new#0
+
+func @app.Cache.new#0(%0: int) -> app.Cache [ctor app.Cache] {
+    binding b0 "seed": int in S4
+    boundary B0 lexical in S4
+    ^b0 in S4 unwind ^b1:
+    %1: int = undef ty int
+    %2: "app::Maybe<int>" = variant.new ty "app::Maybe<int>", case 1
+    stage %2, action S4, field field_ref(declaration=app.Cache, index=1)
+    %3: "app::Maybe<string>" = variant.new ty "app::Maybe<string>", case 1
+    stage %3, action S4, field field_ref(declaration=app.Cache, index=2)
+    stage %0, action S4, field field_ref(declaration=app.Cache, index=0)
+    bind %0, binding b0
+    %4: app.Cache = obj.new app.Cache { seed: %0, $once0_0: %2, $once1_0: %3 }
+    want %4
+    [i9] exit.prepare return %4 at B0
+    result.exit edge normal(0), value %4, demand want, prepare #9
+    ret %4
+    ^b1(%5: failure) in S4:
+    raise %5
+}
+
+func @app.Cache.answer#0(%0: app.Cache) -> int [method app.Cache] {
+    binding b0 "answer": int in S0
+    boundary B0 lexical in S0
+    ^b0 in S0 unwind ^b1:
+    %1: "app::Maybe<int>" = once.load %0, $once0_0
+    %2: int = variant.tag %1
+    %3: int = const 0
+    %4: bool = int.eq %2, %3
+    cond %4, ^b2, ^b3
+    ^b1(%5: failure) in S0:
+    raise %5
+    ^b2 in S0 unwind ^b1:
+    %6: int = variant.get %1, case 0, field field_ref(declaration="app::Maybe<int>.some", index=0)
+    br ^b4(%6)
+    ^b3 in S0 unwind ^b1:
+    %7: int = obj.get %0, seed
+    %8: int = const 1
+    %9: int = int.add %7, %8
+    %10: "app::Maybe<int>" = variant.new [%9], ty "app::Maybe<int>", case 0
+    once.store %0, $once0_0, %10
+    br ^b4(%9)
+    ^b4(%11: int) in S0 unwind ^b1:
+    bind %11, binding b0
+    want %11
+    [i12] exit.prepare return %11 at B0
+    result.exit edge normal(0), value %11, demand want, prepare #12
+    ret %11
+}
+
+func @app.Cache.label#1(%0: app.Cache) -> str [method app.Cache] {
+    binding b0 "text": str in S1
+    boundary B0 lexical in S1
+    ^b0 in S1 unwind ^b1:
+    %1: "app::Maybe<string>" = once.load %0, $once1_0
+    %2: int = variant.tag %1
+    %3: int = const 0
+    %4: bool = int.eq %2, %3
+    cond %4, ^b2, ^b3
+    ^b1(%5: failure) in S1:
+    raise %5
+    ^b2 in S1 unwind ^b1:
+    %6: str = variant.get %1, case 0, field field_ref(declaration="app::Maybe<string>.some", index=0)
+    br ^b4(%6)
+    ^b3 in S1 unwind ^b1:
+    %7: int = obj.get %0, seed
+    %8: str = cvt %7, from int, to str
+    %9: "app::Maybe<string>" = variant.new [%8], ty "app::Maybe<string>", case 0
+    once.store %0, $once1_0, %9
+    br ^b4(%8)
+    ^b4(%10: str) in S1 unwind ^b1:
+    bind %10, binding b0
+    want %10
+    [i11] exit.prepare return %10 at B0
+    result.exit edge normal(0), value %10, demand want, prepare #11
+    ret %10
+}
+
+func @app.Cache.changed#2(%0: app.Cache) -> ^app.Cache [successor app.Cache] {
+    boundary B0 lexical in S2
+    ^b0 in S2 unwind ^b1:
+    %1: int = obj.get %0, seed
+    %2: "app::Maybe<int>" = variant.new ty "app::Maybe<int>", case 1
+    stage %2, action S2, field field_ref(declaration=app.Cache, index=1)
+    %3: "app::Maybe<string>" = variant.new ty "app::Maybe<string>", case 1
+    stage %3, action S2, field field_ref(declaration=app.Cache, index=2)
+    %4: int = obj.get %0, seed
+    %5: int = const 1
+    %6: int = int.add %4, %5
+    stage %6, action S2, field field_ref(declaration=app.Cache, index=0)
+    %7: ^app.Cache = obj.next %0 { seed: %6, $once0_0: %2, $once1_0: %3 }
+    want %7
+    [i11] exit.prepare return %7 at B0
+    result.exit edge normal(0), value %7, demand want, prepare #11
+    ret %7
+    ^b1(%8: failure) in S2:
+    raise %8
+}
+
+func @main() -> int [entry] {
+    binding b0 "cache": app.Cache in S3
+    boundary B0 lexical in S3
+    ^b0 in S3 unwind ^b1:
+    %0: int = const 4
+    [i1] %1: app.Cache = call @app.Cache.new#0(%0)
+    bind %1, binding b0
+    [i3] %2: int = call @app.Cache.answer#0(%1)
+    discard %2
+    [i5] %3: str = call @app.Cache.label#1(%1)
+    discard %3
+    [i7] %4: ^app.Cache = call @app.Cache.changed#2(%1)
+    %5: app.Cache = succ.take %4, ty app.Cache
+    [i9] %6: int = call @app.Cache.answer#0(%5)
+    want %6
+    [i11] exit.prepare return %6 at B0
+    result.exit edge normal(0), value %2, demand discard, prepare none
+    result.exit edge normal(0), value %3, demand discard, prepare none
+    result.exit edge normal(0), value %6, demand want, prepare #11
+    high.effects at #1 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #3 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #5 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #7 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #9 failures [thrown, program, panic, native, cancelled], suspends true
+    ret %6
+    ^b1(%7: failure) in S3:
+    raise %7
+}

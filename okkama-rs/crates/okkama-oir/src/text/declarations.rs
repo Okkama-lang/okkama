@@ -17,7 +17,7 @@ impl Reader<'_> {
     pub(super) fn word(&mut self) -> Result<String, Diagnostic> {
         let token = self.next()?;
         if token.quoted || token.text.is_empty()
-            || (token.text != "$pending"
+            || (!hidden_field(&token.text)
                 && !token.text.chars().all(|c| c.is_alphanumeric() || "_./:#-".contains(c)))
         {
             return Err(self.at(&token, DiagnosticKind::Syntax, "expected identifier or path"));
@@ -480,7 +480,7 @@ fn generic_scope(owner: GenericOwner) -> usize {
 
 impl Writer<'_> {
     pub(super) fn word(&mut self, word: &str) -> Result<(), PrintError> {
-        if word.is_empty() || (word != "$pending"
+        if word.is_empty() || (!hidden_field(word)
             && !word.chars().all(|c| c.is_alphanumeric() || "_./:#-".contains(c))) {
             return Err(PrintError::new("unrepresentable identifier or module path"));
         }
@@ -746,4 +746,11 @@ impl Writer<'_> {
         self.generic_owner = None;
         Ok(())
     }
+}
+
+// Once slots are compiler-created object fields, alongside $pending.
+fn hidden_field(word: &str) -> bool {
+    word == "$pending" || word.strip_prefix("$once").is_some_and(|suffix| {
+        !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit() || c == '_')
+    })
 }

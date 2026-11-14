@@ -88,6 +88,11 @@ impl BodyLowerer<'_, '_> {
                         let right = value!(self, other);
                         self.core(compare(*kind, *op, value, right, expr.span)?)?
                     }
+                    (thir::Builtin::Order(kind), [other]) => {
+                        let right = value!(self, other);
+                        let ty = self.ty(expr.ty.as_ref().expect("Order type"), expr.span)?;
+                        self.scalar_order(*kind, value, right, ty, expr.span)?
+                    }
                     (thir::Builtin::StrCompare(op), [other]) => {
                         let right = value!(self, other);
                         self.core(compare(CompareKind::Str, *op, value, right, expr.span)?)?

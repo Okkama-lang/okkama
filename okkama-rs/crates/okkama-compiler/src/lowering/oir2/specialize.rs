@@ -107,15 +107,35 @@ pub(super) fn prepare_with_limits<'a>(input: &Analysis<'a>, limits: Limits) -> R
         })?;
         if let thir::BodyOwner::Method { object, method } = target {
             let original = owner_object(&owner).expect("method owner");
-            let result = input.registry.objects[original.0].methods[method].result.as_ref();
+            let source = &input.registry.objects[original.0].methods[method];
+            let params = source.params.iter().map(|(name, ty)| {
+                Ok((name.clone(), slice.ty(&ty.subst(&env), body.span)?))
+            }).collect::<Result<Vec<_>>>()?;
+            slice.registry.objects[object.0].methods[method].params = params;
+            let result = source.result.as_ref();
             slice.registry.objects[object.0].methods[method].result = result
                 .map(|ty| slice.ty(&ty.subst(&env), body.span)).transpose()?;
         }
         body.owner = target;
+        if let thir::BodyOwner::Method { object, method } = body.owner {
+            for stmt in &body.block.stmts {
+                if let thir::StmtKind::Let { local, once: true, .. } = stmt.kind {
+                    let value = body.locals[local.0].ty.subst(&env);
+                    let ty = slice.ty(&ty::Ty::Variant(ty::EnumId(0), vec![value]), stmt.span)?;
+                    slice.registry.objects[object.0].fields.push(registry::FieldInfo {
+                        name: format!("$once{method}_{}", local.0),
+                        ty,
+                        default: None,
+                        span: stmt.span,
+                    });
+                }
+            }
+        }
         for local in &mut body.locals {
             local.ty = slice.ty(&local.ty.subst(&env), local.span)?;
         }
-        slice.block(&mut body.block, &env)?;
+        slice.block(&mut body.block, &env)
+            .map_err(|error| error.in_function(&slice.body_name(&body.owner)))?;
         slice.bodies.push(body);
     }
     Ok(Analysis { registry: slice.registry, bodies: slice.bodies, warnings: input.warnings.clone() })
@@ -333,6 +353,13 @@ impl Specializer<'_, '_> {
             return Ok(target);
         }
         let source = &self.input.registry.roles[role.0];
+        if self.input.registry.modules[source.module].name == "collections/iteration" && source.name == "Cursor" {
+            for (index, info) in self.input.registry.enums.iter().enumerate() {
+                if info.module == source.module && info.name == "IterationEnded" {
+                    self.enumeration(ty::EnumId(index), &[], span)?;
+                }
+            }
+        }
         self.check_arguments(&source.params, args, span)?;
         let target = if args.is_empty() { role } else { ty::RoleId(self.registry.roles.len()) };
         let names = args.iter().map(|ty| self.encode(ty)).collect::<Result<Vec<_>>>()?;

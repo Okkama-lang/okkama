@@ -123,7 +123,7 @@ pub(super) fn record_call_effect(builder: &mut ir::FunctionBuilder<'_>, block: i
     Ok(())
 }
 
-fn finish_adapter(builder: &mut ir::FunctionBuilder<'_>, root: ir::ScopeId,
+pub(super) fn finish_adapter(builder: &mut ir::FunctionBuilder<'_>, root: ir::ScopeId,
     block: ir::BlockId, value: Option<ir::ValueId>) -> Result<()> {
     let boundary = builder.declare_boundary(ir::Boundary { scope: root, kind: ir::BoundaryKind::Lexical })?;
     let selection = builder.declare_selection(match value {
@@ -150,6 +150,7 @@ fn finish_adapter(builder: &mut ir::FunctionBuilder<'_>, root: ir::ScopeId,
 
 /// The ByteSource bridge used by the C3 builtin golden. Other adapters keep a diagnostic.
 pub(super) fn declare_builtins(declarations: &mut Declarations, analysis: &Analysis<'_>) -> Result<()> {
+    super::builtin_roles::declare(declarations, analysis)?;
     let Some(role) = analysis.registry.standard.byte_source else {
         return Ok(());
     };

@@ -164,12 +164,17 @@ impl Declarations {
                 }
             });
         }
-        for object in &reg.objects {
+        for (index, object) in reg.objects.iter().enumerate() {
             if object.decl.is_none() || !object.params.is_empty() {
                 continue;
             }
             requested.extend(object.fields.iter().map(|field| (field.ty.clone(), field.span)));
-            for method in &object.methods {
+            for (method_index, method) in object.methods.iter().enumerate() {
+                if !analysis.bodies.iter().any(|body| body.owner == thir::BodyOwner::Method {
+                    object: ty::ObjectId(index), method: method_index,
+                }) {
+                    continue;
+                }
                 requested.extend(method.params.iter().map(|(_, ty)| (ty.clone(), source.program.module.span)));
                 requested.extend(method.result.iter().map(|ty| (ty.clone(), source.program.module.span)));
             }
@@ -436,7 +441,7 @@ impl Declarations {
                     name: field.name.clone(),
                     ty: this.ty(&field.ty, field.span)?,
                     default: this.functions.get(&thir::BodyOwner::Default { object, field: index }).copied(),
-                    once: false,
+                    once: field.name.starts_with("$once"),
                 });
             }
             let defer_receiver = analysis.bodies.iter().any(|body| {

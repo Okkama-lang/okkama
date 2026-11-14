@@ -1,0 +1,129 @@
+oir 2 high
+module app
+requires core
+entry @main
+
+object app.Probe {
+}
+
+role "compare::Comparing<int>" {
+    order(int) -> compare.Order
+}
+
+enum compare.Order = (less, equal, greater)
+
+object builtin.ScalarOrder.t0 {
+    field value0: int
+    does "compare::Comparing<int>" {order = @builtin.ScalarOrder.t0.order}
+}
+scope S0 action in @builtin.ScalarOrder.t0.new
+scope S1 action in @builtin.ScalarOrder.t0.order
+scope S2 action in @app.Probe.order#0
+scope S3 action in @main
+scope S4 branch in @main parent S3
+scope S5 branch in @main parent S3
+scope S6 action in @app.Probe.new#0
+
+func @app.Probe.new#0() -> app.Probe [ctor app.Probe] {
+    boundary B0 lexical in S6
+    ^b0 in S6 unwind ^b1:
+    %0: app.Probe = obj.new app.Probe { }
+    want %0
+    [i2] exit.prepare return %0 at B0
+    result.exit edge normal(0), value %0, demand want, prepare #2
+    ret %0
+    ^b1(%1: failure) in S6:
+    raise %1
+}
+
+func @app.Probe.order#0(%0: app.Probe, %1: "compare::Comparing<int>") -> compare.Order [method app.Probe] {
+    binding b0 "value": "compare::Comparing<int>" in S2
+    boundary B0 lexical in S2
+    ^b0 in S2 unwind ^b1:
+    bind %1, binding b0
+    %2: int = const 2
+    [i2] %3: compare.Order = call.role %1, "compare::Comparing<int>" slot 0(%2)
+    want %3
+    [i4] exit.prepare return %3 at B0
+    result.exit edge normal(0), value %3, demand want, prepare #4
+    high.effects at #2 failures [thrown, program, panic, native, cancelled], suspends true
+    ret %3
+    ^b1(%4: failure) in S2:
+    raise %4
+}
+
+func @main() -> int [entry] {
+    boundary B0 lexical in S3
+    boundary B1 lexical in S4
+    boundary B2 lexical in S5
+    ^b0 in S3 unwind ^b1:
+    [i0] %0: app.Probe = call @app.Probe.new#0()
+    %1: int = const 1
+    [i2] %2: builtin.ScalarOrder.t0 = call @builtin.ScalarOrder.t0.new(%1)
+    %3: "compare::Comparing<int>" = role.wrap %2, ty "compare::Comparing<int>"
+    [i4] %4: compare.Order = call @app.Probe.order#0(%0, %3)
+    %5: compare.Order = enum.case compare.Order, case 0
+    %6: bool = enum.eq %4, %5
+    high.effects at #0 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #2 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #4 failures [thrown, program, panic, native, cancelled], suspends true
+    cond %6, ^b3, ^b4
+    ^b1(%7: failure) in S3:
+    raise %7
+    ^b2(%8: int) in S3 unwind ^b1:
+    want %8
+    [i8] exit.prepare return %8 at B0
+    result.exit edge normal(0), value %8, demand want, prepare #8
+    ret %8
+    ^b3 in S4 unwind ^b1:
+    %9: int = const 1
+    want %9
+    [i11] exit.prepare fallthrough %9 at B1
+    result.exit edge normal(0), value %9, demand want, prepare #11
+    br ^b2(%9)
+    ^b4 in S5 unwind ^b1:
+    %10: int = const 0
+    want %10
+    [i14] exit.prepare fallthrough %10 at B2
+    result.exit edge normal(0), value %10, demand want, prepare #14
+    br ^b2(%10)
+}
+
+func @builtin.ScalarOrder.t0.new(%0: int) -> builtin.ScalarOrder.t0 [ctor builtin.ScalarOrder.t0] {
+    boundary B0 lexical in S0
+    ^b0 in S0 unwind ^b1:
+    %1: builtin.ScalarOrder.t0 = obj.new builtin.ScalarOrder.t0 { value0: %0 }
+    want %1
+    [i2] exit.prepare return %1 at B0
+    result.exit edge normal(0), value %1, demand want, prepare #2
+    ret %1
+    ^b1(%2: failure) in S0:
+    raise %2
+}
+
+func @builtin.ScalarOrder.t0.order(%0: builtin.ScalarOrder.t0, %1: int) -> compare.Order [method builtin.ScalarOrder.t0] {
+    boundary B0 lexical in S1
+    ^b0 in S1 unwind ^b1:
+    %2: int = obj.get %0, value0
+    %3: bool = int.lt %2, %1
+    cond %3, ^b3, ^b4
+    ^b1(%4: failure) in S1:
+    raise %4
+    ^b2(%5: compare.Order) in S1 unwind ^b1:
+    want %5
+    [i3] exit.prepare return %5 at B0
+    result.exit edge normal(0), value %5, demand want, prepare #3
+    ret %5
+    ^b3 in S1 unwind ^b1:
+    %6: compare.Order = enum.case compare.Order, case 0
+    br ^b2(%6)
+    ^b4 in S1 unwind ^b1:
+    %7: bool = int.eq %2, %1
+    cond %7, ^b5, ^b6
+    ^b5 in S1 unwind ^b1:
+    %8: compare.Order = enum.case compare.Order, case 1
+    br ^b2(%8)
+    ^b6 in S1 unwind ^b1:
+    %9: compare.Order = enum.case compare.Order, case 2
+    br ^b2(%9)
+}

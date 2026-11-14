@@ -40,5 +40,5 @@ fn oir2_p2_3_coverage_paths_and_inventory() {
     assert_eq!(l09, inventory("conformance/cases/L09-stdlib-pure", "collections."));
     assert_eq!(l05.len(), 127);
     assert_eq!(l09.len(), 4);
-    assert_eq!(ids.len(), 143);
+    assert_eq!(ids.len(), 145);
 }

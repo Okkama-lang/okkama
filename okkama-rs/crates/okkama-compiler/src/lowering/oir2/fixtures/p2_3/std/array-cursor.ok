@@ -1,0 +1,15 @@
+module app;
+import "collections/iteration" take Iterating, IterationEnded;
+object Probe {
+    Probe();
+    first(values is Iterating<int>) is int {
+        values.cursor().item();
+    }
+}
+main() is int {
+    try {
+        Probe().first([]);
+    } catch e is IterationEnded {
+        -1;
+    }
+}

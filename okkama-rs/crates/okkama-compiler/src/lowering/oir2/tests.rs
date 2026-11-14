@@ -125,14 +125,10 @@ fn oir2_unsupported_source_constructs_are_diagnostics() {
 
 #[test]
 fn oir2_calls_and_async_do_not_enter_the_old_pipeline() {
-    for (source, expected) in [
-        ("module app; async main() is int { 0; }", "async"),
-        ("module app; object O { O(); f() is int { once let x = 1; x; } } main() is int { 0; }", "once let"),
-    ] {
-        let error = print_oir2(source).expect_err("explicit unsupported diagnostic");
-        assert!(matches!(error, LowerError::Unsupported { .. }), "{error}");
-        assert!(error.to_string().contains(expected), "{error}");
-    }
+    let source = "module app; async main() is int { 0; }";
+    let error = print_oir2(source).expect_err("explicit unsupported diagnostic");
+    assert!(matches!(error, LowerError::Unsupported { .. }), "{error}");
+    assert!(error.to_string().contains("async"), "{error}");
 }
 
 #[test]
@@ -1021,7 +1017,7 @@ fn oir2_s3_destroy_normal_locals_and_nested_resource_exits_roundtrip() {
     }
 }
 
-fn verify_high(module: &ir::Module, context: &str) {
+pub(super) fn verify_high(module: &ir::Module, context: &str) {
     assert_eq!(module.profile, ir::Profile::High);
     let catalog = super::native_summaries::P1NativeSummaries::for_module(module).expect("trusted P1 catalog");
     let context_with_catalog = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
@@ -1150,11 +1146,17 @@ fn oir2_d11_local_discards_keep_their_scope_before_divergence() {
     }
 }
 
-struct StdLoader;
+pub(super) struct StdLoader;
 
 impl crate::lowering::ModuleLoader for StdLoader {
     fn load(&mut self, path: &str, _: &str) -> Result<Option<crate::lowering::LoadedModule>, String> {
         let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../std").join(format!("{path}.ok"));
+        let file = if path == "conformance/check" {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../conformance/harness/okkama/conformance/check.ok")
+        } else {
+            file
+        };
         let text = std::fs::read_to_string(&file).map_err(|error| error.to_string())?;
         let source = SourceFile::new(file.to_string_lossy(), text).map_err(|error| error.to_string())?;
         let program = syntax::parse(&source, &ParseOptions::default()).map_err(|error| format!("{error:?}"))?;
@@ -1163,7 +1165,7 @@ impl crate::lowering::ModuleLoader for StdLoader {
     }
 }
 
-fn lower_std(source: &str) -> Result<ir::Module, LowerError> {
+pub(super) fn lower_std(source: &str) -> Result<ir::Module, LowerError> {
     let file = SourceFile::new("oir2-std.ok", source).expect("small source");
     let program = syntax::parse(&file, &ParseOptions::default()).expect("valid source syntax");
     let roots = [(&program, "oir2-std.ok", Some(&file))];

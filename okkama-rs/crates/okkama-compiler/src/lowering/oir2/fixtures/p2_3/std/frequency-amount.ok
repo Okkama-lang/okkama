@@ -1,0 +1,3 @@
+module app;
+import "collections/frequencies" take Frequency;
+main() is int { Frequency(item: "blue", amount: 2).amount(); }

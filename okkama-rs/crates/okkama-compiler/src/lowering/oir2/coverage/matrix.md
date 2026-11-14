@@ -1,7 +1,7 @@
 # P2.3 producer coverage
 
 The binding review decisions (renumbered C2–C9) govern this inventory. `p2_3.tsv`
-contains 127 L05, four L09 and twelve ownership rows. Paths are repository-relative.
+contains 127 L05, four L09 collections, two L09 compare and twelve ownership rows. Paths are repository-relative.
 Comma-separated dependencies are cumulative; `none` means no external feature gate.
 `#593,backend` records unavailable executable evidence, including the harness gate.
 Every row remains `planned`: inventory is not conformance acceptance. Negative cases
@@ -21,7 +21,8 @@ no extracted fixture or acceptance of the whole source file is implied.
 | Range-expanded / large literal | Linear `builder.push/append/append.range`, `finish`, failure `abandon` | C5: `builders/`; migrated C4 `range-expansion`, `large-literal` |
 | `For`, array/range/map/varargs/Iterating/Batching | Parent headers, scoped iterations, D11 state and exits | C6: `traversal/`; [scope and fixture evidence](c6.md) |
 | `Functional(map/filter/reduce/any/all/find)` | Enclosing action CFG, builders, short circuit | C7 High: [functional fixtures](../fixtures/p2_3/functional), [c7.md](c7.md); status `planned` |
-| Imported source calls, plain `once let` | Reachable concrete source bodies, checked cache plumbing | C8: all four L09 collections; once negatives |
+| Imported source calls, plain `once let` | Concrete source bodies, Maybe slots, once.load/store, successor resets | C8: [eight goldens and exact L09 blockers](c8.md); rows stay `planned` |
+| Builtin order / ordering | Scalar Order CFG, stable sorting through C3 Comparing witnesses | C8: `std/scalar-order`, `std/sort-failure`; full compare cases in [c8.md](c8.md) |
 | Closures / bound actions / any / caps | Explicit source-span Unsupported until #569/#565-c4 | C9 integration: any rows, ordered-sets |
 | Async body / await / future | Explicit source-span Unsupported until #570/#565-c5 | C9 integration boundary; no async case in this inventory |
 | Full runtime/harness case | #593 comparison using executable backend | C9 acceptance for all runtime rows |
@@ -76,9 +77,10 @@ role result exactly. Source-level concrete-to-role returns are also covered by
 The generic-evidence tests cover concrete object bounds, narrower role
 arguments and role fields without claiming execution of the original L05 files.
 
-Remaining boundaries: async/variadic role slots, general builtin adapters for
-scalar Comparing and collection iteration/sequence are explicit Unsupported;
-they are not needed by these C3 goldens. Closed-set ownership summary joins and
+C3-stage boundaries: async/variadic role slots and general builtin adapters were
+explicit Unsupported and were not needed by those C3 goldens. C8 now adds scalar
+Comparing and exact array Iterating evidence; other collection/sequence adapters
+remain gated. See [c8.md](c8.md). Closed-set ownership summary joins and
 semantic acceptance remain with #565; executable/oracle evidence remains gated
 by #593 and backend. Dynamic dispatch introduces no `own.dynamic` or fabricated
 summary. All 143 manifest statuses remain `planned`, including all eight C3 rows.
@@ -250,8 +252,9 @@ names are `wrong-key`, `wrong-element`, `byte-key`, `resource-key`.
 Streaming builders are implemented in C5. C6 now implements application array,
 range, resolved map, variadic, cursor and synchronous batch traversal; see [c6.md](c6.md).
 The original P1 range golden text is preserved. C7 functional blocks now use the
-same traversal; see [c7.md](c7.md). Accumulator optimization is deferred. Ordering
-and general builtin iterable adapters remain outside this slice. Any/closures/capability
+same traversal; see [c7.md](c7.md). Accumulator optimization is deferred. C8 adds
+ordering CFG and exact array-to-Iterating and scalar-to-Comparing adapters;
+see [c8.md](c8.md) for the std/once verifier blockers. Other builtin iterable adapters remain gated. Any/closures/capability
 and async dependencies remain #569/#570. General scalar conversions from string
 and int-to-char are outside this slice and produce explicit Unsupported; typed
 identity and numeric conversions supported by existing contracts are retained.

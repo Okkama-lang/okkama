@@ -25,6 +25,11 @@ mod defer;
 mod high;
 mod failures;
 mod objects;
+mod once;
+mod sorting;
+mod builtin_roles;
+#[cfg(test)]
+mod std_collection_tests;
 mod roles;
 mod walk;
 mod scalar;
@@ -180,5 +185,6 @@ pub(crate) fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
     let mut module = declarations.builder.finish()?;
     structure::finish(&mut module)?;
     structure::check(&module)?;
+    once::check(&module)?;
     Ok(module)
 }

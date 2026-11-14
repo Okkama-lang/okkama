@@ -1,0 +1,6 @@
+module app;
+import "collections/list" take EmptyList;
+main() is int {
+    let list is EmptyList<int> = EmptyList();
+    list.size();
+}
