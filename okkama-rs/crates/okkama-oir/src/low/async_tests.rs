@@ -33,6 +33,9 @@ const GOLDENS: &[(&str, &str, &str)] = &[
     golden!("coro-nested-cold-await"),
     golden!("coro-schedule-duty-live-across-await"),
     ("low-suspending-close", SUSPENDING, include_str!("../../tests/fixtures/async/low/low-suspending-close.oir")),
+    // R2: a resource held across an await; a temporary take with its rechecked proof.
+    golden!("r2-resource-across-await"),
+    golden!("r2-take-proof-recheck"),
 ];
 const PLAIN: usize = 0;
 const NEVER: usize = 5;

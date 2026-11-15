@@ -472,7 +472,12 @@ impl Engine<'_, '_> {
             self.error(R::B92, "proof must refer to an actual Future creation");
         }
         let aliases = &before.aliases[proof.future.as_u32() as usize];
-        if aliases.iter().any(|alias| *alias != proof.future && !evidence.aliases.contains(alias)) {
+        // R2: a name that a suspension saved is the frame slot's retention; the evidence accounts for it by the
+        // slot, and coro forbids reading it after the save (B9.5).
+        let in_slot = |alias: ValueId| self.body.insts.iter().any(|(_, inst)| matches!(&inst.op,
+            Operation::Async(AsyncOp::FrameSave { slots, .. })
+                if slots.iter().any(|slot| slot.value == alias && evidence.frame_slots.contains(&slot.slot))));
+        if aliases.iter().any(|alias| *alias != proof.future && !evidence.aliases.contains(alias) && !in_slot(*alias)) {
             self.error(R::B92, "unique-cache evidence omits an existing alias");
         }
         for (value, _) in self.body.values.iter() {
@@ -492,8 +497,10 @@ impl Engine<'_, '_> {
                 let uses = inst.op.operand_refs().iter().any(|operand| {
                     matches!(operand.reference, OperandRef::Value(value) if aliases.contains(&value))
                 });
+                // A frame save retains the cache in a slot; the evidence lists the slot (below).
                 if uses && !matches!(inst.op, Operation::Async(AsyncOp::UniqueCacheProof { .. }
-                    | AsyncOp::AwaitTake { .. } | AsyncOp::FutureDone { .. } | AsyncOp::FutureCancelled { .. })) {
+                    | AsyncOp::AwaitTake { .. } | AsyncOp::FutureDone { .. } | AsyncOp::FutureCancelled { .. }
+                    | AsyncOp::FrameSave { .. })) {
                     self.error(R::B92, "cache is published, retained, shared-awaited or stored in the function");
                 }
                 if let Operation::Async(AsyncOp::FrameSave { slots, .. }) = &inst.op {

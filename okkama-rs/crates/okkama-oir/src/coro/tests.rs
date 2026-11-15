@@ -36,6 +36,9 @@ const GOLDENS: &[(&str, &str, &str)] = &[
     golden!("coro-nested-cold-await"),
     golden!("coro-schedule-duty-live-across-await"),
     variant!("coro-start-descriptors"),
+    // R2: a resource held across an await; a temporary take whose proof coro rechecks.
+    variant!("r2-resource-across-await"),
+    variant!("r2-take-proof-recheck"),
 ];
 
 /// Own → verify(own) → coro → verify(coro) (OIR-2 §12).

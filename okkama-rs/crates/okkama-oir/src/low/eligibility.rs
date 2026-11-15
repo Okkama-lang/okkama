@@ -184,9 +184,10 @@ impl Context<'_> {
             AsyncOp::FutureNew { .. } | AsyncOp::Await { .. } | AsyncOp::AwaitUnwind { .. }
             | AsyncOp::FrameSave { .. } | AsyncOp::FrameResume { .. } | AsyncOp::FuturePublish { .. }
             | AsyncOp::FutureCancel { .. } | AsyncOp::FutureDone { .. } | AsyncOp::FutureCancelled { .. } => Ok(()),
-            AsyncOp::AwaitTake { .. } | AsyncOp::UniqueCacheProof { .. } | AsyncOp::CacheRehome { .. }
-            | AsyncOp::ServiceMaterialize { .. } | AsyncOp::ServiceAbsorb { .. } => {
-                Err(unsupported(function, "take, rehome and packet duties (D25) are lowered by slice R2 (wave 2)"))
+            // R2: a temporary take keeps its invoke and its proof; the cache duty settles as for a shared await.
+            AsyncOp::AwaitTake { .. } | AsyncOp::UniqueCacheProof { .. } => Ok(()),
+            AsyncOp::CacheRehome { .. } | AsyncOp::ServiceMaterialize { .. } | AsyncOp::ServiceAbsorb { .. } => {
+                Err(unsupported(function, "rehome and packet duties (D25) are lowered with own's R1 forms"))
             }
             AsyncOp::FutureSpawn { .. } => Err(unsupported(function, "spawn (D24) is lowered by slice P1 (wave 3)")),
             AsyncOp::Pin { .. } | AsyncOp::PinTransfer { .. } | AsyncOp::Unpin { .. } => {

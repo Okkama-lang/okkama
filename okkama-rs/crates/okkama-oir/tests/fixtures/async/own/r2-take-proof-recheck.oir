@@ -1,0 +1,86 @@
+oir 2 own
+// R2 (P2.5 plan §3.3 step 6): f creates two Futures, awaits the second, then proves the first unique and takes it
+// with a temporary boundary. The first Future lives across the await, so coro saves it in a frame slot. Hand-
+// written Own input in the form V2 own produces (own's temporary take arrives with R1).
+module unique_cache
+protocol Services kind services holders [scope, cache, frame, receipt, root] rules [protocol_rule(transition=settle,
+    from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
+    protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root,
+    checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running))]
+scope ST action in @task
+scope S action in @f
+summary Mtc call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[future<void>], publication=atomic)
+summary Mt call-boundary contract call_contract(failures=[cancelled], suspends=true, publication=atomic)
+summary Mfc call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[future<void>], publication=atomic)
+summary Mf call-boundary contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+func @task(%input: own) -> own [async] abi explicit(input_packet=0,
+    output_packet=0) summary(Mt) async-creation(Mtc) async-body(Mt) {
+    boundary B0 lexical in ST
+    selection s0: selection = union([])
+^entry in ST:
+    %q: scope<ST> = scope.begin ST
+    %a: scope<ST> = own.accept %q, %input
+    %empty: own = own.empty
+    %p: pending = exit.prepare return packet %empty select s0 at B0
+    invoke.own scope.end %a, reserve %p, effects scope_effects(failures=[], suspends=false, cancel=true)
+        normal ^done($closed, $pending)
+        unwind ^failed($closed, $failure)
+^done(%c: closed, %pending: pending) in ST:
+    (%out: own, %d: deps) = exit.commit %pending, destination caller
+    ret %out
+^failed(%c2: closed, %f: failure) in ST:
+    raise %f
+}
+func @f(%input: own) -> own [async] abi explicit(input_packet=0,
+    output_packet=0) summary(Mf) async-creation(Mfc) async-body(Mf) {
+    service.schedule Schedule0 owner S, protocol Services, duties [%future, %other]
+    key k0: key = service_of(value=%future, kind=cache)
+    dependency d0: dependency = key(k0)
+    key k1: key = service_of(value=%other, kind=cache)
+    dependency d1: dependency = key(k1)
+    boundary B0 lexical in S
+    selection s0: selection = union([])
+^entry in S:
+    %q: scope<S> = scope.begin S
+    %a: scope<S> = own.accept %q, %input
+    %empty: own = own.empty
+    %unit: int = const 0
+    %deps: deps = deps.of %unit
+    [imake] (%future: future<void> facts(managed(deps=d0)), %owner:
+        scope<S>) = fut.new %empty, %deps, %a, environment deferred(function=@task, arguments=[]), owner S
+    %empty2: own = own.empty
+    (%other: future<void> facts(managed(deps=d1)), %owner2:
+        scope<S>) = fut.new %empty2, %deps, %owner, environment deferred(function=@task, arguments=[]), owner S
+    invoke.own await %other
+        normal ^between($deps, %owner2)
+        unwind ^bad($failure, $task, $receipt, %owner2)
+^between(%otherdeps: deps, %o0: scope<S>) in S:
+    %unique: unique-cache = unique_cache.proof proof unique_cache_proof(future=%future, scope=S, region=[^between],
+        evidence=unique_cache_evidence(creation=instruction(imake), no_external_storage=true, no_other_waiters=true,
+        no_live_views=true, no_collector_retention=true, scheduler_cannot_publish=true))
+    invoke.own await.take %future, %unique, boundary temporary(awaiting=S)
+        normal ^ok($packet, $deps, %o0)
+        unwind ^bad($failure, $task, $receipt, %o0)
+^ok(%packet: own, %full: deps, %o1: scope<S>) in S:
+    %accepted: scope<S> = own.accept %o1, %packet
+    %out0: own = own.empty
+    %p: pending = exit.prepare return packet %out0 select s0 at B0
+    invoke.own scope.end %accepted, reserve %p, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=false, cancel=true)
+        normal ^done($closed, $pending)
+        unwind ^failed($closed, $failure)
+^bad(%failure0: failure, %task: task-state, %receipt: receipt, %o2: scope<S>) in S:
+    (%o3: scope<S>, %failure1: failure) = await.unwind %o2, %failure0, %task, %receipt, protocol Services
+    %combined: failure = scope.unwind %o3, %failure1, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=false, cancel=false)
+    raise %combined
+^done(%done: closed, %pending: pending) in S:
+    (%out: own, %d: deps) = exit.commit %pending, destination caller
+    ret %out
+^failed(%closed2: closed, %final: failure) in S:
+    raise %final
+}

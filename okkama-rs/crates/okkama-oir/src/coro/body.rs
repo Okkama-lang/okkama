@@ -108,6 +108,7 @@ impl Lowering<'_, '_> {
                     &Variable { original: value, versions, implicit }, self.budget)?;
                 repaired.insert(value, found);
             }
+            self.recheck_proofs()?;
             self.schedules(&schedules, &duties, &closes, &repaired)?;
             self.body.frame_layout = Some(FrameLayout { slots: slots.decls, continuations });
         } else {
@@ -845,6 +846,59 @@ impl Lowering<'_, '_> {
         }
         self.body.insts.get_mut(resume)?.results = results;
         Ok(resume)
+    }
+
+    /// Plan §3.3 step 6 (R2): a unique-cache proof is rechecked after the suspensions are bracketed. The Future
+    /// it proves may be the resumed version of a value saved before; every frame slot that holds that value or
+    /// one of its earlier versions is a retained slot of its evidence (B9.2). The earlier versions stay out of
+    /// the evidence's aliases: their names are dead after the save (B9.5), and the slots account for them.
+    fn recheck_proofs(&mut self) -> Result<(), CoroError> {
+        // The saved value of each (continuation, slot) and the (continuation, slot) of each resumed version.
+        let mut saved = BTreeMap::new();
+        let mut resumed = BTreeMap::new();
+        let mut proofs = Vec::new();
+        for (inst, data) in self.body.insts.iter() {
+            self.budget.step(1)?;
+            match &data.op {
+                Operation::Async(AsyncOp::FrameSave { slots, continuation, .. }) => {
+                    for slot in slots {
+                        saved.insert((*continuation, slot.slot), slot.value);
+                    }
+                }
+                Operation::Async(AsyncOp::FrameResume { continuation, slots, .. }) => {
+                    for (slot, value) in slots.iter().zip(data.results.iter().skip(1)) {
+                        resumed.insert(*value, (*continuation, slot.slot));
+                    }
+                }
+                Operation::Async(AsyncOp::UniqueCacheProof { .. }) => proofs.push(inst),
+                _ => {}
+            }
+        }
+        for inst in proofs {
+            let Operation::Async(AsyncOp::UniqueCacheProof { mut proof }) = self.body.insts.get(inst)?.op.clone()
+            else {
+                continue;
+            };
+            let mut chain = Vec::new();
+            let mut current = proof.future;
+            while let Some(&(continuation, slot)) = resumed.get(&current) {
+                self.budget.step(1)?;
+                let previous = *saved.get(&(continuation, slot))
+                    .ok_or_else(|| self.invalid("a resumed version has no saved value"))?;
+                if chain.contains(&previous) || previous == proof.future {
+                    break;
+                }
+                chain.push(previous);
+                current = previous;
+            }
+            for (&(_, slot), value) in &saved {
+                if (*value == proof.future || chain.contains(value)) && !proof.evidence.frame_slots.contains(&slot) {
+                    proof.evidence.frame_slots.push(slot);
+                }
+            }
+            self.body.insts.get_mut(inst)?.op = Operation::Async(AsyncOp::UniqueCacheProof { proof });
+        }
+        Ok(())
     }
 
     fn implicit_sites(&self, closes: &BTreeMap<Site, Vec<ValueId>>, value: ValueId) -> Vec<Site> {
