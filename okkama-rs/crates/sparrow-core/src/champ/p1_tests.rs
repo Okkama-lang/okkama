@@ -80,8 +80,7 @@ fn declared(name: &str, types: Vec<s::Type>, error_cases: &[&str]) -> s::Object 
 /// A plain enum `L` (0), an Error variant `Inner` (1) of `Inner.named(label)` (2), `Ferr.text(...)` with every
 /// scalar payload (3), `Ferr.kind(L)` (4), `Ferr.nested(Inner)` (5), `Ferr.plain` (6) and an Error enum (7).
 fn errors() -> Box<Runtime> {
-    let mut program = s::Program::default();
-    program.objects = vec![
+    let objects = vec![
         s::Object { enum_cases: 2, enum_names: vec!["L.input".into(), "L.rows".into()],
             ..declared("app.L", vec![s::Type::Int], &[]) },
         s::Object { variant_cases: vec![2], ..declared("app.Inner", vec![], &[]) },
@@ -93,7 +92,7 @@ fn errors() -> Box<Runtime> {
         declared("app.Ferr.plain", vec![], &["Ferr.plain"]),
         declared("app.Db", vec![s::Type::Int], &["Db.closed", "Db.reset"]),
     ];
-    Runtime::new_champ(program, Vec::new()).unwrap()
+    Runtime::new_champ(s::Program { objects, ..s::Program::default() }, Vec::new()).unwrap()
 }
 
 fn text_of(runtime: &Runtime, object: Word) -> String {
