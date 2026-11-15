@@ -54,6 +54,11 @@ const SHIELDED: u64 = 64;
 /// A driver told which of the Futures it listens to settled, in settlement
 /// order: a collection (#443) or a stream's listening request (#444).
 pub const INBOX: u64 = 128;
+/// Suspended at an `await` of machine code with no cancellation requested
+/// (#663). Cleared when the awaited Future settles after a request: then the
+/// re-entered `await` raises the pending cancellation, as before. A request
+/// that comes after the settlement stays pending for the next `await`.
+const AWAIT_SUSPENDED: u64 = 256;
 
 /// Several frames awaiting one Future.
 #[derive(Debug, Default)]
@@ -200,6 +205,10 @@ impl Runtime {
     fn wake_waiter(&mut self, frame: Word, waiter: Word) {
         if get(waiter, AWAITING) == frame {
             set(waiter, AWAITING, UNBOUND);
+            let flags = get(waiter, FLAGS);
+            if flags & CANCEL_REQUESTED != 0 {
+                set(waiter, FLAGS, flags & !AWAIT_SUSPENDED);
+            }
         } else if get(waiter, FLAGS) & INBOX != 0 && !crate::drivers::settled(self, waiter, frame) {
             // A collection or a stream only listens, so a plain `await`
             // skips this; a stream serves its requests itself.
@@ -505,7 +514,19 @@ pub const AWAIT_PENDING: u64 = 2;
 pub extern "C" fn rt_await(ctx_ptr: *mut Ctx, this: Word, future: Word) -> u64 {
     let (ctx, runtime) = unsafe { parts(ctx_ptr) };
     runtime.count(|_| "await".into());
-    if let Some(failure) = runtime.deliverable_cancel() {
+    // Re-entry after the awaited Future settled first (#663): only a
+    // delivered cancellation raises. A cancellation requested after the
+    // settlement stays pending for the next `await`; this one takes the
+    // settled outcome.
+    let flags = get(this, FLAGS);
+    let reentry = flags & AWAIT_SUSPENDED != 0;
+    let cancel = if reentry {
+        set(this, FLAGS, flags & !(AWAIT_SUSPENDED | DELIVER_NOW));
+        (flags & DELIVER_NOW != 0).then(|| runtime.cancelled_failure())
+    } else {
+        runtime.deliverable_cancel()
+    };
+    if let Some(failure) = cancel {
         ctx.failure = failure;
         ctx.status = FAILED;
         return AWAIT_READY;
@@ -537,6 +558,7 @@ pub extern "C" fn rt_await(ctx_ptr: *mut Ctx, this: Word, future: Word) -> u64 {
         }
         _ => {
             runtime.add_waiter(future, this);
+            set(this, FLAGS, get(this, FLAGS) | AWAIT_SUSPENDED);
             AWAIT_PENDING
         }
     }
@@ -670,3 +692,7 @@ pub extern "C" fn rt_fut(ctx_ptr: *mut Ctx, op: u64, future: Word) -> Word {
         ),
     }
 }
+
+#[cfg(test)]
+#[path = "tasks_tests.rs"]
+mod tests;
