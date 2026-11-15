@@ -60,11 +60,14 @@ summary M16 observation results [result_relation(provenance=unbound_result)] con
     failures=[program], publication=atomic)
 summary M17 observation results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
     failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
-protocol P0 kind services holders [scope, cache, frame, receipt, root] rules [protocol_rule(transition=settle,
-    from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
-    protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies],
-    normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root,
-    checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running))]
+protocol P0 kind services holders [scope, cache, frame, receipt, root, pending_exit] rules [
+    protocol_rule(transition=settle, from=cache, to=scope, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=receipt,
+    to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
+    protocol_rule(transition=settle, from=cache, to=root, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=rehome, from=scope,
+    to=pending_exit, checks=[owner, live_dependencies, sufficient_boundary],
+    normal=protocol_poststate(holder=pending_exit, state=open))]
 
 func @app.Quiet.new#0() -> app.Quiet [ctor app.Quiet] abi observation summary(M15) {
     low.metadata cleanup_metadata(closes=[], schedules=[], plans=[], roots=[root_requirement(boundary=terminator(^b0)),
@@ -1115,7 +1118,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M17)
         %19: scope<S2>, %20: deps) in S2:
     [i9] %21: int = const 1
     [i10] %22: own = own.empty
-    [i11] %23: deps = deps.of %17
+    [i11] %23: deps = deps.of %18
     [i12] (%24: future<int> facts(managed(deps=d2)), %25: cache-state,
         %26: scope<S2>) = fut.new %22, %23, %19, environment deferred(function=@app.Adder.plus#0, arguments=[%17, %18,
         %21]), result int, owner S2

@@ -31,7 +31,7 @@ summary M14 internal contract call_contract(publication=atomic)
 summary M15 observation results [result_relation(provenance=unbound_result)] contract call_contract(results=[app.Quiet], failures=[program], publication=atomic)
 summary M16 observation results [result_relation(provenance=unbound_result)] contract call_contract(results=[app.Adder], failures=[program], publication=atomic)
 summary M17 observation results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
-protocol P0 kind services holders [scope, cache, frame, receipt, root] rules [protocol_rule(transition=settle, from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root, checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running))]
+protocol P0 kind services holders [scope, cache, frame, receipt, root, pending_exit] rules [protocol_rule(transition=settle, from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root, checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=rehome, from=scope, to=pending_exit, checks=[owner, live_dependencies, sufficient_boundary], normal=protocol_poststate(holder=pending_exit, state=open))]
 
 func @app.Quiet.new#0() -> app.Quiet [ctor app.Quiet] abi observation summary(M15) {
     boundary B0 lexical in S3
@@ -201,7 +201,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M17)
     ^b4(%15: app.Adder facts(plain(certificate=closed_graph(ty=app.Adder))), %16: future<int> facts(managed(deps=d1)), %17: scope<S2>, %18: deps) in S2:
     %19: int = const 1
     %20: own = own.empty
-    %21: deps = deps.of %15
+    %21: deps = deps.of %16
     (%22: future<int> facts(managed(deps=d2)), %23: cache-state, %24: scope<S2>) = fut.new %20, %21, %17, environment deferred(function=@app.Adder.plus#0, arguments=[%15, %16, %19]), result int, owner S2
     %25: deps = deps.of %22
     %26: frame<@main> = frame.save %1, slots [frame_slot(slot=0, value=%24, mode=consume), frame_slot(slot=1, value=%25, mode=borrow), frame_slot(slot=2, value=%9, mode=consume), frame_slot(slot=3, value=%23, mode=consume)], continuation 1
