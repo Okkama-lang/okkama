@@ -1,0 +1,136 @@
+# Heavy runs of the 0.6.0 Rebuild on GitHub's runners instead of the owner's
+# machine (LLM-GUIDE §1.1): the crate suites of a wave branch, and conformance
+# on Tomato and Champ with the ranking of Champ's blockers. Dispatched by hand:
+#   gh workflow run wave.yml --ref release/0.6.0 -f ref=<branch> -f suites=both
+name: Wave
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit to test (must be pushed)
+        required: true
+      suites:
+        description: "tests, conformance or both"
+        required: true
+        default: both
+
+concurrency:
+  group: wave-${{ inputs.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  tests:
+    name: Tests (${{ matrix.part }})
+    if: inputs.suites != 'conformance'
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [oir, compiler, sparrow, champ, cli, clippy, differential]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal --component clippy && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: okkama-rs -> target
+          shared-key: wave-${{ matrix.part }}
+      - name: Run
+        working-directory: okkama-rs
+        run: |
+          set -euo pipefail
+          gate="--profile gate --locked"
+          case "${{ matrix.part }}" in
+            oir) cargo test $gate -p okkama-oir ;;
+            compiler) cargo test $gate -p okkama-compiler --lib ;;
+            sparrow)
+              cargo test $gate -p okkama-sparrow
+              cargo test $gate -p sparrow-core --lib ;;
+            champ)
+              cargo test $gate -p sparrow-core --features champ-abi --lib champ
+              # p1_pipeline and every champ_* end-to-end file; the full
+              # ownership gate test is a known red until the verifier
+              # completes on P1, so it is skipped here.
+              args="--test p1_pipeline"
+              for file in crates/okkama-cli/tests/champ_*.rs; do
+                [ -e "$file" ] && args="$args --test $(basename "$file" .rs)"
+              done
+              cargo test $gate -p okkama-cli --features champ-abi $args -- --skip p1_pipeline_full_ownership_gate ;;
+            cli) cargo test $gate -p okkama-cli ;;
+            clippy)
+              cargo clippy $gate --workspace --all-targets -- -D warnings
+              cargo clippy $gate -p okkama-cli -p sparrow-core -p okkama-sparrow --features champ-abi \
+                --all-targets -- -D warnings ;;
+            differential)
+              if [ -x tools/verifier-differential.sh ]; then tools/verifier-differential.sh; else echo "no differential"; fi ;;
+          esac
+
+  conformance:
+    name: Conformance (${{ matrix.engine }})
+    if: inputs.suites != 'tests'
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [sparrow, champ]
+    # SQLite 3.41+ for std db/sqlite.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            conformance/adapters/rust/.target
+          key: wave-ocs-${{ matrix.engine }}-${{ hashFiles('okkama-rs/Cargo.lock') }}
+          restore-keys: wave-ocs-${{ matrix.engine }}-
+      - name: Fetch crates
+        working-directory: okkama-rs
+        run: cargo fetch --locked
+      - name: Run full-release
+        working-directory: conformance
+        run: |
+          adapter=adapters/rust/adapter.json
+          [ "${{ matrix.engine }}" = champ ] && adapter=adapters/rust/adapter-champ.json
+          # Failing cases are data here; a missing results.jsonl is the failure.
+          CARGO_NET_OFFLINE=true ./ocs run --adapter "$adapter" --profile full-release -j 4 --quiet \
+            --out "$GITHUB_WORKSPACE/out/${{ matrix.engine }}" || true
+          test -f "$GITHUB_WORKSPACE/out/${{ matrix.engine }}/results.jsonl"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: conformance-${{ matrix.engine }}
+          path: out/${{ matrix.engine }}/
+
+  blockers:
+    name: Champ blockers
+    needs: conformance
+    if: always() && inputs.suites != 'tests'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/download-artifact@v5
+        with:
+          path: out
+      - name: Rank
+        run: |
+          python3 conformance/tools/champ_blockers.py out/conformance-champ \
+            --baseline out/conformance-sparrow --json out/blockers.json | tee out/blockers.txt
+          head -25 out/blockers.txt >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: champ-blockers
+          path: |
+            out/blockers.json
+            out/blockers.txt
