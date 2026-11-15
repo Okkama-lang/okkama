@@ -1,0 +1,23 @@
+{
+  "schema": "ocs-adapter-config/2",
+  "protocol": "ocs-adapter/2",
+  "name": "okkama-rust-champ",
+  "description": "Rust implementation: Champ execution (champ-abi build, OKKAMA_PIPELINE=oir2).",
+  "command": [
+    "python3",
+    "-I",
+    "{adapter_dir}/okkama_rust_adapter.py"
+  ],
+  "env": {
+    "OCS_RUST_IMPLEMENTATION_ROOT": "{suite_root}/../okkama-rs",
+    "OCS_RUST_TARGET_DIR": "{adapter_dir}/.target",
+    "CARGO_HOME": "{host_home}/.cargo",
+    "RUSTUP_HOME": "{host_home}/.rustup",
+    "OCS_RUST_ENGINE": "champ",
+    "OKKAMA_PIPELINE": "oir2"
+  },
+  "pass_env": [
+    "PATH"
+  ],
+  "notes": "Builds okkama-cli with --features champ-abi into .target/engine-champ (never shared with the Sparrow build). parse/check go to the native endpoint (shared front end); run/test go through `okkama run` on Champ. Compare with a run of adapter.json on the same profile: tools/champ_blockers.py."
+}

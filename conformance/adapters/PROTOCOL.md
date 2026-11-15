@@ -141,7 +141,10 @@ error). Diagnostics are rendered to stderr exactly as the CLI does.
 binary for `--ocs-capabilities`. It forwards only modes the binary declares,
 using the same protocol natively (`--ocs-request R --ocs-response P`). The
 workspace builds the `okkama` binary (`okkama-cli`). `OCS_RUST_ENGINE` selects
-`sparrow` (default and only engine). Sparrow declares `parse`, `check`,
+`sparrow` (default) or `champ` (`adapter-champ.json`: a `champ-abi` build in
+its own target directory, `OKKAMA_PIPELINE=oir2`; parse/check through the
+native endpoint, run/test through `okkama run` with its streams passed through
+and its exit status and failure report translated). Sparrow declares `parse`, `check`,
 `run` and `test`. Execution includes code generation and SPB encode/decode
 before running the VM. There is no engine fallback.
 Unsupported constructs are reported as `unsupported`, runtime traps as

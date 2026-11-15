@@ -24,6 +24,8 @@ cd conformance
 ./ocs validate                                   # metadata, discovery, contracts, profiles, ledger
 python3 runner-tests/test_runner.py              # runner self-tests (deliberate failures)
 python3 runner-tests/test_schema_sync.py
+python3 runner-tests/test_rust_adapter.py        # Rust adapter: engines, build caches, Champ translation
+python3 runner-tests/test_champ_blockers.py      # Champ failure classification and ranking
 
 ./ocs run --adapter adapters/rust/adapter.json --profile full-release -j 8
 ./ocs run --adapter adapters/rust/adapter.json --profile bootstrap
@@ -44,6 +46,41 @@ inspection (`--keep failed`).
 
 The Rust adapter uses Sparrow. Removed engines are rejected (#584, #585).
 Results for one engine do not establish support in another. The selected engine appears in each run's adapter configuration.
+
+### Champ conformance and the blocker ranking
+
+`adapters/rust/adapter-champ.json` selects `OCS_RUST_ENGINE=champ`: the
+adapter builds `okkama-cli --features champ-abi` into
+`adapters/rust/.target/engine-champ` (its own target directory and probe
+cache, never shared with the Sparrow build) and runs every case with
+`OKKAMA_PIPELINE=oir2`. `parse`/`check` go to the native endpoint (the shared
+front end); `run` first checks the sources there, then runs
+`okkama run --stdlib STD SOURCES -- ARGS` on Champ and translates its exit
+status and failure report; `test` is `okkama run -t`, which OIR-2 does not
+support yet, so those cases are UNSUPPORTED with a classified reason. To see
+what blocks Champ, run the same profile on both engines and rank the Champ-only
+failures:
+
+```sh
+./ocs run --adapter adapters/rust/adapter.json       --profile full-release -j 6 --out /tmp/runs/sparrow
+./ocs run --adapter adapters/rust/adapter-champ.json --profile full-release -j 6 --out /tmp/runs/champ
+python3 tools/champ_blockers.py /tmp/runs/champ --baseline /tmp/runs/sparrow \
+    --json /tmp/runs/blockers.json [--compare yesterday/blockers.json]
+# or all of it, in an isolated container (offline):
+OCS_JOBS=6 tools/run_champ.sh /path/to/repo /tmp/runs
+```
+
+The report counts passes, cases failing on both engines (not Champ's
+problem) and Champ-only failures by stage: unsupported in OIR-2 lowering, SPB
+17 generation gap (`not yet in S1/S2`), loader rule, runtime failure or crash,
+wrong output, timeout, test mode, driver unavailable, other unsupported, not
+run. Then it ranks blockers: each failure's first diagnostic line with spans,
+numbers, paths, quoted text and symbol names removed (`unsupported in OIR-2
+lowering: closure capture of x in function main` becomes `unsupported: closure
+capture`, `GenerateError("type Map(..): not yet in S1")` becomes `S1 type
+Map`), with case counts and up to five example ids per key. `--json` keeps the
+same data for day-to-day diffs; `--compare` prints new passes, new failures and
+blockers whose counts moved.
 
 ## Locating the implementation and the standard library
 
