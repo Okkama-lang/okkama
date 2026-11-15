@@ -105,7 +105,8 @@ fn test_operations_type_their_operands() {
         vec![Constant::Descriptor(0), Constant::Descriptor(0)]);
     let mut p = profile(descriptors);
     p.objects.push(Object {
-        name: "Empty".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], fields: vec![],
+        name: "Empty".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false,
+        fields: vec![],
         layout: ObjectRuntimeLayout {
             storage_fields: vec![], allocation_words: 2, identity_offset: None, has_destroy: false,
             may_reach_resource: false, may_async_destroy: false, trace_layout: vec![], selection_layout: vec![],
