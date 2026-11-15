@@ -116,7 +116,7 @@ object FixedZone does TimeZone {
     FixedZone(name is string, offset is Duration) {
         confirm name.length() > 0
             else throw InvalidTimeZone.because("fixed time-zone name must not be empty");
-        confirm offset::Span::seconds.denominator() == "1"
+        confirm offset::Span::seconds.denominator() == 1
             else throw InvalidTimeZone.because("time-zone offset must contain whole seconds");
         confirm offset::Span::seconds > -86400.rat() && offset::Span::seconds < 86400.rat()
             else throw InvalidTimeZone.because("time-zone offset must be within one day");

@@ -244,7 +244,7 @@ pub fn rat_compare(op: Cmp, left: &Value, right: &Value) -> Result<Value> {
 pub fn rat_part(value: &Value, denominator: bool) -> Result<Value> {
     let value = rat_value(value)?;
     let part = if denominator { value.denominator() } else { value.numerator() };
-    Ok(Value::Str(Rc::from(part.to_string())))
+    Ok(Value::Int(part.clone()))
 }
 
 pub fn sign(value: &Value) -> Result<Value> {

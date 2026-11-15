@@ -683,7 +683,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                     value: receiver_id,
                     denominator: *op == Builtin::Denominator,
                 },
-                Type::Str,
+                Type::Int,
             ),
             Builtin::FutureCancel => {
                 self.b.emit_void(

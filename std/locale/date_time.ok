@@ -408,7 +408,7 @@ object LocalizedZoneObservation {
         confirm name.length() > 0 && name.length() <= 255
             else throw InvalidLocalizedDateTime.because("timezone name length");
         let offset = zone.offset(instant);
-        confirm offset::Span::seconds.denominator() == "1"
+        confirm offset::Span::seconds.denominator() == 1
             && offset::Span::seconds > (-86400).rat()
             && offset::Span::seconds < 86400.rat()
             else throw InvalidLocalizedDateTime.because(

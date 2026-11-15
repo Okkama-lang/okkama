@@ -302,9 +302,9 @@ hidden object MailDatePrinting {
         let offset = origin.offset();
         let raw = offset::Span::seconds;
         let elapsed = origin.instant().unix_duration();
-        confirm elapsed::Span::seconds.denominator() == "1"
+        confirm elapsed::Span::seconds.denominator() == 1
             else throw InvalidMail.located(0, "mail time must contain whole seconds");
-        confirm raw.denominator() == "1"
+        confirm raw.denominator() == 1
             else throw InvalidMail.located(0, "mail offset must contain whole seconds");
         let seconds = raw.int();
         confirm seconds % 60 == 0 && seconds > -86400 && seconds < 86400

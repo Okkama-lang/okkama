@@ -554,9 +554,8 @@ is converted (`1.rat()`, `(1 / 2).float()`).
 `rat.string()` returns canonical `n/d` text (or just `n` for denominator
 one), `.int()` truncates toward zero, `.byte()` truncates and checks `0..255`,
 and `.float()` is the explicit lossy boundary. `.numerator()` and
-`.denominator()` return exact decimal strings
-because their arbitrary-precision values can exceed the current `int`
-representation.
+`.denominator()` return the parts of the canonical form as `int`s (the
+denominator is positive); an `int` holds any of them exactly.
 
 `int.rat()` and `byte.rat()` are exact conversions from integer categories.
 `float.rat()` explicitly rationalizes the float's canonical decimal value
@@ -975,7 +974,7 @@ Complete list (a test checks it against the compiler's table, `analysis/check/bu
 | `int`, `float` | `abs()`, `sign()`, `pow(exponent)`, `sqrt()` (a `float`) — `int.pow(int)` is the exact `int` (a negative exponent is an error), `float.pow(float)` a `float` |
 | `int`, `float` | `min(other)`, `max(other)` (the receiver when they are equal), `clamp(low, high)` (`low` above `high` is an error) — of the receiver's type |
 | `float` | `floor()`, `ceil()`, `round()` (half away from zero), `trunc()`, `exp()`, `ln()`, `log2()`, `log10()`, `sin()`, `cos()`, `tan()`, `atan2(y)` (`x.atan2(y)` is the angle of the point (x, y)) — each a `float`, and a result that is not finite (`0.0.ln()`, `1000.0.exp()`) is an error, as for every float; `finite()`, `nan()` (a `bool`) |
-| `rat` | `abs()`, `sign()`, `numerator()`, `denominator()` (decimal strings), `pow(exponent)` — the exact `rat`; a negative exponent inverts it |
+| `rat` | `abs()`, `sign()`, `numerator()`, `denominator()` (`int`; the denominator is positive), `pow(exponent)` — the exact `rat`; a negative exponent inverts it |
 | numbers, `byte` | `less`, `less_or_equal`, `greater`, `greater_or_equal`, `order` with the same category |
 | `char` | `order(other)`, `code()` (the code point, an `int`), `string()`; `char(code)` and `code.char()` make one from an `int` (a Unicode scalar value, else an error) |
 | `int`, `byte` | `bit_count()`, `leading_zeros()`, `trailing_zeros()`, `rotate_left(n)`, `rotate_right(n)`, `reverse_bits()`, `swap_bytes()` |

@@ -32,7 +32,7 @@ object Rfc3339 {
 
     // origin at offset from UTC, a whole number of minutes below 24 hours.
     Rfc3339(origin is Instant, offset is Duration) {
-        confirm offset::Span::seconds.denominator() == "1"
+        confirm offset::Span::seconds.denominator() == 1
             else throw InvalidRfc3339Offset.because("RFC 3339 offset must contain whole seconds");
         let seconds is int = offset::Span::seconds.int();
         confirm seconds % 60 == 0

@@ -57,7 +57,7 @@ object Duration does Comparing<Duration>, Adding<Duration, Duration>, Subtractin
             }
         };
         let seconds is rat = value * multiplier;
-        confirm (seconds * 1000000000.rat()).denominator() == "1"
+        confirm (seconds * 1000000000.rat()).denominator() == 1
             else throw InvalidDuration.because(
                 "duration must contain an integral number of nanoseconds"
             );
@@ -108,7 +108,7 @@ object Duration does Comparing<Duration>, Adding<Duration, Duration>, Subtractin
 
     // The length in nanoseconds.
     nanoseconds() is BigInt {
-        BigInt(origin: (origin * 1000000000.rat()).numerator());
+        BigInt((origin * 1000000000.rat()).numerator());
     }
 
     // The sum.

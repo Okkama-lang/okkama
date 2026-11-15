@@ -809,7 +809,7 @@ pub enum DataOp {
     FloatAbs,
     FloatSign,
     FloatSqrt,
-    // rat.ext (wire 17): exact rationals; a zero divisor fails. Numerator and denominator are decimal text.
+    // rat.ext (wire 17): exact rationals; a zero divisor fails. Numerator and denominator are ints (#743).
     RatAdd,
     RatSub,
     RatMul,
@@ -905,7 +905,7 @@ impl DataOp {
             RatAdd | RatSub | RatMul | RatDiv | RatMod => (&[Rat, Rat], Rat),
             RatNeg | RatAbs => (&[Rat], Rat),
             RatSign => (&[Rat], Int),
-            RatNumerator | RatDenominator => (&[Rat], Str),
+            RatNumerator | RatDenominator => (&[Rat], Int),
             StrSlice => (&[Str, Int, Int], Str),
             StrSplit => (&[Str, Str], STR_ARRAY),
             StrReplace | StrReplaceFirst => (&[Str, Str, Str], Str),

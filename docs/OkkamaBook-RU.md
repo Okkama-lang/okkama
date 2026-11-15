@@ -585,9 +585,8 @@ let packet is @byte = source.map() -> item { byte(item); };
 `rat.string()` возвращает канонический текст `n/d` (либо только `n` при
 знаменателе один), `.int()` усекает к нулю, `.byte()` усекает и проверяет
 `0..255`, а `.float()` является явной потерей точности. `.numerator()` и
-`.denominator()` возвращают точные
-десятичные строки: их значения произвольной точности могут не помещаться в
-текущее представление `int`.
+`.denominator()` возвращают части канонической формы как `int` (знаменатель
+положителен); `int` вмещает любую из них точно.
 
 `int.rat()` и `byte.rat()` — точные преобразования целочисленных категорий.
 `float.rat()` явно рационализирует каноническое десятичное значение float
@@ -1022,7 +1021,7 @@ prices.values();             // @V, тот же порядок пар, что у
 | `int`, `float` | `abs()`, `sign()`, `pow(exponent)`, `sqrt()` (это `float`) — `int.pow(int)` даёт точный `int` (отрицательная степень — ошибка), `float.pow(float)` — `float` |
 | `int`, `float` | `min(other)`, `max(other)` (при равенстве — получатель), `clamp(low, high)` (`low` больше `high` — ошибка) — того же типа, что получатель |
 | `float` | `floor()`, `ceil()`, `round()` (половина — от нуля), `trunc()`, `exp()`, `ln()`, `log2()`, `log10()`, `sin()`, `cos()`, `tan()`, `atan2(y)` (`x.atan2(y)` — угол точки (x, y)) — каждое `float`, и неконечный результат (`0.0.ln()`, `1000.0.exp()`) — ошибка, как у любого float; `finite()`, `nan()` (это `bool`) |
-| `rat` | `abs()`, `sign()`, `numerator()`, `denominator()` (десятичные строки), `pow(exponent)` — точный `rat`, отрицательная степень его обращает |
+| `rat` | `abs()`, `sign()`, `numerator()`, `denominator()` (`int`; знаменатель положителен), `pow(exponent)` — точный `rat`, отрицательная степень его обращает |
 | числа, `byte` | `less`, `less_or_equal`, `greater`, `greater_or_equal`, `order` с той же категорией |
 | `char` | `order(other)`, `code()` (code point, `int`), `string()`; `char(code)` и `code.char()` строят его из `int` (скалярное значение Unicode, иначе ошибка) |
 | `int`, `byte` | `bit_count()`, `leading_zeros()`, `trailing_zeros()`, `rotate_left(n)`, `rotate_right(n)`, `reverse_bits()`, `swap_bytes()` |

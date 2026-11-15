@@ -229,9 +229,9 @@ operation_group! { CoreOp {
     RatNew { numerator: ValueId, denominator: ValueId }
         => ("rat.new", [numerator: Observe, denominator: Observe], Rule::Data { ty: ResultType::Scalar(ScalarType::Rat), trap: true });
     RatNumerator { value: ValueId }
-        => ("rat.numerator", [value: Observe], Rule::Data { ty: ResultType::Scalar(ScalarType::Str), trap: false });
+        => ("rat.numerator", [value: Observe], Rule::Data { ty: ResultType::Scalar(ScalarType::Int), trap: false });
     RatDenominator { value: ValueId }
-        => ("rat.denominator", [value: Observe], Rule::Data { ty: ResultType::Scalar(ScalarType::Str), trap: false });
+        => ("rat.denominator", [value: Observe], Rule::Data { ty: ResultType::Scalar(ScalarType::Int), trap: false });
     Convert { value: ValueId, from: NumericType, to: NumericType }
         => ("cvt", [value: Observe], Rule::Convert { from: *from, to: *to });
     ByteFrom { value: ValueId, context: Option<String> }
