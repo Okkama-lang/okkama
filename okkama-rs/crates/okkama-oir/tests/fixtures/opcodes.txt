@@ -12,6 +12,7 @@ array.slice
 await
 await.shielded
 await.take
+await.unwind
 bind
 bool.eq
 bool.ne
@@ -72,6 +73,7 @@ cleanup.failure
 cleanup.finish
 cleanup.plan
 cleanup.settle
+cleanup.settle.dynamic
 cleanup.settle.empty
 cleanup.shield
 const
@@ -224,6 +226,8 @@ scope.end
 scope.split
 scope.transfer
 scope.unwind
+service.absorb
+service.materialize
 stage
 str.characters
 str.chomp

@@ -384,3 +384,83 @@ fn a_cap_of_a_fresh_owner_carries_its_packet() {
                 && main.registers[*output as usize] == s::Type::Object(meter)));
     assert!(moved);
 }
+
+const RESOURCE_CLOSURE: &str = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+main() is int {
+    let out = Stdout();
+    let r = Res(name: "r");
+    let f = () is string { r.label() + "!"; };
+    out.writeln(f());
+    out.writeln(f());
+    out.writeln("end");
+    0;
+}
+"#;
+
+/// Decision (a) of #676: a closure that captures a resource by reference is a new object reaching it, so it is
+/// committed into the scope with the empty packet own gave it, exactly like `obj.new` with a packet.
+#[test]
+fn a_closure_capturing_a_resource_is_committed_with_its_packet() {
+    let p = compile(RESOURCE_CLOSURE);
+    let res = object(&p, "app.Res");
+    let (layout, closure) = p.objects.iter().enumerate()
+        .find(|(_, object)| object.name.ends_with(".closure")).unwrap();
+    assert_eq!(closure.layout.storage_fields, vec![s::Type::Object(res)]);
+    assert!(closure.layout.may_reach_resource);
+    let main = &p.functions[function(&p, "main")];
+    let new = main.code.iter().position(|instruction| matches!(instruction,
+        s::Instruction::Data { op: s::DataOp::ObjNew, immediate: s::Immediate::Object(object), .. }
+            if *object as usize == layout)).unwrap();
+    let s::Instruction::Champ { op: s::Opcode::OwnCreateCommit, arguments, flow: s::Flow::Next(committed) }
+        = &main.code[new + 1] else { panic!("the closure is not committed: {:?}", main.code[new + 1]) };
+    assert_eq!(arguments[1], s::Argument::Object(layout as u32));
+    let s::Instruction::Champ { op: s::Opcode::OwnJoin, arguments, .. } = &main.code[new + 2] else {
+        panic!("the committed packet is not joined: {:?}", main.code[new + 2]);
+    };
+    assert_eq!(arguments[1], s::Argument::Location(committed[0]));
+}
+
+const ESCAPED_ROLE_CALL: &str = "module app v1.0.0;
+role Named { name() is string; }
+object Child {
+    has seen is string;
+    Child(parent is Named) { seen = parent.name(); }
+}
+object Parent does Named {
+    has label is string;
+    has child is Maybe<Child>;
+    Parent(label is string) {
+        self.label = label;
+        child = Maybe.some(Child(self));
+    }
+    name() is string { label; }
+}
+main() is int {
+    let n = Parent(\"p\").name();
+    0;
+}";
+
+/// §11.4: an incomplete construction stores its pending state in `$pending` (High leaves the operand unbound),
+/// so the guard of a role entry sees it until the completing write stores false.
+#[test]
+fn an_incomplete_construction_starts_pending() {
+    let p = compile(ESCAPED_ROLE_CALL);
+    let parent = object(&p, "app.Parent");
+    let constructor = &p.functions[function(&p, "app.Parent.new#0")];
+    let inputs = constructor.code.iter().find_map(|instruction| match instruction {
+        s::Instruction::Data { op: s::DataOp::ObjNew, inputs, immediate: s::Immediate::Object(object), .. }
+            if *object == parent => Some(inputs.clone()),
+        _ => None,
+    }).unwrap();
+    let pending = *inputs.last().unwrap();
+    assert!(constructor.code.iter().any(|instruction| matches!(instruction,
+        s::Instruction::Data { op: s::DataOp::Const, output: Some(output),
+            immediate: s::Immediate::Constant(s::Constant::Bool(true)), .. } if *output == pending)));
+}

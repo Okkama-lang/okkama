@@ -121,19 +121,34 @@ fn oir2_scalar_builtins_golden() {
 
 #[test]
 fn oir2_unsupported_source_constructs_are_diagnostics() {
-    for (body, expected) in [
-        ("let c = char(65); 0;", "char conversion"),
-        ("byte(8) >>> 1; 0;", "byte >>>"),
-    ] {
-        let source = format!("module app; main() is int {{ {body} }}");
-        let error = print_oir2(&source).expect_err("unsupported program must stop");
-        let LowerError::Unsupported { message, span } = error else {
-            panic!("wrong diagnostic: {error}");
-        };
-        assert!(message.contains("unsupported in OIR-2 lowering"), "{message}");
-        assert!(message.contains(expected), "{message}");
-        assert!(!span.is_empty());
-    }
+    // A construct OIR-2 cannot express yet (char conversions, #679) stops with a located diagnostic.
+    let source = "module app; main() is int { let c = char(65); 0; }";
+    let error = print_oir2(source).expect_err("unsupported program must stop");
+    let LowerError::Unsupported { message, span } = error else {
+        panic!("wrong diagnostic: {error}");
+    };
+    assert!(message.contains("unsupported in OIR-2 lowering"), "{message}");
+    assert!(message.contains("char conversion"), "{message}");
+    assert!(!span.is_empty());
+}
+
+/// A value coerced to `any` is boxed with its static type (`any.box`); High verifies it.
+#[test]
+fn oir2_any_coercion_boxes_the_value() {
+    let text = print_oir2("module app; main() is int { let i is any = 8; 0; }").unwrap();
+    // The boxed operand is the int constant itself, whatever its SSA number.
+    let constant = text.lines().find_map(|line| line.trim().strip_suffix(": int = const 8"))
+        .unwrap_or_else(|| panic!("no int constant 8: {text}"));
+    assert!(text.contains(&format!(": any = any.box {constant}, ty any")), "{text}");
+}
+
+/// `byte >>> int` counts in int, as Tomato does: it is byte.shr, never a narrowed byte.ushr count.
+#[test]
+fn oir2_byte_unsigned_shift_counts_in_int() {
+    let text = print_oir2("module app; main() is int { let b = byte(200) >>> 3; b.int(); }").unwrap();
+    assert!(text.contains("byte.shr %1, %2"), "{text}");
+    assert!(!text.contains("byte.ushr"), "{text}");
+    assert_eq!(text.matches("to byte").count(), 1, "only the operand is narrowed: {text}");
 }
 
 #[test]
@@ -967,6 +982,61 @@ fn oir2_s3_self_check_catch_payload_and_binding_dominance() {
     }
 }
 
+/// A match on a catch payload binds it again inside the handler (#677).
+const CATCH_MATCH: &str = concat!("module app; enum Stop is Error = (now); main() is int { ",
+    "try { throw Stop.now; } catch e is Stop { match e { case Stop.now { 7; } } } }");
+
+#[test]
+fn oir2_catch_payload_matched_inside_its_handler() {
+    with_analysis(CATCH_MATCH, |analysis| {
+        let module = lower_to_oir2(analysis).unwrap_or_else(|error| panic!("{error}"));
+        verify_high(&module, CATCH_MATCH);
+        let body = body_for_entry(&module);
+        let binds = body.insts.iter().filter(|(_, inst)| {
+            matches!(inst.op, ir::Operation::Lexical(ir::LexicalOp::Bind { .. }))
+        }).count();
+        assert!(binds >= 2, "the catch binding and the match alias");
+    });
+}
+
+#[test]
+fn oir2_payload_free_error_enum_match_compares_enum_cases() {
+    let source = concat!("module app; enum Stop is Error = (now, later); main() is int { ",
+        "let s = Stop.later; match s { case Stop.now { 1; } case Stop.later { 2; } } }");
+    with_analysis(source, |analysis| {
+        let module = lower_to_oir2(analysis).unwrap_or_else(|error| panic!("{error}"));
+        verify_high(&module, source);
+        let body = body_for_entry(&module);
+        let ops: Vec<_> = body.insts.iter().map(|(_, inst)| &inst.op).collect();
+        assert!(!ops.iter().any(|op| matches!(op, ir::Operation::Core(ir::CoreOp::VariantTag { .. }))));
+        let compares = ops.iter().filter(|op| matches!(op, ir::Operation::Core(ir::CoreOp::EnumEq { .. }))).count();
+        assert_eq!(compares, 2);
+    });
+}
+
+#[test]
+fn oir2_catch_payload_alias_does_not_replace_the_catch_binding() {
+    with_analysis(CATCH_MATCH, |analysis| {
+        let mut broken = lower_to_oir2(analysis).unwrap();
+        let entry = broken.entry.unwrap();
+        let catch_scopes: Vec<_> = broken.scopes.iter()
+            .filter_map(|(id, scope)| (scope.kind == ir::ScopeKind::Catch).then_some(id))
+            .collect();
+        let body = broken.functions.get_mut(entry).unwrap().body.as_mut().unwrap();
+        // Drop the binding in the Catch scope itself; only the match alias in a nested scope remains.
+        let bind = body.insts.iter().find_map(|(id, inst)| match inst.op {
+            ir::Operation::Lexical(ir::LexicalOp::Bind { binding, .. })
+                if catch_scopes.contains(&body.bindings.get(binding).unwrap().scope) => Some(id),
+            _ => None,
+        }).unwrap();
+        for (_, block) in body.blocks.iter_mut() {
+            block.insts.retain(|&id| id != bind);
+        }
+        let error = super::high::check(&broken, body_for_entry(&broken)).expect_err("alias only");
+        assert!(error.to_string().contains("catch payload requires a lexical binding"), "{error}");
+    });
+}
+
 #[test]
 fn oir2_s3_self_check_requires_unwind_for_suspension() {
     let source = "oir 2 high
@@ -1233,6 +1303,11 @@ fn oir2_std_closed_specializations_and_error_cases() {
         concat!("module app; import \"cell\" take Cell; ",
             "main() is int { let a = Cell(1); let b = Cell(\"a\"); ",
             "a.replace(a.value() + 1); b.replace(b.value() + \"b\"); a.value(); }"),
+        // #569 C7: closed and compare_and_replace are registered for every plain specialization.
+        concat!("module app; import \"async/atomic\" take Atomic; ",
+            "main() is int { let a = Atomic(1); let b = Atomic(true); let c = Atomic([\"x\"]); ",
+            "let swapped = b.compare_and_replace(true, false); ",
+            "if a.compare_and_replace(1, 2) && !a.closed() && !swapped { c.value().size(); } else { 0; } }"),
         concat!("module app; import \"io/stdout\" take Stdout; enum E is Error = (empty, text(s is string)); ",
             "main() is int { try { throw E.empty; } catch e is E { Stdout().writeln(e.text(), \"!\"); } 0; }"),
         concat!("module app; import \"io/stdout\" take Stdout; enum E is Error = (bad); ",
@@ -1251,8 +1326,6 @@ fn oir2_std_closed_specializations_and_error_cases() {
 #[test]
 fn oir2_std_rejects_other_intrinsics_resources_and_async() {
     for body in [
-        "let a = Atomic(1); a.closed(); 0;",
-        "let a = Atomic(1); a.compare_and_replace(1, 2); 0;",
         "let a = Atomic(R()); 0;",
         "let a = Cell(R()); 0;",
     ] {
@@ -1368,6 +1441,14 @@ mod defer_tests;
 
 #[path = "own_case_tests.rs"]
 mod own_case_tests;
+#[path = "backend_collection_tests.rs"]
+mod backend_collection_tests;
+
+#[path = "any_tests.rs"]
+mod any_tests;
+
+#[path = "callable_case_tests.rs"]
+mod callable_case_tests;
 
 #[test]
 fn oir2_pipeline_scalar() {
@@ -1377,6 +1458,35 @@ fn oir2_pipeline_scalar() {
     let bytes = super::compile_linked(&roots, &mut StdLoader).unwrap();
     let loaded = okkama_sparrow::spb17::decode(&bytes).unwrap();
     okkama_sparrow::spb17::verify_load(&loaded, &okkama_sparrow::spb17::NoExternalContracts).unwrap();
+}
+
+/// Every root file belongs to the one root module: `main` in the first file is the entry (#677).
+#[test]
+fn oir2_linked_high_keeps_every_root_file() {
+    let first = SourceFile::new("main.ok", "module app; main() is int { Greeter().greet(); }").unwrap();
+    let second = SourceFile::new("part.ok", "module app; object Greeter { Greeter(); greet() is int { 4; } }").unwrap();
+    let programs = [&first, &second].map(|source| syntax::parse(source, &ParseOptions::default()).unwrap());
+    let roots = [
+        crate::lowering::RootFile { source: &first, program: &programs[0] },
+        crate::lowering::RootFile { source: &second, program: &programs[1] },
+    ];
+    let module = super::lower_linked_high(&roots, &mut StdLoader).unwrap_or_else(|error| panic!("{error}"));
+    verify_high(&module, "two root files");
+    let entry = module.entry.expect("main is the entry");
+    assert_eq!(module.functions.get(entry).unwrap().symbol, "main");
+    assert!(module.functions.iter().any(|(_, function)| function.symbol.starts_with("app.Greeter.greet")));
+}
+
+/// `std.…` paths name std declarations without an import, as in OIR-1 (#677).
+#[test]
+fn oir2_linked_high_resolves_std_paths() {
+    let text = "module app; object R { has o is std.compare.Order; R(:o); } main() is int { 0; }";
+    let source = SourceFile::new("app.ok", text).unwrap();
+    let program = syntax::parse(&source, &ParseOptions::default()).unwrap();
+    let roots = [crate::lowering::RootFile { source: &source, program: &program }];
+    let module = super::lower_linked_high(&roots, &mut StdLoader).unwrap_or_else(|error| panic!("{error}"));
+    verify_high(&module, text);
+    assert!(module.declarations.iter().any(|(_, declaration)| declaration.name.ends_with("compare.Order")));
 }
 
 #[test]

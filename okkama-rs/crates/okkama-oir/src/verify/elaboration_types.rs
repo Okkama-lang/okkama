@@ -69,9 +69,11 @@ pub(super) fn metadata<'a>(module: &'a Module, body: &'a Body, function: FuncId,
     }
     let mut dictionaries = BTreeSet::new();
     for binding in &body.descriptor_bindings {
+        // C-2: a D21 async body restores its dictionary parameters from continuation 0.
         let is_parameter = body.values.get(binding.dictionary).is_ok_and(|value| {
             module.types.get(value.ty) == Ok(&Type::Descriptor)
-                && matches!(value.def, Definition::BlockParam { block, .. } if block == body.entry)
+        }) && module.functions.get(function).is_ok_and(|data| {
+            crate::verify::coro::entry_value(module, data, body, binding.dictionary)
         });
         if !is_parameter || !dictionaries.insert(binding.dictionary) {
             state.error(R::T1, "descriptor.binding requires a unique dictionary entry parameter");

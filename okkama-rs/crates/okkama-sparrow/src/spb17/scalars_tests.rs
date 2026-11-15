@@ -42,9 +42,7 @@ fn plain_object(name: &str, storage_fields: Vec<Type>) -> Object {
         name: name.into(),
         error_cases: vec![],
         enum_cases: 0,
-        variant_cases: vec![],
-        role: None,
-        implements: vec![],
+        variant_cases: vec![], handle: false, role: None, implements: vec![],
         fields: (0..count).map(|storage| Field { name: format!("f{storage}"), storage, once: false }).collect(),
         layout: ObjectRuntimeLayout {
             storage_fields, allocation_words: (1 + count).max(2), identity_offset: None, has_destroy: false,
@@ -265,4 +263,200 @@ fn optional_object_fields_stay_out_of_assembly_until_used() {
     let explicit = text.replacen("error_cases 0 }", "error_cases 0 enum_cases 0 }", 1);
     assert_ne!(explicit, text);
     assert_eq!(assemble(&explicit).unwrap_err().rule, "SPB_DECODE");
+}
+
+/// A constant of each scalar family operand type.
+fn operand_constant(ty: Type) -> Constant {
+    match ty {
+        Type::Int => Constant::Int("3".into()),
+        Type::Byte => Constant::Byte(3),
+        Type::Float => Constant::Float(1.5f64.to_bits().to_string()),
+        Type::Rat => Constant::Rat(RatValue { numerator: "1".into(), denominator: "2".into() }),
+        Type::Str => Constant::Str("a b".into()),
+        other => panic!("no operand constant for {other:?}"),
+    }
+}
+
+/// `op` on constants of its signature: registers are the operands, then the result.
+fn family_program(op: DataOp, service: bool, failures: u32) -> Program {
+    let (operands, result) = op.scalar_signature().unwrap();
+    let mut registers = operands.to_vec();
+    registers.push(result);
+    let mut code = operands.iter().enumerate()
+        .map(|(index, ty)| constant(index as u32, operand_constant(*ty)))
+        .collect::<Vec<_>>();
+    let inputs = (0..operands.len() as u32).collect();
+    code.push(data(op, inputs, operands.len() as u32, Immediate::None));
+    program(registers, code, service, failures)
+}
+
+fn family_operations() -> Vec<DataOp> {
+    SCALAR_FAMILIES.iter().flat_map(|(_, _, ops)| ops.iter().copied()).collect()
+}
+
+#[test]
+fn scalar_families_load_and_round_trip_every_operation() {
+    for op in family_operations() {
+        let p = family_program(op, false, 2);
+        verify_load(&p, &NoExternalContracts).unwrap_or_else(|error| panic!("{op:?}: {error}"));
+        assert_eq!(decode(&encode(&p).unwrap()).unwrap(), p, "{op:?}");
+        assert_eq!(assemble(&disassemble(&p).unwrap()).unwrap(), p, "{op:?}");
+        let code = DataOp::from_scalar_code(op.scalar_code().unwrap());
+        assert_eq!(code, Some(op));
+    }
+}
+
+#[test]
+fn scalar_family_wire_codes_are_fixed() {
+    assert_eq!(DataOp::IntAnd.family(), Some((14, 0)));
+    assert_eq!(DataOp::IntRotr.family(), Some((14, 15)));
+    assert_eq!(DataOp::ByteUshr.family(), Some((15, 5)));
+    assert_eq!(DataOp::FloatAdd.family(), Some((16, 0)));
+    assert_eq!(DataOp::FloatSqrt.family(), Some((16, 9)));
+    assert_eq!(DataOp::RatDiv.family(), Some((17, 3)));
+    assert_eq!(DataOp::StrSlice.family(), Some((18, 0)));
+    assert_eq!(DataOp::StrUtf8.family(), Some((18, 15)));
+    assert_eq!(DataOp::IntAdd.family(), None);
+    // Wire codes reserved for other lanes stay free.
+    for code in (56..=63).chain(19..=19).chain(21..=23).chain(27..=39).chain(73..=79) {
+        assert!(SCALAR_FAMILIES.iter().all(|(family, _, _)| *family != code), "{code}");
+    }
+}
+
+#[test]
+fn scalar_family_decoder_refuses_unknown_sub_codes() {
+    let p = family_program(DataOp::FloatAdd, false, 2);
+    let text = disassemble(&p).unwrap();
+    assert!(text.contains("float.ext 0"), "{text}");
+    let unknown = text.replace("float.ext 0", "float.ext 10");
+    assert_eq!(assemble(&unknown).unwrap_err().rule, "SPB_DECODE");
+    let unknown = text.replace("float.ext 0", "str.ext 16");
+    assert_eq!(assemble(&unknown).unwrap_err().rule, "SPB_DECODE");
+}
+
+#[test]
+fn scalar_family_operands_and_results_are_typed() {
+    let mut p = family_program(DataOp::IntShl, false, 2);
+    p.functions[0].registers[2] = Type::Byte;
+    reject(&p, "SCALAR_OP_TYPE");
+    // byte.shl counts in int, byte.ushr in byte.
+    let mut p = family_program(DataOp::ByteShl, false, 2);
+    p.functions[0].registers[1] = Type::Byte;
+    p.functions[0].code[1] = constant(1, Constant::Byte(1));
+    reject(&p, "SCALAR_OP_TYPE");
+    let mut p = family_program(DataOp::ByteUshr, false, 2);
+    p.functions[0].registers[1] = Type::Int;
+    p.functions[0].code[1] = constant(1, Constant::Int("1".into()));
+    reject(&p, "SCALAR_OP_TYPE");
+    let mut p = family_program(DataOp::StrSplit, false, 0);
+    p.functions[0].registers[2] = Type::Str;
+    reject(&p, "SCALAR_OP_TYPE");
+    let mut p = family_program(DataOp::RatNumerator, false, 0);
+    p.functions[0].registers[1] = Type::Int;
+    reject(&p, "SCALAR_OP_TYPE");
+    let mut p = family_program(DataOp::FloatAdd, false, 2);
+    let Instruction::Data { inputs, .. } = &mut p.functions[0].code[2] else { unreachable!() };
+    inputs.pop();
+    reject(&p, "SCALAR_OP_TYPE");
+}
+
+#[test]
+fn scalar_family_failures_follow_tomato() {
+    let fallible = [
+        DataOp::IntAnd, DataOp::IntOr, DataOp::IntXor, DataOp::IntShl, DataOp::IntShr, DataOp::IntUshr,
+        DataOp::IntNot, DataOp::IntBitCount, DataOp::IntLeadingZeros, DataOp::IntTrailingZeros,
+        DataOp::IntReverseBits, DataOp::IntSwapBytes, DataOp::IntRotl, DataOp::IntRotr,
+        DataOp::ByteShl, DataOp::ByteShr, DataOp::ByteUshr, DataOp::ByteRotl, DataOp::ByteRotr,
+        DataOp::FloatAdd, DataOp::FloatSub, DataOp::FloatMul, DataOp::FloatDiv, DataOp::FloatMod,
+        DataOp::FloatPow, DataOp::FloatSqrt, DataOp::RatDiv, DataOp::RatMod, DataOp::StrSlice,
+        DataOp::StrRepeat,
+    ];
+    for op in family_operations() {
+        if fallible.contains(&op) {
+            reject(&family_program(op, false, 0), "ENTRY_FAILURE_MASK");
+            reject(&family_program(op, true, 2), "FALLIBLE_DATA_OUTCOMES");
+        } else {
+            let p = family_program(op, true, 0);
+            verify_load(&p, &NoExternalContracts).unwrap_or_else(|error| panic!("{op:?}: {error}"));
+        }
+    }
+}
+
+/// `op` as an `evaluate` with normal and unwind outcomes, on constants of its signature.
+fn evaluated(op: DataOp) -> Program {
+    let (operands, result) = op.scalar_signature().unwrap();
+    let mut registers = operands.to_vec();
+    registers.extend([result, Type::Failure]);
+    let count = operands.len() as u32;
+    let mut p = program(registers, vec![], false, 2);
+    let f = &mut p.functions[0];
+    let produced = |destination| Assignment { destination, source: Source::ProducedSlot(0) };
+    f.code = operands.iter().enumerate().map(|(index, ty)| constant(index as u32, operand_constant(*ty))).collect();
+    let evaluation = Evaluation { op, result, immediate: Immediate::None };
+    let mut arguments = vec![Argument::Evaluation(evaluation)];
+    arguments.extend((0..count).map(|id| Argument::Location(Location::Register(id))));
+    f.code.extend([
+        Instruction::Champ { op: Opcode::Evaluate, arguments, flow: Flow::Outcomes(vec![
+            Outcome { tag: Tag::Normal, edge: Edge { target_pc: count + 1,
+                assignments: vec![produced(Location::Register(count))] } },
+            Outcome { tag: Tag::Unwind, edge: Edge { target_pc: count + 2,
+                assignments: vec![produced(Location::Register(count + 1))] } },
+        ]) },
+        Instruction::Ret(vec![]),
+        Instruction::Raise(count + 1),
+    ]);
+    f.blocks = vec![
+        Block { pc: 0, params: vec![] },
+        Block { pc: count + 1, params: vec![Location::Register(count)] },
+        Block { pc: count + 2, params: vec![Location::Register(count + 1)] },
+    ];
+    let live = live_locations(f).unwrap();
+    f.proofs.roots = live.into_iter().enumerate().map(|(pc, locations)| RootRequirement {
+        pc: pc as u32, locations: locations.into_iter().collect(),
+    }).collect();
+    p
+}
+
+#[test]
+fn scalar_family_evaluate_takes_only_fallible_operations() {
+    for op in [DataOp::FloatDiv, DataOp::IntShl, DataOp::ByteShl, DataOp::RatDiv, DataOp::StrSlice] {
+        verify_load(&evaluated(op), &NoExternalContracts).unwrap_or_else(|error| panic!("{op:?}: {error}"));
+    }
+    for op in [DataOp::RatAdd, DataOp::ByteAnd, DataOp::FloatNeg, DataOp::StrTrim, DataOp::IntAbs] {
+        reject(&evaluated(op), "EVALUATE_OPERATION");
+    }
+}
+
+fn rat(numerator: &str, denominator: &str) -> Program {
+    let value = Constant::Rat(RatValue { numerator: numerator.into(), denominator: denominator.into() });
+    program(vec![Type::Rat], vec![constant(0, value)], false, 0)
+}
+
+#[test]
+fn rat_constants_are_in_lowest_terms() {
+    for (numerator, denominator) in [("1", "2"), ("-3", "4"), ("0", "1"), ("1", "1"), ("-7", "1"),
+        ("12345678901234567890121", "98765432109876543210"), ("3", "10")]
+    {
+        let p = rat(numerator, denominator);
+        verify_load(&p, &NoExternalContracts).unwrap_or_else(|error| panic!("{numerator}/{denominator}: {error}"));
+        assert_eq!(decode(&encode(&p).unwrap()).unwrap(), p);
+        assert_eq!(assemble(&disassemble(&p).unwrap()).unwrap(), p);
+    }
+    for (numerator, denominator) in [("2", "4"), ("0", "2"), ("1", "0"), ("1", "-2"), ("01", "2"), ("-0", "1"),
+        ("1", "02"), ("x", "1"), ("6", "9"), ("10", "15"), ("246913578024691357802", "98765432109876543210")]
+    {
+        reject(&rat(numerator, denominator), "CONST_RAT");
+    }
+}
+
+#[test]
+fn int_constants_are_exact_beyond_64_bits() {
+    let code = vec![
+        constant(0, Constant::Int("1267650600228229401496703205376".into())),
+        constant(1, Constant::Int("-9223372036854775809".into())),
+        data(DataOp::IntAdd, vec![0, 1], 2, Immediate::None),
+    ];
+    let p = program(vec![Type::Int, Type::Int, Type::Int], code, false, 0);
+    verify_load(&p, &NoExternalContracts).unwrap();
+    assert_eq!(decode(&encode(&p).unwrap()).unwrap(), p);
 }

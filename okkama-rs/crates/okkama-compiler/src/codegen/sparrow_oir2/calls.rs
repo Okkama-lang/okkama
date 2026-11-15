@@ -32,18 +32,77 @@ fn kind(module: &o::Module, ty: o::TypeId) -> Result<P, GenerateError> {
 }
 
 /// OIR scalar operations whose SPB data form is fallible (`DataOp::fallible`). A conversion fails only
-/// where its pair of types can trap; a total one (int to string) stays plain data.
-fn fallible_scalar(op: &o::Operation) -> bool {
+/// where its pair of types can trap; a total one (int to string) stays plain data. Test assertions are
+/// evaluated the same way: they fail only outside a running case.
+pub(super) fn fallible_scalar(op: &o::Operation) -> bool {
+    if test_check(op).is_some() {
+        return true;
+    }
+    if let o::Operation::Core(core) = op
+        && let Some((data, _)) = family_operation(core)
+    {
+        return data.fallible(&[], None);
+    }
     match op {
         o::Operation::Core(o::CoreOp::IntMod { .. } | o::CoreOp::RangeNew { .. } | o::CoreOp::IntDiv { .. }
             | o::CoreOp::RatNew { .. } | o::CoreOp::ValEq { .. } | o::CoreOp::ValNe { .. }
             | o::CoreOp::VariantGet { .. } | o::CoreOp::RoleNarrow { .. }) => true,
+        o::Operation::Collection(o::CollectionOp::MapGet { .. } | o::CollectionOp::MapKeyAt { .. }
+            | o::CollectionOp::MapValueAt { .. } | o::CollectionOp::MapDifference { packet: None, .. }
+            | o::CollectionOp::ArraySlice { packet: None, .. } | o::CollectionOp::ArrayRemove { packet: None, .. }
+            | o::CollectionOp::ArrayReplace { packet: None, .. }
+            | o::CollectionOp::ArrayDifference { packet: None, .. }) => true,
         o::Operation::Core(o::CoreOp::Convert { from, to, .. }) => {
             matches!((numeric_type(*from), numeric_type(*to)),
                 (Some(from), Some(to)) if s::conversion(from, to) == Some(true))
         }
         _ => false,
     }
+}
+
+/// The SPB 17 result of a fallible collection operation on operands of `inputs`.
+fn collection_result(module: &o::Module, op: s::DataOp, inputs: &[s::Type]) -> Result<s::Type, GenerateError> {
+    use s::DataOp as D;
+    let receiver = *inputs.first().ok_or_else(|| error("collection operation without a receiver"))?;
+    let entry = |index: u32| composites(module).entries().get(index as usize).copied();
+    Ok(match (op, receiver) {
+        (D::ArraySlice | D::ArrayRemove | D::ArrayReplace | D::ArrayDifference | D::MapDifference, _) => receiver,
+        (D::MapGet | D::MapValueAt, s::Type::Map(id)) => match entry(id) {
+            Some(s::Composite::Map { value, .. }) => value,
+            _ => return Err(error("map operation on a non-map composite")),
+        },
+        (D::MapKeyAt, s::Type::Map(id)) => match entry(id) {
+            Some(s::Composite::Map { key, .. }) => key,
+            _ => return Err(error("map operation on a non-map composite")),
+        },
+        _ => return Err(later("collection operation outcome")),
+    })
+}
+
+/// The Champ form of a builder transition with outcomes.
+fn builder_opcode(op: &o::CollectionOp) -> Option<O> {
+    use o::CollectionOp as C;
+    Some(match op {
+        C::BuilderPush { .. } | C::MapBuilderPut { .. } => O::BuilderPush,
+        C::BuilderAppend { .. } | C::MapBuilderAppend { .. } => O::BuilderAppend,
+        C::BuilderAppendRange { .. } => O::BuilderRange,
+        C::BuilderFinish { .. } | C::MapBuilderFinish { .. } => O::BuilderFinish,
+        _ => return None,
+    })
+}
+
+/// A test assertion as its SPB 17 test operation and operands.
+fn test_check(op: &o::Operation) -> Option<(s::DataOp, Vec<o::ValueId>)> {
+    let o::Operation::Core(core) = op else {
+        return None;
+    };
+    Some(match *core {
+        o::CoreOp::TestOk { condition } => (s::DataOp::TestOk, vec![condition]),
+        o::CoreOp::TestIs { left, right } => (s::DataOp::TestIs, vec![left, right]),
+        o::CoreOp::TestIsnt { left, right } => (s::DataOp::TestIsnt, vec![left, right]),
+        o::CoreOp::TestFail { message } => (s::DataOp::TestFail, vec![message]),
+        _ => return None,
+    })
 }
 
 pub(super) fn needs_s2(module: &o::Module, function: &o::Function) -> Result<bool, GenerateError> {
@@ -442,24 +501,36 @@ impl Emitter<'_> {
     }
 
     /// `fn.closure`/`fn.bind`/`fn.bind.role`: allocate the closure layout with its captures, then view it as
-    /// the `fn` role. Own gives a closure no packet: a capture's obligation stays with its owner (P2.4 §4.1),
-    /// so the closure may reach only plain data. A resource-reaching closure object would need the commit
-    /// SPB 17 requires of every resource-reaching object (CREATION_UNCOMMITTED), and nothing owns its packet.
+    /// the `fn` role. A closure that captures a resource by reference gets an empty packet from own (the
+    /// capture's obligation stays with its owner, P2.4 §4.1): it commits like any construction with a packet,
+    /// so the resource-reaching closure object is committed (CREATION_UNCOMMITTED) and owns nothing.
     fn closure(&mut self, site: roles::ClosureSite, results: &[o::ValueId]) -> Result<(), GenerateError> {
-        if site.packet.is_some() {
-            return Err(unsupported("action value with a packet"));
-        }
         let index = self.synthetic.closure_index(&site.layout).ok_or_else(|| error("action value without layout"))?;
         let layout = self.synthetic.closure_object(self.module, index);
-        if self.objects[layout as usize].layout.may_reach_resource {
-            return Err(unsupported("action value referencing a resource without its packet"));
-        }
         let inputs = site.values.iter().map(|&value| self.reg(value)).collect::<Result<Vec<_>, _>>()?;
         let object = fresh(&mut self.result, s::Type::Object(layout))?;
         let value = self.reg(*results.first().ok_or_else(|| error("action value without result"))?)?;
-        self.expansions.push((self.result.code.len() as u32, object));
-        self.result.code.push(s::Instruction::Data { op: s::DataOp::ObjNew, inputs, output: Some(object),
-            immediate: s::Immediate::Object(layout) });
+        let allocation = s::Instruction::Data { op: s::DataOp::ObjNew, inputs, output: Some(object),
+            immediate: s::Immediate::Object(layout) };
+        let Some(packet) = site.packet else {
+            if self.objects[layout as usize].layout.may_reach_resource {
+                return Err(unsupported("action value referencing a resource without its packet"));
+            }
+            self.expansions.push((self.result.code.len() as u32, object));
+            self.result.code.push(allocation);
+            self.result.code.push(data(s::DataOp::Move, vec![object], value, s::Immediate::None));
+            return Ok(());
+        };
+        let [_, joined] = results else { return Err(error("action value with a packet has two results")) };
+        let committed = L::Service(self.result.services.len() as u32);
+        self.result.services.push(K::Packet);
+        self.result.code.push(allocation);
+        self.result.code.push(s::Instruction::Champ { op: O::OwnCreateCommit,
+            arguments: vec![A::Location(L::Register(object)), A::Object(layout), A::Boundary(self.scope.as_u32())],
+            flow: s::Flow::Next(vec![committed]) });
+        self.result.code.push(s::Instruction::Champ { op: O::OwnJoin,
+            arguments: vec![A::Location(self.loc(packet)?), A::Location(committed)],
+            flow: s::Flow::Next(vec![self.loc(*joined)?]) });
         self.result.code.push(data(s::DataOp::Move, vec![object], value, s::Immediate::None));
         Ok(())
     }
@@ -524,9 +595,120 @@ impl Emitter<'_> {
         Ok(())
     }
 
+    /// The field write that completes an incomplete construction, then the completed identity's admission
+    /// into `state`. An object without destroy completes no obligation, so its packet is empty.
+    fn complete_construction(&mut self, object: o::ValueId, field: o::FieldRef, value: o::ValueId,
+        state: o::ValueId, results: &[o::ValueId]) -> Result<(), GenerateError>
+    {
+        let [result] = results else { return Err(error("construction completion needs its state result")) };
+        let s::Type::Object(descriptor) = translate_type(self.module, self.body.values.get(object)?.ty)? else {
+            return Err(error("construction completion of a non-object"));
+        };
+        if self.objects[descriptor as usize].layout.has_destroy {
+            return Err(later("construction completion of an identity with destroy"));
+        }
+        let storage = self.objects.get(descriptor as usize)
+            .and_then(|declared| declared.fields.get(field.index as usize))
+            .filter(|_| field.declaration.as_u32() == descriptor)
+            .map(|declared| declared.storage).ok_or_else(|| error("invalid completion field"))?;
+        let packet = L::Service(self.result.services.len() as u32);
+        self.result.services.push(K::Packet);
+        self.result.code.push(s::Instruction::Data { op: s::DataOp::ObjInit,
+            inputs: vec![self.reg(object)?, self.reg(value)?], output: None,
+            immediate: s::Immediate::Field(storage) });
+        self.result.code.push(s::Instruction::Champ { op: O::OwnEmpty, arguments: vec![],
+            flow: s::Flow::Next(vec![packet]) });
+        self.result.code.push(s::Instruction::Champ { op: O::OwnAdmit,
+            arguments: vec![A::Location(self.loc(state)?), A::Location(packet)],
+            flow: s::Flow::Next(vec![self.loc(*result)?]) });
+        Ok(())
+    }
+
+    /// A builder transition: buffer, operands and the journal packet in; outcomes per the registry.
+    fn builder(&mut self, opcode: O, op: &o::CollectionOp, normal: &o::InvokeEdge, unwind: &o::InvokeEdge)
+        -> Result<s::Instruction, GenerateError>
+    {
+        use o::CollectionOp as C;
+        let (flag, values, packet) = match op {
+            C::BuilderPush { buffer, value, packet } => (None, vec![*buffer, *value], packet),
+            C::MapBuilderPut { buffer, key, value, packet } => (None, vec![*buffer, *key, *value], packet),
+            C::BuilderAppend { buffer, array, packet } => (None, vec![*buffer, *array], packet),
+            C::MapBuilderAppend { buffer, map, packet } => (None, vec![*buffer, *map], packet),
+            C::BuilderAppendRange { buffer, start, end, inclusive, packet } => {
+                (Some(*inclusive), vec![*buffer, *start, *end], packet)
+            }
+            C::BuilderFinish { buffer, packet } | C::MapBuilderFinish { buffer, packet } => {
+                (None, vec![*buffer], packet)
+            }
+            _ => return Err(error("expected a builder transition")),
+        };
+        let packet = packet.ok_or_else(|| error("builder transition without its element journal"))?;
+        let mut arguments = flag.map(A::Flag).into_iter().collect::<Vec<_>>();
+        arguments.extend(values.iter().chain([&packet]).map(|&value| self.loc(value).map(A::Location))
+            .collect::<Result<Vec<_>, _>>()?);
+        let buffer = translate_type(self.module, self.body.values.get(values[0])?.ty)?;
+        let finished = match buffer {
+            s::Type::Builder(id) => match composites(self.module).entries().get(id as usize) {
+                Some(s::Composite::Builder { array }) => Some(*array),
+                _ => None,
+            },
+            s::Type::MapBuilder(id) => Some(s::Type::Map(id)),
+            _ => return Err(error("builder transition on a non-builder")),
+        };
+        let context = s::ResultContext {
+            buffer: Some(buffer),
+            value: if opcode == O::BuilderFinish { finished } else { None },
+            may_fail: true,
+            ..s::ResultContext::default()
+        };
+        let outcomes = [(s::Tag::Normal, o::Outcome::Normal, normal), (s::Tag::Unwind, o::Outcome::Unwind, unwind)]
+            .into_iter().map(|(tag, outcome, edge)| {
+                let schema = opcode.results(tag, &context)?;
+                Ok(s::Outcome { tag, edge: self.edge(edge.block, &edge.args, outcome, &schema)? })
+            }).collect::<Result<_, GenerateError>>()?;
+        Ok(s::Instruction::Champ { op: opcode, arguments, flow: s::Flow::Outcomes(outcomes) })
+    }
+
+    /// A scalar family operation as an invocation: a fallible one is an `evaluate` whose outcomes are the
+    /// invocation's; a total one (which OIR-2 lets trap) computes into a fresh register and takes the
+    /// normal edge, its result in place of the produced slot.
+    fn family_invocation(&mut self, op: s::DataOp, inputs: &[o::ValueId], normal: &o::InvokeEdge,
+        unwind: &o::InvokeEdge) -> Result<s::Instruction, GenerateError>
+    {
+        let (_, result) = op.scalar_signature().ok_or_else(|| error("scalar family operation without signature"))?;
+        if op.fallible(&[], None) {
+            let context = s::ResultContext { value: Some(result), may_fail: true, ..s::ResultContext::default() };
+            let mut arguments = vec![A::Evaluation(s::Evaluation { op, result, immediate: s::Immediate::None })];
+            for &input in inputs {
+                arguments.push(A::Location(self.loc(input)?));
+            }
+            let outcomes = [(s::Tag::Normal, o::Outcome::Normal, normal),
+                (s::Tag::Unwind, o::Outcome::Unwind, unwind)].into_iter().map(|(tag, outcome, edge)| {
+                let schema = O::Evaluate.results(tag, &context)?;
+                Ok(s::Outcome { tag, edge: self.edge(edge.block, &edge.args, outcome, &schema)? })
+            }).collect::<Result<_, GenerateError>>()?;
+            return Ok(s::Instruction::Champ { op: O::Evaluate, arguments, flow: s::Flow::Outcomes(outcomes) });
+        }
+        let registers = inputs.iter().map(|&input| self.reg(input)).collect::<Result<Vec<_>, _>>()?;
+        let value = fresh(&mut self.result, result)?;
+        self.result.code.push(data(op, registers, value, s::Immediate::None));
+        let mut edge = self.edge(normal.block, &normal.args, o::Outcome::Normal, &[P::Value(result)])?;
+        for assignment in &mut edge.assignments {
+            if assignment.source == s::Source::ProducedSlot(0) {
+                assignment.source = s::Source::Location(L::Register(value));
+            }
+        }
+        Ok(s::Instruction::Br(edge))
+    }
+
     fn invocation(&mut self, term: &o::TermKind) -> Result<s::Instruction, GenerateError> {
         let (opcode, arguments, context, edges) = match term {
             o::TermKind::InvokeOwn { op, normal, unwind } => {
+                if let o::Operation::Core(core) = op.as_ref()
+                    && let Some((data, inputs)) = family_operation(core)
+                {
+                    return self.family_invocation(data, &inputs, normal, unwind);
+                }
                 if let o::Operation::Core(core) = op.as_ref() {
                     let scalar = match core {
                         o::CoreOp::RangeNew { start, end, inclusive } => Some((s::DataOp::RangeNew,
@@ -560,7 +742,8 @@ impl Emitter<'_> {
                             }
                             Some((s::DataOp::Convert, target, s::Immediate::None, vec![*value]))
                         }
-                        _ => None,
+                        // The check's bool outcome (whether it held) is not used by the source.
+                        _ => test_check(op).map(|(check, inputs)| (check, s::Type::Bool, s::Immediate::None, inputs)),
                     };
                     if let Some((op, result, immediate, inputs)) = scalar {
                         let context = s::ResultContext {
@@ -577,6 +760,34 @@ impl Emitter<'_> {
                         return Ok(s::Instruction::Champ { op: O::Evaluate, arguments,
                             flow: s::Flow::Outcomes(outcomes) });
                     }
+                }
+                if let o::Operation::Collection(collection) = op.as_ref()
+                    && let Some(opcode) = builder_opcode(collection)
+                {
+                    return self.builder(opcode, collection, normal, unwind);
+                }
+                if let o::Operation::Collection(collection) = op.as_ref()
+                    && !matches!(collection, o::CollectionOp::ArrayGet { .. })
+                {
+                    let (data, values) = collection_data(self.module, self.body, collection, None)?
+                        .ok_or_else(|| later(op.opcode()))?;
+                    let inputs = values.iter()
+                        .map(|&value| translate_type(self.module, self.body.values.get(value)?.ty))
+                        .collect::<Result<Vec<_>, GenerateError>>()?;
+                    let result = collection_result(self.module, data, &inputs)?;
+                    let context = s::ResultContext {
+                        value: Some(result), may_fail: true, ..s::ResultContext::default()
+                    };
+                    let evaluation = s::Evaluation { op: data, result, immediate: s::Immediate::None };
+                    let mut arguments = vec![A::Evaluation(evaluation)];
+                    arguments.extend(values.iter().map(|&value| self.loc(value).map(A::Location))
+                        .collect::<Result<Vec<_>, _>>()?);
+                    let outcomes = [(s::Tag::Normal, o::Outcome::Normal, normal),
+                        (s::Tag::Unwind, o::Outcome::Unwind, unwind)].into_iter().map(|(tag, outcome, edge)| {
+                        let schema = O::Evaluate.results(tag, &context)?;
+                        Ok(s::Outcome { tag, edge: self.edge(edge.block, &edge.args, outcome, &schema)? })
+                    }).collect::<Result<_, GenerateError>>()?;
+                    return Ok(s::Instruction::Champ { op: O::Evaluate, arguments, flow: s::Flow::Outcomes(outcomes) });
                 }
                 if let o::Operation::Collection(o::CollectionOp::ArrayGet { array, index }) = op.as_ref() {
                     let s::Type::Array(shape) = translate_type(self.module, self.body.values.get(*array)?.ty)? else {
@@ -666,11 +877,12 @@ impl Emitter<'_> {
 }
 
 /// The SPB 17 instructions an OIR instruction expands to, when more than one: an action value (allocation and
-/// move) and a cap with a packet (move and packet move).
+/// move; with a packet also commit and join) and a cap with a packet (move and packet move).
 pub(super) fn expansion(op: &o::Operation) -> u32 {
     match op {
-        o::Operation::Core(o::CoreOp::FnClosure { .. } | o::CoreOp::FnBind { .. } | o::CoreOp::FnBindRole { .. })
-            | o::Operation::Core(o::CoreOp::CapMake { packet: Some(_), .. }) => 2,
+        o::Operation::Core(o::CoreOp::FnClosure { packet, .. } | o::CoreOp::FnBind { packet, .. }
+            | o::CoreOp::FnBindRole { packet, .. }) => if packet.is_some() { 4 } else { 2 },
+        o::Operation::Core(o::CoreOp::CapMake { packet: Some(_), .. }) => 2,
         _ => 1,
     }
 }
@@ -799,7 +1011,8 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                 return Err(error("duplicate instruction"));
             }
             let inst = body.insts.get(inst_id)?;
-            if block.unwind.is_some() && !fallible_scalar(&inst.op) && o::ContractRegistry::new(module)
+            if block.unwind.is_some() && !fallible_scalar(&inst.op) && !total_family_operation(&inst.op)
+                && o::ContractRegistry::new(module)
                 .lookup(&inst.op).map_err(|failure| error(failure.to_string()))?.unwind.is_some()
             {
                 return Err(later(&format!("{}: implicit instruction unwind {}", function.symbol, inst.op.opcode())));
@@ -807,6 +1020,8 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
             inst_pcs.insert(inst_id, pc);
             let size = match &inst.op {
                 o::Operation::Core(o::CoreOp::RangeLen { .. }) => 3,
+                // The last field write, the completed identity's packet, and its admission into the state.
+                o::Operation::Core(o::CoreOp::ObjInit { completion: Some(_), .. }) => 3,
                 // D8 registration is static CFG metadata, not a second runtime defer runner.
                 o::Operation::Lexical(o::LexicalOp::DeferRegister { .. }) => 0,
                 // allocate the closure layout, then move it into the `fn` role; move a cap and its packet.
@@ -829,9 +1044,15 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
             o::TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(),
                 o::Operation::Core(o::CoreOp::VariantNew { packet: None, ty, .. })
                     if matches!(translate_type(module, *ty), Ok(s::Type::Variant(_)))) => 3,
+            // A total scalar family operation computes into a register and branches with it.
+            o::TermKind::InvokeOwn { op, .. } if total_family_operation(op) => 2,
             o::TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(),
                 o::Operation::Core(o::CoreOp::ObjNew { packet: None, .. }
                     | o::CoreOp::ObjNext { packet: None, .. } | o::CoreOp::VariantNew { packet: None, .. })) => 2,
+            // A case that refers to resources: allocate/commit/join, then the move into the variant type.
+            o::TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(),
+                o::Operation::Core(o::CoreOp::VariantNew { packet: Some(_), ty, .. })
+                    if matches!(translate_type(module, *ty), Ok(s::Type::Variant(_)))) => 5,
             o::TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(),
                 o::Operation::Core(o::CoreOp::ObjNew { .. } | o::CoreOp::ObjNext { .. }
                     | o::CoreOp::VariantNew { .. })) => 4,
@@ -939,6 +1160,17 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                     s::Instruction::Champ { op, arguments, flow: s::Flow::Next(inst.results.iter()
                         .map(|&value| emitter.loc(value)).collect::<Result<_, _>>()?) }
                 }
+                o::Operation::Collection(o::CollectionOp::BuilderAbandon { buffer, packet }
+                    | o::CollectionOp::MapBuilderAbandon { buffer, packet }) => {
+                    let packet = packet.ok_or_else(|| error("builder.abandon without its element journal"))?;
+                    let arguments = vec![A::Location(emitter.loc(*buffer)?), A::Location(emitter.loc(packet)?)];
+                    let outputs = inst.results.iter().map(|&value| emitter.loc(value)).collect::<Result<_, _>>()?;
+                    s::Instruction::Champ { op: O::BuilderAbandon, arguments, flow: s::Flow::Next(outputs) }
+                }
+                o::Operation::Core(o::CoreOp::ObjInit { object, field, value, completion: Some(completion) }) => {
+                    emitter.complete_construction(*object, *field, *value, completion.state, &inst.results)?;
+                    continue;
+                }
                 o::Operation::Cleanup(op) => emitter.cleanup_instruction(op, &inst.results)?,
                 o::Operation::Exit(op) => emitter.exit_instruction(op, &inst.results)?,
                 o::Operation::Core(o::CoreOp::TypeOf { ty, .. }) => {
@@ -1000,6 +1232,17 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                     if !inst.results.is_empty() {
                         return Err(error("defer registration cannot produce execution results"));
                     }
+                    continue;
+                }
+                op if test_check(op).is_some() => {
+                    let (op, operands) = test_check(op).expect("test assertion");
+                    if !inst.results.is_empty() {
+                        return Err(error("test assertion cannot produce results"));
+                    }
+                    let inputs = operands.iter().map(|&value| emitter.reg(value)).collect::<Result<_, _>>()?;
+                    // The check's outcome is a fresh bool: whether it held. The source discards it.
+                    let held = fresh(&mut emitter.result, s::Type::Bool)?;
+                    emitter.evaluate(data(op, inputs, held, s::Immediate::None), block.unwind.as_ref())?;
                     continue;
                 }
                 o::Operation::Core(o::CoreOp::RangeLen { value }) => {
@@ -1099,6 +1342,23 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                     arguments: vec![A::Label(kind), A::Location(L::Register(payload))],
                     flow: s::Flow::Outcomes(vec![s::Outcome { tag: s::Tag::Unwind, edge }]) }
             }
+            o::TermKind::Lookup { collection, key, found, missing, .. } => {
+                let value = match translate_type(module, body.values.get(*collection)?.ty)? {
+                    array @ (s::Type::Array(_) | s::Type::Bytes) => s::element_type(array),
+                    s::Type::Map(id) => match composites(module).entries().get(id as usize) {
+                        Some(s::Composite::Map { value, .. }) => Some(*value),
+                        _ => None,
+                    },
+                    _ => None,
+                }.ok_or_else(|| error("lookup on a value that is neither an array nor a map"))?;
+                s::Instruction::Champ { op: O::Lookup,
+                    arguments: vec![A::Location(emitter.loc(*collection)?), A::Location(emitter.loc(*key)?)],
+                    flow: s::Flow::Outcomes(vec![
+                        s::Outcome { tag: s::Tag::Some,
+                            edge: emitter.edge(found.block, &found.args, o::Outcome::Normal, &[P::Value(value)])? },
+                        s::Outcome { tag: s::Tag::None, edge: emitter.branch(missing)? },
+                    ]) }
+            }
             o::TermKind::Raise(failure) => s::Instruction::Raise(emitter.reg(*failure)?),
             o::TermKind::InvokeOwn { .. } | o::TermKind::InvokeDefer { .. } => emitter.invocation(&block.term.kind)?,
             o::TermKind::Br(target) => s::Instruction::Br(emitter.branch(target)?),
@@ -1175,7 +1435,6 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                 s::Instruction::Champ { op: O::RetDefer, arguments, flow: s::Flow::Next(vec![]) }
             }
             o::TermKind::Unreachable => s::Instruction::Unreachable,
-            _ => return Err(later("failure/cleanup terminator")),
         };
         emitter.result.code.push(term);
     }

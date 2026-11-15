@@ -1,0 +1,91 @@
+oir 2 own
+// object Box { n: int }
+// async action Box.get(k: int) is int { return n + k; }    (with a dictionary parameter)
+// async action run(box: Box, k: int) is int { return await box.get(k); }
+// C-2: continuation 0 restores the receiver, the arguments, the descriptor and the input packet, in order.
+module coro_start_continuation
+object Box {
+    field n: int
+}
+protocol Services kind services holders [scope, cache, receipt] rules [protocol_rule(transition=settle, from=cache,
+    to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
+    protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=scope, state=settled))]
+scope SN action in @noop
+scope SG action in @Box.get
+scope SR action in @run
+summary Mn internal contract call_contract(publication=atomic)
+summary Mgc internal parameters [parameter_effect(convention=borrow, destination=none),
+    parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)]
+    contract call_contract(results=[future<int>], publication=atomic)
+summary Mgb call-boundary parameters [parameter_effect(convention=borrow, destination=none),
+    parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)]
+    contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+summary Mrc internal parameters [parameter_effect(convention=borrow, destination=none),
+    parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)]
+    contract call_contract(results=[future<int>], publication=atomic)
+summary Mrb call-boundary parameters [parameter_effect(convention=borrow, destination=none),
+    parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)]
+    contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+func @noop() -> void summary(Mn) {
+^entry in SN:
+    ret
+}
+func @Box.get(%self: Box facts(plain(certificate=closed_graph(ty=Box))), %k: int; %dict: type, %inputs: own)
+    -> (int, own) [method Box, async] abi explicit(input_packet=3, output_packet=1) summary(Mgb)
+    async-creation(Mgc) async-body(Mgb) {
+    descriptor.binding %dict contract descriptor_contract(managed=plain, retention=descriptor(0), cleanup=@noop,
+        async_destroy=false, summary=Mn)
+    boundary B0 call in SG
+^entry in SG:
+    %q0: scope<SG> = scope.begin SG
+    %q1: scope<SG> = own.accept %q0, %inputs
+    %n: int = obj.get %self, n
+    %sum: int = int.add %n, %k
+    %empty: own = own.empty
+    %d: deps = deps.of %sum
+    %pending: pending = exit.prepare return %sum, %empty, deps(%d) at B0
+    (%closed: closed, %reserved: pending) = scope.end %q1, reserve %pending, effects scope_effects(failures=[],
+        suspends=false, cancel=false)
+    (%r: int, %p: own, %rd: deps) = exit.commit %reserved, destination caller, result int
+    ret %r, %p
+}
+func @run(%box: Box facts(plain(certificate=closed_graph(ty=Box))), %k: int; %inputs: own) -> (int, own) [async]
+    abi explicit(input_packet=2, output_packet=1) summary(Mrb) async-creation(Mrc) async-body(Mrb) {
+    boundary B0 call in SR
+    key k0: key = service_of(value=%f, kind=cache)
+    dependency d0: dependency = key(k0)
+^entry in SR:
+    %q0: scope<SR> = scope.begin SR
+    %q1: scope<SR> = own.accept %q0, %inputs
+    %dict: type = type.of ty Box, descriptor descriptor_contract(managed=plain, retention=descriptor(0),
+        cleanup=@noop, async_destroy=false, summary=Mn)
+    %offered: own = own.empty
+    %external: deps = deps.of %box
+    (%f: future<int> facts(managed(deps=d0)),
+        %q2: scope<SR>) = fut.new %offered, %external, %q1, environment deferred(
+        function=@Box.get, arguments=[%box, %k], descriptors=[%dict]), result int, owner SR
+    invoke.own await %f, result int
+        normal ^ok($value, $deps, %q2)
+        unwind ^bad($failure, $task, $receipt, %q2)
+^ok(%x: int, %xd: deps, %q3: scope<SR>) in SR:
+    %empty: own = own.empty
+    %d: deps = deps.of %x
+    %pending: pending = exit.prepare return %x, %empty, deps(%d) at B0
+    invoke.own scope.end %q3, reserve %pending, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=false)
+        normal ^done($closed, $pending)
+        unwind ^close_failed($closed, $failure)
+^done(%closed: closed, %reserved: pending) in SR:
+    (%r: int, %p: own, %rd: deps) = exit.commit %reserved, destination caller, result int
+    ret %r, %p
+^close_failed(%closed2: closed, %close_failure: failure) in SR:
+    raise %close_failure
+^bad(%failure: failure, %task: task-state, %receipt: receipt, %q4: scope<SR>) in SR:
+    (%q5: scope<SR>, %f1: failure) = await.unwind %q4, %failure, %task, %receipt, protocol Services
+    %combined: failure = scope.unwind %q5, %f1, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=false)
+    raise %combined
+}

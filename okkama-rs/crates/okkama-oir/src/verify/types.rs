@@ -1008,9 +1008,13 @@ fn terminator<'a>(
                 }
             }
             TermKind::Ret { values } => {
-                let tagged = module.functions.get(function)?.attrs.iter()
+                let declaration = module.functions.get(function)?;
+                let tagged = declaration.attrs.iter()
                     .any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. }));
-                checker.require(!tagged, "defer entry requires a tagged return");
+                // C-6: an async defer entry in the D21 form exits by `fut.publish` then `ret` (C-2).
+                let async_body = matches!(module.profile, Profile::Coro | Profile::Low)
+                    && declaration.attrs.contains(&FunctionAttr::Async) && body.frame_layout.is_some();
+                checker.require(!tagged || async_body, "defer entry requires a tagged return");
                 if values.len() != signature.results.len() { checker.report(R::T2, "return arity mismatch"); }
                 for (&value, &ty) in values.iter().zip(&signature.results) { checker.exact(value, ty)?; }
             }
@@ -1215,7 +1219,10 @@ fn function_types(module: &Module, data: &Function, state: &mut State<'_>) -> Ch
                 state.error(R::T5, "object action attribute must name an object declaration");
             }
         }
-        let receiver = |owner| data.signature.params.first().and_then(|id| module.types.get(*id).ok())
+        // C-2: a D21 async body restores its receiver from slot zero of continuation 0.
+        let language = super::coro::language_signature(module, data);
+        let receiver = |owner| language.as_ref().and_then(|signature| signature.params.first())
+            .and_then(|id| module.types.get(*id).ok())
             .is_some_and(|ty| matches!(ty, Type::Object { decl, .. } if *decl == owner));
         match attr {
             FunctionAttr::Extern(name) => {
@@ -1224,7 +1231,8 @@ fn function_types(module: &Module, data: &Function, state: &mut State<'_>) -> Ch
                 }
             }
             FunctionAttr::Intrinsic { name, .. } => {
-                if state.context.external_contracts.intrinsic(name) != Some(&data.signature) {
+                let trusted = state.context.external_contracts.intrinsic_declaration(name, &data.signature);
+                if trusted != Some(&data.signature) {
                     state.error(R::T5, "intrinsic declaration does not match the trusted ABI catalog");
                 }
             }

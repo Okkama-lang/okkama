@@ -286,11 +286,19 @@ pub struct CallContract {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Publication { Atomic, ChannelReceipt, TaskState }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HolderKind { Packet, Scope, Frame, Cache, Channel, Carrier, PendingExit, Pin, Group, Diagnostic, Receipt }
+pub enum HolderKind {
+    Packet, Scope, Frame, Cache, Channel, Carrier, PendingExit, Pin, Group, Diagnostic, Receipt,
+    /// Root task registry of detached tasks and caches (async ABI D24.2).
+    RootRegistry,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HolderState { Open, Unaccepted, Accepted, Delivered, Running, Settled, Consumed, Released, Closed }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProtocolTransition { Attach, Transfer, Rehome, Release, Publish, Settle, Save, Resume, Cancel, Pin, Unpin, Dynamic }
+pub enum ProtocolTransition {
+    Attach, Transfer, Rehome, Release, Publish, Settle, Save, Resume, Cancel, Pin, Unpin, Dynamic,
+    /// `channel` and `group` families of async ABI D23.
+    Offer, Accept, Deliver, Close, Withdraw, Register, Retain, Position,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProtocolCheck { LiveDependencies, Snapshot, Owner, Transferable, UniqueCache, NoReentry, SufficientBoundary }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -314,6 +322,18 @@ pub struct ProtocolDecl {
     pub holders: Vec<HolderKind>,
     pub rules: Vec<ProtocolRule>,
     pub roots: Vec<RootKind>,
+}
+/// One entry of a D16 service schedule. `Dynamic` covers every service entry
+/// admitted at run time (async ABI D25.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ScheduleDuty { Value(ValueId), Dynamic }
+impl ScheduleDuty {
+    pub fn value(self) -> Option<ValueId> {
+        match self {
+            Self::Value(value) => Some(value),
+            Self::Dynamic => None,
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DescriptorContract {
@@ -351,7 +371,13 @@ pub(crate) enum Rule {
     UniqueProof(UniqueCacheProof),
     Protocol { state: ValueId, owner: Option<ValueId>, packet: Option<ValueId>, protocol: ProtocolId, transition: ProtocolTransition },
     FutureNew { environment: FutureEnvironment, packet: ValueId, owner: ValueId, result: Option<TypeId> },
-    Publish { task: ValueId, cache: ValueId, packet: ValueId, protocol: ProtocolId },
+    Publish { frame: ValueId, packet: Option<ValueId> },
+    Spawn { state: ValueId },
+    AwaitUnwind { state: ValueId, task: ValueId, receipt: ValueId, protocol: ProtocolId },
+    Rehome { form: RehomeForm, target: ScopeId, protocol: ProtocolId },
+    Materialize { packet: ValueId, kind: ServiceKeyKind },
+    Absorb { packet: ValueId, token: ValueId },
+    CleanupSettleDynamic { cleanup: ValueId, protocol: ProtocolId },
     TaskSettle { task: ValueId, protocol: ProtocolId },
     FrameSave { frame: ValueId, slots: Vec<FrameSlot> },
     FrameResume { frame: ValueId, slots: Vec<SavedSlot> },
@@ -387,6 +413,8 @@ pub enum ContractError {
     PublicationNeedsProtocol,
     TooManyResults,
     InvalidConversion { from: NumericType, to: NumericType },
+    /// `service.materialize` names an entry kind that has no token form.
+    NoServiceToken(ServiceKeyKind),
 }
 impl From<ArenaError> for ContractError { fn from(error: ArenaError) -> Self { Self::InvalidId(error) } }
 impl std::fmt::Display for ContractError {
@@ -743,12 +771,15 @@ impl<'a> ContractRegistry<'a> {
                 ];
                 let mut inputs = vec![packet, owner];
                 let mut outputs = vec![N::To];
+                let frame = matches!(environment, FutureEnvironment::Frame(_));
                 if let FutureEnvironment::Frame(frame) = environment {
                     inputs.push(frame);
-                    if self.module.profile != Profile::Own {
-                        c.normal.results.insert(1, ResultSlot::service(N::State, S::CacheState));
-                        outputs.insert(0, N::State);
-                    }
+                }
+                // coro/low materialize the owner's cache duty for every environment (D22, C-1).
+                let token_profile = matches!(self.module.profile, Profile::Coro | Profile::Low);
+                if token_profile || frame && self.module.profile != Profile::Own {
+                    c.normal.results.insert(1, ResultSlot::service(N::State, S::CacheState));
+                    outputs.insert(0, N::State);
                 }
                 c.normal.transfers.push(TransferRule::Move { inputs, outputs });
                 c.normal.postconditions.push(Postcondition::OwnerServiceDuty {
@@ -757,13 +788,84 @@ impl<'a> ContractRegistry<'a> {
                 c.roots.roots.push(RootKind::Cache);
                 c.effects.allocates = true;
             }
-            Rule::Publish { task, cache, packet, protocol } => {
-                c.normal.results.push(ResultSlot::service(N::State, S::CacheState));
-                c.normal.transfers.push(TransferRule::Publish { input: packet, holder: HolderKind::Cache, provenance: AdmissionProvenance::CacheOwned });
-                c.normal.transfers.push(TransferRule::Settle { inputs: vec![task, cache] });
-                c.normal.postconditions.push(Postcondition::Closed(task));
+            Rule::Publish { frame, packet } => {
+                // Class L (C-2, C-5): the body publishes through its frame, never through
+                // the owner's cache-state; no result and no unwind.
+                if let Some(packet) = packet {
+                    c.normal.transfers.push(TransferRule::Publish {
+                        input: packet, holder: HolderKind::Cache, provenance: AdmissionProvenance::CacheOwned,
+                    });
+                }
+                c.normal.transfers.push(TransferRule::Settle { inputs: vec![frame] });
+                c.normal.postconditions.push(Postcondition::Closed(frame));
                 c.effects.publishes = true;
-                self.protocol(protocol, ProtocolTransition::Publish, c, validate)?;
+                c.roots.roots.extend([RootKind::FrameSlots, RootKind::Cache]);
+            }
+            Rule::Spawn { state } => {
+                // Class X (D24.1): Normal only. own adds ServiceOf{f, Frame} to the state;
+                // coro/low return the cache duty unchanged plus a new task-state.
+                c.normal.results.push(ResultSlot::new(N::State, ResultType::SameAs(state)));
+                if matches!(self.module.profile, Profile::Coro | Profile::Low) {
+                    c.normal.results.push(ResultSlot::service(N::Task, S::TaskState));
+                }
+                let outputs = c.normal.results.iter().map(|slot| slot.name).collect();
+                c.normal.transfers.push(TransferRule::Move { inputs: vec![state], outputs });
+                c.effects.allocates = true;
+                c.effects.mutates = true;
+                c.roots.roots.push(RootKind::Cache);
+            }
+            Rule::AwaitUnwind { state, task, receipt, protocol } => {
+                // C-3: Normal outcome only, shielded, suspends.
+                self.module.protocols.get(protocol)?;
+                c.normal.results = vec![
+                    ResultSlot::new(N::State, ResultType::SameAs(state)),
+                    ResultSlot::service(N::Failure, S::Failure),
+                ];
+                c.normal.transfers.push(TransferRule::Move { inputs: vec![state], outputs: vec![N::State] });
+                c.normal.transfers.push(TransferRule::Settle { inputs: vec![task, receipt] });
+                c.normal.postconditions.extend([
+                    Postcondition::Shielded,
+                    Postcondition::TaskDeterminesHolder,
+                    Postcondition::ReceiptDeterminesHolder,
+                ]);
+                c.effects.suspends = true;
+                c.roots.roots.extend([RootKind::Cache, RootKind::FrameSlots]);
+            }
+            Rule::Rehome { form, target, protocol } => {
+                // C-4: class L, no unwind; the owner tag changes only at exit.commit.
+                let inputs = match form {
+                    RehomeForm::Scope { state, pending, .. } => {
+                        c.normal.results.push(ResultSlot::new(N::State, ResultType::SameAs(state)));
+                        vec![state, pending]
+                    }
+                    RehomeForm::Token { pending, cache, task } => {
+                        std::iter::once(pending).chain([cache]).chain(task).collect()
+                    }
+                    RehomeForm::State(state) => vec![state],
+                };
+                c.normal.results.push(ResultSlot::service(N::Pending, S::Pending));
+                let outputs = c.normal.results.iter().map(|slot| slot.name).collect();
+                c.normal.transfers.push(TransferRule::Move { inputs, outputs });
+                c.normal.postconditions.extend([Postcondition::CacheRehome(target), Postcondition::NoFreshAdmission]);
+                c.roots.roots.extend([RootKind::PendingExit, RootKind::Cache]);
+                self.protocol(protocol, ProtocolTransition::Rehome, c, validate)?;
+            }
+            Rule::Materialize { packet, kind } => {
+                // D25.2: class L. A known entry leaves the packet as its duty token.
+                let token = match kind {
+                    ServiceKeyKind::Cache => S::CacheState,
+                    ServiceKeyKind::Frame => S::TaskState,
+                    other => return Err(ContractError::NoServiceToken(other)),
+                };
+                c.normal.results = vec![ResultSlot::service(N::Packet, S::Own), ResultSlot::service(N::State, token)];
+                c.normal.transfers.push(TransferRule::Move {
+                    inputs: vec![packet], outputs: vec![N::Packet, N::State],
+                });
+            }
+            Rule::Absorb { packet, token } => {
+                // D25.2: class L. A duty token becomes a service entry of the packet.
+                c.normal.results.push(ResultSlot::service(N::Packet, S::Own));
+                c.normal.transfers.push(TransferRule::Move { inputs: vec![packet, token], outputs: vec![N::Packet] });
             }
             Rule::TaskSettle { task, protocol } => {
                 cleanup(c);
@@ -901,6 +1003,13 @@ impl<'a> ContractRegistry<'a> {
                 cleanup(c);
                 c.normal.results.push(ResultSlot::new(N::State, ResultType::SameAs(plan)));
                 c.normal.transfers.push(TransferRule::Settle { inputs: vec![holder, plan] });
+                self.protocol(protocol, ProtocolTransition::Settle, c, validate)?;
+            }
+            Rule::CleanupSettleDynamic { cleanup: plan, protocol } => {
+                // D25.3: never suspends and never fails in 0.6.0, since no settle waits.
+                captured_cleanup(c);
+                c.normal.results.push(ResultSlot::new(N::State, ResultType::SameAs(plan)));
+                c.normal.transfers.push(TransferRule::Move { inputs: vec![plan], outputs: vec![N::State] });
                 self.protocol(protocol, ProtocolTransition::Settle, c, validate)?;
             }
             Rule::Destroy { cleanup: plan, identity } => {

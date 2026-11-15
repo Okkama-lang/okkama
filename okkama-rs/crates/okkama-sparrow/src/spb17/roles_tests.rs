@@ -38,7 +38,8 @@ fn layout(storage_fields: Vec<Type>) -> ObjectRuntimeLayout {
 fn object(name: &str, storage_fields: Vec<Type>, implements: Vec<RoleImpl>) -> Object {
     let count = storage_fields.len() as u32;
     Object {
-        name: name.into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], role: None, implements,
+        name: name.into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false, role: None,
+        implements,
         fields: (0..count).map(|storage| Field { name: format!("f{storage}"), storage, once: false }).collect(),
         layout: layout(storage_fields),
     }

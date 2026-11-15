@@ -171,7 +171,7 @@ pub(crate) fn implementations(module: &o::Module, witnesses: &[o::Witness])
 
 fn placeholder(name: String, role: Option<s::RoleDecl>, implements: Vec<s::RoleImpl>) -> s::Object {
     s::Object {
-        error_cases: vec![], enum_cases: 0, variant_cases: vec![], name, fields: vec![],
+        error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false, name, fields: vec![],
         layout: s::ObjectRuntimeLayout {
             storage_fields: vec![], allocation_words: 2, identity_offset: None, has_destroy: false,
             may_reach_resource: false, may_async_destroy: false, trace_layout: vec![], selection_layout: vec![],
@@ -180,22 +180,23 @@ fn placeholder(name: String, role: Option<s::RoleDecl>, implements: Vec<s::RoleI
     }
 }
 
-pub(crate) fn traced(ty: s::Type) -> bool {
-    matches!(ty, s::Type::Error | s::Type::Bytes | s::Type::Array(_) | s::Type::Str | s::Type::Object(_)
-        | s::Type::Successor(_) | s::Type::Failure | s::Type::Rat | s::Type::Variant(_) | s::Type::Role(_)
-        | s::Type::RoleSuccessor(_))
-}
-
-/// Whether a value of `ty` may reach a resource, given the descriptors built so far.
-fn reaches(objects: &[s::Object], ty: s::Type) -> bool {
+/// Whether a value of `ty` may reach a resource, given the descriptors built so far: a resource object or
+/// successor, a role one of whose implementations reaches one, or a managed array or map of them.
+fn reaches(module: &o::Module, objects: &[s::Object], ty: s::Type) -> bool {
     match ty {
-        s::Type::Object(id) | s::Type::Successor(id) => objects.get(id as usize)
+        s::Type::Object(id) | s::Type::Successor(id) | s::Type::Variant(id) => objects.get(id as usize)
             .is_none_or(|object| object.layout.may_reach_resource),
         s::Type::Role(id) | s::Type::RoleSuccessor(id) => objects.iter()
             .filter(|object| object.implements.iter().any(|table| table.role == id))
             .any(|object| object.layout.may_reach_resource),
         s::Type::Error => objects.iter().filter(|object| !object.error_cases.is_empty())
             .any(|object| object.layout.may_reach_resource),
+        s::Type::Array(shape) => s::ArrayType { depth: 1, ..shape }.element()
+            .is_some_and(|leaf| reaches(module, objects, leaf)),
+        s::Type::Map(id) => match composites(module).entries().get(id as usize) {
+            Some(s::Composite::Map { value, .. }) => reaches(module, objects, *value),
+            _ => true,
+        },
         _ => false,
     }
 }
@@ -239,10 +240,10 @@ pub(crate) fn synthetic_objects(module: &o::Module, objects: &mut Vec<s::Object>
         }).collect();
         object.layout.allocation_words = (1 + storage_fields.len() as u32).max(2);
         object.layout.trace_layout = storage_fields.iter().enumerate()
-            .filter_map(|(index, &ty)| traced(ty).then_some(index as u32)).collect();
+            .filter_map(|(index, &ty)| ty.traced().then_some(index as u32)).collect();
         // A captured resource is selected like a managed field: the closure reaches what it references.
         object.layout.selection_layout = storage_fields.iter().enumerate()
-            .filter_map(|(index, &ty)| reaches(objects, ty).then_some(index as u32)).collect();
+            .filter_map(|(index, &ty)| reaches(module, objects, ty).then_some(index as u32)).collect();
         object.layout.may_reach_resource = !object.layout.selection_layout.is_empty();
         object.layout.storage_fields = storage_fields;
         objects.push(object);
@@ -253,7 +254,7 @@ pub(crate) fn synthetic_objects(module: &o::Module, objects: &mut Vec<s::Object>
         let mut changed = false;
         for index in first..objects.len() {
             let selection = objects[index].layout.storage_fields.iter().enumerate()
-                .filter_map(|(field, &ty)| reaches(objects, ty).then_some(field as u32)).collect::<Vec<_>>();
+                .filter_map(|(field, &ty)| reaches(module, objects, ty).then_some(field as u32)).collect::<Vec<_>>();
             if selection != objects[index].layout.selection_layout {
                 objects[index].layout.may_reach_resource = !selection.is_empty();
                 objects[index].layout.selection_layout = selection;

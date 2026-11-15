@@ -32,7 +32,8 @@ fn ret_own(locations: &[L]) -> s::Instruction {
 fn object(name: &str, storage: Vec<s::Type>, role: Option<s::RoleDecl>, implements: Vec<s::RoleImpl>) -> s::Object {
     let count = storage.len() as u32;
     s::Object {
-        name: name.into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], role, implements,
+        name: name.into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false, role,
+        implements,
         fields: (0..count).map(|storage| s::Field { name: format!("f{storage}"), storage, once: false }).collect(),
         layout: s::ObjectRuntimeLayout {
             trace_layout: (0..count).collect(), storage_fields: storage, allocation_words: (1 + count).max(2),

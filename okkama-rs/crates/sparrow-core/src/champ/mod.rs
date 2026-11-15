@@ -9,8 +9,10 @@ mod records;
 mod abi;
 pub use abi::*;
 pub(crate) mod machine;
+pub(crate) mod collections;
 pub use machine::{ExternalEntry, PlainEntry};
 mod helpers;
+pub(crate) mod testing;
 pub mod cleanup;
 pub use cleanup::rt_exit_abort;
 pub use records::*;
@@ -277,3 +279,6 @@ mod runtime_tests;
 
 #[cfg(test)]
 mod executor_tests;
+
+#[cfg(test)]
+mod scalar_tests;

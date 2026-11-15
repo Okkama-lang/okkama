@@ -1,12 +1,16 @@
 //! Trusted, finite synchronous P1 boundary catalog. No generic fallback contracts.
 //!
-//! Atomic's four entries are VM operations, not its placeholder Okkama bodies.
-//! `$int`/`$string` identify closed OIR-2 ABI specializations; no dictionaries remain.
+//! Atomic's six entries are VM operations, not its placeholder Okkama bodies.
+//! `$int`, `$string`, `$bool`, `$byte`, `$char`, `$float`, `$rat` and `$array_<suffix>` identify
+//! closed OIR-2 ABI specializations (P2.4 §4.8); no dictionaries remain.
 //! All held values are plain: replacement stores a GC reference, never an ownership
 //! obligation. Consequently all parameter retention, result aliases and deps are empty.
 //! - `new_value(T) -> Atomic<T>`: call boundary, no semantic failure.
 //! - `value(Atomic<T>) -> T`: observation, may throw AtomicClosed.
 //! - `replace(Atomic<T>, T) -> void`: call boundary, may throw AtomicClosed before storing.
+//! - `compare_and_replace(Atomic<T>, T, T) -> bool`: call boundary, may throw AtomicClosed;
+//!   publishes the revised value only on equality, and plain equality cannot fail.
+//! - `closed(Atomic<T>) -> bool`: observation, no semantic failure.
 //! - `close(Atomic<T>) -> void`: observation, idempotent, no semantic failure.
 //!
 //! OIR-2 §7.2 closes unretained fresh publication inputs at the call boundary.
@@ -15,12 +19,15 @@
 //! The value/close observations therefore keep admission at the caller.
 //!
 //! `Error.text(Error) -> string` observes the builtin plain Error view without failure.
-//! `utf8_encode` and `stdout_write` are native call boundaries. Their results are a
-//! plain byte array and an accepted byte count; host failures have Native kind.
+//! Natives (#569 C7) follow the companion catalogue of the runtime table: an admitted
+//! synchronous data or handle operation is a call boundary whose declaration must equal the
+//! table's signature; any other canonical symbol takes the checked unresolved-provider adapter
+//! (see [`native_transport`]). Data and handles carry no ownership graph; failures have Native kind.
 //! All entries are synchronous, with no async destroy, publication receipt or resource result.
 //!
-//! Open sync callables and the opaque callable cleanup intrinsic come from the
-//! runtime catalogue of `okkama-oir` (#569 O1); own and the verifier consult it.
+//! Open sync callables and the opaque cleanup intrinsics (callables, #569 O1 and
+//! C3b; `any` boxes, C6) come from the runtime catalogue of `okkama-oir`; own and
+//! the verifier consult it.
 use std::collections::BTreeMap;
 
 use crate::oir2 as ir;
@@ -54,8 +61,9 @@ impl P1NativeSummaries {
                     ir::FunctionAttr::Intrinsic { name, .. } => (false, name),
                     _ => continue,
                 };
-                if !native && name == ir::catalogue::SYNC_CLOSURE_CLEANUP {
-                    if catalog.runtime.cleanup_summary(name).is_none() {
+                let runtime = [ir::catalogue::SYNC_CLOSURE_CLEANUP, ir::catalogue::ANY_CLEANUP];
+                if !native && runtime.contains(&name.as_str()) {
+                    if catalog.runtime.cleanup_signature(name, &function.signature).is_none() {
                         return Err(error(format!("invalid runtime intrinsic ABI {name}")));
                     }
                     continue;
@@ -117,7 +125,8 @@ impl P1NativeSummaries {
                 _ => continue,
             };
             let decl = module.declarations.get(decl).map_err(|err| error(err.to_string()))?;
-            let atomic = matches!(decl.name.as_str(), "async.atomic.Atomic_int" | "async.atomic.Atomic_string")
+            let atomic = decl.name.strip_prefix("async.atomic.Atomic_")
+                .and_then(|suffix| atomic_value(module, suffix)).is_some()
                 && matches!(&decl.kind, ir::DeclarationKind::Object {
                     builtin: true, destroy: None, fields, witnesses,
                 } if fields.is_empty() && witnesses.is_empty());
@@ -171,7 +180,10 @@ impl ir::verify::ExternalContracts for P1NativeSummaries {
         self.natives.get(name).map(|entry| &entry.0)
     }
     fn intrinsic(&self, name: &str) -> Option<&ir::Signature> {
-        self.intrinsics.get(name).map(|entry| &entry.0).or_else(|| self.runtime.cleanup_signature(name))
+        self.intrinsics.get(name).map(|entry| &entry.0)
+    }
+    fn intrinsic_declaration(&self, name: &str, declared: &ir::Signature) -> Option<&ir::Signature> {
+        self.intrinsics.get(name).map(|entry| &entry.0).or_else(|| self.runtime.cleanup_signature(name, declared))
     }
     fn native_summary(&self, name: &str) -> Option<&ir::Summary> {
         self.natives.get(name).map(|entry| &entry.1)
@@ -190,19 +202,14 @@ impl ir::verify::ExternalContracts for P1NativeSummaries {
 pub(super) fn contract(module: &ir::Module, name: &str, native: bool, signature: &ir::Signature)
     -> Result<ir::Summary, NativeSummaryError> {
     let find = |ty: ir::Type| module.types.iter().find_map(|(id, value)| (*value == ty).then_some(id));
-    let int = || find(ir::Type::Int).ok_or_else(|| error("missing int"));
     let string = || find(ir::Type::Str).ok_or_else(|| error("missing string"));
-    let bytes = find(ir::Type::Byte).and_then(|byte| find(ir::Type::Array(byte)));
     let mut kind = ir::EntryKind::CallBoundary;
     let mut failures = vec![];
     let (params, results) = match (native, name) {
-        (true, "runtime/stdio@1::stdout_write/1") => {
+        (true, name) => {
+            native_transport(module, name, signature)?;
             failures.push(ir::FailureKind::Native);
-            (vec![bytes.ok_or_else(|| error("missing @byte"))?], vec![int()?])
-        }
-        (true, "runtime/utf@1::utf8_encode/1") => {
-            failures.push(ir::FailureKind::Native);
-            (vec![string()?], vec![bytes.ok_or_else(|| error("missing @byte"))?])
+            (signature.params.clone(), signature.results.clone())
         }
         (false, "okkama.Error.text") => {
             kind = ir::EntryKind::ObservationAdmissionStaysCaller;
@@ -215,14 +222,28 @@ pub(super) fn contract(module: &ir::Module, name: &str, native: bool, signature:
             }).ok_or_else(|| error("missing builtin Error"))?;
             (vec![role], vec![string()?])
         }
+        (false, name) if name.starts_with("okkama.test.") => {
+            // Test intrinsics observe plain operands; outside a running case they fail (Program).
+            // `skip` always fails: its program failure is the skip marker, never a thrown value.
+            kind = ir::EntryKind::ObservationAdmissionStaysCaller;
+            failures.push(ir::FailureKind::Program);
+            let float = || find(ir::Type::Float).ok_or_else(|| error("missing float"));
+            let bytes = || find(ir::Type::Byte).and_then(|byte| find(ir::Type::Array(byte)))
+                .ok_or_else(|| error("missing @byte"));
+            let params = match name.strip_prefix("okkama.test.") {
+                Some("skip") => vec![string()?],
+                Some("close") => vec![float()?, float()?, float()?],
+                Some("text") => vec![string()?, string()?],
+                Some("bytes") => vec![bytes()?, bytes()?],
+                _ => return Err(error(format!("unknown test intrinsic {name}"))),
+            };
+            (params, vec![])
+        }
         (false, name) => {
             let (operation, suffix) = name.strip_prefix("okkama.atomic.Atomic.")
                 .and_then(|name| name.split_once('$')).ok_or_else(|| error(format!("unknown intrinsic {name}")))?;
-            let value = match suffix {
-                "int" => int()?,
-                "string" => string()?,
-                _ => return Err(error(format!("unsupported Atomic value {suffix}"))),
-            };
+            let value = atomic_value(module, suffix)
+                .ok_or_else(|| error(format!("unsupported Atomic value {suffix}")))?;
             let object = module.types.iter().find_map(|(id, ty)| match ty {
                 ir::Type::Object { decl, args } if args.is_empty() => module.declarations.get(*decl).ok()
                     .filter(|decl| decl.name == format!("async.atomic.Atomic_{suffix}"))
@@ -242,6 +263,16 @@ pub(super) fn contract(module: &ir::Module, name: &str, native: bool, signature:
                     failures.push(ir::FailureKind::Thrown);
                     (vec![object, value], vec![])
                 }
+                // Publishes `revised` only when the held value equals `expected`; a failed comparison
+                // publishes nothing. Plain values compare without failure.
+                "compare_and_replace" => {
+                    failures.push(ir::FailureKind::Thrown);
+                    (vec![object, value, value], vec![find(ir::Type::Bool).ok_or_else(|| error("missing bool"))?])
+                }
+                "closed" => {
+                    kind = ir::EntryKind::ObservationAdmissionStaysCaller;
+                    (vec![object], vec![find(ir::Type::Bool).ok_or_else(|| error("missing bool"))?])
+                }
                 "close" => {
                     kind = ir::EntryKind::ObservationAdmissionStaysCaller;
                     (vec![object], vec![])
@@ -249,7 +280,6 @@ pub(super) fn contract(module: &ir::Module, name: &str, native: bool, signature:
                 _ => return Err(error(format!("unknown Atomic operation {operation}"))),
             }
         }
-        _ => return Err(error(format!("unknown native {name}"))),
     };
     if signature.params != params || signature.results != results {
         return Err(error(format!("invalid P1 signature for {name}")));
@@ -273,6 +303,102 @@ pub(super) fn contract(module: &ir::Module, name: &str, native: bool, signature:
     })
 }
 
+/// The interned plain value type of a registered Atomic specialization suffix (P2.4 §4.8): a scalar
+/// or `array_` and a plain element suffix; `None` for any other suffix or a type the module lacks.
+pub(super) fn atomic_value(module: &ir::Module, suffix: &str) -> Option<ir::TypeId> {
+    let ty = match suffix {
+        "int" => ir::Type::Int,
+        "string" => ir::Type::Str,
+        "bool" => ir::Type::Bool,
+        "byte" => ir::Type::Byte,
+        "char" => ir::Type::Char,
+        "float" => ir::Type::Float,
+        "rat" => ir::Type::Rat,
+        _ => ir::Type::Array(atomic_value(module, suffix.strip_prefix("array_")?)?),
+    };
+    module.types.iter().find_map(|(id, value)| (*value == ty).then_some(id))
+}
+
+/// The general synchronous native ABI (P2.4 §4.7). A symbol of the runtime table is admitted only
+/// as its companion catalogue classifies it (synchronous, data or handle transport) and only when
+/// the declaration is exactly the table's signature, handle identities included. Any other
+/// canonical symbol has no provider in the table: the checked unresolved-provider adapter carries
+/// it when every type is data or a handle of its own module. Invocation then resolves the provider
+/// at run time and fails as a missing provider; this is not a frontend rejection.
+pub(super) fn native_transport(module: &ir::Module, name: &str, signature: &ir::Signature)
+    -> Result<(), NativeSummaryError> {
+    use okkama_sparrow::abi::catalogue::{self, Admission, Symbol};
+    let symbol = Symbol::parse(name).ok_or_else(|| error(format!("native symbol {name} is not canonical")))?;
+    let handle_prefix = format!("{}.", symbol.module.replace('/', "."));
+    match catalogue::admitted(name) {
+        Ok(contract) => {
+            let expected = contract.native.signature();
+            let result = match &expected.result {
+                okkama_sparrow::abi::Type::Void => None,
+                ty => Some(ty),
+            };
+            let params = signature.params.len() == expected.params.len()
+                && signature.params.iter().zip(&expected.params)
+                    .all(|(&id, ty)| abi_type(module, id, ty, &handle_prefix));
+            let results = match (signature.results.as_slice(), result) {
+                ([], None) => true,
+                ([id], Some(ty)) => abi_type(module, *id, ty, &handle_prefix),
+                _ => false,
+            };
+            if !params || !results {
+                return Err(error(format!("native {name} does not match the runtime table signature")));
+            }
+            Ok(())
+        }
+        Err(Admission::Unknown) => {
+            let transport = signature.params.iter().chain(&signature.results)
+                .all(|&id| adapter_type(module, id, &handle_prefix));
+            if symbol.arity != signature.params.len() || signature.results.len() > 1 || !transport {
+                return Err(error(format!("native {name} has no provider contract and no data or handle transport")));
+            }
+            Ok(())
+        }
+        Err(rejection) => Err(error(format!("native {name}: {rejection}"))),
+    }
+}
+
+/// The handle declared by the native's module, by name.
+fn own_handle(module: &ir::Module, decl: ir::DeclId, prefix: &str) -> Option<String> {
+    let declaration = module.declarations.get(decl).ok()?;
+    let name = declaration.name.strip_prefix(prefix)?;
+    let valid = matches!(declaration.kind, ir::DeclarationKind::Handle) && declaration.type_params.is_empty()
+        && !name.is_empty() && !name.contains('.');
+    valid.then(|| name.to_owned())
+}
+
+fn abi_type(module: &ir::Module, id: ir::TypeId, expected: &okkama_sparrow::abi::Type, prefix: &str) -> bool {
+    use okkama_sparrow::abi::Type as A;
+    let Ok(ty) = module.types.get(id) else {
+        return false;
+    };
+    match (ty, expected) {
+        (ir::Type::Int, A::Int) | (ir::Type::Float, A::Float) | (ir::Type::Rat, A::Rat) | (ir::Type::Bool, A::Bool)
+        | (ir::Type::Byte, A::Byte) | (ir::Type::Char, A::Char) | (ir::Type::Str, A::Str) => true,
+        (ir::Type::Array(item), A::Array(expected)) => abi_type(module, *item, expected, prefix),
+        (ir::Type::Map(key, value), A::Map(expected_key, expected_value)) => {
+            abi_type(module, *key, expected_key, prefix) && abi_type(module, *value, expected_value, prefix)
+        }
+        (ir::Type::Handle(decl), A::Handle(name)) => own_handle(module, *decl, prefix).as_deref() == Some(*name),
+        _ => false,
+    }
+}
+
+fn adapter_type(module: &ir::Module, id: ir::TypeId, prefix: &str) -> bool {
+    match module.types.get(id) {
+        Ok(ir::Type::Int | ir::Type::Float | ir::Type::Rat | ir::Type::Bool | ir::Type::Byte | ir::Type::Char
+            | ir::Type::Str) => true,
+        Ok(ir::Type::Array(item)) => adapter_type(module, *item, prefix),
+        Ok(ir::Type::Map(key, value)) => adapter_type(module, *key, prefix) && adapter_type(module, *value, prefix),
+        Ok(ir::Type::Handle(decl)) => own_handle(module, *decl, prefix).is_some(),
+        _ => false,
+    }
+}
+
 /// Allocation and typed-failure descriptors required independently of source catch use.
 /// The constructor allocates Self; value/replace construct AtomicClosed.closed.
 pub(super) fn intrinsic_objects(module: &ir::Module, name: &str, signature: &ir::Signature)
@@ -284,7 +410,8 @@ pub(super) fn intrinsic_objects(module: &ir::Module, name: &str, signature: &ir:
             _ => Err(error("Atomic constructor needs an object descriptor")),
         };
     }
-    if name.starts_with("okkama.atomic.Atomic.value$") || name.starts_with("okkama.atomic.Atomic.replace$") {
+    if name.starts_with("okkama.atomic.Atomic.value$") || name.starts_with("okkama.atomic.Atomic.replace$")
+        || name.starts_with("okkama.atomic.Atomic.compare_and_replace$") {
         let decl = module.declarations.iter().find_map(|(id, decl)| {
             (decl.name == "async.atomic.AtomicClosed" && matches!(&decl.kind,
                 ir::DeclarationKind::Enum { cases, is_error: true } if cases == &["closed"])).then_some(id)

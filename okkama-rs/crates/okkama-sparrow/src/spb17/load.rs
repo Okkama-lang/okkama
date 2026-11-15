@@ -8,6 +8,13 @@ type Active = BTreeSet<Location>;
 /// The artifact cannot add contracts to this catalog.
 pub trait ExternalContracts {
     fn entry(&self, name: &str) -> Option<&Function>;
+
+    /// The checked unresolved-provider adapter for a declaration whose name has no trusted entry
+    /// (P2.4 §4.7); `None` rejects it. The adapter is recomputed from the declaration's transport,
+    /// never taken from it, and the declaration must then equal it exactly.
+    fn adapter(&self, _declared: &Function) -> Option<Function> {
+        None
+    }
 }
 #[derive(Debug)]
 pub struct NoExternalContracts;
@@ -36,7 +43,11 @@ pub(super) fn consumed(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<
     locations.iter().copied().enumerate().filter_map(|(index, location)| {
         let consume = match op {
             ScopeBegin | OwnEmpty | OwnCreateCommit | DepsOf | DepsEmpty | InvokeObserve | InvokeDispatch
-                | ArrayGet | Fail | Evaluate | Catch => false,
+                | ArrayGet | Fail | Evaluate | Catch | Lookup => false,
+            // The journal packet travels with the buffer; the buffer is a register (check_builders).
+            BuilderPush | BuilderAppend | BuilderRange | BuilderFinish | BuilderAbandon => {
+                index + 1 == locations.len()
+            }
             OwnMove | OwnJoin | OwnAdmit | OwnAccept | CleanupBegin | ExitAbort | ExitDispatch => true,
             OwnBind | OwnRebind => index == 0 || index == 2,
             OwnStage => index < 1 + usize::from(between) || index + 1 == locations.len(),
@@ -171,7 +182,15 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
         if let Some(entry) = &f.proofs.entry
             && let Some(name) = &entry.external
         {
-            let trusted = contracts.entry(name).ok_or_else(|| error(format!("unregistered external {name}")))?;
+            let adapter;
+            let trusted = match contracts.entry(name) {
+                Some(trusted) => trusted,
+                None => {
+                    adapter = contracts.adapter(f).ok_or_else(|| violation("EXTERNAL_UNRESOLVED",
+                        format!("external {name} has no trusted entry and no data or handle adapter")))?;
+                    &adapter
+                }
+            };
             require(f.entry_abi == trusted.entry_abi && f.registers == trusted.registers
                 && f.services == trusted.services && f.params == trusted.params && f.results == trusted.results
                 && f.proofs.entry == trusted.proofs.entry, "external signature/summary mismatch")?;
@@ -224,6 +243,13 @@ fn check_roots(f: &Function) -> Check {
     let live = live_locations(&bare)?;
     let supplied = root_index(&f.proofs.roots);
     let post = root_index(&f.proofs.post_roots);
+    // An undef placeholder is the constant zero until a construction stores over it; verify() admits
+    // it only as a construction operand or forwarded to a parameter, so it is never a reference.
+    let placeholders = f.code.iter().filter_map(|inst| match inst {
+        Instruction::Data { op: DataOp::Undef, output: Some(id), .. } => Some(Location::Register(*id)),
+        _ => None,
+    }).collect::<BTreeSet<_>>();
+    let traced = |f: &Function, location: Location| traced(f, location) && !placeholders.contains(&location);
     for (pc, required) in live.iter().enumerate() {
         let roots = supplied.get(&(pc as u32));
         enforce(required.iter().filter(|&&loc| traced(f, loc))
@@ -460,6 +486,15 @@ fn check_service_results(p: &Program, f: &Function) -> Check {
     Ok(())
 }
 
+/// A rule decided from evidence: when it does not hold because the evidence ran out of budget, the
+/// budget is the reason reported, not the rule.
+fn evidence_rule(evidence: &evidence::Evidence, holds: bool, rule: &'static str, message: &str) -> Check {
+    if !holds {
+        evidence.check_budget()?;
+    }
+    enforce(holds, rule, message)
+}
+
 fn check_call_contracts(p: &Program, f: &Function) -> Check {
     let mut reconstructed = evidence::Evidence::new(p, f);
     for instruction in &f.code {
@@ -470,10 +505,12 @@ fn check_call_contracts(p: &Program, f: &Function) -> Check {
                 _ => None,
             }).ok_or_else(|| violation("RETURN_PLAIN_PACKET", "plain return omits packet"))?;
             if plain_results(p, f) {
-                enforce(reconstructed.inventory(packet).is_some_and(|keys| keys.is_empty()),
-                    "RETURN_PLAIN_PACKET", "plain return cannot carry resource obligations")?;
+                let empty = reconstructed.inventory(packet).is_some_and(|keys| keys.is_empty());
+                evidence_rule(&reconstructed, empty, "RETURN_PLAIN_PACKET",
+                    "plain return cannot carry resource obligations")?;
             }
-            enforce(reconstructed.flat_packet(packet), "RETURN_PACKET_NOT_FLAT",
+            let flat = reconstructed.flat_packet(packet);
+            evidence_rule(&reconstructed, flat, "RETURN_PACKET_NOT_FLAT",
                 "returned packet must have identical admission and full inventories")?;
         }
         if let Instruction::Champ { op: Opcode::InvokeDispatch | Opcode::InvokeDispatchOwn, arguments, .. }
@@ -501,8 +538,9 @@ fn check_call_contracts(p: &Program, f: &Function) -> Check {
                     == Ok(ProducedType::Service(ServiceKind::Packet)) => Some(*location),
                 _ => None,
             }).ok_or_else(|| violation("CALL_PLAIN_PACKET", "plain call omits packet"))?;
-            enforce(reconstructed.inventory(packet).is_some_and(|keys| keys.is_empty()),
-                "CALL_PLAIN_PACKET", &format!("{} -> {}: plain arguments cannot carry resource obligations",
+            let empty = reconstructed.inventory(packet).is_some_and(|keys| keys.is_empty());
+            evidence_rule(&reconstructed, empty, "CALL_PLAIN_PACKET",
+                &format!("{} -> {}: plain arguments cannot carry resource obligations",
                     f.symbol, p.functions[summary.entry as usize].symbol))?;
         }
     }

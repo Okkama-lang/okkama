@@ -320,8 +320,10 @@ macro_rules! record {
 }
 
 record! { Program {
-    module, version, objects, tables, functions, entry,
+    module, version, objects, tables, functions, entry; tests, composites,
 } }
+
+record! { Test { name, function } }
 
 record! { ObjectRuntimeLayout {
     storage_fields, allocation_words, identity_offset, has_destroy,
@@ -330,7 +332,7 @@ record! { ObjectRuntimeLayout {
 
 record! { Field { name, storage, once } }
 record! { Object {
-    name, fields, layout, error_cases; enum_cases, variant_cases, role, implements,
+    name, fields, layout, error_cases; enum_cases, variant_cases, handle, role, implements,
 } }
 record! { RoleDecl { slots } }
 record! { RoleSlot { name, entry_abi, params, results } }
@@ -435,11 +437,40 @@ tagged! { Type {
     0 => Int, 1 => Bool, 2 => Byte, 3 => Float, 4 => Rat, 5 => Char,
     6 => Str, 20 => Range, 11 => Failure, 21 => Bytes, 22 => Error,
     7 => Object(id: u32), 8 => Successor(id: u32), 13 => Never, 9 => Descriptor,
-    23 => Array(shape: ArrayType), 24 => Variant(id: u32), 40 => Role(id: u32), 41 => RoleSuccessor(id: u32),
+    23 => Array(shape: ArrayType), 24 => Variant(id: u32), 25 => Handle(id: u32),
+    26 => Map(id: u32), 27 => MapBuilder(id: u32), 28 => Builder(id: u32),
+    40 => Role(id: u32), 41 => RoleSuccessor(id: u32),
 } }
+impl Wire for Composite {
+    fn put(&self, w: &mut Writer) {
+        match self {
+            Self::Map { key, value } => {
+                w.number(0);
+                key.put(w);
+                value.put(w);
+            }
+            Self::Builder { array } => {
+                w.number(1);
+                array.put(w);
+            }
+        }
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, Error> {
+        match r.number()? {
+            0 => {
+                let key = Type::get(r)?;
+                let value = Type::get(r)?;
+                Ok(Self::Map { key, value })
+            }
+            1 => Ok(Self::Builder { array: Type::get(r)? }),
+            tag => Err(r.fail(format!("unknown Composite tag {tag}"))),
+        }
+    }
+}
 record! { ArrayType { leaf, depth } }
 tagged! { ArrayLeaf {
-    0 => Int, 1 => Bool, 2 => Str, 3 => Range, 4 => Bytes, 5 => Object(id: u32), 20 => Role(id: u32),
+    0 => Int, 1 => Bool, 2 => Str, 3 => Range, 4 => Bytes, 5 => Object(id: u32),
+    6 => Float, 7 => Char, 8 => Rat, 9 => Variant(id: u32), 10 => Map(id: u32), 11 => Never, 20 => Role(id: u32),
 } }
 tagged! { ServiceKind {
     0 => Packet, 1 => ScopeState, 2 => Pending, 3 => Cleanup, 4 => StableKey,
@@ -450,7 +481,9 @@ tagged! { Location { 0 => Register(id: u32), 1 => Service(id: u32) } }
 tagged! { Source { 0 => Location(loc: Location), 1 => ProducedSlot(slot: u32) } }
 tagged! { Flow { 0 => Next(locations: Vec<Location>), 1 => Outcomes(outcomes: Vec<Outcome>) } }
 tagged! { Constant { 0 => Int(value: String), 1 => Bool(value: bool), 2 => Str(value: String),
-    3 => Descriptor(id: u32), 4 => Byte(value: u32), 5 => Char(value: u32), 6 => Float(bits: String) } }
+    3 => Descriptor(id: u32), 4 => Byte(value: u32), 5 => Char(value: u32), 6 => Float(bits: String),
+    7 => Rat(value: RatValue) } }
+record! { RatValue { numerator, denominator } }
 tagged! { Immediate {
     0 => None, 1 => Constant(value: Constant), 2 => Inclusive(flag: bool),
     3 => Object(id: u32), 4 => Field(index: u32), 5 => Updates(indices: Vec<u32>),
@@ -516,6 +549,7 @@ fn opcode_name(code: u8) -> Option<&'static str> {
         12 => Some("int.mul"),
         13 => Some("int.mod"),
         20 => Some("int.neg"),
+        14..=18 => SCALAR_FAMILIES.iter().find(|(family, _, _)| *family == code).map(|(_, name, _)| *name),
         24 => Some("int.cmp"),
         40 => Some("bool.not"),
         41 => Some("bool.cmp"),
@@ -531,6 +565,9 @@ fn opcode_name(code: u8) -> Option<&'static str> {
         53 => Some("val.cmp"),
         54 => Some("variant.tag"),
         55 => Some("variant.get"),
+        56 => Some("map.op"),
+        57 => Some("array.op"),
+        58 => Some("builder.new"),
         26 => Some("cvt"),
         84 => Some("range.new"),
         85 => Some("range.part"),
@@ -549,6 +586,7 @@ fn opcode_name(code: u8) -> Option<&'static str> {
         136 => Some("fail.secondary"),
         137 => Some("fail.caused"),
         100 => Some("role"),
+        150 => Some("test.check"),
         255 => Some("champ"),
         _ => None,
     }
@@ -628,11 +666,43 @@ impl DataOp {
             Self::FailSecondary => (136, None),
             Self::FailCaused => (137, None),
             Self::RoleNarrow => (100, Some(0)),
+            Self::MapNew => (56, Some(0)),
+            Self::MapLen => (56, Some(1)),
+            Self::MapHas => (56, Some(2)),
+            Self::MapGet => (56, Some(3)),
+            Self::MapKeys => (56, Some(4)),
+            Self::MapValues => (56, Some(5)),
+            Self::MapKeyAt => (56, Some(6)),
+            Self::MapValueAt => (56, Some(7)),
+            Self::MapMerge => (56, Some(8)),
+            Self::MapDifference => (56, Some(9)),
+            Self::ArrayConcat => (57, Some(0)),
+            Self::ArrayJoin => (57, Some(1)),
+            Self::ArraySlice => (57, Some(2)),
+            Self::ArrayRemove => (57, Some(3)),
+            Self::ArrayReplace => (57, Some(4)),
+            Self::ArrayDifference => (57, Some(5)),
+            Self::BuilderNew => (58, None),
+            Self::TestOk => (150, Some(0)),
+            Self::TestIs => (150, Some(1)),
+            Self::TestIsnt => (150, Some(2)),
+            Self::TestFail => (150, Some(3)),
+            op => {
+                let (code, sub) = op.family().expect("every other operation belongs to a scalar family");
+                (code, Some(sub))
+            }
         }
     }
 
     fn read(code: u8, r: &mut Reader<'_>) -> Result<Self, Error> {
-        let sub = if matches!(code, 24 | 41 | 71 | 85 | 47..=50 | 52 | 53 | 100) { Some(r.number()?) } else { None };
+        let sub = if matches!(code, 14..=18 | 24 | 41 | 71 | 85 | 47..=50 | 52 | 53 | 56 | 57 | 100 | 150) {
+            Some(r.number()?)
+        } else {
+            None
+        };
+        if let (14..=18, Some(sub)) = (code, sub) {
+            return Self::of_family(code, sub).ok_or_else(|| r.fail(format!("unknown scalar opcode {code}/{sub}")));
+        }
         match (code, sub) {
             (1, None) => Ok(Self::Const),
             (2, None) => Ok(Self::Move),
@@ -705,6 +775,27 @@ impl DataOp {
             (136, None) => Ok(Self::FailSecondary),
             (137, None) => Ok(Self::FailCaused),
             (100, Some(0)) => Ok(Self::RoleNarrow),
+            (56, Some(0)) => Ok(Self::MapNew),
+            (56, Some(1)) => Ok(Self::MapLen),
+            (56, Some(2)) => Ok(Self::MapHas),
+            (56, Some(3)) => Ok(Self::MapGet),
+            (56, Some(4)) => Ok(Self::MapKeys),
+            (56, Some(5)) => Ok(Self::MapValues),
+            (56, Some(6)) => Ok(Self::MapKeyAt),
+            (56, Some(7)) => Ok(Self::MapValueAt),
+            (56, Some(8)) => Ok(Self::MapMerge),
+            (56, Some(9)) => Ok(Self::MapDifference),
+            (57, Some(0)) => Ok(Self::ArrayConcat),
+            (57, Some(1)) => Ok(Self::ArrayJoin),
+            (57, Some(2)) => Ok(Self::ArraySlice),
+            (57, Some(3)) => Ok(Self::ArrayRemove),
+            (57, Some(4)) => Ok(Self::ArrayReplace),
+            (57, Some(5)) => Ok(Self::ArrayDifference),
+            (58, None) => Ok(Self::BuilderNew),
+            (150, Some(0)) => Ok(Self::TestOk),
+            (150, Some(1)) => Ok(Self::TestIs),
+            (150, Some(2)) => Ok(Self::TestIsnt),
+            (150, Some(3)) => Ok(Self::TestFail),
             _ => Err(r.fail(format!("unknown scalar opcode {code}/{sub:?}"))),
         }
     }

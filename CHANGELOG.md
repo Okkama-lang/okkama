@@ -8,6 +8,42 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **The SPB 17 loader tracks a successor's must-use permission through calls
+  and the exit protocol (#680).** A successor result of a call that cannot
+  fail (`invoke.observe` with a plain next flow) could be dropped, and taking
+  it was rejected as "already taken"; a produced successor that an outcome
+  edge left unassigned was dropped silently; `ret.own` and `ret.defer`
+  checked nothing. Now `exit.prepare` (and `exit.replace`) move the value's
+  permission into the pending exit, cleanup and `exit.dispatch` carry it, and
+  `exit.commit` hands it only to a successor-typed result; `ret.own`/`ret.defer`
+  return live successors and leave none behind. On a failure path (`raise`,
+  an unwind dispatch, `exit.abort`) the permission may lapse: must-use is a
+  normal-path promise. The successor rules report stable codes
+  `SUCCESSOR_TAKEN`, `SUCCESSOR_DROPPED`, `SUCCESSOR_FORGED` and
+  `SUCCESSOR_JOIN` instead of `SPB_STRUCTURE`. The SPB 17 code generator no
+  longer discharges a permission it already moved into a pending exit.
+
+- **Tomato delivers a cancellation to a nested frame resumed by the scheduler
+  (#670).** A task awaiting its own async call, whose frame's awaited future
+  had settled and queued it, ignored a cancellation requested before that
+  frame ran: the request stayed on the task, the frame's next `await`
+  suspended, a second `cancel()` did nothing, and the task hung (or the run
+  stopped with "no task can make progress"). The frame's next `await` now
+  raises `Cancelled`, once, and it unwinds through the frame and the task.
+  New case `L08.cancel.nested-frame-next-await`.
+- **Champ correctness, ten conformance cases (#677).** On the OIR-2 → SPB 17
+  → Champ path: a `raise` inside a try reaches the enclosing catch (a
+  non-matching catch or a bare rethrow in a nested try no longer escapes);
+  a match on a catch payload and on payload-free Error enums lowers; a
+  multi-file root keeps every file and `std.…` paths resolve; integer
+  literals beyond 63 bits load; a program without `main` fails with
+  `RuntimeError: Program requires main() declaration`; a constructor may
+  branch before binding its fields; compiled callees are called directly and
+  self tail calls run as loops, so a million-level recursion and ten million
+  tail calls fit the stack (#664). `okkama run` and `okkama build` no longer
+  parse `test` bodies outside test mode (§14), as imports and OCS already
+  did.
+
 - **Tomato keeps an await's outcome when the cancellation comes after it
   (#663).** A task whose awaited future had settled, and which was only
   waiting for its turn, raised `Cancelled` at that finished `await` when it was
@@ -91,6 +127,54 @@ for mutable synchronous test values and `Atomic` for async code or object and
 fake fields; role fakes and their ordinary typed fields remain available.
 
 ### Added
+
+- **OIR-2 low settles the dynamic transfers of open calls and `any` (#683).**
+  `lower_cleanup` and the Low verifier now accept `own.dynamic` with the
+  registered open Closure protocol (reason `closure`) and with the
+  synchronous `any` protocol (reason `any`), not only the storage merge
+  protocol. Their entries join the scope inventory and the common cleanup
+  executor releases them in serial order through their runtime descriptors
+  (`oir.sync_closure.cleanup`, `oir.any.cleanup`). Reserve and failure
+  dispatch follow the storage merge entries, and no plan is direct without
+  order evidence. The dynamic site stays counted (B7.1). Eleven C3b
+  open-call cases now pass own and Low and stop in SPB 17, which has no
+  `fn` values, `fn.call`, `own.dynamic` or protocol table yet (#676).
+  `L09.collections.ordered-sets` hits the low step budget (#687).
+
+- **Champ: int, byte, float, rat and str operations in SPB 17 (#675).**
+  SPB 17 now has five operation families, one wire code each with a
+  sub-code: `int.ext` (14), `byte.ext` (15), `float.ext` (16), `rat.ext`
+  (17) and `str.ext` (18). They cover the bit operations, shifts and
+  rotations, the bit actions, `abs`/`sign`, float arithmetic, `pow` and
+  `sqrt`, exact rat arithmetic with numerator/denominator, and slice, split,
+  replace, trim, chomp, case, repeat, find, starts/ends and utf8. Ints stay
+  exact beyond 64 bits, constants included, and rat constants have their own
+  form. The operations that can fail (shift and rotation counts, ints outside
+  signed 64 bits in bit operations, non-finite floats, zero divisors, slice
+  bounds, a negative repeat count) go through S2 with explicit outcomes and
+  the program-failure mask. The new loader rules are `SCALAR_OP_TYPE` and
+  `CONST_RAT`. Champ runs the operations with Tomato's semantics, which are
+  now shared functions in `sparrow-core::ops`, through one JIT helper,
+  `champ_machine_scalar`; float neg/abs and byte and/or/xor/not are inline.
+  The producer lowers `byte >>> int` as `byte.shr`, which takes the int count,
+  and lowers an `any` coercion to `any.box`. Of the 47 cases blocked on these
+  operations, 38 now pass on Champ (`champ_cases_scalars`). Four pass own and
+  low and then stop on collection operations. Five wait on char conversions
+  in OIR-2 (#679).
+- **OIR-2: open action invocation and `any` in the producer (#569 C3b, C6).**
+  An invocation of an action value is open exactly where own sees no finite
+  origin in the invoking body (a parameter, a produced result, a field read,
+  the block parameters they reach); the producer now gives each such call the
+  registered open sync callable ABI (the Closure protocol, one cleanup
+  intrinsic per `fn` type and a `type.of` runtime descriptor) instead of a
+  diagnostic, and known invocations stay precise. The runtime catalogue keys
+  its cleanup intrinsics by type, so a module can invoke several open `fn`
+  types, and registers `oir.any.cleanup`. `any` boundaries lower to `any.box`
+  (element by element in heterogeneous literals, never a box of a box), and
+  every function whose values reach `any` binds a checked runtime descriptor.
+  An untagged `[]`/`[:]` arm of an `if`/`match` takes the join's collection
+  type. Eleven `any` cases reach Low; the open-call cases reach own and stop in
+  Low, which does not yet take the Closure transfer of an open call result.
 
 - **OIR-2 core (#563).** A new crate, `okkama-oir` (std only, re-exported by
   the compiler as `oir2`), holds the 0.6.0 intermediate representation with

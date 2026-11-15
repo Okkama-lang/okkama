@@ -22,10 +22,11 @@ pub(super) struct BodyContext<'t> {
     // Some(receiver snapshot present) denotes a lazy helper rather than its source action.
     pub deferred: Option<bool>,
     pub key: super::callables::BodyKey,
-    pub calls: &'t std::cell::RefCell<super::known_calls::CallSpans>,
+    pub calls: &'t std::cell::RefCell<super::open_calls::CallSpans>,
     pub bound_entries: &'t std::collections::HashSet<ir::FuncId>,
     pub lambdas: &'t [super::anonymous::Lambda],
     pub globals: &'t HashMap<usize, ir::DeclId>,
+    pub test_intrinsics: &'t HashMap<String, ir::FuncId>,
 }
 
 pub(super) struct BodyLowerer<'a, 't> {
@@ -303,11 +304,32 @@ impl<'a, 't> BodyLowerer<'a, 't> {
     ) -> Result<()> {
         let mut args = vec![];
         if join.value {
-            args.push(value.ok_or_else(|| LowerError::invalid(self.source.span, "valued arm has no value"))?);
+            let value = value.ok_or_else(|| LowerError::invalid(self.source.span, "valued arm has no value"))?;
+            args.push(self.retag_arm(join.block, value)?);
         }
         args.extend(self.args(&join.locals));
         self.abandon_except(&join.locals)?;
         self.edge(join.block, args, kind, boundary)
+    }
+
+    /// An arm's untagged `[]`/`[:]` (at any depth) takes the collection type of
+    /// the join (#297), as `Coercion::Retag` does at a declared boundary: the
+    /// checker types the whole `if`/`match` and leaves the arm untagged.
+    fn retag_arm(&mut self, join: ir::BlockId, value: ir::ValueId) -> Result<ir::ValueId> {
+        let Some(&parameter) = self.b.body().blocks.get(join)?.params.first() else {
+            return Ok(value);
+        };
+        let ty = self.b.body().values.get(parameter)?.ty;
+        let actual = self.b.body().values.get(value)?.ty;
+        if actual == ty {
+            return Ok(value);
+        }
+        let op = match (self.b.module().types.get(actual)?, self.b.module().types.get(ty)?) {
+            (ir::Type::Array(_), ir::Type::Array(_)) => ir::CollectionOp::ArrayRetag { array: value, ty },
+            (ir::Type::Map(..), ir::Type::Map(..)) => ir::CollectionOp::MapRetag { map: value, ty },
+            _ => return Ok(value),
+        };
+        self.collection(op)
     }
 
     fn boundary(&mut self, scope: ir::ScopeId, kind: ir::BoundaryKind) -> Result<ir::BoundaryId> {
@@ -688,6 +710,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             E::Coerce { coercion: thir::Coercion::RoleWrap, value } => {
                 self.error_wrap(expr, value)
             }
+            E::Coerce { coercion: thir::Coercion::Box, value } => self.box_any(expr, value),
             E::Coerce { coercion: thir::Coercion::RoleNarrow { .. }, value } => {
                 let ty = self.ty(expr.ty.as_ref().expect("typed narrowing"), expr.span)?;
                 let Some(value) = self.value(value)? else {
@@ -754,7 +777,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
     }
 
     fn match_expr(&mut self, matching: &thir::Match, ty: Option<&Ty>, want: bool) -> Result<Option<ir::ValueId>> {
-        let Some(subject) = self.value(&matching.subject)? else {
+        let Some((subject, enum_subject)) = self.match_subject(&matching.subject)? else {
             return Ok(None);
         };
         let parent = self.scope();
@@ -766,7 +789,15 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             let types = self.local_types(&join.locals);
             let arm = self.new_block(scope, &types)?;
             for pattern in patterns {
-                let Some(pattern) = self.value(pattern)? else {
+                let lowered = match (enum_subject, &pattern.kind) {
+                    (Some(declaration), thir::ExprKind::Constant(thir::Constant::Int(case))) => {
+                        let case = case.parse::<u32>()
+                            .map_err(|_| LowerError::invalid(pattern.span, "enum case pattern out of range"))?;
+                        Some(self.core(ir::CoreOp::EnumCase { declaration, case })?)
+                    }
+                    _ => self.value(pattern)?,
+                };
+                let Some(pattern) = lowered else {
                     return Err(LowerError::unsupported(pattern.span, "diverging match pattern"));
                 };
                 let condition = self.equal(subject, pattern, matching.subject.span)?;
@@ -811,6 +842,22 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             return Ok(None);
         }
         self.finish_join(&join)
+    }
+
+    /// The value a match compares. The frontend matches every Error enum by its case tag; a
+    /// payload-free Error enum is an OIR-2 enum, so its value is compared with its cases instead.
+    fn match_subject(&mut self, subject: &thir::Expr) -> Result<Option<(ir::ValueId, Option<ir::DeclId>)>> {
+        if let thir::ExprKind::VariantTag(inner) = &subject.kind {
+            let Some(value) = self.value(inner)? else {
+                return Ok(None);
+            };
+            let ty = self.b.body().values.get(value)?.ty;
+            if let ir::Type::Enum(declaration) = *self.b.module().types.get(ty)? {
+                return Ok(Some((value, Some(declaration))));
+            }
+            return Ok(Some((self.core(ir::CoreOp::VariantTag { value })?, None)));
+        }
+        Ok(self.value(subject)?.map(|value| (value, None)))
     }
 
     fn loop_expr(&mut self, block: &thir::Block, ty: Option<&Ty>) -> Result<Option<ir::ValueId>> {

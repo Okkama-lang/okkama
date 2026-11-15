@@ -9,8 +9,9 @@ type Inventory = BTreeSet<(u32, Option<u32>)>;
 /// The loader checks every call, and the machine entry checks the host boundary.
 pub fn plain_inputs(p: &Program, f: &Function) -> bool {
     f.params.iter().all(|&location| match verify::loc_type(f, location) {
-        Ok(ProducedType::Value(Type::Object(id) | Type::Successor(id))) => {
-            !p.objects[id as usize].layout.may_reach_resource
+        Ok(ProducedType::Value(ty @ (Type::Object(_) | Type::Successor(_) | Type::Array(_) | Type::Map(_)
+            | Type::Variant(_)))) => {
+            !verify::reaches_resource(p, ty)
         }
         Ok(ProducedType::Value(Type::Error)) => p.objects.iter().filter(|object| !object.error_cases.is_empty())
             .all(|object| !object.layout.may_reach_resource),
@@ -22,7 +23,9 @@ pub fn plain_inputs(p: &Program, f: &Function) -> bool {
 
 pub fn plain_results(p: &Program, f: &Function) -> bool {
     f.results.iter().all(|ty| match ty {
-        Type::Object(id) | Type::Successor(id) => !p.objects[*id as usize].layout.may_reach_resource,
+        Type::Object(_) | Type::Successor(_) | Type::Array(_) | Type::Map(_) | Type::Variant(_) => {
+            !verify::reaches_resource(p, *ty)
+        }
         Type::Error => p.objects.iter().filter(|object| !object.error_cases.is_empty())
             .all(|object| !object.layout.may_reach_resource),
         Type::Role(id) | Type::RoleSuccessor(id) => !verify::role_reaches_resource(p, *id),
@@ -101,6 +104,11 @@ fn definitions(f: &Function) -> BTreeMap<Location, Vec<Definition>> {
         }
     }
     definitions
+}
+
+/// Builder transitions with outcomes: the journal packet is their last operand.
+fn journal_transition(op: Opcode) -> bool {
+    matches!(op, Opcode::BuilderPush | Opcode::BuilderAppend | Opcode::BuilderRange | Opcode::BuilderFinish)
 }
 
 fn arguments(instruction: &Instruction) -> Vec<Location> {
@@ -224,6 +232,10 @@ impl<'a> Evidence<'a> {
                             let input = arguments(&self.function.code[pc])[0];
                             self.query(input, 3)?;
                         }
+                        (op, _) if journal_transition(*op) => {
+                            let input = *arguments(&self.function.code[pc]).last()?;
+                            self.query(input, 3)?;
+                        }
                         _ => return None,
                     }
                 }
@@ -234,6 +246,9 @@ impl<'a> Evidence<'a> {
                             | Opcode::InvokeCallOwn | Opcode::InvokeDispatchOwn => {}
                         Opcode::OwnMove | Opcode::OwnJoin | Opcode::OwnSplit => {
                             for input in arguments(&self.function.code[pc]) { self.query(input, 3)?; }
+                        }
+                        Opcode::BuilderAbandon => {
+                            self.query(*arguments(&self.function.code[pc]).last()?, 3)?;
                         }
                         _ => return self.inventory(location).filter(Inventory::is_empty),
                     }
@@ -315,6 +330,7 @@ impl<'a> Evidence<'a> {
             }
             InvokeDispatchOwn if !identity => dispatch_plain_results(self.program, args).then(BTreeSet::new),
             OwnEmpty | ScopeBegin => Some(BTreeSet::new()),
+            BuilderAbandon if !identity => self.resolve(*locations.last()?, false),
             OwnCreateCommit => {
                 let object = args.iter().find_map(|arg| match arg { Argument::Object(id) => Some(*id), _ => None })?;
                 Some(if self.program.objects[object as usize].layout.has_destroy {
@@ -389,6 +405,7 @@ impl<'a> Evidence<'a> {
                             self.produced(pc, ordinal, slot as usize, false)?
                         }
                         (Opcode::ExitDispatch, Tag::Pending) => self.produced(pc, ordinal, slot as usize, false)?,
+                        (op, _) if journal_transition(*op) => self.query(*locations.last()?, 2)?,
                         _ => return None,
                     }
                 }
@@ -408,6 +425,7 @@ impl<'a> Evidence<'a> {
                             joined
                         }
                         Opcode::OwnAccept => self.query(locations[0], 2)?,
+                        Opcode::BuilderAbandon => self.query(*locations.last()?, 2)?,
                         Opcode::OwnBind | Opcode::OwnRebind | Opcode::OwnStage
                             if *op != Opcode::OwnStage || args.first() == Some(&Argument::Flag(false)) => {
                             let mut admission = self.query(locations[0], 2)?;
@@ -450,20 +468,7 @@ impl<'a> Evidence<'a> {
         }
         let mut keys = Inventory::new();
         for &location in &selection.locations {
-            let plain = match verify::loc_type(self.function, location).ok()? {
-                ProducedType::Value(Type::Object(id) | Type::Successor(id)) => {
-                    !self.program.objects[id as usize].layout.may_reach_resource
-                }
-                ProducedType::Value(Type::Role(id) | Type::RoleSuccessor(id)) => {
-                    !verify::role_reaches_resource(self.program, id)
-                }
-                ProducedType::Value(Type::Int | Type::Bool | Type::Str | Type::Bytes | Type::Array(_)
-                    | Type::Range | Type::Descriptor | Type::Byte | Type::Float | Type::Char | Type::Rat
-                    | Type::Variant(_)) => true,
-                _ => false,
-            };
-            if plain { continue; }
-            keys.insert(self.identity(location)?);
+            keys.extend(self.selected_identities(location)?);
         }
         if selected && keys.is_empty() {
             return Some(keys);
@@ -478,6 +483,68 @@ impl<'a> Evidence<'a> {
             return None;
         }
         Some(if selected { keys } else { input.difference(&keys).copied().collect() })
+    }
+
+    /// The identities a selected value names: none for plain data, its own for a resource object, and
+    /// for a managed array or map those of its elements. A collection whose elements are not proved by
+    /// the `array.new` or `map.new` that built it has no static inventory, so a selection never loses them.
+    pub fn selected_identities(&mut self, location: Location) -> Option<Inventory> {
+        let ty = match verify::loc_type(self.function, location).ok()? {
+            ProducedType::Value(ty) => ty,
+            ProducedType::Service(_) => return None,
+        };
+        match ty {
+            // A case object refers to resources without being an identity: no static inventory.
+            Type::Variant(_) if verify::reaches_resource(self.program, ty) => None,
+            Type::Object(_) | Type::Successor(_) | Type::Array(_) | Type::Map(_)
+                if verify::reaches_resource(self.program, ty) =>
+            {
+                if !matches!(ty, Type::Array(_) | Type::Map(_)) {
+                    return Some(BTreeSet::from([self.identity(location)?]));
+                }
+                let mut keys = Inventory::new();
+                for element in self.collection_elements(location)? {
+                    keys.extend(self.selected_identities(element)?);
+                }
+                Some(keys)
+            }
+            // A role value is its object: a managed one is selected by its identity.
+            Type::Role(id) | Type::RoleSuccessor(id) if verify::role_reaches_resource(self.program, id) => {
+                Some(BTreeSet::from([self.identity(location)?]))
+            }
+            Type::Object(_) | Type::Successor(_) | Type::Int | Type::Bool | Type::Str | Type::Bytes | Type::Array(_)
+                | Type::Range | Type::Descriptor | Type::Byte | Type::Float | Type::Char | Type::Rat
+                | Type::Variant(_) | Type::Handle(_) | Type::Map(_) | Type::Role(_) | Type::RoleSuccessor(_) => {
+                Some(Inventory::new())
+            }
+            _ => None,
+        }
+    }
+
+    /// The element locations of the single `array.new` (or the values of the single `map.new`), through
+    /// moves, that defines `location`.
+    fn collection_elements(&mut self, location: Location) -> Option<Vec<Location>> {
+        let mut current = location;
+        for _ in 0..65_536 {
+            self.steps += 1;
+            if self.steps > 1_000_000 {
+                self.exhausted = true;
+                return None;
+            }
+            let [Definition::Instruction(pc, _)] = self.definitions.get(&current)?.as_slice() else { return None };
+            match &self.function.code[*pc] {
+                Instruction::Data { op: DataOp::ArrayNew, inputs, .. } => {
+                    return Some(inputs.iter().map(|&id| Location::Register(id)).collect());
+                }
+                Instruction::Data { op: DataOp::MapNew, inputs, .. } => {
+                    return Some(inputs.iter().skip(1).step_by(2).map(|&id| Location::Register(id)).collect());
+                }
+                Instruction::Data { op: DataOp::Move, inputs, .. } => current = Location::Register(inputs[0]),
+                _ => return None,
+            }
+        }
+        self.exhausted = true;
+        None
     }
 
     fn cleanup_begins(&mut self, location: Location) -> Option<BTreeSet<usize>> {
@@ -541,6 +608,11 @@ impl<'a> Evidence<'a> {
         if identity {
             return None;
         }
+        if journal_transition(*op) {
+            // The journal packet leaves every outcome of a builder transition as it entered.
+            let input = *arguments(&self.function.code[pc]).last()?;
+            return self.resolve(input, false);
+        }
         match (op, tag) {
             (Opcode::ScopeSplit | Opcode::OwnSplitChecked, Tag::Normal) => self.partition(args, slot == 1),
             (Opcode::ScopeSplit | Opcode::OwnSplitChecked, Tag::Unwind) if slot == 0 => {
@@ -586,7 +658,7 @@ pub fn static_selections(p: &Program, f: &Function) -> Result<Vec<StaticSelectio
     Ok(result)
 }
 
-pub(super) fn static_selections_with(p: &Program, f: &Function, evidence: &mut Evidence<'_>)
+pub(super) fn static_selections_with(_p: &Program, f: &Function, evidence: &mut Evidence<'_>)
     -> Result<Vec<StaticSelection>, Error>
 {
     let mut result = Vec::new();
@@ -603,22 +675,15 @@ pub(super) fn static_selections_with(p: &Program, f: &Function, evidence: &mut E
         }
         let mut keys = Inventory::new();
         for &location in &f.proofs.selections[selection as usize].locations {
-            if let Ok(ProducedType::Value(Type::Role(id) | Type::RoleSuccessor(id))) = verify::loc_type(f, location)
-                && !verify::role_reaches_resource(p, id)
-            {
-                continue;
-            }
-            if let Ok(ProducedType::Value(Type::Object(id))) = verify::loc_type(f, location) {
-                if !p.objects[id as usize].layout.may_reach_resource { continue }
-                keys.insert(evidence.identity(location).ok_or_else(|| error("unknown static selection identity"))?);
-            } else if matches!(verify::loc_type(f, location), Ok(ProducedType::Value(
-                Type::Bool | Type::Int | Type::Str | Type::Descriptor | Type::Bytes | Type::Range | Type::Array(_)
-                | Type::Byte | Type::Float | Type::Char | Type::Rat | Type::Variant(_))))
-            {
-                continue;
-            } else {
+            let static_value = matches!(verify::loc_type(f, location), Ok(ProducedType::Value(
+                Type::Object(_) | Type::Bool | Type::Int | Type::Str | Type::Descriptor | Type::Bytes | Type::Range
+                | Type::Array(_) | Type::Byte | Type::Float | Type::Char | Type::Rat | Type::Variant(_)
+                | Type::Handle(_) | Type::Role(_) | Type::RoleSuccessor(_))));
+            if !static_value {
                 return Err(error("runtime traversal cannot be used as a static selection"));
             }
+            keys.extend(evidence.selected_identities(location)
+                .ok_or_else(|| error("unknown static selection identity"))?);
         }
         let indices = if keys.is_empty() {
             vec![]

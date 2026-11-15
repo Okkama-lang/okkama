@@ -63,11 +63,11 @@ impl BodyLowerer<'_, '_> {
                 BitOp::Xor => C::ByteXor { left, right },
                 BitOp::Shl => C::ByteShl { left, right },
                 BitOp::Shr => C::ByteShr { left, right },
-                // The language counts in int, as for << and >>; the OIR-2 verifier types the
-                // count of byte.ushr as byte. Narrowing would change the out-of-range failures.
-                BitOp::Ushr => {
-                    return Err(LowerError::unsupported(span, "byte >>> (byte.ushr takes a byte count in OIR-2)"));
-                }
+                // The language counts in int, as for << and >>, while OIR-2's byte.ushr takes a byte
+                // count: narrowing it first would change the out-of-range failures. A byte has no sign,
+                // so `>>>` is `>>`: byte.shr takes the int count and refuses one outside 0..7 with
+                // Tomato's message, as Tomato's byte.ushr does.
+                BitOp::Ushr => C::ByteShr { left, right },
             },
             BinaryOp::Concat => C::StrConcat { left, right },
             BinaryOp::Compare(kind, op) => compare(kind, op, left, right, span)?,

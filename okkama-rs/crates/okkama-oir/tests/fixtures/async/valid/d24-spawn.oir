@@ -1,0 +1,41 @@
+oir 2 coro
+// D24.1 in coro: spawn returns the cache duty unchanged plus a new task-state; the task duty comes first.
+module d24_spawn
+object Worker {
+    field id: int
+}
+protocol Services kind services holders [scope, cache, frame, root] rules [protocol_rule(transition=settle,
+    from=frame, to=root, checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running)),
+    protocol_rule(transition=settle, from=cache, to=root, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=root, state=running))]
+scope SR action in @Worker.run
+scope S action in @main
+summary Mrun internal contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+summary Mmain internal contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+func @Worker.run(%w: Worker) -> void [async] summary(Mrun) {
+^entry in SR:
+    ret
+}
+func @main(%frame: frame<@main>) -> void [async] summary(Mmain) {
+    frame.layout {
+        slot 0: Worker
+        slot 1: own linear
+        slot 2: deps
+    }
+    continuation 0 start saves [0, 1, 2]
+    service.schedule Sched0 owner S, protocol Services, duties [%task, %c1]
+^entry in S:
+    (%fr0: frame<@main>, %w: Worker, %in: own, %deps: deps) = frame.resume %frame, continuation 0, slots [
+        saved_slot(slot=0, ty=Worker, linear=false), saved_slot(slot=1, ty=own, linear=true), saved_slot(slot=2,
+        ty=deps, linear=false)]
+    %q0: scope<S> = scope.begin S
+    (%t: future<void>, %c: cache-state, %q1: scope<S>) = fut.new %in, %deps, %q0, environment deferred(function=@Worker.run,
+        arguments=[%w], descriptors=[]), owner S
+    (%c1: cache-state, %task: task-state) = fut.spawn %t, %c
+    %closed: closed = scope.end %q1, effects scope_effects(failures=[], suspends=false, cancel=false)
+    %p: own = own.empty
+    fut.publish %fr0, success(packet=%p, deps=%deps)
+    ret
+}

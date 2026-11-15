@@ -181,6 +181,9 @@ helpers! {
     champ_machine_convert = crate::champ::machine::rt_machine_convert as (ctx,
         from: Word, to: Word, value: Word) -> u64; [Allocates, Collects, Fails, Stops];
     #[cfg(feature = "champ-abi")]
+    champ_machine_scalar = crate::champ::machine::rt_machine_scalar as (ctx,
+        op: Word, first: Word, second: Word, third: Word) -> u64; [Allocates, Collects, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
     champ_machine_rat_order = crate::champ::machine::rt_machine_rat_order as (ctx,
         left: Word, right: Word) -> i64; [];
     #[cfg(feature = "champ-abi")]
@@ -192,6 +195,18 @@ helpers! {
     #[cfg(feature = "champ-abi")]
     champ_machine_role_narrow = crate::champ::machine::rt_machine_role_narrow as (ctx,
         role: Word, value: Word) -> u64; [Allocates, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_collection = crate::champ::collections::rt_machine_collection as (ctx,
+        function: u64, pc: u64, args: *const Word, count: u64) -> u64; [Allocates, Collects, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_builder = crate::champ::collections::rt_machine_builder as (ctx,
+        function: u64, pc: u64, args: *const Word, count: u64) -> u64; [Allocates, Collects, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_lookup = crate::champ::collections::rt_machine_lookup as (ctx,
+        function: u64, pc: u64, collection: Word, index: Word, post: *mut Word) -> u64; [Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_test = crate::champ::testing::rt_machine_test as (ctx,
+        kind: Word, function: Word, register: Word, left: Word, right: Word) -> u64; [Allocates, Fails, Stops];
     #[cfg(feature = "champ-abi")]
     champ_machine_catch = crate::champ::machine::rt_machine_catch as (ctx,
         failure: Word, descriptor: Word) -> u64; [];

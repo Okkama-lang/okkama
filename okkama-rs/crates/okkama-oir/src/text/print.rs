@@ -374,6 +374,9 @@ impl Writer<'_> {
         self.bind(self.scope, "value", value.as_u32(), format!("%{index}"))
     }
     fn body(&mut self, body: &Body) -> Result<(), PrintError> {
+        if let Some(layout) = &body.frame_layout {
+            self.frame_layout(layout)?;
+        }
         self.elaboration_declarations(body)?;
         if body.cleanup != CleanupMetadata::default() {
             self.push("    low.metadata ");
@@ -443,6 +446,11 @@ impl Writer<'_> {
         }
         for result in &body.high_results {
             referenced.extend(result.prepared);
+        }
+        for continuation in body.frame_layout.iter().flat_map(|layout| &layout.continuations) {
+            if let SuspendSite::Instruction(instruction) = continuation.site {
+                referenced.insert(instruction);
+            }
         }
         for record in &body.high_effects {
             if let HighOperationSite::Instruction(instruction) = record.site {

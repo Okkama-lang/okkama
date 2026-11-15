@@ -28,7 +28,7 @@ impl ModuleLoader for CaseLoader {
     }
 }
 
-fn case_directory(id: &str) -> PathBuf {
+pub(super) fn case_directory(id: &str) -> PathBuf {
     let (level, suffix) = id.split_once('.').unwrap();
     let cases = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../conformance/cases");
     let level = std::fs::read_dir(&cases).unwrap().map(|entry| entry.unwrap().path())
@@ -37,7 +37,7 @@ fn case_directory(id: &str) -> PathBuf {
     level.join(suffix)
 }
 
-fn high(source: &str, case: Option<PathBuf>) -> Result<ir::Module, String> {
+pub(super) fn high(source: &str, case: Option<PathBuf>) -> Result<ir::Module, String> {
     let file = SourceFile::new("main.ok", source).map_err(|error| format!("source: {error:?}"))?;
     let program = syntax::parse(&file, &ParseOptions::default()).map_err(|error| format!("syntax: {error:?}"))?;
     let roots = [crate::lowering::RootFile { source: &file, program: &program }];
@@ -45,10 +45,50 @@ fn high(source: &str, case: Option<PathBuf>) -> Result<ir::Module, String> {
     super::super::lower_linked_high(&roots, &mut loader).map_err(|error| format!("high: {error}"))
 }
 
+/// A single-module source in test mode (spec §14): its tests are the module's entries.
+fn test_high(source: &str) -> Result<ir::Module, String> {
+    let file = SourceFile::new("main.ok", source).map_err(|error| format!("source: {error:?}"))?;
+    let options = ParseOptions { mode: syntax::ParseMode::Full, ..ParseOptions::default() };
+    let program = syntax::parse(&file, &options).map_err(|error| format!("syntax: {error:?}"))?;
+    let program = syntax::prune::desugar_test_items(program);
+    let sources = vec![crate::analysis::SourceModule { path: "app".into(), program: &program, imports: vec![] }];
+    let analysis = crate::analysis::analyze_mode(sources, 1, true)
+        .map_err(|errors| format!("analysis: {errors:?}"))?;
+    super::super::lower_to_oir2(&analysis).map_err(|error| format!("high: {error}"))
+}
+
 /// The Low module; `Err` names the stage that stopped.
-fn own_to_low(source: &str, case: Option<PathBuf>, mode: ir::verify::VerifyMode) -> Result<ir::Module, String> {
-    let module = high(source, case)?;
-    let mut verify = ir::verify::VerifyOptions { mode, ..ir::verify::VerifyOptions::default() };
+pub(super) fn own_to_low(source: &str, case: Option<PathBuf>, mode: ir::verify::VerifyMode)
+    -> Result<ir::Module, String> {
+    module_to_low(high(source, case)?, mode)
+}
+
+/// High -> own -> low under one verifier mode; test-mode modules verify as test executions.
+fn module_to_low(module: ir::Module, mode: ir::verify::VerifyMode) -> Result<ir::Module, String> {
+    let (own, verify) = module_to_own(module, mode)?;
+    let low = ir::low::lower_cleanup(own, &ir::low::LowOptions::default())
+        .map_err(|error| format!("low: {error:?}"))?;
+    let catalog = P1NativeSummaries::for_module(&low).map_err(|error| format!("contracts: {error:?}"))?;
+    let context = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
+    ir::verify::verify_with(&low, &verify, context).map_err(|error| format!("verify_low: {error:?}"))?;
+    Ok(low)
+}
+
+/// The verified Own module and the verification options; `Err` names the stage that stopped.
+pub(super) fn own_stage(source: &str, case: Option<PathBuf>, mode: ir::verify::VerifyMode)
+    -> Result<(ir::Module, ir::verify::VerifyOptions), String> {
+    module_to_own(high(source, case)?, mode)
+}
+
+/// High -> own under one verifier mode; test-mode modules verify as test executions.
+fn module_to_own(module: ir::Module, mode: ir::verify::VerifyMode)
+    -> Result<(ir::Module, ir::verify::VerifyOptions), String> {
+    let execution = if module.tests.is_some() {
+        ir::verify::ExecutionMode::Tests
+    } else {
+        ir::verify::ExecutionMode::Production
+    };
+    let mut verify = ir::verify::VerifyOptions { mode, execution, ..ir::verify::VerifyOptions::default() };
     if std::env::var_os("OKKAMA_OWN_RAISED_LIMITS").is_some() {
         verify.limits.memory_bytes = 2 << 30;
         verify.limits.steps = 500_000_000;
@@ -67,16 +107,11 @@ fn own_to_low(source: &str, case: Option<PathBuf>, mode: ir::verify::VerifyMode)
     let context = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
     ir::verify::verify_with(&own.module, &verify, context)
         .map_err(|error| format!("verify_own: {}", rejection(&own.module, &error)))?;
-    let low = ir::low::lower_cleanup(own.module, &ir::low::LowOptions::default())
-        .map_err(|error| format!("low: {error:?}"))?;
-    let catalog = P1NativeSummaries::for_module(&low).map_err(|error| format!("contracts: {error:?}"))?;
-    let context = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
-    ir::verify::verify_with(&low, &verify, context).map_err(|error| format!("verify_low: {error:?}"))?;
-    Ok(low)
+    Ok((own.module, verify))
 }
 
 /// Rules, messages and the rejected instruction, compact enough for triage.
-fn rejection(module: &ir::Module, report: &ir::verify::VerifyReport) -> String {
+pub(super) fn rejection(module: &ir::Module, report: &ir::verify::VerifyReport) -> String {
     let mut text = format!("{:?}:", report.failure);
     for diagnostic in report.diagnostics.iter().take(4) {
         text.push_str(&format!(" [{:?} {}", diagnostic.rule, diagnostic.message));
@@ -93,17 +128,17 @@ fn rejection(module: &ir::Module, report: &ir::verify::VerifyReport) -> String {
     text
 }
 
-fn full(source: &str) -> ir::Module {
+pub(super) fn full(source: &str) -> ir::Module {
     own_to_low(source, None, ir::verify::VerifyMode::Full).unwrap_or_else(|error| panic!("{error}\n{source}"))
 }
 
-fn case(id: &str, mode: ir::verify::VerifyMode) -> Result<ir::Module, String> {
+pub(super) fn case(id: &str, mode: ir::verify::VerifyMode) -> Result<ir::Module, String> {
     let directory = case_directory(id);
     let source = std::fs::read_to_string(directory.join("main.ok")).unwrap();
     own_to_low(&source, Some(directory), mode)
 }
 
-fn operations(module: &ir::Module) -> Vec<&ir::Operation> {
+pub(super) fn operations(module: &ir::Module) -> Vec<&ir::Operation> {
     module.functions.iter().filter_map(|(_, function)| function.body.as_ref()).flat_map(|body| {
         body.insts.iter().map(|(_, inst)| &inst.op).chain(body.blocks.iter().filter_map(|(_, block)| {
             match &block.term.kind {
@@ -167,13 +202,119 @@ fn oir2_own_managed_array_literal_escapes_with_its_elements() {
 }
 
 #[test]
-fn oir2_own_managed_builder_rehomes_fresh_elements_to_the_outer_scope() {
+fn oir2_own_managed_builder_rehomes_fresh_elements_to_the_builder_owner() {
     let low = full(concat!(
         "module app; object Res { has id is int; Res(:id); destroy { } } ",
         "main() is int { let a = (0..3).map() -> i { Res(id: i); }; a.size(); }",
     ));
     assert!(operations(&low).iter().any(|op| matches!(op, ir::Operation::Ownership(
         ir::OwnershipOp::ScopeTransfer { states: ir::TransferStates::Between { .. }, .. }))));
+}
+
+/// #668 F7: a failure Own introduces after `builder.finish` has no buffer left for the block's
+/// High handler, so Own routes it past that handler only when the handler is a buffer cleanup
+/// block: it abandons its buffers and re-raises. Any other handler is an elaboration error.
+#[test]
+fn oir2_own_skipped_buffer_handler_must_abandon_and_reraise() {
+    let source = concat!(
+        "module app; object Res { has id is int; Res(:id); destroy { } } ",
+        "main() is int { let a = (0..3).map() -> i { Res(id: i); }; a.size(); }",
+    );
+    own_to_low(source, None, ir::verify::VerifyMode::Structural).unwrap_or_else(|error| panic!("{error}"));
+    // The same program with one more instruction in every abandon-and-reraise handler.
+    let text = ir::text::print(&high(source, None).unwrap()).unwrap();
+    let lines: Vec<_> = text.lines().collect();
+    let mut edited = vec![];
+    let mut changed = 0;
+    for (index, line) in lines.iter().enumerate() {
+        let handler = index >= 2 && line.trim_start().starts_with("raise ")
+            && lines[index - 1].trim_start().starts_with("builder.abandon ")
+            && lines[index - 2].trim_start().starts_with('^');
+        if handler {
+            edited.push(format!("    %f7_{changed}: int = const 7"));
+            changed += 1;
+        }
+        edited.push((*line).to_owned());
+    }
+    assert!(changed > 0, "the source has buffer cleanup handlers");
+    let module = ir::text::parse(&edited.join("\n")).unwrap();
+    let Err(error) = module_to_low(module, ir::verify::VerifyMode::Structural) else {
+        panic!("own routed a failure past a handler that is not a buffer cleanup block");
+    };
+    assert!(error.contains("must abandon its buffers and re-raise"), "{error}");
+}
+
+/// The lexical scope a scope-state value belongs to.
+fn state_scope(module: &ir::Module, body: &ir::Body, state: ir::ValueId) -> ir::ScopeId {
+    match module.types.get(body.values.get(state).unwrap().ty).unwrap() {
+        ir::Type::Service(ir::ServiceType::Scope(scope)) => *scope,
+        other => panic!("{state:?} is not a scope state: {other:?}"),
+    }
+}
+
+/// #666, OIR-2 §4.1 and §8: inserted elements go to the journal of the builder's owner, the
+/// scope of `builder.new`. A collection built in a loop body releases its elements at the end
+/// of each iteration, where Tomato destroys it, not at function exit. `kept` retains the root.
+#[test]
+fn oir2_own_builder_elements_die_with_the_iteration_that_built_them() {
+    let low = own_to_low(concat!(
+        "module app; object Res { has id is int; Res(:id); id() is int { id; } destroy { } } ",
+        "main() is int { let kept = Res(id: 100); ",
+        "for 0..2 -> round { let a = (0..2).map() -> i { Res(id: round * 10 + i); }; a.size(); } kept.id(); }",
+    ), None, ir::verify::VerifyMode::Structural).unwrap_or_else(|error| panic!("{error}"));
+    let main = low.functions.iter().find(|(_, function)| function.symbol == "main").unwrap().1;
+    let body = main.body.as_ref().unwrap();
+    let root = body.blocks.get(body.entry).unwrap().lexical_scope;
+    assert!(body.insts.iter().any(|(_, inst)| matches!(inst.op,
+        ir::Operation::Ownership(ir::OwnershipOp::ScopeBegin { scope }) if scope == root)), "the root is retained");
+    let owners: Vec<_> = body.blocks.iter().filter(|(_, block)| block.insts.iter().any(|inst| {
+        matches!(body.insts.get(*inst).unwrap().op,
+            ir::Operation::Collection(ir::CollectionOp::BuilderNew { .. }))
+    })).map(|(_, block)| block.lexical_scope).collect();
+    assert_eq!(owners.len(), 1, "one builder.new in main");
+    assert_ne!(owners[0], root, "the builder is made inside the loop body");
+    let mut targets = vec![];
+    for (_, block) in body.blocks.iter() {
+        let ops = block.insts.iter().map(|inst| &body.insts.get(*inst).unwrap().op)
+            .chain(match &block.term.kind {
+                ir::TermKind::InvokeOwn { op, .. } => Some(op.as_ref()),
+                _ => None,
+            });
+        for op in ops {
+            if let ir::Operation::Ownership(ir::OwnershipOp::ScopeTransfer {
+                states: ir::TransferStates::Between { to, .. }, ..
+            }) = op {
+                targets.push(state_scope(&low, body, *to));
+            }
+        }
+    }
+    assert!(!targets.is_empty(), "the fresh elements leave the lambda body scope");
+    assert!(targets.iter().all(|scope| *scope == owners[0]),
+        "elements go to the scope of builder.new {:?}, not the function root {root:?}: {targets:?}", owners[0]);
+}
+
+/// #667: a test function is a fixed observation root like the module entry, whatever its root
+/// scope holds; its signature stays `() -> void`.
+#[test]
+fn oir2_own_test_functions_are_fixed_observation_roots() {
+    let directory = case_directory("L05.generic.fake-target");
+    let source = std::fs::read_to_string(directory.join("main.ok")).unwrap();
+    for mode in [ir::verify::VerifyMode::Structural, ir::verify::VerifyMode::Full] {
+        let low = test_high(&source).and_then(|module| module_to_low(module, mode))
+            .unwrap_or_else(|error| panic!("{mode:?}: {error}"));
+        let tests = low.tests.as_ref().expect("test-mode module lists its tests");
+        assert_eq!(tests.len(), 1);
+        for test in tests {
+            let function = low.functions.get(test.function).unwrap();
+            assert!(function.signature.params.is_empty() && function.signature.results.is_empty(), "{mode:?}");
+            assert_eq!(function.signature.ownership_abi, ir::OwnershipAbi::Observation, "{mode:?}");
+            // The fake is owned by the test's own root scope, which closes before it returns.
+            let body = function.body.as_ref().unwrap();
+            let root = body.blocks.get(body.entry).unwrap().lexical_scope;
+            assert!(body.insts.iter().any(|(_, inst)| matches!(inst.op,
+                ir::Operation::Ownership(ir::OwnershipOp::ScopeBegin { scope }) if scope == root)), "{mode:?}");
+        }
+    }
 }
 
 #[test]

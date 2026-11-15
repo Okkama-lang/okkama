@@ -59,7 +59,32 @@ pub struct Program {
     pub tables: ChampTables,
     pub functions: Vec<Function>,
     pub entry: Option<u32>,
+    /// The test profile (§14): the tests in run order. `Some([])` is an empty suite, which the runner
+    /// rejects; `None` is a production program. Test operations and test intrinsics need `Some`.
+    pub tests: Option<Vec<Test>>,
+    /// Map and builder shapes named by `Type::Map`, `Type::MapBuilder` and `Type::Builder`. An entry refers
+    /// only to earlier entries, so the table is acyclic (`COMPOSITE_ORDER`).
+    pub composites: Vec<Composite>,
 }
+
+/// A collection shape that does not fit inline in `Type`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Composite {
+    /// `map<key, value>`: the key is a key type (`MAP_KEY`), the value closed plain data (`MAP_PLAIN`).
+    Map { key: Type, value: Type },
+    /// A unique array builder whose finished value has type `array` (an `Array` or `Bytes`).
+    Builder { array: Type },
+}
+
+/// One test of the test profile: a `() -> void` observation entry run on a fresh runtime.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Test {
+    pub name: String,
+    pub function: u32,
+}
+
+/// The test intrinsics (`okkama.test.*` external entries) and test operations need a tests table.
+pub const TEST_INTRINSIC_PREFIX: &str = "okkama.test.";
 
 /// Immutable final descriptor supplied by the runtime layout registry (§2.7).
 /// Physical storage includes hidden construction/$once slots, never the tail.
@@ -89,6 +114,8 @@ pub struct Object {
     pub enum_cases: u32,
     /// Case object descriptors of a plain (non-Error) variant, in case order; empty otherwise.
     pub variant_cases: Vec<u32>,
+    /// A native handle declaration: no fields, no storage and never constructed by a program.
+    pub handle: bool,
     pub name: String,
     pub fields: Vec<Field>,
     pub layout: ObjectRuntimeLayout,
@@ -160,12 +187,30 @@ pub enum Type {
     Successor(u32),
     /// A value of a plain variant declaration: a reference to one of its case objects (`Object::variant_cases`).
     Variant(u32),
+    /// A native handle (`native object`): a reference to the native registry's state, declared by
+    /// the handle object `Object::handle` with this index. It owns no Okkama obligation (P2.4 §4.7).
+    Handle(u32),
     Never,
     Descriptor,
     /// A role value: a reference to an object that implements the role declaration `id` (`Object::role`).
     Role(u32),
     /// A role value that still carries a successor's must-use permission (`^Role`).
     RoleSuccessor(u32),
+    /// A finished map: `Composite::Map` at this index of `Program::composites`.
+    Map(u32),
+    /// A unique map builder whose finished value is `Type::Map` of the same index.
+    MapBuilder(u32),
+    /// A unique array builder: `Composite::Builder` at this index.
+    Builder(u32),
+}
+
+impl Type {
+    /// Words the collector must trace as references (tagged integers are traced separately).
+    pub fn traced(self) -> bool {
+        matches!(self, Self::Error | Self::Bytes | Self::Array(_) | Self::Str | Self::Object(_) | Self::Successor(_)
+            | Self::Failure | Self::Rat | Self::Variant(_) | Self::Handle(_) | Self::Map(_) | Self::MapBuilder(_)
+            | Self::Builder(_) | Self::Role(_) | Self::RoleSuccessor(_))
+    }
 }
 
 /// A finite array shape, including nested plain arrays. No resource/service leaf is representable.
@@ -184,6 +229,13 @@ pub enum ArrayLeaf {
     Bytes,
     Object(u32),
     Role(u32),
+    Float,
+    Char,
+    Rat,
+    Variant(u32),
+    Map(u32),
+    /// The leaf of an uninferred empty literal: no element value exists.
+    Never,
 }
 
 impl ArrayType {
@@ -198,9 +250,62 @@ impl ArrayType {
                 ArrayLeaf::Bytes => Type::Bytes,
                 ArrayLeaf::Object(id) => Type::Object(id),
                 ArrayLeaf::Role(id) => Type::Role(id),
+                ArrayLeaf::Float => Type::Float,
+                ArrayLeaf::Char => Type::Char,
+                ArrayLeaf::Rat => Type::Rat,
+                ArrayLeaf::Variant(id) => Type::Variant(id),
+                ArrayLeaf::Map(id) => Type::Map(id),
+                ArrayLeaf::Never => Type::Never,
             }),
             depth => Some(Type::Array(Self { depth: depth - 1, ..self })),
         }
+    }
+
+    /// The array whose elements have type `element`; `None` for an element no array leaf represents.
+    /// An array of bytes is `Type::Bytes`, not an array shape.
+    pub fn of(element: Type) -> Option<Type> {
+        let leaf = match element {
+            Type::Int => ArrayLeaf::Int,
+            Type::Bool => ArrayLeaf::Bool,
+            Type::Str => ArrayLeaf::Str,
+            Type::Range => ArrayLeaf::Range,
+            Type::Bytes => ArrayLeaf::Bytes,
+            Type::Object(id) => ArrayLeaf::Object(id),
+            Type::Role(id) => ArrayLeaf::Role(id),
+            Type::Float => ArrayLeaf::Float,
+            Type::Char => ArrayLeaf::Char,
+            Type::Rat => ArrayLeaf::Rat,
+            Type::Variant(id) => ArrayLeaf::Variant(id),
+            Type::Map(id) => ArrayLeaf::Map(id),
+            Type::Never => ArrayLeaf::Never,
+            Type::Byte => return Some(Type::Bytes),
+            Type::Array(shape) => {
+                return shape.depth.checked_add(1).map(|depth| Type::Array(Self { depth, ..shape }));
+            }
+            _ => return None,
+        };
+        Some(Type::Array(Self { leaf, depth: 1 }))
+    }
+}
+
+/// A retag of a collection whose leaves cannot exist (an uninferred `[]` or `[:]`) to a collection of the same
+/// shape: no element is reinterpreted. Byte arrays have their own representation and are excluded.
+pub fn never_retag(composites: &[Composite], from: Type, to: Type) -> bool {
+    match (from, to) {
+        (Type::Array(from), Type::Array(to)) => from.leaf == ArrayLeaf::Never && from.depth == to.depth,
+        (Type::Map(from), Type::Map(_)) => {
+            matches!(composites.get(from as usize), Some(Composite::Map { key: Type::Never, .. }))
+        }
+        _ => false,
+    }
+}
+
+/// The element type of an array or byte array value.
+pub fn element_type(array: Type) -> Option<Type> {
+    match array {
+        Type::Array(shape) => shape.element(),
+        Type::Bytes => Some(Type::Byte),
+        _ => None,
     }
 }
 
@@ -319,6 +424,14 @@ pub enum Constant {
     Char(u32),
     /// The IEEE-754 binary64 bit pattern as a decimal u64.
     Float(String),
+    /// An exact rational in lowest terms with a positive denominator.
+    Rat(RatValue),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RatValue {
+    pub numerator: String,
+    pub denominator: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -460,6 +573,190 @@ pub enum DataOp {
     FailCaused,
     /// A checked conversion of a role value to another role: fails unless the object implements it.
     RoleNarrow,
+    /// `map.new k0, v0, k1, v1, ...`: later equal keys replace the value and keep the first key word.
+    MapNew,
+    MapLen,
+    MapHas,
+    /// The value under a key; a missing key fails.
+    MapGet,
+    MapKeys,
+    MapValues,
+    /// The key or value at a position in key order; a position outside the map fails.
+    MapKeyAt,
+    MapValueAt,
+    /// The union of maps: the rightmost value wins, the leftmost key word stays.
+    MapMerge,
+    /// The first map without the keys of the others.
+    MapDifference,
+    ArrayConcat,
+    /// The elements' text joined by a separator (string elements only).
+    ArrayJoin,
+    /// `array.slice a, start, end`; bounds outside the array fail.
+    ArraySlice,
+    /// A copy without the element at an index; an index outside the array fails.
+    ArrayRemove,
+    /// A copy with the element at an index replaced; an index outside the array fails.
+    ArrayReplace,
+    /// The first array without the elements equal to an element of the others.
+    ArrayDifference,
+    /// An empty unique builder of the result's builder type.
+    BuilderNew,
+    /// Test assertions (`test.ok`, `test.is`, `test.isnt`, `test.fail`) of the test profile. Each
+    /// records a failed check in the running case and continues; the bool result says whether the
+    /// check held. Outside a running case each fails with a program failure.
+    TestOk,
+    TestIs,
+    TestIsnt,
+    TestFail,
+    // int.ext (wire 14): exact int operations beyond add/sub/mul/mod/neg. Bit operations and shifts take
+    // a signed 64-bit operand and fail outside it; shift and rotation counts fail outside 0..63.
+    IntAnd,
+    IntOr,
+    IntXor,
+    IntShl,
+    IntShr,
+    IntUshr,
+    IntNot,
+    IntAbs,
+    IntSign,
+    IntBitCount,
+    IntLeadingZeros,
+    IntTrailingZeros,
+    IntReverseBits,
+    IntSwapBytes,
+    IntRotl,
+    IntRotr,
+    // byte.ext (wire 15). Shift and rotation counts fail outside 0..7; byte.ushr counts in byte.
+    ByteAnd,
+    ByteOr,
+    ByteXor,
+    ByteShl,
+    ByteShr,
+    ByteUshr,
+    ByteNot,
+    ByteBitCount,
+    ByteLeadingZeros,
+    ByteTrailingZeros,
+    ByteReverseBits,
+    ByteSwapBytes,
+    ByteRotl,
+    ByteRotr,
+    // float.ext (wire 16). A result that is not finite fails, as do a zero divisor and a negative sqrt.
+    FloatAdd,
+    FloatSub,
+    FloatMul,
+    FloatDiv,
+    FloatMod,
+    FloatPow,
+    FloatNeg,
+    FloatAbs,
+    FloatSign,
+    FloatSqrt,
+    // rat.ext (wire 17): exact rationals; a zero divisor fails. Numerator and denominator are decimal text.
+    RatAdd,
+    RatSub,
+    RatMul,
+    RatDiv,
+    RatMod,
+    RatNeg,
+    RatAbs,
+    RatSign,
+    RatNumerator,
+    RatDenominator,
+    // str.ext (wire 18). Slice bounds and a negative repeat count fail.
+    StrSlice,
+    StrSplit,
+    StrReplace,
+    StrReplaceFirst,
+    StrRepeat,
+    StrTrim,
+    StrChomp,
+    StrTrimStart,
+    StrTrimEnd,
+    StrLower,
+    StrUpper,
+    StrFind,
+    StrFindLast,
+    StrStartsWith,
+    StrEndsWith,
+    StrUtf8,
+}
+
+/// The int, byte, float, rat and str families of wire codes 14..=18, in sub-code order. A family's
+/// position in its list is its sub-code; the list never reorders and only grows at its end.
+pub(crate) const SCALAR_FAMILIES: [(u8, &str, &[DataOp]); 5] = {
+    use DataOp::*;
+    [
+        (14, "int.ext", &[IntAnd, IntOr, IntXor, IntShl, IntShr, IntUshr, IntNot, IntAbs, IntSign, IntBitCount,
+            IntLeadingZeros, IntTrailingZeros, IntReverseBits, IntSwapBytes, IntRotl, IntRotr]),
+        (15, "byte.ext", &[ByteAnd, ByteOr, ByteXor, ByteShl, ByteShr, ByteUshr, ByteNot, ByteBitCount,
+            ByteLeadingZeros, ByteTrailingZeros, ByteReverseBits, ByteSwapBytes, ByteRotl, ByteRotr]),
+        (16, "float.ext", &[FloatAdd, FloatSub, FloatMul, FloatDiv, FloatMod, FloatPow, FloatNeg, FloatAbs,
+            FloatSign, FloatSqrt]),
+        (17, "rat.ext", &[RatAdd, RatSub, RatMul, RatDiv, RatMod, RatNeg, RatAbs, RatSign, RatNumerator,
+            RatDenominator]),
+        (18, "str.ext", &[StrSlice, StrSplit, StrReplace, StrReplaceFirst, StrRepeat, StrTrim, StrChomp,
+            StrTrimStart, StrTrimEnd, StrLower, StrUpper, StrFind, StrFindLast, StrStartsWith, StrEndsWith,
+            StrUtf8]),
+    ]
+};
+
+impl DataOp {
+    /// The wire code and sub-code of an operation of the scalar families (wire codes 14..=18).
+    pub(crate) fn family(self) -> Option<(u8, u32)> {
+        SCALAR_FAMILIES.iter().find_map(|(code, _, ops)| {
+            ops.iter().position(|op| *op == self).map(|sub| (*code, sub as u32))
+        })
+    }
+
+    /// The operation of a scalar family code and sub-code.
+    pub(crate) fn of_family(code: u8, sub: u32) -> Option<Self> {
+        let (_, _, ops) = SCALAR_FAMILIES.iter().find(|(family, _, _)| *family == code)?;
+        ops.get(sub as usize).copied()
+    }
+
+    /// A stable number for a scalar family operation (wire code × 256 + sub-code), which a runtime helper
+    /// receives instead of the operation; `from_scalar_code` inverts it.
+    pub fn scalar_code(self) -> Option<u64> {
+        self.family().map(|(code, sub)| u64::from(code) * 256 + u64::from(sub))
+    }
+
+    pub fn from_scalar_code(code: u64) -> Option<Self> {
+        let family = u8::try_from(code / 256).ok()?;
+        Self::of_family(family, (code % 256) as u32)
+    }
+
+    /// Operand and result types of a scalar family operation (wire codes 14..=18).
+    pub fn scalar_signature(self) -> Option<(&'static [Type], Type)> {
+        use DataOp::*;
+        use Type::{Bool, Byte, Bytes, Float, Int, Rat, Str};
+        const STR_ARRAY: Type = Type::Array(ArrayType { leaf: ArrayLeaf::Str, depth: 1 });
+        Some(match self {
+            IntAnd | IntOr | IntXor | IntShl | IntShr | IntUshr | IntRotl | IntRotr => (&[Int, Int], Int),
+            IntNot | IntAbs | IntSign | IntBitCount | IntLeadingZeros | IntTrailingZeros | IntReverseBits
+                | IntSwapBytes => (&[Int], Int),
+            ByteAnd | ByteOr | ByteXor | ByteUshr => (&[Byte, Byte], Byte),
+            ByteShl | ByteShr | ByteRotl | ByteRotr => (&[Byte, Int], Byte),
+            ByteNot | ByteReverseBits | ByteSwapBytes => (&[Byte], Byte),
+            ByteBitCount | ByteLeadingZeros | ByteTrailingZeros => (&[Byte], Int),
+            FloatAdd | FloatSub | FloatMul | FloatDiv | FloatMod | FloatPow => (&[Float, Float], Float),
+            FloatNeg | FloatAbs | FloatSqrt => (&[Float], Float),
+            FloatSign => (&[Float], Int),
+            RatAdd | RatSub | RatMul | RatDiv | RatMod => (&[Rat, Rat], Rat),
+            RatNeg | RatAbs => (&[Rat], Rat),
+            RatSign => (&[Rat], Int),
+            RatNumerator | RatDenominator => (&[Rat], Str),
+            StrSlice => (&[Str, Int, Int], Str),
+            StrSplit => (&[Str, Str], STR_ARRAY),
+            StrReplace | StrReplaceFirst => (&[Str, Str, Str], Str),
+            StrRepeat => (&[Str, Int], Str),
+            StrTrim | StrChomp | StrTrimStart | StrTrimEnd | StrLower | StrUpper => (&[Str], Str),
+            StrFind | StrFindLast => (&[Str, Str], Int),
+            StrStartsWith | StrEndsWith => (&[Str, Str], Bool),
+            StrUtf8 => (&[Str], Bytes),
+            _ => return None,
+        })
+    }
 }
 
 impl DataOp {
@@ -470,7 +767,20 @@ impl DataOp {
     pub fn fallible(self, operands: &[Type], result: Option<Type>) -> bool {
         match self {
             Self::IntMod | Self::RangeNew | Self::RatNew | Self::ValEq | Self::ValNe | Self::VariantGet
-                | Self::RoleNarrow => true,
+                | Self::RoleNarrow | Self::MapGet | Self::MapKeyAt | Self::MapValueAt | Self::MapDifference
+                | Self::ArraySlice
+                | Self::ArrayRemove | Self::ArrayReplace | Self::ArrayDifference => true,
+            Self::TestOk | Self::TestIs | Self::TestIsnt | Self::TestFail => true,
+            // Tomato's failures: an int outside signed 64 bits in a bit operation, a shift or rotation
+            // count out of range, a float result that is not finite, a zero rat divisor, slice bounds and
+            // a negative repeat count. Every other scalar family operation is total.
+            Self::IntAnd | Self::IntOr | Self::IntXor | Self::IntShl | Self::IntShr | Self::IntUshr | Self::IntNot
+                | Self::IntBitCount | Self::IntLeadingZeros | Self::IntTrailingZeros | Self::IntReverseBits
+                | Self::IntSwapBytes | Self::IntRotl | Self::IntRotr => true,
+            Self::ByteShl | Self::ByteShr | Self::ByteUshr | Self::ByteRotl | Self::ByteRotr => true,
+            Self::FloatAdd | Self::FloatSub | Self::FloatMul | Self::FloatDiv | Self::FloatMod | Self::FloatPow
+                | Self::FloatSqrt => true,
+            Self::RatDiv | Self::RatMod | Self::StrSlice | Self::StrRepeat => true,
             Self::Convert => matches!((operands, result), ([from], Some(to)) if conversion(*from, to) == Some(true)),
             _ => false,
         }
@@ -688,6 +998,18 @@ mod load_tests;
 #[cfg(test)]
 mod arrays_tests;
 #[cfg(test)]
+mod natives_tests;
+#[cfg(test)]
 mod scalars_tests;
+#[cfg(test)]
+mod collections_tests;
+#[cfg(test)]
+mod managed_tests;
+#[cfg(test)]
+mod testmode_tests;
+#[cfg(test)]
+mod rules_tests;
+#[cfg(test)]
+mod budget_tests;
 #[cfg(test)]
 mod roles_tests;

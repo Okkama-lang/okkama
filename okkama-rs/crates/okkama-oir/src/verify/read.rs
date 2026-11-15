@@ -111,7 +111,9 @@ fields!(
     Block { lexical_scope, params, unwind, insts, term },
     Terminator { kind, loc }, SwitchCase { value, target },
     Body { cleanup, entry, values, blocks, insts, bindings, boundaries, deps, keys, selections,
-        high_results, high_effects, descriptor_bindings, service_schedules }
+        high_results, high_effects, descriptor_bindings, service_schedules, frame_layout },
+    FrameLayout { slots, continuations }, FrameSlotDecl { ty }, Continuation { site },
+    ServiceEntry { holder }
 );
 impl Read for DebugLoc {
     fn read(&self, visitor: &mut impl Reader) {
@@ -369,7 +371,8 @@ impl Read for CreationOrigin {
 impl Read for FutureEnvironment {
     fn read(&self, visitor: &mut impl Reader) {
         match self {
-            Self::Deferred { function, arguments, descriptors } => {
+            Self::Deferred { function, arguments, descriptors }
+            | Self::External { function, arguments, descriptors } => {
                 function.read(visitor);
                 arguments.read(visitor);
                 descriptors.read(visitor);
@@ -435,6 +438,52 @@ impl Read for CreationWitness {
                 site.read(visitor);
                 callee.read(visitor);
                 summary.read(visitor);
+            }
+        }
+    }
+}
+
+impl Read for SuspendSite {
+    fn read(&self, visitor: &mut impl Reader) {
+        match self {
+            Self::Start => {}
+            Self::Terminator(block) => block.read(visitor),
+            Self::Instruction(instruction) => instruction.read(visitor),
+        }
+    }
+}
+impl Read for ScheduleDuty {
+    fn read(&self, visitor: &mut impl Reader) {
+        if let Self::Value(value) = self {
+            value.read(visitor);
+        }
+    }
+}
+impl Read for PublishOutcome {
+    fn read(&self, visitor: &mut impl Reader) {
+        match self {
+            Self::Success { value, packet, deps } => {
+                value.read(visitor);
+                packet.read(visitor);
+                deps.read(visitor);
+            }
+            Self::Failure(failure) => failure.read(visitor),
+        }
+    }
+}
+impl Read for RehomeForm {
+    fn read(&self, visitor: &mut impl Reader) {
+        match self {
+            Self::State(state) => state.read(visitor),
+            Self::Scope { state, pending, future } => {
+                state.read(visitor);
+                pending.read(visitor);
+                future.read(visitor);
+            }
+            Self::Token { pending, cache, task } => {
+                pending.read(visitor);
+                cache.read(visitor);
+                task.read(visitor);
             }
         }
     }

@@ -47,6 +47,14 @@ pub fn analyze_function(
     let body = module.functions.get(function).map_err(arena)?.body.as_ref()
         .ok_or_else(|| flow_error("analysis requires a function body"))?;
     let graph = Graph::index(module, body, &mut budget)?;
+    let builder_owners = if arrays::creates_builders(body) {
+        budget.work(body.insts.len() + body.blocks.len())?;
+        let owners = arrays::builder_owners(module, body)?;
+        budget.memory(owners.len() * 96)?;
+        owners
+    } else {
+        BTreeMap::new()
+    };
     let mut equations = Equations::default();
     let empty = equation(&mut equations, Shape::Empty, &mut budget)?;
     let mut value_shapes = BTreeMap::new();
@@ -128,7 +136,7 @@ pub fn analyze_function(
         budget.work(1)?;
         evaluations += 1;
         let outgoing = transfer(module, body, block, &entries[&block], &graph,
-            &value_shapes, classification, &mut budget, None, None, None)?;
+            &value_shapes, &builder_owners, classification, &mut budget, None, None, None)?;
         for (edge, state) in outgoing {
             budget.work(state.stored_facts())?;
             let changed = if let Some(previous) = entries.get_mut(&edge.target) {
@@ -173,7 +181,7 @@ pub fn analyze_function(
     for block in &graph.rpo {
         if let Some(entry) = entries.get(block) {
             outcomes.extend(transfer(module, body, *block, entry, &graph,
-                &value_shapes, classification, &mut budget, Some(&mut before_edges),
+                &value_shapes, &builder_owners, classification, &mut budget, Some(&mut before_edges),
                 Some(&mut constructor_inputs), Some(&mut before_instructions))?);
         }
     }
@@ -206,18 +214,21 @@ fn managed(body: &Body, value: ValueId, classification: &OwnAnalysis) -> Result<
 /// singleton current admission permits a strong source update. Otherwise both
 /// possible locations retain Maybe facts; runtime scope.split chooses contents.
 fn bind_admission(state: &mut FlowState, owner: ScopeId, deps: &BTreeSet<Atom>) {
-    transfer_selected(state, owner, deps, true, 2);
+    transfer_selected(state, owner, None, deps, true, 2);
 }
 
+/// Move the selected journal entries to `owner`; `sources`, when given, limits
+/// the scopes they may leave.
 fn transfer_selected(
     state: &mut FlowState,
     owner: ScopeId,
+    sources: Option<&[ScopeId]>,
     deps: &BTreeSet<Atom>,
     admissible: bool,
     provenance: u8,
 ) {
     let moving: Vec<_> = state.journals.keys().filter(|(scope, atom)| {
-        *scope != owner && deps.contains(atom)
+        *scope != owner && sources.is_none_or(|sources| sources.contains(scope)) && deps.contains(atom)
             && state.journals[&(*scope, *atom)].multiplicity != Multiplicity::Bottom
             && (!admissible || state.provenance.get(&(*scope, *atom)).is_some_and(|mask| mask & 1 != 0))
     }).copied().collect();
@@ -257,6 +268,7 @@ fn transfer(
     entry: &FlowState,
     graph: &Graph,
     shapes: &BTreeMap<ValueId, ShapeId>,
+    builder_owners: &BTreeMap<ValueId, ScopeId>,
     classification: &OwnAnalysis,
     budget: &mut Budget<'_>,
     snapshots: Option<&mut BTreeMap<BlockId, FlowState>>,
@@ -314,8 +326,8 @@ fn transfer(
         }
         match &instruction.op {
             Operation::Collection(CollectionOp::BuilderNew { .. } | CollectionOp::MapBuilderNew { .. }) => {}
-            // A transition moves the admissible parts of inserted values to the
-            // builder's owner, approximated by the function root scope.
+            // A transition moves the admissible parts of inserted values from
+            // the scopes inside the builder's owner into the owner's journal.
             Operation::Collection(collection) if arrays::consumed_buffer(&instruction.op).is_some() => {
                 let buffer = arrays::consumed_buffer(&instruction.op).unwrap();
                 let mut deps = state.values[buffer.as_u32() as usize].deps.clone();
@@ -324,8 +336,10 @@ fn transfer(
                     inserted.extend(state.values[value.as_u32() as usize].deps.iter().copied());
                 }
                 if !inserted.is_empty() {
-                    let owner = super::edges::stack(module, data.lexical_scope)?[0];
-                    transfer_selected(&mut state, owner, &inserted, true, 1);
+                    let owner = *builder_owners.get(&buffer)
+                        .ok_or_else(|| flow_error("builder transition has no builder.new owner"))?;
+                    let sources = arrays::inner_scopes(module, data.lexical_scope, owner)?;
+                    transfer_selected(&mut state, owner, Some(&sources), &inserted, true, 1);
                     deps.extend(inserted);
                 }
                 for result in &instruction.results {
@@ -426,7 +440,7 @@ fn transfer(
             }
             Operation::Lexical(LexicalOp::Stage { action, value, .. }) => {
                 let deps = state.values[value.as_u32() as usize].deps.clone();
-                transfer_selected(&mut state, *action, &deps, false, 4);
+                transfer_selected(&mut state, *action, None, &deps, false, 4);
             }
             Operation::Core(CoreOp::ObjNew { construction: ConstructionStatus::Incomplete, .. }) => {
                 for result in &instruction.results {

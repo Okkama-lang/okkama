@@ -98,12 +98,12 @@ func @f(%0: own) -> (int, own) abi explicit(input_packet=0, output_packet=1) sum
     boundary B0 lexical in S2
     dependency d0: dependency = from_ssa(%7)
     dependency d1: dependency = from_ssa(%17)
-    dependency d2: dependency = from_ssa(%30)
-    dependency d3: dependency = from_ssa(%27)
-    dependency d4: dependency = from_ssa(%41)
-    dependency d5: dependency = from_ssa(%39)
+    dependency d2: dependency = from_ssa(%32)
+    dependency d3: dependency = from_ssa(%30)
+    dependency d4: dependency = from_ssa(%44)
+    dependency d5: dependency = from_ssa(%42)
     selection s0: selection = admissible(selection(%5))
-    selection s1: selection = admissible(selection(%25))
+    selection s1: selection = admissible(selection(%28))
     ^b0 in S2:
     %1: scope<S2> = scope.begin S2
     %2: scope<S2> = own.accept %1, %0
@@ -124,37 +124,39 @@ func @f(%0: own) -> (int, own) abi explicit(input_packet=0, output_packet=1) sum
     ^b4(%13: scope<S2>, %14: own, %15: deps, %16: R facts(managed(deps=d1)), %17: deps) in S2:
     %18: scope<S2> = own.bind binding elaborated_binding(binding=b0, resource=resource_value(value=%16, packet=%14),
         state=%13, original_scope=S2)
-    %19: fn() -> int facts(managed(deps=d1)) = fn.bind %16, @read.__own_entry_1, ty fn() -> int
-    %20: deps = deps.of %19
-    %21: own = own.empty
-    invoke.own call @make(; %21)
-        normal ^b6($value, $packet, $deps, %18, %19, %20)
-        unwind ^b7($failure, %18)
-    ^b5(%22: scope<S2>, %23: failure) in S2:
-    %24: failure = scope.unwind %22, %23, effects scope_effects(failures=[], suspends=false, cancel=false)
-    raise %24
-    ^b6(%25: R facts(managed(deps=d3)), %26: own, %27: deps, %28: scope<S2>, %29: fn() -> int facts(managed(deps=d2)),
-        %30: deps) in S2:
-    %31: scope<S2> = own.admit %28, %26
-    invoke.own scope.split %31, s1
-        normal ^b8($state, $selected, $external_deps, %25, %27, %29, %30)
+    %19: own = own.empty
+    (%20: fn() -> int facts(managed(deps=d1)), %21: own) = fn.bind %16, @read.__own_entry_1, ty fn() -> int, packet %19
+    %22: deps = deps.of %20
+    %23: scope<S2> = own.admit %18, %21
+    %24: own = own.empty
+    invoke.own call @make(; %24)
+        normal ^b6($value, $packet, $deps, %20, %22, %23)
+        unwind ^b7($failure, %23)
+    ^b5(%25: scope<S2>, %26: failure) in S2:
+    %27: failure = scope.unwind %25, %26, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %27
+    ^b6(%28: R facts(managed(deps=d3)), %29: own, %30: deps, %31: fn() -> int facts(managed(deps=d2)), %32: deps,
+        %33: scope<S2>) in S2:
+    %34: scope<S2> = own.admit %33, %29
+    invoke.own scope.split %34, s1
+        normal ^b8($state, $selected, $external_deps, %28, %30, %31, %32)
         unwind ^b9($state, $failure)
-    ^b7(%32: failure, %33: scope<S2>) in S2:
-    %34: failure = scope.unwind %33, %32, effects scope_effects(failures=[], suspends=false, cancel=false)
-    raise %34
-    ^b8(%35: scope<S2>, %36: own, %37: deps, %38: R facts(managed(deps=d5)), %39: deps, %40: fn() -> int
-        facts(managed(deps=d4)), %41: deps) in S2:
-    %42: scope<S2> = own.rebind binding elaborated_binding(binding=b0, resource=resource_value(value=%38, packet=%36),
-        state=%35, original_scope=S2)
-    %43: own = own.empty
-    (%44: int, %45: own, %46: deps) = fn.call %40(; %43) deps [%41] summary(M5)
-    %47: scope<S2> = own.admit %42, %45
-    %48: closed = scope.end %47, effects scope_effects(failures=[], suspends=false, cancel=false)
-    %49: own = own.empty
-    ret %44, %49
-    ^b9(%50: scope<S2>, %51: failure) in S2:
-    %52: failure = scope.unwind %50, %51, effects scope_effects(failures=[], suspends=false, cancel=false)
-    raise %52
+    ^b7(%35: failure, %36: scope<S2>) in S2:
+    %37: failure = scope.unwind %36, %35, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %37
+    ^b8(%38: scope<S2>, %39: own, %40: deps, %41: R facts(managed(deps=d5)), %42: deps,
+        %43: fn() -> int facts(managed(deps=d4)), %44: deps) in S2:
+    %45: scope<S2> = own.rebind binding elaborated_binding(binding=b0, resource=resource_value(value=%41, packet=%39),
+        state=%38, original_scope=S2)
+    %46: own = own.empty
+    (%47: int, %48: own, %49: deps) = fn.call %43(; %46) deps [%44] summary(M5)
+    %50: scope<S2> = own.admit %45, %48
+    %51: closed = scope.end %50, effects scope_effects(failures=[], suspends=false, cancel=false)
+    %52: own = own.empty
+    ret %47, %52
+    ^b9(%53: scope<S2>, %54: failure) in S2:
+    %55: failure = scope.unwind %53, %54, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %55
 }
 
 func @read.__own_entry_1(%0: R facts(managed(deps=d1)); %1: deps, %2: own) -> (int, own) [method

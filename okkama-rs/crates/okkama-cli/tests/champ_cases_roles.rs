@@ -126,7 +126,8 @@ fn run(id: &str, bytes: Vec<u8>) -> Observed {
     Observed { exit: run.result.ok(), stdout: String::from_utf8_lossy(&run.stdout).into_owned() }
 }
 
-/// A `failure` outcome expects a runtime failure; `success` expects its exit status.
+/// A `failure` outcome, or an `error` outcome whose only stage is runtime, expects a runtime failure; `success`
+/// expects its exit status.
 fn expected(id: &str) -> Observed {
     let case = case(id);
     let expect = &case["expect"];
@@ -134,6 +135,7 @@ fn expected(id: &str) -> Observed {
     let exit = match expect["outcome"].as_str().unwrap() {
         "success" => Some(expect["exit_status"].as_i64().unwrap_or(0)),
         "failure" => None,
+        "error" if expect["failure"]["stages"] == serde_json::json!(["runtime"]) => None,
         outcome => panic!("{id}: unsupported outcome {outcome}"),
     };
     Observed { exit, stdout }
@@ -160,12 +162,17 @@ fn check_through_low(id: &str) {
 
 /// A single-file program of this test, run in Champ: its exit status and stdout.
 fn run_source(text: &str) -> Observed {
+    run_source_with(text, okkama_compiler::oir2::VerifyMode::Structural)
+}
+
+/// [`run_source`] with the given verification of every OIR-2 phase.
+fn run_source_with(text: &str, mode: okkama_compiler::oir2::VerifyMode) -> Observed {
     let source = SourceFile::new("app.ok", text).unwrap();
     let program = syntax::parse(&source, &ParseOptions::default()).unwrap();
     let roots = [RootFile { source: &source, program: &program }];
     let stdlib = std::fs::canonicalize(root().join("std")).unwrap();
-    let bytes = oir2::compile_linked_with(&roots, &mut CaseLoader { stdlib },
-        okkama_compiler::oir2::VerifyMode::Structural).unwrap_or_else(|error| panic!("build: {error}"));
+    let bytes = oir2::compile_linked_with(&roots, &mut CaseLoader { stdlib }, mode)
+        .unwrap_or_else(|error| panic!("build: {error}"));
     run("app.ok", bytes)
 }
 
@@ -219,40 +226,51 @@ case!(roles_hidden_state_views, "L06.hidden.state-views");
 // Role successors, and a successor taken twice on one path (OIR-2 §8: used at least once, read again).
 case!(successors_generic_successor_specialization, "L12.generic-successor-specialization");
 
-// Streams and sources: core.StringSource and io.stream.ByteSource stop on `str.utf8` (S1), builders,
-// `array.concat` or multi-case Error variants.
-through_low!(streams_stdout_stream_write, "L00.stdout.stream-write");
+// Streams and sources: core.StringSource and io.stream.ByteSource (str.utf8, builders, array.concat).
+case!(streams_stdout_stream_write, "L00.stdout.stream-write");
+case!(streams_precedence_stream_and_range, "L01.gram.precedence.stream-and-range");
+case!(streams_stream_write_vs_less_minus, "L01.lex.operators.stream-write-vs-less-minus");
+case!(streams_raw_concatenation, "L01.lex.raw.concatenation");
+case!(streams_raw_multiline, "L01.lex.raw.multiline");
+case!(streams_string_escapes, "L01.lex.string.escapes");
+case!(streams_range_for_and_functional, "L02.range.for-and-functional");
+case!(streams_bytes_and_unpack, "L02.stream.bytes-and-unpack");
+case!(streams_for_sources, "L03.for.sources");
+// Builders, maps and collections behind role dispatch.
+case!(collections_literal_argument, "L03.overload.collection-literal-argument");
+case!(collections_array_removed_at, "L05.array.removed-at");
+case!(collections_iterable_functional, "L05.iterable.functional");
+// Caps behind string slices, builders and rational arithmetic; once fields.
+case!(caps_internal_and_external, "L04.caps.internal-and-external");
+case!(caps_snapshot_after_successor, "L04.caps.snapshot-after-successor");
+case!(caps_time_operators, "L09.time.operators");
+case!(once_computed_once, "L04.once.computed-once");
+// Construction completion state: a role call on a receiver whose construction is pending fails (§11.4).
+case!(construction_escaped_self_role_call, "L04.invariant.escaped-self-role-call");
+
+/// It builds and runs in Champ, but sorting 100 000 integers is superlinear in a debug build: 1 000 take
+/// seconds, 10 000 more than four minutes. With smaller arrays the output matches case.json.
+#[test]
+#[ignore = "debug Champ: the 100 000-element sort runs for hours (superlinear)"]
+fn collections_failing_order_stops_the_sort() {
+    check("L09.compare.failing-order-stops-the-sort");
+}
+
+// Multi-case Error variant types are not in S1 yet.
 through_low!(streams_params_grouped, "L01.gram.params.grouped");
-through_low!(streams_precedence_stream_and_range, "L01.gram.precedence.stream-and-range");
-through_low!(streams_stream_write_vs_less_minus, "L01.lex.operators.stream-write-vs-less-minus");
-through_low!(streams_raw_concatenation, "L01.lex.raw.concatenation");
-through_low!(streams_raw_multiline, "L01.lex.raw.multiline");
-through_low!(streams_string_escapes, "L01.lex.string.escapes");
-through_low!(streams_range_for_and_functional, "L02.range.for-and-functional");
-through_low!(streams_bytes_and_unpack, "L02.stream.bytes-and-unpack");
-through_low!(streams_for_sources, "L03.for.sources");
-// Builders, maps and other collection gaps behind role dispatch.
-through_low!(collections_literal_argument, "L03.overload.collection-literal-argument");
-through_low!(collections_array_removed_at, "L05.array.removed-at");
+// compile_low: SPB_STRUCTURE, a definition that does not dominate its use in `main`.
 through_low!(collections_batching_functional, "L05.batching.functional");
-through_low!(collections_iterable_functional, "L05.iterable.functional");
-through_low!(collections_failing_order_stops_the_sort, "L09.compare.failing-order-stops-the-sort");
+// compile_low: ENTRY_FAILURE_MASK, an own entry or witness whose body may fail but whose summary declares no
+// failure.
 through_low!(collections_persistent_list, "L09.collections.persistent-list");
+through_low!(caps_in_collections_and_closures, "L12.caps-in-collections-and-closures");
+through_low!(once_collections_heap_and_deque, "L09.collections.heap-and-deque");
+// compile_low: VAL_EQ_TYPE, a value comparison in collections/frequencies.
+through_low!(once_collections_frequencies, "L09.collections.frequencies");
 // Batching sources holding an Atomic: the constructor's fresh evidence (FRESH_PACKET).
 through_low!(batching_empty_and_nested, "L05.batching.empty-and-nested");
 through_low!(batching_for_protocol_order, "L05.batching.for-protocol-order");
 through_low!(batching_next_last_return, "L05.batching.next-last-return");
-// Caps behind string slices, builders and rational arithmetic; once fields and std objects with a runtime
-// override.
-through_low!(caps_internal_and_external, "L04.caps.internal-and-external");
-through_low!(caps_snapshot_after_successor, "L04.caps.snapshot-after-successor");
-through_low!(caps_in_collections_and_closures, "L12.caps-in-collections-and-closures");
-through_low!(caps_time_operators, "L09.time.operators");
-through_low!(once_computed_once, "L04.once.computed-once");
-through_low!(once_collections_frequencies, "L09.collections.frequencies");
-through_low!(once_collections_heap_and_deque, "L09.collections.heap-and-deque");
-// Construction completion state.
-through_low!(construction_escaped_self_role_call, "L04.invariant.escaped-self-role-call");
 
 /// A bound role action is a closure over its receiver: each call dispatches the slot on that receiver.
 #[test]
@@ -308,4 +326,29 @@ main() is int {
     0;
 }");
     assert_eq!(observed, Observed { exit: Some(0), stdout: "r!\nr!\ndestroy r\n".into() });
+}
+
+/// Decision (a) of #676: a closure captures a resource by reference (P2.4 §4.1), so the resource stays its
+/// owner's. Both calls read it; the owner destroys it once, when `main`'s scope ends, after the closure's last
+/// use. Every OIR-2 phase is verified in full. Tomato prints the same for this program.
+#[test]
+fn a_closure_capturing_a_resource_leaves_its_destruction_to_the_owner() {
+    let observed = run_source_with("module app v1.0.0;
+import \"io/stdout\" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln(\"destroy \" + name); }
+}
+main() is int {
+    let out = Stdout();
+    let r = Res(name: \"r\");
+    let f = () is string { r.label() + \"!\"; };
+    out.writeln(f());
+    out.writeln(f());
+    out.writeln(\"end\");
+    0;
+}", okkama_compiler::oir2::VerifyMode::Full);
+    assert_eq!(observed, Observed { exit: Some(0), stdout: "r!\nr!\nend\ndestroy r\n".into() });
 }

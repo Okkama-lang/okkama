@@ -212,19 +212,37 @@ fn operation(module: &Module, function: &Function, body: &Body, op: &Operation, 
             let dynamic: Vec<_> = declaration.rules.iter().filter(|rule| {
                 rule.transition == ProtocolTransition::Dynamic
             }).collect();
-            let supported = *reason == DynamicReason::Merge && declaration.kind == ProtocolKind::Storage
-                && declaration.holders.contains(&HolderKind::Scope)
+            let transfer = |rule: &&ProtocolRule| rule.from == HolderKind::Packet
+                && rule.to == HolderKind::Scope
+                && rule.normal == ProtocolPoststate { holder: HolderKind::Scope, state: HolderState::Open }
+                && rule.unwind == Some(ProtocolPoststate {
+                    holder: HolderKind::Packet, state: HolderState::Unaccepted,
+                })
+                && rule.cancel.is_none();
+            let shape = declaration.holders.contains(&HolderKind::Scope)
                 && declaration.holders.contains(&HolderKind::Packet)
                 && declaration.holders.iter().all(|holder| matches!(holder, HolderKind::Scope | HolderKind::Packet))
                 && declaration.roots.contains(&RootKind::Operands)
-                && dynamic.len() == 1 && dynamic[0].from == HolderKind::Packet
-                && dynamic[0].to == HolderKind::Scope
-                && dynamic[0].normal == ProtocolPoststate { holder: HolderKind::Scope, state: HolderState::Open }
-                && dynamic[0].unwind == Some(ProtocolPoststate {
-                    holder: HolderKind::Packet, state: HolderState::Unaccepted,
-                }) && dynamic[0].cancel.is_none();
+                && dynamic.len() == 1 && transfer(&dynamic[0]);
+            // The open Closure protocol (#683) also publishes the returned packet into
+            // the scope; its unwind settles the scope, never the unpublished packet.
+            let publish = declaration.rules.iter().filter(|rule| rule.transition != ProtocolTransition::Dynamic)
+                .collect::<Vec<_>>();
+            let closure_publish = matches!(publish.as_slice(), [rule]
+                if rule.transition == ProtocolTransition::Publish
+                && rule.from == HolderKind::Packet && rule.to == HolderKind::Scope
+                && rule.normal == ProtocolPoststate { holder: HolderKind::Scope, state: HolderState::Open }
+                && rule.unwind == Some(ProtocolPoststate { holder: HolderKind::Scope, state: HolderState::Settled })
+                && rule.cancel.is_none());
+            let supported = shape && match (reason, &declaration.kind) {
+                (DynamicReason::Merge, ProtocolKind::Storage) => true,
+                (DynamicReason::Any, ProtocolKind::Any) => publish.is_empty(),
+                (DynamicReason::Closure, ProtocolKind::Closure) => closure_publish,
+                _ => false,
+            };
             if !supported {
-                state.error(R::B71, "Low dynamic source requires the synchronous storage merge transition");
+                state.error(R::B71,
+                    "Low dynamic source requires a synchronous storage merge, any or open Closure transition");
             }
         }
         if value_type(module, body, *owner) != Some(&Type::Service(ServiceType::Scope(*target))) {

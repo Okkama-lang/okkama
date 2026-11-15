@@ -58,6 +58,16 @@ impl s::ExternalContracts for Catalog<'_> {
             entry.proofs.entry.as_ref().and_then(|contract| contract.external.as_deref()) == Some(name)
         }))
     }
+
+    /// Host implementations bind by name first; only an unbound canonical symbol uses the adapter.
+    fn adapter(&self, declared: &s::Function) -> Option<s::Function> {
+        self.1.adapter(declared)
+    }
+}
+
+/// A native symbol (`module@major::name/arity`), as opposed to a runtime intrinsic name.
+pub(super) fn native_symbol(name: &str) -> bool {
+    okkama_sparrow::abi::catalogue::Symbol::parse(name).is_some()
 }
 
 pub(crate) fn repr(ty: s::Type) -> Repr {
@@ -126,6 +136,7 @@ impl Runtime {
             ..okkama_sparrow::Program::default()
         };
         legacy.types.push(okkama_sparrow::Type::Byte);
+        legacy.handles = source.objects.iter().map(|object| object.name.clone()).collect();
         // This declaration view serves existing descriptors, diagnostics and heap layout consumers only.
         // No old bytecode is generated or executed.
         for object in &source.objects {
@@ -154,8 +165,9 @@ impl Runtime {
             }).collect();
             legacy.functions.push(okkama_sparrow::Function {
                 symbol: function.symbol.clone(), is_async: false,
+                // Tomato resolves the provider by symbol; an unresolved adapter finds none and fails at the call.
                 native: function.proofs.entry.as_ref().and_then(|entry| entry.external.clone())
-                    .filter(|name| name.starts_with("runtime/")),
+                    .filter(|name| native_symbol(name)),
                 intrinsic: None,
                 registers, params, result: None, code: vec![], handlers: vec![],
             });
@@ -221,9 +233,12 @@ impl Runtime {
                     entry.declaration.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref()) == Some(name)
                 })).cloned());
         }
-        let p1 = source.functions.iter().map(|function| {
+        // Trusted P1/native entries run through the finite adapters of `p1`, as do checked
+        // unresolved-provider adapters that no embedder implementation binds by name.
+        let p1 = source.functions.iter().zip(&implementations).map(|(function, implementation)| {
             function.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref())
-                .is_some_and(|name| s::ExternalContracts::entry(&catalog.1, name).is_some())
+                .is_some_and(|name| s::ExternalContracts::entry(&catalog.1, name).is_some()
+                    || (implementation.is_none() && catalog.1.adapter(function).is_some()))
         }).collect();
         runtime.champ.machine = Some(Program {
             source: Arc::new(source), plans, selections, entries, shielded_entries,
@@ -237,13 +252,17 @@ fn legacy_type(ty: s::Type) -> okkama_sparrow::Type {
     use okkama_sparrow::Type as T;
     match ty {
         s::Type::Error => T::Failure,
-        s::Type::Bytes | s::Type::Array(_) => T::Array(okkama_sparrow::TypeRef(0)),
+        s::Type::Bytes | s::Type::Array(_) | s::Type::Map(_) | s::Type::MapBuilder(_) | s::Type::Builder(_) => {
+            T::Array(okkama_sparrow::TypeRef(0))
+        }
         s::Type::Int => T::Int,
         s::Type::Bool | s::Type::Descriptor | s::Type::Never => T::Bool,
         s::Type::Str => T::Str,
         s::Type::Object(id) | s::Type::Successor(id) | s::Type::Variant(id) | s::Type::Role(id)
             | s::Type::RoleSuccessor(id) => T::Object(okkama_sparrow::ObjectRef(id)),
         s::Type::Range => T::Range,
+        // Handle indices name SPB objects; the declaration view lists every object name as a handle name.
+        s::Type::Handle(id) => T::Handle(id),
         s::Type::Failure => T::Failure,
         s::Type::Byte => T::Byte,
         s::Type::Float => T::Float,
@@ -271,18 +290,27 @@ extern "C" fn owned_adapter(ctx: *mut Ctx, io: *mut CallOwn, args: *const Word, 
 pub extern "C" fn rt_machine_external(ctx: *mut Ctx, function: u64, io: *mut CallOwn,
     args: *const Word, count: u64) -> Word
 {
+    // The direct call of a compiled function is on every level of a recursion: its frame stays
+    // small, and the provider paths with their large temporaries live in their own frame.
     let runtime = unsafe { &mut *(*ctx).runtime };
     let machine = runtime.champ.machine.as_ref().expect("Champ program");
-    if io.is_null() && !machine.source.functions[function as usize].code.is_empty() {
-        let code = match crate::jit::compile(runtime, function as usize) {
-            Ok(code) => code,
-            Err(error) => return stop(ctx, error),
-        };
-        let arguments = if count == 0 { &[] } else {
-            unsafe { std::slice::from_raw_parts(args, count as usize) }
-        };
-        return unsafe { crate::jit::invoke(code, ctx, arguments) };
+    if !io.is_null() || machine.source.functions[function as usize].code.is_empty() {
+        return machine_provider(ctx, function, io, args, count);
     }
+    let code = match crate::jit::compile(runtime, function as usize) {
+        Ok(code) => code,
+        Err(error) => return stop(ctx, error),
+    };
+    let arguments = if count == 0 { &[] } else {
+        unsafe { std::slice::from_raw_parts(args, count as usize) }
+    };
+    unsafe { crate::jit::invoke(code, ctx, arguments) }
+}
+
+#[inline(never)]
+fn machine_provider(ctx: *mut Ctx, function: u64, io: *mut CallOwn, args: *const Word, count: u64) -> Word {
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    let machine = runtime.champ.machine.as_ref().expect("Champ program");
     if machine.p1[function as usize] {
         let arguments = if count == 0 { &[] } else {
             unsafe { std::slice::from_raw_parts(args, count as usize) }
@@ -513,6 +541,155 @@ pub extern "C" fn rt_machine_convert(ctx: *mut Ctx, from: Word, to: Word, value:
     }
 }
 
+/// An SPB 17 int, byte, float, rat or str family operation (`DataOp::scalar_code`) on Tomato's
+/// representations and with Tomato's semantics (`crate::ops`); unused operands are zero. A failure is a
+/// program failure with Tomato's message; a result larger than the memory budget stops.
+pub extern "C" fn rt_machine_scalar(ctx: *mut Ctx, op: Word, first: Word, second: Word, third: Word) -> Word {
+    let frame = runtime::frame_pointer!();
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    let Some((op, result)) = s::DataOp::from_scalar_code(op)
+        .and_then(|op| op.scalar_signature().map(|(_, result)| (op, result)))
+    else {
+        return stop(ctx, error("invalid verified scalar operation"));
+    };
+    if runtime.limits.memory.is_some() {
+        let bytes = scalar_result_bytes(runtime, op, first, second, third);
+        if runtime.would_exceed(bytes) {
+            return runtime.exhaust(unsafe { &mut *ctx }, crate::budget::Exhausted::Memory);
+        }
+    }
+    match scalar(runtime, op, first, second, third) {
+        Ok(word) => {
+            runtime.safepoint(frame, unsafe { &*ctx }, &[(word, repr(result))]);
+            word
+        }
+        Err(message) => {
+            super::helpers::fail(ctx, error(&message));
+            0
+        }
+    }
+}
+
+/// The size of a result that can be much larger than its operands, before it is built (#72).
+fn scalar_result_bytes(runtime: &Runtime, op: s::DataOp, first: Word, second: Word, third: Word) -> u64 {
+    use s::DataOp as D;
+    match op {
+        D::StrReplace => {
+            let text = |word| runtime.heap.text(word);
+            crate::ops::replace_bytes(text(first), text(second), text(third))
+        }
+        D::StrRepeat => {
+            let count = runtime.small_or_big(second).and_then(|count| u64::try_from(count).ok()).unwrap_or(0);
+            (runtime.heap.text(first).len() as u64).saturating_mul(count)
+        }
+        _ => 0,
+    }
+}
+
+/// The value of a scalar family operation, as Tomato's instruction of the same name computes it.
+pub(crate) fn scalar(runtime: &mut Runtime, op: s::DataOp, first: Word, second: Word, third: Word)
+    -> Result<Word, String>
+{
+    use crate::ops::{self, Bitwise as B, RatArith as R};
+    use crate::program::Kind;
+    use okkama_sparrow::{BitOp, StrFn};
+    use s::DataOp as D;
+    let bits = |op| match op {
+        D::IntAnd | D::ByteAnd => B::And,
+        D::IntOr | D::ByteOr => B::Or,
+        D::IntXor | D::ByteXor => B::Xor,
+        D::IntShl | D::ByteShl => B::Shl,
+        D::IntShr | D::ByteShr => B::Shr,
+        _ => B::Ushr,
+    };
+    let action = |op| match op {
+        D::IntBitCount | D::ByteBitCount => BitOp::BitCount,
+        D::IntLeadingZeros | D::ByteLeadingZeros => BitOp::LeadingZeros,
+        D::IntTrailingZeros | D::ByteTrailingZeros => BitOp::TrailingZeros,
+        D::IntReverseBits | D::ByteReverseBits => BitOp::ReverseBits,
+        D::IntSwapBytes | D::ByteSwapBytes => BitOp::SwapBytes,
+        D::IntRotl | D::ByteRotl => BitOp::RotateLeft,
+        _ => BitOp::RotateRight,
+    };
+    let float = |code, left: Word, right: Word| {
+        crate::scalar::float_binary(code, f64::from_bits(left), f64::from_bits(right))
+            .map(f64::to_bits)
+            .map_err(String::from)
+    };
+    match op {
+        D::IntAnd | D::IntOr | D::IntXor | D::IntShl | D::IntShr | D::IntUshr => {
+            ops::int_bitwise(runtime, bits(op), first, second)
+        }
+        D::IntNot => ops::int_not(runtime, first),
+        D::IntAbs => ops::int_abs(runtime, first),
+        D::IntSign => ops::sign(runtime, Kind::Int, first),
+        D::IntBitCount | D::IntLeadingZeros | D::IntTrailingZeros | D::IntReverseBits | D::IntSwapBytes => {
+            ops::bit_action(runtime, action(op), false, first, None)
+        }
+        D::IntRotl | D::IntRotr => ops::bit_action(runtime, action(op), false, first, Some(second)),
+        D::ByteAnd | D::ByteOr | D::ByteXor | D::ByteShl | D::ByteShr => {
+            ops::byte_bitwise(runtime, bits(op), first, second)
+        }
+        // OIR-2's byte.ushr counts in byte; Tomato's count is an int word.
+        D::ByteUshr => {
+            let count = runtime.heap.int(i64::from(second as u8));
+            ops::byte_bitwise(runtime, B::Ushr, first, count)
+        }
+        D::ByteNot => Ok(Word::from(!(first as u8))),
+        D::ByteBitCount | D::ByteLeadingZeros | D::ByteTrailingZeros | D::ByteReverseBits | D::ByteSwapBytes => {
+            ops::bit_action(runtime, action(op), true, first, None)
+        }
+        D::ByteRotl | D::ByteRotr => ops::bit_action(runtime, action(op), true, first, Some(second)),
+        D::FloatAdd => float(crate::scalar::FLOAT_ADD, first, second),
+        D::FloatSub => float(crate::scalar::FLOAT_SUB, first, second),
+        D::FloatMul => float(crate::scalar::FLOAT_MUL, first, second),
+        D::FloatDiv => float(crate::scalar::FLOAT_DIV, first, second),
+        D::FloatMod => float(crate::scalar::FLOAT_MOD, first, second),
+        D::FloatPow => float(crate::scalar::FLOAT_POW, first, second),
+        D::FloatNeg => Ok((-f64::from_bits(first)).to_bits()),
+        D::FloatAbs => Ok(f64::from_bits(first).abs().to_bits()),
+        D::FloatSign => ops::sign(runtime, Kind::Float, first),
+        D::FloatSqrt => ops::float_sqrt(first),
+        D::RatAdd => ops::rat_arith(runtime, R::Add, first, second),
+        D::RatSub => ops::rat_arith(runtime, R::Sub, first, second),
+        D::RatMul => ops::rat_arith(runtime, R::Mul, first, second),
+        D::RatDiv => ops::rat_arith(runtime, R::Div, first, second),
+        D::RatMod => ops::rat_arith(runtime, R::Mod, first, second),
+        D::RatNeg | D::RatAbs => ops::rat_unary(runtime, op == D::RatNeg, first),
+        D::RatSign => ops::sign(runtime, Kind::Ref, first),
+        D::RatNumerator | D::RatDenominator => Ok(ops::rat_part(runtime, first, op == D::RatDenominator)),
+        D::StrSlice => ops::str_slice(runtime, first, second, third),
+        D::StrSplit => Ok(ops::str_split(runtime, first, second)),
+        D::StrReplace | D::StrReplaceFirst => ops::str_replace(runtime, first, second, third, op == D::StrReplaceFirst),
+        D::StrTrim => Ok(ops::str_trim(runtime, first)),
+        D::StrChomp => Ok(ops::str_chomp(runtime, first)),
+        D::StrUtf8 => {
+            let bytes = runtime.heap.text(first).as_bytes().to_vec();
+            Ok(runtime.heap.allocate_bytes(&bytes))
+        }
+        D::StrTrimStart | D::StrTrimEnd | D::StrLower | D::StrUpper => {
+            let op = match op {
+                D::StrTrimStart => StrFn::TrimStart,
+                D::StrTrimEnd => StrFn::TrimEnd,
+                D::StrLower => StrFn::Lower,
+                _ => StrFn::Upper,
+            };
+            ops::str_fn(runtime, op, vec![first])
+        }
+        D::StrRepeat | D::StrFind | D::StrFindLast | D::StrStartsWith | D::StrEndsWith => {
+            let op = match op {
+                D::StrRepeat => StrFn::Repeat,
+                D::StrFind => StrFn::Find,
+                D::StrFindLast => StrFn::FindLast,
+                D::StrStartsWith => StrFn::StartsWith,
+                _ => StrFn::EndsWith,
+            };
+            ops::str_fn(runtime, op, vec![first, second])
+        }
+        _ => Err("invalid verified scalar operation".into()),
+    }
+}
+
 /// A payload field of a variant value whose active case must be the object `case`.
 pub extern "C" fn rt_machine_variant_get(ctx: *mut Ctx, case: Word, storage: Word, value: Word) -> Word {
     let runtime = unsafe { &*(*ctx).runtime };
@@ -573,7 +750,7 @@ pub extern "C" fn rt_machine_value_eq(ctx: *mut Ctx, descriptor: Word, left: Wor
     }
 }
 
-fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, right: Word, ty: s::Type)
+pub(crate) fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, right: Word, ty: s::Type)
     -> Result<bool, String>
 {
     let mut pending = vec![(left, right, ty)];
@@ -587,6 +764,7 @@ fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, right: Word,
             _ if a == 0 || b == 0 => return Err("cannot compare unbound object fields".into()),
             s::Type::Str => runtime.heap.text(a) == runtime.heap.text(b),
             s::Type::Rat => runtime.rational(a) == runtime.rational(b),
+            s::Type::Handle(_) => return Err("cannot compare native handles".into()),
             s::Type::Bytes => runtime.heap.bytes(a) == runtime.heap.bytes(b),
             s::Type::Range => {
                 let x = runtime.heap.payload::<crate::ops::RangeValue>(a).expect("verified range");
@@ -626,7 +804,24 @@ fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, right: Word,
                 }
                 true
             }
-            s::Type::Error | s::Type::Failure => false,
+            s::Type::Map(id) => {
+                let Some(&s::Composite::Map { value, .. }) = program.composites.get(id as usize) else {
+                    return Err("map equality on a non-map composite".into());
+                };
+                let x = &runtime.heap.payload::<crate::ops::MapValue>(a).expect("verified map").entries;
+                let y = &runtime.heap.payload::<crate::ops::MapValue>(b).expect("verified map").entries;
+                if x.len() != y.len() {
+                    return Ok(false);
+                }
+                for ((left_key, left), (right_key, right)) in x.iter().zip(y.iter()) {
+                    if left_key != right_key {
+                        return Ok(false);
+                    }
+                    pending.push((left.1, right.1, value));
+                }
+                true
+            }
+            s::Type::Error | s::Type::Failure | s::Type::Builder(_) | s::Type::MapBuilder(_) => false,
         };
         if !equal {
             return Ok(false);

@@ -424,10 +424,12 @@ impl Engine<'_, '_> {
         let Some(summary) = self.declaration.summary.and_then(|id| self.module.summaries.get(id).ok()) else {
             return;
         };
-        let Ok(entry) = self.body.blocks.get(self.body.entry) else {
+        if self.body.blocks.get(self.body.entry).is_err() {
             return;
-        };
-        let arguments: Vec<_> = entry.params.iter().copied().filter(|v| {
+        }
+        // C-2: a D21 async body has its entry values in its start continuation.
+        let parameters = self.entry_values();
+        let arguments: Vec<_> = parameters.iter().copied().filter(|v| {
             self.body.values.get(*v).ok().and_then(|v| self.module.types.get(v.ty).ok())
                 .is_some_and(|ty| !matches!(ty, Type::Service(_) | Type::Descriptor))
         }).collect();
@@ -436,17 +438,18 @@ impl Engine<'_, '_> {
             if flow.active_failure & !allowed != 0 {
                 self.error(R::B51, "body exposes a failure kind absent from its declared summary");
             }
-            if entry.params.iter().any(|v| linear(self.module, self.body, *v)
+            if parameters.iter().any(|v| linear(self.module, self.body, *v)
                 && flow.availability[v.as_u32() as usize] == AVAILABLE) {
                 self.error(R::B54, "failure/cancel exit has not settled accepted inputs");
             }
             return;
         }
+        // A D21 async body publishes its output packet (C-2).
         if summary.entry_kind == EntryKind::Internal
-            && self.declaration.signature.results.iter().any(|ty| {
+            && (self.frame_body() || self.declaration.signature.results.iter().any(|ty| {
                 self.module.types.get(*ty) == Ok(&Type::Service(ServiceType::Own))
-            }) {
-            for &parameter in &entry.params {
+            })) {
+            for &parameter in &parameters {
                 if self.body.values.get(parameter).ok().and_then(|v| self.module.types.get(v.ty).ok())
                     != Some(&Type::Service(ServiceType::Own)) { continue; }
                 if self.empty_ctor_packet(parameter) {

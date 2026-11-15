@@ -65,7 +65,7 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
         let data = output.module.functions.get(*function).map_err(arena)?;
         let body = data.body.as_ref().unwrap();
         let root = body.blocks.get(body.entry).map_err(arena)?.lexical_scope;
-        let fixed_observation = output.module.entry == Some(*function)
+        let fixed_observation = fixed_root(&output.module, *function)
             || data.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Destroy(_)));
         if (output.analysis.scopes[&root].empty_scope_eligible || fixed_observation) && !helpers.contains(function) {
             let mut summary = output.module.summaries.get(data.summary.unwrap()).map_err(arena)?.clone();
@@ -133,10 +133,18 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                 .any(|attr| matches!(attr, FunctionAttr::Lambda { .. }));
         emitter.charge(high.values.len(), high.values.len() * 64)?;
         let origins = origins::callable_origins(&output.module, &high, emitter.budget_ref())?;
+        let builder_owners = if arrays::creates_builders(&high) {
+            let owners = arrays::builder_owners(&output.module, &high)?;
+            emitter.charge(high.insts.len() + high.blocks.len(), owners.len() * 96)?;
+            owners
+        } else {
+            BTreeMap::new()
+        };
         let mut driver = Driver {
             module: &mut output.module, high: &high, analysis: &output.analysis, emitter: &mut emitter,
             body: Body {
                 high_results: vec![], high_effects: vec![], descriptor_bindings: vec![], service_schedules: vec![],
+                frame_layout: None,
                 entry: BlockId::from_u32(0), values: Arena::new(), blocks: Arena::new(), insts: Arena::new(),
                 bindings: high.bindings.clone(), boundaries: high.boundaries.clone(), deps: Arena::new(),
                 keys: Arena::new(), selections: Arena::new(), cleanup: Default::default(),
@@ -149,7 +157,7 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
             replacement_returns: vec![],
             constructor_inputs: flows[&function].constructor_inputs.clone(),
             flow: &flows[&function], elide_offers, definitions: BTreeMap::new(), origins,
-            witnesses: &entry_sets.witnesses,
+            witnesses: &entry_sets.witnesses, builder_owners,
         };
         if high.service_schedules.iter().any(|schedule| !schedule.duties.is_empty()) {
             return Err(phase_error(OwnDiagnosticKind::UnsupportedAsync,
@@ -294,7 +302,7 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                 contract: binding.contract.clone(),
             });
         }
-        let explicit = driver.retained.contains(&root) && !destroy && driver.module.entry != Some(function);
+        let explicit = driver.retained.contains(&root) && !destroy && !fixed_root(driver.module, function);
         let mut signature = driver.module.functions.get(function).map_err(arena)?.signature.clone();
         let mut point = Landing { block: prologue, env, results: vec![], forwarded: BTreeMap::new() };
         if explicit {
@@ -441,8 +449,10 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                         };
                     }
                     TermKind::Raise(failure) => {
+                        // A raise inside a try follows its block's unwind to the enclosing catch dispatch.
                         point.env.cleanup.failure = Some(point.env.value(*failure)?.value);
-                        driver.failures.push(FailureRoute { point, target: None });
+                        let target = driver.current_unwind.clone();
+                        driver.failures.push(FailureRoute { point, target });
                     }
                     // A tombstone with live linear state (an exhaustive match's
                     // default) becomes an unreachable trap: the verifier treats it
@@ -606,6 +616,8 @@ struct Driver<'a, 'o> {
     incomplete: BTreeMap<ValueId, BTreeSet<ValueId>>,
     replacement_returns: Vec<ReplacementReturn>,
     constructor_inputs: BTreeMap<InstId, BTreeSet<ScopeId>>,
+    /// The lexical scope of the `builder.new` behind every High buffer version.
+    builder_owners: BTreeMap<ValueId, ScopeId>,
 }
 impl Driver<'_, '_> {
     /// Whether values of `ty` carry full dependencies. Linear buffers never do:

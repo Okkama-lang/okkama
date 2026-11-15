@@ -1,0 +1,85 @@
+oir 2 coro
+// async action work(n: int) is int { return n; }
+// async main() { let f = work(7); }
+// The Future is never awaited: no await suspends, and the close of main settles its cache duty.
+// Coro golden of own/async-never-awaited.oir (V3): the only suspension is the close of main.
+module async_never_awaited
+protocol Services kind services holders [scope, cache, receipt] rules [protocol_rule(transition=settle, from=cache,
+    to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
+    protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=scope, state=settled))]
+scope SW action in @work
+scope SM action in @main
+summary Mwc internal parameters [parameter_effect(convention=borrow, destination=none)] results
+    [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], publication=atomic)
+summary Mwb call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results
+    [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
+    failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary Mmc internal results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[future<void>], publication=atomic)
+summary Mmb call-boundary contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+func @work(%frame: frame<@work>) -> void [async] summary(Mwb) async-creation(Mwc) async-body(Mwb) {
+    frame.layout {
+        slot 0: int
+        slot 1: own linear
+    }
+    continuation 0 start saves [0, 1]
+    boundary B0 call in SW
+^entry in SW:
+    (%fr0: frame<@work>, %n: int, %inputs: own) = frame.resume %frame, continuation 0, slots [
+        saved_slot(slot=0, ty=int, linear=false), saved_slot(slot=1, ty=own, linear=true)]
+    %q0: scope<SW> = scope.begin SW
+    %q1: scope<SW> = own.accept %q0, %inputs
+    %empty: own = own.empty
+    %d: deps = deps.of %n
+    %pending: pending = exit.prepare return %n, %empty, deps(%d) at B0
+    (%closed: closed, %reserved: pending) = scope.end %q1, reserve %pending, effects scope_effects(failures=[],
+        suspends=false, cancel=false)
+    (%r: int, %p: own, %rd: deps) = exit.commit %reserved, destination caller, result int
+    fut.publish %fr0, success(value=%r, packet=%p, deps=%rd)
+    ret
+}
+func @main(%frame: frame<@main>) -> void [async] summary(Mmb) async-creation(Mmc) async-body(Mmb) {
+    frame.layout {
+        slot 0: own linear
+        slot 1: scope<SM> linear
+        slot 2: pending linear
+        slot 3: cache-state linear
+    }
+    continuation 0 start saves [0]
+    // The close settles the cache duty of its schedule: the token is an operand slot of the suspension.
+    continuation 1 at ^entry saves [] operands [1, 2, 3]
+    service.schedule Sched0 owner SM, protocol Services, duties [%c]
+    boundary B0 call in SM
+    key k0: key = service_of(value=%f, kind=cache)
+    dependency d0: dependency = key(k0)
+    selection s0: selection = union([])
+^entry in SM:
+    (%fr0: frame<@main>, %inputs: own) = frame.resume %frame, continuation 0, slots [saved_slot(slot=0, ty=own,
+        linear=true)]
+    %q0: scope<SM> = scope.begin SM
+    %q1: scope<SM> = own.accept %q0, %inputs
+    %seven: int = const 7
+    %offered: own = own.empty
+    %external: deps = deps.of %seven
+    (%f: future<int> facts(managed(deps=d0)), %c: cache-state,
+        %q2: scope<SM>) = fut.new %offered, %external, %q1, environment deferred(
+        function=@work, arguments=[%seven], descriptors=[]), result int, owner SM
+    %e: own = own.empty
+    %pending: pending = exit.prepare return packet %e select s0 at B0
+    %fr1: frame<@main> = frame.save %fr0, continuation 1
+    invoke.own scope.end %q2, reserve %pending, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=false)
+        normal ^done($closed, $pending)
+        unwind ^close_failed($closed, $failure)
+^done(%closed: closed, %reserved: pending) in SM:
+    %fr2: frame<@main> = frame.resume %fr1, continuation 1
+    (%p: own, %pd: deps) = exit.commit %reserved, destination caller
+    fut.publish %fr2, success(packet=%p, deps=%pd)
+    ret
+^close_failed(%closed2: closed, %close_failure: failure) in SM:
+    %fr3: frame<@main> = frame.resume %fr1, continuation 1
+    fut.publish %fr3, failure(%close_failure)
+    ret
+}

@@ -1,0 +1,57 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/event" take Event;
+
+object Child {
+    has go is Event;
+    Child(:go);
+    async run() is int {
+        await go.wait();
+        42;
+    }
+}
+
+object Worker {
+    has ready is Event;
+    has go is Event;
+    has never is Event;
+    has child is Future<int>;
+    Worker(:ready, :go, :never, :child);
+
+    // A nested frame of the worker's task, not a task of its own.
+    async inner() is int {
+        defer Stdout().writeln("inner cleanup");
+        await ready.wait();
+        go.set();
+        let v = await child;
+        Stdout().writeln("inner observed " + v.string());
+        await never.wait();
+        Stdout().writeln("inner not cancelled");
+        v;
+    }
+
+    async run() is int {
+        defer Stdout().writeln("worker cleanup");
+        let v = await self.inner();
+        Stdout().writeln("worker not cancelled");
+        v;
+    }
+}
+
+async main() is int {
+    let ready = Event();
+    let go = Event();
+    let never = Event();
+    let child = spawn Child(go: go).run();
+    let worker = spawn Worker(ready: ready, go: go, never: never, child: child).run();
+    ready.set();
+    let v = await child;
+    Stdout().writeln("main observed " + v.string());
+    worker.cancel();
+    Stdout().writeln("cancel requested");
+    let r = try { await worker; } catch e is Cancelled { -1; };
+    Stdout().writeln(r.string());
+    Stdout().writeln("cancelled " + worker.cancelled().string());
+    0;
+}

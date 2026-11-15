@@ -1,4 +1,5 @@
-use crate::{Arena, BindingDecl, BindingId, BlockId, DebugLoc, InstId, Operation, ScopeId, TypeId, ValueId};
+use crate::{Arena, BindingDecl, BindingId, BlockId, DebugLoc, FuncId, InstId, Module, Operation, ScopeId, ServiceType,
+    Type, TypeId, TypeTable, ValueId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Body {
@@ -7,6 +8,8 @@ pub struct Body {
     pub high_effects: Vec<HighEffectRecord>,
     pub descriptor_bindings: Vec<crate::DescriptorBinding>,
     pub service_schedules: Vec<crate::ServiceSchedule>,
+    /// Required in coro/low for an async body and forbidden elsewhere (async ABI D21).
+    pub frame_layout: Option<FrameLayout>,
     pub entry: BlockId,
     pub values: Arena<ValueId, ValueData>,
     pub blocks: Arena<BlockId, Block>,
@@ -172,4 +175,77 @@ pub struct HighEffectEnvelope {
 pub struct HighEffectRecord {
     pub site: HighOperationSite,
     pub effects: HighEffectEnvelope,
+}
+
+/// Typed frame slots and continuation metadata of an async body (async ABI D21).
+/// Slots are abstract: the loader derives machine words from [`FrameLayout::slot_words`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FrameLayout {
+    pub slots: Vec<FrameSlotDecl>,
+    /// Continuation 0 is the start.
+    pub continuations: Vec<Continuation>,
+}
+/// One type per slot for the whole function; a slot may be reused for values of that type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameSlotDecl {
+    pub ty: TypeId,
+    pub linear: bool,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Continuation {
+    pub site: SuspendSite,
+    pub saved: Vec<u32>,
+    /// Operand slots of the suspending operation, in operand order.
+    pub operands: Vec<u32>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SuspendSite {
+    Start,
+    /// The terminator of this block is the suspending operation.
+    Terminator(BlockId),
+    /// This instruction is the suspending operation.
+    Instruction(InstId),
+}
+/// Machine shape of one frame slot. Offsets are bytes from the slot start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SlotWords {
+    pub words: u32,
+    /// Traced references of a service slot; `None` defers to the register repr of a value.
+    pub references: Option<&'static [u32]>,
+}
+impl FrameLayout {
+    /// Raw words per lexical scope of the function: holder id and owner id (D21, review B2).
+    pub const SCOPE_AREA_WORDS: u32 = 2;
+
+    /// Mirrors `spb17::layout::service_layout` for service kinds; values take one register word.
+    /// The 5-word `destroy-borrow` kind has no IR slot type.
+    pub fn slot_words(types: &TypeTable, ty: TypeId) -> Option<SlotWords> {
+        let words = match types.get(ty).ok()? {
+            Type::Frame(_) => SlotWords { words: 0, references: Some(&[]) },
+            Type::Service(ServiceType::Deps | ServiceType::Closed | ServiceType::UniqueCache) => {
+                SlotWords { words: 0, references: Some(&[]) }
+            }
+            Type::Service(ServiceType::StableKey) => SlotWords { words: 2, references: Some(&[0]) },
+            Type::Service(_) => SlotWords { words: 1, references: Some(&[0]) },
+            _ => SlotWords { words: 1, references: None },
+        };
+        Some(words)
+    }
+    /// Words of the typed slot area, before the scope area.
+    pub fn slot_area_words(&self, types: &TypeTable) -> Option<u32> {
+        let mut total = 0_u32;
+        for slot in &self.slots {
+            total = total.checked_add(Self::slot_words(types, slot.ty)?.words)?;
+        }
+        Some(total)
+    }
+    /// Two Raw words for every lexical scope of `function`, after the slots.
+    pub fn scope_area_words(module: &Module, function: FuncId) -> Option<u32> {
+        let scopes = module.scopes.iter().filter(|(_, scope)| scope.function == function).count();
+        u32::try_from(scopes).ok()?.checked_mul(Self::SCOPE_AREA_WORDS)
+    }
+    /// The frame's machine area: typed slots followed by the scope area.
+    pub fn machine_words(&self, module: &Module, function: FuncId) -> Option<u32> {
+        self.slot_area_words(&module.types)?.checked_add(Self::scope_area_words(module, function)?)
+    }
 }

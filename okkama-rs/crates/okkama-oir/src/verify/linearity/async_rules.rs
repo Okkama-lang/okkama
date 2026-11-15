@@ -1,6 +1,91 @@
 use super::*;
 
 impl Engine<'_, '_> {
+    /// The start of a D21 async body (C-2): its frame parameter and the continuation 0 resume that opens
+    /// the entry block, with the restored slots and their result values.
+    pub(super) fn start_resume(&self) -> Option<(ValueId, &[SavedSlot], &[ValueId])> {
+        if !matches!(self.module.profile, Profile::Coro | Profile::Low)
+            || !self.declaration.attrs.contains(&FunctionAttr::Async)
+            || self.body.frame_layout.is_none() {
+            return None;
+        }
+        let entry = self.body.blocks.get(self.body.entry).ok()?;
+        let [frame] = entry.params.as_slice() else {
+            return None;
+        };
+        let inst = self.body.insts.get(*entry.insts.first()?).ok()?;
+        match &inst.op {
+            Operation::Async(AsyncOp::FrameResume { frame: resumed, continuation: 0, slots })
+                if resumed == frame && inst.results.len() == slots.len() + 1 => {
+                Some((*frame, slots, &inst.results[1..]))
+            }
+            _ => None,
+        }
+    }
+
+    /// An async body of coro/low in the D21 form: it starts from its frame and leaves through `fut.publish`.
+    pub(super) fn frame_body(&self) -> bool {
+        matches!(self.module.profile, Profile::Coro | Profile::Low)
+            && self.declaration.attrs.contains(&FunctionAttr::Async)
+            && self.body.frame_layout.is_some()
+    }
+
+    /// C-2: `fut.publish` is the exit of a D21 async body. Its success outcome is checked against the body
+    /// summary as a return of the value and the packet, its failure as a failure exit.
+    fn publish_exit(&mut self, before: &Flow, outcome: &PublishOutcome) {
+        match outcome {
+            PublishOutcome::Success { value, packet, .. } => {
+                let values: Vec<_> = value.iter().copied().chain([*packet]).collect();
+                self.body_summary(before, true, &values);
+            }
+            PublishOutcome::Failure(failure) => {
+                let mut failed = before.clone();
+                failed.active_failure = before.failures[failure.as_u32() as usize];
+                self.body_summary(&failed, false, &[]);
+            }
+        }
+    }
+
+    /// Entry values of the function. The receiver, arguments, descriptors and input packet of a D21 async
+    /// body are the results of its start resume (C-2); every other body has them as entry parameters.
+    pub(super) fn entry_values(&self) -> Vec<ValueId> {
+        if let Some((_, _, results)) = self.start_resume() {
+            return results.to_vec();
+        }
+        self.body.blocks.get(self.body.entry).map(|entry| entry.params.clone()).unwrap_or_default()
+    }
+
+    /// C-1, C-2: the runtime writes the start slots into the frame before the body runs. The running
+    /// frame is the body's own activation, never a service duty of its owner, so closes do not settle it.
+    pub(super) fn start_frame(&self, flow: &mut Flow) {
+        let Some((frame, slots, results)) = self.start_resume() else {
+            return;
+        };
+        let key = Origin::Input(frame);
+        let index = frame.as_u32() as usize;
+        flow.availability[index] = AVAILABLE;
+        flow.aliases[index].insert(frame);
+        flow.contained[index].insert(frame);
+        let mut token = Token { frame: Some(key), ..Token::default() };
+        token.sources.insert(frame);
+        flow.tokens[index] = token;
+        let mut layout = std::collections::BTreeMap::new();
+        for (slot, &value) in slots.iter().zip(results) {
+            let index = value.as_u32() as usize;
+            let mut token = flow.tokens[index].clone();
+            token.saved_type = Some(slot.ty);
+            layout.insert(slot.slot, Slot {
+                token, refs: flow.refs[index].clone(), identity: flow.identities[index],
+                aliases: flow.aliases[index].clone(), contained: flow.contained[index].clone(),
+                requirements: flow.full_deps[index].clone(), lifetime: flow.lifetimes[index],
+                must_use: flow.must_use[index], failures: flow.failures[index], ..Slot::default()
+            });
+            // The start resume defines the value from its slot.
+            flow.availability[index] = ABSENT;
+        }
+        flow.frames.insert(key, layout);
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn async_operation(
         &mut self, block: BlockId, op: &Operation, outcome: Outcome, origin: Origin, before: &Flow,
@@ -91,7 +176,7 @@ impl Engine<'_, '_> {
                     }
                 }
             }
-            AsyncOp::CacheRehome { state, target, .. } => {
+            AsyncOp::CacheRehome { form: RehomeForm::State(state), target, .. } => {
                 let mut token = before.tokens[state.as_u32() as usize].clone();
                 token.scope = Some(*target);
                 let changed = before.tokens[state.as_u32() as usize].scope != Some(*target);
@@ -253,7 +338,7 @@ impl Engine<'_, '_> {
                     slot.token = before.tokens[frame.as_u32() as usize].clone();
                 }
             }
-            AsyncOp::FrameResume { frame, slots: saved } => {
+            AsyncOp::FrameResume { frame, slots: saved, .. } => {
                 let frame_key = before.tokens[frame.as_u32() as usize].frame;
                 let mut layout = frame_key.and_then(|key| before.frames.get(&key).cloned()).unwrap_or_default();
                 if frame_key.is_none() {
@@ -371,18 +456,8 @@ impl Engine<'_, '_> {
                     }
                 }
             }
-            AsyncOp::FuturePublish { packet, cache, .. } => {
-                if let Some(slot) = slots.first_mut() {
-                    slot.token = before.tokens[packet.as_u32() as usize].clone();
-                    slot.token.private = true;
-                    slot.token.cache = before.tokens[cache.as_u32() as usize].cache;
-                    slot.token.pieces = slot.token.pieces.iter().cloned().map(|mut piece| {
-                        piece.provenance = provenance_bit(AdmissionProvenance::CacheOwned);
-                        piece.holder = before.tokens[cache.as_u32() as usize].cache;
-                        piece
-                    }).collect();
-                }
-            }
+            // `fut.publish` (C-2) has no result slot; in a D21 body it is the exit checked by the summary.
+            AsyncOp::FuturePublish { outcome, .. } if self.frame_body() => self.publish_exit(before, outcome),
             _ => {}
         }
     }

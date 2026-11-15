@@ -114,8 +114,9 @@ fn champ_s2_registry_layouts_effects_and_single_outcome_channel() {
     assert_eq!(size_of::<KeyRef>(), 16);
     assert_eq!(size_of::<PacketSlot>(), 8);
     let helpers: Vec<_> = crate::jit::HELPERS.iter().filter(|(name, _)| name.starts_with("champ_")).collect();
-    // 55 P1 helpers and the role narrowing helper of #676.
-    assert_eq!(helpers.len(), 56);
+    // #622 adds champ_machine_collection, champ_machine_builder and champ_machine_lookup; #675 adds
+    // champ_machine_scalar; #676 adds champ_machine_role_narrow.
+    assert_eq!(helpers.len(), 61);
     for &(name, effects) in helpers {
         let abi = helper_abi(name).unwrap();
         let class = abi.class;
@@ -882,4 +883,34 @@ fn champ_admissible_split_preserves_bound_history_and_escape_restores_admission(
     let mut escaped = ScopeSplitPost::default();
     assert_eq!(rt_scope_split_admissible(&mut h.ctx, &mut target, &selection(&roots), &mut escaped), NORMAL);
     assert_eq!(words(&h.runtime, &escaped.selected), HashSet::from([bound]));
+}
+
+/// A managed array refers to identities it does not own: selecting it selects its elements, also through
+/// nested arrays, while an array of text selects nothing (#622).
+#[test]
+fn champ_selection_walk_descends_into_managed_arrays() {
+    let mut h = Harness::new();
+    let owner = h.runtime.champ_new_owner().unwrap();
+    let (a, p) = h.fresh(0, owner);
+    let (b, q) = h.fresh(0, owner);
+    let mut inputs = [p, q];
+    let mut joined = PacketSlot::default();
+    assert_eq!(rt_own_join(&mut h.ctx, inputs.as_mut_ptr(), 2, &mut joined), NORMAL);
+    let text = h.runtime.heap.allocate_text("plain");
+    let texts = h.runtime.heap.allocate_array(Repr::Ref, &[text, text]);
+    let mut post = SplitPost::default();
+    let roots = [texts];
+    assert_eq!(rt_own_split_checked(&mut h.ctx, &mut joined, &selection(&roots), &mut post), NORMAL);
+    assert!(words(&h.runtime, &post.selected).is_empty());
+    assert_eq!(words(&h.runtime, &post.rest), HashSet::from([a, b]));
+    let inner = h.runtime.heap.allocate_array(Repr::Ref, &[b]);
+    let managed = h.runtime.heap.allocate_array(Repr::Ref, &[a]);
+    let nested = h.runtime.heap.allocate_array(Repr::Ref, &[inner]);
+    let mut rest = post.rest;
+    let mut post = SplitPost::default();
+    let roots = [managed, nested];
+    assert_eq!(rt_own_split_checked(&mut h.ctx, &mut rest, &selection(&roots), &mut post), NORMAL);
+    assert_eq!(words(&h.runtime, &post.selected), HashSet::from([a, b]));
+    assert!(words(&h.runtime, &post.rest).is_empty());
+    h.gc(&[post.rest.record, post.selected.record]);
 }

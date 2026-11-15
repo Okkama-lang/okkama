@@ -197,7 +197,7 @@ pub fn run_executable(
         }
         if program.has_tests() && let Some(out) = tests
         {
-            return Ok(test_program(program.legacy()?, out).map(Execution::Tests).map_err(ExecutionError::Load));
+            return Ok(test_profile(program, out).map(Execution::Tests).map_err(ExecutionError::Load));
         }
         let original_functions = program.function_count();
         let mut runtime = configured_runtime(program, arguments, stats, worker_command, limits)?;
@@ -358,44 +358,85 @@ pub fn run_reported(
 pub fn run_tests(bytes: Vec<u8>, out: Box<dyn std::io::Write + Send>) -> Result<bool, Error> {
     on_vm_thread(move || {
         let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
-        test_program(program.legacy()?, out)
+        test_profile(program, out)
+    })
+}
+
+/// `run_tests` of an SPB 17 test profile under execution budgets, with the report and the program's
+/// output captured together, in order, as `run_captured` captures a run.
+#[cfg(feature = "champ-abi")]
+pub fn run_tests_captured(bytes: Vec<u8>, limits: budget::Limits) -> Result<(Result<bool, Error>, Vec<u8>), Error> {
+    on_vm_thread(move || {
+        let program = decode_runtime(&bytes).map_err(|error| Error(error.to_string()))?;
+        let DecodedProgram::Champ(program) = program else {
+            return Err(Error("test capture requires SPB 17".into()));
+        };
+        let out = Box::new(okkama_runtime_core::stdout::Buffered);
+        Ok(stdout::capture(|| champ::testing::run_suite(program, out, limits)))
     })
 }
 
 // Private: only a decoded, verified program reaches test execution.
-fn test_program(program: okkama_sparrow::Program, mut out: Box<dyn std::io::Write + Send>) -> Result<bool, Error> {
+fn test_profile(program: DecodedProgram, out: Box<dyn std::io::Write + Send>) -> Result<bool, Error> {
+    match program {
+        DecodedProgram::Legacy(program) => test_program(program, out),
+        #[cfg(feature = "champ-abi")]
+        DecodedProgram::Champ(program) => champ::testing::run_suite(program, out, budget::Limits::default()),
+    }
+}
+
+fn test_program(program: okkama_sparrow::Program, out: Box<dyn std::io::Write + Send>) -> Result<bool, Error> {
     let tests = program.tests.clone().ok_or_else(|| Error("module has no tests".into()))?;
     if tests.is_empty() {
         return Err(Error("Test run requires at least one test".into()));
     }
+    let names = tests.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>();
+    report_suite(&names, out, |index| {
+        let function = tests[index].1;
+        let declaration = &program.functions[function.0 as usize];
+        if !declaration.params.is_empty() || declaration.result.is_some() {
+            return Ok(CaseOutcome { failures: vec!["invalid test entry signature".to_owned()], skipped: None });
+        }
+        let mut runtime = Box::new(runtime::Runtime::new(program::Loaded::new(program.clone()))?);
+        if let Some(host) = &mut runtime.host {
+            host.test_failures = Some(Vec::new());
+        }
+        let outcome = runtime.run_function(function.0 as usize, STACK_BYTES);
+        // `SPARROW_CORE_STATS` counts each test's runtime as well (#555).
+        if let Some(report) = runtime.stats_report() {
+            eprint!("{report}");
+        }
+        let host = runtime.host.as_mut();
+        let (mut failures, skipped) =
+            host.map(|h| (h.test_failures.take().unwrap_or_default(), h.test_skipped.take())).unwrap_or_default();
+        // A skipped test ends with the failure of its `test.skip`.
+        if let (Err(error), None) = (outcome, &skipped) {
+            failures.push(error.0);
+        }
+        Ok(CaseOutcome { failures, skipped })
+    })
+}
+
+/// How one test ended: its failed checks in order, and its skip reason when it skipped.
+pub(crate) struct CaseOutcome {
+    pub failures: Vec<String>,
+    pub skipped: Option<String>,
+}
+
+/// The standard textual report of a test run, shared by both runtimes: each test in order, then the
+/// verdict; true when no test failed. `case` runs one test by its index.
+pub(crate) fn report_suite(
+    names: &[String],
+    mut out: Box<dyn std::io::Write + Send>,
+    mut case: impl FnMut(usize) -> Result<CaseOutcome, Error>,
+) -> Result<bool, Error> {
     let io = |e: std::io::Error| Error(format!("test report: {e}"));
     let mut passed = true;
-    for (name, function) in tests {
-        failures::Resources::trace_test(&name);
+    for (index, name) in names.iter().enumerate() {
+        failures::Resources::trace_test(name);
         writeln!(out, "=== RUN   {name}").map_err(io)?;
         out.flush().map_err(io)?;
-        let declaration = &program.functions[function.0 as usize];
-        let (failures, skipped) = if !declaration.params.is_empty() || declaration.result.is_some() {
-            (vec!["invalid test entry signature".to_owned()], None)
-        } else {
-            let mut runtime = Box::new(runtime::Runtime::new(program::Loaded::new(program.clone()))?);
-            if let Some(host) = &mut runtime.host {
-                host.test_failures = Some(Vec::new());
-            }
-            let outcome = runtime.run_function(function.0 as usize, STACK_BYTES);
-            // `SPARROW_CORE_STATS` counts each test's runtime as well (#555).
-            if let Some(report) = runtime.stats_report() {
-                eprint!("{report}");
-            }
-            let host = runtime.host.as_mut();
-            let (mut failures, skipped) =
-                host.map(|h| (h.test_failures.take().unwrap_or_default(), h.test_skipped.take())).unwrap_or_default();
-            // A skipped test ends with the failure of its `test.skip`.
-            if let (Err(error), None) = (outcome, &skipped) {
-                failures.push(error.0);
-            }
-            (failures, skipped)
-        };
+        let CaseOutcome { failures, skipped } = case(index)?;
         if !failures.is_empty() {
             passed = false;
             writeln!(out, "--- FAIL: {name}").map_err(io)?;
@@ -492,7 +533,7 @@ impl DecodedProgram {
         match self {
             Self::Legacy(program) => program.tests.is_some(),
             #[cfg(feature = "champ-abi")]
-            Self::Champ(_) => false,
+            Self::Champ(program) => program.tests.is_some(),
         }
     }
 
