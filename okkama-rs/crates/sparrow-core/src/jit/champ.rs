@@ -629,6 +629,9 @@ impl Emit<'_, '_> {
             }
             O::ArrayGet => {
                 let s::Flow::Outcomes(outcomes) = flow else { unreachable!("verified array outcomes") };
+                // A byte array (`@byte`) is packed: one byte per element after the header, read as a raw byte.
+                let bytes = matches!(locations[0],
+                    L::Register(id) if self.source.registers[id as usize] == s::Type::Bytes);
                 let array = self.word(locations[0]);
                 let index = self.word(locations[1]);
                 let header = self.load(array, 0);
@@ -642,9 +645,14 @@ impl Emit<'_, '_> {
                 let outside = self.builder.create_block();
                 self.builder.ins().brif(valid, load, &[], outside, &[]);
                 self.builder.switch_to_block(load);
-                let offset = self.builder.ins().ishl_imm_u(position, 3);
-                let pointer = self.builder.ins().iadd(array, offset);
-                let value = self.load(pointer, 8);
+                let value = if bytes {
+                    let pointer = self.builder.ins().iadd(array, position);
+                    self.builder.ins().uload8(types::I64, MEMORY, pointer, 8)
+                } else {
+                    let offset = self.builder.ins().ishl_imm_u(position, 3);
+                    let pointer = self.builder.ins().iadd(array, offset);
+                    self.load(pointer, 8)
+                };
                 self.edge(&outcomes[0].edge, &[vec![value]]);
                 self.builder.switch_to_block(outside);
                 let message = self.heap.allocate_text("Array index out of bounds");

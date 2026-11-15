@@ -446,6 +446,16 @@ fn translate_with(module: &o::Module, id: o::TypeId, table: &Composites) -> Resu
     })
 }
 
+/// The case layout of a one-case Error variant type, which SPB 17 represents by that case object
+/// (`translate_type`); `None` for every other type.
+pub(crate) fn single_error_case(module: &o::Module, ty: o::TypeId) -> Result<Option<o::DeclId>, GenerateError> {
+    let o::Type::Variant(decl) = module.types.get(ty)? else { return Ok(None) };
+    Ok(match &module.declarations.get(*decl)?.kind {
+        o::DeclarationKind::Variant { cases, is_error: true } if cases.len() == 1 => Some(cases[0].layout),
+        _ => None,
+    })
+}
+
 /// The storage index of a variant case payload field.
 pub(crate) fn variant_storage(module: &o::Module, objects: &[s::Object], field: o::FieldRef)
     -> Result<u32, GenerateError>
@@ -900,6 +910,11 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
             C::EnumNe { left, right } => (D::EnumNe, vec![reg(*left), reg(*right)]),
             C::IntDiv { left, right } => (D::RatNew, vec![reg(*left), reg(*right)]),
             C::RatNew { numerator, denominator } => (D::RatNew, vec![reg(*numerator), reg(*denominator)]),
+            // A one-case Error variant is its case object (`translate_type`): its active case is always 0.
+            C::VariantTag { value } if single_error_case(module, body.values.get(*value)?.ty)?.is_some() => {
+                immediate = s::Immediate::Constant(s::Constant::Int("0".into()));
+                (D::Const, vec![])
+            }
             C::VariantTag { value } => (D::VariantTag, vec![reg(*value)]),
             C::VariantOf { value, ty } if matches!(translate_type(module, *ty)?, s::Type::Variant(_)) => {
                 (D::Move, vec![reg(*value)])

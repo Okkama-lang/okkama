@@ -44,12 +44,6 @@ fn champ_cases_any() {
     ]);
 }
 
-/// compile_low: `array.get` of a byte array (`bytes[0]`), which SPB 17 has only as `lookup`.
-#[test]
-fn any_array_replaced() {
-    through_low("L05.array.replaced");
-}
-
 /// layout: a module constant (`const NESTED`) is a declaration the SPB 17 layout does not take.
 #[test]
 fn any_literal_empty_collections() {

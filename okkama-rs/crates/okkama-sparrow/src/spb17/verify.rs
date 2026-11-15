@@ -840,12 +840,16 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
         }
         ArrayGet => {
             enforce(locations.len() == 2, "ARRAY_GET_OPERANDS", "array.get needs array and index")?;
-            let ProducedType::Value(Type::Array(shape)) = loc_type(f, locations[0])? else {
-                return Err(violation("ARRAY_GET_OPERANDS", "array.get receiver must be a plain array"));
+            // A plain array yields its element; a byte array (`@byte`, its own packed representation)
+            // yields a byte. The receiver's declared type is the evidence for the read the machine emits.
+            let element = match loc_type(f, locations[0])? {
+                ProducedType::Value(array @ (Type::Array(_) | Type::Bytes)) => element_type(array),
+                _ => return Err(violation("ARRAY_GET_OPERANDS",
+                    "array.get receiver must be a plain array or a byte array")),
             };
             enforce(loc_type(f, locations[1])? == ProducedType::Value(Type::Int),
                 "ARRAY_GET_OPERANDS", "array.get index must be int")?;
-            ctx.value = shape.element();
+            ctx.value = element;
             ctx.may_fail = true;
         }
         BuilderPush | BuilderAppend | BuilderRange | BuilderFinish | BuilderAbandon => {

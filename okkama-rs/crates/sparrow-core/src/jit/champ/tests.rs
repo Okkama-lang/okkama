@@ -1132,6 +1132,81 @@ fn champ_p1_observation_outcomes_and_gc() {
     assert_eq!(runtime.failure(ctx.failure).unwrap().trace.len(), 1);
 }
 
+/// `array.get` of a byte array (`@byte`, #703): a packed byte per element, read as a raw byte word; an index
+/// outside the array fails with Tomato's text.
+#[test]
+fn champ_byte_array_get_reads_packed_bytes_and_checks_bounds() {
+    let reg = L::Register;
+    let mut function = s::Function {
+        symbol: "bytes".into(), entry_abi: s::EntryAbi::Observation,
+        registers: vec![s::Type::Int, s::Type::Byte, s::Type::Byte, s::Type::Byte, s::Type::Bytes, s::Type::Byte,
+            s::Type::Failure],
+        services: vec![], params: vec![reg(0)], results: vec![s::Type::Byte],
+        blocks: vec![
+            s::Block { pc: 0, params: vec![reg(0)] },
+            s::Block { pc: 5, params: vec![reg(5)] },
+            s::Block { pc: 6, params: vec![reg(6)] },
+        ],
+        proofs: s::FunctionProofs {
+            entry: Some(s::EntryContract { failures: 2, ..s::EntryContract::default() }),
+            ..s::FunctionProofs::default()
+        },
+        code: vec![
+            s::Instruction::Data { op: s::DataOp::Const, inputs: vec![], output: Some(1),
+                immediate: s::Immediate::Constant(s::Constant::Byte(0)) },
+            s::Instruction::Data { op: s::DataOp::Const, inputs: vec![], output: Some(2),
+                immediate: s::Immediate::Constant(s::Constant::Byte(171)) },
+            s::Instruction::Data { op: s::DataOp::Const, inputs: vec![], output: Some(3),
+                immediate: s::Immediate::Constant(s::Constant::Byte(255)) },
+            s::Instruction::Data { op: s::DataOp::ArrayNew, inputs: vec![1, 2, 3], output: Some(4),
+                immediate: s::Immediate::None },
+            s::Instruction::Champ { op: O::ArrayGet,
+                arguments: vec![A::Location(reg(4)), A::Location(reg(0))],
+                flow: s::Flow::Outcomes(vec![
+                    s::Outcome { tag: s::Tag::Normal, edge: s::Edge {
+                        target_pc: 5, assignments: vec![s::Assignment {
+                            destination: reg(5), source: s::Source::ProducedSlot(0),
+                        }],
+                    } },
+                    s::Outcome { tag: s::Tag::Unwind, edge: s::Edge {
+                        target_pc: 6, assignments: vec![s::Assignment {
+                            destination: reg(6), source: s::Source::ProducedSlot(0),
+                        }],
+                    } },
+                ]) },
+            s::Instruction::Ret(vec![5]),
+            s::Instruction::Raise(6),
+        ],
+    };
+    function.proofs.roots = s::live_locations(&function).unwrap().into_iter().enumerate()
+        .map(|(pc, locations)| s::RootRequirement { pc: pc as u32, locations: locations.into_iter().collect() })
+        .collect();
+    let source = s::Program { functions: vec![function], ..s::Program::default() };
+    let mut runtime = Runtime::new_champ(source, vec![]).unwrap();
+    let mut ctx = context(&mut runtime);
+    let code = compile(&mut runtime, 0).unwrap();
+    for (index, expected) in [("0", Some(0)), ("1", Some(171)), ("2", Some(255)), ("3", None), ("-1", None),
+        ("999999999999999999999999999999999999999999", None)]
+    {
+        ctx.status = OK;
+        ctx.failure = 0;
+        let index_word = runtime.heap.big(index.parse().unwrap());
+        let value = unsafe { invoke(code, &mut ctx, &[index_word]) };
+        match expected {
+            Some(byte) => {
+                assert_eq!(ctx.status, OK, "{index}");
+                assert_eq!(value, byte, "{index}");
+            }
+            None => {
+                assert_eq!(ctx.status, FAILED, "{index}");
+                let failure = runtime.failure(ctx.failure).unwrap();
+                assert!(matches!(&failure.kind, FailureKind::Program(message)
+                    if message == "Array index out of bounds"), "{index}");
+            }
+        }
+    }
+}
+
 #[test]
 fn champ_plain_array_traces_elements_and_checks_all_index_forms() {
     let array = s::Type::Array(s::ArrayType { leaf: s::ArrayLeaf::Str, depth: 1 });

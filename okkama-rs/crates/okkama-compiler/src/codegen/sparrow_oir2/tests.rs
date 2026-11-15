@@ -914,3 +914,31 @@ fn s1_mixed_parameters_keep_their_edges() {
     let p = generate(&parse(&text), &layouts()).expect_err("an undef edge source stays rejected");
     assert!(p.0.contains("undef"), "{}", p.0);
 }
+
+/// SPB 17 represents a one-case Error variant by its case object (`translate_type`), so `variant.tag` and
+/// `variant.get` of such a value are a constant and a field read (#703). A multi-case Error variant, a plain
+/// variant and other types are not.
+#[test]
+fn single_error_case_names_only_one_case_error_variants() {
+    let module = parse(concat!(
+        "oir 2 low\nmodule app v1.0.0\nrequires core\n\n",
+        "variant app.One is Error = (at: app.One.at)\n\n",
+        "object app.One.at {\n    field offset: int\n}\n\n",
+        "variant app.Plain = (only: app.Plain.only)\n\n",
+        "object app.Plain.only {\n    field value: int\n}\n\n",
+        "variant app.Two is Error = (a: app.Two.a, b: app.Two.b)\n\n",
+        "object app.Two.a {\n}\n\nobject app.Two.b {\n}\n\n",
+        "scope S action in @probe\n",
+        "func @probe(%a: app.One, %b: app.Plain, %c: app.Two) -> int abi observation {\n^entry in S:\n",
+        "    %zero: int = const 0\n    ret %zero\n}\n",
+    ));
+    let named = |name: &str| module.types.iter().find(|(_, ty)| matches!(ty, o::Type::Variant(decl)
+        if module.declarations.get(*decl).unwrap().name == name)).map(|(id, _)| id).unwrap();
+    let layout = |name: &str| module.declarations.iter().find(|(_, d)| d.name == name).map(|(id, _)| id).unwrap();
+    assert_eq!(single_error_case(&module, named("app.One")).unwrap(), Some(layout("app.One.at")));
+    assert_eq!(translate_type(&module, named("app.One")).unwrap(), s::Type::Object(layout("app.One.at").as_u32()));
+    assert_eq!(single_error_case(&module, named("app.Plain")).unwrap(), None);
+    assert_eq!(single_error_case(&module, named("app.Two")).unwrap(), None);
+    let int = module.types.iter().find(|(_, ty)| **ty == o::Type::Int).map(|(id, _)| id).unwrap();
+    assert_eq!(single_error_case(&module, int).unwrap(), None);
+}

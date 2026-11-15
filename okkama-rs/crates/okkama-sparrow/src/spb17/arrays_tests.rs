@@ -221,3 +221,40 @@ fn array_element_cannot_have_an_async_destroy() {
     let failure = verify_load(&p, &NoExternalContracts).unwrap_err();
     assert!(failure.message.contains("async destroy is outside P1"), "{failure}");
 }
+
+/// `array.get` of a byte array (`@byte`, #703): the fixture's array is a byte array built from one byte, and
+/// the read lands a byte in the normal block.
+fn bytes_fixture() -> Program {
+    let mut p = fixture();
+    let f = &mut p.functions[0];
+    f.registers = vec![Type::Byte, Type::Bytes, Type::Int, Type::Byte, Type::Failure];
+    f.results = vec![Type::Byte];
+    f.code[0] = Instruction::Data { op: DataOp::Const, inputs: vec![], output: Some(0),
+        immediate: Immediate::Constant(Constant::Byte(171)) };
+    p
+}
+
+#[test]
+fn byte_array_get_loads_with_a_byte_result() {
+    let p = bytes_fixture();
+    verify_load(&p, &NoExternalContracts).unwrap();
+    assert_eq!(decode(&encode(&p).unwrap()).unwrap(), p);
+    assert_eq!(assemble(&disassemble(&p).unwrap()).unwrap(), p);
+}
+
+/// The element of a byte array is a byte: a normal edge that lands it in an int register is refused (a
+/// loader that took the element type from anywhere but the receiver would accept the raw byte as an int),
+/// and a receiver that is neither a plain array nor a byte array stays outside `array.get`.
+#[test]
+fn byte_array_get_rejects_a_non_byte_result_and_other_receivers() {
+    let mut p = bytes_fixture();
+    p.functions[0].registers[3] = Type::Int;
+    p.functions[0].results = vec![Type::Int];
+    let error = verify_load(&p, &NoExternalContracts).unwrap_err();
+    assert!(error.message.contains("edge assignment type mismatch"), "{error}");
+    let mut p = bytes_fixture();
+    p.functions[0].registers[1] = Type::Str;
+    p.functions[0].code[1] = Instruction::Data { op: DataOp::Const, inputs: vec![], output: Some(1),
+        immediate: Immediate::Constant(Constant::Str("ab".into())) };
+    assert_eq!(verify_load(&p, &NoExternalContracts).unwrap_err().rule, "ARRAY_GET_OPERANDS");
+}

@@ -509,3 +509,37 @@ fn oir2_own_deps_only_field_needs_no_action_scope() {
     assert!(!body.insts.iter().any(|(_, inst)| matches!(inst.op,
         ir::Operation::Ownership(ir::OwnershipOp::Stage { .. }))));
 }
+
+/// #703 (L09.uuid.values, L10.stdin.lines): a role value with plain implementers carries deps but no
+/// obligation, yet own partitions it with a checked scope.split when it is offered to an owning call. The
+/// function that does so declares the program failure the split can raise, as for an Atomic (#671); SPB 17
+/// refuses a body failure outside the declared mask (ENTRY_FAILURE_MASK).
+#[test]
+fn oir2_own_partitioned_role_value_declares_the_split_failure() {
+    let source = concat!("module app; role Named { name() is string; } ",
+        "object A does Named { A(); name() is string { \"a\"; } same(other is Named) is bool { ",
+        "self.name() == other.name(); } } ",
+        "object B does Named { B(); name() is string { \"b\"; } } ",
+        "main() is int { if A().same(B()) { 1; } else { 0; } }");
+    let (module, _) = own_stage(source, None, ir::verify::VerifyMode::Structural).unwrap();
+    let (_, same) = module.functions.iter().find(|(_, function)| function.symbol.starts_with("app.A.same"))
+        .unwrap();
+    let body = same.body.as_ref().unwrap();
+    let splits = body.blocks.iter().any(|(_, block)| matches!(&block.term.kind, ir::TermKind::InvokeOwn { op, .. }
+        if matches!(op.as_ref(), ir::Operation::Ownership(ir::OwnershipOp::ScopeSplit { .. }))));
+    assert!(splits, "own partitions the role argument");
+    let summary = module.summaries.get(same.summary.unwrap()).unwrap();
+    assert!(summary.contract.failures.contains(&ir::FailureKind::Program), "{summary:?}");
+    // An object holding such a role value (io/stdin's Utf8Input) is partitioned the same way.
+    let source = concat!("module app; role Named { name() is string; } ",
+        "object B does Named { B(); name() is string { \"b\"; } } ",
+        "object Holder { has inner is Named; Holder(inner is Named) { self.inner = inner; } ",
+        "name() is string { inner.name(); } } ",
+        "object User { User(); greet(holder is Holder) is string { holder.name(); } } ",
+        "main() is int { User().greet(Holder(B())).length(); }");
+    let (module, _) = own_stage(source, None, ir::verify::VerifyMode::Structural).unwrap();
+    let (_, greet) = module.functions.iter().find(|(_, function)| function.symbol.starts_with("app.User.greet"))
+        .unwrap();
+    let summary = module.summaries.get(greet.summary.unwrap()).unwrap();
+    assert!(summary.contract.failures.contains(&ir::FailureKind::Program), "{summary:?}");
+}

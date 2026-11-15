@@ -186,10 +186,17 @@ impl Universe {
             let binds = matches!(op, Operation::Lexical(LexicalOp::Bind { .. } | LexicalOp::Rebind { .. }));
             if module.profile == Profile::High && (partitions_inputs || binds || matches!(op,
                 Operation::Lexical(LexicalOp::Stage { .. }) | Operation::Exit(ExitOp::Prepare { .. })))
-                // A builtin capability (Atomic) holds no obligation, yet elaboration partitions it.
+                // A builtin capability (Atomic) holds no obligation, yet elaboration partitions it. So does a
+                // deps-carrying reference offered to an owning call or bound (the driver's `managed`), such as
+                // a role value with plain implementers or an object holding one: its checked scope.split can
+                // fail (#703). An offered `fn` value is left out: own elides the offer of a closure without
+                // deps (`may_offer`), which this prediction cannot see.
                 && cfg::operation_uses(op, body).is_ok_and(|uses| uses.iter().any(|operand| {
                     body.values.get(operand.value).is_ok_and(|value| {
-                        (types[&value.ty].may_own() || types[&value.ty].capabilities)
+                        let callable = matches!(module.types.get(value.ty), Ok(Type::Fn(_)));
+                        let reference = types[&value.ty].capabilities
+                            || !callable && types[&value.ty].references && (partitions_inputs || binds);
+                        (types[&value.ty].may_own() || reference)
                             && !(binds && futures::is_future(module, value.ty))
                     })
                 })) {
