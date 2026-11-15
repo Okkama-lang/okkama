@@ -551,7 +551,7 @@ pub extern "C" fn rt_machine_value_eq(ctx: *mut Ctx, descriptor: Word, left: Wor
     }
 }
 
-fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, right: Word, ty: s::Type)
+pub(crate) fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, right: Word, ty: s::Type)
     -> Result<bool, String>
 {
     let mut pending = vec![(left, right, ty)];

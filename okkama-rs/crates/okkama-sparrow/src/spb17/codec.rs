@@ -320,8 +320,10 @@ macro_rules! record {
 }
 
 record! { Program {
-    module, version, objects, tables, functions, entry,
+    module, version, objects, tables, functions, entry; tests,
 } }
+
+record! { Test { name, function } }
 
 record! { ObjectRuntimeLayout {
     storage_fields, allocation_words, identity_offset, has_destroy,
@@ -543,6 +545,7 @@ fn opcode_name(code: u8) -> Option<&'static str> {
         147 => Some("raise"),
         136 => Some("fail.secondary"),
         137 => Some("fail.caused"),
+        150 => Some("test.check"),
         255 => Some("champ"),
         _ => None,
     }
@@ -621,11 +624,15 @@ impl DataOp {
             Self::EnumCase => (94, None),
             Self::FailSecondary => (136, None),
             Self::FailCaused => (137, None),
+            Self::TestOk => (150, Some(0)),
+            Self::TestIs => (150, Some(1)),
+            Self::TestIsnt => (150, Some(2)),
+            Self::TestFail => (150, Some(3)),
         }
     }
 
     fn read(code: u8, r: &mut Reader<'_>) -> Result<Self, Error> {
-        let sub = if matches!(code, 24 | 41 | 71 | 85 | 47..=50 | 52 | 53) { Some(r.number()?) } else { None };
+        let sub = if matches!(code, 24 | 41 | 71 | 85 | 47..=50 | 52 | 53 | 150) { Some(r.number()?) } else { None };
         match (code, sub) {
             (1, None) => Ok(Self::Const),
             (2, None) => Ok(Self::Move),
@@ -697,6 +704,10 @@ impl DataOp {
             (94, None) => Ok(Self::EnumCase),
             (136, None) => Ok(Self::FailSecondary),
             (137, None) => Ok(Self::FailCaused),
+            (150, Some(0)) => Ok(Self::TestOk),
+            (150, Some(1)) => Ok(Self::TestIs),
+            (150, Some(2)) => Ok(Self::TestIsnt),
+            (150, Some(3)) => Ok(Self::TestFail),
             _ => Err(r.fail(format!("unknown scalar opcode {code}/{sub:?}"))),
         }
     }

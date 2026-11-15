@@ -215,6 +215,22 @@ pub(super) fn contract(module: &ir::Module, name: &str, native: bool, signature:
             }).ok_or_else(|| error("missing builtin Error"))?;
             (vec![role], vec![string()?])
         }
+        (false, name) if name.starts_with("okkama.test.") => {
+            // Test intrinsics observe plain operands; outside a running case they fail (Program).
+            // `skip` always fails: its program failure is the skip marker, never a thrown value.
+            kind = ir::EntryKind::ObservationAdmissionStaysCaller;
+            failures.push(ir::FailureKind::Program);
+            let float = || find(ir::Type::Float).ok_or_else(|| error("missing float"));
+            let bytes = || bytes.ok_or_else(|| error("missing @byte"));
+            let params = match name.strip_prefix("okkama.test.") {
+                Some("skip") => vec![string()?],
+                Some("close") => vec![float()?, float()?, float()?],
+                Some("text") => vec![string()?, string()?],
+                Some("bytes") => vec![bytes()?, bytes()?],
+                _ => return Err(error(format!("unknown test intrinsic {name}"))),
+            };
+            (params, vec![])
+        }
         (false, name) => {
             let (operation, suffix) = name.strip_prefix("okkama.atomic.Atomic.")
                 .and_then(|name| name.split_once('$')).ok_or_else(|| error(format!("unknown intrinsic {name}")))?;

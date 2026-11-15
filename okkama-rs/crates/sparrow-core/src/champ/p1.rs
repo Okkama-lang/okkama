@@ -37,6 +37,8 @@ pub(super) fn invoke(ctx: *mut Ctx, function: usize, io: *mut CallOwn, args: &[W
             unsafe { (*ctx).failure = failure };
         }
         value
+    } else if let Some(check) = name.strip_prefix(s::TEST_INTRINSIC_PREFIX) {
+        super::testing::intrinsic(ctx, check, args)
     } else if name == "okkama.Error.text" {
         let text = error_text(runtime, &source, args[0]);
         runtime.heap.allocate_text(&text)

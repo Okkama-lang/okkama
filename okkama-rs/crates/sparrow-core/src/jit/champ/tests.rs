@@ -867,7 +867,9 @@ fn p1_runtime() -> Box<Runtime> {
         });
     }
     let contracts = s::p1::P1Contracts::new(&program.objects).unwrap();
-    program.functions = contracts.entries().to_vec();
+    // Test intrinsics belong to a test profile (`check_tests`); these programs have no tests table.
+    program.functions = contracts.entries().iter().filter(|entry| !entry.symbol.starts_with(s::TEST_INTRINSIC_PREFIX))
+        .cloned().collect();
     let mut runtime = Runtime::new_champ(program, vec![]).unwrap();
     runtime.heap.set_stress(true);
     runtime

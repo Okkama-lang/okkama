@@ -59,7 +59,20 @@ pub struct Program {
     pub tables: ChampTables,
     pub functions: Vec<Function>,
     pub entry: Option<u32>,
+    /// The test profile (§14): the tests in run order. `Some([])` is an empty suite, which the runner
+    /// rejects; `None` is a production program. Test operations and test intrinsics need `Some`.
+    pub tests: Option<Vec<Test>>,
 }
+
+/// One test of the test profile: a `() -> void` observation entry run on a fresh runtime.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Test {
+    pub name: String,
+    pub function: u32,
+}
+
+/// The test intrinsics (`okkama.test.*` external entries) and test operations need a tests table.
+pub const TEST_INTRINSIC_PREFIX: &str = "okkama.test.";
 
 /// Immutable final descriptor supplied by the runtime layout registry (§2.7).
 /// Physical storage includes hidden construction/$once slots, never the tail.
@@ -412,6 +425,13 @@ pub enum DataOp {
     ArrayLen,
     FailSecondary,
     FailCaused,
+    /// Test assertions (`test.ok`, `test.is`, `test.isnt`, `test.fail`) of the test profile. Each
+    /// records a failed check in the running case and continues; the bool result says whether the
+    /// check held. Outside a running case each fails with a program failure.
+    TestOk,
+    TestIs,
+    TestIsnt,
+    TestFail,
 }
 
 impl DataOp {
@@ -422,6 +442,7 @@ impl DataOp {
     pub fn fallible(self, operands: &[Type], result: Option<Type>) -> bool {
         match self {
             Self::IntMod | Self::RangeNew | Self::RatNew | Self::ValEq | Self::ValNe | Self::VariantGet => true,
+            Self::TestOk | Self::TestIs | Self::TestIsnt | Self::TestFail => true,
             Self::Convert => matches!((operands, result), ([from], Some(to)) if conversion(*from, to) == Some(true)),
             _ => false,
         }
@@ -640,3 +661,5 @@ mod load_tests;
 mod arrays_tests;
 #[cfg(test)]
 mod scalars_tests;
+#[cfg(test)]
+mod testmode_tests;

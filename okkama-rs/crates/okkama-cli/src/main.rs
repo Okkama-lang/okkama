@@ -86,21 +86,45 @@ fn exec_input(args: &[String]) -> Option<&String> {
     args.first()
 }
 
+/// The program in SPB 17 through OIR-2; with `tests`, the test profile with its tests table (§14).
 #[cfg(feature = "champ-abi")]
 fn compile_oir2(sources: &[SourceFile], tests: bool, verify_ownership: bool) -> Result<Vec<u8>, Outcome> {
-    if tests {
-        return Err(Outcome::failure(
-            "okkama: unsupported in OIR-2 lowering: test profile\n".into(), EXIT_OIR2_UNSUPPORTED,
-        ));
-    }
-    let programs = parse_all(sources, false)?;
+    let programs = parse_all(sources, tests)?;
     let roots = root_files(sources, &programs);
     let environment = std::env::var_os("OKKAMA_VERIFY_OWNERSHIP");
     let mode = ownership_verification_mode(verify_ownership, environment.as_deref());
-    lowering::oir2::compile_linked_with(&roots, &mut loader(false), mode).map_err(|error| {
+    let compiled = if tests {
+        lowering::oir2::compile_linked_tests_with(&roots, &mut loader(true), mode)
+    } else {
+        lowering::oir2::compile_linked_with(&roots, &mut loader(false), mode)
+    };
+    compiled.map_err(|error| {
         let code = if error.is_unsupported() { EXIT_OIR2_UNSUPPORTED } else { EXIT_DIAGNOSTICS };
         Outcome::failure(format!("okkama: {error}\n"), code)
     })
+}
+
+/// `--filter` (#277) on an SPB 17 test profile: the tests whose names contain one of the texts.
+#[cfg(feature = "champ-abi")]
+fn filter_oir2_tests(bytes: Vec<u8>, filters: &[String]) -> Result<Vec<u8>, Outcome> {
+    if filters.is_empty() {
+        return Ok(bytes);
+    }
+    let failure = |error: okkama_sparrow::spb17::Error| {
+        Outcome::failure(format!("okkama: {error}\n"), EXIT_DIAGNOSTICS)
+    };
+    let mut program = okkama_sparrow::spb17::decode(&bytes).map_err(failure)?;
+    if let Some(tests) = program.tests.as_mut() {
+        tests.retain(|test| filters.iter().any(|text| test.name.contains(text.as_str())));
+        if tests.is_empty() {
+            let texts: Vec<String> = filters.iter().map(|text| format!("{text:?}")).collect();
+            return Err(Outcome::failure(
+                format!("okkama: no test name contains {}\n", texts.join(" or ")),
+                EXIT_DIAGNOSTICS,
+            ));
+        }
+    }
+    okkama_sparrow::spb17::encode(&program).map_err(failure)
 }
 
 #[cfg(feature = "champ-abi")]
@@ -1623,6 +1647,12 @@ fn run_command(args: &[String]) -> Outcome {
             Ok(bytes) => bytes,
             Err(outcome) => return outcome,
         };
+        if tests {
+            return match filter_oir2_tests(bytes, &filters) {
+                Ok(bytes) => core_tests(bytes),
+                Err(outcome) => outcome,
+            };
+        }
         let arguments = program_args.iter().map(|argument| argument.clone().into_bytes()).collect();
         if let Some(flag) = &limits.interrupt {
             watchdog(flag.clone());

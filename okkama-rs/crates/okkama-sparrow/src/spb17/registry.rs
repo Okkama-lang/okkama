@@ -424,6 +424,7 @@ helper_registry! {
         "champ_machine_rat_order" => &[C, W, W], 0, None;
         "champ_machine_value_eq" => &[C, W, W, W], G, None;
         "champ_machine_variant_get" => &[C, W, W, W], G, None;
+        "champ_machine_test" => &[C, W, W, W, W, W], G, None;
         "champ_machine_catch" => &[C, W, W], 0, None;
         "champ_machine_plain_packet" => &[C, P], HELPER_STOPS, None;
         "champ_machine_text_order" => &[C, W, W], 0, None;
