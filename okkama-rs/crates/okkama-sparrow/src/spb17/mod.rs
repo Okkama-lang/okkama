@@ -301,6 +301,13 @@ impl ArrayType {
     }
 }
 
+/// Whether a scope.transfer's arguments carry the admission filter (`TRANSFER_ADMISSION`): it moves only the
+/// selected identities its source admitted, and leaves bound, staged and outside identities where they are.
+pub fn transfer_admissible(arguments: &[Argument]) -> bool {
+    matches!(arguments.last(), Some(Argument::Flag(true)))
+        && arguments.iter().any(|argument| matches!(argument, Argument::Selection(_)))
+}
+
 /// A retag of a collection whose leaves cannot exist (an uninferred `[]` or `[:]`) to a collection of the same
 /// shape: no element is reinterpreted. Byte arrays have their own representation and are excluded. A map
 /// without keys has no values either, but its value type is kept unless it is `never` too: a value word is

@@ -566,3 +566,64 @@ fn no_edge_may_enter_the_entry_block() {
     ];
     reject(&small(f), &NoExternalContracts, "ENTRY_BLOCK_TARGET");
 }
+
+/// An inner scope transfers the int it selects to its outer scope: `scope.transfer` with `filter` after the
+/// selection.
+fn transfer(filter: Vec<Argument>) -> Program {
+    use Location::{Register as R, Service as S};
+    let mut f = empty_function();
+    f.registers = vec![Type::Int, Type::Failure];
+    f.services = vec![ServiceKind::ScopeState; 6];
+    let produced = |destination, slot| Assignment { destination, source: Source::ProducedSlot(slot) };
+    let mut arguments = vec![Argument::Flag(true), Argument::Location(S(1)), Argument::Location(S(0)),
+        Argument::Selection(0)];
+    arguments.extend(filter);
+    f.code = vec![
+        Instruction::Champ { op: Opcode::ScopeBegin, arguments: vec![Argument::Scope(0), Argument::Boundary(0)],
+            flow: Flow::Next(vec![S(0)]) },
+        Instruction::Champ { op: Opcode::ScopeBegin, arguments: vec![Argument::Scope(1), Argument::Boundary(1)],
+            flow: Flow::Next(vec![S(1)]) },
+        Instruction::Data { op: DataOp::Const, inputs: vec![], output: Some(0),
+            immediate: Immediate::Constant(Constant::Int("1".into())) },
+        Instruction::Champ { op: Opcode::ScopeTransfer, arguments, flow: Flow::Outcomes(vec![
+            Outcome { tag: Tag::Normal, edge: Edge { target_pc: 4,
+                assignments: vec![produced(S(2), 0), produced(S(3), 1)] } },
+            Outcome { tag: Tag::Unwind, edge: Edge { target_pc: 5,
+                assignments: vec![produced(S(4), 0), produced(S(5), 1), produced(R(1), 2)] } },
+        ]) },
+        Instruction::Ret(vec![]),
+        Instruction::Raise(1),
+    ];
+    f.blocks = vec![
+        Block { pc: 0, params: vec![] },
+        Block { pc: 4, params: vec![S(2), S(3)] },
+        Block { pc: 5, params: vec![S(4), S(5), R(1)] },
+    ];
+    f.proofs.selections = vec![Selection { locations: vec![R(0)] }];
+    let tables = ChampTables {
+        scopes: vec![
+            Scope { function: 0, parent: None, boundary: 0 },
+            Scope { function: 0, parent: Some(0), boundary: 1 },
+        ],
+        boundaries: vec![Boundary { scope: 0 }, Boundary { scope: 1 }],
+        ..ChampTables::default()
+    };
+    Program { functions: vec![f], tables, ..Program::default() }
+}
+
+/// The admission filter of a transfer is one `true` flag right after its selection (#697): an admissible
+/// transfer moves only what its source admitted, a plain one every selected identity.
+#[test]
+fn a_transfer_admission_filter_is_one_true_flag_after_its_selection() {
+    verify(&transfer(vec![])).unwrap();
+    let admissible = transfer(vec![Argument::Flag(true)]);
+    verify(&admissible).unwrap();
+    let Instruction::Champ { arguments, .. } = &admissible.functions[0].code[3] else { unreachable!() };
+    assert!(transfer_admissible(arguments));
+    let Instruction::Champ { arguments, .. } = &transfer(vec![]).functions[0].code[3] else { unreachable!() };
+    assert!(!transfer_admissible(arguments));
+    for filter in [vec![Argument::Flag(false)], vec![Argument::Flag(true), Argument::Flag(true)]] {
+        let failure = verify(&transfer(filter.clone())).unwrap_err();
+        assert_eq!(failure.rule, "TRANSFER_ADMISSION", "{filter:?}: {failure}");
+    }
+}

@@ -876,7 +876,11 @@ impl Emit<'_, '_> {
                 args.push(self.pointer(locations[1]));
             }
             O::ScopeTransfer => {
-                helper = "champ_scope_transfer";
+                helper = if s::transfer_admissible(arguments) {
+                    "champ_scope_transfer_admissible"
+                } else {
+                    "champ_scope_transfer"
+                };
                 let between = arguments.first() == Some(&A::Flag(true));
                 let from = self.pointer(locations[0]);
                 let to = if between { self.pointer(locations[1]) } else { from };
