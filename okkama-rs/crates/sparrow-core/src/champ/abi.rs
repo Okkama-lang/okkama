@@ -81,6 +81,8 @@ pub const RECORD_LAYOUTS: &[RecordLayout] = &[
     record!(FutureNewIn; []; []),
     record!(FutureNewPost; [future, cache, state]; []),
     record!(AwaitPost; [task]; [value]),
+    record!(AwaitTakePost; [packet, task]; [value]),
+    record!(RehomePost; [pending, state]; []),
     record!(AwaitUnwindPost; [state, failure]; []),
     record!(PublishIn; [failure]; [value]),
     record!(FlagPost; []; []),
@@ -134,6 +136,11 @@ impl HelperAbi {
             (O::ExitCommit, Tag::Normal) => {
                 if count == 1 { vec![8] } else { vec![0, 8] }
             }
+            // AwaitTakePost: the value and the packet, or the failure, the task and the receipt.
+            (O::AwaitTake, Tag::Normal) => {
+                if count == 1 { vec![8] } else { vec![0, 8] }
+            }
+            (O::AwaitTake, Tag::Unwind) => vec![0, 16, 24],
             _ => (0..count).map(|index| index * 8).collect(),
         };
         let mut offsets = offsets.into_iter();
@@ -188,6 +195,8 @@ pub fn helper_abi(name: &str) -> Option<HelperAbi> {
         "champ_destroy_finish" | "champ_failure_capture" => ("", None),
         "champ_future_new" => ("FutureNewPost", Some(O::FutureNew)),
         "champ_await_view" => ("AwaitPost", Some(O::Await)),
+        "champ_await_take" => ("AwaitTakePost", Some(O::AwaitTake)),
+        "champ_cache_rehome" => ("RehomePost", Some(O::CacheRehome)),
         "champ_await_unwind" => ("AwaitUnwindPost", Some(O::AwaitUnwind)),
         "champ_future_publish" => ("", Some(O::FuturePublish)),
         "champ_future_cancel" => ("", Some(O::FutureCancel)),

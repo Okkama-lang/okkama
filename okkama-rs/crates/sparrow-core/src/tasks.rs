@@ -574,6 +574,13 @@ impl Runtime {
         }
     }
 
+    /// Whether `waiter` is among the frames woken when `future` settles.
+    pub(crate) fn champ_listens(&self, future: Word, waiter: Word) -> bool {
+        let current = get(future, WAITER);
+        current == waiter || (current != UNBOUND && heap::kind(self.heap.header_of(current)) == heap::PAYLOAD
+            && self.heap.payload::<Waiters>(current).is_some_and(|list| list.0.contains(&waiter)))
+    }
+
     pub(crate) fn champ_deliverable_cancel(&mut self) -> Option<Word> {
         self.deliverable_cancel()
     }

@@ -1031,14 +1031,16 @@ impl Emit<'_, '_> {
             O::CleanupSettle if locations.len() > 1 => {
                 return self.future_operation(op, arguments, &locations, flow);
             }
-            // The temporary take, its proof and the rehome (#601 R4) have no helpers before the runtime of #601 R5.
+            // An async defer entry (C-6) has its SPB 17 form (#601 R4) and runtime helper (#601 R5); its JIT call
+            // arrives with the dynamic-settle slice.
             O::InvokeDefer if arguments.iter().filter_map(entry).any(|target| {
                 matches!(self.program.functions[target as usize].entry_abi, s::EntryAbi::AsyncDefer { .. })
             }) => {
-                return Err(Error("Champ invoke.defer of an async defer entry runs with #601 R5".into()));
+                return Err(Error("Champ invoke.defer of an async defer entry is not supported yet (#601)".into()));
             }
+            // The temporary take, its proof and the rehome (#601 R4, R5).
             O::AwaitTake | O::UniqueCacheProof | O::CacheRehome => {
-                return Err(Error(format!("Champ {} runs with the async resources runtime (#601 R5)", op.name())));
+                return self.future_operation(op, arguments, &locations, flow);
             }
             O::CleanupSettle => {
                 helper = "champ_cleanup_settle_empty";

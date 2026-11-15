@@ -14,7 +14,7 @@ pub use machine::{ExternalEntry, PlainEntry};
 mod helpers;
 pub(crate) mod testing;
 pub mod cleanup;
-pub use cleanup::{rt_cleanup_deliver_cancel, rt_exit_abort, rt_service_settle};
+pub use cleanup::{rt_cleanup_deliver_cancel, rt_cleanup_settle_dynamic, rt_exit_abort, rt_service_settle};
 mod futures;
 pub use futures::*;
 pub use records::*;

@@ -441,6 +441,21 @@ helpers! {
         future: Word,
         post: *mut crate::champ::AwaitPost) -> u64; [Allocates, Collects, Reenters, Fails, Stops, Suspends];
     #[cfg(feature = "champ-abi")]
+    champ_await_take = crate::champ::rt_await_take as (ctx,
+        this: Word,
+        future: Word,
+        boundary: u64,
+        post: *mut crate::champ::AwaitTakePost) -> u64; [Allocates, Collects, Reenters, Fails, Stops, Suspends];
+    #[cfg(feature = "champ-abi")]
+    champ_cache_rehome = crate::champ::rt_cache_rehome as (ctx,
+        pending: *mut crate::champ::PendingSlot,
+        state: *mut crate::champ::ScopeSlot,
+        cache: *mut crate::champ::CacheSlot,
+        task: *mut crate::champ::TaskSlot,
+        future: Word,
+        target: u64,
+        post: *mut crate::champ::RehomePost) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
     champ_await_unwind = crate::champ::rt_await_unwind as (ctx,
         this: Word,
         state: *mut crate::champ::ScopeSlot,

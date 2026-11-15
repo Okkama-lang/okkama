@@ -126,8 +126,9 @@ fn champ_s2_registry_layouts_effects_and_single_outcome_channel() {
     // #622 adds champ_machine_collection, champ_machine_builder and champ_machine_lookup; #675 adds
     // champ_machine_scalar; #676 adds champ_machine_role_narrow and champ_own_dynamic; #601 V8 adds the eight
     // async helpers of Champ draft 3 §14.4 and champ_machine_future_destination; #697 adds
-    // champ_scope_transfer_admissible; #601 V9 adds champ_body_reject.
-    assert_eq!(helpers.len(), 73);
+    // champ_scope_transfer_admissible; #601 V9 adds champ_body_reject; #601 R5 adds champ_await_take and
+    // champ_cache_rehome.
+    assert_eq!(helpers.len(), 75);
     for &(name, effects) in helpers {
         let abi = helper_abi(name).unwrap();
         let class = abi.class;
@@ -169,6 +170,18 @@ fn champ_s2_registry_layouts_effects_and_single_outcome_channel() {
         vec![Some(0), Some(8), None]);
     assert_eq!(split.post_offsets(okkama_sparrow::spb17::Tag::Unwind, &context).unwrap(),
         vec![Some(0), Some(16)]);
+    // AwaitTakePost (draft 3 §14.4): the value and the packet, or the failure, the task and the receipt.
+    let take = helper_abi("champ_await_take").unwrap();
+    let valued = okkama_sparrow::spb17::ResultContext {
+        value: Some(okkama_sparrow::spb17::Type::Int), ..okkama_sparrow::spb17::ResultContext::default()
+    };
+    assert_eq!(take.post_offsets(okkama_sparrow::spb17::Tag::Normal, &valued).unwrap(),
+        vec![Some(0), Some(8), None]);
+    assert_eq!(take.post_offsets(okkama_sparrow::spb17::Tag::Normal, &context).unwrap(), vec![Some(8), None]);
+    assert_eq!(take.post_offsets(okkama_sparrow::spb17::Tag::Unwind, &context).unwrap(),
+        vec![Some(0), Some(16), Some(24)]);
+    let rehome = helper_abi("champ_cache_rehome").unwrap();
+    assert_eq!(rehome.post_offsets(okkama_sparrow::spb17::Tag::Normal, &context).unwrap(), vec![Some(0)]);
     // Runtime construction imports every helper with its checked CLIF signature.
     let _ = Harness::new();
 }
