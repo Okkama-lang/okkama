@@ -1,0 +1,184 @@
+oir 2 own
+// R2 (P2.5 plan, async ABI C-6): async action f() { let r = R(); defer await closer(); risky(); }
+// risky() throws; the defer runs the async defer entry closer, which awaits a task, on both exits of f. Hand-
+// written Own input in the form own produces for sync defers (own's async defer helpers arrive with R1/K1).
+module defer_await_body_failure
+object R {
+    destroy @destroy
+}
+enum Stop is Error = (now)
+protocol Services kind services holders [scope, cache, frame, receipt, root] rules [protocol_rule(transition=settle,
+    from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
+    protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root,
+    checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running))]
+scope S0 action in @destroy
+scope S1 action in @make
+scope S2 action in @task
+scope S3 action in @closer
+scope S4 action in @f
+scope S5 action in @risky
+summary Md observation parameters [parameter_effect(convention=borrow, destination=none)] contract
+    call_contract(publication=atomic)
+summary Mmk call-boundary results [result_relation(fresh=[0], provenance=unbound_result)] contract
+    call_contract(results=[R], failures=[program], publication=atomic)
+summary MtC call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[future<void>], publication=atomic)
+summary MtB call-boundary contract call_contract(failures=[cancelled], suspends=true, publication=atomic)
+summary Mcl call-boundary contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+summary Mr observation contract call_contract(failures=[thrown], publication=atomic)
+summary MfC call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[future<void>], publication=atomic)
+summary MfB call-boundary contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+func @destroy(%0: R facts(managed(deps=d1))) -> void [destroy R] abi observation summary(Md) {
+    dependency d0: dependency = from_ssa(%3)
+    dependency d1: dependency = retention(value=%0, selection=selection(%0))
+    ^b0 in S0:
+    %1: deps = deps.of %0
+    br ^b1(%0, %1)
+    ^b1(%2: R facts(managed(deps=d0)), %3: deps) in S0:
+    ret
+}
+func @make(%0: own) -> (R, own) [ctor R] abi explicit(input_packet=0, output_packet=1) summary(Mmk) {
+    boundary B0 lexical in S1
+    boundary B1 lexical in S1
+    key k0: key = created(site=7, instance=%5)
+    dependency d0: dependency = key(k0)
+    dependency d1: dependency = union([d0])
+    dependency d2: dependency = from_ssa(%21)
+    dependency d3: dependency = from_ssa(%21)
+    ^b0 in S1:
+    %1: scope<S1> = scope.begin S1
+    %2: scope<S1> = own.accept %1, %0
+    br ^b1(%2)
+    ^b1(%3: scope<S1>) in S1:
+    %4: own = own.empty
+    invoke.own obj.new R {; %4 }
+        normal ^b2($value, $packet, %3)
+        unwind ^b3($packet, $failure, %3)
+    ^b2(%5: R facts(managed(deps=d1)), %6: own, %7: scope<S1>) in S1:
+    %8: deps = deps.of %5
+    %9: scope<S1> = own.admit %7, %6
+    %10: own = own.empty
+    %11: pending = exit.prepare return %5, %10, deps(%8) at B1
+    invoke.own scope.split %9, selection(%5)
+        normal ^b4($state, $selected, $external_deps, %5, %8, %11)
+        unwind ^b5($state, $failure, %11)
+    ^b3(%12: own, %13: failure, %14: scope<S1>) in S1:
+    %15: scope<S1> = own.admit %14, %12
+    %16: failure = scope.unwind %15, %13, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %16
+    ^b4(%17: scope<S1>, %18: own, %19: deps, %20: R facts(managed(deps=d2)), %21: deps, %22: pending) in S1:
+    %23: pending = exit.extend %22, %18
+    (%24: closed, %25: pending) = scope.end %17, reserve %23, effects scope_effects(failures=[], suspends=false,
+        cancel=false)
+    (%26: R facts(managed(deps=d3)), %27: own, %28: deps) = exit.commit %25, destination caller, result R
+    ret %26, %27
+    ^b5(%29: scope<S1>, %30: failure, %31: pending) in S1:
+    %32: failure = scope.unwind %29, %30, reserve %31, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %32
+}
+func @task(%0: own) -> own [async] abi explicit(input_packet=0,
+    output_packet=0) summary(MtB) async-creation(MtC) async-body(MtB) {
+    boundary B0 lexical in S2
+    selection s0: selection = union([])
+    ^b0 in S2:
+    %1: scope<S2> = scope.begin S2
+    %2: scope<S2> = own.accept %1, %0
+    %3: own = own.empty
+    %4: pending = exit.prepare return packet %3 select s0 at B0
+    invoke.own scope.end %2, reserve %4, effects scope_effects(failures=[], suspends=false, cancel=true)
+        normal ^b1($closed, $pending)
+        unwind ^b2($closed, $failure)
+    ^b1(%5: closed, %6: pending) in S2:
+    (%7: own, %8: deps) = exit.commit %6, destination caller
+    ret %7
+    ^b2(%9: closed, %10: failure) in S2:
+    raise %10
+}
+func @closer(%0: own) -> own [async, defer()] abi explicit(input_packet=0, output_packet=0) summary(Mcl) {
+    service.schedule Schedule0 owner S3, protocol Services, duties [%6]
+    key k0: key = service_of(value=%6, kind=cache)
+    dependency d0: dependency = key(k0)
+    ^b0 in S3:
+    %1: scope<S3> = scope.begin S3
+    %2: scope<S3> = own.accept %1, %0
+    %3: own = own.empty
+    %4: int = const 0
+    %5: deps = deps.of %4
+    (%6: future<void> facts(managed(deps=d0)), %7: scope<S3>) = fut.new %3, %5, %2, environment deferred(function=@task,
+        arguments=[]), owner S3
+    invoke.own await %6
+        normal ^b1($deps, %7)
+        unwind ^b2($failure, $task, $receipt, %7)
+    ^b1(%8: deps, %9: scope<S3>) in S3:
+    %10: closed = scope.end %9, effects scope_effects(failures=[], suspends=false, cancel=false)
+    ret defer continue
+    ^b2(%11: failure, %12: task-state, %13: receipt, %14: scope<S3>) in S3:
+    (%15: scope<S3>, %16: failure) = await.unwind %14, %11, %12, %13, protocol Services
+    %17: failure = scope.unwind %15, %16, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %17
+}
+func @risky() -> void abi observation summary(Mr) {
+    ^b0 in S5:
+    %0: Stop facts(plain(certificate=scalar)) = enum.case Stop, case 0
+    br ^b1(%0)
+    ^b1(%1: Stop facts(plain(certificate=scalar))) in S5 unwind ^b2:
+    throw %1
+    ^b2(%2: failure) in S5:
+    raise %2
+}
+func @f(%0: own) -> own [async] abi explicit(input_packet=0,
+    output_packet=0) summary(MfB) async-creation(MfC) async-body(MfB) {
+    boundary B0 lexical in S4
+    selection s0: selection = union([])
+    dependency d0: dependency = from_ssa(%6)
+    ^b0 in S4:
+    %1: scope<S4> = scope.begin S4
+    %2: scope<S4> = own.accept %1, %0
+    %3: own = own.empty
+    invoke.own call @make(; %3)
+        normal ^b1($value, $packet, $deps, %2)
+        unwind ^b2($failure, %2)
+    ^b1(%4: R facts(managed(deps=d0)), %5: own, %6: deps, %7: scope<S4>) in S4:
+    %8: scope<S4> = own.admit %7, %5
+    invoke.own call @risky()
+        normal ^b3(%8)
+        unwind ^b4($failure, %8)
+    ^b2(%9: failure, %10: scope<S4>) in S4:
+    %11: failure = scope.unwind %10, %9, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %11
+    ^b3(%12: scope<S4>) in S4:
+    %13: own = own.empty
+    invoke.defer @closer(; %13) summary(Mcl)
+        continue ^b5(%12)
+        unwind ^b6($failure, %12)
+    ^b4(%14: failure, %15: scope<S4>) in S4:
+    %16: own = own.empty
+    invoke.defer @closer(; %16) summary(Mcl)
+        continue ^b7(%14, %15)
+        unwind ^b8($failure, %14, %15)
+    ^b5(%17: scope<S4>) in S4:
+    %18: own = own.empty
+    %19: pending = exit.prepare return packet %18 select s0 at B0
+    invoke.own scope.end %17, reserve %19, effects scope_effects(failures=[], suspends=false, cancel=true)
+        normal ^b9($closed, $pending)
+        unwind ^b10($closed, $failure)
+    ^b6(%20: failure, %21: scope<S4>) in S4:
+    %22: failure = scope.unwind %21, %20, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %22
+    ^b7(%23: failure, %24: scope<S4>) in S4:
+    %25: failure = scope.unwind %24, %23, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %25
+    ^b8(%26: failure, %27: failure, %28: scope<S4>) in S4:
+    %29: failure = fail.secondary %27, %26
+    %30: failure = scope.unwind %28, %29, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %30
+    ^b9(%31: closed, %32: pending) in S4:
+    (%33: own, %34: deps) = exit.commit %32, destination caller
+    ret %33
+    ^b10(%35: closed, %36: failure) in S4:
+    raise %36
+}

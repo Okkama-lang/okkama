@@ -30,8 +30,9 @@ pub(super) fn async_cleanup_and_profiles(module: &Module, selected: Option<FuncI
                 operation(module, declaration, body, &inst.op, state);
             }
             state.at(L::Terminator { function, block: block_id }, block.term.loc);
+            // C-6: a D21 async defer entry leaves through fut.publish and ret; its success is the Continue.
             if declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. }))
-                && matches!(block.term.kind, TermKind::Ret { .. }) {
+                && body.frame_layout.is_none() && matches!(block.term.kind, TermKind::Ret { .. }) {
                 state.error(R::B101, "defer entry must return a checked Continue/Replace tag");
             }
             if let TermKind::InvokeOwn { op, .. } = &block.term.kind {

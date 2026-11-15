@@ -36,6 +36,14 @@ const GOLDENS: &[(&str, &str, &str)] = &[
     golden!("coro-nested-cold-await"),
     golden!("coro-schedule-duty-live-across-await"),
     variant!("coro-start-descriptors"),
+    // R2: a resource held across an await; a temporary take whose proof coro rechecks.
+    variant!("r2-resource-across-await"),
+    variant!("r2-take-proof-recheck"),
+    // R2, C-6: async defers whose entry awaits, after a body failure and across a pending exit.
+    variant!("r2-defer-await-body-failure"),
+    variant!("r2-defer-await-reserve"),
+    // R2: closes that suspend while the body owns a resource.
+    variant!("r2-resource-suspending-close"),
 ];
 
 /// Own → verify(own) → coro → verify(coro) (OIR-2 §12).
@@ -152,11 +160,14 @@ fn later_slices_keep_their_forms_unsupported() {
     let bad = "^b3(%13: failure, %14: task-state, %15: receipt, %16: scope<S1>) in S1";
     let source = edited(PLAIN, &format!("{bad}:"), &format!("{bad} unwind ^b5(%16):"));
     assert!(matches!(lower(&source), Err(CoroError::Unsupported { .. })));
-    // Async defer entries are slice D1 (C-6).
-    let mut module = parsed(PLAIN);
-    let work = module.functions.iter().find(|(_, function)| function.symbol == "work").unwrap().0;
-    module.functions.get_mut(work).unwrap().attrs.push(FunctionAttr::DeferEntry { replacements: Vec::new() });
-    assert!(matches!(lower_coro(module, &CoroOptions::default()), Err(CoroError::Unsupported { .. })));
+}
+
+#[test]
+fn an_async_defer_entry_never_replaces() {
+    // C-6 (R2): an async defer entry is lowered as an async body; a replacement inside it stays forbidden.
+    let source = include_str!("../../tests/fixtures/async/own/r2-defer-await-body-failure.oir");
+    let replacing = edited(source, "    ret defer continue\n", "    ret defer replace return\n");
+    assert!(matches!(lower(&replacing), Err(CoroError::InvalidInput { message, .. }) if message.contains("C-6")));
 }
 
 #[test]

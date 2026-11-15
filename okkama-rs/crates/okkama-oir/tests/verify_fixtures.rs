@@ -272,6 +272,45 @@ fn async_audit_695_negatives_and_their_positives() {
     }
 }
 
+/// R2: the traces of r2-defer-await-reserve, whose pending exit of r lives across an async defer. A R: the final
+/// close delivers a requested cancellation only after the plan that destroys a has drained. R A: the close after
+/// the failed defer begins with the failure and the resumed pending exit, so r is in its plan from the start.
+#[test]
+fn r2_traces_across_a_suspension_keep_their_order() {
+    use okkama_oir::*;
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/async/low/r2-defer-await-reserve.oir");
+    let source = fs::read_to_string(path).unwrap();
+    let module = text::parse(&source).unwrap();
+    fixture_result(&module, ErrorPolicy::All).unwrap();
+    let (function, data) = module.functions.iter().find(|(_, data)| data.symbol == "f").unwrap();
+    let body = data.body.as_ref().unwrap();
+    // R A: the failing close takes the reserve, resumed from the frame rather than the exit.prepare result.
+    let failing = body.insts.iter().find_map(|(_, inst)| match &inst.op {
+        Operation::Cleanup(CleanupOp::Begin { pending: Some(pending), failure: Some(_), .. }) => Some(*pending),
+        _ => None,
+    }).expect("the close after the failed defer begins with the failure and the reserve");
+    let prepared = |value: ValueId| matches!(body.values.get(value).unwrap().def, Definition::InstResult { inst, .. }
+        if matches!(body.insts.get(inst).unwrap().op, Operation::Exit(ExitOp::Prepare { .. })));
+    assert!(!prepared(failing), "the reserve crosses the async defer through the frame");
+    // A R: delivering before the final close's first plan would abort r before a is destroyed.
+    let text = &source[source.find("func @f(").unwrap()..];
+    let begin = text.lines().position(|line| line.contains("= cleanup.begin ") && line.contains(", pending ")
+        && !line.contains(", failure ")).unwrap();
+    let plan = text.lines().skip(begin).find(|line| line.contains("= cleanup.plan ")).unwrap();
+    let state = plan.split("cleanup.plan ").nth(1).unwrap().split(',').next().unwrap();
+    let early = format!("    %early: cleanup-state = cleanup.deliver_cancel {state}\n{}",
+        plan.replace(&format!("cleanup.plan {state},"), "cleanup.plan %early,"));
+    let mutated = text::parse(&source.replace(plan, &early)).unwrap();
+    let report = fixture_result(&mutated, ErrorPolicy::All).unwrap_err();
+    let body = mutated.functions.get(function).unwrap().body.as_ref().unwrap();
+    let (instruction, _) = body.insts.iter().find(|(_, inst)| matches!(inst.op,
+        Operation::Cleanup(CleanupOp::DeliverCancel { .. }))).unwrap();
+    let expected = EntityLocation::Instruction { function, instruction };
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::B105
+        && diagnostic.message.contains("after the plan has drained") && diagnostic.primary.entity == expected),
+        "{report:?}");
+}
+
 /// #696: the traces of the D21 M8 fixtures. The abort-after-prefix trace A R holds because a cancellation is
 /// delivered only after the plan that destroys A has drained; the explicit aborts (A R and R A) need a definite
 /// failure, because a cancellation in D21 is decided only at the selector after its delivery.
