@@ -1,0 +1,22 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "compare" take Comparing;
+
+main() is int {
+    let out = Stdout();
+    let text = "the cat and the hat and the bat";
+    // Count with reduce: each step returns the map with one entry set.
+    let empty is %string:int = [:];
+    let counts = text.split(" ").reduce(empty) -> seen, word {
+        seen + [word: (seen[word] else 0) + 1];
+    };
+    // Keys come back in sorted order, so the report is the same on every run.
+    for counts.keys() -> word {
+        out.writeln(word + " " + (counts[word] else 0).string());
+    }
+    // The most frequent words: filter the map, then order the keys.
+    let common = counts.filter() -> word, count { count > 1; };
+    out.writeln(common.keys().ordering().join(","));
+    0;
+}

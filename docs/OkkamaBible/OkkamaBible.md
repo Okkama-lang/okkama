@@ -91,7 +91,10 @@
   - [8.4 Ranges](#84-ranges)
   - [8.5 Building and changing collections](#85-building-and-changing-collections)
   - [8.6 Iterating user collections](#86-iterating-user-collections)
-  - [8.7 Limits](#87-limits)
+  - [8.7 Counts and positions: what happens at the edges](#87-counts-and-positions-what-happens-at-the-edges)
+  - [8.8 Sorting](#88-sorting)
+  - [8.9 A worked example: counting words](#89-a-worked-example-counting-words)
+  - [8.10 Limits](#810-limits)
 - [Chapter 9. Expressions and Control Flow](#chapter-9-expressions-and-control-flow)
   - [9.1 Blocks have values](#91-blocks-have-values)
   - [9.2 Names are bound once](#92-names-are-bound-once)
@@ -3365,7 +3368,136 @@ role Batching<T> {
 
 `for file.text() -> line { … }` asks for a batch, walks it as an array and asks again. `next`, `last` and `return` work as in any loop; `map`, `filter` and `reduce` accept such sources too. Batches amortize the cost of requesting items over several values. A source that does both roles is walked in batches.
 
-## 8.7 Limits
+## 8.7 Counts and positions: what happens at the edges
+
+Array actions take two kinds of number, and they behave differently at the
+edge of the array. A **count** says how many: asking for more than there is
+gives what there is. A **position** names an element: a position outside
+the array is a failure.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Show {
+    Show();
+    of(xs is @int) is string { "[" + xs.map() -> x { x.string(); }.join(",") + "]"; }
+}
+
+main() is int {
+    let out = Stdout();
+    let show = Show();
+    let xs = [10, 20, 30];
+    // take and drop are counts: asking for more than there is gives what there is.
+    out.writeln(show.of(xs.take(5)) + " " + show.of(xs.drop(9)));
+    // slice, item, replaced and removed_at are positions: a position outside the array fails.
+    out.writeln(show.of(xs.slice(1, 3)) + " " + show.of(xs.replaced(1, 99)) + " " + show.of(xs.removed_at(0)));
+    out.writeln((xs[7] else -1).string() + " " + show.of(xs.reversed()));
+    // `-` removes every element equal to one on the right.
+    out.writeln(show.of([1, 2, 2, 3] - [2]));
+    // A position outside the array is a runtime failure, not a thrown error: the program stops here.
+    out.writeln(show.of(xs.slice(1, 9)));
+    0;
+}
+```
+
+Output:
+
+```text
+[10,20,30] []
+[20,30] [10,99,30] [20,30]
+-1 [30,20,10]
+[1,3]
+exit 1
+```
+
+| Action | Argument | Beyond the end | Negative |
+|---|---|---|---|
+| `take(n)` | count | the whole array | fails |
+| `drop(n)` | count | `[]` | fails |
+| `slice(start, end)` | positions | fails | fails; so does `start > end` |
+| `item(i)`, `xs[i]` | position | fails; `xs[i] else v` gives `v` | fails; `xs[i] else v` gives `v` |
+| `replaced(i, v)`, `removed_at(i)` | position | fails | fails |
+| `first()`, `last()` | — | fail on an empty array | — |
+
+Such a failure is not a thrown error a caller can catch; it is a runtime
+failure that stops the program with its location, like a division by zero
+(Chapter 10). `try? xs.slice(1, 9)` does not turn it into `Maybe.none`. The
+asymmetry is deliberate. A count is a request — "at most three" — and
+answering it with fewer is the useful answer. A position is a claim — "the
+element at five exists" — and a false claim is a bug to surface, not a value
+to invent. When a position may legitimately be missing, the program says
+so with `else`.
+
+## 8.8 Sorting
+
+`ordering()` returns the array sorted in ascending order, and it is the only
+sort the language has. It orders elements through the standard role
+`Comparing<T>` from `compare`, so the program must import that role even to
+sort integers, and an object sorts when it performs `Comparing` (Chapter
+14). The sort is stable: elements that compare equal keep their original
+order, so sorting by one key after another composes. Strings sort by code
+point, as `order()` compares them (Chapter 6), which puts `"B"` before
+`"a"`.
+
+There is no descending variant and no sort by a key function. Descending
+order is `xs.ordering().reversed()`, and sorting by a key is an object that
+performs `Comparing` on that key — a small object with a name, in place of
+an anonymous comparator. This is the razor's trade again: one operation and
+one role instead of a family of sort methods.
+
+## 8.9 A worked example: counting words
+
+Maps, `reduce` and `ordering()` are enough for the classic exercise of
+counting words, without a mutable counter anywhere.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "compare" take Comparing;
+
+main() is int {
+    let out = Stdout();
+    let text = "the cat and the hat and the bat";
+    // Count with reduce: each step returns the map with one entry set.
+    let empty is %string:int = [:];
+    let counts = text.split(" ").reduce(empty) -> seen, word {
+        seen + [word: (seen[word] else 0) + 1];
+    };
+    // Keys come back in sorted order, so the report is the same on every run.
+    for counts.keys() -> word {
+        out.writeln(word + " " + (counts[word] else 0).string());
+    }
+    // The most frequent words: filter the map, then order the keys.
+    let common = counts.filter() -> word, count { count > 1; };
+    out.writeln(common.keys().ordering().join(","));
+    0;
+}
+```
+
+Output:
+
+```text
+and 2
+bat 1
+cat 1
+hat 1
+the 3
+and,the
+```
+
+The `reduce` threads a map through the words. Each step returns the map with
+one entry set: `seen + [word: n]` adds or replaces the entry, and the old
+map stays as it was. The empty map needs a declared type
+(`let empty is %string:int = [:];`), because `[:]` alone says nothing about
+its keys and values (Chapter 4). Iterating `counts.keys()` gives the words
+in sorted order, `and` before `the`, whatever order they arrived in, so the
+report is identical on every run and every machine. That determinism is a
+property of the map, not of the program.
+
+## 8.10 Limits
 
 - **What still copies.** The `map()` idiom and `a + b` of two large arrays cost the full result.
 - **A large map’s first update costs a copy.** Subsequent updates can be cheaper; do not assume every update has the same cost.
