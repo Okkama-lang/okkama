@@ -21,7 +21,7 @@ pub fn outgoing(inst: &Instruction) -> Vec<&Edge> {
     }
 }
 
-fn definitions(inst: &Instruction) -> Vec<Location> {
+pub(crate) fn definitions(inst: &Instruction) -> Vec<Location> {
     match inst {
         Instruction::Data { output, .. } => output.iter().copied().map(Location::Register).collect(),
         Instruction::Champ { flow: Flow::Next(results), .. } => results.clone(),
@@ -63,7 +63,7 @@ pub(crate) fn metadata_uses(f: &Function) -> Vec<Set> {
     sites
 }
 
-fn post_uses(f: &Function) -> Vec<Set> {
+pub(crate) fn post_uses(f: &Function) -> Vec<Set> {
     let mut sites = vec![Set::new(); f.code.len()];
     for root in &f.proofs.post_roots { sites[root.pc as usize].extend(&root.locations); }
     sites
@@ -83,7 +83,7 @@ pub(crate) fn close_dependencies(f: &Function, live: &mut Set) {
     }
 }
 
-fn terminal(inst: &Instruction) -> bool {
+pub(crate) fn terminal(inst: &Instruction) -> bool {
     !matches!(inst, Instruction::Data { .. } | Instruction::Champ { flow: Flow::Next(_), .. })
         || matches!(inst, Instruction::Champ { op: Opcode::RetOwn | Opcode::RetDefer, .. })
 }
@@ -267,11 +267,14 @@ pub fn allocate(f: &Function) -> Result<Allocation, Error> {
 /// Independent forward symbolic execution: no interference graph or allocator liveness is trusted.
 /// Joins intersect known contents; loops run to a fixed point. Copies execute sequentially and are
 /// compared against the original parallel edge, so stale, clobbered and wrong-outcome values fail.
+///
+/// A state holds, for every frame slot, the sorted locations whose value the slot is known to hold.
+/// The fixed point is the greatest one whatever the visiting order (every transfer is monotone and joins
+/// intersect), so the worklist visits in reverse postorder, each queued PC once (#701).
 pub fn check_allocation(f: &Function, allocation: &Allocation) -> Result<(), Error> {
     if allocation.roots != allocated_roots(f, allocation)? {
         return Err(error("allocation clobbered concrete roots"));
     }
-    type State = Vec<BTreeSet<Location>>;
     let slot = |location: Location| -> Result<usize, Error> {
         let index = *allocation.locations.get(&location).ok_or_else(|| error("allocation missing location"))?;
         if allocation.slots.get(index as usize) != Some(&location_type(f, location)?) {
@@ -284,14 +287,14 @@ pub fn check_allocation(f: &Function, allocation: &Allocation) -> Result<(), Err
     {
         slot(location)?;
     }
-    let empty = || vec![Set::new(); allocation.slots.len()];
+    let empty = || vec![Contents::new(); allocation.slots.len()];
     let mut entry = empty();
     for &param in &f.params {
         let index = slot(param)?;
         if !entry[index].is_empty() {
             return Err(error("allocation clobbers entry parameters"));
         }
-        entry[index].insert(param);
+        insert(&mut entry[index], param);
     }
     let mut incoming: Vec<Option<State>> = vec![None; f.code.len()];
     if incoming.is_empty() {
@@ -300,13 +303,14 @@ pub fn check_allocation(f: &Function, allocation: &Allocation) -> Result<(), Err
         }
         return Err(error("allocation requires code"));
     }
-    let size = |state: &State| state.len() + state.iter().map(Set::len).sum::<usize>();
     let mut stored = size(&entry);
     let mut visits = 0usize;
     incoming[0] = Some(entry);
     let metadata = metadata_uses(f);
     let post = post_uses(f);
-    let mut work = vec![0];
+    let order = reverse_postorder(f);
+    let mut work = Worklist::new(&order);
+    work.push(0);
     while let Some(pc) = work.pop() {
         let mut state = incoming[pc].as_ref().ok_or_else(|| error("allocation worklist state"))?.clone();
         visits = visits.saturating_add(size(&state));
@@ -323,18 +327,18 @@ pub fn check_allocation(f: &Function, allocation: &Allocation) -> Result<(), Err
         }
         close_dependencies(f, &mut used);
         for location in used {
-            if !state[slot(location)?].contains(&location) {
+            if !holds(&state[slot(location)?], location) {
                 return Err(error(format!("allocation clobbered {location:?} at pc {pc}")));
             }
         }
         for definition in definitions(&f.code[pc]) {
             for contents in &mut state {
-                contents.remove(&definition);
+                remove(contents, definition);
             }
-            state[slot(definition)?] = Set::from([definition]);
+            state[slot(definition)?] = vec![definition];
         }
         for &location in &post[pc] {
-            if !state[slot(location)?].contains(&location) {
+            if !holds(&state[slot(location)?], location) {
                 return Err(error(format!("allocation clobbered post root at pc {pc}")));
             }
         }
@@ -342,44 +346,7 @@ pub fn check_allocation(f: &Function, allocation: &Allocation) -> Result<(), Err
         for (ordinal, edge) in outgoing(&f.code[pc]).into_iter().enumerate() {
             visits = visits.saturating_add(size(&state));
             enforce(visits <= 50_000_000, "ALLOCATION_WORK", "allocation edge work budget exceeded")?;
-            let mut values = state.iter().map(|locations| locations.iter().copied()
-                .map(Source::Location).collect::<Vec<_>>()).collect::<Vec<_>>();
-            let copies = allocation.edges.get(&(pc as u32, ordinal as u32))
-                .ok_or_else(|| error("allocation missing edge copies"))?;
-            for copy in copies {
-                let value = match copy.source {
-                    CopySource::Slot(index) => values.get(index as usize).cloned()
-                        .ok_or_else(|| error("allocation invalid copy source"))?,
-                    CopySource::Produced(index) => vec![Source::ProducedSlot(index)],
-                };
-                let destination = values.get_mut(copy.destination as usize)
-                    .ok_or_else(|| error("allocation invalid copy destination"))?;
-                *destination = value;
-            }
-            // Check every destination against the pre-edge value; no assignment-order assumptions.
-            for assignment in &edge.assignments {
-                if !values[slot(assignment.destination)?].contains(&assignment.source) {
-                    return Err(error(format!("allocation clobbered parallel assignment at pc {pc}")));
-                }
-            }
-            let mut next = empty();
-            for (index, contents) in values.into_iter().enumerate() {
-                for source in contents {
-                    if let Source::Location(location) = source {
-                        next[index].insert(location);
-                    }
-                }
-            }
-            // SSA parameters are renamed simultaneously after checking all pre-edge sources.
-            for assignment in &edge.assignments {
-                for contents in &mut next {
-                    contents.remove(&assignment.destination);
-                }
-            }
-            for assignment in &edge.assignments {
-                next[slot(assignment.destination)?].insert(assignment.destination);
-            }
-            successors.push((edge.target_pc as usize, next));
+            successors.push((edge.target_pc as usize, follow_edge(&state, allocation, pc, ordinal, edge, &slot)?));
         }
         if !terminal(&f.code[pc]) && pc + 1 < f.code.len() {
             successors.push((pc + 1, state));
@@ -388,10 +355,8 @@ pub fn check_allocation(f: &Function, allocation: &Allocation) -> Result<(), Err
             let previous = incoming.get_mut(target).ok_or_else(|| error("allocation invalid target"))?;
             if let Some(previous) = previous {
                 let mut changed = false;
-                for (contents, other) in previous.iter_mut().zip(next) {
-                    let intersection = contents.intersection(&other).copied().collect::<Set>();
-                    changed |= *contents != intersection;
-                    *contents = intersection;
+                for (contents, other) in previous.iter_mut().zip(&next) {
+                    changed |= intersect(contents, other);
                 }
                 if changed {
                     work.push(target);
@@ -407,7 +372,161 @@ pub fn check_allocation(f: &Function, allocation: &Allocation) -> Result<(), Err
     Ok(())
 }
 
-fn allocated_roots(f: &Function, allocation: &Allocation)
+/// Sorted, duplicate-free locations known to be held by one frame slot.
+type Contents = Vec<Location>;
+/// Contents of every frame slot at one PC.
+type State = Vec<Contents>;
+
+/// Stored entries of a state: one per slot plus one per known location (the budget's unit).
+fn size(state: &State) -> usize {
+    state.len() + state.iter().map(Vec::len).sum::<usize>()
+}
+
+fn holds(contents: &Contents, location: Location) -> bool {
+    contents.binary_search(&location).is_ok()
+}
+
+fn insert(contents: &mut Contents, location: Location) {
+    if let Err(position) = contents.binary_search(&location) {
+        contents.insert(position, location);
+    }
+}
+
+fn remove(contents: &mut Contents, location: Location) {
+    if let Ok(position) = contents.binary_search(&location) {
+        contents.remove(position);
+    }
+}
+
+/// Keep only the locations `other` holds too; true when `contents` shrank.
+fn intersect(contents: &mut Contents, other: &Contents) -> bool {
+    let before = contents.len();
+    let mut cursor = 0;
+    contents.retain(|location| {
+        while other.get(cursor).is_some_and(|candidate| candidate < location) {
+            cursor += 1;
+        }
+        other.get(cursor) == Some(location)
+    });
+    contents.len() != before
+}
+
+/// What a slot holds while an edge's copies run: the pre-edge contents of a slot, or a produced value.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Held {
+    Slot(usize),
+    Produced(u32),
+}
+
+/// Run the edge's sequential copies over `state`, check every parallel assignment against the pre-edge
+/// value, then rename the SSA parameters simultaneously. A copy moves a reference to what its source slot
+/// holds, so it costs O(1) whatever the slot holds.
+fn follow_edge(state: &State, allocation: &Allocation, pc: usize, ordinal: usize, edge: &Edge,
+    slot: &dyn Fn(Location) -> Result<usize, Error>) -> Result<State, Error>
+{
+    let mut held = (0..state.len()).map(Held::Slot).collect::<Vec<_>>();
+    let copies = allocation.edges.get(&(pc as u32, ordinal as u32))
+        .ok_or_else(|| error("allocation missing edge copies"))?;
+    for copy in copies {
+        let value = match copy.source {
+            CopySource::Slot(index) => *held.get(index as usize)
+                .ok_or_else(|| error("allocation invalid copy source"))?,
+            CopySource::Produced(index) => Held::Produced(index),
+        };
+        let destination = held.get_mut(copy.destination as usize)
+            .ok_or_else(|| error("allocation invalid copy destination"))?;
+        *destination = value;
+    }
+    // Check every destination against the pre-edge value; no assignment-order assumptions.
+    for assignment in &edge.assignments {
+        let present = match (held[slot(assignment.destination)?], assignment.source) {
+            (Held::Slot(index), Source::Location(location)) => holds(&state[index], location),
+            (Held::Produced(index), Source::ProducedSlot(expected)) => index == expected,
+            _ => false,
+        };
+        if !present {
+            return Err(error(format!("allocation clobbered parallel assignment at pc {pc}")));
+        }
+    }
+    let mut next = held.into_iter().map(|value| match value {
+        Held::Slot(index) => state[index].clone(),
+        Held::Produced(_) => Contents::new(),
+    }).collect::<State>();
+    // SSA parameters are renamed simultaneously after checking all pre-edge sources.
+    if !edge.assignments.is_empty() {
+        let renamed = edge.assignments.iter().map(|assignment| assignment.destination).collect::<Set>();
+        for contents in &mut next {
+            contents.retain(|location| !renamed.contains(location));
+        }
+        for assignment in &edge.assignments {
+            insert(&mut next[slot(assignment.destination)?], assignment.destination);
+        }
+    }
+    Ok(next)
+}
+
+/// Rank of every PC reachable from PC 0 in a reverse postorder of the instruction graph (outcome edges and
+/// fall-through); `usize::MAX` for unreachable PCs. Edges to invalid PCs are ignored here: the checker
+/// rejects them when it follows them.
+pub(crate) fn reverse_postorder(f: &Function) -> Vec<usize> {
+    let successors = |pc: usize| {
+        let inst = &f.code[pc];
+        let mut next = outgoing(inst).into_iter().map(|edge| edge.target_pc as usize).collect::<Vec<_>>();
+        if !terminal(inst) {
+            next.push(pc + 1);
+        }
+        next.retain(|&target| target < f.code.len());
+        next
+    };
+    let mut rank = vec![usize::MAX; f.code.len()];
+    if f.code.is_empty() {
+        return rank;
+    }
+    let mut seen = vec![false; f.code.len()];
+    let mut postorder = Vec::with_capacity(f.code.len());
+    // Iterative depth-first search: (PC, its successors, index of the next successor to follow).
+    let mut stack = vec![(0usize, successors(0), 0usize)];
+    seen[0] = true;
+    while let Some((pc, next, index)) = stack.last_mut() {
+        if let Some(&target) = next.get(*index) {
+            *index += 1;
+            if !seen[target] {
+                seen[target] = true;
+                stack.push((target, successors(target), 0));
+            }
+        } else {
+            postorder.push(*pc);
+            stack.pop();
+        }
+    }
+    for (position, pc) in postorder.into_iter().rev().enumerate() {
+        rank[pc] = position;
+    }
+    rank
+}
+
+/// PCs waiting for a visit, taken lowest rank first; a PC already waiting is not queued twice.
+struct Worklist<'a> {
+    rank: &'a [usize],
+    queued: BTreeSet<(usize, usize)>,
+}
+
+impl<'a> Worklist<'a> {
+    fn new(rank: &'a [usize]) -> Self {
+        Self { rank, queued: BTreeSet::new() }
+    }
+
+    fn push(&mut self, pc: usize) {
+        let rank = self.rank.get(pc).copied().unwrap_or(usize::MAX);
+        self.queued.insert((rank, pc));
+    }
+
+    fn pop(&mut self) -> Option<usize> {
+        self.queued.pop_first().map(|(_, pc)| pc)
+    }
+}
+
+pub(crate) fn allocated_roots(f: &Function, allocation: &Allocation)
     -> Result<BTreeMap<(u32, bool), Vec<AllocatedRoot>>, Error>
 {
     let mut maps: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
