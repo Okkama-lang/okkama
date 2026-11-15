@@ -262,7 +262,12 @@ impl Emitter<'_> {
             // C-4, token form: the cache duty joins the pending reserve of the exit whose destination it names.
             X::CacheRehome { form: o::RehomeForm::Token { pending, cache, task: None }, target, protocol } => {
                 self.services(*protocol)?;
-                let destination = A::Destination(s::ExitDestination::Scope(target.as_u32()));
+                // The target is the exit's destination (ruling after C-4): a scope, or the caller of a returned
+                // Future (#601 R1).
+                let destination = A::Destination(match target {
+                    o::RehomeTarget::Scope(scope) => s::ExitDestination::Scope(scope.as_u32()),
+                    o::RehomeTarget::Caller => s::ExitDestination::Caller,
+                });
                 (O::CacheRehome, vec![destination, location(*pending)?, location(*cache)?])
             }
             X::CacheRehome { .. } => {
