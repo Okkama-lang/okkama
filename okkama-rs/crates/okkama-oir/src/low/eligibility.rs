@@ -6,7 +6,7 @@ fn unsupported(function: FuncId, message: &str) -> LowError {
 /// Async destroy suspends inside the cleanup plan; slice D1 (wave 4) lowers it.
 pub(super) const ASYNC_DESTROY: &str = "async destroy is lowered by slice D1 (wave 4)";
 /// An async defer entry (C-6) suspends inside the defer prefix; slice R2 (wave 2) lowers it.
-pub(super) const ASYNC_DEFER: &str = "async defer (C-6) is lowered by slice R2 (wave 2)";
+pub(super) const ASYNC_DEFER: &str = "an async defer entry (C-6) runs only from an async Coro body";
 
 /// Own input is synchronous only. Coro input (verified by `verify_coro`) keeps its frames and service values;
 /// the async forms that a later slice lowers keep a named rejection.
@@ -37,9 +37,6 @@ pub(super) fn check(module: &Module, budget: &mut Budget<'_>) -> Result<(), LowE
             }
         } else if function.body.is_some() {
             return Err(unsupported(id, "missing final function summary"));
-        }
-        if coro && is_async && function.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. })) {
-            return Err(unsupported(id, ASYNC_DEFER));
         }
         let Some(body) = &function.body else {
             continue;
@@ -118,6 +115,10 @@ pub(super) fn check(module: &Module, budget: &mut Budget<'_>) -> Result<(), LowE
             }
             match &block.term.kind {
                 TermKind::InvokeOwn { op, .. } => context.operation(op)?,
+                // C-6 (R2): an async body of Coro runs an async defer entry as a suspending child frame; its
+                // bracket stays, since the defer runs before the close's cleanup steps.
+                TermKind::InvokeDefer { function: target, .. }
+                    if coro && is_async && module.functions.get(*target)?.attrs.contains(&FunctionAttr::Async) => {}
                 TermKind::InvokeDefer { function: target, call, .. } => {
                     if module.functions.get(*target)?.attrs.contains(&FunctionAttr::Async) {
                         return Err(unsupported(id, ASYNC_DEFER));
@@ -184,9 +185,10 @@ impl Context<'_> {
             AsyncOp::FutureNew { .. } | AsyncOp::Await { .. } | AsyncOp::AwaitUnwind { .. }
             | AsyncOp::FrameSave { .. } | AsyncOp::FrameResume { .. } | AsyncOp::FuturePublish { .. }
             | AsyncOp::FutureCancel { .. } | AsyncOp::FutureDone { .. } | AsyncOp::FutureCancelled { .. } => Ok(()),
-            AsyncOp::AwaitTake { .. } | AsyncOp::UniqueCacheProof { .. } | AsyncOp::CacheRehome { .. }
-            | AsyncOp::ServiceMaterialize { .. } | AsyncOp::ServiceAbsorb { .. } => {
-                Err(unsupported(function, "take, rehome and packet duties (D25) are lowered by slice R2 (wave 2)"))
+            // R2: a temporary take keeps its invoke and its proof; the cache duty settles as for a shared await.
+            AsyncOp::AwaitTake { .. } | AsyncOp::UniqueCacheProof { .. } => Ok(()),
+            AsyncOp::CacheRehome { .. } | AsyncOp::ServiceMaterialize { .. } | AsyncOp::ServiceAbsorb { .. } => {
+                Err(unsupported(function, "rehome and packet duties (D25) are lowered with own's R1 forms"))
             }
             AsyncOp::FutureSpawn { .. } => Err(unsupported(function, "spawn (D24) is lowered by slice P1 (wave 3)")),
             AsyncOp::Pin { .. } | AsyncOp::PinTransfer { .. } | AsyncOp::Unpin { .. } => {

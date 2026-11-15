@@ -1031,7 +1031,13 @@ impl Checker<'_, '_> {
         generic_arguments(self.module, GenericOwner::Function(function),
             &data.type_params, &call.type_args, self.state)?;
         self.substitution = substitution(GenericOwner::Function(function), &call.type_args);
-        let params: Vec<_> = data.signature.params.iter().copied().filter(|id| {
+        // C-6: a D21 async defer entry takes the frame as its only parameter; the call passes the language
+        // arguments that its start continuation restores (C-2).
+        let start: Option<Vec<TypeId>> = data.body.as_ref().and_then(|body| body.frame_layout.as_ref())
+            .map(|layout| layout.continuations.first().map(|start| start.saved.iter()
+                .filter_map(|slot| layout.slots.get(*slot as usize).map(|decl| decl.ty)).collect())
+                .unwrap_or_default());
+        let params: Vec<_> = start.unwrap_or_else(|| data.signature.params.clone()).into_iter().filter(|id| {
             self.module.types.get(*id).is_ok_and(|ty| !matches!(ty, Type::Service(_) | Type::Descriptor))
         }).collect();
         self.call_site(call, &params, None)?;
