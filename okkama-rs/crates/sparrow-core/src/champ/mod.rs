@@ -14,7 +14,9 @@ pub use machine::{ExternalEntry, PlainEntry};
 mod helpers;
 pub(crate) mod testing;
 pub mod cleanup;
-pub use cleanup::rt_exit_abort;
+pub use cleanup::{rt_cleanup_deliver_cancel, rt_exit_abort, rt_service_settle};
+mod futures;
+pub use futures::*;
 pub use records::*;
 pub use helpers::*;
 pub use okkama_sparrow::spb17::layout::{LayoutFacts, ObjectRuntimeLayout, RuntimeLayoutRegistry};
@@ -104,6 +106,12 @@ pub(crate) struct State {
     rejection_floor: Option<u64>,
     rejection_plan: Option<PlanId>,
     value_reprs: std::collections::BTreeMap<(u64, u64, bool), crate::word::Repr>,
+    /// Relocated D16 schedules: the duty count of each, by runtime id minus one.
+    schedules: Vec<u64>,
+    /// The owner of caches detached to the root (draft 3 §6.2).
+    root_owner: Option<OwnerId>,
+    #[cfg(test)]
+    pub(crate) future_events: Vec<futures::FutureEvent>,
 }
 
 impl State {
@@ -185,6 +193,12 @@ impl Runtime {
     pub fn champ_new_holder(&mut self) -> Result<HolderId, Error> {
         self.champ.holder = next(self.champ.holder)?;
         Ok(HolderId(self.champ.holder))
+    }
+
+    /// A function-local D16 schedule relocated to a nonzero runtime id: its duties settle in order.
+    pub fn champ_register_schedule(&mut self, duties: u64) -> u64 {
+        self.champ.schedules.push(duties);
+        self.champ.schedules.len() as u64
     }
 
     pub fn champ_new_owner(&mut self) -> Result<OwnerId, Error> {
@@ -282,3 +296,6 @@ mod executor_tests;
 
 #[cfg(test)]
 mod scalar_tests;
+
+#[cfg(test)]
+mod async_tests;

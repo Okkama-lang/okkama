@@ -6,6 +6,13 @@ use super::*;
 
 type Check = Result<(), Error>;
 
+/// An object field has type never.
+const NEVER_FIELD: &str = "NEVER_FIELD";
+/// A data or Champ instruction reads a value of type never.
+const NEVER_OPERAND: &str = "NEVER_OPERAND";
+/// A collection of never leaves is retagged to another shape, or a key-less map to another value type.
+const NEVER_RETAG: &str = "NEVER_RETAG";
+
 fn require(condition: bool, message: &str) -> Check {
     if condition { Ok(()) } else { Err(error(message)) }
 }
@@ -14,10 +21,42 @@ fn at<T>(items: &[T], index: u32) -> Result<&T, Error> {
     items.get(index as usize).ok_or_else(|| error(format!("invalid table/location index {index}")))
 }
 
+/// The role declaration that `id` names (`ROLE_TYPE`).
+pub(crate) fn role_decl(p: &Program, id: u32) -> Result<&RoleDecl, Error> {
+    p.objects.get(id as usize).and_then(|object| object.role.as_ref())
+        .ok_or_else(|| violation("ROLE_TYPE", "role type names a declaration that is not a role"))
+}
+
+/// The objects that implement `role`, each with its implementation table.
+pub(crate) fn implementors(p: &Program, role: u32) -> impl Iterator<Item = (u32, &RoleImpl)> {
+    p.objects.iter().enumerate().flat_map(move |(id, object)| {
+        object.implements.iter().filter(move |table| table.role == role).map(move |table| (id as u32, table))
+    })
+}
+
+pub(crate) fn implements(p: &Program, object: u32, role: u32) -> bool {
+    p.objects.get(object as usize).is_some_and(|object| object.implements.iter().any(|table| table.role == role))
+}
+
+/// A role value is managed when some implementation of the role may reach a resource.
+pub fn role_reaches_resource(p: &Program, role: u32) -> bool {
+    implementors(p, role).any(|(id, _)| p.objects[id as usize].layout.may_reach_resource)
+}
+
+/// The function of `slot` in the implementation table of `object` for `role`.
+pub fn implementation(p: &Program, object: u32, role: u32, slot: u32) -> Option<u32> {
+    let table = p.objects.get(object as usize)?.implements.iter().find(|table| table.role == role)?;
+    table.slots.get(slot as usize).copied()
+}
+
 pub(crate) fn ty_valid(ty: Type, p: &Program) -> Check {
     match ty {
         Type::Object(id) | Type::Successor(id) => {
             enforce(!at(&p.objects, id)?.handle, "HANDLE_TYPE", "an object type names a native handle declaration")?;
+            enforce(at(&p.objects, id)?.role.is_none(), "ROLE_TYPE", "object type names a role declaration")?;
+        }
+        Type::Role(id) | Type::RoleSuccessor(id) => {
+            role_decl(p, id)?;
         }
         Type::Handle(id) => {
             enforce(p.objects.get(id as usize).is_some_and(|object| object.handle),
@@ -44,19 +83,8 @@ pub(crate) fn ty_valid(ty: Type, p: &Program) -> Check {
                 enforce(!p.objects[id as usize].handle, "HANDLE_TYPE",
                     "an array element names a native handle declaration")?;
             }
-            // A managed array holds references to resource objects; it owns none of them (own keeps the
-            // elements' obligations with their owners). Any other leaf is closed plain data.
-            let resource = match element {
-                Type::Object(id) => {
-                    let layout = &p.objects[id as usize].layout;
-                    layout.has_destroy || layout.may_reach_resource
-                }
-                _ => false,
-            };
             // An object with an async destroy is rejected for every use outside P1, arrays included.
-            if !resource {
-                enforce(closed_plain(p, element), "ARRAY_PLAIN", "array element graph is not closed plain data")?;
-            }
+            enforce(collection_leaf(p, element), "ARRAY_PLAIN", "array element graph is not closed plain data")?;
         }
         Type::Map(id) | Type::MapBuilder(id) => {
             enforce(matches!(p.composites.get(id as usize), Some(Composite::Map { .. })),
@@ -78,6 +106,18 @@ pub(crate) fn ty_valid(ty: Type, p: &Program) -> Check {
 /// `Type::Future` indexes distinct `future_results`; await, fut.new and fut.publish agree with them; a Future is
 /// held only in registers (no object storage holds one before the service entries of D25).
 pub(crate) const FUTURE_TYPES: &str = "SPB_FUTURE_TYPES";
+
+/// The leaf of a collection (an array element or a map value): a resource object, which a managed collection
+/// refers to without owning it (own keeps its obligation with its owner), or closed plain data. An object that
+/// declares neither a destroy nor a resource is plain only if its whole graph is (`ARRAY_PLAIN`, `MAP_PLAIN`).
+fn collection_leaf(p: &Program, leaf: Type) -> bool {
+    let resource = match leaf {
+        Type::Object(id) => p.objects.get(id as usize)
+            .is_some_and(|object| object.layout.has_destroy || object.layout.may_reach_resource),
+        _ => false,
+    };
+    resource || closed_plain(p, leaf)
+}
 
 /// Whether a value of `ty` may refer to an identity that reaches a resource: a resource object or successor,
 /// or a managed array or map of them. Plain collections never do (`ARRAY_PLAIN`, `MAP_PLAIN`).
@@ -107,6 +147,13 @@ pub(crate) fn closed_plain(p: &Program, ty: Type) -> bool {
         match ty {
             Type::Int | Type::Bool | Type::Str | Type::Range | Type::Bytes | Type::Byte | Type::Float
                 | Type::Char | Type::Rat | Type::Never => {}
+            // A role value is plain when every implementation of the role is.
+            Type::Role(id) => {
+                if role_decl(p, id).is_err() {
+                    return false;
+                }
+                pending.extend(implementors(p, id).map(|(object, _)| Type::Object(object)));
+            }
             Type::Object(id) | Type::Variant(id) => {
                 let Some(object) = p.objects.get(id as usize) else { return false };
                 if object.handle || object.layout.has_destroy || object.layout.may_reach_resource
@@ -185,9 +232,7 @@ fn composite_valid(p: &Program, index: usize, composite: Composite) -> Check {
             ty_valid(value, p)?;
             enforce(key_type(p, key), "MAP_KEY", "map key is not a key type")?;
             // A managed map refers to resource objects as values; like a managed array it owns none.
-            let resource = matches!(value, Type::Object(id) if p.objects.get(id as usize)
-                .is_some_and(|object| !object.handle && !object.layout.may_async_destroy));
-            enforce(closed_plain(p, value) || resource, "MAP_PLAIN",
+            enforce(collection_leaf(p, value), "MAP_PLAIN",
                 "map value graph is neither plain data nor resource objects")
         }
         Composite::Builder { array } => {
@@ -380,17 +425,32 @@ pub fn verify(p: &Program) -> Check {
             enforce(!matches!(ty, Type::Future(_)), FUTURE_TYPES, "object storage cannot hold a Future")?;
             enforce(!matches!(ty, Type::Builder(_) | Type::MapBuilder(_)), "BUILDER_LINEAR",
                 "object storage cannot hold a unique builder")?;
+            // No value of type never exists: a field of it would be read as a forged word.
+            enforce(ty != Type::Never, NEVER_FIELD, "object storage cannot have type never")?;
             // Retention flags are checked object by object, so a managed collection's leaf flag can be trusted.
             if let Type::Object(id) | Type::Successor(id) = ty {
                 enforce(layout.may_reach_resource || !p.objects[id as usize].layout.may_reach_resource,
                     "OBJECT_RETENTION", "understated object retention metadata")?;
             }
-            if matches!(ty, Type::Array(_) | Type::Map(_) | Type::Variant(_)) && reaches_resource(p, ty) {
+            if let Type::Role(id) | Type::RoleSuccessor(id) = ty {
+                enforce(layout.may_reach_resource || !role_reaches_resource(p, id),
+                    "OBJECT_RETENTION", "understated object retention metadata")?;
+            }
+            // The runtime selection walk reaches identities only through selected fields: a field that may refer
+            // to a resource, directly or through a managed collection or a variant, is selected.
+            if reaches_resource(p, ty) {
                 enforce(layout.may_reach_resource && layout.selection_layout.contains(&(index as u32)),
                     "COLLECTION_RETENTION", "a field holding resource objects must be selected and reach resources")?;
             }
             require(layout.trace_layout.contains(&(index as u32)) == ty.traced(), "incorrect object trace layout")?;
         }
+        if let Some(role) = &object.role {
+            check_role_decl(p, object, role)?;
+        }
+    }
+    // Implementation tables after every role declaration is known to be well formed.
+    for (id, object) in p.objects.iter().enumerate() {
+        check_role_impls(p, id as u32, object)?;
     }
     for (index, scope) in p.tables.scopes.iter().enumerate() {
         at(&p.functions, scope.function)?;
@@ -411,6 +471,48 @@ pub fn verify(p: &Program) -> Check {
     }
     for f in &p.functions {
         verify_function(p, f).map_err(|e| Error { message: format!("{}: {}", f.symbol, e.message), ..e })?;
+    }
+    Ok(())
+}
+
+/// A role declaration is a placeholder descriptor: no storage, fields, cases, destroy or implementations.
+/// Its slots are synchronous plain or owning entries with valid types and at most one result.
+fn check_role_decl(p: &Program, object: &Object, role: &RoleDecl) -> Check {
+    let layout = &object.layout;
+    enforce(object.fields.is_empty() && layout.storage_fields.is_empty() && !layout.has_destroy
+        && !layout.may_reach_resource && object.error_cases.is_empty() && object.enum_cases == 0
+        && object.variant_cases.is_empty() && object.implements.is_empty() && !object.handle,
+        "ROLE_DECL", "a role declaration has no storage, cases, destroy or implementations")?;
+    for slot in &role.slots {
+        enforce(matches!(slot.entry_abi, EntryAbi::Observation | EntryAbi::Owned) && slot.results.len() <= 1,
+            "ROLE_DECL", "a role slot is a plain or owning entry with at most one result")?;
+        for &ty in slot.params.iter().chain(&slot.results) {
+            ty_valid(ty, p)?;
+        }
+    }
+    Ok(())
+}
+
+/// Every implementation table names a role once, has a function for each of its slots, and each
+/// function has the slot's entry ABI, its parameters after the implementing object and its results.
+fn check_role_impls(p: &Program, id: u32, object: &Object) -> Check {
+    let mut seen = BTreeSet::new();
+    for table in &object.implements {
+        let role = role_decl(p, table.role)?;
+        enforce(seen.insert(table.role), "ROLE_IMPL", "an object implements a role once")?;
+        enforce(table.slots.len() == role.slots.len(), "ROLE_IMPL", "implementation table misses or adds slots")?;
+        for (&function, slot) in table.slots.iter().zip(&role.slots) {
+            let f = p.functions.get(function as usize)
+                .ok_or_else(|| violation("ROLE_IMPL", "implementation names no function"))?;
+            let language = f.params.iter().map(|&location| loc_type(f, location))
+                .collect::<Result<Vec<_>, _>>()?.into_iter()
+                .filter_map(|ty| match ty { ProducedType::Value(ty) => Some(ty), _ => None }).collect::<Vec<_>>();
+            let mut expected = vec![Type::Object(id)];
+            expected.extend(&slot.params);
+            enforce(f.entry_abi == slot.entry_abi && language == expected && f.results == slot.results
+                && f.proofs.entry.as_ref().is_some_and(|entry| entry.destroy.is_none()),
+                "ROLE_IMPL", &format!("{}: implementation differs from role slot {}", f.symbol, slot.name))?;
+        }
     }
     Ok(())
 }
@@ -590,6 +692,19 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             Argument::Destination(ExitDestination::Scope(id)) => { at(&p.tables.scopes, id)?; }
             Argument::Flag(flag) => flags.push(flag),
             Argument::Registration(id) => { at(&f.proofs.registrations, id)?; }
+            Argument::Dispatch(ref dispatch) => {
+                let slot = at(&role_decl(p, dispatch.role)?.slots, dispatch.slot)?;
+                ctx.value = slot.results.first().copied();
+                ctx.may_fail = dispatch.failures != 0;
+                let mut targets = BTreeSet::new();
+                let arity = 1 + slot.params.len() as u32;
+                enforce(dispatch.failures & !15 == 0 && !dispatch.targets.is_empty()
+                    && dispatch.targets.iter().all(|&target| {
+                        targets.insert(target) && implements(p, target, dispatch.role)
+                    })
+                    && dispatch.retained_params.iter().all(|&param| param < arity),
+                    "DISPATCH_SITE", "dispatch needs distinct implementing targets and an in-range contract")?;
+            }
             Argument::Binding(_) | Argument::Field(_) | Argument::Label(_) | Argument::Kind(_)
                 | Argument::Continuation(_) => {}
         }
@@ -609,6 +724,9 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
     }
     if matches!(op, Opcode::InvokeCallOwn | Opcode::InvokeDefer) {
         require(args.iter().any(|arg| matches!(arg, Argument::Summary(_))), "missing result contract summary")?;
+    }
+    if matches!(op, Opcode::InvokeDispatch | Opcode::InvokeDispatchOwn) {
+        enforce(args.iter().any(|arg| matches!(arg, Argument::Dispatch(_))), "DISPATCH_SITE", "missing dispatch")?;
     }
     if op == Opcode::ExitCommit {
         // The load gate checks this schema against the typed pending, including through closes/edges.
@@ -971,6 +1089,34 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
                 require(flags.len() == 1, "owned call requires explicit cleanup mode")?;
             }
         }
+        InvokeDispatch | InvokeDispatchOwn => {
+            let Some(Argument::Dispatch(dispatch)) = args.first() else {
+                return Err(violation("DISPATCH_SITE", "missing dispatch"));
+            };
+            let slot = &role_decl(p, dispatch.role)?.slots[dispatch.slot as usize];
+            let abi = if op == InvokeDispatch { EntryAbi::Observation } else { EntryAbi::Owned };
+            enforce(slot.entry_abi == abi, "DISPATCH_SITE", "dispatch ABI differs from the role slot")?;
+            // The receiver is a role value, or the one object a single-target dispatch selects.
+            let receiver = match locations.first().map(|&location| loc_type(f, location)).transpose()? {
+                Some(ProducedType::Value(Type::Object(object))) if dispatch.targets == [object] => Type::Object(object),
+                _ => Type::Role(dispatch.role),
+            };
+            let mut expected = vec![ProducedType::Value(receiver)];
+            expected.extend(slot.params.iter().map(|&ty| ProducedType::Value(ty)));
+            let actual = locations.iter().take(expected.len()).map(|&loc| loc_type(f, loc))
+                .collect::<Result<Vec<_>, _>>()?;
+            enforce(actual == expected, "DISPATCH_SITE", "dispatch receiver or arguments differ from the slot")?;
+            if op == InvokeDispatch {
+                enforce(locations.len() == expected.len(), "DISPATCH_SITE", "plain dispatch carries no services")?;
+            } else {
+                require(locations.len() > expected.len(), "owning call requires input packet")?;
+                input(expected.len(), Packet)?;
+                for &location in &locations[expected.len() + 1..] {
+                    require(loc_type(f, location)? == ProducedType::Service(Deps), "expected proof-only call deps")?;
+                }
+                require(flags.len() == 1, "owned call requires explicit cleanup mode")?;
+            }
+        }
         RetOwn => {
             require(f.entry_abi == EntryAbi::Owned, "ret.own requires owned entry")?;
             let mut expected = f.results.iter().copied().map(ProducedType::Value).collect::<Vec<_>>();
@@ -1018,6 +1164,7 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
             Entry(_) => 'f', Object(_) => 'o', Binding(_) => 'i', Field(_) => 't',
             Label(_) => 'a', Flag(_) => '?', Kind(_) => 'k', Registration(_) => 'm', Destination(_) => 'x',
             Continuation(_) => 'c',
+            Dispatch(_) => 'g',
         }
     };
     let shape: String = args.iter().map(kind).collect();
@@ -1054,6 +1201,8 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         RetOwn | RetDefer => shape.chars().all(|ch| matches!(ch, 'l' | 'a')),
         ExitDispatch => shape == "lll???",
         OwnCreateCommit => shape == "lob",
+        InvokeDispatch => shape.starts_with('g') && shape[1..].chars().all(|ch| ch == 'l'),
+        InvokeDispatchOwn => shape.starts_with('g') && shape[1..].chars().all(|ch| ch == 'l' || ch == '?'),
         BuilderPush => shape == "lll" || shape == "llll",
         BuilderAppend => shape == "lll",
         BuilderRange => shape == "?llll",
@@ -1175,7 +1324,8 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
         }
         ValEq | ValNe => {
             let comparable = match types {
-                [Type::Object(left), Type::Object(right)] => left == right,
+                // Two values of one role compare as their objects: different implementations are unequal.
+                [Type::Object(left), Type::Object(right)] | [Type::Role(left), Type::Role(right)] => left == right,
                 [left @ (Type::Array(_) | Type::Bytes | Type::Map(_) | Type::Variant(_) | Type::Range), right] => {
                     left == right
                 }
@@ -1201,6 +1351,20 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
             enforce(valid && out == Some(Type::Bool), "TEST_OPERAND",
                 "test operation operand types differ from its check, or its result is not bool")
         }
+        RoleNarrow => enforce(matches!((types, out), ([Type::Role(_)], Some(Type::Role(_)))), "ROLE_NARROW",
+            "role narrowing converts a role value to another role"),
+        Move if matches!(out, Some(Type::Role(_) | Type::RoleSuccessor(_))) && types.len() == 1
+            && out != Some(types[0]) =>
+        {
+            // role.wrap: an implementing object becomes a role value; succ.take drops a role successor's permission.
+            let valid = match (types[0], out) {
+                (Type::Object(object), Some(Type::Role(role)))
+                    | (Type::Successor(object), Some(Type::RoleSuccessor(role))) => implements(p, object, role),
+                (Type::RoleSuccessor(source), Some(Type::Role(role))) => source == role,
+                _ => false,
+            };
+            enforce(valid, "ROLE_WRAP", "only an implementing object converts to a role value")
+        }
         Move => {
             require(types.len() == 1, "move requires one source")?;
             let valid = out == Some(types[0]) || matches!((types[0], out),
@@ -1210,6 +1374,13 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
                 || matches!((types[0], out), (Type::Object(case), Some(Type::Variant(variant)))
                     if p.objects[variant as usize].variant_cases.contains(&case))
                 || out.is_some_and(|out| never_retag(&p.composites, types[0], out));
+            let never_source = match types[0] {
+                Type::Array(shape) => shape.leaf == ArrayLeaf::Never,
+                Type::Map(id) => matches!(p.composites.get(id as usize), Some(Composite::Map { key: Type::Never, .. })),
+                _ => false,
+            };
+            enforce(valid || !never_source, NEVER_RETAG,
+                "a collection of never leaves retags only to its own shape, keeping a map's value type")?;
             require(valid, "invalid move/succ.take type")
         }
         Undef => require(types.is_empty() && out.is_some(), "invalid undef"),
@@ -1338,7 +1509,8 @@ pub(crate) fn checked_edges<'a>(p: &Program, f: &Function, inst: &'a Instruction
         match flow {
             Flow::Next(destinations) => {
                 require(!op.is_terminator() || matches!(op, Opcode::RetOwn | Opcode::RetDefer)
-                    || matches!(op, Opcode::InvokeCallOwn | Opcode::InvokeObserve) && !ctx.may_fail,
+                    || matches!(op, Opcode::InvokeCallOwn | Opcode::InvokeObserve | Opcode::InvokeDispatch
+                        | Opcode::InvokeDispatchOwn) && !ctx.may_fail,
                     "terminator requires outcomes")?;
                 if *op == Opcode::DepsOf {
                     let [Argument::Location(anchor)] = arguments.as_slice() else { unreachable!() };
@@ -1426,6 +1598,13 @@ fn verify_function(p: &Program, f: &Function) -> Check {
         for pc in block.pc as usize..end {
             let inst = &f.code[pc];
             require(terminates(inst) == (pc + 1 == end), "missing or early block terminator")?;
+            if matches!(inst, Instruction::Data { .. } | Instruction::Champ { .. }) {
+                // A never value comes only from an unreachable read (an element of an empty collection, an
+                // undef placeholder): no operation may consume it as a word of any type.
+                let never = operand_reads(inst).into_iter()
+                    .any(|location| matches!(loc_type(f, location), Ok(ProducedType::Value(Type::Never))));
+                enforce(!never, NEVER_OPERAND, &format!("an operation reads a value of type never at {pc}"))?;
+            }
             match inst {
                 Instruction::Data { op, inputs, output, immediate } => {
                     check_data(p, f, *op, inputs, *output, immediate)?;
@@ -1687,10 +1866,20 @@ fn check_builders(p: &Program, f: &Function, pcs: &BTreeMap<u32, usize>) -> Chec
             if terminal {
                 linear(active.is_empty(), "a live builder is neither finished nor abandoned")?;
             }
-            for (edge, _) in checked_edges(p, f, inst)? {
+            for (edge, produced) in checked_edges(p, f, inst)? {
                 let mut next = active.clone();
                 let mut consumed = BTreeSet::new();
                 let mut destinations = Vec::new();
+                // The builder an outcome produces continues in exactly one location, like a produced service.
+                for (slot, ty) in produced.iter().enumerate() {
+                    if !matches!(ty, ProducedType::Value(Type::Builder(_) | Type::MapBuilder(_))) {
+                        continue;
+                    }
+                    let uses = edge.assignments.iter()
+                        .filter(|assignment| assignment.source == Source::ProducedSlot(slot as u32)).count();
+                    linear(uses != 0, "an outcome drops its produced builder")?;
+                    linear(uses == 1, "an outcome duplicates its produced builder")?;
+                }
                 for assignment in &edge.assignments {
                     if !builder(assignment.destination) {
                         continue;
@@ -1764,6 +1953,11 @@ pub(super) fn exit_carry(op: Opcode, tag: Tag) -> Carry {
     }
 }
 
+/// A value of this type carries a successor's must-use permission: an object successor or a role successor.
+pub(crate) fn holds_permission(ty: Type) -> bool {
+    matches!(ty, Type::Successor(_) | Type::RoleSuccessor(_))
+}
+
 /// Register operands of `op` whose successor permission moves away from the register: returned values of
 /// ret.own/ret.defer, the value of exit.prepare and the replacement value of exit.replace (into the exit).
 fn successor_operands(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<Location> {
@@ -1774,7 +1968,8 @@ fn successor_operands(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<L
     arguments.iter().filter_map(|argument| match argument {
         Argument::Location(location @ Location::Register(_)) if moves => Some(*location),
         _ => None,
-    }).filter(|&location| matches!(loc_type(f, location), Ok(ProducedType::Value(Type::Successor(_))))).collect()
+    }).filter(|&location| matches!(loc_type(f, location), Ok(ProducedType::Value(ty)) if holds_permission(ty)))
+        .collect()
 }
 
 /// Successor references are copyable, but the independent must-use permission
@@ -1783,7 +1978,7 @@ fn successor_operands(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<L
 /// The active set holds successor registers and the exit services that hold a permission moved into
 /// an exit: it travels with the exit's linear service until exit.commit hands it to the returned value.
 fn check_successors(p: &Program, f: &Function, pcs: &BTreeMap<u32, usize>) -> Check {
-    let successor = |location| matches!(loc_type(f, location), Ok(ProducedType::Value(Type::Successor(_))));
+    let successor = |location| matches!(loc_type(f, location), Ok(ProducedType::Value(ty)) if holds_permission(ty));
     let mut incoming: Vec<Option<BTreeSet<Location>>> = vec![None; f.blocks.len()];
     incoming[0] = Some(f.params.iter().copied().filter(|&param| successor(param)).collect());
     let mut stored = incoming[0].as_ref().map_or(0, BTreeSet::len);
@@ -1879,7 +2074,7 @@ fn check_successors(p: &Program, f: &Function, pcs: &BTreeMap<u32, usize>) -> Ch
                 enforce(!matches!(carry, Carry::Lost | Carry::Commit), SUCCESSOR_DROPPED,
                     "an outcome drops the successor held by its exit")?;
                 for (slot, ty) in produced.iter().enumerate() {
-                    let holds = matches!(ty, ProducedType::Value(Type::Successor(_)))
+                    let holds = matches!(ty, ProducedType::Value(ty) if holds_permission(*ty))
                         || matches!(carry, Carry::Slot(held) if held == slot);
                     if !holds {
                         continue;

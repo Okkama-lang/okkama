@@ -647,3 +647,59 @@ fn open_callees_are_entry_parameters_not_known_closures() {
     // A closure merged through a block parameter keeps its finite origin.
     assert!(open_callees_of(include_str!("protocol-high/closure-known-phi.oir"), "f").is_empty());
 }
+
+/// Decision (a) of #676, P2.4 §4.1: an action value whose capture reaches a resource is a new object that holds a
+/// reference to it. The capture's obligation stays with its owner, so own hands the construction an empty packet
+/// and admits the packet it returns; an action value without such a capture stays packetless.
+fn action_value_packets(source: &str) -> Vec<Option<bool>> {
+    let module = rewrite(source).module;
+    let mut packets = vec![];
+    for (_, data) in module.functions.iter() {
+        let Some(body) = &data.body else { continue };
+        for (_, instruction) in body.insts.iter() {
+            let packet = match &instruction.op {
+                Operation::Core(CoreOp::FnClosure { packet, .. } | CoreOp::FnBind { packet, .. }
+                    | CoreOp::FnBindRole { packet, .. }) => *packet,
+                _ => continue,
+            };
+            let Some(packet) = packet else {
+                packets.push(None);
+                continue;
+            };
+            let crate::Definition::InstResult { inst, .. } = body.values.get(packet).unwrap().def else {
+                panic!("the packet of an action value is not an instruction result");
+            };
+            let empty = matches!(body.insts.get(inst).unwrap().op, Operation::Ownership(OwnershipOp::Empty {}));
+            let returned = instruction.results[1];
+            let admitted = body.insts.iter().any(|(_, user)| {
+                matches!(user.op, Operation::Ownership(OwnershipOp::Admit { packet, .. }) if packet == returned)
+            });
+            packets.push(Some(empty && admitted));
+        }
+    }
+    packets
+}
+
+#[test]
+fn action_values_capturing_a_resource_take_an_empty_packet() {
+    for name in ["closure-known", "closure-known-phi", "closure-known-loop", "bound-snapshot", "bound-role"] {
+        let source = std::fs::read_to_string(fixtures("protocol-high").iter()
+            .find(|path| path.file_stem().unwrap() == name).unwrap()).unwrap();
+        assert_eq!(action_value_packets(&source), vec![Some(true)], "{name}");
+    }
+    let join = include_str!("protocol-high/closure-known-join.oir");
+    let mut packets = action_value_packets(join);
+    packets.sort();
+    assert_eq!(packets, vec![None, Some(true)], "the capture-free closure and the bound receiver");
+}
+
+#[test]
+fn action_values_without_a_resource_capture_stay_packetless() {
+    let empty = include_str!("protocol-high/closure-empty.oir");
+    assert_eq!(action_value_packets(empty), vec![None]);
+    let plain = empty.replace("func @lambda() -> int [lambda] {", "func @lambda(%k: int) -> int [lambda captures 1] {")
+        .replace("    %closure: fn() -> int = fn.closure @lambda, ty fn() -> int",
+            "    %k: int = const 3\n    %closure: fn() -> int = fn.closure @lambda, [%k], ty fn() -> int");
+    assert_ne!(plain, empty);
+    assert_eq!(action_value_packets(&plain), vec![None], "a plain capture");
+}

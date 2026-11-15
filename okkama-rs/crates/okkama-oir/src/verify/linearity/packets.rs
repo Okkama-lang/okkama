@@ -550,7 +550,16 @@ impl Engine<'_, '_> {
                             && !before.tokens[packet.as_u32() as usize].pieces.is_empty() {
                             self.error(R::B73, "Atomic/Cell dynamic publication cannot steal an owned packet");
                         }
-                        let mut token = self.union(inputs.iter().map(|value| {
+                        // The transferred entries join the scope's dynamic part, which its runtime descriptor
+                        // releases in serial order: no finite order covers them, so they are a family (#683).
+                        let mut transferred = before.tokens[packet.as_u32() as usize].clone();
+                        transferred.pieces = transferred.pieces.into_iter().map(|mut piece| {
+                            piece.family = true;
+                            piece
+                        }).collect();
+                        let mut token = self.union(inputs.iter().map(|value| if value == packet {
+                            transferred.clone()
+                        } else {
                             before.tokens[value.as_u32() as usize].clone()
                         }), true);
                         token.scope = Some(*target);

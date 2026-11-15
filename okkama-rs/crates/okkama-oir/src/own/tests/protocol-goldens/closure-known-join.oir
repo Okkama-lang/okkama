@@ -154,16 +154,18 @@ func @f(%0: bool; %1: own) -> (int, own) abi explicit(input_packet=1, output_pac
         state=%32, original_scope=S2)
     %39: fn() -> int facts(managed(deps=d5)) = fn.closure @lambda.__own_entry_0, ty fn() -> int
     %40: deps = deps.of %39
-    %41: fn() -> int facts(managed(deps=d4)) = fn.bind %35, @read.__own_entry_1, ty fn() -> int
-    %42: deps = deps.of %41
+    %41: own = own.empty
+    (%42: fn() -> int facts(managed(deps=d4)), %43: own) = fn.bind %35, @read.__own_entry_1, ty fn() -> int, packet %41
+    %44: deps = deps.of %42
+    %45: scope<S2> = own.admit %38, %43
     cond %37, ^b9, ^b10
-    ^b8(%43: scope<S2>, %44: failure) in S2:
-    %45: failure = scope.unwind %43, %44, effects scope_effects(failures=[], suspends=false, cancel=false)
-    raise %45
+    ^b8(%46: scope<S2>, %47: failure) in S2:
+    %48: failure = scope.unwind %46, %47, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %48
     ^b9 in S2:
-    br ^b3(%39, %40, %38)
+    br ^b3(%39, %40, %45)
     ^b10 in S2:
-    br ^b2(%41, %42, %38)
+    br ^b2(%42, %44, %45)
 }
 
 func @read.__own_entry_1(%0: R facts(managed(deps=d1)); %1: deps, %2: own) -> (int, own) [method

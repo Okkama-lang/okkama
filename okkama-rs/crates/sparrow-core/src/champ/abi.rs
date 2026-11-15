@@ -8,11 +8,15 @@ pub enum HelperClass {
     L,
     G,
     X,
+    /// Draft 3 §1.1: like X, and it may return `OUTCOME_PENDING`.
+    S,
 }
 /// Classes derive from the same effects table that checks Rust and CLIF signatures.
 pub fn helper_class(name: &str) -> Option<HelperClass> {
     let (_, effects) = HELPERS.iter().find(|(entry, _)| *entry == name && name.starts_with("champ_"))?;
-    Some(if effects.contains(&Effect::Reenters) {
+    Some(if effects.contains(&Effect::Suspends) {
+        HelperClass::S
+    } else if effects.contains(&Effect::Reenters) {
         HelperClass::X
     } else if effects.contains(&Effect::Collects) || effects.contains(&Effect::Fails) {
         HelperClass::G
@@ -74,6 +78,12 @@ pub const RECORD_LAYOUTS: &[RecordLayout] = &[
     record!(CloseInputs; [failure]; []),
     record!(NextPost; [state, key]; []),
     record!(FinishPost; [failure, pending]; []),
+    record!(FutureNewIn; []; []),
+    record!(FutureNewPost; [future, cache, state]; []),
+    record!(AwaitPost; [task]; [value]),
+    record!(AwaitUnwindPost; [state, failure]; []),
+    record!(PublishIn; [failure]; [value]),
+    record!(FlagPost; []; []),
 ];
 
 /// One view of signatures/effects (JIT), machine records (above), and abstract outcome schemas (SPB 17).
@@ -173,6 +183,14 @@ pub fn helper_abi(name: &str) -> Option<HelperAbi> {
         "champ_destroy_claim" => ("DestroyBorrow", None),
         "champ_destroy_invoke" => ("DestroyPost", None),
         "champ_destroy_finish" | "champ_failure_capture" => ("", None),
+        "champ_future_new" => ("FutureNewPost", Some(O::FutureNew)),
+        "champ_await_view" => ("AwaitPost", Some(O::Await)),
+        "champ_await_unwind" => ("AwaitUnwindPost", Some(O::AwaitUnwind)),
+        "champ_future_publish" => ("", Some(O::FuturePublish)),
+        "champ_future_cancel" => ("", Some(O::FutureCancel)),
+        "champ_future_cancelled" => ("FlagPost", Some(O::FutureCancelled)),
+        "champ_cleanup_deliver_cancel" => ("CleanupSlot", Some(O::CleanupDeliverCancel)),
+        "champ_cleanup_settle" => ("CleanupSlot", Some(O::CleanupSettle)),
         _ if okkama_sparrow::spb17::helper(name).is_some() => ("", None),
         _ => return None,
     };
@@ -361,7 +379,7 @@ mod shared_registry_tests {
             Effect::Reenters => s::HELPER_REENTERS,
             Effect::Fails => s::HELPER_UNWINDS,
             Effect::Stops => s::HELPER_STOPS,
-            Effect::Suspends => panic!("P1 helper suspends"),
+            Effect::Suspends => s::HELPER_SUSPENDS,
         });
         if flags != shared.effects { return Err("HELPER_EFFECTS"); }
         Ok(())
@@ -384,7 +402,7 @@ mod shared_registry_tests {
             let runtime = helper_abi(name).unwrap();
             assert_eq!(runtime.opcode, shared.opcode);
             if let Some(opcode) = shared.opcode {
-                let context = s::ResultContext::default();
+                let context = crate::champ::runtime_tests::schema_context(Some(opcode));
                 for tag in opcode.tags(&context) {
                     assert_eq!(runtime.schemas(&context).unwrap().iter().find(|(kind, _)| *kind == tag)
                         .unwrap().1, opcode.results(tag, &context).unwrap());

@@ -32,7 +32,20 @@ impl Engine<'_, '_> {
 
     /// C-2: `fut.publish` is the exit of a D21 async body. Its success outcome is checked against the body
     /// summary as a return of the value and the packet, its failure as a failure exit.
-    fn publish_exit(&mut self, before: &Flow, outcome: &PublishOutcome) {
+    fn publish_exit(&mut self, before: &Flow, frame: ValueId, outcome: &PublishOutcome) {
+        // C-2: the body publishes after its cleanup, with every lexical scope closed (OIR-2 §10.1).
+        if before.scopes.values().any(|status| *status == 1) {
+            self.error(R::B41, "fut.publish runs while a lexical scope of the body is still open (C-2)");
+        }
+        // B9.5, D20: a linear token saved in the frame comes back through its resume; publication consumes the
+        // frame, so a linear slot still occupied there would be lost.
+        let hidden = before.tokens[frame.as_u32() as usize].frame.and_then(|key| before.frames.get(&key))
+            .is_some_and(|layout| layout.values().any(|slot| slot.token.saved_type.is_some_and(|ty| {
+                super::super::contracts::linear(self.module, ty)
+            })));
+        if hidden {
+            self.error(R::B95, "fut.publish consumes a frame that still holds a linear token");
+        }
         match outcome {
             PublishOutcome::Success { value, packet, .. } => {
                 let values: Vec<_> = value.iter().copied().chain([*packet]).collect();
@@ -44,6 +57,14 @@ impl Engine<'_, '_> {
                 self.body_summary(&failed, false, &[]);
             }
         }
+    }
+
+    /// C-3: in a D21 body the task and the receipt of an await unwind edge reach only `await.unwind`; neither is a
+    /// service duty that a close or a settle step may take. Layout-less async bodies keep the pre-C-3 form.
+    pub(super) fn await_handle(&self, before: &Flow, value: ValueId) -> bool {
+        self.frame_body() && before.tokens[value.as_u32() as usize].cache.is_some()
+            && matches!(super::super::later::value_type(self.module, self.body, value),
+                Some(Type::Service(ServiceType::TaskState | ServiceType::Receipt)))
     }
 
     /// Entry values of the function. The receiver, arguments, descriptors and input packet of a D21 async
@@ -429,6 +450,15 @@ impl Engine<'_, '_> {
                     piece.holder = Some(origin);
                     piece
                 }).collect();
+                // B10.6, D16/D25: one `fut.new` site names one static duty of its owner. Reached again while the
+                // owner still holds that duty (a loop inside the owner), its Futures need dynamic entries (R1).
+                let retired = match origin {
+                    Origin::Instruction(inst, slot) => Origin::RetiredInstruction(inst, slot),
+                    other => other,
+                };
+                if owner.pieces.iter().any(|piece| piece.origin == origin || piece.origin == retired) {
+                    self.error(R::B106, "fut.new reaches its owner again while the owner holds its earlier duty (D25)");
+                }
                 let mut token = self.union([input, owner.clone()], true);
                 token.scope = owner.scope;
                 let mut duty = Piece::new(origin, AdmissionProvenance::CacheOwned);
@@ -457,7 +487,9 @@ impl Engine<'_, '_> {
                 }
             }
             // `fut.publish` (C-2) has no result slot; in a D21 body it is the exit checked by the summary.
-            AsyncOp::FuturePublish { outcome, .. } if self.frame_body() => self.publish_exit(before, outcome),
+            AsyncOp::FuturePublish { frame, outcome } if self.frame_body() => {
+                self.publish_exit(before, *frame, outcome);
+            }
             _ => {}
         }
     }

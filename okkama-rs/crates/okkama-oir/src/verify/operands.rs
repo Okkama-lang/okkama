@@ -645,8 +645,15 @@ impl Checker<'_, '_> {
             CoreOp::FailIsThrown { failure } => self.service(*failure, ServiceType::Failure)?,
             CoreOp::TypeOf { ty, descriptor } => {
                 self.module.types.get(*ty)?;
-                self.module.functions.get(descriptor.cleanup)?;
+                let cleanup = self.module.functions.get(descriptor.cleanup)?;
                 self.module.summaries.get(descriptor.summary)?;
+                // A runtime cleanup family is keyed by type (#569 C3b, C6): its declaration for one key is
+                // registered by its first parameter, so the descriptor of `ty` names the one keyed by `ty`.
+                let keyed = cleanup.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Intrinsic { name, .. }
+                    if self.state.context.external_contracts.descriptor_cleanup(name).is_some()));
+                if keyed && cleanup.signature.params.first() != Some(ty) {
+                    self.report(R::B111, "descriptor names the runtime cleanup registered for another type");
+                }
             }
             CoreOp::TestOk { condition } => self.expect(*condition, Type::Bool)?,
             CoreOp::TestIs { left, right } | CoreOp::TestIsnt { left, right } => {

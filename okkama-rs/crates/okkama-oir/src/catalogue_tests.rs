@@ -114,3 +114,19 @@ fn closure_cleanups_need_the_open_protocol_but_any_does_not() {
     assert_eq!(catalogue.cleanup_keys(SYNC_CLOSURE_CLEANUP).count(), 0);
     assert_eq!(catalogue.cleanup_keys(ANY_CLEANUP).count(), 1);
 }
+
+/// A descriptor of one open `fn` type cannot carry the cleanup registered for another (#569 C3b): the
+/// cleanup family is keyed by type, and the runtime would run another key's entry on this type's values.
+#[test]
+fn a_descriptor_names_the_cleanup_registered_for_its_own_type() {
+    let swaps = [
+        ("retention=owner_graph(0), cleanup=@drop_fn", "retention=owner_graph(0), cleanup=@drop_int"),
+        ("retention=owner_graph(0), cleanup=@drop_int", "retention=owner_graph(0), cleanup=@drop_fn"),
+        ("retention=owner_graph(0), cleanup=@drop_any", "retention=owner_graph(0), cleanup=@drop_int"),
+    ];
+    for (registered, other) in swaps {
+        assert_eq!(SOURCE.matches(registered).count(), 1, "{registered}");
+        let module = text::parse(&SOURCE.replacen(registered, other, 1)).unwrap();
+        assert!(check(&module).unwrap_err().contains(&RuleId::B111), "{other}");
+    }
+}

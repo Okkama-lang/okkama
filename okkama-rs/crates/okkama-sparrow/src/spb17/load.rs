@@ -40,7 +40,7 @@ pub(super) fn consumed(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<
     let between = arguments.first() == Some(&Argument::Flag(true));
     locations.iter().copied().enumerate().filter_map(|(index, location)| {
         let consume = match op {
-            ScopeBegin | OwnEmpty | OwnCreateCommit | DepsOf | DepsEmpty | InvokeObserve
+            ScopeBegin | OwnEmpty | OwnCreateCommit | DepsOf | DepsEmpty | InvokeObserve | InvokeDispatch
                 | ArrayGet | Fail | Evaluate | Catch | Lookup => false,
             // A Future is a language value: awaiting, cancelling or reading it consumes nothing.
             Await | FutureCancel | FutureDone | FutureCancelled => false,
@@ -64,8 +64,9 @@ pub(super) fn consumed(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<
             CleanupDestroy | ExitExtend => true,
             ExitPrepare => index + 1 == locations.len(),
             ExitReplace => index == 0 || index + 1 == locations.len(),
-            InvokeCallOwn | InvokeDefer | RetOwn | RetDefer => matches!(verify::loc_type(f, location),
-                Ok(ProducedType::Service(ServiceKind::Packet))),
+            InvokeCallOwn | InvokeDispatchOwn | InvokeDefer | RetOwn | RetDefer => {
+                matches!(verify::loc_type(f, location), Ok(ProducedType::Service(ServiceKind::Packet)))
+            }
         };
         (consume && linear(f, location)).then_some(location)
     }).collect()
@@ -330,10 +331,10 @@ pub(super) fn visible_destroy_failures(p: &Program, f: &Function, close: u32,
                     Argument::Object(id) => Some(Type::Object(*id)), _ => None,
                 }));
             }
-            if matches!(op, Opcode::InvokeCallOwn | Opcode::InvokeDefer | Opcode::FutureNew) {
-                for callee in arguments.iter().filter_map(|arg| match arg {
-                    Argument::Entry(id) => Some(&p.functions[*id as usize]), _ => None,
-                }) {
+            if matches!(op, Opcode::InvokeCallOwn | Opcode::InvokeDefer | Opcode::FutureNew | Opcode::InvokeDispatchOwn) {
+                for callee in dispatch_callees(p, arguments).into_iter().chain(arguments.iter().filter_map(|arg| {
+                    match arg { Argument::Entry(id) => Some(&p.functions[*id as usize]), _ => None }
+                })) {
                     // A settled cache releases a Future's outcome and its unstarted inputs into the plan.
                     let released = *op == Opcode::FutureNew && !plain_inputs(p, callee);
                     if !plain_results(p, callee) || *op == Opcode::InvokeDefer || released {
@@ -485,7 +486,7 @@ fn check_fresh(f: &Function, evidence: &mut evidence::Evidence<'_>) -> Check {
         let key = evidence.identity(locations[0])
             .ok_or_else(|| violation("FRESH_ORIGIN", "fresh result has no successful creation"))?;
         enforce(evidence.inventory(locations[1]) == Some(BTreeSet::from([key])),
-            "FRESH_PACKET", "fresh summary not supported by every reachable return packet")?;
+            "FRESH_PACKET", &format!("{}: fresh summary not supported by every reachable return packet", f.symbol))?;
     }
     enforce(returns != 0, "FRESH_REACHABLE_RETURN", "fresh summary has no reachable return evidence")
 }
@@ -567,6 +568,12 @@ fn check_call_contracts(p: &Program, f: &Function) -> Check {
             evidence_rule(&reconstructed, flat, "RETURN_PACKET_NOT_FLAT",
                 "returned packet must have identical admission and full inventories")?;
         }
+        if let Instruction::Champ { op: Opcode::InvokeDispatch | Opcode::InvokeDispatchOwn, arguments, .. }
+            = instruction
+        {
+            check_dispatch_contract(p, f, arguments, &mut reconstructed)?;
+            continue;
+        }
         let Instruction::Champ {
             op: Opcode::InvokeCallOwn | Opcode::InvokeObserve | Opcode::InvokeDefer, arguments, ..
         } = instruction
@@ -593,6 +600,54 @@ fn check_call_contracts(p: &Program, f: &Function) -> Check {
         }
     }
     reconstructed.check_budget()?;
+    Ok(())
+}
+
+/// The implementation functions a dispatch can enter, in target order. Empty for every other operation.
+pub(super) fn dispatch_callees<'a>(p: &'a Program, arguments: &[Argument]) -> Vec<&'a Function> {
+    let Some(Argument::Dispatch(dispatch)) = arguments.first() else { return vec![] };
+    dispatch.targets.iter().filter_map(|&target| {
+        verify::implementation(p, target, dispatch.role, dispatch.slot).and_then(|id| p.functions.get(id as usize))
+    }).collect()
+}
+
+/// Every implementation a dispatch can enter refines the site contract: it fails, and retains its
+/// language parameters (receiver first), within the dispatch's bounds (`DISPATCH_TARGET`). A plain
+/// call packet is required where every target has plain inputs, or where a plain target is external:
+/// a target with code checks its packet on entry, an external one cannot.
+fn check_dispatch_contract(p: &Program, f: &Function, arguments: &[Argument],
+    reconstructed: &mut evidence::Evidence<'_>) -> Check
+{
+    let Some(Argument::Dispatch(dispatch)) = arguments.first() else {
+        return Err(violation("DISPATCH_SITE", "missing dispatch"));
+    };
+    let callees = dispatch_callees(p, arguments);
+    enforce(callees.len() == dispatch.targets.len(), "DISPATCH_TARGET", "dispatch target has no implementation")?;
+    for callee in &callees {
+        let contract = callee.proofs.entry.as_ref()
+            .ok_or_else(|| violation("DISPATCH_TARGET", "implementation has no verified entry contract"))?;
+        let language = callee.params.iter().enumerate().filter(|(_, location)| {
+            matches!(verify::loc_type(callee, **location), Ok(ProducedType::Value(_)))
+        }).map(|(index, _)| index as u32).collect::<Vec<_>>();
+        let retained = contract.retained_params.iter().all(|param| language.iter().position(|index| index == param)
+            .is_some_and(|position| dispatch.retained_params.contains(&(position as u32))));
+        enforce(contract.failures & !dispatch.failures == 0 && retained, "DISPATCH_TARGET",
+            &format!("{} -> {}: implementation fails or retains beyond the dispatch contract",
+                f.symbol, callee.symbol))?;
+    }
+    let packet = arguments.iter().find_map(|arg| match arg {
+        Argument::Location(location) if verify::loc_type(f, *location)
+            == Ok(ProducedType::Service(ServiceKind::Packet)) => Some(*location),
+        _ => None,
+    });
+    let plain = callees.iter().all(|callee| plain_inputs(p, callee))
+        || callees.iter().any(|callee| callee.code.is_empty() && plain_inputs(p, callee));
+    if let Some(packet) = packet
+        && plain
+    {
+        enforce(reconstructed.inventory(packet).is_some_and(|keys| keys.is_empty()),
+            "CALL_PLAIN_PACKET", &format!("{}: plain dispatch arguments cannot carry resource obligations", f.symbol))?;
+    }
     Ok(())
 }
 
@@ -686,6 +741,11 @@ fn check_failure_mask(p: &Program, f: &Function) -> Check {
                         (Opcode::Fail, Tag::Unwind) => arguments.iter().find_map(|arg| match arg {
                             Argument::Label(kind) => Some(1 << kind), _ => None,
                         }).unwrap_or(15),
+                        (Opcode::InvokeDispatch | Opcode::InvokeDispatchOwn, Tag::Unwind) => {
+                            arguments.iter().find_map(|arg| match arg {
+                                Argument::Dispatch(dispatch) => Some(dispatch.failures), _ => None,
+                            }).unwrap_or(15)
+                        }
                         (Opcode::InvokeCallOwn | Opcode::InvokeObserve | Opcode::InvokeDefer, Tag::Unwind) => {
                             arguments.iter()
                             .find_map(|arg| match arg {

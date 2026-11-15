@@ -9,6 +9,8 @@ pub type Outcome = u64;
 pub type PlanId = u64;
 pub type EntryId = u64;
 pub const OUTCOME_STOP: Outcome = u64::MAX;
+/// Class S transport (Champ draft 3 §1.1): never an outcome ordinal, and it carries no Post.
+pub const OUTCOME_PENDING: Outcome = u64::MAX - 1;
 pub const NORMAL: Outcome = 0;
 pub const UNWIND: Outcome = 1;
 pub const CHUNK_ENTRIES: usize = 32;
@@ -168,6 +170,56 @@ pub struct DestroyBorrow {
 pub struct DestroyPost {
     pub state: CleanupSlot,
     pub failure: Word,
+}
+
+/// `fut.new` (SPB 64): `entry` is the SPB index of an async body; `args` are the values of its continuation 0
+/// in order (receiver, language arguments, descriptor parameters). Both slots are consumed on Normal only.
+#[derive(Debug)]
+#[repr(C)]
+pub struct FutureNewIn {
+    pub entry: u64,
+    pub args: *const Word,
+    pub argc: u64,
+    pub inputs: *mut PacketSlot,
+    pub owner: *mut ScopeSlot,
+}
+#[derive(Debug, Default)]
+#[repr(C)]
+pub struct FutureNewPost {
+    pub future: Word,
+    /// The owner's cache duty: one word, the Future frame (draft 3 §14.2).
+    pub cache: Word,
+    pub state: ScopeSlot,
+}
+/// `await` (SPB 66). Normal writes the outcome value (zero for a void Future); Unwind writes the failure, the
+/// awaited Future as the task and the receipt.
+#[derive(Debug, Default)]
+#[repr(C)]
+pub struct AwaitPost {
+    pub value: Word,
+    pub task: Word,
+    pub receipt: u64,
+}
+#[derive(Debug, Default)]
+#[repr(C)]
+pub struct AwaitUnwindPost {
+    pub state: ScopeSlot,
+    pub failure: Word,
+}
+/// `fut.publish` (SPB 70): tag 0 publishes success (`value`, `packet`), tag 1 publishes `failure`.
+#[derive(Debug)]
+#[repr(C)]
+pub struct PublishIn {
+    pub tag: u64,
+    pub value: Word,
+    pub packet: *mut PacketSlot,
+    pub failure: Word,
+}
+/// A one-word boolean result (`fut.cancelled`).
+#[derive(Debug, Default)]
+#[repr(C)]
+pub struct FlagPost {
+    pub value: u64,
 }
 
 /// Exactly one of scope/packet is non-null. Optional pending is consumed by begin.
@@ -354,6 +406,9 @@ impl Stream {
 }
 #[derive(Debug, Clone, Default)]
 pub(super) struct Cleanup {
+    /// The closing scope's owner when the close began from a scope state: cache duties of other owners
+    /// settle to nothing (draft 3 §6.2).
+    pub owner: Option<OwnerId>,
     pub remainder: Packet,
     pub pending: Option<Pending>,
     pub stream: Stream,

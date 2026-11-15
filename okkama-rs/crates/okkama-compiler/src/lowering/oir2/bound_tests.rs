@@ -219,3 +219,48 @@ fn oir2_c4_ordered_set_cache_blocker() {
     }
     eprintln!("C4 actual OrderedSet<int>: lowers to high, verification blocked by once-storage B11.1");
 }
+
+const ESCAPED_ROLE_CALL: &str = "module app v1.0.0;
+role Named { name() is string; }
+object Child {
+    has seen is string;
+    Child(parent is Named) { seen = parent.name(); }
+}
+object Parent does Named {
+    has label is string;
+    has child is Maybe<Child>;
+    Parent(label is string) {
+        self.label = label;
+        child = Maybe.some(Child(self));
+    }
+    name() is string { label; }
+}
+object Plain does Named {
+    Plain();
+    name() is string { \"plain\"; }
+}
+main() is int {
+    let n = Parent(\"p\").name();
+    0;
+}";
+
+/// §11.4, #271: a role call hides the concrete receiver, so only the implementation entry can see that the
+/// receiver's construction is pending; it is guarded like a bound role action. An object whose constructor never
+/// lets `self` escape has no pending state and no guard.
+#[test]
+fn oir2_role_witness_entries_guard_a_pending_receiver() {
+    super::with_analysis(ESCAPED_ROLE_CALL, |analysis| {
+        let module = super::lower_to_oir2(analysis).unwrap();
+        super::verify_high(&module, "role pending guard");
+        let guarded = |symbol: &str| {
+            let function = module.functions.iter().find(|(_, function)| function.symbol == symbol).unwrap().1;
+            let body = function.body.as_ref().unwrap();
+            let entry = body.blocks.get(body.entry).unwrap();
+            matches!(body.insts.get(entry.insts[0]).unwrap().op, ir::Operation::Core(ir::CoreOp::ObjPending { .. }))
+                && body.blocks.iter().any(|(_, block)| matches!(block.term.kind,
+                    ir::TermKind::Trap { code: ir::TrapCode::Pending, .. }))
+        };
+        assert!(guarded("app.Parent.name#0"));
+        assert!(!guarded("app.Plain.name#0"));
+    });
+}

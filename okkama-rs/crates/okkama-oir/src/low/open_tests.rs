@@ -294,3 +294,51 @@ fn eligibility_contract_of_dynamic_protocols() {
     held.holders.push(HolderKind::Frame);
     assert!(!eligibility::synchronous_dynamic(DynamicReason::Any, &held));
 }
+
+/// The singleton golden with its creation transferred by `own.dynamic` (reason any) into the scope before the
+/// close, which keeps its direct plan: the transferred entry is the dynamic part's, released through its runtime
+/// descriptor, so no finite order covers it (#683). The roots are those Low would collect for this body.
+fn direct_plan_after_dynamic_transfer() -> Module {
+    let golden = include_str!("fixtures/singleton.low.oir");
+    let protocol = "protocol P0 kind any holders [scope, packet] rules [protocol_rule(transition=dynamic, \
+        from=packet, to=scope, checks=[owner, live_dependencies, snapshot, transferable], \
+        normal=protocol_poststate(holder=scope, state=open), \
+        unwind=some(protocol_poststate(holder=packet, state=unaccepted)))] roots [operands]\n";
+    let admit = "    [i3] %7: scope<S0> = own.admit %6, %5\n";
+    let transfer = "    invoke.own own.dynamic %6, %5, target S0, reason any, protocol P0\n        \
+        normal ^b14($state)\n        unwind ^b2($packet, $failure, $state)\n    ^b14(%7: scope<S0>) in S0:\n";
+    let edits = [
+        ("\nfunc @destroy", format!("\n{protocol}\nfunc @destroy")),
+        (admit, transfer.to_owned()),
+        ("source=scope(S0), after_defers=^b1,", "source=scope(S0), after_defers=^b14,".into()),
+        ("active_at=^b1)", "active_at=^b14)".into()),
+    ];
+    let mut text = golden.to_owned();
+    for (from, to) in edits {
+        assert_eq!(text.matches(from).count(), 1, "{from}");
+        text = text.replacen(from, &to, 1);
+    }
+    let start = text.find("roots=[").unwrap() + "roots=[".len();
+    let end = text.find("], proofs=[").unwrap();
+    text.replace_range(start..end, "");
+    let mut module = parsed(&text);
+    let options = LowOptions::default();
+    let mut budget = Budget { options: &options, steps: 0, blocks: 0, roots: 0 };
+    let id = module.functions.iter().find(|(_, function)| function.symbol == "main").unwrap().0;
+    let mut body = module.functions.get_mut(id).unwrap().body.take().unwrap();
+    roots::collect(&module, &mut body, &mut budget).unwrap();
+    module.functions.get_mut(id).unwrap().body = Some(body);
+    module
+}
+
+#[test]
+fn rejects_a_direct_plan_over_a_dynamic_transfer() {
+    let module = direct_plan_after_dynamic_transfer();
+    let reparsed = parsed(&text::print(&module).unwrap());
+    for module in [&module, &reparsed] {
+        let report = super::tests::verify_fixture(module).unwrap_err();
+        assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::B102), "{report:?}");
+    }
+    // The same body with the creation admitted instead keeps its direct plan.
+    super::tests::verify_fixture(&parsed(include_str!("fixtures/singleton.low.oir"))).unwrap();
+}

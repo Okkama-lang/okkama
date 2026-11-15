@@ -7,6 +7,7 @@ use okkama_oir as o;
 use okkama_sparrow::spb17 as s;
 
 mod calls;
+mod roles;
 mod successors;
 mod undef;
 
@@ -116,6 +117,7 @@ fn translate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result
         ..s::Program::default()
     };
     p.objects = objects(module, layouts)?;
+    let synthetic = roles::Synthetic::of(module)?;
     p.composites = composites(module).entries().to_vec();
     p.tables.future_results = composites(module).futures().to_vec();
     for (id, scope) in module.scopes.iter() {
@@ -146,18 +148,30 @@ fn translate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result
                 let managed = matches!(value.facts, o::ValueFacts::Managed { .. })
                     && matches!(leaf, Some(s::Type::Object(id))
                         if p.objects.get(id as usize).is_some_and(|object| object.layout.may_reach_resource));
-                if collection && !plain && !managed {
+                // Own tracks role, cap and action-value elements as references; the loader admits such an
+                // array only when every object it can reach is closed plain data (ARRAY_PLAIN).
+                let view = roles::view_array(module, value.ty)? && matches!(value.facts, o::ValueFacts::Managed { .. });
+                if collection && !plain && !managed && !view {
                     return Err(GenerateError("plain array or map requires own ClosedGraph certificate".into()));
                 }
             }
         }
         let translated = if calls::needs_s2(module, function)? {
-            calls::translate(module, id, function, &p.objects, &mut p.tables)?
+            calls::translate(module, id, function, &p.objects, &mut p.tables, &synthetic)?
         } else {
             translate_function(module, id, function, &p.objects)?
         };
         p.functions.push(translated);
     }
+    let mut trampolines = vec![];
+    let mut summaries = std::mem::take(&mut p.tables.summaries);
+    for (index, closure) in synthetic.closures.iter().enumerate() {
+        let layout = synthetic.closure_object(module, index);
+        trampolines.push(roles::trampoline(&p, closure, layout, &mut summaries)?);
+        debug_assert_eq!(roles::Synthetic::trampoline(module, index) as usize, p.functions.len() + index);
+    }
+    p.tables.summaries = summaries;
+    p.functions.extend(trampolines);
     for function in &mut p.functions {
         successors::forward_taken(function)?;
         successors::prune_dead_aliases(function);
@@ -178,15 +192,17 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
                 (fields.as_slice(), witnesses.as_slice(), *destroy)
             }
             o::DeclarationKind::Enum { .. } | o::DeclarationKind::Variant { .. } => (&[][..], &[][..], None),
-            o::DeclarationKind::Role { builtin: true, .. } if declaration.name == "Error" => {
-                (&[][..], &[][..], None)
-            }
+            // A cap value is its owner's reference: the cap declaration is a placeholder descriptor.
+            o::DeclarationKind::Role { .. } | o::DeclarationKind::Cap { .. } => (&[][..], &[][..], None),
             o::DeclarationKind::Handle => (&[][..], &[][..], None),
             _ => return Err(unsupported("non-object declaration")),
         };
-        if !witnesses.is_empty() {
-            return Err(unsupported("object witnesses"));
-        }
+        let role = match &declaration.kind {
+            o::DeclarationKind::Role { builtin: true, .. } if declaration.name == "Error" => None,
+            o::DeclarationKind::Role { methods, .. } => Some(roles::role_decl(module, methods)?),
+            _ => None,
+        };
+        let implements = roles::implementations(module, witnesses)?;
         let layout = layouts.object_layout(id.as_u32())?;
         if let o::DeclarationKind::Variant { cases, is_error: false } = &declaration.kind {
             for case in cases {
@@ -240,8 +256,11 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
                 once: field.once,
             }).collect(),
             layout: layout.runtime,
+            role,
+            implements,
         });
     }
+    roles::synthetic_objects(module, &mut objects)?;
     Ok(objects)
 }
 
@@ -380,6 +399,18 @@ fn translate_with(module: &o::Module, id: o::TypeId, table: &Composites) -> Resu
         o::Type::Role { decl, args } if args.is_empty() && module.declarations.get(*decl)?.name == "Error" => {
             s::Type::Error
         }
+        o::Type::Role { decl, args } if args.is_empty() => s::Type::Role(decl.as_u32()),
+        o::Type::Fn(_) => s::Type::Role(roles::callable_role(module, id)?),
+        // A cap holds its owner's complete graph and reads it on every call: it is the owner's reference.
+        o::Type::Cap { decl, args } if args.is_empty() => {
+            let o::DeclarationKind::Cap { owner, .. } = &module.declarations.get(*decl)?.kind else {
+                return Err(GenerateError("cap type references a non-cap declaration".into()));
+            };
+            match translate_with(module, *owner, table)? {
+                owner @ s::Type::Object(_) => owner,
+                _ => return Err(unsupported("cap of a non-object owner")),
+            }
+        }
         o::Type::Enum(decl) => s::Type::Object(decl.as_u32()),
         o::Type::Variant(decl) => {
             let o::DeclarationKind::Variant { cases, is_error } = &module.declarations.get(*decl)?.kind else {
@@ -415,6 +446,9 @@ fn translate_with(module: &o::Module, id: o::TypeId, table: &Composites) -> Resu
         }
         o::Type::Successor(base) => match module.types.get(*base)? {
             o::Type::Object { decl, args } if args.is_empty() => s::Type::Successor(decl.as_u32()),
+            o::Type::Role { decl, args } if args.is_empty() && module.declarations.get(*decl)?.name != "Error" => {
+                s::Type::RoleSuccessor(decl.as_u32())
+            }
             _ => return Err(unsupported("non-object successor type")),
         },
         o::Type::Future(result) => match table.future_index.get(&id) {
@@ -568,10 +602,12 @@ fn translate_constant(literal: &o::Literal) -> Result<s::Constant, GenerateError
     })
 }
 
-/// Attributes that only say which declaration a function implements: an action, a successor or a
-/// field default. They carry no ABI of their own; the signature and the ownership ABI do.
+/// Attributes that only say which declaration a function implements: an action, a successor, a field
+/// default or the body of an action value. They carry no ABI of their own; the signature and the
+/// ownership ABI do (an action value's captures are its leading parameters).
 pub(super) fn declaration_attr(attr: &o::FunctionAttr) -> bool {
-    matches!(attr, o::FunctionAttr::Method(_) | o::FunctionAttr::Successor(_) | o::FunctionAttr::Default { .. })
+    matches!(attr, o::FunctionAttr::Method(_) | o::FunctionAttr::Successor(_) | o::FunctionAttr::Default { .. }
+        | o::FunctionAttr::Lambda { .. })
 }
 
 fn translate_function(module: &o::Module, id: o::FuncId, function: &o::Function, objects: &[s::Object])
@@ -680,6 +716,12 @@ fn translate_function(module: &o::Module, id: o::FuncId, function: &o::Function,
         {
             return Err(unsupported("managed object value needs ownership/deps verification"));
         }
+        if let s::Type::Role(id) | s::Type::RoleSuccessor(id) = registers[value.as_u32() as usize]
+            && objects.iter().any(|object| object.layout.may_reach_resource
+                && object.implements.iter().any(|table| table.role == id))
+        {
+            return Err(unsupported("managed role value needs ownership/deps verification"));
+        }
     }
     let mut result = s::Function {
         symbol: function.symbol.clone(),
@@ -769,6 +811,24 @@ fn check_definition(body: &o::Body, value: o::ValueId, expected: o::Definition, 
         return Err(unsupported("managed/service value facts"));
     }
     Ok(())
+}
+
+/// The trailing `$pending` operand of an incomplete construction (§11.4): High leaves it unbound, and SPB 17
+/// stores the pending state there, so that a guard on a receiver whose construction is not complete sees it.
+fn pending_placeholder(module: &o::Module, body: &o::Body, value: o::ValueId) -> bool {
+    let pending = |declaration: o::DeclId| match module.declarations.get(declaration).map(|declared| &declared.kind) {
+        Ok(o::DeclarationKind::Object { fields, .. }) => fields.last().is_some_and(|field| {
+            field.name == "$pending" && module.types.get(field.ty) == Ok(&o::Type::Bool)
+        }),
+        _ => false,
+    };
+    let incomplete = |op: &o::Operation| matches!(op, o::Operation::Core(o::CoreOp::ObjNew {
+        declaration, fields, construction: o::ConstructionStatus::Incomplete, ..
+    }) if fields.last() == Some(&value) && pending(*declaration));
+    body.insts.iter().any(|(_, inst)| incomplete(&inst.op))
+        || body.blocks.iter().any(|(_, block)| {
+            matches!(&block.term.kind, o::TermKind::InvokeOwn { op, .. } if incomplete(op))
+        })
 }
 
 fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instruction, objects: &[s::Object])
@@ -961,13 +1021,22 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
                 }
                 let source = translate_type(module, body.values.get(*value)?.ty)?;
                 let target = translate_type(module, *ty)?;
-                if !matches!((source, target), (s::Type::Successor(a), s::Type::Object(b)) if a == b) {
+                if !matches!((source, target), (s::Type::Successor(a), s::Type::Object(b))
+                    | (s::Type::RoleSuccessor(a), s::Type::Role(b)) if a == b)
+                {
                     return Err(GenerateError("succ.take requires matching successor/object types".into()));
                 }
                 (D::Move, vec![reg(*value)])
             }
-            C::RoleWrap { value, ty } if translate_type(module, *ty)? == s::Type::Error => {
-                (D::Move, vec![reg(*value)])
+            // role.wrap is a move; the loader admits it only from an implementing object (ROLE_WRAP).
+            C::RoleWrap { value, .. } => (D::Move, vec![reg(*value)]),
+            C::CapMake { owner, packet: None, .. } => (D::Move, vec![reg(*owner)]),
+            C::RoleNarrow { value, ty } => {
+                let source = translate_type(module, body.values.get(*value)?.ty)?;
+                if !matches!((source, translate_type(module, *ty)?), (s::Type::Role(_), s::Type::Role(_))) {
+                    return Err(unsupported("role narrowing outside role values"));
+                }
+                (D::RoleNarrow, vec![reg(*value)])
             }
             C::Undef { ty } => {
                 let Some(&result) = inst.results.first() else {
@@ -976,7 +1045,13 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
                 if body.values.get(result)?.ty != *ty {
                     return Err(GenerateError("undef result annotation mismatch".into()));
                 }
-                (D::Undef, vec![])
+                if pending_placeholder(module, body, result) {
+                    // `obj.pending` reads `$pending`: it holds true until the completing write stores false.
+                    immediate = s::Immediate::Constant(s::Constant::Bool(true));
+                    (D::Const, vec![])
+                } else {
+                    (D::Undef, vec![])
+                }
             }
             _ => return Err(unsupported(inst.op.opcode())),
         },
@@ -1063,6 +1138,8 @@ mod tests;
 mod cleanup_tests;
 #[cfg(test)]
 mod futures_tests;
+#[cfg(test)]
+mod roles_tests;
 
 /// Mandatory semantic gate for executable Low. External contracts come from the caller's backend catalog.
 /// This path cannot be selected by a file flag; external artifacts always pass verify_load independently.

@@ -98,3 +98,23 @@ fn modulo_by_zero_fails_in_a_plain_function() {
 fn modulo_by_zero_destroys_a_live_resource_once() {
     fails(true, "        a % b;", "3, 0", "Modulo by zero");
 }
+
+/// 512 references to one 16 MiB string: the 8 GiB result is refused before anything is allocated (#692).
+const JOIN: &str = concat!(
+    "        let s = \"x\".repeat(16777216);\n",
+    "        let p = [s, s, s, s, s, s, s, s];\n",
+    "        let q = p + p + p + p + p + p + p + p;\n",
+    "        let w = q + q + q + q + q + q + q + q;\n",
+    "        w.join(\"\").length();",
+);
+const JOIN_MESSAGE: &str = "join: the result would pass the 4 GiB a string can hold";
+
+#[test]
+fn join_past_four_gib_fails_in_a_plain_function() {
+    fails(false, JOIN, "3, 1", JOIN_MESSAGE);
+}
+
+#[test]
+fn join_past_four_gib_destroys_a_live_resource_once() {
+    fails(true, JOIN, "3, 1", JOIN_MESSAGE);
+}

@@ -241,6 +241,37 @@ fn async_v4_low_fixtures_verify_fully() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// #695: the mutated cases of the async wave 1 audit. Each row names the rule and location that reject the
+/// negative and the golden or fixture it mutates, which must verify; every negative is listed.
+#[test]
+fn async_audit_695_negatives_and_their_positives() {
+    use std::collections::BTreeSet;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/async");
+    let mut listed = BTreeSet::new();
+    for line in include_str!("fixtures/async/audit-matrix.tsv").lines().skip(1) {
+        let row: Vec<_> = line.split('\t').collect();
+        assert_eq!(row.len(), 4, "{line}");
+        let positive = fixture_module(&root, row[2]);
+        fixture_result(&positive, ErrorPolicy::All).unwrap_or_else(|report| panic!("{line}: {report:?}"));
+        let source = fs::read_to_string(root.join(row[3])).unwrap();
+        let negative = text::parse(&source).unwrap_or_else(|error| panic!("{line}: {error}"));
+        let report = fixture_result(&negative, ErrorPolicy::All).unwrap_err();
+        assert_eq!(report.failure, VerifyFailure::Rejected, "{line}");
+        assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule.as_str() == row[0]
+            && location(&diagnostic.primary.entity) == row[1]), "{line}: {report:?}");
+        let roundtrip = text::parse(&text::print(&negative).unwrap()).unwrap();
+        let repeated = fixture_result(&roundtrip, ErrorPolicy::All).unwrap_err();
+        assert!(repeated.diagnostics.iter().any(|diagnostic| diagnostic.rule.as_str() == row[0]),
+            "canonical roundtrip lost {line}");
+        let expected = source.lines().find_map(|line| line.strip_prefix("// expect ")).unwrap();
+        listed.insert((row[3].to_string(), expected == format!("{} {}", row[0], row[1])));
+    }
+    for entry in fs::read_dir(root.join("audit-invalid")).unwrap() {
+        let name = format!("audit-invalid/{}", entry.unwrap().file_name().to_string_lossy());
+        assert!(listed.contains(&(name.clone(), true)), "{name}: its expect line needs a row of audit-matrix.tsv");
+    }
+}
+
 #[test]
 fn every_rule_has_a_verified_canonical_positive_and_negative() {
     use std::collections::BTreeSet;

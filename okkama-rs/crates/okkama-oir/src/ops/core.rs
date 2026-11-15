@@ -415,7 +415,7 @@ operation_group! { CollectionOp {
     ArrayGet { array: ValueId, index: ValueId }
         => ("array.get", [array: Borrow, index: Borrow], Rule::Data { ty: ResultType::Element(*array), trap: true }.retains(Retention::Index { base: *array, index: *index }));
     ArrayJoin { array: ValueId, separator: ValueId }
-        => ("array.join", [array: Borrow, separator: Borrow], Rule::Data { ty: ResultType::Scalar(ScalarType::Str), trap: false });
+        => ("array.join", [array: Borrow, separator: Borrow], Rule::Data { ty: ResultType::Scalar(ScalarType::Str), trap: true });
     ArrayRetag { array: ValueId, ty: TypeId }
         => ("array.retag", [array: Borrow], Rule::Data { ty: ResultType::Exact(*ty), trap: false }.retains(Retention::Value(*array)));
     MapLen { map: ValueId }

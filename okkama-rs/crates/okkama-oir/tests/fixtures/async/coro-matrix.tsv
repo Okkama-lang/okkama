@@ -4,3 +4,6 @@ coro-saved-set-incomplete	coro/coro-schedule-duty-live-across-await.oir	coro-inv
 coro-read-after-save	coro/async-repeated-await.oir	coro-invalid/coro-read-after-save.oir
 coro-double-resume	coro/async-never-awaited.oir	coro-invalid/coro-double-resume.oir
 coro-sync-suspends	coro/async-await-failure.oir	coro-invalid/coro-sync-suspends.oir
+coro-unbracketed-suspend	coro/coro-nested-cold-await.oir	audit-invalid/hide-token.oir
+coro-slot-overlap	audit-valid/slot-ok.oir	audit-invalid/slot-overlap.oir
+async-unmodeled-op	coro/coro-nested-cold-await.oir	audit-invalid/c4b.oir

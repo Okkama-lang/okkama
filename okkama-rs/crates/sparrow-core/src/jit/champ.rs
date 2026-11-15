@@ -51,9 +51,11 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
         let blocks = (0..source.code.len()).map(|_| builder.create_block()).collect();
         let stop = builder.create_block();
         let invocations = runtime.invocations.as_ptr();
+        let polled = runtime.limits.polled();
+        let fuel = runtime.budget.fuel.address();
         let mut emit = Emit {
             builder: &mut builder, jit: &mut runtime.jit, program: &program, source, index, invocations,
-            ctx, io, storage, frame: &frame, scope_base, post, blocks, stop, pc: None,
+            ctx, io, storage, frame: &frame, scope_base, post, blocks, stop, pc: None, polled, fuel,
             plans: &machine.plans[index], selections: &machine.selections[index], entries: &machine.entries,
             shielded_entries: &machine.shielded_entries,
             constants: &mut runtime.constants, heap: &mut runtime.heap,
@@ -115,6 +117,11 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
             for (pc, instruction) in source.code.iter().enumerate() {
                 emit.pc = Some(pc);
                 emit.builder.switch_to_block(emit.blocks[pc]);
+                if pc == 0 && emit.polled {
+                    // No edge enters block 0 (ENTRY_BLOCK_TARGET): it is reached at the function entry and by a
+                    // self tail call, each a step as in Tomato.
+                    emit.poll();
+                }
                 if pc == 0 && owned && s::plain_inputs(&program, source) {
                     emit.checked("champ_machine_plain_packet", &[ctx, io]);
                 }
@@ -175,6 +182,10 @@ struct Emit<'a, 'b> {
     blocks: Vec<Block>,
     stop: Block,
     pc: Option<usize>,
+    /// Whether a budget is set (`Limits::polled`): only then does machine code count steps.
+    polled: bool,
+    /// Address of the runtime's fuel cell.
+    fuel: i64,
     plans: &'a [u64],
     selections: &'a [(u32, u64)],
     entries: &'a [u64],
@@ -358,8 +369,31 @@ impl Emit<'_, '_> {
         self.builder.ins().jump(self.blocks[self.pc.unwrap() + 1], &[]);
     }
 
+    /// One budget step (`budget`), counted as Tomato counts them: below zero fuel calls `rt_poll`, and an
+    /// exhausted budget or an interrupt stops the run (no handler catches it, no destroy runs).
+    fn poll(&mut self) {
+        let cell = self.iconst(self.fuel as u64);
+        let fuel = self.load(cell, 0);
+        let left = self.builder.ins().iadd_imm_s(fuel, -1);
+        self.store(cell, 0, left);
+        let empty = self.builder.ins().icmp_imm_s(IntCC::SignedLessThan, left, 0);
+        let slow = self.builder.create_block();
+        let next = self.builder.create_block();
+        self.builder.set_cold_block(slow);
+        self.builder.ins().brif(empty, slow, &[], next, &[]);
+        self.builder.switch_to_block(slow);
+        self.call("poll", &[self.ctx]);
+        let status = self.load(self.ctx, std::mem::offset_of!(Ctx, status));
+        self.builder.ins().brif(status, self.stop, &[], next, &[]);
+        self.builder.switch_to_block(next);
+    }
+
     fn edge(&mut self, edge: &s::Edge, produced: &[Vec<Value>]) {
         let pc = self.pc.expect("edge PC");
+        if self.polled && edge.target_pc as usize <= pc {
+            // A loop back-edge is a step.
+            self.poll();
+        }
         let ordinal = roots::outgoing(&self.source.code[pc]).iter()
             .position(|candidate| std::ptr::eq(*candidate, edge)).expect("source edge");
         for copy in &self.frame.allocation.edges[&(pc as u32, ordinal as u32)] {
@@ -712,21 +746,33 @@ impl Emit<'_, '_> {
                 self.checked("champ_machine_destination", &[ctx, state, destination]);
                 return self.flow(op, flow, arguments, ordinal, "champ_scope_begin");
             }
-            O::InvokeObserve => {
-                let target = arguments.iter().find_map(entry).unwrap() as usize;
-                let count = self.program.functions[target].params.iter()
-                    .filter(|location| matches!(location, L::Register(_))).count();
-                let values = locations[..count].iter().map(|&loc| self.word(loc)).collect::<Vec<_>>();
-                if self.self_tail_call(target, flow) {
-                    // A self call whose result is returned at once reuses this frame: a loop.
-                    let params = self.source.params.iter().filter(|location| matches!(location, L::Register(_)));
-                    for (&location, &value) in params.zip(&values).collect::<Vec<_>>() {
-                        self.write(location, &[value]);
+            O::InvokeObserve | O::InvokeDispatch => {
+                let (value, has_result) = if op == O::InvokeDispatch {
+                    let (function, count, has_result) = self.dispatch(arguments, locations[0], |_, function| {
+                        function as u64
+                    });
+                    let values = locations[..count].iter().map(|&loc| self.word(loc)).collect::<Vec<_>>();
+                    let argv = self.record(&values);
+                    let argc = self.iconst(count as u64);
+                    let value = self.call("champ_machine_external", &[ctx, function, zero, argv, argc]).unwrap();
+                    (value, has_result)
+                } else {
+                    let target = arguments.iter().find_map(entry).unwrap() as usize;
+                    let callee = &self.program.functions[target];
+                    let count = callee.params.iter().filter(|location| matches!(location, L::Register(_))).count();
+                    let has_result = !callee.results.is_empty();
+                    let values = locations[..count].iter().map(|&loc| self.word(loc)).collect::<Vec<_>>();
+                    if self.self_tail_call(target, flow) {
+                        // A self call whose result is returned at once reuses this frame: a loop.
+                        let params = self.source.params.iter().filter(|location| matches!(location, L::Register(_)));
+                        for (&location, &value) in params.zip(&values).collect::<Vec<_>>() {
+                            self.write(location, &[value]);
+                        }
+                        self.builder.ins().jump(self.blocks[0], &[]);
+                        return Ok(());
                     }
-                    self.builder.ins().jump(self.blocks[0], &[]);
-                    return Ok(());
-                }
-                let value = self.observe(target, &values);
+                    (self.observe(target, &values), has_result)
+                };
                 let status = self.load(ctx, std::mem::offset_of!(Ctx, status));
                 let success = self.builder.create_block();
                 let failure = self.builder.create_block();
@@ -741,11 +787,7 @@ impl Emit<'_, '_> {
                     }
                     s::Flow::Outcomes(outcomes) => {
                         let edge = &outcomes.iter().find(|outcome| outcome.tag == s::Tag::Normal).unwrap().edge;
-                        let produced = if self.program.functions[target].results.is_empty() {
-                            vec![]
-                        } else {
-                            vec![vec![value]]
-                        };
+                        let produced = if has_result { vec![vec![value]] } else { vec![] };
                         self.edge(edge, &produced);
                     }
                 }
@@ -970,22 +1012,31 @@ impl Emit<'_, '_> {
                     args.extend(self.read(locations[1]));
                 }
             }
-            O::InvokeCallOwn | O::InvokeDefer => {
+            O::InvokeCallOwn | O::InvokeDefer | O::InvokeDispatchOwn => {
                 helper = if op == O::InvokeDefer { "champ_invoke_defer" } else { "champ_call_owned" };
-                let target = arguments.iter().find_map(entry).unwrap() as usize;
-                let count = self.program.functions[target].params.iter()
-                    .filter(|location| matches!(location, L::Register(_))).count();
+                let shielded = op == O::InvokeDefer || arguments.contains(&A::Flag(true));
+                let (entry_id, count) = if op == O::InvokeDispatchOwn {
+                    let (entry_id, count, _) = self.dispatch(arguments, locations[0], |emit, function| {
+                        let entries = if shielded { emit.shielded_entries } else { emit.entries };
+                        entries[function as usize]
+                    });
+                    (entry_id, count)
+                } else {
+                    let target = arguments.iter().find_map(entry).unwrap() as usize;
+                    let count = self.program.functions[target].params.iter()
+                        .filter(|location| matches!(location, L::Register(_))).count();
+                    let entry = if shielded { self.shielded_entries[target] } else { self.entries[target] };
+                    (self.iconst(entry), count)
+                };
                 let values = locations[..count].iter().map(|&location| self.word(location)).collect::<Vec<_>>();
                 let argv = self.record(&values);
                 let argc = self.iconst(count as u64);
-                let shielded = op == O::InvokeDefer || arguments.contains(&A::Flag(true));
-                let entry = if shielded { self.shielded_entries[target] } else { self.entries[target] };
-                let entry_id = self.iconst(entry);
                 let packet = self.word(locations[count]);
                 let mode = self.iconst(u64::from(shielded));
                 let io = self.record(&[packet, entry_id, post, zero, mode]);
                 args.extend([entry_id, argv, argc, io]);
                 if op == O::InvokeDefer {
+                    let target = arguments.iter().find_map(entry).unwrap() as usize;
                     let replacements = match &self.program.functions[target].entry_abi {
                         s::EntryAbi::Defer { labels } => labels.len(),
                         _ => unreachable!(),
@@ -1066,7 +1117,7 @@ impl Emit<'_, '_> {
         args.push(post);
         let ordinal = self.checked(helper, &args);
         // Retire copied inputs before the next safepoint. CallOwn owns its packet now.
-        if matches!(op, O::InvokeCallOwn | O::InvokeDefer | O::OwnJoin) {
+        if matches!(op, O::InvokeCallOwn | O::InvokeDefer | O::InvokeDispatchOwn | O::OwnJoin) {
             for &location in &locations {
                 if matches!(location, L::Service(id) if self.source.services[id as usize] == s::ServiceKind::Packet) {
                     self.write(location, &[zero]);
@@ -1077,6 +1128,39 @@ impl Emit<'_, '_> {
             self.store(self.io, 0, zero);
         }
         self.flow(op, flow, arguments, ordinal, helper)
+    }
+
+    /// Selects the implementation of a dispatch by the receiver's object descriptor: `select` maps each
+    /// target's implementation function to the word the call needs (its index or its entry ID). A receiver
+    /// outside the verified targets stops the machine. Returns the word, the language argument count
+    /// (receiver first) and whether the slot has a result.
+    fn dispatch(&mut self, arguments: &[A], receiver: L, select: impl Fn(&Self, u32) -> u64)
+        -> (Value, usize, bool)
+    {
+        let Some(A::Dispatch(dispatch)) = arguments.first() else { unreachable!("verified dispatch") };
+        let slot = &self.program.objects[dispatch.role as usize].role.as_ref().expect("verified role")
+            .slots[dispatch.slot as usize];
+        let (count, has_result) = (1 + slot.params.len(), !slot.results.is_empty());
+        let object = self.word(receiver);
+        let header = self.load(object, 0);
+        let descriptor = self.builder.ins().ushr_imm_u(header, 32);
+        let mut selected = self.iconst(u64::MAX);
+        for &target in &dispatch.targets {
+            let function = s::implementation(self.program, target, dispatch.role, dispatch.slot)
+                .expect("verified implementation");
+            let word = self.iconst(select(self, function));
+            let matches = self.builder.ins().icmp_imm_s(IntCC::Equal, descriptor, i64::from(target));
+            selected = self.builder.ins().select(matches, word, selected);
+        }
+        let missing = self.builder.ins().icmp_imm_s(IntCC::Equal, selected, -1);
+        let outside = self.builder.create_block();
+        let selected_block = self.builder.create_block();
+        self.builder.ins().brif(missing, outside, &[], selected_block, &[]);
+        self.builder.switch_to_block(outside);
+        self.call("champ_machine_invalid", &[self.ctx]);
+        self.builder.ins().jump(self.stop, &[]);
+        self.builder.switch_to_block(selected_block);
+        (selected, count, has_result)
     }
 
     fn selection_record(&mut self, id: u32) -> Value {
@@ -1359,7 +1443,8 @@ impl Emit<'_, '_> {
                 self.builder.ins().uextend(types::I64, result)
             }
             D::ValEq | D::ValNe => {
-                let s::Type::Object(descriptor) = self.source.registers[inputs[0] as usize] else {
+                let ty = self.source.registers[inputs[0] as usize];
+                let (s::Type::Object(descriptor) | s::Type::Role(descriptor)) = ty else {
                     return Err(Error("Champ value equality outside objects".into()));
                 };
                 let descriptor = self.iconst(u64::from(descriptor));
@@ -1390,6 +1475,13 @@ impl Emit<'_, '_> {
                 let case = self.iconst(u64::from(case));
                 let storage = self.iconst(u64::from(indices[1]));
                 self.call("champ_machine_variant_get", &[self.ctx, case, storage, words[0]]).unwrap()
+            }
+            D::RoleNarrow => {
+                let s::Type::Role(role) = ty else {
+                    return Err(Error("Champ role narrowing outside role types".into()));
+                };
+                let role = self.iconst(u64::from(role));
+                self.call("champ_machine_role_narrow", &[self.ctx, role, words[0]]).unwrap()
             }
             D::TestOk | D::TestIs | D::TestIsnt | D::TestFail => {
                 let kind = self.iconst(match op {
@@ -1443,7 +1535,8 @@ impl Emit<'_, '_> {
 fn sets_status(op: s::DataOp) -> bool {
     use s::DataOp as D;
     matches!(op, D::IntMod | D::RangeNew | D::Convert | D::IntMul | D::StrConcat | D::RatNew | D::ValEq | D::ValNe
-        | D::VariantGet | D::MapNew | D::MapLen | D::MapHas | D::MapGet | D::MapKeys | D::MapValues | D::MapKeyAt
+        | D::VariantGet | D::RoleNarrow | D::MapNew | D::MapLen | D::MapHas | D::MapGet | D::MapKeys | D::MapValues
+        | D::MapKeyAt
         | D::MapValueAt | D::MapMerge | D::MapDifference | D::ArrayConcat | D::ArrayJoin | D::ArraySlice
         | D::ArrayRemove | D::ArrayReplace | D::ArrayDifference | D::BuilderNew | D::ArrayNew | D::TestOk
         | D::TestIs | D::TestIsnt | D::TestFail)
@@ -1458,3 +1551,5 @@ fn inline_scalar(op: s::DataOp) -> bool {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod roles_tests;

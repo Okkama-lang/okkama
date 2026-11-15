@@ -89,6 +89,13 @@ fn protocols(module: &Module, state: &mut State<'_>) {
 }
 
 fn operation(module: &Module, function: &Function, body: &Body, op: &Operation, state: &mut State<'_>) {
+    // D24, D25, C-4: these operations have no ownership model in the coro/low verifier until slices R1 and P1, so
+    // the full verifier rejects them rather than accept what it cannot check.
+    let unmodeled = matches!(op, Operation::Async(AsyncOp::ServiceAbsorb { .. } | AsyncOp::ServiceMaterialize { .. }
+        | AsyncOp::FutureSpawn { .. } | AsyncOp::CacheRehome { form: RehomeForm::Token { .. }, .. }));
+    if unmodeled && matches!(module.profile, Profile::Coro | Profile::Low) {
+        state.error(R::AsyncUnmodeledOp, "spawn, rehome tokens and packet duties are modeled from slices R1 and P1");
+    }
     if matches!(op, Operation::Carrier(_)) {
         state.error(R::B75, "owned carrier graph operations are excluded from 0.6.0");
     }

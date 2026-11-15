@@ -155,24 +155,27 @@ func @f(%0: bool; %1: own) -> (int, own) abi explicit(input_packet=1, output_pac
     ^b7(%26: scope<S2>, %27: own, %28: deps, %29: R facts(managed(deps=d4)), %30: deps, %31: bool) in S2:
     %32: scope<S2> = own.bind binding elaborated_binding(binding=b0, resource=resource_value(value=%29, packet=%27),
         state=%26, original_scope=S2)
-    %33: fn() -> int facts(managed(deps=d5)) = fn.closure @lambda.__own_entry_1, [%29], ty fn() -> int
-    %34: deps = deps.of %33
+    %33: own = own.empty
+    (%34: fn() -> int facts(managed(deps=d5)),
+        %35: own) = fn.closure @lambda.__own_entry_1, [%29], ty fn() -> int, packet %33
+    %36: deps = deps.of %34
+    %37: scope<S2> = own.admit %32, %35
     cond %31, ^b9, ^b10
-    ^b8(%35: scope<S2>, %36: failure) in S2:
-    %37: failure = scope.unwind %35, %36, effects scope_effects(failures=[], suspends=false, cancel=false)
-    raise %37
+    ^b8(%38: scope<S2>, %39: failure) in S2:
+    %40: failure = scope.unwind %38, %39, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %40
     ^b9 in S2:
-    br ^b3(%33, %34, %32)
+    br ^b3(%34, %36, %37)
     ^b10 in S2:
-    br ^b2(%33, %34, %32)
-    ^b11(%38: int, %39: own, %40: deps, %41: scope<S2>) in S2:
-    %42: scope<S2> = own.admit %41, %39
-    %43: closed = scope.end %42, effects scope_effects(failures=[], suspends=false, cancel=false)
-    %44: own = own.empty
-    ret %38, %44
-    ^b12(%45: failure, %46: scope<S2>) in S2:
-    %47: failure = scope.unwind %46, %45, effects scope_effects(failures=[], suspends=false, cancel=false)
-    raise %47
+    br ^b2(%34, %36, %37)
+    ^b11(%41: int, %42: own, %43: deps, %44: scope<S2>) in S2:
+    %45: scope<S2> = own.admit %44, %42
+    %46: closed = scope.end %45, effects scope_effects(failures=[], suspends=false, cancel=false)
+    %47: own = own.empty
+    ret %41, %47
+    ^b12(%48: failure, %49: scope<S2>) in S2:
+    %50: failure = scope.unwind %49, %48, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %50
 }
 
 func @lambda.__own_entry_1(%0: R facts(managed(deps=d1)); %1: deps, %2: own) -> (int, own) [lambda captures

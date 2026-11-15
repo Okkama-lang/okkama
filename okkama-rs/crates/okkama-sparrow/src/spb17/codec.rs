@@ -332,8 +332,12 @@ record! { ObjectRuntimeLayout {
 
 record! { Field { name, storage, once } }
 record! { Object {
-    name, fields, layout, error_cases; enum_cases, variant_cases, handle,
+    name, fields, layout, error_cases; enum_cases, variant_cases, handle, role, implements,
 } }
+record! { RoleDecl { slots } }
+record! { RoleSlot { name, entry_abi, params, results } }
+record! { RoleImpl { role, slots } }
+record! { Dispatch { role, slot, failures, retained_params, targets } }
 
 record! { Assignment {
     destination, source,
@@ -439,6 +443,7 @@ tagged! { Type {
     7 => Object(id: u32), 8 => Successor(id: u32), 13 => Never, 9 => Descriptor,
     23 => Array(shape: ArrayType), 24 => Variant(id: u32), 25 => Handle(id: u32),
     26 => Map(id: u32), 27 => MapBuilder(id: u32), 28 => Builder(id: u32), 29 => Future(id: u32),
+    40 => Role(id: u32), 41 => RoleSuccessor(id: u32),
 } }
 impl Wire for Composite {
     fn put(&self, w: &mut Writer) {
@@ -469,7 +474,7 @@ impl Wire for Composite {
 record! { ArrayType { leaf, depth } }
 tagged! { ArrayLeaf {
     0 => Int, 1 => Bool, 2 => Str, 3 => Range, 4 => Bytes, 5 => Object(id: u32),
-    6 => Float, 7 => Char, 8 => Rat, 9 => Variant(id: u32), 10 => Map(id: u32), 11 => Never,
+    6 => Float, 7 => Char, 8 => Rat, 9 => Variant(id: u32), 10 => Map(id: u32), 11 => Never, 20 => Role(id: u32),
 } }
 tagged! { ServiceKind {
     0 => Packet, 1 => ScopeState, 2 => Pending, 3 => Cleanup, 4 => StableKey,
@@ -501,6 +506,7 @@ tagged! { Argument {
     8 => Entry(id: u32), 9 => Object(id: u32), 10 => Binding(id: u32), 11 => Field(id: u32),
     12 => Label(id: u32), 13 => Flag(flag: bool), 14 => Kind(kind: ExitKind), 15 => Registration(id: u32),
     16 => Destination(destination: ExitDestination), 19 => Continuation(id: u32),
+    40 => Dispatch(dispatch: Dispatch),
 } }
 record! { Evaluation { op, result, immediate } }
 
@@ -590,6 +596,7 @@ fn opcode_name(code: u8) -> Option<&'static str> {
         147 => Some("raise"),
         136 => Some("fail.secondary"),
         137 => Some("fail.caused"),
+        100 => Some("role"),
         150 => Some("test.check"),
         255 => Some("champ"),
         _ => None,
@@ -669,6 +676,7 @@ impl DataOp {
             Self::EnumCase => (94, None),
             Self::FailSecondary => (136, None),
             Self::FailCaused => (137, None),
+            Self::RoleNarrow => (100, Some(0)),
             Self::MapNew => (56, Some(0)),
             Self::MapLen => (56, Some(1)),
             Self::MapHas => (56, Some(2)),
@@ -698,7 +706,7 @@ impl DataOp {
     }
 
     fn read(code: u8, r: &mut Reader<'_>) -> Result<Self, Error> {
-        let sub = if matches!(code, 14..=18 | 24 | 41 | 71 | 85 | 47..=50 | 52 | 53 | 56 | 57 | 150) {
+        let sub = if matches!(code, 14..=18 | 24 | 41 | 71 | 85 | 47..=50 | 52 | 53 | 56 | 57 | 100 | 150) {
             Some(r.number()?)
         } else {
             None
@@ -777,6 +785,7 @@ impl DataOp {
             (94, None) => Ok(Self::EnumCase),
             (136, None) => Ok(Self::FailSecondary),
             (137, None) => Ok(Self::FailCaused),
+            (100, Some(0)) => Ok(Self::RoleNarrow),
             (56, Some(0)) => Ok(Self::MapNew),
             (56, Some(1)) => Ok(Self::MapLen),
             (56, Some(2)) => Ok(Self::MapHas),

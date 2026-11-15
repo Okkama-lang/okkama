@@ -123,6 +123,8 @@ registry! {
     75 => FrameResume, "frame.resume";
     76 => AwaitUnwind, "await.unwind";
     77 => CleanupDeliverCancel, "cleanup.deliver_cancel";
+    96 => InvokeDispatch, "invoke.dispatch";
+    97 => InvokeDispatchOwn, "invoke.dispatch.own";
 }
 
 impl Opcode {
@@ -170,8 +172,8 @@ impl Opcode {
             (CleanupNext, Tag::Done) => vec![S(Cleanup)],
             (DestroyDirect | CleanupDestroy, Tag::Normal) => vec![S(Cleanup), S(FailureState)],
             (CleanupFinish, Tag::Normal) => vec![S(Closed), S(FailureState), S(ExitState)],
-            (InvokeObserve, Tag::Normal) => context.value.into_iter().map(Value).collect(),
-            (InvokeObserve, Tag::Unwind) if context.may_fail => vec![Value(Type::Failure)],
+            (InvokeObserve | InvokeDispatch, Tag::Normal) => context.value.into_iter().map(Value).collect(),
+            (InvokeObserve | InvokeDispatch, Tag::Unwind) if context.may_fail => vec![Value(Type::Failure)],
             (ArrayGet, Tag::Normal) => context.value.into_iter().map(Value).collect(),
             (ArrayGet, Tag::Unwind) => vec![Value(Type::Failure)],
             (Fail, Tag::Unwind) => vec![Value(Type::Failure)],
@@ -179,8 +181,10 @@ impl Opcode {
             (Evaluate, Tag::Unwind) => vec![Value(Type::Failure)],
             (Catch, Tag::Some) => context.value.into_iter().map(Value).collect(),
             (Catch, Tag::None) => vec![],
-            (InvokeCallOwn, Tag::Normal) => valued(),
-            (InvokeCallOwn | InvokeDefer, Tag::Unwind) if context.may_fail => vec![Value(Type::Failure)],
+            (InvokeCallOwn | InvokeDispatchOwn, Tag::Normal) => valued(),
+            (InvokeCallOwn | InvokeDispatchOwn | InvokeDefer, Tag::Unwind) if context.may_fail => {
+                vec![Value(Type::Failure)]
+            }
             (InvokeDefer, Tag::Continue) => vec![],
             (InvokeDefer, Tag::Replace(label)) => {
                 let declared = context.labels.iter().find(|declared| declared.label == label)
@@ -249,8 +253,8 @@ impl Opcode {
             OwnSplitChecked | ScopeSplit | ScopeTransfer | ArrayGet | Evaluate | Await => {
                 vec![Tag::Normal, Tag::Unwind]
             }
-            InvokeObserve if context.may_fail => vec![Tag::Normal, Tag::Unwind],
-            InvokeCallOwn => {
+            InvokeObserve | InvokeDispatch if context.may_fail => vec![Tag::Normal, Tag::Unwind],
+            InvokeCallOwn | InvokeDispatchOwn => {
                 if context.may_fail { vec![Tag::Normal, Tag::Unwind] } else { vec![Tag::Normal] }
             }
             InvokeDefer => {
@@ -280,6 +284,7 @@ impl Opcode {
     pub fn is_terminator(self) -> bool {
         matches!(self, Self::OwnSplitChecked | Self::ScopeSplit | Self::ScopeTransfer |
             Self::InvokeCallOwn | Self::InvokeObserve | Self::InvokeDefer | Self::CleanupNext | Self::ExitDispatch |
+            Self::InvokeDispatch | Self::InvokeDispatchOwn |
             Self::FailureDispatch | Self::RetOwn | Self::RetDefer | Self::ArrayGet | Self::Fail | Self::Evaluate
             | Self::Catch | Self::BuilderPush | Self::BuilderAppend | Self::BuilderRange | Self::BuilderFinish
             | Self::Lookup | Self::Await)
@@ -339,7 +344,8 @@ pub struct CallAbi {
 impl Opcode {
     pub const fn call_abi(self) -> Option<CallAbi> {
         let helper = match self {
-            Self::InvokeCallOwn => "champ_call_owned",
+            // A dispatch selects the implementation's entry, then transports it as an owned call.
+            Self::InvokeCallOwn | Self::InvokeDispatchOwn => "champ_call_owned",
             Self::InvokeDefer => "champ_invoke_defer",
             _ => return None,
         };
@@ -431,6 +437,9 @@ pub const HELPER_COLLECTS: u8 = 2;
 pub const HELPER_REENTERS: u8 = 4;
 pub const HELPER_UNWINDS: u8 = 8;
 pub const HELPER_STOPS: u8 = 16;
+/// Class S (Champ draft 3 §1.1): the helper may return `OUTCOME_PENDING` after registering a wake entry, having
+/// consumed no linear operand.
+pub const HELPER_SUSPENDS: u8 = 32;
 
 impl Opcode {
     pub const fn helper(self) -> Option<Helper> {
@@ -466,6 +475,10 @@ use MachineArgument::{Context as C, Pointer as P, Word as W, KeyRef as K};
 const L: u8 = HELPER_ALLOCATES | HELPER_STOPS;
 const G: u8 = L | HELPER_UNWINDS;
 const X: u8 = L | HELPER_COLLECTS | HELPER_REENTERS;
+/// Class G without an Unwind outcome: it may collect, and fails only by STOP.
+const COLLECTING: u8 = L | HELPER_COLLECTS;
+/// Class S: like X, and it may also return PENDING.
+const SUSPENDING: u8 = X | HELPER_SUSPENDS;
 
 macro_rules! helper_registry {
     ($( $name:literal => $args:expr, $effects:expr, $op:expr; )*) => {
@@ -521,6 +534,7 @@ helper_registry! {
         "champ_machine_rat_order" => &[C, W, W], 0, None;
         "champ_machine_value_eq" => &[C, W, W, W], G, None;
         "champ_machine_variant_get" => &[C, W, W, W], G, None;
+        "champ_machine_role_narrow" => &[C, W, W], G, None;
         "champ_machine_collection" => &[C, W, W, P, W], G | HELPER_COLLECTS, None;
         "champ_machine_builder" => &[C, W, W, P, W], G | HELPER_COLLECTS, None;
         "champ_machine_lookup" => &[C, W, W, W, W, P], HELPER_STOPS, None;
@@ -536,6 +550,17 @@ helper_registry! {
         "champ_machine_serial" => &[C, W], 0, None;
         "champ_machine_fatal_stack" => &[C], HELPER_STOPS, None;
         "champ_machine_cleanup_mode" => &[C], 0, None;
+        // The async helpers of Champ draft 3 §14.4 (#601 V8). `fut.done`, `frame.save` and `frame.resume` are
+        // inline; the nonempty `cleanup.settle` settles one scheduled duty.
+        "champ_future_new" => &[C, P, P], COLLECTING, Some(O::FutureNew);
+        "champ_await_view" => &[C, W, W, P], SUSPENDING | HELPER_UNWINDS, Some(O::Await);
+        "champ_await_unwind" => &[C, W, P, W, P, P, P], SUSPENDING, Some(O::AwaitUnwind);
+        "champ_future_publish" => &[C, W, P], HELPER_STOPS, Some(O::FuturePublish);
+        "champ_future_cancel" => &[C, W], HELPER_STOPS, Some(O::FutureCancel);
+        "champ_future_cancelled" => &[C, W, P], HELPER_STOPS, Some(O::FutureCancelled);
+        "champ_cleanup_deliver_cancel" => &[C, W, P, P], L, Some(O::CleanupDeliverCancel);
+        "champ_cleanup_settle" => &[C, W, P, W, W, W, P], L, Some(O::CleanupSettle);
+        "champ_machine_future_destination" => &[C, W, P], HELPER_STOPS, None;
 }
 
 pub const fn helper(name: &str) -> Option<Helper> {

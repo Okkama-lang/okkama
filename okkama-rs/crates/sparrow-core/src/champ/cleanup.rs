@@ -17,9 +17,12 @@ impl Runtime {
         Ok(CleanupSlot { record })
     }
     pub fn champ_cleanup_from_scope(&mut self, input: &mut ScopeSlot) -> Result<CleanupSlot, Error> {
-        let remainder = scope(self, input.record)?.all();
+        let closing = scope(self, input.record)?;
+        let remainder = closing.all();
         validate(self, &remainder)?;
-        let record = store(self, Data::Cleanup(Cleanup { remainder, settled: true, ..Cleanup::default() }));
+        let record = store(self, Data::Cleanup(Cleanup {
+            owner: Some(closing.owner), remainder, settled: true, ..Cleanup::default()
+        }));
         consume(self, input.record);
         input.record = 0;
         Ok(CleanupSlot { record })
@@ -113,10 +116,11 @@ pub extern "C" fn rt_cleanup_begin(ctx: *mut Ctx, inputs: *const CloseInputs,
         } else {
             unsafe { (*inputs.scope).record }
         };
-        let remainder = if inputs.scope.is_null() {
-            packet(runtime, source)?
+        let (owner, remainder) = if inputs.scope.is_null() {
+            (None, packet(runtime, source)?)
         } else {
-            scope(runtime, source)?.all()
+            let closing = scope(runtime, source)?;
+            (Some(closing.owner), closing.all())
         };
         let pending_record = if inputs.pending.is_null() { 0 } else { unsafe { (*inputs.pending).record } };
         let pending = if inputs.pending.is_null() {
@@ -129,7 +133,9 @@ pub extern "C" fn rt_cleanup_begin(ctx: *mut Ctx, inputs: *const CloseInputs,
             inventory.append(pending.reserve.clone());
         }
         validate(runtime, &inventory)?;
-        let mut cleanup = Cleanup { remainder, pending, settlements: inputs.settlements, ..Cleanup::default() };
+        let mut cleanup = Cleanup {
+            owner, remainder, pending, settlements: inputs.settlements, ..Cleanup::default()
+        };
         if inputs.failure != 0 {
             record_failure(runtime, &mut cleanup, inputs.failure)?;
         }
@@ -207,6 +213,97 @@ pub extern "C" fn rt_cleanup_settle_packet(ctx: *mut Ctx, input: *mut CleanupSlo
         consume(runtime, packet_record);
         unsafe {
             (*settled).record = 0;
+            (*input).record = 0;
+            post.write(CleanupSlot { record });
+        }
+        Ok(())
+    })
+}
+/// The nonempty `cleanup.settle` (SPB 21) for one scheduled duty, class L (draft 3 §6.2, ABI D24.2): no settle
+/// waits in 0.6.0. `schedule` is the runtime id of the close's schedule and `index` the duty's position in it;
+/// the first duty opens the settlement and the last completes it. `this` is the settling body's frame, or 0 in a
+/// synchronous owner. A cache duty releases a never-started Future's inputs and a success's outcome packet into
+/// the settled run, detaches a running Future to the root, and settles a cold one as Cancelled; a cache of
+/// another owner settles to nothing.
+pub extern "C" fn rt_service_settle(ctx: *mut Ctx, this: Word, input: *mut CleanupSlot, schedule: u64, index: u64,
+    duty: Word, post: *mut CleanupSlot) -> Outcome
+{
+    let _ = this;
+    leaf(ctx, |runtime| {
+        let count = *runtime.champ.schedules.get(schedule.wrapping_sub(1) as usize)
+            .ok_or_else(|| error("unknown service schedule"))?;
+        if index >= count {
+            return Err(error("duty outside its schedule"));
+        }
+        let record = unsafe { (*input).record };
+        edit(runtime, record, |runtime, cleanup| {
+            ready(cleanup)?;
+            if cleanup.settled || cleanup.planned {
+                return Err(error("duty settle after the settlement"));
+            }
+            if index == 0 {
+                if cleanup.settlements != 0 {
+                    return Err(error("settlement opened twice"));
+                }
+                cleanup.settlements = count;
+            }
+            if cleanup.settlements != count - index {
+                return Err(error("duty settled out of schedule order"));
+            }
+            let settle = runtime.champ_cache_settlement(duty, cleanup.owner)?;
+            let mut released = Packet::default();
+            let records = match settle {
+                super::futures::CacheSettle::Release { inputs, outcome, .. } => [inputs, outcome],
+                _ => [0, 0],
+            };
+            for record in records.into_iter().filter(|&record| record != 0) {
+                released.append(packet(runtime, record)?);
+            }
+            let mut all = cleanup.remainder.clone();
+            all.append(released.clone());
+            if let Some(pending) = &cleanup.pending {
+                all.append(pending.reserve.clone());
+            }
+            validate(runtime, &all)?;
+            runtime.champ_cache_settle(duty, settle)?;
+            for record in records.into_iter().filter(|&record| record != 0) {
+                consume(runtime, record);
+            }
+            cleanup.remainder.append(released);
+            cleanup.settlements -= 1;
+            cleanup.settled = cleanup.settlements == 0;
+            Ok(())
+        })?;
+        unsafe {
+            (*input).record = 0;
+            post.write(CleanupSlot { record });
+        }
+        Ok(())
+    })
+}
+/// `cleanup.deliver_cancel` (SPB 77), class L (draft 3 §5): at the final exit of an async body whose close
+/// declares D18 `cancel=true`. A cancellation requested of the body's task and not yet delivered becomes the
+/// close's primary failure when it has none, and activates abort; the failure surfaces through `cleanup.finish`.
+/// With a primary already recorded the request stays for later.
+pub extern "C" fn rt_cleanup_deliver_cancel(ctx: *mut Ctx, this: Word, input: *mut CleanupSlot,
+    post: *mut CleanupSlot) -> Outcome
+{
+    use crate::tasks::{champ_flags as flags, get, set, FLAGS};
+    leaf(ctx, |runtime| {
+        let task = runtime.champ_task_of(this)?;
+        let record = unsafe { (*input).record };
+        edit(runtime, record, |runtime, cleanup| {
+            ready(cleanup)?;
+            let current = get(task, FLAGS);
+            let requested = current & flags::CANCEL_REQUESTED != 0 && current & flags::CANCEL_DELIVERED == 0;
+            if requested && cleanup.failure == 0 {
+                let failure = runtime.champ_take_emergency(this)?;
+                record_failure(runtime, cleanup, failure)?;
+                set(task, FLAGS, current | flags::CANCEL_DELIVERED);
+            }
+            Ok(())
+        })?;
+        unsafe {
             (*input).record = 0;
             post.write(CleanupSlot { record });
         }

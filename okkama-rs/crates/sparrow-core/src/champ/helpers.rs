@@ -217,30 +217,45 @@ fn static_selection(runtime: &Runtime, packet: &Packet, plan: PlanId) -> Result<
     }
     Ok(selected)
 }
-fn checked_selection(runtime: &Runtime, packet: &Packet, selection: &Selection) -> Result<HashSet<Word>, Error> {
-    selection_walk(runtime, packet, selection, true)
+/// What a selection walk insists on for the identities it reaches without a managed collection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Authority {
+    /// Nothing: identities outside the source are not selected (a binding, a scope split).
+    Any,
+    /// A selected identity is live; one outside the source stays with its owner (a scope transfer, whose
+    /// value may borrow an identity an enclosing scope owns, such as an element of its managed array).
+    Live,
+    /// The identity is in the source and live (a checked packet split).
+    Source,
+}
+fn checked_selection(runtime: &Runtime, packet: &Packet, selection: &Selection, authority: Authority)
+    -> Result<HashSet<Word>, Error>
+{
+    selection_walk(runtime, packet, selection, authority)
 }
 #[cfg(test)]
 thread_local! {
     pub(crate) static GRAPH_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-fn selection_walk(runtime: &Runtime, packet: &Packet, selection: &Selection, strict: bool)
+fn selection_walk(runtime: &Runtime, packet: &Packet, selection: &Selection, authority: Authority)
     -> Result<HashSet<Word>, Error>
 {
     #[cfg(test)]
     GRAPH_WALKS.with(|count| count.set(count.get() + 1));
     validate(runtime, packet)?;
     let available: HashSet<_> = packet.words().collect();
-    let mut work = if selection.count == 0 {
+    // Each item says whether it was reached through a managed array or map.
+    let mut work: Vec<(Word, bool)> = if selection.count == 0 {
         Vec::new()
     } else {
-        unsafe { std::slice::from_raw_parts(selection.roots, selection.count as usize) }.to_vec()
+        unsafe { std::slice::from_raw_parts(selection.roots, selection.count as usize) }.iter()
+            .map(|&root| (root, false)).collect()
     };
     let mut seen = HashSet::new();
     let mut selected = HashSet::new();
-    while let Some(object) = work.pop() {
-        if object == 0 || object & 1 != 0 || !seen.insert(object) {
+    while let Some((object, collected)) = work.pop() {
+        if object == 0 || object & 1 != 0 || !seen.insert((object, collected)) {
             continue;
         }
         let header = runtime.heap.header_of(object);
@@ -257,7 +272,7 @@ fn selection_walk(runtime: &Runtime, packet: &Packet, selection: &Selection, str
                     matches!(heap::kind(runtime.heap.header_of(element)), heap::OBJECT | heap::ARRAY)
                 });
             if heap::element_repr(header) == crate::word::Repr::Ref && nested {
-                work.extend(elements.iter().copied());
+                work.extend(elements.iter().map(|&element| (element, true)));
             }
             continue;
         }
@@ -271,7 +286,7 @@ fn selection_walk(runtime: &Runtime, packet: &Packet, selection: &Selection, str
                     matches!(heap::kind(runtime.heap.header_of(value)), heap::OBJECT | heap::ARRAY)
                 });
                 if nested {
-                    work.extend(values);
+                    work.extend(values.into_iter().map(|value| (value, true)));
                 }
             }
             continue;
@@ -287,16 +302,24 @@ fn selection_walk(runtime: &Runtime, packet: &Packet, selection: &Selection, str
             return Err(error("unsupported selection root"));
         }
         if let Some(identity) = runtime.heap.champ_identity(object) {
-            if strict && (!available.contains(&object) || identity.life != Life::Live) {
+            let inside = available.contains(&object);
+            // A collection refers to identities it does not own: an element outside the source stays with its
+            // owner, and only an identity reached without one answers to the authority.
+            let refused = !collected && match authority {
+                Authority::Any => false,
+                Authority::Live => inside && identity.life != Life::Live,
+                Authority::Source => !inside || identity.life != Life::Live,
+            };
+            if refused {
                 return Err(error("selection outside source authority"));
             }
-            if available.contains(&object) {
+            if inside {
                 selected.insert(object);
             }
         }
         let layout = runtime.heap.object_runtime_layout(heap::payload(header));
         for &index in layout.selection_layout() {
-            work.push(runtime.heap.field(object, index));
+            work.push((runtime.heap.field(object, index), collected));
         }
     }
     Ok(selected)
@@ -417,7 +440,7 @@ fn bind(runtime: &mut Runtime, state: Word, binding: u64, value: Word, input: Wo
     let repr = *runtime.champ.value_reprs.get(&(scope.owner.0, binding, stage))
         .ok_or_else(|| error("missing binding/field trace layout"))?;
     let selected = if repr == Repr::Ref && value != 0 {
-        selection_walk(runtime, &all, &Selection { roots: &value, count: 1 }, false)?
+        selection_walk(runtime, &all, &Selection { roots: &value, count: 1 }, Authority::Any)?
     } else {
         HashSet::new()
     };
@@ -694,7 +717,7 @@ pub extern "C" fn rt_own_split_checked(ctx: *mut Ctx, input: *mut PacketSlot,
     }
     let result = (|| {
         let packet = packet(runtime, original)?;
-        let selected = checked_selection(runtime, &packet, unsafe { &*selection })?;
+        let selected = checked_selection(runtime, &packet, unsafe { &*selection }, Authority::Source)?;
         split(runtime, &packet, &selected)
     })();
     let (outcome, output) = match result {
@@ -754,7 +777,7 @@ fn scope_split(ctx: *mut Ctx, input: *mut ScopeSlot, selection: *const Selection
         let all = scope.all();
         let mut selected = // Borrowed external dependencies have no obligation in this boundary. The SPB proof
         // retains them; the runtime packet contains only this scope's selected identities.
-        selection_walk(runtime, &all, unsafe { &*selection }, false)?;
+        selection_walk(runtime, &all, unsafe { &*selection }, Authority::Any)?;
         if admissible {
             let eligible = scope.admission.words().collect::<HashSet<_>>();
             selected.retain(|object| eligible.contains(object));
@@ -804,7 +827,7 @@ pub extern "C" fn rt_scope_transfer(ctx: *mut Ctx, inputs: *const TransferInputs
         }
         let mut source = scope(runtime, from)?;
         let all = source.all();
-        let selected = checked_selection(runtime, &all, unsafe { &*selection })?;
+        let selected = checked_selection(runtime, &all, unsafe { &*selection }, Authority::Live)?;
         if same {
             return Ok((from, 0));
         }

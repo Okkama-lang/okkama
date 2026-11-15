@@ -168,8 +168,9 @@ fn s1_edges_reject_bad_arity_schema_and_cross_outcome_slots() {
 #[test]
 fn s1_registry_has_exact_p1_ids_and_normative_schemas() {
     let reserved = [0, 19, 25, 34, 35, 36];
-    // P1 and the synchronous lanes take 57 IDs; #601 V6 assigns ten of the async block 64..=95.
-    assert_eq!(Opcode::ALL.len(), 57);
+    // P1 and the synchronous lanes take 57 IDs with the ten async IDs of #601 V6 (64..=95), and #676 adds
+    // the dispatch ids 96 and 97.
+    assert_eq!(Opcode::ALL.len(), 59);
     for id in 0..47 {
         assert_eq!(Opcode::from_id(id).is_err(), reserved.contains(&id));
     }
@@ -178,6 +179,8 @@ fn s1_registry_has_exact_p1_ids_and_normative_schemas() {
         let assigned = (56..=61).contains(&id) || matches!(id, 64 | 66 | 70..=77);
         assert_eq!(Opcode::from_id(id).is_ok(), assigned, "{id}");
     }
+    assert_eq!(Opcode::from_id(96).unwrap(), Opcode::InvokeDispatch);
+    assert_eq!(Opcode::from_id(97).unwrap(), Opcode::InvokeDispatchOwn);
     for &op in Opcode::ALL {
         assert_eq!(Opcode::from_id(op.id()).unwrap(), op);
         assert!(!op.name().contains("shield"));
@@ -192,6 +195,15 @@ fn s1_registry_has_exact_p1_ids_and_normative_schemas() {
     assert_eq!(Opcode::DepsOf.results(Tag::Normal, &ctx).unwrap(), vec![S(Deps)]);
     assert_eq!(Opcode::InvokeObserve.results(Tag::Normal, &ctx).unwrap(), vec![Value(Type::Int)]);
     assert_eq!(Opcode::InvokeObserve.results(Tag::Unwind, &ctx).unwrap(), vec![Value(Type::Failure)]);
+    // A dispatch has the outcomes and payloads of the call its slot ABI names.
+    for tag in [Tag::Normal, Tag::Unwind] {
+        assert_eq!(Opcode::InvokeDispatch.results(tag, &ctx).unwrap(),
+            Opcode::InvokeObserve.results(tag, &ctx).unwrap());
+        assert_eq!(Opcode::InvokeDispatchOwn.results(tag, &ctx).unwrap(),
+            Opcode::InvokeCallOwn.results(tag, &ctx).unwrap());
+    }
+    assert_eq!(Opcode::InvokeDispatchOwn.tags(&ctx), Opcode::InvokeCallOwn.tags(&ctx));
+    assert_eq!(Opcode::InvokeDispatchOwn.call_abi(), Opcode::InvokeCallOwn.call_abi());
     assert_eq!(Opcode::OwnSplitChecked.results(Tag::Normal, &ctx).unwrap(), vec![S(Packet), S(Packet), S(Deps)]);
     assert_eq!(Opcode::OwnSplitChecked.results(Tag::Unwind, &ctx).unwrap(), vec![S(Packet), Value(Type::Failure)]);
     assert_eq!(Opcode::ScopeSplit.results(Tag::Unwind, &ctx).unwrap(), vec![S(ScopeState), Value(Type::Failure)]);
@@ -233,7 +245,7 @@ fn s1_plain_and_identity_layouts_round_trip_and_reject_bad_offsets() {
     p.objects.push(Object {
         error_cases: vec![],
         enum_cases: 0,
-        variant_cases: vec![], handle: false,
+        variant_cases: vec![], handle: false, role: None, implements: vec![],
         name: "Plain".into(),
         fields: vec![Field { name: "text".into(), storage: 0, once: false }],
         layout: ObjectRuntimeLayout {

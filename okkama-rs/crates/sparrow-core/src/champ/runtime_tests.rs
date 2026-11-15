@@ -107,6 +107,15 @@ fn changed(before: Identity, after: Identity, holder: u64, owner: u64) {
     assert_eq!(after, Identity { holder_id: holder, owner_id: owner, epoch: before.epoch + 1, ..before });
 }
 
+/// The result context a registry check needs: `fut.new`'s schema names its Future type (#601 V8).
+pub(super) fn schema_context(opcode: Option<okkama_sparrow::spb17::Opcode>) -> okkama_sparrow::spb17::ResultContext {
+    use okkama_sparrow::spb17::{Opcode, ResultContext, Type};
+    match opcode {
+        Some(Opcode::FutureNew) => ResultContext { value: Some(Type::Future(0)), ..ResultContext::default() },
+        _ => ResultContext::default(),
+    }
+}
+
 #[test]
 fn champ_s2_registry_layouts_effects_and_single_outcome_channel() {
     assert_eq!(size_of::<CallPost>(), 24);
@@ -115,13 +124,14 @@ fn champ_s2_registry_layouts_effects_and_single_outcome_channel() {
     assert_eq!(size_of::<PacketSlot>(), 8);
     let helpers: Vec<_> = crate::jit::HELPERS.iter().filter(|(name, _)| name.starts_with("champ_")).collect();
     // #622 adds champ_machine_collection, champ_machine_builder and champ_machine_lookup; #675 adds
-    // champ_machine_scalar.
-    assert_eq!(helpers.len(), 60);
+    // champ_machine_scalar; #676 adds champ_machine_role_narrow; #601 V8 adds the eight async helpers of
+    // Champ draft 3 §14.4 and champ_machine_future_destination.
+    assert_eq!(helpers.len(), 70);
     for &(name, effects) in helpers {
         let abi = helper_abi(name).unwrap();
         let class = abi.class;
         assert_eq!(abi.effects, effects);
-        let context = okkama_sparrow::spb17::ResultContext::default();
+        let context = schema_context(abi.opcode);
         let schemas = abi.schemas(&context).unwrap();
         if let Some(opcode) = abi.opcode {
             for (tag, slots) in schemas {
@@ -133,7 +143,13 @@ fn champ_s2_registry_layouts_effects_and_single_outcome_channel() {
                 }
             }
         }
-        assert!(!effects.contains(&crate::jit::Effect::Suspends));
+        // Draft 3 §1.1: only class S may return PENDING, and an S helper is otherwise an X helper.
+        assert_eq!(effects.contains(&crate::jit::Effect::Suspends), class == HelperClass::S, "{name}");
+        if class == HelperClass::S {
+            for effect in [crate::jit::Effect::Collects, crate::jit::Effect::Reenters] {
+                assert!(effects.contains(&effect), "{name}: {effect:?}");
+            }
+        }
         if class == HelperClass::L {
             for effect in [crate::jit::Effect::Collects, crate::jit::Effect::Reenters, crate::jit::Effect::Fails] {
                 assert!(!effects.contains(&effect), "{name}: {effect:?}");
@@ -913,4 +929,56 @@ fn champ_selection_walk_descends_into_managed_arrays() {
     assert_eq!(words(&h.runtime, &post.selected), HashSet::from([a, b]));
     assert!(words(&h.runtime, &post.rest).is_empty());
     h.gc(&[post.rest.record, post.selected.record]);
+}
+
+/// A managed array may refer to identities another packet owns (the result of mapping a managed array): a
+/// checked split selects the elements in its source and leaves the others with their owner, while a direct
+/// root outside the source is still refused (#692).
+#[test]
+fn champ_checked_selection_leaves_foreign_collection_elements_with_their_owner() {
+    let mut h = Harness::new();
+    let owner = h.runtime.champ_new_owner().unwrap();
+    let (a, mut source) = h.fresh(0, owner);
+    let (b, other) = h.fresh(0, owner);
+    let managed = h.runtime.heap.allocate_array(Repr::Ref, &[a, b]);
+    let nested = h.runtime.heap.allocate_array(Repr::Ref, &[managed]);
+    let mut post = SplitPost::default();
+    let roots = [nested];
+    assert_eq!(rt_own_split_checked(&mut h.ctx, &mut source, &selection(&roots), &mut post), NORMAL);
+    assert_eq!(words(&h.runtime, &post.selected), HashSet::from([a]));
+    assert!(words(&h.runtime, &post.rest).is_empty());
+    assert_eq!(words(&h.runtime, &other), HashSet::from([b]));
+    h.gc(&[post.rest.record, post.selected.record, other.record]);
+    let mut selected = post.selected;
+    let roots = [b];
+    let mut refused = SplitPost::default();
+    assert_eq!(rt_own_split_checked(&mut h.ctx, &mut selected, &selection(&roots), &mut refused), UNWIND);
+    assert_eq!(h.ctx.status, FAILED);
+}
+
+/// A transferred value may borrow an identity an enclosing scope owns (an element of its managed array pushed
+/// into its builder): the transfer moves what its source holds and leaves the borrowed identity with its owner
+/// (#692).
+#[test]
+fn champ_transfer_leaves_a_borrowed_identity_with_its_owner() {
+    let mut h = Harness::new();
+    let mut from = h.scope();
+    let mut to = h.scope();
+    let from_scope = scope(&h.runtime, from.record).unwrap();
+    let to_scope = scope(&h.runtime, to.record).unwrap();
+    let (moved, mut packet) = h.fresh(0, from_scope.owner);
+    assert_eq!(rt_own_accept(&mut h.ctx, &mut from, &mut packet, &mut from), NORMAL);
+    let (borrowed, mut owned) = h.fresh(0, to_scope.owner);
+    assert_eq!(rt_own_accept(&mut h.ctx, &mut to, &mut owned, &mut to), NORMAL);
+    let kept = h.identity(borrowed);
+    let roots = [moved, borrowed];
+    let mut post = TransferPost::default();
+    let inputs = TransferInputs { from: &mut from, to: &mut to };
+    assert_eq!(rt_scope_transfer(&mut h.ctx, &inputs, &selection(&roots), &mut post), NORMAL);
+    let (from, to) = (post.from, post.to);
+    assert_eq!(scope(&h.runtime, from.record).unwrap().all().words().count(), 0);
+    assert_eq!(scope(&h.runtime, to.record).unwrap().all().words().collect::<HashSet<_>>(),
+        HashSet::from([moved, borrowed]));
+    assert_eq!(h.identity(borrowed), kept);
+    h.gc(&[from.record, to.record]);
 }
