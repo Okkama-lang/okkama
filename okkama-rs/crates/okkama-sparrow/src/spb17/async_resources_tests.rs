@@ -368,10 +368,12 @@ fn take_proof_and_rehome_schemas_follow_draft3() {
     let words = layout::service_layout(K::UniqueCache);
     assert_eq!((words.words, words.references), (0, &[][..]));
     assert!(K::UniqueCache.linear());
-    // Their helpers come with the runtime (R5); the proof has none.
-    for op in [O::AwaitTake, O::UniqueCacheProof, O::CacheRehome] {
-        assert_eq!(op.helper(), None, "{}", op.name());
-    }
+    // Their helpers came with the runtime (R5): the take is class S, the rehome class L; the proof has none.
+    let take = O::AwaitTake.helper().unwrap();
+    assert_eq!((take.name, take.effects & HELPER_SUSPENDS != 0), ("champ_await_take", true));
+    let rehome = O::CacheRehome.helper().unwrap();
+    assert_eq!((rehome.name, rehome.effects & (HELPER_SUSPENDS | HELPER_UNWINDS)), ("champ_cache_rehome", 0));
+    assert_eq!(O::UniqueCacheProof.helper(), None);
 }
 
 #[test]

@@ -143,7 +143,8 @@ impl Emit<'_, '_> {
         }
     }
 
-    /// Champ draft 3 §14.4: the Future operations, the suspension brackets and the nonempty `cleanup.settle`.
+    /// Champ draft 3 §14.4: the Future operations, the suspension brackets, the take with its proof, the rehome and
+    /// the nonempty `cleanup.settle`.
     pub(super) fn future_operation(&mut self, op: O, arguments: &[A], locations: &[L], flow: &s::Flow)
         -> Result<(), Error>
     {
@@ -207,6 +208,43 @@ impl Emit<'_, '_> {
             O::Await => {
                 let future = self.word(locations[0]);
                 ("champ_await_view", self.suspending("champ_await_view", &[ctx, body, future, post], locations))
+            }
+            O::AwaitTake => {
+                // The Future, its zero-word capability and the boundary scope, whose owner takes the packet.
+                let future = self.word(locations[0]);
+                let scope = arguments.iter().find_map(|argument| match argument {
+                    A::Scope(id) => Some(*id),
+                    _ => None,
+                }).expect("verified take boundary");
+                let boundary = self.scope_word(scope, 8);
+                let args = [ctx, body, future, boundary, post];
+                ("champ_await_take", self.suspending("champ_await_take", &args, locations))
+            }
+            O::UniqueCacheProof => {
+                // A proof the loader checks (SPB_TAKE_CAPABILITY): zero words, no helper.
+                self.next();
+                return Ok(());
+            }
+            O::CacheRehome => {
+                // The token form (ABI C-4): the exit's target is a scope's owner or the caller.
+                let destination = arguments.iter().find_map(|argument| match argument {
+                    A::Destination(destination) => Some(*destination),
+                    _ => None,
+                }).expect("verified rehome target");
+                let scope = match destination {
+                    s::ExitDestination::Caller => None,
+                    s::ExitDestination::Loop(id) => Some(self.program.tables.boundaries[id as usize].scope),
+                    s::ExitDestination::Scope(id) => Some(id),
+                };
+                let target = match scope {
+                    Some(scope) => self.scope_word(scope, 8),
+                    None => self.iconst(c::TARGET_CALLER),
+                };
+                let pending = self.pointer(locations[0]);
+                let cache = self.pointer(locations[1]);
+                let future = self.word(locations[1]);
+                let args = [ctx, pending, zero, cache, zero, future, target, post];
+                ("champ_cache_rehome", self.checked("champ_cache_rehome", &args))
             }
             O::AwaitUnwind => {
                 let state = self.pointer(locations[0]);

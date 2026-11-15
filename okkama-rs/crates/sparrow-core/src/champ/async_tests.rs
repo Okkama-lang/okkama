@@ -1039,6 +1039,30 @@ impl Activation {
             }
             O::FutureNew => self.future_new(arguments, &operands).ok_or(Step::Stop)?,
             O::Await => return Err(self.await_step(pc, operands[0], flow)),
+            O::AwaitTake => return Err(self.take_step(pc, arguments, operands[0], flow)),
+            O::UniqueCacheProof => vec![vec![]],
+            O::CacheRehome => {
+                let destination = argument(arguments, |argument| match argument {
+                    A::Destination(destination) => Some(*destination),
+                    _ => None,
+                });
+                let target = match destination {
+                    s::ExitDestination::Caller => TARGET_CALLER,
+                    s::ExitDestination::Loop(id) => self.scopes[self.program.tables.boundaries[id as usize].scope
+                        as usize][1],
+                    s::ExitDestination::Scope(id) => self.scopes[id as usize][1],
+                };
+                let mut pending = PendingSlot { record: self.word(operands[0]) };
+                let future = self.word(operands[1]);
+                let mut cache = CacheSlot { record: future };
+                let mut slot = RehomePost::default();
+                let rehomed = self.call(|ctx| rt_cache_rehome(ctx, &mut pending, std::ptr::null_mut(), &mut cache,
+                    std::ptr::null_mut(), future, target, &mut slot));
+                assert_eq!(rehomed, NORMAL, "{:?}", runtime_of(self.ctx).fatal);
+                self.write(operands[0], &[0]);
+                self.write(operands[1], &[0]);
+                vec![vec![slot.pending.record]]
+            }
             O::AwaitUnwind => self.await_unwind(pc, &operands)?,
             O::ExitPrepare => self.exit_prepare(arguments, &operands),
             O::CleanupBegin => self.cleanup_begin(&operands),
@@ -1139,6 +1163,35 @@ impl Activation {
             NORMAL => {
                 let mut values = if valued { vec![vec![slot.value]] } else { vec![] };
                 values.push(vec![]);
+                self.outcome(flow, Tag::Normal, &values)
+            }
+            UNWIND => {
+                self.land(pc);
+                self.outcome(flow, Tag::Unwind, &[vec![slot.value], vec![slot.task], vec![slot.receipt]])
+            }
+            _ => Step::Stop,
+        }
+    }
+
+    /// `await.take`: the Future, its zero-word capability and the boundary scope, whose owner takes the packet.
+    fn take_step(&mut self, pc: usize, arguments: &[A], operand: Location, flow: &s::Flow) -> Step {
+        let future = self.word(operand);
+        let scope = argument(arguments, |argument| match argument {
+            A::Scope(id) => Some(*id),
+            _ => None,
+        });
+        let boundary = self.scopes[scope as usize][1];
+        let frame = self.frame;
+        let mut slot = AwaitTakePost::default();
+        let outcome = self.call(|ctx| rt_await_take(ctx, frame, future, boundary, &mut slot));
+        let Location::Register(id) = operand else { unreachable!("verified Future operand") };
+        let s::Type::Future(result) = self.function().registers[id as usize] else { unreachable!("Future type") };
+        let valued = self.program.tables.future_results[result as usize].is_some();
+        match outcome {
+            OUTCOME_PENDING => self.suspend(self.site(pc)),
+            NORMAL => {
+                let mut values = if valued { vec![vec![slot.value]] } else { vec![] };
+                values.extend([vec![slot.packet.record], vec![]]);
                 self.outcome(flow, Tag::Normal, &values)
             }
             UNWIND => {
@@ -1268,13 +1321,26 @@ impl Activation {
         }
     }
 
-    /// `exit.commit ... caller` in an async body commits into the Future's cache (ABI C-2).
+    /// `exit.commit`: into a scope of the body (its scope area words), or `caller`, which in an async body is the
+    /// Future's cache (ABI C-2).
     fn exit_commit(&mut self, arguments: &[A], operands: &[Location], flow: &s::Flow) -> Vec<Vec<Word>> {
-        assert!(arguments.contains(&A::Destination(s::ExitDestination::Caller)), "these bodies return to the cache");
+        let target = argument(arguments, |argument| match argument {
+            A::Destination(destination) => Some(*destination),
+            _ => None,
+        });
         let mut input = PendingSlot { record: self.word(operands[0]) };
         let mut destination = ExitDestination { holder: HolderId(0), owner: OwnerId(0) };
         let frame = self.frame;
-        assert_eq!(self.call(|ctx| rt_machine_future_destination(ctx, frame, &mut destination)), NORMAL);
+        match target {
+            s::ExitDestination::Caller => {
+                assert_eq!(self.call(|ctx| rt_machine_future_destination(ctx, frame, &mut destination)), NORMAL);
+            }
+            s::ExitDestination::Scope(scope) => {
+                let [holder, owner] = self.scopes[scope as usize];
+                destination = ExitDestination { holder: HolderId(holder), owner: OwnerId(owner) };
+            }
+            s::ExitDestination::Loop(_) => panic!("reference body: no loop exits in these programs"),
+        }
         let mut slot = CommitPost::default();
         assert_eq!(self.call(|ctx| rt_exit_commit(ctx, &mut input, &destination, &mut slot)), NORMAL);
         self.write(operands[0], &[0]);

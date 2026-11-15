@@ -478,11 +478,12 @@ impl Opcode {
                 Self::ScopeTransfer => "champ_scope_transfer",
                 Self::OwnDynamic => "champ_own_dynamic",
                 Self::OwnCreateCommit => "champ_own_create_commit",
-                // Champ draft 3 §14.4. `fut.done`, `frame.save` and `frame.resume` are inline; the helpers of
-                // `await.take` (`champ_await_take`) and `cache.rehome` (`champ_cache_rehome`) join the shared table
-                // with their runtime (#601 R5), and `unique_cache.proof` has none.
+                // Champ draft 3 §14.4. `fut.done`, `frame.save` and `frame.resume` are inline, and
+                // `unique_cache.proof` has no helper.
                 Self::FutureNew => "champ_future_new",
                 Self::Await => "champ_await_view",
+                Self::AwaitTake => "champ_await_take",
+                Self::CacheRehome => "champ_cache_rehome",
                 Self::AwaitUnwind => "champ_await_unwind",
                 Self::FuturePublish => "champ_future_publish",
                 Self::FutureCancel => "champ_future_cancel",
@@ -581,6 +582,8 @@ helper_registry! {
         // inline; the nonempty `cleanup.settle` settles one scheduled duty.
         "champ_future_new" => &[C, P, P], COLLECTING, Some(O::FutureNew);
         "champ_await_view" => &[C, W, W, P], SUSPENDING | HELPER_UNWINDS, Some(O::Await);
+        "champ_await_take" => &[C, W, W, W, P], SUSPENDING | HELPER_UNWINDS, Some(O::AwaitTake);
+        "champ_cache_rehome" => &[C, P, P, P, P, W, W, P], L, Some(O::CacheRehome);
         "champ_await_unwind" => &[C, W, P, W, P, P, P], SUSPENDING, Some(O::AwaitUnwind);
         "champ_future_publish" => &[C, W, P], HELPER_STOPS, Some(O::FuturePublish);
         "champ_future_cancel" => &[C, W], HELPER_STOPS, Some(O::FutureCancel);

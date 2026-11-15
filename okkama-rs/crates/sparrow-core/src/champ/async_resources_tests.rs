@@ -20,7 +20,13 @@ const BAD: u32 = 1;
 const MAKE: u32 = 0;
 const EPUB: u32 = 1;
 const WATCH: u32 = 2;
-const ASYNC: u32 = 3;
+const TAKER: u32 = 3;
+const ESCAPE: u32 = 4;
+const ASYNC: u32 = 5;
+/// The destroy of `Res`, the first synchronous function.
+const DESTROY_RES: u32 = ASYNC;
+/// The inner block of `escape`, a scope and boundary after the async functions' own.
+const INNER_E: u32 = ASYNC;
 /// The failure mask of `fail` with label 1.
 const FAIL_MASK: u32 = 2;
 
@@ -111,31 +117,125 @@ fn awaiting(symbol: &str, index: u32, epub: bool) -> (s::Function, s::FrameLayou
         let q2 = b.emit(O::OwnAdmit, vec![l(resumed[0]), l(d_packet)], K::ScopeState);
         return_packet(&mut b, body_ok, q2, index, q, q_packet, true);
     } else {
-        let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
-        let selection = b.selection();
-        let arguments = vec![A::Kind(s::ExitKind::Return), A::Boundary(index), l(empty), A::Selection(selection)];
-        let pending = b.emit(O::ExitPrepare, arguments, K::Pending);
-        let finished = b.close(resumed[0], Some(pending), None, index, &[], true);
-        let [closed, reserved] = [b.service(K::Closed), b.service(K::Pending)];
-        b.dispatch(finished, [true, false, false], vec![(Tag::Pending, "done", vec![p(0), p(1)])]);
-        b.block("done", &[closed, reserved]);
-        let [packet, deps] = [b.service(K::Packet), b.service(K::Deps)];
-        b.next(O::ExitCommit, vec![l(reserved), A::Destination(s::ExitDestination::Caller)], vec![packet, deps]);
-        b.next(O::FuturePublish, vec![l(body_ok), A::Flag(true), l(packet), l(deps)], vec![]);
-        b.ret();
+        return_void(&mut b, body_ok, resumed[0], index, &[]);
     }
     let unwind = [b.register(s::Type::Failure), b.service(K::TaskState), b.service(K::Receipt)];
     b.block("bad", &unwind);
     let (body_bad, resumed) = b.resume(first, 1, &types(&slots, &[2]));
     let (body_adapted, after, adapted, _) = b.adapter(body_bad, 2, resumed[0], unwind, &[], &[]);
     // Its inputs may hold resources (an async defer's): the failing close merges them into its plan.
-    let finished = b.close(after, None, Some(adapted), index, &[], true);
+    fail_merging(&mut b, body_adapted, after, adapted, index, &[]);
+    let layout = b.layout(slots, vec![(vec![0, 1], vec![]), (vec![2], vec![0]), (vec![], vec![2, 3, 4, 5])]);
+    (b.finish(), layout)
+}
+
+/// Return nothing through a merging close of `state` that settles `duties`, then publish the success.
+fn return_void(b: &mut Body, body: Location, state: Location, scope: u32, duties: &[Location]) {
+    let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
+    let selection = b.selection();
+    let arguments = vec![A::Kind(s::ExitKind::Return), A::Boundary(scope), l(empty), A::Selection(selection)];
+    let pending = b.emit(O::ExitPrepare, arguments, K::Pending);
+    let finished = b.close(state, Some(pending), None, scope, duties, true);
+    let [closed, reserved] = [b.service(K::Closed), b.service(K::Pending)];
+    b.dispatch(finished, [true, false, false], vec![(Tag::Pending, "done", vec![p(0), p(1)])]);
+    b.block("done", &[closed, reserved]);
+    let [packet, deps] = [b.service(K::Packet), b.service(K::Deps)];
+    b.next(O::ExitCommit, vec![l(reserved), A::Destination(s::ExitDestination::Caller)], vec![packet, deps]);
+    b.next(O::FuturePublish, vec![l(body), A::Flag(true), l(packet), l(deps)], vec![]);
+    b.ret();
+}
+
+/// Close `state` with the active `failure` through a merging plan that settles `duties`, and publish the result.
+fn fail_merging(b: &mut Body, body: Location, state: Location, failure: Location, scope: u32, duties: &[Location]) {
+    let finished = b.close(state, None, Some(failure), scope, duties, true);
     let [closed, combined] = [b.service(K::Closed), b.register(s::Type::Failure)];
     b.dispatch(finished, [false, true, false], vec![(Tag::Failure, "unwound", vec![p(0), p(1)])]);
     b.block("unwound", &[closed, combined]);
-    b.next(O::FuturePublish, vec![l(body_adapted), A::Flag(false), l(combined)], vec![]);
+    b.next(O::FuturePublish, vec![l(body), A::Flag(false), l(combined)], vec![]);
     b.ret();
-    let layout = b.layout(slots, vec![(vec![0, 1], vec![]), (vec![2], vec![0]), (vec![], vec![2, 3, 4, 5])]);
+}
+
+/// `fut.new` of `entry`, a `Future<Res>` with no arguments, owned by `scope`: (future, cache duty, state).
+fn future_of(b: &mut Body, scope: u32, entry: u32, state: Location) -> (Location, Location, Location) {
+    let offered = b.emit(O::OwnEmpty, vec![], K::Packet);
+    let [future, cache, next] = [b.register(FUTURE_RES), b.service(K::CacheState), b.service(K::ScopeState)];
+    let arguments = vec![A::Entry(entry), A::Scope(scope), A::Result(Some(FUTURE_RES)), l(offered), l(state)];
+    b.next(O::FutureNew, arguments, vec![future, cache, next]);
+    (future, cache, next)
+}
+
+/// `async taker() { let x = await make(); }` with a proved temporary take (OIR-2 §10.3, draft 3 §4.2): the
+/// outcome packet joins the taker's scope, which destroys `x`; the consumed cache settles to nothing.
+fn taker() -> (s::Function, s::FrameLayout) {
+    // 0 inputs, 1 owner state, 2 cache duty, 3 the Future, 4–6 the unwind, 7 the take capability.
+    let slots = vec![service(K::Packet), service(K::ScopeState), service(K::CacheState), value(FUTURE_RES),
+        value(s::Type::Failure), service(K::TaskState), service(K::Receipt), service(K::UniqueCache)];
+    let (mut b, frame) = Body::asynchronous("taker", TAKER, vec![]);
+    let (body, inputs) = b.resume(frame, 0, &types(&slots, &[0]));
+    let q0 = b.emit(O::ScopeBegin, vec![A::Scope(TAKER), A::Boundary(TAKER)], K::ScopeState);
+    let q1 = b.emit(O::OwnAccept, vec![l(q0), l(inputs[0])], K::ScopeState);
+    let (future, cache, q2) = future_of(&mut b, TAKER, MAKE, q1);
+    let proof = b.emit(O::UniqueCacheProof, vec![l(future)], K::UniqueCache);
+    let first = b.save(body, 1, &[q2, cache]);
+    b.outcomes(O::AwaitTake, vec![l(future), l(proof), A::Scope(TAKER)], vec![
+        (Tag::Normal, "ok", vec![p(0), p(1), p(2)]), (Tag::Unwind, "bad", vec![p(0), p(1), p(2)])]);
+    let [x, packet, deps] = [b.register(RES), b.service(K::Packet), b.service(K::Deps)];
+    b.block("ok", &[x, packet, deps]);
+    let (body_ok, resumed) = b.resume(first, 1, &types(&slots, &[1, 2]));
+    let q3 = b.emit(O::OwnAccept, vec![l(resumed[0]), l(packet)], K::ScopeState);
+    return_void(&mut b, body_ok, q3, TAKER, &[resumed[1]]);
+    let unwind = [b.register(s::Type::Failure), b.service(K::TaskState), b.service(K::Receipt)];
+    b.block("bad", &unwind);
+    let (body_bad, resumed) = b.resume(first, 1, &types(&slots, &[1, 2]));
+    let (body_adapted, after, adapted, kept) =
+        b.adapter(body_bad, 2, resumed[0], unwind, &[resumed[1]], &types(&slots, &[2]));
+    fail_merging(&mut b, body_adapted, after, adapted, TAKER, &[kept[0]]);
+    let layout = b.layout(slots, vec![(vec![0], vec![]), (vec![1, 2], vec![3, 7]), (vec![2], vec![1, 4, 5, 6])]);
+    (b.finish(), layout)
+}
+
+/// `async escape() { let f = { let c = Res(); make() }; await f; }` (ABI C-4 and its ruling): F is created in
+/// the inner block, which returns it to the body's scope, so its cache duty is rehomed into the block's exit for
+/// that scope. The block's close destroys C; the commit gives F's duty to the body's scope, whose close settles
+/// F after the await ran it and destroys its Q.
+fn escaper() -> (s::Function, s::FrameLayout) {
+    // 0 inputs, 1 owner state, 2 the Future, 3–5 the unwind.
+    let slots = vec![service(K::Packet), service(K::ScopeState), value(FUTURE_RES), value(s::Type::Failure),
+        service(K::TaskState), service(K::Receipt)];
+    let (mut b, frame) = Body::asynchronous("escape", ESCAPE, vec![]);
+    let (body, inputs) = b.resume(frame, 0, &types(&slots, &[0]));
+    let q0 = b.emit(O::ScopeBegin, vec![A::Scope(ESCAPE), A::Boundary(ESCAPE)], K::ScopeState);
+    let outer = b.emit(O::OwnAccept, vec![l(q0), l(inputs[0])], K::ScopeState);
+    let i0 = b.emit(O::ScopeBegin, vec![A::Scope(INNER_E), A::Boundary(INNER_E)], K::ScopeState);
+    let (_, c_packet) = create(&mut b, 0, INNER_E);
+    let i1 = b.emit(O::OwnAdmit, vec![l(i0), l(c_packet)], K::ScopeState);
+    let (future, cache, i2) = future_of(&mut b, INNER_E, MAKE, i1);
+    let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
+    let selection = b.selection();
+    let pending = b.emit(O::ExitPrepare, vec![A::Kind(s::ExitKind::Fallthrough), A::Boundary(INNER_E), l(future),
+        l(empty), A::Selection(selection)], K::Pending);
+    let destination = A::Destination(s::ExitDestination::Scope(ESCAPE));
+    let pending = b.emit(O::CacheRehome, vec![destination.clone(), l(pending), l(cache)], K::Pending);
+    let finished = b.close(i2, Some(pending), None, INNER_E, &[], true);
+    let [closed, reserved] = [b.service(K::Closed), b.service(K::Pending)];
+    b.dispatch(finished, [true, false, false], vec![(Tag::Pending, "joined", vec![p(0), p(1)])]);
+    b.block("joined", &[closed, reserved]);
+    let [escaped, packet, deps] = [b.register(FUTURE_RES), b.service(K::Packet), b.service(K::Deps)];
+    b.next(O::ExitCommit, vec![l(reserved), destination, A::Result(Some(FUTURE_RES))], vec![escaped, packet, deps]);
+    let joined = b.emit(O::OwnAccept, vec![l(outer), l(packet)], K::ScopeState);
+    let first = b.save(body, 1, &[joined]);
+    b.outcomes(O::Await, vec![l(escaped)], vec![(Tag::Normal, "ok", vec![p(0), p(1)]),
+        (Tag::Unwind, "bad", vec![p(0), p(1), p(2)])]);
+    let [x, x_deps] = [b.register(RES), b.service(K::Deps)];
+    b.block("ok", &[x, x_deps]);
+    let (body_ok, resumed) = b.resume(first, 1, &types(&slots, &[1]));
+    return_void(&mut b, body_ok, resumed[0], ESCAPE, &[]);
+    let unwind = [b.register(s::Type::Failure), b.service(K::TaskState), b.service(K::Receipt)];
+    b.block("bad", &unwind);
+    let (body_bad, resumed) = b.resume(first, 1, &types(&slots, &[1]));
+    let (body_adapted, after, adapted, _) = b.adapter(body_bad, 2, resumed[0], unwind, &[], &[]);
+    fail_merging(&mut b, body_adapted, after, adapted, ESCAPE, &[]);
+    let layout = b.layout(slots, vec![(vec![0], vec![]), (vec![1], vec![2]), (vec![], vec![1, 3, 4, 5])]);
     (b.finish(), layout)
 }
 
@@ -162,7 +262,9 @@ fn destroy_of(symbol: &str, object: u32) -> s::Function {
 fn r5_program() -> s::Program {
     let mut functions = Vec::new();
     let mut frames = Vec::new();
-    for (function, layout) in [make(), awaiting("epub", EPUB, true), awaiting("watch", WATCH, false)] {
+    for (function, layout) in [make(), awaiting("epub", EPUB, true), awaiting("watch", WATCH, false), taker(),
+        escaper()]
+    {
         functions.push(function);
         frames.push(layout);
     }
@@ -175,8 +277,10 @@ fn r5_program() -> s::Program {
         objects: vec![res(), bad],
         functions,
         tables: s::ChampTables {
-            scopes: (0..ASYNC).map(|index| s::Scope { function: index, parent: None, boundary: index }).collect(),
-            boundaries: (0..ASYNC).map(|scope| s::Boundary { scope }).collect(),
+            scopes: (0..ASYNC).map(|index| s::Scope { function: index, parent: None, boundary: index })
+                .chain([s::Scope { function: ESCAPE, parent: Some(ESCAPE), boundary: INNER_E }])
+                .collect(),
+            boundaries: (0..=INNER_E).map(|scope| s::Boundary { scope }).collect(),
             frames,
             future_results: vec![Some(RES)],
             ..s::ChampTables::default()
@@ -1026,7 +1130,8 @@ fn champ_r5_async_defer_refuses_labels_and_a_non_async_entry() {
     let outcome = defer.step(&mut ctx, this);
     stopped(&mut ctx, outcome, "no replacement labels");
     defer.registration.replacements = 0;
-    let outcome = rt_invoke_defer_async(&mut ctx, this, 3, defer.args.as_ptr(), 1, &mut defer.io,
+    let entry = u64::from(DESTROY_RES);
+    let outcome = rt_invoke_defer_async(&mut ctx, this, entry, defer.args.as_ptr(), 1, &mut defer.io,
         &defer.registration, &mut defer.post);
     stopped(&mut ctx, outcome, "not an async body");
     assert_eq!(get(this, tail(&runtime, this) + STEP), 0);
@@ -1265,4 +1370,38 @@ fn champ_r5_async_defer_publishes_no_packet_and_keeps_its_operand() {
     let outcome = defer.step(&mut ctx, this);
     stopped(&mut ctx, outcome, "changed while it was pending");
     assert_eq!(life(&runtime, r), Life::Live);
+}
+
+// --- await.take and cache.rehome in SPB 17 (R4 forms) ----------------------------------------------------------------
+
+#[test]
+fn champ_r5_a_proved_temporary_take_runs_on_both_engines() {
+    let mut traces = Traces::default();
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load_r5(stress, engine);
+        runtime.run_function(TAKER as usize, crate::STACK_BYTES).unwrap();
+        // make ran once, on the taker's stack; its outcome went to the taker's scope, which destroyed x once.
+        assert_eq!(steps(&runtime, MAKE), [FutureStep::Start, FutureStep::Published]);
+        assert_eq!(steps(&runtime, TAKER), [FutureStep::Start, FutureStep::Published]);
+        assert_eq!(destroyed(&runtime), "Res 1\n");
+        traces.record(configuration, &runtime);
+    }
+    traces.agree();
+}
+
+#[test]
+fn champ_r5_a_rehomed_future_settles_in_the_exit_destination_on_both_engines() {
+    let mut traces = Traces::default();
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load_r5(stress, engine);
+        runtime.run_function(ESCAPE as usize, crate::STACK_BYTES).unwrap();
+        // The block's close destroyed C(1); F ran after the commit, and the body's close destroyed its Q(2).
+        assert_eq!(destroyed(&runtime), "Res 1\nRes 2\n");
+        assert_eq!(steps(&runtime, MAKE), [FutureStep::Start, FutureStep::Published]);
+        assert_eq!(steps(&runtime, ESCAPE), [FutureStep::Start, FutureStep::Published]);
+        traces.record(configuration, &runtime);
+    }
+    traces.agree();
 }
