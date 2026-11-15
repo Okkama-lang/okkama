@@ -8,6 +8,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **`okkama check` checks test code too (#649).** It used to strip `test` and
+  `fake` blocks before analysis, so their errors showed up only on
+  `okkama run -t`. It now also analyses the test profile of files that have
+  tests and reports each diagnostic once. `okkama lint` and the language
+  server had the reverse gap: in a file with tests they missed errors that
+  only production code can have, such as `Role.fake()` in `main`.
+
 - **Cause stacks in failure reports (#74).** Each `Caused by:` entry shows the
   place and stack of its own raise, not only the outermost failure. Rethrowing
   the caught value itself (`throw e;`) keeps the original origin, stack and
