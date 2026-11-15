@@ -178,8 +178,9 @@
   - [14.5 Successors through a role](#145-successors-through-a-role)
   - [14.6 Composition instead of inheritance](#146-composition-instead-of-inheritance)
   - [14.7 Operators are roles](#147-operators-are-roles)
-  - [14.8 Roles elsewhere](#148-roles-elsewhere)
-  - [14.9 What this design costs](#149-what-this-design-costs)
+  - [14.8 A collection of your own: `Iterating` and `Cursor`](#148-a-collection-of-your-own-iterating-and-cursor)
+  - [14.9 Roles elsewhere](#149-roles-elsewhere)
+  - [14.10 What this design costs](#1410-what-this-design-costs)
 - [Chapter 15. Fakes, tests and properties](#chapter-15-fakes-tests-and-properties)
   - [15.1 Tests live next to the code](#151-tests-live-next-to-the-code)
   - [15.2 The `test` binding](#152-the-test-binding)
@@ -8241,7 +8242,99 @@ nothing in a name says that `plus` means addition, which is the argument
 of §14.2. One class for all arithmetic was ruled out because a contract
 should not ask for actions the object cannot keep.
 
-## 14.8 Roles elsewhere
+## 14.8 A collection of your own: `Iterating` and `Cursor`
+
+Generic roles are where roles meet the rest of the language. A collection
+becomes usable by `for`, `map`, `filter` and `reduce` by doing one standard
+role, `Iterating<T>` from `collections/iteration`, whose only action hands
+out a `Cursor<T>`.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "collections/iteration" take Cursor, Iterating, IterationEnded;
+
+// A collection of your own: the days of a month that fall on a weekday.
+object Weekdays does Iterating<int> {
+    has days is int;
+    has first is int;    // 0 = Monday, ... 6 = Sunday, for day 1
+    Weekdays(:days, :first);
+    cursor() is Cursor<int> { WeekdayCursor(days: days, first: first, day: 1).settled(); }
+}
+
+// A cursor is a value: successor() returns the next position and leaves this one as it was.
+object WeekdayCursor does Cursor<int> {
+    has days is int;
+    has first is int;
+    has day is int;
+    WeekdayCursor(:days, :first, :day);
+
+    // Skip forward to the first weekday at or after this day.
+    settled() is WeekdayCursor {
+        if day <= days && (first + day - 1) % 7 >= 5 {
+            WeekdayCursor(days: days, first: first, day: day + 1).settled();
+        } else {
+            self;
+        }
+    }
+    available() is bool { day <= days; }
+    item() is int {
+        confirm day <= days else throw IterationEnded.ended;
+        day;
+    }
+    successor() is Cursor<int> { WeekdayCursor(days: days, first: first, day: day + 1).settled(); }
+}
+
+main() is int {
+    let out = Stdout();
+    // A month of 30 days whose first day is a Saturday.
+    let month = Weekdays(days: 30, first: 5);
+    // for, map, filter and reduce accept it like an array.
+    let first_week = month.filter() -> d { d <= 7; };
+    out.writeln(first_week.map() -> d { d.string(); }.join(" "));
+    out.writeln(month.reduce(0) -> count, d { count + 1; }.string() + " working days");
+    for month -> d {
+        last if d > 4;
+        out.writeln("day " + d.string());
+    }
+    // Two walks over one collection never interfere: each starts its own cursor.
+    let start = month.cursor();
+    out.writeln(start.item().string() + " " + start.successor().item().string() + " " + start.item().string());
+    0;
+}
+```
+
+Output:
+
+```text
+3 4 5 6 7
+20 working days
+day 3
+day 4
+3 4 3
+```
+
+The contract is small and every part of it is a value:
+
+- **`cursor()`** returns the position of the first item. Each call starts a
+  new walk, which is why the last line can read the first item, step to the
+  second, and read the first again: nothing moved.
+- **`available()`** answers whether there is an item here. The end is an
+  ordinary `false`, not a sentinel and not an exception.
+- **`item()`** returns the item, and throws `IterationEnded` if asked at the
+  end; a well-behaved loop never asks.
+- **`successor()`** returns the next position as a new cursor. The cursor is
+  immutable, so a walk can be resumed from any position kept in a variable.
+
+`Weekdays` holds two numbers and computes its items on demand, yet `filter`,
+`reduce` and `for` with `last if` treat it exactly like an array. The role is
+nominal (§14.2): a collection must say `does Iterating<int>`; having actions
+with the right names is not enough, and the type argument says what the
+loop's binding will be. A source that is consumed as it is read — a file, a
+socket — does the other standard role, `Batching<T>` (Chapter 8).
+
+## 14.9 Roles elsewhere
 
 | | Okkama role | Java interface | Go interface | Rust trait |
 |---|---|---|---|---|
@@ -8261,7 +8354,7 @@ the table has a way back from the contract to the concrete type. Okkama
 has none, and that is what makes a role reference a capability rather than
 a type annotation.
 
-## 14.9 What this design costs
+## 14.10 What this design costs
 
 - **Forwarding code.** Decorators repeat every action of the role. No
   delegation syntax shortens it (§14.6).

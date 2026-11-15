@@ -178,8 +178,9 @@
   - [14.5 Преемники через роль](#145-преемники-через-роль)
   - [14.6 Композиция вместо наследования](#146-композиция-вместо-наследования)
   - [14.7 Операторы — это роли](#147-операторы--это-роли)
-  - [14.8 Роли в других языках](#148-роли-в-других-языках)
-  - [14.9 Чего стоит такой замысел](#149-чего-стоит-такой-замысел)
+  - [14.8 Своя коллекция: `Iterating` и `Cursor`](#148-своя-коллекция-iterating-и-cursor)
+  - [14.9 Роли в других языках](#149-роли-в-других-языках)
+  - [14.10 Чего стоит такой замысел](#1410-чего-стоит-такой-замысел)
 - [Глава 15. Фейки, тесты и свойства](#глава-15-фейки-тесты-и-свойства)
   - [15.1 Тесты живут рядом с кодом](#151-тесты-живут-рядом-с-кодом)
   - [15.2 Привязка `test`](#152-привязка-test)
@@ -8337,7 +8338,100 @@ Haskell кладёт их в класс, и `Num` связывает вмест�
 арифметику отвергнут, потому что контракт не должен требовать действий,
 которых объект выполнить не может.
 
-## 14.8 Роли в других языках
+## 14.8 Своя коллекция: `Iterating` и `Cursor`
+
+Generic-роли — место, где роли встречаются с остальным языком. Коллекция
+становится пригодной для `for`, `map`, `filter` и `reduce`, реализуя одну
+стандартную роль, `Iterating<T>` из `collections/iteration`, чьё единственное
+действие выдаёт `Cursor<T>`.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "collections/iteration" take Cursor, Iterating, IterationEnded;
+
+// A collection of your own: the days of a month that fall on a weekday.
+object Weekdays does Iterating<int> {
+    has days is int;
+    has first is int;    // 0 = Monday, ... 6 = Sunday, for day 1
+    Weekdays(:days, :first);
+    cursor() is Cursor<int> { WeekdayCursor(days: days, first: first, day: 1).settled(); }
+}
+
+// A cursor is a value: successor() returns the next position and leaves this one as it was.
+object WeekdayCursor does Cursor<int> {
+    has days is int;
+    has first is int;
+    has day is int;
+    WeekdayCursor(:days, :first, :day);
+
+    // Skip forward to the first weekday at or after this day.
+    settled() is WeekdayCursor {
+        if day <= days && (first + day - 1) % 7 >= 5 {
+            WeekdayCursor(days: days, first: first, day: day + 1).settled();
+        } else {
+            self;
+        }
+    }
+    available() is bool { day <= days; }
+    item() is int {
+        confirm day <= days else throw IterationEnded.ended;
+        day;
+    }
+    successor() is Cursor<int> { WeekdayCursor(days: days, first: first, day: day + 1).settled(); }
+}
+
+main() is int {
+    let out = Stdout();
+    // A month of 30 days whose first day is a Saturday.
+    let month = Weekdays(days: 30, first: 5);
+    // for, map, filter and reduce accept it like an array.
+    let first_week = month.filter() -> d { d <= 7; };
+    out.writeln(first_week.map() -> d { d.string(); }.join(" "));
+    out.writeln(month.reduce(0) -> count, d { count + 1; }.string() + " working days");
+    for month -> d {
+        last if d > 4;
+        out.writeln("day " + d.string());
+    }
+    // Two walks over one collection never interfere: each starts its own cursor.
+    let start = month.cursor();
+    out.writeln(start.item().string() + " " + start.successor().item().string() + " " + start.item().string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+3 4 5 6 7
+20 working days
+day 3
+day 4
+3 4 3
+```
+
+Контракт мал, и каждая его часть — значение:
+
+- **`cursor()`** возвращает позицию первого элемента. Каждый вызов начинает
+  новый обход, поэтому последняя строка может прочитать первый элемент,
+  шагнуть ко второму и снова прочитать первый: ничего не сдвинулось.
+- **`available()`** отвечает, есть ли здесь элемент. Конец — обычный
+  `false`, а не сигнальное значение и не исключение.
+- **`item()`** возвращает элемент и бросает `IterationEnded`, если его
+  спросили в конце; правильный цикл не спрашивает.
+- **`successor()`** возвращает следующую позицию как новый курсор. Курсор
+  неизменяем, так что обход можно продолжить с любой позиции, сохранённой в
+  переменной.
+
+`Weekdays` держит два числа и вычисляет элементы по требованию, но `filter`,
+`reduce` и `for` с `last if` обращаются с ним точно как с массивом. Роль
+номинальна (§14.2): коллекция должна сказать `does Iterating<int>`; действий
+с нужными именами недостаточно, а аргумент типа говорит, чем будет привязка
+цикла. Источник, который расходуется при чтении, — файл, сокет, — реализует
+другую стандартную роль, `Batching<T>` (глава 8).
+
+## 14.9 Роли в других языках
 
 | | Роль Okkama | Интерфейс Java | Интерфейс Go | Трейт Rust |
 |---|---|---|---|---|
@@ -8357,7 +8451,7 @@ Haskell кладёт их в класс, и `Num` связывает вмест�
 У Okkama его нет, и именно это делает ссылку через роль возможностью, а не
 аннотацией типа.
 
-## 14.9 Чего стоит такой замысел
+## 14.10 Чего стоит такой замысел
 
 - **Код переадресации.** Декораторы повторяют каждое действие роли.
   Синтаксиса делегирования, который бы это сократил, нет (§14.6).

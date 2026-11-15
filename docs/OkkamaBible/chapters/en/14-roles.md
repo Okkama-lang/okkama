@@ -295,7 +295,35 @@ nothing in a name says that `plus` means addition, which is the argument
 of §14.2. One class for all arithmetic was ruled out because a contract
 should not ask for actions the object cannot keep.
 
-## 14.8 Roles elsewhere
+## 14.8 A collection of your own: `Iterating` and `Cursor`
+
+Generic roles are where roles meet the rest of the language. A collection
+becomes usable by `for`, `map`, `filter` and `reduce` by doing one standard
+role, `Iterating<T>` from `collections/iteration`, whose only action hands
+out a `Cursor<T>`.
+
+{{example:14-iterating}}
+
+The contract is small and every part of it is a value:
+
+- **`cursor()`** returns the position of the first item. Each call starts a
+  new walk, which is why the last line can read the first item, step to the
+  second, and read the first again: nothing moved.
+- **`available()`** answers whether there is an item here. The end is an
+  ordinary `false`, not a sentinel and not an exception.
+- **`item()`** returns the item, and throws `IterationEnded` if asked at the
+  end; a well-behaved loop never asks.
+- **`successor()`** returns the next position as a new cursor. The cursor is
+  immutable, so a walk can be resumed from any position kept in a variable.
+
+`Weekdays` holds two numbers and computes its items on demand, yet `filter`,
+`reduce` and `for` with `last if` treat it exactly like an array. The role is
+nominal (§14.2): a collection must say `does Iterating<int>`; having actions
+with the right names is not enough, and the type argument says what the
+loop's binding will be. A source that is consumed as it is read — a file, a
+socket — does the other standard role, `Batching<T>` (Chapter 8).
+
+## 14.9 Roles elsewhere
 
 | | Okkama role | Java interface | Go interface | Rust trait |
 |---|---|---|---|---|
@@ -315,7 +343,7 @@ the table has a way back from the contract to the concrete type. Okkama
 has none, and that is what makes a role reference a capability rather than
 a type annotation.
 
-## 14.9 What this design costs
+## 14.10 What this design costs
 
 - **Forwarding code.** Decorators repeat every action of the role. No
   delegation syntax shortens it (§14.6).
