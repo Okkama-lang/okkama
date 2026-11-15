@@ -810,7 +810,8 @@ variants!(TransferRule {
     AbortReservation { pending, cleanup } => "abort_reservation",
     FrameSave { frame, values } => "frame_save",
     FrameResume { frame, slots } => "frame_resume",
-    CompleteIdentity { identity, state, output } => "complete_identity"
+    CompleteIdentity { identity, state, output } => "complete_identity",
+    Rehome { inputs, outputs } => "rehome"
 });
 variants!(Postcondition {
     CleanupOwnsReserve => "cleanup_owns_reserve",
@@ -1037,7 +1038,8 @@ variants!(NumericType {
     Float => "float",
     Rat => "rat",
     Bool => "bool",
-    Str => "str"
+    Str => "str",
+    Char => "char"
 });
 record!(FieldValue, "field_value", { field, value });
 variants!(ConstructionStatus {
@@ -1387,7 +1389,6 @@ opcodes!(CleanupOp {
     Destroy { cleanup, key } => "cleanup.destroy",
     DestroyDirect { cleanup, identity, descriptor, destroy } => "destroy.direct",
     RecordFailure { cleanup, failure } => "cleanup.failure",
-    Shield { cleanup } => "cleanup.shield",
     DeliverCancel { cleanup } => "cleanup.deliver_cancel",
     Finish { cleanup } => "cleanup.finish",
     CellNew { value, ty } => "cell.new",

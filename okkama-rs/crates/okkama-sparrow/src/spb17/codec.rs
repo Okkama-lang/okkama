@@ -320,8 +320,11 @@ macro_rules! record {
 }
 
 record! { Program {
-    module, version, objects, tables, functions, entry; tests,
+    module, version, objects, tables, functions, entry; tests, composites, globals,
 } }
+
+record! { Global { name, ty, data } }
+record! { Datum { ty, value } }
 
 record! { Test { name, function } }
 
@@ -332,8 +335,12 @@ record! { ObjectRuntimeLayout {
 
 record! { Field { name, storage, once } }
 record! { Object {
-    name, fields, layout, error_cases; enum_cases, variant_cases, handle,
+    name, fields, layout, error_cases; enum_cases, variant_cases, handle, role, implements, any_box, enum_names,
 } }
+record! { RoleDecl { slots } }
+record! { RoleSlot { name, entry_abi, params, results } }
+record! { RoleImpl { role, slots } }
+record! { Dispatch { role, slot, failures, retained_params, targets } }
 
 record! { Assignment {
     destination, source,
@@ -356,8 +363,12 @@ record! { Block {
 } }
 
 record! { ChampTables {
-    scopes, boundaries, summaries,
+    scopes, boundaries, summaries; frames, future_results,
 } }
+
+record! { FrameLayout { slots, continuations } }
+record! { FrameSlot { ty, linear } }
+record! { Continuation { site, saved, operands } }
 
 record! { Scope {
     function, parent, boundary,
@@ -434,24 +445,61 @@ tagged! { Type {
     6 => Str, 20 => Range, 11 => Failure, 21 => Bytes, 22 => Error,
     7 => Object(id: u32), 8 => Successor(id: u32), 13 => Never, 9 => Descriptor,
     23 => Array(shape: ArrayType), 24 => Variant(id: u32), 25 => Handle(id: u32),
+    26 => Map(id: u32), 27 => MapBuilder(id: u32), 28 => Builder(id: u32), 29 => Future(id: u32),
+    40 => Role(id: u32), 41 => RoleSuccessor(id: u32), 42 => Any,
 } }
+impl Wire for Composite {
+    fn put(&self, w: &mut Writer) {
+        match self {
+            Self::Map { key, value } => {
+                w.number(0);
+                key.put(w);
+                value.put(w);
+            }
+            Self::Builder { array } => {
+                w.number(1);
+                array.put(w);
+            }
+        }
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, Error> {
+        match r.number()? {
+            0 => {
+                let key = Type::get(r)?;
+                let value = Type::get(r)?;
+                Ok(Self::Map { key, value })
+            }
+            1 => Ok(Self::Builder { array: Type::get(r)? }),
+            tag => Err(r.fail(format!("unknown Composite tag {tag}"))),
+        }
+    }
+}
 record! { ArrayType { leaf, depth } }
 tagged! { ArrayLeaf {
     0 => Int, 1 => Bool, 2 => Str, 3 => Range, 4 => Bytes, 5 => Object(id: u32),
+    6 => Float, 7 => Char, 8 => Rat, 9 => Variant(id: u32), 10 => Map(id: u32), 11 => Never, 20 => Role(id: u32),
+    21 => Any,
 } }
 tagged! { ServiceKind {
     0 => Packet, 1 => ScopeState, 2 => Pending, 3 => Cleanup, 4 => StableKey,
     5 => FailureState, 6 => ExitState, 7 => Closed, 8 => DestroyBorrow, 9 => Deps,
+    10 => Frame, 11 => CacheState, 12 => TaskState, 13 => Receipt, 14 => UniqueCache,
 } }
+tagged! { ProducedType { 0 => Value(ty: Type), 1 => Service(kind: ServiceKind) } }
 tagged! { ExitKind { 0 => Return, 1 => Last, 2 => Next, 3 => Fallthrough } }
 tagged! { Location { 0 => Register(id: u32), 1 => Service(id: u32) } }
 tagged! { Source { 0 => Location(loc: Location), 1 => ProducedSlot(slot: u32) } }
 tagged! { Flow { 0 => Next(locations: Vec<Location>), 1 => Outcomes(outcomes: Vec<Outcome>) } }
 tagged! { Constant { 0 => Int(value: String), 1 => Bool(value: bool), 2 => Str(value: String),
-    3 => Descriptor(id: u32), 4 => Byte(value: u32), 5 => Char(value: u32), 6 => Float(bits: String) } }
+    3 => Descriptor(id: u32), 4 => Byte(value: u32), 5 => Char(value: u32), 6 => Float(bits: String),
+    7 => Rat(value: RatValue) } }
+record! { RatValue { numerator, denominator } }
+tagged! { DatumValue {
+    0 => Constant(value: Constant), 1 => Case(case: u32), 2 => Array(items: Vec<u32>), 3 => Map(items: Vec<u32>),
+} }
 tagged! { Immediate {
     0 => None, 1 => Constant(value: Constant), 2 => Inclusive(flag: bool),
-    3 => Object(id: u32), 4 => Field(index: u32), 5 => Updates(indices: Vec<u32>),
+    3 => Object(id: u32), 4 => Field(index: u32), 5 => Updates(indices: Vec<u32>), 6 => Global(index: u32),
 } }
 tagged! { Tag {
     0 => Normal, 1 => Unwind, 2 => Selected, 3 => Done, 4 => Continue, 5 => Replace(label: u32),
@@ -464,8 +512,10 @@ tagged! { Argument {
     4 => Selection(id: u32), 5 => Plan(id: u32), 6 => Schedule(id: u32), 7 => Envelope(id: u32),
     8 => Entry(id: u32), 9 => Object(id: u32), 10 => Binding(id: u32), 11 => Field(id: u32),
     12 => Label(id: u32), 13 => Flag(flag: bool), 14 => Kind(kind: ExitKind), 15 => Registration(id: u32),
-    16 => Destination(destination: ExitDestination),
+    16 => Destination(destination: ExitDestination), 19 => Continuation(id: u32),
+    40 => Dispatch(dispatch: Dispatch), 41 => Protocol(protocol: Protocol),
 } }
+tagged! { Protocol { 0 => Closure, 1 => Any } }
 record! { Evaluation { op, result, immediate } }
 
 impl Wire for DataOp {
@@ -491,6 +541,14 @@ impl Wire for EntryAbi {
                 w.number(2);
                 labels.put(w);
             }
+            Self::AsyncBody { layout } => {
+                w.number(3);
+                layout.put(w);
+            }
+            Self::AsyncDefer { layout } => {
+                w.number(4);
+                layout.put(w);
+            }
         }
     }
     fn get(r: &mut Reader<'_>) -> Result<Self, Error> {
@@ -498,6 +556,8 @@ impl Wire for EntryAbi {
             0 => Ok(Self::Observation),
             1 => Ok(Self::Owned),
             2 => Ok(Self::Defer { labels: Vec::get(r)? }),
+            3 => Ok(Self::AsyncBody { layout: u32::get(r)? }),
+            4 => Ok(Self::AsyncDefer { layout: u32::get(r)? }),
             _ => Err(r.fail("unknown entry ABI")),
         }
     }
@@ -513,6 +573,7 @@ fn opcode_name(code: u8) -> Option<&'static str> {
         12 => Some("int.mul"),
         13 => Some("int.mod"),
         20 => Some("int.neg"),
+        14..=18 => SCALAR_FAMILIES.iter().find(|(family, _, _)| *family == code).map(|(_, name, _)| *name),
         24 => Some("int.cmp"),
         40 => Some("bool.not"),
         41 => Some("bool.cmp"),
@@ -528,6 +589,9 @@ fn opcode_name(code: u8) -> Option<&'static str> {
         53 => Some("val.cmp"),
         54 => Some("variant.tag"),
         55 => Some("variant.get"),
+        56 => Some("map.op"),
+        57 => Some("array.op"),
+        58 => Some("builder.new"),
         26 => Some("cvt"),
         84 => Some("range.new"),
         85 => Some("range.part"),
@@ -538,6 +602,7 @@ fn opcode_name(code: u8) -> Option<&'static str> {
         92 => Some("obj.get"),
         93 => Some("obj.next"),
         94 => Some("enum.case"),
+        95 => Some("global.get"),
         140 => Some("br"),
         141 => Some("cond"),
         142 => Some("ret"),
@@ -545,6 +610,7 @@ fn opcode_name(code: u8) -> Option<&'static str> {
         147 => Some("raise"),
         136 => Some("fail.secondary"),
         137 => Some("fail.caused"),
+        100 => Some("role"),
         150 => Some("test.check"),
         255 => Some("champ"),
         _ => None,
@@ -622,17 +688,47 @@ impl DataOp {
             Self::ObjGet => (92, None),
             Self::ObjNext => (93, None),
             Self::EnumCase => (94, None),
+            Self::GlobalGet => (95, None),
             Self::FailSecondary => (136, None),
             Self::FailCaused => (137, None),
+            Self::RoleNarrow => (100, Some(0)),
+            Self::MapNew => (56, Some(0)),
+            Self::MapLen => (56, Some(1)),
+            Self::MapHas => (56, Some(2)),
+            Self::MapGet => (56, Some(3)),
+            Self::MapKeys => (56, Some(4)),
+            Self::MapValues => (56, Some(5)),
+            Self::MapKeyAt => (56, Some(6)),
+            Self::MapValueAt => (56, Some(7)),
+            Self::MapMerge => (56, Some(8)),
+            Self::MapDifference => (56, Some(9)),
+            Self::ArrayConcat => (57, Some(0)),
+            Self::ArrayJoin => (57, Some(1)),
+            Self::ArraySlice => (57, Some(2)),
+            Self::ArrayRemove => (57, Some(3)),
+            Self::ArrayReplace => (57, Some(4)),
+            Self::ArrayDifference => (57, Some(5)),
+            Self::BuilderNew => (58, None),
             Self::TestOk => (150, Some(0)),
             Self::TestIs => (150, Some(1)),
             Self::TestIsnt => (150, Some(2)),
             Self::TestFail => (150, Some(3)),
+            op => {
+                let (code, sub) = op.family().expect("every other operation belongs to a scalar family");
+                (code, Some(sub))
+            }
         }
     }
 
     fn read(code: u8, r: &mut Reader<'_>) -> Result<Self, Error> {
-        let sub = if matches!(code, 24 | 41 | 71 | 85 | 47..=50 | 52 | 53 | 150) { Some(r.number()?) } else { None };
+        let sub = if matches!(code, 14..=18 | 24 | 41 | 71 | 85 | 47..=50 | 52 | 53 | 56 | 57 | 100 | 150) {
+            Some(r.number()?)
+        } else {
+            None
+        };
+        if let (14..=18, Some(sub)) = (code, sub) {
+            return Self::of_family(code, sub).ok_or_else(|| r.fail(format!("unknown scalar opcode {code}/{sub}")));
+        }
         match (code, sub) {
             (1, None) => Ok(Self::Const),
             (2, None) => Ok(Self::Move),
@@ -702,8 +798,27 @@ impl DataOp {
             (92, None) => Ok(Self::ObjGet),
             (93, None) => Ok(Self::ObjNext),
             (94, None) => Ok(Self::EnumCase),
+            (95, None) => Ok(Self::GlobalGet),
             (136, None) => Ok(Self::FailSecondary),
             (137, None) => Ok(Self::FailCaused),
+            (100, Some(0)) => Ok(Self::RoleNarrow),
+            (56, Some(0)) => Ok(Self::MapNew),
+            (56, Some(1)) => Ok(Self::MapLen),
+            (56, Some(2)) => Ok(Self::MapHas),
+            (56, Some(3)) => Ok(Self::MapGet),
+            (56, Some(4)) => Ok(Self::MapKeys),
+            (56, Some(5)) => Ok(Self::MapValues),
+            (56, Some(6)) => Ok(Self::MapKeyAt),
+            (56, Some(7)) => Ok(Self::MapValueAt),
+            (56, Some(8)) => Ok(Self::MapMerge),
+            (56, Some(9)) => Ok(Self::MapDifference),
+            (57, Some(0)) => Ok(Self::ArrayConcat),
+            (57, Some(1)) => Ok(Self::ArrayJoin),
+            (57, Some(2)) => Ok(Self::ArraySlice),
+            (57, Some(3)) => Ok(Self::ArrayRemove),
+            (57, Some(4)) => Ok(Self::ArrayReplace),
+            (57, Some(5)) => Ok(Self::ArrayDifference),
+            (58, None) => Ok(Self::BuilderNew),
             (150, Some(0)) => Ok(Self::TestOk),
             (150, Some(1)) => Ok(Self::TestIs),
             (150, Some(2)) => Ok(Self::TestIsnt),

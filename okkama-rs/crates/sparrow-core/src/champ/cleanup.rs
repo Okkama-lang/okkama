@@ -17,9 +17,12 @@ impl Runtime {
         Ok(CleanupSlot { record })
     }
     pub fn champ_cleanup_from_scope(&mut self, input: &mut ScopeSlot) -> Result<CleanupSlot, Error> {
-        let remainder = scope(self, input.record)?.all();
+        let closing = scope(self, input.record)?;
+        let remainder = closing.all();
         validate(self, &remainder)?;
-        let record = store(self, Data::Cleanup(Cleanup { remainder, settled: true, ..Cleanup::default() }));
+        let record = store(self, Data::Cleanup(Cleanup {
+            owner: Some(closing.owner), remainder, settled: true, ..Cleanup::default()
+        }));
         consume(self, input.record);
         input.record = 0;
         Ok(CleanupSlot { record })
@@ -50,7 +53,9 @@ fn ready(cleanup: &Cleanup) -> Result<(), Error> {
     }
     Ok(())
 }
+/// Merge `packet`'s identity runs into the serial stream. Its service entries were settled first (draft 3 §6.3).
 fn stream_append(runtime: &Runtime, stream: &mut Stream, packet: Packet) {
+    debug_assert!(packet.services.is_empty(), "service entries settle before their packet joins a plan");
     for run in packet.journals.into_iter().flatten() {
         if let Some(object) = run.front() {
             let serial = runtime.heap.champ_identity(object).expect("validated identity").serial;
@@ -59,15 +64,56 @@ fn stream_append(runtime: &Runtime, stream: &mut Stream, packet: Packet) {
         }
     }
 }
-fn abort(runtime: &Runtime, cleanup: &mut Cleanup) {
-    if let Some(pending) = cleanup.pending.take() {
+/// Draft 3 §6.3 (ABI D25.4): before `packet` joins a plan, settle its service entries in list order, each
+/// released packet's entries first, and add the identities they release to it. `packet` is outside `cleanup`; the
+/// whole inventory is checked before anything changes, so this is L.
+fn settle_services(runtime: &mut Runtime, cleanup: &Cleanup, packet: &mut Packet) -> Result<(), Error> {
+    if packet.services.is_empty() {
+        return Ok(());
+    }
+    let services = std::mem::take(&mut packet.services);
+    let mut plan = Vec::new();
+    let mut released = Packet::default();
+    runtime.champ_plan_services(&services, cleanup.owner, &mut plan, &mut released)?;
+    let mut all = inventory(cleanup);
+    all.append(packet.clone());
+    all.append(released.clone());
+    validate(runtime, &all)?;
+    runtime.champ_apply_services(plan)?;
+    packet.append(released);
+    Ok(())
+}
+/// Everything a cleanup holds: its remainder, its stream and its reserve.
+fn inventory(cleanup: &Cleanup) -> Packet {
+    let mut all = cleanup.remainder.clone();
+    for run in &cleanup.stream.runs {
+        all.append(Packet::from_run(run.clone()));
+    }
+    if let Some(pending) = &cleanup.pending {
+        all.append(pending.reserve.clone());
+    }
+    all
+}
+/// The whole reserve is consumed (D3). Before the plan it joins the remainder, whose entries the settle phase or
+/// the plan settles; after it, its entries are settled here before its identities merge (ABI C-4 step 3).
+fn abort(runtime: &mut Runtime, cleanup: &mut Cleanup) -> Result<(), Error> {
+    if let Some(mut pending) = cleanup.pending.take() {
         if cleanup.planned {
+            settle_services(runtime, cleanup, &mut pending.reserve)?;
             stream_append(runtime, &mut cleanup.stream, pending.reserve);
         } else {
             cleanup.remainder.append(pending.reserve);
         }
         cleanup.aborted = true;
     }
+    Ok(())
+}
+/// The remainder joins the plan: its entries settle first (draft 3 §6.3).
+fn plan_remainder(runtime: &mut Runtime, cleanup: &mut Cleanup) -> Result<(), Error> {
+    let mut remainder = std::mem::take(&mut cleanup.remainder);
+    settle_services(runtime, cleanup, &mut remainder)?;
+    stream_append(runtime, &mut cleanup.stream, remainder);
+    Ok(())
 }
 fn record_failure(runtime: &mut Runtime, cleanup: &mut Cleanup, failure: Word) -> Result<(), Error> {
     ready(cleanup)?;
@@ -82,8 +128,7 @@ fn record_failure(runtime: &mut Runtime, cleanup: &mut Cleanup, failure: Word) -
         }
         runtime.failure_link(cleanup.failure, failure, true);
     }
-    abort(runtime, cleanup);
-    Ok(())
+    abort(runtime, cleanup)
 }
 impl Runtime {
     pub fn champ_register_cleanup_plan(&mut self, plan: CleanupPlan) -> PlanId {
@@ -113,10 +158,11 @@ pub extern "C" fn rt_cleanup_begin(ctx: *mut Ctx, inputs: *const CloseInputs,
         } else {
             unsafe { (*inputs.scope).record }
         };
-        let remainder = if inputs.scope.is_null() {
-            packet(runtime, source)?
+        let (owner, remainder) = if inputs.scope.is_null() {
+            (None, packet(runtime, source)?)
         } else {
-            scope(runtime, source)?.all()
+            let closing = scope(runtime, source)?;
+            (Some(closing.owner), closing.all())
         };
         let pending_record = if inputs.pending.is_null() { 0 } else { unsafe { (*inputs.pending).record } };
         let pending = if inputs.pending.is_null() {
@@ -129,7 +175,9 @@ pub extern "C" fn rt_cleanup_begin(ctx: *mut Ctx, inputs: *const CloseInputs,
             inventory.append(pending.reserve.clone());
         }
         validate(runtime, &inventory)?;
-        let mut cleanup = Cleanup { remainder, pending, settlements: inputs.settlements, ..Cleanup::default() };
+        let mut cleanup = Cleanup {
+            owner, remainder, pending, settlements: inputs.settlements, ..Cleanup::default()
+        };
         if inputs.failure != 0 {
             record_failure(runtime, &mut cleanup, inputs.failure)?;
         }
@@ -213,6 +261,118 @@ pub extern "C" fn rt_cleanup_settle_packet(ctx: *mut Ctx, input: *mut CleanupSlo
         Ok(())
     })
 }
+/// The nonempty `cleanup.settle` (SPB 21) for one scheduled duty, class L (draft 3 §6.2, ABI D24.2): no settle
+/// waits in 0.6.0. `schedule` is the runtime id of the close's schedule and `index` the duty's position in it;
+/// the first duty opens the settlement and the last completes it. `this` is the settling body's frame, or 0 in a
+/// synchronous owner. A cache duty releases a never-started Future's inputs and a success's outcome packet into
+/// the settled run, detaches a running Future to the root, and settles a cold one as Cancelled; a cache of
+/// another owner settles to nothing.
+pub extern "C" fn rt_service_settle(ctx: *mut Ctx, this: Word, input: *mut CleanupSlot, schedule: u64, index: u64,
+    duty: Word, post: *mut CleanupSlot) -> Outcome
+{
+    let _ = this;
+    leaf(ctx, |runtime| {
+        let count = *runtime.champ.schedules.get(schedule.wrapping_sub(1) as usize)
+            .ok_or_else(|| error("unknown service schedule"))?;
+        if index >= count {
+            return Err(error("duty outside its schedule"));
+        }
+        let record = unsafe { (*input).record };
+        edit(runtime, record, |runtime, cleanup| {
+            ready(cleanup)?;
+            if cleanup.settled || cleanup.planned {
+                return Err(error("duty settle after the settlement"));
+            }
+            if index == 0 {
+                if cleanup.settlements != 0 {
+                    return Err(error("settlement opened twice"));
+                }
+                cleanup.settlements = count;
+            }
+            if cleanup.settlements != count - index {
+                return Err(error("duty settled out of schedule order"));
+            }
+            if runtime.champ_cache(duty)?.flags & super::REHOMED != 0 {
+                return Err(error("a cache duty in an exit reserve settles with the reserve"));
+            }
+            let settle = runtime.champ_cache_settlement(duty, cleanup.owner)?;
+            // The released packets' own entries settle first (draft 3 §6.3); their identities join the run.
+            let mut plan = Vec::new();
+            let mut released = Packet::default();
+            let service = Service { holder: duty, kind: SERVICE_CACHE, target: None };
+            runtime.champ_plan_duty(service, settle, cleanup.owner, &mut plan, &mut released)?;
+            let mut all = inventory(cleanup);
+            all.append(released.clone());
+            validate(runtime, &all)?;
+            runtime.champ_apply_services(plan)?;
+            cleanup.remainder.append(released);
+            cleanup.settlements -= 1;
+            cleanup.settled = cleanup.settlements == 0;
+            Ok(())
+        })?;
+        unsafe {
+            (*input).record = 0;
+            post.write(CleanupSlot { record });
+        }
+        Ok(())
+    })
+}
+/// `cleanup.settle.dynamic` (SPB 84), class L (draft 3 §6.2, ABI D25.3): after the static steps, settle every
+/// entry of the closing scope's service list in list order, each released packet's entries first, with the rows of
+/// draft 3 §6.2; the released identities join the settled run. Nothing waits in 0.6.0, so the list is settled in
+/// one step and the cursor of the draft is the list itself. Once per close; it completes the settlement.
+pub extern "C" fn rt_cleanup_settle_dynamic(ctx: *mut Ctx, this: Word, input: *mut CleanupSlot,
+    post: *mut CleanupSlot) -> Outcome
+{
+    let _ = this;
+    leaf(ctx, |runtime| {
+        let record = unsafe { (*input).record };
+        edit(runtime, record, |runtime, cleanup| {
+            ready(cleanup)?;
+            if cleanup.planned || cleanup.dynamic || cleanup.settlements != 0 {
+                return Err(error("one dynamic settle per close, after its static duties and before its plan"));
+            }
+            let mut remainder = std::mem::take(&mut cleanup.remainder);
+            settle_services(runtime, cleanup, &mut remainder)?;
+            cleanup.remainder = remainder;
+            cleanup.dynamic = true;
+            cleanup.settled = true;
+            Ok(())
+        })?;
+        unsafe {
+            (*input).record = 0;
+            post.write(CleanupSlot { record });
+        }
+        Ok(())
+    })
+}
+/// `cleanup.deliver_cancel` (SPB 77), class L (draft 3 §5): the D18 step of an async body's final exit, between
+/// its two plans. It delivers nothing (ruling #601 K2 in OIR-2 async ABI, Tomato parity): a cancellation still
+/// pending when the body has produced its result leaves the result as it is and stays requested, so the second
+/// plan finds no aborted reserve. The step keeps its place and its once-only check until #727 removes it.
+pub extern "C" fn rt_cleanup_deliver_cancel(ctx: *mut Ctx, this: Word, input: *mut CleanupSlot,
+    post: *mut CleanupSlot) -> Outcome
+{
+    leaf(ctx, |runtime| {
+        // The body's frame, checked as before.
+        runtime.champ_task_of(this)?;
+        let record = unsafe { (*input).record };
+        edit(runtime, record, |_, cleanup| {
+            // Decision L2: after the settle phase and the first plan, which may have run to done; once.
+            let idle = cleanup.active.is_none() && cleanup.selected.is_none() && cleanup.captured == 0;
+            if !idle || !cleanup.planned || cleanup.delivered || cleanup.second {
+                return Err(error("a deferred cancellation is delivered once, between the two plans"));
+            }
+            cleanup.delivered = true;
+            Ok(())
+        })?;
+        unsafe {
+            (*input).record = 0;
+            post.write(CleanupSlot { record });
+        }
+        Ok(())
+    })
+}
 /// The one explicit abort operation, for pending not consumed by begin. No phase flag.
 pub extern "C" fn rt_exit_abort(ctx: *mut Ctx, input: *mut PendingSlot, state: *mut CleanupSlot,
     post: *mut CleanupSlot) -> Outcome
@@ -226,15 +386,11 @@ pub extern "C" fn rt_exit_abort(ctx: *mut Ctx, input: *mut PendingSlot, state: *
             if cleanup.aborted || cleanup.pending.is_some() {
                 return Err(error("reserve already attached or aborted"));
             }
-            let mut all = cleanup.remainder.clone();
-            for run in &cleanup.stream.runs {
-                all.append(Packet::from_run(run.clone()));
-            }
+            let mut all = inventory(cleanup);
             all.append(pending.reserve.clone());
             validate(runtime, &all)?;
             cleanup.pending = Some(pending);
-            abort(runtime, cleanup);
-            Ok(())
+            abort(runtime, cleanup)
         })?;
         consume(runtime, pending_record);
         unsafe {
@@ -253,15 +409,18 @@ pub extern "C" fn rt_cleanup_plan(ctx: *mut Ctx, input: *mut CleanupSlot, plan: 
             .ok_or_else(|| error("unknown cleanup plan"))?;
         let record = unsafe { (*input).record };
         edit(runtime, record, |runtime, cleanup| {
+            if cleanup.planned {
+                return second_plan(runtime, cleanup, plan);
+            }
             ready(cleanup)?;
-            if !cleanup.settled || cleanup.planned || plan.reserve != (cleanup.pending.is_some() || cleanup.aborted) {
+            if !cleanup.settled || plan.reserve != (cleanup.pending.is_some() || cleanup.aborted) {
                 return Err(error("cleanup plan inventory/settlement mismatch"));
             }
             let reserve_empty = cleanup.pending.as_ref().is_none_or(|pending| pending.reserve.words().next().is_none());
             if plan.direct && plan.may_fail && !reserve_empty {
                 return Err(error("B2: fallible direct plan with nonempty reserve"));
             }
-            stream_append(runtime, &mut cleanup.stream, std::mem::take(&mut cleanup.remainder));
+            plan_remainder(runtime, cleanup)?;
             cleanup.planned = true;
             Ok(())
         })?;
@@ -271,6 +430,22 @@ pub extern "C" fn rt_cleanup_plan(ctx: *mut Ctx, input: *mut CleanupSlot, plan: 
         }
         Ok(())
     })
+}
+/// The aborted reserve's executor plan (OIR-2 D18 at an async body's final exit, decision L2): it follows the
+/// delivery that follows the first plan, and no close has a third. The stream then holds what the delivery
+/// aborted, or nothing when no cancellation was delivered and the reserve stays pending.
+fn second_plan(runtime: &mut Runtime, cleanup: &mut Cleanup, plan: CleanupPlan) -> Result<(), Error> {
+    let idle = cleanup.active.is_none() && cleanup.selected.is_none() && cleanup.captured == 0;
+    if !cleanup.delivered || cleanup.second || !idle {
+        return Err(error("a second plan follows a delivered cancellation; a close has at most two plans"));
+    }
+    if plan.direct || plan.reserve != (cleanup.pending.is_some() || cleanup.aborted) {
+        return Err(error("the aborted reserve runs its own executor plan"));
+    }
+    plan_remainder(runtime, cleanup)?;
+    cleanup.second = true;
+    cleanup.done = false;
+    Ok(())
 }
 fn select(runtime: &Runtime, cleanup: &mut Cleanup) -> Option<(Word, u64, HolderId, OwnerId)> {
     let (serial, index) = cleanup.stream.heads.pop()?;
@@ -317,7 +492,7 @@ pub extern "C" fn rt_cleanup_finish(ctx: *mut Ctx, input: *mut CleanupSlot,
         let output = edit(runtime, record, |runtime, cleanup| {
             if !cleanup.planned || !cleanup.settled || cleanup.active.is_some()
                 || cleanup.selected.is_some() || cleanup.captured != 0
-                || !cleanup.stream.heads.is_empty() || cleanup.remainder.words().next().is_some()
+                || !cleanup.stream.heads.is_empty() || !cleanup.remainder.is_empty()
                 || (cleanup.failure != 0 && cleanup.pending.is_some())
             {
                 return Err(error("finish before complete cleanup"));
@@ -606,7 +781,7 @@ pub extern "C" fn rt_destroy_direct(ctx: *mut Ctx, state: *mut CleanupSlot, key:
 }
 
 /// Internal X runner, also used by entry rejection. Compiled Low may drive the same steps explicitly.
-fn close_packet(ctx: *mut Ctx, input: &mut PacketSlot, primary: Word) -> Result<Word, Error> {
+pub(super) fn close_packet(ctx: *mut Ctx, input: &mut PacketSlot, primary: Word) -> Result<Word, Error> {
     let inputs = CloseInputs {
         scope: std::ptr::null_mut(), packet: input, pending: std::ptr::null_mut(),
         failure: primary, settlements: 0,
@@ -662,7 +837,6 @@ fn close_packet(ctx: *mut Ctx, input: &mut PacketSlot, primary: Word) -> Result<
 }
 
 pub extern "C" fn rt_entry_reject(ctx: *mut Ctx, io: *mut CallOwn) -> Outcome {
-    let frame = frame_pointer!();
     let runtime = unsafe { &mut *(*ctx).runtime };
     let io = unsafe { &mut *io };
     let Some(entry) = runtime.champ_entry_contract(io.entry_abi) else {
@@ -671,16 +845,34 @@ pub extern "C" fn rt_entry_reject(ctx: *mut Ctx, io: *mut CallOwn) -> Outcome {
     if entry.replacements >= OUTCOME_STOP - 1 {
         return stop(ctx, error("invalid owning outcome count"));
     }
+    match reject_inputs(ctx, &mut io.input) {
+        Ok(failure) => {
+            unsafe {
+                (*ctx).failure = failure;
+                (*ctx).status = FAILED;
+                io.output.write(CallPost { value: 0, packet: PacketSlot::default(), failure });
+            }
+            entry.replacements + 1
+        }
+        Err(outcome) => outcome,
+    }
+}
+
+/// Close `input` with a stack overflow as the primary failure, in the reserved headroom: the combined
+/// failure, or the terminal outcome when the close stopped.
+fn reject_inputs(ctx: *mut Ctx, input: &mut PacketSlot) -> Result<Word, Outcome> {
+    let frame = frame_pointer!();
+    let runtime = unsafe { &mut *(*ctx).runtime };
     // Validate before constructing or consuming anything, including a repeated rejection.
-    if let Err(error) = packet(runtime, io.input.record).and_then(|packet| validate(runtime, &packet)) {
-        return stop(ctx, error);
+    if let Err(error) = packet(runtime, input.record).and_then(|packet| validate(runtime, &packet)) {
+        return Err(stop(ctx, error));
     }
     let roots = runtime.roots.len();
-    runtime.roots.push((io.input.record, Repr::Ref));
+    runtime.roots.push((input.record, Repr::Ref));
     runtime::rt_stack_overflow(ctx);
     if unsafe { (*ctx).status } != FAILED {
         unsafe { &mut *(*ctx).runtime }.roots.truncate(roots);
-        return OUTCOME_STOP;
+        return Err(OUTCOME_STOP);
     }
     let primary = unsafe { (*ctx).failure };
     unsafe { &mut *(*ctx).runtime }.roots.push((primary, Repr::Ref));
@@ -697,28 +889,49 @@ pub extern "C" fn rt_entry_reject(ctx: *mut Ctx, io: *mut CallOwn) -> Outcome {
     let usable_limit = hard_limit.saturating_add(crate::jit::MAX_FRAME);
     unsafe { (*ctx).stack_limit = old_limit.min(usable_limit) };
     unsafe { &mut *(*ctx).runtime }.safepoint(frame, unsafe { &*ctx }, &[]);
-    let result = close_packet(ctx, &mut io.input, primary);
+    let result = close_packet(ctx, input, primary);
     unsafe { (*ctx).stack_limit = old_limit };
     let runtime = unsafe { &mut *(*ctx).runtime };
     runtime.champ.rejection_floor = previous_floor;
     runtime.roots.truncate(roots);
-    match result {
-        Ok(failure) => {
-            unsafe {
-                (*ctx).failure = failure;
-                (*ctx).status = FAILED;
-                io.output.write(CallPost { value: 0, packet: PacketSlot::default(), failure });
-            }
-            entry.replacements + 1
+    result.map_err(|error| {
+        if matches!(unsafe { (*ctx).status }, FATAL | EXHAUSTED) {
+            OUTCOME_STOP
+        } else {
+            stop(ctx, error)
         }
-        Err(error) => {
-            if matches!(unsafe { (*ctx).status }, FATAL | EXHAUSTED) {
-                OUTCOME_STOP
-            } else {
-                stop(ctx, error)
-            }
-        }
+    })
+}
+
+/// A Champ async body that cannot start for want of stack (draft 3 §3), class X. Its inputs in continuation 0
+/// close with the overflow as the primary failure, as `rt_entry_reject` closes an owning entry's, and the Future
+/// publishes the combined failure. A resumed body holds state that only its own code can close: running out of
+/// stack there stops the engine.
+pub extern "C" fn rt_body_reject(ctx: *mut Ctx, frame: Word) -> Outcome {
+    use crate::tasks::{get, set, RESUME};
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    let Some(map) = runtime.champ_frame_map(runtime.function_of(frame)) else {
+        return stop(ctx, error("body rejection of a frame without a map"));
+    };
+    if get(frame, RESUME) != 0 {
+        return stop(ctx, error("stack exhausted while resuming an async body"));
     }
+    let start = map.start.iter().map(|&slot| map.slots[slot as usize].offset).collect::<Vec<_>>();
+    let packet = map.packet();
+    // A fixed root starts empty (#667): it offers no inputs, and an empty packet closes with the overflow alone.
+    let mut input = match packet {
+        Some(offset) => PacketSlot { record: get(frame, offset) },
+        None => PacketSlot { record: store(runtime, Data::Packet(Packet::default())) },
+    };
+    for offset in start {
+        set(frame, offset, 0);
+    }
+    let failure = match reject_inputs(ctx, &mut input) {
+        Ok(failure) => failure,
+        Err(outcome) => return outcome,
+    };
+    let published = PublishIn { tag: 1, value: 0, packet: std::ptr::null_mut(), failure };
+    super::rt_future_publish(ctx, frame, &published)
 }
 
 fn invoke_owned(ctx: *mut Ctx, entry_id: EntryId, arguments: (*const Word, u64),
@@ -808,6 +1021,17 @@ impl Runtime {
         contracts: &dyn okkama_sparrow::spb17::ExternalContracts) -> Result<Vec<Vec<PlanId>>, Error>
     {
         okkama_sparrow::spb17::verify_load(program, contracts).map_err(|failure| error(&failure.to_string()))?;
+        Ok(self.relocate_cleanup_plans(program))
+    }
+
+    /// [`Runtime::champ_load_cleanup_plans`] for a program the loader has already checked: the evidence
+    /// is the [`Verified`](super::machine::Verified) itself, so nothing verifies it again (#701).
+    pub(crate) fn champ_verified_cleanup_plans(&mut self, verified: &super::machine::Verified) -> Vec<Vec<PlanId>> {
+        self.relocate_cleanup_plans(verified.source())
+    }
+
+    /// Only reached with a program that passed `verify_load`: its plans, closes and envelopes are in range.
+    fn relocate_cleanup_plans(&mut self, program: &okkama_sparrow::spb17::Program) -> Vec<Vec<PlanId>> {
         let mut relocated = Vec::new();
         for function in &program.functions {
             let mut plans = vec![0; function.proofs.plans.len()];
@@ -823,6 +1047,6 @@ impl Runtime {
             }
             relocated.push(plans);
         }
-        Ok(relocated)
+        relocated
     }
 }

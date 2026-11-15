@@ -120,3 +120,64 @@ const GOLDENS: &[&str] = &[
     "shape-reversed",
     "shape-take",
 ];
+
+/// Array and map retags in the lowered module.
+fn retags(module: &ir::Module) -> usize {
+    module.functions.iter().filter_map(|(_, function)| function.body.as_ref())
+        .flat_map(|body| body.insts.iter())
+        .filter(|(_, inst)| matches!(inst.op, ir::Operation::Collection(
+            ir::CollectionOp::ArrayRetag { .. } | ir::CollectionOp::MapRetag { .. })))
+        .count()
+}
+
+// #297 at a join: the checker types the whole `if`/`match`; an untagged arm takes
+// the join's collection type, as at a declared boundary.
+#[test]
+fn oir2_untagged_arm_takes_the_join_collection_type() {
+    for (body, expected) in [
+        ("let c = true; let joined = if c { [[]]; } else { [[2, 3]]; }; joined.size();", 1),
+        ("let m = match 1 { case 1 { [[]]; } else { [[1]]; } }; m.size();", 1),
+        ("let c = true; let t = if c { [\"a\": [1]]; } else { [:]; }; t.size();", 1),
+        // Arms of one type need no retag.
+        ("let c = true; let same = if c { [[1]]; } else { [[2, 3]]; }; same.size();", 0),
+    ] {
+        let source = format!("module app; main() is int {{ {body} }}");
+        with_analysis(&source, |analysis| {
+            let module = super::lower_to_oir2(analysis).unwrap_or_else(|error| panic!("{body}: {error}"));
+            ir::verify::verify_high(&module).unwrap_or_else(|errors| panic!("{body}: {errors:?}"));
+            assert_eq!(retags(&module), expected, "{body}");
+        });
+    }
+}
+
+/// Empty collections created in the lowered module.
+fn empty_news(module: &ir::Module) -> usize {
+    module.functions.iter().filter_map(|(_, function)| function.body.as_ref())
+        .flat_map(|body| body.insts.iter())
+        .filter(|(_, inst)| match &inst.op {
+            ir::Operation::Collection(ir::CollectionOp::ArrayNew { values, .. }) => values.is_empty(),
+            ir::Operation::Collection(ir::CollectionOp::MapNew { entries, .. }) => entries.is_empty(),
+            _ => false,
+        })
+        .count()
+}
+
+// A literal condition types an `if` by its selected arm (`L05.choice.empty-collections`, #710): the other
+// arm never runs, and its collection cannot be retagged to the selected arm's empty type. It passes an empty
+// collection of the join's type instead. A choice typed by its non-empty arm still retags the empty one.
+#[test]
+fn oir2_dead_literal_arm_passes_an_empty_collection_of_the_join_type() {
+    for (body, expected_retags, expected_empty) in [
+        ("((if false { [1]; } else { []; }) == []).string().length();", 0, 3),
+        ("((if false { [\"k\": 1]; } else { [:]; }) == [:]).string().length();", 0, 3),
+        ("((if false { [[1]]; } else { []; }) == []).string().length();", 0, 3),
+        ("((false ?? [1] !! []) == []).string().length();", 2, 2),
+    ] {
+        let source = format!("module app; main() is int {{ {body} }}");
+        with_analysis(&source, |analysis| {
+            let module = super::lower_to_oir2(analysis).unwrap_or_else(|error| panic!("{body}: {error}"));
+            ir::verify::verify_high(&module).unwrap_or_else(|errors| panic!("{body}: {errors:?}"));
+            assert_eq!((retags(&module), empty_news(&module)), (expected_retags, expected_empty), "{body}");
+        });
+    }
+}

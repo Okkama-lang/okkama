@@ -213,8 +213,9 @@ fn oir2_generic_open_types_are_explicit_diagnostics() {
 
 #[test]
 fn oir2_generic_later_constructs_keep_source_diagnostics() {
+    // Plain async lowers since P2.5 V5; spawn stays outside it (plan §4 P1).
     let source = concat!("module app; object Box<T> { has value is T; Box(:value); ",
-        "async get() is T { value; } } main() is int { Box(value: 1).get(); 0; }");
+        "async get() is T { value; } } async main() is int { await spawn Box(value: 1).get(); }");
     with_analysis(source, |analysis| {
         let error = lower_to_oir2(analysis).unwrap_err();
         assert!(matches!(error, LowerError::Unsupported { span, .. } if !span.is_empty()), "{error}");

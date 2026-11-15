@@ -1,0 +1,61 @@
+oir 2 own
+// The Own body of verify/valid/B9-cache-view-escapes-without-rehome.oir (#715): f awaits a Future it borrows and
+// keeps the cached view of the result inside its owner. The normal edge of the await passes the view to a join
+// block, so coro lands it in a new block whose parameter needs a dependency of its own.
+module cache_view
+object R {
+    field x: int
+    destroy @destroy
+}
+scope SD action in @destroy
+summary Md internal parameters [parameter_effect(convention=borrow, destination=none)] contract
+    call_contract(publication=atomic)
+func @destroy(%self: R facts(managed(deps=dd))) -> void [destroy R] summary(Md) {
+    dependency dd: dependency = retention(value=%self, selection=selection(%self))
+^entry in SD:
+    ret
+}
+protocol Services kind services holders [scope, cache, frame, receipt, root, pending_exit] rules [
+    protocol_rule(transition=settle, from=cache, to=scope, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=receipt,
+    to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
+    protocol_rule(transition=settle, from=cache, to=root, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=rehome, from=scope,
+    to=pending_exit, checks=[owner, live_dependencies, sufficient_boundary],
+    normal=protocol_poststate(holder=pending_exit, state=open))]
+scope S action in @f
+summary Mc call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results
+    [result_relation(provenance=unbound_result)] contract call_contract(results=[future<void>], publication=atomic)
+summary M0 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract
+    call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+func @f(%future: future<R> facts(managed(deps=d0)); %input: own) -> own [async] abi explicit(input_packet=1,
+    output_packet=0) summary(M0) async-creation(Mc) async-body(M0) {
+    dependency dv: dependency = retention(value=%v, selection=selection(%v))
+    key k0: key = service_of(value=%future, kind=cache)
+    dependency d0: dependency = key(k0)
+    boundary B0 lexical in S
+    selection s0: selection = union([])
+^entry in S:
+    %q: scope<S> = scope.begin S
+    %a: scope<S> = own.accept %q, %input
+    invoke.own await %future, result R
+        normal ^ok($value, $deps, %a)
+        unwind ^failed($failure, $task, $receipt, %a)
+^ok(%v: R facts(managed(deps=dv)), %d: deps, %a1: scope<S>) in S:
+    %empty: own = own.empty
+    %p: pending = exit.prepare return packet %empty select s0 at B0
+    invoke.own scope.end %a1, reserve %p, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=false, cancel=true)
+        normal ^done($closed, $pending)
+        unwind ^bad($closed, $failure)
+^failed(%e: failure, %t: task-state, %r: receipt, %a2: scope<S>) in S:
+    (%a3: scope<S>, %e1: failure) = await.unwind %a2, %e, %t, %r, protocol Services
+    %combined: failure = scope.unwind %a3, %e1, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=false, cancel=false)
+    raise %combined
+^done(%c: closed, %pending: pending) in S:
+    (%out: own, %rd: deps) = exit.commit %pending, destination caller
+    ret %out
+^bad(%c2: closed, %final: failure) in S:
+    raise %final
+}

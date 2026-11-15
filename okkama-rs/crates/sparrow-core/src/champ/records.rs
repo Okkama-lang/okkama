@@ -9,6 +9,8 @@ pub type Outcome = u64;
 pub type PlanId = u64;
 pub type EntryId = u64;
 pub const OUTCOME_STOP: Outcome = u64::MAX;
+/// Class S transport (Champ draft 3 §1.1): never an outcome ordinal, and it carries no Post.
+pub const OUTCOME_PENDING: Outcome = u64::MAX - 1;
 pub const NORMAL: Outcome = 0;
 pub const UNWIND: Outcome = 1;
 pub const CHUNK_ENTRIES: usize = 32;
@@ -24,7 +26,7 @@ macro_rules! slots {
         }
     )*};
 }
-slots!(PacketSlot, ScopeSlot, PendingSlot, CleanupSlot);
+slots!(PacketSlot, ScopeSlot, PendingSlot, CleanupSlot, CacheSlot, TaskSlot);
 
 /// Fixed service storage used before packet materialization. Inactive guards always have a zero Ref.
 #[derive(Debug, Default)]
@@ -170,6 +172,81 @@ pub struct DestroyPost {
     pub failure: Word,
 }
 
+/// `fut.new` (SPB 64): `entry` is the SPB index of an async body; `args` are the values of its continuation 0
+/// in order (receiver, language arguments, descriptor parameters). Both slots are consumed on Normal only.
+#[derive(Debug)]
+#[repr(C)]
+pub struct FutureNewIn {
+    pub entry: u64,
+    pub args: *const Word,
+    pub argc: u64,
+    pub inputs: *mut PacketSlot,
+    pub owner: *mut ScopeSlot,
+}
+#[derive(Debug, Default)]
+#[repr(C)]
+pub struct FutureNewPost {
+    pub future: Word,
+    /// The owner's cache duty: one word, the Future frame (draft 3 §14.2).
+    pub cache: Word,
+    pub state: ScopeSlot,
+}
+/// `await` (SPB 66). Normal writes the outcome value (zero for a void Future); Unwind writes the failure, the
+/// awaited Future as the task and the receipt.
+#[derive(Debug, Default)]
+#[repr(C)]
+pub struct AwaitPost {
+    pub value: Word,
+    pub task: Word,
+    pub receipt: u64,
+}
+#[derive(Debug, Default)]
+#[repr(C)]
+pub struct AwaitUnwindPost {
+    pub state: ScopeSlot,
+    pub failure: Word,
+}
+/// `fut.publish` (SPB 70): tag 0 publishes success (`value`, `packet`), tag 1 publishes `failure`.
+#[derive(Debug)]
+#[repr(C)]
+pub struct PublishIn {
+    pub tag: u64,
+    pub value: Word,
+    pub packet: *mut PacketSlot,
+    pub failure: Word,
+}
+/// `await.take` (SPB 67, draft 3 §4.2). Normal writes the outcome value and the taken outcome packet; Unwind
+/// writes the failure, the awaited Future as the task and the receipt, as `await` does.
+#[derive(Debug, Default)]
+#[repr(C)]
+pub struct AwaitTakePost {
+    pub value: Word,
+    pub packet: PacketSlot,
+    pub task: Word,
+    pub receipt: u64,
+}
+/// `cache.rehome` (SPB 69, draft 3 §12): the reserve with the receipts, and the owner state of the state form
+/// (zero in the token form).
+#[derive(Debug, Default)]
+#[repr(C)]
+pub struct RehomePost {
+    pub pending: PendingSlot,
+    pub state: ScopeSlot,
+}
+/// `service.materialize` (SPB 85, ABI D25.2): the packet without the entry, and the entry as its token.
+#[derive(Debug, Default)]
+#[repr(C)]
+pub struct MaterializePost {
+    pub packet: PacketSlot,
+    pub token: Word,
+}
+/// A one-word boolean result (`fut.cancelled`).
+#[derive(Debug, Default)]
+#[repr(C)]
+pub struct FlagPost {
+    pub value: u64,
+}
+
 /// Exactly one of scope/packet is non-null. Optional pending is consumed by begin.
 /// Settlements names the checked synchronous protocol inventory, never a defer stack.
 #[derive(Debug)]
@@ -278,10 +355,28 @@ impl Run {
         })
     }
 }
+/// D25 service kinds (Champ draft 3 §6.1, ABI D25.1): a Future's cache duty and a spawned Future's task duty.
+pub const SERVICE_CACHE: u64 = 0;
+pub const SERVICE_TASK: u64 = 1;
+/// The target of a rehome receipt that returns its Future to the caller (ABI C-4 ruling): owner ids are nonzero.
+pub const TARGET_CALLER: u64 = 0;
+
+/// One service entry of a packet, a scope state or a reserve (draft 3 §6.1, ABI D25.1): a Ref to its holder and
+/// its kind. It has no serial and is never destroyed; it is settled. An entry that `cache.rehome` moved into an
+/// exit reserve is a receipt (ABI C-4): it records the exit's target, the owner id of a scope T or
+/// `TARGET_CALLER`, until `exit.commit` performs the single owner transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Service {
+    pub holder: Word,
+    pub kind: u64,
+    pub target: Option<u64>,
+}
 #[derive(Debug, Clone, Default)]
 pub(super) struct Packet {
     /// Positional provenance: admission, bound history, staging. Never encoded in identity bits.
     pub journals: [VecDeque<Run>; 3],
+    /// Service entries in list order (draft 3 §6.1). Every packet transition carries them with the runs.
+    pub services: Vec<Service>,
 }
 impl Packet {
     pub fn runs(&self) -> impl Iterator<Item = &Run> {
@@ -293,21 +388,31 @@ impl Packet {
     pub fn words(&self) -> impl Iterator<Item = Word> + '_ {
         self.runs().flat_map(Run::words)
     }
+    /// Identities and service holders: a Future whose only reference is its duty in a packet, a scope state or a
+    /// reserve stays alive with it (draft 3 §13, "GC roots for frame packets").
     pub fn trace(&self, visit: &mut dyn FnMut(Word, Repr)) {
         for object in self.words() {
             visit(object, Repr::Ref);
+        }
+        for service in &self.services {
+            visit(service.holder, Repr::Ref);
         }
     }
     pub fn append(&mut self, other: Self) {
         for (destination, mut source) in self.journals.iter_mut().zip(other.journals) {
             destination.append(&mut source);
         }
+        self.services.extend(other.services);
+    }
+    /// No identity and no service entry.
+    pub fn is_empty(&self) -> bool {
+        self.runs().all(|run| run.length == 0) && self.services.is_empty()
     }
     pub fn from_run(run: Run) -> Self {
         if run.length == 0 {
             return Self::default();
         }
-        Self { journals: [VecDeque::from([run]), VecDeque::new(), VecDeque::new()] }
+        Self { journals: [VecDeque::from([run]), VecDeque::new(), VecDeque::new()], services: Vec::new() }
     }
 }
 #[derive(Debug, Clone)]
@@ -323,11 +428,13 @@ pub(super) struct Scope {
 }
 impl Scope {
     pub fn all(&self) -> Packet {
+        let services = [&self.admission, &self.bound, &self.staging].into_iter()
+            .flat_map(|packet| packet.services.iter().copied()).collect();
         Packet { journals: [
             self.admission.runs().cloned().collect(),
             self.bound.runs().cloned().collect(),
             self.staging.runs().cloned().collect(),
-        ] }
+        ], services }
     }
 }
 #[derive(Debug, Clone)]
@@ -354,15 +461,24 @@ impl Stream {
 }
 #[derive(Debug, Clone, Default)]
 pub(super) struct Cleanup {
+    /// The closing scope's owner when the close began from a scope state: cache duties of other owners
+    /// settle to nothing (draft 3 §6.2).
+    pub owner: Option<OwnerId>,
     pub remainder: Packet,
     pub pending: Option<Pending>,
     pub stream: Stream,
     pub selected: Option<(Word, u64, HolderId, OwnerId)>,
     pub settlements: u64,
     pub settled: bool,
+    /// `cleanup.settle.dynamic` (SPB 84) ran: the scope's service list is settled (ABI D25.3).
+    pub dynamic: bool,
     pub planned: bool,
     pub aborted: bool,
     pub done: bool,
+    /// D18 at an async body's final exit (decision L2): the deferred cancellation was delivered, after the first
+    /// plan; the aborted reserve's executor plan, the second and last, has begun.
+    pub delivered: bool,
+    pub second: bool,
     pub active: Option<(Word, u64, HolderId, OwnerId)>,
     pub invoked: bool,
     pub captured: Word,
@@ -415,7 +531,8 @@ impl Payload for Record {
     }
     fn external_bytes(&self) -> usize {
         let packet_bytes = |packet: &Packet| {
-            packet.journals.iter().map(|runs| runs.capacity() * size_of::<Run>()).sum::<usize>()
+            packet.services.capacity() * size_of::<Service>()
+                + packet.journals.iter().map(|runs| runs.capacity() * size_of::<Run>()).sum::<usize>()
                 + packet.runs().map(|run| {
                 run.chunks.capacity() * size_of::<VecDeque<Word>>()
                     + run.chunks.iter().map(|chunk| chunk.capacity() * 8).sum::<usize>()

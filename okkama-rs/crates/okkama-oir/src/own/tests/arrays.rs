@@ -1,6 +1,7 @@
 use super::*;
 use crate::own::analyze::analyze_function;
 use crate::own::domain::Shape;
+use std::collections::BTreeMap;
 
 #[test]
 fn plain_arrays_preserve_positions_empty_arrays_and_observation_failures() {
@@ -28,7 +29,6 @@ fn plain_arrays_preserve_positions_empty_arrays_and_observation_failures() {
         let body = builder.finish().unwrap();
         module.define_function(f, body).unwrap();
         let module = module.finish().unwrap();
-        verify_high(&module).unwrap();
         let options = OwnOptions::default();
         let output = elaborate_ownership(module, &TestNatives::default(), &options).unwrap();
         let flow = analyze_function(&output.module, f, &output.analysis, &options).unwrap();
@@ -178,10 +178,52 @@ func @f(%c: bool) -> void {
     assert!(crate::own::arrays::inner_scopes(&module, scope("S"), scope("SI")).is_err());
 }
 
-/// Versions of builders from sibling scopes meeting at one parameter belong
-/// to the nearest common scope, which outlives both.
+/// The owner of a builder holds its element journal (spec §4.1, §8), and no transition moves a journal
+/// between scopes. Versions of builders made in sibling scopes therefore cannot meet at one parameter:
+/// lifting the owner to the common scope would leave the elements pushed before the join in the inner
+/// scope's journal, destroyed at its close while the merged buffer still holds them.
+fn sibling_builders(left: &str) -> Module {
+    crate::text::parse(&format!(r#"oir 2 high
+module owner_join
+scope S action in @f
+scope SA block in @f parent S
+scope SB block in @f parent S
+func @f(%c: bool) -> void {{
+^entry in S:
+    cond %c, ^left, ^right
+^left in SA:
+    %a: builder<int> = builder.new element int
+{left}^right in SB:
+    %b: builder<int> = builder.new element int
+    br ^join(%b)
+^join(%merged: builder<int>) in S:
+    builder.abandon %merged
+    ret
+}}
+"#)).unwrap()
+}
+
+fn owners_of(module: &Module) -> Result<BTreeMap<ValueId, ScopeId>, OwnError> {
+    let (_, function) = module.functions.iter().next().unwrap();
+    crate::own::arrays::builder_owners(module, function.body.as_ref().unwrap())
+}
+
 #[test]
-fn builder_owner_join_takes_the_nearest_common_scope() {
+fn builder_versions_from_sibling_scopes_cannot_meet_at_a_join() {
+    let empty = sibling_builders("    br ^join(%a)\n");
+    let error = owners_of(&empty).unwrap_err();
+    assert!(format!("{error:?}").contains("builder versions made in different scopes meet at a join"),
+        "{error:?}");
+    // The audited shape: an element pushed in SA before the join.
+    let push = "    %item: int = const 1\n    %a2: builder<int> = builder.push %a, %item\n    br ^join(%a2)\n";
+    let pushed = sibling_builders(push);
+    let error = owners_of(&pushed).unwrap_err();
+    assert!(format!("{error:?}").contains("builder versions made in different scopes meet at a join"),
+        "{error:?}");
+}
+
+#[test]
+fn versions_of_one_builder_keep_its_owner_across_a_join() {
     let module = crate::text::parse(r#"oir 2 high
 module owner_join
 scope S action in @f
@@ -189,32 +231,52 @@ scope SA block in @f parent S
 scope SB block in @f parent S
 func @f(%c: bool) -> void {
 ^entry in S:
-    cond %c, ^left, ^right
-^left in SA:
     %a: builder<int> = builder.new element int
-    br ^join(%a)
-^right in SB:
-    %b: builder<int> = builder.new element int
-    br ^join(%b)
+    cond %c, ^left(%a), ^right(%a)
+^left(%l: builder<int>) in SA:
+    %item: int = const 1
+    %l2: builder<int> = builder.push %l, %item
+    br ^join(%l2)
+^right(%r: builder<int>) in SB:
+    br ^join(%r)
 ^join(%merged: builder<int>) in S:
     builder.abandon %merged
     ret
 }
 "#).unwrap();
+    let owners = owners_of(&module).unwrap();
     let (_, function) = module.functions.iter().next().unwrap();
     let body = function.body.as_ref().unwrap();
-    let owners = crate::own::arrays::builder_owners(&module, body).unwrap();
     let root = body.blocks.get(body.entry).unwrap().lexical_scope;
-    let merged = body.blocks.iter().flat_map(|(_, block)| block.params.iter().copied()).find(|value| {
-        matches!(module.types.get(body.values.get(*value).unwrap().ty), Ok(Type::Builder(_)))
-    }).unwrap();
-    assert_eq!(owners.get(&merged), Some(&root));
-    for (_, block) in body.blocks.iter() {
-        for inst in &block.insts {
-            let instruction = body.insts.get(*inst).unwrap();
-            if matches!(instruction.op, Operation::Collection(CollectionOp::BuilderNew { .. })) {
-                assert_eq!(owners.get(&instruction.results[0]), Some(&block.lexical_scope));
-            }
-        }
+    assert!(owners.len() >= 5);
+    assert!(owners.values().all(|owner| *owner == root), "{owners:?}");
+}
+
+#[test]
+fn a_builder_is_finished_and_abandoned_inside_its_owner() {
+    for end in ["%array: array<int> = builder.finish %a", "builder.abandon %a"] {
+        let module = crate::text::parse(&format!(r#"oir 2 high
+module owner_exit
+scope S action in @f
+scope SA iteration in @f parent S
+func @f() -> void {{
+^entry in S:
+    br ^inner
+^inner in SA:
+    %a: builder<int> = builder.new element int
+    br ^out
+^out in S unwind ^failed:
+    {end}
+    ret
+^failed(%e: failure) in S:
+    builder.abandon %a
+    raise %e
+}}
+"#)).unwrap();
+        verify_high(&module).unwrap_or_else(|report| panic!("{end}: {report:?}"));
+        let options = OwnOptions::default();
+        let error = elaborate_ownership(module, &TestNatives::default(), &options)
+            .and_then(|output| rewrite_synchronous(output, &options)).map(|_| ()).unwrap_err();
+        assert!(format!("{error:?}").contains("outside the scope of its builder.new"), "{end}: {error:?}");
     }
 }

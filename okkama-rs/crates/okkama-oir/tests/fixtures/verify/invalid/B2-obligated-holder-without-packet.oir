@@ -1,0 +1,119 @@
+oir 2 own
+// expect OIR2-B2.3 terminator:2:1
+// The implementation now has destroy, so the holder may hold an obligation: its creation needs a packet.
+module app
+requires core
+entry @main
+
+object app.Square {
+    field side: int
+    destroy @destroy
+    does app.Shape {area = @own_witness_entry_4}
+}
+
+object app.Holder {
+    field shape: app.Shape
+}
+
+role app.Shape {
+    area(deps, own) -> (int, own) abi explicit(input_packet=1, output_packet=1)
+}
+scope S0 action in @app.Square.area#0
+scope S1 action in @main
+scope S2 action in @app.Square.new#0
+scope S3 action in @app.Holder.new#0
+scope S4 action in @own_witness_entry_4
+scope S5 action in @destroy
+summary M0 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[app.Square], failures=[program], publication=atomic)
+summary M1 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], publication=atomic)
+summary M2 call-boundary parameters [parameter_effect(convention=take, retention=some(owner_graph(0)), deps=[0], destination=result)] results [result_relation(external_deps=[0], provenance=unbound_result)] contract call_contract(results=[app.Holder], failures=[program], publication=atomic)
+summary M3 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], publication=atomic)
+summary M4 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], publication=atomic)
+summary M5 observation parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[app.Square], failures=[program], publication=atomic)
+summary M6 observation parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], publication=atomic)
+summary M7 observation parameters [parameter_effect(convention=take, retention=some(owner_graph(0)), deps=[0], destination=result)] results [result_relation(external_deps=[0], provenance=unbound_result)] contract call_contract(results=[app.Holder], failures=[program], publication=atomic)
+summary M8 observation results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], publication=atomic)
+summary M9 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(publication=atomic)
+
+func @app.Square.new#0(%0: int) -> app.Square [ctor app.Square] abi observation summary(M5) {
+    binding b0 "side": int in S2
+    boundary B0 lexical in S2
+    ^b0 in S2:
+    br ^b1(%0)
+    ^b1(%1: int) in S2:
+    %2: int = undef ty int
+    invoke.own obj.new app.Square { side: %1 }
+        normal ^b2($value, %1)
+        unwind ^b3($failure)
+    ^b2(%3: app.Square facts(plain(certificate=closed_graph(ty=app.Square))), %4: int) in S2:
+    ret %3
+    ^b3(%5: failure) in S2:
+    raise %5
+}
+
+func @app.Square.area#0(%0: app.Square facts(plain(certificate=closed_graph(ty=app.Square)))) -> int [method app.Square] abi observation summary(M6) {
+    boundary B0 lexical in S0
+    ^b0 in S0:
+    br ^b1(%0)
+    ^b1(%1: app.Square facts(plain(certificate=closed_graph(ty=app.Square)))) in S0:
+    %2: int = obj.get %1, side
+    %3: int = obj.get %1, side
+    %4: int = int.mul %2, %3
+    ret %4
+}
+
+func @app.Holder.new#0(%0: app.Shape facts(managed(deps=d1)); %1: deps) -> app.Holder [ctor app.Holder] abi observation summary(M7) {
+    binding b0 "shape": app.Shape in S3
+    boundary B0 lexical in S3
+    key k0: key = created(site=7, instance=%6)
+    dependency d0: dependency = from_ssa(%3)
+    dependency d1: dependency = from_ssa(%1)
+    dependency d2: dependency = empty
+    dependency d3: dependency = from_ssa(%8)
+    dependency d4: dependency = key(k0)
+    dependency d5: dependency = union([d4, d0])
+    ^b0 in S3:
+    br ^b1(%0, %1)
+    ^b1(%2: app.Shape facts(managed(deps=d0)), %3: deps) in S3:
+    %4: app.Shape facts(managed(deps=d2)) = undef ty app.Shape
+    %5: deps = deps.of %4
+    invoke.own obj.new app.Holder { shape: %2 }
+        normal ^b2($value, %2, %3)
+        unwind ^b3($failure)
+    ^b2(%6: app.Holder facts(managed(deps=d5)), %7: app.Shape facts(managed(deps=d3)), %8: deps) in S3:
+    %9: deps = deps.of %6
+    ret %6
+    ^b3(%10: failure) in S3:
+    raise %10
+}
+
+func @main() -> int [entry] abi observation summary(M8) {
+    boundary B0 lexical in S1
+    ^b0 in S1:
+    br ^b1
+    ^b1 in S1:
+    %0: int = const 0
+    ret %0
+}
+
+func @own_witness_entry_4(%0: app.Square facts(managed(deps=d0)); %1: deps, %2: own) -> (int, own) [method app.Square] abi explicit(input_packet=2, output_packet=1) summary(M4) {
+    boundary B0 lexical in S4
+    dependency d0: dependency = from_ssa(%1)
+    ^b0 in S4:
+    %3: scope<S4> = scope.begin S4
+    %4: scope<S4> = own.accept %3, %2
+    br ^b1(%0, %4)
+    ^b1(%5: app.Square facts(plain(certificate=closed_graph(ty=app.Square))), %6: scope<S4>) in S4:
+    %7: int = obj.get %5, side
+    %8: int = obj.get %5, side
+    %9: int = int.mul %7, %8
+    %10: closed = scope.end %6, effects scope_effects(failures=[], suspends=false, cancel=false)
+    %11: own = own.empty
+    ret %9, %11
+}
+
+func @destroy(%self: app.Square facts(managed(deps=dd))) -> void [destroy app.Square] summary(M9) {
+    dependency dd: dependency = retention(value=%self, selection=selection(%self))
+    ^b0 in S5:
+    ret
+}

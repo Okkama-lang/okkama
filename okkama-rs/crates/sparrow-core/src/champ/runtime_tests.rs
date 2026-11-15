@@ -107,6 +107,15 @@ fn changed(before: Identity, after: Identity, holder: u64, owner: u64) {
     assert_eq!(after, Identity { holder_id: holder, owner_id: owner, epoch: before.epoch + 1, ..before });
 }
 
+/// The result context a registry check needs: `fut.new`'s schema names its Future type (#601 V8).
+pub(super) fn schema_context(opcode: Option<okkama_sparrow::spb17::Opcode>) -> okkama_sparrow::spb17::ResultContext {
+    use okkama_sparrow::spb17::{Opcode, ResultContext, Type};
+    match opcode {
+        Some(Opcode::FutureNew) => ResultContext { value: Some(Type::Future(0)), ..ResultContext::default() },
+        _ => ResultContext::default(),
+    }
+}
+
 #[test]
 fn champ_s2_registry_layouts_effects_and_single_outcome_channel() {
     assert_eq!(size_of::<CallPost>(), 24);
@@ -114,12 +123,17 @@ fn champ_s2_registry_layouts_effects_and_single_outcome_channel() {
     assert_eq!(size_of::<KeyRef>(), 16);
     assert_eq!(size_of::<PacketSlot>(), 8);
     let helpers: Vec<_> = crate::jit::HELPERS.iter().filter(|(name, _)| name.starts_with("champ_")).collect();
-    assert_eq!(helpers.len(), 56);
+    // #622 adds champ_machine_collection, champ_machine_builder and champ_machine_lookup; #675 adds
+    // champ_machine_scalar; #676 adds champ_machine_role_narrow and champ_own_dynamic; #601 V8 adds the eight
+    // async helpers of Champ draft 3 §14.4 and champ_machine_future_destination; #697 adds
+    // champ_scope_transfer_admissible; #601 V9 adds champ_body_reject; #601 R5 adds champ_await_take and
+    // champ_cache_rehome.
+    assert_eq!(helpers.len(), 75);
     for &(name, effects) in helpers {
         let abi = helper_abi(name).unwrap();
         let class = abi.class;
         assert_eq!(abi.effects, effects);
-        let context = okkama_sparrow::spb17::ResultContext::default();
+        let context = schema_context(abi.opcode);
         let schemas = abi.schemas(&context).unwrap();
         if let Some(opcode) = abi.opcode {
             for (tag, slots) in schemas {
@@ -131,7 +145,13 @@ fn champ_s2_registry_layouts_effects_and_single_outcome_channel() {
                 }
             }
         }
-        assert!(!effects.contains(&crate::jit::Effect::Suspends));
+        // Draft 3 §1.1: only class S may return PENDING, and an S helper is otherwise an X helper.
+        assert_eq!(effects.contains(&crate::jit::Effect::Suspends), class == HelperClass::S, "{name}");
+        if class == HelperClass::S {
+            for effect in [crate::jit::Effect::Collects, crate::jit::Effect::Reenters] {
+                assert!(effects.contains(&effect), "{name}: {effect:?}");
+            }
+        }
         if class == HelperClass::L {
             for effect in [crate::jit::Effect::Collects, crate::jit::Effect::Reenters, crate::jit::Effect::Fails] {
                 assert!(!effects.contains(&effect), "{name}: {effect:?}");
@@ -150,6 +170,18 @@ fn champ_s2_registry_layouts_effects_and_single_outcome_channel() {
         vec![Some(0), Some(8), None]);
     assert_eq!(split.post_offsets(okkama_sparrow::spb17::Tag::Unwind, &context).unwrap(),
         vec![Some(0), Some(16)]);
+    // AwaitTakePost (draft 3 §14.4): the value and the packet, or the failure, the task and the receipt.
+    let take = helper_abi("champ_await_take").unwrap();
+    let valued = okkama_sparrow::spb17::ResultContext {
+        value: Some(okkama_sparrow::spb17::Type::Int), ..okkama_sparrow::spb17::ResultContext::default()
+    };
+    assert_eq!(take.post_offsets(okkama_sparrow::spb17::Tag::Normal, &valued).unwrap(),
+        vec![Some(0), Some(8), None]);
+    assert_eq!(take.post_offsets(okkama_sparrow::spb17::Tag::Normal, &context).unwrap(), vec![Some(8), None]);
+    assert_eq!(take.post_offsets(okkama_sparrow::spb17::Tag::Unwind, &context).unwrap(),
+        vec![Some(0), Some(16), Some(24)]);
+    let rehome = helper_abi("champ_cache_rehome").unwrap();
+    assert_eq!(rehome.post_offsets(okkama_sparrow::spb17::Tag::Normal, &context).unwrap(), vec![Some(0)]);
     // Runtime construction imports every helper with its checked CLIF signature.
     let _ = Harness::new();
 }
@@ -245,6 +277,42 @@ fn champ_s2_splits_disjoint_rest_selected_and_failure_preserves_original() {
     assert!(words(&h.runtime, &split_again.rest).is_empty());
     assert_eq!(words(&h.runtime, &split_again.selected), HashSet::from([a]));
     h.gc(&[split.rest.record, split_again.rest.record, split_again.selected.record]);
+}
+
+/// `own.dynamic`: a packet of unknown retention joins the scope inventory (its identities take the scope's
+/// holder and owner); a packet that fails the checks (an identity already in the scope) comes back unaccepted
+/// with the state, both unchanged, and a program failure.
+#[test]
+fn champ_s2_dynamic_transfer_joins_the_scope_or_returns_the_packet() {
+    let mut h = Harness::new();
+    let mut state = h.scope();
+    let target = scope(&h.runtime, state.record).unwrap();
+    let foreign = h.runtime.champ_new_owner().unwrap();
+    let (a, mut packet) = h.fresh(0, foreign);
+    let before = h.identity(a);
+    let mut post = ScopeSplitPost::default();
+    assert_eq!(rt_own_dynamic(&mut h.ctx, &mut state, &mut packet, &mut post), NORMAL);
+    assert_eq!((state.record, packet.record, post.selected.record, post.failure), (0, 0, 0, 0));
+    changed(before, h.identity(a), target.holder.get(), target.owner.get());
+    let joined = scope(&h.runtime, post.state.record).unwrap();
+    assert_eq!(joined.admission.words().collect::<Vec<_>>(), vec![a]);
+    h.gc(&[post.state.record]);
+    // The same identity again: it is already in the scope's inventory, so the check fails.
+    let mut state = ScopeSlot { record: post.state.record };
+    let mut again = PacketSlot::default();
+    let run = super::helpers::run(&h.runtime, vec![a], target.holder, target.owner);
+    again.record = super::helpers::store(&mut h.runtime, Data::Packet(run));
+    let (original, unaccepted) = (state.record, again.record);
+    let held = h.identity(a);
+    let mut failed = ScopeSplitPost::default();
+    assert_eq!(rt_own_dynamic(&mut h.ctx, &mut state, &mut again, &mut failed), UNWIND);
+    assert_eq!((failed.state.record, failed.selected.record), (original, unaccepted));
+    assert_eq!((state.record, again.record), (0, 0));
+    assert_eq!(h.identity(a), held);
+    assert_eq!(h.ctx.status, FAILED);
+    assert_eq!(h.ctx.failure, failed.failure);
+    assert!(matches!(h.runtime.failure(failed.failure).map(|failure| &failure.kind), Some(FailureKind::Program(_))));
+    h.gc(&[failed.state.record, failed.selected.record]);
 }
 
 #[test]
@@ -881,4 +949,153 @@ fn champ_admissible_split_preserves_bound_history_and_escape_restores_admission(
     let mut escaped = ScopeSplitPost::default();
     assert_eq!(rt_scope_split_admissible(&mut h.ctx, &mut target, &selection(&roots), &mut escaped), NORMAL);
     assert_eq!(words(&h.runtime, &escaped.selected), HashSet::from([bound]));
+}
+
+/// A managed array refers to identities it does not own: selecting it selects its elements, also through
+/// nested arrays, while an array of text selects nothing (#622).
+#[test]
+fn champ_selection_walk_descends_into_managed_arrays() {
+    let mut h = Harness::new();
+    let owner = h.runtime.champ_new_owner().unwrap();
+    let (a, p) = h.fresh(0, owner);
+    let (b, q) = h.fresh(0, owner);
+    let mut inputs = [p, q];
+    let mut joined = PacketSlot::default();
+    assert_eq!(rt_own_join(&mut h.ctx, inputs.as_mut_ptr(), 2, &mut joined), NORMAL);
+    let text = h.runtime.heap.allocate_text("plain");
+    let texts = h.runtime.heap.allocate_array(Repr::Ref, &[text, text]);
+    let mut post = SplitPost::default();
+    let roots = [texts];
+    assert_eq!(rt_own_split_checked(&mut h.ctx, &mut joined, &selection(&roots), &mut post), NORMAL);
+    assert!(words(&h.runtime, &post.selected).is_empty());
+    assert_eq!(words(&h.runtime, &post.rest), HashSet::from([a, b]));
+    let inner = h.runtime.heap.allocate_array(Repr::Ref, &[b]);
+    let managed = h.runtime.heap.allocate_array(Repr::Ref, &[a]);
+    let nested = h.runtime.heap.allocate_array(Repr::Ref, &[inner]);
+    let mut rest = post.rest;
+    let mut post = SplitPost::default();
+    let roots = [managed, nested];
+    assert_eq!(rt_own_split_checked(&mut h.ctx, &mut rest, &selection(&roots), &mut post), NORMAL);
+    assert_eq!(words(&h.runtime, &post.selected), HashSet::from([a, b]));
+    assert!(words(&h.runtime, &post.rest).is_empty());
+    h.gc(&[post.rest.record, post.selected.record]);
+}
+
+/// A managed array may refer to identities another packet owns (the result of mapping a managed array): a
+/// checked split selects the elements in its source and leaves the others with their owner, while a direct
+/// root outside the source is still refused (#692).
+#[test]
+fn champ_checked_selection_leaves_foreign_collection_elements_with_their_owner() {
+    let mut h = Harness::new();
+    let owner = h.runtime.champ_new_owner().unwrap();
+    let (a, mut source) = h.fresh(0, owner);
+    let (b, other) = h.fresh(0, owner);
+    let managed = h.runtime.heap.allocate_array(Repr::Ref, &[a, b]);
+    let nested = h.runtime.heap.allocate_array(Repr::Ref, &[managed]);
+    let mut post = SplitPost::default();
+    let roots = [nested];
+    assert_eq!(rt_own_split_checked(&mut h.ctx, &mut source, &selection(&roots), &mut post), NORMAL);
+    assert_eq!(words(&h.runtime, &post.selected), HashSet::from([a]));
+    assert!(words(&h.runtime, &post.rest).is_empty());
+    assert_eq!(words(&h.runtime, &other), HashSet::from([b]));
+    h.gc(&[post.rest.record, post.selected.record, other.record]);
+    let mut selected = post.selected;
+    let roots = [b];
+    let mut refused = SplitPost::default();
+    assert_eq!(rt_own_split_checked(&mut h.ctx, &mut selected, &selection(&roots), &mut refused), UNWIND);
+    assert_eq!(h.ctx.status, FAILED);
+}
+
+/// An admissible transfer (#697) moves only what its source admitted. A value pushed into an outer builder may
+/// borrow an identity an enclosing scope owns (an element of its managed array): it stays with its owner, and the
+/// source's bound and staged identities stay with the source.
+#[test]
+fn champ_admissible_transfer_moves_only_admitted_identities() {
+    let mut h = Harness::new();
+    let mut from = h.scope();
+    let mut to = h.scope();
+    let from_scope = scope(&h.runtime, from.record).unwrap();
+    let to_scope = scope(&h.runtime, to.record).unwrap();
+    let admit = |h: &mut Harness, from: &mut ScopeSlot| {
+        let (object, mut packet) = h.fresh(0, from_scope.owner);
+        assert_eq!(rt_own_admit(&mut h.ctx, from, &mut packet, from), NORMAL);
+        object
+    };
+    let admitted = admit(&mut h, &mut from);
+    let bound = admit(&mut h, &mut from);
+    let mut empty = h.empty();
+    assert_eq!(rt_own_bind(&mut h.ctx, &mut from, 0, bound, &mut empty, &mut from), NORMAL);
+    let staged = admit(&mut h, &mut from);
+    let mut empty = h.empty();
+    let inputs = StageInputs {
+        state: &mut from, source: std::ptr::null_mut(), selection: 0, field: 0, value: staged, packet: &mut empty,
+    };
+    let mut staging = StagePost::default();
+    assert_eq!(rt_own_stage(&mut h.ctx, &inputs, &mut staging), NORMAL);
+    let mut from = staging.state;
+    let (borrowed, mut owned) = h.fresh(0, to_scope.owner);
+    assert_eq!(rt_own_accept(&mut h.ctx, &mut to, &mut owned, &mut to), NORMAL);
+    let kept = [bound, staged, borrowed].map(|object| h.identity(object));
+    let roots = [admitted, bound, staged, borrowed];
+    let mut post = TransferPost::default();
+    let inputs = TransferInputs { from: &mut from, to: &mut to };
+    assert_eq!(rt_scope_transfer_admissible(&mut h.ctx, &inputs, &selection(&roots), &mut post), NORMAL);
+    let (from, to) = (post.from, post.to);
+    let source = scope(&h.runtime, from.record).unwrap();
+    assert!(source.admission.words().next().is_none());
+    assert_eq!(source.bound.words().collect::<Vec<_>>(), vec![bound]);
+    assert_eq!(source.staging.words().collect::<Vec<_>>(), vec![staged]);
+    assert_eq!(scope(&h.runtime, to.record).unwrap().all().words().collect::<HashSet<_>>(),
+        HashSet::from([admitted, borrowed]));
+    assert_eq!([bound, staged, borrowed].map(|object| h.identity(object)), kept);
+    h.gc(&[from.record, to.record]);
+}
+
+/// A transfer without the admission filter moves every selected identity, bound ones included, and its source
+/// must hold each: a root outside it is refused (#697).
+#[test]
+fn champ_plain_transfer_moves_every_selected_identity_of_its_source() {
+    let mut h = Harness::new();
+    let mut from = h.scope();
+    let mut to = h.scope();
+    let from_scope = scope(&h.runtime, from.record).unwrap();
+    let to_scope = scope(&h.runtime, to.record).unwrap();
+    let (bound, mut packet) = h.fresh(0, from_scope.owner);
+    assert_eq!(rt_own_admit(&mut h.ctx, &mut from, &mut packet, &mut from), NORMAL);
+    let mut empty = h.empty();
+    assert_eq!(rt_own_bind(&mut h.ctx, &mut from, 0, bound, &mut empty, &mut from), NORMAL);
+    let (borrowed, mut owned) = h.fresh(0, to_scope.owner);
+    assert_eq!(rt_own_accept(&mut h.ctx, &mut to, &mut owned, &mut to), NORMAL);
+    let roots = [borrowed];
+    let (old_from, old_to) = (from.record, to.record);
+    let mut refused = TransferPost::default();
+    let inputs = TransferInputs { from: &mut from, to: &mut to };
+    assert_eq!(rt_scope_transfer(&mut h.ctx, &inputs, &selection(&roots), &mut refused), UNWIND);
+    assert_eq!((refused.from.record, refused.to.record), (old_from, old_to));
+    let mut captured = 0;
+    assert_eq!(rt_failure_capture(&mut h.ctx, &mut captured), NORMAL);
+    let (mut from, mut to) = (refused.from, refused.to);
+    let roots = [bound];
+    let mut post = TransferPost::default();
+    let inputs = TransferInputs { from: &mut from, to: &mut to };
+    assert_eq!(rt_scope_transfer(&mut h.ctx, &inputs, &selection(&roots), &mut post), NORMAL);
+    assert_eq!(scope(&h.runtime, post.from.record).unwrap().all().words().count(), 0);
+    assert_eq!(scope(&h.runtime, post.to.record).unwrap().bound.words().collect::<HashSet<_>>(),
+        HashSet::from([bound, borrowed]));
+    h.gc(&[post.from.record, post.to.record]);
+}
+
+/// A payload read of an inactive case is Tomato's program failure, with Tomato's text (#698). No source program
+/// reaches it: a payload is read only in the arm that matched its case.
+#[test]
+fn champ_inactive_variant_payload_is_tomato_failure() {
+    let mut h = Harness::new();
+    let owner = h.runtime.champ_new_owner().unwrap();
+    let (object, packet) = h.fresh(0, owner);
+    assert_eq!(super::machine::rt_machine_variant_get(&mut h.ctx, 1, 0, object), 0);
+    assert_eq!(h.ctx.status, FAILED);
+    let failure = h.runtime.failure(h.ctx.failure).unwrap();
+    assert!(matches!(&failure.kind, crate::runtime::FailureKind::Program(text)
+        if text == "Variant payload of an inactive case"), "{:?}", failure.kind);
+    h.gc(&[packet.record]);
 }

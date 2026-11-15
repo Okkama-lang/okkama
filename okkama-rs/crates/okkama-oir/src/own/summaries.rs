@@ -84,6 +84,9 @@ pub(super) struct Universe {
     pub services: BTreeMap<TypeId, usize>,
     pub protocol_services: BTreeMap<ProtocolId, usize>,
     pub descriptors: BTreeMap<TypeId, Vec<DescriptorContract>>,
+    /// The fixed creation equation of each async entry, separate from its body
+    /// equation (elaboration §3.3). Calls of the entry create its Future.
+    pub creations: BTreeMap<FuncId, usize>,
     /// Frozen tagged result equations, separate from the ordinary void ABI.
     replacements: BTreeMap<(FuncId, String), ResultRelation>,
 }
@@ -95,10 +98,12 @@ struct BodyInference {
 
 pub(super) fn bottom(module: &Module, function: &Function) -> Summary {
     let results = language(module, &function.signature.results);
+    // A High async entry declares its body summary in the async-body slot (H6).
+    let declared = function.summary.or(function.async_body_summary);
     Summary {
         entry_kind: if function.signature.ownership_abi == OwnershipAbi::Observation {
             EntryKind::ObservationAdmissionStaysCaller
-        } else if function.summary.and_then(|id| module.summaries.get(id).ok())
+        } else if declared.and_then(|id| module.summaries.get(id).ok())
             .is_some_and(|summary| summary.entry_kind == EntryKind::Internal) {
             EntryKind::Internal
         } else {
@@ -116,9 +121,9 @@ pub(super) fn bottom(module: &Module, function: &Function) -> Summary {
             failures: vec![],
             suspends: false,
             async_destroy: false,
-            publication: function.summary.and_then(|id| module.summaries.get(id).ok())
+            publication: declared.and_then(|id| module.summaries.get(id).ok())
                 .map_or(Publication::Atomic, |summary| summary.contract.publication),
-            protocol: function.summary.and_then(|id| module.summaries.get(id).ok())
+            protocol: declared.and_then(|id| module.summaries.get(id).ok())
                 .and_then(|summary| summary.contract.protocol),
         },
     }
@@ -228,7 +233,7 @@ impl Universe {
         let mut universe = Self {
             nodes: vec![], calls: BTreeMap::new(), strides: BTreeMap::new(), inventories,
             services: BTreeMap::new(), protocol_services: BTreeMap::new(), descriptors: BTreeMap::new(),
-            replacements: BTreeMap::new(),
+            creations: BTreeMap::new(), replacements: BTreeMap::new(),
         };
         let result_bound = module.functions.iter().map(|(_, function)| function.signature.results.len())
             .max().unwrap_or(0).saturating_add(16);
@@ -258,6 +263,16 @@ impl Universe {
                     return Err(OwnError::Incomplete { stats: Box::new(budget.stats.clone()) });
                 }
             }
+        }
+        for (function, data) in module.functions.iter() {
+            if !data.attrs.contains(&FunctionAttr::Async) {
+                continue;
+            }
+            budget.work(1)?;
+            let summary = futures::creation_summary(module, data, types, budget)?;
+            budget.memory(normal::size(&summary) + 256)?;
+            universe.creations.insert(function, universe.nodes.len());
+            universe.nodes.push(Node { equation: Equation::External, summary, dependencies: BTreeSet::new() });
         }
         // Keys include targets, substitution, public ABI, closure kind and
         // dictionary contracts. They never depend on a solver iteration.
@@ -313,7 +328,12 @@ impl Universe {
                         .map(|binding| format!("{:?}", binding.contract))
                 }).collect();
                 let key = (kind, targets.clone(), captures.clone(), call.type_args.clone(), public_types, dictionaries);
-                let node = if direct && targets.len() == 1 {
+                let creation = matches!(op, Operation::Call(CallOp::Direct { .. }))
+                    .then(|| universe.creations.get(&FuncId::from_u32(targets[0] as u32)).copied()).flatten();
+                let node = if let Some(creation) = creation {
+                    // An async call creates the Future; its body runs only when started.
+                    creation
+                } else if direct && targets.len() == 1 {
                     targets[0]
                 } else if let Some(node) = adapters.get(&key) {
                     *node
@@ -412,8 +432,13 @@ impl Universe {
                     if universe.services.contains_key(service) {
                         continue;
                     }
-                    let mut summary = natives.lookup(ExternalBoundary::Service(*service), &Substitution::default())
-                        .map_err(|error| budget.fail(OwnDiagnosticKind::MissingBoundary, error.message))?.summary;
+                    // A Future's cache duty settles by the fixed D24.2 protocol, not a catalogue entry.
+                    let mut summary = if futures::is_future(module, *service) {
+                        futures::settle_summary()
+                    } else {
+                        natives.lookup(ExternalBoundary::Service(*service), &Substitution::default())
+                            .map_err(|error| budget.fail(OwnDiagnosticKind::MissingBoundary, error.message))?.summary
+                    };
                     normal::normalize(&mut summary, budget)?;
                     let node = universe.nodes.len();
                     budget.memory(256 + normal::size(&summary))?;

@@ -91,16 +91,18 @@ fn array_loader_checks_transitive_element_graph_independently() {
     };
     p.objects = vec![
         Object { name: "plain_lie".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![],
-            handle: false, fields: vec![],
+            handle: false, role: None, implements: vec![], any_box: false, enum_names: vec![], fields: vec![],
             layout: layout(vec![Type::Object(1)], false) },
         Object { name: "resource".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![],
-            handle: false, fields: vec![],
+            handle: false, role: None, implements: vec![], any_box: false, enum_names: vec![], fields: vec![],
             layout: layout(vec![], true) },
     ];
     p.functions[0].registers[1] = Type::Array(ArrayType { leaf: ArrayLeaf::Object(0), depth: 1 });
-    // Visit the graph from the first object's array field before ordinary retention checks.
     p.objects[0].layout.storage_fields = vec![p.functions[0].registers[1], Type::Object(1)];
     p.objects[0].layout.allocation_words = 3;
+    p.objects[0].layout.trace_layout = vec![0, 1];
+    // The leaf claims to be plain (no destroy, no resource) but its graph reaches a resource: an array of
+    // it is not closed plain data. Managed arrays (#622) admit only leaves that declare their resources.
     assert_eq!(verify_load(&p, &NoExternalContracts).unwrap_err().rule, "ARRAY_PLAIN");
 }
 
@@ -141,7 +143,7 @@ fn scalar_outcome_extensions_reject_wrong_kinds_and_service_operands() {
 fn enum_case_checks_its_closed_catalog() {
     let mut p = fixture();
     p.objects.push(Object { name: "E".into(), fields: vec![], error_cases: vec!["E.one".into()], enum_cases: 0,
-        variant_cases: vec![], handle: false,
+        variant_cases: vec![], handle: false, role: None, implements: vec![], any_box: false, enum_names: vec![],
         layout: ObjectRuntimeLayout {
             storage_fields: vec![Type::Int], allocation_words: 2, identity_offset: None,
             has_destroy: false, may_reach_resource: false, may_async_destroy: false,
@@ -161,7 +163,7 @@ fn element_array(fields: Vec<Type>, has_destroy: bool) -> Program {
         .map(|(index, _)| index as u32).collect();
     let count = fields.len() as u32;
     p.objects.push(Object { name: "Element".into(), fields: vec![], error_cases: vec![], enum_cases: 0,
-        variant_cases: vec![], handle: false,
+        variant_cases: vec![], handle: false, role: None, implements: vec![], any_box: false, enum_names: vec![],
         layout: ObjectRuntimeLayout {
             storage_fields: fields,
             allocation_words: (1 + count + 4 * u32::from(has_destroy)).max(2),
@@ -202,12 +204,57 @@ fn array_element_fields_must_be_closed_plain_data() {
     }
 }
 
+/// Arrays may hold resource objects (managed arrays, #622; owner decision 2026-11-15): the array
+/// references the elements, and own keeps their obligations with their owners.
 #[test]
-fn array_element_cannot_have_a_destroy() {
-    // A destroy layout always reaches resources (verify: "destroy layout must reach self"), so this
-    // element fails both conditions of the same ARRAY_PLAIN check.
+fn array_of_resource_objects_loads() {
     let p = element_array(vec![Type::Int], true);
+    verify_load(&p, &NoExternalContracts).unwrap();
+}
+
+/// An element whose destroy may suspend cannot be held by an array: async destroy is outside P1 for
+/// every object, so the general rule rejects it before any array rule.
+#[test]
+fn array_element_cannot_have_an_async_destroy() {
+    let mut p = element_array(vec![Type::Int], true);
+    p.objects[0].layout.may_async_destroy = true;
     let failure = verify_load(&p, &NoExternalContracts).unwrap_err();
-    assert_eq!(failure.rule, "ARRAY_PLAIN", "{failure}");
-    assert!(failure.message.contains("reaches resources"), "{failure}");
+    assert!(failure.message.contains("async destroy is outside P1"), "{failure}");
+}
+
+/// `array.get` of a byte array (`@byte`, #703): the fixture's array is a byte array built from one byte, and
+/// the read lands a byte in the normal block.
+fn bytes_fixture() -> Program {
+    let mut p = fixture();
+    let f = &mut p.functions[0];
+    f.registers = vec![Type::Byte, Type::Bytes, Type::Int, Type::Byte, Type::Failure];
+    f.results = vec![Type::Byte];
+    f.code[0] = Instruction::Data { op: DataOp::Const, inputs: vec![], output: Some(0),
+        immediate: Immediate::Constant(Constant::Byte(171)) };
+    p
+}
+
+#[test]
+fn byte_array_get_loads_with_a_byte_result() {
+    let p = bytes_fixture();
+    verify_load(&p, &NoExternalContracts).unwrap();
+    assert_eq!(decode(&encode(&p).unwrap()).unwrap(), p);
+    assert_eq!(assemble(&disassemble(&p).unwrap()).unwrap(), p);
+}
+
+/// The element of a byte array is a byte: a normal edge that lands it in an int register is refused (a
+/// loader that took the element type from anywhere but the receiver would accept the raw byte as an int),
+/// and a receiver that is neither a plain array nor a byte array stays outside `array.get`.
+#[test]
+fn byte_array_get_rejects_a_non_byte_result_and_other_receivers() {
+    let mut p = bytes_fixture();
+    p.functions[0].registers[3] = Type::Int;
+    p.functions[0].results = vec![Type::Int];
+    let error = verify_load(&p, &NoExternalContracts).unwrap_err();
+    assert!(error.message.contains("edge assignment type mismatch"), "{error}");
+    let mut p = bytes_fixture();
+    p.functions[0].registers[1] = Type::Str;
+    p.functions[0].code[1] = Instruction::Data { op: DataOp::Const, inputs: vec![], output: Some(1),
+        immediate: Immediate::Constant(Constant::Str("ab".into())) };
+    assert_eq!(verify_load(&p, &NoExternalContracts).unwrap_err().rule, "ARRAY_GET_OPERANDS");
 }

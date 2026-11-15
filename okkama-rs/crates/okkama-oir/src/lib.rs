@@ -32,6 +32,7 @@ mod value;
 mod cleanup_model;
 pub use cleanup_model::*;
 pub mod low;
+pub mod coro;
 
 pub use contracts::*;
 pub use builder::*;
@@ -55,6 +56,8 @@ mod tests;
 
 #[cfg(test)]
 mod contract_tests;
+#[cfg(test)]
+mod catalogue_tests;
 
 #[cfg(test)]
 mod builder_tests;

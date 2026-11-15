@@ -41,7 +41,7 @@ pub enum Effect {
     /// Terminal engine/budget exit, never an application outcome.
     #[cfg(feature = "champ-abi")]
     Stops,
-    /// Suspension (forbidden for Champ P1).
+    /// May return PENDING after registering a wake entry (Champ class S, draft 3 §1.1).
     #[cfg(feature = "champ-abi")]
     Suspends,
 }
@@ -58,6 +58,10 @@ const fn registered_effects(name: &str, legacy: &'static [Effect]) -> &'static [
             27 => &[Effect::Allocates, Effect::Collects, Effect::Fails, Effect::Stops],
             23 => &[Effect::Allocates, Effect::Collects, Effect::Reenters, Effect::Stops],
             31 => &[Effect::Allocates, Effect::Collects, Effect::Reenters, Effect::Fails, Effect::Stops],
+            19 => &[Effect::Allocates, Effect::Collects, Effect::Stops],
+            55 => &[Effect::Allocates, Effect::Collects, Effect::Reenters, Effect::Stops, Effect::Suspends],
+            63 => &[Effect::Allocates, Effect::Collects, Effect::Reenters, Effect::Fails, Effect::Stops,
+                Effect::Suspends],
             _ => panic!("unsupported shared helper effects"),
         };
     }
@@ -181,6 +185,9 @@ helpers! {
     champ_machine_convert = crate::champ::machine::rt_machine_convert as (ctx,
         from: Word, to: Word, value: Word) -> u64; [Allocates, Collects, Fails, Stops];
     #[cfg(feature = "champ-abi")]
+    champ_machine_scalar = crate::champ::machine::rt_machine_scalar as (ctx,
+        op: Word, first: Word, second: Word, third: Word) -> u64; [Allocates, Collects, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
     champ_machine_rat_order = crate::champ::machine::rt_machine_rat_order as (ctx,
         left: Word, right: Word) -> i64; [];
     #[cfg(feature = "champ-abi")]
@@ -189,6 +196,18 @@ helpers! {
     #[cfg(feature = "champ-abi")]
     champ_machine_variant_get = crate::champ::machine::rt_machine_variant_get as (ctx,
         case: Word, storage: Word, value: Word) -> u64; [Allocates, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_role_narrow = crate::champ::machine::rt_machine_role_narrow as (ctx,
+        role: Word, value: Word) -> u64; [Allocates, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_collection = crate::champ::collections::rt_machine_collection as (ctx,
+        function: u64, pc: u64, args: *const Word, count: u64) -> u64; [Allocates, Collects, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_builder = crate::champ::collections::rt_machine_builder as (ctx,
+        function: u64, pc: u64, args: *const Word, count: u64) -> u64; [Allocates, Collects, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_lookup = crate::champ::collections::rt_machine_lookup as (ctx,
+        function: u64, pc: u64, collection: Word, index: Word, post: *mut Word) -> u64; [Stops];
     #[cfg(feature = "champ-abi")]
     champ_machine_test = crate::champ::testing::rt_machine_test as (ctx,
         kind: Word, function: Word, register: Word, left: Word, right: Word) -> u64; [Allocates, Fails, Stops];
@@ -298,6 +317,16 @@ helpers! {
         selection: *const crate::champ::Selection,
         post: *mut crate::champ::TransferPost) -> u64; [Allocates, Fails, Stops];
     #[cfg(feature = "champ-abi")]
+    champ_own_dynamic = crate::champ::rt_own_dynamic as (ctx,
+        state: *mut crate::champ::ScopeSlot,
+        input: *mut crate::champ::PacketSlot,
+        post: *mut crate::champ::ScopeSplitPost) -> u64; [Allocates, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_scope_transfer_admissible = crate::champ::rt_scope_transfer_admissible as (ctx,
+        inputs: *const crate::champ::TransferInputs,
+        selection: *const crate::champ::Selection,
+        post: *mut crate::champ::TransferPost) -> u64; [Allocates, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
     champ_exit_prepare = crate::champ::rt_exit_prepare as (ctx,
         inputs: *const crate::champ::ExitInputs,
         post: *mut crate::champ::PendingSlot) -> u64; [Allocates, Stops];
@@ -402,6 +431,68 @@ helpers! {
         input: *mut crate::champ::CleanupSlot,
         failure: Word,
         post: *mut crate::champ::CleanupSlot) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_future_new = crate::champ::rt_future_new_owned as (ctx,
+        inputs: *const crate::champ::FutureNewIn,
+        post: *mut crate::champ::FutureNewPost) -> u64; [Allocates, Collects, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_await_view = crate::champ::rt_await_view as (ctx,
+        this: Word,
+        future: Word,
+        post: *mut crate::champ::AwaitPost) -> u64; [Allocates, Collects, Reenters, Fails, Stops, Suspends];
+    #[cfg(feature = "champ-abi")]
+    champ_await_take = crate::champ::rt_await_take as (ctx,
+        this: Word,
+        future: Word,
+        boundary: u64,
+        post: *mut crate::champ::AwaitTakePost) -> u64; [Allocates, Collects, Reenters, Fails, Stops, Suspends];
+    #[cfg(feature = "champ-abi")]
+    champ_cache_rehome = crate::champ::rt_cache_rehome as (ctx,
+        pending: *mut crate::champ::PendingSlot,
+        state: *mut crate::champ::ScopeSlot,
+        cache: *mut crate::champ::CacheSlot,
+        task: *mut crate::champ::TaskSlot,
+        future: Word,
+        target: u64,
+        post: *mut crate::champ::RehomePost) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_await_unwind = crate::champ::rt_await_unwind as (ctx,
+        this: Word,
+        state: *mut crate::champ::ScopeSlot,
+        failure: Word,
+        task: *mut Word,
+        receipt: *mut u64,
+        post: *mut crate::champ::AwaitUnwindPost) -> u64; [Allocates, Collects, Reenters, Stops, Suspends];
+    #[cfg(feature = "champ-abi")]
+    champ_future_publish = crate::champ::rt_future_publish as (ctx,
+        this: Word,
+        inputs: *const crate::champ::PublishIn) -> u64; [Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_future_cancel = crate::champ::rt_cancel_request as (ctx, future: Word) -> u64; [Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_future_cancelled = crate::champ::rt_future_cancelled as (ctx,
+        future: Word,
+        post: *mut crate::champ::FlagPost) -> u64; [Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_cleanup_deliver_cancel = crate::champ::rt_cleanup_deliver_cancel as (ctx,
+        this: Word,
+        input: *mut crate::champ::CleanupSlot,
+        post: *mut crate::champ::CleanupSlot) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_cleanup_settle = crate::champ::rt_service_settle as (ctx,
+        this: Word,
+        input: *mut crate::champ::CleanupSlot,
+        schedule: u64,
+        index: u64,
+        duty: Word,
+        post: *mut crate::champ::CleanupSlot) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_body_reject = crate::champ::cleanup::rt_body_reject as (ctx, frame: Word) -> u64;
+        [Allocates, Collects, Reenters, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_future_destination = crate::champ::rt_machine_future_destination as (ctx,
+        frame: Word,
+        post: *mut crate::champ::ExitDestination) -> u64; [Stops];
 }
 
 const COMPILE_HEADER: &str = "; compile\tfunction\tinstructions\tregisters\tsuspensions\tclif blocks\tclif instructions\tsafepoints\tcode bytes\tframe bytes\tdeclare\tliveness\temit\tfinalize\tcodegen\tmaps\tdefinitions\ttables (microseconds)";

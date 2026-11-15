@@ -42,10 +42,10 @@ impl Engine<'_, '_> {
                         "abort must preserve the executed prefix and cannot duplicate an owned reserve");
                 }
                 let incoming = &before.tokens[pending.as_u32() as usize].pieces;
-                if !fact.shield || fact.awaiting_failure
+                if fact.awaiting_failure
                     || incoming.iter().any(|piece| fact.executed.contains(&piece.origin)
                         || token.pieces.iter().any(|old| old.overlaps(piece))) {
-                    self.error(R::B101, "abort requires shielded disjoint reserve and a settled executed prefix");
+                    self.error(R::B101, "abort requires a disjoint reserve and a settled executed prefix");
                 }
                 if before.active_failure == 0 && fact.failures == 0 {
                     self.error(R::B101, "exit.abort requires an actual failure or delivered cancellation");
@@ -76,26 +76,33 @@ impl Engine<'_, '_> {
             if before.active_failure_origin.is_some() && before.active_failure_origin != failure_origin {
                 self.error(R::B104, "cleanup.begin dropped or substituted the active primary failure/Error");
             }
+            self.final_close_delivers(before, *close, failure.is_some());
+            // Plan §3.4, Champ draft 3 §5 (#690): the shield is a property of the close, not an operation.
+            // Every close of Low begins shielded, including a final close that delivers cancellation, and
+            // cancellation is delivered only by the conditional `cleanup.deliver_cancel` of that close.
             let mut fact = CleanupFact {
                 aborted: false,
-                // G1 P1 carries D9 shielding in begin; general suspending/cancellation cleanup
-                // retains the explicit shield transition checked by the coroutine automaton.
                 phase: 0,
-                shield: self.module.profile == Profile::Low && self.body.cleanup.closes.get(*close)
-                    .is_ok_and(|close| !close.effects.suspends && !close.effects.cancel),
                 pending: pending.is_some(),
                 inventory: token.pieces.union(&reserve).cloned().collect(), reserve,
-                failures, failure_origin, cancel_delivered: false, may_fail: false,
+                failures, failure_origin, cancel_delivered: false, cancel_open: false, may_fail: false,
                 awaiting_failure: false, awaiting_source: None, awaiting_origin: None, selected: None,
                 executed: BTreeSet::new(), services: BTreeSet::new(), had_services: false,
                 close: *close, plan: None,
             };
+            // #684: a close takes the service duties of the scope it closes; those of enclosing scopes pass.
+            let closing = match self.body.cleanup.closes.get(*close).map(|close| &close.source) {
+                Ok(CleanupSource::Scope(owner)) => Some(*owner),
+                _ => None,
+            };
             for (value, _) in self.body.values.iter() {
+                let held = &before.tokens[value.as_u32() as usize];
                 if before.availability[value.as_u32() as usize] == AVAILABLE
                     && matches!(super::super::later::value_type(self.module, self.body, value),
                         Some(Type::Frame(_) | Type::Service(ServiceType::TaskState | ServiceType::Pin
                             | ServiceType::Receipt | ServiceType::CacheState)))
-                    && let Some(key) = before.tokens[value.as_u32() as usize].service {
+                    && !closing.is_some_and(|scope| self.enclosing_duty(held, scope))
+                    && let Some(key) = held.service {
                     fact.services.insert(key);
                 }
             }
@@ -112,15 +119,16 @@ impl Engine<'_, '_> {
                 let owner_matches = self.body.cleanup.closes.get(*close).is_ok_and(|close| {
                     matches!(close.source, CleanupSource::Scope(owner) if token.scope == Some(owner))
                 });
+                // D16: a static inventory of duty tokens names its Services protocol; a runtime dictionary is
+                // optional and, when present, must be live.
+                if let Some(dictionary) = schedule.dictionary {
+                    self.live_use(before, dictionary);
+                }
                 let service_contract = (schedule.holders.is_empty() || owner_matches)
-                    && match (schedule.dictionary, schedule.protocol) {
-                    (None, None) => schedule.holders.is_empty(),
-                    (Some(dictionary), Some(protocol)) => {
-                        self.live_use(before, dictionary);
-                        self.module.protocols.get(protocol)
-                            .is_ok_and(|protocol| protocol.kind == ProtocolKind::Services)
-                    }
-                    _ => false,
+                    && match schedule.protocol {
+                    None => schedule.holders.is_empty() && schedule.dictionary.is_none(),
+                    Some(protocol) => self.module.protocols.get(protocol)
+                        .is_ok_and(|protocol| protocol.kind == ProtocolKind::Services),
                 };
                 if !service_contract {
                     self.error(R::B106, "service duties need their owner's checked schedule dictionary/protocol");
@@ -140,6 +148,7 @@ impl Engine<'_, '_> {
                 token.pending_type = before.tokens[pending.as_u32() as usize].pending_type;
                 token.pending_kind = before.tokens[pending.as_u32() as usize].pending_kind;
                 token.pending_boundary = before.tokens[pending.as_u32() as usize].pending_boundary;
+                token.rehome = before.tokens[pending.as_u32() as usize].rehome;
                 token.reserve = before.tokens[pending.as_u32() as usize].reserve.clone();
             }
             if let Some(slot) = slots.first_mut() {
@@ -159,8 +168,7 @@ impl Engine<'_, '_> {
             | CleanupOp::Plan { cleanup, .. }
             | CleanupOp::SettleEmpty { cleanup, .. } | CleanupOp::Destroy { cleanup, .. }
             | CleanupOp::DestroyDirect { cleanup, .. } | CleanupOp::RecordFailure { cleanup, .. }
-            | CleanupOp::Shield { cleanup } | CleanupOp::DeliverCancel { cleanup }
-            | CleanupOp::Finish { cleanup } => *cleanup,
+            | CleanupOp::DeliverCancel { cleanup } | CleanupOp::Finish { cleanup } => *cleanup,
             _ => return,
         };
         let mut token = before.tokens[cleanup.as_u32() as usize].clone();
@@ -168,9 +176,6 @@ impl Engine<'_, '_> {
             self.error(R::B102, "cleanup step has no checked begin/phase state");
             return;
         };
-        if !fact.shield && !matches!(op, CleanupOp::Shield { .. }) {
-            self.error(R::B105, "cleanup execution, settlement and cancellation require a shield");
-        }
         if fact.awaiting_failure && !matches!(op, CleanupOp::RecordFailure { .. }) {
             self.error(R::B104, "destroy failure state must be dispatched before the next cleanup step");
         }
@@ -194,7 +199,6 @@ impl Engine<'_, '_> {
                     self.error(R::B102, "defer cannot execute after service settlement");
                 }
             }
-            CleanupOp::Shield { .. } => fact.shield = true,
             CleanupOp::Settle { holder, protocol, .. } => {
                 let kind = match super::super::later::value_type(self.module, self.body, *holder) {
                     Some(Type::Service(ServiceType::TaskState)) => HolderKind::Group,
@@ -212,10 +216,33 @@ impl Engine<'_, '_> {
                 if fact.phase > 1 {
                     self.error(R::B106, "service settlement must precede the serial plan");
                 }
-                if !before.tokens[holder.as_u32() as usize].service.is_some_and(|key| fact.services.remove(&key)) {
-                    self.error(R::B106, "settlement is not one of this cleanup's outstanding service duties");
+                if self.await_handle(before, *holder) {
+                    self.error(R::B91, "a settle step takes an await task or receipt instead of await.unwind (C-3)");
                 }
-                fact.may_fail = true;
+                let key = before.tokens[holder.as_u32() as usize].service;
+                // D16: in a D21 body the close-local schedule is the concrete schedule input that the pipeline chose
+                // (own's order), and opcode 21 settles by duty index, so each step takes the next outstanding duty. A
+                // layout-less body keeps the schedule as an inventory whose order is free (OIR-2 §9.3, A.2 M9).
+                let next = self.body.cleanup.schedules.iter().filter(|(_, schedule)| schedule.close == fact.close)
+                    .flat_map(|(_, schedule)| &schedule.holders)
+                    .map(|value| before.tokens[value.as_u32() as usize].service)
+                    .find(|service| service.is_some_and(|service| fact.services.contains(&service)));
+                if self.frame_body() && key.is_some_and(|key| fact.services.contains(&key))
+                    && next.is_some_and(|next| next != key) {
+                    self.error(R::B106, "a settle step takes the next outstanding duty of its schedule (D16)");
+                }
+                if !key.is_some_and(|key| fact.services.remove(&key)) {
+                    if key.is_some() && self.scheduled(before, fact.close, key) {
+                        self.error(R::LowDutySettledTwice, "a scheduled service duty is settled once per close");
+                    } else {
+                        self.error(R::B106, "settlement is not one of this cleanup's outstanding service duties");
+                    }
+                }
+                // D24.2: the settle of a cache duty releases its outcome or closes its unstarted inputs; it never
+                // fails in 0.6.0. Other holders keep a captured settle failure.
+                let cache = matches!(super::super::later::value_type(self.module, self.body, *holder),
+                    Some(Type::Service(ServiceType::CacheState)));
+                fact.may_fail |= !(cache && self.module.profile == Profile::Low);
                 let incoming = &before.tokens[holder.as_u32() as usize];
                 if incoming.frame.and_then(|key| before.frames.get(&key)).is_some_and(|layout| {
                     layout.values().any(|slot| slot.token.saved_type.is_some_and(|ty| {
@@ -238,9 +265,6 @@ impl Engine<'_, '_> {
                 fact.phase = 1;
             }
             CleanupOp::Plan { plan, .. } => {
-                if !fact.shield {
-                    self.error(R::B105, "cleanup plan requires a shield");
-                }
                 if fact.phase != 1 || !fact.services.is_empty() {
                     self.error(R::B106, "every assigned service must settle before planning");
                 }
@@ -249,7 +273,7 @@ impl Engine<'_, '_> {
                 fact.phase = 2;
             }
             CleanupOp::Destroy { key: selected, .. } => {
-                if !fact.shield || fact.phase != 2 || fact.selected.is_none()
+                if fact.phase != 2 || fact.selected.is_none()
                     || !before.refs[selected.as_u32() as usize].iter().any(|key| Some(*key) == fact.selected) {
                     self.error(R::B102, "runtime destroy needs the checked serial selector's selected key");
                 }
@@ -266,9 +290,6 @@ impl Engine<'_, '_> {
             }
             CleanupOp::DestroyDirect { identity, .. } => {
                 let key = self.identity(before, *identity);
-                if !fact.shield {
-                    self.error(R::B105, "destroy must execute shielded");
-                }
                 if fact.phase != 2 {
                     self.error(R::B102, "destroy precedes serial planning");
                 }
@@ -323,31 +344,40 @@ impl Engine<'_, '_> {
                 fact.pending = false;
             }
             CleanupOp::DeliverCancel { .. } => {
+                // D18: only the final successful close of an async action delivers a deferred cancellation;
+                // a nested or failing close keeps it for the next await or for the final exit.
                 let action = token.scope.and_then(|id| self.module.scopes.get(id).ok());
+                let close = self.body.cleanup.closes.get(fact.close).ok();
                 if !self.declaration.attrs.contains(&FunctionAttr::Async)
-                    || action.is_none_or(|scope| scope.kind != ScopeKind::Action || scope.parent.is_some()) {
-                    self.error(R::B105, "cancellation is delivered only at the final async action exit");
+                    || action.is_none_or(|scope| scope.kind != ScopeKind::Action || scope.parent.is_some())
+                    || close.is_none_or(|close| !close.effects.cancel || close.active_failure) {
+                    self.error(R::LowCancelOutsideFinalExit,
+                        "cancellation is delivered only by the final successful close of an async action");
                 }
-                if fact.failures == 0 {
-                    fact.failures = failure_bit(FailureKind::Cancelled);
-                    fact.failure_origin = match self.state.location {
-                        L::Instruction { instruction, .. } => Some(Origin::ViewInstruction(instruction, u16::MAX)),
-                        _ => None,
-                    };
+                // #696: every async body of Low is D21 (coro-missing-layout), so the delivery is the conditional
+                // one of Champ draft 3 §5; the definite delivery of layout-less bodies has no valid body left.
+                self.conditional_cancel(&token, &mut fact);
+                token.cleanup = Some(fact);
+                if let Some(slot) = slots.first_mut() {
+                    slot.token = token;
+                    let index = cleanup.as_u32() as usize;
+                    slot.refs = before.refs[index].clone();
+                    slot.requirements = before.full_deps[index].clone();
+                    slot.aliases = before.aliases[index].clone();
+                    slot.identity = before.identities[index];
                 }
-                fact.cancel_delivered = true;
-                flow.active_failure = fact.failures;
-                flow.active_failure_origin = fact.failure_origin;
-                fact.phase = 1;
-                fact.plan = None;
-                fact.aborted = true;
-                token.pieces.extend(fact.reserve.iter().cloned());
-                fact.reserve.clear();
-                fact.pending = false;
+                return;
             }
             CleanupOp::Finish { .. } => {
                 if fact.phase != 2 || !token.pieces.is_empty() || !fact.services.is_empty() {
                     self.error(R::B102, "cleanup.finish skips an unprocessed remainder or service phase");
+                }
+                if fact.cancel_open {
+                    self.error(R::B105, "an open cancellation delivery is decided by the selector of its plan");
+                }
+                let cancel = self.body.cleanup.closes.get(fact.close).is_ok_and(|close| close.effects.cancel);
+                if cancel && !fact.cancel_delivered {
+                    self.error(R::B105, "a final close with cancel=true delivers the cancellation before finish (D18)");
                 }
                 let destroyed: Vec<_> = fact.inventory.difference(&fact.reserve).cloned().collect();
                 self.invalidate(before, flow, &destroyed);
@@ -392,6 +422,7 @@ impl Engine<'_, '_> {
                             slot.token.pending_type = token.pending_type;
                             slot.token.pending_kind = token.pending_kind;
                             slot.token.pending_boundary = token.pending_boundary;
+                            slot.token.rehome = token.rehome;
                             slot.token.reserve = token.reserve.clone();
                             if let Some(scope) = token.scope {
                                 slot.token.reserve.remove(&scope);
@@ -444,6 +475,86 @@ impl Engine<'_, '_> {
         }
     }
 
+    /// D18 (#716): in Low the successful close of an async action's root scope is the `cleanup.begin` that
+    /// lowers its `scope.end`, and it carries the final cancellation delivery just as that close does.
+    fn final_close_delivers(&mut self, before: &Flow, close: CleanupCloseId, failing: bool) {
+        if self.module.profile != Profile::Low || !self.declaration.attrs.contains(&FunctionAttr::Async) || failing
+            || before.active_failure != 0 {
+            return;
+        }
+        let entry = self.declaration.attrs.iter().any(|attr| {
+            matches!(attr, FunctionAttr::DeferEntry { .. } | FunctionAttr::Destroy(_))
+        });
+        let Ok(close) = self.body.cleanup.closes.get(close) else {
+            return;
+        };
+        let CleanupSource::Scope(owner) = close.source else {
+            return;
+        };
+        let root = self.module.scopes.get(owner)
+            .is_ok_and(|scope| scope.parent.is_none() && scope.kind == ScopeKind::Action);
+        if !entry && root && !close.active_failure && !close.effects.cancel {
+            self.error(R::B105, "the successful close of an async action's root scope needs cancel=true (D18)");
+        }
+    }
+
+    /// Champ draft 3 §5: in a D21 body `cleanup.deliver_cancel` delivers only a cancellation that was
+    /// requested and not yet delivered, and only without a primary failure. It runs once, after the plan has
+    /// drained (OIR-2 §9.3 step 6), so the executed prefix stays executed; a second plan then closes the
+    /// reserve if the cancellation was delivered. The next selector forks into both outcomes.
+    fn conditional_cancel(&mut self, token: &Token, fact: &mut CleanupFact) {
+        if fact.phase != 2 || !token.pieces.is_empty() || fact.awaiting_failure || fact.cancel_delivered {
+            self.error(R::B105, "cancellation is delivered once, after the plan has drained");
+        }
+        fact.cancel_delivered = true;
+        fact.phase = 1;
+        fact.plan = None;
+        if fact.failures == 0 {
+            // A primary failure keeps priority; without one the delivery is decided at run time.
+            fact.cancel_open = true;
+            fact.failure_origin = match self.state.location {
+                L::Instruction { instruction, .. } => Some(Origin::ViewInstruction(instruction, u16::MAX)),
+                _ => None,
+            };
+        }
+    }
+
+    /// The two outcomes of an open cancellation delivery: not delivered, with the reserve still reserved for
+    /// the commit; delivered, with Cancelled as the primary failure and the reserve aborted into the plan.
+    /// Each outcome is paired with whether it delivered the cancellation.
+    fn cancel_outcomes(&self, token: &Token) -> Vec<(Token, bool)> {
+        let Some(fact) = token.cleanup.as_ref().filter(|fact| fact.cancel_open) else {
+            return vec![(token.clone(), false)];
+        };
+        let mut kept = token.clone();
+        if let Some(fact) = &mut kept.cleanup {
+            fact.cancel_open = false;
+            fact.failure_origin = None;
+        }
+        let mut delivered = token.clone();
+        let reserve = fact.reserve.clone();
+        if let Some(fact) = &mut delivered.cleanup {
+            fact.cancel_open = false;
+            fact.failures = failure_bit(FailureKind::Cancelled);
+            if fact.pending {
+                fact.aborted = true;
+                fact.pending = false;
+                fact.reserve.clear();
+            }
+        }
+        if token.cleanup.as_ref().is_some_and(|fact| fact.pending) {
+            delivered.pieces.extend(reserve);
+        }
+        vec![(kept, false), (delivered, true)]
+    }
+
+    /// Whether the D16 schedule of `close` lists a holder whose service key is `key`.
+    fn scheduled(&self, before: &Flow, close: CleanupCloseId, key: Option<Origin>) -> bool {
+        self.body.cleanup.schedules.iter().filter(|(_, schedule)| schedule.close == close)
+            .flat_map(|(_, schedule)| &schedule.holders)
+            .any(|value| before.tokens[value.as_u32() as usize].service == key)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn scope_effects(
         &mut self, block: BlockId, op: &Operation, state: ValueId, reserve: Option<ValueId>,
@@ -455,10 +566,14 @@ impl Engine<'_, '_> {
             .chain(reserve.into_iter().flat_map(|value| &before.tokens[value.as_u32() as usize].pieces))
             .cloned().collect();
         let mut required = self.required_effects(&pieces, before);
-        let has_services = before.tokens.iter().enumerate().any(|(index, token)| {
-            before.availability[index] == AVAILABLE && token.service.is_some()
+        // A cache-state token settles by the parity protocol of async ABI D24.2: it adds neither suspension nor
+        // failures, and the cleanup effects of its outcome come with its duty in the inventory (D12, B10.4). Any
+        // other service token keeps the unknown effects.
+        let unknown = before.tokens.iter().enumerate().any(|(index, token)| {
+            before.availability[index] == AVAILABLE
+                && token.service.is_some_and(|origin| !self.cache_state(origin))
         });
-        if has_services {
+        if unknown {
             required.suspends = true;
             required.failures = vec![
                 FailureKind::Thrown, FailureKind::Program, FailureKind::Panic, FailureKind::Native,
@@ -496,6 +611,16 @@ impl Engine<'_, '_> {
                 self.error(R::B105, "cancel envelope is legal only at final successful async action close");
             }
         }
+        // D18: the successful close of an async action's root scope carries the final cancellation delivery.
+        let entry = self.declaration.attrs.iter().any(|attr| {
+            matches!(attr, FunctionAttr::DeferEntry { .. } | FunctionAttr::Destroy(_))
+        });
+        let root = scope(self.module, self.body, state).and_then(|id| self.module.scopes.get(id).ok())
+            .is_some_and(|scope| scope.parent.is_none() && scope.kind == ScopeKind::Action);
+        if self.declaration.attrs.contains(&FunctionAttr::Async) && !entry && root && !envelope.cancel
+            && before.active_failure == 0 && matches!(op, Operation::Ownership(OwnershipOp::ScopeEnd { .. })) {
+            self.error(R::B105, "the successful close of an async action's root scope needs cancel=true (D18)");
+        }
     }
 
     fn required_effects(&mut self, pieces: &BTreeSet<Piece>, before: &Flow) -> Effects {
@@ -503,6 +628,22 @@ impl Engine<'_, '_> {
         let _work = super::super::work_profile::Operation::new("cleanup::required_effects");
         let mut required = Effects::default();
         for piece in pieces {
+            // A cache duty settles by the parity protocol of async ABI D24.2: no
+            // settle waits, a cold Future settles as an observed Cancelled, and a
+            // settled one releases its outcome packet into the owner's serial plan.
+            // It needs the outcome's cleanup effects; inputs are separate pieces.
+            if let Some(outcome) = self.cache_duty_outcome(piece) {
+                if let Some(ty) = outcome {
+                    let effects = super::super::effects::cleanup(self.module, self.body, ty, self.state);
+                    required.suspends |= effects.suspends;
+                    for kind in effects.failures {
+                        if !required.failures.contains(&kind) {
+                            required.failures.push(kind);
+                        }
+                    }
+                }
+                continue;
+            }
             let types = self.origin_types(piece.origin, piece, before);
             if types.is_empty() {
                 required.suspends = true;
@@ -520,6 +661,37 @@ impl Engine<'_, '_> {
             }
         }
         required
+    }
+
+    /// The outcome type of a piece that is the cache duty `ServiceOf{f, Cache}`
+    /// created by its own `fut.new` (D12): `Some(None)` for a void Future.
+    fn cache_duty_outcome(&self, piece: &Piece) -> Option<Option<TypeId>> {
+        if piece.holder != Some(piece.origin) {
+            return None;
+        }
+        let (Origin::Instruction(inst, _) | Origin::RetiredInstruction(inst, _)) = piece.origin else {
+            return None;
+        };
+        match self.body.insts.get(inst).map(|inst| &inst.op) {
+            Ok(Operation::Async(AsyncOp::FutureNew { result, .. })) => Some(*result),
+            _ => None,
+        }
+    }
+
+    /// Whether a service token is the cache-state result of a `fut.new` (C-1).
+    fn cache_state(&self, service: Origin) -> bool {
+        let (Origin::Instruction(inst, index) | Origin::RetiredInstruction(inst, index)) = service else {
+            return false;
+        };
+        let Ok(instruction) = self.body.insts.get(inst) else {
+            return false;
+        };
+        if !matches!(instruction.op, Operation::Async(AsyncOp::FutureNew { .. })) {
+            return false;
+        }
+        let cache = index.checked_sub(0x8000_0000).and_then(|index| instruction.results.get(index as usize));
+        cache.and_then(|cache| self.body.values.get(*cache).ok())
+            .is_some_and(|value| self.module.types.get(value.ty) == Ok(&Type::Service(ServiceType::CacheState)))
     }
 
     fn origin_types(&self, origin: Origin, piece: &Piece, flow: &Flow) -> Vec<TypeId> {
@@ -602,8 +774,15 @@ impl Engine<'_, '_> {
             self.error(R::B105, "lowered cancellation delivery is missing from its close envelope");
         }
         let mut effects = self.required_effects(&fact.inventory, flow);
-        effects.suspends |= fact.had_services;
-        if fact.had_services {
+        // D20 §2.6: in Low a close suspends or fails only through its steps. No cache settle waits or fails in
+        // 0.6.0 (async ABI D24.2); the outcome identities a settle releases are in the inventory with their types.
+        // Any other service duty keeps the unknown effects, as in `scope_effects`.
+        let cache_only = self.body.cleanup.schedules.iter().filter(|(_, schedule)| schedule.close == fact.close)
+            .flat_map(|(_, schedule)| &schedule.holders)
+            .all(|value| flow.tokens[value.as_u32() as usize].service.is_some_and(|origin| self.cache_state(origin)));
+        let services = fact.had_services && !(self.module.profile == Profile::Low && cache_only);
+        effects.suspends |= services;
+        if services {
             for kind in [FailureKind::Thrown, FailureKind::Program, FailureKind::Panic, FailureKind::Native] {
                 if !effects.failures.contains(&kind) {
                     effects.failures.push(kind);
@@ -872,30 +1051,37 @@ impl Engine<'_, '_> {
             self.error(R::B102, "cleanup.next needs a live cleanup automaton");
             return;
         };
-        if !fact.shield || fact.phase != 2 || fact.awaiting_failure || fact.plan.is_none() {
-            self.error(R::B102, "cleanup.next requires a shielded settled plan and a dispatched failure");
+        if fact.phase != 2 || fact.awaiting_failure || fact.plan.is_none() {
+            self.error(R::B102, "cleanup.next requires a settled plan and a dispatched failure");
         }
         if fact.plan.and_then(|id| self.body.cleanup.plans.get(id).ok()).is_some_and(|plan| plan.direct.is_some()) {
             self.error(R::B102, "runtime selector cannot replace a direct plan's finite order");
         }
         let index = cleanup.as_u32() as usize;
-        let slot = Slot {
-            token: token.clone(), refs: before.refs[index].clone(), requirements: before.full_deps[index].clone(),
-            aliases: before.aliases[index].clone(), identity: before.identities[index], ..Slot::default()
-        };
-        if let Some(piece) = token.pieces.iter().next() {
-            let mut selected_slot = slot.clone();
-            selected_slot.token.cleanup.as_mut().unwrap().selected = Some(piece.origin);
-            let mut key = Slot::default();
-            key.refs.insert(piece.origin);
-            key.token.sources.insert(cleanup);
-            outgoing.push(self.edge(flow, selected.block, &selected.args, &[selected_slot, key], R::B102));
-        }
-        if token.pieces.is_empty() || token.pieces.iter().all(|piece| piece.family) {
-            let mut drained = slot;
-            drained.token.pieces.clear();
-            drained.token.cleanup.as_mut().unwrap().selected = None;
-            outgoing.push(self.edge(flow, done.block, &done.args, &[drained], R::B102));
+        for (token, delivered) in self.cancel_outcomes(&token) {
+            let mut branch = flow.clone();
+            if let Some(fact) = token.cleanup.as_ref().filter(|_| delivered) {
+                branch.active_failure = fact.failures;
+                branch.active_failure_origin = fact.failure_origin;
+            }
+            let slot = Slot {
+                token: token.clone(), refs: before.refs[index].clone(), requirements: before.full_deps[index].clone(),
+                aliases: before.aliases[index].clone(), identity: before.identities[index], ..Slot::default()
+            };
+            if let Some(piece) = token.pieces.iter().next() {
+                let mut selected_slot = slot.clone();
+                selected_slot.token.cleanup.as_mut().unwrap().selected = Some(piece.origin);
+                let mut key = Slot::default();
+                key.refs.insert(piece.origin);
+                key.token.sources.insert(cleanup);
+                outgoing.push(self.edge(&branch, selected.block, &selected.args, &[selected_slot, key], R::B102));
+            }
+            if token.pieces.is_empty() || token.pieces.iter().all(|piece| piece.family) {
+                let mut drained = slot;
+                drained.token.pieces.clear();
+                drained.token.cleanup.as_mut().unwrap().selected = None;
+                outgoing.push(self.edge(&branch, done.block, &done.args, &[drained], R::B102));
+            }
         }
     }
 

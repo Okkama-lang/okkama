@@ -21,6 +21,12 @@ pub struct TypeClassification {
     /// future). The verifier requires full dependencies for such values even
     /// when every reachable target is plain.
     pub references: bool,
+    /// The value graph reaches a builtin capability without destroy (Atomic, P2.4 section 4.8):
+    /// a managed reference that elaboration partitions like an owned value, yet holds no obligation.
+    pub capabilities: bool,
+    /// A once let may keep a value of this type (Bible section 13.13, #491, #520). Computed only for the
+    /// types of once fields; false elsewhere. See `once_graph`.
+    pub once_plain: bool,
 }
 
 impl TypeClassification {
@@ -182,119 +188,18 @@ pub(super) fn classify(
         }
     }
     let free = free_parameters(module, budget)?;
+    let context = Context { module, dictionaries: &dictionaries, captures: &captures, origins: &origins, open: &open,
+        free: &free };
+    let mut once_types = BTreeSet::new();
+    for (_, declaration) in module.declarations.iter() {
+        budget.work(1)?;
+        if let DeclarationKind::Object { fields, .. } = &declaration.kind {
+            once_types.extend(fields.iter().filter(|field| field.once).map(|field| field.ty));
+        }
+    }
     let mut result = BTreeMap::new();
     for (root, _) in module.types.iter() {
-        let mut facts = TypeClassification {
-            class: Classification::Plain,
-            certificate: None,
-            reachable_resources: BTreeSet::new(),
-            destroy_entries: BTreeSet::new(),
-            service_types: BTreeSet::new(),
-            descriptors: vec![],
-            unresolved: BTreeSet::new(),
-            references: false,
-        };
-        let mut terms = Terms { module, free: &free, ids: BTreeMap::new(), nodes: vec![] };
-        let root_term = terms.intern(root, &Environment::new(), budget)?;
-        let mut pending = vec![root_term];
-        let mut visited = BTreeSet::new();
-        while let Some(term) = pending.pop() {
-            budget.work(1)?;
-            if !visited.insert(term) {
-                continue;
-            }
-            let (ty, mut env) = terms.nodes[term].clone();
-            if let Some(descriptor) = dictionaries.get(&ty) {
-                module.functions.get(descriptor.cleanup).map_err(arena)?;
-                module.summaries.get(descriptor.summary).map_err(arena)?;
-                if !facts.descriptors.contains(descriptor) {
-                    facts.descriptors.push(descriptor.clone());
-                }
-                if descriptor.managed != DescriptorManaged::Plain {
-                    facts.reachable_resources.insert(ty);
-                    facts.destroy_entries.insert(descriptor.cleanup);
-                }
-                // A residual dictionary covers traversal, settlement and all
-                // permitted substitutions. Visible concrete fields are still
-                // traversed, so a dictionary cannot hide a known resource.
-                if matches!(module.types.get(ty).map_err(arena)?, Type::Parameter(_) | Type::Any | Type::Fn(_)) {
-                    continue;
-                }
-            }
-            let mut children = vec![];
-            facts.references |= matches!(module.types.get(ty).map_err(arena)?,
-                Type::Fn(_) | Type::Cap { .. } | Type::Role { .. } | Type::Any | Type::Future(_));
-            match module.types.get(ty).map_err(arena)? {
-                Type::Successor(child) | Type::Array(child) | Type::Builder(child) | Type::LowCell(child) => {
-                    children.push(*child);
-                }
-                Type::Map(key, value) | Type::MapBuilder(key, value) => {
-                    children.extend([*key, *value]);
-                }
-                Type::Object { decl, args } | Type::Role { decl, args } | Type::Cap { decl, args } => {
-                    let mut actuals = vec![];
-                    for ty in args {
-                        actuals.push(terms.intern(*ty, &env, budget)?);
-                    }
-                    for (index, actual) in actuals.into_iter().enumerate() {
-                        env.insert((0, decl.as_u32(), index as u32), actual);
-                    }
-                    declaration_edges(module, ty, *decl, &mut facts, &mut children, budget)?;
-                    if let Type::Role { .. } = module.types.get(ty).map_err(arena)? {
-                        // Every enabled witness target participates, including
-                        // targets visible only in a module's test profile.
-                        for (candidate, candidate_type) in module.types.iter() {
-                            budget.work(1)?;
-                            let Type::Object { decl: object, .. } = candidate_type else {
-                                continue;
-                            };
-                            let DeclarationKind::Object { witnesses, .. } =
-                                &module.declarations.get(*object).map_err(arena)?.kind else {
-                                continue;
-                            };
-                            if witnesses.iter().any(|witness| matches!(module.types.get(witness.role),
-                                Ok(Type::Role { decl: role, .. }) if role == decl)) {
-                                children.push(candidate);
-                            }
-                        }
-                    }
-                }
-                Type::Variant(decl) => {
-                    declaration_edges(module, ty, *decl, &mut facts, &mut children, budget)?;
-                }
-                Type::Fn(_) | Type::Any => {
-                    children.extend(captures.get(&ty).into_iter().flatten().copied());
-                    if !origins.contains(&ty) || open.contains(&ty) {
-                        facts.unresolved.insert(ty);
-                    }
-                }
-                Type::Parameter(_) => {
-                    facts.unresolved.insert(ty);
-                }
-                Type::Future(result) => {
-                    facts.service_types.insert(ty);
-                    children.extend(result);
-                }
-                Type::Frame(function) => {
-                    facts.service_types.insert(ty);
-                    let function = module.functions.get(*function).map_err(arena)?;
-                    children.extend(&function.signature.params);
-                    if let Some(body) = &function.body {
-                        children.extend(body.values.iter().map(|(_, value)| value.ty));
-                    }
-                }
-                Type::Service(service) if service.is_linear() => {
-                    facts.service_types.insert(ty);
-                }
-                Type::Int | Type::Bool | Type::Byte | Type::Float | Type::Rat | Type::Char | Type::Str
-                | Type::Range | Type::Never | Type::Enum(_) | Type::Handle(_) | Type::Descriptor
-                | Type::Service(_) => {}
-            }
-            budget.memory(children.len() * (64 + env.len() * 64))?;
-            for child in children.into_iter().rev() {
-                pending.push(terms.intern(child, &env, budget)?);
-            }
-        }
+        let mut facts = graph(&context, root, false, budget)?.facts;
         facts.class = if !facts.descriptors.is_empty() || !facts.unresolved.is_empty() {
             Classification::Residual
         } else if facts.may_own() {
@@ -305,9 +210,167 @@ pub(super) fn classify(
         if facts.class == Classification::Plain {
             facts.certificate = Some(PlainCertificate::ClosedGraph { ty: root });
         }
+        if once_types.contains(&root) {
+            facts.once_plain = once_graph(&context, root, budget)?;
+        }
         result.insert(root, facts);
     }
     Ok(result)
+}
+
+/// What classification reads from the module's function bodies.
+struct Context<'a> {
+    module: &'a Module,
+    dictionaries: &'a BTreeMap<TypeId, DescriptorContract>,
+    captures: &'a BTreeMap<TypeId, BTreeSet<TypeId>>,
+    origins: &'a BTreeSet<TypeId>,
+    open: &'a BTreeSet<TypeId>,
+    free: &'a BTreeMap<TypeId, BTreeSet<ParameterKey>>,
+}
+
+/// The reachable graph of one type: its facts, whether it reaches a cap, `any` or Future, and the function
+/// and `any` types in it.
+struct Graph {
+    facts: TypeClassification,
+    opaque: bool,
+    functions: BTreeSet<TypeId>,
+}
+
+/// Bible section 13.13 (#491, #520): a once value must not retain a resource; a closure or role value is
+/// allowed only when it cannot retain one in this program. The graph of a once type reaches no resource,
+/// service, builtin capability, cap, `any`, Future or unbound parameter. A function type in it counts by the
+/// closures this module creates, whose captures the graph includes: a function parameter leaves a callee's
+/// own analysis open, yet every closure that reaches it is one of those, and a function type without
+/// closures has no value. A role counts by its implementations.
+fn once_graph(context: &Context<'_>, root: TypeId, budget: &mut Budget<'_>) -> Result<bool, OwnError> {
+    let Graph { facts, opaque, functions } = graph(context, root, true, budget)?;
+    Ok(!opaque && !facts.capabilities && facts.reachable_resources.is_empty() && facts.service_types.is_empty()
+        && facts.descriptors.is_empty() && facts.unresolved.is_subset(&functions))
+}
+
+fn graph(context: &Context<'_>, root: TypeId, once: bool, budget: &mut Budget<'_>) -> Result<Graph, OwnError> {
+    let module = context.module;
+    let mut facts = TypeClassification {
+        class: Classification::Plain,
+        certificate: None,
+        reachable_resources: BTreeSet::new(),
+        destroy_entries: BTreeSet::new(),
+        service_types: BTreeSet::new(),
+        descriptors: vec![],
+        unresolved: BTreeSet::new(),
+        references: false,
+        capabilities: false,
+        once_plain: false,
+    };
+    let mut terms = Terms { module, free: context.free, ids: BTreeMap::new(), nodes: vec![] };
+    let root_term = terms.intern(root, &Environment::new(), budget)?;
+    let mut opaque = false;
+    let mut functions = BTreeSet::new();
+    let mut pending = vec![root_term];
+    let mut visited = BTreeSet::new();
+    while let Some(term) = pending.pop() {
+        budget.work(1)?;
+        if !visited.insert(term) {
+            continue;
+        }
+        let (ty, mut env) = terms.nodes[term].clone();
+        // A function type's dictionary is the cleanup contract of its open calls. The once graph resolves the
+        // type by the closures this module creates instead (`once_graph`).
+        let function_type = matches!(module.types.get(ty).map_err(arena)?, Type::Fn(_));
+        if let Some(descriptor) = context.dictionaries.get(&ty).filter(|_| !(once && function_type)) {
+            module.functions.get(descriptor.cleanup).map_err(arena)?;
+            module.summaries.get(descriptor.summary).map_err(arena)?;
+            if !facts.descriptors.contains(descriptor) {
+                facts.descriptors.push(descriptor.clone());
+            }
+            if descriptor.managed != DescriptorManaged::Plain {
+                facts.reachable_resources.insert(ty);
+                facts.destroy_entries.insert(descriptor.cleanup);
+            }
+            // A residual dictionary covers traversal, settlement and all
+            // permitted substitutions. Visible concrete fields are still
+            // traversed, so a dictionary cannot hide a known resource.
+            if matches!(module.types.get(ty).map_err(arena)?, Type::Parameter(_) | Type::Any | Type::Fn(_)) {
+                continue;
+            }
+        }
+        let mut children = vec![];
+        facts.references |= matches!(module.types.get(ty).map_err(arena)?,
+            Type::Fn(_) | Type::Cap { .. } | Type::Role { .. } | Type::Any | Type::Future(_));
+        opaque |= matches!(module.types.get(ty).map_err(arena)?, Type::Cap { .. } | Type::Any | Type::Future(_));
+        match module.types.get(ty).map_err(arena)? {
+            Type::Successor(child) | Type::Array(child) | Type::Builder(child) | Type::LowCell(child) => {
+                children.push(*child);
+            }
+            Type::Map(key, value) | Type::MapBuilder(key, value) => {
+                children.extend([*key, *value]);
+            }
+            Type::Object { decl, args } | Type::Role { decl, args } | Type::Cap { decl, args } => {
+                let mut actuals = vec![];
+                for ty in args {
+                    actuals.push(terms.intern(*ty, &env, budget)?);
+                }
+                for (index, actual) in actuals.into_iter().enumerate() {
+                    env.insert((0, decl.as_u32(), index as u32), actual);
+                }
+                declaration_edges(module, ty, *decl, &mut facts, &mut children, budget)?;
+                if let Type::Role { .. } = module.types.get(ty).map_err(arena)? {
+                    // Every enabled witness target participates, including
+                    // targets visible only in a module's test profile.
+                    for (candidate, candidate_type) in module.types.iter() {
+                        budget.work(1)?;
+                        let Type::Object { decl: object, .. } = candidate_type else {
+                            continue;
+                        };
+                        let DeclarationKind::Object { witnesses, .. } =
+                            &module.declarations.get(*object).map_err(arena)?.kind else {
+                            continue;
+                        };
+                        if witnesses.iter().any(|witness| matches!(module.types.get(witness.role),
+                            Ok(Type::Role { decl: role, .. }) if role == decl)) {
+                            children.push(candidate);
+                        }
+                    }
+                }
+            }
+            Type::Variant(decl) => {
+                declaration_edges(module, ty, *decl, &mut facts, &mut children, budget)?;
+            }
+            Type::Fn(_) | Type::Any => {
+                children.extend(context.captures.get(&ty).into_iter().flatten().copied());
+                if !context.origins.contains(&ty) || context.open.contains(&ty) {
+                    facts.unresolved.insert(ty);
+                }
+                functions.insert(ty);
+            }
+            Type::Parameter(_) => {
+                facts.unresolved.insert(ty);
+            }
+            Type::Future(result) => {
+                facts.service_types.insert(ty);
+                children.extend(result);
+            }
+            Type::Frame(function) => {
+                facts.service_types.insert(ty);
+                let function = module.functions.get(*function).map_err(arena)?;
+                children.extend(&function.signature.params);
+                if let Some(body) = &function.body {
+                    children.extend(body.values.iter().map(|(_, value)| value.ty));
+                }
+            }
+            Type::Service(service) if service.is_linear() => {
+                facts.service_types.insert(ty);
+            }
+            Type::Int | Type::Bool | Type::Byte | Type::Float | Type::Rat | Type::Char | Type::Str
+            | Type::Range | Type::Never | Type::Enum(_) | Type::Handle(_) | Type::Descriptor
+            | Type::Service(_) => {}
+        }
+        budget.memory(children.len() * (64 + env.len() * 64))?;
+        for child in children.into_iter().rev() {
+            pending.push(terms.intern(child, &env, budget)?);
+        }
+    }
+    Ok(Graph { facts, opaque, functions })
 }
 
 fn declaration_edges(
@@ -322,7 +385,12 @@ fn declaration_edges(
     match &module.declarations.get(decl).map_err(arena)?.kind {
         DeclarationKind::Object { fields, destroy, builtin, .. } => {
             children.extend(fields.iter().map(|field| field.ty));
-            if *builtin {
+            // A builtin capability without destroy (Atomic, P2.4 section 4.8) holds no obligation of
+            // its own: close is an explicit operation, a read returns a reference with deps.
+            if *builtin && destroy.is_none() {
+                facts.references = true;
+                facts.capabilities = true;
+            } else if *builtin {
                 facts.service_types.insert(ty);
             }
             if let Some(destroy) = destroy {

@@ -69,7 +69,7 @@ pub fn check(bytes: &[u8]) -> Result<(), Error> {
     match program {
         DecodedProgram::Legacy(program) => contracts::check(&program::Loaded::new(program)),
         #[cfg(feature = "champ-abi")]
-        DecodedProgram::Champ(program) => runtime::Runtime::new_champ(program, Vec::new()).map(|_| ()),
+        DecodedProgram::Champ(verified) => runtime::Runtime::new_champ_verified(&verified).map(|_| ()),
     }
 }
 
@@ -241,7 +241,7 @@ fn configured_runtime(
     let mut runtime = match program {
         DecodedProgram::Legacy(program) => Box::new(runtime::Runtime::new(program::Loaded::new(program))?),
         #[cfg(feature = "champ-abi")]
-        DecodedProgram::Champ(program) => runtime::Runtime::new_champ(program, Vec::new())?,
+        DecodedProgram::Champ(verified) => runtime::Runtime::new_champ_verified(&verified)?,
     };
     runtime.worker_command = worker_command;
     runtime.limits = limits;
@@ -368,11 +368,11 @@ pub fn run_tests(bytes: Vec<u8>, out: Box<dyn std::io::Write + Send>) -> Result<
 pub fn run_tests_captured(bytes: Vec<u8>, limits: budget::Limits) -> Result<(Result<bool, Error>, Vec<u8>), Error> {
     on_vm_thread(move || {
         let program = decode_runtime(&bytes).map_err(|error| Error(error.to_string()))?;
-        let DecodedProgram::Champ(program) = program else {
+        let DecodedProgram::Champ(verified) = program else {
             return Err(Error("test capture requires SPB 17".into()));
         };
         let out = Box::new(okkama_runtime_core::stdout::Buffered);
-        Ok(stdout::capture(|| champ::testing::run_suite(program, out, limits)))
+        Ok(stdout::capture(|| champ::testing::run_verified_suite(&verified, out, limits)))
     })
 }
 
@@ -381,7 +381,9 @@ fn test_profile(program: DecodedProgram, out: Box<dyn std::io::Write + Send>) ->
     match program {
         DecodedProgram::Legacy(program) => test_program(program, out),
         #[cfg(feature = "champ-abi")]
-        DecodedProgram::Champ(program) => champ::testing::run_suite(program, out, budget::Limits::default()),
+        DecodedProgram::Champ(verified) => {
+            champ::testing::run_verified_suite(&verified, out, budget::Limits::default())
+        }
     }
 }
 
@@ -517,7 +519,8 @@ impl std::error::Error for Error {}
 enum DecodedProgram {
     Legacy(okkama_sparrow::Program),
     #[cfg(feature = "champ-abi")]
-    Champ(okkama_sparrow::spb17::Program),
+    /// Decoding an SPB 17 file runs the loader once; everything after shares the verified program.
+    Champ(champ::machine::Verified),
 }
 
 impl DecodedProgram {
@@ -533,7 +536,7 @@ impl DecodedProgram {
         match self {
             Self::Legacy(program) => program.tests.is_some(),
             #[cfg(feature = "champ-abi")]
-            Self::Champ(program) => program.tests.is_some(),
+            Self::Champ(verified) => verified.source().tests.is_some(),
         }
     }
 
@@ -541,7 +544,7 @@ impl DecodedProgram {
         match self {
             Self::Legacy(program) => program.functions.len(),
             #[cfg(feature = "champ-abi")]
-            Self::Champ(program) => program.functions.len(),
+            Self::Champ(verified) => verified.source().functions.len(),
         }
     }
 }
@@ -550,9 +553,7 @@ fn decode_runtime(bytes: &[u8]) -> Result<DecodedProgram, okkama_sparrow::CodecE
     #[cfg(feature = "champ-abi")]
     if bytes.get(..6) == Some(&[b'S', b'P', b'R', b'W', 0, 17]) {
         let program = okkama_sparrow::spb17::decode(bytes)?;
-        let contracts = okkama_sparrow::spb17::p1::P1Contracts::new(&program.objects)?;
-        okkama_sparrow::spb17::verify_load(&program, &contracts)?;
-        return Ok(DecodedProgram::Champ(program));
+        return Ok(DecodedProgram::Champ(champ::machine::Verified::load(program)?));
     }
     okkama_sparrow::decode(bytes).map(DecodedProgram::Legacy)
 }

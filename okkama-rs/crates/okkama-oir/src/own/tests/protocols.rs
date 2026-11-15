@@ -207,6 +207,151 @@ fn once_rejects_a_resource_hidden_behind_an_ordinary_field() {
     }
 }
 
+/// A once slot of `fn() -> int` filled by a closure that captures one `{captured}` value, with `{extra}`
+/// added to the module (#717).
+fn once_closure(captured: &str, extra: &str) -> String {
+    format!("oir 2 high
+module once_closure
+object Plain {{
+    field n: int
+}}
+object R {{
+    destroy @destroy
+}}
+object O {{
+    field slot: fn() -> int once
+}}
+{extra}
+scope SD action in @destroy
+func @destroy(%self: R) -> void [destroy R] {{
+    ^entry in SD:
+    ret
+}}
+scope SL action in @lambda
+func @lambda(%captured: {captured}) -> int [lambda captures 1] {{
+    boundary BL lexical in SL
+    ^entry in SL:
+    %n: int = const 7
+    [ip] exit.prepare return %n at BL
+    result.exit edge normal(0), value %n, demand want, prepare ip
+    ret %n
+}}
+scope S action in @f
+func @f(%self: O, %captured: {captured}) -> int [method O] {{
+    boundary B0 lexical in S
+    ^entry in S:
+    %closure: fn() -> int = fn.closure @lambda, [%captured], ty fn() -> int
+    once.store %self, slot, %closure
+    %kept: fn() -> int = once.load %self, slot
+    %n: int = const 1
+    [ip] exit.prepare return %n at B0
+    result.exit edge normal(0), value %n, demand want, prepare ip
+    ret %n
+}}
+")
+}
+
+/// The rules the full verifier rejects the module by; empty when it verifies completely.
+fn once_rules(source: &str) -> Vec<RuleId> {
+    let module = crate::text::parse(source).unwrap();
+    verify_high(&module).err().map_or(vec![], |report| {
+        report.diagnostics.iter().map(|diagnostic| diagnostic.rule).collect()
+    })
+}
+
+/// Whether the full verifier rejects the module by its once slot alone.
+fn once_rejected(source: &str) -> bool {
+    let rules = once_rules(source);
+    assert!(rules.iter().all(|rule| *rule == RuleId::B111), "{rules:?}");
+    !rules.is_empty()
+}
+
+/// Bible §13.13 (#491, #520, #717): a once slot keeps a closure only when no closure of its function type can
+/// retain a resource in this program (B11.1 counts a function type by the closures the module creates).
+#[test]
+fn once_keeps_a_closure_only_when_no_closure_of_its_type_retains_a_resource() {
+    assert!(!once_rejected(&once_closure("Plain", "")));
+    assert!(once_rejected(&once_closure("R", "")));
+    // A second closure of the same type that captures a resource is enough.
+    let second = "scope SL2 action in @second
+func @second(%captured: R) -> int [lambda captures 1] {
+    boundary BL2 lexical in SL2
+    ^entry in SL2:
+    %n: int = const 2
+    [ip] exit.prepare return %n at BL2
+    result.exit edge normal(0), value %n, demand want, prepare ip
+    ret %n
+}
+scope S2 action in @make
+func @make(%r: R) -> fn() -> int {
+    boundary B2 lexical in S2
+    ^entry in S2:
+    %closure: fn() -> int = fn.closure @second, [%r], ty fn() -> int
+    want %closure
+    [ip] exit.prepare return %closure at B2
+    result.exit edge normal(0), value %closure, demand want, prepare ip
+    ret %closure
+}";
+    assert!(once_rejected(&once_closure("Plain", second)));
+    // A bodyless function may return a closure from outside the module (the fixture's intrinsic is not in
+    // the catalog, T5, which does not hide the once rule).
+    let foreign = "func @foreign() -> fn() -> int [intrinsic \"fixture.foreign\"];";
+    assert!(once_rules(&once_closure("Plain", foreign)).contains(&RuleId::B111));
+}
+
+/// A builtin capability and `any` are never once data (#717).
+#[test]
+fn once_refuses_builtin_capabilities_and_any() {
+    let source = |slot: &str| format!("oir 2 high
+module once_opaque
+object Atomic [builtin] {{
+}}
+object O {{
+    field slot: {slot} once
+}}
+");
+    assert!(!once_rejected(&source("int")));
+    assert!(once_rejected(&source("Atomic")));
+    assert!(once_rejected(&source("any")));
+}
+
+/// A once slot keeps a role value only when no implementation of the role retains a resource (#717).
+#[test]
+fn once_keeps_a_role_value_only_when_no_implementation_retains_a_resource() {
+    let source = |holder: &str| format!("oir 2 high
+module once_role
+role Named {{
+    name() -> int
+}}
+object R {{
+    destroy @destroy
+}}
+object Holder {{
+    does Named {{ name = @name }}
+    field held: {holder}
+}}
+object O {{
+    field slot: Named once
+}}
+scope SD action in @destroy
+func @destroy(%self: R) -> void [destroy R] {{
+    ^entry in SD:
+    ret
+}}
+scope SN action in @name
+func @name(%self: Holder) -> int [method Holder] {{
+    boundary BN lexical in SN
+    ^entry in SN:
+    %n: int = const 7
+    [ip] exit.prepare return %n at BN
+    result.exit edge normal(0), value %n, demand want, prepare ip
+    ret %n
+}}
+");
+    assert!(!once_rejected(&source("int")));
+    assert!(once_rejected(&source("R")));
+}
+
 #[test]
 fn epoch_updates_are_one_conditional_transition_and_ssa_moves_preserve_them() {
     let output = rewrite(include_str!("protocol-high/dynamic-channel.oir"));
@@ -625,4 +770,81 @@ fn open_result_aliasing_a_temporary_environment_is_rejected() {
     let OwnError::InvalidOutput(report) = error else { panic!("{error:?}") };
     assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::B51
         && diagnostic.message.contains("settled by callee cleanup")), "{report:?}");
+}
+
+// #569 C3b: the producer attaches the open ABI exactly to own's open callees.
+fn open_callees_of(source: &str, function: &str) -> Vec<String> {
+    let module = crate::text::parse(source).unwrap();
+    let (_, data) = module.functions.iter().find(|(_, data)| data.symbol == function).unwrap();
+    let body = data.body.as_ref().unwrap();
+    let open = crate::own::open_callees(&module, body, &OwnOptions::default()).unwrap();
+    open.into_iter().map(|value| match body.values.get(value).unwrap().def {
+        Definition::BlockParam { block, index } if block == body.entry => format!("entry {index}"),
+        Definition::BlockParam { index, .. } => format!("block parameter {index}"),
+        Definition::InstResult { inst, .. } => body.insts.get(inst).unwrap().op.opcode().to_owned(),
+    }).collect()
+}
+
+#[test]
+fn open_callees_are_entry_parameters_not_known_closures() {
+    assert_eq!(open_callees_of(include_str!("protocol-high/closure-open.oir"), "f"), ["entry 0"]);
+    assert!(open_callees_of(include_str!("protocol-high/closure-known.oir"), "f").is_empty());
+    // A closure merged through a block parameter keeps its finite origin.
+    assert!(open_callees_of(include_str!("protocol-high/closure-known-phi.oir"), "f").is_empty());
+}
+
+/// Decision (a) of #676, P2.4 §4.1: an action value whose capture reaches a resource is a new object that holds a
+/// reference to it. The capture's obligation stays with its owner, so own hands the construction an empty packet
+/// and admits the packet it returns; an action value without such a capture stays packetless.
+fn action_value_packets(source: &str) -> Vec<Option<bool>> {
+    let module = rewrite(source).module;
+    let mut packets = vec![];
+    for (_, data) in module.functions.iter() {
+        let Some(body) = &data.body else { continue };
+        for (_, instruction) in body.insts.iter() {
+            let packet = match &instruction.op {
+                Operation::Core(CoreOp::FnClosure { packet, .. } | CoreOp::FnBind { packet, .. }
+                    | CoreOp::FnBindRole { packet, .. }) => *packet,
+                _ => continue,
+            };
+            let Some(packet) = packet else {
+                packets.push(None);
+                continue;
+            };
+            let crate::Definition::InstResult { inst, .. } = body.values.get(packet).unwrap().def else {
+                panic!("the packet of an action value is not an instruction result");
+            };
+            let empty = matches!(body.insts.get(inst).unwrap().op, Operation::Ownership(OwnershipOp::Empty {}));
+            let returned = instruction.results[1];
+            let admitted = body.insts.iter().any(|(_, user)| {
+                matches!(user.op, Operation::Ownership(OwnershipOp::Admit { packet, .. }) if packet == returned)
+            });
+            packets.push(Some(empty && admitted));
+        }
+    }
+    packets
+}
+
+#[test]
+fn action_values_capturing_a_resource_take_an_empty_packet() {
+    for name in ["closure-known", "closure-known-phi", "closure-known-loop", "bound-snapshot", "bound-role"] {
+        let source = std::fs::read_to_string(fixtures("protocol-high").iter()
+            .find(|path| path.file_stem().unwrap() == name).unwrap()).unwrap();
+        assert_eq!(action_value_packets(&source), vec![Some(true)], "{name}");
+    }
+    let join = include_str!("protocol-high/closure-known-join.oir");
+    let mut packets = action_value_packets(join);
+    packets.sort();
+    assert_eq!(packets, vec![None, Some(true)], "the capture-free closure and the bound receiver");
+}
+
+#[test]
+fn action_values_without_a_resource_capture_stay_packetless() {
+    let empty = include_str!("protocol-high/closure-empty.oir");
+    assert_eq!(action_value_packets(empty), vec![None]);
+    let plain = empty.replace("func @lambda() -> int [lambda] {", "func @lambda(%k: int) -> int [lambda captures 1] {")
+        .replace("    %closure: fn() -> int = fn.closure @lambda, ty fn() -> int",
+            "    %k: int = const 3\n    %closure: fn() -> int = fn.closure @lambda, [%k], ty fn() -> int");
+    assert_ne!(plain, empty);
+    assert_eq!(action_value_packets(&plain), vec![None], "a plain capture");
 }

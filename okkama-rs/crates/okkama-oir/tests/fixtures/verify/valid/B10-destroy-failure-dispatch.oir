@@ -42,13 +42,8 @@ func @f(%schedule: type, %descriptor: type) -> void summary(Mf) {
         bindings=[root_binding(value=%descriptor, trace=value(type)), root_binding(value=%r, trace=value(R)),
         root_binding(value=%c2, trace=cleanup_activation)], through_suspend=true),
         root_requirement(boundary=before_instruction(i6), bindings=[root_binding(value=%descriptor,
-        trace=value(type)), root_binding(value=%r, trace=value(R)), root_binding(value=%c1,
-        trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=after_instruction(i5),
-        bindings=[root_binding(value=%descriptor, trace=value(type)), root_binding(value=%r, trace=value(R)),
-        root_binding(value=%c1, trace=cleanup_activation)], through_suspend=true),
-        root_requirement(boundary=before_instruction(i5), bindings=[root_binding(value=%descriptor,
-        trace=value(type)), root_binding(value=%r, trace=value(R)), root_binding(value=%c, trace=cleanup_activation)],
-        through_suspend=true), root_requirement(boundary=after_instruction(i4),
+        trace=value(type)), root_binding(value=%r, trace=value(R)), root_binding(value=%c,
+        trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=after_instruction(i4),
         bindings=[root_binding(value=%descriptor, trace=value(type)), root_binding(value=%r, trace=value(R)),
         root_binding(value=%c, trace=cleanup_activation)], through_suspend=true),
         root_requirement(boundary=before_instruction(i4), bindings=[root_binding(value=%schedule, trace=value(type)),
@@ -102,8 +97,7 @@ func @f(%schedule: type, %descriptor: type) -> void summary(Mf) {
     [i3] %admitted: scope<S> = own.admit %q, %packet
     [i4] %c: cleanup-state = cleanup.begin %admitted, close 0, effects scope_effects(failures=[], suspends=false,
         cancel=false)
-    [i5] %c1: cleanup-state = cleanup.shield %c
-    [i6] %c2: cleanup-state = cleanup.settle.empty %c1, schedule 0
+    [i6] %c2: cleanup-state = cleanup.settle.empty %c, schedule 0
     [i7] %c3: cleanup-state = cleanup.plan %c2, plan 0
     [i8] (%c4: cleanup-state, %fs: failure-state) = destroy.direct %c3, %r, %descriptor, destroy @destroy
     failure.dispatch %fs none ^finished(%c4) some ^no_failure_fs($failure)

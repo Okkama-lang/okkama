@@ -1,0 +1,74 @@
+oir 2 high
+module catalogue
+object R {
+    destroy @destroy
+}
+scope SD action in @destroy
+scope SC action in @make
+scope S action in @f
+scope SG action in @g
+scope SA action in @h
+func @destroy(%self: R) -> void [destroy R] {
+    ^entry in SD:
+    ret
+}
+func @make() -> R [ctor R] {
+    boundary BC lexical in SC
+    ^entry in SC unwind ^failed:
+    %r: R = obj.new R { }
+    want %r
+    [iprep0] exit.prepare return %r at BC
+    result.exit edge normal(0), value %r, demand want, prepare iprep0
+    ret %r
+    ^failed(%failure: failure) in SC:
+    raise %failure
+}
+protocol P kind closure holders [scope, packet] rules [protocol_rule(transition=publish, from=packet, to=scope,
+    checks=[owner, live_dependencies, snapshot, transferable],
+    normal=protocol_poststate(holder=scope, state=open),
+    unwind=some(protocol_poststate(holder=scope, state=settled))), protocol_rule(transition=dynamic, from=packet,
+        to=scope,
+        checks=[owner, live_dependencies, snapshot, transferable],
+        normal=protocol_poststate(holder=scope, state=open),
+        unwind=some(protocol_poststate(holder=packet, state=unaccepted)))] roots [operands]
+summary Md call-boundary parameters [parameter_effect(convention=take, destination=none)]
+    contract call_contract(publication=atomic)
+// Two open fn types and an open any: one cleanup declaration per key (#569 C3b, C6).
+func @drop_fn(%value: fn(R) -> R) -> void [intrinsic "oir.sync_closure.cleanup"] summary(Md);
+func @drop_int(%value: fn(int) -> int) -> void [intrinsic "oir.sync_closure.cleanup"] summary(Md);
+func @drop_any(%value: any) -> void [intrinsic "oir.any.cleanup"] summary(Md);
+func @f(%callable: fn(R) -> R) -> R {
+    boundary B0 lexical in S
+    ^entry in S unwind ^failed:
+    %dict: type = type.of ty fn(R) -> R, descriptor descriptor_contract(managed=runtime,
+        retention=owner_graph(0), cleanup=@drop_fn, async_destroy=false, summary=Md)
+    %r: R = call @make()
+    %result: R = fn.call %callable(%r)
+    [ip] exit.prepare return %result at B0
+    result.exit edge normal(0), value %result, demand want, prepare ip
+    ret %result
+    ^failed(%failure: failure) in S:
+    raise %failure
+}
+func @g(%callable: fn(int) -> int) -> int {
+    boundary BG lexical in SG
+    ^entry in SG unwind ^failed:
+    %dict: type = type.of ty fn(int) -> int, descriptor descriptor_contract(managed=runtime,
+        retention=owner_graph(0), cleanup=@drop_int, async_destroy=false, summary=Md)
+    %n: int = const 7
+    %result: int = fn.call %callable(%n)
+    [ip] exit.prepare return %result at BG
+    result.exit edge normal(0), value %result, demand want, prepare ip
+    ret %result
+    ^failed(%failure: failure) in SG:
+    raise %failure
+}
+func @h(%value: any) -> any {
+    boundary BA lexical in SA
+    ^entry in SA:
+    %dict: type = type.of ty any, descriptor descriptor_contract(managed=runtime,
+        retention=owner_graph(0), cleanup=@drop_any, async_destroy=false, summary=Md)
+    [ip] exit.prepare return %value at BA
+    result.exit edge normal(0), value %value, demand want, prepare ip
+    ret %value
+}

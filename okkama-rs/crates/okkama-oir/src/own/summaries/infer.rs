@@ -28,6 +28,10 @@ impl Universe {
                     let relation = &mut values[value.as_u32() as usize];
                     relation.aliases.push(SummarySelection::Parameter(parameter));
                     relation.external_deps.push(parameter);
+                } else if types[&ty].references {
+                    // A parameter with deps but no obligation (a role, cap, closure, `any` or Atomic reference):
+                    // a result that retains it depends on it (P2.4 §5.2), without aliasing an owned graph.
+                    values[value.as_u32() as usize].external_deps.push(parameter);
                 }
                 parameter = parameter.checked_add(1).ok_or_else(|| {
                     budget.fail(OwnDiagnosticKind::IncompatibleSignature, "too many language parameters")
@@ -182,11 +186,23 @@ impl Universe {
             });
             // P1.3 §3.4: include failures introduced by elaboration. Offering
             // managed call inputs emits scope.split even for a scalar result.
-            if module.profile == Profile::High && (partitions_inputs || matches!(op,
-                Operation::Lexical(LexicalOp::Bind { .. } | LexicalOp::Rebind { .. } | LexicalOp::Stage { .. })
-                    | Operation::Exit(ExitOp::Prepare { .. })))
+            // Binding a Future splits nothing: its cache duty stays in the owner state (D12).
+            let binds = matches!(op, Operation::Lexical(LexicalOp::Bind { .. } | LexicalOp::Rebind { .. }));
+            if module.profile == Profile::High && (partitions_inputs || binds || matches!(op,
+                Operation::Lexical(LexicalOp::Stage { .. }) | Operation::Exit(ExitOp::Prepare { .. })))
+                // A builtin capability (Atomic) holds no obligation, yet elaboration partitions it. So does a
+                // deps-carrying reference offered to an owning call or bound (the driver's `managed`), such as
+                // a role value with plain implementers or an object holding one: its checked scope.split can
+                // fail (#703). An offered `fn` value is left out: own elides the offer of a closure without
+                // deps (`may_offer`), which this prediction cannot see.
                 && cfg::operation_uses(op, body).is_ok_and(|uses| uses.iter().any(|operand| {
-                    body.values.get(operand.value).is_ok_and(|value| types[&value.ty].may_own())
+                    body.values.get(operand.value).is_ok_and(|value| {
+                        let callable = matches!(module.types.get(value.ty), Ok(Type::Fn(_)));
+                        let reference = types[&value.ty].capabilities
+                            || !callable && types[&value.ty].references && (partitions_inputs || binds);
+                        (types[&value.ty].may_own() || reference)
+                            && !(binds && futures::is_future(module, value.ty))
+                    })
                 })) {
                 normal::failures(&mut summary.contract.failures, &[FailureKind::Program]);
             }
@@ -323,6 +339,12 @@ impl Universe {
                 summary.contract.async_destroy |= effects.suspends;
             }
         }
+        if declaration.attrs.contains(&FunctionAttr::Async) {
+            // The body of an async action may suspend, and its final successful
+            // exit delivers deferred cancellation (D18).
+            summary.contract.suspends = true;
+            normal::failures(&mut summary.contract.failures, &[FailureKind::Cancelled]);
+        }
         normal::normalize(&mut summary, budget)?;
         Ok(BodyInference { summary, replacements })
     }
@@ -397,7 +419,11 @@ impl Universe {
                         // selected field alias into retention of its container.
                     }
                 }
-                if !relation.fresh.is_empty() {
+                // Creating a cold Future gives its owner the duty ServiceOf{future, Cache} (D12), a fresh
+                // family named the way an identity is (D25.1): a returned Future carries it to the caller.
+                let creates = matches!(op, Operation::Call(CallOp::Direct { function: callee, .. })
+                    if futures::is_async(module, *callee));
+                if !relation.fresh.is_empty() || creates {
                     budget.work(body.keys.len() + body.insts.len() + body.blocks.len())?;
                     result.fresh.push(site.origin(body, index, self.strides[&function]));
                     result.provenance = relation.provenance;
@@ -483,9 +509,11 @@ impl Universe {
         };
         for (index, (result, ty)) in results.iter_mut().zip(result_types).enumerate() {
             if let Some(facts) = types.get(&ty) {
-                if !facts.may_own() {
+                // A construction with deps but no obligation keeps the relation to the fields it retains, and is
+                // no fresh identity (OIR-2 §3.2; P2.4 §4.8).
+                if !facts.may_own() && !(facts.references && created) {
                     *result = normal::empty_relation();
-                } else if created {
+                } else if created && facts.may_own() {
                     budget.work(body.keys.len() + body.insts.len() + body.blocks.len())?;
                     result.fresh.push(site.origin(body, index, self.strides[&function]));
                 }
@@ -541,12 +569,17 @@ fn retain_inputs(
         items.push(selection);
         effect.retention = Some(SummarySelection::Union(normal::selections(&items, budget)?));
         effect.deps.extend_from_slice(&relation.external_deps);
-        if effect.destination != TransferDestination::None && effect.destination != destination {
-            return Err(budget.fail(OwnDiagnosticKind::IncompatibleDestinationJoin, format!(
-                "parameter {parameter}: {:?} conflicts with {destination:?}", effect.destination,
-            )));
-        }
-        effect.destination = destination.clone();
+        effect.destination = match (&effect.destination, &destination) {
+            (TransferDestination::None, _) => destination.clone(),
+            (old, new) if old == new => destination.clone(),
+            // A cold Future that retains the input in its cache and is returned takes the
+            // input along with its cache duty (OIR-2 §10.1, C-4): the input reaches the result.
+            (TransferDestination::Cache, TransferDestination::Result)
+            | (TransferDestination::Result, TransferDestination::Cache) => TransferDestination::Result,
+            (old, _) => return Err(budget.fail(OwnDiagnosticKind::IncompatibleDestinationJoin, format!(
+                "parameter {parameter}: {old:?} conflicts with {destination:?}",
+            ))),
+        };
     }
     Ok(())
 }

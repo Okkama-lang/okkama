@@ -1,7 +1,7 @@
 //! Relocation of verified Low cleanup evidence. No runtime signatures are invented here.
 use super::*;
 
-fn mask(effects: &[o::FailureKind]) -> Result<u32, GenerateError> {
+pub(super) fn mask(effects: &[o::FailureKind]) -> Result<u32, GenerateError> {
     effects.iter().try_fold(0, |bits, kind| Ok(bits | match kind {
         o::FailureKind::Thrown => 1,
         o::FailureKind::Program => 2,
@@ -9,6 +9,16 @@ fn mask(effects: &[o::FailureKind]) -> Result<u32, GenerateError> {
         o::FailureKind::Native => 8,
         _ => return Err(error("cancellation is outside P1")),
     }))
+}
+
+/// The D18 envelope of a close: its failure kinds, and `ENVELOPE_CANCEL` when the close delivers a deferred
+/// cancellation (`cancel=true`, the final exit of an async body). No close suspends in 0.6.0 (D20: no settle
+/// waits); a suspending close step is the async destroy and async defer slices.
+pub(super) fn envelope(effects: &o::ScopeEffectEnvelope) -> Result<u32, GenerateError> {
+    if effects.suspends {
+        return Err(later("suspending close (async destroy or async defer)"));
+    }
+    Ok(mask(&effects.failures)? | if effects.cancel { s::ENVELOPE_CANCEL } else { 0 })
 }
 
 pub(super) fn entry_contract(module: &o::Module, f: &o::Function) -> Result<s::EntryContract, GenerateError> {
@@ -40,9 +50,13 @@ pub(super) fn entry_contract(module: &o::Module, f: &o::Function) -> Result<s::E
             o::FunctionAttr::Extern(name) | o::FunctionAttr::Intrinsic { name, .. } => Some(name.clone()),
             _ => None,
         }),
+        // A singleton result is the fresh identity itself; a managed array of fresh elements is not.
         fresh_singleton: summary.is_some_and(|summary| matches!(summary.results.as_slice(), [result]
             if result.fresh.len() == 1 && result.aliases.is_empty()
-                && result.provenance == o::AdmissionProvenance::UnboundResult)),
+                && result.provenance == o::AdmissionProvenance::UnboundResult))
+            && f.signature.results.iter().any(|&ty| {
+                matches!(kind(module, ty), Ok(P::Value(s::Type::Object(_) | s::Type::Successor(_))))
+            }),
         failures: mask(&summary.map_or(&[][..], |summary| summary.contract.failures.as_slice())
             .iter().copied().filter(|kind| *kind != o::FailureKind::Cancelled).collect::<Vec<_>>())?,
         destroy: f.attrs.iter().find_map(|attr| match attr {
@@ -160,8 +174,28 @@ impl Emitter<'_> {
             ScopeTransfer { states, selection } => {
                 let mut arguments = vec![A::Flag(matches!(states, o::TransferStates::Between { .. }))];
                 arguments.extend(states.values().into_iter().map(location).collect::<Result<Vec<_>, _>>()?);
+                // An admissible selection moves only what the source admitted (TRANSFER_ADMISSION).
+                let admissible = matches!(self.body.selections.get(*selection)?, o::SelectionExpr::Admissible(_));
                 arguments.push(A::Selection(self.selection(*selection)?));
+                if admissible {
+                    arguments.push(A::Flag(true));
+                }
                 (O::ScopeTransfer, arguments)
+            }
+            Dynamic { state, packet, target, reason, protocol } => {
+                let kind = super::protocol(self.module, *protocol)?;
+                let expected = match kind {
+                    s::Protocol::Closure => o::DynamicReason::Closure,
+                    s::Protocol::Any => o::DynamicReason::Any,
+                };
+                let scope = match self.module.types.get(self.body.values.get(*state)?.ty)? {
+                    o::Type::Service(o::ServiceType::Scope(scope)) => Some(*scope),
+                    _ => None,
+                };
+                if *reason != expected || scope != Some(*target) {
+                    return Err(error("dynamic transfer reason, protocol or target scope mismatch"));
+                }
+                (O::OwnDynamic, vec![A::Protocol(kind), location(*state)?, location(*packet)?])
             }
             _ => return Err(later(&format!("ownership operation {op:?} outside synchronous P1 transport"))),
         })
@@ -179,17 +213,24 @@ impl Emitter<'_> {
                 o::CleanupSource::Scope(scope) => scope.as_u32(),
                 o::CleanupSource::Packet(boundary) => self.boundary(boundary)?,
             };
-            self.result.proofs.envelopes.push(s::Envelope { failures: mask(&close.effects.failures)? });
+            self.result.proofs.envelopes.push(s::Envelope { failures: envelope(&close.effects)? });
             self.result.proofs.closes.push(s::CloseContract {
                 begin_pc: instructions[&begin], boundary, reserve: close.reserve,
                 active_failure: close.active_failure, envelope: id.as_u32(),
             });
         }
         for (_, schedule) in self.body.cleanup.schedules.iter() {
-            if !schedule.holders.is_empty() || schedule.dictionary.is_some() || schedule.protocol.is_some() {
-                return Err(error("nonempty D16 is outside P1"));
+            // A static D16 inventory of duty tokens under the Services protocol; the dynamic inventory is D25.
+            if schedule.dictionary.is_some() {
+                return Err(later("dynamic service inventory (D25)"));
             }
-            self.result.proofs.schedules.push(s::Schedule { services: vec![] });
+            match schedule.protocol {
+                Some(protocol) => self.services(protocol)?,
+                None if schedule.holders.is_empty() => {}
+                None => return Err(error("a nonempty service schedule needs its protocol")),
+            }
+            let services = schedule.holders.iter().map(|&duty| self.loc(duty)).collect::<Result<_, _>>()?;
+            self.result.proofs.schedules.push(s::Schedule { services });
         }
         let site = |site: &o::HighOperationSite| match site {
             o::HighOperationSite::Instruction(id) => instructions[id],
@@ -257,15 +298,22 @@ impl Emitter<'_> {
             });
         }
         for (_, root) in self.body.cleanup.roots.iter() {
-            if root.through_suspend {
-                return Err(error("suspension roots are outside P1"));
+            // The roots of a suspension site are the roots before its operation; SPB_ROOTS_SUSPEND checks them.
+            if root.through_suspend && !self.suspension_site(&root.boundary) {
+                return Err(error("through-suspend roots outside a suspension site"));
             }
             let (pc, after) = match root.boundary {
                 o::RootBoundary::BeforeInstruction(id) => (instructions[&id], false),
                 o::RootBoundary::AfterInstruction(id) => {
                     match &self.body.insts.get(id)?.op {
                         o::Operation::Core(o::CoreOp::RangeLen { .. }) => (instructions[&id] + 2, true),
+                        // After the completing write, its empty packet and the admission.
+                        o::Operation::Core(o::CoreOp::ObjInit { completion: Some(_), .. }) => {
+                            (instructions[&id] + 2, true)
+                        }
                         o::Operation::Lexical(o::LexicalOp::DeferRegister { .. }) => (instructions[&id], false),
+                        // An expanded value (an action value, a cap with a packet) exists after its last step.
+                        op if super::expansion(op) > 1 => (instructions[&id] + super::expansion(op) - 1, true),
                         // An evaluate has no post state: its result exists where the normal outcome lands.
                         op if super::fallible_scalar(op) => {
                             let raise = self.body.blocks.iter().any(|(_, block)| {
@@ -308,6 +356,13 @@ impl Emitter<'_> {
             SettleEmpty { cleanup, schedule } => {
                 (O::CleanupSettle, vec![loc(*cleanup)?, A::Schedule(schedule.as_u32())])
             }
+            // One duty of the close's schedule (D16, D24.2); in 0.6.0 no settle waits, so no step suspends.
+            Settle { cleanup, holder, protocol } => {
+                self.services(*protocol)?;
+                let schedule = self.schedule_of(*cleanup, *holder)?;
+                (O::CleanupSettle, vec![loc(*cleanup)?, A::Schedule(schedule), loc(*holder)?])
+            }
+            DeliverCancel { cleanup } => (O::CleanupDeliverCancel, vec![loc(*cleanup)?]),
             Plan { cleanup, plan } => (O::CleanupPlan, vec![loc(*cleanup)?, A::Plan(plan.as_u32())]),
             Destroy { cleanup, key } => (O::CleanupDestroy, vec![loc(*cleanup)?, loc(*key)?]),
             DestroyDirect { cleanup, identity, descriptor, destroy } => {
@@ -323,7 +378,10 @@ impl Emitter<'_> {
             Finish { cleanup } => (O::CleanupFinish, vec![loc(*cleanup)?]),
             _ => return Err(error("unsupported P1 cleanup/service operation")),
         };
-        op.cleanup_abi().ok_or_else(|| error("cleanup operation has no shared runtime ABI"))?;
+        // The async helpers (Champ draft 3 §14.4) carry their class instead; they enter the helper table with V8.
+        if op.cleanup_abi().is_none() && op.helper_class().is_none() {
+            return Err(error("cleanup operation has no shared runtime ABI"));
+        }
         Ok(s::Instruction::Champ { op, arguments, flow: s::Flow::Next(results.iter()
             .map(|&value| self.loc(value)).collect::<Result<_, _>>()?) })
     }
@@ -393,7 +451,8 @@ impl Emitter<'_> {
                 let contract = self.body.cleanup.closes.get(*close)?;
                 context.reserve = contract.reserve;
                 context.active_failure = contract.active_failure;
-                context.may_fail = !contract.effects.failures.is_empty();
+                // A delivered deferred cancellation fails the close with Cancelled (D18).
+                context.may_fail = envelope(&contract.effects)? != 0;
                 let args = vec![loc(*closed)?, loc(*failure)?, loc(*exit)?, A::Flag(context.reserve),
                     A::Flag(context.active_failure), A::Flag(context.may_fail)];
                 let edges = [(s::Tag::Success, o::Outcome::ExitSuccess, success),
@@ -461,7 +520,18 @@ impl Emitter<'_> {
             }
             return Ok(s::Instruction::Br(edge));
         }
+        let mut variant = None;
         let (declaration, inputs, packet, construction, op, immediate, ty) = match op {
+            o::Operation::Core(o::CoreOp::VariantNew { ty, case, fields, packet: Some(packet) })
+                if let s::Type::Variant(declared) = translate_type(self.module, *ty)? =>
+            {
+                let object = *self.objects[declared as usize].variant_cases.get(*case as usize)
+                    .ok_or_else(|| error("variant construction of an unknown case"))?;
+                variant = Some(declared);
+                let inputs = fields.iter().map(|&value| self.reg(value)).collect::<Result<Vec<_>, _>>()?;
+                (o::DeclId::from_u32(object), inputs, Some(*packet), o::ConstructionStatus::Complete,
+                    s::DataOp::ObjNew, s::Immediate::Object(object), s::Type::Object(object))
+            }
             o::Operation::Core(o::CoreOp::VariantNew { ty, case: 0, fields, packet }) => {
                 let s::Type::Object(id) = translate_type(self.module, *ty)? else {
                     return Err(error("variant construction requires a single plain Error case"));
@@ -538,12 +608,21 @@ impl Emitter<'_> {
             self.result.code.push(s::Instruction::Champ { op: O::OwnMove,
                 arguments: vec![A::Location(committed)], flow: s::Flow::Next(vec![joined]) });
         }
+        // The case object is the variant value, moved into the variant type.
+        let value = match variant {
+            Some(declared) => {
+                let moved = fresh(&mut self.result, s::Type::Variant(declared))?;
+                self.result.code.push(data(s::DataOp::Move, vec![object], moved, s::Immediate::None));
+                moved
+            }
+            None => object,
+        };
         let params = &self.body.blocks.get(normal.block)?.params;
         let assignments = params.iter().zip(&normal.args).map(|(&dst, arg)| {
             let source = match *arg {
                 o::EdgeArg::Value(value) => self.loc(value)?,
                 o::EdgeArg::Produced(slot) if slot.outcome == o::Outcome::Normal => match slot.slot {
-                    0 => L::Register(object),
+                    0 => L::Register(value),
                     1 => joined,
                     _ => return Err(error("unexpected construction payload")),
                 },
@@ -572,6 +651,7 @@ impl Emitter<'_> {
                 let instruction = self.body.insts.get(id)?;
                 let pc = instructions[&id];
                 states.insert(pc, active.clone());
+                let before = active.clone();
                 let uses = o::cfg::operation_uses(&instruction.op, self.body)
                     .map_err(|e| error(e.to_string()))?;
                 for operand in uses {
@@ -587,6 +667,11 @@ impl Emitter<'_> {
                 if matches!(instruction.op, o::Operation::Core(o::CoreOp::RangeLen { .. })) {
                     states.insert(pc + 1, active.clone());
                     states.insert(pc + 2, active.clone());
+                }
+                if super::expansion(&instruction.op) == 2 {
+                    // Its first step consumes no service: the second sees the instruction's input state. A
+                    // four-step action value is a construction expansion with its own boundaries below.
+                    states.insert(pc + 1, before);
                 }
                 if super::fallible_scalar(&instruction.op) {
                     // The evaluate consumes no service: its raise block and normal landing see the same state.
@@ -683,10 +768,21 @@ impl Emitter<'_> {
                 self.result.proofs.post_roots.push(s::RootRequirement {
                     pc: pc as u32 + 1, locations: committed_roots.into_iter().collect(),
                 });
-                values.extend(after);
+                values.extend(after.clone());
                 self.result.proofs.post_roots.push(s::RootRequirement {
-                    pc: pc as u32 + 2, locations: values.into_iter().collect(),
+                    pc: pc as u32 + 2, locations: values.clone().into_iter().collect(),
                 });
+                // A variant construction moves the case object into its variant type before the branch.
+                if let Some(s::Instruction::Data { op: s::DataOp::Move, output: Some(moved), .. })
+                    = self.result.code.get(pc + 3)
+                    && matches!(self.result.registers[*moved as usize], s::Type::Variant(_))
+                {
+                    states.insert(pc as u32 + 4, after);
+                    values.insert(L::Register(*moved));
+                    self.result.proofs.roots.push(s::RootRequirement {
+                        pc: pc as u32 + 4, locations: values.into_iter().collect(),
+                    });
+                }
             }
         }
         for pc in 0..self.result.code.len().saturating_sub(1) {
@@ -702,6 +798,36 @@ impl Emitter<'_> {
                 roots.insert(L::Register(object));
                 self.result.proofs.roots.push(s::RootRequirement {
                     pc: pc as u32 + 1, locations: roots.into_iter().collect(),
+                });
+            }
+        }
+        // A completing field write expands to obj.init/own.empty/own.admit. The empty packet has no Low
+        // SSA name, so its state and roots are recorded at the expansion's own boundaries.
+        for pc in 0..self.result.code.len().saturating_sub(2) {
+            if matches!(self.result.code[pc], s::Instruction::Data { op: s::DataOp::ObjInit, .. })
+                && let s::Instruction::Champ { op: O::OwnEmpty, flow: s::Flow::Next(empty), .. }
+                    = &self.result.code[pc + 1]
+                && matches!(self.result.code[pc + 2], s::Instruction::Champ { op: O::OwnAdmit, .. })
+            {
+                let before = states.get(&(pc as u32)).cloned().unwrap_or_default();
+                states.insert(pc as u32 + 1, before.clone());
+                let mut during = before.clone();
+                during.extend(empty);
+                states.insert(pc as u32 + 2, during.clone());
+                let values = self.result.proofs.roots.iter().filter(|root| root.pc == pc as u32)
+                    .flat_map(|root| root.locations.iter().copied()).filter(|loc| matches!(loc, L::Register(_)))
+                    .collect::<BTreeSet<_>>();
+                for (offset, services) in [(1, &before), (2, &during)] {
+                    let mut roots = values.clone();
+                    roots.extend(services);
+                    self.result.proofs.roots.push(s::RootRequirement {
+                        pc: pc as u32 + offset, locations: roots.into_iter().collect(),
+                    });
+                }
+                let mut after = values;
+                after.extend(&during);
+                self.result.proofs.post_roots.push(s::RootRequirement {
+                    pc: pc as u32 + 1, locations: after.into_iter().collect(),
                 });
             }
         }
@@ -728,6 +854,14 @@ impl Emitter<'_> {
                 }
             }
         }
+        // A two-step expansion defines a register its second step reads.
+        for &(pc, object) in &self.expansions {
+            let mut roots = self.result.proofs.roots.iter().filter(|root| root.pc == pc)
+                .flat_map(|root| root.locations.iter().copied()).collect::<BTreeSet<_>>();
+            roots.extend(states.get(&pc).cloned().unwrap_or_default());
+            roots.insert(L::Register(object));
+            self.result.proofs.roots.push(s::RootRequirement { pc: pc + 1, locations: roots.into_iter().collect() });
+        }
         for (&block_id, &pc) in terms {
             if matches!(self.body.blocks.get(block_id)?.term.kind, o::TermKind::Trap { .. }) {
                 states.insert(pc + 1, states.get(&pc).cloned().unwrap_or_default());
@@ -740,6 +874,24 @@ impl Emitter<'_> {
                     pc: pc + 1, locations: roots.into_iter().collect(),
                 });
             }
+        }
+        // A total scalar family invocation (or the payload read of a one-case Error variant) computes into a
+        // register, then branches; neither step touches a service, and the branch roots what the operation
+        // did plus its result.
+        for (&block_id, &pc) in terms {
+            let o::TermKind::InvokeOwn { op, .. } = &self.body.blocks.get(block_id)?.term.kind else { continue };
+            if !super::total_family_operation(op) && super::error_case_get(self.module, self.body, op)?.is_none() {
+                continue;
+            }
+            let before = states.get(&pc).cloned().unwrap_or_default();
+            states.insert(pc + 1, before.clone());
+            let mut roots = self.result.proofs.roots.iter().filter(|root| root.pc == pc)
+                .flat_map(|root| root.locations.iter().copied()).collect::<BTreeSet<_>>();
+            roots.extend(before);
+            if let s::Instruction::Data { output: Some(value), .. } = self.result.code[pc as usize] {
+                roots.insert(L::Register(value));
+            }
+            self.result.proofs.roots.push(s::RootRequirement { pc: pc + 1, locations: roots.into_iter().collect() });
         }
         for (pc, instruction) in self.result.code.iter().enumerate() {
             if let s::Instruction::Champ { op: O::OwnSplit | O::ExitReplace, arguments, .. } = instruction {

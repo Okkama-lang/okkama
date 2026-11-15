@@ -8,6 +8,156 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **`once let` keeps plain closures, plain role values and native handles on the OIR-2 path (#717).**
+  Bible §13.13: a once value must not retain a resource, and a closure or role value is allowed when it
+  cannot retain one in this program; P2.4 §4.7: a native handle has no Okkama destroy. The OIR-2
+  producer gate, own and the verifier rule B11.1 now count a function type by the closures the module
+  creates (a lambda's captures, a bound action's receiver) and a role by its implementations; caps,
+  `any`, Futures, builtin capabilities and anything with destroy stay refused. A summary path may step
+  into a variant case's payload (T4), and SPB 17 treats a native handle as plain data, still not
+  comparable. `L04.once.keeps-plain-closure-and-role` runs on Champ; the two regex cases stop on #702.
+- **Low cleanup inference is linear in its chains (#687).** The inventory of a scope state indexes the
+  incoming edges once and shares the witness sequences it extends instead of copying them;
+  `L09.collections.ordered-sets` needs 1.8M low steps instead of 14.5M and now stops on #723.
+- **Full verification of large async bodies (#693).** The linearity verifier recorded a value slot once
+  per mutable access between clones; it now keeps each slot once, which takes the low verification of
+  `L08.order.lazy-branches` from 114M to 79M steps. The full verifier (the gate profile) gets a measured
+  limit of 120M steps; structural builds keep 50M.
+- **Closure-dense programs compile and load on Champ in seconds (#701).**
+  The SPB 17 allocation checker kept one `BTreeSet` per frame slot, cloned
+  it at every visit and rebuilt every slot on every edge; a 940-instruction
+  `main` with 69 slots and nested loops took 2 s per check in a debug build,
+  and one `okkama run` checked each function five or six times (the
+  producer, the pipeline, the decoder, the runtime, its cleanup-plan load,
+  the JIT). The checker now keeps sorted vectors, runs an edge's copies by
+  reference and visits in reverse postorder (same verdicts, same budgets),
+  and a program passes `verify_load` once in the compiler and once in the
+  runtime. `L05.reduce.accumulator-in-place`, `L05.variants.search`,
+  `L04.roles.contextual-wrap`, `L07.destroy.branch-scope` and
+  `L04.invariant.early-self-in-blocks` no longer time out on Champ (debug
+  build: 19–73 s before, 5.6–11.4 s after). `L09.compare.failing-order-stops-the-sort`
+  still waits for an O(n log n) sort (#678).
+  `OKKAMA_PROFILE_PIPELINE=1` prints the OIR-2 pipeline's per-stage wall
+  times on stderr.
+- **Module constants on Champ (#709).** A `const` whose value is an array or a
+  map (an OIR-2 global with an init function) had no SPB 17 layout ("unsupported
+  declaration app.const.PRIMES"). SPB 17 gains a globals table: each constant
+  is closed plain data written as data (constants, enum cases, arrays and maps
+  of earlier data, children first), read by the new data operation
+  `global.get` (wire 95, `Immediate::Global`). The loader checks the table with
+  the new rules `GLOBAL_TYPE` (closed plain data, last datum is the value),
+  `GLOBAL_DATA` (each datum builds its declared type from earlier data) and
+  `GLOBAL_GET` (an existing constant, read as its type). Champ builds every
+  constant once before the program runs and keeps it as a runtime constant;
+  a read is the word itself. `L06.const.values` and
+  `L05.literal.empty-collections` pass on Champ.
+
+- **Champ indexes byte arrays (#703).** `bytes[i]` on an `@byte` value stopped
+  SPB 17 generation ("array.get requires a certified plain array"): `array.get`
+  took only the plain array shape. The loader now admits a byte array receiver
+  under `ARRAY_GET_OPERANDS` (its element is a byte, from the receiver's
+  declared type), and Champ reads the packed byte in place, with Tomato's
+  "Array index out of bounds" outside it. Two further gaps behind the same
+  cases are closed: `variant.tag` and `variant.get` of a one-case Error
+  variant (which SPB 17 represents by its case object) become a constant 0 and
+  a field read, and own's summaries declare the program failure of the
+  `scope.split` it emits for a deps-carrying reference offered to an owning
+  call or bound (a role value with plain implementers or an object holding
+  one, not only an Atomic), which `ENTRY_FAILURE_MASK` required. `L05.array.replaced`, `L09.encoding.hex`,
+  `.quoted-printable`, `.utf-codecs`, `L09.random.pcg32-reproducible`,
+  `L09.uuid.values`, `L10.stdin.chunks`, `.for-lines` and `.lines` pass on
+  Champ.
+- **Champ runs Error enums with payloads (#705).** The P1 contract of
+  `Error.text` admitted only Error enums and single-case payloads of strings,
+  ints and bools, while codegen emits a case without payload as a case object
+  with no storage, and payloads may be any scalar, a plain enum or another
+  Error variant: `L07.catch-pattern.cases-and-types`,
+  `L07.error-enum.text-escaping` and `L07.error-enum.uncaught` stopped at load
+  with `invalid P1 plain Error layout`. The contract now admits exactly the
+  layouts the text can show, a plain enum carries its case texts
+  (`enum_names`, rule `ENUM_NAMES`), and `Error.text` writes strings as Okkama
+  literals and enums and nested errors by their texts, as Tomato does. Every
+  Error variant is an SPB 17 variant of its case objects: `catch` of the
+  variant takes each of its cases, and its values are thrown and widened to
+  `Error` (`CATCH_TYPE`, `FAIL_OPERAND`, `move`). `L09.csv.rows-and-round-trip`
+  now passes these rules and stops later, at a dead unwind landing of a total
+  construction (see the ticket).
+- **`catch e is NativeFailure` on the OIR-2 → SPB 17 → Champ path (#673).**
+  The language spec (9.5) admits `Error`, an error enum or the system
+  `NativeFailure` as a catch type, but the OIR-2 lowering, the OIR verifier
+  (T1), the SPB 17 loader (`CATCH_TYPE`) and Champ's private descriptor all
+  refused the system object. The lowering now declares it (four `str`
+  fields; its readers are methods, `text()` is the message as in Tomato),
+  the verifier and the loader admit exactly that declaration, and Champ
+  gives native failure payloads the declared descriptor.
+  `L10.random.secure-invariants` passes on Champ; the json, regex and pcg32
+  natives cases now stop on #705, #707, #717 and #703.
+- **Champ compares unbound raw scalar fields as Tomato does (#713).** The
+  undef placeholder of a float, bool, byte or char field is Tomato's
+  `UNBOUND_RAW` marker instead of the zero word, so comparing an object
+  with such an unbound field fails with "cannot compare unbound object
+  fields" instead of reading it as bound.
+- **Four single blockers of the wave-4 Champ run (#710).** An `Atomic` of a
+  float, char or rat array has its registered specialization (P2.4 §4.8);
+  a literal `if` whose other arm holds a collection the join's empty type
+  cannot take passes an empty collection of that type (the arm never runs);
+  natives take and return float arrays; an awaited role value carries the
+  await's deps in own. The loader admits `val.eq` of two values of one
+  scalar type (OIR-1 §16.3) and never-level empty arrays retagged to a
+  deeper shape. `L02.equality.signed-zero-composite`,
+  `L05.choice.empty-collections` and `L09.statistics.exact-samples` pass on
+  Champ; the other four cases stop on #706, #687, #717 and #718.
+
+- **Own never indexes a missing scope state (#672).** A constructor that
+  stores a field which carries deps but holds no obligation (a role whose
+  implementers are plain, as in `L09.math.aggregates` and `L09.time.zones`)
+  sits in an elided action scope; own panicked on `scopes[&action]` before
+  wave 2 stopped staging such values. Every remaining lookup of a scope
+  state or of scope facts in the own driver now reports an `InvalidFlow`
+  diagnostic naming the function and site instead of panicking.
+
+- **Champ constructs objects with an Atomic field, and every Cell (#671,
+  #686).** Own classified a builtin capability without `destroy` (Atomic) as
+  a service obligation, so a holder such as `Cell` or an object with an
+  `Atomic` field got a fresh creation summary, while the SPB 17 layout (in
+  line with P2.4 §4.8: close is explicit, a read returns a reference with
+  deps) gives such a holder no identity; the loader then refused the
+  constructor with `FRESH_PACKET`. Own now treats the capability as a
+  deps-carrying reference with no obligation, and a function that
+  partitions one declares the program failure of its `scope.split`
+  (`ENTRY_FAILURE_MASK`). The loader rules are unchanged.
+- **Char conversions on the OIR-2 → SPB 17 → Champ path (#679).** `c.code()`,
+  `char(n)`, `string(c)` and `c.string()` stopped the OIR-2 producer: `cvt`
+  had no char kind. OIR-2 `cvt` now takes char (char → int and char → str
+  total; int → char fails outside 0..0x10FFFF and on surrogates with Tomato's
+  message "char needs a Unicode scalar value (0..0x10FFFF, not a
+  surrogate)"); SPB 17 `Convert` admits the same three pairs, and Champ and
+  its JIT run them with Tomato's semantics. `s.characters()` reaches SPB 17
+  as `str.ext` sub-code 16 (`StrCharacters`, appended; no existing id
+  changed). Cases `L01.lex.crlf.raw-string-keeps-cr`,
+  `L02.char.code-round-trip`, `L02.char.string-cast` and
+  `L02.char.surrogate-rejected` pass on Champ; `L06.const.values` now passes
+  own and low and stops in the SPB 17 layout on its collection constants.
+- **The OIR-2 High verifier admits `fut.done`, `fut.cancel` and `fut.cancelled`
+  (#688).** Rule H6 rejected them although plan P2.5 §3.1 lowers
+  `f.done()`, `f.cancel()` and `f.cancelled()` to these operations in High
+  (spec §10.1); a program using them stopped in `verify_high`. H6 still
+  rejects every other Future ownership or state operation in High.
+- **The SPB 17 loader tracks a successor's must-use permission through calls
+  and the exit protocol (#680).** A successor result of a call that cannot
+  fail (`invoke.observe` with a plain next flow) could be dropped, and taking
+  it was rejected as "already taken"; a produced successor that an outcome
+  edge left unassigned was dropped silently; `ret.own` and `ret.defer`
+  checked nothing. Now `exit.prepare` (and `exit.replace`) move the value's
+  permission into the pending exit, cleanup and `exit.dispatch` carry it, and
+  `exit.commit` hands it only to a successor-typed result; `ret.own`/`ret.defer`
+  return live successors and leave none behind. On a failure path (`raise`,
+  an unwind dispatch, `exit.abort`) the permission may lapse: must-use is a
+  normal-path promise. The successor rules report stable codes
+  `SUCCESSOR_TAKEN`, `SUCCESSOR_DROPPED`, `SUCCESSOR_FORGED` and
+  `SUCCESSOR_JOIN` instead of `SPB_STRUCTURE`. The SPB 17 code generator no
+  longer discharges a permission it already moved into a pending exit.
+
 - **Tomato delivers a cancellation to a nested frame resumed by the scheduler
   (#670).** A task awaiting its own async call, whose frame's awaited future
   had settled and queued it, ignored a cancellation requested before that
@@ -16,6 +166,18 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   stopped with "no task can make progress"). The frame's next `await` now
   raises `Cancelled`, once, and it unwinds through the frame and the task.
   New case `L08.cancel.nested-frame-next-await`.
+- **Champ correctness, ten conformance cases (#677).** On the OIR-2 → SPB 17
+  → Champ path: a `raise` inside a try reaches the enclosing catch (a
+  non-matching catch or a bare rethrow in a nested try no longer escapes);
+  a match on a catch payload and on payload-free Error enums lowers; a
+  multi-file root keeps every file and `std.…` paths resolve; integer
+  literals beyond 63 bits load; a program without `main` fails with
+  `RuntimeError: Program requires main() declaration`; a constructor may
+  branch before binding its fields; compiled callees are called directly and
+  self tail calls run as loops, so a million-level recursion and ten million
+  tail calls fit the stack (#664). `okkama run` and `okkama build` no longer
+  parse `test` bodies outside test mode (§14), as imports and OCS already
+  did.
 
 - **Tomato keeps an await's outcome when the cancellation comes after it
   (#663).** A task whose awaited future had settled, and which was only
@@ -100,6 +262,54 @@ for mutable synchronous test values and `Atomic` for async code or object and
 fake fields; role fakes and their ordinary typed fields remain available.
 
 ### Added
+
+- **OIR-2 low settles the dynamic transfers of open calls and `any` (#683).**
+  `lower_cleanup` and the Low verifier now accept `own.dynamic` with the
+  registered open Closure protocol (reason `closure`) and with the
+  synchronous `any` protocol (reason `any`), not only the storage merge
+  protocol. Their entries join the scope inventory and the common cleanup
+  executor releases them in serial order through their runtime descriptors
+  (`oir.sync_closure.cleanup`, `oir.any.cleanup`). Reserve and failure
+  dispatch follow the storage merge entries, and no plan is direct without
+  order evidence. The dynamic site stays counted (B7.1). Eleven C3b
+  open-call cases now pass own and Low and stop in SPB 17, which has no
+  `fn` values, `fn.call`, `own.dynamic` or protocol table yet (#676).
+  `L09.collections.ordered-sets` hits the low step budget (#687).
+
+- **Champ: int, byte, float, rat and str operations in SPB 17 (#675).**
+  SPB 17 now has five operation families, one wire code each with a
+  sub-code: `int.ext` (14), `byte.ext` (15), `float.ext` (16), `rat.ext`
+  (17) and `str.ext` (18). They cover the bit operations, shifts and
+  rotations, the bit actions, `abs`/`sign`, float arithmetic, `pow` and
+  `sqrt`, exact rat arithmetic with numerator/denominator, and slice, split,
+  replace, trim, chomp, case, repeat, find, starts/ends and utf8. Ints stay
+  exact beyond 64 bits, constants included, and rat constants have their own
+  form. The operations that can fail (shift and rotation counts, ints outside
+  signed 64 bits in bit operations, non-finite floats, zero divisors, slice
+  bounds, a negative repeat count) go through S2 with explicit outcomes and
+  the program-failure mask. The new loader rules are `SCALAR_OP_TYPE` and
+  `CONST_RAT`. Champ runs the operations with Tomato's semantics, which are
+  now shared functions in `sparrow-core::ops`, through one JIT helper,
+  `champ_machine_scalar`; float neg/abs and byte and/or/xor/not are inline.
+  The producer lowers `byte >>> int` as `byte.shr`, which takes the int count,
+  and lowers an `any` coercion to `any.box`. Of the 47 cases blocked on these
+  operations, 38 now pass on Champ (`champ_cases_scalars`). Four pass own and
+  low and then stop on collection operations. Five wait on char conversions
+  in OIR-2 (#679).
+- **OIR-2: open action invocation and `any` in the producer (#569 C3b, C6).**
+  An invocation of an action value is open exactly where own sees no finite
+  origin in the invoking body (a parameter, a produced result, a field read,
+  the block parameters they reach); the producer now gives each such call the
+  registered open sync callable ABI (the Closure protocol, one cleanup
+  intrinsic per `fn` type and a `type.of` runtime descriptor) instead of a
+  diagnostic, and known invocations stay precise. The runtime catalogue keys
+  its cleanup intrinsics by type, so a module can invoke several open `fn`
+  types, and registers `oir.any.cleanup`. `any` boundaries lower to `any.box`
+  (element by element in heterogeneous literals, never a box of a box), and
+  every function whose values reach `any` binds a checked runtime descriptor.
+  An untagged `[]`/`[:]` arm of an `if`/`match` takes the join's collection
+  type. Eleven `any` cases reach Low; the open-call cases reach own and stop in
+  Low, which does not yet take the Closure transfer of an open call result.
 
 - **OIR-2 core (#563).** A new crate, `okkama-oir` (std only, re-exported by
   the compiler as `oir2`), holds the 0.6.0 intermediate representation with
@@ -248,6 +458,37 @@ fake fields; role fakes and their ordinary typed fields remain available.
   or ticketed (#653–#656, #666–#670).
 
 
+- **Champ coverage, wave 4 (#601, #622, #676, #689, #692, #695–#700, #711, #712).**
+  On Champ the conformance suite rose from 673 to 908 of 1040 cases (CI on
+  616048635), and no case fails on either engine.
+  - **Async, wave 1, end to end.** `async main` awaiting plain async actions
+    runs high → own → coro → low → SPB 17 → Champ JIT: the coro pass with
+    D21 frame layouts and continuations, low with the D18 cancel envelope and
+    conditional delivery, SPB 17 opcodes 64–77 and their loader rules, the
+    Champ Future record (a Tomato frame with cache, slots and scope area),
+    the root driver, and the JIT for async bodies (resume dispatch, frame
+    slots, S-class helpers). All eight W1 cases pass, normally and under GC
+    stress (V1–V10).
+  - **Async, wave 2.** Cold Futures take their fresh resource inputs and own
+    their outcomes; a Future or a view escapes through `cache.rehome` to a
+    scope or to the caller; a temporary await takes the cached outcome
+    (`await.take` with its unique-cache proof); resources, defers and pending
+    exits cross suspension points; cancellation is delivered at awaits, and a
+    nested close keeps it for the next one (R1, R2, R4, R5, K1).
+  - **Roles, closures and `any`.** Dispatch tables, action values as layouts,
+    open calls through the Closure protocol and `any` boxes run on Champ;
+    managed collections of roles and `any` values that reach resources
+    (#676, #689, #711).
+  - **Rules.** Two audits of wave 4 and of the async verifiers were fixed
+    (#692, #695); async bodies need their D21 layout in coro and low (#696);
+    a scope close takes only its own service duties (#684); the full
+    verifier models which creations can hold an obligation (#700);
+    `scope.transfer` moves only admitted identities (#697); shielding is a
+    property of every close, and `cleanup.shield` is gone (#690).
+  - **Parity.** Champ's failure messages match Tomato's (#698, #712, #713);
+    `catch e is Cancelled` works on Champ (#724); and, as on Tomato, a
+    cancellation still pending at a task's final exit keeps the result, while
+    a `defer await` of the final cleanup is interrupted by it.
 - **Champ coverage, wave 3 (#569, #601, #645, #654, #666–#668).** On
   Champ the conformance suite rose from 665 to 673 of 1040 cases, and no
   case fails on both engines.

@@ -11,12 +11,16 @@ mod evidence;
 pub use evidence::{static_selections, plain_inputs, plain_results, redundant_admission_filters};
 mod automaton;
 pub use automaton::infer_plan_reserves;
+mod suspension;
+mod take;
 
 pub use allocation::{AllocatedRoot, Allocation, Copy, CopySource, allocate, check_allocation, live_locations};
 pub use codec::{assemble, decode, disassemble, encode};
-pub use registry::{CallAbi, CleanupAbi, Helper, MachineArgument, Opcode, ProducedType, ResultContext, Tag};
+pub use registry::{CallAbi, CleanupAbi, Helper, HelperClass, MachineArgument, Opcode, ProducedType, ResultContext};
+pub use registry::Tag;
 pub use registry::{helper, HELPER_TABLE, HELPER_ALLOCATES, HELPER_COLLECTS, HELPER_REENTERS, HELPER_UNWINDS, HELPER_STOPS};
-pub use verify::{verify, result_context};
+pub use registry::HELPER_SUSPENDS;
+pub use verify::{any_reaches_resource, implementation, result_context, role_reaches_resource, verify};
 pub use load::{ExternalContracts, NoExternalContracts, verify_load, service_states};
 
 pub const VERSION: u16 = 17;
@@ -62,6 +66,50 @@ pub struct Program {
     /// The test profile (§14): the tests in run order. `Some([])` is an empty suite, which the runner
     /// rejects; `None` is a production program. Test operations and test intrinsics need `Some`.
     pub tests: Option<Vec<Test>>,
+    /// Map and builder shapes named by `Type::Map`, `Type::MapBuilder` and `Type::Builder`. An entry refers
+    /// only to earlier entries, so the table is acyclic (`COMPOSITE_ORDER`).
+    pub composites: Vec<Composite>,
+    /// Module constants (`const`, #709), read by `global.get` with `Immediate::Global` (`GLOBAL_GET`).
+    pub globals: Vec<Global>,
+}
+
+/// A module constant: closed plain data (`GLOBAL_TYPE`) written as data, which the runtime builds once
+/// before the program runs. `data` lists its parts children first; the last datum is the value
+/// (`GLOBAL_DATA`). No code runs to build it, so reading it never fails.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Global {
+    pub name: String,
+    pub ty: Type,
+    pub data: Vec<Datum>,
+}
+
+/// One part of a constant with its type. Array and map parts name earlier data by index.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Datum {
+    pub ty: Type,
+    pub value: DatumValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DatumValue {
+    /// A scalar or string constant of type `ty` (no descriptor).
+    Constant(Constant),
+    /// A case of the plain enum `ty`, as `enum.case`.
+    Case(u32),
+    /// The elements of the array or byte array `ty`.
+    Array(Vec<u32>),
+    /// The entries of the map `ty` as key, value, key, value, ...; later equal keys replace the value, as
+    /// `map.new`.
+    Map(Vec<u32>),
+}
+
+/// A collection shape that does not fit inline in `Type`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Composite {
+    /// `map<key, value>`: the key is a key type (`MAP_KEY`), the value closed plain data (`MAP_PLAIN`).
+    Map { key: Type, value: Type },
+    /// A unique array builder whose finished value has type `array` (an `Array` or `Bytes`).
+    Builder { array: Type },
 }
 
 /// One test of the test profile: a `() -> void` observation entry run on a fresh runtime.
@@ -107,6 +155,49 @@ pub struct Object {
     pub name: String,
     pub fields: Vec<Field>,
     pub layout: ObjectRuntimeLayout,
+    /// A role declaration: a placeholder descriptor that names a role type, never an allocated object.
+    pub role: Option<RoleDecl>,
+    /// The roles this object implements, one implementation table per role (`ROLE_IMPL`).
+    pub implements: Vec<RoleImpl>,
+    /// An any box: the one field holds a boxed value, and the descriptor names its type (`ANY_BOX`).
+    pub any_box: bool,
+    /// The case texts (`Enum.case`) of a plain enum, in case order, or empty (`ENUM_NAMES`).
+    pub enum_names: Vec<String>,
+}
+
+/// The slots of a role: each slot's entry ABI and its signature without the receiver.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RoleDecl {
+    pub slots: Vec<RoleSlot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoleSlot {
+    pub name: String,
+    pub entry_abi: EntryAbi,
+    pub params: Vec<Type>,
+    pub results: Vec<Type>,
+}
+
+/// One object's implementation table for one role: the function of every slot, in slot order.
+/// Each function takes the implementing object first, then the slot's parameters.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoleImpl {
+    pub role: u32,
+    pub slots: Vec<u32>,
+}
+
+/// A dynamic call of one role slot. The receiver's object descriptor selects its implementation; only the
+/// listed objects may be dispatched to, every other receiver stops the machine. Every listed implementation
+/// refines the site contract: its failures and retained parameters (language positions, receiver first)
+/// are within `failures` and `retained_params` (`DISPATCH_TARGET`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Dispatch {
+    pub role: u32,
+    pub slot: u32,
+    pub failures: u32,
+    pub retained_params: Vec<u32>,
+    pub targets: Vec<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -141,6 +232,30 @@ pub enum Type {
     Handle(u32),
     Never,
     Descriptor,
+    /// A role value: a reference to an object that implements the role declaration `id` (`Object::role`).
+    Role(u32),
+    /// A role value that still carries a successor's must-use permission (`^Role`).
+    RoleSuccessor(u32),
+    /// A finished map: `Composite::Map` at this index of `Program::composites`.
+    Map(u32),
+    /// A unique map builder whose finished value is `Type::Map` of the same index.
+    MapBuilder(u32),
+    /// A unique array builder: `Composite::Builder` at this index.
+    Builder(u32),
+    /// A Future: a reference to its frame. Its outcome type is `ChampTables::future_results` at this index.
+    Future(u32),
+    /// An `any` value: a reference to an any box (`Object::any_box`), which holds the value in its one
+    /// field and the value's type in its descriptor.
+    Any,
+}
+
+impl Type {
+    /// Words the collector must trace as references (tagged integers are traced separately).
+    pub fn traced(self) -> bool {
+        matches!(self, Self::Error | Self::Bytes | Self::Array(_) | Self::Str | Self::Object(_) | Self::Successor(_)
+            | Self::Failure | Self::Rat | Self::Variant(_) | Self::Handle(_) | Self::Map(_) | Self::MapBuilder(_)
+            | Self::Builder(_) | Self::Future(_) | Self::Role(_) | Self::RoleSuccessor(_) | Self::Any)
+    }
 }
 
 /// A finite array shape, including nested plain arrays. No resource/service leaf is representable.
@@ -158,6 +273,15 @@ pub enum ArrayLeaf {
     Range,
     Bytes,
     Object(u32),
+    Role(u32),
+    Any,
+    Float,
+    Char,
+    Rat,
+    Variant(u32),
+    Map(u32),
+    /// The leaf of an uninferred empty literal: no element value exists.
+    Never,
 }
 
 impl ArrayType {
@@ -171,9 +295,117 @@ impl ArrayType {
                 ArrayLeaf::Range => Type::Range,
                 ArrayLeaf::Bytes => Type::Bytes,
                 ArrayLeaf::Object(id) => Type::Object(id),
+                ArrayLeaf::Role(id) => Type::Role(id),
+                ArrayLeaf::Any => Type::Any,
+                ArrayLeaf::Float => Type::Float,
+                ArrayLeaf::Char => Type::Char,
+                ArrayLeaf::Rat => Type::Rat,
+                ArrayLeaf::Variant(id) => Type::Variant(id),
+                ArrayLeaf::Map(id) => Type::Map(id),
+                ArrayLeaf::Never => Type::Never,
             }),
             depth => Some(Type::Array(Self { depth: depth - 1, ..self })),
         }
+    }
+
+    /// The array whose elements have type `element`; `None` for an element no array leaf represents.
+    /// An array of bytes is `Type::Bytes`, not an array shape.
+    pub fn of(element: Type) -> Option<Type> {
+        let leaf = match element {
+            Type::Int => ArrayLeaf::Int,
+            Type::Bool => ArrayLeaf::Bool,
+            Type::Str => ArrayLeaf::Str,
+            Type::Range => ArrayLeaf::Range,
+            Type::Bytes => ArrayLeaf::Bytes,
+            Type::Object(id) => ArrayLeaf::Object(id),
+            Type::Role(id) => ArrayLeaf::Role(id),
+            Type::Any => ArrayLeaf::Any,
+            Type::Float => ArrayLeaf::Float,
+            Type::Char => ArrayLeaf::Char,
+            Type::Rat => ArrayLeaf::Rat,
+            Type::Variant(id) => ArrayLeaf::Variant(id),
+            Type::Map(id) => ArrayLeaf::Map(id),
+            Type::Never => ArrayLeaf::Never,
+            Type::Byte => return Some(Type::Bytes),
+            Type::Array(shape) => {
+                return shape.depth.checked_add(1).map(|depth| Type::Array(Self { depth, ..shape }));
+            }
+            _ => return None,
+        };
+        Some(Type::Array(Self { leaf, depth: 1 }))
+    }
+}
+
+/// The system `NativeFailure` (language spec 9.5): the payload of a native failure, four plain strings.
+pub const NATIVE_FAILURE: &str = "NativeFailure";
+/// Its fields, in storage order.
+pub const NATIVE_FAILURE_FIELDS: [&str; 4] = ["domain", "code", "operation", "message"];
+
+/// The declaration of the system NativeFailure, the first object of exactly its name and shape: four public
+/// `str` fields in storage order, no cases, roles, handle, destroy or resource. The runtime gives native failure
+/// payloads this descriptor, and `catch` may name it (`CATCH_TYPE`).
+pub fn native_failure(p: &Program) -> Option<u32> {
+    p.objects.iter().position(|object| {
+        let layout = &object.layout;
+        object.name == NATIVE_FAILURE && object.error_cases.is_empty() && object.enum_cases == 0
+            && object.variant_cases.is_empty() && !object.handle && !object.any_box && object.role.is_none()
+            && object.implements.is_empty() && layout.storage_fields == [Type::Str; 4]
+            && !layout.has_destroy && !layout.may_reach_resource && !layout.may_async_destroy
+            && layout.selection_layout.is_empty() && object.fields.len() == NATIVE_FAILURE_FIELDS.len()
+            && object.fields.iter().zip(NATIVE_FAILURE_FIELDS).enumerate().all(|(storage, (field, name))| {
+                field.name == name && field.storage == storage as u32 && !field.once
+            })
+    }).map(|id| id as u32)
+}
+
+/// The system `Cancelled` (#724): the payload a cancellation binds in `catch e is Cancelled`.
+pub const CANCELLED: &str = "Cancelled";
+
+/// The declaration of the system Cancelled, the first object of exactly its name and shape: no fields, cases,
+/// roles, handle, destroy or resource. The runtime gives a caught cancellation an object of this descriptor, and
+/// `catch` may name it (`CATCH_TYPE`).
+pub fn cancelled(p: &Program) -> Option<u32> {
+    p.objects.iter().position(|object| {
+        let layout = &object.layout;
+        object.name == CANCELLED && object.error_cases.is_empty() && object.enum_cases == 0
+            && object.variant_cases.is_empty() && !object.handle && !object.any_box && object.role.is_none()
+            && object.implements.is_empty() && layout.storage_fields.is_empty() && object.fields.is_empty()
+            && !layout.has_destroy && !layout.may_reach_resource && !layout.may_async_destroy
+            && layout.selection_layout.is_empty()
+    }).map(|id| id as u32)
+}
+
+/// Whether a scope.transfer's arguments carry the admission filter (`TRANSFER_ADMISSION`): it moves only the
+/// selected identities its source admitted, and leaves bound, staged and outside identities where they are.
+pub fn transfer_admissible(arguments: &[Argument]) -> bool {
+    matches!(arguments.last(), Some(Argument::Flag(true)))
+        && arguments.iter().any(|argument| matches!(argument, Argument::Selection(_)))
+}
+
+/// A retag of a collection whose leaves cannot exist (an uninferred `[]` or `[:]`): no element is reinterpreted.
+/// The arrays at the never level are empty, so they may become arrays of any deeper shape (`[]` as `@@int`),
+/// while every level above keeps holding arrays; a shallower shape would read an array as a leaf. Byte arrays
+/// have their own representation and are excluded. A map without keys has no values either, but its value type
+/// is kept unless it is `never` too: a value word is never read as another type.
+pub fn never_retag(composites: &[Composite], from: Type, to: Type) -> bool {
+    match (from, to) {
+        (Type::Array(from), Type::Array(to)) => from.leaf == ArrayLeaf::Never && to.depth >= from.depth,
+        (Type::Map(from), Type::Map(to)) => match (composites.get(from as usize), composites.get(to as usize)) {
+            (Some(Composite::Map { key: Type::Never, value: old }), Some(Composite::Map { value: new, .. })) => {
+                *old == Type::Never || old == new
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// The element type of an array or byte array value.
+pub fn element_type(array: Type) -> Option<Type> {
+    match array {
+        Type::Array(shape) => shape.element(),
+        Type::Bytes => Some(Type::Byte),
+        _ => None,
     }
 }
 
@@ -190,6 +422,27 @@ pub enum ServiceKind {
     DestroyBorrow,
     /// Proof position only: zero machine words, not a GC pointer.
     Deps,
+    /// The running async body's frame token (OIR `frame<@f>`): linear, zero words. The frame word itself is
+    /// the activation's entry argument, never a slot.
+    Frame,
+    /// The owner's cache duty of one Future: one word, the Future frame.
+    CacheState,
+    /// A waiter's handle on the Future it awaited, from an await's unwind outcome: one word, the Future frame.
+    TaskState,
+    /// An await receipt (NotStarted 0, Settled 1, Withdrawn 2, ChildCancelled 3): one raw word.
+    Receipt,
+    /// The take capability of one Future (OIR `unique-cache`): linear, zero words. Only `unique_cache.proof`
+    /// produces it and only `await.take` consumes it (`SPB_TAKE_CAPABILITY`).
+    UniqueCache,
+}
+
+impl ServiceKind {
+    /// A linear token: consumed exactly once on every path, never copied.
+    pub fn linear(self) -> bool {
+        matches!(self, Self::Packet | Self::ScopeState | Self::Pending | Self::Cleanup | Self::StableKey
+            | Self::FailureState | Self::ExitState | Self::Frame | Self::CacheState | Self::TaskState | Self::Receipt
+            | Self::UniqueCache)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -234,6 +487,20 @@ pub enum EntryAbi {
     Observation,
     Owned,
     Defer { labels: Vec<DeferLabel> },
+    /// An async body (Champ draft 3 §13): it takes exactly its frame and publishes its outcome through
+    /// `fut.publish`. `layout` indexes `ChampTables::frames`.
+    AsyncBody { layout: u32 },
+    /// An async defer entry (`defer await`, async ABI C-6, draft 3 §11): an async body that `invoke.defer` runs as
+    /// a shielded child. Its success publication continues the caller, its failure unwinds it. It has no
+    /// replacement labels in 0.6.0 (`SPB_ASYNC_DEFER_LABELS` holds by construction).
+    AsyncDefer { layout: u32 },
+}
+
+impl EntryAbi {
+    /// An async body or an async defer entry: it takes exactly its frame and ends in `fut.publish`.
+    pub fn asynchronous(&self) -> bool {
+        matches!(self, Self::AsyncBody { .. } | Self::AsyncDefer { .. })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -292,6 +559,14 @@ pub enum Constant {
     Char(u32),
     /// The IEEE-754 binary64 bit pattern as a decimal u64.
     Float(String),
+    /// An exact rational in lowest terms with a positive denominator.
+    Rat(RatValue),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RatValue {
+    pub numerator: String,
+    pub denominator: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -302,6 +577,18 @@ pub enum Immediate {
     Object(u32),
     Field(u32),
     Updates(Vec<u32>),
+    /// The index of a module constant in `Program::globals`.
+    Global(u32),
+}
+
+/// A checked synchronous dynamic transfer protocol (`own.dynamic`, OIR-2 §6.4, §7.1): the open Closure
+/// protocol of an open action call's result packet, or the `any` protocol of a boxed value's packet. Both
+/// move a packet of unknown retention into the scope inventory after the owner, live-dependency, snapshot
+/// and transferability checks; on failure the packet comes back unaccepted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Protocol {
+    Closure,
+    Any,
 }
 
 /// Operands are typed references, not an untyped helper argument buffer.
@@ -326,6 +613,11 @@ pub enum Argument {
     Kind(ExitKind),
     Registration(u32),
     Destination(ExitDestination),
+    /// A continuation of the function's frame layout (`frame.save`, `frame.resume`).
+    Continuation(u32),
+    Dispatch(Dispatch),
+    /// The protocol of `own.dynamic`.
+    Protocol(Protocol),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -426,10 +718,42 @@ pub enum DataOp {
     ObjGet,
     ObjNext,
     EnumCase,
+    /// The value of a module constant (`Immediate::Global`), built before the program runs.
+    GlobalGet,
     ArrayNew,
     ArrayLen,
     FailSecondary,
     FailCaused,
+    /// A checked conversion of a role value to another role: fails unless the object implements it.
+    RoleNarrow,
+    /// `map.new k0, v0, k1, v1, ...`: later equal keys replace the value and keep the first key word.
+    MapNew,
+    MapLen,
+    MapHas,
+    /// The value under a key; a missing key fails.
+    MapGet,
+    MapKeys,
+    MapValues,
+    /// The key or value at a position in key order; a position outside the map fails.
+    MapKeyAt,
+    MapValueAt,
+    /// The union of maps: the rightmost value wins, the leftmost key word stays.
+    MapMerge,
+    /// The first map without the keys of the others.
+    MapDifference,
+    ArrayConcat,
+    /// The elements' text joined by a separator (string elements only).
+    ArrayJoin,
+    /// `array.slice a, start, end`; bounds outside the array fail.
+    ArraySlice,
+    /// A copy without the element at an index; an index outside the array fails.
+    ArrayRemove,
+    /// A copy with the element at an index replaced; an index outside the array fails.
+    ArrayReplace,
+    /// The first array without the elements equal to an element of the others.
+    ArrayDifference,
+    /// An empty unique builder of the result's builder type.
+    BuilderNew,
     /// Test assertions (`test.ok`, `test.is`, `test.isnt`, `test.fail`) of the test profile. Each
     /// records a failed check in the running case and continues; the bool result says whether the
     /// check held. Outside a running case each fails with a program failure.
@@ -437,6 +761,159 @@ pub enum DataOp {
     TestIs,
     TestIsnt,
     TestFail,
+    // int.ext (wire 14): exact int operations beyond add/sub/mul/mod/neg. Bit operations and shifts take
+    // a signed 64-bit operand and fail outside it; shift and rotation counts fail outside 0..63.
+    IntAnd,
+    IntOr,
+    IntXor,
+    IntShl,
+    IntShr,
+    IntUshr,
+    IntNot,
+    IntAbs,
+    IntSign,
+    IntBitCount,
+    IntLeadingZeros,
+    IntTrailingZeros,
+    IntReverseBits,
+    IntSwapBytes,
+    IntRotl,
+    IntRotr,
+    // byte.ext (wire 15). Shift and rotation counts fail outside 0..7; byte.ushr counts in byte.
+    ByteAnd,
+    ByteOr,
+    ByteXor,
+    ByteShl,
+    ByteShr,
+    ByteUshr,
+    ByteNot,
+    ByteBitCount,
+    ByteLeadingZeros,
+    ByteTrailingZeros,
+    ByteReverseBits,
+    ByteSwapBytes,
+    ByteRotl,
+    ByteRotr,
+    // float.ext (wire 16). A result that is not finite fails, as do a zero divisor and a negative sqrt.
+    FloatAdd,
+    FloatSub,
+    FloatMul,
+    FloatDiv,
+    FloatMod,
+    FloatPow,
+    FloatNeg,
+    FloatAbs,
+    FloatSign,
+    FloatSqrt,
+    // rat.ext (wire 17): exact rationals; a zero divisor fails. Numerator and denominator are decimal text.
+    RatAdd,
+    RatSub,
+    RatMul,
+    RatDiv,
+    RatMod,
+    RatNeg,
+    RatAbs,
+    RatSign,
+    RatNumerator,
+    RatDenominator,
+    // str.ext (wire 18). Slice bounds and a negative repeat count fail.
+    StrSlice,
+    StrSplit,
+    StrReplace,
+    StrReplaceFirst,
+    StrRepeat,
+    StrTrim,
+    StrChomp,
+    StrTrimStart,
+    StrTrimEnd,
+    StrLower,
+    StrUpper,
+    StrFind,
+    StrFindLast,
+    StrStartsWith,
+    StrEndsWith,
+    StrUtf8,
+    /// The code points of a text as an array of char (#679).
+    StrCharacters,
+}
+
+/// The int, byte, float, rat and str families of wire codes 14..=18, in sub-code order. A family's
+/// position in its list is its sub-code; the list never reorders and only grows at its end.
+pub(crate) const SCALAR_FAMILIES: [(u8, &str, &[DataOp]); 5] = {
+    use DataOp::*;
+    [
+        (14, "int.ext", &[IntAnd, IntOr, IntXor, IntShl, IntShr, IntUshr, IntNot, IntAbs, IntSign, IntBitCount,
+            IntLeadingZeros, IntTrailingZeros, IntReverseBits, IntSwapBytes, IntRotl, IntRotr]),
+        (15, "byte.ext", &[ByteAnd, ByteOr, ByteXor, ByteShl, ByteShr, ByteUshr, ByteNot, ByteBitCount,
+            ByteLeadingZeros, ByteTrailingZeros, ByteReverseBits, ByteSwapBytes, ByteRotl, ByteRotr]),
+        (16, "float.ext", &[FloatAdd, FloatSub, FloatMul, FloatDiv, FloatMod, FloatPow, FloatNeg, FloatAbs,
+            FloatSign, FloatSqrt]),
+        (17, "rat.ext", &[RatAdd, RatSub, RatMul, RatDiv, RatMod, RatNeg, RatAbs, RatSign, RatNumerator,
+            RatDenominator]),
+        (18, "str.ext", &[StrSlice, StrSplit, StrReplace, StrReplaceFirst, StrRepeat, StrTrim, StrChomp,
+            StrTrimStart, StrTrimEnd, StrLower, StrUpper, StrFind, StrFindLast, StrStartsWith, StrEndsWith,
+            StrUtf8, StrCharacters]),
+    ]
+};
+
+impl DataOp {
+    /// The wire code and sub-code of an operation of the scalar families (wire codes 14..=18).
+    pub(crate) fn family(self) -> Option<(u8, u32)> {
+        SCALAR_FAMILIES.iter().find_map(|(code, _, ops)| {
+            ops.iter().position(|op| *op == self).map(|sub| (*code, sub as u32))
+        })
+    }
+
+    /// The operation of a scalar family code and sub-code.
+    pub(crate) fn of_family(code: u8, sub: u32) -> Option<Self> {
+        let (_, _, ops) = SCALAR_FAMILIES.iter().find(|(family, _, _)| *family == code)?;
+        ops.get(sub as usize).copied()
+    }
+
+    /// A stable number for a scalar family operation (wire code × 256 + sub-code), which a runtime helper
+    /// receives instead of the operation; `from_scalar_code` inverts it.
+    pub fn scalar_code(self) -> Option<u64> {
+        self.family().map(|(code, sub)| u64::from(code) * 256 + u64::from(sub))
+    }
+
+    pub fn from_scalar_code(code: u64) -> Option<Self> {
+        let family = u8::try_from(code / 256).ok()?;
+        Self::of_family(family, (code % 256) as u32)
+    }
+
+    /// Operand and result types of a scalar family operation (wire codes 14..=18).
+    pub fn scalar_signature(self) -> Option<(&'static [Type], Type)> {
+        use DataOp::*;
+        use Type::{Bool, Byte, Bytes, Float, Int, Rat, Str};
+        const STR_ARRAY: Type = Type::Array(ArrayType { leaf: ArrayLeaf::Str, depth: 1 });
+        const CHAR_ARRAY: Type = Type::Array(ArrayType { leaf: ArrayLeaf::Char, depth: 1 });
+        Some(match self {
+            IntAnd | IntOr | IntXor | IntShl | IntShr | IntUshr | IntRotl | IntRotr => (&[Int, Int], Int),
+            IntNot | IntAbs | IntSign | IntBitCount | IntLeadingZeros | IntTrailingZeros | IntReverseBits
+                | IntSwapBytes => (&[Int], Int),
+            ByteAnd | ByteOr | ByteXor | ByteUshr => (&[Byte, Byte], Byte),
+            ByteShl | ByteShr | ByteRotl | ByteRotr => (&[Byte, Int], Byte),
+            ByteNot | ByteReverseBits | ByteSwapBytes => (&[Byte], Byte),
+            ByteBitCount | ByteLeadingZeros | ByteTrailingZeros => (&[Byte], Int),
+            FloatAdd | FloatSub | FloatMul | FloatDiv | FloatMod | FloatPow => (&[Float, Float], Float),
+            FloatNeg | FloatAbs | FloatSqrt => (&[Float], Float),
+            FloatSign => (&[Float], Int),
+            RatAdd | RatSub | RatMul | RatDiv | RatMod => (&[Rat, Rat], Rat),
+            RatNeg | RatAbs => (&[Rat], Rat),
+            RatSign => (&[Rat], Int),
+            RatNumerator | RatDenominator => (&[Rat], Str),
+            StrSlice => (&[Str, Int, Int], Str),
+            StrSplit => (&[Str, Str], STR_ARRAY),
+            StrReplace | StrReplaceFirst => (&[Str, Str, Str], Str),
+            StrRepeat => (&[Str, Int], Str),
+            StrTrim | StrChomp | StrTrimStart | StrTrimEnd | StrLower | StrUpper => (&[Str], Str),
+            StrFind | StrFindLast => (&[Str, Str], Int),
+            StrStartsWith | StrEndsWith => (&[Str, Str], Bool),
+            StrUtf8 => (&[Str], Bytes),
+            StrCharacters => (&[Str], CHAR_ARRAY),
+            _ => return None,
+        })
+    }
 }
 
 impl DataOp {
@@ -446,8 +923,23 @@ impl DataOp {
     /// outcomes. A conversion fails only where its pair of types can trap (`conversion`).
     pub fn fallible(self, operands: &[Type], result: Option<Type>) -> bool {
         match self {
-            Self::IntMod | Self::RangeNew | Self::RatNew | Self::ValEq | Self::ValNe | Self::VariantGet => true,
+            Self::IntMod | Self::RangeNew | Self::RatNew | Self::ValEq | Self::ValNe | Self::VariantGet
+                | Self::RoleNarrow | Self::MapGet | Self::MapKeyAt | Self::MapValueAt | Self::MapDifference
+                | Self::ArraySlice
+                | Self::ArrayRemove | Self::ArrayReplace | Self::ArrayDifference => true,
+            // A joined string longer than the 4 GiB a string can hold fails, as in Tomato.
+            Self::ArrayJoin => true,
             Self::TestOk | Self::TestIs | Self::TestIsnt | Self::TestFail => true,
+            // Tomato's failures: an int outside signed 64 bits in a bit operation, a shift or rotation
+            // count out of range, a float result that is not finite, a zero rat divisor, slice bounds and
+            // a negative repeat count. Every other scalar family operation is total.
+            Self::IntAnd | Self::IntOr | Self::IntXor | Self::IntShl | Self::IntShr | Self::IntUshr | Self::IntNot
+                | Self::IntBitCount | Self::IntLeadingZeros | Self::IntTrailingZeros | Self::IntReverseBits
+                | Self::IntSwapBytes | Self::IntRotl | Self::IntRotr => true,
+            Self::ByteShl | Self::ByteShr | Self::ByteUshr | Self::ByteRotl | Self::ByteRotr => true,
+            Self::FloatAdd | Self::FloatSub | Self::FloatMul | Self::FloatDiv | Self::FloatMod | Self::FloatPow
+                | Self::FloatSqrt => true,
+            Self::RatDiv | Self::RatMod | Self::StrSlice | Self::StrRepeat => true,
             Self::Convert => matches!((operands, result), ([from], Some(to)) if conversion(*from, to) == Some(true)),
             _ => false,
         }
@@ -458,10 +950,12 @@ impl DataOp {
 /// total, `None` where it is not a conversion. The same table as OIR-2 `cvt`.
 pub fn conversion(from: Type, to: Type) -> Option<bool> {
     match (from, to) {
-        (Type::Int, Type::Float | Type::Byte) | (Type::Float, Type::Int | Type::Byte)
+        // `char(n)` fails outside the Unicode scalar values (#679).
+        (Type::Int, Type::Float | Type::Byte | Type::Char) | (Type::Float, Type::Int | Type::Byte)
             | (Type::Rat, Type::Float | Type::Byte) => Some(true),
         (Type::Byte, Type::Int | Type::Float | Type::Rat) | (Type::Int | Type::Float, Type::Rat)
-            | (Type::Rat, Type::Int) | (Type::Int | Type::Byte | Type::Float | Type::Rat | Type::Bool, Type::Str) => {
+            | (Type::Rat, Type::Int) | (Type::Char, Type::Int)
+            | (Type::Int | Type::Byte | Type::Float | Type::Rat | Type::Bool | Type::Char, Type::Str) => {
             Some(false)
         }
         _ => None,
@@ -487,6 +981,55 @@ pub struct ChampTables {
     pub scopes: Vec<Scope>,
     pub boundaries: Vec<Boundary>,
     pub summaries: Vec<Summary>,
+    /// D21 frame layouts, one for each async body (`EntryAbi::AsyncBody`, `EntryAbi::AsyncDefer`).
+    pub frames: Vec<FrameLayout>,
+    /// The outcome value of each Future type (`Type::Future`); `None` is a void Future. Entries are distinct.
+    pub future_results: Vec<Option<Type>>,
+}
+
+/// D21 layout of one async body: typed slots and its continuations. Continuation 0 is the start.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FrameLayout {
+    pub slots: Vec<FrameSlot>,
+    pub continuations: Vec<Continuation>,
+}
+
+/// One type per slot for the whole function. Machine words and traced offsets follow from the type
+/// (`layout::service_layout` for services, the register representation for values).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameSlot {
+    pub ty: ProducedType,
+    pub linear: bool,
+}
+
+/// What one suspension stores in the frame. `site` is the pc of the suspending operation; the start has
+/// none. `saved` lists the slots of `frame.save`/`frame.resume` in order; `operands` the slots of the
+/// suspending operation's location operands, in operand order.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Continuation {
+    pub site: Option<u32>,
+    pub saved: Vec<u32>,
+    pub operands: Vec<u32>,
+}
+
+impl FrameLayout {
+    /// The slot types of a continuation's saved set, in order.
+    pub fn saved_types(&self, continuation: u32) -> Option<Vec<ProducedType>> {
+        let continuation = self.continuations.get(continuation as usize)?;
+        continuation.saved.iter().map(|&slot| self.slots.get(slot as usize).map(|slot| slot.ty)).collect()
+    }
+}
+
+impl Program {
+    /// The frame layout of an async body.
+    pub fn frame_layout(&self, f: &Function) -> Option<&FrameLayout> {
+        match f.entry_abi {
+            EntryAbi::AsyncBody { layout } | EntryAbi::AsyncDefer { layout } => {
+                self.tables.frames.get(layout as usize)
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -560,11 +1103,15 @@ pub struct Schedule {
     pub services: Vec<Location>,
 }
 
-/// D18 mask: Thrown=1, Program=2, Panic=4, Native=8. No async/cancel bits.
+/// D18 mask: Thrown=1, Program=2, Panic=4, Native=8, and `ENVELOPE_CANCEL` for the final exit of an async body
+/// whose close delivers a deferred cancellation (`cleanup.deliver_cancel`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Envelope {
     pub failures: u32,
 }
+
+/// The D18 bit of a close that may deliver a deferred cancellation (OIR `scope_effects(cancel=true)`).
+pub const ENVELOPE_CANCEL: u32 = 16;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StateRecord {
@@ -583,6 +1130,8 @@ mod tests;
 
 #[cfg(test)]
 mod layout_tests;
+#[cfg(test)]
+mod allocation_tests;
 
 /// Function contracts are verified against bodies or a trusted external catalog at load time.
 /// In particular, escaping body failures (not just fresh_singleton) must fit the declared mask.
@@ -665,12 +1214,28 @@ mod load_tests;
 #[cfg(test)]
 mod arrays_tests;
 #[cfg(test)]
+mod globals_tests;
+#[cfg(test)]
 mod natives_tests;
 #[cfg(test)]
 mod scalars_tests;
+#[cfg(test)]
+mod collections_tests;
+#[cfg(test)]
+mod managed_tests;
+#[cfg(test)]
+mod builders_tests;
 #[cfg(test)]
 mod testmode_tests;
 #[cfg(test)]
 mod rules_tests;
 #[cfg(test)]
 mod budget_tests;
+#[cfg(test)]
+mod async_tests;
+#[cfg(test)]
+mod async_resources_tests;
+#[cfg(test)]
+mod roles_tests;
+#[cfg(test)]
+mod view_collections_tests;

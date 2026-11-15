@@ -1,0 +1,92 @@
+oir 2 high
+// OIR-2 §10.3: a temporary Future is taken by its awaiting scope with full unique-cache evidence. r is bound in
+// main's scope S; the inner block SI awaits a temporary Future of identity(r) at once (the example's
+// `Work().identity(r)`, without the plain Work receiver). The take extracts the actual outcome packet, which is
+// empty: the result borrows r, which stays owned by S for the label call after SI.
+module r1_temporary_take
+entry @main
+protocol Services kind services holders [scope, cache, frame, receipt, root, pending_exit] rules [
+    protocol_rule(transition=settle, from=cache, to=scope, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=receipt,
+    to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
+    protocol_rule(transition=settle, from=cache, to=root, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=rehome, from=scope,
+    to=pending_exit, checks=[owner, live_dependencies, sufficient_boundary],
+    normal=protocol_poststate(holder=pending_exit, state=open))]
+object Res {
+    destroy @destroy
+}
+scope SD action in @destroy
+scope SR action in @res
+scope SL action in @label
+scope SE action in @identity
+scope S action in @main
+scope SI block in @main parent S
+summary MidC call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results
+    [result_relation(provenance=unbound_result)] contract call_contract(results=[future<Res>], publication=atomic)
+summary MidB call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results
+    [result_relation(aliases=[parameter(0)], external_deps=[0], provenance=unbound_result)] contract
+    call_contract(results=[Res], failures=[cancelled], suspends=true, publication=atomic)
+summary MmainC call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[future<int>], publication=atomic)
+summary MmainB call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+func @destroy(%self: Res) -> void [destroy Res] {
+    ^entry in SD:
+    ret
+}
+func @res() -> Res [ctor Res] {
+    boundary BR lexical in SR
+    ^entry in SR unwind ^failed:
+    %r: Res = obj.new Res { }
+    want %r
+    [iprep0] exit.prepare return %r at BR
+    result.exit edge normal(0), value %r, demand want, prepare iprep0
+    ret %r
+    ^failed(%failure: failure) in SR:
+    raise %failure
+}
+func @label(%self: Res) -> int [method Res] {
+    boundary BL lexical in SL
+    ^entry in SL:
+    %n: int = const 7
+    want %n
+    [iprep1] exit.prepare return %n at BL
+    result.exit edge normal(0), value %n, demand want, prepare iprep1
+    ret %n
+}
+func @identity(%r: Res) -> Res [async] async-creation(MidC) async-body(MidB) {
+    boundary BE lexical in SE
+    ^entry in SE:
+    want %r
+    [iprep2] exit.prepare return %r at BE
+    result.exit edge normal(0), value %r, demand want, prepare iprep2
+    ret %r
+}
+func @main() -> int [entry, async] async-creation(MmainC) async-body(MmainB) {
+    binding b0 "r": Res in S
+    binding b1 "result": Res in SI
+    boundary Bauto lexical in S
+    ^entry in S unwind ^failed:
+    %r: Res = call @res()
+    bind %r, binding b0
+    br ^inner
+    ^inner in SI unwind ^failed:
+    %f: future<Res> = call @identity(%r)
+    temp %f, SI
+    %result: Res = await %f, result Res
+    bind %result, binding b1
+    %n: int = call @label(%result)
+    discard %n
+    result.exit edge normal(0), value %n, demand discard, prepare none
+    br ^after
+    ^after in S unwind ^failed:
+    %m: int = call @label(%r)
+    want %m
+    [iprep3] exit.prepare return %m at Bauto
+    result.exit edge normal(0), value %m, demand want, prepare iprep3
+    ret %m
+    ^failed(%failure: failure) in S:
+    raise %failure
+}

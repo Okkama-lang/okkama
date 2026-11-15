@@ -11,7 +11,6 @@ impl Engine<'_, '_> {
         }
         let closing = self.has_closing_token(before);
         if closing && !matches!(op, Operation::Cleanup(_) | Operation::Exit(ExitOp::Abort { .. })
-            | Operation::Async(AsyncOp::FrameCancel { .. })
             | Operation::Const(_) | Operation::Core(CoreOp::FailSecondary { .. } | CoreOp::FailCaused { .. })) {
             let resource = op.operand_refs().iter().any(|operand| match operand.reference {
                 OperandRef::Value(value) => self.is_managed(value) || linear(self.module, self.body, value),
@@ -26,9 +25,10 @@ impl Engine<'_, '_> {
                 let input = match self.declaration.signature.ownership_abi {
                     OwnershipAbi::Explicit { input_packet, .. } => self.body.blocks.get(self.body.entry).ok()
                         .and_then(|b| b.params.get(usize::from(input_packet))).copied(),
-                    _ => self.body.blocks.get(self.body.entry).ok().and_then(|b| b.params.iter().copied()
+                    // C-2: a D21 async body accepts the input packet of its start continuation.
+                    _ => self.entry_values().into_iter()
                         .find(|v| self.body.values.get(*v).ok().and_then(|v| self.module.types.get(v.ty).ok())
-                            == Some(&Type::Service(ServiceType::Own)))),
+                            == Some(&Type::Service(ServiceType::Own))),
                 };
                 let accepted = input.is_some_and(|input| before.tokens[packet.as_u32() as usize]
                     .sources.contains(&input));
@@ -36,7 +36,10 @@ impl Engine<'_, '_> {
                 if !accepted || root.is_none_or(|s| s.kind != ScopeKind::Action || s.parent.is_some()) {
                     self.error(R::B51, "call inputs must be accepted into the callee action root");
                 } else { flow.entry_accepted = true; }
-            } else if !matches!(op, Operation::Ownership(OwnershipOp::ScopeBegin { .. })) {
+            } else if !matches!(op, Operation::Ownership(OwnershipOp::ScopeBegin { .. }))
+                // C-2: the start resume of a D21 body restores the entry values that the acceptance admits.
+                && !(self.frame_body()
+                    && matches!(op, Operation::Async(AsyncOp::FrameResume { continuation: 0, .. }))) {
                 self.error(R::B51, "callee must accept fresh inputs before evaluating its body");
             }
         }
@@ -155,7 +158,10 @@ impl Engine<'_, '_> {
             if closed && !empty_transport && !matches!(op,
                 Operation::Ownership(OwnershipOp::ScopeEnd { .. } | OwnershipOp::ScopeUnwind { .. }
                     | OwnershipOp::Empty {}) | Operation::Exit(_) | Operation::Core(CoreOp::FailSecondary { .. }
-                    | CoreOp::Undef { .. })) {
+                    | CoreOp::Undef { .. }))
+                // D20, C-2: resuming after a suspending close and publishing the outcome end a D21 body.
+                && !(self.frame_body()
+                    && matches!(op, Operation::Async(AsyncOp::FrameResume { .. } | AsyncOp::FuturePublish { .. }))) {
                 self.error(R::B42, "ordinary execution continues after its lexical cleanup boundary");
             }
         }
@@ -197,9 +203,11 @@ impl Engine<'_, '_> {
                 && super::super::high::inside(self.module, *child, scope, self.state)) {
                 self.error(R::B41, "outer scope closes while a nested lexical scope is open");
             }
+            // #684: the duties of enclosing scopes pass through a nested close untouched.
             let available: BTreeSet<_> = before.token_values().filter(|value| {
-                before.availability[value.as_u32() as usize] == AVAILABLE
-                    && before.tokens[value.as_u32() as usize].service.is_some()
+                let token = &before.tokens[value.as_u32() as usize];
+                before.availability[value.as_u32() as usize] == AVAILABLE && token.service.is_some()
+                    && !self.enclosing_duty(token, scope)
             }).collect();
             if !available.is_empty() {
                 // A `dynamic` entry covers runtime-admitted entries, never a static token (D25.3).
@@ -214,6 +222,9 @@ impl Engine<'_, '_> {
                     self.error(R::B106, "abstract close needs complete, unique service schedule coverage");
                 }
                 for value in available {
+                    if self.await_handle(before, value) {
+                        self.error(R::B91, "a close settles an await task or receipt instead of await.unwind (C-3)");
+                    }
                     self.use_value(flow, value, OperandMode::Consume, R::B106);
                     let pieces: Vec<_> = before.tokens[value.as_u32() as usize].pieces.iter().cloned().collect();
                     self.invalidate(before, flow, &pieces);

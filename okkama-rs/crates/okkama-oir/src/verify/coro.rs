@@ -1,8 +1,12 @@
 //! Structural rules of the async ABI assigned to slice V1 (D20, D21, D22, C-2, C-6).
 //!
-//! The suspension, layout and body rules apply to async bodies of coro/low that
-//! declare a D21 frame layout. Ownership of saved tokens, saved-set completeness
-//! and the one-to-one site correspondence belong to the B9.5 linearity slice.
+//! Only an async body of coro/low declares a D21 frame layout
+//! (`coro-layout-misplaced`). The suspension, layout and body rules apply to the
+//! async coro/low bodies that declare one; an async body without a layout
+//! predates the async ABI, and its layout and continuation graph stay an
+//! inventoried structural gap (`B95FrameLayoutAndContinuations`) until the coro
+//! producer exists. Ownership of saved tokens, saved-set completeness and the
+//! one-to-one site correspondence belong to the B9.5 linearity slice.
 use std::collections::BTreeMap;
 use super::{EntityLocation as L, RuleId as R, State};
 use crate::*;
@@ -19,6 +23,11 @@ pub(super) fn check<'a>(module: &'a Module, function: FuncId, data: &'a Function
         return;
     };
     let token_profile = matches!(module.profile, Profile::Coro | Profile::Low);
+    let async_body = token_profile && data.attrs.contains(&FunctionAttr::Async);
+    if !async_body && body.frame_layout.is_some() {
+        state.at(L::Function(function), data.loc);
+        state.error(R::CoroLayoutMisplaced, "only an async body of coro/low declares a frame layout (D21)");
+    }
     for (block_id, block) in body.blocks.iter() {
         if !state.step(1) {
             return;
@@ -35,9 +44,8 @@ pub(super) fn check<'a>(module: &'a Module, function: FuncId, data: &'a Function
             operation(module, op, token_profile, state);
         }
     }
-    if token_profile && data.attrs.contains(&FunctionAttr::Async)
-        && let Some(layout) = &body.frame_layout {
-        Layout { module, function, data, body, layout, state, sites: BTreeMap::new() }.check();
+    if async_body && let Some(layout) = &body.frame_layout {
+        Layout { module, function, data, body, layout, state, sites: BTreeMap::new(), started: false }.check();
     }
 }
 
@@ -61,6 +69,70 @@ fn operation(module: &Module, op: &Operation, token_profile: bool, state: &mut S
     }
 }
 
+/// The frame layout of an async body of coro/low in the D21 form, if `function` is one.
+pub(super) fn frame_layout<'a>(module: &Module, function: &'a Function) -> Option<&'a FrameLayout> {
+    let token_profile = matches!(module.profile, Profile::Coro | Profile::Low);
+    if !token_profile || !function.attrs.contains(&FunctionAttr::Async) {
+        return None;
+    }
+    function.body.as_ref()?.frame_layout.as_ref()
+}
+
+/// Whether `value` is an entry value of `function`: an entry parameter, or for a D21 async body a value
+/// that its start resume restores from continuation 0 (C-2).
+pub(super) fn entry_value(module: &Module, function: &Function, body: &Body, value: ValueId) -> bool {
+    let Ok(data) = body.values.get(value) else {
+        return false;
+    };
+    if frame_layout(module, function).is_none() {
+        return matches!(data.def, Definition::BlockParam { block, .. } if block == body.entry);
+    }
+    let Definition::InstResult { inst, index } = data.def else {
+        return false;
+    };
+    let start = body.blocks.get(body.entry).ok().and_then(|entry| entry.insts.first()) == Some(&inst);
+    let resume = body.insts.get(inst).is_ok_and(|inst| {
+        matches!(inst.op, Operation::Async(AsyncOp::FrameResume { continuation: 0, .. }))
+    });
+    start && resume && index > 0
+}
+
+/// The language signature of a function (C-2). An async body of coro/low in the D21 form has only its
+/// frame as a parameter: its receiver, arguments, descriptors and input packet are the slots of
+/// continuation 0, and its results are the values it publishes on success. A body that never publishes
+/// a success keeps the results of its summary. The ownership ABI stays the body's own: a fixed root
+/// (`async main`, an async test) keeps its observation ABI. `None` means that the body disagrees with
+/// itself.
+pub(super) fn language_signature(module: &Module, function: &Function) -> Option<Signature> {
+    let Some(layout) = frame_layout(module, function) else {
+        return Some(function.signature.clone());
+    };
+    let start = layout.continuations.first()?;
+    let params = start.saved.iter()
+        .map(|slot| layout.slots.get(*slot as usize).map(|decl| decl.ty))
+        .collect::<Option<Vec<_>>>()?;
+    let body = function.body.as_ref()?;
+    let mut published: Option<Vec<TypeId>> = None;
+    for (_, inst) in body.insts.iter() {
+        let Operation::Async(AsyncOp::FuturePublish { outcome: PublishOutcome::Success { value, .. }, .. }) = &inst.op
+        else {
+            continue;
+        };
+        let types = value.iter().map(|value| body.values.get(*value).ok().map(|data| data.ty))
+            .collect::<Option<Vec<_>>>()?;
+        if published.as_ref().is_some_and(|previous| *previous != types) {
+            return None;
+        }
+        published = Some(types);
+    }
+    let results = match published {
+        Some(results) => results,
+        None => function.summary.and_then(|id| module.summaries.get(id).ok())
+            .map(|summary| summary.contract.results.clone())?,
+    };
+    Some(Signature { params, results, ownership_abi: function.signature.ownership_abi })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Suspends { No, May, Yes }
 
@@ -73,6 +145,8 @@ struct Layout<'s, 'a> {
     state: &'s mut State<'a>,
     /// The first site recorded for each continuation.
     sites: BTreeMap<u32, SuspendSite>,
+    /// Whether the body starts with the resume of continuation 0.
+    started: bool,
 }
 
 impl Layout<'_, '_> {
@@ -114,7 +188,9 @@ impl Layout<'_, '_> {
                 }
             }
             self.state.at(L::Terminator { function: self.function, block: block_id }, block.term.loc);
-            if matches!(block.term.kind, TermKind::Throw(_) | TermKind::Raise(_) | TermKind::Panic(_)) {
+            // C-2: only a failure that leaves the body must be published; a block unwind catches it inside.
+            if block.unwind.is_none() && matches!(block.term.kind,
+                TermKind::Throw(_) | TermKind::Raise(_) | TermKind::Panic(_) | TermKind::Trap { .. }) {
                 self.state.error(R::CoroBodyRaises, "an async body publishes its failure instead of raising (C-2)");
             }
             let last_saves = block.insts.last().and_then(|id| self.body.insts.get(*id).ok())
@@ -123,6 +199,21 @@ impl Layout<'_, '_> {
                 self.state.error(R::CoroMissingResume,
                     "a suspending terminator needs frame.save as the last instruction of its block (D20)");
             }
+        }
+        self.continuations_used();
+    }
+
+    /// The body starts with the resume of continuation 0 (C-2), and every other declared continuation
+    /// is the continuation of a suspension site (D21).
+    fn continuations_used(&mut self) {
+        self.at_function();
+        if !self.started {
+            self.state.error(R::CoroMissingResume,
+                "an async body starts with frame.resume of continuation 0 on its frame parameter (C-2)");
+        }
+        let unused = (1..self.layout.continuations.len() as u32).any(|index| !self.sites.contains_key(&index));
+        if unused {
+            self.state.error(R::CoroContinuationMismatch, "a declared continuation has no suspension site (D21)");
         }
     }
 
@@ -154,6 +245,12 @@ impl Layout<'_, '_> {
             let indices = continuation.saved.iter().chain(&continuation.operands);
             if indices.into_iter().any(|slot| *slot as usize >= count) {
                 self.state.error(R::CoroLayoutTypeMismatch, "continuation names an undeclared frame slot (D21)");
+            }
+            // D20 §2.2: at PENDING the words of S_k ∪ O_k are stored in the frame, each in its own slot.
+            let mut seen = std::collections::BTreeSet::new();
+            if !continuation.saved.iter().chain(&continuation.operands).all(|slot| seen.insert(*slot)) {
+                self.state.error(R::CoroSlotOverlap,
+                    "the saved and operand slots of one continuation are pairwise distinct (D20 §2.2)");
             }
         }
     }
@@ -284,6 +381,7 @@ impl Layout<'_, '_> {
         if position + 1 == block.insts.len() {
             // Form (a): every successor starts with the matching resume and has no other predecessor.
             if self.terminator_suspends(&block.term.kind) == Suspends::No {
+                self.unbracketed();
                 return;
             }
             self.record_site(continuation, SuspendSite::Terminator(block_id));
@@ -319,6 +417,7 @@ impl Layout<'_, '_> {
             return;
         };
         if self.instruction_suspends(op) == Suspends::No {
+            self.unbracketed();
             return;
         }
         self.record_site(continuation, SuspendSite::Instruction(suspending));
@@ -343,10 +442,17 @@ impl Layout<'_, '_> {
         self.state.location = location;
     }
 
+    /// `coro-unbracketed-suspend` (D20 §2.5): a `frame.save` brackets exactly one suspending operation; around any
+    /// other operation it would move a token into the frame with no resume to bring it back.
+    fn unbracketed(&mut self) {
+        self.state.error(R::CoroUnbracketedSuspend, "frame.save brackets an operation that does not suspend (D20)");
+    }
+
     fn resume(&mut self, block_id: BlockId, block: &Block, position: usize, frame: ValueId, continuation: u32) {
         if continuation == 0 {
             // C-2: the start resumes the sole frame parameter at the top of the entry block.
             let start = block_id == self.body.entry && position == 0 && block.params == [frame];
+            self.started |= start;
             if !start {
                 self.state.error(R::CoroContinuationMismatch,
                     "continuation 0 resumes the frame parameter at the start of the body (C-2)");

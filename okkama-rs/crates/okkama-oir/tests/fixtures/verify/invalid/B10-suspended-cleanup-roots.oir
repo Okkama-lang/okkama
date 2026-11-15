@@ -1,5 +1,5 @@
 oir 2 low
-// expect OIR2-B10.5 instruction:0:4
+// expect OIR2-B10.5 instruction:0:3
 module cleanup_empty
 protocol Services kind services
 scope S action in @f
@@ -13,8 +13,7 @@ func @f(%schedule: type) -> void summary(Mf) {
 ^entry in S:
     %q: scope<S> = scope.begin S
     %c: cleanup-state = cleanup.begin %q, close 0, effects scope_effects(failures=[], suspends=false, cancel=false)
-    %shield: cleanup-state = cleanup.shield %c
-    %settled: cleanup-state = cleanup.settle.empty %shield, schedule 0
+    %settled: cleanup-state = cleanup.settle.empty %c, schedule 0
     [i4] %planned: cleanup-state = cleanup.plan %settled, plan 0
     (%closed: closed, %fs: failure-state, %xs: exit-state) = cleanup.finish %planned
     exit.dispatch 0 %closed %fs %xs success ^done($closed)

@@ -40,6 +40,7 @@ sample_expr!(SavedSlot, SavedSlot { slot: 0, ty: sample(), linear: true });
 sample_expr!(CarrierDestination, CarrierDestination::Cache(sample()));
 sample_expr!(PreparedExit, PreparedExit { kind: ExitKind::Return, value: sample(), packet: sample(), deps: sample(), selection: sample(), boundary: sample() });
 sample_expr!(ExitDestination, ExitDestination::Caller);
+sample_expr!(RehomeTarget, RehomeTarget::Caller);
 sample_expr!(CallArgument, CallArgument { value: sample(), convention: OperandConvention::Borrow });
 sample_expr!(CallSite, CallSite { cleanup: CallCleanupMode::Ordinary,  args: vec![CallArgument { value: sample(),
     convention: OperandConvention::Borrow }], packet: sample(), deps: sample(), descriptors: sample(),
@@ -263,6 +264,34 @@ fn provenance_retention_and_high_buffer_shapes() {
     assert!(checked.unwind.is_some());
 }
 
+/// #679: `c.code()` and `string(c)` are total; `char(n)` fails outside the Unicode scalar values.
+#[test]
+fn char_conversions_have_contracts() {
+    let module = module();
+    let registry = ContractRegistry::new(&module);
+    let convert = |from, to| Operation::Core(CoreOp::Convert { value: v(1), from, to });
+    for (from, to, result, fails) in [
+        (NumericType::Char, NumericType::Int, ScalarType::Int, false),
+        (NumericType::Char, NumericType::Str, ScalarType::Str, false),
+        (NumericType::Int, NumericType::Char, ScalarType::Char, true),
+    ] {
+        let contract = registry.lookup(&convert(from, to)).unwrap();
+        assert_eq!(contract.normal.results.len(), 1, "{from:?} -> {to:?}");
+        assert_eq!(contract.normal.results[0].ty, ResultType::Scalar(result), "{from:?} -> {to:?}");
+        assert_eq!(contract.unwind.is_some(), fails, "{from:?} -> {to:?}");
+    }
+    for (from, to) in [
+        (NumericType::Char, NumericType::Float),
+        (NumericType::Char, NumericType::Byte),
+        (NumericType::Byte, NumericType::Char),
+        (NumericType::Str, NumericType::Char),
+        (NumericType::Char, NumericType::Char),
+    ] {
+        assert!(matches!(registry.lookup(&convert(from, to)), Err(ContractError::InvalidConversion { .. })),
+            "{from:?} -> {to:?}");
+    }
+}
+
 #[test]
 fn missing_declarations_and_protocol_poststates_are_explicit() {
     let mut module = module();
@@ -335,7 +364,7 @@ macro_rules! metadata_fields { ($($ty:ty),*) => { $( impl DeclaredOperands for $
 metadata_fields!(
     CleanupCloseId, CleanupPlanId, CleanupScheduleId, RootMapId, u32, bool, String, TypeId, DeclId, FuncId,
     ScopeId, BindingId, BoundaryId, SummaryId, ProtocolId, NumericType, FieldRef, DescriptorContract, ResultDemand,
-    TakeBoundary, SavedSlot, ExitDestination, DynamicReason, ConstructionStatus
+    TakeBoundary, SavedSlot, ExitDestination, DynamicReason, ConstructionStatus, RehomeTarget
 );
 macro_rules! ssa_fields { ($($ty:ty),*) => { $( impl DeclaredOperands for $ty {
     fn append_declared(&self, out: &mut Vec<OperandRef>) {
@@ -537,4 +566,29 @@ fn scope_envelope_projects_exact_outcome_availability_and_reserve_slots() {
     assert_eq!(extend.normal.results[0].ty, ResultType::Service(ServiceType::Pending));
     assert_eq!(extend.operands.iter().map(|operand| operand.mode).collect::<Vec<_>>(),
         [OperandMode::Consume, OperandMode::Consume]);
+}
+
+#[test]
+fn every_rehome_form_and_target_moves_duties_by_its_own_transfer() {
+    // C-4, ruling of #601 R1: the C-4 forms (own scope state and coro/low tokens) into a scope or to the caller
+    // are class L, without unwind, and their duties move by the rehome transfer, never by the generic Move.
+    let module = module();
+    let registry = ContractRegistry::new(&module);
+    let forms = [
+        RehomeForm::Scope { state: v(1), pending: v(2), future: v(3) },
+        RehomeForm::Token { pending: v(2), cache: v(4), task: None },
+        RehomeForm::Token { pending: v(2), cache: v(4), task: Some(v(5)) },
+    ];
+    for form in forms {
+        for target in [RehomeTarget::Scope(sample()), RehomeTarget::Caller] {
+            let op = Operation::Async(AsyncOp::CacheRehome { form: form.clone(), target, protocol: sample() });
+            let contract = registry.lookup(&op).unwrap();
+            assert!(contract.unwind.is_none() && contract.cancellation.is_none(), "{form:?}");
+            let transfers = &contract.normal.transfers;
+            assert!(transfers.iter().any(|transfer| matches!(transfer, TransferRule::Rehome { .. })), "{form:?}");
+            assert!(!transfers.iter().any(|transfer| matches!(transfer, TransferRule::Move { .. })), "{form:?}");
+            assert!(contract.normal.postconditions.contains(&Postcondition::CacheRehome(target)));
+            assert_eq!(names(&contract.normal).last(), Some(&SlotName::Pending));
+        }
+    }
 }

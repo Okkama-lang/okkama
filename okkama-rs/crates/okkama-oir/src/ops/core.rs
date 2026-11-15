@@ -1,11 +1,18 @@
 use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NumericType { Int, Byte, Float, Rat, Bool, Str }
+pub enum NumericType { Int, Byte, Float, Rat, Bool, Str, Char }
 impl NumericType {
     pub(crate) fn result_type(self) -> ResultType {
-        ResultType::Scalar(match self { Self::Int => ScalarType::Int, Self::Byte => ScalarType::Byte,
-            Self::Float => ScalarType::Float, Self::Rat => ScalarType::Rat, Self::Bool => ScalarType::Bool, Self::Str => ScalarType::Str })
+        ResultType::Scalar(match self {
+            Self::Int => ScalarType::Int,
+            Self::Byte => ScalarType::Byte,
+            Self::Float => ScalarType::Float,
+            Self::Rat => ScalarType::Rat,
+            Self::Bool => ScalarType::Bool,
+            Self::Str => ScalarType::Str,
+            Self::Char => ScalarType::Char,
+        })
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -415,7 +422,7 @@ operation_group! { CollectionOp {
     ArrayGet { array: ValueId, index: ValueId }
         => ("array.get", [array: Borrow, index: Borrow], Rule::Data { ty: ResultType::Element(*array), trap: true }.retains(Retention::Index { base: *array, index: *index }));
     ArrayJoin { array: ValueId, separator: ValueId }
-        => ("array.join", [array: Borrow, separator: Borrow], Rule::Data { ty: ResultType::Scalar(ScalarType::Str), trap: false });
+        => ("array.join", [array: Borrow, separator: Borrow], Rule::Data { ty: ResultType::Scalar(ScalarType::Str), trap: true });
     ArrayRetag { array: ValueId, ty: TypeId }
         => ("array.retag", [array: Borrow], Rule::Data { ty: ResultType::Exact(*ty), trap: false }.retains(Retention::Value(*array)));
     MapLen { map: ValueId }

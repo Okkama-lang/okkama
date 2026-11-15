@@ -855,7 +855,8 @@ fn p1_runtime() -> Box<Runtime> {
         }).collect();
         program.objects.push(s::Object {
             name: name.into(), error_cases, enum_cases: 0, variant_cases: vec![],
-            handle: name == "runtime.buffer.BufferState",
+            handle: name == "runtime.buffer.BufferState", role: None, implements: vec![],
+            any_box: false, enum_names: vec![],
             fields: if name == "app.Problem.note" {
                 vec![s::Field { name: "message".into(), storage: 0, once: false }]
             } else {
@@ -881,7 +882,7 @@ fn p1_runtime() -> Box<Runtime> {
     // An unresolved provider: the checked adapter with handle transport of its own module.
     program.objects.push(s::Object {
         name: "app.Port".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: true,
-        fields: vec![],
+        role: None, implements: vec![], any_box: false, enum_names: vec![], fields: vec![],
         layout: s::ObjectRuntimeLayout {
             allocation_words: 2, identity_offset: None, has_destroy: false, may_reach_resource: false,
             may_async_destroy: false, storage_fields: vec![], trace_layout: vec![], selection_layout: vec![],
@@ -893,6 +894,14 @@ fn p1_runtime() -> Box<Runtime> {
     port.registers = vec![s::Type::Str];
     port.results = vec![s::Type::Handle(program.objects.len() as u32 - 1)];
     program.functions.push(port);
+    // An unknown operation of a table module, carrying that module's handle.
+    let mut unknown = contracts.native("runtime/buffer@1::buffer_state_size/1").unwrap().clone();
+    unknown.symbol = "runtime/buffer@1::unknown/0".into();
+    unknown.proofs.entry.as_mut().unwrap().external = Some("runtime/buffer@1::unknown/0".into());
+    unknown.params.retain(|location| matches!(location, s::Location::Service(_)));
+    unknown.registers = vec![];
+    unknown.results = vec![s::Type::Handle(4)];
+    program.functions.push(unknown);
     let mut runtime = Runtime::new_champ(program, vec![]).unwrap();
     runtime.heap.set_stress(true);
     runtime
@@ -1124,6 +1133,143 @@ fn champ_p1_observation_outcomes_and_gc() {
     assert_eq!(runtime.failure(ctx.failure).unwrap().trace.len(), 1);
 }
 
+/// `array.get` of a byte array (`@byte`, #703): a packed byte per element, read as a raw byte word; an index
+/// outside the array fails with Tomato's text.
+#[test]
+fn champ_byte_array_get_reads_packed_bytes_and_checks_bounds() {
+    let reg = L::Register;
+    let mut function = s::Function {
+        symbol: "bytes".into(), entry_abi: s::EntryAbi::Observation,
+        registers: vec![s::Type::Int, s::Type::Byte, s::Type::Byte, s::Type::Byte, s::Type::Bytes, s::Type::Byte,
+            s::Type::Failure],
+        services: vec![], params: vec![reg(0)], results: vec![s::Type::Byte],
+        blocks: vec![
+            s::Block { pc: 0, params: vec![reg(0)] },
+            s::Block { pc: 5, params: vec![reg(5)] },
+            s::Block { pc: 6, params: vec![reg(6)] },
+        ],
+        proofs: s::FunctionProofs {
+            entry: Some(s::EntryContract { failures: 2, ..s::EntryContract::default() }),
+            ..s::FunctionProofs::default()
+        },
+        code: vec![
+            s::Instruction::Data { op: s::DataOp::Const, inputs: vec![], output: Some(1),
+                immediate: s::Immediate::Constant(s::Constant::Byte(0)) },
+            s::Instruction::Data { op: s::DataOp::Const, inputs: vec![], output: Some(2),
+                immediate: s::Immediate::Constant(s::Constant::Byte(171)) },
+            s::Instruction::Data { op: s::DataOp::Const, inputs: vec![], output: Some(3),
+                immediate: s::Immediate::Constant(s::Constant::Byte(255)) },
+            s::Instruction::Data { op: s::DataOp::ArrayNew, inputs: vec![1, 2, 3], output: Some(4),
+                immediate: s::Immediate::None },
+            s::Instruction::Champ { op: O::ArrayGet,
+                arguments: vec![A::Location(reg(4)), A::Location(reg(0))],
+                flow: s::Flow::Outcomes(vec![
+                    s::Outcome { tag: s::Tag::Normal, edge: s::Edge {
+                        target_pc: 5, assignments: vec![s::Assignment {
+                            destination: reg(5), source: s::Source::ProducedSlot(0),
+                        }],
+                    } },
+                    s::Outcome { tag: s::Tag::Unwind, edge: s::Edge {
+                        target_pc: 6, assignments: vec![s::Assignment {
+                            destination: reg(6), source: s::Source::ProducedSlot(0),
+                        }],
+                    } },
+                ]) },
+            s::Instruction::Ret(vec![5]),
+            s::Instruction::Raise(6),
+        ],
+    };
+    function.proofs.roots = s::live_locations(&function).unwrap().into_iter().enumerate()
+        .map(|(pc, locations)| s::RootRequirement { pc: pc as u32, locations: locations.into_iter().collect() })
+        .collect();
+    let source = s::Program { functions: vec![function], ..s::Program::default() };
+    let mut runtime = Runtime::new_champ(source, vec![]).unwrap();
+    let mut ctx = context(&mut runtime);
+    let code = compile(&mut runtime, 0).unwrap();
+    for (index, expected) in [("0", Some(0)), ("1", Some(171)), ("2", Some(255)), ("3", None), ("-1", None),
+        ("999999999999999999999999999999999999999999", None)]
+    {
+        ctx.status = OK;
+        ctx.failure = 0;
+        let index_word = runtime.heap.big(index.parse().unwrap());
+        let value = unsafe { invoke(code, &mut ctx, &[index_word]) };
+        match expected {
+            Some(byte) => {
+                assert_eq!(ctx.status, OK, "{index}");
+                assert_eq!(value, byte, "{index}");
+            }
+            None => {
+                assert_eq!(ctx.status, FAILED, "{index}");
+                let failure = runtime.failure(ctx.failure).unwrap();
+                assert!(matches!(&failure.kind, FailureKind::Program(message)
+                    if message == "Array index out of bounds"), "{index}");
+            }
+        }
+    }
+}
+
+/// Module constants (#709): built from their data before the program runs, kept across a collection, and
+/// read by `global.get` as the same values.
+#[test]
+fn champ_globals_are_built_before_the_run_and_read_in_place() {
+    let ints = s::Type::Array(s::ArrayType { leaf: s::ArrayLeaf::Int, depth: 1 });
+    let int = |value: &str| s::Datum {
+        ty: s::Type::Int, value: s::DatumValue::Constant(s::Constant::Int(value.into())),
+    };
+    let read = |global: u32, ty: s::Type| {
+        let mut function = s::Function {
+            symbol: format!("read{global}"), entry_abi: s::EntryAbi::Observation, registers: vec![ty],
+            services: vec![], params: vec![], results: vec![ty], blocks: vec![s::Block { pc: 0, params: vec![] }],
+            proofs: s::FunctionProofs::default(),
+            code: vec![
+                s::Instruction::Data { op: s::DataOp::GlobalGet, inputs: vec![], output: Some(0),
+                    immediate: s::Immediate::Global(global) },
+                s::Instruction::Ret(vec![0]),
+            ],
+        };
+        function.proofs.roots = s::live_locations(&function).unwrap().into_iter().enumerate()
+            .map(|(pc, locations)| s::RootRequirement { pc: pc as u32, locations: locations.into_iter().collect() })
+            .collect();
+        function
+    };
+    let source = s::Program {
+        composites: vec![s::Composite::Map { key: s::Type::Int, value: s::Type::Str }],
+        globals: vec![
+            s::Global { name: "PRIMES".into(), ty: ints, data: vec![
+                int("2"), int("18446744073709551614"), s::Datum { ty: ints, value: s::DatumValue::Array(vec![0, 1]) },
+            ] },
+            s::Global { name: "NAMES".into(), ty: s::Type::Map(0), data: vec![
+                int("1"), s::Datum { ty: s::Type::Str, value: s::DatumValue::Constant(s::Constant::Str("one".into())) },
+                int("1"), s::Datum { ty: s::Type::Str, value: s::DatumValue::Constant(s::Constant::Str("uno".into())) },
+                s::Datum { ty: s::Type::Map(0), value: s::DatumValue::Map(vec![0, 1, 2, 3]) },
+            ] },
+        ],
+        functions: vec![read(0, ints), read(1, s::Type::Map(0))],
+        ..s::Program::default()
+    };
+    let mut runtime = Runtime::new_champ(source, vec![]).unwrap();
+    let constants = runtime.constants.clone();
+    runtime.heap.collect(|visit| constants.iter().for_each(|&(word, repr)| visit(word, repr)));
+    for _ in 0..1000 {
+        runtime.heap.allocate_text("garbage after the build");
+    }
+    let mut ctx = context(&mut runtime);
+    let code = compile(&mut runtime, 0).unwrap();
+    let array = unsafe { invoke(code, &mut ctx, &[]) };
+    assert_eq!(ctx.status, OK);
+    let elements = runtime.heap.elements(array).into_owned();
+    assert_eq!(runtime.small_or_big(elements[0]), Some(2));
+    assert_eq!(runtime.big_value(elements[1]).to_string(), "18446744073709551614");
+    assert_eq!(unsafe { invoke(code, &mut ctx, &[]) }, array, "one value, built once");
+    let code = compile(&mut runtime, 1).unwrap();
+    let map = unsafe { invoke(code, &mut ctx, &[]) };
+    let entries = &runtime.heap.payload::<crate::ops::MapValue>(map).unwrap().entries;
+    // Later equal keys replace the value, as map.new.
+    assert_eq!(entries.len(), 1);
+    let (_, value) = entries.values().next().unwrap();
+    assert_eq!(runtime.heap.text(*value), "uno");
+}
+
 #[test]
 fn champ_plain_array_traces_elements_and_checks_all_index_forms() {
     let array = s::Type::Array(s::ArrayType { leaf: s::ArrayLeaf::Str, depth: 1 });
@@ -1288,4 +1434,81 @@ fn champ_unresolved_native_fails_as_a_missing_provider() {
     ctx.failure = 0;
     let (text, _) = p1_call(&mut runtime, &mut ctx, "okkama.Error.text", &[payload]);
     assert_eq!(runtime.heap.text(text), "Native symbol \"app@1::port_open/1\" is not registered");
+}
+
+/// An endless loop back-edge, and a self tail call compiled as a jump: each is a step, as in Tomato, so under a
+/// step budget either stops with Tomato's exhausted-budget report (#692).
+#[test]
+fn champ_endless_loops_and_tail_calls_exhaust_the_step_budget() {
+    let reg = L::Register;
+    let roots = |mut function: s::Function| {
+        let live = s::live_locations(&function).unwrap();
+        function.proofs.roots = live.iter().enumerate()
+            .map(|(pc, locations)| s::RootRequirement { pc: pc as u32, locations: locations.iter().copied().collect() })
+            .collect();
+        for (pc, instruction) in function.code.iter().enumerate() {
+            if matches!(instruction, s::Instruction::Champ { flow: s::Flow::Next(_), .. }) {
+                let locations = live[pc + 1].iter().copied().collect();
+                function.proofs.post_roots.push(s::RootRequirement { pc: pc as u32, locations });
+            }
+        }
+        function
+    };
+    let spin = s::Function {
+        symbol: "spin".into(), entry_abi: s::EntryAbi::Observation,
+        registers: vec![], services: vec![], params: vec![], results: vec![],
+        blocks: vec![s::Block { pc: 0, params: vec![] }, s::Block { pc: 1, params: vec![] }],
+        proofs: s::FunctionProofs { entry: Some(s::EntryContract::default()), ..s::FunctionProofs::default() },
+        code: vec![
+            s::Instruction::Br(s::Edge { target_pc: 1, assignments: vec![] }),
+            s::Instruction::Br(s::Edge { target_pc: 1, assignments: vec![] }),
+        ],
+    };
+    let one = s::Immediate::Constant(s::Constant::Int("1".into()));
+    let tail = s::Function {
+        symbol: "tail".into(), entry_abi: s::EntryAbi::Observation,
+        registers: vec![s::Type::Int; 4], services: vec![], params: vec![reg(0)], results: vec![s::Type::Int],
+        blocks: vec![s::Block { pc: 0, params: vec![reg(0)] }],
+        proofs: s::FunctionProofs { entry: Some(s::EntryContract::default()), ..s::FunctionProofs::default() },
+        code: vec![
+            s::Instruction::Data { op: s::DataOp::Const, inputs: vec![], output: Some(1), immediate: one },
+            s::Instruction::Data { op: s::DataOp::IntAdd, inputs: vec![0, 1], output: Some(2),
+                immediate: s::Immediate::None },
+            s::Instruction::Champ { op: O::InvokeObserve,
+                arguments: vec![A::Entry(1), A::Summary(0), A::Location(reg(2))], flow: s::Flow::Next(vec![reg(3)]) },
+            s::Instruction::Ret(vec![3]),
+        ],
+    };
+    let program = s::Program {
+        functions: vec![roots(spin), roots(tail)],
+        tables: s::ChampTables {
+            summaries: vec![s::Summary { entry: 1, may_fail: false, retained_params: vec![] }],
+            ..s::ChampTables::default()
+        },
+        ..s::Program::default()
+    };
+    for entry in [0, 1] {
+        let mut runtime = Runtime::new_champ(program.clone(), vec![]).unwrap();
+        runtime.limits.steps = Some(10_000);
+        let arguments = if entry == 0 { vec![] } else { vec![runtime.heap.int(0)] };
+        let result = runtime.run_function_with(entry, &arguments, crate::STACK_BYTES);
+        assert_eq!(result.unwrap_err().0, "Execution budget exhausted: steps", "function {entry}");
+    }
+}
+
+#[test]
+fn champ_unknown_operation_of_a_table_module_fails_as_a_missing_provider() {
+    let mut runtime = p1_runtime();
+    let mut ctx = context(&mut runtime);
+    let (outcome, post) = p1_call(&mut runtime, &mut ctx, "runtime/buffer@1::unknown/0", &[]);
+    assert_eq!((outcome, ctx.status), (c::UNWIND, FAILED));
+    let post = post.unwrap();
+    assert_eq!(post.packet.record, 0);
+    let FailureKind::Native(payload) = runtime.failure(post.failure).unwrap().kind else { panic!("native failure") };
+    runtime.roots.push((payload, Repr::Ref));
+    ctx.status = OK;
+    ctx.failure = 0;
+    let (text, _) = p1_call(&mut runtime, &mut ctx, "okkama.Error.text", &[payload]);
+    // Tomato's wording for a runtime symbol without a provider (`natives::missing_native`).
+    assert_eq!(runtime.heap.text(text), "native provider is not implemented: runtime/buffer@1::unknown/0");
 }

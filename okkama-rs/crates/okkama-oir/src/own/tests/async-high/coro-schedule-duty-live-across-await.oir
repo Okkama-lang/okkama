@@ -1,0 +1,54 @@
+oir 2 high
+// Review B4: async main creates f and g and awaits only g. The cache duty of f, never awaited, is used at the
+// close of main, so it is live across the await of g and saved there beside the duty of g (async ABI D20).
+module coro_schedule_duty_live_across_await
+entry @main
+protocol Services kind services holders [scope, cache, frame, receipt, root, pending_exit] rules [
+    protocol_rule(transition=settle, from=cache, to=scope, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=receipt,
+    to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
+    protocol_rule(transition=settle, from=cache, to=root, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=rehome, from=scope,
+    to=pending_exit, checks=[owner, live_dependencies, sufficient_boundary],
+    normal=protocol_poststate(holder=pending_exit, state=open))]
+scope SW action in @work
+scope S action in @main
+summary MworkC call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results
+    [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], publication=atomic)
+summary MworkB call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results
+    [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[cancelled],
+    suspends=true, publication=atomic)
+summary MmainC call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[future<int>], publication=atomic)
+summary MmainB call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+func @work(%n: int) -> int [async] async-creation(MworkC) async-body(MworkB) {
+    boundary Bauto lexical in SW
+    ^entry in SW:
+    want %n
+    [iprep0] exit.prepare return %n at Bauto
+    result.exit edge normal(0), value %n, demand want, prepare iprep0
+    ret %n
+}
+func @main() -> int [entry, async] async-creation(MmainC) async-body(MmainB) {
+    binding b0 "f": future<int> in S
+    binding b1 "g": future<int> in S
+    binding b2 "x": int in S
+    boundary Bauto lexical in S
+    ^entry in S unwind ^failed:
+    %one: int = const 1
+    %f: future<int> = call @work(%one)
+    bind %f, binding b0
+    %two: int = const 2
+    %g: future<int> = call @work(%two)
+    bind %g, binding b1
+    %x: int = await %g, result int
+    bind %x, binding b2
+    want %x
+    [iprep1] exit.prepare return %x at Bauto
+    result.exit edge normal(0), value %x, demand want, prepare iprep1
+    ret %x
+    ^failed(%failure: failure) in S:
+    raise %failure
+}

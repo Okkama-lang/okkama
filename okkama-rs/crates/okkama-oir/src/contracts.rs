@@ -151,6 +151,10 @@ pub enum TransferRule {
     FrameSave { frame: ValueId, values: Vec<ValueId> },
     FrameResume { frame: ValueId, slots: Vec<u32> },
     CompleteIdentity { identity: ValueId, state: ValueId, output: SlotName },
+    /// C-4: the duties of one Future leave their holders for the pending reserve
+    /// of the exit. The verifier executes it from the operation's form and target,
+    /// never as a generic `Move`.
+    Rehome { inputs: Vec<ValueId>, outputs: Vec<SlotName> },
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Postcondition {
@@ -169,7 +173,7 @@ pub enum Postcondition {
     PreserveProvenance, CacheConsumedIfSettled(ValueId), NonLinearSlotOnly,
     Dynamic { target: ScopeId, reason: DynamicReason, protocol: ProtocolId },
     LexicalExit { kind: ExitKind, boundary: BoundaryId, selection: SelectionId },
-    CacheRehome(ScopeId), ConstructorFieldWrite(FieldRef), OnceValuePlain,
+    CacheRehome(RehomeTarget), ConstructorFieldWrite(FieldRef), OnceValuePlain,
     IncompleteIdentity, CompleteIdentity(ValueId), DischargeMustUse(ValueId), CreatesMustUse,
     NoActiveFailureReplacement, FullCarrierGraphOwner, NativeTransferableOnly,
     ProtocolState { holder: HolderKind, state: HolderState },
@@ -374,7 +378,7 @@ pub(crate) enum Rule {
     Publish { frame: ValueId, packet: Option<ValueId> },
     Spawn { state: ValueId },
     AwaitUnwind { state: ValueId, task: ValueId, receipt: ValueId, protocol: ProtocolId },
-    Rehome { form: RehomeForm, target: ScopeId, protocol: ProtocolId },
+    Rehome { form: RehomeForm, target: RehomeTarget, protocol: ProtocolId },
     Materialize { packet: ValueId, kind: ServiceKeyKind },
     Absorb { packet: ValueId, token: ValueId },
     CleanupSettleDynamic { cleanup: ValueId, protocol: ProtocolId },
@@ -477,7 +481,15 @@ impl<'a> ContractRegistry<'a> {
                 | CallOp::Role { call, .. } | CallOp::Closure { call, .. } | CallOp::Cap { call, .. } => call,
             };
             if call.summary.is_none() {
-                let results = self.unelaborated_results(call_op, body)?;
+                if let Some(result) = self.async_creation(call_op)? {
+                    // A High call of an async entry creates its Future (P2.5 plan §3.1).
+                    contract.normal.results.push(ResultSlot::new(SlotName::Value, ResultType::FutureOf(result)));
+                }
+                let results = if contract.normal.results.is_empty() {
+                    self.unelaborated_results(call_op, body)?
+                } else {
+                    vec![]
+                };
                 for (index, &ty) in results.iter().enumerate() {
                     contract.normal.results.push(ResultSlot::new(if results.len() == 1 { SlotName::Value } else { SlotName::Slot(u16::try_from(index).map_err(|_| ContractError::TooManyResults)?) }, ResultType::Exact(ty)));
                 }
@@ -493,6 +505,15 @@ impl<'a> ContractRegistry<'a> {
         self.apply(spec.rule, &mut contract, validate)?;
         contract.roots.through_suspend = contract.effects.suspends;
         Ok(contract)
+    }
+    /// The body result of a direct async callee, whose call creates a Future of it.
+    fn async_creation(&self, op: &CallOp) -> Result<Option<Option<TypeId>>, ContractError> {
+        let CallOp::Direct { function, .. } = op else { return Ok(None) };
+        let callee = self.module.functions.get(*function)?;
+        if !callee.attrs.contains(&FunctionAttr::Async) { return Ok(None); }
+        let mut results = callee.signature.results.iter().copied()
+            .filter(|ty| !matches!(self.module.types.get(*ty), Ok(Type::Service(_))));
+        Ok(Some(results.next()))
     }
     fn unelaborated_results(&self, op: &CallOp, body: Option<&Body>) -> Result<Vec<TypeId>, ContractError> {
         let signature = |function| Ok(self.module.functions.get(function)?.signature.results.clone());
@@ -558,7 +579,9 @@ impl<'a> ContractRegistry<'a> {
                 let trap = match (from, to) {
                     (T::Int, T::Float | T::Byte) | (T::Float, T::Int | T::Byte) | (T::Rat, T::Float | T::Byte) => true,
                     (T::Byte, T::Int | T::Float | T::Rat) | (T::Int | T::Float, T::Rat) | (T::Rat, T::Int) |
-                    (T::Int | T::Byte | T::Float | T::Rat | T::Bool, T::Str) => false,
+                    (T::Int | T::Byte | T::Float | T::Rat | T::Bool | T::Char, T::Str) | (T::Char, T::Int) => false,
+                    // #679: `char(n)` fails outside 0..0x10FFFF and on surrogates.
+                    (T::Int, T::Char) => true,
                     _ => return Err(ContractError::InvalidConversion { from, to }),
                 };
                 self.apply(Rule::Data { ty: to.result_type(), trap }, c, validate)?;
@@ -845,7 +868,7 @@ impl<'a> ContractRegistry<'a> {
                 };
                 c.normal.results.push(ResultSlot::service(N::Pending, S::Pending));
                 let outputs = c.normal.results.iter().map(|slot| slot.name).collect();
-                c.normal.transfers.push(TransferRule::Move { inputs, outputs });
+                c.normal.transfers.push(TransferRule::Rehome { inputs, outputs });
                 c.normal.postconditions.extend([Postcondition::CacheRehome(target), Postcondition::NoFreshAdmission]);
                 c.roots.roots.extend([RootKind::PendingExit, RootKind::Cache]);
                 self.protocol(protocol, ProtocolTransition::Rehome, c, validate)?;
@@ -1000,7 +1023,9 @@ impl<'a> ContractRegistry<'a> {
                 }
             }
             Rule::CleanupSettle { cleanup: plan, holder, protocol } => {
-                cleanup(c);
+                // Async ABI D20, D24.2: no service settle waits in 0.6.0; settle failures are captured by the
+                // cleanup state (Champ draft 3 §14.4, opcode 21, class L).
+                captured_cleanup(c);
                 c.normal.results.push(ResultSlot::new(N::State, ResultType::SameAs(plan)));
                 c.normal.transfers.push(TransferRule::Settle { inputs: vec![holder, plan] });
                 self.protocol(protocol, ProtocolTransition::Settle, c, validate)?;

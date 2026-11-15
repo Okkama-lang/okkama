@@ -483,6 +483,7 @@ impl Checker<'_, '_> {
                     NumericType::Rat => Type::Rat,
                     NumericType::Bool => Type::Bool,
                     NumericType::Str => Type::Str,
+                    NumericType::Char => Type::Char,
                 })?;
             }
             CoreOp::ByteFrom { value, .. } => {
@@ -645,8 +646,15 @@ impl Checker<'_, '_> {
             CoreOp::FailIsThrown { failure } => self.service(*failure, ServiceType::Failure)?,
             CoreOp::TypeOf { ty, descriptor } => {
                 self.module.types.get(*ty)?;
-                self.module.functions.get(descriptor.cleanup)?;
+                let cleanup = self.module.functions.get(descriptor.cleanup)?;
                 self.module.summaries.get(descriptor.summary)?;
+                // A runtime cleanup family is keyed by type (#569 C3b, C6): its declaration for one key is
+                // registered by its first parameter, so the descriptor of `ty` names the one keyed by `ty`.
+                let keyed = cleanup.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Intrinsic { name, .. }
+                    if self.state.context.external_contracts.descriptor_cleanup(name).is_some()));
+                if keyed && cleanup.signature.params.first() != Some(ty) {
+                    self.report(R::B111, "descriptor names the runtime cleanup registered for another type");
+                }
             }
             CoreOp::TestOk { condition } => self.expect(*condition, Type::Bool)?,
             CoreOp::TestIs { left, right } | CoreOp::TestIsnt { left, right } => {
@@ -1013,7 +1021,9 @@ impl Checker<'_, '_> {
         for attr in &data.attrs {
             let trusted = match attr {
                 FunctionAttr::Extern(name) => self.state.context.external_contracts.native(name),
-                FunctionAttr::Intrinsic { name, .. } => self.state.context.external_contracts.intrinsic(name),
+                FunctionAttr::Intrinsic { name, .. } => {
+                    self.state.context.external_contracts.intrinsic_declaration(name, &data.signature)
+                }
                 _ => continue,
             };
             self.require(trusted == Some(&data.signature), "call target has no matching trusted external ABI");
@@ -1021,7 +1031,13 @@ impl Checker<'_, '_> {
         generic_arguments(self.module, GenericOwner::Function(function),
             &data.type_params, &call.type_args, self.state)?;
         self.substitution = substitution(GenericOwner::Function(function), &call.type_args);
-        let params: Vec<_> = data.signature.params.iter().copied().filter(|id| {
+        // C-6: a D21 async defer entry takes the frame as its only parameter; the call passes the language
+        // arguments that its start continuation restores (C-2).
+        let start: Option<Vec<TypeId>> = data.body.as_ref().and_then(|body| body.frame_layout.as_ref())
+            .map(|layout| layout.continuations.first().map(|start| start.saved.iter()
+                .filter_map(|slot| layout.slots.get(*slot as usize).map(|decl| decl.ty)).collect())
+                .unwrap_or_default());
+        let params: Vec<_> = start.unwrap_or_else(|| data.signature.params.clone()).into_iter().filter(|id| {
             self.module.types.get(*id).is_ok_and(|ty| !matches!(ty, Type::Service(_) | Type::Descriptor))
         }).collect();
         self.call_site(call, &params, None)?;
@@ -1051,7 +1067,7 @@ impl Checker<'_, '_> {
                         self.state.context.external_contracts.native(name)
                     }
                     (CallOp::Intrinsic { .. }, FunctionAttr::Intrinsic { name, .. }) => {
-                        self.state.context.external_contracts.intrinsic(name)
+                        self.state.context.external_contracts.intrinsic_declaration(name, &data.signature)
                     }
                     _ => None,
                 });
@@ -1172,7 +1188,11 @@ impl Checker<'_, '_> {
                 match environment {
                     FutureEnvironment::Deferred { function, arguments, descriptors }
                     | FutureEnvironment::External { function, arguments, descriptors } => {
-                        let signature = &self.module.functions.get(*function)?.signature;
+                        // C-2: a D21 async body keeps its language signature in its start continuation.
+                        let target = self.module.functions.get(*function)?;
+                        let language = crate::verify::coro::language_signature(self.module, target);
+                        self.require(language.is_some(), "async body publishes results of different types (C-2)");
+                        let signature = &language.unwrap_or_else(|| target.signature.clone());
                         let params: Vec<_> = signature.params.iter().copied().filter(|ty| {
                             self.module.types.get(*ty).is_ok_and(|ty| !matches!(ty,
                                 Type::Service(_) | Type::Descriptor))
@@ -1406,8 +1426,7 @@ impl Checker<'_, '_> {
                 self.service(*cleanup, ServiceType::CleanupState)?;
                 self.service(*key, ServiceType::StableKey)?;
             }
-            CleanupOp::Shield { cleanup }
-            | CleanupOp::DeliverCancel { cleanup } | CleanupOp::Finish { cleanup } => {
+            CleanupOp::DeliverCancel { cleanup } | CleanupOp::Finish { cleanup } => {
                 self.service(*cleanup, ServiceType::CleanupState)?;
             }
             CleanupOp::DestroyDirect { cleanup, identity, descriptor, destroy } => {

@@ -1,0 +1,50 @@
+oir 2 high
+// void.await-for-effect: a void Future awaited as a temporary, and a bound void Future awaited twice.
+// Both cache duties belong to the action scope of async main.
+module async_void
+entry @main
+protocol Services kind services holders [scope, cache, frame, receipt, root, pending_exit] rules [
+    protocol_rule(transition=settle, from=cache, to=scope, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=receipt,
+    to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
+    protocol_rule(transition=settle, from=cache, to=root, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=rehome, from=scope,
+    to=pending_exit, checks=[owner, live_dependencies, sufficient_boundary],
+    normal=protocol_poststate(holder=pending_exit, state=open))]
+scope SN action in @note
+scope S action in @main
+summary MnoteC call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results
+    [result_relation(provenance=unbound_result)] contract call_contract(results=[future<void>], publication=atomic)
+summary MnoteB call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract
+    call_contract(failures=[cancelled], suspends=true, publication=atomic)
+summary MmainC call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[future<int>], publication=atomic)
+summary MmainB call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+func @note(%text: str) -> void [async] async-creation(MnoteC) async-body(MnoteB) {
+    ^entry in SN:
+    %length: int = str.len %text
+    ret
+}
+func @main() -> int [entry, async] async-creation(MmainC) async-body(MmainB) {
+    binding b0 "pending": future<void> in S
+    boundary B0 lexical in S
+    ^entry in S unwind ^failed:
+    %first: str = const "first"
+    %temporary: future<void> = call @note(%first)
+    temp %temporary, S
+    await %temporary
+    %second: str = const "second"
+    %f: future<void> = call @note(%second)
+    bind %f, binding b0
+    await %f
+    await %f
+    %zero: int = const 0
+    want %zero
+    [iprep0] exit.prepare return %zero at B0
+    result.exit edge normal(0), value %zero, demand want, prepare iprep0
+    ret %zero
+    ^failed(%failure: failure) in S:
+    raise %failure
+}

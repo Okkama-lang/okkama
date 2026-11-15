@@ -1,6 +1,119 @@
 use super::*;
 
 impl Engine<'_, '_> {
+    /// The start of a D21 async body (C-2): its frame parameter and the continuation 0 resume that opens
+    /// the entry block, with the restored slots and their result values.
+    pub(super) fn start_resume(&self) -> Option<(ValueId, &[SavedSlot], &[ValueId])> {
+        if !matches!(self.module.profile, Profile::Coro | Profile::Low)
+            || !self.declaration.attrs.contains(&FunctionAttr::Async)
+            || self.body.frame_layout.is_none() {
+            return None;
+        }
+        let entry = self.body.blocks.get(self.body.entry).ok()?;
+        let [frame] = entry.params.as_slice() else {
+            return None;
+        };
+        let inst = self.body.insts.get(*entry.insts.first()?).ok()?;
+        match &inst.op {
+            Operation::Async(AsyncOp::FrameResume { frame: resumed, continuation: 0, slots })
+                if resumed == frame && inst.results.len() == slots.len() + 1 => {
+                Some((*frame, slots, &inst.results[1..]))
+            }
+            _ => None,
+        }
+    }
+
+    /// An async body of coro/low in the D21 form: it starts from its frame and leaves through `fut.publish`.
+    pub(super) fn frame_body(&self) -> bool {
+        matches!(self.module.profile, Profile::Coro | Profile::Low)
+            && self.declaration.attrs.contains(&FunctionAttr::Async)
+            && self.body.frame_layout.is_some()
+    }
+
+    /// C-2: `fut.publish` is the exit of a D21 async body. Its success outcome is checked against the body
+    /// summary as a return of the value and the packet, its failure as a failure exit.
+    fn publish_exit(&mut self, before: &Flow, frame: ValueId, outcome: &PublishOutcome) {
+        // C-2: the body publishes after its cleanup, with every lexical scope closed (OIR-2 §10.1).
+        if before.scopes.values().any(|status| *status == 1) {
+            self.error(R::B41, "fut.publish runs while a lexical scope of the body is still open (C-2)");
+        }
+        // B9.5, D20: a linear token saved in the frame comes back through its resume; publication consumes the
+        // frame, so a linear slot still occupied there would be lost.
+        let hidden = before.tokens[frame.as_u32() as usize].frame.and_then(|key| before.frames.get(&key))
+            .is_some_and(|layout| layout.values().any(|slot| slot.token.saved_type.is_some_and(|ty| {
+                super::super::contracts::linear(self.module, ty)
+            })));
+        if hidden {
+            self.error(R::B95, "fut.publish consumes a frame that still holds a linear token");
+        }
+        match outcome {
+            PublishOutcome::Success { value, packet, .. } => {
+                let values: Vec<_> = value.iter().copied().chain([*packet]).collect();
+                self.body_summary(before, true, &values);
+            }
+            PublishOutcome::Failure(failure) => {
+                let mut failed = before.clone();
+                failed.active_failure = before.failures[failure.as_u32() as usize];
+                self.body_summary(&failed, false, &[]);
+            }
+        }
+    }
+
+    /// #684, D16: a service token owned by a scope that encloses `scope` is a duty of that enclosing scope. A close
+    /// of `scope` settles only its own duties (its D16 schedule) and leaves this one untouched for the owner's close.
+    pub(super) fn enclosing_duty(&mut self, token: &Token, scope: ScopeId) -> bool {
+        token.scope.is_some_and(|owner| owner != scope
+            && super::super::high::inside(self.module, scope, owner, self.state))
+    }
+
+    /// C-3: the task and the receipt of an await unwind edge reach only `await.unwind`; neither is a service duty
+    /// that a close or a settle step may take.
+    pub(super) fn await_handle(&self, before: &Flow, value: ValueId) -> bool {
+        before.tokens[value.as_u32() as usize].cache.is_some()
+            && matches!(super::super::later::value_type(self.module, self.body, value),
+                Some(Type::Service(ServiceType::TaskState | ServiceType::Receipt)))
+    }
+
+    /// Entry values of the function. The receiver, arguments, descriptors and input packet of a D21 async
+    /// body are the results of its start resume (C-2); every other body has them as entry parameters.
+    pub(super) fn entry_values(&self) -> Vec<ValueId> {
+        if let Some((_, _, results)) = self.start_resume() {
+            return results.to_vec();
+        }
+        self.body.blocks.get(self.body.entry).map(|entry| entry.params.clone()).unwrap_or_default()
+    }
+
+    /// C-1, C-2: the runtime writes the start slots into the frame before the body runs. The running
+    /// frame is the body's own activation, never a service duty of its owner, so closes do not settle it.
+    pub(super) fn start_frame(&self, flow: &mut Flow) {
+        let Some((frame, slots, results)) = self.start_resume() else {
+            return;
+        };
+        let key = Origin::Input(frame);
+        let index = frame.as_u32() as usize;
+        flow.availability[index] = AVAILABLE;
+        flow.aliases[index].insert(frame);
+        flow.contained[index].insert(frame);
+        let mut token = Token { frame: Some(key), ..Token::default() };
+        token.sources.insert(frame);
+        flow.tokens[index] = token;
+        let mut layout = std::collections::BTreeMap::new();
+        for (slot, &value) in slots.iter().zip(results) {
+            let index = value.as_u32() as usize;
+            let mut token = flow.tokens[index].clone();
+            token.saved_type = Some(slot.ty);
+            layout.insert(slot.slot, Slot {
+                token, refs: flow.refs[index].clone(), identity: flow.identities[index],
+                aliases: flow.aliases[index].clone(), contained: flow.contained[index].clone(),
+                requirements: flow.full_deps[index].clone(), lifetime: flow.lifetimes[index],
+                must_use: flow.must_use[index], failures: flow.failures[index], ..Slot::default()
+            });
+            // The start resume defines the value from its slot.
+            flow.availability[index] = ABSENT;
+        }
+        flow.frames.insert(key, layout);
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn async_operation(
         &mut self, block: BlockId, op: &Operation, outcome: Outcome, origin: Origin, before: &Flow,
@@ -65,7 +178,7 @@ impl Engine<'_, '_> {
             return;
         };
         if before.frame_conflict && matches!(op, AsyncOp::FrameSave { .. } | AsyncOp::FrameResume { .. }
-            | AsyncOp::FrameCancel { .. } | AsyncOp::FutureNew { .. }) {
+            | AsyncOp::FutureNew { .. }) {
             self.error(R::B95, "occupied frame families need producer layout/continuation metadata");
         }
         match op {
@@ -92,10 +205,15 @@ impl Engine<'_, '_> {
                 }
             }
             AsyncOp::CacheRehome { form: RehomeForm::State(state), target, .. } => {
+                // The pre-C-4 form over one cache-state token names the scope it moves the duty to.
+                let RehomeTarget::Scope(target) = *target else {
+                    self.error(R::B94, "the pre-C-4 cache.rehome form needs a target scope");
+                    return;
+                };
                 let mut token = before.tokens[state.as_u32() as usize].clone();
-                token.scope = Some(*target);
-                let changed = before.tokens[state.as_u32() as usize].scope != Some(*target);
-                if changed && before.scopes.get(target) != Some(&1) {
+                token.scope = Some(target);
+                let changed = before.tokens[state.as_u32() as usize].scope != Some(target);
+                if changed && before.scopes.get(&target) != Some(&1) {
                     self.error(R::B94, "cache rehome requires a live sufficient target boundary");
                 }
                 if let Some(key) = token.cache.filter(|_| changed) {
@@ -107,7 +225,7 @@ impl Engine<'_, '_> {
                             .cloned().collect();
                         for mut piece in moved {
                             holder.pieces.remove(&piece);
-                            piece.owner = Some(*target);
+                            piece.owner = Some(target);
                             token.pieces.insert(piece);
                         }
                         if let Some((keys, stale)) = &mut holder.snapshot
@@ -118,6 +236,60 @@ impl Engine<'_, '_> {
                 }
                 if let Some(slot) = slots.first_mut() {
                     slot.token = token;
+                }
+            }
+            AsyncOp::CacheRehome { form: RehomeForm::Scope { state, pending, future }, target, .. } => {
+                let key = self.identity(before, *future);
+                let mut owner = before.tokens[state.as_u32() as usize].clone();
+                let moved: Vec<_> = owner.pieces.iter().filter(|piece| piece.holder == Some(key)).cloned().collect();
+                for piece in &moved {
+                    owner.pieces.remove(piece);
+                }
+                let held = moved.iter().any(|piece| piece.origin == key);
+                let reserve = self.rehome_reserve(before, flow, *pending, owner.scope, *target, key, moved);
+                if !held {
+                    self.error(R::B94, "cache.rehome names a Future whose cache duty its scope state does not hold");
+                }
+                for (info, slot) in schema.results.iter().zip(slots.iter_mut()) {
+                    match info.name {
+                        SlotName::State => slot.token = owner.clone(),
+                        SlotName::Pending => *slot = reserve.clone(),
+                        _ => {}
+                    }
+                }
+            }
+            AsyncOp::CacheRehome { form: RehomeForm::Token { pending, cache, task }, target, .. } => {
+                // coro/low: the duty tokens are consumed; the duty and what its cache holds leave
+                // every carrier that still holds them, the owner state included.
+                let Some(key) = before.tokens[cache.as_u32() as usize].cache else {
+                    self.error(R::B94, "cache.rehome consumes the cache-state token of a Future");
+                    return;
+                };
+                if let Some(task) = task
+                    && before.tokens[task.as_u32() as usize].cache != Some(key) {
+                    self.error(R::B94, "cache.rehome consumes the task-state of the same spawned Future");
+                }
+                let mut moved = vec![];
+                let mut source = None;
+                for (index, holder) in flow.tokens.indexed_mut() {
+                    if flow.availability[index] != AVAILABLE {
+                        continue;
+                    }
+                    let held: Vec<_> = holder.pieces.iter().filter(|piece| piece.holder == Some(key)).cloned()
+                        .collect();
+                    for piece in held {
+                        holder.pieces.remove(&piece);
+                        if piece.origin == key {
+                            source = piece.owner;
+                        }
+                        moved.push(piece);
+                    }
+                }
+                let reserve = self.rehome_reserve(before, flow, *pending, source, *target, key, moved);
+                for (info, slot) in schema.results.iter().zip(slots.iter_mut()) {
+                    if info.name == SlotName::Pending {
+                        *slot = reserve.clone();
+                    }
                 }
             }
             AsyncOp::FutureSettle { task, .. } => {
@@ -171,6 +343,21 @@ impl Engine<'_, '_> {
                 if matches!(boundary, TakeBoundary::Temporary { .. })
                     && before.provenance.get(&key).is_none_or(|provenance| provenance & !FRESH != 0) {
                     self.error(R::B93, "temporary take cannot change a bound Future's cleanup boundary");
+                }
+                // OIR-2 §10.3: a temporary's boundary is its awaiting scope, which owns its cache. A cache
+                // owned by an outer scope is never taken into an inner consumer block.
+                if let TakeBoundary::Temporary { awaiting } = boundary {
+                    // The duty is in a live carrier, or saved in a frame slot across a suspension (coro).
+                    let live = before.token_values()
+                        .filter(|value| before.availability[value.as_u32() as usize] == AVAILABLE)
+                        .flat_map(|value| before.tokens[value.as_u32() as usize].pieces.iter());
+                    let saved = before.frames.values().flat_map(|layout| layout.values())
+                        .flat_map(|slot| slot.token.pieces.iter());
+                    let owner = live.chain(saved).find(|piece| piece.origin == key && piece.holder == Some(key))
+                        .map(|piece| piece.owner);
+                    if owner.is_some_and(|owner| owner != Some(*awaiting)) {
+                        self.error(R::B93, "temporary take must take the cache into the scope that owns it");
+                    }
                 }
                 if let TakeBoundary::Existing { owner } = boundary {
                     let key = self.identity(before, *future);
@@ -233,11 +420,13 @@ impl Engine<'_, '_> {
                     }
                     let mut token = before.tokens[value].clone();
                     token.saved_type = self.body.values.get(slot.value).ok().map(|data| data.ty);
+                    // R2: a failure saved across a suspension keeps its kinds (a close of the failure begins with
+                    // the resumed value).
                     layout.insert(slot.slot, Slot {
                         token, refs: before.refs[value].clone(),
                         identity: before.identities[value], aliases: before.aliases[value].clone(),
                         requirements: before.full_deps[value].clone(), lifetime: before.lifetimes[value],
-                        ..Slot::default()
+                        failures: before.failures[value], ..Slot::default()
                     });
                     if !seen.insert(slot.slot) {
                         self.error(R::B95, "frame.save has duplicate slots");
@@ -287,55 +476,6 @@ impl Engine<'_, '_> {
                     slot.token = before.tokens[frame.as_u32() as usize].clone();
                 }
             }
-            AsyncOp::FrameCancel { frame, cleanup, .. } => {
-                let mut token = before.tokens[cleanup.as_u32() as usize].clone();
-                let Some(fact) = &mut token.cleanup else {
-                    self.error(R::B95, "frame cancellation needs a checked cleanup automaton");
-                    return;
-                };
-                if !fact.shield || fact.phase > 1 || fact.awaiting_failure {
-                    self.error(R::B95, "frame cancellation must be shielded in the service phase");
-                }
-                let frame_token = &before.tokens[frame.as_u32() as usize];
-                if !frame_token.service.is_some_and(|key| fact.services.remove(&key)) {
-                    self.error(R::B95, "cancelled frame is not an outstanding service duty of this owner");
-                }
-                let mut frames: Vec<_> = frame_token.frame.into_iter().collect();
-                if frames.is_empty() {
-                    self.error(R::B95, "frame cancellation needs its saved layout");
-                }
-                let mut seen = BTreeSet::new();
-                while let Some(key) = frames.pop() {
-                    if !self.state.step(1) {
-                        return;
-                    }
-                    if !seen.insert(key) {
-                        continue;
-                    }
-                    if let Some(layout) = flow.frames.remove(&key) {
-                        for content in layout.into_values() {
-                            frames.extend(content.token.frame);
-                            token.pieces.extend(content.token.pieces.iter().cloned());
-                            fact.inventory.extend(content.token.pieces.iter().cloned());
-                            if let Some(saved) = &content.token.cleanup {
-                                token.pieces.extend(saved.reserve.iter().cloned());
-                                fact.inventory.extend(saved.reserve.iter().cloned());
-                            }
-                            if let Some(scope) = content.token.scope {
-                                flow.scopes.insert(scope, 2);
-                            }
-                        }
-                    }
-                }
-                // The frame's intrinsic cancellation settles its captured duties.
-                // Cancellation of a child does not replace the owner's primary failure.
-                fact.may_fail = true;
-                fact.phase = 1;
-                fact.plan = None;
-                if let Some(slot) = slots.first_mut() {
-                    slot.token = token;
-                }
-            }
             AsyncOp::FutureNew { packet, owner_state, environment, .. } => {
                 let packet = &before.tokens[packet.as_u32() as usize];
                 let owner = &before.tokens[owner_state.as_u32() as usize];
@@ -344,6 +484,15 @@ impl Engine<'_, '_> {
                     piece.holder = Some(origin);
                     piece
                 }).collect();
+                // B10.6, D16/D25: one `fut.new` site names one static duty of its owner. Reached again while the
+                // owner still holds that duty (a loop inside the owner), its Futures need dynamic entries (R1).
+                let retired = match origin {
+                    Origin::Instruction(inst, slot) => Origin::RetiredInstruction(inst, slot),
+                    other => other,
+                };
+                if owner.pieces.iter().any(|piece| piece.origin == origin || piece.origin == retired) {
+                    self.error(R::B106, "fut.new reaches its owner again while the owner holds its earlier duty (D25)");
+                }
                 let mut token = self.union([input, owner.clone()], true);
                 token.scope = owner.scope;
                 let mut duty = Piece::new(origin, AdmissionProvenance::CacheOwned);
@@ -371,8 +520,51 @@ impl Engine<'_, '_> {
                     }
                 }
             }
-            // `fut.publish` (C-2) has no result slot; its async linearity belongs to a later slice.
+            // `fut.publish` (C-2) has no result slot; in a D21 body it is the exit checked by the summary.
+            AsyncOp::FuturePublish { frame, outcome } if self.frame_body() => {
+                self.publish_exit(before, *frame, outcome);
+            }
             _ => {}
+        }
+    }
+
+    /// C-4 step 2 and the ruling of #601 R1: the duties of the Future `key` join the pending reserve of the
+    /// exit of their owner scope `source`. The target is that exit's destination: a live scope enclosing
+    /// `source`, or the caller. The owner tag stays until `exit.commit`, which checks the destination.
+    #[allow(clippy::too_many_arguments)]
+    fn rehome_reserve(
+        &mut self, before: &Flow, flow: &mut Flow, pending: ValueId, source: Option<ScopeId>, target: RehomeTarget,
+        key: Origin, moved: Vec<Piece>,
+    ) -> Slot {
+        let index = pending.as_u32() as usize;
+        let mut reserve = before.tokens[index].clone();
+        // Without a found duty its owner is unknown; the caller reports the missing duty.
+        if let (RehomeTarget::Scope(scope), Some(source)) = (target, source) {
+            let encloses = source != scope && super::super::high::inside(self.module, source, scope, self.state);
+            if before.scopes.get(&scope) != Some(&1) || !encloses {
+                self.error(R::B94, "cache rehome requires a live sufficient target boundary");
+            }
+        }
+        if reserve.rehome.is_some_and(|earlier| earlier != target) {
+            self.error(R::B94, "the duties rehomed into one pending exit name different destinations");
+        }
+        reserve.rehome = Some(target);
+        reserve.pieces.extend(moved);
+        // Snapshots of the moved duty's stable key no longer describe its holder (B7.2).
+        for (value, holder) in flow.tokens.indexed_mut() {
+            if flow.availability[value] != AVAILABLE {
+                continue;
+            }
+            if let Some((keys, stale)) = &mut holder.snapshot
+                && keys.contains(&key) {
+                *stale = true;
+            }
+        }
+        Slot {
+            token: reserve, refs: before.refs[index].clone(), identity: before.identities[index],
+            aliases: before.aliases[index].clone(), contained: before.contained[index].clone(),
+            must_use: before.must_use[index], requirements: before.full_deps[index].clone(),
+            lifetime: before.lifetimes[index], ..Slot::default()
         }
     }
 
@@ -403,7 +595,12 @@ impl Engine<'_, '_> {
             self.error(R::B92, "proof must refer to an actual Future creation");
         }
         let aliases = &before.aliases[proof.future.as_u32() as usize];
-        if aliases.iter().any(|alias| *alias != proof.future && !evidence.aliases.contains(alias)) {
+        // R2: a name that a suspension saved is the frame slot's retention; the evidence accounts for it by the
+        // slot, and coro forbids reading it after the save (B9.5).
+        let in_slot = |alias: ValueId| self.body.insts.iter().any(|(_, inst)| matches!(&inst.op,
+            Operation::Async(AsyncOp::FrameSave { slots, .. })
+                if slots.iter().any(|slot| slot.value == alias && evidence.frame_slots.contains(&slot.slot))));
+        if aliases.iter().any(|alias| *alias != proof.future && !evidence.aliases.contains(alias) && !in_slot(*alias)) {
             self.error(R::B92, "unique-cache evidence omits an existing alias");
         }
         for (value, _) in self.body.values.iter() {
@@ -423,8 +620,10 @@ impl Engine<'_, '_> {
                 let uses = inst.op.operand_refs().iter().any(|operand| {
                     matches!(operand.reference, OperandRef::Value(value) if aliases.contains(&value))
                 });
+                // A frame save retains the cache in a slot; the evidence lists the slot (below).
                 if uses && !matches!(inst.op, Operation::Async(AsyncOp::UniqueCacheProof { .. }
-                    | AsyncOp::AwaitTake { .. } | AsyncOp::FutureDone { .. } | AsyncOp::FutureCancelled { .. })) {
+                    | AsyncOp::AwaitTake { .. } | AsyncOp::FutureDone { .. } | AsyncOp::FutureCancelled { .. }
+                    | AsyncOp::FrameSave { .. })) {
                     self.error(R::B92, "cache is published, retained, shared-awaited or stored in the function");
                 }
                 if let Operation::Async(AsyncOp::FrameSave { slots, .. }) = &inst.op {

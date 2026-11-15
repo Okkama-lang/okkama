@@ -16,6 +16,8 @@ pub struct CleanupContext {
     pub replacement: Option<LatestValue>,
     pub returning: bool,
     pub destination: Option<ExitDestination>,
+    /// A `cache.rehome` moved cache duties into the pending reserve (C-4).
+    pub rehomed: bool,
     pub defers: BTreeMap<ScopeId, Vec<InstId>>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -40,6 +42,10 @@ impl LiveEnv {
     }
     pub fn value(&self, original: ValueId) -> Result<LatestValue, OwnError> {
         self.values.get(&original).copied().ok_or_else(|| flow_error("value has no latest SSA definition"))
+    }
+    /// The state of a retained lexical scope; producer output never makes own panic (#672).
+    pub fn state(&self, scope: ScopeId) -> Result<ValueId, OwnError> {
+        self.scopes.get(&scope).copied().ok_or_else(|| flow_error("lexical scope state is not retained"))
     }
 }
 #[derive(Clone, Debug)]
@@ -352,6 +358,11 @@ impl<'a> OutcomeEmitter<'a> {
                     ValueFacts::Managed { deps } => deps,
                     _ => body.deps.alloc(DepExpr::Empty).map_err(arena)?,
                 }
+            } else if *slot == SlotName::Value && matches!(op, Operation::Async(AsyncOp::FutureNew { .. })) {
+                // A Future depends on the stable key of its own cache duty (D12).
+                let key = body.keys.alloc(KeyExpr::ServiceOf { value: *value, kind: ServiceKeyKind::Cache })
+                    .map_err(arena)?;
+                body.deps.alloc(DepExpr::Key(key)).map_err(arena)?
             } else if *slot == SlotName::Value && matches!(op, Operation::Ownership(OwnershipOp::Empty {})) {
                 // A caught payload (`catch` landing) retains what its failure carried.
                 let selection = body.selections.alloc(SelectionExpr::Value(*value)).map_err(arena)?;
@@ -451,7 +462,7 @@ fn transfer_inputs(transfer: &TransferRule) -> Vec<ValueId> {
         TransferRule::Preserve { input, .. } | TransferRule::Partition { input, .. }
         | TransferRule::Close { input } => vec![*input],
         TransferRule::Move { inputs, .. } | TransferRule::Settle { inputs }
-        | TransferRule::Protocol { inputs, .. } => inputs.clone(),
+        | TransferRule::Protocol { inputs, .. } | TransferRule::Rehome { inputs, .. } => inputs.clone(),
         TransferRule::Admit { state, packet, .. } => vec![*state, *packet],
         TransferRule::ScopeTransfer { states, .. } => states.values(),
         TransferRule::Publish { input, .. } => vec![*input],

@@ -5,13 +5,15 @@ object R {
     field x: int
     destroy @destroy
 }
+protocol Services kind services
 scope SD action in @destroy
 scope ST action in @task
 scope S action in @f
 summary Md internal parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(publication=atomic)
 summary Mt internal contract call_contract(publication=atomic)
 summary Mv observation parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(aliases=[parameter(0)], external_deps=[0], provenance=cache_owned)] contract call_contract(results=[R], publication=atomic)
-summary Mf internal contract call_contract(failures=[thrown, program, panic, native], suspends=true, publication=atomic)
+summary Mf internal contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
 func @destroy(%self: R facts(managed(deps=dd))) -> void [destroy R] summary(Md) {
     dependency dd: dependency = retention(value=%self, selection=selection(%self))
 ^entry in SD:
@@ -23,6 +25,7 @@ func @task() -> void summary(Mt) {
 }
 func @view(%future: future<void>) -> R [extern "fixture.cache_view"] abi observation summary(Mv);
 func @f() -> void [async] summary(Mf) {
+    service.schedule Schedule0 owner S, protocol Services, duties [%future]
     key k0: key = service_of(value=%future, kind=cache)
     dependency d0: dependency = key(k0)
     dependency dv: dependency = retention(value=%view, selection=selection(%view))
@@ -38,8 +41,14 @@ func @f() -> void [async] summary(Mf) {
         unwind ^bad($state, $failure)
 ^ok(%rest: scope<S>, %packet: own, %external: deps) in S:
     %accepted: scope<S> = own.accept %rest, %packet
-    %closed: closed = scope.end %accepted, effects scope_effects(failures=[thrown, program, panic, native], suspends=true, cancel=false)
+    invoke.own scope.end %accepted, effects scope_effects(failures=[thrown, program, panic, native], suspends=true,
+        cancel=true)
+        normal ^d18_closed($closed)
+        unwind ^d18_cancelled($closed, $failure)
+^d18_closed(%closed: closed) in S:
     ret
+^d18_cancelled(%d18_closed2: closed, %d18_cancel: failure) in S:
+    raise %d18_cancel
 ^bad(%failed: scope<S>, %failure: failure) in S:
     %combined: failure = scope.unwind %failed, %failure, effects scope_effects(failures=[thrown, program, panic, native], suspends=true, cancel=false)
     raise %combined

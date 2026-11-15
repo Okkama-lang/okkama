@@ -14,10 +14,17 @@ pub struct P1Contracts {
     core: Vec<Function>,
     natives: BTreeMap<String, Function>,
     handles: BTreeMap<String, u32>,
+    /// The `fn` roles: one owning slot named `call`.
+    callables: Vec<u32>,
 }
 
 /// The failure mask of a native entry: a provider refusal (`NativeFailure`).
 pub const NATIVE_FAILURES: u32 = 8;
+
+/// The opaque cleanup intrinsic of an action value (OIR-2 catalogue, #569 C3b).
+pub const SYNC_CLOSURE_CLEANUP: &str = "oir.sync_closure.cleanup";
+/// The opaque cleanup intrinsic of an `any` box (OIR-2 catalogue, #569 C6).
+pub const ANY_CLEANUP: &str = "oir.any.cleanup";
 
 impl P1Contracts {
     pub fn new(objects: &[Object]) -> Result<Self, Error> {
@@ -27,13 +34,7 @@ impl P1Contracts {
             && object.fields.is_empty() && object.layout.storage_fields == [Type::Int]
             && !object.layout.may_reach_resource);
         for object in objects.iter().filter(|object| !object.error_cases.is_empty()) {
-            let valid = if object.fields.is_empty() {
-                object.layout.storage_fields == [Type::Int]
-            } else {
-                object.error_cases.len() == 1 && object.layout.storage_fields.iter()
-                    .all(|ty| matches!(ty, Type::Str | Type::Int | Type::Bool))
-            };
-            if !valid || object.layout.may_reach_resource || object.layout.has_destroy {
+            if !error_layout(objects, object) {
                 return Err(error("invalid P1 plain Error layout"));
             }
         }
@@ -78,8 +79,12 @@ impl P1Contracts {
         ] {
             entries.push(entry(&format!("{TEST_INTRINSIC_PREFIX}{name}"), params, vec![], false, 2));
         }
-        let handles = objects.iter().enumerate().filter(|(_, object)| object.handle)
-            .map(|(id, object)| (object.name.clone(), id as u32)).collect::<BTreeMap<_, _>>();
+        let mut handles = BTreeMap::new();
+        for (id, object) in objects.iter().enumerate().filter(|(_, object)| object.handle) {
+            // A second declaration of one name would silently replace the first (`HANDLE_NAME`).
+            enforce(handles.insert(object.name.clone(), id as u32).is_none(), "HANDLE_NAME",
+                "two native handle declarations share one name")?;
+        }
         let mut natives = BTreeMap::new();
         for &native in abi::Native::ALL {
             if catalogue::admitted(native.symbol()).is_err() {
@@ -92,13 +97,16 @@ impl P1Contracts {
                 abi::Type::Void => Some(vec![]),
                 ty => abi_type(ty, &prefix, &handles).map(|ty| vec![ty]),
             };
-            // An operation over a type SPB 17 cannot carry (maps, float arrays) has no entry yet.
+            // An operation over a type this bridge does not carry (maps, char and rat arrays) has no entry yet.
             if let (Some(registers), Some(results)) = (registers, results) {
                 let function = entry(native.symbol(), registers, results, true, NATIVE_FAILURES);
                 natives.insert(native.symbol().to_owned(), function);
             }
         }
-        Ok(Self { core: entries, natives, handles })
+        let callables = objects.iter().enumerate().filter(|(_, object)| object.role.as_ref().is_some_and(|role| {
+            matches!(role.slots.as_slice(), [slot] if slot.name == "call" && slot.entry_abi == EntryAbi::Owned)
+        })).map(|(id, _)| id as u32).collect();
+        Ok(Self { core: entries, natives, handles, callables })
     }
 
     /// The finite P1 entries: Atomic operations, `Error.text` and the test intrinsics.
@@ -114,6 +122,9 @@ impl P1Contracts {
     /// The checked unresolved-provider adapter for `declared` (P2.4 §4.7): `None` unless its symbol is
     /// canonical and absent from the runtime table and every type is data or a handle of its module.
     pub fn adapter(&self, declared: &Function) -> Option<Function> {
+        if let Some(entry) = self.opaque_cleanup(declared) {
+            return Some(entry);
+        }
         let name = declared.proofs.entry.as_ref()?.external.as_deref()?;
         let symbol = catalogue::Symbol::parse(name)?;
         if catalogue::admitted(name) != Err(catalogue::Admission::Unknown) {
@@ -139,6 +150,69 @@ impl P1Contracts {
     }
 }
 
+impl P1Contracts {
+    /// The opaque cleanup family, keyed by its first parameter (OIR-2 catalogue, #569 C3b and C6):
+    /// `oir.sync_closure.cleanup` takes an action value (a `fn` role: one owning `call` slot) and
+    /// `oir.any.cleanup` an `any` box, each with its deps and the packet of the value's complete owner graph.
+    /// The entry releases that graph and returns an empty packet; it cannot fail. It is recomputed from
+    /// the key alone, so the declaration must equal it exactly.
+    pub fn opaque_cleanup(&self, declared: &Function) -> Option<Function> {
+        let name = declared.proofs.entry.as_ref()?.external.as_deref()?;
+        let key = *declared.registers.first()?;
+        let admitted = match (name, key) {
+            (SYNC_CLOSURE_CLEANUP, Type::Role(id)) => self.callables.contains(&id),
+            (ANY_CLEANUP, Type::Any) => true,
+            _ => false,
+        };
+        if !admitted {
+            return None;
+        }
+        Some(Function {
+            symbol: name.into(), entry_abi: EntryAbi::Owned,
+            registers: vec![key], services: vec![ServiceKind::Deps, ServiceKind::Packet],
+            params: vec![Location::Register(0), Location::Service(0), Location::Service(1)], results: vec![],
+            blocks: vec![], code: vec![],
+            proofs: FunctionProofs {
+                entry: Some(EntryContract { external: Some(name.into()), ..EntryContract::default() }),
+                ..FunctionProofs::default()
+            },
+        })
+    }
+}
+
+/// A plain Error layout whose text `okkama.Error.text` writes: an Error enum (one case-number word), a
+/// case of an Error variant without payload (no storage), or a case with payload fields of the types an
+/// error payload may have and the text can show: scalars, plain enums that name their cases, and Error
+/// enums and Error variants (an `Error` role payload has no text on Tomato either).
+pub fn error_layout(objects: &[Object], object: &Object) -> bool {
+    let layout = &object.layout;
+    if layout.may_reach_resource || layout.has_destroy || object.enum_cases != 0 || !object.variant_cases.is_empty()
+        || object.handle || object.role.is_some() || object.any_box
+    {
+        return false;
+    }
+    if object.fields.is_empty() {
+        return layout.storage_fields == [Type::Int]
+            || (layout.storage_fields.is_empty() && object.error_cases.len() == 1);
+    }
+    let shown = |ty: &Type| match *ty {
+        Type::Str | Type::Int | Type::Bool | Type::Byte | Type::Float | Type::Rat => true,
+        Type::Object(id) => objects.get(id as usize).is_some_and(|payload| !payload.error_cases.is_empty()
+            || (payload.enum_cases > 0 && payload.enum_names.len() == payload.enum_cases as usize
+                && payload.fields.is_empty() && payload.layout.storage_fields == [Type::Int])),
+        Type::Variant(id) => objects.get(id as usize).is_some_and(|variant| !variant.variant_cases.is_empty()
+            && variant.variant_cases.iter().all(|&case| objects.get(case as usize)
+                .is_some_and(|case| !case.error_cases.is_empty()))),
+        _ => false,
+    };
+    // Every storage word is one payload field, shown in declaration order.
+    let mut storage = object.fields.iter().map(|field| field.storage as usize).collect::<Vec<_>>();
+    storage.sort_unstable();
+    object.error_cases.len() == 1 && object.fields.iter().all(|field| !field.once)
+        && storage.iter().copied().eq(0..layout.storage_fields.len())
+        && layout.storage_fields.iter().all(shown)
+}
+
 /// The runtime word type held by a registered plain Atomic specialization (P2.4 §4.8): a scalar, or
 /// `array_` and a plain element suffix that SPB 17 can carry.
 pub fn atomic_value(suffix: &str) -> Option<Type> {
@@ -157,6 +231,9 @@ pub fn atomic_value(suffix: &str) -> Option<Type> {
                 Type::Bool => ArrayLeaf::Bool,
                 Type::Str => ArrayLeaf::Str,
                 Type::Bytes => ArrayLeaf::Bytes,
+                Type::Float => ArrayLeaf::Float,
+                Type::Char => ArrayLeaf::Char,
+                Type::Rat => ArrayLeaf::Rat,
                 Type::Array(shape) => {
                     let depth = shape.depth.checked_add(1)?;
                     return Some(Type::Array(ArrayType { depth, ..shape }));
@@ -188,6 +265,7 @@ fn abi_type(ty: &abi::Type, prefix: &str, handles: &BTreeMap<String, u32>) -> Op
             let leaf = match abi_type(item, prefix, handles)? {
                 Type::Int => ArrayLeaf::Int,
                 Type::Bool => ArrayLeaf::Bool,
+                Type::Float => ArrayLeaf::Float,
                 Type::Str => ArrayLeaf::Str,
                 Type::Bytes => ArrayLeaf::Bytes,
                 Type::Array(shape) => {

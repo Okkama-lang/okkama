@@ -47,7 +47,7 @@ fn golden(root: &std::path::Path, name: &str) {
 
 // Concrete generic symbols can make a signature wider than a readable stored golden.
 // Break only at whitespace outside quoted identifiers; compare canonical text after parsing.
-fn wrap_high(text: &str) -> String {
+pub(super) fn wrap_high(text: &str) -> String {
     let mut output = String::new();
     for line in text.lines() {
         let mut remaining = line.to_owned();
@@ -206,9 +206,9 @@ fn oir2_c5_computed_callable_field_boundaries() {
     super::print_oir2(&format!("{owner}{main}")).unwrap();
     let open = concat!("object Open { Open(); read(view is Owner::View) is int { ",
         "view::action(); } } ");
-    let error = super::print_oir2(&format!("{owner}{open}{main}")).unwrap_err();
-    assert!(error.to_string().contains("open action invocation"), "{error}");
-    assert!(error.to_string().contains("O1"), "{error}");
+    // #569 C3b: an action read from a cap parameter is open in the reading body.
+    let text = super::print_oir2(&format!("{owner}{open}{main}")).unwrap();
+    assert!(text.contains("[intrinsic \"oir.sync_closure.cleanup\"]"), "{text}");
 }
 
 #[test]

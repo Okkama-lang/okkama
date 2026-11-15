@@ -506,6 +506,60 @@ fn champ_s3_fresh_argument_overflow_runs_destroy_bodies_once_and_preserves_overf
     assert!(f.h.runtime.failure(failure.secondary[0]).unwrap().cleanup_origin);
 }
 
+extern "C" fn opaque_cleanup_adapter(ctx: *mut Ctx, io: *mut CallOwn, _: *const Word, _: u64) -> Outcome {
+    super::p1::opaque_cleanup(ctx, io)
+}
+fn opaque_cleanup_entry(f: &mut Fixture) -> EntryId {
+    f.h.runtime.champ_register_entry(EntryContract {
+        invoke: opaque_cleanup_adapter, arguments: vec![Repr::Ref], replacements: 0, summary: 0,
+        cleanup_mode: CLEANUP_ORDINARY,
+    })
+}
+/// The opaque cleanup intrinsic releases the complete owner graph it is given: each identity of its packet is
+/// destroyed once, in descending serial order, and the result packet is empty.
+#[test]
+fn champ_s3_opaque_cleanup_destroys_the_graph_once_and_returns_an_empty_packet() {
+    let mut f = Fixture::new();
+    let owner = f.h.runtime.champ_new_owner().unwrap();
+    let a = f.fresh(1, false, owner);
+    let b = f.fresh(2, false, owner);
+    let packet = f.join(vec![a, b]);
+    let entry = opaque_cleanup_entry(&mut f);
+    for &(object, _) in &f.objects {
+        f.h.runtime.roots.push((object, Repr::Ref));
+    }
+    let args = [f.log];
+    let mut post = CallPost::default();
+    let mut io = CallOwn { input: packet, entry_abi: entry, output: &mut post, context: 0, cleanup_mode: 0 };
+    f.h.ctx.entry_frame = frame_pointer!();
+    assert_eq!(rt_call_owned(&mut f.h.ctx, entry, args.as_ptr(), 1, &mut io, &mut post), NORMAL);
+    assert_eq!(f.h.ctx.status, OK);
+    assert_eq!(io.input.record, 0);
+    assert!(f.h.runtime.champ_packet_keys(&post.packet).unwrap().is_empty());
+    assert_eq!(f.trace(), "21");
+    f.assert_once();
+}
+
+/// Its contract has no failure: a destroy that fails stops the machine instead of unwinding.
+#[test]
+fn champ_s3_opaque_cleanup_stops_on_a_failing_destroy() {
+    let mut f = Fixture::new();
+    let owner = f.h.runtime.champ_new_owner().unwrap();
+    let packet = f.fresh(1, true, owner);
+    let entry = opaque_cleanup_entry(&mut f);
+    for &(object, _) in &f.objects {
+        f.h.runtime.roots.push((object, Repr::Ref));
+    }
+    let args = [f.log];
+    let mut post = CallPost::default();
+    let mut io = CallOwn { input: packet, entry_abi: entry, output: &mut post, context: 0, cleanup_mode: 0 };
+    f.h.ctx.entry_frame = frame_pointer!();
+    assert_eq!(rt_call_owned(&mut f.h.ctx, entry, args.as_ptr(), 1, &mut io, &mut post), OUTCOME_STOP);
+    assert_ne!(f.h.ctx.status, OK);
+    assert_eq!(f.h.identity(f.objects[0].0).life, Life::Dead);
+    f.h.reset_fatal();
+}
+
 #[test]
 fn champ_s3_journal_head_tail_drains_have_linear_storage_work() {
     for tail in [false, true] {
@@ -755,4 +809,43 @@ fn champ_s3_spb_plan_relocation_is_nonzero_runtime_local_and_checked_before_muta
     let before = harness.runtime.champ.cleanup_plans.len();
     assert!(harness.runtime.champ_load_cleanup_plans(&invalid, &catalog).is_err());
     assert_eq!(harness.runtime.champ.cleanup_plans.len(), before);
+}
+
+extern "C" fn never_owned(_: *mut Ctx, _: *mut CallOwn, _: *const Word, _: u64) -> Outcome {
+    unreachable!("relocation enters no host entry")
+}
+
+extern "C" fn never_plain(_: *mut Ctx, _: *const Word, _: u64) -> Word {
+    unreachable!("relocation enters no host entry")
+}
+
+#[test]
+fn champ_verified_cleanup_plans_relocate_as_the_checked_load_does() {
+    use okkama_sparrow::spb17 as s;
+    struct Catalog<'a>(&'a s::Program);
+    impl s::ExternalContracts for Catalog<'_> {
+        fn entry(&self, name: &str) -> Option<&s::Function> {
+            self.0.functions.iter().find(|function| function.proofs.entry.as_ref()
+                .and_then(|entry| entry.external.as_deref()) == Some(name))
+        }
+    }
+    let program = s::assemble(include_str!(
+        "../../../okkama-compiler/src/codegen/sparrow_oir2/fixtures/unwind-reserve.spb17"
+    )).unwrap();
+    let external = program.functions.iter().filter(|function| function.code.is_empty()).map(|function| {
+        let owned = function.entry_abi != s::EntryAbi::Observation;
+        ExternalEntry {
+            declaration: function.clone(),
+            owned: owned.then_some(never_owned as OwnedEntry),
+            plain: (!owned).then_some(never_plain as super::machine::PlainEntry),
+        }
+    }).collect();
+    let verified = super::machine::Verified::new(program.clone(), external).unwrap();
+    let mut checked = Harness::new();
+    let mut trusted = Harness::new();
+    let expected = checked.runtime.champ_load_cleanup_plans(&program, &Catalog(&program)).unwrap();
+    let relocated = trusted.runtime.champ_verified_cleanup_plans(&verified);
+    assert!(expected.iter().flatten().next().is_some());
+    assert_eq!(relocated, expected);
+    assert_eq!(trusted.runtime.champ.cleanup_plans.len(), checked.runtime.champ.cleanup_plans.len());
 }

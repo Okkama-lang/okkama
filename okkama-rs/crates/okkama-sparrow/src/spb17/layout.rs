@@ -205,11 +205,7 @@ fn repr(ty: s::Type) -> Repr {
 
 // SPB 17 lists reference fields; the GC additionally traces tagged Int words.
 fn reference_slots(types: &[s::Type]) -> Vec<u32> {
-    types.iter().enumerate().filter_map(|(index, ty)| {
-        matches!(ty, s::Type::Error | s::Type::Bytes | s::Type::Array(_) | s::Type::Str | s::Type::Object(_)
-            | s::Type::Successor(_) | s::Type::Failure | s::Type::Rat | s::Type::Variant(_) | s::Type::Handle(_))
-            .then_some(index as u32)
-    }).collect()
+    types.iter().enumerate().filter_map(|(index, ty)| ty.traced().then_some(index as u32)).collect()
 }
 
 #[derive(Debug)]
@@ -275,9 +271,13 @@ pub struct ServiceLayout {
 pub const fn service_layout(kind: s::ServiceKind) -> ServiceLayout {
     use s::ServiceKind::*;
     match kind {
-        Deps | Closed => ServiceLayout { words: 0, references: &[] },
+        // The frame token names the activation's own frame word, which is a root of its own (draft 3 §13).
+        // The take capability is a proof position (draft 3 §14.2).
+        Deps | Closed | Frame | UniqueCache => ServiceLayout { words: 0, references: &[] },
         StableKey => ServiceLayout { words: 2, references: &[0] },
         DestroyBorrow => ServiceLayout { words: 5, references: &[0, 32] },
+        // A receipt is a raw enumeration word (draft 3 §14.2).
+        Receipt => ServiceLayout { words: 1, references: &[] },
         _ => ServiceLayout { words: 1, references: &[0] },
     }
 }

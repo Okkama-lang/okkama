@@ -567,7 +567,7 @@ impl Runtime {
     }
 
     /// The report of an exhausted run.
-    fn exhausted_report(&mut self) -> Error {
+    pub(crate) fn exhausted_report(&mut self) -> Error {
         let message = self.budget.exhausted.unwrap_or(Exhausted::Interrupted).message();
         self.uncaught = Some(crate::Uncaught { category: "exhausted", error_type: None, message: message.into(), trace: Vec::new(), trace_offset: 0, cause_traces: Vec::new() });
         Error(message.into())
@@ -756,7 +756,8 @@ impl Runtime {
             .loaded
             .program
             .entry
-            .ok_or_else(|| Error("Sparrow program has no entry function".into()))?
+            // A program without `main` fails when execution starts, with an ordinary runtime report.
+            .ok_or_else(|| Error("RuntimeError: Program requires main() declaration".into()))?
             .0 as usize;
         let result = self.run_function(entry, stack)?;
         match self.heap.integer(result) {
@@ -800,6 +801,11 @@ impl Runtime {
             entry_frame: frame_pointer!(),
             scratch: UNBOUND,
         };
+        // A Champ async entry runs its own root Future through the same scheduler (draft 3 §3).
+        #[cfg(feature = "champ-abi")]
+        if self.champ_async_body(entry) {
+            return self.champ_run_async_main(&mut ctx, entry, arguments);
+        }
         let result = if asynchronous {
             // The root Future, its task tree, then shutdown of spawned tasks.
             let root = self.future_new(entry, arguments);

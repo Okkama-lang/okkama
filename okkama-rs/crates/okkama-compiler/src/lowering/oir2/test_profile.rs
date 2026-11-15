@@ -19,46 +19,11 @@ pub(super) fn declare(builder: &mut ir::ModuleBuilder, function: ir::FuncId, tes
         return Err(LowerError::invalid(test.span, "test in production"));
     }
     if test.is_async {
-        if !module.requires.contains(&ir::Feature::Async) {
-            module.requires.push(ir::Feature::Async);
-        }
-        // Parameterless, void test bodies have no input/result retention relation.
-        // These High envelopes do not implement Future ownership or async execution.
-        let future = builder.intern_type(ir::Type::Future(None))?;
-        let body = builder.add_summary(envelope(vec![], false))?;
-        let creation = builder.add_summary(envelope(vec![future], true))?;
-        let declaration = builder.raw_mut().functions.get_mut(function)?;
-        declaration.async_creation_summary = Some(creation);
-        declaration.async_body_summary = Some(body);
+        // A parameterless, void test body has the High envelopes of every async entry. They do
+        // not implement Future ownership or async execution.
+        super::asynchronous::declare(builder, function)?;
     }
     Ok(())
-}
-
-fn envelope(results: Vec<ir::TypeId>, creation: bool) -> ir::Summary {
-    ir::Summary {
-        entry_kind: ir::EntryKind::CallBoundary,
-        parameters: vec![],
-        results: results.iter().map(|_| ir::ResultRelation {
-            fresh: vec![],
-            aliases: vec![],
-            external_deps: vec![],
-            opaque: false,
-            provenance: ir::AdmissionProvenance::UnboundResult,
-        }).collect(),
-        contract: ir::CallContract {
-            results,
-            failures: if creation {
-                vec![ir::FailureKind::Program, ir::FailureKind::Panic, ir::FailureKind::Native]
-            } else {
-                vec![ir::FailureKind::Thrown, ir::FailureKind::Program, ir::FailureKind::Panic,
-                    ir::FailureKind::Native, ir::FailureKind::Cancelled]
-            },
-            suspends: !creation,
-            async_destroy: false,
-            publication: ir::Publication::Atomic,
-            protocol: None,
-        },
-    }
 }
 
 pub(super) fn check(module: &ir::Module) -> Result<()> {

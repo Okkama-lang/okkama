@@ -126,17 +126,20 @@ func @f(%0: own) -> (int, own) abi explicit(input_packet=0, output_packet=1) sum
         state=%13, original_scope=S2)
     %19: Readable facts(managed(deps=d1)) = role.wrap %16, ty Readable
     %20: deps = deps.of %19
-    %21: fn() -> int facts(managed(deps=d1)) = fn.bind.role %19, role Readable, slot 0, ty fn() -> int
-    %22: deps = deps.of %21
-    %23: own = own.empty
-    (%24: int, %25: own, %26: deps) = fn.call %21(; %23) deps [%22] summary(M5)
-    %27: scope<S2> = own.admit %18, %25
-    %28: closed = scope.end %27, effects scope_effects(failures=[], suspends=false, cancel=false)
-    %29: own = own.empty
-    ret %24, %29
-    ^b5(%30: scope<S2>, %31: failure) in S2:
-    %32: failure = scope.unwind %30, %31, effects scope_effects(failures=[], suspends=false, cancel=false)
-    raise %32
+    %21: own = own.empty
+    (%22: fn() -> int facts(managed(deps=d1)),
+        %23: own) = fn.bind.role %19, role Readable, slot 0, ty fn() -> int, packet %21
+    %24: deps = deps.of %22
+    %25: scope<S2> = own.admit %18, %23
+    %26: own = own.empty
+    (%27: int, %28: own, %29: deps) = fn.call %22(; %26) deps [%24] summary(M5)
+    %30: scope<S2> = own.admit %25, %28
+    %31: closed = scope.end %30, effects scope_effects(failures=[], suspends=false, cancel=false)
+    %32: own = own.empty
+    ret %27, %32
+    ^b5(%33: scope<S2>, %34: failure) in S2:
+    %35: failure = scope.unwind %33, %34, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %35
 }
 
 func @own_witness_entry_4(%0: R facts(managed(deps=d1)); %1: deps, %2: own) -> (int, own) [method

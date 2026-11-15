@@ -42,7 +42,7 @@ fn plain_object(name: &str, storage_fields: Vec<Type>) -> Object {
         name: name.into(),
         error_cases: vec![],
         enum_cases: 0,
-        variant_cases: vec![], handle: false,
+        variant_cases: vec![], handle: false, role: None, implements: vec![], any_box: false, enum_names: vec![],
         fields: (0..count).map(|storage| Field { name: format!("f{storage}"), storage, once: false }).collect(),
         layout: ObjectRuntimeLayout {
             storage_fields, allocation_words: (1 + count).max(2), identity_offset: None, has_destroy: false,
@@ -79,6 +79,35 @@ fn trapping_conversion_keeps_its_failure() {
     reject(&program(vec![Type::Int, Type::Byte], code(), false, 0), "ENTRY_FAILURE_MASK");
     reject(&program(vec![Type::Int, Type::Byte], code(), true, 2), "FALLIBLE_DATA_OUTCOMES");
     verify_load(&program(vec![Type::Int, Type::Byte], code(), false, 2), &NoExternalContracts).unwrap();
+}
+
+/// #679: char -> int and char -> str are total; int -> char fails outside the Unicode scalar values.
+#[test]
+fn char_conversions_load_with_their_fallibility() {
+    let from_char = || vec![constant(0, Constant::Char(0x416)), data(DataOp::Convert, vec![0], 1, Immediate::None)];
+    for to in [Type::Int, Type::Str] {
+        verify_load(&program(vec![Type::Char, to], from_char(), true, 0), &NoExternalContracts)
+            .unwrap_or_else(|error| panic!("char -> {to:?}: {error}"));
+    }
+    let to_char = || {
+        vec![constant(0, Constant::Int("55296".into())), data(DataOp::Convert, vec![0], 1, Immediate::None)]
+    };
+    reject(&program(vec![Type::Int, Type::Char], to_char(), false, 0), "ENTRY_FAILURE_MASK");
+    reject(&program(vec![Type::Int, Type::Char], to_char(), true, 2), "FALLIBLE_DATA_OUTCOMES");
+    verify_load(&program(vec![Type::Int, Type::Char], to_char(), false, 2), &NoExternalContracts).unwrap();
+}
+
+/// #679 adds only the three char pairs: char stays unconvertible to and from every other type.
+#[test]
+fn char_conversion_pairs_stay_closed() {
+    let code = || vec![constant(0, Constant::Char(0x61)), data(DataOp::Convert, vec![0], 1, Immediate::None)];
+    for to in [Type::Byte, Type::Float, Type::Rat, Type::Bool, Type::Char] {
+        reject(&program(vec![Type::Char, to], code(), false, 2), "CONVERT_TYPE");
+    }
+    let code = vec![constant(0, Constant::Byte(97)), data(DataOp::Convert, vec![0], 1, Immediate::None)];
+    reject(&program(vec![Type::Byte, Type::Char], code, false, 2), "CONVERT_TYPE");
+    let code = vec![constant(0, Constant::Str("a".into())), data(DataOp::Convert, vec![0], 1, Immediate::None)];
+    reject(&program(vec![Type::Str, Type::Char], code, false, 2), "CONVERT_TYPE");
 }
 
 #[test]
@@ -177,12 +206,37 @@ fn value_equality_compares_objects_of_one_declaration() {
     verify_load(&with_declarations(program(registers.clone(), code(0, 1), false, 2)), &NoExternalContracts)
         .unwrap();
     reject(&with_declarations(program(registers.clone(), code(0, 1), false, 0)), "ENTRY_FAILURE_MASK");
-    let code = vec![
-        constant(0, Constant::Int("1".into())),
-        constant(1, Constant::Int("1".into())),
-        data(DataOp::ValEq, vec![0, 1], 2, Immediate::None),
+}
+
+/// OIR-1 §16.3: `val.eq` on scalars is the scalar `==`. A generic `==` specialized to a scalar
+/// (`Frequencies<string>.amount`) reaches SPB as `val.eq` of two values of that scalar type.
+#[test]
+fn value_equality_compares_two_values_of_one_scalar_type() {
+    let compare = |left: (Type, Constant), right: (Type, Constant)| {
+        let code = vec![
+            constant(0, left.1),
+            constant(1, right.1),
+            data(DataOp::ValEq, vec![0, 1], 2, Immediate::None),
+        ];
+        with_declarations(program(vec![left.0, right.0, Type::Bool], code, false, 2))
+    };
+    let int = || (Type::Int, Constant::Int("1".into()));
+    let float = || (Type::Float, Constant::Float(1.0f64.to_bits().to_string()));
+    let scalars = [
+        int(),
+        float(),
+        (Type::Bool, Constant::Bool(true)),
+        (Type::Str, Constant::Str("blue".into())),
+        (Type::Char, Constant::Char(u32::from('x'))),
+        (Type::Byte, Constant::Byte(7)),
+        (Type::Rat, Constant::Rat(RatValue { numerator: "1".into(), denominator: "2".into() })),
     ];
-    reject(&with_declarations(program(vec![Type::Int, Type::Int, Type::Bool], code, false, 2)), "VAL_EQ_TYPE");
+    for scalar in scalars {
+        verify_load(&compare(scalar.clone(), scalar.clone()), &NoExternalContracts)
+            .unwrap_or_else(|error| panic!("{:?}: {error:?}", scalar.0));
+    }
+    reject(&compare(int(), float()), "VAL_EQ_TYPE");
+    reject(&compare((Type::Str, Constant::Str("1".into())), int()), "VAL_EQ_TYPE");
 }
 
 #[test]
@@ -263,4 +317,203 @@ fn optional_object_fields_stay_out_of_assembly_until_used() {
     let explicit = text.replacen("error_cases 0 }", "error_cases 0 enum_cases 0 }", 1);
     assert_ne!(explicit, text);
     assert_eq!(assemble(&explicit).unwrap_err().rule, "SPB_DECODE");
+}
+
+/// A constant of each scalar family operand type.
+fn operand_constant(ty: Type) -> Constant {
+    match ty {
+        Type::Int => Constant::Int("3".into()),
+        Type::Byte => Constant::Byte(3),
+        Type::Float => Constant::Float(1.5f64.to_bits().to_string()),
+        Type::Rat => Constant::Rat(RatValue { numerator: "1".into(), denominator: "2".into() }),
+        Type::Str => Constant::Str("a b".into()),
+        other => panic!("no operand constant for {other:?}"),
+    }
+}
+
+/// `op` on constants of its signature: registers are the operands, then the result.
+fn family_program(op: DataOp, service: bool, failures: u32) -> Program {
+    let (operands, result) = op.scalar_signature().unwrap();
+    let mut registers = operands.to_vec();
+    registers.push(result);
+    let mut code = operands.iter().enumerate()
+        .map(|(index, ty)| constant(index as u32, operand_constant(*ty)))
+        .collect::<Vec<_>>();
+    let inputs = (0..operands.len() as u32).collect();
+    code.push(data(op, inputs, operands.len() as u32, Immediate::None));
+    program(registers, code, service, failures)
+}
+
+fn family_operations() -> Vec<DataOp> {
+    SCALAR_FAMILIES.iter().flat_map(|(_, _, ops)| ops.iter().copied()).collect()
+}
+
+#[test]
+fn scalar_families_load_and_round_trip_every_operation() {
+    for op in family_operations() {
+        let p = family_program(op, false, 2);
+        verify_load(&p, &NoExternalContracts).unwrap_or_else(|error| panic!("{op:?}: {error}"));
+        assert_eq!(decode(&encode(&p).unwrap()).unwrap(), p, "{op:?}");
+        assert_eq!(assemble(&disassemble(&p).unwrap()).unwrap(), p, "{op:?}");
+        let code = DataOp::from_scalar_code(op.scalar_code().unwrap());
+        assert_eq!(code, Some(op));
+    }
+}
+
+#[test]
+fn scalar_family_wire_codes_are_fixed() {
+    assert_eq!(DataOp::IntAnd.family(), Some((14, 0)));
+    assert_eq!(DataOp::IntRotr.family(), Some((14, 15)));
+    assert_eq!(DataOp::ByteUshr.family(), Some((15, 5)));
+    assert_eq!(DataOp::FloatAdd.family(), Some((16, 0)));
+    assert_eq!(DataOp::FloatSqrt.family(), Some((16, 9)));
+    assert_eq!(DataOp::RatDiv.family(), Some((17, 3)));
+    assert_eq!(DataOp::StrSlice.family(), Some((18, 0)));
+    assert_eq!(DataOp::StrUtf8.family(), Some((18, 15)));
+    assert_eq!(DataOp::StrCharacters.family(), Some((18, 16)));
+    assert_eq!(DataOp::IntAdd.family(), None);
+    // Wire codes reserved for other lanes stay free.
+    for code in (56..=63).chain(19..=19).chain(21..=23).chain(27..=39).chain(73..=79) {
+        assert!(SCALAR_FAMILIES.iter().all(|(family, _, _)| *family != code), "{code}");
+    }
+}
+
+#[test]
+fn scalar_family_decoder_refuses_unknown_sub_codes() {
+    let p = family_program(DataOp::FloatAdd, false, 2);
+    let text = disassemble(&p).unwrap();
+    assert!(text.contains("float.ext 0"), "{text}");
+    let unknown = text.replace("float.ext 0", "float.ext 10");
+    assert_eq!(assemble(&unknown).unwrap_err().rule, "SPB_DECODE");
+    // The first sub-code past the end of str.ext, which grows only at its end.
+    let next = SCALAR_FAMILIES.iter().find(|(code, _, _)| *code == 18).unwrap().2.len();
+    let unknown = text.replace("float.ext 0", &format!("str.ext {next}"));
+    assert_eq!(assemble(&unknown).unwrap_err().rule, "SPB_DECODE");
+}
+
+#[test]
+fn scalar_family_operands_and_results_are_typed() {
+    let mut p = family_program(DataOp::IntShl, false, 2);
+    p.functions[0].registers[2] = Type::Byte;
+    reject(&p, "SCALAR_OP_TYPE");
+    // byte.shl counts in int, byte.ushr in byte.
+    let mut p = family_program(DataOp::ByteShl, false, 2);
+    p.functions[0].registers[1] = Type::Byte;
+    p.functions[0].code[1] = constant(1, Constant::Byte(1));
+    reject(&p, "SCALAR_OP_TYPE");
+    let mut p = family_program(DataOp::ByteUshr, false, 2);
+    p.functions[0].registers[1] = Type::Int;
+    p.functions[0].code[1] = constant(1, Constant::Int("1".into()));
+    reject(&p, "SCALAR_OP_TYPE");
+    let mut p = family_program(DataOp::StrSplit, false, 0);
+    p.functions[0].registers[2] = Type::Str;
+    reject(&p, "SCALAR_OP_TYPE");
+    let mut p = family_program(DataOp::RatNumerator, false, 0);
+    p.functions[0].registers[1] = Type::Int;
+    reject(&p, "SCALAR_OP_TYPE");
+    let mut p = family_program(DataOp::FloatAdd, false, 2);
+    let Instruction::Data { inputs, .. } = &mut p.functions[0].code[2] else { unreachable!() };
+    inputs.pop();
+    reject(&p, "SCALAR_OP_TYPE");
+}
+
+#[test]
+fn scalar_family_failures_follow_tomato() {
+    let fallible = [
+        DataOp::IntAnd, DataOp::IntOr, DataOp::IntXor, DataOp::IntShl, DataOp::IntShr, DataOp::IntUshr,
+        DataOp::IntNot, DataOp::IntBitCount, DataOp::IntLeadingZeros, DataOp::IntTrailingZeros,
+        DataOp::IntReverseBits, DataOp::IntSwapBytes, DataOp::IntRotl, DataOp::IntRotr,
+        DataOp::ByteShl, DataOp::ByteShr, DataOp::ByteUshr, DataOp::ByteRotl, DataOp::ByteRotr,
+        DataOp::FloatAdd, DataOp::FloatSub, DataOp::FloatMul, DataOp::FloatDiv, DataOp::FloatMod,
+        DataOp::FloatPow, DataOp::FloatSqrt, DataOp::RatDiv, DataOp::RatMod, DataOp::StrSlice,
+        DataOp::StrRepeat,
+    ];
+    for op in family_operations() {
+        if fallible.contains(&op) {
+            reject(&family_program(op, false, 0), "ENTRY_FAILURE_MASK");
+            reject(&family_program(op, true, 2), "FALLIBLE_DATA_OUTCOMES");
+        } else {
+            let p = family_program(op, true, 0);
+            verify_load(&p, &NoExternalContracts).unwrap_or_else(|error| panic!("{op:?}: {error}"));
+        }
+    }
+}
+
+/// `op` as an `evaluate` with normal and unwind outcomes, on constants of its signature.
+fn evaluated(op: DataOp) -> Program {
+    let (operands, result) = op.scalar_signature().unwrap();
+    let mut registers = operands.to_vec();
+    registers.extend([result, Type::Failure]);
+    let count = operands.len() as u32;
+    let mut p = program(registers, vec![], false, 2);
+    let f = &mut p.functions[0];
+    let produced = |destination| Assignment { destination, source: Source::ProducedSlot(0) };
+    f.code = operands.iter().enumerate().map(|(index, ty)| constant(index as u32, operand_constant(*ty))).collect();
+    let evaluation = Evaluation { op, result, immediate: Immediate::None };
+    let mut arguments = vec![Argument::Evaluation(evaluation)];
+    arguments.extend((0..count).map(|id| Argument::Location(Location::Register(id))));
+    f.code.extend([
+        Instruction::Champ { op: Opcode::Evaluate, arguments, flow: Flow::Outcomes(vec![
+            Outcome { tag: Tag::Normal, edge: Edge { target_pc: count + 1,
+                assignments: vec![produced(Location::Register(count))] } },
+            Outcome { tag: Tag::Unwind, edge: Edge { target_pc: count + 2,
+                assignments: vec![produced(Location::Register(count + 1))] } },
+        ]) },
+        Instruction::Ret(vec![]),
+        Instruction::Raise(count + 1),
+    ]);
+    f.blocks = vec![
+        Block { pc: 0, params: vec![] },
+        Block { pc: count + 1, params: vec![Location::Register(count)] },
+        Block { pc: count + 2, params: vec![Location::Register(count + 1)] },
+    ];
+    let live = live_locations(f).unwrap();
+    f.proofs.roots = live.into_iter().enumerate().map(|(pc, locations)| RootRequirement {
+        pc: pc as u32, locations: locations.into_iter().collect(),
+    }).collect();
+    p
+}
+
+#[test]
+fn scalar_family_evaluate_takes_only_fallible_operations() {
+    for op in [DataOp::FloatDiv, DataOp::IntShl, DataOp::ByteShl, DataOp::RatDiv, DataOp::StrSlice] {
+        verify_load(&evaluated(op), &NoExternalContracts).unwrap_or_else(|error| panic!("{op:?}: {error}"));
+    }
+    for op in [DataOp::RatAdd, DataOp::ByteAnd, DataOp::FloatNeg, DataOp::StrTrim, DataOp::IntAbs] {
+        reject(&evaluated(op), "EVALUATE_OPERATION");
+    }
+}
+
+fn rat(numerator: &str, denominator: &str) -> Program {
+    let value = Constant::Rat(RatValue { numerator: numerator.into(), denominator: denominator.into() });
+    program(vec![Type::Rat], vec![constant(0, value)], false, 0)
+}
+
+#[test]
+fn rat_constants_are_in_lowest_terms() {
+    for (numerator, denominator) in [("1", "2"), ("-3", "4"), ("0", "1"), ("1", "1"), ("-7", "1"),
+        ("12345678901234567890121", "98765432109876543210"), ("3", "10")]
+    {
+        let p = rat(numerator, denominator);
+        verify_load(&p, &NoExternalContracts).unwrap_or_else(|error| panic!("{numerator}/{denominator}: {error}"));
+        assert_eq!(decode(&encode(&p).unwrap()).unwrap(), p);
+        assert_eq!(assemble(&disassemble(&p).unwrap()).unwrap(), p);
+    }
+    for (numerator, denominator) in [("2", "4"), ("0", "2"), ("1", "0"), ("1", "-2"), ("01", "2"), ("-0", "1"),
+        ("1", "02"), ("x", "1"), ("6", "9"), ("10", "15"), ("246913578024691357802", "98765432109876543210")]
+    {
+        reject(&rat(numerator, denominator), "CONST_RAT");
+    }
+}
+
+#[test]
+fn int_constants_are_exact_beyond_64_bits() {
+    let code = vec![
+        constant(0, Constant::Int("1267650600228229401496703205376".into())),
+        constant(1, Constant::Int("-9223372036854775809".into())),
+        data(DataOp::IntAdd, vec![0, 1], 2, Immediate::None),
+    ];
+    let p = program(vec![Type::Int, Type::Int, Type::Int], code, false, 0);
+    verify_load(&p, &NoExternalContracts).unwrap();
+    assert_eq!(decode(&encode(&p).unwrap()).unwrap(), p);
 }

@@ -10,10 +10,12 @@ mod limits;
 mod index;
 mod structure;
 mod coro;
+mod coro_flow;
 mod types;
 mod expressions;
 pub(crate) mod read;
 mod later;
+mod own_async;
 mod effects;
 mod low_phases;
 mod low_roots;
@@ -64,6 +66,13 @@ pub trait ExternalContracts {
     fn intrinsic(&self, name: &str) -> Option<&Signature>;
     fn native_summary(&self, _: &str) -> Option<&Summary> { None }
     fn intrinsic_summary(&self, _: &str) -> Option<&Summary> { None }
+    /// The trusted ABI of the intrinsic declaration `name` with the signature
+    /// `declared`. A runtime family keyed by type (one cleanup per open `fn`
+    /// type, #569 C3b) resolves its key from the declaration and returns its own
+    /// registered signature, which the verifier still compares for equality.
+    fn intrinsic_declaration(&self, name: &str, _declared: &Signature) -> Option<&Signature> {
+        self.intrinsic(name)
+    }
     /// Runtime entries authorized to destroy a descriptor's complete owner graph.
     fn descriptor_cleanup(&self, _: &str) -> Option<&Summary> { None }
     /// The registered conservative contract of an open sync call of this `fn`
@@ -294,6 +303,7 @@ fn run_mode<'m>(
         linearity::check(module, function, &mut state);
         low_phases::check(module, function, &mut state);
         low_roots::check(module, function, &mut state);
+        coro_flow::check(module, function, &mut state);
         later::async_cleanup_and_profiles(module, function, &mut state);
     }
     order_diagnostics(module, &mut state);

@@ -27,9 +27,7 @@ fn require(condition: bool, message: &str) -> Check {
 }
 
 fn linear(f: &Function, location: Location) -> bool {
-    matches!(location, Location::Service(id) if matches!(f.services[id as usize],
-        ServiceKind::Packet | ServiceKind::ScopeState | ServiceKind::Pending | ServiceKind::Cleanup
-        | ServiceKind::StableKey | ServiceKind::FailureState | ServiceKind::ExitState))
+    matches!(location, Location::Service(id) if f.services[id as usize].linear())
 }
 
 /// Operand consumption table. Language values, captures, selections and erased proofs never consume services.
@@ -42,21 +40,35 @@ pub(super) fn consumed(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<
     let between = arguments.first() == Some(&Argument::Flag(true));
     locations.iter().copied().enumerate().filter_map(|(index, location)| {
         let consume = match op {
-            ScopeBegin | OwnEmpty | OwnCreateCommit | DepsOf | DepsEmpty | InvokeObserve
-                | ArrayGet | Fail | Evaluate | Catch => false,
-            OwnMove | OwnJoin | OwnAdmit | OwnAccept | CleanupBegin | ExitAbort | ExitDispatch => true,
+            ScopeBegin | OwnEmpty | OwnCreateCommit | DepsOf | DepsEmpty | InvokeObserve | InvokeDispatch
+                | ArrayGet | Fail | Evaluate | Catch | Lookup => false,
+            // A Future is a language value: awaiting, cancelling or reading it consumes nothing. Its proof
+            // produces a capability, which the take consumes.
+            Await | FutureCancel | FutureDone | FutureCancelled | UniqueCacheProof => false,
+            AwaitTake => index == 1,
+            // Every linear operand: fut.new takes the input packet and the owner state; fut.publish the frame
+            // and the success packet; frame.save the frame and the saved tokens; await.unwind the state, task and
+            // receipt; cleanup.settle the cleanup state and its duty.
+            FutureNew | FuturePublish | FrameSave | FrameResume | AwaitUnwind | CleanupDeliverCancel
+                | CleanupSettle | CacheRehome => true,
+            // The journal packet travels with the buffer; the buffer is a register (check_builders).
+            BuilderPush | BuilderAppend | BuilderRange | BuilderFinish | BuilderAbandon => {
+                index + 1 == locations.len()
+            }
+            OwnMove | OwnJoin | OwnAdmit | OwnAccept | OwnDynamic | CleanupBegin | ExitAbort | ExitDispatch => true,
             OwnBind | OwnRebind => index == 0 || index == 2,
             OwnStage => index < 1 + usize::from(between) || index + 1 == locations.len(),
             ScopeTransfer => index < 1 + usize::from(between),
-            OwnSplit | OwnSplitChecked | ScopeSplit | DeferRegister | ExitCommit | CleanupSettle
+            OwnSplit | OwnSplitChecked | ScopeSplit | DeferRegister | ExitCommit
                 | CleanupPlan | CleanupNext | CleanupFinish | CleanupFailure | DestroyDirect | FailureDispatch => {
                     index == 0
                 }
             CleanupDestroy | ExitExtend => true,
             ExitPrepare => index + 1 == locations.len(),
             ExitReplace => index == 0 || index + 1 == locations.len(),
-            InvokeCallOwn | InvokeDefer | RetOwn | RetDefer => matches!(verify::loc_type(f, location),
-                Ok(ProducedType::Service(ServiceKind::Packet))),
+            InvokeCallOwn | InvokeDispatchOwn | InvokeDefer | RetOwn | RetDefer => {
+                matches!(verify::loc_type(f, location), Ok(ProducedType::Service(ServiceKind::Packet)))
+            }
         };
         (consume && linear(f, location)).then_some(location)
     }).collect()
@@ -163,7 +175,7 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
                 "destroy entry signature mismatch")?;
         }
     }
-    for f in &p.functions {
+    for (index, f) in p.functions.iter().enumerate() {
         if matches!(f.entry_abi, EntryAbi::Owned | EntryAbi::Defer { .. }) {
             require(f.params.iter().filter(|&&location| verify::loc_type(f, location)
                 == Ok(ProducedType::Service(ServiceKind::Packet))).count() == 1,
@@ -172,7 +184,8 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
         enforce(f.params.iter().all(|&location| !matches!(verify::loc_type(f, location),
             Ok(ProducedType::Service(ServiceKind::Pending | ServiceKind::Cleanup | ServiceKind::ExitState
                 | ServiceKind::StableKey | ServiceKind::DestroyBorrow | ServiceKind::ScopeState
-                | ServiceKind::FailureState)))),
+                | ServiceKind::FailureState | ServiceKind::CacheState | ServiceKind::TaskState
+                | ServiceKind::Receipt | ServiceKind::UniqueCache)))),
             "ENTRY_PRIVATE_SERVICE", "private service contents cannot be entry arguments")?;
         if let Some(entry) = &f.proofs.entry
             && let Some(name) = &entry.external
@@ -186,9 +199,10 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
                     &adapter
                 }
             };
-            require(f.entry_abi == trusted.entry_abi && f.registers == trusted.registers
+            enforce(f.entry_abi == trusted.entry_abi && f.registers == trusted.registers
                 && f.services == trusted.services && f.params == trusted.params && f.results == trusted.results
-                && f.proofs.entry == trusted.proofs.entry, "external signature/summary mismatch")?;
+                && f.proofs.entry == trusted.proofs.entry,
+                "EXTERNAL_SIGNATURE", "external signature/summary mismatch")?;
             continue;
         }
         check_fallible_data(f)?;
@@ -196,6 +210,8 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
         check_failure_mask(p, f)?;
         check_call_contracts(p, f)?;
         check_service_results(p, f)?;
+        suspension::check_flow(p, f)?;
+        take::check(p, index as u32, f)?;
         let states = service_states(f)?;
         enforce(f.proofs.states == states, "EVIDENCE_STATES",
             "service maps differ from reconstructed lifetimes")?;
@@ -220,7 +236,7 @@ fn traced(f: &Function, location: Location) -> bool {
     match location {
         Location::Register(id) => !matches!(f.registers[id as usize],
             Type::Bool | Type::Never | Type::Descriptor | Type::Byte | Type::Float | Type::Char),
-        Location::Service(id) => !matches!(f.services[id as usize], ServiceKind::Deps | ServiceKind::Closed),
+        Location::Service(id) => !layout::service_layout(f.services[id as usize]).references.is_empty(),
     }
 }
 
@@ -238,6 +254,13 @@ fn check_roots(f: &Function) -> Check {
     let live = live_locations(&bare)?;
     let supplied = root_index(&f.proofs.roots);
     let post = root_index(&f.proofs.post_roots);
+    // An undef placeholder is the constant zero until a construction stores over it; verify() admits
+    // it only as a construction operand or forwarded to a parameter, so it is never a reference.
+    let placeholders = f.code.iter().filter_map(|inst| match inst {
+        Instruction::Data { op: DataOp::Undef, output: Some(id), .. } => Some(Location::Register(*id)),
+        _ => None,
+    }).collect::<BTreeSet<_>>();
+    let traced = |f: &Function, location: Location| traced(f, location) && !placeholders.contains(&location);
     for (pc, required) in live.iter().enumerate() {
         let roots = supplied.get(&(pc as u32));
         enforce(required.iter().filter(|&&loc| traced(f, loc))
@@ -275,7 +298,14 @@ pub(super) fn visible_destroy_failures(p: &Program, f: &Function, close: u32,
     let empty_reserve = !reserve || contract.reserve && locations.get(1)
         .is_some_and(|&loc| evidence.inventory(loc).is_some_and(|keys| keys.is_empty()));
     evidence.check_budget()?;
-    if empty_source && empty_reserve { return Ok(0); }
+    // A settled cache releases its Future's outcome or unstarted inputs into the plan, outside the inventory.
+    let releases = f.code.iter().any(|instruction| match instruction {
+        Instruction::Champ { op: Opcode::FutureNew, arguments, .. } => arguments.iter().any(|arg| matches!(arg,
+            Argument::Entry(id) if !plain_inputs(p, &p.functions[*id as usize])
+                || !plain_results(p, &p.functions[*id as usize]))),
+        _ => false,
+    });
+    if empty_source && empty_reserve && !releases { return Ok(0); }
     // A scope can only acquire input obligations or packets produced by this activation's calls.
     // Reconstruct their descriptor closure; unrelated module destroys cannot enter this inventory.
     let mut functions = vec![f];
@@ -292,6 +322,12 @@ pub(super) fn visible_destroy_failures(p: &Program, f: &Function, close: u32,
                 Ok(ProducedType::Value(ty)) => Some(ty), _ => None,
             }));
         }
+        // An async body's inputs arrive through its start continuation.
+        if let Some(start) = p.frame_layout(function).and_then(|layout| layout.saved_types(0)) {
+            types.extend(start.into_iter().filter_map(|ty| match ty {
+                ProducedType::Value(ty) => Some(ty), _ => None,
+            }));
+        }
         for instruction in &function.code {
             let Instruction::Champ { op, arguments, .. } = instruction else { continue };
             if *op == Opcode::OwnCreateCommit {
@@ -299,11 +335,13 @@ pub(super) fn visible_destroy_failures(p: &Program, f: &Function, close: u32,
                     Argument::Object(id) => Some(Type::Object(*id)), _ => None,
                 }));
             }
-            if matches!(op, Opcode::InvokeCallOwn | Opcode::InvokeDefer) {
-                for callee in arguments.iter().filter_map(|arg| match arg {
-                    Argument::Entry(id) => Some(&p.functions[*id as usize]), _ => None,
-                }) {
-                    if !plain_results(p, callee) || *op == Opcode::InvokeDefer {
+            if matches!(op, Opcode::InvokeCallOwn | Opcode::InvokeDefer | Opcode::FutureNew | Opcode::InvokeDispatchOwn) {
+                for callee in dispatch_callees(p, arguments).into_iter().chain(arguments.iter().filter_map(|arg| {
+                    match arg { Argument::Entry(id) => Some(&p.functions[*id as usize]), _ => None }
+                })) {
+                    // A settled cache releases a Future's outcome and its unstarted inputs into the plan.
+                    let released = *op == Opcode::FutureNew && !plain_inputs(p, callee);
+                    if !plain_results(p, callee) || *op == Opcode::InvokeDefer || released {
                         if callee.proofs.entry.as_ref().is_some_and(|entry| entry.external.is_some()) {
                             return Ok(p.functions.iter().filter_map(|f| f.proofs.entry.as_ref())
                                 .filter(|entry| entry.destroy.is_some()).fold(0, |mask, entry| mask | entry.failures));
@@ -335,7 +373,7 @@ pub(super) fn visible_destroy_failures(p: &Program, f: &Function, close: u32,
         .fold(0, |mask, entry| mask | entry.failures))
 }
 
-fn check_plans(p: &Program, f: &Function, reconstructed: &mut evidence::Evidence<'_>, destroy_masks: &[u32])
+pub(super) fn check_plans(p: &Program, f: &Function, reconstructed: &mut evidence::Evidence<'_>, destroy_masks: &[u32])
     -> Check
 {
     for (id, _) in f.proofs.plans.iter().enumerate() {
@@ -395,7 +433,9 @@ fn check_plans(p: &Program, f: &Function, reconstructed: &mut evidence::Evidence
             })), "direct descriptor witness does not match identity")?;
             require(p.functions.get(slot.destroy as usize).and_then(|f| f.proofs.entry.as_ref())
                 .is_some_and(|entry| entry.destroy == Some(object)), "direct destroy descriptor/entry mismatch")?;
-            let actual = reconstructed.identity(slot.identity).ok_or_else(|| error("unknown direct identity origin"))?;
+            let Some(actual) = reconstructed.identity(slot.identity) else {
+                return evidence_rule(reconstructed, false, "SPB_STRUCTURE", "unknown direct identity origin");
+            };
             match slot.origin {
                 CreationOrigin::Singleton => require(evidence.slots.len() <= 1, "singleton proves no serial order")?,
                 CreationOrigin::Create(pc) => {
@@ -423,8 +463,12 @@ fn check_plans(p: &Program, f: &Function, reconstructed: &mut evidence::Evidence
             require(suffix.roots == roots, "missing direct suffix roots")?;
         }
         let expected = evidence.slots.iter().map(|slot| reconstructed.identity(slot.identity))
-            .collect::<Option<BTreeSet<_>>>().ok_or_else(|| error("unknown direct slots"))?;
-        require(reconstructed.inventory(source[0]) == Some(expected), "direct plan loses owner inventory")?;
+            .collect::<Option<BTreeSet<_>>>();
+        let Some(expected) = expected else {
+            return evidence_rule(reconstructed, false, "SPB_STRUCTURE", "unknown direct slots");
+        };
+        let kept = reconstructed.inventory(source[0]) == Some(expected);
+        evidence_rule(reconstructed, kept, "SPB_STRUCTURE", "direct plan loses owner inventory")?;
         require(creation_pcs.windows(2).all(|pcs| evidence::precedes(f, pcs[1], pcs[0])),
             "direct order is not descending creation on every CFG path")?;
         require(f.proofs.order_witnesses[plan.order_witness as usize].creation_pcs == creation_pcs,
@@ -435,7 +479,7 @@ fn check_plans(p: &Program, f: &Function, reconstructed: &mut evidence::Evidence
     Ok(())
 }
 
-fn check_fresh(f: &Function, evidence: &mut evidence::Evidence<'_>) -> Check {
+pub(super) fn check_fresh(f: &Function, evidence: &mut evidence::Evidence<'_>) -> Check {
     if !f.proofs.entry.as_ref().is_some_and(|entry| entry.fresh_singleton) {
         return Ok(());
     }
@@ -449,10 +493,13 @@ fn check_fresh(f: &Function, evidence: &mut evidence::Evidence<'_>) -> Check {
             Argument::Location(location) => Some(location), _ => None,
         }).collect::<Vec<_>>();
         require(locations.len() >= 2, "fresh singleton needs value and packet")?;
-        let key = evidence.identity(locations[0])
-            .ok_or_else(|| violation("FRESH_ORIGIN", "fresh result has no successful creation"))?;
-        enforce(evidence.inventory(locations[1]) == Some(BTreeSet::from([key])),
-            "FRESH_PACKET", "fresh summary not supported by every reachable return packet")?;
+        let Some(key) = evidence.identity(locations[0]) else {
+            return evidence_rule(evidence, false, "FRESH_ORIGIN",
+                &format!("{}: fresh result has no successful creation", f.symbol));
+        };
+        let supported = evidence.inventory(locations[1]) == Some(BTreeSet::from([key]));
+        evidence_rule(evidence, supported, "FRESH_PACKET",
+            &format!("{}: fresh summary not supported by every reachable return packet", f.symbol))?;
     }
     enforce(returns != 0, "FRESH_REACHABLE_RETURN", "fresh summary has no reachable return evidence")
 }
@@ -486,6 +533,39 @@ fn evidence_rule(evidence: &evidence::Evidence, holds: bool, rule: &'static str,
 fn check_call_contracts(p: &Program, f: &Function) -> Check {
     let mut reconstructed = evidence::Evidence::new(p, f);
     for instruction in &f.code {
+        if let Instruction::Champ { op: Opcode::FutureNew, arguments, .. } = instruction {
+            let callee = arguments.iter().find_map(|arg| match *arg {
+                Argument::Entry(id) => p.functions.get(id as usize), _ => None,
+            }).ok_or_else(|| error("fut.new has no entry"))?;
+            if plain_inputs(p, callee) {
+                let packet = arguments.iter().find_map(|arg| match arg {
+                    Argument::Location(location) if verify::loc_type(f, *location)
+                        == Ok(ProducedType::Service(ServiceKind::Packet)) => Some(*location),
+                    _ => None,
+                }).ok_or_else(|| violation("CALL_PLAIN_PACKET", "fut.new omits its input packet"))?;
+                let empty = reconstructed.inventory(packet).is_some_and(|keys| keys.is_empty());
+                evidence_rule(&reconstructed, empty, "CALL_PLAIN_PACKET",
+                    &format!("{} -> {}: plain Future inputs cannot carry resource obligations", f.symbol,
+                        callee.symbol))?;
+            }
+        }
+        if let Instruction::Champ { op: Opcode::FuturePublish, arguments, .. } = instruction
+            && let Some(packet) = arguments.iter().find_map(|arg| match arg {
+                Argument::Location(location) if verify::loc_type(f, *location)
+                    == Ok(ProducedType::Service(ServiceKind::Packet)) => Some(*location),
+                _ => None,
+            })
+        {
+            // A published success packet goes to the cache as a returned packet goes to the caller.
+            if plain_results(p, f) {
+                let empty = reconstructed.inventory(packet).is_some_and(|keys| keys.is_empty());
+                evidence_rule(&reconstructed, empty, "RETURN_PLAIN_PACKET",
+                    "a plain outcome cannot carry resource obligations")?;
+            }
+            let flat = reconstructed.flat_packet(packet);
+            evidence_rule(&reconstructed, flat, "RETURN_PACKET_NOT_FLAT",
+                "a published packet must have identical admission and full inventories")?;
+        }
         if let Instruction::Champ { op: Opcode::RetOwn, arguments, .. } = instruction {
             let packet = arguments.iter().find_map(|arg| match arg {
                 Argument::Location(location) if verify::loc_type(f, *location)
@@ -500,6 +580,12 @@ fn check_call_contracts(p: &Program, f: &Function) -> Check {
             let flat = reconstructed.flat_packet(packet);
             evidence_rule(&reconstructed, flat, "RETURN_PACKET_NOT_FLAT",
                 "returned packet must have identical admission and full inventories")?;
+        }
+        if let Instruction::Champ { op: Opcode::InvokeDispatch | Opcode::InvokeDispatchOwn, arguments, .. }
+            = instruction
+        {
+            check_dispatch_contract(p, f, arguments, &mut reconstructed)?;
+            continue;
         }
         let Instruction::Champ {
             op: Opcode::InvokeCallOwn | Opcode::InvokeObserve | Opcode::InvokeDefer, arguments, ..
@@ -530,6 +616,54 @@ fn check_call_contracts(p: &Program, f: &Function) -> Check {
     Ok(())
 }
 
+/// The implementation functions a dispatch can enter, in target order. Empty for every other operation.
+pub(super) fn dispatch_callees<'a>(p: &'a Program, arguments: &[Argument]) -> Vec<&'a Function> {
+    let Some(Argument::Dispatch(dispatch)) = arguments.first() else { return vec![] };
+    dispatch.targets.iter().filter_map(|&target| {
+        verify::implementation(p, target, dispatch.role, dispatch.slot).and_then(|id| p.functions.get(id as usize))
+    }).collect()
+}
+
+/// Every implementation a dispatch can enter refines the site contract: it fails, and retains its
+/// language parameters (receiver first), within the dispatch's bounds (`DISPATCH_TARGET`). A plain
+/// call packet is required where every target has plain inputs, or where a plain target is external:
+/// a target with code checks its packet on entry, an external one cannot.
+fn check_dispatch_contract(p: &Program, f: &Function, arguments: &[Argument],
+    reconstructed: &mut evidence::Evidence<'_>) -> Check
+{
+    let Some(Argument::Dispatch(dispatch)) = arguments.first() else {
+        return Err(violation("DISPATCH_SITE", "missing dispatch"));
+    };
+    let callees = dispatch_callees(p, arguments);
+    enforce(callees.len() == dispatch.targets.len(), "DISPATCH_TARGET", "dispatch target has no implementation")?;
+    for callee in &callees {
+        let contract = callee.proofs.entry.as_ref()
+            .ok_or_else(|| violation("DISPATCH_TARGET", "implementation has no verified entry contract"))?;
+        let language = callee.params.iter().enumerate().filter(|(_, location)| {
+            matches!(verify::loc_type(callee, **location), Ok(ProducedType::Value(_)))
+        }).map(|(index, _)| index as u32).collect::<Vec<_>>();
+        let retained = contract.retained_params.iter().all(|param| language.iter().position(|index| index == param)
+            .is_some_and(|position| dispatch.retained_params.contains(&(position as u32))));
+        enforce(contract.failures & !dispatch.failures == 0 && retained, "DISPATCH_TARGET",
+            &format!("{} -> {}: implementation fails or retains beyond the dispatch contract",
+                f.symbol, callee.symbol))?;
+    }
+    let packet = arguments.iter().find_map(|arg| match arg {
+        Argument::Location(location) if verify::loc_type(f, *location)
+            == Ok(ProducedType::Service(ServiceKind::Packet)) => Some(*location),
+        _ => None,
+    });
+    let plain = callees.iter().all(|callee| plain_inputs(p, callee))
+        || callees.iter().any(|callee| callee.code.is_empty() && plain_inputs(p, callee));
+    if let Some(packet) = packet
+        && plain
+    {
+        enforce(reconstructed.inventory(packet).is_some_and(|keys| keys.is_empty()),
+            "CALL_PLAIN_PACKET", &format!("{}: plain dispatch arguments cannot carry resource obligations", f.symbol))?;
+    }
+    Ok(())
+}
+
 pub(super) fn reachable(f: &Function) -> BTreeSet<usize> {
     let mut result = BTreeSet::new();
     let mut work = if f.code.is_empty() { vec![] } else { vec![0] };
@@ -552,7 +686,10 @@ pub(super) fn reachable(f: &Function) -> BTreeSet<usize> {
 /// its own commit in straight-line code, without any other use of the value: nothing returns, stores,
 /// passes or packs it, and no path leaves its scope, before the commit.
 fn check_creations(p: &Program, f: &Function) -> Check {
-    let mut evidence = evidence::Evidence::new(p, f);
+    check_creations_with(p, f, &mut evidence::Evidence::new(p, f))
+}
+
+pub(super) fn check_creations_with(p: &Program, f: &Function, evidence: &mut evidence::Evidence<'_>) -> Check {
     for (pc, instruction) in f.code.iter().enumerate() {
         let Instruction::Data { op: DataOp::ObjNew | DataOp::ObjNext, output: Some(output), .. } = instruction
             else { continue };
@@ -571,8 +708,10 @@ fn check_creations(p: &Program, f: &Function) -> Check {
             falls_through && !allocation::direct_uses(f, between).contains(&created)
         }));
         let committed = commit.map(|commit| (commit as u32, None));
-        enforce(straight && evidence.identity(created) == committed, "CREATION_UNCOMMITTED",
-            &format!("{}: object created at pc {pc} can escape before its own commit", f.symbol))?;
+        let message = format!("{}: object created at pc {pc} can escape before its own commit", f.symbol);
+        enforce(straight, "CREATION_UNCOMMITTED", &message)?;
+        let own = evidence.identity(created) == committed;
+        evidence_rule(evidence, own, "CREATION_UNCOMMITTED", &message)?;
     }
     evidence.check_budget()
 }
@@ -620,6 +759,11 @@ fn check_failure_mask(p: &Program, f: &Function) -> Check {
                         (Opcode::Fail, Tag::Unwind) => arguments.iter().find_map(|arg| match arg {
                             Argument::Label(kind) => Some(1 << kind), _ => None,
                         }).unwrap_or(15),
+                        (Opcode::InvokeDispatch | Opcode::InvokeDispatchOwn, Tag::Unwind) => {
+                            arguments.iter().find_map(|arg| match arg {
+                                Argument::Dispatch(dispatch) => Some(dispatch.failures), _ => None,
+                            }).unwrap_or(15)
+                        }
                         (Opcode::InvokeCallOwn | Opcode::InvokeObserve | Opcode::InvokeDefer, Tag::Unwind) => {
                             arguments.iter()
                             .find_map(|arg| match arg {
@@ -631,6 +775,8 @@ fn check_failure_mask(p: &Program, f: &Function) -> Check {
                             .fold(0, |mask, envelope| mask | envelope.failures)
                             | masks.values().fold(0, |mask, value| mask | value),
                         (Opcode::FailureDispatch, Tag::Some) => destroy_mask,
+                        // An awaited Future fails with whatever its body published.
+                        (Opcode::Await, Tag::Unwind) => 15,
                         (_, Tag::Unwind) => 2,
                         _ => 0,
                     }

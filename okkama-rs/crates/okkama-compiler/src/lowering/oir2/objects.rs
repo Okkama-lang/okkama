@@ -5,6 +5,20 @@ use crate::analysis::thir;
 use crate::oir2 as ir;
 use crate::lowering::ctx::PENDING_FIELD;
 
+/// `Action "name" on object "Parent" was called before its construction completed`, as Tomato reports it: the
+/// object's own name (without its module, or its generic instance after `::`) and the action's source name.
+fn pending_message(module: &ir::Module, declaration: ir::DeclId, action: ir::FuncId) -> Result<String> {
+    let name = &module.declarations.get(declaration)?.name;
+    let symbol = &module.functions.get(action)?.symbol;
+    let action = symbol.strip_prefix(name.as_str()).and_then(|rest| rest.strip_prefix('.')).unwrap_or(symbol);
+    let action = action.split('#').next().unwrap_or(action);
+    let object = match name.rsplit_once("::") {
+        Some((_, instance)) => instance,
+        None => name.rsplit('.').next().unwrap_or(name),
+    };
+    Ok(format!("Action \"{action}\" on object \"{object}\" was called before its construction completed"))
+}
+
 pub(super) fn pending_index(fields: &[ir::Field]) -> Option<usize> {
     fields.len().checked_sub(1).filter(|&index| fields[index].name == PENDING_FIELD)
 }
@@ -302,9 +316,13 @@ impl BodyLowerer<'_, '_> {
                     return Ok(None);
                 };
                 let value = self.take(value)?;
-                self.check_pending(value, self.context.objects[object])?;
+                let function = self.context.functions[&thir::BodyOwner::Method { object: *object, method: *method }];
+                // The system NativeFailure has no source declaration and is never pending.
+                if let Some(&declaration) = self.context.objects.get(object) {
+                    self.check_pending(value, declaration, function)?;
+                }
                 values.push(value);
-                self.context.functions[&thir::BodyOwner::Method { object: *object, method: *method }]
+                function
             }
             thir::Callee::Ctor { object, ctor, given, type_args } if type_args.is_empty() => {
                 self.context.constructors[&(*object, *ctor, given.clone())]
@@ -341,13 +359,17 @@ impl BodyLowerer<'_, '_> {
         self.call(function, values)
     }
 
-    pub(super) fn check_pending(&mut self, object: ir::ValueId, declaration: ir::DeclId) -> Result<()> {
+    /// A receiver whose construction is pending rejects `action` (§11.4) with Tomato's report.
+    pub(super) fn check_pending(&mut self, object: ir::ValueId, declaration: ir::DeclId, action: ir::FuncId)
+        -> Result<()>
+    {
         let ir::DeclarationKind::Object { fields, .. } = &self.b.module().declarations.get(declaration)?.kind else {
             unreachable!("method owner");
         };
         let Some(index) = pending_index(fields) else {
             return Ok(());
         };
+        let message = pending_message(self.b.module(), declaration, action)?;
         let field = ir::FieldRef { declaration, index: index as u32 };
         let condition = self.core(ir::CoreOp::ObjPending { object, field })?;
         let stop = self.new_block(self.scope(), &[])?;
@@ -356,9 +378,7 @@ impl BodyLowerer<'_, '_> {
             condition, yes: ir::Target { block: stop, args: vec![] }, no: ir::Target { block: go, args: vec![] },
         })?;
         self.switch(stop)?;
-        self.terminate(ir::TermKind::Trap {
-            code: ir::TrapCode::Pending, message: "action called before construction completed".into(),
-        })?;
+        self.terminate(ir::TermKind::Trap { code: ir::TrapCode::Pending, message })?;
         self.switch(go)
     }
 }

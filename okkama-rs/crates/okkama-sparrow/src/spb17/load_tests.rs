@@ -566,3 +566,187 @@ fn no_edge_may_enter_the_entry_block() {
     ];
     reject(&small(f), &NoExternalContracts, "ENTRY_BLOCK_TARGET");
 }
+
+/// An inner scope transfers the int it selects to its outer scope: `scope.transfer` with `filter` after the
+/// selection.
+fn transfer(filter: Vec<Argument>) -> Program {
+    use Location::{Register as R, Service as S};
+    let mut f = empty_function();
+    f.registers = vec![Type::Int, Type::Failure];
+    f.services = vec![ServiceKind::ScopeState; 6];
+    let produced = |destination, slot| Assignment { destination, source: Source::ProducedSlot(slot) };
+    let mut arguments = vec![Argument::Flag(true), Argument::Location(S(1)), Argument::Location(S(0)),
+        Argument::Selection(0)];
+    arguments.extend(filter);
+    f.code = vec![
+        Instruction::Champ { op: Opcode::ScopeBegin, arguments: vec![Argument::Scope(0), Argument::Boundary(0)],
+            flow: Flow::Next(vec![S(0)]) },
+        Instruction::Champ { op: Opcode::ScopeBegin, arguments: vec![Argument::Scope(1), Argument::Boundary(1)],
+            flow: Flow::Next(vec![S(1)]) },
+        Instruction::Data { op: DataOp::Const, inputs: vec![], output: Some(0),
+            immediate: Immediate::Constant(Constant::Int("1".into())) },
+        Instruction::Champ { op: Opcode::ScopeTransfer, arguments, flow: Flow::Outcomes(vec![
+            Outcome { tag: Tag::Normal, edge: Edge { target_pc: 4,
+                assignments: vec![produced(S(2), 0), produced(S(3), 1)] } },
+            Outcome { tag: Tag::Unwind, edge: Edge { target_pc: 5,
+                assignments: vec![produced(S(4), 0), produced(S(5), 1), produced(R(1), 2)] } },
+        ]) },
+        Instruction::Ret(vec![]),
+        Instruction::Raise(1),
+    ];
+    f.blocks = vec![
+        Block { pc: 0, params: vec![] },
+        Block { pc: 4, params: vec![S(2), S(3)] },
+        Block { pc: 5, params: vec![S(4), S(5), R(1)] },
+    ];
+    f.proofs.selections = vec![Selection { locations: vec![R(0)] }];
+    let tables = ChampTables {
+        scopes: vec![
+            Scope { function: 0, parent: None, boundary: 0 },
+            Scope { function: 0, parent: Some(0), boundary: 1 },
+        ],
+        boundaries: vec![Boundary { scope: 0 }, Boundary { scope: 1 }],
+        ..ChampTables::default()
+    };
+    Program { functions: vec![f], tables, ..Program::default() }
+}
+
+/// The admission filter of a transfer is one `true` flag right after its selection (#697): an admissible
+/// transfer moves only what its source admitted, a plain one every selected identity.
+#[test]
+fn a_transfer_admission_filter_is_one_true_flag_after_its_selection() {
+    verify(&transfer(vec![])).unwrap();
+    let admissible = transfer(vec![Argument::Flag(true)]);
+    verify(&admissible).unwrap();
+    let Instruction::Champ { arguments, .. } = &admissible.functions[0].code[3] else { unreachable!() };
+    assert!(transfer_admissible(arguments));
+    let Instruction::Champ { arguments, .. } = &transfer(vec![]).functions[0].code[3] else { unreachable!() };
+    assert!(!transfer_admissible(arguments));
+    for filter in [vec![Argument::Flag(false)], vec![Argument::Flag(true), Argument::Flag(true)]] {
+        let failure = verify(&transfer(filter.clone())).unwrap_err();
+        assert_eq!(failure.rule, "TRANSFER_ADMISSION", "{filter:?}: {failure}");
+    }
+}
+
+/// The system NativeFailure declaration: four public `str` fields in storage order.
+fn native_failure_object() -> Object {
+    Object {
+        name: NATIVE_FAILURE.into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false,
+        role: None, implements: vec![], any_box: false, enum_names: vec![],
+        fields: NATIVE_FAILURE_FIELDS.iter().enumerate()
+            .map(|(storage, name)| Field { name: (*name).into(), storage: storage as u32, once: false }).collect(),
+        layout: ObjectRuntimeLayout {
+            storage_fields: vec![Type::Str; 4], allocation_words: 5, identity_offset: None, has_destroy: false,
+            may_reach_resource: false, may_async_destroy: false, trace_layout: vec![0, 1, 2, 3],
+            selection_layout: vec![],
+        },
+    }
+}
+
+/// `(failure) -> str`: catches `failure` as object 0 and returns its message, or "none".
+fn native_failure_catch(object: Object) -> Program {
+    use Location::Register as R;
+    let mut f = empty_function();
+    f.registers = vec![Type::Failure, Type::Object(0), Type::Str, Type::Str];
+    f.params = vec![R(0)];
+    f.results = vec![Type::Str];
+    f.blocks = vec![Block { pc: 0, params: vec![R(0)] }, Block { pc: 1, params: vec![R(1)] },
+        Block { pc: 3, params: vec![] }];
+    f.code = vec![
+        Instruction::Champ { op: Opcode::Catch, arguments: vec![Argument::Location(R(0)), Argument::Object(0)],
+            flow: Flow::Outcomes(vec![
+                Outcome { tag: Tag::Some, edge: Edge { target_pc: 1, assignments: vec![Assignment {
+                    destination: R(1), source: Source::ProducedSlot(0),
+                }] } },
+                Outcome { tag: Tag::None, edge: Edge { target_pc: 3, assignments: vec![] } },
+            ]) },
+        Instruction::Data { op: DataOp::ObjGet, inputs: vec![1], output: Some(2), immediate: Immediate::Field(3) },
+        Instruction::Ret(vec![2]),
+        Instruction::Data { op: DataOp::Const, inputs: vec![], output: Some(3),
+            immediate: Immediate::Constant(Constant::Str("none".into())) },
+        Instruction::Ret(vec![3]),
+    ];
+    refresh(&mut f);
+    Program { objects: vec![object], functions: vec![f], ..Program::default() }
+}
+
+/// `catch e is NativeFailure` (#673, language spec 9.5): a catch may name the system NativeFailure, whose
+/// payloads the runtime gives that descriptor; another object of its name but not its shape is no catch type.
+#[test]
+fn a_catch_may_name_the_system_native_failure() {
+    let p = native_failure_catch(native_failure_object());
+    assert_eq!(native_failure(&p), Some(0));
+    verify_load(&p, &NoExternalContracts).unwrap();
+    let mut renamed = native_failure_object();
+    renamed.fields[1].name = "kind".into();
+    let mut retyped = native_failure_object();
+    retyped.layout.storage_fields[0] = Type::Int;
+    retyped.layout.trace_layout = vec![1, 2, 3];
+    let mut other = native_failure_object();
+    other.name = "app.NativeFailure".into();
+    for object in [renamed, retyped, other] {
+        let p = native_failure_catch(object);
+        assert_eq!(native_failure(&p), None);
+        reject(&p, &NoExternalContracts, "CATCH_TYPE");
+    }
+}
+
+/// The system Cancelled declaration: an object without fields.
+fn cancelled_object() -> Object {
+    Object {
+        name: CANCELLED.into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false, role: None,
+        implements: vec![], any_box: false, enum_names: vec![], fields: vec![],
+        layout: ObjectRuntimeLayout {
+            storage_fields: vec![], allocation_words: 2, identity_offset: None, has_destroy: false,
+            may_reach_resource: false, may_async_destroy: false, trace_layout: vec![], selection_layout: vec![],
+        },
+    }
+}
+
+/// `(failure) -> bool`: whether `failure` is caught as object 0.
+fn cancelled_catch(object: Object) -> Program {
+    use Location::Register as R;
+    let mut f = empty_function();
+    f.registers = vec![Type::Failure, Type::Object(0), Type::Bool, Type::Bool];
+    f.params = vec![R(0)];
+    f.results = vec![Type::Bool];
+    f.blocks = vec![Block { pc: 0, params: vec![R(0)] }, Block { pc: 1, params: vec![R(1)] },
+        Block { pc: 3, params: vec![] }];
+    f.code = vec![
+        Instruction::Champ { op: Opcode::Catch, arguments: vec![Argument::Location(R(0)), Argument::Object(0)],
+            flow: Flow::Outcomes(vec![
+                Outcome { tag: Tag::Some, edge: Edge { target_pc: 1, assignments: vec![Assignment {
+                    destination: R(1), source: Source::ProducedSlot(0),
+                }] } },
+                Outcome { tag: Tag::None, edge: Edge { target_pc: 3, assignments: vec![] } },
+            ]) },
+        Instruction::Data { op: DataOp::Const, inputs: vec![], output: Some(2),
+            immediate: Immediate::Constant(Constant::Bool(true)) },
+        Instruction::Ret(vec![2]),
+        Instruction::Data { op: DataOp::Const, inputs: vec![], output: Some(3),
+            immediate: Immediate::Constant(Constant::Bool(false)) },
+        Instruction::Ret(vec![3]),
+    ];
+    refresh(&mut f);
+    Program { objects: vec![object], functions: vec![f], ..Program::default() }
+}
+
+/// `catch e is Cancelled` (#724, language spec 9.5): a catch may name the system Cancelled, whose objects the runtime
+/// binds to a caught cancellation; another object of its name but not its shape is no catch type.
+#[test]
+fn a_catch_may_name_the_system_cancelled() {
+    let p = cancelled_catch(cancelled_object());
+    assert_eq!(cancelled(&p), Some(0));
+    verify_load(&p, &NoExternalContracts).unwrap();
+    let mut fielded = cancelled_object();
+    fielded.fields = vec![Field { name: "reason".into(), storage: 0, once: false }];
+    fielded.layout.storage_fields = vec![Type::Str];
+    fielded.layout.trace_layout = vec![0];
+    let mut other = cancelled_object();
+    other.name = "app.Cancelled".into();
+    for object in [fielded, other] {
+        let p = cancelled_catch(object);
+        assert_eq!(cancelled(&p), None);
+        reject(&p, &NoExternalContracts, "CATCH_TYPE");
+    }
+}

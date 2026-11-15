@@ -1,6 +1,7 @@
 //! Conservative finite inventories. Cyclic state equations and ambiguous joins stay with the executor.
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 pub(super) type FreshSummaries = BTreeMap<FuncId, SummaryId>;
 
@@ -15,13 +16,163 @@ struct Inventory {
     preserves: Vec<PreserveWitness>,
     joins: Vec<JoinWitness>,
 }
+
+/// The inventory of one value while its root is inferred. The witnesses of a value extend those of its inputs:
+/// a chain of n scope states would copy 1 + 2 + ... + n witnesses, so a value shares its inputs' sequences and
+/// only the root's are written out (#687).
+#[derive(Clone, Default)]
+struct Partial {
+    entries: Vec<Seed>,
+    preserves: Sequence<PreserveWitness>,
+    joins: Sequence<JoinWitness>,
+}
+
+/// A sequence that shares the sequences it extends: the parts in order, each a shared sequence or one item.
+struct Node<T> {
+    parts: Vec<Part<T>>,
+    len: usize,
+}
+enum Part<T> {
+    Shared(Rc<Node<T>>),
+    Item(T),
+}
+struct Sequence<T>(Option<Rc<Node<T>>>);
+
+impl<T> Drop for Node<T> {
+    /// A long chain would drop one node inside another: take the shared parts apart with a stack.
+    fn drop(&mut self) {
+        let shared = |parts: &mut Vec<Part<T>>| parts.drain(..).filter_map(|part| match part {
+            Part::Shared(node) => Some(node),
+            Part::Item(_) => None,
+        }).collect::<Vec<_>>();
+        let mut pending = shared(&mut self.parts);
+        while let Some(node) = pending.pop() {
+            if let Ok(mut node) = Rc::try_unwrap(node) {
+                pending.extend(shared(&mut node.parts));
+            }
+        }
+    }
+}
+
+impl<T> Clone for Sequence<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+impl<T> Default for Sequence<T> {
+    fn default() -> Self {
+        Self(None)
+    }
+}
+impl<T: Clone> Sequence<T> {
+    fn len(&self) -> usize {
+        self.0.as_ref().map_or(0, |node| node.len)
+    }
+    /// The items in order, written out with an explicit stack (a chain may be as long as the body).
+    fn flatten(&self, budget: &mut Budget<'_>) -> Result<Vec<T>, LowError> {
+        let mut items = Vec::with_capacity(self.len());
+        let mut pending: Vec<&Part<T>> = self.0.iter().flat_map(|node| node.parts.iter().rev()).collect();
+        while let Some(part) = pending.pop() {
+            budget.step(1)?;
+            match part {
+                Part::Shared(node) => pending.extend(node.parts.iter().rev()),
+                Part::Item(item) => items.push(item.clone()),
+            }
+        }
+        Ok(items)
+    }
+}
+/// A sequence under construction: shared prefixes and new items, in order.
+struct Builder<T> {
+    parts: Vec<Part<T>>,
+    len: usize,
+}
+impl<T> Builder<T> {
+    fn new() -> Self {
+        Self { parts: vec![], len: 0 }
+    }
+    fn extend(&mut self, sequence: &Sequence<T>) {
+        if let Some(node) = &sequence.0 {
+            self.len += node.len;
+            self.parts.push(Part::Shared(node.clone()));
+        }
+    }
+    fn push(&mut self, item: T) {
+        self.len += 1;
+        self.parts.push(Part::Item(item));
+    }
+    fn finish(self) -> Sequence<T> {
+        if self.parts.is_empty() {
+            return Sequence(None);
+        }
+        Sequence(Some(Rc::new(Node { parts: self.parts, len: self.len })))
+    }
+}
+
+/// The incoming edge arguments of every block, indexed once per inventory. `incoming` scans the whole body,
+/// and an inventory asks it for each block parameter on its chain (#687).
+struct Edges {
+    into: BTreeMap<BlockId, Vec<(BlockId, Vec<EdgeArg>)>>,
+    /// Blocks entered by an unsupported terminator or a block unwind: no finite inventory there.
+    closed: BTreeSet<BlockId>,
+}
+impl Edges {
+    fn new(body: &Body, budget: &mut Budget<'_>) -> Result<Self, LowError> {
+        let mut edges = Self { into: BTreeMap::new(), closed: BTreeSet::new() };
+        for (id, data) in body.blocks.iter() {
+            budget.step(1)?;
+            let mut edge = |target: BlockId, values: Vec<EdgeArg>| {
+                edges.into.entry(target).or_default().push((id, values));
+            };
+            match &data.term.kind {
+                TermKind::Br(target) => edge(target.block, target.args.iter().copied().map(EdgeArg::Value).collect()),
+                TermKind::Cond { yes, no, .. } => {
+                    for target in [yes, no] {
+                        edge(target.block, target.args.iter().copied().map(EdgeArg::Value).collect());
+                    }
+                }
+                TermKind::Switch { cases, default, .. } => {
+                    for target in cases.iter().map(|case| &case.target).chain([default]) {
+                        edge(target.block, target.args.iter().copied().map(EdgeArg::Value).collect());
+                    }
+                }
+                TermKind::InvokeOwn { normal, unwind, .. } => {
+                    edge(normal.block, normal.args.clone());
+                    edge(unwind.block, unwind.args.clone());
+                }
+                _ => {
+                    // A non-supported predecessor invalidates finite inventory inference.
+                    if let Ok(targets) = graph::successors(body, id) {
+                        budget.step(targets.len())?;
+                        edges.closed.extend(targets);
+                    }
+                }
+            }
+            if let Some(unwind) = &data.unwind {
+                edges.closed.insert(unwind.target.block);
+            }
+        }
+        Ok(edges)
+    }
+    /// `incoming` from the index, charged by the edges it examines.
+    fn incoming(&self, block: BlockId, index: usize, budget: &mut Budget<'_>)
+        -> Result<Vec<(BlockId, EdgeArg)>, LowError>
+    {
+        if self.closed.contains(&block) {
+            return Ok(vec![]);
+        }
+        let edges = self.into.get(&block).map_or(&[][..], Vec::as_slice);
+        budget.step(edges.len())?;
+        Ok(edges.iter().filter_map(|(source, args)| args.get(index).map(|arg| (*source, *arg))).collect())
+    }
+}
 struct Recipe {
     inputs: Vec<ValueId>,
     seed: Option<Seed>,
     alternatives: bool,
     partition: Option<(SelectionId, bool)>,
 }
-fn incoming(body: &Body, block: BlockId, index: usize) -> Vec<(BlockId, EdgeArg)> {
+pub(super) fn incoming(body: &Body, block: BlockId, index: usize) -> Vec<(BlockId, EdgeArg)> {
     let mut args = vec![];
     for (id, data) in body.blocks.iter() {
         let mut edge = |target: BlockId, values: Vec<EdgeArg>| {
@@ -132,106 +283,134 @@ fn operation_recipe(
     }
     Some(recipe)
 }
-fn recipe(body: &Body, value: ValueId, fresh: &FreshSummaries) -> Option<Recipe> {
-    match body.values.get(value).ok()?.def {
+fn recipe(body: &Body, value: ValueId, fresh: &FreshSummaries, edges: &mut Option<Edges>, budget: &mut Budget<'_>)
+    -> Result<Option<Recipe>, LowError>
+{
+    let Ok(data) = body.values.get(value) else {
+        return Ok(None);
+    };
+    match data.def {
         Definition::InstResult { inst, index } => {
-            operation_recipe(body, &body.insts.get(inst).ok()?.op, HighOperationSite::Instruction(inst), index, fresh)
+            let Ok(instruction) = body.insts.get(inst) else {
+                return Ok(None);
+            };
+            Ok(operation_recipe(body, &instruction.op, HighOperationSite::Instruction(inst), index, fresh))
         }
         Definition::BlockParam { block, index } => {
             if block == body.entry {
-                return None;
+                return Ok(None);
             }
-            let args = incoming(body, block, index as usize);
+            let edges = match edges {
+                Some(edges) => edges,
+                None => edges.insert(Edges::new(body, budget)?),
+            };
+            let args = edges.incoming(block, index as usize, budget)?;
             if args.is_empty() {
-                return None;
+                return Ok(None);
             }
             let mut inputs = vec![];
-            for (source, arg) in args {
+            for &(source, arg) in &args {
                 match arg {
                     EdgeArg::Value(value) => inputs.push(value),
                     EdgeArg::Produced(EdgeResult { outcome: Outcome::Normal, slot }) if inputs.is_empty() => {
-                        let TermKind::InvokeOwn { op, normal, .. } = &body.blocks.get(source).ok()?.term.kind else {
-                            return None;
+                        let Ok(source) = body.blocks.get(source).map(|data| (source, data)) else {
+                            return Ok(None);
                         };
-                        if normal.block != block || incoming(body, block, index as usize).len() != 1 {
-                            return None;
+                        let TermKind::InvokeOwn { op, normal, .. } = &source.1.term.kind else {
+                            return Ok(None);
+                        };
+                        if normal.block != block || args.len() != 1 {
+                            return Ok(None);
                         }
-                        return operation_recipe(body, op, HighOperationSite::Terminator(source), slot, fresh);
+                        let site = HighOperationSite::Terminator(source.0);
+                        return Ok(operation_recipe(body, op, site, slot, fresh));
                     }
-                    _ => return None,
+                    _ => return Ok(None),
                 }
             }
-            Some(Recipe { inputs, seed: None, alternatives: true, partition: None })
+            Ok(Some(Recipe { inputs, seed: None, alternatives: true, partition: None }))
         }
     }
 }
 fn inventory(
     body: &Body, root: ValueId, fresh: &FreshSummaries, budget: &mut Budget<'_>,
 ) -> Result<Option<Inventory>, LowError> {
-    let mut pending = vec![(root, false)];
+    let mut edges = None;
+    let mut pending = vec![(root, None)];
     let mut visiting = BTreeSet::new();
-    let mut known = BTreeMap::<ValueId, Inventory>::new();
-    while let Some((value, finish)) = pending.pop() {
-        budget.step(body.blocks.len() + 1)?;
+    let mut known = BTreeMap::<ValueId, Partial>::new();
+    while let Some((value, visited)) = pending.pop() {
+        budget.step(1)?;
         if known.contains_key(&value) {
             continue;
         }
-        let Some(recipe) = recipe(body, value, fresh) else {
-            return Ok(None);
-        };
-        if !finish {
-            if !visiting.insert(value) {
-                return Ok(None);
-            }
-            pending.push((value, true));
-            for input in recipe.inputs.iter().rev() {
-                if !known.contains_key(input) {
-                    pending.push((*input, false));
+        // A value's recipe is read once: before its inputs, and kept for after them.
+        let recipe = match visited {
+            Some(recipe) => recipe,
+            None => {
+                let Some(recipe) = recipe(body, value, fresh, &mut edges, budget)? else {
+                    return Ok(None);
+                };
+                if !visiting.insert(value) {
+                    return Ok(None);
                 }
+                let inputs: Vec<_> = recipe.inputs.iter().rev().filter(|input| !known.contains_key(input))
+                    .copied().collect();
+                pending.push((value, Some(recipe)));
+                pending.extend(inputs.into_iter().map(|input| (input, None)));
+                continue;
             }
-            continue;
-        }
-        let mut result = Inventory::default();
+        };
+        let mut entries = vec![];
+        let mut preserves = Builder::new();
+        let mut joins = Builder::new();
         for (index, input) in recipe.inputs.iter().enumerate() {
             let Some(source) = known.get(input) else {
                 return Ok(None);
             };
-            budget.step(source.entries.len() + source.preserves.len() + 1)?;
+            budget.step(source.entries.len() + 1)?;
             if recipe.alternatives && index != 0 {
-                if result.entries != source.entries {
+                if entries != source.entries {
                     return Ok(None);
                 }
             } else {
-                result.entries.extend(source.entries.clone());
+                entries.extend(source.entries.iter().cloned());
             }
-            result.preserves.extend(source.preserves.clone());
-            result.joins.extend(source.joins.clone());
-            result.preserves.push(PreserveWitness { from: *input, to: value });
+            preserves.extend(&source.preserves);
+            joins.extend(&source.joins);
+            preserves.push(PreserveWitness { from: *input, to: value });
         }
         if let Some((selection, selected)) = recipe.partition {
             let SelectionExpr::Value(identity) = body.selections.get(selection)? else {
                 return Ok(None);
             };
-            if !result.entries.iter().any(|entry| entry.identity == *identity) {
+            if !entries.iter().any(|entry: &Seed| entry.identity == *identity) {
                 return Ok(None);
             }
-            result.entries.retain(|entry| (entry.identity == *identity) == selected);
+            entries.retain(|entry| (entry.identity == *identity) == selected);
         }
 
         if recipe.alternatives && recipe.inputs.len() > 1 {
-            result.joins.push(JoinWitness { state: value, predecessors: recipe.inputs.clone() });
+            joins.push(JoinWitness { state: value, predecessors: recipe.inputs.clone() });
         }
         if let Some(seed) = recipe.seed {
-            result.entries.push(seed);
+            entries.push(seed);
         }
         let mut identities = BTreeSet::new();
-        if result.entries.iter().any(|entry| !identities.insert(entry.identity)) {
+        if entries.iter().any(|entry| !identities.insert(entry.identity)) {
             return Ok(None);
         }
         visiting.remove(&value);
-        known.insert(value, result);
+        known.insert(value, Partial { entries, preserves: preserves.finish(), joins: joins.finish() });
     }
-    Ok(known.remove(&root))
+    let Some(partial) = known.remove(&root) else {
+        return Ok(None);
+    };
+    Ok(Some(Inventory {
+        entries: partial.entries,
+        preserves: partial.preserves.flatten(budget)?,
+        joins: partial.joins.flatten(budget)?,
+    }))
 }
 /// Verify the actual output packet at every return, in addition to the final summary.
 /// Native/opaque contracts need an explicit trusted singleton contract in a later integration.
@@ -475,4 +654,140 @@ pub(super) fn check(module: &Module, budget: &mut Budget<'_>) -> Result<(), LowE
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn budget(options: &LowOptions) -> Budget<'_> {
+        Budget { options, steps: 0, blocks: 0, roots: 0 }
+    }
+
+    /// Shared sequences write out in the order the copying inventory used: each input's sequence, then the
+    /// item that extends it (#687).
+    #[test]
+    fn shared_sequences_write_out_in_extension_order() {
+        let options = LowOptions::default();
+        let mut first = Builder::new();
+        first.push(1);
+        first.push(2);
+        let first = first.finish();
+        let mut second = Builder::new();
+        second.extend(&first);
+        second.push(3);
+        let second = second.finish();
+        let mut joined = Builder::new();
+        joined.extend(&second);
+        joined.push(4);
+        joined.extend(&first);
+        joined.extend(&Sequence::default());
+        joined.push(5);
+        let joined = joined.finish();
+        assert_eq!(joined.len(), 7);
+        assert_eq!(joined.flatten(&mut budget(&options)).unwrap(), vec![1, 2, 3, 4, 1, 2, 5]);
+        assert!(Builder::<u32>::new().finish().flatten(&mut budget(&options)).unwrap().is_empty());
+    }
+
+    /// A chain as long as a large body extends, writes out and drops without recursion, and writing it out
+    /// is charged by its length.
+    #[test]
+    fn a_long_chain_is_linear_and_drops_iteratively() {
+        let options = LowOptions { max_steps: usize::MAX, ..LowOptions::default() };
+        let mut chain = Sequence::default();
+        for item in 0..200_000_u32 {
+            let mut next = Builder::new();
+            next.extend(&chain);
+            next.push(item);
+            chain = next.finish();
+        }
+        let mut charged = budget(&options);
+        let items = chain.flatten(&mut charged).unwrap();
+        assert_eq!(items.len(), 200_000);
+        assert!(items.iter().enumerate().all(|(index, item)| *item as usize == index));
+        assert!(charged.steps < 3 * items.len(), "{}", charged.steps);
+        drop(chain);
+    }
+
+    /// Two scope states meet at a join: equal inventories join with a witness, different ones have no finite
+    /// inventory (#687 keeps the rule of the copying inventory).
+    #[test]
+    fn alternatives_at_a_join_must_agree() {
+        let source = |second: &str| format!("oir 2 own
+module joins
+object Res {{
+    destroy @destroy
+}}
+summary Md internal parameters [parameter_effect(convention=borrow, destination=none)]
+    contract call_contract(failures=[thrown], publication=atomic)
+func @destroy(%self: Res) -> void [extern \"fixture.destroy\", destroy Res] summary(Md);
+scope S action in @main
+summary M0 internal contract call_contract(publication=atomic)
+func @main(%c: bool) -> void summary(M0) {{
+^entry in S:
+    %q0: scope<S> = scope.begin S
+    %ea: own = own.empty
+    invoke.own obj.new Res {{; %ea}} construction complete
+        normal ^made($value, $packet, %q0)
+        unwind ^failed($packet, $failure, %q0)
+^made(%a: Res, %pa: own, %qa: scope<S>) in S:
+    %q1: scope<S> = own.admit %qa, %pa
+    cond %c, ^join(%q1), ^join({second})
+^join(%joined: scope<S>) in S:
+    %closed: closed = scope.end %joined, effects scope_effects()
+    ret
+^failed(%rest: own, %error: failure, %open: scope<S>) in S:
+    raise %error
+}}
+");
+        let options = LowOptions::default();
+        let joined = |text: String| {
+            let module = crate::text::parse(&text).unwrap();
+            let (_, function) = module.functions.iter().find(|(_, function)| function.symbol == "main").unwrap();
+            let body = function.body.as_ref().unwrap();
+            let (block, _) = body.blocks.iter().find(|(_, block)| block.params.len() == 1
+                && body.values.get(block.params[0]).is_ok_and(|value| {
+                    matches!(module.types.get(value.ty), Ok(Type::Service(ServiceType::Scope(_))))
+                }) && block.insts.iter().any(|inst| matches!(body.insts.get(*inst).map(|inst| &inst.op),
+                    Ok(Operation::Ownership(OwnershipOp::ScopeEnd { .. }))))).unwrap();
+            let value = body.blocks.get(block).unwrap().params[0];
+            inventory(body, value, &BTreeMap::new(), &mut budget(&options)).unwrap()
+        };
+        let same = joined(source("%q1")).expect("equal alternatives join");
+        assert_eq!(same.entries.len(), 1);
+        assert_eq!(same.joins.len(), 1);
+        assert_eq!(same.joins[0].predecessors.len(), 2);
+        assert!(joined(source("%q0")).is_none(), "alternatives with different inventories");
+    }
+
+    /// The edge index answers every block parameter as `incoming` does, unsupported predecessors included.
+    #[test]
+    fn the_edge_index_agrees_with_incoming() {
+        let options = LowOptions::default();
+        let mut checked = 0;
+        for source in [
+            include_str!("fixtures/end.own.oir"), include_str!("fixtures/end.low.oir"),
+            include_str!("fixtures/unwind-reserve.own.oir"), include_str!("fixtures/unwind-reserve.low.oir"),
+            include_str!("fixtures/iteration.low.oir"), include_str!("fixtures/mixed-protocol.low.oir"),
+            include_str!("fixtures/rebind-history.low.oir"), include_str!("fixtures/open-any.low.oir"),
+            // Block unwinds enter their handler blocks, also one that a branch enters too.
+            include_str!("../own/tests/protocol-high/closure-borrowed.oir"),
+            "oir 2 high\nmodule unwinds\nscope S action in @f\nfunc @f(%x: int) -> int {\n^entry in S unwind ^h:\n    \
+                br ^h(%x)\n^h(%v: int) in S:\n    ret %v\n}\n",
+        ] {
+            let module = crate::text::parse(source).unwrap();
+            for (_, function) in module.functions.iter() {
+                let Some(body) = &function.body else { continue };
+                let edges = Edges::new(body, &mut budget(&options)).unwrap();
+                for (block, data) in body.blocks.iter() {
+                    for index in 0..data.params.len() + 1 {
+                        let indexed = edges.incoming(block, index, &mut budget(&options)).unwrap();
+                        assert_eq!(indexed, incoming(body, block, index), "{block:?} {index}");
+                        checked += usize::from(!indexed.is_empty());
+                    }
+                }
+            }
+        }
+        assert!(checked > 10, "{checked}");
+    }
 }

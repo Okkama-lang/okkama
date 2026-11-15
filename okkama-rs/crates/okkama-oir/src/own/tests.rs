@@ -134,6 +134,87 @@ fn classification_closes_hidden_fields_roles_caps_and_scalar_graphs() {
     }
 }
 
+/// Bible §13.13 (#491, #520, #717): a once slot keeps a closure only when no closure of its type can retain
+/// a resource. Both function types reach `@take` as parameters, so the callee's own analysis leaves them open
+/// (no certificate), and `fn() -> int` has the runtime-managed dictionary of its open calls; the once graph
+/// counts them by the closures the module creates.
+#[test]
+fn once_slots_count_function_types_by_the_closures_of_the_module() {
+    let source = r#"oir 2 high
+module once_closures
+summary Mc call-boundary parameters [parameter_effect(convention=take, destination=none)]
+    contract call_contract(publication=atomic)
+func @cleanup(%arg0: fn() -> int) -> void [intrinsic "oir.sync_closure.cleanup"] summary(Mc);
+object R {
+    destroy @destroy
+}
+object Plain {
+    field n: int
+}
+object Atomic [builtin] {
+}
+object Holder {
+    field kept: fn() -> int once
+    field leased: fn(int) -> int once
+    field boxed: any once
+    field shared: Atomic once
+}
+scope SD action in @destroy
+func @destroy(%self: R) -> void [destroy R] {
+    ^entry in SD:
+    ret
+}
+scope SP action in @plain
+func @plain(%captured: Plain) -> int [lambda captures 1] {
+    ^entry in SP:
+    %n: int = const 1
+    ret %n
+}
+scope SR action in @leasing
+func @leasing(%captured: R, %x: int) -> int [lambda captures 1] {
+    ^entry in SR:
+    ret %x
+}
+scope ST action in @take
+func @take(%f: fn() -> int, %g: fn(int) -> int) -> int {
+    ^entry in ST:
+    %n: int = const 0
+    ret %n
+}
+scope SF action in @f
+func @f(%p: Plain, %r: R) -> int {
+    ^entry in SF:
+    %dictionary: type = type.of ty fn() -> int, descriptor descriptor_contract(managed=runtime,
+        retention=owner_graph(0), cleanup=@cleanup, summary=Mc)
+    %kept: fn() -> int = fn.closure @plain, [%p], ty fn() -> int
+    %leased: fn(int) -> int = fn.closure @leasing, [%r], ty fn(int) -> int
+    %n: int = const 0
+    ret %n
+}
+"#;
+    let module = crate::text::parse(source).unwrap();
+    let classes = classify_test(&module, &OwnOptions::default());
+    let ty = |text: &str| module.types.iter().find(|(_, ty)| match ty {
+        Type::Fn(function) => function.params.len() == usize::from(text == "fn(int) -> int"),
+        _ => false,
+    }).unwrap().0;
+    let (kept, leased) = (ty("fn() -> int"), ty("fn(int) -> int"));
+    assert!(classes[&kept].certificate.is_none(), "an open function type has no certificate");
+    assert_eq!(classes[&kept].descriptors.len(), 1, "the dictionary of its open calls");
+    assert!(classes[&kept].once_plain);
+    assert!(!classes[&leased].once_plain);
+    // `any` stays opaque, and a builtin capability is not plain for once (P2.4 §4.8).
+    let any = module.types.iter().find(|(_, ty)| matches!(ty, Type::Any)).unwrap().0;
+    assert!(!classes[&any].once_plain);
+    let atomic = module.types.iter().find(|(_, ty)| matches!(ty, Type::Object { decl, .. }
+        if module.declarations.get(*decl).unwrap().name == "Atomic")).unwrap().0;
+    assert!(classes[&atomic].capabilities);
+    assert!(!classes[&atomic].once_plain);
+    // Only once field types get the once graph.
+    let int = module.types.iter().find(|(_, ty)| matches!(ty, Type::Int)).unwrap().0;
+    assert!(!classes[&int].once_plain);
+}
+
 #[test]
 fn residual_descriptor_never_becomes_plain_by_default() {
     let mut module = ModuleBuilder::new("residual", Profile::High);
@@ -804,3 +885,53 @@ mod synchronous;
 mod protocols;
 
 mod arrays;
+
+mod raise_unwind;
+mod asynchronous;
+
+fn builtin(module: &mut ModuleBuilder, name: &str, destroy: Option<FuncId>) -> TypeId {
+    let decl = module.declare(Declaration {
+        name: name.into(),
+        type_params: vec![],
+        kind: DeclarationKind::Object { fields: vec![], witnesses: vec![], destroy, builtin: true },
+        loc: None,
+    }).unwrap();
+    module.intern_type(Type::Object { decl, args: vec![] }).unwrap()
+}
+
+/// P2.4 section 4.8 (#671, #686): Atomic is a capability whose close is explicit; it holds no
+/// obligation, so neither it nor an object holding it may own, and both carry deps. A builtin object
+/// with destroy keeps its service obligation.
+#[test]
+fn builtin_capability_without_destroy_holds_no_obligation() {
+    let mut module = ModuleBuilder::new("capability", Profile::High);
+    let atomic = builtin(&mut module, "async.atomic.Atomic_int", None);
+    let holder = object(&mut module, "Recorded", vec![atomic], None);
+    let close = module.declare_function(function("close", vec![], vec![])).unwrap();
+    let service = builtin(&mut module, "Service", Some(close));
+    let module = module.finish().unwrap();
+    let classes = classify_test(&module, &OwnOptions::default());
+    for ty in [atomic, holder] {
+        assert!(!classes[&ty].may_own(), "{ty:?}");
+        assert!(classes[&ty].service_types.is_empty(), "{ty:?}");
+        assert!(classes[&ty].references && classes[&ty].capabilities, "{ty:?}");
+        assert_eq!(classes[&ty].class, Classification::Plain, "{ty:?}");
+    }
+    assert!(classes[&service].may_own());
+    assert!(classes[&service].service_types.contains(&service));
+    assert!(!classes[&service].capabilities);
+}
+
+/// #672: a missing scope state is an own diagnostic, never a panic.
+#[test]
+fn missing_scope_state_is_a_flow_diagnostic() {
+    let mut env = emit::LiveEnv::default();
+    let scope = ScopeId::from_u32(3);
+    let OwnError::Diagnostics { diagnostics, .. } = env.state(scope).unwrap_err() else {
+        panic!("not a diagnostic");
+    };
+    assert_eq!(diagnostics[0].kind, OwnDiagnosticKind::InvalidFlow);
+    let state = ValueId::from_u32(7);
+    env.scopes.insert(scope, state);
+    assert_eq!(env.state(scope).unwrap(), state);
+}

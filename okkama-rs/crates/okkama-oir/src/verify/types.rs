@@ -1027,7 +1027,14 @@ fn terminator<'a>(
             }
             TermKind::Catch { failure, ty, handler, next } => {
                 checker.service(*failure, ServiceType::Failure)?;
-                let valid = is_error(module, module.types.get(*ty)?);
+                // A catch type guarantees Error: an error enum, the Error role, or the system NativeFailure or
+                // Cancelled (language spec 9.5, #724); an object never implements Error (OIR-2 §9.4).
+                let valid = match module.types.get(*ty)? {
+                    Type::Object { decl, args } => {
+                        args.is_empty() && (is_native_failure(module, *decl) || is_cancelled(module, *decl))
+                    }
+                    ty => is_error(module, ty),
+                };
                 checker.require(valid, "catch needs an Error type");
                 at_edge(function, block_id, next_edge, checker.state);
                 invoke_target(module, body, handler, Outcome::Normal,
@@ -1219,7 +1226,10 @@ fn function_types(module: &Module, data: &Function, state: &mut State<'_>) -> Ch
                 state.error(R::T5, "object action attribute must name an object declaration");
             }
         }
-        let receiver = |owner| data.signature.params.first().and_then(|id| module.types.get(*id).ok())
+        // C-2: a D21 async body restores its receiver from slot zero of continuation 0.
+        let language = super::coro::language_signature(module, data);
+        let receiver = |owner| language.as_ref().and_then(|signature| signature.params.first())
+            .and_then(|id| module.types.get(*id).ok())
             .is_some_and(|ty| matches!(ty, Type::Object { decl, .. } if *decl == owner));
         match attr {
             FunctionAttr::Extern(name) => {
@@ -1228,7 +1238,8 @@ fn function_types(module: &Module, data: &Function, state: &mut State<'_>) -> Ch
                 }
             }
             FunctionAttr::Intrinsic { name, .. } => {
-                if state.context.external_contracts.intrinsic(name) != Some(&data.signature) {
+                let trusted = state.context.external_contracts.intrinsic_declaration(name, &data.signature);
+                if trusted != Some(&data.signature) {
                     state.error(R::T5, "intrinsic declaration does not match the trusted ABI catalog");
                 }
             }

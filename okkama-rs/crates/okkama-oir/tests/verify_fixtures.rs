@@ -145,6 +145,230 @@ fn async_v1_fixtures_roundtrip_and_verify_structurally() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// Slice V3 fixtures: the own inputs of the coro pass (V2's own goldens and the V2-shaped variants), their coro
+/// goldens and the B9.5 negatives, all under the full verifier (OIR-2 §12: own → verify(own) → coro →
+/// verify(coro)).
+#[test]
+fn async_v3_coro_fixtures_verify_fully() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = manifest.join("tests/fixtures/async");
+    let mut failures = Vec::new();
+    for class in ["own", "coro", "coro-invalid"] {
+        let mut paths: Vec<_> = fs::read_dir(root.join(class)).unwrap()
+            .map(|entry| entry.unwrap().path()).collect();
+        if class == "own" {
+            paths.extend(fs::read_dir(manifest.join("src/own/tests/async-goldens")).unwrap()
+                .map(|entry| entry.unwrap().path()));
+        }
+        paths.sort();
+        assert!(!paths.is_empty(), "{class}");
+        for path in paths {
+            let source = fs::read_to_string(&path).unwrap();
+            let module = text::parse(&source).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            let canonical = text::print(&module).unwrap();
+            let roundtrip = text::parse(&canonical).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            assert_eq!(text::print(&roundtrip).unwrap(), canonical, "{}: unstable canonical text", path.display());
+            let result = fixture_result(&module, ErrorPolicy::All);
+            if class != "coro-invalid" {
+                if let Err(error) = result {
+                    failures.push(format!("{}: {error:?}", path.display()));
+                }
+                continue;
+            }
+            let expected = source.lines().find_map(|line| line.strip_prefix("// expect ")).unwrap();
+            let (rule, primary) = expected.split_once(' ').unwrap();
+            let Err(report) = result else {
+                failures.push(format!("{}: accepted invalid fixture", path.display()));
+                continue;
+            };
+            assert_eq!(report.failure, VerifyFailure::Rejected, "{}: {report:?}", path.display());
+            if !report.diagnostics.iter().any(|diagnostic| diagnostic.rule.as_str() == rule
+                && location(&diagnostic.primary.entity) == primary) {
+                failures.push(format!("{}: {expected}; {report:?}", path.display()));
+            }
+            let repeated = fixture_result(&roundtrip, ErrorPolicy::All).unwrap_err();
+            assert!(repeated.diagnostics.iter().any(|diagnostic| diagnostic.rule.as_str() == rule),
+                "canonical roundtrip lost {rule}: {}", path.display());
+            let first = fixture_result(&module, ErrorPolicy::First).unwrap_err();
+            assert_eq!(first.diagnostics, report.diagnostics[..1], "{}", path.display());
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Slice V4 fixtures: the hand-written Coro input, the Low goldens of every coro golden and the B10.6/D18
+/// negatives, all under the full verifier (OIR-2 §12: coro → verify(coro) → low → verify(low)).
+#[test]
+fn async_v4_low_fixtures_verify_fully() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/async");
+    let mut failures = Vec::new();
+    for class in ["low-input", "low", "low-invalid"] {
+        let mut paths: Vec<_> = fs::read_dir(root.join(class)).unwrap()
+            .map(|entry| entry.unwrap().path()).collect();
+        paths.sort();
+        assert!(!paths.is_empty(), "{class}");
+        for path in paths {
+            let source = fs::read_to_string(&path).unwrap();
+            let module = text::parse(&source).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            let canonical = text::print(&module).unwrap();
+            let roundtrip = text::parse(&canonical).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            assert_eq!(text::print(&roundtrip).unwrap(), canonical, "{}: unstable canonical text", path.display());
+            let result = fixture_result(&module, ErrorPolicy::All);
+            if class != "low-invalid" {
+                if let Err(error) = result {
+                    failures.push(format!("{}: {error:?}", path.display()));
+                }
+                continue;
+            }
+            let expected = source.lines().find_map(|line| line.strip_prefix("// expect ")).unwrap();
+            let (rule, primary) = expected.split_once(' ').unwrap();
+            let Err(report) = result else {
+                failures.push(format!("{}: accepted invalid fixture", path.display()));
+                continue;
+            };
+            assert_eq!(report.failure, VerifyFailure::Rejected, "{}: {report:?}", path.display());
+            if !report.diagnostics.iter().any(|diagnostic| diagnostic.rule.as_str() == rule
+                && location(&diagnostic.primary.entity) == primary) {
+                failures.push(format!("{}: {expected}; {report:?}", path.display()));
+            }
+            let repeated = fixture_result(&roundtrip, ErrorPolicy::All).unwrap_err();
+            assert!(repeated.diagnostics.iter().any(|diagnostic| diagnostic.rule.as_str() == rule),
+                "canonical roundtrip lost {rule}: {}", path.display());
+            let first = fixture_result(&module, ErrorPolicy::First).unwrap_err();
+            assert_eq!(first.diagnostics, report.diagnostics[..1], "{}", path.display());
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// #695: the mutated cases of the async wave 1 audit. Each row names the rule and location that reject the
+/// negative and the golden or fixture it mutates, which must verify; every negative is listed.
+#[test]
+fn async_audit_695_negatives_and_their_positives() {
+    use std::collections::BTreeSet;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/async");
+    let mut listed = BTreeSet::new();
+    for line in include_str!("fixtures/async/audit-matrix.tsv").lines().skip(1) {
+        let row: Vec<_> = line.split('\t').collect();
+        assert_eq!(row.len(), 4, "{line}");
+        let positive = fixture_module(&root, row[2]);
+        fixture_result(&positive, ErrorPolicy::All).unwrap_or_else(|report| panic!("{line}: {report:?}"));
+        let source = fs::read_to_string(root.join(row[3])).unwrap();
+        let negative = text::parse(&source).unwrap_or_else(|error| panic!("{line}: {error}"));
+        let report = fixture_result(&negative, ErrorPolicy::All).unwrap_err();
+        assert_eq!(report.failure, VerifyFailure::Rejected, "{line}");
+        assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule.as_str() == row[0]
+            && location(&diagnostic.primary.entity) == row[1]), "{line}: {report:?}");
+        let roundtrip = text::parse(&text::print(&negative).unwrap()).unwrap();
+        let repeated = fixture_result(&roundtrip, ErrorPolicy::All).unwrap_err();
+        assert!(repeated.diagnostics.iter().any(|diagnostic| diagnostic.rule.as_str() == row[0]),
+            "canonical roundtrip lost {line}");
+        let expected = source.lines().find_map(|line| line.strip_prefix("// expect ")).unwrap();
+        listed.insert((row[3].to_string(), expected == format!("{} {}", row[0], row[1])));
+    }
+    for entry in fs::read_dir(root.join("audit-invalid")).unwrap() {
+        let name = format!("audit-invalid/{}", entry.unwrap().file_name().to_string_lossy());
+        assert!(listed.contains(&(name.clone(), true)), "{name}: its expect line needs a row of audit-matrix.tsv");
+    }
+}
+
+/// R2: the traces of r2-defer-await-reserve, whose pending exit of r lives across an async defer. A R: the final
+/// close delivers a requested cancellation only after the plan that destroys a has drained. R A: the close after
+/// the failed defer begins with the failure and the resumed pending exit, so r is in its plan from the start.
+#[test]
+fn r2_traces_across_a_suspension_keep_their_order() {
+    use okkama_oir::*;
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/async/low/r2-defer-await-reserve.oir");
+    let source = fs::read_to_string(path).unwrap();
+    let module = text::parse(&source).unwrap();
+    fixture_result(&module, ErrorPolicy::All).unwrap();
+    let (function, data) = module.functions.iter().find(|(_, data)| data.symbol == "f").unwrap();
+    let body = data.body.as_ref().unwrap();
+    // R A: the failing close takes the reserve, resumed from the frame rather than the exit.prepare result.
+    let failing = body.insts.iter().find_map(|(_, inst)| match &inst.op {
+        Operation::Cleanup(CleanupOp::Begin { pending: Some(pending), failure: Some(_), .. }) => Some(*pending),
+        _ => None,
+    }).expect("the close after the failed defer begins with the failure and the reserve");
+    let prepared = |value: ValueId| matches!(body.values.get(value).unwrap().def, Definition::InstResult { inst, .. }
+        if matches!(body.insts.get(inst).unwrap().op, Operation::Exit(ExitOp::Prepare { .. })));
+    assert!(!prepared(failing), "the reserve crosses the async defer through the frame");
+    // A R: delivering before the final close's first plan would abort r before a is destroyed.
+    let text = &source[source.find("func @f(").unwrap()..];
+    let begin = text.lines().position(|line| line.contains("= cleanup.begin ") && line.contains(", pending ")
+        && !line.contains(", failure ")).unwrap();
+    let plan = text.lines().skip(begin).find(|line| line.contains("= cleanup.plan ")).unwrap();
+    let state = plan.split("cleanup.plan ").nth(1).unwrap().split(',').next().unwrap();
+    let early = format!("    %early: cleanup-state = cleanup.deliver_cancel {state}\n{}",
+        plan.replace(&format!("cleanup.plan {state},"), "cleanup.plan %early,"));
+    let mutated = text::parse(&source.replace(plan, &early)).unwrap();
+    let report = fixture_result(&mutated, ErrorPolicy::All).unwrap_err();
+    let body = mutated.functions.get(function).unwrap().body.as_ref().unwrap();
+    let (instruction, _) = body.insts.iter().find(|(_, inst)| matches!(inst.op,
+        Operation::Cleanup(CleanupOp::DeliverCancel { .. }))).unwrap();
+    let expected = EntityLocation::Instruction { function, instruction };
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::B105
+        && diagnostic.message.contains("after the plan has drained") && diagnostic.primary.entity == expected),
+        "{report:?}");
+}
+
+/// #696: the traces of the D21 M8 fixtures. The abort-after-prefix trace A R holds because a cancellation is
+/// delivered only after the plan that destroys A has drained; the explicit aborts (A R and R A) need a definite
+/// failure, because a cancellation in D21 is decided only at the selector after its delivery.
+#[test]
+fn m8_d21_traces_keep_their_order() {
+    use okkama_oir::*;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/verify");
+    let rejected_at = |source: &str, rule: RuleId, message: &str, op: &dyn Fn(&Operation) -> bool| {
+        let module = text::parse(source).unwrap();
+        let report = fixture_result(&module, ErrorPolicy::All).unwrap_err();
+        let (function, data) = module.functions.iter().find(|(_, data)| data.symbol == "f").unwrap();
+        let body = data.body.as_ref().unwrap();
+        let (instruction, _) = body.insts.iter().find(|(_, inst)| op(&inst.op)).unwrap();
+        let expected = EntityLocation::Instruction { function, instruction };
+        assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == rule
+            && diagnostic.message.contains(message) && diagnostic.primary.entity == expected), "{report:?}");
+    };
+
+    // A R: delivering the cancellation before the first plan would abort R before A is destroyed.
+    let source = fs::read_to_string(root.join("valid/M8-abort-after-executed-prefix.oir")).unwrap();
+    fixture_result(&text::parse(&source).unwrap(), ErrorPolicy::All).unwrap();
+    let body = &source[source.find("func @f(").unwrap()..];
+    let plan = body.lines().find(|line| line.contains("= cleanup.plan ") && line.ends_with(", plan 0")).unwrap();
+    let state = plan.split("cleanup.plan ").nth(1).unwrap().split(',').next().unwrap();
+    let early = format!("    %early: cleanup-state = cleanup.deliver_cancel {state}\n{}",
+        plan.replace(&format!("cleanup.plan {state},"), "cleanup.plan %early,"));
+    let mutated = source.replace(plan, &early);
+    let first = |op: &Operation| matches!(op, Operation::Cleanup(CleanupOp::DeliverCancel { .. }));
+    rejected_at(&mutated, RuleId::B105, "cancellation is delivered once, after the plan has drained", &first);
+
+    // A R and R A by explicit abort in the close of the failed deferred call: A R aborts R with the state that
+    // the drained first plan hands to its `done` edge, R A aborts it with the settled state before any plan.
+    for (name, after_prefix) in [("M8-explicit-abort-after-executed-prefix", true),
+        ("M8-explicit-abort-before-destroy", false)] {
+        let module = text::parse(&fs::read_to_string(root.join(format!("valid/{name}.oir"))).unwrap()).unwrap();
+        fixture_result(&module, ErrorPolicy::All).unwrap();
+        let (_, data) = module.functions.iter().find(|(_, data)| data.symbol == "f").unwrap();
+        let body = data.body.as_ref().unwrap();
+        let aborts: Vec<_> = body.insts.iter().filter_map(|(_, inst)| match inst.op {
+            Operation::Exit(ExitOp::Abort { cleanup, .. }) => Some(cleanup),
+            _ => None,
+        }).collect();
+        let [state] = aborts.as_slice() else { panic!("{name}: one explicit abort") };
+        match body.values.get(*state).unwrap().def {
+            Definition::BlockParam { block, .. } => {
+                assert!(after_prefix, "{name}");
+                assert!(body.blocks.iter().any(|(_, data)| matches!(&data.term.kind,
+                    TermKind::CleanupNext { done, .. } if done.block == block)), "{name}");
+            }
+            Definition::InstResult { inst, .. } => {
+                assert!(!after_prefix, "{name}");
+                assert!(matches!(body.insts.get(inst).unwrap().op,
+                    Operation::Cleanup(CleanupOp::SettleEmpty { .. })), "{name}");
+            }
+        }
+    }
+}
+
 #[test]
 fn every_rule_has_a_verified_canonical_positive_and_negative() {
     use std::collections::BTreeSet;
@@ -171,6 +395,32 @@ fn every_rule_has_a_verified_canonical_positive_and_negative() {
         structural_result(&positive, ErrorPolicy::All).unwrap_or_else(|report| panic!("{line}: {report:?}"));
         let negative = fixture_module(&async_root, row[2]);
         let report = structural_result(&negative, ErrorPolicy::All).unwrap_err();
+        assert_eq!(report.failure, VerifyFailure::Rejected, "{line}");
+        assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule.as_str() == row[0]),
+            "{line}: {report:?}");
+    }
+    // B9.5 rules of slice V3 are linearity rules: full verification.
+    for line in include_str!("fixtures/async/coro-matrix.tsv").lines().skip(1) {
+        let row: Vec<_> = line.split('\t').collect();
+        assert_eq!(row.len(), 3, "{line}");
+        assert!(covered.insert(row[0]), "duplicate RuleId: {line}");
+        let positive = fixture_module(&async_root, row[1]);
+        fixture_result(&positive, ErrorPolicy::All).unwrap_or_else(|report| panic!("{line}: {report:?}"));
+        let negative = fixture_module(&async_root, row[2]);
+        let report = fixture_result(&negative, ErrorPolicy::All).unwrap_err();
+        assert_eq!(report.failure, VerifyFailure::Rejected, "{line}");
+        assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule.as_str() == row[0]),
+            "{line}: {report:?}");
+    }
+    // B10.6 and D18 rules of slice V4 on lowered async bodies: full verification.
+    for line in include_str!("fixtures/async/low-matrix.tsv").lines().skip(1) {
+        let row: Vec<_> = line.split('\t').collect();
+        assert_eq!(row.len(), 3, "{line}");
+        assert!(covered.insert(row[0]), "duplicate RuleId: {line}");
+        let positive = fixture_module(&async_root, row[1]);
+        fixture_result(&positive, ErrorPolicy::All).unwrap_or_else(|report| panic!("{line}: {report:?}"));
+        let negative = fixture_module(&async_root, row[2]);
+        let report = fixture_result(&negative, ErrorPolicy::All).unwrap_err();
         assert_eq!(report.failure, VerifyFailure::Rejected, "{line}");
         assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule.as_str() == row[0]),
             "{line}: {report:?}");
@@ -641,7 +891,9 @@ fn normalization_preserves_rejections_under_dead_prefixes_and_ssa_permutations()
                     });
                     // An explicit packet ABI forbids body evaluation before
                     // own.accept. Do not turn a dead prefix into an ABI error.
-                    if !input_packet {
+                    // C-2: a D21 async body starts with the start resume of
+                    // its frame, so a prefix before it is an ABI error too.
+                    if !input_packet && body.frame_layout.is_none() {
                         let mut prefix = Vec::new();
                         for bit in 0..8 {
                             let inst = InstId::from_u32(body.insts.len() as u32);
@@ -884,4 +1136,30 @@ fn structural_type_errors_do_not_emit_ownership_rules() {
     }), "{report:?}");
     let full = fixture_result(&module, ErrorPolicy::All).unwrap_err();
     assert!(full.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::B11));
+}
+
+/// #688, plan P2.5 §3.1: `fut.done`, `fut.cancel` and `fut.cancelled` belong to High.
+#[test]
+fn high_admits_future_queries_and_cancel() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let module = fixture_module(&root, "verify/valid/H6-future-query-in-high.oir");
+    assert_eq!(module.profile, okkama_oir::Profile::High);
+    fixture_result(&module, ErrorPolicy::All).unwrap_or_else(|report| panic!("{report:?}"));
+    // The spec module of §10.1 is an illustration (its `@make` has no body form), so it is not a
+    // complete certificate; its `fut.cancel` and `fut.cancelled` must still satisfy H6 in High.
+    let spec = fixture_module(&root, "spec/10-never-started-cancel.oir");
+    assert_eq!(spec.profile, okkama_oir::Profile::High);
+    let diagnostics = fixture_result(&spec, ErrorPolicy::All).err().map(|report| report.diagnostics);
+    let h6: Vec<_> = diagnostics.iter().flatten().filter(|d| d.rule.as_str() == "OIR2-H6").collect();
+    assert!(h6.is_empty(), "{h6:?}");
+}
+
+/// #688 keeps H6 for the async operations that only own or later profiles may hold.
+#[test]
+fn high_still_rejects_future_state_operations() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let module = fixture_module(&root, "verify/invalid/H6-future-state-in-high.oir");
+    let report = fixture_result(&module, ErrorPolicy::All).unwrap_err();
+    assert_eq!(report.failure, VerifyFailure::Rejected);
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule.as_str() == "OIR2-H6"), "{report:?}");
 }

@@ -7,6 +7,7 @@ use cranelift_codegen::ir::StackSlot;
 
 mod roots;
 use roots::Frame;
+mod futures;
 
 pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error> {
     if runtime.invocations[index].code != 0 {
@@ -15,9 +16,19 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
     let machine = runtime.champ.machine.as_ref().expect("Champ program");
     let program = machine.source.clone();
     let source = &program.functions[index];
+    // An async defer entry runs as a shielded child of its caller (C-6), with the runtime of #601 R5.
+    if matches!(source.entry_abi, s::EntryAbi::AsyncDefer { .. }) {
+        return Err(Error("Champ async defer entries run with the async resources runtime (#601 R5)".into()));
+    }
     let frame = Frame::new(source)?;
-    let owned = source.entry_abi != s::EntryAbi::Observation;
-    let params = if owned { 3 } else {
+    // An async body takes the context and its frame (draft 3 §13); owning entries take CallOwn.
+    let asynchronous = matches!(source.entry_abi, s::EntryAbi::AsyncBody { .. });
+    let owned = source.entry_abi != s::EntryAbi::Observation && !asynchronous;
+    let params = if asynchronous {
+        1
+    } else if owned {
+        3
+    } else {
         source.params.iter().filter(|location| matches!(location, L::Register(_))).count()
     };
     let signature = runtime.jit.signature(params);
@@ -35,6 +46,7 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
         let ctx = builder.block_params(entry)[0];
         let zero = builder.ins().iconst(types::I64, 0);
         let io = if owned { builder.block_params(entry)[1] } else { zero };
+        let body = if asynchronous { builder.block_params(entry)[1] } else { zero };
         let scope_base = frame.bytes;
         let bytes = scope_base + program.tables.scopes.len() * 16;
         if bytes as u64 > MAX_FRAME / 2 {
@@ -50,12 +62,16 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
         let post = builder.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 64, 3));
         let blocks = (0..source.code.len()).map(|_| builder.create_block()).collect();
         let stop = builder.create_block();
+        let invocations = runtime.invocations.as_ptr();
+        let polled = runtime.limits.polled();
+        let fuel = runtime.budget.fuel.address();
         let mut emit = Emit {
-            builder: &mut builder, jit: &mut runtime.jit, program: &program, source, index,
-            ctx, io, storage, frame: &frame, scope_base, post, blocks, stop, pc: None,
+            builder: &mut builder, jit: &mut runtime.jit, program: &program, source, index, invocations,
+            ctx, io, owned, body, frame_map: machine.frames[index].as_ref(), schedules: &machine.schedules[index],
+            storage, frame: &frame, scope_base, post, blocks, stop, pc: None, polled, fuel,
             plans: &machine.plans[index], selections: &machine.selections[index], entries: &machine.entries,
             shielded_entries: &machine.shielded_entries,
-            constants: &mut runtime.constants, heap: &mut runtime.heap,
+            constants: &mut runtime.constants, heap: &mut runtime.heap, globals: machine.globals.clone(),
         };
         let args = emit.builder.block_params(entry).to_vec();
         let mut language = 0;
@@ -82,7 +98,7 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
         let limit = emit.load(ctx, std::mem::offset_of!(Ctx, stack_limit));
         let low = emit.builder.ins().icmp(IntCC::UnsignedLessThan, sp, limit);
         let overflow = emit.builder.create_block();
-        let start = if source.code.is_empty() { emit.builder.create_block() } else { emit.blocks[0] };
+        let start = if source.code.is_empty() || asynchronous { emit.builder.create_block() } else { emit.blocks[0] };
         emit.builder.ins().brif(low, overflow, &[], start, &[]);
         emit.builder.switch_to_block(overflow);
         let cleanup = emit.call("champ_machine_cleanup_mode", &[ctx]).unwrap();
@@ -93,7 +109,11 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
         emit.call("champ_machine_fatal_stack", &[ctx]);
         emit.builder.ins().jump(stop, &[]);
         emit.builder.switch_to_block(reject);
-        if owned {
+        if asynchronous {
+            // The body closes its inputs and publishes the overflow; its Future is settled either way.
+            emit.call("champ_body_reject", &[ctx, body]);
+            emit.builder.ins().return_(&[zero]);
+        } else if owned {
             let ordinal = emit.call("champ_entry_reject", &[ctx, io]).unwrap();
             emit.builder.ins().return_(&[ordinal]);
         } else {
@@ -111,9 +131,18 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
             let result = emit.call("champ_machine_external", &[ctx, function, io, argv, argc]).unwrap();
             emit.builder.ins().return_(&[result]);
         } else {
+            if asynchronous {
+                emit.builder.switch_to_block(start);
+                emit.resume_dispatch();
+            }
             for (pc, instruction) in source.code.iter().enumerate() {
                 emit.pc = Some(pc);
                 emit.builder.switch_to_block(emit.blocks[pc]);
+                if pc == 0 && emit.polled {
+                    // No edge enters block 0 (ENTRY_BLOCK_TARGET): it is reached at the function entry and by a
+                    // self tail call, each a step as in Tomato.
+                    emit.poll();
+                }
                 if pc == 0 && owned && s::plain_inputs(&program, source) {
                     emit.checked("champ_machine_plain_packet", &[ctx, io]);
                 }
@@ -163,8 +192,18 @@ struct Emit<'a, 'b> {
     program: &'a s::Program,
     source: &'a s::Function,
     index: usize,
+    /// The runtime's invocation table: a boxed slice, so its code words keep their addresses.
+    invocations: *const runtime::Invocation,
     ctx: Value,
     io: Value,
+    /// An owning entry (CallOwn in `io`); false for observations and async bodies.
+    owned: bool,
+    /// An async body's frame word, or zero. The frame is rooted by `Runtime::running` while its body runs.
+    body: Value,
+    /// An async body's frame map (draft 3 §2).
+    frame_map: Option<&'a c::FrameMap>,
+    /// Runtime ids of this function's D16 schedules.
+    schedules: &'a [u64],
     storage: StackSlot,
     frame: &'a Frame,
     scope_base: usize,
@@ -172,12 +211,18 @@ struct Emit<'a, 'b> {
     blocks: Vec<Block>,
     stop: Block,
     pc: Option<usize>,
+    /// Whether a budget is set (`Limits::polled`): only then does machine code count steps.
+    polled: bool,
+    /// Address of the runtime's fuel cell.
+    fuel: i64,
     plans: &'a [u64],
     selections: &'a [(u32, u64)],
     entries: &'a [u64],
     shielded_entries: &'a [u64],
     constants: &'a mut Vec<(Word, Repr)>,
     heap: &'a mut Heap,
+    /// The values of the module constants (`machine::Program::globals`).
+    globals: Vec<Word>,
 }
 
 impl Emit<'_, '_> {
@@ -258,6 +303,74 @@ impl Emit<'_, '_> {
         self.builder.inst_results(instruction).first().copied()
     }
 
+    /// An observation call. A compiled callee with code is called directly, so a recursion costs one
+    /// machine frame per level; otherwise the machine helper compiles it or reaches its provider.
+    fn observe(&mut self, target: usize, values: &[Value]) -> Value {
+        let ctx = self.ctx;
+        let zero = self.iconst(0);
+        let function = self.iconst(target as u64);
+        let argc = self.iconst(values.len() as u64);
+        if self.program.functions[target].code.is_empty() || values.len() > 8 {
+            let argv = self.record(values);
+            return self.call("champ_machine_external", &[ctx, function, zero, argv, argc]).unwrap();
+        }
+        let entry = self.invocations.wrapping_add(target) as u64;
+        let word = self.iconst(entry + std::mem::offset_of!(runtime::Invocation, code) as u64);
+        let code = self.load(word, 0);
+        let direct = self.builder.create_block();
+        let helper = self.builder.create_block();
+        let done = self.builder.create_block();
+        let result = self.builder.append_block_param(done, types::I64);
+        self.builder.ins().brif(code, direct, &[], helper, &[]);
+        self.builder.switch_to_block(direct);
+        #[cfg(test)]
+        self.call("test_champ_safepoint", &[ctx]);
+        let signature = self.jit.signature(values.len());
+        let signature = self.builder.import_signature(signature);
+        let arguments = std::iter::once(ctx).chain(values.iter().copied()).collect::<Vec<_>>();
+        let call = self.builder.ins().call_indirect(signature, code, &arguments);
+        self.report_roots(call);
+        let value = self.builder.inst_results(call)[0];
+        self.builder.ins().jump(done, &[value.into()]);
+        self.builder.switch_to_block(helper);
+        let argv = self.record(values);
+        let value = self.call("champ_machine_external", &[ctx, function, zero, argv, argc]).unwrap();
+        self.builder.ins().jump(done, &[value.into()]);
+        self.builder.switch_to_block(done);
+        result
+    }
+
+    /// A self observation call in tail position (its result returned at once, directly or through
+    /// one branch) in a function without service state: no scope, packet or cleanup outlives it.
+    fn self_tail_call(&self, target: usize, flow: &s::Flow) -> bool {
+        let (Some(pc), s::Flow::Next(outputs)) = (self.pc, flow) else {
+            return false;
+        };
+        let [output] = outputs.as_slice() else {
+            return false;
+        };
+        if target != self.index || self.source.entry_abi != s::EntryAbi::Observation
+            || !self.source.services.is_empty()
+            || self.source.code.iter().any(|instruction| matches!(instruction,
+                s::Instruction::Champ { op, .. } if *op != O::InvokeObserve))
+        {
+            return false;
+        }
+        let returns = |pc: usize, value: L| matches!(self.source.code.get(pc),
+            Some(s::Instruction::Ret(values)) if values.as_slice() == [value].map(|value| match value {
+                L::Register(id) => id,
+                L::Service(_) => u32::MAX,
+            }));
+        match self.source.code.get(pc + 1) {
+            Some(s::Instruction::Ret(_)) => returns(pc + 1, *output),
+            Some(s::Instruction::Br(edge)) => edge.assignments.iter().any(|assignment| {
+                assignment.source == s::Source::Location(*output)
+                    && returns(edge.target_pc as usize, assignment.destination)
+            }),
+            _ => false,
+        }
+    }
+
     fn enter_roots(&mut self) {
         let live = self.frame.before(self.source, self.pc);
         let zero = self.iconst(0);
@@ -287,8 +400,31 @@ impl Emit<'_, '_> {
         self.builder.ins().jump(self.blocks[self.pc.unwrap() + 1], &[]);
     }
 
+    /// One budget step (`budget`), counted as Tomato counts them: below zero fuel calls `rt_poll`, and an
+    /// exhausted budget or an interrupt stops the run (no handler catches it, no destroy runs).
+    fn poll(&mut self) {
+        let cell = self.iconst(self.fuel as u64);
+        let fuel = self.load(cell, 0);
+        let left = self.builder.ins().iadd_imm_s(fuel, -1);
+        self.store(cell, 0, left);
+        let empty = self.builder.ins().icmp_imm_s(IntCC::SignedLessThan, left, 0);
+        let slow = self.builder.create_block();
+        let next = self.builder.create_block();
+        self.builder.set_cold_block(slow);
+        self.builder.ins().brif(empty, slow, &[], next, &[]);
+        self.builder.switch_to_block(slow);
+        self.call("poll", &[self.ctx]);
+        let status = self.load(self.ctx, std::mem::offset_of!(Ctx, status));
+        self.builder.ins().brif(status, self.stop, &[], next, &[]);
+        self.builder.switch_to_block(next);
+    }
+
     fn edge(&mut self, edge: &s::Edge, produced: &[Vec<Value>]) {
         let pc = self.pc.expect("edge PC");
+        if self.polled && edge.target_pc as usize <= pc {
+            // A loop back-edge is a step.
+            self.poll();
+        }
         let ordinal = roots::outgoing(&self.source.code[pc]).iter()
             .position(|candidate| std::ptr::eq(*candidate, edge)).expect("source edge");
         for copy in &self.frame.allocation.edges[&(pc as u32, ordinal as u32)] {
@@ -400,7 +536,7 @@ impl Emit<'_, '_> {
                 self.store(self.ctx, std::mem::offset_of!(Ctx, failure), failure);
                 let failed = self.iconst(FAILED);
                 self.store(self.ctx, std::mem::offset_of!(Ctx, status), failed);
-                if self.source.entry_abi != s::EntryAbi::Observation {
+                if self.owned {
                     let post = self.load(self.io, 16);
                     let zero = self.iconst(0);
                     self.store(post, 0, zero);
@@ -524,6 +660,9 @@ impl Emit<'_, '_> {
             }
             O::ArrayGet => {
                 let s::Flow::Outcomes(outcomes) = flow else { unreachable!("verified array outcomes") };
+                // A byte array (`@byte`) is packed: one byte per element after the header, read as a raw byte.
+                let bytes = matches!(locations[0],
+                    L::Register(id) if self.source.registers[id as usize] == s::Type::Bytes);
                 let array = self.word(locations[0]);
                 let index = self.word(locations[1]);
                 let header = self.load(array, 0);
@@ -537,9 +676,14 @@ impl Emit<'_, '_> {
                 let outside = self.builder.create_block();
                 self.builder.ins().brif(valid, load, &[], outside, &[]);
                 self.builder.switch_to_block(load);
-                let offset = self.builder.ins().ishl_imm_u(position, 3);
-                let pointer = self.builder.ins().iadd(array, offset);
-                let value = self.load(pointer, 8);
+                let value = if bytes {
+                    let pointer = self.builder.ins().iadd(array, position);
+                    self.builder.ins().uload8(types::I64, MEMORY, pointer, 8)
+                } else {
+                    let offset = self.builder.ins().ishl_imm_u(position, 3);
+                    let pointer = self.builder.ins().iadd(array, offset);
+                    self.load(pointer, 8)
+                };
                 self.edge(&outcomes[0].edge, &[vec![value]]);
                 self.builder.switch_to_block(outside);
                 let message = self.heap.allocate_text("Array index out of bounds");
@@ -561,6 +705,72 @@ impl Emit<'_, '_> {
                 self.edge(&outcomes[1].edge, &[vec![failure]]);
                 return Ok(());
             }
+            O::Lookup => {
+                let s::Flow::Outcomes(outcomes) = flow else { unreachable!("verified lookup outcomes") };
+                let collection = self.word(locations[0]);
+                let index = self.word(locations[1]);
+                let function = self.iconst(self.index as u64);
+                let pc = self.iconst(self.pc.unwrap() as u64);
+                let found = self.call("champ_machine_lookup", &[ctx, function, pc, collection, index, post]).unwrap();
+                let status = self.load(ctx, std::mem::offset_of!(Ctx, status));
+                let running = self.builder.create_block();
+                self.builder.ins().brif(status, self.stop, &[], running, &[]);
+                self.builder.switch_to_block(running);
+                let yes = self.builder.create_block();
+                let no = self.builder.create_block();
+                self.builder.ins().brif(found, yes, &[], no, &[]);
+                self.builder.switch_to_block(yes);
+                let value = self.load(post, 0);
+                self.edge(&outcomes[0].edge, &[vec![value]]);
+                self.builder.switch_to_block(no);
+                self.edge(&outcomes[1].edge, &[]);
+                return Ok(());
+            }
+            O::BuilderPush | O::BuilderAppend | O::BuilderRange | O::BuilderFinish | O::BuilderAbandon => {
+                let (&packet, operands) = locations.split_last().expect("verified journal packet");
+                let words = operands.iter().map(|&location| self.word(location)).collect::<Vec<_>>();
+                let record = self.record(&words);
+                let count = self.iconst(words.len() as u64);
+                let function = self.iconst(self.index as u64);
+                let pc = self.iconst(self.pc.unwrap() as u64);
+                let value = self.call("champ_machine_builder", &[ctx, function, pc, record, count]).unwrap();
+                // The journal leaves with the buffer, as own.move moves a packet record. Both are read
+                // after the helper's safepoint, from their rooted frame slots.
+                let journal = self.read(packet);
+                let buffer = self.word(operands[0]);
+                match flow {
+                    s::Flow::Next(destinations) => {
+                        let status = self.load(ctx, std::mem::offset_of!(Ctx, status));
+                        let running = self.builder.create_block();
+                        self.builder.ins().brif(status, self.stop, &[], running, &[]);
+                        self.builder.switch_to_block(running);
+                        self.write(destinations[0], &journal);
+                        self.next();
+                    }
+                    s::Flow::Outcomes(outcomes) => {
+                        let status = self.load(ctx, std::mem::offset_of!(Ctx, status));
+                        let success = self.builder.create_block();
+                        let failure = self.builder.create_block();
+                        self.builder.ins().brif(status, failure, &[], success, &[]);
+                        self.builder.switch_to_block(success);
+                        self.edge(&outcomes[0].edge, &[vec![value], journal.clone()]);
+                        self.builder.switch_to_block(failure);
+                        let failed = self.builder.ins().icmp_imm_s(IntCC::Equal, status, FAILED as i64);
+                        let unwind = self.builder.create_block();
+                        self.builder.ins().brif(failed, unwind, &[], self.stop, &[]);
+                        self.builder.switch_to_block(unwind);
+                        let function = self.iconst(self.index as u64);
+                        let pc = self.iconst(self.pc.unwrap() as u64);
+                        let frame = self.builder.ins().get_frame_pointer(types::I64);
+                        self.call("trace", &[ctx, function, pc, frame]);
+                        let failure = self.load(ctx, std::mem::offset_of!(Ctx, failure));
+                        self.store(ctx, std::mem::offset_of!(Ctx, status), zero);
+                        self.store(ctx, std::mem::offset_of!(Ctx, failure), zero);
+                        self.edge(&outcomes[1].edge, &[vec![buffer], journal, vec![failure]]);
+                    }
+                }
+                return Ok(());
+            }
             O::ScopeBegin => {
                 let scope = arguments.iter().find_map(|arg| match arg {
                     A::Scope(id) => Some(*id), _ => None,
@@ -575,15 +785,33 @@ impl Emit<'_, '_> {
                 self.checked("champ_machine_destination", &[ctx, state, destination]);
                 return self.flow(op, flow, arguments, ordinal, "champ_scope_begin");
             }
-            O::InvokeObserve => {
-                let target = arguments.iter().find_map(entry).unwrap() as usize;
-                let count = self.program.functions[target].params.iter()
-                    .filter(|location| matches!(location, L::Register(_))).count();
-                let values = locations[..count].iter().map(|&loc| self.word(loc)).collect::<Vec<_>>();
-                let argv = self.record(&values);
-                let argc = self.iconst(count as u64);
-                let function = self.iconst(target as u64);
-                let value = self.call("champ_machine_external", &[ctx, function, zero, argv, argc]).unwrap();
+            O::InvokeObserve | O::InvokeDispatch => {
+                let (value, has_result) = if op == O::InvokeDispatch {
+                    let (function, count, has_result) = self.dispatch(arguments, locations[0], |_, function| {
+                        function as u64
+                    });
+                    let values = locations[..count].iter().map(|&loc| self.word(loc)).collect::<Vec<_>>();
+                    let argv = self.record(&values);
+                    let argc = self.iconst(count as u64);
+                    let value = self.call("champ_machine_external", &[ctx, function, zero, argv, argc]).unwrap();
+                    (value, has_result)
+                } else {
+                    let target = arguments.iter().find_map(entry).unwrap() as usize;
+                    let callee = &self.program.functions[target];
+                    let count = callee.params.iter().filter(|location| matches!(location, L::Register(_))).count();
+                    let has_result = !callee.results.is_empty();
+                    let values = locations[..count].iter().map(|&loc| self.word(loc)).collect::<Vec<_>>();
+                    if self.self_tail_call(target, flow) {
+                        // A self call whose result is returned at once reuses this frame: a loop.
+                        let params = self.source.params.iter().filter(|location| matches!(location, L::Register(_)));
+                        for (&location, &value) in params.zip(&values).collect::<Vec<_>>() {
+                            self.write(location, &[value]);
+                        }
+                        self.builder.ins().jump(self.blocks[0], &[]);
+                        return Ok(());
+                    }
+                    (self.observe(target, &values), has_result)
+                };
                 let status = self.load(ctx, std::mem::offset_of!(Ctx, status));
                 let success = self.builder.create_block();
                 let failure = self.builder.create_block();
@@ -598,11 +826,7 @@ impl Emit<'_, '_> {
                     }
                     s::Flow::Outcomes(outcomes) => {
                         let edge = &outcomes.iter().find(|outcome| outcome.tag == s::Tag::Normal).unwrap().edge;
-                        let produced = if self.program.functions[target].results.is_empty() {
-                            vec![]
-                        } else {
-                            vec![vec![value]]
-                        };
+                        let produced = if has_result { vec![vec![value]] } else { vec![] };
                         self.edge(edge, &produced);
                     }
                 }
@@ -685,8 +909,17 @@ impl Emit<'_, '_> {
                     args.push(self.selection_record(id));
                 }
             }
+            O::OwnDynamic => {
+                helper = "champ_own_dynamic";
+                args.push(self.pointer(locations[0]));
+                args.push(self.pointer(locations[1]));
+            }
             O::ScopeTransfer => {
-                helper = "champ_scope_transfer";
+                helper = if s::transfer_admissible(arguments) {
+                    "champ_scope_transfer_admissible"
+                } else {
+                    "champ_scope_transfer"
+                };
                 let between = arguments.first() == Some(&A::Flag(true));
                 let from = self.pointer(locations[0]);
                 let to = if between { self.pointer(locations[1]) } else { from };
@@ -756,6 +989,11 @@ impl Emit<'_, '_> {
                 };
                 let destination = if let Some(scope) = scope {
                     self.scope_pointer(scope)
+                } else if self.frame_map.is_some() {
+                    // An async body returns into its Future's cache (ABI C-2).
+                    let destination = self.record(&[zero, zero]);
+                    self.checked("champ_machine_future_destination", &[ctx, self.body, destination]);
+                    destination
                 } else {
                     let destination = self.record(&[zero, zero]);
                     self.checked("champ_machine_destination", &[ctx, zero, destination]);
@@ -784,6 +1022,25 @@ impl Emit<'_, '_> {
                 let inputs = if scope { [source, zero, pending, failure, zero] }
                     else { [zero, source, pending, failure, zero] };
                 args.push(self.record(&inputs));
+            }
+            // Futures, suspension brackets and duty settles (#601 V9, `futures.rs`).
+            O::FutureNew | O::Await | O::FuturePublish | O::FutureCancel | O::FutureDone | O::FutureCancelled
+                | O::FrameSave | O::FrameResume | O::AwaitUnwind | O::CleanupDeliverCancel => {
+                return self.future_operation(op, arguments, &locations, flow);
+            }
+            O::CleanupSettle if locations.len() > 1 => {
+                return self.future_operation(op, arguments, &locations, flow);
+            }
+            // An async defer entry (C-6) has its SPB 17 form (#601 R4) and runtime helper (#601 R5); its JIT call
+            // arrives with the dynamic-settle slice.
+            O::InvokeDefer if arguments.iter().filter_map(entry).any(|target| {
+                matches!(self.program.functions[target as usize].entry_abi, s::EntryAbi::AsyncDefer { .. })
+            }) => {
+                return Err(Error("Champ invoke.defer of an async defer entry is not supported yet (#601)".into()));
+            }
+            // The temporary take, its proof and the rehome (#601 R4, R5).
+            O::AwaitTake | O::UniqueCacheProof | O::CacheRehome => {
+                return self.future_operation(op, arguments, &locations, flow);
             }
             O::CleanupSettle => {
                 helper = "champ_cleanup_settle_empty";
@@ -819,22 +1076,31 @@ impl Emit<'_, '_> {
                     args.extend(self.read(locations[1]));
                 }
             }
-            O::InvokeCallOwn | O::InvokeDefer => {
+            O::InvokeCallOwn | O::InvokeDefer | O::InvokeDispatchOwn => {
                 helper = if op == O::InvokeDefer { "champ_invoke_defer" } else { "champ_call_owned" };
-                let target = arguments.iter().find_map(entry).unwrap() as usize;
-                let count = self.program.functions[target].params.iter()
-                    .filter(|location| matches!(location, L::Register(_))).count();
+                let shielded = op == O::InvokeDefer || arguments.contains(&A::Flag(true));
+                let (entry_id, count) = if op == O::InvokeDispatchOwn {
+                    let (entry_id, count, _) = self.dispatch(arguments, locations[0], |emit, function| {
+                        let entries = if shielded { emit.shielded_entries } else { emit.entries };
+                        entries[function as usize]
+                    });
+                    (entry_id, count)
+                } else {
+                    let target = arguments.iter().find_map(entry).unwrap() as usize;
+                    let count = self.program.functions[target].params.iter()
+                        .filter(|location| matches!(location, L::Register(_))).count();
+                    let entry = if shielded { self.shielded_entries[target] } else { self.entries[target] };
+                    (self.iconst(entry), count)
+                };
                 let values = locations[..count].iter().map(|&location| self.word(location)).collect::<Vec<_>>();
                 let argv = self.record(&values);
                 let argc = self.iconst(count as u64);
-                let shielded = op == O::InvokeDefer || arguments.contains(&A::Flag(true));
-                let entry = if shielded { self.shielded_entries[target] } else { self.entries[target] };
-                let entry_id = self.iconst(entry);
                 let packet = self.word(locations[count]);
                 let mode = self.iconst(u64::from(shielded));
                 let io = self.record(&[packet, entry_id, post, zero, mode]);
                 args.extend([entry_id, argv, argc, io]);
                 if op == O::InvokeDefer {
+                    let target = arguments.iter().find_map(entry).unwrap() as usize;
                     let replacements = match &self.program.functions[target].entry_abi {
                         s::EntryAbi::Defer { labels } => labels.len(),
                         _ => unreachable!(),
@@ -915,17 +1181,55 @@ impl Emit<'_, '_> {
         args.push(post);
         let ordinal = self.checked(helper, &args);
         // Retire copied inputs before the next safepoint. CallOwn owns its packet now.
-        if matches!(op, O::InvokeCallOwn | O::InvokeDefer | O::OwnJoin) {
+        if matches!(op, O::InvokeCallOwn | O::InvokeDefer | O::InvokeDispatchOwn | O::OwnJoin) {
             for &location in &locations {
                 if matches!(location, L::Service(id) if self.source.services[id as usize] == s::ServiceKind::Packet) {
                     self.write(location, &[zero]);
+                    // An owning entry that passes its input packet on without accepting it (a closure
+                    // trampoline) has handed it over: every outcome of the entry leaves io.input consumed.
+                    if self.source.entry_abi != s::EntryAbi::Observation && self.source.params.contains(&location) {
+                        self.store(self.io, 0, zero);
+                    }
                 }
             }
         }
-        if op == O::OwnAccept && self.source.entry_abi != s::EntryAbi::Observation {
+        if op == O::OwnAccept && self.owned {
             self.store(self.io, 0, zero);
         }
         self.flow(op, flow, arguments, ordinal, helper)
+    }
+
+    /// Selects the implementation of a dispatch by the receiver's object descriptor: `select` maps each
+    /// target's implementation function to the word the call needs (its index or its entry ID). A receiver
+    /// outside the verified targets stops the machine. Returns the word, the language argument count
+    /// (receiver first) and whether the slot has a result.
+    fn dispatch(&mut self, arguments: &[A], receiver: L, select: impl Fn(&Self, u32) -> u64)
+        -> (Value, usize, bool)
+    {
+        let Some(A::Dispatch(dispatch)) = arguments.first() else { unreachable!("verified dispatch") };
+        let slot = &self.program.objects[dispatch.role as usize].role.as_ref().expect("verified role")
+            .slots[dispatch.slot as usize];
+        let (count, has_result) = (1 + slot.params.len(), !slot.results.is_empty());
+        let object = self.word(receiver);
+        let header = self.load(object, 0);
+        let descriptor = self.builder.ins().ushr_imm_u(header, 32);
+        let mut selected = self.iconst(u64::MAX);
+        for &target in &dispatch.targets {
+            let function = s::implementation(self.program, target, dispatch.role, dispatch.slot)
+                .expect("verified implementation");
+            let word = self.iconst(select(self, function));
+            let matches = self.builder.ins().icmp_imm_s(IntCC::Equal, descriptor, i64::from(target));
+            selected = self.builder.ins().select(matches, word, selected);
+        }
+        let missing = self.builder.ins().icmp_imm_s(IntCC::Equal, selected, -1);
+        let outside = self.builder.create_block();
+        let selected_block = self.builder.create_block();
+        self.builder.ins().brif(missing, outside, &[], selected_block, &[]);
+        self.builder.switch_to_block(outside);
+        self.call("champ_machine_invalid", &[self.ctx]);
+        self.builder.ins().jump(self.stop, &[]);
+        self.builder.switch_to_block(selected_block);
+        (selected, count, has_result)
     }
 
     fn selection_record(&mut self, id: u32) -> Value {
@@ -975,6 +1279,15 @@ impl Emit<'_, '_> {
         self.load(pointer, offset)
     }
 
+    /// A collection operation the runtime decodes from this instruction (`rt_machine_collection`).
+    fn collection(&mut self, words: &[Value]) -> Value {
+        let arguments = self.record(words);
+        let count = self.iconst(words.len() as u64);
+        let function = self.iconst(self.index as u64);
+        let pc = self.iconst(self.pc.expect("collection PC") as u64);
+        self.call("champ_machine_collection", &[self.ctx, function, pc, arguments, count]).unwrap()
+    }
+
     fn data(&mut self, op: s::DataOp, inputs: &[u32], output: Option<u32>, immediate: &s::Immediate)
         -> Result<(), Error>
     {
@@ -993,22 +1306,15 @@ impl Emit<'_, '_> {
         let words = inputs.iter().map(|&id| self.word(L::Register(id))).collect::<Vec<_>>();
         let value = match op {
             D::Const => {
-                let word = match immediate {
-                    s::Immediate::Constant(s::Constant::Int(value)) => {
-                        let value = value.parse().map_err(|_| Error("invalid integer constant".into()))?;
-                        self.heap.int(value)
-                    }
-                    s::Immediate::Constant(s::Constant::Bool(value)) => u64::from(*value),
-                    s::Immediate::Constant(s::Constant::Descriptor(value)) => *value as u64,
-                    s::Immediate::Constant(s::Constant::Str(value)) => self.heap.allocate_text(value),
-                    s::Immediate::Constant(s::Constant::Byte(value) | s::Constant::Char(value)) => u64::from(*value),
-                    s::Immediate::Constant(s::Constant::Float(bits)) => {
-                        bits.parse().map_err(|_| Error("invalid float constant".into()))?
-                    }
-                    _ => return Err(Error("invalid constant".into())),
-                };
+                let s::Immediate::Constant(value) = immediate else { return Err(Error("invalid constant".into())) };
+                let word = c::collections::constant_word(self.heap, value).map_err(Error)?;
                 self.constants.push((word, machine::repr(ty)));
                 self.iconst(word)
+            }
+            // Built before the program ran and kept as a runtime constant: the word itself.
+            D::GlobalGet => {
+                let s::Immediate::Global(index) = immediate else { return Err(Error("invalid global".into())) };
+                self.iconst(self.globals[*index as usize])
             }
             D::FailSecondary | D::FailCaused => {
                 let helper = if op == D::FailSecondary { "champ_machine_secondary" } else { "champ_machine_caused" };
@@ -1022,6 +1328,11 @@ impl Emit<'_, '_> {
                 self.iconst(object)
             }
             D::Move => words[0],
+            // An unbound reference or int is the zero word; a raw scalar, whose zero is a value, holds Tomato's
+            // unbound marker (a NaN no finite float and no bool, byte or char uses).
+            D::Undef if matches!(ty, s::Type::Float | s::Type::Bool | s::Type::Byte | s::Type::Char) => {
+                self.iconst(crate::word::UNBOUND_RAW)
+            }
             D::Undef => self.iconst(0),
             D::StrConcat => self.call("concat", &[self.ctx, words[0], words[1]]).unwrap(),
             D::StrLen => self.call("champ_machine_text_len", &[self.ctx, words[0]]).unwrap(),
@@ -1050,6 +1361,10 @@ impl Emit<'_, '_> {
                 let inclusive = self.iconst(u64::from(*immediate == s::Immediate::Inclusive(true)));
                 self.call("champ_machine_range", &[self.ctx, kind, words[0], right, inclusive]).unwrap()
             }
+            D::ArrayNew if ty == s::Type::Bytes => self.collection(&words),
+            D::ValEq | D::ValNe if !matches!(self.source.registers[inputs[0] as usize], s::Type::Object(_)) => {
+                self.collection(&words)
+            }
             D::ArrayNew => {
                 let s::Type::Array(shape) = ty else {
                     unreachable!("verified plain array type")
@@ -1059,6 +1374,9 @@ impl Emit<'_, '_> {
                 let count = self.iconst(words.len() as u64);
                 self.call("array", &[self.ctx, repr, elements, count]).unwrap()
             }
+            D::MapNew | D::MapLen | D::MapHas | D::MapGet | D::MapKeys | D::MapValues | D::MapKeyAt
+                | D::MapValueAt | D::MapMerge | D::MapDifference | D::ArrayConcat | D::ArrayJoin | D::ArraySlice
+                | D::ArrayRemove | D::ArrayReplace | D::ArrayDifference | D::BuilderNew => self.collection(&words),
             D::ArrayLen => {
                 let header = self.load(words[0], 0);
                 let length = self.builder.ins().ushr_imm_u(header, 32);
@@ -1183,7 +1501,8 @@ impl Emit<'_, '_> {
                 self.builder.ins().uextend(types::I64, result)
             }
             D::ValEq | D::ValNe => {
-                let s::Type::Object(descriptor) = self.source.registers[inputs[0] as usize] else {
+                let ty = self.source.registers[inputs[0] as usize];
+                let (s::Type::Object(descriptor) | s::Type::Role(descriptor)) = ty else {
                     return Err(Error("Champ value equality outside objects".into()));
                 };
                 let descriptor = self.iconst(u64::from(descriptor));
@@ -1215,6 +1534,13 @@ impl Emit<'_, '_> {
                 let storage = self.iconst(u64::from(indices[1]));
                 self.call("champ_machine_variant_get", &[self.ctx, case, storage, words[0]]).unwrap()
             }
+            D::RoleNarrow => {
+                let s::Type::Role(role) = ty else {
+                    return Err(Error("Champ role narrowing outside role types".into()));
+                };
+                let role = self.iconst(u64::from(role));
+                self.call("champ_machine_role_narrow", &[self.ctx, role, words[0]]).unwrap()
+            }
             D::TestOk | D::TestIs | D::TestIsnt | D::TestFail => {
                 let kind = self.iconst(match op {
                     D::TestOk => 0,
@@ -1227,11 +1553,35 @@ impl Emit<'_, '_> {
                 let right = words.get(1).copied().unwrap_or_else(|| self.iconst(0));
                 self.call("champ_machine_test", &[self.ctx, kind, function, register, words[0], right]).unwrap()
             }
+            D::FloatNeg | D::FloatAbs => {
+                let value = self.builder.ins().bitcast(types::F64, MemFlagsData::new(), words[0]);
+                let result = if op == D::FloatNeg {
+                    self.builder.ins().fneg(value)
+                } else {
+                    self.builder.ins().fabs(value)
+                };
+                self.builder.ins().bitcast(types::I64, MemFlagsData::new(), result)
+            }
+            D::ByteAnd => self.builder.ins().band(words[0], words[1]),
+            D::ByteOr => self.builder.ins().bor(words[0], words[1]),
+            D::ByteXor => self.builder.ins().bxor(words[0], words[1]),
+            D::ByteNot => self.builder.ins().bxor_imm_u(words[0], 0xff),
             D::BoolNot => self.builder.ins().bxor_imm_s(words[0], 1),
             D::BoolEq | D::BoolNe => {
                 let condition = if op == D::BoolEq { IntCC::Equal } else { IntCC::NotEqual };
                 let result = self.builder.ins().icmp(condition, words[0], words[1]);
                 self.builder.ins().uextend(types::I64, result)
+            }
+            _ => {
+                // Every other scalar family operation runs Tomato's semantics in one helper; it writes its
+                // result word last, after every root it may collect around.
+                let code = op.scalar_code()
+                    .ok_or_else(|| Error("Champ data operation without a translation".into()))?;
+                let code = self.iconst(code);
+                let zero = self.iconst(0);
+                let operand = |index: usize| words.get(index).copied().unwrap_or(zero);
+                let arguments = [self.ctx, code, operand(0), operand(1), operand(2)];
+                self.call("champ_machine_scalar", &arguments).unwrap()
             }
         };
         Ok(value)
@@ -1243,8 +1593,21 @@ impl Emit<'_, '_> {
 fn sets_status(op: s::DataOp) -> bool {
     use s::DataOp as D;
     matches!(op, D::IntMod | D::RangeNew | D::Convert | D::IntMul | D::StrConcat | D::RatNew | D::ValEq | D::ValNe
-        | D::VariantGet | D::TestOk | D::TestIs | D::TestIsnt | D::TestFail)
+        | D::VariantGet | D::RoleNarrow | D::MapNew | D::MapLen | D::MapHas | D::MapGet | D::MapKeys | D::MapValues
+        | D::MapKeyAt
+        | D::MapValueAt | D::MapMerge | D::MapDifference | D::ArrayConcat | D::ArrayJoin | D::ArraySlice
+        | D::ArrayRemove | D::ArrayReplace | D::ArrayDifference | D::BuilderNew | D::ArrayNew | D::TestOk
+        | D::TestIs | D::TestIsnt | D::TestFail)
+        || op.scalar_code().is_some() && !inline_scalar(op)
+}
+
+/// Scalar family operations that machine code computes without a helper.
+fn inline_scalar(op: s::DataOp) -> bool {
+    use s::DataOp as D;
+    matches!(op, D::FloatNeg | D::FloatAbs | D::ByteAnd | D::ByteOr | D::ByteXor | D::ByteNot)
 }
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod roles_tests;

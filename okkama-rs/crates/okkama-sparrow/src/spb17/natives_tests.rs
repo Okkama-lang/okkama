@@ -7,6 +7,7 @@ fn object(name: &str, handle: bool, storage_fields: Vec<Type>) -> Object {
         .filter(|(_, ty)| matches!(ty, Type::Str)).map(|(index, _)| index as u32).collect();
     Object {
         name: name.into(), fields: vec![], error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle,
+        role: None, implements: vec![], any_box: false, enum_names: vec![],
         layout: ObjectRuntimeLayout {
             allocation_words: (1 + storage_fields.len() as u32).max(2),
             storage_fields, identity_offset: None, has_destroy: false, may_reach_resource: false,
@@ -57,11 +58,25 @@ fn table_natives_are_trusted_entries_from_the_table() {
     assert_eq!(P1Contracts::new(&[]).unwrap().native("runtime/buffer@1::buffer_state_size/1"), None);
 }
 
+/// Float arrays cross the native bridge as raw binary64 elements (`statistics.exact-samples`, #710).
+#[test]
+fn table_natives_take_and_return_float_arrays() {
+    let floats = Type::Array(ArrayType { leaf: ArrayLeaf::Float, depth: 1 });
+    let mean = declaration("runtime/statistics@1::statistics_mean/1", vec![floats], vec![Type::Float]);
+    let quantiles = declaration("runtime/statistics@1::statistics_quantiles/3",
+        vec![floats, Type::Int, Type::Str], vec![floats]);
+    load(&program(vec![], vec![mean.clone(), quantiles.clone()])).unwrap();
+    let contracts = P1Contracts::new(&[]).unwrap();
+    assert_eq!(contracts.native("runtime/statistics@1::statistics_mean/1"), Some(&mean));
+    assert_eq!(contracts.native("runtime/statistics@1::statistics_quantiles/3"), Some(&quantiles));
+}
+
 #[test]
 fn a_table_native_cannot_change_its_signature() {
     let hex = declaration("runtime/hex@1::hex_encode/1", vec![Type::Str], vec![Type::Str]);
     let failure = load(&program(vec![], vec![hex])).unwrap_err();
     assert!(failure.message.contains("external signature/summary mismatch"), "{failure}");
+    assert_eq!(failure.rule, "EXTERNAL_SIGNATURE", "{failure}");
     // A table native never falls back to the adapter, even with data transport.
     let mut size = declaration("runtime/buffer@1::buffer_state_size/1", vec![Type::Handle(0)], vec![Type::Int]);
     size.proofs.entry.as_mut().unwrap().failures = 0;
@@ -84,6 +99,44 @@ fn handle_types_name_handle_declarations() {
 }
 
 #[test]
+fn an_external_entry_carries_no_code() {
+    let hex = declaration("runtime/hex@1::hex_encode/1", vec![Type::Bytes], vec![Type::Str]);
+    load(&program(vec![], vec![hex.clone()])).unwrap();
+    let mut body = hex.clone();
+    body.code = vec![Instruction::Ret(vec![])];
+    body.blocks = vec![Block { pc: 0, params: body.params.clone() }];
+    assert_eq!(verify(&program(vec![], vec![body])).unwrap_err().rule, "EXTERNAL_SIGNATURE");
+    let mut blocks = hex;
+    blocks.blocks = vec![Block { pc: 0, params: blocks.params.clone() }];
+    assert_eq!(verify(&program(vec![], vec![blocks])).unwrap_err().rule, "EXTERNAL_SIGNATURE");
+}
+
+#[test]
+fn a_handle_type_out_of_range_names_no_handle() {
+    let size = declaration("runtime/buffer@1::buffer_state_size/1", vec![Type::Handle(1)], vec![Type::Int]);
+    assert_eq!(verify(&program(buffer(), vec![size])).unwrap_err().rule, "HANDLE_TYPE");
+    let create = declaration("runtime/buffer@1::buffer_state_create/1", vec![Type::Bytes], vec![Type::Handle(7)]);
+    assert_eq!(verify(&program(buffer(), vec![create])).unwrap_err().rule, "HANDLE_TYPE");
+}
+
+#[test]
+fn handle_declarations_have_distinct_names() {
+    let two = vec![object("runtime.buffer.BufferState", true, vec![]), object("app.Port", true, vec![])];
+    verify(&program(two.clone(), vec![])).unwrap();
+    P1Contracts::new(&two).unwrap();
+    let twins = vec![object("runtime.buffer.BufferState", true, vec![]), object("runtime.buffer.BufferState", true,
+        vec![])];
+    assert_eq!(verify(&program(twins.clone(), vec![])).unwrap_err().rule, "HANDLE_NAME");
+    // The trusted catalogue refuses them on its own: it never picks one of the two.
+    assert_eq!(P1Contracts::new(&twins).unwrap_err().rule, "HANDLE_NAME");
+    // A plain object may share a handle's name without making it a handle.
+    let plain = vec![object("runtime.buffer.BufferState", true, vec![]), object("runtime.buffer.BufferState", false,
+        vec![])];
+    verify(&program(plain.clone(), vec![])).unwrap();
+    P1Contracts::new(&plain).unwrap();
+}
+
+#[test]
 fn handle_declarations_hold_nothing() {
     verify(&program(buffer(), vec![])).unwrap();
     let held = vec![object("runtime.buffer.BufferState", true, vec![Type::Str])];
@@ -102,6 +155,9 @@ fn unresolved_natives_use_the_checked_adapter() {
     // Unknown runtime symbols are unresolved providers too.
     let runtime = declaration("runtime/hex@1::hex_unknown/1", vec![Type::Str], vec![]);
     load(&program(vec![], vec![runtime])).unwrap();
+    // An unknown symbol of a table module may carry that module's handles; it resolves at run time.
+    let unknown = declaration("runtime/buffer@1::unknown/0", vec![], vec![Type::Handle(0)]);
+    load(&program(buffer(), vec![unknown])).unwrap();
     let rejected = |function: Function, objects: Vec<Object>| {
         assert_eq!(load(&program(objects, vec![function])).unwrap_err().rule, "EXTERNAL_UNRESOLVED");
     };
@@ -130,7 +186,12 @@ fn atomic_entries_follow_the_registered_value_layout() {
     assert_eq!(atomic_value("array_string"), Some(strings));
     assert_eq!(atomic_value("array_array_int"), Some(Type::Array(ArrayType { leaf: ArrayLeaf::Int, depth: 2 })));
     assert_eq!(atomic_value("array_byte"), Some(Type::Bytes));
-    for suffix in ["array_float", "array_char", "range", "array_", "map_int"] {
+    // Every concrete plain specialization is registered (P2.4 §4.8), arrays of every plain scalar included.
+    let arrays = [("array_float", ArrayLeaf::Float), ("array_char", ArrayLeaf::Char), ("array_rat", ArrayLeaf::Rat)];
+    for (suffix, leaf) in arrays {
+        assert_eq!(atomic_value(suffix), Some(Type::Array(ArrayType { leaf, depth: 1 })), "{suffix}");
+    }
+    for suffix in ["range", "array_", "map_int"] {
         assert_eq!(atomic_value(suffix), None, "{suffix}");
     }
     let closed = Object { error_cases: vec!["AtomicClosed.closed".into()], ..object("async.atomic.AtomicClosed", false,
@@ -150,6 +211,61 @@ fn atomic_entries_follow_the_registered_value_layout() {
     let mut wrong = objects.clone();
     wrong[0].layout.storage_fields = vec![Type::Str, Type::Bool];
     assert!(P1Contracts::new(&wrong).is_err());
+}
+
+/// An Error case `name` with payload fields of `types`, one storage word each.
+fn error_case(name: &str, types: Vec<Type>) -> Object {
+    let fields = (0..types.len() as u32).map(|storage| Field { name: format!("f{storage}"), storage, once: false })
+        .collect();
+    Object { error_cases: vec![name.into()], fields, ..object(name, false, types) }
+}
+
+fn p1(objects: Vec<Object>) -> Result<P1Contracts, Error> {
+    P1Contracts::new(&objects)
+}
+
+#[test]
+fn p1_error_text_admits_the_layouts_of_error_variants() {
+    // An Error enum, and a case of an Error variant without payload (no storage).
+    p1(vec![Object { error_cases: vec!["E.a".into(), "E.b".into()], ..object("E", false, vec![Type::Int]) }])
+        .unwrap();
+    p1(vec![error_case("F.plain", vec![])]).unwrap();
+    // Scalar payloads.
+    p1(vec![error_case("F.all", vec![Type::Str, Type::Int, Type::Bool, Type::Byte, Type::Float, Type::Rat])])
+        .unwrap();
+    // A plain enum that names its cases, an Error enum, and an Error variant.
+    let limit = Object { enum_cases: 2, enum_names: vec!["L.a".into(), "L.b".into()],
+        ..object("L", false, vec![Type::Int]) };
+    p1(vec![limit, error_case("F.kind", vec![Type::Object(0)])]).unwrap();
+    let inner = Object { error_cases: vec!["I.a".into()], ..object("I", false, vec![Type::Int]) };
+    p1(vec![inner, error_case("F.cause", vec![Type::Object(0)])]).unwrap();
+    let variant = Object { variant_cases: vec![1], ..object("V", false, vec![]) };
+    p1(vec![variant, error_case("V.one", vec![]), error_case("F.nested", vec![Type::Variant(0)])]).unwrap();
+}
+
+#[test]
+fn p1_error_text_refuses_payloads_it_cannot_show() {
+    let refused = |objects: Vec<Object>| {
+        let failure = p1(objects).unwrap_err();
+        assert!(failure.message.contains("invalid P1 plain Error layout"), "{failure}");
+    };
+    // A plain enum without its case names has no text.
+    let unnamed = Object { enum_cases: 2, ..object("L", false, vec![Type::Int]) };
+    refused(vec![unnamed, error_case("F.kind", vec![Type::Object(0)])]);
+    // Neither has an Error role value (as on Tomato), a plain variant, a plain object or a char.
+    refused(vec![error_case("F.any", vec![Type::Error])]);
+    let plain = Object { variant_cases: vec![1], ..object("V", false, vec![]) };
+    refused(vec![plain, object("V.one", false, vec![]), error_case("F.v", vec![Type::Variant(0)])]);
+    refused(vec![object("P", false, vec![Type::Int]), error_case("F.p", vec![Type::Object(0)])]);
+    refused(vec![error_case("F.c", vec![Type::Char])]);
+    // A case without payload holds no storage; a payload case's storage words are its fields.
+    refused(vec![Object { fields: vec![], ..error_case("F.tag", vec![Type::Str]) }]);
+    refused(vec![Object { fields: vec![Field { name: "s".into(), storage: 0, once: false }],
+        ..error_case("F.extra", vec![Type::Str, Type::Str]) }]);
+    // An Error enum keeps its case number; only a single case may hold no storage.
+    refused(vec![Object { error_cases: vec!["E.a".into(), "E.b".into()], ..object("E", false, vec![]) }]);
+    // A payload case has one case.
+    refused(vec![Object { error_cases: vec!["F.a".into(), "F.b".into()], ..error_case("F", vec![Type::Str]) }]);
 }
 
 #[test]

@@ -69,9 +69,11 @@ pub(super) fn metadata<'a>(module: &'a Module, body: &'a Body, function: FuncId,
     }
     let mut dictionaries = BTreeSet::new();
     for binding in &body.descriptor_bindings {
+        // C-2: a D21 async body restores its dictionary parameters from continuation 0.
         let is_parameter = body.values.get(binding.dictionary).is_ok_and(|value| {
             module.types.get(value.ty) == Ok(&Type::Descriptor)
-                && matches!(value.def, Definition::BlockParam { block, .. } if block == body.entry)
+        }) && module.functions.get(function).is_ok_and(|data| {
+            crate::verify::coro::entry_value(module, data, body, binding.dictionary)
         });
         if !is_parameter || !dictionaries.insert(binding.dictionary) {
             state.error(R::T1, "descriptor.binding requires a unique dictionary entry parameter");
@@ -151,6 +153,8 @@ pub(super) fn summary_paths(module: &Module, summary: &Summary, params: &[TypeId
     }
 }
 
+/// A path steps through object fields, and through the payload field of a variant case (`variant.get`
+/// retains its payload as a field of the case layout, as `once.load` of a Maybe slot does).
 fn path_type(module: &Module, mut ty: TypeId, fields: &[FieldRef], state: &mut State<'_>) -> bool {
     let mut substitution = Substitution::default();
     for field in fields {
@@ -163,6 +167,16 @@ fn path_type(module: &Module, mut ty: TypeId, fields: &[FieldRef], state: &mut S
                     };
             if ty == *replacement { return false; }
             ty = *replacement;
+        }
+        if let Ok(Type::Variant(variant)) = module.types.get(ty) {
+            let Ok(DeclarationKind::Variant { cases, .. }) = module.declarations.get(*variant).map(|d| &d.kind)
+                else { return false;
+                    };
+            if !cases.iter().any(|case| case.layout == field.declaration) { return false; }
+            let Ok(next) = field_type(module, *field) else { return false;
+                };
+            ty = next;
+            continue;
         }
         let Ok(Type::Object { decl, args }) = module.types.get(ty) else { return false;
             };

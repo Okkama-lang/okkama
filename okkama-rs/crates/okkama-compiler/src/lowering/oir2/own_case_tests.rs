@@ -28,7 +28,7 @@ impl ModuleLoader for CaseLoader {
     }
 }
 
-fn case_directory(id: &str) -> PathBuf {
+pub(super) fn case_directory(id: &str) -> PathBuf {
     let (level, suffix) = id.split_once('.').unwrap();
     let cases = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../conformance/cases");
     let level = std::fs::read_dir(&cases).unwrap().map(|entry| entry.unwrap().path())
@@ -37,7 +37,7 @@ fn case_directory(id: &str) -> PathBuf {
     level.join(suffix)
 }
 
-fn high(source: &str, case: Option<PathBuf>) -> Result<ir::Module, String> {
+pub(super) fn high(source: &str, case: Option<PathBuf>) -> Result<ir::Module, String> {
     let file = SourceFile::new("main.ok", source).map_err(|error| format!("source: {error:?}"))?;
     let program = syntax::parse(&file, &ParseOptions::default()).map_err(|error| format!("syntax: {error:?}"))?;
     let roots = [crate::lowering::RootFile { source: &file, program: &program }];
@@ -58,12 +58,31 @@ fn test_high(source: &str) -> Result<ir::Module, String> {
 }
 
 /// The Low module; `Err` names the stage that stopped.
-fn own_to_low(source: &str, case: Option<PathBuf>, mode: ir::verify::VerifyMode) -> Result<ir::Module, String> {
+pub(super) fn own_to_low(source: &str, case: Option<PathBuf>, mode: ir::verify::VerifyMode)
+    -> Result<ir::Module, String> {
     module_to_low(high(source, case)?, mode)
 }
 
 /// High -> own -> low under one verifier mode; test-mode modules verify as test executions.
 fn module_to_low(module: ir::Module, mode: ir::verify::VerifyMode) -> Result<ir::Module, String> {
+    let (own, verify) = module_to_own(module, mode)?;
+    let low = ir::low::lower_cleanup(own, &ir::low::LowOptions::default())
+        .map_err(|error| format!("low: {error:?}"))?;
+    let catalog = P1NativeSummaries::for_module(&low).map_err(|error| format!("contracts: {error:?}"))?;
+    let context = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
+    ir::verify::verify_with(&low, &verify, context).map_err(|error| format!("verify_low: {error:?}"))?;
+    Ok(low)
+}
+
+/// The verified Own module and the verification options; `Err` names the stage that stopped.
+pub(super) fn own_stage(source: &str, case: Option<PathBuf>, mode: ir::verify::VerifyMode)
+    -> Result<(ir::Module, ir::verify::VerifyOptions), String> {
+    module_to_own(high(source, case)?, mode)
+}
+
+/// High -> own under one verifier mode; test-mode modules verify as test executions.
+fn module_to_own(module: ir::Module, mode: ir::verify::VerifyMode)
+    -> Result<(ir::Module, ir::verify::VerifyOptions), String> {
     let execution = if module.tests.is_some() {
         ir::verify::ExecutionMode::Tests
     } else {
@@ -88,16 +107,11 @@ fn module_to_low(module: ir::Module, mode: ir::verify::VerifyMode) -> Result<ir:
     let context = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
     ir::verify::verify_with(&own.module, &verify, context)
         .map_err(|error| format!("verify_own: {}", rejection(&own.module, &error)))?;
-    let low = ir::low::lower_cleanup(own.module, &ir::low::LowOptions::default())
-        .map_err(|error| format!("low: {error:?}"))?;
-    let catalog = P1NativeSummaries::for_module(&low).map_err(|error| format!("contracts: {error:?}"))?;
-    let context = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
-    ir::verify::verify_with(&low, &verify, context).map_err(|error| format!("verify_low: {error:?}"))?;
-    Ok(low)
+    Ok((own.module, verify))
 }
 
 /// Rules, messages and the rejected instruction, compact enough for triage.
-fn rejection(module: &ir::Module, report: &ir::verify::VerifyReport) -> String {
+pub(super) fn rejection(module: &ir::Module, report: &ir::verify::VerifyReport) -> String {
     let mut text = format!("{:?}:", report.failure);
     for diagnostic in report.diagnostics.iter().take(4) {
         text.push_str(&format!(" [{:?} {}", diagnostic.rule, diagnostic.message));
@@ -114,17 +128,17 @@ fn rejection(module: &ir::Module, report: &ir::verify::VerifyReport) -> String {
     text
 }
 
-fn full(source: &str) -> ir::Module {
+pub(super) fn full(source: &str) -> ir::Module {
     own_to_low(source, None, ir::verify::VerifyMode::Full).unwrap_or_else(|error| panic!("{error}\n{source}"))
 }
 
-fn case(id: &str, mode: ir::verify::VerifyMode) -> Result<ir::Module, String> {
+pub(super) fn case(id: &str, mode: ir::verify::VerifyMode) -> Result<ir::Module, String> {
     let directory = case_directory(id);
     let source = std::fs::read_to_string(directory.join("main.ok")).unwrap();
     own_to_low(&source, Some(directory), mode)
 }
 
-fn operations(module: &ir::Module) -> Vec<&ir::Operation> {
+pub(super) fn operations(module: &ir::Module) -> Vec<&ir::Operation> {
     module.functions.iter().filter_map(|(_, function)| function.body.as_ref()).flat_map(|body| {
         body.insts.iter().map(|(_, inst)| &inst.op).chain(body.blocks.iter().filter_map(|(_, block)| {
             match &block.term.kind {
@@ -449,4 +463,87 @@ fn oir2_own_cases_triage() {
         let verdict: String = verdict.chars().take(600).collect();
         println!("OWNCASE {id}\t{verdict}");
     }
+}
+
+/// #671, #686 (P2.4 section 4.8): an Atomic field is a capability without an obligation, so the holder's
+/// constructor returns no fresh creation (the SPB 17 layout gives the holder no identity), and every
+/// function that partitions an Atomic declares the program failure its scope.split can raise. The full
+/// verifier agrees (#700): such a creation needs no ownership result.
+#[test]
+fn oir2_own_atomic_holder_is_not_a_fresh_creation() {
+    let source = concat!("module app; import \"cell\" take Cell; import \"async/atomic\" take Atomic; ",
+        "object Recorded { has served is Atomic<int>; Recorded() { served = Atomic(0); } ",
+        "next() is int { let at = served.value(); served.replace(at + 1); at; } } ",
+        "main() is int { let c = Cell(0); c.replace(2); let a = Atomic(1); a.replace(3); ",
+        "Recorded().next() + c.value() + a.value(); }");
+    let (module, _) = own_stage(source, None, ir::verify::VerifyMode::Full).unwrap();
+    let summary = |symbol: &str| {
+        let function = module.functions.iter().find(|(_, function)| function.symbol.starts_with(symbol))
+            .unwrap_or_else(|| panic!("{symbol}")).1;
+        module.summaries.get(function.summary.unwrap()).unwrap().clone()
+    };
+    for constructor in ["cell.Cell_int.new", "app.Recorded.new"] {
+        let summary = summary(constructor);
+        assert!(summary.results.iter().all(|result| result.fresh.is_empty()), "{constructor}: {summary:?}");
+    }
+    for method in ["app.Recorded.next", "cell.Cell_int.replace"] {
+        assert!(summary(method).contract.failures.contains(&ir::FailureKind::Program), "{method}");
+    }
+}
+
+/// #672: a constructor stores a role field whose implementers are plain (L09.math.aggregates' Extremes,
+/// L09.time.zones' ZonedDateTime). The value carries deps but no obligation and its action scope is
+/// elided; own elaborates the construction without staging instead of failing on the missing scope. Under
+/// the full verifier (#700) the holder is no fresh creation and its summary declares that it depends on the
+/// role argument it retains.
+#[test]
+fn oir2_own_deps_only_field_needs_no_action_scope() {
+    let source = concat!("module app; role Shape { area() is int; } ",
+        "object Square does Shape { has side is int; Square(:side); area() is int { side * side; } } ",
+        "object Holder { has shape is Shape; Holder(shape is Shape) { self.shape = shape; } ",
+        "area() is int { shape.area(); } } ",
+        "main() is int { Holder(Square(side: 2)).area(); }");
+    let (module, _) = own_stage(source, None, ir::verify::VerifyMode::Full).unwrap();
+    let constructor = module.functions.iter().find(|(_, function)| function.symbol.starts_with("app.Holder.new"))
+        .unwrap().1;
+    let summary = module.summaries.get(constructor.summary.unwrap()).unwrap();
+    assert!(summary.results.iter().all(|result| result.fresh.is_empty()), "{summary:?}");
+    assert_eq!(summary.results[0].external_deps, vec![0], "{summary:?}");
+    let body = constructor.body.as_ref().unwrap();
+    assert!(!body.insts.iter().any(|(_, inst)| matches!(inst.op,
+        ir::Operation::Ownership(ir::OwnershipOp::Stage { .. }))));
+}
+
+/// #703 (L09.uuid.values, L10.stdin.lines): a role value with plain implementers carries deps but no
+/// obligation, yet own partitions it with a checked scope.split when it is offered to an owning call. The
+/// function that does so declares the program failure the split can raise, as for an Atomic (#671); SPB 17
+/// refuses a body failure outside the declared mask (ENTRY_FAILURE_MASK).
+#[test]
+fn oir2_own_partitioned_role_value_declares_the_split_failure() {
+    let source = concat!("module app; role Named { name() is string; } ",
+        "object A does Named { A(); name() is string { \"a\"; } same(other is Named) is bool { ",
+        "self.name() == other.name(); } } ",
+        "object B does Named { B(); name() is string { \"b\"; } } ",
+        "main() is int { if A().same(B()) { 1; } else { 0; } }");
+    let (module, _) = own_stage(source, None, ir::verify::VerifyMode::Structural).unwrap();
+    let (_, same) = module.functions.iter().find(|(_, function)| function.symbol.starts_with("app.A.same"))
+        .unwrap();
+    let body = same.body.as_ref().unwrap();
+    let splits = body.blocks.iter().any(|(_, block)| matches!(&block.term.kind, ir::TermKind::InvokeOwn { op, .. }
+        if matches!(op.as_ref(), ir::Operation::Ownership(ir::OwnershipOp::ScopeSplit { .. }))));
+    assert!(splits, "own partitions the role argument");
+    let summary = module.summaries.get(same.summary.unwrap()).unwrap();
+    assert!(summary.contract.failures.contains(&ir::FailureKind::Program), "{summary:?}");
+    // An object holding such a role value (io/stdin's Utf8Input) is partitioned the same way.
+    let source = concat!("module app; role Named { name() is string; } ",
+        "object B does Named { B(); name() is string { \"b\"; } } ",
+        "object Holder { has inner is Named; Holder(inner is Named) { self.inner = inner; } ",
+        "name() is string { inner.name(); } } ",
+        "object User { User(); greet(holder is Holder) is string { holder.name(); } } ",
+        "main() is int { User().greet(Holder(B())).length(); }");
+    let (module, _) = own_stage(source, None, ir::verify::VerifyMode::Structural).unwrap();
+    let (_, greet) = module.functions.iter().find(|(_, function)| function.symbol.starts_with("app.User.greet"))
+        .unwrap();
+    let summary = module.summaries.get(greet.summary.unwrap()).unwrap();
+    assert!(summary.contract.failures.contains(&ir::FailureKind::Program), "{summary:?}");
 }

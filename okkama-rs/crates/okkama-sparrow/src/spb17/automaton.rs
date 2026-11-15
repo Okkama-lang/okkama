@@ -16,9 +16,27 @@ struct Cleanup {
     failure: bool,
     payload: Option<PendingType>,
     step: Option<u32>,
+    /// Duties of `schedule` settled so far, in schedule order.
+    settled: u32,
+    schedule: Option<u32>,
+    /// A settled cache may release obligations (an outcome or unstarted inputs) into this close's plan.
+    released: bool,
+    /// `cleanup.deliver_cancel` ran in this close.
+    delivered: bool,
+    /// Plans this close has begun: the plan, then for a delivered cancellation the aborted reserve's.
+    plans: u32,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PendingType { value: Option<Type>, kind: ExitKind }
+struct PendingType { value: Option<Type>, kind: ExitKind, rehome: Option<Rehome> }
+/// The cache duties a pending reserve carries since `cache.rehome` (C-4): the scope that owned them, the
+/// destination the rehome named, and whether the owner's close has taken the reserve yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Rehome { owner: u32, target: ExitDestination, closed: bool }
+
+/// A Future escapes its owner S only through S's exit: `cache.rehome` puts S's cache duty into the pending
+/// reserve of that exit, the next close to take the reserve is S's, and the exit commits at the destination the
+/// rehome named (C-4 and Claude's ruling of 2026-11-15 on #601 R1).
+pub(crate) const REHOME: &str = "SPB_REHOME";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Fact {
     Cleanup(Cleanup), Step(u32, u32), Captured(u32, u32), Failure(u32), Exit(u32, Option<PendingType>),
@@ -52,9 +70,56 @@ pub fn infer_plan_reserves(p: &Program, f: &Function) -> Result<Vec<Option<bool>
     infer(p, f, &masks)
 }
 
+/// Whether the close's current plan has run: the executor reached done, or the direct chain its last slot.
+fn plan_complete(f: &Function, cleanup: &Cleanup) -> Result<bool, Error> {
+    let plan = cleanup.plan.ok_or_else(|| error("no current plan"))?;
+    if f.proofs.plans[plan as usize].merge {
+        return Ok(cleanup.phase == Phase::Done);
+    }
+    let evidence = f.proofs.cleanup_plans.iter().find(|evidence| evidence.plan == plan)
+        .ok_or_else(|| error("missing suffix evidence"))?;
+    Ok(cleanup.phase == Phase::Ready && cleanup.index as usize == evidence.slots.len())
+}
+
+/// One step of a nonempty schedule: the next duty in order, owned by the closing scope.
+fn settle_duty(p: &Program, f: &Function, origins: &BTreeMap<Location, Option<u32>>, cleanup: &mut Cleanup,
+    schedule: u32, duty: Location) -> Check
+{
+    let duties = &f.proofs.schedules[schedule as usize].services;
+    enforce(cleanup.phase == Phase::Begun && cleanup.schedule.is_none_or(|current| current == schedule),
+        suspension::SCHEDULE, "a close settles the duties of one schedule, before its plan")?;
+    enforce(duties.get(cleanup.settled as usize) == Some(&duty), suspension::SCHEDULE,
+        "each scheduled duty is settled once, in schedule order")?;
+    let creation = origins.get(&duty).copied().flatten().map(|pc| &f.code[pc as usize]);
+    let Some(Instruction::Champ { op: Opcode::FutureNew, arguments, .. }) = creation else {
+        return Err(violation(suspension::SCHEDULE, "a settled duty has no single fut.new"));
+    };
+    let owner = arguments.iter().find_map(|arg| match arg { Argument::Scope(id) => Some(*id), _ => None });
+    let close = &f.proofs.closes[cleanup.close as usize];
+    let closing = p.tables.boundaries.get(close.boundary as usize).map(|boundary| boundary.scope);
+    enforce(owner.is_some() && owner == closing, suspension::SCHEDULE,
+        "a duty is settled by a scope that does not own it")?;
+    let callee = arguments.iter().find_map(|arg| match arg {
+        Argument::Entry(id) => p.functions.get(*id as usize),
+        _ => None,
+    }).ok_or_else(|| error("fut.new has no entry"))?;
+    cleanup.released |= !plain_inputs(p, callee) || !plain_results(p, callee);
+    cleanup.schedule = Some(schedule);
+    cleanup.settled += 1;
+    if cleanup.settled as usize == duties.len() {
+        cleanup.phase = Phase::Settled;
+    }
+    Ok(())
+}
+
 fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<bool>>, Error> {
     let mut reserves = vec![None; f.proofs.plans.len()];
     if f.code.is_empty() { return Ok(reserves) }
+    let origins = suspension::cache_origins(p, f);
+    let fixed_root = p.functions.iter().position(|function| std::ptr::eq(function, f))
+        .is_some_and(|index| suspension::fixed_root(p, index as u32));
+    // Facts of the values each continuation's frame.save stored, for its resumes.
+    let mut saved = BTreeMap::<u32, Vec<Option<Fact>>>::new();
     let mut incoming = vec![None; f.code.len()];
     incoming[0] = Some(State::new());
     let mut work = vec![0];
@@ -89,9 +154,35 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                     let kind = arguments.iter().find_map(|arg| match arg {
                         Argument::Kind(kind) => Some(*kind), _ => None,
                     }).ok_or_else(|| error("missing exit kind"))?;
-                    let mut facts = vec![Some(Fact::Pending(PendingType { value, kind }))];
+                    if *op == ExitReplace {
+                        // Which reserve the rehomed duties would join is not decided for a replaced exit.
+                        enforce(!matches!(operands[0], Some(Fact::Pending(PendingType { rehome: Some(_), .. }))),
+                            REHOME, "exit.replace of a reserve that holds rehomed cache duties")?;
+                    }
+                    let mut facts = vec![Some(Fact::Pending(PendingType { value, kind, rehome: None }))];
                     if *op == ExitReplace { facts.push(None); }
                     facts
+                }
+                CacheRehome => {
+                    let Some(Fact::Pending(mut payload)) = operands[0] else {
+                        return Err(violation(REHOME, "cache.rehome outside an exit's preparation"));
+                    };
+                    let creation = locations.get(1).and_then(|duty| origins.get(duty)).copied().flatten()
+                        .map(|pc| &f.code[pc as usize]);
+                    let Some(Instruction::Champ { op: FutureNew, arguments: created, .. }) = creation else {
+                        return Err(violation(REHOME, "a rehomed duty has no single fut.new"));
+                    };
+                    let owner = created.iter().find_map(|arg| match arg { Argument::Scope(id) => Some(*id), _ => None })
+                        .ok_or_else(|| error("fut.new has no owner scope"))?;
+                    let target = arguments.iter().find_map(|arg| match arg {
+                        Argument::Destination(destination) => Some(*destination),
+                        _ => None,
+                    }).ok_or_else(|| error("cache.rehome has no target"))?;
+                    let rehome = Rehome { owner, target, closed: false };
+                    enforce(payload.rehome.is_none_or(|previous| previous == rehome), REHOME,
+                        "one reserve takes the duties of one owner, for one destination")?;
+                    payload.rehome = Some(rehome);
+                    vec![Some(Fact::Pending(payload))]
                 }
                 ExitExtend => vec![operands[0]],
                 ExitCommit => {
@@ -103,6 +194,15 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                         && (payload.kind != ExitKind::Return || payload.value == f.results.first().copied()),
                         if payload.kind == ExitKind::Return { "PENDING_RETURN_TYPE" } else { "PENDING_COMMIT_TYPE" },
                         "commit result differs from recorded pending value")?;
+                    if let Some(rehome) = payload.rehome {
+                        enforce(rehome.closed, REHOME, "rehomed duties commit without their owner's close")?;
+                        let destination = arguments.iter().find_map(|arg| match arg {
+                            Argument::Destination(destination) => Some(*destination),
+                            _ => None,
+                        });
+                        enforce(destination == Some(rehome.target), REHOME,
+                            "a rehome names the destination of the exit that carries it")?;
+                    }
                     vec![]
                 }
                 CleanupBegin => {
@@ -118,28 +218,100 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                         .collect::<Result<Vec<_>, _>>()?;
                     enforce(actual == tail, "CLOSE_TAIL", "close tail must match reserve/active_failure")?;
                     let payload = if contract.reserve {
-                        let Some(Fact::Pending(payload)) = operands[1] else {
+                        let Some(Fact::Pending(mut payload)) = operands[1] else {
                             return Err(violation("PENDING_COMMIT_TYPE", "close has no typed pending"));
                         };
+                        if let Some(rehome) = payload.rehome.as_mut().filter(|rehome| !rehome.closed) {
+                            let closing = p.tables.boundaries.get(contract.boundary as usize)
+                                .map(|boundary| boundary.scope);
+                            enforce(closing == Some(rehome.owner), REHOME,
+                                "rehomed duties leave through the exit of the scope that owns them")?;
+                            rehome.closed = true;
+                        }
                         Some(payload)
                     } else { None };
                     require(arguments.contains(&Argument::Envelope(contract.envelope))
                         && arguments.contains(&Argument::Boundary(contract.boundary)), "close descriptor mismatch")?;
                     unary(Cleanup { close: close as u32, plan: None, index: 0, phase: Phase::Begun,
                         pending: contract.reserve, aborted: false, failure: contract.active_failure,
-                        payload, step: None })
+                        payload, step: None, settled: 0, schedule: None, released: false, delivered: false,
+                        plans: 0 })
                 }
                 CleanupSettle => {
                     let mut cleanup = cleanup()?;
-                    require(cleanup.phase == Phase::Begun, "settle outside begin phase")?;
-                    cleanup.phase = Phase::Settled;
+                    let schedule = arguments.iter().find_map(|arg| match arg {
+                        Argument::Schedule(id) => Some(*id),
+                        _ => None,
+                    }).ok_or_else(|| error("missing schedule"))?;
+                    let duties = &f.proofs.schedules[schedule as usize].services;
+                    if let Some(&duty) = locations.get(1) {
+                        settle_duty(p, f, &origins, &mut cleanup, schedule, duty)?;
+                    } else {
+                        enforce(duties.is_empty(), suspension::SCHEDULE,
+                            "a nonempty schedule is settled duty by duty")?;
+                        require(cleanup.phase == Phase::Begun, "settle outside begin phase")?;
+                        cleanup.phase = Phase::Settled;
+                    }
                     unary(cleanup)
+                }
+                // D18 at the final exit: settle, the plan, then the delivery, then the aborted reserve's plan.
+                CleanupDeliverCancel => {
+                    let mut cleanup = cleanup()?;
+                    let close = &f.proofs.closes[cleanup.close as usize];
+                    let envelope = f.proofs.envelopes[close.envelope as usize].failures;
+                    enforce(envelope & ENVELOPE_CANCEL != 0, suspension::ASYNC_ENTRY,
+                        "a close delivers a deferred cancellation exactly when its envelope declares one: none here")?;
+                    let root = p.tables.boundaries.get(close.boundary as usize)
+                        .and_then(|boundary| p.tables.scopes.get(boundary.scope as usize))
+                        .is_some_and(|scope| scope.parent.is_none());
+                    // The successful final exit: a body's returns; a fixed root has no caller and closes without a
+                    // reserve (#667).
+                    let final_exit = match cleanup.payload {
+                        Some(payload) => payload.kind == ExitKind::Return,
+                        None => !cleanup.pending && fixed_root,
+                    };
+                    enforce(root && final_exit && !close.active_failure, suspension::ASYNC_ENTRY,
+                        "a deferred cancellation is delivered only at the final exit of the body")?;
+                    enforce(!cleanup.delivered, suspension::ASYNC_ENTRY, "a deferred cancellation is delivered once")?;
+                    enforce(cleanup.plans == 1 && plan_complete(f, &cleanup)?, suspension::ASYNC_ENTRY,
+                        "a deferred cancellation is delivered after the settle phase and the first plan")?;
+                    cleanup.delivered = true;
+                    unary(cleanup)
+                }
+                FrameSave => {
+                    let continuation = suspension::continuation_of(arguments)
+                        .ok_or_else(|| error("no continuation"))?;
+                    let facts = operands[1..].to_vec();
+                    if let Some(previous) = saved.insert(continuation, facts.clone()) {
+                        require(previous == facts, "one continuation saves different cleanup facts")?;
+                    }
+                    vec![None]
+                }
+                FrameResume => {
+                    let continuation = suspension::continuation_of(arguments)
+                        .ok_or_else(|| error("no continuation"))?;
+                    let mut facts = vec![None];
+                    if continuation != 0 {
+                        facts.extend(saved.get(&continuation).ok_or_else(|| error("resume before its save"))?);
+                    }
+                    facts
                 }
                 CleanupPlan => {
                     let mut cleanup = cleanup()?;
-                    require(cleanup.phase == Phase::Settled, "plan before complete settle")?;
                     let id = arguments.iter().find_map(|arg| match arg { Argument::Plan(id) => Some(*id), _ => None })
                         .ok_or_else(|| error("missing plan id"))?;
+                    if cleanup.plans == 0 {
+                        require(cleanup.phase == Phase::Settled, "plan before complete settle")?;
+                    } else {
+                        // The second plan executes the reserve that the delivered cancellation aborts.
+                        enforce(cleanup.plans == 1 && cleanup.delivered, suspension::ASYNC_ENTRY,
+                            "a second plan follows a delivered cancellation; a close has at most two plans")?;
+                        let merge = f.proofs.plans.get(id as usize).is_some_and(|plan| plan.merge);
+                        enforce(cleanup.plan != Some(id) && merge, suspension::ASYNC_ENTRY,
+                            "the aborted reserve runs its own executor plan")?;
+                        cleanup.index = 0;
+                    }
+                    cleanup.plans += 1;
                     let evidence = f.proofs.cleanup_plans.iter().find(|plan| plan.plan == id)
                         .ok_or_else(|| error("plan has no evidence"))?;
                     require(evidence.close == cleanup.close, "plan belongs to another close")?;
@@ -150,6 +322,8 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                         require(previous == reserve, "one runtime plan has inconsistent reserve inventory")?;
                     }
                     reserves[id as usize] = Some(reserve);
+                    enforce(!cleanup.released || f.proofs.plans[id as usize].merge, suspension::SCHEDULE,
+                        "a settled cache releases obligations into the common plan, which needs the executor")?;
                     cleanup.plan = Some(id);
                     cleanup.phase = Phase::Ready;
                     unary(cleanup)
@@ -232,6 +406,12 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                         cleanup.phase == Phase::Ready && cleanup.index as usize == evidence.slots.len()
                     };
                     require(complete, "cleanup.finish loses current or suffix")?;
+                    let envelope = &f.proofs.envelopes[f.proofs.closes[cleanup.close as usize].envelope as usize];
+                    let declared = envelope.failures & ENVELOPE_CANCEL != 0;
+                    enforce(cleanup.delivered || !declared, suspension::ASYNC_ENTRY,
+                        "a close delivers a deferred cancellation exactly when its envelope declares one: never here")?;
+                    enforce(!cleanup.delivered || cleanup.plans == 2, suspension::ASYNC_ENTRY,
+                        "a delivered cancellation runs the aborted reserve's plan before the close finishes")?;
                     vec![None, Some(Fact::Failure(cleanup.close)), Some(Fact::Exit(cleanup.close, cleanup.payload))]
                 }
                 ExitDispatch => {

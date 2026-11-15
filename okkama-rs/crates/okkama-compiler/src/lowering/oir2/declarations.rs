@@ -248,7 +248,10 @@ impl Declarations {
             };
             let span = role.decl.expect("source role").span;
             let methods = role.methods.iter().enumerate().map(|(slot, method)| {
-                if method.is_async || method.variadic {
+                if method.is_async {
+                    return Err(super::asynchronous::async_role_slot(&role.name, &method.name, span));
+                }
+                if method.variadic {
                     return Err(LowerError::unsupported(span, "async or variadic role slot"));
                 }
                 let overloaded = role.methods.iter().filter(|other| other.name == method.name).count() > 1;
@@ -304,6 +307,66 @@ impl Declarations {
                     vec![this.types[&ty::Ty::Str]], vec![], source.program.module.span)?);
             }
         }
+        // The system NativeFailure (language spec 9.5), when a body names it: the payload a native failure
+        // carries and `catch e is NativeFailure` binds. Source never constructs it.
+        let native_failure = ty::Ty::object(reg.system.native_failure);
+        let mut uses_native_failure = all_bodies.iter()
+            .any(|body| body.locals.iter().any(|local| local.ty == native_failure));
+        for body in &all_bodies {
+            super::walk::block(&body.block, &mut |expr| {
+                uses_native_failure |= expr.ty.as_ref() == Some(&native_failure);
+            });
+        }
+        if uses_native_failure {
+            let text = this.types[&ty::Ty::Str];
+            let fields = ir::NATIVE_FAILURE_FIELDS.iter().map(|&name| ir::Field {
+                name: name.into(), ty: text, default: None, once: false,
+            }).collect();
+            let declaration = this.builder.declare(ir::Declaration {
+                name: ir::NATIVE_FAILURE.into(), type_params: vec![], loc: None,
+                kind: ir::DeclarationKind::Object { fields, witnesses: vec![], destroy: None, builtin: false },
+            })?;
+            let lowered = this.builder.intern_type(ir::Type::Object { decl: declaration, args: vec![] })?;
+            this.types.insert(native_failure, lowered);
+            // Its actions read its fields, `text()` the message, as in Tomato; they are methods of the object, so
+            // they hold its field authority.
+            for (method, &name) in crate::analysis::registry::NATIVE_FAILURE_METHODS.iter().enumerate() {
+                let field = if name == "text" { "message" } else { name };
+                let index = ir::NATIVE_FAILURE_FIELDS.iter().position(|&known| known == field)
+                    .expect("a NativeFailure field") as u32;
+                let getter = super::builtin_roles::function(&mut this, declaration, name, vec![lowered], text, false,
+                    |builder, _| {
+                        let receiver = builder.block_params(builder.entry())?[0];
+                        super::builtin_roles::get(builder, receiver, declaration, index)
+                    })?;
+                this.functions.insert(thir::BodyOwner::Method { object: reg.system.native_failure, method }, getter);
+            }
+        }
+        // The system Cancelled (#724), when a body names it: the payload a cancellation carries and
+        // `catch e is Cancelled` binds, an object without fields. Source never constructs it.
+        let cancelled = ty::Ty::object(reg.system.cancelled);
+        let mut uses_cancelled = all_bodies.iter().any(|body| body.locals.iter().any(|local| local.ty == cancelled));
+        for body in &all_bodies {
+            super::walk::block(&body.block, &mut |expr| {
+                uses_cancelled |= expr.ty.as_ref() == Some(&cancelled);
+            });
+        }
+        if uses_cancelled {
+            let declaration = this.builder.declare(ir::Declaration {
+                name: ir::CANCELLED.into(), type_params: vec![], loc: None,
+                kind: ir::DeclarationKind::Object { fields: vec![], witnesses: vec![], destroy: None, builtin: false },
+            })?;
+            let lowered = this.builder.intern_type(ir::Type::Object { decl: declaration, args: vec![] })?;
+            this.types.insert(cancelled, lowered);
+            // Its one action, `text()`, is Tomato's text of a cancellation.
+            let text = this.types[&ty::Ty::Str];
+            let getter = super::builtin_roles::function(&mut this, declaration, "text", vec![lowered], text, false,
+                |builder, _| {
+                    let message = ir::Literal::Str(ir::CANCELLED_TEXT.into());
+                    Ok(builder.emit_schema(ir::Operation::Const(message))?[0])
+                })?;
+            this.functions.insert(thir::BodyOwner::Method { object: reg.system.cancelled, method: 0 }, getter);
+        }
         if reg.test_mode {
             this.declare_test_intrinsics(&all_bodies, source.program.module.span)?;
         }
@@ -319,11 +382,11 @@ impl Declarations {
         }
         // Declare all symbols before bodies: forward references and stable field/default links.
         for body in &analysis.bodies {
-            if body.is_async && !matches!(body.owner, thir::BodyOwner::Test(_)) {
-                return Err(LowerError::unsupported(body.span, "async action or cleanup"));
+            if body.is_async {
+                super::asynchronous::check_owner(reg, body)?;
             }
             let mut params = vec![];
-            let (symbol, attrs, result) = match body.owner {
+            let (symbol, mut attrs, result) = match body.owner {
                 thir::BodyOwner::Entry => {
                     let result = reg.entry.map(|entry| &entry.result);
                     let result = match result {
@@ -383,6 +446,11 @@ impl Declarations {
                 }
                 _ => return Err(LowerError::unsupported(body.span, "test, closure or capability body")),
             };
+            // An async test already carries its attribute and its summaries come from the test profile.
+            let async_action = body.is_async && !matches!(body.owner, thir::BodyOwner::Test(_));
+            if async_action {
+                attrs.push(ir::FunctionAttr::Async);
+            }
             let shorthand = match body.owner {
                 thir::BodyOwner::Ctor { object, ctor } => {
                     match &reg.objects[object.0].ctors[ctor].shape {
@@ -459,6 +527,9 @@ impl Declarations {
                 }
                 _ => None,
             };
+            if atomic.is_none() {
+                super::asynchronous::check_intrinsic(reg, body)?;
+            }
             let function = if let Some(name) = atomic {
                 this.external(&name, false, params, results, attrs, body.span)?
             } else {
@@ -476,6 +547,9 @@ impl Declarations {
             };
             if body.owner == thir::BodyOwner::Entry {
                 this.builder.raw_mut().entry = Some(function);
+            }
+            if async_action {
+                super::asynchronous::declare(&mut this.builder, function)?;
             }
             if let thir::BodyOwner::Test(index) = body.owner {
                 super::test_profile::declare(&mut this.builder, function, &reg.tests[index])?;
@@ -583,7 +657,10 @@ impl Declarations {
             let module = &reg.modules[native.module];
             let name = format!("{}@{}::{}/{}", module.name, module.program.module.major(),
                 native.name, native.params.len());
-            if native.is_async || native.variadic {
+            if native.is_async {
+                return Err(super::asynchronous::async_native(&name, native.decl.span));
+            }
+            if native.variadic {
                 return Err(LowerError::unsupported(native.decl.span, "async or variadic native"));
             }
             let params = native.params.iter().map(|(_, ty)| this.ty(ty, native.decl.span)).collect::<Result<_>>()?;
@@ -654,13 +731,14 @@ impl Declarations {
             T::Float => ir::Type::Float,
             T::Rat => ir::Type::Rat,
             T::Char => ir::Type::Char,
+            T::Any => ir::Type::Any,
             T::Array(element) | T::Varargs(element) => {
                 self.collection_type(element, span)?;
                 ir::Type::Array(self.ty(element, span)?)
             }
             T::Action(action) => {
                 if action.is_async {
-                    return Err(LowerError::unsupported(span, "async action type (#570)"));
+                    return Err(super::asynchronous::async_action_type(span));
                 }
                 for ty in action.params.iter().chain(action.result.iter()) {
                     self.collection_type(ty, span)?;
@@ -675,6 +753,13 @@ impl Declarations {
                 self.collection_type(key, span)?;
                 self.collection_type(value, span)?;
                 ir::Type::Map(self.ty(key, span)?, self.ty(value, span)?)
+            }
+            // `Future<T>` is an ordinary generic value type; `None` is the Future of an async void action.
+            T::Future(result) => {
+                if let Some(result) = result {
+                    self.collection_type(result, span)?;
+                }
+                ir::Type::Future(result.as_ref().map(|ty| self.ty(ty, span)).transpose()?)
             }
             _ => return Ok(()),
         };

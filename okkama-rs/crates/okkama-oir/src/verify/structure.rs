@@ -126,8 +126,12 @@ pub(super) fn check<'a>(module: &'a Module, selected: Option<FuncId>, state: &mu
             || (data.body.is_some() == (externs + intrinsics == 1)) {
             state.error(R::S1, "function must have exactly one body, external ABI, or intrinsic ABI form");
         }
-        if is_entry && (!data.signature.params.is_empty() || data.signature.results.len() != 1
-            || data.signature.results.first().and_then(|id| module.types.get(*id).ok()) != Some(&Type::Int)) {
+        // C-2: an async entry in the D21 form is checked by its language signature (async ABI ruling 3:
+        // `async main` is a fixed root without packets).
+        let entry = is_entry.then(|| super::coro::language_signature(module, data)).flatten();
+        let entry = entry.as_ref().unwrap_or(&data.signature);
+        if is_entry && (!entry.params.is_empty() || entry.results.len() != 1
+            || entry.results.first().and_then(|id| module.types.get(*id).ok()) != Some(&Type::Int)) {
             state.error(R::S3, "module entry must have signature () -> int");
         }
         if let Some(body) = &data.body { body_structure(module, function, data, body, state); }
@@ -161,9 +165,14 @@ fn module_structure<'a>(module: &'a Module, state: &mut State<'a>) {
         for test in tests {
             if !state.step(1) { return; }
             refs(module, &test.function, state);
-            if let Ok(function) = module.functions.get(test.function)
-                && (!function.signature.params.is_empty() || !function.signature.results.is_empty()) {
-                state.error(R::S1, "test function must have signature () -> void");
+            // C-2 (#691): an async test in the D21 form is a void fixed root, checked by its language signature:
+            // an empty start and a success that publishes no value.
+            if let Ok(function) = module.functions.get(test.function) {
+                let language = super::coro::language_signature(module, function);
+                let signature = language.as_ref().unwrap_or(&function.signature);
+                if !signature.params.is_empty() || !signature.results.is_empty() {
+                    state.error(R::S1, "test function must have signature () -> void");
+                }
             }
         }
     }

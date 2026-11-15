@@ -251,6 +251,11 @@ fn transfer_selected(
     for atom in deps {
         if let Some(quantity) = state.journals.get(&(owner, *atom)) {
             let mask = state.provenance.entry((owner, *atom)).or_default();
+            // A cache duty stays in its owner state: binding or staging its Future neither
+            // binds nor stages the duty (D12, OIR-2 §10.2), so it can still leave by cache.rehome.
+            if *mask & futures::CACHE_DUTY != 0 {
+                continue;
+            }
             if deps.len() == 1 && atom.incarnation == Incarnation::Current && *quantity == Quantity::ONE {
                 *mask = provenance;
             } else {
@@ -335,10 +340,11 @@ fn transfer(
                 for value in arrays::inserted(collection) {
                     inserted.extend(state.values[value.as_u32() as usize].deps.iter().copied());
                 }
+                // Every transition, finish and abandon included, lies inside the builder's owner.
+                let owner = *builder_owners.get(&buffer)
+                    .ok_or_else(|| flow_error("builder transition has no builder.new owner"))?;
+                let sources = arrays::inner_scopes(module, data.lexical_scope, owner)?;
                 if !inserted.is_empty() {
-                    let owner = *builder_owners.get(&buffer)
-                        .ok_or_else(|| flow_error("builder transition has no builder.new owner"))?;
-                    let sources = arrays::inner_scopes(module, data.lexical_scope, owner)?;
                     transfer_selected(&mut state, owner, Some(&sources), &inserted, true, 1);
                     deps.extend(inserted);
                 }
@@ -409,8 +415,8 @@ fn transfer(
             }
             Operation::Core(CoreOp::OnceStore { value, .. }) => {
                 let ty = body.values.get(*value).map_err(arena)?.ty;
-                if classification.types[&ty].certificate.is_none() {
-                    return Err(flow_error("once.store requires a full-graph plain certificate"));
+                if !classification.types[&ty].once_plain {
+                    return Err(flow_error("once.store requires a value that cannot retain a resource"));
                 }
             }
             Operation::Lexical(LexicalOp::Bind { binding, value }
@@ -469,6 +475,19 @@ fn transfer(
                     .map_err(|error| flow_error(format!("operands: {error}")))? {
                     deps.extend(&state.values[operand.value.as_u32() as usize].deps);
                 }
+                // An async call creates a Future whose cache duty joins its creation
+                // scope (D12). The duty is never offered, bound or staged.
+                let provenance = match &instruction.op {
+                    Operation::Call(CallOp::Direct { function, .. }) if futures::is_async(module, *function) => {
+                        futures::CACHE_DUTY
+                    }
+                    // A returned Future brings its cache duty in the result packet (D25.1): the same
+                    // duty, never offered, and leaving a scope only by cache.rehome.
+                    Operation::Call(_) if instruction.results.iter().any(|result| {
+                        body.values.get(*result).is_ok_and(|value| futures::is_future(module, value.ty))
+                    }) => futures::CACHE_DUTY,
+                    _ => 1,
+                };
                 for result in &instruction.results {
                     if managed(body, *result, classification)? {
                         let origin = shapes[result];
@@ -477,10 +496,23 @@ fn transfer(
                         state.values[result.as_u32() as usize].deps = deps.clone();
                         state.values[result.as_u32() as usize].deps.insert(atom);
                         state.journals.insert((data.lexical_scope, atom), Quantity::ONE);
-                        state.provenance.insert((data.lexical_scope, atom), 1);
+                        state.provenance.insert((data.lexical_scope, atom), provenance);
                     }
                 }
             }
+            // A shared await borrows the cached outcome: the value depends on the
+            // stable cache service key and the outcome's external deps (§13.2).
+            Operation::Async(AsyncOp::Await { future, .. }) => {
+                let deps = state.values[future.as_u32() as usize].deps.clone();
+                for result in &instruction.results {
+                    if managed(body, *result, classification)? {
+                        state.values[result.as_u32() as usize].deps = deps.clone();
+                    }
+                }
+            }
+            // A cancellation request and the Future queries observe the Future; their results are scalars.
+            Operation::Async(AsyncOp::FutureCancel { .. } | AsyncOp::FutureDone { .. }
+                | AsyncOp::FutureCancelled { .. }) => {}
             Operation::Core(_) if instruction.results.iter().all(|value| {
                 !classification.types.get(&body.values.get(*value).unwrap().ty)
                     .is_some_and(TypeClassification::may_own)
@@ -562,10 +594,13 @@ fn edge_state(
         let moving: Vec<_> = state.journals.iter().filter(|((scope, atom), _)| {
             edge.plan.close.contains(scope) && deps.contains(atom)
         }).map(|(key, quantity)| (*key, *quantity)).collect();
-        for ((_, atom), quantity) in moving {
+        for ((source, atom), quantity) in moving {
             let target = state.journals.entry((destination, atom)).or_default();
             *target = target.append(quantity);
-            state.provenance.insert((destination, atom), 1);
+            // A cache duty stays a cache duty in the landing scope: cache.rehome moves it,
+            // and it never becomes admissible for an offer (C-4, OIR-2 §10.2).
+            let duty = state.provenance.get(&(source, atom)).is_some_and(|mask| mask & futures::CACHE_DUTY != 0);
+            state.provenance.insert((destination, atom), if duty { futures::CACHE_DUTY } else { 1 });
         }
     }
     for scope in &edge.plan.close {

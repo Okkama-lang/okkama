@@ -94,8 +94,23 @@ rule_ids! {
     CoroRawFrameAccess => "coro-raw-frame-access",
     CoroShieldedAwait => "coro-shielded-await",
     CoroBodyRaises => "coro-body-raises",
+    CoroLayoutMisplaced => "coro-layout-misplaced",
     AsyncDeferReplace => "async-defer-replace",
     D22ExternalWithBody => "d22-external-with-body",
+    // B9.5 rules of the coro suspension metadata (async ABI D20, D21; slice V3).
+    CoroTokenInTwoPlaces => "coro-token-in-two-places",
+    CoroSavedSetIncomplete => "coro-saved-set-incomplete",
+    CoroReadAfterSave => "coro-read-after-save",
+    CoroDoubleResume => "coro-double-resume",
+    CoroSyncSuspends => "coro-sync-suspends",
+    // B10.5/B10.6 rules of lowered service settlement and final cancellation (OIR-2 §9.3, D18; slice V4).
+    LowDutySettledTwice => "low-duty-settled-twice",
+    LowCancelOutsideFinalExit => "low-cancel-outside-final-exit",
+    // Async wave 1 audit (#695): suspension form, frame slots and unmodeled service operations.
+    CoroUnbracketedSuspend => "coro-unbracketed-suspend",
+    CoroSlotOverlap => "coro-slot-overlap",
+    AsyncUnmodeledOp => "async-unmodeled-op",
+    CoroMissingLayout => "coro-missing-layout",
 }
 impl std::fmt::Display for RuleId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(self.as_str()) }

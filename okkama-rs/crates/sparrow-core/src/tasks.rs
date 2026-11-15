@@ -239,6 +239,11 @@ impl Runtime {
             self.running.pop();
             return !pending;
         }
+        // A Champ body publishes its own outcome (draft 3 §3).
+        #[cfg(feature = "champ-abi")]
+        if get(frame, FLAGS) & crate::champ::CHAMP != 0 {
+            return self.champ_run_body(ctx, frame);
+        }
         let code = match crate::jit::compile(self, function) {
             Ok(code) => code,
             Err(error) => {
@@ -290,33 +295,42 @@ impl Runtime {
 
     /// The frame with an undelivered cancellation request among the frames
     /// awaiting `frame`, and the frames awaiting those, up to their task
-    /// (#670). Frames that only listen to `frame` do not count.
+    /// (#670). Frames that only listen to `frame` do not count. The walk is
+    /// depth first in waiter order with an explicit stack, so a deep chain of
+    /// nested frames never grows the process stack.
     fn requested_above(&self, frame: Word) -> Option<Word> {
-        let waiters = get(frame, WAITER);
-        if waiters == UNBOUND {
-            return None;
+        let mut pending = Vec::new();
+        self.push_waiters(frame, &mut pending);
+        while let Some((awaited, waiter)) = pending.pop() {
+            // A frame that only listens to `awaited` does not await it.
+            if get(waiter, AWAITING) != awaited {
+                continue;
+            }
+            let flags = get(waiter, FLAGS);
+            if flags & CANCEL_REQUESTED != 0 && flags & CANCEL_DELIVERED == 0 {
+                return Some(waiter);
+            }
+            if flags & (SPAWNED | SHIELDED) != 0 {
+                continue;
+            }
+            self.push_waiters(waiter, &mut pending);
         }
-        if heap::kind(self.heap.header_of(waiters)) == heap::FRAME {
-            return self.requested_from(frame, waiters);
-        }
-        let list = &self.heap.payload::<Waiters>(waiters).expect("waiters").0;
-        list.iter().find_map(|&waiter| self.requested_from(frame, waiter))
+        None
     }
 
-    /// `waiter`, or a frame above it, with an undelivered cancellation
-    /// request, when `waiter` awaits `frame` (see `requested_above`).
-    fn requested_from(&self, frame: Word, waiter: Word) -> Option<Word> {
-        if get(waiter, AWAITING) != frame {
-            return None;
+    /// Push the waiters of `frame`, each paired with `frame`, so that the
+    /// first waiter is popped first.
+    fn push_waiters(&self, frame: Word, pending: &mut Vec<(Word, Word)>) {
+        let waiters = get(frame, WAITER);
+        if waiters == UNBOUND {
+            return;
         }
-        let flags = get(waiter, FLAGS);
-        if flags & CANCEL_REQUESTED != 0 && flags & CANCEL_DELIVERED == 0 {
-            return Some(waiter);
+        if heap::kind(self.heap.header_of(waiters)) == heap::FRAME {
+            pending.push((frame, waiters));
+            return;
         }
-        if flags & (SPAWNED | SHIELDED) != 0 {
-            return None;
-        }
-        self.requested_above(waiter)
+        let list = &self.heap.payload::<Waiters>(waiters).expect("waiters").0;
+        pending.extend(list.iter().rev().map(|&waiter| (frame, waiter)));
     }
 
     /// Deliver a cancellation to a suspended task: its innermost waiting
@@ -345,6 +359,9 @@ impl Runtime {
             if !self.is_driver(frame) && self.sole_awaiter(awaited, frame) {
                 set(task, FLAGS, get(task, FLAGS) | CANCEL_DELIVERED);
                 set(frame, FLAGS, get(frame, FLAGS) | DELIVER_NOW);
+                // Champ's await receipt (draft 3 §4.1): this waiter stays to see its own child settle.
+                #[cfg(feature = "champ-abi")]
+                set(frame, FLAGS, get(frame, FLAGS) | crate::champ::CHILD_CANCEL);
                 self.cancel_running(awaited);
                 return;
             }
@@ -520,6 +537,61 @@ impl Runtime {
                 self.deliver_cancel(future);
             }
         }
+    }
+}
+
+/// Tomato's frame flags for the Champ runtime, which shares this scheduler (plan decision C3, draft 3 §2.1).
+#[cfg(feature = "champ-abi")]
+pub(crate) mod champ_flags {
+    pub(crate) const SPAWNED: u64 = super::SPAWNED;
+    pub(crate) const OBSERVED: u64 = super::OBSERVED;
+    #[cfg(test)]
+    pub(crate) const CANCEL_REQUESTED: u64 = super::CANCEL_REQUESTED;
+    #[cfg(test)]
+    pub(crate) const CANCEL_DELIVERED: u64 = super::CANCEL_DELIVERED;
+    pub(crate) const SHIELDED: u64 = super::SHIELDED;
+    /// Draft 3's WAITED, with Tomato's meaning (#663).
+    pub(crate) const AWAIT_SUSPENDED: u64 = super::AWAIT_SUSPENDED;
+}
+
+/// Tomato's protocol steps that the Champ helpers call unchanged (draft 3 §§3–5).
+#[cfg(feature = "champ-abi")]
+impl Runtime {
+    pub(crate) fn champ_add_waiter(&mut self, future: Word, waiter: Word) {
+        self.add_waiter(future, waiter);
+    }
+
+    /// The wake half of `settle`, after a Champ publication has written its fields: detach the wait list and
+    /// queue the waiters in registration order. Champ owns its outcome, so `own_outcome` does not run.
+    pub(crate) fn champ_queue_waiters(&mut self, frame: Word) {
+        let waiters = get(frame, WAITER);
+        set(frame, WAITER, UNBOUND);
+        if waiters == UNBOUND {
+            return;
+        }
+        if heap::kind(self.heap.header_of(waiters)) == heap::FRAME {
+            self.wake_waiter(frame, waiters);
+            return;
+        }
+        let list = std::mem::take(&mut self.heap.payload_mut::<Waiters>(waiters).expect("waiters").0);
+        for waiter in list {
+            self.wake_waiter(frame, waiter);
+        }
+    }
+
+    /// Whether `waiter` is among the frames woken when `future` settles.
+    pub(crate) fn champ_listens(&self, future: Word, waiter: Word) -> bool {
+        let current = get(future, WAITER);
+        current == waiter || (current != UNBOUND && heap::kind(self.heap.header_of(current)) == heap::PAYLOAD
+            && self.heap.payload::<Waiters>(current).is_some_and(|list| list.0.contains(&waiter)))
+    }
+
+    pub(crate) fn champ_deliverable_cancel(&mut self) -> Option<Word> {
+        self.deliverable_cancel()
+    }
+
+    pub(crate) fn champ_cancel_running(&mut self, future: Word) {
+        self.cancel_running(future);
     }
 }
 

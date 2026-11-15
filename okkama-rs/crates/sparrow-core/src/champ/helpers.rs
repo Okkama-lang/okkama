@@ -141,6 +141,17 @@ pub(super) fn validate(runtime: &Runtime, packet: &Packet) -> Result<(), Error> 
             }
         }
     }
+    // One place per duty (draft 3 §1.4): a service entry is in exactly one packet, state or reserve.
+    let mut duties = HashSet::new();
+    for service in &packet.services {
+        if !matches!(service.kind, SERVICE_CACHE | SERVICE_TASK) {
+            return Err(error("unknown service kind"));
+        }
+        runtime.champ_cache(service.holder)?;
+        if !duties.insert((service.holder, service.kind)) {
+            return Err(error("a service duty in two places"));
+        }
+    }
     Ok(())
 }
 pub(super) fn run(runtime: &Runtime, mut words: Vec<Word>, holder: HolderId, owner: OwnerId) -> Packet {
@@ -166,8 +177,47 @@ pub(super) fn preflight(runtime: &Runtime, packet: &Packet, holder: HolderId, ow
             return Err(error("epoch exhausted"));
         }
     }
+    duties_preflight(runtime, &packet.services, owner)
+}
+fn duties_preflight(runtime: &Runtime, services: &[Service], owner: OwnerId) -> Result<(), Error> {
+    for service in services.iter().filter(|service| service.kind == SERVICE_CACHE) {
+        runtime.champ_duty_preflight(service.holder, owner)?;
+    }
     Ok(())
 }
+fn duties_transition(runtime: &mut Runtime, services: &mut [Service], owner: OwnerId) {
+    for service in services {
+        service.target = None;
+        if service.kind == SERVICE_CACHE {
+            runtime.champ_duty_transition(service.holder, owner);
+        }
+    }
+}
+/// [`preflight`] of a packet whose runs keep their holders and take `owner`: a cache's outcome or inputs.
+pub(super) fn owner_preflight(runtime: &Runtime, packet: &Packet, owner: OwnerId) -> Result<(), Error> {
+    validate(runtime, packet)?;
+    for run in packet.runs() {
+        preflight(runtime, &Packet::from_run(run.clone()), run.holder, owner)?;
+    }
+    duties_preflight(runtime, &packet.services, owner)
+}
+/// [`transition`] of a packet whose runs keep their holders and take `owner`.
+pub(super) fn owner_transition(runtime: &mut Runtime, packet: Packet, owner: OwnerId) -> Packet {
+    let Packet { journals, mut services } = packet;
+    let mut moved = Packet::default();
+    for (index, runs) in journals.into_iter().enumerate() {
+        for run in runs {
+            let holder = run.holder;
+            let mut updated = transition(runtime, Packet::from_run(run), holder, owner);
+            moved.journals[index].append(&mut updated.journals[0]);
+        }
+    }
+    duties_transition(runtime, &mut services, owner);
+    moved.services = services;
+    moved
+}
+/// The single owner transition of G1 §3. The service entries go with the runs (ABI D25.1): each cache duty
+/// takes the new owner, with the identities of its outcome or inputs (ABI C-4), and a rehome receipt ends.
 pub(super) fn transition(runtime: &mut Runtime, mut packet: Packet, holder: HolderId, owner: OwnerId) -> Packet {
     // Each input run is already ordered. A metadata transition neither sorts nor rewrites its Ref slots.
     for run in packet.runs_mut() {
@@ -190,6 +240,7 @@ pub(super) fn transition(runtime: &mut Runtime, mut packet: Packet, holder: Hold
         run.holder = holder;
         run.owner = owner;
     }
+    duties_transition(runtime, &mut packet.services, owner);
     packet
 }
 fn partition(_runtime: &Runtime, packet: &Packet, selected: &HashSet<Word>) -> (Packet, Packet) {
@@ -202,6 +253,8 @@ fn partition(_runtime: &Runtime, packet: &Packet, selected: &HashSet<Word>) -> (
             rest.journals[index].append(&mut ordered_run(no, source.holder, source.owner).journals[0]);
         }
     }
+    // A selection picks identities; service entries stay where they are (ABI D25).
+    rest.services = packet.services.clone();
     (rest, picked)
 }
 fn static_selection(runtime: &Runtime, packet: &Packet, plan: PlanId) -> Result<HashSet<Word>, Error> {
@@ -217,55 +270,104 @@ fn static_selection(runtime: &Runtime, packet: &Packet, plan: PlanId) -> Result<
     }
     Ok(selected)
 }
-fn checked_selection(runtime: &Runtime, packet: &Packet, selection: &Selection) -> Result<HashSet<Word>, Error> {
-    selection_walk(runtime, packet, selection, true)
+/// What a selection walk insists on for the identities it reaches without a managed collection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Authority {
+    /// Nothing: identities outside the source are not selected (a binding, a scope split, an admissible
+    /// transfer).
+    Any,
+    /// The identity is in the source and live (a checked packet split, a transfer).
+    Source,
+}
+fn checked_selection(runtime: &Runtime, packet: &Packet, selection: &Selection, authority: Authority)
+    -> Result<HashSet<Word>, Error>
+{
+    selection_walk(runtime, packet, selection, authority)
 }
 #[cfg(test)]
 thread_local! {
     pub(crate) static GRAPH_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-fn selection_walk(runtime: &Runtime, packet: &Packet, selection: &Selection, strict: bool)
+fn selection_walk(runtime: &Runtime, packet: &Packet, selection: &Selection, authority: Authority)
     -> Result<HashSet<Word>, Error>
 {
     #[cfg(test)]
     GRAPH_WALKS.with(|count| count.set(count.get() + 1));
     validate(runtime, packet)?;
     let available: HashSet<_> = packet.words().collect();
-    let mut work = if selection.count == 0 {
+    // Each item says whether it was reached through a managed array or map.
+    let mut work: Vec<(Word, bool)> = if selection.count == 0 {
         Vec::new()
     } else {
-        unsafe { std::slice::from_raw_parts(selection.roots, selection.count as usize) }.to_vec()
+        unsafe { std::slice::from_raw_parts(selection.roots, selection.count as usize) }.iter()
+            .map(|&root| (root, false)).collect()
     };
     let mut seen = HashSet::new();
     let mut selected = HashSet::new();
-    while let Some(object) = work.pop() {
-        if object == 0 || object & 1 != 0 || !seen.insert(object) {
+    while let Some((object, collected)) = work.pop() {
+        if object == 0 || object & 1 != 0 || !seen.insert((object, collected)) {
             continue;
         }
         let header = runtime.heap.header_of(object);
-        // Kinds without identity are leaves: the loader's ARRAY_PLAIN admits only arrays whose
-        // element graph is closed and plain. Of the payloads only a Range is a leaf; failures and
+        // A managed array (ARRAY_PLAIN admits resource object leaves) refers to identities it does not
+        // own: its elements are selected like fields. Arrays are homogeneous, so the first element shows
+        // whether the elements can hold identities at all; text, numbers and plain leaves stop here.
+        if heap::kind(header) == heap::ARRAY {
+            if runtime.heap.is_bytes(object) {
+                continue;
+            }
+            let elements = runtime.heap.elements(object);
+            let nested = elements.iter().find(|&&element| element != 0 && element & 1 == 0)
+                .is_some_and(|&element| {
+                    matches!(heap::kind(runtime.heap.header_of(element)), heap::OBJECT | heap::ARRAY)
+                });
+            if heap::element_repr(header) == crate::word::Repr::Ref && nested {
+                work.extend(elements.iter().map(|&element| (element, true)));
+            }
+            continue;
+        }
+        // A managed map refers to resource objects as values, selected like a managed array's elements.
+        if heap::kind(header) == heap::PAYLOAD
+            && let Some(map) = runtime.heap.payload::<crate::ops::MapValue>(object)
+        {
+            if map.value == crate::word::Repr::Ref {
+                let values: Vec<Word> = map.entries.values().map(|&(_, value)| value).collect();
+                let nested = values.iter().find(|&&value| value != 0 && value & 1 == 0).is_some_and(|&value| {
+                    matches!(heap::kind(runtime.heap.header_of(value)), heap::OBJECT | heap::ARRAY)
+                });
+                if nested {
+                    work.extend(values.into_iter().map(|value| (value, true)));
+                }
+            }
+            continue;
+        }
+        // Other kinds without identity are leaves. Of the payloads only a Range is a leaf; failures and
         // service records can hold identities and still stop the walk.
         let range = heap::kind(header) == heap::PAYLOAD
             && runtime.heap.payload::<crate::ops::RangeValue>(object).is_some();
-        if range || matches!(heap::kind(header), heap::STRING | heap::BIGINT | heap::ARRAY) {
+        if range || matches!(heap::kind(header), heap::STRING | heap::BIGINT) {
             continue;
         }
         if heap::kind(header) != heap::OBJECT {
             return Err(error("unsupported selection root"));
         }
         if let Some(identity) = runtime.heap.champ_identity(object) {
-            if strict && (!available.contains(&object) || identity.life != Life::Live) {
+            let inside = available.contains(&object);
+            // A collection refers to identities it does not own: an element outside the source stays with its
+            // owner, and only an identity reached without one answers to the authority.
+            let refused = !collected && authority == Authority::Source
+                && (!inside || identity.life != Life::Live);
+            if refused {
                 return Err(error("selection outside source authority"));
             }
-            if available.contains(&object) {
+            if inside {
                 selected.insert(object);
             }
         }
         let layout = runtime.heap.object_runtime_layout(heap::payload(header));
         for &index in layout.selection_layout() {
-            work.push(runtime.heap.field(object, index));
+            work.push((runtime.heap.field(object, index), collected));
         }
     }
     Ok(selected)
@@ -350,10 +452,10 @@ fn admit(runtime: &mut Runtime, state: Word, input: Word, bound: bool) -> Result
     if bound {
         scope.bound.append(packet);
     } else {
-        let [admission, mut bound, mut staging] = packet.journals;
+        let Packet { journals: [admission, mut bound, mut staging], services } = packet;
         bound.append(&mut staging);
-        scope.admission.append(Packet { journals: [admission, VecDeque::new(), VecDeque::new()] });
-        scope.bound.append(Packet { journals: [VecDeque::new(), bound, VecDeque::new()] });
+        scope.admission.append(Packet { journals: [admission, VecDeque::new(), VecDeque::new()], services });
+        scope.bound.append(Packet { journals: [VecDeque::new(), bound, VecDeque::new()], services: Vec::new() });
     }
     let record = store(runtime, Data::Scope(scope));
     consume(runtime, state);
@@ -386,7 +488,7 @@ fn bind(runtime: &mut Runtime, state: Word, binding: u64, value: Word, input: Wo
     let repr = *runtime.champ.value_reprs.get(&(scope.owner.0, binding, stage))
         .ok_or_else(|| error("missing binding/field trace layout"))?;
     let selected = if repr == Repr::Ref && value != 0 {
-        selection_walk(runtime, &all, &Selection { roots: &value, count: 1 }, false)?
+        selection_walk(runtime, &all, &Selection { roots: &value, count: 1 }, Authority::Any)?
     } else {
         HashSet::new()
     };
@@ -663,7 +765,7 @@ pub extern "C" fn rt_own_split_checked(ctx: *mut Ctx, input: *mut PacketSlot,
     }
     let result = (|| {
         let packet = packet(runtime, original)?;
-        let selected = checked_selection(runtime, &packet, unsafe { &*selection })?;
+        let selected = checked_selection(runtime, &packet, unsafe { &*selection }, Authority::Source)?;
         split(runtime, &packet, &selected)
     })();
     let (outcome, output) = match result {
@@ -723,7 +825,7 @@ fn scope_split(ctx: *mut Ctx, input: *mut ScopeSlot, selection: *const Selection
         let all = scope.all();
         let mut selected = // Borrowed external dependencies have no obligation in this boundary. The SPB proof
         // retains them; the runtime packet contains only this scope's selected identities.
-        selection_walk(runtime, &all, unsafe { &*selection }, false)?;
+        selection_walk(runtime, &all, unsafe { &*selection }, Authority::Any)?;
         if admissible {
             let eligible = scope.admission.words().collect::<HashSet<_>>();
             selected.retain(|object| eligible.contains(object));
@@ -752,8 +854,52 @@ fn scope_split(ctx: *mut Ctx, input: *mut ScopeSlot, selection: *const Selection
     }
     outcome
 }
+/// `own.dynamic` (Closure and `any` protocols): the checked transfer of a packet of unknown retention into
+/// the scope inventory. Every identity must be live in its run's holder and owner and must not already be
+/// in the scope (owner, live dependencies, snapshot, transferable); then it joins the admission journal in
+/// serial order, and the scope's cleanup releases it once. A failed check returns the state and the packet
+/// unaccepted with a program failure.
+pub extern "C" fn rt_own_dynamic(ctx: *mut Ctx, state: *mut ScopeSlot, input: *mut PacketSlot,
+    post: *mut ScopeSplitPost) -> Outcome
+{
+    if unsafe { (*ctx).status } != runtime::OK || unsafe { (*ctx).failure } != 0 {
+        return stop(ctx, error("checked helper entered with active bridge failure"));
+    }
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    let original = unsafe { (*state).record };
+    let packet = unsafe { (*input).record };
+    // admit() checks everything before its first store and consumes nothing when it fails.
+    let (outcome, output) = match admit(runtime, original, packet, false) {
+        Ok(record) => (NORMAL, ScopeSplitPost {
+            state: ScopeSlot { record }, selected: PacketSlot::default(), failure: 0,
+        }),
+        Err(error) => (UNWIND, ScopeSplitPost {
+            state: ScopeSlot { record: original }, selected: PacketSlot { record: packet }, failure: fail(ctx, error),
+        }),
+    };
+    unsafe {
+        (*state).record = 0;
+        (*input).record = 0;
+        post.write(output);
+    }
+    outcome
+}
+/// A transfer moves every selected identity of its source, which must hold each one it is given.
 pub extern "C" fn rt_scope_transfer(ctx: *mut Ctx, inputs: *const TransferInputs,
     selection: *const Selection, post: *mut TransferPost) -> Outcome
+{
+    scope_transfer(ctx, inputs, selection, post, false)
+}
+/// An admissible transfer (`TRANSFER_ADMISSION`) moves only the selected identities its source admitted. Bound,
+/// staged and outside identities stay with their owners: the value may borrow an identity an enclosing scope
+/// owns, such as an element of its managed array pushed into its builder.
+pub extern "C" fn rt_scope_transfer_admissible(ctx: *mut Ctx, inputs: *const TransferInputs,
+    selection: *const Selection, post: *mut TransferPost) -> Outcome
+{
+    scope_transfer(ctx, inputs, selection, post, true)
+}
+fn scope_transfer(ctx: *mut Ctx, inputs: *const TransferInputs, selection: *const Selection,
+    post: *mut TransferPost, admissible: bool) -> Outcome
 {
     if unsafe { (*ctx).status } != runtime::OK || unsafe { (*ctx).failure } != 0 {
         return stop(ctx, error("checked helper entered with active bridge failure"));
@@ -764,7 +910,9 @@ pub extern "C" fn rt_scope_transfer(ctx: *mut Ctx, inputs: *const TransferInputs
     let to = unsafe { (*inputs.to).record };
     let same = inputs.from == inputs.to;
     let result = (|| {
-        if let Some(object) = checked_endpoint(runtime, from, unsafe { &*selection }, true)? {
+        if !admissible
+            && let Some(object) = checked_endpoint(runtime, from, unsafe { &*selection }, true)?
+        {
             if same {
                 return Ok((from, 0));
             }
@@ -773,7 +921,12 @@ pub extern "C" fn rt_scope_transfer(ctx: *mut Ctx, inputs: *const TransferInputs
         }
         let mut source = scope(runtime, from)?;
         let all = source.all();
-        let selected = checked_selection(runtime, &all, unsafe { &*selection })?;
+        let authority = if admissible { Authority::Any } else { Authority::Source };
+        let mut selected = checked_selection(runtime, &all, unsafe { &*selection }, authority)?;
+        if admissible {
+            let eligible = source.admission.words().collect::<HashSet<_>>();
+            selected.retain(|object| eligible.contains(object));
+        }
         if same {
             return Ok((from, 0));
         }
@@ -846,7 +999,9 @@ leaf_helper!(rt_exit_replace(ctx, input: *mut PendingSlot, replacement: *const S
     let replacement = &*replacement;
     let mut pending = pending(runtime, (*input).record)?;
     let selected = static_selection(runtime, &pending.reserve, replacement.selection)?;
-    let (rest, mut kept) = partition(runtime, &pending.reserve, &selected);
+    let (mut rest, mut kept) = partition(runtime, &pending.reserve, &selected);
+    // Rehome receipts stay in the reserve: custody leaves S only at commit or abort (ABI C-4).
+    kept.services = std::mem::take(&mut rest.services);
     kept.append(packet(runtime, (*replacement.packet).record)?);
     validate(runtime, &kept)?;
     pending.value = replacement.value;
@@ -867,6 +1022,14 @@ leaf_helper!(rt_exit_commit(ctx, input: *mut PendingSlot, destination: *const Ex
     post: *mut CommitPost) |runtime| {
     let pending = pending(runtime, (*input).record)?;
     let destination = &*destination;
+    // A rehome receipt names the exit's destination (ABI C-4 ruling): a scope T, or the caller.
+    for service in &pending.reserve.services {
+        if let Some(target) = service.target
+            && target != TARGET_CALLER && target != destination.owner.get()
+        {
+            return Err(error("a rehome receipt names another target than its exit's destination"));
+        }
+    }
     preflight(runtime, &pending.reserve, destination.holder, destination.owner)?;
     let mut packet = transition(runtime, pending.reserve, destination.holder, destination.owner);
     // An ordinary escape commits a new unbound-result admission in the destination.
@@ -881,3 +1044,119 @@ leaf_helper!(rt_exit_commit(ctx, input: *mut PendingSlot, destination: *const Ex
     post.write(CommitPost { value: pending.value, packet: PacketSlot { record } });
     Ok(())
 });
+
+/// Take the entry of `future`'s duty of `kind` out of the state's service lists.
+fn take_duty(scope: &mut Scope, future: Word, kind: u64) -> Option<Service> {
+    for packet in [&mut scope.admission, &mut scope.bound, &mut scope.staging] {
+        if let Some(index) = packet.services.iter().position(|entry| entry.holder == future && entry.kind == kind) {
+            return Some(packet.services.remove(index));
+        }
+    }
+    None
+}
+
+/// `cache.rehome` (SPB 69), class L (Champ draft 3 §12, ABI C-4 and its ruling): the duties of `future`, its cache
+/// and, when it was spawned, its task (task first, D24.1), move from the scope S into the exit reserve as receipts
+/// naming the exit's target: the owner id of a scope T, or `TARGET_CALLER`. The owner stays S; `exit.commit`
+/// performs the single transition to T, and an abort leaves the receipts for S to settle (draft 3 §6.3).
+///
+/// The state form (`state` non-null, `cache` and `task` null) takes the entries from the state's service lists;
+/// the token form (`state` null) consumes the `cache` token and the optional `task` token, both naming `future`.
+/// There is no failure: a refused operand is an engine error.
+pub extern "C" fn rt_cache_rehome(ctx: *mut Ctx, pending: *mut PendingSlot, state: *mut ScopeSlot,
+    cache: *mut CacheSlot, task: *mut TaskSlot, future: Word, target: u64, post: *mut RehomePost) -> Outcome
+{
+    leaf(ctx, |runtime| unsafe {
+        let pending_record = (*pending).record;
+        let mut exit = self::pending(runtime, pending_record)?;
+        let flags = runtime.champ_cache(future)?.flags;
+        if flags & (super::RELEASED | super::REHOMED) != 0 {
+            return Err(error("cache.rehome of a settled or rehomed cache duty"));
+        }
+        let owner = runtime.champ_cache(future)?.owner;
+        let mut entries = Vec::new();
+        let mut state_record = 0;
+        if !state.is_null() {
+            if !cache.is_null() || !task.is_null() {
+                return Err(error("cache.rehome takes the state form or the token form"));
+            }
+            let mut source = scope(runtime, (*state).record)?;
+            if source.owner != owner {
+                return Err(error("cache.rehome from a scope that does not own the Future"));
+            }
+            entries.extend(take_duty(&mut source, future, SERVICE_TASK));
+            entries.push(take_duty(&mut source, future, SERVICE_CACHE)
+                .ok_or_else(|| error("cache.rehome: the state holds no cache duty of the Future"))?);
+            state_record = store(runtime, Data::Scope(source));
+        } else {
+            if cache.is_null() || (*cache).record != future {
+                return Err(error("cache.rehome: the cache token names another Future"));
+            }
+            if !task.is_null() {
+                if (*task).record != future {
+                    return Err(error("cache.rehome: the task token names another Future"));
+                }
+                entries.push(Service { holder: future, kind: SERVICE_TASK, target: None });
+            }
+            entries.push(Service { holder: future, kind: SERVICE_CACHE, target: None });
+        }
+        for entry in &mut entries {
+            entry.target = Some(target);
+        }
+        exit.reserve.services.extend(entries);
+        validate(runtime, &exit.reserve)?;
+        runtime.champ_cache_mut(future)?.flags |= super::REHOMED;
+        let record = store(runtime, Data::Pending(exit));
+        consume(runtime, pending_record);
+        (*pending).record = 0;
+        if !state.is_null() {
+            consume(runtime, (*state).record);
+            (*state).record = 0;
+        } else {
+            (*cache).record = 0;
+            if !task.is_null() {
+                (*task).record = 0;
+            }
+        }
+        post.write(RehomePost { pending: PendingSlot { record }, state: ScopeSlot { record: state_record } });
+        Ok(())
+    })
+}
+
+/// `service.absorb` (SPB 86), class L (ABI D25.2): the cache or task token of a Future becomes a service entry
+/// of the packet, which carries it from then on (to an exit, a field, an array or a group). The token is consumed.
+pub extern "C" fn rt_service_absorb(ctx: *mut Ctx, input: *mut PacketSlot, token: Word, kind: u64,
+    post: *mut PacketSlot) -> Outcome
+{
+    leaf(ctx, |runtime| unsafe {
+        let mut absorbed = packet(runtime, (*input).record)?;
+        if runtime.champ_cache(token)?.flags & (super::RELEASED | super::REHOMED) != 0 {
+            return Err(error("service.absorb of a settled or rehomed duty"));
+        }
+        absorbed.services.push(Service { holder: token, kind, target: None });
+        validate(runtime, &absorbed)?;
+        let record = store(runtime, Data::Packet(absorbed));
+        consume(runtime, (*input).record);
+        (*input).record = 0;
+        post.write(PacketSlot { record });
+        Ok(())
+    })
+}
+
+/// `service.materialize` (SPB 85), class L (ABI D25.2): take the entry of `holder`'s duty of `kind` out of the
+/// packet as its token. The packet must hold exactly that entry (`d25-materialize-absent`).
+pub extern "C" fn rt_service_materialize(ctx: *mut Ctx, input: *mut PacketSlot, holder: Word, kind: u64,
+    post: *mut MaterializePost) -> Outcome
+{
+    leaf(ctx, |runtime| unsafe {
+        let mut source = packet(runtime, (*input).record)?;
+        let index = source.services.iter().position(|entry| entry.holder == holder && entry.kind == kind)
+            .ok_or_else(|| error("service.materialize of an entry the packet does not hold"))?;
+        source.services.remove(index);
+        let record = store(runtime, Data::Packet(source));
+        consume(runtime, (*input).record);
+        (*input).record = 0;
+        post.write(MaterializePost { packet: PacketSlot { record }, token: holder });
+        Ok(())
+    })
+}

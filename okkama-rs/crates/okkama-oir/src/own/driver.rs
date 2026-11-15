@@ -7,6 +7,7 @@ mod control;
 mod finalize;
 mod defers;
 mod buffers;
+mod futures;
 use super::*;
 use super::analyze::analyze_function;
 use super::bindings::{block, parameter, plain_or_service, LatestValue, SealedSsa, SsaSlot};
@@ -67,11 +68,21 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
         let root = body.blocks.get(body.entry).map_err(arena)?.lexical_scope;
         let fixed_observation = fixed_root(&output.module, *function)
             || data.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Destroy(_)));
-        if (output.analysis.scopes[&root].empty_scope_eligible || fixed_observation) && !helpers.contains(function) {
+        // The runtime starts an async body with its accepted input packet (async ABI C-2),
+        // so only a fixed root (async main, an async test) observes.
+        let asynchronous = data.attrs.contains(&FunctionAttr::Async);
+        let eligible = output.analysis.scopes.get(&root)
+            .ok_or_else(|| flow_error("function root scope has no analysis facts"))?.empty_scope_eligible;
+        let empty = eligible && !asynchronous;
+        if (empty || fixed_observation) && !helpers.contains(function) {
             let mut summary = output.module.summaries.get(data.summary.unwrap()).map_err(arena)?.clone();
             summary.entry_kind = EntryKind::ObservationAdmissionStaysCaller;
             let summary = output.module.summaries.alloc(summary).map_err(arena)?;
-            output.module.functions.get_mut(*function).map_err(arena)?.summary = Some(summary);
+            let data = output.module.functions.get_mut(*function).map_err(arena)?;
+            data.summary = Some(summary);
+            if asynchronous {
+                data.async_body_summary = Some(summary);
+            }
         }
     }
     super::entries::dictionary_summaries(&mut output.module, emitter.budget_ref())?;
@@ -115,7 +126,8 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
         let empty_reserves = exits::empty_reserve_scopes(&output.module, &high, &graph, &flows[&function],
             &output.analysis, emitter.budget_ref())?;
         retained.retain(|scope| !empty_reserves.contains(scope));
-        if helpers.contains(&function) {
+        // An async action's final successful close delivers cancellation (D18).
+        if helpers.contains(&function) || super::futures::is_async(&output.module, function) {
             retained.insert(root);
         }
         for (scope, declaration) in output.module.scopes.iter() {
@@ -157,12 +169,10 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
             replacement_returns: vec![],
             constructor_inputs: flows[&function].constructor_inputs.clone(),
             flow: &flows[&function], elide_offers, definitions: BTreeMap::new(), origins,
-            witnesses: &entry_sets.witnesses, builder_owners,
+            witnesses: &entry_sets.witnesses, builder_owners, cache_duties: vec![], exit_landing: None,
+            dynamic_owners: BTreeSet::new(), temporaries: BTreeSet::new(),
         };
-        if high.service_schedules.iter().any(|schedule| !schedule.duties.is_empty()) {
-            return Err(phase_error(OwnDiagnosticKind::UnsupportedAsync,
-                "nonempty service holder schedules require commit 5"));
-        }
+        driver.temporaries = driver.temporary_futures();
         let captured: BTreeSet<_> = high.insts.iter().flat_map(|(_, instruction)| match &instruction.op {
             Operation::Lexical(LexicalOp::DeferRegister { action, .. }) => action.bindings.clone(),
             _ => vec![],
@@ -315,7 +325,7 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
             signature.ownership_abi = OwnershipAbi::Explicit { input_packet, output_packet };
             point.env.linear.insert(packet);
             point = driver.emit(point, Operation::Ownership(OwnershipOp::ScopeBegin { scope: root }))?;
-            let state = point.env.scopes[&root];
+            let state = point.env.state(root)?;
             point = driver.emit(point, Operation::Ownership(OwnershipOp::Accept { state, packet }))?;
         } else {
             signature.ownership_abi = OwnershipAbi::Observation;
@@ -417,8 +427,9 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                             _ if helpers.contains(&function) => Some(DeferReturnTag::Continue),
                             _ => None,
                         };
+                        driver.exit_landing = None;
                         point = driver.prepare(point, values.first().copied(), None)?;
-                        point = driver.close_all(point, false)?;
+                        point = driver.close_final(point)?;
                         let committed = if point.env.cleanup.pending.is_some() {
                             let result = values.first().map(|value| high.values.get(*value).unwrap().ty);
                             point = driver.commit(point, ExitDestination::Caller, result)?;
@@ -449,8 +460,10 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                         };
                     }
                     TermKind::Raise(failure) => {
+                        // A raise inside a try follows its block's unwind to the enclosing catch dispatch.
                         point.env.cleanup.failure = Some(point.env.value(*failure)?.value);
-                        driver.failures.push(FailureRoute { point, target: None });
+                        let target = driver.current_unwind.clone();
+                        driver.failures.push(FailureRoute { point, target });
                     }
                     // A tombstone with live linear state (an exhaustive match's
                     // default) becomes an unreachable trap: the verifier treats it
@@ -516,7 +529,7 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                         .into_iter().rev().find(|scope| point.env.scopes.contains_key(scope))
                         .ok_or_else(|| flow_error("packet restoration without a retained scope"))?
                 };
-                let state = point.env.scopes[&owner];
+                let state = point.env.state(owner)?;
                 point = driver.emit(point, Operation::Ownership(OwnershipOp::Admit { state, packet }))?;
             }
             driver.current_unwind = target.clone();
@@ -544,6 +557,7 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
             }).transpose()?;
             driver.body.service_schedules.push(schedule);
         }
+        driver.cache_schedules()?;
         driver.emitter.charge(driver.body.values.len() * (1 + driver.body.descriptor_bindings.len()), 0)?;
         for (_, value) in driver.body.values.iter_mut() {
             let Type::Parameter(parameter) = driver.module.types.get(value.ty).map_err(arena)? else { continue };
@@ -616,6 +630,17 @@ struct Driver<'a, 'o> {
     constructor_inputs: BTreeMap<InstId, BTreeSet<ScopeId>>,
     /// The lexical scope of the `builder.new` behind every High buffer version.
     builder_owners: BTreeMap<ValueId, ScopeId>,
+    /// Cache duties in creation order: the owner scope and the Future (D12, D16).
+    cache_duties: Vec<(ScopeId, ValueId)>,
+    /// The destination of the exit whose scopes are closing: the landing scope
+    /// of an edge, or the caller (`None`) for a return. A `cache.rehome` of an
+    /// escaping cache duty names it (C-4).
+    exit_landing: Option<ScopeId>,
+    /// Scopes that admit service entries at run time: their schedules end with
+    /// the dynamic step (D25.3).
+    dynamic_owners: BTreeSet<ScopeId>,
+    /// High Futures that their awaiting scope takes (OIR-2 §10.2, §10.3).
+    temporaries: BTreeSet<ValueId>,
 }
 impl Driver<'_, '_> {
     /// Whether values of `ty` carry full dependencies. Linear buffers never do:
@@ -637,20 +662,7 @@ impl Driver<'_, '_> {
         op: Operation,
         restored: Option<ValueId>,
     ) -> Result<Landing, OwnError> {
-        let mut needed: BTreeSet<ValueId> = BTreeSet::new();
-        if let Some(target) = &self.current_unwind {
-            needed.extend(&target.args);
-            needed.extend(&self.failure_live[&target.block]);
-        }
-        for prefix in point.env.cleanup.defers.values() {
-            for registration in prefix {
-                if let Operation::Lexical(LexicalOp::DeferRegister { action, .. }) =
-                    &self.high.insts.get(*registration).unwrap().op {
-                    needed.extend(&action.captures);
-                }
-            }
-        }
-        point.env.unwind_values = Some(needed);
+        point.env.unwind_values = Some(self.unwind_needed(&point));
         let closed_parent = match &op {
             Operation::Ownership(OwnershipOp::ScopeEnd { state, .. }) => {
                 match self.module.types.get(self.body.values.get(*state).map_err(arena)?.ty).map_err(arena)? {
@@ -672,15 +684,36 @@ impl Driver<'_, '_> {
             if let Some(parent) = closed_parent {
                 self.body.blocks.get_mut(unwind.block).map_err(arena)?.lexical_scope = parent;
             }
-            let target = self.current_unwind.clone().filter(|target| {
-                let lexical = self.high.blocks.get(target.block).unwrap().lexical_scope;
-                !self.retained.contains(&lexical) || unwind.env.scopes.contains_key(&lexical)
-            });
+            let target = self.unwind_target(&unwind.env);
             self.record_failure(unwind, target)?;
         }
         let mut normal = emission.normal;
         normal.env.cleanup.primary_before_failure = None;
         Ok(normal)
+    }
+    /// High references the exceptional continuation of the current operation needs.
+    fn unwind_needed(&self, point: &Landing) -> BTreeSet<ValueId> {
+        let mut needed: BTreeSet<ValueId> = BTreeSet::new();
+        if let Some(target) = &self.current_unwind {
+            needed.extend(&target.args);
+            needed.extend(&self.failure_live[&target.block]);
+        }
+        for prefix in point.env.cleanup.defers.values() {
+            for registration in prefix {
+                if let Operation::Lexical(LexicalOp::DeferRegister { action, .. }) =
+                    &self.high.insts.get(*registration).unwrap().op {
+                    needed.extend(&action.captures);
+                }
+            }
+        }
+        needed
+    }
+    /// The High handler of an exceptional landing, unless its scope has already closed.
+    fn unwind_target(&self, env: &LiveEnv) -> Option<Target> {
+        self.current_unwind.clone().filter(|target| {
+            let lexical = self.high.blocks.get(target.block).unwrap().lexical_scope;
+            !self.retained.contains(&lexical) || env.scopes.contains_key(&lexical)
+        })
     }
     fn instruction(&mut self, mut point: Landing, instruction: &Instruction) -> Result<Landing, OwnError> {
         let _handling = routing::handling(&instruction.op);
@@ -703,7 +736,9 @@ impl Driver<'_, '_> {
                 };
                 let latest = point.env.value(original)?;
                 let owner = self.high.bindings.get(binding).map_err(arena)?.scope;
-                if self.managed(self.body.values.get(value).map_err(arena)?.ty)
+                let ty = self.body.values.get(value).map_err(arena)?.ty;
+                // A Future's binding names it; its cache duty stays in the owner state (D12).
+                if self.managed(ty) && !super::futures::is_future(self.module, ty)
                     && point.env.scopes.contains_key(&owner) {
                     let packet;
                     if point.env.scopes.len() == 1 {
@@ -721,7 +756,7 @@ impl Driver<'_, '_> {
                     let resource = point.env.value(original)?.value;
                     let binding = ElaboratedBinding {
                         binding, resource: ResourceValue { value: resource, packet },
-                        state: point.env.scopes[&owner], original_scope: owner,
+                        state: point.env.state(owner)?, original_scope: owner,
                     };
                     let op = if matches!(instruction.op, Operation::Lexical(LexicalOp::Rebind { .. })) {
                         OwnershipOp::Rebind { binding }
@@ -741,6 +776,15 @@ impl Driver<'_, '_> {
                 point.env.cleanup.defers.entry(scope).or_default().push(inst);
                 return Ok(point);
             }
+            Operation::Call(CallOp::Direct { function, .. }) if super::futures::is_async(self.module, function) => {
+                return self.create_future(point, instruction, function);
+            }
+            Operation::Async(AsyncOp::Await { .. }) => return self.await_future(point, instruction),
+            // Elaboration §13.1, Champ draft 3 §5: a cancellation request and the two queries only observe the
+            // Future. Cancelling a cold Future never moves its inputs: they stay with its cache duty in the
+            // owner's journal until that duty settles at the owner's close.
+            Operation::Async(AsyncOp::FutureCancel { .. } | AsyncOp::FutureDone { .. }
+                | AsyncOp::FutureCancelled { .. }) => {}
             Operation::Call(CallOp::Direct { function, .. } | CallOp::Native { function, .. }
                 | CallOp::Intrinsic { function, .. }) => return self.call(point, instruction, function),
             Operation::Call(CallOp::Closure { .. } | CallOp::Cap { .. } | CallOp::Role { .. }) => {
@@ -810,12 +854,18 @@ impl Driver<'_, '_> {
         }
         Ok(point)
     }
-    fn close_one(&mut self, mut point: Landing, scope: ScopeId, unwind: bool) -> Result<Landing, OwnError> {
+    fn close_one(&mut self, point: Landing, scope: ScopeId, unwind: bool) -> Result<Landing, OwnError> {
+        self.close_scope(point, scope, unwind, false)
+    }
+    /// `cancel` adds final deferred-cancellation delivery to the close (D18).
+    fn close_scope(&mut self, mut point: Landing, scope: ScopeId, unwind: bool, cancel: bool)
+        -> Result<Landing, OwnError> {
         point = self.run_defers(point, scope)?;
         if !unwind && point.env.cleanup.pending.is_some() {
+            point = self.rehome_caches(point, scope)?;
             point = self.extend(point, scope)?;
         }
-        let state = point.env.scopes[&scope];
+        let state = point.env.state(scope)?;
         let reserve = point.env.cleanup.pending;
         point.env.bindings.retain(|binding, _| self.high.bindings.get(*binding)
             .is_ok_and(|binding| binding.scope != scope));
@@ -831,7 +881,9 @@ impl Driver<'_, '_> {
             let journals = &point.env.journals;
             point.env.values.retain(|value, _| needed.contains(value) || journals.contains_key(value));
         }
-        let effects = self.analysis.scopes[&scope].effects.clone();
+        let mut effects = self.analysis.scopes.get(&scope)
+            .ok_or_else(|| flow_error("closed scope has no analysis facts"))?.effects.clone();
+        effects.cancel = cancel;
         let op = if unwind {
             OwnershipOp::ScopeUnwind {
                 state, failure: point.env.cleanup.failure.ok_or_else(|| flow_error("missing active failure"))?,
@@ -879,6 +931,7 @@ impl Driver<'_, '_> {
         } else {
             vec![]
         };
+        self.exit_landing = Some(original.lexical_scope);
         if !prologue && !unwind && let Some(closing) = closing {
             point = self.prepare_edge(point, &escaped, closing)?;
         }
@@ -904,6 +957,7 @@ impl Driver<'_, '_> {
                 Some(ExitDestination::Loop(boundary)) => ExitDestination::Loop(boundary),
                 _ => ExitDestination::Scope(original.lexical_scope),
             };
+            let rehomed = point.env.cleanup.rehomed;
             point = self.commit(point, destination, result)?;
             if let Some(value) = escaped.first().filter(|_| escaped.len() == 1) {
                 point.env.values.insert(*value, LatestValue {
@@ -911,8 +965,13 @@ impl Driver<'_, '_> {
                 });
             }
             let packet = point.result(SlotName::Packet)?;
-            let state = point.env.scopes[&original.lexical_scope];
+            let state = point.env.state(original.lexical_scope)?;
             point = self.emit(point, Operation::Ownership(OwnershipOp::Admit { state, packet }))?;
+            // Admitted service entries join the landing scope's dynamic inventory (D25.3).
+            if rehomed {
+                self.dynamic_owners.insert(original.lexical_scope);
+            }
+            point.env.cleanup.rehomed = false;
             point.env.cleanup.wanted = None;
             point.env.cleanup.carried.clear();
         }

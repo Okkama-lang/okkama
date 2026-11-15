@@ -1,0 +1,102 @@
+id	path	slice	wave	mode	outcome	exit	golden	blocker	note
+L00.exit.async-main	conformance/cases/L00-bootstrap/exit.async-main/case.json	V5	W1	run	success	5	-	-	async main without await
+L01.gram.action.forms	conformance/cases/L01-lexical-and-grammar/gram.action.forms/case.json	parse	-	parse	success	-	-	-	parse-only case
+L01.gram.role.members	conformance/cases/L01-lexical-and-grammar/gram.role.members/case.json	parse	-	parse	success	-	-	-	parse-only case
+L01.gram.test.skipped-in-production	conformance/cases/L01-lexical-and-grammar/gram.test.skipped-in-production/case.json	pruned	-	run	success	3	-	-	the async test is pruned in production
+L03.anonymous.async-rejected	conformance/cases/L03-control-flow-and-calls/anonymous.async-rejected/case.json	frontend	-	run	reject	-	-	-	the parser rejects async anonymous actions (Bible §20.11)
+L04.fakes.typed-state	conformance/cases/L04-objects-roles-caps-successors/fakes.typed-state/case.json	F1	W3	test	success	0	-	-	async test
+L06.native.decl-valid-forms	conformance/cases/L06-modules-and-native-boundaries/native.decl-valid-forms/case.json	parse	-	parse	success	-	-	-	parse-only case
+L07.destroy.async-in-sync-rejected	conformance/cases/L07-errors-cleanup-and-lifetimes/destroy.async-in-sync-rejected/case.json	frontend	-	run	error	-	-	-	plan §4 lists it under D1; the checker rejects owning an async destroy in sync code
+L07.destroy.async-not-interrupted	conformance/cases/L07-errors-cleanup-and-lifetimes/destroy.async-not-interrupted/case.json	D1	W4	run	success	0	-	-	plan §4 D1
+L07.destroy.async-on-cancel	conformance/cases/L07-errors-cleanup-and-lifetimes/destroy.async-on-cancel/case.json	D1	W4	run	success	0	-	-	plan §4 D1
+L07.destroy.async-on-failure	conformance/cases/L07-errors-cleanup-and-lifetimes/destroy.async-on-failure/case.json	D1	W4	run	success	0	-	-	plan §4 D1
+L07.destroy.async-scope-exit	conformance/cases/L07-errors-cleanup-and-lifetimes/destroy.async-scope-exit/case.json	D1	W4	run	success	0	-	-	plan §4 D1
+L07.test-runner.all-pass-async	conformance/cases/L07-errors-cleanup-and-lifetimes/test-runner.all-pass-async/case.json	F1	W3	test	success	0	-	-	async test
+L08.atomic.compare-and-replace	conformance/cases/L08-async-and-concurrency/atomic.compare-and-replace/case.json	V5	W1	run	success	0	-	-	plan §4 lists it under G1; only Atomic<int> in async main is lowered, unused async/* imports are not
+L08.await.in-async-main	conformance/cases/L08-async-and-concurrency/await.in-async-main/case.json	V5	W1	run	success	0	okkama-rs/crates/okkama-compiler/src/lowering/oir2/goldens/p2_5/L08.await.in-async-main.oir	-	W1 case of plan §4 V5 and V10
+L08.await.in-sync-action	conformance/cases/L08-async-and-concurrency/await.in-sync-action/case.json	frontend	-	run	error	-	-	-	the checker rejects await outside async actions
+L08.await.non-future	conformance/cases/L08-async-and-concurrency/await.non-future/case.json	frontend	-	run	error	-	-	-	the checker rejects await of a non-Future
+L08.cancel.after-await-settled	conformance/cases/L08-async-and-concurrency/cancel.after-await-settled/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1
+L08.cancel.awaited-cleanup-settles	conformance/cases/L08-async-and-concurrency/cancel.awaited-cleanup-settles/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1; also defer await (R3)
+L08.cancel.awaited-spawned	conformance/cases/L08-async-and-concurrency/cancel.awaited-spawned/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1; also defer await (R3)
+L08.cancel.nested-frame-next-await	conformance/cases/L08-async-and-concurrency/cancel.nested-frame-next-await/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1
+L08.cancel.shared-awaited-survives	conformance/cases/L08-async-and-concurrency/cancel.shared-awaited-survives/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1; also defer await (R3)
+L08.cancellation.cooperative-token	conformance/cases/L08-async-and-concurrency/cancellation.cooperative-token/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1
+L08.channel.close-semantics	conformance/cases/L08-async-and-concurrency/channel.close-semantics/case.json	Q2	W3	run	success	0	-	-	plan §4 Q2
+L08.channel.negative-capacity	conformance/cases/L08-async-and-concurrency/channel.negative-capacity/case.json	Q2	W3	run	success	0	-	-	plan §4 Q2
+L08.channel.rendezvous	conformance/cases/L08-async-and-concurrency/channel.rendezvous/case.json	Q2	W3	run	success	0	-	-	plan §4 Q2
+L08.collect.all-futures-order	conformance/cases/L08-async-and-concurrency/collect.all-futures-order/case.json	G1	W3	run	success	0	-	-	plan §4 G1
+L08.collect.completions-consumers	conformance/cases/L08-async-and-concurrency/collect.completions-consumers/case.json	G1	W3	run	success	0	-	-	plan §4 G1
+L08.collect.first-successful-and-completions	conformance/cases/L08-async-and-concurrency/collect.first-successful-and-completions/case.json	G1	W3	run	success	0	-	-	plan §4 G1
+L08.collect.race-empty	conformance/cases/L08-async-and-concurrency/collect.race-empty/case.json	G1	W3	run	success	0	-	role-adapter	plan §4 G1
+L08.collect.settlement-order	conformance/cases/L08-async-and-concurrency/collect.settlement-order/case.json	G1	W3	run	success	0	-	-	plan §4 G1
+L08.db.query-lifetime	conformance/cases/L08-async-and-concurrency/db.query-lifetime/case.json	N1	W3	run	success	0	-	-	plan §4 N1
+L08.deadlock.after-timer	conformance/cases/L08-async-and-concurrency/deadlock.after-timer/case.json	Q1	W3	run	failure	-	-	-	plan §4 Q1
+L08.deadlock.two-tasks	conformance/cases/L08-async-and-concurrency/deadlock.two-tasks/case.json	Q1	W3	run	failure	-	-	-	plan §4 Q1
+L08.failure.rethrown-at-every-await	conformance/cases/L08-async-and-concurrency/failure.rethrown-at-every-await/case.json	V5	W1	run	success	0	okkama-rs/crates/okkama-compiler/src/lowering/oir2/goldens/p2_5/L08.failure.rethrown-at-every-await.oir	-	W1 case of plan §4 V5 and V10
+L08.failure.spawned-task-observed	conformance/cases/L08-async-and-concurrency/failure.spawned-task-observed/case.json	P1	W3	run	success	0	-	-	plan §4 P1
+L08.for-await.multiple-bindings	conformance/cases/L08-async-and-concurrency/for-await.multiple-bindings/case.json	frontend	-	check	reject	-	-	-	the checker rejects for await with two bindings
+L08.for-await.stream	conformance/cases/L08-async-and-concurrency/for-await.stream/case.json	Q2	W3	run	success	0	-	-	plan §4 Q2 and F1 (async role slot Reading.next)
+L08.for-await.sync-action	conformance/cases/L08-async-and-concurrency/for-await.sync-action/case.json	frontend	-	check	reject	-	-	-	the checker rejects for await outside async actions
+L08.for-await.sync-next	conformance/cases/L08-async-and-concurrency/for-await.sync-next/case.json	frontend	-	check	reject	-	-	-	the checker rejects for await over a sync next
+L08.for-await.wrong-result	conformance/cases/L08-async-and-concurrency/for-await.wrong-result/case.json	frontend	-	check	reject	-	-	-	the checker rejects a next without Maybe
+L08.future.cancel-unstarted	conformance/cases/L08-async-and-concurrency/future.cancel-unstarted/case.json	K2	W2	run	success	0	-	-	plan §4 K2; catch e is Cancelled (#724); fut.cancel in High with K1; runs on Champ (champ_cases_async)
+L08.future.lazy-and-cached	conformance/cases/L08-async-and-concurrency/future.lazy-and-cached/case.json	V5	W1	run	success	0	okkama-rs/crates/okkama-compiler/src/lowering/oir2/goldens/p2_5/L08.future.lazy-and-cached.oir	-	W1 case of plan §4 V5 and V10
+L08.future.never-awaited	conformance/cases/L08-async-and-concurrency/future.never-awaited/case.json	V5	W1	run	success	0	okkama-rs/crates/okkama-compiler/src/lowering/oir2/goldens/p2_5/L08.future.never-awaited.oir	-	W1 case of plan §4 V5 and V10
+L08.future.no-implicit-await	conformance/cases/L08-async-and-concurrency/future.no-implicit-await/case.json	frontend	-	run	error	-	-	-	the checker rejects a Future used as its value
+L08.future.passed-and-awaited-elsewhere	conformance/cases/L08-async-and-concurrency/future.passed-and-awaited-elsewhere/case.json	V5	W1	run	success	0	okkama-rs/crates/okkama-compiler/src/lowering/oir2/goldens/p2_5/L08.future.passed-and-awaited-elsewhere.oir	-	W1 case of plan §4 V5 and V10
+L08.intrinsic.retained-arguments	conformance/cases/L08-async-and-concurrency/intrinsic.retained-arguments/case.json	Q2	W3	run	success	0	-	-	plan §4 R3 (High) and Q2
+L08.order.across-suspension	conformance/cases/L08-async-and-concurrency/order.across-suspension/case.json	V5	W1	run	success	0	okkama-rs/crates/okkama-compiler/src/lowering/oir2/goldens/p2_5/L08.order.across-suspension.oir	-	W1 case of plan §4 V5 and V10
+L08.order.lazy-branches	conformance/cases/L08-async-and-concurrency/order.lazy-branches/case.json	V5	W1	run	success	0	okkama-rs/crates/okkama-compiler/src/lowering/oir2/goldens/p2_5/L08.order.lazy-branches.oir	-	W1 case of plan §4 V5 and V10
+L08.role-shape.async-dispatch	conformance/cases/L08-async-and-concurrency/role-shape.async-dispatch/case.json	F1	W3	run	success	0	-	-	plan §4 F1
+L08.role-shape.async-mismatch	conformance/cases/L08-async-and-concurrency/role-shape.async-mismatch/case.json	frontend	-	run	error	-	-	-	the checker rejects a sync implementation of an async role slot
+L08.scope.future-scope-and-deadlines	conformance/cases/L08-async-and-concurrency/scope.future-scope-and-deadlines/case.json	G1	W3	run	success	0	-	-	plan §4 G1; also a bound async action value (F1)
+L08.scope.group-waits	conformance/cases/L08-async-and-concurrency/scope.group-waits/case.json	G1	W3	run	success	0	-	-	plan §4 G1
+L08.shutdown.outstanding-task-cleanup	conformance/cases/L08-async-and-concurrency/shutdown.outstanding-task-cleanup/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1
+L08.shutdown.unobserved-failure	conformance/cases/L08-async-and-concurrency/shutdown.unobserved-failure/case.json	P1	W3	run	error	-	-	-	plan §4 P1
+L08.spawn.eager-start-and-channel	conformance/cases/L08-async-and-concurrency/spawn.eager-start-and-channel/case.json	Q2	W3	run	success	0	-	-	plan §4 Q2
+L08.spawn.event-barrier	conformance/cases/L08-async-and-concurrency/spawn.event-barrier/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1
+L08.spawn.worker-process	conformance/cases/L08-async-and-concurrency/spawn.worker-process/case.json	X1	W4	run	success	0	-	-	plan §4 X1
+L08.spawn.worker-rejects-objects	conformance/cases/L08-async-and-concurrency/spawn.worker-rejects-objects/case.json	frontend	-	run	error	-	-	-	plan §4 lists it under X1; the checker rejects a non-transferable worker value
+L08.timeout.before-and-within	conformance/cases/L08-async-and-concurrency/timeout.before-and-within/case.json	G1	W3	run	success	0	-	-	plan §4 G1; also the async role slot Timing.wait (F1)
+L08.void.await-for-effect	conformance/cases/L08-async-and-concurrency/void.await-for-effect/case.json	V5	W1	run	success	0	okkama-rs/crates/okkama-compiler/src/lowering/oir2/goldens/p2_5/L08.void.await-for-effect.oir	-	W1 case of plan §4 V5 and V10
+L08.void.capture-await	conformance/cases/L08-async-and-concurrency/void.capture-await/case.json	frontend	-	run	error	-	-	-	plan §4 lists it under R3 and R6; the checker rejects the value of an async void await
+L08.wake.already-settled	conformance/cases/L08-async-and-concurrency/wake.already-settled/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1
+L08.wake.async-destroy-on-cancel	conformance/cases/L08-async-and-concurrency/wake.async-destroy-on-cancel/case.json	D1	W4	run	success	0	-	-	plan §4 D1
+L08.wake.cancel-defers-cleanup	conformance/cases/L08-async-and-concurrency/wake.cancel-defers-cleanup/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1
+L08.wake.channel-and-semaphore	conformance/cases/L08-async-and-concurrency/wake.channel-and-semaphore/case.json	Q2	W3	run	success	0	-	-	plan §4 Q2
+L08.wake.event-set	conformance/cases/L08-async-and-concurrency/wake.event-set/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1
+L08.wake.multiple-waiters	conformance/cases/L08-async-and-concurrency/wake.multiple-waiters/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1
+L08.wake.no-external	conformance/cases/L08-async-and-concurrency/wake.no-external/case.json	Q2	W3	run	success	0	-	-	plan §4 Q2
+L08.wake.spawn-and-cold-start	conformance/cases/L08-async-and-concurrency/wake.spawn-and-cold-start/case.json	P1	W3	run	success	0	-	-	plan §4 P1
+L08.wake.transitive	conformance/cases/L08-async-and-concurrency/wake.transitive/case.json	G1	W3	run	success	0	-	-	plan §4 G1
+L10.clock.monotonic-order	conformance/cases/L10-stdlib-host-resources/clock.monotonic-order/case.json	N1	W3	run	success	0	-	-	plan §4 N1 (L10); also the async role slot Timing.wait (F1)
+L10.process.capture	conformance/cases/L10-stdlib-host-resources/process.capture/case.json	N1	W3	run	success	0	-	native-failure	plan §4 N1 (L10)
+L11.sqlite.cancel-close-race	conformance/cases/L11-protocols-and-persistence/sqlite.cancel-close-race/case.json	N1	W3	run	success	0	-	atomic-nonplain	async sqlite natives and defer await (R3)
+L11.sqlite.closed-reply-row	conformance/cases/L11-protocols-and-persistence/sqlite.closed-reply-row/case.json	N1	W3	run	success	0	-	atomic-nonplain	async sqlite natives and defer await (R3)
+L11.sqlite.constraint-failure	conformance/cases/L11-protocols-and-persistence/sqlite.constraint-failure/case.json	N1	W3	run	success	0	-	atomic-nonplain	async sqlite natives and defer await (R3)
+L11.sqlite.exact-large-values	conformance/cases/L11-protocols-and-persistence/sqlite.exact-large-values/case.json	N1	W3	run	success	0	-	atomic-nonplain	async sqlite natives and defer await (R3)
+L11.sqlite.param-binding	conformance/cases/L11-protocols-and-persistence/sqlite.param-binding/case.json	N1	W3	run	success	0	-	atomic-nonplain	async sqlite natives and defer await (R3)
+L11.sqlite.prepared-pool-query	conformance/cases/L11-protocols-and-persistence/sqlite.prepared-pool-query/case.json	N1	W3	run	success	0	-	atomic-nonplain	async sqlite natives and defer await (R3)
+L11.sqlite.query-cardinality	conformance/cases/L11-protocols-and-persistence/sqlite.query-cardinality/case.json	N1	W3	run	success	0	-	atomic-nonplain	async sqlite natives and defer await (R3)
+L11.sqlite.raw-transaction-control-rejected	conformance/cases/L11-protocols-and-persistence/sqlite.raw-transaction-control-rejected/case.json	N1	W3	run	success	0	-	atomic-nonplain	async sqlite natives and defer await (R3)
+L11.sqlite.round-trip	conformance/cases/L11-protocols-and-persistence/sqlite.round-trip/case.json	N1	W3	run	success	0	-	atomic-nonplain	async sqlite natives and defer await (R3)
+L11.sqlite.throughput-lifetime	conformance/cases/L11-protocols-and-persistence/sqlite.throughput-lifetime/case.json	N1	W3	run	success	0	-	atomic-nonplain	async sqlite natives and defer await (R3)
+L11.sqlite.transaction-rollback-commit	conformance/cases/L11-protocols-and-persistence/sqlite.transaction-rollback-commit/case.json	N1	W3	run	success	0	-	atomic-nonplain	async sqlite natives and defer await (R3)
+L11.tcp.cancelled-read-keeps-data	conformance/cases/L11-protocols-and-persistence/tcp.cancelled-read-keeps-data/case.json	N1	W3	run	success	0	-	-	async network natives, spawn and timeouts
+L11.tcp.connection-refused	conformance/cases/L11-protocols-and-persistence/tcp.connection-refused/case.json	N1	W3	run	success	0	-	native-failure	async tcp natives
+L11.tcp.echo-round-trip	conformance/cases/L11-protocols-and-persistence/tcp.echo-round-trip/case.json	N1	W3	run	success	0	-	native-failure	async tcp natives
+L11.tcp.peer-eof	conformance/cases/L11-protocols-and-persistence/tcp.peer-eof/case.json	N1	W3	run	success	0	-	native-failure	async tcp natives
+L11.tls.cancelled-read-keeps-data	conformance/cases/L11-protocols-and-persistence/tls.cancelled-read-keeps-data/case.json	N1	W3	run	success	0	-	-	async network natives, spawn and timeouts
+L12.await-cap-continuation	conformance/cases/L12-cross-feature-adversarial/await-cap-continuation/case.json	G1	W3	run	success	0	-	-	Event and FutureGroup
+L12.cancellation-runs-cleanup	conformance/cases/L12-cross-feature-adversarial/cancellation-runs-cleanup/case.json	Q1	W3	run	success	0	-	-	Event and spawn
+L12.concurrent-cas-and-dedup	conformance/cases/L12-cross-feature-adversarial/concurrent-cas-and-dedup/case.json	G1	W3	run	success	0	-	-	spawn, Event and AllFutures
+L12.exact-number-json-sqlite	conformance/cases/L12-cross-feature-adversarial/exact-number-json-sqlite/case.json	N1	W3	run	success	0	-	atomic-nonplain	async sqlite natives and defer await (R3)
+L12.future-successor-dropped	conformance/cases/L12-cross-feature-adversarial/future-successor-dropped/case.json	frontend	-	run	error	-	-	-	the checker rejects a dropped successor result
+L12.future-successor-obligation	conformance/cases/L12-cross-feature-adversarial/future-successor-obligation/case.json	R3	W2	run	success	0	-	-	async successor outcome ^Counter
+L12.primary-failure-over-cleanup	conformance/cases/L12-cross-feature-adversarial/primary-failure-over-cleanup/case.json	N1	W3	run	success	0	-	atomic-nonplain	async sqlite natives and defer await (R3)
+L12.role-restriction-through-async	conformance/cases/L12-cross-feature-adversarial/role-restriction-through-async/case.json	R3	W2	run	success	0	-	-	role-typed outcome; own treats it as resource-bearing until R1
+L12.role-restriction-through-async-hidden	conformance/cases/L12-cross-feature-adversarial/role-restriction-through-async-hidden/case.json	frontend	-	run	error	-	-	-	the checker rejects a hidden action through a role
+L13.durable-command-replay	conformance/cases/L13-application-scenarios/durable-command-replay/case.json	N1	W3	run	success	0	-	atomic-nonplain	async sqlite natives and defer await (R3)
+L13.migration-and-restart	conformance/cases/L13-application-scenarios/migration-and-restart/case.json	N1	W3	run	success	0	-	atomic-nonplain	async sqlite natives and defer await (R3)
+L13.optimistic-locking	conformance/cases/L13-application-scenarios/optimistic-locking/case.json	N1	W3	run	success	0	-	atomic-nonplain	async sqlite natives and defer await (R3)

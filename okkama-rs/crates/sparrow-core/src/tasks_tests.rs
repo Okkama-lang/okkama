@@ -272,3 +272,94 @@ fn await_take_in_a_nested_frame_delivers_a_later_cancellation_at_the_next_await(
     assert_eq!(source.matches("await.take").count(), 2);
     assert!(passes(&source));
 }
+
+/// The #670 walk over the frames awaiting a frame, on hand-built frames.
+mod requested_walk {
+    use crate::heap;
+    use crate::runtime::Runtime;
+    use crate::tasks::*;
+    use crate::word::{Repr, UNBOUND, Word};
+
+    fn runtime() -> Box<Runtime> {
+        let program = okkama_sparrow::Program::default();
+        Box::new(Runtime::new(crate::program::Loaded::new(program)).unwrap())
+    }
+
+    /// A bare async frame: header and fixed words, nothing awaited, no waiter.
+    fn frame(runtime: &mut Runtime) -> Word {
+        let frame = runtime.heap.allocate(1 + FIXED_WORDS);
+        // SAFETY: fresh storage of 1 + FIXED_WORDS words.
+        unsafe {
+            *(frame as *mut u64) = heap::header(heap::FRAME, Repr::Raw, 0);
+            std::ptr::write_bytes((frame + 8) as *mut u64, 0, FIXED_WORDS);
+        }
+        set(frame, WAITER, UNBOUND);
+        set(frame, AWAITING, UNBOUND);
+        frame
+    }
+
+    /// `waiter` awaits `future`.
+    fn awaits(runtime: &mut Runtime, waiter: Word, future: Word) {
+        runtime.listen(future, waiter);
+        set(waiter, AWAITING, future);
+    }
+
+    fn request(frame: Word) {
+        set(frame, FLAGS, get(frame, FLAGS) | CANCEL_REQUESTED);
+    }
+
+    #[test]
+    fn a_deep_chain_of_nested_frames_is_walked_without_recursion() {
+        let mut runtime = runtime();
+        let bottom = frame(&mut runtime);
+        let mut top = bottom;
+        for _ in 0..200_000 {
+            let next = frame(&mut runtime);
+            awaits(&mut runtime, next, top);
+            top = next;
+        }
+        assert_eq!(runtime.requested_above(bottom), None);
+        request(top);
+        assert_eq!(runtime.requested_above(bottom), Some(top));
+    }
+
+    #[test]
+    fn the_first_request_depth_first_in_waiter_order_is_found() {
+        let mut runtime = runtime();
+        let future = frame(&mut runtime);
+        let (first, second, above_first) = (frame(&mut runtime), frame(&mut runtime), frame(&mut runtime));
+        awaits(&mut runtime, first, future);
+        awaits(&mut runtime, second, future);
+        awaits(&mut runtime, above_first, first);
+        request(second);
+        request(above_first);
+        assert_eq!(runtime.requested_above(future), Some(above_first));
+        // A delivered request no longer counts.
+        set(above_first, FLAGS, get(above_first, FLAGS) | CANCEL_DELIVERED);
+        assert_eq!(runtime.requested_above(future), Some(second));
+    }
+
+    #[test]
+    fn listeners_spawned_and_shielded_frames_end_the_walk() {
+        let mut runtime = runtime();
+        let future = frame(&mut runtime);
+        // A frame that only listens to the future does not await it.
+        let listener = frame(&mut runtime);
+        runtime.listen(future, listener);
+        request(listener);
+        assert_eq!(runtime.requested_above(future), None);
+        // A spawned or shielded waiter is a task boundary: requests above it do not count.
+        for boundary in [SPAWNED, SHIELDED] {
+            let future = frame(&mut runtime);
+            let task = frame(&mut runtime);
+            let above = frame(&mut runtime);
+            awaits(&mut runtime, task, future);
+            awaits(&mut runtime, above, task);
+            set(task, FLAGS, boundary);
+            request(above);
+            assert_eq!(runtime.requested_above(future), None);
+            request(task);
+            assert_eq!(runtime.requested_above(future), Some(task));
+        }
+    }
+}

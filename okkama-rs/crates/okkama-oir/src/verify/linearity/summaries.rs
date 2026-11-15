@@ -142,6 +142,10 @@ impl Engine<'_, '_> {
         if !piece.family && graph.contains(&piece.origin) {
             return true;
         }
+        // What a Future's cache holds (its inputs or outcome) is reachable from the Future (D25.1).
+        if piece.holder.is_some_and(|holder| graph.contains(&holder)) {
+            return true;
+        }
         // A retired filter without labels names no particular incarnation.
         piece.predicates.iter().any(|(filter, selected)| {
             *selected && !filter.stale && filter.keys.is_subset(graph)
@@ -176,6 +180,23 @@ impl Engine<'_, '_> {
             std::collections::BTreeMap::new();
         let opaque_sites: BTreeSet<_> = summary.results.iter().filter(|relation| relation.opaque)
             .flat_map(|relation| relation.fresh.iter().copied()).collect();
+        // D25.1: a returned Future brings its duty ServiceOf{result, Cache} as a fresh family, keyed by
+        // the result itself. Its fresh pieces are the Future's cache graph, held by that key.
+        let mut held_sites = std::collections::BTreeMap::new();
+        for (index, relation) in summary.results.iter().enumerate() {
+            let Some(&slot) = language.get(index) else {
+                continue;
+            };
+            let future = match schema.results[slot].ty {
+                ResultType::Exact(ty) => matches!(self.module.types.get(ty), Ok(Type::Future(_))),
+                ResultType::FutureOf(_) => true,
+                _ => false,
+            };
+            if future && summary.results.len() == 1 && !relation.opaque && let Some(&first) = relation.fresh.first() {
+                let key = creation(origin, first);
+                held_sites.extend(relation.fresh.iter().map(|site| (*site, key)));
+            }
+        }
         for (index, relation) in summary.results.iter().enumerate() {
             let Some(&slot) = language.get(index) else {
                 continue;
@@ -188,9 +209,16 @@ impl Engine<'_, '_> {
             }
             // A declared opaque relation (an open callable) never identifies its
             // result with an input alias or a single fresh site (#569 O1).
+            let held = relation.fresh.first().and_then(|site| held_sites.get(site)).copied();
             let opaque = relation.opaque || relation.aliases.len() > 1 || summary.results.len() > 1
                 || relation.fresh.len() > 1;
-            if opaque {
+            if let Some(key) = held {
+                slots[slot].refs = aliases;
+                slots[slot].refs.insert(key);
+                slots[slot].contained = labels.clone();
+                slots[slot].identity = Some(key);
+                flow.cache_keys.insert(key);
+            } else if opaque {
                 let view = match origin {
                     Origin::Instruction(inst, _) => Origin::ViewInstruction(inst, slot as u16),
                     Origin::Invoke(block, _) => Origin::ViewInvoke(block, slot as u16),
@@ -298,6 +326,15 @@ impl Engine<'_, '_> {
             let key = creation(origin, site);
             let mut piece = Piece::new(key, state);
             piece.family = summary.results.len() > 1;
+            if let Some(holder) = held_sites.get(&site) {
+                // The returned Future's cache graph stays cache-owned in the caller (OIR-2 §10.2).
+                piece.holder = Some(*holder);
+                piece.provenance = provenance_bit(AdmissionProvenance::CacheOwned);
+                output.pieces.insert(piece);
+                flow.provenance.insert(key, provenance_bit(state));
+                flow.dead.remove(&key);
+                continue;
+            }
             // A sync callee lets its fresh graph escape only through its results,
             // and its return check proves exactly that: the exported packet lies in
             // the union of the result graphs. So the fresh piece of an opaque (or
@@ -424,10 +461,12 @@ impl Engine<'_, '_> {
         let Some(summary) = self.declaration.summary.and_then(|id| self.module.summaries.get(id).ok()) else {
             return;
         };
-        let Ok(entry) = self.body.blocks.get(self.body.entry) else {
+        if self.body.blocks.get(self.body.entry).is_err() {
             return;
-        };
-        let arguments: Vec<_> = entry.params.iter().copied().filter(|v| {
+        }
+        // C-2: a D21 async body has its entry values in its start continuation.
+        let parameters = self.entry_values();
+        let arguments: Vec<_> = parameters.iter().copied().filter(|v| {
             self.body.values.get(*v).ok().and_then(|v| self.module.types.get(v.ty).ok())
                 .is_some_and(|ty| !matches!(ty, Type::Service(_) | Type::Descriptor))
         }).collect();
@@ -436,17 +475,18 @@ impl Engine<'_, '_> {
             if flow.active_failure & !allowed != 0 {
                 self.error(R::B51, "body exposes a failure kind absent from its declared summary");
             }
-            if entry.params.iter().any(|v| linear(self.module, self.body, *v)
+            if parameters.iter().any(|v| linear(self.module, self.body, *v)
                 && flow.availability[v.as_u32() as usize] == AVAILABLE) {
                 self.error(R::B54, "failure/cancel exit has not settled accepted inputs");
             }
             return;
         }
+        // A D21 async body publishes its output packet (C-2).
         if summary.entry_kind == EntryKind::Internal
-            && self.declaration.signature.results.iter().any(|ty| {
+            && (self.frame_body() || self.declaration.signature.results.iter().any(|ty| {
                 self.module.types.get(*ty) == Ok(&Type::Service(ServiceType::Own))
-            }) {
-            for &parameter in &entry.params {
+            })) {
+            for &parameter in &parameters {
                 if self.body.values.get(parameter).ok().and_then(|v| self.module.types.get(v.ty).ok())
                     != Some(&Type::Service(ServiceType::Own)) { continue; }
                 if self.empty_ctor_packet(parameter) {
@@ -508,9 +548,14 @@ impl Engine<'_, '_> {
                 let keys = flow.refs[value.as_u32() as usize].clone();
                 let labels = flow.contained[value.as_u32() as usize].clone();
                 for output in values {
-                    let filter = self.graph_filter(flow, keys.clone(), labels.clone(), false);
+                    let mut filter = self.graph_filter(flow, keys.clone(), labels.clone(), false);
+                    // A returned Future carries its cache duty and the packets its cache holds (C-4):
+                    // this check reads the whole graph and extracts nothing. They stay cache-owned, and
+                    // the caller admits them as the Future's fresh family (D25.1).
+                    filter.whole_future = true;
                     let (_, selected) = self.partition_filter(&flow.tokens[output.as_u32() as usize], filter);
-                    if selected.pieces.iter().any(|piece| piece.provenance != provenance_bit(relation.provenance)) {
+                    if selected.pieces.iter().any(|piece| piece.holder.is_none()
+                        && piece.provenance != provenance_bit(relation.provenance)) {
                         self.error(R::B51, "body result provenance differs from its declared summary");
                     }
                 }

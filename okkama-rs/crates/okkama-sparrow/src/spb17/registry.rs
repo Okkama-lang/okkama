@@ -30,6 +30,10 @@ pub struct ResultContext {
     pub labels: Vec<DeferLabel>,
     pub reserve: bool,
     pub active_failure: bool,
+    /// The consumed builder of a builder transition: its normal (or unwind) result keeps this type.
+    pub buffer: Option<Type>,
+    /// The saved slot types `frame.resume` reloads, in its continuation's order (D21).
+    pub slots: Vec<ProducedType>,
 }
 
 macro_rules! registry {
@@ -49,7 +53,8 @@ macro_rules! registry {
             pub fn from_id(id: u32) -> Result<Self, Error> {
                 match id {
                     $( $id => Ok(Self::$variant), )*
-                    0 | 19 | 25 | 34..=36 => Err(error(format!("reserved Champ opcode {id}"))),
+                    // 64..=95 is the async block (Champ draft 3 §14.1); its unassigned IDs stay reserved.
+                    0 | 19 | 25 | 34..=36 | 64..=95 => Err(error(format!("reserved Champ opcode {id}"))),
                     _ => Err(error(format!("unknown Champ opcode {id}"))),
                 }
             }
@@ -99,6 +104,31 @@ registry! {
     44 => Evaluate, "evaluate";
     45 => Catch, "catch";
     46 => DepsEmpty, "deps.empty";
+    56 => BuilderPush, "builder.push";
+    57 => BuilderAppend, "builder.append";
+    58 => BuilderRange, "builder.range";
+    59 => BuilderFinish, "builder.finish";
+    60 => BuilderAbandon, "builder.abandon";
+    61 => Lookup, "lookup";
+    // The async block, Champ draft 3 §14.1 (plan IDs 42–61 are superseded, CQ-1). Wave 1 assigns plain
+    // await, wave 2 (#601 R4) the temporary take, its proof and the rehome; spawn (65), pins (78–80), workers
+    // (81–83), the dynamic settle (84) and service materialize/absorb (85–86) stay reserved.
+    64 => FutureNew, "fut.new";
+    66 => Await, "await";
+    67 => AwaitTake, "await.take";
+    68 => UniqueCacheProof, "unique_cache.proof";
+    69 => CacheRehome, "cache.rehome";
+    70 => FuturePublish, "fut.publish";
+    71 => FutureCancel, "fut.cancel";
+    72 => FutureDone, "fut.done";
+    73 => FutureCancelled, "fut.cancelled";
+    74 => FrameSave, "frame.save";
+    75 => FrameResume, "frame.resume";
+    76 => AwaitUnwind, "await.unwind";
+    77 => CleanupDeliverCancel, "cleanup.deliver_cancel";
+    96 => InvokeDispatch, "invoke.dispatch";
+    97 => InvokeDispatchOwn, "invoke.dispatch.own";
+    98 => OwnDynamic, "own.dynamic";
 }
 
 impl Opcode {
@@ -128,6 +158,9 @@ impl Opcode {
             (OwnSplitChecked, Tag::Unwind) => vec![S(Packet), Value(Type::Failure)],
             (ScopeSplit, Tag::Normal) => vec![S(ScopeState), S(Packet), S(Deps)],
             (ScopeSplit, Tag::Unwind) => vec![S(ScopeState), Value(Type::Failure)],
+            // The packet joins the scope inventory; a failed check returns it unaccepted.
+            (OwnDynamic, Tag::Normal) => vec![S(ScopeState)],
+            (OwnDynamic, Tag::Unwind) => vec![S(ScopeState), S(Packet), Value(Type::Failure)],
             (ScopeTransfer, Tag::Normal | Tag::Unwind) => {
                 let mut slots = vec![S(ScopeState)];
                 if context.between {
@@ -146,8 +179,8 @@ impl Opcode {
             (CleanupNext, Tag::Done) => vec![S(Cleanup)],
             (DestroyDirect | CleanupDestroy, Tag::Normal) => vec![S(Cleanup), S(FailureState)],
             (CleanupFinish, Tag::Normal) => vec![S(Closed), S(FailureState), S(ExitState)],
-            (InvokeObserve, Tag::Normal) => context.value.into_iter().map(Value).collect(),
-            (InvokeObserve, Tag::Unwind) if context.may_fail => vec![Value(Type::Failure)],
+            (InvokeObserve | InvokeDispatch, Tag::Normal) => context.value.into_iter().map(Value).collect(),
+            (InvokeObserve | InvokeDispatch, Tag::Unwind) if context.may_fail => vec![Value(Type::Failure)],
             (ArrayGet, Tag::Normal) => context.value.into_iter().map(Value).collect(),
             (ArrayGet, Tag::Unwind) => vec![Value(Type::Failure)],
             (Fail, Tag::Unwind) => vec![Value(Type::Failure)],
@@ -155,8 +188,10 @@ impl Opcode {
             (Evaluate, Tag::Unwind) => vec![Value(Type::Failure)],
             (Catch, Tag::Some) => context.value.into_iter().map(Value).collect(),
             (Catch, Tag::None) => vec![],
-            (InvokeCallOwn, Tag::Normal) => valued(),
-            (InvokeCallOwn | InvokeDefer, Tag::Unwind) if context.may_fail => vec![Value(Type::Failure)],
+            (InvokeCallOwn | InvokeDispatchOwn, Tag::Normal) => valued(),
+            (InvokeCallOwn | InvokeDispatchOwn | InvokeDefer, Tag::Unwind) if context.may_fail => {
+                vec![Value(Type::Failure)]
+            }
             (InvokeDefer, Tag::Continue) => vec![],
             (InvokeDefer, Tag::Replace(label)) => {
                 let declared = context.labels.iter().find(|declared| declared.label == label)
@@ -176,6 +211,47 @@ impl Opcode {
             }
             (FailureDispatch, Tag::None) => vec![],
             (FailureDispatch, Tag::Some) => vec![Value(Type::Failure)],
+            (BuilderPush | BuilderAppend | BuilderRange, Tag::Normal) => {
+                let buffer = context.buffer.ok_or_else(|| error("builder transition without a buffer type"))?;
+                vec![Value(buffer), S(Packet)]
+            }
+            (BuilderFinish, Tag::Normal) => {
+                let value = context.value.ok_or_else(|| error("builder.finish without a result type"))?;
+                vec![Value(value), S(Packet)]
+            }
+            (BuilderPush | BuilderAppend | BuilderRange | BuilderFinish, Tag::Unwind) => {
+                let buffer = context.buffer.ok_or_else(|| error("builder transition without a buffer type"))?;
+                vec![Value(buffer), S(Packet), Value(Type::Failure)]
+            }
+            (BuilderAbandon, Tag::Normal) => vec![S(Packet)],
+            (Lookup, Tag::Some) => context.value.into_iter().map(Value).collect(),
+            (Lookup, Tag::None) => vec![],
+            (FutureNew, Tag::Normal) => {
+                let future = context.value.ok_or_else(|| error("fut.new without a Future type"))?;
+                vec![Value(future), S(CacheState), S(ScopeState)]
+            }
+            (Await, Tag::Normal) => {
+                let mut slots = context.value.into_iter().map(Value).collect::<Vec<_>>();
+                slots.push(S(Deps));
+                slots
+            }
+            (Await | AwaitTake, Tag::Unwind) => vec![Value(Type::Failure), S(TaskState), S(Receipt)],
+            // The taken outcome: its value, the cache's outcome packet (now the boundary's) and its deps.
+            (AwaitTake, Tag::Normal) => valued(),
+            // The take capability: a proof position of zero words (draft 3 §14.2).
+            (UniqueCacheProof, Tag::Normal) => vec![S(UniqueCache)],
+            // The token form of C-4: the cache duty joins the pending reserve, which continues the exit.
+            (CacheRehome, Tag::Normal) => vec![S(Pending)],
+            (FuturePublish | FutureCancel, Tag::Normal) => vec![],
+            (FutureDone | FutureCancelled, Tag::Normal) => vec![Value(Type::Bool)],
+            (FrameSave, Tag::Normal) => vec![S(Frame)],
+            (FrameResume, Tag::Normal) => {
+                let mut slots = vec![S(Frame)];
+                slots.extend(context.slots.iter().copied());
+                slots
+            }
+            (AwaitUnwind, Tag::Normal) => vec![S(ScopeState), Value(Type::Failure)],
+            (CleanupDeliverCancel, Tag::Normal) => vec![S(Cleanup)],
             _ => return Err(error(format!("invalid outcome {tag:?} for {}", self.name()))),
         };
         Ok(slots)
@@ -184,11 +260,14 @@ impl Opcode {
     pub fn tags(self, context: &ResultContext) -> Vec<Tag> {
         use Opcode::*;
         match self {
-            Catch => vec![Tag::Some, Tag::None],
+            Catch | Lookup => vec![Tag::Some, Tag::None],
+            BuilderPush | BuilderAppend | BuilderRange | BuilderFinish => vec![Tag::Normal, Tag::Unwind],
             Fail => vec![Tag::Unwind],
-            OwnSplitChecked | ScopeSplit | ScopeTransfer | ArrayGet | Evaluate => vec![Tag::Normal, Tag::Unwind],
-            InvokeObserve if context.may_fail => vec![Tag::Normal, Tag::Unwind],
-            InvokeCallOwn => {
+            OwnSplitChecked | ScopeSplit | ScopeTransfer | OwnDynamic | ArrayGet | Evaluate | Await | AwaitTake => {
+                vec![Tag::Normal, Tag::Unwind]
+            }
+            InvokeObserve | InvokeDispatch if context.may_fail => vec![Tag::Normal, Tag::Unwind],
+            InvokeCallOwn | InvokeDispatchOwn => {
                 if context.may_fail { vec![Tag::Normal, Tag::Unwind] } else { vec![Tag::Normal] }
             }
             InvokeDefer => {
@@ -216,10 +295,46 @@ impl Opcode {
     }
 
     pub fn is_terminator(self) -> bool {
-        matches!(self, Self::OwnSplitChecked | Self::ScopeSplit | Self::ScopeTransfer |
+        matches!(self, Self::OwnSplitChecked | Self::ScopeSplit | Self::ScopeTransfer | Self::OwnDynamic |
             Self::InvokeCallOwn | Self::InvokeObserve | Self::InvokeDefer | Self::CleanupNext | Self::ExitDispatch |
+            Self::InvokeDispatch | Self::InvokeDispatchOwn |
             Self::FailureDispatch | Self::RetOwn | Self::RetDefer | Self::ArrayGet | Self::Fail | Self::Evaluate
-            | Self::Catch)
+            | Self::Catch | Self::BuilderPush | Self::BuilderAppend | Self::BuilderRange | Self::BuilderFinish
+            | Self::Lookup | Self::Await | Self::AwaitTake)
+    }
+}
+
+/// The helper classes of Champ G1 §5.4 and draft 3 §1.1. S may also return PENDING: it has then consumed no
+/// linear operand, kept its progress in records reachable from its operands, and registered a wake entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HelperClass { L, G, X, S }
+
+impl Opcode {
+    /// The class of an async operation (Champ draft 3 §14.4), including the nonempty form of
+    /// `cleanup.settle`, which is L in 0.6.0 because no settle waits. The shared effects of each async helper in
+    /// `HELPER_TABLE` give the same class. `unique_cache.proof` has no helper and no class: it is a proof the
+    /// loader checks (`SPB_TAKE_CAPABILITY`).
+    pub const fn helper_class(self) -> Option<HelperClass> {
+        use HelperClass::*;
+        Some(match self {
+            Self::FutureNew => G,
+            Self::Await | Self::AwaitTake | Self::AwaitUnwind => S,
+            Self::FuturePublish | Self::FutureCancel | Self::FutureDone | Self::FutureCancelled | Self::FrameSave
+                | Self::FrameResume | Self::CleanupDeliverCancel | Self::CleanupSettle | Self::CacheRehome => L,
+            _ => return None,
+        })
+    }
+
+    /// A suspension site: an S-class operation bracketed by `frame.save` and `frame.resume` (D20).
+    pub const fn suspends(self) -> bool {
+        matches!(self.helper_class(), Some(HelperClass::S))
+    }
+
+    /// Operations that act on the running body's own frame (draft 3 helpers taking `Word this`): they
+    /// belong to async bodies only.
+    pub const fn frame_bound(self) -> bool {
+        matches!(self, Self::Await | Self::AwaitTake | Self::AwaitUnwind | Self::FuturePublish | Self::FrameSave
+            | Self::FrameResume | Self::CleanupDeliverCancel)
     }
 }
 
@@ -243,7 +358,8 @@ pub struct CallAbi {
 impl Opcode {
     pub const fn call_abi(self) -> Option<CallAbi> {
         let helper = match self {
-            Self::InvokeCallOwn => "champ_call_owned",
+            // A dispatch selects the implementation's entry, then transports it as an owned call.
+            Self::InvokeCallOwn | Self::InvokeDispatchOwn => "champ_call_owned",
             Self::InvokeDefer => "champ_invoke_defer",
             _ => return None,
         };
@@ -335,6 +451,9 @@ pub const HELPER_COLLECTS: u8 = 2;
 pub const HELPER_REENTERS: u8 = 4;
 pub const HELPER_UNWINDS: u8 = 8;
 pub const HELPER_STOPS: u8 = 16;
+/// Class S (Champ draft 3 §1.1): the helper may return `OUTCOME_PENDING` after registering a wake entry, having
+/// consumed no linear operand.
+pub const HELPER_SUSPENDS: u8 = 32;
 
 impl Opcode {
     pub const fn helper(self) -> Option<Helper> {
@@ -357,7 +476,19 @@ impl Opcode {
                 Self::OwnSplitChecked => "champ_own_split_checked",
                 Self::ScopeSplit => "champ_scope_split",
                 Self::ScopeTransfer => "champ_scope_transfer",
+                Self::OwnDynamic => "champ_own_dynamic",
                 Self::OwnCreateCommit => "champ_own_create_commit",
+                // Champ draft 3 §14.4. `fut.done`, `frame.save` and `frame.resume` are inline, and
+                // `unique_cache.proof` has no helper.
+                Self::FutureNew => "champ_future_new",
+                Self::Await => "champ_await_view",
+                Self::AwaitTake => "champ_await_take",
+                Self::CacheRehome => "champ_cache_rehome",
+                Self::AwaitUnwind => "champ_await_unwind",
+                Self::FuturePublish => "champ_future_publish",
+                Self::FutureCancel => "champ_future_cancel",
+                Self::FutureCancelled => "champ_future_cancelled",
+                Self::CleanupDeliverCancel => "champ_cleanup_deliver_cancel",
                 // These forms lower to CFG, return transport, or parallel slot moves.
                 _ => return None,
             }
@@ -370,6 +501,10 @@ use MachineArgument::{Context as C, Pointer as P, Word as W, KeyRef as K};
 const L: u8 = HELPER_ALLOCATES | HELPER_STOPS;
 const G: u8 = L | HELPER_UNWINDS;
 const X: u8 = L | HELPER_COLLECTS | HELPER_REENTERS;
+/// Class G without an Unwind outcome: it may collect, and fails only by STOP.
+const COLLECTING: u8 = L | HELPER_COLLECTS;
+/// Class S: like X, and it may also return PENDING.
+const SUSPENDING: u8 = X | HELPER_SUSPENDS;
 
 macro_rules! helper_registry {
     ($( $name:literal => $args:expr, $effects:expr, $op:expr; )*) => {
@@ -395,6 +530,8 @@ helper_registry! {
         "champ_scope_split" => &[C, P, P, P], G, Some(O::ScopeSplit);
         "champ_scope_split_admissible" => &[C, P, P, P], G, Some(O::ScopeSplit);
         "champ_scope_transfer" => &[C, P, P, P], G, Some(O::ScopeTransfer);
+        "champ_own_dynamic" => &[C, P, P, P], G, Some(O::OwnDynamic);
+        "champ_scope_transfer_admissible" => &[C, P, P, P], G, Some(O::ScopeTransfer);
         "champ_exit_prepare" => &[C, P, P], L, Some(O::ExitPrepare);
         "champ_exit_extend" => &[C, P, P, P], L, Some(O::ExitExtend);
         "champ_exit_replace" => &[C, P, P, P], L, Some(O::ExitReplace);
@@ -421,9 +558,14 @@ helper_registry! {
         "champ_machine_fail" => &[C, W, W], L, None;
         "champ_machine_range" => &[C, W, W, W, W], G | HELPER_COLLECTS, None;
         "champ_machine_convert" => &[C, W, W, W], G | HELPER_COLLECTS, None;
+        "champ_machine_scalar" => &[C, W, W, W, W], G | HELPER_COLLECTS, None;
         "champ_machine_rat_order" => &[C, W, W], 0, None;
         "champ_machine_value_eq" => &[C, W, W, W], G, None;
         "champ_machine_variant_get" => &[C, W, W, W], G, None;
+        "champ_machine_role_narrow" => &[C, W, W], G, None;
+        "champ_machine_collection" => &[C, W, W, P, W], G | HELPER_COLLECTS, None;
+        "champ_machine_builder" => &[C, W, W, P, W], G | HELPER_COLLECTS, None;
+        "champ_machine_lookup" => &[C, W, W, W, W, P], HELPER_STOPS, None;
         "champ_machine_test" => &[C, W, W, W, W, W], G, None;
         "champ_machine_catch" => &[C, W, W], 0, None;
         "champ_machine_plain_packet" => &[C, P], HELPER_STOPS, None;
@@ -436,6 +578,20 @@ helper_registry! {
         "champ_machine_serial" => &[C, W], 0, None;
         "champ_machine_fatal_stack" => &[C], HELPER_STOPS, None;
         "champ_machine_cleanup_mode" => &[C], 0, None;
+        // The async helpers of Champ draft 3 §14.4 (#601 V8). `fut.done`, `frame.save` and `frame.resume` are
+        // inline; the nonempty `cleanup.settle` settles one scheduled duty.
+        "champ_future_new" => &[C, P, P], COLLECTING, Some(O::FutureNew);
+        "champ_await_view" => &[C, W, W, P], SUSPENDING | HELPER_UNWINDS, Some(O::Await);
+        "champ_await_take" => &[C, W, W, W, P], SUSPENDING | HELPER_UNWINDS, Some(O::AwaitTake);
+        "champ_cache_rehome" => &[C, P, P, P, P, W, W, P], L, Some(O::CacheRehome);
+        "champ_await_unwind" => &[C, W, P, W, P, P, P], SUSPENDING, Some(O::AwaitUnwind);
+        "champ_future_publish" => &[C, W, P], HELPER_STOPS, Some(O::FuturePublish);
+        "champ_future_cancel" => &[C, W], HELPER_STOPS, Some(O::FutureCancel);
+        "champ_future_cancelled" => &[C, W, P], HELPER_STOPS, Some(O::FutureCancelled);
+        "champ_cleanup_deliver_cancel" => &[C, W, P, P], L, Some(O::CleanupDeliverCancel);
+        "champ_cleanup_settle" => &[C, W, P, W, W, W, P], L, Some(O::CleanupSettle);
+        "champ_machine_future_destination" => &[C, W, P], HELPER_STOPS, None;
+        "champ_body_reject" => &[C, W], X, None;
 }
 
 pub const fn helper(name: &str) -> Option<Helper> {

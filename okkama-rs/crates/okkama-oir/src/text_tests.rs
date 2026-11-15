@@ -82,7 +82,7 @@ fn every_opcode_builder_roundtrips_and_every_invoke_slot_is_preserved() {
         roundtrip(&module);
     }
     assert_eq!(seen, Operation::opcode_inventory().into_iter().collect(), "opcode missing a builder round-trip case");
-    assert_eq!(seen.len(), 275);
+    assert_eq!(seen.len(), 274);
 }
 
 #[test]
@@ -319,6 +319,7 @@ codec_samples!(SavedSlot => SavedSlot { slot: cs::<u32>(), ty: cs::<TypeId>(), l
 codec_samples!(CarrierDestination => CarrierDestination::FailureContext(cs::<ScopeId>()));
 codec_samples!(ExitKind => ExitKind::Return);
 codec_samples!(ExitDestination => ExitDestination::Caller);
+codec_samples!(RehomeTarget => RehomeTarget::Scope(cs::<ScopeId>()));
 codec_samples!(PreparedExit => PreparedExit { kind: cs::<ExitKind>(), value: cs::<Option<ValueId>>(), packet: cs::<Option<ValueId>>(), deps: cs::<Option<ValueId>>(), selection: cs::<SelectionId>(), boundary: cs::<BoundaryId>() });
 
 #[test]
@@ -684,7 +685,8 @@ fn every_typed_payload_enum_branch_roundtrips() {
         TransferRule::AbortReservation { pending: cs::<ValueId>(), cleanup: cs::<ValueId>() },
         TransferRule::FrameSave { frame: cs::<ValueId>(), values: cs::<Vec<ValueId>>() },
         TransferRule::FrameResume { frame: cs::<ValueId>(), slots: cs::<Vec<u32>>() },
-        TransferRule::CompleteIdentity { identity: cs::<ValueId>(), state: cs::<ValueId>(), output: cs::<SlotName>() }
+        TransferRule::CompleteIdentity { identity: cs::<ValueId>(), state: cs::<ValueId>(), output: cs::<SlotName>() },
+        TransferRule::Rehome { inputs: cs::<Vec<ValueId>>(), outputs: cs::<Vec<SlotName>>() }
     ];
     assert_eq!(cases.len(), TransferRule::TEXT_VARIANTS.len(), "TransferRule branch missing");
     for value in cases { crate::text::payload_roundtrip(value); }
@@ -725,7 +727,7 @@ fn every_typed_payload_enum_branch_roundtrips() {
         Postcondition::NonLinearSlotOnly,
         Postcondition::Dynamic { target: cs::<ScopeId>(), reason: cs::<DynamicReason>(), protocol: cs::<ProtocolId>() },
         Postcondition::LexicalExit { kind: cs::<ExitKind>(), boundary: cs::<BoundaryId>(), selection: cs::<SelectionId>() },
-        Postcondition::CacheRehome(cs::<ScopeId>()),
+        Postcondition::CacheRehome(cs::<RehomeTarget>()),
         Postcondition::ConstructorFieldWrite(cs::<FieldRef>()),
         Postcondition::OnceValuePlain,
         Postcondition::IncompleteIdentity,
@@ -885,7 +887,8 @@ fn every_typed_payload_enum_branch_roundtrips() {
         NumericType::Float,
         NumericType::Rat,
         NumericType::Bool,
-        NumericType::Str
+        NumericType::Str,
+        NumericType::Char
     ];
     assert_eq!(cases.len(), NumericType::TEXT_VARIANTS.len(), "NumericType branch missing");
     for value in cases { crate::text::payload_roundtrip(value); }
@@ -946,6 +949,10 @@ fn every_typed_payload_enum_branch_roundtrips() {
     ];
     assert_eq!(cases.len(), ExitDestination::TEXT_VARIANTS.len(), "ExitDestination branch missing");
     for value in cases { crate::text::payload_roundtrip(value); }
+    // C-4, ruling of #601 R1: `target T` or `target caller`.
+    for value in [RehomeTarget::Scope(cs::<ScopeId>()), RehomeTarget::Caller] {
+        crate::text::payload_roundtrip(value);
+    }
 
 }
 codec_samples!(DebugLoc => DebugLoc { file: FileId::from_u32(0), line: 1, column: 2 },
@@ -1465,10 +1472,16 @@ fn coverage_modules() -> Vec<Module> {
     modules.push(build_op(Operation::Carrier(CarrierOp::Transfer { state: v, target: CarrierDestination::FailureContext(cs()), protocol: cs() }), Profile::Own));
     // Coro/low token forms of the async ABI (D24.1, C-4).
     modules.push(build_op(Operation::Async(AsyncOp::FutureSpawn { future: v, state: v }), Profile::Coro));
-    for task in [None, Some(v)] {
+    for (task, target) in [(None, cs()), (Some(v), cs()), (None, RehomeTarget::Caller)] {
         let form = RehomeForm::Token { pending: v, cache: v, task };
-        modules.push(build_op(Operation::Async(AsyncOp::CacheRehome { form, target: cs(), protocol: cs() }),
+        modules.push(build_op(Operation::Async(AsyncOp::CacheRehome { form, target, protocol: cs() }),
             Profile::Coro));
+    }
+    // The own form of C-4, into a scope of the function or to the caller.
+    for target in [cs(), RehomeTarget::Caller] {
+        let form = RehomeForm::Scope { state: v, pending: v, future: v };
+        modules.push(build_op(Operation::Async(AsyncOp::CacheRehome { form, target, protocol: cs() }),
+            Profile::Own));
     }
     for n in [0, 1, 3] {
         let slots = vec![SavedSlot { slot: 7, ty: cs(), linear: true }; n];

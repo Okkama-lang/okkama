@@ -1,0 +1,46 @@
+oir 2 high
+// The body of work throws; its block unwind catches the throw inside the body, unwinds the scope and raises
+// the failure out of the body (async ABI C-2: only that raise leaves it). async main awaits work once.
+module async_caught_throw
+entry @main
+protocol Services kind services holders [scope, cache, frame, receipt, root, pending_exit] rules [
+    protocol_rule(transition=settle, from=cache, to=scope, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=receipt,
+    to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
+    protocol_rule(transition=settle, from=cache, to=root, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=rehome, from=scope,
+    to=pending_exit, checks=[owner, live_dependencies, sufficient_boundary],
+    normal=protocol_poststate(holder=pending_exit, state=open))]
+enum Stop is Error = (now)
+scope SW action in @work
+scope S action in @main
+summary MworkC call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[future<int>], publication=atomic)
+summary MworkB call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[int], failures=[thrown, cancelled], suspends=true, publication=atomic)
+summary MmainC call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[future<int>], publication=atomic)
+summary MmainB call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+func @work() -> int [async] async-creation(MworkC) async-body(MworkB) {
+    ^entry in SW unwind ^failed:
+    %stop: Stop = enum.case Stop, case 0
+    throw %stop
+    ^failed(%failure: failure) in SW:
+    raise %failure
+}
+func @main() -> int [entry, async] async-creation(MmainC) async-body(MmainB) {
+    binding b0 "x": int in S
+    boundary Bauto lexical in S
+    ^entry in S unwind ^failed:
+    %f: future<int> = call @work()
+    %x: int = await %f, result int
+    bind %x, binding b0
+    want %x
+    [iprep0] exit.prepare return %x at Bauto
+    result.exit edge normal(0), value %x, demand want, prepare iprep0
+    ret %x
+    ^failed(%failure: failure) in S:
+    raise %failure
+}

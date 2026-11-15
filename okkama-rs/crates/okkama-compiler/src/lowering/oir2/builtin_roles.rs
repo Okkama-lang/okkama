@@ -71,7 +71,7 @@ fn object(declarations: &mut Declarations, name: String, fields: Vec<ir::TypeId>
     Ok((decl, ty))
 }
 
-fn function(declarations: &mut Declarations, owner: ir::DeclId, name: &str,
+pub(super) fn function(declarations: &mut Declarations, owner: ir::DeclId, name: &str,
     params: Vec<ir::TypeId>, result: ir::TypeId, constructor: bool,
     lower: impl FnOnce(&mut ir::FunctionBuilder<'_>, ir::ScopeId) -> Result<ir::ValueId>) -> Result<ir::FuncId> {
     let symbol = format!("{}.{}", declarations.builder.module().declarations.get(owner)?.name, name);
@@ -112,7 +112,7 @@ fn core(builder: &mut ir::FunctionBuilder<'_>, op: ir::CoreOp) -> Result<ir::Val
     Ok(builder.emit_schema(ir::Operation::Core(op))?[0])
 }
 
-fn get(builder: &mut ir::FunctionBuilder<'_>, object: ir::ValueId, owner: ir::DeclId, index: u32)
+pub(super) fn get(builder: &mut ir::FunctionBuilder<'_>, object: ir::ValueId, owner: ir::DeclId, index: u32)
     -> Result<ir::ValueId> {
     core(builder, ir::CoreOp::ObjGet { object, field: ir::FieldRef { declaration: owner, index } })
 }

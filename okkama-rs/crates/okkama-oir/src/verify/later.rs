@@ -14,6 +14,7 @@ pub(super) fn async_cleanup_and_profiles(module: &Module, selected: Option<FuncI
         if !super::graph::eligible(function, body, state) {
             continue;
         }
+        super::own_async::check(module, function, body, state);
         for (value, data) in body.values.iter() {
             if module.types.get(data.ty) == Ok(&Type::Service(ServiceType::CarrierState)) {
                 state.at(L::Value { function, value }, None);
@@ -29,8 +30,9 @@ pub(super) fn async_cleanup_and_profiles(module: &Module, selected: Option<FuncI
                 operation(module, declaration, body, &inst.op, state);
             }
             state.at(L::Terminator { function, block: block_id }, block.term.loc);
+            // C-6: a D21 async defer entry leaves through fut.publish and ret; its success is the Continue.
             if declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. }))
-                && matches!(block.term.kind, TermKind::Ret { .. }) {
+                && body.frame_layout.is_none() && matches!(block.term.kind, TermKind::Ret { .. }) {
                 state.error(R::B101, "defer entry must return a checked Continue/Replace tag");
             }
             if let TermKind::InvokeOwn { op, .. } = &block.term.kind {
@@ -88,6 +90,13 @@ fn protocols(module: &Module, state: &mut State<'_>) {
 }
 
 fn operation(module: &Module, function: &Function, body: &Body, op: &Operation, state: &mut State<'_>) {
+    // D24, D25, C-4: these operations have no ownership model in the coro/low verifier until slices R1 and P1, so
+    // the full verifier rejects them rather than accept what it cannot check.
+    let unmodeled = matches!(op, Operation::Async(AsyncOp::ServiceAbsorb { .. } | AsyncOp::ServiceMaterialize { .. }
+        | AsyncOp::FutureSpawn { .. } | AsyncOp::CacheRehome { form: RehomeForm::Token { .. }, .. }));
+    if unmodeled && matches!(module.profile, Profile::Coro | Profile::Low) {
+        state.error(R::AsyncUnmodeledOp, "spawn, rehome tokens and packet duties are modeled from slices R1 and P1");
+    }
     if matches!(op, Operation::Carrier(_)) {
         state.error(R::B75, "owned carrier graph operations are excluded from 0.6.0");
     }
@@ -212,19 +221,37 @@ fn operation(module: &Module, function: &Function, body: &Body, op: &Operation, 
             let dynamic: Vec<_> = declaration.rules.iter().filter(|rule| {
                 rule.transition == ProtocolTransition::Dynamic
             }).collect();
-            let supported = *reason == DynamicReason::Merge && declaration.kind == ProtocolKind::Storage
-                && declaration.holders.contains(&HolderKind::Scope)
+            let transfer = |rule: &&ProtocolRule| rule.from == HolderKind::Packet
+                && rule.to == HolderKind::Scope
+                && rule.normal == ProtocolPoststate { holder: HolderKind::Scope, state: HolderState::Open }
+                && rule.unwind == Some(ProtocolPoststate {
+                    holder: HolderKind::Packet, state: HolderState::Unaccepted,
+                })
+                && rule.cancel.is_none();
+            let shape = declaration.holders.contains(&HolderKind::Scope)
                 && declaration.holders.contains(&HolderKind::Packet)
                 && declaration.holders.iter().all(|holder| matches!(holder, HolderKind::Scope | HolderKind::Packet))
                 && declaration.roots.contains(&RootKind::Operands)
-                && dynamic.len() == 1 && dynamic[0].from == HolderKind::Packet
-                && dynamic[0].to == HolderKind::Scope
-                && dynamic[0].normal == ProtocolPoststate { holder: HolderKind::Scope, state: HolderState::Open }
-                && dynamic[0].unwind == Some(ProtocolPoststate {
-                    holder: HolderKind::Packet, state: HolderState::Unaccepted,
-                }) && dynamic[0].cancel.is_none();
+                && dynamic.len() == 1 && transfer(&dynamic[0]);
+            // The open Closure protocol (#683) also publishes the returned packet into
+            // the scope; its unwind settles the scope, never the unpublished packet.
+            let publish = declaration.rules.iter().filter(|rule| rule.transition != ProtocolTransition::Dynamic)
+                .collect::<Vec<_>>();
+            let closure_publish = matches!(publish.as_slice(), [rule]
+                if rule.transition == ProtocolTransition::Publish
+                && rule.from == HolderKind::Packet && rule.to == HolderKind::Scope
+                && rule.normal == ProtocolPoststate { holder: HolderKind::Scope, state: HolderState::Open }
+                && rule.unwind == Some(ProtocolPoststate { holder: HolderKind::Scope, state: HolderState::Settled })
+                && rule.cancel.is_none());
+            let supported = shape && match (reason, &declaration.kind) {
+                (DynamicReason::Merge, ProtocolKind::Storage) => true,
+                (DynamicReason::Any, ProtocolKind::Any) => publish.is_empty(),
+                (DynamicReason::Closure, ProtocolKind::Closure) => closure_publish,
+                _ => false,
+            };
             if !supported {
-                state.error(R::B71, "Low dynamic source requires the synchronous storage merge transition");
+                state.error(R::B71,
+                    "Low dynamic source requires a synchronous storage merge, any or open Closure transition");
             }
         }
         if value_type(module, body, *owner) != Some(&Type::Service(ServiceType::Scope(*target))) {
@@ -242,12 +269,12 @@ fn operation(module: &Module, function: &Function, body: &Body, op: &Operation, 
             FunctionAttr::Cleanup | FunctionAttr::Destroy(_) | FunctionAttr::DeferEntry { .. })) {
         state.error(R::B105, "shielded await is restricted to cleanup execution");
     }
+    // D20: `await` and `await.take` stay `invoke.own` terminators in Low; closes become cleanup steps.
     if module.profile == Profile::Low && matches!(op,
         Operation::Lexical(_)
         | Operation::Ownership(OwnershipOp::ScopeEnd { .. }
             | OwnershipOp::ScopeUnwind { .. } | OwnershipOp::End { .. })
-        | Operation::Async(AsyncOp::Await { .. } | AsyncOp::AwaitTake { .. }
-            | AsyncOp::AwaitShielded { .. })) {
+        | Operation::Async(AsyncOp::AwaitShielded { .. })) {
         state.error(R::B114, "low profile contains an unlowered lexical close or suspension form");
     }
     if module.profile == Profile::Own && matches!(op,

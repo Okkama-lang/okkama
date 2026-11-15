@@ -6,6 +6,15 @@ use super::*;
 
 type Check = Result<(), Error>;
 
+/// An object field has type never.
+const NEVER_FIELD: &str = "NEVER_FIELD";
+/// A data or Champ instruction reads a value of type never.
+const NEVER_OPERAND: &str = "NEVER_OPERAND";
+/// A collection of never leaves is retagged to another shape, or a key-less map to another value type.
+const NEVER_RETAG: &str = "NEVER_RETAG";
+/// The admission filter of a scope.transfer is anything but a single `true` flag right after its selection.
+const TRANSFER_ADMISSION: &str = "TRANSFER_ADMISSION";
+
 fn require(condition: bool, message: &str) -> Check {
     if condition { Ok(()) } else { Err(error(message)) }
 }
@@ -14,55 +23,276 @@ fn at<T>(items: &[T], index: u32) -> Result<&T, Error> {
     items.get(index as usize).ok_or_else(|| error(format!("invalid table/location index {index}")))
 }
 
-fn ty_valid(ty: Type, p: &Program) -> Check {
-    if let Type::Object(id) | Type::Successor(id) = ty {
-        enforce(!at(&p.objects, id)?.handle, "HANDLE_TYPE", "an object type names a native handle declaration")?;
-    }
-    if let Type::Handle(id) = ty {
-        enforce(p.objects.get(id as usize).is_some_and(|object| object.handle),
-            "HANDLE_TYPE", "a handle type names no native handle declaration")?;
-    }
-    if let Type::Variant(id) = ty {
-        enforce(p.objects.get(id as usize).is_some_and(|object| !object.variant_cases.is_empty()),
-            "VARIANT_TYPE", "variant type names a declaration without variant cases")?;
-    }
-    if let Type::Array(shape) = ty {
-        enforce(shape.depth > 0, "ARRAY_SHAPE", "array depth must be positive")?;
-        if let ArrayLeaf::Object(id) = shape.leaf {
-            let handle = p.objects.get(id as usize).is_some_and(|object| object.handle);
-            enforce(!handle, "HANDLE_TYPE", "an array element names a native handle declaration")?;
-            closed_plain(id, p, "ARRAY_PLAIN")?;
+/// The role declaration that `id` names (`ROLE_TYPE`).
+pub(crate) fn role_decl(p: &Program, id: u32) -> Result<&RoleDecl, Error> {
+    p.objects.get(id as usize).and_then(|object| object.role.as_ref())
+        .ok_or_else(|| violation("ROLE_TYPE", "role type names a declaration that is not a role"))
+}
+
+/// The objects that implement `role`, each with its implementation table.
+pub(crate) fn implementors(p: &Program, role: u32) -> impl Iterator<Item = (u32, &RoleImpl)> {
+    p.objects.iter().enumerate().flat_map(move |(id, object)| {
+        object.implements.iter().filter(move |table| table.role == role).map(move |table| (id as u32, table))
+    })
+}
+
+pub(crate) fn implements(p: &Program, object: u32, role: u32) -> bool {
+    p.objects.get(object as usize).is_some_and(|object| object.implements.iter().any(|table| table.role == role))
+}
+
+/// A role value is managed when some implementation of the role may reach a resource.
+pub fn role_reaches_resource(p: &Program, role: u32) -> bool {
+    implementors(p, role).any(|(id, _)| p.objects[id as usize].layout.may_reach_resource)
+}
+
+/// An `any` value is managed when some any box may reach a resource.
+pub fn any_reaches_resource(p: &Program) -> bool {
+    p.objects.iter().any(|object| object.any_box && object.layout.may_reach_resource)
+}
+
+/// The function of `slot` in the implementation table of `object` for `role`.
+pub fn implementation(p: &Program, object: u32, role: u32, slot: u32) -> Option<u32> {
+    let table = p.objects.get(object as usize)?.implements.iter().find(|table| table.role == role)?;
+    table.slots.get(slot as usize).copied()
+}
+
+pub(crate) fn ty_valid(ty: Type, p: &Program) -> Check {
+    match ty {
+        Type::Object(id) | Type::Successor(id) => {
+            enforce(!at(&p.objects, id)?.handle, "HANDLE_TYPE", "an object type names a native handle declaration")?;
+            enforce(at(&p.objects, id)?.role.is_none(), "ROLE_TYPE", "object type names a role declaration")?;
         }
+        Type::Role(id) | Type::RoleSuccessor(id) => {
+            role_decl(p, id)?;
+        }
+        Type::Handle(id) => {
+            enforce(p.objects.get(id as usize).is_some_and(|object| object.handle),
+                "HANDLE_TYPE", "a handle type names no native handle declaration")?;
+        }
+        Type::Variant(id) => {
+            enforce(p.objects.get(id as usize).is_some_and(|object| !object.variant_cases.is_empty()),
+                "VARIANT_TYPE", "variant type names a declaration without variant cases")?;
+        }
+        Type::Array(shape) => {
+            enforce(shape.depth > 0, "ARRAY_SHAPE", "array depth must be positive")?;
+            let element = ArrayType { depth: 1, ..shape }.element()
+                .ok_or_else(|| violation("ARRAY_SHAPE", "array without element"))?;
+            if let Type::Object(id) | Type::Variant(id) | Type::Map(id) = element {
+                enforce(match element {
+                    Type::Object(_) => (id as usize) < p.objects.len(),
+                    Type::Variant(_) => {
+                        p.objects.get(id as usize).is_some_and(|object| !object.variant_cases.is_empty())
+                    }
+                    _ => matches!(p.composites.get(id as usize), Some(Composite::Map { .. })),
+                }, "ARRAY_ELEMENT", "unknown array element declaration")?;
+            }
+            if let Type::Object(id) = element {
+                enforce(!p.objects[id as usize].handle, "HANDLE_TYPE",
+                    "an array element names a native handle declaration")?;
+            }
+            if let Type::Role(id) = element {
+                role_decl(p, id)?;
+            }
+            // An object with an async destroy is rejected for every use outside P1, arrays included.
+            enforce(collection_leaf(p, element), "ARRAY_PLAIN", "array element graph is not closed plain data")?;
+        }
+        Type::Map(id) | Type::MapBuilder(id) => {
+            enforce(matches!(p.composites.get(id as usize), Some(Composite::Map { .. })),
+                "COMPOSITE_TYPE", "map type names no map composite")?;
+        }
+        Type::Builder(id) => {
+            enforce(matches!(p.composites.get(id as usize), Some(Composite::Builder { .. })),
+                "COMPOSITE_TYPE", "builder type names no builder composite")?;
+        }
+        Type::Future(id) => {
+            enforce((id as usize) < p.tables.future_results.len(), FUTURE_TYPES,
+                "a Future type names no future_results entry")?;
+        }
+        _ => {}
     }
     Ok(())
 }
 
-/// The object graph from `root` is closed plain data: no destroy, nothing that reaches a resource,
-/// and only scalar, text, range, bytes, array and plain object fields. `rule` names the caller's rule.
-fn closed_plain(root: u32, p: &Program, rule: &'static str) -> Check {
-    let mut pending = vec![Type::Object(root)];
-    let mut seen = BTreeSet::new();
+/// `Type::Future` indexes distinct `future_results`; await, fut.new and fut.publish agree with them; a Future is
+/// held only in registers (no object storage holds one before the service entries of D25).
+pub(crate) const FUTURE_TYPES: &str = "SPB_FUTURE_TYPES";
+
+/// The leaf of a collection (an array element or a map value): a resource object, which a managed collection
+/// refers to without owning it (own keeps its obligation with its owner), or closed plain data. An object that
+/// declares neither a destroy nor a resource is plain only if its whole graph is (`ARRAY_PLAIN`, `MAP_PLAIN`).
+/// A role or `any` leaf refers to an implementing object or an any box: the collection is managed when one of
+/// them may reach a resource (#711), and plain data otherwise.
+fn collection_leaf(p: &Program, leaf: Type) -> bool {
+    let resource = match leaf {
+        Type::Object(id) => p.objects.get(id as usize)
+            .is_some_and(|object| object.layout.has_destroy || object.layout.may_reach_resource),
+        Type::Role(id) => role_reaches_resource(p, id),
+        Type::Any => any_reaches_resource(p),
+        _ => false,
+    };
+    resource || closed_plain(p, leaf)
+}
+
+/// Whether a value of `ty` may refer to an identity that reaches a resource: a resource object or successor, a
+/// role value one of whose implementations does, an `any` value one of whose boxes does, or a managed array or
+/// map of them. Plain collections never do (`ARRAY_PLAIN`, `MAP_PLAIN`).
+pub(crate) fn reaches_resource(p: &Program, ty: Type) -> bool {
+    let leaf = match ty {
+        Type::Array(shape) => ArrayType { depth: 1, ..shape }.element(),
+        Type::Variant(id) => return p.objects.get(id as usize).is_some_and(|object| object.layout.may_reach_resource),
+        Type::Map(id) => match p.composites.get(id as usize) {
+            Some(Composite::Map { value, .. }) => Some(*value),
+            _ => None,
+        },
+        ty => Some(ty),
+    };
+    match leaf {
+        Some(Type::Object(id) | Type::Successor(id)) => {
+            p.objects.get(id as usize).is_some_and(|object| object.layout.may_reach_resource)
+        }
+        Some(Type::Role(id) | Type::RoleSuccessor(id)) => role_reaches_resource(p, id),
+        Some(Type::Any) => any_reaches_resource(p),
+        _ => false,
+    }
+}
+
+/// Whether every value of `ty` is closed plain data: no identity with destroy, no resource, no service
+/// and no unique builder anywhere in its graph. Unknown declarations are not plain.
+pub(crate) fn closed_plain(p: &Program, ty: Type) -> bool {
+    plain_graph(p, ty, true)
+}
+
+/// Whether values of `ty` compare structurally (`val.eq`, `test.is`, `array.difference`): closed plain data
+/// without a native handle, which has no structural value.
+pub(crate) fn comparable(p: &Program, ty: Type) -> bool {
+    plain_graph(p, ty, false)
+}
+
+fn plain_graph(p: &Program, ty: Type, handles: bool) -> bool {
+    let mut pending = vec![ty];
+    let mut seen = std::collections::HashSet::new();
     while let Some(ty) = pending.pop() {
+        if !seen.insert(ty) {
+            continue;
+        }
         match ty {
-            Type::Object(id) if seen.insert(id) => {
-                let object = p.objects.get(id as usize)
-                    .ok_or_else(|| violation("ARRAY_ELEMENT", "unknown array element object"))?;
-                enforce(!object.layout.has_destroy && !object.layout.may_reach_resource
-                    && !object.layout.may_async_destroy, rule, "object graph reaches resources")?;
-                pending.extend(&object.layout.storage_fields);
+            Type::Int | Type::Bool | Type::Str | Type::Range | Type::Bytes | Type::Byte | Type::Float
+                | Type::Char | Type::Rat | Type::Never => {}
+            // An `any` value is plain when every any box is.
+            Type::Any => {
+                pending.extend(p.objects.iter().enumerate().filter(|(_, object)| object.any_box)
+                    .map(|(id, _)| Type::Object(id as u32)));
             }
-            Type::Array(inner) => {
-                enforce(inner.depth > 0, "ARRAY_SHAPE", "array depth must be positive")?;
-                if let ArrayLeaf::Object(id) = inner.leaf {
-                    pending.push(Type::Object(id));
+            // A role value is plain when every implementation of the role is.
+            Type::Role(id) => {
+                if role_decl(p, id).is_err() {
+                    return false;
+                }
+                pending.extend(implementors(p, id).map(|(object, _)| Type::Object(object)));
+            }
+            Type::Object(id) | Type::Variant(id) => {
+                let Some(object) = p.objects.get(id as usize) else { return false };
+                if object.handle || object.layout.has_destroy || object.layout.may_reach_resource
+                    || object.layout.may_async_destroy
+                {
+                    return false;
+                }
+                pending.extend(&object.layout.storage_fields);
+                pending.extend(object.variant_cases.iter().map(|&case| Type::Object(case)));
+            }
+            // A native handle is the native registry's: it has no Okkama destroy and holds no ownership graph
+            // (P2.4 §4.7), so an object that keeps one (a regex match keeps its match state) stays plain data.
+            Type::Handle(id) => {
+                if !handles || !p.objects.get(id as usize).is_some_and(|object| object.handle) {
+                    return false;
                 }
             }
-            Type::Int | Type::Bool | Type::Str | Type::Range | Type::Bytes | Type::Object(_)
-                | Type::Byte | Type::Float | Type::Char | Type::Rat => {}
-            _ => return Err(violation(rule, "object graph is not closed plain data")),
+            // Nested arrays share their leaf: check it once, whatever the depth.
+            Type::Array(shape) if shape.depth > 0 => {
+                pending.extend(ArrayType { depth: 1, ..shape }.element());
+            }
+            Type::Map(id) => match p.composites.get(id as usize) {
+                Some(Composite::Map { key, value }) => pending.extend([*key, *value]),
+                _ => return false,
+            },
+            _ => return false,
         }
     }
-    Ok(())
+    true
+}
+
+/// A map key: a scalar, string, rat, enum or key object (no destroy, no resource, every source field a key,
+/// not containing itself), the frontend's `object_key_problem` rule (OIR-2 §3.1).
+pub(crate) fn key_type(p: &Program, ty: Type) -> bool {
+    fn key(p: &Program, ty: Type, open: &mut Vec<u32>) -> bool {
+        match ty {
+            // A `never` key belongs to an uninferred empty map: no key value exists.
+            Type::Int | Type::Bool | Type::Byte | Type::Char | Type::Float | Type::Rat | Type::Str | Type::Never => {
+                true
+            }
+            Type::Object(id) => {
+                let Some(object) = p.objects.get(id as usize) else { return false };
+                if open.contains(&id) || object.layout.has_destroy || object.layout.may_reach_resource
+                    || !object.variant_cases.is_empty()
+                {
+                    return false;
+                }
+                if object.fields.is_empty() {
+                    // A plain enum or Error enum: its single storage word is the case number.
+                    return object.layout.storage_fields == [Type::Int]
+                        && (object.enum_cases > 0 || !object.error_cases.is_empty());
+                }
+                open.push(id);
+                let fields = object.fields.iter().filter(|field| !field.once)
+                    .all(|field| object.layout.storage_fields.get(field.storage as usize)
+                        .is_some_and(|&field| key(p, field, open)));
+                open.pop();
+                fields
+            }
+            _ => false,
+        }
+    }
+    key(p, ty, &mut Vec::new())
+}
+
+/// A multi-case Error variant: a variant whose every case is a plain Error case object. Its values are
+/// Error values: they convert to `Error`, are thrown and are caught by the variant's declaration.
+fn error_variant(p: &Program, id: u32) -> bool {
+    p.objects.get(id as usize).is_some_and(|object| !object.variant_cases.is_empty()
+        && object.variant_cases.iter().all(|&case| p.objects.get(case as usize)
+            .is_some_and(|case| !case.error_cases.is_empty())))
+}
+
+/// Composite references point backwards, so composite types are finite and checkable in order.
+fn composite_valid(p: &Program, index: usize, composite: Composite) -> Check {
+    let earlier = |ty: Type| -> bool {
+        let mut pending = vec![ty];
+        while let Some(ty) = pending.pop() {
+            match ty {
+                Type::Map(id) | Type::MapBuilder(id) | Type::Builder(id) if id as usize >= index => return false,
+                Type::Array(shape) => pending.extend(ArrayType { depth: 1, ..shape }.element()),
+                _ => {}
+            }
+        }
+        true
+    };
+    match composite {
+        Composite::Map { key, value } => {
+            enforce(earlier(key) && earlier(value), "COMPOSITE_ORDER", "map composite refers forward")?;
+            ty_valid(key, p)?;
+            ty_valid(value, p)?;
+            enforce(key_type(p, key), "MAP_KEY", "map key is not a key type")?;
+            // A managed map refers to resource objects as values; like a managed array it owns none.
+            enforce(collection_leaf(p, value), "MAP_PLAIN",
+                "map value graph is neither plain data nor resource objects")
+        }
+        Composite::Builder { array } => {
+            enforce(earlier(array), "COMPOSITE_ORDER", "builder composite refers forward")?;
+            enforce(matches!(array, Type::Array(_) | Type::Bytes), "BUILDER_ARRAY",
+                "builder composite must finish an array")?;
+            ty_valid(array, p)
+        }
+    }
 }
 
 pub(crate) fn loc_type(f: &Function, location: Location) -> Result<ProducedType, Error> {
@@ -72,14 +302,95 @@ pub(crate) fn loc_type(f: &Function, location: Location) -> Result<ProducedType,
     }
 }
 
+/// A decimal integer without a plus sign, leading zeros or a negative zero.
+fn canonical_integer(text: &str) -> bool {
+    let digits = text.strip_prefix('-').unwrap_or(text);
+    !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+        && (digits == "0" || !digits.starts_with('0')) && text != "-0"
+}
+
+/// Work bound of the coprimality check of one rational constant, in digit steps.
+const RAT_GCD_STEPS: usize = 1 << 22;
+
+/// Whether two canonical non-negative decimals are coprime, by binary GCD on their digits.
+/// `None` when the check would exceed `RAT_GCD_STEPS`.
+fn coprime_decimals(left: &str, right: &str) -> Option<bool> {
+    let mut steps = 0usize;
+    let mut step = |cost: usize| {
+        steps = steps.saturating_add(cost.max(1));
+        steps <= RAT_GCD_STEPS
+    };
+    let mut left: Vec<u8> = left.bytes().map(|digit| digit - b'0').collect();
+    let mut right: Vec<u8> = right.bytes().map(|digit| digit - b'0').collect();
+    let even = |number: &Vec<u8>| number.last().is_some_and(|digit| digit % 2 == 0);
+    if left == [0] || right == [0] {
+        return Some(left == [1] || right == [1]);
+    }
+    if even(&left) && even(&right) {
+        return Some(false);
+    }
+    loop {
+        for number in [&mut left, &mut right] {
+            while even(number) {
+                if !step(number.len()) {
+                    return None;
+                }
+                let mut carry = 0;
+                for digit in number.iter_mut() {
+                    let next = carry * 10 + *digit;
+                    *digit = next / 2;
+                    carry = next % 2;
+                }
+                trim_decimal(number);
+            }
+        }
+        if !step(left.len() + right.len()) {
+            return None;
+        }
+        let order = left.len().cmp(&right.len()).then_with(|| left.cmp(&right));
+        if order == std::cmp::Ordering::Equal {
+            return Some(left == [1]);
+        }
+        let (larger, smaller) = if order == std::cmp::Ordering::Greater {
+            (&mut left, &right)
+        } else {
+            (&mut right, &left)
+        };
+        let mut borrow = 0i16;
+        for (index, digit) in larger.iter_mut().rev().enumerate() {
+            let other = smaller.len().checked_sub(index + 1).map_or(0, |index| smaller[index]);
+            let next = i16::from(*digit) - i16::from(other) - borrow;
+            borrow = i16::from(next < 0);
+            *digit = (next + borrow * 10) as u8;
+        }
+        trim_decimal(larger);
+    }
+}
+
+fn trim_decimal(number: &mut Vec<u8>) {
+    match number.iter().position(|&digit| digit != 0) {
+        Some(first) => {
+            number.drain(..first);
+        }
+        None => *number = vec![0],
+    }
+}
+
 fn constant_type(value: &Constant) -> Result<Type, Error> {
     match value {
         Constant::Int(text) => {
-            let digits = text.strip_prefix('-').unwrap_or(text);
-            require(!digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()), "invalid integer")?;
-            require(digits == "0" || !digits.starts_with('0'), "non-canonical integer")?;
-            require(text != "-0", "non-canonical integer")?;
+            require(canonical_integer(text), "non-canonical integer")?;
             Ok(Type::Int)
+        }
+        Constant::Rat(RatValue { numerator, denominator }) => {
+            let terms = canonical_integer(numerator) && canonical_integer(denominator)
+                && !denominator.starts_with('-') && denominator != "0";
+            enforce(terms, "CONST_RAT", "rat constant needs canonical integers and a positive denominator")?;
+            let magnitude = numerator.strip_prefix('-').unwrap_or(numerator);
+            let lowest = coprime_decimals(magnitude, denominator)
+                .ok_or_else(|| violation("LOAD_WORK_BUDGET", "rat constant exceeds the load work budget"))?;
+            enforce(lowest, "CONST_RAT", "rat constant is not in lowest terms")?;
+            Ok(Type::Rat)
         }
         Constant::Bool(_) => Ok(Type::Bool),
         Constant::Descriptor(_) => Ok(Type::Descriptor),
@@ -102,12 +413,78 @@ fn constant_type(value: &Constant) -> Result<Type, Error> {
     }
 }
 
+/// Module constants (#709): each is closed plain data (`GLOBAL_TYPE`) whose data build exactly its type
+/// (`GLOBAL_DATA`): every datum is a constant, an enum case, an array or a map of its declared type, made of
+/// earlier data of its element, key and value types, and the last datum is the constant. The runtime
+/// builds the data in order before the program runs, so a value is never read as another type.
+fn check_globals(p: &Program) -> Check {
+    for global in &p.globals {
+        ty_valid(global.ty, p)?;
+        enforce(closed_plain(p, global.ty), "GLOBAL_TYPE", "a module constant must be closed plain data")?;
+        enforce(global.data.last().map(|datum| datum.ty) == Some(global.ty), "GLOBAL_TYPE",
+            "the last datum of a module constant must have the constant's type")?;
+        for (index, datum) in global.data.iter().enumerate() {
+            ty_valid(datum.ty, p)?;
+            let parts = |items: &[u32]| -> Result<Vec<Type>, Error> {
+                items.iter().map(|&item| {
+                    enforce((item as usize) < index, "GLOBAL_DATA", "a datum names a datum that does not precede it")?;
+                    Ok(global.data[item as usize].ty)
+                }).collect()
+            };
+            let valid = match &datum.value {
+                DatumValue::Constant(Constant::Descriptor(_)) => false,
+                DatumValue::Constant(value) => constant_type(value)? == datum.ty,
+                DatumValue::Case(case) => match datum.ty {
+                    Type::Object(id) => p.objects.get(id as usize).is_some_and(|object| {
+                        object.fields.is_empty() && object.layout.storage_fields == [Type::Int]
+                            && !object.layout.may_reach_resource
+                            && ((*case as usize) < object.error_cases.len() || *case < object.enum_cases)
+                    }),
+                    _ => false,
+                },
+                DatumValue::Array(items) => {
+                    let element = element_type(datum.ty);
+                    element.is_some() && parts(items)?.into_iter().all(|ty| Some(ty) == element)
+                }
+                DatumValue::Map(items) => match datum.ty {
+                    Type::Map(id) => match p.composites.get(id as usize) {
+                        Some(&Composite::Map { key, value }) => items.len().is_multiple_of(2)
+                            && parts(items)?.chunks(2).all(|pair| pair == [key, value]),
+                        _ => false,
+                    },
+                    _ => false,
+                },
+            };
+            enforce(valid, "GLOBAL_DATA", "a datum does not build a value of its declared type")?;
+        }
+    }
+    Ok(())
+}
+
 pub fn verify(p: &Program) -> Check {
     if let Some(entry) = p.entry {
         at(&p.functions, entry)?;
     }
+    let mut results = std::collections::HashSet::new();
+    for &result in &p.tables.future_results {
+        if let Some(ty) = result {
+            ty_valid(ty, p)?;
+            enforce(!matches!(ty, Type::Builder(_) | Type::MapBuilder(_)), "BUILDER_LINEAR",
+                "a Future cannot publish a unique builder")?;
+        }
+        enforce(results.insert(result), FUTURE_TYPES, "future_results entries must be distinct")?;
+    }
+    suspension::check_layouts(p)?;
+    for (index, &composite) in p.composites.iter().enumerate() {
+        composite_valid(p, index, composite)?;
+    }
     check_tests(p)?;
+    check_globals(p)?;
+    let mut handles = BTreeSet::new();
     for object in &p.objects {
+        // Natives name their handles by declaring module and name: one name, one declaration.
+        enforce(!object.handle || handles.insert(object.name.as_str()), "HANDLE_NAME",
+            "two native handle declarations share one name")?;
         let layout = &object.layout;
         let count = layout.storage_fields.len() as u64;
         let words = (1 + count + 4 * u64::from(layout.has_destroy)).max(2);
@@ -130,27 +507,71 @@ pub fn verify(p: &Program) -> Check {
                 && !layout.may_reach_resource && layout.trace_layout.is_empty() && layout.selection_layout.is_empty();
             enforce(plain, "HANDLE_DECLARATION", "a native handle declaration has fields, cases or resources")?;
         }
+        // Case texts belong to a plain enum only, one per case; an enum may also carry none.
+        enforce(object.enum_names.is_empty()
+            || (object.enum_cases > 0 && object.enum_names.len() == object.enum_cases as usize),
+            "ENUM_NAMES", "enum case names belong to a plain enum, one per case")?;
         if !object.variant_cases.is_empty() {
+            // A case object is never an identity, but it may refer to resources (Maybe<Resource>). The
+            // variant declares that it reaches resources exactly when one of its cases does.
             let mut seen = BTreeSet::new();
-            let plain = object.fields.is_empty() && layout.storage_fields.is_empty() && !layout.may_reach_resource
-                && object.variant_cases.iter().all(|&case| seen.insert(case) && p.objects.get(case as usize)
-                    .is_some_and(|case| case.variant_cases.is_empty() && !case.layout.has_destroy
-                        && !case.layout.may_reach_resource));
-            enforce(plain, "VARIANT_CASES", "variant cases must be distinct plain case objects")?;
+            let cases = object.variant_cases.iter().all(|&case| seen.insert(case) && p.objects.get(case as usize)
+                .is_some_and(|case| case.variant_cases.is_empty() && !case.layout.has_destroy && !case.handle));
+            let reaches = object.variant_cases.iter().any(|&case| {
+                p.objects.get(case as usize).is_some_and(|case| case.layout.may_reach_resource)
+            });
+            let declaration = object.fields.is_empty() && layout.storage_fields.is_empty()
+                && layout.selection_layout.is_empty() && layout.may_reach_resource == reaches;
+            enforce(cases && declaration, "VARIANT_CASES",
+                "variant cases must be distinct case objects without identity, its retention their union")?;
         }
         unique(&object.fields.iter().map(|field| field.storage).collect::<Vec<_>>())?;
         unique(&layout.trace_layout)?;
         unique(&layout.selection_layout)?;
         for (index, &ty) in layout.storage_fields.iter().enumerate() {
             ty_valid(ty, p)?;
+            enforce(!matches!(ty, Type::Future(_)), FUTURE_TYPES, "object storage cannot hold a Future")?;
+            enforce(!matches!(ty, Type::Builder(_) | Type::MapBuilder(_)), "BUILDER_LINEAR",
+                "object storage cannot hold a unique builder")?;
+            // No value of type never exists: a field of it would be read as a forged word.
+            enforce(ty != Type::Never, NEVER_FIELD, "object storage cannot have type never")?;
+            // Retention flags are checked object by object, so a managed collection's leaf flag can be trusted.
             if let Type::Object(id) | Type::Successor(id) = ty {
-                require(layout.may_reach_resource || !p.objects[id as usize].layout.may_reach_resource,
-                    "understated object retention metadata")?;
+                enforce(layout.may_reach_resource || !p.objects[id as usize].layout.may_reach_resource,
+                    "OBJECT_RETENTION", "understated object retention metadata")?;
             }
-            let traced = matches!(ty, Type::Error | Type::Bytes | Type::Array(_) | Type::Str | Type::Object(_)
-                | Type::Successor(_) | Type::Failure | Type::Rat | Type::Variant(_) | Type::Handle(_));
-            require(layout.trace_layout.contains(&(index as u32)) == traced, "incorrect object trace layout")?;
+            if let Type::Role(id) | Type::RoleSuccessor(id) = ty {
+                enforce(layout.may_reach_resource || !role_reaches_resource(p, id),
+                    "OBJECT_RETENTION", "understated object retention metadata")?;
+            }
+            if ty == Type::Any {
+                enforce(layout.may_reach_resource || !any_reaches_resource(p),
+                    "OBJECT_RETENTION", "understated object retention metadata")?;
+            }
+            // The runtime selection walk reaches identities only through selected fields: a field that may refer
+            // to a resource, directly or through a managed collection or a variant, is selected. An any box states
+            // its selection exactly under ANY_BOX (selected if and only if its value reaches a resource).
+            if reaches_resource(p, ty) && !object.any_box {
+                enforce(layout.may_reach_resource && layout.selection_layout.contains(&(index as u32)),
+                    "COLLECTION_RETENTION", "a field holding resource objects must be selected and reach resources")?;
+            }
+            require(layout.trace_layout.contains(&(index as u32)) == ty.traced(), "incorrect object trace layout")?;
         }
+        if let Some(role) = &object.role {
+            check_role_decl(p, object, role)?;
+        }
+        if object.any_box {
+            check_any_box(p, object)?;
+        }
+    }
+    // One any box per boxed type: the descriptor of a box names exactly one value type.
+    let mut boxed = std::collections::HashSet::new();
+    for object in p.objects.iter().filter(|object| object.any_box) {
+        enforce(boxed.insert(object.layout.storage_fields[0]), "ANY_BOX", "two any boxes hold one value type")?;
+    }
+    // Implementation tables after every role declaration is known to be well formed.
+    for (id, object) in p.objects.iter().enumerate() {
+        check_role_impls(p, id as u32, object)?;
     }
     for (index, scope) in p.tables.scopes.iter().enumerate() {
         at(&p.functions, scope.function)?;
@@ -171,6 +592,71 @@ pub fn verify(p: &Program) -> Check {
     }
     for f in &p.functions {
         verify_function(p, f).map_err(|e| Error { message: format!("{}: {}", f.symbol, e.message), ..e })?;
+    }
+    Ok(())
+}
+
+/// A role declaration is a placeholder descriptor: no storage, fields, cases, destroy or implementations.
+/// Its slots are synchronous plain or owning entries with valid types and at most one result.
+fn check_role_decl(p: &Program, object: &Object, role: &RoleDecl) -> Check {
+    let layout = &object.layout;
+    enforce(object.fields.is_empty() && layout.storage_fields.is_empty() && !layout.has_destroy
+        && !layout.may_reach_resource && object.error_cases.is_empty() && object.enum_cases == 0
+        && object.variant_cases.is_empty() && object.implements.is_empty() && !object.handle,
+        "ROLE_DECL", "a role declaration has no storage, cases, destroy or implementations")?;
+    for slot in &role.slots {
+        enforce(matches!(slot.entry_abi, EntryAbi::Observation | EntryAbi::Owned) && slot.results.len() <= 1,
+            "ROLE_DECL", "a role slot is a plain or owning entry with at most one result")?;
+        for &ty in slot.params.iter().chain(&slot.results) {
+            ty_valid(ty, p)?;
+        }
+    }
+    Ok(())
+}
+
+/// An any box holds one value in its one field: no destroy, identity, cases, role or implementations. The value
+/// is not itself `any`; the box is traced and selected exactly as its value is, and reaches what it reaches.
+fn check_any_box(p: &Program, object: &Object) -> Check {
+    let layout = &object.layout;
+    let [value] = layout.storage_fields.as_slice() else {
+        return Err(violation("ANY_BOX", "an any box holds exactly one value"));
+    };
+    let reaches = reaches_resource(p, *value) || match *value {
+        Type::Role(id) | Type::RoleSuccessor(id) => role_reaches_resource(p, id),
+        Type::Error => p.objects.iter()
+            .any(|object| !object.error_cases.is_empty() && object.layout.may_reach_resource),
+        _ => false,
+    };
+    let selection: &[u32] = if reaches { &[0] } else { &[] };
+    let linear = matches!(value, Type::Builder(_) | Type::MapBuilder(_) | Type::Future(_));
+    let declaration = *value != Type::Any && !linear && object.fields.len() == 1 && object.fields[0].storage == 0
+        && !layout.has_destroy
+        && object.error_cases.is_empty() && object.enum_cases == 0 && object.variant_cases.is_empty()
+        && object.role.is_none() && object.implements.is_empty() && !object.handle
+        && layout.selection_layout == selection && layout.may_reach_resource == reaches;
+    enforce(declaration, "ANY_BOX", "an any box holds one value with its retention and nothing else")
+}
+
+/// Every implementation table names a role once, has a function for each of its slots, and each
+/// function has the slot's entry ABI, its parameters after the implementing object and its results.
+fn check_role_impls(p: &Program, id: u32, object: &Object) -> Check {
+    let mut seen = BTreeSet::new();
+    for table in &object.implements {
+        let role = role_decl(p, table.role)?;
+        enforce(seen.insert(table.role), "ROLE_IMPL", "an object implements a role once")?;
+        enforce(table.slots.len() == role.slots.len(), "ROLE_IMPL", "implementation table misses or adds slots")?;
+        for (&function, slot) in table.slots.iter().zip(&role.slots) {
+            let f = p.functions.get(function as usize)
+                .ok_or_else(|| violation("ROLE_IMPL", "implementation names no function"))?;
+            let language = f.params.iter().map(|&location| loc_type(f, location))
+                .collect::<Result<Vec<_>, _>>()?.into_iter()
+                .filter_map(|ty| match ty { ProducedType::Value(ty) => Some(ty), _ => None }).collect::<Vec<_>>();
+            let mut expected = vec![Type::Object(id)];
+            expected.extend(&slot.params);
+            enforce(f.entry_abi == slot.entry_abi && language == expected && f.results == slot.results
+                && f.proofs.entry.as_ref().is_some_and(|entry| entry.destroy.is_none()),
+                "ROLE_IMPL", &format!("{}: implementation differs from role slot {}", f.symbol, slot.name))?;
+        }
     }
     Ok(())
 }
@@ -263,8 +749,11 @@ fn check_proofs(p: &Program, f: &Function) -> Check {
         locations(&dependency.obligations)?;
     }
     for registration in &f.proofs.registrations {
-        let EntryAbi::Defer { labels } = &at(&p.functions, registration.entry)?.entry_abi else {
-            return Err(error("registration requires defer entry"));
+        let labels: &[DeferLabel] = match &at(&p.functions, registration.entry)?.entry_abi {
+            EntryAbi::Defer { labels } => labels,
+            // An async defer entry has no replacement labels (C-6).
+            EntryAbi::AsyncDefer { .. } => &[],
+            _ => return Err(error("registration requires defer entry")),
         };
         let mut seen = BTreeSet::new();
         for label in &registration.labels {
@@ -287,10 +776,18 @@ fn check_proofs(p: &Program, f: &Function) -> Check {
         }
     }
     for schedule in &f.proofs.schedules {
-        require(schedule.services.is_empty(), "P1 D16 service schedule must be empty")?;
+        let mut seen = BTreeSet::new();
+        for &duty in &schedule.services {
+            enforce(loc_type(f, duty)? == ProducedType::Service(ServiceKind::CacheState), suspension::SCHEDULE,
+                "a scheduled duty is not a cache-state")?;
+            enforce(seen.insert(duty), suspension::SCHEDULE, "a schedule names one duty twice")?;
+        }
     }
+    let asynchronous = matches!(f.entry_abi, EntryAbi::AsyncBody { .. });
     for envelope in &f.proofs.envelopes {
-        require(envelope.failures & !15 == 0, "invalid P1 D18 failure mask")?;
+        require(envelope.failures & !(15 | ENVELOPE_CANCEL) == 0, "invalid D18 failure mask")?;
+        enforce(asynchronous || envelope.failures & ENVELOPE_CANCEL == 0, suspension::ASYNC_ENTRY,
+            "only an async body delivers a deferred cancellation")?;
     }
     for state in &f.proofs.states {
         at(&f.code, state.pc)?;
@@ -342,11 +839,36 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             Argument::Destination(ExitDestination::Scope(id)) => { at(&p.tables.scopes, id)?; }
             Argument::Flag(flag) => flags.push(flag),
             Argument::Registration(id) => { at(&f.proofs.registrations, id)?; }
-            Argument::Binding(_) | Argument::Field(_) | Argument::Label(_) | Argument::Kind(_) => {}
+            Argument::Dispatch(ref dispatch) => {
+                let slot = at(&role_decl(p, dispatch.role)?.slots, dispatch.slot)?;
+                ctx.value = slot.results.first().copied();
+                ctx.may_fail = dispatch.failures != 0;
+                let mut targets = BTreeSet::new();
+                let arity = 1 + slot.params.len() as u32;
+                enforce(dispatch.failures & !15 == 0 && !dispatch.targets.is_empty()
+                    && dispatch.targets.iter().all(|&target| {
+                        targets.insert(target) && implements(p, target, dispatch.role)
+                    })
+                    && dispatch.retained_params.iter().all(|&param| param < arity),
+                    "DISPATCH_SITE", "dispatch needs distinct implementing targets and an in-range contract")?;
+            }
+            Argument::Binding(_) | Argument::Field(_) | Argument::Label(_) | Argument::Kind(_)
+                | Argument::Continuation(_) | Argument::Protocol(_) => {}
         }
+    }
+    if op.frame_bound() {
+        enforce(f.entry_abi.asynchronous(), suspension::ASYNC_ENTRY,
+            &format!("{} belongs to async bodies only", op.name()))?;
     }
     if matches!(op, Opcode::ScopeTransfer | Opcode::OwnStage) {
         ctx.between = flags.first().copied().ok_or_else(|| error("missing Same/Between discriminator"))?;
+    }
+    if op == Opcode::ScopeTransfer {
+        // An admissible transfer moves only what its source admitted (OIR-2 `admissible(...)` selections).
+        let filter = args.iter().skip_while(|arg| !matches!(arg, Argument::Selection(_))).skip(1)
+            .collect::<Vec<_>>();
+        enforce(filter.is_empty() || filter == [&Argument::Flag(true)], TRANSFER_ADMISSION,
+            "a transfer's admission filter is one true flag after its selection")?;
     }
     if op == Opcode::ExitDispatch {
         require(flags.len() == 3, "exit.dispatch requires reserve/active-failure/may-fail close contract")?;
@@ -356,6 +878,9 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
     }
     if matches!(op, Opcode::InvokeCallOwn | Opcode::InvokeDefer) {
         require(args.iter().any(|arg| matches!(arg, Argument::Summary(_))), "missing result contract summary")?;
+    }
+    if matches!(op, Opcode::InvokeDispatch | Opcode::InvokeDispatchOwn) {
+        enforce(args.iter().any(|arg| matches!(arg, Argument::Dispatch(_))), "DISPATCH_SITE", "missing dispatch")?;
     }
     if op == Opcode::ExitCommit {
         // The load gate checks this schema against the typed pending, including through closes/edges.
@@ -385,8 +910,13 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
         Catch => {
             enforce(loc_type(f, locations[0])? == ProducedType::Value(Type::Failure),
                 "CATCH_FAILURE", "catch operand must be a failure")?;
+            // A plain Error, the Error role, or the system NativeFailure or Cancelled (language spec 9.5, #724).
             ctx.value = Some(match args.get(1) {
                 Some(Argument::Object(id)) if !p.objects[*id as usize].error_cases.is_empty() => Type::Object(*id),
+                // A multi-case Error variant catches each of its cases (descriptors of its `variant_cases`).
+                Some(Argument::Object(id)) if error_variant(p, *id) => Type::Variant(*id),
+                Some(Argument::Object(id)) if native_failure(p) == Some(*id) => Type::Object(*id),
+                Some(Argument::Object(id)) if cancelled(p) == Some(*id) => Type::Object(*id),
                 Some(Argument::Flag(true)) => Type::Error,
                 _ => return Err(violation("CATCH_TYPE", "catch target must be a declared plain Error")),
             });
@@ -412,6 +942,7 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             let ty = loc_type(f, locations[0])?;
             let valid = if kind == Some(0) {
                 matches!(ty, ProducedType::Value(Type::Object(id)) if !p.objects[id as usize].error_cases.is_empty())
+                    || matches!(ty, ProducedType::Value(Type::Variant(id)) if error_variant(p, id))
                     || ty == ProducedType::Value(Type::Error)
             } else {
                 ty == ProducedType::Value(Type::Str)
@@ -420,13 +951,66 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
         }
         ArrayGet => {
             enforce(locations.len() == 2, "ARRAY_GET_OPERANDS", "array.get needs array and index")?;
-            let ProducedType::Value(Type::Array(shape)) = loc_type(f, locations[0])? else {
-                return Err(violation("ARRAY_GET_OPERANDS", "array.get receiver must be a plain array"));
+            // A plain array yields its element; a byte array (`@byte`, its own packed representation)
+            // yields a byte. The receiver's declared type is the evidence for the read the machine emits.
+            let element = match loc_type(f, locations[0])? {
+                ProducedType::Value(array @ (Type::Array(_) | Type::Bytes)) => element_type(array),
+                _ => return Err(violation("ARRAY_GET_OPERANDS",
+                    "array.get receiver must be a plain array or a byte array")),
             };
             enforce(loc_type(f, locations[1])? == ProducedType::Value(Type::Int),
                 "ARRAY_GET_OPERANDS", "array.get index must be int")?;
-            ctx.value = shape.element();
+            ctx.value = element;
             ctx.may_fail = true;
+        }
+        BuilderPush | BuilderAppend | BuilderRange | BuilderFinish | BuilderAbandon => {
+            let ty = |index: usize| match locations.get(index).map(|&location| loc_type(f, location)) {
+                Some(Ok(ProducedType::Value(ty))) => Some(ty),
+                _ => None,
+            };
+            let buffer = ty(0);
+            let packet = locations.last().map(|&location| loc_type(f, location));
+            let (finished, element) = match buffer {
+                Some(Type::Builder(id)) => match p.composites.get(id as usize) {
+                    Some(&Composite::Builder { array }) => (Some(array), element_type(array).map(|item| (None, item))),
+                    _ => (None, None),
+                },
+                Some(Type::MapBuilder(id)) => match p.composites.get(id as usize) {
+                    Some(&Composite::Map { key, value }) => (Some(Type::Map(id)), Some((Some(key), value))),
+                    _ => (None, None),
+                },
+                _ => (None, None),
+            };
+            let operands = match (op, element) {
+                (BuilderPush, Some((None, item))) => locations.len() == 3 && ty(1) == Some(item),
+                (BuilderPush, Some((Some(key), value))) => locations.len() == 4 && ty(1) == Some(key)
+                    && ty(2) == Some(value),
+                (BuilderAppend, Some(_)) => locations.len() == 3 && ty(1) == finished,
+                (BuilderRange, Some((None, Type::Int))) => {
+                    locations.len() == 4 && ty(1) == Some(Type::Int) && ty(2) == Some(Type::Int)
+                }
+                (BuilderFinish | BuilderAbandon, Some(_)) => locations.len() == 2,
+                _ => false,
+            };
+            enforce(operands && packet == Some(Ok(ProducedType::Service(Packet))), "BUILDER_OPERANDS",
+                "builder transition operands differ from its buffer, elements and journal packet")?;
+            ctx.buffer = buffer;
+            ctx.value = finished;
+            ctx.may_fail = op != BuilderAbandon;
+        }
+        Lookup => {
+            let types = locations.iter().map(|&location| loc_type(f, location)).collect::<Result<Vec<_>, _>>()?;
+            ctx.value = match types.as_slice() {
+                [ProducedType::Value(array @ (Type::Array(_) | Type::Bytes)), ProducedType::Value(Type::Int)] => {
+                    element_type(*array)
+                }
+                [ProducedType::Value(Type::Map(id)), ProducedType::Value(key)] => match p.composites.get(*id as usize) {
+                    Some(Composite::Map { key: declared, value }) if declared == key => Some(*value),
+                    _ => None,
+                },
+                _ => None,
+            };
+            enforce(ctx.value.is_some(), "LOOKUP_OPERANDS", "lookup needs an array and int or a map and its key")?;
         }
         DepsOf => value(0)?,
         OwnMove | OwnJoin => {
@@ -437,6 +1021,14 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
         OwnSplit | OwnSplitChecked => {
             input(0, Packet)?;
             for index in 1..locations.len() { value(index)?; }
+        }
+        OwnDynamic => {
+            // A scope state and the packet of unknown retention it takes in (DYNAMIC_SITE).
+            enforce(locations.len() == 2 && loc_type(f, locations[0])? == ProducedType::Service(ScopeState)
+                && loc_type(f, locations[1])? == ProducedType::Service(Packet), "DYNAMIC_SITE",
+                "own.dynamic takes a scope state and a packet")?;
+            input(0, ScopeState)?;
+            input(1, Packet)?;
         }
         OwnAdmit | OwnAccept | OwnBind | OwnRebind => {
             input(0, ScopeState)?;
@@ -507,7 +1099,122 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             input(0, Pending)?;
             input(1, Cleanup)?;
         }
-        CleanupSettle | CleanupPlan | CleanupNext | CleanupFinish => input(0, Cleanup)?,
+        CleanupPlan | CleanupNext | CleanupFinish | CleanupDeliverCancel => input(0, Cleanup)?,
+        CleanupSettle => {
+            input(0, Cleanup)?;
+            if let Some(&duty) = locations.get(1) {
+                enforce(loc_type(f, duty)? == ProducedType::Service(CacheState), suspension::SCHEDULE,
+                    "a settled duty is not a cache-state")?;
+            }
+        }
+        FutureNew => {
+            let entry = args.iter().find_map(|arg| match arg { Argument::Entry(id) => Some(*id), _ => None })
+                .ok_or_else(|| error("fut.new requires an entry"))?;
+            let callee = at(&p.functions, entry)?;
+            let layout = p.frame_layout(callee).filter(|_| matches!(callee.entry_abi, EntryAbi::AsyncBody { .. }))
+                .ok_or_else(|| violation(suspension::ASYNC_ENTRY, "fut.new must name an async body"))?;
+            let start = layout.saved_types(0).ok_or_else(|| error("async body without a start continuation"))?;
+            // A fixed root starts without a packet: only the root driver starts it (#667).
+            enforce(!suspension::fixed_root(p, entry), suspension::ASYNC_ENTRY,
+                "fut.new cannot create a fixed root")?;
+            let inputs = start.iter().filter(|ty| matches!(ty, ProducedType::Value(_))).count();
+            let future = args.iter().find_map(|arg| match arg {
+                Argument::Result(result) => *result,
+                _ => None,
+            });
+            let Some(Type::Future(index)) = future else {
+                return Err(violation(FUTURE_TYPES, "fut.new must produce a Future type"));
+            };
+            enforce(p.tables.future_results.get(index as usize) == Some(&callee.results.first().copied()),
+                FUTURE_TYPES, "the Future type differs from the async body's result")?;
+            require(locations.len() >= inputs + 2, "fut.new needs its arguments, input packet and owner state")?;
+            for (&location, expected) in locations.iter().zip(&start[..inputs]) {
+                require(loc_type(f, location)? == *expected, "fut.new argument type mismatch")?;
+            }
+            input(inputs, Packet)?;
+            for index in inputs + 1..locations.len() - 1 {
+                input(index, Deps)?;
+            }
+            input(locations.len() - 1, ScopeState)?;
+            ctx.value = future;
+        }
+        Await | FutureCancel | FutureDone | FutureCancelled => {
+            let Some(Type::Future(index)) = locations.first().and_then(|&location| match loc_type(f, location) {
+                Ok(ProducedType::Value(ty)) => Some(ty),
+                _ => None,
+            }) else {
+                return Err(violation(FUTURE_TYPES, format!("{} needs a Future", op.name())));
+            };
+            if op == Await {
+                ctx.value = *p.tables.future_results.get(index as usize)
+                    .ok_or_else(|| violation(FUTURE_TYPES, "a Future type names no future_results entry"))?;
+                ctx.may_fail = true;
+            }
+        }
+        AwaitTake | UniqueCacheProof => {
+            let Some(Type::Future(index)) = locations.first().and_then(|&location| match loc_type(f, location) {
+                Ok(ProducedType::Value(ty)) => Some(ty),
+                _ => None,
+            }) else {
+                return Err(violation(FUTURE_TYPES, format!("{} needs a Future", op.name())));
+            };
+            let outcome = *p.tables.future_results.get(index as usize)
+                .ok_or_else(|| violation(FUTURE_TYPES, "a Future type names no future_results entry"))?;
+            if op == AwaitTake {
+                input(1, UniqueCache)?;
+                ctx.value = outcome;
+                ctx.may_fail = true;
+            }
+        }
+        CacheRehome => {
+            input(0, Pending)?;
+            input(1, CacheState)?;
+        }
+        FuturePublish => {
+            input(0, Frame)?;
+            let rest = &locations[1..];
+            if flags.first() == Some(&true) {
+                let value = f.results.first().copied();
+                let offset = usize::from(value.is_some());
+                require(rest.len() > offset, "fut.publish success needs its value and packet")?;
+                if let Some(ty) = value {
+                    enforce(loc_type(f, rest[0])? == ProducedType::Value(ty), FUTURE_TYPES,
+                        "the published value differs from the Future type")?;
+                }
+                input(1 + offset, Packet)?;
+                for index in 2 + offset..locations.len() {
+                    input(index, Deps)?;
+                }
+            } else {
+                require(rest.len() == 1 && loc_type(f, rest[0])? == ProducedType::Value(Type::Failure),
+                    "fut.publish failure needs exactly one failure")?;
+            }
+        }
+        FrameSave | FrameResume => {
+            input(0, Frame)?;
+            let continuation = args.iter().find_map(|arg| match arg {
+                Argument::Continuation(id) => Some(*id),
+                _ => None,
+            }).ok_or_else(|| error("frame operation without a continuation"))?;
+            let layout = p.frame_layout(f).ok_or_else(|| error("async body without a frame layout"))?;
+            let saved = layout.saved_types(continuation)
+                .ok_or_else(|| violation(suspension::RESUME_TABLE, "unknown continuation"))?;
+            if op == FrameSave {
+                enforce(continuation != 0, suspension::SUSPEND_BRACKET, "the start continuation is never saved")?;
+                let actual = locations[1..].iter().map(|&location| loc_type(f, location))
+                    .collect::<Result<Vec<_>, _>>()?;
+                enforce(actual == saved, suspension::FRAME_LINEAR,
+                    "frame.save values differ from the continuation's saved slots")?;
+            } else {
+                ctx.slots = saved;
+            }
+        }
+        AwaitUnwind => {
+            input(0, ScopeState)?;
+            require(loc_type(f, locations[1])? == ProducedType::Value(Type::Failure), "expected failure view")?;
+            input(2, TaskState)?;
+            input(3, Receipt)?;
+        }
         CleanupFailure => {
             input(0, Cleanup)?;
             require(loc_type(f, locations[1])? == ProducedType::Value(Type::Failure), "expected failure view")?;
@@ -555,12 +1262,16 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
                 require(at(&f.proofs.registrations, map)?.entry == entry, "defer registration/entry mismatch")?;
             }
             let abi = &at(&p.functions, entry)?.entry_abi;
-            require(matches!((op, abi), (InvokeCallOwn, EntryAbi::Owned) | (InvokeDefer, EntryAbi::Defer { .. })),
-                "invoke entry ABI mismatch")?;
+            require(matches!((op, abi), (InvokeCallOwn, EntryAbi::Owned)
+                | (InvokeDefer, EntryAbi::Defer { .. } | EntryAbi::AsyncDefer { .. })), "invoke entry ABI mismatch")?;
             let callee = at(&p.functions, entry)?;
-            let language = callee.params.iter().map(|&location| loc_type(callee, location))
-                .collect::<Result<Vec<_>, _>>()?.into_iter()
-                .filter(|ty| matches!(ty, ProducedType::Value(_))).collect::<Vec<_>>();
+            // An async defer entry takes its frame; its captures and its packet arrive through its start (C-2).
+            let inputs = match p.frame_layout(callee) {
+                Some(layout) => layout.saved_types(0).ok_or_else(|| error("async defer entry without a start"))?,
+                None => callee.params.iter().map(|&location| loc_type(callee, location))
+                    .collect::<Result<Vec<_>, _>>()?,
+            };
+            let language = inputs.iter().copied().filter(|ty| matches!(ty, ProducedType::Value(_))).collect::<Vec<_>>();
             require(locations.len() > language.len(), "owning call requires input packet")?;
             for (&location, expected) in locations.iter().zip(&language) {
                 require(loc_type(f, location)? == *expected, "owning call language argument type mismatch")?;
@@ -569,10 +1280,37 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             for &location in &locations[language.len() + 1..] {
                 require(loc_type(f, location)? == ProducedType::Service(Deps), "expected proof-only call deps")?;
             }
-            require(callee.params.iter().filter(|&&location| {
-                loc_type(callee, location) == Ok(ProducedType::Service(Packet))
-            }).count() == 1, "owning entry requires exactly one input packet")?;
+            require(inputs.iter().filter(|&&ty| ty == ProducedType::Service(Packet)).count() == 1,
+                "owning entry requires exactly one input packet")?;
             if op == InvokeCallOwn {
+                require(flags.len() == 1, "owned call requires explicit cleanup mode")?;
+            }
+        }
+        InvokeDispatch | InvokeDispatchOwn => {
+            let Some(Argument::Dispatch(dispatch)) = args.first() else {
+                return Err(violation("DISPATCH_SITE", "missing dispatch"));
+            };
+            let slot = &role_decl(p, dispatch.role)?.slots[dispatch.slot as usize];
+            let abi = if op == InvokeDispatch { EntryAbi::Observation } else { EntryAbi::Owned };
+            enforce(slot.entry_abi == abi, "DISPATCH_SITE", "dispatch ABI differs from the role slot")?;
+            // The receiver is a role value, or the one object a single-target dispatch selects.
+            let receiver = match locations.first().map(|&location| loc_type(f, location)).transpose()? {
+                Some(ProducedType::Value(Type::Object(object))) if dispatch.targets == [object] => Type::Object(object),
+                _ => Type::Role(dispatch.role),
+            };
+            let mut expected = vec![ProducedType::Value(receiver)];
+            expected.extend(slot.params.iter().map(|&ty| ProducedType::Value(ty)));
+            let actual = locations.iter().take(expected.len()).map(|&loc| loc_type(f, loc))
+                .collect::<Result<Vec<_>, _>>()?;
+            enforce(actual == expected, "DISPATCH_SITE", "dispatch receiver or arguments differ from the slot")?;
+            if op == InvokeDispatch {
+                enforce(locations.len() == expected.len(), "DISPATCH_SITE", "plain dispatch carries no services")?;
+            } else {
+                require(locations.len() > expected.len(), "owning call requires input packet")?;
+                input(expected.len(), Packet)?;
+                for &location in &locations[expected.len() + 1..] {
+                    require(loc_type(f, location)? == ProducedType::Service(Deps), "expected proof-only call deps")?;
+                }
                 require(flags.len() == 1, "owned call requires explicit cleanup mode")?;
             }
         }
@@ -622,6 +1360,9 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
             Selection(_) => 'e', Plan(_) => 'p', Schedule(_) => 'd', Envelope(_) => 'v',
             Entry(_) => 'f', Object(_) => 'o', Binding(_) => 'i', Field(_) => 't',
             Label(_) => 'a', Flag(_) => '?', Kind(_) => 'k', Registration(_) => 'm', Destination(_) => 'x',
+            Continuation(_) => 'c',
+            Dispatch(_) => 'g',
+            Protocol(_) => 'q',
         }
     };
     let shape: String = args.iter().map(kind).collect();
@@ -635,20 +1376,21 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         OwnMove | DepsOf => shape == "l",
         OwnJoin => !shape.is_empty() && shape.chars().all(|ch| ch == 'l'),
         OwnAdmit | OwnAccept => shape == "ll",
+        OwnDynamic => shape == "qll",
         OwnBind | OwnRebind => shape == "lisll",
         OwnStage => shape == "?lotll" || shape == "?llotll",
         OwnSplit => shape == "le",
         OwnSplitChecked => shape.starts_with("le") && shape[2..].chars().all(|ch| ch == 'l'),
         ScopeSplit => shape.starts_with("le") && shape[2..].chars().all(|ch| ch == 'l' || ch == '?')
             && args.iter().filter(|arg| matches!(arg, Flag(_))).count() <= 1,
-        ScopeTransfer => shape == "?le" || shape == "?lle",
+        ScopeTransfer => matches!(shape.as_str(), "?le" | "?lle" | "?le?" | "?lle?"),
         DeferRegister => shape.starts_with("lm") && shape[2..].chars().all(|ch| ch == 'l' || ch == 'i'),
         ExitPrepare => shape == "kble" || shape == "kblle",
         ExitExtend | ExitAbort | CleanupFailure | CleanupDestroy => shape == "ll",
         ExitReplace => shape == "lkble" || shape == "lkblle",
         ExitCommit => matches!(shape.as_str(), "lx" | "lb" | "lxr"),
         CleanupBegin => matches!(shape.as_str(), "lbv" | "llbv" | "lllbv"),
-        CleanupSettle => shape == "ld",
+        CleanupSettle => shape == "ld" || shape == "ldl",
         CleanupPlan => shape == "lp",
         CleanupNext | CleanupFinish | FailureDispatch => shape == "l",
         DestroyDirect => shape == "llof",
@@ -658,6 +1400,22 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         RetOwn | RetDefer => shape.chars().all(|ch| matches!(ch, 'l' | 'a')),
         ExitDispatch => shape == "lll???",
         OwnCreateCommit => shape == "lob",
+        InvokeDispatch => shape.starts_with('g') && shape[1..].chars().all(|ch| ch == 'l'),
+        InvokeDispatchOwn => shape.starts_with('g') && shape[1..].chars().all(|ch| ch == 'l' || ch == '?'),
+        BuilderPush => shape == "lll" || shape == "llll",
+        BuilderAppend => shape == "lll",
+        BuilderRange => shape == "?llll",
+        BuilderFinish | BuilderAbandon | Lookup => shape == "ll",
+        FutureNew => shape.len() >= 5 && shape.starts_with("fsr") && shape[3..].chars().all(|ch| ch == 'l'),
+        Await | FutureCancel | FutureDone | FutureCancelled | CleanupDeliverCancel | UniqueCacheProof => shape == "l",
+        // The Future, its take capability and the awaiting scope of the temporary boundary (C5).
+        AwaitTake => shape == "lls",
+        // The exit's destination, the pending reserve and the cache duty (C-4, token form).
+        CacheRehome => shape == "xll",
+        FuturePublish => shape.len() > 2 && shape.starts_with("l?") && shape[2..].chars().all(|ch| ch == 'l'),
+        FrameSave => shape.starts_with("lc") && shape[2..].chars().all(|ch| ch == 'l'),
+        FrameResume => shape == "lc",
+        AwaitUnwind => shape == "llll",
     };
     require(valid, &format!("invalid operands for {}", op.name()))
 }
@@ -673,9 +1431,14 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
     let expect = |args: &[Type], result: Option<Type>| -> Check {
         require(types == args && out == result, "scalar operand/result type or arity mismatch")
     };
-    let immediate_none = !matches!(op, Const | RangeNew | ObjNew | ObjInit | ObjGet | ObjNext | EnumCase | VariantGet);
+    let immediate_none = !matches!(op,
+        Const | RangeNew | ObjNew | ObjInit | ObjGet | ObjNext | EnumCase | VariantGet | GlobalGet);
     if immediate_none {
         require(*imm == Immediate::None, "unexpected scalar immediate")?;
+    }
+    if let Some((operands, result)) = op.scalar_signature() {
+        return enforce(types == operands && out == Some(result), "SCALAR_OP_TYPE",
+            "operand or result types differ from the scalar operation's signature");
     }
     match op {
         EnumCase => {
@@ -692,15 +1455,36 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
                 "ENUM_CASE", "invalid plain enum case")?;
             expect(&[], Some(Type::Object(*id)))
         }
+        GlobalGet => {
+            let Immediate::Global(index) = *imm else {
+                return Err(violation("GLOBAL_GET", "global.get requires a module constant index"));
+            };
+            let global = p.globals.get(index as usize)
+                .ok_or_else(|| violation("GLOBAL_GET", "global.get names no module constant"))?;
+            enforce(types.is_empty() && out == Some(global.ty), "GLOBAL_GET",
+                "global.get takes no operand and produces the constant's type")
+        }
         ArrayNew => {
-            let Some(Type::Array(shape)) = out else {
+            let Some(element) = out.and_then(element_type) else {
                 return Err(violation("ARRAY_NEW_TYPE", "array.new must produce a plain array"));
             };
-            enforce(shape.element().is_some_and(|element| types.iter().all(|ty| *ty == element)),
+            enforce(types.iter().all(|ty| *ty == element),
                 "ARRAY_NEW_TYPE", "array.new element types differ from the result element")
         }
         ArrayLen => enforce(matches!(types, [Type::Array(_) | Type::Bytes]) && out == Some(Type::Int),
             "ARRAY_LEN_TYPE", "array.len needs a plain array and an int result"),
+        MapNew | MapLen | MapHas | MapGet | MapKeys | MapValues | MapKeyAt | MapValueAt | MapMerge
+            | MapDifference => enforce(map_types(p, op, types, out), "MAP_OP_TYPE",
+                "map operation operand/result types mismatch"),
+        ArrayConcat | ArrayJoin | ArraySlice | ArrayRemove | ArrayReplace | ArrayDifference => {
+            // array.difference compares elements structurally, which only plain data allows.
+            let comparable = op != ArrayDifference
+                || types.first().is_some_and(|&ty| self::comparable(p, ty));
+            enforce(array_types(op, types, out) && comparable, "ARRAY_OP_TYPE",
+                "array operation operand/result types mismatch")
+        }
+        BuilderNew => enforce(types.is_empty() && matches!(out, Some(Type::Builder(_) | Type::MapBuilder(_))),
+            "BUILDER_NEW_TYPE", "builder.new must produce a builder"),
         Const => {
             let Immediate::Constant(value) = imm else { return Err(error("missing constant")); };
             if let Constant::Descriptor(id) = value {
@@ -753,12 +1537,21 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
                 "variant.get needs a case of the variant and one of its payload fields")
         }
         ValEq | ValNe => {
-            let object = matches!(types, [Type::Object(left), Type::Object(right)] if left == right);
-            enforce(object && out == Some(Type::Bool), "VAL_EQ_TYPE",
-                "value comparison needs two objects of one declaration and a bool result")?;
+            let comparable = match types {
+                // Two values of one role compare as their objects: different implementations are unequal.
+                [Type::Object(left), Type::Object(right)] | [Type::Role(left), Type::Role(right)] => left == right,
+                [left @ (Type::Array(_) | Type::Bytes | Type::Map(_) | Type::Variant(_) | Type::Range), right] => {
+                    left == right
+                }
+                // A generic `==` specialized to a scalar (`Frequencies<string>`) compares two values of it.
+                [left @ (Type::Int | Type::Bool | Type::Str | Type::Float | Type::Char | Type::Byte | Type::Rat),
+                    right] => left == right,
+                _ => false,
+            };
+            enforce(comparable && out == Some(Type::Bool), "VAL_EQ_TYPE",
+                "value comparison needs two values of one scalar, object or plain collection type")?;
             // Structural equality is defined on plain values; identities and error payloads are not compared.
-            let [Type::Object(id), _] = types else { return Ok(()) };
-            closed_plain(*id, p, "VAL_EQ_TYPE")
+            enforce(self::comparable(p, types[0]), "VAL_EQ_TYPE", "value comparison needs closed plain operands")
         }
         Convert => enforce(matches!((types, out), ([from], Some(to)) if conversion(*from, to).is_some()),
             "CONVERT_TYPE", "conversion between these types is not defined"),
@@ -773,7 +1566,35 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
                 _ => false,
             };
             enforce(valid && out == Some(Type::Bool), "TEST_OPERAND",
-                "test operation operand types differ from its check, or its result is not bool")
+                "test operation operand types differ from its check, or its result is not bool")?;
+            // `test.is` compares as `val.eq` does: objects are compared structurally only when closed plain.
+            let compared = match types {
+                [Type::Successor(id), _] => Some(Type::Object(*id)),
+                [ty @ (Type::Object(_) | Type::Variant(_)), _] => Some(*ty),
+                _ => None,
+            };
+            enforce(compared.is_none_or(|ty| comparable(p, ty)), "TEST_OPERAND",
+                "test.is/test.isnt compare objects only when they are closed plain data")
+        }
+        RoleNarrow => enforce(matches!((types, out), ([Type::Role(_)], Some(Type::Role(_)))), "ROLE_NARROW",
+            "role narrowing converts a role value to another role"),
+        // any.box: an any box becomes an `any` value.
+        Move if out == Some(Type::Any) && types.len() == 1 && types[0] != Type::Any => {
+            let boxed = matches!(types[0], Type::Object(id)
+                if p.objects.get(id as usize).is_some_and(|object| object.any_box));
+            enforce(boxed, "ANY_WRAP", "only an any box converts to an any value")
+        }
+        Move if matches!(out, Some(Type::Role(_) | Type::RoleSuccessor(_))) && types.len() == 1
+            && out != Some(types[0]) =>
+        {
+            // role.wrap: an implementing object becomes a role value; succ.take drops a role successor's permission.
+            let valid = match (types[0], out) {
+                (Type::Object(object), Some(Type::Role(role)))
+                    | (Type::Successor(object), Some(Type::RoleSuccessor(role))) => implements(p, object, role),
+                (Type::RoleSuccessor(source), Some(Type::Role(role))) => source == role,
+                _ => false,
+            };
+            enforce(valid, "ROLE_WRAP", "only an implementing object converts to a role value")
         }
         Move => {
             require(types.len() == 1, "move requires one source")?;
@@ -781,8 +1602,17 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
                 (Type::Successor(a), Some(Type::Object(b))) if a == b)
                 || matches!((types[0], out), (Type::Object(id), Some(Type::Error))
                     if !p.objects[id as usize].error_cases.is_empty())
+                || matches!((types[0], out), (Type::Variant(id), Some(Type::Error)) if error_variant(p, id))
                 || matches!((types[0], out), (Type::Object(case), Some(Type::Variant(variant)))
-                    if p.objects[variant as usize].variant_cases.contains(&case));
+                    if p.objects[variant as usize].variant_cases.contains(&case))
+                || out.is_some_and(|out| never_retag(&p.composites, types[0], out));
+            let never_source = match types[0] {
+                Type::Array(shape) => shape.leaf == ArrayLeaf::Never,
+                Type::Map(id) => matches!(p.composites.get(id as usize), Some(Composite::Map { key: Type::Never, .. })),
+                _ => false,
+            };
+            enforce(valid || !never_source, NEVER_RETAG,
+                "a collection of never leaves retags only to its own shape, keeping a map's value type")?;
             require(valid, "invalid move/succ.take type")
         }
         Undef => require(types.is_empty() && out.is_some(), "invalid undef"),
@@ -827,6 +1657,56 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
                 }
             }
         }
+        _ => unreachable!("scalar family operations are checked by their signature"),
+    }
+}
+
+/// Operand and result types of a map operation.
+fn map_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>) -> bool {
+    use DataOp::*;
+    let map = |ty: Type| match ty {
+        Type::Map(id) => match p.composites.get(id as usize) {
+            Some(Composite::Map { key, value }) => Some((*key, *value)),
+            _ => None,
+        },
+        _ => None,
+    };
+    if op == MapNew {
+        let Some((key, value)) = out.and_then(map) else { return false };
+        return types.len().is_multiple_of(2) && types.chunks(2).all(|pair| pair == [key, value]);
+    }
+    if op == MapMerge {
+        return !types.is_empty() && out.and_then(map).is_some() && types.iter().all(|&ty| Some(ty) == out);
+    }
+    let Some(&receiver) = types.first() else { return false };
+    let Some((key, value)) = map(receiver) else { return false };
+    match op {
+        MapLen => types.len() == 1 && out == Some(Type::Int),
+        MapHas => types == [receiver, key] && out == Some(Type::Bool),
+        MapGet => types == [receiver, key] && out == Some(value),
+        MapKeys => types.len() == 1 && out.is_some() && out == ArrayType::of(key),
+        MapValues => types.len() == 1 && out.is_some() && out == ArrayType::of(value),
+        MapKeyAt => types == [receiver, Type::Int] && out == Some(key),
+        MapValueAt => types == [receiver, Type::Int] && out == Some(value),
+        MapDifference => out == Some(receiver)
+            && types[1..].iter().all(|&ty| map(ty).is_some_and(|(removed, _)| removed == key)),
+        _ => false,
+    }
+}
+
+/// Operand and result types of an array operation; the receiver is an array or a byte array.
+fn array_types(op: DataOp, types: &[Type], out: Option<Type>) -> bool {
+    use DataOp::*;
+    let Some(&receiver) = types.first() else { return false };
+    let Some(element) = element_type(receiver) else { return false };
+    match op {
+        ArrayConcat => out == Some(receiver) && types.iter().all(|&ty| ty == receiver),
+        ArrayJoin => types == [receiver, Type::Str] && element == Type::Str && out == Some(Type::Str),
+        ArraySlice => types == [receiver, Type::Int, Type::Int] && out == Some(receiver),
+        ArrayRemove => types == [receiver, Type::Int] && out == Some(receiver),
+        ArrayReplace => types == [receiver, Type::Int, element] && out == Some(receiver),
+        ArrayDifference => out == Some(receiver) && types.iter().all(|&ty| ty == receiver),
+        _ => false,
     }
 }
 
@@ -861,7 +1741,8 @@ pub(crate) fn checked_edges<'a>(p: &Program, f: &Function, inst: &'a Instruction
         match flow {
             Flow::Next(destinations) => {
                 require(!op.is_terminator() || matches!(op, Opcode::RetOwn | Opcode::RetDefer)
-                    || matches!(op, Opcode::InvokeCallOwn | Opcode::InvokeObserve) && !ctx.may_fail,
+                    || matches!(op, Opcode::InvokeCallOwn | Opcode::InvokeObserve | Opcode::InvokeDispatch
+                        | Opcode::InvokeDispatchOwn) && !ctx.may_fail,
                     "terminator requires outcomes")?;
                 if *op == Opcode::DepsOf {
                     let [Argument::Location(anchor)] = arguments.as_slice() else { unreachable!() };
@@ -918,8 +1799,9 @@ fn uses(inst: &Instruction) -> Vec<Location> {
 
 fn verify_function(p: &Program, f: &Function) -> Check {
     check_proofs(p, f)?;
+    suspension::check_entry(f)?;
     if f.proofs.entry.as_ref().is_some_and(|entry| entry.external.is_some()) {
-        require(f.code.is_empty() && f.blocks.is_empty(), "external entry cannot carry code")?;
+        enforce(f.code.is_empty() && f.blocks.is_empty(), "EXTERNAL_SIGNATURE", "external entry cannot carry code")?;
         for &param in &f.params {
             loc_type(f, param)?;
         }
@@ -948,6 +1830,13 @@ fn verify_function(p: &Program, f: &Function) -> Check {
         for pc in block.pc as usize..end {
             let inst = &f.code[pc];
             require(terminates(inst) == (pc + 1 == end), "missing or early block terminator")?;
+            if matches!(inst, Instruction::Data { .. } | Instruction::Champ { .. }) {
+                // A never value comes only from an unreachable read (an element of an empty collection, an
+                // undef placeholder): no operation may consume it as a word of any type.
+                let never = operand_reads(inst).into_iter()
+                    .any(|location| matches!(loc_type(f, location), Ok(ProducedType::Value(Type::Never))));
+                enforce(!never, NEVER_OPERAND, &format!("an operation reads a value of type never at {pc}"))?;
+            }
             match inst {
                 Instruction::Data { op, inputs, output, immediate } => {
                     check_data(p, f, *op, inputs, *output, immediate)?;
@@ -961,6 +1850,10 @@ fn verify_function(p: &Program, f: &Function) -> Check {
                 }
                 Instruction::Raise(value) => {
                     require(at(&f.registers, *value)? == &Type::Failure, "raise needs failure")?;
+                }
+                Instruction::Ret(values) if f.entry_abi.asynchronous() => {
+                    enforce(values.is_empty(), suspension::ASYNC_ENTRY,
+                        "an async body publishes instead of returning")?;
                 }
                 Instruction::Ret(values) => {
                     enforce(f.entry_abi == EntryAbi::Observation, "ENTRY_RETURN_ABI",
@@ -1062,27 +1955,263 @@ fn verify_function(p: &Program, f: &Function) -> Check {
                     && let Some(defined) = def_pc
                     && matches!(f.code[defined], Instruction::Data { op: DataOp::Undef, .. })
                 {
-                    let allowed = match &f.code[pc] {
-                        Instruction::Data { op: DataOp::ObjNew, .. } => true,
-                        Instruction::Data { op: DataOp::ObjInit | DataOp::ObjNext, inputs, .. } => {
-                            inputs.first() != Some(&reg)
-                        }
-                        _ => false,
-                    };
+                    // Forwarding along an edge is not a read: check_unbound tracks the parameter it binds.
+                    let forwarded = !operand_reads(&f.code[pc]).contains(&used) && !metadata.contains(&used)
+                        && edge_sources(&f.code[pc]).contains(&used);
+                    let allowed = construction_operand(&f.code[pc], reg) || forwarded;
                     require(allowed, &format!("undef r{reg} outside construction fields at {pc}: {:?}", f.code[pc]))?;
                 }
             }
         }
     }
+    suspension::check_structure(p, f)?;
+    check_unbound(f)?;
     check_successors(p, f, &pcs)?;
+    check_builders(p, f, &pcs)?;
     Ok(())
 }
 
+/// A construction field operand: any operand of obj.new, a non-receiver operand of obj.init/obj.next.
+fn construction_operand(inst: &Instruction, reg: u32) -> bool {
+    match inst {
+        Instruction::Data { op: DataOp::ObjNew, .. } => true,
+        Instruction::Data { op: DataOp::ObjInit | DataOp::ObjNext, inputs, .. } => inputs.first() != Some(&reg),
+        _ => false,
+    }
+}
+
+/// Locations an instruction reads as operands, without its edges.
+fn operand_reads(inst: &Instruction) -> BTreeSet<Location> {
+    match inst {
+        Instruction::Data { inputs, .. } | Instruction::Ret(inputs) => {
+            inputs.iter().copied().map(Location::Register).collect()
+        }
+        Instruction::Cond { condition: id, .. } | Instruction::Raise(id) => BTreeSet::from([Location::Register(*id)]),
+        Instruction::Champ { arguments, .. } => arguments.iter().filter_map(|argument| match argument {
+            Argument::Location(location) => Some(*location),
+            _ => None,
+        }).collect(),
+        _ => BTreeSet::new(),
+    }
+}
+
+fn edge_sources(inst: &Instruction) -> BTreeSet<Location> {
+    allocation::outgoing(inst).into_iter().flat_map(|edge| edge.assignments.iter()).filter_map(|assignment| {
+        match assignment.source {
+            Source::Location(location) => Some(location),
+            Source::ProducedSlot(_) => None,
+        }
+    }).collect()
+}
+
+/// A block parameter that an edge may bind to an undef placeholder is itself possibly unbound: like the
+/// placeholder, it is read only as a construction field operand, or forwarded to another parameter.
+fn check_unbound(f: &Function) -> Check {
+    let mut unbound = f.code.iter().filter_map(|inst| match inst {
+        Instruction::Data { op: DataOp::Undef, output: Some(id), .. } => Some(Location::Register(*id)),
+        _ => None,
+    }).collect::<BTreeSet<_>>();
+    let placeholders = unbound.clone();
+    loop {
+        let mut changed = false;
+        for inst in &f.code {
+            for edge in allocation::outgoing(inst) {
+                for assignment in &edge.assignments {
+                    if let Source::Location(source) = assignment.source
+                        && unbound.contains(&source)
+                    {
+                        changed |= unbound.insert(assignment.destination);
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    for (pc, inst) in f.code.iter().enumerate() {
+        for location in operand_reads(inst) {
+            let Location::Register(reg) = location else { continue };
+            if unbound.contains(&location) && !placeholders.contains(&location) {
+                enforce(construction_operand(inst, reg), "UNBOUND_READ",
+                    &format!("possibly unbound r{reg} read outside construction fields at {pc}"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn builder_transition(op: Opcode) -> bool {
+    matches!(op, Opcode::BuilderPush | Opcode::BuilderAppend | Opcode::BuilderRange | Opcode::BuilderFinish
+        | Opcode::BuilderAbandon)
+}
+
+/// A builder is unique: `builder.new` or a transition outcome creates it, exactly one transition or edge
+/// consumes it on every reachable path, and nothing else reads it (`BUILDER_LINEAR`).
+fn check_builders(p: &Program, f: &Function, pcs: &BTreeMap<u32, usize>) -> Check {
+    let builder = |location| matches!(loc_type(f, location),
+        Ok(ProducedType::Value(Type::Builder(_) | Type::MapBuilder(_))));
+    let linear = |condition: bool, message: &str| enforce(condition, "BUILDER_LINEAR", message);
+    linear(!f.params.iter().any(|&param| builder(param))
+        && !f.results.iter().any(|ty| matches!(ty, Type::Builder(_) | Type::MapBuilder(_))),
+        "a builder cannot cross an entry")?;
+    let mut incoming: Vec<Option<BTreeSet<Location>>> = vec![None; f.blocks.len()];
+    incoming[0] = Some(BTreeSet::new());
+    let mut stored = 0usize;
+    let mut work = vec![0];
+    while let Some(index) = work.pop() {
+        let mut active = incoming[index].as_ref().expect("queued block").clone();
+        let block = &f.blocks[index];
+        let end = f.blocks.get(index + 1).map_or(f.code.len(), |block| block.pc as usize);
+        for pc in block.pc as usize..end {
+            let inst = &f.code[pc];
+            let reads = match inst {
+                Instruction::Data { inputs, .. } | Instruction::Ret(inputs) => {
+                    inputs.iter().copied().map(Location::Register).collect()
+                }
+                Instruction::Cond { condition: id, .. } | Instruction::Raise(id) => vec![Location::Register(*id)],
+                Instruction::Champ { arguments, .. } => arguments.iter().filter_map(|argument| match argument {
+                    Argument::Location(location) => Some(*location),
+                    _ => None,
+                }).collect(),
+                _ => vec![],
+            };
+            for (position, location) in reads.into_iter().enumerate() {
+                if !builder(location) {
+                    continue;
+                }
+                let transition = matches!(inst, Instruction::Champ { op, .. } if builder_transition(*op));
+                linear(transition && position == 0, "a builder is read outside its own transition")?;
+                linear(active.remove(&location), "a builder is used after its transition")?;
+            }
+            if let Instruction::Data { op, output: Some(output), .. } = inst
+                && builder(Location::Register(*output))
+            {
+                linear(*op == DataOp::BuilderNew, "only builder.new or a transition creates a builder")?;
+                linear(active.insert(Location::Register(*output)), "builder overwritten")?;
+            }
+            if let Instruction::Champ { flow: Flow::Next(outputs), .. } = inst {
+                linear(!outputs.iter().any(|&output| builder(output)), "a builder needs transition outcomes")?;
+            }
+            let terminal = matches!(inst, Instruction::Ret(_) | Instruction::Raise(_) | Instruction::Unreachable)
+                || matches!(inst, Instruction::Champ { op: Opcode::RetOwn | Opcode::RetDefer, .. });
+            if terminal {
+                linear(active.is_empty(), "a live builder is neither finished nor abandoned")?;
+            }
+            for (edge, produced) in checked_edges(p, f, inst)? {
+                let mut next = active.clone();
+                let mut consumed = BTreeSet::new();
+                let mut destinations = Vec::new();
+                // The builder an outcome produces continues in exactly one location, like a produced service.
+                for (slot, ty) in produced.iter().enumerate() {
+                    if !matches!(ty, ProducedType::Value(Type::Builder(_) | Type::MapBuilder(_))) {
+                        continue;
+                    }
+                    let uses = edge.assignments.iter()
+                        .filter(|assignment| assignment.source == Source::ProducedSlot(slot as u32)).count();
+                    linear(uses != 0, "an outcome drops its produced builder")?;
+                    linear(uses == 1, "an outcome duplicates its produced builder")?;
+                }
+                for assignment in &edge.assignments {
+                    if !builder(assignment.destination) {
+                        continue;
+                    }
+                    if let Source::Location(source) = assignment.source {
+                        linear(active.contains(&source) && consumed.insert(source),
+                            "an edge forwards a consumed or duplicated builder")?;
+                    }
+                    destinations.push(assignment.destination);
+                }
+                for source in consumed {
+                    next.remove(&source);
+                }
+                for destination in destinations {
+                    linear(next.insert(destination), "an edge overwrites a live builder")?;
+                }
+                let target = pcs[&edge.target_pc];
+                if let Some(expected) = &incoming[target] {
+                    linear(*expected == next, "inconsistent live builders at a CFG join")?;
+                } else {
+                    stored = stored.saturating_add(next.len());
+                    enforce(stored <= 8 * 1024 * 1024, "LOAD_WORK_BUDGET",
+                        "builder storage exceeds verification work budget")?;
+                    incoming[target] = Some(next);
+                    work.push(target);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A permission is used after it was taken, returned or moved into a pending exit.
+const SUCCESSOR_TAKEN: &str = "SUCCESSOR_TAKEN";
+/// A live permission is lost on a normal path: overwritten, left at a return, or dropped with its exit.
+const SUCCESSOR_DROPPED: &str = "SUCCESSOR_DROPPED";
+/// A permission appears from nothing or is duplicated.
+const SUCCESSOR_FORGED: &str = "SUCCESSOR_FORGED";
+/// Paths that join disagree on the live permissions.
+const SUCCESSOR_JOIN: &str = "SUCCESSOR_JOIN";
+
+/// What happens to the successor permission held by an exit service that `op` consumes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Carry {
+    /// The produced result slot of this outcome continues the same exit and holds the permission.
+    Slot(usize),
+    /// The exit ends on a failure path: must-use is a normal-path promise, so the permission may lapse.
+    Lapses,
+    /// exit.commit hands the permission to its successor-typed value result.
+    Commit,
+    /// Nothing continues the exit on this outcome: the permission would be lost on a normal path.
+    Lost,
+}
+
+/// The exit protocol threads one pending exit through its cleanup: exit.prepare/extend/replace produce the
+/// pending service, cleanup.begin turns it into the cleanup state, which every cleanup step consumes and
+/// produces again, cleanup.finish leaves it in the exit state, and exit.dispatch returns it as the pending
+/// service that exit.commit completes.
+pub(super) fn exit_carry(op: Opcode, tag: Tag) -> Carry {
+    use Opcode::*;
+    match (op, tag) {
+        // A rehome puts a cache duty into the reserve; the reserve continues the same exit.
+        (ExitExtend | CleanupBegin | CleanupSettle | CleanupPlan | CleanupFailure | DestroyDirect
+            | CleanupDestroy | CacheRehome, Tag::Normal) => Carry::Slot(0),
+        (CleanupNext, Tag::Selected | Tag::Done) => Carry::Slot(0),
+        (CleanupFinish, Tag::Normal) => Carry::Slot(2),
+        (ExitDispatch, Tag::Pending) => Carry::Slot(1),
+        (ExitDispatch, Tag::Failure) | (ExitAbort, Tag::Normal) => Carry::Lapses,
+        (ExitCommit, Tag::Normal) => Carry::Commit,
+        // exit.replace replaces the pending value: a permission the exit held would be lost with it.
+        _ => Carry::Lost,
+    }
+}
+
+/// A value of this type carries a successor's must-use permission: an object successor or a role successor.
+pub(crate) fn holds_permission(ty: Type) -> bool {
+    matches!(ty, Type::Successor(_) | Type::RoleSuccessor(_))
+}
+
+/// Register operands of `op` whose successor permission moves away from the register: returned values of
+/// ret.own/ret.defer, the value of exit.prepare and the replacement value of exit.replace (into the exit).
+fn successor_operands(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<Location> {
+    // frame.save moves a saved permission into the frame (its resume produces it again); fut.publish into the
+    // Future's outcome.
+    let moves = matches!(op, Opcode::RetOwn | Opcode::RetDefer | Opcode::ExitPrepare | Opcode::ExitReplace
+        | Opcode::FrameSave | Opcode::FuturePublish);
+    arguments.iter().filter_map(|argument| match argument {
+        Argument::Location(location @ Location::Register(_)) if moves => Some(*location),
+        _ => None,
+    }).filter(|&location| matches!(loc_type(f, location), Ok(ProducedType::Value(ty)) if holds_permission(ty)))
+        .collect()
+}
+
 /// Successor references are copyable, but the independent must-use permission
-/// must be taken or returned exactly once on every reachable path. Edge renames
+/// must be taken or returned exactly once on every reachable normal path. Edge renames
 /// consume all sources before creating destinations, including cyclic moves.
+/// The active set holds successor registers and the exit services that hold a permission moved into
+/// an exit: it travels with the exit's linear service until exit.commit hands it to the returned value.
 fn check_successors(p: &Program, f: &Function, pcs: &BTreeMap<u32, usize>) -> Check {
-    let successor = |location| matches!(loc_type(f, location), Ok(ProducedType::Value(Type::Successor(_))));
+    let successor = |location| matches!(loc_type(f, location), Ok(ProducedType::Value(ty)) if holds_permission(ty));
     let mut incoming: Vec<Option<BTreeSet<Location>>> = vec![None; f.blocks.len()];
     incoming[0] = Some(f.params.iter().copied().filter(|&param| successor(param)).collect());
     let mut stored = incoming[0].as_ref().map_or(0, BTreeSet::len);
@@ -1095,13 +2224,15 @@ fn check_successors(p: &Program, f: &Function, pcs: &BTreeMap<u32, usize>) -> Ch
             let inst = &f.code[pc];
             if let Instruction::Data { op, inputs, output, .. } = inst {
                 if *op == DataOp::Move && inputs.first().is_some_and(|&id| successor(Location::Register(id))) {
-                    require(active.remove(&Location::Register(inputs[0])), "successor permission already taken")?;
+                    enforce(active.remove(&Location::Register(inputs[0])), SUCCESSOR_TAKEN,
+                        "successor permission already taken")?;
                 }
                 if let Some(dst) = output {
                     let location = Location::Register(*dst);
                     if successor(location) {
-                        require(matches!(op, DataOp::ObjNext | DataOp::Move), "invalid successor producer")?;
-                        require(active.insert(location), "successor permission overwritten")?;
+                        enforce(matches!(op, DataOp::ObjNext | DataOp::Move), SUCCESSOR_FORGED,
+                            "invalid successor producer")?;
+                        enforce(active.insert(location), SUCCESSOR_DROPPED, "successor permission overwritten")?;
                     }
                 }
             }
@@ -1109,25 +2240,99 @@ fn check_successors(p: &Program, f: &Function, pcs: &BTreeMap<u32, usize>) -> Ch
                 for &value in values {
                     let location = Location::Register(value);
                     if successor(location) {
-                        require(active.remove(&location), "successor returned twice or after take")?;
+                        enforce(active.remove(&location), SUCCESSOR_TAKEN, "successor returned twice or after take")?;
                     }
                 }
-                require(active.is_empty(), "return loses successor must-use permission")?;
+                enforce(active.is_empty(), SUCCESSOR_DROPPED, "return loses successor must-use permission")?;
             }
             if matches!(inst, Instruction::Unreachable) {
-                require(active.is_empty(), "unreachable loses successor must-use permission")?;
+                enforce(active.is_empty(), SUCCESSOR_DROPPED, "unreachable loses successor must-use permission")?;
             }
-            for (edge, _) in checked_edges(p, f, inst)? {
+            // Whether this instruction consumes an exit service that holds a permission.
+            let mut carried = false;
+            if let Instruction::Champ { op, arguments, flow } = inst {
+                let moved = successor_operands(f, *op, arguments);
+                for &location in &moved {
+                    enforce(active.remove(&location), SUCCESSOR_TAKEN,
+                        &format!("{} uses a taken successor permission", op.name()))?;
+                }
+                for location in load::consumed(f, *op, arguments) {
+                    if matches!(location, Location::Service(_)) && active.remove(&location) {
+                        // One continuation cannot hold two permissions.
+                        enforce(!carried, SUCCESSOR_DROPPED, "one operation consumes two successor-holding exits")?;
+                        carried = true;
+                    }
+                }
+                // The operand shapes give exit.prepare/exit.replace at most one value register.
+                let entering = !moved.is_empty() && matches!(op, Opcode::ExitPrepare | Opcode::ExitReplace);
+                if matches!(op, Opcode::RetOwn | Opcode::RetDefer) {
+                    enforce(active.is_empty(), SUCCESSOR_DROPPED,
+                        &format!("{} loses successor must-use permission", op.name()))?;
+                }
+                if let Flow::Next(outputs) = flow {
+                    // Without a held permission there is nothing to carry: Lapses is a no-op.
+                    let carry = if carried { exit_carry(*op, Tag::Normal) } else { Carry::Lapses };
+                    let committed = match carry {
+                        Carry::Commit => outputs.first().copied().filter(|&location| successor(location)),
+                        _ => None,
+                    };
+                    enforce(carry != Carry::Commit || committed.is_some(), SUCCESSOR_DROPPED,
+                        "exit.commit stores a successor-holding exit value in a non-successor register")?;
+                    enforce(carry != Carry::Lost, SUCCESSOR_DROPPED,
+                        &format!("{} drops the successor held by its exit", op.name()))?;
+                    for (slot, &location) in outputs.iter().enumerate() {
+                        // The pending service (slot 0) of exit.prepare/exit.replace receives the value's permission.
+                        let holds = entering && slot == 0 || matches!(carry, Carry::Slot(held) if held == slot);
+                        if successor(location) {
+                            enforce(*op != Opcode::ExitCommit || committed == Some(location), SUCCESSOR_FORGED,
+                                "exit.commit produces a successor from an exit that holds none")?;
+                        } else if !holds {
+                            continue;
+                        }
+                        enforce(active.insert(location), SUCCESSOR_DROPPED, "successor permission overwritten")?;
+                    }
+                }
+            }
+            let tags = match inst {
+                Instruction::Champ { flow: Flow::Outcomes(outcomes), .. } => {
+                    outcomes.iter().map(|outcome| Some(outcome.tag)).collect()
+                }
+                _ => vec![],
+            };
+            for (ordinal, (edge, produced)) in checked_edges(p, f, inst)?.into_iter().enumerate() {
+                let carry = match (inst, tags.get(ordinal).copied().flatten()) {
+                    (Instruction::Champ { op, .. }, Some(tag)) if carried => exit_carry(*op, tag),
+                    _ => Carry::Lapses,
+                };
+                enforce(!matches!(carry, Carry::Lost | Carry::Commit), SUCCESSOR_DROPPED,
+                    "an outcome drops the successor held by its exit")?;
+                for (slot, ty) in produced.iter().enumerate() {
+                    let holds = matches!(ty, ProducedType::Value(ty) if holds_permission(*ty))
+                        || matches!(carry, Carry::Slot(held) if held == slot);
+                    if !holds {
+                        continue;
+                    }
+                    let uses = edge.assignments.iter()
+                        .filter(|assignment| assignment.source == Source::ProducedSlot(slot as u32)).count();
+                    enforce(uses != 0, SUCCESSOR_DROPPED, "an outcome drops a produced successor permission")?;
+                    enforce(uses == 1, SUCCESSOR_FORGED, "an outcome duplicates a produced successor permission")?;
+                }
                 let mut next = active.clone();
                 let mut consumed = BTreeSet::new();
                 let mut destinations = Vec::new();
                 for assignment in &edge.assignments {
-                    if !successor(assignment.destination) {
+                    let tracked = match assignment.source {
+                        Source::Location(source @ Location::Service(_)) => active.contains(&source),
+                        Source::Location(Location::Register(_)) => successor(assignment.destination),
+                        Source::ProducedSlot(slot) => successor(assignment.destination)
+                            || matches!(carry, Carry::Slot(held) if held == slot as usize),
+                    };
+                    if !tracked {
                         continue;
                     }
                     if let Source::Location(source) = assignment.source {
-                        require(active.contains(&source), "edge forwards a taken successor")?;
-                        require(consumed.insert(source), "edge duplicates successor permission")?;
+                        enforce(active.contains(&source), SUCCESSOR_TAKEN, "edge forwards a taken successor")?;
+                        enforce(consumed.insert(source), SUCCESSOR_FORGED, "edge duplicates successor permission")?;
                     }
                     destinations.push(assignment.destination);
                 }
@@ -1135,11 +2340,11 @@ fn check_successors(p: &Program, f: &Function, pcs: &BTreeMap<u32, usize>) -> Ch
                     next.remove(&source);
                 }
                 for destination in destinations {
-                    require(next.insert(destination), "edge overwrites live successor permission")?;
+                    enforce(next.insert(destination), SUCCESSOR_DROPPED, "edge overwrites live successor permission")?;
                 }
                 let target = pcs[&edge.target_pc];
                 if let Some(expected) = &incoming[target] {
-                    require(*expected == next, "inconsistent successor permissions at CFG join")?;
+                    enforce(*expected == next, SUCCESSOR_JOIN, "inconsistent successor permissions at CFG join")?;
                 } else {
                     stored = stored.saturating_add(next.len());
                     enforce(stored <= 8 * 1024 * 1024, "LOAD_WORK_BUDGET",

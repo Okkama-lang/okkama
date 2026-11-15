@@ -1,0 +1,89 @@
+oir 2 high
+// Cold escape through a loop exit (OIR-2 §10.1, §10.2, C-4): the iteration scope SI creates a cold Future of a
+// fresh Res and leaves the loop with it (`last f`). The commit names the loop boundary and the rehome names SO,
+// the block where the loop exit lands; SO admits the duty. The Future then leaves SO as its value (rehome, target
+// S), and S awaits it.
+module r1_loop_escape
+entry @main
+protocol Services kind services holders [scope, cache, frame, receipt, root, pending_exit] rules [
+    protocol_rule(transition=settle, from=cache, to=scope, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=receipt,
+    to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
+    protocol_rule(transition=settle, from=cache, to=root, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=rehome, from=scope,
+    to=pending_exit, checks=[owner, live_dependencies, sufficient_boundary],
+    normal=protocol_poststate(holder=pending_exit, state=open))]
+object Res {
+    destroy @destroy
+}
+scope SD action in @destroy
+scope SR action in @res
+scope SE action in @read
+scope S action in @main
+scope SO block in @main parent S
+scope SI iteration in @main parent SO
+summary MreadC call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results
+    [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], publication=atomic)
+summary MreadB call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results
+    [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[cancelled],
+    suspends=true, publication=atomic)
+summary MmainC call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[future<int>], publication=atomic)
+summary MmainB call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+func @destroy(%self: Res) -> void [destroy Res] {
+    ^entry in SD:
+    ret
+}
+func @res() -> Res [ctor Res] {
+    boundary BR lexical in SR
+    ^entry in SR unwind ^failed:
+    %r: Res = obj.new Res { }
+    want %r
+    [iprep0] exit.prepare return %r at BR
+    result.exit edge normal(0), value %r, demand want, prepare iprep0
+    ret %r
+    ^failed(%failure: failure) in SR:
+    raise %failure
+}
+func @read(%arg: Res) -> int [async] async-creation(MreadC) async-body(MreadB) {
+    boundary BE lexical in SE
+    ^entry in SE:
+    %n: int = const 1
+    want %n
+    [iprep1] exit.prepare return %n at BE
+    result.exit edge normal(0), value %n, demand want, prepare iprep1
+    ret %n
+}
+func @main() -> int [entry, async] async-creation(MmainC) async-body(MmainB) {
+    binding b0 "f": future<int> in S
+    boundary BL loop in SI
+    boundary BO lexical in SO
+    boundary Bauto lexical in S
+    ^entry in S unwind ^failed:
+    br ^outer
+    ^outer in SO unwind ^failed:
+    br ^loop
+    ^loop in SI unwind ^failed:
+    %r: Res = call @res()
+    %f: future<int> = call @read(%r)
+    want %f
+    [iprep2] exit.prepare last %f at BL
+    result.exit edge normal(0), value %f, demand want, prepare iprep2
+    br ^landed(%f)
+    ^landed(%l: future<int>) in SO unwind ^failed:
+    want %l
+    [iprep4] exit.prepare fallthrough %l at BO
+    result.exit edge normal(0), value %l, demand want, prepare iprep4
+    br ^after(%l)
+    ^after(%g: future<int>) in S unwind ^failed:
+    bind %g, binding b0
+    %n: int = await %g, result int
+    want %n
+    [iprep3] exit.prepare return %n at Bauto
+    result.exit edge normal(0), value %n, demand want, prepare iprep3
+    ret %n
+    ^failed(%failure: failure) in S:
+    raise %failure
+}

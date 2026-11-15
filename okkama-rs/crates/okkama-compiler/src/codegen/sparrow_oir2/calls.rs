@@ -2,6 +2,8 @@
 use super::*;
 #[path = "cleanup.rs"]
 mod cleanup;
+#[path = "futures.rs"]
+mod futures;
 use s::{Argument as A, Location as L, Opcode as O, ProducedType as P, ServiceKind as K};
 
 fn error(message: impl Into<String>) -> GenerateError {
@@ -25,29 +27,89 @@ fn kind(module: &o::Module, ty: o::TypeId) -> Result<P, GenerateError> {
             o::ServiceType::ExitState => P::Service(K::ExitState),
             o::ServiceType::StableKey => P::Service(K::StableKey),
             o::ServiceType::Closed => P::Service(K::Closed),
+            o::ServiceType::CacheState => P::Service(K::CacheState),
+            o::ServiceType::TaskState => P::Service(K::TaskState),
+            o::ServiceType::Receipt => P::Service(K::Receipt),
+            o::ServiceType::UniqueCache => P::Service(K::UniqueCache),
             _ => return Err(later("async service type")),
         },
+        // The running body's frame token (`frame<@f>`); `translate` checks that it names its own function.
+        o::Type::Frame(_) => P::Service(K::Frame),
         _ => P::Value(translate_type(module, ty)?),
     })
+}
+
+/// The operands of a `variant.get` whose receiver is a one-case Error variant (`single_error_case`).
+pub(super) fn error_case_get(module: &o::Module, body: &o::Body, op: &o::Operation)
+    -> Result<Option<(o::ValueId, o::FieldRef)>, GenerateError>
+{
+    let o::Operation::Core(o::CoreOp::VariantGet { value, case, field }) = op else { return Ok(None) };
+    let Some(layout) = single_error_case(module, body.values.get(*value)?.ty)? else { return Ok(None) };
+    if *case != 0 || field.declaration != layout {
+        return Err(error("variant.get of a one-case Error variant names another case"));
+    }
+    Ok(Some((*value, *field)))
 }
 
 /// OIR scalar operations whose SPB data form is fallible (`DataOp::fallible`). A conversion fails only
 /// where its pair of types can trap; a total one (int to string) stays plain data. Test assertions are
 /// evaluated the same way: they fail only outside a running case.
-fn fallible_scalar(op: &o::Operation) -> bool {
+pub(super) fn fallible_scalar(op: &o::Operation) -> bool {
     if test_check(op).is_some() {
         return true;
+    }
+    if let o::Operation::Core(core) = op
+        && let Some((data, _)) = family_operation(core)
+    {
+        return data.fallible(&[], None);
     }
     match op {
         o::Operation::Core(o::CoreOp::IntMod { .. } | o::CoreOp::RangeNew { .. } | o::CoreOp::IntDiv { .. }
             | o::CoreOp::RatNew { .. } | o::CoreOp::ValEq { .. } | o::CoreOp::ValNe { .. }
-            | o::CoreOp::VariantGet { .. }) => true,
+            | o::CoreOp::VariantGet { .. } | o::CoreOp::RoleNarrow { .. }) => true,
+        o::Operation::Collection(o::CollectionOp::MapGet { .. } | o::CollectionOp::MapKeyAt { .. }
+            | o::CollectionOp::MapValueAt { .. } | o::CollectionOp::MapDifference { packet: None, .. }
+            | o::CollectionOp::ArraySlice { packet: None, .. } | o::CollectionOp::ArrayRemove { packet: None, .. }
+            | o::CollectionOp::ArrayReplace { packet: None, .. }
+            | o::CollectionOp::ArrayDifference { packet: None, .. } | o::CollectionOp::ArrayJoin { .. }) => true,
         o::Operation::Core(o::CoreOp::Convert { from, to, .. }) => {
             matches!((numeric_type(*from), numeric_type(*to)),
                 (Some(from), Some(to)) if s::conversion(from, to) == Some(true))
         }
         _ => false,
     }
+}
+
+/// The SPB 17 result of a fallible collection operation on operands of `inputs`.
+fn collection_result(module: &o::Module, op: s::DataOp, inputs: &[s::Type]) -> Result<s::Type, GenerateError> {
+    use s::DataOp as D;
+    let receiver = *inputs.first().ok_or_else(|| error("collection operation without a receiver"))?;
+    let entry = |index: u32| composites(module).entries().get(index as usize).copied();
+    Ok(match (op, receiver) {
+        (D::ArraySlice | D::ArrayRemove | D::ArrayReplace | D::ArrayDifference | D::MapDifference, _) => receiver,
+        (D::ArrayJoin, _) => s::Type::Str,
+        (D::MapGet | D::MapValueAt, s::Type::Map(id)) => match entry(id) {
+            Some(s::Composite::Map { value, .. }) => value,
+            _ => return Err(error("map operation on a non-map composite")),
+        },
+        (D::MapKeyAt, s::Type::Map(id)) => match entry(id) {
+            Some(s::Composite::Map { key, .. }) => key,
+            _ => return Err(error("map operation on a non-map composite")),
+        },
+        _ => return Err(later("collection operation outcome")),
+    })
+}
+
+/// The Champ form of a builder transition with outcomes.
+fn builder_opcode(op: &o::CollectionOp) -> Option<O> {
+    use o::CollectionOp as C;
+    Some(match op {
+        C::BuilderPush { .. } | C::MapBuilderPut { .. } => O::BuilderPush,
+        C::BuilderAppend { .. } | C::MapBuilderAppend { .. } => O::BuilderAppend,
+        C::BuilderAppendRange { .. } => O::BuilderRange,
+        C::BuilderFinish { .. } | C::MapBuilderFinish { .. } => O::BuilderFinish,
+        _ => return None,
+    })
 }
 
 /// A test assertion as its SPB 17 test operation and operands.
@@ -112,6 +174,12 @@ struct Emitter<'a> {
     summaries: &'a mut Vec<s::Summary>,
     scope: o::ScopeId,
     result: s::Function,
+    synthetic: &'a roles::Synthetic,
+    /// Finite action-value origins of this body, computed at its first `fn.call`.
+    origins: Option<BTreeMap<o::ValueId, Option<BTreeSet<usize>>>>,
+    /// Plain two-instruction expansions (`fn.closure`/`fn.bind`/`fn.bind.role` without a packet, `cap.make`
+    /// with one): the pc of the first instruction and the register it defines for the second.
+    expansions: Vec<(u32, u32)>,
 }
 
 impl Emitter<'_> {
@@ -172,7 +240,9 @@ impl Emitter<'_> {
         if summary.entry_kind == o::EntryKind::ObservationAdmissionStaysCaller {
             return Err(error("owning call cannot use an observation summary"));
         }
-        if !call.type_args.is_empty() || !call.descriptors.is_empty() || summary.contract.suspends
+        // An async defer entry suspends its caller while its shielded child runs (C-6).
+        let async_defer = defer && declaration.attrs.contains(&o::FunctionAttr::Async);
+        if !call.type_args.is_empty() || !call.descriptors.is_empty() || (summary.contract.suspends && !async_defer)
             || summary.contract.async_destroy || summary.contract.publication != o::Publication::Atomic
             || summary.contract.protocol.is_some()
         {
@@ -185,8 +255,18 @@ impl Emitter<'_> {
         if !shielded && summary.contract.failures.contains(&o::FailureKind::Cancelled) {
             return Err(later("delivered cancellation"));
         }
-        let params = declaration.signature.params.iter().map(|&ty| kind(self.module, ty))
-            .collect::<Result<Vec<_>, _>>()?;
+        // An async defer entry takes its frame; its captures arrive through its start continuation (C-2).
+        let inputs = match declaration.body.as_ref().and_then(|body| body.frame_layout.as_ref()) {
+            Some(layout) if async_defer => {
+                let start = layout.continuations.first().ok_or_else(|| error("async defer entry without a start"))?;
+                start.saved.iter().map(|&slot| {
+                    let slot = layout.slots.get(slot as usize).ok_or_else(|| error("start slot outside layout"))?;
+                    kind(self.module, slot.ty)
+                }).collect::<Result<Vec<_>, _>>()?
+            }
+            _ => declaration.signature.params.iter().map(|&ty| kind(self.module, ty)).collect::<Result<Vec<_>, _>>()?,
+        };
+        let params = inputs;
         let language = params.iter().filter_map(|ty| match ty { P::Value(ty) => Some(*ty), _ => None })
             .collect::<Vec<_>>();
         if call.args.len() != language.len() || call.args.len() != summary.parameters.len() {
@@ -324,7 +404,10 @@ impl Emitter<'_> {
         }
         let may_fail = !summary.contract.failures.is_empty();
         let id = self.summaries.len() as u32;
-        self.summaries.push(s::Summary { entry: function.as_u32(), may_fail, retained_params: vec![] });
+        // An observation keeps no obligation, but its result may still depend on a parameter (a holder of a
+        // role or Atomic reference): the entry contract states the same retained parameters.
+        let retained_params = retained_parameters(summary)?.into_iter().collect();
+        self.summaries.push(s::Summary { entry: function.as_u32(), may_fail, retained_params });
         let mut arguments = vec![A::Entry(function.as_u32()), A::Summary(id)];
         arguments.extend(call.args.iter().map(|arg| self.loc(arg.value).map(A::Location))
             .collect::<Result<Vec<_>, _>>()?);
@@ -334,6 +417,204 @@ impl Emitter<'_> {
             value: declaration.signature.results.first().map(|&ty| translate_type(self.module, ty)).transpose()?,
             may_fail, ..s::ResultContext::default()
         }))
+    }
+
+    /// `call.role` and `fn.call`: a dispatch on the receiver's object descriptor. A role call lists every
+    /// implementation of the role (one, for a concrete receiver); a call of an action value lists the
+    /// closure layouts of its finite origins, or every closure layout of its `fn` type when it is open.
+    /// The contract is the site summary's; the loader checks that every listed implementation refines it.
+    fn dispatch(&mut self, op: &o::CallOp) -> Result<(O, Vec<A>, s::ResultContext), GenerateError> {
+        let (receiver, role, slot, call) = match op {
+            o::CallOp::Role { receiver, role, slot, call } => (*receiver, role.as_u32(), *slot, call),
+            o::CallOp::Closure { callee, call } => {
+                let ty = self.body.values.get(callee.value)?.ty;
+                (*callee, roles::callable_role(self.module, ty)?, 0, call)
+            }
+            _ => return Err(error("expected a dynamic call")),
+        };
+        let summary = self.module.summaries.get(call.summary.ok_or_else(|| error("dynamic call requires summary"))?)?;
+        // An open call (its callee's closures are unknown) has exactly the registered conservative contract of
+        // its `fn` type, with the open Closure protocol: its result packet then goes to `own.dynamic`.
+        let open = match (op, summary.contract.protocol) {
+            (o::CallOp::Closure { callee, .. }, Some(protocol)) => {
+                let ty = self.body.values.get(callee.value)?.ty;
+                if o::catalogue::open_callable_summary(self.module, ty, protocol).as_ref() != Some(summary)
+                    || super::protocol(self.module, protocol)? != s::Protocol::Closure
+                {
+                    return Err(error("open call without the registered open callable contract"));
+                }
+                true
+            }
+            (_, Some(_)) => return Err(later("protocol dynamic call")),
+            (_, None) => false,
+        };
+        if !call.type_args.is_empty() || !call.descriptors.is_empty() || summary.contract.suspends
+            || summary.contract.async_destroy || summary.contract.publication != o::Publication::Atomic
+        {
+            return Err(later("async/generic dynamic call"));
+        }
+        let shielded = call.cleanup == o::CallCleanupMode::Shielded;
+        if shielded && !self.function.attrs.contains(&o::FunctionAttr::Cleanup) {
+            return Err(error("cleanup shielded outside cleanup function"));
+        }
+        if !shielded && summary.contract.failures.contains(&o::FailureKind::Cancelled) {
+            return Err(later("delivered cancellation"));
+        }
+        let declaration = self.objects.get(role as usize).and_then(|object| object.role.as_ref())
+            .ok_or_else(|| error("dynamic call of a non-role"))?;
+        let signature = declaration.slots.get(slot as usize).ok_or_else(|| error("dynamic call of a missing slot"))?;
+        let observation = summary.entry_kind == o::EntryKind::ObservationAdmissionStaysCaller;
+        if observation != (signature.entry_abi == s::EntryAbi::Observation) {
+            return Err(error("dynamic call ABI differs from its slot"));
+        }
+        if call.args.len() != signature.params.len() || call.args.len() + 1 != summary.parameters.len() {
+            return Err(error("dynamic call argument arity mismatch"));
+        }
+        let results = summary.contract.results.iter().map(|&ty| translate_type(self.module, ty))
+            .collect::<Result<Vec<_>, _>>()?;
+        if results != signature.results {
+            return Err(error("dynamic call summary/result signature mismatch"));
+        }
+        let failures = cleanup::mask(&summary.contract.failures.iter().copied()
+            .filter(|kind| *kind != o::FailureKind::Cancelled).collect::<Vec<_>>())?;
+        let retained = retained_parameters(summary)?;
+        let implementations = self.objects.iter().enumerate()
+            .filter(|(_, object)| object.implements.iter().any(|table| table.role == role))
+            .map(|(id, _)| id as u32).collect::<Vec<_>>();
+        let targets = match op {
+            o::CallOp::Role { .. } => match self.module.types.get(self.body.values.get(receiver.value)?.ty)? {
+                o::Type::Object { decl, .. } => vec![decl.as_u32()],
+                _ => implementations,
+            },
+            // An open call can reach every closure layout of its `fn` type.
+            _ if open => implementations,
+            _ => {
+                if self.origins.is_none() {
+                    self.origins = Some(roles::callable_origins(self.module, self.body, self.synthetic)?);
+                }
+                match self.origins.as_ref().and_then(|origins| origins.get(&receiver.value)).cloned().flatten() {
+                    Some(layouts) if !layouts.is_empty() => layouts.iter()
+                        .map(|&index| self.synthetic.closure_object(self.module, index)).collect(),
+                    _ => implementations,
+                }
+            }
+        };
+        if targets.is_empty() {
+            return Err(error("dynamic call without implementations"));
+        }
+        let dispatch = s::Dispatch {
+            role, slot, failures, retained_params: retained.into_iter().collect(), targets,
+        };
+        let mut arguments = vec![A::Dispatch(dispatch)];
+        if !observation {
+            arguments.push(A::Flag(shielded));
+        }
+        arguments.push(A::Location(self.loc(receiver.value)?));
+        arguments.extend(call.args.iter().map(|arg| self.loc(arg.value).map(A::Location))
+            .collect::<Result<Vec<_>, _>>()?);
+        match (observation, call.packet) {
+            (true, None) if call.deps.is_empty() => {}
+            (false, Some(packet)) => {
+                if kind(self.module, self.body.values.get(packet)?.ty)? != P::Service(K::Packet) {
+                    return Err(error("owning dynamic call input is not a packet"));
+                }
+                arguments.push(A::Location(self.loc(packet)?));
+                arguments.extend(call.deps.iter().map(|&dep| self.loc(dep).map(A::Location))
+                    .collect::<Result<Vec<_>, _>>()?);
+            }
+            _ => return Err(error("dynamic call packet differs from its ABI")),
+        }
+        let opcode = if observation { O::InvokeDispatch } else { O::InvokeDispatchOwn };
+        Ok((opcode, arguments, s::ResultContext {
+            value: signature.results.first().copied(), may_fail: failures != 0, ..s::ResultContext::default()
+        }))
+    }
+
+    /// `call.cap`: a direct call of the computed field's function with the cap (its owner's reference) first.
+    fn cap_call(&mut self, cap: o::CallArgument, field: o::FieldRef, call: &o::CallSite)
+        -> Result<(O, Vec<A>, s::ResultContext), GenerateError>
+    {
+        let o::DeclarationKind::Cap { fields, .. } = &self.module.declarations.get(field.declaration)?.kind else {
+            return Err(error("call.cap of a non-cap field"));
+        };
+        let function = fields.get(field.index as usize).ok_or_else(|| error("call.cap of a missing field"))?.function;
+        let mut site = call.clone();
+        site.args.insert(0, cap);
+        let summary = self.module.summaries.get(site.summary.ok_or_else(|| error("missing summary"))?)?;
+        if summary.entry_kind == o::EntryKind::ObservationAdmissionStaysCaller {
+            // An observation takes exactly its parameters; the cap's proof-only deps stay with its value.
+            site.deps.clear();
+            let (arguments, context) = self.observation(function, &site)?;
+            Ok((O::InvokeObserve, arguments, context))
+        } else {
+            let (arguments, context) = self.call(function, &site, false)?;
+            Ok((O::InvokeCallOwn, arguments, context))
+        }
+    }
+
+    /// `fn.closure`/`fn.bind`/`fn.bind.role`: allocate the closure layout with its captures, then view it as
+    /// the `fn` role. A closure that captures a resource by reference gets an empty packet from own (the
+    /// capture's obligation stays with its owner, P2.4 §4.1): it commits like any construction with a packet,
+    /// so the resource-reaching closure object is committed (CREATION_UNCOMMITTED) and owns nothing.
+    fn closure(&mut self, site: roles::ClosureSite, results: &[o::ValueId]) -> Result<(), GenerateError> {
+        let index = self.synthetic.closure_index(&site.layout).ok_or_else(|| error("action value without layout"))?;
+        let layout = self.synthetic.closure_object(self.module, index);
+        self.view_construction(layout, &site.values, site.packet, results)
+    }
+
+    /// `any.box`: allocate the any box of the value's type with the value, then view it as `any`. A boxed value
+    /// that reaches a resource comes with its packet, committed like any construction with a packet.
+    fn any_box(&mut self, ty: o::TypeId, value: o::ValueId, packet: Option<o::ValueId>, results: &[o::ValueId])
+        -> Result<(), GenerateError>
+    {
+        let layout = self.synthetic.box_object(self.module, ty).ok_or_else(|| error("any.box without its box"))?;
+        self.view_construction(layout, &[value], packet, results)
+    }
+
+    /// The construction of an object that a value views (a closure layout as its `fn` role, an any box as
+    /// `any`): allocation and move; with a packet also the commit into the scope and the join of the packets.
+    fn view_construction(&mut self, layout: u32, values: &[o::ValueId], packet: Option<o::ValueId>,
+        results: &[o::ValueId]) -> Result<(), GenerateError>
+    {
+        let inputs = values.iter().map(|&value| self.reg(value)).collect::<Result<Vec<_>, _>>()?;
+        let object = fresh(&mut self.result, s::Type::Object(layout))?;
+        let value = self.reg(*results.first().ok_or_else(|| error("view construction without result"))?)?;
+        let allocation = s::Instruction::Data { op: s::DataOp::ObjNew, inputs, output: Some(object),
+            immediate: s::Immediate::Object(layout) };
+        let Some(packet) = packet else {
+            if self.objects[layout as usize].layout.may_reach_resource {
+                return Err(unsupported("a value referencing a resource without its packet"));
+            }
+            self.expansions.push((self.result.code.len() as u32, object));
+            self.result.code.push(allocation);
+            self.result.code.push(data(s::DataOp::Move, vec![object], value, s::Immediate::None));
+            return Ok(());
+        };
+        let [_, joined] = results else { return Err(error("a construction with a packet has two results")) };
+        let committed = L::Service(self.result.services.len() as u32);
+        self.result.services.push(K::Packet);
+        self.result.code.push(allocation);
+        self.result.code.push(s::Instruction::Champ { op: O::OwnCreateCommit,
+            arguments: vec![A::Location(L::Register(object)), A::Object(layout), A::Boundary(self.scope.as_u32())],
+            flow: s::Flow::Next(vec![committed]) });
+        self.result.code.push(s::Instruction::Champ { op: O::OwnJoin,
+            arguments: vec![A::Location(self.loc(packet)?), A::Location(committed)],
+            flow: s::Flow::Next(vec![self.loc(*joined)?]) });
+        self.result.code.push(data(s::DataOp::Move, vec![object], value, s::Immediate::None));
+        Ok(())
+    }
+
+    /// `cap.make` with a packet: the cap is its owner's reference and carries the owner's packet.
+    fn cap_with_packet(&mut self, owner: o::ValueId, packet: o::ValueId, results: &[o::ValueId])
+        -> Result<(), GenerateError>
+    {
+        let [value, moved] = results else { return Err(error("cap.make with a packet has two results")) };
+        let value = self.reg(*value)?;
+        self.expansions.push((self.result.code.len() as u32, value));
+        self.result.code.push(data(s::DataOp::Move, vec![self.reg(owner)?], value, s::Immediate::None));
+        self.result.code.push(s::Instruction::Champ { op: O::OwnMove, arguments: vec![A::Location(self.loc(packet)?)],
+            flow: s::Flow::Next(vec![self.loc(*moved)?]) });
+        Ok(())
     }
 
     /// A fallible scalar has explicit outcomes in S2: the loader never admits its data form here.
@@ -383,9 +664,142 @@ impl Emitter<'_> {
         Ok(())
     }
 
+    /// The field write that completes an incomplete construction, then the completed identity's admission
+    /// into `state`. An object without destroy completes no obligation, so its packet is empty.
+    fn complete_construction(&mut self, object: o::ValueId, field: o::FieldRef, value: o::ValueId,
+        state: o::ValueId, results: &[o::ValueId]) -> Result<(), GenerateError>
+    {
+        let [result] = results else { return Err(error("construction completion needs its state result")) };
+        let s::Type::Object(descriptor) = translate_type(self.module, self.body.values.get(object)?.ty)? else {
+            return Err(error("construction completion of a non-object"));
+        };
+        if self.objects[descriptor as usize].layout.has_destroy {
+            return Err(later("construction completion of an identity with destroy"));
+        }
+        let storage = self.objects.get(descriptor as usize)
+            .and_then(|declared| declared.fields.get(field.index as usize))
+            .filter(|_| field.declaration.as_u32() == descriptor)
+            .map(|declared| declared.storage).ok_or_else(|| error("invalid completion field"))?;
+        let packet = L::Service(self.result.services.len() as u32);
+        self.result.services.push(K::Packet);
+        self.result.code.push(s::Instruction::Data { op: s::DataOp::ObjInit,
+            inputs: vec![self.reg(object)?, self.reg(value)?], output: None,
+            immediate: s::Immediate::Field(storage) });
+        self.result.code.push(s::Instruction::Champ { op: O::OwnEmpty, arguments: vec![],
+            flow: s::Flow::Next(vec![packet]) });
+        self.result.code.push(s::Instruction::Champ { op: O::OwnAdmit,
+            arguments: vec![A::Location(self.loc(state)?), A::Location(packet)],
+            flow: s::Flow::Next(vec![self.loc(*result)?]) });
+        Ok(())
+    }
+
+    /// A builder transition: buffer, operands and the journal packet in; outcomes per the registry.
+    fn builder(&mut self, opcode: O, op: &o::CollectionOp, normal: &o::InvokeEdge, unwind: &o::InvokeEdge)
+        -> Result<s::Instruction, GenerateError>
+    {
+        use o::CollectionOp as C;
+        let (flag, values, packet) = match op {
+            C::BuilderPush { buffer, value, packet } => (None, vec![*buffer, *value], packet),
+            C::MapBuilderPut { buffer, key, value, packet } => (None, vec![*buffer, *key, *value], packet),
+            C::BuilderAppend { buffer, array, packet } => (None, vec![*buffer, *array], packet),
+            C::MapBuilderAppend { buffer, map, packet } => (None, vec![*buffer, *map], packet),
+            C::BuilderAppendRange { buffer, start, end, inclusive, packet } => {
+                (Some(*inclusive), vec![*buffer, *start, *end], packet)
+            }
+            C::BuilderFinish { buffer, packet } | C::MapBuilderFinish { buffer, packet } => {
+                (None, vec![*buffer], packet)
+            }
+            _ => return Err(error("expected a builder transition")),
+        };
+        let packet = packet.ok_or_else(|| error("builder transition without its element journal"))?;
+        let mut arguments = flag.map(A::Flag).into_iter().collect::<Vec<_>>();
+        arguments.extend(values.iter().chain([&packet]).map(|&value| self.loc(value).map(A::Location))
+            .collect::<Result<Vec<_>, _>>()?);
+        let buffer = translate_type(self.module, self.body.values.get(values[0])?.ty)?;
+        let finished = match buffer {
+            s::Type::Builder(id) => match composites(self.module).entries().get(id as usize) {
+                Some(s::Composite::Builder { array }) => Some(*array),
+                _ => None,
+            },
+            s::Type::MapBuilder(id) => Some(s::Type::Map(id)),
+            _ => return Err(error("builder transition on a non-builder")),
+        };
+        let context = s::ResultContext {
+            buffer: Some(buffer),
+            value: if opcode == O::BuilderFinish { finished } else { None },
+            may_fail: true,
+            ..s::ResultContext::default()
+        };
+        let outcomes = [(s::Tag::Normal, o::Outcome::Normal, normal), (s::Tag::Unwind, o::Outcome::Unwind, unwind)]
+            .into_iter().map(|(tag, outcome, edge)| {
+                let schema = opcode.results(tag, &context)?;
+                Ok(s::Outcome { tag, edge: self.edge(edge.block, &edge.args, outcome, &schema)? })
+            }).collect::<Result<_, GenerateError>>()?;
+        Ok(s::Instruction::Champ { op: opcode, arguments, flow: s::Flow::Outcomes(outcomes) })
+    }
+
+    /// A scalar family operation as an invocation: a fallible one is an `evaluate` whose outcomes are the
+    /// invocation's; a total one (which OIR-2 lets trap) computes into a fresh register and takes the
+    /// normal edge, its result in place of the produced slot.
+    fn family_invocation(&mut self, op: s::DataOp, inputs: &[o::ValueId], normal: &o::InvokeEdge,
+        unwind: &o::InvokeEdge) -> Result<s::Instruction, GenerateError>
+    {
+        let (_, result) = op.scalar_signature().ok_or_else(|| error("scalar family operation without signature"))?;
+        if op.fallible(&[], None) {
+            let context = s::ResultContext { value: Some(result), may_fail: true, ..s::ResultContext::default() };
+            let mut arguments = vec![A::Evaluation(s::Evaluation { op, result, immediate: s::Immediate::None })];
+            for &input in inputs {
+                arguments.push(A::Location(self.loc(input)?));
+            }
+            let outcomes = [(s::Tag::Normal, o::Outcome::Normal, normal),
+                (s::Tag::Unwind, o::Outcome::Unwind, unwind)].into_iter().map(|(tag, outcome, edge)| {
+                let schema = O::Evaluate.results(tag, &context)?;
+                Ok(s::Outcome { tag, edge: self.edge(edge.block, &edge.args, outcome, &schema)? })
+            }).collect::<Result<_, GenerateError>>()?;
+            return Ok(s::Instruction::Champ { op: O::Evaluate, arguments, flow: s::Flow::Outcomes(outcomes) });
+        }
+        let registers = inputs.iter().map(|&input| self.reg(input)).collect::<Result<Vec<_>, _>>()?;
+        let value = fresh(&mut self.result, result)?;
+        self.result.code.push(data(op, registers, value, s::Immediate::None));
+        let mut edge = self.edge(normal.block, &normal.args, o::Outcome::Normal, &[P::Value(result)])?;
+        for assignment in &mut edge.assignments {
+            if assignment.source == s::Source::ProducedSlot(0) {
+                assignment.source = s::Source::Location(L::Register(value));
+            }
+        }
+        Ok(s::Instruction::Br(edge))
+    }
+
+    /// `variant.get` of a one-case Error variant: the value is its case object, so the payload is a field
+    /// read that cannot fail. It computes into a fresh register and takes the normal edge.
+    fn error_case_payload(&mut self, value: o::ValueId, field: o::FieldRef, normal: &o::InvokeEdge)
+        -> Result<s::Instruction, GenerateError>
+    {
+        let storage = variant_storage(self.module, self.objects, field)?;
+        let ty = self.objects[field.declaration.as_u32() as usize].layout.storage_fields[storage as usize];
+        let target = fresh(&mut self.result, ty)?;
+        let receiver = self.reg(value)?;
+        self.result.code.push(data(s::DataOp::ObjGet, vec![receiver], target, s::Immediate::Field(storage)));
+        let mut edge = self.edge(normal.block, &normal.args, o::Outcome::Normal, &[P::Value(ty)])?;
+        for assignment in &mut edge.assignments {
+            if assignment.source == s::Source::ProducedSlot(0) {
+                assignment.source = s::Source::Location(L::Register(target));
+            }
+        }
+        Ok(s::Instruction::Br(edge))
+    }
+
     fn invocation(&mut self, term: &o::TermKind) -> Result<s::Instruction, GenerateError> {
         let (opcode, arguments, context, edges) = match term {
             o::TermKind::InvokeOwn { op, normal, unwind } => {
+                if let Some((value, field)) = error_case_get(self.module, self.body, op)? {
+                    return self.error_case_payload(value, field, normal);
+                }
+                if let o::Operation::Core(core) = op.as_ref()
+                    && let Some((data, inputs)) = family_operation(core)
+                {
+                    return self.family_invocation(data, &inputs, normal, unwind);
+                }
                 if let o::Operation::Core(core) = op.as_ref() {
                     let scalar = match core {
                         o::CoreOp::RangeNew { start, end, inclusive } => Some((s::DataOp::RangeNew,
@@ -404,6 +818,8 @@ impl Emitter<'_> {
                             s::Type::Bool, s::Immediate::None, vec![*left, *right])),
                         o::CoreOp::ValNe { left, right } => Some((s::DataOp::ValNe,
                             s::Type::Bool, s::Immediate::None, vec![*left, *right])),
+                        o::CoreOp::RoleNarrow { value, ty } => Some((s::DataOp::RoleNarrow,
+                            translate_type(self.module, *ty)?, s::Immediate::None, vec![*value])),
                         o::CoreOp::VariantGet { value, case, field } => {
                             let storage = variant_storage(self.module, self.objects, *field)?;
                             let ty = self.objects[field.declaration.as_u32() as usize].layout.storage_fields
@@ -436,13 +852,43 @@ impl Emitter<'_> {
                             flow: s::Flow::Outcomes(outcomes) });
                     }
                 }
-                if let o::Operation::Collection(o::CollectionOp::ArrayGet { array, index }) = op.as_ref() {
-                    let s::Type::Array(shape) = translate_type(self.module, self.body.values.get(*array)?.ty)? else {
-                        return Err(error("array.get requires a certified plain array"));
-                    };
+                if let o::Operation::Collection(collection) = op.as_ref()
+                    && let Some(opcode) = builder_opcode(collection)
+                {
+                    return self.builder(opcode, collection, normal, unwind);
+                }
+                if let o::Operation::Collection(collection) = op.as_ref()
+                    && !matches!(collection, o::CollectionOp::ArrayGet { .. })
+                {
+                    let (data, values) = collection_data(self.module, self.body, collection, None)?
+                        .ok_or_else(|| later(op.opcode()))?;
+                    let inputs = values.iter()
+                        .map(|&value| translate_type(self.module, self.body.values.get(value)?.ty))
+                        .collect::<Result<Vec<_>, GenerateError>>()?;
+                    let result = collection_result(self.module, data, &inputs)?;
                     let context = s::ResultContext {
-                        value: shape.element(), may_fail: true, ..s::ResultContext::default()
+                        value: Some(result), may_fail: true, ..s::ResultContext::default()
                     };
+                    let evaluation = s::Evaluation { op: data, result, immediate: s::Immediate::None };
+                    let mut arguments = vec![A::Evaluation(evaluation)];
+                    arguments.extend(values.iter().map(|&value| self.loc(value).map(A::Location))
+                        .collect::<Result<Vec<_>, _>>()?);
+                    let outcomes = [(s::Tag::Normal, o::Outcome::Normal, normal),
+                        (s::Tag::Unwind, o::Outcome::Unwind, unwind)].into_iter().map(|(tag, outcome, edge)| {
+                        let schema = O::Evaluate.results(tag, &context)?;
+                        Ok(s::Outcome { tag, edge: self.edge(edge.block, &edge.args, outcome, &schema)? })
+                    }).collect::<Result<_, GenerateError>>()?;
+                    return Ok(s::Instruction::Champ { op: O::Evaluate, arguments, flow: s::Flow::Outcomes(outcomes) });
+                }
+                if let o::Operation::Collection(o::CollectionOp::ArrayGet { array, index }) = op.as_ref() {
+                    // A plain array or a byte array (`@byte`, SPB 17 `Type::Bytes`): the loader reads the element
+                    // type from the receiver's declared type.
+                    let receiver = translate_type(self.module, self.body.values.get(*array)?.ty)?;
+                    let element = match receiver {
+                        s::Type::Array(_) | s::Type::Bytes => s::element_type(receiver),
+                        _ => return Err(error("array.get requires a plain array or a byte array")),
+                    };
+                    let context = s::ResultContext { value: element, may_fail: true, ..s::ResultContext::default() };
                     let outcomes = [(s::Tag::Normal, o::Outcome::Normal, normal),
                         (s::Tag::Unwind, o::Outcome::Unwind, unwind)].into_iter().map(|(tag, outcome, edge)| {
                         let schema = O::ArrayGet.results(tag, &context)?;
@@ -454,6 +900,13 @@ impl Emitter<'_> {
                         flow: s::Flow::Outcomes(outcomes),
                     });
                 }
+                if let o::Operation::Call(call @ (o::CallOp::Role { .. } | o::CallOp::Closure { .. })) = op.as_ref() {
+                    let (opcode, arguments, context) = self.dispatch(call)?;
+                    (opcode, arguments, context, vec![normal, unwind])
+                } else if let o::Operation::Call(o::CallOp::Cap { cap, field, call }) = op.as_ref() {
+                    let (opcode, arguments, context) = self.cap_call(*cap, *field, call)?;
+                    (opcode, arguments, context, vec![normal, unwind])
+                } else {
                 let o::Operation::Call(o::CallOp::Direct { function, call } | o::CallOp::Native { function, call }
                     | o::CallOp::Intrinsic { function, call }) = op.as_ref() else {
                     return Err(later(op.opcode()));
@@ -465,6 +918,7 @@ impl Emitter<'_> {
                 } else {
                     let (arguments, context) = self.call(*function, call, false)?;
                     (O::InvokeCallOwn, arguments, context, vec![normal, unwind])
+                }
                 }
             }
             o::TermKind::InvokeDefer { function, call, continue_edge, replacements, unwind } => {
@@ -490,7 +944,7 @@ impl Emitter<'_> {
             }
             _ => return Err(error("expected invocation")),
         };
-        if opcode != O::InvokeObserve {
+        if !matches!(opcode, O::InvokeObserve | O::InvokeDispatch) {
             opcode.call_abi().ok_or_else(|| error("missing shared helper ABI"))?;
         }
         let tags = opcode.tags(&context);
@@ -506,7 +960,7 @@ impl Emitter<'_> {
                 _ => return Err(error("unexpected call outcome")),
             };
             let schema = opcode.results(tag, &context)?;
-            if opcode != O::InvokeObserve {
+            if !matches!(opcode, O::InvokeObserve | O::InvokeDispatch) {
                 opcode.call_post_offsets(tag, &context)?;
             }
             Ok(s::Outcome { tag, edge: self.edge(edge.block, &edge.args, outcome, &schema)? })
@@ -515,23 +969,56 @@ impl Emitter<'_> {
     }
 }
 
+/// The SPB 17 instructions an OIR instruction expands to, when more than one: an action value or an `any` box
+/// (allocation and move; with a packet also commit and join) and a cap with a packet (move and packet move).
+pub(super) fn expansion(op: &o::Operation) -> u32 {
+    match op {
+        o::Operation::Core(o::CoreOp::FnClosure { packet, .. } | o::CoreOp::FnBind { packet, .. }
+            | o::CoreOp::FnBindRole { packet, .. } | o::CoreOp::AnyBox { packet, .. }) => {
+            if packet.is_some() { 4 } else { 2 }
+        }
+        o::Operation::Core(o::CoreOp::CapMake { packet: Some(_), .. }) => 2,
+        _ => 1,
+    }
+}
+
+/// The summary parameters (receiver first) whose graphs a call may retain: in result dependencies, result
+/// aliases or parameter retention. SPB keeps the conservative parameter inventory.
+fn retained_parameters(summary: &o::Summary) -> Result<BTreeSet<u32>, GenerateError> {
+    let mut selections = summary.parameters.iter().filter_map(|parameter| parameter.retention.as_ref())
+        .chain(summary.results.iter().flat_map(|result| result.aliases.iter())).collect::<Vec<_>>();
+    let mut retained = summary.results.iter().flat_map(|result| result.external_deps.iter().copied())
+        .map(u32::from).collect::<BTreeSet<_>>();
+    while let Some(selection) = selections.pop() {
+        match selection {
+            o::SummarySelection::Parameter(parameter) | o::SummarySelection::OwnerGraph(parameter)
+            | o::SummarySelection::Field { parameter, .. } | o::SummarySelection::Path { parameter, .. } => {
+                retained.insert(u32::from(*parameter));
+            }
+            o::SummarySelection::Union(parts) => selections.extend(parts),
+            o::SummarySelection::Descriptor(_) => return Err(later("descriptor summary retention")),
+        }
+    }
+    Ok(retained)
+}
+
 pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Function, objects: &[s::Object],
-    summaries: &mut Vec<s::Summary>) -> Result<s::Function, GenerateError>
+    tables: &mut s::ChampTables, synthetic: &roles::Synthetic) -> Result<s::Function, GenerateError>
 {
+    let asynchronous = futures::async_body(module, id, function)?;
     if function.body.is_none() {
         return cleanup::external(module, function);
     }
-    if !function.type_params.is_empty() || function.async_creation_summary.is_some()
-        || function.async_body_summary.is_some()
-    {
-        return Err(later(&format!("{}: generic/async entry", function.symbol)));
+    if !function.type_params.is_empty() {
+        return Err(later(&format!("{}: generic entry", function.symbol)));
     }
     if let Some(attr) = function.attrs.iter().find(|attr| !declaration_attr(attr) && !matches!(attr,
-        o::FunctionAttr::Entry | o::FunctionAttr::Hidden | o::FunctionAttr::Cleanup
+        o::FunctionAttr::Entry | o::FunctionAttr::Hidden | o::FunctionAttr::Cleanup | o::FunctionAttr::Async
         | o::FunctionAttr::DeferEntry { .. } | o::FunctionAttr::Ctor(_) | o::FunctionAttr::Destroy(_)))
     {
         return Err(later(&format!("{}: entry attribute {attr:?}", function.symbol)));
     }
+    let defer = function.attrs.iter().any(|attr| matches!(attr, o::FunctionAttr::DeferEntry { .. }));
     let body = function.body.as_ref().ok_or_else(|| later("entry without body"))?;
     if !body.high_results.is_empty() || !body.high_effects.is_empty() || !body.descriptor_bindings.is_empty()
         || !body.service_schedules.is_empty()
@@ -544,8 +1031,11 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
     if params != function.signature.params {
         return Err(error("entry parameter signature mismatch"));
     }
-    let defer = function.attrs.iter().any(|attr| matches!(attr, o::FunctionAttr::DeferEntry { .. }));
-    let entry_abi = if defer {
+    let entry_abi = if let Some(shape) = &asynchronous {
+        // Its layout is pushed once the pcs of its sites are known, below.
+        let layout = u32::try_from(tables.frames.len()).map_err(|_| error("too many frame layouts"))?;
+        if shape.defer { s::EntryAbi::AsyncDefer { layout } } else { s::EntryAbi::AsyncBody { layout } }
+    } else if defer {
         s::EntryAbi::Defer { labels: labels(module, function)? }
     } else {
         match function.signature.ownership_abi {
@@ -594,6 +1084,10 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
             result.results.push(ty);
         }
     }
+    // An async body returns nothing: its results are the Future's outcome, which fut.publish delivers.
+    if let Some(body) = &asynchronous {
+        result.results.extend(body.outcome);
+    }
     let mut order = vec![body.entry];
     order.extend(body.blocks.iter().map(|(id, _)| id).filter(|&id| id != body.entry));
     let mut pcs = BTreeMap::new();
@@ -619,7 +1113,8 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                 return Err(error("duplicate instruction"));
             }
             let inst = body.insts.get(inst_id)?;
-            if block.unwind.is_some() && !fallible_scalar(&inst.op) && o::ContractRegistry::new(module)
+            if block.unwind.is_some() && !fallible_scalar(&inst.op) && !total_family_operation(&inst.op)
+                && o::ContractRegistry::new(module)
                 .lookup(&inst.op).map_err(|failure| error(failure.to_string()))?.unwind.is_some()
             {
                 return Err(later(&format!("{}: implicit instruction unwind {}", function.symbol, inst.op.opcode())));
@@ -627,8 +1122,12 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
             inst_pcs.insert(inst_id, pc);
             let size = match &inst.op {
                 o::Operation::Core(o::CoreOp::RangeLen { .. }) => 3,
+                // The last field write, the completed identity's packet, and its admission into the state.
+                o::Operation::Core(o::CoreOp::ObjInit { completion: Some(_), .. }) => 3,
                 // D8 registration is static CFG metadata, not a second runtime defer runner.
                 o::Operation::Lexical(o::LexicalOp::DeferRegister { .. }) => 0,
+                // allocate the closure layout, then move it into the `fn` role; move a cap and its packet.
+                op if expansion(op) > 1 => expansion(op),
                 // evaluate, then the function failure exit unless the block unwind receives the failure.
                 op if fallible_scalar(op) && block.unwind.is_none() => 2,
                 _ => 1,
@@ -647,9 +1146,17 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
             o::TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(),
                 o::Operation::Core(o::CoreOp::VariantNew { packet: None, ty, .. })
                     if matches!(translate_type(module, *ty), Ok(s::Type::Variant(_)))) => 3,
+            // A total scalar family operation computes into a register and branches with it, as does the
+            // payload read of a one-case Error variant.
+            o::TermKind::InvokeOwn { op, .. } if total_family_operation(op)
+                || error_case_get(module, body, op)?.is_some() => 2,
             o::TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(),
                 o::Operation::Core(o::CoreOp::ObjNew { packet: None, .. }
                     | o::CoreOp::ObjNext { packet: None, .. } | o::CoreOp::VariantNew { packet: None, .. })) => 2,
+            // A case that refers to resources: allocate/commit/join, then the move into the variant type.
+            o::TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(),
+                o::Operation::Core(o::CoreOp::VariantNew { packet: Some(_), ty, .. })
+                    if matches!(translate_type(module, *ty), Ok(s::Type::Variant(_)))) => 5,
             o::TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(),
                 o::Operation::Core(o::CoreOp::ObjNew { .. } | o::CoreOp::ObjNext { .. }
                     | o::CoreOp::VariantNew { .. })) => 4,
@@ -663,8 +1170,14 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
     if definitions.len() != body.values.len() || instructions.len() != body.insts.len() {
         return Err(error("orphan SSA value or instruction"));
     }
+    if asynchronous.is_some() {
+        let layout = body.frame_layout.as_ref().ok_or_else(|| error("async body without its frame layout"))?;
+        tables.frames.push(futures::frame_layout(module, layout, &inst_pcs, &term_pcs)?);
+    }
+    let summaries = &mut tables.summaries;
     let mut emitter = Emitter {
         module, function, body, objects, locations, pcs, summaries, scope: entry.lexical_scope, result,
+        synthetic, origins: None, expansions: vec![],
     };
     emitter.result.proofs.entry = Some(cleanup::entry_contract(module, function)?);
     emitter.result.params = entry.params.iter().map(|&value| emitter.loc(value)).collect::<Result<_, _>>()?;
@@ -680,8 +1193,9 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
         let location = emitter.loc(value)?;
         match site {
             o::cfg::UseSite::ValueFacts(owner) => {
+                let obligation = emitter.loc(emitter.through_frame(owner, value)?)?;
                 emitter.result.proofs.dependencies.push(s::Dependency {
-                    value: emitter.loc(owner)?, obligations: vec![location],
+                    value: emitter.loc(owner)?, obligations: vec![obligation],
                 });
             }
             o::cfg::UseSite::Instruction(inst) | o::cfg::UseSite::InstructionFacts(inst) => {
@@ -756,14 +1270,71 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                     s::Instruction::Champ { op, arguments, flow: s::Flow::Next(inst.results.iter()
                         .map(|&value| emitter.loc(value)).collect::<Result<_, _>>()?) }
                 }
+                o::Operation::Collection(o::CollectionOp::BuilderAbandon { buffer, packet }
+                    | o::CollectionOp::MapBuilderAbandon { buffer, packet }) => {
+                    let packet = packet.ok_or_else(|| error("builder.abandon without its element journal"))?;
+                    let arguments = vec![A::Location(emitter.loc(*buffer)?), A::Location(emitter.loc(packet)?)];
+                    let outputs = inst.results.iter().map(|&value| emitter.loc(value)).collect::<Result<_, _>>()?;
+                    s::Instruction::Champ { op: O::BuilderAbandon, arguments, flow: s::Flow::Next(outputs) }
+                }
+                o::Operation::Core(o::CoreOp::ObjInit { object, field, value, completion: Some(completion) }) => {
+                    emitter.complete_construction(*object, *field, *value, completion.state, &inst.results)?;
+                    continue;
+                }
                 o::Operation::Cleanup(op) => emitter.cleanup_instruction(op, &inst.results)?,
                 o::Operation::Exit(op) => emitter.exit_instruction(op, &inst.results)?,
-                o::Operation::Core(o::CoreOp::TypeOf { ty, .. }) => {
-                    let o::Type::Object { decl, .. } = module.types.get(*ty)? else {
-                        return Err(error("descriptor is not an object"));
+                o::Operation::Async(op) => emitter.async_instruction(op, &inst.results)?,
+                o::Operation::Core(o::CoreOp::TypeOf { ty, descriptor }) => {
+                    let id = match module.types.get(*ty)? {
+                        o::Type::Object { decl, .. } => decl.as_u32(),
+                        // An action value's runtime descriptor is its `fn` role; its opaque cleanup releases
+                        // the value's complete owner graph.
+                        o::Type::Fn(_) => {
+                            roles::opaque_descriptor(module, *ty, descriptor, o::catalogue::SYNC_CLOSURE_CLEANUP)?;
+                            roles::callable_role(module, *ty)?
+                        }
+                        // The descriptor of `any`; its opaque cleanup releases a box's complete owner graph.
+                        o::Type::Any => {
+                            roles::opaque_descriptor(module, *ty, descriptor, o::catalogue::ANY_CLEANUP)?;
+                            emitter.synthetic.any_object(module)
+                        }
+                        _ => return Err(error("descriptor of a type without one")),
                     };
                     data(s::DataOp::Const, vec![], emitter.reg(inst.results[0])?,
-                        s::Immediate::Constant(s::Constant::Descriptor(decl.as_u32())))
+                        s::Immediate::Constant(s::Constant::Descriptor(id)))
+                }
+                o::Operation::Call(call @ (o::CallOp::Role { .. } | o::CallOp::Closure { .. })) => {
+                    let (opcode, arguments, context) = emitter.dispatch(call)?;
+                    if context.may_fail {
+                        return Err(error("fallible call requires explicit outcomes"));
+                    }
+                    s::Instruction::Champ { op: opcode, arguments,
+                        flow: s::Flow::Next(inst.results.iter().map(|&v| emitter.loc(v))
+                            .collect::<Result<_, _>>()?) }
+                }
+                o::Operation::Call(o::CallOp::Cap { cap, field, call }) => {
+                    let (opcode, arguments, context) = emitter.cap_call(*cap, *field, call)?;
+                    if context.may_fail {
+                        return Err(error("fallible call requires explicit outcomes"));
+                    }
+                    s::Instruction::Champ { op: opcode, arguments,
+                        flow: s::Flow::Next(inst.results.iter().map(|&v| emitter.loc(v))
+                            .collect::<Result<_, _>>()?) }
+                }
+                o::Operation::Core(o::CoreOp::FnClosure { .. } | o::CoreOp::FnBind { .. }
+                    | o::CoreOp::FnBindRole { .. }) => {
+                    let site = roles::closure_site(body, &inst.op)?.expect("action value site");
+                    emitter.closure(site, &inst.results)?;
+                    continue;
+                }
+                o::Operation::Core(o::CoreOp::AnyBox { .. }) => {
+                    let (ty, value, packet) = roles::any_box_site(body, &inst.op)?.expect("any.box site");
+                    emitter.any_box(ty, value, packet, &inst.results)?;
+                    continue;
+                }
+                o::Operation::Core(o::CoreOp::CapMake { owner, packet: Some(packet), .. }) => {
+                    emitter.cap_with_packet(*owner, *packet, &inst.results)?;
+                    continue;
                 }
                 o::Operation::Call(o::CallOp::Direct { function, call } | o::CallOp::Native { function, call }
                     | o::CallOp::Intrinsic { function, call }) => {
@@ -855,7 +1426,8 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
             o::TermKind::Catch { failure, ty, handler, next } => {
                 let ty = translate_type(module, *ty)?;
                 let target = match ty {
-                    s::Type::Object(id) => A::Object(id),
+                    // An Error variant is caught by its declaration: any of its cases.
+                    s::Type::Object(id) | s::Type::Variant(id) => A::Object(id),
                     s::Type::Error => A::Flag(true),
                     _ => return Err(error("catch requires a plain Error")),
                 };
@@ -875,6 +1447,9 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
             o::TermKind::InvokeOwn { op, normal, unwind }
                 if matches!(op.as_ref(), o::Operation::Ownership(_)) => {
                 emitter.ownership_invoke(op, normal, unwind)?
+            }
+            o::TermKind::InvokeOwn { op, normal, unwind } if matches!(op.as_ref(), o::Operation::Async(_)) => {
+                emitter.async_invocation(op, normal, unwind)?
             }
             o::TermKind::CleanupNext { .. } | o::TermKind::ExitDispatch { .. }
                 | o::TermKind::FailureDispatch { .. } => emitter.cleanup_term(&block.term.kind)?,
@@ -898,6 +1473,23 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                 s::Instruction::Champ { op: O::Fail,
                     arguments: vec![A::Label(kind), A::Location(L::Register(payload))],
                     flow: s::Flow::Outcomes(vec![s::Outcome { tag: s::Tag::Unwind, edge }]) }
+            }
+            o::TermKind::Lookup { collection, key, found, missing, .. } => {
+                let value = match translate_type(module, body.values.get(*collection)?.ty)? {
+                    array @ (s::Type::Array(_) | s::Type::Bytes) => s::element_type(array),
+                    s::Type::Map(id) => match composites(module).entries().get(id as usize) {
+                        Some(s::Composite::Map { value, .. }) => Some(*value),
+                        _ => None,
+                    },
+                    _ => None,
+                }.ok_or_else(|| error("lookup on a value that is neither an array nor a map"))?;
+                s::Instruction::Champ { op: O::Lookup,
+                    arguments: vec![A::Location(emitter.loc(*collection)?), A::Location(emitter.loc(*key)?)],
+                    flow: s::Flow::Outcomes(vec![
+                        s::Outcome { tag: s::Tag::Some,
+                            edge: emitter.edge(found.block, &found.args, o::Outcome::Normal, &[P::Value(value)])? },
+                        s::Outcome { tag: s::Tag::None, edge: emitter.branch(missing)? },
+                    ]) }
             }
             o::TermKind::Raise(failure) => s::Instruction::Raise(emitter.reg(*failure)?),
             o::TermKind::InvokeOwn { .. } | o::TermKind::InvokeDefer { .. } => emitter.invocation(&block.term.kind)?,
@@ -936,7 +1528,8 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                 if actual != function.signature.results {
                     return Err(error("return signature/type mismatch"));
                 }
-                if emitter.result.entry_abi == s::EntryAbi::Observation {
+                if emitter.result.entry_abi == s::EntryAbi::Observation || emitter.result.entry_abi.asynchronous() {
+                    // An async body returns nothing: fut.publish just before has delivered its outcome.
                     s::Instruction::Ret(values.iter().map(|&value| emitter.reg(value))
                         .collect::<Result<_, _>>()?)
                 } else {
@@ -975,7 +1568,6 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                 s::Instruction::Champ { op: O::RetDefer, arguments, flow: s::Flow::Next(vec![]) }
             }
             o::TermKind::Unreachable => s::Instruction::Unreachable,
-            _ => return Err(later("failure/cleanup terminator")),
         };
         emitter.result.code.push(term);
     }

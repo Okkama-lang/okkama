@@ -101,6 +101,40 @@ pub struct VariantCase {
     pub layout: DeclId,
 }
 
+/// The system `NativeFailure` (language spec 9.5): the payload of a native failure, a plain object of four
+/// strings that source never constructs and a `catch e is NativeFailure` binds.
+pub const NATIVE_FAILURE: &str = "NativeFailure";
+/// The fields of [`NATIVE_FAILURE`], in storage order; all are `str`.
+pub const NATIVE_FAILURE_FIELDS: [&str; 4] = ["domain", "code", "operation", "message"];
+
+/// Whether `decl` is the system NativeFailure: exactly its name and four plain string fields, no type
+/// parameters, roles, destroy or builtin capability. A declaration of another shape is an ordinary object.
+pub fn is_native_failure(module: &Module, decl: DeclId) -> bool {
+    let Ok(declaration) = module.declarations.get(decl) else { return false };
+    let DeclarationKind::Object { fields, witnesses, destroy: None, builtin: false } = &declaration.kind else {
+        return false;
+    };
+    declaration.name == NATIVE_FAILURE && declaration.type_params.is_empty() && witnesses.is_empty()
+        && fields.len() == NATIVE_FAILURE_FIELDS.len()
+        && fields.iter().zip(NATIVE_FAILURE_FIELDS).all(|(field, name)| field.name == name
+            && field.default.is_none() && !field.once && module.types.get(field.ty) == Ok(&crate::Type::Str))
+}
+
+/// The system `Cancelled` (#724): the payload a cancellation binds in `catch e is Cancelled`, an object without
+/// fields that source never constructs.
+pub const CANCELLED: &str = "Cancelled";
+/// The text of [`CANCELLED`]'s `text()`, as Tomato gives it.
+pub const CANCELLED_TEXT: &str = "Operation was cancelled";
+
+/// Whether `decl` is the system Cancelled: exactly its name, no fields, type parameters, roles, destroy or builtin
+/// capability. A declaration of another shape is an ordinary object.
+pub fn is_cancelled(module: &Module, decl: DeclId) -> bool {
+    let Ok(declaration) = module.declarations.get(decl) else { return false };
+    matches!(&declaration.kind, DeclarationKind::Object { fields, witnesses, destroy: None, builtin: false }
+        if fields.is_empty() && witnesses.is_empty())
+        && declaration.name == CANCELLED && declaration.type_params.is_empty()
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ComputedField {
     pub name: String,

@@ -557,6 +557,7 @@ impl Specializer<'_, '_> {
             }
             T::Varargs(inner) => T::Varargs(Box::new(self.ty(inner, span)?)),
             T::Successor(inner) => T::Successor(Box::new(self.ty(inner, span)?)),
+            T::Future(result) => T::Future(result.as_ref().map(|ty| self.ty(ty, span).map(Box::new)).transpose()?),
             T::Enum(id) => T::Enum(self.enumeration(*id, &[], span)?),
             T::Variant(id, args) => T::Variant(self.enumeration(*id, args, span)?, vec![]),
             T::Param(_) => return Err(LowerError::unsupported(span,
@@ -651,8 +652,8 @@ impl Specializer<'_, '_> {
 
     fn expr(&mut self, expr: &mut thir::Expr, env: &[(ty::ParamId, ty::Ty)]) -> Result<()> {
         use thir::ExprKind as E;
-        if let E::Await(_) | E::Spawn(_) = &expr.kind {
-            return Err(LowerError::unsupported(expr.span, "async operation (#570)"));
+        if let Some(construct) = super::asynchronous::outside_plain(expr) {
+            return Err(LowerError::unsupported(expr.span, construct));
         }
         if let E::StreamWrite { .. } = &expr.kind {
             let roles = super::streams::StreamRoles::find(&self.input.registry, expr.span)?;
@@ -721,6 +722,13 @@ impl Specializer<'_, '_> {
             }
             E::Call { callee, args } => {
                 match callee {
+                    // The system NativeFailure's getters are field reads and Cancelled's text() a constant: no body
+                    // to specialize.
+                    thir::Callee::Method { receiver, object, .. }
+                        if *object == self.input.registry.system.native_failure
+                            || *object == self.input.registry.system.cancelled => {
+                        self.expr(receiver, env)?;
+                    }
                     thir::Callee::Method { receiver, object, method } => {
                         let original = *object;
                         let args = match receiver.ty.as_ref().map(|ty| ty.taken().subst(env)) {
@@ -797,7 +805,8 @@ impl Specializer<'_, '_> {
                 }
             }
             E::Unary { operand: value, .. } | E::Coerce { value, .. } | E::Cast { value, .. }
-            | E::Panic(value) | E::Unpack(value) | E::VariantTag(value) | E::VariantGet { value, .. } => {
+            | E::Panic(value) | E::Unpack(value) | E::VariantTag(value) | E::VariantGet { value, .. }
+            | E::Await(value) => {
                 self.expr(value, env)?;
             }
             E::Binary { left, right, .. } | E::Logical { left, right, .. }

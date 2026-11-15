@@ -7,7 +7,9 @@ use okkama_oir as o;
 use okkama_sparrow::spb17 as s;
 
 mod calls;
+mod roles;
 mod successors;
+mod undef;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GenerateError(pub String);
@@ -55,62 +57,11 @@ pub struct AllocatedProgram {
 pub fn generate_with_allocation(module: &o::Module, layouts: &dyn LayoutRegistry)
     -> Result<AllocatedProgram, GenerateError>
 {
-    if module.profile != o::Profile::Low {
-        return Err(GenerateError("expected verified low profile".into()));
-    }
-    // The test profile carries its tests table; a tests table needs `requires test` and nothing else.
-    let profile = |feature: &o::Feature| *feature == o::Feature::Core
-        || *feature == o::Feature::Test && module.tests.is_some();
-    if !module.imports.is_empty() || !module.protocols.is_empty() || !module.requires.iter().all(profile)
-        || module.tests.is_some() != module.requires.contains(&o::Feature::Test)
-    {
-        return Err(unsupported("unresolved declarations, protocols or service metadata"));
-    }
-    let tests = module.tests.as_ref().map(|tests| tests.iter().map(|test| s::Test {
-        name: test.name.clone(),
-        function: test.function.as_u32(),
-    }).collect());
-    let mut p = s::Program {
-        module: module.name.clone(),
-        version: module.version.clone().unwrap_or_default(),
-        entry: module.entry.map(|id| id.as_u32()),
-        tests,
-        ..s::Program::default()
-    };
-    p.objects = objects(module, layouts)?;
-    for (id, scope) in module.scopes.iter() {
-        p.tables.scopes.push(s::Scope {
-            function: scope.function.as_u32(),
-            parent: scope.parent.map(|id| id.as_u32()),
-            boundary: id.as_u32(),
-        });
-        p.tables.boundaries.push(s::Boundary { scope: id.as_u32() });
-    }
-    for (id, function) in module.functions.iter() {
-        if let Some(body) = &function.body {
-            for (_, value) in body.values.iter() {
-                if matches!(translate_type(module, value.ty), Ok(s::Type::Array(_)))
-                    && value.facts != (o::ValueFacts::Plain {
-                        certificate: o::PlainCertificate::ClosedGraph { ty: value.ty },
-                    })
-                {
-                    return Err(GenerateError("plain array requires own ClosedGraph certificate".into()));
-                }
-            }
-        }
-        let translated = if calls::needs_s2(module, function)? {
-            calls::translate(module, id, function, &p.objects, &mut p.tables.summaries)?
-        } else {
-            translate_function(module, id, function, &p.objects)?
-        };
-        p.functions.push(translated);
-    }
-    for function in &mut p.functions {
-        successors::forward_taken(function)?;
-        successors::prune_dead_aliases(function);
-        successors::close_unwind_permissions(function)?;
-        complete_codegen_roots(function)?;
-    }
+    with_composites(module, || generate_program(module, layouts))
+}
+
+fn generate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<AllocatedProgram, GenerateError> {
+    let mut p = translate_program(module, layouts)?;
     s::verify(&p)?;
     let redundant = p.functions.iter().map(|function| s::redundant_admission_filters(&p, function))
         .collect::<Result<Vec<_>, _>>()?;
@@ -130,6 +81,134 @@ pub fn generate_with_allocation(module: &o::Module, layouts: &dyn LayoutRegistry
     Ok(AllocatedProgram { program: p, allocations })
 }
 
+/// The translated program with its relocated evidence, before SPB 17's own structural verification.
+fn translate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<s::Program, GenerateError> {
+    if module.profile != o::Profile::Low {
+        return Err(GenerateError("expected verified low profile".into()));
+    }
+    let mut sunk = module.clone();
+    for (_, function) in sunk.functions.iter_mut() {
+        if let Some(body) = &mut function.body {
+            undef::sink_undef_params(body)?;
+        }
+    }
+    let module = &sunk;
+    // The test profile carries its tests table; a tests table needs `requires test` and nothing else.
+    // Plain async (#601 V7) is part of SPB 17; process workers are not.
+    let profile = |feature: &o::Feature| matches!(feature, o::Feature::Core | o::Feature::Async)
+        || *feature == o::Feature::Test && module.tests.is_some();
+    if !module.imports.is_empty() || !module.requires.iter().all(profile)
+        || module.tests.is_some() != module.requires.contains(&o::Feature::Test)
+    {
+        return Err(unsupported("unresolved declarations or service metadata"));
+    }
+    // The Services family (D16) is the protocol of Future duties: its settle and await.unwind steps are opcodes,
+    // so it needs no SPB 17 protocol. Every dynamic transfer protocol maps to one.
+    for (id, declared) in module.protocols.iter() {
+        if declared.kind != o::ProtocolKind::Services {
+            protocol(module, id)?;
+        }
+    }
+    let tests = module.tests.as_ref().map(|tests| tests.iter().map(|test| s::Test {
+        name: test.name.clone(),
+        function: test.function.as_u32(),
+    }).collect());
+    let mut p = s::Program {
+        module: module.name.clone(),
+        version: module.version.clone().unwrap_or_default(),
+        entry: module.entry.map(|id| id.as_u32()),
+        tests,
+        ..s::Program::default()
+    };
+    p.objects = objects(module, layouts)?;
+    let synthetic = roles::Synthetic::of(module)?;
+    p.composites = composites(module).entries().to_vec();
+    p.tables.future_results = composites(module).futures().to_vec();
+    p.globals = globals(module)?;
+    for (id, scope) in module.scopes.iter() {
+        p.tables.scopes.push(s::Scope {
+            function: scope.function.as_u32(),
+            parent: scope.parent.map(|id| id.as_u32()),
+            boundary: id.as_u32(),
+        });
+        p.tables.boundaries.push(s::Boundary { scope: id.as_u32() });
+    }
+    for (id, function) in module.functions.iter() {
+        if let Some(body) = &function.body {
+            for (_, value) in body.values.iter() {
+                let ty = translate_type(module, value.ty);
+                let collection = matches!(ty, Ok(s::Type::Array(_) | s::Type::Map(_)));
+                let plain = value.facts == (o::ValueFacts::Plain {
+                    certificate: o::PlainCertificate::ClosedGraph { ty: value.ty },
+                });
+                // A managed array or map refers to resource objects: own proves its deps on their owners.
+                let leaf = match ty {
+                    Ok(s::Type::Array(shape)) => s::ArrayType { depth: 1, ..shape }.element(),
+                    Ok(s::Type::Map(id)) => match composites(module).entries().get(id as usize) {
+                        Some(s::Composite::Map { value, .. }) => Some(*value),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let managed = matches!(value.facts, o::ValueFacts::Managed { .. })
+                    && matches!(leaf, Some(s::Type::Object(id))
+                        if p.objects.get(id as usize).is_some_and(|object| object.layout.may_reach_resource));
+                // Own tracks role, cap and action-value elements as references; the loader admits such an
+                // array only when every object it can reach is closed plain data (ARRAY_PLAIN).
+                let view = roles::view_array(module, value.ty)? && matches!(value.facts, o::ValueFacts::Managed { .. });
+                if collection && !plain && !managed && !view {
+                    return Err(GenerateError("plain array or map requires own ClosedGraph certificate".into()));
+                }
+            }
+        }
+        let translated = if calls::needs_s2(module, function)? {
+            calls::translate(module, id, function, &p.objects, &mut p.tables, &synthetic)?
+        } else {
+            translate_function(module, id, function, &p.objects)?
+        };
+        p.functions.push(translated);
+    }
+    let mut trampolines = vec![];
+    let mut summaries = std::mem::take(&mut p.tables.summaries);
+    for (index, closure) in synthetic.closures.iter().enumerate() {
+        let layout = synthetic.closure_object(module, index);
+        trampolines.push(roles::trampoline(&p, closure, layout, &mut summaries)?);
+        debug_assert_eq!(roles::Synthetic::trampoline(module, index) as usize, p.functions.len() + index);
+    }
+    p.tables.summaries = summaries;
+    p.functions.extend(trampolines);
+    for function in &mut p.functions {
+        successors::forward_taken(function)?;
+        successors::prune_dead_aliases(function);
+        successors::close_unwind_permissions(function)?;
+        complete_codegen_roots(function)?;
+    }
+    Ok(p)
+}
+
+/// The SPB 17 protocol of a declared dynamic transfer protocol: the registered open Closure protocol, or the
+/// synchronous `any` protocol (one checked packet-to-scope transfer, as Low admits it). Services protocols are
+/// carried by opcodes (see `program`); any other protocol (storage merges) has no SPB 17 form yet.
+pub(crate) fn protocol(module: &o::Module, id: o::ProtocolId) -> Result<s::Protocol, GenerateError> {
+    let declared = module.protocols.get(id)?;
+    if *declared == o::catalogue::open_callable_protocol() {
+        return Ok(s::Protocol::Closure);
+    }
+    let open = o::ProtocolPoststate { holder: o::HolderKind::Scope, state: o::HolderState::Open };
+    let unaccepted = o::ProtocolPoststate { holder: o::HolderKind::Packet, state: o::HolderState::Unaccepted };
+    let transfer = |rule: &o::ProtocolRule| rule.transition == o::ProtocolTransition::Dynamic
+        && rule.from == o::HolderKind::Packet && rule.to == o::HolderKind::Scope
+        && rule.normal == open && rule.unwind == Some(unaccepted) && rule.cancel.is_none()
+        && [o::ProtocolCheck::Owner, o::ProtocolCheck::LiveDependencies, o::ProtocolCheck::Snapshot,
+            o::ProtocolCheck::Transferable].iter().all(|check| rule.checks.contains(check));
+    if declared.kind == o::ProtocolKind::Any && declared.holders == [o::HolderKind::Scope, o::HolderKind::Packet]
+        && matches!(declared.rules.as_slice(), [rule] if transfer(rule)) && declared.roots == [o::RootKind::Operands]
+    {
+        return Ok(s::Protocol::Any);
+    }
+    Err(unsupported(&format!("{:?} protocol", declared.kind)))
+}
+
 pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<Vec<s::Object>, GenerateError> {
     let mut objects = Vec::new();
     for (id, declaration) in module.declarations.iter() {
@@ -141,21 +220,26 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
                 (fields.as_slice(), witnesses.as_slice(), *destroy)
             }
             o::DeclarationKind::Enum { .. } | o::DeclarationKind::Variant { .. } => (&[][..], &[][..], None),
-            o::DeclarationKind::Role { builtin: true, .. } if declaration.name == "Error" => {
-                (&[][..], &[][..], None)
-            }
+            // A cap value is its owner's reference: the cap declaration is a placeholder descriptor.
+            o::DeclarationKind::Role { .. } | o::DeclarationKind::Cap { .. } => (&[][..], &[][..], None),
             o::DeclarationKind::Handle => (&[][..], &[][..], None),
-            _ => return Err(unsupported("non-object declaration")),
+            // A module constant is laid out in `Program::globals`; its declaration keeps a placeholder
+            // descriptor so that descriptor indices stay declaration indices.
+            o::DeclarationKind::Global { .. } => (&[][..], &[][..], None),
         };
-        if !witnesses.is_empty() {
-            return Err(unsupported("object witnesses"));
-        }
+        let role = match &declaration.kind {
+            o::DeclarationKind::Role { builtin: true, .. } if declaration.name == "Error" => None,
+            o::DeclarationKind::Role { methods, .. } => Some(roles::role_decl(module, methods)?),
+            _ => None,
+        };
+        let implements = roles::implementations(module, witnesses)?;
         let layout = layouts.object_layout(id.as_u32())?;
         if let o::DeclarationKind::Variant { cases, is_error: false } = &declaration.kind {
             for case in cases {
                 let case = layouts.object_layout(case.layout.as_u32())?;
-                if case.runtime.has_destroy || case.runtime.may_reach_resource {
-                    return Err(unsupported("variant case that reaches resources"));
+                // A case may refer to resources (Maybe<Resource>); it is never an identity itself.
+                if case.runtime.has_destroy {
+                    return Err(unsupported("variant case with destroy"));
                 }
             }
         }
@@ -183,7 +267,7 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
                 }).unwrap_or_default(),
             },
             variant_cases: match &declaration.kind {
-                o::DeclarationKind::Variant { cases, is_error: false } => {
+                o::DeclarationKind::Variant { cases, .. } => {
                     cases.iter().map(|case| case.layout.as_u32()).collect()
                 }
                 _ => vec![],
@@ -202,45 +286,182 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
                 once: field.once,
             }).collect(),
             layout: layout.runtime,
+            role,
+            implements,
+            any_box: false,
+            // A plain enum names its cases as Tomato's texts do (`Enum.case`): an Error payload shows them.
+            enum_names: match &declaration.kind {
+                o::DeclarationKind::Enum { cases, is_error: false } => cases.iter().map(|case| {
+                    format!("{}.{case}", declaration.name.rsplit('.').next().unwrap())
+                }).collect(),
+                _ => vec![],
+            },
         });
     }
+    roles::synthetic_objects(module, &mut objects)?;
     Ok(objects)
 }
 
+/// SPB 17 collection shapes and Future outcomes of one module, in OIR type order. Equal shapes share one
+/// entry, and so do Futures of one outcome type (`ChampTables::future_results` entries are distinct).
+#[derive(Debug, Default)]
+pub(crate) struct Composites {
+    index: std::collections::HashMap<o::TypeId, u32>,
+    entries: Vec<s::Composite>,
+    future_index: std::collections::HashMap<o::TypeId, u32>,
+    futures: Vec<Option<s::Type>>,
+}
+
+impl Composites {
+    fn build(module: &o::Module) -> Self {
+        let mut table = Self::default();
+        for (id, ty) in module.types.iter() {
+            // A type is interned after the types it names, so its outcome is already in the table.
+            if let o::Type::Future(result) = ty {
+                let outcome = match result {
+                    Some(result) => match translate_with(module, *result, &table) {
+                        Ok(outcome) => Some(outcome),
+                        Err(_) => continue,
+                    },
+                    None => None,
+                };
+                let position = match table.futures.iter().position(|entry| *entry == outcome) {
+                    Some(position) => position,
+                    None => {
+                        table.futures.push(outcome);
+                        table.futures.len() - 1
+                    }
+                };
+                table.future_index.insert(id, position as u32);
+                continue;
+            }
+            let composite = match ty {
+                o::Type::Map(key, value) | o::Type::MapBuilder(key, value) => {
+                    match (translate_with(module, *key, &table), translate_with(module, *value, &table)) {
+                        (Ok(key), Ok(value)) => s::Composite::Map { key, value },
+                        _ => continue,
+                    }
+                }
+                o::Type::Builder(element) => match translate_with(module, *element, &table) {
+                    Ok(element) => match s::ArrayType::of(element) {
+                        Some(array) => s::Composite::Builder { array },
+                        None => continue,
+                    },
+                    Err(_) => continue,
+                },
+                _ => continue,
+            };
+            let position = match table.entries.iter().position(|entry| *entry == composite) {
+                Some(position) => position,
+                None => {
+                    table.entries.push(composite);
+                    table.entries.len() - 1
+                }
+            };
+            table.index.insert(id, position as u32);
+        }
+        table
+    }
+
+    pub(crate) fn entries(&self) -> &[s::Composite] {
+        &self.entries
+    }
+
+    /// `ChampTables::future_results`: the outcome of each `Type::Future` index; `None` is a void Future.
+    pub(crate) fn futures(&self) -> &[Option<s::Type>] {
+        &self.futures
+    }
+}
+
+thread_local! {
+    /// The table of the module being generated, keyed by its address; outside `with_composites` every
+    /// lookup rebuilds the table, so a stale entry can never be read.
+    static COMPOSITES: std::cell::RefCell<Option<(usize, std::rc::Rc<Composites>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn module_key(module: &o::Module) -> usize {
+    module as *const o::Module as usize
+}
+
+/// Run `body` with the module's composite table built once.
+pub(crate) fn with_composites<T>(module: &o::Module, body: impl FnOnce() -> T) -> T {
+    struct Restore(Option<(usize, std::rc::Rc<Composites>)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = self.0.take();
+            COMPOSITES.with(|slot| *slot.borrow_mut() = previous);
+        }
+    }
+    let table = std::rc::Rc::new(Composites::build(module));
+    let previous = COMPOSITES.with(|slot| slot.borrow_mut().replace((module_key(module), table)));
+    let _restore = Restore(previous);
+    body()
+}
+
+pub(crate) fn composites(module: &o::Module) -> std::rc::Rc<Composites> {
+    let cached = COMPOSITES.with(|slot| slot.borrow().as_ref()
+        .filter(|(key, _)| *key == module_key(module)).map(|(_, table)| table.clone()));
+    cached.unwrap_or_else(|| std::rc::Rc::new(Composites::build(module)))
+}
+
 pub(crate) fn translate_type(module: &o::Module, id: o::TypeId) -> Result<s::Type, GenerateError> {
+    translate_with(module, id, &composites(module))
+}
+
+fn translate_with(module: &o::Module, id: o::TypeId, table: &Composites) -> Result<s::Type, GenerateError> {
     Ok(match module.types.get(id)? {
         o::Type::Int => s::Type::Int,
-        o::Type::Array(element) if module.types.get(*element)? == &o::Type::Byte => s::Type::Bytes,
         o::Type::Array(element) => {
-            let leaf = match translate_type(module, *element)? {
-                s::Type::Int => s::ArrayLeaf::Int,
-                s::Type::Bool => s::ArrayLeaf::Bool,
-                s::Type::Str => s::ArrayLeaf::Str,
-                s::Type::Range => s::ArrayLeaf::Range,
-                s::Type::Bytes => s::ArrayLeaf::Bytes,
-                s::Type::Object(id) => s::ArrayLeaf::Object(id),
-                s::Type::Array(shape) => {
-                    let depth = shape.depth.checked_add(1)
-                        .ok_or_else(|| GenerateError("array nesting overflow".into()))?;
-                    return Ok(s::Type::Array(s::ArrayType { depth, ..shape }));
+            let element = translate_with(module, *element, table)?;
+            s::ArrayType::of(element).ok_or_else(|| unsupported("array element type"))?
+        }
+        o::Type::Map(..) | o::Type::MapBuilder(..) | o::Type::Builder(_) => {
+            let Some(&index) = table.index.get(&id) else {
+                let parts = match module.types.get(id)? {
+                    o::Type::Map(key, value) | o::Type::MapBuilder(key, value) => vec![*key, *value],
+                    o::Type::Builder(element) => vec![*element],
+                    _ => vec![],
+                };
+                for part in parts {
+                    translate_with(module, part, table)?;
                 }
-                _ => return Err(unsupported("array element type")),
+                return Err(unsupported("collection shape outside SPB 17"));
             };
-            s::Type::Array(s::ArrayType { leaf, depth: 1 })
+            match module.types.get(id)? {
+                o::Type::Map(..) => s::Type::Map(index),
+                o::Type::MapBuilder(..) => s::Type::MapBuilder(index),
+                _ => s::Type::Builder(index),
+            }
         }
         o::Type::Role { decl, args } if args.is_empty() && module.declarations.get(*decl)?.name == "Error" => {
             s::Type::Error
+        }
+        o::Type::Role { decl, args } if args.is_empty() => s::Type::Role(decl.as_u32()),
+        o::Type::Fn(_) => s::Type::Role(roles::callable_role(module, id)?),
+        // An `any` value is a reference to an any box: the boxed value and, in its descriptor, its type.
+        o::Type::Any => s::Type::Any,
+        // A cap holds its owner's complete graph and reads it on every call: it is the owner's reference.
+        o::Type::Cap { decl, args } if args.is_empty() => {
+            let o::DeclarationKind::Cap { owner, .. } = &module.declarations.get(*decl)?.kind else {
+                return Err(GenerateError("cap type references a non-cap declaration".into()));
+            };
+            match translate_with(module, *owner, table)? {
+                owner @ s::Type::Object(_) => owner,
+                _ => return Err(unsupported("cap of a non-object owner")),
+            }
         }
         o::Type::Enum(decl) => s::Type::Object(decl.as_u32()),
         o::Type::Variant(decl) => {
             let o::DeclarationKind::Variant { cases, is_error } = &module.declarations.get(*decl)?.kind else {
                 return Err(GenerateError("variant type references non-variant declaration".into()));
             };
-            if !is_error {
-                return Ok(s::Type::Variant(decl.as_u32()));
+            // A one-case Error variant is its case object (#703); an Error variant with several cases is a
+            // variant whose values are its case objects, which are Error values (#705).
+            match cases.as_slice() {
+                [case] if *is_error => s::Type::Object(case.layout.as_u32()),
+                _ => s::Type::Variant(decl.as_u32()),
             }
-            let [case] = cases.as_slice() else { return Err(unsupported("multi-case Error variant type")); };
-            s::Type::Object(case.layout.as_u32())
         }
         o::Type::Descriptor => s::Type::Descriptor,
         o::Type::Handle(decl) => {
@@ -266,9 +487,111 @@ pub(crate) fn translate_type(module: &o::Module, id: o::TypeId) -> Result<s::Typ
         }
         o::Type::Successor(base) => match module.types.get(*base)? {
             o::Type::Object { decl, args } if args.is_empty() => s::Type::Successor(decl.as_u32()),
+            o::Type::Role { decl, args } if args.is_empty() && module.declarations.get(*decl)?.name != "Error" => {
+                s::Type::RoleSuccessor(decl.as_u32())
+            }
             _ => return Err(unsupported("non-object successor type")),
         },
+        o::Type::Future(result) => match table.future_index.get(&id) {
+            Some(&index) => s::Type::Future(index),
+            None => {
+                // The outcome type decides the error: a Future of an SPB 17 type is always in the table.
+                if let Some(result) = result {
+                    translate_with(module, *result, table)?;
+                }
+                return Err(unsupported("Future outcome outside SPB 17"));
+            }
+        },
         ty => return Err(unsupported(&format!("type {ty:?}"))),
+    })
+}
+
+/// The index in `Program::globals` of a module constant: its position among the global declarations.
+fn global_index(module: &o::Module, declaration: o::DeclId) -> Result<u32, GenerateError> {
+    let position = module.declarations.iter()
+        .filter(|(_, declared)| matches!(declared.kind, o::DeclarationKind::Global { .. }))
+        .position(|(id, _)| id == declaration)
+        .ok_or_else(|| GenerateError("global read of a declaration that is not a global".into()))?;
+    u32::try_from(position).map_err(|_| GenerateError("too many globals".into()))
+}
+
+fn global_init(module: &o::Module, declaration: o::DeclId) -> Result<o::FuncId, GenerateError> {
+    match module.declarations.get(declaration)?.kind {
+        o::DeclarationKind::Global { init, .. } => Ok(init),
+        _ => Err(GenerateError("global read of a declaration that is not a global".into())),
+    }
+}
+
+/// The SPB 17 layout of the module constants (#709): each global's value as data, read from its init
+/// function. The producer builds that body from literals, `enum.case`, `array.new` and `map.new` only
+/// (`lowering::oir2::globals`), so the data are the value the init would compute, children first.
+fn globals(module: &o::Module) -> Result<Vec<s::Global>, GenerateError> {
+    let mut globals = Vec::new();
+    for (_, declaration) in module.declarations.iter() {
+        let o::DeclarationKind::Global { ty, init } = declaration.kind else { continue };
+        let function = module.functions.get(init)?;
+        let body = function.body.as_ref().ok_or_else(|| unsupported("global without an init body"))?;
+        let mut definitions = BTreeMap::new();
+        for (_, block) in body.blocks.iter() {
+            for &inst in &block.insts {
+                let instruction = body.insts.get(inst)?;
+                if let [result] = instruction.results.as_slice() {
+                    definitions.insert(*result, &instruction.op);
+                }
+            }
+        }
+        let returned = body.blocks.iter().find_map(|(_, block)| match &block.term.kind {
+            o::TermKind::Ret { values } => values.first().copied(),
+            _ => None,
+        }).ok_or_else(|| unsupported("global init without a returned value"))?;
+        let mut data = Vec::new();
+        let mut built = BTreeMap::new();
+        datum(module, body, &definitions, returned, &mut data, &mut built)?;
+        let ty = translate_type(module, ty)?;
+        if data.last().map(|datum| datum.ty) != Some(ty) {
+            return Err(GenerateError("global init returns another type".into()));
+        }
+        globals.push(s::Global { name: declaration.name.clone(), ty, data });
+    }
+    Ok(globals)
+}
+
+/// The datum of one init value, after the data of its parts; each value becomes one datum.
+fn datum(module: &o::Module, body: &o::Body, definitions: &BTreeMap<o::ValueId, &o::Operation>,
+    value: o::ValueId, data: &mut Vec<s::Datum>, built: &mut BTreeMap<o::ValueId, u32>) -> Result<u32, GenerateError>
+{
+    if let Some(&index) = built.get(&value) {
+        return Ok(index);
+    }
+    let ty = translate_type(module, body.values.get(value)?.ty)?;
+    let operation = definitions.get(&value).ok_or_else(|| unsupported("global init value outside its data"))?;
+    let mut parts = |values: &[o::ValueId], data: &mut Vec<s::Datum>| values.iter()
+        .map(|&part| datum(module, body, definitions, part, data, built)).collect::<Result<Vec<_>, _>>();
+    let value_datum = match operation {
+        o::Operation::Const(literal) => s::DatumValue::Constant(translate_constant(literal)?),
+        o::Operation::Core(o::CoreOp::EnumCase { case, .. }) => s::DatumValue::Case(*case),
+        o::Operation::Collection(o::CollectionOp::ArrayNew { values, packet: None, .. }) => {
+            s::DatumValue::Array(parts(values, data)?)
+        }
+        o::Operation::Collection(o::CollectionOp::MapNew { entries, packet: None, .. }) => {
+            let values = entries.iter().flat_map(|&(key, item)| [key, item]).collect::<Vec<_>>();
+            s::DatumValue::Map(parts(&values, data)?)
+        }
+        _ => return Err(unsupported(&format!("global init operation {}", operation.opcode()))),
+    };
+    let index = u32::try_from(data.len()).map_err(|_| GenerateError("too many global data".into()))?;
+    data.push(s::Datum { ty, value: value_datum });
+    built.insert(value, index);
+    Ok(index)
+}
+
+/// The case layout of a one-case Error variant type, which SPB 17 represents by that case object
+/// (`translate_type`); `None` for every other type.
+pub(crate) fn single_error_case(module: &o::Module, ty: o::TypeId) -> Result<Option<o::DeclId>, GenerateError> {
+    let o::Type::Variant(decl) = module.types.get(ty)? else { return Ok(None) };
+    Ok(match &module.declarations.get(*decl)?.kind {
+        o::DeclarationKind::Variant { cases, is_error: true } if cases.len() == 1 => Some(cases[0].layout),
+        _ => None,
     })
 }
 
@@ -284,6 +607,18 @@ pub(crate) fn variant_storage(module: &o::Module, objects: &[s::Object], field: 
         .map(|field| field.storage).ok_or_else(|| GenerateError("invalid variant payload field".into()))
 }
 
+/// The storage of a once slot: a source field marked `once` (#491).
+fn once_field(module: &o::Module, objects: &[s::Object], field: o::FieldRef) -> Result<u32, GenerateError> {
+    let o::DeclarationKind::Object { fields, .. } = &module.declarations.get(field.declaration)?.kind else {
+        return Err(GenerateError("once slot outside an object".into()));
+    };
+    if !fields.get(field.index as usize).is_some_and(|source| source.once) {
+        return Err(GenerateError("once.load/once.store needs a once slot".into()));
+    }
+    objects.get(field.declaration.as_u32() as usize).and_then(|object| object.fields.get(field.index as usize))
+        .map(|field| field.storage).ok_or_else(|| GenerateError("invalid once slot".into()))
+}
+
 /// The SPB 17 type of an OIR-2 conversion operand.
 pub(crate) fn numeric_type(ty: o::NumericType) -> Option<s::Type> {
     match ty {
@@ -293,7 +628,94 @@ pub(crate) fn numeric_type(ty: o::NumericType) -> Option<s::Type> {
         o::NumericType::Byte => Some(s::Type::Byte),
         o::NumericType::Float => Some(s::Type::Float),
         o::NumericType::Rat => Some(s::Type::Rat),
+        o::NumericType::Char => Some(s::Type::Char),
     }
+}
+
+/// The SPB 17 operation of an OIR-2 int, byte, float, rat or str operation of the scalar families
+/// (wire codes 14..=18) and its operands in order. Both IRs give these operations the same operand and
+/// result types; `int.div` and `rat.new` stay `RatNew`.
+pub(crate) fn family_operation(core: &o::CoreOp) -> Option<(s::DataOp, Vec<o::ValueId>)> {
+    use o::CoreOp as C;
+    use s::DataOp as D;
+    Some(match *core {
+        C::IntAnd { left, right } => (D::IntAnd, vec![left, right]),
+        C::IntOr { left, right } => (D::IntOr, vec![left, right]),
+        C::IntXor { left, right } => (D::IntXor, vec![left, right]),
+        C::IntShl { left, right } => (D::IntShl, vec![left, right]),
+        C::IntShr { left, right } => (D::IntShr, vec![left, right]),
+        C::IntUshr { left, right } => (D::IntUshr, vec![left, right]),
+        C::IntNot { value } => (D::IntNot, vec![value]),
+        C::IntAbs { value } => (D::IntAbs, vec![value]),
+        C::IntSign { value } => (D::IntSign, vec![value]),
+        C::IntBitCount { value } => (D::IntBitCount, vec![value]),
+        C::IntLeadingZeros { value } => (D::IntLeadingZeros, vec![value]),
+        C::IntTrailingZeros { value } => (D::IntTrailingZeros, vec![value]),
+        C::IntReverseBits { value } => (D::IntReverseBits, vec![value]),
+        C::IntSwapBytes { value } => (D::IntSwapBytes, vec![value]),
+        C::IntRotateLeft { value, count } => (D::IntRotl, vec![value, count]),
+        C::IntRotateRight { value, count } => (D::IntRotr, vec![value, count]),
+        C::ByteAnd { left, right } => (D::ByteAnd, vec![left, right]),
+        C::ByteOr { left, right } => (D::ByteOr, vec![left, right]),
+        C::ByteXor { left, right } => (D::ByteXor, vec![left, right]),
+        C::ByteShl { left, right } => (D::ByteShl, vec![left, right]),
+        C::ByteShr { left, right } => (D::ByteShr, vec![left, right]),
+        C::ByteUshr { left, right } => (D::ByteUshr, vec![left, right]),
+        C::ByteNot { value } => (D::ByteNot, vec![value]),
+        C::ByteBitCount { value } => (D::ByteBitCount, vec![value]),
+        C::ByteLeadingZeros { value } => (D::ByteLeadingZeros, vec![value]),
+        C::ByteTrailingZeros { value } => (D::ByteTrailingZeros, vec![value]),
+        C::ByteReverseBits { value } => (D::ByteReverseBits, vec![value]),
+        C::ByteSwapBytes { value } => (D::ByteSwapBytes, vec![value]),
+        C::ByteRotateLeft { value, count } => (D::ByteRotl, vec![value, count]),
+        C::ByteRotateRight { value, count } => (D::ByteRotr, vec![value, count]),
+        C::FloatAdd { left, right } => (D::FloatAdd, vec![left, right]),
+        C::FloatSub { left, right } => (D::FloatSub, vec![left, right]),
+        C::FloatMul { left, right } => (D::FloatMul, vec![left, right]),
+        C::FloatDiv { left, right } => (D::FloatDiv, vec![left, right]),
+        C::FloatMod { left, right } => (D::FloatMod, vec![left, right]),
+        C::FloatPow { left, right } => (D::FloatPow, vec![left, right]),
+        C::FloatNeg { value } => (D::FloatNeg, vec![value]),
+        C::FloatAbs { value } => (D::FloatAbs, vec![value]),
+        C::FloatSign { value } => (D::FloatSign, vec![value]),
+        C::FloatSqrt { value } => (D::FloatSqrt, vec![value]),
+        C::RatAdd { left, right } => (D::RatAdd, vec![left, right]),
+        C::RatSub { left, right } => (D::RatSub, vec![left, right]),
+        C::RatMul { left, right } => (D::RatMul, vec![left, right]),
+        C::RatDiv { left, right } => (D::RatDiv, vec![left, right]),
+        C::RatMod { left, right } => (D::RatMod, vec![left, right]),
+        C::RatNeg { value } => (D::RatNeg, vec![value]),
+        C::RatAbs { value } => (D::RatAbs, vec![value]),
+        C::RatSign { value } => (D::RatSign, vec![value]),
+        C::RatNumerator { value } => (D::RatNumerator, vec![value]),
+        C::RatDenominator { value } => (D::RatDenominator, vec![value]),
+        C::StrSlice { value, start, end } => (D::StrSlice, vec![value, start, end]),
+        C::StrSplit { value, separator } => (D::StrSplit, vec![value, separator]),
+        C::StrReplace { value, target, replacement } => (D::StrReplace, vec![value, target, replacement]),
+        C::StrReplaceFirst { value, target, replacement } => {
+            (D::StrReplaceFirst, vec![value, target, replacement])
+        }
+        C::StrRepeat { value, count } => (D::StrRepeat, vec![value, count]),
+        C::StrTrim { value } => (D::StrTrim, vec![value]),
+        C::StrChomp { value } => (D::StrChomp, vec![value]),
+        C::StrTrimStart { value } => (D::StrTrimStart, vec![value]),
+        C::StrTrimEnd { value } => (D::StrTrimEnd, vec![value]),
+        C::StrLower { value } => (D::StrLower, vec![value]),
+        C::StrUpper { value } => (D::StrUpper, vec![value]),
+        C::StrFind { value, part } => (D::StrFind, vec![value, part]),
+        C::StrFindLast { value, part } => (D::StrFindLast, vec![value, part]),
+        C::StrStartsWith { value, part } => (D::StrStartsWith, vec![value, part]),
+        C::StrEndsWith { value, part } => (D::StrEndsWith, vec![value, part]),
+        C::StrUtf8 { value } => (D::StrUtf8, vec![value]),
+        C::StrCharacters { value } => (D::StrCharacters, vec![value]),
+        _ => return None,
+    })
+}
+
+/// A scalar family operation that OIR-2 lets trap but that cannot fail in SPB 17 or in Tomato
+/// (`byte.and`, `float.neg`, …): it has no failure to deliver to an unwind continuation.
+pub(crate) fn total_family_operation(op: &o::Operation) -> bool {
+    matches!(op, o::Operation::Core(core) if family_operation(core).is_some_and(|(op, _)| !op.fallible(&[], None)))
 }
 
 fn translate_constant(literal: &o::Literal) -> Result<s::Constant, GenerateError> {
@@ -304,14 +726,20 @@ fn translate_constant(literal: &o::Literal) -> Result<s::Constant, GenerateError
         o::Literal::Byte(value) => s::Constant::Byte(u32::from(*value)),
         o::Literal::Char(value) => s::Constant::Char(u32::from(*value)),
         o::Literal::Float(bits) => s::Constant::Float(bits.to_string()),
-        _ => return Err(unsupported("constant outside int/bool/byte/char/float/string")),
+        // OIR-2 keeps a rat literal in lowest terms with a positive denominator, as CONST_RAT requires.
+        o::Literal::Rat { numerator, denominator } => s::Constant::Rat(s::RatValue {
+            numerator: numerator.clone(), denominator: denominator.clone(),
+        }),
+        _ => return Err(unsupported("constant outside int/bool/byte/char/float/rat/string")),
     })
 }
 
-/// Attributes that only say which declaration a function implements: an action, a successor or a
-/// field default. They carry no ABI of their own; the signature and the ownership ABI do.
+/// Attributes that only say which declaration a function implements: an action, a successor, a field
+/// default or the body of an action value. They carry no ABI of their own; the signature and the
+/// ownership ABI do (an action value's captures are its leading parameters).
 pub(super) fn declaration_attr(attr: &o::FunctionAttr) -> bool {
-    matches!(attr, o::FunctionAttr::Method(_) | o::FunctionAttr::Successor(_) | o::FunctionAttr::Default { .. })
+    matches!(attr, o::FunctionAttr::Method(_) | o::FunctionAttr::Successor(_) | o::FunctionAttr::Default { .. }
+        | o::FunctionAttr::Lambda { .. })
 }
 
 fn translate_function(module: &o::Module, id: o::FuncId, function: &o::Function, objects: &[s::Object])
@@ -420,6 +848,12 @@ fn translate_function(module: &o::Module, id: o::FuncId, function: &o::Function,
         {
             return Err(unsupported("managed object value needs ownership/deps verification"));
         }
+        if let s::Type::Role(id) | s::Type::RoleSuccessor(id) = registers[value.as_u32() as usize]
+            && objects.iter().any(|object| object.layout.may_reach_resource
+                && object.implements.iter().any(|table| table.role == id))
+        {
+            return Err(unsupported("managed role value needs ownership/deps verification"));
+        }
     }
     let mut result = s::Function {
         symbol: function.symbol.clone(),
@@ -511,6 +945,24 @@ fn check_definition(body: &o::Body, value: o::ValueId, expected: o::Definition, 
     Ok(())
 }
 
+/// The trailing `$pending` operand of an incomplete construction (§11.4): High leaves it unbound, and SPB 17
+/// stores the pending state there, so that a guard on a receiver whose construction is not complete sees it.
+fn pending_placeholder(module: &o::Module, body: &o::Body, value: o::ValueId) -> bool {
+    let pending = |declaration: o::DeclId| match module.declarations.get(declaration).map(|declared| &declared.kind) {
+        Ok(o::DeclarationKind::Object { fields, .. }) => fields.last().is_some_and(|field| {
+            field.name == "$pending" && module.types.get(field.ty) == Ok(&o::Type::Bool)
+        }),
+        _ => false,
+    };
+    let incomplete = |op: &o::Operation| matches!(op, o::Operation::Core(o::CoreOp::ObjNew {
+        declaration, fields, construction: o::ConstructionStatus::Incomplete, ..
+    }) if fields.last() == Some(&value) && pending(*declaration));
+    body.insts.iter().any(|(_, inst)| incomplete(&inst.op))
+        || body.blocks.iter().any(|(_, block)| {
+            matches!(&block.term.kind, o::TermKind::InvokeOwn { op, .. } if incomplete(op))
+        })
+}
+
 fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instruction, objects: &[s::Object])
     -> Result<s::Instruction, GenerateError>
 {
@@ -527,19 +979,37 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
             .ok_or_else(|| GenerateError("invalid source field index".into()))
     };
     let mut immediate = s::Immediate::None;
-    let (op, inputs) = match &inst.op {
+    let family = match &inst.op {
+        o::Operation::Core(core) => family_operation(core),
+        _ => None,
+    };
+    let (op, inputs): (D, Vec<u32>) = match &inst.op {
+        _ if family.is_some() => {
+            let (op, inputs) = family.expect("scalar family operation");
+            (op, inputs.into_iter().map(reg).collect())
+        }
         o::Operation::Const(value) => {
             immediate = s::Immediate::Constant(translate_constant(value)?);
             (D::Const, vec![])
         }
-        o::Operation::Collection(collection) => match collection {
-            o::CollectionOp::ArrayNew { values, packet: None, .. } => {
-                (D::ArrayNew, values.iter().map(|value| reg(*value)).collect())
-            }
-            o::CollectionOp::ArrayLen { array } => (D::ArrayLen, vec![reg(*array)]),
-            _ => return Err(unsupported(inst.op.opcode())),
-        },
+        o::Operation::Collection(collection) => {
+            let result = inst.results.first().map(|&value| body.values.get(value).map(|value| value.ty))
+                .transpose()?;
+            let (op, values) = collection_data(module, body, collection, result)?
+                .ok_or_else(|| unsupported(inst.op.opcode()))?;
+            (op, values.into_iter().map(reg).collect())
+        }
         o::Operation::Core(core) => match core {
+            C::Global { declaration, ty } => {
+                let global = global_index(module, *declaration)?;
+                if module.declarations.get(*declaration)?.kind != (o::DeclarationKind::Global {
+                    ty: *ty, init: global_init(module, *declaration)?,
+                }) {
+                    return Err(GenerateError("global read type differs from its declaration".into()));
+                }
+                immediate = s::Immediate::Global(global);
+                (D::GlobalGet, vec![])
+            }
             C::EnumCase { declaration, case } => {
                 immediate = s::Immediate::Updates(vec![declaration.as_u32(), *case]);
                 (D::EnumCase, vec![])
@@ -589,6 +1059,11 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
             C::EnumNe { left, right } => (D::EnumNe, vec![reg(*left), reg(*right)]),
             C::IntDiv { left, right } => (D::RatNew, vec![reg(*left), reg(*right)]),
             C::RatNew { numerator, denominator } => (D::RatNew, vec![reg(*numerator), reg(*denominator)]),
+            // A one-case Error variant is its case object (`translate_type`): its active case is always 0.
+            C::VariantTag { value } if single_error_case(module, body.values.get(*value)?.ty)?.is_some() => {
+                immediate = s::Immediate::Constant(s::Constant::Int("0".into()));
+                (D::Const, vec![])
+            }
             C::VariantTag { value } => (D::VariantTag, vec![reg(*value)]),
             C::VariantOf { value, ty } if matches!(translate_type(module, *ty)?, s::Type::Variant(_)) => {
                 (D::Move, vec![reg(*value)])
@@ -653,6 +1128,15 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
                 }
                 (D::ObjGet, vec![reg(*object)])
             }
+            C::OnceLoad { object, field: reference } => {
+                immediate = s::Immediate::Field(once_field(module, objects, *reference)?);
+                (D::ObjGet, vec![reg(*object)])
+            }
+            C::OnceStore { object, field: reference, value } => {
+                immediate = s::Immediate::Field(once_field(module, objects, *reference)?);
+                field(*object, *reference)?;
+                (D::ObjInit, vec![reg(*object), reg(*value)])
+            }
             C::ObjInit { object, field: reference, value, completion } => {
                 if completion.is_some() {
                     return Err(unsupported("construction completion state"));
@@ -684,13 +1168,22 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
                 }
                 let source = translate_type(module, body.values.get(*value)?.ty)?;
                 let target = translate_type(module, *ty)?;
-                if !matches!((source, target), (s::Type::Successor(a), s::Type::Object(b)) if a == b) {
+                if !matches!((source, target), (s::Type::Successor(a), s::Type::Object(b))
+                    | (s::Type::RoleSuccessor(a), s::Type::Role(b)) if a == b)
+                {
                     return Err(GenerateError("succ.take requires matching successor/object types".into()));
                 }
                 (D::Move, vec![reg(*value)])
             }
-            C::RoleWrap { value, ty } if translate_type(module, *ty)? == s::Type::Error => {
-                (D::Move, vec![reg(*value)])
+            // role.wrap is a move; the loader admits it only from an implementing object (ROLE_WRAP).
+            C::RoleWrap { value, .. } => (D::Move, vec![reg(*value)]),
+            C::CapMake { owner, packet: None, .. } => (D::Move, vec![reg(*owner)]),
+            C::RoleNarrow { value, ty } => {
+                let source = translate_type(module, body.values.get(*value)?.ty)?;
+                if !matches!((source, translate_type(module, *ty)?), (s::Type::Role(_), s::Type::Role(_))) {
+                    return Err(unsupported("role narrowing outside role values"));
+                }
+                (D::RoleNarrow, vec![reg(*value)])
             }
             C::Undef { ty } => {
                 let Some(&result) = inst.results.first() else {
@@ -699,7 +1192,13 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
                 if body.values.get(result)?.ty != *ty {
                     return Err(GenerateError("undef result annotation mismatch".into()));
                 }
-                (D::Undef, vec![])
+                if pending_placeholder(module, body, result) {
+                    // `obj.pending` reads `$pending`: it holds true until the completing write stores false.
+                    immediate = s::Immediate::Constant(s::Constant::Bool(true));
+                    (D::Const, vec![])
+                } else {
+                    (D::Undef, vec![])
+                }
             }
             _ => return Err(unsupported(inst.op.opcode())),
         },
@@ -717,6 +1216,59 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
     })
 }
 
+/// The data form of a plain collection operation: its operation and OIR input values. `result` is the
+/// OIR type of its result, for retags. `None` for builder transitions and operations with packets.
+pub(crate) fn collection_data(module: &o::Module, body: &o::Body, op: &o::CollectionOp, result: Option<o::TypeId>)
+    -> Result<Option<(s::DataOp, Vec<o::ValueId>)>, GenerateError>
+{
+    use o::CollectionOp as C;
+    use s::DataOp as D;
+    Ok(Some(match op {
+        C::ArrayNew { values, packet: None, .. } => (D::ArrayNew, values.clone()),
+        C::ArrayLen { array } => (D::ArrayLen, vec![*array]),
+        C::ArrayConcat { arrays, packet: None, .. } => (D::ArrayConcat, arrays.clone()),
+        C::ArrayJoin { array, separator } => (D::ArrayJoin, vec![*array, *separator]),
+        C::ArraySlice { array, start, end, packet: None } => (D::ArraySlice, vec![*array, *start, *end]),
+        C::ArrayRemove { array, index, packet: None } => (D::ArrayRemove, vec![*array, *index]),
+        C::ArrayReplace { array, index, value, packet: None } => (D::ArrayReplace, vec![*array, *index, *value]),
+        C::ArrayDifference { array, removed, packet: None } => {
+            (D::ArrayDifference, std::iter::once(*array).chain(removed.iter().copied()).collect())
+        }
+        C::MapNew { entries, packet: None, .. } => {
+            (D::MapNew, entries.iter().flat_map(|&(key, value)| [key, value]).collect())
+        }
+        C::MapMerge { maps, packet: None, .. } => (D::MapMerge, maps.clone()),
+        C::MapDifference { map, removed, packet: None } => {
+            (D::MapDifference, std::iter::once(*map).chain(removed.iter().copied()).collect())
+        }
+        C::MapLen { map } => (D::MapLen, vec![*map]),
+        C::MapHas { map, key } => (D::MapHas, vec![*map, *key]),
+        C::MapGet { map, key } => (D::MapGet, vec![*map, *key]),
+        C::MapKeys { map } => (D::MapKeys, vec![*map]),
+        C::MapValues { map } => (D::MapValues, vec![*map]),
+        C::MapKeyAt { map, index } => (D::MapKeyAt, vec![*map, *index]),
+        C::MapValueAt { map, index } => (D::MapValueAt, vec![*map, *index]),
+        C::ArrayRetag { array: value, ty } | C::MapRetag { map: value, ty } => {
+            let source = translate_type(module, body.values.get(*value)?.ty)?;
+            let target = translate_type(module, *ty)?;
+            let empty = s::Type::Array(s::ArrayType { leaf: s::ArrayLeaf::Never, depth: 1 });
+            if result.is_some_and(|result| result != *ty) {
+                return Err(GenerateError("collection retag result annotation mismatch".into()));
+            }
+            if (source, target) == (empty, s::Type::Bytes) {
+                // An uninferred `[]` becomes an empty byte array, which has its own representation.
+                (D::ArrayNew, vec![])
+            } else if target == source || s::never_retag(composites(module).entries(), source, target) {
+                (D::Move, vec![*value])
+            } else {
+                return Err(unsupported("collection retag that changes the SPB 17 type"));
+            }
+        }
+        C::BuilderNew { .. } | C::MapBuilderNew { .. } => (D::BuilderNew, vec![]),
+        _ => return Ok(None),
+    }))
+}
+
 fn fresh(function: &mut s::Function, ty: s::Type) -> Result<u32, GenerateError> {
     let id = u32::try_from(function.registers.len()).map_err(|_| GenerateError("too many registers".into()))?;
     function.registers.push(ty);
@@ -731,6 +1283,10 @@ fn data(op: s::DataOp, inputs: Vec<u32>, output: u32, immediate: s::Immediate) -
 mod tests;
 #[cfg(test)]
 mod cleanup_tests;
+#[cfg(test)]
+mod futures_tests;
+#[cfg(test)]
+mod roles_tests;
 
 /// Mandatory semantic gate for executable Low. External contracts come from the caller's backend catalog.
 /// This path cannot be selected by a file flag; external artifacts always pass verify_load independently.
@@ -759,6 +1315,67 @@ pub fn compile_low_with(
     Ok(output)
 }
 
+/// Low traces values and inventories; a Future's duty tokens have no Low trace. In SPB 17 each of them is a word
+/// that refers to the Future frame (cache-state, task-state; Champ draft 3 §14.2), so it is rooted wherever the
+/// token is active. The state records list the active tokens: like the maps before each pc, which take the
+/// state records whole, the map after an operation takes the duty tokens of the next pc's state.
+fn root_duty_words(function: &mut s::Function) {
+    let duty = |location: &s::Location| matches!(location, s::Location::Service(id)
+        if matches!(function.services[*id as usize], s::ServiceKind::CacheState | s::ServiceKind::TaskState));
+    let mut missing = Vec::new();
+    for state in &function.proofs.states {
+        let Some(pc) = state.pc.checked_sub(1) else { continue };
+        let next = matches!(function.code.get(pc as usize),
+            Some(s::Instruction::Champ { op, flow: s::Flow::Next(_), .. })
+                if !matches!(op, s::Opcode::RetOwn | s::Opcode::RetDefer));
+        let duties = state.locations.iter().filter(|&location| duty(location)).copied().collect::<Vec<_>>();
+        if next && !duties.is_empty() {
+            missing.push((pc, duties));
+        }
+    }
+    for (pc, duties) in missing {
+        let post = &mut function.proofs.post_roots;
+        let index = match post.iter().position(|root| root.pc == pc) {
+            Some(index) => index,
+            None => {
+                post.push(s::RootRequirement { pc, locations: vec![] });
+                post.len() - 1
+            }
+        };
+        let locations = &mut post[index].locations;
+        for location in duties {
+            if !locations.contains(&location) {
+                locations.push(location);
+            }
+        }
+    }
+}
+
+/// Low roots a value with its full dependencies (`RootTrace::FullDependencies`, managed facts). In SPB 17 a location
+/// keeps the anchors its dependencies name alive (`proofs.dependencies`), so every traced anchor joins each map that
+/// holds the location: for instance a fixed root's deps of its result, taken before its scope closes, keep the
+/// result's register alive up to fut.publish.
+fn root_dependency_anchors(function: &s::Function, locations: &mut BTreeSet<s::Location>) {
+    let traced = |location: &s::Location| match *location {
+        s::Location::Register(id) => !matches!(function.registers[id as usize], s::Type::Bool | s::Type::Never
+            | s::Type::Descriptor | s::Type::Byte | s::Type::Float | s::Type::Char),
+        s::Location::Service(id) => !s::layout::service_layout(function.services[id as usize]).references.is_empty(),
+    };
+    let mut reached = locations.clone();
+    loop {
+        let before = reached.len();
+        for dependency in &function.proofs.dependencies {
+            if reached.contains(&dependency.value) {
+                reached.extend(&dependency.obligations);
+            }
+        }
+        if reached.len() == before {
+            break;
+        }
+    }
+    locations.extend(reached.into_iter().filter(traced));
+}
+
 /// Relocated Low roots remain authoritative for services. Scalar register liveness fills the gaps
 /// introduced by machine expansion (range.len, switch, construction); it never synthesizes Low proofs.
 fn complete_codegen_roots(function: &mut s::Function) -> Result<(), GenerateError> {
@@ -781,7 +1398,23 @@ fn complete_codegen_roots(function: &mut s::Function) -> Result<(), GenerateErro
     for state in &function.proofs.states {
         roots.entry(state.pc).or_default().extend(&state.locations);
     }
-    if !function.proofs.closes.is_empty() || !function.proofs.post_roots.is_empty() {
+    let low_roots = !function.proofs.closes.is_empty() || !function.proofs.post_roots.is_empty();
+    root_duty_words(function);
+    for locations in roots.values_mut() {
+        root_dependency_anchors(function, locations);
+    }
+    let mut post = std::mem::take(&mut function.proofs.post_roots);
+    for root in &mut post {
+        let mut locations = root.locations.iter().copied().collect::<BTreeSet<_>>();
+        root_dependency_anchors(function, &mut locations);
+        for location in locations {
+            if !root.locations.contains(&location) {
+                root.locations.push(location);
+            }
+        }
+    }
+    function.proofs.post_roots = post;
+    if low_roots {
         // Cleanup-bearing Low has complete #591 roots. Never repair a missing Low root here.
         // Only the explicitly recorded machine-expansion boundaries were added by the emitter.
         function.proofs.roots = roots.into_iter().map(|(pc, locations)| s::RootRequirement {

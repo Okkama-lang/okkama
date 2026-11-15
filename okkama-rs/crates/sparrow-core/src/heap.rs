@@ -153,7 +153,7 @@ pub fn payload(header: u64) -> u32 {
     (header >> 32) as u32
 }
 #[inline]
-fn element_repr(header: u64) -> Repr {
+pub(crate) fn element_repr(header: u64) -> Repr {
     Repr::from_bits((header >> 9) & 3)
 }
 
@@ -506,12 +506,11 @@ impl Heap {
         self.external = self.external.saturating_sub(bytes);
     }
 
-    /// Collector stress: a zero threshold makes every safepoint collect.
+    /// Collector stress: a zero threshold makes every safepoint collect. Turning it off restores the threshold
+    /// a collection would set, from the live heap of the last one (#720).
     pub fn set_stress(&mut self, on: bool) {
         self.stress = on;
-        if on {
-            self.threshold = 0;
-        }
+        self.threshold = if on { 0 } else { (self.live + self.external_live).max(COLLECTION_FLOOR) };
     }
 
     /// Report the death of `object` through [`Heap::take_released`].
@@ -1833,6 +1832,24 @@ mod tests {
     use super::*;
     use crate::word::UNBOUND;
     use std::rc::Rc;
+
+    /// #720: a heap made with stress on (`SPARROW_CORE_GC_STRESS=1`) and then set off collects like a heap that
+    /// never had it: not at every safepoint, only when the floor is reached.
+    #[test]
+    fn stress_off_restores_the_collection_threshold() {
+        let mut heap = Heap::new(layouts());
+        heap.set_stress(true);
+        heap.allocate(4);
+        assert!(heap.needs_collection());
+        heap.set_stress(false);
+        assert!(!heap.needs_collection());
+        let fresh = Heap::new(layouts());
+        assert_eq!(heap.threshold, fresh.threshold);
+        while !heap.needs_collection() {
+            heap.allocate(64);
+        }
+        assert!(heap.allocated >= COLLECTION_FLOOR);
+    }
 
     fn layouts() -> Layouts {
         Layouts {

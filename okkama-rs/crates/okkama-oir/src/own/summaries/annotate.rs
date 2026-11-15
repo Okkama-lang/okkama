@@ -14,6 +14,11 @@ impl Universe {
         }
         for (function, data) in module.functions.iter_mut() {
             data.summary = Some(ids[function.as_u32() as usize]);
+            if let Some(creation) = self.creations.get(&function) {
+                // The body summary is the ordinary entry summary (plan §3.2).
+                data.async_creation_summary = Some(ids[*creation]);
+                data.async_body_summary = data.summary;
+            }
             let Some(body) = &mut data.body else {
                 continue;
             };
