@@ -8,6 +8,21 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **The SPB 17 loader tracks a successor's must-use permission through calls
+  and the exit protocol (#680).** A successor result of a call that cannot
+  fail (`invoke.observe` with a plain next flow) could be dropped, and taking
+  it was rejected as "already taken"; a produced successor that an outcome
+  edge left unassigned was dropped silently; `ret.own` and `ret.defer`
+  checked nothing. Now `exit.prepare` (and `exit.replace`) move the value's
+  permission into the pending exit, cleanup and `exit.dispatch` carry it, and
+  `exit.commit` hands it only to a successor-typed result; `ret.own`/`ret.defer`
+  return live successors and leave none behind. On a failure path (`raise`,
+  an unwind dispatch, `exit.abort`) the permission may lapse: must-use is a
+  normal-path promise. The successor rules report stable codes
+  `SUCCESSOR_TAKEN`, `SUCCESSOR_DROPPED`, `SUCCESSOR_FORGED` and
+  `SUCCESSOR_JOIN` instead of `SPB_STRUCTURE`. The SPB 17 code generator no
+  longer discharges a permission it already moved into a pending exit.
+
 - **Tomato delivers a cancellation to a nested frame resumed by the scheduler
   (#670).** A task awaiting its own async call, whose frame's awaited future
   had settled and queued it, ignored a cancellation requested before that
