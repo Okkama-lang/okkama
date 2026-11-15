@@ -8,6 +8,32 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **`catch e is NativeFailure` on the OIR-2 → SPB 17 → Champ path (#673).**
+  The language spec (9.5) admits `Error`, an error enum or the system
+  `NativeFailure` as a catch type, but the OIR-2 lowering, the OIR verifier
+  (T1), the SPB 17 loader (`CATCH_TYPE`) and Champ's private descriptor all
+  refused the system object. The lowering now declares it (four `str`
+  fields; its readers are methods, `text()` is the message as in Tomato),
+  the verifier and the loader admit exactly that declaration, and Champ
+  gives native failure payloads the declared descriptor.
+  `L10.random.secure-invariants` passes on Champ; the json, regex and pcg32
+  natives cases now stop on #705, #707, #717 and #703.
+- **Champ compares unbound raw scalar fields as Tomato does (#713).** The
+  undef placeholder of a float, bool, byte or char field is Tomato's
+  `UNBOUND_RAW` marker instead of the zero word, so comparing an object
+  with such an unbound field fails with "cannot compare unbound object
+  fields" instead of reading it as bound.
+- **Four single blockers of the wave-4 Champ run (#710).** An `Atomic` of a
+  float, char or rat array has its registered specialization (P2.4 §4.8);
+  a literal `if` whose other arm holds a collection the join's empty type
+  cannot take passes an empty collection of that type (the arm never runs);
+  natives take and return float arrays; an awaited role value carries the
+  await's deps in own. The loader admits `val.eq` of two values of one
+  scalar type (OIR-1 §16.3) and never-level empty arrays retagged to a
+  deeper shape. `L02.equality.signed-zero-composite`,
+  `L05.choice.empty-collections` and `L09.statistics.exact-samples` pass on
+  Champ; the other four cases stop on #706, #687, #717 and #718.
+
 - **Own never indexes a missing scope state (#672).** A constructor that
   stores a field which carries deps but holds no obligation (a role whose
   implementers are plain, as in `L09.math.aggregates` and `L09.time.zones`)
