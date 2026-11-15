@@ -142,6 +142,14 @@ impl Emitter<'_> {
     {
         let o::Definition::InstResult { inst, .. } = self.body.values.get(owner)?.def else { return Ok(obligation) };
         let resume = self.body.insts.get(inst)?;
+        // A committed value depends on the deps its exit carried, which the commit returns as its last result: the
+        // value the prepare named has left with the reserve and is not kept alive for it (#601 D25).
+        if let o::Operation::Exit(o::ExitOp::Commit { .. }) = &resume.op
+            && let (Some(&value), Some(&deps)) = (resume.results.first(), resume.results.last())
+            && value == owner && deps != owner && obligation != owner
+        {
+            return Ok(deps);
+        }
         let o::Operation::Async(o::AsyncOp::FrameResume { continuation, slots: reloaded, .. }) = &resume.op else {
             return Ok(obligation);
         };
@@ -270,9 +278,24 @@ impl Emitter<'_> {
                 });
                 (O::CacheRehome, vec![destination, location(*pending)?, location(*cache)?])
             }
-            X::CacheRehome { .. } => {
-                return Err(later("cache.rehome of a scope state or of a spawned task's duty (D25, P1)"));
+            // C-4, own form: the entry the owner admitted (D25.3) leaves the state for the reserve.
+            X::CacheRehome { form: o::RehomeForm::Scope { state, pending, future }, target, protocol } => {
+                self.services(*protocol)?;
+                let destination = A::Destination(match target {
+                    o::RehomeTarget::Scope(scope) => s::ExitDestination::Scope(scope.as_u32()),
+                    o::RehomeTarget::Caller => s::ExitDestination::Caller,
+                });
+                (O::CacheRehome, vec![destination, location(*pending)?, location(*state)?, location(*future)?])
             }
+            X::CacheRehome { .. } => {
+                return Err(later("cache.rehome of a spawned task's duty (P1)"));
+            }
+            // D25.2: a cache duty's entry out of a packet as its token, or a token into a packet.
+            X::ServiceMaterialize { packet, entry } if entry.kind == o::ServiceKeyKind::Cache => {
+                (O::ServiceMaterialize, vec![location(*packet)?, location(entry.holder)?])
+            }
+            X::ServiceMaterialize { .. } => return Err(later("service.materialize of a task duty (P1)")),
+            X::ServiceAbsorb { packet, token } => (O::ServiceAbsorb, vec![location(*packet)?, location(*token)?]),
             X::Await { .. } | X::AwaitTake { .. } => {
                 return Err(error("await and await.take are invoke.own terminators"));
             }

@@ -79,7 +79,7 @@ suffixes 0 }
  Selection { locations 1 0 0 }
  dependencies 4 Dependency { value 0 0 obligations 1 0 0 }
  Dependency { value 0 2 obligations 1 1 16 }
- Dependency { value 0 4 obligations 1 1 16 }
+ Dependency { value 0 4 obligations 1 1 24 }
  Dependency { value 1 9 obligations 1 0 0 }
  registrations 0 plans 3 Plan { merge 1 selection 0 order_witness 0 }
  Plan { merge 1 selection 1 order_witness 1 }

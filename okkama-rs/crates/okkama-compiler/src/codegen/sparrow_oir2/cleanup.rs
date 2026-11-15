@@ -363,6 +363,11 @@ impl Emitter<'_> {
                 (O::CleanupSettle, vec![loc(*cleanup)?, A::Schedule(schedule), loc(*holder)?])
             }
             DeliverCancel { cleanup } => (O::CleanupDeliverCancel, vec![loc(*cleanup)?]),
+            // D25.3: the entries the owner admitted at run time, after the static duties.
+            SettleDynamic { cleanup, protocol } => {
+                self.services(*protocol)?;
+                (O::CleanupSettleDynamic, vec![loc(*cleanup)?])
+            }
             Plan { cleanup, plan } => (O::CleanupPlan, vec![loc(*cleanup)?, A::Plan(plan.as_u32())]),
             Destroy { cleanup, key } => (O::CleanupDestroy, vec![loc(*cleanup)?, loc(*key)?]),
             DestroyDirect { cleanup, identity, descriptor, destroy } => {
