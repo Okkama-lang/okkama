@@ -905,6 +905,17 @@ impl Runtime {
         contracts: &dyn okkama_sparrow::spb17::ExternalContracts) -> Result<Vec<Vec<PlanId>>, Error>
     {
         okkama_sparrow::spb17::verify_load(program, contracts).map_err(|failure| error(&failure.to_string()))?;
+        Ok(self.relocate_cleanup_plans(program))
+    }
+
+    /// [`Runtime::champ_load_cleanup_plans`] for a program the loader has already checked: the evidence
+    /// is the [`Verified`](super::machine::Verified) itself, so nothing verifies it again (#701).
+    pub(crate) fn champ_verified_cleanup_plans(&mut self, verified: &super::machine::Verified) -> Vec<Vec<PlanId>> {
+        self.relocate_cleanup_plans(verified.source())
+    }
+
+    /// Only reached with a program that passed `verify_load`: its plans, closes and envelopes are in range.
+    fn relocate_cleanup_plans(&mut self, program: &okkama_sparrow::spb17::Program) -> Vec<Vec<PlanId>> {
         let mut relocated = Vec::new();
         for function in &program.functions {
             let mut plans = vec![0; function.proofs.plans.len()];
@@ -920,6 +931,6 @@ impl Runtime {
             }
             relocated.push(plans);
         }
-        Ok(relocated)
+        relocated
     }
 }

@@ -106,3 +106,35 @@ fn an_incomparable_check_fails_its_case_instead_of_stopping() {
     assert!(matches!(&failure.kind, FailureKind::Program(text) if text.contains("native handles")),
         "{:?}", failure.kind);
 }
+
+#[test]
+fn the_decoders_load_accepts_and_refuses_as_the_runtimes_check_does() {
+    let accepted = machine::Verified::load(suite()).unwrap();
+    assert_eq!(accepted.source(), &suite());
+    let mut refused = suite();
+    refused.tests.as_mut().unwrap()[1].function = 0;
+    assert_eq!(machine::Verified::load(refused.clone()).unwrap_err().rule, "TEST_ENTRY");
+    let error = machine::Verified::new(refused, Vec::new()).unwrap_err();
+    assert!(error.0.contains("TEST_ENTRY"), "{}", error.0);
+}
+
+#[test]
+fn a_verified_suite_reports_as_a_checked_one() {
+    let checked = Report::default();
+    assert!(run_suite(suite(), Box::new(checked.clone()), crate::budget::Limits::default()).unwrap());
+    let verified = Report::default();
+    let program = machine::Verified::load(suite()).unwrap();
+    assert!(run_verified_suite(&program, Box::new(verified.clone()), crate::budget::Limits::default()).unwrap());
+    assert_eq!(*verified.0.lock().unwrap(), *checked.0.lock().unwrap());
+}
+
+#[test]
+fn a_verified_program_without_tests_is_refused_before_any_case() {
+    let mut program = suite();
+    program.tests = Some(vec![]);
+    let verified = machine::Verified::load(program).unwrap();
+    let report = Report::default();
+    let error = run_verified_suite(&verified, Box::new(report.clone()), crate::budget::Limits::default()).unwrap_err();
+    assert_eq!(error.0, "Test run requires at least one test");
+    assert!(report.0.lock().unwrap().is_empty());
+}

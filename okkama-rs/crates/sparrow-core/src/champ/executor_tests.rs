@@ -810,3 +810,42 @@ fn champ_s3_spb_plan_relocation_is_nonzero_runtime_local_and_checked_before_muta
     assert!(harness.runtime.champ_load_cleanup_plans(&invalid, &catalog).is_err());
     assert_eq!(harness.runtime.champ.cleanup_plans.len(), before);
 }
+
+extern "C" fn never_owned(_: *mut Ctx, _: *mut CallOwn, _: *const Word, _: u64) -> Outcome {
+    unreachable!("relocation enters no host entry")
+}
+
+extern "C" fn never_plain(_: *mut Ctx, _: *const Word, _: u64) -> Word {
+    unreachable!("relocation enters no host entry")
+}
+
+#[test]
+fn champ_verified_cleanup_plans_relocate_as_the_checked_load_does() {
+    use okkama_sparrow::spb17 as s;
+    struct Catalog<'a>(&'a s::Program);
+    impl s::ExternalContracts for Catalog<'_> {
+        fn entry(&self, name: &str) -> Option<&s::Function> {
+            self.0.functions.iter().find(|function| function.proofs.entry.as_ref()
+                .and_then(|entry| entry.external.as_deref()) == Some(name))
+        }
+    }
+    let program = s::assemble(include_str!(
+        "../../../okkama-compiler/src/codegen/sparrow_oir2/fixtures/unwind-reserve.spb17"
+    )).unwrap();
+    let external = program.functions.iter().filter(|function| function.code.is_empty()).map(|function| {
+        let owned = function.entry_abi != s::EntryAbi::Observation;
+        ExternalEntry {
+            declaration: function.clone(),
+            owned: owned.then_some(never_owned as OwnedEntry),
+            plain: (!owned).then_some(never_plain as super::machine::PlainEntry),
+        }
+    }).collect();
+    let verified = super::machine::Verified::new(program.clone(), external).unwrap();
+    let mut checked = Harness::new();
+    let mut trusted = Harness::new();
+    let expected = checked.runtime.champ_load_cleanup_plans(&program, &Catalog(&program)).unwrap();
+    let relocated = trusted.runtime.champ_verified_cleanup_plans(&verified);
+    assert!(expected.iter().flatten().next().is_some());
+    assert_eq!(relocated, expected);
+    assert_eq!(trusted.runtime.champ.cleanup_plans.len(), checked.runtime.champ.cleanup_plans.len());
+}
