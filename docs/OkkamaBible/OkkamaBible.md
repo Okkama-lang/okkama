@@ -169,8 +169,9 @@
   - [13.11 When a value must change: `Cell`](#1311-when-a-value-must-change-cell)
   - [13.12 What a successor costs](#1312-what-a-successor-costs)
   - [13.13 A value computed once: `once let`](#1313-a-value-computed-once-once-let)
-  - [13.14 Immutability elsewhere](#1314-immutability-elsewhere)
-  - [13.15 What this design costs](#1315-what-this-design-costs)
+  - [13.14 A worked example: an order's life](#1314-a-worked-example-an-orders-life)
+  - [13.15 Immutability elsewhere](#1315-immutability-elsewhere)
+  - [13.16 What this design costs](#1316-what-this-design-costs)
 - [Chapter 14. Roles: nominal contracts and composition](#chapter-14-roles-nominal-contracts-and-composition)
   - [14.1 Declaring a role](#141-declaring-a-role)
   - [14.2 Nominal, not structural](#142-nominal-not-structural)
@@ -7534,7 +7535,93 @@ The remembered result does not participate in `==`, map keys or `Dumper`. A succ
 work: an object binds its input when it is made, and computes from it on
 the first question.
 
-## 13.14 Immutability elsewhere
+## 13.14 A worked example: an order's life
+
+Successors are how an object goes through stages without a mutable field.
+An order is drafted, paid, shipped and delivered; each transition is a
+successor action that checks the stage it starts from.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Stage = (draft, paid, shipped, delivered);
+enum Refused is Error = (step(from is Stage, action is string));
+
+// An order's life as successors: each transition returns the order in its next stage.
+object Order {
+    has id is int;
+    has stage is Stage;
+    has paid_cents is int;
+    Order(:id) { self.stage = Stage.draft; self.paid_cents = 0; }
+
+    pay(cents is int) is ^Order {
+        confirm stage == Stage.draft else throw Refused.step(stage, "pay");
+        ^stage = Stage.paid;
+        ^paid_cents = cents;
+    }
+    ship() is ^Order {
+        confirm stage == Stage.paid else throw Refused.step(stage, "ship");
+        ^stage = Stage.shipped;
+    }
+    deliver() is ^Order {
+        confirm stage == Stage.shipped else throw Refused.step(stage, "deliver");
+        ^stage = Stage.delivered;
+    }
+    shown() is string {
+        let name = match stage {
+            case Stage.draft { "draft"; }
+            case Stage.paid { "paid"; }
+            case Stage.shipped { "shipped"; }
+            case Stage.delivered { "delivered"; }
+        };
+        "#" + id.string() + " " + name + " (" + paid_cents.string() + ")";
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let order = Order(id: 7);
+    let done = order.pay(1250).ship().deliver();
+    out.writeln(order.shown());
+    out.writeln(done.shown());
+    let early = try { order.ship().shown(); } catch Refused.step(from, action) { "cannot " + action + " a draft"; };
+    out.writeln(early);
+    0;
+}
+```
+
+Output:
+
+```text
+#7 draft (0)
+#7 delivered (1250)
+cannot ship a draft
+```
+
+- **Each step returns the next order.** `order.pay(1250).ship().deliver()`
+  is a chain of three successors. The original `order` is still a draft
+  afterwards, printed as such: nothing was updated in place, and both values
+  can be used side by side.
+- **A transition guards its own precondition.** `ship()` on a draft is
+  refused with a typed error that names the stage and the action; the caller
+  decides what to do with it. There is no "status" field that some code path
+  forgot to check.
+- **A transition cannot be ignored.** Calling `order.pay(1250);` as a
+  statement is rejected: "Successor action result must be used". A step whose
+  result is dropped is almost always a bug — the programmer believed the
+  order changed — so the language refuses it (§13.6).
+- **Only the changed fields are written.** `pay` sets `^stage` and
+  `^paid_cents`; `ship` sets only `^stage`, and the successor keeps every
+  other field of its receiver.
+
+The same life could be an enum of stages with a `match` per transition
+(Chapter 16). Successors fit when the stages share most of their data and
+the transitions are actions of one object; variants fit when each stage
+carries different data.
+
+## 13.15 Immutability elsewhere
 
 | | Okkama | Java | Kotlin | Rust | Clojure |
 |---|---|---|---|---|---|
@@ -7551,7 +7638,7 @@ a discarded result; Rust warns, but only for functions and types marked
 reachable from any caller [[Kotlin documentation](#ref-kotlindata); [Klabnik 2023](#ref-klabnik2023)]. A successor makes
 reachable only what its author named.
 
-## 13.15 What this design costs
+## 13.16 What this design costs
 
 - **More allocation.** Every state change is an object. Most are small
   and short-lived, but a design that ignores the cost of wide objects

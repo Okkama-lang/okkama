@@ -416,7 +416,36 @@ The remembered result does not participate in `==`, map keys or `Dumper`. A succ
 work: an object binds its input when it is made, and computes from it on
 the first question.
 
-## 13.14 Immutability elsewhere
+## 13.14 A worked example: an order's life
+
+Successors are how an object goes through stages without a mutable field.
+An order is drafted, paid, shipped and delivered; each transition is a
+successor action that checks the stage it starts from.
+
+{{example:13-lifecycle}}
+
+- **Each step returns the next order.** `order.pay(1250).ship().deliver()`
+  is a chain of three successors. The original `order` is still a draft
+  afterwards, printed as such: nothing was updated in place, and both values
+  can be used side by side.
+- **A transition guards its own precondition.** `ship()` on a draft is
+  refused with a typed error that names the stage and the action; the caller
+  decides what to do with it. There is no "status" field that some code path
+  forgot to check.
+- **A transition cannot be ignored.** Calling `order.pay(1250);` as a
+  statement is rejected: "Successor action result must be used". A step whose
+  result is dropped is almost always a bug — the programmer believed the
+  order changed — so the language refuses it (§13.6).
+- **Only the changed fields are written.** `pay` sets `^stage` and
+  `^paid_cents`; `ship` sets only `^stage`, and the successor keeps every
+  other field of its receiver.
+
+The same life could be an enum of stages with a `match` per transition
+(Chapter 16). Successors fit when the stages share most of their data and
+the transitions are actions of one object; variants fit when each stage
+carries different data.
+
+## 13.15 Immutability elsewhere
 
 | | Okkama | Java | Kotlin | Rust | Clojure |
 |---|---|---|---|---|---|
@@ -433,7 +462,7 @@ a discarded result; Rust warns, but only for functions and types marked
 reachable from any caller [@kotlindata; @klabnik2023]. A successor makes
 reachable only what its author named.
 
-## 13.15 What this design costs
+## 13.16 What this design costs
 
 - **More allocation.** Every state change is an object. Most are small
   and short-lived, but a design that ignores the cost of wide objects
