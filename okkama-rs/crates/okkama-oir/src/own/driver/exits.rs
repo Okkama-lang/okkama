@@ -111,7 +111,7 @@ impl Driver<'_, '_> {
             } else {
                 self.body.selections.alloc(SelectionExpr::Union(selections)).map_err(arena)?
             };
-            let state = point.env.scopes[&scope];
+            let state = point.env.state(scope)?;
             point = self.emit(point, Operation::Ownership(OwnershipOp::ScopeSplit { state, selection }))?;
             point.result(SlotName::Selected)?
         } else {

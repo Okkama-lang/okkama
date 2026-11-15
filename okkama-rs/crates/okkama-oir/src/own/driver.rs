@@ -67,7 +67,9 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
         let root = body.blocks.get(body.entry).map_err(arena)?.lexical_scope;
         let fixed_observation = fixed_root(&output.module, *function)
             || data.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Destroy(_)));
-        if (output.analysis.scopes[&root].empty_scope_eligible || fixed_observation) && !helpers.contains(function) {
+        let eligible = output.analysis.scopes.get(&root)
+            .ok_or_else(|| flow_error("function root scope has no analysis facts"))?.empty_scope_eligible;
+        if (eligible || fixed_observation) && !helpers.contains(function) {
             let mut summary = output.module.summaries.get(data.summary.unwrap()).map_err(arena)?.clone();
             summary.entry_kind = EntryKind::ObservationAdmissionStaysCaller;
             let summary = output.module.summaries.alloc(summary).map_err(arena)?;
@@ -315,7 +317,7 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
             signature.ownership_abi = OwnershipAbi::Explicit { input_packet, output_packet };
             point.env.linear.insert(packet);
             point = driver.emit(point, Operation::Ownership(OwnershipOp::ScopeBegin { scope: root }))?;
-            let state = point.env.scopes[&root];
+            let state = point.env.state(root)?;
             point = driver.emit(point, Operation::Ownership(OwnershipOp::Accept { state, packet }))?;
         } else {
             signature.ownership_abi = OwnershipAbi::Observation;
@@ -518,7 +520,7 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                         .into_iter().rev().find(|scope| point.env.scopes.contains_key(scope))
                         .ok_or_else(|| flow_error("packet restoration without a retained scope"))?
                 };
-                let state = point.env.scopes[&owner];
+                let state = point.env.state(owner)?;
                 point = driver.emit(point, Operation::Ownership(OwnershipOp::Admit { state, packet }))?;
             }
             driver.current_unwind = target.clone();
@@ -723,7 +725,7 @@ impl Driver<'_, '_> {
                     let resource = point.env.value(original)?.value;
                     let binding = ElaboratedBinding {
                         binding, resource: ResourceValue { value: resource, packet },
-                        state: point.env.scopes[&owner], original_scope: owner,
+                        state: point.env.state(owner)?, original_scope: owner,
                     };
                     let op = if matches!(instruction.op, Operation::Lexical(LexicalOp::Rebind { .. })) {
                         OwnershipOp::Rebind { binding }
@@ -817,7 +819,7 @@ impl Driver<'_, '_> {
         if !unwind && point.env.cleanup.pending.is_some() {
             point = self.extend(point, scope)?;
         }
-        let state = point.env.scopes[&scope];
+        let state = point.env.state(scope)?;
         let reserve = point.env.cleanup.pending;
         point.env.bindings.retain(|binding, _| self.high.bindings.get(*binding)
             .is_ok_and(|binding| binding.scope != scope));
@@ -833,7 +835,8 @@ impl Driver<'_, '_> {
             let journals = &point.env.journals;
             point.env.values.retain(|value, _| needed.contains(value) || journals.contains_key(value));
         }
-        let effects = self.analysis.scopes[&scope].effects.clone();
+        let effects = self.analysis.scopes.get(&scope)
+            .ok_or_else(|| flow_error("closed scope has no analysis facts"))?.effects.clone();
         let op = if unwind {
             OwnershipOp::ScopeUnwind {
                 state, failure: point.env.cleanup.failure.ok_or_else(|| flow_error("missing active failure"))?,
@@ -913,7 +916,7 @@ impl Driver<'_, '_> {
                 });
             }
             let packet = point.result(SlotName::Packet)?;
-            let state = point.env.scopes[&original.lexical_scope];
+            let state = point.env.state(original.lexical_scope)?;
             point = self.emit(point, Operation::Ownership(OwnershipOp::Admit { state, packet }))?;
             point.env.cleanup.wanted = None;
             point.env.cleanup.carried.clear();

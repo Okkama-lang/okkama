@@ -839,3 +839,17 @@ fn builtin_capability_without_destroy_holds_no_obligation() {
     assert!(classes[&service].service_types.contains(&service));
     assert!(!classes[&service].capabilities);
 }
+
+/// #672: a missing scope state is an own diagnostic, never a panic.
+#[test]
+fn missing_scope_state_is_a_flow_diagnostic() {
+    let mut env = emit::LiveEnv::default();
+    let scope = ScopeId::from_u32(3);
+    let OwnError::Diagnostics { diagnostics, .. } = env.state(scope).unwrap_err() else {
+        panic!("not a diagnostic");
+    };
+    assert_eq!(diagnostics[0].kind, OwnDiagnosticKind::InvalidFlow);
+    let state = ValueId::from_u32(7);
+    env.scopes.insert(scope, state);
+    assert_eq!(env.state(scope).unwrap(), state);
+}

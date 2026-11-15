@@ -8,6 +8,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Own never indexes a missing scope state (#672).** A constructor that
+  stores a field which carries deps but holds no obligation (a role whose
+  implementers are plain, as in `L09.math.aggregates` and `L09.time.zones`)
+  sits in an elided action scope; own panicked on `scopes[&action]` before
+  wave 2 stopped staging such values. Every remaining lookup of a scope
+  state or of scope facts in the own driver now reports an `InvalidFlow`
+  diagnostic naming the function and site instead of panicking.
+
 - **Champ constructs objects with an Atomic field, and every Cell (#671,
   #686).** Own classified a builtin capability without `destroy` (Atomic) as
   a service obligation, so a holder such as `Cell` or an object with an

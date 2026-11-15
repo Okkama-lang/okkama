@@ -490,3 +490,22 @@ fn oir2_own_atomic_holder_is_not_a_fresh_creation() {
         assert!(summary(method).contract.failures.contains(&ir::FailureKind::Program), "{method}");
     }
 }
+
+/// #672: a constructor stores a role field whose implementers are plain (L09.math.aggregates' Extremes,
+/// L09.time.zones' ZonedDateTime). The value carries deps but no obligation and its action scope is
+/// elided; own elaborates the construction without staging instead of failing on the missing scope.
+#[test]
+fn oir2_own_deps_only_field_needs_no_action_scope() {
+    let source = concat!("module app; role Shape { area() is int; } ",
+        "object Square does Shape { has side is int; Square(:side); area() is int { side * side; } } ",
+        "object Holder { has shape is Shape; Holder(shape is Shape) { self.shape = shape; } ",
+        "area() is int { shape.area(); } } ",
+        "main() is int { Holder(Square(side: 2)).area(); }");
+    // The build gate: the full verifier's owned-creation rule is the open counterpart of this class.
+    let (module, _) = own_stage(source, None, ir::verify::VerifyMode::Structural).unwrap();
+    let constructor = module.functions.iter().find(|(_, function)| function.symbol.starts_with("app.Holder.new"))
+        .unwrap().1;
+    let body = constructor.body.as_ref().unwrap();
+    assert!(!body.insts.iter().any(|(_, inst)| matches!(inst.op,
+        ir::Operation::Ownership(ir::OwnershipOp::Stage { .. }))));
+}
