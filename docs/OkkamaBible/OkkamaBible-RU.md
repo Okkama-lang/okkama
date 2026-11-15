@@ -2205,6 +2205,99 @@ Okkama никогда не превращает значение одного т
   перечисления и потому всегда даёт значение (неполный `match` как оператор
   допустим, и редактор помечает его lint-предупреждением).
 
+Как выглядит такой отказ, показывают три короткие программы. Первая
+умножает количество на цену:
+
+```okkama
+module bible/mix v1.0.0;
+
+// An int and a float never meet in an operator; the program converts one.
+import "io/stdout" take Stdout;
+
+main() is int {
+    let items = 3;
+    let price = 2.5;
+    Stdout().writeln((items * price).string());
+    0;
+}
+```
+
+Ответ компилятора:
+
+```text
+04-mix-rejected.ok:9:23: semantic error: Operator * cannot be applied to int and float
+```
+
+Исправление — преобразование, которое читатель видит: `items.float() * price`
+или цена в `rat`, и какое из них верно, решает программа, а не компилятор
+(глава 5). Вторая держит квадрат за ролью, которую он исполняет, и просит то,
+чего роль не обещает:
+
+```okkama
+module bible/rolecall v1.0.0;
+
+// A role reference offers the role's actions and nothing else.
+import "io/stdout" take Stdout;
+
+role Shape {
+    area() is int;
+}
+
+object Square does Shape {
+    has side is int;
+    Square(:side);
+    area() is int { side * side; }
+    side() is int { side; }
+}
+
+main() is int {
+    let shape is Shape = Square(side: 3);
+    Stdout().writeln(shape.side().string());
+    0;
+}
+```
+
+Ответ компилятора:
+
+```text
+04-role-call-rejected.ok:19:28: semantic error: Role "Shape" has no action "side"
+```
+
+Ссылка на роль даёт действия роли и ничего больше, даже когда у объекта за
+ней их больше; чтобы дотянуться до `side()`, нужно держать `Square` или
+добавить `side()` в роль (раздел 14.3). Третья заявляет роль и забывает
+половину её:
+
+```okkama
+module bible/incomplete v1.0.0;
+
+// An object that claims a role implements all of it.
+role Shape {
+    area() is int;
+    perimeter() is int;
+}
+
+object Square does Shape {
+    has side is int;
+    Square(:side);
+    area() is int { side * side; }
+}
+
+main() is int {
+    Square(side: 3).area();
+}
+```
+
+Ответ компилятора:
+
+```text
+04-incomplete-rejected.ok:9:8: semantic error: Object "Square" does role "Shape" but does not implement action "perimeter"
+```
+
+Каждое сообщение называет место, типы и недостающую часть. Ни одна из этих
+программ не запускается вовсе: ошибка найдена там, где её написали, а не на
+первом входе, который до неё дойдёт.
+
 Некоторые проверки возможны только во время работы программы, потому что
 зависят от значений: индекс в пределах массива, ключ в словаре, преобразование
 вроде `byte(256)` в допустимом диапазоне, деление на ненулевое число,

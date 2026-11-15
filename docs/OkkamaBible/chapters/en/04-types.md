@@ -235,6 +235,29 @@ The Okkama compiler checks, before anything runs:
   always produces one (a non-exhaustive `match` used as a statement is
   allowed, and the editor flags it with a lint).
 
+Three short programs show what such a refusal looks like. The first
+multiplies a count by a price:
+
+{{example:04-mix-rejected}}
+
+The fix is a conversion the reader can see, `items.float() * price` or a
+`rat` price, and which one is right is the program's decision, not the
+compiler's (Chapter 5). The second holds a square behind the role it
+performs and asks for something the role does not promise:
+
+{{example:04-role-call-rejected}}
+
+A role reference offers the role's actions and nothing else, even when the
+object behind it has more; reaching `side()` means holding a `Square`, or
+adding `side()` to the role (Section 14.3). The third claims a role and
+forgets half of it:
+
+{{example:04-incomplete-rejected}}
+
+Each message names the place, the types and the missing piece. None of these
+programs runs at all: the error is found where it was written, not on the
+first input that reaches it.
+
 Some checks can only happen while the program runs, because they depend on
 values: an index within an array's bounds, a key present in a map, a
 conversion such as `byte(256)` in range, a division by a non-zero number, a

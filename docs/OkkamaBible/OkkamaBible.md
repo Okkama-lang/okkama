@@ -2172,6 +2172,99 @@ The Okkama compiler checks, before anything runs:
   always produces one (a non-exhaustive `match` used as a statement is
   allowed, and the editor flags it with a lint).
 
+Three short programs show what such a refusal looks like. The first
+multiplies a count by a price:
+
+```okkama
+module bible/mix v1.0.0;
+
+// An int and a float never meet in an operator; the program converts one.
+import "io/stdout" take Stdout;
+
+main() is int {
+    let items = 3;
+    let price = 2.5;
+    Stdout().writeln((items * price).string());
+    0;
+}
+```
+
+The compiler answers:
+
+```text
+04-mix-rejected.ok:9:23: semantic error: Operator * cannot be applied to int and float
+```
+
+The fix is a conversion the reader can see, `items.float() * price` or a
+`rat` price, and which one is right is the program's decision, not the
+compiler's (Chapter 5). The second holds a square behind the role it
+performs and asks for something the role does not promise:
+
+```okkama
+module bible/rolecall v1.0.0;
+
+// A role reference offers the role's actions and nothing else.
+import "io/stdout" take Stdout;
+
+role Shape {
+    area() is int;
+}
+
+object Square does Shape {
+    has side is int;
+    Square(:side);
+    area() is int { side * side; }
+    side() is int { side; }
+}
+
+main() is int {
+    let shape is Shape = Square(side: 3);
+    Stdout().writeln(shape.side().string());
+    0;
+}
+```
+
+The compiler answers:
+
+```text
+04-role-call-rejected.ok:19:28: semantic error: Role "Shape" has no action "side"
+```
+
+A role reference offers the role's actions and nothing else, even when the
+object behind it has more; reaching `side()` means holding a `Square`, or
+adding `side()` to the role (Section 14.3). The third claims a role and
+forgets half of it:
+
+```okkama
+module bible/incomplete v1.0.0;
+
+// An object that claims a role implements all of it.
+role Shape {
+    area() is int;
+    perimeter() is int;
+}
+
+object Square does Shape {
+    has side is int;
+    Square(:side);
+    area() is int { side * side; }
+}
+
+main() is int {
+    Square(side: 3).area();
+}
+```
+
+The compiler answers:
+
+```text
+04-incomplete-rejected.ok:9:8: semantic error: Object "Square" does role "Shape" but does not implement action "perimeter"
+```
+
+Each message names the place, the types and the missing piece. None of these
+programs runs at all: the error is found where it was written, not on the
+first input that reaches it.
+
 Some checks can only happen while the program runs, because they depend on
 values: an index within an array's bounds, a key present in a map, a
 conversion such as `byte(256)` in range, a division by a non-zero number, a
