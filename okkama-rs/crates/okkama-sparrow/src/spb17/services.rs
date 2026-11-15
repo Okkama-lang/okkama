@@ -748,6 +748,12 @@ fn state_results(slots: &[bool], states: &[BTreeSet<u32>]) -> Vec<BTreeSet<u32>>
 /// For each state-form `cache.rehome`, the scope of its state when only one reaches it (C-4: the duties leave
 /// the scope that owns them).
 pub(crate) fn rehome_scopes(p: &Program, f: &Function) -> Result<BTreeMap<usize, Option<u32>>, Error> {
+    // Only a function with a state-form rehome has anything to report; the others skip the analysis (#750).
+    let rehomes_state = f.code.iter().any(|instruction| matches!(instruction,
+        Instruction::Champ { op: Opcode::CacheRehome, arguments, .. } if locations(arguments).len() == 3));
+    if !rehomes_state {
+        return Ok(BTreeMap::new());
+    }
     let resumes = resumes(f);
     let mut saved = BTreeMap::<u32, Vec<BTreeSet<u32>>>::new();
     let mut rehomes = BTreeMap::new();
@@ -765,8 +771,13 @@ pub(crate) fn rehome_scopes(p: &Program, f: &Function) -> Result<BTreeMap<usize,
             Source::Location(source) => scopes.get(&source).cloned().unwrap_or_default(),
             Source::ProducedSlot(slot) => produced.get(slot as usize).cloned().unwrap_or_default(),
         }).collect::<Vec<_>>();
+        // Sparse: a location without scopes is absent, which every read takes as the empty set (#750).
         for (assignment, value) in edge.assignments.iter().zip(sources) {
-            out.insert(assignment.destination, value);
+            if value.is_empty() {
+                out.remove(&assignment.destination);
+            } else {
+                out.insert(assignment.destination, value);
+            }
         }
         out
     };
@@ -834,7 +845,11 @@ pub(crate) fn rehome_scopes(p: &Program, f: &Function) -> Result<BTreeMap<usize,
                             }
                         };
                         for (&location, value) in outputs.iter().zip(facts) {
-                            out.insert(location, value);
+                            if value.is_empty() {
+                                out.remove(&location);
+                            } else {
+                                out.insert(location, value);
+                            }
                         }
                         if !matches!(op, Opcode::RetOwn | Opcode::RetDefer) {
                             successors.push((pc + 1, out));

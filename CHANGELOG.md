@@ -20,6 +20,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **SPB 17 load is fast again (#750).** D25's scope analysis for state-form
+  rehomes ran on every function and cloned a dense map of all locations at
+  every instruction. Debug builds spent 50 s of a 53 s compile of
+  `L10.stdin.lines` there, and nine Champ conformance cases timed out. The
+  analysis now runs only for functions with a state-form `cache.rehome` and
+  keeps only the locations that hold scopes; `L10.stdin.lines` compiles and
+  runs in 10 s instead of 104 s.
+
 - **Async tests load on Champ (#725).** The SPB 17 loader took only a
   synchronous `() -> void` observation body as a test (`TEST_ENTRY`), so the
   program of an async test, a void async body that starts with an empty

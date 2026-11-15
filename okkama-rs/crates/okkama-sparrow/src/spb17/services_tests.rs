@@ -426,3 +426,20 @@ fn the_state_form_names_the_scope_of_one_state() {
         Instruction::Champ { op: O::CacheRehome, .. })).unwrap();
     assert_eq!(services::rehome_scopes(&p, pass).unwrap().get(&pc), Some(&Some(PASSER)));
 }
+
+/// #750: a function without a state-form rehome reports nothing and skips the scope analysis; the analysis of a
+/// function with one still names the rehome's scope (above). Without the early exit the loader spent 50 s of a
+/// 53 s debug load of L10.stdin.lines cloning dense scope maps of sync functions.
+#[test]
+fn rehome_scopes_of_a_function_without_a_state_form_rehome_are_empty() {
+    let p = passing(true);
+    for f in &p.functions {
+        let rehomes = f.code.iter().any(|instruction| matches!(instruction,
+            Instruction::Champ { op: O::CacheRehome, arguments, .. } if arguments.iter()
+                .filter(|argument| matches!(argument, A::Location(_))).count() == 3));
+        if !rehomes {
+            assert!(services::rehome_scopes(&p, f).unwrap().is_empty(), "{}", f.symbol);
+        }
+    }
+}
+
