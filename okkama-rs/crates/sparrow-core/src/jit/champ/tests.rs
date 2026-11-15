@@ -853,7 +853,7 @@ fn p1_runtime() -> Box<Runtime> {
             (*ty == s::Type::Str).then_some(index as u32)
         }).collect();
         program.objects.push(s::Object {
-            name: name.into(), error_cases,
+            name: name.into(), error_cases, enum_cases: 0, variant_cases: vec![],
             fields: if name == "app.Problem.note" {
                 vec![s::Field { name: "message".into(), storage: 0, once: false }]
             } else {

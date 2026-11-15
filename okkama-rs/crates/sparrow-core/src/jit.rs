@@ -178,6 +178,18 @@ helpers! {
     champ_machine_range = crate::champ::machine::rt_machine_range as (ctx,
         kind: Word, left: Word, right: Word, inclusive: Word) -> u64; [Allocates, Collects, Fails, Stops];
     #[cfg(feature = "champ-abi")]
+    champ_machine_convert = crate::champ::machine::rt_machine_convert as (ctx,
+        from: Word, to: Word, value: Word) -> u64; [Allocates, Collects, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_rat_order = crate::champ::machine::rt_machine_rat_order as (ctx,
+        left: Word, right: Word) -> i64; [];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_value_eq = crate::champ::machine::rt_machine_value_eq as (ctx,
+        descriptor: Word, left: Word, right: Word) -> u64; [Allocates, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_variant_get = crate::champ::machine::rt_machine_variant_get as (ctx,
+        case: Word, storage: Word, value: Word) -> u64; [Allocates, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
     champ_machine_catch = crate::champ::machine::rt_machine_catch as (ctx,
         failure: Word, descriptor: Word) -> u64; [];
     #[cfg(feature = "champ-abi")]

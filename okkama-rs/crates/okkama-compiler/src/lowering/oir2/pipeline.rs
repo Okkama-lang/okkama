@@ -112,7 +112,7 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
         }
         let trace_layout = storage_fields.iter().enumerate().filter_map(|(index, ty)| {
             matches!(ty, s::Type::Bytes | s::Type::Array(_) | s::Type::Str | s::Type::Object(_) | s::Type::Successor(_)
-                | s::Type::Failure).then_some(index as u32)
+                | s::Type::Failure | s::Type::Rat | s::Type::Variant(_)).then_some(index as u32)
         }).collect::<Vec<_>>();
         // Plain layouts can contain resource fields; compute the transitive fact below.
         layouts.insert(id.as_u32(), sparrow_oir2::ObjectLayout {

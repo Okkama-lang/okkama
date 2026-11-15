@@ -439,7 +439,8 @@ impl<'a> Evidence<'a> {
                     !self.program.objects[id as usize].layout.may_reach_resource
                 }
                 ProducedType::Value(Type::Int | Type::Bool | Type::Str | Type::Bytes | Type::Array(_)
-                    | Type::Range | Type::Descriptor) => true,
+                    | Type::Range | Type::Descriptor | Type::Byte | Type::Float | Type::Char | Type::Rat
+                    | Type::Variant(_)) => true,
                 _ => false,
             };
             if plain { continue; }
@@ -583,7 +584,8 @@ pub(super) fn static_selections_with(p: &Program, f: &Function, evidence: &mut E
                 if !p.objects[id as usize].layout.may_reach_resource { continue }
                 keys.insert(evidence.identity(location).ok_or_else(|| error("unknown static selection identity"))?);
             } else if matches!(verify::loc_type(f, location), Ok(ProducedType::Value(
-                Type::Bool | Type::Int | Type::Str | Type::Descriptor | Type::Bytes | Type::Range | Type::Array(_))))
+                Type::Bool | Type::Int | Type::Str | Type::Descriptor | Type::Bytes | Type::Range | Type::Array(_)
+                | Type::Byte | Type::Float | Type::Char | Type::Rat | Type::Variant(_))))
             {
                 continue;
             } else {

@@ -196,7 +196,9 @@ impl ObjectRuntimeLayout {
 fn repr(ty: s::Type) -> Repr {
     match ty {
         s::Type::Int => Repr::Int,
-        s::Type::Bool | s::Type::Never | s::Type::Descriptor => Repr::Raw,
+        s::Type::Bool | s::Type::Never | s::Type::Descriptor | s::Type::Byte | s::Type::Float | s::Type::Char => {
+            Repr::Raw
+        }
         _ => Repr::Ref,
     }
 }
@@ -205,7 +207,7 @@ fn repr(ty: s::Type) -> Repr {
 fn reference_slots(types: &[s::Type]) -> Vec<u32> {
     types.iter().enumerate().filter_map(|(index, ty)| {
         matches!(ty, s::Type::Error | s::Type::Bytes | s::Type::Array(_) | s::Type::Str | s::Type::Object(_)
-            | s::Type::Successor(_) | s::Type::Failure)
+            | s::Type::Successor(_) | s::Type::Failure | s::Type::Rat | s::Type::Variant(_))
             .then_some(index as u32)
     }).collect()
 }

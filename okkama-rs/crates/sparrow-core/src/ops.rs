@@ -1821,6 +1821,11 @@ pub extern "C" fn rt_int_text(ctx: *mut Ctx, word: Word) -> Word {
 fn convert(runtime: &mut Runtime, function: usize, source: okkama_sparrow::Register, dst: okkama_sparrow::Register, word: Word) -> Outcome {
     let from = runtime.ty(function, source).cloned();
     let to = runtime.ty(function, dst).cloned();
+    convert_scalar(runtime, from, to, word)
+}
+
+/// `cvt` between scalar types on Tomato's representations; Champ's `Convert` shares it.
+pub(crate) fn convert_scalar(runtime: &mut Runtime, from: Option<Type>, to: Option<Type>, word: Word) -> Outcome {
     match (from, to) {
         (Some(Type::Int), Some(Type::Str)) => Ok(int_text(runtime, word)),
         (Some(Type::Bool), Some(Type::Str)) => Ok(runtime.text_new(if word != 0 { "true" } else { "false" })),
@@ -1919,7 +1924,7 @@ fn str_fn(runtime: &mut Runtime, op: StrFn, args: Vec<Word>) -> Outcome {
     }
 }
 
-fn byte_from(runtime: &mut Runtime, kind: Kind, word: Word, context: Option<&str>) -> Outcome {
+pub(crate) fn byte_from(runtime: &mut Runtime, kind: Kind, word: Word, context: Option<&str>) -> Outcome {
     let (name, text) = match kind {
         Kind::Float => {
             let n = f64::from_bits(word);

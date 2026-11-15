@@ -225,6 +225,8 @@ fn s1_plain_and_identity_layouts_round_trip_and_reject_bad_offsets() {
     let mut p = plain();
     p.objects.push(Object {
         error_cases: vec![],
+        enum_cases: 0,
+        variant_cases: vec![],
         name: "Plain".into(),
         fields: vec![Field { name: "text".into(), storage: 0, once: false }],
         layout: ObjectRuntimeLayout {

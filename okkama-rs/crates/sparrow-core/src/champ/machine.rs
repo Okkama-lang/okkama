@@ -63,7 +63,8 @@ impl s::ExternalContracts for Catalog<'_> {
 pub(crate) fn repr(ty: s::Type) -> Repr {
     match ty {
         s::Type::Int => Repr::Int,
-        s::Type::Bool | s::Type::Descriptor | s::Type::Never => Repr::Raw,
+        s::Type::Bool | s::Type::Descriptor | s::Type::Never | s::Type::Byte | s::Type::Float
+            | s::Type::Char => Repr::Raw,
         _ => Repr::Ref,
     }
 }
@@ -240,9 +241,15 @@ fn legacy_type(ty: s::Type) -> okkama_sparrow::Type {
         s::Type::Int => T::Int,
         s::Type::Bool | s::Type::Descriptor | s::Type::Never => T::Bool,
         s::Type::Str => T::Str,
-        s::Type::Object(id) | s::Type::Successor(id) => T::Object(okkama_sparrow::ObjectRef(id)),
+        s::Type::Object(id) | s::Type::Successor(id) | s::Type::Variant(id) => {
+            T::Object(okkama_sparrow::ObjectRef(id))
+        }
         s::Type::Range => T::Range,
         s::Type::Failure => T::Failure,
+        s::Type::Byte => T::Byte,
+        s::Type::Float => T::Float,
+        s::Type::Rat => T::Rat,
+        s::Type::Char => T::Char,
     }
 }
 
@@ -447,6 +454,162 @@ pub extern "C" fn rt_machine_range(ctx: *mut Ctx, kind: Word, left: Word, right:
     let repr = if kind == 0 { Repr::Ref } else { Repr::Int };
     runtime.safepoint(frame, unsafe { &*ctx }, &[(value, repr)]);
     value
+}
+
+/// The operand code of a `Convert` helper call for an SPB 17 scalar type.
+pub(crate) fn scalar_code(ty: s::Type) -> Option<u64> {
+    Some(match ty {
+        s::Type::Int => 0,
+        s::Type::Bool => 1,
+        s::Type::Str => 2,
+        s::Type::Byte => 3,
+        s::Type::Float => 4,
+        s::Type::Rat => 5,
+        _ => return None,
+    })
+}
+
+/// Tomato's type and representation for a `Convert` operand code.
+fn scalar_type(code: Word) -> Option<(okkama_sparrow::Type, Repr)> {
+    Some(match code {
+        0 => (okkama_sparrow::Type::Int, Repr::Int),
+        1 => (okkama_sparrow::Type::Bool, Repr::Raw),
+        2 => (okkama_sparrow::Type::Str, Repr::Ref),
+        3 => (okkama_sparrow::Type::Byte, Repr::Raw),
+        4 => (okkama_sparrow::Type::Float, Repr::Raw),
+        5 => (okkama_sparrow::Type::Rat, Repr::Ref),
+        _ => return None,
+    })
+}
+
+/// SPB 17 `Convert` on Tomato's scalar representations. A failing conversion is a program failure.
+/// Conversions to byte are Tomato's `byte.from`; every other pair is Tomato's `cvt`.
+pub extern "C" fn rt_machine_convert(ctx: *mut Ctx, from: Word, to: Word, value: Word) -> Word {
+    use okkama_sparrow::Type as T;
+    let frame = runtime::frame_pointer!();
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    let (Some((source, _)), Some((target, repr))) = (scalar_type(from), scalar_type(to)) else {
+        return stop(ctx, error("invalid verified conversion"));
+    };
+    let outcome = match (&source, &target) {
+        (T::Int | T::Float | T::Rat, T::Byte) => {
+            let kind = match source {
+                T::Int => crate::program::Kind::Int,
+                T::Float => crate::program::Kind::Float,
+                _ => crate::program::Kind::Ref,
+            };
+            crate::ops::byte_from(runtime, kind, value, None)
+        }
+        _ => crate::ops::convert_scalar(runtime, Some(source), Some(target), value),
+    };
+    match outcome {
+        Ok(word) => {
+            runtime.safepoint(frame, unsafe { &*ctx }, &[(word, repr)]);
+            word
+        }
+        Err(message) => {
+            super::helpers::fail(ctx, error(&message));
+            0
+        }
+    }
+}
+
+/// A payload field of a variant value whose active case must be the object `case`.
+pub extern "C" fn rt_machine_variant_get(ctx: *mut Ctx, case: Word, storage: Word, value: Word) -> Word {
+    let runtime = unsafe { &*(*ctx).runtime };
+    if u64::from(heap::payload(runtime.heap.header_of(value))) != case {
+        super::helpers::fail(ctx, error("Variant payload of an inactive case"));
+        return 0;
+    }
+    runtime.heap.field(value, storage as usize)
+}
+
+/// The order of two exact rationals: -1, 0 or 1.
+pub extern "C" fn rt_machine_rat_order(ctx: *mut Ctx, left: Word, right: Word) -> i64 {
+    let runtime = unsafe { &*(*ctx).runtime };
+    match runtime.rational(left).compare(runtime.rational(right)) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    }
+}
+
+/// Deep value equality (§16.3) of two objects of descriptor `descriptor`: 1 or 0. Comparing an unbound
+/// field is a program failure, as in Tomato.
+pub extern "C" fn rt_machine_value_eq(ctx: *mut Ctx, descriptor: Word, left: Word, right: Word) -> Word {
+    let runtime = unsafe { &*(*ctx).runtime };
+    let Some(machine) = runtime.champ.machine.as_ref() else {
+        return stop(ctx, error("value equality outside a Champ program"));
+    };
+    let program = machine.source.clone();
+    match value_equal(runtime, &program, left, right, s::Type::Object(descriptor as u32)) {
+        Ok(equal) => Word::from(equal),
+        Err(message) => {
+            super::helpers::fail(ctx, error(&message));
+            0
+        }
+    }
+}
+
+fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, right: Word, ty: s::Type)
+    -> Result<bool, String>
+{
+    let mut pending = vec![(left, right, ty)];
+    let mut seen = std::collections::HashSet::new();
+    while let Some((a, b, ty)) = pending.pop() {
+        let equal = match ty {
+            s::Type::Int => runtime.big_value(a) == runtime.big_value(b),
+            s::Type::Float => f64::from_bits(a) == f64::from_bits(b),
+            s::Type::Bool | s::Type::Byte | s::Type::Char | s::Type::Descriptor | s::Type::Never => a == b,
+            _ if a == b => true,
+            _ if a == 0 || b == 0 => return Err("cannot compare unbound object fields".into()),
+            s::Type::Str => runtime.heap.text(a) == runtime.heap.text(b),
+            s::Type::Rat => runtime.rational(a) == runtime.rational(b),
+            s::Type::Bytes => runtime.heap.bytes(a) == runtime.heap.bytes(b),
+            s::Type::Range => {
+                let x = runtime.heap.payload::<crate::ops::RangeValue>(a).expect("verified range");
+                let y = runtime.heap.payload::<crate::ops::RangeValue>(b).expect("verified range");
+                x.inclusive == y.inclusive && runtime.big_value(x.start) == runtime.big_value(y.start)
+                    && runtime.big_value(x.end) == runtime.big_value(y.end)
+            }
+            s::Type::Array(shape) => {
+                let (x, y) = (runtime.heap.elements(a), runtime.heap.elements(b));
+                let element = shape.element().expect("verified array shape");
+                if x.len() == y.len() && seen.insert((a, b)) {
+                    pending.extend(x.iter().zip(y.iter()).map(|(&x, &y)| (x, y, element)));
+                }
+                x.len() == y.len()
+            }
+            s::Type::Object(_) | s::Type::Successor(_) | s::Type::Variant(_) => {
+                let descriptor = heap::payload(runtime.heap.header_of(a));
+                if descriptor != heap::payload(runtime.heap.header_of(b)) {
+                    return Ok(false);
+                }
+                let object = &program.objects[descriptor as usize];
+                if seen.insert((a, b)) {
+                    let storage = object.fields.iter().filter(|field| !field.once).map(|field| field.storage)
+                        .collect::<Vec<_>>();
+                    // An enum has no source fields: its tag is its value.
+                    let storage = if object.fields.is_empty() {
+                        (0..object.layout.storage_fields.len() as u32).collect()
+                    } else {
+                        storage
+                    };
+                    for index in storage {
+                        let field = object.layout.storage_fields[index as usize];
+                        let index = index as usize;
+                        pending.push((runtime.heap.field(a, index), runtime.heap.field(b, index), field));
+                    }
+                }
+                true
+            }
+            s::Type::Error | s::Type::Failure => false,
+        };
+        if !equal {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 pub extern "C" fn rt_machine_catch(ctx: *mut Ctx, failure: Word, descriptor: Word) -> Word {
