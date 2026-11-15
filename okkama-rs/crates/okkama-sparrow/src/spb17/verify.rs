@@ -455,8 +455,9 @@ pub fn verify(p: &Program) -> Check {
                     "OBJECT_RETENTION", "understated object retention metadata")?;
             }
             // The runtime selection walk reaches identities only through selected fields: a field that may refer
-            // to a resource, directly or through a managed collection or a variant, is selected.
-            if reaches_resource(p, ty) {
+            // to a resource, directly or through a managed collection or a variant, is selected. An any box states
+            // its selection exactly under ANY_BOX (selected if and only if its value reaches a resource).
+            if reaches_resource(p, ty) && !object.any_box {
                 enforce(layout.may_reach_resource && layout.selection_layout.contains(&(index as u32)),
                     "COLLECTION_RETENTION", "a field holding resource objects must be selected and reach resources")?;
             }
