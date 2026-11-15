@@ -2730,20 +2730,21 @@ in a rounding difference.
 ## 5.11 Limits
 
 - **No non-finite floats.** Code that relies on IEEE infinities and NaN must
-  be restructured (Section 5.4).
+  be restructured (Section 5.5).
 - **Decimal arithmetic lives in the library.** The standard library's
   `Decimal`, used for JSON numbers, adds, subtracts and multiplies exactly
-  and divides and rounds to a scale (issue #191); the library's
-  string-backed `BigInt` still duplicates the language's own
-  arbitrary-precision `int` (issues #189, #190).
+  and divides and rounds to a scale (issue #191). The library's `BigInt`,
+  kept for the APIs that hand one out, holds an `int` and uses its
+  arithmetic, so it no longer duplicates the language's own integers
+  (issues #189, #190).
 - **Elementary functions.** Besides `abs`, `sign`, `pow` and `sqrt`, a
   `float` has `floor`, `ceil`, `round` (half away from zero), `trunc`,
   `exp`, `ln`, `log2`, `log10`, `sin`, `cos`, `tan` and `atan2`, and `int`
   and `float` have `min`, `max` and `clamp` (issue #192). A result that is
   not finite, such as `0.0.ln()`, is an error, as for every float.
 
-The first two are small and fixable; the third is a stance; the last two
-were gaps the standard library audit found, and 0.5.5 closes most of them.
+The first is a stance (Section 5.5). The other two were gaps the standard
+library audit found, and 0.5.5 closed them.
 
 # Chapter 6. Text
 
