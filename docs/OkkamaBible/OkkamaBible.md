@@ -189,8 +189,9 @@
   - [14.6 Composition instead of inheritance](#146-composition-instead-of-inheritance)
   - [14.7 Operators are roles](#147-operators-are-roles)
   - [14.8 A collection of your own: `Iterating` and `Cursor`](#148-a-collection-of-your-own-iterating-and-cursor)
-  - [14.9 Roles elsewhere](#149-roles-elsewhere)
-  - [14.10 What this design costs](#1410-what-this-design-costs)
+  - [14.9 Where roles came from](#149-where-roles-came-from)
+  - [14.10 Roles elsewhere](#1410-roles-elsewhere)
+  - [14.11 What this design costs](#1411-what-this-design-costs)
 - [Chapter 15. Fakes, tests and properties](#chapter-15-fakes-tests-and-properties)
   - [15.1 Tests live next to the code](#151-tests-live-next-to-the-code)
   - [15.2 The `test` binding](#152-the-test-binding)
@@ -9298,7 +9299,41 @@ with the right names is not enough, and the type argument says what the
 loop's binding will be. A source that is consumed as it is read — a file, a
 socket — does the other standard role, `Batching<T>` (Chapter 8).
 
-## 14.9 Roles elsewhere
+## 14.9 Where roles came from
+
+The idea of a contract separate from its implementations has a short and
+traceable history.
+
+- **CLU (1977).** Liskov's clusters gave a type a set of operations and
+  hid its representation behind them [[Liskov 1977](#ref-liskov1977)]. A cluster was one
+  implementation; there was not yet a way to say that two clusters offered
+  the same contract.
+- **Type classes (1989).** Wadler and Blott proposed type classes for
+  Haskell: a class names operations, and an *instance* declares that a type
+  provides them [[Wadler 1989](#ref-wadlerblott1989)]. Conformance is declared, as in Okkama,
+  but an instance may be written in any module, so a type can join a class
+  after the fact. Okkama does not allow that (§14.2): the object's module
+  is the only place that can say what the object does.
+- **Interfaces (1995).** Java made a contract a type of its own: an
+  `interface` lists method signatures, and a class `implements` any number
+  of them while inheriting implementation from one superclass
+  [[Gosling 2023](#ref-gosling2023)]. Java 8 later let interfaces carry default methods, and
+  with them part of what interfaces had been introduced to avoid.
+- **Traits (2003).** Schärli, Ducasse, Nierstrasz and Black proposed traits
+  as units of reusable *behaviour*: a trait supplies method bodies, a class
+  composes several traits, and conflicts between them must be resolved
+  explicitly [[Schärli 2003](#ref-scharli2003)]. Scala, PHP and Rust use the name; what they
+  mean by it ranges from Schärli's composable behaviour to something close
+  to Haskell's type classes.
+
+Okkama's role takes the contract from this line and leaves the code. A role
+has signatures, successor results and an optional fake for tests, and never
+a method body. With no bodies there is nothing to compose and nothing to
+resolve: the question traits answer, which of two inherited methods wins,
+does not arise. Shared behaviour lives in an object that others hold
+(§14.6), which is where Chapter 2 argued it belongs.
+
+## 14.10 Roles elsewhere
 
 | | Okkama role | Java interface | Go interface | Rust trait |
 |---|---|---|---|---|
@@ -9318,7 +9353,7 @@ the table has a way back from the contract to the concrete type. Okkama
 has none, and that is what makes a role reference a capability rather than
 a type annotation.
 
-## 14.10 What this design costs
+## 14.11 What this design costs
 
 - **Forwarding code.** Decorators repeat every action of the role. No
   delegation syntax shortens it (§14.6).
@@ -19733,6 +19768,7 @@ limits are deliberate, and Chapter 28 discusses the ones that are not.
 - <a id="ref-scales2022"></a>Dan Scales (2022). Go 1.18 Implementation of Generics via Dictionaries and Gcshape Stenciling. Design document, Go proposal repository, 22 February 2022. https://go.googlesource.com/proposal/+/master/design/generics-implementation-dictionaries-go1.18.md
 - <a id="ref-goruntime"></a>The Go Authors. The Go runtime scheduler, src/runtime/proc.go, function checkdead. https://go.dev/src/runtime/proc.go
 - <a id="ref-schlueter2013"></a>Isaac Z. Schlueter (2013). Designing APIs for Asynchrony. Blog post, 23 August 2013. https://blog.izs.me/2013/08/designing-apis-for-asynchrony/
+- <a id="ref-scharli2003"></a>Nathanael Schärli, Stéphane Ducasse, Oscar Nierstrasz, Andrew P. Black (2003). Traits: Composable Units of Behaviour. In *ECOOP 2003 — Object-Oriented Programming*, LNCS 2743: 248–274. Springer. https://doi.org/10.1007/978-3-540-45070-2_12
 - <a id="ref-semver"></a>Tom Preston-Werner (2013). *Semantic Versioning 2.0.0*. https://semver.org/
 - <a id="ref-smith2018"></a>Nathaniel J. Smith (2018). Notes on Structured Concurrency, or: Go Statement Considered Harmful. Blog post, 25 April 2018. https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/
 - <a id="ref-snyder1986"></a>Alan Snyder (1986). Encapsulation and Inheritance in Object-Oriented Programming Languages. In *Proceedings of OOPSLA '86*: 38–45. ACM. https://doi.org/10.1145/28697.28702

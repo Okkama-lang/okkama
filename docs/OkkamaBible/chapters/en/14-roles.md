@@ -323,7 +323,41 @@ with the right names is not enough, and the type argument says what the
 loop's binding will be. A source that is consumed as it is read — a file, a
 socket — does the other standard role, `Batching<T>` (Chapter 8).
 
-## 14.9 Roles elsewhere
+## 14.9 Where roles came from
+
+The idea of a contract separate from its implementations has a short and
+traceable history.
+
+- **CLU (1977).** Liskov's clusters gave a type a set of operations and
+  hid its representation behind them [@liskov1977]. A cluster was one
+  implementation; there was not yet a way to say that two clusters offered
+  the same contract.
+- **Type classes (1989).** Wadler and Blott proposed type classes for
+  Haskell: a class names operations, and an *instance* declares that a type
+  provides them [@wadlerblott1989]. Conformance is declared, as in Okkama,
+  but an instance may be written in any module, so a type can join a class
+  after the fact. Okkama does not allow that (§14.2): the object's module
+  is the only place that can say what the object does.
+- **Interfaces (1995).** Java made a contract a type of its own: an
+  `interface` lists method signatures, and a class `implements` any number
+  of them while inheriting implementation from one superclass
+  [@gosling2023]. Java 8 later let interfaces carry default methods, and
+  with them part of what interfaces had been introduced to avoid.
+- **Traits (2003).** Schärli, Ducasse, Nierstrasz and Black proposed traits
+  as units of reusable *behaviour*: a trait supplies method bodies, a class
+  composes several traits, and conflicts between them must be resolved
+  explicitly [@scharli2003]. Scala, PHP and Rust use the name; what they
+  mean by it ranges from Schärli's composable behaviour to something close
+  to Haskell's type classes.
+
+Okkama's role takes the contract from this line and leaves the code. A role
+has signatures, successor results and an optional fake for tests, and never
+a method body. With no bodies there is nothing to compose and nothing to
+resolve: the question traits answer, which of two inherited methods wins,
+does not arise. Shared behaviour lives in an object that others hold
+(§14.6), which is where Chapter 2 argued it belongs.
+
+## 14.10 Roles elsewhere
 
 | | Okkama role | Java interface | Go interface | Rust trait |
 |---|---|---|---|---|
@@ -343,7 +377,7 @@ the table has a way back from the contract to the concrete type. Okkama
 has none, and that is what makes a role reference a capability rather than
 a type annotation.
 
-## 14.10 What this design costs
+## 14.11 What this design costs
 
 - **Forwarding code.** Decorators repeat every action of the role. No
   delegation syntax shortens it (§14.6).

@@ -145,6 +145,7 @@ bibliographic data were checked are listed.
 - [@ritchie1993] Dennis M. Ritchie (1993). The Development of the C Language. *HOPL-II: The Second ACM SIGPLAN Conference on History of Programming Languages*: 201–208. https://doi.org/10.1145/154766.155580
 - [@saltzer1975] Jerome H. Saltzer, Michael D. Schroeder (1975). The Protection of Information in Computer Systems. *Proceedings of the IEEE* 63(9): 1278–1308. https://doi.org/10.1109/PROC.1975.9939
 - [@scales2022] Dan Scales (2022). Go 1.18 Implementation of Generics via Dictionaries and Gcshape Stenciling. Design document, Go proposal repository, 22 February 2022. https://go.googlesource.com/proposal/+/master/design/generics-implementation-dictionaries-go1.18.md
+- [@scharli2003] Nathanael Schärli, Stéphane Ducasse, Oscar Nierstrasz, Andrew P. Black (2003). Traits: Composable Units of Behaviour. In *ECOOP 2003 — Object-Oriented Programming*, LNCS 2743: 248–274. Springer. https://doi.org/10.1007/978-3-540-45070-2_12
 - [@schlueter2013] Isaac Z. Schlueter (2013). Designing APIs for Asynchrony. Blog post, 23 August 2013. https://blog.izs.me/2013/08/designing-apis-for-asynchrony/
 - [@se0304] Swift Evolution (2021). SE-0304: Structured Concurrency. https://github.com/swiftlang/swift-evolution/blob/main/proposals/0304-structured-concurrency.md
 - [@semver] Tom Preston-Werner (2013). *Semantic Versioning 2.0.0*. https://semver.org/ {label: SemVer 2.0.0}
