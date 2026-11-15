@@ -22,7 +22,7 @@ pub(super) struct BodyContext<'t> {
     // Some(receiver snapshot present) denotes a lazy helper rather than its source action.
     pub deferred: Option<bool>,
     pub key: super::callables::BodyKey,
-    pub calls: &'t std::cell::RefCell<super::known_calls::CallSpans>,
+    pub calls: &'t std::cell::RefCell<super::open_calls::CallSpans>,
     pub bound_entries: &'t std::collections::HashSet<ir::FuncId>,
     pub lambdas: &'t [super::anonymous::Lambda],
     pub globals: &'t HashMap<usize, ir::DeclId>,
@@ -303,11 +303,32 @@ impl<'a, 't> BodyLowerer<'a, 't> {
     ) -> Result<()> {
         let mut args = vec![];
         if join.value {
-            args.push(value.ok_or_else(|| LowerError::invalid(self.source.span, "valued arm has no value"))?);
+            let value = value.ok_or_else(|| LowerError::invalid(self.source.span, "valued arm has no value"))?;
+            args.push(self.retag_arm(join.block, value)?);
         }
         args.extend(self.args(&join.locals));
         self.abandon_except(&join.locals)?;
         self.edge(join.block, args, kind, boundary)
+    }
+
+    /// An arm's untagged `[]`/`[:]` (at any depth) takes the collection type of
+    /// the join (#297), as `Coercion::Retag` does at a declared boundary: the
+    /// checker types the whole `if`/`match` and leaves the arm untagged.
+    fn retag_arm(&mut self, join: ir::BlockId, value: ir::ValueId) -> Result<ir::ValueId> {
+        let Some(&parameter) = self.b.body().blocks.get(join)?.params.first() else {
+            return Ok(value);
+        };
+        let ty = self.b.body().values.get(parameter)?.ty;
+        let actual = self.b.body().values.get(value)?.ty;
+        if actual == ty {
+            return Ok(value);
+        }
+        let op = match (self.b.module().types.get(actual)?, self.b.module().types.get(ty)?) {
+            (ir::Type::Array(_), ir::Type::Array(_)) => ir::CollectionOp::ArrayRetag { array: value, ty },
+            (ir::Type::Map(..), ir::Type::Map(..)) => ir::CollectionOp::MapRetag { map: value, ty },
+            _ => return Ok(value),
+        };
+        self.collection(op)
     }
 
     fn boundary(&mut self, scope: ir::ScopeId, kind: ir::BoundaryKind) -> Result<ir::BoundaryId> {
@@ -688,6 +709,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             E::Coerce { coercion: thir::Coercion::RoleWrap, value } => {
                 self.error_wrap(expr, value)
             }
+            E::Coerce { coercion: thir::Coercion::Box, value } => self.box_any(expr, value),
             E::Coerce { coercion: thir::Coercion::RoleNarrow { .. }, value } => {
                 let ty = self.ty(expr.ty.as_ref().expect("typed narrowing"), expr.span)?;
                 let Some(value) = self.value(value)? else {

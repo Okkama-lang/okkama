@@ -20,10 +20,9 @@ mod functional_tests;
 mod specialize;
 mod callables;
 mod anonymous;
+mod any;
 mod bound;
 mod caps;
-mod known_calls;
-#[cfg(test)]
 mod open_calls;
 mod test_profile;
 #[cfg(test)]
@@ -123,18 +122,10 @@ type Result<T> = std::result::Result<T, LowerError>;
 /// Independent developer entry: analysis supplies resolved THIR and declarations.
 /// No CLI routing, ownership elaboration or semantic verifier is invoked here.
 pub fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
-    lower(analysis, false)
+    lower(analysis)
 }
 
-/// #569 O1 evidence only: open invocations of `fn` parameters receive the
-/// registered open sync callable ABI instead of the C3a diagnostic. C3b, after
-/// the audit, integrates open invocations into the producer itself.
-#[cfg(test)]
-pub(crate) fn lower_to_oir2_with_open_calls(analysis: &Analysis<'_>) -> Result<ir::Module> {
-    lower(analysis, true)
-}
-
-fn lower(analysis: &Analysis<'_>, open_calls: bool) -> Result<ir::Module> {
+fn lower(analysis: &Analysis<'_>) -> Result<ir::Module> {
     let prepared = specialize::prepare(analysis)?;
     let constants = &analysis.registry.const_state;
     let constant_names: Vec<_> = analysis.registry.consts.iter().map(|constant| {
@@ -149,7 +140,7 @@ fn lower(analysis: &Analysis<'_>, open_calls: bool) -> Result<ir::Module> {
     let globals = declarations.declare_globals(constants, &constant_names, &walked)?;
     let bound_entries = bound::entries(declarations.builder.module(), &prepared.callables,
         &declarations.functions, &declarations.types)?;
-    let calls = std::cell::RefCell::new(known_calls::CallSpans::new());
+    let calls = std::cell::RefCell::new(open_calls::CallSpans::new());
     // Check ordinary/default/cleanup bodies before constructor specializations.
     let mut bodies: Vec<_> = analysis.bodies.iter().collect();
     bodies.sort_by_key(|body| matches!(body.owner, thir::BodyOwner::Ctor { .. }));
@@ -254,12 +245,8 @@ fn lower(analysis: &Analysis<'_>, open_calls: bool) -> Result<ir::Module> {
     let mut module = declarations.builder.finish()?;
     structure::finish(&mut module)?;
     test_profile::check(&module)?;
-    if open_calls {
-        #[cfg(test)]
-        open_calls::attach(&mut module)?;
-    } else {
-        known_calls::check(&module, &calls.into_inner())?;
-    }
+    open_calls::attach(&mut module, &calls.into_inner())?;
+    any::attach_descriptors(&mut module)?;
     structure::check(&module)?;
     once::check(&module)?;
     Ok(module)

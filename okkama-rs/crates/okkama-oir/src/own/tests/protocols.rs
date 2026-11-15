@@ -626,3 +626,24 @@ fn open_result_aliasing_a_temporary_environment_is_rejected() {
     assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::B51
         && diagnostic.message.contains("settled by callee cleanup")), "{report:?}");
 }
+
+// #569 C3b: the producer attaches the open ABI exactly to own's open callees.
+fn open_callees_of(source: &str, function: &str) -> Vec<String> {
+    let module = crate::text::parse(source).unwrap();
+    let (_, data) = module.functions.iter().find(|(_, data)| data.symbol == function).unwrap();
+    let body = data.body.as_ref().unwrap();
+    let open = crate::own::open_callees(&module, body, &OwnOptions::default()).unwrap();
+    open.into_iter().map(|value| match body.values.get(value).unwrap().def {
+        Definition::BlockParam { block, index } if block == body.entry => format!("entry {index}"),
+        Definition::BlockParam { index, .. } => format!("block parameter {index}"),
+        Definition::InstResult { inst, .. } => body.insts.get(inst).unwrap().op.opcode().to_owned(),
+    }).collect()
+}
+
+#[test]
+fn open_callees_are_entry_parameters_not_known_closures() {
+    assert_eq!(open_callees_of(include_str!("protocol-high/closure-open.oir"), "f"), ["entry 0"]);
+    assert!(open_callees_of(include_str!("protocol-high/closure-known.oir"), "f").is_empty());
+    // A closure merged through a block parameter keeps its finite origin.
+    assert!(open_callees_of(include_str!("protocol-high/closure-known-phi.oir"), "f").is_empty());
+}

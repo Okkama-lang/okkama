@@ -397,6 +397,24 @@ pub fn elaborate_ownership(
     })
 }
 
+/// The `fn` values of `body` that own treats as open callees (#569 C3b): an
+/// entry parameter, a produced edge result or any definition other than a
+/// closure, a bound action or a witnessed role slot, also through retags and
+/// block parameters; a value without any finite origin is open as well. A
+/// producer attaches the open callable ABI exactly to the invocations of these
+/// values; every other invocation is known to own.
+pub fn open_callees(
+    module: &Module,
+    body: &Body,
+    options: &OwnOptions,
+) -> Result<std::collections::BTreeSet<ValueId>, OwnError> {
+    let mut budget = Budget::new(options);
+    let origins = origins::callable_origins(module, body, &mut budget)?;
+    Ok(origins.into_iter().filter_map(|(value, origin)| {
+        (origin.open || origin.entries.is_empty()).then_some(value)
+    }).collect())
+}
+
 #[cfg(test)]
 mod tests;
 
