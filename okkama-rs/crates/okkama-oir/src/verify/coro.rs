@@ -176,7 +176,9 @@ impl Layout<'_, '_> {
                 }
             }
             self.state.at(L::Terminator { function: self.function, block: block_id }, block.term.loc);
-            if matches!(block.term.kind, TermKind::Throw(_) | TermKind::Raise(_) | TermKind::Panic(_)) {
+            // C-2: only a failure that leaves the body must be published; a block unwind catches it inside.
+            if block.unwind.is_none()
+                && matches!(block.term.kind, TermKind::Throw(_) | TermKind::Raise(_) | TermKind::Panic(_)) {
                 self.state.error(R::CoroBodyRaises, "an async body publishes its failure instead of raising (C-2)");
             }
             let last_saves = block.insts.last().and_then(|id| self.body.insts.get(*id).ok())

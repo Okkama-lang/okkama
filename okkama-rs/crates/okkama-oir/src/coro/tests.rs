@@ -19,6 +19,7 @@ macro_rules! golden {
 const GOLDENS: &[(&str, &str, &str)] = &[
     golden!("async-plain-await"),
     golden!("async-await-failure"),
+    golden!("async-caught-throw"),
     golden!("async-void"),
     golden!("async-repeated-await"),
     golden!("async-never-awaited"),

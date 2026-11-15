@@ -201,3 +201,24 @@ func @f(%frame: frame<@f>) -> void summary(Mf) {
         "scope S action in @f\nscope SG action in @g\nfunc @g() -> void summary(Mf) {\n^entry in SG:\n    ret\n}"))
         .contains(&RuleId::CoroSyncSuspends));
 }
+
+const CAUGHT: &str = include_str!("../../tests/fixtures/async/coro/async-caught-throw.oir");
+
+#[test]
+fn only_a_failure_that_leaves_a_d21_body_must_be_published() {
+    // C-2: a throw that the block unwind catches inside the body is ordinary control flow.
+    assert_eq!(structural(CAUGHT), []);
+    assert_eq!(full(CAUGHT), []);
+    assert_eq!(full(FAILURE), []);
+    let caught = "^throw(%e: Stop facts(plain(certificate=scalar)), %q2: scope<SW>) in SW";
+    for terminator in ["throw %e", "panic %e"] {
+        let source = edited(CAUGHT, "    throw %e\n", &format!("    {terminator}\n"));
+        assert!(!structural(&source).contains(&RuleId::CoroBodyRaises), "{terminator}");
+        // Without its unwind edge the same terminator leaves the body unpublished.
+        let source = edited(&source, &format!("{caught} unwind ^thrown(%q2):"), &format!("{caught}:"));
+        assert!(structural(&source).contains(&RuleId::CoroBodyRaises), "{terminator}");
+    }
+    // The raise after the lexical unwind leaves the body when the pass has not rewritten it.
+    let source = edited(CAUGHT, "    fut.publish %fr0, failure(%combined)\n    ret\n", "    raise %combined\n");
+    assert!(structural(&source).contains(&RuleId::CoroBodyRaises));
+}

@@ -632,7 +632,9 @@ impl Lowering<'_, '_> {
     }
 
     /// D16, review B4: every close of a scope that owns duties names their reaching tokens in a service
-    /// schedule of that scope, in creation order.
+    /// schedule of that scope. The duties follow the creation order of their Futures, and the protocol is
+    /// the one that the body's `await.unwind` names (see `services_protocol`). Identical schedules of one
+    /// owner are shared.
     fn schedules(
         &mut self, duties: &[Duty], closes: &BTreeMap<Site, Vec<ValueId>>,
         repaired: &BTreeMap<ValueId, BTreeMap<Site, ValueId>>,
