@@ -443,6 +443,36 @@ fake fields; role fakes and their ordinary typed fields remain available.
   or ticketed (#653–#656, #666–#670).
 
 
+- **Champ coverage, wave 4 (#601, #622, #676, #689, #692, #695–#700, #711, #712).**
+  On Champ the conformance suite rose from 673 to 908 of 1040 cases (CI on
+  616048635), and no case fails on either engine.
+  - **Async, wave 1, end to end.** `async main` awaiting plain async actions
+    runs high → own → coro → low → SPB 17 → Champ JIT: the coro pass with
+    D21 frame layouts and continuations, low with the D18 cancel envelope and
+    conditional delivery, SPB 17 opcodes 64–77 and their loader rules, the
+    Champ Future record (a Tomato frame with cache, slots and scope area),
+    the root driver, and the JIT for async bodies (resume dispatch, frame
+    slots, S-class helpers). All eight W1 cases pass, normally and under GC
+    stress (V1–V10).
+  - **Async, wave 2.** Cold Futures take their fresh resource inputs and own
+    their outcomes; a Future or a view escapes through `cache.rehome` to a
+    scope or to the caller; a temporary await takes the cached outcome
+    (`await.take` with its unique-cache proof); resources, defers and pending
+    exits cross suspension points; cancellation is delivered at awaits, and a
+    nested close keeps it for the next one (R1, R2, R4, R5, K1).
+  - **Roles, closures and `any`.** Dispatch tables, action values as layouts,
+    open calls through the Closure protocol and `any` boxes run on Champ;
+    managed collections of roles and `any` values that reach resources
+    (#676, #689, #711).
+  - **Rules.** Two audits of wave 4 and of the async verifiers were fixed
+    (#692, #695); async bodies need their D21 layout in coro and low (#696);
+    a scope close takes only its own service duties (#684); the full
+    verifier models which creations can hold an obligation (#700);
+    `scope.transfer` moves only admitted identities (#697); shielding is a
+    property of every close, and `cleanup.shield` is gone (#690).
+  - **Parity.** Champ's failure messages match Tomato's (#698, #712, #713),
+    and at a task's final exit a pending cancellation keeps the result, as on
+    Tomato.
 - **Champ coverage, wave 3 (#569, #601, #645, #654, #666–#668).** On
   Champ the conformance suite rose from 665 to 673 of 1040 cases, and no
   case fails on both engines.
