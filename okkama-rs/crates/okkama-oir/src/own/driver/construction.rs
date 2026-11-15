@@ -8,14 +8,18 @@ impl Driver<'_, '_> {
         field: FieldRef,
         original: ValueId,
     ) -> Result<Landing, OwnError> {
-        if !self.managed(self.high.values.get(original).map_err(arena)?.ty) {
+        let ty = self.high.values.get(original).map_err(arena)?.ty;
+        // A value that only reaches plain targets through references carries
+        // deps but can hold no obligation, so there is nothing to stage.
+        if !self.managed(ty) || !self.analysis.types.get(&ty).is_some_and(TypeClassification::may_own) {
             return Ok(point);
         }
         let value = point.env.value(original)?.value;
         let (next, packet) = self.local_values(point, vec![value])?;
         point = next;
         let value = point.env.value(original)?.value;
-        let state = point.env.scopes[&action];
+        let state = point.env.scopes.get(&action).copied()
+            .ok_or_else(|| flow_error("staging action scope is not retained"))?;
         self.emit(point, Operation::Ownership(OwnershipOp::Stage { stage: ElaboratedStage {
             action, field, resource: ResourceValue { value, packet }, states: TransferStates::Same(state),
         } }))
@@ -28,19 +32,25 @@ impl Driver<'_, '_> {
     ) -> Result<Landing, OwnError> {
         let mut op = instruction.op.clone();
         let inputs = match &op {
-            Operation::Core(CoreOp::ObjNew { fields, .. }) => fields.clone(),
+            Operation::Core(CoreOp::ObjNew { fields, .. } | CoreOp::VariantNew { fields, .. }) => fields.clone(),
             Operation::Core(CoreOp::ObjNext { updates, .. }) => updates.iter().map(|field| field.value).collect(),
             _ => vec![],
         };
         let creates = matches!(op, Operation::Core(CoreOp::ObjNew {
-            construction: ConstructionStatus::Complete, .. } | CoreOp::ObjNext { .. }));
+            construction: ConstructionStatus::Complete, .. } | CoreOp::ObjNext { .. } | CoreOp::VariantNew { .. }));
+        // Only a result that may own takes a creation packet; one that merely
+        // reaches references carries deps but no obligation.
         let managed = instruction.results.iter().any(|value| self.managed(self.high.values.get(*value).unwrap().ty));
+        let owning = instruction.results.iter().any(|value| {
+            let ty = self.high.values.get(*value).unwrap().ty;
+            self.managed(ty) && self.analysis.types.get(&ty).is_some_and(TypeClassification::may_own)
+        });
         let owners = self.current_instruction.and_then(|inst| self.constructor_inputs.get(&inst));
-        if creates && managed && owners.is_some_and(|owners| owners.len() > 1) {
+        if creates && owning && owners.is_some_and(|owners| owners.len() > 1) {
             return Err(flow_error("pre-accept construction spans admission owners; stage fields at the action first"));
         }
         let restore_to = owners.and_then(|owners| owners.first().copied());
-        let packet = if creates && managed {
+        let packet = if creates && owning {
             let (next, packet) = self.offered(point, &inputs)?;
             point = next;
             Some(packet)
@@ -53,7 +63,8 @@ impl Driver<'_, '_> {
             return Err(flow_error("construction operand has no reaching definition"));
         }
         match &mut op {
-            Operation::Core(CoreOp::ObjNew { packet: input, .. } | CoreOp::ObjNext { packet: input, .. }) => {
+            Operation::Core(CoreOp::ObjNew { packet: input, .. } | CoreOp::ObjNext { packet: input, .. }
+                | CoreOp::VariantNew { packet: input, .. }) => {
                 *input = packet;
             }
             Operation::Core(CoreOp::ObjInit { field, completion, .. }) => {
@@ -122,7 +133,8 @@ impl Driver<'_, '_> {
         }
         if let Some(packet) = packet {
             let scope = self.body.blocks.get(point.block).map_err(arena)?.lexical_scope;
-            let state = point.env.scopes[&scope];
+            let state = point.env.scopes.get(&scope).copied()
+                .ok_or_else(|| flow_error("construction packet has no retained lexical owner"))?;
             point = self.emit(point, Operation::Ownership(OwnershipOp::Admit { state, packet }))?;
         }
         if let Some((original, object)) = initialized

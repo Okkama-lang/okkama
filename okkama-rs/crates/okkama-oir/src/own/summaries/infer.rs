@@ -445,6 +445,18 @@ impl Universe {
             }
             _ => {}
         }
+        // A builder transition retains its buffer and every inserted value; its
+        // contract carries this as buffer refs rather than a retention formula.
+        if let Operation::Collection(collection) = op
+            && let Some(buffer) = super::arrays::consumed_buffer(op)
+            && let Some(index) = contract.normal.results.iter()
+                .position(|slot| matches!(slot.name, SlotName::Buffer | SlotName::Value)) {
+            let mut relation = values[buffer.as_u32() as usize].clone();
+            for value in super::arrays::inserted(collection) {
+                normal::relation(&mut relation, &values[value.as_u32() as usize], budget)?;
+            }
+            results[index] = relation;
+        }
         let created = matches!(op, Operation::Core(CoreOp::ObjNew { construction: ConstructionStatus::Complete, .. }
             | CoreOp::ObjNext { .. } | CoreOp::VariantNew { .. } | CoreOp::FakeNew { .. }));
         let result_types = match site {

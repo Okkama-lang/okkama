@@ -61,8 +61,10 @@ fn plain_arrays_preserve_positions_empty_arrays_and_observation_failures() {
     }
 }
 
+// Managed and residual element graphs take the collection rules: no packet,
+// full deps through the retention formula, and observations only borrow.
 #[test]
-fn managed_and_residual_element_graphs_remain_unsupported_for_all_three_operations() {
+fn managed_and_residual_element_graphs_follow_the_collection_rules_for_all_three_operations() {
     for residual in [false, true] {
         for operation in 0..3 {
             let mut module = ModuleBuilder::new("not_plain", Profile::High);
@@ -100,9 +102,28 @@ fn managed_and_residual_element_graphs_remain_unsupported_for_all_three_operatio
             let options = OwnOptions::default();
             let analysis = OwnAnalysis { types: classify_test(&module, &options), ..OwnAnalysis::default() };
             assert_ne!(analysis.types[&array].class, Classification::Plain);
-            let error = analyze_function(&module, f, &analysis, &options).unwrap_err();
-            assert!(matches!(error, OwnError::Diagnostics { diagnostics, .. }
-                if diagnostics[0].kind == OwnDiagnosticKind::UnsupportedConstruct));
+            let flow = analyze_function(&module, f, &analysis, &options).unwrap();
+            let body = module.functions.get(f).unwrap().body.as_ref().unwrap();
+            let (_, inst) = body.insts.iter().find(|(_, inst)| matches!(inst.op, Operation::Collection(_))).unwrap();
+            let after = flow.before_edges.values().next().unwrap();
+            let element_deps = &after.values[params[0].as_u32() as usize].deps;
+            let array_deps = &after.values[params[1].as_u32() as usize].deps;
+            if let Some(result) = inst.results.first().filter(|_| operation != 1) {
+                let expected = if operation == 0 { element_deps } else { array_deps };
+                assert_eq!(&after.values[result.as_u32() as usize].deps, expected);
+            }
+            if residual {
+                continue;
+            }
+            verify_high(&module).unwrap();
+            let output = elaborate_ownership(module, &TestNatives::default(), &options).unwrap();
+            let output = rewrite_synchronous(output, &options).unwrap();
+            verify_own(&output.module).unwrap();
+            let body = output.module.functions.get(f).unwrap().body.as_ref().unwrap();
+            assert!(body.values.iter().all(|(_, value)| {
+                !matches!(output.module.types.get(value.ty), Ok(Type::Array(_)))
+                    || matches!(value.facts, ValueFacts::Managed { .. })
+            }));
         }
     }
 }

@@ -30,6 +30,9 @@ pub struct LiveEnv {
     pub unwind_values: Option<BTreeSet<ValueId>>,
     /// A returned pre-accept construction packet keeps its original admission.
     pub restore_to: BTreeMap<ValueId, ScopeId>,
+    /// High builder buffer -> the linear element journal travelling with it.
+    /// Journal packets are also members of `linear`.
+    pub journals: BTreeMap<ValueId, ValueId>,
 }
 impl LiveEnv {
     pub fn all_linear(&self) -> BTreeSet<ValueId> {
@@ -231,7 +234,10 @@ impl<'a> OutcomeEmitter<'a> {
         let filtered;
         let env = if outcome == Outcome::Unwind && env.unwind_values.is_some() {
             let mut next = env.clone();
-            next.values.retain(|value, _| next.unwind_values.as_ref().unwrap().contains(value));
+            // A live buffer keeps its High name: it is abandoned on this path.
+            next.values.retain(|value, _| {
+                next.unwind_values.as_ref().unwrap().contains(value) || next.journals.contains_key(value)
+            });
             if let Operation::Ownership(OwnershipOp::ScopeEnd { state, .. }) = op {
                 let ty = body.values.get(*state).map_err(arena)?.ty;
                 if let Type::Service(ServiceType::Scope(owner)) = module.types.get(ty).map_err(arena)? {
@@ -302,6 +308,7 @@ impl<'a> OutcomeEmitter<'a> {
             let ty = body.values.get(*value).map_err(arena)?.ty;
             if !self.managed.contains(&ty)
                 || matches!(module.types.get(ty).map_err(arena)?, Type::Service(_) | Type::Descriptor
+                    | Type::Builder(_) | Type::MapBuilder(..) | Type::Frame(_)
                     | Type::Int | Type::Bool | Type::Byte | Type::Float | Type::Rat | Type::Char | Type::Str
                     | Type::Range | Type::Enum(_) | Type::Never) {
                 continue;
@@ -345,8 +352,16 @@ impl<'a> OutcomeEmitter<'a> {
                     ValueFacts::Managed { deps } => deps,
                     _ => body.deps.alloc(DepExpr::Empty).map_err(arena)?,
                 }
-            } else if matches!(op, Operation::Call(_)
-                | Operation::Core(CoreOp::ObjGet { .. } | CoreOp::OnceLoad { .. } | CoreOp::Undef { .. })) {
+            } else if *slot == SlotName::Value && matches!(op, Operation::Ownership(OwnershipOp::Empty {})) {
+                // A caught payload (`catch` landing) retains what its failure carried.
+                let selection = body.selections.alloc(SelectionExpr::Value(*value)).map_err(arena)?;
+                body.deps.alloc(DepExpr::Retention { value: *value, selection }).map_err(arena)?
+            } else if matches!(op, Operation::Call(_) | Operation::Collection(_)
+                | Operation::Core(CoreOp::ObjGet { .. } | CoreOp::OnceLoad { .. } | CoreOp::Undef { .. }
+                    | CoreOp::VariantNew { .. } | CoreOp::VariantOf { .. } | CoreOp::VariantGet { .. }
+                    | CoreOp::Retag { .. })) {
+                // Collections, variants and projections retain exactly what their
+                // contract's retention formula selects from the operands.
                 let expression = if matches!(op, Operation::Core(CoreOp::Undef { .. })) {
                     DepExpr::Empty
                 } else {
@@ -390,6 +405,8 @@ impl<'a> OutcomeEmitter<'a> {
         env.cleanup.pending = env.cleanup.pending.filter(|value| !consumed.contains(value)).map(remap);
         env.restore_to = env.restore_to.into_iter().filter(|(value, _)| !consumed.contains(value))
             .map(|(value, owner)| (remap(value), owner)).collect();
+        env.journals = env.journals.into_iter().filter(|(_, packet)| !consumed.contains(packet))
+            .map(|(buffer, packet)| (buffer, remap(packet))).collect();
         for (name, value) in results {
             match module.types.get(body.values.get(*value).map_err(arena)?.ty).map_err(arena)? {
                 Type::Service(ServiceType::Pending) => {
