@@ -147,8 +147,9 @@
   - [11.9 Ресурсы и задачи](#119-ресурсы-и-задачи)
   - [11.10 Закройте раньше, destroy подстрахует](#1110-закройте-раньше-destroy-подстрахует)
   - [11.11 Разобранный пример: пул соединений](#1111-разобранный-пример-пул-соединений)
-  - [11.12 Чего не обещают](#1112-чего-не-обещают)
-  - [11.13 Чего стоит такой замысел](#1113-чего-стоит-такой-замысел)
+  - [11.12 Разобранный пример: подтвердить или откатить](#1112-разобранный-пример-подтвердить-или-откатить)
+  - [11.13 Чего не обещают](#1113-чего-не-обещают)
+  - [11.14 Чего стоит такой замысел](#1114-чего-стоит-такой-замысел)
 - [Глава 12. Объекты, поля и конструкторы](#глава-12-объекты-поля-и-конструкторы)
   - [12.1 Объявление объекта](#121-объявление-объекта)
   - [12.2 Поля частные и постоянные](#122-поля-частные-и-постоянные)
@@ -6940,7 +6941,99 @@ after the block
 Пул, которому нужно передать соединение коду, живущему дольше, перемещает
 соединение наружу, и это другая, видимая операция.
 
-## 11.12 Чего не обещают
+## 11.12 Разобранный пример: подтвердить или откатить
+
+Транзакция — классический ресурс, освобождение которого зависит от того, чем
+кончилась работа: если работа завершилась, подтвердить; если что-то пошло
+не так, откатить. В Okkama откат — это `destroy` транзакции, а
+подтверждение — явный вызов.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/atomic" take Atomic;
+
+enum Rejected is Error = (amount(cents is int));
+
+// A transaction rolls back unless it was committed before its scope ended.
+object Transaction {
+    has label is string;
+    has committed is Atomic<bool>;
+    Transaction(:label) {
+        self.committed = Atomic(false);
+        Stdout().writeln(label + ": begin");
+    }
+    commit() is void {
+        committed.replace(true);
+        Stdout().writeln(label + ": commit");
+    }
+    destroy {
+        if !committed.value() {
+            Stdout().writeln(label + ": rollback");
+        }
+    }
+}
+
+object Shop {
+    Shop();
+    order(label is string, cents is int) is string {
+        let tx = Transaction(label: label);
+        confirm cents > 0 else throw Rejected.amount(cents);
+        Stdout().writeln(label + ": charge " + cents.string());
+        tx.commit();
+        label + " done";
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let shop = Shop();
+    out.writeln(shop.order("first", 250));
+    let second = try { shop.order("second", -5); }
+        catch Rejected.amount(cents) { "second refused: " + cents.string(); };
+    out.writeln(second);
+    0;
+}
+```
+
+Вывод:
+
+```text
+first: begin
+first: charge 250
+first: commit
+first done
+second: begin
+second: rollback
+second refused: -5
+```
+
+- **Откат нельзя пропустить.** Каким бы путём ни покидалось `order` —
+  через `confirm`, отвергающий неположительную сумму, через отказ дальше по
+  коду, через баг, — область транзакции заканчивается, и её `destroy`
+  выполняется (§11.7). Второй заказ это показывает: `begin`, затем
+  `rollback`, затем `catch` вызывающего.
+- **Подтверждение — единственное решение.** Без `tx.commit()` транзакция
+  откатывается, так что забытое подтверждение теряет работу, а не делает
+  её наполовину. Подтверждение — последний шаг `order`, способный изменить
+  исход.
+- **То, что должен видеть `destroy`, — поле, которое он может прочитать.**
+  Флаг — `Atomic<bool>`, объявленный в объекте, где его видит читатель.
+  Преемник здесь был бы не тем инструментом: `committed()`, возвращающий
+  `^Transaction`, создал бы новую идентичность со своим временем жизни
+  (§11.5), а исходная, так и не подтверждённая, всё равно была бы
+  уничтожена и откатилась бы.
+
+Другие языки помещают то же решение в другие места. Соединение `sqlite3` в
+Python, использованное как контекстный менеджер, подтверждает или
+откатывает транзакцию по выходу из блока `with` [[Python sqlite3](#ref-pysqlite3)]; `scope(failure)`
+в D выполняет блок, только когда область покидается исключением [[D specification](#ref-dscope)].
+И то и другое зависит от того, напишет ли вызывающий нужную конструкцию при
+каждом использовании. В Okkama правило несёт сама транзакция: держать её
+так, чтобы область её не закрыла, невозможно.
+
+## 11.13 Чего не обещают
 
 У детерминированной уборки есть пределы, и их стоит знать.
 
@@ -6957,7 +7050,7 @@ after the block
 - **`destroy` нельзя повторить.** Он выполняется не больше одного раза. Если
   он провалился, отказ сообщается, а идентичность считается освобождённой.
 
-## 11.13 Чего стоит такой замысел
+## 11.14 Чего стоит такой замысел
 
 - **Владение проверяется во время исполнения, а не при компиляции.** Rust
   отвергает программу, которая освободила бы значение дважды или
@@ -19871,6 +19964,7 @@ main() is int {
 - <a id="ref-cook2009"></a>William R. Cook (2009). On Understanding Data Abstraction, Revisited. In *Proceedings of OOPSLA 2009*, *ACM SIGPLAN Notices* 44(10): 557–572. https://doi.org/10.1145/1640089.1640133
 - <a id="ref-cox2018"></a>Russ Cox (2018). Minimal Version Selection. research!rsc, 21 February 2018. https://research.swtch.com/vgo-mvs
 - <a id="ref-cytron1991"></a>Ron Cytron, Jeanne Ferrante, Barry K. Rosen, Mark N. Wegman, F. Kenneth Zadeck (1991). Efficiently Computing Static Single Assignment Form and the Control Dependence Graph. *ACM TOPLAS* 13(4): 451–490. https://doi.org/10.1145/115372.115320
+- <a id="ref-dscope"></a>D Language Foundation (2026). Scope Guard Statement. *D Language Specification*, Statements. https://dlang.org/spec/statement.html#scope-guard-statement
 - <a id="ref-dunittest"></a>D Language Foundation (2026). Unit Tests. *D Language Specification*. https://dlang.org/spec/unittest.html
 - <a id="ref-dahl1966"></a>Ole-Johan Dahl, Kristen Nygaard (1966). SIMULA — an ALGOL-Based Simulation Language. *Communications of the ACM* 9(9): 671–678. https://doi.org/10.1145/365813.365819
 - <a id="ref-dennis1966"></a>Jack B. Dennis, Earl C. Van Horn (1966). Programming Semantics for Multiprogrammed Computations. *Communications of the ACM* 9(3): 143–155. https://doi.org/10.1145/365230.365252
@@ -19962,6 +20056,7 @@ main() is int {
 - <a id="ref-prasad2020"></a>Aanand Prasad, Ben Firshman, Carl Tashian, Eva Parish (2020). *Command Line Interface Guidelines*. https://clig.dev/
 - <a id="ref-promisesaplus"></a>Promises/A+ organization. Promises/A+, rule 2.2.4 and note 3.1. https://promisesaplus.com/
 - <a id="ref-pydoctest"></a>Python Software Foundation (2026). doctest — Test interactive Python examples. *The Python Standard Library*. https://docs.python.org/3/library/doctest.html
+- <a id="ref-pysqlite3"></a>Python Software Foundation (2026). sqlite3 — DB-API 2.0 interface for SQLite databases: How to use the connection context manager. *The Python Standard Library*. https://docs.python.org/3/library/sqlite3.html#sqlite3-connection-context-manager
 - <a id="ref-pymock"></a>Python Software Foundation (2026). unittest.mock — mock object library. *The Python Standard Library*. https://docs.python.org/3/library/unittest.mock.html
 - <a id="ref-r7rs2013"></a>Alex Shinn, John Cowan, Arthur A. Gleckler (eds.) (2013). *Revised⁷ Report on the Algorithmic Language Scheme*. https://small.r7rs.org/attachment/r7rs.pdf
 - <a id="ref-rfc3629"></a>François Yergeau (2003). *UTF-8, a Transformation Format of ISO 10646*. RFC 3629, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc3629

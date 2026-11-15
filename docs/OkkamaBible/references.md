@@ -40,6 +40,7 @@ bibliographic data were checked are listed.
 - [@dijkstra1968] Edsger W. Dijkstra (1968). Go To Statement Considered Harmful. *Communications of the ACM* 11(3): 147–148. https://doi.org/10.1145/362929.362947
 - [@dijkstra1972] Edsger W. Dijkstra (1972). The Humble Programmer. *Communications of the ACM* 15(10): 859–866. https://doi.org/10.1145/355604.361591
 - [@donovan2015] Alan A. A. Donovan, Brian W. Kernighan (2015). *The Go Programming Language*. Addison-Wesley. ISBN 978-0134190440.
+- [@dscope] D Language Foundation (2026). Scope Guard Statement. *D Language Specification*, Statements. https://dlang.org/spec/statement.html#scope-guard-statement {label: D specification}
 - [@duffy2016] Joe Duffy (2016). The Error Model. Blog post, 7 February 2016. http://joeduffyblog.com/2016/02/07/the-error-model/
 - [@dunittest] D Language Foundation (2026). Unit Tests. *D Language Specification*. https://dlang.org/spec/unittest.html {label: D specification}
 - [@elizarov2018] Roman Elizarov (2018). Structured concurrency. Blog post, 12 September 2018. https://medium.com/@elizarov/structured-concurrency-722d765aa952
@@ -133,6 +134,7 @@ bibliographic data were checked are listed.
 - [@promisesaplus] Promises/A+ organization. Promises/A+, rule 2.2.4 and note 3.1. https://promisesaplus.com/
 - [@pydoctest] Python Software Foundation (2026). doctest — Test interactive Python examples. *The Python Standard Library*. https://docs.python.org/3/library/doctest.html {label: Python doctest}
 - [@pymock] Python Software Foundation (2026). unittest.mock — mock object library. *The Python Standard Library*. https://docs.python.org/3/library/unittest.mock.html {label: Python unittest.mock}
+- [@pysqlite3] Python Software Foundation (2026). sqlite3 — DB-API 2.0 interface for SQLite databases: How to use the connection context manager. *The Python Standard Library*. https://docs.python.org/3/library/sqlite3.html#sqlite3-connection-context-manager {label: Python sqlite3}
 - [@r7rs2013] Alex Shinn, John Cowan, Arthur A. Gleckler (eds.) (2013). *Revised⁷ Report on the Algorithmic Language Scheme*. https://small.r7rs.org/attachment/r7rs.pdf {label: R7RS}
 - [@rfc3629] François Yergeau (2003). *UTF-8, a Transformation Format of ISO 10646*. RFC 3629, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc3629 {label: RFC 3629}
 - [@rfc6901] Paul C. Bryan, Kris Zyp, Mark Nottingham (eds.) (2013). *JavaScript Object Notation (JSON) Pointer*. RFC 6901, IETF. https://www.rfc-editor.org/rfc/rfc6901 {label: RFC 6901}

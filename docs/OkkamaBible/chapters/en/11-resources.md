@@ -318,7 +318,37 @@ still owned when it uses it, and released once, by the pool's owner. A pool
 that must hand a connection to code that outlives it moves the connection
 out instead, and that is a different, visible operation.
 
-## 11.12 What is not promised
+## 11.12 A worked example: commit or roll back
+
+A transaction is the classic resource whose release depends on how the work
+ended: if the work finished, commit; if anything went wrong, roll back. In
+Okkama the rollback is the transaction's `destroy`, and the commit is an
+explicit call.
+
+{{example:11-transaction}}
+
+- **The rollback cannot be skipped.** Whatever path leaves `order` — the
+  `confirm` that refuses a non-positive amount, a failure further down, a
+  bug — the transaction's scope ends and its `destroy` runs (§11.7). The
+  second order shows it: `begin`, then `rollback`, then the caller's
+  `catch`.
+- **The commit is the one decision.** Without `tx.commit()` the transaction
+  rolls back, so forgetting the commit loses the work instead of half-doing
+  it. The commit is the last step of `order` that can change the outcome.
+- **What `destroy` must see is a field it can read.** The flag is an
+  `Atomic<bool>`, declared in the object, where a reader sees it. A
+  successor would be the wrong tool here: `committed()` returning `^Transaction`
+  would make a new identity with its own lifetime (§11.5), and the original,
+  never committed, would still be destroyed and roll back.
+
+Other languages put the same decision in different places. Python's
+`sqlite3` connection, used as a context manager, commits or rolls back when
+the `with` block ends [@pysqlite3]; D's `scope(failure)` runs a block only
+when the scope is left by an exception [@dscope]. Both depend on the caller
+writing the construct at every use. In Okkama the transaction carries the
+rule itself: there is no way to hold one that its scope will not settle.
+
+## 11.13 What is not promised
 
 Deterministic cleanup has limits, and they are worth knowing.
 
@@ -335,7 +365,7 @@ Deterministic cleanup has limits, and they are worth knowing.
 - **A `destroy` cannot be retried.** It runs at most once. If it fails, the
   failure is reported and the identity is considered released.
 
-## 11.13 What this design costs
+## 11.14 What this design costs
 
 - **Ownership is checked at run time, not at compile time.** Rust rejects a
   program that would release a value twice or use it after release. Okkama
