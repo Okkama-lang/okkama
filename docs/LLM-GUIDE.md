@@ -20,9 +20,10 @@ the instruction table in `okkama-sparrow`); everything else lives outside the re
   runtime tooling. **Needs the owner's permission**: the language, the
   compiler's front end and checks, and the public API of `std`. When a
   compiler change would help, explain the risk and ask (or file an issue).
-- **Commits**: the owner commits, unless the task explicitly includes merging
-  or a release. Commit messages end with the attribution line the harness
-  asks for.
+- **Commits**: Claude commits on feature branches and merges them into the
+  current release branch as part of the release workflow; tags, `develop` and
+  `main` are the owner's. Never `git commit -a`: name the paths. Commit
+  messages end with the attribution line the harness asks for.
 - **Working on `std/`**: read `docs/std-principles.md` first and follow it
   (objects are mechanisms, not records: no accessors or mutators unless
   unavoidable; flat APIs; the review plan and its inventory tool).
@@ -36,8 +37,9 @@ the instruction table in `okkama-sparrow`); everything else lives outside the re
   Both are proper nouns, not translated or declined in Russian. Crates,
   binaries, flags, environment variables and the benchmark engine id
   `tomato` keep their names.
-- **After every step**: a benchmark table (before/after, against Python where
-  it applies).
+- **Benchmarks**: each release gets the micro A/B report against the previous
+  release. Champ (0.6.0) is not measured until it reaches a production state
+  (§1.1, #651).
 - **Limitations and deferred work**: file a GitHub issue right away
   (`gh issue create`, `gh` is logged in) and give the link — not just a line
   in a report.
@@ -51,6 +53,52 @@ the instruction table in `okkama-sparrow`); everything else lives outside the re
   crypto, TLS, X.509 and PEM stay native (do not rewrite them in Okkama).
 - **Restoring files**: `git checkout`-style reverts may be blocked; keep a
   copy in the scratchpad before temporary instrumentation and restore from it.
+
+### 1.1 The 0.6.0 Rebuild: how work runs (owner, 2026-11-15)
+
+Re-read this section at the start of every session and after every context
+summary.
+
+- **Goal.** Within two weeks of 2026-11-15, Champ (OIR-2 → SPB 17 → Champ JIT)
+  reaches Tomato's production level: the language, std and conformance. After
+  that it must be faster: parity on the micro suite, and ≥10× where Tomato
+  pays for dynamic ownership (destroy, resources, successors, unwind with
+  cleanup). Champ is not measured until then (#651).
+- **Roles.**
+  - **Claude (the lead session).** Manager and main worker: plans waves,
+    writes task specifications, reviews every diff, merges, and keeps the
+    board and the CHANGELOG.
+  - **Implementers.** Anthropic subagents (Opus), and Codex when its quota
+    allows. Before every Codex launch check its usage; above ~85% give it
+    only short single-item tasks.
+  - **Fable.** The principal expert for independent audits.
+- **Subagent effort.** Medium by default. High only for soundness-critical
+  work: verifier and loader rules, runtime ownership, the JIT.
+- **Fable costs money.** Audit only changes to verifier or loader rules: one
+  audit per wave, covering all of that wave's rule changes. Claude reviews
+  everything else.
+- **Waves, not per-change testing.** Group tickets into logical waves.
+  - **Per ticket:** the implementer runs only the targeted tests of the
+    crates it touched, on the host.
+  - **Per wave:** one Docker run of the affected suites and one
+    conformance-on-Champ run (at most once a day). Then merge the wave into
+    `release/0.6.0` and push.
+  - No Docker or conformance runs for small changes.
+- **Parallel lanes.** Every agent builds on this machine (12 cores, 32 GB; no
+  remote agents), so run at most 3–4 lanes with Rust builds at once.
+  - Split lanes along crate boundaries.
+  - Each lane gets its own branch and its own worktree under
+    `../okkama-work`.
+  - Remove the worktree and its Docker volume `okkama-gate-target-<name>`
+    after the merge. Never put worktrees inside the repository.
+- **Board.** Every slice is a sub-issue of its epic, with the milestone and
+  Release v0.6.0. Set it In Progress when taken and Done with its commit.
+  Deferred items become Todo sub-issues right away.
+- **Champ builds.** The `champ-abi` feature compiles Tomato's resource
+  tracking out, so such a build runs only SPB 17 (`OKKAMA_PIPELINE=oir2`).
+  Anything about Tomato is measured or tested with a default build.
+- **Docker disk.** Per-worktree target volumes take several GB each. When a
+  build fails on space, run `docker system df`.
 
 ## 2. Repository map
 
