@@ -433,5 +433,5 @@ Second pass (2026-11-15), 9.9 pages:
 
 To add for the floor:
 - the same suite over PostgresStore in CI (a role contract suite), only if the book's check gets a database;
-- a session/login walkthrough with web/session;
+- a session/login walkthrough with web/session (blocked: WebTestClient sends no headers on GET/DELETE and keeps no cookies, #650);
 - the server-perf notes, only with measured numbers.
