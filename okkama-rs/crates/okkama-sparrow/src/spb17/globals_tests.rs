@@ -30,7 +30,7 @@ fn program(read: u32, result: Type) -> Program {
     }).collect();
     let color = Object {
         name: "Color".into(), error_cases: vec![], enum_cases: 2, variant_cases: vec![], handle: false,
-        role: None, implements: vec![], any_box: false, fields: vec![],
+        role: None, implements: vec![], any_box: false, enum_names: vec![], fields: vec![],
         layout: ObjectRuntimeLayout {
             storage_fields: vec![Type::Int], allocation_words: 2, identity_offset: None, has_destroy: false,
             may_reach_resource: false, may_async_destroy: false, trace_layout: vec![], selection_layout: vec![],
