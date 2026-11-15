@@ -1,6 +1,7 @@
-//! Plain async in SPB 17 (#601 V7): async bodies with their D21 frame layout, Future creation, await and its
-//! unwind adapter, publication, the suspension brackets and cancellation requests. The forms follow the async
-//! ABI (C-1…C-3, D20, D21) and Champ draft 3 §14; the loader rules of §15 check what this emits.
+//! Async in SPB 17 (#601 V7, R4): async bodies with their D21 frame layout, Future creation, await and its
+//! unwind adapter, publication, the suspension brackets and cancellation requests; with resources, the temporary
+//! take with its proof and the rehome of an escaping Future's cache duty. The forms follow the async ABI
+//! (C-1…C-4, D20, D21) and Champ draft 3 §14; the loader rules of §15 check what this emits.
 use super::*;
 
 /// What SPB 17 takes from an async body besides its code and layout. A function is an async body when it carries
@@ -8,6 +9,8 @@ use super::*;
 pub(super) struct AsyncBody {
     /// The Future's outcome value; `None` for a void Future.
     pub outcome: Option<s::Type>,
+    /// An async defer entry (C-6): `invoke.defer` runs it as a shielded child, it has no Future of its own.
+    pub defer: bool,
 }
 
 /// The async body shape of `function`, `None` for a synchronous function. A layout or an async summary outside
@@ -37,6 +40,21 @@ pub(super) fn async_body(module: &o::Module, id: o::FuncId, function: &o::Functi
         return Err(error(format!("{}: an async body takes exactly its own frame and returns nothing",
             function.symbol)));
     }
+    // C-6: an async defer entry publishes an empty success (Continue) or its failure, never a Future's outcome,
+    // and never replaces the exit in 0.6.0.
+    let replacements = function.attrs.iter().find_map(|attr| match attr {
+        o::FunctionAttr::DeferEntry { replacements } => Some(replacements),
+        _ => None,
+    });
+    if let Some(replacements) = replacements {
+        if !replacements.is_empty() {
+            return Err(error(format!("{}: an async defer entry never replaces (C-6)", function.symbol)));
+        }
+        if function.async_creation_summary.is_some() || function.async_body_summary.is_some() {
+            return Err(error(format!("{}: an async defer entry creates no Future", function.symbol)));
+        }
+        return Ok(Some(AsyncBody { outcome: None, defer: true }));
+    }
     let (Some(body), Some(creation)) = (function.async_body_summary, function.async_creation_summary) else {
         return Err(error(format!("{}: async body without its creation and body summaries", function.symbol)));
     };
@@ -56,7 +74,7 @@ pub(super) fn async_body(module: &o::Module, id: o::FuncId, function: &o::Functi
     if !agrees {
         return Err(error(format!("{}: creation summary's Future differs from the body's outcome", function.symbol)));
     }
-    Ok(Some(AsyncBody { outcome }))
+    Ok(Some(AsyncBody { outcome, defer: false }))
 }
 
 /// The D21 layout of an async body in SPB 17: slot types as produced types and each continuation's site as the
@@ -112,6 +130,30 @@ impl Emitter<'_> {
         let layout = self.body.frame_layout.as_ref().ok_or_else(|| error("frame operation outside an async body"))?;
         layout.continuations.get(continuation as usize).map(|continuation| continuation.saved.as_slice())
             .ok_or_else(|| error(format!("unknown continuation {continuation}")))
+    }
+
+    /// The name `obligation` has in the facts of `owner`, after the suspension that reloaded `owner`. Coro keeps
+    /// the facts of a resumed value as they were (a deps key still names the value its continuation saved, for
+    /// example the Future before an await), while the saved name is dead after its save (B9.5). When `owner` is a
+    /// `frame.resume` result and `obligation` a value its continuation's `frame.save` stored, the obligation is the
+    /// resume's result of the same slot, so the dependency never keeps the dead name alive across the suspension.
+    pub(super) fn through_frame(&self, owner: o::ValueId, obligation: o::ValueId)
+        -> Result<o::ValueId, GenerateError>
+    {
+        let o::Definition::InstResult { inst, .. } = self.body.values.get(owner)?.def else { return Ok(obligation) };
+        let resume = self.body.insts.get(inst)?;
+        let o::Operation::Async(o::AsyncOp::FrameResume { continuation, slots: reloaded, .. }) = &resume.op else {
+            return Ok(obligation);
+        };
+        let saved = self.body.insts.iter().find_map(|(_, candidate)| match &candidate.op {
+            o::Operation::Async(o::AsyncOp::FrameSave { slots, continuation: saved, .. })
+                if saved == continuation && *continuation != 0 => {
+                slots.iter().find(|slot| slot.value == obligation).map(|slot| slot.slot)
+            }
+            _ => None,
+        });
+        let position = saved.and_then(|slot| reloaded.iter().position(|reloaded| reloaded.slot == slot));
+        Ok(position.and_then(|position| resume.results.get(position + 1).copied()).unwrap_or(obligation))
     }
 
     /// The SPB 17 Future type of an OIR value and its outcome.
@@ -214,40 +256,58 @@ impl Emitter<'_> {
                     .collect::<Result<Vec<_>, _>>()?;
                 (O::AwaitUnwind, operands)
             }
-            X::Await { .. } => return Err(error("await is an invoke.own terminator")),
+            // The capability is a proof position: its evidence was checked by verify_low, and the loader proves
+            // it again from the code (SPB_TAKE_CAPABILITY), so only the proved Future travels.
+            X::UniqueCacheProof { proof } => (O::UniqueCacheProof, vec![location(proof.future)?]),
+            // C-4, token form: the cache duty joins the pending reserve of the exit whose destination it names.
+            X::CacheRehome { form: o::RehomeForm::Token { pending, cache, task: None }, target, protocol } => {
+                self.services(*protocol)?;
+                let destination = A::Destination(s::ExitDestination::Scope(target.as_u32()));
+                (O::CacheRehome, vec![destination, location(*pending)?, location(*cache)?])
+            }
+            X::CacheRehome { .. } => {
+                return Err(later("cache.rehome of a scope state or of a spawned task's duty (D25, P1)"));
+            }
+            X::Await { .. } | X::AwaitTake { .. } => {
+                return Err(error("await and await.take are invoke.own terminators"));
+            }
             _ => return Err(later(o::Operation::Async(op.clone()).opcode())),
         };
         let outputs = results.iter().map(|&value| self.loc(value)).collect::<Result<_, _>>()?;
         Ok(s::Instruction::Champ { op: opcode, arguments, flow: s::Flow::Next(outputs) })
     }
 
-    /// `invoke.own await` (form a of D20): the normal outcome is the value and its deps, the unwind outcome
-    /// the failure with the waiter's task and receipt.
+    /// `invoke.own await` and `invoke.own await.take` (form a of D20): the normal outcome is the value and its
+    /// deps, for a take with the outcome packet between them; the unwind outcome is the failure with the waiter's
+    /// task and receipt. Only the temporary take exists in 0.6.0 (C5): its boundary is the awaiting scope.
     pub(super) fn async_invocation(&mut self, op: &o::Operation, normal: &o::InvokeEdge, unwind: &o::InvokeEdge)
         -> Result<s::Instruction, GenerateError>
     {
-        let o::Operation::Async(o::AsyncOp::Await { future, result }) = op else {
-            return Err(later(op.opcode()));
+        let (opcode, future, result, mut arguments) = match op {
+            o::Operation::Async(o::AsyncOp::Await { future, result }) => (O::Await, future, result, vec![]),
+            o::Operation::Async(o::AsyncOp::AwaitTake { future, result, unique,
+                boundary: o::TakeBoundary::Temporary { awaiting } }) => {
+                (O::AwaitTake, future, result, vec![A::Location(self.loc(*unique)?), A::Scope(awaiting.as_u32())])
+            }
+            o::Operation::Async(o::AsyncOp::AwaitTake { .. }) => return Err(later("bound await.take (C5)")),
+            _ => return Err(later(op.opcode())),
         };
         let (_, outcome) = self.future(*future)?;
         if outcome != result.map(|ty| translate_type(self.module, ty)).transpose()? {
             return Err(error("await result type differs from its Future"));
         }
+        arguments.insert(0, A::Location(self.loc(*future)?));
         let context = s::ResultContext { value: outcome, may_fail: true, ..s::ResultContext::default() };
-        let tags = O::Await.tags(&context);
+        let tags = opcode.tags(&context);
         let edges = [(o::Outcome::Normal, normal), (o::Outcome::Unwind, unwind)];
         if tags != [s::Tag::Normal, s::Tag::Unwind] {
             return Err(error("await outcome inventory mismatch"));
         }
         let outcomes = tags.into_iter().zip(edges).map(|(tag, (outcome, edge))| {
-            let schema = O::Await.results(tag, &context)?;
+            let schema = opcode.results(tag, &context)?;
             Ok(s::Outcome { tag, edge: self.edge(edge.block, &edge.args, outcome, &schema)? })
         }).collect::<Result<_, GenerateError>>()?;
-        Ok(s::Instruction::Champ {
-            op: O::Await,
-            arguments: vec![A::Location(self.loc(*future)?)],
-            flow: s::Flow::Outcomes(outcomes),
-        })
+        Ok(s::Instruction::Champ { op: opcode, arguments, flow: s::Flow::Outcomes(outcomes) })
     }
 
     /// The schedule a `cleanup.settle` step works through: the one of the close its cleanup state began, which

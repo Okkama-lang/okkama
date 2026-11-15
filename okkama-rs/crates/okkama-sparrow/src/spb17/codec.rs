@@ -483,7 +483,7 @@ tagged! { ArrayLeaf {
 tagged! { ServiceKind {
     0 => Packet, 1 => ScopeState, 2 => Pending, 3 => Cleanup, 4 => StableKey,
     5 => FailureState, 6 => ExitState, 7 => Closed, 8 => DestroyBorrow, 9 => Deps,
-    10 => Frame, 11 => CacheState, 12 => TaskState, 13 => Receipt,
+    10 => Frame, 11 => CacheState, 12 => TaskState, 13 => Receipt, 14 => UniqueCache,
 } }
 tagged! { ProducedType { 0 => Value(ty: Type), 1 => Service(kind: ServiceKind) } }
 tagged! { ExitKind { 0 => Return, 1 => Last, 2 => Next, 3 => Fallthrough } }
@@ -545,6 +545,10 @@ impl Wire for EntryAbi {
                 w.number(3);
                 layout.put(w);
             }
+            Self::AsyncDefer { layout } => {
+                w.number(4);
+                layout.put(w);
+            }
         }
     }
     fn get(r: &mut Reader<'_>) -> Result<Self, Error> {
@@ -553,6 +557,7 @@ impl Wire for EntryAbi {
             1 => Ok(Self::Owned),
             2 => Ok(Self::Defer { labels: Vec::get(r)? }),
             3 => Ok(Self::AsyncBody { layout: u32::get(r)? }),
+            4 => Ok(Self::AsyncDefer { layout: u32::get(r)? }),
             _ => Err(r.fail("unknown entry ABI")),
         }
     }

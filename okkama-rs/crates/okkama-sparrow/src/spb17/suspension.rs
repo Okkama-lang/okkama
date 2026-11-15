@@ -51,8 +51,21 @@ fn frame_operation(f: &Function, pc: usize, op: Opcode) -> Option<(u32, Vec<Loca
     }
 }
 
-fn suspending(f: &Function, pc: usize) -> bool {
-    matches!(f.code.get(pc), Some(Instruction::Champ { op, .. }) if op.suspends())
+fn suspending(p: &Program, f: &Function, pc: usize) -> bool {
+    f.code.get(pc).is_some_and(|instruction| suspends(p, instruction))
+}
+
+/// A suspension site: an S-class operation, or `invoke.defer` of an async defer entry, which waits for its
+/// shielded child (draft 3 §§11, 14.4: ID 29 is S for `AsyncDefer`).
+pub(crate) fn suspends(p: &Program, instruction: &Instruction) -> bool {
+    match instruction {
+        Instruction::Champ { op: Opcode::InvokeDefer, arguments, .. } => arguments.iter().any(|argument| {
+            matches!(argument, Argument::Entry(id)
+                if matches!(p.functions.get(*id as usize).map(|f| &f.entry_abi), Some(EntryAbi::AsyncDefer { .. })))
+        }),
+        Instruction::Champ { op, .. } => op.suspends(),
+        _ => false,
+    }
 }
 
 fn kind(f: &Function, location: Location) -> Option<ServiceKind> {
@@ -71,7 +84,7 @@ pub(crate) fn fixed_root(p: &Program, function: u32) -> bool {
 pub(crate) fn check_layouts(p: &Program) -> Check {
     let mut owners = vec![Vec::new(); p.tables.frames.len()];
     for (index, f) in p.functions.iter().enumerate() {
-        if let EntryAbi::AsyncBody { layout } = f.entry_abi {
+        if let EntryAbi::AsyncBody { layout } | EntryAbi::AsyncDefer { layout } = f.entry_abi {
             let owner = owners.get_mut(layout as usize).ok_or_else(|| error("frame layout index out of range"))?;
             owner.push(index as u32);
         }
@@ -106,6 +119,10 @@ pub(crate) fn check_layouts(p: &Program) -> Check {
                 require_index(&layout.slots, slot)?;
                 enforce(slots.insert(slot), ROOTS_SUSPEND, "one frame slot holds two values of a suspension")?;
             }
+            // A take capability waits in the frame only as an operand of its own take (draft 2 §7.3).
+            enforce(continuation.saved.iter().all(|&slot| {
+                layout.slots[slot as usize].ty != ProducedType::Service(ServiceKind::UniqueCache)
+            }), take::TAKE_CAPABILITY, "a take capability crosses a suspension other than its take")?;
         }
         let inputs = layout.saved_types(0).ok_or_else(|| error("invalid start slots"))?;
         if fixed_root(p, owners[0]) {
@@ -130,7 +147,7 @@ fn require_index<T>(items: &[T], index: u32) -> Check {
 /// verify_function(), before anything that returns early: the entry shape of async bodies, and no frame
 /// token anywhere else.
 pub(crate) fn check_entry(f: &Function) -> Check {
-    let asynchronous = matches!(f.entry_abi, EntryAbi::AsyncBody { .. });
+    let asynchronous = f.entry_abi.asynchronous();
     if !asynchronous {
         return enforce(!f.services.contains(&ServiceKind::Frame), ASYNC_ENTRY,
             "a frame token outside an async body");
@@ -144,7 +161,9 @@ pub(crate) fn check_entry(f: &Function) -> Check {
 /// verify_function(), after SSA and outcome checks: the exit protocol, the brackets and the resume table.
 pub(crate) fn check_structure(p: &Program, f: &Function) -> Check {
     let Some(layout) = p.frame_layout(f) else {
-        return Ok(());
+        // An async defer waits for its child, so only an async body runs it.
+        return enforce(!f.code.iter().any(|instruction| suspends(p, instruction)), ASYNC_ENTRY,
+            "an async defer entry runs only in an async body");
     };
     let starts = f.blocks.iter().map(|block| block.pc as usize).collect::<BTreeSet<_>>();
     let mut incoming = BTreeMap::<usize, usize>::new();
@@ -176,10 +195,10 @@ pub(crate) fn check_structure(p: &Program, f: &Function) -> Check {
         if *op == Opcode::FrameSave {
             let continuation = continuation_of(arguments).unwrap_or(0);
             let site = layout.continuations.get(continuation as usize).and_then(|continuation| continuation.site);
-            enforce(site == Some(pc as u32 + 1) && suspending(f, pc + 1), SUSPEND_BRACKET,
+            enforce(site == Some(pc as u32 + 1) && suspending(p, f, pc + 1), SUSPEND_BRACKET,
                 "frame.save brackets exactly the suspending site of its continuation")?;
         }
-        if op.suspends() {
+        if suspends(p, instruction) {
             let save = (pc > 0 && !starts.contains(&pc)).then(|| frame_operation(f, pc - 1, Opcode::FrameSave))
                 .flatten();
             let Some((continuation, _, outputs)) = save else {
@@ -220,7 +239,7 @@ pub(crate) fn check_structure(p: &Program, f: &Function) -> Check {
     }
     for continuation in &layout.continuations[1..] {
         let site = continuation.site.unwrap_or(u32::MAX) as usize;
-        enforce(suspending(f, site), SUSPEND_BRACKET, "a continuation's site is not a suspending operation")?;
+        enforce(suspending(p, f, site), SUSPEND_BRACKET, "a continuation's site is not a suspending operation")?;
     }
     Ok(())
 }

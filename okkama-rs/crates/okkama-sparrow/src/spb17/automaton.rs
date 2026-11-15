@@ -27,7 +27,16 @@ struct Cleanup {
     plans: u32,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PendingType { value: Option<Type>, kind: ExitKind }
+struct PendingType { value: Option<Type>, kind: ExitKind, rehome: Option<Rehome> }
+/// The cache duties a pending reserve carries since `cache.rehome` (C-4): the scope that owned them, the
+/// destination the rehome named, and whether the owner's close has taken the reserve yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Rehome { owner: u32, target: ExitDestination, closed: bool }
+
+/// A Future escapes its owner S only through S's exit: `cache.rehome` puts S's cache duty into the pending
+/// reserve of that exit, the next close to take the reserve is S's, and the exit commits at the destination the
+/// rehome named (C-4 and Claude's ruling of 2026-11-15 on #601 R1).
+pub(crate) const REHOME: &str = "SPB_REHOME";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Fact {
     Cleanup(Cleanup), Step(u32, u32), Captured(u32, u32), Failure(u32), Exit(u32, Option<PendingType>),
@@ -145,9 +154,35 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                     let kind = arguments.iter().find_map(|arg| match arg {
                         Argument::Kind(kind) => Some(*kind), _ => None,
                     }).ok_or_else(|| error("missing exit kind"))?;
-                    let mut facts = vec![Some(Fact::Pending(PendingType { value, kind }))];
+                    if *op == ExitReplace {
+                        // Which reserve the rehomed duties would join is not decided for a replaced exit.
+                        enforce(!matches!(operands[0], Some(Fact::Pending(PendingType { rehome: Some(_), .. }))),
+                            REHOME, "exit.replace of a reserve that holds rehomed cache duties")?;
+                    }
+                    let mut facts = vec![Some(Fact::Pending(PendingType { value, kind, rehome: None }))];
                     if *op == ExitReplace { facts.push(None); }
                     facts
+                }
+                CacheRehome => {
+                    let Some(Fact::Pending(mut payload)) = operands[0] else {
+                        return Err(violation(REHOME, "cache.rehome outside an exit's preparation"));
+                    };
+                    let creation = locations.get(1).and_then(|duty| origins.get(duty)).copied().flatten()
+                        .map(|pc| &f.code[pc as usize]);
+                    let Some(Instruction::Champ { op: FutureNew, arguments: created, .. }) = creation else {
+                        return Err(violation(REHOME, "a rehomed duty has no single fut.new"));
+                    };
+                    let owner = created.iter().find_map(|arg| match arg { Argument::Scope(id) => Some(*id), _ => None })
+                        .ok_or_else(|| error("fut.new has no owner scope"))?;
+                    let target = arguments.iter().find_map(|arg| match arg {
+                        Argument::Destination(destination) => Some(*destination),
+                        _ => None,
+                    }).ok_or_else(|| error("cache.rehome has no target"))?;
+                    let rehome = Rehome { owner, target, closed: false };
+                    enforce(payload.rehome.is_none_or(|previous| previous == rehome), REHOME,
+                        "one reserve takes the duties of one owner, for one destination")?;
+                    payload.rehome = Some(rehome);
+                    vec![Some(Fact::Pending(payload))]
                 }
                 ExitExtend => vec![operands[0]],
                 ExitCommit => {
@@ -159,6 +194,15 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                         && (payload.kind != ExitKind::Return || payload.value == f.results.first().copied()),
                         if payload.kind == ExitKind::Return { "PENDING_RETURN_TYPE" } else { "PENDING_COMMIT_TYPE" },
                         "commit result differs from recorded pending value")?;
+                    if let Some(rehome) = payload.rehome {
+                        enforce(rehome.closed, REHOME, "rehomed duties commit without their owner's close")?;
+                        let destination = arguments.iter().find_map(|arg| match arg {
+                            Argument::Destination(destination) => Some(*destination),
+                            _ => None,
+                        });
+                        enforce(destination == Some(rehome.target), REHOME,
+                            "a rehome names the destination of the exit that carries it")?;
+                    }
                     vec![]
                 }
                 CleanupBegin => {
@@ -174,9 +218,16 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                         .collect::<Result<Vec<_>, _>>()?;
                     enforce(actual == tail, "CLOSE_TAIL", "close tail must match reserve/active_failure")?;
                     let payload = if contract.reserve {
-                        let Some(Fact::Pending(payload)) = operands[1] else {
+                        let Some(Fact::Pending(mut payload)) = operands[1] else {
                             return Err(violation("PENDING_COMMIT_TYPE", "close has no typed pending"));
                         };
+                        if let Some(rehome) = payload.rehome.as_mut().filter(|rehome| !rehome.closed) {
+                            let closing = p.tables.boundaries.get(contract.boundary as usize)
+                                .map(|boundary| boundary.scope);
+                            enforce(closing == Some(rehome.owner), REHOME,
+                                "rehomed duties leave through the exit of the scope that owns them")?;
+                            rehome.closed = true;
+                        }
                         Some(payload)
                     } else { None };
                     require(arguments.contains(&Argument::Envelope(contract.envelope))

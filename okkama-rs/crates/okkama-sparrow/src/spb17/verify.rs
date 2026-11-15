@@ -732,8 +732,11 @@ fn check_proofs(p: &Program, f: &Function) -> Check {
         locations(&dependency.obligations)?;
     }
     for registration in &f.proofs.registrations {
-        let EntryAbi::Defer { labels } = &at(&p.functions, registration.entry)?.entry_abi else {
-            return Err(error("registration requires defer entry"));
+        let labels: &[DeferLabel] = match &at(&p.functions, registration.entry)?.entry_abi {
+            EntryAbi::Defer { labels } => labels,
+            // An async defer entry has no replacement labels (C-6).
+            EntryAbi::AsyncDefer { .. } => &[],
+            _ => return Err(error("registration requires defer entry")),
         };
         let mut seen = BTreeSet::new();
         for label in &registration.labels {
@@ -837,7 +840,7 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
         }
     }
     if op.frame_bound() {
-        enforce(matches!(f.entry_abi, EntryAbi::AsyncBody { .. }), suspension::ASYNC_ENTRY,
+        enforce(f.entry_abi.asynchronous(), suspension::ASYNC_ENTRY,
             &format!("{} belongs to async bodies only", op.name()))?;
     }
     if matches!(op, Opcode::ScopeTransfer | Opcode::OwnStage) {
@@ -1090,7 +1093,7 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             let entry = args.iter().find_map(|arg| match arg { Argument::Entry(id) => Some(*id), _ => None })
                 .ok_or_else(|| error("fut.new requires an entry"))?;
             let callee = at(&p.functions, entry)?;
-            let layout = p.frame_layout(callee)
+            let layout = p.frame_layout(callee).filter(|_| matches!(callee.entry_abi, EntryAbi::AsyncBody { .. }))
                 .ok_or_else(|| violation(suspension::ASYNC_ENTRY, "fut.new must name an async body"))?;
             let start = layout.saved_types(0).ok_or_else(|| error("async body without a start continuation"))?;
             // A fixed root starts without a packet: only the root driver starts it (#667).
@@ -1129,6 +1132,25 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
                     .ok_or_else(|| violation(FUTURE_TYPES, "a Future type names no future_results entry"))?;
                 ctx.may_fail = true;
             }
+        }
+        AwaitTake | UniqueCacheProof => {
+            let Some(Type::Future(index)) = locations.first().and_then(|&location| match loc_type(f, location) {
+                Ok(ProducedType::Value(ty)) => Some(ty),
+                _ => None,
+            }) else {
+                return Err(violation(FUTURE_TYPES, format!("{} needs a Future", op.name())));
+            };
+            let outcome = *p.tables.future_results.get(index as usize)
+                .ok_or_else(|| violation(FUTURE_TYPES, "a Future type names no future_results entry"))?;
+            if op == AwaitTake {
+                input(1, UniqueCache)?;
+                ctx.value = outcome;
+                ctx.may_fail = true;
+            }
+        }
+        CacheRehome => {
+            input(0, Pending)?;
+            input(1, CacheState)?;
         }
         FuturePublish => {
             input(0, Frame)?;
@@ -1222,12 +1244,16 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
                 require(at(&f.proofs.registrations, map)?.entry == entry, "defer registration/entry mismatch")?;
             }
             let abi = &at(&p.functions, entry)?.entry_abi;
-            require(matches!((op, abi), (InvokeCallOwn, EntryAbi::Owned) | (InvokeDefer, EntryAbi::Defer { .. })),
-                "invoke entry ABI mismatch")?;
+            require(matches!((op, abi), (InvokeCallOwn, EntryAbi::Owned)
+                | (InvokeDefer, EntryAbi::Defer { .. } | EntryAbi::AsyncDefer { .. })), "invoke entry ABI mismatch")?;
             let callee = at(&p.functions, entry)?;
-            let language = callee.params.iter().map(|&location| loc_type(callee, location))
-                .collect::<Result<Vec<_>, _>>()?.into_iter()
-                .filter(|ty| matches!(ty, ProducedType::Value(_))).collect::<Vec<_>>();
+            // An async defer entry takes its frame; its captures and its packet arrive through its start (C-2).
+            let inputs = match p.frame_layout(callee) {
+                Some(layout) => layout.saved_types(0).ok_or_else(|| error("async defer entry without a start"))?,
+                None => callee.params.iter().map(|&location| loc_type(callee, location))
+                    .collect::<Result<Vec<_>, _>>()?,
+            };
+            let language = inputs.iter().copied().filter(|ty| matches!(ty, ProducedType::Value(_))).collect::<Vec<_>>();
             require(locations.len() > language.len(), "owning call requires input packet")?;
             for (&location, expected) in locations.iter().zip(&language) {
                 require(loc_type(f, location)? == *expected, "owning call language argument type mismatch")?;
@@ -1236,9 +1262,8 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             for &location in &locations[language.len() + 1..] {
                 require(loc_type(f, location)? == ProducedType::Service(Deps), "expected proof-only call deps")?;
             }
-            require(callee.params.iter().filter(|&&location| {
-                loc_type(callee, location) == Ok(ProducedType::Service(Packet))
-            }).count() == 1, "owning entry requires exactly one input packet")?;
+            require(inputs.iter().filter(|&&ty| ty == ProducedType::Service(Packet)).count() == 1,
+                "owning entry requires exactly one input packet")?;
             if op == InvokeCallOwn {
                 require(flags.len() == 1, "owned call requires explicit cleanup mode")?;
             }
@@ -1364,7 +1389,11 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         BuilderRange => shape == "?llll",
         BuilderFinish | BuilderAbandon | Lookup => shape == "ll",
         FutureNew => shape.len() >= 5 && shape.starts_with("fsr") && shape[3..].chars().all(|ch| ch == 'l'),
-        Await | FutureCancel | FutureDone | FutureCancelled | CleanupDeliverCancel => shape == "l",
+        Await | FutureCancel | FutureDone | FutureCancelled | CleanupDeliverCancel | UniqueCacheProof => shape == "l",
+        // The Future, its take capability and the awaiting scope of the temporary boundary (C5).
+        AwaitTake => shape == "lls",
+        // The exit's destination, the pending reserve and the cache duty (C-4, token form).
+        CacheRehome => shape == "xll",
         FuturePublish => shape.len() > 2 && shape.starts_with("l?") && shape[2..].chars().all(|ch| ch == 'l'),
         FrameSave => shape.starts_with("lc") && shape[2..].chars().all(|ch| ch == 'l'),
         FrameResume => shape == "lc",
@@ -1803,7 +1832,7 @@ fn verify_function(p: &Program, f: &Function) -> Check {
                 Instruction::Raise(value) => {
                     require(at(&f.registers, *value)? == &Type::Failure, "raise needs failure")?;
                 }
-                Instruction::Ret(values) if matches!(f.entry_abi, EntryAbi::AsyncBody { .. }) => {
+                Instruction::Ret(values) if f.entry_abi.asynchronous() => {
                     enforce(values.is_empty(), suspension::ASYNC_ENTRY,
                         "an async body publishes instead of returning")?;
                 }
@@ -2125,8 +2154,9 @@ pub(super) enum Carry {
 pub(super) fn exit_carry(op: Opcode, tag: Tag) -> Carry {
     use Opcode::*;
     match (op, tag) {
+        // A rehome puts a cache duty into the reserve; the reserve continues the same exit.
         (ExitExtend | CleanupBegin | CleanupSettle | CleanupPlan | CleanupFailure | DestroyDirect
-            | CleanupDestroy, Tag::Normal) => Carry::Slot(0),
+            | CleanupDestroy | CacheRehome, Tag::Normal) => Carry::Slot(0),
         (CleanupNext, Tag::Selected | Tag::Done) => Carry::Slot(0),
         (CleanupFinish, Tag::Normal) => Carry::Slot(2),
         (ExitDispatch, Tag::Pending) => Carry::Slot(1),

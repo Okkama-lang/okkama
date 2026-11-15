@@ -16,6 +16,10 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
     let machine = runtime.champ.machine.as_ref().expect("Champ program");
     let program = machine.source.clone();
     let source = &program.functions[index];
+    // An async defer entry runs as a shielded child of its caller (C-6), with the runtime of #601 R5.
+    if matches!(source.entry_abi, s::EntryAbi::AsyncDefer { .. }) {
+        return Err(Error("Champ async defer entries run with the async resources runtime (#601 R5)".into()));
+    }
     let frame = Frame::new(source)?;
     // An async body takes the context and its frame (draft 3 §13); owning entries take CallOwn.
     let asynchronous = matches!(source.entry_abi, s::EntryAbi::AsyncBody { .. });
@@ -1026,6 +1030,15 @@ impl Emit<'_, '_> {
             }
             O::CleanupSettle if locations.len() > 1 => {
                 return self.future_operation(op, arguments, &locations, flow);
+            }
+            // The temporary take, its proof and the rehome (#601 R4) have no helpers before the runtime of #601 R5.
+            O::InvokeDefer if arguments.iter().filter_map(entry).any(|target| {
+                matches!(self.program.functions[target as usize].entry_abi, s::EntryAbi::AsyncDefer { .. })
+            }) => {
+                return Err(Error("Champ invoke.defer of an async defer entry runs with #601 R5".into()));
+            }
+            O::AwaitTake | O::UniqueCacheProof | O::CacheRehome => {
+                return Err(Error(format!("Champ {} runs with the async resources runtime (#601 R5)", op.name())));
             }
             O::CleanupSettle => {
                 helper = "champ_cleanup_settle_empty";

@@ -12,6 +12,7 @@ pub use evidence::{static_selections, plain_inputs, plain_results, redundant_adm
 mod automaton;
 pub use automaton::infer_plan_reserves;
 mod suspension;
+mod take;
 
 pub use allocation::{AllocatedRoot, Allocation, Copy, CopySource, allocate, check_allocation, live_locations};
 pub use codec::{assemble, decode, disassemble, encode};
@@ -413,13 +414,17 @@ pub enum ServiceKind {
     TaskState,
     /// An await receipt (NotStarted 0, Settled 1, Withdrawn 2, ChildCancelled 3): one raw word.
     Receipt,
+    /// The take capability of one Future (OIR `unique-cache`): linear, zero words. Only `unique_cache.proof`
+    /// produces it and only `await.take` consumes it (`SPB_TAKE_CAPABILITY`).
+    UniqueCache,
 }
 
 impl ServiceKind {
     /// A linear token: consumed exactly once on every path, never copied.
     pub fn linear(self) -> bool {
         matches!(self, Self::Packet | Self::ScopeState | Self::Pending | Self::Cleanup | Self::StableKey
-            | Self::FailureState | Self::ExitState | Self::Frame | Self::CacheState | Self::TaskState | Self::Receipt)
+            | Self::FailureState | Self::ExitState | Self::Frame | Self::CacheState | Self::TaskState | Self::Receipt
+            | Self::UniqueCache)
     }
 }
 
@@ -468,6 +473,17 @@ pub enum EntryAbi {
     /// An async body (Champ draft 3 §13): it takes exactly its frame and publishes its outcome through
     /// `fut.publish`. `layout` indexes `ChampTables::frames`.
     AsyncBody { layout: u32 },
+    /// An async defer entry (`defer await`, async ABI C-6, draft 3 §11): an async body that `invoke.defer` runs as
+    /// a shielded child. Its success publication continues the caller, its failure unwinds it. It has no
+    /// replacement labels in 0.6.0 (`SPB_ASYNC_DEFER_LABELS` holds by construction).
+    AsyncDefer { layout: u32 },
+}
+
+impl EntryAbi {
+    /// An async body or an async defer entry: it takes exactly its frame and ends in `fut.publish`.
+    pub fn asynchronous(&self) -> bool {
+        matches!(self, Self::AsyncBody { .. } | Self::AsyncDefer { .. })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -948,7 +964,7 @@ pub struct ChampTables {
     pub scopes: Vec<Scope>,
     pub boundaries: Vec<Boundary>,
     pub summaries: Vec<Summary>,
-    /// D21 frame layouts, one for each async body (`EntryAbi::AsyncBody`).
+    /// D21 frame layouts, one for each async body (`EntryAbi::AsyncBody`, `EntryAbi::AsyncDefer`).
     pub frames: Vec<FrameLayout>,
     /// The outcome value of each Future type (`Type::Future`); `None` is a void Future. Entries are distinct.
     pub future_results: Vec<Option<Type>>,
@@ -991,7 +1007,9 @@ impl Program {
     /// The frame layout of an async body.
     pub fn frame_layout(&self, f: &Function) -> Option<&FrameLayout> {
         match f.entry_abi {
-            EntryAbi::AsyncBody { layout } => self.tables.frames.get(layout as usize),
+            EntryAbi::AsyncBody { layout } | EntryAbi::AsyncDefer { layout } => {
+                self.tables.frames.get(layout as usize)
+            }
             _ => None,
         }
     }
@@ -1198,6 +1216,8 @@ mod rules_tests;
 mod budget_tests;
 #[cfg(test)]
 mod async_tests;
+#[cfg(test)]
+mod async_resources_tests;
 #[cfg(test)]
 mod roles_tests;
 #[cfg(test)]

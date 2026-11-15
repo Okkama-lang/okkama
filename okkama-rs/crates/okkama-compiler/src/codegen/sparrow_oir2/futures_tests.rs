@@ -3,30 +3,32 @@
 use super::*;
 use s::{Argument as A, Location as L, Opcode as O, ProducedType as P, ServiceKind as K};
 
-/// Plain layouts of the goldens' declarations: objects without destroy and Error enums.
+/// Layouts of the goldens' declarations: plain objects, resources (a destroy, its identity after the fields, as
+/// the S3 goldens lay it out) and Error enums.
 fn layouts(module: &o::Module) -> BTreeMap<u32, ObjectLayout> {
     let mut layouts = BTreeMap::new();
     for (id, declaration) in module.declarations.iter() {
-        let (storage_fields, fields) = match &declaration.kind {
-            o::DeclarationKind::Object { fields, destroy: None, .. } => {
+        let (storage_fields, fields, resource) = match &declaration.kind {
+            o::DeclarationKind::Object { fields, destroy, .. } => {
                 let storage = fields.iter().map(|field| translate_type(module, field.ty).unwrap()).collect::<Vec<_>>();
-                (storage, fields.len() as u32)
+                (storage, fields.len() as u32, destroy.is_some())
             }
-            o::DeclarationKind::Enum { .. } => (vec![s::Type::Int], 0),
+            o::DeclarationKind::Enum { .. } => (vec![s::Type::Int], 0, false),
             kind => panic!("{}: no test layout for {kind:?}", declaration.name),
         };
         let trace_layout = storage_fields.iter().enumerate()
-            .filter_map(|(index, ty): (usize, &s::Type)| ty.traced().then_some(index as u32)).collect();
+            .filter_map(|(index, ty): (usize, &s::Type)| ty.traced().then_some(index as u32)).collect::<Vec<_>>();
+        let words = 1 + storage_fields.len() as u32;
         layouts.insert(id.as_u32(), ObjectLayout {
             runtime: s::ObjectRuntimeLayout {
-                allocation_words: (1 + storage_fields.len() as u32).max(2),
-                identity_offset: None,
-                has_destroy: false,
-                may_reach_resource: false,
+                allocation_words: (words + 4 * u32::from(resource)).max(2),
+                identity_offset: resource.then_some(8 * words),
+                has_destroy: resource,
+                may_reach_resource: resource,
                 may_async_destroy: false,
                 storage_fields,
+                selection_layout: if resource { trace_layout.clone() } else { vec![] },
                 trace_layout,
-                selection_layout: vec![],
             },
             source_fields: (0..fields).collect(),
         });
@@ -537,4 +539,145 @@ fn v7_low_goldens_compile_and_load() {
 #[ignore = "#689"]
 fn v7_descriptor_start_golden_compiles_and_loads() {
     loads("coro-start-descriptors");
+}
+
+
+// --- #601 R4: resources ------------------------------------------------------------------------------------------
+
+/// The R2 Low goldens with resources (okkama-oir, `verify_low` in full): a resource held across an await, a close
+/// that suspends with resources, the temporary take whose proof coro rechecked, and `defer await` with a body
+/// failure and with a reserve (C-6).
+#[test]
+fn r4_low_goldens_with_resources_compile_and_load() {
+    for name in ["r2-resource-across-await", "r2-resource-suspending-close", "r2-take-proof-recheck",
+        "r2-defer-await-body-failure", "r2-defer-await-reserve"]
+    {
+        loads(name);
+    }
+}
+
+/// OIR-2 §10.3 after coro: the proof names the Future, the take consumes the capability with the awaiting scope
+/// as its temporary boundary, and the capability waits in the frame only as the take's operand (draft 3 §4.2).
+#[test]
+fn r4_take_consumes_the_proof_of_its_future_at_a_temporary_boundary() {
+    let p = translated(&golden("r2-take-proof-recheck"));
+    let f = function(&p, "f");
+    let [(proof, proof_arguments, proof_flow)] = sites(f, O::UniqueCacheProof)[..] else { panic!("one proof") };
+    let [(take, take_arguments, take_flow)] = sites(f, O::AwaitTake)[..] else { panic!("one take") };
+    let capability = outputs(proof_flow)[0];
+    assert_eq!(ty(f, capability), P::Service(K::UniqueCache));
+    assert_eq!(take_arguments[0], proof_arguments[0], "the take awaits the proved Future");
+    assert_eq!(take_arguments[1], A::Location(capability));
+    assert_eq!(take_arguments[2], A::Scope(1), "boundary temporary(awaiting=S1)");
+    // The golden's only Future type is future<void>.
+    assert_eq!(types(f, take_arguments), [P::Value(s::Type::Future(0)), P::Service(K::UniqueCache)]);
+    // The bracket: proof, save, take; the outcomes are the void value's packet and deps, and the unwind triple.
+    assert_eq!(take, proof + 2);
+    assert!(matches!(f.code[proof + 1], s::Instruction::Champ { op: O::FrameSave, .. }));
+    let s::Flow::Outcomes(outcomes) = take_flow else { panic!("the take is a terminator") };
+    let tags = outcomes.iter().map(|outcome| outcome.tag).collect::<Vec<_>>();
+    assert_eq!(tags, [s::Tag::Normal, s::Tag::Unwind]);
+    let layout = &p.tables.frames[1];
+    let site = layout.continuations.iter().find(|continuation| continuation.site == Some(take as u32)).unwrap();
+    assert_eq!(site.operands, [1, 6], "the Future and its capability are the take's operands");
+    assert_eq!(layout.slots[6], service(K::UniqueCache));
+    assert!(layout.continuations.iter().all(|continuation| !continuation.saved.contains(&6)));
+}
+
+/// Coro keeps the facts of a resumed value: the Future reloaded after the first await still names, in its deps
+/// key, the register its continuation saved. The dependency of SPB 17 names the reloaded value instead, so the
+/// saved register is dead after its save, as B9.5 has it.
+#[test]
+fn r4_facts_of_a_resumed_value_name_the_reloaded_value() {
+    let p = translated(&golden("r2-take-proof-recheck"));
+    let f = function(&p, "f");
+    let [(_, _, created)] = sites(f, O::FutureNew)[..1] else { panic!("fut.new") };
+    let saved = outputs(created)[0];
+    let reloaded = sites(f, O::FrameResume).into_iter()
+        .filter(|(_, arguments, _)| arguments[1] == A::Continuation(1))
+        .map(|(_, _, flow)| outputs(flow)[1]).collect::<Vec<_>>();
+    assert_eq!(reloaded.len(), 2, "the normal and the unwind resume of the first await");
+    for value in reloaded {
+        assert!(!f.proofs.dependencies.iter().any(|dependency| dependency.value == value
+            && dependency.obligations.contains(&saved)), "{value:?} keeps the saved {saved:?} alive");
+    }
+}
+
+#[test]
+fn r4_bound_take_waits_for_c5() {
+    let mut module = golden("r2-take-proof-recheck");
+    edit(&mut module, "f", |function| {
+        let body = function.body.as_mut().unwrap();
+        for (_, block) in body.blocks.iter_mut() {
+            if let o::TermKind::InvokeOwn { op, .. } = &mut block.term.kind
+                && let o::Operation::Async(o::AsyncOp::AwaitTake { boundary, .. }) = op.as_mut()
+            {
+                *boundary = o::TakeBoundary::Existing { owner: o::ScopeId::from_u32(1) };
+            }
+        }
+    });
+    rejected(&module, "bound await.take (C5)");
+}
+
+
+/// C-4, token form: the cache duty joins the pending reserve before the close, which no longer settles it. The
+/// fixture is the take golden with the second Future's duty rehomed on the successful return. OIR has only scope
+/// targets until #601 R1 adds `target caller`, so the translated target is S1 while the return commits to the
+/// caller: the load gate refuses exactly that, and accepts the same program with the caller as target.
+#[test]
+fn r4_rehome_puts_the_cache_duty_into_the_reserve_of_its_exit() {
+    let module = o::text::parse(include_str!("fixtures/rehome-token.low.oir")).unwrap_or_else(|e| panic!("{e:?}"));
+    let layouts = layouts(&module);
+    let mut program = with_composites(&module, || generate_with_allocation(&module, &layouts)).unwrap().program;
+    let f = function(&program, "f");
+    let [(pc, arguments, flow)] = sites(f, O::CacheRehome)[..] else { panic!("one rehome") };
+    assert_eq!(arguments[0], A::Destination(s::ExitDestination::Scope(1)));
+    assert_eq!(types(f, arguments), [P::Service(K::Pending), P::Service(K::CacheState)]);
+    let reserve = outputs(flow)[0];
+    let s::Instruction::Champ { op: O::CleanupBegin, arguments: begin, .. } = &f.code[pc + 1] else {
+        panic!("the rehome prepares the close")
+    };
+    assert_eq!(begin[1], A::Location(reserve), "the close takes the reserve that holds the duty");
+    let objects = with_composites(&module, || objects(&module, &layouts)).unwrap();
+    let contracts = s::p1::P1Contracts::new(&objects).unwrap();
+    let failure = s::verify_load(&program, &contracts).unwrap_err();
+    assert_eq!(failure.rule, "SPB_REHOME", "{failure}");
+    let index = program.functions.iter().position(|function| function.symbol == "f").unwrap();
+    let s::Instruction::Champ { arguments, .. } = &mut program.functions[index].code[pc] else { unreachable!() };
+    arguments[0] = A::Destination(s::ExitDestination::Caller);
+    s::verify_load(&program, &contracts).unwrap();
+}
+
+/// C-6: `defer await closer()` in R2's goldens. The async defer entry takes its frame and publishes, and
+/// `invoke.defer` of it is a suspension site of its caller's layout.
+#[test]
+fn r4_async_defer_entry_is_an_async_body_that_its_caller_awaits() {
+    let p = translated(&golden("r2-defer-await-body-failure"));
+    let closer = function(&p, "closer");
+    assert!(matches!(closer.entry_abi, s::EntryAbi::AsyncDefer { .. }));
+    assert_eq!(types(closer, &closer.params.iter().copied().map(A::Location).collect::<Vec<_>>()),
+        [P::Service(K::Frame)]);
+    let f = function(&p, "f");
+    let s::EntryAbi::AsyncBody { layout } = f.entry_abi else { panic!("f is an async body") };
+    let defers = sites(f, O::InvokeDefer);
+    assert_eq!(defers.len(), 2);
+    for (pc, arguments, _) in defers {
+        assert_eq!(arguments[0], A::Entry(index(&p, "closer")));
+        assert!(p.tables.frames[layout as usize].continuations.iter().any(|k| k.site == Some(pc as u32)),
+            "invoke.defer at {pc} is a suspension site");
+        assert!(matches!(f.code[pc - 1], s::Instruction::Champ { op: O::FrameSave, .. }));
+    }
+}
+
+#[test]
+fn r4_async_defer_entry_never_replaces() {
+    let mut module = golden("r2-defer-await-body-failure");
+    edit(&mut module, "closer", |function| {
+        for attr in &mut function.attrs {
+            if let o::FunctionAttr::DeferEntry { replacements } = attr {
+                replacements.push(o::DeferLabel { label: "early".into(), result: None });
+            }
+        }
+    });
+    rejected(&module, "an async defer entry never replaces (C-6)");
 }
