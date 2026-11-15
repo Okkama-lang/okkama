@@ -11,6 +11,16 @@ fn mask(effects: &[o::FailureKind]) -> Result<u32, GenerateError> {
     }))
 }
 
+/// The D18 envelope of a close: its failure kinds, and `ENVELOPE_CANCEL` when the close delivers a deferred
+/// cancellation (`cancel=true`, the final exit of an async body). No close suspends in 0.6.0 (D20: no settle
+/// waits); a suspending close step is the async destroy and async defer slices.
+pub(super) fn envelope(effects: &o::ScopeEffectEnvelope) -> Result<u32, GenerateError> {
+    if effects.suspends {
+        return Err(later("suspending close (async destroy or async defer)"));
+    }
+    Ok(mask(&effects.failures)? | if effects.cancel { s::ENVELOPE_CANCEL } else { 0 })
+}
+
 pub(super) fn entry_contract(module: &o::Module, f: &o::Function) -> Result<s::EntryContract, GenerateError> {
     let summary = f.summary.map(|id| module.summaries.get(id)).transpose()?;
     let mut retained = summary.into_iter().flat_map(|summary| &summary.results)
@@ -183,17 +193,24 @@ impl Emitter<'_> {
                 o::CleanupSource::Scope(scope) => scope.as_u32(),
                 o::CleanupSource::Packet(boundary) => self.boundary(boundary)?,
             };
-            self.result.proofs.envelopes.push(s::Envelope { failures: mask(&close.effects.failures)? });
+            self.result.proofs.envelopes.push(s::Envelope { failures: envelope(&close.effects)? });
             self.result.proofs.closes.push(s::CloseContract {
                 begin_pc: instructions[&begin], boundary, reserve: close.reserve,
                 active_failure: close.active_failure, envelope: id.as_u32(),
             });
         }
         for (_, schedule) in self.body.cleanup.schedules.iter() {
-            if !schedule.holders.is_empty() || schedule.dictionary.is_some() || schedule.protocol.is_some() {
-                return Err(error("nonempty D16 is outside P1"));
+            // A static D16 inventory of duty tokens under the Services protocol; the dynamic inventory is D25.
+            if schedule.dictionary.is_some() {
+                return Err(later("dynamic service inventory (D25)"));
             }
-            self.result.proofs.schedules.push(s::Schedule { services: vec![] });
+            match schedule.protocol {
+                Some(protocol) => self.services(protocol)?,
+                None if schedule.holders.is_empty() => {}
+                None => return Err(error("a nonempty service schedule needs its protocol")),
+            }
+            let services = schedule.holders.iter().map(|&duty| self.loc(duty)).collect::<Result<_, _>>()?;
+            self.result.proofs.schedules.push(s::Schedule { services });
         }
         let site = |site: &o::HighOperationSite| match site {
             o::HighOperationSite::Instruction(id) => instructions[id],
@@ -261,8 +278,9 @@ impl Emitter<'_> {
             });
         }
         for (_, root) in self.body.cleanup.roots.iter() {
-            if root.through_suspend {
-                return Err(error("suspension roots are outside P1"));
+            // The roots of a suspension site are the roots before its operation; SPB_ROOTS_SUSPEND checks them.
+            if root.through_suspend && !self.suspension_site(&root.boundary) {
+                return Err(error("through-suspend roots outside a suspension site"));
             }
             let (pc, after) = match root.boundary {
                 o::RootBoundary::BeforeInstruction(id) => (instructions[&id], false),
@@ -316,6 +334,13 @@ impl Emitter<'_> {
             SettleEmpty { cleanup, schedule } => {
                 (O::CleanupSettle, vec![loc(*cleanup)?, A::Schedule(schedule.as_u32())])
             }
+            // One duty of the close's schedule (D16, D24.2); in 0.6.0 no settle waits, so no step suspends.
+            Settle { cleanup, holder, protocol } => {
+                self.services(*protocol)?;
+                let schedule = self.schedule_of(*cleanup, *holder)?;
+                (O::CleanupSettle, vec![loc(*cleanup)?, A::Schedule(schedule), loc(*holder)?])
+            }
+            DeliverCancel { cleanup } => (O::CleanupDeliverCancel, vec![loc(*cleanup)?]),
             Plan { cleanup, plan } => (O::CleanupPlan, vec![loc(*cleanup)?, A::Plan(plan.as_u32())]),
             Destroy { cleanup, key } => (O::CleanupDestroy, vec![loc(*cleanup)?, loc(*key)?]),
             DestroyDirect { cleanup, identity, descriptor, destroy } => {
@@ -331,7 +356,10 @@ impl Emitter<'_> {
             Finish { cleanup } => (O::CleanupFinish, vec![loc(*cleanup)?]),
             _ => return Err(error("unsupported P1 cleanup/service operation")),
         };
-        op.cleanup_abi().ok_or_else(|| error("cleanup operation has no shared runtime ABI"))?;
+        // The async helpers (Champ draft 3 §14.4) carry their class instead; they enter the helper table with V8.
+        if op.cleanup_abi().is_none() && op.helper_class().is_none() {
+            return Err(error("cleanup operation has no shared runtime ABI"));
+        }
         Ok(s::Instruction::Champ { op, arguments, flow: s::Flow::Next(results.iter()
             .map(|&value| self.loc(value)).collect::<Result<_, _>>()?) })
     }
@@ -401,7 +429,8 @@ impl Emitter<'_> {
                 let contract = self.body.cleanup.closes.get(*close)?;
                 context.reserve = contract.reserve;
                 context.active_failure = contract.active_failure;
-                context.may_fail = !contract.effects.failures.is_empty();
+                // A delivered deferred cancellation fails the close with Cancelled (D18).
+                context.may_fail = envelope(&contract.effects)? != 0;
                 let args = vec![loc(*closed)?, loc(*failure)?, loc(*exit)?, A::Flag(context.reserve),
                     A::Flag(context.active_failure), A::Flag(context.may_fail)];
                 let edges = [(s::Tag::Success, o::Outcome::ExitSuccess, success),
