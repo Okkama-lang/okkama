@@ -8,6 +8,21 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **`once let` keeps plain closures, plain role values and native handles on the OIR-2 path (#717).**
+  Bible §13.13: a once value must not retain a resource, and a closure or role value is allowed when it
+  cannot retain one in this program; P2.4 §4.7: a native handle has no Okkama destroy. The OIR-2
+  producer gate, own and the verifier rule B11.1 now count a function type by the closures the module
+  creates (a lambda's captures, a bound action's receiver) and a role by its implementations; caps,
+  `any`, Futures, builtin capabilities and anything with destroy stay refused. A summary path may step
+  into a variant case's payload (T4), and SPB 17 treats a native handle as plain data, still not
+  comparable. `L04.once.keeps-plain-closure-and-role` runs on Champ; the two regex cases stop on #702.
+- **Low cleanup inference is linear in its chains (#687).** The inventory of a scope state indexes the
+  incoming edges once and shares the witness sequences it extends instead of copying them;
+  `L09.collections.ordered-sets` needs 1.8M low steps instead of 14.5M and now stops on #723.
+- **Full verification of large async bodies (#693).** The linearity verifier recorded a value slot once
+  per mutable access between clones; it now keeps each slot once, which takes the low verification of
+  `L08.order.lazy-branches` from 114M to 79M steps. The full verifier (the gate profile) gets a measured
+  limit of 120M steps; structural builds keep 50M.
 - **Closure-dense programs compile and load on Champ in seconds (#701).**
   The SPB 17 allocation checker kept one `BTreeSet` per frame slot, cloned
   it at every visit and rebuilt every slot on every edge; a 940-instruction

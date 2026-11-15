@@ -56,12 +56,18 @@ impl BodyLowerer<'_, '_> {
 
 /// Reject known resource graphs here as well as in the public frontend check.
 /// This is a producer gate; it does not issue the #565 ownership certificate.
+///
+/// Bible §13.13 (#491, #520): a once value must not retain a resource. A function or role value is allowed
+/// only when it cannot retain one in this program: every closure of that function type captures plain
+/// values, and every implementation of that role is plain. A native handle has no Okkama destroy (P2.4
+/// §4.7), so it is plain; an object with `destroy`, a builtin capability, a cap, `any` or a Future is not.
 pub(super) fn check(module: &ir::Module) -> Result<()> {
+    let functions = Functions::settle(module)?;
     for (_, declaration) in module.declarations.iter() {
         if let ir::DeclarationKind::Object { fields, .. } = &declaration.kind {
             for field in fields.iter().filter(|field| field.once) {
                 let mut seen = std::collections::HashSet::new();
-                if !plain(module, field.ty, &mut seen)? {
+                if !plain(module, &functions, field.ty, &mut seen)? {
                     return Err(LowerError::invalid(Default::default(),
                         "once let cannot keep a resource: its value would outlive the scope that releases it"));
                 }
@@ -71,15 +77,69 @@ pub(super) fn check(module: &ir::Module) -> Result<()> {
     Ok(())
 }
 
-fn plain(module: &ir::Module, ty: ir::TypeId, seen: &mut std::collections::HashSet<ir::TypeId>) -> Result<bool> {
+/// The function types whose closures cannot retain a resource in this module. A closure retains what it
+/// captures: a bound action its receiver, a lambda its captures. A function type is plain until one of its
+/// closures captures a value that is not plain; that can only turn types from plain to not plain, so the
+/// table settles after at most one pass per function type.
+struct Functions {
+    not_plain: std::collections::HashSet<ir::TypeId>,
+}
+
+impl Functions {
+    fn settle(module: &ir::Module) -> Result<Self> {
+        let mut origins: Vec<(ir::TypeId, Vec<ir::TypeId>)> = vec![];
+        for (_, function) in module.functions.iter() {
+            let Some(body) = &function.body else {
+                continue;
+            };
+            for (_, instruction) in body.insts.iter() {
+                let (ty, captured) = match &instruction.op {
+                    ir::Operation::Core(ir::CoreOp::FnClosure { captures, ty, .. }) => (*ty, captures.clone()),
+                    ir::Operation::Core(ir::CoreOp::FnBind { receiver, ty, .. }
+                        | ir::CoreOp::FnBindRole { receiver, ty, .. }) => (*ty, vec![*receiver]),
+                    _ => continue,
+                };
+                let types = captured.iter().map(|value| Ok(body.values.get(*value)?.ty)).collect::<Result<_>>()?;
+                origins.push((ty, types));
+            }
+        }
+        let mut functions = Self { not_plain: std::collections::HashSet::new() };
+        loop {
+            let mut changed = false;
+            for (ty, captures) in &origins {
+                if functions.not_plain.contains(ty) {
+                    continue;
+                }
+                let mut plain_captures = true;
+                for capture in captures {
+                    let mut seen = std::collections::HashSet::new();
+                    plain_captures &= plain(module, &functions, *capture, &mut seen)?;
+                }
+                if !plain_captures {
+                    functions.not_plain.insert(*ty);
+                    changed = true;
+                }
+            }
+            if !changed {
+                return Ok(functions);
+            }
+        }
+    }
+}
+
+fn plain(module: &ir::Module, functions: &Functions, ty: ir::TypeId, seen: &mut std::collections::HashSet<ir::TypeId>)
+    -> Result<bool>
+{
     if !seen.insert(ty) {
         return Ok(true);
     }
     Ok(match *module.types.get(ty)? {
         ir::Type::Int | ir::Type::Bool | ir::Type::Byte | ir::Type::Float | ir::Type::Rat
-        | ir::Type::Char | ir::Type::Str | ir::Type::Range | ir::Type::Never | ir::Type::Enum(_) => true,
-        ir::Type::Array(inner) | ir::Type::Successor(inner) => plain(module, inner, seen)?,
-        ir::Type::Map(key, value) => plain(module, key, seen)? && plain(module, value, seen)?,
+        | ir::Type::Char | ir::Type::Str | ir::Type::Range | ir::Type::Never | ir::Type::Enum(_)
+        | ir::Type::Handle(_) => true,
+        ir::Type::Fn(_) => !functions.not_plain.contains(&ty),
+        ir::Type::Array(inner) | ir::Type::Successor(inner) => plain(module, functions, inner, seen)?,
+        ir::Type::Map(key, value) => plain(module, functions, key, seen)? && plain(module, functions, value, seen)?,
         ir::Type::Object { decl, .. } => {
             let declaration = module.declarations.get(decl)?;
             let ir::DeclarationKind::Object { fields, destroy, builtin, .. } = &declaration.kind else {
@@ -87,7 +147,7 @@ fn plain(module: &ir::Module, ty: ir::TypeId, seen: &mut std::collections::HashS
             };
             let mut result = destroy.is_none() && !*builtin;
             for field in fields {
-                result &= plain(module, field.ty, seen)?;
+                result &= plain(module, functions, field.ty, seen)?;
             }
             result
         }
@@ -101,7 +161,7 @@ fn plain(module: &ir::Module, ty: ir::TypeId, seen: &mut std::collections::HashS
                     return Err(LowerError::invalid(Default::default(), "once case has no layout"));
                 };
                 for field in fields {
-                    result &= plain(module, field.ty, seen)?;
+                    result &= plain(module, functions, field.ty, seen)?;
                 }
             }
             result
@@ -116,7 +176,7 @@ fn plain(module: &ir::Module, ty: ir::TypeId, seen: &mut std::collections::HashS
                     };
                     result &= destroy.is_none() && !*builtin;
                     for field in fields {
-                        result &= plain(module, field.ty, seen)?;
+                        result &= plain(module, functions, field.ty, seen)?;
                     }
                 }
             }

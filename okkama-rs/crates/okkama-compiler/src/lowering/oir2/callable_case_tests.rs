@@ -36,9 +36,6 @@ const OPEN_CALL_CASES: [&str; 12] = [
     "L09.collections.ordered-sets",
 ];
 
-/// Open-invocation cases whose Low stops on the cleanup inference step budget (#687).
-const LOW_BUDGET_CASES: [&str; 1] = ["L09.collections.ordered-sets"];
-
 fn own(id: &str) -> Result<ir::Module, String> {
     let directory = case_directory(id);
     let source = std::fs::read_to_string(directory.join("main.ok")).unwrap();
@@ -79,23 +76,17 @@ fn oir2_c3b_open_invocation_cases_reach_own() {
     assert!(failed.is_empty(), "{failed:#?}");
 }
 
+/// Every open-invocation case reaches low within the default step budget (cleanup inventories are linear in
+/// their chains since #687; `L09.collections.ordered-sets` needed 14.5M steps before, 1.8M now).
 #[test]
 fn oir2_c3b_open_invocation_cases_reach_low() {
     let mut failed = vec![];
-    for id in OPEN_CALL_CASES.iter().filter(|id| !LOW_BUDGET_CASES.contains(id)) {
+    for id in OPEN_CALL_CASES {
         if let Err(error) = case(id, ir::verify::VerifyMode::Structural) {
             failed.push(format!("{id}: {}", error.chars().take(300).collect::<String>()));
         }
     }
     assert!(failed.is_empty(), "{failed:#?}");
-}
-
-#[test]
-#[ignore = "#687: low cleanup inventory inference exceeds the step budget"]
-fn oir2_c3b_open_invocation_cases_reach_low_within_the_step_budget() {
-    for id in LOW_BUDGET_CASES {
-        case(id, ir::verify::VerifyMode::Structural).unwrap_or_else(|error| panic!("{id}: {error}"));
-    }
 }
 
 #[test]

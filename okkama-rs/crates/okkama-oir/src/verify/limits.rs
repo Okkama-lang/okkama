@@ -11,6 +11,20 @@ pub struct VerifyLimits {
     pub steps: usize,
     pub diagnostics: usize,
 }
+/// The Full verifier's work limit in the gate profile (owner decision O3: a gate over budget raises the
+/// limit of the gate profile and never skips a module; #693). The largest measured function, `main` of
+/// L08.order.lazy-branches, needs 79.4M steps in Low (26.2M in coro): the low cleanup expansion gives it 2.3
+/// times the edges and 1.5 times the definitions of its coro form, and the relational work per edge and
+/// definition grows with the live state. 120M keeps half again as headroom.
+pub const GATE_STEPS: usize = 120_000_000;
+
+impl VerifyLimits {
+    /// The limits of the gate profile: the defaults with [`GATE_STEPS`].
+    pub fn gate() -> Self {
+        Self { steps: GATE_STEPS, ..Self::default() }
+    }
+}
+
 impl Default for VerifyLimits {
     fn default() -> Self {
         Self {

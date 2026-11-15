@@ -53,9 +53,16 @@ impl Driver<'_, '_> {
                 | CoreOp::AnyBox { packet: input, .. }) => *input = packet,
             Operation::Core(CoreOp::OnceStore { value, .. }) => {
                 let ty = self.body.values.get(*value).map_err(arena)?.ty;
-                let certificate = self.analysis.types[&ty].certificate.clone()
-                    .ok_or_else(|| flow_error("once.store requires a full-graph plain certificate"))?;
-                self.body.values.get_mut(*value).map_err(arena)?.facts = ValueFacts::Plain { certificate };
+                let facts = &self.analysis.types[&ty];
+                if !facts.once_plain {
+                    return Err(flow_error("once.store requires a value that cannot retain a resource"));
+                }
+                // A closed plain graph is certified as such. A graph that reaches a function or role value keeps
+                // its full deps (the references every such value carries); its closures and implementations
+                // retain no resource (`once_plain`).
+                if let Some(certificate) = facts.certificate.clone().filter(|_| !facts.references) {
+                    self.body.values.get_mut(*value).map_err(arena)?.facts = ValueFacts::Plain { certificate };
+                }
             }
             _ => {}
         }

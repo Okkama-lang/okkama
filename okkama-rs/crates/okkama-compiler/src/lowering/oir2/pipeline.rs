@@ -144,7 +144,9 @@ pub(super) fn compile_high_with(high: o::Module, mode: o::VerifyMode) -> Result<
     } else {
         o::verify::ExecutionMode::Production
     };
-    let verify = o::VerifyOptions { mode, execution, ..o::VerifyOptions::default() };
+    // The Full verifier is the gate profile: its work limit is the gate's (#693, owner decision O3).
+    let limits = if mode == o::VerifyMode::Full { o::verify::VerifyLimits::gate() } else { Default::default() };
+    let verify = o::VerifyOptions { mode, execution, limits, ..o::VerifyOptions::default() };
     let mut stages = Stages::start();
     let catalog = P1NativeSummaries::for_module(&high).map_err(|error| phase("contracts", error))?;
     let context = || o::VerifyContext { external_contracts: &catalog, ..o::VerifyContext::default() };

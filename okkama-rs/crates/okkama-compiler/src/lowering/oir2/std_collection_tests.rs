@@ -182,24 +182,14 @@ fn oir2_c8_l09_sources() {
                         roundtrip(&module, name);
                         eprintln!("C8 {name}: verified high");
                     }
+                    // Role-valued and closure caches over plain implementations are once data (#717). The full
+                    // verifier rejects none of these sources; on the three largest it runs out of budget (#634).
                     Err(report) => {
                         eprintln!("C8 {name}: {report:#?}");
-                        assert!(matches!(name, "collections.frequencies" | "collections.heap-and-deque"
-                            | "compare.failing-order-stops-the-sort" | "collections.ordered-sets"));
-                        assert!(report.diagnostics.iter().all(|diagnostic| {
-                            diagnostic.rule == ir::verify::RuleId::B111
-                        }));
-                        if name == "compare.failing-order-stops-the-sort" {
-                            assert_eq!(report.failure, ir::verify::VerifyFailure::Incomplete);
-                        } else {
-                            assert!(!report.diagnostics.is_empty(), "role-valued caches need the #565 plain proof");
-                        }
-                        for diagnostic in &report.diagnostics {
-                            if let ir::verify::EntityLocation::Declaration(id) = diagnostic.primary.entity {
-                                let declaration = module.declarations.get(id).unwrap();
-                                eprintln!("C8 {name}: {} in {}", diagnostic.rule.as_str(), declaration.name);
-                            }
-                        }
+                        assert!(matches!(name, "collections.frequencies" | "compare.failing-order-stops-the-sort"
+                            | "collections.ordered-sets"), "{name}");
+                        assert_eq!(report.failure, ir::verify::VerifyFailure::Incomplete, "{name}");
+                        assert!(report.diagnostics.is_empty(), "{name}");
                     }
                 }
             }
@@ -211,12 +201,113 @@ fn oir2_c8_l09_sources() {
     }
 }
 
+/// Two closures of one type, one capturing a resource: a once let of that type is refused even for the plain
+/// one, since the slot's type is what it keeps (#520, #717).
+const ONCE_SHARED_CLOSURE_TYPE: &str = "module ownership v1.0.0;
+object Res {
+    Res();
+    label() is string { \"R\"; }
+    destroy { 0; }
+}
+object Cache {
+    has value is () is string;
+    Cache(value is () is string) { self.value = value; }
+    cached() is () is string { once let kept = value; kept; }
+}
+main() is int {
+    let r = Res();
+    let plain = Cache(() is string { \"p\"; });
+    let leased = () is string { r.label(); };
+    leased();
+    plain.cached()();
+    0;
+}";
+
+/// Bible §13.13 (#491, #520, #717): a once let keeps a closure that captures plain values, a role value whose
+/// implementations are plain, and an object that holds a native handle without destroy (P2.4 §4.7).
+#[test]
+fn oir2_c8_once_keeps_plain_closures_roles_and_native_handles() {
+    let closure_and_role = "module app v1.0.0;
+role Named { name() is string; }
+object Plain does Named {
+    has label is string;
+    Plain(:label);
+    name() is string { label; }
+}
+object Registry {
+    has first is Named;
+    has pick is (string) is bool;
+    Registry(:first, :pick);
+    names() is @Named {
+        once let kept is @Named = [first];
+        kept;
+    }
+    chosen() is (string) is bool {
+        once let kept = pick;
+        kept;
+    }
+}
+main() is int {
+    let prefix = \"a\";
+    let registry = Registry(first: Plain(label: \"a\"), pick: (s is string) is bool { s == prefix; });
+    registry.names().size() + registry.chosen()(\"a\").string().length();
+}";
+    let handle = "module app v1.0.0;
+native object Token;
+native token_make(seed is int) is Token;
+object Keeper {
+    has token is Token;
+    Keeper(:token);
+    kept() is Keeper {
+        once let copy = Keeper(token: token);
+        copy;
+    }
+}
+main() is int {
+    let keeper = Keeper(token: token_make(1));
+    keeper.kept();
+    0;
+}";
+    for source in [closure_and_role, handle] {
+        let module = super::tests::lower_std(source).unwrap_or_else(|error| panic!("{error}\n{source}"));
+        let once = module.declarations.iter().map(|(_, declaration)| match &declaration.kind {
+            ir::DeclarationKind::Object { fields, .. } => fields.iter().filter(|field| field.once).count(),
+            _ => 0,
+        }).sum::<usize>();
+        assert!(once > 0, "{source}");
+    }
+}
+
+/// A bound action retains its receiver: a resource's bound action cannot be kept (#717).
+const ONCE_BOUND_RESOURCE_ACTION: &str = "module ownership v1.0.0;
+object Res {
+    Res();
+    label() is string { \"R\"; }
+    destroy { 0; }
+}
+object Cache {
+    has value is () is string;
+    Cache(value is () is string) { self.value = value; }
+    cached() is () is string { once let kept = value; kept; }
+}
+main() is int {
+    let r = Res();
+    let cache = Cache(r.label);
+    cache.cached()();
+    0;
+}";
+
 #[test]
 fn oir2_c8_once_resources_stay_frontend_rejections() {
-    for name in ["once-generic", "once-role"] {
+    let corpus = |name: &str| {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../tests/ownership-corpus/rejected").join(format!("{name}.ok"));
-        let text = std::fs::read_to_string(path).unwrap();
+        std::fs::read_to_string(path).unwrap()
+    };
+    let sources = ["once-generic", "once-role", "once-closure", "once-resource"].map(|name| (name, corpus(name)));
+    let shared = ("once-shared-closure-type", ONCE_SHARED_CLOSURE_TYPE.to_owned());
+    let bound = ("once-bound-resource-action", ONCE_BOUND_RESOURCE_ACTION.to_owned());
+    for (name, text) in sources.into_iter().chain([shared, bound]) {
         let file = SourceFile::new(name, &text).unwrap();
         let program = syntax::parse(&file, &ParseOptions::default()).unwrap();
         let errors = crate::lowering::check_linked(&program, name, &mut super::tests::StdLoader)

@@ -122,12 +122,13 @@ impl Slot {
 pub(super) fn check<'m>(module: &'m Module, selected: Option<FuncId>, state: &mut State<'m>) {
     let managed = managed_types(module, state);
     let obligations = obligation_types(module, state);
+    let once = once_types(module, state);
     for (id, declaration) in module.declarations.iter() {
         if let DeclarationKind::Object { fields, .. } = &declaration.kind {
             for field in fields {
-                if field.once && managed.get(field.ty.as_u32() as usize).copied().unwrap_or(true) {
+                if field.once && once.get(field.ty.as_u32() as usize).copied().unwrap_or(true) {
                     state.at(L::Declaration(id), declaration.loc);
-                    state.error(R::B111, "once storage must be plain over its complete target/type graph");
+                    state.error(R::B111, "once storage must not retain a resource over its complete target/type graph");
                 }
             }
         }
