@@ -41,6 +41,7 @@ pub(super) fn consumed(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<
     locations.iter().copied().enumerate().filter_map(|(index, location)| {
         let consume = match op {
             ScopeBegin | OwnEmpty | OwnCreateCommit | DepsOf | DepsEmpty | InvokeObserve | InvokeDispatch
+                | OrderDispatch
                 | ArrayGet | Fail | Evaluate | Catch | Lookup => false,
             // A Future is a language value: awaiting, cancelling or reading it consumes nothing.
             Await | FutureCancel | FutureDone | FutureCancelled => false,
@@ -577,8 +578,9 @@ fn check_call_contracts(p: &Program, f: &Function) -> Check {
             evidence_rule(&reconstructed, flat, "RETURN_PACKET_NOT_FLAT",
                 "returned packet must have identical admission and full inventories")?;
         }
-        if let Instruction::Champ { op: Opcode::InvokeDispatch | Opcode::InvokeDispatchOwn, arguments, .. }
-            = instruction
+        if let Instruction::Champ {
+            op: Opcode::InvokeDispatch | Opcode::InvokeDispatchOwn | Opcode::OrderDispatch, arguments, ..
+        } = instruction
         {
             check_dispatch_contract(p, f, arguments, &mut reconstructed)?;
             continue;
@@ -755,7 +757,7 @@ fn check_failure_mask(p: &Program, f: &Function) -> Check {
                         (Opcode::Fail, Tag::Unwind) => arguments.iter().find_map(|arg| match arg {
                             Argument::Label(kind) => Some(1 << kind), _ => None,
                         }).unwrap_or(15),
-                        (Opcode::InvokeDispatch | Opcode::InvokeDispatchOwn, Tag::Unwind) => {
+                        (Opcode::InvokeDispatch | Opcode::InvokeDispatchOwn | Opcode::OrderDispatch, Tag::Unwind) => {
                             arguments.iter().find_map(|arg| match arg {
                                 Argument::Dispatch(dispatch) => Some(dispatch.failures), _ => None,
                             }).unwrap_or(15)
