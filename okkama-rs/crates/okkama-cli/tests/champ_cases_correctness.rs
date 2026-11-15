@@ -102,7 +102,9 @@ fn report_kind(report: &str) -> (&'static str, Option<String>) {
     }
     match line.split_once(": ") {
         Some((name, _)) if name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
-            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') => ("uncaught-error", Some(name.to_string())),
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') => {
+            ("uncaught-error", Some(name.to_string()))
+        }
         _ => ("runtime", None),
     }
 }
@@ -244,4 +246,31 @@ fn champ_correctness_exit_status() {
 #[test]
 fn champ_correctness_constructor_branches_before_binding() {
     check(&["L04.ctor.field-bind-forms"]);
+}
+
+/// A compiled observation callee is called directly: a million non-tail levels fit the VM stack.
+#[test]
+fn champ_deep_recursion_takes_one_machine_frame_per_level() {
+    let run = run_source(concat!(
+        "module app; object Sums { Sums(); sum(n is int) is int { if n == 0 { 0; } else { n + self.sum(n - 1); } } } ",
+        "main() is int { confirm Sums().sum(1000000) == 500000500000; 0; }",
+    ));
+    assert_eq!(run.result, Ok(0));
+}
+
+/// A self call whose result is returned at once runs in constant stack, deeper than any frame chain fits.
+#[test]
+fn champ_self_tail_calls_run_in_constant_stack() {
+    let run = run_source(concat!(
+        "module app; object Counter { Counter(); ",
+        "count(n is int, total is int) is int { if n == 0 { total; } else { self.count(n - 1, total + n); } } } ",
+        "main() is int { confirm Counter().count(4000000, 0) == 8000002000000; 0; }",
+    ));
+    assert_eq!(run.result, Ok(0));
+}
+
+/// Recursion depth: a million non-tail levels, ten million self tail calls.
+#[test]
+fn champ_correctness_recursion_depth() {
+    check(&["L03.recursion.deep-non-tail", "L03.recursion.tail-constant-stack"]);
 }

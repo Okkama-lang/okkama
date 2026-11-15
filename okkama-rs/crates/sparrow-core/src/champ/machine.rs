@@ -272,18 +272,27 @@ extern "C" fn owned_adapter(ctx: *mut Ctx, io: *mut CallOwn, args: *const Word, 
 pub extern "C" fn rt_machine_external(ctx: *mut Ctx, function: u64, io: *mut CallOwn,
     args: *const Word, count: u64) -> Word
 {
+    // The direct call of a compiled function is on every level of a recursion: its frame stays
+    // small, and the provider paths with their large temporaries live in their own frame.
     let runtime = unsafe { &mut *(*ctx).runtime };
     let machine = runtime.champ.machine.as_ref().expect("Champ program");
-    if io.is_null() && !machine.source.functions[function as usize].code.is_empty() {
-        let code = match crate::jit::compile(runtime, function as usize) {
-            Ok(code) => code,
-            Err(error) => return stop(ctx, error),
-        };
-        let arguments = if count == 0 { &[] } else {
-            unsafe { std::slice::from_raw_parts(args, count as usize) }
-        };
-        return unsafe { crate::jit::invoke(code, ctx, arguments) };
+    if !io.is_null() || machine.source.functions[function as usize].code.is_empty() {
+        return machine_provider(ctx, function, io, args, count);
     }
+    let code = match crate::jit::compile(runtime, function as usize) {
+        Ok(code) => code,
+        Err(error) => return stop(ctx, error),
+    };
+    let arguments = if count == 0 { &[] } else {
+        unsafe { std::slice::from_raw_parts(args, count as usize) }
+    };
+    unsafe { crate::jit::invoke(code, ctx, arguments) }
+}
+
+#[inline(never)]
+fn machine_provider(ctx: *mut Ctx, function: u64, io: *mut CallOwn, args: *const Word, count: u64) -> Word {
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    let machine = runtime.champ.machine.as_ref().expect("Champ program");
     if machine.p1[function as usize] {
         let arguments = if count == 0 { &[] } else {
             unsafe { std::slice::from_raw_parts(args, count as usize) }
