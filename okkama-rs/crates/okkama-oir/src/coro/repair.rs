@@ -5,6 +5,7 @@ use super::graph;
 use super::liveness::{self, Site};
 use super::{Budget, CoroError};
 use crate::visit::{Rewrite, VisitorMut};
+use crate::cfg;
 use crate::*;
 use std::collections::BTreeMap;
 
@@ -52,31 +53,75 @@ impl VisitorMut for Count {
     }
 }
 
-/// Single-value selections of `refs` that name `from`, copied to name `to` instead.
-struct Selections(BTreeMap<SelectionId, SelectionId>);
-impl VisitorMut for Selections {
+/// Copies of the selection and dependency expressions that name `from`, naming `to` instead (#734). An
+/// expression nests (the admissible part of a union of single values, the retention of a value's selection),
+/// so a copy is made wherever `from` occurs below it; key expressions are identities and are never copied.
+struct Renamed {
+    from: ValueId,
+    to: ValueId,
+    selections: BTreeMap<SelectionId, SelectionId>,
+    deps: BTreeMap<DepExprId, DepExprId>,
+}
+impl VisitorMut for Renamed {
+    fn value(&mut self, value: &mut ValueId) {
+        if *value == self.from {
+            *value = self.to;
+        }
+    }
     fn selection(&mut self, selection: &mut SelectionId) {
-        if let Some(copy) = self.0.get(selection) {
+        if let Some(copy) = self.selections.get(selection) {
             *selection = *copy;
+        }
+    }
+    fn dependency(&mut self, dependency: &mut DepExprId) {
+        if let Some(copy) = self.deps.get(dependency) {
+            *dependency = *copy;
         }
     }
 }
 
-fn value_selections(
+fn renamed(
     body: &mut Body, refs: Vec<ReferencedOperand>, from: ValueId, to: ValueId,
-) -> Result<Selections, CoroError> {
-    let mut copies = BTreeMap::new();
+) -> Result<Renamed, CoroError> {
+    let traversal = |error: cfg::TraversalError| CoroError::InvalidInput { function: None, message: error.to_string() };
+    let mut renamed = Renamed { from, to, selections: BTreeMap::new(), deps: BTreeMap::new() };
+    let mut seen = std::collections::BTreeSet::new();
     for operand in refs {
-        let OperandRef::Selection(selection) = operand.reference else {
-            continue;
-        };
-        if copies.contains_key(&selection) || body.selections.get(selection)? != &SelectionExpr::Value(from) {
-            continue;
+        // Post order: an expression is copied after its children, so the copy names their copies.
+        let mut pending = vec![(operand.reference, false)];
+        while let Some((reference, leaving)) = pending.pop() {
+            if !leaving {
+                if matches!(reference, OperandRef::Selection(_) | OperandRef::Dependency(_)) && seen.insert(reference) {
+                    pending.push((reference, true));
+                    let children = cfg::expression_children(reference, body).map_err(traversal)?;
+                    pending.extend(children.into_iter().map(|child| (child, false)));
+                }
+                continue;
+            }
+            match reference {
+                OperandRef::Selection(id) => {
+                    let original = body.selections.get(id)?.clone();
+                    let mut expr = original.clone();
+                    expr.rewrite(&mut renamed);
+                    if expr != original {
+                        let copy = body.selections.alloc(expr)?;
+                        renamed.selections.insert(id, copy);
+                    }
+                }
+                OperandRef::Dependency(id) => {
+                    let original = body.deps.get(id)?.clone();
+                    let mut expr = original.clone();
+                    expr.rewrite(&mut renamed);
+                    if expr != original {
+                        let copy = body.deps.alloc(expr)?;
+                        renamed.deps.insert(id, copy);
+                    }
+                }
+                _ => {}
+            }
         }
-        let copy = body.selections.alloc(SelectionExpr::Value(to))?;
-        copies.insert(selection, copy);
     }
-    Ok(Selections(copies))
+    Ok(renamed)
 }
 
 fn direct_uses(op: &mut impl Rewrite, value: ValueId) -> usize {
@@ -259,9 +304,9 @@ pub(super) fn repair(
                 };
                 if version != variable.original {
                     let mut op = body.insts.get(inst)?.op.clone();
-                    let mut selections = value_selections(body, op.operand_refs(), variable.original, version)?;
+                    let mut renamed = renamed(body, op.operand_refs(), variable.original, version)?;
                     op.rewrite(&mut Replace { from: variable.original, to: version, count: 0 });
-                    op.rewrite(&mut selections);
+                    op.rewrite(&mut renamed);
                     if liveness::operation_uses(&op, body)?.contains(&variable.original) {
                         return Err(unsupported("a selection or dependency names a value saved across a suspension"));
                     }
@@ -297,9 +342,9 @@ pub(super) fn repair(
                     TermKind::InvokeOwn { op, .. } => op.operand_refs(),
                     _ => Vec::new(),
                 };
-                let mut selections = value_selections(body, refs, variable.original, version)?;
+                let mut renamed = renamed(body, refs, variable.original, version)?;
                 term.kind.rewrite(&mut Replace { from: variable.original, to: version, count: 0 });
-                term.kind.rewrite(&mut selections);
+                term.kind.rewrite(&mut renamed);
                 let remaining = liveness::terminator_uses(module, block, &term, body)?.iter()
                     .filter(|value| **value == variable.original).count();
                 if remaining > unwinding {

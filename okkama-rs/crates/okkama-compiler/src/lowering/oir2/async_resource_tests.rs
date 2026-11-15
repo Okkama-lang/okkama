@@ -267,6 +267,23 @@ fn oir2_r6_defer_await_reaches_verified_low() {
 }
 
 #[test]
+fn oir2_r6_future_inputs_holding_a_borrowed_value_reach_verified_low() {
+    // #734, OIR-2 §10.1: the receiver and the argument of the cold Future keep the caller's `log`; coro saves
+    // the selections that name them across the await and low takes the result, under the full verifiers.
+    let module = lower(&source(concat!(
+        "object Receiver { has name is string; has log is Atomic<string>; ",
+        "Receiver(name is string, log is Atomic<string>) { self.name = name; self.log = log; } ",
+        "async read(arg is Res) is string { name + arg.label(); } ",
+        "destroy { log.replace(log.value() + name); } } ",
+        "async main() is int { let log = Atomic(\"\"); defer log.close(); ",
+        "{ let r = Receiver(\"R\", log); let a = Res(\"A\", log); let f = r.read(a); let s = await f; ",
+        "s.length(); } 0; }",
+    )));
+    let coro = super::async_tests::high_to_coro(module).unwrap_or_else(|error| panic!("{error}"));
+    super::async_tests::coro_to_low(coro).unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
 fn oir2_r3_a_return_inside_an_awaiting_defer_is_refused_by_name() {
     // Async ABI C-6: an async defer entry has no replacement in 0.6.0 (verifier rule `async-defer-replace`).
     assert_names(

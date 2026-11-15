@@ -477,3 +477,35 @@ fn a_void_fixed_root_publishes_the_empty_deps_of_a_scalar() {
     }
     assert_eq!(published, 1);
 }
+
+#[test]
+fn a_nested_selection_of_a_saved_value_names_its_resumed_version() {
+    // #734, D20: a value used after a suspension is saved and redefined by the resume. A selection names it
+    // through nested expressions too (the admissible part of a union of single values, as own selects the
+    // borrowed inputs of a cold Future); the repair copies the expression to name the resumed version.
+    let source = include_str!("../../tests/fixtures/async/own/r2-resource-across-await.oir");
+    let nested = edited(source, "selection s2: selection = union([selection(%31)])",
+        "selection s2: selection = union([selection(%16)])");
+    let output = lowered("nested selection", &nested);
+    let f = body(&output, "f");
+    let split = f.blocks.iter().find_map(|(_, block)| match &block.term.kind {
+        TermKind::InvokeOwn { op, .. } => match **op {
+            Operation::Ownership(OwnershipOp::ScopeSplit { selection, .. }) => match f.selections.get(selection) {
+                Ok(SelectionExpr::Admissible(inner))
+                    if matches!(f.selections.get(*inner), Ok(SelectionExpr::Union(items)) if !items.is_empty()) => {
+                    Some(selection)
+                }
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    }).expect("the split after the await");
+    let SelectionExpr::Admissible(union) = f.selections.get(split).unwrap() else { unreachable!() };
+    let SelectionExpr::Union(items) = f.selections.get(*union).unwrap() else { panic!("{union:?}") };
+    let [single] = items.as_slice() else { panic!("{items:?}") };
+    let SelectionExpr::Value(named) = f.selections.get(*single).unwrap() else { panic!("{single:?}") };
+    let (_, _, definition) = definition(f, *named);
+    assert!(matches!(definition.op, Operation::Async(AsyncOp::FrameResume { continuation: 1, .. })),
+        "{named:?} is the version the await's resume restores");
+}
