@@ -32,6 +32,7 @@ mod trace;
 use blade::manifest;
 use okkama_compiler::codegen::{self, Backend, Options as CodegenOptions};
 use okkama_compiler::diagnostics::{Diagnostic, render_all};
+use okkama_compiler::ide::{Inspection, Severity};
 use okkama_compiler::ir;
 use okkama_compiler::lowering::{
     self, LinkError, LoadedModule, LoweringError, ModuleLoader, RootFile,
@@ -651,18 +652,30 @@ fn load_all(line: &CommandLine) -> Result<Vec<SourceFile>, Outcome> {
 /// Разбор файлов программы: без тестовых объявлений или, с `--tests`, с
 /// тестами и fakes (§14).
 fn parse_all(sources: &[SourceFile], tests: bool) -> Result<Vec<ast::Program>, Outcome> {
+    Ok(prune_all(parse_raw(sources)?, tests))
+}
+
+/// Разбор файлов программы как есть: тесты и fakes ещё на месте.
+fn parse_raw(sources: &[SourceFile]) -> Result<Vec<ast::Program>, Outcome> {
     sources
         .iter()
         .map(|source| {
             syntax::parse(source, &ParseOptions::default())
-                .map(|program| {
-                    if tests {
-                        syntax::prune::desugar_test_items(program)
-                    } else {
-                        syntax::prune::strip_test_items(program)
-                    }
-                })
                 .map_err(|diagnostics| diagnostics_outcome(&diagnostics, source))
+        })
+        .collect()
+}
+
+/// Профиль программы: производственный (тесты и fakes убраны) или тестовый.
+fn prune_all(programs: Vec<ast::Program>, tests: bool) -> Vec<ast::Program> {
+    programs
+        .into_iter()
+        .map(|program| {
+            if tests {
+                syntax::prune::desugar_test_items(program)
+            } else {
+                syntax::prune::strip_test_items(program)
+            }
         })
         .collect()
 }
@@ -874,9 +887,7 @@ fn lint_command(args: &[String]) -> Outcome {
                 continue;
             }
         };
-        let test_mode = okkama_compiler::ide::has_tests(&source);
-        let mut loader = loader(test_mode);
-        let inspection = lowering::inspect(&source, &mut loader, test_mode);
+        let inspection = inspect_file(&source, loader);
         for found in &inspection.diagnostics {
             let shown = if found.path == source.name() {
                 file.clone()
@@ -907,6 +918,30 @@ fn lint_command(args: &[String]) -> Outcome {
         stderr,
         code,
     }
+}
+
+/// Диагностики файла для `okkama lint` и `okkama lsp`. Файл с тестами или
+/// fakes проверяется в тестовом режиме, чтобы их тела тоже анализировались;
+/// тестовый режим разрешает `Role.fake()`, поэтому ошибки, которые находит
+/// только производственный режим, добавляются вторым проходом без повторов
+/// (#649). Предупреждения и находки линтера — только тестового прохода: без
+/// тестов импорт или `hidden`, нужные лишь тестам, выглядели бы лишними.
+fn inspect_file(source: &SourceFile, loader_for: impl Fn(bool) -> FileLoader) -> Inspection {
+    let test_mode = okkama_compiler::ide::has_tests(source);
+    let mut loader = loader_for(test_mode);
+    let mut inspection = lowering::inspect(source, &mut loader, test_mode);
+    if !test_mode || !inspection.parsed {
+        return inspection;
+    }
+    let mut loader = loader_for(false);
+    let production = lowering::inspect(source, &mut loader, false);
+    for found in production.diagnostics {
+        let error = found.severity == Severity::Error;
+        if error && !inspection.diagnostics.contains(&found) {
+            inspection.diagnostics.push(found);
+        }
+    }
+    inspection
 }
 
 fn fmt_command(args: &[String]) -> Outcome {
@@ -1030,27 +1065,77 @@ fn check_command(args: &[String]) -> Outcome {
         Ok(sources) => sources,
         Err(outcome) => return outcome,
     };
-    let programs = match parse_all(&sources, line.tests) {
-        Ok(programs) => programs,
+    let parsed = match parse_raw(&sources) {
+        Ok(parsed) => parsed,
         Err(outcome) => return outcome,
     };
+    // Code that exists only in test mode — tests and fakes — is checked too
+    // (#649): a second pass in test mode. Test mode is not a superset of
+    // production (`Role.fake()` is allowed there), so production keeps its
+    // own pass; diagnostics found by both are reported once.
+    let test_profile = !line.tests && parsed.iter().any(okkama_compiler::ide::program_has_tests);
+    let tested = test_profile.then(|| parsed.clone());
+    let mut report = check_profile(&sources, prune_all(parsed, line.tests), line.tests);
+    if let Some(parsed) = tested {
+        report.merge(check_profile(&sources, prune_all(parsed, true), true));
+    }
+    report.outcome()
+}
+
+/// Итог `okkama check` в одном профиле: строки ошибок и предупреждений.
+#[derive(Default)]
+struct CheckReport {
+    errors: Vec<String>,
+    warnings: Vec<String>,
+}
+
+impl CheckReport {
+    /// Добавляет диагностики другого профиля, которых ещё нет.
+    fn merge(&mut self, other: CheckReport) {
+        for error in other.errors {
+            if !self.errors.contains(&error) {
+                self.errors.push(error);
+            }
+        }
+        for warning in other.warnings {
+            if !self.warnings.contains(&warning) {
+                self.warnings.push(warning);
+            }
+        }
+    }
+
+    /// Ошибки — код 1 и только они; без ошибок — предупреждения и код 0.
+    fn outcome(self) -> Outcome {
+        if self.errors.is_empty() {
+            return Outcome {
+                stdout: String::new(),
+                stderr: self.warnings.concat(),
+                code: 0,
+            };
+        }
+        Outcome::failure(self.errors.concat(), EXIT_DIAGNOSTICS)
+    }
+}
+
+/// Анализ программы в одном профиле (производственном или тестовом).
+fn check_profile(sources: &[SourceFile], programs: Vec<ast::Program>, tests: bool) -> CheckReport {
     let source = &sources[0];
-    let mut loader = loader(line.tests);
-    let roots = root_files(&sources, &programs);
-    let checked = if line.tests {
+    let mut loader = loader(tests);
+    let roots = root_files(sources, &programs);
+    let checked = if tests {
         lowering::check_linked_tests(&roots, &mut loader)
     } else {
         lowering::check_linked_files(&roots, &mut loader)
     };
+    let mut report = CheckReport::default();
     match checked {
-        Ok(warnings) => Outcome {
-            stdout: String::new(),
-            stderr: render_warnings(source, &warnings),
-            code: 0,
-        },
-        Err(Err(text)) => Outcome::failure(text, EXIT_DIAGNOSTICS),
+        Ok(warnings) => {
+            for found in &warnings {
+                report.warnings.push(render_warnings(source, std::slice::from_ref(found)));
+            }
+        }
+        Err(Err(text)) => report.errors.push(text),
         Err(Ok(errors)) => {
-            let mut text = String::new();
             for found in errors {
                 let file = found.source.as_ref().unwrap_or(source);
                 let location = file.location(found.error.span.start);
@@ -1059,7 +1144,7 @@ fn check_command(args: &[String]) -> Outcome {
                 } else {
                     "semantic error"
                 };
-                text.push_str(&format!(
+                report.errors.push(format!(
                     "{}:{}:{}: {kind}: {}\n",
                     file.name(),
                     location.line,
@@ -1067,9 +1152,9 @@ fn check_command(args: &[String]) -> Outcome {
                     found.error.message
                 ));
             }
-            Outcome::failure(text, EXIT_DIAGNOSTICS)
         }
     }
+    report
 }
 
 /// The same source-to-IR pipeline serves both inspection and artifact builds.

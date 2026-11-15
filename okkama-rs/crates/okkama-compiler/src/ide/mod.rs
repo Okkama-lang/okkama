@@ -33,6 +33,11 @@ pub fn has_tests(source: &SourceFile) -> bool {
     let Ok(program) = syntax::parse(source, &ParseOptions::default()) else {
         return true;
     };
+    program_has_tests(&program)
+}
+
+/// Есть ли в разобранном файле тесты или fakes — код тестового режима (§14).
+pub fn program_has_tests(program: &ast::Program) -> bool {
     program.items.iter().any(|item| match item {
         ast::Item::Test(_) => true,
         ast::Item::Object(decl) => decl

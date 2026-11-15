@@ -1715,3 +1715,134 @@ fn man_survives_a_reader_that_leaves_early() {
     assert!(output.status.code().is_some(), "killed by a signal");
     assert!(!stderr(&output).contains("panicked"), "{}", stderr(&output));
 }
+
+/// A role whose fake holds a `Cell` in a field: rule #152 rejects it.
+const CELL_FAKE: &str = "module app v1.0.0;
+import \"cell\" take Cell;
+role Shelf {
+    put(id is int, title is string) is void;
+    fake {
+        has shelf is Cell<%int:string> = Cell([:]);
+        put(id is int, title is string) is void { shelf.replace(shelf.value() + [id: title]); }
+    }
+}
+main() is int { 0; }
+";
+
+#[test]
+fn check_reports_errors_in_test_blocks() {
+    // #649: code that exists only in test mode is checked too.
+    let source = "module app v1.0.0;\ntest \"t\" {\n    let x is int = \"no\";\n}\nmain() is int { 0; }\n";
+    let output = run_stdin(&["check", "-"], source.as_bytes());
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.starts_with("<stdin>:3:"), "{text}");
+    assert!(text.contains(": semantic error: "), "{text}");
+    assert_eq!(text.lines().count(), 1, "{text}");
+    assert!(stdout(&output).is_empty());
+}
+
+#[test]
+fn check_reports_errors_in_fakes() {
+    let output = run_stdin(&["check", "-"], CELL_FAKE.as_bytes());
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("semantic error: Field \"shelf\" cannot hold a Cell"), "{text}");
+    assert_eq!(text.lines().count(), 1, "{text}");
+}
+
+#[test]
+fn check_passes_valid_tests_quietly() {
+    let source = "module app v1.0.0;
+role Counter {
+    count() is int;
+    fake {
+        has value is int = 3;
+        count() is int { value; }
+    }
+}
+object Twice { Twice(); of(n is int) is int { n * 2; } }
+test \"twice\" {
+    test.is(Twice().of(Counter.fake().count()), 6);
+}
+main() is int { Twice().of(0); }
+";
+    let output = run_stdin(&["check", "-"], source.as_bytes());
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(stdout(&output).is_empty());
+    assert!(stderr(&output).is_empty(), "{}", stderr(&output));
+    // `--tests` still checks the test profile alone.
+    let output = run_stdin(&["check", "--tests", "-"], source.as_bytes());
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(stderr(&output).is_empty(), "{}", stderr(&output));
+}
+
+#[test]
+fn check_reports_shared_errors_once() {
+    // Both profiles find the error in `main`; it is reported once, and the
+    // error inside the test follows it.
+    let source = "module app v1.0.0;
+test \"t\" {
+    let x is int = \"no\";
+}
+main() is int { let a = 1 + true; 0; }
+";
+    let output = run_stdin(&["check", "-"], source.as_bytes());
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let text = stderr(&output);
+    let shared = "<stdin>:5:25: semantic error: Operator + cannot be applied to int and bool\n";
+    assert_eq!(text.matches(shared).count(), 1, "{text}");
+    assert!(text.starts_with(shared), "{text}");
+    assert_eq!(text.lines().count(), 2, "{text}");
+    assert!(text.lines().nth(1).unwrap().starts_with("<stdin>:3:"), "{text}");
+    // A warning in shared code is printed once as well.
+    let source = "module app v1.0.0;
+test \"t\" { test.is(1, 1); }
+main() is int { let n = 2; for 0..n -> index { index; } }
+";
+    let output = run_stdin(&["check", "-"], source.as_bytes());
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        stderr(&output),
+        "<stdin>:3:28: warning: For loop value is undefined when its source is empty: the body may not run\n"
+    );
+}
+
+#[test]
+fn check_rejects_fake_in_production_code_of_a_file_with_tests() {
+    // Test mode allows `Role.fake()`; production code must still not use it.
+    let source = "module app v1.0.0;
+role Counter {
+    count() is int;
+    fake {
+        has value is int = 3;
+        count() is int { value; }
+    }
+}
+test \"fake\" {
+    test.is(Counter.fake().count(), 3);
+}
+main() is int { Counter.fake().count(); }
+";
+    let output = run_stdin(&["check", "-"], source.as_bytes());
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("Counter.fake() is available only in test mode"), "{text}");
+    assert_eq!(text.lines().count(), 1, "{text}");
+    // `okkama lint` (and the language server, which shares its path) too.
+    let file = TempFile::new("fake-in-main.ok", source.as_bytes());
+    let output = run(&["lint", file.path()]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("error: Counter.fake() is available only in test mode"), "{text}");
+    assert_eq!(text.matches("available only in test mode").count(), 1, "{text}");
+}
+
+#[test]
+fn lint_reports_errors_in_test_blocks_and_fakes() {
+    let file = TempFile::new("cell-fake.ok", CELL_FAKE.as_bytes());
+    let output = run(&["lint", file.path()]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("error: Field \"shelf\" cannot hold a Cell"), "{text}");
+}
