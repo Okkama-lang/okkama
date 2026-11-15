@@ -111,8 +111,9 @@
   - [9.6 `return`](#96-return)
   - [9.7 Order of evaluation](#97-order-of-evaluation)
   - [9.8 A worked example: a small calculator](#98-a-worked-example-a-small-calculator)
-  - [9.9 What is not there](#99-what-is-not-there)
-  - [9.10 Limits](#910-limits)
+  - [9.9 A worked example: binary search](#99-a-worked-example-binary-search)
+  - [9.10 What is not there](#910-what-is-not-there)
+  - [9.11 Limits](#911-limits)
 - [Chapter 10. Failure: throw, panic, try/catch, causes, confirm](#chapter-10-failure-throw-panic-trycatch-causes-confirm)
   - [10.1 Who should hear about a failure](#101-who-should-hear-about-a-failure)
   - [10.2 A short history: codes, exceptions, values](#102-a-short-history-codes-exceptions-values)
@@ -4708,7 +4709,125 @@ The program is short not because it is clever but because there is nothing
 to keep in sync: no index variable, no stack pointer, no flag for "an error
 happened". Each token's effect is the value of one block.
 
-## 9.9 What is not there
+## 9.9 A worked example: binary search
+
+Binary search is short, classic and famously easy to get wrong. Bentley
+reports that most professional programmers he asked to write it handed in a
+program with a bug [[Bentley 2000](#ref-bentley2000)], and Bloch later found that the midpoint
+computation `(low + high) / 2` in the Java library's binary search, and in
+the version Bentley had published, overflows on very large arrays, a bug
+that went unnoticed for years [[Bloch 2006](#ref-bloch2006)]. Here it is in Okkama, twice.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// The part of a sorted array still to search: positions low..high-1.
+object Window {
+    has low is int;
+    has high is int;
+    Window(:low, :high);
+
+    empty() is bool { low >= high; }
+    middle() is int { int((low + high) / 2); }
+    above(position is int) is ^Window { ^low = position + 1; }
+    below(position is int) is ^Window { ^high = position; }
+}
+
+object Sorted {
+    has items is @int;
+    Sorted(:items);
+
+    // The position of `wanted`, if it is there.
+    find(wanted is int) is Maybe<int> {
+        let window = Window(low: 0, high: items.size());
+        loop {
+            last Maybe.none if window.empty();
+            let middle = window.middle();
+            last Maybe.some(middle) if items[middle] == wanted;
+            if items[middle] < wanted {
+                window = window.above(middle);
+            } else {
+                window = window.below(middle);
+            }
+        }
+    }
+}
+
+// Two bounds around an answer: `yes` passes the test, `no` fails it.
+object Bracket {
+    has yes is int;
+    has no is int;
+    Bracket(:yes, :no);
+
+    settled() is bool { no - yes == 1; }
+    middle() is int { int((yes + no) / 2); }
+    passed(at is int) is ^Bracket { ^yes = at; }
+    failed(at is int) is ^Bracket { ^no = at; }
+    answer() is int { yes; }
+}
+
+main() is int {
+    let out = Stdout();
+    let evens = Sorted(items: (0..100000).map() -> n { n * 2; });
+    out.writeln("131072 at " + (evens.find(131072) else -1).string());
+    out.writeln("131071 at " + (evens.find(131071) else -1).string());
+
+    // The integer square root of 10^40 by bisection. yes + no exceeds 2^64 here.
+    let n = (10).pow(40);
+    let bracket = Bracket(yes: 0, no: n + 1);
+    let root = loop {
+        last bracket.answer() if bracket.settled();
+        let middle = bracket.middle();
+        if middle * middle <= n {
+            bracket = bracket.passed(middle);
+        } else {
+            bracket = bracket.failed(middle);
+        }
+    };
+    out.writeln("isqrt(10^40) = " + root.string());
+    0;
+}
+```
+
+Output:
+
+```text
+131072 at 65536
+131071 at -1
+isqrt(10^40) = 100000000000000000000
+```
+
+- **The loop exits in the middle.** `find` is one `loop` with two exits:
+  `last Maybe.none if window.empty()` when nothing is left to search, and
+  `last Maybe.some(middle) if …` when the probe hits. The loop's value is
+  the action's result, so there is no flag, no `found` variable and no code
+  after the loop. This is the loop Knuth described, with its exit where the
+  decision is made (Section 9.5).
+- **The bounds are one value.** `Window` holds both bounds and knows the
+  two facts the algorithm needs: whether it is empty and where its middle
+  is. Narrowing is a successor, `above(middle)` or `below(middle)`, and
+  `window = window.above(middle)` rebinds the local to it, which is allowed
+  because `Window` declares successor actions (Section 13.7). The invariant
+  "the answer, if any, is in `low..high-1`" lives in one object, not in two
+  integers that must be updated together.
+- **The midpoint cannot overflow.** `(low + high) / 2` divides two integers,
+  which gives an exact rational, and `int(...)` truncates it (Chapter 5).
+  The sum is an `int`, and Okkama integers grow instead of wrapping, so
+  Bloch's bug has nothing to stand on. The second search makes the point
+  with numbers: it finds the integer square root of 10^40, where `yes + no`
+  is far beyond 2^64, with the same textbook midpoint.
+- **A bracket states the invariant.** `Bracket` keeps a value known to pass
+  the test (`yes`) and one known to fail it (`no`); the search is over when
+  they are adjacent. The `loop` produces the answer as its value, and
+  `root` is bound once.
+
+The program is longer than the same search in C, by the two small objects.
+In return each state of the search is a value with a name, the invariant has
+a home, and the overflow that broke the library version cannot happen.
+
+## 9.10 What is not there
 
 | Elsewhere | In Okkama |
 |---|---|
@@ -4732,7 +4851,7 @@ syntax error at "=": Okkama has no compound assignment: a name is bound once; bi
 semantic error: Undefined variable "break"; Okkama leaves a loop with `last`
 ```
 
-## 9.10 Limits
+## 9.11 Limits
 
 - **One binding per `for`.** An index comes from a range, not from a second
   binding.
@@ -19352,10 +19471,12 @@ limits are deliberate, and Chapter 28 discusses the ones that are not.
 - <a id="ref-aycock2003"></a>John Aycock (2003). A Brief History of Just-In-Time. *ACM Computing Surveys* 35(2): 97–113. https://doi.org/10.1145/857076.857077
 - <a id="ref-bagwell2001"></a>Phil Bagwell (2001). *Ideal Hash Trees*. Technical report, École Polytechnique Fédérale de Lausanne. https://infoscience.epfl.ch/record/64398
 - <a id="ref-baker-sep"></a>Alan Baker (2022). Simplicity. In *The Stanford Encyclopedia of Philosophy* (Summer 2022 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/simplicity/
+- <a id="ref-bentley2000"></a>Jon Bentley (2000). *Programming Pearls*, 2nd edition. Addison-Wesley. Column 4: Writing Correct Programs.
 - <a id="ref-bernhardt2012"></a>Gary Bernhardt (2012). Boundaries. Talk at SCNA 2012. https://www.destroyallsoftware.com/talks/boundaries
 - <a id="ref-jep395"></a>Gavin Bierman (2021). JEP 395: Records. OpenJDK. https://openjdk.org/jeps/395
 - <a id="ref-jep409"></a>Gavin Bierman (2021). JEP 409: Sealed Classes. OpenJDK. https://openjdk.org/jeps/409
 - <a id="ref-jep441"></a>Gavin Bierman (2023). JEP 441: Pattern Matching for switch. OpenJDK. https://openjdk.org/jeps/441
+- <a id="ref-bloch2006"></a>Joshua Bloch (2006). Extra, Extra — Read All About It: Nearly All Binary Searches and Mergesorts are Broken. Google Research Blog, 2 June 2006. https://research.google/blog/extra-extra-read-all-about-it-nearly-all-binary-searches-and-mergesorts-are-broken/
 - <a id="ref-bloch2018"></a>Joshua Bloch (2018). *Effective Java*, 3rd edition. Addison-Wesley.
 - <a id="ref-nasa1999mco"></a>Mars Climate Orbiter Mishap Investigation Board (1999). *Phase I Report*. NASA, 10 November 1999. https://llis.nasa.gov/llis_lib/pdf/1009464main1_0641-mr.pdf
 - <a id="ref-boehm2003"></a>Hans-J. Boehm (2003). Destructors, Finalizers, and Synchronization. In *Proceedings of POPL 2003*: 262–272. ACM. https://doi.org/10.1145/604131.604153

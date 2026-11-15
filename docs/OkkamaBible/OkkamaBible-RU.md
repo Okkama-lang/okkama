@@ -111,8 +111,9 @@
   - [9.6 `return`](#96-return)
   - [9.7 Порядок вычисления](#97-порядок-вычисления)
   - [9.8 Разобранный пример: маленький калькулятор](#98-разобранный-пример-маленький-калькулятор)
-  - [9.9 Чего нет](#99-чего-нет)
-  - [9.10 Ограничения](#910-ограничения)
+  - [9.9 Разобранный пример: бинарный поиск](#99-разобранный-пример-бинарный-поиск)
+  - [9.10 Чего нет](#910-чего-нет)
+  - [9.11 Ограничения](#911-ограничения)
 - [Глава 10. Отказ: throw, panic, try/catch, причины, confirm](#глава-10-отказ-throw-panic-trycatch-причины-confirm)
   - [10.1 Кому нужно узнать об отказе](#101-кому-нужно-узнать-об-отказе)
   - [10.2 Краткая история: коды, исключения, значения](#102-краткая-история-коды-исключения-значения)
@@ -4763,7 +4764,126 @@ main() is int {
 синхронизировать: нет индексной переменной, указателя стека или флага
 «случилась ошибка». Действие каждой лексемы — значение одного блока.
 
-## 9.9 Чего нет
+## 9.9 Разобранный пример: бинарный поиск
+
+Бинарный поиск короток, классичен и печально известен тем, как легко в нём
+ошибиться. Бентли пишет, что большинство профессиональных программистов,
+которых он просил его написать, сдавали программу с ошибкой [[Bentley 2000](#ref-bentley2000)],
+а Блох позже нашёл, что вычисление середины `(low + high) / 2` в бинарном
+поиске библиотеки Java и в версии, которую опубликовал Бентли, переполняется
+на очень больших массивах — и эту ошибку годами никто не замечал
+[[Bloch 2006](#ref-bloch2006)]. Вот он на Okkama, дважды.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// The part of a sorted array still to search: positions low..high-1.
+object Window {
+    has low is int;
+    has high is int;
+    Window(:low, :high);
+
+    empty() is bool { low >= high; }
+    middle() is int { int((low + high) / 2); }
+    above(position is int) is ^Window { ^low = position + 1; }
+    below(position is int) is ^Window { ^high = position; }
+}
+
+object Sorted {
+    has items is @int;
+    Sorted(:items);
+
+    // The position of `wanted`, if it is there.
+    find(wanted is int) is Maybe<int> {
+        let window = Window(low: 0, high: items.size());
+        loop {
+            last Maybe.none if window.empty();
+            let middle = window.middle();
+            last Maybe.some(middle) if items[middle] == wanted;
+            if items[middle] < wanted {
+                window = window.above(middle);
+            } else {
+                window = window.below(middle);
+            }
+        }
+    }
+}
+
+// Two bounds around an answer: `yes` passes the test, `no` fails it.
+object Bracket {
+    has yes is int;
+    has no is int;
+    Bracket(:yes, :no);
+
+    settled() is bool { no - yes == 1; }
+    middle() is int { int((yes + no) / 2); }
+    passed(at is int) is ^Bracket { ^yes = at; }
+    failed(at is int) is ^Bracket { ^no = at; }
+    answer() is int { yes; }
+}
+
+main() is int {
+    let out = Stdout();
+    let evens = Sorted(items: (0..100000).map() -> n { n * 2; });
+    out.writeln("131072 at " + (evens.find(131072) else -1).string());
+    out.writeln("131071 at " + (evens.find(131071) else -1).string());
+
+    // The integer square root of 10^40 by bisection. yes + no exceeds 2^64 here.
+    let n = (10).pow(40);
+    let bracket = Bracket(yes: 0, no: n + 1);
+    let root = loop {
+        last bracket.answer() if bracket.settled();
+        let middle = bracket.middle();
+        if middle * middle <= n {
+            bracket = bracket.passed(middle);
+        } else {
+            bracket = bracket.failed(middle);
+        }
+    };
+    out.writeln("isqrt(10^40) = " + root.string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+131072 at 65536
+131071 at -1
+isqrt(10^40) = 100000000000000000000
+```
+
+- **Цикл выходит из середины.** `find` — один `loop` с двумя выходами:
+  `last Maybe.none if window.empty()`, когда искать больше негде, и
+  `last Maybe.some(middle) if …`, когда проба попала. Значение цикла —
+  результат действия, поэтому нет ни флага, ни переменной `found`, ни кода
+  после цикла. Это тот цикл, о котором писал Кнут, с выходом там, где
+  принимается решение (раздел 9.5).
+- **Границы — одно значение.** `Window` хранит обе границы и знает два
+  факта, которые нужны алгоритму: пусто ли окно и где его середина. Сужение
+  — преемник, `above(middle)` или `below(middle)`, а
+  `window = window.above(middle)` перепривязывает локальное имя к нему; это
+  разрешено, потому что у `Window` есть действия-преемники (раздел 13.7).
+  Инвариант «ответ, если он есть, лежит в `low..high-1`» живёт в одном
+  объекте, а не в двух целых, которые надо обновлять согласованно.
+- **Середина не переполняется.** `(low + high) / 2` делит два целых, что
+  даёт точное рациональное, и `int(...)` его усекает (глава 5). Сумма —
+  `int`, а целые Okkama растут, а не заворачиваются, так что ошибке Блоха не
+  на чем стоять. Второй поиск показывает это на числах: он находит
+  целочисленный корень из 10^40, где `yes + no` намного больше 2^64, с той
+  же учебной серединой.
+- **Вилка записывает инвариант.** `Bracket` держит значение, которое
+  заведомо проходит проверку (`yes`), и значение, которое заведомо не
+  проходит (`no`); поиск окончен, когда они соседние. `loop` выдаёт ответ
+  как своё значение, и `root` связывается один раз.
+
+Программа длиннее того же поиска на C — на два маленьких объекта. Взамен
+каждое состояние поиска — значение с именем, у инварианта есть дом, а
+переполнение, сломавшее библиотечную версию, произойти не может.
+
+## 9.10 Чего нет
 
 | В других языках | В Okkama |
 |---|---|
@@ -4787,7 +4907,7 @@ syntax error at "=": Okkama has no compound assignment: a name is bound once; bi
 semantic error: Undefined variable "break"; Okkama leaves a loop with `last`
 ```
 
-## 9.10 Ограничения
+## 9.11 Ограничения
 
 - **Одно связывание на `for`.** Индекс берётся из диапазона, а не из второго
   связывания.
@@ -19560,10 +19680,12 @@ main() is int {
 - <a id="ref-aycock2003"></a>John Aycock (2003). A Brief History of Just-In-Time. *ACM Computing Surveys* 35(2): 97–113. https://doi.org/10.1145/857076.857077
 - <a id="ref-bagwell2001"></a>Phil Bagwell (2001). *Ideal Hash Trees*. Technical report, École Polytechnique Fédérale de Lausanne. https://infoscience.epfl.ch/record/64398
 - <a id="ref-baker-sep"></a>Alan Baker (2022). Simplicity. In *The Stanford Encyclopedia of Philosophy* (Summer 2022 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/simplicity/
+- <a id="ref-bentley2000"></a>Jon Bentley (2000). *Programming Pearls*, 2nd edition. Addison-Wesley. Column 4: Writing Correct Programs.
 - <a id="ref-bernhardt2012"></a>Gary Bernhardt (2012). Boundaries. Talk at SCNA 2012. https://www.destroyallsoftware.com/talks/boundaries
 - <a id="ref-jep395"></a>Gavin Bierman (2021). JEP 395: Records. OpenJDK. https://openjdk.org/jeps/395
 - <a id="ref-jep409"></a>Gavin Bierman (2021). JEP 409: Sealed Classes. OpenJDK. https://openjdk.org/jeps/409
 - <a id="ref-jep441"></a>Gavin Bierman (2023). JEP 441: Pattern Matching for switch. OpenJDK. https://openjdk.org/jeps/441
+- <a id="ref-bloch2006"></a>Joshua Bloch (2006). Extra, Extra — Read All About It: Nearly All Binary Searches and Mergesorts are Broken. Google Research Blog, 2 June 2006. https://research.google/blog/extra-extra-read-all-about-it-nearly-all-binary-searches-and-mergesorts-are-broken/
 - <a id="ref-bloch2018"></a>Joshua Bloch (2018). *Effective Java*, 3rd edition. Addison-Wesley.
 - <a id="ref-nasa1999mco"></a>Mars Climate Orbiter Mishap Investigation Board (1999). *Phase I Report*. NASA, 10 November 1999. https://llis.nasa.gov/llis_lib/pdf/1009464main1_0641-mr.pdf
 - <a id="ref-boehm2003"></a>Hans-J. Boehm (2003). Destructors, Finalizers, and Synchronization. In *Proceedings of POPL 2003*: 262–272. ACM. https://doi.org/10.1145/604131.604153

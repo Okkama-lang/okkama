@@ -1,0 +1,70 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// The part of a sorted array still to search: positions low..high-1.
+object Window {
+    has low is int;
+    has high is int;
+    Window(:low, :high);
+
+    empty() is bool { low >= high; }
+    middle() is int { int((low + high) / 2); }
+    above(position is int) is ^Window { ^low = position + 1; }
+    below(position is int) is ^Window { ^high = position; }
+}
+
+object Sorted {
+    has items is @int;
+    Sorted(:items);
+
+    // The position of `wanted`, if it is there.
+    find(wanted is int) is Maybe<int> {
+        let window = Window(low: 0, high: items.size());
+        loop {
+            last Maybe.none if window.empty();
+            let middle = window.middle();
+            last Maybe.some(middle) if items[middle] == wanted;
+            if items[middle] < wanted {
+                window = window.above(middle);
+            } else {
+                window = window.below(middle);
+            }
+        }
+    }
+}
+
+// Two bounds around an answer: `yes` passes the test, `no` fails it.
+object Bracket {
+    has yes is int;
+    has no is int;
+    Bracket(:yes, :no);
+
+    settled() is bool { no - yes == 1; }
+    middle() is int { int((yes + no) / 2); }
+    passed(at is int) is ^Bracket { ^yes = at; }
+    failed(at is int) is ^Bracket { ^no = at; }
+    answer() is int { yes; }
+}
+
+main() is int {
+    let out = Stdout();
+    let evens = Sorted(items: (0..100000).map() -> n { n * 2; });
+    out.writeln("131072 at " + (evens.find(131072) else -1).string());
+    out.writeln("131071 at " + (evens.find(131071) else -1).string());
+
+    // The integer square root of 10^40 by bisection. yes + no exceeds 2^64 here.
+    let n = (10).pow(40);
+    let bracket = Bracket(yes: 0, no: n + 1);
+    let root = loop {
+        last bracket.answer() if bracket.settled();
+        let middle = bracket.middle();
+        if middle * middle <= n {
+            bracket = bracket.passed(middle);
+        } else {
+            bracket = bracket.failed(middle);
+        }
+    };
+    out.writeln("isqrt(10^40) = " + root.string());
+    0;
+}

@@ -12,7 +12,9 @@ bibliographic data were checked are listed.
 - [@bagwell2001] Phil Bagwell (2001). *Ideal Hash Trees*. Technical report, École Polytechnique Fédérale de Lausanne. https://infoscience.epfl.ch/record/64398
 - [@baker-sep] Alan Baker (2022). Simplicity. In *The Stanford Encyclopedia of Philosophy* (Summer 2022 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/simplicity/
 - [@baker1977] Henry C. Baker Jr. and Carl Hewitt (1977). The Incremental Garbage Collection of Processes. MIT AI Laboratory Working Paper 149; also in *Proceedings of the Symposium on Artificial Intelligence and Programming Languages*, Rochester, NY. https://hdl.handle.net/1721.1/41969
+- [@bentley2000] Jon Bentley (2000). *Programming Pearls*, 2nd edition. Addison-Wesley. Column 4: Writing Correct Programs.
 - [@bernhardt2012] Gary Bernhardt (2012). Boundaries. Talk at SCNA 2012. https://www.destroyallsoftware.com/talks/boundaries
+- [@bloch2006] Joshua Bloch (2006). Extra, Extra — Read All About It: Nearly All Binary Searches and Mergesorts are Broken. Google Research Blog, 2 June 2006. https://research.google/blog/extra-extra-read-all-about-it-nearly-all-binary-searches-and-mergesorts-are-broken/
 - [@bloch2018] Joshua Bloch (2018). *Effective Java*, 3rd edition. Addison-Wesley.
 - [@boehm2003] Hans-J. Boehm (2003). Destructors, Finalizers, and Synchronization. In *Proceedings of POPL 2003*: 262–272. ACM. https://doi.org/10.1145/604131.604153
 - [@bracha1998] Gilad Bracha, Martin Odersky, David Stoutamire, Philip Wadler (1998). Making the Future Safe for the Past: Adding Genericity to the Java Programming Language. In *Proceedings of OOPSLA 1998*: 183–200. ACM. https://doi.org/10.1145/286936.286957

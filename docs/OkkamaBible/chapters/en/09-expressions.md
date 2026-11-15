@@ -329,7 +329,46 @@ The program is short not because it is clever but because there is nothing
 to keep in sync: no index variable, no stack pointer, no flag for "an error
 happened". Each token's effect is the value of one block.
 
-## 9.9 What is not there
+## 9.9 A worked example: binary search
+
+Binary search is short, classic and famously easy to get wrong. Bentley
+reports that most professional programmers he asked to write it handed in a
+program with a bug [@bentley2000], and Bloch later found that the midpoint
+computation `(low + high) / 2` in the Java library's binary search, and in
+the version Bentley had published, overflows on very large arrays, a bug
+that went unnoticed for years [@bloch2006]. Here it is in Okkama, twice.
+
+{{example:09-search}}
+
+- **The loop exits in the middle.** `find` is one `loop` with two exits:
+  `last Maybe.none if window.empty()` when nothing is left to search, and
+  `last Maybe.some(middle) if …` when the probe hits. The loop's value is
+  the action's result, so there is no flag, no `found` variable and no code
+  after the loop. This is the loop Knuth described, with its exit where the
+  decision is made (Section 9.5).
+- **The bounds are one value.** `Window` holds both bounds and knows the
+  two facts the algorithm needs: whether it is empty and where its middle
+  is. Narrowing is a successor, `above(middle)` or `below(middle)`, and
+  `window = window.above(middle)` rebinds the local to it, which is allowed
+  because `Window` declares successor actions (Section 13.7). The invariant
+  "the answer, if any, is in `low..high-1`" lives in one object, not in two
+  integers that must be updated together.
+- **The midpoint cannot overflow.** `(low + high) / 2` divides two integers,
+  which gives an exact rational, and `int(...)` truncates it (Chapter 5).
+  The sum is an `int`, and Okkama integers grow instead of wrapping, so
+  Bloch's bug has nothing to stand on. The second search makes the point
+  with numbers: it finds the integer square root of 10^40, where `yes + no`
+  is far beyond 2^64, with the same textbook midpoint.
+- **A bracket states the invariant.** `Bracket` keeps a value known to pass
+  the test (`yes`) and one known to fail it (`no`); the search is over when
+  they are adjacent. The `loop` produces the answer as its value, and
+  `root` is bound once.
+
+The program is longer than the same search in C, by the two small objects.
+In return each state of the search is a value with a name, the invariant has
+a home, and the overflow that broke the library version cannot happen.
+
+## 9.10 What is not there
 
 | Elsewhere | In Okkama |
 |---|---|
@@ -353,7 +392,7 @@ syntax error at "=": Okkama has no compound assignment: a name is bound once; bi
 semantic error: Undefined variable "break"; Okkama leaves a loop with `last`
 ```
 
-## 9.10 Limits
+## 9.11 Limits
 
 - **One binding per `for`.** An index comes from a range, not from a second
   binding.
