@@ -40,7 +40,8 @@
   - [3.10 Rule ten: authority is explicit](#310-rule-ten-authority-is-explicit)
   - [3.11 Rule eleven: concurrency is structured](#311-rule-eleven-concurrency-is-structured)
   - [3.12 Eleven rules in one program](#312-eleven-rules-in-one-program)
-  - [3.13 One design, not eleven](#313-one-design-not-eleven)
+  - [3.13 The weaknesses each rule removes](#313-the-weaknesses-each-rule-removes)
+  - [3.14 One design, not eleven](#314-one-design-not-eleven)
 - [Part II. Values](#part-ii-values)
 - [Chapter 4. Types at a Glance](#chapter-4-types-at-a-glance)
   - [4.1 What a type is for](#41-what-a-type-is-for)
@@ -1728,7 +1729,41 @@ Only Rule eleven, structured concurrency, is absent, because nothing here
 waits. Section 20.6 shows a teller and a ledger again, with the ledger as a
 task that owns its state and answers through a channel.
 
-## 3.13 One design, not eleven
+## 3.13 The weaknesses each rule removes
+
+A rule earns its place by the mistakes it makes impossible, or at least
+impossible to make by accident. MITRE's Common Weakness Enumeration
+catalogues such mistakes by class [[MITRE CWE](#ref-cwe)]. The table maps the rules of this
+chapter to the classes they address, and it says what is left, because no
+rule removes a class entirely.
+
+| Rule | Weakness class | What the rule does | What is left |
+|---|---|---|---|
+| 2. Constructors guard state | CWE-665 Improper Initialization | Every field is bound, and every check has run, before anyone holds the object | A `self` handed out of a constructor is unfinished; using it fails at run time (Section 12.10) |
+| 3. Change is a new object | CWE-362 Concurrent Execution using Shared Resource with Improper Synchronization | Values are never edited, so two tasks cannot race on one | `Atomic` and `Cell` are mutable on purpose (Sections 13.11, 20.8) |
+| 3. Change is a new object | CWE-252 Unchecked Return Value | A successor that is never used is a compile error (Section 13.6) | Other results may be dropped |
+| 4. No null | CWE-476 NULL Pointer Dereference | A value can be absent only when its type is `Maybe`, and a `Maybe` must be opened | The decision about absence still has to be right (Chapter 7) |
+| 6. Exact numbers | CWE-190 Integer Overflow or Wraparound | `int` grows instead of wrapping | A number too large for the run's memory budget is refused (Section 5.2) |
+| 6. Exact numbers | CWE-681 Incorrect Conversion between Numeric Types | Categories never mix silently, and a narrowing conversion checks its range | — |
+| 6. Exact numbers | CWE-1339 Insufficient Precision or Accuracy of a Real Number | `rat` is exact; `float` is approximate by declaration and never holds NaN or an infinity | A `float` computation still rounds (Section 5.12) |
+| 8. Typed failures | CWE-396 Declaration of Catch for Generic Exception | `catch e is Error` catches thrown errors only; a bug passes through it | A handler can still lose the error it caught |
+| 8. Typed failures | CWE-390 Detection of Error Condition Without Action | A failure is thrown, not returned, so ignoring it takes a written `catch` | A `catch` that does nothing can be written |
+| 9. Deterministic release | CWE-404 Improper Resource Shutdown or Release; CWE-772 Missing Release of Resource after Effective Lifetime | The scope that owns a resource destroys it on every way out | A resource held by a long-lived owner lives as long as the owner |
+| 9. Deterministic release | CWE-672 Operation on a Resource after Expiration or Release | Nothing outlives the owner it borrows from | A resource closed early must refuse its own actions (Section 11.10) |
+| 10. Explicit authority | CWE-250 Execution with Unnecessary Privileges | Code reaches files, network and processes only through objects it was given, and an embedder can deny native groups (Section 21.6) | A command-line program keeps its user's authority (Section 21.7) |
+
+Rules one, five, seven and eleven do not appear. They are about the shape
+of programs rather than a class of weakness: hidden state, booleans
+without truthiness, composition and structured tasks make programs easier
+to read and to change, and they support the rows above (structured tasks,
+for one, are why a failure is never lost in a task nobody awaits), but no
+catalogue entry corresponds to them alone.
+
+The table is a claim about the language. It holds as long as the
+implementation keeps the language's promises, which is a separate subject
+and the business of a separate book.
+
+## 3.14 One design, not eleven
 
 The rules are not a list of independent prohibitions; each makes the others
 work. Immutability (Rule three) makes hiding state (Rule one) cheap, because
@@ -20850,6 +20885,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-miller2006"></a>Mark S. Miller (2006). *Robust Composition: Towards a Unified Approach to Access Control and Concurrency Control*. PhD thesis, Johns Hopkins University.
 - <a id="ref-milner1978"></a>Robin Milner (1978). A Theory of Type Polymorphism in Programming. *Journal of Computer and System Sciences* 17(3): 348–375. https://doi.org/10.1016/0022-0000(78)90014-4
 - <a id="ref-milner1997"></a>Robin Milner, Mads Tofte, Robert Harper, David MacQueen (1997). *The Definition of Standard ML (Revised)*. MIT Press.
+- <a id="ref-cwe"></a>The MITRE Corporation (2026). *Common Weakness Enumeration (CWE)*, version 5.0. https://cwe.mitre.org/
 - <a id="ref-moseley2006"></a>Ben Moseley, Peter Marks (2006). Out of the Tar Pit. Software Practice Advancement (SPA) 2006. https://curtclifton.net/papers/MoseleyMarks06a.pdf
 - <a id="ref-moses1970"></a>Joel Moses (1970). The Function of FUNCTION in LISP, or Why the FUNARG Problem Should Be Called the Environment Problem. *ACM SIGSAM Bulletin* 15: 13–27. https://doi.org/10.1145/1093410.1093411
 - <a id="ref-norvig1996"></a>Peter Norvig (1996). Design Patterns in Dynamic Programming. Presentation at Object World, Boston, May 1996. https://norvig.com/design-patterns/
