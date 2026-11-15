@@ -202,3 +202,82 @@ fn test_intrinsics_need_the_test_profile() {
     let contracts = p1::P1Contracts::new(&p.objects).unwrap();
     assert!(verify_load(&p, &contracts).unwrap_err().message.contains("external signature/summary mismatch"));
 }
+
+/// A declaration with `storage` fields named `f<i>`; `destroy` makes it a resource object (an identity).
+fn object(name: &str, storage: Vec<Type>, destroy: bool, handle: bool) -> Object {
+    let count = storage.len() as u32;
+    Object {
+        name: name.into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle,
+        fields: (0..count).map(|index| Field { name: format!("f{index}"), storage: index, once: false }).collect(),
+        layout: ObjectRuntimeLayout {
+            allocation_words: (1 + count + if destroy { 4 } else { 0 }).max(2),
+            identity_offset: destroy.then_some(8 * (1 + count)),
+            trace_layout: (0..count).filter(|&index| storage[index as usize].traced()).collect(),
+            storage_fields: storage, has_destroy: destroy, may_reach_resource: destroy, may_async_destroy: false,
+            selection_layout: vec![],
+        },
+    }
+}
+
+/// `test.is`/`test.isnt` of the two `ty` parameters of a helper beside the test, with the declarations
+/// `objects`.
+fn compare_objects(op: DataOp, ty: Type, objects: Vec<Object>) -> Program {
+    let mut helper = tests::empty_function();
+    helper.symbol = "same".into();
+    helper.registers = vec![ty, ty, Type::Bool];
+    helper.params = vec![Location::Register(0), Location::Register(1)];
+    helper.blocks[0].params = helper.params.clone();
+    helper.proofs.entry = Some(EntryContract { failures: 2, ..EntryContract::default() });
+    helper.code = vec![data(op, vec![0, 1], 2, Immediate::None)];
+    // A successor parameter carries a must-use permission: take both after the check.
+    if let Type::Successor(id) = ty {
+        helper.registers.extend([Type::Object(id), Type::Object(id)]);
+        helper.code.push(data(DataOp::Move, vec![0], 3, Immediate::None));
+        helper.code.push(data(DataOp::Move, vec![1], 4, Immediate::None));
+    }
+    helper.code.push(Instruction::Ret(vec![]));
+    let live = live_locations(&helper).unwrap();
+    helper.proofs.roots = live.into_iter().enumerate().map(|(pc, locations)| RootRequirement {
+        pc: pc as u32, locations: locations.into_iter().collect(),
+    }).collect();
+    let mut p = profile(is_ints());
+    p.functions.push(helper);
+    // Every resource declaration has its destroy entry, so the program is complete apart from the check.
+    for (id, object) in objects.iter().enumerate().filter(|(_, object)| object.layout.has_destroy) {
+        let mut destroy = tests::empty_function();
+        destroy.symbol = format!("{}.destroy", object.name);
+        destroy.registers = vec![Type::Object(id as u32)];
+        destroy.params = vec![Location::Register(0)];
+        destroy.blocks[0].params = destroy.params.clone();
+        destroy.proofs.entry = Some(EntryContract { destroy: Some(id as u32), ..EntryContract::default() });
+        destroy.proofs.roots = vec![RootRequirement { pc: 0, locations: vec![] }];
+        p.functions.push(destroy);
+    }
+    p.objects = objects;
+    p
+}
+
+#[test]
+fn test_checks_compare_closed_plain_objects() {
+    let point = || object("Point", vec![Type::Int, Type::Str], false, false);
+    accept(&compare_objects(DataOp::TestIs, Type::Object(0), vec![point()]));
+    accept(&compare_objects(DataOp::TestIsnt, Type::Successor(0), vec![point()]));
+    // A plain object holding a plain object stays comparable.
+    let line = object("Line", vec![Type::Object(0), Type::Object(0)], false, false);
+    accept(&compare_objects(DataOp::TestIs, Type::Object(1), vec![point(), line]));
+}
+
+#[test]
+fn test_checks_reject_objects_that_value_equality_rejects() {
+    // A resource object has an identity: `val.eq` refuses it, and so does `test.is`.
+    let file = || object("File", vec![Type::Int], true, false);
+    reject(&compare_objects(DataOp::TestIs, Type::Object(0), vec![file()]), "TEST_OPERAND");
+    reject(&compare_objects(DataOp::TestIsnt, Type::Successor(0), vec![file()]), "TEST_OPERAND");
+    // A native handle field cannot be compared.
+    let state = object("runtime.buffer.BufferState", vec![], false, true);
+    let holder = object("Holder", vec![Type::Handle(0)], false, false);
+    reject(&compare_objects(DataOp::TestIs, Type::Object(1), vec![state, holder]), "TEST_OPERAND");
+    // Neither can a failure payload.
+    let carrier = object("Carrier", vec![Type::Error], false, false);
+    reject(&compare_objects(DataOp::TestIsnt, Type::Object(0), vec![carrier]), "TEST_OPERAND");
+}

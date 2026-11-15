@@ -1067,7 +1067,15 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
                 _ => false,
             };
             enforce(valid && out == Some(Type::Bool), "TEST_OPERAND",
-                "test operation operand types differ from its check, or its result is not bool")
+                "test operation operand types differ from its check, or its result is not bool")?;
+            // `test.is` compares as `val.eq` does: objects are compared structurally only when closed plain.
+            let compared = match types {
+                [Type::Successor(id), _] => Some(Type::Object(*id)),
+                [ty @ (Type::Object(_) | Type::Variant(_)), _] => Some(*ty),
+                _ => None,
+            };
+            enforce(compared.is_none_or(|ty| closed_plain(p, ty)), "TEST_OPERAND",
+                "test.is/test.isnt compare objects only when they are closed plain data")
         }
         Move => {
             require(types.len() == 1, "move requires one source")?;
