@@ -50,11 +50,14 @@
 - [Chapter 5. Numbers](#chapter-5-numbers)
   - [5.1 Four categories](#51-four-categories)
   - [5.2 Exact integers](#52-exact-integers)
-  - [5.3 Exact rationals](#53-exact-rationals)
-  - [5.4 Floating point, kept finite](#54-floating-point-kept-finite)
-  - [5.5 Bytes](#55-bytes)
-  - [5.6 Conversions](#56-conversions)
-  - [5.7 Limits](#57-limits)
+  - [5.3 Integer operations](#53-integer-operations)
+  - [5.4 Exact rationals](#54-exact-rationals)
+  - [5.5 Floating point, kept finite](#55-floating-point-kept-finite)
+  - [5.6 Bytes](#56-bytes)
+  - [5.7 Conversions](#57-conversions)
+  - [5.8 Numbers from text](#58-numbers-from-text)
+  - [5.9 Numbers in other languages](#59-numbers-in-other-languages)
+  - [5.10 Limits](#510-limits)
 - [Chapter 6. Text](#chapter-6-text)
   - [6.1 Three layers of text](#61-three-layers-of-text)
   - [6.2 Okkama's choice: immutable code points](#62-okkamas-choice-immutable-code-points)
@@ -1711,7 +1714,90 @@ A product that cannot fit in the run’s memory budget is refused before computa
 
 **Cost.** Exact arithmetic must preserve results beyond fixed-width bounds. Once results become big, their cost grows with the number of digits.
 
-## 5.3 Exact rationals
+## 5.3 Integer operations
+
+```okkama
+module bible/integers v1.0.0;
+
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    // Division of two ints is exact: a rat, not a truncated int.
+    let half = 7 / 2;
+    out.writeln(half.string() + ": numerator " + half.numerator().string() + ", denominator " + half.denominator().string());
+    // Truncation toward zero is written, and so is the remainder.
+    out.writeln(int(7 / 2).string() + " " + int(-7 / 2).string());
+    out.writeln((7 % 3).string() + " " + (-7 % 3).string() + " " + (7 % -3).string());
+    // Powers stay exact, past any machine word.
+    out.writeln((2).pow(64).string());
+    out.writeln(((2).pow(64) - 1).string());
+    // Bit operations work on the 64-bit two's complement view of an int.
+    out.writeln((12 & 10).string() + " " + (12 | 10).string() + " " + (12 ^ 10).string() + " " + (~5).string());
+    out.writeln((1 << 62).string() + " " + (1 << 63).string());
+    out.writeln((-8 >> 1).string() + " " + (-1 >>> 60).string());
+    out.writeln(255.bit_count().string() + " " + 1.leading_zeros().string() + " " + 8.trailing_zeros().string());
+    0;
+}
+```
+
+Output:
+
+```text
+7/2: numerator 7, denominator 2
+3 -3
+1 -1 1
+18446744073709551616
+18446744073709551615
+8 14 6 -6
+4611686018427387904 -9223372036854775808
+-4 15
+8 63 3
+```
+
+**Division and remainder.** `/` on two integers never truncates: `7 / 2` is
+the rational `7/2`, with `numerator()` 7 and `denominator()` 2. An integer
+quotient is a decision, so it is written: `int(7 / 2)` truncates toward zero
+and gives 3, and `int(-7 / 2)` gives −3. `%` is the remainder that goes with
+that quotient, so it has the sign of the dividend: `-7 % 3` is −1 and
+`7 % -3` is 1, and `a == int(a / b) * b + a % b` holds for every `a` and
+every nonzero `b`. Dividing by zero, with `/` or `%`, is a runtime error, a
+bug in the program rather than a thrown `Error` (Section 10.4).
+
+**Powers.** `pow` takes a non-negative exponent and is exact at any size:
+`(2).pow(64)` is 18446744073709551616, one more than the largest unsigned
+64-bit value printed on the next line. A negative exponent belongs to `rat`
+(Section 5.4).
+
+**Bits: a 64-bit window.** The bitwise operators work on a bit pattern, and a
+bit pattern needs a width. Okkama gives every bitwise operation the same one:
+the 64-bit two's complement view of an `int`, the width that hash functions,
+checksums and network protocols use.
+- **The operators.** `&`, `|`, `^` and `~` work bit by bit; `~5` is −6, as in
+  every two's complement language.
+- **Shifts.** `<<` shifts left, `>>` shifts right copying the sign bit, and
+  `>>>` shifts right filling with zeros, so `-8 >> 1` is −4 and `-1 >>> 60`
+  is 15. A shift count must be in `0..63`.
+- **Methods.** `bit_count`, `leading_zeros`, `trailing_zeros`,
+  `rotate_left`, `rotate_right`, `reverse_bits` and `swap_bytes` use the same
+  window on an `int` and an 8-bit one on a `byte`.
+
+Inside the window, a shift drops the bits that leave it: `1 << 63` is the
+lowest 64-bit value, not 2⁶³. This is the one place where an Okkama integer
+operation is modular, and it is deliberate. A shift asks for a bit pattern,
+not for a number, and the result is the pattern a hash or a checksum expects.
+Arithmetic never does this, and neither does an operand outside the window.
+`(2).pow(70) & 1` is not silently truncated to 64 bits; it is a runtime error,
+"Bitwise operand is outside signed-64 range".
+
+**Comparisons.** `==`, `!=`, `<`, `<=`, `>` and `>=` compare two values of one
+category, and so do the methods `less`, `greater`, `less_or_equal` and
+`greater_or_equal`. `min`, `max` and `clamp` give one of their operands back:
+`7.min(3)` is 3 and `7.clamp(0, 5)` is 5. Comparing an `int` with a `float` or
+a `byte` is a compile-time error, like adding them. The program converts one
+side, and that conversion says which comparison was meant (Section 5.7).
+
+## 5.4 Exact rationals
 
 Dividing two integers gives a `rat`, an exact fraction kept in lowest terms
 with a positive denominator. Rationals add, subtract, multiply and divide with
@@ -1779,7 +1865,7 @@ with unrelated denominators makes them large, and arithmetic slows down with
 them. Programs that iterate thousands of times over rational quantities should
 round deliberately at known points, as the bill example does.
 
-## 5.4 Floating point, kept finite
+## 5.5 Floating point, kept finite
 
 `float` is an IEEE 754 binary64 number [[IEEE 754](#ref-ieee754)] — the `double` of C and
 Java — with one deliberate difference: an Okkama float is always *finite*. An
@@ -1823,7 +1909,7 @@ hide the difference between a count and a measurement. The literal obeys the
 same rule as arithmetic: `1e400` is a compile error rather than an infinity,
 and so is `1e-400`, a nonzero number that would silently become `0.0`.
 
-## 5.5 Bytes
+## 5.6 Bytes
 
 `byte` is an octet, `0..255`: the unit of binary data — file contents,
 network packets, encoded text. It is a separate category, not a small `int`:
@@ -1831,7 +1917,7 @@ network packets, encoded text. It is a separate category, not a small `int`:
 the range check), and arithmetic on bytes produces `int`. Binary data is
 `@byte`, an immutable array of octets; Chapter 6 shows how text and bytes meet.
 
-## 5.6 Conversions
+## 5.7 Conversions
 
 Every conversion between categories is written. The table lists them.
 
@@ -1853,7 +1939,107 @@ decimal is what the programmer wrote and meant. And float-to-text produces
 the shortest string that reads back as the same float, so printing never
 invents digits.
 
-## 5.7 Limits
+## 5.8 Numbers from text
+
+Numbers that come from outside, a file, a form or a command line, arrive as
+text. The standard library's `strings/parse` reads them strictly:
+
+```okkama
+module bible/parse v1.0.0;
+
+import "io/stdout" take Stdout;
+import "strings/parse" take Number, InvalidInteger, InvalidRational;
+
+// Reads a quantity typed by a person, and says why it is not one.
+object Quantity {
+    has text is string;
+
+    Quantity(:text);
+
+    described() is string {
+        try {
+            text + " -> " + Number(text).int().string();
+        }
+        catch InvalidInteger.source(source) {
+            text + " -> not an integer: '" + source + "'";
+        };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    out.writeln(Number("42").int().string());
+    out.writeln(Number("ff").int(16).string() + " " + Number("0x2A").int(0).string() + " " + Number("101").int(2).string());
+    out.writeln(Number("6/8").rat().string() + " " + Number("-42.5").float().string());
+    out.writeln(Number("12345678901234567890").int().string());
+    for ["17", " 17", "+17", "1_000", "-0"] -> text {
+        out.writeln(Quantity(text: text).described());
+    }
+    let ratio = try { Number("1/0").rat().string(); } catch e is InvalidRational { "1/0 is not a rat"; };
+    out.writeln(ratio);
+    0;
+}
+```
+
+Output:
+
+```text
+42
+255 42 5
+3/4 -42.5
+12345678901234567890
+17 -> 17
+ 17 -> not an integer: ' 17'
++17 -> not an integer: '+17'
+1_000 -> not an integer: '1_000'
+-0 -> 0
+1/0 is not a rat
+```
+
+- **Asking for a type.** `Number(text)` holds the text and reads nothing until
+  it is asked for a type: `int()`, `rat()`, `float()` or `byte()`. That way
+  the same text can be read as different categories, and the choice is
+  visible where it is made.
+- **Bases.** `int(base)` reads bases 2 to 36. Base 0 reads the prefixes `0b`,
+  `0o` and `0x`. Integers of any size are read exactly.
+- **Strictness.** Nothing is trimmed, a leading `+` is not accepted, and
+  digit separators such as `1_000` are not either. `" 17"` is not a number:
+  the space is in the text, and a program that wants to accept it trims it
+  first, in code that says so.
+- **Errors.** A text that is not a number of the asked type throws
+  `InvalidInteger`, `InvalidRational`, `InvalidFloat` or `InvalidByte`, each
+  carrying the exact source text. They are ordinary errors a caller catches
+  (Chapter 10), unlike a division by zero, which is a bug.
+
+This is the opposite of the forgiving parsers of many scripting languages,
+which read the longest numeric prefix and ignore the rest. A forgiving parser
+turns `"12 apples"` into 12 and a typo into a wrong value; a strict one turns
+both into an error at the boundary, where the input can still be rejected.
+
+## 5.9 Numbers in other languages
+
+Every mainstream language answers the same five questions about numbers.
+Their answers differ more than their syntax does:
+
+| | Integer overflow | `int / int` | `%` sign follows | Float ∞ and NaN | Mixed `int` and `float` |
+|---|---|---|---|---|---|
+| C | undefined behaviour | truncates | dividend | yes | converted implicitly |
+| Java | wraps | truncates | dividend | yes | converted implicitly |
+| Go | wraps | truncates | dividend | yes | compile error |
+| Rust | panics in debug, wraps in release | truncates | dividend | yes | compile error |
+| Python | none (arbitrary size) | float (`//` floors) | divisor | yes | converted implicitly |
+| Haskell | `Int` wraps, `Integer` none | not defined (`div` floors) | `mod`: divisor, `rem`: dividend | yes | compile error |
+| Scheme | none (exact integers) | exact rational | `modulo`: divisor, `remainder`: dividend | `+inf.0`, `+nan.0` | exact becomes inexact |
+| Okkama | none | exact `rat` | dividend | runtime failure | compile error |
+
+Okkama is closest to Scheme in what its numbers are: exact integers and
+rationals, with floats as a separate, approximate category [[R7RS](#ref-r7rs2013)]. It
+is closest to Go, Rust and Haskell in refusing to mix categories silently.
+And it differs from all of them in keeping floats finite (Section 5.5). The
+remainder follows the dividend, as in C, Java, Go and Rust. That is the
+remainder of truncating division, which is the division `int(a / b)` writes.
+
+## 5.10 Limits
 
 - **No non-finite floats.** Code that relies on IEEE infinities and NaN must
   be restructured (Section 5.4).
