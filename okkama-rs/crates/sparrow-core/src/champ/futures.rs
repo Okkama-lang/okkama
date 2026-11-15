@@ -982,17 +982,31 @@ pub extern "C" fn rt_invoke_defer_async(ctx: *mut Ctx, this: Word, entry: u64, a
     runtime.safepoint(frame_pointer, unsafe { &*ctx }, &[]);
     let started = get(this, tail + STEP) != 0;
     let input = unsafe { (*io).input.record };
-    let empty = match packet(runtime, input) {
-        Ok(offered) => offered.is_empty(),
+    let (empty, closable) = match packet(runtime, input) {
+        Ok(offered) => (offered.is_empty(), closable_before_start(runtime, &offered)),
         Err(failure) => return stop(ctx, failure),
     };
     // The await of the deferred call checks for a cancellation first (`rt_await`); a child that still runs has
     // not woken `this`, so a re-entry finds one only after the child settled.
-    let cancel = if started || empty { take_cancel(runtime, this).map(|(failure, _)| failure) } else { None };
+    let cancel = if started || closable { take_cancel(runtime, this).map(|(failure, _)| failure) } else { None };
     if let (Some(failure), false) = (cancel, started) {
-        consume(runtime, input);
-        unsafe { (*io).input.record = 0 };
-        return defer_unwind(ctx, post, failure);
+        if empty {
+            consume(runtime, input);
+            unsafe { (*io).input.record = 0 };
+            return defer_unwind(ctx, post, failure);
+        }
+        // The deferred call never starts (#728): its inputs close here, where its own body would have closed them,
+        // with the cancellation as the primary failure, as a body that cannot start closes its continuation-0
+        // inputs (`rt_body_reject`). The step unwinds with the combined failure.
+        let roots = runtime.roots.len();
+        runtime.roots.push((failure, Repr::Ref));
+        let closed = super::cleanup::close_packet(ctx, unsafe { &mut (*io).input }, failure);
+        unsafe { &mut *(*ctx).runtime }.roots.truncate(roots);
+        return match closed {
+            Ok(combined) => defer_unwind(ctx, post, combined),
+            Err(_) if matches!(unsafe { (*ctx).status }, runtime::FATAL | EXHAUSTED) => OUTCOME_STOP,
+            Err(failure) => stop(ctx, failure),
+        };
     }
     if !started {
         let args = if argc == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(args, argc as usize) } };
@@ -1085,6 +1099,18 @@ pub extern "C" fn rt_invoke_defer_async(ctx: *mut Ctx, this: Word, entry: u64, a
         return NORMAL;
     }
     defer_unwind(ctx, post, get(child, tasks::FAILURE))
+}
+
+/// Whether the inputs of an async defer can close in the step itself when a cancellation stops the deferred call
+/// before it starts (#728): every identity has a synchronous destroy (or none) and the packet carries no service
+/// entry. Otherwise the child starts and raises the cancellation at its first await, where its own code closes its
+/// inputs (#745).
+pub(super) fn closable_before_start(runtime: &Runtime, offered: &Packet) -> bool {
+    let program = &runtime.loaded.program;
+    offered.services.is_empty() && offered.words().all(|object| {
+        let descriptor = heap::payload(runtime.heap.header_of(object)) as usize;
+        program.objects[descriptor].destroy.is_none_or(|entry| !program.functions[entry.0 as usize].is_async)
+    })
 }
 
 /// The Unwind of an async defer step with `failure`, for the caller to capture.

@@ -1114,6 +1114,63 @@ fn champ_r5_async_defer_suspends_and_continues_or_unwinds() {
     traces.agree();
 }
 
+/// #728: a cancellation is pending when an async defer whose input packet carries obligations runs. Tomato's await
+/// of the deferred call raises it before the call starts (probe `windowdefer`, ruling #601 K2), so the deferred
+/// body never starts; its inputs close in the step, each destroyed once, with the cancellation as the primary
+/// failure, and the step unwinds with it. A destroy that fails in that close is a secondary of the cancellation.
+#[test]
+fn champ_r5_a_cancelled_async_defer_with_inputs_never_starts_and_closes_them() {
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load_r5(stress, engine);
+        let mut ctx = context(&mut runtime);
+        ctx.entry_frame = frame_pointer!();
+        let mut state = owner(&mut ctx);
+        for bad in [false, true] {
+            let this = gate(&mut ctx, &mut state);
+            let g = gate(&mut ctx, &mut state);
+            let scope_owner = owner_of(&runtime, &state);
+            let (r, first) = object_of(&mut ctx, scope_owner, 0);
+            let mut objects = vec![r];
+            let input = if bad {
+                let (b, second) = object_of(&mut ctx, scope_owner, BAD);
+                objects.push(b);
+                let mut parts = [first, second];
+                let mut joined = PacketSlot::default();
+                assert_eq!(rt_own_join(&mut ctx, parts.as_mut_ptr(), 2, &mut joined), NORMAL);
+                joined
+            } else {
+                first
+            };
+            let mut defer = Defer::new(input, g);
+            runtime.roots.push((defer.io.input.record, Repr::Ref));
+            assert_eq!(rt_cancel_request(&mut ctx, this), NORMAL);
+            runtime.running.push(this);
+            let outcome = defer.step(&mut ctx, this);
+            runtime.running.pop();
+            assert_eq!(outcome, UNWIND, "{:?}", runtime.fatal);
+            assert_eq!((ctx.status, ctx.failure), (FAILED, defer.post.failure));
+            (ctx.status, ctx.failure) = (OK, 0);
+            let failure = defer.post.failure;
+            assert_eq!(kind(&runtime, failure), "Cancelled");
+            let secondary = runtime.failure(failure).unwrap().secondary.clone();
+            assert_eq!(secondary.len(), usize::from(bad), "the failed destroy is the only secondary");
+            if let Some(&secondary) = secondary.first() {
+                assert_eq!(kind(&runtime, secondary), "Program(\"bad destroy\")");
+            }
+            // The step is over: no child, the input operand consumed, the request delivered.
+            assert_eq!((get(this, tail(&runtime, this) + STEP), defer.io.input.record), (0, 0));
+            assert_ne!(get(this, tasks::FLAGS) & tasks::champ_flags::CANCEL_DELIVERED, 0);
+            assert!(objects.iter().all(|&object| life(&runtime, object) == Life::Dead));
+        }
+        // No body ran in any configuration (there is no Future trace to compare); every configuration destroys the
+        // same identities in the same order, a close's reverse creation order (G1 §6.5): Bad 3 before Res 2.
+        assert_eq!(count(&runtime, WATCH, FutureStep::Start), 0, "the deferred body never started");
+        assert!(runtime.champ.future_events.iter().all(|event| event.step != FutureStep::Start), "{configuration:?}");
+        assert_eq!(destroyed(&runtime), "Res 1\nBad 3\nRes 2\n", "{configuration:?}");
+    }
+}
+
 #[test]
 fn champ_r5_async_defer_refuses_labels_and_a_non_async_entry() {
     let mut runtime = load_r5(false, Engine::Jit);
@@ -1145,6 +1202,32 @@ fn absorbed(ctx: &mut Ctx, f: Word) -> PacketSlot {
     assert_eq!(rt_service_absorb(ctx, &mut packet, f, SERVICE_CACHE, &mut absorbed), NORMAL);
     unsafe { &mut *ctx.runtime }.roots.push((absorbed.record, Repr::Ref));
     absorbed
+}
+
+/// Which input packets an async defer cancelled before start closes in its step (#728): plain identities with
+/// synchronous destroys, and the empty packet; a packet with a service entry, or an identity whose destroy is
+/// asynchronous, needs the child's own code to close (#745).
+#[test]
+fn champ_r5_only_synchronous_plain_inputs_close_before_start() {
+    use super::super::futures::closable_before_start;
+    let mut runtime = load_r5(false, Engine::Jit);
+    let mut ctx = context(&mut runtime);
+    ctx.entry_frame = frame_pointer!();
+    let mut state = owner(&mut ctx);
+    let scope_owner = owner_of(&runtime, &state);
+    let inputs = empty(&mut ctx);
+    let plain = |runtime: &Runtime, slot: &PacketSlot| {
+        closable_before_start(runtime, &super::super::helpers::packet(runtime, slot.record).unwrap())
+    };
+    let none = empty(&mut ctx);
+    assert!(plain(&runtime, &none));
+    let (_, res) = object_of(&mut ctx, scope_owner, 0);
+    let (_, bad) = object_of(&mut ctx, scope_owner, BAD);
+    assert!(plain(&runtime, &res) && plain(&runtime, &bad));
+    let f = new_future(&mut ctx, MAKE, &[], &mut state, inputs);
+    assert!(!plain(&runtime, &absorbed(&mut ctx, f)));
+    runtime.loaded.program.functions[DESTROY_RES as usize].is_async = true;
+    assert!(!plain(&runtime, &res) && plain(&runtime, &bad));
 }
 
 #[test]

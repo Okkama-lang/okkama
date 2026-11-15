@@ -8,6 +8,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **An async defer with owned inputs never starts when a cancellation is pending, as on Tomato
+  (#728).** Ruling #601 K2: a `defer await` is an unshielded await of the deferred call, and Tomato
+  raises a pending cancellation before the call starts. Champ did so only for an empty input packet;
+  with owned arguments it started the child, whose code ran up to its first await. Now the step closes
+  the inputs itself through the common cleanup executor, each destroyed once with the cancellation as
+  the primary failure (a failing destroy is its secondary), as a body that cannot start closes its
+  continuation-0 inputs, and unwinds with it. Inputs with an async destroy or a service entry still
+  start the child (#745).
 - **`catch e is Error` takes a cancellation on Champ, as on Tomato (#738).** Language spec 9.5: the
   system `Cancelled` does the role `Error`. Champ's catch binds a new `Cancelled` object for a catch of
   the Error role too, and its `text()` through the role is "Operation was cancelled". The OIR-2 → SPB 17
