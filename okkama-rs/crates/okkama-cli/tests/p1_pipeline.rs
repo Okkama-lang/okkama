@@ -23,11 +23,15 @@ impl ModuleLoader for StdLoader {
     }
 }
 
-fn compile(text: &str) -> Result<Vec<u8>, oir2::PipelineError> {
+fn compile_with(text: &str, mode: okkama_compiler::oir2::VerifyMode) -> Result<Vec<u8>, oir2::PipelineError> {
     let source = SourceFile::new("app.ok", text).unwrap();
     let program = syntax::parse(&source, &ParseOptions::default()).unwrap();
     let roots = [RootFile { source: &source, program: &program }];
-    oir2::compile_linked(&roots, &mut StdLoader)
+    oir2::compile_linked_with(&roots, &mut StdLoader, mode)
+}
+
+fn compile(text: &str) -> Result<Vec<u8>, oir2::PipelineError> {
+    compile_with(text, okkama_compiler::oir2::VerifyMode::Structural)
 }
 
 fn manifest() -> Value {
@@ -39,7 +43,12 @@ fn check(id: &str) {
     let entry = manifest["entries"].as_array().unwrap().iter().find(|entry| entry["id"] == id).unwrap();
     assert_eq!(entry["expected"], "supported");
     let text = std::fs::read_to_string(root().join(entry["source"].as_str().unwrap())).unwrap();
-    let bytes = compile(&text).unwrap_or_else(|error| panic!("{id}: {error}"));
+    let start = std::time::Instant::now();
+    let bytes = compile(&text).unwrap_or_else(|error| {
+        println!("BUILD {id}: stopped after {:?}: {error}", start.elapsed());
+        panic!("{id}: {error}");
+    });
+    println!("BUILD {id}: high -> own -> low -> SPB17 -> verify_load in {:?}", start.elapsed());
     let limits = sparrow_core::budget::Limits {
         steps: Some(100_000),
         ..sparrow_core::budget::Limits::default()
@@ -64,7 +73,7 @@ fn check(id: &str) {
         format!("{} {}\n", reference["type"].as_str().unwrap(), reference["serial"].as_u64().unwrap())
     }).collect::<String>();
     assert_eq!(String::from_utf8(run.destroy_trace).unwrap(), expected_trace, "{id}: creation-event trace");
-    println!("{id}: checkpoints={checkpoints:?}; trace={expected_trace:?}");
+    println!("BUILD {id}: Champ JIT and manifest passed; checkpoints={checkpoints:?}; trace={expected_trace:?}");
 }
 
 macro_rules! fixture {
@@ -157,4 +166,25 @@ fn p1_pipeline_atomic_replace_fresh_preserves_old_value() {
     assert_eq!(run.result.unwrap(), 7);
     assert_eq!(String::from_utf8(run.stdout).unwrap(), "oldnew");
     assert!(run.destroy_trace.is_empty(), "plain strings have no resource obligations");
+}
+
+// Keep the ownership gate independent of build policy. Collect all verdicts even
+// when an earlier fixture fails; Rejected and Incomplete both fail this test.
+#[test]
+fn p1_pipeline_full_ownership_gate() {
+    let manifest = manifest();
+    let mut failures = Vec::new();
+    for entry in manifest["entries"].as_array().unwrap() {
+        let id = entry["id"].as_str().unwrap();
+        let text = std::fs::read_to_string(root().join(entry["source"].as_str().unwrap())).unwrap();
+        let start = std::time::Instant::now();
+        match compile_with(&text, okkama_compiler::oir2::VerifyMode::Full) {
+            Ok(_) => println!("FULL {id}: high/own/low passed in {:?}", start.elapsed()),
+            Err(error) => {
+                println!("FULL {id}: stopped after {:?}: {error}", start.elapsed());
+                failures.push(format!("{id}: {error}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

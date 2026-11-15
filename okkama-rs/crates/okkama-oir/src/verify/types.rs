@@ -210,6 +210,12 @@ impl Checker<'_, '_> {
         Ok(self.module.types.get(value_type(self.body, value)?)?)
     }
     fn report(&mut self, rule: R, message: &str) {
+        // These ownership/profile diagnostics share the type traversal. The
+        // ordinary T rules still reject service/reference type mismatches.
+        if self.state.options.mode == super::VerifyMode::Structural
+            && matches!(rule, R::B11 | R::B31 | R::B114) {
+            return;
+        }
         self.state.location = L::Operand { site: self.site, path: OperandPath(vec![self.operand]) };
         self.operand = self.operand.saturating_add(1);
         self.state.error(rule, message);

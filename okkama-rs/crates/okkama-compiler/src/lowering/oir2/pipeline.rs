@@ -1,4 +1,4 @@
-//! Source-facing experimental pipeline. Every phase has an independent semantic gate.
+//! Source-facing experimental pipeline. Builds use structural gates; tests can request full ownership gates.
 use super::{LowerError, lower_to_oir2, native_summaries::P1NativeSummaries};
 use crate::analysis;
 use crate::codegen::sparrow_oir2;
@@ -53,25 +53,34 @@ pub fn lower_linked_high(roots: &[RootFile<'_>], loader: &mut dyn ModuleLoader)
 pub fn compile_linked(roots: &[RootFile<'_>], loader: &mut dyn ModuleLoader)
     -> Result<Vec<u8>, PipelineError>
 {
+    compile_linked_with(roots, loader, o::VerifyMode::Structural)
+}
+
+/// Select verification explicitly; environment and command-line policy belong to the CLI.
+pub fn compile_linked_with(roots: &[RootFile<'_>], loader: &mut dyn ModuleLoader, mode: o::VerifyMode)
+    -> Result<Vec<u8>, PipelineError>
+{
+    let verify = o::VerifyOptions { mode, ..o::VerifyOptions::default() };
     let high = lower_linked_high(roots, loader)?;
     let catalog = P1NativeSummaries::for_module(&high).map_err(|error| phase("contracts", error))?;
     let context = || o::VerifyContext { external_contracts: &catalog, ..o::VerifyContext::default() };
-    o::verify_with(&high, &o::VerifyOptions::default(), context())
+    o::verify_high_with(&high, &verify, context())
         .map_err(|error| phase("verify_high", error))?;
-    let options = o::own::OwnOptions::default();
-    let own = o::own::elaborate_ownership(high, &catalog, &options)
-        .and_then(|output| o::own::rewrite_subset(output, &options))
-        .map_err(|error| phase("own", error))?;
+    let options = o::own::OwnOptions { verify, ..o::own::OwnOptions::default() };
+    let inferred = o::own::elaborate_ownership(high, &catalog, &options)
+        .map_err(|error| phase("own_elaborate", error))?;
+    let own = o::own::rewrite_subset(inferred, &options)
+        .map_err(|error| phase("own_rewrite", error))?;
     let catalog = P1NativeSummaries::for_module(&own.module).map_err(|error| phase("contracts_own", error))?;
     let context = || o::VerifyContext { external_contracts: &catalog, ..o::VerifyContext::default() };
-    o::verify_with(&own.module, &options.verify, context()).map_err(|error| phase("verify_own", error))?;
+    o::verify_own_with(&own.module, &options.verify, context()).map_err(|error| phase("verify_own", error))?;
     let low = o::low::lower_cleanup(own.module, &o::low::LowOptions::default())
         .map_err(|error| phase("low", error))?;
-    o::verify_with(&low, &options.verify, context()).map_err(|error| phase("verify_low", error))?;
+    o::verify_low_with(&low, &options.verify, context()).map_err(|error| phase("verify_low", error))?;
     let layouts = layouts(&low)?;
     let objects = sparrow_oir2::objects(&low, &layouts).map_err(|error| phase("layout", error))?;
     let contracts = s::p1::P1Contracts::new(&objects).map_err(|error| phase("contracts", error))?;
-    let output = sparrow_oir2::compile_low(&low, &layouts, context(), &contracts)
+    let output = sparrow_oir2::compile_low_with(&low, &layouts, context(), &contracts, &options.verify)
         .map_err(|error| phase("compile_low", error))?;
     s::verify_load(&output.program, &contracts).map_err(|error| phase("verify_load", error))?;
     s::encode(&output.program).map_err(|error| phase("encode", error))

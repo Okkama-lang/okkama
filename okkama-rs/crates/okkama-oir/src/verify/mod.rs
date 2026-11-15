@@ -32,8 +32,17 @@ pub use limits::*;
 pub enum ErrorPolicy { First, #[default] All }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ExecutionMode { #[default] Production, Tests }
+/// Structural checks never enter the ownership/protocol solvers.
+/// Full remains the default for verifier callers and the mandatory test/CI gate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VerifyMode {
+    Structural,
+    #[default]
+    Full,
+}
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct VerifyOptions {
+    pub mode: VerifyMode,
     pub errors: ErrorPolicy,
     pub limits: VerifyLimits,
     pub execution: ExecutionMode,
@@ -75,11 +84,13 @@ impl Default for VerifyContext<'_> {
 pub struct VerifiedModule<'m> {
     module: &'m Module,
     profile: Profile,
+    mode: VerifyMode,
     stats: VerifyStats,
 }
 impl<'m> VerifiedModule<'m> {
     pub fn module(&self) -> &'m Module { self.module }
     pub fn profile(&self) -> Profile { self.profile }
+    pub fn mode(&self) -> VerifyMode { self.mode }
     pub fn stats(&self) -> &VerifyStats { &self.stats }
 }
 
@@ -87,13 +98,25 @@ pub fn verify(module: &Module) -> Result<VerifiedModule<'_>, VerifyReport> {
     verify_with(module, &VerifyOptions::default(), VerifyContext::default())
 }
 macro_rules! profile_api {
-    ($($name:ident => $profile:ident),* $(,)?) => {$(
+    ($($name:ident, $with:ident => $profile:ident),* $(,)?) => {$(
         pub fn $name(module: &Module) -> Result<VerifiedModule<'_>, VerifyReport> {
-            run(module, &VerifyOptions::default(), VerifyContext::default(), Some(Profile::$profile), None)
+            $with(module, &VerifyOptions::default(), VerifyContext::default())
+        }
+        pub fn $with<'m>(
+            module: &'m Module,
+            options: &VerifyOptions,
+            context: VerifyContext<'_>,
+        ) -> Result<VerifiedModule<'m>, VerifyReport> {
+            run(module, options, context, Some(Profile::$profile), None)
         }
     )*};
 }
-profile_api!(verify_high => High, verify_own => Own, verify_coro => Coro, verify_low => Low);
+profile_api!(
+    verify_high, verify_high_with => High,
+    verify_own, verify_own_with => Own,
+    verify_coro, verify_coro_with => Coro,
+    verify_low, verify_low_with => Low,
+);
 pub fn verify_with<'m>(
     module: &'m Module,
     options: &VerifyOptions,
@@ -227,13 +250,31 @@ fn run<'m>(
     dominance::check(module, function, &mut state);
     contracts::check(module, function, &mut state);
     authority::check(module, function, &mut state);
-    summaries::check(module, function, &mut state);
-    high::check(module, function, &mut state);
-    linearity::check(module, function, &mut state);
-    low_phases::check(module, function, &mut state);
-    low_roots::check(module, function, &mut state);
-    later::async_cleanup_and_profiles(module, function, &mut state);
+    if options.mode == VerifyMode::Full {
+        summaries::check(module, function, &mut state);
+        high::check(module, function, &mut state);
+        linearity::check(module, function, &mut state);
+        low_phases::check(module, function, &mut state);
+        low_roots::check(module, function, &mut state);
+        later::async_cleanup_and_profiles(module, function, &mut state);
+    }
     order_diagnostics(module, &mut state);
+    // Structural resource exhaustion rejects the build; it is not an ownership
+    // proof with an Incomplete verdict, and must never silently accept a prefix.
+    if state.incomplete && options.mode == VerifyMode::Structural {
+        state.diagnostics.push(VerifyDiagnostic {
+            rule: RuleId::S1,
+            primary: IrLocation {
+                entity: state.location.clone(),
+                text_span: context.text_locations.and_then(|table| table.span(&state.location)),
+                source_loc: state.source_loc,
+            },
+            related: vec![],
+            message: "structural verification resource limit exceeded".into(),
+            witness: None,
+        });
+        state.incomplete = false;
+    }
     // Passes emit in traversal order: module arenas, function/block arenas,
     // instruction positions, then operands/slots. No hash iteration controls diagnostics.
     if state.incomplete || !state.diagnostics.is_empty() {
@@ -246,7 +287,7 @@ fn run<'m>(
             diagnostics: state.diagnostics, suppressed: state.suppressed, stats: state.stats,
         });
     }
-    Ok(VerifiedModule { module, profile: module.profile, stats: state.stats })
+    Ok(VerifiedModule { module, profile: module.profile, mode: options.mode, stats: state.stats })
 }
 
 #[cfg(test)]

@@ -561,10 +561,21 @@ pub fn compile_low(module: &o::Module, layouts: &dyn LayoutRegistry,
     context: o::VerifyContext<'_>, contracts: &dyn s::ExternalContracts)
     -> Result<AllocatedProgram, GenerateError>
 {
+    compile_low_with(module, layouts, context, contracts, &o::VerifyOptions::default())
+}
+
+/// Build policy may select structural verification; loader checks remain mandatory in either mode.
+pub fn compile_low_with(
+    module: &o::Module,
+    layouts: &dyn LayoutRegistry,
+    context: o::VerifyContext<'_>,
+    contracts: &dyn s::ExternalContracts,
+    options: &o::VerifyOptions,
+) -> Result<AllocatedProgram, GenerateError> {
     if module.profile != o::Profile::Low {
         return Err(GenerateError("expected Low profile".into()));
     }
-    o::verify_with(module, &o::VerifyOptions::default(), context)
+    o::verify_low_with(module, options, context)
         .map_err(|report| GenerateError(format!("verify_low: {report:?}")))?;
     let output = generate_with_allocation(module, layouts)?;
     s::verify_load(&output.program, contracts)?;

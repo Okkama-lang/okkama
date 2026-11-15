@@ -401,3 +401,96 @@ fn malformed_cleanup_proof_arenas_are_rejected_without_panics() {
         assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::S3));
     }
 }
+
+#[test]
+fn structural_profiles_skip_ownership_but_preserve_structural_gates() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/verify");
+    let options = VerifyOptions {
+        mode: VerifyMode::Structural,
+        execution: ExecutionMode::Tests,
+        ..VerifyOptions::default()
+    };
+    for path in [
+        "valid/H3-dominating-defer-prefix.oir",
+        "invalid/B2-duplicate-input.oir",
+        "invalid/B3-dead-borrow.oir",
+        "invalid/B4-double-close.oir",
+        "invalid/B10-common-cleanup-plan.oir",
+    ] {
+        let module = fixture_module(&root, path);
+        let context = VerifyContext {
+            external_contracts: &FixtureContracts(&module),
+            ..VerifyContext::default()
+        };
+        let verified = match module.profile {
+            okkama_oir::Profile::High => verify_high_with(&module, &options, context),
+            okkama_oir::Profile::Own => verify_own_with(&module, &options, context),
+            okkama_oir::Profile::Low => verify_low_with(&module, &options, context),
+            other => panic!("unexpected profile {other:?}"),
+        }.unwrap_or_else(|error| panic!("{path}: {error:?}"));
+        assert_eq!(verified.mode(), VerifyMode::Structural);
+        assert!(verified.stats().structural_checks.is_empty());
+        assert!(verified.stats().dynamic.sites.is_empty());
+        if path.starts_with("invalid/") {
+            let full = fixture_result(&module, ErrorPolicy::All).unwrap_err();
+            assert_eq!(full.failure, VerifyFailure::Rejected, "{path}");
+        }
+        let selected = verify_function(&module, okkama_oir::FuncId::from_u32(0), context, &options);
+        assert_eq!(selected.failure, None, "{path}: {selected:?}");
+    }
+    for path in [
+        "invalid/S3-tombstone.oir",
+        "invalid/T1-arithmetic.oir",
+        "invalid/SSA2-sibling-value-use.oir",
+        "invalid/A1-foreign-field-read.oir",
+    ] {
+        let module = fixture_module(&root, path);
+        let context = VerifyContext {
+            external_contracts: &FixtureContracts(&module),
+            ..VerifyContext::default()
+        };
+        let report = verify_with(&module, &options, context).unwrap_err();
+        assert_eq!(report.failure, VerifyFailure::Rejected, "{path}");
+        assert_eq!(report.diagnostics[0].rule, fixture_result(&module, ErrorPolicy::All)
+            .unwrap_err().diagnostics[0].rule, "{path}");
+    }
+}
+
+#[test]
+fn structural_exhaustion_rejects_without_an_incomplete_ownership_verdict() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/verify");
+    let module = fixture_module(&root, "valid/T1-arithmetic.oir");
+    for limits in [
+        VerifyLimits { steps: 0, ..VerifyLimits::default() },
+        VerifyLimits { memory_bytes: 0, ..VerifyLimits::default() },
+        VerifyLimits { entities: 0, ..VerifyLimits::default() },
+    ] {
+        let options = VerifyOptions { mode: VerifyMode::Structural, limits, ..VerifyOptions::default() };
+        let report = verify_with(&module, &options, VerifyContext::default()).unwrap_err();
+        assert_eq!(report.failure, VerifyFailure::Rejected);
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.rule == RuleId::S1 && diagnostic.message.contains("resource limit")
+        }), "{report:?}");
+        let full = VerifyOptions { mode: VerifyMode::Full, ..options };
+        assert_eq!(verify_with(&module, &full, VerifyContext::default()).unwrap_err().failure,
+            VerifyFailure::Incomplete);
+    }
+}
+
+#[test]
+fn structural_type_errors_do_not_emit_ownership_rules() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/verify");
+    let module = fixture_module(&root, "invalid/B1-token-as-reference.oir");
+    let options = VerifyOptions { mode: VerifyMode::Structural, ..VerifyOptions::default() };
+    let report = verify_with(&module, &options, VerifyContext::default()).unwrap_err();
+    assert_eq!(report.failure, VerifyFailure::Rejected);
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::T1));
+    assert!(report.diagnostics.iter().all(|diagnostic| {
+        matches!(diagnostic.rule, RuleId::S1 | RuleId::S2 | RuleId::S3
+            | RuleId::T1 | RuleId::T2 | RuleId::T3 | RuleId::T4 | RuleId::T5 | RuleId::T6
+            | RuleId::SSA1 | RuleId::SSA2 | RuleId::B61 | RuleId::B62
+            | RuleId::A1 | RuleId::A2 | RuleId::A3)
+    }), "{report:?}");
+    let full = fixture_result(&module, ErrorPolicy::All).unwrap_err();
+    assert!(full.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::B11));
+}

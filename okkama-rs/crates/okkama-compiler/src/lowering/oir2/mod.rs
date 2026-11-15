@@ -10,7 +10,7 @@ mod body;
 mod std_slice;
 mod native_summaries;
 mod pipeline;
-pub use pipeline::{PipelineError, compile_linked, lower_linked_high};
+pub use pipeline::{PipelineError, compile_linked, compile_linked_with, lower_linked_high};
 mod construction;
 mod declarations;
 mod defer;
