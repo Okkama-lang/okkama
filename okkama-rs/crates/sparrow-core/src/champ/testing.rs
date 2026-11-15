@@ -55,7 +55,11 @@ pub extern "C" fn rt_machine_test(ctx: *mut Ctx, kind: Word, function: Word, reg
             let ty = program.functions[function as usize].registers[register as usize];
             let equal = match super::machine::value_equal(runtime, &program, left, right, ty) {
                 Ok(equal) => equal,
-                Err(message) => return super::helpers::stop(ctx, super::helpers::error(&message)),
+                // A comparison the loader should have refused fails the check's case, not the engine.
+                Err(message) => {
+                    super::helpers::fail(ctx, super::helpers::error(&message));
+                    return 0;
+                }
             };
             if kind == 1 && !equal {
                 Some(format!("expected {}, got {}", show(runtime, &program, right, ty),
@@ -170,8 +174,10 @@ pub(crate) fn run_suite(program: s::Program, out: Box<dyn std::io::Write + Send>
         return Err(Error("Test run requires at least one test".into()));
     }
     let names = tests.iter().map(|test| test.name.clone()).collect::<Vec<_>>();
+    // The loader checks the program once; every case gets a fresh runtime over the same verified program.
+    let verified = machine::Verified::new(program, Vec::new())?;
     crate::report_suite(&names, out, |index| {
-        let mut runtime = Runtime::new_champ(program.clone(), Vec::new())?;
+        let mut runtime = Runtime::new_champ_verified(&verified)?;
         runtime.limits = limits.clone();
         if let Some(host) = &mut runtime.host {
             host.test_failures = Some(Vec::new());
@@ -194,3 +200,7 @@ pub(crate) fn run_suite(program: s::Program, out: Box<dyn std::io::Write + Send>
         Ok(crate::CaseOutcome { failures, skipped })
     })
 }
+
+#[cfg(test)]
+#[path = "testing_tests.rs"]
+mod tests;
