@@ -575,14 +575,22 @@ impl Emit<'_, '_> {
                 self.checked("champ_machine_destination", &[ctx, state, destination]);
                 return self.flow(op, flow, arguments, ordinal, "champ_scope_begin");
             }
-            O::InvokeObserve => {
-                let target = arguments.iter().find_map(entry).unwrap() as usize;
-                let count = self.program.functions[target].params.iter()
-                    .filter(|location| matches!(location, L::Register(_))).count();
+            O::InvokeObserve | O::InvokeDispatch => {
+                let (function, count, has_result) = if op == O::InvokeDispatch {
+                    let (function, count, has_result) = self.dispatch(arguments, locations[0], |_, function| {
+                        function as u64
+                    });
+                    (function, count, has_result)
+                } else {
+                    let target = arguments.iter().find_map(entry).unwrap() as usize;
+                    let callee = &self.program.functions[target];
+                    let count = callee.params.iter().filter(|location| matches!(location, L::Register(_))).count();
+                    let has_result = !callee.results.is_empty();
+                    (self.iconst(target as u64), count, has_result)
+                };
                 let values = locations[..count].iter().map(|&loc| self.word(loc)).collect::<Vec<_>>();
                 let argv = self.record(&values);
                 let argc = self.iconst(count as u64);
-                let function = self.iconst(target as u64);
                 let value = self.call("champ_machine_external", &[ctx, function, zero, argv, argc]).unwrap();
                 let status = self.load(ctx, std::mem::offset_of!(Ctx, status));
                 let success = self.builder.create_block();
@@ -598,11 +606,7 @@ impl Emit<'_, '_> {
                     }
                     s::Flow::Outcomes(outcomes) => {
                         let edge = &outcomes.iter().find(|outcome| outcome.tag == s::Tag::Normal).unwrap().edge;
-                        let produced = if self.program.functions[target].results.is_empty() {
-                            vec![]
-                        } else {
-                            vec![vec![value]]
-                        };
+                        let produced = if has_result { vec![vec![value]] } else { vec![] };
                         self.edge(edge, &produced);
                     }
                 }
@@ -819,22 +823,31 @@ impl Emit<'_, '_> {
                     args.extend(self.read(locations[1]));
                 }
             }
-            O::InvokeCallOwn | O::InvokeDefer => {
+            O::InvokeCallOwn | O::InvokeDefer | O::InvokeDispatchOwn => {
                 helper = if op == O::InvokeDefer { "champ_invoke_defer" } else { "champ_call_owned" };
-                let target = arguments.iter().find_map(entry).unwrap() as usize;
-                let count = self.program.functions[target].params.iter()
-                    .filter(|location| matches!(location, L::Register(_))).count();
+                let shielded = op == O::InvokeDefer || arguments.contains(&A::Flag(true));
+                let (entry_id, count) = if op == O::InvokeDispatchOwn {
+                    let (entry_id, count, _) = self.dispatch(arguments, locations[0], |emit, function| {
+                        let entries = if shielded { emit.shielded_entries } else { emit.entries };
+                        entries[function as usize]
+                    });
+                    (entry_id, count)
+                } else {
+                    let target = arguments.iter().find_map(entry).unwrap() as usize;
+                    let count = self.program.functions[target].params.iter()
+                        .filter(|location| matches!(location, L::Register(_))).count();
+                    let entry = if shielded { self.shielded_entries[target] } else { self.entries[target] };
+                    (self.iconst(entry), count)
+                };
                 let values = locations[..count].iter().map(|&location| self.word(location)).collect::<Vec<_>>();
                 let argv = self.record(&values);
                 let argc = self.iconst(count as u64);
-                let shielded = op == O::InvokeDefer || arguments.contains(&A::Flag(true));
-                let entry = if shielded { self.shielded_entries[target] } else { self.entries[target] };
-                let entry_id = self.iconst(entry);
                 let packet = self.word(locations[count]);
                 let mode = self.iconst(u64::from(shielded));
                 let io = self.record(&[packet, entry_id, post, zero, mode]);
                 args.extend([entry_id, argv, argc, io]);
                 if op == O::InvokeDefer {
+                    let target = arguments.iter().find_map(entry).unwrap() as usize;
                     let replacements = match &self.program.functions[target].entry_abi {
                         s::EntryAbi::Defer { labels } => labels.len(),
                         _ => unreachable!(),
@@ -915,7 +928,7 @@ impl Emit<'_, '_> {
         args.push(post);
         let ordinal = self.checked(helper, &args);
         // Retire copied inputs before the next safepoint. CallOwn owns its packet now.
-        if matches!(op, O::InvokeCallOwn | O::InvokeDefer | O::OwnJoin) {
+        if matches!(op, O::InvokeCallOwn | O::InvokeDefer | O::InvokeDispatchOwn | O::OwnJoin) {
             for &location in &locations {
                 if matches!(location, L::Service(id) if self.source.services[id as usize] == s::ServiceKind::Packet) {
                     self.write(location, &[zero]);
@@ -926,6 +939,39 @@ impl Emit<'_, '_> {
             self.store(self.io, 0, zero);
         }
         self.flow(op, flow, arguments, ordinal, helper)
+    }
+
+    /// Selects the implementation of a dispatch by the receiver's object descriptor: `select` maps each
+    /// target's implementation function to the word the call needs (its index or its entry ID). A receiver
+    /// outside the verified targets stops the machine. Returns the word, the language argument count
+    /// (receiver first) and whether the slot has a result.
+    fn dispatch(&mut self, arguments: &[A], receiver: L, select: impl Fn(&Self, u32) -> u64)
+        -> (Value, usize, bool)
+    {
+        let Some(A::Dispatch(dispatch)) = arguments.first() else { unreachable!("verified dispatch") };
+        let slot = &self.program.objects[dispatch.role as usize].role.as_ref().expect("verified role")
+            .slots[dispatch.slot as usize];
+        let (count, has_result) = (1 + slot.params.len(), !slot.results.is_empty());
+        let object = self.word(receiver);
+        let header = self.load(object, 0);
+        let descriptor = self.builder.ins().ushr_imm_u(header, 32);
+        let mut selected = self.iconst(u64::MAX);
+        for &target in &dispatch.targets {
+            let function = s::implementation(self.program, target, dispatch.role, dispatch.slot)
+                .expect("verified implementation");
+            let word = self.iconst(select(self, function));
+            let matches = self.builder.ins().icmp_imm_s(IntCC::Equal, descriptor, i64::from(target));
+            selected = self.builder.ins().select(matches, word, selected);
+        }
+        let missing = self.builder.ins().icmp_imm_s(IntCC::Equal, selected, -1);
+        let outside = self.builder.create_block();
+        let selected_block = self.builder.create_block();
+        self.builder.ins().brif(missing, outside, &[], selected_block, &[]);
+        self.builder.switch_to_block(outside);
+        self.call("champ_machine_invalid", &[self.ctx]);
+        self.builder.ins().jump(self.stop, &[]);
+        self.builder.switch_to_block(selected_block);
+        (selected, count, has_result)
     }
 
     fn selection_record(&mut self, id: u32) -> Value {
@@ -1183,7 +1229,8 @@ impl Emit<'_, '_> {
                 self.builder.ins().uextend(types::I64, result)
             }
             D::ValEq | D::ValNe => {
-                let s::Type::Object(descriptor) = self.source.registers[inputs[0] as usize] else {
+                let ty = self.source.registers[inputs[0] as usize];
+                let (s::Type::Object(descriptor) | s::Type::Role(descriptor)) = ty else {
                     return Err(Error("Champ value equality outside objects".into()));
                 };
                 let descriptor = self.iconst(u64::from(descriptor));
@@ -1215,6 +1262,13 @@ impl Emit<'_, '_> {
                 let storage = self.iconst(u64::from(indices[1]));
                 self.call("champ_machine_variant_get", &[self.ctx, case, storage, words[0]]).unwrap()
             }
+            D::RoleNarrow => {
+                let s::Type::Role(role) = ty else {
+                    return Err(Error("Champ role narrowing outside role types".into()));
+                };
+                let role = self.iconst(u64::from(role));
+                self.call("champ_machine_role_narrow", &[self.ctx, role, words[0]]).unwrap()
+            }
             D::BoolNot => self.builder.ins().bxor_imm_s(words[0], 1),
             D::BoolEq | D::BoolNe => {
                 let condition = if op == D::BoolEq { IntCC::Equal } else { IntCC::NotEqual };
@@ -1231,8 +1285,10 @@ impl Emit<'_, '_> {
 fn sets_status(op: s::DataOp) -> bool {
     use s::DataOp as D;
     matches!(op, D::IntMod | D::RangeNew | D::Convert | D::IntMul | D::StrConcat | D::RatNew | D::ValEq | D::ValNe
-        | D::VariantGet)
+        | D::VariantGet | D::RoleNarrow)
 }
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod roles_tests;

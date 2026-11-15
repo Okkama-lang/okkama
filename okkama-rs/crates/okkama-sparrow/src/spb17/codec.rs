@@ -330,8 +330,12 @@ record! { ObjectRuntimeLayout {
 
 record! { Field { name, storage, once } }
 record! { Object {
-    name, fields, layout, error_cases; enum_cases, variant_cases,
+    name, fields, layout, error_cases; enum_cases, variant_cases, role, implements,
 } }
+record! { RoleDecl { slots } }
+record! { RoleSlot { name, entry_abi, params, results } }
+record! { RoleImpl { role, slots } }
+record! { Dispatch { role, slot, failures, retained_params, targets } }
 
 record! { Assignment {
     destination, source,
@@ -431,11 +435,11 @@ tagged! { Type {
     0 => Int, 1 => Bool, 2 => Byte, 3 => Float, 4 => Rat, 5 => Char,
     6 => Str, 20 => Range, 11 => Failure, 21 => Bytes, 22 => Error,
     7 => Object(id: u32), 8 => Successor(id: u32), 13 => Never, 9 => Descriptor,
-    23 => Array(shape: ArrayType), 24 => Variant(id: u32),
+    23 => Array(shape: ArrayType), 24 => Variant(id: u32), 40 => Role(id: u32), 41 => RoleSuccessor(id: u32),
 } }
 record! { ArrayType { leaf, depth } }
 tagged! { ArrayLeaf {
-    0 => Int, 1 => Bool, 2 => Str, 3 => Range, 4 => Bytes, 5 => Object(id: u32),
+    0 => Int, 1 => Bool, 2 => Str, 3 => Range, 4 => Bytes, 5 => Object(id: u32), 20 => Role(id: u32),
 } }
 tagged! { ServiceKind {
     0 => Packet, 1 => ScopeState, 2 => Pending, 3 => Cleanup, 4 => StableKey,
@@ -463,6 +467,7 @@ tagged! { Argument {
     8 => Entry(id: u32), 9 => Object(id: u32), 10 => Binding(id: u32), 11 => Field(id: u32),
     12 => Label(id: u32), 13 => Flag(flag: bool), 14 => Kind(kind: ExitKind), 15 => Registration(id: u32),
     16 => Destination(destination: ExitDestination),
+    40 => Dispatch(dispatch: Dispatch),
 } }
 record! { Evaluation { op, result, immediate } }
 
@@ -543,6 +548,7 @@ fn opcode_name(code: u8) -> Option<&'static str> {
         147 => Some("raise"),
         136 => Some("fail.secondary"),
         137 => Some("fail.caused"),
+        100 => Some("role"),
         255 => Some("champ"),
         _ => None,
     }
@@ -621,11 +627,12 @@ impl DataOp {
             Self::EnumCase => (94, None),
             Self::FailSecondary => (136, None),
             Self::FailCaused => (137, None),
+            Self::RoleNarrow => (100, Some(0)),
         }
     }
 
     fn read(code: u8, r: &mut Reader<'_>) -> Result<Self, Error> {
-        let sub = if matches!(code, 24 | 41 | 71 | 85 | 47..=50 | 52 | 53) { Some(r.number()?) } else { None };
+        let sub = if matches!(code, 24 | 41 | 71 | 85 | 47..=50 | 52 | 53 | 100) { Some(r.number()?) } else { None };
         match (code, sub) {
             (1, None) => Ok(Self::Const),
             (2, None) => Ok(Self::Move),
@@ -697,6 +704,7 @@ impl DataOp {
             (94, None) => Ok(Self::EnumCase),
             (136, None) => Ok(Self::FailSecondary),
             (137, None) => Ok(Self::FailCaused),
+            (100, Some(0)) => Ok(Self::RoleNarrow),
             _ => Err(r.fail(format!("unknown scalar opcode {code}/{sub:?}"))),
         }
     }

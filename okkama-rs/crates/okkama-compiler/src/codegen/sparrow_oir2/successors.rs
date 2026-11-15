@@ -2,6 +2,20 @@
 //! Do not manufacture a second permission by forwarding an unused alias after succ.take.
 use super::*;
 
+/// The value a successor's succ.take produces: the object of an object successor, the role value of a
+/// role successor. `None` for every other type.
+fn taken(ty: s::Type) -> Option<s::Type> {
+    match ty {
+        s::Type::Successor(id) => Some(s::Type::Object(id)),
+        s::Type::RoleSuccessor(id) => Some(s::Type::Role(id)),
+        _ => None,
+    }
+}
+
+fn is_successor(ty: s::Type) -> bool {
+    taken(ty).is_some()
+}
+
 pub(super) fn prune_dead_aliases(function: &mut s::Function) {
     let mut needed = function.params.iter().copied().collect::<BTreeSet<_>>();
     for instruction in &function.code {
@@ -45,7 +59,7 @@ pub(super) fn prune_dead_aliases(function: &mut s::Function) {
     for block in &mut function.blocks {
         block.params.retain(|location| {
             let dead = matches!(location, s::Location::Register(id)
-                if matches!(function.registers[*id as usize], s::Type::Successor(_)))
+                if is_successor(function.registers[*id as usize]))
                 && !needed.contains(location);
             if dead { removed.insert(*location); }
             !dead
@@ -87,11 +101,11 @@ fn edges(instruction: &s::Instruction) -> Vec<&s::Edge> {
 /// Unwind abandons unused successor results. Discharge their must-use permission explicitly;
 /// cleanup still owns the same identity packet. No destroy or ownership operation is introduced.
 pub(super) fn close_unwind_permissions(function: &mut s::Function) -> Result<(), GenerateError> {
-    if !function.registers.iter().any(|ty| matches!(ty, s::Type::Successor(_))) || function.code.is_empty() {
+    if !function.registers.iter().any(|&ty| is_successor(ty)) || function.code.is_empty() {
         return Ok(());
     }
     let successor = |location| matches!(location, s::Location::Register(id)
-        if matches!(function.registers[id as usize], s::Type::Successor(_)));
+        if is_successor(function.registers[id as usize]));
     let mut bare = function.clone();
     bare.proofs.roots.clear();
     bare.proofs.post_roots.clear();
@@ -175,8 +189,8 @@ pub(super) fn close_unwind_permissions(function: &mut s::Function) -> Result<(),
         for location in abandoned {
             extended.insert(location);
             let s::Location::Register(input) = location else { unreachable!() };
-            let s::Type::Successor(id) = function.registers[input as usize] else { unreachable!() };
-            let output = fresh(function, s::Type::Object(id))?;
+            let Some(object) = taken(function.registers[input as usize]) else { unreachable!() };
+            let output = fresh(function, object)?;
             function.code.push(data(s::DataOp::Move, vec![input], output, s::Immediate::None));
         }
         function.code.push(s::Instruction::Br(continuation));
@@ -239,8 +253,8 @@ pub(super) fn forward_taken(function: &mut s::Function) -> Result<(), GenerateEr
             edge.assignments[index].source = s::Source::Location(object);
         }
         for param in params {
-            if let s::Type::Successor(id) = function.registers[param as usize] {
-                function.registers[param as usize] = s::Type::Object(id);
+            if let Some(object) = taken(function.registers[param as usize]) {
+                function.registers[param as usize] = object;
             }
         }
     }
@@ -276,8 +290,8 @@ type Forward = (usize, usize, usize, s::Location);
 /// when nothing can be forwarded. Inconsistent states are left for the verifier to reject.
 fn taken_forwards(function: &s::Function) -> Option<(Vec<Forward>, BTreeSet<u32>)> {
     let successor = |location: s::Location| matches!(location, s::Location::Register(id)
-        if matches!(function.registers[id as usize], s::Type::Successor(_)));
-    if function.code.is_empty() || !function.registers.iter().any(|ty| matches!(ty, s::Type::Successor(_))) {
+        if is_successor(function.registers[id as usize]));
+    if function.code.is_empty() || !function.registers.iter().any(|&ty| is_successor(ty)) {
         return None;
     }
     let blocks = function.blocks.iter().enumerate().map(|(index, block)| (block.pc, index))

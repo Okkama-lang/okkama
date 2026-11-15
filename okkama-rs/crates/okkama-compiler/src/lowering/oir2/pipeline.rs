@@ -97,7 +97,9 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
         let (fields, destroy, builtin) = match &declaration.kind {
             o::DeclarationKind::Object { fields, destroy, builtin, .. } => (fields.as_slice(), *destroy, *builtin),
             o::DeclarationKind::Enum { .. } | o::DeclarationKind::Variant { .. } => (&[][..], None, false),
-            o::DeclarationKind::Role { builtin: true, .. } if declaration.name == "Error" => (&[][..], None, false),
+            // A role is a placeholder descriptor; its slots and implementations live in the SPB declarations.
+            // A cap value is its owner's reference, so its declaration is a placeholder too.
+            o::DeclarationKind::Role { .. } | o::DeclarationKind::Cap { .. } => (&[][..], None, false),
             _ => return Err(phase("layout", format!("unsupported declaration {}", declaration.name))),
         };
         let atomic = match declaration.name.as_str() {
@@ -117,7 +119,8 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
         }
         let trace_layout = storage_fields.iter().enumerate().filter_map(|(index, ty)| {
             matches!(ty, s::Type::Bytes | s::Type::Array(_) | s::Type::Str | s::Type::Object(_) | s::Type::Successor(_)
-                | s::Type::Failure | s::Type::Rat | s::Type::Variant(_)).then_some(index as u32)
+                | s::Type::Failure | s::Type::Rat | s::Type::Variant(_) | s::Type::Role(_)
+                | s::Type::RoleSuccessor(_)).then_some(index as u32)
         }).collect::<Vec<_>>();
         // Plain layouts can contain resource fields; compute the transitive fact below.
         layouts.insert(id.as_u32(), sparrow_oir2::ObjectLayout {
@@ -134,13 +137,32 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
             source_fields: (0..fields.len() as u32).collect(),
         });
     }
+    // A role value reaches a resource when one of its implementations does.
+    let mut implementors = BTreeMap::<u32, Vec<u32>>::new();
+    for (id, declaration) in module.declarations.iter() {
+        let o::DeclarationKind::Object { witnesses, .. } = &declaration.kind else { continue };
+        for witness in witnesses {
+            let role = module.types.get(witness.role).map_err(|error| phase("layout", error))?;
+            if let o::Type::Role { decl, .. } = role {
+                implementors.entry(decl.as_u32()).or_default().push(id.as_u32());
+            }
+        }
+    }
     loop {
         let reaches = layouts.iter().filter_map(|(&id, layout)| layout.runtime.may_reach_resource.then_some(id))
             .collect::<std::collections::BTreeSet<_>>();
+        let role_reaches = |role: &u32| implementors.get(role).is_some_and(|objects| {
+            objects.iter().any(|object| reaches.contains(object))
+        });
         let mut changed = false;
         for layout in layouts.values_mut() {
             layout.runtime.selection_layout = layout.runtime.storage_fields.iter().enumerate().filter_map(|(i, ty)| {
-                matches!(ty, s::Type::Object(id) | s::Type::Successor(id) if reaches.contains(id)).then_some(i as u32)
+                let reaching = match ty {
+                    s::Type::Object(id) | s::Type::Successor(id) => reaches.contains(id),
+                    s::Type::Role(id) | s::Type::RoleSuccessor(id) => role_reaches(id),
+                    _ => false,
+                };
+                reaching.then_some(i as u32)
             }).collect();
             if !layout.runtime.may_reach_resource && !layout.runtime.selection_layout.is_empty() {
                 layout.runtime.may_reach_resource = true;

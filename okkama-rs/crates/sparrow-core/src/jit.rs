@@ -190,6 +190,9 @@ helpers! {
     champ_machine_variant_get = crate::champ::machine::rt_machine_variant_get as (ctx,
         case: Word, storage: Word, value: Word) -> u64; [Allocates, Fails, Stops];
     #[cfg(feature = "champ-abi")]
+    champ_machine_role_narrow = crate::champ::machine::rt_machine_role_narrow as (ctx,
+        role: Word, value: Word) -> u64; [Allocates, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
     champ_machine_catch = crate::champ::machine::rt_machine_catch as (ctx,
         failure: Word, descriptor: Word) -> u64; [];
     #[cfg(feature = "champ-abi")]

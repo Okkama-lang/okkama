@@ -1,7 +1,7 @@
 //! Relocation of verified Low cleanup evidence. No runtime signatures are invented here.
 use super::*;
 
-fn mask(effects: &[o::FailureKind]) -> Result<u32, GenerateError> {
+pub(super) fn mask(effects: &[o::FailureKind]) -> Result<u32, GenerateError> {
     effects.iter().try_fold(0, |bits, kind| Ok(bits | match kind {
         o::FailureKind::Thrown => 1,
         o::FailureKind::Program => 2,
@@ -266,6 +266,10 @@ impl Emitter<'_> {
                     match &self.body.insts.get(id)?.op {
                         o::Operation::Core(o::CoreOp::RangeLen { .. }) => (instructions[&id] + 2, true),
                         o::Operation::Lexical(o::LexicalOp::DeferRegister { .. }) => (instructions[&id], false),
+                        // The closure value exists after its allocation and move.
+                        o::Operation::Core(o::CoreOp::FnClosure { .. } | o::CoreOp::FnBind { .. }) => {
+                            (instructions[&id] + 1, true)
+                        }
                         // An evaluate has no post state: its result exists where the normal outcome lands.
                         op if super::fallible_scalar(op) => {
                             let raise = self.body.blocks.iter().any(|(_, block)| {
@@ -588,6 +592,12 @@ impl Emitter<'_> {
                     states.insert(pc + 1, active.clone());
                     states.insert(pc + 2, active.clone());
                 }
+                if matches!(instruction.op,
+                    o::Operation::Core(o::CoreOp::FnClosure { .. } | o::CoreOp::FnBind { .. }))
+                {
+                    // The allocation and the move consume no service.
+                    states.insert(pc + 1, active.clone());
+                }
                 if super::fallible_scalar(&instruction.op) {
                     // The evaluate consumes no service: its raise block and normal landing see the same state.
                     states.insert(pc + 1, active.clone());
@@ -727,6 +737,14 @@ impl Emitter<'_> {
                     });
                 }
             }
+        }
+        // A closure creation expands to allocate/move; the closure object is live between them.
+        for &(pc, object) in &self.closures {
+            let mut roots = self.result.proofs.roots.iter().filter(|root| root.pc == pc)
+                .flat_map(|root| root.locations.iter().copied()).collect::<BTreeSet<_>>();
+            roots.extend(states.get(&pc).cloned().unwrap_or_default());
+            roots.insert(L::Register(object));
+            self.result.proofs.roots.push(s::RootRequirement { pc: pc + 1, locations: roots.into_iter().collect() });
         }
         for (&block_id, &pc) in terms {
             if matches!(self.body.blocks.get(block_id)?.term.kind, o::TermKind::Trap { .. }) {

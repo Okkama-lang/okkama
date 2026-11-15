@@ -14,6 +14,7 @@ pub fn plain_inputs(p: &Program, f: &Function) -> bool {
         }
         Ok(ProducedType::Value(Type::Error)) => p.objects.iter().filter(|object| !object.error_cases.is_empty())
             .all(|object| !object.layout.may_reach_resource),
+        Ok(ProducedType::Value(Type::Role(id) | Type::RoleSuccessor(id))) => !verify::role_reaches_resource(p, id),
         Ok(_) => true,
         Err(_) => false,
     })
@@ -24,6 +25,7 @@ pub fn plain_results(p: &Program, f: &Function) -> bool {
         Type::Object(id) | Type::Successor(id) => !p.objects[*id as usize].layout.may_reach_resource,
         Type::Error => p.objects.iter().filter(|object| !object.error_cases.is_empty())
             .all(|object| !object.layout.may_reach_resource),
+        Type::Role(id) | Type::RoleSuccessor(id) => !verify::role_reaches_resource(p, *id),
         _ => true,
     })
 }
@@ -38,9 +40,16 @@ fn resource_free(p: &Program, f: &Function) -> bool {
         Instruction::Champ { op: Opcode::InvokeCallOwn, arguments, .. } => arguments.iter().any(|arg| {
             matches!(arg, Argument::Entry(id) if plain_results(p, &p.functions[*id as usize]))
         }),
+        Instruction::Champ { op: Opcode::InvokeDispatchOwn, arguments, .. } => dispatch_plain_results(p, arguments),
         Instruction::Champ { op: Opcode::InvokeDefer, .. } => false,
         _ => true,
     })
+}
+
+/// Every implementation a dispatch can enter returns plain results: its returned packet is empty.
+fn dispatch_plain_results(p: &Program, arguments: &[Argument]) -> bool {
+    let callees = load::dispatch_callees(p, arguments);
+    !callees.is_empty() && callees.iter().all(|callee| plain_results(p, callee))
 }
 
 /// PCs where independently reconstructed selected inventories prove the admission filter redundant.
@@ -210,7 +219,7 @@ impl<'a> Evidence<'a> {
                     let Instruction::Champ { op, flow: Flow::Outcomes(outcomes), .. }
                         = &self.function.code[pc] else { return None };
                     match (op, outcomes[ordinal].tag) {
-                        (Opcode::InvokeCallOwn, Tag::Normal) => {}
+                        (Opcode::InvokeCallOwn | Opcode::InvokeDispatchOwn, Tag::Normal) => {}
                         (Opcode::OwnSplitChecked | Opcode::ScopeSplit, Tag::Normal | Tag::Unwind) => {
                             let input = arguments(&self.function.code[pc])[0];
                             self.query(input, 3)?;
@@ -222,7 +231,7 @@ impl<'a> Evidence<'a> {
                     let Instruction::Champ { op, .. } = &self.function.code[pc] else { return None };
                     match op {
                         Opcode::ExitCommit | Opcode::OwnCreateCommit | Opcode::OwnEmpty
-                            | Opcode::InvokeCallOwn => {}
+                            | Opcode::InvokeCallOwn | Opcode::InvokeDispatchOwn => {}
                         Opcode::OwnMove | Opcode::OwnJoin | Opcode::OwnSplit => {
                             for input in arguments(&self.function.code[pc]) { self.query(input, 3)?; }
                         }
@@ -304,6 +313,7 @@ impl<'a> Evidence<'a> {
                 })?;
                 if plain_results(self.program, entry) { Some(BTreeSet::new()) } else { None }
             }
+            InvokeDispatchOwn if !identity => dispatch_plain_results(self.program, args).then(BTreeSet::new),
             OwnEmpty | ScopeBegin => Some(BTreeSet::new()),
             OwnCreateCommit => {
                 let object = args.iter().find_map(|arg| match arg { Argument::Object(id) => Some(*id), _ => None })?;
@@ -375,7 +385,9 @@ impl<'a> Evidence<'a> {
                         (Opcode::ScopeSplit | Opcode::OwnSplitChecked, Tag::Unwind) if slot == 0 => {
                             self.query(locations[0], 2)?
                         }
-                        (Opcode::InvokeCallOwn, Tag::Normal) => self.produced(pc, ordinal, slot as usize, false)?,
+                        (Opcode::InvokeCallOwn | Opcode::InvokeDispatchOwn, Tag::Normal) => {
+                            self.produced(pc, ordinal, slot as usize, false)?
+                        }
                         (Opcode::ExitDispatch, Tag::Pending) => self.produced(pc, ordinal, slot as usize, false)?,
                         _ => return None,
                     }
@@ -387,7 +399,7 @@ impl<'a> Evidence<'a> {
                     let locations = arguments(&self.function.code[pc]);
                     match op {
                         Opcode::OwnEmpty | Opcode::ScopeBegin => Inventory::new(),
-                        Opcode::OwnCreateCommit | Opcode::InvokeCallOwn => {
+                        Opcode::OwnCreateCommit | Opcode::InvokeCallOwn | Opcode::InvokeDispatchOwn => {
                             self.instruction(pc, slot, location, false)?
                         }
                         Opcode::OwnMove | Opcode::OwnJoin | Opcode::OwnAdmit | Opcode::ExitExtend => {
@@ -441,6 +453,9 @@ impl<'a> Evidence<'a> {
             let plain = match verify::loc_type(self.function, location).ok()? {
                 ProducedType::Value(Type::Object(id) | Type::Successor(id)) => {
                     !self.program.objects[id as usize].layout.may_reach_resource
+                }
+                ProducedType::Value(Type::Role(id) | Type::RoleSuccessor(id)) => {
+                    !verify::role_reaches_resource(self.program, id)
                 }
                 ProducedType::Value(Type::Int | Type::Bool | Type::Str | Type::Bytes | Type::Array(_)
                     | Type::Range | Type::Descriptor | Type::Byte | Type::Float | Type::Char | Type::Rat
@@ -510,6 +525,10 @@ impl<'a> Evidence<'a> {
             }
             let callee = callee(self.program, &self.function.code[pc])?;
             return Some(BTreeSet::from([(pc as u32, Some(callee))]));
+        }
+        if *op == Opcode::InvokeDispatchOwn && tag == Tag::Normal {
+            // No implementation's fresh result certifies a direct slot: the inventory is opaque unless plain.
+            return (!identity && dispatch_plain_results(self.program, args)).then(BTreeSet::new);
         }
         if *op == Opcode::ExitDispatch && tag == Tag::Pending && slot == 1 {
             let exit = arguments(&self.function.code[pc])[2];
@@ -584,6 +603,11 @@ pub(super) fn static_selections_with(p: &Program, f: &Function, evidence: &mut E
         }
         let mut keys = Inventory::new();
         for &location in &f.proofs.selections[selection as usize].locations {
+            if let Ok(ProducedType::Value(Type::Role(id) | Type::RoleSuccessor(id))) = verify::loc_type(f, location)
+                && !verify::role_reaches_resource(p, id)
+            {
+                continue;
+            }
             if let Ok(ProducedType::Value(Type::Object(id))) = verify::loc_type(f, location) {
                 if !p.objects[id as usize].layout.may_reach_resource { continue }
                 keys.insert(evidence.identity(location).ok_or_else(|| error("unknown static selection identity"))?);

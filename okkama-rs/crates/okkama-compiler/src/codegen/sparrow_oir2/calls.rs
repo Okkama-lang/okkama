@@ -37,7 +37,7 @@ fn fallible_scalar(op: &o::Operation) -> bool {
     match op {
         o::Operation::Core(o::CoreOp::IntMod { .. } | o::CoreOp::RangeNew { .. } | o::CoreOp::IntDiv { .. }
             | o::CoreOp::RatNew { .. } | o::CoreOp::ValEq { .. } | o::CoreOp::ValNe { .. }
-            | o::CoreOp::VariantGet { .. }) => true,
+            | o::CoreOp::VariantGet { .. } | o::CoreOp::RoleNarrow { .. }) => true,
         o::Operation::Core(o::CoreOp::Convert { from, to, .. }) => {
             matches!((numeric_type(*from), numeric_type(*to)),
                 (Some(from), Some(to)) if s::conversion(from, to) == Some(true))
@@ -94,6 +94,11 @@ struct Emitter<'a> {
     summaries: &'a mut Vec<s::Summary>,
     scope: o::ScopeId,
     result: s::Function,
+    synthetic: &'a roles::Synthetic,
+    /// Finite action-value origins of this body, computed at its first `fn.call`.
+    origins: Option<BTreeMap<o::ValueId, Option<BTreeSet<o::FuncId>>>>,
+    /// `fn.closure`/`fn.bind` expansions: the pc of their allocation and the closure object register.
+    closures: Vec<(u32, u32)>,
 }
 
 impl Emitter<'_> {
@@ -318,6 +323,141 @@ impl Emitter<'_> {
         }))
     }
 
+    /// `call.role` and `fn.call`: a dispatch on the receiver's object descriptor. A role call lists every
+    /// implementation of the role (one, for a concrete receiver); a call of an action value lists the
+    /// closure layouts of its finite origins, or every closure layout of its `fn` type when it is open.
+    /// The contract is the site summary's; the loader checks that every listed implementation refines it.
+    fn dispatch(&mut self, op: &o::CallOp) -> Result<(O, Vec<A>, s::ResultContext), GenerateError> {
+        let (receiver, role, slot, call) = match op {
+            o::CallOp::Role { receiver, role, slot, call } => (*receiver, role.as_u32(), *slot, call),
+            o::CallOp::Closure { callee, call } => {
+                let ty = self.body.values.get(callee.value)?.ty;
+                (*callee, roles::callable_role(self.module, ty)?, 0, call)
+            }
+            _ => return Err(error("expected a dynamic call")),
+        };
+        let summary = self.module.summaries.get(call.summary.ok_or_else(|| error("dynamic call requires summary"))?)?;
+        if !call.type_args.is_empty() || !call.descriptors.is_empty() || summary.contract.suspends
+            || summary.contract.async_destroy || summary.contract.publication != o::Publication::Atomic
+            || summary.contract.protocol.is_some()
+        {
+            return Err(later("async/generic/protocol dynamic call"));
+        }
+        let shielded = call.cleanup == o::CallCleanupMode::Shielded;
+        if shielded && !self.function.attrs.contains(&o::FunctionAttr::Cleanup) {
+            return Err(error("cleanup shielded outside cleanup function"));
+        }
+        if !shielded && summary.contract.failures.contains(&o::FailureKind::Cancelled) {
+            return Err(later("delivered cancellation"));
+        }
+        let declaration = self.objects.get(role as usize).and_then(|object| object.role.as_ref())
+            .ok_or_else(|| error("dynamic call of a non-role"))?;
+        let signature = declaration.slots.get(slot as usize).ok_or_else(|| error("dynamic call of a missing slot"))?;
+        let observation = summary.entry_kind == o::EntryKind::ObservationAdmissionStaysCaller;
+        if observation != (signature.entry_abi == s::EntryAbi::Observation) {
+            return Err(error("dynamic call ABI differs from its slot"));
+        }
+        if call.args.len() != signature.params.len() || call.args.len() + 1 != summary.parameters.len() {
+            return Err(error("dynamic call argument arity mismatch"));
+        }
+        let results = summary.contract.results.iter().map(|&ty| translate_type(self.module, ty))
+            .collect::<Result<Vec<_>, _>>()?;
+        if results != signature.results {
+            return Err(error("dynamic call summary/result signature mismatch"));
+        }
+        let failures = cleanup::mask(&summary.contract.failures.iter().copied()
+            .filter(|kind| *kind != o::FailureKind::Cancelled).collect::<Vec<_>>())?;
+        let retained = retained_parameters(summary)?;
+        let implementations = self.objects.iter().enumerate()
+            .filter(|(_, object)| object.implements.iter().any(|table| table.role == role))
+            .map(|(id, _)| id as u32).collect::<Vec<_>>();
+        let targets = match op {
+            o::CallOp::Role { .. } => match self.module.types.get(self.body.values.get(receiver.value)?.ty)? {
+                o::Type::Object { decl, .. } => vec![decl.as_u32()],
+                _ => implementations,
+            },
+            _ => {
+                if self.origins.is_none() {
+                    self.origins = Some(roles::callable_origins(self.module, self.body)?);
+                }
+                match self.origins.as_ref().and_then(|origins| origins.get(&receiver.value)).cloned().flatten() {
+                    Some(functions) if !functions.is_empty() => functions.iter().map(|&function| {
+                        self.synthetic.closure_object(self.module, function)
+                            .ok_or_else(|| error("action value origin without closure layout"))
+                    }).collect::<Result<Vec<_>, _>>()?,
+                    _ => implementations,
+                }
+            }
+        };
+        if targets.is_empty() {
+            return Err(error("dynamic call without implementations"));
+        }
+        let dispatch = s::Dispatch {
+            role, slot, failures, retained_params: retained.into_iter().collect(), targets,
+        };
+        let mut arguments = vec![A::Dispatch(dispatch)];
+        if !observation {
+            arguments.push(A::Flag(shielded));
+        }
+        arguments.push(A::Location(self.loc(receiver.value)?));
+        arguments.extend(call.args.iter().map(|arg| self.loc(arg.value).map(A::Location))
+            .collect::<Result<Vec<_>, _>>()?);
+        match (observation, call.packet) {
+            (true, None) if call.deps.is_empty() => {}
+            (false, Some(packet)) => {
+                if kind(self.module, self.body.values.get(packet)?.ty)? != P::Service(K::Packet) {
+                    return Err(error("owning dynamic call input is not a packet"));
+                }
+                arguments.push(A::Location(self.loc(packet)?));
+                arguments.extend(call.deps.iter().map(|&dep| self.loc(dep).map(A::Location))
+                    .collect::<Result<Vec<_>, _>>()?);
+            }
+            _ => return Err(error("dynamic call packet differs from its ABI")),
+        }
+        let opcode = if observation { O::InvokeDispatch } else { O::InvokeDispatchOwn };
+        Ok((opcode, arguments, s::ResultContext {
+            value: signature.results.first().copied(), may_fail: failures != 0, ..s::ResultContext::default()
+        }))
+    }
+
+    /// `call.cap`: a direct call of the computed field's function with the cap (its owner's reference) first.
+    fn cap_call(&mut self, cap: o::CallArgument, field: o::FieldRef, call: &o::CallSite)
+        -> Result<(O, Vec<A>, s::ResultContext), GenerateError>
+    {
+        let o::DeclarationKind::Cap { fields, .. } = &self.module.declarations.get(field.declaration)?.kind else {
+            return Err(error("call.cap of a non-cap field"));
+        };
+        let function = fields.get(field.index as usize).ok_or_else(|| error("call.cap of a missing field"))?.function;
+        let mut site = call.clone();
+        site.args.insert(0, cap);
+        let summary = self.module.summaries.get(site.summary.ok_or_else(|| error("missing summary"))?)?;
+        if summary.entry_kind == o::EntryKind::ObservationAdmissionStaysCaller {
+            // An observation takes exactly its parameters; the cap's proof-only deps stay with its value.
+            site.deps.clear();
+            let (arguments, context) = self.observation(function, &site)?;
+            Ok((O::InvokeObserve, arguments, context))
+        } else {
+            let (arguments, context) = self.call(function, &site, false)?;
+            Ok((O::InvokeCallOwn, arguments, context))
+        }
+    }
+
+    /// `fn.closure`/`fn.bind`: allocate the closure layout with its captures, then view it as the `fn` role.
+    fn closure(&mut self, function: o::FuncId, captures: &[o::ValueId], result: o::ValueId)
+        -> Result<(), GenerateError>
+    {
+        let layout = self.synthetic.closure_object(self.module, function)
+            .ok_or_else(|| error("action value without closure layout"))?;
+        let inputs = captures.iter().map(|&value| self.reg(value)).collect::<Result<Vec<_>, _>>()?;
+        let object = fresh(&mut self.result, s::Type::Object(layout))?;
+        let value = self.reg(result)?;
+        self.closures.push((self.result.code.len() as u32, object));
+        self.result.code.push(s::Instruction::Data { op: s::DataOp::ObjNew, inputs, output: Some(object),
+            immediate: s::Immediate::Object(layout) });
+        self.result.code.push(data(s::DataOp::Move, vec![object], value, s::Immediate::None));
+        Ok(())
+    }
+
     /// A fallible scalar has explicit outcomes in S2: the loader never admits its data form here.
     /// Without a block unwind its failure leaves the function through a raise block right after it,
     /// which is what Low defines for such a block; the loader rejects that exit if services are live.
@@ -386,6 +526,8 @@ impl Emitter<'_> {
                             s::Type::Bool, s::Immediate::None, vec![*left, *right])),
                         o::CoreOp::ValNe { left, right } => Some((s::DataOp::ValNe,
                             s::Type::Bool, s::Immediate::None, vec![*left, *right])),
+                        o::CoreOp::RoleNarrow { value, ty } => Some((s::DataOp::RoleNarrow,
+                            translate_type(self.module, *ty)?, s::Immediate::None, vec![*value])),
                         o::CoreOp::VariantGet { value, case, field } => {
                             let storage = variant_storage(self.module, self.objects, *field)?;
                             let ty = self.objects[field.declaration.as_u32() as usize].layout.storage_fields
@@ -435,6 +577,13 @@ impl Emitter<'_> {
                         flow: s::Flow::Outcomes(outcomes),
                     });
                 }
+                if let o::Operation::Call(call @ (o::CallOp::Role { .. } | o::CallOp::Closure { .. })) = op.as_ref() {
+                    let (opcode, arguments, context) = self.dispatch(call)?;
+                    (opcode, arguments, context, vec![normal, unwind])
+                } else if let o::Operation::Call(o::CallOp::Cap { cap, field, call }) = op.as_ref() {
+                    let (opcode, arguments, context) = self.cap_call(*cap, *field, call)?;
+                    (opcode, arguments, context, vec![normal, unwind])
+                } else {
                 let o::Operation::Call(o::CallOp::Direct { function, call } | o::CallOp::Native { function, call }
                     | o::CallOp::Intrinsic { function, call }) = op.as_ref() else {
                     return Err(later(op.opcode()));
@@ -446,6 +595,7 @@ impl Emitter<'_> {
                 } else {
                     let (arguments, context) = self.call(*function, call, false)?;
                     (O::InvokeCallOwn, arguments, context, vec![normal, unwind])
+                }
                 }
             }
             o::TermKind::InvokeDefer { function, call, continue_edge, replacements, unwind } => {
@@ -471,7 +621,7 @@ impl Emitter<'_> {
             }
             _ => return Err(error("expected invocation")),
         };
-        if opcode != O::InvokeObserve {
+        if !matches!(opcode, O::InvokeObserve | O::InvokeDispatch) {
             opcode.call_abi().ok_or_else(|| error("missing shared helper ABI"))?;
         }
         let tags = opcode.tags(&context);
@@ -487,7 +637,7 @@ impl Emitter<'_> {
                 _ => return Err(error("unexpected call outcome")),
             };
             let schema = opcode.results(tag, &context)?;
-            if opcode != O::InvokeObserve {
+            if !matches!(opcode, O::InvokeObserve | O::InvokeDispatch) {
                 opcode.call_post_offsets(tag, &context)?;
             }
             Ok(s::Outcome { tag, edge: self.edge(edge.block, &edge.args, outcome, &schema)? })
@@ -496,8 +646,28 @@ impl Emitter<'_> {
     }
 }
 
+/// The summary parameters (receiver first) whose graphs a call may retain: in result dependencies, result
+/// aliases or parameter retention. SPB keeps the conservative parameter inventory.
+fn retained_parameters(summary: &o::Summary) -> Result<BTreeSet<u32>, GenerateError> {
+    let mut selections = summary.parameters.iter().filter_map(|parameter| parameter.retention.as_ref())
+        .chain(summary.results.iter().flat_map(|result| result.aliases.iter())).collect::<Vec<_>>();
+    let mut retained = summary.results.iter().flat_map(|result| result.external_deps.iter().copied())
+        .map(u32::from).collect::<BTreeSet<_>>();
+    while let Some(selection) = selections.pop() {
+        match selection {
+            o::SummarySelection::Parameter(parameter) | o::SummarySelection::OwnerGraph(parameter)
+            | o::SummarySelection::Field { parameter, .. } | o::SummarySelection::Path { parameter, .. } => {
+                retained.insert(u32::from(*parameter));
+            }
+            o::SummarySelection::Union(parts) => selections.extend(parts),
+            o::SummarySelection::Descriptor(_) => return Err(later("descriptor summary retention")),
+        }
+    }
+    Ok(retained)
+}
+
 pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Function, objects: &[s::Object],
-    summaries: &mut Vec<s::Summary>) -> Result<s::Function, GenerateError>
+    summaries: &mut Vec<s::Summary>, synthetic: &roles::Synthetic) -> Result<s::Function, GenerateError>
 {
     if function.body.is_none() {
         return cleanup::external(module, function);
@@ -610,6 +780,8 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                 o::Operation::Core(o::CoreOp::RangeLen { .. }) => 3,
                 // D8 registration is static CFG metadata, not a second runtime defer runner.
                 o::Operation::Lexical(o::LexicalOp::DeferRegister { .. }) => 0,
+                // allocate the closure layout, then move it into the `fn` role.
+                o::Operation::Core(o::CoreOp::FnClosure { .. } | o::CoreOp::FnBind { .. }) => 2,
                 // evaluate, then the function failure exit unless the block unwind receives the failure.
                 op if fallible_scalar(op) && block.unwind.is_none() => 2,
                 _ => 1,
@@ -646,6 +818,7 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
     }
     let mut emitter = Emitter {
         module, function, body, objects, locations, pcs, summaries, scope: entry.lexical_scope, result,
+        synthetic, origins: None, closures: vec![],
     };
     emitter.result.proofs.entry = Some(cleanup::entry_contract(module, function)?);
     emitter.result.params = entry.params.iter().map(|&value| emitter.loc(value)).collect::<Result<_, _>>()?;
@@ -745,6 +918,32 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                     };
                     data(s::DataOp::Const, vec![], emitter.reg(inst.results[0])?,
                         s::Immediate::Constant(s::Constant::Descriptor(decl.as_u32())))
+                }
+                o::Operation::Call(call @ (o::CallOp::Role { .. } | o::CallOp::Closure { .. })) => {
+                    let (opcode, arguments, context) = emitter.dispatch(call)?;
+                    if context.may_fail {
+                        return Err(error("fallible call requires explicit outcomes"));
+                    }
+                    s::Instruction::Champ { op: opcode, arguments,
+                        flow: s::Flow::Next(inst.results.iter().map(|&v| emitter.loc(v))
+                            .collect::<Result<_, _>>()?) }
+                }
+                o::Operation::Call(o::CallOp::Cap { cap, field, call }) => {
+                    let (opcode, arguments, context) = emitter.cap_call(*cap, *field, call)?;
+                    if context.may_fail {
+                        return Err(error("fallible call requires explicit outcomes"));
+                    }
+                    s::Instruction::Champ { op: opcode, arguments,
+                        flow: s::Flow::Next(inst.results.iter().map(|&v| emitter.loc(v))
+                            .collect::<Result<_, _>>()?) }
+                }
+                o::Operation::Core(o::CoreOp::FnClosure { function, captures, packet: None, .. }) => {
+                    emitter.closure(*function, captures, inst.results[0])?;
+                    continue;
+                }
+                o::Operation::Core(o::CoreOp::FnBind { receiver, function, packet: None, .. }) => {
+                    emitter.closure(*function, &[*receiver], inst.results[0])?;
+                    continue;
                 }
                 o::Operation::Call(o::CallOp::Direct { function, call } | o::CallOp::Native { function, call }
                     | o::CallOp::Intrinsic { function, call }) => {

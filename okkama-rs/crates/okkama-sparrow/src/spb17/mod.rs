@@ -16,7 +16,7 @@ pub use allocation::{AllocatedRoot, Allocation, Copy, CopySource, allocate, chec
 pub use codec::{assemble, decode, disassemble, encode};
 pub use registry::{CallAbi, CleanupAbi, Helper, MachineArgument, Opcode, ProducedType, ResultContext, Tag};
 pub use registry::{helper, HELPER_TABLE, HELPER_ALLOCATES, HELPER_COLLECTS, HELPER_REENTERS, HELPER_UNWINDS, HELPER_STOPS};
-pub use verify::{verify, result_context};
+pub use verify::{verify, result_context, implementation, role_reaches_resource};
 pub use load::{ExternalContracts, NoExternalContracts, verify_load, service_states};
 
 pub const VERSION: u16 = 17;
@@ -92,6 +92,45 @@ pub struct Object {
     pub name: String,
     pub fields: Vec<Field>,
     pub layout: ObjectRuntimeLayout,
+    /// A role declaration: a placeholder descriptor that names a role type, never an allocated object.
+    pub role: Option<RoleDecl>,
+    /// The roles this object implements, one implementation table per role (`ROLE_IMPL`).
+    pub implements: Vec<RoleImpl>,
+}
+
+/// The slots of a role: each slot's entry ABI and its signature without the receiver.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RoleDecl {
+    pub slots: Vec<RoleSlot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoleSlot {
+    pub name: String,
+    pub entry_abi: EntryAbi,
+    pub params: Vec<Type>,
+    pub results: Vec<Type>,
+}
+
+/// One object's implementation table for one role: the function of every slot, in slot order.
+/// Each function takes the implementing object first, then the slot's parameters.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoleImpl {
+    pub role: u32,
+    pub slots: Vec<u32>,
+}
+
+/// A dynamic call of one role slot. The receiver's object descriptor selects its implementation; only the
+/// listed objects may be dispatched to, every other receiver stops the machine. Every listed implementation
+/// refines the site contract: its failures and retained parameters (language positions, receiver first)
+/// are within `failures` and `retained_params` (`DISPATCH_TARGET`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Dispatch {
+    pub role: u32,
+    pub slot: u32,
+    pub failures: u32,
+    pub retained_params: Vec<u32>,
+    pub targets: Vec<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -123,6 +162,10 @@ pub enum Type {
     Variant(u32),
     Never,
     Descriptor,
+    /// A role value: a reference to an object that implements the role declaration `id` (`Object::role`).
+    Role(u32),
+    /// A role value that still carries a successor's must-use permission (`^Role`).
+    RoleSuccessor(u32),
 }
 
 /// A finite array shape, including nested plain arrays. No resource/service leaf is representable.
@@ -140,6 +183,7 @@ pub enum ArrayLeaf {
     Range,
     Bytes,
     Object(u32),
+    Role(u32),
 }
 
 impl ArrayType {
@@ -153,6 +197,7 @@ impl ArrayType {
                 ArrayLeaf::Range => Type::Range,
                 ArrayLeaf::Bytes => Type::Bytes,
                 ArrayLeaf::Object(id) => Type::Object(id),
+                ArrayLeaf::Role(id) => Type::Role(id),
             }),
             depth => Some(Type::Array(Self { depth: depth - 1, ..self })),
         }
@@ -308,6 +353,7 @@ pub enum Argument {
     Kind(ExitKind),
     Registration(u32),
     Destination(ExitDestination),
+    Dispatch(Dispatch),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -412,6 +458,8 @@ pub enum DataOp {
     ArrayLen,
     FailSecondary,
     FailCaused,
+    /// A checked conversion of a role value to another role: fails unless the object implements it.
+    RoleNarrow,
 }
 
 impl DataOp {
@@ -421,7 +469,8 @@ impl DataOp {
     /// outcomes. A conversion fails only where its pair of types can trap (`conversion`).
     pub fn fallible(self, operands: &[Type], result: Option<Type>) -> bool {
         match self {
-            Self::IntMod | Self::RangeNew | Self::RatNew | Self::ValEq | Self::ValNe | Self::VariantGet => true,
+            Self::IntMod | Self::RangeNew | Self::RatNew | Self::ValEq | Self::ValNe | Self::VariantGet
+                | Self::RoleNarrow => true,
             Self::Convert => matches!((operands, result), ([from], Some(to)) if conversion(*from, to) == Some(true)),
             _ => false,
         }
@@ -640,3 +689,5 @@ mod load_tests;
 mod arrays_tests;
 #[cfg(test)]
 mod scalars_tests;
+#[cfg(test)]
+mod roles_tests;

@@ -241,9 +241,8 @@ fn legacy_type(ty: s::Type) -> okkama_sparrow::Type {
         s::Type::Int => T::Int,
         s::Type::Bool | s::Type::Descriptor | s::Type::Never => T::Bool,
         s::Type::Str => T::Str,
-        s::Type::Object(id) | s::Type::Successor(id) | s::Type::Variant(id) => {
-            T::Object(okkama_sparrow::ObjectRef(id))
-        }
+        s::Type::Object(id) | s::Type::Successor(id) | s::Type::Variant(id) | s::Type::Role(id)
+            | s::Type::RoleSuccessor(id) => T::Object(okkama_sparrow::ObjectRef(id)),
         s::Type::Range => T::Range,
         s::Type::Failure => T::Failure,
         s::Type::Byte => T::Byte,
@@ -524,6 +523,28 @@ pub extern "C" fn rt_machine_variant_get(ctx: *mut Ctx, case: Word, storage: Wor
     runtime.heap.field(value, storage as usize)
 }
 
+/// A role value narrowed to `role`: the value itself when its object implements the role, otherwise
+/// Tomato's program failure for a missing witness (`I::RoleNarrow` without a source message).
+pub extern "C" fn rt_machine_role_narrow(ctx: *mut Ctx, role: Word, value: Word) -> Word {
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    let Some(machine) = runtime.champ.machine.as_ref() else {
+        return stop(ctx, error("role narrowing outside a Champ program"));
+    };
+    let header = runtime.heap.header_of(value);
+    let implements = heap::kind(header) == heap::OBJECT && machine.source.objects
+        .get(heap::payload(header) as usize)
+        .is_some_and(|object| object.implements.iter().any(|table| u64::from(table.role) == role));
+    if implements {
+        return value;
+    }
+    let failure = runtime.failure_new(runtime::FailureKind::Program("role witness is missing".into()));
+    unsafe {
+        (*ctx).failure = failure;
+        (*ctx).status = runtime::FAILED;
+    }
+    0
+}
+
 /// The order of two exact rationals: -1, 0 or 1.
 pub extern "C" fn rt_machine_rat_order(ctx: *mut Ctx, left: Word, right: Word) -> i64 {
     let runtime = unsafe { &*(*ctx).runtime };
@@ -534,8 +555,9 @@ pub extern "C" fn rt_machine_rat_order(ctx: *mut Ctx, left: Word, right: Word) -
     }
 }
 
-/// Deep value equality (§16.3) of two objects of descriptor `descriptor`: 1 or 0. Comparing an unbound
-/// field is a program failure, as in Tomato.
+/// Deep value equality (§16.3) of two objects of descriptor `descriptor`, or of two values of the role
+/// `descriptor` (the comparison reads the actual objects): 1 or 0. Comparing an unbound field is a program
+/// failure, as in Tomato.
 pub extern "C" fn rt_machine_value_eq(ctx: *mut Ctx, descriptor: Word, left: Word, right: Word) -> Word {
     let runtime = unsafe { &*(*ctx).runtime };
     let Some(machine) = runtime.champ.machine.as_ref() else {
@@ -580,7 +602,8 @@ fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, right: Word,
                 }
                 x.len() == y.len()
             }
-            s::Type::Object(_) | s::Type::Successor(_) | s::Type::Variant(_) => {
+            s::Type::Object(_) | s::Type::Successor(_) | s::Type::Variant(_) | s::Type::Role(_)
+                | s::Type::RoleSuccessor(_) => {
                 let descriptor = heap::payload(runtime.heap.header_of(a));
                 if descriptor != heap::payload(runtime.heap.header_of(b)) {
                     return Ok(false);

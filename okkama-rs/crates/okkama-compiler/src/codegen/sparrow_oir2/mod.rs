@@ -7,6 +7,7 @@ use okkama_oir as o;
 use okkama_sparrow::spb17 as s;
 
 mod calls;
+mod roles;
 mod successors;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -70,6 +71,7 @@ pub fn generate_with_allocation(module: &o::Module, layouts: &dyn LayoutRegistry
         ..s::Program::default()
     };
     p.objects = objects(module, layouts)?;
+    let synthetic = roles::Synthetic::of(module)?;
     for (id, scope) in module.scopes.iter() {
         p.tables.scopes.push(s::Scope {
             function: scope.function.as_u32(),
@@ -81,7 +83,12 @@ pub fn generate_with_allocation(module: &o::Module, layouts: &dyn LayoutRegistry
     for (id, function) in module.functions.iter() {
         if let Some(body) = &function.body {
             for (_, value) in body.values.iter() {
-                if matches!(translate_type(module, value.ty), Ok(s::Type::Array(_)))
+                let translated = translate_type(module, value.ty);
+                // Own tracks the deps of role, cap and action-value elements; the loader admits such an array
+                // only when every object it can reach is closed plain data (ARRAY_PLAIN).
+                let role_array = roles::view_array(module, value.ty)?
+                    && matches!(value.facts, o::ValueFacts::Managed { .. });
+                if matches!(translated, Ok(s::Type::Array(_))) && !role_array
                     && value.facts != (o::ValueFacts::Plain {
                         certificate: o::PlainCertificate::ClosedGraph { ty: value.ty },
                     })
@@ -91,12 +98,22 @@ pub fn generate_with_allocation(module: &o::Module, layouts: &dyn LayoutRegistry
             }
         }
         let translated = if calls::needs_s2(module, function)? {
-            calls::translate(module, id, function, &p.objects, &mut p.tables.summaries)?
+            calls::translate(module, id, function, &p.objects, &mut p.tables.summaries, &synthetic)?
         } else {
             translate_function(module, id, function, &p.objects)?
         };
         p.functions.push(translated);
     }
+    let mut trampolines = vec![];
+    let mut summaries = std::mem::take(&mut p.tables.summaries);
+    for (index, closure) in synthetic.closures.iter().enumerate() {
+        let layout = synthetic.closure_object(module, closure.function)
+            .ok_or_else(|| GenerateError("closure layout without descriptor".into()))?;
+        trampolines.push(roles::trampoline(&p, closure, layout, &mut summaries)?);
+        debug_assert_eq!(roles::Synthetic::trampoline(module, index) as usize, p.functions.len() + index);
+    }
+    p.tables.summaries = summaries;
+    p.functions.extend(trampolines);
     for function in &mut p.functions {
         successors::forward_taken(function)?;
         successors::prune_dead_aliases(function);
@@ -133,14 +150,16 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
                 (fields.as_slice(), witnesses.as_slice(), *destroy)
             }
             o::DeclarationKind::Enum { .. } | o::DeclarationKind::Variant { .. } => (&[][..], &[][..], None),
-            o::DeclarationKind::Role { builtin: true, .. } if declaration.name == "Error" => {
-                (&[][..], &[][..], None)
-            }
+            // A cap value is its owner's reference: the cap declaration is a placeholder descriptor.
+            o::DeclarationKind::Role { .. } | o::DeclarationKind::Cap { .. } => (&[][..], &[][..], None),
             _ => return Err(unsupported("non-object declaration")),
         };
-        if !witnesses.is_empty() {
-            return Err(unsupported("object witnesses"));
-        }
+        let role = match &declaration.kind {
+            o::DeclarationKind::Role { builtin: true, .. } if declaration.name == "Error" => None,
+            o::DeclarationKind::Role { methods, .. } => Some(roles::role_decl(module, methods)?),
+            _ => None,
+        };
+        let implements = roles::implementations(module, witnesses)?;
         let layout = layouts.object_layout(id.as_u32())?;
         if let o::DeclarationKind::Variant { cases, is_error: false } = &declaration.kind {
             for case in cases {
@@ -192,8 +211,11 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
                 once: field.once,
             }).collect(),
             layout: layout.runtime,
+            role,
+            implements,
         });
     }
+    roles::synthetic_objects(module, &mut objects)?;
     Ok(objects)
 }
 
@@ -209,6 +231,7 @@ pub(crate) fn translate_type(module: &o::Module, id: o::TypeId) -> Result<s::Typ
                 s::Type::Range => s::ArrayLeaf::Range,
                 s::Type::Bytes => s::ArrayLeaf::Bytes,
                 s::Type::Object(id) => s::ArrayLeaf::Object(id),
+                s::Type::Role(id) => s::ArrayLeaf::Role(id),
                 s::Type::Array(shape) => {
                     let depth = shape.depth.checked_add(1)
                         .ok_or_else(|| GenerateError("array nesting overflow".into()))?;
@@ -220,6 +243,18 @@ pub(crate) fn translate_type(module: &o::Module, id: o::TypeId) -> Result<s::Typ
         }
         o::Type::Role { decl, args } if args.is_empty() && module.declarations.get(*decl)?.name == "Error" => {
             s::Type::Error
+        }
+        o::Type::Role { decl, args } if args.is_empty() => s::Type::Role(decl.as_u32()),
+        o::Type::Fn(_) => s::Type::Role(roles::callable_role(module, id)?),
+        // A cap holds its owner's complete graph and reads it on every call: it is the owner's reference.
+        o::Type::Cap { decl, args } if args.is_empty() => {
+            let o::DeclarationKind::Cap { owner, .. } = &module.declarations.get(*decl)?.kind else {
+                return Err(GenerateError("cap type references a non-cap declaration".into()));
+            };
+            match translate_type(module, *owner)? {
+                owner @ s::Type::Object(_) => owner,
+                _ => return Err(unsupported("cap of a non-object owner")),
+            }
         }
         o::Type::Enum(decl) => s::Type::Object(decl.as_u32()),
         o::Type::Variant(decl) => {
@@ -250,6 +285,9 @@ pub(crate) fn translate_type(module: &o::Module, id: o::TypeId) -> Result<s::Typ
         }
         o::Type::Successor(base) => match module.types.get(*base)? {
             o::Type::Object { decl, args } if args.is_empty() => s::Type::Successor(decl.as_u32()),
+            o::Type::Role { decl, args } if args.is_empty() && module.declarations.get(*decl)?.name != "Error" => {
+                s::Type::RoleSuccessor(decl.as_u32())
+            }
             _ => return Err(unsupported("non-object successor type")),
         },
         ty => return Err(unsupported(&format!("type {ty:?}"))),
@@ -292,10 +330,12 @@ fn translate_constant(literal: &o::Literal) -> Result<s::Constant, GenerateError
     })
 }
 
-/// Attributes that only say which declaration a function implements: an action, a successor or a
-/// field default. They carry no ABI of their own; the signature and the ownership ABI do.
+/// Attributes that only say which declaration a function implements: an action, a successor, a field
+/// default or the body of an action value. They carry no ABI of their own; the signature and the
+/// ownership ABI do (an action value's captures are its leading parameters).
 pub(super) fn declaration_attr(attr: &o::FunctionAttr) -> bool {
-    matches!(attr, o::FunctionAttr::Method(_) | o::FunctionAttr::Successor(_) | o::FunctionAttr::Default { .. })
+    matches!(attr, o::FunctionAttr::Method(_) | o::FunctionAttr::Successor(_) | o::FunctionAttr::Default { .. }
+        | o::FunctionAttr::Lambda { .. })
 }
 
 fn translate_function(module: &o::Module, id: o::FuncId, function: &o::Function, objects: &[s::Object])
@@ -403,6 +443,12 @@ fn translate_function(module: &o::Module, id: o::FuncId, function: &o::Function,
             && objects.get(id as usize).is_some_and(|object| object.layout.may_reach_resource)
         {
             return Err(unsupported("managed object value needs ownership/deps verification"));
+        }
+        if let s::Type::Role(id) | s::Type::RoleSuccessor(id) = registers[value.as_u32() as usize]
+            && objects.iter().any(|object| object.layout.may_reach_resource
+                && object.implements.iter().any(|table| table.role == id))
+        {
+            return Err(unsupported("managed role value needs ownership/deps verification"));
         }
     }
     let mut result = s::Function {
@@ -668,13 +714,22 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
                 }
                 let source = translate_type(module, body.values.get(*value)?.ty)?;
                 let target = translate_type(module, *ty)?;
-                if !matches!((source, target), (s::Type::Successor(a), s::Type::Object(b)) if a == b) {
+                if !matches!((source, target), (s::Type::Successor(a), s::Type::Object(b))
+                    | (s::Type::RoleSuccessor(a), s::Type::Role(b)) if a == b)
+                {
                     return Err(GenerateError("succ.take requires matching successor/object types".into()));
                 }
                 (D::Move, vec![reg(*value)])
             }
-            C::RoleWrap { value, ty } if translate_type(module, *ty)? == s::Type::Error => {
-                (D::Move, vec![reg(*value)])
+            // role.wrap is a move; the loader admits it only from an implementing object (ROLE_WRAP).
+            C::RoleWrap { value, .. } => (D::Move, vec![reg(*value)]),
+            C::CapMake { owner, packet: None, .. } => (D::Move, vec![reg(*owner)]),
+            C::RoleNarrow { value, ty } => {
+                let source = translate_type(module, body.values.get(*value)?.ty)?;
+                if !matches!((source, translate_type(module, *ty)?), (s::Type::Role(_), s::Type::Role(_))) {
+                    return Err(unsupported("role narrowing outside role values"));
+                }
+                (D::RoleNarrow, vec![reg(*value)])
             }
             C::Undef { ty } => {
                 let Some(&result) = inst.results.first() else {
@@ -715,6 +770,8 @@ fn data(op: s::DataOp, inputs: Vec<u32>, output: u32, immediate: s::Immediate) -
 mod tests;
 #[cfg(test)]
 mod cleanup_tests;
+#[cfg(test)]
+mod roles_tests;
 
 /// Mandatory semantic gate for executable Low. External contracts come from the caller's backend catalog.
 /// This path cannot be selected by a file flag; external artifacts always pass verify_load independently.
