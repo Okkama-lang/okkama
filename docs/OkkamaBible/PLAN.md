@@ -160,6 +160,15 @@ language.
 
 ## Progress
 
+- 2026-11-15, evening: 5.11 "What exactness costs, in digits" (`05-growth`:
+  harmonic numbers as rat and float, a year of daily interest exact or
+  booked to the cent); a pass over the 70 closed issues the chapters cite
+  (`build.py --issues`): #190 (ch. 1), #264 → #329 (ch. 11), #121, #196,
+  #199, #204 (ch. 20; `20-stream` now iterates the receiver itself). Found
+  while writing: #743 (`rat.numerator()`/`denominator()` return strings).
+  Many "To add" notes below are already written (14.8 iteration, 16.6
+  protocol, 12.11 domain model, 11.11 pool, 20.12 pool and pipeline).
+
 - 2026-11-15 (idle work during the 0.6.0 rebuild): worked examples or
   comparison sections added to chapters 1–6, 8, 9, 11, 14–16 (harbour,
   units after the Mars Climate Orbiter report, slug, grouping and joining,
