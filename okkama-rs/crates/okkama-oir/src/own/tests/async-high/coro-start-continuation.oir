@@ -1,0 +1,84 @@
+oir 2 high
+// Async ABI C-2: continuation 0 restores the receiver, the language arguments and the input packet, in order.
+// Box.get is an async action of an object; run passes the Box and k on to it and awaits the Future.
+module coro_start_continuation
+entry @main
+protocol Services kind services holders [scope, cache, frame, receipt, root] rules [protocol_rule(transition=settle,
+    from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
+    protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root,
+    checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running))]
+object Box {
+    field n: int
+}
+scope SB action in @Box.new
+scope SG action in @Box.get
+scope SR action in @run
+scope S action in @main
+summary MgetC call-boundary parameters [parameter_effect(convention=borrow, destination=none),
+    parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)]
+    contract call_contract(results=[future<int>], publication=atomic)
+summary MgetB call-boundary parameters [parameter_effect(convention=borrow, destination=none),
+    parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)]
+    contract call_contract(results=[int], failures=[cancelled], suspends=true, publication=atomic)
+summary MrunC call-boundary parameters [parameter_effect(convention=borrow, destination=none),
+    parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)]
+    contract call_contract(results=[future<int>], publication=atomic)
+summary MrunB call-boundary parameters [parameter_effect(convention=borrow, destination=none),
+    parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)]
+    contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+summary MmainC call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[future<int>], publication=atomic)
+summary MmainB call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+func @Box.new(%n: int) -> Box [ctor Box] {
+    boundary Bauto lexical in SB
+    ^entry in SB unwind ^failed:
+    stage %n, action SB, field field_ref(declaration=Box, index=0)
+    %box: Box = obj.new Box { n: %n }
+    want %box
+    [iprep0] exit.prepare return %box at Bauto
+    result.exit edge normal(0), value %box, demand want, prepare iprep0
+    ret %box
+    ^failed(%failure: failure) in SB:
+    raise %failure
+}
+func @Box.get(%self: Box, %k: int) -> int [method Box, async] async-creation(MgetC) async-body(MgetB) {
+    boundary Bauto lexical in SG
+    ^entry in SG:
+    %n: int = obj.get %self, n
+    %sum: int = int.add %n, %k
+    want %sum
+    [iprep1] exit.prepare return %sum at Bauto
+    result.exit edge normal(0), value %sum, demand want, prepare iprep1
+    ret %sum
+}
+func @run(%box: Box, %k: int) -> int [async] async-creation(MrunC) async-body(MrunB) {
+    boundary Bauto lexical in SR
+    ^entry in SR unwind ^failed:
+    %f: future<int> = call @Box.get(%box, %k)
+    %x: int = await %f, result int
+    want %x
+    [iprep2] exit.prepare return %x at Bauto
+    result.exit edge normal(0), value %x, demand want, prepare iprep2
+    ret %x
+    ^failed(%failure: failure) in SR:
+    raise %failure
+}
+func @main() -> int [entry, async] async-creation(MmainC) async-body(MmainB) {
+    boundary Bauto lexical in S
+    ^entry in S unwind ^failed:
+    %two: int = const 2
+    %box: Box = call @Box.new(%two)
+    %five: int = const 5
+    %f: future<int> = call @run(%box, %five)
+    %x: int = await %f, result int
+    want %x
+    [iprep3] exit.prepare return %x at Bauto
+    result.exit edge normal(0), value %x, demand want, prepare iprep3
+    ret %x
+    ^failed(%failure: failure) in S:
+    raise %failure
+}

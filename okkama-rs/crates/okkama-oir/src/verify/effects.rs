@@ -350,7 +350,10 @@ pub(super) fn cleanup(module: &Module, body: &Body, ty: TypeId, state: &mut Stat
                     unknown(&mut result);
                 }
             }
-            Ok(Type::Future(_) | Type::Frame(_) | Type::Role { .. }) => unknown(&mut result),
+            // A Future's obligation is its cache duty. It settles by the parity protocol of async ABI D24.2:
+            // no settle waits, and a settled Future releases its outcome into the owner's serial plan.
+            Ok(Type::Future(outcome)) => pending.extend(*outcome),
+            Ok(Type::Frame(_) | Type::Role { .. }) => unknown(&mut result),
             _ => {}
         }
     }

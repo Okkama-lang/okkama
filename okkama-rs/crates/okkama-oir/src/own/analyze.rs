@@ -469,6 +469,14 @@ fn transfer(
                     .map_err(|error| flow_error(format!("operands: {error}")))? {
                     deps.extend(&state.values[operand.value.as_u32() as usize].deps);
                 }
+                // An async call creates a Future whose cache duty joins its creation
+                // scope (D12). The duty is never offered, bound or staged.
+                let provenance = match &instruction.op {
+                    Operation::Call(CallOp::Direct { function, .. }) if futures::is_async(module, *function) => {
+                        futures::CACHE_DUTY
+                    }
+                    _ => 1,
+                };
                 for result in &instruction.results {
                     if managed(body, *result, classification)? {
                         let origin = shapes[result];
@@ -477,7 +485,17 @@ fn transfer(
                         state.values[result.as_u32() as usize].deps = deps.clone();
                         state.values[result.as_u32() as usize].deps.insert(atom);
                         state.journals.insert((data.lexical_scope, atom), Quantity::ONE);
-                        state.provenance.insert((data.lexical_scope, atom), 1);
+                        state.provenance.insert((data.lexical_scope, atom), provenance);
+                    }
+                }
+            }
+            // A shared await borrows the cached outcome: the value depends on the
+            // stable cache service key and the outcome's external deps (§13.2).
+            Operation::Async(AsyncOp::Await { future, .. }) => {
+                let deps = state.values[future.as_u32() as usize].deps.clone();
+                for result in &instruction.results {
+                    if managed(body, *result, classification)? {
+                        state.values[result.as_u32() as usize].deps = deps.clone();
                     }
                 }
             }

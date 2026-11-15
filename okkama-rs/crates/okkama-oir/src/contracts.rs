@@ -477,7 +477,15 @@ impl<'a> ContractRegistry<'a> {
                 | CallOp::Role { call, .. } | CallOp::Closure { call, .. } | CallOp::Cap { call, .. } => call,
             };
             if call.summary.is_none() {
-                let results = self.unelaborated_results(call_op, body)?;
+                if let Some(result) = self.async_creation(call_op)? {
+                    // A High call of an async entry creates its Future (P2.5 plan §3.1).
+                    contract.normal.results.push(ResultSlot::new(SlotName::Value, ResultType::FutureOf(result)));
+                }
+                let results = if contract.normal.results.is_empty() {
+                    self.unelaborated_results(call_op, body)?
+                } else {
+                    vec![]
+                };
                 for (index, &ty) in results.iter().enumerate() {
                     contract.normal.results.push(ResultSlot::new(if results.len() == 1 { SlotName::Value } else { SlotName::Slot(u16::try_from(index).map_err(|_| ContractError::TooManyResults)?) }, ResultType::Exact(ty)));
                 }
@@ -493,6 +501,15 @@ impl<'a> ContractRegistry<'a> {
         self.apply(spec.rule, &mut contract, validate)?;
         contract.roots.through_suspend = contract.effects.suspends;
         Ok(contract)
+    }
+    /// The body result of a direct async callee, whose call creates a Future of it.
+    fn async_creation(&self, op: &CallOp) -> Result<Option<Option<TypeId>>, ContractError> {
+        let CallOp::Direct { function, .. } = op else { return Ok(None) };
+        let callee = self.module.functions.get(*function)?;
+        if !callee.attrs.contains(&FunctionAttr::Async) { return Ok(None); }
+        let mut results = callee.signature.results.iter().copied()
+            .filter(|ty| !matches!(self.module.types.get(*ty), Ok(Type::Service(_))));
+        Ok(Some(results.next()))
     }
     fn unelaborated_results(&self, op: &CallOp, body: Option<&Body>) -> Result<Vec<TypeId>, ContractError> {
         let signature = |function| Ok(self.module.functions.get(function)?.signature.results.clone());
@@ -1000,7 +1017,9 @@ impl<'a> ContractRegistry<'a> {
                 }
             }
             Rule::CleanupSettle { cleanup: plan, holder, protocol } => {
-                cleanup(c);
+                // Async ABI D20, D24.2: no service settle waits in 0.6.0; settle failures are captured by the
+                // cleanup state (Champ draft 3 §14.4, opcode 21, class L).
+                captured_cleanup(c);
                 c.normal.results.push(ResultSlot::new(N::State, ResultType::SameAs(plan)));
                 c.normal.transfers.push(TransferRule::Settle { inputs: vec![holder, plan] });
                 self.protocol(protocol, ProtocolTransition::Settle, c, validate)?;

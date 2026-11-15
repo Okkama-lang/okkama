@@ -322,6 +322,32 @@ fake fields; role fakes and their ordinary typed fields remain available.
   Independent audits found no unsound acceptance; their findings are fixed
   or ticketed (#653–#656, #666–#670).
 
+
+- **Champ coverage, wave 3 (#569, #601, #645, #654, #666–#668).** On
+  Champ the conformance suite rose from 665 to 673 of 1040 cases, and no
+  case fails on both engines.
+  - **Test mode.** `okkama run -t` runs through OIR-2 on Champ: SPB 17 carries
+    a tests table and a `test.check` operation, and `skip`, `close`, `text` and
+    `bytes` are test intrinsics with plain operands (C8b).
+  - **Natives.** A catalogue beside the runtime ABI table classifies every
+    native by ABI kind, transport, handle role and effect; 594 synchronous
+    natives are admitted, and none is trusted by name alone. `native object`
+    declarations are handles without a destroy token, and a canonical symbol
+    that no provider registers fails at run time after the program has run up
+    to it (C7, #645).
+  - **Own.** A builder's elements live in the journal of the scope that made
+    the builder, so they are destroyed with that scope, not at function exit
+    (#666). Test functions are fixed observation roots, like `main` (#667). A
+    handler that own routes a failure past must abandon its buffers and
+    re-raise; a callee with no language parameters receives an empty packet
+    (#668).
+  - **Loader.** Every rule of the load gate now has a positive and a negative
+    test (#654). The tests found two defects. An exhausted evidence budget was
+    reported under another rule's code; that is fixed. An owned return can drop
+    a live successor's must-use permission, because the successor check does
+    not follow the exit protocol yet; that is #680.
+  - **Async.** The OIR-2 data model for suspension, frame layouts and the
+    await-unwind adapter (#601 V1).
 - **OIR-2 ownership elaboration, synchronous part (#565).** A pass from
   `high` to `own` makes ownership explicit for synchronous code. It covers:
   - scope ends, call conventions and per-scope exits with the reserve;

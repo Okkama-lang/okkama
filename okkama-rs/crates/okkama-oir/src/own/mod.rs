@@ -22,6 +22,7 @@ mod census;
 mod routing;
 mod arrays;
 mod construction;
+mod futures;
 
 use crate::*;
 use std::collections::BTreeMap;
@@ -347,12 +348,11 @@ pub fn elaborate_ownership(
         return Err(budget.fail(OwnDiagnosticKind::InvalidEquation,
             "classification/summary elaboration requires High or an existing Own fixture"));
     }
+    futures::intern_futures(&mut module)?;
     let mut external = BTreeMap::new();
     for (id, function) in module.functions.iter() {
         budget.work(1)?;
-        if function.attrs.contains(&FunctionAttr::Async) {
-            return Err(budget.fail(OwnDiagnosticKind::UnsupportedAsync, format!("async entry {}", function.symbol)));
-        }
+        futures::check_boundary(&module, id, &mut budget)?;
         if function.body.is_some() {
             continue;
         }
@@ -432,12 +432,30 @@ fn flow_error(message: impl Into<String>) -> OwnError {
 
 fn unsupported(operation: &Operation) -> OwnError {
     let (kind, phase) = match operation {
-        Operation::Async(_) => (OwnDiagnosticKind::UnsupportedAsync, "commit 5"),
+        Operation::Async(op) => (OwnDiagnosticKind::UnsupportedAsync, async_phase(op)),
         Operation::Carrier(_) => (OwnDiagnosticKind::UnsupportedConstruct,
             "owned failure carriers are excluded from 0.6.0"),
         _ => (OwnDiagnosticKind::UnsupportedConstruct, "outside the synchronous P1 producer"),
     };
     phase_error(kind, format!("{phase}: {}", operation.opcode()))
+}
+
+/// The slice of the P2.5 plan that lifts an async operation beyond plain async.
+fn async_phase(op: &AsyncOp) -> &'static str {
+    match op {
+        AsyncOp::FutureSpawn { .. } => "spawn of an async action arrives with D24 (P1)",
+        AsyncOp::WorkerBind { .. } | AsyncOp::WorkerSpawn { .. } | AsyncOp::ProcessSpawn { .. } => {
+            "process workers arrive with X1"
+        }
+        AsyncOp::FutureCancel { .. } | AsyncOp::FutureDone { .. } | AsyncOp::FutureCancelled { .. } => {
+            "Future observation and cancellation requests arrive with the High contract of V5 and K1"
+        }
+        AsyncOp::Pin { .. } | AsyncOp::PinTransfer { .. } | AsyncOp::Unpin { .. } => "pins arrive with D23 (Q2)",
+        AsyncOp::AwaitTake { .. } | AsyncOp::UniqueCacheProof { .. } | AsyncOp::CacheRehome { .. } => {
+            "unique take and rehome are own decisions of R1, never High input (C1)"
+        }
+        _ => "not a High operation; own and coro produce it",
+    }
 }
 
 fn phase_error(kind: OwnDiagnosticKind, message: impl Into<String>) -> OwnError {

@@ -806,3 +806,4 @@ mod protocols;
 mod arrays;
 
 mod raise_unwind;
+mod asynchronous;

@@ -9,8 +9,19 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// The owner's cache duty of one Future (C-1).
 struct Duty {
+    future: ValueId,
     token: ValueId,
     scope: ScopeId,
+}
+
+/// The Services schedule that own declared for one owner (D16). Own names each duty by its Future;
+/// several schedules of one owner are merged in declaration order.
+struct OwnSchedule {
+    name: String,
+    owner: ScopeId,
+    protocol: ProtocolId,
+    dictionary: Option<ValueId>,
+    futures: Vec<ValueId>,
 }
 
 /// One suspension site and its continuation.
@@ -26,20 +37,23 @@ struct Suspension {
 pub(super) fn lower(module: &mut Module, function: FuncId, budget: &mut Budget<'_>) -> Result<(), CoroError> {
     let data = module.functions.get(function)?;
     let is_async = data.attrs.contains(&FunctionAttr::Async);
+    // `async main` and async tests are fixed roots: observation ABI, no packets, no exit transaction.
+    let fixed_root = data.signature.ownership_abi == OwnershipAbi::Observation;
     let Some(body) = module.functions.get_mut(function)?.body.take() else {
         return Ok(());
     };
-    let mut lowering = Lowering { module, function, body, budget };
+    let mut lowering = Lowering { module, function, body, budget, fixed_root };
     let result = lowering.run(is_async);
     let Lowering { module, body, .. } = lowering;
     module.functions.get_mut(function)?.body = Some(body);
     result?;
     if is_async {
-        // C-2: the coro body takes only its frame; the language signature stays on its summaries.
+        // C-2: the coro body takes only its frame; the language signature stays on its summaries. A fixed
+        // root keeps its observation ABI, which its summary's entry kind states.
         let frame = module.types.intern(Type::Frame(function))?;
-        module.functions.get_mut(function)?.signature = Signature {
-            params: vec![frame], results: vec![], ownership_abi: OwnershipAbi::Unelaborated,
-        };
+        let ownership_abi = if fixed_root { OwnershipAbi::Observation } else { OwnershipAbi::Unelaborated };
+        let signature = Signature { params: vec![frame], results: vec![], ownership_abi };
+        module.functions.get_mut(function)?.signature = signature;
     }
     Ok(())
 }
@@ -49,6 +63,7 @@ struct Lowering<'a, 'b> {
     function: FuncId,
     body: Body,
     budget: &'a mut Budget<'b>,
+    fixed_root: bool,
 }
 
 impl Lowering<'_, '_> {
@@ -61,7 +76,8 @@ impl Lowering<'_, '_> {
 
     fn run(&mut self, is_async: bool) -> Result<(), CoroError> {
         self.check(is_async)?;
-        let duties = self.futures()?;
+        let schedules = self.own_schedules()?;
+        let duties = self.futures(&schedules)?;
         let mut slots = Slots::default();
         let mut continuations = Vec::new();
         let mut frame = None;
@@ -92,10 +108,10 @@ impl Lowering<'_, '_> {
                     &Variable { original: value, versions, implicit }, self.budget)?;
                 repaired.insert(value, found);
             }
-            self.schedules(&duties, &closes, &repaired)?;
+            self.schedules(&schedules, &duties, &closes, &repaired)?;
             self.body.frame_layout = Some(FrameLayout { slots: slots.decls, continuations });
         } else {
-            self.schedules(&duties, &closes, &BTreeMap::new())?;
+            self.schedules(&schedules, &duties, &closes, &BTreeMap::new())?;
         }
         Ok(())
     }
@@ -103,9 +119,6 @@ impl Lowering<'_, '_> {
     fn check(&self, is_async: bool) -> Result<(), CoroError> {
         if self.body.frame_layout.is_some() {
             return Err(self.invalid("an Own body declares no frame layout"));
-        }
-        if !self.body.service_schedules.is_empty() {
-            return Err(self.unsupported("service schedules of an Own body"));
         }
         let declaration = self.module.functions.get(self.function)?;
         if is_async && declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. })) {
@@ -166,8 +179,41 @@ impl Lowering<'_, '_> {
         Ok(self.body.values.get(value)?.ty)
     }
 
-    /// C-1: `fut.new` keeps its environment and returns the owner's cache duty after the Future.
-    fn futures(&mut self) -> Result<Vec<Duty>, CoroError> {
+    /// D16 (ruling 1): own declares the Services schedules; coro consumes them. Own names a cache duty by
+    /// its Future; dynamic entries (D25) and the D23 families belong to later slices.
+    fn own_schedules(&mut self) -> Result<Vec<OwnSchedule>, CoroError> {
+        let mut merged: Vec<OwnSchedule> = Vec::new();
+        for schedule in std::mem::take(&mut self.body.service_schedules) {
+            self.budget.step(schedule.duties.len() + 1)?;
+            let services = self.module.protocols.get(schedule.protocol)?.kind == ProtocolKind::Services;
+            if !services {
+                return Err(self.unsupported("a service schedule of another protocol family (D23)"));
+            }
+            let mut futures = Vec::new();
+            for duty in &schedule.duties {
+                let ScheduleDuty::Value(future) = duty else {
+                    return Err(self.unsupported("a dynamic schedule entry (D25)"));
+                };
+                futures.push(*future);
+            }
+            match merged.iter_mut().find(|item| item.owner == schedule.owner) {
+                Some(item) if item.protocol != schedule.protocol || item.dictionary != schedule.dictionary => {
+                    return Err(self.invalid("the Services schedules of one owner disagree (D16)"));
+                }
+                Some(item) => item.futures.extend(futures),
+                None => merged.push(OwnSchedule {
+                    name: schedule.name, owner: schedule.owner, protocol: schedule.protocol,
+                    dictionary: schedule.dictionary, futures,
+                }),
+            }
+        }
+        Ok(merged)
+    }
+
+    /// C-1: `fut.new` keeps its environment and returns the owner's cache duty after the Future. The duties
+    /// follow their order in own's schedules: each Future has exactly one entry in a schedule of its owner
+    /// (D16, B10.6).
+    fn futures(&mut self, schedules: &[OwnSchedule]) -> Result<Vec<Duty>, CoroError> {
         let mut duties = Vec::new();
         let blocks: Vec<_> = self.body.blocks.iter().map(|(_, block)| block.insts.clone()).collect();
         for inst in blocks.into_iter().flatten() {
@@ -184,9 +230,20 @@ impl Lowering<'_, '_> {
                 let index = u16::try_from(index).map_err(|_| CoroError::LimitExceeded("results"))?;
                 self.body.values.get_mut(*value)?.def = Definition::InstResult { inst, index };
             }
-            duties.push(Duty { token, scope: owner });
+            duties.push(Duty { future: results[0], token, scope: owner });
         }
-        Ok(duties)
+        let mut ordered = Vec::with_capacity(duties.len());
+        for schedule in schedules {
+            for future in &schedule.futures {
+                let position = duties.iter().position(|duty| duty.future == *future && duty.scope == schedule.owner)
+                    .ok_or_else(|| self.invalid("a schedule entry names no cache duty of its owner (D16)"))?;
+                ordered.push(duties.swap_remove(position));
+            }
+        }
+        if !duties.is_empty() {
+            return Err(self.invalid("a cache duty has no entry in a Services schedule of its owner (D16)"));
+        }
+        Ok(ordered)
     }
 
     /// C-3: every await unwind edge flows into `await.unwind`, which consumes its task and receipt.
@@ -363,6 +420,10 @@ impl Lowering<'_, '_> {
             self.budget.step(1)?;
             let data = self.body.blocks.get(block)?;
             let outcome = match &data.term.kind {
+                TermKind::Ret { values } if self.fixed_root => {
+                    let values = values.clone();
+                    self.root_success(block, &values)?
+                }
                 TermKind::Ret { values } => self.success(block, values)?,
                 TermKind::Raise(failure) if data.unwind.is_none() => PublishOutcome::Failure(*failure),
                 TermKind::Throw(_) | TermKind::Panic(_) if data.unwind.is_some() => continue,
@@ -405,6 +466,74 @@ impl Lowering<'_, '_> {
             (Some(packet), Some(deps)) => Ok(PublishOutcome::Success { value, packet, deps }),
             _ => Err(self.invalid("an async success exit returns the outcome of its exit.commit (C-2)")),
         }
+    }
+
+    /// Ruling 3: a fixed root returns its value without an exit transaction. Its success publishes that value
+    /// with an empty packet (Champ draft 3 §3: the root's success packet must be empty) and the value's deps.
+    fn root_success(&mut self, block: BlockId, values: &[ValueId]) -> Result<PublishOutcome, CoroError> {
+        let [value] = values else {
+            return Err(self.unsupported("a fixed root without a value has no deps to publish (async tests, F1)"));
+        };
+        if matches!(self.module.types.get(self.ty(*value)?)?, Type::Service(_)) {
+            return Err(self.invalid("a fixed root returns no service value"));
+        }
+        let deps = self.root_deps(block, *value)?;
+        let own = self.intern(Type::Service(ServiceType::Own))?;
+        let end = self.body.blocks.get(block)?.insts.len();
+        let packet = self.emit(block, end, own, Operation::Ownership(OwnershipOp::Empty {}))?;
+        Ok(PublishOutcome::Success { value: Some(*value), packet, deps })
+    }
+
+    /// `deps.of` the value of a fixed root, taken while its scope is still open: only exit forms run after
+    /// the close (B4.2). The deps are taken right before the close in the exit block, or at the end of the
+    /// block whose close terminator reaches the exit through single-predecessor edges.
+    fn root_deps(&mut self, exit: BlockId, value: ValueId) -> Result<ValueId, CoroError> {
+        let deps = self.intern(Type::Service(ServiceType::Deps))?;
+        let predecessors = graph::predecessors(&self.body);
+        let mut block = exit;
+        let mut value = value;
+        for _ in 0..self.body.blocks.len() {
+            self.budget.step(1)?;
+            let insts = self.body.blocks.get(block)?.insts.clone();
+            for (position, inst) in insts.into_iter().enumerate() {
+                if self.closed_scope(&self.body.insts.get(inst)?.op)?.is_some() {
+                    return self.emit(block, position, deps, Operation::Ownership(OwnershipOp::Dependencies { value }));
+                }
+            }
+            let [source] = predecessors.get(block.as_u32() as usize).map_or(&[][..], Vec::as_slice) else {
+                break;
+            };
+            let source = *source;
+            let data = self.body.blocks.get(block)?;
+            if let Some(index) = data.params.iter().position(|param| *param == value) {
+                value = match graph::edge_argument(&self.body.blocks.get(source)?.term.kind, block, index) {
+                    Some(EdgeArg::Value(passed)) => passed,
+                    _ => return Err(self.invalid("a fixed root's value is produced by its close")),
+                };
+            }
+            let closes = match &self.body.blocks.get(source)?.term.kind {
+                TermKind::InvokeOwn { op, .. } => self.closed_scope(op)?.is_some(),
+                _ => false,
+            };
+            if closes {
+                let end = self.body.blocks.get(source)?.insts.len();
+                return self.emit(source, end, deps, Operation::Ownership(OwnershipOp::Dependencies { value }));
+            }
+            block = source;
+        }
+        Err(self.unsupported("a fixed root's value reaches its exit through a merge after its close"))
+    }
+
+    /// Insert an instruction with one result of type `ty` at `position` of `block`.
+    fn emit(&mut self, block: BlockId, position: usize, ty: TypeId, op: Operation) -> Result<ValueId, CoroError> {
+        let inst = self.body.insts.alloc(Instruction {
+            results: Vec::new(), op, facts: InstructionFacts::default(), loc: None,
+        })?;
+        let facts = self.default_facts(ty);
+        let value = self.value(ty, Definition::InstResult { inst, index: 0 }, facts)?;
+        self.body.insts.get_mut(inst)?.results.push(value);
+        self.body.blocks.get_mut(block)?.insts.insert(position, inst);
+        Ok(value)
     }
 
     /// Close sites of every scope that owns a duty, with the duties that reach them on every path.
@@ -631,49 +760,65 @@ impl Lowering<'_, '_> {
         closes.iter().filter(|(_, duties)| duties.contains(&value)).map(|(site, _)| *site).collect()
     }
 
-    /// D16, review B4: every close of a scope that owns duties names their reaching tokens in a service
-    /// schedule of that scope. The duties follow the creation order of their Futures, and the protocol is
-    /// the one that the body's `await.unwind` names (see `services_protocol`). Identical schedules of one
-    /// owner are shared.
+    /// D16 (ruling 1), review B4: own's Services schedules with each Future renamed to its cache-state token.
+    /// Every close of an owner names the versions of the tokens that reach it, in own's order. Closes that see
+    /// the same versions share one schedule; the first keeps own's name and each further one is `name#k`. An
+    /// owner that never closes after its Futures keeps own's schedule over the tokens of `fut.new`.
     fn schedules(
-        &mut self, duties: &[Duty], closes: &BTreeMap<Site, Vec<ValueId>>,
+        &mut self, own: &[OwnSchedule], duties: &[Duty], closes: &BTreeMap<Site, Vec<ValueId>>,
         repaired: &BTreeMap<ValueId, BTreeMap<Site, ValueId>>,
     ) -> Result<(), CoroError> {
-        if closes.is_empty() {
-            return Ok(());
-        }
-        let protocol = self.services_protocol()?;
-        for (site, tokens) in closes {
-            let Some(owner) = duties.iter().find(|duty| tokens.contains(&duty.token)).map(|duty| duty.scope) else {
-                continue;
-            };
-            let mut reaching = Vec::new();
-            for token in tokens {
-                let version = repaired.get(token).and_then(|sites| sites.get(site)).copied().unwrap_or(*token);
-                reaching.push(ScheduleDuty::Value(version));
+        for schedule in own {
+            let tokens: Vec<ValueId> = duties.iter().filter(|duty| duty.scope == schedule.owner)
+                .map(|duty| duty.token).collect();
+            let mut versions: Vec<Vec<ScheduleDuty>> = Vec::new();
+            for (site, settled) in closes {
+                self.budget.step(settled.len() + 1)?;
+                if !settled.iter().any(|token| tokens.contains(token)) {
+                    continue;
+                }
+                let reaching: Vec<ScheduleDuty> = settled.iter().map(|token| {
+                    let version = repaired.get(token).and_then(|sites| sites.get(site)).copied();
+                    ScheduleDuty::Value(version.unwrap_or(*token))
+                }).collect();
+                if !versions.contains(&reaching) {
+                    versions.push(reaching);
+                }
             }
-            let exists = self.body.service_schedules.iter().any(|schedule| {
-                schedule.owner == owner && schedule.duties == reaching
-            });
-            if exists {
-                continue;
+            if versions.is_empty() {
+                versions.push(tokens.iter().map(|token| ScheduleDuty::Value(*token)).collect());
             }
-            let name = format!("Sched{}", self.body.service_schedules.len());
-            self.body.service_schedules.push(ServiceSchedule {
-                dictionary: None, duties: reaching, name, owner, protocol,
-            });
+            for (index, duties) in versions.into_iter().enumerate() {
+                let name = self.schedule_name(&schedule.name, index, own);
+                self.body.service_schedules.push(ServiceSchedule {
+                    dictionary: schedule.dictionary, duties, name, owner: schedule.owner, protocol: schedule.protocol,
+                });
+            }
         }
         Ok(())
     }
 
-    /// The services protocol of the module: the one the body's `await.unwind` names, else the first.
-    fn services_protocol(&self) -> Result<ProtocolId, CoroError> {
-        for (_, inst) in self.body.insts.iter() {
-            if let Operation::Async(AsyncOp::AwaitUnwind { protocol, .. }) = inst.op {
-                return Ok(protocol);
-            }
+    /// `name` for the first version of an own schedule, else the first `name#k` that no schedule uses.
+    fn schedule_name(&self, name: &str, index: usize, own: &[OwnSchedule]) -> String {
+        version_name(name, index, |candidate| {
+            own.iter().any(|schedule| schedule.name == candidate)
+                || self.body.service_schedules.iter().any(|schedule| schedule.name == candidate)
+        })
+    }
+}
+
+/// The name of version `index` of the schedule `name`: `name` itself for the first version, else the first
+/// `name#k` with `k >= index` that is not `taken`.
+pub(super) fn version_name(name: &str, index: usize, taken: impl Fn(&str) -> bool) -> String {
+    if index == 0 {
+        return name.to_owned();
+    }
+    let mut suffix = index;
+    loop {
+        let candidate = format!("{name}#{suffix}");
+        if !taken(&candidate) {
+            return candidate;
         }
-        self.module.protocols.iter().find(|(_, protocol)| protocol.kind == ProtocolKind::Services)
-            .map(|(id, _)| id).ok_or_else(|| self.invalid("cache duties need a services protocol for their schedule"))
+        suffix += 1;
     }
 }

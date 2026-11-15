@@ -153,7 +153,9 @@ fn oir2_byte_unsigned_shift_counts_in_int() {
 
 #[test]
 fn oir2_calls_and_async_do_not_enter_the_old_pipeline() {
-    let source = "module app; async main() is int { 0; }";
+    // Plain async lowers since P2.5 V5; spawn stays outside it (plan §4 P1).
+    let source = concat!("module app; object W { W(); async run() is int { 1; } } ",
+        "async main() is int { await spawn W().run(); }");
     let error = print_oir2(source).expect_err("explicit unsupported diagnostic");
     assert!(matches!(error, LowerError::Unsupported { .. }), "{error}");
     assert!(error.to_string().contains("async"), "{error}");
@@ -1334,8 +1336,10 @@ fn oir2_std_rejects_other_intrinsics_resources_and_async() {
         let error = lower_std(&source).expect_err("outside finite P1 boundary catalog");
         assert!(error.to_string().contains("unsupported in OIR-2 lowering"), "{error}");
     }
-    let error = lower_std("module app; import \"async/atomic\" take Atomic; async main() is int { \
-        let a = Atomic(1); a.value(); }").expect_err("async remains unsupported");
+    // Plain async lowers since P2.5 V5; async natives stay outside it (plan §4 N1).
+    let error = lower_std("module app; import \"async/atomic\" take Atomic; \
+        import \"runtime/time\" take sleep_nanoseconds; async main() is int { \
+        let a = Atomic(1); await sleep_nanoseconds(\"1\"); a.value(); }").expect_err("async remains unsupported");
     assert!(error.to_string().contains("unsupported in OIR-2 lowering: async"), "{error}");
 }
 

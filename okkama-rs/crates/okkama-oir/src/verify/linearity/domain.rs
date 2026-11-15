@@ -126,6 +126,8 @@ pub(super) struct CleanupFact {
     pub failures: u8,
     pub failure_origin: Option<Origin>,
     pub cancel_delivered: bool,
+    /// D21 body: `cleanup.deliver_cancel` ran and the next selector decides whether it delivered.
+    pub cancel_open: bool,
     pub may_fail: bool,
     pub awaiting_failure: bool,
     pub awaiting_source: Option<ValueId>,

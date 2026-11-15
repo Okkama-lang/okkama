@@ -14,6 +14,7 @@ pub(super) fn async_cleanup_and_profiles(module: &Module, selected: Option<FuncI
         if !super::graph::eligible(function, body, state) {
             continue;
         }
+        super::own_async::check(module, function, body, state);
         for (value, data) in body.values.iter() {
             if module.types.get(data.ty) == Ok(&Type::Service(ServiceType::CarrierState)) {
                 state.at(L::Value { function, value }, None);
@@ -260,12 +261,12 @@ fn operation(module: &Module, function: &Function, body: &Body, op: &Operation, 
             FunctionAttr::Cleanup | FunctionAttr::Destroy(_) | FunctionAttr::DeferEntry { .. })) {
         state.error(R::B105, "shielded await is restricted to cleanup execution");
     }
+    // D20: `await` and `await.take` stay `invoke.own` terminators in Low; closes become cleanup steps.
     if module.profile == Profile::Low && matches!(op,
         Operation::Lexical(_)
         | Operation::Ownership(OwnershipOp::ScopeEnd { .. }
             | OwnershipOp::ScopeUnwind { .. } | OwnershipOp::End { .. })
-        | Operation::Async(AsyncOp::Await { .. } | AsyncOp::AwaitTake { .. }
-            | AsyncOp::AwaitShielded { .. })) {
+        | Operation::Async(AsyncOp::AwaitShielded { .. })) {
         state.error(R::B114, "low profile contains an unlowered lexical close or suspension form");
     }
     if module.profile == Profile::Own && matches!(op,

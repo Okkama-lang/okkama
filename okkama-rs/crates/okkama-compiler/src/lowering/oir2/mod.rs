@@ -35,6 +35,10 @@ mod native_catalogue_tests;
 mod pipeline;
 pub use pipeline::{PipelineError, compile_linked, compile_linked_with, lower_linked_high};
 pub use pipeline::{compile_linked_tests_with, lower_linked_tests_high};
+#[path = "async.rs"]
+mod asynchronous;
+#[cfg(test)]
+mod async_tests;
 mod construction;
 mod declarations;
 mod defer;
@@ -252,6 +256,7 @@ fn lower(analysis: &Analysis<'_>) -> Result<ir::Module> {
     structure::finish(&mut module)?;
     test_profile::check(&module)?;
     open_calls::attach(&mut module, &calls.into_inner())?;
+    asynchronous::attach_services(&mut module)?;
     any::attach_descriptors(&mut module)?;
     structure::check(&module)?;
     once::check(&module)?;

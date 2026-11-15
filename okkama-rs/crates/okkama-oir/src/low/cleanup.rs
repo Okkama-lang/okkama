@@ -1,5 +1,5 @@
 use super::*;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 struct CloseInputs {
     state: ValueId,
@@ -111,8 +111,87 @@ fn produced(outcome: Outcome, slot: u16) -> EdgeArg {
     EdgeArg::Produced(EdgeResult { outcome, slot })
 }
 
+/// D20 §2.6: the envelope of a lowered close suspends only if one of its cleanup steps does. In 0.6.0 none
+/// does: `cleanup.settle` never waits (async ABI D24.2, OQ-4) and eligibility rejects async destroy and async
+/// defer. Failures and the final cancellation stay as own and coro declared them.
+fn narrowed(effects: &ScopeEffectEnvelope) -> ScopeEffectEnvelope {
+    ScopeEffectEnvelope { suspends: false, ..effects.clone() }
+}
+
+/// The blocks of the runtime selector loop over the remaining identities of a close: `cleanup.next`, a
+/// destroy, and the record of its failure. Their parameters are allocated before any later block of the close,
+/// so the synchronous closes keep their value numbering.
+struct SelectorLoop {
+    next: (BlockId, Vec<ValueId>),
+    destroy: (BlockId, Vec<ValueId>),
+    record: (BlockId, Vec<ValueId>),
+}
+
+fn selector_blocks(
+    module: &mut Module, body: &mut Body, scope: ScopeId, budget: &mut Budget<'_>,
+) -> Result<SelectorLoop, LowError> {
+    let cleanup_type = service(module, ServiceType::CleanupState)?;
+    let key_type = service(module, ServiceType::StableKey)?;
+    let failure_type = service(module, ServiceType::Failure)?;
+    let next = block(body, scope, &[cleanup_type], budget)?;
+    let destroy = block(body, scope, &[cleanup_type, key_type], budget)?;
+    let record = block(body, scope, &[cleanup_type, failure_type], budget)?;
+    Ok(SelectorLoop { next, destroy, record })
+}
+
+/// `cleanup.next`, then a destroy whose failure is recorded, back to `cleanup.next`; the done edge enters
+/// `done`. Returns the loop entry.
+fn selector_fill(
+    module: &mut Module, body: &mut Body, blocks: &SelectorLoop, done: BlockId, loc: Option<DebugLoc>,
+) -> Result<BlockId, LowError> {
+    let (next, next_params) = &blocks.next;
+    let (destroy, destroy_params) = &blocks.destroy;
+    let (record, record_params) = &blocks.record;
+    terminate(body, *next, TermKind::CleanupNext {
+        cleanup: next_params[0],
+        selected: InvokeEdge { block: *destroy, args: vec![produced(Outcome::CleanupSelected, 0),
+            produced(Outcome::CleanupSelected, 1)] },
+        done: InvokeEdge { block: done, args: vec![produced(Outcome::CleanupDone, 0)] },
+    }, loc)?;
+    let step = emit(module, body, *destroy, CleanupOp::Destroy {
+        cleanup: destroy_params[0], key: destroy_params[1],
+    }, loc)?;
+    terminate(body, *destroy, TermKind::FailureDispatch {
+        failure: step[1],
+        none: Target { block: *next, args: vec![step[0]] },
+        some: InvokeEdge { block: *record, args: vec![EdgeArg::Value(step[0]),
+            produced(Outcome::FailureSome, 0)] },
+    }, loc)?;
+    let recorded = emit(module, body, *record, CleanupOp::RecordFailure {
+        cleanup: record_params[0], failure: record_params[1],
+    }, loc)?[0];
+    branch(body, *record, *next, vec![recorded])?;
+    Ok(*next)
+}
+
+/// D18, OIR-2 §9.3 step 6: after the plan of the final successful close of an async action has run,
+/// `cleanup.deliver_cancel` delivers a pending cancellation. A delivered cancellation becomes the primary
+/// failure and aborts the reserve into a second plan, which the selector closes before `cleanup.finish`; the
+/// already executed prefix stays executed (trace A R). Returns the block that receives the drained state.
+#[allow(clippy::too_many_arguments)]
+fn deliver_cancel(
+    module: &mut Module, body: &mut Body, scope: ScopeId, close: CleanupCloseId, sources: Vec<MergeSource>,
+    finish: BlockId, loc: Option<DebugLoc>, budget: &mut Budget<'_>,
+) -> Result<BlockId, LowError> {
+    let cleanup_type = service(module, ServiceType::CleanupState)?;
+    let (deliver, deliver_params) = block(body, scope, &[cleanup_type], budget)?;
+    let delivered = emit(module, body, deliver, CleanupOp::DeliverCancel { cleanup: deliver_params[0] }, loc)?[0];
+    let plan = body.cleanup.plans.alloc(CleanupPlan { close, sources, direct: None })?;
+    let planned = emit(module, body, deliver, CleanupOp::Plan { cleanup: delivered, plan }, loc)?[0];
+    let blocks = selector_blocks(module, body, scope, budget)?;
+    let next = selector_fill(module, body, &blocks, finish, loc)?;
+    branch(body, deliver, next, vec![planned])?;
+    Ok(deliver)
+}
+
 pub(super) fn expand(
-    module: &mut Module, body: &mut Body, fresh: &plans::FreshSummaries, budget: &mut Budget<'_>,
+    module: &mut Module, body: &mut Body, fresh: &plans::FreshSummaries,
+    duties: &BTreeMap<services::CloseKey, services::CloseDuties>, budget: &mut Budget<'_>,
 ) -> Result<(), LowError> {
     let mut queue: VecDeque<_> = body.blocks.iter().map(|(id, _)| id).collect();
     while let Some(source) = queue.pop_front() {
@@ -130,7 +209,7 @@ pub(super) fn expand(
             }
         }
         let scope = body.blocks.get(source)?.lexical_scope;
-        let (close, normal, failed, loc, reuse) = if let Some((position, id, close)) = site {
+        let (close, normal, failed, loc, reuse, key) = if let Some((position, id, close)) = site {
             let old = body.insts.get(id)?.clone();
             let continuation = FunctionEditor::new(module, body).split_block(source, position + 1).map_err(build)?;
             budget.block()?;
@@ -172,7 +251,7 @@ pub(super) fn expand(
             } else {
                 None
             };
-            (close, normal, failed, old.loc, Some(id))
+            (close, normal, failed, old.loc, Some(id), services::CloseKey::Instruction(id))
         } else {
             let term = body.blocks.get(source)?.term.clone();
             let TermKind::InvokeOwn { op, normal, unwind } = term.kind else {
@@ -181,19 +260,26 @@ pub(super) fn expand(
             let Some(close) = inputs(module, body, &op)? else {
                 continue;
             };
-            if close.failure.is_some() || close.effects.failures.is_empty() {
+            // D18: an invoke close has an outward Unwind for its failures or for the final cancellation.
+            if close.failure.is_some() || close.effects.failures.is_empty() && !close.effects.cancel {
                 return Err(LowError::InvalidInput {
                     function: None, message: "invoke close requires a D18 outward failure outcome".into(),
                 });
             }
-            (close, normal, Some(unwind), term.loc, None)
+            let key = services::CloseKey::Edge(normal.block);
+            (close, normal, Some(unwind), term.loc, None, key)
         };
+        let effects = narrowed(&close.effects);
         let close_id = body.cleanup.closes.alloc(CleanupClose {
             source: close.source.clone(), after_defers: source, reserve: close.pending.is_some(),
-            active_failure: close.failure.is_some(), effects: close.effects.clone(),
+            active_failure: close.failure.is_some(), effects: effects.clone(),
         })?;
+        let assigned = duties.get(&key);
         let schedule = body.cleanup.schedules.alloc(CleanupSchedule {
-            close: close_id, holders: vec![], dictionary: None, protocol: None,
+            close: close_id,
+            holders: assigned.map(|item| item.duties.clone()).unwrap_or_default(),
+            dictionary: assigned.and_then(|item| item.dictionary),
+            protocol: assigned.map(|item| item.protocol),
         })?;
         let mut sources = vec![match close.source {
             CleanupSource::Scope(_) => MergeSource::ScopeInventory,
@@ -205,13 +291,12 @@ pub(super) fn expand(
         let direct = plans::prove(
             module, body, close.state, close.pending, body.cleanup.closes.get(close_id)?, fresh, budget,
         )?.map(|proof| body.cleanup.proofs.alloc(proof)).transpose()?;
-        let plan = body.cleanup.plans.alloc(CleanupPlan { close: close_id, sources, direct })?;
+        let plan = body.cleanup.plans.alloc(CleanupPlan { close: close_id, sources: sources.clone(), direct })?;
         let begin = CleanupOp::Begin {
             state: close.state, pending: close.pending, failure: close.failure,
-            close: close_id, effects: close.effects,
+            close: close_id, effects: effects.clone(),
         };
         let cleanup_type = service(module, ServiceType::CleanupState)?;
-        let key_type = service(module, ServiceType::StableKey)?;
         let failure_type = service(module, ServiceType::Failure)?;
         let c = if let Some(id) = reuse {
             let value = body.values.alloc(ValueData {
@@ -224,10 +309,26 @@ pub(super) fn expand(
         } else {
             emit(module, body, source, begin, loc)?[0]
         };
-        let c = emit(module, body, source, CleanupOp::SettleEmpty { cleanup: c, schedule }, loc)?[0];
+        // OIR-2 §9.3 step 3: settle every scheduled duty, in schedule order, before the plan.
+        let mut c = c;
+        match assigned {
+            Some(assigned) => {
+                for &holder in &assigned.duties {
+                    let settle = CleanupOp::Settle { cleanup: c, holder, protocol: assigned.protocol };
+                    c = emit(module, body, source, settle, loc)?[0];
+                }
+            }
+            None => c = emit(module, body, source, CleanupOp::SettleEmpty { cleanup: c, schedule }, loc)?[0],
+        }
         let c = emit(module, body, source, CleanupOp::Plan { cleanup: c, plan }, loc)?[0];
+        // The first plan drains into the final cancellation step, or into the finish itself.
         let (finish, finish_params) = if let Some(proof) = direct {
             let (finish, finish_params) = block(body, scope, &[cleanup_type], budget)?;
+            let drained = if effects.cancel {
+                deliver_cancel(module, body, scope, close_id, sources, finish, loc, budget)?
+            } else {
+                finish
+            };
             let slots = body.cleanup.proofs.get(proof)?.slots.clone();
             let mut predecessor = source;
             let mut current = c;
@@ -252,33 +353,18 @@ pub(super) fn expand(
                 predecessor = next;
                 current = next_params[0];
             }
-            branch(body, predecessor, finish, vec![current])?;
+            branch(body, predecessor, drained, vec![current])?;
             (finish, finish_params)
         } else {
-            let (next, next_params) = block(body, scope, &[cleanup_type], budget)?;
-            let (destroy, destroy_params) = block(body, scope, &[cleanup_type, key_type], budget)?;
-            let (record, record_params) = block(body, scope, &[cleanup_type, failure_type], budget)?;
+            let blocks = selector_blocks(module, body, scope, budget)?;
             let (finish, finish_params) = block(body, scope, &[cleanup_type], budget)?;
+            let drained = if effects.cancel {
+                deliver_cancel(module, body, scope, close_id, sources, finish, loc, budget)?
+            } else {
+                finish
+            };
+            let next = selector_fill(module, body, &blocks, drained, loc)?;
             branch(body, source, next, vec![c])?;
-            terminate(body, next, TermKind::CleanupNext {
-                cleanup: next_params[0],
-                selected: InvokeEdge { block: destroy, args: vec![produced(Outcome::CleanupSelected, 0),
-                    produced(Outcome::CleanupSelected, 1)] },
-                done: InvokeEdge { block: finish, args: vec![produced(Outcome::CleanupDone, 0)] },
-            }, loc)?;
-            let step = emit(module, body, destroy, CleanupOp::Destroy {
-                cleanup: destroy_params[0], key: destroy_params[1],
-            }, loc)?;
-            terminate(body, destroy, TermKind::FailureDispatch {
-                failure: step[1],
-                none: Target { block: next, args: vec![step[0]] },
-                some: InvokeEdge { block: record, args: vec![EdgeArg::Value(step[0]),
-                    produced(Outcome::FailureSome, 0)] },
-            }, loc)?;
-            let recorded = emit(module, body, record, CleanupOp::RecordFailure {
-                cleanup: record_params[0], failure: record_params[1],
-            }, loc)?[0];
-            branch(body, record, next, vec![recorded])?;
             (finish, finish_params)
         };
         let finished = emit(module, body, finish, CleanupOp::Finish { cleanup: finish_params[0] }, loc)?;

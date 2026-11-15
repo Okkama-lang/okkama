@@ -92,7 +92,9 @@ pub(super) fn entry_value(module: &Module, function: &Function, body: &Body, val
 /// The language signature of a function (C-2). An async body of coro/low in the D21 form has only its
 /// frame as a parameter: its receiver, arguments, descriptors and input packet are the slots of
 /// continuation 0, and its results are the values it publishes on success. A body that never publishes
-/// a success keeps the results of its summary. `None` means that the body disagrees with itself.
+/// a success keeps the results of its summary. The ownership ABI stays the body's own: a fixed root
+/// (`async main`, an async test) keeps its observation ABI. `None` means that the body disagrees with
+/// itself.
 pub(super) fn language_signature(module: &Module, function: &Function) -> Option<Signature> {
     let Some(layout) = frame_layout(module, function) else {
         return Some(function.signature.clone());
@@ -120,7 +122,7 @@ pub(super) fn language_signature(module: &Module, function: &Function) -> Option
         None => function.summary.and_then(|id| module.summaries.get(id).ok())
             .map(|summary| summary.contract.results.clone())?,
     };
-    Some(Signature { params, results, ownership_abi: OwnershipAbi::Unelaborated })
+    Some(Signature { params, results, ownership_abi: function.signature.ownership_abi })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
