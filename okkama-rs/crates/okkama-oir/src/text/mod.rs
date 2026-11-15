@@ -1265,6 +1265,7 @@ opcodes!(CoreOp {
 opcodes!(CallOp {
     Direct { function, call } => "call",
     Role { receiver, role, slot, call } => "call.role",
+    Order { array, role, slot, call } => "call.order",
     Closure { callee, call } => "fn.call",
     Cap { cap, field, call } => "call.cap",
     Native { function, call } => "call.native",
@@ -1284,6 +1285,7 @@ opcodes!(CollectionOp {
     ArrayLen { array } => "array.len",
     ArrayGet { array, index } => "array.get",
     ArrayJoin { array, separator } => "array.join",
+    ArrayOrder { array } => "array.order",
     ArrayRetag { array, ty } => "array.retag",
     MapLen { map } => "map.len",
     MapHas { map, key } => "map.has",

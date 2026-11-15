@@ -773,6 +773,12 @@ impl Checker<'_, '_> {
                 self.require(self.module.types.get(element)? == &Type::Str, "array.join requires str elements");
                 self.expect(*separator, Type::Str)?;
             }
+            CollectionOp::ArrayOrder { array } => {
+                let element = self.array(*array)?;
+                let scalar = matches!(self.module.types.get(element)?,
+                    Type::Int | Type::Float | Type::Rat | Type::Byte | Type::Char | Type::Str);
+                self.require(scalar, "array.order requires int, float, rat, byte, char or str elements");
+            }
             CollectionOp::ArrayRetag { array, ty } => {
                 let element = self.array(*array)?;
                 let valid = match self.module.types.get(*ty)? {
@@ -960,6 +966,54 @@ impl Checker<'_, '_> {
         self.require(false, "role slot is out of range");
         Err(TypeCheckError)
     }
+    /// `call.order`: an array whose element type does the role, sorted by a role slot that takes one more
+    /// element and returns a value. The call site is one comparison of two elements of the array: both of
+    /// its actuals are the array, borrowed, and it carries no packet.
+    fn order_call(&mut self, array: CallArgument, role: DeclId, slot: u32, call: &CallSite) -> Checked<()> {
+        let Type::Array(element) = *self.ty(array.value)? else {
+            self.require(false, "call.order sorts an array");
+            return Err(TypeCheckError);
+        };
+        let DeclarationKind::Role { methods, .. } = &self.module.declarations.get(role)?.kind else {
+            self.require(false, "call.order requires a role declaration");
+            return Err(TypeCheckError);
+        };
+        let Some(method) = methods.get(slot as usize) else {
+            self.require(false, "role slot is out of range");
+            return Err(TypeCheckError);
+        };
+        let signature = method.signature.clone();
+        // Elaborated profiles add service slots to the signature; the comparison is over language slots.
+        let params = language_slots(self.module, &signature.params, self.state);
+        let results = language_slots(self.module, &signature.results, self.state);
+        self.require(params == [element] && results.len() == 1,
+            "call.order slot must compare the element type with one result");
+        let does = |module: &Module, decl: DeclId| match &module.declarations.get(decl) {
+            Ok(Declaration { kind: DeclarationKind::Object { witnesses, .. }, .. }) => witnesses.iter()
+                .any(|witness| matches!(module.types.get(witness.role), Ok(Type::Role { decl, .. }) if *decl == role)),
+            _ => false,
+        };
+        let implements = match self.module.types.get(element)? {
+            Type::Role { decl, .. } => *decl == role,
+            Type::Object { decl, .. } => does(self.module, *decl),
+            _ => false,
+        };
+        self.require(implements, "call.order element type does not do the role");
+        let actuals = std::iter::once(&array).chain(&call.args);
+        self.require(call.args.len() == 1 && actuals.clone().all(|actual| {
+            actual.value == array.value && actual.convention == OperandConvention::Borrow
+        }), "call.order compares borrowed elements of its array");
+        self.require(call.packet.is_none() && call.cleanup == CallCleanupMode::Ordinary
+            && call.descriptors.is_empty() && call.type_args.is_empty(),
+            "call.order comparisons are ordinary observations");
+        for &dep in &call.deps { self.service(dep, ServiceType::Deps)?; }
+        if let Some(summary) = call.summary {
+            let summary = self.module.summaries.get(summary)?;
+            self.require(summary.contract.results == results, "call.order summary result mismatch");
+        }
+        Ok(())
+    }
+
     fn call_site(&mut self, call: &CallSite, params: &[TypeId], receiver: Option<ValueId>) -> Checked<()> {
         if call.cleanup == CallCleanupMode::Shielded {
             let function = match self.site {
@@ -1077,6 +1131,7 @@ impl Checker<'_, '_> {
                 let params = language_slots(self.module, &signature.params, self.state);
                 self.call_site(call, &params, None)?;
             }
+            CallOp::Order { array, role, slot, call } => self.order_call(*array, *role, *slot, call)?,
             CallOp::Closure { callee, call } => {
                 let Type::Fn(signature) = self.ty(callee.value)? else {
                     self.require(false, "fn.call requires a fn value");

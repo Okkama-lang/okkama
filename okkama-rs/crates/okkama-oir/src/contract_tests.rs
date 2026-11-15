@@ -88,7 +88,15 @@ pub(crate) fn representatives() -> Vec<Operation> {
     ops.extend(LexicalOp::representatives().into_iter().map(Operation::Lexical));
     ops.extend(OwnershipOp::representatives().into_iter().map(Operation::Ownership));
     ops.extend(CallOp::representatives().into_iter().map(|mut op| {
-        match &mut op { CallOp::Role { call, .. } | CallOp::Closure { call, .. } | CallOp::Cap { call, .. } => call.args.clear(), _ => {} }
+        match &mut op {
+            CallOp::Role { call, .. } | CallOp::Closure { call, .. } | CallOp::Cap { call, .. } => call.args.clear(),
+            // A sort's comparison observes elements: it carries no packet.
+            CallOp::Order { call, .. } => {
+                call.args.clear();
+                call.packet = None;
+            }
+            _ => {}
+        }
         Operation::Call(op)
     }));
     ops.extend(CollectionOp::representatives().into_iter().map(Operation::Collection));
@@ -261,6 +269,50 @@ fn provenance_retention_and_high_buffer_shapes() {
     assert!(pure.unwind.is_none());
     let checked = registry.lookup(&Operation::Core(CoreOp::Convert { value: v(1), from: NumericType::Rat, to: NumericType::Float })).unwrap();
     assert!(checked.unwind.is_some());
+}
+
+/// #678: `array.order` is total data that keeps its array's elements; `call.order` yields an array of the same
+/// type and fails exactly as its comparison does, with no packet of its own.
+#[test]
+fn ordering_operations_have_contracts() {
+    let mut module = module();
+    let order = |failures: Vec<FailureKind>| Summary {
+        entry_kind: EntryKind::CallBoundary,
+        parameters: vec![ParameterEffect { convention: FreshConvention::Borrow, retention: None, deps: vec![],
+            destination: TransferDestination::None }; 2],
+        results: vec![ResultRelation { fresh: vec![], aliases: vec![], external_deps: vec![], opaque: false,
+            provenance: AdmissionProvenance::UnboundResult }],
+        contract: CallContract { results: vec![sample()], failures, suspends: false, async_destroy: false,
+            publication: Publication::Atomic, protocol: None },
+    };
+    let total = module.summaries.alloc(order(vec![])).unwrap();
+    let thrown = module.summaries.alloc(order(vec![FailureKind::Thrown])).unwrap();
+    let registry = ContractRegistry::new(&module);
+    let natural = registry.lookup(&Operation::Collection(CollectionOp::ArrayOrder { array: v(1) })).unwrap();
+    assert_eq!(names(&natural.normal), [SlotName::Value]);
+    assert_eq!(natural.normal.results[0].ty, ResultType::SameAs(v(1)));
+    assert!(natural.unwind.is_none() && natural.effects.failures.is_empty());
+    assert!(natural.normal.retention.iter().any(|rule| rule.selection == Retention::Value(v(1))));
+    let array = CallArgument { value: v(1), convention: OperandConvention::Borrow };
+    let sort = |summary, packet| Operation::Call(CallOp::Order { array, role: sample(), slot: 0, call: CallSite {
+        cleanup: CallCleanupMode::Ordinary, args: vec![array], packet, deps: vec![], descriptors: vec![],
+        type_args: vec![], summary: Some(summary) } });
+    for (summary, failures) in [(total, vec![]), (thrown, vec![FailureKind::Thrown])] {
+        let contract = registry.lookup(&sort(summary, None)).unwrap();
+        assert_eq!(names(&contract.normal), [SlotName::Value]);
+        assert_eq!(contract.normal.results[0].ty, ResultType::SameAs(v(1)));
+        assert!(contract.normal.retention.iter().any(|rule| rule.selection == Retention::Value(v(1))));
+        assert_eq!(contract.effects.failures, failures);
+        assert_eq!(contract.unwind.is_some(), !failures.is_empty());
+        assert!(contract.effects.allocates);
+    }
+    // The comparison's arity is the summary's: the receiver and one more element.
+    let mut short = sort(total, None);
+    let Operation::Call(CallOp::Order { call, .. }) = &mut short else { unreachable!() };
+    call.args.clear();
+    assert!(matches!(registry.lookup(&short), Err(ContractError::CallArity { .. })));
+    // A sort offers no packet: an owning comparison gets an empty one from the runtime.
+    assert_eq!(registry.lookup(&sort(total, Some(v(2)))).unwrap_err(), ContractError::ObservationPacket);
 }
 
 /// #679: `c.code()` and `string(c)` are total; `char(n)` fails outside the Unicode scalar values.

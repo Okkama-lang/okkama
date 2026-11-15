@@ -110,7 +110,7 @@ pub(super) fn inventory(
                     | CoreOp::FnBind { .. } | CoreOp::FnBindRole { .. } | CoreOp::AnyBox { .. }
                     | CoreOp::FakeNew { .. }) | Operation::Collection(_) | Operation::Call(_)
                     | Operation::Async(_));
-                if matches!(op, Operation::Call(CallOp::Closure { .. } | CallOp::Role { .. })) {
+                if matches!(op, Operation::Call(CallOp::Closure { .. } | CallOp::Role { .. } | CallOp::Order { .. })) {
                     scopes.get_mut(&block.lexical_scope).unwrap().blockers.insert(ElisionBlocker::ExplicitTransport);
                 }
                 if can_own {

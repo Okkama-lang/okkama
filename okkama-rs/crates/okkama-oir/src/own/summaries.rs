@@ -149,6 +149,7 @@ pub(super) fn call(op: &Operation) -> Option<(&CallSite, Option<CallArgument>)> 
         Operation::Call(CallOp::Direct { call, .. } | CallOp::Native { call, .. }
             | CallOp::Intrinsic { call, .. } | CallOp::Resume { call, .. }) => Some((call, None)),
         Operation::Call(CallOp::Role { call, receiver, .. }) => Some((call, Some(*receiver))),
+        Operation::Call(CallOp::Order { call, array, .. }) => Some((call, Some(*array))),
         Operation::Call(CallOp::Closure { call, callee }) => Some((call, Some(*callee))),
         Operation::Call(CallOp::Cap { call, cap, .. }) => Some((call, Some(*cap))),
         _ => None,
@@ -160,6 +161,7 @@ fn call_mut(op: &mut Operation) -> Option<(&mut CallSite, Option<&mut CallArgume
         Operation::Call(CallOp::Direct { call, .. } | CallOp::Native { call, .. }
             | CallOp::Intrinsic { call, .. } | CallOp::Resume { call, .. }) => Some((call, None)),
         Operation::Call(CallOp::Role { call, receiver, .. }) => Some((call, Some(receiver))),
+        Operation::Call(CallOp::Order { call, array, .. }) => Some((call, Some(array))),
         Operation::Call(CallOp::Closure { call, callee }) => Some((call, Some(callee))),
         Operation::Call(CallOp::Cap { call, cap, .. }) => Some((call, Some(cap))),
         _ => None,
@@ -180,7 +182,7 @@ fn targets(module: &Module, body: &Body, op: &Operation, budget: &mut Budget<'_>
                 targets.insert(field.function.as_u32() as usize);
             }
         }
-        Operation::Call(CallOp::Role { role, slot, .. }) => {
+        Operation::Call(CallOp::Role { role, slot, .. } | CallOp::Order { role, slot, .. }) => {
             for (_, declaration) in module.declarations.iter() {
                 budget.work(1)?;
                 let DeclarationKind::Object { witnesses, .. } = &declaration.kind else {
@@ -307,7 +309,7 @@ impl Universe {
                     | CallOp::Intrinsic { .. } | CallOp::Resume { .. } | CallOp::Cap { .. }));
                 let captures = captures_by_target;
                 let kind = match op {
-                    Operation::Call(CallOp::Role { .. }) => 0,
+                    Operation::Call(CallOp::Role { .. } | CallOp::Order { .. }) => 0,
                     Operation::Call(CallOp::Closure { callee, .. }) => {
                         match body.values.get(callee.value).map_err(arena)?.def {
                             Definition::InstResult { inst, .. } => match &body.insts.get(inst).map_err(arena)?.op {

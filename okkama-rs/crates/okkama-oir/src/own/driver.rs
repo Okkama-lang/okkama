@@ -140,7 +140,7 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
         let elide_offers = high.insts.iter().any(|(_, instruction)| matches!(
             routing::handling(&instruction.op), routing::Handling::Snapshot)
             || matches!(instruction.op, Operation::Call(CallOp::Closure { .. } | CallOp::Cap { .. }
-                | CallOp::Role { .. })))
+                | CallOp::Role { .. } | CallOp::Order { .. })))
             || output.module.functions.get(function).map_err(arena)?.attrs.iter()
                 .any(|attr| matches!(attr, FunctionAttr::Lambda { .. }));
         emitter.charge(high.values.len(), high.values.len() * 64)?;
@@ -771,7 +771,8 @@ impl Driver<'_, '_> {
             Operation::Async(AsyncOp::Await { .. }) => return self.await_future(point, instruction),
             Operation::Call(CallOp::Direct { function, .. } | CallOp::Native { function, .. }
                 | CallOp::Intrinsic { function, .. }) => return self.call(point, instruction, function),
-            Operation::Call(CallOp::Closure { .. } | CallOp::Cap { .. } | CallOp::Role { .. }) => {
+            Operation::Call(CallOp::Closure { .. } | CallOp::Cap { .. } | CallOp::Role { .. }
+                | CallOp::Order { .. }) => {
                 return self.dispatch(point, instruction);
             }
             Operation::Core(CoreOp::FnClosure { .. } | CoreOp::FnBind { .. } | CoreOp::FnBindRole { .. }

@@ -222,7 +222,8 @@ fn operation(module: &Module, function: FuncId, op: &Operation) -> Result<(), Lo
         }
         Operation::Call(call) => {
             let site = match call {
-                CallOp::Direct { call, .. } | CallOp::Role { call, .. } | CallOp::Closure { call, .. }
+                CallOp::Direct { call, .. } | CallOp::Role { call, .. } | CallOp::Order { call, .. }
+                | CallOp::Closure { call, .. }
                 | CallOp::Cap { call, .. } | CallOp::Native { call, .. } | CallOp::Intrinsic { call, .. }
                 | CallOp::Resume { call, .. } => call,
             };

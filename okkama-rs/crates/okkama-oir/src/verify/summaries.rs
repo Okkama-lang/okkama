@@ -160,6 +160,7 @@ pub(super) fn call(op: &Operation) -> Option<(&CallSite, Option<CallArgument>, O
             (call, None, Some(*function))
         }
         CallOp::Role { receiver, call, .. } => (call, Some(*receiver), None),
+        CallOp::Order { array, call, .. } => (call, Some(*array), None),
         CallOp::Closure { callee, call } => (call, Some(*callee), None),
         CallOp::Cap { cap, call, .. } => (call, Some(*cap), None),
     })
@@ -250,6 +251,19 @@ fn dispatch(module: &Module, body: &Body, op: &Operation, summary: &Summary, sta
             let mut sig = method.signature.clone();
             sig.params.insert(0, value.ty);
             signature(module, &sig, summary, Some((GenericOwner::Declaration(*role), args)), false, state);
+        }
+        // A sort's comparison is the slot called on an element with another element.
+        CallOp::Order { array, role, slot, .. } => {
+            witnesses(module, *role, *slot, summary, state);
+            let Ok(decl) = module.declarations.get(*role) else { return; };
+            let DeclarationKind::Role { methods, .. } = &decl.kind else { return; };
+            let Some(method) = methods.get(*slot as usize) else { return; };
+            let Ok(value) = body.values.get(array.value) else { return; };
+            let Ok(Type::Array(element)) = module.types.get(value.ty) else { return; };
+            if !state.array(method.signature.params.len() + 1, 16) { return; }
+            let mut sig = method.signature.clone();
+            sig.params.insert(0, *element);
+            signature(module, &sig, summary, None, false, state);
         }
         CallOp::Cap { cap, field, .. } => {
             let Ok(value) = body.values.get(cap.value) else { return; };

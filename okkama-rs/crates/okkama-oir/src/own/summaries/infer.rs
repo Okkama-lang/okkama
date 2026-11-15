@@ -384,6 +384,10 @@ impl Universe {
         types: &BTreeMap<TypeId, TypeClassification>,
         budget: &mut Budget<'_>,
     ) -> Result<Vec<ResultRelation>, OwnError> {
+        // A sort's result holds exactly the elements of its array; the comparisons' results stay inside.
+        if let Operation::Call(CallOp::Order { array, .. }) = op {
+            return Ok(vec![values[array.value.as_u32() as usize].clone()]);
+        }
         if let Some((call, receiver)) = call(op) {
             let callee = self.call_summary(function, site).unwrap();
             let arguments: Vec<_> = receiver.iter().chain(&call.args).map(|arg| arg.value).collect();
