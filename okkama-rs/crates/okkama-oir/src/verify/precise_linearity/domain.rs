@@ -569,3 +569,80 @@ impl<T> DenseEntries<T> for Vec<T> {
         self.iter_mut().enumerate()
     }
 }
+
+#[cfg(test)]
+mod cell_tests {
+    use super::*;
+    // The precise oracle keeps plain sets where the production domain shares them.
+    type SharedSet<T> = BTreeSet<T>;
+
+    fn labels(values: &[u32]) -> SharedSet<ValueId> {
+        values.iter().map(|value| ValueId::from_u32(*value)).collect()
+    }
+
+    fn filter(keys: &[Origin], values: &[u32]) -> Filter {
+        Filter {
+            keys: keys.iter().copied().collect(), fresh: false, possible: BTreeSet::new(),
+            labels: labels(values), stale: false, whole_future: false, state: 0,
+        }
+    }
+
+    const VIEW: Origin = Origin::ViewInstruction(InstId::from_u32(1), 0);
+    const RETIRED: Origin = Origin::RetiredViewInstruction(InstId::from_u32(1), 0);
+
+    #[test]
+    fn same_cell_ignores_labels_only_for_current_keys() {
+        assert!(filter(&[VIEW], &[1]).same_cell(&filter(&[VIEW], &[2])));
+        assert!(filter(&[VIEW], &[]).same_cell(&filter(&[VIEW], &[1, 2])));
+        // A retired family denotes several incarnations: labels tell them apart.
+        assert!(!filter(&[RETIRED], &[1]).same_cell(&filter(&[RETIRED], &[2])));
+        assert!(!filter(&[VIEW, RETIRED], &[1]).same_cell(&filter(&[VIEW, RETIRED], &[1, 2])));
+        assert!(filter(&[RETIRED], &[1]).same_cell(&filter(&[RETIRED], &[1])));
+        // Every other component still distinguishes the cells.
+        let base = filter(&[VIEW], &[1]);
+        assert!(!base.same_cell(&filter(&[RETIRED], &[1])));
+        let mut other = base.clone();
+        other.possible.insert(Origin::External(ValueId::from_u32(3)));
+        assert!(!base.same_cell(&other));
+        for change in 0..4 {
+            let mut other = base.clone();
+            match change {
+                0 => other.fresh = true,
+                1 => other.stale = true,
+                2 => other.whole_future = true,
+                _ => other.state = 1,
+            }
+            assert!(!base.same_cell(&other), "{change}");
+            assert!(!other.same_cell(&base), "{change}");
+        }
+    }
+
+    #[test]
+    fn predicate_reads_exact_then_same_cell_and_never_stale_records() {
+        let mut piece = Piece::new(Origin::Instruction(InstId::from_u32(1), 0), AdmissionProvenance::UnboundResult);
+        assert_eq!(piece.predicate(&filter(&[VIEW], &[1])), None);
+        piece.predicates.insert(filter(&[VIEW], &[1]), true);
+        assert_eq!(piece.predicate(&filter(&[VIEW], &[1])), Some(true));
+        // A forwarded alias name selects the same current cell.
+        assert_eq!(piece.predicate(&filter(&[VIEW], &[2])), Some(true));
+        assert_eq!(piece.predicate(&filter(&[VIEW, RETIRED], &[1])), None);
+
+        let mut retired = Piece::new(Origin::RetiredInstruction(InstId::from_u32(1), 0),
+            AdmissionProvenance::UnboundResult);
+        retired.family = true;
+        retired.predicates.insert(filter(&[RETIRED], &[1]), true);
+        assert_eq!(retired.predicate(&filter(&[RETIRED], &[1])), Some(true));
+        // Another incarnation's labels never reuse the recorded side.
+        assert_eq!(retired.predicate(&filter(&[RETIRED], &[2])), None);
+        assert_eq!(retired.predicate(&filter(&[RETIRED], &[])), None);
+
+        let mut stale = Piece::new(Origin::Instruction(InstId::from_u32(1), 0), AdmissionProvenance::UnboundResult);
+        let mut recorded = filter(&[VIEW], &[1]);
+        recorded.stale = true;
+        stale.predicates.insert(recorded.clone(), false);
+        // Only the exact (stale) filter reads its record; a fresh filter does not.
+        assert_eq!(stale.predicate(&recorded), Some(false));
+        assert_eq!(stale.predicate(&filter(&[VIEW], &[1])), None);
+        assert_eq!(stale.predicate(&filter(&[VIEW], &[2])), None);
+    }
+}
