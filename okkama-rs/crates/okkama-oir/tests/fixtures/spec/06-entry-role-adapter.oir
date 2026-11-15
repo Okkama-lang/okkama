@@ -42,7 +42,8 @@ func @adapter(%self: Read facts(managed(deps=dfull_self)), %r: Res facts(managed
     %final: failure = scope.unwind %failed_state, %failure, effects scope_effects(failures=[thrown, program, panic, native], suspends=true, cancel=false)
     raise %final
 ^close(%text: str, %rest: scope<Sadapter>) in Sadapter:
-    invoke.own scope.end %rest, effects scope_effects(failures=[thrown, program, panic, native], suspends=true, cancel=false)
+    invoke.own scope.end %rest, effects scope_effects(failures=[thrown, program, panic, native], suspends=true,
+        cancel=true)
         normal ^done($closed, %text)
         unwind ^close_failed($closed, $failure)
 ^close_failed(%closed: closed, %error: failure) in Sadapter:
@@ -68,7 +69,8 @@ func @main(%reader: Read facts(managed(deps=dreader))) -> (str, own, deps) [asyn
         unwind ^failed(%q, $failure)
 ^close(%text: str, %rest: own, %open: scope<S>) in S:
     %admitted: scope<S> = own.admit %open, %rest
-    invoke.own scope.end %admitted, effects scope_effects(failures=[thrown, program, panic, native], suspends=true, cancel=false)
+    invoke.own scope.end %admitted, effects scope_effects(failures=[thrown, program, panic, native], suspends=true,
+        cancel=true)
         normal ^done($closed, %text)
         unwind ^closed_failed($closed, $failure)
 ^done(%closed: closed, %answer: str) in S:

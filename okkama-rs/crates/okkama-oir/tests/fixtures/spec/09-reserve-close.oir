@@ -39,7 +39,8 @@ func @main(%value: Res facts(managed(deps=dfull_value)), %deps: deps; %packet: o
         unwind ^split_failed($state, $failure)
 ^prepare(%rest: scope<S>, %part: own, %external: deps) in S:
     %pending: pending = exit.prepare return %value, %part, deps(%deps) at B0
-    invoke.own scope.end %rest, reserve %pending, effects scope_effects(failures=[thrown, program, panic, native], suspends=true, cancel=false)
+    invoke.own scope.end %rest, reserve %pending, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=true)
         normal ^commit($closed, $pending)
         unwind ^failed($closed, $failure)
 ^commit(%closed: closed, %reserved: pending) in S:

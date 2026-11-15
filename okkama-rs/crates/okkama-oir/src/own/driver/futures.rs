@@ -29,6 +29,11 @@ impl Driver<'_, '_> {
         };
         let result = outcome(self.module, self.module.functions.get(function).map_err(arena)?)?;
         let owner = self.owner_scope(&point)?;
+        if self.created_in_owner_loop(owner)? {
+            let message = "fut.new inside a loop of its owner: the duties of its Futures are dynamic (D25), \
+                they arrive with R1";
+            return Err(unsupported_async(message));
+        }
         // Plain async (V2): every language argument is plain, so the offered input
         // packet is empty and the Future has no external deps. R1 brings fresh cold
         // inputs. The empty deps are those of a plain argument, or the external deps
@@ -115,6 +120,31 @@ impl Driver<'_, '_> {
         let root = stack(self.module, lexical)?[0];
         let function = self.module.scopes.get(root).map_err(arena)?.function;
         Ok(crate::own::futures::is_async(self.module, function) && !fixed_root(self.module, function))
+    }
+
+    /// D25 (OIR-2 B10.6): one `fut.new` site names one static duty of its owner.
+    /// A site that a loop inside the owner reaches again finds the owner still
+    /// holding the duty of the earlier iteration, so it needs dynamic duty
+    /// entries. A loop that opens the owner on every iteration leaves the owner
+    /// on its way back, and its site keeps one static duty.
+    fn created_in_owner_loop(&self, owner: ScopeId) -> Result<bool, OwnError> {
+        let registry = ContractRegistry::new(self.module);
+        let mut seen = BTreeSet::new();
+        let mut work = vec![self.current_high];
+        while let Some(block) = work.pop() {
+            let successors = crate::cfg::successors(block, self.high, registry)
+                .map_err(|error| flow_error(format!("Future creation site has no CFG: {error:?}")))?;
+            for next in successors {
+                if next == self.current_high {
+                    return Ok(true);
+                }
+                let lexical = self.high.blocks.get(next).map_err(arena)?.lexical_scope;
+                if stack(self.module, lexical)?.contains(&owner) && seen.insert(next) {
+                    work.push(next);
+                }
+            }
+        }
+        Ok(false)
     }
 
     /// The innermost retained scope at a program point: the owner of a created

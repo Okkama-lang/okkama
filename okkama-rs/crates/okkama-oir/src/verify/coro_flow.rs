@@ -28,6 +28,11 @@ pub(super) fn check<'a>(module: &'a Module, selected: Option<FuncId>, state: &mu
             sync(module, function, body, state);
         } else if let Some(layout) = &body.frame_layout {
             Frames::new(module, function, body, layout, state).check();
+        } else {
+            // D21: every async body of coro/low declares its frame layout; without one the suspension, frame and
+            // root rules of D20/D21 would not apply to it.
+            state.at(L::Function(function), data.loc);
+            state.error(R::CoroMissingLayout, "an async body of coro/low declares its D21 frame layout");
         }
     }
 }

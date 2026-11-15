@@ -7,3 +7,4 @@ coro-sync-suspends	coro/async-await-failure.oir	coro-invalid/coro-sync-suspends.
 coro-unbracketed-suspend	coro/coro-nested-cold-await.oir	audit-invalid/hide-token.oir
 coro-slot-overlap	audit-valid/slot-ok.oir	audit-invalid/slot-overlap.oir
 async-unmodeled-op	coro/coro-nested-cold-await.oir	audit-invalid/c4b.oir
+coro-missing-layout	../verify/valid/B9-unique-temporary-take.oir	coro-invalid/coro-missing-layout.oir

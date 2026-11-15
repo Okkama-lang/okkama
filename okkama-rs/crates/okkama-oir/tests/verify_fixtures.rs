@@ -272,6 +272,64 @@ fn async_audit_695_negatives_and_their_positives() {
     }
 }
 
+/// #696: the traces of the D21 M8 fixtures. The abort-after-prefix trace A R holds because a cancellation is
+/// delivered only after the plan that destroys A has drained; the explicit aborts (A R and R A) need a definite
+/// failure, because a cancellation in D21 is decided only at the selector after its delivery.
+#[test]
+fn m8_d21_traces_keep_their_order() {
+    use okkama_oir::*;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/verify");
+    let rejected_at = |source: &str, rule: RuleId, message: &str, op: &dyn Fn(&Operation) -> bool| {
+        let module = text::parse(source).unwrap();
+        let report = fixture_result(&module, ErrorPolicy::All).unwrap_err();
+        let (function, data) = module.functions.iter().find(|(_, data)| data.symbol == "f").unwrap();
+        let body = data.body.as_ref().unwrap();
+        let (instruction, _) = body.insts.iter().find(|(_, inst)| op(&inst.op)).unwrap();
+        let expected = EntityLocation::Instruction { function, instruction };
+        assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == rule
+            && diagnostic.message.contains(message) && diagnostic.primary.entity == expected), "{report:?}");
+    };
+
+    // A R: delivering the cancellation before the first plan would abort R before A is destroyed.
+    let source = fs::read_to_string(root.join("valid/M8-abort-after-executed-prefix.oir")).unwrap();
+    fixture_result(&text::parse(&source).unwrap(), ErrorPolicy::All).unwrap();
+    let body = &source[source.find("func @f(").unwrap()..];
+    let plan = body.lines().find(|line| line.contains("= cleanup.plan ") && line.ends_with(", plan 0")).unwrap();
+    let state = plan.split("cleanup.plan ").nth(1).unwrap().split(',').next().unwrap();
+    let early = format!("    %early: cleanup-state = cleanup.deliver_cancel {state}\n{}",
+        plan.replace(&format!("cleanup.plan {state},"), "cleanup.plan %early,"));
+    let mutated = source.replace(plan, &early);
+    let first = |op: &Operation| matches!(op, Operation::Cleanup(CleanupOp::DeliverCancel { .. }));
+    rejected_at(&mutated, RuleId::B105, "cancellation is delivered once, after the plan has drained", &first);
+
+    // A R and R A by explicit abort in the close of the failed deferred call: A R aborts R with the state that
+    // the drained first plan hands to its `done` edge, R A aborts it with the settled state before any plan.
+    for (name, after_prefix) in [("M8-explicit-abort-after-executed-prefix", true),
+        ("M8-explicit-abort-before-destroy", false)] {
+        let module = text::parse(&fs::read_to_string(root.join(format!("valid/{name}.oir"))).unwrap()).unwrap();
+        fixture_result(&module, ErrorPolicy::All).unwrap();
+        let (_, data) = module.functions.iter().find(|(_, data)| data.symbol == "f").unwrap();
+        let body = data.body.as_ref().unwrap();
+        let aborts: Vec<_> = body.insts.iter().filter_map(|(_, inst)| match inst.op {
+            Operation::Exit(ExitOp::Abort { cleanup, .. }) => Some(cleanup),
+            _ => None,
+        }).collect();
+        let [state] = aborts.as_slice() else { panic!("{name}: one explicit abort") };
+        match body.values.get(*state).unwrap().def {
+            Definition::BlockParam { block, .. } => {
+                assert!(after_prefix, "{name}");
+                assert!(body.blocks.iter().any(|(_, data)| matches!(&data.term.kind,
+                    TermKind::CleanupNext { done, .. } if done.block == block)), "{name}");
+            }
+            Definition::InstResult { inst, .. } => {
+                assert!(!after_prefix, "{name}");
+                assert!(matches!(body.insts.get(inst).unwrap().op,
+                    Operation::Cleanup(CleanupOp::SettleEmpty { .. })), "{name}");
+            }
+        }
+    }
+}
+
 #[test]
 fn every_rule_has_a_verified_canonical_positive_and_negative() {
     use std::collections::BTreeSet;
@@ -794,7 +852,9 @@ fn normalization_preserves_rejections_under_dead_prefixes_and_ssa_permutations()
                     });
                     // An explicit packet ABI forbids body evaluation before
                     // own.accept. Do not turn a dead prefix into an ABI error.
-                    if !input_packet {
+                    // C-2: a D21 async body starts with the start resume of
+                    // its frame, so a prefix before it is an ABI error too.
+                    if !input_packet && body.frame_layout.is_none() {
                         let mut prefix = Vec::new();
                         for bit in 0..8 {
                             let inst = InstId::from_u32(body.insts.len() as u32);

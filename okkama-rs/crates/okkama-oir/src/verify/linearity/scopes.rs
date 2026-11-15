@@ -11,7 +11,6 @@ impl Engine<'_, '_> {
         }
         let closing = self.has_closing_token(before);
         if closing && !matches!(op, Operation::Cleanup(_) | Operation::Exit(ExitOp::Abort { .. })
-            | Operation::Async(AsyncOp::FrameCancel { .. })
             | Operation::Const(_) | Operation::Core(CoreOp::FailSecondary { .. } | CoreOp::FailCaused { .. })) {
             let resource = op.operand_refs().iter().any(|operand| match operand.reference {
                 OperandRef::Value(value) => self.is_managed(value) || linear(self.module, self.body, value),
