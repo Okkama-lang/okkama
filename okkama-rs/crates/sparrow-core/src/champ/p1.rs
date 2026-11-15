@@ -18,7 +18,7 @@ pub(super) fn invoke(ctx: *mut Ctx, function: usize, io: *mut CallOwn, args: &[W
             return OUTCOME_STOP;
         }
     }
-    let value = if name.starts_with("runtime/") {
+    let value = if super::machine::native_symbol(name) {
         let value = runtime::rt_native(ctx, function as u64, args.as_ptr(), args.len() as u64);
         if unsafe { (*ctx).status } == runtime::FAILED
             && let Some(FailureKind::Program(message)) = runtime.failure(unsafe { (*ctx).failure })
@@ -54,7 +54,8 @@ pub(super) fn invoke(ctx: *mut Ctx, function: usize, io: *mut CallOwn, args: &[W
                 runtime.heap.set_field(args[0], 0, crate::word::UNBOUND);
                 0
             }
-            "value" | "replace" => {
+            "closed" => u64::from(runtime.heap.field(args[0], 1) != 0),
+            "value" | "replace" | "compare_and_replace" => {
                 if runtime.heap.field(args[0], 1) != 0 {
                     let descriptor = source.objects.iter().position(|object| {
                         object.name == "async.atomic.AtomicClosed"
@@ -69,6 +70,18 @@ pub(super) fn invoke(ctx: *mut Ctx, function: usize, io: *mut CallOwn, args: &[W
                     0
                 } else if operation == "value" {
                     runtime.heap.field(args[0], 0)
+                } else if operation == "compare_and_replace" {
+                    // A failed comparison publishes nothing; plain values compare without failure.
+                    let ty = source.functions[function].registers[1];
+                    let current = runtime.heap.field(args[0], 0);
+                    match super::machine::value_equal(runtime, &source, current, args[1], ty) {
+                        Ok(true) => {
+                            runtime.heap.set_field(args[0], 0, args[2]);
+                            1
+                        }
+                        Ok(false) => 0,
+                        Err(message) => return super::helpers::stop(ctx, Error(message)),
+                    }
                 } else {
                     runtime.heap.set_field(args[0], 0, args[1]);
                     0

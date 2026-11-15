@@ -8,6 +8,13 @@ type Active = BTreeSet<Location>;
 /// The artifact cannot add contracts to this catalog.
 pub trait ExternalContracts {
     fn entry(&self, name: &str) -> Option<&Function>;
+
+    /// The checked unresolved-provider adapter for a declaration whose name has no trusted entry
+    /// (P2.4 §4.7); `None` rejects it. The adapter is recomputed from the declaration's transport,
+    /// never taken from it, and the declaration must then equal it exactly.
+    fn adapter(&self, _declared: &Function) -> Option<Function> {
+        None
+    }
 }
 #[derive(Debug)]
 pub struct NoExternalContracts;
@@ -170,7 +177,15 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
         if let Some(entry) = &f.proofs.entry
             && let Some(name) = &entry.external
         {
-            let trusted = contracts.entry(name).ok_or_else(|| error(format!("unregistered external {name}")))?;
+            let adapter;
+            let trusted = match contracts.entry(name) {
+                Some(trusted) => trusted,
+                None => {
+                    adapter = contracts.adapter(f).ok_or_else(|| violation("EXTERNAL_UNRESOLVED",
+                        format!("external {name} has no trusted entry and no data or handle adapter")))?;
+                    &adapter
+                }
+            };
             require(f.entry_abi == trusted.entry_abi && f.registers == trusted.registers
                 && f.services == trusted.services && f.params == trusted.params && f.results == trusted.results
                 && f.proofs.entry == trusted.proofs.entry, "external signature/summary mismatch")?;

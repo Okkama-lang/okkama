@@ -227,7 +227,7 @@ fn s1_plain_and_identity_layouts_round_trip_and_reject_bad_offsets() {
     p.objects.push(Object {
         error_cases: vec![],
         enum_cases: 0,
-        variant_cases: vec![],
+        variant_cases: vec![], handle: false,
         name: "Plain".into(),
         fields: vec![Field { name: "text".into(), storage: 0, once: false }],
         layout: ObjectRuntimeLayout {

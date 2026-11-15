@@ -144,6 +144,7 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
             o::DeclarationKind::Role { builtin: true, .. } if declaration.name == "Error" => {
                 (&[][..], &[][..], None)
             }
+            o::DeclarationKind::Handle => (&[][..], &[][..], None),
             _ => return Err(unsupported("non-object declaration")),
         };
         if !witnesses.is_empty() {
@@ -193,6 +194,7 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
                 }
                 _ => 0,
             },
+            handle: matches!(declaration.kind, o::DeclarationKind::Handle),
             name: declaration.name.clone(),
             fields: fields.iter().zip(&layout.source_fields).map(|(field, &storage)| s::Field {
                 name: field.name.clone(),
@@ -241,6 +243,12 @@ pub(crate) fn translate_type(module: &o::Module, id: o::TypeId) -> Result<s::Typ
             s::Type::Object(case.layout.as_u32())
         }
         o::Type::Descriptor => s::Type::Descriptor,
+        o::Type::Handle(decl) => {
+            if !matches!(module.declarations.get(*decl)?.kind, o::DeclarationKind::Handle) {
+                return Err(GenerateError("handle type references a non-handle declaration".into()));
+            }
+            s::Type::Handle(decl.as_u32())
+        }
         o::Type::Bool => s::Type::Bool,
         o::Type::Byte => s::Type::Byte,
         o::Type::Float => s::Type::Float,

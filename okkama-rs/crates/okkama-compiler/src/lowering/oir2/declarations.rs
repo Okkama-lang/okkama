@@ -58,8 +58,18 @@ impl Declarations {
         ] {
             this.types.insert(ty, this.builder.intern_type(lowered)?);
         }
-        if let Some(handle) = reg.handles.first() {
-            return Err(LowerError::unsupported(handle.span, "native object declaration"));
+        // OIR-2 §6.5, P2.4 §4.7: a handle is an opaque value of the native registry. It has no
+        // fields, no Okkama destroy and no ownership token; its identity is module and name.
+        for (index, handle) in reg.handles.iter().enumerate() {
+            let module = reg.modules[handle.module].name.replace('/', ".");
+            let declaration = this.builder.declare(ir::Declaration {
+                name: format!("{module}.{}", handle.name),
+                type_params: vec![],
+                kind: ir::DeclarationKind::Handle,
+                loc: None,
+            })?;
+            let lowered = this.builder.intern_type(ir::Type::Handle(declaration))?;
+            this.types.insert(ty::Ty::Handle(ty::HandleId(index)), lowered);
         }
         let byte = this.builder.intern_type(ir::Type::Byte)?;
         this.types.insert(ty::Ty::Byte, byte);
