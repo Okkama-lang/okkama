@@ -1,9 +1,9 @@
 //! #569 C3b and C6 conformance cases from source: High -> own -> Low.
 //!
 //! The `any` cases reach Low under the build gate (the SPB 17 lane does not take
-//! `any` or role layouts yet). The open-invocation cases reach own and verify_own;
-//! their own output keeps the checked dynamic transfer of each open call result
-//! (`own.dynamic` with the Closure protocol), which Low does not accept yet.
+//! `any` or role layouts yet). The open-invocation cases keep the checked dynamic
+//! transfer of each open call result (`own.dynamic` with the Closure protocol) and
+//! reach Low, which settles it in the cleanup automaton (#683).
 use super::own_case_tests::{case, case_directory, own_stage};
 use crate::oir2 as ir;
 
@@ -35,6 +35,9 @@ const OPEN_CALL_CASES: [&str; 12] = [
     "L07.regions.role-instances",
     "L09.collections.ordered-sets",
 ];
+
+/// Open-invocation cases whose Low stops on the cleanup inference step budget (#687).
+const LOW_BUDGET_CASES: [&str; 1] = ["L09.collections.ordered-sets"];
 
 fn own(id: &str) -> Result<ir::Module, String> {
     let directory = case_directory(id);
@@ -77,9 +80,20 @@ fn oir2_c3b_open_invocation_cases_reach_own() {
 }
 
 #[test]
-#[ignore = "#641: Low accepts own.dynamic only for the storage merge protocol, not an open call's Closure transfer"]
 fn oir2_c3b_open_invocation_cases_reach_low() {
-    for id in OPEN_CALL_CASES {
+    let mut failed = vec![];
+    for id in OPEN_CALL_CASES.iter().filter(|id| !LOW_BUDGET_CASES.contains(id)) {
+        if let Err(error) = case(id, ir::verify::VerifyMode::Structural) {
+            failed.push(format!("{id}: {}", error.chars().take(300).collect::<String>()));
+        }
+    }
+    assert!(failed.is_empty(), "{failed:#?}");
+}
+
+#[test]
+#[ignore = "#687: low cleanup inventory inference exceeds the step budget"]
+fn oir2_c3b_open_invocation_cases_reach_low_within_the_step_budget() {
+    for id in LOW_BUDGET_CASES {
         case(id, ir::verify::VerifyMode::Structural).unwrap_or_else(|error| panic!("{id}: {error}"));
     }
 }
