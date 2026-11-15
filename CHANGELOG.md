@@ -121,6 +121,20 @@ fake fields; role fakes and their ordinary typed fields remain available.
   operations, 38 now pass on Champ (`champ_cases_scalars`). Four pass own and
   low and then stop on collection operations. Five wait on char conversions
   in OIR-2 (#679).
+- **OIR-2: open action invocation and `any` in the producer (#569 C3b, C6).**
+  An invocation of an action value is open exactly where own sees no finite
+  origin in the invoking body (a parameter, a produced result, a field read,
+  the block parameters they reach); the producer now gives each such call the
+  registered open sync callable ABI (the Closure protocol, one cleanup
+  intrinsic per `fn` type and a `type.of` runtime descriptor) instead of a
+  diagnostic, and known invocations stay precise. The runtime catalogue keys
+  its cleanup intrinsics by type, so a module can invoke several open `fn`
+  types, and registers `oir.any.cleanup`. `any` boundaries lower to `any.box`
+  (element by element in heterogeneous literals, never a box of a box), and
+  every function whose values reach `any` binds a checked runtime descriptor.
+  An untagged `[]`/`[:]` arm of an `if`/`match` takes the join's collection
+  type. Eleven `any` cases reach Low; the open-call cases reach own and stop in
+  Low, which does not yet take the Closure transfer of an open call result.
 
 - **OIR-2 core (#563).** A new crate, `okkama-oir` (std only, re-exported by
   the compiler as `oir2`), holds the 0.6.0 intermediate representation with

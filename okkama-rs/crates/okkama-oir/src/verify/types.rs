@@ -1228,7 +1228,8 @@ fn function_types(module: &Module, data: &Function, state: &mut State<'_>) -> Ch
                 }
             }
             FunctionAttr::Intrinsic { name, .. } => {
-                if state.context.external_contracts.intrinsic(name) != Some(&data.signature) {
+                let trusted = state.context.external_contracts.intrinsic_declaration(name, &data.signature);
+                if trusted != Some(&data.signature) {
                     state.error(R::T5, "intrinsic declaration does not match the trusted ABI catalog");
                 }
             }

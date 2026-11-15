@@ -28,7 +28,7 @@ impl ModuleLoader for CaseLoader {
     }
 }
 
-fn case_directory(id: &str) -> PathBuf {
+pub(super) fn case_directory(id: &str) -> PathBuf {
     let (level, suffix) = id.split_once('.').unwrap();
     let cases = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../conformance/cases");
     let level = std::fs::read_dir(&cases).unwrap().map(|entry| entry.unwrap().path())
@@ -37,7 +37,7 @@ fn case_directory(id: &str) -> PathBuf {
     level.join(suffix)
 }
 
-fn high(source: &str, case: Option<PathBuf>) -> Result<ir::Module, String> {
+pub(super) fn high(source: &str, case: Option<PathBuf>) -> Result<ir::Module, String> {
     let file = SourceFile::new("main.ok", source).map_err(|error| format!("source: {error:?}"))?;
     let program = syntax::parse(&file, &ParseOptions::default()).map_err(|error| format!("syntax: {error:?}"))?;
     let roots = [crate::lowering::RootFile { source: &file, program: &program }];
@@ -58,12 +58,31 @@ fn test_high(source: &str) -> Result<ir::Module, String> {
 }
 
 /// The Low module; `Err` names the stage that stopped.
-fn own_to_low(source: &str, case: Option<PathBuf>, mode: ir::verify::VerifyMode) -> Result<ir::Module, String> {
+pub(super) fn own_to_low(source: &str, case: Option<PathBuf>, mode: ir::verify::VerifyMode)
+    -> Result<ir::Module, String> {
     module_to_low(high(source, case)?, mode)
 }
 
 /// High -> own -> low under one verifier mode; test-mode modules verify as test executions.
 fn module_to_low(module: ir::Module, mode: ir::verify::VerifyMode) -> Result<ir::Module, String> {
+    let (own, verify) = module_to_own(module, mode)?;
+    let low = ir::low::lower_cleanup(own, &ir::low::LowOptions::default())
+        .map_err(|error| format!("low: {error:?}"))?;
+    let catalog = P1NativeSummaries::for_module(&low).map_err(|error| format!("contracts: {error:?}"))?;
+    let context = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
+    ir::verify::verify_with(&low, &verify, context).map_err(|error| format!("verify_low: {error:?}"))?;
+    Ok(low)
+}
+
+/// The verified Own module and the verification options; `Err` names the stage that stopped.
+pub(super) fn own_stage(source: &str, case: Option<PathBuf>, mode: ir::verify::VerifyMode)
+    -> Result<(ir::Module, ir::verify::VerifyOptions), String> {
+    module_to_own(high(source, case)?, mode)
+}
+
+/// High -> own under one verifier mode; test-mode modules verify as test executions.
+fn module_to_own(module: ir::Module, mode: ir::verify::VerifyMode)
+    -> Result<(ir::Module, ir::verify::VerifyOptions), String> {
     let execution = if module.tests.is_some() {
         ir::verify::ExecutionMode::Tests
     } else {
@@ -88,16 +107,11 @@ fn module_to_low(module: ir::Module, mode: ir::verify::VerifyMode) -> Result<ir:
     let context = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
     ir::verify::verify_with(&own.module, &verify, context)
         .map_err(|error| format!("verify_own: {}", rejection(&own.module, &error)))?;
-    let low = ir::low::lower_cleanup(own.module, &ir::low::LowOptions::default())
-        .map_err(|error| format!("low: {error:?}"))?;
-    let catalog = P1NativeSummaries::for_module(&low).map_err(|error| format!("contracts: {error:?}"))?;
-    let context = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
-    ir::verify::verify_with(&low, &verify, context).map_err(|error| format!("verify_low: {error:?}"))?;
-    Ok(low)
+    Ok((own.module, verify))
 }
 
 /// Rules, messages and the rejected instruction, compact enough for triage.
-fn rejection(module: &ir::Module, report: &ir::verify::VerifyReport) -> String {
+pub(super) fn rejection(module: &ir::Module, report: &ir::verify::VerifyReport) -> String {
     let mut text = format!("{:?}:", report.failure);
     for diagnostic in report.diagnostics.iter().take(4) {
         text.push_str(&format!(" [{:?} {}", diagnostic.rule, diagnostic.message));
@@ -114,17 +128,17 @@ fn rejection(module: &ir::Module, report: &ir::verify::VerifyReport) -> String {
     text
 }
 
-fn full(source: &str) -> ir::Module {
+pub(super) fn full(source: &str) -> ir::Module {
     own_to_low(source, None, ir::verify::VerifyMode::Full).unwrap_or_else(|error| panic!("{error}\n{source}"))
 }
 
-fn case(id: &str, mode: ir::verify::VerifyMode) -> Result<ir::Module, String> {
+pub(super) fn case(id: &str, mode: ir::verify::VerifyMode) -> Result<ir::Module, String> {
     let directory = case_directory(id);
     let source = std::fs::read_to_string(directory.join("main.ok")).unwrap();
     own_to_low(&source, Some(directory), mode)
 }
 
-fn operations(module: &ir::Module) -> Vec<&ir::Operation> {
+pub(super) fn operations(module: &ir::Module) -> Vec<&ir::Operation> {
     module.functions.iter().filter_map(|(_, function)| function.body.as_ref()).flat_map(|body| {
         body.insts.iter().map(|(_, inst)| &inst.op).chain(body.blocks.iter().filter_map(|(_, block)| {
             match &block.term.kind {

@@ -13,6 +13,13 @@ impl ExternalContracts for FixtureContracts<'_> {
     fn intrinsic(&self, name: &str) -> Option<&okkama_oir::Signature> {
         self.intrinsic_function(name).map(|function| &function.signature)
     }
+    fn intrinsic_declaration(&self, name: &str, declared: &okkama_oir::Signature)
+        -> Option<&okkama_oir::Signature> {
+        if name == SYNC_CLOSURE_CLEANUP {
+            return self.runtime_cleanup(Some(declared)).map(|function| &function.signature);
+        }
+        self.intrinsic(name)
+    }
     fn intrinsic_summary(&self, name: &str) -> Option<&okkama_oir::Summary> {
         self.intrinsic_function(name).and_then(|function| function.summary)
             .and_then(|id| self.0.summaries.get(id).ok())
@@ -39,7 +46,7 @@ impl ExternalContracts for FixtureContracts<'_> {
 impl FixtureContracts<'_> {
     fn intrinsic_function(&self, name: &str) -> Option<&okkama_oir::Function> {
         if name == SYNC_CLOSURE_CLEANUP {
-            return self.runtime_cleanup();
+            return self.runtime_cleanup(None);
         }
         if !matches!(name, "fixture.cleanup.fn" | "fixture.cleanup.any" | "fixture.cleanup.borrow"
             | "fixture.ordinary" | "fixture.source") {
@@ -53,13 +60,15 @@ impl FixtureContracts<'_> {
 
 impl FixtureContracts<'_> {
     // The runtime cleanup intrinsic is trusted only as the catalogue registers it:
-    // its declaration must carry exactly the catalogue's ABI and summary.
-    fn runtime_cleanup(&self) -> Option<&okkama_oir::Function> {
+    // its declaration must carry exactly the catalogue's ABI and summary. The
+    // family is keyed by type: `declared` selects the declaration of one key.
+    fn runtime_cleanup(&self, declared: Option<&okkama_oir::Signature>) -> Option<&okkama_oir::Function> {
         let catalogue = RuntimeCatalogue::for_module(self.0);
         self.0.functions.iter().map(|(_, function)| function).find(|function| {
             function.attrs.iter().any(|attr| {
                 matches!(attr, okkama_oir::FunctionAttr::Intrinsic { name, .. } if name == SYNC_CLOSURE_CLEANUP)
-            }) && catalogue.cleanup_signature(SYNC_CLOSURE_CLEANUP) == Some(&function.signature)
+            }) && declared.is_none_or(|declared| *declared == function.signature)
+                && catalogue.cleanup_signature(SYNC_CLOSURE_CLEANUP, &function.signature) == Some(&function.signature)
                 && function.summary.and_then(|id| self.0.summaries.get(id).ok())
                     == catalogue.cleanup_summary(SYNC_CLOSURE_CLEANUP)
         })

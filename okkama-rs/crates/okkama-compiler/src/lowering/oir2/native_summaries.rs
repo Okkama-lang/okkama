@@ -25,8 +25,9 @@
 //! (see [`native_transport`]). Data and handles carry no ownership graph; failures have Native kind.
 //! All entries are synchronous, with no async destroy, publication receipt or resource result.
 //!
-//! Open sync callables and the opaque callable cleanup intrinsic come from the
-//! runtime catalogue of `okkama-oir` (#569 O1); own and the verifier consult it.
+//! Open sync callables and the opaque cleanup intrinsics (callables, #569 O1 and
+//! C3b; `any` boxes, C6) come from the runtime catalogue of `okkama-oir`; own and
+//! the verifier consult it.
 use std::collections::BTreeMap;
 
 use crate::oir2 as ir;
@@ -60,8 +61,9 @@ impl P1NativeSummaries {
                     ir::FunctionAttr::Intrinsic { name, .. } => (false, name),
                     _ => continue,
                 };
-                if !native && name == ir::catalogue::SYNC_CLOSURE_CLEANUP {
-                    if catalog.runtime.cleanup_summary(name).is_none() {
+                let runtime = [ir::catalogue::SYNC_CLOSURE_CLEANUP, ir::catalogue::ANY_CLEANUP];
+                if !native && runtime.contains(&name.as_str()) {
+                    if catalog.runtime.cleanup_signature(name, &function.signature).is_none() {
                         return Err(error(format!("invalid runtime intrinsic ABI {name}")));
                     }
                     continue;
@@ -178,7 +180,10 @@ impl ir::verify::ExternalContracts for P1NativeSummaries {
         self.natives.get(name).map(|entry| &entry.0)
     }
     fn intrinsic(&self, name: &str) -> Option<&ir::Signature> {
-        self.intrinsics.get(name).map(|entry| &entry.0).or_else(|| self.runtime.cleanup_signature(name))
+        self.intrinsics.get(name).map(|entry| &entry.0)
+    }
+    fn intrinsic_declaration(&self, name: &str, declared: &ir::Signature) -> Option<&ir::Signature> {
+        self.intrinsics.get(name).map(|entry| &entry.0).or_else(|| self.runtime.cleanup_signature(name, declared))
     }
     fn native_summary(&self, name: &str) -> Option<&ir::Summary> {
         self.natives.get(name).map(|entry| &entry.1)

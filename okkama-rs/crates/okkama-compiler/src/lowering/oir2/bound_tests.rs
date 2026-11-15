@@ -29,6 +29,7 @@ fn oir2_c4_bound_source_goldens() {
         if std::env::var_os("OKKAMA_OIR2_P2_WRITE_GOLDENS").is_some() {
             std::fs::create_dir_all(directory).unwrap();
             let wrapped = actual.replace(", read#slot", ",\n        read#slot");
+            let wrapped = super::cap_tests::wrap_high(&wrapped);
             std::fs::write(&path, wrapped).unwrap();
         }
         let stored = std::fs::read_to_string(path).unwrap();
@@ -157,17 +158,19 @@ fn oir2_c4_frontend_must_use_and_hidden_boundaries() {
     assert!(errors.iter().any(|error| error.message.contains("Hidden action")), "{errors:?}");
 }
 
+/// Open ABI entities: the protocol and the closure cleanup intrinsics.
+fn open_abi(text: &str) -> (usize, usize) {
+    (text.matches("protocol P").count(), text.matches("[intrinsic \"oir.sync_closure.cleanup\"]").count())
+}
+
 #[test]
 fn oir2_c4_closed_fields_and_open_boundaries() {
+    // #569 C3b: an invocation is open exactly where own sees no finite origin in
+    // the invoking body: a field read, a bound role action of an opaque receiver
+    // and a parameter. Each such module carries the open callable ABI.
     for source in [
         concat!("module app; object Hold { has f is () is int; Hold(:f); call() is int { f(); } } ",
             "main() is int { Hold(f: () is int { 7; }).call(); }"),
-        concat!("module app; object A { A(); add(f is () is int) is int { f(); } } ",
-            "main() is int { let run is (() is int) is int = A().add; run(() is int { 7; }); }"),
-    ] {
-        super::print_oir2(source).unwrap();
-    }
-    for source in [
         concat!("module app; object Hold { has f is () is int; Hold(:f); call() is int { f(); } } ",
             "object Apply { Apply(); call(h is Hold) is int { h.call(); } } ",
             "main() is int { Hold(f: () is int { 7; }).call(); }"),
@@ -176,17 +179,35 @@ fn oir2_c4_closed_fields_and_open_boundaries() {
             "object Open { Open(); call(f is () is int) is int { let a is Apply = A(); ",
             "let run = a.run; run(f); } } main() is int { 0; }"),
     ] {
-        let error = super::print_oir2(source).unwrap_err();
-        assert!(error.to_string().contains("open action invocation"), "{error}");
-        assert!(error.to_string().contains("O1"), "{error}");
+        let text = super::print_oir2(source).unwrap_or_else(|error| panic!("{error}"));
+        let (protocols, cleanups) = open_abi(&text);
+        assert_eq!(protocols, 1, "{text}");
+        assert!(cleanups >= 1, "{text}");
     }
+    // The bound action invoked where it is bound has a finite known origin: only
+    // the parameter invocation inside `add` is open.
+    let known = concat!("module app; object A { A(); add(f is () is int) is int { f(); } } ",
+        "main() is int { let run is (() is int) is int = A().add; run(() is int { 7; }); }");
+    super::with_analysis(known, |analysis| {
+        let module = super::lower_to_oir2(analysis).unwrap();
+        let descriptors = |symbol: &str| {
+            let (_, function) = module.functions.iter().find(|(_, function)| function.symbol == symbol).unwrap();
+            function.body.as_ref().unwrap().insts.iter()
+                .filter(|(_, inst)| matches!(inst.op, ir::Operation::Core(ir::CoreOp::TypeOf { .. }))).count()
+        };
+        assert_eq!(descriptors("main"), 0);
+        assert_eq!(descriptors("app.A.add#0"), 1);
+    });
 }
 
 #[test]
 fn oir2_c4_ordered_set_cache_blocker() {
     let source = include_str!("fixtures/p2_4/ordered-set-cached.ok");
     let module = super::lower_std(source).unwrap();
-    let report = ir::verify::verify_high(&module).unwrap_err();
+    // The runtime catalogue trusts the open-callable cleanup of its open invocations.
+    let catalog = super::P1NativeSummaries::for_module(&module).unwrap();
+    let context = ir::VerifyContext { external_contracts: &catalog, ..ir::VerifyContext::default() };
+    let report = ir::verify_high_with(&module, &ir::VerifyOptions::default(), context).unwrap_err();
     assert_eq!(report.failure, ir::verify::VerifyFailure::Rejected);
     assert!(!report.diagnostics.is_empty());
     for diagnostic in &report.diagnostics {

@@ -120,3 +120,32 @@ const GOLDENS: &[&str] = &[
     "shape-reversed",
     "shape-take",
 ];
+
+/// Array and map retags in the lowered module.
+fn retags(module: &ir::Module) -> usize {
+    module.functions.iter().filter_map(|(_, function)| function.body.as_ref())
+        .flat_map(|body| body.insts.iter())
+        .filter(|(_, inst)| matches!(inst.op, ir::Operation::Collection(
+            ir::CollectionOp::ArrayRetag { .. } | ir::CollectionOp::MapRetag { .. })))
+        .count()
+}
+
+// #297 at a join: the checker types the whole `if`/`match`; an untagged arm takes
+// the join's collection type, as at a declared boundary.
+#[test]
+fn oir2_untagged_arm_takes_the_join_collection_type() {
+    for (body, expected) in [
+        ("let c = true; let joined = if c { [[]]; } else { [[2, 3]]; }; joined.size();", 1),
+        ("let m = match 1 { case 1 { [[]]; } else { [[1]]; } }; m.size();", 1),
+        ("let c = true; let t = if c { [\"a\": [1]]; } else { [:]; }; t.size();", 1),
+        // Arms of one type need no retag.
+        ("let c = true; let same = if c { [[1]]; } else { [[2, 3]]; }; same.size();", 0),
+    ] {
+        let source = format!("module app; main() is int {{ {body} }}");
+        with_analysis(&source, |analysis| {
+            let module = super::lower_to_oir2(analysis).unwrap_or_else(|error| panic!("{body}: {error}"));
+            ir::verify::verify_high(&module).unwrap_or_else(|errors| panic!("{body}: {errors:?}"));
+            assert_eq!(retags(&module), expected, "{body}");
+        });
+    }
+}

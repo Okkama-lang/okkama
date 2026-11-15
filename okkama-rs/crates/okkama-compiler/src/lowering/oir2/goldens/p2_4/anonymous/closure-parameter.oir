@@ -9,6 +9,13 @@ scope S0 action in @app.Make.make#0
 scope S1 action in @main
 scope S2 action in @app.Make.new#0
 scope S3 action in @app.Make.make#0.lambda#0
+summary M0 call-boundary parameters [parameter_effect(convention=take, destination=none)] contract
+        call_contract(publication=atomic)
+protocol P0 kind closure holders [scope, packet] rules [protocol_rule(transition=publish, from=packet, to=scope,
+        checks=[owner, live_dependencies, snapshot, transferable], normal=protocol_poststate(holder=scope, state=open),
+        unwind=some(protocol_poststate(holder=scope, state=settled))), protocol_rule(transition=dynamic, from=packet,
+        to=scope, checks=[owner, live_dependencies, snapshot, transferable], normal=protocol_poststate(holder=scope,
+        state=open), unwind=some(protocol_poststate(holder=packet, state=unaccepted)))] roots [operands]
 
 func @app.Make.new#0() -> app.Make [ctor app.Make] {
     boundary B0 lexical in S2
@@ -39,19 +46,21 @@ func @app.Make.make#0(%0: app.Make, %1: int) -> fn() -> int [method app.Make] {
 func @main() -> int [entry] {
     boundary B0 lexical in S1
     ^b0 in S1 unwind ^b1:
-    [i0] %0: app.Make = call @app.Make.new#0()
-    %1: int = const 7
-    [i2] %2: fn() -> int = call @app.Make.make#0(%0, %1)
-    [i3] %3: int = fn.call %2()
-    want %3
-    [i5] exit.prepare return %3 at B0
-    result.exit edge normal(0), value %3, demand want, prepare #5
-    high.effects at #0 failures [thrown, program, panic, native, cancelled], suspends true
-    high.effects at #2 failures [thrown, program, panic, native, cancelled], suspends true
+    %0: type = type.of ty fn() -> int, descriptor descriptor_contract(managed=runtime, retention=owner_graph(0),
+        cleanup=@oir.sync_closure.cleanup, summary=M0)
+    [i1] %1: app.Make = call @app.Make.new#0()
+    %2: int = const 7
+    [i3] %3: fn() -> int = call @app.Make.make#0(%1, %2)
+    [i4] %4: int = fn.call %3()
+    want %4
+    [i6] exit.prepare return %4 at B0
+    result.exit edge normal(0), value %4, demand want, prepare #6
+    high.effects at #1 failures [thrown, program, panic, native, cancelled], suspends true
     high.effects at #3 failures [thrown, program, panic, native, cancelled], suspends true
-    ret %3
-    ^b1(%4: failure) in S1:
-    raise %4
+    high.effects at #4 failures [thrown, program, panic, native, cancelled], suspends true
+    ret %4
+    ^b1(%5: failure) in S1:
+    raise %5
 }
 
 func @app.Make.make#0.lambda#0(%0: int) -> int [lambda captures 1 owner app.Make] {
@@ -66,3 +75,5 @@ func @app.Make.make#0.lambda#0(%0: int) -> int [lambda captures 1 owner app.Make
     ^b1(%1: failure) in S3:
     raise %1
 }
+
+func @oir.sync_closure.cleanup(%arg0: fn() -> int) -> void [intrinsic "oir.sync_closure.cleanup"] summary(M0);

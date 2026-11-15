@@ -1013,7 +1013,9 @@ impl Checker<'_, '_> {
         for attr in &data.attrs {
             let trusted = match attr {
                 FunctionAttr::Extern(name) => self.state.context.external_contracts.native(name),
-                FunctionAttr::Intrinsic { name, .. } => self.state.context.external_contracts.intrinsic(name),
+                FunctionAttr::Intrinsic { name, .. } => {
+                    self.state.context.external_contracts.intrinsic_declaration(name, &data.signature)
+                }
                 _ => continue,
             };
             self.require(trusted == Some(&data.signature), "call target has no matching trusted external ABI");
@@ -1051,7 +1053,7 @@ impl Checker<'_, '_> {
                         self.state.context.external_contracts.native(name)
                     }
                     (CallOp::Intrinsic { .. }, FunctionAttr::Intrinsic { name, .. }) => {
-                        self.state.context.external_contracts.intrinsic(name)
+                        self.state.context.external_contracts.intrinsic_declaration(name, &data.signature)
                     }
                     _ => None,
                 });

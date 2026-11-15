@@ -20,6 +20,7 @@ fn oir2_c3a_anonymous_source_goldens() {
         if std::env::var_os("OKKAMA_OIR2_P2_WRITE_GOLDENS").is_some() {
             std::fs::create_dir_all(&destination).unwrap();
             let wrapped = actual.replace(", replacements=[", ",\n        replacements=[");
+            let wrapped = super::cap_tests::wrap_high(&wrapped);
             std::fs::write(&path, wrapped).unwrap();
         }
         let stored = std::fs::read_to_string(path).unwrap();
@@ -31,7 +32,10 @@ fn oir2_c3a_anonymous_source_goldens() {
 }
 
 #[test]
-fn oir2_c3a_open_invocations_remain_explicit() {
+fn oir2_c3b_open_invocations_carry_the_open_abi() {
+    // #569 C3b: these invocations have no finite origin in their body (a
+    // parameter, a field read, a join of a field read with a closure); they lower
+    // with the registered open callable ABI instead of a diagnostic.
     for source in [
         "module app; object Apply { Apply(); call(f is () is int) is int { f(); } } main() is int { 0; }",
         concat!("module app; object Hold { has f is () is int; Hold(:f); call() is int { f(); } } ",
@@ -40,10 +44,9 @@ fn oir2_c3a_open_invocations_remain_explicit() {
             "call() is int { let g = if true { () is int { 1; }; } else { f; }; g(); } } ",
             "object Apply { Apply(); call(f is () is int) is int { Hold(f: f).call(); } } main() is int { 0; }"),
     ] {
-        let error = super::print_oir2(source).unwrap_err();
-        assert!(matches!(error, super::LowerError::Unsupported { span, .. } if !span.is_empty()), "{error}");
-        assert!(error.to_string().contains("open action invocation"), "{error}");
-        assert!(error.to_string().contains("O1"), "{error}");
+        let text = super::print_oir2(source).unwrap_or_else(|error| panic!("{error}"));
+        assert!(text.contains("[intrinsic \"oir.sync_closure.cleanup\"]"), "{text}");
+        assert_eq!(text.matches("type.of ty fn() -> int").count(), 1, "{text}");
     }
 }
 

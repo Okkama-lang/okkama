@@ -16,23 +16,32 @@ scope S0 action in @app.Parent.read#0
 scope S1 action in @main
 scope S2 action in @app.Child.new#0
 scope S3 action in @app.Parent.new#0
+summary M0 call-boundary parameters [parameter_effect(convention=take, destination=none)] contract
+        call_contract(publication=atomic)
+protocol P0 kind closure holders [scope, packet] rules [protocol_rule(transition=publish, from=packet, to=scope,
+        checks=[owner, live_dependencies, snapshot, transferable], normal=protocol_poststate(holder=scope, state=open),
+        unwind=some(protocol_poststate(holder=scope, state=settled))), protocol_rule(transition=dynamic, from=packet,
+        to=scope, checks=[owner, live_dependencies, snapshot, transferable], normal=protocol_poststate(holder=scope,
+        state=open), unwind=some(protocol_poststate(holder=packet, state=unaccepted)))] roots [operands]
 
 func @app.Child.new#0(%0: fn() -> int) -> app.Child [ctor app.Child] {
     binding b0 "ask": fn() -> int in S2
     boundary B0 lexical in S2
     ^b0 in S2 unwind ^b1:
-    %1: int = undef ty int
+    %1: type = type.of ty fn() -> int, descriptor descriptor_contract(managed=runtime, retention=owner_graph(0),
+        cleanup=@oir.sync_closure.cleanup, summary=M0)
+    %2: int = undef ty int
     bind %0, binding b0
-    [i2] %2: int = fn.call %0()
-    stage %2, action S2, field field_ref(declaration=app.Child, index=0)
-    %3: app.Child = obj.new app.Child { seen: %2 }
-    want %3
-    [i6] exit.prepare return %3 at B0
-    result.exit edge normal(0), value %3, demand want, prepare #6
-    high.effects at #2 failures [thrown, program, panic, native, cancelled], suspends true
-    ret %3
-    ^b1(%4: failure) in S2:
-    raise %4
+    [i3] %3: int = fn.call %0()
+    stage %3, action S2, field field_ref(declaration=app.Child, index=0)
+    %4: app.Child = obj.new app.Child { seen: %3 }
+    want %4
+    [i7] exit.prepare return %4 at B0
+    result.exit edge normal(0), value %4, demand want, prepare #7
+    high.effects at #3 failures [thrown, program, panic, native, cancelled], suspends true
+    ret %4
+    ^b1(%5: failure) in S2:
+    raise %5
 }
 
 func @app.Parent.new#0(%0: int) -> app.Parent [ctor app.Parent] {
@@ -99,3 +108,5 @@ func @main() -> int [entry] {
     high.effects at #3 failures [thrown, program, panic, native, cancelled], suspends true
     ret %4
 }
+
+func @oir.sync_closure.cleanup(%arg0: fn() -> int) -> void [intrinsic "oir.sync_closure.cleanup"] summary(M0);

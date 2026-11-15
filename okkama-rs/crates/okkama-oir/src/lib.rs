@@ -55,6 +55,8 @@ mod tests;
 
 #[cfg(test)]
 mod contract_tests;
+#[cfg(test)]
+mod catalogue_tests;
 
 #[cfg(test)]
 mod builder_tests;

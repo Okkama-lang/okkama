@@ -1387,6 +1387,12 @@ mod own_case_tests;
 #[path = "backend_collection_tests.rs"]
 mod backend_collection_tests;
 
+#[path = "any_tests.rs"]
+mod any_tests;
+
+#[path = "callable_case_tests.rs"]
+mod callable_case_tests;
+
 #[test]
 fn oir2_pipeline_scalar() {
     let source = SourceFile::new("app.ok", "module app; main() is int { 7; }").unwrap();
