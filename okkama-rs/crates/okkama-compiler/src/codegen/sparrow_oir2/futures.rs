@@ -9,6 +9,8 @@ use super::*;
 pub(super) struct AsyncBody {
     /// The Future's outcome value; `None` for a void Future.
     pub outcome: Option<s::Type>,
+    /// An async defer entry (C-6): `invoke.defer` runs it as a shielded child, it has no Future of its own.
+    pub defer: bool,
 }
 
 /// The async body shape of `function`, `None` for a synchronous function. A layout or an async summary outside
@@ -38,6 +40,21 @@ pub(super) fn async_body(module: &o::Module, id: o::FuncId, function: &o::Functi
         return Err(error(format!("{}: an async body takes exactly its own frame and returns nothing",
             function.symbol)));
     }
+    // C-6: an async defer entry publishes an empty success (Continue) or its failure, never a Future's outcome,
+    // and never replaces the exit in 0.6.0.
+    let replacements = function.attrs.iter().find_map(|attr| match attr {
+        o::FunctionAttr::DeferEntry { replacements } => Some(replacements),
+        _ => None,
+    });
+    if let Some(replacements) = replacements {
+        if !replacements.is_empty() {
+            return Err(error(format!("{}: an async defer entry never replaces (C-6)", function.symbol)));
+        }
+        if function.async_creation_summary.is_some() || function.async_body_summary.is_some() {
+            return Err(error(format!("{}: an async defer entry creates no Future", function.symbol)));
+        }
+        return Ok(Some(AsyncBody { outcome: None, defer: true }));
+    }
     let (Some(body), Some(creation)) = (function.async_body_summary, function.async_creation_summary) else {
         return Err(error(format!("{}: async body without its creation and body summaries", function.symbol)));
     };
@@ -57,7 +74,7 @@ pub(super) fn async_body(module: &o::Module, id: o::FuncId, function: &o::Functi
     if !agrees {
         return Err(error(format!("{}: creation summary's Future differs from the body's outcome", function.symbol)));
     }
-    Ok(Some(AsyncBody { outcome }))
+    Ok(Some(AsyncBody { outcome, defer: false }))
 }
 
 /// The D21 layout of an async body in SPB 17: slot types as produced types and each continuation's site as the

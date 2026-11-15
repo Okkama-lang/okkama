@@ -240,7 +240,9 @@ impl Emitter<'_> {
         if summary.entry_kind == o::EntryKind::ObservationAdmissionStaysCaller {
             return Err(error("owning call cannot use an observation summary"));
         }
-        if !call.type_args.is_empty() || !call.descriptors.is_empty() || summary.contract.suspends
+        // An async defer entry suspends its caller while its shielded child runs (C-6).
+        let async_defer = defer && declaration.attrs.contains(&o::FunctionAttr::Async);
+        if !call.type_args.is_empty() || !call.descriptors.is_empty() || (summary.contract.suspends && !async_defer)
             || summary.contract.async_destroy || summary.contract.publication != o::Publication::Atomic
             || summary.contract.protocol.is_some()
         {
@@ -253,8 +255,18 @@ impl Emitter<'_> {
         if !shielded && summary.contract.failures.contains(&o::FailureKind::Cancelled) {
             return Err(later("delivered cancellation"));
         }
-        let params = declaration.signature.params.iter().map(|&ty| kind(self.module, ty))
-            .collect::<Result<Vec<_>, _>>()?;
+        // An async defer entry takes its frame; its captures arrive through its start continuation (C-2).
+        let inputs = match declaration.body.as_ref().and_then(|body| body.frame_layout.as_ref()) {
+            Some(layout) if async_defer => {
+                let start = layout.continuations.first().ok_or_else(|| error("async defer entry without a start"))?;
+                start.saved.iter().map(|&slot| {
+                    let slot = layout.slots.get(slot as usize).ok_or_else(|| error("start slot outside layout"))?;
+                    kind(self.module, slot.ty)
+                }).collect::<Result<Vec<_>, _>>()?
+            }
+            _ => declaration.signature.params.iter().map(|&ty| kind(self.module, ty)).collect::<Result<Vec<_>, _>>()?,
+        };
+        let params = inputs;
         let language = params.iter().filter_map(|ty| match ty { P::Value(ty) => Some(*ty), _ => None })
             .collect::<Vec<_>>();
         if call.args.len() != language.len() || call.args.len() != summary.parameters.len() {
@@ -1007,9 +1019,6 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
         return Err(later(&format!("{}: entry attribute {attr:?}", function.symbol)));
     }
     let defer = function.attrs.iter().any(|attr| matches!(attr, o::FunctionAttr::DeferEntry { .. }));
-    if asynchronous.is_some() && defer {
-        return Err(later(&format!("{}: async defer entry (C-6)", function.symbol)));
-    }
     let body = function.body.as_ref().ok_or_else(|| later("entry without body"))?;
     if !body.high_results.is_empty() || !body.high_effects.is_empty() || !body.descriptor_bindings.is_empty()
         || !body.service_schedules.is_empty()
@@ -1022,10 +1031,10 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
     if params != function.signature.params {
         return Err(error("entry parameter signature mismatch"));
     }
-    let entry_abi = if asynchronous.is_some() {
+    let entry_abi = if let Some(shape) = &asynchronous {
         // Its layout is pushed once the pcs of its sites are known, below.
         let layout = u32::try_from(tables.frames.len()).map_err(|_| error("too many frame layouts"))?;
-        s::EntryAbi::AsyncBody { layout }
+        if shape.defer { s::EntryAbi::AsyncDefer { layout } } else { s::EntryAbi::AsyncBody { layout } }
     } else if defer {
         s::EntryAbi::Defer { labels: labels(module, function)? }
     } else {
@@ -1519,7 +1528,7 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                 if actual != function.signature.results {
                     return Err(error("return signature/type mismatch"));
                 }
-                if matches!(emitter.result.entry_abi, s::EntryAbi::Observation | s::EntryAbi::AsyncBody { .. }) {
+                if emitter.result.entry_abi == s::EntryAbi::Observation || emitter.result.entry_abi.asynchronous() {
                     // An async body returns nothing: fut.publish just before has delivered its outcome.
                     s::Instruction::Ret(values.iter().map(|&value| emitter.reg(value))
                         .collect::<Result<_, _>>()?)

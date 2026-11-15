@@ -545,10 +545,13 @@ fn v7_descriptor_start_golden_compiles_and_loads() {
 // --- #601 R4: resources ------------------------------------------------------------------------------------------
 
 /// The R2 Low goldens with resources (okkama-oir, `verify_low` in full): a resource held across an await, a close
-/// that suspends with resources, and the temporary take whose proof coro rechecked.
+/// that suspends with resources, the temporary take whose proof coro rechecked, and `defer await` with a body
+/// failure and with a reserve (C-6).
 #[test]
 fn r4_low_goldens_with_resources_compile_and_load() {
-    for name in ["r2-resource-across-await", "r2-resource-suspending-close", "r2-take-proof-recheck"] {
+    for name in ["r2-resource-across-await", "r2-resource-suspending-close", "r2-take-proof-recheck",
+        "r2-defer-await-body-failure", "r2-defer-await-reserve"]
+    {
         loads(name);
     }
 }
@@ -643,4 +646,38 @@ fn r4_rehome_puts_the_cache_duty_into_the_reserve_of_its_exit() {
     let s::Instruction::Champ { arguments, .. } = &mut program.functions[index].code[pc] else { unreachable!() };
     arguments[0] = A::Destination(s::ExitDestination::Caller);
     s::verify_load(&program, &contracts).unwrap();
+}
+
+/// C-6: `defer await closer()` in R2's goldens. The async defer entry takes its frame and publishes, and
+/// `invoke.defer` of it is a suspension site of its caller's layout.
+#[test]
+fn r4_async_defer_entry_is_an_async_body_that_its_caller_awaits() {
+    let p = translated(&golden("r2-defer-await-body-failure"));
+    let closer = function(&p, "closer");
+    assert!(matches!(closer.entry_abi, s::EntryAbi::AsyncDefer { .. }));
+    assert_eq!(types(closer, &closer.params.iter().copied().map(A::Location).collect::<Vec<_>>()),
+        [P::Service(K::Frame)]);
+    let f = function(&p, "f");
+    let s::EntryAbi::AsyncBody { layout } = f.entry_abi else { panic!("f is an async body") };
+    let defers = sites(f, O::InvokeDefer);
+    assert_eq!(defers.len(), 2);
+    for (pc, arguments, _) in defers {
+        assert_eq!(arguments[0], A::Entry(index(&p, "closer")));
+        assert!(p.tables.frames[layout as usize].continuations.iter().any(|k| k.site == Some(pc as u32)),
+            "invoke.defer at {pc} is a suspension site");
+        assert!(matches!(f.code[pc - 1], s::Instruction::Champ { op: O::FrameSave, .. }));
+    }
+}
+
+#[test]
+fn r4_async_defer_entry_never_replaces() {
+    let mut module = golden("r2-defer-await-body-failure");
+    edit(&mut module, "closer", |function| {
+        for attr in &mut function.attrs {
+            if let o::FunctionAttr::DeferEntry { replacements } = attr {
+                replacements.push(o::DeferLabel { label: "early".into(), result: None });
+            }
+        }
+    });
+    rejected(&module, "an async defer entry never replaces (C-6)");
 }

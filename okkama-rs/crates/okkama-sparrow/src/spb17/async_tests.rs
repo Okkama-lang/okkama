@@ -580,7 +580,7 @@ fn plain_with(variant: Main) -> Program {
     program(vec![work, main], vec![work_layout, main_layout], None)
 }
 
-fn plain() -> Program {
+pub(super) fn plain() -> Program {
     plain_with(Main::Plain)
 }
 
@@ -1019,7 +1019,8 @@ fn async_codec_refuses_reserved_opcodes_and_unknown_tags() {
     let at = spawned.windows(2).position(|window| window == marker).unwrap();
     spawned[at + 1] = 65;
     assert!(decode(&spawned).unwrap_err().message.contains("reserved"));
-    let unknown = text.replacen("entry_abi 3 ", "entry_abi 4 ", 1);
+    // Tags 0..=4 are assigned (4 is the async defer entry of #601 R4).
+    let unknown = text.replacen("entry_abi 3 ", "entry_abi 5 ", 1);
     assert!(assemble(&unknown).unwrap_err().message.contains("entry ABI"));
 }
 

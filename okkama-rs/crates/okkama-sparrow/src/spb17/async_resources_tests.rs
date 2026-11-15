@@ -1,11 +1,12 @@
 //! #601 R4: async with resources in SPB 17. The temporary take with its proof (IDs 67, 68), the rehome of an
-//! escaping Future's cache duty (ID 69), the take capability as a frame slot kind, and their load rules:
-//! `SPB_TAKE_CAPABILITY` (Champ draft 3 §§4.2, 15, with the `box.f` case of draft 2 §7.3) and `SPB_REHOME` (async
-//! ABI C-4 and its ruling). Positive programs follow the low golden `r2-take-proof-recheck` of okkama-oir; each
-//! negative is valid up to the rule it names.
+//! escaping Future's cache duty (ID 69), the take capability as a frame slot kind, the async defer entry (C-6),
+//! and their load rules: `SPB_TAKE_CAPABILITY` (Champ draft 3 §§4.2, 15, with the `box.f` case of draft 2 §7.3),
+//! `SPB_REHOME` (async ABI C-4 and its ruling), and the async defer under `SPB_ASYNC_ENTRY` and
+//! `SPB_SUSPEND_BRACKET` (draft 3 §§11, 15). Positive programs follow the low goldens `r2-take-proof-recheck` and
+//! `r2-defer-await-body-failure` of okkama-oir; each negative is valid up to the rule it names.
 use super::*;
 use super::async_tests::{Body, FUTURE_INT, FUTURE_VOID, INNER, MAIN, WORK, CONSUME, arguments, find, l, p,
-    owner_program, program, reject_with, s, service, slot_types, value, work};
+    owner_program, plain, program, reject_with, s, service, slot_types, value, work};
 
 use Argument as A;
 use Opcode as O;
@@ -639,4 +640,146 @@ fn a_rehome_takes_a_pending_exit_and_a_cache_duty() {
     let rehome = find(f, O::CacheRehome);
     arguments(f, rehome).swap(1, 2);
     assert!(verify_load(&p, &NoExternalContracts).unwrap_err().message.contains("wrong service operand type"));
+}
+
+// --- Async defer entries (C-6) ----------------------------------------------------------------------------------
+
+/// What a `defer await closer()` variant does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Defer {
+    /// @main runs @closer as its defer, bracketed as a suspension.
+    Plain,
+    /// The same without the bracket.
+    Unbracketed,
+    /// A synchronous function runs @closer.
+    Synchronous,
+}
+
+/// @closer, an async defer entry: it closes its own scope and publishes an empty success (Continue).
+fn closer() -> (Function, FrameLayout) {
+    let mut b = Body::new("closer", EntryAbi::AsyncDefer { layout: 0 }, vec![]);
+    let frame = b.service(K::Frame);
+    b.f.params = vec![frame];
+    b.f.proofs.entry = Some(EntryContract::default());
+    b.block("entry", &[frame]);
+    let (body, start) = b.resume(frame, 0, &[ProducedType::Service(K::Packet)]);
+    let q0 = b.emit(O::ScopeBegin, vec![A::Scope(WORK), A::Boundary(WORK)], K::ScopeState);
+    let q1 = b.emit(O::OwnAccept, vec![l(q0), l(start[0])], K::ScopeState);
+    let finished = b.close(q1, None, None, WORK, &[], 0, false);
+    let closed = b.service(K::Closed);
+    b.dispatch(finished, [false, false, false], vec![(Tag::Success, "done", vec![p(0)])]);
+    b.block("done", &[closed]);
+    let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
+    let deps = b.emit(O::DepsEmpty, vec![], K::Deps);
+    b.next(O::FuturePublish, vec![l(body), A::Flag(true), l(empty), l(deps)], vec![]);
+    b.ret();
+    let layout = FrameLayout {
+        slots: vec![service(K::Packet)],
+        continuations: vec![Continuation { site: None, saved: vec![0], operands: vec![] }],
+    };
+    (b.finish(), layout)
+}
+
+/// `invoke.defer @closer` with its empty packet, bracketed at continuation 1 when `frame` is the body's frame.
+/// Returns the scope state and the frame after it.
+fn run_closer(b: &mut Body, state: Location, frame: Option<Location>) -> (Location, Option<Location>) {
+    let packet = b.emit(O::OwnEmpty, vec![], K::Packet);
+    let saved = frame.map(|frame| b.save(frame, 1, &[state]));
+    b.f.proofs.registrations.push(RegistrationMap { entry: 0, labels: vec![] });
+    b.outcomes(O::InvokeDefer, vec![A::Entry(0), A::Summary(0), A::Registration(0), l(packet)],
+        vec![(Tag::Continue, "continued", vec![])]);
+    b.block("continued", &[]);
+    match saved {
+        Some(saved) => {
+            let (body, resumed) = b.resume(saved, 1, &[ProducedType::Service(K::ScopeState)]);
+            (resumed[0], Some(body))
+        }
+        None => (state, frame),
+    }
+}
+
+fn deferring(variant: Defer) -> Program {
+    let (closer, closer_layout) = closer();
+    let mut functions = vec![closer];
+    let mut layouts = vec![closer_layout];
+    if variant == Defer::Synchronous {
+        // A synchronous action of scope MAIN runs the async defer.
+        let mut b = Body::new("sync", EntryAbi::Observation, vec![]);
+        b.f.proofs.entry = Some(EntryContract::default());
+        b.block("entry", &[]);
+        let q0 = b.emit(O::ScopeBegin, vec![A::Scope(MAIN), A::Boundary(MAIN)], K::ScopeState);
+        let (state, _) = run_closer(&mut b, q0, None);
+        let finished = b.close(state, None, None, MAIN, &[], 0, false);
+        let closed = b.service(K::Closed);
+        b.dispatch(finished, [false, false, false], vec![(Tag::Success, "done", vec![p(0)])]);
+        b.block("done", &[closed]);
+        b.ret();
+        functions.push(b.finish());
+    } else {
+        let (mut b, frame) = Body::asynchronous("main", 1, vec![]);
+        b.block("entry", &[frame]);
+        let (body, start) = b.resume(frame, 0, &[ProducedType::Service(K::Packet)]);
+        let q0 = b.emit(O::ScopeBegin, vec![A::Scope(MAIN), A::Boundary(MAIN)], K::ScopeState);
+        let q1 = b.emit(O::OwnAccept, vec![l(q0), l(start[0])], K::ScopeState);
+        let bracket = (variant == Defer::Plain).then_some(body);
+        let (state, resumed) = run_closer(&mut b, q1, bracket);
+        let body = resumed.unwrap_or(body);
+        let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
+        let selection = b.selection();
+        let pending = b.emit(O::ExitPrepare, vec![A::Kind(ExitKind::Return), A::Boundary(MAIN), l(empty),
+            A::Selection(selection)], K::Pending);
+        let finished = b.close(state, Some(pending), None, MAIN, &[], 0, false);
+        let [closed, reserved] = [b.service(K::Closed), b.service(K::Pending)];
+        b.dispatch(finished, [true, false, false], vec![(Tag::Pending, "done", vec![p(0), p(1)])]);
+        b.block("done", &[closed, reserved]);
+        let [packet, deps] = [b.service(K::Packet), b.service(K::Deps)];
+        b.next(O::ExitCommit, vec![l(reserved), A::Destination(ExitDestination::Caller)], vec![packet, deps]);
+        b.next(O::FuturePublish, vec![l(body), A::Flag(true), l(packet), l(deps)], vec![]);
+        b.ret();
+        let mut continuations = vec![Continuation { site: None, saved: vec![0], operands: vec![] }];
+        if variant == Defer::Plain {
+            continuations.push(Continuation { site: Some(b.sites[&1]), saved: vec![1], operands: vec![2] });
+        }
+        let f = if variant == Defer::Plain { b.finish() } else { b.finish_unchecked() };
+        functions.push(f);
+        layouts.push(FrameLayout {
+            slots: vec![service(K::Packet), service(K::ScopeState), service(K::Packet)],
+            continuations,
+        });
+    }
+    let mut p = program(functions, layouts, None);
+    p.tables.summaries.push(Summary { entry: 0, may_fail: false, retained_params: vec![] });
+    p
+}
+
+#[test]
+fn an_async_defer_runs_as_a_bracketed_suspension() {
+    verify_load(&deferring(Defer::Plain), &NoExternalContracts).unwrap();
+}
+
+#[test]
+fn an_async_defer_is_bracketed() {
+    reject_with(&deferring(Defer::Unbracketed), suspension::SUSPEND_BRACKET, "has no frame.save");
+}
+
+#[test]
+fn only_an_async_body_runs_an_async_defer() {
+    reject_with(&deferring(Defer::Synchronous), suspension::ASYNC_ENTRY, "runs only in an async body");
+}
+
+#[test]
+fn an_async_defer_entry_creates_no_future() {
+    let mut p = plain();
+    p.functions[0].entry_abi = EntryAbi::AsyncDefer { layout: 0 };
+    reject_with(&p, suspension::ASYNC_ENTRY, "fut.new must name an async body");
+}
+
+#[test]
+fn an_async_defer_entry_round_trips() {
+    let p = deferring(Defer::Plain);
+    assert_eq!(p.functions[0].entry_abi, EntryAbi::AsyncDefer { layout: 0 });
+    assert_eq!(decode(&encode(&p).unwrap()).unwrap(), p);
+    let text = disassemble(&p).unwrap();
+    assert!(text.contains("entry_abi 4 "), "{text}");
+    assert_eq!(assemble(&text).unwrap(), p);
 }
