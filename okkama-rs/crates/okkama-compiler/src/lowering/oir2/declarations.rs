@@ -342,6 +342,31 @@ impl Declarations {
                 this.functions.insert(thir::BodyOwner::Method { object: reg.system.native_failure, method }, getter);
             }
         }
+        // The system Cancelled (#724), when a body names it: the payload a cancellation carries and
+        // `catch e is Cancelled` binds, an object without fields. Source never constructs it.
+        let cancelled = ty::Ty::object(reg.system.cancelled);
+        let mut uses_cancelled = all_bodies.iter().any(|body| body.locals.iter().any(|local| local.ty == cancelled));
+        for body in &all_bodies {
+            super::walk::block(&body.block, &mut |expr| {
+                uses_cancelled |= expr.ty.as_ref() == Some(&cancelled);
+            });
+        }
+        if uses_cancelled {
+            let declaration = this.builder.declare(ir::Declaration {
+                name: ir::CANCELLED.into(), type_params: vec![], loc: None,
+                kind: ir::DeclarationKind::Object { fields: vec![], witnesses: vec![], destroy: None, builtin: false },
+            })?;
+            let lowered = this.builder.intern_type(ir::Type::Object { decl: declaration, args: vec![] })?;
+            this.types.insert(cancelled, lowered);
+            // Its one action, `text()`, is Tomato's text of a cancellation.
+            let text = this.types[&ty::Ty::Str];
+            let getter = super::builtin_roles::function(&mut this, declaration, "text", vec![lowered], text, false,
+                |builder, _| {
+                    let message = ir::Literal::Str(ir::CANCELLED_TEXT.into());
+                    Ok(builder.emit_schema(ir::Operation::Const(message))?[0])
+                })?;
+            this.functions.insert(thir::BodyOwner::Method { object: reg.system.cancelled, method: 0 }, getter);
+        }
         if reg.test_mode {
             this.declare_test_intrinsics(&all_bodies, source.program.module.span)?;
         }

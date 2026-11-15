@@ -358,6 +358,23 @@ pub fn native_failure(p: &Program) -> Option<u32> {
     }).map(|id| id as u32)
 }
 
+/// The system `Cancelled` (#724): the payload a cancellation binds in `catch e is Cancelled`.
+pub const CANCELLED: &str = "Cancelled";
+
+/// The declaration of the system Cancelled, the first object of exactly its name and shape: no fields, cases,
+/// roles, handle, destroy or resource. The runtime gives a caught cancellation an object of this descriptor, and
+/// `catch` may name it (`CATCH_TYPE`).
+pub fn cancelled(p: &Program) -> Option<u32> {
+    p.objects.iter().position(|object| {
+        let layout = &object.layout;
+        object.name == CANCELLED && object.error_cases.is_empty() && object.enum_cases == 0
+            && object.variant_cases.is_empty() && !object.handle && !object.any_box && object.role.is_none()
+            && object.implements.is_empty() && layout.storage_fields.is_empty() && object.fields.is_empty()
+            && !layout.has_destroy && !layout.may_reach_resource && !layout.may_async_destroy
+            && layout.selection_layout.is_empty()
+    }).map(|id| id as u32)
+}
+
 /// Whether a scope.transfer's arguments carry the admission filter (`TRANSFER_ADMISSION`): it moves only the
 /// selected identities its source admitted, and leaves bound, staged and outside identities where they are.
 pub fn transfer_admissible(arguments: &[Argument]) -> bool {

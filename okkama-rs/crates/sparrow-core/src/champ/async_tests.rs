@@ -1086,6 +1086,19 @@ impl Activation {
                 self.write(operands[0], &[0]);
                 vec![vec![], vec![slot.failure], vec![slot.pending.record]]
             }
+            O::Catch => {
+                let failure = self.word(operands[0]);
+                let descriptor = arguments.iter().find_map(|argument| match argument {
+                    A::Object(id) => Some(u64::from(*id)),
+                    _ => None,
+                }).unwrap_or(u64::MAX);
+                let payload = self.call(|ctx| machine::rt_machine_catch(ctx, failure, descriptor));
+                return Err(if payload != 0 {
+                    self.outcome(flow, Tag::Some, &[vec![payload]])
+                } else {
+                    self.outcome(flow, Tag::None, &[])
+                });
+            }
             O::CleanupDeliverCancel => {
                 let mut input = CleanupSlot { record: self.word(operands[0]) };
                 let mut slot = CleanupSlot::default();

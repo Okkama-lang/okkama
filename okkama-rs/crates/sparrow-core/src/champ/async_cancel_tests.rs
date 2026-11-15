@@ -24,6 +24,8 @@ const DIRECT: u32 = 7;
 const INNER: u32 = 8;
 const WORKER: u32 = 9;
 const ASYNC_K: u32 = 10;
+/// Object 1: the system Cancelled (#724).
+const CANCELLED_OBJECT: u32 = 1;
 
 // --- SPB 17 programs ------------------------------------------------------------------------------------------
 
@@ -246,7 +248,8 @@ fn after() -> (s::Function, s::FrameLayout) {
 }
 
 /// `async unstarted(f: Future<void>) is bool { f.cancel(); f.cancel(); try { await f; false } catch e is Cancelled
-/// { f.cancelled() } }`, the body of conformance `L08.future.cancel-unstarted` with `f` passed in.
+/// { f.cancelled() } }`, the body of conformance `L08.future.cancel-unstarted` with `f` passed in; the catch names
+/// the program's system Cancelled (#724), and any other failure is published.
 fn unstarted() -> (s::Function, s::FrameLayout) {
     // 0 f, 1 inputs, 2 owner state, 3–5 the unwind.
     let slots = vec![value(FUTURE_VOID), service(K::Packet), service(K::ScopeState), value(s::Type::Failure),
@@ -268,11 +271,17 @@ fn unstarted() -> (s::Function, s::FrameLayout) {
     let unwind = [b.register(s::Type::Failure), b.service(K::TaskState), b.service(K::Receipt)];
     b.block("bad", &unwind);
     let (body_bad, resumed) = b.resume(first, 1, &types(&slots, &[2]));
-    let (body_caught, closing, _, kept) =
+    let (body_caught, closing, adapted, kept) =
         b.adapter(body_bad, 2, resumed[0], unwind, &[inputs[0]], &types(&slots, &[0]));
+    b.outcomes(O::Catch, vec![l(adapted), A::Object(CANCELLED_OBJECT)],
+        vec![(Tag::Some, "is_cancelled", vec![p(0)]), (Tag::None, "other", vec![])]);
+    let caught = b.register(s::Type::Object(CANCELLED_OBJECT));
+    b.block("is_cancelled", &[caught]);
     let cancelled = b.register(s::Type::Bool);
     b.next(O::FutureCancelled, vec![l(kept[0])], vec![cancelled]);
     return_merging(&mut b, body_caught, closing, UNSTARTED, Some(cancelled), &[], "caught");
+    b.block("other", &[]);
+    fail_merging(&mut b, body_caught, closing, adapted, UNSTARTED, &[], "failed");
     let layout = b.layout(slots, vec![(vec![0, 1], vec![]), (vec![2], vec![0]), (vec![0], vec![2, 3, 4, 5])]);
     (b.finish(), layout)
 }
@@ -317,9 +326,14 @@ fn k2_program() -> s::Program {
         frames.push(layout);
     }
     functions.push(destroy());
+    let mut cancelled = res();
+    cancelled.name = s::CANCELLED.into();
+    cancelled.layout = s::ObjectRuntimeLayout { storage_fields: vec![], allocation_words: 2, identity_offset: None,
+        has_destroy: false, may_reach_resource: false, may_async_destroy: false, trace_layout: vec![],
+        selection_layout: vec![] };
     s::Program {
         module: "cancellation".into(),
-        objects: vec![res()],
+        objects: vec![res(), cancelled],
         functions,
         tables: s::ChampTables {
             scopes: (0..ASYNC_K).map(|index| s::Scope { function: index, parent: None, boundary: index }).collect(),

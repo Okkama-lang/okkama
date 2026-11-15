@@ -961,3 +961,25 @@ fn only_the_system_native_failure_object_is_a_catch_type() {
         assert!(catch_rule_rejects(&native_failure_catch(&fields)), "{fields}");
     }
 }
+
+/// `catch e is Cancelled` (#724): the system Cancelled, an object without fields, is a catch type; an object of
+/// another name or with a field is an ordinary object, which never implements Error.
+fn cancelled_catch(name: &str, fields: &str) -> Module {
+    let source = include_str!("../own/tests/lowering/s3-catch.oir")
+        .replace("enum app.Stop is Error = (now)\n",
+            &format!("enum app.Stop is Error = (now)\nobject {name} {{\n{fields}}}\n"))
+        .replace("binding b0 \"e\": app.Stop in S2", &format!("binding b0 \"e\": {name} in S2"))
+        .replace("catch %2 is app.Stop,", &format!("catch %2 is {name},"))
+        .replace("^b5(%4: failure, %5: app.Stop)", &format!("^b5(%4: failure, %5: {name})"));
+    crate::text::parse(&source).unwrap()
+}
+
+#[test]
+fn only_the_system_cancelled_object_is_a_catch_type() {
+    let module = cancelled_catch(CANCELLED, "");
+    assert!(is_cancelled(&module, module.declarations.iter().find(|(_, decl)| decl.name == CANCELLED).unwrap().0));
+    assert!(!catch_rule_rejects(&module));
+    for (name, fields) in [(CANCELLED, "    field reason: str\n"), ("app.Cancelled", "")] {
+        assert!(catch_rule_rejects(&cancelled_catch(name, fields)), "{name} {fields}");
+    }
+}

@@ -893,12 +893,13 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
         Catch => {
             enforce(loc_type(f, locations[0])? == ProducedType::Value(Type::Failure),
                 "CATCH_FAILURE", "catch operand must be a failure")?;
-            // A plain Error, the Error role, or the system NativeFailure (language spec 9.5).
+            // A plain Error, the Error role, or the system NativeFailure or Cancelled (language spec 9.5, #724).
             ctx.value = Some(match args.get(1) {
                 Some(Argument::Object(id)) if !p.objects[*id as usize].error_cases.is_empty() => Type::Object(*id),
                 // A multi-case Error variant catches each of its cases (descriptors of its `variant_cases`).
                 Some(Argument::Object(id)) if error_variant(p, *id) => Type::Variant(*id),
                 Some(Argument::Object(id)) if native_failure(p) == Some(*id) => Type::Object(*id),
+                Some(Argument::Object(id)) if cancelled(p) == Some(*id) => Type::Object(*id),
                 Some(Argument::Flag(true)) => Type::Error,
                 _ => return Err(violation("CATCH_TYPE", "catch target must be a declared plain Error")),
             });

@@ -936,8 +936,18 @@ pub(crate) fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, r
 /// The payload of a failure that a `catch` of `descriptor` takes, or zero: every thrown or native payload
 /// (`u64::MAX`), a payload of that descriptor, or of a case of that multi-case Error variant.
 pub extern "C" fn rt_machine_catch(ctx: *mut Ctx, failure: Word, descriptor: Word) -> Word {
-    let runtime = unsafe { &*(*ctx).runtime };
-    let cases = runtime.champ.machine.as_ref().and_then(|machine| machine.source.objects.get(descriptor as usize))
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    let source = runtime.champ.machine.as_ref().map(|machine| machine.source.clone());
+    // A cancellation matches the program's system Cancelled (#724) and binds a new object of it, as Tomato's
+    // `rt_catch` does; the object has no fields.
+    if matches!(runtime.failure(failure).map(|failure| &failure.kind), Some(runtime::FailureKind::Cancelled)) {
+        let cancelled = source.as_deref().and_then(s::cancelled).map(u64::from);
+        return match cancelled {
+            Some(cancelled) if cancelled == descriptor => runtime.heap.object_new(cancelled as u32, &[]),
+            _ => 0,
+        };
+    }
+    let cases = source.as_deref().and_then(|source| source.objects.get(descriptor as usize))
         .map_or(&[][..], |object| object.variant_cases.as_slice());
     match runtime.failure(failure).map(|failure| &failure.kind) {
         Some(runtime::FailureKind::Thrown(payload) | runtime::FailureKind::Native(payload)) => {
