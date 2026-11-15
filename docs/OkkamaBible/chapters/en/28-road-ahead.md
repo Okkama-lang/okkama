@@ -48,6 +48,12 @@ explicit. The table is the razor's procedure in action: a missing operation
 is added as an operation, not by bringing back the entity whose removal made
 it necessary.
 
+Writing this book found gaps too. Measuring how far exact fractions grow
+(Section 5.11) showed that `rat.numerator()` and `rat.denominator()`
+returned their parts as text, a choice made when `int` had a fixed width
+and kept after `int` became unbounded. They return `int` since 0.6.0
+(#743).
+
 ## 28.2 Missing from the language
 
 Four open issues describe what the language plans to have and lacks. All
