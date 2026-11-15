@@ -3075,7 +3075,13 @@ mod profile_tests {
                         let columns: Vec<_> = reports[0].split('\t').collect();
                         assert_eq!(columns.len(), 18);
                         // Pre-codegen CLIF includes entry/limit/failure blocks.
-                        assert_eq!(&columns[..8], &["; compile", "main", "2", "1", "0", "3", "10", "0"]);
+                        // Champ adds the cleanup-mode branch on the stack-overflow edge:
+                        // fatal and ordinary blocks; call, brif, call, iconst, return.
+                        let champ = cfg!(feature = "champ-abi");
+                        let blocks = if champ { "5" } else { "3" };
+                        let instructions = if champ { "15" } else { "10" };
+                        let expected = ["; compile", "main", "2", "1", "0", blocks, instructions, "0"];
+                        assert_eq!(&columns[..8], &expected);
                         for column in &columns[8..] {
                             column.parse::<u64>().unwrap();
                         }
