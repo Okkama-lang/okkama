@@ -928,6 +928,14 @@ impl Emit<'_, '_> {
                     else { [zero, source, pending, failure, zero] };
                 args.push(self.record(&inputs));
             }
+            // Async bodies, Futures and duty settles arrive with the Champ runtime and JIT (#601 V8, V9).
+            O::FutureNew | O::Await | O::FuturePublish | O::FutureCancel | O::FutureDone | O::FutureCancelled
+                | O::FrameSave | O::FrameResume | O::AwaitUnwind | O::CleanupDeliverCancel => {
+                return Err(Error(format!("Champ JIT: {} is not supported yet (#601)", op.name())));
+            }
+            O::CleanupSettle if locations.len() > 1 => {
+                return Err(Error("Champ JIT: a nonempty cleanup.settle is not supported yet (#601)".into()));
+            }
             O::CleanupSettle => {
                 helper = "champ_cleanup_settle_empty";
                 args.push(self.pointer(locations[0]));

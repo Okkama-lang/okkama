@@ -16,6 +16,13 @@ struct Cleanup {
     failure: bool,
     payload: Option<PendingType>,
     step: Option<u32>,
+    /// Duties of `schedule` settled so far, in schedule order.
+    settled: u32,
+    schedule: Option<u32>,
+    /// A settled cache may release obligations (an outcome or unstarted inputs) into this close's plan.
+    released: bool,
+    /// `cleanup.deliver_cancel` ran in this close.
+    delivered: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PendingType { value: Option<Type>, kind: ExitKind }
@@ -52,9 +59,43 @@ pub fn infer_plan_reserves(p: &Program, f: &Function) -> Result<Vec<Option<bool>
     infer(p, f, &masks)
 }
 
+/// One step of a nonempty schedule: the next duty in order, owned by the closing scope.
+fn settle_duty(p: &Program, f: &Function, origins: &BTreeMap<Location, Option<u32>>, cleanup: &mut Cleanup,
+    schedule: u32, duty: Location) -> Check
+{
+    let duties = &f.proofs.schedules[schedule as usize].services;
+    enforce(cleanup.phase == Phase::Begun && cleanup.schedule.is_none_or(|current| current == schedule),
+        suspension::SCHEDULE, "a close settles the duties of one schedule, before its plan")?;
+    enforce(duties.get(cleanup.settled as usize) == Some(&duty), suspension::SCHEDULE,
+        "each scheduled duty is settled once, in schedule order")?;
+    let creation = origins.get(&duty).copied().flatten().map(|pc| &f.code[pc as usize]);
+    let Some(Instruction::Champ { op: Opcode::FutureNew, arguments, .. }) = creation else {
+        return Err(violation(suspension::SCHEDULE, "a settled duty has no single fut.new"));
+    };
+    let owner = arguments.iter().find_map(|arg| match arg { Argument::Scope(id) => Some(*id), _ => None });
+    let close = &f.proofs.closes[cleanup.close as usize];
+    let closing = p.tables.boundaries.get(close.boundary as usize).map(|boundary| boundary.scope);
+    enforce(owner.is_some() && owner == closing, suspension::SCHEDULE,
+        "a duty is settled by a scope that does not own it")?;
+    let callee = arguments.iter().find_map(|arg| match arg {
+        Argument::Entry(id) => p.functions.get(*id as usize),
+        _ => None,
+    }).ok_or_else(|| error("fut.new has no entry"))?;
+    cleanup.released |= !plain_inputs(p, callee) || !plain_results(p, callee);
+    cleanup.schedule = Some(schedule);
+    cleanup.settled += 1;
+    if cleanup.settled as usize == duties.len() {
+        cleanup.phase = Phase::Settled;
+    }
+    Ok(())
+}
+
 fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<bool>>, Error> {
     let mut reserves = vec![None; f.proofs.plans.len()];
     if f.code.is_empty() { return Ok(reserves) }
+    let origins = suspension::cache_origins(p, f);
+    // Facts of the values each continuation's frame.save stored, for its resumes.
+    let mut saved = BTreeMap::<u32, Vec<Option<Fact>>>::new();
     let mut incoming = vec![None; f.code.len()];
     incoming[0] = Some(State::new());
     let mut work = vec![0];
@@ -127,17 +168,64 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                         && arguments.contains(&Argument::Boundary(contract.boundary)), "close descriptor mismatch")?;
                     unary(Cleanup { close: close as u32, plan: None, index: 0, phase: Phase::Begun,
                         pending: contract.reserve, aborted: false, failure: contract.active_failure,
-                        payload, step: None })
+                        payload, step: None, settled: 0, schedule: None, released: false, delivered: false })
                 }
                 CleanupSettle => {
                     let mut cleanup = cleanup()?;
-                    require(cleanup.phase == Phase::Begun, "settle outside begin phase")?;
-                    cleanup.phase = Phase::Settled;
+                    let schedule = arguments.iter().find_map(|arg| match arg {
+                        Argument::Schedule(id) => Some(*id),
+                        _ => None,
+                    }).ok_or_else(|| error("missing schedule"))?;
+                    let duties = &f.proofs.schedules[schedule as usize].services;
+                    if let Some(&duty) = locations.get(1) {
+                        settle_duty(p, f, &origins, &mut cleanup, schedule, duty)?;
+                    } else {
+                        enforce(duties.is_empty(), suspension::SCHEDULE,
+                            "a nonempty schedule is settled duty by duty")?;
+                        require(cleanup.phase == Phase::Begun, "settle outside begin phase")?;
+                        cleanup.phase = Phase::Settled;
+                    }
                     unary(cleanup)
+                }
+                CleanupDeliverCancel => {
+                    let mut cleanup = cleanup()?;
+                    let close = &f.proofs.closes[cleanup.close as usize];
+                    let root = p.tables.boundaries.get(close.boundary as usize)
+                        .and_then(|boundary| p.tables.scopes.get(boundary.scope as usize))
+                        .is_some_and(|scope| scope.parent.is_none());
+                    let returns = cleanup.pending
+                        && cleanup.payload.is_some_and(|payload| payload.kind == ExitKind::Return);
+                    enforce(root && returns, suspension::ASYNC_ENTRY,
+                        "a deferred cancellation is delivered only at the final exit of the body")?;
+                    enforce(cleanup.phase == Phase::Settled && !cleanup.delivered, suspension::ASYNC_ENTRY,
+                        "a deferred cancellation is delivered once, after the settle phase and before the plan")?;
+                    cleanup.delivered = true;
+                    unary(cleanup)
+                }
+                FrameSave => {
+                    let continuation = suspension::continuation_of(arguments)
+                        .ok_or_else(|| error("no continuation"))?;
+                    let facts = operands[1..].to_vec();
+                    if let Some(previous) = saved.insert(continuation, facts.clone()) {
+                        require(previous == facts, "one continuation saves different cleanup facts")?;
+                    }
+                    vec![None]
+                }
+                FrameResume => {
+                    let continuation = suspension::continuation_of(arguments)
+                        .ok_or_else(|| error("no continuation"))?;
+                    let mut facts = vec![None];
+                    if continuation != 0 {
+                        facts.extend(saved.get(&continuation).ok_or_else(|| error("resume before its save"))?);
+                    }
+                    facts
                 }
                 CleanupPlan => {
                     let mut cleanup = cleanup()?;
                     require(cleanup.phase == Phase::Settled, "plan before complete settle")?;
+                    let envelope = &f.proofs.envelopes[f.proofs.closes[cleanup.close as usize].envelope as usize];
+                    enforce(cleanup.delivered == (envelope.failures & ENVELOPE_CANCEL != 0), suspension::ASYNC_ENTRY,
+                        "a close delivers a deferred cancellation exactly when its envelope declares one")?;
                     let id = arguments.iter().find_map(|arg| match arg { Argument::Plan(id) => Some(*id), _ => None })
                         .ok_or_else(|| error("missing plan id"))?;
                     let evidence = f.proofs.cleanup_plans.iter().find(|plan| plan.plan == id)
@@ -150,6 +238,8 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                         require(previous == reserve, "one runtime plan has inconsistent reserve inventory")?;
                     }
                     reserves[id as usize] = Some(reserve);
+                    enforce(!cleanup.released || f.proofs.plans[id as usize].merge, suspension::SCHEDULE,
+                        "a settled cache releases obligations into the common plan, which needs the executor")?;
                     cleanup.plan = Some(id);
                     cleanup.phase = Phase::Ready;
                     unary(cleanup)

@@ -269,6 +269,8 @@ fn legacy_type(ty: s::Type) -> okkama_sparrow::Type {
         s::Type::Float => T::Float,
         s::Type::Rat => T::Rat,
         s::Type::Char => T::Char,
+        // A Future is a reference to its frame (Champ draft 3 §2); #601 V8 gives the view its outcome type.
+        s::Type::Future(_) => T::Future(None),
     }
 }
 
@@ -743,6 +745,7 @@ pub(crate) fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, r
             s::Type::Str => runtime.heap.text(a) == runtime.heap.text(b),
             s::Type::Rat => runtime.rational(a) == runtime.rational(b),
             s::Type::Handle(_) => return Err("cannot compare native handles".into()),
+            s::Type::Future(_) => return Err("cannot compare Futures".into()),
             s::Type::Bytes => runtime.heap.bytes(a) == runtime.heap.bytes(b),
             s::Type::Range => {
                 let x = runtime.heap.payload::<crate::ops::RangeValue>(a).expect("verified range");
