@@ -248,7 +248,10 @@ impl Declarations {
             };
             let span = role.decl.expect("source role").span;
             let methods = role.methods.iter().enumerate().map(|(slot, method)| {
-                if method.is_async || method.variadic {
+                if method.is_async {
+                    return Err(super::asynchronous::async_role_slot(&role.name, &method.name, span));
+                }
+                if method.variadic {
                     return Err(LowerError::unsupported(span, "async or variadic role slot"));
                 }
                 let overloaded = role.methods.iter().filter(|other| other.name == method.name).count() > 1;
@@ -319,11 +322,11 @@ impl Declarations {
         }
         // Declare all symbols before bodies: forward references and stable field/default links.
         for body in &analysis.bodies {
-            if body.is_async && !matches!(body.owner, thir::BodyOwner::Test(_)) {
-                return Err(LowerError::unsupported(body.span, "async action or cleanup"));
+            if body.is_async {
+                super::asynchronous::check_owner(reg, body)?;
             }
             let mut params = vec![];
-            let (symbol, attrs, result) = match body.owner {
+            let (symbol, mut attrs, result) = match body.owner {
                 thir::BodyOwner::Entry => {
                     let result = reg.entry.map(|entry| &entry.result);
                     let result = match result {
@@ -383,6 +386,11 @@ impl Declarations {
                 }
                 _ => return Err(LowerError::unsupported(body.span, "test, closure or capability body")),
             };
+            // An async test already carries its attribute and its summaries come from the test profile.
+            let async_action = body.is_async && !matches!(body.owner, thir::BodyOwner::Test(_));
+            if async_action {
+                attrs.push(ir::FunctionAttr::Async);
+            }
             let shorthand = match body.owner {
                 thir::BodyOwner::Ctor { object, ctor } => {
                     match &reg.objects[object.0].ctors[ctor].shape {
@@ -459,6 +467,9 @@ impl Declarations {
                 }
                 _ => None,
             };
+            if atomic.is_none() {
+                super::asynchronous::check_intrinsic(reg, body)?;
+            }
             let function = if let Some(name) = atomic {
                 this.external(&name, false, params, results, attrs, body.span)?
             } else {
@@ -476,6 +487,9 @@ impl Declarations {
             };
             if body.owner == thir::BodyOwner::Entry {
                 this.builder.raw_mut().entry = Some(function);
+            }
+            if async_action {
+                super::asynchronous::declare(&mut this.builder, function)?;
             }
             if let thir::BodyOwner::Test(index) = body.owner {
                 super::test_profile::declare(&mut this.builder, function, &reg.tests[index])?;
@@ -583,7 +597,10 @@ impl Declarations {
             let module = &reg.modules[native.module];
             let name = format!("{}@{}::{}/{}", module.name, module.program.module.major(),
                 native.name, native.params.len());
-            if native.is_async || native.variadic {
+            if native.is_async {
+                return Err(super::asynchronous::async_native(&name, native.decl.span));
+            }
+            if native.variadic {
                 return Err(LowerError::unsupported(native.decl.span, "async or variadic native"));
             }
             let params = native.params.iter().map(|(_, ty)| this.ty(ty, native.decl.span)).collect::<Result<_>>()?;
@@ -660,7 +677,7 @@ impl Declarations {
             }
             T::Action(action) => {
                 if action.is_async {
-                    return Err(LowerError::unsupported(span, "async action type (#570)"));
+                    return Err(super::asynchronous::async_action_type(span));
                 }
                 for ty in action.params.iter().chain(action.result.iter()) {
                     self.collection_type(ty, span)?;
@@ -675,6 +692,13 @@ impl Declarations {
                 self.collection_type(key, span)?;
                 self.collection_type(value, span)?;
                 ir::Type::Map(self.ty(key, span)?, self.ty(value, span)?)
+            }
+            // `Future<T>` is an ordinary generic value type; `None` is the Future of an async void action.
+            T::Future(result) => {
+                if let Some(result) = result {
+                    self.collection_type(result, span)?;
+                }
+                ir::Type::Future(result.as_ref().map(|ty| self.ty(ty, span)).transpose()?)
             }
             _ => return Ok(()),
         };

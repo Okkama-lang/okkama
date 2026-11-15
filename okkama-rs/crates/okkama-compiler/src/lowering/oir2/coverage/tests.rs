@@ -45,3 +45,6 @@ fn oir2_p2_3_coverage_paths_and_inventory() {
 
 #[path = "p2_4.rs"]
 mod p2_4;
+
+#[path = "p2_5.rs"]
+mod p2_5;

@@ -535,6 +535,11 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             E::BoundAction { .. } | E::BoundRoleAction { .. } => self.bound(expr),
             E::Closure { .. } => self.anonymous(expr),
             E::CallValue { .. } => self.invoke_anonymous(expr),
+            E::Await(operand) => self.await_value(operand, result_ty, expr.span),
+            E::Call { callee: thir::Callee::Builtin { receiver, op: op @ (thir::Builtin::FutureDone
+                | thir::Builtin::FutureCancel | thir::Builtin::FutureCancelled) }, .. } => {
+                self.future_builtin(op, receiver, expr.span)
+            }
             E::Array(_) | E::Map(_) | E::Index { .. } | E::ArrayCast { .. }
             | E::Coerce { coercion: thir::Coercion::Retag, .. } => self.collection_expr(expr),
             E::Binary { op: thir::BinaryOp::ArrayConcat | thir::BinaryOp::ArrayDifference
