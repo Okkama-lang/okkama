@@ -1,0 +1,23 @@
+open log.0
+open log.1
+writing to log.1
+open log.2
+writing to log.2
+open log.3
+writing to log.3
+done rebound
+close log.3
+close log.2
+close log.1
+close log.0
+--
+open log.0
+open log.1
+close log.0
+open log.2
+close log.1
+open log.3
+close log.2
+writing to log.3
+done folded
+close log.3

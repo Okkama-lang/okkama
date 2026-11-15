@@ -295,7 +295,37 @@ The pattern costs one rule for authors of resource objects: `close()` must
 be idempotent, and every other action of a closed resource should fail with
 a catchable `already_closed`, not misbehave.
 
-## 11.11 A worked example: a connection pool
+## 11.11 Replacing a resource: rebinding keeps, folding releases
+
+A log that rotates its file is a resource that is replaced over and over.
+In Okkama the replacement is a successor, `rotated()`, which builds a new
+`Log` around a new `Segment`. Where the old `Log` goes then depends on how
+the program holds it, and the two usual ways give different lifetimes.
+
+{{example:11-rotation}}
+
+- **Rebinding keeps every old value.** In `rebound`, `log = log.rotated()`
+  gives the name a new value, but it does not destroy the old one early: the
+  old `Log` belongs to the scope that declared `log`, and its `destroy` runs
+  when that scope ends (Section 13.7). All four segments stay open until
+  `done rebound`, and then close newest first. For three rotations this is
+  harmless; for a server that rotates every hour and runs for a month, it is
+  a file per hour held open until the action returns.
+- **A fold releases each value.** In `folded`, `reduce` passes each `Log`
+  to the next step and keeps only what the step returns. Each step is an
+  iteration, and an iteration's scope ends with it (Section 11.5), so the
+  old segment closes as soon as its successor exists: `open log.1`, then
+  `close log.0`. Only the last `Log` leaves the loop.
+
+The rule behind both is the one this chapter has used throughout: a
+resource lives as long as the scope that owns it, not as long as a name
+refers to it. A long-running program that replaces a resource should
+therefore replace it inside a scope that ends: a fold, a loop iteration
+that produces the next value, or a state owner whose request handler is
+such a scope (Section 20.6). Rebinding a name in a scope that lives for the
+whole program is the one shape to avoid.
+
+## 11.12 A worked example: a connection pool
 
 A pool is the textbook case where resources outlive the code that uses them.
 In Okkama a pool is an ordinary object whose field holds its connections;
@@ -321,7 +351,7 @@ still owned when it uses it, and released once, by the pool's owner. A pool
 that must hand a connection to code that outlives it moves the connection
 out instead, and that is a different, visible operation.
 
-## 11.12 A worked example: commit or roll back
+## 11.13 A worked example: commit or roll back
 
 A transaction is the classic resource whose release depends on how the work
 ended: if the work finished, commit; if anything went wrong, roll back. In
@@ -351,7 +381,7 @@ when the scope is left by an exception [@dscope]. Both depend on the caller
 writing the construct at every use. In Okkama the transaction carries the
 rule itself: there is no way to hold one that its scope will not settle.
 
-## 11.13 What is not promised
+## 11.14 What is not promised
 
 Deterministic cleanup has limits, and they are worth knowing.
 
@@ -368,7 +398,7 @@ Deterministic cleanup has limits, and they are worth knowing.
 - **A `destroy` cannot be retried.** It runs at most once. If it fails, the
   failure is reported and the identity is considered released.
 
-## 11.14 What this design costs
+## 11.15 What this design costs
 
 - **Ownership is checked at run time, not at compile time.** Rust rejects a
   program that would release a value twice or use it after release. Okkama

@@ -173,7 +173,7 @@ language is, argued where they appear:
 - a fake to write for every role a test replaces (Section 15.11);
 - no list of an enum's cases and no order between them (Section 16.10);
 - no module-level state, only compile-time constants (Section 19.6);
-- a fixed cleanup order: newest first, owner before fields (Section 11.14).
+- a fixed cleanup order: newest first, owner before fields (Section 11.15).
 
 A reader who finds one of these intolerable has found a real disagreement
 with the language, not a bug in it. The book has tried to state each one

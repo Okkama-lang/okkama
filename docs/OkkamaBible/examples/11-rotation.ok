@@ -1,0 +1,48 @@
+module bible/rotation v1.0.0;
+
+// A successor that replaces a resource: rebinding keeps every old segment
+// open until the scope ends; a fold releases each one as the next is made.
+
+import "io/stdout" take Stdout;
+
+object Segment {
+    has name is string;
+    Segment(:name) { Stdout().writeln("open " + name); }
+    destroy { Stdout().writeln("close " + name); }
+    name() is string { name; }
+}
+
+object Log {
+    has current is Segment;
+    has index is int;
+    Log(:index) { current = Segment(name: "log." + index.string()); }
+    rotated() is ^Log {
+        ^current = Segment(name: "log." + (index + 1).string());
+        ^index = index + 1;
+    }
+    name() is string { current.name(); }
+}
+
+object Runs {
+    Runs() {}
+    rebound() is void {
+        let log = Log(index: 0);
+        for 1..=3 -> n {
+            log = log.rotated();
+            Stdout().writeln("writing to " + log.name());
+        }
+        Stdout().writeln("done rebound");
+    }
+    folded() is void {
+        let final = (1..=3).reduce(Log(index: 0)) -> log, n { log.rotated(); };
+        Stdout().writeln("writing to " + final.name());
+        Stdout().writeln("done folded");
+    }
+}
+
+main() is int {
+    Runs().rebound();
+    Stdout().writeln("--");
+    Runs().folded();
+    0;
+}
