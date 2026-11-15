@@ -321,6 +321,7 @@ helpers! {
         state: *mut crate::champ::ScopeSlot,
         input: *mut crate::champ::PacketSlot,
         post: *mut crate::champ::ScopeSplitPost) -> u64; [Allocates, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
     champ_scope_transfer_admissible = crate::champ::rt_scope_transfer_admissible as (ctx,
         inputs: *const crate::champ::TransferInputs,
         selection: *const crate::champ::Selection,
