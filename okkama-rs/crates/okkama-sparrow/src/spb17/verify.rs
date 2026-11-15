@@ -100,6 +100,7 @@ pub fn verify(p: &Program) -> Check {
     if let Some(entry) = p.entry {
         at(&p.functions, entry)?;
     }
+    check_tests(p)?;
     for object in &p.objects {
         let layout = &object.layout;
         let count = layout.storage_fields.len() as u64;
@@ -158,6 +159,33 @@ pub fn verify(p: &Program) -> Check {
     }
     for f in &p.functions {
         verify_function(p, f).map_err(|e| Error { message: format!("{}: {}", f.symbol, e.message), ..e })?;
+    }
+    Ok(())
+}
+
+/// The tests table of the test profile: unique names, distinct `() -> void` observation bodies that are
+/// not the program entry. Test intrinsics belong to the test profile only.
+fn check_tests(p: &Program) -> Check {
+    for f in &p.functions {
+        let name = f.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref());
+        enforce(p.tests.is_some() || !name.is_some_and(|name| name.starts_with(TEST_INTRINSIC_PREFIX)),
+            "TEST_PROFILE", "test intrinsics need a tests table")?;
+    }
+    let Some(tests) = &p.tests else {
+        return Ok(());
+    };
+    let mut names = BTreeSet::new();
+    let mut functions = BTreeSet::new();
+    for test in tests {
+        enforce(!test.name.is_empty() && names.insert(test.name.as_str()), "TEST_TABLE",
+            "test names must be non-empty and unique")?;
+        let f = p.functions.get(test.function as usize)
+            .ok_or_else(|| violation("TEST_TABLE", "test function index out of range"))?;
+        enforce(functions.insert(test.function), "TEST_TABLE", "two tests share one function")?;
+        enforce(p.entry != Some(test.function), "TEST_ENTRY", "the program entry cannot be a test")?;
+        let external = f.proofs.entry.as_ref().is_some_and(|entry| entry.external.is_some());
+        enforce(f.entry_abi == EntryAbi::Observation && f.params.is_empty() && f.results.is_empty()
+            && !external && !f.code.is_empty(), "TEST_ENTRY", "a test needs a () -> void observation body")?;
     }
     Ok(())
 }
@@ -722,6 +750,19 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
         }
         Convert => enforce(matches!((types, out), ([from], Some(to)) if conversion(*from, to).is_some()),
             "CONVERT_TYPE", "conversion between these types is not defined"),
+        TestOk | TestFail | TestIs | TestIsnt => {
+            enforce(p.tests.is_some(), "TEST_PROFILE", "test operations need a tests table")?;
+            let valid = match (op, types) {
+                (TestOk, [Type::Bool]) | (TestFail, [Type::Str]) => true,
+                (TestIs | TestIsnt, [left, right]) => left == right && matches!(left,
+                    Type::Int | Type::Bool | Type::Byte | Type::Float | Type::Char | Type::Rat | Type::Str
+                    | Type::Range | Type::Bytes | Type::Array(_) | Type::Object(_) | Type::Successor(_)
+                    | Type::Variant(_)),
+                _ => false,
+            };
+            enforce(valid && out == Some(Type::Bool), "TEST_OPERAND",
+                "test operation operand types differ from its check, or its result is not bool")
+        }
         Move => {
             require(types.len() == 1, "move requires one source")?;
             let valid = out == Some(types[0]) || matches!((types[0], out),

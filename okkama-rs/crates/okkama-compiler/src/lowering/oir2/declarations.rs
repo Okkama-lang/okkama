@@ -19,6 +19,8 @@ pub(super) struct Declarations {
     pub lambdas: Vec<super::anonymous::Lambda>,
     pub builtin_adapters: HashMap<(ir::TypeId, ir::TypeId), ir::FuncId>,
     pub ctor_fields: HashMap<ir::FuncId, Vec<usize>>,
+    /// Registered test intrinsics (`okkama.test.*`) by assertion name; the test profile only.
+    pub test_intrinsics: HashMap<String, ir::FuncId>,
 }
 
 impl Declarations {
@@ -46,6 +48,7 @@ impl Declarations {
             builtin_adapters: HashMap::new(),
             defers: vec![],
             lambdas: vec![],
+            test_intrinsics: HashMap::new(),
         };
         for (ty, lowered) in [
             (ty::Ty::Int, ir::Type::Int),
@@ -291,6 +294,9 @@ impl Declarations {
                     vec![this.types[&ty::Ty::Str]], vec![], source.program.module.span)?);
             }
         }
+        if reg.test_mode {
+            this.declare_test_intrinsics(&all_bodies, source.program.module.span)?;
+        }
         let mut requested_ctors = HashMap::new();
         for body in &all_bodies {
             super::walk::block(&body.block, &mut |expr| {
@@ -428,7 +434,12 @@ impl Declarations {
                 thir::BodyOwner::Ctor { object, .. } | thir::BodyOwner::Method { object, .. }
                     if reg.modules[reg.objects[object.0].module].name == "async/atomic" => {
                     let info = &reg.objects[object.0];
-                    let suffix = info.name.split_once('_').expect("closed Atomic").1;
+                    // Only the closed specializations (`Atomic_int`) are VM operations; the module's own
+                    // declarations, as when async/atomic is the root, have no P1 ABI.
+                    let Some((_, suffix)) = info.name.split_once('_') else {
+                        return Err(LowerError::unsupported(body.span, format!("{} outside the closed P1 Atomic ABI",
+                            info.name)));
+                    };
                     let op = match body.owner {
                         thir::BodyOwner::Ctor { .. } => "new_value",
                         thir::BodyOwner::Method { method, .. } => info.methods[method].name.as_str(),
@@ -573,6 +584,34 @@ impl Declarations {
         super::roles::declare_witnesses(&mut this, analysis)?;
         super::roles::declare_builtins(&mut this, analysis)?;
         Ok(this)
+    }
+
+    /// `test.skip`, `test.close`, `test.text` and `test.bytes` are registered test intrinsics with typed
+    /// plain operands (OIR-2 §7.4); the other assertions are core operations.
+    fn declare_test_intrinsics(&mut self, bodies: &[thir::Body], span: Span) -> Result<()> {
+        let mut calls = vec![];
+        for body in bodies {
+            super::walk::block(&body.block, &mut |expr| {
+                if let thir::ExprKind::Call { callee: thir::Callee::Test(name), args } = &expr.kind
+                    && super::test_profile::INTRINSICS.contains(&name.as_str()) {
+                    calls.push((name.clone(), args.iter().map(|arg| arg.ty.clone()).collect::<Vec<_>>()));
+                }
+            });
+        }
+        for (name, types) in calls {
+            if self.test_intrinsics.contains_key(&name) {
+                continue;
+            }
+            let mut params = vec![];
+            for ty in types {
+                let ty = ty.ok_or_else(|| LowerError::invalid(span, "untyped test assertion operand"))?;
+                self.collection_type(&ty, span)?;
+                params.push(self.ty(&ty, span)?);
+            }
+            let function = self.external(&format!("okkama.test.{name}"), false, params, vec![], vec![], span)?;
+            self.test_intrinsics.insert(name, function);
+        }
+        Ok(())
     }
 
     fn external(&mut self, name: &str, native: bool, params: Vec<ir::TypeId>, results: Vec<ir::TypeId>,

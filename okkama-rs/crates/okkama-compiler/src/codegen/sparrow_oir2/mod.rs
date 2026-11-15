@@ -58,15 +58,23 @@ pub fn generate_with_allocation(module: &o::Module, layouts: &dyn LayoutRegistry
     if module.profile != o::Profile::Low {
         return Err(GenerateError("expected verified low profile".into()));
     }
-    if !module.imports.is_empty() || !module.protocols.is_empty()
-        || module.tests.is_some() || module.requires.iter().any(|feature| *feature != o::Feature::Core)
+    // The test profile carries its tests table; a tests table needs `requires test` and nothing else.
+    let profile = |feature: &o::Feature| *feature == o::Feature::Core
+        || *feature == o::Feature::Test && module.tests.is_some();
+    if !module.imports.is_empty() || !module.protocols.is_empty() || !module.requires.iter().all(profile)
+        || module.tests.is_some() != module.requires.contains(&o::Feature::Test)
     {
         return Err(unsupported("unresolved declarations, protocols or service metadata"));
     }
+    let tests = module.tests.as_ref().map(|tests| tests.iter().map(|test| s::Test {
+        name: test.name.clone(),
+        function: test.function.as_u32(),
+    }).collect());
     let mut p = s::Program {
         module: module.name.clone(),
         version: module.version.clone().unwrap_or_default(),
         entry: module.entry.map(|id| id.as_u32()),
+        tests,
         ..s::Program::default()
     };
     p.objects = objects(module, layouts)?;

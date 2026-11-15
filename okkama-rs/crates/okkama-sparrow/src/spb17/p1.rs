@@ -53,6 +53,16 @@ impl P1Contracts {
         entries.push(entry("okkama.Error.text", vec![Type::Error], vec![Type::Str], false, 0));
         entries.push(entry("runtime/utf@1::utf8_encode/1", vec![Type::Str], vec![Type::Bytes], true, 8));
         entries.push(entry("runtime/stdio@1::stdout_write/1", vec![Type::Bytes], vec![Type::Int], true, 8));
+        // Test intrinsics of the test profile (`check_tests`). Each observes plain values and fails with a
+        // program failure outside a running case; `skip` always fails, ending its case with the skip marker.
+        for (name, params) in [
+            ("skip", vec![Type::Str]),
+            ("close", vec![Type::Float, Type::Float, Type::Float]),
+            ("text", vec![Type::Str, Type::Str]),
+            ("bytes", vec![Type::Bytes, Type::Bytes]),
+        ] {
+            entries.push(entry(&format!("{TEST_INTRINSIC_PREFIX}{name}"), params, vec![], false, 2));
+        }
         Ok(Self(entries))
     }
 
