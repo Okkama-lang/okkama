@@ -10,6 +10,7 @@ mod limits;
 mod index;
 mod structure;
 mod coro;
+mod coro_flow;
 mod types;
 mod expressions;
 pub(crate) mod read;
@@ -289,6 +290,7 @@ fn run_mode<'m>(
         linearity::check(module, function, &mut state);
         low_phases::check(module, function, &mut state);
         low_roots::check(module, function, &mut state);
+        coro_flow::check(module, function, &mut state);
         later::async_cleanup_and_profiles(module, function, &mut state);
     }
     order_diagnostics(module, &mut state);

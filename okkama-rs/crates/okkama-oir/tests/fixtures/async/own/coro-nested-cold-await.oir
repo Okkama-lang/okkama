@@ -1,0 +1,113 @@
+oir 2 own
+// async action inner(n: int) is int { return n; }
+// async action outer(n: int) is int { return await inner(n); }
+// async main() { await outer(7); }
+// A cold Future awaited inside the body of another cold Future: each body brackets its own await.
+// Hand-written input of the coro pass (V3) until own commit 5a (V2) produces it.
+module coro_nested_cold_await
+protocol Services kind services holders [scope, cache, receipt] rules [protocol_rule(transition=settle, from=cache,
+    to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
+    protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=scope, state=settled))]
+scope SI action in @inner
+scope SO action in @outer
+scope SM action in @main
+summary Mic internal parameters [parameter_effect(convention=borrow, destination=none)] results
+    [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], publication=atomic)
+summary Mib call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results
+    [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
+    failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary Moc internal parameters [parameter_effect(convention=borrow, destination=none)] results
+    [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], publication=atomic)
+summary Mob call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results
+    [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
+    failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary Mmc internal results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[future<void>], publication=atomic)
+summary Mmb call-boundary contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+func @inner(%n: int; %inputs: own) -> (int, own) [async] abi explicit(input_packet=1, output_packet=1)
+    summary(Mib) async-creation(Mic) async-body(Mib) {
+    boundary B0 call in SI
+^entry in SI:
+    %q0: scope<SI> = scope.begin SI
+    %q1: scope<SI> = own.accept %q0, %inputs
+    %empty: own = own.empty
+    %d: deps = deps.of %n
+    %pending: pending = exit.prepare return %n, %empty, deps(%d) at B0
+    (%closed: closed, %reserved: pending) = scope.end %q1, reserve %pending, effects scope_effects(failures=[],
+        suspends=false, cancel=false)
+    (%r: int, %p: own, %rd: deps) = exit.commit %reserved, destination caller, result int
+    ret %r, %p
+}
+func @outer(%n: int; %inputs: own) -> (int, own) [async] abi explicit(input_packet=1, output_packet=1)
+    summary(Mob) async-creation(Moc) async-body(Mob) {
+    boundary B0 call in SO
+    key k0: key = service_of(value=%f, kind=cache)
+    dependency d0: dependency = key(k0)
+^entry in SO:
+    %q0: scope<SO> = scope.begin SO
+    %q1: scope<SO> = own.accept %q0, %inputs
+    %offered: own = own.empty
+    %external: deps = deps.of %n
+    (%f: future<int> facts(managed(deps=d0)),
+        %q2: scope<SO>) = fut.new %offered, %external, %q1, environment deferred(
+        function=@inner, arguments=[%n], descriptors=[]), result int, owner SO
+    invoke.own await %f, result int
+        normal ^ok($value, $deps, %q2)
+        unwind ^bad($failure, $task, $receipt, %q2)
+^ok(%x: int, %xd: deps, %q3: scope<SO>) in SO:
+    %empty: own = own.empty
+    %d: deps = deps.of %x
+    %pending: pending = exit.prepare return %x, %empty, deps(%d) at B0
+    invoke.own scope.end %q3, reserve %pending, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=false)
+        normal ^done($closed, $pending)
+        unwind ^close_failed($closed, $failure)
+^done(%closed: closed, %reserved: pending) in SO:
+    (%r: int, %p: own, %rd: deps) = exit.commit %reserved, destination caller, result int
+    ret %r, %p
+^close_failed(%closed2: closed, %close_failure: failure) in SO:
+    raise %close_failure
+^bad(%failure: failure, %task: task-state, %receipt: receipt, %q4: scope<SO>) in SO:
+    (%q5: scope<SO>, %f1: failure) = await.unwind %q4, %failure, %task, %receipt, protocol Services
+    %combined: failure = scope.unwind %q5, %f1, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=false)
+    raise %combined
+}
+func @main(%inputs: own) -> own [async] abi explicit(input_packet=0, output_packet=0) summary(Mmb)
+    async-creation(Mmc) async-body(Mmb) {
+    boundary B0 call in SM
+    selection s0: selection = union([])
+    key k0: key = service_of(value=%f, kind=cache)
+    dependency d0: dependency = key(k0)
+^entry in SM:
+    %q0: scope<SM> = scope.begin SM
+    %q1: scope<SM> = own.accept %q0, %inputs
+    %seven: int = const 7
+    %offered: own = own.empty
+    %external: deps = deps.of %seven
+    (%f: future<int> facts(managed(deps=d0)),
+        %q2: scope<SM>) = fut.new %offered, %external, %q1, environment deferred(
+        function=@outer, arguments=[%seven], descriptors=[]), result int, owner SM
+    invoke.own await %f, result int
+        normal ^ok($value, $deps, %q2)
+        unwind ^bad($failure, $task, $receipt, %q2)
+^ok(%x: int, %xd: deps, %q3: scope<SM>) in SM:
+    %e: own = own.empty
+    %pending: pending = exit.prepare return packet %e select s0 at B0
+    invoke.own scope.end %q3, reserve %pending, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=false)
+        normal ^done($closed, $pending)
+        unwind ^close_failed($closed, $failure)
+^done(%closed: closed, %reserved: pending) in SM:
+    (%p: own, %pd: deps) = exit.commit %reserved, destination caller
+    ret %p
+^close_failed(%closed2: closed, %close_failure: failure) in SM:
+    raise %close_failure
+^bad(%failure: failure, %task: task-state, %receipt: receipt, %q4: scope<SM>) in SM:
+    (%q5: scope<SM>, %f1: failure) = await.unwind %q4, %failure, %task, %receipt, protocol Services
+    %combined: failure = scope.unwind %q5, %f1, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=false)
+    raise %combined
+}

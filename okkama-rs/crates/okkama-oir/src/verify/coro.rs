@@ -61,6 +61,68 @@ fn operation(module: &Module, op: &Operation, token_profile: bool, state: &mut S
     }
 }
 
+/// The frame layout of an async body of coro/low in the D21 form, if `function` is one.
+pub(super) fn frame_layout<'a>(module: &Module, function: &'a Function) -> Option<&'a FrameLayout> {
+    let token_profile = matches!(module.profile, Profile::Coro | Profile::Low);
+    if !token_profile || !function.attrs.contains(&FunctionAttr::Async) {
+        return None;
+    }
+    function.body.as_ref()?.frame_layout.as_ref()
+}
+
+/// Whether `value` is an entry value of `function`: an entry parameter, or for a D21 async body a value
+/// that its start resume restores from continuation 0 (C-2).
+pub(super) fn entry_value(module: &Module, function: &Function, body: &Body, value: ValueId) -> bool {
+    let Ok(data) = body.values.get(value) else {
+        return false;
+    };
+    if frame_layout(module, function).is_none() {
+        return matches!(data.def, Definition::BlockParam { block, .. } if block == body.entry);
+    }
+    let Definition::InstResult { inst, index } = data.def else {
+        return false;
+    };
+    let start = body.blocks.get(body.entry).ok().and_then(|entry| entry.insts.first()) == Some(&inst);
+    let resume = body.insts.get(inst).is_ok_and(|inst| {
+        matches!(inst.op, Operation::Async(AsyncOp::FrameResume { continuation: 0, .. }))
+    });
+    start && resume && index > 0
+}
+
+/// The language signature of a function (C-2). An async body of coro/low in the D21 form has only its
+/// frame as a parameter: its receiver, arguments, descriptors and input packet are the slots of
+/// continuation 0, and its results are the values it publishes on success. A body that never publishes
+/// a success keeps the results of its summary. `None` means that the body disagrees with itself.
+pub(super) fn language_signature(module: &Module, function: &Function) -> Option<Signature> {
+    let Some(layout) = frame_layout(module, function) else {
+        return Some(function.signature.clone());
+    };
+    let start = layout.continuations.first()?;
+    let params = start.saved.iter()
+        .map(|slot| layout.slots.get(*slot as usize).map(|decl| decl.ty))
+        .collect::<Option<Vec<_>>>()?;
+    let body = function.body.as_ref()?;
+    let mut published: Option<Vec<TypeId>> = None;
+    for (_, inst) in body.insts.iter() {
+        let Operation::Async(AsyncOp::FuturePublish { outcome: PublishOutcome::Success { value, .. }, .. }) = &inst.op
+        else {
+            continue;
+        };
+        let types = value.iter().map(|value| body.values.get(*value).ok().map(|data| data.ty))
+            .collect::<Option<Vec<_>>>()?;
+        if published.as_ref().is_some_and(|previous| *previous != types) {
+            return None;
+        }
+        published = Some(types);
+    }
+    let results = match published {
+        Some(results) => results,
+        None => function.summary.and_then(|id| module.summaries.get(id).ok())
+            .map(|summary| summary.contract.results.clone())?,
+    };
+    Some(Signature { params, results, ownership_abi: OwnershipAbi::Unelaborated })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Suspends { No, May, Yes }
 

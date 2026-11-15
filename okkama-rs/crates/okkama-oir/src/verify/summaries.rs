@@ -18,7 +18,11 @@ pub(super) fn check(module: &Module, selected: Option<FuncId>, state: &mut State
         if let Some(id) = data.summary {
             if let Ok(summary) = module.summaries.get(id) {
                 let observation = high_external_observation(module, data, summary, state);
-                signature(module, &data.signature, summary, None, observation, state);
+                // C-2: the language signature of a D21 async body is its start continuation and publication.
+                match super::coro::language_signature(module, data) {
+                    Some(language) => signature(module, &language, summary, None, observation, state),
+                    None => state.error(R::B51, "async body publishes results of different types (C-2)"),
+                }
             }
         } else if module.profile != Profile::High {
             state.error(R::B51, "elaborated function requires its declared summary");

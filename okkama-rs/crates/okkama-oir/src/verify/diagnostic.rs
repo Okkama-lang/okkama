@@ -94,6 +94,12 @@ rule_ids! {
     CoroBodyRaises => "coro-body-raises",
     AsyncDeferReplace => "async-defer-replace",
     D22ExternalWithBody => "d22-external-with-body",
+    // B9.5 rules of the coro suspension metadata (async ABI D20, D21; slice V3).
+    CoroTokenInTwoPlaces => "coro-token-in-two-places",
+    CoroSavedSetIncomplete => "coro-saved-set-incomplete",
+    CoroReadAfterSave => "coro-read-after-save",
+    CoroDoubleResume => "coro-double-resume",
+    CoroSyncSuspends => "coro-sync-suspends",
 }
 impl std::fmt::Display for RuleId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(self.as_str()) }

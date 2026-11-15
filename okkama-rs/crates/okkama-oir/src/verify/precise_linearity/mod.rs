@@ -256,15 +256,22 @@ impl Engine<'_, '_> {
         let defer_entry = self.declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. }));
         let call_boundary = defer_entry || self.declaration.summary.and_then(|id| self.module.summaries.get(id).ok())
             .is_some_and(|s| s.entry_kind == EntryKind::CallBoundary);
-        let input = self.declaration.signature.params.iter().any(|ty| {
-            self.module.types.get(*ty) == Ok(&Type::Service(ServiceType::Own))
-        });
+        // C-2: a D21 async body takes its input packet from its start continuation.
+        let parameters = self.entry_values();
+        let input = if self.start_resume().is_some() {
+            parameters.iter().any(|value| super::later::value_type(self.module, self.body, *value)
+                == Some(&Type::Service(ServiceType::Own)))
+        } else {
+            self.declaration.signature.params.iter().any(|ty| {
+                self.module.types.get(*ty) == Ok(&Type::Service(ServiceType::Own))
+            })
+        };
         flow.entry_accepted = !matches!(self.declaration.signature.ownership_abi, OwnershipAbi::Explicit { .. })
             && !(call_boundary && input);
-        let Ok(entry) = self.body.blocks.get(self.body.entry) else {
+        if self.body.blocks.get(self.body.entry).is_err() {
             return flow;
-        };
-        for &value in &entry.params {
+        }
+        for &value in &parameters {
             let i = value.as_u32() as usize;
             flow.availability[i] = AVAILABLE;
             if self.body.descriptor_bindings.iter().any(|binding| binding.dictionary == value) {
@@ -321,28 +328,28 @@ impl Engine<'_, '_> {
         }
         // A paired deps parameter is an ABI precondition, checked at direct
         // calls below. Its symbolic entry graph is the argument's full graph.
-        for &value in &entry.params {
+        for &value in &parameters {
             let Ok(ValueData { facts: ValueFacts::Managed { deps }, .. }) = self.body.values.get(value) else {
                 continue;
             };
             if let Ok(DepExpr::FromSsa(parameter)) = self.body.deps.get(*deps)
-                && entry.params.contains(parameter) {
+                && parameters.contains(parameter) {
                 let required = flow.full_deps[value.as_u32() as usize].clone();
                 flow.refs[parameter.as_u32() as usize].extend(&required);
                 flow.full_deps[parameter.as_u32() as usize].extend(required);
             }
         }
         if call_boundary {
-            let keys: BTreeSet<_> = entry.params.iter().flat_map(|v| {
+            let keys: BTreeSet<_> = parameters.iter().flat_map(|v| {
                 flow.refs[v.as_u32() as usize].iter().copied()
             }).collect();
             if keys.is_empty() {
                 flow.entry_accepted = true;
             }
-            let input_labels: BTreeSet<_> = entry.params.iter().copied().filter(|value| {
+            let input_labels: BTreeSet<_> = parameters.iter().copied().filter(|value| {
                 flow.witnesses[value.as_u32() as usize] && !flow.refs[value.as_u32() as usize].is_empty()
             }).collect();
-            for &value in &entry.params {
+            for &value in &parameters {
                 let token = &mut flow.tokens[value.as_u32() as usize];
                 if self.body.values.get(value).ok().and_then(|v| self.module.types.get(v.ty).ok())
                     != Some(&Type::Service(ServiceType::Own)) { continue; }
@@ -360,11 +367,12 @@ impl Engine<'_, '_> {
                 }
             }
         }
-        for &value in &entry.params {
+        for &value in &parameters {
             self.state.at(L::Value { function: self.function, value }, None);
             let expected = flow.full_deps[value.as_u32() as usize].clone();
             self.check_deps(&mut flow, value, &expected);
         }
+        self.start_frame(&mut flow);
         flow
     }
     fn is_managed(&self, value: ValueId) -> bool {
@@ -824,7 +832,9 @@ impl Engine<'_, '_> {
         }
     }
     fn finish(&mut self, flow: &mut Flow, normal: bool, values: &[ValueId]) {
-        if !self.declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. })) {
+        // A D21 async body checks its summary where it publishes (C-2); its `ret` carries no values.
+        if !self.declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. }))
+            && !self.frame_body() {
             self.body_summary(flow, normal, values);
         }
         if !flow.entry_accepted && self.module.profile != Profile::High {

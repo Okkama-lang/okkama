@@ -1,0 +1,146 @@
+oir 2 coro
+// object Box { n: int }
+// async action Box.get(k: int) is int { return n + k; }    (with a dictionary parameter)
+// async action run(box: Box, k: int) is int { return await box.get(k); }
+// Coro golden (V3). C-2: continuation 0 restores the receiver, the arguments, the descriptor and the input
+// packet, in order.
+module coro_start_continuation
+object Box {
+    field n: int
+}
+protocol Services kind services holders [scope, cache, receipt] rules [protocol_rule(transition=settle, from=cache,
+    to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
+    protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=scope, state=settled))]
+scope SN action in @noop
+scope SG action in @Box.get
+scope SR action in @run
+summary Mn internal contract call_contract(publication=atomic)
+summary Mgc internal parameters [parameter_effect(convention=borrow, destination=none),
+    parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)]
+    contract call_contract(results=[future<int>], publication=atomic)
+summary Mgb call-boundary parameters [parameter_effect(convention=borrow, destination=none),
+    parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)]
+    contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+summary Mrc internal parameters [parameter_effect(convention=borrow, destination=none),
+    parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)]
+    contract call_contract(results=[future<int>], publication=atomic)
+summary Mrb call-boundary parameters [parameter_effect(convention=borrow, destination=none),
+    parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)]
+    contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+func @noop() -> void summary(Mn) {
+^entry in SN:
+    ret
+}
+func @Box.get(%frame: frame<@Box.get>) -> void [method Box, async] summary(Mgb) async-creation(Mgc)
+    async-body(Mgb) {
+    frame.layout {
+        slot 0: Box
+        slot 1: int
+        slot 2: type
+        slot 3: own linear
+    }
+    // Receiver, argument, dictionary and input packet, in this order.
+    continuation 0 start saves [0, 1, 2, 3]
+    descriptor.binding %dict contract descriptor_contract(managed=plain, retention=descriptor(0), cleanup=@noop,
+        async_destroy=false, summary=Mn)
+    boundary B0 call in SG
+^entry in SG:
+    (%fr0: frame<@Box.get>, %self: Box facts(plain(certificate=closed_graph(ty=Box))), %k: int, %dict: type,
+        %inputs: own) = frame.resume %frame, continuation 0, slots [saved_slot(slot=0, ty=Box, linear=false),
+        saved_slot(slot=1, ty=int, linear=false), saved_slot(slot=2, ty=type, linear=false), saved_slot(slot=3,
+        ty=own, linear=true)]
+    %q0: scope<SG> = scope.begin SG
+    %q1: scope<SG> = own.accept %q0, %inputs
+    %n: int = obj.get %self, n
+    %sum: int = int.add %n, %k
+    %empty: own = own.empty
+    %d: deps = deps.of %sum
+    %pending: pending = exit.prepare return %sum, %empty, deps(%d) at B0
+    (%closed: closed, %reserved: pending) = scope.end %q1, reserve %pending, effects scope_effects(failures=[],
+        suspends=false, cancel=false)
+    (%r: int, %p: own, %rd: deps) = exit.commit %reserved, destination caller, result int
+    fut.publish %fr0, success(value=%r, packet=%p, deps=%rd)
+    ret
+}
+func @run(%frame: frame<@run>) -> void [async] summary(Mrb) async-creation(Mrc) async-body(Mrb) {
+    frame.layout {
+        slot 0: Box
+        slot 1: int
+        slot 2: own linear
+        slot 3: scope<SR> linear
+        slot 4: cache-state linear
+        slot 5: future<int>
+        slot 6: pending linear
+        slot 7: failure
+        slot 8: task-state linear
+        slot 9: receipt linear
+    }
+    continuation 0 start saves [0, 1, 2]
+    continuation 1 at ^entry saves [3, 4] operands [5]
+    continuation 2 at ^ok saves [] operands [3, 6, 4]
+    continuation 3 at #90 saves [4] operands [3, 7, 8, 9]
+    continuation 4 at #91 saves [] operands [3, 7, 4]
+    service.schedule Sched0 owner SR, protocol Services, duties [%c3]
+    service.schedule Sched1 owner SR, protocol Services, duties [%c1]
+    boundary B0 call in SR
+    key k0: key = service_of(value=%f, kind=cache)
+    dependency d0: dependency = key(k0)
+^entry in SR:
+    (%fr0: frame<@run>, %box: Box facts(plain(certificate=closed_graph(ty=Box))), %k: int,
+        %inputs: own) = frame.resume %frame, continuation 0, slots [saved_slot(slot=0, ty=Box, linear=false),
+        saved_slot(slot=1, ty=int, linear=false), saved_slot(slot=2, ty=own, linear=true)]
+    %q0: scope<SR> = scope.begin SR
+    %q1: scope<SR> = own.accept %q0, %inputs
+    %dict: type = type.of ty Box, descriptor descriptor_contract(managed=plain, retention=descriptor(0),
+        cleanup=@noop, async_destroy=false, summary=Mn)
+    %offered: own = own.empty
+    %external: deps = deps.of %box
+    (%f: future<int> facts(managed(deps=d0)), %c: cache-state,
+        %q2: scope<SR>) = fut.new %offered, %external, %q1, environment deferred(
+        function=@Box.get, arguments=[%box, %k], descriptors=[%dict]), result int, owner SR
+    %fr1: frame<@run> = frame.save %fr0, slots [frame_slot(slot=3, value=%q2, mode=consume), frame_slot(slot=4,
+        value=%c, mode=consume)], continuation 1
+    invoke.own await %f, result int
+        normal ^ok_resume($value, $deps)
+        unwind ^bad_resume($failure, $task, $receipt)
+^ok(%x: int, %xd: deps, %q3: scope<SR>) in SR:
+    %empty: own = own.empty
+    %d: deps = deps.of %x
+    %pending: pending = exit.prepare return %x, %empty, deps(%d) at B0
+    %fr3: frame<@run> = frame.save %fr2, continuation 2
+    invoke.own scope.end %q3, reserve %pending, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=false)
+        normal ^done($closed, $pending)
+        unwind ^close_failed($closed, $failure)
+^done(%closed: closed, %reserved: pending) in SR:
+    %fr4: frame<@run> = frame.resume %fr3, continuation 2
+    (%r: int, %p: own, %rd: deps) = exit.commit %reserved, destination caller, result int
+    fut.publish %fr4, success(value=%r, packet=%p, deps=%rd)
+    ret
+^close_failed(%closed2: closed, %close_failure: failure) in SR:
+    %fr5: frame<@run> = frame.resume %fr3, continuation 2
+    fut.publish %fr5, failure(%close_failure)
+    ret
+^bad(%failure: failure, %task: task-state, %receipt: receipt, %q4: scope<SR>) in SR:
+    %fr7: frame<@run> = frame.save %fr6, slots [frame_slot(slot=4, value=%c2, mode=consume)], continuation 3
+    [i90] (%q5: scope<SR>, %f1: failure) = await.unwind %q4, %failure, %task, %receipt, protocol Services
+    (%fr8: frame<@run>, %c3: cache-state) = frame.resume %fr7, continuation 3, slots [saved_slot(slot=4,
+        ty=cache-state, linear=true)]
+    %fr9: frame<@run> = frame.save %fr8, continuation 4
+    [i91] %combined: failure = scope.unwind %q5, %f1, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=false)
+    %fr10: frame<@run> = frame.resume %fr9, continuation 4
+    fut.publish %fr10, failure(%combined)
+    ret
+^ok_resume(%x0: int, %xd0: deps) in SR:
+    (%fr2: frame<@run>, %q2r: scope<SR>, %c1: cache-state) = frame.resume %fr1, continuation 1, slots [
+        saved_slot(slot=3, ty=scope<SR>, linear=true), saved_slot(slot=4, ty=cache-state, linear=true)]
+    br ^ok(%x0, %xd0, %q2r)
+^bad_resume(%failure0: failure, %task0: task-state, %receipt0: receipt) in SR:
+    (%fr6: frame<@run>, %q2b: scope<SR>, %c2: cache-state) = frame.resume %fr1, continuation 1, slots [
+        saved_slot(slot=3, ty=scope<SR>, linear=true), saved_slot(slot=4, ty=cache-state, linear=true)]
+    br ^bad(%failure0, %task0, %receipt0, %q2b)
+}
