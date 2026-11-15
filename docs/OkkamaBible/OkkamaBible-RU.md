@@ -72,10 +72,16 @@
   - [7.1 Что означает null — слишком многое](#71-что-означает-null--слишком-многое)
   - [7.2 Ответ Okkama: одна конструкция на один смысл](#72-ответ-okkama-одна-конструкция-на-один-смысл)
   - [7.3 `Maybe<T>`](#73-maybet)
-  - [7.4 `Presence<T>`: три состояния для обновлений](#74-presencet-три-состояния-для-обновлений)
-  - [7.5 Как отсутствие устроено в других языках](#75-как-отсутствие-устроено-в-других-языках)
-  - [7.6 Чего это стоит](#76-чего-это-стоит)
-  - [7.7 Ограничения](#77-ограничения)
+  - [7.4 Откуда берётся `Maybe`](#74-откуда-берётся-maybe)
+  - [7.5 `else` подробно](#75-else-подробно)
+  - [7.6 `Maybe` — это значение](#76-maybe--это-значение)
+  - [7.7 `Presence<T>`: три состояния для обновлений](#77-presencet-три-состояния-для-обновлений)
+  - [7.8 Отсутствие на границах](#78-отсутствие-на-границах)
+  - [7.9 Разобранный пример: настройки](#79-разобранный-пример-настройки)
+  - [7.10 Отсутствие с поведением: нулевой объект](#710-отсутствие-с-поведением-нулевой-объект)
+  - [7.11 Как отсутствие устроено в других языках](#711-как-отсутствие-устроено-в-других-языках)
+  - [7.12 Чего это стоит](#712-чего-это-стоит)
+  - [7.13 Ограничения](#713-ограничения)
 - [Глава 8. Коллекции](#глава-8-коллекции)
   - [8.1 Массивы](#81-массивы)
   - [8.2 Функциональные операции](#82-функциональные-операции)
@@ -2468,8 +2474,11 @@ Unicode (больше `0x10FFFF` или суррогат), — ошибка вр
 
 ## 7.2 Ответ Okkama: одна конструкция на один смысл
 
-В Okkama null нет, а зарезервированные слова `null` и `nil` не разбираются
-(глава 3). Вместо этого у каждой из пяти ситуаций своя конструкция.
+В Okkama null нет. Слова `null`, `nil` и голое `none` не разбираются:
+компилятор останавливается с сообщением «Null/none/nil values are not part of
+Okkama v1.0 syntax», даже там, где `none` было бы всего лишь именем переменной
+(глава 3). `none` существует только как случай: `Maybe.none` или `.none` в
+выборе. Вместо этого у каждой из пяти ситуаций своя конструкция.
 
 | Ситуация | Конструкция Okkama | Глава |
 |---|---|---|
@@ -2586,7 +2595,144 @@ require(4) gave none
 Языки, схлопывающие вложенные optional, — `undefined` в TypeScript,
 опциональные цепочки JavaScript, — теряют ровно это различие.
 
-## 7.4 `Presence<T>`: три состояния для обновлений
+## 7.4 Откуда берётся `Maybe`
+
+`Maybe` встречается не только в собственном коде программиста. Язык и
+стандартная библиотека отвечают им везде, где на вопрос может не быть ответа,
+и никогда не отвечают сигнальным значением: ни `-1` для «не найдено», ни пустой
+строки для «не задано».
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Lookup is Error = (unknown(name is string));
+
+object Directory {
+    has phones is %string:string;
+    Directory(:phones);
+
+    // A lookup that may find nothing answers a Maybe.
+    phone(name is string) is Maybe<string> {
+        if phones.has(name) { Maybe.some(phones[name]); } else { Maybe<string>.none; }
+    }
+
+    // The same question as an error, for callers that cannot go on without it.
+    require(name is string) is string {
+        self.phone(name) else throw Lookup.unknown(name);
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let names = ["ada", "brian", "grace"];
+    // Searches answer Maybe, never -1 or an empty string.
+    out.writeln((names.index_of("grace") else -1).string() + " " + (names.index_of("linus") else -1).string());
+    out.writeln(names.find() -> n { n.starts_with("b"); } else "nobody");
+    out.writeln(("a=1;b=2".find(";") else -1).string() + " " + ("a=1".find(";") else -1).string());
+    // An index or a key with a fallback; without one, a miss is a failure.
+    out.writeln(names[5] else "past the end");
+    let book = Directory(phones: ["ada": "555-0101"]);
+    out.writeln(book.phone("ada") else "unlisted");
+    // Several sources tried in order: each `else` takes the next.
+    let office is Maybe<string> = Maybe<string>.none;
+    out.writeln(book.phone("brian") else office else "no number");
+    // try? turns an error into absence; a Maybe result is kept whole, never flattened.
+    out.writeln(try? book.require("grace") else "unknown");
+    let nested is Maybe<Maybe<string>> = try? book.phone("grace");
+    out.writeln(nested == Maybe.some(Maybe<string>.none) ?? "found the answer: no phone" !! "something else");
+    0;
+}
+```
+
+Вывод:
+
+```text
+2 -1
+brian
+3 -1
+past the end
+555-0101
+no number
+unknown
+found the answer: no phone
+```
+
+- **Поиск.** `index_of(value)` у массива, `find(part)` и `find_last(part)` у
+  строки отвечают `Maybe<int>`. Функциональный блок `find` отвечает `Maybe`
+  первого элемента, который ему удовлетворяет:
+  `names.find() -> n { n.starts_with("b"); } else "nobody"`.
+- **Индексы и ключи — с запасным значением.** `names[5] else "past the end"` и
+  `stock["kiwi"] else 0` читают элемент или запись, которых может не быть. Без
+  `else` промах — ошибка времени выполнения: запасное значение — часть
+  выражения, а не запоздалая мысль. Словарь отвечает на `has(key)`, не доставая
+  значения, поэтому действие, которое хочет вернуть отсутствие, отделено от
+  `Maybe` одним `if` (действие `Directory.phone` выше).
+- **Действия, которые так и говорят.** Любое действие может объявить
+  `is Maybe<T>`; стандартная библиотека делает это у каждого читателя
+  необязательных данных. `maybe(name)` читателя json, `Environment.maybe(name)`,
+  источники конфигурации и `maybe(column)` строки базы данных отвечают `Maybe`
+  для каждого вида значения: `row.maybe("nick").text()` — это `Maybe.none`,
+  когда в столбце SQL `NULL`.
+- **`try?`.** Превращает брошенную ошибку в `Maybe.none` (§7.3).
+- **Потоки.** `for await` спрашивает у потока следующий элемент действием
+  `async next() is Maybe<T>`, и `Maybe.none` завершает цикл. Отсутствие — это
+  то, как поток говорит «больше нет», точно так же, как поиск говорит «здесь
+  нет» (глава 20).
+
+Значение строится через `Maybe.some(value)` и `Maybe<T>.none`. Аргумент типа у
+`none` можно опустить, когда его даёт контекст — `let m is Maybe<int> =
+Maybe.none;`, — и нужно написать, когда контекста нет: само по себе `none` не
+несёт типа элемента.
+
+## 7.5 `else` подробно
+
+`else` после `Maybe` — самый частый выход, и у него точные правила.
+
+- **Запасное значение ленивое.** Оно вычисляется, только когда значения нет.
+  `Maybe.some(0) else panic "eager"` никогда не паникует; запасное значение,
+  которое что-то считает, пишет в лог или выделяет память, ничего не стоит на
+  пути, где значение есть.
+- **Запасное значение имеет тип содержимого.** `Maybe<int> else 0` — это
+  `int`. Запасное значение другого типа — ошибка компиляции («Fallback must be
+  int, got string»), а не преобразование.
+- **Три вида запасного.** Выражение типа содержимого; `throw` с ошибкой, когда
+  отсутствие нарушает контракт вызывающего (глава 10); `panic` с сообщением,
+  когда отсутствие означает, что неверна сама программа. Других нет: за `else`
+  не может стоять `return`, `next` или `last`, потому что запасное — это
+  значение, а управление, которое зависит от наличия, пишется через `match` или
+  `if`, где читатель его и ищет.
+- **Запасные значения выстраиваются в цепочку.**
+  `book.phone("brian") else office else "no number"` перебирает источники по
+  порядку: правый `else` превращает `office` в строку, левый берёт её, если
+  первый поиск промахнулся.
+- **То же слово в `confirm`.** `confirm port > 0 else throw ...` использует
+  `else` для условия, а не для отсутствия (глава 10). Запасное и там ленивое:
+  ошибка строится, только когда условие не выполнено.
+
+## 7.6 `Maybe` — это значение
+
+`Maybe<T>` — обычное значение, и всё, что глава 16 говорит о вариантах,
+относится и к нему.
+
+- **Равенство структурное.** `Maybe.some(3) == Maybe.some(3)` истинно, и
+  `Maybe<int>.none == Maybe<int>.none` тоже. Массив значений `Maybe` отвечает на
+  `contains` и `index_of` по тому же равенству.
+- **Оно может быть полем.** Объект может хранить `has note is Maybe<string>;`
+  для действительно необязательных данных и придать им смысл в одном месте:
+  `shown() is string { note else "(no note)"; }`. Вызывающие спрашивают объект,
+  а не поле.
+- **Оно не ключ словаря.** Ключи словаря — скаляры или ключевые объекты (глава
+  8); поле `has index is %Maybe<int>:string;` отвергается с сообщением «Map key
+  type Maybe<int> is not a scalar key type». Словарь, которому нужен «нет
+  ключа» в роли ключа, обычно оказывается двумя структурами: самим словарём и
+  значением для отсутствующего случая.
+- **Оно владеет тем, что держит.** `Maybe` с объектом, у которого есть
+  `destroy`, — владелец этого объекта: объект разрушается, когда `Maybe` выходит
+  из области видимости, как у любого другого владельца (глава 11).
+
+## 7.7 `Presence<T>`: три состояния для обновлений
 
 Некоторым данным нужны три состояния, и самый частый пример — частичное
 обновление. Когда клиент присылает JSON PATCH для записи пользователя, каждое
@@ -2670,7 +2816,142 @@ main() is int {
 `Maybe.as_presence()` сохраняет `some` и `none` и никогда не выдумывает
 `missing`.)
 
-## 7.5 Как отсутствие устроено в других языках
+## 7.8 Отсутствие на границах
+
+Внутри программы отсутствие — это тип. На её границах — переменные окружения,
+файлы конфигурации, JSON, базы данных — отсутствие приходит как данные, и
+стандартная библиотека везде проводит одну и ту же черту: **отсутствующее —
+значение, испорченное — ошибка.** `Environment.maybe("PORT").int()` — это
+`Maybe.none`, если переменная не задана, и `Maybe.some(8080)`, если в ней
+`8080`; если в ней `80a0`, чтение бросает `InvalidEnvironmentValue` с именем
+переменной, потому что значение, которое есть, но неверно, — не тот же факт,
+что значение, которого нет. Источники конфигурации по тому же правилу бросают
+`MalformedSetting`. Читатель json даёт оба взгляда на член объекта:
+`maybe(name)` отвечает `Maybe` и не различает отсутствующий ключ и `null`, а
+`presence(name)` разводит их как `Presence.missing` и `Presence.none`; в обоих
+случаях член не того вида — это `JsonError.wrong_kind`. `maybe` — буквально
+`presence`, за которым следует `fold()`.
+
+Базы данных — место, где null родился второй раз. SQL-ный `NULL` пришёл из
+расширения реляционной модели Коддом [[Codd 1979](#ref-codd1979)] вместе с трёхзначной логикой,
+в которой `NULL = NULL` не истинно и не ложно, а неизвестно. Позже Кодд
+предложил два вида пропущенного значения — «отсутствует, но применимо» и
+«отсутствует и неприменимо» — и четырёхзначную логику к ним [[Codd 1990](#ref-codd1990)]; ни
+одна крупная система её не реализовала, и в SQL остался один `NULL`. Okkama
+отображает `NULL` базы данных в `Maybe.none` в обе стороны:
+`DbText(Maybe<string>.none)` привязывает параметр `NULL`, а
+`row.maybe("nick").text()` читает его обратно как `Maybe.none`. Равенство на
+стороне Okkama остаётся двузначным: `Maybe<int>.none == Maybe<int>.none` просто
+истинно. У второй метки Кодда тоже есть пара — в `Presence`: `none` значит
+«значения нет», `missing` — «ничего не сказано».
+
+## 7.9 Разобранный пример: настройки
+
+Одна и та же отсутствующая настройка может означать три разные вещи, и только
+код, который использует значение, знает, какую. Сервер читает настройки как
+текст и решает для каждой, что значит её отсутствие.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "strings/parse" take Number, InvalidInteger;
+
+enum SettingError is Error = (malformed(name is string, text is string));
+
+// Settings as read from a file: a name and its text, nothing more.
+object Settings {
+    has entries is %string:string;
+    Settings(:entries);
+
+    // Absence is an answer: the setting is not there.
+    text(name is string) is Maybe<string> {
+        if entries.has(name) { Maybe.some(entries[name]); } else { Maybe<string>.none; }
+    }
+
+    // Absent gives none; present but not a number is an error that names the setting.
+    int(name is string) is Maybe<int> {
+        self.text(name) ?? .some(raw): Maybe.some(try {
+            Number(raw).int();
+        } catch failure is InvalidInteger {
+            throw SettingError.malformed(name, raw);
+        }) !! .none: Maybe<int>.none;
+    }
+}
+
+// What the program does with each setting decides what absence means.
+object Server {
+    has settings is Settings;
+    Server(:settings);
+
+    port() is int { settings.int("port") else 8080; }
+    certificate() is string { settings.text("certificate") ?? .some(path): "TLS with " + path !! .none: "plain HTTP"; }
+    workers() is int { settings.int("workers") else throw SettingError.malformed("workers", "(missing)"); }
+}
+
+main() is int {
+    let out = Stdout();
+    let full = Server(settings: Settings(entries: ["port": "9000", "certificate": "/etc/tls/site.pem", "workers": "4"]));
+    out.writeln(full.port().string() + ", " + full.certificate() + ", " + full.workers().string() + " workers");
+    let sparse = Server(settings: Settings(entries: ["workers": "2"]));
+    out.writeln(sparse.port().string() + ", " + sparse.certificate() + ", " + sparse.workers().string() + " workers");
+    let broken = Server(settings: Settings(entries: ["port": "90o0"]));
+    let port = try { broken.port().string(); } catch SettingError.malformed(name, text) { name + " is not a number: " + text; };
+    out.writeln(port);
+    let lean = Server(settings: Settings(entries: ["port": "80"]));
+    let workers = try { lean.workers().string(); } catch SettingError.malformed(name, text) { name + " " + text; };
+    out.writeln(workers);
+    0;
+}
+```
+
+Вывод:
+
+```text
+9000, TLS with /etc/tls/site.pem, 4 workers
+8080, plain HTTP, 2 workers
+port is not a number: 90o0
+workers (missing)
+```
+
+- У `port()` есть разумное значение по умолчанию: отсутствие означает 8080.
+- У `certificate()` значения по умолчанию нет, а отсутствие осмысленно: нет
+  сертификата — значит, обычный HTTP. Компактный выбор называет оба случая, и
+  смысл отсутствия записан рядом со смыслом наличия.
+- У `workers()` нет ни значения по умолчанию, ни смысла для отсутствия:
+  программа не может работать без этой настройки, поэтому отсутствие —
+  ошибка, брошенная с именем настройки.
+
+Объект `Settings` ничего этого не знает. Он отвечает `Maybe` на «нет» и бросает
+`SettingError.malformed` на «есть, но не число», а все решения об отсутствии
+оставляет вызывающему. Такое разделение — читатель сообщает, пользователь
+решает — и есть устройство, которому следуют читатели стандартной библиотеки.
+
+## 7.10 Отсутствие с поведением: нулевой объект
+
+Иногда у отсутствия есть поведение. Сервису, у которого логгер может быть, а
+может не быть, не нужен `Maybe<Logger>` и выбор при каждом вызове; ему нужен
+логгер, который ничего не делает. Это шаблон *Null Object* Вулфа [[Woolf 1998](#ref-woolf1998)]:
+реализация роли, чьи действия — безвредные пустышки, передаётся туда, куда
+пошла бы настоящая.
+
+В Okkama нулевой объект — обычная реализация роли (глава 14), а выбор между ним
+и `Maybe` сводится к одному вопросу: **ведёт ли себя вызывающий иначе, когда
+вещи нет?** Если да — сертификат включает TLS, отсутствующий номер телефона
+меняет то, что показывает экран, — отсутствие — это данные, и это `Maybe`,
+который заставляет вызывающего решить. Если нет — молчаливый логгер, пустой
+набор слушателей, часы, которые в тесте никогда не идут, — отсутствие — это
+поведение, и объект, реализующий роль, сохраняет каждое место вызова простым.
+Elegant Objects приходит к тому же с другой стороны: никогда не возвращай null,
+возвращай объект, который знает, что делать [[Bugayenko 2016](#ref-bugayenko2016)].
+
+Okkama отвергает третий вариант — сигнальное значение: `-1` для «не найдено»,
+`""` для «не задано», `0` для «неизвестно». Сигнальное значение — это null в
+маскировке: обычное значение типа, которое читатель должен не забыть
+обработать особо. Поиск в Okkama отвечает `Maybe` именно для того, чтобы ни
+одному `int` не приходилось означать «ничего».
+
+## 7.11 Как отсутствие устроено в других языках
 
 Подход Okkama принадлежит семейству, начатому типом `option` в ML и `Maybe`
 в Haskell [[Pierce 2002](#ref-pierce2002); [Haskell 2010](#ref-haskell2010)]. Таблица сравнивает популярные решения.
@@ -2683,6 +2964,7 @@ main() is int {
 | Swift | `Optional<T>`, пишется `T?` | нет, если не объявлен `T?` | `!` аварийно останавливает |
 | Rust | `Option<T>` | нет [[Klabnik 2023](#ref-klabnik2023)] | `.unwrap()` паникует |
 | Haskell | `Maybe a` | нет | `fromJust` даёт ошибку |
+| Go | `nil` у указателей, словарей, срезов, интерфейсов, каналов и функций; нулевые значения; `v, ok := m[k]` | да, для этих видов [[Go specification](#ref-gospec)] | разыменование `nil` паникует |
 | Okkama | `Maybe<T>`, `Presence<T>` | нет | нет: каждый выход называет случай `none` |
 
 Kotlin, Swift и Rust сделали решающий шаг — простой `T` не может
@@ -2693,7 +2975,7 @@ Kotlin, Swift и Rust сделали решающий шаг — простой 
 мала в символах и велика в культуре: самый короткий способ достать значение
 из `Maybe` — сказать, что означает отсутствие.
 
-## 7.6 Чего это стоит
+## 7.12 Чего это стоит
 
 - **Церемонии на границах.** Каждому поиску, который может промахнуться,
   нужно запасное значение, `match` или `try?`. Код, читающий много
@@ -2710,12 +2992,15 @@ Kotlin, Swift и Rust сделали решающий шаг — простой 
   преобразование между ними явное (`fold()`, `as_presence()`). Это цена
   третьего состояния; большинству программ `Presence` не понадобится никогда.
 
-## 7.7 Ограничения
+## 7.13 Ограничения
 
 - У `Maybe` сегодня нет в языке библиотеки комбинаторов вроде `map`,
   `and_then` или `filter`; цепочки вычислений с отсутствием пишутся
   компактными выборами или `match`. Добавлять ли их — открытый вопрос: каждый
   удобен, и каждый — ещё один способ сказать то, что уже говорит `??`.
+- `Maybe` не может быть ключом словаря, а запасное значение не может нести
+  управление: `else return` и `else next` не существуют. Оба решения
+  намеренные, и оба иногда стоят нескольких строк.
 - API стандартной библиотеки пока не единообразны: одни модули возвращают
   `Maybe`, другие бросают типизированную ошибку на отсутствующее значение,
   третьи принимают явное запасное. Стиль модуля json — образец, к которому
@@ -17712,6 +17997,8 @@ main() is int {
 - <a id="ref-jep421"></a>Brent Christian (2021). JEP 421: Deprecate Finalization for Removal. OpenJDK. https://openjdk.org/jeps/421
 - <a id="ref-church1936"></a>Alonzo Church (1936). An Unsolvable Problem of Elementary Number Theory. *American Journal of Mathematics* 58(2): 345–363. https://doi.org/10.2307/2371045
 - <a id="ref-claessen2000"></a>Koen Claessen, John Hughes (2000). QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs. In *Proceedings of ICFP 2000*: 268–279. ACM. https://doi.org/10.1145/351240.351266
+- <a id="ref-codd1979"></a>E. F. Codd (1979). Extending the Database Relational Model to Capture More Meaning. *ACM Transactions on Database Systems* 4(4): 397–434. https://doi.org/10.1145/320107.320109
+- <a id="ref-codd1990"></a>E. F. Codd (1990). *The Relational Model for Database Management: Version 2*. Addison-Wesley.
 - <a id="ref-cook2009"></a>William R. Cook (2009). On Understanding Data Abstraction, Revisited. In *Proceedings of OOPSLA 2009*, *ACM SIGPLAN Notices* 44(10): 557–572. https://doi.org/10.1145/1640089.1640133
 - <a id="ref-cox2018"></a>Russ Cox (2018). Minimal Version Selection. research!rsc, 21 February 2018. https://research.swtch.com/vgo-mvs
 - <a id="ref-cytron1991"></a>Ron Cytron, Jeanne Ferrante, Barry K. Rosen, Mark N. Wegman, F. Kenneth Zadeck (1991). Efficiently Computing Static Single Assignment Form and the Control Dependence Graph. *ACM TOPLAS* 13(4): 451–490. https://doi.org/10.1145/115372.115320
@@ -17836,4 +18123,5 @@ main() is int {
 - <a id="ref-wirth1971"></a>Niklaus Wirth (1971). The Programming Language Pascal. *Acta Informatica* 1(1): 35–63. https://doi.org/10.1007/BF00264291
 - <a id="ref-wirth1982"></a>Niklaus Wirth (1982). *Programming in Modula-2*. Springer-Verlag.
 - <a id="ref-wirth1995"></a>Niklaus Wirth (1995). A Plea for Lean Software. *Computer* 28(2): 64–68. https://doi.org/10.1109/2.348001
+- <a id="ref-woolf1998"></a>Bobby Woolf (1998). Null Object. In Robert C. Martin, Dirk Riehle, Frank Buschmann (eds.), *Pattern Languages of Program Design 3*, pp. 5–18. Addison-Wesley.
 - <a id="ref-yuan2014"></a>Ding Yuan, Yu Luo, Xin Zhuang, Guilherme Renna Rodrigues, Xu Zhao, Yongle Zhang, Pranay U. Jain, Michael Stumm (2014). Simple Testing Can Prevent Most Critical Failures: An Analysis of Production Failures in Distributed Data-Intensive Systems. In *11th USENIX Symposium on Operating Systems Design and Implementation (OSDI 14)*: 249–265. USENIX. https://www.usenix.org/conference/osdi14/technical-sessions/presentation/yuan

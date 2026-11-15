@@ -26,6 +26,8 @@ bibliographic data were checked are listed.
 - [@cardelli1985] Luca Cardelli, Peter Wegner (1985). On Understanding Types, Data Abstraction, and Polymorphism. *ACM Computing Surveys* 17(4): 471–523. https://doi.org/10.1145/6041.6042
 - [@church1936] Alonzo Church (1936). An Unsolvable Problem of Elementary Number Theory. *American Journal of Mathematics* 58(2): 345–363. https://doi.org/10.2307/2371045
 - [@claessen2000] Koen Claessen, John Hughes (2000). QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs. In *Proceedings of ICFP 2000*: 268–279. ACM. https://doi.org/10.1145/351240.351266
+- [@codd1979] E. F. Codd (1979). Extending the Database Relational Model to Capture More Meaning. *ACM Transactions on Database Systems* 4(4): 397–434. https://doi.org/10.1145/320107.320109
+- [@codd1990] E. F. Codd (1990). *The Relational Model for Database Management: Version 2*. Addison-Wesley.
 - [@cook2009] William R. Cook (2009). On Understanding Data Abstraction, Revisited. In *Proceedings of OOPSLA 2009*, *ACM SIGPLAN Notices* 44(10): 557–572. https://doi.org/10.1145/1640089.1640133
 - [@cox2018] Russ Cox (2018). Minimal Version Selection. research!rsc, 21 February 2018. https://research.swtch.com/vgo-mvs
 - [@cytron1991] Ron Cytron, Jeanne Ferrante, Barry K. Rosen, Mark N. Wegman, F. Kenneth Zadeck (1991). Efficiently Computing Static Single Assignment Form and the Control Dependence Graph. *ACM TOPLAS* 13(4): 451–490. https://doi.org/10.1145/115372.115320
@@ -156,4 +158,5 @@ bibliographic data were checked are listed.
 - [@wirth1971] Niklaus Wirth (1971). The Programming Language Pascal. *Acta Informatica* 1(1): 35–63. https://doi.org/10.1007/BF00264291
 - [@wirth1982] Niklaus Wirth (1982). *Programming in Modula-2*. Springer-Verlag.
 - [@wirth1995] Niklaus Wirth (1995). A Plea for Lean Software. *Computer* 28(2): 64–68. https://doi.org/10.1109/2.348001
+- [@woolf1998] Bobby Woolf (1998). Null Object. In Robert C. Martin, Dirk Riehle, Frank Buschmann (eds.), *Pattern Languages of Program Design 3*, pp. 5–18. Addison-Wesley.
 - [@yuan2014] Ding Yuan, Yu Luo, Xin Zhuang, Guilherme Renna Rodrigues, Xu Zhao, Yongle Zhang, Pranay U. Jain, Michael Stumm (2014). Simple Testing Can Prevent Most Critical Failures: An Analysis of Production Failures in Distributed Data-Intensive Systems. In *11th USENIX Symposium on Operating Systems Design and Implementation (OSDI 14)*: 249–265. USENIX. https://www.usenix.org/conference/osdi14/technical-sessions/presentation/yuan

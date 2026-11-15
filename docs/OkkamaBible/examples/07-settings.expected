@@ -1,0 +1,4 @@
+9000, TLS with /etc/tls/site.pem, 4 workers
+8080, plain HTTP, 2 workers
+port is not a number: 90o0
+workers (missing)

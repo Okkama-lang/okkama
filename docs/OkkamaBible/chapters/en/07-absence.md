@@ -32,8 +32,10 @@ common way those operations fail.
 
 ## 7.2 Okkama's answer: one construct per meaning
 
-Okkama has no null, and the reserved words `null` and `nil` do not parse
-(Chapter 3). Instead, each of the five situations has its own construct.
+Okkama has no null. The words `null`, `nil` and a bare `none` do not parse;
+the compiler stops with "Null/none/nil values are not part of Okkama v1.0
+syntax", even where `none` would only have been a variable name (Chapter 3).
+`none` exists only as a case, written `Maybe.none` or `.none` in a choice. Instead, each of the five situations has its own construct.
 
 | Situation | Okkama construct | Chapter |
 |---|---|---|
@@ -93,7 +95,85 @@ entry saying there is no value" are different facts. Languages that collapse
 nested optionals — TypeScript's `undefined`, JavaScript's optional chaining —
 lose exactly that distinction.
 
-## 7.4 `Presence<T>`: three states for updates
+## 7.4 Where a `Maybe` comes from
+
+A `Maybe` is not something a programmer meets only in their own code. The
+language and the standard library answer with one wherever a question may have
+no answer, and they never answer with a sentinel — no `-1` for "not found", no
+empty string for "not set".
+
+{{example:07-sources}}
+
+- **Searches.** `index_of(value)` on an array, `find(part)` and
+  `find_last(part)` on a string answer a `Maybe<int>`. The functional `find`
+  block answers a `Maybe` of the first element that satisfies it:
+  `names.find() -> n { n.starts_with("b"); } else "nobody"`.
+- **Indexes and keys, with a fallback.** `names[5] else "past the end"` and
+  `stock["kiwi"] else 0` read an element or an entry that may not exist. Without
+  the `else`, a miss is a runtime failure: the fallback is part of the
+  expression, not an afterthought. A map answers `has(key)` without looking the
+  value up, so an action that wants to return absence is one `if` away from a
+  `Maybe` (the `Directory.phone` action above).
+- **Actions that say so.** Any action may declare `is Maybe<T>`; the standard
+  library does it for every reader of optional data. The json reader's
+  `maybe(name)`, `Environment.maybe(name)`, the configuration sources and a
+  database row's `maybe(column)` all answer `Maybe` per kind:
+  `row.maybe("nick").text()` is `Maybe.none` when the column holds SQL `NULL`.
+- **`try?`.** It turns a thrown error into `Maybe.none` (§7.3).
+- **Streams.** `for await` asks a stream for its next element with an
+  `async next() is Maybe<T>` action, and `Maybe.none` ends the loop. Absence is
+  how a stream says "no more", exactly as it is how a search says "not here"
+  (Chapter 20).
+
+A value is made with `Maybe.some(value)` and `Maybe<T>.none`. The type argument
+of `none` may be left out when the context gives it — `let m is Maybe<int> =
+Maybe.none;` — and must be written when nothing does, because `none` alone
+carries no element type.
+
+## 7.5 `else` in detail
+
+`else` after a `Maybe` is the most common exit, and it has precise rules.
+
+- **The fallback is lazy.** It is evaluated only when the value is absent.
+  `Maybe.some(0) else panic "eager"` never panics; a fallback that computes,
+  logs or allocates costs nothing on the present path.
+- **The fallback has the type of the payload.** `Maybe<int> else 0` is an
+  `int`. A fallback of another type is a compile-time error ("Fallback must be
+  int, got string"), not a conversion.
+- **Three kinds of fallback.** An expression of the payload type; `throw` with
+  an error, when absence is a failure of the caller's contract (Chapter 10);
+  `panic` with a message, when absence means the program itself is wrong. These
+  are the only three: `return`, `next` and `last` cannot follow `else`, because
+  a fallback is a value, and control flow that depends on presence is written
+  as a `match` or an `if`, where a reader looks for it.
+- **Fallbacks chain.** `book.phone("brian") else office else "no number"`
+  tries each source in order: the right-hand `else` turns `office` into a
+  string, the left-hand one takes it when the first lookup misses.
+- **The same word in `confirm`.** `confirm port > 0 else throw ...` uses `else`
+  for a condition rather than an absence (Chapter 10). The fallback is lazy
+  there too: the error is built only when the condition fails.
+
+## 7.6 A `Maybe` is a value
+
+`Maybe<T>` is an ordinary value, and everything Chapter 16 says about variants
+applies to it.
+
+- **Equality is structural.** `Maybe.some(3) == Maybe.some(3)` is true, and so
+  is `Maybe<int>.none == Maybe<int>.none`. An array of `Maybe` values answers
+  `contains` and `index_of` by the same equality.
+- **It can be a field.** An object may hold `has note is Maybe<string>;` for
+  data that is genuinely optional, and give it a meaning in one place:
+  `shown() is string { note else "(no note)"; }`. Callers ask the object, not
+  the field.
+- **It is not a map key.** Map keys must be scalars or key objects (Chapter
+  8); a field `has index is %Maybe<int>:string;` is rejected with "Map key
+  type Maybe<int> is not a scalar key type". A map that needs "no key" as a key is usually two
+  structures: the map and the value for the missing case.
+- **It owns what it holds.** A `Maybe` that holds an object with a `destroy`
+  is that object's owner: the object is destroyed when the `Maybe` goes out of
+  scope, like any other owner (Chapter 11).
+
+## 7.7 `Presence<T>`: three states for updates
 
 Some data needs three states, and the most common example is a partial
 update. When a client sends a JSON PATCH for a user record, each field can
@@ -124,7 +204,80 @@ rejected, and the program must say how to merge the two kinds of absence.
 direction, `Maybe.as_presence()` keeps `some` and `none` and never invents
 `missing`.)
 
-## 7.5 How other languages handle absence
+## 7.8 Absence at the edges
+
+Inside a program, absence is a type. At its edges — environment variables,
+configuration files, JSON, databases — absence arrives as data, and the
+standard library draws the same line everywhere: **absent is a value,
+malformed is an error.** `Environment.maybe("PORT").int()` is `Maybe.none` when
+the variable is not set and `Maybe.some(8080)` when it holds `8080`; when it
+holds `80a0`, the read throws `InvalidEnvironmentValue` naming the variable,
+because a value that is there but wrong is not the same fact as a value that is
+not there. The configuration sources throw `MalformedSetting` by the same rule.
+The json reader offers both views of a member: `maybe(name)` answers `Maybe`
+and treats an absent key and a `null` alike, while `presence(name)` keeps them
+apart as `Presence.missing` and `Presence.none`; in both, a member of the wrong
+kind is `JsonError.wrong_kind`. `maybe` is literally `presence` followed by
+`fold()`.
+
+Databases are where null was born a second time. SQL's `NULL` came from Codd's
+extension of the relational model [@codd1979], with a three-valued logic in
+which `NULL = NULL` is neither true nor false but unknown. Codd later proposed
+two kinds of missing value — "missing but applicable" and "missing and
+inapplicable" — and a four-valued logic to go with them [@codd1990]; no major
+system implemented it, and SQL kept one `NULL`. Okkama maps the database's
+`NULL` to `Maybe.none` in both directions: `DbText(Maybe<string>.none)` binds a
+`NULL` parameter, and `row.maybe("nick").text()` reads one back as
+`Maybe.none`. Equality on the Okkama side stays two-valued:
+`Maybe<int>.none == Maybe<int>.none` is simply true. Codd's second mark has a
+counterpart too, in `Presence`: `none` is "there is no value", `missing` is
+"nothing was said".
+
+## 7.9 A worked example: settings
+
+The same absent setting can mean three different things, and only the code
+that uses the value knows which. A server reads its settings as text and
+decides, per setting, what absence means.
+
+{{example:07-settings}}
+
+- `port()` has a sensible default: absence means 8080.
+- `certificate()` has no default, and absence is meaningful: no certificate
+  means plain HTTP. The compact choice names both cases, so the meaning of
+  absence is written next to the meaning of presence.
+- `workers()` has no default and no meaning for absence: the program cannot
+  run without it, so absence is an error, thrown with the setting's name.
+
+The `Settings` object knows none of this. It answers `Maybe` for "not there"
+and throws `SettingError.malformed` for "there but not a number", and it leaves
+every decision about absence to its caller. That split — the reader reports,
+the user decides — is the design the standard library's readers follow.
+
+## 7.10 Absence with behaviour: the null object
+
+Sometimes absence has behaviour. A service that may or may not have a logger
+does not want a `Maybe<Logger>` and a choice at every call; it wants a logger
+that does nothing. This is Woolf's *Null Object* pattern [@woolf1998]: an
+implementation of the role whose actions are harmless no-ops, passed where the
+real one would go.
+
+In Okkama the null object is an ordinary implementation of a role (Chapter
+14), and the choice between it and `Maybe` follows one question: **does the
+caller act differently when the thing is absent?** If it does — a certificate
+turns TLS on, a missing phone number changes what the screen shows — absence is
+data, and it is a `Maybe` that forces the caller to decide. If it does not — a
+silent logger, an empty set of listeners, a clock that never ticks in a test —
+absence is behaviour, and an object that implements the role keeps every call
+site simple. Elegant Objects arrives at the same place from the other side:
+never return null, return an object that knows what to do [@bugayenko2016].
+
+What Okkama rejects is the third option, the sentinel: `-1` for "not found",
+`""` for "not set", `0` for "unknown". A sentinel is a null with a disguise —
+an ordinary value of the type that the reader must remember to treat
+specially. Okkama's searches answer `Maybe` precisely so that no `int` has to
+mean "nothing".
+
+## 7.11 How other languages handle absence
 
 Okkama's approach belongs to a family that started with ML's `option` type
 and Haskell's `Maybe` [@pierce2002; @haskell2010]. The table compares the
@@ -138,6 +291,7 @@ mainstream designs.
 | Swift | `Optional<T>`, written `T?` | no, unless declared `T?` | `!` traps |
 | Rust | `Option<T>` | no [@klabnik2023] | `.unwrap()` panics |
 | Haskell | `Maybe a` | no | `fromJust` errors |
+| Go | `nil` for pointers, maps, slices, interfaces, channels and functions; zero values; `v, ok := m[k]` | yes, for those kinds [@gospec] | dereferencing `nil` panics |
 | Okkama | `Maybe<T>`, `Presence<T>` | no | none: every exit names the `none` case |
 
 Kotlin, Swift and Rust made the decisive move — a plain `T` cannot be absent —
@@ -148,7 +302,7 @@ message and therefore a moment's thought. The difference is small in
 characters and large in culture: the shortest way to get a value out of a
 `Maybe` is to say what absence means.
 
-## 7.6 What it costs
+## 7.12 What it costs
 
 - **Ceremony at the boundaries.** Every lookup that may miss needs a fallback,
   a match or a `try?`. Code that reads many optional fields — configuration,
@@ -164,12 +318,15 @@ characters and large in culture: the shortest way to get a value out of a
   converting between them is explicit (`fold()`, `as_presence()`). This is the
   price of keeping the third state; most programs never need `Presence`.
 
-## 7.7 Limits
+## 7.13 Limits
 
 - `Maybe` has no library of combinators such as `map`, `and_then` or `filter`
   in the language today; chained optional computations are written with
   compact choices or `match`. Whether to add them is an open question: each is
   convenient, and each is another way to say what `??` already says.
+- A `Maybe` cannot be a map key, and a fallback cannot carry control flow:
+  `else return` and `else next` do not exist. Both are deliberate, and both
+  occasionally cost a few lines.
 - Standard-library APIs are not yet uniform: some modules return `Maybe`,
   some throw a typed error for a missing value, some take an explicit
   fallback. The json module's style is the reference the library is being
