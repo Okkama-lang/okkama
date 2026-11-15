@@ -22,6 +22,11 @@ impl Driver<'_, '_> {
     ) -> Result<Landing, OwnError> {
         let consumed = arrays::consumed_buffer(&instruction.op);
         if let Some(buffer) = consumed {
+            // Every transition, finish and abandon included, lies inside the builder's owner.
+            let owner = *self.builder_owners.get(&buffer)
+                .ok_or_else(|| flow_error("builder transition has no builder.new owner"))?;
+            let scope = self.body.blocks.get(point.block).map_err(arena)?.lexical_scope;
+            arrays::inner_scopes(self.module, scope, owner)?;
             let inserted = self.inserted_values(&point, &instruction.op)?;
             point = self.rehome(point, buffer, &inserted)?;
             // Checked transfers forward every live SSA name: rename again.
