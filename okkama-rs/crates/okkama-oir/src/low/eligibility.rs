@@ -120,28 +120,9 @@ fn operation(module: &Module, function: FuncId, op: &Operation) -> Result<(), Lo
             return Err(unsupported(function, "async/service or preexisting Low operation"));
         }
         Operation::Ownership(OwnershipOp::Dynamic { reason, protocol, .. }) => {
-            let protocol = module.protocols.get(*protocol)?;
-            let supported = *reason == DynamicReason::Merge && protocol.kind == ProtocolKind::Storage
-                && protocol.holders.iter().all(|holder| matches!(holder, HolderKind::Scope | HolderKind::Packet))
-                && protocol.holders.contains(&HolderKind::Scope)
-                && protocol.holders.contains(&HolderKind::Packet)
-                && protocol.rules.iter().filter(|rule| rule.transition == ProtocolTransition::Dynamic).count() == 1
-                && protocol.roots.contains(&RootKind::Operands)
-                && protocol.rules.iter().any(|rule| {
-                    rule.transition == ProtocolTransition::Dynamic
-                        && rule.from == HolderKind::Packet && rule.to == HolderKind::Scope
-                        && rule.normal.holder == HolderKind::Scope
-                        && rule.normal.state == HolderState::Open
-                        && rule.unwind.as_ref().is_some_and(|post| {
-                            post.holder == HolderKind::Packet && post.state == HolderState::Unaccepted
-                        })
-                        && rule.cancel.is_none()
-                        && [ProtocolCheck::Owner, ProtocolCheck::LiveDependencies,
-                            ProtocolCheck::Snapshot, ProtocolCheck::Transferable]
-                            .iter().all(|check| rule.checks.contains(check))
-                });
-            if !supported {
-                return Err(unsupported(function, "dynamic source needs the synchronous storage merge protocol"));
+            if !synchronous_dynamic(*reason, module.protocols.get(*protocol)?) {
+                return Err(unsupported(function,
+                    "dynamic source needs the storage merge, open Closure or any cleanup protocol"));
             }
         }
         Operation::Ownership(OwnershipOp::DynamicCheck { .. } | OwnershipOp::DynamicRefresh { .. }) => {
@@ -164,4 +145,42 @@ fn operation(module: &Module, function: FuncId, op: &Operation) -> Result<(), Lo
         _ => {}
     }
     Ok(())
+}
+
+/// The checked synchronous transfer of a packet into the dynamic part of the named
+/// scope: `packet -> scope`, open on normal, the unaccepted packet back on unwind,
+/// no cancellation, every protocol check.
+fn synchronous_transfer(rule: &ProtocolRule) -> bool {
+    rule.transition == ProtocolTransition::Dynamic
+        && rule.from == HolderKind::Packet && rule.to == HolderKind::Scope
+        && rule.normal.holder == HolderKind::Scope
+        && rule.normal.state == HolderState::Open
+        && rule.unwind.as_ref().is_some_and(|post| {
+            post.holder == HolderKind::Packet && post.state == HolderState::Unaccepted
+        })
+        && rule.cancel.is_none()
+        && [ProtocolCheck::Owner, ProtocolCheck::LiveDependencies, ProtocolCheck::Snapshot, ProtocolCheck::Transferable]
+            .iter().all(|check| rule.checks.contains(check))
+}
+
+/// Dynamic sources whose entries the synchronous cleanup automaton can settle: the
+/// storage merge protocol, the `any` cleanup protocol (one transfer each) and the
+/// registered open Closure protocol of the sync callable ABI (#683). Their entries
+/// join the scope inventory in serial order and are released through their runtime
+/// descriptors (`oir.any.cleanup`, `oir.sync_closure.cleanup`).
+pub(super) fn synchronous_dynamic(reason: DynamicReason, protocol: &ProtocolDecl) -> bool {
+    let holders = protocol.holders.iter().all(|holder| matches!(holder, HolderKind::Scope | HolderKind::Packet))
+        && protocol.holders.contains(&HolderKind::Scope)
+        && protocol.holders.contains(&HolderKind::Packet)
+        && protocol.roots.contains(&RootKind::Operands);
+    let transfers: Vec<_> = protocol.rules.iter()
+        .filter(|rule| rule.transition == ProtocolTransition::Dynamic)
+        .collect();
+    let transfer = holders && matches!(transfers.as_slice(), [rule] if synchronous_transfer(rule));
+    match (reason, &protocol.kind) {
+        (DynamicReason::Merge, ProtocolKind::Storage) => transfer,
+        (DynamicReason::Any, ProtocolKind::Any) => transfer && transfers.len() == protocol.rules.len(),
+        (DynamicReason::Closure, ProtocolKind::Closure) => *protocol == crate::catalogue::open_callable_protocol(),
+        _ => false,
+    }
 }

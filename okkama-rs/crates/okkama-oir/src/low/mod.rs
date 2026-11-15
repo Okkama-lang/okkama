@@ -114,3 +114,6 @@ mod direct_tests;
 
 #[cfg(test)]
 mod merge_tests;
+
+#[cfg(test)]
+mod open_tests;

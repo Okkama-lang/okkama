@@ -33,7 +33,9 @@ pub struct CleanupSchedule {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MergeSource {
     /// Complete owner inventory: active static slots, admission, staging, bound journal history
-    /// and entries admitted by checked storage protocols. History survives loss of language uses.
+    /// and entries admitted by checked storage protocols or transferred by the synchronous `any`
+    /// and open Closure protocols (#683), each released through its runtime descriptor.
+    /// History survives loss of language uses.
     ScopeInventory,
     /// Every entry in the consumed packet, preserving its original key, serial and descriptor.
     PacketInventory,
