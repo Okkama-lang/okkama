@@ -18,6 +18,15 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `strings.parse.Number.rat`, `time.rfc3339.Rfc3339.parsed`). The emitter now
   removes unreachable blocks with their closes, plans, envelopes and records
   and renumbers the rest. Low was valid; the loader rules are unchanged.
+- **Single-case Error variants on Champ (#704).** SPB 17 holds an Error
+  enum with one payload case as that case's object, but `variant.tag` and
+  `variant.get` were emitted on it as on a variant (`VARIANT_TAG` in
+  `confirm … else throw`, `xs[i] else v` and case patterns). Its tag is now
+  the constant 0 and its payload read a field read that cannot fail. A
+  failure raised from an owning entry (a closure that throws into its
+  caller's `catch`) now clears the entry's input packet as `ret.own` does,
+  instead of stopping Champ with "owning entry did not consume input". The
+  loader rules are unchanged.
 - **Own never indexes a missing scope state (#672).** A constructor that
   stores a field which carries deps but holds no obligation (a role whose
   implementers are plain, as in `L09.math.aggregates` and `L09.time.zones`)

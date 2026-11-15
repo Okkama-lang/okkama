@@ -448,6 +448,13 @@ fn translate_with(module: &o::Module, id: o::TypeId, table: &Composites) -> Resu
     })
 }
 
+/// Whether an OIR type is an Error variant with exactly one case, which SPB 17 represents as that case's object.
+pub(super) fn single_error_case(module: &o::Module, ty: o::TypeId) -> Result<bool, GenerateError> {
+    let o::Type::Variant(decl) = module.types.get(ty)? else { return Ok(false) };
+    Ok(matches!(&module.declarations.get(*decl)?.kind,
+        o::DeclarationKind::Variant { cases, is_error: true } if cases.len() == 1))
+}
+
 /// The storage index of a variant case payload field.
 pub(crate) fn variant_storage(module: &o::Module, objects: &[s::Object], field: o::FieldRef)
     -> Result<u32, GenerateError>
@@ -902,13 +909,35 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
             C::EnumNe { left, right } => (D::EnumNe, vec![reg(*left), reg(*right)]),
             C::IntDiv { left, right } => (D::RatNew, vec![reg(*left), reg(*right)]),
             C::RatNew { numerator, denominator } => (D::RatNew, vec![reg(*numerator), reg(*denominator)]),
-            C::VariantTag { value } => (D::VariantTag, vec![reg(*value)]),
+            // A single-case Error variant is its case's object in SPB 17 (translate_type): its tag is that
+            // only case, 0. A real SPB variant reads its tag.
+            C::VariantTag { value } => match translate_type(module, body.values.get(*value)?.ty)? {
+                s::Type::Variant(_) => (D::VariantTag, vec![reg(*value)]),
+                s::Type::Object(_) if single_error_case(module, body.values.get(*value)?.ty)? => {
+                    immediate = s::Immediate::Constant(s::Constant::Int("0".into()));
+                    (D::Const, vec![])
+                }
+                _ => return Err(GenerateError("variant.tag of a value that is not a variant".into())),
+            },
             C::VariantOf { value, ty } if matches!(translate_type(module, *ty)?, s::Type::Variant(_)) => {
                 (D::Move, vec![reg(*value)])
             }
             C::VariantGet { value, case, field } => {
-                immediate = s::Immediate::Updates(vec![*case, variant_storage(module, objects, *field)?]);
-                (D::VariantGet, vec![reg(*value)])
+                let storage = variant_storage(module, objects, *field)?;
+                match translate_type(module, body.values.get(*value)?.ty)? {
+                    // The single case of an Error variant is the value's own object: read the field.
+                    s::Type::Object(id) if single_error_case(module, body.values.get(*value)?.ty)? => {
+                        if *case != 0 || field.declaration.as_u32() != id {
+                            return Err(GenerateError("variant.get outside the only Error case".into()));
+                        }
+                        immediate = s::Immediate::Field(storage);
+                        (D::ObjGet, vec![reg(*value)])
+                    }
+                    _ => {
+                        immediate = s::Immediate::Updates(vec![*case, storage]);
+                        (D::VariantGet, vec![reg(*value)])
+                    }
+                }
             }
             C::ValEq { left, right } => (D::ValEq, vec![reg(*left), reg(*right)]),
             C::ValNe { left, right } => (D::ValNe, vec![reg(*left), reg(*right)]),
@@ -1125,6 +1154,8 @@ mod cleanup_tests;
 mod roles_tests;
 #[cfg(test)]
 mod dead_tests;
+#[cfg(test)]
+mod variant_tests;
 
 /// Mandatory semantic gate for executable Low. External contracts come from the caller's backend catalog.
 /// This path cannot be selected by a file flag; external artifacts always pass verify_load independently.
