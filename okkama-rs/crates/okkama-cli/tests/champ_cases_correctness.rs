@@ -200,6 +200,17 @@ fn champ_correctness_nested_try_rethrow() {
     check(&["L07.catch.non-matching-propagates", "L07.rethrow.preserves-identity", "L01.gram.throw.forms"]);
 }
 
+/// Error variants with payloads (#705): their cases are caught by case and by declaration, thrown uncaught
+/// with their error type, and written by `text()` as Tomato writes them.
+#[test]
+fn champ_correctness_error_variants() {
+    check(&[
+        "L07.catch-pattern.cases-and-types",
+        "L07.error-enum.text-escaping",
+        "L07.error-enum.uncaught",
+    ]);
+}
+
 /// Compiles one source file through OIR-2 and runs it in Champ.
 fn run_source(text: &str) -> sparrow_core::CapturedRun {
     let source = SourceFile::new("app.ok", text).unwrap();

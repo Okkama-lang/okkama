@@ -921,12 +921,20 @@ pub(crate) fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, r
     Ok(true)
 }
 
+/// The payload of a failure that a `catch` of `descriptor` takes, or zero: every thrown or native payload
+/// (`u64::MAX`), a payload of that descriptor, or of a case of that multi-case Error variant.
 pub extern "C" fn rt_machine_catch(ctx: *mut Ctx, failure: Word, descriptor: Word) -> Word {
     let runtime = unsafe { &*(*ctx).runtime };
+    let cases = runtime.champ.machine.as_ref().and_then(|machine| machine.source.objects.get(descriptor as usize))
+        .map_or(&[][..], |object| object.variant_cases.as_slice());
     match runtime.failure(failure).map(|failure| &failure.kind) {
-        Some(runtime::FailureKind::Thrown(payload) | runtime::FailureKind::Native(payload))
-            if descriptor == u64::MAX || u64::from(heap::payload(runtime.heap.header_of(*payload))) == descriptor => {
-            *payload
+        Some(runtime::FailureKind::Thrown(payload) | runtime::FailureKind::Native(payload)) => {
+            let actual = heap::payload(runtime.heap.header_of(*payload));
+            if descriptor == u64::MAX || u64::from(actual) == descriptor || cases.contains(&actual) {
+                *payload
+            } else {
+                0
+            }
         }
         _ => 0,
     }

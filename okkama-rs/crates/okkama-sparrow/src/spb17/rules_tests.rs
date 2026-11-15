@@ -28,7 +28,7 @@ pub(super) fn plain_object(error_cases: Vec<String>) -> Object {
         variant_cases: vec![],
         handle: false,
         role: None,
-        implements: vec![], any_box: false,
+        implements: vec![], any_box: false, enum_names: vec![],
         error_cases,
         layout: ObjectRuntimeLayout {
             storage_fields: vec![Type::Int],
@@ -236,6 +236,117 @@ fn catch_loads_into_a_declared_error_object() {
 #[test]
 fn catch_target_object_must_declare_error_cases() {
     reject(&catching(vec![]), &NoExternalContracts, "CATCH_TYPE");
+}
+
+// ---- Error variants: CATCH_TYPE, FAIL_OPERAND and Move Variant -> Error ----
+
+/// Object 0 is a variant of cases 1 and 2: Error cases without payload when `errors`, plain cases otherwise.
+fn error_variant(errors: bool) -> Vec<Object> {
+    let case = |name: &str| Object {
+        name: name.into(),
+        error_cases: if errors { vec![name.into()] } else { vec![] },
+        layout: ObjectRuntimeLayout { storage_fields: vec![], ..plain_object(vec![]).layout },
+        ..plain_object(vec![])
+    };
+    let variant = Object {
+        name: "E".into(), variant_cases: vec![1, 2],
+        layout: ObjectRuntimeLayout { storage_fields: vec![], ..plain_object(vec![]).layout },
+        ..plain_object(vec![])
+    };
+    vec![variant, case("E.one"), case("E.two")]
+}
+
+/// catch of a failure parameter into the variant: Some returns the caught case, None re-raises.
+fn catching_variant(errors: bool) -> Program {
+    let mut f = scalar(1, vec![Type::Failure, Type::Variant(0)], vec![Type::Variant(0)], vec![
+        Instruction::Champ { op: Opcode::Catch,
+            arguments: vec![Argument::Location(Location::Register(0)), Argument::Object(0)],
+            flow: Flow::Outcomes(vec![
+                Outcome { tag: Tag::Some, edge: Edge { target_pc: 1, assignments: vec![Assignment {
+                    destination: Location::Register(1), source: Source::ProducedSlot(0) }] } },
+                Outcome { tag: Tag::None, edge: Edge { target_pc: 2, assignments: vec![] } },
+            ]) },
+        Instruction::Ret(vec![1]),
+        Instruction::Raise(0),
+    ]);
+    f.blocks.push(Block { pc: 1, params: vec![Location::Register(1)] });
+    f.blocks.push(Block { pc: 2, params: vec![] });
+    f.proofs.entry.as_mut().unwrap().failures = 15;
+    refresh(&mut f);
+    Program { objects: error_variant(errors), ..small(f) }
+}
+
+#[test]
+fn catch_loads_into_an_error_variant() {
+    verify_load(&catching_variant(true), &NoExternalContracts).unwrap();
+}
+
+#[test]
+fn catch_target_variant_must_have_error_cases() {
+    reject(&catching_variant(false), &NoExternalContracts, "CATCH_TYPE");
+}
+
+/// A function that throws its variant parameter.
+fn throwing_variant(errors: bool) -> Program {
+    let mut f = scalar(1, vec![Type::Variant(0), Type::Failure], vec![], vec![
+        Instruction::Champ { op: Opcode::Fail,
+            arguments: vec![Argument::Label(0), Argument::Location(Location::Register(0))],
+            flow: Flow::Outcomes(vec![Outcome { tag: Tag::Unwind, edge: Edge { target_pc: 1, assignments: vec![
+                Assignment { destination: Location::Register(1), source: Source::ProducedSlot(0) }] } }]) },
+        Instruction::Raise(1),
+    ]);
+    f.blocks.push(Block { pc: 1, params: vec![Location::Register(1)] });
+    f.proofs.entry.as_mut().unwrap().failures = 15;
+    refresh(&mut f);
+    Program { objects: error_variant(errors), ..small(f) }
+}
+
+#[test]
+fn an_error_variant_is_thrown() {
+    verify_load(&throwing_variant(true), &NoExternalContracts).unwrap();
+}
+
+#[test]
+fn a_plain_variant_is_not_thrown() {
+    reject(&throwing_variant(false), &NoExternalContracts, "FAIL_OPERAND");
+}
+
+#[test]
+fn move_widens_only_an_error_variant_to_error() {
+    let widen = |errors| Program {
+        objects: error_variant(errors),
+        ..small(scalar(1, vec![Type::Variant(0), Type::Error], vec![], vec![
+            data(DataOp::Move, vec![0], 1),
+            Instruction::Ret(vec![]),
+        ]))
+    };
+    verify_load(&widen(true), &NoExternalContracts).unwrap();
+    reject_message(&widen(false), &NoExternalContracts, "SPB_STRUCTURE", "invalid move/succ.take type");
+}
+
+// ---- ENUM_NAMES ----
+
+fn named_enum(cases: u32, names: &[&str]) -> Program {
+    let object = Object {
+        enum_cases: cases, enum_names: names.iter().map(|name| (*name).into()).collect(), ..plain_object(vec![])
+    };
+    Program { objects: vec![object], ..Program::default() }
+}
+
+#[test]
+fn a_plain_enum_names_each_case_or_none() {
+    verify(&named_enum(2, &["E.one", "E.two"])).unwrap();
+    verify(&named_enum(2, &[])).unwrap();
+}
+
+#[test]
+fn enum_names_follow_the_cases_of_a_plain_enum() {
+    assert_eq!(verify(&named_enum(2, &["E.one"])).unwrap_err().rule, "ENUM_NAMES");
+    assert_eq!(verify(&named_enum(1, &["E.one", "E.two"])).unwrap_err().rule, "ENUM_NAMES");
+    // Only a plain enum has case names: an Error enum's cases are its error_cases.
+    let mut error = named_enum(0, &["E.one"]);
+    error.objects[0].error_cases = vec!["E.one".into()];
+    assert_eq!(verify(&error).unwrap_err().rule, "ENUM_NAMES");
 }
 
 // ---- typing of deps.empty, range.len, fail.caused and Move Object -> Error ----
@@ -747,7 +858,7 @@ fn resource_object(name: &str) -> Object {
         variant_cases: vec![],
         handle: false,
         role: None,
-        implements: vec![], any_box: false,
+        implements: vec![], any_box: false, enum_names: vec![],
         error_cases: vec![],
         layout: ObjectRuntimeLayout {
             storage_fields: vec![],

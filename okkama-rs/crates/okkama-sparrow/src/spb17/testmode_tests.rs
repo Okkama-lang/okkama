@@ -106,7 +106,7 @@ fn test_operations_type_their_operands() {
     let mut p = profile(descriptors);
     p.objects.push(Object {
         name: "Empty".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false,
-        role: None, implements: vec![], any_box: false,
+        role: None, implements: vec![], any_box: false, enum_names: vec![],
         fields: vec![],
         layout: ObjectRuntimeLayout {
             storage_fields: vec![], allocation_words: 2, identity_offset: None, has_destroy: false,
@@ -227,7 +227,7 @@ fn object(name: &str, storage: Vec<Type>, destroy: bool, handle: bool) -> Object
     let count = storage.len() as u32;
     Object {
         name: name.into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle, role: None,
-        implements: vec![], any_box: false,
+        implements: vec![], any_box: false, enum_names: vec![],
         fields: (0..count).map(|index| Field { name: format!("f{index}"), storage: index, once: false }).collect(),
         layout: ObjectRuntimeLayout {
             allocation_words: (1 + count + if destroy { 4 } else { 0 }).max(2),

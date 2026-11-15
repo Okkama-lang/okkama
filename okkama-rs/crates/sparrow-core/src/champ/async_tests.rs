@@ -600,7 +600,7 @@ fn destroy() -> s::Function {
 fn res() -> s::Object {
     s::Object {
         name: "Res".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false, role: None,
-        implements: vec![], any_box: false, fields: vec![],
+        implements: vec![], any_box: false, enum_names: vec![], fields: vec![],
         layout: s::ObjectRuntimeLayout { storage_fields: vec![], allocation_words: 5, identity_offset: Some(8),
             has_destroy: true, may_reach_resource: true, may_async_destroy: false, trace_layout: vec![],
             selection_layout: vec![] },

@@ -1415,7 +1415,8 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
             o::TermKind::Catch { failure, ty, handler, next } => {
                 let ty = translate_type(module, *ty)?;
                 let target = match ty {
-                    s::Type::Object(id) => A::Object(id),
+                    // An Error variant is caught by its declaration: any of its cases.
+                    s::Type::Object(id) | s::Type::Variant(id) => A::Object(id),
                     s::Type::Error => A::Flag(true),
                     _ => return Err(error("catch requires a plain Error")),
                 };

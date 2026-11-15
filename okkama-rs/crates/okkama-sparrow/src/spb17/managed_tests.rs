@@ -10,7 +10,7 @@ fn objects() -> Vec<Object> {
             .collect();
         Object {
             name: name.into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false,
-            role: None, implements: vec![], any_box: false,
+            role: None, implements: vec![], any_box: false, enum_names: vec![],
             fields: (0..fields.len() as u32).map(|storage| Field { name: format!("f{storage}"), storage, once: false })
                 .collect(),
             layout: ObjectRuntimeLayout {
@@ -148,7 +148,7 @@ fn selected_identities_never_lose_unproved_elements() {
 fn handle_object() -> Object {
     Object {
         name: "Native".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: true, role: None,
-        implements: vec![], any_box: false,
+        implements: vec![], any_box: false, enum_names: vec![],
         fields: vec![],
         layout: ObjectRuntimeLayout {
             allocation_words: 2, storage_fields: vec![], identity_offset: None, has_destroy: false,
