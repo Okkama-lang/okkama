@@ -39,6 +39,8 @@ pub use pipeline::{compile_linked_tests_with, lower_linked_tests_high};
 mod asynchronous;
 #[cfg(test)]
 mod async_tests;
+#[cfg(test)]
+mod async_resource_tests;
 mod construction;
 mod declarations;
 mod defer;
