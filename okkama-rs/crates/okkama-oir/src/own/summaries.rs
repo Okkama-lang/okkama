@@ -269,7 +269,6 @@ impl Universe {
                 continue;
             }
             budget.work(1)?;
-            futures::check_plain(module, data, types)?;
             let summary = futures::creation_summary(module, data, types, budget)?;
             budget.memory(normal::size(&summary) + 256)?;
             universe.creations.insert(function, universe.nodes.len());

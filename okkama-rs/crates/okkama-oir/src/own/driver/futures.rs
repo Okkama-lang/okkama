@@ -15,6 +15,56 @@ impl Driver<'_, '_> {
         instruction: &Instruction,
         function: FuncId,
     ) -> Result<Landing, OwnError> {
+        let [original] = instruction.results.as_slice() else {
+            return Err(flow_error("async call has exactly one Future result"));
+        };
+        let result = outcome(self.module, self.module.functions.get(function).map_err(arena)?)?;
+        let owner = self.owner_scope(&point)?;
+        let Operation::Call(CallOp::Direct { call: original_call, .. }) = &instruction.op else {
+            return Err(flow_error("Future creation is a direct call of the async entry"));
+        };
+        let originals: Vec<_> = original_call.args.iter().map(|argument| argument.value).collect();
+        let managed: Vec<_> = originals.iter().copied()
+            .filter(|original| self.high.values.get(*original).is_ok_and(|value| self.managed(value.ty))).collect();
+        // OIR-2 §10.1, #587: the creation retains the fresh part of every managed input in the
+        // input packet, which the Future's inputs holder keeps until the first start, and the
+        // Future depends on their external deps (the creation summary). Plain inputs offer
+        // nothing: their empty deps are those of a plain argument, or the external deps of an
+        // empty selection when there is no argument.
+        let deps;
+        let mut packet;
+        if !managed.is_empty() {
+            let (next, offered) = self.offered(point, &originals)?;
+            point = next;
+            let mut parts = vec![];
+            for original in &managed {
+                let value = point.env.value(*original)?.value;
+                parts.push(self.body.selections.alloc(SelectionExpr::Value(value)).map_err(arena)?);
+            }
+            let selection = self.body.selections.alloc(SelectionExpr::Union(parts)).map_err(arena)?;
+            point = self.emit(point, Operation::Ownership(OwnershipOp::Split { packet: offered, selection }))?;
+            let parts = vec![point.result(SlotName::Rest)?, point.result(SlotName::Selected)?];
+            deps = point.result(SlotName::ExternalDeps)?;
+            point = self.emit(point, Operation::Ownership(OwnershipOp::Join { packets: parts }))?;
+            packet = point.result(SlotName::Packet)?;
+        } else {
+            point = self.emit(point, Operation::Ownership(OwnershipOp::Empty {}))?;
+            packet = point.result(SlotName::Packet)?;
+            deps = if let Some(&argument) = originals.first() {
+                let value = point.env.value(argument)?.value;
+                point = self.emit(point, Operation::Ownership(OwnershipOp::Dependencies { value }))?;
+                point.result(SlotName::Value)?
+            } else {
+                let selection = self.body.selections.alloc(SelectionExpr::Union(vec![])).map_err(arena)?;
+                point = self.emit(point, Operation::Ownership(OwnershipOp::Split { packet, selection }))?;
+                let parts = vec![point.result(SlotName::Rest)?, point.result(SlotName::Selected)?];
+                let deps = point.result(SlotName::ExternalDeps)?;
+                point = self.emit(point, Operation::Ownership(OwnershipOp::Join { packets: parts }))?;
+                packet = point.result(SlotName::Packet)?;
+                deps
+            };
+        }
+        // The arguments as the offer left them, as for an owning call.
         let mut op = instruction.op.clone();
         let mut missing = false;
         op.rewrite(&mut Rename { env: &point.env, missing: &mut missing });
@@ -24,29 +74,6 @@ impl Driver<'_, '_> {
         if missing {
             return Err(flow_error("Future creation operand has no reaching SSA definition"));
         }
-        let [original] = instruction.results.as_slice() else {
-            return Err(flow_error("async call has exactly one Future result"));
-        };
-        let result = outcome(self.module, self.module.functions.get(function).map_err(arena)?)?;
-        let owner = self.owner_scope(&point)?;
-        // Plain async (V2): every language argument is plain, so the offered input
-        // packet is empty and the Future has no external deps. R1 brings fresh cold
-        // inputs. The empty deps are those of a plain argument, or the external deps
-        // of an empty selection when there is no argument.
-        point = self.emit(point, Operation::Ownership(OwnershipOp::Empty {}))?;
-        let mut packet = point.result(SlotName::Packet)?;
-        let deps = if let Some(argument) = call.args.first() {
-            point = self.emit(point, Operation::Ownership(OwnershipOp::Dependencies { value: argument.value }))?;
-            point.result(SlotName::Value)?
-        } else {
-            let selection = self.body.selections.alloc(SelectionExpr::Union(vec![])).map_err(arena)?;
-            point = self.emit(point, Operation::Ownership(OwnershipOp::Split { packet, selection }))?;
-            let parts = vec![point.result(SlotName::Rest)?, point.result(SlotName::Selected)?];
-            let deps = point.result(SlotName::ExternalDeps)?;
-            point = self.emit(point, Operation::Ownership(OwnershipOp::Join { packets: parts }))?;
-            packet = point.result(SlotName::Packet)?;
-            deps
-        };
         let environment = FutureEnvironment::Deferred {
             function,
             arguments: call.args.iter().map(|argument| argument.value).collect(),
@@ -73,9 +100,6 @@ impl Driver<'_, '_> {
         let Operation::Async(AsyncOp::Await { future, result }) = instruction.op else {
             return Err(flow_error("expected a shared await"));
         };
-        if let Some(ty) = result && self.analysis.types.get(&ty).is_none_or(TypeClassification::may_own) {
-            return Err(unsupported_async("resource-bearing await outcome: cache-owned results arrive with R1"));
-        }
         let protocol = services_protocol(self.module)?;
         let future = point.env.value(future)?.value;
         point.env.unwind_values = Some(self.unwind_needed(&point));
@@ -87,9 +111,12 @@ impl Driver<'_, '_> {
         self.record_failure(failed, target)?;
         let mut normal = emission.normal;
         normal.env.cleanup.primary_before_failure = None;
-        if let (Some(original), Some(_)) = (instruction.results.first(), result) {
+        // The view of a cached outcome depends on the stable cache service key and the
+        // outcome's external deps, which the await returns (§13.2); it owns nothing.
+        if let (Some(original), Some(ty)) = (instruction.results.first(), result) {
             let value = normal.result(SlotName::Value)?;
-            normal.env.values.insert(*original, LatestValue { value, deps: None });
+            let deps = if self.managed(ty) { Some(normal.result(SlotName::Deps)?) } else { None };
+            normal.env.values.insert(*original, LatestValue { value, deps });
         }
         Ok(normal)
     }

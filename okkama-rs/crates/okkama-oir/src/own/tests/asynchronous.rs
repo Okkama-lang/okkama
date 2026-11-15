@@ -51,6 +51,9 @@ const WITNESSES: &[&str] = &[
     "coro-nested-cold-await",
     "coro-schedule-duty-live-across-await",
     "coro-start-continuation",
+    // Commit 5b (R1): resources across the Future boundary.
+    "r1-cached-outcome",
+    "r1-never-started-close",
 ];
 
 #[test]
@@ -278,4 +281,63 @@ fn await_unwind_requires_the_services_protocol() {
     let error = rewrite_subset(output, &OwnOptions::default()).unwrap_err();
     let OwnError::Diagnostics { diagnostics, .. } = error else { panic!("{error:?}") };
     assert_eq!(diagnostics[0].kind, OwnDiagnosticKind::MissingBoundary);
+}
+
+/// OIR-2 §10.1, #587: the creation of a cold Future retains the fresh part of its managed input. The offered packet
+/// comes out of the creating scope, the creation summary takes the parameter into the Future's cache, and the
+/// environment names the argument as the offer left it.
+#[test]
+fn r1_a_cold_future_retains_its_fresh_input() {
+    let output = rewrite_async(&input("r1-never-started-close")).unwrap();
+    let module = &output.module;
+    let (_, consume) = function(module, "consume");
+    let creation = module.summaries.get(consume.async_creation_summary.unwrap()).unwrap();
+    assert_eq!(creation.parameters[0].convention, FreshConvention::Take);
+    assert_eq!(creation.parameters[0].destination, TransferDestination::Cache);
+    assert_eq!(creation.parameters[0].retention, Some(SummarySelection::Parameter(0)));
+    let (_, main) = function(module, "main");
+    let body = main.body.as_ref().unwrap();
+    let (packet, environment) = body.insts.iter().find_map(|(_, instruction)| match &instruction.op {
+        Operation::Async(AsyncOp::FutureNew { packet, environment, .. }) => Some((*packet, environment.clone())),
+        _ => None,
+    }).unwrap();
+    // The input packet is not an empty packet: it joins what the scope split offered.
+    let Definition::InstResult { inst, .. } = body.values.get(packet).unwrap().def else { panic!("packet") };
+    assert!(matches!(body.insts.get(inst).unwrap().op, Operation::Ownership(OwnershipOp::Join { .. })));
+    let offers = body.blocks.iter().filter(|(_, block)| matches!(&block.term.kind,
+        TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(), Operation::Ownership(OwnershipOp::ScopeSplit { .. }))))
+        .count();
+    assert_eq!(offers, 1, "the fresh Res is offered once, from main's scope");
+    let FutureEnvironment::Deferred { arguments, .. } = environment else { panic!("deferred environment") };
+    let argument = body.values.get(arguments[0]).unwrap();
+    assert!(matches!(argument.def, Definition::BlockParam { .. }), "the argument after the offer's edge");
+}
+
+/// OIR-2 §10.2, elaboration §13.2: a shared await of a resource outcome borrows the cached outcome. It yields the
+/// value and its deps and no packet; the body publishes a fresh result.
+#[test]
+fn r1_a_shared_await_borrows_the_cached_outcome() {
+    let output = rewrite_async(&input("r1-cached-outcome")).unwrap();
+    let module = &output.module;
+    let (_, work) = function(module, "work");
+    let body = module.summaries.get(work.async_body_summary.unwrap()).unwrap();
+    assert!(!body.results[0].fresh.is_empty(), "work's outcome is fresh");
+    let (_, main) = function(module, "main");
+    let main_body = main.body.as_ref().unwrap();
+    let mut awaits = 0;
+    for (_, block) in main_body.blocks.iter() {
+        let TermKind::InvokeOwn { op, normal, .. } = &block.term.kind else { continue };
+        if !matches!(op.as_ref(), Operation::Async(AsyncOp::Await { .. })) {
+            continue;
+        }
+        awaits += 1;
+        let produced: Vec<_> = normal.args.iter().filter_map(|arg| match arg {
+            EdgeArg::Produced(result) => Some(result.slot),
+            EdgeArg::Value(_) => None,
+        }).collect();
+        assert_eq!(produced, [0, 1], "value and deps, no packet");
+        let view = main_body.blocks.get(normal.block).unwrap().params[0];
+        assert!(matches!(main_body.values.get(view).unwrap().facts, ValueFacts::Managed { .. }));
+    }
+    assert_eq!(awaits, 2);
 }

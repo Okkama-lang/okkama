@@ -1,0 +1,90 @@
+oir 2 high
+// OIR-2 §10.2: the Future owns its cached outcome. A fresh Res published by work stays in the cache of f, owned
+// by main's scope: the first await's consumer block ends without destroying it, the second await sees the same
+// live result, and main's close destroys it after the cache settle.
+module r1_cached_outcome
+entry @main
+protocol Services kind services holders [scope, cache, frame, receipt, root] rules [protocol_rule(transition=settle,
+    from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
+    protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root,
+    checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running))]
+object Res {
+    destroy @destroy
+}
+scope SD action in @destroy
+scope SM action in @make
+scope SL action in @label
+scope SW action in @work
+scope S action in @main
+scope SI block in @main parent S
+summary MworkC call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[future<Res>], publication=atomic)
+summary MworkB call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[Res], failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+summary MmainC call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[future<int>], publication=atomic)
+summary MmainB call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+func @destroy(%self: Res) -> void [destroy Res] {
+    ^entry in SD:
+    ret
+}
+func @make() -> Res [ctor Res] {
+    boundary BM lexical in SM
+    ^entry in SM unwind ^failed:
+    %r: Res = obj.new Res { }
+    want %r
+    [iprep0] exit.prepare return %r at BM
+    result.exit edge normal(0), value %r, demand want, prepare iprep0
+    ret %r
+    ^failed(%failure: failure) in SM:
+    raise %failure
+}
+func @label(%self: Res) -> int [method Res] {
+    boundary BL lexical in SL
+    ^entry in SL:
+    %n: int = const 7
+    want %n
+    [iprep1] exit.prepare return %n at BL
+    result.exit edge normal(0), value %n, demand want, prepare iprep1
+    ret %n
+}
+func @work() -> Res [async] async-creation(MworkC) async-body(MworkB) {
+    boundary BW lexical in SW
+    ^entry in SW unwind ^failed:
+    %r: Res = call @make()
+    want %r
+    [iprep2] exit.prepare return %r at BW
+    result.exit edge normal(0), value %r, demand want, prepare iprep2
+    ret %r
+    ^failed(%failure: failure) in SW:
+    raise %failure
+}
+func @main() -> int [entry, async] async-creation(MmainC) async-body(MmainB) {
+    binding b0 "f": future<Res> in S
+    binding b1 "r": Res in SI
+    boundary Bauto lexical in S
+    ^entry in S unwind ^failed:
+    %f: future<Res> = call @work()
+    bind %f, binding b0
+    br ^inner
+    ^inner in SI unwind ^failed:
+    %r: Res = await %f, result Res
+    bind %r, binding b1
+    %n: int = call @label(%r)
+    discard %n
+    result.exit edge normal(0), value %n, demand discard, prepare none
+    br ^after
+    ^after in S unwind ^failed:
+    %again: Res = await %f, result Res
+    %m: int = call @label(%again)
+    want %m
+    [iprep3] exit.prepare return %m at Bauto
+    result.exit edge normal(0), value %m, demand want, prepare iprep3
+    ret %m
+    ^failed(%failure: failure) in S:
+    raise %failure
+}
