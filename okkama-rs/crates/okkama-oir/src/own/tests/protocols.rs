@@ -427,6 +427,30 @@ fn open_calls_require_the_registered_conservative_contract() {
     assert!(format!("{error:?}").contains("registered conservative"), "{error:?}");
 }
 
+// #569 O1 audit: identical protocol declarations are one protocol. The catalogue
+// registers the first; a call naming a later identical one is still canonical.
+#[test]
+fn identical_open_protocol_declarations_are_one_protocol() {
+    let mut module = rewrite(include_str!("protocol-high/closure-open.oir")).module;
+    let first = crate::catalogue::open_callable_protocol_id(&module).unwrap();
+    let second = module.protocols.alloc(crate::catalogue::open_callable_protocol()).unwrap();
+    assert_eq!(crate::catalogue::open_callable_protocol_id(&module), Some(first));
+    let mut renamed = 0;
+    for (_, summary) in module.summaries.iter_mut() {
+        if summary.contract.protocol == Some(first) {
+            summary.contract.protocol = Some(second);
+            renamed += 1;
+        }
+    }
+    assert!(renamed > 0);
+    verify_output(&module);
+    // A different protocol under the same contract stays rejected.
+    let mut other = crate::catalogue::open_callable_protocol();
+    other.roots.clear();
+    *module.protocols.get_mut(second).unwrap() = other;
+    reject(&module, RuleId::B55);
+}
+
 #[test]
 fn the_cleanup_intrinsic_is_not_trusted_by_its_name() {
     let mut module = rewrite(include_str!("protocol-high/closure-open.oir")).module;
@@ -470,6 +494,87 @@ fn open_contract_shape_for_plain_and_resource_signatures() {
     let asynchronous = module.types.intern(Type::Fn(FnType { params: vec![], result: None, is_async: true }))
         .unwrap();
     assert!(crate::catalogue::open_callable_summary(&module, asynchronous, protocol).is_none());
+}
+
+// #569 O1 audit: a result that may alias a bound environment can leave the binding's
+// scope only together with that environment's graph. Own's fall-through selects the
+// result's whole graph; a selection of only its fresh part leaves the environment to
+// the scope's end, and the result outlives what it may alias.
+#[test]
+fn open_result_outliving_a_bound_environment_scope_is_rejected() {
+    let extra = concat!(
+        "scope SL action in @lambda\n",
+        "func @lambda(%captured: R, %x: R) -> R [lambda captures 1] {\n",
+        "    boundary BL lexical in SL\n",
+        "    ^entry in SL unwind ^failed:\n",
+        "    [ip] exit.prepare return %captured at BL\n",
+        "    result.exit edge normal(0), value %captured, demand want, prepare ip\n",
+        "    ret %captured\n",
+        "    ^failed(%failure: failure) in SL:\n",
+        "    raise %failure\n",
+        "}\n",
+        "scope SM action in @mk\n",
+        "func @mk() -> fn(R) -> R {\n",
+        "    boundary BM lexical in SM\n",
+        "    ^entry in SM unwind ^failed:\n",
+        "    %r: R = call @make()\n",
+        "    %c: fn(R) -> R = fn.closure @lambda, [%r], ty fn(R) -> R\n",
+        "    [ip] exit.prepare return %c at BM\n",
+        "    result.exit edge normal(0), value %c, demand want, prepare ip\n",
+        "    ret %c\n",
+        "    ^failed(%failure: failure) in SM:\n",
+        "    raise %failure\n",
+        "}\n",
+        "scope SG action in @g\n",
+        "scope SGI block in @g parent SG\n",
+        "func @g() -> R {\n",
+        "    boundary BG lexical in SG\n",
+        "    boundary BGI lexical in SGI\n",
+        "    binding bc \"c\": fn(R) -> R in SGI\n",
+        "    ^entry in SG unwind ^failed:\n",
+        "    %dict: type = type.of ty fn(R) -> R, descriptor descriptor_contract(managed=runtime,\n",
+        "        retention=owner_graph(0), cleanup=@drop_fn, async_destroy=false, summary=Md)\n",
+        "    br ^inner\n",
+        "    ^inner in SGI unwind ^failed:\n",
+        "    %c: fn(R) -> R = call @mk()\n",
+        "    bind %c, binding bc\n",
+        "    %r: R = call @make()\n",
+        "    %result: R = fn.call %c(consume %r) summary(Mopen)\n",
+        "    [ipass] exit.prepare fallthrough %result at BGI\n",
+        "    result.exit edge normal(0), value %result, demand want, prepare ipass\n",
+        "    br ^after(%result)\n",
+        "    ^after(%out: R) in SG unwind ^failed:\n",
+        "    [ip] exit.prepare return %out at BG\n",
+        "    result.exit edge normal(0), value %out, demand want, prepare ip\n",
+        "    ret %out\n",
+        "    ^failed(%failure: failure) in SG:\n",
+        "    raise %failure\n",
+        "}\n",
+    );
+    let source = format!("{}{extra}", include_str!("protocol-high/closure-open.oir"));
+    let mut module = rewrite(&source).module;
+    verify_output(&module);
+    let (_, function) = module.functions.iter_mut().find(|(_, function)| function.symbol == "g").unwrap();
+    let body = function.body.as_mut().unwrap();
+    let root = body.blocks.get(body.entry).unwrap().lexical_scope;
+    let inner: Vec<_> = body.blocks.iter().filter(|(_, block)| block.lexical_scope != root).filter_map(|(id, block)| {
+        let TermKind::InvokeOwn { op, .. } = &block.term.kind else { return None };
+        let Operation::Ownership(OwnershipOp::ScopeSplit { selection, .. }) = op.as_ref() else { return None };
+        matches!(body.selections.get(*selection), Ok(SelectionExpr::Value(_))).then_some(id)
+    }).collect();
+    let [fallthrough] = inner[..] else { panic!("{inner:?}") };
+    let TermKind::InvokeOwn { op, .. } = &body.blocks.get(fallthrough).unwrap().term.kind else { panic!() };
+    let Operation::Ownership(OwnershipOp::ScopeSplit { selection, .. }) = op.as_ref() else { panic!() };
+    let fresh = body.selections.alloc(SelectionExpr::Admissible(*selection)).unwrap();
+    let term = &mut body.blocks.get_mut(fallthrough).unwrap().term.kind;
+    let TermKind::InvokeOwn { op, .. } = term else { panic!() };
+    let Operation::Ownership(OwnershipOp::ScopeSplit { selection, .. }) = op.as_mut() else { panic!() };
+    *selection = fresh;
+    let trusted = runtime_contract(&module, Profile::Own);
+    let report = verify_with(&module, &VerifyOptions::default(), context(&trusted)).unwrap_err();
+    assert!(report.diagnostics.iter().all(|diagnostic| diagnostic.rule == RuleId::B31
+        && diagnostic.message.contains("stable dependency has been closed")), "{report:?}");
+    reject(&module, RuleId::B31);
 }
 
 // #569 O1: the environment is borrowed, so a fresh temporary callable ends at the

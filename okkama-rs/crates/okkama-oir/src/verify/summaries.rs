@@ -301,13 +301,20 @@ fn open_invocation(module: &Module, body: &Body, op: &Operation, summary: &Summa
     let Ok(callable) = body.values.get(callee.value).map(|value| value.ty) else {
         return;
     };
-    let registered = state.context.external_contracts.open_callable(callable);
-    let canonical = contract.protocol
-        .filter(|id| module.protocols.get(*id).is_ok_and(|protocol| {
-            *protocol == crate::catalogue::open_callable_protocol()
-        }))
-        .and_then(|id| crate::catalogue::open_callable_summary(module, callable, id));
-    if registered.as_ref() != Some(summary) || canonical.as_ref() != Some(summary) {
+    let exact = |id: &ProtocolId| module.protocols.get(*id).is_ok_and(|protocol| {
+        *protocol == crate::catalogue::open_callable_protocol()
+    });
+    let protocol = contract.protocol.filter(exact);
+    // Identical protocol declarations are one protocol: the registered entry may
+    // name the first of them and the call another one.
+    let registered = state.context.external_contracts.open_callable(callable)
+        .filter(|registered| registered.contract.protocol.as_ref().is_some_and(exact))
+        .map(|mut registered| {
+            registered.contract.protocol = protocol;
+            registered
+        });
+    let canonical = protocol.and_then(|id| crate::catalogue::open_callable_summary(module, callable, id));
+    if protocol.is_none() || registered.as_ref() != Some(summary) || canonical.as_ref() != Some(summary) {
         state.error(R::B55, "open invocation requires the registered conservative open-callable contract");
     }
 }

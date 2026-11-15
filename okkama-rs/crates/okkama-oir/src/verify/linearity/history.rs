@@ -638,6 +638,53 @@ func @f() -> void {
         rules
     }
 
+    // #569 O1 audit: a retired opaque fresh family is inside a graph only when the
+    // graph names the retired view and carries the result's own labels.
+    #[test]
+    fn retired_fresh_family_needs_the_result_labels() {
+        let module = module();
+        with_state(&module, |state| {
+            let module = state.module;
+            let function = FuncId::from_u32(0);
+            let declaration = module.functions.get(function).unwrap();
+            let body = declaration.body.as_ref().unwrap();
+            let managed = managed_types(module, state);
+            let engine = Engine {
+                module, function, declaration, body, state, emit: true,
+                reported: BTreeSet::new(), managed: &managed, flow_memory: 0,
+                materialized_scopes: None, witnesses: witnesses(module, body),
+                diagnose: true, collecting: false, capture_returns: false, contract_invalid: false,
+                defer_stack: vec![function], defer_outputs: vec![], defer_cache: Default::default(),
+            };
+            let value = ValueId::from_u32;
+            let labels = |values: &[u32]| -> SharedSet<ValueId> { values.iter().map(|v| value(*v)).collect() };
+            let piece = |key: Origin, recorded: &[u32]| {
+                let mut piece = Piece::new(Origin::RetiredInstruction(InstId::from_u32(1), 0),
+                    AdmissionProvenance::UnboundResult);
+                piece.family = true;
+                piece.predicates.insert(Filter {
+                    keys: BTreeSet::from([key]), fresh: false, possible: BTreeSet::new(),
+                    labels: labels(recorded), stale: false, whole_future: false, state: 0,
+                }, true);
+                piece
+            };
+            let retired = Origin::RetiredViewInstruction(InstId::from_u32(1), 0);
+            let graph = BTreeSet::from([retired, Origin::External(value(3))]);
+            // The old result (label 1) and a graph that also contains it accept.
+            assert!(engine.subset(&piece(retired, &[1]), &graph, &labels(&[1])));
+            assert!(engine.subset(&piece(retired, &[1]), &graph, &labels(&[1, 2, 3])));
+            // Another incarnation (label 2), or only the aliased inputs (label 3).
+            assert!(!engine.subset(&piece(retired, &[1]), &graph, &labels(&[2])));
+            assert!(!engine.subset(&piece(retired, &[1]), &graph, &labels(&[3])));
+            // Labels lost on the way identify no incarnation at all.
+            assert!(!engine.subset(&piece(retired, &[]), &graph, &labels(&[1, 2, 3])));
+            assert!(!engine.subset(&piece(retired, &[1]), &BTreeSet::new(), &labels(&[1])));
+            // A current key names exactly one incarnation: labels are irrelevant.
+            let view = Origin::ViewInstruction(InstId::from_u32(1), 0);
+            assert!(engine.subset(&piece(view, &[]), &BTreeSet::from([view]), &labels(&[])));
+        });
+    }
+
     #[test]
     fn boundary_future_includes_unwind_dag_leaves_and_redefinitions() {
         let mut module = module();
