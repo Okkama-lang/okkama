@@ -62,18 +62,23 @@ fn kind(f: &Function, location: Location) -> Option<ServiceKind> {
     }
 }
 
+/// A fixed root (#667): the program's entry or one of its tests. Nothing calls it, so nothing offers it inputs.
+pub(crate) fn fixed_root(p: &Program, function: u32) -> bool {
+    p.entry == Some(function) || p.tests.iter().flatten().any(|test| test.function == function)
+}
+
 /// verify(): every frame layout is well formed and belongs to exactly one async body.
 pub(crate) fn check_layouts(p: &Program) -> Check {
-    let mut owners = vec![0usize; p.tables.frames.len()];
-    for f in &p.functions {
+    let mut owners = vec![Vec::new(); p.tables.frames.len()];
+    for (index, f) in p.functions.iter().enumerate() {
         if let EntryAbi::AsyncBody { layout } = f.entry_abi {
             let owner = owners.get_mut(layout as usize).ok_or_else(|| error("frame layout index out of range"))?;
-            *owner += 1;
+            owner.push(index as u32);
         }
     }
-    enforce(owners.iter().all(|&owners| owners == 1), ASYNC_ENTRY,
+    enforce(owners.iter().all(|owners| owners.len() == 1), ASYNC_ENTRY,
         "a frame layout belongs to exactly one async body")?;
-    for layout in &p.tables.frames {
+    for (layout, owners) in p.tables.frames.iter().zip(&owners) {
         for slot in &layout.slots {
             match slot.ty {
                 ProducedType::Value(ty) => {
@@ -103,10 +108,17 @@ pub(crate) fn check_layouts(p: &Program) -> Check {
             }
         }
         let inputs = layout.saved_types(0).ok_or_else(|| error("invalid start slots"))?;
+        if fixed_root(p, owners[0]) {
+            // The root driver writes nothing into continuation 0 (draft 3 §3).
+            enforce(inputs.is_empty(), ASYNC_ENTRY, "a fixed root starts without inputs and without a packet")?;
+            continue;
+        }
+        // The deps of borrowed inputs (a Future argument's, for one) are zero-word proof inputs after them.
         let values = inputs.iter().take_while(|ty| matches!(ty, ProducedType::Value(_))).count();
+        let deps = inputs[values..].iter().take_while(|ty| **ty == ProducedType::Service(ServiceKind::Deps)).count();
         let packet = inputs.last() == Some(&ProducedType::Service(ServiceKind::Packet));
-        enforce(packet && values + 1 == inputs.len(), ASYNC_ENTRY,
-            "the start holds the language inputs, then exactly one input packet")?;
+        enforce(packet && values + deps + 1 == inputs.len(), ASYNC_ENTRY,
+            "the start holds the language inputs, their deps, then exactly one input packet")?;
     }
     Ok(())
 }

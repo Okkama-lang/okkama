@@ -5,13 +5,18 @@ oir 2 own
 module own_loose_cache_state
 protocol Services kind services
 scope S action in @f
-summary M0 internal contract call_contract(failures=[thrown, program, panic, native], suspends=true,
+summary M0 internal contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true,
     publication=atomic)
 func @f(%cache: cache-state) -> void [async] summary(M0) {
     service.schedule Schedule0 owner S, protocol Services, duties [%cache]
 ^entry in S:
     %q: scope<S> = scope.begin S
-    %closed: closed = scope.end %q, effects scope_effects(failures=[thrown, program, panic, native], suspends=true,
-        cancel=false)
+    invoke.own scope.end %q, effects scope_effects(failures=[thrown, program, panic, native], suspends=true,
+        cancel=true)
+        normal ^d18_closed($closed)
+        unwind ^d18_cancelled($closed, $failure)
+^d18_closed(%closed: closed) in S:
     ret
+^d18_cancelled(%d18_closed2: closed, %d18_cancel: failure) in S:
+    raise %d18_cancel
 }

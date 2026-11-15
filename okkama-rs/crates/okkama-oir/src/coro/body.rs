@@ -355,6 +355,16 @@ impl Lowering<'_, '_> {
                         EdgeArg::Value(value) => forwarded.push(*value),
                     }
                 }
+                // #715: a target parameter's dependency names the target's own parameters, which the landing
+                // does not see; its landing parameter depends on the values that the landing forwards for them.
+                let substitution: BTreeMap<_, _> = target_params.iter().copied().zip(forwarded.iter().copied())
+                    .collect();
+                for &param in &params {
+                    if let ValueFacts::Managed { deps } = self.body.values.get(param)?.facts {
+                        let deps = self.substituted_deps(deps, &substitution)?;
+                        self.body.values.get_mut(param)?.facts = ValueFacts::Managed { deps };
+                    }
+                }
                 let data = self.body.blocks.get_mut(landing)?;
                 data.params = params;
                 data.term.kind = TermKind::Br(Target { block: target, args: forwarded });
@@ -364,6 +374,87 @@ impl Lowering<'_, '_> {
             self.body.blocks.get_mut(block)?.term.kind = term;
         }
         Ok(())
+    }
+
+    /// The dependency `deps` with every value of `substitution` replaced. An expression that names none of
+    /// them is shared; a changed one is a new expression.
+    fn substituted_deps(&mut self, deps: DepExprId, substitution: &BTreeMap<ValueId, ValueId>)
+        -> Result<DepExprId, CoroError> {
+        self.budget.step(1)?;
+        let swap = |value: ValueId| substitution.get(&value).copied().unwrap_or(value);
+        let expression = self.body.deps.get(deps)?.clone();
+        let changed = match &expression {
+            DepExpr::Empty => return Ok(deps),
+            DepExpr::Key(key) => DepExpr::Key(self.substituted_key(*key, substitution)?),
+            DepExpr::Union(parts) => {
+                let mut substituted = Vec::with_capacity(parts.len());
+                for part in parts {
+                    substituted.push(self.substituted_deps(*part, substitution)?);
+                }
+                DepExpr::Union(substituted)
+            }
+            DepExpr::FromSsa(value) => DepExpr::FromSsa(swap(*value)),
+            DepExpr::Retention { value, selection } => DepExpr::Retention {
+                value: swap(*value),
+                selection: self.substituted_selection(*selection, substitution)?,
+            },
+        };
+        if changed == expression {
+            return Ok(deps);
+        }
+        Ok(self.body.deps.alloc(changed)?)
+    }
+
+    fn substituted_selection(&mut self, selection: SelectionId, substitution: &BTreeMap<ValueId, ValueId>)
+        -> Result<SelectionId, CoroError> {
+        self.budget.step(1)?;
+        let swap = |value: ValueId| substitution.get(&value).copied().unwrap_or(value);
+        let expression = self.body.selections.get(selection)?.clone();
+        let changed = match &expression {
+            SelectionExpr::Value(value) => SelectionExpr::Value(swap(*value)),
+            SelectionExpr::OwnerGraph(value) => SelectionExpr::OwnerGraph(swap(*value)),
+            SelectionExpr::ViewOwner(value) => SelectionExpr::ViewOwner(swap(*value)),
+            SelectionExpr::Descriptor { descriptor, value } => {
+                SelectionExpr::Descriptor { descriptor: swap(*descriptor), value: swap(*value) }
+            }
+            SelectionExpr::Projection(projection) => SelectionExpr::Projection(match projection {
+                Projection::Field { value, field } => Projection::Field { value: swap(*value), field: *field },
+                Projection::Index { value, index } => Projection::Index { value: swap(*value), index: swap(*index) },
+                Projection::Slice { value, start, end } => {
+                    Projection::Slice { value: swap(*value), start: swap(*start), end: swap(*end) }
+                }
+                Projection::Map { value, keys } => Projection::Map { value: swap(*value), keys: swap(*keys) },
+            }),
+            SelectionExpr::Admissible(inner) => {
+                SelectionExpr::Admissible(self.substituted_selection(*inner, substitution)?)
+            }
+            SelectionExpr::Union(parts) => {
+                let mut substituted = Vec::with_capacity(parts.len());
+                for part in parts {
+                    substituted.push(self.substituted_selection(*part, substitution)?);
+                }
+                SelectionExpr::Union(substituted)
+            }
+        };
+        if changed == expression {
+            return Ok(selection);
+        }
+        Ok(self.body.selections.alloc(changed)?)
+    }
+
+    fn substituted_key(&mut self, key: KeyExprId, substitution: &BTreeMap<ValueId, ValueId>)
+        -> Result<KeyExprId, CoroError> {
+        let swap = |value: ValueId| substitution.get(&value).copied().unwrap_or(value);
+        let expression = self.body.keys.get(key)?.clone();
+        let changed = match &expression {
+            KeyExpr::Created { site, instance } => KeyExpr::Created { site: *site, instance: swap(*instance) },
+            KeyExpr::ServiceOf { value, kind } => KeyExpr::ServiceOf { value: swap(*value), kind: *kind },
+            KeyExpr::Runtime(value) => KeyExpr::Runtime(swap(*value)),
+        };
+        if changed == expression {
+            return Ok(key);
+        }
+        Ok(self.body.keys.alloc(changed)?)
     }
 
     /// C-2: the body takes its frame and restores the receiver, the arguments, the descriptors and the

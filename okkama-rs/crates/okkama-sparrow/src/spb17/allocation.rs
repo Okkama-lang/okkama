@@ -46,7 +46,8 @@ pub(crate) fn direct_uses(f: &Function, pc: usize) -> Set {
                         let selection = f.proofs.plans[id as usize].selection;
                         used.extend(&f.proofs.selections[selection as usize].locations);
                     }
-                    Argument::Schedule(id) => used.extend(&f.proofs.schedules[id as usize].services),
+                    // A nonempty schedule is settled duty by duty, each duty an explicit operand (SPB_SCHEDULE);
+                    // its list is proof data and keeps no settled duty alive.
                     _ => {}
                 }
             }

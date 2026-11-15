@@ -7,6 +7,7 @@ use cranelift_codegen::ir::StackSlot;
 
 mod roots;
 use roots::Frame;
+mod futures;
 
 pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error> {
     if runtime.invocations[index].code != 0 {
@@ -16,8 +17,14 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
     let program = machine.source.clone();
     let source = &program.functions[index];
     let frame = Frame::new(source)?;
-    let owned = source.entry_abi != s::EntryAbi::Observation;
-    let params = if owned { 3 } else {
+    // An async body takes the context and its frame (draft 3 §13); owning entries take CallOwn.
+    let asynchronous = matches!(source.entry_abi, s::EntryAbi::AsyncBody { .. });
+    let owned = source.entry_abi != s::EntryAbi::Observation && !asynchronous;
+    let params = if asynchronous {
+        1
+    } else if owned {
+        3
+    } else {
         source.params.iter().filter(|location| matches!(location, L::Register(_))).count()
     };
     let signature = runtime.jit.signature(params);
@@ -35,6 +42,7 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
         let ctx = builder.block_params(entry)[0];
         let zero = builder.ins().iconst(types::I64, 0);
         let io = if owned { builder.block_params(entry)[1] } else { zero };
+        let body = if asynchronous { builder.block_params(entry)[1] } else { zero };
         let scope_base = frame.bytes;
         let bytes = scope_base + program.tables.scopes.len() * 16;
         if bytes as u64 > MAX_FRAME / 2 {
@@ -55,7 +63,8 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
         let fuel = runtime.budget.fuel.address();
         let mut emit = Emit {
             builder: &mut builder, jit: &mut runtime.jit, program: &program, source, index, invocations,
-            ctx, io, storage, frame: &frame, scope_base, post, blocks, stop, pc: None, polled, fuel,
+            ctx, io, owned, body, frame_map: machine.frames[index].as_ref(), schedules: &machine.schedules[index],
+            storage, frame: &frame, scope_base, post, blocks, stop, pc: None, polled, fuel,
             plans: &machine.plans[index], selections: &machine.selections[index], entries: &machine.entries,
             shielded_entries: &machine.shielded_entries,
             constants: &mut runtime.constants, heap: &mut runtime.heap,
@@ -85,7 +94,7 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
         let limit = emit.load(ctx, std::mem::offset_of!(Ctx, stack_limit));
         let low = emit.builder.ins().icmp(IntCC::UnsignedLessThan, sp, limit);
         let overflow = emit.builder.create_block();
-        let start = if source.code.is_empty() { emit.builder.create_block() } else { emit.blocks[0] };
+        let start = if source.code.is_empty() || asynchronous { emit.builder.create_block() } else { emit.blocks[0] };
         emit.builder.ins().brif(low, overflow, &[], start, &[]);
         emit.builder.switch_to_block(overflow);
         let cleanup = emit.call("champ_machine_cleanup_mode", &[ctx]).unwrap();
@@ -96,7 +105,11 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
         emit.call("champ_machine_fatal_stack", &[ctx]);
         emit.builder.ins().jump(stop, &[]);
         emit.builder.switch_to_block(reject);
-        if owned {
+        if asynchronous {
+            // The body closes its inputs and publishes the overflow; its Future is settled either way.
+            emit.call("champ_body_reject", &[ctx, body]);
+            emit.builder.ins().return_(&[zero]);
+        } else if owned {
             let ordinal = emit.call("champ_entry_reject", &[ctx, io]).unwrap();
             emit.builder.ins().return_(&[ordinal]);
         } else {
@@ -114,6 +127,10 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
             let result = emit.call("champ_machine_external", &[ctx, function, io, argv, argc]).unwrap();
             emit.builder.ins().return_(&[result]);
         } else {
+            if asynchronous {
+                emit.builder.switch_to_block(start);
+                emit.resume_dispatch();
+            }
             for (pc, instruction) in source.code.iter().enumerate() {
                 emit.pc = Some(pc);
                 emit.builder.switch_to_block(emit.blocks[pc]);
@@ -175,6 +192,14 @@ struct Emit<'a, 'b> {
     invocations: *const runtime::Invocation,
     ctx: Value,
     io: Value,
+    /// An owning entry (CallOwn in `io`); false for observations and async bodies.
+    owned: bool,
+    /// An async body's frame word, or zero. The frame is rooted by `Runtime::running` while its body runs.
+    body: Value,
+    /// An async body's frame map (draft 3 §2).
+    frame_map: Option<&'a c::FrameMap>,
+    /// Runtime ids of this function's D16 schedules.
+    schedules: &'a [u64],
     storage: StackSlot,
     frame: &'a Frame,
     scope_base: usize,
@@ -505,7 +530,7 @@ impl Emit<'_, '_> {
                 self.store(self.ctx, std::mem::offset_of!(Ctx, failure), failure);
                 let failed = self.iconst(FAILED);
                 self.store(self.ctx, std::mem::offset_of!(Ctx, status), failed);
-                if self.source.entry_abi != s::EntryAbi::Observation {
+                if self.owned {
                     let post = self.load(self.io, 16);
                     let zero = self.iconst(0);
                     self.store(post, 0, zero);
@@ -950,6 +975,11 @@ impl Emit<'_, '_> {
                 };
                 let destination = if let Some(scope) = scope {
                     self.scope_pointer(scope)
+                } else if self.frame_map.is_some() {
+                    // An async body returns into its Future's cache (ABI C-2).
+                    let destination = self.record(&[zero, zero]);
+                    self.checked("champ_machine_future_destination", &[ctx, self.body, destination]);
+                    destination
                 } else {
                     let destination = self.record(&[zero, zero]);
                     self.checked("champ_machine_destination", &[ctx, zero, destination]);
@@ -979,13 +1009,13 @@ impl Emit<'_, '_> {
                     else { [zero, source, pending, failure, zero] };
                 args.push(self.record(&inputs));
             }
-            // Async bodies, Futures and duty settles arrive with the Champ runtime and JIT (#601 V8, V9).
+            // Futures, suspension brackets and duty settles (#601 V9, `futures.rs`).
             O::FutureNew | O::Await | O::FuturePublish | O::FutureCancel | O::FutureDone | O::FutureCancelled
                 | O::FrameSave | O::FrameResume | O::AwaitUnwind | O::CleanupDeliverCancel => {
-                return Err(Error(format!("Champ JIT: {} is not supported yet (#601)", op.name())));
+                return self.future_operation(op, arguments, &locations, flow);
             }
             O::CleanupSettle if locations.len() > 1 => {
-                return Err(Error("Champ JIT: a nonempty cleanup.settle is not supported yet (#601)".into()));
+                return self.future_operation(op, arguments, &locations, flow);
             }
             O::CleanupSettle => {
                 helper = "champ_cleanup_settle_empty";
@@ -1133,7 +1163,7 @@ impl Emit<'_, '_> {
                 }
             }
         }
-        if op == O::OwnAccept && self.source.entry_abi != s::EntryAbi::Observation {
+        if op == O::OwnAccept && self.owned {
             self.store(self.io, 0, zero);
         }
         self.flow(op, flow, arguments, ordinal, helper)

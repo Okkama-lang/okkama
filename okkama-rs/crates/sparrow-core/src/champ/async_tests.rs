@@ -1,11 +1,12 @@
-//! #601 V8: the Champ runtime for plain await on assembled SPB 17 (Champ draft 3 §§2–7, plan §3.6).
+//! #601 V8 and V9: the Champ runtime and the JIT for plain await on assembled SPB 17 (Champ draft 3 §§2–7, 13;
+//! plan §§3.6–3.7).
 //!
-//! Async bodies are compiled by V9. Until then a reference body runs each async body's SPB code with the
-//! helpers the JIT calls, under draft 3 §3 and ABI D20 §2.2: resume dispatch on RESUME, continuation 0 read
-//! and cleared at the start, the saved and operand slots stored at PENDING with RESUME = k, reloaded and
-//! cleared at resume, and the step re-invoked. Everything a body touches outside its activation goes through
-//! the runtime under test; the reference body keeps its locations rooted across every helper call, as a stack
-//! map does.
+//! Every scenario runs its async bodies twice: compiled by the JIT, and by a reference body that runs the same
+//! SPB code with the same helpers under draft 3 §3 and ABI D20 §2.2 (resume dispatch on RESUME, continuation 0
+//! read and cleared at the start, the saved and operand slots stored at PENDING with RESUME = k, reloaded and
+//! cleared at resume, the step re-invoked). The reference body keeps its locations rooted across every helper
+//! call, as a stack map does. The two engines must give the same trace, with the collector idle and with a
+//! collection at every safepoint.
 //!
 //! Expectations come from draft 3 and Tomato: the counters of draft 2 §7.2 with a plain outcome, Tomato's
 //! FIFO wakes and its deadlock report.
@@ -31,8 +32,11 @@ const TWICE: u32 = 5;
 const LAZY: u32 = 6;
 const MAIN_FAILS: u32 = 7;
 const CONSUME: u32 = 8;
-const DESTROY: u32 = 9;
-const ASYNC_FUNCTIONS: u32 = 9;
+const NESTED: u32 = 9;
+const DESTROY: u32 = 10;
+const ASYNC_FUNCTIONS: u32 = 10;
+/// The lexical scope `nested` begins after its first suspension, a child of `nested`'s own scope.
+const INNER: u32 = 10;
 
 // --- SPB 17 programs ------------------------------------------------------------------------------------------
 
@@ -532,6 +536,55 @@ fn consume() -> (s::Function, s::FrameLayout) {
     (b.finish(), layout)
 }
 
+/// `async nested(g1: Future<int>, g2: Future<int>) is int { await g1; { return await g2; } }`: the inner scope
+/// begins after the first suspension, so its parent owner comes from the scope area that resume reloads, and it
+/// is open across the second.
+fn nested() -> (s::Function, s::FrameLayout) {
+    // 0 g1, 1 g2, 2 inputs, 3 the outer state, 4 the inner state, 5–7 the unwind.
+    let slots = vec![value(FUTURE_INT), value(FUTURE_INT), service(K::Packet), service(K::ScopeState),
+        service(K::ScopeState), value(s::Type::Failure), service(K::TaskState), service(K::Receipt)];
+    let (mut b, frame) = Body::asynchronous("nested", NESTED, vec![s::Type::Int]);
+    let (body, inputs) = b.resume(frame, 0, &types(&slots, &[0, 1, 2]));
+    let q0 = b.emit(O::ScopeBegin, vec![A::Scope(NESTED), A::Boundary(NESTED)], K::ScopeState);
+    let q1 = b.emit(O::OwnAccept, vec![l(q0), l(inputs[2])], K::ScopeState);
+    let first = b.save(body, 1, &[q1, inputs[1]]);
+    b.outcomes(O::Await, vec![l(inputs[0])], vec![(Tag::Normal, "ok1", vec![p(0), p(1)]),
+        (Tag::Unwind, "bad1", vec![p(0), p(1), p(2)])]);
+    let [x, x_deps] = [b.register(s::Type::Int), b.service(K::Deps)];
+    b.block("ok1", &[x, x_deps]);
+    let (body_first, resumed) = b.resume(first, 1, &types(&slots, &[3, 1]));
+    let i0 = b.emit(O::ScopeBegin, vec![A::Scope(INNER), A::Boundary(INNER)], K::ScopeState);
+    let second = b.save(body_first, 2, &[i0, resumed[0]]);
+    b.outcomes(O::Await, vec![l(resumed[1])], vec![(Tag::Normal, "ok2", vec![p(0), p(1)]),
+        (Tag::Unwind, "bad2", vec![p(0), p(1), p(2)])]);
+    let [y, y_deps] = [b.register(s::Type::Int), b.service(K::Deps)];
+    b.block("ok2", &[y, y_deps]);
+    let (body_second, resumed) = b.resume(second, 2, &types(&slots, &[4, 3]));
+    let finished = b.close(resumed[0], None, None, INNER, &[], false);
+    let closed = b.service(K::Closed);
+    b.dispatch(finished, [false, false, false], vec![(Tag::Success, "inner_closed", vec![p(0)])]);
+    b.block("inner_closed", &[closed]);
+    b.return_value(body_second, resumed[1], NESTED, Some(y), &[], "done");
+    let unwind = [b.register(s::Type::Failure), b.service(K::TaskState), b.service(K::Receipt)];
+    b.block("bad2", &unwind);
+    let (body_bad, resumed) = b.resume(second, 2, &types(&slots, &[4, 3]));
+    let (body_adapted, after, adapted, kept) =
+        b.adapter(body_bad, 4, resumed[0], unwind, &[resumed[1]], &types(&slots, &[3]));
+    let finished = b.close(after, None, Some(adapted), INNER, &[], false);
+    let [closed, combined] = [b.service(K::Closed), b.register(s::Type::Failure)];
+    b.dispatch(finished, [false, true, false], vec![(Tag::Failure, "inner_failed", vec![p(0), p(1)])]);
+    b.block("inner_failed", &[closed, combined]);
+    b.fail_close(body_adapted, kept[0], combined, NESTED, &[], "failed2");
+    let unwind = [b.register(s::Type::Failure), b.service(K::TaskState), b.service(K::Receipt)];
+    b.block("bad1", &unwind);
+    let (body_bad, resumed) = b.resume(first, 1, &types(&slots, &[3, 1]));
+    let (body_adapted, after, adapted, _) = b.adapter(body_bad, 3, resumed[0], unwind, &[], &[]);
+    b.fail_close(body_adapted, after, adapted, NESTED, &[], "failed");
+    let layout = b.layout(slots, vec![(vec![0, 1, 2], vec![]), (vec![3, 1], vec![0]), (vec![4, 3], vec![1]),
+        (vec![], vec![3, 5, 6, 7]), (vec![3], vec![4, 5, 6, 7])]);
+    (b.finish(), layout)
+}
+
 /// The destroy entry of `Res`.
 fn destroy() -> s::Function {
     let mut b = Body::new("destroy", s::EntryAbi::Observation, vec![]);
@@ -559,7 +612,7 @@ fn program() -> s::Program {
     let mut frames = Vec::new();
     for (function, layout) in [work(), fails(), awaits_parameter("chain", CHAIN, true),
         awaits_parameter("watch", WATCH, false), awaits_created("main", MAIN, WORK), twice(), lazy(),
-        awaits_created("main_fails", MAIN_FAILS, FAILS), consume()]
+        awaits_created("main_fails", MAIN_FAILS, FAILS), consume(), nested()]
     {
         functions.push(function);
         frames.push(layout);
@@ -571,8 +624,9 @@ fn program() -> s::Program {
         functions,
         tables: s::ChampTables {
             scopes: (0..ASYNC_FUNCTIONS).map(|index| s::Scope { function: index, parent: None, boundary: index })
+                .chain([s::Scope { function: NESTED, parent: Some(NESTED), boundary: INNER }])
                 .collect(),
-            boundaries: (0..ASYNC_FUNCTIONS).map(|scope| s::Boundary { scope }).collect(),
+            boundaries: (0..=INNER).map(|scope| s::Boundary { scope }).collect(),
             frames,
             future_results: vec![Some(s::Type::Int), None],
             ..s::ChampTables::default()
@@ -581,18 +635,66 @@ fn program() -> s::Program {
     }
 }
 
-/// The program, through its text form, on a Champ runtime whose async bodies run the reference body.
-fn load(stress: bool) -> Box<Runtime> {
+/// Who runs the async bodies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Engine {
+    /// The Champ JIT (V9).
+    Jit,
+    /// The reference body below, the oracle.
+    Reference,
+}
+
+/// Each engine, with the collector idle and with a collection at every safepoint.
+fn configurations() -> impl Iterator<Item = (bool, Engine)> {
+    [false, true].into_iter().flat_map(|stress| [Engine::Jit, Engine::Reference].map(|engine| (stress, engine)))
+}
+
+/// The program, through its text form, on a Champ runtime whose async bodies `engine` runs.
+fn load(stress: bool, engine: Engine) -> Box<Runtime> {
     let built = program();
     s::verify_load(&built, &s::NoExternalContracts).unwrap();
     let assembled = s::assemble(&s::disassemble(&built).unwrap()).unwrap();
     assert_eq!(assembled, built);
     let mut runtime = Runtime::new_champ(assembled, Vec::new()).unwrap();
     runtime.heap.set_stress(stress);
-    for function in 0..ASYNC_FUNCTIONS as usize {
-        runtime.invocations[function].code = reference as *const () as u64;
+    if engine == Engine::Reference {
+        for function in 0..ASYNC_FUNCTIONS as usize {
+            runtime.invocations[function].code = reference as *const () as u64;
+        }
     }
     runtime
+}
+
+/// The steps of a run, by function: frames differ between runs, functions do not.
+type Trace = Vec<(FutureStep, usize)>;
+
+fn trace(runtime: &Runtime) -> Trace {
+    runtime.champ.future_events.iter().map(|event| (event.step, event.function)).collect()
+}
+
+/// The traces of one scenario in every configuration: both engines, with and without collections, agree.
+#[derive(Default)]
+struct Traces(Vec<((bool, Engine), Trace)>);
+
+impl Traces {
+    fn record(&mut self, configuration: (bool, Engine), runtime: &Runtime) {
+        // Every body that ran was the engine's: machine code from the JIT, or the reference body.
+        let reference = reference as *const () as u64;
+        for event in runtime.champ.future_events.iter().filter(|event| event.step == FutureStep::Start) {
+            let code = runtime.invocations[event.function].code;
+            assert_ne!(code, 0);
+            assert_eq!(code == reference, configuration.1 == Engine::Reference, "{configuration:?}");
+        }
+        self.0.push((configuration, trace(runtime)));
+    }
+
+    fn agree(&self) {
+        let (first, expected) = &self.0[0];
+        assert!(!expected.is_empty());
+        for (configuration, trace) in &self.0[1..] {
+            assert_eq!(trace, expected, "{configuration:?} against {first:?}");
+        }
+    }
 }
 
 // --- The reference body -----------------------------------------------------------------------------------------
@@ -643,13 +745,7 @@ extern "C" fn reference(ctx: *mut Ctx, frame: Word) -> Word {
         program,
     };
     let k = get(frame, tasks::RESUME);
-    let mut pc = if k == 0 {
-        runtime.champ_event(FutureStep::Start, frame);
-        0
-    } else {
-        runtime.champ_event(FutureStep::Resume, frame);
-        activation.reload(k as u32)
-    };
+    let mut pc = if k == 0 { 0 } else { activation.reload(k as u32) };
     loop {
         match activation.step(pc) {
             Step::Next(next) => pc = next,
@@ -718,7 +814,6 @@ impl Activation {
             set(self.frame, offset + 8, self.scopes[scope as usize][1]);
         }
         set(self.frame, tasks::RESUME, u64::from(k));
-        runtime_of(self.ctx).champ_event(FutureStep::Pending, self.frame);
         Step::Pending
     }
 
@@ -1338,7 +1433,7 @@ fn champ_v8_frame_map_follows_the_layout_service_words_and_scopes() {
     assert_eq!(FrameMap::new(&p, CONSUME as usize).unwrap().trace[1], x);
     assert_eq!(FrameMap::new(&p, DESTROY as usize), None);
     // The loaded runtime traces each async body's frame by its map.
-    let runtime = load(false);
+    let runtime = load(false, Engine::Jit);
     for function in 0..ASYNC_FUNCTIONS as usize {
         let map = runtime.champ_frame_map(function).unwrap();
         assert_eq!(runtime.heap.layouts().frames[function], map.trace);
@@ -1355,8 +1450,8 @@ fn champ_v8_frame_map_follows_the_layout_service_words_and_scopes() {
 
 #[test]
 fn champ_v8_future_new_allocates_first_and_accepts_inputs_into_continuation_zero() {
-    for stress in [false, true] {
-        let mut runtime = load(stress);
+    for (stress, engine) in configurations() {
+        let mut runtime = load(stress, engine);
         let mut ctx = context(&mut runtime);
         ctx.entry_frame = frame_pointer!();
         let mut state = owner(&mut ctx);
@@ -1425,32 +1520,42 @@ fn champ_v8_future_new_allocates_first_and_accepts_inputs_into_continuation_zero
 
 #[test]
 fn champ_v8_body_runs_once() {
-    for stress in [false, true] {
-        let mut runtime = load(stress);
+    let mut traces = Traces::default();
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load(stress, engine);
         let result = runtime.run_function(MAIN as usize, crate::STACK_BYTES);
         assert_eq!(result.unwrap(), word::small(7).unwrap());
         assert_eq!(steps(&runtime, WORK), [FutureStep::Start, FutureStep::Published]);
         assert_eq!(steps(&runtime, MAIN), [FutureStep::Start, FutureStep::Published]);
         assert_eq!(stress, runtime.heap.stats().collections > 0);
+        traces.record(configuration, &runtime);
     }
+    traces.agree();
 }
 
 #[test]
 fn champ_v8_repeated_await_sees_one_outcome() {
-    for stress in [false, true] {
-        let mut runtime = load(stress);
+    let mut traces = Traces::default();
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load(stress, engine);
         let result = runtime.run_function(TWICE as usize, crate::STACK_BYTES);
         assert_eq!(result.unwrap(), word::small(14).unwrap());
         // The second await reads the cache: the body ran once and settled once.
         assert_eq!(steps(&runtime, WORK), [FutureStep::Start, FutureStep::Published]);
         assert_eq!(steps(&runtime, TWICE), [FutureStep::Start, FutureStep::Published]);
+        traces.record(configuration, &runtime);
     }
+    traces.agree();
 }
 
 #[test]
 fn champ_v8_cached_failure_is_seen_by_two_waiters() {
-    for stress in [false, true] {
-        let mut runtime = load(stress);
+    let mut traces = Traces::default();
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load(stress, engine);
         let mut ctx = context(&mut runtime);
         ctx.entry_frame = frame_pointer!();
         let mut state = owner(&mut ctx);
@@ -1514,31 +1619,40 @@ fn champ_v8_cached_failure_is_seen_by_two_waiters() {
         for frame in [gate, f, w1, w2, w3] {
             assert_eq!(runtime.champ_cache(frame).unwrap().flags, RELEASED);
         }
+        traces.record(configuration, &runtime);
     }
+    traces.agree();
 }
 
 #[test]
 fn champ_v8_failure_reaches_the_root_through_every_await() {
-    for stress in [false, true] {
-        let mut runtime = load(stress);
+    let mut traces = Traces::default();
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load(stress, engine);
         let report = runtime.run_function(MAIN_FAILS as usize, crate::STACK_BYTES).unwrap_err().0;
         assert!(report.starts_with("RuntimeError: boom"), "{report}");
         assert_eq!(steps(&runtime, FAILS), [FutureStep::Start, FutureStep::Published]);
         assert_eq!(steps(&runtime, MAIN_FAILS), [FutureStep::Start, FutureStep::Published]);
+        traces.record(configuration, &runtime);
     }
+    traces.agree();
 }
 
 #[test]
 fn champ_v8_never_awaited_future_never_runs_and_settles_at_owner_close() {
-    for stress in [false, true] {
+    let mut traces = Traces::default();
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
         // Two cold Futures, one cancelled: neither body runs, and the close settles both duties.
-        let mut runtime = load(stress);
+        let mut runtime = load(stress, engine);
         assert_eq!(runtime.run_function(LAZY as usize, crate::STACK_BYTES).unwrap(), 1);
         assert!(steps(&runtime, WORK).is_empty());
         assert_eq!(steps(&runtime, LAZY), [FutureStep::Start, FutureStep::Published]);
+        traces.record(configuration, &runtime);
         // With resource inputs: a cold Future and a Future cancelled before start hold their inputs until the
         // owner closes; the close releases them into its plan and settles the Futures as Cancelled.
-        let mut runtime = load(stress);
+        let mut runtime = load(stress, engine);
         let mut ctx = context(&mut runtime);
         ctx.entry_frame = frame_pointer!();
         let mut state = owner(&mut ctx);
@@ -1568,11 +1682,18 @@ fn champ_v8_never_awaited_future_never_runs_and_settles_at_owner_close() {
         assert_eq!(rt_future_cancelled(&mut ctx, cold, &mut flag), NORMAL);
         assert_eq!(flag.value, 1);
     }
+    traces.agree();
 }
 
 #[test]
 fn champ_v8_cache_settle_follows_its_rows_and_refuses_a_second_settle() {
-    let mut runtime = load(true);
+    for engine in [Engine::Jit, Engine::Reference] {
+        cache_settle_rows(engine);
+    }
+}
+
+fn cache_settle_rows(engine: Engine) {
+    let mut runtime = load(true, engine);
     let mut ctx = context(&mut runtime);
     ctx.entry_frame = frame_pointer!();
     let mut state = owner(&mut ctx);
@@ -1626,8 +1747,10 @@ fn champ_v8_cache_settle_follows_its_rows_and_refuses_a_second_settle() {
 
 #[test]
 fn champ_v8_cancel_request_follows_tomato_and_await_unwind_and_deliver_cancel_finish_it() {
-    for stress in [false, true] {
-        let mut runtime = load(stress);
+    let mut traces = Traces::default();
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load(stress, engine);
         let mut ctx = context(&mut runtime);
         ctx.entry_frame = frame_pointer!();
         let mut state = owner(&mut ctx);
@@ -1710,12 +1833,14 @@ fn champ_v8_cancel_request_follows_tomato_and_await_unwind_and_deliver_cancel_fi
         assert_eq!(deliver(&mut ctx, &mut last, 0), emergency);
         assert_ne!(get(parked, tasks::FLAGS) & tasks::champ_flags::CANCEL_DELIVERED, 0);
         assert_eq!(get(parked, tail + EMERGENCY), 0);
+        traces.record(configuration, &runtime);
     }
+    traces.agree();
 }
 
 #[test]
 fn champ_v8_publish_refuses_a_future_that_is_not_running_or_a_foreign_outcome() {
-    let mut runtime = load(false);
+    let mut runtime = load(false, Engine::Jit);
     let mut ctx = context(&mut runtime);
     ctx.entry_frame = frame_pointer!();
     let mut state = owner(&mut ctx);
@@ -1741,8 +1866,10 @@ fn champ_v8_publish_refuses_a_future_that_is_not_running_or_a_foreign_outcome() 
 
 #[test]
 fn champ_v8_root_reports_the_first_unobserved_spawned_failure() {
-    for stress in [false, true] {
-        let mut runtime = load(stress);
+    let mut traces = Traces::default();
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load(stress, engine);
         let mut ctx = context(&mut runtime);
         ctx.entry_frame = frame_pointer!();
         let mut state = owner(&mut ctx);
@@ -1757,7 +1884,9 @@ fn champ_v8_root_reports_the_first_unobserved_spawned_failure() {
         let report = runtime.run_function(MAIN as usize, crate::STACK_BYTES).unwrap_err().0;
         assert!(report.starts_with("RuntimeError: boom"), "{report}");
         assert_eq!(count(&runtime, MAIN, FutureStep::Published), 1);
+        traces.record(configuration, &runtime);
     }
+    traces.agree();
 }
 
 /// A body that returns with a failure status instead of publishing it.
@@ -1803,7 +1932,7 @@ fn champ_v8_run_body_and_root_refuse_what_a_body_must_not_do() {
         (MAIN, returns_resource, "main returned an ownership packet"),
     ];
     for (function, body, message) in cases {
-        let mut runtime = load(true);
+        let mut runtime = load(true, Engine::Jit);
         runtime.invocations[function as usize].code = body as *const () as u64;
         let report = runtime.run_function(MAIN as usize, crate::STACK_BYTES).unwrap_err().0;
         assert!(report.contains(message), "{report}");
@@ -1852,8 +1981,10 @@ fn champ_v8_deadlock_diagnostic_matches_tomato() {
         runtime.run_function(2, crate::STACK_BYTES).unwrap_err().0
     };
     assert_eq!(tomato, "RuntimeError: async main cannot complete: no task can make progress");
-    for stress in [false, true] {
-        let mut runtime = load(stress);
+    let mut traces = Traces::default();
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load(stress, engine);
         let mut ctx = context(&mut runtime);
         ctx.entry_frame = frame_pointer!();
         let mut state = owner(&mut ctx);
@@ -1862,5 +1993,157 @@ fn champ_v8_deadlock_diagnostic_matches_tomato() {
         let report = runtime.champ_run_async_main(&mut ctx, WATCH as usize, &[gate]).unwrap_err().0;
         assert_eq!(report, tomato);
         assert_eq!(steps(&runtime, WATCH), [FutureStep::Start, FutureStep::Pending]);
+        traces.record(configuration, &runtime);
     }
+    traces.agree();
+}
+
+/// Publish a gate's success as its body would.
+fn open_gate(ctx: &mut Ctx, gate: Word, value: i64) {
+    let mut outcome = empty(ctx);
+    let published = PublishIn { tag: 0, value: word::small(value).unwrap(), packet: &mut outcome, failure: 0 };
+    assert_eq!(rt_future_publish(ctx, gate, &published), NORMAL);
+}
+
+#[test]
+fn champ_v9_saved_slots_and_the_scope_area_cross_each_suspension() {
+    let mut traces = Traces::default();
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load(stress, engine);
+        let mut ctx = context(&mut runtime);
+        ctx.entry_frame = frame_pointer!();
+        let mut state = owner(&mut ctx);
+        let first = gate(&mut ctx, &mut state);
+        let second = gate(&mut ctx, &mut state);
+        let inputs = empty(&mut ctx);
+        let nested = new_future(&mut ctx, NESTED, &[first, second], &mut state, inputs);
+        let map = runtime.champ_frame_map(NESTED as usize).unwrap().clone();
+        let slot = |index: usize| map.slots[index].offset;
+        let area = |scope: u32| map.scopes.iter().find(|(id, _)| *id == scope).unwrap().1;
+        // Exactly these words of the slot and scope areas may be nonzero while suspended.
+        let only = |held: &[u64]| (AREA..map.tail).step_by(8).filter(|offset| !held.contains(offset))
+            .all(|offset| get(nested, offset) == 0);
+        runtime.champ_future_start(&mut ctx, 0, nested);
+        assert_eq!(ctx.status, OK, "{:?}", runtime.fatal);
+        // PENDING at continuation 1: saved [3, 1], operand [0], and the outer scope's two words.
+        assert_eq!(get(nested, tasks::RESUME), 1);
+        let outer_record = get(nested, slot(3));
+        let outer = super::helpers::scope(&runtime, outer_record).unwrap();
+        assert_eq!((get(nested, slot(0)), get(nested, slot(1))), (first, second));
+        assert_eq!((get(nested, area(NESTED)), get(nested, area(NESTED) + 8)), (outer.holder.get(), outer.owner.get()));
+        assert!(only(&[slot(0), slot(1), slot(3), area(NESTED), area(NESTED) + 8]));
+        // The first gate settles: the body resumes, begins the inner scope under the reloaded outer owner, and
+        // suspends at continuation 2 with both scopes open.
+        open_gate(&mut ctx, first, 4);
+        assert_eq!(runtime.ready.pop_front(), Some(nested));
+        assert!(!runtime.run_body(&mut ctx, nested));
+        assert_eq!(ctx.status, OK, "{:?}", runtime.fatal);
+        assert_eq!(get(nested, tasks::RESUME), 2);
+        let inner = super::helpers::scope(&runtime, get(nested, slot(4))).unwrap();
+        assert_eq!(inner.parent_owner, outer.owner.get());
+        assert_eq!((get(nested, slot(3)), get(nested, slot(1))), (outer_record, second));
+        assert_eq!((get(nested, area(INNER)), get(nested, area(INNER) + 8)), (inner.holder.get(), inner.owner.get()));
+        let held = [slot(1), slot(3), slot(4), area(NESTED), area(NESTED) + 8, area(INNER), area(INNER) + 8];
+        assert!(only(&held));
+        open_gate(&mut ctx, second, 9);
+        runtime.schedule(&mut ctx, nested);
+        assert_eq!(ctx.status, OK, "{:?}", runtime.fatal);
+        assert_eq!((get(nested, tasks::STATE), get(nested, tasks::RESULT)), (tasks::DONE, word::small(9).unwrap()));
+        assert!(cleared(&runtime, nested));
+        use FutureStep::*;
+        // Each gate's publication queues the body once.
+        assert_eq!(steps(&runtime, NESTED), [Start, Pending, Queued, Resume, Pending, Queued, Resume, Published]);
+        traces.record(configuration, &runtime);
+    }
+    traces.agree();
+}
+
+#[test]
+fn champ_v9_a_body_without_stack_closes_its_inputs_and_publishes_the_overflow() {
+    for stress in [false, true] {
+        let mut runtime = load(stress, Engine::Jit);
+        let mut ctx = context(&mut runtime);
+        ctx.entry_frame = frame_pointer!();
+        let mut state = owner(&mut ctx);
+        let scope_owner = super::helpers::scope(&runtime, state.record).unwrap().owner;
+        let (r, inputs) = resource(&mut ctx, scope_owner);
+        let future = new_future(&mut ctx, CONSUME, &[r], &mut state, inputs);
+        let serial = runtime.heap.champ_identity(r).unwrap().serial;
+        // The body's entry lies below the limit; the rejection runs in the headroom reserved below it.
+        let marker = 0u8;
+        ctx.stack_limit = &marker as *const u8 as u64 + 64 * 1024;
+        runtime.champ_future_start(&mut ctx, 0, future);
+        ctx.stack_limit = 0;
+        assert_eq!(ctx.status, OK, "{:?}", runtime.fatal);
+        assert_eq!(get(future, tasks::STATE), tasks::FAILURE_STATE);
+        assert!(kind(&runtime, get(future, tasks::FAILURE)).contains("Stack overflow"));
+        assert_eq!(runtime.champ.destroy_events, [serial]);
+        assert_eq!(runtime.heap.champ_identity(r).unwrap().life, Life::Dead);
+        assert!(cleared(&runtime, future));
+        assert_eq!(steps(&runtime, CONSUME), [FutureStep::Start, FutureStep::Published]);
+        // A resumed body holds state only its own code can close: running out of stack there stops.
+        let inputs = empty(&mut ctx);
+        let resumed = new_future(&mut ctx, WORK, &[word::small(1).unwrap()], &mut state, inputs);
+        set(resumed, tasks::STATE, tasks::RUNNING);
+        set(resumed, tasks::RESUME, 1);
+        ctx.stack_limit = &marker as *const u8 as u64 + 64 * 1024;
+        runtime.run_body(&mut ctx, resumed);
+        ctx.stack_limit = 0;
+        assert!(runtime.fatal.as_deref().unwrap().contains("while resuming an async body"));
+    }
+}
+
+// --- #601 V7: fixed roots and deps inputs (#667) ---------------------------------------------------------------
+
+/// `async main() is int { 7; }` as the program's entry: a fixed root starts without inputs and without a packet.
+fn fixed_root() -> (s::Function, s::FrameLayout) {
+    let (mut b, frame) = Body::asynchronous("main", 0, vec![s::Type::Int]);
+    let (body, inputs) = b.resume(frame, 0, &[]);
+    assert!(inputs.is_empty());
+    let q0 = b.emit(O::ScopeBegin, vec![A::Scope(0), A::Boundary(0)], K::ScopeState);
+    let seven = b.constant(s::Constant::Int("7".into()), s::Type::Int);
+    b.return_value(body, q0, 0, Some(seven), &[], "done");
+    let layout = b.layout(vec![], vec![(vec![], vec![])]);
+    (b.finish(), layout)
+}
+
+#[test]
+fn champ_v7_fixed_root_runs_from_an_empty_start() {
+    let (function, layout) = fixed_root();
+    let program = s::Program {
+        module: "root".into(),
+        functions: vec![function],
+        entry: Some(0),
+        tables: s::ChampTables {
+            scopes: vec![s::Scope { function: 0, parent: None, boundary: 0 }],
+            boundaries: vec![s::Boundary { scope: 0 }],
+            frames: vec![layout],
+            ..s::ChampTables::default()
+        },
+        ..s::Program::default()
+    };
+    s::verify_load(&program, &s::NoExternalContracts).unwrap();
+    for stress in [false, true] {
+        let mut runtime = Runtime::new_champ(program.clone(), Vec::new()).unwrap();
+        runtime.heap.set_stress(stress);
+        runtime.invocations[0].code = reference as *const () as u64;
+        let map = runtime.champ_frame_map(0).unwrap();
+        assert_eq!((map.start.len(), map.inputs()), (0, 0));
+        let mut ctx = context(&mut runtime);
+        ctx.entry_frame = frame_pointer!();
+        assert_eq!(runtime.champ_run_async_main(&mut ctx, 0, &[]), Ok(word::small(7).unwrap()));
+    }
+}
+
+#[test]
+fn champ_v7_deps_inputs_take_no_words() {
+    let mut p = program();
+    // `work(n is int)` with the deps of a borrowed input after it: one language input, then the packet.
+    let layout = &mut p.tables.frames[WORK as usize];
+    layout.slots = vec![value(s::Type::Int), service(K::Deps), service(K::Packet)];
+    layout.continuations[0].saved = vec![0, 1, 2];
+    let map = FrameMap::new(&p, WORK as usize).unwrap();
+    assert_eq!(map.slots[1].reprs, []);
+    assert_eq!((map.inputs(), map.packet()), (1, map.slots[2].offset));
 }

@@ -24,7 +24,8 @@ func @main(%session: Session facts(managed(deps=dfull_session)), %full: deps; %q
     raise %final
 ^prepare(%rest: scope<S>, %selected: own, %external: deps) in S:
     %pending: pending = exit.prepare return %child, %selected, deps(%full) at B0
-    invoke.own scope.end %rest, reserve %pending, effects scope_effects(failures=[thrown, program, panic, native], suspends=true, cancel=false)
+    invoke.own scope.end %rest, reserve %pending, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=true)
         normal ^commit($closed, $pending)
         unwind ^failed($closed, $failure)
 ^commit(%closed: closed, %reservation: pending) in S:

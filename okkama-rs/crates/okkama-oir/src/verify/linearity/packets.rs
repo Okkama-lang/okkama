@@ -359,8 +359,7 @@ impl Engine<'_, '_> {
                 }
                 TransferRule::Settle { inputs } => {
                     if matches!(op, Operation::Cleanup(CleanupOp::Settle { .. })
-                        | Operation::Async(AsyncOp::FrameCancel { .. } | AsyncOp::FuturePublish { .. }
-                            | AsyncOp::FutureSettle { .. })) { continue; }
+                        | Operation::Async(AsyncOp::FuturePublish { .. } | AsyncOp::FutureSettle { .. })) { continue; }
                     for input in inputs {
                         let pieces: Vec<_> = before.tokens[input.as_u32() as usize].pieces.iter().cloned().collect();
                         self.invalidate(&before, flow, &pieces);
