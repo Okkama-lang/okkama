@@ -268,6 +268,20 @@ fn binding_a_managed_array_removes_its_elements_from_admission() {
     assert_eq!(redundant(1), Vec::<usize>::new());
 }
 
+/// A role value is its object: binding a role value of a resource object binds that object, so the admission
+/// filter of a later split is not redundant either (#711, #697: `reaches_resource` counts role values).
+#[test]
+fn binding_a_managed_role_value_removes_its_object_from_admission() {
+    let mut p = bound_then_split(2);
+    let role = p.objects.len() as u32;
+    p.objects.push(Object { handle: false, role: Some(RoleDecl::default()), ..handle_object() });
+    p.objects[0].implements = vec![RoleImpl { role, slots: vec![] }];
+    let f = &mut p.functions[0];
+    f.registers[2] = Type::Role(role);
+    f.code[5] = Instruction::Data { op: DataOp::Move, inputs: vec![0], output: Some(2), immediate: Immediate::None };
+    assert_eq!(evidence::redundant_admission_filters(&p, &p.functions[0]).unwrap(), Vec::<usize>::new());
+}
+
 /// `map.new` over two fresh resources whose keys are the constants `first` and `second`.
 fn keyed_map(first: &str, second: &str) -> Program {
     use Argument::Location as At;

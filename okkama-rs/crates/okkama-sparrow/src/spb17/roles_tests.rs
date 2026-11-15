@@ -551,3 +551,31 @@ fn role_fields_are_traced_and_never_understate_resources() {
     let failure = verify_load(&q, &NoExternalContracts).unwrap_err();
     assert!(failure.message.contains("understated object retention metadata"), "{failure}");
 }
+
+/// A role field whose implementations reach a resource is selected: the runtime selection walk follows only
+/// selected fields, and would otherwise leave the identity behind the role value unbound (#697, #711:
+/// `COLLECTION_RETENTION`).
+#[test]
+fn managed_role_fields_are_selected() {
+    // Holder keeps a slotless `Marker`, which the resource implements when `managed`.
+    let holder = |managed: bool, selected: Vec<u32>| {
+        let mut p = role_caller(vec![1, 2], 0);
+        let marker = p.objects.len() as u32;
+        p.objects.push(role("Marker", vec![]));
+        let mut object = object("Holder", vec![Type::Role(marker)], vec![]);
+        object.layout.may_reach_resource = managed;
+        object.layout.selection_layout = selected;
+        p.objects.push(object);
+        let resource = with_resource(&mut p);
+        if managed {
+            p.objects[resource as usize].implements = vec![RoleImpl { role: marker, slots: vec![] }];
+        } else {
+            p.objects[3].implements = vec![RoleImpl { role: marker, slots: vec![] }];
+        }
+        p
+    };
+    accept(&holder(true, vec![0]));
+    reject(&holder(true, vec![]), "COLLECTION_RETENTION");
+    // A role whose implementations are all plain needs no selection.
+    accept(&holder(false, vec![]));
+}
