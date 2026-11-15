@@ -35,10 +35,15 @@ func @work(%frame: frame<@work>) -> void [async] summary(Mwb) async-creation(Mwc
     %empty: own = own.empty
     %d: deps = deps.of %n
     %pending: pending = exit.prepare return %n, %empty, deps(%d) at B0
-    (%closed: closed, %reserved: pending) = scope.end %q1, reserve %pending, effects scope_effects(failures=[],
-        suspends=false, cancel=false)
+    invoke.own scope.end %q1, reserve %pending, effects scope_effects(failures=[], suspends=false, cancel=true)
+        normal ^done($closed, $pending)
+        unwind ^cancelled($closed, $failure)
+^done(%closed: closed, %reserved: pending) in SW:
     (%r: int, %p: own, %rd: deps) = exit.commit %reserved, destination caller, result int
     fut.publish %fr0, success(value=%r, packet=%p, deps=%rd)
+    ret
+^cancelled(%closed2: closed, %cancel: failure) in SW:
+    fut.publish %fr0, failure(%cancel)
     ret
 }
 func @main(%frame: frame<@main>) -> void [async] summary(Mmb) async-creation(Mmc) async-body(Mmb) {
@@ -84,7 +89,7 @@ func @main(%frame: frame<@main>) -> void [async] summary(Mmb) async-creation(Mmc
     %pending: pending = exit.prepare return packet %e select s0 at B0
     %fr3: frame<@main> = frame.save %fr2, continuation 2
     invoke.own scope.end %q3, reserve %pending, effects scope_effects(failures=[thrown, program, panic, native],
-        suspends=true, cancel=false)
+        suspends=true, cancel=true)
         normal ^done($closed, $pending)
         unwind ^close_failed($closed, $failure)
 ^done(%closed: closed, %reserved: pending) in SM:

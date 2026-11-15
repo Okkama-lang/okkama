@@ -13,8 +13,14 @@ func @f(%future: future<int> facts(managed(deps=d0))) -> void [async] summary(M0
         normal ^ok($value, $deps, %q)
         unwind ^failed($failure, $task, $receipt, %q)
 ^ok(%v: int, %d: deps, %q1: scope<S>) in S:
-    %closed: closed = scope.end %q1, effects scope_effects(failures=[], suspends=false, cancel=false)
+    invoke.own scope.end %q1, effects scope_effects(failures=[], suspends=false,
+        cancel=true)
+        normal ^d18_closed($closed)
+        unwind ^d18_cancelled($closed, $failure)
+^d18_closed(%closed: closed) in S:
     ret
+^d18_cancelled(%d18_closed2: closed, %d18_cancel: failure) in S:
+    raise %d18_cancel
 ^failed(%e: failure, %t: task-state, %r: receipt, %q2: scope<S>) in S:
     (%q3: scope<S>, %e1: failure) = await.unwind %q2, %e, %t, %r, protocol Services
     %combined: failure = scope.unwind %q3, %e1, effects scope_effects(failures=[], suspends=false, cancel=false)

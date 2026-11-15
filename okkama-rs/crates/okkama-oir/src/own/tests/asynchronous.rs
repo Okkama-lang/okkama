@@ -279,3 +279,54 @@ fn await_unwind_requires_the_services_protocol() {
     let OwnError::Diagnostics { diagnostics, .. } = error else { panic!("{error:?}") };
     assert_eq!(diagnostics[0].kind, OwnDiagnosticKind::MissingBoundary);
 }
+
+/// The main of async-repeated-await with its creation and await in a loop of the root scope, or in an
+/// iteration scope that the loop opens on every round.
+fn creation_in_loop(iteration_scope: bool) -> String {
+    let source = input("async-repeated-await");
+    let start = source.find("    binding b0 \"pending\"").unwrap();
+    let end = source.find("    ^failed(").unwrap();
+    let mut lines = vec!["    boundary Bauto lexical in S"];
+    if iteration_scope {
+        lines.push("    boundary BI lexical in SI");
+    }
+    lines.extend(["    ^entry in S unwind ^failed:", "    %zero: int = const 0"]);
+    if iteration_scope {
+        lines.extend(["    br ^head(%zero)", "    ^head(%h: int) in S unwind ^failed:", "    br ^loop(%h)",
+            "    ^loop(%i: int) in SI unwind ^failed:"]);
+    } else {
+        lines.extend(["    br ^loop(%zero)", "    ^loop(%i: int) in S unwind ^failed:"]);
+    }
+    lines.extend(["    %f: future<int> = call @work(%i)", "    %x: int = await %f, result int",
+        "    %lim: int = const 3", "    %c: bool = int.lt %x, %lim"]);
+    if iteration_scope {
+        lines.extend(["    want %x", "    [ip0] exit.prepare fallthrough %x at BI",
+            "    result.exit edge normal(0), value %x, demand want, prepare ip0",
+            "    result.exit edge normal(1), value %x, demand want, prepare ip0",
+            "    cond %c, ^head(%x), ^done(%x)"]);
+    } else {
+        lines.push("    cond %c, ^loop(%x), ^done(%x)");
+    }
+    lines.extend(["    ^done(%r: int) in S unwind ^failed:", "    want %r",
+        "    [iprep1] exit.prepare return %r at Bauto",
+        "    result.exit edge normal(0), value %r, demand want, prepare iprep1", "    ret %r", ""]);
+    let source = format!("{}{}{}", &source[..start], lines.join("\n"), &source[end..]);
+    if iteration_scope {
+        let root = "scope S action in @main\n";
+        return source.replace(root, &format!("{root}scope SI iteration in @main parent S\n"));
+    }
+    source
+}
+
+#[test]
+fn a_future_created_in_a_loop_of_its_owner_is_unsupported() {
+    // D25 (OIR-2 B10.6): one fut.new site names one static duty of its owner. A loop of the owner reaches the
+    // site again while the owner holds the earlier duty; such duties are dynamic and arrive with R1.
+    let error = rewrite_async(&creation_in_loop(false)).unwrap_err();
+    let OwnError::Diagnostics { diagnostics, .. } = error else { panic!("{error:?}") };
+    assert_eq!(diagnostics[0].kind, OwnDiagnosticKind::UnsupportedAsync);
+    assert!(diagnostics[0].message.contains("fut.new inside a loop of its owner"), "{diagnostics:?}");
+    // An iteration scope owns the Future of each round and closes it before the next one.
+    let output = rewrite_async(&creation_in_loop(true)).unwrap();
+    crate::verify_own(&output.module).unwrap();
+}
