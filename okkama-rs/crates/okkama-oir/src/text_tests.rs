@@ -82,7 +82,7 @@ fn every_opcode_builder_roundtrips_and_every_invoke_slot_is_preserved() {
         roundtrip(&module);
     }
     assert_eq!(seen, Operation::opcode_inventory().into_iter().collect(), "opcode missing a builder round-trip case");
-    assert_eq!(seen.len(), 271);
+    assert_eq!(seen.len(), 275);
 }
 
 #[test]
@@ -819,7 +819,8 @@ fn every_typed_payload_enum_branch_roundtrips() {
         HolderKind::Pin,
         HolderKind::Group,
         HolderKind::Diagnostic,
-        HolderKind::Receipt
+        HolderKind::Receipt,
+        HolderKind::RootRegistry
     ];
     assert_eq!(cases.len(), HolderKind::TEXT_VARIANTS.len(), "HolderKind branch missing");
     for value in cases { crate::text::payload_roundtrip(value); }
@@ -848,7 +849,15 @@ fn every_typed_payload_enum_branch_roundtrips() {
         ProtocolTransition::Cancel,
         ProtocolTransition::Pin,
         ProtocolTransition::Unpin,
-        ProtocolTransition::Dynamic
+        ProtocolTransition::Dynamic,
+        ProtocolTransition::Offer,
+        ProtocolTransition::Accept,
+        ProtocolTransition::Deliver,
+        ProtocolTransition::Close,
+        ProtocolTransition::Withdraw,
+        ProtocolTransition::Register,
+        ProtocolTransition::Retain,
+        ProtocolTransition::Position
     ];
     assert_eq!(cases.len(), ProtocolTransition::TEXT_VARIANTS.len(), "ProtocolTransition branch missing");
     for value in cases { crate::text::payload_roundtrip(value); }
@@ -1107,9 +1116,15 @@ fn every_variadic_opcode_field_has_zero_one_many_cases() {
     roundtrip(&build_op(Operation::Async(AsyncOp::FrameSave { frame: crate::contract_tests::sample::<ValueId>(), slots: Vec::<FrameSlot>::new(), continuation: crate::contract_tests::sample::<u32>() }), Profile::Own));
     roundtrip(&build_op(Operation::Async(AsyncOp::FrameSave { frame: crate::contract_tests::sample::<ValueId>(), slots: vec![cs::<FrameSlot>(); 1], continuation: crate::contract_tests::sample::<u32>() }), Profile::Own));
     roundtrip(&build_op(Operation::Async(AsyncOp::FrameSave { frame: crate::contract_tests::sample::<ValueId>(), slots: vec![cs::<FrameSlot>(); 3], continuation: crate::contract_tests::sample::<u32>() }), Profile::Own));
-    roundtrip(&build_op(Operation::Async(AsyncOp::FrameResume { frame: crate::contract_tests::sample::<ValueId>(), slots: Vec::<SavedSlot>::new() }), Profile::Own));
-    roundtrip(&build_op(Operation::Async(AsyncOp::FrameResume { frame: crate::contract_tests::sample::<ValueId>(), slots: vec![cs::<SavedSlot>(); 1] }), Profile::Own));
-    roundtrip(&build_op(Operation::Async(AsyncOp::FrameResume { frame: crate::contract_tests::sample::<ValueId>(), slots: vec![cs::<SavedSlot>(); 3] }), Profile::Own));
+    let frame = crate::contract_tests::sample::<ValueId>();
+    let resume = AsyncOp::FrameResume { frame, continuation: 1, slots: Vec::<SavedSlot>::new() };
+    roundtrip(&build_op(Operation::Async(resume), Profile::Own));
+    let frame = crate::contract_tests::sample::<ValueId>();
+    let resume = AsyncOp::FrameResume { frame, continuation: 1, slots: vec![cs::<SavedSlot>(); 1] };
+    roundtrip(&build_op(Operation::Async(resume), Profile::Own));
+    let frame = crate::contract_tests::sample::<ValueId>();
+    let resume = AsyncOp::FrameResume { frame, continuation: 1, slots: vec![cs::<SavedSlot>(); 3] };
+    roundtrip(&build_op(Operation::Async(resume), Profile::Own));
     roundtrip(&build_op(Operation::Async(AsyncOp::WorkerBind { action: crate::contract_tests::sample::<ValueId>(), entry: crate::contract_tests::sample::<ValueId>(), fields: Vec::<ValueId>::new(), ty: crate::contract_tests::sample::<TypeId>() }), Profile::Own));
     roundtrip(&build_op(Operation::Async(AsyncOp::WorkerBind { action: crate::contract_tests::sample::<ValueId>(), entry: crate::contract_tests::sample::<ValueId>(), fields: vec![cs::<ValueId>(); 1], ty: crate::contract_tests::sample::<TypeId>() }), Profile::Own));
     roundtrip(&build_op(Operation::Async(AsyncOp::WorkerBind { action: crate::contract_tests::sample::<ValueId>(), entry: crate::contract_tests::sample::<ValueId>(), fields: vec![cs::<ValueId>(); 3], ty: crate::contract_tests::sample::<TypeId>() }), Profile::Own));
@@ -1448,8 +1463,17 @@ fn coverage_modules() -> Vec<Module> {
     }
     modules.push(build_op(Operation::Ownership(OwnershipOp::ScopeTransfer { states: TransferStates::Between { from: v, to: v }, selection: cs() }), Profile::Own));
     modules.push(build_op(Operation::Carrier(CarrierOp::Transfer { state: v, target: CarrierDestination::FailureContext(cs()), protocol: cs() }), Profile::Own));
+    // Coro/low token forms of the async ABI (D24.1, C-4).
+    modules.push(build_op(Operation::Async(AsyncOp::FutureSpawn { future: v, state: v }), Profile::Coro));
+    for task in [None, Some(v)] {
+        let form = RehomeForm::Token { pending: v, cache: v, task };
+        modules.push(build_op(Operation::Async(AsyncOp::CacheRehome { form, target: cs(), protocol: cs() }),
+            Profile::Coro));
+    }
     for n in [0, 1, 3] {
-        modules.push(build_op(Operation::Async(AsyncOp::FrameResume { frame: v, slots: vec![SavedSlot { slot: 7, ty: cs(), linear: true }; n] }), Profile::Coro));
+        let slots = vec![SavedSlot { slot: 7, ty: cs(), linear: true }; n];
+        let resume = AsyncOp::FrameResume { frame: v, continuation: 1, slots };
+        modules.push(build_op(Operation::Async(resume), Profile::Coro));
     }
     for publication in [Publication::ChannelReceipt, Publication::TaskState] {
         modules.push(build_op_config(Operation::Call(CallOp::Direct { function: cs(), call: crate::contract_tests::sample() }), Profile::Own, |b| {
@@ -1635,6 +1659,7 @@ fn elaboration_payload_enums_roundtrip() {
     for kind in kinds { crate::text::payload_roundtrip(kind); }
     let environments = [
         FutureEnvironment::Deferred { function: cs(), arguments: vec![], descriptors: vec![] },
+        FutureEnvironment::External { function: cs(), arguments: vec![], descriptors: vec![] },
         FutureEnvironment::Frame(cs()),
     ];
     assert_eq!(environments.len(), FutureEnvironment::TEXT_VARIANTS.len());

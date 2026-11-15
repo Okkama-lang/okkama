@@ -24,7 +24,7 @@ protocol frame_protocol holders [frame, scope] rules [protocol_rule(transition=c
 func @main(%frame: frame<@main>, %packet: own, %cleanup: cleanup-state) -> void {
 ^entry in S:
     %saved: frame<@main> = frame.save %frame, slots [frame_slot(slot=2, value=%packet, mode=consume)], continuation 7
-    (%resumed: frame<@main>, %restored: own) = frame.resume %saved, slots [saved_slot(slot=2, ty=own, linear=true)]
+    (%resumed: frame<@main>, %restored: own) = frame.resume %saved, continuation 7, slots [saved_slot(slot=2, ty=own, linear=true)]
     %cancelled: cleanup-state = frame.cancel %resumed, %cleanup, protocol frame_protocol
     ret
 }

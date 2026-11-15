@@ -239,6 +239,7 @@ pub(super) fn handling(operation: &Operation) -> Handling {
             | CleanupOp::SettleEmpty { .. }
             | CleanupOp::Defer { .. }
             | CleanupOp::Settle { .. }
+            | CleanupOp::SettleDynamic { .. }
             | CleanupOp::Plan { .. }
             | CleanupOp::Destroy { .. }
             | CleanupOp::DestroyDirect { .. }
@@ -284,6 +285,9 @@ pub(super) fn handling(operation: &Operation) -> Handling {
             | AsyncOp::FutureCancelled { .. }
             | AsyncOp::FutureNew { .. }
             | AsyncOp::FuturePublish { .. }
+            | AsyncOp::AwaitUnwind { .. }
+            | AsyncOp::ServiceMaterialize { .. }
+            | AsyncOp::ServiceAbsorb { .. }
             | AsyncOp::FutureSettle { .. }
             | AsyncOp::FrameAlloc { .. }
             | AsyncOp::FrameLoad { .. }

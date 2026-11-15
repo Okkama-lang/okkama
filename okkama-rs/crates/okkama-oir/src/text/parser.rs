@@ -440,6 +440,7 @@ impl<'a> Reader<'a> {
         let mut body = Body {
             cleanup: CleanupMetadata::default(),
             high_results: vec![], high_effects: vec![], descriptor_bindings: vec![], service_schedules: vec![],
+            frame_layout: None,
             entry, values: Arena::new(), blocks: Arena::new(), insts: Arena::new(), bindings: Arena::new(),
             boundaries: Arena::new(), deps: Arena::new(), keys: Arena::new(), selections: Arena::new(),
         };
@@ -465,6 +466,11 @@ impl<'a> Reader<'a> {
                 let contract = DescriptorContract::read(self)?;
                 body.descriptor_bindings.push(DescriptorBinding { dictionary, contract });
                 self.line()?;
+            } else if self.is("frame.layout") {
+                if body.frame_layout.is_some() {
+                    return Err(self.error(DiagnosticKind::Structure, "duplicate frame layout"));
+                }
+                body.frame_layout = Some(self.frame_layout()?);
             } else if self.is("low.metadata") {
                 self.expect("low.metadata")?;
                 body.cleanup = CleanupMetadata::read(self)?;

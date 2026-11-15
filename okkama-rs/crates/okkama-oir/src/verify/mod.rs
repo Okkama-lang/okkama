@@ -9,6 +9,7 @@ mod diagnostic;
 mod limits;
 mod index;
 mod structure;
+mod coro;
 mod types;
 mod expressions;
 pub(crate) mod read;

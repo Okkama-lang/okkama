@@ -121,6 +121,7 @@ fn construct_minimal_module_by_hand() -> Result<(), ArenaError> {
     module.functions.get_mut(main)?.body = Some(Body {
         cleanup: CleanupMetadata::default(), high_results: vec![], high_effects: vec![],
         descriptor_bindings: vec![], service_schedules: vec![], entry, values, blocks, insts, bindings,
+        frame_layout: None,
         boundaries: Arena::new(), deps: Arena::new(), keys: Arena::new(), selections: Arena::new() });
     module.entry = Some(main);
 

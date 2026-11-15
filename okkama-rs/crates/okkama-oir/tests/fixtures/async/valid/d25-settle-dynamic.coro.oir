@@ -1,0 +1,25 @@
+oir 2 coro
+// D25.3 in coro: an opaque admitted packet may hold service entries, so the schedule has a dynamic entry.
+module d25_settle_dynamic_coro
+protocol Services kind services holders [scope, cache] rules [protocol_rule(transition=settle, from=cache, to=scope,
+    checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled))]
+scope S action in @f
+summary Mf internal contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+func @f(%frame: frame<@f>) -> void [async] summary(Mf) {
+    frame.layout {
+        slot 0: own linear
+        slot 1: deps
+    }
+    continuation 0 start saves [0, 1]
+    service.schedule Sched0 owner S, protocol Services, duties [dynamic]
+^entry in S:
+    (%fr0: frame<@f>, %inputs: own, %deps: deps) = frame.resume %frame, continuation 0, slots [saved_slot(slot=0,
+        ty=own, linear=true), saved_slot(slot=1, ty=deps, linear=false)]
+    %q0: scope<S> = scope.begin S
+    %q1: scope<S> = own.admit %q0, %inputs
+    %closed: closed = scope.end %q1, effects scope_effects(failures=[], suspends=false, cancel=false)
+    %p: own = own.empty
+    fut.publish %fr0, success(packet=%p, deps=%deps)
+    ret
+}

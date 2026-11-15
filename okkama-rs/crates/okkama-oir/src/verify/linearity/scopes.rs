@@ -202,9 +202,11 @@ impl Engine<'_, '_> {
                     && before.tokens[value.as_u32() as usize].service.is_some()
             }).collect();
             if !available.is_empty() {
+                // A `dynamic` entry covers runtime-admitted entries, never a static token (D25.3).
                 let schedule = self.body.service_schedules.iter().find(|schedule| {
-                    schedule.owner == scope && schedule.duties.iter().copied().collect::<BTreeSet<_>>() == available
-                        && schedule.duties.len() == available.len()
+                    let duties: Vec<_> = schedule.duties.iter().filter_map(|duty| duty.value()).collect();
+                    schedule.owner == scope && duties.iter().copied().collect::<BTreeSet<_>>() == available
+                        && duties.len() == available.len()
                         && self.module.protocols.get(schedule.protocol)
                             .is_ok_and(|protocol| protocol.kind == ProtocolKind::Services)
                 });
