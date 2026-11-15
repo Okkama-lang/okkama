@@ -22,8 +22,9 @@ pub(super) fn declare_witnesses(declarations: &mut Declarations, analysis: &Anal
             let methods = methods.clone();
             let mut slots = vec![];
             for (slot, method) in methods.iter().enumerate() {
+                let source_name = &analysis.registry.roles[role.0].methods[slot].name;
                 let index = info.methods.iter().position(|candidate| {
-                    candidate.name == method.name && candidate.params.len() == method.signature.params.len()
+                    candidate.name == *source_name && candidate.params.len() == method.signature.params.len()
                         && candidate.params.iter().zip(&method.signature.params)
                             .all(|((_, ty), lowered)| declarations.types.get(ty) == Some(lowered))
                 }).ok_or_else(|| LowerError::invalid(span, format!("unknown role slot {}", method.name)))?;

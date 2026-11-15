@@ -173,6 +173,7 @@ impl Engine<'_, '_> {
         let mut all_labels = SharedSet::new();
         let mut fresh_refs: std::collections::BTreeMap<CreationSiteId, BTreeSet<Origin>> =
             std::collections::BTreeMap::new();
+        let mut opaque_cells = std::collections::BTreeMap::new();
         for (index, relation) in summary.results.iter().enumerate() {
             let Some(&slot) = language.get(index) else {
                 continue;
@@ -183,7 +184,10 @@ impl Engine<'_, '_> {
                 aliases.extend(self.summary_selection(before, &arguments, alias));
                 labels.extend(self.summary_labels(before, &arguments, alias));
             }
-            let opaque = relation.aliases.len() > 1 || summary.results.len() > 1 || relation.fresh.len() > 1;
+            // A declared opaque relation (an open callable) never identifies its
+            // result with an input alias or a single fresh site (#569 O1).
+            let opaque = relation.opaque || relation.aliases.len() > 1 || summary.results.len() > 1
+                || relation.fresh.len() > 1;
             if opaque {
                 let view = match origin {
                     Origin::Instruction(inst, _) => Origin::ViewInstruction(inst, slot as u16),
@@ -214,6 +218,13 @@ impl Engine<'_, '_> {
                 let mentioned = relation.aliases.iter().any(|selection| summary_mentions(selection, *parameter));
                 if !mentioned && let Some(value) = arguments.get(usize::from(*parameter)) {
                     slots[slot].requirements.extend(&before.full_deps[value.as_u32() as usize]);
+                }
+            }
+            // A sync callee can let its fresh graph escape only through the result,
+            // so an opaque result's fresh piece is the part reachable from its view.
+            if relation.opaque {
+                for site in &relation.fresh {
+                    opaque_cells.insert(*site, (slots[slot].refs.clone(), labels.clone()));
                 }
             }
             for site in &relation.fresh {
@@ -295,6 +306,10 @@ impl Engine<'_, '_> {
             if piece.family {
                 let filter = self.graph_filter(flow, fresh_refs.remove(&site).unwrap_or_default(),
                     SharedSet::new(), false);
+                piece.predicates.insert(filter, true);
+            }
+            if let Some((refs, labels)) = opaque_cells.remove(&site) {
+                let filter = self.graph_filter(flow, refs, labels, false);
                 piece.predicates.insert(filter, true);
             }
             output.pieces.insert(piece);

@@ -9,17 +9,18 @@ pub(super) struct Deferred {
     pub function: ir::FuncId,
     pub source: thir::Body,
     pub receiver: bool,
+    pub key: super::callables::BodyKey,
 }
 
 impl super::declarations::Declarations {
-    pub fn declare_defers(&mut self, source: &thir::Body) -> Result<()> {
+    pub fn declare_defers(&mut self, source: &thir::Body, owner: ir::FuncId,
+        key: &super::callables::BodyKey) -> Result<()> {
         let mut expressions = vec![];
         scan_block(&source.block, &mut |stmt| {
             if let thir::StmtKind::Defer(expr) = &stmt.kind {
                 expressions.push(expr.clone());
             }
         });
-        let owner = self.functions[&source.owner];
         let symbol = self.builder.module().functions.get(owner)?.symbol.clone();
         for (number, expr) in expressions.into_iter().enumerate() {
             let mut defined = HashSet::new();
@@ -69,9 +70,10 @@ impl super::declarations::Declarations {
             };
             let mut attrs = vec![ir::FunctionAttr::DeferEntry { replacements }];
             if receiver {
-                let object = match source.owner {
+                let object = match key.root {
                     thir::BodyOwner::Method { object, .. } | thir::BodyOwner::Ctor { object, .. }
-                    | thir::BodyOwner::Default { object, .. } | thir::BodyOwner::Destroy { object } => object,
+                    | thir::BodyOwner::Default { object, .. } | thir::BodyOwner::Destroy { object }
+                    | thir::BodyOwner::CapField { object, .. } => object,
                     _ => return Err(LowerError::unsupported(expr.span, "defer receiver without object owner")),
                 };
                 types.push(self.types[&Ty::object(object)]);
@@ -92,7 +94,7 @@ impl super::declarations::Declarations {
                 attrs, type_params: vec![], summary: None,
                 async_creation_summary: None, async_body_summary: None, body: None, loc: None,
             })?;
-            self.defers.push(Deferred { function, source: body, receiver });
+            self.defers.push(Deferred { function, source: body, receiver, key: key.clone() });
         }
         Ok(())
     }
@@ -101,7 +103,7 @@ impl super::declarations::Declarations {
 impl super::body::BodyLowerer<'_, '_> {
     pub fn register_defer(&mut self, expr: &thir::Expr) -> Result<()> {
         let deferred = self.context.defers.iter().find(|entry| {
-            entry.source.owner == self.source.owner && entry.source.span == expr.span
+            entry.key == self.context.key && entry.source.span == expr.span
         }).ok_or_else(|| LowerError::invalid(expr.span, "missing defer declaration"))?;
         let function = deferred.function;
         let locals = deferred.source.params.clone();

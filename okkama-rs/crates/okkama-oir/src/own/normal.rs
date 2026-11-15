@@ -108,6 +108,7 @@ pub(super) fn relation(
     target.external_deps.extend_from_slice(&source.external_deps);
     target.external_deps.sort();
     target.external_deps.dedup();
+    target.opaque |= source.opaque;
     Ok(())
 }
 
@@ -116,6 +117,7 @@ pub(super) fn empty_relation() -> ResultRelation {
         fresh: vec![],
         aliases: vec![],
         external_deps: vec![],
+        opaque: false,
         provenance: AdmissionProvenance::UnboundResult,
     }
 }

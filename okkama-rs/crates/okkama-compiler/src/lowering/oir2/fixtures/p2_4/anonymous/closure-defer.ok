@@ -1,0 +1,11 @@
+module app;
+main() is int {
+    let f = () is int {
+        defer if true {
+            return 7;
+        } else {
+        };
+        return 1;
+    };
+    f();
+}

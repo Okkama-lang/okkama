@@ -1,0 +1,14 @@
+test-mode false
+body Entry/[]
+  local f: action<sync;(int)->int>
+  local g: action<sync;(int)->int>
+body Entry/[0]
+  local x: int
+body Ctor { object: ObjectId(3), ctor: 0 }/[]
+  receiver object(app::Id<int>)
+  local seed: int
+body Method { object: ObjectId(3), method: 0 }/[]
+  receiver object(app::Id<int>)
+  local f: action<sync;(int)->int>
+open action<sync;(int)->int>
+  site Entry/[] #0 module 0

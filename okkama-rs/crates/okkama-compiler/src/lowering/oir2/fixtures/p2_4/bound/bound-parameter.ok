@@ -1,0 +1,17 @@
+module app;
+object Counter {
+    has n is int;
+    Counter(:n);
+    read() is int { n; }
+    bumped() is ^Counter { ^n = n + 1; }
+}
+object Apply {
+    Apply();
+    call(f is (int) is int) is int { f(3); }
+}
+object Add {
+    has n is int;
+    Add(:n);
+    add(value is int) is int { n + value; }
+}
+main() is int { Apply().call(Add(n: 7).add); }

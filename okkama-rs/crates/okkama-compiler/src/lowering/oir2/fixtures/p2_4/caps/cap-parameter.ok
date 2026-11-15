@@ -1,0 +1,13 @@
+module app;
+object Owner {
+    has n is int;
+    Owner(:n);
+    cap View {
+        value is int { n; }
+    }
+}
+object Reader {
+    Reader();
+    read(view is Owner::View) is int { view::value; }
+}
+main() is int { Reader().read(Owner(n: 4)::View); }

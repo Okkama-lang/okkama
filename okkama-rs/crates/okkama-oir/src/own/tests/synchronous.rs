@@ -261,9 +261,6 @@ impl ExternalContracts for TrustedNative {
     fn intrinsic_summary(&self, name: &str) -> Option<&Summary> {
         (name == self.name).then_some(&self.summary)
     }
-    fn descriptor_cleanup(&self, name: &str) -> Option<&Summary> {
-        (name == "oir.sync_closure.cleanup" && name == self.name).then_some(&self.summary)
-    }
 }
 
 #[test]
@@ -293,6 +290,7 @@ fn observation_borrowed_result_and_explicit_empty_native_transport() {
             results: vec![ResultRelation {
                 fresh: vec![], aliases: if observation { vec![SummarySelection::Parameter(0)] } else { vec![] },
                 external_deps: if observation { vec![0] } else { vec![] },
+                opaque: false,
                 provenance: if observation { AdmissionProvenance::Bound } else { AdmissionProvenance::UnboundResult },
             }],
             contract: CallContract {

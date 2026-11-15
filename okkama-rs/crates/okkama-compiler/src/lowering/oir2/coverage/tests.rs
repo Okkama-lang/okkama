@@ -42,3 +42,6 @@ fn oir2_p2_3_coverage_paths_and_inventory() {
     assert_eq!(l09.len(), 4);
     assert_eq!(ids.len(), 145);
 }
+
+#[path = "p2_4.rs"]
+mod p2_4;

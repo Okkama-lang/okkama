@@ -357,6 +357,7 @@ impl Universe {
             result.fresh.push(site.origin(body, 0, self.strides[&function]));
             result.provenance = source.provenance;
         }
+        result.opaque |= source.opaque;
         Ok(result)
     }
 
@@ -401,6 +402,8 @@ impl Universe {
                     result.fresh.push(site.origin(body, index, self.strides[&function]));
                     result.provenance = relation.provenance;
                 }
+                // An opaque callee result stays opaque in every caller relation.
+                result.opaque |= relation.opaque;
                 results.push(result);
             }
             if call.packet.is_some() {

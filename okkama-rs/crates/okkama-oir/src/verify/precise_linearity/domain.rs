@@ -61,6 +61,19 @@ pub(super) struct Piece {
     pub holder: Option<Origin>,
     pub channel: bool,
 }
+impl Filter {
+    /// Filters that name the same stable keys, possible graph, admission filter
+    /// and piece state select the same cell of a piece. Labels name SSA aliases of
+    /// the selecting value; they distinguish incarnations only for retired
+    /// families, so elsewhere a forwarded alias name does not change the cell.
+    pub fn same_cell(&self, other: &Self) -> bool {
+        let retired = |key: &Origin| matches!(key, Origin::RetiredInstruction(..) | Origin::RetiredInvoke(..)
+            | Origin::RetiredProjection(..) | Origin::RetiredViewInstruction(..) | Origin::RetiredViewInvoke(..));
+        self.keys == other.keys && self.fresh == other.fresh && self.possible == other.possible
+            && self.stale == other.stale && self.whole_future == other.whole_future && self.state == other.state
+            && (self.labels == other.labels || !self.keys.iter().any(retired))
+    }
+}
 impl Piece {
     pub fn new(origin: Origin, provenance: AdmissionProvenance) -> Self {
         Self {
@@ -73,6 +86,14 @@ impl Piece {
             holder: None,
             channel: false,
         }
+    }
+    /// The recorded side of this piece for `filter`'s cell (#569 O1): an exact
+    /// predicate, else one recorded by a non-stale filter selecting the same cell.
+    pub fn predicate(&self, filter: &Filter) -> Option<bool> {
+        if let Some(value) = self.predicates.get(filter) {
+            return Some(*value);
+        }
+        self.predicates.iter().find(|(old, _)| !old.stale && old.same_cell(filter)).map(|(_, value)| *value)
     }
     pub fn overlaps(&self, other: &Self) -> bool {
         self.origin == other.origin && self.journal == other.journal && !self.predicates.iter().any(|(key, value)| {

@@ -1,0 +1,18 @@
+module app;
+object Counter {
+    has n is int;
+    Counter(:n);
+    bumped() is ^Counter {
+        ^n = n + 1;
+    }
+read() is int {
+        n;
+    }
+}
+main() is int {
+    let later = Counter(n: 1).bumped();
+    let f = () is int {
+        later.read();
+    };
+    f();
+}

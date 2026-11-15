@@ -1,3 +1,12 @@
+#[path = "anonymous_tests.rs"]
+mod anonymous_tests;
+#[path = "bound_tests.rs"]
+mod bound_tests;
+#[path = "cap_tests.rs"]
+mod cap_tests;
+#[path = "open_call_tests.rs"]
+mod open_call_tests;
+
 use super::{LowerError, lower_to_oir2};
 use super::native_summaries::P1NativeSummaries;
 use crate::analysis::{self, thir};
@@ -1246,7 +1255,6 @@ fn oir2_std_rejects_other_intrinsics_resources_and_async() {
         "let a = Atomic(1); a.compare_and_replace(1, 2); 0;",
         "let a = Atomic(R()); 0;",
         "let a = Cell(R()); 0;",
-        "let action = () is int { 1; }; 0;",
     ] {
         let source = format!("module app; import \"async/atomic\" take Atomic; import \"cell\" take Cell; \
             object R {{ R(); destroy {{ }} }} main() is int {{ {body} }}");
@@ -1330,7 +1338,7 @@ fn oir2_high_observation_requires_a_trusted_external() {
             entry_kind: ir::EntryKind::ObservationAdmissionStaysCaller,
             parameters: vec![],
             results: vec![ir::ResultRelation {
-                fresh: vec![], aliases: vec![], external_deps: vec![],
+                fresh: vec![], aliases: vec![], external_deps: vec![], opaque: false,
                 provenance: ir::AdmissionProvenance::UnboundResult,
             }],
             contract: ir::CallContract {

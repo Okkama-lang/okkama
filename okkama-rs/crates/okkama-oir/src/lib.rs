@@ -20,6 +20,7 @@ mod ids;
 mod module;
 pub mod ops;
 pub mod contracts;
+pub mod catalogue;
 pub mod cfg;
 pub mod builder;
 pub mod visit;

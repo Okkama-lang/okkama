@@ -1,0 +1,55 @@
+oir 2 high
+module app
+requires core
+entry @main
+scope S0 action in @main
+scope S1 action in @main.lambda#0
+scope S2 action in @main.lambda#0.0
+
+func @main() -> int [entry] {
+    binding b0 "x": int in S0
+    binding b1 "make": fn() -> fn() -> int in S0
+    boundary B0 lexical in S0
+    ^b0 in S0 unwind ^b1:
+    %0: int = const 7
+    bind %0, binding b0
+    %1: fn() -> fn() -> int = fn.closure @main.lambda#0, [%0], ty fn() -> fn() -> int
+    bind %1, binding b1
+    [i4] %2: fn() -> int = fn.call %1()
+    [i5] %3: int = fn.call %2()
+    want %3
+    [i7] exit.prepare return %3 at B0
+    result.exit edge normal(0), value %3, demand want, prepare #7
+    high.effects at #4 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #5 failures [thrown, program, panic, native, cancelled], suspends true
+    ret %3
+    ^b1(%4: failure) in S0:
+    raise %4
+}
+
+func @main.lambda#0(%0: int) -> fn() -> int [lambda captures 1] {
+    binding b0 "x": int in S1
+    boundary B0 lexical in S1
+    ^b0 in S1 unwind ^b1:
+    bind %0, binding b0
+    %1: fn() -> int = fn.closure @main.lambda#0.0, [%0], ty fn() -> int
+    want %1
+    [i3] exit.prepare return %1 at B0
+    result.exit edge normal(0), value %1, demand want, prepare #3
+    ret %1
+    ^b1(%2: failure) in S1:
+    raise %2
+}
+
+func @main.lambda#0.0(%0: int) -> int [lambda captures 1] {
+    binding b0 "x": int in S2
+    boundary B0 lexical in S2
+    ^b0 in S2 unwind ^b1:
+    bind %0, binding b0
+    want %0
+    [i2] exit.prepare return %0 at B0
+    result.exit edge normal(0), value %0, demand want, prepare #2
+    ret %0
+    ^b1(%1: failure) in S2:
+    raise %1
+}

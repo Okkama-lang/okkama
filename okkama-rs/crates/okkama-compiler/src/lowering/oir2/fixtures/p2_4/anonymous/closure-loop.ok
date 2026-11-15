@@ -1,0 +1,9 @@
+module app;
+main() is int {
+    for 0..2 -> i {
+        let f = () is int {
+            i;
+        };
+        f();
+    } 0;
+}

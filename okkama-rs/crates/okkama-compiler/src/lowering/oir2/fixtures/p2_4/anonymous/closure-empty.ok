@@ -1,0 +1,7 @@
+module app;
+main() is int {
+    let f = () is int {
+        7;
+    };
+    f();
+}

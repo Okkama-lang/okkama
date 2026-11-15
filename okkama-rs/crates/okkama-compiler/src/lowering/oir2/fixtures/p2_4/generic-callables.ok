@@ -1,0 +1,11 @@
+module app;
+object Id<T> {
+    has seed is T;
+    Id(:seed);
+    id(f is (T) is T) is (T) is T { f; }
+}
+main() is int {
+    let f = (x is int) is int { x; };
+    let g = Id(seed: 0).id(f);
+    g(4);
+}

@@ -243,11 +243,13 @@ fn oir2_c7_frontend_restrictions_are_preserved() {
 }
 
 #[test]
-fn oir2_c7_anonymous_action_inside_block_remains_unsupported() {
+fn oir2_c7_anonymous_action_inside_block_has_its_own_boundary() {
     with_analysis("module app; main() is int { [1].map() -> x { () is int { x; }; }; 0; }", |analysis| {
-        let error = super::lower_to_oir2(analysis).unwrap_err();
-        assert!(matches!(error, super::LowerError::Unsupported { span, .. } if !span.is_empty()));
-        assert!(error.to_string().contains("#569"), "{error}");
+        let module = super::lower_to_oir2(analysis).unwrap();
+        super::tests::verify_high(&module, "closure inside functional block");
+        assert!(module.functions.iter().any(|(_, function)| function.attrs.iter().any(|attr| {
+            matches!(attr, ir::FunctionAttr::Lambda { captures: 1, .. })
+        })));
     });
 }
 
