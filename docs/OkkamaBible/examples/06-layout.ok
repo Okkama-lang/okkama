@@ -1,0 +1,22 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "strings/format" take Formatted, InvalidFormat;
+import "text/layout" take Wrapped, Indented, Shortened;
+
+main() is int {
+    let out = Stdout();
+    let title = "The northern line reopens on Monday after three weeks of track renewal";
+    let body = "Trains run every ten minutes from six in the morning. "
+        + "Replacement buses stop at the usual places until Sunday night.";
+    // A heading cut at a word, with a visible mark where it was cut.
+    out.writeln(Shortened(origin: title, width: 40, placeholder: "...").string());
+    // Slots are filled in order; every value turns into text by its own string().
+    out.writeln(Formatted("{} stations, {} km, {} minutes end to end", 14, 23.5, 41).string());
+    // A paragraph wrapped to a width and indented as a block.
+    out.writeln(Indented(origin: Wrapped(origin: body, width: 36).string(), prefix: "  ").string());
+    // A pattern whose slots do not match its values is an error, not a silent blank.
+    let broken = try { Formatted("{} and {}", "one").string(); } catch error is InvalidFormat { "pattern and values disagree"; };
+    out.writeln(broken);
+    0;
+}

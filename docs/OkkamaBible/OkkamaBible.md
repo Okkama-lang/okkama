@@ -69,7 +69,8 @@
   - [6.6 Text and bytes](#66-text-and-bytes)
   - [6.7 Characters](#67-characters)
   - [6.8 What text costs](#68-what-text-costs)
-  - [6.9 Limits](#69-limits)
+  - [6.9 Laying out text](#69-laying-out-text)
+  - [6.10 Limits](#610-limits)
 - [Chapter 7. Absence Without Null](#chapter-7-absence-without-null)
   - [7.1 What null means — too many things](#71-what-null-means--too-many-things)
   - [7.2 Okkama's answer: one construct per meaning](#72-okkamas-answer-one-construct-per-meaning)
@@ -2520,7 +2521,71 @@ the best example in this book of a cost that a design choice moved from the
 language to its users, and of why the choice has to be paid for with the
 right operation.
 
-## 6.9 Limits
+## 6.9 Laying out text
+
+Without interpolation, longer text is assembled from small objects that each
+know one transformation and answer `string()`. Two modules carry them:
+`strings/format` fills a pattern, and `text/layout` shapes paragraphs.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "strings/format" take Formatted, InvalidFormat;
+import "text/layout" take Wrapped, Indented, Shortened;
+
+main() is int {
+    let out = Stdout();
+    let title = "The northern line reopens on Monday after three weeks of track renewal";
+    let body = "Trains run every ten minutes from six in the morning. "
+        + "Replacement buses stop at the usual places until Sunday night.";
+    // A heading cut at a word, with a visible mark where it was cut.
+    out.writeln(Shortened(origin: title, width: 40, placeholder: "...").string());
+    // Slots are filled in order; every value turns into text by its own string().
+    out.writeln(Formatted("{} stations, {} km, {} minutes end to end", 14, 23.5, 41).string());
+    // A paragraph wrapped to a width and indented as a block.
+    out.writeln(Indented(origin: Wrapped(origin: body, width: 36).string(), prefix: "  ").string());
+    // A pattern whose slots do not match its values is an error, not a silent blank.
+    let broken = try { Formatted("{} and {}", "one").string(); } catch error is InvalidFormat { "pattern and values disagree"; };
+    out.writeln(broken);
+    0;
+}
+```
+
+Output:
+
+```text
+The northern line reopens on Monday...
+14 stations, 23.5 km, 41 minutes end to end
+  Trains run every ten minutes from
+  six in the morning. Replacement
+  buses stop at the usual places until
+  Sunday night.
+pattern and values disagree
+```
+
+- **`Formatted(pattern, values...)`** fills each `{}` slot, left to right,
+  with the next value's own `string()`. Other braces are literal, so `{x}`
+  stays `{x}`. A pattern whose slots do not match its values is the error
+  `InvalidFormat`, not a blank or a leftover `{}`.
+- **`Wrapped(origin:, width:)`** collapses runs of whitespace between words,
+  removes it at both ends, and packs whole words into lines no wider than
+  `width`. A word is never split; one longer than the width keeps a line of
+  its own.
+- **`Indented(origin:, prefix:)`** puts the prefix before every line that is
+  not blank and keeps the line endings; **`Dedented(origin:)`** removes the
+  longest spaces-and-tabs prefix that every non-blank line shares.
+- **`Shortened(origin:, width:, placeholder:)`** keeps the longest
+  whole-word prefix that still fits together with the placeholder.
+
+Widths count code points, consistently with `length()`: a width of 36 is 36
+Unicode scalar values, which is what a terminal shows for text without wide
+or combining characters, and an honest approximation otherwise. Each object
+is a value, so a layout is built by nesting — `Indented(origin:
+Wrapped(...).string(), prefix: "  ")` — rather than by calling a chain of
+methods on a mutable buffer.
+
+## 6.10 Limits
 
 - **Text assembly.** Extending a chain with `text + piece` costs the appended text rather than a copy of everything so far. A `TextBuffer` makes the intention to build one result explicit.
 - **Case conversion has no locale.** `lower()` and `upper()` follow the

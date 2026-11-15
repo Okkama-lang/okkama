@@ -231,7 +231,36 @@ the best example in this book of a cost that a design choice moved from the
 language to its users, and of why the choice has to be paid for with the
 right operation.
 
-## 6.9 Limits
+## 6.9 Laying out text
+
+Without interpolation, longer text is assembled from small objects that each
+know one transformation and answer `string()`. Two modules carry them:
+`strings/format` fills a pattern, and `text/layout` shapes paragraphs.
+
+{{example:06-layout}}
+
+- **`Formatted(pattern, values...)`** fills each `{}` slot, left to right,
+  with the next value's own `string()`. Other braces are literal, so `{x}`
+  stays `{x}`. A pattern whose slots do not match its values is the error
+  `InvalidFormat`, not a blank or a leftover `{}`.
+- **`Wrapped(origin:, width:)`** collapses runs of whitespace between words,
+  removes it at both ends, and packs whole words into lines no wider than
+  `width`. A word is never split; one longer than the width keeps a line of
+  its own.
+- **`Indented(origin:, prefix:)`** puts the prefix before every line that is
+  not blank and keeps the line endings; **`Dedented(origin:)`** removes the
+  longest spaces-and-tabs prefix that every non-blank line shares.
+- **`Shortened(origin:, width:, placeholder:)`** keeps the longest
+  whole-word prefix that still fits together with the placeholder.
+
+Widths count code points, consistently with `length()`: a width of 36 is 36
+Unicode scalar values, which is what a terminal shows for text without wide
+or combining characters, and an honest approximation otherwise. Each object
+is a value, so a layout is built by nesting — `Indented(origin:
+Wrapped(...).string(), prefix: "  ")` — rather than by calling a chain of
+methods on a mutable buffer.
+
+## 6.10 Limits
 
 - **Text assembly.** Extending a chain with `text + piece` costs the appended text rather than a copy of everything so far. A `TextBuffer` makes the intention to build one result explicit.
 - **Case conversion has no locale.** `lower()` and `upper()` follow the

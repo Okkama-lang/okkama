@@ -69,7 +69,8 @@
   - [6.6 Текст и байты](#66-текст-и-байты)
   - [6.7 Символы](#67-символы)
   - [6.8 Чего стоит текст](#68-чего-стоит-текст)
-  - [6.9 Ограничения](#69-ограничения)
+  - [6.9 Раскладка текста](#69-раскладка-текста)
+  - [6.10 Ограничения](#610-ограничения)
 - [Глава 7. Отсутствие без null](#глава-7-отсутствие-без-null)
   - [7.1 Что означает null — слишком многое](#71-что-означает-null--слишком-многое)
   - [7.2 Ответ Okkama: одна конструкция на один смысл](#72-ответ-okkama-одна-конструкция-на-один-смысл)
@@ -2563,7 +2564,73 @@ Unicode (больше `0x10FFFF` или суррогат), — ошибка вр
 пользователей, — и того, почему за решение нужно платить правильной
 операцией.
 
-## 6.9 Ограничения
+## 6.9 Раскладка текста
+
+Без интерполяции длинный текст собирается из маленьких объектов, каждый из
+которых знает одно преобразование и отвечает на `string()`. Их несут два
+модуля: `strings/format` заполняет шаблон, а `text/layout` придаёт форму
+абзацам.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "strings/format" take Formatted, InvalidFormat;
+import "text/layout" take Wrapped, Indented, Shortened;
+
+main() is int {
+    let out = Stdout();
+    let title = "The northern line reopens on Monday after three weeks of track renewal";
+    let body = "Trains run every ten minutes from six in the morning. "
+        + "Replacement buses stop at the usual places until Sunday night.";
+    // A heading cut at a word, with a visible mark where it was cut.
+    out.writeln(Shortened(origin: title, width: 40, placeholder: "...").string());
+    // Slots are filled in order; every value turns into text by its own string().
+    out.writeln(Formatted("{} stations, {} km, {} minutes end to end", 14, 23.5, 41).string());
+    // A paragraph wrapped to a width and indented as a block.
+    out.writeln(Indented(origin: Wrapped(origin: body, width: 36).string(), prefix: "  ").string());
+    // A pattern whose slots do not match its values is an error, not a silent blank.
+    let broken = try { Formatted("{} and {}", "one").string(); } catch error is InvalidFormat { "pattern and values disagree"; };
+    out.writeln(broken);
+    0;
+}
+```
+
+Вывод:
+
+```text
+The northern line reopens on Monday...
+14 stations, 23.5 km, 41 minutes end to end
+  Trains run every ten minutes from
+  six in the morning. Replacement
+  buses stop at the usual places until
+  Sunday night.
+pattern and values disagree
+```
+
+- **`Formatted(pattern, values...)`** заполняет каждый слот `{}` слева
+  направо значением следующего аргумента через его собственный `string()`.
+  Остальные фигурные скобки буквальны, `{x}` остаётся `{x}`. Шаблон, слоты
+  которого не совпадают со значениями, — ошибка `InvalidFormat`, а не пустое
+  место или оставшийся `{}`.
+- **`Wrapped(origin:, width:)`** схлопывает пробельные промежутки между
+  словами, убирает их по краям и укладывает целые слова в строки не шире
+  `width`. Слово никогда не разрезается; слово длиннее ширины занимает
+  отдельную строку.
+- **`Indented(origin:, prefix:)`** ставит префикс перед каждой непустой
+  строкой и сохраняет концы строк; **`Dedented(origin:)`** убирает самый
+  длинный префикс из пробелов и табуляций, общий для всех непустых строк.
+- **`Shortened(origin:, width:, placeholder:)`** оставляет самый длинный
+  префикс из целых слов, который помещается вместе с заполнителем.
+
+Ширина считается в кодовых точках, согласованно с `length()`: ширина 36 —
+это 36 скалярных значений Unicode, то есть то, что показывает терминал для
+текста без широких и комбинирующих символов, и честное приближение в
+остальных случаях. Каждый объект — значение, поэтому раскладка строится
+вложением — `Indented(origin: Wrapped(...).string(), prefix: "  ")`, — а не
+цепочкой вызовов над изменяемым буфером.
+
+## 6.10 Ограничения
 
 - **Сборка текста.** Продолжение цепочки `text + piece` стоит дописываемого текста, а не копии всего накопленного. `TextBuffer` явно выражает намерение собрать один результат.
 - **Регистр без локали.** `lower()` и `upper()` следуют умолчанию Unicode;
