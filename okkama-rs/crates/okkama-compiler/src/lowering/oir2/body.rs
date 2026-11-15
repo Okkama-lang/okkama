@@ -121,7 +121,8 @@ impl<'a, 't> BodyLowerer<'a, 't> {
         }
         if this.context.deferred.is_none() && this.context.bound_entries.contains(&this.function()) {
             let object = owner.expect("bound method owner");
-            this.check_pending(this.receiver.expect("bound method receiver"), this.context.objects[&object])?;
+            let function = this.function();
+            this.check_pending(this.receiver.expect("bound method receiver"), this.context.objects[&object], function)?;
         }
         if this.context.deferred.is_none() {
             this.initialize_fields()?;

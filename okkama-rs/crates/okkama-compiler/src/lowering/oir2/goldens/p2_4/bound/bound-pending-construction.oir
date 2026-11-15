@@ -79,7 +79,7 @@ func @app.Parent.read#0(%0: app.Parent) -> int [method app.Parent] {
     ^b1(%2: failure) in S0:
     raise %2
     ^b2 in S0 unwind ^b1:
-    trap pending "action called before construction completed"
+    trap pending "Action \"read\" on object \"Parent\" was called before its construction completed"
     ^b3 in S0 unwind ^b1:
     %3: int = obj.get %0, n
     want %3
@@ -99,7 +99,7 @@ func @main() -> int [entry] {
     ^b1(%3: failure) in S1:
     raise %3
     ^b2 in S1 unwind ^b1:
-    trap pending "action called before construction completed"
+    trap pending "Action \"read\" on object \"Parent\" was called before its construction completed"
     ^b3 in S1 unwind ^b1:
     [i3] %4: int = call @app.Parent.read#0(%1)
     want %4

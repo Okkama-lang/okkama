@@ -1126,6 +1126,11 @@ impl Emit<'_, '_> {
             for &location in &locations {
                 if matches!(location, L::Service(id) if self.source.services[id as usize] == s::ServiceKind::Packet) {
                     self.write(location, &[zero]);
+                    // An owning entry that passes its input packet on without accepting it (a closure
+                    // trampoline) has handed it over: every outcome of the entry leaves io.input consumed.
+                    if self.source.entry_abi != s::EntryAbi::Observation && self.source.params.contains(&location) {
+                        self.store(self.io, 0, zero);
+                    }
                 }
             }
         }
