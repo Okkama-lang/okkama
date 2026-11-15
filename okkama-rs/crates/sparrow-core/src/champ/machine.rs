@@ -42,6 +42,10 @@ pub(crate) struct Program {
     pub external: Vec<Option<ExternalEntry>>,
     pub p1: Vec<bool>,
     pub native_failure: u32,
+    /// The frame of each async body (draft 3 §2), index-aligned with the functions.
+    pub frames: Vec<Option<super::FrameMap>>,
+    /// Runtime ids of each function's D16 schedules, by local schedule index.
+    pub schedules: Vec<Vec<u64>>,
 }
 
 impl Program {
@@ -120,6 +124,11 @@ impl Runtime {
         self.champ.machine.as_ref()?.entries.get(function).copied()
     }
 
+    /// The runtime id of a function's D16 schedule, the `schedule` operand of `champ_cleanup_settle`.
+    pub fn champ_schedule_id(&self, function: usize, schedule: u32) -> Option<u64> {
+        self.champ.machine.as_ref()?.schedules.get(function)?.get(schedule as usize).copied()
+    }
+
     /// There is no SPB 16 fallback. External contracts are checked before any machine code is published.
     pub fn new_champ(source: s::Program, external: Vec<ExternalEntry>) -> Result<Box<Self>, Error> {
         for entry in &external {
@@ -137,12 +146,21 @@ impl Runtime {
         };
         legacy.types.push(okkama_sparrow::Type::Byte);
         legacy.handles = source.objects.iter().map(|object| object.name.clone()).collect();
+        // A Future's outcome type, as Tomato's declarations name it (draft 3 §2); a void Future has none.
+        let mut futures = Vec::new();
+        for result in &source.tables.future_results {
+            let outcome = result.map(|ty| {
+                legacy.types.push(legacy_type(ty, &futures));
+                okkama_sparrow::TypeRef(legacy.types.len() as u32 - 1)
+            });
+            futures.push(outcome);
+        }
         // This declaration view serves existing descriptors, diagnostics and heap layout consumers only.
         // No old bytecode is generated or executed.
         for object in &source.objects {
             let fields = object.layout.storage_fields.iter().enumerate().map(|(index, &ty)| {
                 let id = okkama_sparrow::TypeRef(legacy.types.len() as u32);
-                legacy.types.push(legacy_type(ty));
+                legacy.types.push(legacy_type(ty, &futures));
                 (format!("storage{index}"), id)
             }).collect();
             let descriptor = legacy.objects.len() as u32;
@@ -156,7 +174,7 @@ impl Runtime {
         for function in &source.functions {
             let registers = function.registers.iter().map(|&ty| {
                 let id = okkama_sparrow::TypeRef(legacy.types.len() as u32);
-                legacy.types.push(legacy_type(ty));
+                legacy.types.push(legacy_type(ty, &futures));
                 id
             }).collect();
             let params = function.params.iter().filter_map(|location| match location {
@@ -194,8 +212,21 @@ impl Runtime {
         }).collect::<Result<Vec<_>, _>>().map_err(|error| Error(error.to_string()))?;
         layouts.push(ObjectRuntimeLayout::new(vec![Repr::Ref; 4], LayoutFacts::default(), vec![])
             .map_err(|error| Error(error.to_string()))?);
-        runtime.heap = Heap::new_champ(runtime.loaded.layouts(), layouts.into_boxed_slice());
+        // An async body's frame is traced by its frame map, not by Tomato's register layout.
+        let frames = (0..source.functions.len()).map(|index| super::FrameMap::new(&source, index)).collect::<Vec<_>>();
+        let mut heap_layouts = runtime.loaded.layouts();
+        for (index, map) in frames.iter().enumerate() {
+            if let Some(map) = map {
+                heap_layouts.frames[index] = map.trace.clone();
+            }
+        }
+        runtime.heap = Heap::new_champ(heap_layouts, layouts.into_boxed_slice());
         let plans = runtime.champ_load_cleanup_plans(&source, &catalog)?;
+        let schedules = source.functions.iter().map(|function| {
+            function.proofs.schedules.iter()
+                .map(|schedule| runtime.champ_register_schedule(schedule.services.len() as u64))
+                .collect()
+        }).collect();
         let mut selections = Vec::new();
         let mut entries = Vec::new();
         let mut shielded_entries = Vec::new();
@@ -242,13 +273,13 @@ impl Runtime {
         }).collect();
         runtime.champ.machine = Some(Program {
             source: Arc::new(source), plans, selections, entries, shielded_entries,
-            external: implementations, p1, native_failure,
+            external: implementations, p1, native_failure, frames, schedules,
         });
         Ok(Box::new(runtime))
     }
 }
 
-fn legacy_type(ty: s::Type) -> okkama_sparrow::Type {
+fn legacy_type(ty: s::Type, futures: &[Option<okkama_sparrow::TypeRef>]) -> okkama_sparrow::Type {
     use okkama_sparrow::Type as T;
     match ty {
         s::Type::Error => T::Failure,
@@ -268,8 +299,8 @@ fn legacy_type(ty: s::Type) -> okkama_sparrow::Type {
         s::Type::Float => T::Float,
         s::Type::Rat => T::Rat,
         s::Type::Char => T::Char,
-        // A Future is a reference to its frame (Champ draft 3 §2); #601 V8 gives the view its outcome type.
-        s::Type::Future(_) => T::Future(None),
+        // A Future is a reference to its frame (Champ draft 3 §2), with its outcome type when it has one.
+        s::Type::Future(index) => T::Future(futures.get(index as usize).copied().flatten()),
     }
 }
 
