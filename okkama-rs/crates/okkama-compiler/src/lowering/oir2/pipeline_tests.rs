@@ -62,3 +62,11 @@ w1_loads! {
     oir2_w1_order_lazy_branches_loads_as_spb17 => "L08.order.lazy-branches",
     oir2_w1_void_await_for_effect_loads_as_spb17 => "L08.void.await-for-effect",
 }
+
+/// The full verifier is the gate profile: the largest W1 body, `main` of L08.order.lazy-branches (79.4M steps in
+/// Low), builds under it within the gate's limit, above the default 50M (#693).
+#[test]
+fn oir2_w1_order_lazy_branches_builds_under_the_full_gate() {
+    assert!(o::verify::GATE_STEPS > o::verify::VerifyLimits::default().steps);
+    spb17("L08.order.lazy-branches", o::VerifyMode::Full).unwrap_or_else(|error| panic!("{error}"));
+}

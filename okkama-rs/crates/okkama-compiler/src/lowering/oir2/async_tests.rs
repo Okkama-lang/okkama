@@ -546,9 +546,9 @@ fn coro_to_low(coro: ir::Module) -> Result<ir::Module, String> {
         .map_err(|error| format!("contracts_coro: {error:?}"))?;
     let low = ir::low::lower_cleanup(coro, &ir::low::LowOptions::default()).map_err(|error| format!("low: {error}"))?;
     // Owner decision O3 (plan §6.1): a gate over budget raises the work limit of the gate profile and never skips a
-    // module. The main of order.lazy-branches needs about 114M verifier steps in Low (26M in coro), above the
-    // default 50M.
-    let limits = ir::verify::VerifyLimits { steps: 200_000_000, ..Default::default() };
+    // module. The main of order.lazy-branches needs 79.4M verifier steps in Low (26.2M in coro), above the default
+    // 50M (#693).
+    let limits = ir::verify::VerifyLimits::gate();
     let verify = ir::verify::VerifyOptions { mode: ir::verify::VerifyMode::Full, limits, ..Default::default() };
     let context = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
     ir::verify::verify_low_with(&low, &verify, context).map_err(|error| format!("verify_low: {error:?}"))?;

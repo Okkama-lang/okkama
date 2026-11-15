@@ -234,11 +234,25 @@ impl<T: Clone + Eq> PerValue<T> {
     }
     pub fn indexed_mut(&mut self) -> impl Iterator<Item = (usize, &mut T)> {
         self.dirty.extend(self.entries.keys().copied());
+        self.compact_dirty();
         self.entries.iter_mut().map(|(index, value)| (*index, value))
     }
     pub fn stored_mut(&mut self) -> impl Iterator<Item = &mut T> {
         self.dirty.extend(self.entries.keys().copied());
+        self.compact_dirty();
         self.entries.values_mut()
+    }
+    /// Every mutable access records its slot, and a slot is usually accessed many times between clones. Once
+    /// the record outgrows the stored slots, keep each stored slot once: only a stored slot can hold an explicit
+    /// default, so a clone and its charge scale with the slots, not with the accesses (#693).
+    fn compact_dirty(&mut self) {
+        if self.dirty.len() <= 2 * self.entries.len() + 16 {
+            return;
+        }
+        self.dirty.sort_unstable();
+        self.dirty.dedup();
+        let entries = &self.entries;
+        self.dirty.retain(|index| entries.get(index).is_some());
     }
     /// Bulk rewrites may touch only a few logical slots. Do not detach the
     /// unchanged entries merely because a caller visits them during a scan.
@@ -266,6 +280,7 @@ impl<T: Clone + Eq> PerValue<T> {
                 self.dirty.push(*index);
             }
         }
+        self.compact_dirty();
         work + self.entries.replace_values(changed)
     }
     #[cfg(test)]
@@ -438,6 +453,8 @@ impl<T: Clone + Eq> Index<usize> for PerValue<T> {
 impl<T: Clone + Eq> IndexMut<usize> for PerValue<T> {
     fn index_mut(&mut self, index: usize) -> &mut T {
         assert!(index < self.len);
+        // Compact before recording: the slot may not be stored yet.
+        self.compact_dirty();
         self.dirty.push(index);
         self.entries.entry(index).or_insert_with(|| self.default.as_ref().unwrap().value.clone())
     }
@@ -508,6 +525,39 @@ mod tests {
             *value = 0;
         }
         assert_eq!(values.clone().indexed().count(), 0);
+    }
+
+    /// A slot accessed many times between clones is recorded once: the record stays within the stored slots,
+    /// the clone charge does not grow with the accesses, and a clone still drops explicit defaults (#693).
+    #[test]
+    fn repeated_mutable_access_records_each_slot_once() {
+        let mut values = PerValue::new(1_000, 0u8);
+        for index in 0..10 {
+            values.set(index, 1);
+        }
+        let once = {
+            let mut copy = values.clone();
+            for index in 0..10 {
+                copy[index] = 2;
+            }
+            copy.clone_work()
+        };
+        for _ in 0..1_000 {
+            for index in 0..10 {
+                values[index] = 2;
+            }
+            for value in values.stored_mut() {
+                *value = 2;
+            }
+        }
+        assert!(values.dirty.len() <= 2 * values.stored_len() + 16, "{}", values.dirty.len());
+        assert!(values.clone_work() <= 3 * once, "{} {once}", values.clone_work());
+        values[3] = 0;
+        values[500] = 0;
+        let copied = values.clone();
+        assert_eq!(copied.indexed().count(), 9);
+        assert_eq!(copied[3], 0);
+        assert_eq!(copied[4], 2);
     }
 
     #[test]
