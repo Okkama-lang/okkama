@@ -8,6 +8,19 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Module constants on Champ (#709).** A `const` whose value is an array or a
+  map (an OIR-2 global with an init function) had no SPB 17 layout ("unsupported
+  declaration app.const.PRIMES"). SPB 17 gains a globals table: each constant
+  is closed plain data written as data (constants, enum cases, arrays and maps
+  of earlier data, children first), read by the new data operation
+  `global.get` (wire 95, `Immediate::Global`). The loader checks the table with
+  the new rules `GLOBAL_TYPE` (closed plain data, last datum is the value),
+  `GLOBAL_DATA` (each datum builds its declared type from earlier data) and
+  `GLOBAL_GET` (an existing constant, read as its type). Champ builds every
+  constant once before the program runs and keeps it as a runtime constant;
+  a read is the word itself. `L06.const.values` and
+  `L05.literal.empty-collections` pass on Champ.
+
 - **Champ indexes byte arrays (#703).** `bytes[i]` on an `@byte` value stopped
   SPB 17 generation ("array.get requires a certified plain array"): `array.get`
   took only the plain array shape. The loader now admits a byte array receiver

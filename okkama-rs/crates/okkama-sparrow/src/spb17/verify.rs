@@ -372,6 +372,54 @@ fn constant_type(value: &Constant) -> Result<Type, Error> {
     }
 }
 
+/// Module constants (#709): each is closed plain data (`GLOBAL_TYPE`) whose data build exactly its type
+/// (`GLOBAL_DATA`): every datum is a constant, an enum case, an array or a map of its declared type, made of
+/// earlier data of its element, key and value types, and the last datum is the constant. The runtime
+/// builds the data in order before the program runs, so a value is never read as another type.
+fn check_globals(p: &Program) -> Check {
+    for global in &p.globals {
+        ty_valid(global.ty, p)?;
+        enforce(closed_plain(p, global.ty), "GLOBAL_TYPE", "a module constant must be closed plain data")?;
+        enforce(global.data.last().map(|datum| datum.ty) == Some(global.ty), "GLOBAL_TYPE",
+            "the last datum of a module constant must have the constant's type")?;
+        for (index, datum) in global.data.iter().enumerate() {
+            ty_valid(datum.ty, p)?;
+            let parts = |items: &[u32]| -> Result<Vec<Type>, Error> {
+                items.iter().map(|&item| {
+                    enforce((item as usize) < index, "GLOBAL_DATA", "a datum names a datum that does not precede it")?;
+                    Ok(global.data[item as usize].ty)
+                }).collect()
+            };
+            let valid = match &datum.value {
+                DatumValue::Constant(Constant::Descriptor(_)) => false,
+                DatumValue::Constant(value) => constant_type(value)? == datum.ty,
+                DatumValue::Case(case) => match datum.ty {
+                    Type::Object(id) => p.objects.get(id as usize).is_some_and(|object| {
+                        object.fields.is_empty() && object.layout.storage_fields == [Type::Int]
+                            && !object.layout.may_reach_resource
+                            && ((*case as usize) < object.error_cases.len() || *case < object.enum_cases)
+                    }),
+                    _ => false,
+                },
+                DatumValue::Array(items) => {
+                    let element = element_type(datum.ty);
+                    element.is_some() && parts(items)?.into_iter().all(|ty| Some(ty) == element)
+                }
+                DatumValue::Map(items) => match datum.ty {
+                    Type::Map(id) => match p.composites.get(id as usize) {
+                        Some(&Composite::Map { key, value }) => items.len().is_multiple_of(2)
+                            && parts(items)?.chunks(2).all(|pair| pair == [key, value]),
+                        _ => false,
+                    },
+                    _ => false,
+                },
+            };
+            enforce(valid, "GLOBAL_DATA", "a datum does not build a value of its declared type")?;
+        }
+    }
+    Ok(())
+}
+
 pub fn verify(p: &Program) -> Check {
     if let Some(entry) = p.entry {
         at(&p.functions, entry)?;
@@ -390,6 +438,7 @@ pub fn verify(p: &Program) -> Check {
         composite_valid(p, index, composite)?;
     }
     check_tests(p)?;
+    check_globals(p)?;
     let mut handles = BTreeSet::new();
     for object in &p.objects {
         // Natives name their handles by declaring module and name: one name, one declaration.
@@ -1291,7 +1340,8 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
     let expect = |args: &[Type], result: Option<Type>| -> Check {
         require(types == args && out == result, "scalar operand/result type or arity mismatch")
     };
-    let immediate_none = !matches!(op, Const | RangeNew | ObjNew | ObjInit | ObjGet | ObjNext | EnumCase | VariantGet);
+    let immediate_none = !matches!(op,
+        Const | RangeNew | ObjNew | ObjInit | ObjGet | ObjNext | EnumCase | VariantGet | GlobalGet);
     if immediate_none {
         require(*imm == Immediate::None, "unexpected scalar immediate")?;
     }
@@ -1313,6 +1363,15 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
                 && ((*case as usize) < object.error_cases.len() || *case < object.enum_cases),
                 "ENUM_CASE", "invalid plain enum case")?;
             expect(&[], Some(Type::Object(*id)))
+        }
+        GlobalGet => {
+            let Immediate::Global(index) = *imm else {
+                return Err(violation("GLOBAL_GET", "global.get requires a module constant index"));
+            };
+            let global = p.globals.get(index as usize)
+                .ok_or_else(|| violation("GLOBAL_GET", "global.get names no module constant"))?;
+            enforce(types.is_empty() && out == Some(global.ty), "GLOBAL_GET",
+                "global.get takes no operand and produces the constant's type")
         }
         ArrayNew => {
             let Some(element) = out.and_then(element_type) else {

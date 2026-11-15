@@ -942,3 +942,40 @@ fn single_error_case_names_only_one_case_error_variants() {
     let int = module.types.iter().find(|(_, ty)| **ty == o::Type::Int).map(|(id, _)| id).unwrap();
     assert_eq!(single_error_case(&module, int).unwrap(), None);
 }
+
+/// A module constant's SPB 17 layout (#709): its init body as data, children first and each value once;
+/// the global read becomes `global.get` of the constant's index. An init that computes anything else is
+/// not a constant SPB 17 lays out.
+#[test]
+fn globals_lay_out_init_data_children_first() {
+    let text = |extra: &str| format!(concat!(
+        "oir 2 low\nmodule app v1.0.0\nrequires core\n\n",
+        "global app.const.EMPTY: array<int> = @app.const.EMPTY.init\n",
+        "global app.const.NESTED: array<array<int>> = @app.const.NESTED.init\n\n",
+        "scope S0 action in @app.const.EMPTY.init\nscope S1 action in @app.const.NESTED.init\n",
+        "func @app.const.EMPTY.init() -> array<int> abi observation {{\n^entry in S0:\n",
+        "    %e: array<int> = array.new [], ty array<int>\n    ret %e\n}}\n",
+        "func @app.const.NESTED.init() -> array<array<int>> abi observation {{\n^entry in S1:\n",
+        "    %two: int = const 2\n    %inner: array<int> = array.new [%two, %two], ty array<int>\n{}",
+        "    %outer: array<array<int>> = array.new [%inner, %inner], ty array<array<int>>\n    ret %outer\n}}\n"),
+        extra);
+    let module = parse(&text(""));
+    let ints = s::Type::Array(s::ArrayType { leaf: s::ArrayLeaf::Int, depth: 1 });
+    let nested = s::Type::Array(s::ArrayType { leaf: s::ArrayLeaf::Int, depth: 2 });
+    assert_eq!(globals(&module).unwrap(), vec![
+        s::Global { name: "app.const.EMPTY".into(), ty: ints, data: vec![
+            s::Datum { ty: ints, value: s::DatumValue::Array(vec![]) },
+        ] },
+        s::Global { name: "app.const.NESTED".into(), ty: nested, data: vec![
+            s::Datum { ty: s::Type::Int, value: s::DatumValue::Constant(s::Constant::Int("2".into())) },
+            s::Datum { ty: ints, value: s::DatumValue::Array(vec![0, 0]) },
+            s::Datum { ty: nested, value: s::DatumValue::Array(vec![1, 1]) },
+        ] },
+    ]);
+    let nested_decl = module.declarations.iter().find(|(_, d)| d.name == "app.const.NESTED").unwrap().0;
+    assert_eq!(global_index(&module, nested_decl).unwrap(), 1);
+    let computed = "    %sum: int = int.add %two, %two\n    %more: array<int> = array.new [%sum], ty array<int>\n";
+    let module = parse(&text(computed)
+        .replace("array.new [%inner, %inner]", "array.new [%inner, %more]"));
+    assert!(globals(&module).unwrap_err().0.contains("int.add"));
+}

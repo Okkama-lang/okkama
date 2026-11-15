@@ -68,6 +68,38 @@ pub struct Program {
     /// Map and builder shapes named by `Type::Map`, `Type::MapBuilder` and `Type::Builder`. An entry refers
     /// only to earlier entries, so the table is acyclic (`COMPOSITE_ORDER`).
     pub composites: Vec<Composite>,
+    /// Module constants (`const`, #709), read by `global.get` with `Immediate::Global` (`GLOBAL_GET`).
+    pub globals: Vec<Global>,
+}
+
+/// A module constant: closed plain data (`GLOBAL_TYPE`) written as data, which the runtime builds once
+/// before the program runs. `data` lists its parts children first; the last datum is the value
+/// (`GLOBAL_DATA`). No code runs to build it, so reading it never fails.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Global {
+    pub name: String,
+    pub ty: Type,
+    pub data: Vec<Datum>,
+}
+
+/// One part of a constant with its type. Array and map parts name earlier data by index.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Datum {
+    pub ty: Type,
+    pub value: DatumValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DatumValue {
+    /// A scalar or string constant of type `ty` (no descriptor).
+    Constant(Constant),
+    /// A case of the plain enum `ty`, as `enum.case`.
+    Case(u32),
+    /// The elements of the array or byte array `ty`.
+    Array(Vec<u32>),
+    /// The entries of the map `ty` as key, value, key, value, ...; later equal keys replace the value, as
+    /// `map.new`.
+    Map(Vec<u32>),
 }
 
 /// A collection shape that does not fit inline in `Type`.
@@ -480,6 +512,8 @@ pub enum Immediate {
     Object(u32),
     Field(u32),
     Updates(Vec<u32>),
+    /// The index of a module constant in `Program::globals`.
+    Global(u32),
 }
 
 /// A checked synchronous dynamic transfer protocol (`own.dynamic`, OIR-2 §6.4, §7.1): the open Closure
@@ -619,6 +653,8 @@ pub enum DataOp {
     ObjGet,
     ObjNext,
     EnumCase,
+    /// The value of a module constant (`Immediate::Global`), built before the program runs.
+    GlobalGet,
     ArrayNew,
     ArrayLen,
     FailSecondary,
@@ -1108,6 +1144,8 @@ pub struct StaticSelection {
 mod load_tests;
 #[cfg(test)]
 mod arrays_tests;
+#[cfg(test)]
+mod globals_tests;
 #[cfg(test)]
 mod natives_tests;
 #[cfg(test)]

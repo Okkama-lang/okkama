@@ -1207,6 +1207,68 @@ fn champ_byte_array_get_reads_packed_bytes_and_checks_bounds() {
     }
 }
 
+/// Module constants (#709): built from their data before the program runs, kept across a collection, and
+/// read by `global.get` as the same values.
+#[test]
+fn champ_globals_are_built_before_the_run_and_read_in_place() {
+    let ints = s::Type::Array(s::ArrayType { leaf: s::ArrayLeaf::Int, depth: 1 });
+    let int = |value: &str| s::Datum {
+        ty: s::Type::Int, value: s::DatumValue::Constant(s::Constant::Int(value.into())),
+    };
+    let read = |global: u32, ty: s::Type| {
+        let mut function = s::Function {
+            symbol: format!("read{global}"), entry_abi: s::EntryAbi::Observation, registers: vec![ty],
+            services: vec![], params: vec![], results: vec![ty], blocks: vec![s::Block { pc: 0, params: vec![] }],
+            proofs: s::FunctionProofs::default(),
+            code: vec![
+                s::Instruction::Data { op: s::DataOp::GlobalGet, inputs: vec![], output: Some(0),
+                    immediate: s::Immediate::Global(global) },
+                s::Instruction::Ret(vec![0]),
+            ],
+        };
+        function.proofs.roots = s::live_locations(&function).unwrap().into_iter().enumerate()
+            .map(|(pc, locations)| s::RootRequirement { pc: pc as u32, locations: locations.into_iter().collect() })
+            .collect();
+        function
+    };
+    let source = s::Program {
+        composites: vec![s::Composite::Map { key: s::Type::Int, value: s::Type::Str }],
+        globals: vec![
+            s::Global { name: "PRIMES".into(), ty: ints, data: vec![
+                int("2"), int("18446744073709551614"), s::Datum { ty: ints, value: s::DatumValue::Array(vec![0, 1]) },
+            ] },
+            s::Global { name: "NAMES".into(), ty: s::Type::Map(0), data: vec![
+                int("1"), s::Datum { ty: s::Type::Str, value: s::DatumValue::Constant(s::Constant::Str("one".into())) },
+                int("1"), s::Datum { ty: s::Type::Str, value: s::DatumValue::Constant(s::Constant::Str("uno".into())) },
+                s::Datum { ty: s::Type::Map(0), value: s::DatumValue::Map(vec![0, 1, 2, 3]) },
+            ] },
+        ],
+        functions: vec![read(0, ints), read(1, s::Type::Map(0))],
+        ..s::Program::default()
+    };
+    let mut runtime = Runtime::new_champ(source, vec![]).unwrap();
+    let constants = runtime.constants.clone();
+    runtime.heap.collect(|visit| constants.iter().for_each(|&(word, repr)| visit(word, repr)));
+    for _ in 0..1000 {
+        runtime.heap.allocate_text("garbage after the build");
+    }
+    let mut ctx = context(&mut runtime);
+    let code = compile(&mut runtime, 0).unwrap();
+    let array = unsafe { invoke(code, &mut ctx, &[]) };
+    assert_eq!(ctx.status, OK);
+    let elements = runtime.heap.elements(array).into_owned();
+    assert_eq!(runtime.small_or_big(elements[0]), Some(2));
+    assert_eq!(runtime.big_value(elements[1]).to_string(), "18446744073709551614");
+    assert_eq!(unsafe { invoke(code, &mut ctx, &[]) }, array, "one value, built once");
+    let code = compile(&mut runtime, 1).unwrap();
+    let map = unsafe { invoke(code, &mut ctx, &[]) };
+    let entries = &runtime.heap.payload::<crate::ops::MapValue>(map).unwrap().entries;
+    // Later equal keys replace the value, as map.new.
+    assert_eq!(entries.len(), 1);
+    let (_, value) = entries.values().next().unwrap();
+    assert_eq!(runtime.heap.text(*value), "uno");
+}
+
 #[test]
 fn champ_plain_array_traces_elements_and_checks_all_index_forms() {
     let array = s::Type::Array(s::ArrayType { leaf: s::ArrayLeaf::Str, depth: 1 });

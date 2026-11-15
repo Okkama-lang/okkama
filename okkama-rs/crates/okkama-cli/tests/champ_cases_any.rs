@@ -1,32 +1,13 @@
 //! `any` on Champ, in process (#689, #569 C6): an `any` value is a traced reference to an any box, which holds
 //! the value in its one field and the value's type in its descriptor. Conformance cases are compared with
-//! their case.json; a case that stops on a gap outside `any` passes own and Low and is a `through_low` entry
-//! until the backend accepts it.
+//! their case.json.
 //!
 //! Only pure language cases: no processes, workers, network, outside files or test mode.
 #![cfg(feature = "champ-abi")]
 
 mod champ_support;
 
-use champ_support::{case_dir, check, compile, run_case, run_source};
-use okkama_compiler::SourceFile;
-
-/// Phases after verify_low belong to the SPB 17 / Champ backend.
-const BACKEND: [&str; 4] = ["layout", "compile_low", "verify_load", "encode"];
-
-/// The case passes own and Low; it runs in Champ, compared with case.json, once the backend accepts it.
-fn through_low(id: &str) {
-    let file = case_dir(id).join("main.ok");
-    let text = std::fs::read_to_string(&file).unwrap();
-    let source = SourceFile::new(std::fs::canonicalize(&file).unwrap().to_string_lossy(), text).unwrap();
-    match compile(&[source]) {
-        Ok(_) => run_case(id).unwrap_or_else(|error| panic!("{id}: {error}")),
-        Err(error) if BACKEND.iter().any(|phase| error.contains(&format!("OIR-2 {phase}:"))) => {
-            println!("{id}: own and low passed; stops in the backend: {error}");
-        }
-        Err(error) => panic!("{id}: {error}"),
-    }
-}
+use champ_support::{check, run_case, run_source};
 
 /// `any` boundaries: boxed literals, `any` parameters and results, arrays and maps of `any`, overloads.
 #[test]
@@ -42,12 +23,6 @@ fn champ_cases_any() {
         "L05.literal.heterogeneous-to-any",
         "L05.literal.homogeneous-inference",
     ]);
-}
-
-/// layout: a module constant (`const NESTED`) is a declaration the SPB 17 layout does not take.
-#[test]
-fn any_literal_empty_collections() {
-    through_low("L05.literal.empty-collections");
 }
 
 #[test]

@@ -143,7 +143,8 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
             // A cap value is its owner's reference, so its declaration is a placeholder too.
             o::DeclarationKind::Role { .. } | o::DeclarationKind::Cap { .. } => (&[][..], None, false),
             o::DeclarationKind::Handle => (&[][..], None, false),
-            _ => return Err(phase("layout", format!("unsupported declaration {}", declaration.name))),
+            // A module constant lives in the SPB 17 globals table (#709); its declaration is a placeholder.
+            o::DeclarationKind::Global { .. } => (&[][..], None, false),
         };
         let atomic = declaration.name.strip_prefix("async.atomic.Atomic_")
             .filter(|_| builtin && fields.is_empty() && destroy.is_none())

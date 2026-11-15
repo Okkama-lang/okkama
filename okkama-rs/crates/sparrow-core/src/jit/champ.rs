@@ -58,7 +58,7 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
             ctx, io, storage, frame: &frame, scope_base, post, blocks, stop, pc: None, polled, fuel,
             plans: &machine.plans[index], selections: &machine.selections[index], entries: &machine.entries,
             shielded_entries: &machine.shielded_entries,
-            constants: &mut runtime.constants, heap: &mut runtime.heap,
+            constants: &mut runtime.constants, heap: &mut runtime.heap, globals: machine.globals.clone(),
         };
         let args = emit.builder.block_params(entry).to_vec();
         let mut language = 0;
@@ -192,6 +192,8 @@ struct Emit<'a, 'b> {
     shielded_entries: &'a [u64],
     constants: &'a mut Vec<(Word, Repr)>,
     heap: &'a mut Heap,
+    /// The values of the module constants (`machine::Program::globals`).
+    globals: Vec<Word>,
 }
 
 impl Emit<'_, '_> {
@@ -1250,31 +1252,15 @@ impl Emit<'_, '_> {
         let words = inputs.iter().map(|&id| self.word(L::Register(id))).collect::<Vec<_>>();
         let value = match op {
             D::Const => {
-                let word = match immediate {
-                    // Exact beyond 64 bits, as Tomato represents int: inline when it fits, a BigInt otherwise.
-                    s::Immediate::Constant(s::Constant::Int(value)) => {
-                        let value = value.parse::<num_bigint::BigInt>()
-                            .map_err(|_| Error("invalid integer constant".into()))?;
-                        self.heap.big(value)
-                    }
-                    s::Immediate::Constant(s::Constant::Rat(value)) => {
-                        let part = |text: &str| okkama_runtime_core::IntValue::parse(text)
-                            .ok_or_else(|| Error("invalid rat constant".into()));
-                        let rat = okkama_runtime_core::rat::Rat::new(&part(&value.numerator)?,
-                            &part(&value.denominator)?).map_err(|_| Error("invalid rat constant".into()))?;
-                        self.heap.allocate_payload(Box::new(crate::ops::Rational(rat)))
-                    }
-                    s::Immediate::Constant(s::Constant::Bool(value)) => u64::from(*value),
-                    s::Immediate::Constant(s::Constant::Descriptor(value)) => *value as u64,
-                    s::Immediate::Constant(s::Constant::Str(value)) => self.heap.allocate_text(value),
-                    s::Immediate::Constant(s::Constant::Byte(value) | s::Constant::Char(value)) => u64::from(*value),
-                    s::Immediate::Constant(s::Constant::Float(bits)) => {
-                        bits.parse().map_err(|_| Error("invalid float constant".into()))?
-                    }
-                    _ => return Err(Error("invalid constant".into())),
-                };
+                let s::Immediate::Constant(value) = immediate else { return Err(Error("invalid constant".into())) };
+                let word = c::collections::constant_word(self.heap, value).map_err(Error)?;
                 self.constants.push((word, machine::repr(ty)));
                 self.iconst(word)
+            }
+            // Built before the program ran and kept as a runtime constant: the word itself.
+            D::GlobalGet => {
+                let s::Immediate::Global(index) = immediate else { return Err(Error("invalid global".into())) };
+                self.iconst(self.globals[*index as usize])
             }
             D::FailSecondary | D::FailCaused => {
                 let helper = if op == D::FailSecondary { "champ_machine_secondary" } else { "champ_machine_caused" };

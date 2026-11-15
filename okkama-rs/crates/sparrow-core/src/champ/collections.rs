@@ -99,6 +99,60 @@ fn new_array(runtime: &mut Runtime, array: s::Type, items: &[Word]) -> Word {
     runtime.heap.allocate_array(repr(element), items)
 }
 
+/// The word of a verified scalar or string constant: an int inline when it fits and a BigInt beyond 64 bits,
+/// as Tomato represents it; a rat, a string on the heap; raw bits otherwise.
+pub(crate) fn constant_word(heap: &mut crate::heap::Heap, value: &s::Constant) -> Result<Word, String> {
+    Ok(match value {
+        s::Constant::Int(value) => heap.big(value.parse::<num_bigint::BigInt>()
+            .map_err(|_| "invalid integer constant".to_string())?),
+        s::Constant::Rat(value) => {
+            let part = |text: &str| okkama_runtime_core::IntValue::parse(text)
+                .ok_or_else(|| "invalid rat constant".to_string());
+            let rat = okkama_runtime_core::rat::Rat::new(&part(&value.numerator)?, &part(&value.denominator)?)
+                .map_err(|_| "invalid rat constant".to_string())?;
+            heap.allocate_payload(Box::new(crate::ops::Rational(rat)))
+        }
+        s::Constant::Bool(value) => u64::from(*value),
+        s::Constant::Descriptor(value) => *value as u64,
+        s::Constant::Str(value) => heap.allocate_text(value),
+        s::Constant::Byte(value) | s::Constant::Char(value) => u64::from(*value),
+        s::Constant::Float(bits) => bits.parse().map_err(|_| "invalid float constant".to_string())?,
+    })
+}
+
+/// The values of the program's module constants (#709), built once from their verified data before the
+/// program runs. Every datum becomes a runtime constant (a root) as soon as it exists, so a collection
+/// while a later datum is built keeps it; `global.get` reads the last datum of each constant.
+pub(crate) fn build_globals(runtime: &mut Runtime, program: &s::Program) -> Result<Vec<Word>, String> {
+    let mut values = Vec::with_capacity(program.globals.len());
+    for global in &program.globals {
+        let mut words: Vec<Word> = Vec::with_capacity(global.data.len());
+        for datum in &global.data {
+            let parts = |items: &[u32]| items.iter().map(|&item| words[item as usize]).collect::<Vec<_>>();
+            let word = match &datum.value {
+                s::DatumValue::Constant(value) => constant_word(&mut runtime.heap, value)?,
+                s::DatumValue::Case(case) => {
+                    let s::Type::Object(id) = datum.ty else { return Err("verified enum datum".into()) };
+                    let tag = runtime.heap.int(i64::from(*case));
+                    runtime.heap.object_new(id, &[tag])
+                }
+                s::DatumValue::Array(items) => {
+                    let items = parts(items);
+                    new_array(runtime, datum.ty, &items)
+                }
+                s::DatumValue::Map(items) => {
+                    let items = parts(items);
+                    collection(runtime, program, s::DataOp::MapNew, &[], datum.ty, &items)?
+                }
+            };
+            runtime.constants.push((word, repr(datum.ty)));
+            words.push(word);
+        }
+        values.push(*words.last().ok_or_else(|| "verified global data".to_string())?);
+    }
+    Ok(values)
+}
+
 fn items(runtime: &Runtime, array: Word, ty: s::Type) -> Vec<Word> {
     if ty == s::Type::Bytes {
         runtime.heap.byte_view(array).iter().map(|&byte| Word::from(byte)).collect()
