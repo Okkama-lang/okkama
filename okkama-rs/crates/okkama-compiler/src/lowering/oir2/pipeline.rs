@@ -60,8 +60,13 @@ pub fn compile_linked(roots: &[RootFile<'_>], loader: &mut dyn ModuleLoader)
 pub fn compile_linked_with(roots: &[RootFile<'_>], loader: &mut dyn ModuleLoader, mode: o::VerifyMode)
     -> Result<Vec<u8>, PipelineError>
 {
-    let verify = o::VerifyOptions { mode, ..o::VerifyOptions::default() };
     let high = lower_linked_high(roots, loader)?;
+    compile_high_with(high, mode)
+}
+
+/// The phases after the producer: verify_high, own, verify_own, low, verify_low, SPB 17 and its load check.
+pub(super) fn compile_high_with(high: o::Module, mode: o::VerifyMode) -> Result<Vec<u8>, PipelineError> {
+    let verify = o::VerifyOptions { mode, ..o::VerifyOptions::default() };
     let catalog = P1NativeSummaries::for_module(&high).map_err(|error| phase("contracts", error))?;
     let context = || o::VerifyContext { external_contracts: &catalog, ..o::VerifyContext::default() };
     o::verify_high_with(&high, &verify, context())
@@ -79,7 +84,7 @@ pub fn compile_linked_with(roots: &[RootFile<'_>], loader: &mut dyn ModuleLoader
     o::verify_low_with(&low, &options.verify, context()).map_err(|error| phase("verify_low", error))?;
     let layouts = layouts(&low)?;
     let objects = sparrow_oir2::objects(&low, &layouts).map_err(|error| phase("layout", error))?;
-    let contracts = s::p1::P1Contracts::new(&objects).map_err(|error| phase("contracts", error))?;
+    let contracts = s::p1::P1Contracts::new(&objects).map_err(|error| phase("spb_contracts", error))?;
     let output = sparrow_oir2::compile_low_with(&low, &layouts, context(), &contracts, &options.verify)
         .map_err(|error| phase("compile_low", error))?;
     s::verify_load(&output.program, &contracts).map_err(|error| phase("verify_load", error))?;

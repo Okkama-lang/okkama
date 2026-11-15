@@ -120,8 +120,8 @@ fn oir2_scalar_builtins_golden() {
 #[test]
 fn oir2_unsupported_source_constructs_are_diagnostics() {
     for (body, expected) in [
-        ("let n = try? 1; 0;", "try?"),
-        ("1 & 2;", "binary"),
+        ("let c = char(65); 0;", "char conversion"),
+        ("byte(8) >>> 1; 0;", "byte >>>"),
     ] {
         let source = format!("module app; main() is int {{ {body} }}");
         let error = print_oir2(&source).expect_err("unsupported program must stop");
@@ -215,12 +215,12 @@ fn oir2_boundary_edge_cases_roundtrip() {
 #[test]
 fn oir2_declared_unsupported_bodies_name_the_function() {
     for (source, name, construct) in [
-        ("module app; object O { O() { try { 1 & 2; } catch e is Error { 0; } } } main() is int { 0; }",
-            "app.O.new#0", "binary"),
-        ("module app; object O { O(); destroy { 1 & 2; } } main() is int { 0; }",
-            "app.O.destroy", "binary"),
-        ("module app; object O { has n is int = 1 & 2; O(); } main() is int { 0; }",
-            "app.O.default#0", "binary"),
+        ("module app; object O { O() { try { char(65).code(); } catch e is Error { 0; } } } main() is int { 0; }",
+            "app.O.new#0", "char conversion"),
+        ("module app; object O { O(); destroy { char(65).code(); } } main() is int { 0; }",
+            "app.O.destroy", "char conversion"),
+        ("module app; object O { has n is int = char(65).code(); O(); } main() is int { 0; }",
+            "app.O.default#0", "char conversion"),
     ] {
         let error = print_oir2(source).expect_err("unsupported declared body must stop the module");
         let LowerError::Unsupported { span, message } = error else {
@@ -493,12 +493,12 @@ fn oir2_s2_control_flow_and_aliases_roundtrip() {
 #[test]
 fn oir2_s2_unsupported_bodies_name_the_function() {
     for (source, name) in [
-        ("module app; object O { O() { try { 1 & 2; } catch e is Error { 2; } } } main() is int { 0; }",
+        ("module app; object O { O() { try { char(65).code(); } catch e is Error { 2; } } } main() is int { 0; }",
             "app.O.new#0"),
-        ("module app; object O { O(); f() is int { 1 & 2; } } main() is int { 0; }", "app.O.f#0"),
-        ("module app; object O { has n is int = 1 & 2; O(); } main() is int { 0; }",
+        ("module app; object O { O(); f() is int { char(65).code(); } } main() is int { 0; }", "app.O.f#0"),
+        ("module app; object O { has n is int = char(65).code(); O(); } main() is int { 0; }",
             "app.O.default#0"),
-        ("module app; object O { O(); destroy { 1 & 2; } } main() is int { 0; }", "app.O.destroy"),
+        ("module app; object O { O(); destroy { char(65).code(); } } main() is int { 0; }", "app.O.destroy"),
         (concat!("module app; object O { has n is int = 1; O() { let alias = self; n = 2; } } ",
             "main() is int { 0; }"), "app.O.new#0"),
         (concat!("module app; object O { has n is int; O(b is bool) { ",
@@ -633,8 +633,8 @@ fn oir2_defer_lexical_captures_roundtrip() {
 #[test]
 fn oir2_outside_s3_constructs_report_unsupported() {
     for body in [
-        "let n = try? 1; 0;",
-        "try { throw Stop.now; } catch Stop.now { 0; }",
+        "let c = char(65); 0;",
+        "let n = 1.char().code(); 0;",
     ] {
         let source = format!("module app; enum Stop is Error = (now); main() is int {{ {body} }}");
         let error = print_oir2(&source).expect_err("outside the slice must remain unsupported");

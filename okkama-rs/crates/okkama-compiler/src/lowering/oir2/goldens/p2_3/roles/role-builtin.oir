@@ -7,7 +7,7 @@ role io.stream.ByteSource {
     bytes() -> array<byte>
 }
 
-object core.StringSource [builtin] {
+object core.StringSource {
     field value: str
     does io.stream.ByteSource {bytes = @core.StringSource.bytes}
 }

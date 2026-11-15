@@ -301,29 +301,35 @@ impl BodyLowerer<'_, '_> {
             }
             B::ArrayContains(kind) | B::ArrayIndexOf(kind) => {
                 let index = self.array_search(array, args[0], *kind, span)?;
-                let zero = self.int(0)?;
-                let found = self.core(ir::CoreOp::IntGe { left: index, right: zero })?;
                 if matches!(op, B::ArrayContains(_)) {
-                    return Ok(found);
+                    let zero = self.int(0)?;
+                    return self.core(ir::CoreOp::IntGe { left: index, right: zero });
                 }
-                let scope = self.scope();
-                let yes = self.new_block(scope, &[])?;
-                let no = self.new_block(scope, &[])?;
-                let join = self.join(scope, Some(ty))?;
-                self.terminate(ir::TermKind::Cond { condition: found,
-                    yes: ir::Target { block: yes, args: vec![] }, no: ir::Target { block: no, args: vec![] } })?;
-                let env = self.env.clone();
-                for (block, case, fields) in [(yes, 0, vec![index]), (no, 1, vec![])] {
-                    self.env = env.clone();
-                    self.switch(block)?;
-                    let value = self.core(ir::CoreOp::VariantNew { ty, case, fields, packet: None })?;
-                    self.branch_join(&join, Some(value), ir::ExitKind::Fallthrough)?;
-                }
-                return Ok(self.finish_join(&join)?.expect("Maybe result"));
+                return self.maybe_index(index, ty);
             }
             _ => unreachable!("collection builtin allowlist"),
         };
         self.collection(operation)
+    }
+
+    /// A found index (`>= 0`) as `Maybe<int>` case 0, and -1 as the empty case 1.
+    pub(super) fn maybe_index(&mut self, index: ir::ValueId, ty: ir::TypeId) -> Result<ir::ValueId> {
+        let zero = self.int(0)?;
+        let found = self.core(ir::CoreOp::IntGe { left: index, right: zero })?;
+        let scope = self.scope();
+        let yes = self.new_block(scope, &[])?;
+        let no = self.new_block(scope, &[])?;
+        let join = self.join(scope, Some(ty))?;
+        self.terminate(ir::TermKind::Cond { condition: found,
+            yes: ir::Target { block: yes, args: vec![] }, no: ir::Target { block: no, args: vec![] } })?;
+        let env = self.env.clone();
+        for (block, case, fields) in [(yes, 0, vec![index]), (no, 1, vec![])] {
+            self.env = env.clone();
+            self.switch(block)?;
+            let value = self.core(ir::CoreOp::VariantNew { ty, case, fields, packet: None })?;
+            self.branch_join(&join, Some(value), ir::ExitKind::Fallthrough)?;
+        }
+        Ok(self.finish_join(&join)?.expect("Maybe result"))
     }
 
     fn array_cut(&mut self, array: ir::ValueId, count: ir::ValueId, drop: bool) -> Result<ir::ValueId> {
