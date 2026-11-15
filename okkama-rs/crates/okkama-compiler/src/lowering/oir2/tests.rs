@@ -1434,6 +1434,35 @@ fn oir2_pipeline_scalar() {
     okkama_sparrow::spb17::verify_load(&loaded, &okkama_sparrow::spb17::NoExternalContracts).unwrap();
 }
 
+/// Every root file belongs to the one root module: `main` in the first file is the entry (#677).
+#[test]
+fn oir2_linked_high_keeps_every_root_file() {
+    let first = SourceFile::new("main.ok", "module app; main() is int { Greeter().greet(); }").unwrap();
+    let second = SourceFile::new("part.ok", "module app; object Greeter { Greeter(); greet() is int { 4; } }").unwrap();
+    let programs = [&first, &second].map(|source| syntax::parse(source, &ParseOptions::default()).unwrap());
+    let roots = [
+        crate::lowering::RootFile { source: &first, program: &programs[0] },
+        crate::lowering::RootFile { source: &second, program: &programs[1] },
+    ];
+    let module = super::lower_linked_high(&roots, &mut StdLoader).unwrap_or_else(|error| panic!("{error}"));
+    verify_high(&module, "two root files");
+    let entry = module.entry.expect("main is the entry");
+    assert_eq!(module.functions.get(entry).unwrap().symbol, "main");
+    assert!(module.functions.iter().any(|(_, function)| function.symbol.starts_with("app.Greeter.greet")));
+}
+
+/// `std.…` paths name std declarations without an import, as in OIR-1 (#677).
+#[test]
+fn oir2_linked_high_resolves_std_paths() {
+    let text = "module app; object R { has o is std.compare.Order; R(:o); } main() is int { 0; }";
+    let source = SourceFile::new("app.ok", text).unwrap();
+    let program = syntax::parse(&source, &ParseOptions::default()).unwrap();
+    let roots = [crate::lowering::RootFile { source: &source, program: &program }];
+    let module = super::lower_linked_high(&roots, &mut StdLoader).unwrap_or_else(|error| panic!("{error}"));
+    verify_high(&module, text);
+    assert!(module.declarations.iter().any(|(_, declaration)| declaration.name.ends_with("compare.Order")));
+}
+
 #[test]
 fn oir2_p1_sources() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/ownership-corpus/p1");

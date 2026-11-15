@@ -44,9 +44,15 @@ pub fn lower_linked_high(roots: &[RootFile<'_>], loader: &mut dyn ModuleLoader)
     let roots: Vec<_> = roots.iter().map(|root| {
         (root.program, root.source.name(), Some(root.source))
     }).collect();
+    // As for OIR-1: `std.…` paths of the root become hidden imports, and every root file
+    // belongs to the one root module (§5.1).
+    let programs = crate::lowering::desugared(&roots).map_err(|error| phase("imports", error))?;
+    let roots: Vec<_> = programs.iter().zip(&roots).map(|(program, (_, name, source))| {
+        (program, *name, *source)
+    }).collect();
     let graph = modules::load_graph(&roots, loader).map_err(|error| phase("imports", error))?;
     let sources = modules::source_modules(&graph, &roots);
-    let analysis = analysis::analyze(sources).map_err(|error| phase("analysis", error))?;
+    let analysis = analysis::analyze_files(sources, roots.len()).map_err(|error| phase("analysis", error))?;
     lower_to_oir2(&analysis).map_err(PipelineError::Lower)
 }
 
