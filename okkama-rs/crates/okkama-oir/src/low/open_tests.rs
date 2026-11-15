@@ -198,11 +198,13 @@ fn rejects_an_open_entry_settled_twice() {
     rejected(&output, RuleId::B102);
 }
 
+type Mutation = Box<dyn Fn(&mut ProtocolDecl)>;
+
 /// Mutations of the protocol named by the dynamic site. Each leaves the general B7.1
 /// family check satisfied, so only the Low synchronous-protocol rule refuses it.
-fn protocol_mutations(source: &str) -> Vec<Box<dyn Fn(&mut ProtocolDecl)>> {
+fn protocol_mutations(source: &str) -> Vec<Mutation> {
     let closure = source.contains("kind closure");
-    let mut mutations: Vec<Box<dyn Fn(&mut ProtocolDecl)>> = vec![
+    let mut mutations: Vec<Mutation> = vec![
         // The transfer leaves the packet accepted on unwind.
         Box::new(|protocol| {
             let rule = protocol.rules.iter_mut().find(|rule| rule.transition == ProtocolTransition::Dynamic).unwrap();
