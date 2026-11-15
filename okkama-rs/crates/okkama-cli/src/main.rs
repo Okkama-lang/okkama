@@ -678,16 +678,24 @@ fn load_all(line: &CommandLine) -> Result<Vec<SourceFile>, Outcome> {
 
 /// Разбор файлов программы: без тестовых объявлений или, с `--tests`, с
 /// тестами и fakes (§14).
+/// Программа без тестов разбирается в production-грамматике: тела `test` и
+/// `fake` не разбираются (§14), как у импортов и в OCS.
 fn parse_all(sources: &[SourceFile], tests: bool) -> Result<Vec<ast::Program>, Outcome> {
-    Ok(prune_all(parse_raw(sources)?, tests))
+    let mode = if tests { ParseMode::Full } else { ParseMode::Production };
+    Ok(prune_all(parse_raw_in(sources, mode)?, tests))
 }
 
 /// Разбор файлов программы как есть: тесты и fakes ещё на месте.
 fn parse_raw(sources: &[SourceFile]) -> Result<Vec<ast::Program>, Outcome> {
+    parse_raw_in(sources, ParseMode::Full)
+}
+
+fn parse_raw_in(sources: &[SourceFile], mode: ParseMode) -> Result<Vec<ast::Program>, Outcome> {
+    let options = ParseOptions { mode, ..ParseOptions::default() };
     sources
         .iter()
         .map(|source| {
-            syntax::parse(source, &ParseOptions::default())
+            syntax::parse(source, &options)
                 .map_err(|diagnostics| diagnostics_outcome(&diagnostics, source))
         })
         .collect()
@@ -1808,6 +1816,17 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|arg| arg.to_string()).collect()
+    }
+
+    /// A program run outside test mode does not parse test bodies (§14, #677).
+    #[test]
+    fn program_files_skip_test_bodies_outside_test_mode() {
+        let text = "module app v1.0.0;\ntest \"t\" {\n    let = = ;\n}\nmain() is int { 4; }\n";
+        let sources = vec![SourceFile::new("main.ok", text).unwrap()];
+        let programs = parse_all(&sources, false).unwrap_or_else(|outcome| panic!("{}", outcome.stderr));
+        assert_eq!(programs.len(), 1);
+        let outcome = parse_all(&sources, true).expect_err("test mode parses the test body");
+        assert!(outcome.stderr.contains("syntax error"), "{}", outcome.stderr);
     }
 
     #[test]
