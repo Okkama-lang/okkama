@@ -359,6 +359,9 @@ impl Runtime {
             if !self.is_driver(frame) && self.sole_awaiter(awaited, frame) {
                 set(task, FLAGS, get(task, FLAGS) | CANCEL_DELIVERED);
                 set(frame, FLAGS, get(frame, FLAGS) | DELIVER_NOW);
+                // Champ's await receipt (draft 3 §4.1): this waiter stays to see its own child settle.
+                #[cfg(feature = "champ-abi")]
+                set(frame, FLAGS, get(frame, FLAGS) | crate::champ::CHILD_CANCEL);
                 self.cancel_running(awaited);
                 return;
             }

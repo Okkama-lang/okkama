@@ -112,6 +112,9 @@ pub(crate) struct State {
     root_owner: Option<OwnerId>,
     #[cfg(test)]
     pub(crate) future_events: Vec<futures::FutureEvent>,
+    /// The receipts `await.unwind` consumed, with the function of the frame that consumed each.
+    #[cfg(test)]
+    pub(crate) receipts: Vec<(usize, u64)>,
 }
 
 impl State {

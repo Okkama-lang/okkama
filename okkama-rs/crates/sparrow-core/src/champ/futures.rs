@@ -32,6 +32,10 @@ const TAIL_WORDS: usize = 4;
 /// a suspended await (#663); that bit is draft 3's WAITED and keeps Tomato's meaning.
 pub const CHAMP: u64 = 512;
 pub const DETACHED: u64 = 1024;
+/// A delivered cancellation reached this waiter as the sole awaiter of its spawned child (#147): the child was
+/// cancelled and the waiter stays registered until it settles. Set with DELIVER_NOW by Tomato's `deliver_cancel`
+/// and consumed with it by the await, whose receipt it decides: ChildCancelled with it, Withdrawn without.
+pub const CHILD_CANCEL: u64 = 2048;
 /// `CacheRecord::flags`: the cache duty has been settled.
 pub const RELEASED: u64 = 1;
 /// `CacheRecord::flags`: the cache duty is a receipt in an exit reserve (draft 3 §12): custody stays with the
@@ -666,16 +670,16 @@ fn await_entry(ctx: *mut Ctx, frame_pointer: u64, this: Word, future: Word) -> A
     // A collection at every entry, the first and each re-entry: operands are rooted by the caller.
     runtime.safepoint(frame_pointer, unsafe { &*ctx }, &[]);
     let current = get(this, tasks::FLAGS);
-    // A cancellation delivered to this waiting frame: Tomato's structured await keeps a sole awaiter of a
-    // spawned child registered until the child settles; any other waiter was withdrawn.
-    let structured = get(future, tasks::FLAGS) & flags::SPAWNED != 0
-        && matches!(get(future, tasks::STATE), tasks::DONE | tasks::FAILURE_STATE);
-    let delivered = if structured { RECEIPT_CHILD_CANCELLED } else { RECEIPT_WITHDRAWN };
+    // A cancellation delivered to this waiting frame: Tomato's structured await kept the sole awaiter of a spawned
+    // child registered until the child settled (CHILD_CANCEL); any other waiter was withdrawn, even when the child
+    // it left has settled since.
+    let delivered = if current & CHILD_CANCEL != 0 { RECEIPT_CHILD_CANCELLED } else { RECEIPT_WITHDRAWN };
     let cancel = if current & flags::AWAIT_SUSPENDED != 0 {
-        set(this, tasks::FLAGS, current & !(flags::AWAIT_SUSPENDED | tasks::DELIVER_NOW));
+        set(this, tasks::FLAGS, current & !(flags::AWAIT_SUSPENDED | tasks::DELIVER_NOW | CHILD_CANCEL));
         (current & tasks::DELIVER_NOW != 0).then(|| (runtime.cancelled_failure(), delivered))
     } else {
         let receipt = if current & tasks::DELIVER_NOW != 0 { delivered } else { RECEIPT_NOT_STARTED };
+        set(this, tasks::FLAGS, current & !CHILD_CANCEL);
         runtime.champ_deliverable_cancel().map(|failure| (failure, receipt))
     };
     if let Some((failure, receipt)) = cancel {
@@ -814,6 +818,11 @@ pub extern "C" fn rt_await_unwind(ctx: *mut Ctx, this: Word, state: *mut ScopeSl
     })();
     if let Err(failure) = checked {
         return stop(ctx, failure);
+    }
+    #[cfg(test)]
+    {
+        let function = runtime.function_of(this);
+        runtime.champ.receipts.push((function, unsafe { *receipt }));
     }
     if get(this, tasks::AWAITING) == child {
         runtime.remove_waiter(child, this);
