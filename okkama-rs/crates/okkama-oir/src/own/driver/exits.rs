@@ -14,7 +14,10 @@ impl Driver<'_, '_> {
                     Operation::Lexical(LexicalOp::DeferRegister { action, .. }) if !action.replacements.is_empty())
             });
         let managed = value.is_some_and(|value| self.managed(self.high.values.get(value).unwrap().ty));
-        if (!managed && !replaces) || point.env.scopes.is_empty() {
+        // Every successful return of an async body is an exit transaction: its commit
+        // gives the value, packet and deps the coro pass publishes (async ABI C-2).
+        let publishes = destination.is_none() && self.async_exit(&point)?;
+        if (!managed && !replaces && !publishes) || point.env.scopes.is_empty() {
             return Ok(point);
         }
         let scope = self.body.blocks.get(point.block).map_err(arena)?.lexical_scope;
@@ -37,7 +40,12 @@ impl Driver<'_, '_> {
         };
         point = self.emit(point, Operation::Ownership(OwnershipOp::Empty {}))?;
         let packet = point.result(SlotName::Packet)?;
-        let latest = value.map(|value| point.env.value(value)).transpose()?;
+        let mut latest = value.map(|value| point.env.value(value)).transpose()?;
+        // Own names packet and deps explicitly even when empty (elaboration §10.12).
+        if publishes && let Some(plain) = latest.as_mut().filter(|latest| latest.deps.is_none()) {
+            point = self.emit(point, Operation::Ownership(OwnershipOp::Dependencies { value: plain.value }))?;
+            plain.deps = Some(point.result(SlotName::Value)?);
+        }
         let selection = self.body.selections.alloc(match latest {
             Some(latest) => SelectionExpr::Value(latest.value),
             None => SelectionExpr::Union(vec![]),
@@ -99,6 +107,13 @@ impl Driver<'_, '_> {
         } else {
             for original in point.env.cleanup.wanted.iter().chain(&point.env.cleanup.carried) {
                 values.push(point.env.value(*original)?.value);
+            }
+        }
+        // An async body's plain result selects nothing from the closing scope.
+        if self.async_exit(&point)? {
+            values.retain(|value| self.managed(self.body.values.get(*value).unwrap().ty));
+            if values.is_empty() {
+                return Ok(point);
             }
         }
         let packet = if !values.is_empty() {

@@ -4,6 +4,7 @@ object R {
     field x: int
     destroy @destroy
 }
+protocol Services kind services
 scope SD action in @destroy
 scope ST action in @task
 scope S action in @f
@@ -22,6 +23,7 @@ func @task() -> void summary(Mt) {
 }
 func @view(%future: future<void>) -> R [extern "fixture.cache_view"] abi observation summary(Mv);
 func @f() -> void [async] summary(Mf) {
+    service.schedule Schedule0 owner S, protocol Services, duties [%future]
     key k0: key = service_of(value=%future, kind=cache)
     dependency d0: dependency = key(k0)
     dependency dv: dependency = retention(value=%view, selection=selection(%view))
