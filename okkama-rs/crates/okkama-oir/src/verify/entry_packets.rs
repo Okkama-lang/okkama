@@ -4,9 +4,9 @@
 //! graph, so its entry packet is empty. Low's eligibility relies on that; the
 //! linearity rules that bound a call packet by its arguments run only in full
 //! verification. This check holds in every mode: such a call passes a packet
-//! defined by `own.empty`. So does a `fn.call` of a closure whose function type
-//! has no language parameters (a lambda without captures or parameters has the
-//! signature `(; own)`), whatever function it binds.
+//! defined by `own.empty`. So does a `fn.call` of a lambda made in the body by
+//! `fn.closure` without captures, of a type without language parameters: its
+//! signature is `(; own)`.
 use super::{EntityLocation as L, RuleId as R, State};
 use crate::*;
 
@@ -61,8 +61,10 @@ fn operation(module: &Module, body: &Body, op: &Operation, state: &mut State<'_>
     packet(module, body, target, call.packet, state);
 }
 
-/// A closure's callee is unknown, but a closure type without language parameters has no argument
-/// retention graph either: whatever function it binds, its entry packet is empty.
+/// The receiver of a closure call is itself a language argument: a closure's packet may carry the
+/// obligations of its captures (an open call hands over the callable's selected parts). A closure made
+/// here by `fn.closure` without captures, of a type without language parameters, has no retention
+/// graph at all, so its call passes a packet defined by `own.empty`.
 fn closure(module: &Module, body: &Body, callee: ValueId, packet: Option<ValueId>, state: &mut State<'_>) {
     let Some(packet) = packet else {
         return;
@@ -73,8 +75,17 @@ fn closure(module: &Module, body: &Body, callee: ValueId, packet: Option<ValueId
     if ty.params.iter().any(|&ty| language(module, ty)) {
         return;
     }
+    let captureless = body.values.get(callee).ok().and_then(|value| match value.def {
+        Definition::InstResult { inst, .. } => body.insts.get(inst).ok(),
+        Definition::BlockParam { .. } => None,
+    }).is_some_and(|inst| matches!(&inst.op, Operation::Core(CoreOp::FnClosure { captures, .. })
+        if captures.is_empty()));
+    if !captureless {
+        return;
+    }
     if !from_empty(body, packet) {
-        state.error(R::B51, "a parameterless closure call must pass a packet defined by own.empty");
+        state.error(R::B51,
+            "a call of a lambda without captures or parameters must pass a packet defined by own.empty");
     }
 }
 
@@ -142,43 +153,68 @@ func @main(%given: own) -> own abi explicit(input_packet=0, output_packet=0) sum
         })
     }
 
-    /// `@main` calls its parameterless closure `%f` with the packet `PACKET` (a lambda without captures
-    /// or parameters has the signature `(; own)`).
-    fn closure_module(profile: &str, packet: &str) -> crate::Module {
+    /// `@main` makes the lambda `@lambda` without captures (signature `(; own)`) by `CLOSURE` and calls
+    /// it with the packet `PACKET`; without `CLOSURE` it calls its parameter `%g` instead.
+    fn closure_module(profile: &str, closure: &str, packet: &str) -> crate::Module {
         let text = r#"oir 2 PROFILE
 module f5
+scope SL action in @lambda
 scope SM action in @main
+summary Ml call-boundary results [result_relation(provenance=unbound_result)] contract
+        call_contract(results=[int], publication=atomic)
 summary Mf call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results
         [result_relation(provenance=unbound_result)] contract call_contract(results=[int], publication=atomic)
 summary Mm call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract
         call_contract(publication=atomic)
-func @main(%f: fn() -> int, %given: own) -> own abi explicit(input_packet=1, output_packet=0) summary(Mm) {
+func @lambda(%input: own) -> (int, own) [lambda captures 0] abi explicit(input_packet=0, output_packet=1)
+        summary(Ml) {
+^entry in SL:
+    %seven: int = const 7
+    ret %seven, %input
+}
+func @main(%g: fn() -> int, %given: own) -> own abi explicit(input_packet=1, output_packet=0) summary(Mm) {
 ^entry in SM:
-    %deps: deps = deps.of %f
+    CLOSURE
+    %deps: deps = deps.of CALLEE
     %packet: own = PACKET
-    (%value: int, %out: own, %after: deps) = fn.call %f(; %packet) deps [%deps] summary(Mf)
+    (%value: int, %out: own, %after: deps) = fn.call CALLEE(; %packet) deps [%deps] summary(Mf)
     ret %out
 }
 "#;
-        let text = text.replace("PROFILE", profile).replace("PACKET", packet);
+        let callee = if closure.is_empty() { "%g" } else { "%f" };
+        let text = text.replace("PROFILE", profile).replace("CLOSURE", closure).replace("PACKET", packet)
+            .replace("CALLEE", callee);
         crate::text::parse(&text).unwrap_or_else(|error| panic!("{error:?}"))
     }
 
+    const LAMBDA: &str = "%f: fn() -> int = fn.closure @lambda, [], ty fn() -> int";
+
     #[test]
-    fn parameterless_closure_call_accepts_an_own_empty_packet() {
+    fn captureless_lambda_call_accepts_an_own_empty_packet() {
         for profile in ["own", "low"] {
-            structural(&closure_module(profile, "own.empty")).unwrap_or_else(|error| panic!("{profile}: {error:?}"));
+            structural(&closure_module(profile, LAMBDA, "own.empty"))
+                .unwrap_or_else(|error| panic!("{profile}: {error:?}"));
         }
     }
 
     #[test]
-    fn parameterless_closure_call_rejects_any_other_packet_in_structural_builds() {
+    fn captureless_lambda_call_rejects_any_other_packet_in_structural_builds() {
         for profile in ["own", "low"] {
-            let rejected = structural(&closure_module(profile, "own.join [%given]")).unwrap_err();
+            let rejected = structural(&closure_module(profile, LAMBDA, "own.join [%given]")).unwrap_err();
             assert_eq!(rejected.len(), 1, "{profile}: {rejected:?}");
             assert_eq!(rejected[0].0, RuleId::B51, "{profile}");
-            assert!(rejected[0].1.contains("parameterless closure call must pass a packet defined by own.empty"),
+            assert!(rejected[0].1.contains("lambda without captures or parameters must pass a packet defined by"),
                 "{profile}: {rejected:?}");
+        }
+    }
+
+    /// A closure received from elsewhere may carry captures: an open call hands its selected
+    /// obligations over in the packet (#569 C3b), so its packet is bounded only in full verification.
+    #[test]
+    fn a_closure_of_unknown_origin_may_pass_its_obligations() {
+        for profile in ["own", "low"] {
+            let received = closure_module(profile, "", "own.join [%given]");
+            structural(&received).unwrap_or_else(|error| panic!("{profile}: {error:?}"));
         }
     }
 
