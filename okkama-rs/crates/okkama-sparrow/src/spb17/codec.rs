@@ -400,6 +400,11 @@ macro_rules! tagged {
 tagged! { Type {
     0 => Int, 1 => Bool, 6 => Str, 20 => Range, 11 => Failure, 21 => Bytes, 22 => Error,
     7 => Object(id: u32), 8 => Successor(id: u32), 13 => Never, 9 => Descriptor,
+    23 => Array(shape: ArrayType),
+} }
+record! { ArrayType { leaf, depth } }
+tagged! { ArrayLeaf {
+    0 => Int, 1 => Bool, 2 => Str, 3 => Range, 4 => Bytes, 5 => Object(id: u32),
 } }
 tagged! { ServiceKind {
     0 => Packet, 1 => ScopeState, 2 => Pending, 3 => Cleanup, 4 => StableKey,
@@ -420,12 +425,29 @@ tagged! { Tag {
     6 => Success, 7 => Pending, 8 => Failure, 9 => None, 10 => Some,
 } }
 tagged! { Argument {
+    17 => Evaluation(evaluation: Evaluation),
+    18 => Result(result: Option<Type>),
     0 => Location(value: Location), 1 => Scope(id: u32), 2 => Boundary(id: u32), 3 => Summary(id: u32),
     4 => Selection(id: u32), 5 => Plan(id: u32), 6 => Schedule(id: u32), 7 => Envelope(id: u32),
     8 => Entry(id: u32), 9 => Object(id: u32), 10 => Binding(id: u32), 11 => Field(id: u32),
     12 => Label(id: u32), 13 => Flag(flag: bool), 14 => Kind(kind: ExitKind), 15 => Registration(id: u32),
     16 => Destination(destination: ExitDestination),
 } }
+record! { Evaluation { op, result, immediate } }
+
+impl Wire for DataOp {
+    fn put(&self, w: &mut Writer) {
+        let (code, sub) = self.wire();
+        w.opcode(code, opcode_name(code).unwrap());
+        if let Some(sub) = sub {
+            sub.put(w);
+        }
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, Error> {
+        let code = r.opcode()?;
+        Self::read(code, r)
+    }
+}
 
 impl Wire for EntryAbi {
     fn put(&self, w: &mut Writer) {
@@ -467,16 +489,20 @@ fn opcode_name(code: u8) -> Option<&'static str> {
         26 => Some("cvt"),
         84 => Some("range.new"),
         85 => Some("range.part"),
+        80 => Some("array.new"),
+        81 => Some("array.len"),
         90 => Some("obj.new"),
         91 => Some("obj.init"),
         92 => Some("obj.get"),
         93 => Some("obj.next"),
+        94 => Some("enum.case"),
         140 => Some("br"),
         141 => Some("cond"),
         142 => Some("ret"),
         145 => Some("unreachable"),
         147 => Some("raise"),
         136 => Some("fail.secondary"),
+        137 => Some("fail.caused"),
         255 => Some("champ"),
         _ => None,
     }
@@ -512,13 +538,18 @@ impl DataOp {
             Self::StrLen => (72, None),
             Self::Convert => (26, None),
             Self::RangeNew => (84, None),
+            Self::ArrayNew => (80, None),
+            Self::ArrayLen => (81, None),
             Self::RangeStart => (85, Some(0)),
             Self::RangeEnd => (85, Some(1)),
+            Self::RangeLen => (85, Some(2)),
             Self::ObjNew => (90, None),
             Self::ObjInit => (91, None),
             Self::ObjGet => (92, None),
             Self::ObjNext => (93, None),
+            Self::EnumCase => (94, None),
             Self::FailSecondary => (136, None),
+            Self::FailCaused => (137, None),
         }
     }
 
@@ -552,13 +583,18 @@ impl DataOp {
             (72, None) => Ok(Self::StrLen),
             (26, None) => Ok(Self::Convert),
             (84, None) => Ok(Self::RangeNew),
+            (80, None) => Ok(Self::ArrayNew),
+            (81, None) => Ok(Self::ArrayLen),
             (85, Some(0)) => Ok(Self::RangeStart),
             (85, Some(1)) => Ok(Self::RangeEnd),
+            (85, Some(2)) => Ok(Self::RangeLen),
             (90, None) => Ok(Self::ObjNew),
             (91, None) => Ok(Self::ObjInit),
             (92, None) => Ok(Self::ObjGet),
             (93, None) => Ok(Self::ObjNext),
+            (94, None) => Ok(Self::EnumCase),
             (136, None) => Ok(Self::FailSecondary),
+            (137, None) => Ok(Self::FailCaused),
             _ => Err(r.fail(format!("unknown scalar opcode {code}/{sub:?}"))),
         }
     }

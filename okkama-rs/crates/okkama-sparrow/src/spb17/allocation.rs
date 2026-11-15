@@ -92,12 +92,14 @@ fn terminal(inst: &Instruction) -> bool {
 /// dependency leaves, ownership states and root requirements participate, including zero-word deps.
 pub fn live_locations(f: &Function) -> Result<Vec<Set>, Error> {
     let count = f.registers.len().saturating_add(f.services.len());
-    if count.saturating_mul(f.code.len()) > 8 * 1024 * 1024 {
+    if count.saturating_add(f.code.len()) > 8 * 1024 * 1024 {
         return Err(error("allocation liveness budget exceeded"));
     }
     let metadata = metadata_uses(f);
     let post = post_uses(f);
     let mut before = vec![Set::new(); f.code.len()];
+    let mut entries = 0usize;
+    let mut work = 0usize;
     loop {
         let mut changed = false;
         for pc in (0..f.code.len()).rev() {
@@ -129,7 +131,11 @@ pub fn live_locations(f: &Function) -> Result<Vec<Set>, Error> {
             live.extend(direct_uses(f, pc));
             live.extend(&metadata[pc]);
             close_dependencies(f, &mut live);
+            work = work.saturating_add(live.len().max(1));
+            enforce(work <= 50_000_000, "ALLOCATION_WORK", "allocation liveness work budget exceeded")?;
             if before[pc] != live {
+                entries = entries - before[pc].len() + live.len();
+                enforce(entries <= 8 * 1024 * 1024, "ALLOCATION_MEMORY", "allocation liveness storage exceeded")?;
                 before[pc] = live;
                 changed = true;
             }
@@ -170,31 +176,41 @@ pub struct AllocatedRoot {
     pub tagged_int: bool,
 }
 
-fn clique(graph: &mut BTreeMap<Location, Set>, locations: impl IntoIterator<Item = Location>) {
+fn clique(graph: &mut BTreeMap<Location, Set>, locations: impl IntoIterator<Item = Location>,
+    edges: &mut usize) -> Result<(), Error>
+{
     let locations = locations.into_iter().collect::<Set>();
+    enforce(locations.len().saturating_mul(locations.len().saturating_sub(1)) <= 8 * 1024 * 1024,
+        "ALLOCATION_MEMORY", "interference clique exceeds storage budget")?;
     for &location in &locations {
-        graph.entry(location).or_default().extend(locations.iter().copied().filter(|&other| other != location));
+        let neighbours = graph.entry(location).or_default();
+        let before = neighbours.len();
+        neighbours.extend(locations.iter().copied().filter(|&other| other != location));
+        *edges = edges.saturating_add(neighbours.len() - before);
+        enforce(*edges <= 8 * 1024 * 1024, "ALLOCATION_MEMORY", "interference graph exceeds storage budget")?;
     }
+    Ok(())
 }
 
 pub fn allocate(f: &Function) -> Result<Allocation, Error> {
     let live = live_locations(f)?;
     let post = post_uses(f);
     let mut graph = BTreeMap::new();
+    let mut edges = 0;
     // Entry adapters store every parameter before their first collecting call, including externals.
-    clique(&mut graph, f.params.iter().copied());
+    clique(&mut graph, f.params.iter().copied(), &mut edges)?;
     for set in &live {
-        clique(&mut graph, set.iter().copied());
+        clique(&mut graph, set.iter().copied(), &mut edges)?;
     }
     for block in &f.blocks {
-        clique(&mut graph, block.params.iter().copied().chain(live[block.pc as usize].iter().copied()));
+        clique(&mut graph, block.params.iter().copied().chain(live[block.pc as usize].iter().copied()), &mut edges)?;
     }
     for (pc, inst) in f.code.iter().enumerate() {
         if !terminal(inst) {
             clique(&mut graph, definitions(inst).into_iter().chain(post[pc].iter().copied())
-                .chain(live.get(pc + 1).into_iter().flatten().copied()));
+                .chain(live.get(pc + 1).into_iter().flatten().copied()), &mut edges)?;
             clique(&mut graph, definitions(inst).into_iter()
-                .chain(live.get(pc + 1).into_iter().flatten().copied()));
+                .chain(live.get(pc + 1).into_iter().flatten().copied()), &mut edges)?;
         }
     }
     let mut allocation = Allocation {
@@ -284,12 +300,17 @@ pub fn check_allocation(f: &Function, allocation: &Allocation) -> Result<(), Err
         }
         return Err(error("allocation requires code"));
     }
+    let size = |state: &State| state.len() + state.iter().map(Set::len).sum::<usize>();
+    let mut stored = size(&entry);
+    let mut visits = 0usize;
     incoming[0] = Some(entry);
     let metadata = metadata_uses(f);
     let post = post_uses(f);
     let mut work = vec![0];
     while let Some(pc) = work.pop() {
         let mut state = incoming[pc].as_ref().ok_or_else(|| error("allocation worklist state"))?.clone();
+        visits = visits.saturating_add(size(&state));
+        enforce(visits <= 50_000_000, "ALLOCATION_WORK", "allocation checker work budget exceeded")?;
         let mut used = direct_uses(f, pc);
         used.extend(&metadata[pc]);
         // This is a forward availability check, independent of the backward live set computation.
@@ -319,6 +340,8 @@ pub fn check_allocation(f: &Function, allocation: &Allocation) -> Result<(), Err
         }
         let mut successors = Vec::new();
         for (ordinal, edge) in outgoing(&f.code[pc]).into_iter().enumerate() {
+            visits = visits.saturating_add(size(&state));
+            enforce(visits <= 50_000_000, "ALLOCATION_WORK", "allocation edge work budget exceeded")?;
             let mut values = state.iter().map(|locations| locations.iter().copied()
                 .map(Source::Location).collect::<Vec<_>>()).collect::<Vec<_>>();
             let copies = allocation.edges.get(&(pc as u32, ordinal as u32))
@@ -374,6 +397,8 @@ pub fn check_allocation(f: &Function, allocation: &Allocation) -> Result<(), Err
                     work.push(target);
                 }
             } else {
+                stored = stored.saturating_add(size(&next));
+                enforce(stored <= 8 * 1024 * 1024, "ALLOCATION_MEMORY", "allocation checker storage exceeded")?;
                 *previous = Some(next);
                 work.push(target);
             }

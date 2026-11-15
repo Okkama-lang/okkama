@@ -114,7 +114,7 @@ fn champ_s2_registry_layouts_effects_and_single_outcome_channel() {
     assert_eq!(size_of::<KeyRef>(), 16);
     assert_eq!(size_of::<PacketSlot>(), 8);
     let helpers: Vec<_> = crate::jit::HELPERS.iter().filter(|(name, _)| name.starts_with("champ_")).collect();
-    assert_eq!(helpers.len(), 43);
+    assert_eq!(helpers.len(), 51);
     for &(name, effects) in helpers {
         let abi = helper_abi(name).unwrap();
         let class = abi.class;
@@ -843,4 +843,42 @@ fn champ_s2_owner_only_holder_only_and_combined_transitions_increment_once() {
         packet = post.packet;
         h.gc(&[packet.record]);
     }
+}
+
+#[test]
+fn champ_admissible_split_preserves_bound_history_and_escape_restores_admission() {
+    let mut h = Harness::new();
+    let mut state = h.scope();
+    let owner = scope(&h.runtime, state.record).unwrap().owner;
+    let (bound, mut packet) = h.fresh(0, owner);
+    assert_eq!(rt_own_admit(&mut h.ctx, &mut state, &mut packet, &mut state), NORMAL);
+    let mut empty = h.empty();
+    assert_eq!(rt_own_bind(&mut h.ctx, &mut state, 0, bound, &mut empty, &mut state), NORMAL);
+    let before = h.identity(bound);
+    let (fresh, mut packet) = h.fresh(0, owner);
+    assert_eq!(rt_own_admit(&mut h.ctx, &mut state, &mut packet, &mut state), NORMAL);
+    let roots = [bound, fresh];
+    let mut split = ScopeSplitPost::default();
+    assert_eq!(rt_scope_split_admissible(&mut h.ctx, &mut state, &selection(&roots), &mut split), NORMAL);
+    state = split.state;
+    assert_eq!(words(&h.runtime, &split.selected), HashSet::from([fresh]));
+    assert_eq!(scope(&h.runtime, state.record).unwrap().bound.words().collect::<Vec<_>>(), vec![bound]);
+    assert_eq!(h.identity(bound), before);
+    h.gc(&[state.record, split.selected.record]);
+    let roots = [bound];
+    let mut bound_split = ScopeSplitPost::default();
+    assert_eq!(rt_scope_split(&mut h.ctx, &mut state, &selection(&roots), &mut bound_split), NORMAL);
+    let mut target = h.scope();
+    let destination = scope(&h.runtime, target.record).unwrap();
+    let destination = ExitDestination { holder: destination.holder, owner: destination.owner };
+    let mut pending = PendingSlot::default();
+    let inputs = ExitInputs { kind: 1, boundary: owner.get(), value: bound, value_repr: Repr::Ref as u64,
+        packet: &mut bound_split.selected, selection: 0 };
+    assert_eq!(rt_exit_prepare(&mut h.ctx, &inputs, &mut pending), NORMAL);
+    let mut committed = CommitPost::default();
+    assert_eq!(rt_exit_commit(&mut h.ctx, &mut pending, &destination, &mut committed), NORMAL);
+    assert_eq!(rt_own_admit(&mut h.ctx, &mut target, &mut committed.packet, &mut target), NORMAL);
+    let mut escaped = ScopeSplitPost::default();
+    assert_eq!(rt_scope_split_admissible(&mut h.ctx, &mut target, &selection(&roots), &mut escaped), NORMAL);
+    assert_eq!(words(&h.runtime, &escaped.selected), HashSet::from([bound]));
 }

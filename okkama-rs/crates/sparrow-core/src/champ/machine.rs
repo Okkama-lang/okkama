@@ -10,6 +10,20 @@ use std::sync::Arc;
 
 pub type PlainEntry = extern "C" fn(*mut Ctx, *const Word, u64) -> Word;
 
+pub(crate) fn error_text(runtime: &Runtime, object: Word) -> Option<String> {
+    let machine = runtime.champ.machine.as_ref()?;
+    let descriptor = heap::payload(runtime.heap.header_of(object)) as usize;
+    let declaration = machine.source.objects.get(descriptor)?;
+    (!declaration.error_cases.is_empty()).then(|| super::p1::error_text(runtime, &machine.source, object))
+}
+
+pub(crate) fn error_name(runtime: &Runtime, object: Word) -> Option<String> {
+    let machine = runtime.champ.machine.as_ref()?;
+    let descriptor = heap::payload(runtime.heap.header_of(object)) as usize;
+    let case = machine.source.objects.get(descriptor)?.error_cases.first()?;
+    Some(case.split('.').next()?.to_owned())
+}
+
 /// Trusted host implementation and its independently supplied load-time declaration.
 #[derive(Clone, Debug)]
 pub struct ExternalEntry {
@@ -222,7 +236,7 @@ fn legacy_type(ty: s::Type) -> okkama_sparrow::Type {
     use okkama_sparrow::Type as T;
     match ty {
         s::Type::Error => T::Failure,
-        s::Type::Bytes => T::Array(okkama_sparrow::TypeRef(0)),
+        s::Type::Bytes | s::Type::Array(_) => T::Array(okkama_sparrow::TypeRef(0)),
         s::Type::Int => T::Int,
         s::Type::Bool | s::Type::Descriptor | s::Type::Never => T::Bool,
         s::Type::Str => T::Str,
@@ -384,6 +398,89 @@ pub extern "C" fn rt_machine_cleanup_mode(ctx: *mut Ctx) -> Word {
 
 pub extern "C" fn rt_machine_secondary(ctx: *mut Ctx, primary: Word, secondary: Word) -> Word {
     unsafe { &mut *(*ctx).runtime }.failure_link(primary, secondary, true)
+}
+
+pub extern "C" fn rt_machine_caused(ctx: *mut Ctx, fresh: Word, handled: Word) -> Word {
+    unsafe { &mut *(*ctx).runtime }.failure_link(fresh, handled, false)
+}
+
+pub extern "C" fn rt_machine_fail(ctx: *mut Ctx, kind: Word, payload: Word) -> Word {
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    let failure = match kind {
+        0 => runtime::FailureKind::Thrown(payload),
+        1 => runtime::FailureKind::Program(runtime.heap.text(payload).to_owned()),
+        2 => runtime::FailureKind::Panic(runtime.heap.text(payload).to_owned()),
+        _ => return stop(ctx, error("invalid verified failure kind")),
+    };
+    runtime.failure_new(failure)
+}
+
+pub extern "C" fn rt_machine_range(ctx: *mut Ctx, kind: Word, left: Word, right: Word, inclusive: Word) -> Word {
+    let frame = runtime::frame_pointer!();
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    let integer = |word| match runtime.heap.integer(word) {
+        heap::Integer::Small(value) => num_bigint::BigInt::from(value),
+        heap::Integer::Big(value) => value.clone(),
+    };
+    let value = if kind == 0 {
+        if integer(left) > integer(right) {
+            let failure = runtime.failure_new(runtime::FailureKind::Program(
+                "Range start must be less than or equal to range end".into()));
+            unsafe {
+                (*ctx).failure = failure;
+                (*ctx).status = runtime::FAILED;
+            }
+            return 0;
+        }
+        runtime.heap.allocate_payload(Box::new(crate::ops::RangeValue { start: left, end: right,
+            inclusive: inclusive != 0 }))
+    } else {
+        let range = runtime.heap.payload::<crate::ops::RangeValue>(left).expect("verified range");
+        let value = match kind {
+            1 => integer(range.start),
+            2 => integer(range.end) + u8::from(range.inclusive),
+            3 => integer(range.end) - integer(range.start) + u8::from(range.inclusive),
+            _ => return stop(ctx, error("invalid verified range operation")),
+        };
+        runtime.heap.big(value)
+    };
+    let repr = if kind == 0 { Repr::Ref } else { Repr::Int };
+    runtime.safepoint(frame, unsafe { &*ctx }, &[(value, repr)]);
+    value
+}
+
+pub extern "C" fn rt_machine_catch(ctx: *mut Ctx, failure: Word, descriptor: Word) -> Word {
+    let runtime = unsafe { &*(*ctx).runtime };
+    match runtime.failure(failure).map(|failure| &failure.kind) {
+        Some(runtime::FailureKind::Thrown(payload) | runtime::FailureKind::Native(payload))
+            if descriptor == u64::MAX || u64::from(heap::payload(runtime.heap.header_of(*payload))) == descriptor => {
+            *payload
+        }
+        _ => 0,
+    }
+}
+
+pub extern "C" fn rt_machine_plain_packet(ctx: *mut Ctx, packet: *const PacketSlot) -> Word {
+    let runtime = unsafe { &*(*ctx).runtime };
+    if runtime.champ_packet_keys(unsafe { &*packet }).is_ok_and(|keys| keys.is_empty()) {
+        NORMAL
+    } else {
+        stop(ctx, error("plain entry received resource obligations"))
+    }
+}
+
+pub extern "C" fn rt_machine_text_order(ctx: *mut Ctx, left: Word, right: Word) -> i64 {
+    let runtime = unsafe { &*(*ctx).runtime };
+    match runtime.heap.text(left).cmp(runtime.heap.text(right)) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    }
+}
+
+pub extern "C" fn rt_machine_text_len(ctx: *mut Ctx, text: Word) -> Word {
+    let runtime = unsafe { &*(*ctx).runtime };
+    crate::word::small(runtime.heap.text(text).chars().count() as i64).expect("addressable text length")
 }
 
 #[cfg(test)]

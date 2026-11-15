@@ -55,6 +55,7 @@ const fn registered_effects(name: &str, legacy: &'static [Effect]) -> &'static [
             16 => &[Effect::Stops],
             17 => &[Effect::Allocates, Effect::Stops],
             25 => &[Effect::Allocates, Effect::Fails, Effect::Stops],
+            27 => &[Effect::Allocates, Effect::Collects, Effect::Fails, Effect::Stops],
             23 => &[Effect::Allocates, Effect::Collects, Effect::Reenters, Effect::Stops],
             31 => &[Effect::Allocates, Effect::Collects, Effect::Reenters, Effect::Fails, Effect::Stops],
             _ => panic!("unsupported shared helper effects"),
@@ -167,6 +168,30 @@ helpers! {
     #[cfg(feature = "champ-abi")]
     champ_machine_secondary = crate::champ::machine::rt_machine_secondary as (ctx,
         primary: Word, secondary: Word) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_caused = crate::champ::machine::rt_machine_caused as (ctx,
+        fresh: Word, handled: Word) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_fail = crate::champ::machine::rt_machine_fail as (ctx,
+        kind: Word, payload: Word) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_range = crate::champ::machine::rt_machine_range as (ctx,
+        kind: Word, left: Word, right: Word, inclusive: Word) -> u64; [Allocates, Collects, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_catch = crate::champ::machine::rt_machine_catch as (ctx,
+        failure: Word, descriptor: Word) -> u64; [];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_plain_packet = crate::champ::machine::rt_machine_plain_packet as (ctx,
+        packet: *const crate::champ::PacketSlot) -> u64; [Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_text_order = crate::champ::machine::rt_machine_text_order as (ctx,
+        left: Word, right: Word) -> i64; [];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_text_len = crate::champ::machine::rt_machine_text_len as (ctx, text: Word) -> Word; [];
+    #[cfg(feature = "champ-abi")]
+    champ_scope_split_admissible = crate::champ::rt_scope_split_admissible as (ctx,
+        input: *mut crate::champ::ScopeSlot, selection: *const crate::champ::Selection,
+        post: *mut crate::champ::ScopeSplitPost) -> u64; [Allocates, Fails, Stops];
     #[cfg(feature = "champ-abi")]
     champ_machine_external = crate::champ::machine::rt_machine_external as (ctx,
         function: u64, io: *mut crate::champ::CallOwn, args: *const Word, count: u64) -> u64;

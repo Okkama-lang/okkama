@@ -98,7 +98,9 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                     let Some(Fact::Pending(payload)) = operands[0] else {
                         return Err(violation("PENDING_COMMIT_TYPE", "commit has no typed pending"));
                     };
-                    enforce(payload.value == f.results.first().copied(),
+                    let context = verify::result_context(p, f, *op, arguments)?;
+                    enforce(payload.value == context.value
+                        && (payload.kind != ExitKind::Return || payload.value == f.results.first().copied()),
                         if payload.kind == ExitKind::Return { "PENDING_RETURN_TYPE" } else { "PENDING_COMMIT_TYPE" },
                         "commit result differs from recorded pending value")?;
                     vec![]

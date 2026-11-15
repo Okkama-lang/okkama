@@ -114,6 +114,9 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
             for (pc, instruction) in source.code.iter().enumerate() {
                 emit.pc = Some(pc);
                 emit.builder.switch_to_block(emit.blocks[pc]);
+                if pc == 0 && owned && s::plain_inputs(&program, source) {
+                    emit.checked("champ_machine_plain_packet", &[ctx, io]);
+                }
                 emit.enter_roots();
                 emit.instruction(instruction)?;
             }
@@ -419,6 +422,14 @@ impl Emit<'_, '_> {
             }
             s::Instruction::Data { op, inputs, output, immediate } => {
                 self.data(*op, inputs, *output, immediate)?;
+                if sets_status(*op) {
+                    // A fallible data form loads only without services (S1). Leave exactly as a failing
+                    // call without an unwind outcome does, with the failure (or the stop) still set.
+                    let status = self.load(self.ctx, std::mem::offset_of!(Ctx, status));
+                    let ok = self.builder.create_block();
+                    self.builder.ins().brif(status, self.stop, &[], ok, &[]);
+                    self.builder.switch_to_block(ok);
+                }
                 self.next();
             }
             s::Instruction::Champ { op, arguments, flow } => self.operation(*op, arguments, flow)?,
@@ -448,6 +459,108 @@ impl Emit<'_, '_> {
         let boundary = |arg: &A| if let A::Boundary(id) = arg { Some(*id) } else { None };
         let selection = |arg: &A| if let A::Selection(id) = arg { Some(*id) } else { None };
         match op {
+            O::Catch => {
+                let failure = self.word(locations[0]);
+                let descriptor = arguments.iter().find_map(|arg| match arg { A::Object(id) => Some(*id), _ => None })
+                    .map_or(u64::MAX, u64::from);
+                let descriptor = self.iconst(descriptor);
+                let payload = self.call("champ_machine_catch", &[ctx, failure, descriptor]).unwrap();
+                let yes = self.builder.create_block();
+                let no = self.builder.create_block();
+                let s::Flow::Outcomes(outcomes) = flow else { unreachable!() };
+                self.builder.ins().brif(payload, yes, &[], no, &[]);
+                self.builder.switch_to_block(yes);
+                self.edge(&outcomes[0].edge, &[vec![payload]]);
+                self.builder.switch_to_block(no);
+                self.edge(&outcomes[1].edge, &[]);
+                return Ok(());
+            }
+            O::Evaluate => {
+                let A::Evaluation(evaluation) = &arguments[0] else { unreachable!() };
+                let inputs = locations.iter().map(|location| match location {
+                    L::Register(id) => *id, _ => unreachable!("verified scalar operands"),
+                }).collect::<Vec<_>>();
+                let value = self.data_value(evaluation.op, &inputs, evaluation.result, &evaluation.immediate)?;
+                let s::Flow::Outcomes(outcomes) = flow else { unreachable!() };
+                let status = self.load(ctx, std::mem::offset_of!(Ctx, status));
+                let success = self.builder.create_block();
+                let failure = self.builder.create_block();
+                self.builder.ins().brif(status, failure, &[], success, &[]);
+                self.builder.switch_to_block(success);
+                self.edge(&outcomes[0].edge, &[vec![value]]);
+                self.builder.switch_to_block(failure);
+                let failed = self.builder.ins().icmp_imm_s(IntCC::Equal, status, FAILED as i64);
+                let unwind = self.builder.create_block();
+                self.builder.ins().brif(failed, unwind, &[], self.stop, &[]);
+                self.builder.switch_to_block(unwind);
+                let function = self.iconst(self.index as u64);
+                let pc = self.iconst(self.pc.unwrap() as u64);
+                let frame = self.builder.ins().get_frame_pointer(types::I64);
+                self.call("trace", &[ctx, function, pc, frame]);
+                let failure = self.load(ctx, std::mem::offset_of!(Ctx, failure));
+                self.store(ctx, std::mem::offset_of!(Ctx, status), zero);
+                self.store(ctx, std::mem::offset_of!(Ctx, failure), zero);
+                self.edge(&outcomes[1].edge, &[vec![failure]]);
+                return Ok(());
+            }
+            O::Fail => {
+                let kind = arguments.iter().find_map(|arg| match arg { A::Label(id) => Some(*id), _ => None })
+                    .unwrap();
+                let kind = self.iconst(u64::from(kind));
+                let payload = self.word(locations[0]);
+                let failure = self.call("champ_machine_fail", &[ctx, kind, payload]).unwrap();
+                self.store(ctx, std::mem::offset_of!(Ctx, failure), failure);
+                let failed = self.iconst(FAILED);
+                self.store(ctx, std::mem::offset_of!(Ctx, status), failed);
+                let function = self.iconst(self.index as u64);
+                let pc = self.iconst(self.pc.unwrap() as u64);
+                let frame = self.builder.ins().get_frame_pointer(types::I64);
+                self.call("trace", &[ctx, function, pc, frame]);
+                self.store(ctx, std::mem::offset_of!(Ctx, status), zero);
+                self.store(ctx, std::mem::offset_of!(Ctx, failure), zero);
+                let s::Flow::Outcomes(outcomes) = flow else { unreachable!("verified fail outcome") };
+                self.edge(&outcomes[0].edge, &[vec![failure]]);
+                return Ok(());
+            }
+            O::ArrayGet => {
+                let s::Flow::Outcomes(outcomes) = flow else { unreachable!("verified array outcomes") };
+                let array = self.word(locations[0]);
+                let index = self.word(locations[1]);
+                let header = self.load(array, 0);
+                let length = self.builder.ins().ushr_imm_u(header, 32);
+                let small = self.builder.ins().band_imm_u(index, 1);
+                let position = self.builder.ins().sshr_imm_u(index, 1);
+                let inside = self.builder.ins().icmp(IntCC::UnsignedLessThan, position, length);
+                let inside = self.builder.ins().uextend(types::I64, inside);
+                let valid = self.builder.ins().band(small, inside);
+                let load = self.builder.create_block();
+                let outside = self.builder.create_block();
+                self.builder.ins().brif(valid, load, &[], outside, &[]);
+                self.builder.switch_to_block(load);
+                let offset = self.builder.ins().ishl_imm_u(position, 3);
+                let pointer = self.builder.ins().iadd(array, offset);
+                let value = self.load(pointer, 8);
+                self.edge(&outcomes[0].edge, &[vec![value]]);
+                self.builder.switch_to_block(outside);
+                let message = self.heap.allocate_text("Array index out of bounds");
+                self.constants.push((message, Repr::Ref));
+                let message = self.iconst(message);
+                self.call("trap", &[ctx, message]);
+                let status = self.load(ctx, std::mem::offset_of!(Ctx, status));
+                let failed = self.builder.ins().icmp_imm_s(IntCC::Equal, status, FAILED as i64);
+                let unwind = self.builder.create_block();
+                self.builder.ins().brif(failed, unwind, &[], self.stop, &[]);
+                self.builder.switch_to_block(unwind);
+                let function = self.iconst(self.index as u64);
+                let pc = self.iconst(self.pc.unwrap() as u64);
+                let frame = self.builder.ins().get_frame_pointer(types::I64);
+                self.call("trace", &[ctx, function, pc, frame]);
+                let failure = self.load(ctx, std::mem::offset_of!(Ctx, failure));
+                self.store(ctx, std::mem::offset_of!(Ctx, status), zero);
+                self.store(ctx, std::mem::offset_of!(Ctx, failure), zero);
+                self.edge(&outcomes[1].edge, &[vec![failure]]);
+                return Ok(());
+            }
             O::ScopeBegin => {
                 let scope = arguments.iter().find_map(|arg| match arg {
                     A::Scope(id) => Some(*id), _ => None,
@@ -514,7 +627,7 @@ impl Emit<'_, '_> {
                 }
                 return Ok(());
             }
-            O::DepsOf => {
+            O::DepsOf | O::DepsEmpty => {
                 // The result has a definition and proof dependencies, but no machine storage.
                 self.next();
                 return Ok(());
@@ -563,7 +676,11 @@ impl Emit<'_, '_> {
                     helper = "champ_own_split_static";
                     args.push(self.static_selection()?);
                 } else {
-                    helper = if op == O::ScopeSplit { "champ_scope_split" } else { "champ_own_split_checked" };
+                    helper = if op == O::ScopeSplit && arguments.contains(&A::Flag(true)) {
+                        "champ_scope_split_admissible"
+                    } else if op == O::ScopeSplit {
+                        "champ_scope_split"
+                    } else { "champ_own_split_checked" };
                     let id = arguments.iter().find_map(selection).unwrap();
                     args.push(self.selection_record(id));
                 }
@@ -741,6 +858,12 @@ impl Emit<'_, '_> {
                 let packet = locations.iter().find(|location| matches!(location, L::Service(id)
                     if self.source.services[*id as usize] == s::ServiceKind::Packet)).copied();
                 let value = locations.iter().find(|location| matches!(location, L::Register(_))).copied();
+                if op == O::RetOwn && s::plain_results(self.program, self.source)
+                    && let Some(packet) = packet
+                {
+                    let pointer = self.pointer(packet);
+                    self.checked("champ_machine_plain_packet", &[ctx, pointer]);
+                }
                 let packet = packet.map_or(zero, |location| self.word(location));
                 let value = value.map_or(zero, |location| self.word(location));
                 let output = self.load(self.io, 16);
@@ -855,6 +978,17 @@ impl Emit<'_, '_> {
     fn data(&mut self, op: s::DataOp, inputs: &[u32], output: Option<u32>, immediate: &s::Immediate)
         -> Result<(), Error>
     {
+        let ty = output.map_or(s::Type::Never, |id| self.source.registers[id as usize]);
+        let value = self.data_value(op, inputs, ty, immediate)?;
+        if let Some(output) = output {
+            self.write(L::Register(output), &[value]);
+        }
+        Ok(())
+    }
+
+    fn data_value(&mut self, op: s::DataOp, inputs: &[u32], ty: s::Type, immediate: &s::Immediate)
+        -> Result<Value, Error>
+    {
         use s::DataOp as D;
         let words = inputs.iter().map(|&id| self.word(L::Register(id))).collect::<Vec<_>>();
         let value = match op {
@@ -869,29 +1003,95 @@ impl Emit<'_, '_> {
                     s::Immediate::Constant(s::Constant::Str(value)) => self.heap.allocate_text(value),
                     _ => return Err(Error("invalid constant".into())),
                 };
-                self.constants.push((word, machine::repr(self.source.registers[output.unwrap() as usize])));
+                self.constants.push((word, machine::repr(ty)));
                 self.iconst(word)
             }
-            D::FailSecondary => self.call("champ_machine_secondary", &[self.ctx, words[0], words[1]]).unwrap(),
+            D::FailSecondary | D::FailCaused => {
+                let helper = if op == D::FailSecondary { "champ_machine_secondary" } else { "champ_machine_caused" };
+                self.call(helper, &[self.ctx, words[0], words[1]]).unwrap()
+            }
+            D::EnumCase => {
+                let s::Immediate::Updates(indices) = immediate else { unreachable!() };
+                let tag = self.heap.int(i64::from(indices[1]));
+                let object = self.heap.object_new(indices[0], &[tag]);
+                self.constants.push((object, Repr::Ref));
+                self.iconst(object)
+            }
             D::Move => words[0],
             D::Undef => self.iconst(0),
-            D::ObjNew => {
-                let s::Immediate::Object(descriptor) = immediate else { unreachable!() };
-                let layout = self.heap.object_runtime_layout(*descriptor).clone();
+            D::StrConcat => self.call("concat", &[self.ctx, words[0], words[1]]).unwrap(),
+            D::StrLen => self.call("champ_machine_text_len", &[self.ctx, words[0]]).unwrap(),
+            D::IntEq | D::IntNe | D::IntLt | D::IntLe | D::IntGt | D::IntGe
+                | D::StrEq | D::StrNe | D::StrLt | D::StrLe | D::StrGt | D::StrGe => {
+                let helper = if matches!(op, D::IntEq | D::IntNe | D::IntLt | D::IntLe | D::IntGt | D::IntGe) {
+                    "int_order"
+                } else { "champ_machine_text_order" };
+                let order = self.call(helper, &[self.ctx, words[0], words[1]]).unwrap();
+                let condition = match op {
+                    D::IntEq | D::StrEq => IntCC::Equal,
+                    D::IntNe | D::StrNe => IntCC::NotEqual,
+                    D::IntLt | D::StrLt => IntCC::SignedLessThan,
+                    D::IntLe | D::StrLe => IntCC::SignedLessThanOrEqual,
+                    D::IntGt | D::StrGt => IntCC::SignedGreaterThan,
+                    _ => IntCC::SignedGreaterThanOrEqual,
+                };
+                let result = self.builder.ins().icmp_imm_s(condition, order, 0);
+                self.builder.ins().uextend(types::I64, result)
+            }
+            D::RangeNew | D::RangeStart | D::RangeEnd | D::RangeLen => {
+                let kind = self.iconst(match op {
+                    D::RangeNew => 0, D::RangeStart => 1, D::RangeEnd => 2, _ => 3,
+                });
+                let right = words.get(1).copied().unwrap_or_else(|| self.iconst(0));
+                let inclusive = self.iconst(u64::from(*immediate == s::Immediate::Inclusive(true)));
+                self.call("champ_machine_range", &[self.ctx, kind, words[0], right, inclusive]).unwrap()
+            }
+            D::ArrayNew => {
+                let s::Type::Array(shape) = ty else {
+                    unreachable!("verified plain array type")
+                };
+                let repr = self.iconst(machine::repr(shape.element().unwrap()) as u64);
+                let elements = self.record(&words);
+                let count = self.iconst(words.len() as u64);
+                self.call("array", &[self.ctx, repr, elements, count]).unwrap()
+            }
+            D::ArrayLen => {
+                let header = self.load(words[0], 0);
+                let length = self.builder.ins().ushr_imm_u(header, 32);
+                let doubled = self.builder.ins().ishl_imm_u(length, 1);
+                self.builder.ins().bor_imm_u(doubled, 1)
+            }
+            D::ObjNew | D::ObjNext => {
+                let descriptor = match ty {
+                    s::Type::Object(id) | s::Type::Successor(id) => id,
+                    _ => unreachable!("verified construction"),
+                };
+                let layout = self.heap.object_runtime_layout(descriptor).clone();
                 let count = self.iconst(layout.allocation_words() as u64);
                 let pointer = self.call("allocate", &[self.ctx, count]).unwrap();
                 let null = self.builder.ins().icmp_imm_s(IntCC::Equal, pointer, 0);
                 let allocated = self.builder.create_block();
                 self.builder.ins().brif(null, self.stop, &[], allocated, &[]);
                 self.builder.switch_to_block(allocated);
-                let header = self.iconst(layout.header(*descriptor));
+                let header = self.iconst(layout.header(descriptor));
                 self.store(pointer, 0, header);
                 let zero = self.iconst(0);
                 for word in 1..layout.allocation_words() {
                     self.store(pointer, word * 8, zero);
                 }
-                for (index, &word) in words.iter().enumerate() {
-                    self.store(pointer, (index + 1) * 8, word);
+                if let s::Immediate::Updates(indices) = immediate {
+                    for index in 0..layout.storage_field_count() {
+                        let word = if let Some(update) = indices.iter().position(|&field| field as usize == index) {
+                            words[update + 1]
+                        } else {
+                            self.load(words[0], (index + 1) * 8)
+                        };
+                        self.store(pointer, (index + 1) * 8, word);
+                    }
+                } else {
+                    for (index, &word) in words.iter().enumerate() {
+                        self.store(pointer, (index + 1) * 8, word);
+                    }
                 }
                 pointer
             }
@@ -929,11 +1129,14 @@ impl Emit<'_, '_> {
             }
             _ => return Err(Error(format!("Champ J1 data operation {op:?} is outside the executable slice"))),
         };
-        if let Some(output) = output {
-            self.write(L::Register(output), &[value]);
-        }
-        Ok(())
+        Ok(value)
     }
+}
+
+/// Data helpers that can return with a non-OK status: an application failure (`DataOp::fallible`)
+/// or a terminal stop such as an exhausted memory budget. Their result is then not a value.
+fn sets_status(op: s::DataOp) -> bool {
+    op.fallible() || matches!(op, s::DataOp::IntMul | s::DataOp::StrConcat)
 }
 
 #[cfg(test)]

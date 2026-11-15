@@ -381,3 +381,184 @@ fn non_return_commit_cannot_reinterpret_pending_value() {
     }
     reject(&p, &catalog, "PENDING_COMMIT_TYPE");
 }
+
+/// fresh-call's callee rebuilt to bind its fresh object: create_commit, own.accept into the bound journal,
+/// a scope.split without the admissible flag, and a close of the emptied scope. With `commit` the selected
+/// packet returns through exit.prepare and exit.commit; without it ret.own returns that bound packet itself.
+fn bound_fresh_return(commit: bool) -> (Program, Catalog) {
+    let (mut p, catalog) = fixture("fresh-call");
+    let f = p.functions.iter_mut().find(|f| f.symbol == "fresh").unwrap();
+    assert!(matches!(f.code[11], Instruction::Champ { op: Opcode::OwnSplit, .. }), "fixture changed");
+    assert!(matches!(f.code[14], Instruction::Champ { op: Opcode::CleanupBegin, .. }), "fixture changed");
+    assert!(matches!(f.code[32], Instruction::Champ { op: Opcode::RetOwn, .. }), "fixture changed");
+    let service = Location::Service;
+    let produced = |destination, slot| Assignment { destination, source: Source::ProducedSlot(slot) };
+    let emptied = service(f.services.len() as u32);
+    f.services.push(ServiceKind::ScopeState);
+    f.code[11] = Instruction::Champ { op: Opcode::ScopeBegin,
+        arguments: vec![Argument::Scope(3), Argument::Boundary(3)], flow: Flow::Next(vec![service(12)]) };
+    f.code[12] = Instruction::Champ { op: Opcode::OwnAccept,
+        arguments: vec![Argument::Location(service(12)), Argument::Location(service(8))],
+        flow: Flow::Next(vec![service(13)]) };
+    let normal = Edge { target_pc: 14,
+        assignments: vec![produced(emptied, 0), produced(service(10), 1), produced(service(11), 2)] };
+    let unwind = Edge { target_pc: 20,
+        assignments: vec![produced(service(19), 0), produced(Location::Register(1), 1)] };
+    f.code[13] = Instruction::Champ { op: Opcode::ScopeSplit,
+        arguments: vec![Argument::Location(service(13)), Argument::Selection(3)],
+        flow: Flow::Outcomes(vec![Outcome { tag: Tag::Normal, edge: normal },
+            Outcome { tag: Tag::Unwind, edge: unwind }]) };
+    let Instruction::Champ { arguments, .. } = &mut f.code[14] else { unreachable!() };
+    arguments[0] = Argument::Location(emptied);
+    // The old unwind landing (own.admit of a rest packet) is dead; the split unwinds into the close.
+    f.code[18] = Instruction::Unreachable;
+    f.code[19] = Instruction::Unreachable;
+    f.blocks.iter_mut().find(|block| block.pc == 18).unwrap().params.clear();
+    f.blocks.push(Block { pc: 14, params: vec![emptied, service(10), service(11)] });
+    f.blocks.push(Block { pc: 19, params: vec![] });
+    f.blocks.push(Block { pc: 20, params: vec![service(19), Location::Register(1)] });
+    f.proofs.static_selections.clear();
+    if commit {
+        let end = f.code.len() as u32;
+        let base = f.services.len() as u32;
+        let (pending, packet, deps) = (service(base), service(base + 1), service(base + 2));
+        f.services.extend([ServiceKind::Pending, ServiceKind::Packet, ServiceKind::Deps]);
+        let value = Location::Register(f.registers.len() as u32);
+        f.registers.push(Type::Object(0));
+        f.code[32] = Instruction::Br(Edge { target_pc: end, assignments: vec![] });
+        f.blocks.push(Block { pc: end, params: vec![] });
+        f.code.push(Instruction::Champ { op: Opcode::ExitPrepare,
+            arguments: vec![Argument::Kind(ExitKind::Return), Argument::Boundary(2),
+                Argument::Location(Location::Register(0)), Argument::Location(service(10)), Argument::Selection(3)],
+            flow: Flow::Next(vec![pending]) });
+        f.code.push(Instruction::Champ { op: Opcode::ExitCommit,
+            arguments: vec![Argument::Location(pending), Argument::Destination(ExitDestination::Caller)],
+            flow: Flow::Next(vec![value, packet, deps]) });
+        f.code.push(Instruction::Champ { op: Opcode::RetOwn,
+            arguments: vec![Argument::Location(value), Argument::Location(packet), Argument::Location(deps)],
+            flow: Flow::Next(vec![]) });
+    }
+    f.blocks.sort_by_key(|block| block.pc);
+    refresh(f);
+    (p, catalog)
+}
+
+#[test]
+fn bound_return_packet_cannot_claim_all_admission_at_its_caller() {
+    // A caller's admission-only split would select nothing and its merge would destroy the result.
+    let (p, catalog) = bound_fresh_return(false);
+    reject(&p, &catalog, "RETURN_PACKET_NOT_FLAT");
+}
+
+#[test]
+fn bound_return_packet_loads_after_exit_commit() {
+    let (p, catalog) = bound_fresh_return(true);
+    verify_load(&p, &catalog).unwrap();
+}
+
+fn modulo(services: Vec<ServiceKind>) -> Function {
+    let mut f = empty_function();
+    f.registers = vec![Type::Int; 3];
+    f.params = vec![Location::Register(0), Location::Register(1)];
+    f.params.extend((0..services.len() as u32).map(Location::Service));
+    f.services = services;
+    f.blocks[0].params = f.params.clone();
+    f.proofs.entry = Some(EntryContract { failures: 2, ..EntryContract::default() });
+    f.code.insert(0, Instruction::Data { op: DataOp::IntMod, inputs: vec![0, 1], output: Some(2),
+        immediate: Immediate::None });
+    refresh(&mut f);
+    f
+}
+
+#[test]
+fn fallible_data_needs_outcomes_where_services_live() {
+    verify_load(&small(modulo(vec![])), &NoExternalContracts).unwrap();
+    reject(&small(modulo(vec![ServiceKind::Deps])), &NoExternalContracts, "FALLIBLE_DATA_OUTCOMES");
+}
+
+#[test]
+fn fallible_evaluate_loads_where_services_live() {
+    let mut f = modulo(vec![ServiceKind::Deps]);
+    let failure = Location::Register(3);
+    f.registers.push(Type::Failure);
+    let produced = |destination| Assignment { destination, source: Source::ProducedSlot(0) };
+    let evaluation = Evaluation { op: DataOp::IntMod, result: Type::Int, immediate: Immediate::None };
+    f.code = vec![
+        Instruction::Champ { op: Opcode::Evaluate,
+            arguments: vec![Argument::Evaluation(evaluation), Argument::Location(Location::Register(0)),
+                Argument::Location(Location::Register(1))],
+            flow: Flow::Outcomes(vec![
+                Outcome { tag: Tag::Normal, edge: Edge { target_pc: 1,
+                    assignments: vec![produced(Location::Register(2))] } },
+                Outcome { tag: Tag::Unwind, edge: Edge { target_pc: 2, assignments: vec![produced(failure)] } },
+            ]) },
+        Instruction::Ret(vec![]),
+        Instruction::Raise(3),
+    ];
+    f.blocks.push(Block { pc: 1, params: vec![Location::Register(2)] });
+    f.blocks.push(Block { pc: 2, params: vec![failure] });
+    refresh(&mut f);
+    verify_load(&small(f), &NoExternalContracts).unwrap();
+}
+
+/// An observation function beside fixture valued's destroy-bearing `Res { label: str }`.
+/// Its first `params` registers are its parameters.
+fn creating(params: u32, registers: Vec<Type>, results: Vec<Type>, code: Vec<Instruction>) -> (Program, Catalog) {
+    let (mut p, catalog) = fixture("valued");
+    let mut f = empty_function();
+    f.symbol = "create".into();
+    f.params = (0..params).map(Location::Register).collect();
+    f.registers = registers;
+    f.results = results;
+    f.blocks[0].params = f.params.clone();
+    f.code = code;
+    f.proofs.entry = Some(EntryContract::default());
+    refresh(&mut f);
+    p.functions.push(f);
+    (p, catalog)
+}
+
+#[test]
+fn packet_less_construction_cannot_return_a_destroy_bearing_object() {
+    let (p, catalog) = creating(1, vec![Type::Str, Type::Object(0)], vec![Type::Object(0)], vec![
+        Instruction::Data { op: DataOp::ObjNew, inputs: vec![0], output: Some(1), immediate: Immediate::Object(0) },
+        Instruction::Ret(vec![1]),
+    ]);
+    reject(&p, &catalog, "CREATION_UNCOMMITTED");
+}
+
+#[test]
+fn successor_cannot_leave_its_scope_without_its_commit() {
+    let registers = vec![Type::Object(0), Type::Str, Type::Successor(0), Type::Object(0)];
+    let (p, catalog) = creating(2, registers, vec![], vec![
+        Instruction::Data { op: DataOp::ObjNext, inputs: vec![0, 1], output: Some(2),
+            immediate: Immediate::Updates(vec![0]) },
+        Instruction::Data { op: DataOp::Move, inputs: vec![2], output: Some(3), immediate: Immediate::None },
+        Instruction::Ret(vec![]),
+    ]);
+    reject(&p, &catalog, "CREATION_UNCOMMITTED");
+}
+
+#[test]
+fn incomplete_construction_cannot_move_a_packet_instead_of_committing() {
+    // cleanup.rs's Incomplete path: the fresh object travels to ret.own beside a packet that never holds it.
+    let (mut p, catalog) = fixture("fresh-call");
+    let f = p.functions.iter_mut().find(|f| f.symbol == "fresh").unwrap();
+    let move_packet = |from, to| Instruction::Champ { op: Opcode::OwnMove,
+        arguments: vec![Argument::Location(Location::Service(from))], flow: Flow::Next(vec![Location::Service(to)]) };
+    assert!(matches!(f.code[8], Instruction::Champ { op: Opcode::OwnCreateCommit, .. }), "fixture changed");
+    f.code[8] = move_packet(7, 58);
+    f.code[9] = move_packet(58, 59);
+    refresh(f);
+    reject(&p, &catalog, "CREATION_UNCOMMITTED");
+}
+
+#[test]
+fn creation_may_reach_its_commit_past_unrelated_instructions() {
+    let (mut p, catalog) = fixture("fresh-call");
+    let f = p.functions.iter_mut().find(|f| f.symbol == "fresh").unwrap();
+    assert!(matches!(f.code[7], Instruction::Data { op: DataOp::ObjNew, .. }), "fixture changed");
+    f.code.swap(6, 7);
+    refresh(f);
+    verify_load(&p, &catalog).unwrap();
+}

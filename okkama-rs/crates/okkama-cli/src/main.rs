@@ -54,6 +54,27 @@ fn oir2_selected() -> bool {
     std::env::var_os("OKKAMA_PIPELINE").is_some_and(|value| value == "oir2")
 }
 
+/// A champ-abi build compiles Tomato's resource tracking out of the runtime, so SPB 16 programs
+/// would run without their destroys. Such a build runs only SPB 17 (OKKAMA_PIPELINE=oir2).
+#[cfg(feature = "champ-abi")]
+fn spb16_refusal(command: &str, rest: &[String]) -> Option<Outcome> {
+    let message = "okkama: this build has the champ-abi feature and runs only SPB 17: \
+        set OKKAMA_PIPELINE=oir2, or use a build without champ-abi for SPB 16\n";
+    let refused = match command {
+        "run" => !oir2_selected(),
+        "exec" => {
+            let path = rest.iter().find(|argument| argument.ends_with(".spb"));
+            path.is_some_and(|path| {
+                let mut header = [0u8; 6];
+                let read = std::fs::File::open(path).and_then(|mut file| file.read_exact(&mut header));
+                read.is_ok() && header != [b'S', b'P', b'R', b'W', 0, 17]
+            })
+        }
+        _ => command.ends_with(".ok") && !oir2_selected(),
+    };
+    refused.then(|| Outcome::failure(message.into(), EXIT_DIAGNOSTICS))
+}
+
 #[cfg(feature = "champ-abi")]
 fn compile_oir2(sources: &[SourceFile], tests: bool, verify_ownership: bool) -> Result<Vec<u8>, Outcome> {
     if tests {
@@ -452,14 +473,9 @@ fn run(args: &[String]) -> Outcome {
         return Outcome::failure(HELP.to_string(), EXIT_USAGE);
     };
     let rest = &args[1..];
-    if cfg!(feature = "champ-abi") && matches!(command.as_str(), "build" | "run" | "exec" | "ir") {
-        return Outcome::failure(
-            "Champ OIR-2 driver is not yet available: requires #572 and #573-P1\n".into(),
-            EXIT_DIAGNOSTICS,
-        );
-    }
-    if cfg!(feature = "champ-abi") && command.ends_with(".ok") {
-        return Outcome::failure("Champ driver requires #572 and #573-P1\n".into(), EXIT_DIAGNOSTICS);
+    #[cfg(feature = "champ-abi")]
+    if let Some(refusal) = spb16_refusal(command, rest) {
+        return refusal;
     }
     match command.as_str() {
         "-h" | "--help" => Outcome::success(HELP.to_string()),

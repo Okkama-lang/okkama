@@ -152,7 +152,7 @@ pub fn helper_abi(name: &str) -> Option<HelperAbi> {
         "champ_own_stage" => ("StagePost", Some(O::OwnStage)),
         "champ_own_split_static" => ("SplitPost", Some(O::OwnSplit)),
         "champ_own_split_checked" => ("SplitPost", Some(O::OwnSplitChecked)),
-        "champ_scope_split" => ("ScopeSplitPost", Some(O::ScopeSplit)),
+        "champ_scope_split" | "champ_scope_split_admissible" => ("ScopeSplitPost", Some(O::ScopeSplit)),
         "champ_scope_transfer" => ("TransferPost", Some(O::ScopeTransfer)),
         "champ_exit_prepare" => ("PendingSlot", Some(O::ExitPrepare)),
         "champ_exit_extend" => ("PendingSlot", Some(O::ExitExtend)),
