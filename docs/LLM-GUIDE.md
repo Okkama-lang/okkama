@@ -74,9 +74,10 @@ summary.
   - **Fable.** The principal expert for independent audits.
 - **Subagent effort.** High by default (owner, 2026-11-15: better code
   costs less review later). Only purely mechanical chores may go lower.
-- **Fable costs money.** Audit only changes to verifier or loader rules: one
-  audit per wave, covering all of that wave's rule changes. Claude reviews
-  everything else.
+- **Fable with purpose.** The owner extended the quota (2026-11-15). Use it
+  for audits of verifier or loader rule changes, once per wave or per
+  risky slice, and for reviews of key design documents. Claude reviews
+  routine code.
 - **Waves, not per-change testing.** Group tickets into logical waves.
   - **Per ticket:** the implementer runs only the targeted tests of the
     crates it touched, on the host.
