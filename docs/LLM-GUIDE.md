@@ -85,6 +85,12 @@ summary.
     conformance-on-Champ run (at most once a day). Then merge the wave into
     `release/0.6.0` and push.
   - No Docker or conformance runs for small changes.
+  - **Before pushing a `wave/*` branch** (owner, 2026-11-15): locally only a
+    build and both clippy runs (`cargo clippy --workspace --all-targets` and
+    the champ-abi one, `-D warnings`), about 5–8 minutes. Tests, the Champ
+    end-to-end harnesses, the verifier differential and conformance run in
+    the `Wave` CI, in parallel with further work; a red CI is fixed forward
+    on the wave. A wave merges into `release/0.6.0` only after a green CI.
 - **Parallel lanes.** Every agent builds on this machine (12 cores, 32 GB; no
   remote agents), so run at most 3–4 lanes with Rust builds at once.
   - Split lanes along crate boundaries.
