@@ -1135,3 +1135,5 @@ mod budget_tests;
 mod async_tests;
 #[cfg(test)]
 mod roles_tests;
+#[cfg(test)]
+mod view_collections_tests;

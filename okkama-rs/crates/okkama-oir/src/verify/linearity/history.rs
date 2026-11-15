@@ -450,6 +450,71 @@ mod tests {
         assert!(!state.incomplete);
     }
 
+    /// #700: an obligation is the duty to finish an identity (OIR-2 §3.2). A builtin capability without destroy
+    /// (Atomic) holds borrowed references and no obligation (§7.2; P2.4 §4.8), a role holds one only when an
+    /// implementation can (§3.1), and a holder holds one only through such a field. Managedness, which also
+    /// counts deps, is unchanged: the capability and every role stay managed.
+    #[test]
+    fn obligations_follow_destroy_role_implementations_and_fields() {
+        let module = text::parse("oir 2 own
+module classes
+role Shape {
+}
+role Owned {
+}
+object Cap [builtin] {
+}
+object Res {
+    destroy @destroy
+    does Owned {}
+}
+object Square {
+    field side: int
+    does Shape {}
+}
+object CapHolder {
+    field cap: Cap
+}
+object ShapeHolder {
+    field shape: Shape
+}
+object OwnedHolder {
+    field owned: Owned
+}
+scope S action in @destroy
+func @destroy(%self: Res) -> void [destroy Res] {
+^entry in S:
+    ret
+}
+scope SU action in @uses
+func @uses(%a: Square, %b: CapHolder, %c: ShapeHolder, %d: OwnedHolder) -> void {
+^entry in SU:
+    ret
+}
+").unwrap_or_else(|error| panic!("{error}"));
+        with_state(&module, |state| {
+            let module = state.module;
+            let obligations = obligation_types(module, state);
+            let managed = managed_types(module, state);
+            let classified = |name: &str| {
+                let (decl, _) = module.declarations.iter().find(|(_, declaration)| declaration.name == name).unwrap();
+                let (ty, _) = module.types.iter().find(|(_, ty)| match ty {
+                    Type::Object { decl: object, .. } | Type::Role { decl: object, .. } => *object == decl,
+                    _ => false,
+                }).unwrap();
+                (obligations[ty.as_u32() as usize], managed[ty.as_u32() as usize])
+            };
+            assert_eq!(classified("Cap"), (false, true));
+            assert_eq!(classified("Res"), (true, true));
+            assert_eq!(classified("Square"), (false, false));
+            assert_eq!(classified("Shape"), (false, true));
+            assert_eq!(classified("Owned"), (true, true));
+            assert_eq!(classified("CapHolder"), (false, true));
+            assert_eq!(classified("ShapeHolder"), (false, true));
+            assert_eq!(classified("OwnedHolder"), (true, true));
+        });
+    }
+
     fn module() -> Module {
         text::parse("oir 2 own
 module history
@@ -483,9 +548,10 @@ func @f() -> void {
             let declaration = module.functions.get(function).unwrap();
             let body = declaration.body.as_ref().unwrap();
             let managed = managed_types(module, state);
+            let obligations = obligation_types(module, state);
             let mut engine = Engine {
                 module, function, declaration, body, state, emit: true,
-                reported: BTreeSet::new(), managed: &managed, flow_memory: 0,
+                reported: BTreeSet::new(), managed: &managed, obligations: &obligations, flow_memory: 0,
                 materialized_scopes: None, witnesses: witnesses(module, body),
                 diagnose: true, collecting: false, capture_returns: false, contract_invalid: false,
                 defer_stack: vec![function], defer_outputs: vec![], defer_cache: Default::default(),
@@ -622,9 +688,10 @@ func @f() -> void {
             let declaration = module.functions.get(function).unwrap();
             let body = declaration.body.as_ref().unwrap();
             let managed = managed_types(module, state);
+            let obligations = obligation_types(module, state);
             let mut engine = Engine {
                 module, function, declaration, body, state, emit: true,
-                reported: BTreeSet::new(), managed: &managed, flow_memory: 0,
+                reported: BTreeSet::new(), managed: &managed, obligations: &obligations, flow_memory: 0,
                 materialized_scopes: None, witnesses: witnesses(module, body),
                 diagnose: true, collecting: false, capture_returns: false, contract_invalid: false,
                 defer_stack: vec![function], defer_outputs: vec![], defer_cache: Default::default(),
@@ -649,9 +716,10 @@ func @f() -> void {
             let declaration = module.functions.get(function).unwrap();
             let body = declaration.body.as_ref().unwrap();
             let managed = managed_types(module, state);
+            let obligations = obligation_types(module, state);
             let engine = Engine {
                 module, function, declaration, body, state, emit: true,
-                reported: BTreeSet::new(), managed: &managed, flow_memory: 0,
+                reported: BTreeSet::new(), managed: &managed, obligations: &obligations, flow_memory: 0,
                 materialized_scopes: None, witnesses: witnesses(module, body),
                 diagnose: true, collecting: false, capture_returns: false, contract_invalid: false,
                 defer_stack: vec![function], defer_outputs: vec![], defer_cache: Default::default(),

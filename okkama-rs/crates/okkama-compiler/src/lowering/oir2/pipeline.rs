@@ -233,11 +233,10 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
                 };
                 let reaching = match leaf {
                     Some(s::Type::Object(id) | s::Type::Successor(id) | s::Type::Variant(id)) => reaches.contains(&id),
-                    // A role field reaches what one of its implementations reaches; role arrays are closed plain.
-                    Some(s::Type::Role(id) | s::Type::RoleSuccessor(id)) if !matches!(ty, s::Type::Array(_)) => {
-                        role_reaches(&id)
-                    }
-                    Some(s::Type::Any) if !matches!(ty, s::Type::Array(_)) => any_reaches,
+                    // A role or `any` field, or a managed collection of them, reaches what one of the role's
+                    // implementations or one of the any boxes reaches (#711).
+                    Some(s::Type::Role(id) | s::Type::RoleSuccessor(id)) => role_reaches(&id),
+                    Some(s::Type::Any) => any_reaches,
                     _ => false,
                 };
                 reaching.then_some(i as u32)

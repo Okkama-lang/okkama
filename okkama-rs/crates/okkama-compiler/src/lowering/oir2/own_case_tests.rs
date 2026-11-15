@@ -467,7 +467,8 @@ fn oir2_own_cases_triage() {
 
 /// #671, #686 (P2.4 section 4.8): an Atomic field is a capability without an obligation, so the holder's
 /// constructor returns no fresh creation (the SPB 17 layout gives the holder no identity), and every
-/// function that partitions an Atomic declares the program failure its scope.split can raise.
+/// function that partitions an Atomic declares the program failure its scope.split can raise. The full
+/// verifier agrees (#700): such a creation needs no ownership result.
 #[test]
 fn oir2_own_atomic_holder_is_not_a_fresh_creation() {
     let source = concat!("module app; import \"cell\" take Cell; import \"async/atomic\" take Atomic; ",
@@ -475,8 +476,7 @@ fn oir2_own_atomic_holder_is_not_a_fresh_creation() {
         "next() is int { let at = served.value(); served.replace(at + 1); at; } } ",
         "main() is int { let c = Cell(0); c.replace(2); let a = Atomic(1); a.replace(3); ",
         "Recorded().next() + c.value() + a.value(); }");
-    // The build gate: the full verifier still treats every deps-carrying holder as an owned creation.
-    let (module, _) = own_stage(source, None, ir::verify::VerifyMode::Structural).unwrap();
+    let (module, _) = own_stage(source, None, ir::verify::VerifyMode::Full).unwrap();
     let summary = |symbol: &str| {
         let function = module.functions.iter().find(|(_, function)| function.symbol.starts_with(symbol))
             .unwrap_or_else(|| panic!("{symbol}")).1;
@@ -493,7 +493,9 @@ fn oir2_own_atomic_holder_is_not_a_fresh_creation() {
 
 /// #672: a constructor stores a role field whose implementers are plain (L09.math.aggregates' Extremes,
 /// L09.time.zones' ZonedDateTime). The value carries deps but no obligation and its action scope is
-/// elided; own elaborates the construction without staging instead of failing on the missing scope.
+/// elided; own elaborates the construction without staging instead of failing on the missing scope. Under
+/// the full verifier (#700) the holder is no fresh creation and its summary declares that it depends on the
+/// role argument it retains.
 #[test]
 fn oir2_own_deps_only_field_needs_no_action_scope() {
     let source = concat!("module app; role Shape { area() is int; } ",
@@ -501,10 +503,12 @@ fn oir2_own_deps_only_field_needs_no_action_scope() {
         "object Holder { has shape is Shape; Holder(shape is Shape) { self.shape = shape; } ",
         "area() is int { shape.area(); } } ",
         "main() is int { Holder(Square(side: 2)).area(); }");
-    // The build gate: the full verifier's owned-creation rule is the open counterpart of this class.
-    let (module, _) = own_stage(source, None, ir::verify::VerifyMode::Structural).unwrap();
+    let (module, _) = own_stage(source, None, ir::verify::VerifyMode::Full).unwrap();
     let constructor = module.functions.iter().find(|(_, function)| function.symbol.starts_with("app.Holder.new"))
         .unwrap().1;
+    let summary = module.summaries.get(constructor.summary.unwrap()).unwrap();
+    assert!(summary.results.iter().all(|result| result.fresh.is_empty()), "{summary:?}");
+    assert_eq!(summary.results[0].external_deps, vec![0], "{summary:?}");
     let body = constructor.body.as_ref().unwrap();
     assert!(!body.insts.iter().any(|(_, inst)| matches!(inst.op,
         ir::Operation::Ownership(ir::OwnershipOp::Stage { .. }))));

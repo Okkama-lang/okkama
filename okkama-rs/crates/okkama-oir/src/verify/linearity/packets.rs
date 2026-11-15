@@ -726,14 +726,18 @@ impl Engine<'_, '_> {
         if normal && let Some((call, receiver, _)) = call {
             self.call_results(call, receiver, origin, before, flow, schema, slots);
         }
+        // A creation makes a new identity with an obligation only when its value may hold one (OIR-2 §3.2): a
+        // value that merely carries deps on borrowed identities, such as a holder of an Atomic capability or of a
+        // role whose implementations are all plain, is created without an ownership result (§7.2, P2.4 §4.8).
+        let obligation = |ty: TypeId| self.obligations.get(ty.as_u32() as usize).copied().unwrap_or(true);
         let managed_result = schema.results.iter().find(|slot| slot.name == SlotName::Value)
             .is_some_and(|slot| match &slot.ty {
-                ResultType::Exact(ty) => self.managed.get(ty.as_u32() as usize).copied().unwrap_or(true),
+                ResultType::Exact(ty) => obligation(*ty),
                 ResultType::Object { decl, .. } => self.module.types.iter().any(|(id, ty)| {
-                    matches!(ty, Type::Object { decl: actual, .. } if actual == decl)
-                        && self.managed.get(id.as_u32() as usize).copied().unwrap_or(true)
+                    matches!(ty, Type::Object { decl: actual, .. } if actual == decl) && obligation(id)
                 }),
-                ResultType::SuccessorOf(value) => self.is_managed(*value),
+                ResultType::SuccessorOf(value) => self.is_managed(*value)
+                    && self.body.values.get(*value).is_ok_and(|value| obligation(value.ty)),
                 _ => true,
             });
         let creates = normal && managed_result && schema.postconditions.iter().any(|p| {

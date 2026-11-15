@@ -90,6 +90,9 @@ pub(crate) fn ty_valid(ty: Type, p: &Program) -> Check {
                 enforce(!p.objects[id as usize].handle, "HANDLE_TYPE",
                     "an array element names a native handle declaration")?;
             }
+            if let Type::Role(id) = element {
+                role_decl(p, id)?;
+            }
             // An object with an async destroy is rejected for every use outside P1, arrays included.
             enforce(collection_leaf(p, element), "ARRAY_PLAIN", "array element graph is not closed plain data")?;
         }
@@ -117,17 +120,22 @@ pub(crate) const FUTURE_TYPES: &str = "SPB_FUTURE_TYPES";
 /// The leaf of a collection (an array element or a map value): a resource object, which a managed collection
 /// refers to without owning it (own keeps its obligation with its owner), or closed plain data. An object that
 /// declares neither a destroy nor a resource is plain only if its whole graph is (`ARRAY_PLAIN`, `MAP_PLAIN`).
+/// A role or `any` leaf refers to an implementing object or an any box: the collection is managed when one of
+/// them may reach a resource (#711), and plain data otherwise.
 fn collection_leaf(p: &Program, leaf: Type) -> bool {
     let resource = match leaf {
         Type::Object(id) => p.objects.get(id as usize)
             .is_some_and(|object| object.layout.has_destroy || object.layout.may_reach_resource),
+        Type::Role(id) => role_reaches_resource(p, id),
+        Type::Any => any_reaches_resource(p),
         _ => false,
     };
     resource || closed_plain(p, leaf)
 }
 
-/// Whether a value of `ty` may refer to an identity that reaches a resource: a resource object or successor,
-/// or a managed array or map of them. Plain collections never do (`ARRAY_PLAIN`, `MAP_PLAIN`).
+/// Whether a value of `ty` may refer to an identity that reaches a resource: a resource object or successor, a
+/// role value one of whose implementations does, an `any` value one of whose boxes does, or a managed array or
+/// map of them. Plain collections never do (`ARRAY_PLAIN`, `MAP_PLAIN`).
 pub(crate) fn reaches_resource(p: &Program, ty: Type) -> bool {
     let leaf = match ty {
         Type::Array(shape) => ArrayType { depth: 1, ..shape }.element(),
@@ -138,8 +146,14 @@ pub(crate) fn reaches_resource(p: &Program, ty: Type) -> bool {
         },
         ty => Some(ty),
     };
-    matches!(leaf, Some(Type::Object(id) | Type::Successor(id))
-        if p.objects.get(id as usize).is_some_and(|object| object.layout.may_reach_resource))
+    match leaf {
+        Some(Type::Object(id) | Type::Successor(id)) => {
+            p.objects.get(id as usize).is_some_and(|object| object.layout.may_reach_resource)
+        }
+        Some(Type::Role(id) | Type::RoleSuccessor(id)) => role_reaches_resource(p, id),
+        Some(Type::Any) => any_reaches_resource(p),
+        _ => false,
+    }
 }
 
 /// Whether every value of `ty` is closed plain data: no identity with destroy, no resource, no service

@@ -28,6 +28,10 @@ impl Universe {
                     let relation = &mut values[value.as_u32() as usize];
                     relation.aliases.push(SummarySelection::Parameter(parameter));
                     relation.external_deps.push(parameter);
+                } else if types[&ty].references {
+                    // A parameter with deps but no obligation (a role, cap, closure, `any` or Atomic reference):
+                    // a result that retains it depends on it (P2.4 §5.2), without aliasing an owned graph.
+                    values[value.as_u32() as usize].external_deps.push(parameter);
                 }
                 parameter = parameter.checked_add(1).ok_or_else(|| {
                     budget.fail(OwnDiagnosticKind::IncompatibleSignature, "too many language parameters")
@@ -494,9 +498,11 @@ impl Universe {
         };
         for (index, (result, ty)) in results.iter_mut().zip(result_types).enumerate() {
             if let Some(facts) = types.get(&ty) {
-                if !facts.may_own() {
+                // A construction with deps but no obligation keeps the relation to the fields it retains, and is
+                // no fresh identity (OIR-2 §3.2; P2.4 §4.8).
+                if !facts.may_own() && !(facts.references && created) {
                     *result = normal::empty_relation();
-                } else if created {
+                } else if created && facts.may_own() {
                     budget.work(body.keys.len() + body.insts.len() + body.blocks.len())?;
                     result.fresh.push(site.origin(body, index, self.strides[&function]));
                 }
