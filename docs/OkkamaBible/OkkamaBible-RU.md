@@ -99,7 +99,8 @@
   - [8.7 Количества и позиции: что происходит на краях](#87-количества-и-позиции-что-происходит-на-краях)
   - [8.8 Сортировка](#88-сортировка)
   - [8.9 Разобранный пример: подсчёт слов](#89-разобранный-пример-подсчёт-слов)
-  - [8.10 Ограничения](#810-ограничения)
+  - [8.10 Разобранный пример: группировка и соединение](#810-разобранный-пример-группировка-и-соединение)
+  - [8.11 Ограничения](#811-ограничения)
 - [Глава 9. Выражения и управление потоком](#глава-9-выражения-и-управление-потоком)
   - [9.1 У блоков есть значения](#91-у-блоков-есть-значения)
   - [9.2 Имя связывается один раз](#92-имя-связывается-один-раз)
@@ -3957,7 +3958,111 @@ and,the
 пришли, поэтому отчёт одинаков при каждом запуске и на каждой машине. Эта
 детерминированность — свойство словаря, а не программы.
 
-## 8.10 Ограничения
+## 8.10 Разобранный пример: группировка и соединение
+
+Отчёты — то место, где коллекции отрабатывают своё: строки приходят в одном
+порядке, а их нужно сгруппировать, подсчитать и соединить с другими данными.
+Вот пять продаж, сгруппированных по покупателю, а затем по городу и месяцу.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Sale {
+    has customer is string;
+    has month is int;
+    has cents is int;
+    Sale(:customer, :month, :cents);
+    buyer() is string { customer; }
+    period() is int { month; }
+    amount() is int { cents; }
+}
+
+// A value object: its fields are scalars, so it can key a map.
+object Bucket {
+    has city is string;
+    has month is int;
+    Bucket(:city, :month);
+    shown() is string { city + "/" + month.string(); }
+}
+
+main() is int {
+    let out = Stdout();
+    let sales = [
+        Sale(customer: "ada", month: 2, cents: 1200),
+        Sale(customer: "bob", month: 1, cents: 300),
+        Sale(customer: "ada", month: 1, cents: 450),
+        Sale(customer: "cy", month: 2, cents: 990),
+        Sale(customer: "bob", month: 2, cents: 700)
+    ];
+    let cities = ["ada": "Oslo", "bob": "Lima"];
+
+    // Group: each customer's sales, in the order they arrived.
+    let nobody is %string:@Sale = [:];
+    let by_customer = sales.reduce(nobody) -> groups, sale {
+        let earlier = groups[sale.buyer()] else [];
+        groups + [sale.buyer(): earlier + [sale]];
+    };
+    for by_customer.keys() -> name {
+        let mine = by_customer[name];
+        let total = mine.reduce(0) -> sum, sale { sum + sale.amount(); };
+        out.writeln(name + "  sales " + mine.size().string() + "  total " + total.string());
+    }
+
+    // Join with the cities and re-key by (city, month); a customer without a city goes to "?".
+    let nothing is %Bucket:int = [:];
+    let by_bucket = sales.reduce(nothing) -> totals, sale {
+        let key = Bucket(city: cities[sale.buyer()] else "?", month: sale.period());
+        totals + [key: (totals[key] else 0) + sale.amount()];
+    };
+    for by_bucket.keys() -> key {
+        out.writeln(key.shown() + " " + by_bucket[key].string());
+    }
+    0;
+}
+```
+
+Вывод:
+
+```text
+ada  sales 2  total 1650
+bob  sales 2  total 1000
+cy  sales 1  total 990
+?/2 990
+Lima/1 300
+Lima/2 700
+Oslo/1 450
+Oslo/2 1200
+```
+
+- **Группировка — это `reduce` в словарь массивов.** Каждый шаг ищет прежние
+  продажи покупателя, `groups[sale.buyer()] else []`, и возвращает словарь,
+  в котором эта запись заменена более длинным массивом. Запасное значение
+  говорит, что значит первая продажа — пустую историю, — в единственном
+  месте, где это важно. Ничего не мутирует: каждый шаг даёт новый словарь, а
+  массивы в нём хранят продажи в порядке прихода.
+- **Соединение — это поиск с запасным значением.**
+  `cities[sale.buyer()] else "?"` соединяет каждую продажу с городом
+  покупателя. У `cy` города нет, и программа решает здесь, в выражении, что
+  такая продажа уходит в `"?"`. В SQL тот же вопрос — выбор между внутренним
+  и внешним соединением; здесь это один `else` рядом с поиском, к которому
+  он относится.
+- **Составной ключ — value object.** У `Bucket` только скалярные поля,
+  поэтому он может быть ключом словаря (раздел 8.3), и два bucket с одним
+  городом и месяцем — один ключ. Словарь держит ключи упорядоченными поле за
+  полем: сначала город, потом месяц. Строки сравниваются по кодовым точкам
+  (раздел 4.7), поэтому `"?"` идёт раньше `"Lima"` и `"Oslo"`.
+- **Вывод одинаков при каждом запуске.** Оба цикла идут по `keys()`, а они
+  отсортированы, так что ни один отчёт не зависит ни от порядка входа, ни от
+  хеширования. Перемешайте `sales` — программа напечатает те же восемь строк.
+
+В SQL это `GROUP BY` и `JOIN`, а само соединение восходит к реляционной
+модели Кодда [[Codd 1970](#ref-codd1970)]. Операции те же; программа добавляет к ним то, что
+каждая — типизированное выражение, результат которого можно назвать,
+протестировать и передать дальше.
+
+## 8.11 Ограничения
 
 - **Что всё ещё копируется.** Идиома с `map()` и `a + b` двух больших массивов стоят полного результата.
 - **Первое обновление большой карты стоит копии.** Последующие обновления могут быть дешевле; не считайте стоимость всех обновлений одинаковой.
@@ -19352,6 +19457,7 @@ main() is int {
 - <a id="ref-jep421"></a>Brent Christian (2021). JEP 421: Deprecate Finalization for Removal. OpenJDK. https://openjdk.org/jeps/421
 - <a id="ref-church1936"></a>Alonzo Church (1936). An Unsolvable Problem of Elementary Number Theory. *American Journal of Mathematics* 58(2): 345–363. https://doi.org/10.2307/2371045
 - <a id="ref-claessen2000"></a>Koen Claessen, John Hughes (2000). QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs. In *Proceedings of ICFP 2000*: 268–279. ACM. https://doi.org/10.1145/351240.351266
+- <a id="ref-codd1970"></a>E. F. Codd (1970). A Relational Model of Data for Large Shared Data Banks. *Communications of the ACM* 13(6): 377–387. https://doi.org/10.1145/362384.362685
 - <a id="ref-codd1979"></a>E. F. Codd (1979). Extending the Database Relational Model to Capture More Meaning. *ACM Transactions on Database Systems* 4(4): 397–434. https://doi.org/10.1145/320107.320109
 - <a id="ref-codd1990"></a>E. F. Codd (1990). *The Relational Model for Database Management: Version 2*. Addison-Wesley.
 - <a id="ref-cook2009"></a>William R. Cook (2009). On Understanding Data Abstraction, Revisited. In *Proceedings of OOPSLA 2009*, *ACM SIGPLAN Notices* 44(10): 557–572. https://doi.org/10.1145/1640089.1640133

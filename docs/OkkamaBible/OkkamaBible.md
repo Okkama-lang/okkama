@@ -99,7 +99,8 @@
   - [8.7 Counts and positions: what happens at the edges](#87-counts-and-positions-what-happens-at-the-edges)
   - [8.8 Sorting](#88-sorting)
   - [8.9 A worked example: counting words](#89-a-worked-example-counting-words)
-  - [8.10 Limits](#810-limits)
+  - [8.10 A worked example: grouping and joining](#810-a-worked-example-grouping-and-joining)
+  - [8.11 Limits](#811-limits)
 - [Chapter 9. Expressions and Control Flow](#chapter-9-expressions-and-control-flow)
   - [9.1 Blocks have values](#91-blocks-have-values)
   - [9.2 Names are bound once](#92-names-are-bound-once)
@@ -3903,7 +3904,110 @@ in sorted order, `and` before `the`, whatever order they arrived in, so the
 report is identical on every run and every machine. That determinism is a
 property of the map, not of the program.
 
-## 8.10 Limits
+## 8.10 A worked example: grouping and joining
+
+Reports are where collections earn their keep: rows arrive in one order and
+must be grouped, totalled and joined with other data. Here are five sales,
+grouped by customer and then by city and month.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Sale {
+    has customer is string;
+    has month is int;
+    has cents is int;
+    Sale(:customer, :month, :cents);
+    buyer() is string { customer; }
+    period() is int { month; }
+    amount() is int { cents; }
+}
+
+// A value object: its fields are scalars, so it can key a map.
+object Bucket {
+    has city is string;
+    has month is int;
+    Bucket(:city, :month);
+    shown() is string { city + "/" + month.string(); }
+}
+
+main() is int {
+    let out = Stdout();
+    let sales = [
+        Sale(customer: "ada", month: 2, cents: 1200),
+        Sale(customer: "bob", month: 1, cents: 300),
+        Sale(customer: "ada", month: 1, cents: 450),
+        Sale(customer: "cy", month: 2, cents: 990),
+        Sale(customer: "bob", month: 2, cents: 700)
+    ];
+    let cities = ["ada": "Oslo", "bob": "Lima"];
+
+    // Group: each customer's sales, in the order they arrived.
+    let nobody is %string:@Sale = [:];
+    let by_customer = sales.reduce(nobody) -> groups, sale {
+        let earlier = groups[sale.buyer()] else [];
+        groups + [sale.buyer(): earlier + [sale]];
+    };
+    for by_customer.keys() -> name {
+        let mine = by_customer[name];
+        let total = mine.reduce(0) -> sum, sale { sum + sale.amount(); };
+        out.writeln(name + "  sales " + mine.size().string() + "  total " + total.string());
+    }
+
+    // Join with the cities and re-key by (city, month); a customer without a city goes to "?".
+    let nothing is %Bucket:int = [:];
+    let by_bucket = sales.reduce(nothing) -> totals, sale {
+        let key = Bucket(city: cities[sale.buyer()] else "?", month: sale.period());
+        totals + [key: (totals[key] else 0) + sale.amount()];
+    };
+    for by_bucket.keys() -> key {
+        out.writeln(key.shown() + " " + by_bucket[key].string());
+    }
+    0;
+}
+```
+
+Output:
+
+```text
+ada  sales 2  total 1650
+bob  sales 2  total 1000
+cy  sales 1  total 990
+?/2 990
+Lima/1 300
+Lima/2 700
+Oslo/1 450
+Oslo/2 1200
+```
+
+- **Grouping is a `reduce` into a map of arrays.** Each step looks up the
+  customer's earlier sales, `groups[sale.buyer()] else []`, and returns the
+  map with that entry replaced by the longer array. The fallback says what a
+  first sale means, an empty history, at the one place it matters. Nothing is
+  mutated: every step yields a new map, and the arrays inside it keep the
+  sales in the order they arrived.
+- **A join is a lookup with a fallback.** `cities[sale.buyer()] else "?"`
+  joins each sale with its customer's city. `cy` has no city, and the program
+  decides here, in the expression, that such a sale goes to `"?"`. In SQL
+  the same question is the choice between an inner and an outer join; here it
+  is one `else`, written next to the lookup it qualifies.
+- **A composite key is a value object.** `Bucket` has only scalar fields, so
+  it can key a map (Section 8.3), and two buckets with the same city and month
+  are the same key. The map keeps its keys in order field by field: city
+  first, then month. Strings compare by code point (Section 4.7), so `"?"`
+  comes before `"Lima"` and `"Oslo"`.
+- **The output is the same on every run.** Both loops walk `keys()`, which
+  are sorted, so neither report depends on the order of the input or on
+  hashing. Shuffle `sales` and the program prints the same eight lines.
+
+In SQL this is `GROUP BY` and `JOIN`, and the join itself goes back to
+Codd's relational model [[Codd 1970](#ref-codd1970)]. The operations are the same; what the
+program adds is that each one is a typed expression whose result can be
+named, tested and passed on.
+
+## 8.11 Limits
 
 - **What still copies.** The `map()` idiom and `a + b` of two large arrays cost the full result.
 - **A large map’s first update costs a copy.** Subsequent updates can be cheaper; do not assume every update has the same cost.
@@ -19145,6 +19249,7 @@ limits are deliberate, and Chapter 28 discusses the ones that are not.
 - <a id="ref-jep421"></a>Brent Christian (2021). JEP 421: Deprecate Finalization for Removal. OpenJDK. https://openjdk.org/jeps/421
 - <a id="ref-church1936"></a>Alonzo Church (1936). An Unsolvable Problem of Elementary Number Theory. *American Journal of Mathematics* 58(2): 345–363. https://doi.org/10.2307/2371045
 - <a id="ref-claessen2000"></a>Koen Claessen, John Hughes (2000). QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs. In *Proceedings of ICFP 2000*: 268–279. ACM. https://doi.org/10.1145/351240.351266
+- <a id="ref-codd1970"></a>E. F. Codd (1970). A Relational Model of Data for Large Shared Data Banks. *Communications of the ACM* 13(6): 377–387. https://doi.org/10.1145/362384.362685
 - <a id="ref-codd1979"></a>E. F. Codd (1979). Extending the Database Relational Model to Capture More Meaning. *ACM Transactions on Database Systems* 4(4): 397–434. https://doi.org/10.1145/320107.320109
 - <a id="ref-codd1990"></a>E. F. Codd (1990). *The Relational Model for Database Management: Version 2*. Addison-Wesley.
 - <a id="ref-cook2009"></a>William R. Cook (2009). On Understanding Data Abstraction, Revisited. In *Proceedings of OOPSLA 2009*, *ACM SIGPLAN Notices* 44(10): 557–572. https://doi.org/10.1145/1640089.1640133

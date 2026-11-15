@@ -277,7 +277,40 @@ in sorted order, `and` before `the`, whatever order they arrived in, so the
 report is identical on every run and every machine. That determinism is a
 property of the map, not of the program.
 
-## 8.10 Limits
+## 8.10 A worked example: grouping and joining
+
+Reports are where collections earn their keep: rows arrive in one order and
+must be grouped, totalled and joined with other data. Here are five sales,
+grouped by customer and then by city and month.
+
+{{example:08-report}}
+
+- **Grouping is a `reduce` into a map of arrays.** Each step looks up the
+  customer's earlier sales, `groups[sale.buyer()] else []`, and returns the
+  map with that entry replaced by the longer array. The fallback says what a
+  first sale means, an empty history, at the one place it matters. Nothing is
+  mutated: every step yields a new map, and the arrays inside it keep the
+  sales in the order they arrived.
+- **A join is a lookup with a fallback.** `cities[sale.buyer()] else "?"`
+  joins each sale with its customer's city. `cy` has no city, and the program
+  decides here, in the expression, that such a sale goes to `"?"`. In SQL
+  the same question is the choice between an inner and an outer join; here it
+  is one `else`, written next to the lookup it qualifies.
+- **A composite key is a value object.** `Bucket` has only scalar fields, so
+  it can key a map (Section 8.3), and two buckets with the same city and month
+  are the same key. The map keeps its keys in order field by field: city
+  first, then month. Strings compare by code point (Section 4.7), so `"?"`
+  comes before `"Lima"` and `"Oslo"`.
+- **The output is the same on every run.** Both loops walk `keys()`, which
+  are sorted, so neither report depends on the order of the input or on
+  hashing. Shuffle `sales` and the program prints the same eight lines.
+
+In SQL this is `GROUP BY` and `JOIN`, and the join itself goes back to
+Codd's relational model [@codd1970]. The operations are the same; what the
+program adds is that each one is a typed expression whose result can be
+named, tested and passed on.
+
+## 8.11 Limits
 
 - **What still copies.** The `map()` idiom and `a + b` of two large arrays cost the full result.
 - **A large map’s first update costs a copy.** Subsequent updates can be cheaper; do not assume every update has the same cost.
