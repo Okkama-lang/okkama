@@ -171,6 +171,27 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   deps-carrying reference with no obligation, and a function that
   partitions one declares the program failure of its `scope.split`
   (`ENTRY_FAILURE_MASK`). The loader rules are unchanged.
+- **`ordering()` on Champ is Tomato's runtime sort (#678).** The OIR-2
+  producer synthesized an O(n²) insertion sort, so sorting 10⁵ ints ran out of
+  the step budget. Following the lead's ruling (a synthesized merge sort took
+  the Full High verifier past its step budget, 470afc9cf), `ordering()` now
+  lowers to one operation, as Tomato's `ordering` intrinsic. Scalars and text
+  (int, float, rat, byte, char, str) use OIR-2 `array.order` (total) and
+  SPB 17 `array.order` (`array.op` sub-code 6, rule `ARRAY_ORDER_TYPE`); Champ
+  runs Tomato's sort with the same comparators and interrupt/memory polling,
+  and a byte array stays bytes. Elements ordered by `Comparing<T>.order` use
+  OIR-2 `call.order` (the failures of `order`, inferred by own like a role
+  dispatch) and the SPB 17 operation `array.order.dispatch` (Champ opcode 99,
+  rule `ORDER_DISPATCH`, with the dispatch's `DISPATCH_SITE`/`DISPATCH_TARGET`
+  and failure mask); its re-entrant Champ helper `champ_machine_order` runs
+  Tomato's bottom-up merge (now shared, `merge_order`) and calls `order`
+  through the dispatch once per comparison, so the comparisons and their
+  effects come in Tomato's order; the first failure stops the sort and
+  propagates, and the source array stays rooted. Each comparison borrows its
+  elements, so elements that own resources sort too (each destroyed once, as
+  in Tomato); an owning `order` slot gets an empty packet per comparison and
+  must return one.
+  `L09.compare.failing-order-stops-the-sort` passes on Champ.
 - **Char conversions on the OIR-2 → SPB 17 → Champ path (#679).** `c.code()`,
   `char(n)`, `string(c)` and `c.string()` stopped the OIR-2 producer: `cvt`
   had no char kind. OIR-2 `cvt` now takes char (char → int and char → str

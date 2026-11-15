@@ -82,7 +82,8 @@ fn every_opcode_builder_roundtrips_and_every_invoke_slot_is_preserved() {
         roundtrip(&module);
     }
     assert_eq!(seen, Operation::opcode_inventory().into_iter().collect(), "opcode missing a builder round-trip case");
-    assert_eq!(seen.len(), 274);
+    // #678 adds array.order and call.order.
+    assert_eq!(seen.len(), 276);
 }
 
 #[test]
@@ -1655,7 +1656,11 @@ func @main(%fn: fn() -> int, %role: Read, %cap: View, %frame: frame<@callee>) ->
     let body = module.functions.iter().find(|(_, f)| f.symbol == "main").unwrap().1.body.as_ref().unwrap();
     for (_, inst) in body.insts.iter() {
         if let Operation::Call(op) = &inst.op {
-            let call = match op { CallOp::Direct { call, .. } | CallOp::Native { call, .. } | CallOp::Intrinsic { call, .. } | CallOp::Role { call, .. } | CallOp::Closure { call, .. } | CallOp::Cap { call, .. } | CallOp::Resume { call, .. } => call };
+            let call = match op {
+                CallOp::Direct { call, .. } | CallOp::Native { call, .. } | CallOp::Intrinsic { call, .. }
+                    | CallOp::Role { call, .. } | CallOp::Order { call, .. } | CallOp::Closure { call, .. }
+                    | CallOp::Cap { call, .. } | CallOp::Resume { call, .. } => call,
+            };
             summaries.push(call.summary);
         }
     }

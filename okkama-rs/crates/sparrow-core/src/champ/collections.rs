@@ -336,6 +336,14 @@ pub extern "C" fn rt_machine_collection(ctx: *mut Ctx, function: u64, pc: u64, a
         return stop(ctx, error("invalid verified collection operation"));
     };
     let words = unsafe { std::slice::from_raw_parts(args, count as usize) }.to_vec();
+    if op == s::DataOp::ArrayOrder {
+        // Tomato's sort of scalars and text (#678): it never fails, but a budget stop ends the run.
+        let word = super::ordering::order_natural(ctx, words[0], types[0]);
+        if unsafe { (*ctx).status } == runtime::OK {
+            runtime.safepoint(frame, unsafe { &*ctx }, &[(word, repr(result))]);
+        }
+        return word;
+    }
     match collection(runtime, &program, op, &types, result, &words) {
         Ok(word) => {
             runtime.safepoint(frame, unsafe { &*ctx }, &[(word, repr(result))]);

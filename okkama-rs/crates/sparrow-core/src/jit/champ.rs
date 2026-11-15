@@ -785,8 +785,14 @@ impl Emit<'_, '_> {
                 self.checked("champ_machine_destination", &[ctx, state, destination]);
                 return self.flow(op, flow, arguments, ordinal, "champ_scope_begin");
             }
-            O::InvokeObserve | O::InvokeDispatch => {
-                let (value, has_result) = if op == O::InvokeDispatch {
+            O::InvokeObserve | O::InvokeDispatch | O::OrderDispatch => {
+                let (value, has_result) = if op == O::OrderDispatch {
+                    // The runtime decodes the dispatch from this instruction and runs the whole sort (#678).
+                    let function = self.iconst(self.index as u64);
+                    let pc = self.iconst(self.pc.unwrap() as u64);
+                    let array = self.word(locations[0]);
+                    (self.call("champ_machine_order", &[ctx, function, pc, array]).unwrap(), true)
+                } else if op == O::InvokeDispatch {
                     let (function, count, has_result) = self.dispatch(arguments, locations[0], |_, function| {
                         function as u64
                     });
@@ -1376,7 +1382,9 @@ impl Emit<'_, '_> {
             }
             D::MapNew | D::MapLen | D::MapHas | D::MapGet | D::MapKeys | D::MapValues | D::MapKeyAt
                 | D::MapValueAt | D::MapMerge | D::MapDifference | D::ArrayConcat | D::ArrayJoin | D::ArraySlice
-                | D::ArrayRemove | D::ArrayReplace | D::ArrayDifference | D::BuilderNew => self.collection(&words),
+                | D::ArrayRemove | D::ArrayReplace | D::ArrayDifference | D::ArrayOrder | D::BuilderNew => {
+                    self.collection(&words)
+                }
             D::ArrayLen => {
                 let header = self.load(words[0], 0);
                 let length = self.builder.ins().ushr_imm_u(header, 32);
@@ -1596,7 +1604,8 @@ fn sets_status(op: s::DataOp) -> bool {
         | D::VariantGet | D::RoleNarrow | D::MapNew | D::MapLen | D::MapHas | D::MapGet | D::MapKeys | D::MapValues
         | D::MapKeyAt
         | D::MapValueAt | D::MapMerge | D::MapDifference | D::ArrayConcat | D::ArrayJoin | D::ArraySlice
-        | D::ArrayRemove | D::ArrayReplace | D::ArrayDifference | D::BuilderNew | D::ArrayNew | D::TestOk
+        | D::ArrayRemove | D::ArrayReplace | D::ArrayDifference | D::ArrayOrder | D::BuilderNew | D::ArrayNew
+        | D::TestOk
         | D::TestIs | D::TestIsnt | D::TestFail)
         || op.scalar_code().is_some() && !inline_scalar(op)
 }

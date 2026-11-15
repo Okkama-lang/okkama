@@ -1,0 +1,11 @@
+oir 2 high
+module array_order
+scope S action in @f
+func @f(%ints: array<int>, %texts: array<str>, %bytes: array<byte>, %chars: array<char>) -> void {
+^entry in S:
+    %a: array<int> = array.order %ints
+    %b: array<str> = array.order %texts
+    %c: array<byte> = array.order %bytes
+    %d: array<char> = array.order %chars
+    ret
+}

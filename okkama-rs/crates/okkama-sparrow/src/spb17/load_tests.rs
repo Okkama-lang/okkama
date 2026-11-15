@@ -9,8 +9,15 @@ impl ExternalContracts for Catalog {
     }
 }
 pub(super) fn fixture(name: &str) -> (Program, Catalog) {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join(format!("../okkama-compiler/src/codegen/sparrow_oir2/fixtures/{name}.spb17"));
+    loaded(&format!("../okkama-compiler/src/codegen/sparrow_oir2/fixtures/{name}.spb17"))
+}
+/// fresh-call as codegen emitted it before #702 removed unreachable blocks: the tests that rebuild its
+/// callee by instruction position keep this program, which the loader accepts as it is.
+pub(super) fn fresh_call_unwind_chain() -> (Program, Catalog) {
+    loaded("src/spb17/fixtures/fresh-call-unwind-chain.spb17")
+}
+fn loaded(relative: &str) -> (Program, Catalog) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
     let program = assemble(&std::fs::read_to_string(path).unwrap()).unwrap();
     let catalog = Catalog(program.functions.iter().filter(|f| f.proofs.entry.as_ref()
         .is_some_and(|entry| entry.external.is_some())).cloned().collect());
@@ -372,7 +379,7 @@ fn non_return_commit_cannot_reinterpret_pending_value() {
 /// a scope.split without the admissible flag, and a close of the emptied scope. With `commit` the selected
 /// packet returns through exit.prepare and exit.commit; without it ret.own returns that bound packet itself.
 pub(super) fn bound_fresh_return(commit: bool) -> (Program, Catalog) {
-    let (mut p, catalog) = fixture("fresh-call");
+    let (mut p, catalog) = fresh_call_unwind_chain();
     let f = p.functions.iter_mut().find(|f| f.symbol == "fresh").unwrap();
     assert!(matches!(f.code[11], Instruction::Champ { op: Opcode::OwnSplit, .. }), "fixture changed");
     assert!(matches!(f.code[14], Instruction::Champ { op: Opcode::CleanupBegin, .. }), "fixture changed");

@@ -753,6 +753,9 @@ pub enum DataOp {
     ArrayReplace,
     /// The first array without the elements equal to an element of the others.
     ArrayDifference,
+    /// The stable ascending sort of an array of int, float, rat, char or str, or of a byte array (#678):
+    /// Tomato's `ordering` of scalars. Total; an exhausted budget or an interrupt stops the machine.
+    ArrayOrder,
     /// An empty unique builder of the result's builder type.
     BuilderNew,
     /// Test assertions (`test.ok`, `test.is`, `test.isnt`, `test.fail`) of the test profile. Each
@@ -1242,3 +1245,5 @@ mod services_tests;
 mod roles_tests;
 #[cfg(test)]
 mod view_collections_tests;
+#[cfg(test)]
+mod ordering_tests;

@@ -132,6 +132,8 @@ registry! {
     96 => InvokeDispatch, "invoke.dispatch";
     97 => InvokeDispatchOwn, "invoke.dispatch.own";
     98 => OwnDynamic, "own.dynamic";
+    // The stable sort of an array by a role slot (`Comparing<T>.order`, #678), one dispatch per comparison.
+    99 => OrderDispatch, "array.order.dispatch";
 }
 
 impl Opcode {
@@ -185,6 +187,10 @@ impl Opcode {
             (CleanupFinish, Tag::Normal) => vec![S(Closed), S(FailureState), S(ExitState)],
             (InvokeObserve | InvokeDispatch, Tag::Normal) => context.value.into_iter().map(Value).collect(),
             (InvokeObserve | InvokeDispatch, Tag::Unwind) if context.may_fail => vec![Value(Type::Failure)],
+            (OrderDispatch, Tag::Normal) => {
+                vec![Value(context.value.ok_or_else(|| error("array.order.dispatch without an array type"))?)]
+            }
+            (OrderDispatch, Tag::Unwind) if context.may_fail => vec![Value(Type::Failure)],
             (ArrayGet, Tag::Normal) => context.value.into_iter().map(Value).collect(),
             (ArrayGet, Tag::Unwind) => vec![Value(Type::Failure)],
             (Fail, Tag::Unwind) => vec![Value(Type::Failure)],
@@ -276,7 +282,7 @@ impl Opcode {
             OwnSplitChecked | ScopeSplit | ScopeTransfer | OwnDynamic | ArrayGet | Evaluate | Await | AwaitTake => {
                 vec![Tag::Normal, Tag::Unwind]
             }
-            InvokeObserve | InvokeDispatch if context.may_fail => vec![Tag::Normal, Tag::Unwind],
+            InvokeObserve | InvokeDispatch | OrderDispatch if context.may_fail => vec![Tag::Normal, Tag::Unwind],
             InvokeCallOwn | InvokeDispatchOwn => {
                 if context.may_fail { vec![Tag::Normal, Tag::Unwind] } else { vec![Tag::Normal] }
             }
@@ -307,7 +313,7 @@ impl Opcode {
     pub fn is_terminator(self) -> bool {
         matches!(self, Self::OwnSplitChecked | Self::ScopeSplit | Self::ScopeTransfer | Self::OwnDynamic |
             Self::InvokeCallOwn | Self::InvokeObserve | Self::InvokeDefer | Self::CleanupNext | Self::ExitDispatch |
-            Self::InvokeDispatch | Self::InvokeDispatchOwn |
+            Self::InvokeDispatch | Self::InvokeDispatchOwn | Self::OrderDispatch |
             Self::FailureDispatch | Self::RetOwn | Self::RetDefer | Self::ArrayGet | Self::Fail | Self::Evaluate
             | Self::Catch | Self::BuilderPush | Self::BuilderAppend | Self::BuilderRange | Self::BuilderFinish
             | Self::Lookup | Self::Await | Self::AwaitTake)
@@ -586,6 +592,7 @@ helper_registry! {
         "champ_machine_text_order" => &[C, W, W], 0, None;
         "champ_machine_text_len" => &[C, W], 0, None;
         "champ_machine_external" => &[C, W, P, P, W], X | HELPER_UNWINDS, None;
+        "champ_machine_order" => &[C, W, W, W], X | HELPER_UNWINDS, None;
         "champ_machine_scope" => &[C, W, W, W, P], L, None;
         "champ_machine_invalid" => &[C], HELPER_STOPS, None;
         "champ_machine_destination" => &[C, W, P], L, None;

@@ -14,6 +14,13 @@ const NEVER_OPERAND: &str = "NEVER_OPERAND";
 const NEVER_RETAG: &str = "NEVER_RETAG";
 /// The admission filter of a scope.transfer is anything but a single `true` flag right after its selection.
 const TRANSFER_ADMISSION: &str = "TRANSFER_ADMISSION";
+/// `array.order` of anything but an array of int, float, rat, char or str or a byte array, or into another type.
+const ARRAY_ORDER_TYPE: &str = "ARRAY_ORDER_TYPE";
+/// `array.order.dispatch` sorts an array whose elements its dispatch cannot compare: the slot is not a
+/// synchronous (observation or owned) slot taking one element and returning a plain three-case enum
+/// (`compare.Order`), the elements are not the dispatch's receivers, a comparison may retain an element, or
+/// the site carries services.
+const ORDER_DISPATCH: &str = "ORDER_DISPATCH";
 
 fn require(condition: bool, message: &str) -> Check {
     if condition { Ok(()) } else { Err(error(message)) }
@@ -856,6 +863,16 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
                 | Argument::Continuation(_) | Argument::Protocol(_) => {}
         }
     }
+    if op == Opcode::OrderDispatch {
+        // A sort yields a new array of its operand's type, not the slot's result.
+        ctx.value = args.iter().find_map(|arg| match *arg {
+            Argument::Location(location) => match loc_type(f, location) {
+                Ok(ProducedType::Value(ty)) => Some(ty),
+                _ => None,
+            },
+            _ => None,
+        });
+    }
     if op.frame_bound() {
         enforce(f.entry_abi.asynchronous(), suspension::ASYNC_ENTRY,
             &format!("{} belongs to async bodies only", op.name()))?;
@@ -879,7 +896,7 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
     if matches!(op, Opcode::InvokeCallOwn | Opcode::InvokeDefer) {
         require(args.iter().any(|arg| matches!(arg, Argument::Summary(_))), "missing result contract summary")?;
     }
-    if matches!(op, Opcode::InvokeDispatch | Opcode::InvokeDispatchOwn) {
+    if matches!(op, Opcode::InvokeDispatch | Opcode::InvokeDispatchOwn | Opcode::OrderDispatch) {
         enforce(args.iter().any(|arg| matches!(arg, Argument::Dispatch(_))), "DISPATCH_SITE", "missing dispatch")?;
     }
     if op == Opcode::ExitCommit {
@@ -1336,6 +1353,38 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
                 require(flags.len() == 1, "owned call requires explicit cleanup mode")?;
             }
         }
+        OrderDispatch => {
+            let Some(Argument::Dispatch(dispatch)) = args.first() else {
+                return Err(violation("DISPATCH_SITE", "missing dispatch"));
+            };
+            let slot = &role_decl(p, dispatch.role)?.slots[dispatch.slot as usize];
+            let element = match locations.as_slice() {
+                [array] => match loc_type(f, *array)? {
+                    ProducedType::Value(Type::Array(shape)) => shape.element(),
+                    _ => None,
+                },
+                _ => None,
+            };
+            // The elements are the dispatch's receivers: role values, or the one object it selects.
+            let receivers = match element {
+                Some(Type::Object(object)) => dispatch.targets == [object],
+                Some(Type::Role(role)) => role == dispatch.role,
+                _ => false,
+            };
+            let order = match slot.results.as_slice() {
+                [Type::Object(id)] => p.objects.get(*id as usize).is_some_and(|object| object.enum_cases == 3
+                    && object.fields.is_empty() && object.layout.storage_fields == [Type::Int]),
+                _ => false,
+            };
+            // A comparison borrows its elements: an owning slot gets an empty packet and must return one, and
+            // the elements' obligations stay with the array's owner.
+            let borrows = dispatch.retained_params.is_empty();
+            enforce(matches!(slot.entry_abi, EntryAbi::Observation | EntryAbi::Owned) && borrows && receivers
+                && element.is_some_and(|element| {
+                slot.params == [element]
+            }) && order, ORDER_DISPATCH,
+                "array.order.dispatch compares its array's elements by an observation slot returning compare.Order")?;
+        }
         RetOwn => {
             require(f.entry_abi == EntryAbi::Owned, "ret.own requires owned entry")?;
             let mut expected = f.results.iter().copied().map(ProducedType::Value).collect::<Vec<_>>();
@@ -1423,6 +1472,7 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         ExitDispatch => shape == "lll???",
         OwnCreateCommit => shape == "lob",
         InvokeDispatch => shape.starts_with('g') && shape[1..].chars().all(|ch| ch == 'l'),
+        OrderDispatch => shape == "gl",
         InvokeDispatchOwn => shape.starts_with('g') && shape[1..].chars().all(|ch| ch == 'l' || ch == '?'),
         BuilderPush => shape == "lll" || shape == "llll",
         BuilderAppend => shape == "lll",
@@ -1509,6 +1559,9 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
             enforce(array_types(op, types, out) && comparable, "ARRAY_OP_TYPE",
                 "array operation operand/result types mismatch")
         }
+        ArrayOrder => enforce(types.len() == 1 && out == Some(types[0]) && sortable(types[0]),
+            ARRAY_ORDER_TYPE,
+            "array.order sorts an array of int, float, rat, char or str, or a byte array, into its own type"),
         BuilderNew => enforce(types.is_empty() && matches!(out, Some(Type::Builder(_) | Type::MapBuilder(_))),
             "BUILDER_NEW_TYPE", "builder.new must produce a builder"),
         Const => {
@@ -1720,6 +1773,17 @@ fn map_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>) -> bool
     }
 }
 
+/// An array whose elements have Tomato's natural order: int, float, rat, char, str, or a byte array.
+fn sortable(ty: Type) -> bool {
+    match ty {
+        Type::Bytes => true,
+        Type::Array(shape) => shape.depth == 1
+            && matches!(shape.leaf,
+                ArrayLeaf::Int | ArrayLeaf::Float | ArrayLeaf::Rat | ArrayLeaf::Char | ArrayLeaf::Str),
+        _ => false,
+    }
+}
+
 /// Operand and result types of an array operation; the receiver is an array or a byte array.
 fn array_types(op: DataOp, types: &[Type], out: Option<Type>) -> bool {
     use DataOp::*;
@@ -1768,7 +1832,7 @@ pub(crate) fn checked_edges<'a>(p: &Program, f: &Function, inst: &'a Instruction
             Flow::Next(destinations) => {
                 require(!op.is_terminator() || matches!(op, Opcode::RetOwn | Opcode::RetDefer)
                     || matches!(op, Opcode::InvokeCallOwn | Opcode::InvokeObserve | Opcode::InvokeDispatch
-                        | Opcode::InvokeDispatchOwn) && !ctx.may_fail,
+                        | Opcode::InvokeDispatchOwn | Opcode::OrderDispatch) && !ctx.may_fail,
                     "terminator requires outcomes")?;
                 if *op == Opcode::DepsOf {
                     let [Argument::Location(anchor)] = arguments.as_slice() else { unreachable!() };

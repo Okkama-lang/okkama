@@ -371,6 +371,9 @@ pub(crate) enum Rule {
     Dynamic { state: ValueId, packet: ValueId, target: ScopeId, reason: DynamicReason, protocol: ProtocolId },
     Close { input: ValueId, failure: Option<ValueId>, reserve: Option<ValueId>, effects: ScopeEffectEnvelope },
     Call(CallSite), Resume { frame: ValueId, call: CallSite },
+    /// A sort whose comparisons call `call` (`call.order`): the failures and roots of the call, the
+    /// array's type as the result.
+    Order { array: ValueId, call: CallSite },
     Await { future: ValueId, result: Option<TypeId>, take: Option<(ValueId, TakeBoundary)>, shielded: bool },
     UniqueProof(UniqueCacheProof),
     Protocol { state: ValueId, owner: Option<ValueId>, packet: Option<ValueId>, protocol: ProtocolId, transition: ProtocolTransition },
@@ -478,7 +481,8 @@ impl<'a> ContractRegistry<'a> {
             let call = match call_op {
                 CallOp::Direct { call, .. } | CallOp::Native { call, .. }
                 | CallOp::Intrinsic { call, .. } | CallOp::Resume { call, .. }
-                | CallOp::Role { call, .. } | CallOp::Closure { call, .. } | CallOp::Cap { call, .. } => call,
+                | CallOp::Role { call, .. } | CallOp::Order { call, .. } | CallOp::Closure { call, .. }
+                | CallOp::Cap { call, .. } => call,
             };
             if call.summary.is_none() {
                 if let Some(result) = self.async_creation(call_op)? {
@@ -531,6 +535,11 @@ impl<'a> ContractRegistry<'a> {
                 DeclarationKind::Role { methods, .. } => methods.get(*slot as usize).map(|m| m.signature.results.clone()).ok_or(ContractError::MissingSummary),
                 _ => Err(ContractError::MissingSummary),
             },
+            // A sort yields an array of the same type as its operand.
+            CallOp::Order { array, .. } => {
+                let body = body.ok_or(ContractError::MissingSummary)?;
+                Ok(vec![body.values.get(array.value)?.ty])
+            }
             CallOp::Cap { field, .. } => match &self.module.declarations.get(field.declaration)?.kind {
                 DeclarationKind::Cap { fields, .. } => signature(fields.get(field.index as usize).ok_or(ContractError::MissingSummary)?.function),
                 _ => Err(ContractError::MissingSummary),
@@ -724,6 +733,17 @@ impl<'a> ContractRegistry<'a> {
                 }
             }
             Rule::Call(call) => { self.call(&call, c, validate)?; }
+            Rule::Order { array, call } => {
+                // Each comparison observes two elements: the sort admits no packet (an owning slot gets an
+                // empty one from the runtime) and the plain `Order` result never leaves the sort. The
+                // operation's failures, unwind outcome and roots are the comparison's; its value is a new
+                // array of the same elements.
+                if validate && call.packet.is_some() { return Err(ContractError::ObservationPacket); }
+                self.call(&call, c, validate)?;
+                c.effects.allocates = true;
+                c.normal.results = vec![ResultSlot::new(N::Value, ResultType::SameAs(array))];
+                c.normal.postconditions.retain(|condition| !matches!(condition, Postcondition::ResultRelation(_)));
+            }
             Rule::Resume { frame, call } => {
                 self.call(&call, c, validate)?;
                 c.normal.transfers.push(TransferRule::Settle { inputs: vec![frame] });

@@ -385,6 +385,15 @@ operation_group! { CallOp {
         => ("call", [call: Borrow], Rule::Call(call.clone()));
     Role { receiver: CallArgument, role: DeclId, slot: u32, call: CallSite }
         => ("call.role", [receiver: Borrow, call: Borrow], Rule::Call(call.with_receiver(*receiver)));
+    // The stable sort of an array whose elements are ordered by a role slot (`Comparing<T>.order`, #678):
+    // one operation that calls the slot once per comparison through role dispatch, in Tomato's bottom-up
+    // merge order. `call` describes one comparison `left.order(right)`; both of its actuals are the array,
+    // whose elements are compared, and its summary is the slot's. The result is a new array of the same
+    // elements; the first failing comparison stops the sort with its failure.
+    Order { array: CallArgument, role: DeclId, slot: u32, call: CallSite }
+        => ("call.order", [array: Borrow, call: Borrow],
+            Rule::Order { array: array.value, call: call.with_receiver(*array) }
+                .retains(Retention::Value(array.value)));
     Closure { callee: CallArgument, call: CallSite }
         => ("fn.call", [callee: Borrow, call: Borrow], Rule::Call(call.with_receiver(*callee)));
     Cap { cap: CallArgument, field: FieldRef, call: CallSite }
@@ -423,6 +432,11 @@ operation_group! { CollectionOp {
         => ("array.get", [array: Borrow, index: Borrow], Rule::Data { ty: ResultType::Element(*array), trap: true }.retains(Retention::Index { base: *array, index: *index }));
     ArrayJoin { array: ValueId, separator: ValueId }
         => ("array.join", [array: Borrow, separator: Borrow], Rule::Data { ty: ResultType::Scalar(ScalarType::Str), trap: true });
+    // The stable ascending sort of an array of int, float, rat, byte, char or str (#678): a new array of the
+    // same elements. Total: only an exhausted budget or an interrupt stops it.
+    ArrayOrder { array: ValueId }
+        => ("array.order", [array: Borrow],
+            Rule::Data { ty: ResultType::SameAs(*array), trap: false }.retains(Retention::Value(*array)));
     ArrayRetag { array: ValueId, ty: TypeId }
         => ("array.retag", [array: Borrow], Rule::Data { ty: ResultType::Exact(*ty), trap: false }.retains(Retention::Value(*array)));
     MapLen { map: ValueId }

@@ -181,6 +181,7 @@ pub(super) fn handling(operation: &Operation) -> Handling {
         Operation::Call(op) => match op {
             CallOp::Direct { .. }
             | CallOp::Role { .. }
+            | CallOp::Order { .. }
             | CallOp::Closure { .. }
             | CallOp::Cap { .. }
             | CallOp::Native { .. }
@@ -200,6 +201,7 @@ pub(super) fn handling(operation: &Operation) -> Handling {
             | CollectionOp::MapMerge { .. }
             | CollectionOp::MapDifference { .. }
             | CollectionOp::ArrayJoin { .. }
+            | CollectionOp::ArrayOrder { .. }
             | CollectionOp::ArrayRetag { .. }
             | CollectionOp::MapLen { .. }
             | CollectionOp::MapHas { .. }

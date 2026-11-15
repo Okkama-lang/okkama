@@ -106,6 +106,16 @@ pub(super) fn read_operation(r: &mut Reader<'_>) -> Result<Option<Operation>, Di
             let call = read_call(r, None)?;
             Operation::Call(CallOp::Role { receiver, role, slot, call })
         }
+        "call.order" => {
+            r.next()?;
+            let array = read_argument(r)?;
+            r.expect(",")?;
+            let role = DeclId::read(r)?;
+            r.expect("slot")?;
+            let slot = u32::read(r)?;
+            let call = read_call(r, None)?;
+            Operation::Call(CallOp::Order { array, role, slot, call })
+        }
         "fn.call" => {
             r.next()?;
             let callee = read_argument(r)?;
@@ -348,6 +358,15 @@ pub(super) fn write_operation(op: &Operation, w: &mut Writer<'_>) -> Result<bool
         Operation::Call(CallOp::Role { receiver, role, slot, call }) => {
             w.push("call.role ");
             write_argument(receiver, w)?;
+            w.push(", ");
+            role.write(w)?;
+            w.push(" slot ");
+            slot.write(w)?;
+            write_call(call, None, w)?;
+        }
+        Operation::Call(CallOp::Order { array, role, slot, call }) => {
+            w.push("call.order ");
+            write_argument(array, w)?;
             w.push(", ");
             role.write(w)?;
             w.push(" slot ");
