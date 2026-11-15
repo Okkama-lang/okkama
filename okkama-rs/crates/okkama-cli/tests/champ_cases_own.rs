@@ -144,6 +144,12 @@ case!(other_defer_failure_beats_destroy, "L07.defer.failure-beats-destroy");
 through_low!(other_fields_defaults_per_construction, "L04.fields.defaults-per-construction");
 through_low!(other_index_fallback, "L01.gram.index.fallback");
 through_low!(other_map_fallback_lazy, "L05.map.fallback-lazy");
+// String sources (core.StringSource is an ordinary lowered object): checked against case.json.
+through_low!(strings_raw_concatenation, "L01.lex.raw.concatenation");
+through_low!(strings_raw_multiline, "L01.lex.raw.multiline");
+through_low!(strings_escapes, "L01.lex.string.escapes");
+through_low!(strings_range_for_and_functional, "L02.range.for-and-functional");
+through_low!(strings_for_sources, "L03.for.sources");
 
 /// Opt-in triage: `OKKAMA_CHAMP_CASES=<file with one id per line>` prints where each case stops.
 #[test]

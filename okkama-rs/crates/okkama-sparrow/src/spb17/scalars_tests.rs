@@ -122,6 +122,10 @@ fn scalar_constants_are_canonical() {
     reject(&program(vec![Type::Char], vec![constant(0, Constant::Char(0xd800))], false, 0), "CONST_CHAR");
     reject(&program(vec![Type::Float], vec![constant(0, Constant::Float("01".into()))], false, 0), "CONST_FLOAT");
     reject(&program(vec![Type::Float], vec![constant(0, Constant::Float("x".into()))], false, 0), "CONST_FLOAT");
+    for bits in [f64::INFINITY.to_bits(), f64::NEG_INFINITY.to_bits(), f64::NAN.to_bits()] {
+        let p = program(vec![Type::Float], vec![constant(0, Constant::Float(bits.to_string()))], false, 0);
+        reject(&p, "CONST_FLOAT");
+    }
     let code = vec![
         constant(0, Constant::Byte(255)),
         constant(1, Constant::Char(0xe9)),
@@ -179,6 +183,26 @@ fn value_equality_compares_objects_of_one_declaration() {
         data(DataOp::ValEq, vec![0, 1], 2, Immediate::None),
     ];
     reject(&with_declarations(program(vec![Type::Int, Type::Int, Type::Bool], code, false, 2)), "VAL_EQ_TYPE");
+}
+
+#[test]
+fn value_equality_needs_a_closed_plain_graph() {
+    // 4 `Box`, outside the variant declarations of `declarations()`.
+    let code = vec![
+        data(DataOp::ObjNew, vec![], 0, Immediate::Object(4)),
+        data(DataOp::ObjNew, vec![], 1, Immediate::Object(4)),
+        data(DataOp::ValEq, vec![0, 1], 2, Immediate::None),
+    ];
+    let registers = vec![Type::Object(4), Type::Object(4), Type::Bool];
+    let boxed = || {
+        let mut p = with_declarations(program(registers.clone(), code.clone(), false, 2));
+        p.objects.push(plain_object("Box", vec![]));
+        p
+    };
+    verify_load(&boxed(), &NoExternalContracts).unwrap();
+    let mut reaching = boxed();
+    reaching.objects[4].layout.may_reach_resource = true;
+    reject(&reaching, "VAL_EQ_TYPE");
 }
 
 /// A `Pair.two(7, "x")` value, its tag and its payload field `storage` of case `case`.

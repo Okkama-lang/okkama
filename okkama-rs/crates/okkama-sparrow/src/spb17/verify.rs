@@ -25,28 +25,35 @@ fn ty_valid(ty: Type, p: &Program) -> Check {
     if let Type::Array(shape) = ty {
         enforce(shape.depth > 0, "ARRAY_SHAPE", "array depth must be positive")?;
         if let ArrayLeaf::Object(id) = shape.leaf {
-            let mut pending = vec![Type::Object(id)];
-            let mut seen = BTreeSet::new();
-            while let Some(ty) = pending.pop() {
-                match ty {
-                    Type::Object(id) if seen.insert(id) => {
-                        let object = p.objects.get(id as usize)
-                            .ok_or_else(|| violation("ARRAY_ELEMENT", "unknown array element object"))?;
-                        enforce(!object.layout.has_destroy && !object.layout.may_reach_resource
-                            && !object.layout.may_async_destroy, "ARRAY_PLAIN", "array element reaches resources")?;
-                        pending.extend(&object.layout.storage_fields);
-                    }
-                    Type::Array(inner) => {
-                        enforce(inner.depth > 0, "ARRAY_SHAPE", "array depth must be positive")?;
-                        if let ArrayLeaf::Object(id) = inner.leaf {
-                            pending.push(Type::Object(id));
-                        }
-                    }
-                    Type::Int | Type::Bool | Type::Str | Type::Range | Type::Bytes | Type::Object(_)
-                        | Type::Byte | Type::Float | Type::Char | Type::Rat => {}
-                    _ => return Err(violation("ARRAY_PLAIN", "array element graph is not closed plain data")),
+            closed_plain(id, p, "ARRAY_PLAIN")?;
+        }
+    }
+    Ok(())
+}
+
+/// The object graph from `root` is closed plain data: no destroy, nothing that reaches a resource,
+/// and only scalar, text, range, bytes, array and plain object fields. `rule` names the caller's rule.
+fn closed_plain(root: u32, p: &Program, rule: &'static str) -> Check {
+    let mut pending = vec![Type::Object(root)];
+    let mut seen = BTreeSet::new();
+    while let Some(ty) = pending.pop() {
+        match ty {
+            Type::Object(id) if seen.insert(id) => {
+                let object = p.objects.get(id as usize)
+                    .ok_or_else(|| violation("ARRAY_ELEMENT", "unknown array element object"))?;
+                enforce(!object.layout.has_destroy && !object.layout.may_reach_resource
+                    && !object.layout.may_async_destroy, rule, "object graph reaches resources")?;
+                pending.extend(&object.layout.storage_fields);
+            }
+            Type::Array(inner) => {
+                enforce(inner.depth > 0, "ARRAY_SHAPE", "array depth must be positive")?;
+                if let ArrayLeaf::Object(id) = inner.leaf {
+                    pending.push(Type::Object(id));
                 }
             }
+            Type::Int | Type::Bool | Type::Str | Type::Range | Type::Bytes | Type::Object(_)
+                | Type::Byte | Type::Float | Type::Char | Type::Rat => {}
+            _ => return Err(violation(rule, "object graph is not closed plain data")),
         }
     }
     Ok(())
@@ -80,8 +87,10 @@ fn constant_type(value: &Constant) -> Result<Type, Error> {
             Ok(Type::Char)
         }
         Constant::Float(bits) => {
-            let canonical = bits.parse::<u64>().is_ok_and(|value| value.to_string() == *bits);
-            enforce(canonical, "CONST_FLOAT", "float constant is not a canonical binary64 bit pattern")?;
+            // Floats are always finite in Okkama; every other source of a float checks it at run time.
+            let canonical = bits.parse::<u64>()
+                .is_ok_and(|value| value.to_string() == *bits && f64::from_bits(value).is_finite());
+            enforce(canonical, "CONST_FLOAT", "float constant is not a canonical finite binary64 bit pattern")?;
             Ok(Type::Float)
         }
     }
@@ -706,7 +715,10 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
         ValEq | ValNe => {
             let object = matches!(types, [Type::Object(left), Type::Object(right)] if left == right);
             enforce(object && out == Some(Type::Bool), "VAL_EQ_TYPE",
-                "value comparison needs two objects of one declaration and a bool result")
+                "value comparison needs two objects of one declaration and a bool result")?;
+            // Structural equality is defined on plain values; identities and error payloads are not compared.
+            let [Type::Object(id), _] = types else { return Ok(()) };
+            closed_plain(*id, p, "VAL_EQ_TYPE")
         }
         Convert => enforce(matches!((types, out), ([from], Some(to)) if conversion(*from, to).is_some()),
             "CONVERT_TYPE", "conversion between these types is not defined"),
