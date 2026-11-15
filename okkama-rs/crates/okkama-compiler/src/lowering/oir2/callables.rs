@@ -30,6 +30,8 @@ pub(super) struct Capture {
 pub(super) struct DiscoveredBody {
     pub key: BodyKey,
     /// Lexical receiver authority, even when no receiver snapshot is needed.
+    /// Inventory evidence for the discovery tests; lowering reads `captures`.
+    #[cfg(test)]
     pub receiver: Option<ty::Ty>,
     /// Receiver snapshot first when used, then THIR captures in their original order.
     pub captures: Vec<Capture>,
@@ -67,6 +69,8 @@ pub(super) struct BoundAction {
 
 #[derive(Debug, Default)]
 pub(super) struct Inventory {
+    /// Inventory evidence for the isolation tests; lowering reads the registry.
+    #[cfg(test)]
     pub test_mode: bool,
     pub bodies: Vec<DiscoveredBody>,
     pub bound: Vec<BoundAction>,

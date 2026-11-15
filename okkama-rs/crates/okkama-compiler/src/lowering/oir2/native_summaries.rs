@@ -18,6 +18,9 @@
 //! `utf8_encode` and `stdout_write` are native call boundaries. Their results are a
 //! plain byte array and an accepted byte count; host failures have Native kind.
 //! All entries are synchronous, with no async destroy, publication receipt or resource result.
+//!
+//! Open sync callables and the opaque callable cleanup intrinsic come from the
+//! runtime catalogue of `okkama-oir` (#569 O1); own and the verifier consult it.
 use std::collections::BTreeMap;
 
 use crate::oir2 as ir;
@@ -28,6 +31,7 @@ pub(crate) struct P1NativeSummaries {
     natives: BTreeMap<String, (ir::Signature, ir::Summary)>,
     intrinsics: BTreeMap<String, (ir::Signature, ir::Summary)>,
     services: BTreeMap<ir::TypeId, ir::Summary>,
+    runtime: ir::catalogue::RuntimeCatalogue,
 }
 
 fn error(message: impl Into<String>) -> NativeSummaryError {
@@ -36,7 +40,13 @@ fn error(message: impl Into<String>) -> NativeSummaryError {
 
 impl P1NativeSummaries {
     pub fn for_module(module: &ir::Module) -> Result<Self, NativeSummaryError> {
-        let mut catalog = Self::default();
+        Self::for_profile(module, module.profile)
+    }
+
+    /// Elaboration registers the runtime entries with the ABI of its target profile.
+    pub fn for_profile(module: &ir::Module, profile: ir::Profile) -> Result<Self, NativeSummaryError> {
+        let runtime = ir::catalogue::RuntimeCatalogue::for_profile(module, profile);
+        let mut catalog = Self { runtime, ..Self::default() };
         for (_, function) in module.functions.iter() {
             for attr in &function.attrs {
                 let (native, name) = match attr {
@@ -44,6 +54,12 @@ impl P1NativeSummaries {
                     ir::FunctionAttr::Intrinsic { name, .. } => (false, name),
                     _ => continue,
                 };
+                if !native && name == ir::catalogue::SYNC_CLOSURE_CLEANUP {
+                    if catalog.runtime.cleanup_summary(name).is_none() {
+                        return Err(error(format!("invalid runtime intrinsic ABI {name}")));
+                    }
+                    continue;
+                }
                 let mut language = function.signature.clone();
                 if module.profile != ir::Profile::High {
                     language.params.retain(|ty| !matches!(module.types.get(*ty),
@@ -132,6 +148,14 @@ impl NativeSummaries for P1NativeSummaries {
             return self.services.get(&ty).cloned().map(|summary| ExternalSummary { summary })
                 .ok_or_else(|| error(format!("unregistered P1 service {ty:?}")));
         }
+        let runtime = match boundary {
+            ExternalBoundary::Callable(ty) => self.runtime.open_callable(ty),
+            ExternalBoundary::Intrinsic(name) => self.runtime.cleanup_summary(name),
+            _ => None,
+        };
+        if let Some(summary) = runtime {
+            return Ok(ExternalSummary { summary: summary.clone() });
+        }
         let entry = match boundary {
             ExternalBoundary::Native(name) => self.natives.get(name),
             ExternalBoundary::Intrinsic(name) => self.intrinsics.get(name),
@@ -147,13 +171,19 @@ impl ir::verify::ExternalContracts for P1NativeSummaries {
         self.natives.get(name).map(|entry| &entry.0)
     }
     fn intrinsic(&self, name: &str) -> Option<&ir::Signature> {
-        self.intrinsics.get(name).map(|entry| &entry.0)
+        self.intrinsics.get(name).map(|entry| &entry.0).or_else(|| self.runtime.cleanup_signature(name))
     }
     fn native_summary(&self, name: &str) -> Option<&ir::Summary> {
         self.natives.get(name).map(|entry| &entry.1)
     }
     fn intrinsic_summary(&self, name: &str) -> Option<&ir::Summary> {
-        self.intrinsics.get(name).map(|entry| &entry.1)
+        self.intrinsics.get(name).map(|entry| &entry.1).or_else(|| self.runtime.cleanup_summary(name))
+    }
+    fn descriptor_cleanup(&self, name: &str) -> Option<&ir::Summary> {
+        self.runtime.cleanup_summary(name)
+    }
+    fn open_callable(&self, callable: ir::TypeId) -> Option<ir::Summary> {
+        self.runtime.open_callable(callable).cloned()
     }
 }
 
@@ -233,7 +263,8 @@ pub(super) fn contract(module: &ir::Module, name: &str, native: bool, signature:
             destination: ir::TransferDestination::None,
         }).collect(),
         results: results.iter().map(|_| ir::ResultRelation {
-            fresh: vec![], aliases: vec![], external_deps: vec![], provenance: ir::AdmissionProvenance::UnboundResult,
+            fresh: vec![], aliases: vec![], external_deps: vec![], opaque: false,
+            provenance: ir::AdmissionProvenance::UnboundResult,
         }).collect(),
         contract: ir::CallContract {
             results, failures, suspends: false, async_destroy: false, publication: ir::Publication::Atomic,

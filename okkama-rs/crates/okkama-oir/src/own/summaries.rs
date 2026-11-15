@@ -354,6 +354,20 @@ impl Universe {
                             "open closure requires a checked call-boundary Closure family"));
                     }
                     normal::normalize(&mut summary, budget)?;
+                    // #569 O1: the catalogue entry must be the registered conservative
+                    // contract (fresh or aliased results, environment as parameter 0).
+                    if matches!(op, Operation::Call(CallOp::Closure { .. })) {
+                        let canonical = summary.contract.protocol
+                            .filter(|id| module.protocols.get(*id).is_ok_and(|protocol| {
+                                *protocol == crate::catalogue::open_callable_protocol()
+                            }))
+                            .and_then(|id| crate::catalogue::open_callable_summary(module, ty, id));
+                        if canonical.as_ref() != Some(&summary) {
+                            return Err(budget.fail(OwnDiagnosticKind::MissingBoundary, format!(
+                                "{function:?} {site:?}: open callable contract is not the registered conservative one",
+                            )));
+                        }
+                    }
                     let node = universe.nodes.len();
                     budget.memory(256 + normal::size(&summary))?;
                     universe.nodes.push(Node { equation: Equation::External, summary, dependencies: BTreeSet::new() });

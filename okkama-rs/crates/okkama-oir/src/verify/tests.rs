@@ -33,7 +33,8 @@ fn complete_summaries(module: &mut Module) {
         summary.contract.results = signature.results.iter().copied().filter(|ty| module.types.get(*ty)
             .is_ok_and(|ty| !matches!(ty, Type::Service(_) | Type::Descriptor))).collect();
         summary.results = summary.contract.results.iter().map(|_| ResultRelation {
-            fresh: vec![], aliases: vec![], external_deps: vec![], provenance: AdmissionProvenance::UnboundResult,
+            fresh: vec![], aliases: vec![], external_deps: vec![], opaque: false,
+        provenance: AdmissionProvenance::UnboundResult,
         }).collect();
         let summary = module.summaries.alloc(summary).unwrap();
         module.functions.get_mut(id).unwrap().summary = Some(summary);
@@ -78,7 +79,8 @@ fn rejected(module: &Module, rule: RuleId) -> VerifyReport {
 }
 fn own_summary(results: Vec<TypeId>) -> Summary {
     let relations = results.iter().map(|_| ResultRelation {
-        fresh: vec![], aliases: vec![], external_deps: vec![], provenance: AdmissionProvenance::UnboundResult,
+        fresh: vec![], aliases: vec![], external_deps: vec![], opaque: false,
+        provenance: AdmissionProvenance::UnboundResult,
     }).collect();
     Summary {
         entry_kind: EntryKind::CallBoundary, parameters: vec![], results: relations,

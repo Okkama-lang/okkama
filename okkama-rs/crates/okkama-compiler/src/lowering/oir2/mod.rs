@@ -23,6 +23,8 @@ mod anonymous;
 mod bound;
 mod caps;
 mod known_calls;
+#[cfg(test)]
+mod open_calls;
 mod test_profile;
 #[cfg(test)]
 mod test_profile_tests;
@@ -116,6 +118,18 @@ type Result<T> = std::result::Result<T, LowerError>;
 /// Independent developer entry: analysis supplies resolved THIR and declarations.
 /// No CLI routing, ownership elaboration or semantic verifier is invoked here.
 pub fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
+    lower(analysis, false)
+}
+
+/// #569 O1 evidence only: open invocations of `fn` parameters receive the
+/// registered open sync callable ABI instead of the C3a diagnostic. C3b, after
+/// the audit, integrates open invocations into the producer itself.
+#[cfg(test)]
+pub(crate) fn lower_to_oir2_with_open_calls(analysis: &Analysis<'_>) -> Result<ir::Module> {
+    lower(analysis, true)
+}
+
+fn lower(analysis: &Analysis<'_>, open_calls: bool) -> Result<ir::Module> {
     let prepared = specialize::prepare(analysis)?;
     let analysis = &prepared.analysis;
     let mut declarations = declarations::Declarations::new(analysis)?;
@@ -226,7 +240,12 @@ pub fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
     let mut module = declarations.builder.finish()?;
     structure::finish(&mut module)?;
     test_profile::check(&module)?;
-    known_calls::check(&module, &calls.into_inner())?;
+    if open_calls {
+        #[cfg(test)]
+        open_calls::attach(&mut module)?;
+    } else {
+        known_calls::check(&module, &calls.into_inner())?;
+    }
     structure::check(&module)?;
     once::check(&module)?;
     Ok(module)

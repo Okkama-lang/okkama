@@ -60,7 +60,11 @@ pub(super) fn prepare_with_limits<'a>(input: &Analysis<'a>, limits: Limits) -> R
         queued: HashSet::new(),
         pending: VecDeque::new(),
         bodies: vec![],
-        inventory: callables::Inventory { test_mode: input.registry.test_mode, ..Default::default() },
+        inventory: callables::Inventory {
+            #[cfg(test)]
+            test_mode: input.registry.test_mode,
+            ..Default::default()
+        },
         lexical: None,
         nested: HashSet::new(),
     };
@@ -160,7 +164,13 @@ pub(super) fn prepare_with_limits<'a>(input: &Analysis<'a>, limits: Limits) -> R
         });
         slice.block(&mut body.block, &env)
             .map_err(|error| error.in_function(&slice.body_name(&body.owner)))?;
-        slice.inventory.bodies.push(callables::DiscoveredBody { key, receiver, captures, body: body.clone() });
+        slice.inventory.bodies.push(callables::DiscoveredBody {
+            key,
+            #[cfg(test)]
+            receiver,
+            captures,
+            body: body.clone(),
+        });
         if body.owner != thir::BodyOwner::Closure {
             slice.bodies.push(body);
         }

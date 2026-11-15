@@ -36,6 +36,7 @@ fn envelope(results: Vec<ir::TypeId>, creation: bool) -> ir::Summary {
             fresh: vec![],
             aliases: vec![],
             external_deps: vec![],
+            opaque: false,
             provenance: ir::AdmissionProvenance::UnboundResult,
         }).collect(),
         contract: ir::CallContract {

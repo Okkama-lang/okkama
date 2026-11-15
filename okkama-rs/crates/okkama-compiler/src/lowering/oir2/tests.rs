@@ -4,6 +4,8 @@ mod anonymous_tests;
 mod bound_tests;
 #[path = "cap_tests.rs"]
 mod cap_tests;
+#[path = "open_call_tests.rs"]
+mod open_call_tests;
 
 use super::{LowerError, lower_to_oir2};
 use super::native_summaries::P1NativeSummaries;
@@ -1336,7 +1338,7 @@ fn oir2_high_observation_requires_a_trusted_external() {
             entry_kind: ir::EntryKind::ObservationAdmissionStaysCaller,
             parameters: vec![],
             results: vec![ir::ResultRelation {
-                fresh: vec![], aliases: vec![], external_deps: vec![],
+                fresh: vec![], aliases: vec![], external_deps: vec![], opaque: false,
                 provenance: ir::AdmissionProvenance::UnboundResult,
             }],
             contract: ir::CallContract {
