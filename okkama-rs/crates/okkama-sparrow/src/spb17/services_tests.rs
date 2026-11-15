@@ -188,7 +188,7 @@ fn d25_forms_have_their_schemas_and_classes() {
 #[test]
 fn d25_codec_round_trips_its_forms() {
     let programs = [returned(Make::Rehomed, Caller::Materialized, Some(Dynamic::AfterStatic)),
-        returned(Make::Rehomed, Caller::AbsorbOwn, Some(Dynamic::AfterStatic))];
+        returned(Make::Rehomed, Caller::AbsorbOwn, Some(Dynamic::AfterStatic)), passing(true)];
     let mut used = std::collections::BTreeSet::new();
     for p in &programs {
         let bytes = encode(p).unwrap();
@@ -196,9 +196,7 @@ fn d25_codec_round_trips_its_forms() {
         let text = disassemble(p).unwrap();
         assert_eq!(&assemble(&text).unwrap(), p);
         assert_eq!(disassemble(&assemble(&text).unwrap()).unwrap(), text);
-        for form in ["champ cleanup.settle.dynamic", "champ service.absorb"] {
-            assert!(text.contains(form), "{form}");
-        }
+        assert!(text.contains("champ cleanup.settle.dynamic"));
         used.extend(p.functions.iter().flat_map(|f| &f.code).filter_map(|instruction| match instruction {
             Instruction::Champ { op, .. } => Some(op.id()),
             _ => None,
@@ -207,6 +205,13 @@ fn d25_codec_round_trips_its_forms() {
     for id in [69, 84, 85, 86] {
         assert!(used.contains(&id), "opcode {id} is not round-tripped");
     }
+    // Both forms of cache.rehome.
+    let forms: std::collections::BTreeSet<_> = programs.iter().flat_map(|p| &p.functions).flat_map(|f| &f.code)
+        .filter_map(|instruction| match instruction {
+            Instruction::Champ { op: O::CacheRehome, arguments, .. } => Some(arguments.len()),
+            _ => None,
+        }).collect();
+    assert_eq!(forms, [3, 4].into());
 }
 
 #[test]
