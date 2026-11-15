@@ -5,6 +5,8 @@ impl Engine<'_, '_> {
         &mut self, op: &Operation, outcome: Outcome, origin: Origin, before: &Flow,
         flow: &mut Flow, slots: &mut [Slot],
     ) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("storage::storage_operation");
         if outcome != Outcome::Normal {
             return;
         }

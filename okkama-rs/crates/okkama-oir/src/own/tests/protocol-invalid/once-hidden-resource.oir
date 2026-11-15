@@ -1,0 +1,32 @@
+oir 2 high
+// expect OIR2-B11.1 Declaration(DeclId(2))
+module once_plain
+
+object Hidden {
+    field resource: R
+}
+
+object R {
+    destroy @destroy
+}
+
+object O {
+    field slot: Hidden once
+}
+scope S0 action in @f
+scope S1 action in @destroy
+
+func @f(%0: O, %1: Hidden) -> Hidden [method O] {
+    boundary B0 lexical in S0
+    ^b0 in S0:
+    once.store %0, slot, %1
+    %2: Hidden = once.load %0, slot
+    [i2] exit.prepare return %2 at B0
+    result.exit edge normal(0), value %2, demand want, prepare #2
+    ret %2
+}
+
+func @destroy(%0: R) -> void [destroy R] {
+    ^b0 in S1:
+    ret
+}

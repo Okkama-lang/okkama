@@ -1,6 +1,11 @@
 //! Bounded relational worklist. Diagnostics are emitted only by replaying the
 //! fixed point; solver visits never turn a temporary absence into a rejection.
+// Ordered keys contain accounting Cells only. Eq/Ord read logical labels;
+// changing labels copies Rc paths and cannot mutate another ordered key.
+#![allow(clippy::mutable_key_type)]
 mod domain;
+mod per_value;
+mod shared;
 mod metadata;
 mod packets;
 mod scopes;
@@ -10,12 +15,35 @@ mod async_rules;
 mod defer;
 mod storage;
 mod descriptors;
+mod history;
 
 use super::{EntityLocation as L, RuleId as R, State};
 use crate::*;
 use domain::*;
+use per_value::AllocationSize;
+use shared::SharedSet;
 use metadata::*;
 use std::collections::{BTreeSet, VecDeque};
+
+#[cfg(any(test, feature = "verifier-differential"))]
+#[derive(Default)]
+struct ScheduleWork {
+    visits: usize,
+    alternatives: usize,
+    comparisons: usize,
+}
+#[cfg(test)]
+thread_local! {
+    static LAST_SCHEDULE: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+#[cfg(any(test, feature = "verifier-differential"))]
+impl Drop for ScheduleWork {
+    fn drop(&mut self) {
+        super::differential::record_schedule(self.visits, self.alternatives, self.comparisons);
+        #[cfg(test)]
+        LAST_SCHEDULE.set((self.visits, self.alternatives));
+    }
+}
 
 struct Engine<'m, 's> {
     module: &'m Module,
@@ -27,6 +55,8 @@ struct Engine<'m, 's> {
     reported: BTreeSet<(L, R)>,
     managed: &'s [bool],
     flow_memory: usize,
+    materialized_scopes: Option<BTreeSet<ScopeId>>,
+    witnesses: std::rc::Rc<Vec<bool>>,
     diagnose: bool,
     collecting: bool,
     capture_returns: bool,
@@ -42,13 +72,13 @@ struct Slot {
     journal: Token,
     refs: BTreeSet<Origin>,
     identity: Option<Origin>,
-    aliases: BTreeSet<ValueId>,
-    contained: BTreeSet<ValueId>,
-    bases: BTreeSet<ValueId>,
+    aliases: SharedSet<ValueId>,
+    contained: SharedSet<ValueId>,
+    bases: SharedSet<ValueId>,
     requirements: BTreeSet<Origin>,
     lifetime: u8,
     must_use: u8,
-    must_use_aliases: BTreeSet<ValueId>,
+    must_use_aliases: SharedSet<ValueId>,
     failures: u8,
     redefine: bool,
 }
@@ -57,16 +87,18 @@ impl Default for Slot {
     fn default() -> Self {
         Self {
             token: Token::default(), journal: Token::default(), refs: BTreeSet::new(),
-            identity: None, aliases: BTreeSet::new(),
+            identity: None, aliases: SharedSet::new(),
             requirements: BTreeSet::new(), lifetime: 1, must_use: 0, failures: 0,
-            contained: BTreeSet::new(), bases: BTreeSet::new(), redefine: true,
-            must_use_aliases: BTreeSet::new(),
+            contained: SharedSet::new(), bases: SharedSet::new(), redefine: true,
+            must_use_aliases: SharedSet::new(),
         }
     }
 }
 
 impl Slot {
     fn rename(&mut self, old: Origin, new: Origin) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::rename");
         let rename = |key| if key == old { new } else { key };
         self.refs = self.refs.iter().copied().map(rename).collect();
         self.requirements = self.requirements.iter().copied().map(rename).collect();
@@ -116,7 +148,8 @@ pub(super) fn check<'m>(module: &'m Module, selected: Option<FuncId>, state: &mu
         let mut engine = Engine {
             module, function, declaration, body, state, emit: false,
             reported: BTreeSet::new(),
-            managed: &managed, flow_memory: 0, diagnose: true, collecting: false,
+            managed: &managed, flow_memory: 0, materialized_scopes: None,
+            witnesses: witnesses(module, body), diagnose: true, collecting: false,
             capture_returns: false, contract_invalid: false,
             defer_stack: vec![function], defer_outputs: vec![], defer_cache: Default::default(),
         };
@@ -125,7 +158,51 @@ pub(super) fn check<'m>(module: &'m Module, selected: Option<FuncId>, state: &mu
 }
 
 impl Engine<'_, '_> {
+    fn scan_work(&mut self, work: usize) -> bool {
+        self.state.step(work)
+    }
+    fn has_closing_token(&self, flow: &Flow) -> bool {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::has_closing_token");
+        flow.tokens.indexed().any(|(index, token)| {
+            flow.availability[index] == AVAILABLE && token.cleanup.is_some()
+        })
+    }
+    fn materialized_scope(&mut self, ancestor: ScopeId) -> Option<bool> {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::materialized_scope");
+        if self.materialized_scopes.is_none() {
+            if !self.state.step(self.body.values.len()) || !self.state.array(self.body.values.len(), 64) {
+                return None;
+            }
+            self.materialized_scopes = Some(self.body.values.iter().filter_map(|(value, _)| {
+                metadata::scope(self.module, self.body, value)
+            }).collect());
+        }
+        if !self.state.step(1) {
+            return None;
+        }
+        Some(self.materialized_scopes.as_ref().unwrap().contains(&ancestor))
+    }
+    fn clear_finish_generation(&self, branch: &mut Flow, generation: Option<Origin>) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::clear_finish_generation");
+        // Defaults have no failure evidence. Clearing them must not materialize
+        // a token and a failure entry for every SSA value on every dispatch.
+        for (index, failure) in branch.failures.indexed_mut() {
+            if branch.tokens[index].finish_origin == generation {
+                *failure = 0;
+            }
+        }
+        for (_, token) in branch.tokens.indexed_mut() {
+            if token.finish_origin == generation {
+                token.failure_origin = None;
+            }
+        }
+    }
     fn empty_ctor_packet(&self, value: ValueId) -> bool {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::empty_ctor_packet");
         self.declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Ctor(_)))
             && super::later::value_type(self.module, self.body, value)
                 == Some(&Type::Service(ServiceType::Own))
@@ -141,46 +218,36 @@ impl Engine<'_, '_> {
             self.state.error(rule, message);
         }
     }
-    fn flow_entries(&self, flow: &Flow) -> usize {
-        let tokens = flow.tokens.iter().chain(&flow.journals)
-            .chain(flow.frames.values().flat_map(|layout| layout.values().map(|slot| &slot.token)))
-            .chain(flow.cells.values().map(|slot| &slot.token));
-        let mut entries = tokens.clone().map(|token| token.destinations.len()).sum::<usize>();
-        let pieces = tokens.flat_map(|token| &token.pieces).chain(&flow.closed_inputs);
-        for piece in pieces {
-            entries = entries.saturating_add(1);
-            for filter in piece.predicates.keys() {
-                entries = entries.saturating_add(1 + filter.keys.len() + filter.possible.len() + filter.labels.len());
-            }
+    fn retain_flow(&mut self, flow: &Flow) -> bool {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let measurement = std::env::var_os("OKKAMA_634_RETAINED").map(|_| {
+            flow.allocation_bytes()
+        });
+        #[cfg(any(test, feature = "verifier-differential"))]
+        shared::retention_counts();
+        let bytes = flow.charge_retained();
+        #[cfg(any(test, feature = "verifier-differential"))]
+        if let Some(logical) = measurement {
+            let (shared, nodes) = shared::retention_counts();
+            super::differential::record_retained(
+                self.module.profile, &self.declaration.symbol, bytes, shared, nodes, logical,
+            );
         }
-        for refs in flow.refs.iter().chain(&flow.full_deps) {
-            entries = entries.saturating_add(refs.len());
-        }
-        for labels in flow.aliases.iter().chain(&flow.contained) {
-            entries = entries.saturating_add(labels.len());
-        }
-        for refs in flow.views.values() {
-            entries = entries.saturating_add(1 + refs.len());
-        }
-        for (refs, _) in flow.fields.values() {
-            entries = entries.saturating_add(1 + refs.len());
-        }
-        for token in &flow.tokens {
-            entries = entries.saturating_add(token.unique_region.len() + token.pin_deps.len());
-            if let Some(fact) = &token.cleanup {
-                entries = entries.saturating_add(fact.reserve.len() + fact.inventory.len()
-                    + fact.services.len() + fact.executed.len());
-            }
-        }
-        entries = entries.saturating_add(flow.dead.len() + flow.bindings.len() + flow.provenance.len());
-        entries = entries.saturating_add(flow.frames.values().map(|slots| slots.len()).sum::<usize>());
-        entries
+        self.state.memory(bytes.saturating_add(1))
     }
     fn flow_bytes(&self, flow: &Flow) -> usize {
-        flow.availability.len().saturating_mul(1536)
-            .saturating_add(self.flow_entries(flow).saturating_mul(128))
+        flow.scratch_bytes()
     }
     fn charge_flow(&mut self, flow: &Flow) -> bool {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::charge_flow");
+        self.charge_flow_work(flow, flow.clone_work())
+    }
+    fn retire_origin(&mut self, flow: &mut Flow, origin: Origin, _charged: bool) -> bool {
+        flow.retire_origin(origin, self.state);
+        !self.state.incomplete
+    }
+    fn charge_flow_work(&mut self, flow: &Flow, work: usize) -> bool {
         // Scratch clones are released after each transfer. Charge their peak,
         // and account retained alternatives separately when inserting them.
         let bytes = self.flow_bytes(flow).saturating_mul(8);
@@ -190,17 +257,13 @@ impl Engine<'_, '_> {
             }
             self.flow_memory = bytes;
         }
-        self.state.step(self.flow_entries(flow).saturating_add(flow.availability.len()))
+        self.state.step(work)
     }
 
     fn initial(&mut self) -> Flow {
-        let mut flow = Flow::new(self.body.values.len());
-        for (value, data) in self.body.values.iter() {
-            flow.witnesses[value.as_u32() as usize] = self.module.types.get(data.ty).is_ok_and(|ty| {
-                !matches!(ty, Type::Service(_) | Type::Descriptor | Type::Frame(_)
-                    | Type::Builder(_) | Type::MapBuilder(..))
-            });
-        }
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::initial");
+        let mut flow = Flow::new(self.body.values.len(), self.witnesses.clone());
         let defer_entry = self.declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. }));
         let call_boundary = defer_entry || self.declaration.summary.and_then(|id| self.module.summaries.get(id).ok())
             .is_some_and(|s| s.entry_kind == EntryKind::CallBoundary);
@@ -287,7 +350,7 @@ impl Engine<'_, '_> {
             if keys.is_empty() {
                 flow.entry_accepted = true;
             }
-            let input_labels: BTreeSet<_> = entry.params.iter().copied().filter(|value| {
+            let input_labels: SharedSet<_> = entry.params.iter().copied().filter(|value| {
                 flow.witnesses[value.as_u32() as usize] && !flow.refs[value.as_u32() as usize].is_empty()
             }).collect();
             for &value in &entry.params {
@@ -322,6 +385,29 @@ impl Engine<'_, '_> {
             || self.managed.get(v.ty.as_u32() as usize).copied().unwrap_or(true)))
     }
     fn solve(&mut self) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let before = (self.state.stats.memory_bytes, self.state.stats.steps);
+        #[cfg(any(test, feature = "verifier-differential"))]
+        super::work_profile::begin();
+        self.solve_inner();
+        #[cfg(any(test, feature = "verifier-differential"))]
+        super::work_profile::finish(self.module.profile, &self.declaration.symbol);
+        #[cfg(any(test, feature = "verifier-differential"))]
+        super::differential::record_function(
+            self.module.profile, &self.declaration.symbol, false, before,
+            &self.state.stats, self.flow_memory, self.state.incomplete,
+        );
+    }
+    fn solve_inner(&mut self) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::solve_inner");
+        // ReturnWitness translation inspects the entire callee Flow. Keep that
+        // history intact until a separate proof covers the cross-body observer.
+        let history = if self.capture_returns { None }
+            else { history::BoundaryHistory::new(self.module, self.body, self.state) };
+        if self.state.incomplete {
+            return;
+        }
         if !self.state.array(self.body.blocks.len(), 64) {
             return;
         }
@@ -329,59 +415,99 @@ impl Engine<'_, '_> {
         if !self.state.array(self.body.values.len(), 320) {
             return;
         }
-        let initial = self.initial();
-        if !self.charge_flow(&initial) {
+        // Flow locals live on the stack. Only vectors of Flow allocate their
+        // inline headers on the heap; charge their capacities separately.
+        let outgoing = self.body.blocks.iter().map(|(_, block)| targets(&block.term.kind).len()).max().unwrap_or(0);
+        let outgoing_capacity = if outgoing == 0 { 0 } else { outgoing.next_power_of_two().max(4) };
+        if !self.state.array(outgoing_capacity, size_of::<(BlockId, Flow)>()) {
             return;
         }
-        if !self.state.memory(self.flow_bytes(&initial)) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let mut schedule = ScheduleWork { alternatives: 1, ..ScheduleWork::default() };
+        let mut initial = self.initial();
+        if let Some(history) = &history {
+            history.normalize(self.body.entry, &mut initial, self.state);
+        }
+        if !self.charge_flow(&initial) || !self.retain_flow(&initial) {
             return;
         }
+        incoming[self.body.entry.as_u32() as usize].reserve_exact(1);
         incoming[self.body.entry.as_u32() as usize].push(initial);
-        let mut queue = VecDeque::from([self.body.entry]);
-        let mut queued = vec![false; self.body.blocks.len()];
-        queued[self.body.entry.as_u32() as usize] = true;
-        while let Some(block) = queue.pop_front() {
+        // State indices are stable: alternatives are appended and only masks
+        // are joined in place. One dirty bit coalesces versions awaiting a visit.
+        // Every new or changed mask is queued; a queued visit reads the latest
+        // mask, and a later change queues another visit. Thus every state is
+        // processed with its final mask before replay emits diagnostics.
+        // Verdict equality with the old block schedule is checked by the differential.
+        let mut dirty = vec![Vec::new(); self.body.blocks.len()];
+        dirty[self.body.entry.as_u32() as usize].reserve_exact(1);
+        dirty[self.body.entry.as_u32() as usize].push(true);
+        let mut queue = VecDeque::from([(self.body.entry, 0)]);
+        let mut queue_peak = 1;
+        if !self.state.array(queue_peak, size_of::<(BlockId, usize)>()) {
+            return;
+        }
+        while let Some((block, state_id)) = queue.pop_front() {
             let index = block.as_u32() as usize;
-            queued[index] = false;
-            if !self.state.step(1) {
+            dirty[index][state_id] = false;
+            #[cfg(any(test, feature = "verifier-differential"))]
+            { schedule.visits += 1; }
+            if !self.state.step(1) || !self.charge_flow(&incoming[index][state_id]) {
                 return;
             }
-            let scratch = incoming[index].iter().map(|flow| self.flow_bytes(flow)).sum::<usize>();
-            if scratch > self.flow_memory {
-                if !self.state.memory(scratch - self.flow_memory) {
-                    return;
-                }
-                self.flow_memory = scratch;
-            }
-            let inputs = incoming[index].clone();
-            for flow in inputs {
+            let input = incoming[index][state_id].clone();
+            for (target, mut flow) in self.block(block, input) {
+                // The outgoing clone existed before pruning. Reserve its
+                // unpruned scratch bound before deleting any slots.
                 if !self.charge_flow(&flow) {
                     return;
                 }
-                for (target, flow) in self.block(block, flow) {
-                    if !self.charge_flow(&flow) {
+                if let Some(history) = &history {
+                    history.normalize(target, &mut flow, self.state);
+                }
+                let index = target.as_u32() as usize;
+                let Some(states) = incoming.get_mut(index) else {
+                    continue;
+                };
+                let mut found = None;
+                for (id, old) in states.iter().enumerate() {
+                    #[cfg(any(test, feature = "verifier-differential"))]
+                    { schedule.comparisons += 1; }
+                    if old.same_relations(&flow, self.state) {
+                        found = Some(id);
+                        break;
+                    }
+                }
+                if self.state.incomplete {
+                    return;
+                }
+                let (id, changed) = if let Some(id) = found {
+                    if !self.state.step(flow.mask_work()) {
                         return;
                     }
-                    let index = target.as_u32() as usize;
-                    let Some(states) = incoming.get_mut(index) else {
-                        continue;
-                    };
-                    if !self.state.step(states.len().saturating_mul(self.body.values.len())) {
+                    (id, states[id].join_masks(&flow))
+                } else {
+                    if !self.retain_flow(&flow) {
                         return;
                     }
-                    let changed = if let Some(old) = states.iter_mut().find(|old| old.same_relations(&flow)) {
-                        old.join_masks(&flow)
-                    } else {
-                        if !self.state.memory(self.flow_bytes(&flow)) {
+                    #[cfg(any(test, feature = "verifier-differential"))]
+                    { schedule.alternatives += 1; }
+                    let id = states.len();
+                    states.reserve_exact(1);
+                    states.push(flow);
+                    dirty[index].reserve_exact(1);
+                    dirty[index].push(false);
+                    (id, true)
+                };
+                if changed && !dirty[index][id] {
+                    dirty[index][id] = true;
+                    if queue.len() == queue_peak {
+                        if !self.state.array(queue_peak, size_of::<(BlockId, usize)>()) {
                             return;
                         }
-                        states.push(flow);
-                        true
-                    };
-                    if changed && !queued[index] {
-                        queued[index] = true;
-                        queue.push_back(target);
+                        queue_peak = queue_peak.saturating_mul(2);
                     }
+                    queue.push_back((target, id));
                 }
             }
         }
@@ -398,6 +524,8 @@ impl Engine<'_, '_> {
         }
     }
     fn use_value(&mut self, flow: &mut Flow, value: ValueId, mode: OperandMode, rule: R) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::use_value");
         let index = value.as_u32() as usize;
         if flow.tokens[index].pin_deps.iter().any(|key| flow.dead.contains(key)) {
             self.error(R::B96, "retained view pin outlives its stable owner");
@@ -424,8 +552,16 @@ impl Engine<'_, '_> {
         }
     }
     fn define(&mut self, flow: &mut Flow, value: ValueId, mut slot: Slot) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::define");
+        if !self.state.step(32 * (2 + self.body.values.len().max(1).ilog2() as usize)) {
+            return;
+        }
         let i = value.as_u32() as usize;
         if slot.redefine && flow.availability[i] != ABSENT {
+            if !self.state.step(flow.relation_work()) {
+                return;
+            }
             for key in flow.projection_keys() {
                 let Origin::Projection(base, kind) = key else {
                     continue;
@@ -439,7 +575,7 @@ impl Engine<'_, '_> {
                     _ => false,
                 };
                 if changes {
-                    flow.retire_origin(key);
+                    flow.retire_origin(key, self.state);
                     slot.rename(key, Origin::RetiredProjection(base, kind));
                 }
             }
@@ -454,21 +590,31 @@ impl Engine<'_, '_> {
         }
         if slot.aliases != flow.aliases[i] || !slot.aliases.contains(&value) {
             let old = flow.aliases[i].clone();
-            let retained: BTreeSet<_> = old.iter().copied().filter(|v| *v != value).collect();
-            flow.replace_aliases(&old, &retained);
+            let mut retained = old.clone();
+            retained.remove(&value);
+            flow.replace_aliases(&old, &retained, self.state);
         }
         let source = slot.aliases.clone();
-        let aliases: BTreeSet<_> = source.iter().copied().chain(std::iter::once(value)).collect();
-        flow.replace_aliases(&source, &aliases);
+        let mut aliases = source.clone();
+        aliases.insert(value);
+        flow.replace_aliases(&source, &aliases, self.state);
         flow.aliases[i] = aliases.clone();
-        flow.contained[i] = slot.contained.union(&aliases).copied().collect();
+        if !self.state.step(slot.contained.comparison_work(&source)) {
+            return;
+        }
+        if slot.contained == source {
+            flow.contained.set(i, aliases.clone());
+        } else {
+            flow.contained[i] = slot.contained.clone();
+            flow.contained[i].extend(&aliases);
+        }
         for base in &slot.bases {
             let roots = flow.aliases[base.as_u32() as usize].clone();
-            flow.add_contained(&roots, &aliases);
+            flow.add_contained(&roots, &aliases, self.state);
         }
         flow.availability[i] = AVAILABLE;
-        flow.tokens[i] = flow.normalize_token(slot.token);
-        flow.journals[i] = flow.normalize_token(slot.journal);
+        flow.tokens[i] = flow.normalize_token(slot.token, self.state);
+        flow.journals[i] = flow.normalize_token(slot.journal, self.state);
         let service_deps = self.body.values.get(value).ok().and_then(|v| self.module.types.get(v.ty).ok())
             .is_some_and(|ty| matches!(ty, Type::Service(ServiceType::Deps | ServiceType::Pending
                 | ServiceType::StableKey
@@ -484,20 +630,22 @@ impl Engine<'_, '_> {
         let mut previous = flow.must_use_aliases[i].clone();
         previous.remove(&value);
         for &alias in &previous {
-            flow.must_use_aliases[alias.as_u32() as usize] = previous.clone();
+            flow.must_use_aliases.set(alias.as_u32() as usize, previous.clone());
         }
         let mut aliases = slot.must_use_aliases;
         if successor(self.module, self.body, value) {
             aliases.insert(value);
         }
         for &alias in &aliases {
-            flow.must_use_aliases[alias.as_u32() as usize] = aliases.clone();
+            flow.must_use_aliases.set(alias.as_u32() as usize, aliases.clone());
         }
-        flow.must_use_aliases[i] = aliases;
+        flow.must_use_aliases.set(i, aliases);
         flow.must_use[i] = if successor(self.module, self.body, value) && slot.must_use == 0 { 1 }
             else { slot.must_use };
     }
     fn block(&mut self, id: BlockId, mut flow: Flow) -> Vec<(BlockId, Flow)> {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::block");
         let Ok(block) = self.body.blocks.get(id) else {
             return Vec::new();
         };
@@ -567,7 +715,7 @@ impl Engine<'_, '_> {
             }
             TermKind::RetDefer { tag, values } => {
                 if self.collecting {
-                    if !self.state.memory(self.flow_bytes(&flow)) {
+                    if !self.state.memory(flow.charge_retained()) {
                         return outgoing;
                     }
                     self.defer_outputs.push(defer::ReturnWitness {
@@ -632,7 +780,7 @@ impl Engine<'_, '_> {
                 let mut found_flow = flow.clone();
                 found_flow.views.insert(view, flow.refs[collection.as_u32() as usize].clone());
                 let slot = Slot {
-                    refs: BTreeSet::from([view]), bases: BTreeSet::from([*collection]),
+                    refs: BTreeSet::from([view]), bases: SharedSet::from([*collection]),
                     lifetime: flow.lifetimes[collection.as_u32() as usize], ..Slot::default()
                 };
                 outgoing.push(self.edge(&found_flow, found.block, &found.args, &[slot], R::B21));
@@ -665,11 +813,16 @@ impl Engine<'_, '_> {
         outgoing
     }
     fn edge(&mut self, flow: &Flow, target: BlockId, args: &[EdgeArg], slots: &[Slot], rule: R) -> (BlockId, Flow) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::edge");
         if !self.charge_flow(flow) {
             return (target, flow.clone());
         }
         let mut next = flow.clone();
-        for (index, token) in flow.tokens.iter().enumerate() {
+        if !self.state.step(flow.tokens.stored_len()) {
+            return (target, flow.clone());
+        }
+        for (index, token) in flow.tokens.indexed() {
             if flow.availability[index] == AVAILABLE && token.unique.is_some()
                 && !token.unique_region.contains(&target) {
                 self.error(R::B92, "unique capability leaves its proved CFG region");
@@ -686,7 +839,7 @@ impl Engine<'_, '_> {
                         must_use_aliases: flow.must_use_aliases[i].clone(),
                         failures: flow.failures[i], identity: flow.identities[i], aliases: flow.aliases[i].clone(),
                         requirements: flow.full_deps[i].clone(), lifetime: flow.lifetimes[i],
-                        contained: flow.contained[i].clone(), bases: BTreeSet::new(), redefine: true,
+                        contained: flow.contained[i].clone(), bases: SharedSet::new(), redefine: true,
                     };
                     self.use_value(&mut next, *value, OperandMode::Forward, rule);
                     next.must_use[i] = 0;
@@ -705,12 +858,27 @@ impl Engine<'_, '_> {
             for (index, slot) in saved.iter_mut().enumerate() {
                 slot.redefine = args.get(index) != block.params.get(index).map(|value| EdgeArg::Value(*value)).as_ref();
             }
-            let replaced: BTreeSet<_> = block.params.iter().copied().collect();
+            let replaced: SharedSet<_> = block.params.iter().copied().collect();
             let originals: Vec<_> = saved.iter().map(|slot| slot.aliases.clone()).collect();
-            let classes: BTreeSet<_> = next.aliases.iter().filter(|aliases| !aliases.is_empty()).cloned().collect();
+            let mut roots = BTreeSet::new();
+            let mut classes = BTreeSet::new();
+            for aliases in next.aliases.stored() {
+                if !self.state.step(2 + next.aliases.stored_len().max(1).ilog2() as usize) {
+                    break;
+                }
+                if !aliases.is_empty() && roots.insert(aliases.root_id()) {
+                    if !self.state.step(aliases.len() * (2 + classes.len().max(1).ilog2() as usize)) {
+                        break;
+                    }
+                    classes.insert(aliases.clone());
+                }
+            }
+            if self.state.incomplete {
+                return (target, next);
+            }
             let mut remapped = std::collections::BTreeMap::new();
             for class in classes {
-                let mut members: BTreeSet<_> = class.difference(&replaced).copied().collect();
+                let mut members = class.without(&replaced);
                 for (index, aliases) in originals.iter().enumerate() {
                     if aliases == &class {
                         members.insert(block.params[index]);
@@ -718,7 +886,7 @@ impl Engine<'_, '_> {
                 }
                 remapped.insert(class, members);
             }
-            next.remap_aliases(&remapped);
+            next.remap_aliases(&remapped, self.state);
             for (index, slot) in saved.iter_mut().enumerate() {
                 if let Some(members) = remapped.get(&originals[index]) {
                     slot.aliases = members.clone();
@@ -728,7 +896,7 @@ impl Engine<'_, '_> {
                 }).collect();
                 slot.token.pieces = slot.token.pieces.iter().cloned().map(|mut piece| {
                     piece.predicates = piece.predicates.into_iter().map(|(mut filter, selected)| {
-                        let mut labels = BTreeSet::new();
+                        let mut labels = SharedSet::new();
                         for label in &filter.labels {
                             let class = &flow.aliases[label.as_u32() as usize];
                             if let Some(members) = remapped.get(class) {
@@ -745,8 +913,14 @@ impl Engine<'_, '_> {
             for (&param, slot) in block.params.iter().zip(saved) {
                 self.define(&mut next, param, slot);
             }
-            for index in 0..next.tokens.len() {
-                next.tokens[index] = next.normalize_token(next.tokens[index].clone());
+            if !self.state.step(next.tokens.work()) {
+                return (target, next);
+            }
+            let normalized: Vec<_> = next.tokens.indexed().map(|(index, token)| {
+                (index, next.normalize_token(token.clone(), self.state))
+            }).collect();
+            for (index, token) in normalized {
+                next.tokens.set(index, token);
             }
             for &param in &block.params {
                 let expected = next.full_deps[param.as_u32() as usize].clone();
@@ -762,6 +936,8 @@ impl Engine<'_, '_> {
         }
     }
     fn finish(&mut self, flow: &mut Flow, normal: bool, values: &[ValueId]) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::work_profile::Operation::new("mod::finish");
         if !self.declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. })) {
             self.body_summary(flow, normal, values);
         }
@@ -787,6 +963,9 @@ impl Engine<'_, '_> {
             }
             self.use_value(flow, value, OperandMode::Forward, R::B21);
             self.discharge_must_use(flow, value);
+        }
+        if !self.state.step(self.body.values.len()) {
+            return;
         }
         for (value, _) in self.body.values.iter() {
             let i = value.as_u32() as usize;
@@ -818,5 +997,48 @@ fn targets(term: &TermKind) -> Vec<(BlockId, Vec<EdgeArg>)> {
         TermKind::Catch { handler, next, .. } => vec![(handler.block, handler.args.clone()), target(next)],
         TermKind::Lookup { found, missing, .. } => vec![(found.block, found.args.clone()), target(missing)],
         _ => Vec::new(),
+    }
+}
+
+fn witnesses(module: &Module, body: &Body) -> std::rc::Rc<Vec<bool>> {
+    std::rc::Rc::new(body.values.iter().map(|(_, data)| {
+        module.types.get(data.ty).is_ok_and(|ty| {
+            !matches!(ty, Type::Service(_) | Type::Descriptor | Type::Frame(_)
+                | Type::Builder(_) | Type::MapBuilder(..))
+        })
+    }).collect())
+}
+
+#[cfg(test)]
+mod scheduling_tests {
+    use super::*;
+
+    #[test]
+    fn delayed_alternative_does_not_replay_unchanged_block_inputs() {
+        let module = text::parse(
+            "oir 2 high
+module schedule
+requires core
+scope S action in @f
+func @f(%c: bool, %x: int, %y: int) -> void {
+^entry in S:
+    cond %c, ^join(%x), ^delay
+^delay in S:
+    br ^tail
+^tail in S:
+    br ^join(%y)
+^join(%p: int) in S:
+    br ^end(%p)
+^end(%q: int) in S:
+    ret
+}",
+        ).unwrap();
+        let options = super::super::VerifyOptions::default();
+        super::super::run_mode(
+            &module, &options, super::super::VerifyContext::default(), None, None, false,
+        ).unwrap();
+        // Entry, delay and tail once; join and end once per distinct input.
+        // The old block queue revisited the first join/end alternatives too.
+        assert_eq!(LAST_SCHEDULE.get(), (7, 7));
     }
 }

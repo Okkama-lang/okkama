@@ -4,12 +4,12 @@ impl Engine<'_, '_> {
     pub(super) fn scope_operation(
         &mut self, block: BlockId, op: &Operation, outcome: Outcome, before: &Flow, flow: &mut Flow,
     ) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("scopes::scope_operation");
         if outcome != Outcome::Normal {
             return;
         }
-        let closing = before.tokens.iter().enumerate().any(|(index, token)| {
-            before.availability[index] == AVAILABLE && token.cleanup.is_some()
-        });
+        let closing = self.has_closing_token(before);
         if closing && !matches!(op, Operation::Cleanup(_) | Operation::Exit(ExitOp::Abort { .. })
             | Operation::Async(AsyncOp::FrameCancel { .. })
             | Operation::Const(_) | Operation::Core(CoreOp::FailSecondary { .. } | CoreOp::FailCaused { .. })) {
@@ -71,12 +71,9 @@ impl Engine<'_, '_> {
                         .and_then(|scope| scope.parent);
                     let mut nearest = None;
                     while let Some(ancestor) = parent {
-                        if !self.state.step(self.body.values.len().saturating_add(1)) {
+                        let Some(materialized) = self.materialized_scope(ancestor) else {
                             return;
-                        }
-                        let materialized = self.body.values.iter().any(|(value, _)| {
-                            super::metadata::scope(self.module, self.body, value) == Some(ancestor)
-                        });
+                        };
                         if materialized {
                             nearest = Some(ancestor);
                             break;
@@ -105,12 +102,9 @@ impl Engine<'_, '_> {
             }
             let mut parent = self.module.scopes.get(*scope).ok().and_then(|scope| scope.parent);
             while let Some(ancestor) = parent {
-                if !self.state.step(self.body.values.len().saturating_add(1)) {
+                let Some(materialized) = self.materialized_scope(ancestor) else {
                     return;
-                }
-                let materialized = self.body.values.iter().any(|(value, _)| {
-                    super::metadata::scope(self.module, self.body, value) == Some(ancestor)
-                });
+                };
                 if materialized && flow.scopes.get(&ancestor) != Some(&1) {
                     self.error(R::B41, "nested scope opened without its materialized lexical ancestor");
                 }
@@ -169,6 +163,8 @@ impl Engine<'_, '_> {
     pub(super) fn close(
         &mut self, before: &Flow, flow: &mut Flow, input: ValueId, reserve: Option<ValueId>,
     ) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("scopes::close");
         let token = &before.tokens[input.as_u32() as usize];
         self.invalidate(before, flow, &token.pieces.iter().cloned().collect::<Vec<_>>());
         for piece in &token.pieces {
@@ -176,7 +172,10 @@ impl Engine<'_, '_> {
             flow.closed_inputs.insert(piece.clone());
         }
         if let Some(scope) = scope(self.module, self.body, input) {
-            for (value, _) in self.body.values.iter() {
+            for value in before.token_values() {
+                if !self.scan_work(1) {
+                    return;
+                }
                 if value == input || Some(value) == reserve
                     || before.availability[value.as_u32() as usize] & AVAILABLE == 0 { continue; }
                 let held = &before.tokens[value.as_u32() as usize];
@@ -198,9 +197,9 @@ impl Engine<'_, '_> {
                 && super::super::high::inside(self.module, *child, scope, self.state)) {
                 self.error(R::B41, "outer scope closes while a nested lexical scope is open");
             }
-            let available: BTreeSet<_> = self.body.values.iter().filter_map(|(value, _)| {
-                (before.availability[value.as_u32() as usize] == AVAILABLE
-                    && before.tokens[value.as_u32() as usize].service.is_some()).then_some(value)
+            let available: BTreeSet<_> = before.token_values().filter(|value| {
+                before.availability[value.as_u32() as usize] == AVAILABLE
+                    && before.tokens[value.as_u32() as usize].service.is_some()
             }).collect();
             if !available.is_empty() {
                 let schedule = self.body.service_schedules.iter().find(|schedule| {
@@ -231,6 +230,8 @@ impl Engine<'_, '_> {
         &mut self, op: &Operation, outcome: Outcome, before: &Flow, flow: &mut Flow,
         schema: &OutcomeContract, slots: &mut [Slot],
     ) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("scopes::stage");
         let Operation::Ownership(OwnershipOp::Stage { stage }) = op else {
             return;
         };

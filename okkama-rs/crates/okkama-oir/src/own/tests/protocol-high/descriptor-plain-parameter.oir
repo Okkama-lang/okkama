@@ -1,0 +1,18 @@
+oir 2 high
+module plain_parameter_dictionary
+scope SN action in @noop
+scope S action in @f
+summary MN call-boundary contract call_contract(publication=atomic)
+func @noop() -> void summary(MN) {
+    ^entry in SN:
+    ret
+}
+func @f<T>(%value: T, %dictionary: type) -> T {
+    descriptor.binding %dictionary contract descriptor_contract(managed=plain, retention=descriptor(0),
+        cleanup=@noop, async_destroy=false, summary=MN)
+    boundary B0 lexical in S
+    ^entry in S:
+    [ip] exit.prepare return %value at B0
+    result.exit edge normal(0), value %value, demand want, prepare ip
+    ret %value
+}

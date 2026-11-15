@@ -4,6 +4,8 @@ use super::*;
 enum DispatchKind { None, Some, Success, Pending, Failure }
 impl DispatchKind {
     fn results(self) -> Vec<ResultSlot> {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("cleanup::results");
         let outcome = match self {
             Self::None => return vec![],
             Self::Some => Outcome::FailureSome,
@@ -23,6 +25,8 @@ impl Engine<'_, '_> {
         &mut self, block: BlockId, op: &Operation, outcome: Outcome, before: &Flow, flow: &mut Flow,
         schema: &OutcomeContract, slots: &mut [Slot],
     ) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("cleanup::cleanup_operation");
         if let Operation::Ownership(OwnershipOp::ScopeEnd { state, reserve, effects }
             | OwnershipOp::ScopeUnwind { state, reserve, effects, .. }) = op {
             self.scope_effects(block, op, *state, *reserve, effects, before);
@@ -445,6 +449,8 @@ impl Engine<'_, '_> {
         &mut self, block: BlockId, op: &Operation, state: ValueId, reserve: Option<ValueId>,
         envelope: &ScopeEffectEnvelope, before: &Flow,
     ) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("cleanup::scope_effects");
         let pieces = before.tokens[state.as_u32() as usize].pieces.iter()
             .chain(reserve.into_iter().flat_map(|value| &before.tokens[value.as_u32() as usize].pieces))
             .cloned().collect();
@@ -493,6 +499,8 @@ impl Engine<'_, '_> {
     }
 
     fn required_effects(&mut self, pieces: &BTreeSet<Piece>, before: &Flow) -> Effects {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("cleanup::required_effects");
         let mut required = Effects::default();
         for piece in pieces {
             let types = self.origin_types(piece.origin, piece, before);
@@ -515,6 +523,8 @@ impl Engine<'_, '_> {
     }
 
     fn origin_types(&self, origin: Origin, piece: &Piece, flow: &Flow) -> Vec<TypeId> {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("cleanup::origin_types");
         let values: Vec<_> = match origin {
             Origin::Input(value) | Origin::External(value) => vec![value],
             Origin::Instruction(inst, _) | Origin::RetiredInstruction(inst, _) => self.body.insts.get(inst)
@@ -560,6 +570,8 @@ impl Engine<'_, '_> {
 
 impl Engine<'_, '_> {
     fn check_plan(&mut self, flow: &Flow, cleanup: ValueId, token: &Token, fact: &CleanupFact, id: CleanupPlanId) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("cleanup::check_plan");
         let Ok(plan) = self.body.cleanup.plans.get(id) else {
             return;
         };
@@ -674,6 +686,8 @@ impl Engine<'_, '_> {
     }
 
     fn proof_links(&mut self, proof: &CleanupOrderProof) -> bool {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("cleanup::proof_links");
         let edges = super::super::graph::edges(self.body, self.state);
         let mut valid = true;
         for witness in &proof.preserves {
@@ -728,6 +742,8 @@ impl Engine<'_, '_> {
     }
 
     fn cleanup_roots(&mut self, flow: &Flow, cleanup: ValueId) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("cleanup::cleanup_roots");
         let L::Instruction { instruction, .. } = self.state.location else {
             return;
         };
@@ -761,6 +777,8 @@ impl Engine<'_, '_> {
     fn witness_completion(
         &self, flow: &Flow, witness: &CreationWitness, identity: ValueId,
     ) -> Option<(Origin, BlockId, usize)> {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("cleanup::witness_completion");
         if matches!(witness, CreationWitness::Singleton) {
             return None;
         }
@@ -814,6 +832,8 @@ impl Engine<'_, '_> {
     }
 
     fn completion(&self, flow: &Flow, creation: CreationOrigin) -> Option<(Origin, BlockId, usize)> {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("cleanup::completion");
         let (op, key, block, position) = match creation {
             CreationOrigin::Instruction(inst) => {
                 let data = self.body.insts.get(inst).ok()?;
@@ -843,6 +863,8 @@ impl Engine<'_, '_> {
         &mut self, flow: &mut Flow, cleanup: ValueId, selected: &InvokeEdge, done: &InvokeEdge,
         outgoing: &mut Vec<(BlockId, Flow)>,
     ) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("cleanup::cleanup_next");
         let before = flow.clone();
         self.use_value(flow, cleanup, OperandMode::Consume, R::B102);
         let mut token = before.tokens[cleanup.as_u32() as usize].clone();
@@ -880,6 +902,8 @@ impl Engine<'_, '_> {
     pub(super) fn cleanup_dispatch(
         &mut self, flow: &mut Flow, term: &TermKind, outgoing: &mut Vec<(BlockId, Flow)>,
     ) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("cleanup::cleanup_dispatch");
         let (closed, failure, exit, arms) = match term {
             TermKind::ExitDispatch { closed, failure, exit, success, pending, failed, close } => {
                 if flow.tokens[exit.as_u32() as usize].cleanup.as_ref().is_none_or(|fact| fact.close != *close) {
@@ -906,6 +930,8 @@ impl Engine<'_, '_> {
         &mut self, flow: &mut Flow, closed: Option<ValueId>, failure: ValueId, exit: Option<ValueId>,
         arms: &[DispatchEdge], outgoing: &mut Vec<(BlockId, Flow)>,
     ) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("cleanup::dispatch");
         let before = flow.clone();
         self.live_use(&before, failure);
         if let Some(exit) = exit {
@@ -956,12 +982,7 @@ impl Engine<'_, '_> {
             let mut branch = flow.clone();
             if exit.is_some() && matches!(arm.kind, DispatchKind::Success | DispatchKind::Pending) {
                 let generation = before.tokens[failure.as_u32() as usize].finish_origin;
-                for (index, token) in branch.tokens.iter_mut().enumerate() {
-                    if token.finish_origin == generation {
-                        branch.failures[index] = 0;
-                        token.failure_origin = None;
-                    }
-                }
+                self.clear_finish_generation(&mut branch, generation);
             }
             if arm.kind == DispatchKind::Failure && let Some(fact) = &fact {
                 let reserve: Vec<_> = fact.reserve.iter().cloned().collect();
@@ -995,7 +1016,7 @@ impl Engine<'_, '_> {
             } else {
                 // Copyable FailureState is not a linear permission. Its association
                 // with the current cleanup token prevents skipping a failed step.
-                for token in &mut branch.tokens {
+                for token in branch.tokens.stored_mut() {
                     if let Some(fact) = &mut token.cleanup
                         && fact.awaiting_failure && arm.kind == DispatchKind::None
                             && fact.awaiting_source.is_some_and(|source| {

@@ -14,6 +14,8 @@ impl Engine<'_, '_> {
         replacements: &[DeferReplaceEdge], unwind: Option<&InvokeEdge>, before: &Flow,
         outgoing: &mut Vec<(BlockId, Flow)>,
     ) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("defer::defer_invoke");
         if !replacements.is_empty() && !self.defer_cache.contains_key(&function) {
             if self.defer_stack.contains(&function)
                 || self.defer_stack.len() >= self.state.options.limits.expression_depth {
@@ -34,7 +36,9 @@ impl Engine<'_, '_> {
             let mut helper = Engine {
                 module: self.module, function, declaration, body, state: self.state,
                 emit: false, reported: BTreeSet::new(), managed: self.managed, flow_memory: 0,
+                materialized_scopes: None,
                 diagnose: false, collecting: false, capture_returns: true, contract_invalid: false,
+                witnesses: witnesses(self.module, body),
                 defer_stack: stack, defer_outputs: vec![],
                 defer_cache: Default::default(),
             };
@@ -77,7 +81,7 @@ impl Engine<'_, '_> {
                 Some(Origin::Invoke(block, u32::MAX - u32::from(index)))
             } else { None };
             if let Some(origin) = opaque {
-                branch.retire_origin(origin);
+                self.retire_origin(&mut branch, origin, false);
             }
             let normal = if outcome == Outcome::Unwind { Outcome::Unwind } else { Outcome::Normal };
             let mut slots = self.operation(block, &op, &schema, normal, Origin::Invoke(block, 0), &mut branch);
@@ -99,6 +103,8 @@ impl Engine<'_, '_> {
 
 impl Engine<'_, '_> {
     pub(super) fn defer_return(&mut self, tag: &DeferReturnTag, values: &[ValueId], flow: &Flow) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("defer::defer_return");
         if matches!(tag, DeferReturnTag::Continue) {
             return;
         }
@@ -121,6 +127,8 @@ impl Engine<'_, '_> {
     fn defer_projection_bound(
         &mut self, witness: &Flow, base: ValueId, actual: &impl Fn(ValueId) -> Option<ValueId>, flow: &Flow,
     ) -> Option<BTreeSet<Origin>> {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("defer::defer_projection_bound");
         let mut pending = vec![base];
         let mut seen = BTreeSet::new();
         let mut bound = BTreeSet::new();
@@ -163,6 +171,8 @@ impl Engine<'_, '_> {
         &mut self, function: FuncId, label: &str, schema: &OutcomeContract, key: Origin,
         call: &CallSite, flow: &Flow, slots: &mut [Slot],
     ) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("defer::defer_replacement");
         // D8 exports the actual packet. Derive each tagged return independently
         // with the verifier engine; a borrowed replacement never creates ownership.
         let declaration = self.module.functions.get(function).unwrap();
@@ -181,7 +191,7 @@ impl Engine<'_, '_> {
         let witnesses = self.defer_cache.get(&function).cloned().unwrap_or_default();
         let mut refs = BTreeSet::new();
         let mut deps = BTreeSet::new();
-        let mut contained = BTreeSet::new();
+        let mut contained = SharedSet::new();
         let mut packet = Token::default();
         for witness in witnesses.iter().filter(|item| {
             matches!(&item.tag, DeferReturnTag::Replace(returned) if returned == label)
@@ -265,7 +275,7 @@ impl Engine<'_, '_> {
                         piece.family = true;
                         piece.predicates.insert(Filter {
                             keys: BTreeSet::from([key]), fresh: false, possible: BTreeSet::new(),
-                            labels: BTreeSet::new(), stale: false, whole_future: false, state: 0,
+                            labels: SharedSet::new(), stale: false, whole_future: false, state: 0,
                         }, true);
                         packet.pieces.insert(piece);
                     }

@@ -9,7 +9,19 @@ impl ExternalContracts for FixtureContracts<'_> {
             matches!(a, okkama_oir::FunctionAttr::Extern(n) if n == name && n.starts_with("fixture."))
         }).then_some(&f.signature))
     }
-    fn intrinsic(&self, _: &str) -> Option<&okkama_oir::Signature> { None }
+    fn intrinsic(&self, name: &str) -> Option<&okkama_oir::Signature> {
+        self.intrinsic_function(name).map(|function| &function.signature)
+    }
+    fn intrinsic_summary(&self, name: &str) -> Option<&okkama_oir::Summary> {
+        self.intrinsic_function(name).and_then(|function| function.summary)
+            .and_then(|id| self.0.summaries.get(id).ok())
+    }
+    fn descriptor_cleanup(&self, name: &str) -> Option<&okkama_oir::Summary> {
+        match name {
+            "fixture.cleanup.fn" | "fixture.cleanup.any" | "fixture.cleanup.borrow" => self.intrinsic_summary(name),
+            _ => None,
+        }
+    }
     fn native_summary(&self, name: &str) -> Option<&okkama_oir::Summary> {
         self.0.functions.iter().find_map(|(_, f)| f.attrs.iter().any(|a| {
             matches!(a, okkama_oir::FunctionAttr::Extern(n) if n == name && n.starts_with("fixture."))
@@ -17,3 +29,15 @@ impl ExternalContracts for FixtureContracts<'_> {
     }
 }
 
+
+impl FixtureContracts<'_> {
+    fn intrinsic_function(&self, name: &str) -> Option<&okkama_oir::Function> {
+        if !matches!(name, "fixture.cleanup.fn" | "fixture.cleanup.any" | "fixture.cleanup.borrow"
+            | "fixture.ordinary" | "fixture.source") {
+            return None;
+        }
+        self.0.functions.iter().find_map(|(_, function)| function.attrs.iter().any(|attr| {
+            matches!(attr, okkama_oir::FunctionAttr::Intrinsic { name: actual, .. } if actual == name)
+        }).then_some(function))
+    }
+}

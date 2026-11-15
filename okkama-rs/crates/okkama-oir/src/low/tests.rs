@@ -1,5 +1,37 @@
 use super::*;
 
+#[test]
+fn unwind_local_parameters_do_not_escape_into_predecessor_roots() {
+    // Champ G1 ABI §8.1–8.4: root requirements bind holders live at this PC.
+    let output = checked(include_str!("fixtures/unwind-local-parameter.own.oir"));
+    let expected = parsed(include_str!("fixtures/unwind-local-parameter.low.oir"));
+    verify_fixture(&expected).unwrap();
+    assert!(text::normalized_eq(&output, &expected).unwrap());
+    let mut missing = output.clone();
+    let body = body_mut(&mut missing);
+    let trap = body.blocks.iter().find(|(_, block)| matches!(block.term.kind, TermKind::Trap { .. })).unwrap().0;
+    let local = body.blocks.get(trap).unwrap().params[0];
+    let map = body.cleanup.roots.iter_mut().find(|(_, map)| {
+        map.boundary == RootBoundary::Terminator(trap)
+    }).unwrap().1;
+    assert!(map.bindings.iter().any(|binding| binding.value == local));
+    map.bindings.retain(|binding| binding.value != local);
+    rejected_after_roundtrip(&missing, RuleId::B105);
+
+    let mut unavailable = output;
+    let body = body_mut(&mut unavailable);
+    let plan = body.insts.iter().find(|(_, inst)| {
+        matches!(inst.op, Operation::Cleanup(CleanupOp::Plan { .. }))
+    }).unwrap().0;
+    let ty = body.values.get(local).unwrap().ty;
+    let map = body.cleanup.roots.iter_mut().find(|(_, map)| {
+        map.boundary == RootBoundary::BeforeInstruction(plan)
+    }).unwrap().1;
+    assert!(!map.bindings.iter().any(|binding| binding.value == local));
+    map.bindings.push(RootBinding { value: local, trace: RootTrace::Value(ty) });
+    rejected_after_roundtrip(&unavailable, RuleId::B105);
+}
+
 fn parsed(source: &str) -> Module {
     text::parse(source).unwrap_or_else(|error| panic!("{error}"))
 }

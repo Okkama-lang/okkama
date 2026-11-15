@@ -106,7 +106,7 @@ fn p1_pipeline_scalar_run() {
 
 #[test]
 fn p1_pipeline_unsupported_does_not_fallback() {
-    let error = compile("module app; main() is int { let array = [1]; 0; }").unwrap_err();
+    let error = compile("module app; async main() is int { 0; }").unwrap_err();
     assert!(error.is_unsupported(), "{error}");
     assert!(error.to_string().contains("unsupported in OIR-2 lowering"));
 }

@@ -9,6 +9,7 @@ pub struct FunctionAnalysis {
     pub equations: Equations,
     pub value_shapes: BTreeMap<ValueId, ShapeId>,
     pub entries: BTreeMap<BlockId, FlowState>,
+    pub before_instructions: BTreeMap<InstId, FlowState>,
     pub before_edges: BTreeMap<BlockId, FlowState>,
     /// Possible original admission owners of a pre-accept construction packet.
     pub constructor_inputs: BTreeMap<InstId, BTreeSet<ScopeId>>,
@@ -18,6 +19,21 @@ pub struct FunctionAnalysis {
     /// contributes one; quantity contributes at most four; masks one per bit.
     pub height_bound: usize,
     pub stats: OwnStats,
+}
+
+impl FunctionAnalysis {
+    /// Retained allocations after graph/worklist/transfer scratch has been dropped.
+    pub(super) fn allocated_bytes(&self) -> usize {
+        size_of::<Self>() + self.equations.allocated_bytes() + self.value_shapes.len() * 96
+            + self.entries.values().chain(self.before_instructions.values()).chain(self.before_edges.values())
+                .map(|state| state.allocated_bytes() + 128).sum::<usize>()
+            + self.constructor_inputs.values().map(|owners| 128 + owners.len() * 96).sum::<usize>()
+            + self.outcomes.capacity() * size_of::<(SemanticEdge, FlowState)>()
+            + self.outcomes.iter().map(|(edge, state)| {
+                state.allocated_bytes() + edge.args.capacity() * size_of::<ValueId>()
+                    + (edge.plan.close.capacity() + edge.plan.begin.capacity()) * size_of::<ScopeId>()
+            }).sum::<usize>()
+    }
 }
 
 pub fn analyze_function(
@@ -32,60 +48,69 @@ pub fn analyze_function(
         .ok_or_else(|| flow_error("analysis requires a function body"))?;
     let graph = Graph::index(module, body, &mut budget)?;
     let mut equations = Equations::default();
-    equations.intern(Shape::Empty).unwrap();
+    let empty = equation(&mut equations, Shape::Empty, &mut budget)?;
     let mut value_shapes = BTreeMap::new();
     for (value, data) in body.values.iter() {
         budget.work(1)?;
-        let shape = match data.def {
-            Definition::BlockParam { block, index } if block == body.entry => Shape::Input { parameter: index },
-            Definition::BlockParam { block, index } => Shape::Phi { block, parameter: index },
-            Definition::InstResult { inst, .. } => Shape::Fresh { origin: Site::Instruction(inst), current: value },
+        budget.memory(96)?;
+        let shape = if managed(body, value, classification)? {
+            let shape = match data.def {
+                Definition::BlockParam { block, index } if block == body.entry => Shape::Input { parameter: index },
+                Definition::BlockParam { block, index } => Shape::Phi { block, parameter: index },
+                Definition::InstResult { inst, .. } => Shape::Fresh { origin: Site::Instruction(inst), current: value },
+            };
+            equation(&mut equations, shape, &mut budget)?
+        } else {
+            empty
         };
-        value_shapes.insert(value, equations.intern(shape).unwrap());
+        value_shapes.insert(value, shape);
     }
-    for (_, block) in body.blocks.iter() {
-        for inst in &block.insts {
-            let site = Site::Instruction(*inst);
-            equations.intern(Shape::Rest { site }).unwrap();
-            equations.intern(Shape::Selected { site }).unwrap();
-        }
-    }
-    for (scope, decl) in module.scopes.iter() {
-        if decl.function == function {
-            for (value, _) in body.values.iter() {
-                budget.work(1)?;
-                equations.intern(Shape::Journal { owner: scope, slot: value }).unwrap();
+    let scopes: Vec<_> = module.scopes.iter().filter_map(|(scope, decl)| {
+        (decl.function == function).then_some(scope)
+    }).collect();
+    budget.memory(scopes.capacity() * size_of::<ScopeId>())?;
+    for scope in &scopes {
+        for (value, shape) in &value_shapes {
+            budget.work(1)?;
+            if *shape != empty {
+                equation(&mut equations, Shape::Journal { owner: *scope, slot: *value }, &mut budget)?;
             }
         }
     }
     for edge in &graph.edges {
         for (argument, parameter) in edge.args.iter().zip(&body.blocks.get(edge.target).map_err(arena)?.params) {
-            equations.connect(value_shapes[parameter], value_shapes[argument]);
+            if value_shapes[parameter] != empty && value_shapes[argument] != empty
+                && equations.connect(value_shapes[parameter], value_shapes[argument]) {
+                budget.memory(96)?;
+            }
         }
     }
     equations.freeze();
     let origins = equations.nodes.len();
     let values = body.values.len();
-    let scopes = module.scopes.len();
+    let scopes = scopes.len();
     let height_bound = values.saturating_mul(origins.saturating_mul(2).saturating_add(64))
         .saturating_add(scopes.saturating_mul(origins).saturating_mul(8))
         .saturating_add(body.bindings.len().saturating_mul(values.saturating_add(origins * 2)));
     let height_bound = height_bound.saturating_add(scopes.saturating_mul(origins).saturating_mul(4));
-    let facts = values.saturating_mul(origins.saturating_mul(2).saturating_add(8))
-        .saturating_add(scopes.saturating_mul(origins).saturating_mul(4))
-        .saturating_add(body.bindings.len().saturating_mul(values.saturating_add(origins * 2)));
-    budget.memory(origins.saturating_mul(128))?;
-    budget.memory((body.blocks.len() + graph.edges.len()).saturating_mul(facts).saturating_mul(64))?;
+    // Rank, pending and block-state map nodes; no product of possible facts and CFG points.
+    budget.memory(body.blocks.len().saturating_mul(256))?;
+    let initial_bytes = size_of::<FlowState>() + values * size_of::<ValueState>();
+    budget.memory(initial_bytes)?;
     let mut initial = FlowState { values: vec![ValueState::default(); values], ..FlowState::default() };
     let root = body.blocks.get(body.entry).map_err(arena)?.lexical_scope;
     let declaration = module.functions.get(function).map_err(arena)?;
     let accepts = declaration.signature.ownership_abi != OwnershipAbi::Observation;
     let destroy = declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Destroy(_)));
+    let mut initial_reserved = initial_bytes;
     for (index, value) in body.blocks.get(body.entry).map_err(arena)?.params.iter().enumerate() {
         let state = &mut initial.values[value.as_u32() as usize];
         state.masks.availability = 2;
         state.masks.lifetime = 1;
         if managed(body, *value, classification)? {
+            // One dependency plus at most one journal/provenance entry.
+            budget.memory(3 * 128)?;
+            initial_reserved += 3 * 128;
             let atom = Atom::current(value_shapes[value]);
             state.deps.insert(atom);
             if accepts && !(destroy && index == 0) {
@@ -94,6 +119,7 @@ pub fn analyze_function(
             }
         }
     }
+    budget.resize(initial_reserved, initial.allocated_bytes())?;
     let mut entries = BTreeMap::from([(body.entry, initial)]);
     let ranks: BTreeMap<_, _> = graph.rpo.iter().enumerate().map(|(rank, block)| (*block, rank)).collect();
     let mut pending = BTreeSet::from([(ranks[&body.entry], body.entry)]);
@@ -101,16 +127,23 @@ pub fn analyze_function(
     while let Some((_, block)) = pending.pop_first() {
         budget.work(1)?;
         evaluations += 1;
-        let outgoing = transfer(module, body, block, entries[&block].clone(), &graph,
-            &value_shapes, classification, &mut budget, None, None)?;
+        let outgoing = transfer(module, body, block, &entries[&block], &graph,
+            &value_shapes, classification, &mut budget, None, None, None)?;
         for (edge, state) in outgoing {
             budget.work(state.stored_facts())?;
             let changed = if let Some(previous) = entries.get_mut(&edge.target) {
-                previous.join(&state)
+                let old = previous.allocated_bytes();
+                let scratch = old.saturating_add(state.allocated_bytes().saturating_mul(2));
+                budget.memory(scratch)?;
+                let changed = previous.join(&state);
+                budget.resize(old, previous.allocated_bytes())?;
+                budget.release(scratch + state.allocated_bytes());
+                changed
             } else {
                 entries.insert(edge.target, state);
                 true
             };
+            budget.release(outcome_bytes(&edge));
             if changed {
                 pending.insert((ranks[&edge.target], edge.target));
             }
@@ -118,13 +151,17 @@ pub fn analyze_function(
     }
     // Journal equations point to the existing origin families, never to a new
     // per-iteration expression or a correlated list of alternatives.
-    let origin_values: BTreeMap<_, _> = value_shapes.iter().map(|(value, shape)| (*shape, *value)).collect();
+    budget.memory(value_shapes.len() * 96)?;
+    let origin_values: BTreeMap<_, _> = value_shapes.iter().filter(|(_, shape)| **shape != empty)
+        .map(|(value, shape)| (*shape, *value)).collect();
     for flow in entries.values() {
         for (scope, atom) in flow.journals.keys() {
             budget.work(1)?;
             if let Some(value) = origin_values.get(&atom.origin) {
                 let journal = equations.intern(Shape::Journal { owner: *scope, slot: *value }).unwrap();
-                equations.connect(journal, atom.origin);
+                if equations.connect(journal, atom.origin) {
+                    budget.memory(96)?;
+                }
             }
         }
     }
@@ -132,10 +169,12 @@ pub fn analyze_function(
     let mut outcomes = vec![];
     let mut before_edges = BTreeMap::new();
     let mut constructor_inputs = BTreeMap::new();
+    let mut before_instructions = BTreeMap::new();
     for block in &graph.rpo {
         if let Some(entry) = entries.get(block) {
-            outcomes.extend(transfer(module, body, *block, entry.clone(), &graph,
-                &value_shapes, classification, &mut budget, Some(&mut before_edges), Some(&mut constructor_inputs))?);
+            outcomes.extend(transfer(module, body, *block, entry, &graph,
+                &value_shapes, classification, &mut budget, Some(&mut before_edges),
+                Some(&mut constructor_inputs), Some(&mut before_instructions))?);
         }
     }
     for (edge, state) in &outcomes {
@@ -153,7 +192,7 @@ pub fn analyze_function(
         }
     }
     Ok(FunctionAnalysis {
-        equations, value_shapes, entries, before_edges, constructor_inputs, outcomes, evaluations,
+        equations, value_shapes, entries, before_instructions, before_edges, constructor_inputs, outcomes, evaluations,
         height_bound, stats: budget.stats,
     })
 }
@@ -215,23 +254,41 @@ fn transfer(
     module: &Module,
     body: &Body,
     block: BlockId,
-    mut state: FlowState,
+    entry: &FlowState,
     graph: &Graph,
     shapes: &BTreeMap<ValueId, ShapeId>,
     classification: &OwnAnalysis,
     budget: &mut Budget<'_>,
     snapshots: Option<&mut BTreeMap<BlockId, FlowState>>,
     mut constructor_inputs: Option<&mut BTreeMap<InstId, BTreeSet<ScopeId>>>,
+    mut before_instructions: Option<&mut BTreeMap<InstId, FlowState>>,
 ) -> Result<Vec<(SemanticEdge, FlowState)>, OwnError> {
+    budget.memory(entry.allocated_bytes())?;
+    let mut state = entry.clone();
+    budget.resize(entry.allocated_bytes(), state.allocated_bytes())?;
     let data = body.blocks.get(block).map_err(arena)?;
+    let edge_refs = graph.outgoing[block.as_u32() as usize].len() * size_of::<&SemanticEdge>();
+    budget.memory(edge_refs)?;
     let edges: Vec<_> = graph.outgoing[block.as_u32() as usize].iter().map(|index| &graph.edges[*index]).collect();
     let mut outcomes = vec![];
     for inst in &data.insts {
         budget.work(state.stored_facts() + 1)?;
+        if let Some(snapshots) = before_instructions.as_deref_mut() {
+            budget.memory(state.allocated_bytes() + 128)?;
+            let snapshot = state.clone();
+            budget.resize(state.allocated_bytes(), snapshot.allocated_bytes())?;
+            snapshots.insert(*inst, snapshot);
+        }
         for edge in edges.iter().filter(|edge| edge.failure_point == Some(*inst)) {
-            outcomes.push(((*edge).clone(), edge_state(module, body, edge, state.clone())?));
+            outcomes.push(outcome(module, body, edge, &state, budget)?);
         }
         let instruction = body.insts.get(*inst).map_err(arena)?;
+        let old = state.allocated_bytes();
+        // Transfers clone dependency sets, retire maps and operand vectors. Reserve scratch
+        // before allocation, then retain only the resulting sparse state's actual capacity.
+        let scratch = state.sparse_bytes().saturating_mul(2 + instruction.results.len())
+            .saturating_add(instruction.op.operand_refs().len().saturating_mul(128)).saturating_add(1024);
+        budget.memory(scratch)?;
         if let Some(inputs) = constructor_inputs.as_deref_mut() {
             let fields = match &instruction.op {
                 Operation::Core(CoreOp::ObjNew { fields, construction: ConstructionStatus::Complete, .. }) => {
@@ -256,6 +313,20 @@ fn transfer(
             }
         }
         match &instruction.op {
+            Operation::Collection(_) if arrays::supported(module, body, classification, &instruction.op) => {
+                let deps = match &instruction.op {
+                    Operation::Collection(CollectionOp::ArrayNew { values, .. }) => values.iter()
+                        .flat_map(|value| state.values[value.as_u32() as usize].deps.iter().copied()).collect(),
+                    Operation::Collection(CollectionOp::ArrayGet { array, .. }) => {
+                        state.values[array.as_u32() as usize].deps.clone()
+                    }
+                    Operation::Collection(CollectionOp::ArrayLen { .. }) => BTreeSet::new(),
+                    _ => unreachable!(),
+                };
+                for result in &instruction.results {
+                    state.values[result.as_u32() as usize].deps = deps.clone();
+                }
+            }
             Operation::Const(_) => {}
             Operation::Core(CoreOp::RangeNew { .. } | CoreOp::Undef { .. }) => {}
             Operation::Core(CoreOp::ObjNew { construction: ConstructionStatus::Complete, .. }) => {
@@ -276,6 +347,28 @@ fn transfer(
                     value.deps.insert(atom);
                     state.journals.insert((data.lexical_scope, atom), Quantity::ONE);
                     state.provenance.insert((data.lexical_scope, atom), 1);
+                }
+            }
+            Operation::Core(CoreOp::FnClosure { .. } | CoreOp::FnBind { .. } | CoreOp::FnBindRole { .. }
+                | CoreOp::CapMake { .. } | CoreOp::AnyBox { .. } | CoreOp::RoleWrap { .. }
+                | CoreOp::RoleNarrow { .. } | CoreOp::OnceLoad { .. }) => {
+                // Wrapping snapshots references and their full dependencies. It
+                // neither creates an identity nor promotes borrowed admission.
+                let mut deps = BTreeSet::new();
+                for operand in cfg::operation_uses(&instruction.op, body)
+                    .map_err(|error| flow_error(format!("operands: {error}")))? {
+                    deps.extend(&state.values[operand.value.as_u32() as usize].deps);
+                }
+                for result in &instruction.results {
+                    if managed(body, *result, classification)? {
+                        state.values[result.as_u32() as usize].deps = deps.clone();
+                    }
+                }
+            }
+            Operation::Core(CoreOp::OnceStore { value, .. }) => {
+                let ty = body.values.get(*value).map_err(arena)?.ty;
+                if classification.types[&ty].certificate.is_none() {
+                    return Err(flow_error("once.store requires a full-graph plain certificate"));
                 }
             }
             Operation::Lexical(LexicalOp::Bind { binding, value }
@@ -356,6 +449,8 @@ fn transfer(
             }) => {}
             _ => return Err(unsupported(&instruction.op)),
         }
+        budget.resize(old, state.allocated_bytes())?;
+        budget.release(scratch);
         for value in &instruction.results {
             let masks = &mut state.values[value.as_u32() as usize].masks;
             masks.availability = 2;
@@ -367,13 +462,46 @@ fn transfer(
     }
     if let Some(snapshots) = snapshots {
         budget.work(state.stored_facts())?;
-        budget.memory(state.stored_facts() * 64)?;
-        snapshots.insert(block, state.clone());
+        budget.memory(state.allocated_bytes() + 128)?;
+        let snapshot = state.clone();
+        budget.resize(state.allocated_bytes(), snapshot.allocated_bytes())?;
+        snapshots.insert(block, snapshot);
     }
     for edge in edges.iter().filter(|edge| edge.failure_point.is_none()) {
-        outcomes.push(((*edge).clone(), edge_state(module, body, edge, state.clone())?));
+        outcomes.push(outcome(module, body, edge, &state, budget)?);
     }
+    budget.release(state.allocated_bytes() + edge_refs);
     Ok(outcomes)
+}
+
+fn equation(equations: &mut Equations, shape: Shape, budget: &mut Budget<'_>) -> Result<ShapeId, OwnError> {
+    // Node, interning-map node, and spare vector capacity. Shapes indexed here have no heap children.
+    budget.memory(256)?;
+    Ok(equations.intern(shape).expect("index before freeze"))
+}
+
+fn outcome_bytes(edge: &SemanticEdge) -> usize {
+    // Copied edge payload, outcome vector capacity and map-node allowance when retained.
+    2 * size_of::<(SemanticEdge, FlowState)>() + 128
+        + edge.args.len() * size_of::<ValueId>()
+        + (edge.plan.close.len() + edge.plan.begin.len()) * size_of::<ScopeId>()
+}
+
+fn outcome(
+    module: &Module,
+    body: &Body,
+    edge: &SemanticEdge,
+    state: &FlowState,
+    budget: &mut Budget<'_>,
+) -> Result<(SemanticEdge, FlowState), OwnError> {
+    let old = state.allocated_bytes();
+    let scratch = state.sparse_bytes().saturating_mul(2)
+        .saturating_add(edge.args.len().saturating_mul(size_of::<ValueState>())).saturating_add(1024);
+    budget.memory(old.saturating_add(scratch).saturating_add(outcome_bytes(edge)))?;
+    let result = edge_state(module, body, edge, state.clone())?;
+    budget.resize(old, result.allocated_bytes())?;
+    budget.release(scratch);
+    Ok((edge.clone(), result))
 }
 
 fn edge_state(

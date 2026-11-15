@@ -2,12 +2,16 @@ use super::*;
 
 impl Engine<'_, '_> {
     pub(super) fn graph_filter(
-        &mut self, flow: &Flow, keys: BTreeSet<Origin>, labels: BTreeSet<ValueId>, fresh: bool,
+        &mut self, flow: &Flow, keys: BTreeSet<Origin>, labels: SharedSet<ValueId>, fresh: bool,
     ) -> Filter {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("summaries::graph_filter");
         let possible = self.possible(flow, &keys);
         Filter { keys, possible, labels, fresh, state: 0, stale: false, whole_future: false }
     }
     pub(super) fn call_entry(&mut self, op: &Operation, before: &Flow, _: &mut Flow) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("summaries::call_entry");
         if self.module.profile == Profile::High {
             return;
         }
@@ -48,7 +52,7 @@ impl Engine<'_, '_> {
         let arguments: Vec<_> = receiver.iter().chain(&call.args).map(|arg| arg.value).collect();
         let graph: BTreeSet<_> = arguments.iter().flat_map(|v| before.refs[v.as_u32() as usize].iter().copied())
             .collect();
-        let labels: BTreeSet<_> = arguments.iter().flat_map(|v| before.contained[v.as_u32() as usize].iter().copied())
+        let labels: SharedSet<_> = arguments.iter().flat_map(|v| before.contained[v.as_u32() as usize].iter().copied())
             .collect();
         if let Some(packet) = call.packet {
             for piece in &before.tokens[packet.as_u32() as usize].pieces {
@@ -60,7 +64,10 @@ impl Engine<'_, '_> {
                 }
             }
         }
-        for (value, _) in self.body.values.iter() {
+        for value in before.token_values() {
+            if !self.scan_work(1) {
+                return;
+            }
             if Some(value) == call.packet || before.availability[value.as_u32() as usize] != AVAILABLE {
                 continue;
             }
@@ -72,6 +79,8 @@ impl Engine<'_, '_> {
         }
     }
     fn call_deps(&mut self, call: &CallSite, receiver: Option<CallArgument>, target: Option<FuncId>, flow: &Flow) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("summaries::call_deps");
         let arguments: Vec<_> = receiver.iter().chain(&call.args).map(|argument| argument.value).collect();
         let formal = target.and_then(|id| self.module.functions.get(id).ok());
         let count = formal.map_or(0, |function| function.signature.params.iter().filter(|ty| {
@@ -127,7 +136,9 @@ impl Engine<'_, '_> {
     // Spec §4.2 defines inclusion by retained identities, not container SSA names.
     // Current keys identify the same immutable graph across field projections.
     // Retired families can denote several incarnations, so they also need labels.
-    pub(super) fn subset(&self, piece: &Piece, graph: &BTreeSet<Origin>, labels: &BTreeSet<ValueId>) -> bool {
+    pub(super) fn subset(&self, piece: &Piece, graph: &BTreeSet<Origin>, labels: &SharedSet<ValueId>) -> bool {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("summaries::subset");
         if !piece.family && graph.contains(&piece.origin) {
             return true;
         }
@@ -144,6 +155,8 @@ impl Engine<'_, '_> {
         &mut self, call: &CallSite, receiver: Option<CallArgument>, origin: Origin, before: &Flow,
         flow: &mut Flow, schema: &OutcomeContract, slots: &mut [Slot],
     ) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("summaries::call_results");
         let Some(summary) = call.summary.and_then(|id| self.module.summaries.get(id).ok()) else {
             return;
         };
@@ -157,7 +170,7 @@ impl Engine<'_, '_> {
         let mixed = summary.results.iter().any(|relation| relation.provenance != state);
         let mut fresh_states = std::collections::BTreeMap::new();
         let mut all_refs = BTreeSet::new();
-        let mut all_labels = BTreeSet::new();
+        let mut all_labels = SharedSet::new();
         let mut fresh_refs: std::collections::BTreeMap<CreationSiteId, BTreeSet<Origin>> =
             std::collections::BTreeMap::new();
         for (index, relation) in summary.results.iter().enumerate() {
@@ -165,7 +178,7 @@ impl Engine<'_, '_> {
                 continue;
             };
             let mut aliases = BTreeSet::new();
-            let mut labels = BTreeSet::new();
+            let mut labels = SharedSet::new();
             for alias in &relation.aliases {
                 aliases.extend(self.summary_selection(before, &arguments, alias));
                 labels.extend(self.summary_labels(before, &arguments, alias));
@@ -217,7 +230,7 @@ impl Engine<'_, '_> {
         } else { Token::default() };
         if !internal && let Some(packet) = call.packet {
             let mut permitted = BTreeSet::new();
-            let mut labels = BTreeSet::new();
+            let mut labels = SharedSet::new();
             for parameter in &summary.parameters {
                 if parameter.convention == FreshConvention::Take
                     && parameter.destination == TransferDestination::Result
@@ -281,7 +294,7 @@ impl Engine<'_, '_> {
             piece.family = summary.results.len() > 1;
             if piece.family {
                 let filter = self.graph_filter(flow, fresh_refs.remove(&site).unwrap_or_default(),
-                    BTreeSet::new(), false);
+                    SharedSet::new(), false);
                 piece.predicates.insert(filter, true);
             }
             output.pieces.insert(piece);
@@ -299,8 +312,10 @@ impl Engine<'_, '_> {
             slots[slot].refs.extend(required);
         }
     }
-    fn summary_labels(&mut self, flow: &Flow, args: &[ValueId], root: &SummarySelection) -> BTreeSet<ValueId> {
-        let mut labels = BTreeSet::new();
+    fn summary_labels(&mut self, flow: &Flow, args: &[ValueId], root: &SummarySelection) -> SharedSet<ValueId> {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("summaries::summary_labels");
+        let mut labels = SharedSet::new();
         let mut pending = vec![root];
         while let Some(selection) = pending.pop() {
             if !self.state.step(1) {
@@ -319,6 +334,8 @@ impl Engine<'_, '_> {
         labels
     }
     fn summary_selection(&mut self, flow: &Flow, args: &[ValueId], root: &SummarySelection) -> BTreeSet<Origin> {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("summaries::summary_selection");
         let mut selected = BTreeSet::new();
         let mut pending = vec![root];
         while let Some(selection) = pending.pop() {
@@ -387,6 +404,8 @@ impl Engine<'_, '_> {
         selected
     }
     pub(super) fn body_summary(&mut self, flow: &Flow, normal: bool, values: &[ValueId]) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("summaries::body_summary");
         if self.module.profile == Profile::High {
             return;
         }
@@ -449,7 +468,7 @@ impl Engine<'_, '_> {
                 }
             }
             let mut permitted = BTreeSet::new();
-            let mut labels = BTreeSet::new();
+            let mut labels = SharedSet::new();
             for parameter in &summary.parameters {
                 if parameter.convention == FreshConvention::Take
                     && parameter.destination == TransferDestination::Result

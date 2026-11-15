@@ -30,10 +30,14 @@ struct ManagedFormula {
 }
 impl ManagedFormula {
     fn include(&mut self, other: &Self) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("metadata::include");
         self.owned |= other.owned;
         self.parameters.extend(&other.parameters);
     }
     fn grow(&mut self, other: Self, state: &mut State<'_>) -> bool {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("metadata::grow");
         let changed = other.owned && !self.owned
             || other.parameters.iter().any(|parameter| !self.parameters.contains(parameter));
         for parameter in other.parameters {
@@ -172,9 +176,13 @@ pub(super) fn value_facts(
 
 impl Engine<'_, '_> {
     pub(super) fn identity(&self, flow: &Flow, value: ValueId) -> Origin {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("metadata::identity");
         flow.identities[value.as_u32() as usize].unwrap_or(Origin::External(value))
     }
     pub(super) fn field(&self, flow: &Flow, value: ValueId, field: FieldRef) -> BTreeSet<Origin> {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("metadata::field");
         let identity = self.identity(flow, value);
         if let Some((refs, _)) = flow.fields.get(&(identity, field.declaration, field.index)) {
             return refs.clone();
@@ -188,6 +196,8 @@ impl Engine<'_, '_> {
         BTreeSet::from([Origin::Projection(root, ProjectionKind::Field(field.declaration, field.index))])
     }
     pub(super) fn possible(&mut self, flow: &Flow, keys: &BTreeSet<Origin>) -> BTreeSet<Origin> {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("metadata::possible");
         let mut possible = BTreeSet::new();
         let mut pending: Vec<_> = keys.iter().copied().collect();
         while let Some(key) = pending.pop() {
@@ -209,6 +219,8 @@ impl Engine<'_, '_> {
         possible
     }
     fn may_alias(&mut self, flow: &Flow, a: Origin, b: Origin) -> bool {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("metadata::may_alias");
         if !self.state.step(1) {
             return true;
         }
@@ -229,6 +241,8 @@ impl Engine<'_, '_> {
             || (external(&left) && external(&right))
     }
     pub(super) fn dependencies(&mut self, flow: &Flow, root: DepExprId) -> BTreeSet<Origin> {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("metadata::dependencies");
         let mut result = BTreeSet::new();
         let mut seen = BTreeSet::new();
         let mut pending = vec![root];
@@ -277,7 +291,9 @@ impl Engine<'_, '_> {
     }
     pub(super) fn selection_terms(
         &mut self, flow: &Flow, root: SelectionId,
-    ) -> Vec<(BTreeSet<Origin>, bool, BTreeSet<ValueId>)> {
+    ) -> Vec<(BTreeSet<Origin>, bool, SharedSet<ValueId>)> {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("metadata::selection_terms");
         let mut terms = Vec::new();
         let mut seen = BTreeSet::new();
         let mut pending = vec![(root, false)];
@@ -298,7 +314,7 @@ impl Engine<'_, '_> {
                         | SelectionExpr::ViewOwner(value) | SelectionExpr::Descriptor { value, .. } => {
                             flow.contained[value.as_u32() as usize].clone()
                         }
-                        _ => BTreeSet::new(),
+                        _ => SharedSet::new(),
                     };
                     terms.push((keys, fresh, labels));
                 }
@@ -308,6 +324,8 @@ impl Engine<'_, '_> {
         terms
     }
     pub(super) fn selection(&mut self, flow: &Flow, root: SelectionId) -> (BTreeSet<Origin>, bool) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("metadata::selection");
         let mut result = BTreeSet::new();
         let mut fresh = false;
         let mut seen = BTreeSet::new();
@@ -353,6 +371,8 @@ impl Engine<'_, '_> {
         (result, fresh)
     }
     pub(super) fn live_use(&mut self, flow: &Flow, value: ValueId) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("metadata::live_use");
         if flow.lifetimes[value.as_u32() as usize] != 1 {
             if flow.tokens[value.as_u32() as usize].cell.is_some() {
                 self.error(R::B73, "Cell publication preserves the stored borrow's owner lifetime");
@@ -364,7 +384,12 @@ impl Engine<'_, '_> {
         }
     }
     pub(super) fn invalidate(&mut self, before: &Flow, flow: &mut Flow, pieces: &[Piece]) {
-        for (value, _) in self.body.values.iter() {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("metadata::invalidate");
+        for value in before.dependency_values() {
+            if !self.scan_work(1) {
+                return;
+            }
             if before.lifetimes[value.as_u32() as usize] == 1 && self.invalidated(before, value, pieces) {
                 flow.lifetimes[value.as_u32() as usize] = 2;
             }
@@ -385,12 +410,16 @@ impl Engine<'_, '_> {
         }
     }
     fn invalidated(&mut self, flow: &Flow, value: ValueId, pieces: &[Piece]) -> bool {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("metadata::invalidated");
         self.keys_invalidated(flow, &flow.full_deps[value.as_u32() as usize],
             &flow.aliases[value.as_u32() as usize], pieces)
     }
     pub(super) fn keys_invalidated(
-        &mut self, flow: &Flow, refs: &BTreeSet<Origin>, aliases: &BTreeSet<ValueId>, pieces: &[Piece],
+        &mut self, flow: &Flow, refs: &BTreeSet<Origin>, aliases: &SharedSet<ValueId>, pieces: &[Piece],
     ) -> bool {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("metadata::keys_invalidated");
         refs.iter().any(|key| {
             pieces.iter().any(|piece| {
                 if !self.state.step(piece.predicates.len().saturating_add(1)) {
@@ -417,6 +446,8 @@ impl Engine<'_, '_> {
         })
     }
     pub(super) fn check_deps(&mut self, flow: &mut Flow, value: ValueId, expected: &BTreeSet<Origin>) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("metadata::check_deps");
         if let Ok(ValueData { facts: ValueFacts::Managed { deps }, .. }) = self.body.values.get(value) {
             let stated = self.dependencies(flow, *deps);
             if !expected.is_subset(&stated) {

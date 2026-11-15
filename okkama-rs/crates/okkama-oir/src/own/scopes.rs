@@ -48,6 +48,7 @@ pub(super) fn inventory(
 ) -> Result<BTreeMap<ScopeId, ScopeFacts>, OwnError> {
     budget.memory(module.scopes.len() * 512)?;
     let mut scopes: BTreeMap<_, _> = module.scopes.iter().map(|(id, _)| (id, ScopeFacts::default())).collect();
+    let entries = entries::entry_sets(module, budget)?;
     for (_, function) in module.functions.iter() {
         let Some(body) = &function.body else {
             continue;
@@ -55,6 +56,14 @@ pub(super) fn inventory(
         let offered = inventory::may_offer(module, function, body, types, external, budget)?;
         let entry = body.blocks.get(body.entry).map_err(arena)?;
         let destroy = function.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Destroy(_)));
+        let function_id = module.scopes.get(entry.lexical_scope).map_err(arena)?.function;
+        if entries.witnesses.contains(&function_id) || entries.callables.contains(&function_id) {
+            scopes.get_mut(&entry.lexical_scope).unwrap().blockers.insert(ElisionBlocker::ExplicitTransport);
+        }
+        if function.summary.and_then(|id| module.summaries.get(id).ok())
+            .is_some_and(|summary| summary.contract.protocol.is_some()) {
+            scopes.get_mut(&entry.lexical_scope).unwrap().blockers.insert(ElisionBlocker::ExplicitTransport);
+        }
         let mut language_index = 0;
         let internal = function.summary.and_then(|id| module.summaries.get(id).ok())
             .is_some_and(|summary| summary.entry_kind == EntryKind::Internal);
@@ -93,6 +102,9 @@ pub(super) fn inventory(
                     | CoreOp::FnBind { .. } | CoreOp::FnBindRole { .. } | CoreOp::AnyBox { .. }
                     | CoreOp::FakeNew { .. }) | Operation::Collection(_) | Operation::Call(_)
                     | Operation::Async(_));
+                if matches!(op, Operation::Call(CallOp::Closure { .. } | CallOp::Role { .. })) {
+                    scopes.get_mut(&block.lexical_scope).unwrap().blockers.insert(ElisionBlocker::ExplicitTransport);
+                }
                 if can_own {
                     let observation = summaries::call(op).is_some_and(|(call, _)| {
                         call.summary.and_then(|id| module.summaries.get(id).ok()).is_some_and(|summary| {
@@ -251,6 +263,43 @@ pub(super) fn inventory(
             let facts = scopes.get_mut(&schedule.owner).unwrap();
             facts.blockers.insert(ElisionBlocker::ServiceDuty);
             facts.service_protocols.insert(schedule.protocol);
+        }
+    }
+    // A retained callee root uses the explicit packet ABI even when its
+    // language result is plain or void. Its caller must consume that output;
+    // the absence of a managed result does not erase the linear packet.
+    loop {
+        let mut changed = false;
+        for (_, function) in module.functions.iter() {
+            let Some(body) = &function.body else {
+                continue;
+            };
+            for (_, block) in body.blocks.iter() {
+                for instruction in &block.insts {
+                    budget.work(1)?;
+                    let op = &body.insts.get(*instruction).map_err(arena)?.op;
+                    let Operation::Call(CallOp::Direct { function: target, .. }) = op else {
+                        continue;
+                    };
+                    let callee = module.functions.get(*target).map_err(arena)?;
+                    let Some(callee_body) = &callee.body else {
+                        continue;
+                    };
+                    if module.entry == Some(*target)
+                        || callee.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Destroy(_))) {
+                        continue;
+                    }
+                    let root = callee_body.blocks.get(callee_body.entry).map_err(arena)?.lexical_scope;
+                    let facts = &scopes[&root];
+                    if !facts.blockers.is_empty() || !facts.potential_owned_types.is_empty() {
+                        changed |= scopes.get_mut(&block.lexical_scope).unwrap().blockers
+                            .insert(ElisionBlocker::ExplicitTransport);
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
         }
     }
     // Until commit 2 partitions packet equations, explicit packet/reserve

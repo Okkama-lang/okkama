@@ -1,0 +1,19 @@
+oir 2 own
+module opaque_plain
+scope S0 action in @f
+summary M0 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[any],
+        publication=atomic)
+summary M1 observation results [result_relation(provenance=unbound_result)] contract call_contract(results=[any],
+        publication=atomic)
+
+func @f() -> any abi observation summary(M1) {
+    boundary B0 lexical in S0
+    dependency d0: dependency = empty
+    ^b0 in S0:
+    br ^b1
+    ^b1 in S0:
+    %0: int = const 7
+    %1: any facts(managed(deps=d0)) = any.box %0, ty any
+    %2: deps = deps.of %1
+    ret %1
+}

@@ -1,7 +1,7 @@
 use super::*;
 use std::path::{Path, PathBuf};
 
-fn fixtures(directory: &str) -> Vec<PathBuf> {
+pub(super) fn fixtures(directory: &str) -> Vec<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/own/tests").join(directory);
     let mut paths: Vec<_> = std::fs::read_dir(root).unwrap().map(|entry| entry.unwrap().path()).collect();
     paths.sort();
@@ -15,7 +15,61 @@ fn rewrite_source(source: &str) -> Result<OwnOutput, String> {
     rewrite_subset(output, &OwnOptions::default()).map_err(|error| format!("rewrite: {error}"))
 }
 
-fn roundtrip(module: &Module) -> Module {
+#[test]
+fn successor_retention_triage() {
+    // Spec §4.1/§6.2 and P1.3 §8 permit the inherited field plus new self.
+    // Keep the B51 limitation reduced for the separate linearity state lane.
+    for (successor, source, golden) in [
+        (true, include_str!("triage-high/successor-retention.oir"),
+            include_str!("triage-goldens/successor-retention.oir")),
+        (false, include_str!("triage-high/field-retention.oir"),
+            include_str!("triage-goldens/field-retention.oir")),
+    ] {
+        crate::verify_high(&crate::text::parse(source).unwrap()).unwrap();
+        let output = rewrite_source(source).unwrap();
+        let expected = crate::text::parse(golden).unwrap();
+        assert!(crate::text::normalized_eq(&output.module, &expected).unwrap());
+        for module in [&output.module, &roundtrip(&output.module), &expected] {
+            if successor {
+                let report = verify_own(module).unwrap_err();
+                assert_eq!(report.failure, VerifyFailure::Rejected);
+                assert_eq!(report.diagnostics.len(), 1);
+                assert_eq!(report.diagnostics[0].rule, RuleId::B51);
+                assert_eq!(report.diagnostics[0].message,
+                    "body exports accepted inputs beyond its declared take retention");
+            } else {
+                verify_own(module).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn managed_call_effects_triage() {
+    // P1.3 §3.4 requires effects from inserted partitions, independently of
+    // the language result type. A managed parameter alone introduces none.
+    let source = include_str!("triage-high/managed-call-effects.oir");
+    crate::verify_high(&crate::text::parse(source).unwrap()).unwrap();
+    let output = rewrite_source(source).unwrap();
+    let expected = crate::text::parse(include_str!("triage-goldens/managed-call-effects.oir")).unwrap();
+    assert!(crate::text::normalized_eq(&output.module, &expected).unwrap());
+    for module in [&output.module, &roundtrip(&output.module), &expected] {
+        verify_own(module).unwrap();
+    }
+    let read = output.module.functions.iter().find(|(_, function)| function.symbol == "read").unwrap().1;
+    let summary = output.module.summaries.get(read.summary.unwrap()).unwrap();
+    assert!(summary.contract.failures.is_empty());
+    let mut understated = output.module;
+    let main = understated.functions.iter().find(|(_, function)| function.symbol == "main").unwrap().1;
+    let summary = understated.summaries.get_mut(main.summary.unwrap()).unwrap();
+    assert_eq!(summary.contract.failures, [FailureKind::Program]);
+    summary.contract.failures.clear();
+    let report = verify_own(&understated).unwrap_err();
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::B51
+        && diagnostic.message == "body exposes a failure kind absent from its declared summary"));
+}
+
+pub(super) fn roundtrip(module: &Module) -> Module {
     let printed = crate::text::print(module).unwrap();
     let parsed = crate::text::parse(&printed).unwrap();
     assert_eq!(crate::text::print(&parsed).unwrap(), printed);
@@ -189,10 +243,10 @@ fn checked_entry_point_certifies_projection_escape() {
     rewrite_synchronous(output, &OwnOptions::default()).unwrap();
 }
 
-struct TrustedNative {
-    name: &'static str,
-    signature: Signature,
-    summary: Summary,
+pub(super) struct TrustedNative {
+    pub(super) name: &'static str,
+    pub(super) signature: Signature,
+    pub(super) summary: Summary,
 }
 impl ExternalContracts for TrustedNative {
     fn native(&self, name: &str) -> Option<&Signature> {
@@ -206,6 +260,9 @@ impl ExternalContracts for TrustedNative {
     }
     fn intrinsic_summary(&self, name: &str) -> Option<&Summary> {
         (name == self.name).then_some(&self.summary)
+    }
+    fn descriptor_cleanup(&self, name: &str) -> Option<&Summary> {
+        (name == "oir.sync_closure.cleanup" && name == self.name).then_some(&self.summary)
     }
 }
 

@@ -21,3 +21,6 @@ sparrow-core = { path = "../sparrow-core" }
 
 [lints]
 workspace = true
+
+[features]
+verifier-differential = ["okkama-oir/verifier-differential"]

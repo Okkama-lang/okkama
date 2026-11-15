@@ -11,6 +11,11 @@ impl Universe {
         let declaration = module.functions.get(function).map_err(arena)?;
         let body = declaration.body.as_ref().unwrap();
         let mut summary = bottom(module, declaration);
+        if module.profile == Profile::High && summary.contract.protocol.is_some() {
+            normal::failures(&mut summary.contract.failures, &[
+                FailureKind::Thrown, FailureKind::Program, FailureKind::Panic, FailureKind::Native,
+            ]);
+        }
         let mut replacements = BTreeMap::new();
         budget.memory(body.values.len() * 256 + (body.insts.len() + body.blocks.len()) * 64)?;
         let mut values = vec![normal::empty_relation(); body.values.len()];
@@ -172,9 +177,14 @@ impl Universe {
         }
         for (site, op) in operations {
             budget.work(1)?;
-            if module.profile == Profile::High && matches!(op,
+            let partitions_inputs = self.call_summary(function, site).is_some_and(|summary| {
+                summary.entry_kind != EntryKind::ObservationAdmissionStaysCaller
+            });
+            // P1.3 §3.4: include failures introduced by elaboration. Offering
+            // managed call inputs emits scope.split even for a scalar result.
+            if module.profile == Profile::High && (partitions_inputs || matches!(op,
                 Operation::Lexical(LexicalOp::Bind { .. } | LexicalOp::Rebind { .. } | LexicalOp::Stage { .. })
-                    | Operation::Exit(ExitOp::Prepare { .. }))
+                    | Operation::Exit(ExitOp::Prepare { .. })))
                 && cfg::operation_uses(op, body).is_ok_and(|uses| uses.iter().any(|operand| {
                     body.values.get(operand.value).is_ok_and(|value| types[&value.ty].may_own())
                 })) {
