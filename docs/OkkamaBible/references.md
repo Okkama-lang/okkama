@@ -69,6 +69,7 @@ bibliographic data were checked are listed.
 - [@hoare1978] C. A. R. Hoare (1978). Communicating Sequential Processes. *Communications of the ACM* 21(8): 666–677. https://doi.org/10.1145/359576.359585
 - [@hoare1981] C. A. R. Hoare (1981). The Emperor's Old Clothes. *Communications of the ACM* 24(2): 75–83. https://doi.org/10.1145/358549.358561
 - [@hoare2009] Tony Hoare (2009). Null References: The Billion Dollar Mistake. Talk at QCon London, March 2009. https://www.infoq.com/presentations/Null-References-The-Billion-Dollar-Mistake-Tony-Hoare/
+- [@hsexception] The GHC Team (2026). Control.Exception. *base library documentation*. https://hackage.haskell.org/package/base/docs/Control-Exception.html {label: Haskell base library}
 - [@hyperspec] Kent M. Pitman (1996). *Common Lisp HyperSpec*, Chapter 9: Conditions. Harlequin; now LispWorks. https://www.lispworks.com/documentation/HyperSpec/Body/09_.htm
 - [@ieee754] IEEE (2019). *IEEE Standard for Floating-Point Arithmetic* (IEEE Std 754-2019). https://doi.org/10.1109/IEEESTD.2019.8766229 {label: IEEE 754}
 - [@javalist] Oracle (2023). Interface List<E>. *Java SE 21 API Specification*. https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/List.html {label: Java SE 21 API}
@@ -78,6 +79,7 @@ bibliographic data were checked are listed.
 - [@jep411] OpenJDK (2021). JEP 411: Deprecate the Security Manager for Removal. https://openjdk.org/jeps/411
 - [@jep421] Brent Christian (2021). JEP 421: Deprecate Finalization for Removal. OpenJDK. https://openjdk.org/jeps/421
 - [@jep441] Gavin Bierman (2023). JEP 441: Pattern Matching for switch. OpenJDK. https://openjdk.org/jeps/441
+- [@jep444] Ron Pressler, Alan Bateman (2023). JEP 444: Virtual Threads. OpenJDK. https://openjdk.org/jeps/444 {label: JEP 444}
 - [@jep453] OpenJDK (2023). JEP 453: Structured Concurrency (Preview). https://openjdk.org/jeps/453
 - [@jones2023] Richard Jones, Antony Hosking, Eliot Moss (2023). *The Garbage Collection Handbook: The Art of Automatic Memory Management*, 2nd edition. CRC Press.
 - [@junit5] The JUnit Team (2026). *JUnit User Guide*. https://docs.junit.org/current/user-guide/ {label: JUnit User Guide}
@@ -92,8 +94,12 @@ bibliographic data were checked are listed.
 - [@knuth1974] Donald E. Knuth (1974). Structured Programming with go to Statements. *ACM Computing Surveys* 6(4): 261–301. https://doi.org/10.1145/356635.356640
 - [@knuth1997] Donald E. Knuth (1997). *The Art of Computer Programming, Volume 2: Seminumerical Algorithms*, 3rd edition. Addison-Wesley.
 - [@koenig1995] Andrew Koenig (1995). Patterns and Antipatterns. *Journal of Object-Oriented Programming* 8(1): 46–48.
+- [@kotlincoroutines] JetBrains (2026). Coroutines basics: coroutine scope and structured concurrency. *Kotlin documentation*. https://kotlinlang.org/docs/coroutines-basics.html {label: Kotlin documentation}
 - [@kotlindata] JetBrains (2024). Data classes. *Kotlin documentation*. https://kotlinlang.org/docs/data-classes.html {label: Kotlin documentation}
+- [@kotlinexceptions] JetBrains (2026). Exceptions. *Kotlin documentation*. https://kotlinlang.org/docs/exceptions.html {label: Kotlin documentation}
+- [@kotlininheritance] JetBrains (2026). Inheritance. *Kotlin documentation*. https://kotlinlang.org/docs/inheritance.html {label: Kotlin documentation}
 - [@kotlinspec] JetBrains (2024). *Kotlin Language Specification*, chapter Type System: Nullable Types. https://kotlinlang.org/spec/type-system.html {label: Kotlin specification}
+- [@kotlinuse] JetBrains (2026). use. *Kotlin standard library API*. https://kotlinlang.org/api/core/kotlin-stdlib/kotlin.io/use.html {label: Kotlin standard library}
 - [@landin1964] Peter J. Landin (1964). The Mechanical Evaluation of Expressions. *The Computer Journal* 6(4): 308–320. https://doi.org/10.1093/comjnl/6.4.308
 - [@landin1966] P. J. Landin (1966). The Next 700 Programming Languages. *Communications of the ACM* 9(3): 157–166. https://doi.org/10.1145/365230.365257
 - [@langley2014] Adam Langley (2014). Apple's SSL/TLS bug. *ImperialViolet*, 22 February 2014. https://www.imperialviolet.org/2014/02/22/applebug.html
@@ -125,6 +131,10 @@ bibliographic data were checked are listed.
 - [@norvig1996] Peter Norvig (1996). Design Patterns in Dynamic Programming. Presentation at Object World, Boston, May 1996. https://norvig.com/design-patterns/
 - [@nygaard1978] Kristen Nygaard, Ole-Johan Dahl (1978). The Development of the SIMULA Languages. *ACM SIGPLAN Notices* 13(8): 245–272 (HOPL I). https://doi.org/10.1145/960118.808391
 - [@nystrom2015] Bob Nystrom (2015). What Color is Your Function? Blog post, 1 February 2015. https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/
+- [@ocamlfun] The OCaml Development Team (2024). Module Fun. *The OCaml Manual*, version 5.2. https://ocaml.org/manual/5.2/api/Fun.html {label: OCaml Manual}
+- [@ocamlint] The OCaml Development Team (2024). Module Int. *The OCaml Manual*, version 5.2. https://ocaml.org/manual/5.2/api/Int.html {label: OCaml Manual}
+- [@ocamlmanual] The OCaml Development Team (2024). *The OCaml Manual*, version 5.2. https://ocaml.org/manual/5.2/index.html {label: OCaml Manual}
+- [@ocamlparallel] The OCaml Development Team (2024). Parallel programming. *The OCaml Manual*, version 5.2. https://ocaml.org/manual/5.2/parallelism.html {label: OCaml Manual}
 - [@okasaki1998] Chris Okasaki (1998). *Purely Functional Data Structures*. Cambridge University Press. https://doi.org/10.1017/CBO9780511530104
 - [@ousterhout2018] John Ousterhout (2018). *A Philosophy of Software Design*. Yaknyam Press.
 - [@parnas1972] David L. Parnas (1972). On the Criteria To Be Used in Decomposing Systems into Modules. *Communications of the ACM* 15(12): 1053–1058. https://doi.org/10.1145/361598.361623

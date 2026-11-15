@@ -340,6 +340,15 @@
   - [26.11 A refactoring, step by step](#2611-a-refactoring-step-by-step)
   - [26.12 The classic catalogue, read in Okkama](#2612-the-classic-catalogue-read-in-okkama)
   - [26.13 What the patterns cost](#2613-what-the-patterns-cost)
+- [Chapter 27. Okkama Among Languages](#chapter-27-okkama-among-languages)
+  - [27.1 The rules side by side](#271-the-rules-side-by-side)
+  - [27.2 Java](#272-java)
+  - [27.3 Kotlin](#273-kotlin)
+  - [27.4 Go](#274-go)
+  - [27.5 Rust](#275-rust)
+  - [27.6 Haskell](#276-haskell)
+  - [27.7 OCaml](#277-ocaml)
+  - [27.8 What the comparison shows](#278-what-the-comparison-shows)
 - [Chapter 28. Weaknesses, Open Problems and the Road Ahead](#chapter-28-weaknesses-open-problems-and-the-road-ahead)
   - [28.1 Closed while this book was written](#281-closed-while-this-book-was-written)
   - [28.2 Missing from the language](#282-missing-from-the-language)
@@ -19852,6 +19861,171 @@ counter between objects other than an `Atomic` or an owning task, and no way
 to write the small mutable helper object other languages reach for. Those
 limits are deliberate, and Chapter 28 discusses the ones that are not.
 
+# Chapter 27. Okkama Among Languages
+
+The earlier chapters compared Okkama with other languages one construct at a
+time: numbers in Chapter 5, types in Chapter 4, collections in Chapter 8,
+roles in Chapter 14, tests in Chapter 15. This chapter turns the comparison
+around. It takes six languages that a reader of this book is likely to know,
+Java, Kotlin, Go, Rust, Haskell and OCaml, and asks of each the same
+questions the manifesto answered for Okkama (Chapter 3).
+
+A comparison of languages is easy to make unfair. Each of these languages
+was designed for a purpose, by people who weighed the same trade-offs and
+chose differently, and each has decades of programs behind it that Okkama
+does not. The aim here is not a ranking. It is to show where Okkama's
+choices sit among choices that working languages have made, so that a
+reader who knows one of them can see what is familiar, what is different,
+and what is missing.
+
+## 27.1 The rules side by side
+
+| | Java | Kotlin | Go | Rust | Haskell | OCaml | Okkama |
+|---|---|---|---|---|---|---|---|
+| Absence | `null` in every reference type [[Gosling 2023](#ref-gosling2023)] | nullable types `T?`, checked [[Kotlin specification](#ref-kotlinspec)] | `nil` for pointers, interfaces, maps, slices [[Go specification](#ref-gospec)] | `Option` [[Klabnik 2023](#ref-klabnik2023)] | `Maybe` [[Haskell 2010](#ref-haskell2010)] | `option` [[OCaml Manual](#ref-ocamlmanual)] | `Maybe` (Chapter 7) |
+| Change | mutable fields; immutable records | `val`/`var`; `copy` on data classes [[Kotlin documentation](#ref-kotlindata)] | mutable | immutable bindings, `mut` | immutable; `IORef`, `ST` | immutable bindings; mutable fields and `ref` | successors; `Cell` in synchronous code (Chapter 13) |
+| Implementation inheritance | classes, single | classes, final unless `open` [[Kotlin documentation](#ref-kotlininheritance)] | none; embedding | none | none | classes, rarely used | none (Chapter 2) |
+| Contracts | interfaces, with default methods | interfaces | interfaces, structural | traits | type classes | module signatures | roles, nominal, no bodies (Chapter 14) |
+| Failures | checked and unchecked exceptions | unchecked exceptions [[Kotlin documentation](#ref-kotlinexceptions)] | error values, `panic` | `Result`, `panic` | `Maybe`, `Either`; exceptions in `IO` | exceptions, `result` | typed errors and panics (Chapter 10) |
+| Resource release | `try`-with-resources | `use` [[Kotlin standard library](#ref-kotlinuse)] | `defer` | `Drop` | `bracket` [[Haskell base library](#ref-hsexception)] | `Fun.protect` [[OCaml Manual](#ref-ocamlfun)] | `destroy`, `defer` (Chapter 11) |
+| Integers | fixed width, wrap | fixed width, wrap | fixed width, wrap | panic in debug builds, wrap in release | `Int` bounded, `Integer` unbounded | fixed width, wrap [[OCaml Manual](#ref-ocamlint)] | unbounded (Chapter 5) |
+| Concurrency | threads; virtual threads [[JEP 444](#ref-jep444)]; structured concurrency in preview [[OpenJDK 2023](#ref-jep453)] | coroutines, structured [[Kotlin documentation](#ref-kotlincoroutines)] | goroutines and channels | threads; `async` with library runtimes | green threads, STM | domains [[OCaml Manual](#ref-ocamlparallel)] and libraries | structured async, process workers (Chapter 20) |
+
+Read across a row and Okkama is rarely alone. Rust, Haskell and OCaml share
+its answer to absence; Go, Rust and Haskell share its refusal of
+implementation inheritance; Haskell's `Integer`, the type its integer
+literals default to, is unbounded like Okkama's `int`. Read down a column and the picture changes: no other language in
+the table gives all of Okkama's answers at once, and that is the design's
+one new idea (Section 1.10).
+
+## 27.2 Java
+
+Java is the language Okkama argues with most, because *Elegant Objects*,
+the discipline Okkama turns into rules, was written for Java programmers
+(Section 2.7). Almost every Okkama rule is something a Java team can adopt
+by convention: final fields, no setters, no `null`, composition instead of
+`extends`, small interfaces with fakes. What Java cannot give is the
+guarantee. A convention holds as long as every reviewer catches every
+exception to it; in Okkama the compiler does.
+
+Java answers some of the same problems with newer features. Records are
+immutable carriers of data [[Gosling 2023](#ref-gosling2023)], close to what Section 28.4 calls
+a shorthand for data objects. Virtual threads make blocking code cheap
+[[JEP 444](#ref-jep444)], and structured concurrency, still a preview in Java 21, gives
+tasks a parent scope that waits for them [[OpenJDK 2023](#ref-jep453)]. Java keeps `null`,
+checked exceptions and class inheritance, and for a language with Java's
+installed base, removing them is not an option. Okkama had no installed
+base, which is the only reason it could start where Java's best practice
+ends.
+
+## 27.3 Kotlin
+
+Kotlin took Java's runtime and changed its defaults: classes are final
+unless declared `open` [[Kotlin documentation](#ref-kotlininheritance)], nullability is part of a type
+and checked by the compiler [[Kotlin specification](#ref-kotlinspec)], data classes come with
+`copy` [[Kotlin documentation](#ref-kotlindata)], and all exceptions are unchecked
+[[Kotlin documentation](#ref-kotlinexceptions)]. Its coroutines are structured: a coroutine belongs to
+a scope that does not complete until its children do [[Kotlin documentation](#ref-kotlincoroutines)],
+which is the model of Chapter 20.
+
+The difference from Okkama is one of degree. Kotlin makes the safer choice
+the easier one, and keeps the other within reach: `var`, `open`, `!!` and
+platform types from Java are all available when a programmer wants them.
+Okkama removes the other choice. A Kotlin team can write Okkama-style code;
+an Okkama program cannot be written any other way.
+
+## 27.4 Go
+
+Go and Okkama agree on more than their surfaces suggest. Neither has
+classes or inheritance, both treat errors as values that a function hands
+back rather than throws past its caller, both release resources with
+`defer` [[Go specification](#ref-gospec)], and both keep the language small. The
+disagreements are just as basic. Go's interfaces are structural, satisfied
+by any type with the right methods; Okkama's roles are declared (Section
+14.2). Go's values are mutable and its `nil` reaches pointers, interfaces,
+maps and slices. And Go's `go` statement starts a goroutine that nothing
+waits for, the unstructured concurrency that Chapter 20 argues against.
+
+Go chose simplicity of the language and left discipline to the programmer
+and to tools such as linters. Okkama chose simplicity of the *program*: a
+smaller set of things that can go wrong, bought with a stricter language.
+
+## 27.5 Rust
+
+Rust is the closest relative in purpose. It has no `null`, no inheritance,
+values immutable unless declared `mut`, errors as `Result`, and resources
+released by `Drop` when their owner goes out of scope
+[[Klabnik 2023](#ref-klabnik2023)]. Its traits are nominal contracts, like roles, though they
+may carry default methods. Where Rust differs is in what it asks of the
+programmer to get there. Ownership and borrowing are checked at compile
+time and written in the program: lifetimes, `&` and `&mut`, moves. The
+reward is memory safety without a garbage collector and control over every
+allocation.
+
+Okkama makes a different trade. Its memory is managed automatically, and
+deterministic destruction is reserved for resources (Section 11.1), so most
+programs never mention ownership, and a resource is released by the scope
+that made it without annotations. Rust also overflows: integer arithmetic
+panics in debug builds and wraps in release builds [[Klabnik 2023](#ref-klabnik2023)], where
+Okkama's integers grow (Chapter 5). A program that needs Rust's control of
+memory should be written in Rust.
+
+## 27.6 Haskell
+
+Haskell is the purest language in the table: values never change, effects
+are confined to types such as `IO`, absence is `Maybe`, and contracts are
+type classes [[Haskell 2010](#ref-haskell2010)]. Much of Okkama's vocabulary comes from this
+line, through ML: enums with payloads and `match` (Chapter 16), `Maybe`,
+roles that resemble type classes with declared instances (Section 14.9).
+
+Two differences matter. Haskell infers types across a whole program, while
+Okkama infers only inside bodies and asks for every declaration to be
+annotated (Section 4.5). And Haskell is lazy by default: an expression is
+evaluated when its value is needed, which makes some programs elegant and
+the cost and the order of evaluation harder to see. Okkama is strict, and
+its order of evaluation is fixed and written down (Section 9.7). Haskell's
+purity is enforced by types; Okkama's immutability is enforced by the
+absence of assignment, and its effects are ordinary calls on objects that
+carry the authority for them (Chapter 21).
+
+## 27.7 OCaml
+
+OCaml is ML with objects and an industrial track record. Bindings are
+immutable, absence is `option`, failures are exceptions or `result`, and
+modules with signatures and functors are its main tool for abstraction
+[[OCaml Manual](#ref-ocamlmanual)]. It also has a class system with inheritance, which most
+OCaml code does not use, and mutable record fields and references when a
+program wants them. Its integers have a fixed width and wrap on overflow
+[[OCaml Manual](#ref-ocamlint)]. Since OCaml 5, domains run in parallel on several cores
+[[OCaml Manual](#ref-ocamlparallel)].
+
+OCaml shows that an expression-oriented, immutable-by-default language with
+algebraic data types can be fast and practical. It keeps the escape
+hatches, mutable fields and classes, that Okkama removed, and it has the
+recursive variants and nested patterns that Okkama does not have yet
+(Section 28.2).
+
+## 27.8 What the comparison shows
+
+Three things stand out.
+
+- **Okkama's rules are not new.** Each comes from a language in this table
+  or from the literature behind it. What is new is that all of them hold at
+  once, in one language, by rule rather than by convention.
+- **The other languages keep exits.** Kotlin's `var`, Rust's `unsafe`
+  [[Klabnik 2023](#ref-klabnik2023)],
+  OCaml's mutable fields, Java's `null`: each language with a safer default
+  also keeps the less safe choice for the programs that need it. Okkama
+  has fewer exits: `Cell` for synchronous code, `Atomic` for state shared
+  between tasks, and natives for the host. A program that needs another one
+  is a program Okkama does not serve well, and Chapter 28 lists where that
+  shows.
+- **Maturity is the largest difference.** Every language in the table has
+  libraries, tools, books and production systems built over years or
+  decades. Okkama has a conformance suite, a standard library being
+  rewritten, and this book. A comparison of designs is only half of a
+  comparison of languages.
+
 # Chapter 28. Weaknesses, Open Problems and the Road Ahead
 
 Every chapter of this book ends by counting what its design costs and what
@@ -20111,6 +20285,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-griesemer2020"></a>Robert Griesemer, Raymond Hu, Wen Kokke, Julien Lange, Ian Lance Taylor, Bernardo Toninho, Philip Wadler, Nobuko Yoshida (2020). Featherweight Go. *Proceedings of the ACM on Programming Languages* 4(OOPSLA): 149:1–149:29. https://doi.org/10.1145/3428217
 - <a id="ref-grigore2017"></a>Radu Grigore (2017). Java Generics are Turing Complete. In *Proceedings of POPL 2017*: 73–85. ACM. https://doi.org/10.1145/3009837.3009871
 - <a id="ref-haskell2010"></a>Simon Marlow (ed.) (2010). *Haskell 2010 Language Report*. https://www.haskell.org/onlinereport/haskell2010/
+- <a id="ref-hsexception"></a>The GHC Team (2026). Control.Exception. *base library documentation*. https://hackage.haskell.org/package/base/docs/Control-Exception.html
 - <a id="ref-hewitt1973"></a>Carl Hewitt, Peter Bishop, Richard Steiger (1973). A Universal Modular ACTOR Formalism for Artificial Intelligence. In *Proceedings of the 3rd International Joint Conference on Artificial Intelligence (IJCAI '73)*, 235–245.
 - <a id="ref-hickey2008"></a>Rich Hickey (2008). The Clojure Programming Language. In *Proceedings of the 2008 Symposium on Dynamic Languages (DLS '08)*. ACM. https://doi.org/10.1145/1408681.1408682
 - <a id="ref-hickey2011"></a>Rich Hickey (2011). Simple Made Easy. Talk at Strange Loop, 20 September 2011. https://www.infoq.com/presentations/Simple-Made-Easy/
@@ -20121,6 +20296,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-wasi"></a>WebAssembly System Interface (WASI): capability-based access, pre-opened directories. https://wasi.dev/
 - <a id="ref-javalist"></a>Oracle (2023). Interface List<E>. *Java SE 21 API Specification*. https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/List.html
 - <a id="ref-javastream"></a>Oracle (2023). Package java.util.stream. *Java SE 21 API Specification*. https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/stream/package-summary.html
+- <a id="ref-jep444"></a>Ron Pressler, Alan Bateman (2023). JEP 444: Virtual Threads. OpenJDK. https://openjdk.org/jeps/444
 - <a id="ref-jones2023"></a>Richard Jones, Antony Hosking, Eliot Moss (2023). *The Garbage Collection Handbook: The Art of Automatic Memory Management*, 2nd edition. CRC Press.
 - <a id="ref-baker1977"></a>Henry C. Baker Jr. and Carl Hewitt (1977). The Incremental Garbage Collection of Processes. MIT AI Laboratory Working Paper 149; also in *Proceedings of the Symposium on Artificial Intelligence and Programming Languages*, Rochester, NY. https://hdl.handle.net/1721.1/41969
 - <a id="ref-halstead1985"></a>Robert H. Halstead Jr. (1985). MULTILISP: A Language for Concurrent Symbolic Computation. *ACM Transactions on Programming Languages and Systems* 7(4): 501–538. https://doi.org/10.1145/4472.4478
@@ -20136,8 +20312,12 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-knuth1974"></a>Donald E. Knuth (1974). Structured Programming with go to Statements. *ACM Computing Surveys* 6(4): 261–301. https://doi.org/10.1145/356635.356640
 - <a id="ref-knuth1997"></a>Donald E. Knuth (1997). *The Art of Computer Programming, Volume 2: Seminumerical Algorithms*, 3rd edition. Addison-Wesley.
 - <a id="ref-koenig1995"></a>Andrew Koenig (1995). Patterns and Antipatterns. *Journal of Object-Oriented Programming* 8(1): 46–48.
+- <a id="ref-kotlincoroutines"></a>JetBrains (2026). Coroutines basics: coroutine scope and structured concurrency. *Kotlin documentation*. https://kotlinlang.org/docs/coroutines-basics.html
 - <a id="ref-kotlindata"></a>JetBrains (2024). Data classes. *Kotlin documentation*. https://kotlinlang.org/docs/data-classes.html
+- <a id="ref-kotlinexceptions"></a>JetBrains (2026). Exceptions. *Kotlin documentation*. https://kotlinlang.org/docs/exceptions.html
+- <a id="ref-kotlininheritance"></a>JetBrains (2026). Inheritance. *Kotlin documentation*. https://kotlinlang.org/docs/inheritance.html
 - <a id="ref-kotlinspec"></a>JetBrains (2024). *Kotlin Language Specification*, chapter Type System: Nullable Types. https://kotlinlang.org/spec/type-system.html
+- <a id="ref-kotlinuse"></a>JetBrains (2026). use. *Kotlin standard library API*. https://kotlinlang.org/api/core/kotlin-stdlib/kotlin.io/use.html
 - <a id="ref-landin1964"></a>Peter J. Landin (1964). The Mechanical Evaluation of Expressions. *The Computer Journal* 6(4): 308–320. https://doi.org/10.1093/comjnl/6.4.308
 - <a id="ref-landin1966"></a>P. J. Landin (1966). The Next 700 Programming Languages. *Communications of the ACM* 9(3): 157–166. https://doi.org/10.1145/365230.365257
 - <a id="ref-langley2014"></a>Adam Langley (2014). Apple's SSL/TLS bug. *ImperialViolet*, 22 February 2014. https://www.imperialviolet.org/2014/02/22/applebug.html
@@ -20165,6 +20345,10 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-norvig1996"></a>Peter Norvig (1996). Design Patterns in Dynamic Programming. Presentation at Object World, Boston, May 1996. https://norvig.com/design-patterns/
 - <a id="ref-nygaard1978"></a>Kristen Nygaard, Ole-Johan Dahl (1978). The Development of the SIMULA Languages. *ACM SIGPLAN Notices* 13(8): 245–272 (HOPL I). https://doi.org/10.1145/960118.808391
 - <a id="ref-nystrom2015"></a>Bob Nystrom (2015). What Color is Your Function? Blog post, 1 February 2015. https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/
+- <a id="ref-ocamlfun"></a>The OCaml Development Team (2024). Module Fun. *The OCaml Manual*, version 5.2. https://ocaml.org/manual/5.2/api/Fun.html
+- <a id="ref-ocamlint"></a>The OCaml Development Team (2024). Module Int. *The OCaml Manual*, version 5.2. https://ocaml.org/manual/5.2/api/Int.html
+- <a id="ref-ocamlmanual"></a>The OCaml Development Team (2024). *The OCaml Manual*, version 5.2. https://ocaml.org/manual/5.2/index.html
+- <a id="ref-ocamlparallel"></a>The OCaml Development Team (2024). Parallel programming. *The OCaml Manual*, version 5.2. https://ocaml.org/manual/5.2/parallelism.html
 - <a id="ref-okasaki1998"></a>Chris Okasaki (1998). *Purely Functional Data Structures*. Cambridge University Press. https://doi.org/10.1017/CBO9780511530104
 - <a id="ref-jep411"></a>OpenJDK (2021). JEP 411: Deprecate the Security Manager for Removal. https://openjdk.org/jeps/411
 - <a id="ref-jep453"></a>OpenJDK (2023). JEP 453: Structured Concurrency (Preview). https://openjdk.org/jeps/453

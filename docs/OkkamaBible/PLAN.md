@@ -170,7 +170,10 @@ language.
   questions (data-object shorthand, narrowing `any`, a non-finite type,
   `Maybe` combinators, errors in signatures, #148, generic actions), costs
   accepted on purpose. Stale passages fixed: #214 and #233 (ch. 4, 8),
-  BigInt after #189 (ch. 5). Still unwritten: chapters 23 and 27.
+  BigInt after #189 (ch. 5). Chapter 27 first version (4.0 pages EN): a
+  matrix of the rules across Java, Kotlin, Go, Rust, Haskell, OCaml and
+  Okkama, one section per language, what the comparison shows. Still
+  unwritten: chapter 23 (cost model, after Champ is production-ready).
 - Editorial pass (2026-11-14): applied “The language, not its organs” to
   all 21 remaining existing chapter pairs (1–19, 21–22); Chapter 20 was
   used as the reference and left unchanged. Removed and rewritten source

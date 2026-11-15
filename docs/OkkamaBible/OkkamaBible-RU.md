@@ -340,6 +340,15 @@
   - [26.11 Рефакторинг шаг за шагом](#2611-рефакторинг-шаг-за-шагом)
   - [26.12 Классический каталог, прочитанный в Okkama](#2612-классический-каталог-прочитанный-в-okkama)
   - [26.13 Чего стоят паттерны](#2613-чего-стоят-паттерны)
+- [Глава 27. Okkama среди языков](#глава-27-okkama-среди-языков)
+  - [27.1 Правила рядом](#271-правила-рядом)
+  - [27.2 Java](#272-java)
+  - [27.3 Kotlin](#273-kotlin)
+  - [27.4 Go](#274-go)
+  - [27.5 Rust](#275-rust)
+  - [27.6 Haskell](#276-haskell)
+  - [27.7 OCaml](#277-ocaml)
+  - [27.8 Что показывает сравнение](#278-что-показывает-сравнение)
 - [Глава 28. Слабости, открытые проблемы и путь вперёд](#глава-28-слабости-открытые-проблемы-и-путь-вперёд)
   - [28.1 Закрыто, пока писалась книга](#281-закрыто-пока-писалась-книга)
   - [28.2 Чего нет в языке](#282-чего-нет-в-языке)
@@ -20069,6 +20078,167 @@ main() is int {
 написать нельзя вовсе. Эти ограничения намеренны; глава 28 обсуждает те,
 что ненамеренны.
 
+# Глава 27. Okkama среди языков
+
+Предыдущие главы сравнивали Okkama с другими языками по одной конструкции:
+числа в главе 5, типы в главе 4, коллекции в главе 8, роли в главе 14,
+тесты в главе 15. Эта глава поворачивает сравнение. Она берёт шесть языков,
+которые читатель этой книги, скорее всего, знает, — Java, Kotlin, Go, Rust,
+Haskell и OCaml — и задаёт каждому те же вопросы, на которые манифест
+ответил за Okkama (глава 3).
+
+Сравнение языков легко сделать нечестным. Каждый из этих языков создан для
+своей цели людьми, которые взвешивали те же компромиссы и выбрали иначе, и
+за каждым десятилетия программ, которых у Okkama нет. Цель здесь — не
+рейтинг. Она в том, чтобы показать, где выбор Okkama стоит среди решений,
+принятых работающими языками, чтобы читатель, знающий один из них, увидел,
+что знакомо, что иначе и чего недостаёт.
+
+## 27.1 Правила рядом
+
+| | Java | Kotlin | Go | Rust | Haskell | OCaml | Okkama |
+|---|---|---|---|---|---|---|---|
+| Отсутствие | `null` в любом ссылочном типе [[Gosling 2023](#ref-gosling2023)] | nullable-типы `T?`, проверяемые [[Kotlin specification](#ref-kotlinspec)] | `nil` у указателей, интерфейсов, словарей, срезов [[Go specification](#ref-gospec)] | `Option` [[Klabnik 2023](#ref-klabnik2023)] | `Maybe` [[Haskell 2010](#ref-haskell2010)] | `option` [[OCaml Manual](#ref-ocamlmanual)] | `Maybe` (глава 7) |
+| Изменение | изменяемые поля; неизменяемые records | `val`/`var`; `copy` у data-классов [[Kotlin documentation](#ref-kotlindata)] | изменяемо | неизменяемые привязки, `mut` | неизменяемо; `IORef`, `ST` | неизменяемые привязки; изменяемые поля и `ref` | преемники; `Cell` в синхронном коде (глава 13) |
+| Наследование реализации | классы, одиночное | классы, final, если не `open` [[Kotlin documentation](#ref-kotlininheritance)] | нет; встраивание | нет | нет | классы, редко используемые | нет (глава 2) |
+| Контракты | интерфейсы с методами по умолчанию | интерфейсы | интерфейсы, структурные | трейты | классы типов | сигнатуры модулей | роли, номинальные, без тел (глава 14) |
+| Отказы | проверяемые и непроверяемые исключения | непроверяемые исключения [[Kotlin documentation](#ref-kotlinexceptions)] | значения-ошибки, `panic` | `Result`, `panic` | `Maybe`, `Either`; исключения в `IO` | исключения, `result` | типизированные ошибки и паники (глава 10) |
+| Освобождение ресурсов | `try`-with-resources | `use` [[Kotlin standard library](#ref-kotlinuse)] | `defer` | `Drop` | `bracket` [[Haskell base library](#ref-hsexception)] | `Fun.protect` [[OCaml Manual](#ref-ocamlfun)] | `destroy`, `defer` (глава 11) |
+| Целые | фиксированная ширина, заворачиваются | фиксированная ширина, заворачиваются | фиксированная ширина, заворачиваются | паника в отладочной сборке, заворот в выпускной | `Int` ограничен, `Integer` нет | фиксированная ширина, заворачиваются [[OCaml Manual](#ref-ocamlint)] | неограниченные (глава 5) |
+| Конкурентность | потоки; виртуальные потоки [[JEP 444](#ref-jep444)]; структурная конкурентность в preview [[OpenJDK 2023](#ref-jep453)] | корутины, структурные [[Kotlin documentation](#ref-kotlincoroutines)] | горутины и каналы | потоки; `async` с библиотечными средами | зелёные потоки, STM | домены [[OCaml Manual](#ref-ocamlparallel)] и библиотеки | структурный async, процессы-исполнители (глава 20) |
+
+Если читать строку, Okkama редко одинока. Rust, Haskell и OCaml разделяют
+её ответ на отсутствие; Go, Rust и Haskell — её отказ от наследования
+реализации; `Integer` в Haskell, к которому по умолчанию сводятся целые
+литералы, неограничен, как `int` в Okkama. Если читать столбец, картина
+меняется: ни один другой язык таблицы не даёт все ответы Okkama сразу, и
+это единственная новая идея замысла (раздел 1.10).
+
+## 27.2 Java
+
+С Java Okkama спорит больше всего, потому что *Elegant Objects* —
+дисциплина, которую Okkama превращает в правила, — написана для
+программистов на Java (раздел 2.7). Почти каждое правило Okkama команда на
+Java может принять соглашением: final-поля, никаких сеттеров, никакого
+`null`, композиция вместо `extends`, маленькие интерфейсы с фейками. Чего
+Java дать не может, так это гарантии. Соглашение держится, пока каждый
+рецензент ловит каждое исключение из него; в Okkama это делает компилятор.
+
+На часть тех же задач Java отвечает новыми возможностями. Records —
+неизменяемые носители данных [[Gosling 2023](#ref-gosling2023)], близкие к тому, что раздел 28.4
+называет сокращением для объектов-данных. Виртуальные потоки делают
+блокирующий код дешёвым [[JEP 444](#ref-jep444)], а структурная конкурентность, в Java 21
+ещё preview, даёт задачам родительскую область, которая их ждёт [[OpenJDK 2023](#ref-jep453)].
+Java сохраняет `null`, проверяемые исключения и наследование классов, и для
+языка с такой базой установленного кода убрать их невозможно. У Okkama
+такой базы не было — только поэтому она и смогла начать там, где кончается
+лучшая практика Java.
+
+## 27.3 Kotlin
+
+Kotlin взял среду выполнения Java и поменял умолчания: классы final, пока
+не объявлены `open` [[Kotlin documentation](#ref-kotlininheritance)], допустимость `null` — часть типа
+и проверяется компилятором [[Kotlin specification](#ref-kotlinspec)], data-классы приходят с `copy`
+[[Kotlin documentation](#ref-kotlindata)], а все исключения непроверяемые [[Kotlin documentation](#ref-kotlinexceptions)]. Его
+корутины структурны: корутина принадлежит области, которая не завершается,
+пока не завершатся её дети [[Kotlin documentation](#ref-kotlincoroutines)], — это модель главы 20.
+
+Отличие от Okkama — в степени. Kotlin делает безопасный выбор лёгким и
+оставляет другой под рукой: `var`, `open`, `!!` и платформенные типы из Java
+доступны, когда программисту они нужны. Okkama другой выбор убирает.
+Команда на Kotlin может писать в стиле Okkama; программу на Okkama иначе не
+напишешь.
+
+## 27.4 Go
+
+Go и Okkama согласны в большем, чем кажется по поверхности. Ни там, ни там
+нет классов и наследования, оба считают ошибки значениями, которые функция
+возвращает, а не бросает мимо вызывающего, оба освобождают ресурсы через
+`defer` [[Go specification](#ref-gospec)], и оба держат язык маленьким. Расхождения столь же
+коренные. Интерфейсы Go структурны, им удовлетворяет любой тип с нужными
+методами; роли Okkama объявляются (раздел 14.2). Значения Go изменяемы, а
+его `nil` достаёт до указателей, интерфейсов, словарей и срезов. И
+инструкция `go` запускает горутину, которую никто не ждёт, —
+неструктурная конкурентность, против которой выступает глава 20.
+
+Go выбрал простоту языка и оставил дисциплину программисту и инструментам
+вроде линтеров. Okkama выбрала простоту *программы*: меньший набор того,
+что может пойти не так, купленный более строгим языком.
+
+## 27.5 Rust
+
+Rust — ближайший родственник по цели. В нём нет `null`, нет наследования,
+значения неизменяемы, пока не объявлены `mut`, ошибки — `Result`, а ресурсы
+освобождаются через `Drop`, когда их владелец выходит из области
+[[Klabnik 2023](#ref-klabnik2023)]. Его трейты — номинальные контракты, как роли, хотя могут
+нести методы по умолчанию. Rust отличается тем, чего он требует от
+программиста, чтобы туда прийти. Владение и заимствование проверяются при
+компиляции и записываются в программе: времена жизни, `&` и `&mut`,
+перемещения. Награда — безопасность памяти без сборщика мусора и контроль
+над каждым выделением.
+
+Okkama заключает другую сделку. Её памятью управляют автоматически, а
+детерминированное уничтожение оставлено ресурсам (раздел 11.1), так что
+большинство программ о владении не говорит вовсе, а ресурс освобождается
+областью, которая его создала, без аннотаций. В Rust целые ещё и
+переполняются: арифметика паникует в отладочной сборке и заворачивается в
+выпускной [[Klabnik 2023](#ref-klabnik2023)], тогда как целые Okkama растут (глава 5).
+Программу, которой нужен контроль Rust над памятью, следует писать на Rust.
+
+## 27.6 Haskell
+
+Haskell — самый чистый язык таблицы: значения никогда не меняются, эффекты
+заключены в типы вроде `IO`, отсутствие — `Maybe`, контракты — классы типов
+[[Haskell 2010](#ref-haskell2010)]. Многое в словаре Okkama пришло из этой линии через ML:
+перечисления с полезной нагрузкой и `match` (глава 16), `Maybe`, роли,
+похожие на классы типов с объявленными экземплярами (раздел 14.9).
+
+Важны два отличия. Haskell выводит типы по всей программе, а Okkama —
+только внутри тел и требует аннотировать каждое объявление (раздел 4.5). И
+Haskell по умолчанию ленив: выражение вычисляется, когда нужно его
+значение, что делает одни программы изящными, а стоимость и порядок
+вычислений — менее заметными. Okkama энергична, и её порядок вычислений
+фиксирован и записан (раздел 9.7). Чистота Haskell обеспечивается типами;
+неизменяемость Okkama — отсутствием присваивания, а её эффекты — обычные
+вызовы объектов, несущих полномочия на них (глава 21).
+
+## 27.7 OCaml
+
+OCaml — это ML с объектами и промышленным опытом. Привязки неизменяемы,
+отсутствие — `option`, отказы — исключения или `result`, а модули с
+сигнатурами и функторами — его главный инструмент абстракции
+[[OCaml Manual](#ref-ocamlmanual)]. В нём есть и система классов с наследованием, которой
+большая часть кода на OCaml не пользуется, и изменяемые поля записей и
+ссылки, когда они нужны программе. Его целые фиксированной ширины и
+заворачиваются при переполнении [[OCaml Manual](#ref-ocamlint)]. С OCaml 5 домены выполняются
+параллельно на нескольких ядрах [[OCaml Manual](#ref-ocamlparallel)].
+
+OCaml показывает, что язык, ориентированный на выражения, неизменяемый по
+умолчанию и с алгебраическими типами данных, может быть быстрым и
+практичным. Он сохраняет запасные выходы — изменяемые поля и классы, —
+которые Okkama убрала, и у него есть рекурсивные варианты и вложенные
+образцы, которых у Okkama пока нет (раздел 28.2).
+
+## 27.8 Что показывает сравнение
+
+Выделяются три вещи.
+
+- **Правила Okkama не новы.** Каждое пришло из языка этой таблицы или из
+  литературы за ним. Новое — то, что все они выполняются одновременно, в
+  одном языке, по правилу, а не по соглашению.
+- **Другие языки сохраняют выходы.** `var` в Kotlin, `unsafe` в Rust
+  [[Klabnik 2023](#ref-klabnik2023)], изменяемые поля OCaml, `null` в Java: каждый язык с более
+  безопасным умолчанием сохраняет и менее безопасный выбор для программ,
+  которым он нужен. У Okkama выходов меньше: `Cell` для синхронного кода,
+  `Atomic` для состояния, общего для задач, и natives для хоста.
+  Программа, которой нужен другой выход, — программа, которую Okkama
+  обслуживает плохо, и глава 28 перечисляет, где это видно.
+- **Самое большое различие — зрелость.** У каждого языка таблицы есть
+  библиотеки, инструменты, книги и рабочие системы, построенные за годы и
+  десятилетия. У Okkama есть набор тестов соответствия, стандартная
+  библиотека, которую переписывают, и эта книга. Сравнение замыслов — лишь
+  половина сравнения языков.
+
 # Глава 28. Слабости, открытые проблемы и путь вперёд
 
 Каждая глава этой книги заканчивается подсчётом того, чего стоит её замысел
@@ -20335,6 +20505,7 @@ Objects* утверждает, что такие объекты зовут ло�
 - <a id="ref-griesemer2020"></a>Robert Griesemer, Raymond Hu, Wen Kokke, Julien Lange, Ian Lance Taylor, Bernardo Toninho, Philip Wadler, Nobuko Yoshida (2020). Featherweight Go. *Proceedings of the ACM on Programming Languages* 4(OOPSLA): 149:1–149:29. https://doi.org/10.1145/3428217
 - <a id="ref-grigore2017"></a>Radu Grigore (2017). Java Generics are Turing Complete. In *Proceedings of POPL 2017*: 73–85. ACM. https://doi.org/10.1145/3009837.3009871
 - <a id="ref-haskell2010"></a>Simon Marlow (ed.) (2010). *Haskell 2010 Language Report*. https://www.haskell.org/onlinereport/haskell2010/
+- <a id="ref-hsexception"></a>The GHC Team (2026). Control.Exception. *base library documentation*. https://hackage.haskell.org/package/base/docs/Control-Exception.html
 - <a id="ref-hewitt1973"></a>Carl Hewitt, Peter Bishop, Richard Steiger (1973). A Universal Modular ACTOR Formalism for Artificial Intelligence. In *Proceedings of the 3rd International Joint Conference on Artificial Intelligence (IJCAI '73)*, 235–245.
 - <a id="ref-hickey2008"></a>Rich Hickey (2008). The Clojure Programming Language. In *Proceedings of the 2008 Symposium on Dynamic Languages (DLS '08)*. ACM. https://doi.org/10.1145/1408681.1408682
 - <a id="ref-hickey2011"></a>Rich Hickey (2011). Simple Made Easy. Talk at Strange Loop, 20 September 2011. https://www.infoq.com/presentations/Simple-Made-Easy/
@@ -20345,6 +20516,7 @@ Objects* утверждает, что такие объекты зовут ло�
 - <a id="ref-wasi"></a>WebAssembly System Interface (WASI): capability-based access, pre-opened directories. https://wasi.dev/
 - <a id="ref-javalist"></a>Oracle (2023). Interface List<E>. *Java SE 21 API Specification*. https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/List.html
 - <a id="ref-javastream"></a>Oracle (2023). Package java.util.stream. *Java SE 21 API Specification*. https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/stream/package-summary.html
+- <a id="ref-jep444"></a>Ron Pressler, Alan Bateman (2023). JEP 444: Virtual Threads. OpenJDK. https://openjdk.org/jeps/444
 - <a id="ref-jones2023"></a>Richard Jones, Antony Hosking, Eliot Moss (2023). *The Garbage Collection Handbook: The Art of Automatic Memory Management*, 2nd edition. CRC Press.
 - <a id="ref-baker1977"></a>Henry C. Baker Jr. and Carl Hewitt (1977). The Incremental Garbage Collection of Processes. MIT AI Laboratory Working Paper 149; also in *Proceedings of the Symposium on Artificial Intelligence and Programming Languages*, Rochester, NY. https://hdl.handle.net/1721.1/41969
 - <a id="ref-halstead1985"></a>Robert H. Halstead Jr. (1985). MULTILISP: A Language for Concurrent Symbolic Computation. *ACM Transactions on Programming Languages and Systems* 7(4): 501–538. https://doi.org/10.1145/4472.4478
@@ -20360,8 +20532,12 @@ Objects* утверждает, что такие объекты зовут ло�
 - <a id="ref-knuth1974"></a>Donald E. Knuth (1974). Structured Programming with go to Statements. *ACM Computing Surveys* 6(4): 261–301. https://doi.org/10.1145/356635.356640
 - <a id="ref-knuth1997"></a>Donald E. Knuth (1997). *The Art of Computer Programming, Volume 2: Seminumerical Algorithms*, 3rd edition. Addison-Wesley.
 - <a id="ref-koenig1995"></a>Andrew Koenig (1995). Patterns and Antipatterns. *Journal of Object-Oriented Programming* 8(1): 46–48.
+- <a id="ref-kotlincoroutines"></a>JetBrains (2026). Coroutines basics: coroutine scope and structured concurrency. *Kotlin documentation*. https://kotlinlang.org/docs/coroutines-basics.html
 - <a id="ref-kotlindata"></a>JetBrains (2024). Data classes. *Kotlin documentation*. https://kotlinlang.org/docs/data-classes.html
+- <a id="ref-kotlinexceptions"></a>JetBrains (2026). Exceptions. *Kotlin documentation*. https://kotlinlang.org/docs/exceptions.html
+- <a id="ref-kotlininheritance"></a>JetBrains (2026). Inheritance. *Kotlin documentation*. https://kotlinlang.org/docs/inheritance.html
 - <a id="ref-kotlinspec"></a>JetBrains (2024). *Kotlin Language Specification*, chapter Type System: Nullable Types. https://kotlinlang.org/spec/type-system.html
+- <a id="ref-kotlinuse"></a>JetBrains (2026). use. *Kotlin standard library API*. https://kotlinlang.org/api/core/kotlin-stdlib/kotlin.io/use.html
 - <a id="ref-landin1964"></a>Peter J. Landin (1964). The Mechanical Evaluation of Expressions. *The Computer Journal* 6(4): 308–320. https://doi.org/10.1093/comjnl/6.4.308
 - <a id="ref-landin1966"></a>P. J. Landin (1966). The Next 700 Programming Languages. *Communications of the ACM* 9(3): 157–166. https://doi.org/10.1145/365230.365257
 - <a id="ref-langley2014"></a>Adam Langley (2014). Apple's SSL/TLS bug. *ImperialViolet*, 22 February 2014. https://www.imperialviolet.org/2014/02/22/applebug.html
@@ -20389,6 +20565,10 @@ Objects* утверждает, что такие объекты зовут ло�
 - <a id="ref-norvig1996"></a>Peter Norvig (1996). Design Patterns in Dynamic Programming. Presentation at Object World, Boston, May 1996. https://norvig.com/design-patterns/
 - <a id="ref-nygaard1978"></a>Kristen Nygaard, Ole-Johan Dahl (1978). The Development of the SIMULA Languages. *ACM SIGPLAN Notices* 13(8): 245–272 (HOPL I). https://doi.org/10.1145/960118.808391
 - <a id="ref-nystrom2015"></a>Bob Nystrom (2015). What Color is Your Function? Blog post, 1 February 2015. https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/
+- <a id="ref-ocamlfun"></a>The OCaml Development Team (2024). Module Fun. *The OCaml Manual*, version 5.2. https://ocaml.org/manual/5.2/api/Fun.html
+- <a id="ref-ocamlint"></a>The OCaml Development Team (2024). Module Int. *The OCaml Manual*, version 5.2. https://ocaml.org/manual/5.2/api/Int.html
+- <a id="ref-ocamlmanual"></a>The OCaml Development Team (2024). *The OCaml Manual*, version 5.2. https://ocaml.org/manual/5.2/index.html
+- <a id="ref-ocamlparallel"></a>The OCaml Development Team (2024). Parallel programming. *The OCaml Manual*, version 5.2. https://ocaml.org/manual/5.2/parallelism.html
 - <a id="ref-okasaki1998"></a>Chris Okasaki (1998). *Purely Functional Data Structures*. Cambridge University Press. https://doi.org/10.1017/CBO9780511530104
 - <a id="ref-jep411"></a>OpenJDK (2021). JEP 411: Deprecate the Security Manager for Removal. https://openjdk.org/jeps/411
 - <a id="ref-jep453"></a>OpenJDK (2023). JEP 453: Structured Concurrency (Preview). https://openjdk.org/jeps/453
