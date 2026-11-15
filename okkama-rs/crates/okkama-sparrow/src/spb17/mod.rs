@@ -18,6 +18,7 @@ pub use codec::{assemble, decode, disassemble, encode};
 pub use registry::{CallAbi, CleanupAbi, Helper, HelperClass, MachineArgument, Opcode, ProducedType, ResultContext};
 pub use registry::Tag;
 pub use registry::{helper, HELPER_TABLE, HELPER_ALLOCATES, HELPER_COLLECTS, HELPER_REENTERS, HELPER_UNWINDS, HELPER_STOPS};
+pub use registry::HELPER_SUSPENDS;
 pub use verify::{verify, result_context};
 pub use load::{ExternalContracts, NoExternalContracts, verify_load, service_states};
 

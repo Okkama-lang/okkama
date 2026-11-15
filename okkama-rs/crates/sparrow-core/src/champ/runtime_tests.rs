@@ -107,6 +107,15 @@ fn changed(before: Identity, after: Identity, holder: u64, owner: u64) {
     assert_eq!(after, Identity { holder_id: holder, owner_id: owner, epoch: before.epoch + 1, ..before });
 }
 
+/// The result context a registry check needs: `fut.new`'s schema names its Future type (#601 V8).
+pub(super) fn schema_context(opcode: Option<okkama_sparrow::spb17::Opcode>) -> okkama_sparrow::spb17::ResultContext {
+    use okkama_sparrow::spb17::{Opcode, ResultContext, Type};
+    match opcode {
+        Some(Opcode::FutureNew) => ResultContext { value: Some(Type::Future(0)), ..ResultContext::default() },
+        _ => ResultContext::default(),
+    }
+}
+
 #[test]
 fn champ_s2_registry_layouts_effects_and_single_outcome_channel() {
     assert_eq!(size_of::<CallPost>(), 24);
@@ -115,13 +124,14 @@ fn champ_s2_registry_layouts_effects_and_single_outcome_channel() {
     assert_eq!(size_of::<PacketSlot>(), 8);
     let helpers: Vec<_> = crate::jit::HELPERS.iter().filter(|(name, _)| name.starts_with("champ_")).collect();
     // #622 adds champ_machine_collection, champ_machine_builder and champ_machine_lookup; #675 adds
-    // champ_machine_scalar.
-    assert_eq!(helpers.len(), 60);
+    // champ_machine_scalar; #601 V8 adds the eight async helpers of Champ draft 3 §14.4 and
+    // champ_machine_future_destination.
+    assert_eq!(helpers.len(), 69);
     for &(name, effects) in helpers {
         let abi = helper_abi(name).unwrap();
         let class = abi.class;
         assert_eq!(abi.effects, effects);
-        let context = okkama_sparrow::spb17::ResultContext::default();
+        let context = schema_context(abi.opcode);
         let schemas = abi.schemas(&context).unwrap();
         if let Some(opcode) = abi.opcode {
             for (tag, slots) in schemas {
@@ -133,7 +143,13 @@ fn champ_s2_registry_layouts_effects_and_single_outcome_channel() {
                 }
             }
         }
-        assert!(!effects.contains(&crate::jit::Effect::Suspends));
+        // Draft 3 §1.1: only class S may return PENDING, and an S helper is otherwise an X helper.
+        assert_eq!(effects.contains(&crate::jit::Effect::Suspends), class == HelperClass::S, "{name}");
+        if class == HelperClass::S {
+            for effect in [crate::jit::Effect::Collects, crate::jit::Effect::Reenters] {
+                assert!(effects.contains(&effect), "{name}: {effect:?}");
+            }
+        }
         if class == HelperClass::L {
             for effect in [crate::jit::Effect::Collects, crate::jit::Effect::Reenters, crate::jit::Effect::Fails] {
                 assert!(!effects.contains(&effect), "{name}: {effect:?}");
