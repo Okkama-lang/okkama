@@ -1403,10 +1403,13 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
                 [left @ (Type::Array(_) | Type::Bytes | Type::Map(_) | Type::Variant(_) | Type::Range), right] => {
                     left == right
                 }
+                // A generic `==` specialized to a scalar (`Frequencies<string>`) compares two values of it.
+                [left @ (Type::Int | Type::Bool | Type::Str | Type::Float | Type::Char | Type::Byte | Type::Rat),
+                    right] => left == right,
                 _ => false,
             };
             enforce(comparable && out == Some(Type::Bool), "VAL_EQ_TYPE",
-                "value comparison needs two objects of one declaration or two plain collections of one type")?;
+                "value comparison needs two values of one scalar, object or plain collection type")?;
             // Structural equality is defined on plain values; identities and error payloads are not compared.
             enforce(closed_plain(p, types[0]), "VAL_EQ_TYPE", "value comparison needs closed plain operands")
         }

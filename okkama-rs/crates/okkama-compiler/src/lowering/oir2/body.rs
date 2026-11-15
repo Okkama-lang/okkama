@@ -325,11 +325,37 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             return Ok(value);
         }
         let op = match (self.b.module().types.get(actual)?, self.b.module().types.get(ty)?) {
+            // A literal condition types the whole `if` by its selected branch: an arm whose concrete collection
+            // cannot take the join's untagged type is the other branch, which never runs. It passes an empty
+            // collection of the join's type instead of reinterpreting its elements.
+            (ir::Type::Array(_), ir::Type::Array(_)) if !self.untagged_fits(actual, ty)? => {
+                ir::CollectionOp::ArrayNew { values: vec![], ty, packet: None }
+            }
+            (ir::Type::Map(..), ir::Type::Map(..)) if !self.untagged_fits(actual, ty)? => {
+                ir::CollectionOp::MapNew { entries: vec![], ty, packet: None }
+            }
             (ir::Type::Array(_), ir::Type::Array(_)) => ir::CollectionOp::ArrayRetag { array: value, ty },
             (ir::Type::Map(..), ir::Type::Map(..)) => ir::CollectionOp::MapRetag { map: value, ty },
             _ => return Ok(value),
         };
         self.collection(op)
+    }
+
+    /// Whether a collection of type `actual` retags to `target`: wherever they differ, `actual` has `never`.
+    fn untagged_fits(&self, actual: ir::TypeId, target: ir::TypeId) -> Result<bool> {
+        let mut pending = vec![(actual, target)];
+        while let Some((actual, target)) = pending.pop() {
+            if actual == target {
+                continue;
+            }
+            match (self.b.module().types.get(actual)?, self.b.module().types.get(target)?) {
+                (ir::Type::Never, _) => {}
+                (ir::Type::Array(a), ir::Type::Array(b)) => pending.push((*a, *b)),
+                (ir::Type::Map(ak, av), ir::Type::Map(bk, bv)) => pending.extend([(*ak, *bk), (*av, *bv)]),
+                _ => return Ok(false),
+            }
+        }
+        Ok(true)
     }
 
     fn boundary(&mut self, scope: ir::ScopeId, kind: ir::BoundaryKind) -> Result<ir::BoundaryId> {

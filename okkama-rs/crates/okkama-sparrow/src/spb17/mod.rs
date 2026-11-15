@@ -330,13 +330,14 @@ pub fn transfer_admissible(arguments: &[Argument]) -> bool {
         && arguments.iter().any(|argument| matches!(argument, Argument::Selection(_)))
 }
 
-/// A retag of a collection whose leaves cannot exist (an uninferred `[]` or `[:]`) to a collection of the same
-/// shape: no element is reinterpreted. Byte arrays have their own representation and are excluded. A map
-/// without keys has no values either, but its value type is kept unless it is `never` too: a value word is
-/// never read as another type.
+/// A retag of a collection whose leaves cannot exist (an uninferred `[]` or `[:]`): no element is reinterpreted.
+/// The arrays at the never level are empty, so they may become arrays of any deeper shape (`[]` as `@@int`),
+/// while every level above keeps holding arrays; a shallower shape would read an array as a leaf. Byte arrays
+/// have their own representation and are excluded. A map without keys has no values either, but its value type
+/// is kept unless it is `never` too: a value word is never read as another type.
 pub fn never_retag(composites: &[Composite], from: Type, to: Type) -> bool {
     match (from, to) {
-        (Type::Array(from), Type::Array(to)) => from.leaf == ArrayLeaf::Never && from.depth == to.depth,
+        (Type::Array(from), Type::Array(to)) => from.leaf == ArrayLeaf::Never && to.depth >= from.depth,
         (Type::Map(from), Type::Map(to)) => match (composites.get(from as usize), composites.get(to as usize)) {
             (Some(Composite::Map { key: Type::Never, value: old }), Some(Composite::Map { value: new, .. })) => {
                 *old == Type::Never || old == new
