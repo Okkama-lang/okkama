@@ -185,8 +185,10 @@ impl Universe {
             if module.profile == Profile::High && (partitions_inputs || matches!(op,
                 Operation::Lexical(LexicalOp::Bind { .. } | LexicalOp::Rebind { .. } | LexicalOp::Stage { .. })
                     | Operation::Exit(ExitOp::Prepare { .. })))
+                // A builtin capability (Atomic) holds no obligation, yet elaboration partitions it.
                 && cfg::operation_uses(op, body).is_ok_and(|uses| uses.iter().any(|operand| {
-                    body.values.get(operand.value).is_ok_and(|value| types[&value.ty].may_own())
+                    body.values.get(operand.value).is_ok_and(|value| types[&value.ty].may_own()
+                        || types[&value.ty].capabilities)
                 })) {
                 normal::failures(&mut summary.contract.failures, &[FailureKind::Program]);
             }

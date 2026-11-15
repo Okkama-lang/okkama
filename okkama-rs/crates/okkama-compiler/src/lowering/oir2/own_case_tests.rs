@@ -464,3 +464,29 @@ fn oir2_own_cases_triage() {
         println!("OWNCASE {id}\t{verdict}");
     }
 }
+
+/// #671, #686 (P2.4 section 4.8): an Atomic field is a capability without an obligation, so the holder's
+/// constructor returns no fresh creation (the SPB 17 layout gives the holder no identity), and every
+/// function that partitions an Atomic declares the program failure its scope.split can raise.
+#[test]
+fn oir2_own_atomic_holder_is_not_a_fresh_creation() {
+    let source = concat!("module app; import \"cell\" take Cell; import \"async/atomic\" take Atomic; ",
+        "object Recorded { has served is Atomic<int>; Recorded() { served = Atomic(0); } ",
+        "next() is int { let at = served.value(); served.replace(at + 1); at; } } ",
+        "main() is int { let c = Cell(0); c.replace(2); let a = Atomic(1); a.replace(3); ",
+        "Recorded().next() + c.value() + a.value(); }");
+    // The build gate: the full verifier still treats every deps-carrying holder as an owned creation.
+    let (module, _) = own_stage(source, None, ir::verify::VerifyMode::Structural).unwrap();
+    let summary = |symbol: &str| {
+        let function = module.functions.iter().find(|(_, function)| function.symbol.starts_with(symbol))
+            .unwrap_or_else(|| panic!("{symbol}")).1;
+        module.summaries.get(function.summary.unwrap()).unwrap().clone()
+    };
+    for constructor in ["cell.Cell_int.new", "app.Recorded.new"] {
+        let summary = summary(constructor);
+        assert!(summary.results.iter().all(|result| result.fresh.is_empty()), "{constructor}: {summary:?}");
+    }
+    for method in ["app.Recorded.next", "cell.Cell_int.replace"] {
+        assert!(summary(method).contract.failures.contains(&ir::FailureKind::Program), "{method}");
+    }
+}

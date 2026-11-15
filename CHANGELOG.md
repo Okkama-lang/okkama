@@ -8,6 +8,17 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Champ constructs objects with an Atomic field, and every Cell (#671,
+  #686).** Own classified a builtin capability without `destroy` (Atomic) as
+  a service obligation, so a holder such as `Cell` or an object with an
+  `Atomic` field got a fresh creation summary, while the SPB 17 layout (in
+  line with P2.4 §4.8: close is explicit, a read returns a reference with
+  deps) gives such a holder no identity; the loader then refused the
+  constructor with `FRESH_PACKET`. Own now treats the capability as a
+  deps-carrying reference with no obligation, and a function that
+  partitions one declares the program failure of its `scope.split`
+  (`ENTRY_FAILURE_MASK`). The loader rules are unchanged.
+
 - **The SPB 17 loader tracks a successor's must-use permission through calls
   and the exit protocol (#680).** A successor result of a call that cannot
   fail (`invoke.observe` with a plain next flow) could be dropped, and taking
