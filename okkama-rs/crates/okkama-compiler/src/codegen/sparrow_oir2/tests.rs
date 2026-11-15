@@ -646,3 +646,54 @@ fn s2_taken_successor_alias_forwards_its_object() {
     super::successors::forward_taken(&mut held).unwrap();
     assert_eq!(held.registers[2], s::Type::Successor(0));
 }
+
+/// A constructor's unbound field travels as undef through a branch before it is bound (#677).
+const UNDEF_EDGES: &str = "oir 2 low
+module undef_edges
+object Box {
+    field value: int
+}
+scope S action in @make
+func @make(%flag: bool, %v: int) -> Box abi observation {
+^entry in S:
+    %u: int = undef ty int
+    cond %flag, ^yes(%u), ^no(%u)
+^yes(%a: int) in S:
+    br ^join(%a, %v)
+^no(%b: int) in S:
+    br ^join(%b, %v)
+^join(%p: int, %w: int) in S:
+    %box: Box facts(plain(certificate=closed_graph(ty=Box))) = obj.new Box { value: %p } construction incomplete
+    obj.init %box, %w, field field_ref(declaration=Box, index=0)
+    ret %box
+}
+";
+
+#[test]
+fn s1_undef_only_parameters_become_block_local_undef() {
+    let m = parse(UNDEF_EDGES);
+    let p = generate(&m, &layouts()).unwrap_or_else(|error| panic!("{error}"));
+    let f = &p.functions[0];
+    let undef: BTreeSet<_> = f.code.iter().filter_map(|instruction| match instruction {
+        s::Instruction::Data { op: s::DataOp::Undef, output: Some(id), .. } => Some(s::Location::Register(*id)),
+        _ => None,
+    }).collect();
+    // Only the real value crosses an edge; the join defines its own undef for the construction.
+    for instruction in &f.code {
+        if let s::Instruction::Br(edge) | s::Instruction::Cond { yes: edge, .. } = instruction {
+            assert!(edge.assignments.iter().all(|assignment| {
+                !matches!(assignment.source, s::Source::Location(location) if undef.contains(&location))
+            }), "{instruction:?}");
+        }
+    }
+    assert_eq!(undef.len(), 4, "entry, both branches and the join keep their own undef");
+    assert!(f.blocks.iter().all(|block| block.params.len() <= 2));
+}
+
+#[test]
+fn s1_mixed_parameters_keep_their_edges() {
+    // A parameter that receives a real value on one edge is an ordinary parameter.
+    let text = UNDEF_EDGES.replace("br ^join(%a, %v)", "br ^join(%v, %v)");
+    let p = generate(&parse(&text), &layouts()).expect_err("an undef edge source stays rejected");
+    assert!(p.0.contains("undef"), "{}", p.0);
+}

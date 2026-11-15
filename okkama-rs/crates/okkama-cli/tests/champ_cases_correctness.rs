@@ -239,3 +239,9 @@ fn champ_correctness_exit_status() {
         "L00.entry.missing-main-fails",
     ]);
 }
+
+/// A constructor branches before binding its fields: the unbound fields never cross an edge.
+#[test]
+fn champ_correctness_constructor_branches_before_binding() {
+    check(&["L04.ctor.field-bind-forms"]);
+}

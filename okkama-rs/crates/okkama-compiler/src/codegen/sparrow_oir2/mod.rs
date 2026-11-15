@@ -8,6 +8,7 @@ use okkama_sparrow::spb17 as s;
 
 mod calls;
 mod successors;
+mod undef;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GenerateError(pub String);
@@ -58,6 +59,13 @@ pub fn generate_with_allocation(module: &o::Module, layouts: &dyn LayoutRegistry
     if module.profile != o::Profile::Low {
         return Err(GenerateError("expected verified low profile".into()));
     }
+    let mut sunk = module.clone();
+    for (_, function) in sunk.functions.iter_mut() {
+        if let Some(body) = &mut function.body {
+            undef::sink_undef_params(body)?;
+        }
+    }
+    let module = &sunk;
     if !module.imports.is_empty() || !module.protocols.is_empty()
         || module.tests.is_some() || module.requires.iter().any(|feature| *feature != o::Feature::Core)
     {
