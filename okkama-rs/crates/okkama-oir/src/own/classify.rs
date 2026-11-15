@@ -21,6 +21,9 @@ pub struct TypeClassification {
     /// future). The verifier requires full dependencies for such values even
     /// when every reachable target is plain.
     pub references: bool,
+    /// The value graph reaches a builtin capability without destroy (Atomic, P2.4 section 4.8):
+    /// a managed reference that elaboration partitions like an owned value, yet holds no obligation.
+    pub capabilities: bool,
 }
 
 impl TypeClassification {
@@ -193,6 +196,7 @@ pub(super) fn classify(
             descriptors: vec![],
             unresolved: BTreeSet::new(),
             references: false,
+            capabilities: false,
         };
         let mut terms = Terms { module, free: &free, ids: BTreeMap::new(), nodes: vec![] };
         let root_term = terms.intern(root, &Environment::new(), budget)?;
@@ -322,7 +326,12 @@ fn declaration_edges(
     match &module.declarations.get(decl).map_err(arena)?.kind {
         DeclarationKind::Object { fields, destroy, builtin, .. } => {
             children.extend(fields.iter().map(|field| field.ty));
-            if *builtin {
+            // A builtin capability without destroy (Atomic, P2.4 section 4.8) holds no obligation of
+            // its own: close is an explicit operation, a read returns a reference with deps.
+            if *builtin && destroy.is_none() {
+                facts.references = true;
+                facts.capabilities = true;
+            } else if *builtin {
                 facts.service_types.insert(ty);
             }
             if let Some(destroy) = destroy {

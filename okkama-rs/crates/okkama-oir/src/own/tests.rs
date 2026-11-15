@@ -807,3 +807,50 @@ mod arrays;
 
 mod raise_unwind;
 mod asynchronous;
+
+fn builtin(module: &mut ModuleBuilder, name: &str, destroy: Option<FuncId>) -> TypeId {
+    let decl = module.declare(Declaration {
+        name: name.into(),
+        type_params: vec![],
+        kind: DeclarationKind::Object { fields: vec![], witnesses: vec![], destroy, builtin: true },
+        loc: None,
+    }).unwrap();
+    module.intern_type(Type::Object { decl, args: vec![] }).unwrap()
+}
+
+/// P2.4 section 4.8 (#671, #686): Atomic is a capability whose close is explicit; it holds no
+/// obligation, so neither it nor an object holding it may own, and both carry deps. A builtin object
+/// with destroy keeps its service obligation.
+#[test]
+fn builtin_capability_without_destroy_holds_no_obligation() {
+    let mut module = ModuleBuilder::new("capability", Profile::High);
+    let atomic = builtin(&mut module, "async.atomic.Atomic_int", None);
+    let holder = object(&mut module, "Recorded", vec![atomic], None);
+    let close = module.declare_function(function("close", vec![], vec![])).unwrap();
+    let service = builtin(&mut module, "Service", Some(close));
+    let module = module.finish().unwrap();
+    let classes = classify_test(&module, &OwnOptions::default());
+    for ty in [atomic, holder] {
+        assert!(!classes[&ty].may_own(), "{ty:?}");
+        assert!(classes[&ty].service_types.is_empty(), "{ty:?}");
+        assert!(classes[&ty].references && classes[&ty].capabilities, "{ty:?}");
+        assert_eq!(classes[&ty].class, Classification::Plain, "{ty:?}");
+    }
+    assert!(classes[&service].may_own());
+    assert!(classes[&service].service_types.contains(&service));
+    assert!(!classes[&service].capabilities);
+}
+
+/// #672: a missing scope state is an own diagnostic, never a panic.
+#[test]
+fn missing_scope_state_is_a_flow_diagnostic() {
+    let mut env = emit::LiveEnv::default();
+    let scope = ScopeId::from_u32(3);
+    let OwnError::Diagnostics { diagnostics, .. } = env.state(scope).unwrap_err() else {
+        panic!("not a diagnostic");
+    };
+    assert_eq!(diagnostics[0].kind, OwnDiagnosticKind::InvalidFlow);
+    let state = ValueId::from_u32(7);
+    env.scopes.insert(scope, state);
+    assert_eq!(env.state(scope).unwrap(), state);
+}

@@ -126,7 +126,7 @@ impl Driver<'_, '_> {
             }
             let selection = self.body.selections.alloc(SelectionExpr::Union(selections)).map_err(arena)?;
             let selection = self.body.selections.alloc(SelectionExpr::Admissible(selection)).map_err(arena)?;
-            let states = TransferStates::Between { from: point.env.scopes[scope], to: point.env.scopes[&outer] };
+            let states = TransferStates::Between { from: point.env.state(*scope)?, to: point.env.state(outer)? };
             point = self.emit(point, Operation::Ownership(OwnershipOp::ScopeTransfer { states, selection }))?;
         }
         Ok(point)
@@ -162,7 +162,7 @@ impl Driver<'_, '_> {
         let scope = self.body.blocks.get(point.block).map_err(arena)?.lexical_scope;
         let owner = stack(self.module, scope)?.into_iter().rev().find(|scope| point.env.scopes.contains_key(scope))
             .ok_or_else(|| flow_error("builder journal has no retained lexical owner"))?;
-        let state = point.env.scopes[&owner];
+        let state = point.env.state(owner)?;
         self.emit(point, Operation::Ownership(OwnershipOp::Admit { state, packet }))
     }
 }
