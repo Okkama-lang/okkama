@@ -1,7 +1,8 @@
 oir 2 high
 // K1 (#601), producer output: a branch block owns the cache duty of g and closes after awaiting it; its close
 // is nested, so it never delivers a deferred cancellation (D18, cancel=false). The await of f after the block
-// is the next await, where a pending cancellation is delivered; the final close of main delivers it otherwise.
+// is the next await, where a pending cancellation is delivered. (The final close keeps the D18 form until #727;
+// per the K2 ruling it delivers nothing at run time.)
 module k1_nested_close_next_await
 requires core, async
 entry @main

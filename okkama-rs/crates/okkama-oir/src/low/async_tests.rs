@@ -492,11 +492,12 @@ fn close_of(body: &Body, mut cleanup: ValueId) -> CleanupCloseId {
     }
 }
 
-/// K1 (D18, elaboration §13.4): only the final successful close of async main delivers a deferred cancellation.
-/// The nested close of the branch block S2 settles the duty of g and keeps a pending cancellation for the next
-/// await (of f); its failing closes never deliver.
+/// K1 (D18, elaboration §13.4): a nested close keeps a pending cancellation for the next await. The successful
+/// close of the branch block S2 settles the duty of g, declares no cancellation and delivers none; no failing
+/// close delivers either. The final close keeps the D18 form of the IR, which the K2 ruling leaves for #727
+/// (at run time it delivers nothing), so this test does not state it.
 #[test]
-fn k1_only_the_final_close_of_the_action_delivers() {
+fn k1_a_nested_close_keeps_the_cancellation_for_the_next_await() {
     let (name, coro, _) = GOLDENS[K1_NESTED];
     assert_eq!(name, "k1-nested-close-next-await");
     let output = lowered(name, coro);
@@ -512,11 +513,11 @@ fn k1_only_the_final_close_of_the_action_delivers() {
         Operation::Cleanup(CleanupOp::DeliverCancel { cleanup }) => Some(close_of(body, cleanup)),
         _ => None,
     }).collect();
-    let finals: std::collections::BTreeSet<_> = closes.iter().filter(|(_, scope, failing, cancel)| {
-        output.scopes.get(*scope).unwrap().parent.is_none() && !failing && *cancel
+    let kept: std::collections::BTreeSet<_> = closes.iter().filter(|(_, scope, failing, _)| {
+        output.scopes.get(*scope).unwrap().parent.is_some() || *failing
     }).map(|(close, ..)| *close).collect();
-    assert!(!finals.is_empty());
-    assert_eq!(delivering, finals, "{closes:?}");
+    assert!(!kept.is_empty());
+    assert!(delivering.is_disjoint(&kept), "{closes:?}");
     // The duty of g is settled by the nested close, before the await of f.
     let schedule = body.cleanup.schedules.iter().find(|(_, schedule)| schedule.close == nested[0].0).unwrap().1;
     assert_eq!(schedule.holders.len(), 1);
@@ -593,7 +594,7 @@ fn k1_the_failure_view_outlives_the_cache_duty_it_came_from() {
 }
 
 /// K1 (elaboration §13.1, Champ draft 3 §5): cancelling a cold Future twice before it starts leaves its cache
-/// duty with its owner. Every close of main settles that duty once, and the final close delivers.
+/// duty with its owner. Every close of main settles that duty once.
 #[test]
 fn k1_a_cancelled_cold_future_keeps_its_duty_until_the_close() {
     let (name, coro, _) = GOLDENS[K1_CANCEL];
