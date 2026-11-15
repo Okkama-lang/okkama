@@ -142,22 +142,20 @@ through_low!(any_literal_homogeneous_inference, "L05.literal.homogeneous-inferen
 stops_before_low!(any_variadic_string_tail_converts, "L03.variadic.string-tail-converts",
     "#569: OIR-2 has no char-to-string conversion");
 
-// C3b: open action invocation. High and own pass; Low accepts own.dynamic only for
-// the storage merge protocol, not the Closure transfer of an open call result.
-stops_before_low!(open_anon_capture_and_escape, "L03.anon.capture-and-escape", "#641: Low and open calls");
-stops_before_low!(open_anon_captures_self, "L03.anon.captures-self", "#641: Low and open calls");
-stops_before_low!(open_anon_compose, "L03.anon.compose", "#641: Low and open calls");
-stops_before_low!(open_anon_self_retained_only_when_read, "L03.anon.self-retained-only-when-read",
-    "#641: Low and open calls");
-stops_before_low!(open_anonymous_lexical_scope, "L03.anonymous.lexical-scope", "#641: Low and open calls");
-stops_before_low!(open_caps_ordinary_block_body, "L04.caps.ordinary-block-body", "#641: Low and open calls");
-stops_before_low!(open_invariant_escaped_self_bound_action, "L04.invariant.escaped-self-bound-action",
-    "#641: Low and open calls");
-stops_before_low!(open_privacy_closure_reads_self_field, "L04.privacy.closure-reads-self-field",
-    "#641: Low and open calls");
-stops_before_low!(open_successor_bound_action_invoked, "L04.successor.bound-action-invoked",
-    "#641: Low and open calls");
-stops_before_low!(open_successor_closure_transferred, "L04.successor.closure-transferred",
-    "#641: Low and open calls");
-stops_before_low!(open_regions_role_instances, "L07.regions.role-instances", "#641: Low and open calls");
-stops_before_low!(open_collections_ordered_sets, "L09.collections.ordered-sets", "#641: Low and open calls");
+// C3b: open action invocation. High, own and Low pass (#683: Low settles the Closure
+// transfer of an open call result in the cleanup automaton). SPB 17 has no `fn`
+// values, `fn.call`, `own.dynamic` or protocol table yet (`compile_low`: "protocols
+// ... not yet in S1"; #676 builds closure values), and no role layout (`layout`).
+through_low!(open_anon_capture_and_escape, "L03.anon.capture-and-escape");
+through_low!(open_anon_captures_self, "L03.anon.captures-self");
+through_low!(open_anon_compose, "L03.anon.compose");
+through_low!(open_anon_self_retained_only_when_read, "L03.anon.self-retained-only-when-read");
+through_low!(open_anonymous_lexical_scope, "L03.anonymous.lexical-scope");
+through_low!(open_caps_ordinary_block_body, "L04.caps.ordinary-block-body");
+through_low!(open_invariant_escaped_self_bound_action, "L04.invariant.escaped-self-bound-action");
+through_low!(open_privacy_closure_reads_self_field, "L04.privacy.closure-reads-self-field");
+through_low!(open_successor_bound_action_invoked, "L04.successor.bound-action-invoked");
+through_low!(open_successor_closure_transferred, "L04.successor.closure-transferred");
+through_low!(open_regions_role_instances, "L07.regions.role-instances");
+stops_before_low!(open_collections_ordered_sets, "L09.collections.ordered-sets",
+    "#687: low cleanup inventory inference exceeds the step budget");

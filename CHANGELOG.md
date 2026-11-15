@@ -116,6 +116,19 @@ fake fields; role fakes and their ordinary typed fields remain available.
 
 ### Added
 
+- **OIR-2 low settles the dynamic transfers of open calls and `any` (#683).**
+  `lower_cleanup` and the Low verifier now accept `own.dynamic` with the
+  registered open Closure protocol (reason `closure`) and with the
+  synchronous `any` protocol (reason `any`), not only the storage merge
+  protocol. Their entries join the scope inventory and the common cleanup
+  executor releases them in serial order through their runtime descriptors
+  (`oir.sync_closure.cleanup`, `oir.any.cleanup`). Reserve and failure
+  dispatch follow the storage merge entries, and no plan is direct without
+  order evidence. The dynamic site stays counted (B7.1). Eleven C3b
+  open-call cases now pass own and Low and stop in SPB 17, which has no
+  `fn` values, `fn.call`, `own.dynamic` or protocol table yet (#676).
+  `L09.collections.ordered-sets` hits the low step budget (#687).
+
 - **Champ: int, byte, float, rat and str operations in SPB 17 (#675).**
   SPB 17 now has five operation families, one wire code each with a
   sub-code: `int.ext` (14), `byte.ext` (15), `float.ext` (16), `rat.ext`
