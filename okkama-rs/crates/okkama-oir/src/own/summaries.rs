@@ -81,6 +81,9 @@ pub(super) struct Universe {
     pub calls: BTreeMap<(FuncId, Site), usize>,
     strides: BTreeMap<FuncId, usize>,
     pub inventories: BTreeMap<ScopeId, ScopeFacts>,
+    /// Functions whose root scope the rewrite keeps whatever its inventory says: async actions and
+    /// defer helpers (the registered actions and the D8 entries).
+    pub retained_roots: BTreeSet<FuncId>,
     pub services: BTreeMap<TypeId, usize>,
     pub protocol_services: BTreeMap<ProtocolId, usize>,
     pub descriptors: BTreeMap<TypeId, Vec<DescriptorContract>>,
@@ -230,8 +233,22 @@ impl Universe {
         budget: &mut Budget<'_>,
     ) -> Result<Self, OwnError> {
         let inventories = scopes::inventory(module, types, &external, budget)?;
+        let mut retained_roots = BTreeSet::new();
+        for (id, function) in module.functions.iter() {
+            budget.work(1)?;
+            if function.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Async | FunctionAttr::DeferEntry { .. })) {
+                retained_roots.insert(id);
+            }
+            for (_, instruction) in function.body.iter().flat_map(|body| body.insts.iter()) {
+                budget.work(1)?;
+                if let Operation::Lexical(LexicalOp::DeferRegister { action, .. }) = &instruction.op {
+                    retained_roots.insert(action.function);
+                }
+            }
+        }
+        budget.memory(retained_roots.len() * 64)?;
         let mut universe = Self {
-            nodes: vec![], calls: BTreeMap::new(), strides: BTreeMap::new(), inventories,
+            nodes: vec![], calls: BTreeMap::new(), strides: BTreeMap::new(), inventories, retained_roots,
             services: BTreeMap::new(), protocol_services: BTreeMap::new(), descriptors: BTreeMap::new(),
             creations: BTreeMap::new(), replacements: BTreeMap::new(),
         };

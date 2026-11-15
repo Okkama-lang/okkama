@@ -10,7 +10,7 @@ impl Driver<'_, '_> {
         }
         let flow = self.current_instruction.and_then(|inst| self.flow.before_instructions.get(&inst));
         flow.is_none_or(|flow| {
-            let deps = &flow.values[original.as_u32() as usize].deps;
+            let deps = &flow.values[original].deps;
             flow.journals.iter().any(|((owner, atom), quantity)| {
                 point.env.scopes.contains_key(owner) && deps.contains(atom)
                     && !matches!(quantity.presence, domain::Presence::Bottom | domain::Presence::Absent)

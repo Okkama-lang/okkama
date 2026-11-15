@@ -296,11 +296,8 @@ fn collections_failing_order_stops_the_sort() {
 through_low!(streams_params_grouped, "L01.gram.params.grouped");
 // compile_low: SPB_STRUCTURE, a definition that does not dominate its use in `main`.
 through_low!(collections_batching_functional, "L05.batching.functional");
-// compile_low: ENTRY_FAILURE_MASK, an own entry or witness whose body may fail but whose summary declares no
-// failure.
-through_low!(collections_persistent_list, "L09.collections.persistent-list");
-through_low!(caps_in_collections_and_closures, "L12.caps-in-collections-and-closures");
-through_low!(once_collections_heap_and_deque, "L09.collections.heap-and-deque");
+// L09.collections.persistent-list, L12.caps-in-collections-and-closures and L09.collections.heap-and-deque
+// (ENTRY_FAILURE_MASK, #706) are full checks in champ_cases_own_masks.rs.
 // compile_low: ENTRY_FAILURE_MASK (#706), the witness entry of `CursorItems.cursor`; its scalar `val.eq`
 // loads since #710.
 through_low!(once_collections_frequencies, "L09.collections.frequencies");

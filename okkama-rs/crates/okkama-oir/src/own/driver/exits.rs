@@ -177,7 +177,7 @@ fn crosses(
     budget: &mut Budget<'_>,
 ) -> Result<bool, OwnError> {
     let deps: BTreeSet<_> = values.iter().flat_map(|value| {
-        flow.values[value.as_u32() as usize].deps.iter().copied()
+        flow.values[*value].deps.iter().copied()
     }).collect();
     budget.work(1 + deps.len() + flow.journals.len())?;
     for ((owner, atom), quantity) in &flow.journals {

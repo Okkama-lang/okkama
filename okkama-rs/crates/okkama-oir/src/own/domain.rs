@@ -189,14 +189,84 @@ pub struct ValueState {
     pub deps: BTreeSet<Atom>,
     pub masks: Masks,
 }
+impl ValueState {
+    /// The state of a value before its definition: absent, without dependencies.
+    pub const ABSENT: Self = Self {
+        deps: BTreeSet::new(),
+        masks: Masks {
+            availability: 1, lifetime: 0, scope_phase: 0, must_use: 0, snapshot: 0, builder: 0, protocol: 0,
+        },
+    };
+}
+static ABSENT: ValueState = ValueState::ABSENT;
 impl Default for ValueState {
     fn default() -> Self {
-        Self { deps: BTreeSet::new(), masks: Masks { availability: 1, ..Masks::default() } }
+        Self::ABSENT
     }
 }
+
+/// Per-value states of the values that may carry ownership facts (#707). The analysis keys exactly the
+/// function's values whose type may own, at every program point: a value of any other type never has
+/// dependencies, so it reads as `ValueState::ABSENT`. A program point costs space and transfer work in
+/// proportion to its facts, not to the size of the function, whose plain values may number thousands.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ValueStates(BTreeMap<ValueId, ValueState>);
+impl ValueStates {
+    pub fn insert(&mut self, value: ValueId, state: ValueState) {
+        self.0.insert(value, state);
+    }
+    pub fn get(&self, value: ValueId) -> Option<&ValueState> {
+        self.0.get(&value)
+    }
+    pub fn remove(&mut self, value: ValueId) -> Option<ValueState> {
+        self.0.remove(&value)
+    }
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    pub fn iter(&self) -> impl Iterator<Item = (&ValueId, &ValueState)> {
+        self.0.iter()
+    }
+    pub fn states(&self) -> impl Iterator<Item = &ValueState> {
+        self.0.values()
+    }
+    pub fn states_mut(&mut self) -> impl Iterator<Item = &mut ValueState> {
+        self.0.values_mut()
+    }
+    /// Pointwise join; a value without a state on one side joins as `ValueState::ABSENT`.
+    fn join(&mut self, other: &Self) {
+        for (value, state) in &mut self.0 {
+            let incoming = other.0.get(value).unwrap_or(&ABSENT);
+            state.deps.extend(&incoming.deps);
+            state.masks = state.masks.join(incoming.masks);
+        }
+        for (value, incoming) in &other.0 {
+            if !self.0.contains_key(value) {
+                let mut state = incoming.clone();
+                state.masks = state.masks.join(ValueState::ABSENT.masks);
+                self.0.insert(*value, state);
+            }
+        }
+    }
+}
+impl std::ops::Index<ValueId> for ValueStates {
+    type Output = ValueState;
+    fn index(&self, value: ValueId) -> &ValueState {
+        self.0.get(&value).unwrap_or(&ABSENT)
+    }
+}
+impl std::ops::IndexMut<ValueId> for ValueStates {
+    fn index_mut(&mut self, value: ValueId) -> &mut ValueState {
+        self.0.entry(value).or_default()
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FlowState {
-    pub values: Vec<ValueState>,
+    pub values: ValueStates,
     pub journals: BTreeMap<(ScopeId, Atom), Quantity>,
     /// 1 = admission, 2 = bound. Union is uncertainty, never an admission right.
     pub provenance: BTreeMap<(ScopeId, Atom), u8>,
@@ -207,10 +277,7 @@ pub struct FlowState {
 impl FlowState {
     pub fn join(&mut self, other: &Self) -> bool {
         let old = self.clone();
-        for (value, incoming) in self.values.iter_mut().zip(&other.values) {
-            value.deps.extend(&incoming.deps);
-            value.masks = value.masks.join(incoming.masks);
-        }
+        self.values.join(&other.values);
         let keys: BTreeSet<_> = self.journals.keys().chain(other.journals.keys()).copied().collect();
         for key in keys {
             let left = self.journals.get(&key).copied().unwrap_or_default();
@@ -237,7 +304,7 @@ impl FlowState {
         *self != old
     }
     pub fn retire(&mut self, origin: ShapeId) {
-        for value in &mut self.values {
+        for value in self.values.states_mut() {
             let current = Atom::current(origin);
             if value.deps.remove(&current) {
                 value.deps.insert(current.history());
@@ -265,7 +332,8 @@ impl FlowState {
     /// B-tree node slack/links and vector spare capacity. This is independent of
     /// the number of possible equations and of unrelated module scopes.
     pub fn allocated_bytes(&self) -> usize {
-        let trees = self.values.iter().map(|value| value.deps.len() * (size_of::<Atom>() + 64)).sum::<usize>()
+        let trees = self.values.len() * (size_of::<(ValueId, ValueState)>() + 64)
+            + self.values.states().map(|value| value.deps.len() * (size_of::<Atom>() + 64)).sum::<usize>()
             + self.journals.len() * (size_of::<((ScopeId, Atom), Quantity)>() + 64)
             + self.provenance.len() * (size_of::<((ScopeId, Atom), u8)>() + 64)
             + self.latest.len() * (size_of::<(BindingId, BTreeSet<ValueId>)>() + 64)
@@ -273,14 +341,14 @@ impl FlowState {
             + self.binding_deps.len() * (size_of::<(BindingId, BTreeSet<Atom>)>() + 64)
             + self.binding_deps.values().map(|deps| deps.len() * (size_of::<Atom>() + 64)).sum::<usize>()
             + self.defers.len() * (size_of::<(ScopeId, Vec<InstId>)>() + 64);
-        size_of::<Self>() + self.values.capacity() * size_of::<ValueState>() + trees
+        size_of::<Self>() + trees
             + self.defers.values().map(|prefix| prefix.capacity() * size_of::<InstId>()).sum::<usize>()
     }
     pub(super) fn sparse_bytes(&self) -> usize {
-        self.allocated_bytes() - size_of::<Self>() - self.values.capacity() * size_of::<ValueState>()
+        self.allocated_bytes() - size_of::<Self>()
     }
     pub fn stored_facts(&self) -> usize {
-        self.values.iter().map(|value| value.deps.len() + 8).sum::<usize>()
+        self.values.states().map(|value| value.deps.len() + 8).sum::<usize>()
             + self.journals.len() * 2 + self.provenance.len()
             + self.latest.values().map(BTreeSet::len).sum::<usize>()
             + self.binding_deps.values().map(BTreeSet::len).sum::<usize>()

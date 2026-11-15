@@ -107,6 +107,32 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   deeper shape. `L02.equality.signed-zero-composite`,
   `L05.choice.empty-collections` and `L09.statistics.exact-samples` pass on
   Champ; the other four cases stop on #706, #687, #717 and #718.
+- **Own's flow analysis is linear in the plain values of a function (#707).**
+  Each program point kept a state for every SSA value of the function, and
+  every instruction charged (and walked) the whole state, so a large `main`
+  with thousands of plain values cost work quadratic in its size and
+  exhausted own's work budget (`own_rewrite: Incomplete`) in
+  `L05.variants.case-layouts`, `L07.try-mark.diverging-operand` and
+  `L09.digest.md5-sha1-vectors`, whose largest functions have 0 to 20
+  values that may own among 700 to 4 800. A point now keeps states only for
+  the values that may own (the only ones with dependencies; no consumer
+  reads the masks of plain values). The budgets are unchanged.
+
+- **Own declares the program failure of every split it elaborates (#706).**
+  Elaboration gives deps to, and so splits, any deps-carrying reference
+  without an obligation (a cap value, a role, a function value), not only
+  owned values and Atomic. Summary inference counted only the latter, so a
+  lambda own entry binding a cap parameter, a witness entry returning a role
+  field and a generic method staging a role value declared no failure while
+  their bodies held a `scope.split`, and the loader refused them with
+  `ENTRY_FAILURE_MASK`. Inference now declares the failure wherever the
+  driver may split such a reference: at a binding, a staged value or an exit
+  inside a scope that keeps a state, and at a call that offers it (not where
+  the scope is elided or the offer is dropped, so plain functions stay
+  infallible). `L09.collections.heap-and-deque`,
+  `L09.collections.persistent-list`, `L09.math.aggregates` and
+  `L12.caps-in-collections-and-closures` pass on Champ. The loader rules are
+  unchanged.
 
 - **Own never indexes a missing scope state (#672).** A constructor that
   stores a field which carries deps but holds no obligation (a role whose

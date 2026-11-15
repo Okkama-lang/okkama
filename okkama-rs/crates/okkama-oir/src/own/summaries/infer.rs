@@ -179,6 +179,34 @@ impl Universe {
                 break;
             }
         }
+        // Elaboration splits only against the state of a scope it keeps. A scope keeps no state when its
+        // inventory makes it eligible for elision, unless it is the root of an async action or a defer helper.
+        let mut site_scopes = BTreeMap::new();
+        for (block_id, block) in body.blocks.iter() {
+            budget.work(1 + block.insts.len())?;
+            site_scopes.insert(Site::Terminator(block_id), block.lexical_scope);
+            site_scopes.extend(block.insts.iter().map(|inst| (Site::Instruction(*inst), block.lexical_scope)));
+        }
+        budget.memory(site_scopes.len() * 64)?;
+        let root = entry.lexical_scope;
+        let keeps_state = |site: &Site, budget: &mut Budget<'_>| -> Result<bool, OwnError> {
+            let stack = super::super::edges::stack(module, site_scopes[site])?;
+            budget.work(stack.len())?;
+            Ok(stack.iter().any(|scope| {
+                (*scope == root && self.retained_roots.contains(&function))
+                    || self.inventories.get(scope).is_some_and(|facts| {
+                        !facts.blockers.is_empty() || !facts.potential_owned_types.is_empty()
+                    })
+            }))
+        };
+        // The driver offers a call operand without flow facts (a reference without an obligation) only when it
+        // keeps every offer, or at a terminator call, which has no flow snapshot.
+        let elides_offers = body.insts.iter().any(|(_, instruction)| {
+            matches!(routing::handling(&instruction.op), routing::Handling::Snapshot)
+                || matches!(instruction.op, Operation::Call(CallOp::Closure { .. } | CallOp::Cap { .. }
+                    | CallOp::Role { .. }))
+        }) || declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Lambda { .. }));
+        budget.work(body.insts.len())?;
         for (site, op) in operations {
             budget.work(1)?;
             let partitions_inputs = self.call_summary(function, site).is_some_and(|summary| {
@@ -188,22 +216,34 @@ impl Universe {
             // managed call inputs emits scope.split even for a scalar result.
             // Binding a Future splits nothing: its cache duty stays in the owner state (D12).
             let binds = matches!(op, Operation::Lexical(LexicalOp::Bind { .. } | LexicalOp::Rebind { .. }));
+            // Elaboration partitions every value it gives deps (the driver's `managed`): an owned value, a
+            // builtin capability (Atomic), and a deps-carrying reference without an obligation (a cap value, a
+            // role, a function value), the last only against a kept scope state (#706).
+            let partitioned = |owned: bool| cfg::operation_uses(op, body).is_ok_and(|uses| uses.iter().any(|operand| {
+                body.values.get(operand.value).is_ok_and(|value| {
+                    let facts = &types[&value.ty];
+                    let selected = if owned { facts.may_own() || facts.capabilities } else { facts.references };
+                    selected && !(binds && futures::is_future(module, value.ty))
+                })
+            }));
             if module.profile == Profile::High && (partitions_inputs || binds || matches!(op,
                 Operation::Lexical(LexicalOp::Stage { .. }) | Operation::Exit(ExitOp::Prepare { .. })))
-                // A builtin capability (Atomic) holds no obligation, yet elaboration partitions it. So does a
-                // deps-carrying reference offered to an owning call or bound (the driver's `managed`), such as
-                // a role value with plain implementers or an object holding one: its checked scope.split can
-                // fail (#703). An offered `fn` value is left out: own elides the offer of a closure without
-                // deps (`may_offer`), which this prediction cannot see.
-                && cfg::operation_uses(op, body).is_ok_and(|uses| uses.iter().any(|operand| {
-                    body.values.get(operand.value).is_ok_and(|value| {
-                        let callable = matches!(module.types.get(value.ty), Ok(Type::Fn(_)));
-                        let reference = types[&value.ty].capabilities
-                            || !callable && types[&value.ty].references && (partitions_inputs || binds);
-                        (types[&value.ty].may_own() || reference)
-                            && !(binds && futures::is_future(module, value.ty))
-                    })
-                })) {
+                // Elaboration partitions an owned value or a builtin capability (Atomic) wherever it gives it
+                // deps; a deps-carrying reference without an obligation only against a scope state it keeps
+                // (#706). A non-callable reference offered to an owning call or bound, such as a role value with
+                // plain implementers or an object holding one, is also counted (#703); an offered `fn` value is
+                // left out of that count, as own elides the offer of a closure without deps (`may_offer`).
+                && (partitioned(true)
+                    || partitioned(false)
+                        && !(partitions_inputs && elides_offers && matches!(site, Site::Instruction(_)))
+                        && keeps_state(&site, budget)?
+                    || (partitions_inputs || binds) && cfg::operation_uses(op, body).is_ok_and(|uses| {
+                        uses.iter().any(|operand| body.values.get(operand.value).is_ok_and(|value| {
+                            let callable = matches!(module.types.get(value.ty), Ok(Type::Fn(_)));
+                            !callable && types[&value.ty].references
+                                && !(binds && futures::is_future(module, value.ty))
+                        }))
+                    })) {
                 normal::failures(&mut summary.contract.failures, &[FailureKind::Program]);
             }
             if let Some(callee) = self.call_summary(function, site) {

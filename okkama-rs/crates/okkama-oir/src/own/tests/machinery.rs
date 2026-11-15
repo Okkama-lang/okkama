@@ -48,15 +48,17 @@ fn join_tables_and_independent_obligations() {
     assert_eq!(optional_history, Quantity::new(Maybe, Many));
     assert_eq!(Multiplicity::Bottom.join(One), One);
     assert_eq!(One.join(Many), Many);
-    let mut left = FlowState { values: vec![ValueState::default()], ..FlowState::default() };
-    left.values[0].masks.builder = 1;
-    left.values[0].masks.must_use = 2;
+    let value = ValueId::from_u32(0);
+    let mut left = FlowState::default();
+    left.values.insert(value, ValueState::default());
+    left.values[value].masks.builder = 1;
+    left.values[value].masks.must_use = 2;
     let mut right = left.clone();
-    right.values[0].masks.builder = 4;
-    right.values[0].masks.must_use = 4;
+    right.values[value].masks.builder = 4;
+    right.values[value].masks.must_use = 4;
     left.join(&right);
-    assert_eq!(left.values[0].masks.builder, 5);
-    assert_eq!(left.values[0].masks.must_use, 6);
+    assert_eq!(left.values[value].masks.builder, 5);
+    assert_eq!(left.values[value].masks.must_use, 6);
 }
 
 fn loop_input(managed: bool) -> (Module, FuncId, ScopeId, BlockId, ValueId) {
@@ -144,7 +146,7 @@ fn cyclic_analysis_has_current_history_and_maybe_many_without_unrolling() {
     let header = &flow.entries[&head];
     assert_eq!(header.journals[&(root, Atom::current(origin).history())],
         Quantity::new(Presence::Maybe, Multiplicity::Many));
-    assert!(header.values[next.as_u32() as usize].deps.contains(&Atom::current(origin)));
+    assert!(header.values[next].deps.contains(&Atom::current(origin)));
     assert!(flow.evaluations < flow.height_bound);
     let mut equations = flow.equations.clone();
     assert!(equations.intern(Shape::Protocol { holder: next, slot: 0 }).is_err());
@@ -155,7 +157,7 @@ fn cyclic_analysis_has_current_history_and_maybe_many_without_unrolling() {
     let original = output.module.functions.get(function).unwrap().body.as_ref().unwrap();
     let initial = original.bindings.iter().next().unwrap().0;
     assert!(history_edge.1.binding_deps[&initial].contains(&Atom::current(origin)));
-    assert!(history_edge.1.values.iter().any(|value| {
+    assert!(history_edge.1.values.states().any(|value| {
         value.deps.contains(&Atom::current(origin).history())
             && !value.deps.contains(&Atom::current(origin))
     }));
@@ -485,13 +487,48 @@ fn sparse_p1_size_memory_and_function_local_scope_dimensions() {
     assert!(matches!(error, OwnError::Incomplete { stats } if stats.exhausted_limit == Some(OwnLimit::Memory)));
 }
 
+/// #707: a program point stores and charges only the facts of values that may own. Thousands of plain values
+/// across hundreds of blocks cost work linear in the function, where the dense state charged every value at
+/// every instruction (quadratic) and exhausted the default work budget.
+#[test]
+fn plain_values_cost_no_state_at_any_program_point() {
+    let (module, function) = scalar_size_input(5000, 400);
+    let options = OwnOptions::default();
+    let analysis = OwnAnalysis { types: classify_test(&module, &options), ..OwnAnalysis::default() };
+    let flow = analyze_function(&module, function, &analysis, &options).unwrap_or_else(|error| panic!("{error:?}"));
+    assert_eq!(flow.before_instructions.len(), 5000);
+    assert!(flow.entries.values().chain(flow.before_instructions.values()).all(|state| state.values.is_empty()));
+    assert!(flow.stats.charged_work < 100 * (5000 + 400), "{}", flow.stats.charged_work);
+}
+
+/// A value with a state on one side only joins as absent on the other (the dense join's default).
+#[test]
+fn sparse_value_states_join_a_missing_value_as_absent() {
+    let value = ValueId::from_u32(3);
+    let atom = Atom::current(ShapeId(0));
+    let mut defined = FlowState::default();
+    defined.values.insert(value, ValueState {
+        deps: BTreeSet::from([atom]), masks: Masks { availability: 2, lifetime: 1, ..Masks::default() },
+    });
+    let mut joined = FlowState::default();
+    assert!(joined.join(&defined));
+    assert_eq!(joined.values[value].deps, BTreeSet::from([atom]));
+    assert_eq!(joined.values[value].masks.availability, 3);
+    let mut other = defined.clone();
+    assert!(other.join(&FlowState::default()));
+    assert_eq!(other.values[value].masks.availability, 3);
+    assert_eq!(FlowState::default().values[value], ValueState::ABSENT);
+}
+
 #[test]
 fn genuinely_large_sparse_function_exhausts_default_memory_cheaply() {
     // Linear CFG, but thousands of retained SSA states: real vector/snapshot storage
     // exceeds 256 MiB. No enormous dense equation matrix or unbounded work is needed.
+    // Only values that may own have a state (#707), so the parameters hold resources.
     let mut module = ModuleBuilder::new("large_memory", Profile::High);
-    let int = module.intern_type(Type::Int).unwrap();
-    let f = module.declare_function(function("large", vec![int; 4096], vec![])).unwrap();
+    let (resource, destroy) = resource(&mut module, "Res");
+    empty_body(&mut module, destroy);
+    let f = module.declare_function(function("large", vec![resource; 4096], vec![])).unwrap();
     let root = scope(&mut module, f);
     let mut builder = module.function_builder(f, root).unwrap();
     for _ in 0..768 {
