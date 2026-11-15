@@ -850,6 +850,76 @@ fn sort_or_stop<T, E>(items: &mut [T], mut compare: impl FnMut(&T, &T) -> Result
     }
 }
 
+/// The natural order `ordering` sorts scalars and text by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NaturalOrder {
+    Int,
+    Float,
+    Rat,
+    Str,
+    /// Bytes and chars: their raw words.
+    Raw,
+}
+
+/// A stable sort of scalars or text in their natural order. A long sort stops for the interrupt flag or
+/// the memory budget (#238): every few thousand comparisons look at them, and a stop leaves the sort at
+/// once (#283). Champ runs the same sort (#678).
+pub(crate) fn sort_natural(runtime: &Runtime, items: &mut [Word], order: NaturalOrder)
+    -> Result<(), crate::budget::Exhausted>
+{
+    let mut compared = 0u32;
+    sort_or_stop(items, |&a, &b| {
+        compared = compared.wrapping_add(1);
+        if compared.is_multiple_of(SORT_POLL)
+            && runtime.limits.polled()
+            && let Some(what) = runtime.over_budget()
+        {
+            return Err(what);
+        }
+        Ok(match order {
+            NaturalOrder::Int => runtime.big_value(a).cmp(&runtime.big_value(b)),
+            NaturalOrder::Float => f64::from_bits(a).partial_cmp(&f64::from_bits(b)).unwrap_or(Ordering::Equal),
+            NaturalOrder::Rat => runtime.rational(a).compare(runtime.rational(b)),
+            NaturalOrder::Str => runtime.heap.text(a).cmp(runtime.heap.text(b)),
+            NaturalOrder::Raw => a.cmp(&b),
+        })
+    })
+}
+
+/// A stable bottom-up merge sort whose comparison says whether the left element is greater than the right
+/// one (only then is the right one taken first), or None when it failed. The first failure stops the sort:
+/// no later comparison runs. Champ runs the same merge, so the sequence of comparisons is the same (#678).
+pub(crate) fn merge_order(mut items: Vec<Word>, mut greater: impl FnMut(Word, Word) -> Option<bool>)
+    -> Option<Vec<Word>>
+{
+    let mut width = 1;
+    while width < items.len() {
+        let mut merged = Vec::with_capacity(items.len());
+        let mut left = 0;
+        while left < items.len() {
+            let mid = (left + width).min(items.len());
+            let end = (mid + width).min(items.len());
+            let (mut i, mut j) = (left, mid);
+            while i < mid && j < end {
+                // Take the right element only when the left one is greater.
+                if greater(items[i], items[j])? {
+                    merged.push(items[j]);
+                    j += 1;
+                } else {
+                    merged.push(items[i]);
+                    i += 1;
+                }
+            }
+            merged.extend_from_slice(&items[i..mid]);
+            merged.extend_from_slice(&items[j..end]);
+            left = end;
+        }
+        items = merged;
+        width *= 2;
+    }
+    Some(items)
+}
+
 /// Stable ordering of an array: natural order for scalars and text, otherwise
 /// a bottom-up merge sort over `compare::Comparing<T>.order`.
 fn ordering(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, source: Word) -> Word {
@@ -860,34 +930,17 @@ fn ordering(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, source: Word)
     };
     let kind = Kind::of(program, element);
     let mut items = runtime.heap.elements(source).to_vec();
-    let element_type = program.ty(element).cloned();
-    let builtin = matches!(
-        element_type,
-        Some(Type::Int | Type::Float | Type::Rat | Type::Byte | Type::Char | Type::Str)
-    );
+    let natural = match program.ty(element) {
+        Some(Type::Int) => Some(NaturalOrder::Int),
+        Some(Type::Float) => Some(NaturalOrder::Float),
+        Some(Type::Rat) => Some(NaturalOrder::Rat),
+        Some(Type::Str) => Some(NaturalOrder::Str),
+        Some(Type::Byte | Type::Char) => Some(NaturalOrder::Raw),
+        _ => None,
+    };
     let repr = kind.repr();
-    if builtin {
-        // A long sort stops for the interrupt flag or the memory budget
-        // (#238): every few thousand comparisons look at them, and a stop
-        // leaves the sort at once (#283).
-        let mut compared = 0u32;
-        let sorted = sort_or_stop(&mut items, |&a, &b| {
-            compared = compared.wrapping_add(1);
-            if compared.is_multiple_of(SORT_POLL)
-                && runtime.limits.polled()
-                && let Some(what) = runtime.over_budget()
-            {
-                return Err(what);
-            }
-            Ok(match element_type {
-                Some(Type::Int) => runtime.big_value(a).cmp(&runtime.big_value(b)),
-                Some(Type::Float) => f64::from_bits(a).partial_cmp(&f64::from_bits(b)).unwrap_or(Ordering::Equal),
-                Some(Type::Rat) => runtime.rational(a).compare(runtime.rational(b)),
-                Some(Type::Str) => runtime.heap.text(a).cmp(runtime.heap.text(b)),
-                _ => a.cmp(&b),
-            })
-        });
-        if let Err(what) = sorted {
+    if let Some(natural) = natural {
+        if let Err(what) = sort_natural(runtime, &mut items, natural) {
             return runtime.exhaust(unsafe { &mut *ctx }, what);
         }
         if kind == Kind::Byte {
@@ -902,49 +955,14 @@ fn ordering(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, source: Word)
     };
     // The source keeps every element alive while comparisons run.
     runtime.roots.push((source, Repr::Ref));
-    let mut width = 1;
-    let mut failed = false;
-    while width < items.len() && !failed {
-        let mut merged = Vec::with_capacity(items.len());
-        let mut left = 0;
-        while left < items.len() {
-            let mid = (left + width).min(items.len());
-            let end = (mid + width).min(items.len());
-            let (mut i, mut j) = (left, mid);
-            while i < mid && j < end {
-                // Take the right element only when the left one is greater.
-                match order(ctx, runtime, role, slot, items[i], items[j]) {
-                    Some(result) if result == greater => {
-                        merged.push(items[j]);
-                        j += 1;
-                    }
-                    Some(_) => {
-                        merged.push(items[i]);
-                        i += 1;
-                    }
-                    None => {
-                        failed = true;
-                        break;
-                    }
-                }
-            }
-            if failed {
-                break;
-            }
-            merged.extend_from_slice(&items[i..mid]);
-            merged.extend_from_slice(&items[j..end]);
-            left = end;
-        }
-        if !failed {
-            items = merged;
-        }
-        width *= 2;
-    }
+    let sorted = merge_order(items, |left, right| {
+        order(ctx, runtime, role, slot, left, right).map(|result| result == greater)
+    });
     runtime.roots.pop();
-    if failed {
-        return 0;
+    match sorted {
+        Some(items) => runtime.heap.allocate_array(repr, &items),
+        None => 0,
     }
-    runtime.heap.allocate_array(repr, &items)
 }
 
 /// The `order` method of `compare::Comparing<T>` for element type `element`,
