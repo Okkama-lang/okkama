@@ -258,7 +258,36 @@ And it differs from all of them in keeping floats finite (Section 5.5). The
 remainder follows the dividend, as in C, Java, Go and Rust. That is the
 remainder of truncating division, which is the division `int(a / b)` writes.
 
-## 5.10 Limits
+## 5.10 A worked example: drift and exact money
+
+The choice between `rat` and `float` is easiest to see when both compute the
+same thing.
+
+{{example:05-drift}}
+
+- **Ten dimes.** Adding `0.1` ten times in binary floating point gives
+  `0.9999999999999999`, because one tenth has no finite binary expansion and
+  every addition rounds. The same sum in `rat` is exactly `1`. Neither
+  result is a bug: `float` is fast and approximate by definition, `rat` is
+  exact by definition, and the program chose.
+- **Comparing floats.** A `float` result is compared with a tolerance,
+  `(x - 1.0).abs() < 1e-9`, never with `==`. An exact result needs no
+  tolerance, which is why money, ratios and anything a person will check by
+  hand belong in `rat` or `int`.
+- **Interest.** Twelve months at one-twelfth of a percent are computed
+  exactly in `rat` and converted to `float` once, for display:
+  `1010.045960887182`. Rounding happens at the edge, where a person reads
+  the number, not twelve times inside the computation.
+- **Integers grow.** `(2).pow(70)` is the exact 22-digit integer; there is
+  no overflow to guard against (§5.2).
+
+The cost of exactness is speed and size: a long chain of `rat` operations
+can grow large denominators, and a numerical simulation with millions of
+steps belongs in `float`. The language makes the choice explicit in the
+type, so it is made once, where the number is created, not discovered later
+in a rounding difference.
+
+## 5.11 Limits
 
 - **No non-finite floats.** Code that relies on IEEE infinities and NaN must
   be restructured (Section 5.4).

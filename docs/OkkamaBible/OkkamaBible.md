@@ -59,7 +59,8 @@
   - [5.7 Conversions](#57-conversions)
   - [5.8 Numbers from text](#58-numbers-from-text)
   - [5.9 Numbers in other languages](#59-numbers-in-other-languages)
-  - [5.10 Limits](#510-limits)
+  - [5.10 A worked example: drift and exact money](#510-a-worked-example-drift-and-exact-money)
+  - [5.11 Limits](#511-limits)
 - [Chapter 6. Text](#chapter-6-text)
   - [6.1 Three layers of text](#61-three-layers-of-text)
   - [6.2 Okkama's choice: immutable code points](#62-okkamas-choice-immutable-code-points)
@@ -2186,7 +2187,67 @@ And it differs from all of them in keeping floats finite (Section 5.5). The
 remainder follows the dividend, as in C, Java, Go and Rust. That is the
 remainder of truncating division, which is the division `int(a / b)` writes.
 
-## 5.10 Limits
+## 5.10 A worked example: drift and exact money
+
+The choice between `rat` and `float` is easiest to see when both compute the
+same thing.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    // Ten dimes as floats and as rats.
+    let floats = (1..=10).reduce(0.0) -> sum, n { sum + 0.1; };
+    let rats = (1..=10).reduce(0.rat()) -> sum, n { sum + 1.rat() / 10.rat(); };
+    out.writeln(floats.string() + " " + (floats == 1.0).string());
+    out.writeln(rats.string() + " " + (rats == 1.rat()).string());
+    // A float comparison needs a tolerance; an exact one does not.
+    out.writeln(((floats - 1.0).abs() < 0.000000001).string());
+    // Monthly interest of 1/12 percent on 1000, twelve times, exactly.
+    let balance = (1..=12).reduce(1000.rat()) -> total, month { total + total / 1200.rat(); };
+    out.writeln(balance.float().string());
+    // Integers never overflow; they grow.
+    out.writeln((2).pow(70).string());
+    0;
+}
+```
+
+Output:
+
+```text
+0.9999999999999999 false
+1 true
+true
+1010.045960887182
+1180591620717411303424
+```
+
+- **Ten dimes.** Adding `0.1` ten times in binary floating point gives
+  `0.9999999999999999`, because one tenth has no finite binary expansion and
+  every addition rounds. The same sum in `rat` is exactly `1`. Neither
+  result is a bug: `float` is fast and approximate by definition, `rat` is
+  exact by definition, and the program chose.
+- **Comparing floats.** A `float` result is compared with a tolerance,
+  `(x - 1.0).abs() < 1e-9`, never with `==`. An exact result needs no
+  tolerance, which is why money, ratios and anything a person will check by
+  hand belong in `rat` or `int`.
+- **Interest.** Twelve months at one-twelfth of a percent are computed
+  exactly in `rat` and converted to `float` once, for display:
+  `1010.045960887182`. Rounding happens at the edge, where a person reads
+  the number, not twelve times inside the computation.
+- **Integers grow.** `(2).pow(70)` is the exact 22-digit integer; there is
+  no overflow to guard against (§5.2).
+
+The cost of exactness is speed and size: a long chain of `rat` operations
+can grow large denominators, and a numerical simulation with millions of
+steps belongs in `float`. The language makes the choice explicit in the
+type, so it is made once, where the number is created, not discovered later
+in a rounding difference.
+
+## 5.11 Limits
 
 - **No non-finite floats.** Code that relies on IEEE infinities and NaN must
   be restructured (Section 5.4).
