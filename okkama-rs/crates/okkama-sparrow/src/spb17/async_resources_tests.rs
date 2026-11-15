@@ -5,7 +5,7 @@
 //! `SPB_SUSPEND_BRACKET` (draft 3 §§11, 15). Positive programs follow the low goldens `r2-take-proof-recheck` and
 //! `r2-defer-await-body-failure` of okkama-oir; each negative is valid up to the rule it names.
 use super::*;
-use super::async_tests::{Body, FUTURE_INT, FUTURE_VOID, INNER, MAIN, WORK, CONSUME, arguments, find, l, p,
+use super::async_tests::{Body, FUTURE_INT, FUTURE_VOID, INNER, MAIN, MAKE, WORK, CONSUME, arguments, find, l, p,
     owner_program, plain, program, reject_with, s, service, slot_types, value, work};
 
 use Argument as A;
@@ -494,6 +494,43 @@ fn a_packet_crosses_the_take_in_one_frame_slot() {
     verify_load(&taking(Take::PacketAcross), &NoExternalContracts).unwrap();
     reject_with(&taking(Take::PacketUnsaved), suspension::FRAME_LINEAR, "outside the frame");
     reject_with(&taking(Take::PacketTwice), suspension::FRAME_LINEAR, "saved twice");
+}
+
+// --- Packets of fut.new ----------------------------------------------------------------------------------------
+
+/// `action mint() { let f = consume(Res()); }` (OIR-2 §10.1): the cold Future's input packet holds the fresh `Res`,
+/// which the cache settle at @mint's close releases into its plan. With `merge`, the plan is the executor.
+fn mint(merge: bool) -> Function {
+    let mut b = Body::new("mint", EntryAbi::Observation, vec![]);
+    b.f.proofs.entry = Some(EntryContract::default());
+    b.block("entry", &[]);
+    let q0 = b.emit(O::ScopeBegin, vec![A::Scope(MAKE), A::Boundary(MAKE)], K::ScopeState);
+    let created = b.register(Type::Object(0));
+    let Location::Register(id) = created else { unreachable!() };
+    b.f.code.push(Instruction::Data { op: DataOp::ObjNew, inputs: vec![], output: Some(id),
+        immediate: Immediate::Object(0) });
+    let packet = b.emit(O::OwnCreateCommit, vec![l(created), A::Object(0), A::Boundary(MAKE)], K::Packet);
+    let [future, cache, q1] = [b.register(FUTURE_VOID), b.service(K::CacheState), b.service(K::ScopeState)];
+    b.next(O::FutureNew, vec![A::Entry(2), A::Scope(MAKE), A::Result(Some(FUTURE_VOID)), l(created), l(packet),
+        l(q0)], vec![future, cache, q1]);
+    let finished = b.close(q1, None, None, MAKE, &[cache], 0, merge);
+    let closed = b.service(K::Closed);
+    b.dispatch(finished, [false, false, false], vec![(Tag::Success, "done", vec![p(0)])]);
+    b.block("done", &[closed]);
+    b.ret();
+    b.finish()
+}
+
+fn minting(merge: bool) -> Program {
+    let mut p = owner_program(true);
+    p.functions[3] = mint(merge);
+    p
+}
+
+#[test]
+fn a_cold_future_holds_its_fresh_inputs_until_its_owner_settles_it() {
+    verify_load(&minting(true), &NoExternalContracts).unwrap();
+    reject_with(&minting(false), suspension::SCHEDULE, "needs the executor");
 }
 
 // --- SPB_REHOME --------------------------------------------------------------------------------------------------
