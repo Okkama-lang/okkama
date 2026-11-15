@@ -1049,8 +1049,10 @@ impl Defer {
     }
 }
 
+/// An async defer runs its entry as a child Future that the frame awaits (ruling #601 K2: not shielded, Tomato
+/// parity); cancellation of a defer is tested with the K2 rules.
 #[test]
-fn champ_r5_async_defer_suspends_shielded_and_continues_or_unwinds() {
+fn champ_r5_async_defer_suspends_and_continues_or_unwinds() {
     let mut traces = Traces::default();
     for configuration in configurations() {
         let (stress, engine) = configuration;
@@ -1065,26 +1067,23 @@ fn champ_r5_async_defer_suspends_shielded_and_continues_or_unwinds() {
             let (r, input) = object_of(&mut ctx, owner_of(&runtime, &state), 0);
             let mut defer = Defer::new(input, g);
             runtime.roots.push((defer.io.input.record, Repr::Ref));
-            // The child starts on this stack and waits for G: PENDING, with the child as the frame's STEP.
+            // The child starts on this stack, a frame of this task, and waits for G: PENDING, with the child as
+            // the frame's STEP.
             assert_eq!(defer.step(&mut ctx, this), OUTCOME_PENDING, "{:?}", runtime.fatal);
             let child = get(this, step);
             assert_eq!(runtime.function_of(child), WATCH as usize);
-            let shield = tasks::champ_flags::SHIELDED | tasks::champ_flags::OBSERVED;
-            assert_eq!(get(child, tasks::FLAGS) & shield, shield);
-            assert_eq!(runtime.champ_task_of(child).unwrap(), child);
-            // `this` only listens (§5): no AWAITING, no WAITED; the input operand stays a packet, now empty.
-            assert_eq!(get(child, tasks::WAITER), this);
-            assert_eq!(get(this, tasks::AWAITING), word::UNBOUND);
-            assert_eq!(get(this, tasks::FLAGS) & tasks::champ_flags::AWAIT_SUSPENDED, 0);
+            let flags = get(child, tasks::FLAGS);
+            let observed = tasks::champ_flags::OBSERVED;
+            assert_eq!(flags & (tasks::champ_flags::SHIELDED | observed), observed, "not shielded");
+            assert_eq!(runtime.champ_task_of(child).unwrap(), this);
+            // `this` awaits it, as an await of the deferred call; the input operand stays a packet, now empty.
+            assert_eq!((get(child, tasks::WAITER), get(this, tasks::AWAITING)), (this, child));
+            assert_ne!(get(this, tasks::FLAGS) & tasks::champ_flags::AWAIT_SUSPENDED, 0);
             assert!(super::super::helpers::packet(&runtime, defer.io.input.record).unwrap().is_empty());
             assert_eq!(life(&runtime, r), Life::Live);
             // A re-entry while the child runs continues the same step: no second child, no second listener.
             assert_eq!(defer.step(&mut ctx, this), OUTCOME_PENDING);
             assert_eq!((get(this, step), get(child, tasks::WAITER)), (child, this));
-            // A cancellation of `this` stays requested: the shielded child is not cancelled.
-            assert_eq!(rt_cancel_request(&mut ctx, this), NORMAL);
-            let requested = tasks::champ_flags::CANCEL_REQUESTED;
-            assert_eq!(get(child, tasks::FLAGS) & requested, 0);
             assert!(runtime.ready.is_empty());
             let e = if fails { failure(&mut runtime, "defer failed") } else { 0 };
             open(&mut ctx, g, e);
@@ -1106,9 +1105,6 @@ fn champ_r5_async_defer_suspends_shielded_and_continues_or_unwinds() {
                 assert_eq!(outcome, NORMAL);
                 assert_eq!((defer.post.failure, defer.post.value, defer.post.packet.record), (0, 0, 0));
             }
-            let flags = get(this, tasks::FLAGS);
-            assert_eq!(flags & (requested | tasks::champ_flags::CANCEL_DELIVERED), requested);
-            set(this, tasks::FLAGS, flags & !requested);
         }
         assert_eq!(destroyed(&runtime), "Res 1\nRes 2\n");
         traces.record(configuration, &runtime);

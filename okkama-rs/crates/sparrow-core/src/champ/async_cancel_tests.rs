@@ -20,7 +20,10 @@ const ORDER: u32 = 3;
 const AFTER: u32 = 4;
 const OUTER: u32 = 5;
 const UNSTARTED: u32 = 6;
-const ASYNC_K: u32 = 7;
+const DIRECT: u32 = 7;
+const INNER: u32 = 8;
+const WORKER: u32 = 9;
+const ASYNC_K: u32 = 10;
 
 // --- SPB 17 programs ------------------------------------------------------------------------------------------
 
@@ -73,6 +76,67 @@ fn fail_merging(b: &mut Body, body: Location, state: Location, failure: Location
     b.ret();
 }
 
+/// One merging plan of close `close` over the scope and the reserve, run by its executor.
+fn final_plan(b: &mut Body, cleanup: Location, close: u32) -> Location {
+    let selection = b.selection();
+    let proofs = &mut b.f.proofs;
+    proofs.order_witnesses.push(s::OrderWitness { creation_pcs: vec![] });
+    let plan = proofs.plans.len() as u32;
+    proofs.plans.push(s::Plan { merge: true, selection, order_witness: proofs.order_witnesses.len() as u32 - 1 });
+    proofs.cleanup_plans.push(s::CleanupPlan { plan, reserve: true, close, reserve_empty: false,
+        sources: vec![s::MergeSource::Scope, s::MergeSource::Reserve], slots: vec![], preserves: vec![], joins: vec![],
+        suffixes: vec![] });
+    let planned = b.emit(O::CleanupPlan, vec![l(cleanup), A::Plan(plan)], K::Cleanup);
+    b.executor(planned)
+}
+
+/// Return `value` through the final close of an async body as the compiler emits it (D18, `cancel=true`): settle
+/// `duties`, the first plan, `cleanup.deliver_cancel`, the aborted reserve's plan, then publish the success or the
+/// close's failure.
+fn return_final(b: &mut Body, body: Location, state: Location, scope: u32, value: Location, duties: &[Location],
+    labels: (&'static str, &'static str))
+{
+    let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
+    let selection = b.selection();
+    let arguments = vec![A::Kind(s::ExitKind::Return), A::Boundary(scope), l(value), l(empty),
+        A::Selection(selection)];
+    let pending = b.emit(O::ExitPrepare, arguments, K::Pending);
+    let proofs = &mut b.f.proofs;
+    let close = proofs.closes.len() as u32;
+    let envelope = proofs.envelopes.len() as u32;
+    proofs.envelopes.push(s::Envelope { failures: s::ENVELOPE_CANCEL });
+    proofs.closes.push(s::CloseContract { begin_pc: b.f.code.len() as u32, boundary: scope, reserve: true,
+        active_failure: false, envelope });
+    let schedule = proofs.schedules.len() as u32;
+    proofs.schedules.push(s::Schedule { services: duties.to_vec() });
+    let arguments = vec![l(state), l(pending), A::Boundary(scope), A::Envelope(envelope)];
+    let mut cleanup = b.emit(O::CleanupBegin, arguments, K::Cleanup);
+    if duties.is_empty() {
+        cleanup = b.emit(O::CleanupSettle, vec![l(cleanup), A::Schedule(schedule)], K::Cleanup);
+    }
+    for &duty in duties {
+        cleanup = b.emit(O::CleanupSettle, vec![l(cleanup), A::Schedule(schedule), l(duty)], K::Cleanup);
+    }
+    cleanup = final_plan(b, cleanup, close);
+    cleanup = b.emit(O::CleanupDeliverCancel, vec![l(cleanup)], K::Cleanup);
+    cleanup = final_plan(b, cleanup, close);
+    let finished = [b.service(K::Closed), b.service(K::FailureState), b.service(K::ExitState)];
+    b.next(O::CleanupFinish, vec![l(cleanup)], finished.to_vec());
+    let (done, failed) = labels;
+    b.dispatch((finished[0], finished[1], finished[2]), [true, false, true],
+        vec![(Tag::Pending, done, vec![p(0), p(1)]), (Tag::Failure, failed, vec![p(0), p(1)])]);
+    let [closed, reserved] = [b.service(K::Closed), b.service(K::Pending)];
+    b.block(done, &[closed, reserved]);
+    let outputs = [b.register(s::Type::Int), b.service(K::Packet), b.service(K::Deps)];
+    b.next(O::ExitCommit, vec![l(reserved), A::Destination(s::ExitDestination::Caller)], outputs.to_vec());
+    b.next(O::FuturePublish, vec![l(body), A::Flag(true), l(outputs[0]), l(outputs[1]), l(outputs[2])], vec![]);
+    b.ret();
+    let [closed, combined] = [b.service(K::Closed), b.register(s::Type::Failure)];
+    b.block(failed, &[closed, combined]);
+    b.next(O::FuturePublish, vec![l(body), A::Flag(false), l(combined)], vec![]);
+    b.ret();
+}
+
 /// `async consume(r: Res) { }`: its inputs hold `r`'s obligation; its own close merges.
 fn consumer() -> (s::Function, s::FrameLayout) {
     let (mut b, frame) = Body::asynchronous("consume", CONSUME_K, vec![]);
@@ -88,7 +152,9 @@ fn consumer() -> (s::Function, s::FrameLayout) {
 /// With `inner` None, `async delivery(f: Future<int>) is int { let van = Res(); return await f; }`; with an inner
 /// entry, `async order(f…) is int { let van = Res(); return await inner(f…); }`, whose await starts the inner
 /// Future (a frame of its task) and whose close settles its cache duty. The vans show the cleanup order.
-fn forward(symbol: &str, index: u32, inner: Option<u32>, params: u32) -> (s::Function, s::FrameLayout) {
+fn forward(symbol: &str, index: u32, inner: Option<u32>, params: u32, final_exit: bool)
+    -> (s::Function, s::FrameLayout)
+{
     let mut slots = (0..params).map(|_| value(FUTURE_INT)).collect::<Vec<_>>();
     let state_slot = params + 1;
     slots.extend([service(K::Packet), service(K::ScopeState)]);
@@ -122,7 +188,11 @@ fn forward(symbol: &str, index: u32, inner: Option<u32>, params: u32) -> (s::Fun
     let [x, deps] = [b.register(s::Type::Int), b.service(K::Deps)];
     b.block("ok", &[x, deps]);
     let (body_ok, resumed) = b.resume(first, 1, &types(&slots, &saved_slots));
-    return_merging(&mut b, body_ok, resumed[0], index, Some(x), &resumed[1..], "done");
+    if final_exit {
+        return_final(&mut b, body_ok, resumed[0], index, x, &resumed[1..], ("done", "done_failed"));
+    } else {
+        return_merging(&mut b, body_ok, resumed[0], index, Some(x), &resumed[1..], "done");
+    }
     let unwind = [b.register(s::Type::Failure), b.service(K::TaskState), b.service(K::Receipt)];
     b.block("bad", &unwind);
     let (body_bad, resumed) = b.resume(first, 1, &types(&slots, &saved_slots));
@@ -207,11 +277,41 @@ fn unstarted() -> (s::Function, s::FrameLayout) {
     (b.finish(), layout)
 }
 
+/// `async worker(g: Future<int>) is int { let f = inner(g); let v = try { await f } catch e is Cancelled { -2 };
+/// return v; }`, the worker of the `window` probe, with the final exit of the compiler (D18).
+fn worker() -> (s::Function, s::FrameLayout) {
+    // 0 g, 1 inputs, 2 owner state, 3 the cache duty, 4 f, 5–7 the unwind.
+    let slots = vec![value(FUTURE_INT), service(K::Packet), service(K::ScopeState), service(K::CacheState),
+        value(FUTURE_INT), value(s::Type::Failure), service(K::TaskState), service(K::Receipt)];
+    let (mut b, frame) = Body::asynchronous("worker", WORKER, vec![s::Type::Int]);
+    let (body, inputs) = b.resume(frame, 0, &types(&slots, &[0, 1]));
+    let q0 = b.emit(O::ScopeBegin, vec![A::Scope(WORKER), A::Boundary(WORKER)], K::ScopeState);
+    let q1 = b.emit(O::OwnAccept, vec![l(q0), l(inputs[1])], K::ScopeState);
+    let (future, cache, q2) = future_new(&mut b, WORKER, INNER, &[inputs[0]], q1);
+    let first = b.save(body, 1, &[q2, cache]);
+    b.outcomes(O::Await, vec![l(future)], vec![(Tag::Normal, "ok", vec![p(0), p(1)]),
+        (Tag::Unwind, "bad", vec![p(0), p(1), p(2)])]);
+    let [x, deps] = [b.register(s::Type::Int), b.service(K::Deps)];
+    b.block("ok", &[x, deps]);
+    let (body_ok, resumed) = b.resume(first, 1, &types(&slots, &[2, 3]));
+    return_final(&mut b, body_ok, resumed[0], WORKER, x, &[resumed[1]], ("done", "done_failed"));
+    let unwind = [b.register(s::Type::Failure), b.service(K::TaskState), b.service(K::Receipt)];
+    b.block("bad", &unwind);
+    let (body_bad, resumed) = b.resume(first, 1, &types(&slots, &[2, 3]));
+    let (body_caught, closing, _, kept) =
+        b.adapter(body_bad, 2, resumed[0], unwind, &[resumed[1]], &types(&slots, &[3]));
+    let caught = b.constant(s::Constant::Int("-2".into()), s::Type::Int);
+    return_final(&mut b, body_caught, closing, WORKER, caught, &[kept[0]], ("caught", "caught_failed"));
+    let layout = b.layout(slots, vec![(vec![0, 1], vec![]), (vec![2, 3], vec![4]), (vec![3], vec![2, 5, 6, 7])]);
+    (b.finish(), layout)
+}
+
 fn k2_program() -> s::Program {
     let mut functions = Vec::new();
     let mut frames = Vec::new();
-    for (function, layout) in [work(), consumer(), forward("delivery", DELIVERY, None, 1),
-        forward("order", ORDER, Some(DELIVERY), 1), after(), forward("outer", OUTER, Some(AFTER), 2), unstarted()]
+    for (function, layout) in [work(), consumer(), forward("delivery", DELIVERY, None, 1, false),
+        forward("order", ORDER, Some(DELIVERY), 1, false), after(), forward("outer", OUTER, Some(AFTER), 2, false),
+        unstarted(), forward("direct", DIRECT, None, 1, true), forward("inner", INNER, None, 1, true), worker()]
     {
         functions.push(function);
         frames.push(layout);
@@ -556,12 +656,13 @@ fn champ_k2_a_frame_of_a_cancelled_task_raises_at_its_next_await() {
     traces.agree();
 }
 
-/// The shield (draft 3 §5, test `k2-cancel-during-shielded-settle-kept` in its next-await form; OIR-2 §10.4
-/// "cancellation does not interrupt cleanup"; Bible "its defers … run"): a task is cancelled while an async defer
-/// of its runs as a shielded child. The child is not cancelled and runs to its end, nothing is delivered while it
-/// runs, and the request stays for the task's next await, which raises Cancelled before starting anything.
+// --- The final exit (ruling #601 K2 in OIR-2 async ABI: Tomato parity) -----------------------------------------
+
+/// Probe `window`, direct form: the awaited Future settles and queues the task, the task is cancelled before its
+/// turn, and no await follows. Tomato: the task completes with its value and `cancelled()` is false. The final
+/// exit's D18 step delivers nothing; the request stays pending.
 #[test]
-fn champ_k2_a_cancellation_during_a_shielded_defer_waits_for_the_next_await() {
+fn champ_k2_a_request_pending_at_the_final_exit_leaves_the_result() {
     let mut traces = Traces::default();
     for configuration in configurations() {
         let (stress, engine) = configuration;
@@ -569,55 +670,196 @@ fn champ_k2_a_cancellation_during_a_shielded_defer_waits_for_the_next_await() {
         let mut ctx = context(&mut runtime);
         ctx.entry_frame = frame_pointer!();
         let mut state = owner(&mut ctx);
-        // The task's body is played by the test: it is on the stack while it runs its defer and its await.
-        let this = gate(&mut ctx, &mut state);
-        let step = tail(&runtime, this) + STEP;
-        let child_gate = gate(&mut ctx, &mut state);
-        let input = empty(&mut ctx);
-        runtime.roots.push((input.record, Repr::Ref));
-        let mut io = CallOwn { input, entry_abi: u64::from(DELIVERY), output: std::ptr::null_mut(), context: 0,
-            cleanup_mode: CLEANUP_SHIELDED };
-        let args = [child_gate];
-        let registration = RegistrationMap { replacements: 0 };
-        let mut post = DeferPost::default();
-        let mut defer = |ctx: &mut Ctx, runtime: &mut Runtime, post: &mut DeferPost| {
-            runtime.running.push(this);
-            let outcome = rt_invoke_defer_async(ctx, this, u64::from(DELIVERY), args.as_ptr(), 1, &mut io,
-                &registration, post);
-            runtime.running.pop();
-            outcome
-        };
-        assert_eq!(defer(&mut ctx, &mut runtime, &mut post), OUTCOME_PENDING, "{:?}", runtime.fatal);
-        let child = get(this, step);
-        assert_eq!(flags(child) & (SHIELDED | OBSERVED), SHIELDED | OBSERVED);
-        assert_eq!(runtime.champ_task_of(child).unwrap(), child);
-        assert_eq!(rt_cancel_request(&mut ctx, this), NORMAL);
-        // Nothing reaches the shielded child or its own wait, and nothing is queued.
-        assert_eq!(flags(this) & (CANCEL_REQUESTED | CANCEL_DELIVERED | tasks::DELIVER_NOW), CANCEL_REQUESTED);
-        assert_eq!([child, child_gate].map(|frame| flags(frame) & CANCEL_REQUESTED), [0, 0]);
-        assert_eq!(flags(child) & tasks::DELIVER_NOW, 0);
-        assert!(runtime.ready.is_empty());
-        open_gate(&mut ctx, child_gate, 5);
-        runtime.schedule(&mut ctx, child);
+        let first = gate(&mut ctx, &mut state);
+        let direct = task(&mut ctx, DIRECT, &[first], &mut state, true);
+        open_gate(&mut ctx, first, 42);
+        assert_eq!(rt_cancel_request(&mut ctx, direct), NORMAL);
+        runtime.schedule(&mut ctx, direct);
         assert_eq!(ctx.status, OK, "{:?}", runtime.fatal);
-        assert_eq!((get(child, tasks::STATE), get(child, tasks::RESULT)), (tasks::DONE, word::small(5).unwrap()));
-        assert_eq!(destroyed(&runtime), "Res 1\n", "the defer ran to its end");
-        assert_eq!(runtime.ready.pop_front(), Some(this));
-        assert_eq!(defer(&mut ctx, &mut runtime, &mut post), NORMAL, "{:?}", runtime.fatal);
-        assert_eq!(flags(this) & (CANCEL_REQUESTED | CANCEL_DELIVERED), CANCEL_REQUESTED, "kept");
-        // The next await raises it before starting the Future it awaits.
-        let next = cold(&mut ctx, &mut state, 7);
-        let mut awaited = AwaitPost::default();
-        runtime.running.push(this);
-        let outcome = rt_await_view(&mut ctx, this, next, &mut awaited);
-        runtime.running.pop();
-        assert_eq!(outcome, UNWIND);
-        assert_eq!((ctx.status, awaited.task, awaited.receipt), (FAILED, next, RECEIPT_NOT_STARTED));
-        assert_eq!(kind(&runtime, awaited.value), "Cancelled");
-        assert_eq!(get(next, tasks::STATE), tasks::COLD);
-        assert_ne!(flags(this) & CANCEL_DELIVERED, 0);
-        (ctx.status, ctx.failure) = (OK, 0);
+        assert_eq!((get(direct, tasks::STATE), get(direct, tasks::RESULT)), (tasks::DONE, word::small(42).unwrap()));
+        assert!(!cancelled(&mut ctx, direct));
+        assert_eq!(flags(direct) & (CANCEL_REQUESTED | CANCEL_DELIVERED), CANCEL_REQUESTED);
+        assert_eq!(destroyed(&runtime), "Res 1\n", "its cleanup ran once, on the success path");
         traces.record(configuration, &runtime);
     }
     traces.agree();
+}
+
+/// Probe `window`, nested form (Tomato: `inner observed 42`, `inner cleanup`, `inner cancelled false`, `worker got
+/// -2`, `-2`, `cancelled false`): the worker awaits the inner frame its await started; the inner frame's awaited
+/// Future settles and queues it; the worker is cancelled. The inner frame completes with its value at its final
+/// exit; the worker's await of it throws Cancelled, which the worker catches, and the worker completes.
+#[test]
+fn champ_k2_a_frame_completes_and_its_cancelled_task_throws_at_its_await() {
+    let mut traces = Traces::default();
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load_k2(stress, engine);
+        let mut ctx = context(&mut runtime);
+        ctx.entry_frame = frame_pointer!();
+        let mut state = owner(&mut ctx);
+        let first = gate(&mut ctx, &mut state);
+        let worker = task(&mut ctx, WORKER, &[first], &mut state, true);
+        let inner = get(worker, tasks::AWAITING);
+        runtime.roots.push((inner, Repr::Ref));
+        assert_eq!(runtime.function_of(inner), INNER as usize);
+        open_gate(&mut ctx, first, 42);
+        assert_eq!(rt_cancel_request(&mut ctx, worker), NORMAL);
+        assert_eq!(runtime.ready.iter().copied().collect::<Vec<_>>(), [inner]);
+        runtime.schedule(&mut ctx, worker);
+        assert_eq!(ctx.status, OK, "{:?}", runtime.fatal);
+        let value = word::small(42).unwrap();
+        assert_eq!((get(inner, tasks::STATE), get(inner, tasks::RESULT)), (tasks::DONE, value));
+        assert!(!cancelled(&mut ctx, inner));
+        assert_eq!((get(worker, tasks::STATE), get(worker, tasks::RESULT)), (tasks::DONE, word::small(-2).unwrap()));
+        assert!(!cancelled(&mut ctx, worker));
+        assert_ne!(flags(worker) & CANCEL_DELIVERED, 0, "delivered at the worker's await");
+        assert_eq!(destroyed(&runtime), "Res 1\n", "the inner frame's cleanup");
+        traces.record(configuration, &runtime);
+    }
+    traces.agree();
+}
+
+// --- `defer await` (ruling #601 K2: not shielded, Tomato parity) -------------------------------------------------
+
+/// A task whose body the test plays (it is on the stack while it steps) runs `defer await delivery(gate)`.
+struct Deferring {
+    this: Word,
+    io: CallOwn,
+    args: [Word; 1],
+    registration: RegistrationMap,
+    post: DeferPost,
+}
+
+impl Deferring {
+    fn new(ctx: &mut Ctx, state: &mut ScopeSlot, awaited: Word) -> Self {
+        let this = gate(ctx, state);
+        let input = empty(ctx);
+        unsafe { (*ctx.runtime).roots.push((input.record, Repr::Ref)) };
+        let io = CallOwn { input, entry_abi: u64::from(DELIVERY), output: std::ptr::null_mut(), context: 0,
+            cleanup_mode: CLEANUP_SHIELDED };
+        let registration = RegistrationMap { replacements: 0 };
+        Self { this, io, args: [awaited], registration, post: DeferPost::default() }
+    }
+
+    fn step(&mut self, ctx: &mut Ctx) -> Outcome {
+        let runtime = unsafe { &mut *ctx.runtime };
+        runtime.running.push(self.this);
+        let outcome = rt_invoke_defer_async(ctx, self.this, u64::from(DELIVERY), self.args.as_ptr(), 1, &mut self.io,
+            &self.registration, &mut self.post);
+        runtime.running.pop();
+        outcome
+    }
+
+    fn child(&self, runtime: &Runtime) -> Word {
+        get(self.this, tail(runtime, self.this) + STEP)
+    }
+
+    /// The step's Unwind, taken off the bridge as the caller's capture does; its failure.
+    fn unwound(&mut self, ctx: &mut Ctx, outcome: Outcome) -> Word {
+        assert_eq!(outcome, UNWIND);
+        assert_eq!((ctx.status, ctx.failure), (FAILED, self.post.failure));
+        (ctx.status, ctx.failure) = (OK, 0);
+        assert_eq!((self.io.input.record, self.child(unsafe { &*ctx.runtime })), (0, 0), "the step is over");
+        self.post.failure
+    }
+}
+
+/// Probe `finaldefer` (Tomato: `body done`, `cancel requested`, `task -1 cancelled true`, without `defer
+/// finished`): a cancellation that arrives while the defer waits is delivered at its await. Here the deferred call
+/// waits as the sole awaiter of a spawned child, which the delivery cancels; the deferred call throws Cancelled
+/// before its end, and the defer step unwinds with it.
+#[test]
+fn champ_k2_a_cancellation_interrupts_a_waiting_defer_await() {
+    let mut traces = Traces::default();
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load_k2(stress, engine);
+        let mut ctx = context(&mut runtime);
+        ctx.entry_frame = frame_pointer!();
+        let mut state = owner(&mut ctx);
+        let release = gate(&mut ctx, &mut state);
+        mark(release, SPAWNED);
+        let mut defer = Deferring::new(&mut ctx, &mut state, release);
+        let this = defer.this;
+        assert_eq!(defer.step(&mut ctx), OUTCOME_PENDING, "{:?}", runtime.fatal);
+        let child = defer.child(&runtime);
+        assert_eq!(flags(child) & (SHIELDED | OBSERVED), OBSERVED, "not shielded");
+        assert_eq!(runtime.champ_task_of(child).unwrap(), this, "a frame of the task");
+        assert_eq!(get(this, tasks::AWAITING), child);
+        assert_eq!(rt_cancel_request(&mut ctx, this), NORMAL);
+        // The request reaches the defer's own wait.
+        assert_ne!(flags(child) & tasks::DELIVER_NOW, 0);
+        assert_ne!(flags(release) & CANCEL_REQUESTED, 0);
+        assert_ne!(flags(this) & CANCEL_DELIVERED, 0);
+        close_gate_cancelled(&mut ctx, release);
+        runtime.schedule(&mut ctx, child);
+        assert_eq!(ctx.status, OK, "{:?}", runtime.fatal);
+        assert!(failed_cancelled(&runtime, child), "the deferred call did not reach its end");
+        assert_eq!(runtime.ready.pop_front(), Some(this));
+        let outcome = defer.step(&mut ctx);
+        let failure = defer.unwound(&mut ctx, outcome);
+        assert_eq!(kind(&runtime, failure), "Cancelled");
+        assert_eq!(destroyed(&runtime), "Res 1\n");
+        traces.record(configuration, &runtime);
+    }
+    traces.agree();
+}
+
+/// The deferred call settles while the task's request is still pending (the delivery found no wait to reach):
+/// Tomato's await of it then raises the request, as an await whose task was cancelled while it waited does.
+#[test]
+fn champ_k2_a_defer_await_raises_a_request_pending_when_its_call_settles() {
+    let mut traces = Traces::default();
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load_k2(stress, engine);
+        let mut ctx = context(&mut runtime);
+        ctx.entry_frame = frame_pointer!();
+        let mut state = owner(&mut ctx);
+        let release = gate(&mut ctx, &mut state);
+        let mut defer = Deferring::new(&mut ctx, &mut state, release);
+        let this = defer.this;
+        assert_eq!(defer.step(&mut ctx), OUTCOME_PENDING, "{:?}", runtime.fatal);
+        let child = defer.child(&runtime);
+        open_gate(&mut ctx, release, 5);
+        assert_eq!(runtime.ready.iter().copied().collect::<Vec<_>>(), [child]);
+        assert_eq!(rt_cancel_request(&mut ctx, this), NORMAL);
+        assert_eq!(flags(this) & (CANCEL_REQUESTED | CANCEL_DELIVERED), CANCEL_REQUESTED);
+        runtime.schedule(&mut ctx, child);
+        assert_eq!(ctx.status, OK, "{:?}", runtime.fatal);
+        assert_eq!((get(child, tasks::STATE), get(child, tasks::RESULT)), (tasks::DONE, word::small(5).unwrap()));
+        assert_eq!(runtime.ready.pop_front(), Some(this));
+        let outcome = defer.step(&mut ctx);
+        let failure = defer.unwound(&mut ctx, outcome);
+        assert_eq!(kind(&runtime, failure), "Cancelled");
+        assert_ne!(flags(this) & CANCEL_DELIVERED, 0);
+        assert_eq!(destroyed(&runtime), "Res 1\n");
+        traces.record(configuration, &runtime);
+    }
+    traces.agree();
+}
+
+/// Probe `windowdefer` (Tomato: `worker observed 42`, `worker -1 cancelled true`, without `defer started`): a
+/// request pending when the defer runs is raised by its await before the deferred call starts.
+#[test]
+fn champ_k2_a_request_pending_before_a_defer_await_never_starts_the_call() {
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load_k2(stress, engine);
+        let mut ctx = context(&mut runtime);
+        ctx.entry_frame = frame_pointer!();
+        let mut state = owner(&mut ctx);
+        let release = gate(&mut ctx, &mut state);
+        let mut defer = Deferring::new(&mut ctx, &mut state, release);
+        assert_eq!(rt_cancel_request(&mut ctx, defer.this), NORMAL);
+        let outcome = defer.step(&mut ctx);
+        let failure = defer.unwound(&mut ctx, outcome);
+        assert_eq!(kind(&runtime, failure), "Cancelled");
+        assert_eq!(count(&runtime, DELIVERY, FutureStep::Start), 0);
+        assert_ne!(flags(defer.this) & CANCEL_DELIVERED, 0);
+        assert_eq!((get(release, tasks::WAITER), destroyed(&runtime)), (word::UNBOUND, String::new()));
+        // No body ran in any configuration: there is no trace to compare.
+        assert!(runtime.champ.future_events.iter().all(|event| event.step != FutureStep::Start), "{configuration:?}");
+    }
 }

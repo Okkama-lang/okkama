@@ -346,32 +346,24 @@ pub extern "C" fn rt_cleanup_settle_dynamic(ctx: *mut Ctx, this: Word, input: *m
         Ok(())
     })
 }
-/// `cleanup.deliver_cancel` (SPB 77), class L (draft 3 §5): at the final exit of an async body whose close
-/// declares D18 `cancel=true`. A cancellation requested of the body's task and not yet delivered becomes the
-/// close's primary failure when it has none, and activates abort; the failure surfaces through `cleanup.finish`.
-/// With a primary already recorded the request stays for later.
+/// `cleanup.deliver_cancel` (SPB 77), class L (draft 3 §5): the D18 step of an async body's final exit, between
+/// its two plans. It delivers nothing (ruling #601 K2 in OIR-2 async ABI, Tomato parity): a cancellation still
+/// pending when the body has produced its result leaves the result as it is and stays requested, so the second
+/// plan finds no aborted reserve. The step keeps its place and its once-only check until #727 removes it.
 pub extern "C" fn rt_cleanup_deliver_cancel(ctx: *mut Ctx, this: Word, input: *mut CleanupSlot,
     post: *mut CleanupSlot) -> Outcome
 {
-    use crate::tasks::{champ_flags as flags, get, set, FLAGS};
     leaf(ctx, |runtime| {
-        let task = runtime.champ_task_of(this)?;
+        // The body's frame, checked as before.
+        runtime.champ_task_of(this)?;
         let record = unsafe { (*input).record };
-        edit(runtime, record, |runtime, cleanup| {
+        edit(runtime, record, |_, cleanup| {
             // Decision L2: after the settle phase and the first plan, which may have run to done; once.
             let idle = cleanup.active.is_none() && cleanup.selected.is_none() && cleanup.captured == 0;
             if !idle || !cleanup.planned || cleanup.delivered || cleanup.second {
                 return Err(error("a deferred cancellation is delivered once, between the two plans"));
             }
             cleanup.delivered = true;
-            let current = get(task, FLAGS);
-            let requested = current & flags::CANCEL_REQUESTED != 0 && current & flags::CANCEL_DELIVERED == 0;
-            if requested && cleanup.failure == 0 {
-                let failure = runtime.champ_take_emergency(this)?;
-                cleanup.failure = failure;
-                abort(runtime, cleanup)?;
-                set(task, FLAGS, current | flags::CANCEL_DELIVERED);
-            }
             Ok(())
         })?;
         unsafe {

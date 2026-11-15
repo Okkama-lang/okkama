@@ -545,7 +545,9 @@ impl Runtime {
 pub(crate) mod champ_flags {
     pub(crate) const SPAWNED: u64 = super::SPAWNED;
     pub(crate) const OBSERVED: u64 = super::OBSERVED;
+    #[cfg(test)]
     pub(crate) const CANCEL_REQUESTED: u64 = super::CANCEL_REQUESTED;
+    #[cfg(test)]
     pub(crate) const CANCEL_DELIVERED: u64 = super::CANCEL_DELIVERED;
     pub(crate) const SHIELDED: u64 = super::SHIELDED;
     /// Draft 3's WAITED, with Tomato's meaning (#663).
