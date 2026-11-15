@@ -15,13 +15,15 @@ struct Duty {
 }
 
 /// The Services schedule that own declared for one owner (D16). Own names each duty by its Future;
-/// several schedules of one owner are merged in declaration order.
+/// several schedules of one owner are merged in declaration order. `dynamic` keeps own's step for the entries
+/// the owner admits at run time (D25.3).
 struct OwnSchedule {
     name: String,
     owner: ScopeId,
     protocol: ProtocolId,
     dictionary: Option<ValueId>,
     futures: Vec<ValueId>,
+    dynamic: bool,
 }
 
 /// One suspension site and its continuation.
@@ -78,6 +80,7 @@ impl Lowering<'_, '_> {
         self.check(is_async)?;
         let schedules = self.own_schedules()?;
         let duties = self.futures(&schedules)?;
+        let rehomed = self.rehomes(&duties)?;
         let mut slots = Slots::default();
         let mut continuations = Vec::new();
         let mut frame = None;
@@ -89,7 +92,7 @@ impl Lowering<'_, '_> {
             self.exits(start)?;
             frame = Some(start);
         }
-        let closes = self.closes(&duties)?;
+        let closes = self.closes(&duties, &rehomed)?;
         if let Some(start) = frame {
             let suspensions = self.suspensions(&closes)?;
             let mut versions: BTreeMap<ValueId, Vec<ValueId>> = BTreeMap::new();
@@ -109,10 +112,14 @@ impl Lowering<'_, '_> {
                 repaired.insert(value, found);
             }
             self.recheck_proofs()?;
-            self.schedules(&schedules, &duties, &closes, &repaired)?;
+            self.schedules(&schedules, &duties, &closes, &repaired, &rehomed)?;
             self.body.frame_layout = Some(FrameLayout { slots: slots.decls, continuations });
         } else {
-            self.schedules(&schedules, &duties, &closes, &BTreeMap::new())?;
+            self.schedules(&schedules, &duties, &closes, &BTreeMap::new(), &rehomed)?;
+        }
+        if !rehomed.is_empty() {
+            // The state results of the rewritten rehomes have no definition left.
+            crate::low::compact::compact_body(&mut self.body).map_err(|message| self.invalid(&message))?;
         }
         Ok(())
     }
@@ -184,7 +191,8 @@ impl Lowering<'_, '_> {
     }
 
     /// D16 (ruling 1): own declares the Services schedules; coro consumes them. Own names a cache duty by
-    /// its Future; dynamic entries (D25) and the D23 families belong to later slices.
+    /// its Future and ends a schedule with `dynamic` when the owner admits entries at run time (D25.3); the
+    /// D23 families belong to later slices.
     fn own_schedules(&mut self) -> Result<Vec<OwnSchedule>, CoroError> {
         let mut merged: Vec<OwnSchedule> = Vec::new();
         for schedule in std::mem::take(&mut self.body.service_schedules) {
@@ -194,20 +202,25 @@ impl Lowering<'_, '_> {
                 return Err(self.unsupported("a service schedule of another protocol family (D23)"));
             }
             let mut futures = Vec::new();
+            let mut dynamic = false;
             for duty in &schedule.duties {
-                let ScheduleDuty::Value(future) = duty else {
-                    return Err(self.unsupported("a dynamic schedule entry (D25)"));
-                };
-                futures.push(*future);
+                match duty {
+                    ScheduleDuty::Value(future) => futures.push(*future),
+                    ScheduleDuty::Dynamic if !dynamic => dynamic = true,
+                    ScheduleDuty::Dynamic => return Err(self.invalid("a schedule names its dynamic step twice")),
+                }
             }
             match merged.iter_mut().find(|item| item.owner == schedule.owner) {
                 Some(item) if item.protocol != schedule.protocol || item.dictionary != schedule.dictionary => {
                     return Err(self.invalid("the Services schedules of one owner disagree (D16)"));
                 }
-                Some(item) => item.futures.extend(futures),
+                Some(item) => {
+                    item.futures.extend(futures);
+                    item.dynamic |= dynamic;
+                }
                 None => merged.push(OwnSchedule {
                     name: schedule.name, owner: schedule.owner, protocol: schedule.protocol,
-                    dictionary: schedule.dictionary, futures,
+                    dictionary: schedule.dictionary, futures, dynamic,
                 }),
             }
         }
@@ -248,6 +261,79 @@ impl Lowering<'_, '_> {
             return Err(self.invalid("a cache duty has no entry in a Services schedule of its owner (D16)"));
         }
         Ok(ordered)
+    }
+
+    /// C-1, C-4: own's rehome of a Future created here moves its cache duty from the owner state; in coro the duty
+    /// is the token of its `fut.new`, so the rehome takes the token form and the state passes through. A Future
+    /// that reached the owner in an admitted packet has no token: its entry is dynamic (D25.3), and the own form,
+    /// valid in coro, takes it from the state. Returns the rehomes that consume each token.
+    fn rehomes(&mut self, duties: &[Duty]) -> Result<BTreeMap<ValueId, Vec<InstId>>, CoroError> {
+        let predecessors = graph::predecessors(&self.body);
+        let mut rehomed: BTreeMap<ValueId, Vec<InstId>> = BTreeMap::new();
+        let insts: Vec<_> = self.body.blocks.iter().flat_map(|(_, block)| block.insts.clone()).collect();
+        for inst in insts {
+            self.budget.step(1)?;
+            let Operation::Async(AsyncOp::CacheRehome { form: RehomeForm::Scope { state, pending, future }, target,
+                protocol }) = self.body.insts.get(inst)?.op.clone()
+            else {
+                continue;
+            };
+            // The token form takes the duty from its owner; a duty that an earlier rehome moved on is an entry of
+            // the scope that admitted it.
+            let origin = self.origin(future, &predecessors)?;
+            let owner = match self.module.types.get(self.ty(state)?)? {
+                Type::Service(ServiceType::Scope(scope)) => *scope,
+                _ => return Err(self.invalid("cache.rehome takes a scope state")),
+            };
+            let Some(duty) = duties.iter().find(|duty| Some(duty.future) == origin && duty.scope == owner) else {
+                continue;
+            };
+            let results = self.body.insts.get(inst)?.results.clone();
+            let [moved, reserve] = results[..] else {
+                return Err(self.invalid("the own form of cache.rehome gives the state and the reserve"));
+            };
+            let instruction = self.body.insts.get_mut(inst)?;
+            instruction.op = Operation::Async(AsyncOp::CacheRehome {
+                form: RehomeForm::Token { pending, cache: duty.token, task: None }, target, protocol,
+            });
+            instruction.results = vec![reserve];
+            self.body.values.get_mut(reserve)?.def = Definition::InstResult { inst, index: 0 };
+            // The state's other uses read the state the rehome no longer consumes.
+            visit::rewrite_uses(&mut self.body, &mut repair::Replace::single(moved, state));
+            rehomed.entry(duty.token).or_default().push(inst);
+        }
+        Ok(rehomed)
+    }
+
+    /// The value that `value` stands for through block parameters, if every edge passes the same one.
+    fn origin(&mut self, value: ValueId, predecessors: &[Vec<BlockId>]) -> Result<Option<ValueId>, CoroError> {
+        let mut pending = vec![value];
+        let mut seen = BTreeSet::new();
+        let mut found = None;
+        while let Some(value) = pending.pop() {
+            self.budget.step(1)?;
+            if !seen.insert(value) {
+                continue;
+            }
+            match self.body.values.get(value)?.def {
+                Definition::BlockParam { block, index } => {
+                    for &source in &predecessors[block.as_u32() as usize] {
+                        let term = &self.body.blocks.get(source)?.term.kind;
+                        match graph::edge_argument(term, block, index as usize) {
+                            Some(EdgeArg::Value(argument)) => pending.push(argument),
+                            _ => return Ok(None),
+                        }
+                    }
+                }
+                Definition::InstResult { .. } => {
+                    if found.is_some_and(|previous| previous != value) {
+                        return Ok(None);
+                    }
+                    found = Some(value);
+                }
+            }
+        }
+        Ok(found)
     }
 
     /// C-3: every await unwind edge flows into `await.unwind`, which consumes its task and receipt.
@@ -670,7 +756,8 @@ impl Lowering<'_, '_> {
     }
 
     /// Close sites of every scope that owns a duty, with the duties that reach them on every path.
-    fn closes(&mut self, duties: &[Duty]) -> Result<BTreeMap<Site, Vec<ValueId>>, CoroError> {
+    fn closes(&mut self, duties: &[Duty], rehomed: &BTreeMap<ValueId, Vec<InstId>>)
+        -> Result<BTreeMap<Site, Vec<ValueId>>, CoroError> {
         let mut sites: Vec<(Site, BlockId, usize, ScopeId)> = Vec::new();
         for (block, data) in self.body.blocks.iter() {
             for (position, &inst) in data.insts.iter().enumerate() {
@@ -686,23 +773,28 @@ impl Lowering<'_, '_> {
         let predecessors = graph::predecessors(&self.body);
         let mut closes: BTreeMap<Site, Vec<ValueId>> = BTreeMap::new();
         for duty in duties {
-            let (must, may) = self.defined(duty.token, &predecessors)?;
-            let Definition::InstResult { inst, .. } = self.body.values.get(duty.token)?.def else {
-                return Err(self.invalid("a cache duty is an instruction result"));
-            };
-            let (def_block, def_at) = self.body.blocks.iter().find_map(|(block, data)| {
-                data.insts.iter().position(|item| *item == inst).map(|at| (block, at))
-            }).ok_or_else(|| self.invalid("a cache duty has no defining instruction"))?;
+            let kills = rehomed.get(&duty.token).cloned().unwrap_or_default();
+            let (must, may) = self.available(duty.token, &kills, &predecessors)?;
             for &(site, block, position, scope) in &sites {
                 if scope != duty.scope {
                     continue;
                 }
                 let index = block.as_u32() as usize;
-                let earlier = block == def_block && def_at < position;
-                if must[index] || earlier {
-                    closes.entry(site).or_default().push(duty.token);
-                } else if may[index] {
-                    return Err(self.unsupported("a Future created on some paths only before its owner closes (D25)"));
+                // The duty's last event in the block before the close, else its state at the block entry.
+                let mut here = (must[index], may[index]);
+                for &inst in &self.body.blocks.get(block)?.insts[..position] {
+                    if self.body.insts.get(inst)?.results.contains(&duty.token) {
+                        here = (true, true);
+                    } else if kills.contains(&inst) {
+                        here = (false, false);
+                    }
+                }
+                match here {
+                    (true, _) => closes.entry(site).or_default().push(duty.token),
+                    (false, true) => {
+                        return Err(self.unsupported("a cache duty that reaches its owner's close on some paths only"));
+                    }
+                    (false, false) => {}
                 }
             }
         }
@@ -720,13 +812,23 @@ impl Lowering<'_, '_> {
         }
     }
 
-    /// Whether `value` is defined at each block entry on every path, and on some path.
-    fn defined(&mut self, value: ValueId, predecessors: &[Vec<BlockId>]) -> Result<(Vec<bool>, Vec<bool>), CoroError> {
+    /// Whether the token `value` is held at each block entry on every path, and on some path: defined and not
+    /// yet consumed by one of `kills`.
+    fn available(&mut self, value: ValueId, kills: &[InstId], predecessors: &[Vec<BlockId>])
+        -> Result<(Vec<bool>, Vec<bool>), CoroError> {
         let count = self.body.blocks.len();
-        let defines: Vec<bool> = self.body.blocks.iter().map(|(_, block)| {
-            block.params.contains(&value) || block.insts.iter().any(|inst| {
-                self.body.insts.get(*inst).is_ok_and(|inst| inst.results.contains(&value))
-            })
+        // A block's effect on the token: `Some(true)` when its last event defines it, `Some(false)` when that
+        // event consumes it, `None` when it passes the entry state through.
+        let effects: Vec<Option<bool>> = self.body.blocks.iter().map(|(_, block)| {
+            let mut effect = block.params.contains(&value).then_some(true);
+            for inst in &block.insts {
+                if self.body.insts.get(*inst).is_ok_and(|inst| inst.results.contains(&value)) {
+                    effect = Some(true);
+                } else if kills.contains(inst) {
+                    effect = Some(false);
+                }
+            }
+            effect
         }).collect();
         let entry = self.body.entry.as_u32() as usize;
         let mut must = vec![true; count];
@@ -740,11 +842,11 @@ impl Lowering<'_, '_> {
                 let inputs = &predecessors[index];
                 let all = index != entry && inputs.iter().all(|source| {
                     let source = source.as_u32() as usize;
-                    must[source] || defines[source]
+                    effects[source].unwrap_or(must[source])
                 });
                 let any = inputs.iter().any(|source| {
                     let source = source.as_u32() as usize;
-                    may[source] || defines[source]
+                    effects[source].unwrap_or(may[source])
                 });
                 if all != must[index] || any != may[index] {
                     must[index] = all;
@@ -956,7 +1058,7 @@ impl Lowering<'_, '_> {
     /// owner that never closes after its Futures keeps own's schedule over the tokens of `fut.new`.
     fn schedules(
         &mut self, own: &[OwnSchedule], duties: &[Duty], closes: &BTreeMap<Site, Vec<ValueId>>,
-        repaired: &BTreeMap<ValueId, BTreeMap<Site, ValueId>>,
+        repaired: &BTreeMap<ValueId, BTreeMap<Site, ValueId>>, rehomed: &BTreeMap<ValueId, Vec<InstId>>,
     ) -> Result<(), CoroError> {
         for schedule in own {
             let tokens: Vec<ValueId> = duties.iter().filter(|duty| duty.scope == schedule.owner)
@@ -976,7 +1078,15 @@ impl Lowering<'_, '_> {
                 }
             }
             if versions.is_empty() {
-                versions.push(tokens.iter().map(|token| ScheduleDuty::Value(*token)).collect());
+                // A rehomed duty leaves its owner with the exit (C-4): the owner never settles it.
+                versions.push(tokens.iter().filter(|token| !rehomed.contains_key(token))
+                    .map(|token| ScheduleDuty::Value(*token)).collect());
+            }
+            // D25.3: every close of the owner settles its admitted entries after the static duties.
+            if schedule.dynamic {
+                for version in &mut versions {
+                    version.push(ScheduleDuty::Dynamic);
+                }
             }
             for (index, duties) in versions.into_iter().enumerate() {
                 let name = self.schedule_name(&schedule.name, index, own);

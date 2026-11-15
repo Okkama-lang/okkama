@@ -287,7 +287,7 @@ impl Rewrite for HighOperationSite {
 
 fields!(
     CleanupMetadata { closes, schedules, plans, roots, proofs },
-    CleanupClose { source, after_defers, effects }, CleanupSchedule { close, holders, dictionary, protocol },
+    CleanupClose { source, after_defers, effects }, CleanupSchedule { close, holders, dictionary, protocol, dynamic },
     CleanupPlan { close, sources, direct }, RootRequirement { boundary, bindings }, RootBinding { value, trace }
 );
 impl Rewrite for CleanupSource {

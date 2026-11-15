@@ -29,6 +29,9 @@ pub struct CleanupSchedule {
     /// A finite empty P1 inventory needs neither runtime operand.
     pub dictionary: Option<ValueId>,
     pub protocol: Option<ProtocolId>,
+    /// After the static duties, the close settles the entries its owner admitted at run time with one
+    /// `cleanup.settle.dynamic` (async ABI D25.3).
+    pub dynamic: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MergeSource {

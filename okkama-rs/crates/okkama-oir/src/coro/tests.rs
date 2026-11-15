@@ -395,3 +395,68 @@ fn a_landing_parameter_depends_on_values_that_its_landing_sees() {
     let expected = parsed(include_str!("../../tests/fixtures/verify/valid/B9-cache-view-escapes-without-rehome.oir"));
     assert!(text::normalized_eq(&output, &expected).unwrap(), "{}", text::print(&output).unwrap());
 }
+
+/// The rehomes of a coro body: the form and the scope whose state or duty they take.
+fn rehomes(module: &Module, body: &Body) -> Vec<(bool, Option<ScopeId>)> {
+    body.blocks.iter().flat_map(|(_, block)| block.insts.iter()).filter_map(|inst| {
+        match &body.insts.get(*inst).unwrap().op {
+            Operation::Async(AsyncOp::CacheRehome { form: RehomeForm::Token { .. }, .. }) => Some((true, None)),
+            Operation::Async(AsyncOp::CacheRehome { form: RehomeForm::Scope { state, .. }, .. }) => {
+                let ty = body.values.get(*state).unwrap().ty;
+                let Ok(Type::Service(ServiceType::Scope(scope))) = module.types.get(ty) else { unreachable!() };
+                Some((false, Some(*scope)))
+            }
+            _ => None,
+        }
+    }).collect()
+}
+
+/// #601 D25 (C-1, C-4, D25.3): a Future created here leaves its owner with its token: the rehome takes the token
+/// form (verify_coro then checks that no close settles it again). A Future that reached a scope through an admitted
+/// packet has no token: it leaves in the own form, which takes it from the state. Own's dynamic step stays the
+/// last entry of every schedule version of its owner.
+#[test]
+fn a_rehome_takes_the_token_of_a_duty_created_here_and_the_state_of_an_admitted_one() {
+    let source = include_str!("../own/tests/async-goldens/r1-loop-escape.oir");
+    let module = lowered("r1-loop-escape", source);
+    let main = body(&module, "main");
+    // S5's Future leaves S5 by its token; S4 admitted it and passes it on from its state.
+    let forms = rehomes(&module, main);
+    assert_eq!(forms.len(), 2, "{forms:?}");
+    assert!(forms.contains(&(true, None)), "{forms:?}");
+    assert!(forms.iter().any(|(token, scope)| !token && scope.is_some()), "{forms:?}");
+    let own = parsed(source);
+    let own_main = own.functions.iter().find(|(_, function)| function.symbol == "main").unwrap().1;
+    let dynamic: Vec<_> = own_main.body.as_ref().unwrap().service_schedules.iter()
+        .filter(|schedule| schedule.duties.contains(&ScheduleDuty::Dynamic)).map(|schedule| schedule.owner).collect();
+    assert!(!dynamic.is_empty());
+    for schedule in main.service_schedules.iter().filter(|schedule| dynamic.contains(&schedule.owner)) {
+        assert_eq!(schedule.duties.last(), Some(&ScheduleDuty::Dynamic), "{}", schedule.name);
+        assert_eq!(schedule.duties.iter().filter(|duty| **duty == ScheduleDuty::Dynamic).count(), 1);
+    }
+    for schedule in main.service_schedules.iter().filter(|schedule| !dynamic.contains(&schedule.owner)) {
+        assert!(!schedule.duties.contains(&ScheduleDuty::Dynamic), "{}", schedule.name);
+    }
+}
+
+/// The returned Future of OIR-2 §10.1 `make()`: @make's rehome takes its token to the caller, and main's scopes
+/// that admit it settle it dynamically.
+#[test]
+fn a_returned_future_leaves_by_its_token() {
+    let module = lowered("r1-make-escape", include_str!("../own/tests/async-goldens/r1-make-escape.oir"));
+    let make = body(&module, "make");
+    assert_eq!(rehomes(&module, make), [(true, None)]);
+    // The duty left with the exit: no schedule of @make names its token.
+    let token = cache_tokens(make)[0];
+    assert!(make.service_schedules.iter().all(|schedule| !schedule.duties.contains(&ScheduleDuty::Value(token))));
+    let main = body(&module, "main");
+    assert!(main.service_schedules.iter().all(|schedule| schedule.duties.last() == Some(&ScheduleDuty::Dynamic)));
+}
+
+/// A schedule names its dynamic step once.
+#[test]
+fn a_schedule_names_its_dynamic_step_once() {
+    let source = include_str!("../own/tests/async-goldens/r1-make-escape.oir");
+    let twice = source.replace("duties [dynamic]", "duties [dynamic, dynamic]");
+    assert!(matches!(lower(&twice), Err(CoroError::InvalidInput { .. })));
+}
