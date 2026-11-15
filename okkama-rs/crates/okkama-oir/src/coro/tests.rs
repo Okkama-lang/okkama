@@ -44,6 +44,10 @@ const GOLDENS: &[(&str, &str, &str)] = &[
     variant!("r2-defer-await-reserve"),
     // R2: closes that suspend while the body owns a resource.
     variant!("r2-resource-suspending-close"),
+    // K1: cancellation before start, the elaboration §13.4 fixture, a nested close before the next await.
+    golden!("k1-cancel-unstarted"),
+    golden!("k1-failure-view-escapes"),
+    golden!("k1-nested-close-next-await"),
 ];
 
 /// Own → verify(own) → coro → verify(coro) (OIR-2 §12).

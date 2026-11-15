@@ -1,0 +1,97 @@
+oir 2 own
+// expect OIR2-B9.1 instruction:2:7
+// K1 (elaboration §13.3, async ABI C-3): the own golden k1-failure-view-escapes whose failing close of main
+// takes the failure that await.unwind observed instead of the failure it returned.
+module k1_failure_view_escapes
+requires core, async
+entry @main
+
+object app.Work {
+}
+
+enum app.Broken is Error = (broken)
+scope S0 action in @app.Work.run#0
+scope S1 action in @main
+scope S2 action in @app.Work.new#0
+summary M0 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary M1 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], failures=[program, panic, native], publication=atomic)
+summary M2 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary M3 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], failures=[program, panic, native], publication=atomic)
+summary M4 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[app.Work], failures=[program], publication=atomic)
+summary M5 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, cancelled], suspends=true, publication=atomic)
+summary M6 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary M7 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], publication=atomic)
+summary M8 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], publication=atomic)
+summary M9 internal contract call_contract(publication=atomic)
+summary M10 observation results [result_relation(provenance=unbound_result)] contract call_contract(results=[app.Work], failures=[program], publication=atomic)
+summary M11 observation results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+protocol P0 kind services holders [scope, cache, frame, receipt, root] rules [protocol_rule(transition=settle, from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root, checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running))]
+
+func @app.Work.new#0() -> app.Work [ctor app.Work] abi observation summary(M10) {
+    boundary B0 lexical in S2
+    ^b0 in S2:
+    br ^b1
+    ^b1 in S2:
+    invoke.own obj.new app.Work { }
+        normal ^b2($value)
+        unwind ^b3($failure)
+    ^b2(%0: app.Work facts(plain(certificate=closed_graph(ty=app.Work)))) in S2:
+    ret %0
+    ^b3(%1: failure) in S2:
+    raise %1
+}
+
+func @app.Work.run#0(%0: app.Work facts(plain(certificate=closed_graph(ty=app.Work))); %1: own) -> (int, own) [method app.Work, async] abi explicit(input_packet=1, output_packet=1) summary(M5) async-creation(M7) async-body(M5) {
+    boundary B0 lexical in S0
+    ^b0 in S0:
+    %2: scope<S0> = scope.begin S0
+    %3: scope<S0> = own.accept %2, %1
+    br ^b1(%0, %3)
+    ^b1(%4: app.Work facts(plain(certificate=closed_graph(ty=app.Work))), %5: scope<S0>) in S0:
+    %6: app.Broken facts(plain(certificate=scalar)) = enum.case app.Broken, case 0
+    br ^b2(%5, %6)
+    ^b2(%7: scope<S0>, %8: app.Broken facts(plain(certificate=scalar))) in S0 unwind ^b3(%7):
+    throw %8
+    ^b3(%9: scope<S0>, %10: failure) in S0:
+    %11: failure = scope.unwind %9, %10, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %11
+}
+
+func @main() -> int [entry, async] abi observation summary(M11) async-creation(M8) async-body(M11) {
+    service.schedule Schedule0 owner S1, protocol P0, duties [%6]
+    binding b0 "f": future<int> in S1
+    boundary B0 lexical in S1
+    key k0: key = service_of(value=%6, kind=cache)
+    dependency d0: dependency = key(k0)
+    dependency d1: dependency = from_ssa(%16)
+    ^b0 in S1:
+    %0: scope<S1> = scope.begin S1
+    br ^b1(%0)
+    ^b1(%1: scope<S1>) in S1:
+    invoke.own call @app.Work.new#0()
+        normal ^b2($value, %1)
+        unwind ^b3($failure, %1)
+    ^b2(%2: app.Work facts(plain(certificate=closed_graph(ty=app.Work))), %3: scope<S1>) in S1:
+    %4: own = own.empty
+    %5: deps = deps.of %2
+    (%6: future<int> facts(managed(deps=d0)), %7: scope<S1>) = fut.new %4, %5, %3, environment deferred(function=@app.Work.run#0, arguments=[%2]), result int, owner S1
+    %8: deps = deps.of %6
+    invoke.own await %6, result int
+        normal ^b4($value, $deps, %6, %7, %8)
+        unwind ^b5($failure, $task, $receipt, %7)
+    ^b3(%9: failure, %10: scope<S1>) in S1:
+    %11: failure = scope.unwind %10, %9, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %11
+    ^b4(%12: int, %13: deps, %14: future<int> facts(managed(deps=d1)), %15: scope<S1>, %16: deps) in S1:
+    invoke.own scope.end %15, effects scope_effects(failures=[], suspends=false, cancel=true)
+        normal ^b6($closed, %12)
+        unwind ^b7($closed, $failure)
+    ^b5(%17: failure, %18: task-state, %19: receipt, %20: scope<S1>) in S1:
+    (%21: scope<S1>, %22: failure) = await.unwind %20, %17, %18, %19, protocol P0
+    %23: failure = scope.unwind %21, %17, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %23
+    ^b6(%24: closed, %25: int) in S1:
+    ret %25
+    ^b7(%26: closed, %27: failure) in S1:
+    raise %27
+}
