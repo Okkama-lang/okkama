@@ -62,8 +62,8 @@ pub(super) fn creates_builders(body: &Body) -> bool {
 /// The builder's owner holds the journal of its elements (spec §4.1, §8): a
 /// transition moves the fresh parts of inserted values into that scope, so they
 /// are destroyed when the scope that created the builder closes. A buffer flows
-/// only through its own transitions and edge arguments. Versions from different
-/// owners meeting at a join take their nearest common scope, which outlives both.
+/// only through its own transitions and edge arguments. Versions of builders made
+/// in different scopes meeting at a join are refused (`join_owner`).
 pub(super) fn builder_owners(module: &Module, body: &Body) -> Result<BTreeMap<ValueId, ScopeId>, OwnError> {
     let buffer = |value: ValueId| -> Result<bool, OwnError> {
         let ty = body.values.get(value).map_err(arena)?.ty;
@@ -87,7 +87,7 @@ pub(super) fn builder_owners(module: &Module, body: &Body) -> Result<BTreeMap<Va
                 };
                 for result in &instruction.results {
                     if buffer(*result)? {
-                        changed |= join_owner(module, &mut owners, *result, owner)?;
+                        changed |= join_owner(&mut owners, *result, owner)?;
                     }
                 }
             }
@@ -98,7 +98,7 @@ pub(super) fn builder_owners(module: &Module, body: &Body) -> Result<BTreeMap<Va
                         continue;
                     };
                     if buffer(*parameter)? {
-                        changed |= join_owner(module, &mut owners, *parameter, owner)?;
+                        changed |= join_owner(&mut owners, *parameter, owner)?;
                     }
                 }
             }
@@ -141,28 +141,19 @@ fn edge_arguments(block: &Block) -> Vec<(BlockId, Vec<Option<ValueId>>)> {
     edges
 }
 
+/// Record `owner` for the buffer version `value`. The owner's journal already holds the elements pushed
+/// into the version, and no transition moves a journal between scopes, so versions of builders made in
+/// different scopes cannot meet at a join: the merged buffer would have no single owner.
 fn join_owner(
-    module: &Module,
     owners: &mut BTreeMap<ValueId, ScopeId>,
     value: ValueId,
     owner: ScopeId,
 ) -> Result<bool, OwnError> {
-    let Some(&previous) = owners.get(&value) else {
-        owners.insert(value, owner);
-        return Ok(true);
-    };
-    if previous == owner {
-        return Ok(false);
+    match owners.insert(value, owner) {
+        None => Ok(true),
+        Some(previous) if previous == owner => Ok(false),
+        Some(_) => Err(flow_error("builder versions made in different scopes meet at a join")),
     }
-    let left = super::edges::stack(module, previous)?;
-    let right = super::edges::stack(module, owner)?;
-    let common = left.iter().zip(&right).take_while(|(a, b)| a == b).count();
-    if common == 0 {
-        return Err(flow_error("builder versions from different functions meet at a join"));
-    }
-    let joined = left[common - 1];
-    owners.insert(value, joined);
-    Ok(joined != previous)
 }
 
 /// The scopes from which a transition in `scope` moves inserted elements to

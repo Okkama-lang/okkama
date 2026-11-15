@@ -380,7 +380,11 @@ pub fn verify(p: &Program) -> Check {
         composite_valid(p, index, composite)?;
     }
     check_tests(p)?;
+    let mut handles = BTreeSet::new();
     for object in &p.objects {
+        // Natives name their handles by declaring module and name: one name, one declaration.
+        enforce(!object.handle || handles.insert(object.name.as_str()), "HANDLE_NAME",
+            "two native handle declarations share one name")?;
         let layout = &object.layout;
         let count = layout.storage_fields.len() as u64;
         let words = (1 + count + 4 * u64::from(layout.has_destroy)).max(2);
@@ -1349,7 +1353,15 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
                 _ => false,
             };
             enforce(valid && out == Some(Type::Bool), "TEST_OPERAND",
-                "test operation operand types differ from its check, or its result is not bool")
+                "test operation operand types differ from its check, or its result is not bool")?;
+            // `test.is` compares as `val.eq` does: objects are compared structurally only when closed plain.
+            let compared = match types {
+                [Type::Successor(id), _] => Some(Type::Object(*id)),
+                [ty @ (Type::Object(_) | Type::Variant(_)), _] => Some(*ty),
+                _ => None,
+            };
+            enforce(compared.is_none_or(|ty| closed_plain(p, ty)), "TEST_OPERAND",
+                "test.is/test.isnt compare objects only when they are closed plain data")
         }
         RoleNarrow => enforce(matches!((types, out), ([Type::Role(_)], Some(Type::Role(_)))), "ROLE_NARROW",
             "role narrowing converts a role value to another role"),
@@ -1569,7 +1581,7 @@ fn verify_function(p: &Program, f: &Function) -> Check {
     check_proofs(p, f)?;
     suspension::check_entry(f)?;
     if f.proofs.entry.as_ref().is_some_and(|entry| entry.external.is_some()) {
-        require(f.code.is_empty() && f.blocks.is_empty(), "external entry cannot carry code")?;
+        enforce(f.code.is_empty() && f.blocks.is_empty(), "EXTERNAL_SIGNATURE", "external entry cannot carry code")?;
         for &param in &f.params {
             loc_type(f, param)?;
         }

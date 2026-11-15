@@ -8,7 +8,10 @@ pub struct Body {
     pub high_effects: Vec<HighEffectRecord>,
     pub descriptor_bindings: Vec<crate::DescriptorBinding>,
     pub service_schedules: Vec<crate::ServiceSchedule>,
-    /// Required in coro/low for an async body and forbidden elsewhere (async ABI D21).
+    /// Required in coro/low for an async body and forbidden elsewhere (async ABI D21). Only the second half
+    /// is a rule today (`coro-layout-misplaced`): an async coro/low body without a layout predates the async
+    /// ABI, and its layout stays the inventoried gap `B95FrameLayoutAndContinuations` until the coro producer
+    /// exists.
     pub frame_layout: Option<FrameLayout>,
     pub entry: BlockId,
     pub values: Arena<ValueId, ValueData>,

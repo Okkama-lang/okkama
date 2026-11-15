@@ -335,10 +335,11 @@ fn transfer(
                 for value in arrays::inserted(collection) {
                     inserted.extend(state.values[value.as_u32() as usize].deps.iter().copied());
                 }
+                // Every transition, finish and abandon included, lies inside the builder's owner.
+                let owner = *builder_owners.get(&buffer)
+                    .ok_or_else(|| flow_error("builder transition has no builder.new owner"))?;
+                let sources = arrays::inner_scopes(module, data.lexical_scope, owner)?;
                 if !inserted.is_empty() {
-                    let owner = *builder_owners.get(&buffer)
-                        .ok_or_else(|| flow_error("builder transition has no builder.new owner"))?;
-                    let sources = arrays::inner_scopes(module, data.lexical_scope, owner)?;
                     transfer_selected(&mut state, owner, Some(&sources), &inserted, true, 1);
                     deps.extend(inserted);
                 }

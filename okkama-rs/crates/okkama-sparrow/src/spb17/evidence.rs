@@ -145,6 +145,9 @@ fn callee(p: &Program, instruction: &Instruction) -> Option<u32> {
     })
 }
 
+/// Resolution steps one function's evidence may take before its queries stay unresolved.
+const STEP_BUDGET: usize = 1_000_000;
+
 pub(super) struct Evidence<'a> {
     program: &'a Program,
     function: &'a Function,
@@ -192,6 +195,12 @@ impl<'a> Evidence<'a> {
         arguments(save).get(slot).copied().map(Resumed::Saved)
     }
 
+    /// Spend the whole step budget, so the next unresolved query exhausts it (tests of budget reporting).
+    #[cfg(test)]
+    pub fn spend_budget(&mut self) {
+        self.steps = STEP_BUDGET;
+    }
+
     pub fn check_budget(&self) -> Result<(), Error> {
         enforce(!self.exhausted, "LOAD_WORK_BUDGET", "evidence resolution exceeds step/depth budget")
     }
@@ -221,7 +230,7 @@ impl<'a> Evidence<'a> {
         let mut active = BTreeSet::from([query]);
         while let Some(&(location, mode)) = stack.last() {
             self.steps += 1;
-            if self.steps > 1_000_000 || stack.len() > 65_536 {
+            if self.steps > STEP_BUDGET || stack.len() > 65_536 {
                 self.exhausted = true;
                 self.cache.insert(query, None);
                 return None;

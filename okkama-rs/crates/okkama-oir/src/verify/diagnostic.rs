@@ -94,6 +94,7 @@ rule_ids! {
     CoroRawFrameAccess => "coro-raw-frame-access",
     CoroShieldedAwait => "coro-shielded-await",
     CoroBodyRaises => "coro-body-raises",
+    CoroLayoutMisplaced => "coro-layout-misplaced",
     AsyncDeferReplace => "async-defer-replace",
     D22ExternalWithBody => "d22-external-with-body",
     // B9.5 rules of the coro suspension metadata (async ABI D20, D21; slice V3).

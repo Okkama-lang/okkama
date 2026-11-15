@@ -63,6 +63,7 @@ fn a_table_native_cannot_change_its_signature() {
     let hex = declaration("runtime/hex@1::hex_encode/1", vec![Type::Str], vec![Type::Str]);
     let failure = load(&program(vec![], vec![hex])).unwrap_err();
     assert!(failure.message.contains("external signature/summary mismatch"), "{failure}");
+    assert_eq!(failure.rule, "EXTERNAL_SIGNATURE", "{failure}");
     // A table native never falls back to the adapter, even with data transport.
     let mut size = declaration("runtime/buffer@1::buffer_state_size/1", vec![Type::Handle(0)], vec![Type::Int]);
     size.proofs.entry.as_mut().unwrap().failures = 0;
@@ -85,6 +86,44 @@ fn handle_types_name_handle_declarations() {
 }
 
 #[test]
+fn an_external_entry_carries_no_code() {
+    let hex = declaration("runtime/hex@1::hex_encode/1", vec![Type::Bytes], vec![Type::Str]);
+    load(&program(vec![], vec![hex.clone()])).unwrap();
+    let mut body = hex.clone();
+    body.code = vec![Instruction::Ret(vec![])];
+    body.blocks = vec![Block { pc: 0, params: body.params.clone() }];
+    assert_eq!(verify(&program(vec![], vec![body])).unwrap_err().rule, "EXTERNAL_SIGNATURE");
+    let mut blocks = hex;
+    blocks.blocks = vec![Block { pc: 0, params: blocks.params.clone() }];
+    assert_eq!(verify(&program(vec![], vec![blocks])).unwrap_err().rule, "EXTERNAL_SIGNATURE");
+}
+
+#[test]
+fn a_handle_type_out_of_range_names_no_handle() {
+    let size = declaration("runtime/buffer@1::buffer_state_size/1", vec![Type::Handle(1)], vec![Type::Int]);
+    assert_eq!(verify(&program(buffer(), vec![size])).unwrap_err().rule, "HANDLE_TYPE");
+    let create = declaration("runtime/buffer@1::buffer_state_create/1", vec![Type::Bytes], vec![Type::Handle(7)]);
+    assert_eq!(verify(&program(buffer(), vec![create])).unwrap_err().rule, "HANDLE_TYPE");
+}
+
+#[test]
+fn handle_declarations_have_distinct_names() {
+    let two = vec![object("runtime.buffer.BufferState", true, vec![]), object("app.Port", true, vec![])];
+    verify(&program(two.clone(), vec![])).unwrap();
+    P1Contracts::new(&two).unwrap();
+    let twins = vec![object("runtime.buffer.BufferState", true, vec![]), object("runtime.buffer.BufferState", true,
+        vec![])];
+    assert_eq!(verify(&program(twins.clone(), vec![])).unwrap_err().rule, "HANDLE_NAME");
+    // The trusted catalogue refuses them on its own: it never picks one of the two.
+    assert_eq!(P1Contracts::new(&twins).unwrap_err().rule, "HANDLE_NAME");
+    // A plain object may share a handle's name without making it a handle.
+    let plain = vec![object("runtime.buffer.BufferState", true, vec![]), object("runtime.buffer.BufferState", false,
+        vec![])];
+    verify(&program(plain.clone(), vec![])).unwrap();
+    P1Contracts::new(&plain).unwrap();
+}
+
+#[test]
 fn handle_declarations_hold_nothing() {
     verify(&program(buffer(), vec![])).unwrap();
     let held = vec![object("runtime.buffer.BufferState", true, vec![Type::Str])];
@@ -103,6 +142,9 @@ fn unresolved_natives_use_the_checked_adapter() {
     // Unknown runtime symbols are unresolved providers too.
     let runtime = declaration("runtime/hex@1::hex_unknown/1", vec![Type::Str], vec![]);
     load(&program(vec![], vec![runtime])).unwrap();
+    // An unknown symbol of a table module may carry that module's handles; it resolves at run time.
+    let unknown = declaration("runtime/buffer@1::unknown/0", vec![], vec![Type::Handle(0)]);
+    load(&program(buffer(), vec![unknown])).unwrap();
     let rejected = |function: Function, objects: Vec<Object>| {
         assert_eq!(load(&program(objects, vec![function])).unwrap_err().rule, "EXTERNAL_UNRESOLVED");
     };

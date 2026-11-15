@@ -55,7 +55,7 @@ impl Program {
     }
 }
 
-struct Catalog<'a>(&'a [ExternalEntry], s::p1::P1Contracts);
+struct Catalog<'a>(&'a [ExternalEntry], &'a s::p1::P1Contracts);
 impl s::ExternalContracts for Catalog<'_> {
     fn entry(&self, name: &str) -> Option<&s::Function> {
         self.1.entry(name).or_else(|| self.0.iter().map(|entry| &entry.declaration).find(|entry| {
@@ -66,6 +66,34 @@ impl s::ExternalContracts for Catalog<'_> {
     /// Host implementations bind by name first; only an unbound canonical symbol uses the adapter.
     fn adapter(&self, declared: &s::Function) -> Option<s::Function> {
         self.1.adapter(declared)
+    }
+}
+
+/// An SPB 17 program accepted by `verify_load` against the P1 catalogue and its host entries. Only `new`
+/// makes one, so a runtime built from it never runs unverified code.
+#[derive(Debug)]
+pub(crate) struct Verified {
+    source: Arc<s::Program>,
+    external: Vec<ExternalEntry>,
+    p1: s::p1::P1Contracts,
+}
+
+impl Verified {
+    pub(crate) fn new(source: s::Program, external: Vec<ExternalEntry>) -> Result<Self, Error> {
+        for entry in &external {
+            let owns = entry.declaration.entry_abi != s::EntryAbi::Observation;
+            if owns != entry.owned.is_some() || owns == entry.plain.is_some() {
+                return Err(error("external implementation ABI mismatch"));
+            }
+        }
+        let p1 = s::p1::P1Contracts::new(&source.objects).map_err(|error| Error(error.to_string()))?;
+        s::verify_load(&source, &Catalog(&external, &p1)).map_err(|error| Error(error.to_string()))?;
+        Ok(Self { source: Arc::new(source), external, p1 })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn source(&self) -> &s::Program {
+        &self.source
     }
 }
 
@@ -131,15 +159,15 @@ impl Runtime {
 
     /// There is no SPB 16 fallback. External contracts are checked before any machine code is published.
     pub fn new_champ(source: s::Program, external: Vec<ExternalEntry>) -> Result<Box<Self>, Error> {
-        for entry in &external {
-            let owns = entry.declaration.entry_abi != s::EntryAbi::Observation;
-            if owns != entry.owned.is_some() || owns == entry.plain.is_some() {
-                return Err(error("external implementation ABI mismatch"));
-            }
-        }
-        let p1 = s::p1::P1Contracts::new(&source.objects).map_err(|error| Error(error.to_string()))?;
-        let catalog = Catalog(&external, p1);
-        s::verify_load(&source, &catalog).map_err(|error| Error(error.to_string()))?;
+        Self::new_champ_verified(&Verified::new(source, external)?)
+    }
+
+    /// A runtime for a program the loader has already checked: no second `verify_load`, and the source is
+    /// shared with every other runtime of the same verified program.
+    pub(crate) fn new_champ_verified(verified: &Verified) -> Result<Box<Self>, Error> {
+        let source = &*verified.source;
+        let external = &verified.external;
+        let catalog = Catalog(external, &verified.p1);
         let mut legacy = okkama_sparrow::Program {
             entry: source.entry.map(okkama_sparrow::FuncRef),
             ..okkama_sparrow::Program::default()
@@ -213,7 +241,7 @@ impl Runtime {
         layouts.push(ObjectRuntimeLayout::new(vec![Repr::Ref; 4], LayoutFacts::default(), vec![])
             .map_err(|error| Error(error.to_string()))?);
         // An async body's frame is traced by its frame map, not by Tomato's register layout.
-        let frames = (0..source.functions.len()).map(|index| super::FrameMap::new(&source, index)).collect::<Vec<_>>();
+        let frames = (0..source.functions.len()).map(|index| super::FrameMap::new(source, index)).collect::<Vec<_>>();
         let mut heap_layouts = runtime.loaded.layouts();
         for (index, map) in frames.iter().enumerate() {
             if let Some(map) = map {
@@ -221,7 +249,7 @@ impl Runtime {
             }
         }
         runtime.heap = Heap::new_champ(heap_layouts, layouts.into_boxed_slice());
-        let plans = runtime.champ_load_cleanup_plans(&source, &catalog)?;
+        let plans = runtime.champ_load_cleanup_plans(source, &catalog)?;
         let schedules = source.functions.iter().map(|function| {
             function.proofs.schedules.iter()
                 .map(|schedule| runtime.champ_register_schedule(schedule.services.len() as u64))
@@ -233,7 +261,7 @@ impl Runtime {
         let mut implementations = Vec::new();
         for function in &source.functions {
             let mut relocated = Vec::new();
-            for selection in s::static_selections(&source, function).map_err(|error| Error(error.to_string()))? {
+            for selection in s::static_selections(source, function).map_err(|error| Error(error.to_string()))? {
                 let indices = selection.indices.iter().map(|&index| index as usize).collect();
                 relocated.push((selection.pc, runtime.champ_register_selection(indices)));
             }
@@ -268,11 +296,11 @@ impl Runtime {
         // unresolved-provider adapters that no embedder implementation binds by name.
         let p1 = source.functions.iter().zip(&implementations).map(|(function, implementation)| {
             function.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref())
-                .is_some_and(|name| s::ExternalContracts::entry(&catalog.1, name).is_some()
+                .is_some_and(|name| s::ExternalContracts::entry(catalog.1, name).is_some()
                     || (implementation.is_none() && catalog.1.adapter(function).is_some()))
         }).collect();
         runtime.champ.machine = Some(Program {
-            source: Arc::new(source), plans, selections, entries, shielded_entries,
+            source: verified.source.clone(), plans, selections, entries, shielded_entries,
             external: implementations, p1, native_failure, frames, schedules,
         });
         Ok(Box::new(runtime))

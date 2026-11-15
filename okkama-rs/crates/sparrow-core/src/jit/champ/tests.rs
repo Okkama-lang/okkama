@@ -893,6 +893,14 @@ fn p1_runtime() -> Box<Runtime> {
     port.registers = vec![s::Type::Str];
     port.results = vec![s::Type::Handle(program.objects.len() as u32 - 1)];
     program.functions.push(port);
+    // An unknown operation of a table module, carrying that module's handle.
+    let mut unknown = contracts.native("runtime/buffer@1::buffer_state_size/1").unwrap().clone();
+    unknown.symbol = "runtime/buffer@1::unknown/0".into();
+    unknown.proofs.entry.as_mut().unwrap().external = Some("runtime/buffer@1::unknown/0".into());
+    unknown.params.retain(|location| matches!(location, s::Location::Service(_)));
+    unknown.registers = vec![];
+    unknown.results = vec![s::Type::Handle(4)];
+    program.functions.push(unknown);
     let mut runtime = Runtime::new_champ(program, vec![]).unwrap();
     runtime.heap.set_stress(true);
     runtime
@@ -1348,4 +1356,21 @@ fn champ_endless_loops_and_tail_calls_exhaust_the_step_budget() {
         let result = runtime.run_function_with(entry, &arguments, crate::STACK_BYTES);
         assert_eq!(result.unwrap_err().0, "Execution budget exhausted: steps", "function {entry}");
     }
+}
+
+#[test]
+fn champ_unknown_operation_of_a_table_module_fails_as_a_missing_provider() {
+    let mut runtime = p1_runtime();
+    let mut ctx = context(&mut runtime);
+    let (outcome, post) = p1_call(&mut runtime, &mut ctx, "runtime/buffer@1::unknown/0", &[]);
+    assert_eq!((outcome, ctx.status), (c::UNWIND, FAILED));
+    let post = post.unwrap();
+    assert_eq!(post.packet.record, 0);
+    let FailureKind::Native(payload) = runtime.failure(post.failure).unwrap().kind else { panic!("native failure") };
+    runtime.roots.push((payload, Repr::Ref));
+    ctx.status = OK;
+    ctx.failure = 0;
+    let (text, _) = p1_call(&mut runtime, &mut ctx, "okkama.Error.text", &[payload]);
+    // Tomato's wording for a runtime symbol without a provider (`natives::missing_native`).
+    assert_eq!(runtime.heap.text(text), "native provider is not implemented: runtime/buffer@1::unknown/0");
 }
