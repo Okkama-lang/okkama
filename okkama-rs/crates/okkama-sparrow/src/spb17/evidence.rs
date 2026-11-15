@@ -38,8 +38,10 @@ enum Resumed {
     Start,
 }
 
+/// The returned packet is empty: no result reaches a resource, nor a Future whose duty's entry it may carry
+/// (ABI D25.1).
 pub fn plain_results(p: &Program, f: &Function) -> bool {
-    f.results.iter().all(|ty| match ty {
+    f.results.iter().all(|ty| !super::services::reaches_holder(p, *ty) && match ty {
         Type::Object(_) | Type::Successor(_) | Type::Array(_) | Type::Map(_) | Type::Variant(_) => {
             !verify::reaches_resource(p, *ty)
         }

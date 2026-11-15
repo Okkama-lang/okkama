@@ -121,6 +121,7 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
     if f.code.is_empty() { return Ok(reserves) }
     let origins = suspension::cache_origins(p, f);
     let admitting = services::admitting_closes(p, f)?;
+    let rehome_scopes = services::rehome_scopes(p, f)?;
     let fixed_root = p.functions.iter().position(|function| std::ptr::eq(function, f))
         .is_some_and(|index| suspension::fixed_root(p, index as u32));
     // Facts of the values each continuation's frame.save stored, for its resumes.
@@ -172,13 +173,19 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                     let Some(Fact::Pending(mut payload)) = operands[0] else {
                         return Err(violation(REHOME, "cache.rehome outside an exit's preparation"));
                     };
-                    let creation = locations.get(1).and_then(|duty| origins.get(duty)).copied().flatten()
-                        .map(|pc| &f.code[pc as usize]);
-                    let Some(Instruction::Champ { op: FutureNew, arguments: created, .. }) = creation else {
-                        return Err(violation(REHOME, "a rehomed duty has no single fut.new"));
+                    let owner = if locations.len() == 3 {
+                        // The state form moves an entry the owner admitted: the owner is the state's scope.
+                        rehome_scopes.get(&pc).copied().flatten()
+                            .ok_or_else(|| violation(REHOME, "a rehomed entry leaves the state of one scope"))?
+                    } else {
+                        let creation = locations.get(1).and_then(|duty| origins.get(duty)).copied().flatten()
+                            .map(|pc| &f.code[pc as usize]);
+                        let Some(Instruction::Champ { op: FutureNew, arguments: created, .. }) = creation else {
+                            return Err(violation(REHOME, "a rehomed duty has no single fut.new"));
+                        };
+                        created.iter().find_map(|arg| match arg { Argument::Scope(id) => Some(*id), _ => None })
+                            .ok_or_else(|| error("fut.new has no owner scope"))?
                     };
-                    let owner = created.iter().find_map(|arg| match arg { Argument::Scope(id) => Some(*id), _ => None })
-                        .ok_or_else(|| error("fut.new has no owner scope"))?;
                     let target = arguments.iter().find_map(|arg| match arg {
                         Argument::Destination(destination) => Some(*destination),
                         _ => None,
@@ -187,7 +194,12 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                     enforce(payload.rehome.is_none_or(|previous| previous == rehome), REHOME,
                         "one reserve takes the duties of one owner, for one destination")?;
                     payload.rehome = Some(rehome);
-                    vec![Some(Fact::Pending(payload))]
+                    // The state form gives the state back first.
+                    if locations.len() == 3 {
+                        vec![None, Some(Fact::Pending(payload))]
+                    } else {
+                        vec![Some(Fact::Pending(payload))]
+                    }
                 }
                 ExitExtend => vec![operands[0]],
                 ExitCommit => {

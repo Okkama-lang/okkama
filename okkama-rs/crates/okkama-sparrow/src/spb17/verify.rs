@@ -1150,6 +1150,14 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
                 ctx.may_fail = true;
             }
         }
+        CacheRehome if locations.len() == 3 => {
+            // The state form (C-4): the reserve, the owner state and the Future whose entry it holds.
+            input(0, Pending)?;
+            input(1, ScopeState)?;
+            enforce(matches!(loc_type(f, locations[2])?, ProducedType::Value(Type::Future(_))), FUTURE_TYPES,
+                "the state form of cache.rehome names a Future")?;
+            ctx.between = true;
+        }
         CacheRehome => {
             input(0, Pending)?;
             input(1, CacheState)?;
@@ -1406,8 +1414,9 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         Await | FutureCancel | FutureDone | FutureCancelled | CleanupDeliverCancel | UniqueCacheProof => shape == "l",
         // The Future, its take capability and the awaiting scope of the temporary boundary (C5).
         AwaitTake => shape == "lls",
-        // The exit's destination, the pending reserve and the cache duty (C-4, token form).
-        CacheRehome => shape == "xll",
+        // The exit's destination, the pending reserve and the cache duty (C-4, token form), or the owner state and
+        // the Future whose admitted entry moves (state form).
+        CacheRehome => shape == "xll" || shape == "xlll",
         // The closing scope's cleanup state (D25.3); a packet and the holder or the token (D25.2).
         CleanupSettleDynamic => shape == "l",
         ServiceMaterialize | ServiceAbsorb => shape == "ll",
@@ -2269,7 +2278,12 @@ fn check_successors(p: &Program, f: &Function, pcs: &BTreeMap<u32, usize>) -> Ch
                 }
                 if let Flow::Next(outputs) = flow {
                     // Without a held permission there is nothing to carry: Lapses is a no-op.
-                    let carry = if carried { exit_carry(*op, Tag::Normal) } else { Carry::Lapses };
+                    // The state form of cache.rehome gives the state back before the reserve.
+                    let carry = match (*op, outputs.len()) {
+                        _ if !carried => Carry::Lapses,
+                        (Opcode::CacheRehome, 2) => Carry::Slot(1),
+                        _ => exit_carry(*op, Tag::Normal),
+                    };
                     let committed = match carry {
                         Carry::Commit => outputs.first().copied().filter(|&location| successor(location)),
                         _ => None,

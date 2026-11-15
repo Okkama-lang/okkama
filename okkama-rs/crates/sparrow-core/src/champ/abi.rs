@@ -141,6 +141,8 @@ impl HelperAbi {
                 if count == 1 { vec![8] } else { vec![0, 8] }
             }
             (O::AwaitTake, Tag::Unwind) => vec![0, 16, 24],
+            // RehomePost: the state form's state, then the reserve.
+            (O::CacheRehome, Tag::Normal) if context.between => vec![8, 0],
             _ => (0..count).map(|index| index * 8).collect(),
         };
         let mut offsets = offsets.into_iter();

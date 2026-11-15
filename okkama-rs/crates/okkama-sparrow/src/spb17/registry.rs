@@ -244,7 +244,9 @@ impl Opcode {
             (AwaitTake, Tag::Normal) => valued(),
             // The take capability: a proof position of zero words (draft 3 §14.2).
             (UniqueCacheProof, Tag::Normal) => vec![S(UniqueCache)],
-            // The token form of C-4: the cache duty joins the pending reserve, which continues the exit.
+            // C-4: the cache duty joins the pending reserve, which continues the exit. The state form (`between`)
+            // takes an entry the scope admitted (ABI D25.3) and gives the state back first, as own's form does.
+            (CacheRehome, Tag::Normal) if context.between => vec![S(ScopeState), S(Pending)],
             (CacheRehome, Tag::Normal) => vec![S(Pending)],
             (FuturePublish | FutureCancel, Tag::Normal) => vec![],
             (FutureDone | FutureCancelled, Tag::Normal) => vec![Value(Type::Bool)],

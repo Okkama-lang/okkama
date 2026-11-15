@@ -32,8 +32,9 @@ enum Make {
 enum Caller {
     /// `let f = make();`: the returned packet joins the scope.
     Admit,
-    /// The same, with a direct plan instead of the executor.
-    AdmitDirect,
+    /// A Future of @caller absorbed into an empty packet that joins the scope, with a direct plan instead of the
+    /// executor.
+    AbsorbDirect,
     /// The entry is materialized as a token and absorbed again before the packet joins the scope.
     Materialized,
     /// The materialize names a Future of @caller, whose entry the returned packet does not hold.
@@ -106,7 +107,7 @@ fn caller(variant: Caller, dynamic: Option<Dynamic>) -> Function {
     b.block("entry", &[]);
     let mut state = b.emit(O::ScopeBegin, vec![A::Scope(MAIN), A::Boundary(MAIN)], K::ScopeState);
     let mut duties = Vec::new();
-    let admitted = if matches!(variant, Caller::AbsorbOwn | Caller::AbsorbAndSettle) {
+    let admitted = if matches!(variant, Caller::AbsorbOwn | Caller::AbsorbAndSettle | Caller::AbsorbDirect) {
         let (_, cache) = create(&mut b, &mut state, MAIN);
         if variant == Caller::AbsorbAndSettle {
             duties.push(cache);
@@ -136,7 +137,7 @@ fn caller(variant: Caller, dynamic: Option<Dynamic>) -> Function {
         }
     };
     let state = b.emit(O::OwnAdmit, vec![l(state), l(admitted)], K::ScopeState);
-    let finished = b.close(state, None, None, MAIN, &duties, 0, variant != Caller::AdmitDirect);
+    let finished = b.close(state, None, None, MAIN, &duties, 0, variant != Caller::AbsorbDirect);
     let closed = b.service(K::Closed);
     b.dispatch(finished, [false, false, false], vec![(Tag::Success, "done", vec![p(0)])]);
     b.block("done", &[closed]);
@@ -259,7 +260,7 @@ fn an_absorbed_duty_makes_its_packet_carry_an_entry() {
 #[test]
 fn a_dynamic_step_releases_into_the_executor() {
     // The settled entries may release an outcome packet, which only the executor plan can take (draft 3 §6.3).
-    reject_with(&returned(Make::Rehomed, Caller::AdmitDirect, Some(Dynamic::AfterStatic)), suspension::SCHEDULE,
+    reject_with(&returned(Make::Rehomed, Caller::AbsorbDirect, Some(Dynamic::AfterStatic)), suspension::SCHEDULE,
         "needs the executor");
 }
 
@@ -312,4 +313,111 @@ fn holders_are_futures_and_what_reaches_them() {
     assert!(services::reaches_holder(&p, Type::Successor(0)));
     // An unknown declaration may reach one.
     assert!(services::reaches_holder(&p, Type::Object(9)));
+}
+
+// --- SPB_REHOME, state form (ABI C-4 with D25.3) --------------------------------------------------------------
+
+/// @pass's scope (the fourth function's).
+const PASSER: u32 = super::async_tests::MAKE;
+const PASS: u32 = 3;
+
+/// `pass() is Future<int> { return make(); }`: the returned Future joins @pass's scope, and leaves it again in the
+/// state form of `cache.rehome`, target caller. When `admitted` is false, the returned packet goes into the exit
+/// instead, so the state does not hold the entry the rehome names.
+fn passer(admitted: bool) -> Function {
+    let mut b = Body::new("pass", EntryAbi::Owned, vec![FUTURE_INT]);
+    let input = b.service(K::Packet);
+    b.f.params = vec![input];
+    b.f.proofs.entry = Some(EntryContract::default());
+    b.dynamic.insert(PASSER, Dynamic::AfterStatic);
+    b.block("entry", &[input]);
+    let q0 = b.emit(O::ScopeBegin, vec![A::Scope(PASSER), A::Boundary(PASSER)], K::ScopeState);
+    let q1 = b.emit(O::OwnAccept, vec![l(q0), l(input)], K::ScopeState);
+    let offered = b.emit(O::OwnEmpty, vec![], K::Packet);
+    b.outcomes(O::InvokeCallOwn, vec![A::Entry(MAKE), A::Summary(0), l(offered), A::Flag(false)],
+        vec![(Tag::Normal, "made", vec![p(0), p(1), p(2)])]);
+    let [future, packet, deps] = [b.register(FUTURE_INT), b.service(K::Packet), b.service(K::Deps)];
+    b.block("made", &[future, packet, deps]);
+    let (state, exit_packet) = if admitted {
+        (b.emit(O::OwnAdmit, vec![l(q1), l(packet)], K::ScopeState), b.emit(O::OwnEmpty, vec![], K::Packet))
+    } else {
+        (q1, packet)
+    };
+    let selection = b.selection();
+    let pending = b.emit(O::ExitPrepare, vec![A::Kind(ExitKind::Return), A::Boundary(PASSER), l(future),
+        l(exit_packet), A::Selection(selection)], K::Pending);
+    let [state, pending] = [b.service(K::ScopeState), {
+        let reserve = b.service(K::Pending);
+        b.next(O::CacheRehome, vec![A::Destination(ExitDestination::Caller), l(pending), l(state), l(future)],
+            vec![]);
+        reserve
+    }];
+    // The rehome's outputs: the state, then the reserve.
+    let last = b.f.code.len() - 1;
+    let Instruction::Champ { flow: Flow::Next(outputs), .. } = &mut b.f.code[last] else { unreachable!() };
+    *outputs = vec![state, pending];
+    let finished = b.close(state, Some(pending), None, PASSER, &[], 0, true);
+    let [closed, reserved] = [b.service(K::Closed), b.service(K::Pending)];
+    b.dispatch(finished, [true, false, false], vec![(Tag::Pending, "done", vec![p(0), p(1)])]);
+    b.block("done", &[closed, reserved]);
+    let [result, packet, deps] = [b.register(FUTURE_INT), b.service(K::Packet), b.service(K::Deps)];
+    b.next(O::ExitCommit, vec![l(reserved), A::Destination(ExitDestination::Caller)], vec![result, packet, deps]);
+    b.f.code.push(Instruction::Champ { op: O::RetOwn, arguments: vec![l(result), l(packet), l(deps)],
+        flow: Flow::Next(vec![]) });
+    b.finish()
+}
+
+fn passing(admitted: bool) -> Program {
+    let mut p = returned(Make::Rehomed, Caller::Admit, Some(Dynamic::AfterStatic));
+    p.functions.push(passer(admitted));
+    p.tables.scopes.push(Scope { function: PASS, parent: None, boundary: PASSER });
+    p.tables.boundaries.push(Boundary { scope: PASSER });
+    assert_eq!(p.tables.scopes.len() as u32, PASSER + 1);
+    p
+}
+
+#[test]
+fn an_admitted_entry_leaves_its_scope_in_the_state_form() {
+    loads(&passing(true));
+    // @pass returns the entry it took from its state: its callers may materialize it (D25.1).
+    assert!(services::fresh_futures(&passing(true)).unwrap()[PASS as usize]);
+}
+
+#[test]
+fn the_state_form_takes_an_entry_its_state_holds() {
+    reject_with(&passing(false), automaton::REHOME, "does not surely hold");
+}
+
+#[test]
+fn the_state_form_names_the_scope_of_one_state() {
+    // Two states of different scopes reach the rehome's state operand through one block parameter.
+    let mut b = Body::new("both", EntryAbi::Observation, vec![]);
+    let flag = b.constant(Constant::Bool(true), Type::Bool);
+    let [first, second, joined] = [b.service(K::ScopeState), b.service(K::ScopeState), b.service(K::ScopeState)];
+    b.next(O::ScopeBegin, vec![A::Scope(MAIN), A::Boundary(MAIN)], vec![first]);
+    b.next(O::ScopeBegin, vec![A::Scope(PASSER), A::Boundary(PASSER)], vec![second]);
+    b.cond(flag, "one", "two");
+    b.block("one", &[]);
+    b.br("join", vec![super::async_tests::s(first)]);
+    b.block("two", &[]);
+    b.br("join", vec![super::async_tests::s(second)]);
+    b.block("join", &[joined]);
+    let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
+    let future = b.register(FUTURE_INT);
+    let pending = b.emit(O::ExitPrepare, vec![A::Kind(ExitKind::Return), A::Boundary(MAIN), l(empty),
+        A::Selection(0)], K::Pending);
+    let [state, reserve] = [b.service(K::ScopeState), b.service(K::Pending)];
+    b.next(O::CacheRehome, vec![A::Destination(ExitDestination::Caller), l(pending), l(joined), l(future)],
+        vec![state, reserve]);
+    b.ret();
+    let f = b.finish_unchecked();
+    let mut p = passing(true);
+    p.functions.push(f.clone());
+    let pc = f.code.iter().position(|instruction| matches!(instruction,
+        Instruction::Champ { op: O::CacheRehome, .. })).unwrap();
+    assert_eq!(services::rehome_scopes(&p, &f).unwrap().get(&pc), Some(&None));
+    let pass = &p.functions[PASS as usize];
+    let pc = pass.code.iter().position(|instruction| matches!(instruction,
+        Instruction::Champ { op: O::CacheRehome, .. })).unwrap();
+    assert_eq!(services::rehome_scopes(&p, pass).unwrap().get(&pc), Some(&Some(PASSER)));
 }

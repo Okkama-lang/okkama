@@ -3,8 +3,9 @@
 //! Two forward analyses over concrete SPB edges, frame saves and resumes:
 //! - **May admit** (D25.3): which closes take a scope state that may have admitted a service entry. A packet may
 //!   carry entries when it is the result packet of a call or take whose language result can reach a service holder
-//!   (D25.1: the result relation names the fresh holder's duty), the packet of an absorb, of an opaque admission
-//!   (`own.dynamic`), or of an exit that carries a rehomed duty (C-4), or when such a packet flows into it. A split
+//!   (D25.1: the result relation names the fresh holder's duty), the packet of an absorb, or of an exit that
+//!   carries a rehomed duty (C-4), or when such a packet flows into it; a packet of unknown retention
+//!   (`own.dynamic`) is judged by its source the same way. A split
 //!   never selects an entry (C-4 ruling: the one escape mechanism is `cache.rehome`). Such a close needs exactly one
 //!   `cleanup.settle.dynamic` before its first plan (`SPB_SCHEDULE`).
 //! - **Holds** (D25.2): which entries a packet surely holds, by the Future value they name. An entry is known from
@@ -179,7 +180,10 @@ fn next_carriers(f: &Function, op: Opcode, arguments: &[Argument], ins: &[bool],
         ExitExtend => vec![any],
         // The replacement reserve starts from its own packet; the replaced reserve's content comes back.
         ExitReplace => vec![last, first],
-        CacheRehome | ServiceAbsorb => vec![true],
+        // The state form gives the state back with what else it admitted, then the reserve.
+        CacheRehome if outputs.len() == 2 => vec![ins.get(1) == Some(&true), true],
+        CacheRehome => vec![true],
+        ServiceAbsorb => vec![true],
         ServiceMaterialize => vec![first, false],
         // The cleanup state continues the reserve; the scope's own entries settle at the close, never escape.
         CleanupBegin => {
@@ -220,9 +224,10 @@ fn produced_carriers(p: &Program, op: Opcode, tag: Tag, schema: &[ProducedType],
         (OwnSplitChecked, Tag::Unwind) => vec![first, false],
         (ScopeSplit, Tag::Normal) => vec![first, false, false],
         (ScopeSplit, Tag::Unwind) => vec![first, false],
-        // An opaque packet (D25.3): its admission may add entries; a refused one comes back.
-        (OwnDynamic, Tag::Normal) => vec![true],
-        (OwnDynamic, Tag::Unwind) => vec![first, true, false],
+        // A packet of unknown retention (D25.3): which obligations it holds is unknown, but its entries can only
+        // name holders its source's language result reaches, which the packet's own fact already judges.
+        (OwnDynamic, Tag::Normal) => vec![any],
+        (OwnDynamic, Tag::Unwind) => vec![first, ins.get(1).copied().unwrap_or(false), false],
         (ScopeTransfer, _) => schema.iter().map(|slot| *slot == ProducedType::Service(ServiceKind::ScopeState)
             && any).collect(),
         (CleanupNext, _) => schema.iter().enumerate().map(|(index, _)| index == 0 && first).collect(),
@@ -337,7 +342,8 @@ struct Held {
     futures: BTreeMap<Location, Val>,
     /// Cache-state tokens and the Future whose duty they are.
     tokens: BTreeMap<Location, Val>,
-    /// Packets, reserves and the cleanup and exit states that continue a reserve: the entries they surely hold.
+    /// Packets, scope states, reserves and the cleanup and exit states that continue a reserve: the entries they
+    /// surely hold.
     entries: BTreeMap<Location, BTreeSet<Val>>,
     /// Reserves and their continuations: the Future value the exit returns.
     exits: BTreeMap<Location, Val>,
@@ -432,7 +438,13 @@ fn next_held(f: &Function, pc: usize, op: Opcode, arguments: &[Argument], state:
             let value = (pc as u32, u32::MAX, 0);
             facts[0].future = Some(value);
             facts[1].token = Some(value);
+            facts[2].entries = read(operands.len() - 1).entries;
         }
+        // An admission adds the packet's entries to the state's (D25.3).
+        OwnAdmit | OwnAccept | OwnBind | OwnRebind => {
+            facts[0].entries = union(&mut [0, operands.len() - 1].into_iter());
+        }
+        AwaitUnwind | DeferRegister => facts[0].entries = read(0).entries,
         OwnMove => facts[0].entries = read(0).entries,
         OwnJoin => facts[0].entries = union(&mut (0..operands.len())),
         OwnSplit => facts[0].entries = read(0).entries,
@@ -458,6 +470,19 @@ fn next_held(f: &Function, pc: usize, op: Opcode, arguments: &[Argument], state:
         ExitExtend => {
             facts[0].entries = union(&mut (0..2));
             facts[0].exit = read(0).exit;
+        }
+        CacheRehome if operands.len() == 3 => {
+            // The state form takes the entry of its Future out of a state that surely holds it.
+            let holder = read(2).future;
+            let mut held = read(1).entries;
+            let found = holder.is_some_and(|value| held.remove(&value));
+            enforce(found || !check, automaton::REHOME, &format!(
+                "cache.rehome at pc {pc} takes an entry its state does not surely hold"))?;
+            let mut entries = read(0).entries;
+            entries.extend(holder);
+            facts[0].entries = held;
+            facts[1].entries = entries;
+            facts[1].exit = read(0).exit;
         }
         CacheRehome => {
             let mut entries = read(0).entries;
@@ -528,7 +553,7 @@ fn produced_held(p: &Program, pc: usize, ordinal: usize, op: Opcode, arguments: 
                 facts[packet].entries = BTreeSet::from([value]);
             }
         }
-        (OwnSplitChecked, Tag::Normal | Tag::Unwind) => facts[0].entries = read(0).entries,
+        (OwnSplitChecked | ScopeSplit | ScopeTransfer | OwnDynamic, _) => facts[0].entries = read(0).entries,
         (CleanupNext, _) => {
             facts[0].entries = read(0).entries;
             facts[0].exit = read(0).exit;
@@ -683,12 +708,152 @@ pub(crate) fn fresh_futures(p: &Program) -> Result<Vec<bool>, Error> {
     }
 }
 
-/// `SPB_MATERIALIZE`: every materialize of `f` takes an entry its packet surely holds.
+/// `SPB_MATERIALIZE`: every materialize of `f` takes an entry its packet surely holds; `SPB_REHOME`: every
+/// state-form rehome takes an entry its state surely holds.
 pub(crate) fn check_materialize(p: &Program, f: &Function, fresh: &[bool]) -> Check {
-    if !f.code.iter().any(|instruction| matches!(instruction,
-        Instruction::Champ { op: Opcode::ServiceMaterialize, .. }))
-    {
+    if !f.code.iter().any(|instruction| match instruction {
+        Instruction::Champ { op: Opcode::ServiceMaterialize, .. } => true,
+        Instruction::Champ { op: Opcode::CacheRehome, arguments, .. } => locations(arguments).len() == 3,
+        _ => false,
+    }) {
         return Ok(());
     }
     held(p, f, fresh, true).map(|_| ())
+}
+
+// --- Scopes of states (C-4, state form) ----------------------------------------------------------------------
+
+/// The scopes each scope-state location may belong to.
+type Scopes = BTreeMap<Location, BTreeSet<u32>>;
+
+/// The scopes of the outputs (or produced slots) of an operation, from the scopes of its state operands: the
+/// i-th state result continues the i-th state operand, and a lone state result continues all of them.
+fn state_results(slots: &[bool], states: &[BTreeSet<u32>]) -> Vec<BTreeSet<u32>> {
+    let count = slots.iter().filter(|state| **state).count();
+    let mut index = 0;
+    slots.iter().map(|&state| {
+        if !state {
+            return BTreeSet::new();
+        }
+        let scopes = if count == states.len() {
+            states[index].clone()
+        } else {
+            states.iter().flatten().copied().collect()
+        };
+        index += 1;
+        scopes
+    }).collect()
+}
+
+/// For each state-form `cache.rehome`, the scope of its state when only one reaches it (C-4: the duties leave
+/// the scope that owns them).
+pub(crate) fn rehome_scopes(p: &Program, f: &Function) -> Result<BTreeMap<usize, Option<u32>>, Error> {
+    let resumes = resumes(f);
+    let mut saved = BTreeMap::<u32, Vec<BTreeSet<u32>>>::new();
+    let mut rehomes = BTreeMap::new();
+    let state = |location: Location| kind(f, location) == Some(ServiceKind::ScopeState);
+    let join = |previous: &mut Scopes, next: &Scopes| {
+        let before = previous.clone();
+        for (location, scopes) in next {
+            previous.entry(*location).or_default().extend(scopes.iter().copied());
+        }
+        *previous != before
+    };
+    let assign = |scopes: &Scopes, edge: &Edge, produced: &[BTreeSet<u32>]| {
+        let mut out = scopes.clone();
+        let sources = edge.assignments.iter().map(|assignment| match assignment.source {
+            Source::Location(source) => scopes.get(&source).cloned().unwrap_or_default(),
+            Source::ProducedSlot(slot) => produced.get(slot as usize).cloned().unwrap_or_default(),
+        }).collect::<Vec<_>>();
+        for (assignment, value) in edge.assignments.iter().zip(sources) {
+            out.insert(assignment.destination, value);
+        }
+        out
+    };
+    forward(f, Scopes::new(), join, |pc, scopes| {
+        let mut out = scopes.clone();
+        let mut successors = Vec::new();
+        let mut revisit = Vec::new();
+        match &f.code[pc] {
+            Instruction::Data { .. } => successors.push((pc + 1, out)),
+            Instruction::Br(edge) => successors.push((edge.target_pc as usize, assign(scopes, edge, &[]))),
+            Instruction::Cond { yes, no, .. } => {
+                successors.push((yes.target_pc as usize, assign(scopes, yes, &[])));
+                successors.push((no.target_pc as usize, assign(scopes, no, &[])));
+            }
+            Instruction::Ret(_) | Instruction::Raise(_) | Instruction::Unreachable => {}
+            Instruction::Champ { op, arguments, flow } => {
+                let operands = locations(arguments);
+                let read = |location: &Location| scopes.get(location).cloned().unwrap_or_default();
+                let states = operands.iter().filter(|location| state(**location)).map(read).collect::<Vec<_>>();
+                if *op == Opcode::CacheRehome && operands.len() == 3 {
+                    let scope = read(&operands[1]);
+                    let single = (scope.len() == 1).then(|| scope.first().copied()).flatten();
+                    let entry = rehomes.entry(pc).or_insert(single);
+                    if *entry != single {
+                        *entry = None;
+                    }
+                }
+                match flow {
+                    Flow::Next(outputs) => {
+                        let facts = match op {
+                            Opcode::ScopeBegin => {
+                                let scope = arguments.iter().find_map(|argument| match argument {
+                                    Argument::Scope(id) => Some(*id),
+                                    _ => None,
+                                });
+                                vec![scope.into_iter().collect()]
+                            }
+                            Opcode::FrameSave => {
+                                let k = suspension::continuation_of(arguments).unwrap_or(0);
+                                let values = operands[1..].iter().map(read).collect::<Vec<_>>();
+                                let entry = saved.entry(k).or_insert_with(|| vec![BTreeSet::new(); values.len()]);
+                                let mut grew = false;
+                                for (slot, value) in entry.iter_mut().zip(values) {
+                                    let before = slot.len();
+                                    slot.extend(value);
+                                    grew |= slot.len() != before;
+                                }
+                                if grew {
+                                    revisit.extend(resumes.get(&k).into_iter().flatten().copied());
+                                }
+                                vec![BTreeSet::new()]
+                            }
+                            Opcode::FrameResume => {
+                                let k = suspension::continuation_of(arguments).unwrap_or(0);
+                                let stored = saved.get(&k).cloned().unwrap_or_default();
+                                let mut facts = vec![BTreeSet::new()];
+                                facts.extend((1..outputs.len()).map(|index| {
+                                    stored.get(index - 1).cloned().unwrap_or_default()
+                                }));
+                                facts
+                            }
+                            _ => {
+                                let slots = outputs.iter().map(|location| state(*location)).collect::<Vec<_>>();
+                                state_results(&slots, &states)
+                            }
+                        };
+                        for (&location, value) in outputs.iter().zip(facts) {
+                            out.insert(location, value);
+                        }
+                        if !matches!(op, Opcode::RetOwn | Opcode::RetDefer) {
+                            successors.push((pc + 1, out));
+                        }
+                    }
+                    Flow::Outcomes(outcomes) => {
+                        for outcome in outcomes {
+                            let slots = schema(p, f, *op, arguments, outcome.tag)?.iter()
+                                .map(|slot| *slot == ProducedType::Service(ServiceKind::ScopeState))
+                                .collect::<Vec<_>>();
+                            let produced = state_results(&slots, &states);
+                            successors.push((outcome.edge.target_pc as usize, assign(scopes, &outcome.edge,
+                                &produced)));
+                        }
+                    }
+                }
+            }
+        }
+        Ok((successors, revisit))
+    })?;
+    Ok(rehomes)
 }
