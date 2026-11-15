@@ -339,11 +339,13 @@ impl Engine<'_, '_> {
                     }
                     let mut token = before.tokens[value].clone();
                     token.saved_type = self.body.values.get(slot.value).ok().map(|data| data.ty);
+                    // R2: a failure saved across a suspension keeps its kinds (a close of the failure begins with
+                    // the resumed value).
                     layout.insert(slot.slot, Slot {
                         token, refs: before.refs[value].clone(),
                         identity: before.identities[value], aliases: before.aliases[value].clone(),
                         requirements: before.full_deps[value].clone(), lifetime: before.lifetimes[value],
-                        ..Slot::default()
+                        failures: before.failures[value], ..Slot::default()
                     });
                     if !seen.insert(slot.slot) {
                         self.error(R::B95, "frame.save has duplicate slots");

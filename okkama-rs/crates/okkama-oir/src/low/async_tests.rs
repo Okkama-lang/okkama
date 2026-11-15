@@ -36,6 +36,11 @@ const GOLDENS: &[(&str, &str, &str)] = &[
     // R2: a resource held across an await; a temporary take with its rechecked proof.
     golden!("r2-resource-across-await"),
     golden!("r2-take-proof-recheck"),
+    // R2, C-6: async defers whose entry awaits, after a body failure and across a pending exit.
+    golden!("r2-defer-await-body-failure"),
+    golden!("r2-defer-await-reserve"),
+    // R2: closes that suspend while the body owns a resource.
+    golden!("r2-resource-suspending-close"),
 ];
 const PLAIN: usize = 0;
 const NEVER: usize = 5;
@@ -123,12 +128,25 @@ fn later_slices_keep_named_rejections() {
     module.summaries.get_mut(summary).unwrap().contract.async_destroy = true;
     let error = lower_cleanup(module, &LowOptions::default()).unwrap_err();
     assert_eq!(error, LowError::Unsupported { function: main, message: eligibility::ASYNC_DESTROY.into() });
-    // An async defer entry (slice R2).
-    let mut module = parsed(source);
-    let work = function_id(&module, "work");
-    module.functions.get_mut(work).unwrap().attrs.push(FunctionAttr::DeferEntry { replacements: vec![] });
+    // An async defer entry runs only from an async body (C-6; R2 lowers it there, r2-defer-await-* goldens).
+    let mut module = parsed(include_str!("../../tests/fixtures/async/coro/r2-defer-await-body-failure.oir"));
+    let risky = function_id(&module, "risky");
+    let closer = function_id(&module, "closer");
+    let body = function_mut(&mut module, "risky");
+    let block = body.entry;
+    let term = std::mem::replace(&mut body.blocks.get_mut(block).unwrap().term.kind, TermKind::Unreachable);
+    let next = body.blocks.alloc(Block {
+        lexical_scope: body.blocks.get(block).unwrap().lexical_scope, params: vec![], unwind: None, insts: vec![],
+        term: Terminator { kind: term, loc: None },
+    }).unwrap();
+    let call = CallSite { cleanup: CallCleanupMode::Ordinary, args: vec![], packet: None, deps: vec![],
+        descriptors: vec![], type_args: vec![], summary: module.functions.get(closer).unwrap().summary };
+    function_mut(&mut module, "risky").blocks.get_mut(block).unwrap().term.kind = TermKind::InvokeDefer {
+        function: closer, call, continue_edge: InvokeEdge { block: next, args: vec![] }, replacements: vec![],
+        unwind: None,
+    };
     let error = lower_cleanup(module, &LowOptions::default()).unwrap_err();
-    assert_eq!(error, LowError::Unsupported { function: work, message: eligibility::ASYNC_DEFER.into() });
+    assert_eq!(error, LowError::Unsupported { function: risky, message: eligibility::ASYNC_DEFER.into() });
     // Spawn (slice P1).
     let mut module = parsed(source);
     let body = function_mut(&mut module, "main");

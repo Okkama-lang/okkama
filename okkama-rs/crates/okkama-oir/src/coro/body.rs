@@ -122,8 +122,11 @@ impl Lowering<'_, '_> {
             return Err(self.invalid("an Own body declares no frame layout"));
         }
         let declaration = self.module.functions.get(self.function)?;
-        if is_async && declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. })) {
-            return Err(self.unsupported("async defer entries (C-6) are lowered by slice D1"));
+        // C-6: an async defer entry is an async body; a replacement (a `return` inside it) is forbidden.
+        let defer_entry = declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. }));
+        if is_async && defer_entry && self.body.blocks.iter().any(|(_, block)| matches!(block.term.kind,
+            TermKind::RetDefer { tag: DeferReturnTag::Replace(_), .. })) {
+            return Err(self.invalid("an async defer entry has no replacement (C-6, async-defer-replace)"));
         }
         for (_, block) in self.body.blocks.iter() {
             // A block unwind leaves from any point of its block, so no frame version may change there.
@@ -296,12 +299,10 @@ impl Lowering<'_, '_> {
     fn terminator_suspends(&self, term: &TermKind) -> Result<bool, CoroError> {
         match term {
             TermKind::InvokeOwn { op, .. } => self.suspends(op),
+            // C-6: `invoke.defer` of an async defer entry runs it as a shielded child frame and suspends.
             TermKind::InvokeDefer { function, .. } => {
                 let target = self.module.functions.get(*function)?;
-                if target.attrs.contains(&FunctionAttr::Async) {
-                    return Err(self.unsupported("async defer invocations (C-6) are lowered by slice D1"));
-                }
-                Ok(false)
+                Ok(target.attrs.contains(&FunctionAttr::Async))
             }
             _ => Ok(false),
         }
@@ -508,8 +509,24 @@ impl Lowering<'_, '_> {
     /// the outcome that its `exit.commit` moved to the Future's cache; a failure exit publishes it.
     fn exits(&mut self, frame: ValueId) -> Result<(), CoroError> {
         let blocks: Vec<BlockId> = self.body.blocks.iter().map(|(block, _)| block).collect();
+        let mut continue_deps = None;
         for block in blocks {
             self.budget.step(1)?;
+            let data = self.body.blocks.get(block)?;
+            if let TermKind::RetDefer { tag: DeferReturnTag::Continue, values } = &data.term.kind {
+                if !values.is_empty() {
+                    return Err(self.invalid("an async defer entry continues without values (C-6)"));
+                }
+                let deps = match continue_deps {
+                    Some(deps) => deps,
+                    None => *continue_deps.insert(self.continue_deps()?),
+                };
+                let own = self.intern(Type::Service(ServiceType::Own))?;
+                let end = self.body.blocks.get(block)?.insts.len();
+                let packet = self.emit(block, end, own, Operation::Ownership(OwnershipOp::Empty {}))?;
+                self.publish(block, frame, PublishOutcome::Success { value: None, packet, deps })?;
+                continue;
+            }
             let data = self.body.blocks.get(block)?;
             let outcome = match &data.term.kind {
                 TermKind::Ret { values } if self.fixed_root => {
@@ -525,15 +542,39 @@ impl Lowering<'_, '_> {
                 }
                 _ => continue,
             };
-            let publish = self.body.insts.alloc(Instruction {
-                results: Vec::new(), op: Operation::Async(AsyncOp::FuturePublish { frame, outcome }),
-                facts: InstructionFacts::default(), loc: None,
-            })?;
-            let data = self.body.blocks.get_mut(block)?;
-            data.insts.push(publish);
-            data.term.kind = TermKind::Ret { values: Vec::new() };
+            self.publish(block, frame, outcome)?;
         }
         Ok(())
+    }
+
+    /// End `block` with the publication of `outcome` and a return.
+    fn publish(&mut self, block: BlockId, frame: ValueId, outcome: PublishOutcome) -> Result<(), CoroError> {
+        let publish = self.body.insts.alloc(Instruction {
+            results: Vec::new(), op: Operation::Async(AsyncOp::FuturePublish { frame, outcome }),
+            facts: InstructionFacts::default(), loc: None,
+        })?;
+        let data = self.body.blocks.get_mut(block)?;
+        data.insts.push(publish);
+        data.term.kind = TermKind::Ret { values: Vec::new() };
+        Ok(())
+    }
+
+    /// C-6: the Continue of an async defer entry publishes an empty packet with empty deps. Only exit forms
+    /// run after a close (B4.2), so the deps are taken at the entry, right after the input packet's acceptance.
+    fn continue_deps(&mut self) -> Result<ValueId, CoroError> {
+        let entry = self.body.entry;
+        let insts = self.body.blocks.get(entry)?.insts.clone();
+        let mut position = 1;
+        for (index, inst) in insts.iter().enumerate() {
+            if matches!(self.body.insts.get(*inst)?.op, Operation::Ownership(OwnershipOp::Accept { .. })) {
+                position = index + 1;
+                break;
+            }
+        }
+        let int = self.intern(Type::Int)?;
+        let unit = self.emit(entry, position, int, Operation::Const(Literal::Int("0".into())))?;
+        let deps = self.intern(Type::Service(ServiceType::Deps))?;
+        self.emit(entry, position + 1, deps, Operation::Ownership(OwnershipOp::Dependencies { value: unit }))
     }
 
     fn success(&self, block: BlockId, values: &[ValueId]) -> Result<PublishOutcome, CoroError> {
@@ -735,28 +776,32 @@ impl Lowering<'_, '_> {
                 for result in &instruction.results {
                     live.remove(result);
                 }
-                suspensions.push(self.suspension(site, block, &instruction.op, live, closes, &frames));
+                let operands = instruction.op.operand_refs();
+                suspensions.push(self.suspension(site, block, &operands, live, closes, &frames));
             }
-            let TermKind::InvokeOwn { op, .. } = &data.term.kind else {
+            if !self.terminator_suspends(&data.term.kind)? {
                 continue;
-            };
-            if !self.suspends(op)? {
-                continue;
+            }
+            let mut operands = Vec::new();
+            match &data.term.kind {
+                TermKind::InvokeOwn { op, .. } => operands = op.operand_refs(),
+                TermKind::InvokeDefer { call, .. } => call.append(OperandMode::Borrow, &mut operands),
+                _ => {}
             }
             let mut live = BTreeSet::new();
             for target in graph::successors(&data.term.kind) {
                 live.extend(liveness.live_in[target.as_u32() as usize].iter().copied());
             }
-            suspensions.push(self.suspension(Site::Terminator(block), block, op, live, closes, &frames));
+            suspensions.push(self.suspension(Site::Terminator(block), block, &operands, live, closes, &frames));
         }
         Ok(suspensions)
     }
 
     fn suspension(
-        &self, site: Site, block: BlockId, op: &Operation, mut live: BTreeSet<ValueId>,
+        &self, site: Site, block: BlockId, operands: &[ReferencedOperand], mut live: BTreeSet<ValueId>,
         closes: &BTreeMap<Site, Vec<ValueId>>, frames: &BTreeSet<ValueId>,
     ) -> Suspension {
-        let operands: Vec<ValueId> = op.operand_refs().into_iter().filter_map(|operand| match operand.reference {
+        let operands: Vec<ValueId> = operands.iter().filter_map(|operand| match operand.reference {
             OperandRef::Value(value) => Some(value),
             _ => None,
         }).collect();
