@@ -1128,6 +1128,25 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
                 ctx.may_fail = true;
             }
         }
+        AwaitTake | UniqueCacheProof => {
+            let Some(Type::Future(index)) = locations.first().and_then(|&location| match loc_type(f, location) {
+                Ok(ProducedType::Value(ty)) => Some(ty),
+                _ => None,
+            }) else {
+                return Err(violation(FUTURE_TYPES, format!("{} needs a Future", op.name())));
+            };
+            let outcome = *p.tables.future_results.get(index as usize)
+                .ok_or_else(|| violation(FUTURE_TYPES, "a Future type names no future_results entry"))?;
+            if op == AwaitTake {
+                input(1, UniqueCache)?;
+                ctx.value = outcome;
+                ctx.may_fail = true;
+            }
+        }
+        CacheRehome => {
+            input(0, Pending)?;
+            input(1, CacheState)?;
+        }
         FuturePublish => {
             input(0, Frame)?;
             let rest = &locations[1..];
@@ -1362,7 +1381,11 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         BuilderRange => shape == "?llll",
         BuilderFinish | BuilderAbandon | Lookup => shape == "ll",
         FutureNew => shape.len() >= 5 && shape.starts_with("fsr") && shape[3..].chars().all(|ch| ch == 'l'),
-        Await | FutureCancel | FutureDone | FutureCancelled | CleanupDeliverCancel => shape == "l",
+        Await | FutureCancel | FutureDone | FutureCancelled | CleanupDeliverCancel | UniqueCacheProof => shape == "l",
+        // The Future, its take capability and the awaiting scope of the temporary boundary (C5).
+        AwaitTake => shape == "lls",
+        // The exit's destination, the pending reserve and the cache duty (C-4, token form).
+        CacheRehome => shape == "xll",
         FuturePublish => shape.len() > 2 && shape.starts_with("l?") && shape[2..].chars().all(|ch| ch == 'l'),
         FrameSave => shape.starts_with("lc") && shape[2..].chars().all(|ch| ch == 'l'),
         FrameResume => shape == "lc",
@@ -2120,8 +2143,9 @@ pub(super) enum Carry {
 pub(super) fn exit_carry(op: Opcode, tag: Tag) -> Carry {
     use Opcode::*;
     match (op, tag) {
+        // A rehome puts a cache duty into the reserve; the reserve continues the same exit.
         (ExitExtend | CleanupBegin | CleanupSettle | CleanupPlan | CleanupFailure | DestroyDirect
-            | CleanupDestroy, Tag::Normal) => Carry::Slot(0),
+            | CleanupDestroy | CacheRehome, Tag::Normal) => Carry::Slot(0),
         (CleanupNext, Tag::Selected | Tag::Done) => Carry::Slot(0),
         (CleanupFinish, Tag::Normal) => Carry::Slot(2),
         (ExitDispatch, Tag::Pending) => Carry::Slot(1),

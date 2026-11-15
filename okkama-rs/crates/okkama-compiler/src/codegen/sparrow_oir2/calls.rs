@@ -30,6 +30,7 @@ fn kind(module: &o::Module, ty: o::TypeId) -> Result<P, GenerateError> {
             o::ServiceType::CacheState => P::Service(K::CacheState),
             o::ServiceType::TaskState => P::Service(K::TaskState),
             o::ServiceType::Receipt => P::Service(K::Receipt),
+            o::ServiceType::UniqueCache => P::Service(K::UniqueCache),
             _ => return Err(later("async service type")),
         },
         // The running body's frame token (`frame<@f>`); `translate` checks that it names its own function.
@@ -1183,8 +1184,9 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
         let location = emitter.loc(value)?;
         match site {
             o::cfg::UseSite::ValueFacts(owner) => {
+                let obligation = emitter.loc(emitter.through_frame(owner, value)?)?;
                 emitter.result.proofs.dependencies.push(s::Dependency {
-                    value: emitter.loc(owner)?, obligations: vec![location],
+                    value: emitter.loc(owner)?, obligations: vec![obligation],
                 });
             }
             o::cfg::UseSite::Instruction(inst) | o::cfg::UseSite::InstructionFacts(inst) => {

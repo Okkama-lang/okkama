@@ -1027,6 +1027,10 @@ impl Emit<'_, '_> {
             O::CleanupSettle if locations.len() > 1 => {
                 return self.future_operation(op, arguments, &locations, flow);
             }
+            // The temporary take, its proof and the rehome (#601 R4) have no helpers before the runtime of #601 R5.
+            O::AwaitTake | O::UniqueCacheProof | O::CacheRehome => {
+                return Err(Error(format!("Champ {} runs with the async resources runtime (#601 R5)", op.name())));
+            }
             O::CleanupSettle => {
                 helper = "champ_cleanup_settle_empty";
                 args.push(self.pointer(locations[0]));

@@ -106,6 +106,10 @@ pub(crate) fn check_layouts(p: &Program) -> Check {
                 require_index(&layout.slots, slot)?;
                 enforce(slots.insert(slot), ROOTS_SUSPEND, "one frame slot holds two values of a suspension")?;
             }
+            // A take capability waits in the frame only as an operand of its own take (draft 2 §7.3).
+            enforce(continuation.saved.iter().all(|&slot| {
+                layout.slots[slot as usize].ty != ProducedType::Service(ServiceKind::UniqueCache)
+            }), take::TAKE_CAPABILITY, "a take capability crosses a suspension other than its take")?;
         }
         let inputs = layout.saved_types(0).ok_or_else(|| error("invalid start slots"))?;
         if fixed_root(p, owners[0]) {
