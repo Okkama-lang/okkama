@@ -223,7 +223,8 @@ const DEFER_AWAIT: &str = concat!(
 #[test]
 fn oir2_r3_defer_await_is_an_async_defer_entry() {
     // Async ABI C-6: a defer entry whose expression awaits is an async body, `[defer(), async]`, with no
-    // replacement. In High it carries the async envelopes H6 requires of every async function.
+    // replacement. It creates no Future, so in High it carries the body envelope only (H6, #730: the
+    // coordinator's decision on the question of #730).
     let module = lower(&source(DEFER_AWAIT));
     let close = function(&module, "main.defer#0");
     assert!(!close.attrs.contains(&ir::FunctionAttr::Async), "log.close() does not await");
@@ -233,8 +234,7 @@ fn oir2_r3_defer_await_is_an_async_defer_entry() {
     let body = summary(&module, entry.async_body_summary);
     assert!(body.contract.suspends && body.contract.results.is_empty());
     assert!(body.contract.failures.contains(&ir::FailureKind::Cancelled));
-    let future = summary(&module, entry.async_creation_summary).contract.results[0];
-    assert_eq!(ty(&module, future), &ir::Type::Future(None));
+    assert_eq!(entry.async_creation_summary, None, "a defer entry creates no Future");
     // Its body awaits the temporary Future of `c.close()` in the entry's scope.
     let ops = async_ops(entry);
     let [ir::AsyncOp::Await { future, result: None }] = ops.as_slice() else { panic!("{ops:?}") };
@@ -246,6 +246,41 @@ fn oir2_r3_defer_await_is_an_async_defer_entry() {
     }).map(|id| module.functions.get(id).unwrap().symbol.clone()).collect();
     assert_eq!(registered, ["main.defer#0", "main.defer#1"]);
     verify_high(&module, "defer await");
+}
+
+#[test]
+fn oir2_r6_defer_await_reaches_verified_low() {
+    // #730, async ABI C-6: own runs the async defer entry through `invoke.defer` with its input packet at the
+    // block's exit (nothing after the registration can fail); coro and low take it under the full verifiers.
+    let module = lower(concat!(
+        "module app; object Conn { Conn(); async close() is void { } } ",
+        "async main() is int { { let c = Conn(); defer await c.close(); } 0; }",
+    ));
+    let coro = super::async_tests::high_to_coro(module).unwrap_or_else(|error| panic!("{error}"));
+    let entry = function(&coro, "main.defer#0");
+    assert!(entry.attrs.contains(&ir::FunctionAttr::Async) && entry.async_creation_summary.is_none());
+    let main = function(&coro, "main");
+    let invokes = body_of(main).blocks.iter().filter(|(_, block)| matches!(&block.term.kind,
+        ir::TermKind::InvokeDefer { call, .. } if call.packet.is_some())).count();
+    assert_eq!(invokes, 1, "the one exit of the block after the registration");
+    super::async_tests::coro_to_low(coro).unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
+fn oir2_r6_future_inputs_holding_a_borrowed_value_reach_verified_low() {
+    // #734, OIR-2 §10.1: the receiver and the argument of the cold Future keep the caller's `log`; coro saves
+    // the selections that name them across the await and low takes the result, under the full verifiers.
+    let module = lower(&source(concat!(
+        "object Receiver { has name is string; has log is Atomic<string>; ",
+        "Receiver(name is string, log is Atomic<string>) { self.name = name; self.log = log; } ",
+        "async read(arg is Res) is string { name + arg.label(); } ",
+        "destroy { log.replace(log.value() + name); } } ",
+        "async main() is int { let log = Atomic(\"\"); defer log.close(); ",
+        "{ let r = Receiver(\"R\", log); let a = Res(\"A\", log); let f = r.read(a); let s = await f; ",
+        "s.length(); } 0; }",
+    )));
+    let coro = super::async_tests::high_to_coro(module).unwrap_or_else(|error| panic!("{error}"));
+    super::async_tests::coro_to_low(coro).unwrap_or_else(|error| panic!("{error}"));
 }
 
 #[test]

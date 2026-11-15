@@ -555,3 +555,23 @@ fn a_token_rehome_hands_the_duty_to_its_destination() {
     };
     assert!(rules.is_empty(), "{rules:?}");
 }
+
+const SUCCESSOR: &str = include_str!("../../tests/fixtures/async/coro/async-successor.oir");
+
+#[test]
+fn an_async_successor_body_is_checked_against_its_language_signature() {
+    // #733, C-2: the coro signature of an async body is `[frame<@f>] -> void`; T5 reads the successor result
+    // from its language signature, and B8.2 counts the published successor as the body's return. A failure
+    // publication is a failure exit, which may drop a successor (main's failing `Counter(n: 5)`).
+    assert_eq!(full(SUCCESSOR), []);
+    // T5: the body publishes an int, so its language signature no longer returns the successor type.
+    let other = edited(SUCCESSOR, "fut.publish %1, success(value=%25,", "fut.publish %1, success(value=%11,");
+    let rules = full(&other);
+    assert!(rules.contains(&RuleId::T5), "{rules:?}");
+    // B8.2: main's success exit leaves the awaited successor unused.
+    let unused = edited(SUCCESSOR, concat!(
+        "    %36: app.Counter facts(plain(certificate=closed_graph(ty=app.Counter))) = succ.take %34, ty app.Counter\n",
+        "    %37: int = call @app.Counter.n#1(%36)\n"), "    %37: int = const 2\n");
+    let rules = full(&unused);
+    assert!(rules.contains(&RuleId::B82), "{rules:?}");
+}

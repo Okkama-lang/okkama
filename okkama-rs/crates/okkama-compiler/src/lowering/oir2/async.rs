@@ -38,6 +38,7 @@ const ASYNC_DEFER_REPLACE: &str = "return inside an awaiting defer (async ABI C-
 /// Future of the body result, never fails with a thrown error and never suspends: it does not run
 /// the body. The body summary returns the body result and may throw, fail, suspend and be
 /// cancelled. Own replaces both with its own creation and body equations (elaboration §3.3).
+/// An async defer entry (`defer await`, async ABI C-6) creates no Future: it gets the body summary only (#730).
 pub(super) fn declare(builder: &mut ir::ModuleBuilder, function: ir::FuncId) -> Result<()> {
     let module = builder.raw_mut();
     if !module.requires.contains(&ir::Feature::Async) {
@@ -51,11 +52,17 @@ pub(super) fn declare(builder: &mut ir::ModuleBuilder, function: ir::FuncId) -> 
         [result] => Some(*result),
         _ => return Err(LowerError::invalid(Span::default(), "async action with more than one result")),
     };
-    let future = builder.intern_type(ir::Type::Future(outcome))?;
+    let defer_entry = builder.module().functions.get(function)?.attrs.iter()
+        .any(|attr| matches!(attr, ir::FunctionAttr::DeferEntry { .. }));
     let body = builder.add_summary(envelope(parameters, results, false))?;
-    let creation = builder.add_summary(envelope(parameters, vec![future], true))?;
+    let creation = if defer_entry {
+        None
+    } else {
+        let future = builder.intern_type(ir::Type::Future(outcome))?;
+        Some(builder.add_summary(envelope(parameters, vec![future], true))?)
+    };
     let declaration = builder.raw_mut().functions.get_mut(function)?;
-    declaration.async_creation_summary = Some(creation);
+    declaration.async_creation_summary = creation;
     declaration.async_body_summary = Some(body);
     Ok(())
 }

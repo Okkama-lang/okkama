@@ -652,7 +652,10 @@ impl Engine<'_, '_> {
                 let normal = !matches!(tag, DeferReturnTag::Continue) || values.is_empty();
                 self.finish(&mut flow, normal, values);
             }
-            TermKind::Ret { values } => self.finish(&mut flow, true, values),
+            TermKind::Ret { values } => {
+                let normal = self.ret_normal(block);
+                self.finish(&mut flow, normal, values);
+            }
             TermKind::Throw(v) | TermKind::Raise(v) | TermKind::Panic(v) => {
                 self.live_use(&flow, *v);
                 if flow.active_failure != 0 && !matches!(block.term.kind, TermKind::Raise(_)) {
