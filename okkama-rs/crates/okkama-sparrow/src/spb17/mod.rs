@@ -1034,6 +1034,8 @@ mod tests;
 
 #[cfg(test)]
 mod layout_tests;
+#[cfg(test)]
+mod allocation_tests;
 
 /// Function contracts are verified against bodies or a trusted external catalog at load time.
 /// In particular, escaping body failures (not just fresh_singleton) must fit the declared mask.

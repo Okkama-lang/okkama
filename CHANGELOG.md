@@ -8,6 +8,23 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Closure-dense programs compile and load on Champ in seconds (#701).**
+  The SPB 17 allocation checker kept one `BTreeSet` per frame slot, cloned
+  it at every visit and rebuilt every slot on every edge; a 940-instruction
+  `main` with 69 slots and nested loops took 2 s per check in a debug build,
+  and one `okkama run` checked each function five or six times (the
+  producer, the pipeline, the decoder, the runtime, its cleanup-plan load,
+  the JIT). The checker now keeps sorted vectors, runs an edge's copies by
+  reference and visits in reverse postorder (same verdicts, same budgets),
+  and a program passes `verify_load` once in the compiler and once in the
+  runtime. `L05.reduce.accumulator-in-place`, `L05.variants.search`,
+  `L04.roles.contextual-wrap`, `L07.destroy.branch-scope` and
+  `L04.invariant.early-self-in-blocks` no longer time out on Champ (debug
+  build: 19–73 s before, 5.6–11.4 s after). `L09.compare.failing-order-stops-the-sort`
+  still waits for an O(n log n) sort (#678).
+  `OKKAMA_PROFILE_PIPELINE=1` prints the OIR-2 pipeline's per-stage wall
+  times on stderr.
+
 - **Own never indexes a missing scope state (#672).** A constructor that
   stores a field which carries deps but holds no obligation (a role whose
   implementers are plain, as in `L09.math.aggregates` and `L09.time.zones`)

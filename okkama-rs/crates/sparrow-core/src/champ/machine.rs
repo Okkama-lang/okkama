@@ -91,7 +91,13 @@ impl Verified {
         Ok(Self { source: Arc::new(source), external, p1 })
     }
 
-    #[cfg(test)]
+    /// [`Verified::new`] without host entries, failing with the loader's own error: the decoder's check.
+    pub(crate) fn load(source: s::Program) -> Result<Self, s::Error> {
+        let p1 = s::p1::P1Contracts::new(&source.objects)?;
+        s::verify_load(&source, &Catalog(&[], &p1))?;
+        Ok(Self { source: Arc::new(source), external: Vec::new(), p1 })
+    }
+
     pub(crate) fn source(&self) -> &s::Program {
         &self.source
     }
@@ -254,7 +260,7 @@ impl Runtime {
         runtime.heap = Heap::new_champ(heap_layouts, layouts.into_boxed_slice());
         runtime.heap.set_stress(stress);
         runtime.heap.allocations = allocations;
-        let plans = runtime.champ_load_cleanup_plans(source, &catalog)?;
+        let plans = runtime.champ_verified_cleanup_plans(verified);
         let schedules = source.functions.iter().map(|function| {
             function.proofs.schedules.iter()
                 .map(|schedule| runtime.champ_register_schedule(schedule.services.len() as u64))
