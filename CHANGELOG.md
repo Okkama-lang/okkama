@@ -8,6 +8,16 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **The SPB 17 emitter drops the code it disconnects (#702).** A Low
+  invocation that SPB 17 computes totally (a total scalar operation, a plain
+  construction such as `throw E.case(x)`) becomes data and a branch, and its
+  unwind edge is dropped; the cleanup chain behind that edge stayed in the
+  function, still reading by Low dominance a local carried to a catch
+  handler, so the loader refused it with `SPB_STRUCTURE` "definition does not
+  dominate use" (`L05.batching.functional`, the `L07.traversal.*` cases,
+  `strings.parse.Number.rat`, `time.rfc3339.Rfc3339.parsed`). The emitter now
+  removes unreachable blocks with their closes, plans, envelopes and records
+  and renumbers the rest. Low was valid; the loader rules are unchanged.
 - **Own never indexes a missing scope state (#672).** A constructor that
   stores a field which carries deps but holds no obligation (a role whose
   implementers are plain, as in `L09.math.aggregates` and `L09.time.zones`)

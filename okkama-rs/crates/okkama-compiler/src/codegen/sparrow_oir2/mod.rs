@@ -7,6 +7,7 @@ use okkama_oir as o;
 use okkama_sparrow::spb17 as s;
 
 mod calls;
+mod dead;
 mod roles;
 mod successors;
 mod undef;
@@ -149,6 +150,7 @@ fn generate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<
     p.tables.summaries = summaries;
     p.functions.extend(trampolines);
     for function in &mut p.functions {
+        dead::prune_unreachable(function)?;
         successors::forward_taken(function)?;
         successors::prune_dead_aliases(function);
         successors::close_unwind_permissions(function)?;
@@ -1121,6 +1123,8 @@ mod tests;
 mod cleanup_tests;
 #[cfg(test)]
 mod roles_tests;
+#[cfg(test)]
+mod dead_tests;
 
 /// Mandatory semantic gate for executable Low. External contracts come from the caller's backend catalog.
 /// This path cannot be selected by a file flag; external artifacts always pass verify_load independently.

@@ -133,14 +133,16 @@ fn s3_loader_negatives_before_native_or_constructor_execution() {
     let bytes = s::encode(&missing).unwrap();
     rejects(&s::decode(&bytes).unwrap(), &catalog, "missing abstract reference root");
 
-    let mut arity = output.program.clone();
-    let main = arity.functions.iter_mut().find(|f| f.symbol == "main").unwrap();
+    // A reachable cleanup.next: local-pair's only one sat on an unwind edge the emitter drops (#702).
+    let (fresh, fresh_catalog) = emit(include_str!("fixtures/fresh-call.low.oir"));
+    let mut arity = fresh.program;
+    let main = arity.functions.iter_mut().find(|f| f.symbol == "fresh").unwrap();
     let outcomes = main.code.iter_mut().find_map(|inst| match inst {
         s::Instruction::Champ { op: s::Opcode::CleanupNext, flow: s::Flow::Outcomes(outcomes), .. } => Some(outcomes),
         _ => None,
     }).unwrap();
     outcomes[0].edge.assignments.pop();
-    rejects(&arity, &catalog, "edge arity");
+    rejects(&arity, &fresh_catalog, "edge arity");
 
     let mut repeat = output.program;
     let main = repeat.functions.iter_mut().find(|f| f.symbol == "main").unwrap();
