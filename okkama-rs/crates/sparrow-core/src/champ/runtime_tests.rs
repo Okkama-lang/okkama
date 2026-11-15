@@ -127,8 +127,9 @@ fn champ_s2_registry_layouts_effects_and_single_outcome_channel() {
     // champ_machine_scalar; #676 adds champ_machine_role_narrow and champ_own_dynamic; #601 V8 adds the eight
     // async helpers of Champ draft 3 §14.4 and champ_machine_future_destination; #697 adds
     // champ_scope_transfer_admissible; #601 V9 adds champ_body_reject; #601 R5 adds champ_await_take and
-    // champ_cache_rehome.
-    assert_eq!(helpers.len(), 75);
+    // champ_cache_rehome; #601 D25 adds champ_cleanup_settle_dynamic, champ_service_materialize,
+    // champ_service_absorb and champ_invoke_defer_async.
+    assert_eq!(helpers.len(), 79);
     for &(name, effects) in helpers {
         let abi = helper_abi(name).unwrap();
         let class = abi.class;

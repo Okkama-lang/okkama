@@ -83,6 +83,7 @@ pub const RECORD_LAYOUTS: &[RecordLayout] = &[
     record!(AwaitPost; [task]; [value]),
     record!(AwaitTakePost; [packet, task]; [value]),
     record!(RehomePost; [pending, state]; []),
+    record!(MaterializePost; [packet, token]; []),
     record!(AwaitUnwindPost; [state, failure]; []),
     record!(PublishIn; [failure]; [value]),
     record!(FlagPost; []; []),
@@ -205,6 +206,10 @@ pub fn helper_abi(name: &str) -> Option<HelperAbi> {
         "champ_future_cancelled" => ("FlagPost", Some(O::FutureCancelled)),
         "champ_cleanup_deliver_cancel" => ("CleanupSlot", Some(O::CleanupDeliverCancel)),
         "champ_cleanup_settle" => ("CleanupSlot", Some(O::CleanupSettle)),
+        "champ_cleanup_settle_dynamic" => ("CleanupSlot", Some(O::CleanupSettleDynamic)),
+        "champ_service_materialize" => ("MaterializePost", Some(O::ServiceMaterialize)),
+        "champ_service_absorb" => ("PacketSlot", Some(O::ServiceAbsorb)),
+        "champ_invoke_defer_async" => ("CallPost", Some(O::InvokeDefer)),
         _ if okkama_sparrow::spb17::helper(name).is_some() => ("", None),
         _ => return None,
     };

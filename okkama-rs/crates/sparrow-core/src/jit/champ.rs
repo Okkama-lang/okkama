@@ -16,13 +16,10 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
     let machine = runtime.champ.machine.as_ref().expect("Champ program");
     let program = machine.source.clone();
     let source = &program.functions[index];
-    // An async defer entry runs as a shielded child of its caller (C-6), with the runtime of #601 R5.
-    if matches!(source.entry_abi, s::EntryAbi::AsyncDefer { .. }) {
-        return Err(Error("Champ async defer entries run with the async resources runtime (#601 R5)".into()));
-    }
     let frame = Frame::new(source)?;
-    // An async body takes the context and its frame (draft 3 §13); owning entries take CallOwn.
-    let asynchronous = matches!(source.entry_abi, s::EntryAbi::AsyncBody { .. });
+    // An async body takes the context and its frame (draft 3 §13); owning entries take CallOwn. An async defer
+    // entry is an async body that runs as a child of its caller (C-6, draft 3 §11).
+    let asynchronous = source.entry_abi.asynchronous();
     let owned = source.entry_abi != s::EntryAbi::Observation && !asynchronous;
     let params = if asynchronous {
         1
@@ -1031,15 +1028,15 @@ impl Emit<'_, '_> {
             O::CleanupSettle if locations.len() > 1 => {
                 return self.future_operation(op, arguments, &locations, flow);
             }
-            // An async defer entry (C-6) has its SPB 17 form (#601 R4) and runtime helper (#601 R5); its JIT call
-            // arrives with the dynamic-settle slice.
+            // An async defer entry (C-6): a shielded child the body waits for (draft 3 §11, `futures.rs`).
             O::InvokeDefer if arguments.iter().filter_map(entry).any(|target| {
                 matches!(self.program.functions[target as usize].entry_abi, s::EntryAbi::AsyncDefer { .. })
             }) => {
-                return Err(Error("Champ invoke.defer of an async defer entry is not supported yet (#601)".into()));
+                return self.future_operation(op, arguments, &locations, flow);
             }
-            // The temporary take, its proof and the rehome (#601 R4, R5).
-            O::AwaitTake | O::UniqueCacheProof | O::CacheRehome => {
+            // The temporary take, its proof and the rehome (#601 R4, R5); service duties in packets (#601 D25).
+            O::AwaitTake | O::UniqueCacheProof | O::CacheRehome | O::CleanupSettleDynamic | O::ServiceMaterialize
+                | O::ServiceAbsorb => {
                 return self.future_operation(op, arguments, &locations, flow);
             }
             O::CleanupSettle => {

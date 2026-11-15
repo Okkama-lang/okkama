@@ -13,6 +13,7 @@
 use super::*;
 use super::cleanup::{rt_cleanup_begin, rt_cleanup_destroy, rt_cleanup_finish, rt_cleanup_next, rt_cleanup_plan};
 use super::cleanup::{rt_cleanup_failure, rt_cleanup_settle_empty};
+use super::cleanup::{rt_call_owned, rt_cleanup_settle_dynamic};
 use super::futures::FutureStep;
 use crate::runtime::{frame_pointer, Ctx, FailureKind, FAILED, OK};
 use crate::tasks::{self, get, set};
@@ -66,6 +67,8 @@ struct Body {
     labels: BTreeMap<&'static str, u32>,
     targets: Vec<(usize, usize, &'static str, Vec<s::Source>)>,
     sites: BTreeMap<u32, u32>,
+    /// Scopes whose closes settle the entries they admitted after the static duties (ABI D25.3).
+    dynamic: std::collections::BTreeSet<u32>,
 }
 
 impl Body {
@@ -74,7 +77,7 @@ impl Body {
             symbol: symbol.into(), entry_abi, registers: vec![], services: vec![], params: vec![], results,
             blocks: vec![], proofs: s::FunctionProofs::default(), code: vec![],
         };
-        Self { f, labels: BTreeMap::new(), targets: vec![], sites: BTreeMap::new() }
+        Self { f, labels: BTreeMap::new(), targets: vec![], sites: BTreeMap::new(), dynamic: Default::default() }
     }
 
     /// An async body of the function with index `index`: its only parameter is its frame.
@@ -186,6 +189,9 @@ impl Body {
         }
         for &duty in duties {
             cleanup = self.emit(O::CleanupSettle, vec![l(cleanup), A::Schedule(schedule), l(duty)], K::Cleanup);
+        }
+        if self.dynamic.contains(&scope) {
+            cleanup = self.emit(O::CleanupSettleDynamic, vec![l(cleanup)], K::Cleanup);
         }
         let selection = self.selection();
         let proofs = &mut self.f.proofs;
@@ -1038,6 +1044,7 @@ impl Activation {
                 vec![vec![slot.record]]
             }
             O::FutureNew => self.future_new(arguments, &operands).ok_or(Step::Stop)?,
+            O::InvokeCallOwn => return Err(self.call_owned(pc, arguments, &operands, flow)),
             O::Await => return Err(self.await_step(pc, operands[0], flow)),
             O::AwaitTake => return Err(self.take_step(pc, arguments, operands[0], flow)),
             O::UniqueCacheProof => vec![vec![]],
@@ -1053,15 +1060,57 @@ impl Activation {
                     s::ExitDestination::Scope(id) => self.scopes[id as usize][1],
                 };
                 let mut pending = PendingSlot { record: self.word(operands[0]) };
-                let future = self.word(operands[1]);
-                let mut cache = CacheSlot { record: future };
                 let mut slot = RehomePost::default();
-                let rehomed = self.call(|ctx| rt_cache_rehome(ctx, &mut pending, std::ptr::null_mut(), &mut cache,
-                    std::ptr::null_mut(), future, target, &mut slot));
-                assert_eq!(rehomed, NORMAL, "{:?}", runtime_of(self.ctx).fatal);
+                if let [_, state, future] = operands[..] {
+                    // The state form takes the entry the scope admitted (ABI D25.3).
+                    let mut source = ScopeSlot { record: self.word(state) };
+                    let future = self.word(future);
+                    let rehomed = self.call(|ctx| rt_cache_rehome(ctx, &mut pending, &mut source,
+                        std::ptr::null_mut(), std::ptr::null_mut(), future, target, &mut slot));
+                    assert_eq!(rehomed, NORMAL, "{:?}", runtime_of(self.ctx).fatal);
+                    self.write(operands[0], &[0]);
+                    self.write(state, &[0]);
+                    vec![vec![slot.state.record], vec![slot.pending.record]]
+                } else {
+                    let future = self.word(operands[1]);
+                    let mut cache = CacheSlot { record: future };
+                    let rehomed = self.call(|ctx| rt_cache_rehome(ctx, &mut pending, std::ptr::null_mut(), &mut cache,
+                        std::ptr::null_mut(), future, target, &mut slot));
+                    assert_eq!(rehomed, NORMAL, "{:?}", runtime_of(self.ctx).fatal);
+                    self.write(operands[0], &[0]);
+                    self.write(operands[1], &[0]);
+                    vec![vec![slot.pending.record]]
+                }
+            }
+            O::CleanupSettleDynamic => {
+                let mut input = CleanupSlot { record: self.word(operands[0]) };
+                let mut slot = CleanupSlot::default();
+                let frame = self.frame;
+                let settled = self.call(|ctx| rt_cleanup_settle_dynamic(ctx, frame, &mut input, &mut slot));
+                assert_eq!(settled, NORMAL, "{:?}", runtime_of(self.ctx).fatal);
+                self.write(operands[0], &[0]);
+                vec![vec![slot.record]]
+            }
+            O::ServiceAbsorb => {
+                let mut input = PacketSlot { record: self.word(operands[0]) };
+                let token = self.word(operands[1]);
+                let Location::Service(id) = operands[1] else { unreachable!("verified duty token") };
+                let kind = if self.function().services[id as usize] == K::TaskState { SERVICE_TASK }
+                    else { SERVICE_CACHE };
+                let mut slot = PacketSlot::default();
+                assert_eq!(self.call(|ctx| rt_service_absorb(ctx, &mut input, token, kind, &mut slot)), NORMAL);
                 self.write(operands[0], &[0]);
                 self.write(operands[1], &[0]);
-                vec![vec![slot.pending.record]]
+                vec![vec![slot.record]]
+            }
+            O::ServiceMaterialize => {
+                let mut input = PacketSlot { record: self.word(operands[0]) };
+                let holder = self.word(operands[1]);
+                let mut slot = MaterializePost::default();
+                let taken = self.call(|ctx| rt_service_materialize(ctx, &mut input, holder, SERVICE_CACHE, &mut slot));
+                assert_eq!(taken, NORMAL);
+                self.write(operands[0], &[0]);
+                vec![vec![slot.packet.record], vec![slot.token]]
             }
             O::AwaitUnwind => self.await_unwind(pc, &operands)?,
             O::ExitPrepare => self.exit_prepare(arguments, &operands),
@@ -1168,6 +1217,39 @@ impl Activation {
             UNWIND => {
                 self.land(pc);
                 self.outcome(flow, Tag::Unwind, &[vec![slot.value], vec![slot.task], vec![slot.receipt]])
+            }
+            _ => Step::Stop,
+        }
+    }
+
+    /// `invoke.call.own` of a synchronous owning entry (#601 D25: a call that returns a Future with its entry): its
+    /// language arguments and input packet go through `CallOwn`, as the JIT passes them.
+    fn call_owned(&mut self, pc: usize, arguments: &[A], operands: &[Location], flow: &s::Flow) -> Step {
+        let target = argument(arguments, |argument| match argument {
+            A::Entry(id) => Some(*id),
+            _ => None,
+        }) as usize;
+        let callee = &self.program.functions[target];
+        let count = callee.params.iter().filter(|location| matches!(location, Location::Register(_))).count();
+        let valued = !callee.results.is_empty();
+        let values = operands[..count].iter().map(|&location| self.word(location)).collect::<Vec<_>>();
+        let shielded = arguments.contains(&A::Flag(true));
+        let machine = runtime_of(self.ctx).champ.machine.as_ref().unwrap();
+        let entry = if shielded { machine.shielded_entries[target] } else { machine.entries[target] };
+        let mut post = CallPost::default();
+        let mut io = CallOwn { input: PacketSlot { record: self.word(operands[count]) }, entry_abi: entry,
+            output: &mut post, context: 0, cleanup_mode: u64::from(shielded) };
+        let outcome = self.call(|ctx| rt_call_owned(ctx, entry, values.as_ptr(), count as u64, &mut io, &mut post));
+        self.write(operands[count], &[0]);
+        match outcome {
+            NORMAL => {
+                let mut produced = if valued { vec![vec![post.value]] } else { vec![] };
+                produced.extend([vec![post.packet.record], vec![]]);
+                self.outcome(flow, Tag::Normal, &produced)
+            }
+            UNWIND => {
+                self.land(pc);
+                self.outcome(flow, Tag::Unwind, &[vec![post.failure]])
             }
             _ => Step::Stop,
         }

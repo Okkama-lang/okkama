@@ -203,6 +203,8 @@ fn escaper() -> (s::Function, s::FrameLayout) {
     let slots = vec![service(K::Packet), service(K::ScopeState), value(FUTURE_RES), value(s::Type::Failure),
         service(K::TaskState), service(K::Receipt)];
     let (mut b, frame) = Body::asynchronous("escape", ESCAPE, vec![]);
+    // The body's scope admits F's duty with the commit, so its closes settle it dynamically (D25.3).
+    b.dynamic.insert(ESCAPE);
     let (body, inputs) = b.resume(frame, 0, &types(&slots, &[0]));
     let q0 = b.emit(O::ScopeBegin, vec![A::Scope(ESCAPE), A::Boundary(ESCAPE)], K::ScopeState);
     let outer = b.emit(O::OwnAccept, vec![l(q0), l(inputs[0])], K::ScopeState);
@@ -1404,4 +1406,279 @@ fn champ_r5_a_rehomed_future_settles_in_the_exit_destination_on_both_engines() {
         traces.record(configuration, &runtime);
     }
     traces.agree();
+}
+
+// --- #601 D25: returned and admitted Futures, end to end ----------------------------------------------------
+
+/// Function indices of [`d25_program`]: three async bodies, then the synchronous ones. Each has its scope and
+/// boundary of its index.
+const D25_CALLER: u32 = 1;
+const D25_ABSORBER: u32 = 2;
+const D25_ASYNC: u32 = 3;
+const D25_MAKE_FUTURE: u32 = 3;
+
+/// How a D25 body gets the Future whose entry its scope admits.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Admitted {
+    /// `let f = make_future();`: the returned packet carries F's entry (OIR-2 §10.1, ABI D25.1).
+    Returned,
+    /// `let f = make();` whose cache duty is absorbed into a packet that joins the scope (D25.2).
+    Absorbed,
+}
+
+/// `async caller() { let f = make_future(); await f; }` or `async absorber() { ... }`: the scope admits F's entry,
+/// awaits F (which creates Q), and its closes settle F dynamically (D25.3): F is done, so its outcome packet joins
+/// the plan, which destroys Q once.
+fn admitting(admitted: Admitted) -> (s::Function, s::FrameLayout) {
+    let (index, symbol) = match admitted {
+        Admitted::Returned => (D25_CALLER, "caller"),
+        Admitted::Absorbed => (D25_ABSORBER, "absorber"),
+    };
+    // 0 inputs, 1 owner state, 2 the Future, 3–5 the unwind.
+    let slots = vec![service(K::Packet), service(K::ScopeState), value(FUTURE_RES), value(s::Type::Failure),
+        service(K::TaskState), service(K::Receipt)];
+    let (mut b, frame) = Body::asynchronous(symbol, index, vec![]);
+    b.dynamic.insert(index);
+    let (body, inputs) = b.resume(frame, 0, &types(&slots, &[0]));
+    let q0 = b.emit(O::ScopeBegin, vec![A::Scope(index), A::Boundary(index)], K::ScopeState);
+    let q1 = b.emit(O::OwnAccept, vec![l(q0), l(inputs[0])], K::ScopeState);
+    let (future, admitted_state) = match admitted {
+        Admitted::Returned => {
+            let offered = b.emit(O::OwnEmpty, vec![], K::Packet);
+            b.outcomes(O::InvokeCallOwn, vec![A::Entry(D25_MAKE_FUTURE), A::Summary(0), l(offered), A::Flag(false)],
+                vec![(Tag::Normal, "made", vec![p(0), p(1), p(2)])]);
+            let [future, packet, deps] = [b.register(FUTURE_RES), b.service(K::Packet), b.service(K::Deps)];
+            b.block("made", &[future, packet, deps]);
+            (future, b.emit(O::OwnAdmit, vec![l(q1), l(packet)], K::ScopeState))
+        }
+        Admitted::Absorbed => {
+            let (future, cache, q2) = future_of(&mut b, index, MAKE, q1);
+            let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
+            let packet = b.emit(O::ServiceAbsorb, vec![l(empty), l(cache)], K::Packet);
+            (future, b.emit(O::OwnAdmit, vec![l(q2), l(packet)], K::ScopeState))
+        }
+    };
+    let first = b.save(body, 1, &[admitted_state]);
+    b.outcomes(O::Await, vec![l(future)], vec![(Tag::Normal, "ok", vec![p(0), p(1)]),
+        (Tag::Unwind, "bad", vec![p(0), p(1), p(2)])]);
+    let [x, x_deps] = [b.register(RES), b.service(K::Deps)];
+    b.block("ok", &[x, x_deps]);
+    let (body_ok, resumed) = b.resume(first, 1, &types(&slots, &[1]));
+    return_void(&mut b, body_ok, resumed[0], index, &[]);
+    let unwind = [b.register(s::Type::Failure), b.service(K::TaskState), b.service(K::Receipt)];
+    b.block("bad", &unwind);
+    let (body_bad, resumed) = b.resume(first, 1, &types(&slots, &[1]));
+    let (body_adapted, after, adapted, _) = b.adapter(body_bad, 2, resumed[0], unwind, &[], &[]);
+    fail_merging(&mut b, body_adapted, after, adapted, index, &[]);
+    let layout = b.layout(slots, vec![(vec![0], vec![]), (vec![1], vec![2]), (vec![], vec![1, 3, 4, 5])]);
+    (b.finish(), layout)
+}
+
+/// `make_future() is Future<Res> { return make(); }` (OIR-2 §10.1): F's cache duty leaves with the returned
+/// Future through `cache.rehome ... target caller` (C-4 and its ruling).
+fn make_future() -> s::Function {
+    let scope = D25_MAKE_FUTURE;
+    let mut b = Body::new("make_future", s::EntryAbi::Owned, vec![FUTURE_RES]);
+    let input = b.service(K::Packet);
+    b.f.params = vec![input];
+    b.f.proofs.entry = Some(s::EntryContract::default());
+    b.block("entry", &[input]);
+    let q0 = b.emit(O::ScopeBegin, vec![A::Scope(scope), A::Boundary(scope)], K::ScopeState);
+    let q1 = b.emit(O::OwnAccept, vec![l(q0), l(input)], K::ScopeState);
+    let (future, cache, q2) = future_of(&mut b, scope, MAKE, q1);
+    let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
+    let selection = b.selection();
+    let pending = b.emit(O::ExitPrepare, vec![A::Kind(s::ExitKind::Return), A::Boundary(scope), l(future),
+        l(empty), A::Selection(selection)], K::Pending);
+    let pending = b.emit(O::CacheRehome, vec![A::Destination(s::ExitDestination::Caller), l(pending), l(cache)],
+        K::Pending);
+    let finished = b.close(q2, Some(pending), None, scope, &[], true);
+    let [closed, reserved] = [b.service(K::Closed), b.service(K::Pending)];
+    b.dispatch(finished, [true, false, false], vec![(Tag::Pending, "done", vec![p(0), p(1)])]);
+    b.block("done", &[closed, reserved]);
+    let [result, packet, deps] = [b.register(FUTURE_RES), b.service(K::Packet), b.service(K::Deps)];
+    b.next(O::ExitCommit, vec![l(reserved), A::Destination(s::ExitDestination::Caller)], vec![result, packet, deps]);
+    b.f.code.push(s::Instruction::Champ { op: O::RetOwn, arguments: vec![l(result), l(packet), l(deps)],
+        flow: s::Flow::Next(vec![]) });
+    b.finish()
+}
+
+fn d25_program() -> s::Program {
+    let mut functions = Vec::new();
+    let mut frames = Vec::new();
+    for (function, layout) in [make(), admitting(Admitted::Returned), admitting(Admitted::Absorbed)] {
+        functions.push(function);
+        frames.push(layout);
+    }
+    functions.push(make_future());
+    functions.push(destroy_of("destroy_res", 0));
+    s::Program {
+        module: "services".into(),
+        objects: vec![res()],
+        functions,
+        tables: s::ChampTables {
+            scopes: (0..=D25_MAKE_FUTURE).map(|index| s::Scope { function: index, parent: None, boundary: index })
+                .collect(),
+            boundaries: (0..=D25_MAKE_FUTURE).map(|scope| s::Boundary { scope }).collect(),
+            summaries: vec![s::Summary { entry: D25_MAKE_FUTURE, may_fail: false, retained_params: vec![] }],
+            frames,
+            future_results: vec![Some(RES)],
+        },
+        ..s::Program::default()
+    }
+}
+
+/// [`d25_program`] through its text form, its async bodies run by `engine`.
+fn load_d25(stress: bool, engine: Engine) -> Box<Runtime> {
+    let built = d25_program();
+    s::verify_load(&built, &s::NoExternalContracts).unwrap();
+    let assembled = s::assemble(&s::disassemble(&built).unwrap()).unwrap();
+    assert_eq!(assembled, built);
+    let mut runtime = Runtime::new_champ(assembled, Vec::new()).unwrap();
+    runtime.heap.set_stress(stress);
+    runtime.champ.captured_trace = Some(Vec::new());
+    if engine == Engine::Reference {
+        for function in 0..D25_ASYNC as usize {
+            runtime.invocations[function].code = reference as *const () as u64;
+        }
+    }
+    runtime
+}
+
+#[test]
+fn champ_d25_a_returned_future_settles_at_the_admitting_close_on_both_engines() {
+    let mut traces = Traces::default();
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load_d25(stress, engine);
+        runtime.run_function(D25_CALLER as usize, crate::STACK_BYTES).unwrap();
+        // make_future returned F with its entry; the caller's await ran it once, and its dynamic settle released
+        // F's outcome into the plan, which destroyed Q once.
+        assert_eq!(steps(&runtime, MAKE), [FutureStep::Start, FutureStep::Published]);
+        assert_eq!(steps(&runtime, D25_CALLER), [FutureStep::Start, FutureStep::Published]);
+        assert_eq!(destroyed(&runtime), "Res 1\n");
+        traces.record(configuration, &runtime);
+    }
+    traces.agree();
+}
+
+#[test]
+fn champ_d25_an_absorbed_duty_settles_from_the_scope_list_on_both_engines() {
+    let mut traces = Traces::default();
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load_d25(stress, engine);
+        runtime.run_function(D25_ABSORBER as usize, crate::STACK_BYTES).unwrap();
+        assert_eq!(steps(&runtime, MAKE), [FutureStep::Start, FutureStep::Published]);
+        assert_eq!(steps(&runtime, D25_ABSORBER), [FutureStep::Start, FutureStep::Published]);
+        assert_eq!(destroyed(&runtime), "Res 1\n");
+        traces.record(configuration, &runtime);
+    }
+    traces.agree();
+}
+
+// --- #601: `defer await` on the JIT (ABI C-6, draft 3 §11) ---------------------------------------------------
+
+const DEFER_CLOSER: u32 = 1;
+const DEFER_MAIN: u32 = 2;
+
+/// `async close() { let x = await make(); }`, an async defer entry: its scope settles F, whose outcome Q it
+/// destroys once, then it publishes an empty success (Continue). A failure of the await publishes Unwind.
+fn async_closer() -> (s::Function, s::FrameLayout) {
+    let index = DEFER_CLOSER;
+    // 0 inputs, 1 owner state, 2 cache duty, 3 the Future, 4–6 the unwind.
+    let slots = vec![service(K::Packet), service(K::ScopeState), service(K::CacheState), value(FUTURE_RES),
+        value(s::Type::Failure), service(K::TaskState), service(K::Receipt)];
+    let mut b = Body::new("close", s::EntryAbi::AsyncDefer { layout: index }, vec![]);
+    let frame = b.service(K::Frame);
+    b.f.params = vec![frame];
+    b.f.proofs.entry = Some(s::EntryContract::default());
+    b.block("entry", &[frame]);
+    let (body, inputs) = b.resume(frame, 0, &types(&slots, &[0]));
+    let q0 = b.emit(O::ScopeBegin, vec![A::Scope(index), A::Boundary(index)], K::ScopeState);
+    let q1 = b.emit(O::OwnAccept, vec![l(q0), l(inputs[0])], K::ScopeState);
+    let (future, cache, q2) = future_of(&mut b, index, MAKE, q1);
+    let first = b.save(body, 1, &[q2, cache]);
+    b.outcomes(O::Await, vec![l(future)], vec![(Tag::Normal, "ok", vec![p(0), p(1)]),
+        (Tag::Unwind, "bad", vec![p(0), p(1), p(2)])]);
+    let [x, x_deps] = [b.register(RES), b.service(K::Deps)];
+    b.block("ok", &[x, x_deps]);
+    let (body_ok, resumed) = b.resume(first, 1, &types(&slots, &[1, 2]));
+    let finished = b.close(resumed[0], None, None, index, &[resumed[1]], true);
+    let closed = b.service(K::Closed);
+    b.dispatch(finished, [false, false, false], vec![(Tag::Success, "done", vec![p(0)])]);
+    b.block("done", &[closed]);
+    let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
+    let deps = b.emit(O::DepsEmpty, vec![], K::Deps);
+    b.next(O::FuturePublish, vec![l(body_ok), A::Flag(true), l(empty), l(deps)], vec![]);
+    b.ret();
+    let unwind = [b.register(s::Type::Failure), b.service(K::TaskState), b.service(K::Receipt)];
+    b.block("bad", &unwind);
+    let (body_bad, resumed) = b.resume(first, 1, &types(&slots, &[1, 2]));
+    let (body_adapted, after, adapted, kept) =
+        b.adapter(body_bad, 2, resumed[0], unwind, &[resumed[1]], &types(&slots, &[2]));
+    fail_merging(&mut b, body_adapted, after, adapted, index, &[kept[0]]);
+    let layout = b.layout(slots, vec![(vec![0], vec![]), (vec![1, 2], vec![3]), (vec![2], vec![1, 4, 5, 6])]);
+    (b.finish(), layout)
+}
+
+/// `async main() { defer await close(); }`: the body runs the async defer as a bracketed suspension of its own.
+fn deferring_main() -> (s::Function, s::FrameLayout) {
+    let index = DEFER_MAIN;
+    let (mut b, frame) = Body::asynchronous("main", index, vec![]);
+    let (body, start) = b.resume(frame, 0, &[s::ProducedType::Service(K::Packet)]);
+    let q0 = b.emit(O::ScopeBegin, vec![A::Scope(index), A::Boundary(index)], K::ScopeState);
+    let q1 = b.emit(O::OwnAccept, vec![l(q0), l(start[0])], K::ScopeState);
+    let packet = b.emit(O::OwnEmpty, vec![], K::Packet);
+    let saved = b.save(body, 1, &[q1]);
+    b.f.proofs.registrations.push(s::RegistrationMap { entry: DEFER_CLOSER, labels: vec![] });
+    b.outcomes(O::InvokeDefer, vec![A::Entry(DEFER_CLOSER), A::Summary(0), A::Registration(0), l(packet)],
+        vec![(Tag::Continue, "continued", vec![])]);
+    b.block("continued", &[]);
+    let (body, resumed) = b.resume(saved, 1, &[s::ProducedType::Service(K::ScopeState)]);
+    return_void(&mut b, body, resumed[0], index, &[]);
+    let slots = vec![service(K::Packet), service(K::ScopeState), service(K::Packet)];
+    let layout = b.layout(slots, vec![(vec![0], vec![]), (vec![1], vec![2])]);
+    (b.finish(), layout)
+}
+
+fn defer_program() -> s::Program {
+    let mut functions = Vec::new();
+    let mut frames = Vec::new();
+    for (function, layout) in [make(), async_closer(), deferring_main()] {
+        functions.push(function);
+        frames.push(layout);
+    }
+    functions.push(destroy_of("destroy_res", 0));
+    s::Program {
+        module: "defer".into(),
+        objects: vec![res()],
+        functions,
+        tables: s::ChampTables {
+            scopes: (0..=DEFER_MAIN).map(|index| s::Scope { function: index, parent: None, boundary: index })
+                .collect(),
+            boundaries: (0..=DEFER_MAIN).map(|scope| s::Boundary { scope }).collect(),
+            summaries: vec![s::Summary { entry: DEFER_CLOSER, may_fail: false, retained_params: vec![] }],
+            frames,
+            future_results: vec![Some(RES)],
+        },
+        ..s::Program::default()
+    }
+}
+
+#[test]
+fn champ_jit_runs_an_async_defer_entry_as_a_child_and_continues() {
+    for stress in [false, true] {
+        let built = defer_program();
+        s::verify_load(&built, &s::NoExternalContracts).unwrap();
+        let mut runtime = Runtime::new_champ(built, Vec::new()).unwrap();
+        runtime.heap.set_stress(stress);
+        runtime.champ.captured_trace = Some(Vec::new());
+        runtime.run_function(DEFER_MAIN as usize, crate::STACK_BYTES).unwrap();
+        // The defer ran as a child of main, ran make once and destroyed its outcome Q once; main continued.
+        assert_eq!(steps(&runtime, DEFER_CLOSER), [FutureStep::Start, FutureStep::Published], "stress {stress}");
+        assert_eq!(steps(&runtime, MAKE), [FutureStep::Start, FutureStep::Published]);
+        assert_eq!(steps(&runtime, DEFER_MAIN), [FutureStep::Start, FutureStep::Published]);
+        assert_eq!(destroyed(&runtime), "Res 1\n");
+    }
 }

@@ -487,6 +487,32 @@ helpers! {
         duty: Word,
         post: *mut crate::champ::CleanupSlot) -> u64; [Allocates, Stops];
     #[cfg(feature = "champ-abi")]
+    champ_cleanup_settle_dynamic = crate::champ::rt_cleanup_settle_dynamic as (ctx,
+        this: Word,
+        input: *mut crate::champ::CleanupSlot,
+        post: *mut crate::champ::CleanupSlot) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_service_materialize = crate::champ::rt_service_materialize as (ctx,
+        input: *mut crate::champ::PacketSlot,
+        holder: Word,
+        kind: u64,
+        post: *mut crate::champ::MaterializePost) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_service_absorb = crate::champ::rt_service_absorb as (ctx,
+        input: *mut crate::champ::PacketSlot,
+        token: Word,
+        kind: u64,
+        post: *mut crate::champ::PacketSlot) -> u64; [Allocates, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_invoke_defer_async = crate::champ::rt_invoke_defer_async as (ctx,
+        this: Word,
+        entry: u64,
+        args: *const Word,
+        argc: u64,
+        io: *mut crate::champ::CallOwn,
+        registration: *const crate::champ::RegistrationMap,
+        post: *mut crate::champ::DeferPost) -> u64; [Allocates, Collects, Reenters, Fails, Stops, Suspends];
+    #[cfg(feature = "champ-abi")]
     champ_body_reject = crate::champ::cleanup::rt_body_reject as (ctx, frame: Word) -> u64;
         [Allocates, Collects, Reenters, Stops];
     #[cfg(feature = "champ-abi")]
