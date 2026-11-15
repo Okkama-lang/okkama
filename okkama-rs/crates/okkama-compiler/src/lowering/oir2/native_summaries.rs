@@ -223,7 +223,8 @@ pub(super) fn contract(module: &ir::Module, name: &str, native: bool, signature:
             kind = ir::EntryKind::ObservationAdmissionStaysCaller;
             failures.push(ir::FailureKind::Program);
             let float = || find(ir::Type::Float).ok_or_else(|| error("missing float"));
-            let bytes = || bytes.ok_or_else(|| error("missing @byte"));
+            let bytes = || find(ir::Type::Byte).and_then(|byte| find(ir::Type::Array(byte)))
+                .ok_or_else(|| error("missing @byte"));
             let params = match name.strip_prefix("okkama.test.") {
                 Some("skip") => vec![string()?],
                 Some("close") => vec![float()?, float()?, float()?],
