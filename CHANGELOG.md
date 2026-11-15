@@ -135,10 +135,26 @@ fake fields; role fakes and their ordinary typed fields remain available.
     Every read names its projection (index, slice, map entry, keys,
     values, removal, path), so ownership follows exactly what is taken.
   - **Builders.** Streaming builders for large literals.
+  - **Traversal.** `for` over arrays, ranges, maps, `Iterating` and
+    `Batching`, with the cursor protocol and per-iteration lifetimes.
+  - **Functional blocks.** `map`, `filter`, `reduce`, `any`, `all` and
+    `find` lower as code inside the enclosing action, never as lambda calls.
+  - **Plain `once let`.** A failed computation publishes nothing. The std
+    collections List, Frequencies, Heap and Deque lower from their own
+    source.
+  - **Object map keys** that the language allows (no destroy, no caps,
+    key fields) are accepted by the verifier (#635).
 
-  A coverage manifest classifies all 143 conformance and corpus cases it
-  answers for. Traversal, functional blocks and std collections are still
-  to come.
+  A coverage manifest classifies the 145 conformance and corpus cases it
+  answers for. `return` from a `defer` now lowers as a replacement of the
+  enclosing result (#609).
+
+- **First end-to-end wiring of the new pipeline (#593, #648).** Under the
+  feature `champ-abi`, `OKKAMA_PIPELINE=oir2` runs a program through the
+  OIR-2 pipeline into Champ: high, own, low, SPB 17 and the JIT. Builds run
+  the structural checks; the full ownership verifier is a test and CI
+  gate, and runs in a build only with `--verify-ownership`. `Atomic.replace`
+  is now a call-boundary entry (#606).
 
 - **OIR-2 ownership elaboration, synchronous part (#565).** A pass from
   `high` to `own` makes ownership explicit for synchronous code. It covers:
