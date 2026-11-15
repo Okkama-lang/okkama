@@ -12,7 +12,7 @@
 //! FIFO wakes and its deadlock report.
 use super::*;
 use super::cleanup::{rt_cleanup_begin, rt_cleanup_destroy, rt_cleanup_finish, rt_cleanup_next, rt_cleanup_plan};
-use super::cleanup::rt_cleanup_settle_empty;
+use super::cleanup::{rt_cleanup_failure, rt_cleanup_settle_empty};
 use super::futures::FutureStep;
 use crate::runtime::{frame_pointer, Ctx, FailureKind, FAILED, OK};
 use crate::tasks::{self, get, set};
@@ -208,26 +208,33 @@ impl Body {
     }
 
     /// The merge executor: destroy selected keys until done, capturing failures. Returns the done cleanup.
+    /// Each executor of a function has its own labels.
     fn executor(&mut self, cleanup: Location) -> Location {
+        let earlier = self.labels.keys().filter(|label| label.starts_with("x_loop")).count();
+        let label = |name: &'static str| -> &'static str {
+            if earlier == 0 { name } else { Box::leak(format!("{name}{earlier}").into_boxed_str()) }
+        };
+        let [x_loop, x_destroy, x_failed, x_finish] = [label("x_loop"), label("x_destroy"), label("x_failed"),
+            label("x_finish")];
         let [looping, selected, key, destroyed, failure_state, failed, failure, recorded, done] = [
             self.service(K::Cleanup), self.service(K::Cleanup), self.service(K::StableKey), self.service(K::Cleanup),
             self.service(K::FailureState), self.service(K::Cleanup), self.register(s::Type::Failure),
             self.service(K::Cleanup), self.service(K::Cleanup),
         ];
-        self.br("x_loop", vec![s::Source::Location(cleanup)]);
-        self.block("x_loop", &[looping]);
+        self.br(x_loop, vec![s::Source::Location(cleanup)]);
+        self.block(x_loop, &[looping]);
         self.outcomes(O::CleanupNext, vec![l(looping)],
-            vec![(Tag::Selected, "x_destroy", vec![p(0), p(1)]), (Tag::Done, "x_finish", vec![p(0)])]);
-        self.block("x_destroy", &[selected, key]);
+            vec![(Tag::Selected, x_destroy, vec![p(0), p(1)]), (Tag::Done, x_finish, vec![p(0)])]);
+        self.block(x_destroy, &[selected, key]);
         self.next(O::CleanupDestroy, vec![l(selected), l(key)], vec![destroyed, failure_state]);
         self.outcomes(O::FailureDispatch, vec![l(failure_state)], vec![
-            (Tag::None, "x_loop", vec![s::Source::Location(destroyed)]),
-            (Tag::Some, "x_failed", vec![s::Source::Location(destroyed), p(0)]),
+            (Tag::None, x_loop, vec![s::Source::Location(destroyed)]),
+            (Tag::Some, x_failed, vec![s::Source::Location(destroyed), p(0)]),
         ]);
-        self.block("x_failed", &[failed, failure]);
+        self.block(x_failed, &[failed, failure]);
         self.next(O::CleanupFailure, vec![l(failed), l(failure)], vec![recorded]);
-        self.br("x_loop", vec![s::Source::Location(recorded)]);
-        self.block("x_finish", &[done]);
+        self.br(x_loop, vec![s::Source::Location(recorded)]);
+        self.block(x_finish, &[done]);
         done
     }
 
@@ -908,6 +915,11 @@ impl Activation {
                 self.registers[output as usize] = value;
                 Step::Next(pc + 1)
             }
+            s::Instruction::Data { op: s::DataOp::ObjNew, output: Some(output), immediate: s::Immediate::Object(id),
+                .. } => {
+                self.registers[output as usize] = runtime_of(self.ctx).heap.object_new(id, &[]);
+                Step::Next(pc + 1)
+            }
             s::Instruction::Data { op: s::DataOp::IntAdd, inputs, output: Some(output), .. } => {
                 let value = |id: u32| word::small_value(self.registers[id as usize]).unwrap();
                 self.registers[output as usize] = word::small(value(inputs[0]) + value(inputs[1])).unwrap();
@@ -958,6 +970,71 @@ impl Activation {
             O::OwnEmpty => {
                 let mut slot = PacketSlot::default();
                 assert_eq!(self.call(|ctx| rt_own_empty(ctx, &mut slot)), NORMAL);
+                vec![vec![slot.record]]
+            }
+            O::OwnAdmit => {
+                let mut state = ScopeSlot { record: self.word(operands[0]) };
+                let mut input = PacketSlot { record: self.word(operands[1]) };
+                let mut slot = ScopeSlot::default();
+                assert_eq!(self.call(|ctx| rt_own_admit(ctx, &mut state, &mut input, &mut slot)), NORMAL);
+                self.write(operands[0], &[state.record]);
+                self.write(operands[1], &[input.record]);
+                vec![vec![slot.record]]
+            }
+            O::OwnCreateCommit => {
+                let descriptor = argument(arguments, |argument| match argument {
+                    A::Object(id) => Some(u64::from(*id)),
+                    _ => None,
+                });
+                let boundary = argument(arguments, |argument| match argument {
+                    A::Boundary(id) => Some(*id),
+                    _ => None,
+                });
+                let scope = self.program.tables.boundaries[boundary as usize].scope;
+                let owner = self.scopes[scope as usize][1];
+                let object = self.word(operands[0]);
+                let mut slot = PacketSlot::default();
+                let committed = self.call(|ctx| rt_own_create_commit(ctx, object, descriptor, owner, &mut slot));
+                assert_eq!(committed, NORMAL);
+                vec![vec![slot.record]]
+            }
+            O::CleanupNext => {
+                let mut input = CleanupSlot { record: self.word(operands[0]) };
+                let mut slot = NextPost::default();
+                let ordinal = self.call(|ctx| rt_cleanup_next(ctx, &mut input, &mut slot));
+                self.write(operands[0], &[0]);
+                return Err(match ordinal {
+                    NORMAL => self.outcome(flow, Tag::Selected,
+                        &[vec![slot.state.record], vec![slot.key.object(), slot.key.serial()]]),
+                    1 => self.outcome(flow, Tag::Done, &[vec![slot.state.record]]),
+                    _ => Step::Stop,
+                });
+            }
+            O::CleanupDestroy => {
+                let mut input = CleanupSlot { record: self.word(operands[0]) };
+                let key = self.read(operands[1]);
+                let key = KeyRef { object: key[0], serial: key[1] };
+                let mut slot = DestroyPost::default();
+                if self.call(|ctx| rt_cleanup_destroy(ctx, &mut input, key, &mut slot)) != NORMAL {
+                    return Err(Step::Stop);
+                }
+                self.write(operands[0], &[0]);
+                vec![vec![slot.state.record], vec![slot.failure]]
+            }
+            O::FailureDispatch => {
+                let failure = self.word(operands[0]);
+                return Err(if failure == 0 {
+                    self.outcome(flow, Tag::None, &[])
+                } else {
+                    self.outcome(flow, Tag::Some, &[vec![failure]])
+                });
+            }
+            O::CleanupFailure => {
+                let mut input = CleanupSlot { record: self.word(operands[0]) };
+                let failure = self.word(operands[1]);
+                let mut slot = CleanupSlot::default();
+                assert_eq!(self.call(|ctx| rt_cleanup_failure(ctx, &mut input, failure, &mut slot)), NORMAL);
+                self.write(operands[0], &[0]);
                 vec![vec![slot.record]]
             }
             O::FutureNew => self.future_new(arguments, &operands).ok_or(Step::Stop)?,
@@ -2267,3 +2344,6 @@ fn champ_v10_d18_delivers_between_the_first_plan_and_the_aborted_reserve_plan() 
         assert_eq!(runtime.heap.champ_identity(r).unwrap().life, Life::Dead);
     }
 }
+
+#[path = "async_resources_tests.rs"]
+mod resources;
