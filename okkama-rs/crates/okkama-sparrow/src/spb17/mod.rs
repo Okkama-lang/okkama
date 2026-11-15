@@ -13,6 +13,7 @@ mod automaton;
 pub use automaton::infer_plan_reserves;
 mod suspension;
 mod take;
+mod services;
 
 pub use allocation::{AllocatedRoot, Allocation, Copy, CopySource, allocate, check_allocation, live_locations};
 pub use codec::{assemble, decode, disassemble, encode};
@@ -1235,6 +1236,8 @@ mod budget_tests;
 mod async_tests;
 #[cfg(test)]
 mod async_resources_tests;
+#[cfg(test)]
+mod services_tests;
 #[cfg(test)]
 mod roles_tests;
 #[cfg(test)]

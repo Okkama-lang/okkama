@@ -280,6 +280,7 @@ pub(super) fn expand(
             holders: assigned.map(|item| item.duties.clone()).unwrap_or_default(),
             dictionary: assigned.and_then(|item| item.dictionary),
             protocol: assigned.map(|item| item.protocol),
+            dynamic: assigned.is_some_and(|item| item.dynamic),
         })?;
         let mut sources = vec![match close.source {
             CleanupSource::Scope(_) => MergeSource::ScopeInventory,
@@ -288,9 +289,12 @@ pub(super) fn expand(
         if close.pending.is_some() {
             sources.push(MergeSource::WholeReserveOnFailure);
         }
-        let direct = plans::prove(
-            module, body, close.state, close.pending, body.cleanup.closes.get(close_id)?, fresh, budget,
-        )?.map(|proof| body.cleanup.proofs.alloc(proof)).transpose()?;
+        // D25.3, draft 3 §6.3: entries settled dynamically may release outcomes, which only the executor takes.
+        let direct = if assigned.is_some_and(|item| item.dynamic) {
+            None
+        } else {
+            plans::prove(module, body, close.state, close.pending, body.cleanup.closes.get(close_id)?, fresh, budget)?
+        }.map(|proof| body.cleanup.proofs.alloc(proof)).transpose()?;
         let plan = body.cleanup.plans.alloc(CleanupPlan { close: close_id, sources: sources.clone(), direct })?;
         let begin = CleanupOp::Begin {
             state: close.state, pending: close.pending, failure: close.failure,
@@ -312,13 +316,18 @@ pub(super) fn expand(
         // OIR-2 §9.3 step 3: settle every scheduled duty, in schedule order, before the plan.
         let mut c = c;
         match assigned {
-            Some(assigned) => {
+            Some(assigned) if !assigned.duties.is_empty() => {
                 for &holder in &assigned.duties {
                     let settle = CleanupOp::Settle { cleanup: c, holder, protocol: assigned.protocol };
                     c = emit(module, body, source, settle, loc)?[0];
                 }
             }
-            None => c = emit(module, body, source, CleanupOp::SettleEmpty { cleanup: c, schedule }, loc)?[0],
+            _ => c = emit(module, body, source, CleanupOp::SettleEmpty { cleanup: c, schedule }, loc)?[0],
+        }
+        // D25.3: one step settles the entries the owner admitted at run time, after the static duties.
+        if let Some(assigned) = assigned.filter(|assigned| assigned.dynamic) {
+            let settle = CleanupOp::SettleDynamic { cleanup: c, protocol: assigned.protocol };
+            c = emit(module, body, source, settle, loc)?[0];
         }
         let c = emit(module, body, source, CleanupOp::Plan { cleanup: c, plan }, loc)?[0];
         // The first plan drains into the final cancellation step, or into the finish itself.

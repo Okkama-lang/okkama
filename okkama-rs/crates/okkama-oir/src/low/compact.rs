@@ -28,35 +28,40 @@ impl VisitorMut for Remap {
 
 /// Keep the placed instructions and the values that a block parameter or a placed instruction defines.
 pub(super) fn compact(body: &mut Body) -> Result<(), LowError> {
+    compact_body(body).map_err(LowError::InvalidOutput)
+}
+
+/// `compact` for any pass: also drops the values that a rewrite left without a definition (coro's token rehome).
+pub(crate) fn compact_body(body: &mut Body) -> Result<(), String> {
     let placed: BTreeSet<InstId> = body.blocks.iter().flat_map(|(_, block)| block.insts.iter().copied()).collect();
-    if placed.len() == body.insts.len() {
-        return Ok(());
-    }
     let mut defined = BTreeSet::new();
     for (_, block) in body.blocks.iter() {
         defined.extend(block.params.iter().copied());
     }
     for inst in &placed {
-        defined.extend(body.insts.get(*inst)?.results.iter().copied());
+        defined.extend(body.insts.get(*inst).map_err(|error| error.to_string())?.results.iter().copied());
+    }
+    if placed.len() == body.insts.len() && defined.len() == body.values.len() {
+        return Ok(());
     }
     let mut remap = Remap { values: BTreeMap::new(), insts: BTreeMap::new(), dangling: false };
     let mut insts = Arena::new();
     for (id, inst) in body.insts.iter() {
         if placed.contains(&id) {
-            remap.insts.insert(id, insts.alloc(inst.clone())?);
+            remap.insts.insert(id, insts.alloc(inst.clone()).map_err(|error| error.to_string())?);
         }
     }
     let mut values = Arena::new();
     for (id, value) in body.values.iter() {
         if defined.contains(&id) {
-            remap.values.insert(id, values.alloc(value.clone())?);
+            remap.values.insert(id, values.alloc(value.clone()).map_err(|error| error.to_string())?);
         }
     }
     body.insts = insts;
     body.values = values;
     body.rewrite(&mut remap);
     if remap.dangling {
-        return Err(LowError::InvalidOutput("a removed instruction or value is still referenced".into()));
+        return Err("a removed instruction or value is still referenced".into());
     }
     Ok(())
 }

@@ -1730,7 +1730,7 @@ impl Codec for CleanupMetadata {
     }
 }
 record!(CleanupClose, "cleanup_close", { source, after_defers, reserve, active_failure, effects });
-record!(CleanupSchedule, "cleanup_schedule", { close, holders, dictionary, protocol });
+record!(CleanupSchedule, "cleanup_schedule", { close, holders, dictionary, protocol, dynamic });
 record!(CleanupPlan, "cleanup_plan", { close, sources, direct });
 record!(RootRequirement, "root_requirement", { boundary, bindings, through_suspend });
 record!(RootBinding, "root_binding", { value, trace });

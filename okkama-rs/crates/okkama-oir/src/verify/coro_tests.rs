@@ -470,9 +470,8 @@ result future<int>
 /// ownership rules are read from their own diagnostics.
 #[test]
 fn a_token_rehome_moves_the_duty_into_the_reserve_of_its_exit() {
-    let valid = full(&token_rehome("S1"));
-    // The token form stays outside the full verifier until the coro pass produces it (R2).
-    assert_eq!(valid, [RuleId::AsyncUnmodeledOp]);
+    // The token form is the form coro produces for a duty created here (#601 D25); the full verifier accepts it.
+    assert_eq!(full(&token_rehome("S1")), []);
     // The destination of S2's exit is S1, not the caller.
     assert!(full(&token_rehome("caller")).contains(&RuleId::B94));
     // The token was consumed by the first rehome: a second one has no cache-state of a live Future.
@@ -554,6 +553,5 @@ fn a_token_rehome_hands_the_duty_to_its_destination() {
         Ok(_) => vec![],
         Err(report) => report.diagnostics.into_iter().map(|diagnostic| (diagnostic.rule, diagnostic.message)).collect(),
     };
-    // The token form stays outside the full verifier until the coro pass produces it (R2).
-    assert!(rules.iter().all(|(rule, _)| *rule == RuleId::AsyncUnmodeledOp), "{rules:?}");
+    assert!(rules.is_empty(), "{rules:?}");
 }

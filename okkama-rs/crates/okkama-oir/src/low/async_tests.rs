@@ -725,3 +725,215 @@ fn a_nested_close_that_schedules_an_outer_duty_is_rejected() {
         && diagnostic.primary.entity == EntityLocation::Instruction { function: main, instruction: begin });
     assert!(found, "{:?}", diagnostics(&output));
 }
+
+// --- #601 D25: returned and rehomed Futures (R1's own output through coro) ------------------------------------
+
+/// R1's own goldens whose Futures leave their owner through `cache.rehome` and reach a scope that admits them
+/// (async ABI C-4 and its ruling, D25.1, D25.3).
+const ESCAPES: &[(&str, &str)] = &[
+    ("r1-make-escape", include_str!("../own/tests/async-goldens/r1-make-escape.oir")),
+    ("r1-cold-escape", include_str!("../own/tests/async-goldens/r1-cold-escape.oir")),
+    ("r1-view-escape", include_str!("../own/tests/async-goldens/r1-view-escape.oir")),
+    ("r1-loop-escape", include_str!("../own/tests/async-goldens/r1-loop-escape.oir")),
+];
+
+/// own → coro → verify(coro), the input of `lowered`.
+fn coro_of(name: &str, source: &str) -> String {
+    let coro = crate::coro::lower_coro(parsed(source), &Default::default())
+        .unwrap_or_else(|error| panic!("{name}: coro {error}"));
+    text::print(&coro).unwrap()
+}
+
+fn ops<'b>(body: &'b Body, block: BlockId) -> impl Iterator<Item = (InstId, &'b Operation)> + 'b {
+    body.blocks.get(block).unwrap().insts.iter().map(move |inst| (*inst, &body.insts.get(*inst).unwrap().op))
+}
+
+/// The cleanup steps of each close, in order, from its `cleanup.begin` to its first plan.
+fn close_steps(body: &Body) -> Vec<(CleanupCloseId, Vec<&Operation>)> {
+    let mut closes = Vec::new();
+    for (block, _) in body.blocks.iter() {
+        let mut current: Option<(CleanupCloseId, Vec<&Operation>)> = None;
+        for (_, op) in ops(body, block) {
+            match op {
+                Operation::Cleanup(CleanupOp::Begin { close, .. }) => current = Some((*close, vec![op])),
+                Operation::Cleanup(CleanupOp::Plan { .. }) => {
+                    if let Some((close, mut steps)) = current.take() {
+                        steps.push(op);
+                        closes.push((close, steps));
+                    }
+                }
+                Operation::Cleanup(_) => {
+                    if let Some((_, steps)) = current.as_mut() {
+                        steps.push(op);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    closes
+}
+
+/// D25.3: every close of a scope that admits a returned or rehomed Future settles the static duties, then its
+/// entries in one dynamic step, then plans through the executor; the other closes have no dynamic step. The
+/// rehome of a duty created here takes its token (C-1, C-4); the rehome of an admitted entry keeps the state form.
+#[test]
+fn escaping_futures_settle_where_they_are_admitted() {
+    for (name, own) in ESCAPES {
+        let low = lowered(name, &coro_of(name, own));
+        let mut dynamic = 0;
+        for (_, function) in low.functions.iter() {
+            let Some(body) = &function.body else { continue };
+            for (close, steps) in close_steps(body) {
+                let schedule = body.cleanup.schedules.iter().find(|(_, schedule)| schedule.close == close).unwrap().1;
+                let settles: Vec<_> = steps.iter().filter(|op| matches!(op,
+                    Operation::Cleanup(CleanupOp::SettleDynamic { .. }))).collect();
+                assert_eq!(settles.len(), usize::from(schedule.dynamic), "{name}: close {close:?}");
+                if schedule.dynamic {
+                    dynamic += 1;
+                    let position = steps.iter().position(|op| matches!(op,
+                        Operation::Cleanup(CleanupOp::SettleDynamic { .. }))).unwrap();
+                    assert_eq!(position, steps.len() - 2, "{name}: the dynamic step comes right before the plan");
+                    assert!(matches!(steps[position - 1], Operation::Cleanup(CleanupOp::Settle { .. }
+                        | CleanupOp::SettleEmpty { .. })), "{name}: after the static duties");
+                    let Operation::Cleanup(CleanupOp::Plan { plan, .. }) = steps[steps.len() - 1] else {
+                        unreachable!()
+                    };
+                    assert!(body.cleanup.plans.get(*plan).unwrap().direct.is_none(), "{name}: the executor plans");
+                }
+            }
+        }
+        assert!(dynamic > 0, "{name}: a scope admits the escaped Future");
+    }
+    let make = lowered("r1-make-escape", &coro_of("r1-make-escape", ESCAPES[0].1));
+    let forms: Vec<_> = make.functions.iter().filter_map(|(_, function)| function.body.as_ref()).flat_map(|body| {
+        body.insts.iter().filter_map(|(_, inst)| match &inst.op {
+            Operation::Async(AsyncOp::CacheRehome { form, target, .. }) => Some((form.clone(), *target)),
+            _ => None,
+        }).collect::<Vec<_>>()
+    }).collect();
+    // @make returns its Future with its token; main's block passes the admitted Future on in the own form.
+    assert!(forms.iter().any(|(form, target)| matches!(form, RehomeForm::Token { task: None, .. })
+        && *target == RehomeTarget::Caller), "{forms:?}");
+    assert!(forms.iter().any(|(form, target)| matches!(form, RehomeForm::Scope { .. })
+        && matches!(target, RehomeTarget::Scope(_))), "{forms:?}");
+}
+
+/// The Low form of r1-cold-escape and the body of `main`, for the negatives of the dynamic step.
+fn cold_escape() -> (Module, FuncId) {
+    let low = lowered("r1-cold-escape", &coro_of("r1-cold-escape", ESCAPES[1].1));
+    let main = function_id(&low, "main");
+    (low, main)
+}
+
+/// The first close of `main` whose schedule has the dynamic step, its dynamic settle and the step before it.
+fn dynamic_close(module: &Module, main: FuncId) -> (CleanupCloseId, InstId, InstId) {
+    let body = module.functions.get(main).unwrap().body.as_ref().unwrap();
+    for (block, _) in body.blocks.iter() {
+        let insts: Vec<_> = ops(body, block).collect();
+        for (index, (inst, op)) in insts.iter().enumerate() {
+            if let Operation::Cleanup(CleanupOp::SettleDynamic { cleanup, .. }) = op {
+                let begin = insts.iter().find_map(|(_, op)| match op {
+                    Operation::Cleanup(CleanupOp::Begin { close, .. }) => Some(*close),
+                    _ => None,
+                }).unwrap();
+                let _ = cleanup;
+                return (begin, insts[index - 1].0, *inst);
+            }
+        }
+    }
+    panic!("no dynamic close");
+}
+
+fn schedule_of(body: &mut Body, close: CleanupCloseId) -> &mut CleanupSchedule {
+    body.cleanup.schedules.iter_mut().find(|(_, schedule)| schedule.close == close).unwrap().1
+}
+
+fn has_rule(module: &Module, message: &str) -> bool {
+    diagnostics(module).iter().any(|diagnostic| diagnostic.rule == RuleId::B106 && diagnostic.message.contains(message))
+}
+
+#[test]
+fn a_dynamic_close_settles_its_entries_before_its_plan() {
+    let (mut module, main) = cold_escape();
+    assert!(diagnostics(&module).is_empty());
+    // A close whose schedule has no dynamic step gets one: its plan comes without the step.
+    let protocol = module.protocols.iter().next().unwrap().0;
+    let body = function_mut(&mut module, "main");
+    let close = body.cleanup.schedules.iter().find(|(_, schedule)| !schedule.dynamic).unwrap().1.close;
+    schedule_of(body, close).dynamic = true;
+    schedule_of(body, close).protocol = Some(protocol);
+    let _ = main;
+    assert!(has_rule(&module, "settles them before its plan"), "{:?}", diagnostics(&module));
+}
+
+#[test]
+fn a_dynamic_settle_belongs_to_a_dynamic_schedule() {
+    let (mut module, main) = cold_escape();
+    let (close, _, _) = dynamic_close(&module, main);
+    schedule_of(function_mut(&mut module, "main"), close).dynamic = false;
+    assert!(has_rule(&module, "belongs to a close"), "{:?}", diagnostics(&module));
+}
+
+#[test]
+fn a_dynamic_settle_follows_the_static_duties() {
+    let (mut module, main) = cold_escape();
+    let (close, before, settle) = dynamic_close(&module, main);
+    let body = function_mut(&mut module, "main");
+    let Operation::Cleanup(CleanupOp::SettleEmpty { cleanup: first, schedule }) = body.insts.get(before).unwrap().op
+    else {
+        panic!("the dynamic close of main has no static duty");
+    };
+    let Operation::Cleanup(CleanupOp::SettleDynamic { cleanup: second, protocol }) =
+        body.insts.get(settle).unwrap().op else { unreachable!() };
+    body.insts.get_mut(before).unwrap().op = Operation::Cleanup(CleanupOp::SettleDynamic { cleanup: first, protocol });
+    body.insts.get_mut(settle).unwrap().op = Operation::Cleanup(CleanupOp::SettleEmpty { cleanup: second, schedule });
+    let _ = close;
+    assert!(has_rule(&module, "follows the static duties"), "{:?}", diagnostics(&module));
+}
+
+/// Insert a second dynamic settle right after `settle`, which the plan then takes.
+fn settle_again(body: &mut Body, settle: InstId) -> InstId {
+    let Operation::Cleanup(CleanupOp::SettleDynamic { protocol, .. }) = body.insts.get(settle).unwrap().op
+    else { unreachable!() };
+    let first = body.insts.get(settle).unwrap().results[0];
+    let ty = body.values.get(first).unwrap().ty;
+    let again = body.insts.alloc(Instruction { results: vec![], facts: InstructionFacts::default(), loc: None,
+        op: Operation::Cleanup(CleanupOp::SettleDynamic { cleanup: first, protocol }) }).unwrap();
+    let second = body.values.alloc(ValueData { ty, def: Definition::InstResult { inst: again, index: 0 },
+        facts: ValueFacts::Service }).unwrap();
+    body.insts.get_mut(again).unwrap().results = vec![second];
+    let (block, position) = body.blocks.iter().find_map(|(block, data)| {
+        data.insts.iter().position(|inst| *inst == settle).map(|position| (block, position))
+    }).unwrap();
+    let next = body.blocks.get(block).unwrap().insts[position + 1];
+    let Operation::Cleanup(CleanupOp::Plan { cleanup, .. }) = &mut body.insts.get_mut(next).unwrap().op else {
+        panic!("the plan follows the dynamic settle");
+    };
+    *cleanup = second;
+    body.blocks.get_mut(block).unwrap().insts.insert(position + 1, again);
+    again
+}
+
+#[test]
+fn a_close_settles_its_dynamic_entries_once() {
+    let (mut module, main) = cold_escape();
+    let (_, _, settle) = dynamic_close(&module, main);
+    settle_again(function_mut(&mut module, "main"), settle);
+    rebuild_roots(&mut module, "main");
+    assert!(has_rule(&module, "dynamic entries once"), "{:?}", diagnostics(&module));
+}
+
+#[test]
+fn dynamically_settled_entries_need_the_executor() {
+    let (mut module, main) = cold_escape();
+    let (close, _, _) = dynamic_close(&module, main);
+    let body = function_mut(&mut module, "main");
+    let state = body.values.iter().next().unwrap().0;
+    let proof = body.cleanup.proofs.alloc(CleanupOrderProof { state, slots: vec![], preserves: vec![], joins: vec![],
+        suffixes: vec![], reserve_empty: true }).unwrap();
+    for (_, plan) in body.cleanup.plans.iter_mut().filter(|(_, plan)| plan.close == close) {
+        plan.direct = Some(proof);
+    }
+    assert!(has_rule(&module, "executor plan"), "{:?}", diagnostics(&module));
+}

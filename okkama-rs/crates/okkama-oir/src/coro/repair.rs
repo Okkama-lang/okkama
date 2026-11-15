@@ -26,10 +26,16 @@ enum Reach {
     Partial,
 }
 
-struct Replace {
+pub(super) struct Replace {
     from: ValueId,
     to: ValueId,
     count: usize,
+}
+impl Replace {
+    /// Every use of `from` names `to` instead.
+    pub(super) fn single(from: ValueId, to: ValueId) -> Self {
+        Self { from, to, count: 0 }
+    }
 }
 impl VisitorMut for Replace {
     fn value(&mut self, value: &mut ValueId) {

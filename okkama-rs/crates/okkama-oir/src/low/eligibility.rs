@@ -187,8 +187,18 @@ impl Context<'_> {
             | AsyncOp::FutureCancel { .. } | AsyncOp::FutureDone { .. } | AsyncOp::FutureCancelled { .. } => Ok(()),
             // R2: a temporary take keeps its invoke and its proof; the cache duty settles as for a shared await.
             AsyncOp::AwaitTake { .. } | AsyncOp::UniqueCacheProof { .. } => Ok(()),
-            AsyncOp::CacheRehome { .. } | AsyncOp::ServiceMaterialize { .. } | AsyncOp::ServiceAbsorb { .. } => {
-                Err(unsupported(function, "rehome and packet duties (D25) are lowered with own's R1 forms"))
+            // C-4: the token form of a duty created here, the own form of an entry the owner admitted (D25.3).
+            AsyncOp::CacheRehome { form: RehomeForm::Token { task: None, .. } | RehomeForm::Scope { .. }, .. } => {
+                Ok(())
+            }
+            AsyncOp::CacheRehome { form: RehomeForm::Token { .. }, .. } => {
+                Err(unsupported(function, "the rehome of a spawned task's duty is lowered by slice P1 (wave 3)"))
+            }
+            AsyncOp::CacheRehome { form: RehomeForm::State(_), .. } => Err(LowError::InvalidInput {
+                function: Some(function), message: "the pre-C-4 rehome form is not produced (C-4)".into(),
+            }),
+            AsyncOp::ServiceMaterialize { .. } | AsyncOp::ServiceAbsorb { .. } => {
+                Err(unsupported(function, "packet duties in fields, arrays and groups (D25.2) come with G1"))
             }
             AsyncOp::FutureSpawn { .. } => Err(unsupported(function, "spawn (D24) is lowered by slice P1 (wave 3)")),
             AsyncOp::Pin { .. } | AsyncOp::PinTransfer { .. } | AsyncOp::Unpin { .. } => {
