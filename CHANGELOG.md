@@ -205,6 +205,39 @@ fake fields; role fakes and their ordinary typed fields remain available.
   run passed 534 of 1038 cases on Champ, with no case failing on both
   engines.
 
+- **Champ coverage, wave 2 (#660, #661, #569, #657).** On Champ the
+  conformance suite rose from 534 to 665 of 1039 cases, and no case
+  fails on both engines.
+  - **Backend.**
+    - A conversion is fallible only where its types make it so: `int.string()`
+      is total, so code with a live resource no longer needs an unwind for it
+      (#658).
+    - SPB 17 carries `byte`, `float`, `rat`, `char` and enum variants, with
+      comparisons, structural equality and variant access. The loader checks
+      each new form, keeps float constants finite and restricts structural
+      equality to plain values.
+  - **Own and low.**
+    - Collections, maps and variants keep their elements' obligations with
+      their owners.
+    - A builder carries an explicit journal of its elements.
+    - A `catch` landing has a deps recipe, and `m[k] else …` lowers.
+  - **Producer.**
+    - Arithmetic and bit operations on `float`, `rat` and `byte`, and the
+      string builtins.
+    - `catch case`, `try?`, stream writes, module constants and spread
+      arguments.
+  - **Open calls (O1).** A call of an action value whose target is unknown
+    follows one registered contract, checked against a catalogue:
+    - the environment is borrowed, so one action value can be called many
+      times;
+    - the result may be fresh or alias the environment or an argument.
+
+    The verifier treats two filters with the same keys as one cell, so
+    repeated calls of one callable no longer leave phantom fresh inputs.
+
+  Independent audits found no unsound acceptance; their findings are fixed
+  or ticketed (#653–#656, #666–#670).
+
 - **OIR-2 ownership elaboration, synchronous part (#565).** A pass from
   `high` to `own` makes ownership explicit for synchronous code. It covers:
   - scope ends, call conventions and per-scope exits with the reserve;
