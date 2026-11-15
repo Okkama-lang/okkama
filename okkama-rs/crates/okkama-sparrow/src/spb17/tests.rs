@@ -103,9 +103,9 @@ fn s1_truncation_and_malformed_inputs_never_panic() {
     assert!(decode(&trailing).unwrap_err().message.contains("trailing"));
     let p = Program { entry: None, ..plain() };
     let bytes = encode(&p).unwrap();
-    // `ret` with no values, no entry, no tests table and no composites.
-    assert_eq!(&bytes[bytes.len() - 5..], &[142, 0, 0, 0, 0]);
-    let prefix = &bytes[..bytes.len() - 5];
+    // `ret` with no values, no entry, no tests table, no composites and no globals (#709).
+    assert_eq!(&bytes[bytes.len() - 6..], &[142, 0, 0, 0, 0, 0]);
+    let prefix = &bytes[..bytes.len() - 6];
     for id in [0, 19, 25, 34, 35, 36, 47, 127, 128, u32::MAX] {
         let mut malformed = prefix.to_vec();
         malformed.push(255);

@@ -46,6 +46,8 @@ pub(crate) struct Program {
     pub frames: Vec<Option<super::FrameMap>>,
     /// Runtime ids of each function's D16 schedules, by local schedule index.
     pub schedules: Vec<Vec<u64>>,
+    /// The value of each module constant (`Program::globals`), built before the program runs (#709).
+    pub globals: Vec<Word>,
 }
 
 impl Program {
@@ -312,8 +314,10 @@ impl Runtime {
         }).collect();
         runtime.champ.machine = Some(Program {
             source: verified.source.clone(), plans, selections, entries, shielded_entries,
-            external: implementations, p1, native_failure, frames, schedules,
+            external: implementations, p1, native_failure, frames, schedules, globals: Vec::new(),
         });
+        let globals = super::collections::build_globals(&mut runtime, source).map_err(Error)?;
+        runtime.champ.machine.as_mut().expect("Champ program").globals = globals;
         Ok(Box::new(runtime))
     }
 }

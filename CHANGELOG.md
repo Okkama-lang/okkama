@@ -24,6 +24,34 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   still waits for an O(n log n) sort (#678).
   `OKKAMA_PROFILE_PIPELINE=1` prints the OIR-2 pipeline's per-stage wall
   times on stderr.
+- **Module constants on Champ (#709).** A `const` whose value is an array or a
+  map (an OIR-2 global with an init function) had no SPB 17 layout ("unsupported
+  declaration app.const.PRIMES"). SPB 17 gains a globals table: each constant
+  is closed plain data written as data (constants, enum cases, arrays and maps
+  of earlier data, children first), read by the new data operation
+  `global.get` (wire 95, `Immediate::Global`). The loader checks the table with
+  the new rules `GLOBAL_TYPE` (closed plain data, last datum is the value),
+  `GLOBAL_DATA` (each datum builds its declared type from earlier data) and
+  `GLOBAL_GET` (an existing constant, read as its type). Champ builds every
+  constant once before the program runs and keeps it as a runtime constant;
+  a read is the word itself. `L06.const.values` and
+  `L05.literal.empty-collections` pass on Champ.
+
+- **Champ indexes byte arrays (#703).** `bytes[i]` on an `@byte` value stopped
+  SPB 17 generation ("array.get requires a certified plain array"): `array.get`
+  took only the plain array shape. The loader now admits a byte array receiver
+  under `ARRAY_GET_OPERANDS` (its element is a byte, from the receiver's
+  declared type), and Champ reads the packed byte in place, with Tomato's
+  "Array index out of bounds" outside it. Two further gaps behind the same
+  cases are closed: `variant.tag` and `variant.get` of a one-case Error
+  variant (which SPB 17 represents by its case object) become a constant 0 and
+  a field read, and own's summaries declare the program failure of the
+  `scope.split` it emits for a deps-carrying reference offered to an owning
+  call or bound (a role value with plain implementers or an object holding
+  one, not only an Atomic), which `ENTRY_FAILURE_MASK` required. `L05.array.replaced`, `L09.encoding.hex`,
+  `.quoted-printable`, `.utf-codecs`, `L09.random.pcg32-reproducible`,
+  `L09.uuid.values`, `L10.stdin.chunks`, `.for-lines` and `.lines` pass on
+  Champ.
 
 - **Own never indexes a missing scope state (#672).** A constructor that
   stores a field which carries deps but holds no obligation (a role whose

@@ -875,11 +875,12 @@ impl Emitter<'_> {
                 });
             }
         }
-        // A total scalar family invocation computes into a register, then branches; neither step touches
-        // a service, and the branch roots what the operation did plus its result.
+        // A total scalar family invocation (or the payload read of a one-case Error variant) computes into a
+        // register, then branches; neither step touches a service, and the branch roots what the operation
+        // did plus its result.
         for (&block_id, &pc) in terms {
             let o::TermKind::InvokeOwn { op, .. } = &self.body.blocks.get(block_id)?.term.kind else { continue };
-            if !super::total_family_operation(op) {
+            if !super::total_family_operation(op) && super::error_case_get(self.module, self.body, op)?.is_none() {
                 continue;
             }
             let before = states.get(&pc).cloned().unwrap_or_default();
