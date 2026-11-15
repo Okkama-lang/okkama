@@ -79,6 +79,7 @@ bibliographic data were checked are listed.
 - [@ieee754] IEEE (2019). *IEEE Standard for Floating-Point Arithmetic* (IEEE Std 754-2019). https://doi.org/10.1109/IEEESTD.2019.8766229 {label: IEEE 754}
 - [@javalist] Oracle (2023). Interface List<E>. *Java SE 21 API Specification*. https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/List.html {label: Java SE 21 API}
 - [@javastream] Oracle (2023). Package java.util.stream. *Java SE 21 API Specification*. https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/stream/package-summary.html {label: Java SE 21 API}
+- [@jep361] Gavin Bierman (2020). JEP 361: Switch Expressions. OpenJDK. https://openjdk.org/jeps/361
 - [@jep395] Gavin Bierman (2021). JEP 395: Records. OpenJDK. https://openjdk.org/jeps/395
 - [@jep409] Gavin Bierman (2021). JEP 409: Sealed Classes. OpenJDK. https://openjdk.org/jeps/409
 - [@jep411] OpenJDK (2021). JEP 411: Deprecate the Security Manager for Removal. https://openjdk.org/jeps/411
@@ -145,8 +146,10 @@ bibliographic data were checked are listed.
 - [@ousterhout2018] John Ousterhout (2018). *A Philosophy of Software Design*. Yaknyam Press.
 - [@parnas1972] David L. Parnas (1972). On the Criteria To Be Used in Decomposing Systems into Modules. *Communications of the ACM* 15(12): 1053–1058. https://doi.org/10.1145/361598.361623
 - [@pep237] Moshe Zadka, Guido van Rossum (2001). PEP 237 — Unifying Long Integers and Integers. Python Enhancement Proposals. https://peps.python.org/pep-0237/ {label: PEP 237}
+- [@pep308] Guido van Rossum, Raymond Hettinger (2003). PEP 308 — Conditional Expressions. Python Enhancement Proposals. https://peps.python.org/pep-0308/ {label: PEP 308}
 - [@pep343] Guido van Rossum, Nick Coghlan (2005). PEP 343 — The "with" Statement. Python Enhancement Proposals. https://peps.python.org/pep-0343/
 - [@pep484] Guido van Rossum, Jukka Lehtosalo, Łukasz Langa (2014). PEP 484 — Type Hints. Python Enhancement Proposals. https://peps.python.org/pep-0484/
+- [@pep572] Chris Angelico, Tim Peters, Guido van Rossum (2018). PEP 572 — Assignment Expressions. Python Enhancement Proposals. https://peps.python.org/pep-0572/ {label: PEP 572}
 - [@peters2004] Tim Peters (2004). *PEP 20 — The Zen of Python*. https://peps.python.org/pep-0020/
 - [@pierce2002] Benjamin C. Pierce (2002). *Types and Programming Languages*. MIT Press.
 - [@pike2015] Rob Pike (2015). Errors are values. *The Go Blog*, 12 January 2015. https://go.dev/blog/errors-are-values

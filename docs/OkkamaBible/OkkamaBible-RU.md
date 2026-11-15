@@ -121,8 +121,9 @@
   - [9.7 Порядок вычисления](#97-порядок-вычисления)
   - [9.8 Разобранный пример: маленький калькулятор](#98-разобранный-пример-маленький-калькулятор)
   - [9.9 Разобранный пример: бинарный поиск](#99-разобранный-пример-бинарный-поиск)
-  - [9.10 Чего нет](#910-чего-нет)
-  - [9.11 Ограничения](#911-ограничения)
+  - [9.10 Выражения в других языках](#910-выражения-в-других-языках)
+  - [9.11 Чего нет](#911-чего-нет)
+  - [9.12 Ограничения](#912-ограничения)
 - [Глава 10. Отказ: throw, panic, try/catch, причины, confirm](#глава-10-отказ-throw-panic-trycatch-причины-confirm)
   - [10.1 Кому нужно узнать об отказе](#101-кому-нужно-узнать-об-отказе)
   - [10.2 Краткая история: коды, исключения, значения](#102-краткая-история-коды-исключения-значения)
@@ -5727,7 +5728,29 @@ isqrt(10^40) = 100000000000000000000
 каждое состояние поиска — значение с именем, у инварианта есть дом, а
 переполнение, сломавшее библиотечную версию, произойти не может.
 
-## 9.10 Чего нет
+## 9.10 Выражения в других языках
+
+Является ли `if` оператором или выражением, кажется делом синтаксиса, но это
+решает, как часто программа объявляет имя раньше, чем знает значение.
+
+- **Языки операторов добавляют форму-выражение позже.** В C рядом с `if`
+  есть условный оператор `?:`. В Go нет ни того ни другого, поэтому
+  значение, зависящее от условия, сначала объявляют, а потом присваивают в
+  обеих ветках [[Go specification](#ref-gospec)]. Python добавил условное выражение `a if c else b`
+  в 2.5 [[PEP 308](#ref-pep308)] и выражение присваивания `:=` в 3.8 [[PEP 572](#ref-pep572)]. Java
+  сделала `switch` выражением в Java 14 [[Bierman 2020](#ref-jep361)].
+- **Языки выражений начинают со значений.** В Rust последнее выражение блока
+  — его значение, а `if`, `match` и `loop` дают значения; `break value`
+  выходит из `loop` со значением [[Klabnik 2023](#ref-klabnik2023)]. В Kotlin выражения — это
+  `if`, `when` и `try` [[Kotlin specification](#ref-kotlinspec)].
+
+Okkama во второй группе. У блока есть значение (раздел 9.1), `if`, `match`
+и `try` его дают, а цикл даёт его через `last value` (раздел 9.5) — почти
+как `break value` в Rust. Okkama добавляет вторую половину раздела 9.2: имя
+связывается со значением один раз, поэтому у образца «объявить, потом
+присвоить в каждой ветке» нечего присваивать, и форма-выражение — единственная.
+
+## 9.11 Чего нет
 
 | В других языках | В Okkama |
 |---|---|
@@ -5751,7 +5774,7 @@ syntax error at "=": Okkama has no compound assignment: a name is bound once; bi
 semantic error: Undefined variable "break"; Okkama leaves a loop with `last`
 ```
 
-## 9.11 Ограничения
+## 9.12 Ограничения
 
 - **Одно связывание на `for`.** Индекс берётся из диапазона, а не из второго
   связывания.
@@ -21253,7 +21276,7 @@ in the updated map: ada 700
 | #215 | операторов для библиотечных числовых типов | роли операторов (раздел 14.7) |
 | #216 | проверки, что блок бросает ошибку | `test.throws` (раздел 15.2) |
 | #233 | молчаливого требования `ordering()` | диагностика называет импорт (раздел 8.1) |
-| #256–#258 | диагностик для `while`, `+=` и `break`; `else if`; постфиксного `return` | раздел 9.10 |
+| #256–#258 | диагностик для `while`, `+=` и `break`; `else if`; постфиксного `return` | раздел 9.11 |
 
 Две просьбы отклонены, и их причины — часть замысла: тела по умолчанию в
 ролях (#146, раздел 1.9) и цепочечные действия для ролей (#213), где ответ
@@ -21433,6 +21456,7 @@ Objects* утверждает, что такие объекты зовут ло�
 - <a id="ref-baker-sep"></a>Alan Baker (2022). Simplicity. In *The Stanford Encyclopedia of Philosophy* (Summer 2022 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/simplicity/
 - <a id="ref-bentley2000"></a>Jon Bentley (2000). *Programming Pearls*, 2nd edition. Addison-Wesley. Column 4: Writing Correct Programs.
 - <a id="ref-bernhardt2012"></a>Gary Bernhardt (2012). Boundaries. Talk at SCNA 2012. https://www.destroyallsoftware.com/talks/boundaries
+- <a id="ref-jep361"></a>Gavin Bierman (2020). JEP 361: Switch Expressions. OpenJDK. https://openjdk.org/jeps/361
 - <a id="ref-jep395"></a>Gavin Bierman (2021). JEP 395: Records. OpenJDK. https://openjdk.org/jeps/395
 - <a id="ref-jep409"></a>Gavin Bierman (2021). JEP 409: Sealed Classes. OpenJDK. https://openjdk.org/jeps/409
 - <a id="ref-jep441"></a>Gavin Bierman (2023). JEP 441: Pattern Matching for switch. OpenJDK. https://openjdk.org/jeps/441
@@ -21560,6 +21584,8 @@ Objects* утверждает, что такие объекты зовут ло�
 - <a id="ref-ousterhout2018"></a>John Ousterhout (2018). *A Philosophy of Software Design*. Yaknyam Press.
 - <a id="ref-parnas1972"></a>David L. Parnas (1972). On the Criteria To Be Used in Decomposing Systems into Modules. *Communications of the ACM* 15(12): 1053–1058. https://doi.org/10.1145/361598.361623
 - <a id="ref-pep237"></a>Moshe Zadka, Guido van Rossum (2001). PEP 237 — Unifying Long Integers and Integers. Python Enhancement Proposals. https://peps.python.org/pep-0237/
+- <a id="ref-pep308"></a>Guido van Rossum, Raymond Hettinger (2003). PEP 308 — Conditional Expressions. Python Enhancement Proposals. https://peps.python.org/pep-0308/
+- <a id="ref-pep572"></a>Chris Angelico, Tim Peters, Guido van Rossum (2018). PEP 572 — Assignment Expressions. Python Enhancement Proposals. https://peps.python.org/pep-0572/
 - <a id="ref-peters2004"></a>Tim Peters (2004). *PEP 20 — The Zen of Python*. https://peps.python.org/pep-0020/
 - <a id="ref-pierce2002"></a>Benjamin C. Pierce (2002). *Types and Programming Languages*. MIT Press.
 - <a id="ref-pike2015"></a>Rob Pike (2015). Errors are values. *The Go Blog*, 12 January 2015. https://go.dev/blog/errors-are-values

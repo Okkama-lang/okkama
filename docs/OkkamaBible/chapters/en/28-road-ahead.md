@@ -39,7 +39,7 @@ answered within days, in 0.4.1 and 0.4.2:
 | #215 | operators on library number types | operator roles (Section 14.7) |
 | #216 | asserting that a block throws | `test.throws` (Section 15.2) |
 | #233 | a silent requirement of `ordering()` | the diagnostic names the import (Section 8.1) |
-| #256–#258 | diagnostics for `while`, `+=` and `break`; `else if`; postfix `return` | Section 9.10 |
+| #256–#258 | diagnostics for `while`, `+=` and `break`; `else if`; postfix `return` | Section 9.11 |
 
 Two requests were declined, with reasons that are part of the design:
 default bodies in roles (#146, Section 1.9) and chainable actions for roles

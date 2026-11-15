@@ -368,7 +368,31 @@ The program is longer than the same search in C, by the two small objects.
 In return each state of the search is a value with a name, the invariant has
 a home, and the overflow that broke the library version cannot happen.
 
-## 9.10 What is not there
+## 9.10 Expressions in other languages
+
+Whether `if` is a statement or an expression looks like a matter of
+syntax, but it decides how often a program declares a name before it knows
+the value.
+
+- **Statement languages add an expression form later.** C has the
+  conditional operator `?:` beside `if`. Go has neither, so a value that
+  depends on a condition is declared first and assigned in both branches
+  [@gospec]. Python added a conditional expression, `a if c else b`, in
+  2.5 [@pep308], and an assignment expression, `:=`, in 3.8 [@pep572].
+  Java made `switch` usable as an expression in Java 14 [@jep361].
+- **Expression languages start from values.** In Rust a block's last
+  expression is its value, and `if`, `match` and `loop` produce values;
+  `break value` leaves a `loop` with one [@klabnik2023]. In Kotlin, `if`,
+  `when` and `try` are expressions [@kotlinspec].
+
+Okkama is in the second group. A block has a value (Section 9.1), `if`,
+`match` and `try` produce one, and a loop gives one through `last value`
+(Section 9.5), much as Rust's `break value` does. What Okkama adds is the
+other half of Section 9.2: the name a value is bound to is bound once, so
+the pattern "declare, then assign in each branch" has nothing to assign to,
+and the expression form is the only one.
+
+## 9.11 What is not there
 
 | Elsewhere | In Okkama |
 |---|---|
@@ -392,7 +416,7 @@ syntax error at "=": Okkama has no compound assignment: a name is bound once; bi
 semantic error: Undefined variable "break"; Okkama leaves a loop with `last`
 ```
 
-## 9.11 Limits
+## 9.12 Limits
 
 - **One binding per `for`.** An index comes from a range, not from a second
   binding.

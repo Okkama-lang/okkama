@@ -121,8 +121,9 @@
   - [9.7 Order of evaluation](#97-order-of-evaluation)
   - [9.8 A worked example: a small calculator](#98-a-worked-example-a-small-calculator)
   - [9.9 A worked example: binary search](#99-a-worked-example-binary-search)
-  - [9.10 What is not there](#910-what-is-not-there)
-  - [9.11 Limits](#911-limits)
+  - [9.10 Expressions in other languages](#910-expressions-in-other-languages)
+  - [9.11 What is not there](#911-what-is-not-there)
+  - [9.12 Limits](#912-limits)
 - [Chapter 10. Failure: throw, panic, try/catch, causes, confirm](#chapter-10-failure-throw-panic-trycatch-causes-confirm)
   - [10.1 Who should hear about a failure](#101-who-should-hear-about-a-failure)
   - [10.2 A short history: codes, exceptions, values](#102-a-short-history-codes-exceptions-values)
@@ -5663,7 +5664,31 @@ The program is longer than the same search in C, by the two small objects.
 In return each state of the search is a value with a name, the invariant has
 a home, and the overflow that broke the library version cannot happen.
 
-## 9.10 What is not there
+## 9.10 Expressions in other languages
+
+Whether `if` is a statement or an expression looks like a matter of
+syntax, but it decides how often a program declares a name before it knows
+the value.
+
+- **Statement languages add an expression form later.** C has the
+  conditional operator `?:` beside `if`. Go has neither, so a value that
+  depends on a condition is declared first and assigned in both branches
+  [[Go specification](#ref-gospec)]. Python added a conditional expression, `a if c else b`, in
+  2.5 [[PEP 308](#ref-pep308)], and an assignment expression, `:=`, in 3.8 [[PEP 572](#ref-pep572)].
+  Java made `switch` usable as an expression in Java 14 [[Bierman 2020](#ref-jep361)].
+- **Expression languages start from values.** In Rust a block's last
+  expression is its value, and `if`, `match` and `loop` produce values;
+  `break value` leaves a `loop` with one [[Klabnik 2023](#ref-klabnik2023)]. In Kotlin, `if`,
+  `when` and `try` are expressions [[Kotlin specification](#ref-kotlinspec)].
+
+Okkama is in the second group. A block has a value (Section 9.1), `if`,
+`match` and `try` produce one, and a loop gives one through `last value`
+(Section 9.5), much as Rust's `break value` does. What Okkama adds is the
+other half of Section 9.2: the name a value is bound to is bound once, so
+the pattern "declare, then assign in each branch" has nothing to assign to,
+and the expression form is the only one.
+
+## 9.11 What is not there
 
 | Elsewhere | In Okkama |
 |---|---|
@@ -5687,7 +5712,7 @@ syntax error at "=": Okkama has no compound assignment: a name is bound once; bi
 semantic error: Undefined variable "break"; Okkama leaves a loop with `last`
 ```
 
-## 9.11 Limits
+## 9.12 Limits
 
 - **One binding per `for`.** An index comes from a range, not from a second
   binding.
@@ -21031,7 +21056,7 @@ answered within days, in 0.4.1 and 0.4.2:
 | #215 | operators on library number types | operator roles (Section 14.7) |
 | #216 | asserting that a block throws | `test.throws` (Section 15.2) |
 | #233 | a silent requirement of `ordering()` | the diagnostic names the import (Section 8.1) |
-| #256–#258 | diagnostics for `while`, `+=` and `break`; `else if`; postfix `return` | Section 9.10 |
+| #256–#258 | diagnostics for `while`, `+=` and `break`; `else if`; postfix `return` | Section 9.11 |
 
 Two requests were declined, with reasons that are part of the design:
 default bodies in roles (#146, Section 1.9) and chainable actions for roles
@@ -21204,6 +21229,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-baker-sep"></a>Alan Baker (2022). Simplicity. In *The Stanford Encyclopedia of Philosophy* (Summer 2022 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/simplicity/
 - <a id="ref-bentley2000"></a>Jon Bentley (2000). *Programming Pearls*, 2nd edition. Addison-Wesley. Column 4: Writing Correct Programs.
 - <a id="ref-bernhardt2012"></a>Gary Bernhardt (2012). Boundaries. Talk at SCNA 2012. https://www.destroyallsoftware.com/talks/boundaries
+- <a id="ref-jep361"></a>Gavin Bierman (2020). JEP 361: Switch Expressions. OpenJDK. https://openjdk.org/jeps/361
 - <a id="ref-jep395"></a>Gavin Bierman (2021). JEP 395: Records. OpenJDK. https://openjdk.org/jeps/395
 - <a id="ref-jep409"></a>Gavin Bierman (2021). JEP 409: Sealed Classes. OpenJDK. https://openjdk.org/jeps/409
 - <a id="ref-jep441"></a>Gavin Bierman (2023). JEP 441: Pattern Matching for switch. OpenJDK. https://openjdk.org/jeps/441
@@ -21331,6 +21357,8 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-ousterhout2018"></a>John Ousterhout (2018). *A Philosophy of Software Design*. Yaknyam Press.
 - <a id="ref-parnas1972"></a>David L. Parnas (1972). On the Criteria To Be Used in Decomposing Systems into Modules. *Communications of the ACM* 15(12): 1053–1058. https://doi.org/10.1145/361598.361623
 - <a id="ref-pep237"></a>Moshe Zadka, Guido van Rossum (2001). PEP 237 — Unifying Long Integers and Integers. Python Enhancement Proposals. https://peps.python.org/pep-0237/
+- <a id="ref-pep308"></a>Guido van Rossum, Raymond Hettinger (2003). PEP 308 — Conditional Expressions. Python Enhancement Proposals. https://peps.python.org/pep-0308/
+- <a id="ref-pep572"></a>Chris Angelico, Tim Peters, Guido van Rossum (2018). PEP 572 — Assignment Expressions. Python Enhancement Proposals. https://peps.python.org/pep-0572/
 - <a id="ref-peters2004"></a>Tim Peters (2004). *PEP 20 — The Zen of Python*. https://peps.python.org/pep-0020/
 - <a id="ref-pierce2002"></a>Benjamin C. Pierce (2002). *Types and Programming Languages*. MIT Press.
 - <a id="ref-pike2015"></a>Rob Pike (2015). Errors are values. *The Go Blog*, 12 January 2015. https://go.dev/blog/errors-are-values
