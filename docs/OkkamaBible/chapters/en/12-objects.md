@@ -319,7 +319,35 @@ which may still be "free", with few annotations [@summers2011]. Okkama
 takes the cheaper road: one static rule for `self`, and a run-time check
 for the indirect cases.
 
-## 12.11 Objects elsewhere
+## 12.11 A worked domain model: money and an order
+
+Small objects are easiest to judge in a domain everyone knows. An order has
+lines; a line has an item, a quantity and a unit price; prices are money in
+one currency.
+
+{{example:12-order}}
+
+- **One noun per idea.** `Money` is an amount and a currency, nothing else;
+  `Line` is one row; `Order` is its lines. Each object answers questions
+  about itself (`total()`), and none exposes its fields: `Money` offers
+  `code()` and `value()` for the one comparison `plus` needs, and `string()`
+  for display.
+- **The constructor is the gate.** A negative amount and a zero quantity are
+  refused where the object would be born, with a typed error that names the
+  bad value (§12.6). An object that exists is valid, so `total()` never
+  checks its own fields again.
+- **Exact arithmetic is the default.** The amounts are `rat`, so three teas
+  at 7/2 and two cups at 12 make exactly `69/2`, with no rounding to explain
+  later. A currency mismatch is an error, not an implicit conversion.
+- **Derived values are computed.** `Order.total` folds its lines with
+  `reduce`; nothing stores a running total that could drift from the lines.
+  Changing an order means building a new one with other lines (Chapter 13).
+
+The model is three short objects and two error enums. A design with getters
+and setters would have more code and fewer guarantees: every reader would
+have to trust that nobody set a quantity to zero after construction.
+
+## 12.12 Objects elsewhere
 
 Most languages that took immutability seriously added a shorthand for "an
 object that is its fields". Comparing them shows what Okkama chose to
@@ -349,7 +377,7 @@ and its fields are nobody else's business. Bloch's advice for Java,
 "minimize mutability" and "favor composition over inheritance", needs no
 discipline here: the language allows nothing else [@bloch2018].
 
-## 12.12 What this design costs
+## 12.13 What this design costs
 
 - **More objects.** Without free functions, a small computation that would
   be a function elsewhere becomes an object with one action, or an action

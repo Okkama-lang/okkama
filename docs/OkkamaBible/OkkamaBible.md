@@ -152,8 +152,9 @@
   - [12.8 Caps: a read-only view of an object](#128-caps-a-read-only-view-of-an-object)
   - [12.9 Objects are values](#129-objects-are-values)
   - [12.10 Handing `self` out of a constructor](#1210-handing-self-out-of-a-constructor)
-  - [12.11 Objects elsewhere](#1211-objects-elsewhere)
-  - [12.12 What this design costs](#1212-what-this-design-costs)
+  - [12.11 A worked domain model: money and an order](#1211-a-worked-domain-model-money-and-an-order)
+  - [12.12 Objects elsewhere](#1212-objects-elsewhere)
+  - [12.13 What this design costs](#1213-what-this-design-costs)
 - [Chapter 13. Actions, successors and immutability](#chapter-13-actions-successors-and-immutability)
   - [13.1 An action is a typed request](#131-an-action-is-a-typed-request)
   - [13.2 Parameters and calls](#132-parameters-and-calls)
@@ -6657,7 +6658,105 @@ which may still be "free", with few annotations [[Summers 2011](#ref-summers2011
 takes the cheaper road: one static rule for `self`, and a run-time check
 for the indirect cases.
 
-## 12.11 Objects elsewhere
+## 12.11 A worked domain model: money and an order
+
+Small objects are easiest to judge in a domain everyone knows. An order has
+lines; a line has an item, a quantity and a unit price; prices are money in
+one currency.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Mismatch is Error = (currency(left is string, right is string));
+enum Invalid is Error = (quantity(given is int), price(given is string));
+
+// An amount of money in one currency, exact: a rat, never a float.
+object Money {
+    has amount is rat;
+    has currency is string;
+    Money(:amount, :currency) {
+        confirm amount >= 0.rat() else throw Invalid.price(amount.string());
+    }
+    plus(other is Money) is Money {
+        confirm currency == other.code() else throw Mismatch.currency(currency, other.code());
+        Money(amount: amount + other.value(), currency: currency);
+    }
+    times(count is int) is Money { Money(amount: amount * count.rat(), currency: currency); }
+    code() is string { currency; }
+    value() is rat { amount; }
+    string() is string { amount.string() + " " + currency; }
+}
+
+// One line of an order: what, how many, at what unit price.
+object Line {
+    has item is string;
+    has quantity is int;
+    has price is Money;
+    Line(:item, :quantity, :price) {
+        confirm quantity > 0 else throw Invalid.quantity(quantity);
+    }
+    total() is Money { price.times(quantity); }
+}
+
+// An order knows its lines and nothing else; its total is computed, never stored.
+object Order {
+    has lines is @Line;
+    Order(:lines);
+    total(currency is string) is Money {
+        lines.reduce(Money(amount: 0.rat(), currency: currency)) -> sum, line { sum.plus(line.total()); };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let tea = Money(amount: 7.rat() / 2.rat(), currency: "EUR");
+    let order = Order(lines: [
+        Line(item: "tea", quantity: 3, price: tea),
+        Line(item: "cup", quantity: 2, price: Money(amount: 12.rat(), currency: "EUR")),
+    ]);
+    out.writeln(order.total("EUR").string());
+    let mixed = Order(lines: [Line(item: "tea", quantity: 1, price: Money(amount: 4.rat(), currency: "USD"))]);
+    let shown = try { mixed.total("EUR").string(); } catch Mismatch.currency(left, right) { left + " cannot meet " + right; };
+    out.writeln(shown);
+    let refused = try { Line(item: "air", quantity: 0, price: tea).total().string(); } catch Invalid.quantity(given) {
+        "quantity " + given.string() + " refused";
+    };
+    out.writeln(refused);
+    0;
+}
+```
+
+Output:
+
+```text
+69/2 EUR
+EUR cannot meet USD
+quantity 0 refused
+```
+
+- **One noun per idea.** `Money` is an amount and a currency, nothing else;
+  `Line` is one row; `Order` is its lines. Each object answers questions
+  about itself (`total()`), and none exposes its fields: `Money` offers
+  `code()` and `value()` for the one comparison `plus` needs, and `string()`
+  for display.
+- **The constructor is the gate.** A negative amount and a zero quantity are
+  refused where the object would be born, with a typed error that names the
+  bad value (§12.6). An object that exists is valid, so `total()` never
+  checks its own fields again.
+- **Exact arithmetic is the default.** The amounts are `rat`, so three teas
+  at 7/2 and two cups at 12 make exactly `69/2`, with no rounding to explain
+  later. A currency mismatch is an error, not an implicit conversion.
+- **Derived values are computed.** `Order.total` folds its lines with
+  `reduce`; nothing stores a running total that could drift from the lines.
+  Changing an order means building a new one with other lines (Chapter 13).
+
+The model is three short objects and two error enums. A design with getters
+and setters would have more code and fewer guarantees: every reader would
+have to trust that nobody set a quantity to zero after construction.
+
+## 12.12 Objects elsewhere
 
 Most languages that took immutability seriously added a shorthand for "an
 object that is its fields". Comparing them shows what Okkama chose to
@@ -6687,7 +6786,7 @@ and its fields are nobody else's business. Bloch's advice for Java,
 "minimize mutability" and "favor composition over inheritance", needs no
 discipline here: the language allows nothing else [[Bloch 2018](#ref-bloch2018)].
 
-## 12.12 What this design costs
+## 12.13 What this design costs
 
 - **More objects.** Without free functions, a small computation that would
   be a function elsewhere becomes an object with one action, or an action

@@ -152,8 +152,9 @@
   - [12.8 cap: вид объекта только для чтения](#128-cap-вид-объекта-только-для-чтения)
   - [12.9 Объекты — значения](#129-объекты--значения)
   - [12.10 Отдать `self` из конструктора](#1210-отдать-self-из-конструктора)
-  - [12.11 Объекты в других языках](#1211-объекты-в-других-языках)
-  - [12.12 Чего стоит такой замысел](#1212-чего-стоит-такой-замысел)
+  - [12.11 Разобранная модель предметной области: деньги и заказ](#1211-разобранная-модель-предметной-области-деньги-и-заказ)
+  - [12.12 Объекты в других языках](#1212-объекты-в-других-языках)
+  - [12.13 Чего стоит такой замысел](#1213-чего-стоит-такой-замысел)
 - [Глава 13. Действия, преемники и неизменяемость](#глава-13-действия-преемники-и-неизменяемость)
   - [13.1 Действие — типизированный запрос](#131-действие--типизированный-запрос)
   - [13.2 Параметры и вызовы](#132-параметры-и-вызовы)
@@ -6750,7 +6751,107 @@ RuntimeError: Action "greeted" on object "Tree" was called before its constructi
 Okkama идёт более дешёвым путём: одно статическое правило для `self` и
 проверка во время выполнения для косвенных случаев.
 
-## 12.11 Объекты в других языках
+## 12.11 Разобранная модель предметной области: деньги и заказ
+
+Маленькие объекты легче всего оценивать в области, которую знают все. У
+заказа есть строки; у строки — товар, количество и цена за единицу; цены —
+это деньги в одной валюте.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Mismatch is Error = (currency(left is string, right is string));
+enum Invalid is Error = (quantity(given is int), price(given is string));
+
+// An amount of money in one currency, exact: a rat, never a float.
+object Money {
+    has amount is rat;
+    has currency is string;
+    Money(:amount, :currency) {
+        confirm amount >= 0.rat() else throw Invalid.price(amount.string());
+    }
+    plus(other is Money) is Money {
+        confirm currency == other.code() else throw Mismatch.currency(currency, other.code());
+        Money(amount: amount + other.value(), currency: currency);
+    }
+    times(count is int) is Money { Money(amount: amount * count.rat(), currency: currency); }
+    code() is string { currency; }
+    value() is rat { amount; }
+    string() is string { amount.string() + " " + currency; }
+}
+
+// One line of an order: what, how many, at what unit price.
+object Line {
+    has item is string;
+    has quantity is int;
+    has price is Money;
+    Line(:item, :quantity, :price) {
+        confirm quantity > 0 else throw Invalid.quantity(quantity);
+    }
+    total() is Money { price.times(quantity); }
+}
+
+// An order knows its lines and nothing else; its total is computed, never stored.
+object Order {
+    has lines is @Line;
+    Order(:lines);
+    total(currency is string) is Money {
+        lines.reduce(Money(amount: 0.rat(), currency: currency)) -> sum, line { sum.plus(line.total()); };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let tea = Money(amount: 7.rat() / 2.rat(), currency: "EUR");
+    let order = Order(lines: [
+        Line(item: "tea", quantity: 3, price: tea),
+        Line(item: "cup", quantity: 2, price: Money(amount: 12.rat(), currency: "EUR")),
+    ]);
+    out.writeln(order.total("EUR").string());
+    let mixed = Order(lines: [Line(item: "tea", quantity: 1, price: Money(amount: 4.rat(), currency: "USD"))]);
+    let shown = try { mixed.total("EUR").string(); } catch Mismatch.currency(left, right) { left + " cannot meet " + right; };
+    out.writeln(shown);
+    let refused = try { Line(item: "air", quantity: 0, price: tea).total().string(); } catch Invalid.quantity(given) {
+        "quantity " + given.string() + " refused";
+    };
+    out.writeln(refused);
+    0;
+}
+```
+
+Вывод:
+
+```text
+69/2 EUR
+EUR cannot meet USD
+quantity 0 refused
+```
+
+- **Одно существительное на одну идею.** `Money` — сумма и валюта, и ничего
+  больше; `Line` — одна строка; `Order` — его строки. Каждый объект отвечает
+  на вопросы о себе (`total()`), и ни один не выставляет поля наружу: `Money`
+  даёт `code()` и `value()` для единственного сравнения, которое нужно
+  `plus`, и `string()` для показа.
+- **Конструктор — это пропускной пункт.** Отрицательная сумма и нулевое
+  количество отвергаются там, где объект родился бы, типизированной ошибкой,
+  которая называет плохое значение (§12.6). Существующий объект корректен,
+  поэтому `total()` больше никогда не проверяет собственные поля.
+- **Точная арифметика по умолчанию.** Суммы — `rat`, поэтому три чая по 7/2
+  и две чашки по 12 дают ровно `69/2`, без округления, которое потом
+  придётся объяснять. Несовпадение валют — ошибка, а не неявное
+  преобразование.
+- **Производные значения вычисляются.** `Order.total` сворачивает строки через
+  `reduce`; нигде не хранится накопленная сумма, которая могла бы разойтись
+  со строками. Изменить заказ — значит построить новый с другими строками
+  (глава 13).
+
+Модель — это три коротких объекта и два перечисления ошибок. Проект с
+геттерами и сеттерами дал бы больше кода и меньше гарантий: каждому читателю
+пришлось бы верить, что никто не обнулил количество после конструирования.
+
+## 12.12 Объекты в других языках
 
 Большинство языков, всерьёз взявшихся за неизменяемость, добавили
 сокращение для «объекта, который и есть свои поля». Сравнение показывает,
@@ -6779,7 +6880,7 @@ Okkama оставляет порождённое равенство и отка�
 изменяемость к минимуму» и «предпочитайте композицию наследованию», здесь
 не требует дисциплины: язык просто не позволяет иного [[Bloch 2018](#ref-bloch2018)].
 
-## 12.12 Чего стоит такой замысел
+## 12.13 Чего стоит такой замысел
 
 - **Больше объектов.** Без свободных функций небольшое вычисление, которое
   в другом языке было бы функцией, становится объектом с одним действием

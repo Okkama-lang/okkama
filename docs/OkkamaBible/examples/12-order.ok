@@ -1,0 +1,61 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Mismatch is Error = (currency(left is string, right is string));
+enum Invalid is Error = (quantity(given is int), price(given is string));
+
+// An amount of money in one currency, exact: a rat, never a float.
+object Money {
+    has amount is rat;
+    has currency is string;
+    Money(:amount, :currency) {
+        confirm amount >= 0.rat() else throw Invalid.price(amount.string());
+    }
+    plus(other is Money) is Money {
+        confirm currency == other.code() else throw Mismatch.currency(currency, other.code());
+        Money(amount: amount + other.value(), currency: currency);
+    }
+    times(count is int) is Money { Money(amount: amount * count.rat(), currency: currency); }
+    code() is string { currency; }
+    value() is rat { amount; }
+    string() is string { amount.string() + " " + currency; }
+}
+
+// One line of an order: what, how many, at what unit price.
+object Line {
+    has item is string;
+    has quantity is int;
+    has price is Money;
+    Line(:item, :quantity, :price) {
+        confirm quantity > 0 else throw Invalid.quantity(quantity);
+    }
+    total() is Money { price.times(quantity); }
+}
+
+// An order knows its lines and nothing else; its total is computed, never stored.
+object Order {
+    has lines is @Line;
+    Order(:lines);
+    total(currency is string) is Money {
+        lines.reduce(Money(amount: 0.rat(), currency: currency)) -> sum, line { sum.plus(line.total()); };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let tea = Money(amount: 7.rat() / 2.rat(), currency: "EUR");
+    let order = Order(lines: [
+        Line(item: "tea", quantity: 3, price: tea),
+        Line(item: "cup", quantity: 2, price: Money(amount: 12.rat(), currency: "EUR")),
+    ]);
+    out.writeln(order.total("EUR").string());
+    let mixed = Order(lines: [Line(item: "tea", quantity: 1, price: Money(amount: 4.rat(), currency: "USD"))]);
+    let shown = try { mixed.total("EUR").string(); } catch Mismatch.currency(left, right) { left + " cannot meet " + right; };
+    out.writeln(shown);
+    let refused = try { Line(item: "air", quantity: 0, price: tea).total().string(); } catch Invalid.quantity(given) {
+        "quantity " + given.string() + " refused";
+    };
+    out.writeln(refused);
+    0;
+}
