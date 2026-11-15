@@ -169,8 +169,8 @@ fn s1_edges_reject_bad_arity_schema_and_cross_outcome_slots() {
 fn s1_registry_has_exact_p1_ids_and_normative_schemas() {
     let reserved = [0, 19, 25, 34, 35, 36];
     // P1 and the synchronous lanes take 57 IDs with the ten async IDs of #601 V6 (64..=95), and #676 adds
-    // the dispatch ids 96 and 97 and the dynamic transfer 98.
-    assert_eq!(Opcode::ALL.len(), 60);
+    // the dispatch ids 96 and 97 and the dynamic transfer 98; #678 adds the sort dispatch 99.
+    assert_eq!(Opcode::ALL.len(), 61);
     for id in 0..47 {
         assert_eq!(Opcode::from_id(id).is_err(), reserved.contains(&id));
     }
@@ -182,9 +182,20 @@ fn s1_registry_has_exact_p1_ids_and_normative_schemas() {
     assert_eq!(Opcode::from_id(96).unwrap(), Opcode::InvokeDispatch);
     assert_eq!(Opcode::from_id(97).unwrap(), Opcode::InvokeDispatchOwn);
     assert_eq!(Opcode::from_id(98).unwrap(), Opcode::OwnDynamic);
-    for id in 99..=103 {
+    assert_eq!(Opcode::from_id(99).unwrap(), Opcode::OrderDispatch);
+    for id in 100..=103 {
         assert!(Opcode::from_id(id).is_err(), "{id}");
     }
+    // array.order.dispatch yields its array type, and fails only when its dispatch may.
+    let array = Type::Array(ArrayType { leaf: ArrayLeaf::Object(1), depth: 1 });
+    let sorted = ResultContext { value: Some(array), ..ResultContext::default() };
+    assert_eq!(Opcode::OrderDispatch.tags(&sorted), vec![Tag::Normal]);
+    assert_eq!(Opcode::OrderDispatch.results(Tag::Normal, &sorted).unwrap(), vec![ProducedType::Value(array)]);
+    let failing = ResultContext { may_fail: true, ..sorted.clone() };
+    assert_eq!(Opcode::OrderDispatch.tags(&failing), vec![Tag::Normal, Tag::Unwind]);
+    assert_eq!(Opcode::OrderDispatch.results(Tag::Unwind, &failing).unwrap(),
+        vec![ProducedType::Value(Type::Failure)]);
+    assert!(Opcode::OrderDispatch.is_terminator() && Opcode::OrderDispatch.helper().is_none());
     // own.dynamic joins the packet on success and returns state and packet with a failure on a failed check.
     let plain = ResultContext::default();
     assert_eq!(Opcode::OwnDynamic.tags(&plain), vec![Tag::Normal, Tag::Unwind]);

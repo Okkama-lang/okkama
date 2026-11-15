@@ -22,7 +22,7 @@ no extracted fixture or acceptance of the whole source file is implied.
 | `For`, array/range/map/varargs/Iterating/Batching | Parent headers, scoped iterations, D11 state and exits | C6: `traversal/`; [scope and fixture evidence](c6.md) |
 | `Functional(map/filter/reduce/any/all/find)` | Enclosing action CFG, builders, short circuit | C7 High: [functional fixtures](../fixtures/p2_3/functional), [c7.md](c7.md); status `planned` |
 | Imported source calls, plain `once let` | Concrete source bodies, Maybe slots, once.load/store, successor resets | C8: [eight goldens and exact L09 blockers](c8.md); rows stay `planned` |
-| Builtin order / ordering | Scalar Order CFG, stable sorting through C3 Comparing witnesses | C8: `std/scalar-order`, `std/sort-failure`; full compare cases in [c8.md](c8.md) |
+| Builtin order / ordering | Scalar Order CFG; `ordering()` is one operation: `array.order` (scalars), `call.order` on the Comparing slot (#678) | C8: `std/scalar-order`, `std/sort-failure`; full compare cases in [c8.md](c8.md) |
 | Closures / bound actions / any / caps | Explicit source-span Unsupported until #569/#565-c4 | C9 integration: any rows, ordered-sets |
 | Async body / await / future | Explicit source-span Unsupported until #570/#565-c5 | C9 integration boundary; no async case in this inventory |
 | Full runtime/harness case | #593 comparison using executable backend | C9 acceptance for all runtime rows |
