@@ -285,6 +285,10 @@ def report_header(stderr):
     return None
 
 
+# Errors of the test runner itself (spec 14: an empty root suite is an error).
+CHAMP_TEST_RUNNER_ERRORS = ("Test run requires at least one test",)
+
+
 def champ_outcome(mode, code, stderr):
     """Translate one `okkama run` on Champ into (response fields, adapter exit).
 
@@ -301,6 +305,12 @@ def champ_outcome(mode, code, stderr):
         return {"outcome": "unsupported", "stage_reached": "check",
                 "unsupported_reason": head[len("okkama: "):] if head.startswith("okkama: ") else head,
                 "raw": stderr}, 3
+    runner = head[len("okkama: "):] if head.startswith("okkama: ") else head
+    if mode == "test" and runner in CHAMP_TEST_RUNNER_ERRORS:
+        # The test runner's own language-level errors, reported as the native
+        # endpoint reports them on Tomato (sparrow_core::run_tests).
+        failure = {"stage": "runtime", "category": "runtime", "message": runner, "raw": stderr}
+        return {"outcome": "failed", "stage_reached": "runtime", "failure": failure}, code if code else 1
     if head.startswith("okkama: ") or any(text in head for text in CHAMP_DRIVER_REFUSALS):
         # The front end accepted the program: what follows is the OIR-2
         # pipeline (lowering, verifiers, SPB 17 generation, load gate) or the

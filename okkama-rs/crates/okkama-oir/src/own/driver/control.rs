@@ -236,7 +236,8 @@ impl Driver<'_, '_> {
     /// buffer was finished in that block has no buffer left to abandon, and a
     /// failure with a pending exit must unwind with its reserve: both continue
     /// at the handler's own unwind target. Skipped buffers are abandoned on the
-    /// failure path itself (`abandon_unrouted`).
+    /// failure path itself (`abandon_unrouted`). Only such a cleanup block may be
+    /// skipped; routing past any other handler is an elaboration error.
     pub(super) fn consumed_buffer_target(
         &self,
         env: &LiveEnv,
@@ -254,6 +255,11 @@ impl Driver<'_, '_> {
                 && matches!(handler.term.kind, TermKind::Raise(failure) if handler.params.last() == Some(&failure));
             if !consumed && !(abandons && env.cleanup.pending.is_some()) {
                 break;
+            }
+            // Only a buffer cleanup block may be skipped: any other handler has
+            // effects the failure must not bypass.
+            if !abandons {
+                return Err(flow_error("a skipped buffer handler must abandon its buffers and re-raise"));
             }
             let Some(next) = &handler.unwind else {
                 return Ok(None);

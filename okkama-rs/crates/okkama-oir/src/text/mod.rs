@@ -12,6 +12,7 @@ mod surface;
 mod types;
 mod declarations;
 mod elaboration;
+mod coro;
 
 pub use diagnostic::{Diagnostic, DiagnosticKind, Span, PrintError, print_diagnostic};
 pub use parser::{parse, parse_with_limits};
@@ -932,7 +933,8 @@ variants!(HolderKind {
     Pin => "pin",
     Group => "group",
     Diagnostic => "diagnostic",
-    Receipt => "receipt"
+    Receipt => "receipt",
+    RootRegistry => "root"
 });
 variants!(HolderState {
     Open => "open",
@@ -957,7 +959,15 @@ variants!(ProtocolTransition {
     Cancel => "cancel",
     Pin => "pin",
     Unpin => "unpin",
-    Dynamic => "dynamic"
+    Dynamic => "dynamic",
+    Offer => "offer",
+    Accept => "accept",
+    Deliver => "deliver",
+    Close => "close",
+    Withdraw => "withdraw",
+    Register => "register",
+    Retain => "retain",
+    Position => "position"
 });
 variants!(ProtocolCheck {
     LiveDependencies => "live_dependencies",
@@ -997,7 +1007,9 @@ impl Codec for ScopeEffectEnvelope {
     }
 }
 variants!(FutureEnvironment {
-    Deferred { function, arguments, descriptors } => "deferred", Frame(value) => "frame"
+    Deferred { function, arguments, descriptors } => "deferred",
+    External { function, arguments, descriptors } => "external",
+    Frame(value) => "frame"
 });
 impl Codec for CallCleanupMode {
     fn default_value() -> Option<Self> { Some(Self::Ordinary) }
@@ -1328,19 +1340,22 @@ opcodes!(AsyncOp {
     AwaitShielded { future, result } => "await.shielded",
     AwaitTake { future, result, unique, boundary } => "await.take",
     UniqueCacheProof { proof } => "unique_cache.proof",
-    CacheRehome { state, target, protocol } => "cache.rehome",
-    FutureSpawn { future } => "fut.spawn",
+    CacheRehome { form, target, protocol } => "cache.rehome",
+    FutureSpawn { future, state } => "fut.spawn",
     FutureCancel { future } => "fut.cancel",
     FutureDone { future } => "fut.done",
     FutureCancelled { future } => "fut.cancelled",
     FutureNew { packet, deps, owner_state, environment, result, owner } => "fut.new",
-    FuturePublish { task, cache, value, packet, deps, failure, protocol } => "fut.publish",
+    FuturePublish { frame, outcome } => "fut.publish",
+    AwaitUnwind { state, failure, task, receipt, protocol } => "await.unwind",
+    ServiceMaterialize { packet, entry } => "service.materialize",
+    ServiceAbsorb { packet, token } => "service.absorb",
     FutureSettle { task, protocol } => "fut.settle",
     FrameAlloc { function } => "frame.alloc",
     FrameLoad { frame, slot, ty } => "frame.load",
     FrameStore { frame, slot, value } => "frame.store",
     FrameSave { frame, slots, continuation } => "frame.save",
-    FrameResume { frame, slots } => "frame.resume",
+    FrameResume { frame, continuation, slots } => "frame.resume",
     FrameCancel { frame, cleanup, protocol } => "frame.cancel",
     Pin { value, deps, owner, protocol } => "pin",
     PinTransfer { pin, owner, protocol } => "pin.transfer",
@@ -1366,6 +1381,7 @@ opcodes!(CleanupOp {
     Begin { state, pending, failure, close, effects } => "cleanup.begin",
     Defer { cleanup, action } => "cleanup.defer",
     Settle { cleanup, holder, protocol } => "cleanup.settle",
+    SettleDynamic { cleanup, protocol } => "cleanup.settle.dynamic",
     Plan { cleanup, plan } => "cleanup.plan",
     SettleEmpty { cleanup, schedule } => "cleanup.settle.empty",
     Destroy { cleanup, key } => "cleanup.destroy",

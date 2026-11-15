@@ -1215,6 +1215,18 @@ impl Emit<'_, '_> {
                 let storage = self.iconst(u64::from(indices[1]));
                 self.call("champ_machine_variant_get", &[self.ctx, case, storage, words[0]]).unwrap()
             }
+            D::TestOk | D::TestIs | D::TestIsnt | D::TestFail => {
+                let kind = self.iconst(match op {
+                    D::TestOk => 0,
+                    D::TestIs => 1,
+                    D::TestIsnt => 2,
+                    _ => 3,
+                });
+                let function = self.iconst(self.index as u64);
+                let register = self.iconst(u64::from(inputs[0]));
+                let right = words.get(1).copied().unwrap_or_else(|| self.iconst(0));
+                self.call("champ_machine_test", &[self.ctx, kind, function, register, words[0], right]).unwrap()
+            }
             D::BoolNot => self.builder.ins().bxor_imm_s(words[0], 1),
             D::BoolEq | D::BoolNe => {
                 let condition = if op == D::BoolEq { IntCC::Equal } else { IntCC::NotEqual };
@@ -1231,7 +1243,7 @@ impl Emit<'_, '_> {
 fn sets_status(op: s::DataOp) -> bool {
     use s::DataOp as D;
     matches!(op, D::IntMod | D::RangeNew | D::Convert | D::IntMul | D::StrConcat | D::RatNew | D::ValEq | D::ValNe
-        | D::VariantGet)
+        | D::VariantGet | D::TestOk | D::TestIs | D::TestIsnt | D::TestFail)
 }
 
 #[cfg(test)]

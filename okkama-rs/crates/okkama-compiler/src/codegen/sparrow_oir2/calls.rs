@@ -32,8 +32,12 @@ fn kind(module: &o::Module, ty: o::TypeId) -> Result<P, GenerateError> {
 }
 
 /// OIR scalar operations whose SPB data form is fallible (`DataOp::fallible`). A conversion fails only
-/// where its pair of types can trap; a total one (int to string) stays plain data.
+/// where its pair of types can trap; a total one (int to string) stays plain data. Test assertions are
+/// evaluated the same way: they fail only outside a running case.
 fn fallible_scalar(op: &o::Operation) -> bool {
+    if test_check(op).is_some() {
+        return true;
+    }
     match op {
         o::Operation::Core(o::CoreOp::IntMod { .. } | o::CoreOp::RangeNew { .. } | o::CoreOp::IntDiv { .. }
             | o::CoreOp::RatNew { .. } | o::CoreOp::ValEq { .. } | o::CoreOp::ValNe { .. }
@@ -44,6 +48,20 @@ fn fallible_scalar(op: &o::Operation) -> bool {
         }
         _ => false,
     }
+}
+
+/// A test assertion as its SPB 17 test operation and operands.
+fn test_check(op: &o::Operation) -> Option<(s::DataOp, Vec<o::ValueId>)> {
+    let o::Operation::Core(core) = op else {
+        return None;
+    };
+    Some(match *core {
+        o::CoreOp::TestOk { condition } => (s::DataOp::TestOk, vec![condition]),
+        o::CoreOp::TestIs { left, right } => (s::DataOp::TestIs, vec![left, right]),
+        o::CoreOp::TestIsnt { left, right } => (s::DataOp::TestIsnt, vec![left, right]),
+        o::CoreOp::TestFail { message } => (s::DataOp::TestFail, vec![message]),
+        _ => return None,
+    })
 }
 
 pub(super) fn needs_s2(module: &o::Module, function: &o::Function) -> Result<bool, GenerateError> {
@@ -399,7 +417,8 @@ impl Emitter<'_> {
                             }
                             Some((s::DataOp::Convert, target, s::Immediate::None, vec![*value]))
                         }
-                        _ => None,
+                        // The check's bool outcome (whether it held) is not used by the source.
+                        _ => test_check(op).map(|(check, inputs)| (check, s::Type::Bool, s::Immediate::None, inputs)),
                     };
                     if let Some((op, result, immediate, inputs)) = scalar {
                         let context = s::ResultContext {
@@ -770,6 +789,17 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                     if !inst.results.is_empty() {
                         return Err(error("defer registration cannot produce execution results"));
                     }
+                    continue;
+                }
+                op if test_check(op).is_some() => {
+                    let (op, operands) = test_check(op).expect("test assertion");
+                    if !inst.results.is_empty() {
+                        return Err(error("test assertion cannot produce results"));
+                    }
+                    let inputs = operands.iter().map(|&value| emitter.reg(value)).collect::<Result<_, _>>()?;
+                    // The check's outcome is a fresh bool: whether it held. The source discards it.
+                    let held = fresh(&mut emitter.result, s::Type::Bool)?;
+                    emitter.evaluate(data(op, inputs, held, s::Immediate::None), block.unwind.as_ref())?;
                     continue;
                 }
                 o::Operation::Core(o::CoreOp::RangeLen { value }) => {

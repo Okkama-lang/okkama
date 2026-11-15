@@ -31,7 +31,7 @@ func @f(%schedule: type, %success_schedule: type) -> void [async] summary(Mf) {
     %unique: unique-cache = unique_cache.proof proof unique_cache_proof(future=%future, scope=S, region=[^entry],
         evidence=unique_cache_evidence(creation=instruction(imake), no_external_storage=true, no_other_waiters=true,
         no_live_views=true, no_collector_retention=true, scheduler_cannot_publish=true))
-    %alias: future<void> facts(managed(deps=d0)) = fut.spawn %future
+    (%spawned: cache-state, %alias: task-state) = fut.spawn %future, %cache
     invoke.own await.take %future, %unique, boundary temporary(awaiting=S)
         normal ^ok($packet, $deps)
         unwind ^bad($failure, $task, $receipt)

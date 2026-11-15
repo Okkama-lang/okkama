@@ -516,3 +516,37 @@ fn high_calls_without_summaries_use_typed_shapes_without_inventing_contracts() -
     }
     Ok(())
 }
+
+#[test]
+fn async_body_with_frame_layout_builds_and_roundtrips() -> Result<(), BuildError> {
+    let mut module = ModuleBuilder::new("async_body", Profile::Coro);
+    let function = module.declare_function(declaration(vec![], vec![]))?;
+    let frame = module.intern_type(Type::Frame(function))?;
+    let deps = module.intern_type(Type::Service(ServiceType::Deps))?;
+    module.raw_mut().functions.get_mut(function)?.signature.params = vec![frame];
+    module.raw_mut().functions.get_mut(function)?.attrs.push(FunctionAttr::Async);
+    let scope = module.declare_scope(ScopeDecl { function, parent: None, kind: ScopeKind::Action, loc: None })?;
+    let mut builder = module.function_builder(function, scope)?;
+    let entry = builder.entry();
+    let parameter = builder.block_params(entry)?[0];
+    let start = AsyncOp::FrameResume {
+        frame: parameter, continuation: 0, slots: vec![SavedSlot { slot: 0, ty: deps, linear: false }],
+    };
+    let resumed = builder.emit_schema(Operation::Async(start))?;
+    let packet = builder.emit_schema(Operation::Ownership(OwnershipOp::Empty {}))?[0];
+    let outcome = PublishOutcome::Success { value: None, packet, deps: resumed[1] };
+    assert!(builder.emit_schema(Operation::Async(AsyncOp::FuturePublish { frame: resumed[0], outcome }))?.is_empty());
+    builder.terminate(TermKind::Ret { values: vec![] })?;
+    let continuation = Continuation { site: SuspendSite::Start, saved: vec![0], operands: vec![] };
+    let layout = FrameLayout { slots: vec![FrameSlotDecl { ty: deps, linear: false }], continuations: vec![continuation] };
+    builder.set_frame_layout(Some(layout))?;
+    let body = builder.finish()?;
+    module.define_function(function, body)?;
+    let module = module.finish()?;
+    let printed = text::print(&module).unwrap();
+    assert!(printed.contains("continuation 0 start saves [0]"), "{printed}");
+    assert_eq!(text::print(&text::parse(&printed).unwrap()).unwrap(), printed);
+    let options = VerifyOptions { mode: VerifyMode::Structural, ..VerifyOptions::default() };
+    verify_with(&module, &options, VerifyContext::default()).unwrap();
+    Ok(())
+}

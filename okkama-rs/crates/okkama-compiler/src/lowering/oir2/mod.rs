@@ -31,8 +31,11 @@ mod test_profile_tests;
 #[cfg(test)]
 mod callable_tests;
 mod native_summaries;
+#[cfg(test)]
+mod native_catalogue_tests;
 mod pipeline;
 pub use pipeline::{PipelineError, compile_linked, compile_linked_with, lower_linked_high};
+pub use pipeline::{compile_linked_tests_with, lower_linked_tests_high};
 mod construction;
 mod declarations;
 mod defer;
@@ -200,6 +203,7 @@ fn lower(analysis: &Analysis<'_>, open_calls: bool) -> Result<ir::Module> {
                 deferred: None,
                 key: callables::BodyKey { root: body.owner.clone(), path: vec![] },
                 lambdas: &declarations.lambdas, globals: &globals, calls: &calls, bound_entries: &bound_entries,
+                test_intrinsics: &declarations.test_intrinsics,
             };
             let lowered = body::BodyLowerer::lower(builder, body, root, &declarations.types, context)
                 .map_err(|error| error.in_function(&symbol))?;
@@ -223,6 +227,7 @@ fn lower(analysis: &Analysis<'_>, open_calls: bool) -> Result<ir::Module> {
             given: vec![], listed: None, defers: &declarations.defers, deferred: None,
             key: lambda.source.key.clone(), lambdas: &declarations.lambdas, globals: &globals,
             calls: &calls, bound_entries: &bound_entries,
+            test_intrinsics: &declarations.test_intrinsics,
         };
         let lowered = body::BodyLowerer::lower(builder, &lambda.source.body, root, &declarations.types, context)
             .map_err(|error| error.in_function(&symbol))?;
@@ -246,6 +251,7 @@ fn lower(analysis: &Analysis<'_>, open_calls: bool) -> Result<ir::Module> {
             deferred: Some(deferred.receiver),
             key: deferred.key.clone(), lambdas: &declarations.lambdas, globals: &globals,
             calls: &calls, bound_entries: &bound_entries,
+            test_intrinsics: &declarations.test_intrinsics,
         };
         let lowered = body::BodyLowerer::lower(builder, &deferred.source, root, &declarations.types, context)
             .map_err(|error| error.in_function(&symbol))?;

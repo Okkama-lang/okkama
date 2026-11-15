@@ -104,6 +104,27 @@ fn check_through_low(id: &str) {
     }
 }
 
+/// A source of this lane, with the stdout Tomato prints for it: passes own and low, and is
+/// checked in Champ once the backend accepts it.
+fn check_source_through_low(name: &str, text: &str, stdout: &str) {
+    let directory = root().join("conformance/harness/okkama");
+    match compile(&directory, text) {
+        Ok(bytes) => {
+            let limits = sparrow_core::budget::Limits {
+                steps: Some(10_000_000),
+                ..sparrow_core::budget::Limits::default()
+            };
+            let run = sparrow_core::run_captured(bytes, limits).unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(String::from_utf8_lossy(&run.stdout), stdout, "{name}: stdout");
+            assert_eq!(run.result.ok(), Some(0), "{name}: exit");
+        }
+        Err(oir2::PipelineError::Phase { phase, message }) if BACKEND.contains(&phase) => {
+            println!("{name}: own and low passed; stops in {phase}: {message}");
+        }
+        Err(error) => panic!("{name}: {error}"),
+    }
+}
+
 macro_rules! case {
     ($name:ident, $id:literal) => {
         #[test]
@@ -150,6 +171,38 @@ through_low!(strings_raw_multiline, "L01.lex.raw.multiline");
 through_low!(strings_escapes, "L01.lex.string.escapes");
 through_low!(strings_range_for_and_functional, "L02.range.for-and-functional");
 through_low!(strings_for_sources, "L03.for.sources");
+
+// #666: a collection built in a loop body owns its elements until the end of that iteration.
+// The expected trace is Tomato's output for this program (okkama run, default build).
+const ITERATION_BUILDER: &str = r#"module app;
+
+import "io/stdout" take Stdout;
+import "async/atomic" take Atomic;
+
+object Res {
+    has n is int;
+    has log is Atomic<string>;
+    Res(:n, :log);
+    destroy { log.replace(log.value() + " -" + n.string()); }
+}
+
+main() is int {
+    let log = Atomic("");
+    for 0..2 -> round {
+        let a = (0..2).map() -> i { Res(n: round * 10 + i, log: log); };
+        log.replace(log.value() + " round" + round.string() + ":" + a.size().string());
+    }
+    log.replace(log.value() + " end");
+    Stdout().writeln(log.value());
+    0;
+}
+"#;
+
+#[test]
+fn builders_elements_die_with_their_iteration() {
+    check_source_through_low("builder-elements-per-iteration", ITERATION_BUILDER,
+        " round0:2 -1 -0 round1:2 -11 -10 end\n");
+}
 
 /// Opt-in triage: `OKKAMA_CHAMP_CASES=<file with one id per line>` prints where each case stops.
 #[test]

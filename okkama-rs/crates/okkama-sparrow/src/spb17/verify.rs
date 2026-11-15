@@ -16,7 +16,11 @@ fn at<T>(items: &[T], index: u32) -> Result<&T, Error> {
 
 fn ty_valid(ty: Type, p: &Program) -> Check {
     if let Type::Object(id) | Type::Successor(id) = ty {
-        at(&p.objects, id)?;
+        enforce(!at(&p.objects, id)?.handle, "HANDLE_TYPE", "an object type names a native handle declaration")?;
+    }
+    if let Type::Handle(id) = ty {
+        enforce(p.objects.get(id as usize).is_some_and(|object| object.handle),
+            "HANDLE_TYPE", "a handle type names no native handle declaration")?;
     }
     if let Type::Variant(id) = ty {
         enforce(p.objects.get(id as usize).is_some_and(|object| !object.variant_cases.is_empty()),
@@ -25,6 +29,8 @@ fn ty_valid(ty: Type, p: &Program) -> Check {
     if let Type::Array(shape) = ty {
         enforce(shape.depth > 0, "ARRAY_SHAPE", "array depth must be positive")?;
         if let ArrayLeaf::Object(id) = shape.leaf {
+            let handle = p.objects.get(id as usize).is_some_and(|object| object.handle);
+            enforce(!handle, "HANDLE_TYPE", "an array element names a native handle declaration")?;
             closed_plain(id, p, "ARRAY_PLAIN")?;
         }
     }
@@ -100,6 +106,7 @@ pub fn verify(p: &Program) -> Check {
     if let Some(entry) = p.entry {
         at(&p.functions, entry)?;
     }
+    check_tests(p)?;
     for object in &p.objects {
         let layout = &object.layout;
         let count = layout.storage_fields.len() as u64;
@@ -117,6 +124,12 @@ pub fn verify(p: &Program) -> Check {
             }
             Ok(())
         };
+        if object.handle {
+            let plain = object.fields.is_empty() && object.error_cases.is_empty() && object.enum_cases == 0
+                && object.variant_cases.is_empty() && layout.storage_fields.is_empty() && !layout.has_destroy
+                && !layout.may_reach_resource && layout.trace_layout.is_empty() && layout.selection_layout.is_empty();
+            enforce(plain, "HANDLE_DECLARATION", "a native handle declaration has fields, cases or resources")?;
+        }
         if !object.variant_cases.is_empty() {
             let mut seen = BTreeSet::new();
             let plain = object.fields.is_empty() && layout.storage_fields.is_empty() && !layout.may_reach_resource
@@ -135,7 +148,7 @@ pub fn verify(p: &Program) -> Check {
                     "understated object retention metadata")?;
             }
             let traced = matches!(ty, Type::Error | Type::Bytes | Type::Array(_) | Type::Str | Type::Object(_)
-                | Type::Successor(_) | Type::Failure | Type::Rat | Type::Variant(_));
+                | Type::Successor(_) | Type::Failure | Type::Rat | Type::Variant(_) | Type::Handle(_));
             require(layout.trace_layout.contains(&(index as u32)) == traced, "incorrect object trace layout")?;
         }
     }
@@ -158,6 +171,33 @@ pub fn verify(p: &Program) -> Check {
     }
     for f in &p.functions {
         verify_function(p, f).map_err(|e| Error { message: format!("{}: {}", f.symbol, e.message), ..e })?;
+    }
+    Ok(())
+}
+
+/// The tests table of the test profile: unique names, distinct `() -> void` observation bodies that are
+/// not the program entry. Test intrinsics belong to the test profile only.
+fn check_tests(p: &Program) -> Check {
+    for f in &p.functions {
+        let name = f.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref());
+        enforce(p.tests.is_some() || !name.is_some_and(|name| name.starts_with(TEST_INTRINSIC_PREFIX)),
+            "TEST_PROFILE", "test intrinsics need a tests table")?;
+    }
+    let Some(tests) = &p.tests else {
+        return Ok(());
+    };
+    let mut names = BTreeSet::new();
+    let mut functions = BTreeSet::new();
+    for test in tests {
+        enforce(!test.name.is_empty() && names.insert(test.name.as_str()), "TEST_TABLE",
+            "test names must be non-empty and unique")?;
+        let f = p.functions.get(test.function as usize)
+            .ok_or_else(|| violation("TEST_TABLE", "test function index out of range"))?;
+        enforce(functions.insert(test.function), "TEST_TABLE", "two tests share one function")?;
+        enforce(p.entry != Some(test.function), "TEST_ENTRY", "the program entry cannot be a test")?;
+        let external = f.proofs.entry.as_ref().is_some_and(|entry| entry.external.is_some());
+        enforce(f.entry_abi == EntryAbi::Observation && f.params.is_empty() && f.results.is_empty()
+            && !external && !f.code.is_empty(), "TEST_ENTRY", "a test needs a () -> void observation body")?;
     }
     Ok(())
 }
@@ -722,6 +762,19 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
         }
         Convert => enforce(matches!((types, out), ([from], Some(to)) if conversion(*from, to).is_some()),
             "CONVERT_TYPE", "conversion between these types is not defined"),
+        TestOk | TestFail | TestIs | TestIsnt => {
+            enforce(p.tests.is_some(), "TEST_PROFILE", "test operations need a tests table")?;
+            let valid = match (op, types) {
+                (TestOk, [Type::Bool]) | (TestFail, [Type::Str]) => true,
+                (TestIs | TestIsnt, [left, right]) => left == right && matches!(left,
+                    Type::Int | Type::Bool | Type::Byte | Type::Float | Type::Char | Type::Rat | Type::Str
+                    | Type::Range | Type::Bytes | Type::Array(_) | Type::Object(_) | Type::Successor(_)
+                    | Type::Variant(_)),
+                _ => false,
+            };
+            enforce(valid && out == Some(Type::Bool), "TEST_OPERAND",
+                "test operation operand types differ from its check, or its result is not bool")
+        }
         Move => {
             require(types.len() == 1, "move requires one source")?;
             let valid = out == Some(types[0]) || matches!((types[0], out),

@@ -167,6 +167,15 @@ class ChampTranslationTests(unittest.TestCase):
                          ["/b/okkama", "run", "--stdlib", "/std", "/w/main.ok", "/w/part.ok", "--", "a.ok", "-x", ""])
         self.assertEqual(adapter.champ_command("/b/okkama", "test", req)[:3], ["/b/okkama", "run", "-t"])
 
+    def test_empty_test_suite_is_a_runtime_failure(self):
+        fields, exit_code = self.outcome(1, "okkama: Test run requires at least one test\n", mode="test")
+        self.assertEqual(fields["outcome"], "failed")
+        self.assertEqual(fields["failure"]["category"], "runtime")
+        self.assertEqual(fields["failure"]["message"], "Test run requires at least one test")
+        self.assertEqual(exit_code, 1)
+        # Outside test mode the same prefix still means the pipeline or the driver.
+        self.assertEqual(self.outcome(1, "okkama: something else\n")[0]["outcome"], "internal-error")
+
     def test_completed(self):
         self.assertEqual(self.outcome(0, "")[0]["exit_status"], 0)
         self.assertEqual(self.outcome(3, "")[1], 3)

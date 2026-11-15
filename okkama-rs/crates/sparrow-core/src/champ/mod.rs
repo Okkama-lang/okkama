@@ -11,6 +11,7 @@ pub use abi::*;
 pub(crate) mod machine;
 pub use machine::{ExternalEntry, PlainEntry};
 mod helpers;
+pub(crate) mod testing;
 pub mod cleanup;
 pub use cleanup::rt_exit_abort;
 pub use records::*;

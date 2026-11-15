@@ -39,6 +39,22 @@ fn fixture_result(module: &okkama_oir::Module, errors: ErrorPolicy) -> Result<()
     verify_with(module, &options, context).map(|_| ())
 }
 
+/// Async ABI V1 fixtures are checked by the structural verifier only (D20–D25);
+/// their ownership rules arrive with later slices.
+fn structural_result(module: &okkama_oir::Module, errors: ErrorPolicy) -> Result<(), VerifyReport> {
+    let options = VerifyOptions {
+        mode: VerifyMode::Structural,
+        execution: ExecutionMode::Tests,
+        errors,
+        ..VerifyOptions::default()
+    };
+    let context = VerifyContext {
+        external_contracts: &FixtureContracts(module),
+        ..VerifyContext::default()
+    };
+    verify_with(module, &options, context).map(|_| ())
+}
+
 fn fixture_module(root: &Path, path: &str) -> okkama_oir::Module {
     let source = fs::read_to_string(root.join(path)).unwrap();
     text::parse(&source).unwrap_or_else(|error| panic!("{path}: {error}"))
@@ -90,6 +106,46 @@ fn canonical_verifier_fixtures() {
 }
 
 #[test]
+fn async_v1_fixtures_roundtrip_and_verify_structurally() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/async");
+    let mut failures = Vec::new();
+    for class in ["valid", "invalid"] {
+        let mut paths: Vec<_> = fs::read_dir(root.join(class)).unwrap()
+            .map(|entry| entry.unwrap().path()).collect();
+        paths.sort();
+        assert!(!paths.is_empty(), "{class}");
+        for path in paths {
+            let source = fs::read_to_string(&path).unwrap();
+            let module = text::parse(&source).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            let canonical = text::print(&module).unwrap();
+            let roundtrip = text::parse(&canonical).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            assert_eq!(text::print(&roundtrip).unwrap(), canonical, "{}: unstable canonical text", path.display());
+            assert_eq!(roundtrip, module, "{}: canonical text changes the module", path.display());
+            let result = structural_result(&module, ErrorPolicy::All);
+            if class == "valid" {
+                if let Err(error) = result {
+                    failures.push(format!("{}: {error:?}", path.display()));
+                }
+                continue;
+            }
+            let expected = source.lines().find_map(|line| line.strip_prefix("// expect ")).unwrap();
+            let (rule, primary) = expected.split_once(' ').unwrap();
+            let Err(report) = result else {
+                failures.push(format!("{}: accepted invalid fixture", path.display()));
+                continue;
+            };
+            if !report.diagnostics.iter().any(|diagnostic| diagnostic.rule.as_str() == rule
+                && location(&diagnostic.primary.entity) == primary) {
+                failures.push(format!("{}: {expected}; {report:?}", path.display()));
+            }
+            let first = structural_result(&module, ErrorPolicy::First).unwrap_err();
+            assert_eq!(first.diagnostics, report.diagnostics[..1], "{}", path.display());
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
 fn every_rule_has_a_verified_canonical_positive_and_negative() {
     use std::collections::BTreeSet;
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/verify");
@@ -102,6 +158,19 @@ fn every_rule_has_a_verified_canonical_positive_and_negative() {
         fixture_result(&positive, ErrorPolicy::All).unwrap_or_else(|report| panic!("{line}: {report:?}"));
         let negative = fixture_module(&root, row[2]);
         let report = fixture_result(&negative, ErrorPolicy::All).unwrap_err();
+        assert_eq!(report.failure, VerifyFailure::Rejected, "{line}");
+        assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule.as_str() == row[0]),
+            "{line}: {report:?}");
+    }
+    let async_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/async");
+    for line in include_str!("fixtures/async/matrix.tsv").lines().skip(1) {
+        let row: Vec<_> = line.split('\t').collect();
+        assert_eq!(row.len(), 3, "{line}");
+        assert!(covered.insert(row[0]), "duplicate RuleId: {line}");
+        let positive = fixture_module(&async_root, row[1]);
+        structural_result(&positive, ErrorPolicy::All).unwrap_or_else(|report| panic!("{line}: {report:?}"));
+        let negative = fixture_module(&async_root, row[2]);
+        let report = structural_result(&negative, ErrorPolicy::All).unwrap_err();
         assert_eq!(report.failure, VerifyFailure::Rejected, "{line}");
         assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule.as_str() == row[0]),
             "{line}: {report:?}");

@@ -1142,12 +1142,36 @@ impl Checker<'_, '_> {
                 }
                 for &alias in &proof.evidence.aliases { self.same(proof.future, alias)?; }
             }
-            AsyncOp::CacheRehome { state, .. } => self.service(*state, ServiceType::CacheState)?,
-            AsyncOp::FutureSpawn { future } | AsyncOp::FutureCancel { future }
+            AsyncOp::CacheRehome { form, .. } => match form {
+                RehomeForm::State(state) => self.service(*state, ServiceType::CacheState)?,
+                RehomeForm::Scope { state, pending, future } => {
+                    self.scope(*state)?;
+                    self.service(*pending, ServiceType::Pending)?;
+                    self.future(*future)?;
+                }
+                RehomeForm::Token { pending, cache, task } => {
+                    self.service(*pending, ServiceType::Pending)?;
+                    self.service(*cache, ServiceType::CacheState)?;
+                    if let Some(task) = task {
+                        self.service(*task, ServiceType::TaskState)?;
+                    }
+                }
+            },
+            AsyncOp::FutureSpawn { future, state } => {
+                self.future(*future)?;
+                // D24.1: own forwards the scope state; coro/low forward the cache duty.
+                if matches!(self.module.profile, Profile::Coro | Profile::Low) {
+                    self.service(*state, ServiceType::CacheState)?;
+                } else {
+                    self.scope(*state)?;
+                }
+            }
+            AsyncOp::FutureCancel { future }
             | AsyncOp::FutureDone { future } | AsyncOp::FutureCancelled { future } => { self.future(*future)?; }
             AsyncOp::FutureNew { environment, packet, deps, owner, owner_state, result } => {
                 match environment {
-                    FutureEnvironment::Deferred { function, arguments, descriptors } => {
+                    FutureEnvironment::Deferred { function, arguments, descriptors }
+                    | FutureEnvironment::External { function, arguments, descriptors } => {
                         let signature = &self.module.functions.get(*function)?.signature;
                         let params: Vec<_> = signature.params.iter().copied().filter(|ty| {
                             self.module.types.get(*ty).is_ok_and(|ty| !matches!(ty,
@@ -1166,8 +1190,9 @@ impl Checker<'_, '_> {
                         for descriptor in descriptors {
                             self.expect(*descriptor, Type::Descriptor)?;
                         }
-                        self.require(self.module.profile == Profile::Own,
-                            "deferred Future environment belongs to own");
+                        // Coro keeps deferred/external unchanged (async ABI C-1, amending D12).
+                        self.require(self.module.profile != Profile::High,
+                            "named Future environments belong to own, coro or low");
                     }
                     FutureEnvironment::Frame(frame) => {
                         self.frame(*frame)?;
@@ -1179,13 +1204,32 @@ impl Checker<'_, '_> {
                 self.service(*deps, ServiceType::Deps)?;
                 self.service(*owner_state, ServiceType::Scope(*owner))?;
             }
-            AsyncOp::FuturePublish { task, cache, value, packet, deps, failure, .. } => {
+            AsyncOp::FuturePublish { frame, outcome } => {
+                self.frame(*frame)?;
+                match outcome {
+                    PublishOutcome::Success { value, packet, deps } => {
+                        if let Some(value) = value { self.language(*value)?; }
+                        self.service(*packet, ServiceType::Own)?;
+                        self.service(*deps, ServiceType::Deps)?;
+                    }
+                    PublishOutcome::Failure(failure) => self.service(*failure, ServiceType::Failure)?,
+                }
+            }
+            AsyncOp::AwaitUnwind { state, failure, task, receipt, .. } => {
+                self.scope(*state)?;
+                self.service(*failure, ServiceType::Failure)?;
                 self.service(*task, ServiceType::TaskState)?;
-                self.service(*cache, ServiceType::CacheState)?;
-                if let Some(value) = value { self.language(*value)?; }
+                self.service(*receipt, ServiceType::Receipt)?;
+            }
+            AsyncOp::ServiceMaterialize { packet, entry } => {
                 self.service(*packet, ServiceType::Own)?;
-                self.service(*deps, ServiceType::Deps)?;
-                if let Some(failure) = failure { self.service(*failure, ServiceType::Failure)?; }
+                self.language(entry.holder)?;
+            }
+            AsyncOp::ServiceAbsorb { packet, token } => {
+                self.service(*packet, ServiceType::Own)?;
+                let valid = matches!(self.ty(*token)?,
+                    Type::Service(ServiceType::CacheState | ServiceType::TaskState));
+                self.require(valid, "service.absorb takes a cache-state or task-state token");
             }
             AsyncOp::FutureSettle { task, .. } => self.service(*task, ServiceType::TaskState)?,
             AsyncOp::FrameAlloc { function } => { self.module.functions.get(*function)?; }
@@ -1207,7 +1251,7 @@ impl Checker<'_, '_> {
                     self.require(seen.insert(slot.slot), "duplicate frame slot");
                 }
             }
-            AsyncOp::FrameResume { frame, slots } => {
+            AsyncOp::FrameResume { frame, slots, .. } => {
                 self.frame(*frame)?;
                 let mut seen = std::collections::BTreeSet::new();
                 for slot in slots {
@@ -1330,6 +1374,7 @@ impl Checker<'_, '_> {
                     | Type::Frame(_));
                 self.require(valid, "cleanup settle requires a service holder");
             }
+            CleanupOp::SettleDynamic { cleanup, .. } => self.service(*cleanup, ServiceType::CleanupState)?,
             CleanupOp::SettleEmpty { cleanup, schedule } => {
                 self.service(*cleanup, ServiceType::CleanupState)?;
                 let valid = self.body.cleanup.schedules.get(*schedule).is_ok_and(|item| item.holders.is_empty()
