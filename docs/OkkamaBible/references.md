@@ -71,6 +71,7 @@ bibliographic data were checked are listed.
 - [@hyperspec] Kent M. Pitman (1996). *Common Lisp HyperSpec*, Chapter 9: Conditions. Harlequin; now LispWorks. https://www.lispworks.com/documentation/HyperSpec/Body/09_.htm
 - [@ieee754] IEEE (2019). *IEEE Standard for Floating-Point Arithmetic* (IEEE Std 754-2019). https://doi.org/10.1109/IEEESTD.2019.8766229 {label: IEEE 754}
 - [@javalist] Oracle (2023). Interface List<E>. *Java SE 21 API Specification*. https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/List.html {label: Java SE 21 API}
+- [@javastream] Oracle (2023). Package java.util.stream. *Java SE 21 API Specification*. https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/stream/package-summary.html {label: Java SE 21 API}
 - [@jep395] Gavin Bierman (2021). JEP 395: Records. OpenJDK. https://openjdk.org/jeps/395
 - [@jep409] Gavin Bierman (2021). JEP 409: Sealed Classes. OpenJDK. https://openjdk.org/jeps/409
 - [@jep411] OpenJDK (2021). JEP 411: Deprecate the Security Manager for Removal. https://openjdk.org/jeps/411

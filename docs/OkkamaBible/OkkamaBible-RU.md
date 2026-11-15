@@ -4322,7 +4322,7 @@ Oslo/2 1200
 | | Коллекции по умолчанию | Порядок обхода словаря | `map`, `filter` |
 |---|---|---|---|
 | Python | изменяемые `list` и `dict` | порядок вставки, гарантирован с 3.7 [[Python built-in types](#ref-pystdtypes)] | ленивые итераторы [[Python built-in functions](#ref-pyfunctions)] |
-| Java | изменяемые; `List.of` и `List.copyOf` дают неизменяемые списки [[Java SE 21 API](#ref-javalist)] | зависит от класса: не задан у `HashMap`, отсортирован у `TreeMap` | ленивые потоки |
+| Java | изменяемые; `List.of` и `List.copyOf` дают неизменяемые списки [[Java SE 21 API](#ref-javalist)] | зависит от класса: не задан у `HashMap`, отсортирован у `TreeMap` | ленивые потоки [[Java SE 21 API](#ref-javastream)] |
 | Go | изменяемые срезы и словари | не задан и не обязан совпадать от обхода к обходу [[Go specification](#ref-gospec)] | циклы |
 | Rust | `Vec`, `HashMap`, меняются через `mut` | произвольный у `HashMap` [[Rust standard library](#ref-rusthashmap)], отсортированный у `BTreeMap` | ленивые итераторы [[Klabnik 2023](#ref-klabnik2023)] |
 | Clojure | персистентные, неизменяемые, с общей структурой [[Hickey 2008](#ref-hickey2008)] | неупорядоченный `hash-map`, упорядоченный `sorted-map` [[Clojure Reference](#ref-clojureds)] | ленивые последовательности |
@@ -20060,6 +20060,7 @@ main() is int {
 - <a id="ref-ieee754"></a>IEEE (2019). *IEEE Standard for Floating-Point Arithmetic* (IEEE Std 754-2019). https://doi.org/10.1109/IEEESTD.2019.8766229
 - <a id="ref-wasi"></a>WebAssembly System Interface (WASI): capability-based access, pre-opened directories. https://wasi.dev/
 - <a id="ref-javalist"></a>Oracle (2023). Interface List<E>. *Java SE 21 API Specification*. https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/List.html
+- <a id="ref-javastream"></a>Oracle (2023). Package java.util.stream. *Java SE 21 API Specification*. https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/stream/package-summary.html
 - <a id="ref-jones2023"></a>Richard Jones, Antony Hosking, Eliot Moss (2023). *The Garbage Collection Handbook: The Art of Automatic Memory Management*, 2nd edition. CRC Press.
 - <a id="ref-baker1977"></a>Henry C. Baker Jr. and Carl Hewitt (1977). The Incremental Garbage Collection of Processes. MIT AI Laboratory Working Paper 149; also in *Proceedings of the Symposium on Artificial Intelligence and Programming Languages*, Rochester, NY. https://hdl.handle.net/1721.1/41969
 - <a id="ref-halstead1985"></a>Robert H. Halstead Jr. (1985). MULTILISP: A Language for Concurrent Symbolic Computation. *ACM Transactions on Programming Languages and Systems* 7(4): 501–538. https://doi.org/10.1145/4472.4478

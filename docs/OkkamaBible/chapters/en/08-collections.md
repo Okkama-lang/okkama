@@ -315,7 +315,7 @@ named, tested and passed on.
 | | Default collections | Map iteration order | `map`, `filter` |
 |---|---|---|---|
 | Python | mutable `list` and `dict` | insertion order, guaranteed since 3.7 [@pystdtypes] | lazy iterators [@pyfunctions] |
-| Java | mutable; `List.of` and `List.copyOf` give unmodifiable lists [@javalist] | depends on the class: unspecified for `HashMap`, sorted for `TreeMap` | lazy streams |
+| Java | mutable; `List.of` and `List.copyOf` give unmodifiable lists [@javalist] | depends on the class: unspecified for `HashMap`, sorted for `TreeMap` | lazy streams [@javastream] |
 | Go | mutable slices and maps | not specified, and not the same from one iteration to the next [@gospec] | loops |
 | Rust | `Vec`, `HashMap`, changed through `mut` | arbitrary for `HashMap` [@rusthashmap], sorted for `BTreeMap` | lazy iterators [@klabnik2023] |
 | Clojure | persistent, immutable, sharing structure [@hickey2008] | unordered `hash-map`, ordered `sorted-map` [@clojureds] | lazy sequences |
