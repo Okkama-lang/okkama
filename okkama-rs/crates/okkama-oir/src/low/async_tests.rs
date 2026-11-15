@@ -45,6 +45,8 @@ const GOLDENS: &[(&str, &str, &str)] = &[
     golden!("k1-cancel-unstarted"),
     golden!("k1-failure-view-escapes"),
     golden!("k1-nested-close-next-await"),
+    // #684: a nested close while a Future of an enclosing scope is live.
+    golden!("nested-close-outer-future"),
 ];
 const PLAIN: usize = 0;
 const NEVER: usize = 5;
@@ -640,4 +642,82 @@ fn the_shield_is_a_property_of_every_close() {
     assert_eq!(error.kind, text::DiagnosticKind::Syntax, "{error}");
     assert!(error.to_string().contains("unknown opcode"), "{error}");
     assert!(diagnostics(&parsed(golden)).is_empty());
+}
+
+const OUTER_FUTURE: usize = 19;
+
+/// The cache-state result of the `fut.new` whose owner is `owner`, in a Low body.
+fn cache_state_of(body: &Body, owner: ScopeId) -> Vec<ValueId> {
+    body.insts.iter().filter_map(|(_, inst)| match inst.op {
+        Operation::Async(AsyncOp::FutureNew { owner: scope, .. }) if scope == owner => Some(inst.results[1]),
+        _ => None,
+    }).collect()
+}
+
+/// #684, D16: a close settles exactly the duties of the scope it closes. In nested-close-outer-future the
+/// successful close of the branch block S2 settles the duty of g while the duty of f, owned by main's root
+/// scope, passes through it; the final close of main settles f.
+#[test]
+fn a_close_settles_only_the_duties_of_its_own_scope() {
+    let (name, coro, _) = GOLDENS[OUTER_FUTURE];
+    assert_eq!(name, "nested-close-outer-future");
+    let output = lowered(name, coro);
+    let main = function_id(&output, "main");
+    let body = output.functions.get(main).unwrap().body.as_ref().unwrap();
+    let closes = closes_of(body);
+    assert!(closes.iter().any(|(_, scope, failing, _)| {
+        !failing && output.scopes.get(*scope).unwrap().parent.is_some()
+    }));
+    for (close, scope, failing, _) in closes {
+        // S2 created g and S1 created f: a successful close schedules the one duty of its own scope and never the
+        // other; a failing close schedules at most that duty (a failure before the creation has none).
+        let schedule = body.cleanup.schedules.iter().find(|(_, schedule)| schedule.close == close).unwrap().1;
+        let created = cache_state_of(body, scope).len();
+        if failing {
+            assert!(schedule.holders.len() <= created, "{scope:?}");
+        } else {
+            assert_eq!(schedule.holders.len(), created, "{scope:?}");
+        }
+        let settles = body.insts.iter().filter(|(_, inst)| matches!(inst.op,
+            Operation::Cleanup(CleanupOp::Settle { cleanup, .. }) if close_of(body, cleanup) == close)).count();
+        assert_eq!(settles, schedule.holders.len(), "{scope:?}");
+    }
+}
+
+/// #684: the nested close of S2 that names the outer duty of f in its schedule is rejected at its begin: the
+/// begin takes only the duties of S2. Before #684 the begin took every live duty and accepted this schedule.
+#[test]
+fn a_nested_close_that_schedules_an_outer_duty_is_rejected() {
+    let (_, coro, _) = GOLDENS[OUTER_FUTURE];
+    let mut output = lower_cleanup(parsed(coro), &LowOptions::default()).unwrap();
+    let scopes = output.scopes.clone();
+    let main = function_id(&output, "main");
+    let body = function_mut(&mut output, "main");
+    let (nested, branch) = body.cleanup.closes.iter().find_map(|(id, close)| match close.source {
+        CleanupSource::Scope(scope) if !close.active_failure && scopes.get(scope).unwrap().parent.is_some() => {
+            Some((id, scope))
+        }
+        _ => None,
+    }).unwrap();
+    let root = scopes.get(branch).unwrap().parent.unwrap();
+    let begin = body.insts.iter().find_map(|(id, inst)| match inst.op {
+        Operation::Cleanup(CleanupOp::Begin { close, .. }) if close == nested => Some(id),
+        _ => None,
+    }).unwrap();
+    // The outer duty as the nested close sees it: g's holder and f's cache-state come back from the same resume
+    // of the await of g, which saved both.
+    let cache_type = body.values.get(cache_state_of(body, root)[0]).unwrap().ty;
+    let schedule = body.cleanup.schedules.iter().find(|(_, schedule)| schedule.close == nested).unwrap().0;
+    let own = body.cleanup.schedules.get(schedule).unwrap().holders.clone();
+    assert_eq!(own.len(), 1, "the nested close settles the duty of g");
+    let Definition::InstResult { inst: resume, .. } = body.values.get(own[0]).unwrap().def else {
+        panic!("g's duty reaches the nested close from the resume of its await");
+    };
+    let holder = body.insts.get(resume).unwrap().results.iter().copied().find(|value| {
+        *value != own[0] && body.values.get(*value).unwrap().ty == cache_type
+    }).expect("the resume of the await of g restores the duty of f");
+    body.cleanup.schedules.get_mut(schedule).unwrap().holders.push(holder);
+    let found = diagnostics(&output).into_iter().any(|diagnostic| diagnostic.rule == RuleId::B106
+        && diagnostic.primary.entity == EntityLocation::Instruction { function: main, instruction: begin });
+    assert!(found, "{:?}", diagnostics(&output));
 }

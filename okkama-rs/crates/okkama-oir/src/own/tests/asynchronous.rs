@@ -56,6 +56,8 @@ const WITNESSES: &[&str] = &[
     "k1-cancel-unstarted",
     "k1-failure-view-escapes",
     "k1-nested-close-next-await",
+    // #684: a nested close while a Future of an enclosing scope is live.
+    "nested-close-outer-future",
 ];
 
 #[test]

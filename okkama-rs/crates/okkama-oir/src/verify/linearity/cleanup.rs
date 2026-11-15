@@ -90,12 +90,19 @@ impl Engine<'_, '_> {
                 executed: BTreeSet::new(), services: BTreeSet::new(), had_services: false,
                 close: *close, plan: None,
             };
+            // #684: a close takes the service duties of the scope it closes; those of enclosing scopes pass.
+            let closing = match self.body.cleanup.closes.get(*close).map(|close| &close.source) {
+                Ok(CleanupSource::Scope(owner)) => Some(*owner),
+                _ => None,
+            };
             for (value, _) in self.body.values.iter() {
+                let held = &before.tokens[value.as_u32() as usize];
                 if before.availability[value.as_u32() as usize] == AVAILABLE
                     && matches!(super::super::later::value_type(self.module, self.body, value),
                         Some(Type::Frame(_) | Type::Service(ServiceType::TaskState | ServiceType::Pin
                             | ServiceType::Receipt | ServiceType::CacheState)))
-                    && let Some(key) = before.tokens[value.as_u32() as usize].service {
+                    && !closing.is_some_and(|scope| self.enclosing_duty(held, scope))
+                    && let Some(key) = held.service {
                     fact.services.insert(key);
                 }
             }

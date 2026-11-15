@@ -48,6 +48,8 @@ const GOLDENS: &[(&str, &str, &str)] = &[
     golden!("k1-cancel-unstarted"),
     golden!("k1-failure-view-escapes"),
     golden!("k1-nested-close-next-await"),
+    // #684: a nested close while a Future of an enclosing scope is live.
+    golden!("nested-close-outer-future"),
 ];
 
 /// Own → verify(own) → coro → verify(coro) (OIR-2 §12).
