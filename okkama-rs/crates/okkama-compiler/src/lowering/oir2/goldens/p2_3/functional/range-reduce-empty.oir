@@ -1,0 +1,61 @@
+oir 2 high
+module app
+requires core
+entry @main
+scope S0 action in @main
+scope S1 iteration in @main parent S0
+scope S2 block in @main parent S1
+
+func @main() -> int [entry] {
+    binding b0 "acc": int in S1
+    binding b1 "x": int in S1
+    boundary B0 lexical in S0
+    boundary B1 loop in S1
+    boundary B2 lexical in S2
+    ^b0 in S0 unwind ^b1:
+    %0: int = const 0
+    %1: int = const 0
+    %2: range = range.new %0, %1
+    %3: int = const 0
+    br ^b3(%0, %3)
+    ^b1(%4: failure) in S0:
+    raise %4
+    ^b2(%5: int) in S0 unwind ^b1:
+    discard %5
+    %6: int = const 0
+    want %6
+    [i7] exit.prepare return %6 at B0
+    result.exit edge normal(0), value %5, demand discard, prepare none
+    result.exit edge normal(0), value %6, demand want, prepare #7
+    ret %6
+    ^b3(%7: int, %8: int) in S0 unwind ^b1:
+    %9: bool = int.lt %7, %1
+    cond %9, ^b4, ^b5
+    ^b4 in S1 unwind ^b1:
+    bind %8, binding b0
+    bind %7, binding b1
+    br ^b8
+    ^b5 in S0 unwind ^b1:
+    br ^b2(%8)
+    ^b6(%10: int) in S0 unwind ^b1:
+    %11: int = const 1
+    %12: int = int.add %7, %11
+    br ^b3(%12, %10)
+    ^b7(%13: int, %14: int, %15: int, %16: int) in S1 unwind ^b1:
+    want %13
+    [i14] exit.prepare fallthrough %13 at B1
+    result.exit edge normal(0), value %13, demand want, prepare #14
+    br ^b6(%13)
+    ^b8 in S2 unwind ^b1:
+    %17: int = int.add %8, %7
+    want %17
+    [i17] exit.prepare fallthrough %17 at B2
+    want %8
+    [i19] exit.prepare fallthrough %8 at B2
+    want %7
+    [i21] exit.prepare fallthrough %7 at B2
+    result.exit edge normal(0), value %17, demand want, prepare #17
+    result.exit edge normal(0), value %8, demand want, prepare #19
+    result.exit edge normal(0), value %7, demand want, prepare #21
+    br ^b7(%17, %8, %7, %8)
+}

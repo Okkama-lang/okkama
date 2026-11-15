@@ -1,0 +1,24 @@
+oir 2 high
+module app
+requires core
+entry @main
+scope S0 action in @main
+
+func @main() -> int [entry] {
+    boundary B0 lexical in S0
+    ^b0 in S0 unwind ^b1:
+    %0: array<never> = array.new ty array<never>
+    %1: int = const 0
+    %2: int = array.len %0
+    %3: range = range.new %1, %2
+    %4: int = const 0
+    discard %4
+    %5: int = const 0
+    want %5
+    [i8] exit.prepare return %5 at B0
+    result.exit edge normal(0), value %4, demand discard, prepare none
+    result.exit edge normal(0), value %5, demand want, prepare #8
+    ret %5
+    ^b1(%6: failure) in S0:
+    raise %6
+}

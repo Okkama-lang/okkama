@@ -1,0 +1,26 @@
+module app;
+object Res {
+    Res();
+    destroy {
+    }
+}
+object Accumulator {
+    has items is @Res;
+    Accumulator(:items);
+    add() is ^Accumulator {
+        ^items = items + [Res()];
+    }
+}
+object Run {
+    Run();
+    run() is Accumulator {
+        let accumulated = Accumulator(items: []);
+        for [1, 2] -> n {
+            accumulated = accumulated.add();
+        }
+        accumulated;
+    }
+}
+main() is int {
+    0;
+}

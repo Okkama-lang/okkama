@@ -16,7 +16,7 @@ macro_rules! value {
 
 pub(super) fn is_builtin(op: &thir::Builtin) -> bool {
     use thir::Builtin as B;
-    matches!(op, B::ArraySize | B::ArraySlice | B::ArrayJoin | B::ArrayItem
+    matches!(op, B::ArrayOrdering | B::ArraySize | B::ArraySlice | B::ArrayJoin | B::ArrayItem
         | B::ArrayFirst | B::ArrayLast | B::ArrayContains(_) | B::ArrayIndexOf(_)
         | B::ArrayReversed | B::ArrayTake | B::ArrayDrop | B::ArrayReplaced
         | B::ArrayRemovedAt | B::MapSize | B::MapHas | B::MapKeys | B::MapValues)
@@ -42,6 +42,11 @@ impl BodyLowerer<'_, '_> {
     pub(super) fn collection_expr(&mut self, expr: &thir::Expr) -> Result<Option<ir::ValueId>> {
         use thir::ExprKind as E;
         let ty = self.ty(expr.ty.as_ref().expect("typed collection expression"), expr.span)?;
+        if let E::Call { callee: thir::Callee::Builtin { receiver, op: thir::Builtin::ArrayOrdering }, .. }
+            = &expr.kind {
+            let array = value!(self, receiver);
+            return self.array_ordering(array, expr.span).map(Some);
+        }
         let result = match &expr.kind {
             E::Array(parts) if parts.len() >= super::builders::STREAM_LIMIT
                 || parts.iter().any(|part| matches!(part, thir::ArrayPart::Range { .. })) => {

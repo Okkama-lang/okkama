@@ -1,0 +1,9 @@
+module app;
+main() is int {
+    let xs = [1, 2];
+    for xs -> x {
+        next if x == 1;
+        x;
+    }
+    0;
+}

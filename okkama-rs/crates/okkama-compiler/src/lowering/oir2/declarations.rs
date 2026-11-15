@@ -164,12 +164,17 @@ impl Declarations {
                 }
             });
         }
-        for object in &reg.objects {
+        for (index, object) in reg.objects.iter().enumerate() {
             if object.decl.is_none() || !object.params.is_empty() {
                 continue;
             }
             requested.extend(object.fields.iter().map(|field| (field.ty.clone(), field.span)));
-            for method in &object.methods {
+            for (method_index, method) in object.methods.iter().enumerate() {
+                if !analysis.bodies.iter().any(|body| body.owner == thir::BodyOwner::Method {
+                    object: ty::ObjectId(index), method: method_index,
+                }) {
+                    continue;
+                }
                 requested.extend(method.params.iter().map(|(_, ty)| (ty.clone(), source.program.module.span)));
                 requested.extend(method.result.iter().map(|ty| (ty.clone(), source.program.module.span)));
             }
@@ -297,9 +302,6 @@ impl Declarations {
                     let info = &reg.objects[object.0];
                     let decl = this.objects[&object];
                     let method_info = &info.methods[method];
-                    if method_info.variadic && info.module >= reg.root_start {
-                        return Err(LowerError::unsupported(body.span, "variadic action"));
-                    }
                     params.push(this.ty(&ty::Ty::object(object), body.span)?);
                     let attr = if method_info.successor {
                         ir::FunctionAttr::Successor(decl)
@@ -350,9 +352,6 @@ impl Declarations {
             };
             for param in &body.params {
                 let local = &body.locals[param.0];
-                if local.variadic && body.module >= reg.root_start {
-                    return Err(LowerError::unsupported(local.span, "variadic parameter"));
-                }
                 params.push(this.ty(&local.ty, local.span)?);
             }
             if let Some(given) = &primary_given
@@ -442,7 +441,7 @@ impl Declarations {
                     name: field.name.clone(),
                     ty: this.ty(&field.ty, field.span)?,
                     default: this.functions.get(&thir::BodyOwner::Default { object, field: index }).copied(),
-                    once: false,
+                    once: field.name.starts_with("$once"),
                 });
             }
             let defer_receiver = analysis.bodies.iter().any(|body| {

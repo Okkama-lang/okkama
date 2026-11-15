@@ -1,0 +1,13 @@
+module app;
+main() is int {
+    let offset = 2;
+    [1].map() -> x {
+        let ys = [x].map() -> y {
+            {
+                y + offset;
+            }
+        };
+        ys.size();
+    };
+    0;
+}

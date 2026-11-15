@@ -1,0 +1,8 @@
+module app;
+main() is int {
+    let xs = 0..0;
+    xs.find() -> x {
+        x > 0;
+    };
+    0;
+}

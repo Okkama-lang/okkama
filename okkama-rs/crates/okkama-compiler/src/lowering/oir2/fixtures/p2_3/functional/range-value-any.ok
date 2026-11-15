@@ -1,0 +1,8 @@
+module app;
+main() is int {
+    let xs = 1..=2;
+    xs.any() -> x {
+        x > 0;
+    };
+    0;
+}

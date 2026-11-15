@@ -1,0 +1,8 @@
+module app;
+main() is int {
+    let xs is %int:int = [:];
+    xs.filter() -> key, value {
+        key < value;
+    };
+    0;
+}

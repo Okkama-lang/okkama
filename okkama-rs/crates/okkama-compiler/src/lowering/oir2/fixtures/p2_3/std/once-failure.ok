@@ -1,0 +1,21 @@
+module app;
+enum Refused is Error = (no);
+object Cache {
+    has seed is int;
+    Cache(:seed);
+    compute() is int {
+        confirm seed > 0 else throw Refused.no;
+        seed;
+    }
+    answer() is int {
+        once let answer = self.compute();
+        answer;
+    }
+}
+main() is int {
+    try {
+        Cache(seed: 0).answer();
+    } catch e is Refused {
+        -1;
+    }
+}

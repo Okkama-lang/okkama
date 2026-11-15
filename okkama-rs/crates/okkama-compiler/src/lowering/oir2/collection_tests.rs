@@ -81,21 +81,6 @@ fn oir2_c4_frontend_negatives() {
     }
 }
 
-#[test]
-fn oir2_c4_later_collection_features_remain_unsupported() {
-    for (body, message) in [
-        ("for [1, 2] -> x { x; } 0;", "C6"),
-        ("[1, 2].map() -> x { x; }; 0;", "C7"),
-    ] {
-        let source = format!("module app; main() is int {{ {body} }}");
-        with_analysis(&source, |analysis| {
-            let error = super::lower_to_oir2(analysis).unwrap_err();
-            assert!(matches!(error, super::LowerError::Unsupported { span, .. } if !span.is_empty()));
-            assert!(error.to_string().contains(message), "{error}");
-        });
-    }
-}
-
 const GOLDENS: &[&str] = &[
     "array-ops",
     "bounds",

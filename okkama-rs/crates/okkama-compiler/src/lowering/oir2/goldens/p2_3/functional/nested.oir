@@ -1,0 +1,167 @@
+oir 2 high
+module app
+requires core
+entry @main
+scope S0 action in @main
+scope S1 iteration in @main parent S0
+scope S2 block in @main parent S1
+scope S3 iteration in @main parent S2
+scope S4 block in @main parent S3
+scope S5 block in @main parent S4
+
+func @main() -> int [entry] {
+    binding b0 "offset": int in S0
+    binding b1 "x": int in S1
+    binding b2 "y": int in S3
+    binding b3 "ys": array<int> in S2
+    boundary B0 lexical in S0
+    boundary B1 loop in S1
+    boundary B2 loop in S3
+    boundary B3 lexical in S5
+    boundary B4 lexical in S4
+    boundary B5 lexical in S2
+    ^b0 in S0 unwind ^b1:
+    %0: int = const 2
+    bind %0, binding b0
+    %1: int = const 1
+    %2: array<int> = array.new [%1], ty array<int>
+    %3: int = const 0
+    %4: int = array.len %2
+    %5: range = range.new %3, %4
+    %6: builder<int> = builder.new element int
+    br ^b3(%3, %0, %6)
+    ^b1(%7: failure) in S0:
+    raise %7
+    ^b2(%8: int, %9: builder<int>) in S0 unwind ^b27(%9):
+    %10: array<int> = builder.finish %9
+    discard %10
+    %11: int = const 0
+    want %11
+    [i12] exit.prepare return %11 at B0
+    result.exit edge normal(0), value %10, demand discard, prepare none
+    result.exit edge normal(0), value %11, demand want, prepare #12
+    ret %11
+    ^b3(%12: int, %13: int, %14: builder<int>) in S0 unwind ^b1:
+    %15: bool = int.lt %12, %4
+    cond %15, ^b4, ^b5
+    ^b4 in S1 unwind ^b1:
+    br ^b7(%13, %14)
+    ^b5 in S0 unwind ^b1:
+    br ^b2(%13, %14)
+    ^b6(%16: int, %17: builder<int>) in S0 unwind ^b1:
+    %18: int = const 1
+    %19: int = int.add %12, %18
+    br ^b3(%19, %16, %17)
+    ^b7(%20: int, %21: builder<int>) in S1 unwind ^b8(%21):
+    %22: int = array.get %2, %12
+    bind %22, binding b1
+    br ^b10
+    ^b8(%23: builder<int>, %24: failure) in S1 unwind ^b1:
+    builder.abandon %23
+    raise %24
+    ^b9(%25: int, %26: int, %27: int, %28: builder<int>) in S1 unwind ^b26(%28):
+    %29: builder<int> = builder.push %28, %25
+    want %26
+    [i21] exit.prepare fallthrough %26 at B1
+    result.exit edge normal(0), value %26, demand want, prepare #21
+    br ^b6(%26, %29)
+    ^b10 in S2 unwind ^b1:
+    %30: array<int> = array.new [%22], ty array<int>
+    %31: int = const 0
+    %32: int = array.len %30
+    br ^b11(%20, %22, %21)
+    ^b11(%33: int, %34: int, %35: builder<int>) in S2 unwind ^b12(%35):
+    %36: range = range.new %31, %32
+    %37: builder<int> = builder.new element int
+    br ^b14(%31, %33, %34, %35, %37)
+    ^b12(%38: builder<int>, %39: failure) in S2 unwind ^b1:
+    builder.abandon %38
+    raise %39
+    ^b13(%40: int, %41: int, %42: builder<int>, %43: builder<int>) in S2 unwind ^b25(%42, %43):
+    %44: array<int> = builder.finish %43
+    bind %44, binding b3
+    %45: int = array.len %44
+    want %45
+    [i32] exit.prepare fallthrough %45 at B5
+    want %40
+    [i34] exit.prepare fallthrough %40 at B5
+    want %41
+    [i36] exit.prepare fallthrough %41 at B5
+    result.exit edge normal(0), value %45, demand want, prepare #32
+    result.exit edge normal(0), value %40, demand want, prepare #34
+    result.exit edge normal(0), value %41, demand want, prepare #36
+    br ^b9(%45, %40, %41, %42)
+    ^b14(%46: int, %47: int, %48: int, %49: builder<int>, %50: builder<int>) in S2 unwind ^b1:
+    %51: bool = int.lt %46, %32
+    cond %51, ^b15, ^b16
+    ^b15 in S3 unwind ^b1:
+    br ^b18(%47, %48, %49, %50)
+    ^b16 in S2 unwind ^b1:
+    br ^b13(%47, %48, %49, %50)
+    ^b17(%52: int, %53: int, %54: builder<int>, %55: builder<int>) in S2 unwind ^b1:
+    %56: int = const 1
+    %57: int = int.add %46, %56
+    br ^b14(%57, %52, %53, %54, %55)
+    ^b18(%58: int, %59: int, %60: builder<int>, %61: builder<int>) in S3 unwind ^b19(%60, %61):
+    %62: int = array.get %30, %46
+    bind %62, binding b2
+    br ^b21
+    ^b19(%63: builder<int>, %64: builder<int>, %65: failure) in S3 unwind ^b1:
+    builder.abandon %64
+    builder.abandon %63
+    raise %65
+    ^b20(%66: int, %67: int, %68: int, %69: int, %70: builder<int>, %71: builder<int>) in S3 unwind ^b24(%70, %71):
+    %72: builder<int> = builder.push %71, %66
+    want %67
+    [i46] exit.prepare fallthrough %67 at B2
+    want %68
+    [i48] exit.prepare fallthrough %68 at B2
+    result.exit edge normal(0), value %67, demand want, prepare #46
+    result.exit edge normal(0), value %68, demand want, prepare #48
+    br ^b17(%67, %68, %70, %72)
+    ^b21 in S4 unwind ^b1:
+    br ^b23
+    ^b22(%73: int, %74: int, %75: int, %76: int, %77: builder<int>, %78: builder<int>) in S4 unwind ^b1:
+    want %73
+    [i50] exit.prepare fallthrough %73 at B4
+    want %74
+    [i52] exit.prepare fallthrough %74 at B4
+    want %75
+    [i54] exit.prepare fallthrough %75 at B4
+    want %76
+    [i56] exit.prepare fallthrough %76 at B4
+    result.exit edge normal(0), value %73, demand want, prepare #50
+    result.exit edge normal(0), value %74, demand want, prepare #52
+    result.exit edge normal(0), value %75, demand want, prepare #54
+    result.exit edge normal(0), value %76, demand want, prepare #56
+    br ^b20(%73, %74, %75, %76, %77, %78)
+    ^b23 in S5 unwind ^b1:
+    %79: int = int.add %62, %58
+    want %79
+    [i59] exit.prepare fallthrough %79 at B3
+    want %58
+    [i61] exit.prepare fallthrough %58 at B3
+    want %59
+    [i63] exit.prepare fallthrough %59 at B3
+    want %62
+    [i65] exit.prepare fallthrough %62 at B3
+    result.exit edge normal(0), value %79, demand want, prepare #59
+    result.exit edge normal(0), value %58, demand want, prepare #61
+    result.exit edge normal(0), value %59, demand want, prepare #63
+    result.exit edge normal(0), value %62, demand want, prepare #65
+    br ^b22(%79, %58, %59, %62, %60, %61)
+    ^b24(%80: builder<int>, %81: builder<int>, %82: failure) in S3 unwind ^b1:
+    builder.abandon %81
+    builder.abandon %80
+    raise %82
+    ^b25(%83: builder<int>, %84: builder<int>, %85: failure) in S2 unwind ^b1:
+    builder.abandon %84
+    builder.abandon %83
+    raise %85
+    ^b26(%86: builder<int>, %87: failure) in S1 unwind ^b1:
+    builder.abandon %86
+    raise %87
+    ^b27(%88: builder<int>, %89: failure) in S0 unwind ^b1:
+    builder.abandon %88
+    raise %89
+}

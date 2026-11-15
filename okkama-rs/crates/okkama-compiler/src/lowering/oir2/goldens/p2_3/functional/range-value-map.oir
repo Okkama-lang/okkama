@@ -1,0 +1,74 @@
+oir 2 high
+module app
+requires core
+entry @main
+scope S0 action in @main
+scope S1 iteration in @main parent S0
+scope S2 block in @main parent S1
+
+func @main() -> int [entry] {
+    binding b0 "xs": range in S0
+    binding b1 "x": int in S1
+    boundary B0 lexical in S0
+    boundary B1 loop in S1
+    boundary B2 lexical in S2
+    ^b0 in S0 unwind ^b1:
+    %0: int = const 1
+    %1: int = const 2
+    %2: range = range.new %0, %1, inclusive true
+    bind %2, binding b0
+    %3: int = range.start %2
+    %4: int = range.len %2
+    %5: int = int.add %3, %4
+    %6: range = range.new %3, %5
+    %7: builder<int> = builder.new element int
+    br ^b3(%3, %2, %7)
+    ^b1(%8: failure) in S0:
+    raise %8
+    ^b2(%9: range, %10: builder<int>) in S0 unwind ^b10(%10):
+    %11: array<int> = builder.finish %10
+    discard %11
+    %12: int = const 0
+    want %12
+    [i13] exit.prepare return %12 at B0
+    result.exit edge normal(0), value %11, demand discard, prepare none
+    result.exit edge normal(0), value %12, demand want, prepare #13
+    ret %12
+    ^b3(%13: int, %14: range, %15: builder<int>) in S0 unwind ^b1:
+    %16: bool = int.lt %13, %5
+    cond %16, ^b4, ^b5
+    ^b4 in S1 unwind ^b1:
+    bind %13, binding b1
+    br ^b8
+    ^b5 in S0 unwind ^b1:
+    br ^b2(%14, %15)
+    ^b6(%17: range, %18: builder<int>) in S0 unwind ^b1:
+    %19: int = const 1
+    %20: int = int.add %13, %19
+    br ^b3(%20, %17, %18)
+    ^b7(%21: int, %22: range, %23: int, %24: builder<int>) in S1 unwind ^b9(%24):
+    %25: builder<int> = builder.push %24, %21
+    want %22
+    [i20] exit.prepare fallthrough %22 at B1
+    result.exit edge normal(0), value %22, demand want, prepare #20
+    br ^b6(%22, %25)
+    ^b8 in S2 unwind ^b1:
+    %26: int = const 1
+    %27: int = int.add %13, %26
+    want %27
+    [i24] exit.prepare fallthrough %27 at B2
+    want %14
+    [i26] exit.prepare fallthrough %14 at B2
+    want %13
+    [i28] exit.prepare fallthrough %13 at B2
+    result.exit edge normal(0), value %27, demand want, prepare #24
+    result.exit edge normal(0), value %14, demand want, prepare #26
+    result.exit edge normal(0), value %13, demand want, prepare #28
+    br ^b7(%27, %14, %13, %15)
+    ^b9(%28: builder<int>, %29: failure) in S1 unwind ^b1:
+    builder.abandon %28
+    raise %29
+    ^b10(%30: builder<int>, %31: failure) in S0 unwind ^b1:
+    builder.abandon %30
+    raise %31
+}

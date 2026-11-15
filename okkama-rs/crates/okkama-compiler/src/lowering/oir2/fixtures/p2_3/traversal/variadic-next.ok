@@ -1,0 +1,14 @@
+module app;
+object Walk {
+    Walk();
+    run(xs is ...int) is int {
+        for xs... -> x {
+            next if x == 1;
+            x;
+        }
+        0;
+    }
+}
+main() is int {
+    Walk().run(1, 2);
+}

@@ -1,0 +1,19 @@
+module app;
+object Res {
+    Res();
+    destroy {
+    }
+}
+object Walk {
+    Walk();
+    result(xs is @int, borrowed is Res) is Res {
+        let carried = borrowed;
+        for xs -> n {
+            next if n == 0;
+            carried;
+        }
+    }
+}
+main() is int {
+    0;
+}

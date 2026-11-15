@@ -1,0 +1,15 @@
+oir 2 high
+module keys
+object Key {
+    field rank: int
+    field share: rat
+}
+scope S action in @f
+func @f(%map: map<Key,int>) -> void {
+^entry in S unwind ^failed:
+    %buffer: mbuilder<Key,int> = mbuilder.new key Key, value int
+    mbuilder.abandon %buffer
+    ret
+^failed(%failure: failure) in S:
+    raise %failure
+}

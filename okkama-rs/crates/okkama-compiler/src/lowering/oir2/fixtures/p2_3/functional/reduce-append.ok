@@ -1,0 +1,8 @@
+module app;
+main() is int {
+    let initial is @int = [];
+    [1, 2].reduce(initial) -> acc, x {
+        acc + [x];
+    };
+    0;
+}

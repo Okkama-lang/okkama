@@ -1,0 +1,17 @@
+module app;
+import "collections/iteration" take Cursor, Iterating, Batching;
+object Walk does Batching<int> {
+    has values is @int;
+    Walk(:values);
+    batch() is @int {
+        values;
+    }
+}
+main() is int {
+    for Walk(values: [1]) -> outer {
+        for Walk(values: [2]) -> inner {
+            last;
+        }
+        last outer;
+    }
+}

@@ -1,0 +1,75 @@
+oir 2 high
+module app
+requires core
+entry @main
+
+object "collections/frequencies::Frequency<string>" {
+    field origin: str
+    field quantity: int
+}
+
+object error.InvalidArgument.because {
+    field reason: str
+}
+
+variant error.InvalidArgument is Error = (because: error.InvalidArgument.because)
+scope S0 action in @main
+scope S1 action in "@collections/frequencies::Frequency<string>.amount#overload()"
+scope S2 action in "@collections/frequencies::Frequency<string>.new#ctor(item:string,amount:int)"
+
+func @main() -> int [entry] {
+    boundary B0 lexical in S0
+    ^b0 in S0 unwind ^b1:
+    %0: str = const "blue"
+    %1: int = const 2
+    [i2] %2: "collections/frequencies::Frequency<string>" = call "@collections/frequencies::Frequency<string>.new#ctor(item:string,amount:int)"(%0, %1)
+    [i3] %3: int = call "@collections/frequencies::Frequency<string>.amount#overload()"(%2)
+    want %3
+    [i5] exit.prepare return %3 at B0
+    result.exit edge normal(0), value %3, demand want, prepare #5
+    high.effects at #2 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #3 failures [thrown, program, panic, native, cancelled], suspends true
+    ret %3
+    ^b1(%4: failure) in S0:
+    raise %4
+}
+
+func "@collections/frequencies::Frequency<string>.new#ctor(item:string,amount:int)"(%0: str, %1: int) -> "collections/frequencies::Frequency<string>" [ctor "collections/frequencies::Frequency<string>"] {
+    binding b0 "item": str in S2
+    binding b1 "amount": int in S2
+    boundary B0 lexical in S2
+    ^b0 in S2 unwind ^b1:
+    %2: str = undef ty str
+    %3: int = undef ty int
+    bind %0, binding b0
+    bind %1, binding b1
+    %4: int = const 0
+    %5: bool = int.gt %1, %4
+    cond %5, ^b2(%0, %1, %2, %3), ^b3(%0, %1, %2, %3)
+    ^b1(%6: failure) in S2:
+    raise %6
+    ^b2(%7: str, %8: int, %9: str, %10: int) in S2 unwind ^b1:
+    stage %7, action S2, field field_ref(declaration="collections/frequencies::Frequency<string>", index=0)
+    stage %8, action S2, field field_ref(declaration="collections/frequencies::Frequency<string>", index=1)
+    %11: "collections/frequencies::Frequency<string>" = obj.new "collections/frequencies::Frequency<string>" { origin: %7, quantity: %8 }
+    want %11
+    [i10] exit.prepare return %11 at B0
+    result.exit edge normal(0), value %11, demand want, prepare #10
+    ret %11
+    ^b3(%12: str, %13: int, %14: str, %15: int) in S2 unwind ^b1:
+    %16: str = const "frequency amount must be positive"
+    %17: error.InvalidArgument = variant.new [%16], ty error.InvalidArgument, case 0
+    throw %17
+}
+
+func "@collections/frequencies::Frequency<string>.amount#overload()"(%0: "collections/frequencies::Frequency<string>") -> int [method "collections/frequencies::Frequency<string>"] {
+    boundary B0 lexical in S1
+    ^b0 in S1 unwind ^b1:
+    %1: int = obj.get %0, quantity
+    want %1
+    [i2] exit.prepare return %1 at B0
+    result.exit edge normal(0), value %1, demand want, prepare #2
+    ret %1
+    ^b1(%2: failure) in S1:
+    raise %2
+}

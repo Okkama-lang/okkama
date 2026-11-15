@@ -1,0 +1,7 @@
+module app;
+main() is int {
+    [].reduce(0) -> acc, x {
+        acc;
+    };
+    0;
+}

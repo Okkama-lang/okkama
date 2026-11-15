@@ -1,0 +1,9 @@
+module app;
+main() is int {
+    let m = ["z": 1, "a": 2];
+    for m.values() -> x {
+        last if x == 1;
+        x;
+    }
+    0;
+}

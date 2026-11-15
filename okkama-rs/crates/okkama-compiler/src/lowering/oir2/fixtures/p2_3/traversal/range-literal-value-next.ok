@@ -1,0 +1,7 @@
+module app;
+main() is int {
+    for 1..=2 -> x {
+        next if x == 1;
+        x;
+    }
+}

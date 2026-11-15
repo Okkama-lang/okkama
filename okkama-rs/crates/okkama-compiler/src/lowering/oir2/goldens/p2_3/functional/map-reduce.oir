@@ -1,0 +1,81 @@
+oir 2 high
+module app
+requires core
+entry @main
+scope S0 action in @main
+scope S1 iteration in @main parent S0
+scope S2 block in @main parent S1
+
+func @main() -> int [entry] {
+    binding b0 "xs": map<int, int> in S0
+    binding b1 "acc": int in S1
+    binding b2 "key": int in S1
+    binding b3 "value": int in S1
+    boundary B0 lexical in S0
+    boundary B1 loop in S1
+    boundary B2 lexical in S2
+    ^b0 in S0 unwind ^b1:
+    %0: int = const 1
+    %1: int = const 2
+    %2: int = const 3
+    %3: int = const 4
+    %4: map<int, int> = map.new entries [(%0, %1), (%2, %3)], ty map<int, int>
+    bind %4, binding b0
+    %5: int = const 0
+    %6: int = map.len %4
+    %7: range = range.new %5, %6
+    %8: int = const 0
+    br ^b3(%5, %4, %8)
+    ^b1(%9: failure) in S0:
+    raise %9
+    ^b2(%10: map<int, int>, %11: int) in S0 unwind ^b1:
+    discard %11
+    %12: int = const 0
+    want %12
+    [i13] exit.prepare return %12 at B0
+    result.exit edge normal(0), value %11, demand discard, prepare none
+    result.exit edge normal(0), value %12, demand want, prepare #13
+    ret %12
+    ^b3(%13: int, %14: map<int, int>, %15: int) in S0 unwind ^b1:
+    %16: bool = int.lt %13, %6
+    cond %16, ^b4, ^b5
+    ^b4 in S1 unwind ^b1:
+    %17: int = map.key_at %4, %13
+    %18: int = map.value_at %4, %13
+    bind %15, binding b1
+    bind %17, binding b2
+    bind %18, binding b3
+    br ^b8
+    ^b5 in S0 unwind ^b1:
+    br ^b2(%14, %15)
+    ^b6(%19: map<int, int>, %20: int) in S0 unwind ^b1:
+    %21: int = const 1
+    %22: int = int.add %13, %21
+    br ^b3(%22, %19, %20)
+    ^b7(%23: int, %24: map<int, int>, %25: int, %26: int, %27: int, %28: int) in S1 unwind ^b1:
+    want %24
+    [i23] exit.prepare fallthrough %24 at B1
+    want %23
+    [i25] exit.prepare fallthrough %23 at B1
+    result.exit edge normal(0), value %24, demand want, prepare #23
+    result.exit edge normal(0), value %23, demand want, prepare #25
+    br ^b6(%24, %23)
+    ^b8 in S2 unwind ^b1:
+    %29: int = int.add %15, %18
+    want %29
+    [i28] exit.prepare fallthrough %29 at B2
+    want %14
+    [i30] exit.prepare fallthrough %14 at B2
+    want %15
+    [i32] exit.prepare fallthrough %15 at B2
+    want %17
+    [i34] exit.prepare fallthrough %17 at B2
+    want %18
+    [i36] exit.prepare fallthrough %18 at B2
+    result.exit edge normal(0), value %29, demand want, prepare #28
+    result.exit edge normal(0), value %14, demand want, prepare #30
+    result.exit edge normal(0), value %15, demand want, prepare #32
+    result.exit edge normal(0), value %17, demand want, prepare #34
+    result.exit edge normal(0), value %18, demand want, prepare #36
+    br ^b7(%29, %14, %15, %17, %18, %15)
+}

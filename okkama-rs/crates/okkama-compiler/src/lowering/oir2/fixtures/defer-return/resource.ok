@@ -1,0 +1,21 @@
+module app;
+object Res {
+    has name is string;
+    Res(:name);
+    destroy { }
+}
+object Work {
+    Work();
+    run() is Res {
+        defer if true {
+            let local = Res(name: "local");
+            defer local;
+            return Res(name: "replacement");
+        } else { };
+        return Res(name: "original");
+    }
+}
+main() is int {
+    let result = Work().run();
+    0;
+}

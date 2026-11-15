@@ -1,0 +1,20 @@
+module app;
+object Res {
+    Res();
+    destroy { }
+}
+object Work {
+    Work();
+    run() is Res {
+        let a = Res();
+        let b = Res();
+        defer if true {
+            return b;
+        } else { };
+        return a;
+    }
+}
+main() is int {
+    Work().run();
+    0;
+}

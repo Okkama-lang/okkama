@@ -1,0 +1,11 @@
+module app;
+object Box<T> {
+    has value is T;
+    Box(:value);
+}
+main() is int {
+    [Box(value: 1)].map() -> x {
+        x;
+    };
+    0;
+}

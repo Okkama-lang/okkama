@@ -1,0 +1,14 @@
+module app;
+object Work {
+    Work();
+    run() is void {
+        defer if true {
+            return;
+        } else { };
+        return;
+    }
+}
+main() is int {
+    Work().run();
+    0;
+}

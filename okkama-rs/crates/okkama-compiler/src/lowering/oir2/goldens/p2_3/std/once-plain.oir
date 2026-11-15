@@ -1,0 +1,89 @@
+oir 2 high
+module app
+requires core
+entry @main
+
+object app.Cache {
+    field seed: int
+    field $once0_0: "app::Maybe<int>" once
+}
+
+variant "app::Maybe<int>" = (some: "app::Maybe<int>.some", none: "app::Maybe<int>.none")
+
+object "app::Maybe<int>.some" {
+    field value: int
+}
+
+object "app::Maybe<int>.none" {
+}
+scope S0 action in @app.Cache.answer#0
+scope S1 action in @main
+scope S2 action in @app.Cache.new#0
+
+func @app.Cache.new#0(%0: int) -> app.Cache [ctor app.Cache] {
+    binding b0 "seed": int in S2
+    boundary B0 lexical in S2
+    ^b0 in S2 unwind ^b1:
+    %1: int = undef ty int
+    %2: "app::Maybe<int>" = variant.new ty "app::Maybe<int>", case 1
+    stage %2, action S2, field field_ref(declaration=app.Cache, index=1)
+    stage %0, action S2, field field_ref(declaration=app.Cache, index=0)
+    bind %0, binding b0
+    %3: app.Cache = obj.new app.Cache { seed: %0, $once0_0: %2 }
+    want %3
+    [i7] exit.prepare return %3 at B0
+    result.exit edge normal(0), value %3, demand want, prepare #7
+    ret %3
+    ^b1(%4: failure) in S2:
+    raise %4
+}
+
+func @app.Cache.answer#0(%0: app.Cache) -> int [method app.Cache] {
+    binding b0 "answer": int in S0
+    boundary B0 lexical in S0
+    ^b0 in S0 unwind ^b1:
+    %1: "app::Maybe<int>" = once.load %0, $once0_0
+    %2: int = variant.tag %1
+    %3: int = const 0
+    %4: bool = int.eq %2, %3
+    cond %4, ^b2, ^b3
+    ^b1(%5: failure) in S0:
+    raise %5
+    ^b2 in S0 unwind ^b1:
+    %6: int = variant.get %1, case 0, field field_ref(declaration="app::Maybe<int>.some", index=0)
+    br ^b4(%6)
+    ^b3 in S0 unwind ^b1:
+    %7: int = obj.get %0, seed
+    %8: int = const 1
+    %9: int = int.add %7, %8
+    %10: "app::Maybe<int>" = variant.new [%9], ty "app::Maybe<int>", case 0
+    once.store %0, $once0_0, %10
+    br ^b4(%9)
+    ^b4(%11: int) in S0 unwind ^b1:
+    bind %11, binding b0
+    want %11
+    [i12] exit.prepare return %11 at B0
+    result.exit edge normal(0), value %11, demand want, prepare #12
+    ret %11
+}
+
+func @main() -> int [entry] {
+    binding b0 "cache": app.Cache in S1
+    boundary B0 lexical in S1
+    ^b0 in S1 unwind ^b1:
+    %0: int = const 4
+    [i1] %1: app.Cache = call @app.Cache.new#0(%0)
+    bind %1, binding b0
+    [i3] %2: int = call @app.Cache.answer#0(%1)
+    [i4] %3: int = call @app.Cache.answer#0(%1)
+    %4: int = int.add %2, %3
+    want %4
+    [i7] exit.prepare return %4 at B0
+    result.exit edge normal(0), value %4, demand want, prepare #7
+    high.effects at #1 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #3 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #4 failures [thrown, program, panic, native, cancelled], suspends true
+    ret %4
+    ^b1(%5: failure) in S1:
+    raise %5
+}

@@ -1,0 +1,17 @@
+module app;
+object Res {
+    Res();
+    destroy {
+    }
+}
+object Walk {
+    Walk();
+    result(xs is @int) is Res {
+        for xs -> n {
+            last Res();
+        }
+    }
+}
+main() is int {
+    0;
+}

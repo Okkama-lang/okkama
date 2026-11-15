@@ -1,0 +1,10 @@
+module app;
+main() is int {
+    defer if true {
+        defer if true {
+            return 7;
+        } else { };
+        2;
+    } else { };
+    return 1;
+}

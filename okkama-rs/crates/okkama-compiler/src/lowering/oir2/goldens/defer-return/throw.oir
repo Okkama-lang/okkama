@@ -1,0 +1,117 @@
+oir 2 high
+module app
+requires core
+entry @main
+
+enum app.Stop is Error = (now)
+scope S0 action in @main
+scope S1 action in @main.defer#0
+scope S2 branch in @main.defer#0 parent S1
+scope S3 branch in @main.defer#0 parent S1
+scope S4 action in @main.defer#1
+scope S5 branch in @main.defer#1 parent S4
+scope S6 branch in @main.defer#1 parent S4
+scope S7 branch in @main.defer#1 parent S5
+scope S8 branch in @main.defer#1 parent S5
+scope S9 action in @main.defer#2
+
+func @main() -> int [entry] {
+    binding b0 "fails": bool in S0
+    boundary B0 lexical in S0
+    ^b0 in S0 unwind ^b1:
+    %0: bool = const true
+    bind %0, binding b0
+    defer.register S0, action defer_action(function=@main.defer#0, replacements=[defer_registration(label="return", kind=return, boundary=B0)])
+    br ^b2(%0)
+    ^b1(%1: failure) in S0:
+    raise %1
+    ^b2(%2: bool) in S0 unwind ^b3:
+    defer.register S0, action defer_action(function=@main.defer#1, bindings=[b0], replacements=[defer_registration(label="return", kind=return, boundary=B0)])
+    br ^b4(%2)
+    ^b3(%3: failure) in S0:
+    raise %3
+    ^b4(%4: bool) in S0 unwind ^b5:
+    %5: int = const 1
+    want %5
+    [i6] exit.prepare return %5 at B0
+    result.exit edge normal(0), value %5, demand want, prepare #6
+    ret %5
+    ^b5(%6: failure) in S0:
+    raise %6
+}
+
+func @main.defer#0() -> void [defer(replacements=[defer_label(label="return", result=some(int))])] {
+    boundary B0 lexical in S1
+    boundary B1 lexical in S3
+    selection s0: selection = union([])
+    ^b0 in S1 unwind ^b1:
+    %0: bool = const true
+    cond %0, ^b3, ^b4
+    ^b1(%1: failure) in S1:
+    raise %1
+    ^b2 in S1 unwind ^b1:
+    ret defer continue
+    ^b3 in S2 unwind ^b1:
+    %2: int = const 9
+    want %2
+    [i3] exit.prepare return %2 at B0
+    result.exit edge normal(0), value %2, demand want, prepare #3
+    ret defer replace return, %2
+    ^b4 in S3 unwind ^b1:
+    exit.prepare fallthrough select s0 at B1
+    br ^b2
+}
+
+func @main.defer#1(%0: bool) -> void [defer(replacements=[defer_label(label="return", result=some(int))])] {
+    binding b0 "fails": bool in S4
+    boundary B0 lexical in S4
+    boundary B1 lexical in S8
+    boundary B2 lexical in S6
+    ^b0 in S4 unwind ^b1:
+    bind %0, binding b0
+    %1: bool = const true
+    cond %1, ^b3(%0), ^b4(%0)
+    ^b1(%2: failure) in S4:
+    raise %2
+    ^b2(%3: bool) in S4 unwind ^b1:
+    ret defer continue
+    ^b3(%4: bool) in S5 unwind ^b1:
+    defer.register S5, action defer_action(function=@main.defer#2)
+    br ^b5(%4)
+    ^b4(%5: bool) in S6 unwind ^b1:
+    want %5
+    [i4] exit.prepare fallthrough %5 at B2
+    result.exit edge normal(0), value %5, demand want, prepare #4
+    br ^b2(%5)
+    ^b5(%6: bool) in S5 unwind ^b6:
+    cond %6, ^b8(%6), ^b9(%6)
+    ^b6(%7: failure) in S4:
+    raise %7
+    ^b7(%8: bool) in S5 unwind ^b6:
+    %9: int = const 7
+    want %9
+    [i7] exit.prepare return %9 at B0
+    result.exit edge normal(0), value %9, demand want, prepare #7
+    ret defer replace return, %9
+    ^b8(%10: bool) in S7 unwind ^b6:
+    %11: app.Stop = enum.case app.Stop, case 0
+    throw %11
+    ^b9(%12: bool) in S8 unwind ^b6:
+    want %12
+    [i10] exit.prepare fallthrough %12 at B1
+    result.exit edge normal(0), value %12, demand want, prepare #10
+    br ^b7(%12)
+}
+
+func @main.defer#2() -> void [defer()] {
+    boundary B0 lexical in S9
+    ^b0 in S9 unwind ^b1:
+    %0: int = const 1
+    discard %0
+    result.exit edge normal(0), value %0, demand discard, prepare none
+    br ^b2
+    ^b1(%1: failure) in S9:
+    raise %1
+    ^b2 in S9 unwind ^b1:
+    ret defer continue
+}

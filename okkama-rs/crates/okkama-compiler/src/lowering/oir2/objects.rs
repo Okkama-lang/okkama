@@ -29,7 +29,7 @@ impl BodyLowerer<'_, '_> {
         Ok(self.context.objects[&object])
     }
 
-    fn layout(&self) -> Result<Vec<ir::Field>> {
+    pub(super) fn layout(&self) -> Result<Vec<ir::Field>> {
         let decl = self.declaration()?;
         let ir::DeclarationKind::Object { fields, .. } = &self.b.module().declarations.get(decl)?.kind else {
             return Err(LowerError::invalid(self.source.span, "object owner has no fields"));
@@ -37,7 +37,7 @@ impl BodyLowerer<'_, '_> {
         Ok(fields.clone())
     }
 
-    fn field(&self, index: usize) -> Result<ir::FieldRef> {
+    pub(super) fn field(&self, index: usize) -> Result<ir::FieldRef> {
         Ok(ir::FieldRef { declaration: self.declaration()?, index: index as u32 })
     }
 
@@ -48,12 +48,18 @@ impl BodyLowerer<'_, '_> {
         let fields = self.layout()?;
         let count = pending_index(&fields).unwrap_or(fields.len());
         for (index, field) in fields[..count].iter().enumerate() {
-            let value = if self.is_constructor() {
+            let value = if field.once {
+                self.core(ir::CoreOp::VariantNew { ty: field.ty, case: 1, fields: vec![], packet: None })?
+            } else if self.is_constructor() {
                 self.core(ir::CoreOp::Undef { ty: field.ty })?
             } else {
                 self.read_field(index)?
             };
-            self.env[self.field_base + index] = Some(value);
+            if field.once {
+                self.write_field(index, value)?;
+            } else {
+                self.env[self.field_base + index] = Some(value);
+            }
         }
         Ok(())
     }

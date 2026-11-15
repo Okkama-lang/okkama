@@ -1,0 +1,121 @@
+oir 2 high
+module app
+requires core
+entry @main
+
+role Error [builtin] {
+    text() -> str
+}
+scope S0 action in @main
+scope S1 try in @main parent S0
+scope S2 iteration in @main parent S1
+scope S3 block in @main parent S2
+scope S4 catch in @main parent S0
+
+func @main() -> int [entry] {
+    binding b0 "x": int in S2
+    binding b1 "failure": Error in S4
+    boundary B0 lexical in S0
+    boundary B1 loop in S2
+    boundary B2 lexical in S3
+    boundary B3 lexical in S1
+    boundary B4 lexical in S4
+    selection s0: selection = union([])
+    ^b0 in S0 unwind ^b1:
+    br ^b4
+    ^b1(%0: failure) in S0:
+    raise %0
+    ^b2(%1: int) in S0 unwind ^b1:
+    want %1
+    [i1] exit.prepare return %1 at B0
+    result.exit edge normal(0), value %1, demand want, prepare #1
+    ret %1
+    ^b3(%2: failure) in S0 unwind ^b1:
+    catch %2 is Error, ^b22(%2, $value), ^b23(%2)
+    ^b4 in S1 unwind ^b3:
+    %3: int = const 1
+    %4: int = const 2
+    %5: array<int> = array.new [%3, %4], ty array<int>
+    %6: int = const 0
+    %7: int = array.len %5
+    %8: range = range.new %6, %7
+    %9: builder<int> = builder.new element int
+    br ^b6(%6, %9)
+    ^b5(%10: builder<int>) in S1 unwind ^b21(%10):
+    %11: array<int> = builder.finish %10
+    discard %11
+    %12: int = const 0
+    want %12
+    [i13] exit.prepare fallthrough %12 at B3
+    result.exit edge normal(0), value %11, demand discard, prepare none
+    result.exit edge normal(0), value %12, demand want, prepare #13
+    br ^b2(%12)
+    ^b6(%13: int, %14: builder<int>) in S1 unwind ^b7(%14):
+    %15: bool = int.lt %13, %7
+    cond %15, ^b8, ^b9
+    ^b7(%16: builder<int>, %17: failure) in S1 unwind ^b3:
+    builder.abandon %16
+    raise %17
+    ^b8 in S2 unwind ^b3:
+    br ^b13(%14)
+    ^b9 in S1 unwind ^b3:
+    br ^b10(%14)
+    ^b10(%18: builder<int>) in S1 unwind ^b11(%18):
+    br ^b5(%18)
+    ^b11(%19: builder<int>, %20: failure) in S1 unwind ^b3:
+    builder.abandon %19
+    raise %20
+    ^b12(%21: builder<int>) in S1 unwind ^b20(%21):
+    %22: int = const 1
+    %23: int = int.add %13, %22
+    br ^b6(%23, %21)
+    ^b13(%24: builder<int>) in S2 unwind ^b14(%24):
+    %25: int = array.get %5, %13
+    bind %25, binding b0
+    br ^b16
+    ^b14(%26: builder<int>, %27: failure) in S2 unwind ^b3:
+    builder.abandon %26
+    raise %27
+    ^b15(%28: int, %29: int, %30: builder<int>) in S2 unwind ^b19(%30):
+    %31: builder<int> = builder.push %30, %28
+    exit.prepare fallthrough select s0 at B1
+    br ^b12(%31)
+    ^b16 in S3 unwind ^b3:
+    br ^b17(%25, %24)
+    ^b17(%32: int, %33: builder<int>) in S3 unwind ^b18(%33):
+    %34: int = const 0
+    %35: int = int.mod %32, %34
+    want %35
+    [i27] exit.prepare fallthrough %35 at B2
+    want %32
+    [i29] exit.prepare fallthrough %32 at B2
+    result.exit edge normal(0), value %35, demand want, prepare #27
+    result.exit edge normal(0), value %32, demand want, prepare #29
+    br ^b15(%35, %32, %33)
+    ^b18(%36: builder<int>, %37: failure) in S3 unwind ^b3:
+    builder.abandon %36
+    raise %37
+    ^b19(%38: builder<int>, %39: failure) in S2 unwind ^b3:
+    builder.abandon %38
+    raise %39
+    ^b20(%40: builder<int>, %41: failure) in S1 unwind ^b3:
+    builder.abandon %40
+    raise %41
+    ^b21(%42: builder<int>, %43: failure) in S1 unwind ^b3:
+    builder.abandon %42
+    raise %43
+    ^b22(%44: failure, %45: Error) in S4 unwind ^b1:
+    bind %45, binding b1
+    br ^b25(%44)
+    ^b23(%46: failure) in S0 unwind ^b1:
+    raise %46
+    ^b24(%47: failure, %48: failure) in S0 unwind ^b1:
+    %49: failure = fail.caused %48, %47
+    raise %49
+    ^b25(%50: failure) in S4 unwind ^b24(%50):
+    %51: int = const 9
+    want %51
+    [i38] exit.prepare fallthrough %51 at B4
+    result.exit edge normal(0), value %51, demand want, prepare #38
+    br ^b2(%51)
+}

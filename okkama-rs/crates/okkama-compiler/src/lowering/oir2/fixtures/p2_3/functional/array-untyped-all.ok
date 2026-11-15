@@ -1,0 +1,7 @@
+module app;
+main() is int {
+    [].all() -> x {
+        true;
+    };
+    0;
+}

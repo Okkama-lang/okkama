@@ -487,7 +487,9 @@ fn type_valid(module: &Module, ty: &Type, state: &mut State<'_>) -> Checked<()> 
             if parameter.index as usize >= params.len() { state.error(R::T4, "type parameter index is out of range"); }
         }
         Type::Map(key, value) | Type::MapBuilder(key, value) => {
-            if !map_key(module.types.get(*key)?) { state.error(R::T1, "map key type is not permitted"); }
+            if !map_key(module, *key, state)? {
+                state.error(R::T1, "map key type is not permitted");
+            }
             if module.types.get(*value)? != &Type::Never && !language_type(module, *value, state)? {
                 state.error(R::T1, "map value must be a language type");
             }
@@ -537,9 +539,79 @@ fn concrete_successor_role(module: &Module, root: TypeId, state: &mut State<'_>)
     Ok(true)
 }
 
-fn map_key(ty: &Type) -> bool {
+fn scalar_key(ty: &Type) -> bool {
     matches!(ty, Type::Int | Type::Bool | Type::Byte | Type::Float | Type::Rat | Type::Char | Type::Str
         | Type::Enum(_) | Type::Parameter(_) | Type::Never)
+}
+/// Key objects follow the frontend rule after substitution. Track declarations,
+/// not instantiated types: even a changing generic self-containment is cyclic.
+fn map_key(module: &Module, root: TypeId, state: &mut State<'_>) -> Checked<bool> {
+    enum Visit {
+        Enter(TypeId, Substitution),
+        Leave(DeclId),
+    }
+    let mut pending = vec![Visit::Enter(root, Substitution::default())];
+    let mut visiting = std::collections::BTreeSet::new();
+    while let Some(visit) = pending.pop() {
+        if !state.step(1) || !state.memory(64) {
+            return Err(TypeCheckError);
+        }
+        let Visit::Enter(mut id, sub) = visit else {
+            let Visit::Leave(decl) = visit else {
+                unreachable!();
+            };
+            visiting.remove(&decl);
+            continue;
+        };
+        while let Type::Parameter(parameter) = module.types.get(id)? {
+            let Some((_, replacement)) = sub.entries.iter().rev().find(|(key, _)| key == parameter) else {
+                break;
+            };
+            if *replacement == id {
+                break;
+            }
+            if !state.step(1) {
+                return Err(TypeCheckError);
+            }
+            id = *replacement;
+        }
+        let ty = module.types.get(id)?;
+        if scalar_key(ty) {
+            continue;
+        }
+        let Type::Object { decl, args } = ty else {
+            return Ok(false);
+        };
+        let DeclarationKind::Object { fields, destroy, .. } = &module.declarations.get(*decl)?.kind else {
+            return Ok(false);
+        };
+        if destroy.is_some() || !visiting.insert(*decl) {
+            return Ok(false);
+        }
+        // Caps are declared separately from their owner layout in OIR.
+        for (_, declaration) in module.declarations.iter() {
+            if !state.step(1) {
+                return Err(TypeCheckError);
+            }
+            if let DeclarationKind::Cap { owner, .. } = declaration.kind
+                && matches!(module.types.get(owner)?, Type::Object { decl: owner, .. } if owner == decl) {
+                return Ok(false);
+            }
+        }
+        let mut next = sub;
+        next.entries.extend(substitution(GenericOwner::Declaration(*decl), args).entries);
+        if !state.array(fields.len(), 64) {
+            return Err(TypeCheckError);
+        }
+        pending.push(Visit::Leave(*decl));
+        for field in fields.iter().rev() {
+            if !state.array(next.entries.len(), 16) {
+                return Err(TypeCheckError);
+            }
+            pending.push(Visit::Enter(field.ty, next.clone()));
+        }
+    }
+    Ok(true)
 }
 fn implements(
     module: &Module,
@@ -878,7 +950,7 @@ fn terminator<'a>(
             }
             TermKind::Switch { value, cases, default } => {
                 let ty = checker.ty(*value)?;
-                let valid = map_key(ty);
+                let valid = scalar_key(ty);
                 checker.require(valid, "switch needs a scalar/enum value");
                 for case in cases {
                     if !literal(module, &case.value, checker.state) { checker.report(R::T1, "invalid switch literal"); }
