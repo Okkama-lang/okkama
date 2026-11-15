@@ -3,7 +3,7 @@
 #![cfg(feature = "champ-abi")]
 
 use okkama_compiler::lowering::{LoadedModule, ModuleLoader, RootFile, oir2};
-use okkama_compiler::syntax::{self, ParseOptions};
+use okkama_compiler::syntax::{self, ParseMode, ParseOptions};
 use okkama_compiler::SourceFile;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -137,9 +137,11 @@ fn run_case(id: &str) -> Result<(), String> {
     let expect = &case["expect"];
     let outcome = expect["outcome"].as_str().unwrap();
     let sources = sources(&dir, &case);
+    // A program runs in the production grammar: test bodies are not parsed (§14), as `okkama run` does.
+    let options = ParseOptions { mode: ParseMode::Production, ..ParseOptions::default() };
     let mut programs = Vec::new();
     for source in &sources {
-        let program = syntax::parse(source, &ParseOptions::default()).map_err(|error| format!("parse: {error:?}"))?;
+        let program = syntax::parse(source, &options).map_err(|error| format!("parse: {error:?}"))?;
         programs.push(syntax::prune::strip_test_items(program));
     }
     let roots = sources.iter()
@@ -174,8 +176,7 @@ fn run_case(id: &str) -> Result<(), String> {
         }
         ("success", Err(error)) => return Err(format!("failed: {}; stdout={stdout:?}", error.0)),
         (_, Ok(code)) => return Err(format!("completed with {code}, expected a failure; stdout={stdout:?}")),
-        ("failure", Err(error)) => expected_failure(expect, &error.0)?,
-        (_, Err(_)) => {}
+        (_, Err(error)) => expected_failure(expect, &error.0)?,
     }
     let expected_stdout = expect["stdout"]["text"].as_str().unwrap_or("");
     if stdout != expected_stdout {
@@ -195,4 +196,46 @@ fn check(ids: &[&str]) {
 #[test]
 fn champ_correctness_nested_try_rethrow() {
     check(&["L07.catch.non-matching-propagates", "L07.rethrow.preserves-identity", "L01.gram.throw.forms"]);
+}
+
+/// Compiles one source file through OIR-2 and runs it in Champ.
+fn run_source(text: &str) -> sparrow_core::CapturedRun {
+    let source = SourceFile::new("app.ok", text).unwrap();
+    let program = syntax::parse(&source, &ParseOptions::default()).unwrap();
+    let roots = [RootFile { source: &source, program: &program }];
+    let stdlib = std::fs::canonicalize(root().join("std")).unwrap();
+    let mode = okkama_compiler::oir2::VerifyMode::Structural;
+    let bytes = oir2::compile_linked_with(&roots, &mut CaseLoader { stdlib }, mode)
+        .unwrap_or_else(|error| panic!("compile: {error}"));
+    let limits = sparrow_core::budget::Limits { steps: Some(1_000_000), ..sparrow_core::budget::Limits::default() };
+    sparrow_core::run_captured(bytes, limits).unwrap()
+}
+
+/// An integer literal beyond 63 bits is an unbounded integer constant in Champ.
+#[test]
+fn champ_big_integer_literals() {
+    let run = run_source(concat!(
+        "module app; main() is int { let big = 9223372036854775808; ",
+        "confirm big - 1 == 9223372036854775807; confirm big + big == 18446744073709551616; 3; }",
+    ));
+    assert_eq!(run.result, Ok(3));
+}
+
+/// A program without `main` fails at start with a runtime report.
+#[test]
+fn champ_program_without_main_fails_at_start() {
+    let run = run_source("module app; object Marker { Marker(); }");
+    let error = run.result.expect_err("no entry");
+    assert_eq!(error.0, "RuntimeError: Program requires main() declaration");
+}
+
+/// Exit status: unparsed test bodies, big integer constants, multi-file roots, a missing entry.
+#[test]
+fn champ_correctness_exit_status() {
+    check(&[
+        "L01.gram.test.inner-grammar-not-parsed",
+        "L04.fields.scalar-replacement",
+        "L06.multifile.shared-declarations",
+        "L00.entry.missing-main-fails",
+    ]);
 }

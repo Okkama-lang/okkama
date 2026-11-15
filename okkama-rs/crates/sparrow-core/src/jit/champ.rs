@@ -995,8 +995,10 @@ impl Emit<'_, '_> {
             D::Const => {
                 let word = match immediate {
                     s::Immediate::Constant(s::Constant::Int(value)) => {
-                        let value = value.parse().map_err(|_| Error("invalid integer constant".into()))?;
-                        self.heap.int(value)
+                        // Okkama integers are unbounded: a literal beyond 63 bits is a big integer.
+                        let value: num_bigint::BigInt =
+                            value.parse().map_err(|_| Error("invalid integer constant".into()))?;
+                        self.heap.big(value)
                     }
                     s::Immediate::Constant(s::Constant::Bool(value)) => u64::from(*value),
                     s::Immediate::Constant(s::Constant::Descriptor(value)) => *value as u64,

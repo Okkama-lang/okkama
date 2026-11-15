@@ -114,3 +114,13 @@ fn launcher_setup_runs_only_after_spb_verification() {
         assert_eq!(prepared.load(Ordering::Relaxed), expected);
     }
 }
+
+/// A program without an entry function fails at start with a runtime report (#677).
+#[test]
+fn program_without_entry_fails_with_a_runtime_report() {
+    let mut program = main_program("0: const r0, int 7\n1: ret r0");
+    program.entry = None;
+    let bytes = okkama_sparrow::encode(&program).unwrap();
+    let error = sparrow_core::run_limited(bytes, Vec::new(), false, Vec::new(), Limits::default()).unwrap_err();
+    assert_eq!(error.0, "RuntimeError: Program requires main() declaration");
+}
