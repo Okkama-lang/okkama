@@ -349,7 +349,8 @@
   - [27.5 Rust](#275-rust)
   - [27.6 Haskell](#276-haskell)
   - [27.7 OCaml](#277-ocaml)
-  - [27.8 Что показывает сравнение](#278-что-показывает-сравнение)
+  - [27.8 Перенос, шаг за шагом](#278-перенос-шаг-за-шагом)
+  - [27.9 Что показывает сравнение](#279-что-показывает-сравнение)
 - [Глава 28. Слабости, открытые проблемы и путь вперёд](#глава-28-слабости-открытые-проблемы-и-путь-вперёд)
   - [28.1 Закрыто, пока писалась книга](#281-закрыто-пока-писалась-книга)
   - [28.2 Чего нет в языке](#282-чего-нет-в-языке)
@@ -20313,7 +20314,140 @@ OCaml показывает, что язык, ориентированный на
 которые Okkama убрала, и у него есть рекурсивные варианты и вложенные
 образцы, которых у Okkama пока нет (раздел 28.2).
 
-## 27.8 Что показывает сравнение
+## 27.8 Перенос, шаг за шагом
+
+Правила проще всего сравнить на одном маленьком классе. Вот банковский счёт
+на Java, написанный так, как его написал бы учебный курс:
+
+```java
+import java.util.HashMap;
+import java.util.Map;
+
+public class Account {
+    private final String owner;
+    private long cents;
+
+    public Account(String owner, long cents) {
+        if (cents < 0) throw new IllegalArgumentException("negative balance");
+        this.owner = owner;
+        this.cents = cents;
+    }
+
+    public void withdraw(long amount) {
+        if (amount > cents) throw new IllegalStateException("overdrawn: " + cents + " < " + amount);
+        cents -= amount;
+    }
+
+    public String shown() { return owner + " " + cents; }
+
+    public static void main(String[] args) {
+        Map<String, Account> accounts = new HashMap<>();
+        accounts.put("ada", new Account("ada", 1000));
+        Account ada = accounts.get("ada");
+        ada.withdraw(300);
+        System.out.println(ada.shown());
+        Account bob = accounts.get("bob");
+        System.out.println(bob == null ? "no bob" : bob.shown());
+        try {
+            ada.withdraw(5000);
+        } catch (IllegalStateException e) {
+            System.out.println("refused: " + e.getMessage());
+        }
+        System.out.println("in the map: " + accounts.get("ada").shown());
+    }
+}
+```
+
+Запущенный на Java 26, он печатает:
+
+```text
+ada 700
+no bob
+refused: overdrawn: 700 < 5000
+in the map: ada 700
+```
+
+Та же программа на Okkama:
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Refused is Error = (negative, overdrawn(balance is int, wanted is int));
+
+object Account {
+    has owner is string;
+    has cents is int;
+    Account(:owner, :cents) {
+        confirm cents >= 0 else throw Refused.negative;
+    }
+    withdrawn(amount is int) is ^Account {
+        confirm amount <= cents else throw Refused.overdrawn(cents, amount);
+        ^cents = cents - amount;
+    }
+    shown() is string { owner + " " + cents.string(); }
+}
+
+main() is int {
+    let out = Stdout();
+    let accounts = ["ada": Account(owner: "ada", cents: 1000)];
+    let ada = accounts["ada"].withdrawn(300);
+    out.writeln(ada.shown());
+    out.writeln(if accounts.has("bob") { accounts["bob"].shown(); } else { "no bob"; });
+    let refused = try { ada.withdrawn(5000).shown(); }
+        catch Refused.overdrawn(balance, wanted) {
+            "refused: overdrawn: " + balance.string() + " < " + wanted.string();
+        };
+    out.writeln(refused);
+    // The map still holds the account it was given; the new state is a new value.
+    out.writeln("in the map: " + accounts["ada"].shown());
+    let updated = accounts + ["ada": ada];
+    out.writeln("in the updated map: " + updated["ada"].shown());
+    0;
+}
+```
+
+Вывод:
+
+```text
+ada 700
+no bob
+refused: overdrawn: 700 < 5000
+in the map: ada 1000
+in the updated map: ada 700
+```
+
+Каждое изменение при переносе — решение, которое версия на Java оставила
+неявным.
+
+- **Баланс больше не изменяемое поле.** `withdraw` становится `withdrawn`,
+  преемником (глава 13). Словарь в Java показывает изменённый баланс,
+  `ada 700`, потому что словарь и `ada` делят один изменяемый объект.
+  Словарь Okkama по-прежнему держит счёт, который ему дали, `ada 1000`, а
+  новое состояние попадает в словарь, только когда программа его туда
+  кладёт: `accounts + ["ada": ada]`. При переносе на каждой мутации
+  приходится решать, кто должен увидеть изменение.
+- **Отсутствующий ключ — больше не `null`.** `accounts.get("bob")` возвращает
+  `null`, и код должен не забыть это проверить. В Okkama отсутствующий ключ
+  — отказ, если поиск не говорит, что делать: здесь `accounts.has`, или
+  `accounts["bob"] else …`, или `Maybe` (глава 7).
+- **Исключения становятся словарём.** `IllegalArgumentException` и
+  `IllegalStateException` говорят, что что-то не так; перечисление `Refused`
+  говорит, что именно: `negative` и `overdrawn(balance, wanted)`. Вызывающий
+  ловит случай, который обрабатывает, и читает его нагрузку, а не разбирает
+  сообщение (глава 10).
+- **Конструктор сохраняет проверку.** `if … throw` из Java становится
+  `confirm … else throw`, и ни в одном из языков счёт не может существовать
+  с отрицательным балансом.
+
+Чего перенос не потребовал: геттеров (`shown()` — единственный вопрос,
+который задаёт программа), ключевого слова `final` (все поля и так
+неизменяемы) и проверки, что `owner` не null (`string` не может
+отсутствовать). Перенос примерно той же длины, что и оригинал; он больше
+говорит о том, что может произойти.
+
+## 27.9 Что показывает сравнение
 
 Выделяются три вещи.
 

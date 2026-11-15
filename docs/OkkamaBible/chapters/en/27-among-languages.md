@@ -142,7 +142,91 @@ hatches, mutable fields and classes, that Okkama removed, and it has the
 recursive variants and nested patterns that Okkama does not have yet
 (Section 28.2).
 
-## 27.8 What the comparison shows
+## 27.8 A port, step by step
+
+The rules are easiest to compare on one small class. Here is a bank account
+in Java, written the way a Java course would write it:
+
+```java
+import java.util.HashMap;
+import java.util.Map;
+
+public class Account {
+    private final String owner;
+    private long cents;
+
+    public Account(String owner, long cents) {
+        if (cents < 0) throw new IllegalArgumentException("negative balance");
+        this.owner = owner;
+        this.cents = cents;
+    }
+
+    public void withdraw(long amount) {
+        if (amount > cents) throw new IllegalStateException("overdrawn: " + cents + " < " + amount);
+        cents -= amount;
+    }
+
+    public String shown() { return owner + " " + cents; }
+
+    public static void main(String[] args) {
+        Map<String, Account> accounts = new HashMap<>();
+        accounts.put("ada", new Account("ada", 1000));
+        Account ada = accounts.get("ada");
+        ada.withdraw(300);
+        System.out.println(ada.shown());
+        Account bob = accounts.get("bob");
+        System.out.println(bob == null ? "no bob" : bob.shown());
+        try {
+            ada.withdraw(5000);
+        } catch (IllegalStateException e) {
+            System.out.println("refused: " + e.getMessage());
+        }
+        System.out.println("in the map: " + accounts.get("ada").shown());
+    }
+}
+```
+
+Run with Java 26, it prints:
+
+```text
+ada 700
+no bob
+refused: overdrawn: 700 < 5000
+in the map: ada 700
+```
+
+The same program in Okkama:
+
+{{example:27-port}}
+
+Each change in the port is a decision that the Java version left implicit.
+
+- **The balance is no longer a mutable field.** `withdraw` becomes
+  `withdrawn`, a successor (Chapter 13). The Java map shows the changed
+  balance, `ada 700`, because the map and `ada` share one mutable object.
+  The Okkama map still holds the account it was given, `ada 1000`, and the
+  new state reaches the map only when the program puts it there:
+  `accounts + ["ada": ada]`. A port has to decide, at every mutation, who
+  should see the change.
+- **The missing key is no longer `null`.** `accounts.get("bob")` returns
+  `null`, and the code must remember to check it. In Okkama a missing key is
+  a failure unless the lookup says what to do: here `accounts.has`, or
+  `accounts["bob"] else …`, or a `Maybe` (Chapter 7).
+- **The exceptions become a vocabulary.** `IllegalArgumentException` and
+  `IllegalStateException` say that something is wrong; the enum `Refused`
+  says what: `negative` and `overdrawn(balance, wanted)`. The caller catches
+  the case it handles and reads its payload instead of parsing a message
+  (Chapter 10).
+- **The constructor keeps its check.** Java's `if … throw` becomes
+  `confirm … else throw`, and in neither language can an account exist with
+  a negative balance.
+
+What the port did not need: getters (`shown()` is the one question the
+program asks), a `final` keyword (every field is final), and a check that
+`owner` is not null (a `string` cannot be absent). The port is about as long
+as the original; it says more about what can happen.
+
+## 27.9 What the comparison shows
 
 Three things stand out.
 

@@ -1,0 +1,5 @@
+ada 700
+no bob
+refused: overdrawn: 700 < 5000
+in the map: ada 1000
+in the updated map: ada 700
