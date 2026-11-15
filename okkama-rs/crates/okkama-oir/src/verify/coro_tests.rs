@@ -107,3 +107,49 @@ fn layout_machine_words_follow_service_layout_and_scope_area() {
     assert_eq!(FrameLayout::scope_area_words(&module, function), Some(4));
     assert_eq!(layout.machine_words(&module, function), Some(8));
 }
+
+/// An async coro body declaring a one-slot layout whose entry block is `ENTRY`, then `ret`.
+fn bare_body(profile: &str, attrs: &str, entry: &str) -> String {
+    format!("oir 2 {profile}
+module bare
+scope S action in @f
+summary Mf internal contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+func @f(%frame: frame<@f>) -> void {attrs}summary(Mf) {{
+    frame.layout {{
+        slot 0: str
+    }}
+    continuation 0 start saves [0]
+^entry in S:
+{entry}    ret
+}}
+")
+}
+
+#[test]
+fn only_an_async_coro_or_low_body_declares_a_frame_layout() {
+    for source in [AWAIT, DESTROY, LAYOUT, EXTERNAL] {
+        assert!(!structural(source).contains(&RuleId::CoroLayoutMisplaced));
+    }
+    // A layout on an ordinary function.
+    let ordinary = bare_body("coro", "", "");
+    assert_eq!(structural(&ordinary), [RuleId::CoroLayoutMisplaced]);
+    // A layout on an async body before the coro profile.
+    let early = bare_body("own", "[async] ", "");
+    assert!(structural(&early).contains(&RuleId::CoroLayoutMisplaced), "{:?}", structural(&early));
+}
+
+#[test]
+fn an_async_body_starts_with_the_resume_of_continuation_0() {
+    let resumed = "    (%fr0: frame<@f>, %name: str) = frame.resume %frame, continuation 0, slots [
+        saved_slot(slot=0, ty=str, linear=false)]\n";
+    assert_eq!(structural(&bare_body("coro", "[async] ", resumed)), []);
+    assert_eq!(structural(&bare_body("coro", "[async] ", "")), [RuleId::CoroMissingResume]);
+}
+
+#[test]
+fn every_declared_continuation_has_a_suspension_site() {
+    let unused = edited(AWAIT, "    continuation 2 at #9 saves [1] operands [0, 3, 4, 5]\n",
+        "    continuation 2 at #9 saves [1] operands [0, 3, 4, 5]\n    continuation 3 at ^ok saves [1]\n");
+    assert_eq!(structural(&unused), [RuleId::CoroContinuationMismatch]);
+}

@@ -1,8 +1,12 @@
 //! Structural rules of the async ABI assigned to slice V1 (D20, D21, D22, C-2, C-6).
 //!
-//! The suspension, layout and body rules apply to async bodies of coro/low that
-//! declare a D21 frame layout. Ownership of saved tokens, saved-set completeness
-//! and the one-to-one site correspondence belong to the B9.5 linearity slice.
+//! Only an async body of coro/low declares a D21 frame layout
+//! (`coro-layout-misplaced`). The suspension, layout and body rules apply to the
+//! async coro/low bodies that declare one; an async body without a layout
+//! predates the async ABI, and its layout and continuation graph stay an
+//! inventoried structural gap (`B95FrameLayoutAndContinuations`) until the coro
+//! producer exists. Ownership of saved tokens, saved-set completeness and the
+//! one-to-one site correspondence belong to the B9.5 linearity slice.
 use std::collections::BTreeMap;
 use super::{EntityLocation as L, RuleId as R, State};
 use crate::*;
@@ -19,6 +23,11 @@ pub(super) fn check<'a>(module: &'a Module, function: FuncId, data: &'a Function
         return;
     };
     let token_profile = matches!(module.profile, Profile::Coro | Profile::Low);
+    let async_body = token_profile && data.attrs.contains(&FunctionAttr::Async);
+    if !async_body && body.frame_layout.is_some() {
+        state.at(L::Function(function), data.loc);
+        state.error(R::CoroLayoutMisplaced, "only an async body of coro/low declares a frame layout (D21)");
+    }
     for (block_id, block) in body.blocks.iter() {
         if !state.step(1) {
             return;
@@ -35,9 +44,8 @@ pub(super) fn check<'a>(module: &'a Module, function: FuncId, data: &'a Function
             operation(module, op, token_profile, state);
         }
     }
-    if token_profile && data.attrs.contains(&FunctionAttr::Async)
-        && let Some(layout) = &body.frame_layout {
-        Layout { module, function, data, body, layout, state, sites: BTreeMap::new() }.check();
+    if async_body && let Some(layout) = &body.frame_layout {
+        Layout { module, function, data, body, layout, state, sites: BTreeMap::new(), started: false }.check();
     }
 }
 
@@ -73,6 +81,8 @@ struct Layout<'s, 'a> {
     state: &'s mut State<'a>,
     /// The first site recorded for each continuation.
     sites: BTreeMap<u32, SuspendSite>,
+    /// Whether the body starts with the resume of continuation 0.
+    started: bool,
 }
 
 impl Layout<'_, '_> {
@@ -123,6 +133,21 @@ impl Layout<'_, '_> {
                 self.state.error(R::CoroMissingResume,
                     "a suspending terminator needs frame.save as the last instruction of its block (D20)");
             }
+        }
+        self.continuations_used();
+    }
+
+    /// The body starts with the resume of continuation 0 (C-2), and every other declared continuation
+    /// is the continuation of a suspension site (D21).
+    fn continuations_used(&mut self) {
+        self.at_function();
+        if !self.started {
+            self.state.error(R::CoroMissingResume,
+                "an async body starts with frame.resume of continuation 0 on its frame parameter (C-2)");
+        }
+        let unused = (1..self.layout.continuations.len() as u32).any(|index| !self.sites.contains_key(&index));
+        if unused {
+            self.state.error(R::CoroContinuationMismatch, "a declared continuation has no suspension site (D21)");
         }
     }
 
@@ -347,6 +372,7 @@ impl Layout<'_, '_> {
         if continuation == 0 {
             // C-2: the start resumes the sole frame parameter at the top of the entry block.
             let start = block_id == self.body.entry && position == 0 && block.params == [frame];
+            self.started |= start;
             if !start {
                 self.state.error(R::CoroContinuationMismatch,
                     "continuation 0 resumes the frame parameter at the start of the body (C-2)");
