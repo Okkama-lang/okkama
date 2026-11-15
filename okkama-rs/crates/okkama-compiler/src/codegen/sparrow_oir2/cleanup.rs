@@ -263,9 +263,16 @@ impl Emitter<'_> {
             let (pc, after) = match root.boundary {
                 o::RootBoundary::BeforeInstruction(id) => (instructions[&id], false),
                 o::RootBoundary::AfterInstruction(id) => {
-                    match self.body.insts.get(id)?.op {
+                    match &self.body.insts.get(id)?.op {
                         o::Operation::Core(o::CoreOp::RangeLen { .. }) => (instructions[&id] + 2, true),
                         o::Operation::Lexical(o::LexicalOp::DeferRegister { .. }) => (instructions[&id], false),
+                        // An evaluate has no post state: its result exists where the normal outcome lands.
+                        op if super::fallible_scalar(op) => {
+                            let raise = self.body.blocks.iter().any(|(_, block)| {
+                                block.insts.contains(&id) && block.unwind.is_none()
+                            });
+                            (instructions[&id] + 1 + u32::from(raise), false)
+                        }
                         _ => (instructions[&id], true),
                     }
                 }
@@ -556,6 +563,13 @@ impl Emitter<'_> {
                 if matches!(instruction.op, o::Operation::Core(o::CoreOp::RangeLen { .. })) {
                     states.insert(pc + 1, active.clone());
                     states.insert(pc + 2, active.clone());
+                }
+                if super::fallible_scalar(&instruction.op) {
+                    // The evaluate consumes no service: its raise block and normal landing see the same state.
+                    states.insert(pc + 1, active.clone());
+                    if block.unwind.is_none() {
+                        states.insert(pc + 2, active.clone());
+                    }
                 }
             }
             let pc = terms[&block_id];

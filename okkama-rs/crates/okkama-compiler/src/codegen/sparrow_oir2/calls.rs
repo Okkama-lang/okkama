@@ -31,6 +31,11 @@ fn kind(module: &o::Module, ty: o::TypeId) -> Result<P, GenerateError> {
     })
 }
 
+/// OIR scalar operations whose SPB data form is fallible (`DataOp::fallible`).
+fn fallible_scalar(op: &o::Operation) -> bool {
+    matches!(op, o::Operation::Core(o::CoreOp::IntMod { .. } | o::CoreOp::RangeNew { .. } | o::CoreOp::Convert { .. }))
+}
+
 pub(super) fn needs_s2(module: &o::Module, function: &o::Function) -> Result<bool, GenerateError> {
     if function.summary.is_some() || function.signature.ownership_abi != o::OwnershipAbi::Observation {
         return Ok(true);
@@ -303,6 +308,53 @@ impl Emitter<'_> {
         }))
     }
 
+    /// A fallible scalar has explicit outcomes in S2: the loader never admits its data form here.
+    /// Without a block unwind its failure leaves the function through a raise block right after it,
+    /// which is what Low defines for such a block; the loader rejects that exit if services are live.
+    fn evaluate(&mut self, data: s::Instruction, unwind: Option<&o::BlockUnwind>) -> Result<(), GenerateError> {
+        let s::Instruction::Data { op, inputs, output: Some(output), immediate } = data else {
+            return Err(error("fallible scalar without a result"));
+        };
+        let result = self.result.registers[output as usize];
+        let pc = self.result.code.len() as u32;
+        let produced = |destination| s::Assignment { destination, source: s::Source::ProducedSlot(0) };
+        let (unwind, exit) = match unwind {
+            Some(unwind) => {
+                let mut args = unwind.target.args.iter().copied().map(o::EdgeArg::Value).collect::<Vec<_>>();
+                args.push(o::EdgeArg::Produced(o::EdgeResult { outcome: o::Outcome::Unwind, slot: 0 }));
+                let edge = self.edge(unwind.target.block, &args, o::Outcome::Unwind, &[P::Value(s::Type::Failure)])?;
+                let sources = edge.assignments.iter().filter_map(|assignment| match assignment.source {
+                    s::Source::Location(location) => Some(location),
+                    s::Source::ProducedSlot(_) => None,
+                }).collect();
+                self.result.proofs.roots.push(s::RootRequirement { pc, locations: sources });
+                (edge, None)
+            }
+            None => {
+                let failure = fresh(&mut self.result, s::Type::Failure)?;
+                (s::Edge { target_pc: pc + 1, assignments: vec![produced(L::Register(failure))] }, Some(failure))
+            }
+        };
+        let next = pc + 1 + u32::from(exit.is_some());
+        let normal = s::Edge { target_pc: next, assignments: vec![produced(L::Register(output))] };
+        self.result.code.push(s::Instruction::Champ {
+            op: O::Evaluate,
+            arguments: std::iter::once(A::Evaluation(s::Evaluation { op, result, immediate }))
+                .chain(inputs.into_iter().map(|input| A::Location(L::Register(input)))).collect(),
+            flow: s::Flow::Outcomes(vec![
+                s::Outcome { tag: s::Tag::Normal, edge: normal },
+                s::Outcome { tag: s::Tag::Unwind, edge: unwind },
+            ]),
+        });
+        if let Some(failure) = exit {
+            self.result.blocks.push(s::Block { pc: pc + 1, params: vec![L::Register(failure)] });
+            self.result.proofs.roots.push(s::RootRequirement { pc: pc + 1, locations: vec![L::Register(failure)] });
+            self.result.code.push(s::Instruction::Raise(failure));
+        }
+        self.result.blocks.push(s::Block { pc: next, params: vec![L::Register(output)] });
+        Ok(())
+    }
+
     fn invocation(&mut self, term: &o::TermKind) -> Result<s::Instruction, GenerateError> {
         let (opcode, arguments, context, edges) = match term {
             o::TermKind::InvokeOwn { op, normal, unwind } => {
@@ -517,8 +569,8 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                 return Err(error("duplicate instruction"));
             }
             let inst = body.insts.get(inst_id)?;
-            if block.unwind.is_some() && o::ContractRegistry::new(module).lookup(&inst.op)
-                .map_err(|failure| error(failure.to_string()))?.unwind.is_some()
+            if block.unwind.is_some() && !fallible_scalar(&inst.op) && o::ContractRegistry::new(module)
+                .lookup(&inst.op).map_err(|failure| error(failure.to_string()))?.unwind.is_some()
             {
                 return Err(later(&format!("{}: implicit instruction unwind {}", function.symbol, inst.op.opcode())));
             }
@@ -527,6 +579,8 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                 o::Operation::Core(o::CoreOp::RangeLen { .. }) => 3,
                 // D8 registration is static CFG metadata, not a second runtime defer runner.
                 o::Operation::Lexical(o::LexicalOp::DeferRegister { .. }) => 0,
+                // evaluate, then the function failure exit unless the block unwind receives the failure.
+                op if fallible_scalar(op) && block.unwind.is_none() => 2,
                 _ => 1,
             };
             pc = pc.checked_add(size).ok_or_else(|| error("too much code"))?;
@@ -718,6 +772,14 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                         if let Some(value) = output {
                             *value = emitter.reg(o::ValueId::from_u32(*value))?;
                         }
+                    }
+                    let fallible = matches!(&translated, s::Instruction::Data { op, .. } if op.fallible());
+                    if fallible != fallible_scalar(&inst.op) {
+                        return Err(error(format!("{}: fallible scalar classification", inst.op.opcode())));
+                    }
+                    if fallible {
+                        emitter.evaluate(translated, block.unwind.as_ref())?;
+                        continue;
                     }
                     translated
                 }

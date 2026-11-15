@@ -422,6 +422,14 @@ impl Emit<'_, '_> {
             }
             s::Instruction::Data { op, inputs, output, immediate } => {
                 self.data(*op, inputs, *output, immediate)?;
+                if sets_status(*op) {
+                    // A fallible data form loads only without services (S1). Leave exactly as a failing
+                    // call without an unwind outcome does, with the failure (or the stop) still set.
+                    let status = self.load(self.ctx, std::mem::offset_of!(Ctx, status));
+                    let ok = self.builder.create_block();
+                    self.builder.ins().brif(status, self.stop, &[], ok, &[]);
+                    self.builder.switch_to_block(ok);
+                }
                 self.next();
             }
             s::Instruction::Champ { op, arguments, flow } => self.operation(*op, arguments, flow)?,
@@ -1123,6 +1131,12 @@ impl Emit<'_, '_> {
         };
         Ok(value)
     }
+}
+
+/// Data helpers that can return with a non-OK status: an application failure (`DataOp::fallible`)
+/// or a terminal stop such as an exhausted memory budget. Their result is then not a value.
+fn sets_status(op: s::DataOp) -> bool {
+    op.fallible() || matches!(op, s::DataOp::IntMul | s::DataOp::StrConcat)
 }
 
 #[cfg(test)]

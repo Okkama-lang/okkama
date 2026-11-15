@@ -244,7 +244,9 @@ fn selection_walk(runtime: &Runtime, packet: &Packet, selection: &Selection, str
             continue;
         }
         let header = runtime.heap.header_of(object);
-        if matches!(heap::kind(header), heap::STRING | heap::BIGINT) {
+        // Kinds without identity are leaves: the loader's ARRAY_PLAIN admits only arrays whose
+        // element graph is closed and plain, and Bytes and Range payloads hold no references.
+        if matches!(heap::kind(header), heap::STRING | heap::BIGINT | heap::ARRAY | heap::PAYLOAD) {
             continue;
         }
         if heap::kind(header) != heap::OBJECT {

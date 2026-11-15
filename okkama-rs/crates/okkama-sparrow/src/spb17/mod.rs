@@ -363,6 +363,15 @@ pub enum DataOp {
     FailCaused,
 }
 
+impl DataOp {
+    /// Operations that can fail with an application failure. Their data form has no outcome edge,
+    /// so it is admitted only where nothing needs cleanup (no service locations); elsewhere the
+    /// operation is an `evaluate` with explicit normal and unwind outcomes.
+    pub fn fallible(self) -> bool {
+        matches!(self, Self::IntMod | Self::Convert | Self::RangeNew)
+    }
+}
+
 /// Shared declarations. Function-local proof references never index these
 /// arenas accidentally: their Argument variants select the appropriate arena.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

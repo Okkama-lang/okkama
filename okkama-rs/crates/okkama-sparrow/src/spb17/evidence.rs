@@ -190,7 +190,48 @@ impl<'a> Evidence<'a> {
         self.cache.get(&query).cloned().flatten()
     }
 
+    pub fn flat_packet(&mut self, location: Location) -> bool {
+        self.query(location, 3).is_some()
+    }
+
+    fn flat(&mut self, location: Location) -> Option<Inventory> {
+        let definitions = self.definitions.get(&location).cloned().unwrap_or_default();
+        if definitions.is_empty() {
+            return self.inventory(location).filter(Inventory::is_empty);
+        }
+        for definition in definitions {
+            match definition {
+                Definition::Incoming(_, _, Source::Location(source)) => { self.query(source, 3)?; }
+                Definition::Incoming(pc, ordinal, Source::ProducedSlot(_)) => {
+                    let Instruction::Champ { op, flow: Flow::Outcomes(outcomes), .. }
+                        = &self.function.code[pc] else { return None };
+                    match (op, outcomes[ordinal].tag) {
+                        (Opcode::InvokeCallOwn, Tag::Normal) => {}
+                        (Opcode::OwnSplitChecked | Opcode::ScopeSplit, Tag::Normal | Tag::Unwind) => {
+                            let input = arguments(&self.function.code[pc])[0];
+                            self.query(input, 3)?;
+                        }
+                        _ => return None,
+                    }
+                }
+                Definition::Instruction(pc, _) => {
+                    let Instruction::Champ { op, .. } = &self.function.code[pc] else { return None };
+                    match op {
+                        Opcode::ExitCommit | Opcode::OwnCreateCommit | Opcode::OwnEmpty
+                            | Opcode::InvokeCallOwn => {}
+                        Opcode::OwnMove | Opcode::OwnJoin | Opcode::OwnSplit => {
+                            for input in arguments(&self.function.code[pc]) { self.query(input, 3)?; }
+                        }
+                        _ => return self.inventory(location).filter(Inventory::is_empty),
+                    }
+                }
+            }
+        }
+        Some(Inventory::new())
+    }
+
     fn resolve_inner(&mut self, location: Location, mode: u8) -> Option<Inventory> {
+        if mode == 3 { return self.flat(location); }
         let identity = mode == 1;
         if !identity && matches!(verify::loc_type(self.function, location),
             Ok(ProducedType::Service(ServiceKind::Packet | ServiceKind::ScopeState | ServiceKind::Pending)))
@@ -541,8 +582,8 @@ pub(super) fn static_selections_with(p: &Program, f: &Function, evidence: &mut E
             if let Ok(ProducedType::Value(Type::Object(id))) = verify::loc_type(f, location) {
                 if !p.objects[id as usize].layout.may_reach_resource { continue }
                 keys.insert(evidence.identity(location).ok_or_else(|| error("unknown static selection identity"))?);
-            } else if matches!(verify::loc_type(f, location),
-                Ok(ProducedType::Value(Type::Bool | Type::Int | Type::Str | Type::Descriptor)))
+            } else if matches!(verify::loc_type(f, location), Ok(ProducedType::Value(
+                Type::Bool | Type::Int | Type::Str | Type::Descriptor | Type::Bytes | Type::Range | Type::Array(_))))
             {
                 continue;
             } else {

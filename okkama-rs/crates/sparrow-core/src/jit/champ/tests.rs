@@ -1165,3 +1165,54 @@ fn champ_plain_array_traces_elements_and_checks_all_index_forms() {
     }
     assert!(runtime.heap.stats().collections > 0);
 }
+
+/// S1 data form: `left op right`, then a use of the result that would misread a failed helper's zero.
+fn s1_fallible(op: s::DataOp, result: s::Type, immediate: s::Immediate, use_op: s::DataOp) -> s::Function {
+    let reg = L::Register;
+    let mut function = s::Function {
+        symbol: "fallible".into(), entry_abi: s::EntryAbi::Observation,
+        registers: vec![s::Type::Int, s::Type::Int, result, s::Type::Int],
+        services: vec![], params: vec![reg(0), reg(1)], results: vec![s::Type::Int],
+        blocks: vec![s::Block { pc: 0, params: vec![reg(0), reg(1)] }],
+        proofs: s::FunctionProofs {
+            entry: Some(s::EntryContract { failures: 2, ..s::EntryContract::default() }),
+            ..s::FunctionProofs::default()
+        },
+        code: vec![
+            s::Instruction::Data { op, inputs: vec![0, 1], output: Some(2), immediate },
+            s::Instruction::Data { op: use_op, inputs: vec![2], output: Some(3), immediate: s::Immediate::None },
+            s::Instruction::Ret(vec![3]),
+        ],
+    };
+    function.proofs.roots = s::live_locations(&function).unwrap().into_iter().enumerate()
+        .map(|(pc, locations)| s::RootRequirement { pc: pc as u32, locations: locations.into_iter().collect() })
+        .collect();
+    function
+}
+
+#[test]
+fn champ_s1_fallible_data_leaves_like_a_failing_call() {
+    let cases = [
+        (s1_fallible(s::DataOp::RangeNew, s::Type::Range, s::Immediate::Inclusive(false), s::DataOp::RangeStart),
+            "Range start must be less than or equal to range end"),
+        (s1_fallible(s::DataOp::IntMod, s::Type::Int, s::Immediate::None, s::DataOp::IntNeg), "Modulo by zero"),
+    ];
+    for (function, message) in cases {
+        let source = s::Program { functions: vec![function], ..s::Program::default() };
+        let mut runtime = Runtime::new_champ(source, vec![]).unwrap();
+        runtime.heap.set_stress(true);
+        let mut ctx = context(&mut runtime);
+        let code = compile(&mut runtime, 0).unwrap();
+        let (one, three) = (runtime.heap.int(1), runtime.heap.int(3));
+        let value = unsafe { invoke(code, &mut ctx, &[one, three]) };
+        assert_eq!(ctx.status, OK);
+        assert!(runtime.small_or_big(value).is_some());
+        let zero = runtime.heap.int(0);
+        let right = if message == "Modulo by zero" { zero } else { one };
+        unsafe { invoke(code, &mut ctx, &[three, right]) };
+        assert_eq!(ctx.status, FAILED);
+        assert!(runtime.fatal.is_none(), "{:?}", runtime.fatal);
+        let failure = runtime.failure(ctx.failure).unwrap();
+        assert!(matches!(&failure.kind, FailureKind::Program(text) if text == message), "{:?}", failure.kind);
+    }
+}

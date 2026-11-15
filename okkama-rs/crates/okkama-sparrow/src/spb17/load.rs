@@ -176,6 +176,8 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
                 && f.proofs.entry == trusted.proofs.entry, "external signature/summary mismatch")?;
             continue;
         }
+        check_fallible_data(f)?;
+        check_creations(p, f)?;
         check_failure_mask(p, f)?;
         check_call_contracts(p, f)?;
         check_service_results(p, f)?;
@@ -459,16 +461,18 @@ fn check_service_results(p: &Program, f: &Function) -> Check {
 fn check_call_contracts(p: &Program, f: &Function) -> Check {
     let mut reconstructed = evidence::Evidence::new(p, f);
     for instruction in &f.code {
-        if let Instruction::Champ { op: Opcode::RetOwn, arguments, .. } = instruction
-            && plain_results(p, f)
-        {
+        if let Instruction::Champ { op: Opcode::RetOwn, arguments, .. } = instruction {
             let packet = arguments.iter().find_map(|arg| match arg {
                 Argument::Location(location) if verify::loc_type(f, *location)
                     == Ok(ProducedType::Service(ServiceKind::Packet)) => Some(*location),
                 _ => None,
             }).ok_or_else(|| violation("RETURN_PLAIN_PACKET", "plain return omits packet"))?;
-            enforce(reconstructed.inventory(packet).is_some_and(|keys| keys.is_empty()),
-                "RETURN_PLAIN_PACKET", "plain return cannot carry resource obligations")?;
+            if plain_results(p, f) {
+                enforce(reconstructed.inventory(packet).is_some_and(|keys| keys.is_empty()),
+                    "RETURN_PLAIN_PACKET", "plain return cannot carry resource obligations")?;
+            }
+            enforce(reconstructed.flat_packet(packet), "RETURN_PACKET_NOT_FLAT",
+                "returned packet must have identical admission and full inventories")?;
         }
         let Instruction::Champ {
             op: Opcode::InvokeCallOwn | Opcode::InvokeObserve | Opcode::InvokeDefer, arguments, ..
@@ -513,6 +517,49 @@ pub(super) fn reachable(f: &Function) -> BTreeSet<usize> {
         }
     }
     result
+}
+
+/// A created object becomes an obligation only at its commit; until then no cleanup can destroy it.
+/// So the creation of a resource-reaching object (has_destroy implies may_reach_resource) must reach
+/// its own commit in straight-line code, without any other use of the value: nothing returns, stores,
+/// passes or packs it, and no path leaves its scope, before the commit.
+fn check_creations(p: &Program, f: &Function) -> Check {
+    let mut evidence = evidence::Evidence::new(p, f);
+    for (pc, instruction) in f.code.iter().enumerate() {
+        let Instruction::Data { op: DataOp::ObjNew | DataOp::ObjNext, output: Some(output), .. } = instruction
+            else { continue };
+        let (Type::Object(id) | Type::Successor(id)) = f.registers[*output as usize] else { continue };
+        if !p.objects[id as usize].layout.may_reach_resource {
+            continue;
+        }
+        let created = Location::Register(*output);
+        let commit = (pc + 1..f.code.len()).find(|&next| matches!(&f.code[next],
+            Instruction::Champ { op: Opcode::OwnCreateCommit, arguments, .. }
+                if arguments.first() == Some(&Argument::Location(created))));
+        let straight = commit.is_some_and(|commit| (pc + 1..commit).all(|between| {
+            let falls_through = matches!(f.code[between], Instruction::Data { .. }
+                | Instruction::Champ { flow: Flow::Next(_), .. })
+                && !matches!(f.code[between], Instruction::Champ { op: Opcode::RetOwn | Opcode::RetDefer, .. });
+            falls_through && !allocation::direct_uses(f, between).contains(&created)
+        }));
+        let committed = commit.map(|commit| (commit as u32, None));
+        enforce(straight && evidence.identity(created) == committed, "CREATION_UNCOMMITTED",
+            &format!("{}: object created at pc {pc} can escape before its own commit", f.symbol))?;
+    }
+    evidence.check_budget()
+}
+
+/// A fallible data operation has no outcome edge: after its failure the machine can only leave the
+/// function, which would lose every live service. With service locations it must be an `evaluate`.
+fn check_fallible_data(f: &Function) -> Check {
+    if f.services.is_empty() {
+        return Ok(());
+    }
+    let fallible = f.code.iter().any(|instruction| {
+        matches!(instruction, Instruction::Data { op, .. } if op.fallible())
+    });
+    enforce(!fallible, "FALLIBLE_DATA_OUTCOMES",
+        "a fallible data operation in a function with service locations needs explicit outcomes")
 }
 
 /// Failure views follow SSA, including handled Unwind edges. Only escaping raise or implicit scalar
@@ -582,7 +629,7 @@ fn check_failure_mask(p: &Program, f: &Function) -> Check {
     for pc in reachable {
         match &f.code[pc] {
             Instruction::Raise(id) => computed |= masks.get(&Location::Register(*id)).copied().unwrap_or(15),
-            Instruction::Data { op: DataOp::IntMod | DataOp::Convert | DataOp::RangeNew, .. } => computed |= 2,
+            Instruction::Data { op, .. } if op.fallible() => computed |= 2,
             _ => {}
         }
     }

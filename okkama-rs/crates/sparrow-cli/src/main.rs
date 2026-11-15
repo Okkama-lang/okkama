@@ -104,8 +104,18 @@ fn watchdog(flag: std::sync::Arc<std::sync::atomic::AtomicBool>) {
     });
 }
 
+/// A champ-abi build compiles Tomato's resource tracking out of the runtime: it runs only SPB 17.
+fn champ_refuses(bytes: &[u8]) -> Result<(), Failure> {
+    if cfg!(feature = "champ-abi") && bytes.get(..6) != Some(&[b'S', b'P', b'R', b'W', 0, 17]) {
+        return Err((1, "this build has the champ-abi feature and runs only SPB 17; use a build without \
+            champ-abi for SPB 16".into()));
+    }
+    Ok(())
+}
+
 fn execute(path: &Path, arguments: &[String], stats: bool, limits: sparrow_core::budget::Limits) -> Result<u8, Failure> {
     let bytes = read(path)?;
+    champ_refuses(&bytes)?;
     let on_verified = limits.interrupt.as_ref().map(|flag| {
         let flag = flag.clone();
         Box::new(move || watchdog(flag)) as Box<dyn FnOnce() + Send>
@@ -130,6 +140,7 @@ fn execute(path: &Path, arguments: &[String], stats: bool, limits: sparrow_core:
 
 fn test(path: &Path) -> Result<u8, Failure> {
     let bytes = read(path)?;
+    champ_refuses(&bytes)?;
     match sparrow_core::run_tests(bytes, Box::new(sparrow_core::stdout::Buffered)) {
         Ok(passed) => Ok(u8::from(!passed)),
         Err(error) => Err((1, error.0)),

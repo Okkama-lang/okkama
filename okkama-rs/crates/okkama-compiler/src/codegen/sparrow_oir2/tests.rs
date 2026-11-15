@@ -557,3 +557,49 @@ fn s2_summary_retention_keeps_language_parameter_positions() {
     s::verify(&program).unwrap();
     assert_eq!(s::decode(&s::encode(&program).unwrap()).unwrap(), program);
 }
+
+const FALLIBLE: &str = "oir 2 low\nmodule fallible\nscope S action in @f\n\
+    summary M0 internal parameters [parameter_effect(convention=borrow, destination=none),\n\
+    parameter_effect(convention=borrow, destination=none)] contract call_contract(failures=[program],\n\
+    publication=atomic)\n\
+    func @f(%a: int, %b: int) -> int summary(M0) {\n\
+    ^entry in S UNWIND:\n    %m: int = int.mod %a, %b\n    %n: int = int.add %m, %a\n    ret %n\nFAILED}\n";
+
+fn fallible_program(unwind: bool) -> s::Program {
+    let (header, failed) = if unwind {
+        (" unwind ^failed", "^failed(%f: failure) in S:\n    raise %f\n")
+    } else {
+        ("", "")
+    };
+    let module = parse(&FALLIBLE.replace(" UNWIND", header).replace("FAILED", failed));
+    let program = generate(&module, &layouts()).unwrap();
+    s::verify_load(&program, &s::NoExternalContracts).unwrap();
+    program
+}
+
+#[test]
+fn s2_fallible_scalar_without_block_unwind_leaves_through_raise() {
+    let program = fallible_program(false);
+    let code = &program.functions[0].code;
+    let s::Instruction::Champ { op: s::Opcode::Evaluate, arguments, flow: s::Flow::Outcomes(outcomes) } = &code[0]
+        else { panic!("evaluate: {:?}", code[0]) };
+    assert!(matches!(&arguments[0], s::Argument::Evaluation(evaluation) if evaluation.op == s::DataOp::IntMod));
+    assert_eq!(outcomes.iter().map(|outcome| (outcome.tag, outcome.edge.target_pc)).collect::<Vec<_>>(),
+        [(s::Tag::Normal, 2), (s::Tag::Unwind, 1)]);
+    assert!(matches!(code[1], s::Instruction::Raise(_)));
+    assert!(matches!(code[2], s::Instruction::Data { op: s::DataOp::IntAdd, .. }));
+    assert!(!code.iter().any(|instruction| matches!(instruction, s::Instruction::Data { op, .. } if op.fallible())));
+}
+
+#[test]
+fn s2_fallible_scalar_unwinds_into_the_block_unwind() {
+    let program = fallible_program(true);
+    let function = &program.functions[0];
+    let s::Instruction::Champ { op: s::Opcode::Evaluate, flow: s::Flow::Outcomes(outcomes), .. } = &function.code[0]
+        else { panic!("evaluate: {:?}", function.code[0]) };
+    let unwind = &outcomes[1].edge;
+    assert_eq!((outcomes[0].edge.target_pc, outcomes[1].tag), (1, s::Tag::Unwind));
+    let target = function.blocks.iter().position(|block| block.pc == unwind.target_pc).unwrap();
+    assert!(matches!(function.code[unwind.target_pc as usize], s::Instruction::Raise(_)));
+    assert_eq!(function.blocks[target].params.len(), 1);
+}

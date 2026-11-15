@@ -320,8 +320,8 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             let Some(Argument::Evaluation(evaluation)) = args.first() else {
                 return Err(violation("EVALUATE_OPERATION", "missing evaluation operation"));
             };
-            enforce(matches!(evaluation.op, DataOp::RangeNew | DataOp::RangeEnd | DataOp::RangeLen
-                | DataOp::IntMod), "EVALUATE_OPERATION", "operation is outside scalar outcomes")?;
+            enforce(evaluation.op.fallible() || matches!(evaluation.op, DataOp::RangeEnd | DataOp::RangeLen),
+                "EVALUATE_OPERATION", "operation is outside scalar outcomes")?;
             let types = locations.iter().map(|&location| match loc_type(f, location)? {
                 ProducedType::Value(ty) => Ok(ty),
                 _ => Err(violation("EVALUATE_OPERAND", "evaluation cannot consume services")),
