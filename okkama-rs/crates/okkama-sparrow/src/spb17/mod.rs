@@ -556,3 +556,7 @@ pub struct StaticSelection {
 mod load_tests;
 #[cfg(test)]
 mod arrays_tests;
+#[cfg(test)]
+mod rules_tests;
+#[cfg(test)]
+mod budget_tests;
