@@ -135,12 +135,19 @@ pub(super) fn opaque_cleanup(ctx: *mut Ctx, io: *mut CallOwn) -> Word {
     NORMAL
 }
 
+/// Tomato's text of a cancellation (`Cancelled.text()`, OIR `CANCELLED_TEXT`).
+pub(super) const CANCELLED_TEXT: &str = "Operation was cancelled";
+
 /// The text of a plain Error value, as Tomato's compiled `text()` writes it (#306): the case, then its
 /// payload in parentheses, strings as Okkama literals, plain enums and Error values by their own texts.
 pub(super) fn error_text(runtime: &Runtime, source: &s::Program, object: Word) -> String {
     let descriptor = heap::payload(runtime.heap.header_of(object)) as usize;
     if descriptor == runtime.champ.machine.as_ref().unwrap().native_failure as usize {
         return runtime.heap.text(runtime.heap.field(object, 3)).to_string();
+    }
+    // A cancellation caught as Error (#738) reads as Tomato's text of a cancellation.
+    if s::cancelled(source) == Some(descriptor as u32) {
+        return CANCELLED_TEXT.to_owned();
     }
     let declaration = &source.objects[descriptor];
     if declaration.fields.is_empty() {

@@ -154,3 +154,28 @@ fn catch_of_an_error_variant_takes_each_of_its_cases() {
     assert_eq!(catch(&mut ctx, 6), 0);
     assert_eq!(catch(&mut ctx, 0), 0);
 }
+
+/// A cancellation is caught by the system Cancelled and by the Error role (`u64::MAX`), binding a new Cancelled
+/// object whose Error text is Tomato's (#724, #738); a catch of another declaration lets it pass, and so does every
+/// catch in a program without Cancelled.
+#[test]
+fn a_cancellation_is_caught_as_cancelled_and_as_error() {
+    let mut cancelled = declared("Cancelled", vec![], &[]);
+    cancelled.layout.allocation_words = 2;
+    let objects = vec![declared("app.Ferr.plain", vec![], &["Ferr.plain"]), cancelled];
+    let mut runtime = Runtime::new_champ(s::Program { objects, ..s::Program::default() }, Vec::new()).unwrap();
+    let failure = runtime.failure_new(FailureKind::Cancelled);
+    let mut ctx = Ctx { status: FAILED, stack_limit: 0, failure, runtime: &mut *runtime, entry_frame: 0, scratch: 0 };
+    let catch = |ctx: &mut Ctx, descriptor| super::super::machine::rt_machine_catch(ctx, failure, descriptor);
+    assert_eq!(catch(&mut ctx, 0), 0);
+    for descriptor in [1, u64::MAX] {
+        let object = catch(&mut ctx, descriptor);
+        assert_ne!(object, 0);
+        assert_eq!(heap::payload(runtime.heap.header_of(object)), 1);
+        assert_eq!(text_of(&runtime, object), "Operation was cancelled");
+    }
+    let mut bare = errors();
+    let failure = bare.failure_new(FailureKind::Cancelled);
+    let mut ctx = Ctx { status: FAILED, stack_limit: 0, failure, runtime: &mut *bare, entry_frame: 0, scratch: 0 };
+    assert_eq!(super::super::machine::rt_machine_catch(&mut ctx, failure, u64::MAX), 0);
+}

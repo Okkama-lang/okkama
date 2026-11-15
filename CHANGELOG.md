@@ -8,6 +8,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **`catch e is Error` takes a cancellation on Champ, as on Tomato (#738).** Language spec 9.5: the
+  system `Cancelled` does the role `Error`. Champ's catch binds a new `Cancelled` object for a catch of
+  the Error role too, and its `text()` through the role is "Operation was cancelled". The OIR-2 → SPB 17
+  codegen adds the system `Cancelled` descriptor, after every other one, to a program that catches the
+  Error role without declaring it, and the SPB 17 loader admits such a catch only in a program that
+  declares `Cancelled` (`CATCH_TYPE`). A provider's `NativeFailure` already matched `catch e is Error`
+  on both engines; a test now holds it. Tomato's debug build crashes on this program when it does not
+  name `Cancelled` (#744).
 - **A native's program failure passes every catch on Champ, as on Tomato (#719).** Language spec 9.5:
   only a native's own `NativeFailure` takes part in matching. Champ no longer rewrites a synchronous
   native's program failure (a missing provider, a refused permission group) into a catchable

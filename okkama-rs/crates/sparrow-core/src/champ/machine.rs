@@ -933,17 +933,20 @@ pub(crate) fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, r
     Ok(true)
 }
 
-/// The payload of a failure that a `catch` of `descriptor` takes, or zero: every thrown or native payload
-/// (`u64::MAX`), a payload of that descriptor, or of a case of that multi-case Error variant.
+/// The payload of a failure that a `catch` of `descriptor` takes, or zero: every thrown, native or cancellation
+/// payload (`u64::MAX`, the Error role), a payload of that descriptor, or of a case of that multi-case Error variant.
 pub extern "C" fn rt_machine_catch(ctx: *mut Ctx, failure: Word, descriptor: Word) -> Word {
     let runtime = unsafe { &mut *(*ctx).runtime };
     let source = runtime.champ.machine.as_ref().map(|machine| machine.source.clone());
-    // A cancellation matches the program's system Cancelled (#724) and binds a new object of it, as Tomato's
-    // `rt_catch` does; the object has no fields.
+    // A cancellation matches the program's system Cancelled (#724) and the Error role (#738), and binds a new
+    // object of Cancelled, as Tomato's `rt_catch` does; the object has no fields. The loader admits a catch of the
+    // Error role only in a program that declares Cancelled (`CATCH_TYPE`).
     if matches!(runtime.failure(failure).map(|failure| &failure.kind), Some(runtime::FailureKind::Cancelled)) {
         let cancelled = source.as_deref().and_then(s::cancelled).map(u64::from);
         return match cancelled {
-            Some(cancelled) if cancelled == descriptor => runtime.heap.object_new(cancelled as u32, &[]),
+            Some(cancelled) if cancelled == descriptor || descriptor == u64::MAX => {
+                runtime.heap.object_new(cancelled as u32, &[])
+            }
             _ => 0,
         };
     }

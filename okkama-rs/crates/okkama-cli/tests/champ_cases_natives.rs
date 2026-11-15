@@ -133,6 +133,27 @@ fn champ_natives_native_failure_is_caught() {
     ), "ok\ncore.json/invalid_input/runtime/json@1::json_node_text/1\ntrue\nnot text\n");
 }
 
+/// The provider's NativeFailure is an Error too: `catch e is Error` takes it and `e.text()` is its message, as on
+/// Tomato, where this program prints the same line (#738, language spec 9.5).
+#[test]
+fn champ_natives_native_failure_is_caught_as_error() {
+    expect_output(concat!(
+        "module app v1.0.0;\n",
+        "import \"io/stdout\" take Stdout;\n",
+        "import \"runtime/json\" take json_parse_state, json_parse_root, json_node_text;\n",
+        "main() is int {\n",
+        "    let root = json_parse_root(json_parse_state(\"1\", 64));\n",
+        "    let text = try {\n",
+        "        json_node_text(root);\n",
+        "    } catch e is Error {\n",
+        "        \"error: \" + e.text();\n",
+        "    };\n",
+        "    Stdout().writeln(text);\n",
+        "    0;\n",
+        "}\n",
+    ), "error: JSON node has the wrong kind\n");
+}
+
 /// A provider refusal is a NativeFailure; uncaught, it ends the run after earlier effects.
 #[test]
 fn champ_natives_provider_failure() {
