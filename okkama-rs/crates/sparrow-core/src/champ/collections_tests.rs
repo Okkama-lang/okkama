@@ -11,6 +11,7 @@ fn object(name: &str, fields: Vec<s::Type>, enum_cases: u32) -> s::Object {
     };
     s::Object {
         name: name.into(), error_cases: vec![], enum_cases, variant_cases: vec![], handle: false, fields: source,
+        role: None, implements: vec![],
         layout: s::ObjectRuntimeLayout {
             allocation_words: (1 + fields.len() as u32).max(2),
             trace_layout: fields.iter().enumerate().filter_map(|(index, ty)| ty.traced().then_some(index as u32))

@@ -17,5 +17,5 @@ adapters.equations=1
 adapters.materialized=1
 joins.incompatible_publication=0
 joins.incompatible_protocol=0
-work.charged=3037
-memory.peak_auxiliary_bytes=95390
+work.charged=3053
+memory.peak_auxiliary_bytes=96222

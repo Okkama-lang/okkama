@@ -123,6 +123,8 @@ registry! {
     75 => FrameResume, "frame.resume";
     76 => AwaitUnwind, "await.unwind";
     77 => CleanupDeliverCancel, "cleanup.deliver_cancel";
+    96 => InvokeDispatch, "invoke.dispatch";
+    97 => InvokeDispatchOwn, "invoke.dispatch.own";
 }
 
 impl Opcode {
@@ -170,8 +172,8 @@ impl Opcode {
             (CleanupNext, Tag::Done) => vec![S(Cleanup)],
             (DestroyDirect | CleanupDestroy, Tag::Normal) => vec![S(Cleanup), S(FailureState)],
             (CleanupFinish, Tag::Normal) => vec![S(Closed), S(FailureState), S(ExitState)],
-            (InvokeObserve, Tag::Normal) => context.value.into_iter().map(Value).collect(),
-            (InvokeObserve, Tag::Unwind) if context.may_fail => vec![Value(Type::Failure)],
+            (InvokeObserve | InvokeDispatch, Tag::Normal) => context.value.into_iter().map(Value).collect(),
+            (InvokeObserve | InvokeDispatch, Tag::Unwind) if context.may_fail => vec![Value(Type::Failure)],
             (ArrayGet, Tag::Normal) => context.value.into_iter().map(Value).collect(),
             (ArrayGet, Tag::Unwind) => vec![Value(Type::Failure)],
             (Fail, Tag::Unwind) => vec![Value(Type::Failure)],
@@ -179,8 +181,10 @@ impl Opcode {
             (Evaluate, Tag::Unwind) => vec![Value(Type::Failure)],
             (Catch, Tag::Some) => context.value.into_iter().map(Value).collect(),
             (Catch, Tag::None) => vec![],
-            (InvokeCallOwn, Tag::Normal) => valued(),
-            (InvokeCallOwn | InvokeDefer, Tag::Unwind) if context.may_fail => vec![Value(Type::Failure)],
+            (InvokeCallOwn | InvokeDispatchOwn, Tag::Normal) => valued(),
+            (InvokeCallOwn | InvokeDispatchOwn | InvokeDefer, Tag::Unwind) if context.may_fail => {
+                vec![Value(Type::Failure)]
+            }
             (InvokeDefer, Tag::Continue) => vec![],
             (InvokeDefer, Tag::Replace(label)) => {
                 let declared = context.labels.iter().find(|declared| declared.label == label)
@@ -249,8 +253,8 @@ impl Opcode {
             OwnSplitChecked | ScopeSplit | ScopeTransfer | ArrayGet | Evaluate | Await => {
                 vec![Tag::Normal, Tag::Unwind]
             }
-            InvokeObserve if context.may_fail => vec![Tag::Normal, Tag::Unwind],
-            InvokeCallOwn => {
+            InvokeObserve | InvokeDispatch if context.may_fail => vec![Tag::Normal, Tag::Unwind],
+            InvokeCallOwn | InvokeDispatchOwn => {
                 if context.may_fail { vec![Tag::Normal, Tag::Unwind] } else { vec![Tag::Normal] }
             }
             InvokeDefer => {
@@ -280,6 +284,7 @@ impl Opcode {
     pub fn is_terminator(self) -> bool {
         matches!(self, Self::OwnSplitChecked | Self::ScopeSplit | Self::ScopeTransfer |
             Self::InvokeCallOwn | Self::InvokeObserve | Self::InvokeDefer | Self::CleanupNext | Self::ExitDispatch |
+            Self::InvokeDispatch | Self::InvokeDispatchOwn |
             Self::FailureDispatch | Self::RetOwn | Self::RetDefer | Self::ArrayGet | Self::Fail | Self::Evaluate
             | Self::Catch | Self::BuilderPush | Self::BuilderAppend | Self::BuilderRange | Self::BuilderFinish
             | Self::Lookup | Self::Await)
@@ -339,7 +344,8 @@ pub struct CallAbi {
 impl Opcode {
     pub const fn call_abi(self) -> Option<CallAbi> {
         let helper = match self {
-            Self::InvokeCallOwn => "champ_call_owned",
+            // A dispatch selects the implementation's entry, then transports it as an owned call.
+            Self::InvokeCallOwn | Self::InvokeDispatchOwn => "champ_call_owned",
             Self::InvokeDefer => "champ_invoke_defer",
             _ => return None,
         };
@@ -521,6 +527,7 @@ helper_registry! {
         "champ_machine_rat_order" => &[C, W, W], 0, None;
         "champ_machine_value_eq" => &[C, W, W, W], G, None;
         "champ_machine_variant_get" => &[C, W, W, W], G, None;
+        "champ_machine_role_narrow" => &[C, W, W], G, None;
         "champ_machine_collection" => &[C, W, W, P, W], G | HELPER_COLLECTS, None;
         "champ_machine_builder" => &[C, W, W, P, W], G | HELPER_COLLECTS, None;
         "champ_machine_lookup" => &[C, W, W, W, W, P], HELPER_STOPS, None;

@@ -1,7 +1,7 @@
 //! Relocation of verified Low cleanup evidence. No runtime signatures are invented here.
 use super::*;
 
-fn mask(effects: &[o::FailureKind]) -> Result<u32, GenerateError> {
+pub(super) fn mask(effects: &[o::FailureKind]) -> Result<u32, GenerateError> {
     effects.iter().try_fold(0, |bits, kind| Ok(bits | match kind {
         o::FailureKind::Thrown => 1,
         o::FailureKind::Program => 2,
@@ -274,6 +274,8 @@ impl Emitter<'_> {
                             (instructions[&id] + 2, true)
                         }
                         o::Operation::Lexical(o::LexicalOp::DeferRegister { .. }) => (instructions[&id], false),
+                        // An expanded value (an action value, a cap with a packet) exists after its last step.
+                        op if super::expansion(op) > 1 => (instructions[&id] + super::expansion(op) - 1, true),
                         // An evaluate has no post state: its result exists where the normal outcome lands.
                         op if super::fallible_scalar(op) => {
                             let raise = self.body.blocks.iter().any(|(_, block)| {
@@ -600,6 +602,7 @@ impl Emitter<'_> {
                 let instruction = self.body.insts.get(id)?;
                 let pc = instructions[&id];
                 states.insert(pc, active.clone());
+                let before = active.clone();
                 let uses = o::cfg::operation_uses(&instruction.op, self.body)
                     .map_err(|e| error(e.to_string()))?;
                 for operand in uses {
@@ -615,6 +618,11 @@ impl Emitter<'_> {
                 if matches!(instruction.op, o::Operation::Core(o::CoreOp::RangeLen { .. })) {
                     states.insert(pc + 1, active.clone());
                     states.insert(pc + 2, active.clone());
+                }
+                if super::expansion(&instruction.op) == 2 {
+                    // Its first step consumes no service: the second sees the instruction's input state. A
+                    // four-step action value is a construction expansion with its own boundaries below.
+                    states.insert(pc + 1, before);
                 }
                 if super::fallible_scalar(&instruction.op) {
                     // The evaluate consumes no service: its raise block and normal landing see the same state.
@@ -796,6 +804,14 @@ impl Emitter<'_> {
                     });
                 }
             }
+        }
+        // A two-step expansion defines a register its second step reads.
+        for &(pc, object) in &self.expansions {
+            let mut roots = self.result.proofs.roots.iter().filter(|root| root.pc == pc)
+                .flat_map(|root| root.locations.iter().copied()).collect::<BTreeSet<_>>();
+            roots.extend(states.get(&pc).cloned().unwrap_or_default());
+            roots.insert(L::Register(object));
+            self.result.proofs.roots.push(s::RootRequirement { pc: pc + 1, locations: roots.into_iter().collect() });
         }
         for (&block_id, &pc) in terms {
             if matches!(self.body.blocks.get(block_id)?.term.kind, o::TermKind::Trap { .. }) {

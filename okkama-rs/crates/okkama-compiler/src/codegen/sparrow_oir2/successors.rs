@@ -2,6 +2,20 @@
 //! Do not manufacture a second permission by forwarding an unused alias after succ.take.
 use super::*;
 
+/// The value a successor's succ.take produces: the object of an object successor, the role value of a
+/// role successor. `None` for every other type.
+fn taken(ty: s::Type) -> Option<s::Type> {
+    match ty {
+        s::Type::Successor(id) => Some(s::Type::Object(id)),
+        s::Type::RoleSuccessor(id) => Some(s::Type::Role(id)),
+        _ => None,
+    }
+}
+
+fn is_successor(ty: s::Type) -> bool {
+    taken(ty).is_some()
+}
+
 pub(super) fn prune_dead_aliases(function: &mut s::Function) {
     let mut needed = function.params.iter().copied().collect::<BTreeSet<_>>();
     for instruction in &function.code {
@@ -45,7 +59,7 @@ pub(super) fn prune_dead_aliases(function: &mut s::Function) {
     for block in &mut function.blocks {
         block.params.retain(|location| {
             let dead = matches!(location, s::Location::Register(id)
-                if matches!(function.registers[*id as usize], s::Type::Successor(_)))
+                if is_successor(function.registers[*id as usize]))
                 && !needed.contains(location);
             if dead { removed.insert(*location); }
             !dead
@@ -92,7 +106,7 @@ pub(super) fn permission_effects(function: &s::Function, instruction: &s::Instru
     -> (Vec<s::Location>, Vec<s::Location>)
 {
     let successor = |location: s::Location| matches!(location, s::Location::Register(id)
-        if matches!(function.registers[id as usize], s::Type::Successor(_)));
+        if is_successor(function.registers[id as usize]));
     match instruction {
         s::Instruction::Data { op, inputs, output, .. } => {
             let taken = inputs.first().copied().map(s::Location::Register)
@@ -120,11 +134,11 @@ pub(super) fn permission_effects(function: &s::Function, instruction: &s::Instru
 /// Unwind abandons unused successor results. Discharge their must-use permission explicitly;
 /// cleanup still owns the same identity packet. No destroy or ownership operation is introduced.
 pub(super) fn close_unwind_permissions(function: &mut s::Function) -> Result<(), GenerateError> {
-    if !function.registers.iter().any(|ty| matches!(ty, s::Type::Successor(_))) || function.code.is_empty() {
+    if !function.registers.iter().any(|&ty| is_successor(ty)) || function.code.is_empty() {
         return Ok(());
     }
     let successor = |location| matches!(location, s::Location::Register(id)
-        if matches!(function.registers[id as usize], s::Type::Successor(_)));
+        if is_successor(function.registers[id as usize]));
     let mut bare = function.clone();
     bare.proofs.roots.clear();
     bare.proofs.post_roots.clear();
@@ -205,8 +219,8 @@ pub(super) fn close_unwind_permissions(function: &mut s::Function) -> Result<(),
         for location in abandoned {
             extended.insert(location);
             let s::Location::Register(input) = location else { unreachable!() };
-            let s::Type::Successor(id) = function.registers[input as usize] else { unreachable!() };
-            let output = fresh(function, s::Type::Object(id))?;
+            let Some(object) = taken(function.registers[input as usize]) else { unreachable!() };
+            let output = fresh(function, object)?;
             function.code.push(data(s::DataOp::Move, vec![input], output, s::Immediate::None));
         }
         function.code.push(s::Instruction::Br(continuation));
@@ -257,7 +271,16 @@ struct Permissions {
 /// successor alias they replace.
 pub(super) fn forward_taken(function: &mut s::Function) -> Result<(), GenerateError> {
     let mut forwarded = BTreeSet::new();
-    while let Some((sources, params)) = taken_forwards(function) {
+    while let Some((sources, params, retakes)) = taken_forwards(function) {
+        // OIR-2 §8: a successor is used at least once and its value may be read again, so Own may take it
+        // twice on one path. The second take moves the object the first one produced: one permission per path.
+        for (pc, object) in retakes {
+            forwarded.insert(object);
+            let s::Location::Register(object) = object else { unreachable!("taken object register") };
+            if let s::Instruction::Data { inputs, .. } = &mut function.code[pc] {
+                inputs[0] = object;
+            }
+        }
         for (pc, ordinal, index, object) in sources {
             forwarded.insert(object);
             let edge = match &mut function.code[pc] {
@@ -269,8 +292,8 @@ pub(super) fn forward_taken(function: &mut s::Function) -> Result<(), GenerateEr
             edge.assignments[index].source = s::Source::Location(object);
         }
         for param in params {
-            if let s::Type::Successor(id) = function.registers[param as usize] {
-                function.registers[param as usize] = s::Type::Object(id);
+            if let Some(object) = taken(function.registers[param as usize]) {
+                function.registers[param as usize] = object;
             }
         }
     }
@@ -301,13 +324,15 @@ pub(super) fn forward_taken(function: &mut s::Function) -> Result<(), GenerateEr
 }
 
 type Forward = (usize, usize, usize, s::Location);
+type Round = (Vec<Forward>, BTreeSet<u32>, Vec<(usize, s::Location)>);
 
-/// One round of `forward_taken`: the edge sources to replace and the parameters to retype, or `None`
-/// when nothing can be forwarded. Inconsistent states are left for the verifier to reject.
-fn taken_forwards(function: &s::Function) -> Option<(Vec<Forward>, BTreeSet<u32>)> {
+/// One round of `forward_taken`: the edge sources to replace, the parameters to retype and the repeated
+/// takes to redirect, or `None` when nothing can be forwarded. Inconsistent states are left for the
+/// verifier to reject.
+fn taken_forwards(function: &s::Function) -> Option<Round> {
     let successor = |location: s::Location| matches!(location, s::Location::Register(id)
-        if matches!(function.registers[id as usize], s::Type::Successor(_)));
-    if function.code.is_empty() || !function.registers.iter().any(|ty| matches!(ty, s::Type::Successor(_))) {
+        if is_successor(function.registers[id as usize]));
+    if function.code.is_empty() || !function.registers.iter().any(|&ty| is_successor(ty)) {
         return None;
     }
     let blocks = function.blocks.iter().enumerate().map(|(index, block)| (block.pc, index))
@@ -321,6 +346,9 @@ fn taken_forwards(function: &s::Function) -> Option<(Vec<Forward>, BTreeSet<u32>
     let mut work = vec![0];
     // Per (pc, ordinal, assignment): the object to forward, or None where the source holds no object.
     let mut forwards = BTreeMap::<(usize, usize, usize), Option<s::Location>>::new();
+    // Per pc of a succ.take whose permission is already spent: the object its first take produced, or None
+    // where the paths into it disagree.
+    let mut retakes = BTreeMap::<usize, Option<s::Location>>::new();
     while let Some(index) = work.pop() {
         let mut state: Permissions = incoming[index].clone()?;
         let block = &function.blocks[index];
@@ -330,10 +358,21 @@ fn taken_forwards(function: &s::Function) -> Option<(Vec<Forward>, BTreeSet<u32>
             let (taken, created) = permission_effects(function, instruction);
             for location in taken {
                 // Only succ.take (a Data move) leaves an object reference to forward in place of the alias.
-                if state.active.remove(&location)
-                    && let s::Instruction::Data { output: Some(output), .. } = instruction
-                {
-                    state.taken.insert(location, s::Location::Register(*output));
+                let take = match instruction {
+                    s::Instruction::Data { op: s::DataOp::Move, output: Some(output), .. } => Some(*output),
+                    _ => None,
+                };
+                if state.active.remove(&location) {
+                    if let Some(output) = take {
+                        state.taken.insert(location, s::Location::Register(output));
+                    }
+                } else if take.is_some() {
+                    // OIR-2 §8: a second succ.take of a taken successor moves the first take's object.
+                    let object = state.taken.get(&location).copied();
+                    let entry = retakes.entry(pc).or_insert(object);
+                    if *entry != object {
+                        *entry = None;
+                    }
                 }
             }
             state.active.extend(created);
@@ -398,7 +437,8 @@ fn taken_forwards(function: &s::Function) -> Option<(Vec<Forward>, BTreeSet<u32>
         }
     }
     let params = candidates.into_iter().filter_map(|(param, all)| all.then_some(param)).collect::<BTreeSet<_>>();
-    if params.is_empty() {
+    let retakes = retakes.into_iter().filter_map(|(pc, object)| Some((pc, object?))).collect::<Vec<_>>();
+    if params.is_empty() && retakes.is_empty() {
         return None;
     }
     let sources = forwards.into_iter().filter_map(|((pc, ordinal, position), object)| {
@@ -406,5 +446,5 @@ fn taken_forwards(function: &s::Function) -> Option<(Vec<Forward>, BTreeSet<u32>
         let s::Location::Register(destination) = edge.assignments[position].destination else { return None };
         params.contains(&destination).then_some((pc, ordinal, position, object?))
     }).collect();
-    Some((sources, params))
+    Some((sources, params, retakes))
 }

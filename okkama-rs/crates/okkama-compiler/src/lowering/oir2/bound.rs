@@ -36,20 +36,36 @@ pub(super) fn entries(module: &ir::Module, inventory: &callables::Inventory,
                     unreachable!("specialized bound role");
                 };
                 for target in role_targets(module, decl, slot as u32)? {
-                    entries.insert(target);
-                    // A witness adapter can call the implementation; guard that concrete entry too.
-                    if let Some(body) = &module.functions.get(target)?.body {
-                        for (_, inst) in body.insts.iter() {
-                            if let ir::Operation::Call(ir::CallOp::Direct { function, .. }) = inst.op {
-                                entries.insert(function);
-                            }
-                        }
-                    }
+                    guard_witness(module, target, &mut entries)?;
+                }
+            }
+        }
+    }
+    // A role call hides the concrete receiver, so only its implementation entry can see that the receiver's
+    // construction is still pending (§11.4, #271): every witness slot is guarded like a bound role action.
+    for (_, declaration) in module.declarations.iter() {
+        if let ir::DeclarationKind::Object { witnesses, .. } = &declaration.kind {
+            for witness in witnesses {
+                for &target in &witness.slots {
+                    guard_witness(module, target, &mut entries)?;
                 }
             }
         }
     }
     Ok(entries)
+}
+
+/// Guard a witness slot's entry; a witness adapter can call the implementation, so guard that concrete entry too.
+fn guard_witness(module: &ir::Module, target: ir::FuncId, entries: &mut HashSet<ir::FuncId>) -> Result<()> {
+    entries.insert(target);
+    if let Some(body) = &module.functions.get(target)?.body {
+        for (_, inst) in body.insts.iter() {
+            if let ir::Operation::Call(ir::CallOp::Direct { function, .. }) = inst.op {
+                entries.insert(function);
+            }
+        }
+    }
+    Ok(())
 }
 
 impl super::body::BodyLowerer<'_, '_> {

@@ -193,6 +193,9 @@ helpers! {
     champ_machine_variant_get = crate::champ::machine::rt_machine_variant_get as (ctx,
         case: Word, storage: Word, value: Word) -> u64; [Allocates, Fails, Stops];
     #[cfg(feature = "champ-abi")]
+    champ_machine_role_narrow = crate::champ::machine::rt_machine_role_narrow as (ctx,
+        role: Word, value: Word) -> u64; [Allocates, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
     champ_machine_collection = crate::champ::collections::rt_machine_collection as (ctx,
         function: u64, pc: u64, args: *const Word, count: u64) -> u64; [Allocates, Collects, Fails, Stops];
     #[cfg(feature = "champ-abi")]

@@ -131,8 +131,8 @@ func @f(%0: int; %1: own) -> (int, own) abi explicit(input_packet=1, output_pack
     dependency d7: dependency = from_ssa(%46)
     dependency d8: dependency = from_ssa(%57)
     dependency d9: dependency = union([d8])
-    dependency d10: dependency = from_ssa(%73)
-    dependency d11: dependency = from_ssa(%76)
+    dependency d10: dependency = from_ssa(%76)
+    dependency d11: dependency = from_ssa(%79)
     selection s0: selection = admissible(selection(%44))
     ^b0 in S2:
     %2: scope<S2> = scope.begin S2
@@ -174,33 +174,36 @@ func @f(%0: int; %1: own) -> (int, own) abi explicit(input_packet=1, output_pack
     ^b8(%53: scope<S2>, %54: own, %55: deps, %56: R facts(managed(deps=d8)), %57: deps, %58: int) in S2:
     %59: scope<S2> = own.bind binding elaborated_binding(binding=b0, resource=resource_value(value=%56, packet=%54),
         state=%53, original_scope=S2)
-    %60: fn() -> int facts(managed(deps=d9)) = fn.closure @lambda.__own_entry_1, [%56], ty fn() -> int
-    %61: deps = deps.of %60
-    %62: int = const 0
-    %63: int = const 1
-    br ^b2(%58, %56, %57, %63, %60, %61, %62, %59)
-    ^b9(%64: scope<S2>, %65: failure) in S2:
-    %66: failure = scope.unwind %64, %65, effects scope_effects(failures=[], suspends=false, cancel=false)
-    raise %66
+    %60: own = own.empty
+    (%61: fn() -> int facts(managed(deps=d9)),
+        %62: own) = fn.closure @lambda.__own_entry_1, [%56], ty fn() -> int, packet %60
+    %63: deps = deps.of %61
+    %64: scope<S2> = own.admit %59, %62
+    %65: int = const 0
+    %66: int = const 1
+    br ^b2(%58, %56, %57, %66, %61, %63, %65, %64)
+    ^b9(%67: scope<S2>, %68: failure) in S2:
+    %69: failure = scope.unwind %67, %68, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %69
     ^b10 in S2:
-    %67: scope<S5> = scope.begin S5
-    br ^b4(%7, %8, %9, %10, %11, %12, %13, %14, %67)
+    %70: scope<S5> = scope.begin S5
+    br ^b4(%7, %8, %9, %10, %11, %12, %13, %14, %70)
     ^b11 in S2:
     br ^b3(%8, %9, %14)
-    ^b12(%68: int, %69: own, %70: deps, %71: int, %72: R facts(managed(deps=d10)), %73: deps, %74: int, %75: fn() ->
-        int facts(managed(deps=d11)), %76: deps, %77: int, %78: scope<S2>, %79: scope<S5>) in S5:
-    %80: scope<S5> = own.admit %79, %69
-    %81: int = int.add %77, %74
-    %82: closed = scope.end %80, effects scope_effects(failures=[], suspends=false, cancel=false)
+    ^b12(%71: int, %72: own, %73: deps, %74: int, %75: R facts(managed(deps=d10)), %76: deps, %77: int,
+        %78: fn() -> int facts(managed(deps=d11)), %79: deps, %80: int, %81: scope<S2>, %82: scope<S5>) in S5:
+    %83: scope<S5> = own.admit %82, %72
+    %84: int = int.add %80, %77
+    %85: closed = scope.end %83, effects scope_effects(failures=[], suspends=false, cancel=false)
     br ^b14
-    ^b13(%83: failure, %84: scope<S2>, %85: scope<S5>) in S5:
-    %86: failure = scope.unwind %85, %83, effects scope_effects(failures=[], suspends=false, cancel=false)
+    ^b13(%86: failure, %87: scope<S2>, %88: scope<S5>) in S5:
+    %89: failure = scope.unwind %88, %86, effects scope_effects(failures=[], suspends=false, cancel=false)
     br ^b15
     ^b14 in S2:
-    br ^b5(%71, %72, %73, %74, %75, %76, %81, %78)
+    br ^b5(%74, %75, %76, %77, %78, %79, %84, %81)
     ^b15 in S2:
-    %87: failure = scope.unwind %84, %86, effects scope_effects(failures=[], suspends=false, cancel=false)
-    raise %87
+    %90: failure = scope.unwind %87, %89, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %90
 }
 
 func @lambda.__own_entry_1(%0: R facts(managed(deps=d1)); %1: deps, %2: own) -> (int, own) [lambda captures

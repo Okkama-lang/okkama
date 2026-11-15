@@ -18,7 +18,7 @@ pub use codec::{assemble, decode, disassemble, encode};
 pub use registry::{CallAbi, CleanupAbi, Helper, HelperClass, MachineArgument, Opcode, ProducedType, ResultContext};
 pub use registry::Tag;
 pub use registry::{helper, HELPER_TABLE, HELPER_ALLOCATES, HELPER_COLLECTS, HELPER_REENTERS, HELPER_UNWINDS, HELPER_STOPS};
-pub use verify::{verify, result_context};
+pub use verify::{verify, result_context, implementation, role_reaches_resource};
 pub use load::{ExternalContracts, NoExternalContracts, verify_load, service_states};
 
 pub const VERSION: u16 = 17;
@@ -121,6 +121,45 @@ pub struct Object {
     pub name: String,
     pub fields: Vec<Field>,
     pub layout: ObjectRuntimeLayout,
+    /// A role declaration: a placeholder descriptor that names a role type, never an allocated object.
+    pub role: Option<RoleDecl>,
+    /// The roles this object implements, one implementation table per role (`ROLE_IMPL`).
+    pub implements: Vec<RoleImpl>,
+}
+
+/// The slots of a role: each slot's entry ABI and its signature without the receiver.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RoleDecl {
+    pub slots: Vec<RoleSlot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoleSlot {
+    pub name: String,
+    pub entry_abi: EntryAbi,
+    pub params: Vec<Type>,
+    pub results: Vec<Type>,
+}
+
+/// One object's implementation table for one role: the function of every slot, in slot order.
+/// Each function takes the implementing object first, then the slot's parameters.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoleImpl {
+    pub role: u32,
+    pub slots: Vec<u32>,
+}
+
+/// A dynamic call of one role slot. The receiver's object descriptor selects its implementation; only the
+/// listed objects may be dispatched to, every other receiver stops the machine. Every listed implementation
+/// refines the site contract: its failures and retained parameters (language positions, receiver first)
+/// are within `failures` and `retained_params` (`DISPATCH_TARGET`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Dispatch {
+    pub role: u32,
+    pub slot: u32,
+    pub failures: u32,
+    pub retained_params: Vec<u32>,
+    pub targets: Vec<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -155,6 +194,10 @@ pub enum Type {
     Handle(u32),
     Never,
     Descriptor,
+    /// A role value: a reference to an object that implements the role declaration `id` (`Object::role`).
+    Role(u32),
+    /// A role value that still carries a successor's must-use permission (`^Role`).
+    RoleSuccessor(u32),
     /// A finished map: `Composite::Map` at this index of `Program::composites`.
     Map(u32),
     /// A unique map builder whose finished value is `Type::Map` of the same index.
@@ -170,7 +213,7 @@ impl Type {
     pub fn traced(self) -> bool {
         matches!(self, Self::Error | Self::Bytes | Self::Array(_) | Self::Str | Self::Object(_) | Self::Successor(_)
             | Self::Failure | Self::Rat | Self::Variant(_) | Self::Handle(_) | Self::Map(_) | Self::MapBuilder(_)
-            | Self::Builder(_) | Self::Future(_))
+            | Self::Builder(_) | Self::Future(_) | Self::Role(_) | Self::RoleSuccessor(_))
     }
 }
 
@@ -189,6 +232,7 @@ pub enum ArrayLeaf {
     Range,
     Bytes,
     Object(u32),
+    Role(u32),
     Float,
     Char,
     Rat,
@@ -209,6 +253,7 @@ impl ArrayType {
                 ArrayLeaf::Range => Type::Range,
                 ArrayLeaf::Bytes => Type::Bytes,
                 ArrayLeaf::Object(id) => Type::Object(id),
+                ArrayLeaf::Role(id) => Type::Role(id),
                 ArrayLeaf::Float => Type::Float,
                 ArrayLeaf::Char => Type::Char,
                 ArrayLeaf::Rat => Type::Rat,
@@ -230,6 +275,7 @@ impl ArrayType {
             Type::Range => ArrayLeaf::Range,
             Type::Bytes => ArrayLeaf::Bytes,
             Type::Object(id) => ArrayLeaf::Object(id),
+            Type::Role(id) => ArrayLeaf::Role(id),
             Type::Float => ArrayLeaf::Float,
             Type::Char => ArrayLeaf::Char,
             Type::Rat => ArrayLeaf::Rat,
@@ -446,6 +492,7 @@ pub enum Argument {
     Destination(ExitDestination),
     /// A continuation of the function's frame layout (`frame.save`, `frame.resume`).
     Continuation(u32),
+    Dispatch(Dispatch),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -550,6 +597,8 @@ pub enum DataOp {
     ArrayLen,
     FailSecondary,
     FailCaused,
+    /// A checked conversion of a role value to another role: fails unless the object implements it.
+    RoleNarrow,
     /// `map.new k0, v0, k1, v1, ...`: later equal keys replace the value and keep the first key word.
     MapNew,
     MapLen,
@@ -744,7 +793,8 @@ impl DataOp {
     pub fn fallible(self, operands: &[Type], result: Option<Type>) -> bool {
         match self {
             Self::IntMod | Self::RangeNew | Self::RatNew | Self::ValEq | Self::ValNe | Self::VariantGet
-                | Self::MapGet | Self::MapKeyAt | Self::MapValueAt | Self::MapDifference | Self::ArraySlice
+                | Self::RoleNarrow | Self::MapGet | Self::MapKeyAt | Self::MapValueAt | Self::MapDifference
+                | Self::ArraySlice
                 | Self::ArrayRemove | Self::ArrayReplace | Self::ArrayDifference => true,
             Self::TestOk | Self::TestIs | Self::TestIsnt | Self::TestFail => true,
             // Tomato's failures: an int outside signed 64 bits in a bit operation, a shift or rotation
@@ -1040,3 +1090,5 @@ mod rules_tests;
 mod budget_tests;
 #[cfg(test)]
 mod async_tests;
+#[cfg(test)]
+mod roles_tests;

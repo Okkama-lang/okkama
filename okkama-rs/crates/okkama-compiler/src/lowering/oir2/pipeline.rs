@@ -139,7 +139,9 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
         let (fields, destroy, builtin) = match &declaration.kind {
             o::DeclarationKind::Object { fields, destroy, builtin, .. } => (fields.as_slice(), *destroy, *builtin),
             o::DeclarationKind::Enum { .. } | o::DeclarationKind::Variant { .. } => (&[][..], None, false),
-            o::DeclarationKind::Role { builtin: true, .. } if declaration.name == "Error" => (&[][..], None, false),
+            // A role is a placeholder descriptor; its slots and implementations live in the SPB declarations.
+            // A cap value is its owner's reference, so its declaration is a placeholder too.
+            o::DeclarationKind::Role { .. } | o::DeclarationKind::Cap { .. } => (&[][..], None, false),
             o::DeclarationKind::Handle => (&[][..], None, false),
             _ => return Err(phase("layout", format!("unsupported declaration {}", declaration.name))),
         };
@@ -175,9 +177,23 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
             source_fields: (0..fields.len() as u32).collect(),
         });
     }
+    // A role value reaches a resource when one of its implementations does.
+    let mut implementors = BTreeMap::<u32, Vec<u32>>::new();
+    for (id, declaration) in module.declarations.iter() {
+        let o::DeclarationKind::Object { witnesses, .. } = &declaration.kind else { continue };
+        for witness in witnesses {
+            let role = module.types.get(witness.role).map_err(|error| phase("layout", error))?;
+            if let o::Type::Role { decl, .. } = role {
+                implementors.entry(decl.as_u32()).or_default().push(id.as_u32());
+            }
+        }
+    }
     loop {
         let reaches = layouts.iter().filter_map(|(&id, layout)| layout.runtime.may_reach_resource.then_some(id))
             .collect::<std::collections::BTreeSet<_>>();
+        let role_reaches = |role: &u32| implementors.get(role).is_some_and(|objects| {
+            objects.iter().any(|object| reaches.contains(object))
+        });
         let mut changed = false;
         for layout in layouts.values_mut() {
             // A field holding a resource object, or a managed array of them, is selected: the runtime
@@ -191,9 +207,15 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
                     },
                     ty => Some(ty),
                 };
-                matches!(leaf, Some(s::Type::Object(id) | s::Type::Successor(id) | s::Type::Variant(id))
-                    if reaches.contains(&id))
-                    .then_some(i as u32)
+                let reaching = match leaf {
+                    Some(s::Type::Object(id) | s::Type::Successor(id) | s::Type::Variant(id)) => reaches.contains(&id),
+                    // A role field reaches what one of its implementations reaches; role arrays are closed plain.
+                    Some(s::Type::Role(id) | s::Type::RoleSuccessor(id)) if !matches!(ty, s::Type::Array(_)) => {
+                        role_reaches(&id)
+                    }
+                    _ => false,
+                };
+                reaching.then_some(i as u32)
             }).collect();
             if !layout.runtime.may_reach_resource && !layout.runtime.selection_layout.is_empty() {
                 layout.runtime.may_reach_resource = true;

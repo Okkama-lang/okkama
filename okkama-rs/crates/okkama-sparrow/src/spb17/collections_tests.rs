@@ -69,6 +69,7 @@ fn plain_object(name: &str, fields: Vec<Type>, resource: bool) -> Object {
         .collect();
     Object {
         name: name.into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false,
+        role: None, implements: vec![],
         fields: (0..fields.len() as u32).map(|storage| Field { name: format!("f{storage}"), storage, once: false })
             .collect(),
         layout: ObjectRuntimeLayout {
