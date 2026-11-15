@@ -1426,8 +1426,7 @@ impl Checker<'_, '_> {
                 self.service(*cleanup, ServiceType::CleanupState)?;
                 self.service(*key, ServiceType::StableKey)?;
             }
-            CleanupOp::Shield { cleanup }
-            | CleanupOp::DeliverCancel { cleanup } | CleanupOp::Finish { cleanup } => {
+            CleanupOp::DeliverCancel { cleanup } | CleanupOp::Finish { cleanup } => {
                 self.service(*cleanup, ServiceType::CleanupState)?;
             }
             CleanupOp::DestroyDirect { cleanup, identity, descriptor, destroy } => {

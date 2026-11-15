@@ -27,11 +27,9 @@ func @f(%schedule: type) -> void summary(Mf) {
         root_binding(value=%settled,
         trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=after_instruction(i3),
         bindings=[root_binding(value=%settled, trace=cleanup_activation)], through_suspend=true),
-        root_requirement(boundary=before_instruction(i3), bindings=[root_binding(value=%shield,
-        trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=after_instruction(i2),
-        bindings=[root_binding(value=%shield, trace=cleanup_activation)], through_suspend=true),
-        root_requirement(boundary=before_instruction(i2), bindings=[root_binding(value=%c, trace=cleanup_activation)],
-        through_suspend=true), root_requirement(boundary=after_instruction(i1), bindings=[root_binding(value=%c,
+        root_requirement(boundary=before_instruction(i3), bindings=[root_binding(value=%c,
+        trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=after_instruction(i1),
+        bindings=[root_binding(value=%c,
         trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=before_instruction(i1),
         bindings=[root_binding(value=%schedule, trace=value(type)), root_binding(value=%q, trace=scope_inventory)],
         through_suspend=true), root_requirement(boundary=after_instruction(i0),
@@ -47,8 +45,7 @@ func @f(%schedule: type) -> void summary(Mf) {
 ^cleanup in S:
     [i0] %q: scope<S> = scope.begin S
     [i1] %c: cleanup-state = cleanup.begin %q, close 0, effects scope_effects(failures=[], suspends=false, cancel=false)
-    [i2] %shield: cleanup-state = cleanup.shield %c
-    [i3] %settled: cleanup-state = cleanup.settle.empty %shield, schedule 0
+    [i3] %settled: cleanup-state = cleanup.settle.empty %c, schedule 0
     [i4] %planned: cleanup-state = cleanup.plan %settled, plan 0
     [i5] (%closed: closed, %fs: failure-state, %xs: exit-state) = cleanup.finish %planned
     exit.dispatch 0 %closed %fs %xs success ^done($closed)

@@ -41,6 +41,15 @@ const GOLDENS: &[(&str, &str, &str)] = &[
     golden!("r2-defer-await-reserve"),
     // R2: closes that suspend while the body owns a resource.
     golden!("r2-resource-suspending-close"),
+    // K1: cancellation before start, the elaboration §13.4 fixture, a nested close before the next await.
+    golden!("k1-cancel-unstarted"),
+    golden!("k1-failure-view-escapes"),
+    golden!("k1-nested-close-next-await"),
+    // #684: a nested close while a Future of an enclosing scope is live.
+    golden!("nested-close-outer-future"),
+    // #691: a void fixed root (an async test); the deps of a Future argument in continuation 0.
+    golden!("void-fixed-root"),
+    golden!("start-deps"),
 ];
 const PLAIN: usize = 0;
 const NEVER: usize = 5;
@@ -432,5 +441,287 @@ fn a_settle_step_never_takes_an_await_task() {
         .map(|(id, _)| id).unwrap();
     let found = diagnostics(&output).into_iter().any(|diagnostic| diagnostic.rule == RuleId::B91
         && diagnostic.primary.entity == EntityLocation::Instruction { function: main, instruction: first });
+    assert!(found, "{:?}", diagnostics(&output));
+}
+
+const K1_CANCEL: usize = 16;
+const K1_ESCAPES: usize = 17;
+const K1_NESTED: usize = 18;
+
+/// The scope closes of a body: each close, its scope, whether it runs on a failure and whether it delivers.
+fn closes_of(body: &Body) -> Vec<(CleanupCloseId, ScopeId, bool, bool)> {
+    body.cleanup.closes.iter().filter_map(|(id, close)| match close.source {
+        CleanupSource::Scope(scope) => Some((id, scope, close.active_failure, close.effects.cancel)),
+        CleanupSource::Packet(_) => None,
+    }).collect()
+}
+
+/// The close an instruction of a cleanup chain belongs to, through its cleanup-state operand back to the begin.
+fn close_of(body: &Body, mut cleanup: ValueId) -> CleanupCloseId {
+    loop {
+        match body.values.get(cleanup).unwrap().def {
+            Definition::InstResult { inst, .. } => match &body.insts.get(inst).unwrap().op {
+                Operation::Cleanup(CleanupOp::Begin { close, .. }) => return *close,
+                Operation::Cleanup(CleanupOp::Settle { cleanup: previous, .. }
+                    | CleanupOp::SettleEmpty { cleanup: previous, .. } | CleanupOp::Plan { cleanup: previous, .. }
+                    | CleanupOp::DeliverCancel { cleanup: previous }) => cleanup = *previous,
+                other => panic!("{other:?}"),
+            },
+            Definition::BlockParam { block, index } => {
+                let (_, source) = body.blocks.iter().find_map(|(id, data)| {
+                    let arguments: Vec<_> = match &data.term.kind {
+                        TermKind::Br(target) if target.block == block => {
+                            target.args.iter().copied().map(EdgeArg::Value).collect()
+                        }
+                        kind => dispatch_edges(kind).into_iter().find(|(_, edge)| edge.block == block)
+                            .map(|(_, edge)| edge.args.clone()).unwrap_or_default(),
+                    };
+                    match arguments.get(index as usize) {
+                        Some(EdgeArg::Value(value)) => Some((id, *value)),
+                        Some(EdgeArg::Produced(_)) => match &data.term.kind {
+                            TermKind::CleanupNext { cleanup, .. } | TermKind::FailureDispatch { failure: cleanup, .. }
+                                => Some((id, *cleanup)),
+                            _ => None,
+                        },
+                        None => None,
+                    }
+                }).unwrap();
+                cleanup = source;
+            }
+        }
+    }
+}
+
+/// K1 (D18, elaboration §13.4): a nested close keeps a pending cancellation for the next await. The successful
+/// close of the branch block S2 settles the duty of g, declares no cancellation and delivers none; no failing
+/// close delivers either. The final close keeps the D18 form of the IR, which the K2 ruling leaves for #727
+/// (at run time it delivers nothing), so this test does not state it.
+#[test]
+fn k1_a_nested_close_keeps_the_cancellation_for_the_next_await() {
+    let (name, coro, _) = GOLDENS[K1_NESTED];
+    assert_eq!(name, "k1-nested-close-next-await");
+    let output = lowered(name, coro);
+    let main = function_id(&output, "main");
+    let body = output.functions.get(main).unwrap().body.as_ref().unwrap();
+    let closes = closes_of(body);
+    let nested: Vec<_> = closes.iter().filter(|(_, scope, failing, _)| {
+        output.scopes.get(*scope).unwrap().parent.is_some() && !failing
+    }).collect();
+    assert_eq!(nested.len(), 1, "{closes:?}");
+    assert!(!nested[0].3, "a nested close declares no cancellation");
+    let delivering: std::collections::BTreeSet<_> = body.insts.iter().filter_map(|(_, inst)| match inst.op {
+        Operation::Cleanup(CleanupOp::DeliverCancel { cleanup }) => Some(close_of(body, cleanup)),
+        _ => None,
+    }).collect();
+    let kept: std::collections::BTreeSet<_> = closes.iter().filter(|(_, scope, failing, _)| {
+        output.scopes.get(*scope).unwrap().parent.is_some() || *failing
+    }).map(|(close, ..)| *close).collect();
+    assert!(!kept.is_empty());
+    assert!(delivering.is_disjoint(&kept), "{closes:?}");
+    // The duty of g is settled by the nested close, before the await of f.
+    let schedule = body.cleanup.schedules.iter().find(|(_, schedule)| schedule.close == nested[0].0).unwrap().1;
+    assert_eq!(schedule.holders.len(), 1);
+}
+
+/// K1 (D18): delivering in the nested close of S2 is rejected; the pending cancellation belongs to the next await.
+#[test]
+fn k1_a_nested_close_that_delivers_is_rejected() {
+    let (name, coro, _) = GOLDENS[K1_NESTED];
+    let mut output = lowered(name, coro);
+    let scopes = output.scopes.clone();
+    let body = function_mut(&mut output, "main");
+    let nested = body.cleanup.closes.iter().find(|(_, close)| !close.active_failure && match close.source {
+        CleanupSource::Scope(scope) => scopes.get(scope).unwrap().parent.is_some(),
+        CleanupSource::Packet(_) => false,
+    }).map(|(id, _)| id).unwrap();
+    let (plan, settled) = body.insts.iter().find_map(|(id, inst)| match inst.op {
+        Operation::Cleanup(CleanupOp::Plan { cleanup, .. }) if close_of(body, cleanup) == nested => {
+            Some((id, cleanup))
+        }
+        _ => None,
+    }).unwrap();
+    let ty = body.values.get(settled).unwrap().ty;
+    let deliver = body.insts.alloc(Instruction {
+        results: vec![], op: Operation::Cleanup(CleanupOp::DeliverCancel { cleanup: settled }),
+        facts: InstructionFacts::default(), loc: None,
+    }).unwrap();
+    let delivered = body.values.alloc(ValueData {
+        ty, def: Definition::InstResult { inst: deliver, index: 0 }, facts: ValueFacts::Service,
+    }).unwrap();
+    body.insts.get_mut(deliver).unwrap().results = vec![delivered];
+    let Operation::Cleanup(CleanupOp::Plan { cleanup, .. }) = &mut body.insts.get_mut(plan).unwrap().op else {
+        unreachable!();
+    };
+    *cleanup = delivered;
+    let (block, position) = body.blocks.iter().find_map(|(id, block)| {
+        block.insts.iter().position(|inst| *inst == plan).map(|position| (id, position))
+    }).unwrap();
+    body.blocks.get_mut(block).unwrap().insts.insert(position, deliver);
+    rebuild_roots(&mut output, "main");
+    let main = function_id(&output, "main");
+    let found = diagnostics(&output).into_iter().any(|diagnostic| diagnostic.rule == RuleId::LowCancelOutsideFinalExit
+        && diagnostic.primary.entity == EntityLocation::Instruction { function: main, instruction: deliver });
+    assert!(found, "{:?}", diagnostics(&output));
+}
+
+/// K1, elaboration §13.4: the failure of `await f` escapes the Future-owning action main. The failing close
+/// after `await.unwind` begins with the adapter's failure, settles the cache duty of f and finishes; main
+/// publishes the failure the close returns, which closing the duty did not invalidate.
+#[test]
+fn k1_the_failure_view_outlives_the_cache_duty_it_came_from() {
+    let (name, coro, _) = GOLDENS[K1_ESCAPES];
+    assert_eq!(name, "k1-failure-view-escapes");
+    let output = lowered(name, coro);
+    let main = function_id(&output, "main");
+    let body = output.functions.get(main).unwrap().body.as_ref().unwrap();
+    let adapted: Vec<ValueId> = body.insts.iter()
+        .filter(|(_, inst)| matches!(inst.op, Operation::Async(AsyncOp::AwaitUnwind { .. })))
+        .map(|(_, inst)| inst.results[1]).collect();
+    assert_eq!(adapted.len(), 1);
+    let close = body.insts.iter().find_map(|(_, inst)| match inst.op {
+        Operation::Cleanup(CleanupOp::Begin { failure: Some(failure), close, .. }) if failure == adapted[0] => {
+            Some(close)
+        }
+        _ => None,
+    }).expect("the failing close begins with the failure that await.unwind returns");
+    assert!(!body.cleanup.closes.get(close).unwrap().effects.cancel, "a failing close never delivers");
+    let settles = body.insts.iter().filter(|(_, inst)| matches!(inst.op,
+        Operation::Cleanup(CleanupOp::Settle { cleanup, .. }) if close_of(body, cleanup) == close)).count();
+    assert_eq!(settles, 1, "the close settles the cache duty of f");
+    assert!(body.blocks.iter().any(|(_, block)| block.insts.iter().any(|inst| matches!(
+        body.insts.get(*inst).unwrap().op,
+        Operation::Async(AsyncOp::FuturePublish { outcome: PublishOutcome::Failure(_), .. })))));
+}
+
+/// K1 (elaboration §13.1, Champ draft 3 §5): cancelling a cold Future twice before it starts leaves its cache
+/// duty with its owner. Every close of main settles that duty once.
+#[test]
+fn k1_a_cancelled_cold_future_keeps_its_duty_until_the_close() {
+    let (name, coro, _) = GOLDENS[K1_CANCEL];
+    assert_eq!(name, "k1-cancel-unstarted");
+    let output = lowered(name, coro);
+    let main = function_id(&output, "main");
+    let body = output.functions.get(main).unwrap().body.as_ref().unwrap();
+    let cancels = body.insts.iter().filter(|(_, inst)| matches!(inst.op,
+        Operation::Async(AsyncOp::FutureCancel { .. }))).count();
+    assert_eq!(cancels, 2);
+    let cache_states = body.insts.iter().filter_map(|(_, inst)| match inst.op {
+        Operation::Async(AsyncOp::FutureNew { .. }) => Some(inst.results[1]),
+        _ => None,
+    }).count();
+    assert_eq!(cache_states, 1);
+    for (close, ..) in closes_of(body) {
+        let schedule = body.cleanup.schedules.iter().find(|(_, schedule)| schedule.close == close).unwrap().1;
+        let settles = body.insts.iter().filter(|(_, inst)| matches!(inst.op,
+            Operation::Cleanup(CleanupOp::Settle { cleanup, .. }) if close_of(body, cleanup) == close)).count();
+        assert_eq!(settles, schedule.holders.len());
+    }
+}
+
+/// K1 (elaboration §13.3, C-3): the cancel edge of an await that skips `await.unwind` drops its task and
+/// receipt; the abstract close that would take them is rejected in Low as in Coro.
+#[test]
+fn k1_a_cancel_edge_without_its_adapter_is_rejected_in_low() {
+    for source in [include_str!("../../tests/fixtures/async/coro-invalid/k1-cancel-edge-drops-task.oir"),
+        include_str!("../../tests/fixtures/async/coro-invalid/k1-stale-await-failure.oir")] {
+        let output = lower_cleanup(parsed(source), &LowOptions::default()).unwrap();
+        assert!(rules(&output).contains(&RuleId::B91), "{:?}", diagnostics(&output));
+    }
+}
+
+/// #690, plan §3.4, Champ draft 3 §5: the shield is a property of every close, not an operation, so Low has no
+/// `cleanup.shield` step. The close of `work` verifies without one, and the text form no longer has the opcode.
+#[test]
+fn the_shield_is_a_property_of_every_close() {
+    let (_, _, golden) = GOLDENS[PLAIN];
+    let mut lines: Vec<String> = golden.lines().map(str::to_owned).collect();
+    let begin = lines.iter().position(|line| line.contains("= cleanup.begin ")).unwrap();
+    let (name, _) = lines[begin].trim_start().split_once(':').unwrap();
+    let name = name.rsplit(' ').next().unwrap().to_owned();
+    // The step goes after the whole begin, whose continuation lines are indented further.
+    let after = (begin + 1..lines.len()).find(|index| !lines[*index].starts_with("        ")).unwrap();
+    lines.insert(after, format!("    %shielded: cleanup-state = cleanup.shield {name}"));
+    let shielded = lines.join("\n");
+    let error = text::parse(&shielded).unwrap_err();
+    assert_eq!(error.kind, text::DiagnosticKind::Syntax, "{error}");
+    assert!(error.to_string().contains("unknown opcode"), "{error}");
+    assert!(diagnostics(&parsed(golden)).is_empty());
+}
+
+const OUTER_FUTURE: usize = 19;
+
+/// The cache-state result of the `fut.new` whose owner is `owner`, in a Low body.
+fn cache_state_of(body: &Body, owner: ScopeId) -> Vec<ValueId> {
+    body.insts.iter().filter_map(|(_, inst)| match inst.op {
+        Operation::Async(AsyncOp::FutureNew { owner: scope, .. }) if scope == owner => Some(inst.results[1]),
+        _ => None,
+    }).collect()
+}
+
+/// #684, D16: a close settles exactly the duties of the scope it closes. In nested-close-outer-future the
+/// successful close of the branch block S2 settles the duty of g while the duty of f, owned by main's root
+/// scope, passes through it; the final close of main settles f.
+#[test]
+fn a_close_settles_only_the_duties_of_its_own_scope() {
+    let (name, coro, _) = GOLDENS[OUTER_FUTURE];
+    assert_eq!(name, "nested-close-outer-future");
+    let output = lowered(name, coro);
+    let main = function_id(&output, "main");
+    let body = output.functions.get(main).unwrap().body.as_ref().unwrap();
+    let closes = closes_of(body);
+    assert!(closes.iter().any(|(_, scope, failing, _)| {
+        !failing && output.scopes.get(*scope).unwrap().parent.is_some()
+    }));
+    for (close, scope, failing, _) in closes {
+        // S2 created g and S1 created f: a successful close schedules the one duty of its own scope and never the
+        // other; a failing close schedules at most that duty (a failure before the creation has none).
+        let schedule = body.cleanup.schedules.iter().find(|(_, schedule)| schedule.close == close).unwrap().1;
+        let created = cache_state_of(body, scope).len();
+        if failing {
+            assert!(schedule.holders.len() <= created, "{scope:?}");
+        } else {
+            assert_eq!(schedule.holders.len(), created, "{scope:?}");
+        }
+        let settles = body.insts.iter().filter(|(_, inst)| matches!(inst.op,
+            Operation::Cleanup(CleanupOp::Settle { cleanup, .. }) if close_of(body, cleanup) == close)).count();
+        assert_eq!(settles, schedule.holders.len(), "{scope:?}");
+    }
+}
+
+/// #684: the nested close of S2 that names the outer duty of f in its schedule is rejected at its begin: the
+/// begin takes only the duties of S2. Before #684 the begin took every live duty and accepted this schedule.
+#[test]
+fn a_nested_close_that_schedules_an_outer_duty_is_rejected() {
+    let (_, coro, _) = GOLDENS[OUTER_FUTURE];
+    let mut output = lower_cleanup(parsed(coro), &LowOptions::default()).unwrap();
+    let scopes = output.scopes.clone();
+    let main = function_id(&output, "main");
+    let body = function_mut(&mut output, "main");
+    let (nested, branch) = body.cleanup.closes.iter().find_map(|(id, close)| match close.source {
+        CleanupSource::Scope(scope) if !close.active_failure && scopes.get(scope).unwrap().parent.is_some() => {
+            Some((id, scope))
+        }
+        _ => None,
+    }).unwrap();
+    let root = scopes.get(branch).unwrap().parent.unwrap();
+    let begin = body.insts.iter().find_map(|(id, inst)| match inst.op {
+        Operation::Cleanup(CleanupOp::Begin { close, .. }) if close == nested => Some(id),
+        _ => None,
+    }).unwrap();
+    // The outer duty as the nested close sees it: g's holder and f's cache-state come back from the same resume
+    // of the await of g, which saved both.
+    let cache_type = body.values.get(cache_state_of(body, root)[0]).unwrap().ty;
+    let schedule = body.cleanup.schedules.iter().find(|(_, schedule)| schedule.close == nested).unwrap().0;
+    let own = body.cleanup.schedules.get(schedule).unwrap().holders.clone();
+    assert_eq!(own.len(), 1, "the nested close settles the duty of g");
+    let Definition::InstResult { inst: resume, .. } = body.values.get(own[0]).unwrap().def else {
+        panic!("g's duty reaches the nested close from the resume of its await");
+    };
+    let holder = body.insts.get(resume).unwrap().results.iter().copied().find(|value| {
+        *value != own[0] && body.values.get(*value).unwrap().ty == cache_type
+    }).expect("the resume of the await of g restores the duty of f");
+    body.cleanup.schedules.get_mut(schedule).unwrap().holders.push(holder);
+    let found = diagnostics(&output).into_iter().any(|diagnostic| diagnostic.rule == RuleId::B106
+        && diagnostic.primary.entity == EntityLocation::Instruction { function: main, instruction: begin });
     assert!(found, "{:?}", diagnostics(&output));
 }

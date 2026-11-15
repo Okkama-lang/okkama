@@ -60,6 +60,16 @@ const WITNESSES: &[&str] = &[
     "r1-plain-temporary",
     "r1-temporary-take",
     "r1-view-escape",
+    // K1: a cold Future cancelled before it starts; the elaboration §13.4 fixture; a nested close before the
+    // next await.
+    "k1-cancel-unstarted",
+    "k1-failure-view-escapes",
+    "k1-nested-close-next-await",
+    // #684: a nested close while a Future of an enclosing scope is live.
+    "nested-close-outer-future",
+    // #691: a void fixed root (an async test); the deps of a Future argument in continuation 0.
+    "void-fixed-root",
+    "start-deps",
 ];
 
 #[test]
@@ -693,4 +703,31 @@ func @main()")
         }
     }
     assert_eq!(creations, 2);
+}
+
+/// K1 (elaboration §13.1, Champ draft 3 §5): a cancellation request and the Future queries only observe the
+/// Future. Own keeps them as they are, on the renamed Future, and the cancelled cold Future keeps its cache duty
+/// in the schedule of its owner, which settles it at the close.
+#[test]
+fn k1_cancellation_requests_observe_the_future_and_keep_its_duty() {
+    let output = rewrite_async(&input("k1-cancel-unstarted")).unwrap();
+    let module = &output.module;
+    let (_, main) = function(module, "main");
+    let body = main.body.as_ref().unwrap();
+    let created: Vec<ValueId> = body.insts.iter()
+        .filter(|(_, inst)| matches!(inst.op, Operation::Async(AsyncOp::FutureNew { .. })))
+        .map(|(_, inst)| inst.results[0]).collect();
+    assert_eq!(created.len(), 1);
+    let observed: Vec<ValueId> = body.insts.iter().filter_map(|(_, inst)| match inst.op {
+        Operation::Async(AsyncOp::FutureCancel { future } | AsyncOp::FutureDone { future }
+            | AsyncOp::FutureCancelled { future }) => Some(future),
+        _ => None,
+    }).collect();
+    assert_eq!(observed.len(), 4, "two requests, done and cancelled");
+    // The two requests name the Future that fut.new created; the queries read it after the try.
+    assert_eq!(observed.iter().filter(|future| **future == created[0]).count(), 2);
+    let root = module.scopes.iter().find(|(_, scope)| scope.function == function(module, "main").0
+        && scope.parent.is_none()).unwrap().0;
+    let schedule = body.service_schedules.iter().find(|schedule| schedule.owner == root).unwrap();
+    assert_eq!(schedule.duties, [ScheduleDuty::Value(created[0])]);
 }

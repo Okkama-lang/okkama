@@ -14,6 +14,8 @@ fn layouts(module: &o::Module) -> BTreeMap<u32, ObjectLayout> {
                 (storage, fields.len() as u32, destroy.is_some())
             }
             o::DeclarationKind::Enum { .. } => (vec![s::Type::Int], 0, false),
+            // A role (the builtin Error of a catch) is a placeholder descriptor, as in the pipeline's layouts.
+            o::DeclarationKind::Role { .. } => (vec![], 0, false),
             kind => panic!("{}: no test layout for {kind:?}", declaration.name),
         };
         let trace_layout = storage_fields.iter().enumerate()
@@ -529,6 +531,19 @@ fn v7_low_goldens_compile_and_load() {
     for name in ["async-await-failure", "async-caught-throw", "async-never-awaited", "async-plain-await",
         "async-repeated-await", "async-void", "coro-nested-cold-await", "coro-schedule-duty-live-across-await",
         "coro-start-continuation", "low-suspending-close"]
+    {
+        loads(name);
+    }
+}
+
+/// The async Low goldens of #601 K1, #684 and #691 load: cancellation requests and queries, the elaboration §13.4
+/// fixture, nested closes before the next await and while an outer Future is live, and the deps of a Future
+/// argument between the language inputs and the packet of continuation 0 (SPB_ASYNC_ENTRY). The void fixed root
+/// of #691 is an async test, which TEST_ENTRY does not take yet (#725).
+#[test]
+fn k1_low_goldens_compile_and_load() {
+    for name in ["k1-cancel-unstarted", "k1-failure-view-escapes", "k1-nested-close-next-await",
+        "nested-close-outer-future", "start-deps"]
     {
         loads(name);
     }

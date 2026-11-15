@@ -44,6 +44,15 @@ const GOLDENS: &[(&str, &str, &str)] = &[
     variant!("r2-defer-await-reserve"),
     // R2: closes that suspend while the body owns a resource.
     variant!("r2-resource-suspending-close"),
+    // K1: cancellation before start, the elaboration §13.4 fixture, a nested close before the next await.
+    golden!("k1-cancel-unstarted"),
+    golden!("k1-failure-view-escapes"),
+    golden!("k1-nested-close-next-await"),
+    // #684: a nested close while a Future of an enclosing scope is live.
+    golden!("nested-close-outer-future"),
+    // #691: a void fixed root (an async test); the deps of a Future argument in continuation 0.
+    golden!("void-fixed-root"),
+    golden!("start-deps"),
 ];
 
 /// Own → verify(own) → coro → verify(coro) (OIR-2 §12).
@@ -394,4 +403,75 @@ fn a_landing_parameter_depends_on_values_that_its_landing_sees() {
     assert_eq!(checked, 1, "the landing of the await's normal edge takes the managed view");
     let expected = parsed(include_str!("../../tests/fixtures/verify/valid/B9-cache-view-escapes-without-rehome.oir"));
     assert!(text::normalized_eq(&output, &expected).unwrap(), "{}", text::print(&output).unwrap());
+}
+
+const START_DEPS: &str = include_str!("../own/tests/async-goldens/start-deps.oir");
+const VOID_ROOT: &str = include_str!("../own/tests/async-goldens/void-fixed-root.oir");
+
+/// The types of the start slots of `symbol`, in continuation 0 order.
+fn start_types(module: &Module, symbol: &str) -> Vec<Type> {
+    let layout = body(module, symbol).frame_layout.as_ref().unwrap();
+    layout.continuations[0].saved.iter()
+        .map(|slot| module.types.get(layout.slots[*slot as usize].ty).unwrap().clone()).collect()
+}
+
+/// #691 (2), the C-2 ruling: a Future argument brings its deps into the start, after the language arguments and
+/// before the one input packet, the order that the loader's SPB_ASYNC_ENTRY reads. Moving the deps parameter
+/// after the packet in Own's signature does not move it in continuation 0.
+#[test]
+fn the_deps_of_the_start_follow_the_arguments_and_precede_the_packet() {
+    let output = lower(START_DEPS).unwrap();
+    let types = start_types(&output, "app.Adder.plus#0");
+    let [Type::Object { .. }, Type::Future(_), Type::Int, Type::Service(ServiceType::Deps),
+        Type::Service(ServiceType::Own)] = types.as_slice() else {
+        panic!("{types:?}");
+    };
+    // A fixed root starts empty (L1).
+    assert!(start_types(&output, "main").is_empty());
+}
+
+/// The value a resumed value was saved from, through the saves and resumes of the frame (D20).
+fn saved_origin(body: &Body, mut value: ValueId) -> ValueId {
+    loop {
+        let Definition::InstResult { inst, index } = body.values.get(value).unwrap().def else {
+            return value;
+        };
+        let Operation::Async(AsyncOp::FrameResume { frame, slots, .. }) = &body.insts.get(inst).unwrap().op else {
+            return value;
+        };
+        let Some(slot) = (index as usize).checked_sub(1).map(|index| slots[index].slot) else {
+            return value;
+        };
+        let (_, _, save) = definition(body, *frame);
+        let Operation::Async(AsyncOp::FrameSave { slots, .. }) = &save.op else { panic!("{save:?}") };
+        value = slots.iter().find(|saved| saved.slot == slot).unwrap().value;
+    }
+}
+
+/// #691 (1), the C-2 ruling: a void fixed root publishes an empty packet and the empty deps of a scalar taken at
+/// the entry, before its root scope begins and so before any close (B4.2).
+#[test]
+fn a_void_fixed_root_publishes_the_empty_deps_of_a_scalar() {
+    let output = lower(VOID_ROOT).unwrap();
+    assert!(start_types(&output, "check").is_empty());
+    let check = body(&output, "check");
+    let mut published = 0;
+    for (_, inst) in check.insts.iter() {
+        let Operation::Async(AsyncOp::FuturePublish { outcome: PublishOutcome::Success { value, packet, deps }, .. })
+            = &inst.op else {
+            continue;
+        };
+        published += 1;
+        assert!(value.is_none());
+        assert!(matches!(definition(check, *packet).2.op, Operation::Ownership(OwnershipOp::Empty {})));
+        let (block, position, made) = definition(check, saved_origin(check, *deps));
+        let Operation::Ownership(OwnershipOp::Dependencies { value: unit }) = made.op else { panic!("{made:?}") };
+        assert!(matches!(definition(check, unit).2.op, Operation::Const(Literal::Int(_))));
+        assert_eq!(block, check.entry);
+        let begins = check.blocks.get(block).unwrap().insts.iter().position(|inst| {
+            matches!(check.insts.get(*inst).unwrap().op, Operation::Ownership(OwnershipOp::ScopeBegin { .. }))
+        }).unwrap();
+        assert!(position < begins, "the deps are taken before the root scope opens");
+    }
+    assert_eq!(published, 1);
 }

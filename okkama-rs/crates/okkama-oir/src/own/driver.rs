@@ -780,6 +780,11 @@ impl Driver<'_, '_> {
                 return self.create_future(point, instruction, function);
             }
             Operation::Async(AsyncOp::Await { .. }) => return self.await_future(point, instruction),
+            // Elaboration §13.1, Champ draft 3 §5: a cancellation request and the two queries only observe the
+            // Future. Cancelling a cold Future never moves its inputs: they stay with its cache duty in the
+            // owner's journal until that duty settles at the owner's close.
+            Operation::Async(AsyncOp::FutureCancel { .. } | AsyncOp::FutureDone { .. }
+                | AsyncOp::FutureCancelled { .. }) => {}
             Operation::Call(CallOp::Direct { function, .. } | CallOp::Native { function, .. }
                 | CallOp::Intrinsic { function, .. }) => return self.call(point, instruction, function),
             Operation::Call(CallOp::Closure { .. } | CallOp::Cap { .. } | CallOp::Role { .. }) => {

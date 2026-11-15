@@ -22,8 +22,7 @@ func @job(%frame: frame<@job>) -> void [async] summary(Mjob) {
     %q: scope<S> = scope.begin S
     %c: cleanup-state = cleanup.begin %q, close 0, effects scope_effects(failures=[thrown, program, panic, native],
         suspends=true, cancel=false)
-    %shield: cleanup-state = cleanup.shield %c
-    %settled: cleanup-state = cleanup.settle.empty %shield, schedule 0
+    %settled: cleanup-state = cleanup.settle.empty %c, schedule 0
     %planned: cleanup-state = cleanup.plan %settled, plan 0
     br ^next(%planned, %fr0)
 ^next(%c0: cleanup-state, %fr6: frame<@job>) in S:

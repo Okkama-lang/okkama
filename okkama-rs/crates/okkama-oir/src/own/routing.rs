@@ -244,7 +244,6 @@ pub(super) fn handling(operation: &Operation) -> Handling {
             | CleanupOp::Destroy { .. }
             | CleanupOp::DestroyDirect { .. }
             | CleanupOp::RecordFailure { .. }
-            | CleanupOp::Shield { .. }
             | CleanupOp::DeliverCancel { .. }
             | CleanupOp::Finish { .. }
             | CleanupOp::CellNew { .. }

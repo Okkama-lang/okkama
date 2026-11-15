@@ -510,6 +510,9 @@ fn transfer(
                     }
                 }
             }
+            // A cancellation request and the Future queries observe the Future; their results are scalars.
+            Operation::Async(AsyncOp::FutureCancel { .. } | AsyncOp::FutureDone { .. }
+                | AsyncOp::FutureCancelled { .. }) => {}
             Operation::Core(_) if instruction.results.iter().all(|value| {
                 !classification.types.get(&body.values.get(*value).unwrap().ty)
                     .is_some_and(TypeClassification::may_own)

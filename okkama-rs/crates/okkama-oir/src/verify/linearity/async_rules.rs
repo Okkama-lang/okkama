@@ -59,6 +59,13 @@ impl Engine<'_, '_> {
         }
     }
 
+    /// #684, D16: a service token owned by a scope that encloses `scope` is a duty of that enclosing scope. A close
+    /// of `scope` settles only its own duties (its D16 schedule) and leaves this one untouched for the owner's close.
+    pub(super) fn enclosing_duty(&mut self, token: &Token, scope: ScopeId) -> bool {
+        token.scope.is_some_and(|owner| owner != scope
+            && super::super::high::inside(self.module, scope, owner, self.state))
+    }
+
     /// C-3: the task and the receipt of an await unwind edge reach only `await.unwind`; neither is a service duty
     /// that a close or a settle step may take.
     pub(super) fn await_handle(&self, before: &Flow, value: ValueId) -> bool {

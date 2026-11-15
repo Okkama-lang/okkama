@@ -165,9 +165,14 @@ fn module_structure<'a>(module: &'a Module, state: &mut State<'a>) {
         for test in tests {
             if !state.step(1) { return; }
             refs(module, &test.function, state);
-            if let Ok(function) = module.functions.get(test.function)
-                && (!function.signature.params.is_empty() || !function.signature.results.is_empty()) {
-                state.error(R::S1, "test function must have signature () -> void");
+            // C-2 (#691): an async test in the D21 form is a void fixed root, checked by its language signature:
+            // an empty start and a success that publishes no value.
+            if let Ok(function) = module.functions.get(test.function) {
+                let language = super::coro::language_signature(module, function);
+                let signature = language.as_ref().unwrap_or(&function.signature);
+                if !signature.params.is_empty() || !signature.results.is_empty() {
+                    state.error(R::S1, "test function must have signature () -> void");
+                }
             }
         }
     }

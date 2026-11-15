@@ -1,5 +1,5 @@
 oir 2 low
-// expect OIR2-B10.6 instruction:0:8
+// expect OIR2-B10.6 instruction:0:6
 // M9: the body plans the close while duty b is still unsettled.
 // #696: the D21 form of the same defect; its valid pair is valid/M9-service-settle-two-orders.oir.
 // #716: the root close declares cancel=true and delivers the cancellation after its drained plan (D18).
@@ -35,22 +35,14 @@ func @f(%0: frame<@f>) -> void [async] summary(M0) {
         bindings=[root_binding(value=%1, trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies),
         root_binding(value=%12, trace=cleanup_activation)], through_suspend=true),
         root_requirement(boundary=before_instruction(i8), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
-        root_binding(value=%6, trace=full_dependencies), root_binding(value=%11, trace=cleanup_activation)],
-        through_suspend=true), root_requirement(boundary=after_instruction(i7), bindings=[root_binding(value=%1,
-        trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies), root_binding(value=%11,
-        trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=before_instruction(i7),
-        bindings=[root_binding(value=%1, trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies),
-        root_binding(value=%10, trace=cleanup_activation)], through_suspend=true),
-        root_requirement(boundary=after_instruction(i6), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
+        root_binding(value=%6, trace=full_dependencies), root_binding(value=%10, trace=cleanup_activation)],
+        through_suspend=true), root_requirement(boundary=after_instruction(i6), bindings=[root_binding(value=%1,
+        trace=value(frame<@f>)),
         root_binding(value=%6, trace=full_dependencies), root_binding(value=%10, trace=cleanup_activation)],
         through_suspend=true), root_requirement(boundary=before_instruction(i6), bindings=[root_binding(value=%1,
-        trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies), root_binding(value=%9,
-        trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=after_instruction(i5),
-        bindings=[root_binding(value=%1, trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies),
-        root_binding(value=%9, trace=cleanup_activation)], through_suspend=true),
-        root_requirement(boundary=before_instruction(i5), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
-        root_binding(value=%6, trace=full_dependencies), root_binding(value=%8, trace=cleanup_activation)],
-        through_suspend=true), root_requirement(boundary=after_instruction(i4), bindings=[root_binding(value=%1,
+        trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies), root_binding(value=%8,
+        trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=after_instruction(i4),
+        bindings=[root_binding(value=%1,
         trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies), root_binding(value=%8,
         trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=before_instruction(i4),
         bindings=[root_binding(value=%1, trace=value(frame<@f>)), root_binding(value=%2, trace=value(type)),
@@ -133,10 +125,8 @@ func @f(%0: frame<@f>) -> void [async] summary(M0) {
     [i3] %7: scope<S0> = scope.begin S0
     [i4] %8: cleanup-state = cleanup.begin %7, close 0, effects scope_effects(failures=[thrown, program, panic, native],
         suspends=true, cancel=true)
-    [i5] %9: cleanup-state = cleanup.shield %8
-    [i6] %10: cleanup-state = cleanup.settle %9, %3, protocol P0
-    [i7] %11: cleanup-state = cleanup.shield %10
-    [i8] %12: cleanup-state = cleanup.plan %11, plan 0
+    [i6] %10: cleanup-state = cleanup.settle %8, %3, protocol P0
+    [i8] %12: cleanup-state = cleanup.plan %10, plan 0
     [i9] %13: cleanup-state = cleanup.deliver_cancel %12
     [i10] %14: cleanup-state = cleanup.plan %13, plan 1
     br ^b1(%14)
