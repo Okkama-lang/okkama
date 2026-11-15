@@ -132,6 +132,7 @@ impl<'s, 'a> Frames<'s, 'a> {
         if !self.schedule_duties() {
             return;
         }
+        self.schedule_order();
         let saves = self.saves();
         self.agreement(&saves);
         let Some(liveness) = self.liveness() else {
@@ -143,6 +144,34 @@ impl<'s, 'a> Frames<'s, 'a> {
         }
         self.read_after_save(&saves);
         self.double_resume();
+    }
+
+    /// B10.6, D16: the schedules of one owner list the versions of its duties in one order. Each version is
+    /// traced to the token that created its duty; two creations keep the same relative order in every schedule.
+    fn schedule_order(&mut self) {
+        let edges = super::graph::edges(self.body, self.state);
+        let mut orders: BTreeMap<ScopeId, Vec<Vec<Option<ValueId>>>> = BTreeMap::new();
+        for schedule in &self.body.service_schedules {
+            let tokens = schedule.duties.iter().filter_map(|duty| duty.value())
+                .map(|value| creation(self.body, &edges, value, self.state)).collect();
+            orders.entry(schedule.owner).or_default().push(tokens);
+        }
+        for lists in orders.values() {
+            let mut before: BTreeSet<(ValueId, ValueId)> = BTreeSet::new();
+            for list in lists {
+                let known: Vec<ValueId> = list.iter().flatten().copied().collect();
+                for (index, first) in known.iter().enumerate() {
+                    for second in known[index + 1..].iter().filter(|second| *second != first) {
+                        before.insert((*first, *second));
+                    }
+                }
+            }
+            if before.iter().any(|(first, second)| before.contains(&(*second, *first))) {
+                self.state.at(L::Function(self.function), None);
+                self.state.error(R::B106, "the schedules of one owner list its duties in one order (D16)");
+                return;
+            }
+        }
     }
 
     fn closed_scope(&self, op: &Operation) -> Option<ScopeId> {
@@ -301,6 +330,9 @@ impl<'s, 'a> Frames<'s, 'a> {
             let declared = self.layout.continuations.get(save.continuation as usize);
             let slots: Vec<u32> = save.slots.iter().map(|slot| slot.slot).collect();
             self.at_save(save);
+            if declared.is_none() {
+                self.state.error(R::CoroContinuationMismatch, "frame.save names an undeclared continuation (D21)");
+            }
             if declared.is_some_and(|declared| declared.saved != slots) {
                 self.state.error(R::CoroLayoutTypeMismatch, "frame.save differs from the declared saved slots (D21)");
             }
@@ -321,6 +353,10 @@ impl<'s, 'a> Frames<'s, 'a> {
             };
             let resumed: Vec<u32> = slots.iter().map(|slot| slot.slot).collect();
             let declared = self.layout.continuations.get(*continuation as usize);
+            if declared.is_none() {
+                self.state.at(L::Instruction { function: self.function, instruction }, inst.loc);
+                self.state.error(R::CoroContinuationMismatch, "frame.resume names an undeclared continuation (D21)");
+            }
             if declared.is_some_and(|declared| declared.saved != resumed) {
                 self.state.at(L::Instruction { function: self.function, instruction }, inst.loc);
                 self.state.error(R::CoroLayoutTypeMismatch, "frame.resume differs from the declared saved slots (D21)");
@@ -522,6 +558,47 @@ impl<'s, 'a> Frames<'s, 'a> {
             }
         }
     }
+}
+
+/// The token that created the duty a schedule entry names: a resumed version is the value its save stored, a
+/// block parameter the duty that every edge passes. `None` when the edges pass different duties.
+fn creation(body: &Body, edges: &[super::graph::Edge], value: ValueId, state: &mut State<'_>) -> Option<ValueId> {
+    let mut pending = vec![value];
+    let mut seen = BTreeSet::new();
+    let mut found = None;
+    while let Some(value) = pending.pop() {
+        if !state.step(1) || !seen.insert(value) {
+            continue;
+        }
+        match body.values.get(value).ok()?.def {
+            Definition::InstResult { inst, index } => {
+                let Operation::Async(AsyncOp::FrameResume { frame, slots, .. }) = &body.insts.get(inst).ok()?.op else {
+                    if found.is_some_and(|previous| previous != value) {
+                        return None;
+                    }
+                    found = Some(value);
+                    continue;
+                };
+                let slot = slots.get(usize::from(index).checked_sub(1)?)?.slot;
+                let Definition::InstResult { inst: save, .. } = body.values.get(*frame).ok()?.def else {
+                    return None;
+                };
+                let Operation::Async(AsyncOp::FrameSave { slots, .. }) = &body.insts.get(save).ok()?.op else {
+                    return None;
+                };
+                pending.push(slots.iter().find(|item| item.slot == slot)?.value);
+            }
+            Definition::BlockParam { block, index } => {
+                for edge in edges.iter().filter(|edge| edge.target == block) {
+                    let EdgeArg::Value(source) = edge.args.get(index as usize)? else {
+                        return None;
+                    };
+                    pending.push(*source);
+                }
+            }
+        }
+    }
+    found
 }
 
 /// Backward liveness of SSA values with the implicit uses of schedule duties.

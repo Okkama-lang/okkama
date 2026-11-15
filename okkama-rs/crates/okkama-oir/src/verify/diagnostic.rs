@@ -105,6 +105,10 @@ rule_ids! {
     // B10.5/B10.6 rules of lowered service settlement and final cancellation (OIR-2 §9.3, D18; slice V4).
     LowDutySettledTwice => "low-duty-settled-twice",
     LowCancelOutsideFinalExit => "low-cancel-outside-final-exit",
+    // Async wave 1 audit (#695): suspension form, frame slots and unmodeled service operations.
+    CoroUnbracketedSuspend => "coro-unbracketed-suspend",
+    CoroSlotOverlap => "coro-slot-overlap",
+    AsyncUnmodeledOp => "async-unmodeled-op",
 }
 impl std::fmt::Display for RuleId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(self.as_str()) }

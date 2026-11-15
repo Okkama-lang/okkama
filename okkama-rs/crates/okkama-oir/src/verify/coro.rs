@@ -179,8 +179,8 @@ impl Layout<'_, '_> {
             }
             self.state.at(L::Terminator { function: self.function, block: block_id }, block.term.loc);
             // C-2: only a failure that leaves the body must be published; a block unwind catches it inside.
-            if block.unwind.is_none()
-                && matches!(block.term.kind, TermKind::Throw(_) | TermKind::Raise(_) | TermKind::Panic(_)) {
+            if block.unwind.is_none() && matches!(block.term.kind,
+                TermKind::Throw(_) | TermKind::Raise(_) | TermKind::Panic(_) | TermKind::Trap { .. }) {
                 self.state.error(R::CoroBodyRaises, "an async body publishes its failure instead of raising (C-2)");
             }
             let last_saves = block.insts.last().and_then(|id| self.body.insts.get(*id).ok())
@@ -220,6 +220,12 @@ impl Layout<'_, '_> {
             let indices = continuation.saved.iter().chain(&continuation.operands);
             if indices.into_iter().any(|slot| *slot as usize >= count) {
                 self.state.error(R::CoroLayoutTypeMismatch, "continuation names an undeclared frame slot (D21)");
+            }
+            // D20 §2.2: at PENDING the words of S_k ∪ O_k are stored in the frame, each in its own slot.
+            let mut seen = std::collections::BTreeSet::new();
+            if !continuation.saved.iter().chain(&continuation.operands).all(|slot| seen.insert(*slot)) {
+                self.state.error(R::CoroSlotOverlap,
+                    "the saved and operand slots of one continuation are pairwise distinct (D20 §2.2)");
             }
         }
     }
@@ -350,6 +356,7 @@ impl Layout<'_, '_> {
         if position + 1 == block.insts.len() {
             // Form (a): every successor starts with the matching resume and has no other predecessor.
             if self.terminator_suspends(&block.term.kind) == Suspends::No {
+                self.unbracketed();
                 return;
             }
             self.record_site(continuation, SuspendSite::Terminator(block_id));
@@ -385,6 +392,7 @@ impl Layout<'_, '_> {
             return;
         };
         if self.instruction_suspends(op) == Suspends::No {
+            self.unbracketed();
             return;
         }
         self.record_site(continuation, SuspendSite::Instruction(suspending));
@@ -407,6 +415,12 @@ impl Layout<'_, '_> {
             }
         }
         self.state.location = location;
+    }
+
+    /// `coro-unbracketed-suspend` (D20 §2.5): a `frame.save` brackets exactly one suspending operation; around any
+    /// other operation it would move a token into the frame with no resume to bring it back.
+    fn unbracketed(&mut self) {
+        self.state.error(R::CoroUnbracketedSuspend, "frame.save brackets an operation that does not suspend (D20)");
     }
 
     fn resume(&mut self, block_id: BlockId, block: &Block, position: usize, frame: ValueId, continuation: u32) {

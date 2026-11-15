@@ -215,7 +215,21 @@ impl Engine<'_, '_> {
                 if fact.phase > 1 {
                     self.error(R::B106, "service settlement must precede the serial plan");
                 }
+                if self.await_handle(before, *holder) {
+                    self.error(R::B91, "a settle step takes an await task or receipt instead of await.unwind (C-3)");
+                }
                 let key = before.tokens[holder.as_u32() as usize].service;
+                // D16: in a D21 body the close-local schedule is the concrete schedule input that the pipeline chose
+                // (own's order), and opcode 21 settles by duty index, so each step takes the next outstanding duty. A
+                // layout-less body keeps the schedule as an inventory whose order is free (OIR-2 §9.3, A.2 M9).
+                let next = self.body.cleanup.schedules.iter().filter(|(_, schedule)| schedule.close == fact.close)
+                    .flat_map(|(_, schedule)| &schedule.holders)
+                    .map(|value| before.tokens[value.as_u32() as usize].service)
+                    .find(|service| service.is_some_and(|service| fact.services.contains(&service)));
+                if self.frame_body() && key.is_some_and(|key| fact.services.contains(&key))
+                    && next.is_some_and(|next| next != key) {
+                    self.error(R::B106, "a settle step takes the next outstanding duty of its schedule (D16)");
+                }
                 if !key.is_some_and(|key| fact.services.remove(&key)) {
                     if key.is_some() && self.scheduled(before, fact.close, key) {
                         self.error(R::LowDutySettledTwice, "a scheduled service duty is settled once per close");
@@ -381,6 +395,10 @@ impl Engine<'_, '_> {
                 }
                 if fact.cancel_open {
                     self.error(R::B105, "an open cancellation delivery is decided by the selector of its plan");
+                }
+                let cancel = self.body.cleanup.closes.get(fact.close).is_ok_and(|close| close.effects.cancel);
+                if self.frame_body() && cancel && !fact.cancel_delivered {
+                    self.error(R::B105, "a final close with cancel=true delivers the cancellation before finish (D18)");
                 }
                 let destroyed: Vec<_> = fact.inventory.difference(&fact.reserve).cloned().collect();
                 self.invalidate(before, flow, &destroyed);
@@ -590,6 +608,18 @@ impl Engine<'_, '_> {
                 self.error(R::B105, "cancel envelope is legal only at final successful async action close");
             }
         }
+        // D18: the successful close of an async action's root scope carries the final cancellation delivery. An
+        // async action is the one elaborated with its creation and body summaries (H6), or its D21 body.
+        let entry = self.declaration.attrs.iter().any(|attr| {
+            matches!(attr, FunctionAttr::DeferEntry { .. } | FunctionAttr::Destroy(_))
+        });
+        let action = self.declaration.async_body_summary.is_some() || self.frame_body();
+        let root = scope(self.module, self.body, state).and_then(|id| self.module.scopes.get(id).ok())
+            .is_some_and(|scope| scope.parent.is_none() && scope.kind == ScopeKind::Action);
+        if self.declaration.attrs.contains(&FunctionAttr::Async) && action && !entry && root && !envelope.cancel
+            && before.active_failure == 0 && matches!(op, Operation::Ownership(OwnershipOp::ScopeEnd { .. })) {
+            self.error(R::B105, "the successful close of an async action's root scope needs cancel=true (D18)");
+        }
     }
 
     fn required_effects(&mut self, pieces: &BTreeSet<Piece>, before: &Flow) -> Effects {
@@ -743,9 +773,13 @@ impl Engine<'_, '_> {
             self.error(R::B105, "lowered cancellation delivery is missing from its close envelope");
         }
         let mut effects = self.required_effects(&fact.inventory, flow);
-        // D20 §2.6: in Low a close suspends or fails only through its steps. No service settle waits or fails in
+        // D20 §2.6: in Low a close suspends or fails only through its steps. No cache settle waits or fails in
         // 0.6.0 (async ABI D24.2); the outcome identities a settle releases are in the inventory with their types.
-        let services = fact.had_services && self.module.profile != Profile::Low;
+        // Any other service duty keeps the unknown effects, as in `scope_effects`.
+        let cache_only = self.body.cleanup.schedules.iter().filter(|(_, schedule)| schedule.close == fact.close)
+            .flat_map(|(_, schedule)| &schedule.holders)
+            .all(|value| flow.tokens[value.as_u32() as usize].service.is_some_and(|origin| self.cache_state(origin)));
+        let services = fact.had_services && !(self.module.profile == Profile::Low && cache_only);
         effects.suspends |= services;
         if services {
             for kind in [FailureKind::Thrown, FailureKind::Program, FailureKind::Panic, FailureKind::Native] {

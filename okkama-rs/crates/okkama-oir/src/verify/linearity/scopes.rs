@@ -221,6 +221,9 @@ impl Engine<'_, '_> {
                     self.error(R::B106, "abstract close needs complete, unique service schedule coverage");
                 }
                 for value in available {
+                    if self.await_handle(before, value) {
+                        self.error(R::B91, "a close settles an await task or receipt instead of await.unwind (C-3)");
+                    }
                     self.use_value(flow, value, OperandMode::Consume, R::B106);
                     let pieces: Vec<_> = before.tokens[value.as_u32() as usize].pieces.iter().cloned().collect();
                     self.invalidate(before, flow, &pieces);
