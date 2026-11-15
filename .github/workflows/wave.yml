@@ -1,10 +1,14 @@
 # Heavy runs of the 0.6.0 Rebuild on GitHub's runners instead of the owner's
 # machine (LLM-GUIDE §1.1): the crate suites of a wave branch, and conformance
-# on Tomato and Champ with the ranking of Champ's blockers. Dispatched by hand:
-#   gh workflow run wave.yml --ref release/0.6.0 -f ref=<branch> -f suites=both
+# on Tomato and Champ with the ranking of Champ's blockers. Run it by pushing a
+# branch named wave/<name> at the commit to test (both suites), or, once this
+# file is on the default branch, by dispatch:
+#   gh workflow run wave.yml -f ref=<branch> -f suites=tests|conformance|both
 name: Wave
 
 on:
+  push:
+    branches: ["wave/**"]
   workflow_dispatch:
     inputs:
       ref:
@@ -16,7 +20,7 @@ on:
         default: both
 
 concurrency:
-  group: wave-${{ inputs.ref }}
+  group: wave-${{ inputs.ref || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -34,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.ref || github.ref }}
       - name: Rust
         run: rustup toolchain install stable --profile minimal --component clippy && rustup default stable
       - uses: Swatinem/rust-cache@v2
@@ -83,7 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.ref || github.ref }}
       - name: Rust
         run: rustup toolchain install stable --profile minimal && rustup default stable
       - uses: actions/cache@v4
@@ -119,7 +123,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.ref || github.ref }}
       - uses: actions/download-artifact@v5
         with:
           path: out
