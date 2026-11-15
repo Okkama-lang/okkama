@@ -1,39 +1,88 @@
 oir 2 coro
+// B9.4 (OIR-2 §10.2): f awaits a Future it borrows, and the cached view of the result stays inside the owner S1.
+// #696: the D21 form that the coro pass produces from async/own/b9-cache-view.oir; the landing parameter of the
+// await's normal edge has its own retention d2 (#715). Every D21 body closes its owner before it publishes, so the
+// cached view of a borrowed Future cannot leave the body without a rehome; the layout-less positive that returned
+// it is gone.
 module cache_view
 object R {
     field x: int
     destroy @destroy
 }
-scope SD action in @destroy
-summary Md internal parameters [parameter_effect(convention=borrow, destination=none)] contract
+scope S0 action in @destroy
+scope S1 action in @f
+summary M0 internal parameters [parameter_effect(convention=borrow, destination=none)] contract
     call_contract(publication=atomic)
-func @destroy(%self: R facts(managed(deps=dd))) -> void [destroy R] summary(Md) {
-    dependency dd: dependency = retention(value=%self, selection=selection(%self))
-^entry in SD:
+summary M1 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results
+    [result_relation(provenance=unbound_result)] contract call_contract(results=[future<void>], publication=atomic)
+summary M2 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract
+    call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+protocol P0 kind services holders [scope, cache, frame, receipt, root] rules [protocol_rule(transition=settle,
+    from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
+    protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root,
+    checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running))]
+func @destroy(%0: R facts(managed(deps=d0))) -> void [destroy R] summary(M0) {
+    dependency d0: dependency = retention(value=%0, selection=selection(%0))
+    ^b0 in S0:
     ret
 }
-protocol Services kind services holders [scope, group, receipt] rules [protocol_rule(transition=settle, from=group,
-    to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
-    protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies],
-    normal=protocol_poststate(holder=scope, state=settled))]
-scope S action in @f
-summary M0 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results
-    [result_relation(aliases=[parameter(0)], external_deps=[0], provenance=bound)] contract call_contract(results=[R],
-    failures=[thrown, program, panic, native, cancelled], publication=atomic)
-func @f(%schedule: type, %future: future<R> facts(managed(deps=d0))) -> R [async] summary(M0) {
-    service.schedule Schedule0 owner S, protocol Services, dictionary %schedule, duties [%t, %r]
-    dependency dv: dependency = retention(value=%v, selection=selection(%v))
-    key k0: key = service_of(value=%future, kind=cache)
-    dependency d0: dependency = key(k0)
-^entry in S:
-    invoke.own await %future, result R
-        normal ^ok($value, $deps)
-        unwind ^failed($failure, $task, $receipt)
-^ok(%v: R facts(managed(deps=dv)), %d: deps) in S:
-    ret %v
-^failed(%e: failure, %t: task-state, %r: receipt) in S:
-    %q: scope<S> = scope.begin S
-    %combined: failure = scope.unwind %q, %e, effects scope_effects(failures=[thrown, program, panic, native],
-        suspends=true)
-    raise %combined
+func @f(%0: frame<@f>) -> void [async] summary(M2) async-creation(M1) async-body(M2) {
+    frame.layout {
+        slot 0: future<R>
+        slot 1: own linear
+        slot 2: scope<S1> linear
+        slot 3: failure
+        slot 4: task-state linear
+        slot 5: receipt linear
+    }
+    continuation 0 start saves [0, 1]
+    continuation 1 at ^b0 saves [2] operands [0]
+    continuation 2 at #7 saves [] operands [2, 3, 4, 5]
+    boundary B0 lexical in S1
+    key k0: key = service_of(value=%2, kind=cache)
+    dependency d0: dependency = retention(value=%7, selection=selection(%7))
+    dependency d1: dependency = key(k0)
+    dependency d2: dependency = retention(value=%27, selection=selection(%27))
+    selection s0: selection = union([])
+    ^b0 in S1:
+    (%1: frame<@f>, %2: future<R> facts(managed(deps=d1)), %3:
+        own) = frame.resume %0, continuation 0, slots [saved_slot(slot=0, ty=future<R>), saved_slot(slot=1, ty=own,
+        linear=true)]
+    %4: scope<S1> = scope.begin S1
+    %5: scope<S1> = own.accept %4, %3
+    %6: frame<@f> = frame.save %1, slots [frame_slot(slot=2, value=%5, mode=consume)], continuation 1
+    invoke.own await %2, result R
+        normal ^b5($value, $deps)
+        unwind ^b6($failure, $task, $receipt)
+    ^b1(%7: R facts(managed(deps=d0)), %8: deps, %9: scope<S1>) in S1:
+    %10: own = own.empty
+    %11: pending = exit.prepare return packet %10 select s0 at B0
+    invoke.own scope.end %9, reserve %11, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=false, cancel=true)
+        normal ^b3($closed, $pending)
+        unwind ^b4($closed, $failure)
+    ^b2(%12: failure, %13: task-state, %14: receipt, %15: scope<S1>) in S1:
+    %16: frame<@f> = frame.save %34, continuation 2
+    [i7] (%17: scope<S1>, %18: failure) = await.unwind %15, %12, %13, %14, protocol P0
+    %19: frame<@f> = frame.resume %16, continuation 2
+    %20: failure = scope.unwind %17, %18, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=false, cancel=false)
+    fut.publish %19, failure(%20)
+    ret
+    ^b3(%21: closed, %22: pending) in S1:
+    (%23: own, %24: deps) = exit.commit %22, destination caller
+    fut.publish %29, success(packet=%23, deps=%24)
+    ret
+    ^b4(%25: closed, %26: failure) in S1:
+    fut.publish %29, failure(%26)
+    ret
+    ^b5(%27: R facts(managed(deps=d2)), %28: deps) in S1:
+    (%29: frame<@f>, %30: scope<S1>) = frame.resume %6, continuation 1, slots [saved_slot(slot=2, ty=scope<S1>,
+        linear=true)]
+    br ^b1(%27, %28, %30)
+    ^b6(%31: failure, %32: task-state, %33: receipt) in S1:
+    (%34: frame<@f>, %35: scope<S1>) = frame.resume %6, continuation 1, slots [saved_slot(slot=2, ty=scope<S1>,
+        linear=true)]
+    br ^b2(%31, %32, %33, %35)
 }

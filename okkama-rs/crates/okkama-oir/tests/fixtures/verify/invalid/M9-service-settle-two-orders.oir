@@ -1,29 +1,161 @@
 oir 2 low
-// expect OIR2-B10.6 instruction:0:5
+// expect OIR2-B10.6 instruction:0:8
+// M9: the body plans the close while duty b is still unsettled.
+// #696: the D21 form of the same defect; its valid pair is valid/M9-service-settle-two-orders.oir.
+// #716: the root close declares cancel=true and delivers the cancellation after its drained plan (D18).
 module cleanup_empty
-protocol Services kind services holders [scope, group] rules [protocol_rule(transition=settle, from=group, to=scope,
+scope S0 action in @f
+summary M0 internal contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+protocol P0 kind services holders [scope, group] rules [protocol_rule(transition=settle, from=group, to=scope,
     checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled))]
-scope S action in @f
-summary Mf internal contract call_contract(failures=[thrown, program, panic, native], suspends=true, publication=atomic)
-func @f(%schedule: type, %t1: task-state, %t2: task-state) -> void [async] summary(Mf) {
-    low.metadata cleanup_metadata(closes=[cleanup_close(source=scope(S), after_defers=^entry, reserve=false,
-        active_failure=false, effects=scope_effects(failures=[thrown, program, panic, native], suspends=true,
-        cancel=false))], schedules=[cleanup_schedule(close=0, holders=[%t1, %t2], dictionary=some(%schedule),
-        protocol=some(Services))], plans=[cleanup_plan(close=0, sources=[scope_inventory], direct=none)],
-        roots=[root_requirement(boundary=before_instruction(i5), bindings=[root_binding(value=%settled2,
-        trace=cleanup_activation)], through_suspend=true)], proofs=[])
-^entry in S:
-    %q: scope<S> = scope.begin S
-    %c: cleanup-state = cleanup.begin %q, close 0, effects scope_effects(failures=[thrown, program, panic, native],
-        suspends=true, cancel=false)
-    %shield: cleanup-state = cleanup.shield %c
-    %settled: cleanup-state = cleanup.settle %shield, %t1, protocol Services
-    %settled2: cleanup-state = cleanup.shield %settled
-    [i5] %planned: cleanup-state = cleanup.plan %settled2, plan 0
-    (%closed: closed, %fs: failure-state, %xs: exit-state) = cleanup.finish %planned
-    exit.dispatch 0 %closed %fs %xs success ^done($closed) failure ^failed($closed, $failure)
-^done(%done: closed) in S:
+func @f(%0: frame<@f>) -> void [async] summary(M0) {
+    frame.layout {
+        slot 0: type
+        slot 1: task-state linear
+        slot 2: task-state linear
+    }
+    continuation 0 start saves [0, 1, 2]
+    low.metadata cleanup_metadata(closes=[cleanup_close(source=scope(S0), after_defers=^b0,
+        effects=scope_effects(failures=[thrown, program, panic, native], suspends=true, cancel=true)), ],
+        schedules=[cleanup_schedule(close=0, holders=[%3, %4], dictionary=some(%2), protocol=some(P0)), ],
+        plans=[cleanup_plan(close=0, sources=[scope_inventory]), cleanup_plan(close=0, sources=[scope_inventory]), ],
+        roots=[root_requirement(boundary=terminator(^b0), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
+        root_binding(value=%6, trace=full_dependencies), root_binding(value=%14, trace=cleanup_activation)],
+        through_suspend=true), root_requirement(boundary=after_instruction(i10), bindings=[root_binding(value=%1,
+        trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies), root_binding(value=%14,
+        trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=before_instruction(i10),
+        bindings=[root_binding(value=%1, trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies),
+        root_binding(value=%13, trace=cleanup_activation)], through_suspend=true),
+        root_requirement(boundary=after_instruction(i9), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
+        root_binding(value=%6, trace=full_dependencies), root_binding(value=%13, trace=cleanup_activation)],
+        through_suspend=true), root_requirement(boundary=before_instruction(i9), bindings=[root_binding(value=%1,
+        trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies), root_binding(value=%12,
+        trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=after_instruction(i8),
+        bindings=[root_binding(value=%1, trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies),
+        root_binding(value=%12, trace=cleanup_activation)], through_suspend=true),
+        root_requirement(boundary=before_instruction(i8), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
+        root_binding(value=%6, trace=full_dependencies), root_binding(value=%11, trace=cleanup_activation)],
+        through_suspend=true), root_requirement(boundary=after_instruction(i7), bindings=[root_binding(value=%1,
+        trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies), root_binding(value=%11,
+        trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=before_instruction(i7),
+        bindings=[root_binding(value=%1, trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies),
+        root_binding(value=%10, trace=cleanup_activation)], through_suspend=true),
+        root_requirement(boundary=after_instruction(i6), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
+        root_binding(value=%6, trace=full_dependencies), root_binding(value=%10, trace=cleanup_activation)],
+        through_suspend=true), root_requirement(boundary=before_instruction(i6), bindings=[root_binding(value=%1,
+        trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies), root_binding(value=%9,
+        trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=after_instruction(i5),
+        bindings=[root_binding(value=%1, trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies),
+        root_binding(value=%9, trace=cleanup_activation)], through_suspend=true),
+        root_requirement(boundary=before_instruction(i5), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
+        root_binding(value=%6, trace=full_dependencies), root_binding(value=%8, trace=cleanup_activation)],
+        through_suspend=true), root_requirement(boundary=after_instruction(i4), bindings=[root_binding(value=%1,
+        trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies), root_binding(value=%8,
+        trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=before_instruction(i4),
+        bindings=[root_binding(value=%1, trace=value(frame<@f>)), root_binding(value=%2, trace=value(type)),
+        root_binding(value=%6, trace=full_dependencies), root_binding(value=%7, trace=scope_inventory)],
+        through_suspend=true), root_requirement(boundary=after_instruction(i3), bindings=[root_binding(value=%1,
+        trace=value(frame<@f>)), root_binding(value=%2, trace=value(type)), root_binding(value=%6,
+        trace=full_dependencies), root_binding(value=%7, trace=scope_inventory)], through_suspend=true),
+        root_requirement(boundary=before_instruction(i3), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
+        root_binding(value=%2, trace=value(type)), root_binding(value=%6, trace=full_dependencies)],
+        through_suspend=true), root_requirement(boundary=after_instruction(i2), bindings=[root_binding(value=%1,
+        trace=value(frame<@f>)), root_binding(value=%2, trace=value(type)), root_binding(value=%6,
+        trace=full_dependencies)], through_suspend=true), root_requirement(boundary=before_instruction(i2),
+        bindings=[root_binding(value=%1, trace=value(frame<@f>)), root_binding(value=%2, trace=value(type)),
+        root_binding(value=%5, trace=value(int))], through_suspend=true),
+        root_requirement(boundary=after_instruction(i1), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
+        root_binding(value=%2, trace=value(type)), root_binding(value=%5, trace=value(int))], through_suspend=true),
+        root_requirement(boundary=before_instruction(i1), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
+        root_binding(value=%2, trace=value(type))], through_suspend=true),
+        root_requirement(boundary=after_instruction(i0), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
+        root_binding(value=%2, trace=value(type))], through_suspend=true),
+        root_requirement(boundary=before_instruction(i0), bindings=[root_binding(value=%0, trace=value(frame<@f>))],
+        through_suspend=true), root_requirement(boundary=entry(^b0), bindings=[root_binding(value=%0,
+        trace=value(frame<@f>))], through_suspend=true), root_requirement(boundary=terminator(^b1),
+        bindings=[root_binding(value=%1, trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies),
+        root_binding(value=%15, trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=entry(^b1),
+        bindings=[root_binding(value=%1, trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies),
+        root_binding(value=%15, trace=cleanup_activation)], through_suspend=true),
+        root_requirement(boundary=terminator(^b2), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
+        root_binding(value=%6, trace=full_dependencies), root_binding(value=%18, trace=cleanup_activation),
+        root_binding(value=%19, trace=failure_graph)], through_suspend=true),
+        root_requirement(boundary=after_instruction(i11), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
+        root_binding(value=%6, trace=full_dependencies), root_binding(value=%18, trace=cleanup_activation),
+        root_binding(value=%19, trace=failure_graph)], through_suspend=true),
+        root_requirement(boundary=before_instruction(i11), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
+        root_binding(value=%6, trace=full_dependencies), root_binding(value=%16, trace=cleanup_activation)],
+        through_suspend=true), root_requirement(boundary=entry(^b2), bindings=[root_binding(value=%1,
+        trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies), root_binding(value=%16,
+        trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=terminator(^b3),
+        bindings=[root_binding(value=%1, trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies),
+        root_binding(value=%22, trace=cleanup_activation)], through_suspend=true),
+        root_requirement(boundary=after_instruction(i12), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
+        root_binding(value=%6, trace=full_dependencies), root_binding(value=%22, trace=cleanup_activation)],
+        through_suspend=true), root_requirement(boundary=before_instruction(i12), bindings=[root_binding(value=%1,
+        trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies), root_binding(value=%20,
+        trace=cleanup_activation), root_binding(value=%21, trace=failure_graph)], through_suspend=true),
+        root_requirement(boundary=entry(^b3), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
+        root_binding(value=%6, trace=full_dependencies), root_binding(value=%20, trace=cleanup_activation),
+        root_binding(value=%21, trace=failure_graph)], through_suspend=true), root_requirement(boundary=terminator(^b4),
+        bindings=[root_binding(value=%1, trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies),
+        root_binding(value=%25, trace=failure_graph), root_binding(value=%26, trace=exit_reserve)],
+        through_suspend=true), root_requirement(boundary=after_instruction(i13), bindings=[root_binding(value=%1,
+        trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies), root_binding(value=%25,
+        trace=failure_graph), root_binding(value=%26, trace=exit_reserve)], through_suspend=true),
+        root_requirement(boundary=before_instruction(i13), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
+        root_binding(value=%6, trace=full_dependencies), root_binding(value=%23, trace=cleanup_activation)],
+        through_suspend=true), root_requirement(boundary=entry(^b4), bindings=[root_binding(value=%1,
+        trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies), root_binding(value=%23,
+        trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=terminator(^b5),
+        through_suspend=true), root_requirement(boundary=after_instruction(i15), through_suspend=true),
+        root_requirement(boundary=before_instruction(i15), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
+        root_binding(value=%6, trace=full_dependencies), root_binding(value=%28, trace=packet_inventory)],
+        through_suspend=true), root_requirement(boundary=after_instruction(i14), bindings=[root_binding(value=%1,
+        trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies), root_binding(value=%28,
+        trace=packet_inventory)], through_suspend=true), root_requirement(boundary=before_instruction(i14),
+        bindings=[root_binding(value=%1, trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies)],
+        through_suspend=true), root_requirement(boundary=entry(^b5), bindings=[root_binding(value=%1,
+        trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies)], through_suspend=true),
+        root_requirement(boundary=terminator(^b6), through_suspend=true),
+        root_requirement(boundary=after_instruction(i16), through_suspend=true),
+        root_requirement(boundary=before_instruction(i16), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
+        root_binding(value=%30, trace=failure_graph)], through_suspend=true), root_requirement(boundary=entry(^b6),
+        bindings=[root_binding(value=%1, trace=value(frame<@f>)), root_binding(value=%30, trace=failure_graph)],
+        through_suspend=true), ], proofs=[])
+    ^b0 in S0:
+    [i0] (%1: frame<@f>, %2: type, %3: task-state, %4:
+        task-state) = frame.resume %0, continuation 0, slots [saved_slot(slot=0, ty=type), saved_slot(slot=1,
+        ty=task-state, linear=true), saved_slot(slot=2, ty=task-state, linear=true)]
+    [i1] %5: int = const 0
+    [i2] %6: deps = deps.of %5
+    [i3] %7: scope<S0> = scope.begin S0
+    [i4] %8: cleanup-state = cleanup.begin %7, close 0, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=true)
+    [i5] %9: cleanup-state = cleanup.shield %8
+    [i6] %10: cleanup-state = cleanup.settle %9, %3, protocol P0
+    [i7] %11: cleanup-state = cleanup.shield %10
+    [i8] %12: cleanup-state = cleanup.plan %11, plan 0
+    [i9] %13: cleanup-state = cleanup.deliver_cancel %12
+    [i10] %14: cleanup-state = cleanup.plan %13, plan 1
+    br ^b1(%14)
+    ^b1(%15: cleanup-state) in S0:
+    cleanup.next %15 selected ^b2($state, $selected) done ^b4($state)
+    ^b2(%16: cleanup-state, %17: stable-key) in S0:
+    [i11] (%18: cleanup-state, %19: failure-state) = cleanup.destroy %16, %17
+    failure.dispatch %19 none ^b1(%18) some ^b3(%18, $failure)
+    ^b3(%20: cleanup-state, %21: failure) in S0:
+    [i12] %22: cleanup-state = cleanup.failure %20, %21
+    br ^b1(%22)
+    ^b4(%23: cleanup-state) in S0:
+    [i13] (%24: closed, %25: failure-state, %26: exit-state) = cleanup.finish %23
+    exit.dispatch 0 %24 %25 %26 success ^b5($closed) failure ^b6($closed, $failure)
+    ^b5(%27: closed) in S0:
+    [i14] %28: own = own.empty
+    [i15] fut.publish %1, success(packet=%28, deps=%6)
     ret
-^failed(%closed2: closed, %failure: failure) in S:
-    raise %failure
+    ^b6(%29: closed, %30: failure) in S0:
+    [i16] fut.publish %1, failure(%30)
+    ret
 }

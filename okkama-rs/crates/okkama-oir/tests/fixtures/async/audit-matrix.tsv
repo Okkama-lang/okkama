@@ -16,4 +16,4 @@ OIR2-B10.6	instruction:1:4	../../../src/own/tests/async-goldens/async-repeated-a
 async-unmodeled-op	instruction:1:20	coro/coro-nested-cold-await.oir	audit-invalid/c4b.oir
 OIR2-B10.6	instruction:1:15	low/coro-schedule-duty-live-across-await.oir	audit-invalid/q4-low-swap.oir
 OIR2-B10.6	function:1	coro/coro-schedule-duty-live-across-await.oir	audit-invalid/q4-coro-swap.oir
-OIR2-B10.4	instruction:1:7	../verify/valid/B9-frame-cancel-captured-packet.oir	audit-invalid/legacy-frame-envelope.oir
+OIR2-B10.4	instruction:0:8	../verify/valid/M9-service-settle-two-orders.oir	audit-invalid/legacy-frame-envelope.oir

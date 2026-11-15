@@ -2,6 +2,8 @@
 use super::*;
 #[path = "cleanup.rs"]
 mod cleanup;
+#[path = "futures.rs"]
+mod futures;
 use s::{Argument as A, Location as L, Opcode as O, ProducedType as P, ServiceKind as K};
 
 fn error(message: impl Into<String>) -> GenerateError {
@@ -25,8 +27,13 @@ fn kind(module: &o::Module, ty: o::TypeId) -> Result<P, GenerateError> {
             o::ServiceType::ExitState => P::Service(K::ExitState),
             o::ServiceType::StableKey => P::Service(K::StableKey),
             o::ServiceType::Closed => P::Service(K::Closed),
+            o::ServiceType::CacheState => P::Service(K::CacheState),
+            o::ServiceType::TaskState => P::Service(K::TaskState),
+            o::ServiceType::Receipt => P::Service(K::Receipt),
             _ => return Err(later("async service type")),
         },
+        // The running body's frame token (`frame<@f>`); `translate` checks that it names its own function.
+        o::Type::Frame(_) => P::Service(K::Frame),
         _ => P::Value(translate_type(module, ty)?),
     })
 }
@@ -947,21 +954,24 @@ fn retained_parameters(summary: &o::Summary) -> Result<BTreeSet<u32>, GenerateEr
 }
 
 pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Function, objects: &[s::Object],
-    summaries: &mut Vec<s::Summary>, synthetic: &roles::Synthetic) -> Result<s::Function, GenerateError>
+    tables: &mut s::ChampTables, synthetic: &roles::Synthetic) -> Result<s::Function, GenerateError>
 {
+    let asynchronous = futures::async_body(module, id, function)?;
     if function.body.is_none() {
         return cleanup::external(module, function);
     }
-    if !function.type_params.is_empty() || function.async_creation_summary.is_some()
-        || function.async_body_summary.is_some()
-    {
-        return Err(later(&format!("{}: generic/async entry", function.symbol)));
+    if !function.type_params.is_empty() {
+        return Err(later(&format!("{}: generic entry", function.symbol)));
     }
     if let Some(attr) = function.attrs.iter().find(|attr| !declaration_attr(attr) && !matches!(attr,
-        o::FunctionAttr::Entry | o::FunctionAttr::Hidden | o::FunctionAttr::Cleanup
+        o::FunctionAttr::Entry | o::FunctionAttr::Hidden | o::FunctionAttr::Cleanup | o::FunctionAttr::Async
         | o::FunctionAttr::DeferEntry { .. } | o::FunctionAttr::Ctor(_) | o::FunctionAttr::Destroy(_)))
     {
         return Err(later(&format!("{}: entry attribute {attr:?}", function.symbol)));
+    }
+    let defer = function.attrs.iter().any(|attr| matches!(attr, o::FunctionAttr::DeferEntry { .. }));
+    if asynchronous.is_some() && defer {
+        return Err(later(&format!("{}: async defer entry (C-6)", function.symbol)));
     }
     let body = function.body.as_ref().ok_or_else(|| later("entry without body"))?;
     if !body.high_results.is_empty() || !body.high_effects.is_empty() || !body.descriptor_bindings.is_empty()
@@ -975,8 +985,11 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
     if params != function.signature.params {
         return Err(error("entry parameter signature mismatch"));
     }
-    let defer = function.attrs.iter().any(|attr| matches!(attr, o::FunctionAttr::DeferEntry { .. }));
-    let entry_abi = if defer {
+    let entry_abi = if asynchronous.is_some() {
+        // Its layout is pushed once the pcs of its sites are known, below.
+        let layout = u32::try_from(tables.frames.len()).map_err(|_| error("too many frame layouts"))?;
+        s::EntryAbi::AsyncBody { layout }
+    } else if defer {
         s::EntryAbi::Defer { labels: labels(module, function)? }
     } else {
         match function.signature.ownership_abi {
@@ -1024,6 +1037,10 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
         if let P::Value(ty) = kind(module, ty)? {
             result.results.push(ty);
         }
+    }
+    // An async body returns nothing: its results are the Future's outcome, which fut.publish delivers.
+    if let Some(body) = &asynchronous {
+        result.results.extend(body.outcome);
     }
     let mut order = vec![body.entry];
     order.extend(body.blocks.iter().map(|(id, _)| id).filter(|&id| id != body.entry));
@@ -1105,6 +1122,11 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
     if definitions.len() != body.values.len() || instructions.len() != body.insts.len() {
         return Err(error("orphan SSA value or instruction"));
     }
+    if asynchronous.is_some() {
+        let layout = body.frame_layout.as_ref().ok_or_else(|| error("async body without its frame layout"))?;
+        tables.frames.push(futures::frame_layout(module, layout, &inst_pcs, &term_pcs)?);
+    }
+    let summaries = &mut tables.summaries;
     let mut emitter = Emitter {
         module, function, body, objects, locations, pcs, summaries, scope: entry.lexical_scope, result,
         synthetic, origins: None, expansions: vec![],
@@ -1212,6 +1234,7 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                 }
                 o::Operation::Cleanup(op) => emitter.cleanup_instruction(op, &inst.results)?,
                 o::Operation::Exit(op) => emitter.exit_instruction(op, &inst.results)?,
+                o::Operation::Async(op) => emitter.async_instruction(op, &inst.results)?,
                 o::Operation::Core(o::CoreOp::TypeOf { ty, descriptor }) => {
                     let id = match module.types.get(*ty)? {
                         o::Type::Object { decl, .. } => decl.as_u32(),
@@ -1375,6 +1398,9 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                 if matches!(op.as_ref(), o::Operation::Ownership(_)) => {
                 emitter.ownership_invoke(op, normal, unwind)?
             }
+            o::TermKind::InvokeOwn { op, normal, unwind } if matches!(op.as_ref(), o::Operation::Async(_)) => {
+                emitter.async_invocation(op, normal, unwind)?
+            }
             o::TermKind::CleanupNext { .. } | o::TermKind::ExitDispatch { .. }
                 | o::TermKind::FailureDispatch { .. } => emitter.cleanup_term(&block.term.kind)?,
             o::TermKind::Throw(_) | o::TermKind::Panic(_) | o::TermKind::Trap { .. } => {
@@ -1452,7 +1478,8 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                 if actual != function.signature.results {
                     return Err(error("return signature/type mismatch"));
                 }
-                if emitter.result.entry_abi == s::EntryAbi::Observation {
+                if matches!(emitter.result.entry_abi, s::EntryAbi::Observation | s::EntryAbi::AsyncBody { .. }) {
+                    // An async body returns nothing: fut.publish just before has delivered its outcome.
                     s::Instruction::Ret(values.iter().map(|&value| emitter.reg(value))
                         .collect::<Result<_, _>>()?)
                 } else {

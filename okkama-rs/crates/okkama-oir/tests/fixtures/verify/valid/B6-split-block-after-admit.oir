@@ -10,7 +10,8 @@ func @f(%q0: scope<S>, %p: own, %x: int) -> void [async] summary(M0) {
     %n: int = int.mod %x, %x
     br ^close(%current)
 ^close(%q2: scope<S>) in S:
-    invoke.own scope.end %q2, effects scope_effects(failures=[thrown, program, panic, native], suspends=true, cancel=false)
+    invoke.own scope.end %q2, effects scope_effects(failures=[thrown, program, panic, native], suspends=true,
+        cancel=true)
         normal ^done($closed)
         unwind ^closed_failed($closed, $failure)
 ^failed(%old: scope<S>, %failure: failure) in S:

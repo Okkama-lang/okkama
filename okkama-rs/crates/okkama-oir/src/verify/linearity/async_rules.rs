@@ -59,10 +59,10 @@ impl Engine<'_, '_> {
         }
     }
 
-    /// C-3: in a D21 body the task and the receipt of an await unwind edge reach only `await.unwind`; neither is a
-    /// service duty that a close or a settle step may take. Layout-less async bodies keep the pre-C-3 form.
+    /// C-3: the task and the receipt of an await unwind edge reach only `await.unwind`; neither is a service duty
+    /// that a close or a settle step may take.
     pub(super) fn await_handle(&self, before: &Flow, value: ValueId) -> bool {
-        self.frame_body() && before.tokens[value.as_u32() as usize].cache.is_some()
+        before.tokens[value.as_u32() as usize].cache.is_some()
             && matches!(super::super::later::value_type(self.module, self.body, value),
                 Some(Type::Service(ServiceType::TaskState | ServiceType::Receipt)))
     }
@@ -171,7 +171,7 @@ impl Engine<'_, '_> {
             return;
         };
         if before.frame_conflict && matches!(op, AsyncOp::FrameSave { .. } | AsyncOp::FrameResume { .. }
-            | AsyncOp::FrameCancel { .. } | AsyncOp::FutureNew { .. }) {
+            | AsyncOp::FutureNew { .. }) {
             self.error(R::B95, "occupied frame families need producer layout/continuation metadata");
         }
         match op {
@@ -391,55 +391,6 @@ impl Engine<'_, '_> {
                 }
                 if let Some(slot) = slots.first_mut() {
                     slot.token = before.tokens[frame.as_u32() as usize].clone();
-                }
-            }
-            AsyncOp::FrameCancel { frame, cleanup, .. } => {
-                let mut token = before.tokens[cleanup.as_u32() as usize].clone();
-                let Some(fact) = &mut token.cleanup else {
-                    self.error(R::B95, "frame cancellation needs a checked cleanup automaton");
-                    return;
-                };
-                if !fact.shield || fact.phase > 1 || fact.awaiting_failure {
-                    self.error(R::B95, "frame cancellation must be shielded in the service phase");
-                }
-                let frame_token = &before.tokens[frame.as_u32() as usize];
-                if !frame_token.service.is_some_and(|key| fact.services.remove(&key)) {
-                    self.error(R::B95, "cancelled frame is not an outstanding service duty of this owner");
-                }
-                let mut frames: Vec<_> = frame_token.frame.into_iter().collect();
-                if frames.is_empty() {
-                    self.error(R::B95, "frame cancellation needs its saved layout");
-                }
-                let mut seen = BTreeSet::new();
-                while let Some(key) = frames.pop() {
-                    if !self.state.step(1) {
-                        return;
-                    }
-                    if !seen.insert(key) {
-                        continue;
-                    }
-                    if let Some(layout) = flow.frames.remove(&key) {
-                        for content in layout.into_values() {
-                            frames.extend(content.token.frame);
-                            token.pieces.extend(content.token.pieces.iter().cloned());
-                            fact.inventory.extend(content.token.pieces.iter().cloned());
-                            if let Some(saved) = &content.token.cleanup {
-                                token.pieces.extend(saved.reserve.iter().cloned());
-                                fact.inventory.extend(saved.reserve.iter().cloned());
-                            }
-                            if let Some(scope) = content.token.scope {
-                                flow.scopes.insert(scope, 2);
-                            }
-                        }
-                    }
-                }
-                // The frame's intrinsic cancellation settles its captured duties.
-                // Cancellation of a child does not replace the owner's primary failure.
-                fact.may_fail = true;
-                fact.phase = 1;
-                fact.plan = None;
-                if let Some(slot) = slots.first_mut() {
-                    slot.token = token;
                 }
             }
             AsyncOp::FutureNew { packet, owner_state, environment, .. } => {

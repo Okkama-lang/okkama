@@ -76,6 +76,7 @@ impl Engine<'_, '_> {
             if before.active_failure_origin.is_some() && before.active_failure_origin != failure_origin {
                 self.error(R::B104, "cleanup.begin dropped or substituted the active primary failure/Error");
             }
+            self.final_close_delivers(before, *close, failure.is_some());
             let mut fact = CleanupFact {
                 aborted: false,
                 // Plan §3.4: in a D21 async body of Low the shield is a property of the close, not an
@@ -359,35 +360,19 @@ impl Engine<'_, '_> {
                     self.error(R::LowCancelOutsideFinalExit,
                         "cancellation is delivered only by the final successful close of an async action");
                 }
-                if self.frame_body() {
-                    self.conditional_cancel(&token, &mut fact);
-                    token.cleanup = Some(fact);
-                    if let Some(slot) = slots.first_mut() {
-                        slot.token = token;
-                        let index = cleanup.as_u32() as usize;
-                        slot.refs = before.refs[index].clone();
-                        slot.requirements = before.full_deps[index].clone();
-                        slot.aliases = before.aliases[index].clone();
-                        slot.identity = before.identities[index];
-                    }
-                    return;
+                // #696: every async body of Low is D21 (coro-missing-layout), so the delivery is the conditional
+                // one of Champ draft 3 §5; the definite delivery of layout-less bodies has no valid body left.
+                self.conditional_cancel(&token, &mut fact);
+                token.cleanup = Some(fact);
+                if let Some(slot) = slots.first_mut() {
+                    slot.token = token;
+                    let index = cleanup.as_u32() as usize;
+                    slot.refs = before.refs[index].clone();
+                    slot.requirements = before.full_deps[index].clone();
+                    slot.aliases = before.aliases[index].clone();
+                    slot.identity = before.identities[index];
                 }
-                if fact.failures == 0 {
-                    fact.failures = failure_bit(FailureKind::Cancelled);
-                    fact.failure_origin = match self.state.location {
-                        L::Instruction { instruction, .. } => Some(Origin::ViewInstruction(instruction, u16::MAX)),
-                        _ => None,
-                    };
-                }
-                fact.cancel_delivered = true;
-                flow.active_failure = fact.failures;
-                flow.active_failure_origin = fact.failure_origin;
-                fact.phase = 1;
-                fact.plan = None;
-                fact.aborted = true;
-                token.pieces.extend(fact.reserve.iter().cloned());
-                fact.reserve.clear();
-                fact.pending = false;
+                return;
             }
             CleanupOp::Finish { .. } => {
                 if fact.phase != 2 || !token.pieces.is_empty() || !fact.services.is_empty() {
@@ -492,6 +477,29 @@ impl Engine<'_, '_> {
                 slot.aliases = before.aliases[index].clone();
                 slot.identity = before.identities[index];
             }
+        }
+    }
+
+    /// D18 (#716): in Low the successful close of an async action's root scope is the `cleanup.begin` that
+    /// lowers its `scope.end`, and it carries the final cancellation delivery just as that close does.
+    fn final_close_delivers(&mut self, before: &Flow, close: CleanupCloseId, failing: bool) {
+        if self.module.profile != Profile::Low || !self.declaration.attrs.contains(&FunctionAttr::Async) || failing
+            || before.active_failure != 0 {
+            return;
+        }
+        let entry = self.declaration.attrs.iter().any(|attr| {
+            matches!(attr, FunctionAttr::DeferEntry { .. } | FunctionAttr::Destroy(_))
+        });
+        let Ok(close) = self.body.cleanup.closes.get(close) else {
+            return;
+        };
+        let CleanupSource::Scope(owner) = close.source else {
+            return;
+        };
+        let root = self.module.scopes.get(owner)
+            .is_ok_and(|scope| scope.parent.is_none() && scope.kind == ScopeKind::Action);
+        if !entry && root && !close.active_failure && !close.effects.cancel {
+            self.error(R::B105, "the successful close of an async action's root scope needs cancel=true (D18)");
         }
     }
 
@@ -608,15 +616,13 @@ impl Engine<'_, '_> {
                 self.error(R::B105, "cancel envelope is legal only at final successful async action close");
             }
         }
-        // D18: the successful close of an async action's root scope carries the final cancellation delivery. An
-        // async action is the one elaborated with its creation and body summaries (H6), or its D21 body.
+        // D18: the successful close of an async action's root scope carries the final cancellation delivery.
         let entry = self.declaration.attrs.iter().any(|attr| {
             matches!(attr, FunctionAttr::DeferEntry { .. } | FunctionAttr::Destroy(_))
         });
-        let action = self.declaration.async_body_summary.is_some() || self.frame_body();
         let root = scope(self.module, self.body, state).and_then(|id| self.module.scopes.get(id).ok())
             .is_some_and(|scope| scope.parent.is_none() && scope.kind == ScopeKind::Action);
-        if self.declaration.attrs.contains(&FunctionAttr::Async) && action && !entry && root && !envelope.cancel
+        if self.declaration.attrs.contains(&FunctionAttr::Async) && !entry && root && !envelope.cancel
             && before.active_failure == 0 && matches!(op, Operation::Ownership(OwnershipOp::ScopeEnd { .. })) {
             self.error(R::B105, "the successful close of an async action's root scope needs cancel=true (D18)");
         }
