@@ -543,10 +543,36 @@ fn v7_low_goldens_compile_and_load() {
 #[test]
 fn k1_low_goldens_compile_and_load() {
     for name in ["k1-cancel-unstarted", "k1-failure-view-escapes", "k1-nested-close-next-await",
-        "nested-close-outer-future", "start-deps"]
+        "nested-close-outer-future", "start-deps", "void-fixed-root"]
     {
         loads(name);
     }
+}
+
+/// #725: an async test is a void async body and a fixed root. TEST_ENTRY refuses one that publishes a value, and
+/// SPB_ASYNC_ENTRY one whose start holds an input.
+#[test]
+fn an_async_test_is_a_void_fixed_root() {
+    let module = golden("void-fixed-root");
+    let program = compile(&module).unwrap().program;
+    let objects = with_composites(&module, || objects(&module, &layouts(&module))).unwrap();
+    let contracts = s::p1::P1Contracts::new(&objects).unwrap();
+    s::verify_load(&program, &contracts).unwrap();
+    let test = program.tests.as_ref().unwrap()[0].function as usize;
+    assert!(matches!(program.functions[test].entry_abi, s::EntryAbi::AsyncBody { .. }));
+    let mut valued = program.clone();
+    valued.functions[test].results.push(s::Type::Int);
+    assert_eq!(s::verify_load(&valued, &contracts).unwrap_err().rule, "TEST_ENTRY");
+    let mut started = program.clone();
+    let layout = match started.functions[test].entry_abi {
+        s::EntryAbi::AsyncBody { layout } => layout as usize,
+        _ => unreachable!(),
+    };
+    let frame = &mut started.tables.frames[layout];
+    frame.slots.push(s::FrameSlot { ty: P::Value(s::Type::Int), linear: false });
+    let slot = (frame.slots.len() - 1) as u32;
+    frame.continuations[0].saved.push(slot);
+    assert_eq!(s::verify_load(&started, &contracts).unwrap_err().rule, "SPB_ASYNC_ENTRY");
 }
 
 /// C-2 with descriptor parameters: the S2 transport has no descriptor bindings yet (open calls, lane cr).

@@ -689,8 +689,12 @@ fn check_tests(p: &Program) -> Check {
         enforce(functions.insert(test.function), "TEST_TABLE", "two tests share one function")?;
         enforce(p.entry != Some(test.function), "TEST_ENTRY", "the program entry cannot be a test")?;
         let external = f.proofs.entry.as_ref().is_some_and(|entry| entry.external.is_some());
-        enforce(f.entry_abi == EntryAbi::Observation && f.params.is_empty() && f.results.is_empty()
-            && !external && !f.code.is_empty(), "TEST_ENTRY", "a test needs a () -> void observation body")?;
+        // A test is a synchronous `() -> void` observation or a void async body (#725): an async body takes only
+        // its frame (`check_entry`), and as a fixed root its start holds nothing (`check_layouts`).
+        let observation = f.entry_abi == EntryAbi::Observation && f.params.is_empty();
+        let asynchronous = matches!(f.entry_abi, EntryAbi::AsyncBody { .. });
+        enforce((observation || asynchronous) && f.results.is_empty() && !external && !f.code.is_empty(),
+            "TEST_ENTRY", "a test needs a () -> void observation body or a void async body")?;
     }
     Ok(())
 }

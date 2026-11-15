@@ -8,6 +8,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Async tests load on Champ (#725).** The SPB 17 loader took only a
+  synchronous `() -> void` observation body as a test (`TEST_ENTRY`), so the
+  program of an async test, a void async body that starts with an empty
+  continuation 0 (async ABI C-2, #691), was refused. `TEST_ENTRY` now also
+  takes a void async body; as a fixed root its start must stay empty
+  (`SPB_ASYNC_ENTRY`).
 - **`once let` keeps plain closures, plain role values and native handles on the OIR-2 path (#717).**
   Bible §13.13: a once value must not retain a resource, and a closure or role value is allowed when it
   cannot retain one in this program; P2.4 §4.7: a native handle has no Okkama destroy. The OIR-2
