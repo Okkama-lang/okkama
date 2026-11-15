@@ -50,7 +50,8 @@
   - [4.7 Equality and order](#47-equality-and-order)
   - [4.8 Conversions are explicit](#48-conversions-are-explicit)
   - [4.9 What the compiler checks, and what remains for run time](#49-what-the-compiler-checks-and-what-remains-for-run-time)
-  - [4.10 Limits](#410-limits)
+  - [4.10 A worked example: units the compiler checks](#410-a-worked-example-units-the-compiler-checks)
+  - [4.11 Limits](#411-limits)
 - [Chapter 5. Numbers](#chapter-5-numbers)
   - [5.1 Four categories](#51-four-categories)
   - [5.2 Exact integers](#52-exact-integers)
@@ -1908,7 +1909,117 @@ errors, that a caller may catch.
 
 Types are checked before execution; the remaining dynamic checks concern values, such as bounds and divisors.
 
-## 4.10 Limits
+## 4.10 A worked example: units the compiler checks
+
+On 23 September 1999 the Mars Climate Orbiter was lost as it entered orbit
+around Mars. The investigation board found the root cause in a ground
+program, `SM_FORCES`, whose output file was specified in newton-seconds and
+was written in pound-force seconds. The navigation software read the numbers
+as newton-seconds, underestimated the effect of the thruster firings by a
+factor of 4.45, and computed a trajectory that took the spacecraft far too
+close to the planet [[Board 1999](#ref-nasa1999mco)]. Both programs were correct about their
+own numbers. The error lived at the boundary between them, where a number
+crossed without its unit.
+
+In Okkama a unit can be a type. Two objects with the same single field are
+still two types, because the type system is nominal (Section 4.4):
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// Impulse in the units the navigation software expects.
+object NewtonSeconds {
+    has amount is rat;
+    NewtonSeconds(:amount);
+    plus(other is NewtonSeconds) is NewtonSeconds { NewtonSeconds(amount: amount + other.size()); }
+    size() is rat { amount; }
+    shown() is string { amount.float().string() + " N*s"; }
+}
+
+// Impulse in the units a thruster table was written in.
+object PoundSeconds {
+    has amount is rat;
+    PoundSeconds(:amount);
+    // One pound-force is exactly 0.45359237 kg * 9.80665 m/s^2 = 4.4482216152605 N.
+    newton_seconds() is NewtonSeconds {
+        NewtonSeconds(amount: amount * 44482216152605.rat() / 10000000000000.rat());
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let burns = [PoundSeconds(amount: 12.rat()), PoundSeconds(amount: 7.rat() / 2.rat())];
+    // The conversion is a call, written where the two kinds of number meet.
+    let total = burns.map() -> burn { burn.newton_seconds(); }
+        .reduce(NewtonSeconds(amount: 0.rat())) -> sum, n { sum.plus(n); };
+    out.writeln(total.shown());
+    0;
+}
+```
+
+Output:
+
+```text
+68.94743503653775 N*s
+```
+
+- **The unit is in the type, not in a comment.** `NewtonSeconds` and
+  `PoundSeconds` each hold one `rat`. Nothing about their shape tells them
+  apart, and nothing has to: they are different declarations.
+- **Conversion is an action with a name.** `newton_seconds()` is the only
+  way from one to the other, and its factor is written once, exactly: one
+  pound-force is 0.45359237 kg times 9.80665 m/s², which is 4.4482216152605
+  newtons by definition. `rat` keeps the product exact until the result is
+  shown (Chapter 5).
+- **Arithmetic is offered, not inherited.** `plus` accepts only another
+  `NewtonSeconds`. An object gets no `+` it did not declare, so impulse
+  cannot be added to time or to a raw number by accident.
+
+The mistake of 1999, written in Okkama, does not compile:
+
+```okkama
+module app v1.0.0;
+
+object NewtonSeconds {
+    has amount is rat;
+    NewtonSeconds(:amount);
+    plus(other is NewtonSeconds) is NewtonSeconds { NewtonSeconds(amount: amount + other.size()); }
+    size() is rat { amount; }
+}
+
+object PoundSeconds {
+    has amount is rat;
+    PoundSeconds(:amount);
+}
+
+main() is int {
+    let start = NewtonSeconds(amount: 0.rat());
+    // Same shape, different meaning: the compiler does not accept one for the other.
+    let total = start.plus(PoundSeconds(amount: 12.rat()));
+    0;
+}
+```
+
+The compiler answers:
+
+```text
+04-units-rejected.ok:18:17: semantic error: No action "plus" on object "NewtonSeconds" accepts (PoundSeconds)
+```
+
+The compiler names the action, the argument it was given and the parameter
+it expected. The error is found where the two kinds of number meet, before
+anything runs, and the fix is a call that a reader can see.
+
+The cost is a declaration per unit and an action per operation the program
+needs. A program that does physics with dozens of units would want derived
+units — newton-seconds as newtons times seconds — computed by the type
+system, as in F#'s units of measure [[Kennedy 2010](#ref-kennedy2010)]; Okkama has no such feature, and each
+combination is written by hand. For the few quantities that cross a boundary
+between programs or teams, the declaration is cheap insurance.
+
+## 4.11 Limits
 
 - **No union or intersection types.** A value is of one type; a choice
   between types is expressed by a role or by an enum with cases.
@@ -19020,6 +19131,7 @@ limits are deliberate, and Chapter 28 discusses the ones that are not.
 - <a id="ref-jep409"></a>Gavin Bierman (2021). JEP 409: Sealed Classes. OpenJDK. https://openjdk.org/jeps/409
 - <a id="ref-jep441"></a>Gavin Bierman (2023). JEP 441: Pattern Matching for switch. OpenJDK. https://openjdk.org/jeps/441
 - <a id="ref-bloch2018"></a>Joshua Bloch (2018). *Effective Java*, 3rd edition. Addison-Wesley.
+- <a id="ref-nasa1999mco"></a>Mars Climate Orbiter Mishap Investigation Board (1999). *Phase I Report*. NASA, 10 November 1999. https://llis.nasa.gov/llis_lib/pdf/1009464main1_0641-mr.pdf
 - <a id="ref-boehm2003"></a>Hans-J. Boehm (2003). Destructors, Finalizers, and Synchronization. In *Proceedings of POPL 2003*: 262–272. ACM. https://doi.org/10.1145/604131.604153
 - <a id="ref-bracha1998"></a>Gilad Bracha, Martin Odersky, David Stoutamire, Philip Wadler (1998). Making the Future Safe for the Past: Adding Genericity to the Java Programming Language. In *Proceedings of OOPSLA 1998*: 183–200. ACM. https://doi.org/10.1145/286936.286957
 - <a id="ref-braun2013"></a>Matthias Braun, Sebastian Buchwald, Sebastian Hack, Roland Leißa, Christoph Mallon, Andreas Zwinkau (2013). Simple and Efficient Construction of Static Single Assignment Form. In *Compiler Construction (CC 2013)*, LNCS 7791: 102–122. Springer. https://doi.org/10.1007/978-3-642-37051-9_6
@@ -19075,6 +19187,7 @@ limits are deliberate, and Chapter 28 discusses the ones that are not.
 - <a id="ref-kay1993"></a>Alan C. Kay (1993). The Early History of Smalltalk. *ACM SIGPLAN Notices* 28(3): 69–95 (HOPL-II). https://doi.org/10.1145/155360.155364
 - <a id="ref-kay2003"></a>Alan Kay (2003). On the Meaning of "Object-Oriented Programming". E-mail to Stefan Ram, 23 July 2003. https://www.purl.org/stefan_ram/pub/doc_kay_oop_en
 - <a id="ref-kennedy2001"></a>Andrew Kennedy, Don Syme (2001). Design and Implementation of Generics for the .NET Common Language Runtime. In *Proceedings of PLDI 2001*: 1–12. ACM. https://doi.org/10.1145/378795.378797
+- <a id="ref-kennedy2010"></a>Andrew Kennedy (2010). Types for Units-of-Measure: Theory and Practice. In *Central European Functional Programming School (CEFP 2009)*, LNCS 6299: 268–305. Springer. https://doi.org/10.1007/978-3-642-17685-2_8
 - <a id="ref-kernighan1988"></a>Brian W. Kernighan, Dennis M. Ritchie (1988). *The C Programming Language*, 2nd edition. Prentice Hall.
 - <a id="ref-king2019"></a>Alexis King (2019). Parse, Don't Validate. Blog post, 5 November 2019. https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/
 - <a id="ref-klabnik2023"></a>Steve Klabnik, Carol Nichols (2023). *The Rust Programming Language*, 2nd edition. No Starch Press. https://doc.rust-lang.org/book/

@@ -50,7 +50,8 @@
   - [4.7 Равенство и порядок](#47-равенство-и-порядок)
   - [4.8 Преобразования явные](#48-преобразования-явные)
   - [4.9 Что проверяет компилятор, а что остаётся на время выполнения](#49-что-проверяет-компилятор-а-что-остаётся-на-время-выполнения)
-  - [4.10 Ограничения](#410-ограничения)
+  - [4.10 Разобранный пример: единицы, которые проверяет компилятор](#410-разобранный-пример-единицы-которые-проверяет-компилятор)
+  - [4.11 Ограничения](#411-ограничения)
 - [Глава 5. Числа](#глава-5-числа)
   - [5.1 Четыре категории](#51-четыре-категории)
   - [5.2 Точные целые](#52-точные-целые)
@@ -1937,7 +1938,118 @@ Okkama никогда не превращает значение одного т
 
 Типы проверяются до выполнения; оставшиеся динамические проверки относятся к значениям, например к границам и делителям.
 
-## 4.10 Ограничения
+## 4.10 Разобранный пример: единицы, которые проверяет компилятор
+
+23 сентября 1999 года аппарат Mars Climate Orbiter был потерян при выходе на
+орбиту Марса. Комиссия по расследованию нашла первопричину в наземной
+программе `SM_FORCES`: её выходной файл по спецификации был в
+ньютон-секундах, а записывался в фунт-сила-секундах. Навигационная
+программа читала числа как ньютон-секунды, недооценила действие включений
+двигателей в 4,45 раза и рассчитала траекторию, которая провела аппарат
+слишком близко к планете [[Board 1999](#ref-nasa1999mco)]. Обе программы были правы насчёт
+своих чисел. Ошибка жила на границе между ними, там, где число переходило
+без своей единицы.
+
+В Okkama единица может быть типом. Два объекта с одним и тем же
+единственным полем — всё равно два типа, потому что система типов
+номинальная (раздел 4.4):
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// Impulse in the units the navigation software expects.
+object NewtonSeconds {
+    has amount is rat;
+    NewtonSeconds(:amount);
+    plus(other is NewtonSeconds) is NewtonSeconds { NewtonSeconds(amount: amount + other.size()); }
+    size() is rat { amount; }
+    shown() is string { amount.float().string() + " N*s"; }
+}
+
+// Impulse in the units a thruster table was written in.
+object PoundSeconds {
+    has amount is rat;
+    PoundSeconds(:amount);
+    // One pound-force is exactly 0.45359237 kg * 9.80665 m/s^2 = 4.4482216152605 N.
+    newton_seconds() is NewtonSeconds {
+        NewtonSeconds(amount: amount * 44482216152605.rat() / 10000000000000.rat());
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let burns = [PoundSeconds(amount: 12.rat()), PoundSeconds(amount: 7.rat() / 2.rat())];
+    // The conversion is a call, written where the two kinds of number meet.
+    let total = burns.map() -> burn { burn.newton_seconds(); }
+        .reduce(NewtonSeconds(amount: 0.rat())) -> sum, n { sum.plus(n); };
+    out.writeln(total.shown());
+    0;
+}
+```
+
+Вывод:
+
+```text
+68.94743503653775 N*s
+```
+
+- **Единица — в типе, а не в комментарии.** `NewtonSeconds` и
+  `PoundSeconds` хранят по одному `rat`. По форме их не различить, и это не
+  нужно: это разные объявления.
+- **Перевод — действие с именем.** `newton_seconds()` — единственный путь от
+  одного к другому, и его множитель записан один раз и точно: фунт-сила —
+  это 0,45359237 кг на 9,80665 м/с², то есть по определению 4,4482216152605
+  ньютона. `rat` держит произведение точным, пока результат не покажут
+  (глава 5).
+- **Арифметику предлагают, а не наследуют.** `plus` принимает только другой
+  `NewtonSeconds`. Объект не получает `+`, которого не объявил, поэтому
+  импульс нельзя случайно сложить со временем или с голым числом.
+
+Ошибка 1999 года, записанная на Okkama, не компилируется:
+
+```okkama
+module app v1.0.0;
+
+object NewtonSeconds {
+    has amount is rat;
+    NewtonSeconds(:amount);
+    plus(other is NewtonSeconds) is NewtonSeconds { NewtonSeconds(amount: amount + other.size()); }
+    size() is rat { amount; }
+}
+
+object PoundSeconds {
+    has amount is rat;
+    PoundSeconds(:amount);
+}
+
+main() is int {
+    let start = NewtonSeconds(amount: 0.rat());
+    // Same shape, different meaning: the compiler does not accept one for the other.
+    let total = start.plus(PoundSeconds(amount: 12.rat()));
+    0;
+}
+```
+
+Ответ компилятора:
+
+```text
+04-units-rejected.ok:18:17: semantic error: No action "plus" on object "NewtonSeconds" accepts (PoundSeconds)
+```
+
+Компилятор называет действие, переданный аргумент и ожидаемый параметр.
+Ошибка находится там, где встречаются два рода чисел, до всякого запуска, а
+исправление — вызов, который читатель видит.
+
+Цена — объявление на каждую единицу и действие на каждую нужную программе
+операцию. Программе, которая считает физику в десятках единиц, нужны
+производные единицы — ньютон-секунды как ньютоны на секунды, — вычисляемые
+системой типов, как единицы измерения в F# [[Kennedy 2010](#ref-kennedy2010)]; в Okkama такого нет, и каждое
+сочетание пишется вручную. Для немногих величин, пересекающих границу между
+программами или командами, объявление — дешёвая страховка.
+
+## 4.11 Ограничения
 
 - **Нет объединений и пересечений типов.** Значение имеет один тип; выбор
   между типами выражается ролью или перечислением со случаями.
@@ -19226,6 +19338,7 @@ main() is int {
 - <a id="ref-jep409"></a>Gavin Bierman (2021). JEP 409: Sealed Classes. OpenJDK. https://openjdk.org/jeps/409
 - <a id="ref-jep441"></a>Gavin Bierman (2023). JEP 441: Pattern Matching for switch. OpenJDK. https://openjdk.org/jeps/441
 - <a id="ref-bloch2018"></a>Joshua Bloch (2018). *Effective Java*, 3rd edition. Addison-Wesley.
+- <a id="ref-nasa1999mco"></a>Mars Climate Orbiter Mishap Investigation Board (1999). *Phase I Report*. NASA, 10 November 1999. https://llis.nasa.gov/llis_lib/pdf/1009464main1_0641-mr.pdf
 - <a id="ref-boehm2003"></a>Hans-J. Boehm (2003). Destructors, Finalizers, and Synchronization. In *Proceedings of POPL 2003*: 262–272. ACM. https://doi.org/10.1145/604131.604153
 - <a id="ref-bracha1998"></a>Gilad Bracha, Martin Odersky, David Stoutamire, Philip Wadler (1998). Making the Future Safe for the Past: Adding Genericity to the Java Programming Language. In *Proceedings of OOPSLA 1998*: 183–200. ACM. https://doi.org/10.1145/286936.286957
 - <a id="ref-braun2013"></a>Matthias Braun, Sebastian Buchwald, Sebastian Hack, Roland Leißa, Christoph Mallon, Andreas Zwinkau (2013). Simple and Efficient Construction of Static Single Assignment Form. In *Compiler Construction (CC 2013)*, LNCS 7791: 102–122. Springer. https://doi.org/10.1007/978-3-642-37051-9_6
@@ -19281,6 +19394,7 @@ main() is int {
 - <a id="ref-kay1993"></a>Alan C. Kay (1993). The Early History of Smalltalk. *ACM SIGPLAN Notices* 28(3): 69–95 (HOPL-II). https://doi.org/10.1145/155360.155364
 - <a id="ref-kay2003"></a>Alan Kay (2003). On the Meaning of "Object-Oriented Programming". E-mail to Stefan Ram, 23 July 2003. https://www.purl.org/stefan_ram/pub/doc_kay_oop_en
 - <a id="ref-kennedy2001"></a>Andrew Kennedy, Don Syme (2001). Design and Implementation of Generics for the .NET Common Language Runtime. In *Proceedings of PLDI 2001*: 1–12. ACM. https://doi.org/10.1145/378795.378797
+- <a id="ref-kennedy2010"></a>Andrew Kennedy (2010). Types for Units-of-Measure: Theory and Practice. In *Central European Functional Programming School (CEFP 2009)*, LNCS 6299: 268–305. Springer. https://doi.org/10.1007/978-3-642-17685-2_8
 - <a id="ref-kernighan1988"></a>Brian W. Kernighan, Dennis M. Ritchie (1988). *The C Programming Language*, 2nd edition. Prentice Hall.
 - <a id="ref-king2019"></a>Alexis King (2019). Parse, Don't Validate. Blog post, 5 November 2019. https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/
 - <a id="ref-klabnik2023"></a>Steve Klabnik, Carol Nichols (2023). *The Rust Programming Language*, 2nd edition. No Starch Press. https://doc.rust-lang.org/book/

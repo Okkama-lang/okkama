@@ -243,7 +243,51 @@ errors, that a caller may catch.
 
 Types are checked before execution; the remaining dynamic checks concern values, such as bounds and divisors.
 
-## 4.10 Limits
+## 4.10 A worked example: units the compiler checks
+
+On 23 September 1999 the Mars Climate Orbiter was lost as it entered orbit
+around Mars. The investigation board found the root cause in a ground
+program, `SM_FORCES`, whose output file was specified in newton-seconds and
+was written in pound-force seconds. The navigation software read the numbers
+as newton-seconds, underestimated the effect of the thruster firings by a
+factor of 4.45, and computed a trajectory that took the spacecraft far too
+close to the planet [@nasa1999mco]. Both programs were correct about their
+own numbers. The error lived at the boundary between them, where a number
+crossed without its unit.
+
+In Okkama a unit can be a type. Two objects with the same single field are
+still two types, because the type system is nominal (Section 4.4):
+
+{{example:04-units}}
+
+- **The unit is in the type, not in a comment.** `NewtonSeconds` and
+  `PoundSeconds` each hold one `rat`. Nothing about their shape tells them
+  apart, and nothing has to: they are different declarations.
+- **Conversion is an action with a name.** `newton_seconds()` is the only
+  way from one to the other, and its factor is written once, exactly: one
+  pound-force is 0.45359237 kg times 9.80665 m/s², which is 4.4482216152605
+  newtons by definition. `rat` keeps the product exact until the result is
+  shown (Chapter 5).
+- **Arithmetic is offered, not inherited.** `plus` accepts only another
+  `NewtonSeconds`. An object gets no `+` it did not declare, so impulse
+  cannot be added to time or to a raw number by accident.
+
+The mistake of 1999, written in Okkama, does not compile:
+
+{{example:04-units-rejected}}
+
+The compiler names the action, the argument it was given and the parameter
+it expected. The error is found where the two kinds of number meet, before
+anything runs, and the fix is a call that a reader can see.
+
+The cost is a declaration per unit and an action per operation the program
+needs. A program that does physics with dozens of units would want derived
+units — newton-seconds as newtons times seconds — computed by the type
+system, as in F#'s units of measure [@kennedy2010]; Okkama has no such feature, and each
+combination is written by hand. For the few quantities that cross a boundary
+between programs or teams, the declaration is cheap insurance.
+
+## 4.11 Limits
 
 - **No union or intersection types.** A value is of one type; a choice
   between types is expressed by a role or by an enum with cases.
