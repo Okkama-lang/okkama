@@ -4601,6 +4601,124 @@ exit 1
 анонимного компаратора. Это снова обмен бритвы: одна операция и одна роль
 вместо семейства методов сортировки.
 
+Программа ниже сортирует бегунов по времени, затем по клубу, затем от
+медленных к быстрым и, наконец, по рейтингу, который знает не все клубы.
+
+```okkama
+module bible/sorting v1.0.0;
+
+// Sorting by a key is an object that compares by that key. The sort is
+// stable, so one key after another composes; descending is a reversal; a
+// comparison that throws stops the sort and leaves the array as it was.
+import "io/stdout" take Stdout;
+import "compare" take Comparing, Order;
+
+enum Refused is Error = (unranked(club is string));
+
+object Runner {
+    has name is string;
+    has club is string;
+    has minutes is int;
+    Runner(:name, :club, :minutes);
+    name() is string { name; }
+    club() is string { club; }
+    minutes() is int { minutes; }
+}
+
+// One key per object: the finishing time.
+object ByTime does Comparing<ByTime> {
+    has runner is Runner;
+    ByTime(:runner);
+    runner() is Runner { runner; }
+    order(other is ByTime) is Order { runner.minutes().order(other.runner().minutes()); }
+}
+
+// The club's name.
+object ByClub does Comparing<ByClub> {
+    has runner is Runner;
+    ByClub(:runner);
+    runner() is Runner { runner; }
+    order(other is ByClub) is Order { runner.club().order(other.runner().club()); }
+}
+
+// A ranking of clubs that knows only some of them.
+object ByRank does Comparing<ByRank> {
+    has runner is Runner;
+    ByRank(:runner);
+    runner() is Runner { runner; }
+    rank() is int {
+        let ranks = ["South": 1, "North": 2];
+        confirm ranks.has(runner.club()) else throw Refused.unranked(runner.club());
+        ranks[runner.club()];
+    }
+    order(other is ByRank) is Order { self.rank().order(other.rank()); }
+}
+
+object Board {
+    has runners is @Runner;
+    Board(:runners);
+    shown() is string {
+        runners.map() -> r { r.name() + " " + r.club() + " " + r.minutes().string(); }.join(", ");
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let runners is @Runner = [
+        Runner(name: "Ada", club: "North", minutes: 42),
+        Runner(name: "Bo", club: "South", minutes: 39),
+        Runner(name: "Cy", club: "North", minutes: 39),
+        Runner(name: "Di", club: "East", minutes: 45)
+    ];
+    let timed = runners.map() -> r { ByTime(runner: r); };
+    let byTime = timed.ordering().map() -> k { k.runner(); };
+    out.writeln("by time:         " + Board(runners: byTime).shown());
+    let clubbed = byTime.map() -> r { ByClub(runner: r); };
+    let byClub = clubbed.ordering().map() -> k { k.runner(); };
+    out.writeln("by club, time:   " + Board(runners: byClub).shown());
+    out.writeln("slowest first:   " + Board(runners: byTime.reversed()).shown());
+    let ranked = runners.map() -> r { ByRank(runner: r); };
+    let outcome = try {
+        Board(runners: ranked.ordering().map() -> k { k.runner(); }).shown();
+    }
+    catch e is Refused {
+        "refused: " + e.text();
+    };
+    out.writeln("by rank:         " + outcome);
+    out.writeln("unchanged:       " + Board(runners: runners).shown());
+    0;
+}
+```
+
+Вывод:
+
+```text
+by time:         Bo South 39, Cy North 39, Ada North 42, Di East 45
+by club, time:   Di East 45, Cy North 39, Ada North 42, Bo South 39
+slowest first:   Di East 45, Ada North 42, Cy North 39, Bo South 39
+by rank:         refused: Refused.unranked("East")
+unchanged:       Ada North 42, Bo South 39, Cy North 39, Di East 45
+```
+
+- **Ключ — это объект.** `ByTime` и `ByClub` оборачивают бегуна и
+  сравнивают одно поле. Сортировка по ключу — три шага: обернуть,
+  `ordering()`, развернуть. У обёртки есть имя, которого нет у анонимного
+  компаратора, и это имя говорит, каков порядок.
+- **Устойчивость складывается.** Bo и Cy пробежали за 39 минут, и сортировка
+  по времени оставляет их в исходном порядке. Сортировка этого результата по
+  клубу сохраняет порядок по времени внутри каждого клуба: в North Cy идёт
+  раньше Ada. Чтобы отсортировать по нескольким ключам, сортируйте сначала
+  по наименее значимому.
+- **Разворот — не устойчивая сортировка по убыванию.** `reversed()`
+  переворачивает весь массив, вместе с равными: «от медленных к быстрым»
+  ставит Cy раньше Bo. Когда порядок равных элементов важен, убывающий ключ
+  пишут отдельным объектом, чей `order` сравнивает в обратную сторону.
+- **Сравнение может отказать, и сортировка останавливается.** `ByRank`
+  бросает ошибку для клуба, у которого нет рейтинга, и первое такое
+  сравнение заканчивает сортировку этой ошибкой. Наполовину отсортированного
+  массива, который надо прибирать, нет: `ordering()` возвращает новый массив
+  или отказывает, а `runners` остаётся каким был.
+
 ## 8.9 Разобранный пример: подсчёт слов
 
 Словарей, `reduce` и `ordering()` хватает для классического упражнения —

@@ -263,6 +263,28 @@ performs `Comparing` on that key — a small object with a name, in place of
 an anonymous comparator. This is the razor's trade again: one operation and
 one role instead of a family of sort methods.
 
+The program below sorts runners by time, then by club, then slowest
+first, and finally by a ranking that does not know every club.
+
+{{example:08-sorting}}
+
+- **A key is an object.** `ByTime` and `ByClub` each wrap a runner and
+  compare one field. Sorting by a key is three steps: wrap, `ordering()`,
+  unwrap. The wrapper has a name, which an anonymous comparator does not,
+  and the name says what the order is.
+- **Stability composes.** Bo and Cy both ran 39 minutes, and the sort by
+  time keeps them in their input order. Sorting that result by club keeps
+  the time order inside each club: Cy before Ada in North. To sort by
+  several keys, sort by the least significant one first.
+- **Reversal is not a stable descending sort.** `reversed()` turns the
+  whole array around, ties included: slowest first puts Cy before Bo. When
+  the order of equal elements matters, the descending key is written as an
+  object of its own, whose `order` compares the other way.
+- **A comparison may fail, and the sort stops.** `ByRank` throws for a
+  club it has no rank for, and the first such comparison ends the sort with
+  that error. There is no half-sorted array to clean up: `ordering()`
+  returns a new array or fails, and `runners` is what it was.
+
 ## 8.9 A worked example: counting words
 
 Maps, `reduce` and `ordering()` are enough for the classic exercise of
