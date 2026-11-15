@@ -40,7 +40,7 @@ L08.for-await.stream	conformance/cases/L08-async-and-concurrency/for-await.strea
 L08.for-await.sync-action	conformance/cases/L08-async-and-concurrency/for-await.sync-action/case.json	frontend	-	check	reject	-	-	-	the checker rejects for await outside async actions
 L08.for-await.sync-next	conformance/cases/L08-async-and-concurrency/for-await.sync-next/case.json	frontend	-	check	reject	-	-	-	the checker rejects for await over a sync next
 L08.for-await.wrong-result	conformance/cases/L08-async-and-concurrency/for-await.wrong-result/case.json	frontend	-	check	reject	-	-	-	the checker rejects a next without Maybe
-L08.future.cancel-unstarted	conformance/cases/L08-async-and-concurrency/future.cancel-unstarted/case.json	K2	W2	run	success	0	-	catch-cancelled	plan §4 K2; catch e is Cancelled has no producer slice in §4; fut.cancel needs the High contract
+L08.future.cancel-unstarted	conformance/cases/L08-async-and-concurrency/future.cancel-unstarted/case.json	K2	W2	run	success	0	-	-	plan §4 K2; catch e is Cancelled (#724); fut.cancel in High with K1; runs on Champ (champ_cases_async)
 L08.future.lazy-and-cached	conformance/cases/L08-async-and-concurrency/future.lazy-and-cached/case.json	V5	W1	run	success	0	okkama-rs/crates/okkama-compiler/src/lowering/oir2/goldens/p2_5/L08.future.lazy-and-cached.oir	-	W1 case of plan §4 V5 and V10
 L08.future.never-awaited	conformance/cases/L08-async-and-concurrency/future.never-awaited/case.json	V5	W1	run	success	0	okkama-rs/crates/okkama-compiler/src/lowering/oir2/goldens/p2_5/L08.future.never-awaited.oir	-	W1 case of plan §4 V5 and V10
 L08.future.no-implicit-await	conformance/cases/L08-async-and-concurrency/future.no-implicit-await/case.json	frontend	-	run	error	-	-	-	the checker rejects a Future used as its value

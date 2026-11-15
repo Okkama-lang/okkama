@@ -59,6 +59,7 @@ full_check! {
     w1_order_across_suspension => "L08.order.across-suspension",
     w1_order_lazy_branches => "L08.order.lazy-branches",
     w1_void_await_for_effect => "L08.void.await-for-effect",
+    k2_future_cancel_unstarted => "L08.future.cancel-unstarted",
 }
 
 /// `catch e is Cancelled` compiles through OIR-2 and SPB 17 and lets every other failure pass (#724, language spec
