@@ -350,8 +350,11 @@
   - [27.5 Rust](#275-rust)
   - [27.6 Haskell](#276-haskell)
   - [27.7 OCaml](#277-ocaml)
-  - [27.8 Перенос, шаг за шагом](#278-перенос-шаг-за-шагом)
-  - [27.9 Что показывает сравнение](#279-что-показывает-сравнение)
+  - [27.8 Python](#278-python)
+  - [27.9 Swift](#279-swift)
+  - [27.10 Erlang](#2710-erlang)
+  - [27.11 Перенос, шаг за шагом](#2711-перенос-шаг-за-шагом)
+  - [27.12 Что показывает сравнение](#2712-что-показывает-сравнение)
 - [Глава 28. Слабости, открытые проблемы и путь вперёд](#глава-28-слабости-открытые-проблемы-и-путь-вперёд)
   - [28.1 Закрыто, пока писалась книга](#281-закрыто-пока-писалась-книга)
   - [28.2 Чего нет в языке](#282-чего-нет-в-языке)
@@ -20284,7 +20287,8 @@ main() is int {
 тесты в главе 15. Эта глава поворачивает сравнение. Она берёт шесть языков,
 которые читатель этой книги, скорее всего, знает, — Java, Kotlin, Go, Rust,
 Haskell и OCaml — и задаёт каждому те же вопросы, на которые манифест
-ответил за Okkama (глава 3).
+ответил за Okkama (глава 3). Ещё три — Python, Swift и Erlang — идут
+следом в разделах покороче, потому что к Okkama приходят и из них.
 
 Сравнение языков легко сделать нечестным. Каждый из этих языков создан для
 своей цели людьми, которые взвешивали те же компромиссы и выбрали иначе, и
@@ -20418,7 +20422,82 @@ OCaml показывает, что язык, ориентированный на
 которые Okkama убрала, и у него есть рекурсивные варианты и вложенные
 образцы, которых у Okkama пока нет (раздел 28.2).
 
-## 27.8 Перенос, шаг за шагом
+## 27.8 Python
+
+На Python читатель, скорее всего, хоть что-то писал, и его декларация
+замысла среди прочего говорит, что практичность важнее чистоты
+[[Peters 2004](#ref-peters2004)]. Некоторые ответы Okkama — и ответы Python. Его `int` с PEP 237
+стал единым неограниченным типом [[PEP 237](#ref-pep237)], точные дроби — стандартный модуль
+(`fractions.Fraction`) [[Python fractions](#ref-pyfractions)] там, где у Okkama встроенный `rat`, а
+`with` освобождает ресурс, когда блок заканчивается [[Rossum 2005](#ref-pep343)], — та же мысль,
+что за `defer` и `destroy`. С Python 3.11 `asyncio.TaskGroup` дожидается
+всех созданных в нём задач, когда его блок завершается [[Python asyncio](#ref-pyasyncio)], — это
+структурное ожидание главы 20 в виде библиотечного объекта.
+
+Различия в том, где живут правила. Типы — необязательные аннотации
+[[Rossum 2014](#ref-pep484)], которые проверяют инструменты вне интерпретатора; программа с
+неверными аннотациями всё равно выполняется. `None` может стоять там, где
+ждут любое значение, объекты изменяемы, если класс не позаботился об
+обратном, а класс может наследовать от нескольких других. Вызов работает на
+любом объекте с нужными методами — структурная типизация, которой раздел
+14.2 противопоставляет роли. Исключения не проверяются, и голый
+`except Exception` ловит и ошибки, и баги, тогда как Okkama разделяет эти
+два канала (глава 10). `float` хранит бесконечности и NaN (раздел 5.5).
+
+Python меняет гарантии на скорость, с которой пишется первая версия, и делает
+это сознательно. Программа на Python, которая следует правилам Okkama по
+соглашению — замороженные dataclass, никакого `None` в сигнатурах,
+аннотации, проверяемые в непрерывной интеграции, — по форме близка к
+программе на Okkama. Ей недостаёт гарантии, что модуль, написанный кем-то
+другим, следует тем же соглашениям.
+
+## 27.9 Swift
+
+Swift, представленный Apple в 2014 году, — промышленный язык, ближе всех к
+Okkama по умолчаниям [[The Swift Programming Language](#ref-swiftbook)]. Значения типов `struct` и `enum`
+копируются, а не разделяются; `let` объявляет константу; отсутствие —
+опционал `T?`, который проверяет компилятор; перечисления несут связанные
+значения и разбираются через `switch` с проверкой полноты. Целочисленная
+арифметика по умолчанию останавливается при переполнении, а для
+заворачивания нужны явные операторы вроде `&+`. Структурная конкурентность
+— `async let` и группы задач — часть языка [[Evolution 2021](#ref-se0304)].
+
+Swift, как и Kotlin, держит оба мира. Рядом с типами-значениями у него есть
+классы с одиночным наследованием и разделяемыми изменяемыми экземплярами. Его
+протоколы — номинальные контракты, как роли, но расширение протокола может
+дать им реализации по умолчанию, то наследование поведения, от которого
+Okkama отказалась (раздел 1.9, #146). Память управляется подсчётом ссылок,
+поэтому `deinit` экземпляра класса выполняется, как только уходит последняя
+сильная ссылка: память и ресурсы освобождает один механизм, тогда как Okkama
+собирает память, а детерминированное освобождение даёт только объектам с
+`destroy` (глава 11). Функция, которая может отказать, помечается `throws`,
+а каждый вызов — `try`; сигнатура Okkama не говорит, что действие может
+отказать (раздел 10.19).
+
+## 27.10 Erlang
+
+Erlang создавали в Ericsson для телефонных коммутаторов, которые не должны
+останавливаться [[Armstrong 2003](#ref-armstrong2003)]. Его данные неизменяемы, переменная
+связывается один раз, целые не ограничены, а функции разбирают аргументы
+сопоставлением с образцом. Единица конкурентности в нём — процесс:
+изолированный дешёвый поток со своей кучей, который ничего не разделяет и
+общается только сообщениями [[Erlang Reference Manual](#ref-erlangref)]. Единица обработки отказов — тоже
+процесс. Вместо того чтобы обрабатывать каждую ошибку там, где она
+случилась, процессу, который её встретил, позволено упасть, а связанный с
+ним супервизор перезапускает его в известном состоянии.
+
+Okkama разделяет первую половину этого замысла: неизменяемые значения,
+никакого разделяемого изменяемого состояния между задачами и образец
+владельца состояния из раздела 20.6, где одна задача владеет куском
+состояния, а остальные шлют ей запросы по каналу, — так состояние держит
+процесс Erlang. Отличается вторая половина. Задачи Okkama работают в одной
+программе и структурированы: отказ доходит до задачи, которая ждёт, как
+типизированное значение, которое она может обработать, и ничто не
+перезапускается само. Изоляцию по памяти дают рабочие процессы (глава 21) —
+ценой отдельной программы. Кроме того, Erlang типизирован динамически, а
+статическая проверка оставлена необязательным инструментам.
+
+## 27.11 Перенос, шаг за шагом
 
 Правила проще всего сравнить на одном маленьком классе. Вот банковский счёт
 на Java, написанный так, как его написал бы учебный курс:
@@ -20551,7 +20630,7 @@ in the updated map: ada 700
 отсутствовать). Перенос примерно той же длины, что и оригинал; он больше
 говорит о том, что может произойти.
 
-## 27.9 Что показывает сравнение
+## 27.12 Что показывает сравнение
 
 Выделяются три вещи.
 
@@ -20823,6 +20902,7 @@ Objects* утверждает, что такие объекты зовут ло�
 - <a id="ref-donovan2015"></a>Alan A. A. Donovan, Brian W. Kernighan (2015). *The Go Programming Language*. Addison-Wesley. ISBN 978-0134190440.
 - <a id="ref-duffy2016"></a>Joe Duffy (2016). The Error Model. Blog post, 7 February 2016. http://joeduffyblog.com/2016/02/07/the-error-model/
 - <a id="ref-elizarov2018"></a>Roman Elizarov (2018). Structured concurrency. Blog post, 12 September 2018. https://medium.com/@elizarov/structured-concurrency-722d765aa952
+- <a id="ref-erlangref"></a>Ericsson AB (2026). *Erlang Reference Manual*. Erlang/OTP documentation. https://www.erlang.org/doc/system/reference_manual.html
 - <a id="ref-se0304"></a>Swift Evolution (2021). SE-0304: Structured Concurrency. https://github.com/swiftlang/swift-evolution/blob/main/proposals/0304-structured-concurrency.md
 - <a id="ref-fowler2007"></a>Martin Fowler (2007). Mocks Aren't Stubs. https://martinfowler.com/articles/mocksArentStubs.html
 - <a id="ref-fahndrich2003"></a>Manuel Fähndrich, K. Rustan M. Leino (2003). Declaring and Checking Non-null Types in an Object-Oriented Language. In *Proceedings of OOPSLA 2003*: 302–312. ACM. https://doi.org/10.1145/949305.949332
@@ -20915,9 +20995,11 @@ Objects* утверждает, что такие объекты зовут ло�
 - <a id="ref-posix2017"></a>IEEE and The Open Group (2018). Utility Conventions. In *The Open Group Base Specifications Issue 7, 2018 edition* (IEEE Std 1003.1-2017), Base Definitions, Chapter 12. https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap12.html
 - <a id="ref-prasad2020"></a>Aanand Prasad, Ben Firshman, Carl Tashian, Eva Parish (2020). *Command Line Interface Guidelines*. https://clig.dev/
 - <a id="ref-promisesaplus"></a>Promises/A+ organization. Promises/A+, rule 2.2.4 and note 3.1. https://promisesaplus.com/
+- <a id="ref-pyasyncio"></a>Python Software Foundation (2026). Coroutines and Tasks: Task Groups. *The Python Standard Library*. https://docs.python.org/3/library/asyncio-task.html#task-groups
 - <a id="ref-pyfunctions"></a>Python Software Foundation (2026). Built-in Functions: map. *The Python Standard Library*. https://docs.python.org/3/library/functions.html#map
 - <a id="ref-pystdtypes"></a>Python Software Foundation (2026). Built-in Types: Mapping Types — dict. *The Python Standard Library*. https://docs.python.org/3/library/stdtypes.html#mapping-types-dict
 - <a id="ref-pydoctest"></a>Python Software Foundation (2026). doctest — Test interactive Python examples. *The Python Standard Library*. https://docs.python.org/3/library/doctest.html
+- <a id="ref-pyfractions"></a>Python Software Foundation (2026). fractions — Rational numbers. *The Python Standard Library*. https://docs.python.org/3/library/fractions.html
 - <a id="ref-pysqlite3"></a>Python Software Foundation (2026). sqlite3 — DB-API 2.0 interface for SQLite databases: How to use the connection context manager. *The Python Standard Library*. https://docs.python.org/3/library/sqlite3.html#sqlite3-connection-context-manager
 - <a id="ref-pymock"></a>Python Software Foundation (2026). unittest.mock — mock object library. *The Python Standard Library*. https://docs.python.org/3/library/unittest.mock.html
 - <a id="ref-r7rs2013"></a>Alex Shinn, John Cowan, Arthur A. Gleckler (eds.) (2013). *Revised⁷ Report on the Algorithmic Language Scheme*. https://small.r7rs.org/attachment/r7rs.pdf
@@ -20948,6 +21030,7 @@ Objects* утверждает, что такие объекты зовут ло�
 - <a id="ref-summers2011"></a>Alexander J. Summers, Peter Müller (2011). Freedom Before Commitment: A Lightweight Type System for Object Initialisation. In *Proceedings of OOPSLA 2011*: 1013–1032. ACM. https://doi.org/10.1145/2048066.2048142
 - <a id="ref-sussman1975"></a>Gerald Jay Sussman, Guy Lewis Steele Jr. (1975). *Scheme: An Interpreter for Extended Lambda Calculus*. AI Memo 349, MIT Artificial Intelligence Laboratory. https://dspace.mit.edu/handle/1721.1/5794
 - <a id="ref-syme2011"></a>Don Syme, Tomas Petricek and Dmitry Lomov (2011). The F# Asynchronous Programming Model. *Practical Aspects of Declarative Languages (PADL 2011)*, LNCS 6539: 175–189. https://doi.org/10.1007/978-3-642-18378-2_15
+- <a id="ref-swiftbook"></a>Apple Inc. (2026). *The Swift Programming Language*. https://docs.swift.org/swift-book/documentation/the-swift-programming-language/
 - <a id="ref-thorburn1918"></a>W. M. Thorburn (1918). The Myth of Occam's Razor. *Mind* 27(107): 345–353. https://doi.org/10.1093/mind/XXVII.3.345
 - <a id="ref-tofte1997"></a>Mads Tofte, Jean-Pierre Talpin (1997). Region-Based Memory Management. *Information and Computation* 132(2): 109–176. https://doi.org/10.1006/inco.1996.2613
 - <a id="ref-tscompat"></a>Microsoft (2026). Type Compatibility. *TypeScript Handbook*. https://www.typescriptlang.org/docs/handbook/type-compatibility.html

@@ -5,7 +5,9 @@ time: numbers in Chapter 5, types in Chapter 4, collections in Chapter 8,
 roles in Chapter 14, tests in Chapter 15. This chapter turns the comparison
 around. It takes six languages that a reader of this book is likely to know,
 Java, Kotlin, Go, Rust, Haskell and OCaml, and asks of each the same
-questions the manifesto answered for Okkama (Chapter 3).
+questions the manifesto answered for Okkama (Chapter 3). Three more, Python,
+Swift and Erlang, follow in shorter sections, because readers come to
+Okkama from them as well.
 
 A comparison of languages is easy to make unfair. Each of these languages
 was designed for a purpose, by people who weighed the same trade-offs and
@@ -142,7 +144,80 @@ hatches, mutable fields and classes, that Okkama removed, and it has the
 recursive variants and nested patterns that Okkama does not have yet
 (Section 28.2).
 
-## 27.8 A port, step by step
+## 27.8 Python
+
+Python is the language most readers have written something in, and its
+design statement says, among other things, that practicality beats purity
+[@peters2004]. Some of Okkama's answers are Python's too. Its `int` has been
+one unbounded type since PEP 237 [@pep237], exact fractions are a standard
+module (`fractions.Fraction`) [@pyfractions] where Okkama has the built-in
+`rat`, and `with` releases a resource when a block ends [@pep343], the
+idea behind `defer` and `destroy`. Since Python 3.11 `asyncio.TaskGroup`
+awaits every task created in it when its block exits [@pyasyncio], which is
+the structured await of Chapter 20 as a library object.
+
+The differences are in where the rules live. Types are optional
+annotations [@pep484], checked by tools outside the interpreter; a program
+whose annotations are wrong still runs. `None` can stand where any value is
+expected, objects are mutable unless a class takes care, and a class may
+inherit from several others. A call works on any object with the right
+methods, the structural typing that Section 14.2 contrasts with roles.
+Exceptions are unchecked, and a bare `except Exception` catches errors and
+bugs alike, where Okkama separates the two channels (Chapter 10). A
+`float` holds infinities and NaN (Section 5.5).
+
+Python trades guarantees for the speed of writing a first version, and it
+makes that trade on purpose. A Python program that follows Okkama's rules
+by convention, with frozen dataclasses, no `None` in signatures and
+annotations checked in continuous integration, is close to an Okkama program
+in shape. What it lacks is the guarantee that a module someone else wrote
+follows the same conventions.
+
+## 27.9 Swift
+
+Swift, introduced by Apple in 2014, is the industrial language closest to
+Okkama in its defaults [@swiftbook]. Values of `struct` and `enum` types are
+copied, not shared; `let` declares a constant; absence is an optional `T?`
+that the compiler checks; enumerations carry associated values and are
+taken apart by `switch` with exhaustiveness checking. Integer arithmetic
+traps on overflow by default, and wrapping needs explicit operators such
+as `&+`. Structured concurrency, `async let` and task groups, is part of
+the language [@se0304].
+
+Swift keeps both worlds, as Kotlin does. Beside value types it has classes
+with single inheritance and shared, mutable instances. Its protocols are
+nominal contracts like roles, but a protocol extension can give them
+default implementations, the inheritance of behaviour that Okkama declined
+(Section 1.9, #146). Memory is managed by reference counting, so a class
+instance's `deinit` runs as soon as the last strong reference goes: memory
+and resources are released by one mechanism, where Okkama collects memory
+and gives deterministic release only to objects with `destroy` (Chapter 11).
+A function that can fail is marked `throws`, and each call marks `try`; an
+Okkama signature does not say that an action can fail (Section 10.19).
+
+## 27.10 Erlang
+
+Erlang was built at Ericsson for telephone switches that must not stop
+[@armstrong2003]. Its data is immutable, a variable is bound once, integers
+are unbounded, and functions take their arguments apart by pattern
+matching. Its unit of concurrency is the process: an isolated, cheap thread
+with its own heap that shares nothing and communicates only by messages
+[@erlangref]. Its unit of failure handling is the process too. Instead of
+handling every error where it occurs, a process that meets one is allowed
+to crash, and a supervisor that is linked to it restarts it in a known
+state.
+
+Okkama shares the first half of this design: immutable values, no shared
+mutable state between tasks, and the state-owner pattern of Section 20.6,
+in which one task owns a piece of state and others send it requests over
+a channel, which is how an Erlang process holds state. It differs in the
+second half. Okkama's tasks run in one program and are structured: a
+failure travels to the task that awaits, as a typed value it can handle,
+and nothing restarts automatically. Isolation by memory is what process
+workers give (Chapter 21), at the price of a separate program. Erlang is
+also dynamically typed, with static checking left to optional tools.
+
+## 27.11 A port, step by step
 
 The rules are easiest to compare on one small class. Here is a bank account
 in Java, written the way a Java course would write it:
@@ -226,7 +301,7 @@ program asks), a `final` keyword (every field is final), and a check that
 `owner` is not null (a `string` cannot be absent). The port is about as long
 as the original; it says more about what can happen.
 
-## 27.9 What the comparison shows
+## 27.12 What the comparison shows
 
 Three things stand out.
 

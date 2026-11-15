@@ -350,8 +350,11 @@
   - [27.5 Rust](#275-rust)
   - [27.6 Haskell](#276-haskell)
   - [27.7 OCaml](#277-ocaml)
-  - [27.8 A port, step by step](#278-a-port-step-by-step)
-  - [27.9 What the comparison shows](#279-what-the-comparison-shows)
+  - [27.8 Python](#278-python)
+  - [27.9 Swift](#279-swift)
+  - [27.10 Erlang](#2710-erlang)
+  - [27.11 A port, step by step](#2711-a-port-step-by-step)
+  - [27.12 What the comparison shows](#2712-what-the-comparison-shows)
 - [Chapter 28. Weaknesses, Open Problems and the Road Ahead](#chapter-28-weaknesses-open-problems-and-the-road-ahead)
   - [28.1 Closed while this book was written](#281-closed-while-this-book-was-written)
   - [28.2 Missing from the language](#282-missing-from-the-language)
@@ -20064,7 +20067,9 @@ time: numbers in Chapter 5, types in Chapter 4, collections in Chapter 8,
 roles in Chapter 14, tests in Chapter 15. This chapter turns the comparison
 around. It takes six languages that a reader of this book is likely to know,
 Java, Kotlin, Go, Rust, Haskell and OCaml, and asks of each the same
-questions the manifesto answered for Okkama (Chapter 3).
+questions the manifesto answered for Okkama (Chapter 3). Three more, Python,
+Swift and Erlang, follow in shorter sections, because readers come to
+Okkama from them as well.
 
 A comparison of languages is easy to make unfair. Each of these languages
 was designed for a purpose, by people who weighed the same trade-offs and
@@ -20201,7 +20206,80 @@ hatches, mutable fields and classes, that Okkama removed, and it has the
 recursive variants and nested patterns that Okkama does not have yet
 (Section 28.2).
 
-## 27.8 A port, step by step
+## 27.8 Python
+
+Python is the language most readers have written something in, and its
+design statement says, among other things, that practicality beats purity
+[[Peters 2004](#ref-peters2004)]. Some of Okkama's answers are Python's too. Its `int` has been
+one unbounded type since PEP 237 [[PEP 237](#ref-pep237)], exact fractions are a standard
+module (`fractions.Fraction`) [[Python fractions](#ref-pyfractions)] where Okkama has the built-in
+`rat`, and `with` releases a resource when a block ends [[Rossum 2005](#ref-pep343)], the
+idea behind `defer` and `destroy`. Since Python 3.11 `asyncio.TaskGroup`
+awaits every task created in it when its block exits [[Python asyncio](#ref-pyasyncio)], which is
+the structured await of Chapter 20 as a library object.
+
+The differences are in where the rules live. Types are optional
+annotations [[Rossum 2014](#ref-pep484)], checked by tools outside the interpreter; a program
+whose annotations are wrong still runs. `None` can stand where any value is
+expected, objects are mutable unless a class takes care, and a class may
+inherit from several others. A call works on any object with the right
+methods, the structural typing that Section 14.2 contrasts with roles.
+Exceptions are unchecked, and a bare `except Exception` catches errors and
+bugs alike, where Okkama separates the two channels (Chapter 10). A
+`float` holds infinities and NaN (Section 5.5).
+
+Python trades guarantees for the speed of writing a first version, and it
+makes that trade on purpose. A Python program that follows Okkama's rules
+by convention, with frozen dataclasses, no `None` in signatures and
+annotations checked in continuous integration, is close to an Okkama program
+in shape. What it lacks is the guarantee that a module someone else wrote
+follows the same conventions.
+
+## 27.9 Swift
+
+Swift, introduced by Apple in 2014, is the industrial language closest to
+Okkama in its defaults [[The Swift Programming Language](#ref-swiftbook)]. Values of `struct` and `enum` types are
+copied, not shared; `let` declares a constant; absence is an optional `T?`
+that the compiler checks; enumerations carry associated values and are
+taken apart by `switch` with exhaustiveness checking. Integer arithmetic
+traps on overflow by default, and wrapping needs explicit operators such
+as `&+`. Structured concurrency, `async let` and task groups, is part of
+the language [[Evolution 2021](#ref-se0304)].
+
+Swift keeps both worlds, as Kotlin does. Beside value types it has classes
+with single inheritance and shared, mutable instances. Its protocols are
+nominal contracts like roles, but a protocol extension can give them
+default implementations, the inheritance of behaviour that Okkama declined
+(Section 1.9, #146). Memory is managed by reference counting, so a class
+instance's `deinit` runs as soon as the last strong reference goes: memory
+and resources are released by one mechanism, where Okkama collects memory
+and gives deterministic release only to objects with `destroy` (Chapter 11).
+A function that can fail is marked `throws`, and each call marks `try`; an
+Okkama signature does not say that an action can fail (Section 10.19).
+
+## 27.10 Erlang
+
+Erlang was built at Ericsson for telephone switches that must not stop
+[[Armstrong 2003](#ref-armstrong2003)]. Its data is immutable, a variable is bound once, integers
+are unbounded, and functions take their arguments apart by pattern
+matching. Its unit of concurrency is the process: an isolated, cheap thread
+with its own heap that shares nothing and communicates only by messages
+[[Erlang Reference Manual](#ref-erlangref)]. Its unit of failure handling is the process too. Instead of
+handling every error where it occurs, a process that meets one is allowed
+to crash, and a supervisor that is linked to it restarts it in a known
+state.
+
+Okkama shares the first half of this design: immutable values, no shared
+mutable state between tasks, and the state-owner pattern of Section 20.6,
+in which one task owns a piece of state and others send it requests over
+a channel, which is how an Erlang process holds state. It differs in the
+second half. Okkama's tasks run in one program and are structured: a
+failure travels to the task that awaits, as a typed value it can handle,
+and nothing restarts automatically. Isolation by memory is what process
+workers give (Chapter 21), at the price of a separate program. Erlang is
+also dynamically typed, with static checking left to optional tools.
+
+## 27.11 A port, step by step
 
 The rules are easiest to compare on one small class. Here is a bank account
 in Java, written the way a Java course would write it:
@@ -20332,7 +20410,7 @@ program asks), a `final` keyword (every field is final), and a check that
 `owner` is not null (a `string` cannot be absent). The port is about as long
 as the original; it says more about what can happen.
 
-## 27.9 What the comparison shows
+## 27.12 What the comparison shows
 
 Three things stand out.
 
@@ -20598,6 +20676,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-donovan2015"></a>Alan A. A. Donovan, Brian W. Kernighan (2015). *The Go Programming Language*. Addison-Wesley. ISBN 978-0134190440.
 - <a id="ref-duffy2016"></a>Joe Duffy (2016). The Error Model. Blog post, 7 February 2016. http://joeduffyblog.com/2016/02/07/the-error-model/
 - <a id="ref-elizarov2018"></a>Roman Elizarov (2018). Structured concurrency. Blog post, 12 September 2018. https://medium.com/@elizarov/structured-concurrency-722d765aa952
+- <a id="ref-erlangref"></a>Ericsson AB (2026). *Erlang Reference Manual*. Erlang/OTP documentation. https://www.erlang.org/doc/system/reference_manual.html
 - <a id="ref-se0304"></a>Swift Evolution (2021). SE-0304: Structured Concurrency. https://github.com/swiftlang/swift-evolution/blob/main/proposals/0304-structured-concurrency.md
 - <a id="ref-fowler2007"></a>Martin Fowler (2007). Mocks Aren't Stubs. https://martinfowler.com/articles/mocksArentStubs.html
 - <a id="ref-fahndrich2003"></a>Manuel Fähndrich, K. Rustan M. Leino (2003). Declaring and Checking Non-null Types in an Object-Oriented Language. In *Proceedings of OOPSLA 2003*: 302–312. ACM. https://doi.org/10.1145/949305.949332
@@ -20690,9 +20769,11 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-posix2017"></a>IEEE and The Open Group (2018). Utility Conventions. In *The Open Group Base Specifications Issue 7, 2018 edition* (IEEE Std 1003.1-2017), Base Definitions, Chapter 12. https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap12.html
 - <a id="ref-prasad2020"></a>Aanand Prasad, Ben Firshman, Carl Tashian, Eva Parish (2020). *Command Line Interface Guidelines*. https://clig.dev/
 - <a id="ref-promisesaplus"></a>Promises/A+ organization. Promises/A+, rule 2.2.4 and note 3.1. https://promisesaplus.com/
+- <a id="ref-pyasyncio"></a>Python Software Foundation (2026). Coroutines and Tasks: Task Groups. *The Python Standard Library*. https://docs.python.org/3/library/asyncio-task.html#task-groups
 - <a id="ref-pyfunctions"></a>Python Software Foundation (2026). Built-in Functions: map. *The Python Standard Library*. https://docs.python.org/3/library/functions.html#map
 - <a id="ref-pystdtypes"></a>Python Software Foundation (2026). Built-in Types: Mapping Types — dict. *The Python Standard Library*. https://docs.python.org/3/library/stdtypes.html#mapping-types-dict
 - <a id="ref-pydoctest"></a>Python Software Foundation (2026). doctest — Test interactive Python examples. *The Python Standard Library*. https://docs.python.org/3/library/doctest.html
+- <a id="ref-pyfractions"></a>Python Software Foundation (2026). fractions — Rational numbers. *The Python Standard Library*. https://docs.python.org/3/library/fractions.html
 - <a id="ref-pysqlite3"></a>Python Software Foundation (2026). sqlite3 — DB-API 2.0 interface for SQLite databases: How to use the connection context manager. *The Python Standard Library*. https://docs.python.org/3/library/sqlite3.html#sqlite3-connection-context-manager
 - <a id="ref-pymock"></a>Python Software Foundation (2026). unittest.mock — mock object library. *The Python Standard Library*. https://docs.python.org/3/library/unittest.mock.html
 - <a id="ref-r7rs2013"></a>Alex Shinn, John Cowan, Arthur A. Gleckler (eds.) (2013). *Revised⁷ Report on the Algorithmic Language Scheme*. https://small.r7rs.org/attachment/r7rs.pdf
@@ -20723,6 +20804,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-summers2011"></a>Alexander J. Summers, Peter Müller (2011). Freedom Before Commitment: A Lightweight Type System for Object Initialisation. In *Proceedings of OOPSLA 2011*: 1013–1032. ACM. https://doi.org/10.1145/2048066.2048142
 - <a id="ref-sussman1975"></a>Gerald Jay Sussman, Guy Lewis Steele Jr. (1975). *Scheme: An Interpreter for Extended Lambda Calculus*. AI Memo 349, MIT Artificial Intelligence Laboratory. https://dspace.mit.edu/handle/1721.1/5794
 - <a id="ref-syme2011"></a>Don Syme, Tomas Petricek and Dmitry Lomov (2011). The F# Asynchronous Programming Model. *Practical Aspects of Declarative Languages (PADL 2011)*, LNCS 6539: 175–189. https://doi.org/10.1007/978-3-642-18378-2_15
+- <a id="ref-swiftbook"></a>Apple Inc. (2026). *The Swift Programming Language*. https://docs.swift.org/swift-book/documentation/the-swift-programming-language/
 - <a id="ref-thorburn1918"></a>W. M. Thorburn (1918). The Myth of Occam's Razor. *Mind* 27(107): 345–353. https://doi.org/10.1093/mind/XXVII.3.345
 - <a id="ref-tofte1997"></a>Mads Tofte, Jean-Pierre Talpin (1997). Region-Based Memory Management. *Information and Computation* 132(2): 109–176. https://doi.org/10.1006/inco.1996.2613
 - <a id="ref-tscompat"></a>Microsoft (2026). Type Compatibility. *TypeScript Handbook*. https://www.typescriptlang.org/docs/handbook/type-compatibility.html
