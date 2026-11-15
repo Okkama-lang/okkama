@@ -464,3 +464,299 @@ fn an_incomplete_construction_starts_pending() {
         s::Instruction::Data { op: s::DataOp::Const, output: Some(output),
             immediate: s::Immediate::Constant(s::Constant::Bool(true)), .. } if *output == pending)));
 }
+
+const OPEN_RESOURCE: &str = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+object Factory {
+    Factory();
+    maker(name is string) is () is Res { () is Res { Res(name: name); }; }
+}
+main() is int {
+    let out = Stdout();
+    let make = Factory().maker("made");
+    {
+        let r = make();
+        out.writeln("got " + r.label());
+    }
+    out.writeln("end");
+    0;
+}
+"#;
+
+/// The loader's verdict on `p` with the runtime's P1 contracts.
+fn load(p: &s::Program) -> Result<(), s::Error> {
+    s::verify_load(p, &s::p1::P1Contracts::new(&p.objects).unwrap())
+}
+
+/// The `own.dynamic` instruction of `main` and its position.
+fn dynamic_site(p: &s::Program) -> (usize, usize, Vec<s::Argument>) {
+    let main = function(p, "main");
+    let (pc, arguments) = p.functions[main].code.iter().enumerate().find_map(|(pc, instruction)| match instruction {
+        s::Instruction::Champ { op: s::Opcode::OwnDynamic, arguments, .. } => Some((pc, arguments.clone())),
+        _ => None,
+    }).expect("own.dynamic in main");
+    (main, pc, arguments)
+}
+
+/// An open call has the registered open callable contract with the Closure protocol: it dispatches over every
+/// closure layout of its `fn` type, and its result packet (here a fresh resource) joins the scope through the
+/// checked `own.dynamic` transfer of that protocol.
+#[test]
+fn an_open_call_hands_its_result_packet_to_the_closure_protocol() {
+    let p = compile(OPEN_RESOURCE);
+    let (main, pc, arguments) = dynamic_site(&p);
+    assert_eq!(arguments[0], s::Argument::Protocol(s::Protocol::Closure));
+    let code = &p.functions[main].code;
+    let s::Argument::Location(packet) = arguments[2] else { panic!("packet operand") };
+    // The packet arrives from the normal outcome of the open dispatch.
+    let dispatched = code.iter().any(|instruction| match instruction {
+        s::Instruction::Champ { op: s::Opcode::InvokeDispatchOwn, flow: s::Flow::Outcomes(outcomes), .. } => {
+            outcomes.iter().any(|outcome| outcome.tag == s::Tag::Normal && outcome.edge.target_pc as usize == pc
+                && outcome.edge.assignments.iter().any(|assignment| assignment.destination == packet))
+        }
+        _ => false,
+    });
+    assert!(dispatched, "{:?}", code[pc]);
+    load(&p).unwrap();
+    assert_eq!(s::assemble(&s::disassemble(&p).unwrap()).unwrap(), p);
+}
+
+/// The runtime descriptor of an action value is its `fn` role; the opaque cleanup intrinsic of that type is a
+/// trusted external entry recomputed from its key.
+#[test]
+fn an_action_value_descriptor_names_its_fn_role_and_cleanup() {
+    let p = compile(OPEN_RESOURCE);
+    let main = &p.functions[function(&p, "main")];
+    let descriptors = main.code.iter().filter_map(|instruction| match instruction {
+        s::Instruction::Data { op: s::DataOp::Const,
+            immediate: s::Immediate::Constant(s::Constant::Descriptor(id)), .. } => Some(*id),
+        _ => None,
+    }).collect::<Vec<_>>();
+    assert!(!descriptors.is_empty());
+    for id in descriptors {
+        let role = p.objects[id as usize].role.as_ref().expect("descriptor of a role");
+        assert_eq!(role.slots[0].name, "call");
+    }
+    let cleanup = p.functions.iter().find(|function| function.proofs.entry.as_ref()
+        .and_then(|entry| entry.external.as_deref()) == Some(s::p1::SYNC_CLOSURE_CLEANUP)).expect("cleanup entry");
+    assert!(matches!(cleanup.registers.as_slice(), [s::Type::Role(_)]));
+    assert_eq!(o::catalogue::SYNC_CLOSURE_CLEANUP, s::p1::SYNC_CLOSURE_CLEANUP);
+    assert_eq!(o::catalogue::ANY_CLEANUP, s::p1::ANY_CLEANUP);
+}
+
+/// DYNAMIC_SITE: `own.dynamic` takes its protocol, a scope state and a packet, in that order.
+#[test]
+fn a_dynamic_transfer_needs_a_scope_state_and_a_packet() {
+    let p = compile(OPEN_RESOURCE);
+    let (main, pc, arguments) = dynamic_site(&p);
+    let mut swapped = p.clone();
+    let s::Instruction::Champ { arguments: operands, .. } = &mut swapped.functions[main].code[pc] else {
+        unreachable!()
+    };
+    operands.swap(1, 2);
+    assert_eq!(load(&swapped).unwrap_err().rule, "DYNAMIC_SITE");
+    let mut short = p.clone();
+    let s::Instruction::Champ { arguments: operands, .. } = &mut short.functions[main].code[pc] else {
+        unreachable!()
+    };
+    *operands = vec![arguments[0].clone(), arguments[1].clone(), arguments[1].clone()];
+    assert_eq!(load(&short).unwrap_err().rule, "DYNAMIC_SITE");
+    let mut bare = p.clone();
+    let s::Instruction::Champ { arguments: operands, .. } = &mut bare.functions[main].code[pc] else {
+        unreachable!()
+    };
+    operands.remove(0);
+    assert!(load(&bare).is_err(), "own.dynamic without its protocol");
+}
+
+/// The opaque cleanup family is keyed by an action value's `fn` role: another key has no trusted entry, and
+/// a declaration that differs from the recomputed entry is rejected.
+#[test]
+fn the_opaque_cleanup_entry_is_keyed_by_a_fn_role() {
+    let p = compile(OPEN_RESOURCE);
+    let index = p.functions.iter().position(|function| function.proofs.entry.as_ref()
+        .and_then(|entry| entry.external.as_deref()) == Some(s::p1::SYNC_CLOSURE_CLEANUP)).unwrap();
+    let mut plain = p.clone();
+    plain.functions[index].registers[0] = s::Type::Int;
+    assert_eq!(load(&plain).unwrap_err().rule, "EXTERNAL_UNRESOLVED");
+    let named = object(&p, "app.Res");
+    let mut object_key = p.clone();
+    object_key.functions[index].registers[0] = s::Type::Object(named);
+    assert_eq!(load(&object_key).unwrap_err().rule, "EXTERNAL_UNRESOLVED");
+    let mut failing = p.clone();
+    failing.functions[index].proofs.entry.as_mut().unwrap().failures = 2;
+    assert!(load(&failing).is_err(), "a cleanup entry that may fail");
+}
+
+const ANY_VALUES: &str = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    destroy { Stdout().writeln("destroy " + name); }
+}
+object Holder {
+    has value is any;
+    Holder(:value);
+}
+object Relay {
+    Relay();
+    echo(value is any) is any { value; }
+}
+main() is int {
+    let out = Stdout();
+    let one is any = 1;
+    let text is any = "two";
+    let holder = Holder(value: Res(name: "held"));
+    let back = Relay().echo(text);
+    out.writeln("end");
+    0;
+}
+"#;
+
+fn any_box(p: &s::Program, value: s::Type) -> u32 {
+    p.objects.iter().position(|object| object.any_box && object.layout.storage_fields == [value])
+        .unwrap_or_else(|| panic!("no any box of {value:?}")) as u32
+}
+
+/// `any.box` allocates the any box of the value's type and views it as `any`; one box per boxed type. A box of
+/// a resource reaches it, so the object with an `any` field that holds it does too.
+#[test]
+fn an_any_value_is_a_box_of_its_value_type() {
+    let p = compile(ANY_VALUES);
+    let res = object(&p, "app.Res");
+    let (int, text) = (any_box(&p, s::Type::Int), any_box(&p, s::Type::Str));
+    let resource = any_box(&p, s::Type::Object(res));
+    assert_eq!(p.objects.iter().filter(|object| object.any_box).count(), 3);
+    assert!(!p.objects[int as usize].layout.may_reach_resource);
+    assert!(p.objects[resource as usize].layout.may_reach_resource);
+    assert_eq!(p.objects[resource as usize].layout.selection_layout, vec![0]);
+    let holder = &p.objects[object(&p, "app.Holder") as usize];
+    assert_eq!(holder.layout.storage_fields, vec![s::Type::Any]);
+    assert!(holder.layout.may_reach_resource);
+    let main = &p.functions[function(&p, "main")];
+    for boxed in [int, text] {
+        let wrapped = main.code.windows(2).any(|pair| matches!(pair,
+            [s::Instruction::Data { op: s::DataOp::ObjNew, immediate: s::Immediate::Object(object),
+                output: Some(created), .. },
+                s::Instruction::Data { op: s::DataOp::Move, inputs, output: Some(output), .. }]
+                if *object == boxed && inputs[0] == *created && main.registers[*output as usize] == s::Type::Any));
+        assert!(wrapped, "box {boxed}");
+    }
+    let echo = p.functions.iter().find(|function| function.symbol.starts_with("app.Relay.echo")).unwrap();
+    assert!(echo.registers.contains(&s::Type::Any));
+    load(&p).unwrap();
+}
+
+/// The runtime descriptor of `any` is its placeholder; `oir.any.cleanup` is keyed by `any` alone.
+#[test]
+fn the_any_descriptor_and_cleanup_are_keyed_by_any() {
+    let p = compile(ANY_VALUES);
+    let any = object(&p, "any");
+    let descriptor = p.functions.iter().flat_map(|function| &function.code).any(|instruction| matches!(instruction,
+        s::Instruction::Data { op: s::DataOp::Const,
+            immediate: s::Immediate::Constant(s::Constant::Descriptor(id)), .. } if *id == any));
+    assert!(descriptor);
+    let index = p.functions.iter().position(|function| function.proofs.entry.as_ref()
+        .and_then(|entry| entry.external.as_deref()) == Some(s::p1::ANY_CLEANUP)).expect("any cleanup entry");
+    assert_eq!(p.functions[index].registers, vec![s::Type::Any]);
+    let mut keyed = p.clone();
+    keyed.functions[index].registers[0] = s::Type::Str;
+    assert_eq!(load(&keyed).unwrap_err().rule, "EXTERNAL_UNRESOLVED");
+}
+
+/// ANY_WRAP: only an any box becomes an `any` value.
+#[test]
+fn only_an_any_box_becomes_an_any_value() {
+    let p = compile(ANY_VALUES);
+    let mut unboxed = p.clone();
+    unboxed.objects[any_box(&p, s::Type::Int) as usize].any_box = false;
+    assert_eq!(load(&unboxed).unwrap_err().rule, "ANY_WRAP");
+}
+
+/// ANY_BOX: a box holds exactly its one value with that value's retention, and each value type has one box.
+#[test]
+fn an_any_box_holds_one_value_with_its_retention() {
+    let p = compile(ANY_VALUES);
+    let int = any_box(&p, s::Type::Int) as usize;
+    let mut fieldless = p.clone();
+    fieldless.objects[int].fields.clear();
+    assert_eq!(load(&fieldless).unwrap_err().rule, "ANY_BOX");
+    let mut overstated = p.clone();
+    overstated.objects[int].layout.selection_layout = vec![0];
+    assert_eq!(load(&overstated).unwrap_err().rule, "ANY_BOX");
+    let resource = any_box(&p, s::Type::Object(object(&p, "app.Res"))) as usize;
+    let mut unselected = p.clone();
+    unselected.objects[resource].layout.selection_layout.clear();
+    assert_eq!(load(&unselected).unwrap_err().rule, "ANY_BOX");
+    // Understating the box's reach is the general field rule.
+    let mut understated = unselected.clone();
+    understated.objects[resource].layout.may_reach_resource = false;
+    assert_eq!(load(&understated).unwrap_err().rule, "OBJECT_RETENTION");
+    let mut role = p.clone();
+    role.objects[int].role = Some(s::RoleDecl { slots: vec![] });
+    assert!(load(&role).is_err());
+    let mut twice = p.clone();
+    let text = any_box(&p, s::Type::Str) as usize;
+    twice.objects[text].layout.storage_fields = vec![s::Type::Int];
+    twice.objects[text].layout.trace_layout.clear();
+    assert_eq!(load(&twice).unwrap_err().rule, "ANY_BOX");
+}
+
+/// An object with an `any` field reaches resources when some any box does (OBJECT_RETENTION).
+#[test]
+fn an_any_field_states_the_retention_of_the_boxes() {
+    let p = compile(ANY_VALUES);
+    let holder = object(&p, "app.Holder") as usize;
+    let mut understated = p.clone();
+    understated.objects[holder].layout.may_reach_resource = false;
+    understated.objects[holder].layout.selection_layout.clear();
+    assert_eq!(load(&understated).unwrap_err().rule, "OBJECT_RETENTION");
+}
+
+/// An array or map of plain `any` values is closed plain data: its leaf is `any`, and it loads and round trips.
+#[test]
+fn plain_any_collections_are_closed_plain_data() {
+    let p = compile(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+main() is int {
+    let one is any = 1;
+    let values is @any = [one, "two", 3.5];
+    let row is %string:any = ["a": one];
+    Stdout().writeln(values.size().string() + " " + row.size().string());
+    0;
+}
+"#);
+    let main = &p.functions[function(&p, "main")];
+    assert!(main.registers.contains(&s::Type::Array(s::ArrayType { leaf: s::ArrayLeaf::Any, depth: 1 })));
+    assert!(p.composites.contains(&s::Composite::Map { key: s::Type::Str, value: s::Type::Any }));
+    assert_eq!(p.objects.iter().filter(|object| object.any_box).count(), 3);
+    load(&p).unwrap();
+    assert_eq!(s::assemble(&s::disassemble(&p).unwrap()).unwrap(), p);
+    assert_eq!(s::decode(&s::encode(&p).unwrap()).unwrap(), p);
+}
+
+/// The SPB 17 protocols: the registered open Closure protocol and the synchronous `any` protocol (Low's #683
+/// fixtures). An `any` protocol without every check, or any other protocol, has no SPB 17 form.
+#[test]
+fn dynamic_protocols_map_to_spb17_protocols() {
+    let escape = o::text::parse(include_str!("../../../../okkama-oir/src/low/fixtures/open-call-escape.low.oir"))
+        .unwrap();
+    let any = o::text::parse(include_str!("../../../../okkama-oir/src/low/fixtures/open-any.low.oir")).unwrap();
+    let (closure, _) = escape.protocols.iter().next().unwrap();
+    assert_eq!(protocol(&escape, closure).unwrap(), s::Protocol::Closure);
+    let (boxed, _) = any.protocols.iter().next().unwrap();
+    assert_eq!(protocol(&any, boxed).unwrap(), s::Protocol::Any);
+    let mut unchecked = any.clone();
+    unchecked.protocols.get_mut(boxed).unwrap().rules[0].checks.pop();
+    assert!(protocol(&unchecked, boxed).is_err());
+    let mut services = any.clone();
+    *services.protocols.get_mut(boxed).unwrap() = o::catalogue::services_protocol();
+    assert!(protocol(&services, boxed).is_err());
+}

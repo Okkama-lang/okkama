@@ -397,11 +397,25 @@ impl Emitter<'_> {
             _ => return Err(error("expected a dynamic call")),
         };
         let summary = self.module.summaries.get(call.summary.ok_or_else(|| error("dynamic call requires summary"))?)?;
+        // An open call (its callee's closures are unknown) has exactly the registered conservative contract of
+        // its `fn` type, with the open Closure protocol: its result packet then goes to `own.dynamic`.
+        let open = match (op, summary.contract.protocol) {
+            (o::CallOp::Closure { callee, .. }, Some(protocol)) => {
+                let ty = self.body.values.get(callee.value)?.ty;
+                if o::catalogue::open_callable_summary(self.module, ty, protocol).as_ref() != Some(summary)
+                    || super::protocol(self.module, protocol)? != s::Protocol::Closure
+                {
+                    return Err(error("open call without the registered open callable contract"));
+                }
+                true
+            }
+            (_, Some(_)) => return Err(later("protocol dynamic call")),
+            (_, None) => false,
+        };
         if !call.type_args.is_empty() || !call.descriptors.is_empty() || summary.contract.suspends
             || summary.contract.async_destroy || summary.contract.publication != o::Publication::Atomic
-            || summary.contract.protocol.is_some()
         {
-            return Err(later("async/generic/protocol dynamic call"));
+            return Err(later("async/generic dynamic call"));
         }
         let shielded = call.cleanup == o::CallCleanupMode::Shielded;
         if shielded && !self.function.attrs.contains(&o::FunctionAttr::Cleanup) {
@@ -436,6 +450,8 @@ impl Emitter<'_> {
                 o::Type::Object { decl, .. } => vec![decl.as_u32()],
                 _ => implementations,
             },
+            // An open call can reach every closure layout of its `fn` type.
+            _ if open => implementations,
             _ => {
                 if self.origins.is_none() {
                     self.origins = Some(roles::callable_origins(self.module, self.body, self.synthetic)?);
@@ -507,21 +523,38 @@ impl Emitter<'_> {
     fn closure(&mut self, site: roles::ClosureSite, results: &[o::ValueId]) -> Result<(), GenerateError> {
         let index = self.synthetic.closure_index(&site.layout).ok_or_else(|| error("action value without layout"))?;
         let layout = self.synthetic.closure_object(self.module, index);
-        let inputs = site.values.iter().map(|&value| self.reg(value)).collect::<Result<Vec<_>, _>>()?;
+        self.view_construction(layout, &site.values, site.packet, results)
+    }
+
+    /// `any.box`: allocate the any box of the value's type with the value, then view it as `any`. A boxed value
+    /// that reaches a resource comes with its packet, committed like any construction with a packet.
+    fn any_box(&mut self, ty: o::TypeId, value: o::ValueId, packet: Option<o::ValueId>, results: &[o::ValueId])
+        -> Result<(), GenerateError>
+    {
+        let layout = self.synthetic.box_object(self.module, ty).ok_or_else(|| error("any.box without its box"))?;
+        self.view_construction(layout, &[value], packet, results)
+    }
+
+    /// The construction of an object that a value views (a closure layout as its `fn` role, an any box as
+    /// `any`): allocation and move; with a packet also the commit into the scope and the join of the packets.
+    fn view_construction(&mut self, layout: u32, values: &[o::ValueId], packet: Option<o::ValueId>,
+        results: &[o::ValueId]) -> Result<(), GenerateError>
+    {
+        let inputs = values.iter().map(|&value| self.reg(value)).collect::<Result<Vec<_>, _>>()?;
         let object = fresh(&mut self.result, s::Type::Object(layout))?;
-        let value = self.reg(*results.first().ok_or_else(|| error("action value without result"))?)?;
+        let value = self.reg(*results.first().ok_or_else(|| error("view construction without result"))?)?;
         let allocation = s::Instruction::Data { op: s::DataOp::ObjNew, inputs, output: Some(object),
             immediate: s::Immediate::Object(layout) };
-        let Some(packet) = site.packet else {
+        let Some(packet) = packet else {
             if self.objects[layout as usize].layout.may_reach_resource {
-                return Err(unsupported("action value referencing a resource without its packet"));
+                return Err(unsupported("a value referencing a resource without its packet"));
             }
             self.expansions.push((self.result.code.len() as u32, object));
             self.result.code.push(allocation);
             self.result.code.push(data(s::DataOp::Move, vec![object], value, s::Immediate::None));
             return Ok(());
         };
-        let [_, joined] = results else { return Err(error("action value with a packet has two results")) };
+        let [_, joined] = results else { return Err(error("a construction with a packet has two results")) };
         let committed = L::Service(self.result.services.len() as u32);
         self.result.services.push(K::Packet);
         self.result.code.push(allocation);
@@ -876,12 +909,14 @@ impl Emitter<'_> {
     }
 }
 
-/// The SPB 17 instructions an OIR instruction expands to, when more than one: an action value (allocation and
-/// move; with a packet also commit and join) and a cap with a packet (move and packet move).
+/// The SPB 17 instructions an OIR instruction expands to, when more than one: an action value or an `any` box
+/// (allocation and move; with a packet also commit and join) and a cap with a packet (move and packet move).
 pub(super) fn expansion(op: &o::Operation) -> u32 {
     match op {
         o::Operation::Core(o::CoreOp::FnClosure { packet, .. } | o::CoreOp::FnBind { packet, .. }
-            | o::CoreOp::FnBindRole { packet, .. }) => if packet.is_some() { 4 } else { 2 },
+            | o::CoreOp::FnBindRole { packet, .. } | o::CoreOp::AnyBox { packet, .. }) => {
+            if packet.is_some() { 4 } else { 2 }
+        }
         o::Operation::Core(o::CoreOp::CapMake { packet: Some(_), .. }) => 2,
         _ => 1,
     }
@@ -1173,12 +1208,24 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                 }
                 o::Operation::Cleanup(op) => emitter.cleanup_instruction(op, &inst.results)?,
                 o::Operation::Exit(op) => emitter.exit_instruction(op, &inst.results)?,
-                o::Operation::Core(o::CoreOp::TypeOf { ty, .. }) => {
-                    let o::Type::Object { decl, .. } = module.types.get(*ty)? else {
-                        return Err(error("descriptor is not an object"));
+                o::Operation::Core(o::CoreOp::TypeOf { ty, descriptor }) => {
+                    let id = match module.types.get(*ty)? {
+                        o::Type::Object { decl, .. } => decl.as_u32(),
+                        // An action value's runtime descriptor is its `fn` role; its opaque cleanup releases
+                        // the value's complete owner graph.
+                        o::Type::Fn(_) => {
+                            roles::opaque_descriptor(module, *ty, descriptor, o::catalogue::SYNC_CLOSURE_CLEANUP)?;
+                            roles::callable_role(module, *ty)?
+                        }
+                        // The descriptor of `any`; its opaque cleanup releases a box's complete owner graph.
+                        o::Type::Any => {
+                            roles::opaque_descriptor(module, *ty, descriptor, o::catalogue::ANY_CLEANUP)?;
+                            emitter.synthetic.any_object(module)
+                        }
+                        _ => return Err(error("descriptor of a type without one")),
                     };
                     data(s::DataOp::Const, vec![], emitter.reg(inst.results[0])?,
-                        s::Immediate::Constant(s::Constant::Descriptor(decl.as_u32())))
+                        s::Immediate::Constant(s::Constant::Descriptor(id)))
                 }
                 o::Operation::Call(call @ (o::CallOp::Role { .. } | o::CallOp::Closure { .. })) => {
                     let (opcode, arguments, context) = emitter.dispatch(call)?;
@@ -1202,6 +1249,11 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                     | o::CoreOp::FnBindRole { .. }) => {
                     let site = roles::closure_site(body, &inst.op)?.expect("action value site");
                     emitter.closure(site, &inst.results)?;
+                    continue;
+                }
+                o::Operation::Core(o::CoreOp::AnyBox { .. }) => {
+                    let (ty, value, packet) = roles::any_box_site(body, &inst.op)?.expect("any.box site");
+                    emitter.any_box(ty, value, packet, &inst.results)?;
                     continue;
                 }
                 o::Operation::Core(o::CoreOp::CapMake { owner, packet: Some(packet), .. }) => {

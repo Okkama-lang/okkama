@@ -42,7 +42,7 @@ fn plain_object(name: &str, storage_fields: Vec<Type>) -> Object {
         name: name.into(),
         error_cases: vec![],
         enum_cases: 0,
-        variant_cases: vec![], handle: false, role: None, implements: vec![],
+        variant_cases: vec![], handle: false, role: None, implements: vec![], any_box: false,
         fields: (0..count).map(|storage| Field { name: format!("f{storage}"), storage, once: false }).collect(),
         layout: ObjectRuntimeLayout {
             storage_fields, allocation_words: (1 + count).max(2), identity_offset: None, has_destroy: false,

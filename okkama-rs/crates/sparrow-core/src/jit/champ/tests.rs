@@ -855,7 +855,7 @@ fn p1_runtime() -> Box<Runtime> {
         }).collect();
         program.objects.push(s::Object {
             name: name.into(), error_cases, enum_cases: 0, variant_cases: vec![],
-            handle: name == "runtime.buffer.BufferState", role: None, implements: vec![],
+            handle: name == "runtime.buffer.BufferState", role: None, implements: vec![], any_box: false,
             fields: if name == "app.Problem.note" {
                 vec![s::Field { name: "message".into(), storage: 0, once: false }]
             } else {
@@ -881,7 +881,7 @@ fn p1_runtime() -> Box<Runtime> {
     // An unresolved provider: the checked adapter with handle transport of its own module.
     program.objects.push(s::Object {
         name: "app.Port".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: true,
-        role: None, implements: vec![], fields: vec![],
+        role: None, implements: vec![], any_box: false, fields: vec![],
         layout: s::ObjectRuntimeLayout {
             allocation_words: 2, identity_offset: None, has_destroy: false, may_reach_resource: false,
             may_async_destroy: false, storage_fields: vec![], trace_layout: vec![], selection_layout: vec![],

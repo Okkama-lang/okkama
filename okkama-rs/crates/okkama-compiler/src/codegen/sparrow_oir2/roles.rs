@@ -58,21 +58,55 @@ pub(crate) fn closure_site(body: &o::Body, op: &o::Operation) -> Result<Option<C
 pub(crate) struct Synthetic {
     pub callables: Vec<o::TypeId>,
     pub closures: Vec<ClosureLayout>,
+    /// Whether the module has the `any` type: its descriptor follows the closure layouts.
+    pub any: bool,
+    /// The boxed value types of the `any.box` sites, one any box each, after the `any` descriptor.
+    pub boxes: Vec<o::TypeId>,
 }
 
-/// An array of role values, caps or action values (at any nesting depth). Own tracks the deps of its
-/// elements as references, so it never certifies such an array as a closed graph.
+/// An `any.box` site: the boxed value and its packet.
+pub(crate) fn any_box_site(body: &o::Body, op: &o::Operation) -> Result<Option<(o::TypeId, o::ValueId,
+    Option<o::ValueId>)>, GenerateError>
+{
+    let o::Operation::Core(o::CoreOp::AnyBox { value, packet, .. }) = op else { return Ok(None) };
+    Ok(Some((body.values.get(*value)?.ty, *value, *packet)))
+}
+
+/// An array of role values, caps, action values or `any` values (at any nesting depth), or a map whose values
+/// are such values or arrays of them. Own tracks the deps of their elements as references, so it never
+/// certifies such a collection as a closed graph; the loader admits it only as closed plain data.
 pub(crate) fn view_array(module: &o::Module, mut ty: o::TypeId) -> Result<bool, GenerateError> {
     let mut depth = 0;
+    if let o::Type::Map(_, value) = module.types.get(ty)? {
+        ty = *value;
+        depth += 1;
+    }
     while let o::Type::Array(element) = module.types.get(ty)? {
         ty = *element;
         depth += 1;
     }
-    Ok(depth > 0 && matches!(module.types.get(ty)?, o::Type::Role { .. } | o::Type::Cap { .. } | o::Type::Fn(_)))
+    Ok(depth > 0 && matches!(module.types.get(ty)?,
+        o::Type::Role { .. } | o::Type::Cap { .. } | o::Type::Fn(_) | o::Type::Any))
 }
 
 fn sync_fn(ty: &o::Type) -> bool {
     matches!(ty, o::Type::Fn(function) if !function.is_async)
+}
+
+/// A runtime descriptor of an opaque value (`type.of` of a `fn` type or `any`) names the registered opaque
+/// cleanup intrinsic `name` of exactly that type: a bodiless declaration keyed by its first parameter.
+pub(crate) fn opaque_descriptor(module: &o::Module, ty: o::TypeId, descriptor: &o::DescriptorContract, name: &str)
+    -> Result<(), GenerateError>
+{
+    let cleanup = module.functions.get(descriptor.cleanup)?;
+    let intrinsic = cleanup.attrs.iter().any(|attr| matches!(attr, o::FunctionAttr::Intrinsic { name: actual, .. }
+        if actual == name));
+    if descriptor.managed != o::DescriptorManaged::Runtime || descriptor.async_destroy || !intrinsic
+        || cleanup.body.is_some() || cleanup.signature.params.first() != Some(&ty)
+    {
+        return Err(GenerateError(format!("runtime descriptor without the {name} intrinsic of its type")));
+    }
+    Ok(())
 }
 
 /// The descriptor of the role of a sync `fn` type: after the declarations, in type order.
@@ -87,10 +121,17 @@ pub(crate) fn callable_role(module: &o::Module, ty: o::TypeId) -> Result<u32, Ge
 impl Synthetic {
     pub fn of(module: &o::Module) -> Result<Self, GenerateError> {
         let callables = module.types.iter().filter(|(_, ty)| sync_fn(ty)).map(|(id, _)| id).collect();
-        let mut synthetic = Self { callables, closures: vec![] };
+        let any = module.types.iter().any(|(_, ty)| *ty == o::Type::Any);
+        let mut synthetic = Self { callables, closures: vec![], any, boxes: vec![] };
         for (_, function) in module.functions.iter() {
             let Some(body) = &function.body else { continue };
             for (_, instruction) in body.insts.iter() {
+                if let Some((ty, _, _)) = any_box_site(body, &instruction.op)? {
+                    if !synthetic.boxes.contains(&ty) {
+                        synthetic.boxes.push(ty);
+                    }
+                    continue;
+                }
                 let Some(site) = closure_site(body, &instruction.op)? else { continue };
                 // A target function has one capture layout; a bound role slot has one per receiver type.
                 let same = synthetic.closures.iter().find(|closure| closure.target == site.layout.target
@@ -116,6 +157,17 @@ impl Synthetic {
     /// The descriptor of closure layout `index`.
     pub fn closure_object(&self, module: &o::Module, index: usize) -> u32 {
         (module.declarations.len() + self.callables.len() + index) as u32
+    }
+
+    /// The descriptor of `any`, after the closure layouts.
+    pub fn any_object(&self, module: &o::Module) -> u32 {
+        (module.declarations.len() + self.callables.len() + self.closures.len()) as u32
+    }
+
+    /// The any box of the boxed value type `ty`, after the `any` descriptor.
+    pub fn box_object(&self, module: &o::Module, ty: o::TypeId) -> Option<u32> {
+        let index = self.boxes.iter().position(|boxed| *boxed == ty)?;
+        Some(self.any_object(module) + 1 + index as u32)
     }
 
     /// The trampoline of closure layout `index`, after the module's functions.
@@ -176,7 +228,7 @@ fn placeholder(name: String, role: Option<s::RoleDecl>, implements: Vec<s::RoleI
             storage_fields: vec![], allocation_words: 2, identity_offset: None, has_destroy: false,
             may_reach_resource: false, may_async_destroy: false, trace_layout: vec![], selection_layout: vec![],
         },
-        role, implements,
+        role, implements, any_box: false,
     }
 }
 
@@ -191,6 +243,7 @@ fn reaches(module: &o::Module, objects: &[s::Object], ty: s::Type) -> bool {
             .any(|object| object.layout.may_reach_resource),
         s::Type::Error => objects.iter().filter(|object| !object.error_cases.is_empty())
             .any(|object| object.layout.may_reach_resource),
+        s::Type::Any => objects.iter().any(|object| object.any_box && object.layout.may_reach_resource),
         s::Type::Array(shape) => s::ArrayType { depth: 1, ..shape }.element()
             .is_some_and(|leaf| reaches(module, objects, leaf)),
         s::Type::Map(id) => match composites(module).entries().get(id as usize) {
@@ -248,8 +301,22 @@ pub(crate) fn synthetic_objects(module: &o::Module, objects: &mut Vec<s::Object>
         object.layout.storage_fields = storage_fields;
         objects.push(object);
     }
-    // A closure capturing an action value reaches what that value's closures reach, wherever they are listed.
     let first = objects.len() - synthetic.closures.len();
+    // The `any` descriptor, then one any box per boxed value type: the value in its one field.
+    if synthetic.any {
+        objects.push(placeholder("any".into(), None, vec![]));
+        for &ty in &synthetic.boxes {
+            let value = translate_type(module, ty)?;
+            let mut object = placeholder(format!("any#{}", ty.as_u32()), None, vec![]);
+            object.any_box = true;
+            object.fields = vec![s::Field { name: "value".into(), storage: 0, once: false }];
+            object.layout.trace_layout = if value.traced() { vec![0] } else { vec![] };
+            object.layout.storage_fields = vec![value];
+            objects.push(object);
+        }
+    }
+    // A closure capturing an action value reaches what that value's closures reach, wherever they are listed;
+    // an any box reaches what its value reaches.
     loop {
         let mut changed = false;
         for index in first..objects.len() {

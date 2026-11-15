@@ -783,6 +783,36 @@ fn scope_split(ctx: *mut Ctx, input: *mut ScopeSlot, selection: *const Selection
     }
     outcome
 }
+/// `own.dynamic` (Closure and `any` protocols): the checked transfer of a packet of unknown retention into
+/// the scope inventory. Every identity must be live in its run's holder and owner and must not already be
+/// in the scope (owner, live dependencies, snapshot, transferable); then it joins the admission journal in
+/// serial order, and the scope's cleanup releases it once. A failed check returns the state and the packet
+/// unaccepted with a program failure.
+pub extern "C" fn rt_own_dynamic(ctx: *mut Ctx, state: *mut ScopeSlot, input: *mut PacketSlot,
+    post: *mut ScopeSplitPost) -> Outcome
+{
+    if unsafe { (*ctx).status } != runtime::OK || unsafe { (*ctx).failure } != 0 {
+        return stop(ctx, error("checked helper entered with active bridge failure"));
+    }
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    let original = unsafe { (*state).record };
+    let packet = unsafe { (*input).record };
+    // admit() checks everything before its first store and consumes nothing when it fails.
+    let (outcome, output) = match admit(runtime, original, packet, false) {
+        Ok(record) => (NORMAL, ScopeSplitPost {
+            state: ScopeSlot { record }, selected: PacketSlot::default(), failure: 0,
+        }),
+        Err(error) => (UNWIND, ScopeSplitPost {
+            state: ScopeSlot { record: original }, selected: PacketSlot { record: packet }, failure: fail(ctx, error),
+        }),
+    };
+    unsafe {
+        (*state).record = 0;
+        (*input).record = 0;
+        post.write(output);
+    }
+    outcome
+}
 pub extern "C" fn rt_scope_transfer(ctx: *mut Ctx, inputs: *const TransferInputs,
     selection: *const Selection, post: *mut TransferPost) -> Outcome
 {

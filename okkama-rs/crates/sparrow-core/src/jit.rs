@@ -313,6 +313,11 @@ helpers! {
         selection: *const crate::champ::Selection,
         post: *mut crate::champ::TransferPost) -> u64; [Allocates, Fails, Stops];
     #[cfg(feature = "champ-abi")]
+    champ_own_dynamic = crate::champ::rt_own_dynamic as (ctx,
+        state: *mut crate::champ::ScopeSlot,
+        input: *mut crate::champ::PacketSlot,
+        post: *mut crate::champ::ScopeSplitPost) -> u64; [Allocates, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
     champ_exit_prepare = crate::champ::rt_exit_prepare as (ctx,
         inputs: *const crate::champ::ExitInputs,
         post: *mut crate::champ::PendingSlot) -> u64; [Allocates, Stops];

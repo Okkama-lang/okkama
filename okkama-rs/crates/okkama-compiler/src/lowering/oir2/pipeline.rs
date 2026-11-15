@@ -188,11 +188,29 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
             }
         }
     }
+    // An `any` value reaches what one of its boxed values reaches (`any.box` sites).
+    let mut boxed = Vec::new();
+    for (_, function) in module.functions.iter() {
+        let Some(body) = &function.body else { continue };
+        for (_, instruction) in body.insts.iter() {
+            if let o::Operation::Core(o::CoreOp::AnyBox { value, .. }) = &instruction.op
+                && let Ok(ty) = sparrow_oir2::translate_type(module, body.values.get(*value)
+                    .map_err(|error| phase("layout", error))?.ty)
+            {
+                boxed.push(ty);
+            }
+        }
+    }
     loop {
         let reaches = layouts.iter().filter_map(|(&id, layout)| layout.runtime.may_reach_resource.then_some(id))
             .collect::<std::collections::BTreeSet<_>>();
         let role_reaches = |role: &u32| implementors.get(role).is_some_and(|objects| {
             objects.iter().any(|object| reaches.contains(object))
+        });
+        let any_reaches = boxed.iter().any(|ty| match *ty {
+            s::Type::Object(id) | s::Type::Successor(id) | s::Type::Variant(id) => reaches.contains(&id),
+            s::Type::Role(id) | s::Type::RoleSuccessor(id) => role_reaches(&id),
+            _ => false,
         });
         let mut changed = false;
         for layout in layouts.values_mut() {
@@ -213,6 +231,7 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
                     Some(s::Type::Role(id) | s::Type::RoleSuccessor(id)) if !matches!(ty, s::Type::Array(_)) => {
                         role_reaches(&id)
                     }
+                    Some(s::Type::Any) if !matches!(ty, s::Type::Array(_)) => any_reaches,
                     _ => false,
                 };
                 reaching.then_some(i as u32)
