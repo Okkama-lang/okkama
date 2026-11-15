@@ -70,6 +70,8 @@ const WITNESSES: &[&str] = &[
     // #691: a void fixed root (an async test); the deps of a Future argument in continuation 0.
     "void-fixed-root",
     "start-deps",
+    // #733: an async successor action publishes its successor.
+    "async-successor",
 ];
 
 #[test]

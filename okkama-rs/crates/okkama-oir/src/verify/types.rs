@@ -1245,12 +1245,15 @@ fn function_types(module: &Module, data: &Function, state: &mut State<'_>) -> Ch
             }
             FunctionAttr::Method(owner) | FunctionAttr::Destroy(owner) | FunctionAttr::Successor(owner) => {
                 if !receiver(*owner) { state.error(R::T5, "object action needs its concrete receiver in slot zero"); }
+                // #733: the results of a D21 async body are those of its language signature (C-2); its coro
+                // signature `[frame<@f>] -> void` never returns a value.
+                let results = language.as_ref().map_or(&data.signature.results, |signature| &signature.results);
                 if matches!(attr, FunctionAttr::Destroy(_))
-                    && (data.signature.params.len() != 1 || !data.signature.results.is_empty()) {
+                    && (data.signature.params.len() != 1 || !results.is_empty()) {
                     state.error(R::T5, "destroy must take only self and return void");
                 }
                 if matches!(attr, FunctionAttr::Successor(_)) {
-                    let results = language_slots(module, &data.signature.results, state);
+                    let results = language_slots(module, results, state);
                     let valid = results.len() == 1 && results.first()
                         .and_then(|id| module.types.get(*id).ok()).is_some_and(|ty| match ty {
                             Type::Successor(id) => module.types.get(*id).is_ok_and(|ty| {

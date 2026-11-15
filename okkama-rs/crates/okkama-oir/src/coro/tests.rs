@@ -53,6 +53,8 @@ const GOLDENS: &[(&str, &str, &str)] = &[
     // #691: a void fixed root (an async test); the deps of a Future argument in continuation 0.
     golden!("void-fixed-root"),
     golden!("start-deps"),
+    // #733: an async successor action publishes its successor (T5 and B8.2 read the language signature).
+    golden!("async-successor"),
 ];
 
 /// Own → verify(own) → coro → verify(coro) (OIR-2 §12).
