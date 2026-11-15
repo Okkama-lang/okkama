@@ -471,6 +471,13 @@ impl Read for PublishOutcome {
         }
     }
 }
+impl Read for RehomeTarget {
+    fn read(&self, visitor: &mut impl Reader) {
+        if let Self::Scope(scope) = self {
+            scope.read(visitor);
+        }
+    }
+}
 impl Read for RehomeForm {
     fn read(&self, visitor: &mut impl Reader) {
         match self {

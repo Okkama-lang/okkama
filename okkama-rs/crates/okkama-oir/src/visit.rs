@@ -365,6 +365,13 @@ impl Rewrite for PublishOutcome {
         }
     }
 }
+impl Rewrite for RehomeTarget {
+    fn rewrite(&mut self, visitor: &mut impl VisitorMut) {
+        if let Self::Scope(scope) = self {
+            scope.rewrite(visitor);
+        }
+    }
+}
 impl Rewrite for RehomeForm {
     fn rewrite(&mut self, visitor: &mut impl VisitorMut) {
         match self {

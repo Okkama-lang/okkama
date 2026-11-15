@@ -83,40 +83,14 @@ fn a_cache_settle_neither_fails_nor_waits() {
 }
 
 #[test]
-fn plain_async_entries_pass_the_plain_boundary() {
-    let (module, types) = prepared();
+fn async_entries_with_resource_inputs_pass_the_boundary() {
+    // Commit 5b (R1): an async entry's resource inputs are cold Future inputs, retained by the creation.
+    let (module, _) = prepared();
     let options = OwnOptions::default();
     let mut budget = Budget::new(&options);
-    for (id, data) in module.functions.iter() {
+    for (id, _) in module.functions.iter() {
         check_boundary(&module, id, &mut budget).unwrap();
-        if data.symbol == "void" {
-            check_plain(&module, data, &types).unwrap();
-        }
     }
-}
-
-#[test]
-fn a_future_input_offers_only_what_its_outcome_owns() {
-    // OIR-2 §10.2, D12: a Future's cache duty stays in its owner state, so passing a Future offers only its
-    // deps (future.passed-and-awaited-elsewhere). A Future of a resource still offers what its outcome owns.
-    let plain = "func @plain(%f: future<int>, %n: int) -> int [async] {\n^entry in SP:\n    ret %n\n}\n";
-    let source = SOURCE.replace("func @void(%n: int) -> void [async] {",
-        &format!("{plain}func @void(%n: int) -> void [async] {{"))
-        .replace("scope SV action in @void", "scope SV action in @void\nscope SP action in @plain");
-    let mut module = crate::text::parse(&source).unwrap_or_else(|error| panic!("{error}"));
-    let r = module.types.iter().find(|(_, ty)| matches!(ty, Type::Object { .. })).unwrap().0;
-    module.types.intern(Type::Future(Some(r))).unwrap();
-    intern_futures(&mut module).unwrap();
-    let options = OwnOptions::default();
-    let types = classify::classify(&module, &options, &mut Budget::new(&options)).unwrap();
-    let id = |wanted: Type| module.types.iter().find(|(_, ty)| **ty == wanted).unwrap().0;
-    let int = id(Type::Int);
-    let offers = |ty: TypeId| offers_obligation(&module, &types[&ty]);
-    assert!(!offers(id(Type::Future(Some(int)))));
-    assert!(!offers(int));
-    assert!(offers(id(Type::Future(Some(r)))));
-    assert!(offers(r));
-    assert!(check_plain(&module, function(&module, "plain"), &types).is_ok());
 }
 
 #[test]

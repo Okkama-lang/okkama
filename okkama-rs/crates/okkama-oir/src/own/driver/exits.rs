@@ -109,6 +109,9 @@ impl Driver<'_, '_> {
                 values.push(point.env.value(*original)?.value);
             }
         }
+        // A Future's graph is its cache: its duty and what the cache holds leave the scope only
+        // through cache.rehome (C-4), never through a split.
+        values.retain(|value| !crate::own::futures::is_future(self.module, self.body.values.get(*value).unwrap().ty));
         // An async body's plain result selects nothing from the closing scope.
         if self.async_exit(&point)? {
             values.retain(|value| self.managed(self.body.values.get(*value).unwrap().ty));

@@ -16,6 +16,8 @@ pub struct CleanupContext {
     pub replacement: Option<LatestValue>,
     pub returning: bool,
     pub destination: Option<ExitDestination>,
+    /// A `cache.rehome` moved cache duties into the pending reserve (C-4).
+    pub rehomed: bool,
     pub defers: BTreeMap<ScopeId, Vec<InstId>>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -460,7 +462,7 @@ fn transfer_inputs(transfer: &TransferRule) -> Vec<ValueId> {
         TransferRule::Preserve { input, .. } | TransferRule::Partition { input, .. }
         | TransferRule::Close { input } => vec![*input],
         TransferRule::Move { inputs, .. } | TransferRule::Settle { inputs }
-        | TransferRule::Protocol { inputs, .. } => inputs.clone(),
+        | TransferRule::Protocol { inputs, .. } | TransferRule::Rehome { inputs, .. } => inputs.clone(),
         TransferRule::Admit { state, packet, .. } => vec![*state, *packet],
         TransferRule::ScopeTransfer { states, .. } => states.values(),
         TransferRule::Publish { input, .. } => vec![*input],
