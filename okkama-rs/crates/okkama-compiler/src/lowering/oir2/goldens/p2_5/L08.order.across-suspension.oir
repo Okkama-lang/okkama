@@ -281,44 +281,48 @@ func @main() -> int [entry, async] async-creation(M13) async-body(M12) {
     %2: str = const "x"
     %3: int = const 1
     [i6] %4: future<int> = call @app.Values.v#0(%1, %2, %3)
+    temp %4, S7
     %5: int = await %4, result int
     %6: str = const "y"
     %7: int = const 2
-    [i10] %8: future<int> = call @app.Values.v#0(%1, %6, %7)
+    [i11] %8: future<int> = call @app.Values.v#0(%1, %6, %7)
+    temp %8, S7
     %9: int = await %8, result int
     %10: int = int.add %5, %9
     bind %10, binding b2
     %11: str = cvt %10, from int, to str
     %12: array<str> = array.new [%11], ty array<str>
-    [i16] call @io.stdout.Stdout.writeln#4(%0, %12)
-    [i17] %13: app.Pair = call @app.Pair.new#0()
+    [i18] call @io.stdout.Stdout.writeln#4(%0, %12)
+    [i19] %13: app.Pair = call @app.Pair.new#0()
     %14: str = const "first"
     %15: int = const 3
-    [i20] %16: future<int> = call @app.Values.v#0(%1, %14, %15)
+    [i22] %16: future<int> = call @app.Values.v#0(%1, %14, %15)
+    temp %16, S7
     %17: int = await %16, result int
     %18: str = const "second"
     %19: int = const 4
-    [i24] %20: future<int> = call @app.Values.v#0(%1, %18, %19)
+    [i27] %20: future<int> = call @app.Values.v#0(%1, %18, %19)
+    temp %20, S7
     %21: int = await %20, result int
-    [i26] %22: int = call @app.Pair.join#0(%13, %17, %21)
+    [i30] %22: int = call @app.Pair.join#0(%13, %17, %21)
     bind %22, binding b3
     %23: str = cvt %22, from int, to str
     %24: array<str> = array.new [%23], ty array<str>
-    [i30] call @io.stdout.Stdout.writeln#4(%0, %24)
+    [i34] call @io.stdout.Stdout.writeln#4(%0, %24)
     %25: int = const 0
     want %25
-    [i33] exit.prepare return %25 at B0
-    result.exit edge normal(0), value %25, demand want, prepare #33
+    [i37] exit.prepare return %25 at B0
+    result.exit edge normal(0), value %25, demand want, prepare #37
     high.effects at #0 failures [thrown, program, panic, native, cancelled], suspends true
     high.effects at #2 failures [thrown, program, panic, native, cancelled], suspends true
     high.effects at #6 failures [thrown, program, panic, native, cancelled], suspends true
-    high.effects at #10 failures [thrown, program, panic, native, cancelled], suspends true
-    high.effects at #16 failures [thrown, program, panic, native, cancelled], suspends true
-    high.effects at #17 failures [thrown, program, panic, native, cancelled], suspends true
-    high.effects at #20 failures [thrown, program, panic, native, cancelled], suspends true
-    high.effects at #24 failures [thrown, program, panic, native, cancelled], suspends true
-    high.effects at #26 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #11 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #18 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #19 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #22 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #27 failures [thrown, program, panic, native, cancelled], suspends true
     high.effects at #30 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #34 failures [thrown, program, panic, native, cancelled], suspends true
     ret %25
     ^b1(%26: failure) in S7:
     raise %26

@@ -241,18 +241,19 @@ func @main() -> int [entry, async] async-creation(M13) async-body(M12) {
     %1: int = const 9
     [i3] %2: app.Quiet = call @app.Quiet.new#0(%1)
     [i4] %3: future<int> = call @app.Quiet.run#0(%2)
+    temp %3, S6
     %4: int = await %3, result int
     %5: str = cvt %4, from int, to str
     %6: array<str> = array.new [%5], ty array<str>
-    [i8] call @io.stdout.Stdout.writeln#4(%0, %6)
+    [i9] call @io.stdout.Stdout.writeln#4(%0, %6)
     %7: int = const 0
     want %7
-    [i11] exit.prepare return %7 at B0
-    result.exit edge normal(0), value %7, demand want, prepare #11
+    [i12] exit.prepare return %7 at B0
+    result.exit edge normal(0), value %7, demand want, prepare #12
     high.effects at #0 failures [thrown, program, panic, native, cancelled], suspends true
     high.effects at #3 failures [thrown, program, panic, native, cancelled], suspends true
     high.effects at #4 failures [thrown, program, panic, native, cancelled], suspends true
-    high.effects at #8 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #9 failures [thrown, program, panic, native, cancelled], suspends true
     ret %7
     ^b1(%8: failure) in S6:
     raise %8

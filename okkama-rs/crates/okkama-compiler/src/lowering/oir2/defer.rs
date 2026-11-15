@@ -1,4 +1,5 @@
-//! Lazy defer entries. Binding captures are supplied at execution, after snapshots.
+//! Lazy defer entries. Binding captures are supplied at execution, after snapshots. A deferred expression
+//! that awaits (`defer await x.close();`) is an async defer entry (async ABI C-6).
 use std::collections::HashSet;
 
 use super::{LowerError, Result};
@@ -68,7 +69,15 @@ impl super::declarations::Declarations {
             } else {
                 vec![]
             };
+            // An expression that awaits makes an async defer entry (async ABI C-6), which has no replacement.
+            let awaits = super::asynchronous::awaits(&expr);
+            if awaits && returns {
+                return Err(super::asynchronous::async_defer_replace(expr.span));
+            }
             let mut attrs = vec![ir::FunctionAttr::DeferEntry { replacements }];
+            if awaits {
+                attrs.push(ir::FunctionAttr::Async);
+            }
             if receiver {
                 let object = match key.root {
                     thir::BodyOwner::Method { object, .. } | thir::BodyOwner::Ctor { object, .. }
@@ -94,6 +103,9 @@ impl super::declarations::Declarations {
                 attrs, type_params: vec![], summary: None,
                 async_creation_summary: None, async_body_summary: None, body: None, loc: None,
             })?;
+            if awaits {
+                super::asynchronous::declare(&mut self.builder, function)?;
+            }
             self.defers.push(Deferred { function, source: body, receiver, key: key.clone() });
         }
         Ok(())

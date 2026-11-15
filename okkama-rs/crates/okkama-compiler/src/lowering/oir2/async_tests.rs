@@ -64,36 +64,36 @@ fn gap(context: &str) {
     eprintln!("{context}: okkama-oir has no High creation rule for an async call yet; Future type checks skipped");
 }
 
-fn lower(source: &str) -> ir::Module {
+pub(super) fn lower(source: &str) -> ir::Module {
     lower_std(source).unwrap_or_else(|error| panic!("{source}\n{error}"))
 }
 
-fn function_id(module: &ir::Module, symbol: &str) -> ir::FuncId {
+pub(super) fn function_id(module: &ir::Module, symbol: &str) -> ir::FuncId {
     module.functions.iter().find(|(_, function)| function.symbol == symbol).map(|(id, _)| id)
         .unwrap_or_else(|| panic!("no function {symbol}"))
 }
 
-fn function<'m>(module: &'m ir::Module, symbol: &str) -> &'m ir::Function {
+pub(super) fn function<'m>(module: &'m ir::Module, symbol: &str) -> &'m ir::Function {
     module.functions.get(function_id(module, symbol)).unwrap()
 }
 
-fn summary(module: &ir::Module, id: Option<ir::SummaryId>) -> &ir::Summary {
+pub(super) fn summary(module: &ir::Module, id: Option<ir::SummaryId>) -> &ir::Summary {
     module.summaries.get(id.expect("declared summary")).unwrap()
 }
 
-fn ty(module: &ir::Module, id: ir::TypeId) -> &ir::Type {
+pub(super) fn ty(module: &ir::Module, id: ir::TypeId) -> &ir::Type {
     module.types.get(id).unwrap()
 }
 
 /// Every instruction of a body with its block and ID, in block order.
-fn instructions(function: &ir::Function) -> Vec<(ir::BlockId, ir::InstId, &ir::Instruction)> {
+pub(super) fn instructions(function: &ir::Function) -> Vec<(ir::BlockId, ir::InstId, &ir::Instruction)> {
     let body = function.body.as_ref().expect("source body");
     body.blocks.iter()
         .flat_map(|(block, data)| data.insts.iter().map(move |id| (block, *id, body.insts.get(*id).unwrap())))
         .collect()
 }
 
-fn async_ops(function: &ir::Function) -> Vec<&ir::AsyncOp> {
+pub(super) fn async_ops(function: &ir::Function) -> Vec<&ir::AsyncOp> {
     instructions(function).into_iter().filter_map(|(_, _, instruction)| match &instruction.op {
         ir::Operation::Async(op) => Some(op),
         _ => None,
@@ -118,7 +118,7 @@ fn assert_no_elaborated_async(module: &ir::Module) {
 
 /// The diagnostic of an async construct outside plain async: an explicit producer stop that names
 /// the construct and its slice, at a source location.
-fn diagnostic(source: &str) -> (String, crate::source::Span) {
+pub(super) fn diagnostic(source: &str) -> (String, crate::source::Span) {
     match lower_std(source) {
         Err(LowerError::Unsupported { message, span }) => {
             assert!(!span.is_empty(), "{message}");
@@ -129,7 +129,7 @@ fn diagnostic(source: &str) -> (String, crate::source::Span) {
     }
 }
 
-fn assert_names(source: &str, construct: &str, at: Option<&str>) {
+pub(super) fn assert_names(source: &str, construct: &str, at: Option<&str>) {
     let (message, span) = diagnostic(source);
     let expected = format!("unsupported in OIR-2 lowering: {construct}");
     assert!(message == expected || message.starts_with(&format!("{expected} in function ")), "{message}");
@@ -405,16 +405,6 @@ fn oir2_v5_process_worker_keeps_its_diagnostic() {
 }
 
 #[test]
-fn oir2_v5_defer_await_keeps_its_diagnostic() {
-    assert_names(
-        concat!("module app; object C { C(); async close() is void { } } ",
-            "async main() is int { let c = C(); defer await c.close(); 0; }"),
-        "defer await (P2.5 slice R3, async defer entry)",
-        Some("defer await c.close()"),
-    );
-}
-
-#[test]
 fn oir2_v5_async_destroy_keeps_its_diagnostic() {
     assert_names(
         "module app; object Lease { Lease(); async destroy { } } async main() is int { let l = Lease(); 0; }",
@@ -486,7 +476,7 @@ fn w1_high_to_coro(id: &str) -> Result<ir::Module, String> {
 }
 
 /// High -> verify_high (Full) -> own -> verify_own (Full) -> coro -> verify_coro (Full).
-fn high_to_coro(high: ir::Module) -> Result<ir::Module, String> {
+pub(super) fn high_to_coro(high: ir::Module) -> Result<ir::Module, String> {
     let verify = ir::verify::VerifyOptions { mode: ir::verify::VerifyMode::Full, ..Default::default() };
     let catalog = super::native_summaries::P1NativeSummaries::for_module(&high)
         .map_err(|error| format!("contracts: {error:?}"))?;
@@ -541,7 +531,7 @@ fn w1_high_to_low(id: &str) -> Result<ir::Module, String> {
 }
 
 /// Coro -> low -> verify_low (Full).
-fn coro_to_low(coro: ir::Module) -> Result<ir::Module, String> {
+pub(super) fn coro_to_low(coro: ir::Module) -> Result<ir::Module, String> {
     let catalog = super::native_summaries::P1NativeSummaries::for_module(&coro)
         .map_err(|error| format!("contracts_coro: {error:?}"))?;
     let low = ir::low::lower_cleanup(coro, &ir::low::LowOptions::default()).map_err(|error| format!("low: {error}"))?;

@@ -283,21 +283,22 @@ func @main() -> int [entry, async] async-creation(M15) async-body(M14) {
     [i6] %4: app.Adder = call @app.Adder.new#0()
     %5: int = const 1
     [i8] %6: future<int> = call @app.Adder.plus#0(%4, %3, %5)
+    temp %6, S7
     %7: int = await %6, result int
     bind %7, binding b2
     %8: str = cvt %7, from int, to str
     %9: array<str> = array.new [%8], ty array<str>
-    [i13] call @io.stdout.Stdout.writeln#4(%0, %9)
+    [i14] call @io.stdout.Stdout.writeln#4(%0, %9)
     %10: int = const 0
     want %10
-    [i16] exit.prepare return %10 at B0
-    result.exit edge normal(0), value %10, demand want, prepare #16
+    [i17] exit.prepare return %10 at B0
+    result.exit edge normal(0), value %10, demand want, prepare #17
     high.effects at #0 failures [thrown, program, panic, native, cancelled], suspends true
     high.effects at #3 failures [thrown, program, panic, native, cancelled], suspends true
     high.effects at #4 failures [thrown, program, panic, native, cancelled], suspends true
     high.effects at #6 failures [thrown, program, panic, native, cancelled], suspends true
     high.effects at #8 failures [thrown, program, panic, native, cancelled], suspends true
-    high.effects at #13 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #14 failures [thrown, program, panic, native, cancelled], suspends true
     ret %10
     ^b1(%11: failure) in S7:
     raise %11
