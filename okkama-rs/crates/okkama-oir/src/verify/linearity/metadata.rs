@@ -600,11 +600,31 @@ impl Engine<'_, '_> {
                 if !matches!(piece.origin, Origin::Input(_)) {
                     return self.may_alias(flow, piece.origin, *key);
                 }
+                if self.obligation_free(*key) {
+                    return false;
+                }
                 piece.predicates.iter().all(|(filter, included)| {
                     !*included || filter.keys.iter().any(|other| self.may_alias(flow, *other, *key))
                 })
             })
         })
+    }
+    /// #700, #731 (OIR-2 §3.2, §7.2, §10.2; P2.4 §4.8): a key that names a value holding no obligation: an
+    /// entry value or a field whose type holds none (a builtin capability such as Atomic, an object holding
+    /// only such references, a role with plain implementers). A packet carries obligations, so an accepted input
+    /// packet holds nothing such a key names, and closing that packet ends nothing that depends on it.
+    pub(super) fn obligation_free(&self, key: Origin) -> bool {
+        let ty = match key {
+            Origin::External(value) => self.body.values.get(value).ok().map(|data| data.ty),
+            Origin::Projection(_, ProjectionKind::Field(declaration, index)) => {
+                match self.module.declarations.get(declaration).ok().map(|data| &data.kind) {
+                    Some(DeclarationKind::Object { fields, .. }) => fields.get(index as usize).map(|field| field.ty),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        ty.is_some_and(|ty| self.obligations.get(ty.as_u32() as usize).is_some_and(|obligation| !*obligation))
     }
     pub(super) fn check_deps(&mut self, flow: &mut Flow, value: ValueId, expected: &BTreeSet<Origin>) {
         #[cfg(any(test, feature = "verifier-differential"))]
