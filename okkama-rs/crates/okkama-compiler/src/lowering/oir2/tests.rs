@@ -487,6 +487,82 @@ fn oir2_construction_self_check_rejects_broken_early_self() {
     }
 }
 
+/// The High module of `source`, verified.
+fn high_of(source: &str) -> ir::Module {
+    with_analysis(source, |analysis| -> Result<ir::Module, LowerError> {
+        let module = lower_to_oir2(analysis)?;
+        verify_high(&module, source);
+        Ok(module)
+    }).unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// The bound-flag checks of the constructor of `object` (#708): their trap messages, in block order.
+fn unbound_traps(module: &ir::Module, object: &str) -> Vec<String> {
+    let (_, ctor) = module.functions.iter().find(|(_, function)| function.symbol.starts_with(&format!("{object}.new"))
+        || function.attrs.iter().any(|attr| matches!(attr, ir::FunctionAttr::Ctor(_)))
+            && function.symbol.starts_with(object)).unwrap();
+    ctor.body.as_ref().unwrap().blocks.iter().filter_map(|(_, block)| match &block.term.kind {
+        ir::TermKind::Trap { code: ir::TrapCode::Unbound, message } => Some(message.clone()),
+        _ => None,
+    }).collect()
+}
+
+/// A field that the constructor body may leave unbound is checked after the body through its bound flag, with
+/// Tomato's failure (#708, L04.ctor.unbound-field-dies-after-body); the complete self follows the check. A field
+/// that every path binds, by a default or a top-level statement, needs no check.
+#[test]
+fn oir2_constructor_checks_fields_bound_on_some_paths() {
+    let module = high_of(concat!("module app; object Gate { has a is int; has b is int; has c is int = 3; ",
+        "Gate(flag is bool) { if flag { self.a = 1; } self.b = 2; } } main() is int { Gate(true); 0; }"));
+    assert_eq!(unbound_traps(&module, "app.Gate"), ["Object \"Gate\" field \"a\" was not initialized"]);
+    super::structure::check(&module).unwrap();
+    // Both arms bind it: the value is never undef, so there is nothing to check.
+    let module = high_of(concat!("module app; object O { has n is int; O(b is bool) { ",
+        "if b { n = 1; } else { n = 2; } } } main() is int { O(true); 0; }"));
+    assert!(unbound_traps(&module, "app.O").is_empty());
+}
+
+/// The construction self-check takes a field that may be unbound into a complete self only behind the check of
+/// that field's flag (#708): without the check, or with a check of another field, or with a check whose failing
+/// edge does not trap as an unbound field, it refuses the constructor.
+#[test]
+fn oir2_construction_self_check_requires_the_bound_check_of_each_maybe_unbound_field() {
+    let module = high_of(concat!("module app; object Gate { has a is int; Gate(flag is bool) { ",
+        "if flag { self.a = 1; } } } main() is int { Gate(true); 0; }"));
+    super::structure::check(&module).unwrap();
+    let ctor = module.functions.iter().find(|(_, function)| {
+        function.attrs.iter().any(|attr| matches!(attr, ir::FunctionAttr::Ctor(_)))
+    }).unwrap().0;
+    let trap = |module: &ir::Module| module.functions.get(ctor).unwrap().body.as_ref().unwrap().blocks.iter()
+        .find(|(_, block)| matches!(block.term.kind, ir::TermKind::Trap { code: ir::TrapCode::Unbound, .. }))
+        .unwrap().0;
+    for mutation in 0..3 {
+        let mut broken = module.clone();
+        let block = trap(&broken);
+        let body = broken.functions.get_mut(ctor).unwrap().body.as_mut().unwrap();
+        let term = &mut body.blocks.get_mut(block).unwrap().term.kind;
+        match mutation {
+            // The check names another field.
+            0 => *term = ir::TermKind::Trap { code: ir::TrapCode::Unbound,
+                message: "Object \"Gate\" field \"b\" was not initialized".into() },
+            // The failing edge is not an unbound-field trap.
+            1 => *term = ir::TermKind::Trap { code: ir::TrapCode::Confirm,
+                message: "Object \"Gate\" field \"a\" was not initialized".into() },
+            // No check: the passing block is reached from both edges.
+            _ => {
+                let source = body.blocks.iter().find(|(_, data)| matches!(&data.term.kind,
+                    ir::TermKind::Cond { no, .. } if no.block == block)).unwrap().0;
+                let ir::TermKind::Cond { yes, .. } = body.blocks.get(source).unwrap().term.kind.clone() else {
+                    unreachable!()
+                };
+                body.blocks.get_mut(source).unwrap().term.kind = ir::TermKind::Br(yes);
+            }
+        }
+        let error = super::structure::check(&broken).expect_err("an unchecked maybe-unbound field");
+        assert!(error.to_string().contains("complete self has uninitialized fields"), "{mutation}: {error}");
+    }
+}
+
 #[test]
 fn oir2_s2_control_flow_and_aliases_roundtrip() {
     for source in [

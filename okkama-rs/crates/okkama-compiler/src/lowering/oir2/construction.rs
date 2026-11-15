@@ -63,10 +63,27 @@ pub(super) fn check(module: &ir::Module, body: &ir::Body) -> Result<()> {
             && (!pending || !fields.last().is_some_and(|value| undefined.contains(value))) {
             return Err(error("incomplete self requires trailing $pending: bool = undef"));
         }
+        // A complete self takes a field that may be unbound only after the check of its bound flag (#708): every
+        // path to the allocation passes the flag's Cond, whose other edge traps as Tomato does.
+        let guards = if *construction == ir::ConstructionStatus::Complete {
+            guarded(body, allocation)?
+        } else {
+            HashSet::new()
+        };
+        let object = short_name(&module.declarations.get(*declaration)?.name);
+        let unguarded = |index: usize, value: &ir::ValueId| undefined.contains(value)
+            && (direct_undef(body, *value)
+                || !guards.contains(&super::objects::unbound_message(&object, &layout[index].name)));
         if *construction == ir::ConstructionStatus::Complete
-            && (fields.iter().any(|value| undefined.contains(value))
+            && (fields.iter().enumerate().any(|(index, value)| unguarded(index, value))
                 || (pending && !fields.last().is_some_and(|value| is_false(body, *value)))) {
             return Err(error("complete self has uninitialized fields or non-false $pending"));
+        }
+        let mut undefined = undefined.clone();
+        for (index, value) in fields.iter().enumerate() {
+            if !unguarded(index, value) {
+                undefined.remove(value);
+            }
         }
         let mut aliases: HashSet<_> = inst.results.iter().copied().collect();
         loop {
@@ -94,6 +111,54 @@ pub(super) fn check(module: &ir::Module, body: &ir::Body) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The object's name as Tomato's messages give it: without its module, or its generic instance after `::`.
+pub(super) fn short_name(name: &str) -> String {
+    match name.rsplit_once("::") {
+        Some((_, instance)) => instance.to_owned(),
+        None => name.rsplit('.').next().unwrap_or(name).to_owned(),
+    }
+}
+
+fn direct_undef(body: &ir::Body, value: ir::ValueId) -> bool {
+    body.values.get(value).is_ok_and(|data| matches!(data.def, ir::Definition::InstResult { inst, .. }
+        if body.insts.get(inst).is_ok_and(|inst| matches!(inst.op, ir::Operation::Core(ir::CoreOp::Undef { .. })))))
+}
+
+/// The messages of the bound-flag checks that every path to `allocation` passes (#708): from its block up a chain
+/// of blocks, each the `yes` target of its only predecessor's `Cond`, whose `no` target traps with
+/// `TrapCode::Unbound`.
+fn guarded(body: &ir::Body, allocation: ir::InstId) -> Result<HashSet<String>> {
+    let mut predecessors: HashMap<ir::BlockId, Vec<ir::BlockId>> = HashMap::new();
+    let mut current = None;
+    for (id, block) in body.blocks.iter() {
+        if block.insts.contains(&allocation) {
+            current = Some(id);
+        }
+        for edge in targets(&block.term.kind) {
+            predecessors.entry(edge.block).or_default().push(id);
+        }
+        if let Some(unwind) = &block.unwind {
+            predecessors.entry(unwind.target.block).or_default().push(id);
+        }
+    }
+    let mut messages = HashSet::new();
+    let mut seen = HashSet::new();
+    while let Some(block) = current.take().filter(|block| seen.insert(*block)) {
+        let Some([source]) = predecessors.get(&block).map(Vec::as_slice) else { break };
+        let ir::TermKind::Cond { yes, no, .. } = &body.blocks.get(*source)?.term.kind else { break };
+        if yes.block != block || no.block == block {
+            break;
+        }
+        let ir::TermKind::Trap { code: ir::TrapCode::Unbound, message } = &body.blocks.get(no.block)?.term.kind
+        else {
+            break;
+        };
+        messages.insert(message.clone());
+        current = Some(*source);
+    }
+    Ok(messages)
 }
 
 fn is_false(body: &ir::Body, value: ir::ValueId) -> bool {

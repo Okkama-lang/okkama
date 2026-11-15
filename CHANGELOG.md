@@ -8,6 +8,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A constructor that may leave a field unbound runs on Champ and fails as on Tomato (#708).** The
+  OIR-2 producer gives each constructor field that its body may leave unbound (no default, not given,
+  no top-level write) a bound flag that crosses joins as the fields do, and checks it before the complete
+  self with Tomato's failure, `Object "Gate" field "a" was not initialized`. The producer's construction
+  self-check takes a field that may be unbound into a complete self only behind that check.
+  `L04.ctor.unbound-field-dies-after-body` and `L12.constructor-nested-resource-failure` (bound fields
+  destroyed once when the body or a nested construction fails) run on Champ against their case.json;
+  `L09.csv.rows-and-round-trip` already ran after #702. The early-self form is #746.
 - **An async defer with owned inputs never starts when a cancellation is pending, as on Tomato
   (#728).** Ruling #601 K2: a `defer await` is an unshielded await of the deferred call, and Tomato
   raises a pending cancellation before the call starts. Champ did so only for an empty input packet;
