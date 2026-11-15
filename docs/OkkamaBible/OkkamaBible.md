@@ -103,7 +103,8 @@
   - [8.8 Sorting](#88-sorting)
   - [8.9 A worked example: counting words](#89-a-worked-example-counting-words)
   - [8.10 A worked example: grouping and joining](#810-a-worked-example-grouping-and-joining)
-  - [8.11 Limits](#811-limits)
+  - [8.11 Okkama among other languages](#811-okkama-among-other-languages)
+  - [8.12 Limits](#812-limits)
 - [Chapter 9. Expressions and Control Flow](#chapter-9-expressions-and-control-flow)
   - [9.1 Blocks have values](#91-blocks-have-values)
   - [9.2 Names are bound once](#92-names-are-bound-once)
@@ -4258,7 +4259,37 @@ Codd's relational model [[Codd 1970](#ref-codd1970)]. The operations are the sam
 program adds is that each one is a typed expression whose result can be
 named, tested and passed on.
 
-## 8.11 Limits
+## 8.11 Okkama among other languages
+
+| | Default collections | Map iteration order | `map`, `filter` |
+|---|---|---|---|
+| Python | mutable `list` and `dict` | insertion order, guaranteed since 3.7 [[Python built-in types](#ref-pystdtypes)] | lazy iterators [[Python built-in functions](#ref-pyfunctions)] |
+| Java | mutable; `List.of` and `List.copyOf` give unmodifiable lists [[Java SE 21 API](#ref-javalist)] | depends on the class: unspecified for `HashMap`, sorted for `TreeMap` | lazy streams |
+| Go | mutable slices and maps | not specified, and not the same from one iteration to the next [[Go specification](#ref-gospec)] | loops |
+| Rust | `Vec`, `HashMap`, changed through `mut` | arbitrary for `HashMap` [[Rust standard library](#ref-rusthashmap)], sorted for `BTreeMap` | lazy iterators [[Klabnik 2023](#ref-klabnik2023)] |
+| Clojure | persistent, immutable, sharing structure [[Hickey 2008](#ref-hickey2008)] | unordered `hash-map`, ordered `sorted-map` [[Clojure Reference](#ref-clojureds)] | lazy sequences |
+| Okkama | immutable arrays and maps | always sorted by key | eager; lazy views in `collections/views` |
+
+Two columns show the choices.
+
+- **Order.** Go goes furthest in the other direction: the specification
+  promises nothing about map order, so a program that depends on it is
+  wrong. Python chose insertion order. Okkama chooses sorted order for every
+  map, so the order follows from the keys alone: two maps with the same
+  entries iterate the same way, however they were built (Section 8.3).
+- **Laziness.** Python, Java, Rust and Clojure make `map` and `filter` lazy:
+  nothing runs until the result is consumed, which saves work on long
+  pipelines and makes the moment of a failure harder to see. Okkama's are
+  eager, so a failure inside a block happens at the call that contains it.
+  When laziness pays, the program asks for it by name with a view
+  (Section 8.2).
+
+Clojure is the closest relative. Its collections are immutable values that
+share structure between versions, as Okkama's persistent library
+collections do (Section 8.5); the difference is that in Okkama there is no
+mutable collection beside them to fall back on.
+
+## 8.12 Limits
 
 - **What still copies.** The `map()` idiom and `a + b` of two large arrays cost the full result.
 - **A large map’s first update costs a copy.** Subsequent updates can be cheaper; do not assume every update has the same cost.
@@ -19773,6 +19804,7 @@ limits are deliberate, and Chapter 28 discusses the ones that are not.
 - <a id="ref-jep421"></a>Brent Christian (2021). JEP 421: Deprecate Finalization for Removal. OpenJDK. https://openjdk.org/jeps/421
 - <a id="ref-church1936"></a>Alonzo Church (1936). An Unsolvable Problem of Elementary Number Theory. *American Journal of Mathematics* 58(2): 345–363. https://doi.org/10.2307/2371045
 - <a id="ref-claessen2000"></a>Koen Claessen, John Hughes (2000). QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs. In *Proceedings of ICFP 2000*: 268–279. ACM. https://doi.org/10.1145/351240.351266
+- <a id="ref-clojureds"></a>Rich Hickey and contributors (2026). Data Structures. *Clojure Reference*. https://clojure.org/reference/data_structures
 - <a id="ref-codd1970"></a>E. F. Codd (1970). A Relational Model of Data for Large Shared Data Banks. *Communications of the ACM* 13(6): 377–387. https://doi.org/10.1145/362384.362685
 - <a id="ref-codd1979"></a>E. F. Codd (1979). Extending the Database Relational Model to Capture More Meaning. *ACM Transactions on Database Systems* 4(4): 397–434. https://doi.org/10.1145/320107.320109
 - <a id="ref-codd1990"></a>E. F. Codd (1990). *The Relational Model for Database Management: Version 2*. Addison-Wesley.
@@ -19812,6 +19844,7 @@ limits are deliberate, and Chapter 28 discusses the ones that are not.
 - <a id="ref-hoare2009"></a>Tony Hoare (2009). Null References: The Billion Dollar Mistake. Talk at QCon London, March 2009. https://www.infoq.com/presentations/Null-References-The-Billion-Dollar-Mistake-Tony-Hoare/
 - <a id="ref-ieee754"></a>IEEE (2019). *IEEE Standard for Floating-Point Arithmetic* (IEEE Std 754-2019). https://doi.org/10.1109/IEEESTD.2019.8766229
 - <a id="ref-wasi"></a>WebAssembly System Interface (WASI): capability-based access, pre-opened directories. https://wasi.dev/
+- <a id="ref-javalist"></a>Oracle (2023). Interface List<E>. *Java SE 21 API Specification*. https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/List.html
 - <a id="ref-jones2023"></a>Richard Jones, Antony Hosking, Eliot Moss (2023). *The Garbage Collection Handbook: The Art of Automatic Memory Management*, 2nd edition. CRC Press.
 - <a id="ref-baker1977"></a>Henry C. Baker Jr. and Carl Hewitt (1977). The Incremental Garbage Collection of Processes. MIT AI Laboratory Working Paper 149; also in *Proceedings of the Symposium on Artificial Intelligence and Programming Languages*, Rochester, NY. https://hdl.handle.net/1721.1/41969
 - <a id="ref-halstead1985"></a>Robert H. Halstead Jr. (1985). MULTILISP: A Language for Concurrent Symbolic Computation. *ACM Transactions on Programming Languages and Systems* 7(4): 501–538. https://doi.org/10.1145/4472.4478
@@ -19870,6 +19903,8 @@ limits are deliberate, and Chapter 28 discusses the ones that are not.
 - <a id="ref-posix2017"></a>IEEE and The Open Group (2018). Utility Conventions. In *The Open Group Base Specifications Issue 7, 2018 edition* (IEEE Std 1003.1-2017), Base Definitions, Chapter 12. https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap12.html
 - <a id="ref-prasad2020"></a>Aanand Prasad, Ben Firshman, Carl Tashian, Eva Parish (2020). *Command Line Interface Guidelines*. https://clig.dev/
 - <a id="ref-promisesaplus"></a>Promises/A+ organization. Promises/A+, rule 2.2.4 and note 3.1. https://promisesaplus.com/
+- <a id="ref-pyfunctions"></a>Python Software Foundation (2026). Built-in Functions: map. *The Python Standard Library*. https://docs.python.org/3/library/functions.html#map
+- <a id="ref-pystdtypes"></a>Python Software Foundation (2026). Built-in Types: Mapping Types — dict. *The Python Standard Library*. https://docs.python.org/3/library/stdtypes.html#mapping-types-dict
 - <a id="ref-pydoctest"></a>Python Software Foundation (2026). doctest — Test interactive Python examples. *The Python Standard Library*. https://docs.python.org/3/library/doctest.html
 - <a id="ref-pysqlite3"></a>Python Software Foundation (2026). sqlite3 — DB-API 2.0 interface for SQLite databases: How to use the connection context manager. *The Python Standard Library*. https://docs.python.org/3/library/sqlite3.html#sqlite3-connection-context-manager
 - <a id="ref-pymock"></a>Python Software Foundation (2026). unittest.mock — mock object library. *The Python Standard Library*. https://docs.python.org/3/library/unittest.mock.html
@@ -19885,6 +19920,7 @@ limits are deliberate, and Chapter 28 discusses the ones that are not.
 - <a id="ref-ritchie1993"></a>Dennis M. Ritchie (1993). The Development of the C Language. *HOPL-II: The Second ACM SIGPLAN Conference on History of Programming Languages*: 201–208. https://doi.org/10.1145/154766.155580
 - <a id="ref-pep343"></a>Guido van Rossum, Nick Coghlan (2005). PEP 343 — The "with" Statement. Python Enhancement Proposals. https://peps.python.org/pep-0343/
 - <a id="ref-pep484"></a>Guido van Rossum, Jukka Lehtosalo, Łukasz Langa (2014). PEP 484 — Type Hints. Python Enhancement Proposals. https://peps.python.org/pep-0484/
+- <a id="ref-rusthashmap"></a>The Rust Project Developers (2026). Struct HashMap. *The Rust Standard Library*. https://doc.rust-lang.org/std/collections/struct.HashMap.html
 - <a id="ref-saltzer1975"></a>Jerome H. Saltzer, Michael D. Schroeder (1975). The Protection of Information in Computer Systems. *Proceedings of the IEEE* 63(9): 1278–1308. https://doi.org/10.1109/PROC.1975.9939
 - <a id="ref-scales2022"></a>Dan Scales (2022). Go 1.18 Implementation of Generics via Dictionaries and Gcshape Stenciling. Design document, Go proposal repository, 22 February 2022. https://go.googlesource.com/proposal/+/master/design/generics-implementation-dictionaries-go1.18.md
 - <a id="ref-goruntime"></a>The Go Authors. The Go runtime scheduler, src/runtime/proc.go, function checkdead. https://go.dev/src/runtime/proc.go

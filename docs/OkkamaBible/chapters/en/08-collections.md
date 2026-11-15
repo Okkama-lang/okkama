@@ -310,7 +310,37 @@ Codd's relational model [@codd1970]. The operations are the same; what the
 program adds is that each one is a typed expression whose result can be
 named, tested and passed on.
 
-## 8.11 Limits
+## 8.11 Okkama among other languages
+
+| | Default collections | Map iteration order | `map`, `filter` |
+|---|---|---|---|
+| Python | mutable `list` and `dict` | insertion order, guaranteed since 3.7 [@pystdtypes] | lazy iterators [@pyfunctions] |
+| Java | mutable; `List.of` and `List.copyOf` give unmodifiable lists [@javalist] | depends on the class: unspecified for `HashMap`, sorted for `TreeMap` | lazy streams |
+| Go | mutable slices and maps | not specified, and not the same from one iteration to the next [@gospec] | loops |
+| Rust | `Vec`, `HashMap`, changed through `mut` | arbitrary for `HashMap` [@rusthashmap], sorted for `BTreeMap` | lazy iterators [@klabnik2023] |
+| Clojure | persistent, immutable, sharing structure [@hickey2008] | unordered `hash-map`, ordered `sorted-map` [@clojureds] | lazy sequences |
+| Okkama | immutable arrays and maps | always sorted by key | eager; lazy views in `collections/views` |
+
+Two columns show the choices.
+
+- **Order.** Go goes furthest in the other direction: the specification
+  promises nothing about map order, so a program that depends on it is
+  wrong. Python chose insertion order. Okkama chooses sorted order for every
+  map, so the order follows from the keys alone: two maps with the same
+  entries iterate the same way, however they were built (Section 8.3).
+- **Laziness.** Python, Java, Rust and Clojure make `map` and `filter` lazy:
+  nothing runs until the result is consumed, which saves work on long
+  pipelines and makes the moment of a failure harder to see. Okkama's are
+  eager, so a failure inside a block happens at the call that contains it.
+  When laziness pays, the program asks for it by name with a view
+  (Section 8.2).
+
+Clojure is the closest relative. Its collections are immutable values that
+share structure between versions, as Okkama's persistent library
+collections do (Section 8.5); the difference is that in Okkama there is no
+mutable collection beside them to fall back on.
+
+## 8.12 Limits
 
 - **What still copies.** The `map()` idiom and `a + b` of two large arrays cost the full result.
 - **A large map’s first update costs a copy.** Subsequent updates can be cheaper; do not assume every update has the same cost.
