@@ -485,7 +485,10 @@ fake fields; role fakes and their ordinary typed fields remain available.
     verifier models which creations can hold an obligation (#700);
     `scope.transfer` moves only admitted identities (#697); shielding is a
     property of every close, and `cleanup.shield` is gone (#690).
-  - **Parity.** Champ's failure messages match Tomato's (#698, #712, #713).
+  - **Parity.** Champ's failure messages match Tomato's (#698, #712, #713);
+    `catch e is Cancelled` works on Champ (#724); and, as on Tomato, a
+    cancellation still pending at a task's final exit keeps the result, while
+    a `defer await` of the final cleanup is interrupted by it.
 - **Champ coverage, wave 3 (#569, #601, #645, #654, #666–#668).** On
   Champ the conformance suite rose from 665 to 673 of 1040 cases, and no
   case fails on both engines.
