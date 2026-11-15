@@ -143,8 +143,8 @@ impl Payload for CacheRecord {
     }
 }
 
-/// A test-only record of the Future protocol: starts, resumes and suspensions come from test bodies,
-/// publications and the queue entries they make from the runtime.
+/// A test-only record of the Future protocol, kept by the runtime for every body, compiled or not: starts,
+/// resumes and suspensions as `run_body` sees them, publications and the queue entries they make.
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FutureStep {
@@ -292,10 +292,16 @@ impl Runtime {
                 return true;
             }
         };
+        #[cfg(test)]
+        self.champ_event(if get(frame, tasks::RESUME) == 0 { FutureStep::Start } else { FutureStep::Resume }, frame);
         self.running.push(frame);
         // SAFETY: an async body takes the context and its frame.
         let pending = unsafe { crate::jit::invoke(code, ctx, &[frame]) } != 0;
         self.running.pop();
+        #[cfg(test)]
+        if pending {
+            self.champ_event(FutureStep::Pending, frame);
+        }
         let context = unsafe { &mut *ctx };
         match context.status {
             OK => {}
