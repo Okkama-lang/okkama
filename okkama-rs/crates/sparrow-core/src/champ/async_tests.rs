@@ -2413,3 +2413,6 @@ fn champ_v10_d18_delivers_between_the_first_plan_and_the_aborted_reserve_plan() 
 
 #[path = "async_resources_tests.rs"]
 mod resources;
+
+#[path = "async_cancel_tests.rs"]
+mod cancel;
