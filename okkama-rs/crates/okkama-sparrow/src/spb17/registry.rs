@@ -125,6 +125,7 @@ registry! {
     77 => CleanupDeliverCancel, "cleanup.deliver_cancel";
     96 => InvokeDispatch, "invoke.dispatch";
     97 => InvokeDispatchOwn, "invoke.dispatch.own";
+    98 => OwnDynamic, "own.dynamic";
 }
 
 impl Opcode {
@@ -154,6 +155,9 @@ impl Opcode {
             (OwnSplitChecked, Tag::Unwind) => vec![S(Packet), Value(Type::Failure)],
             (ScopeSplit, Tag::Normal) => vec![S(ScopeState), S(Packet), S(Deps)],
             (ScopeSplit, Tag::Unwind) => vec![S(ScopeState), Value(Type::Failure)],
+            // The packet joins the scope inventory; a failed check returns it unaccepted.
+            (OwnDynamic, Tag::Normal) => vec![S(ScopeState)],
+            (OwnDynamic, Tag::Unwind) => vec![S(ScopeState), S(Packet), Value(Type::Failure)],
             (ScopeTransfer, Tag::Normal | Tag::Unwind) => {
                 let mut slots = vec![S(ScopeState)];
                 if context.between {
@@ -250,7 +254,7 @@ impl Opcode {
             Catch | Lookup => vec![Tag::Some, Tag::None],
             BuilderPush | BuilderAppend | BuilderRange | BuilderFinish => vec![Tag::Normal, Tag::Unwind],
             Fail => vec![Tag::Unwind],
-            OwnSplitChecked | ScopeSplit | ScopeTransfer | ArrayGet | Evaluate | Await => {
+            OwnSplitChecked | ScopeSplit | ScopeTransfer | OwnDynamic | ArrayGet | Evaluate | Await => {
                 vec![Tag::Normal, Tag::Unwind]
             }
             InvokeObserve | InvokeDispatch if context.may_fail => vec![Tag::Normal, Tag::Unwind],
@@ -282,7 +286,7 @@ impl Opcode {
     }
 
     pub fn is_terminator(self) -> bool {
-        matches!(self, Self::OwnSplitChecked | Self::ScopeSplit | Self::ScopeTransfer |
+        matches!(self, Self::OwnSplitChecked | Self::ScopeSplit | Self::ScopeTransfer | Self::OwnDynamic |
             Self::InvokeCallOwn | Self::InvokeObserve | Self::InvokeDefer | Self::CleanupNext | Self::ExitDispatch |
             Self::InvokeDispatch | Self::InvokeDispatchOwn |
             Self::FailureDispatch | Self::RetOwn | Self::RetDefer | Self::ArrayGet | Self::Fail | Self::Evaluate
@@ -462,6 +466,7 @@ impl Opcode {
                 Self::OwnSplitChecked => "champ_own_split_checked",
                 Self::ScopeSplit => "champ_scope_split",
                 Self::ScopeTransfer => "champ_scope_transfer",
+                Self::OwnDynamic => "champ_own_dynamic",
                 Self::OwnCreateCommit => "champ_own_create_commit",
                 // These forms lower to CFG, return transport, or parallel slot moves.
                 _ => return None,
@@ -504,6 +509,7 @@ helper_registry! {
         "champ_scope_split" => &[C, P, P, P], G, Some(O::ScopeSplit);
         "champ_scope_split_admissible" => &[C, P, P, P], G, Some(O::ScopeSplit);
         "champ_scope_transfer" => &[C, P, P, P], G, Some(O::ScopeTransfer);
+        "champ_own_dynamic" => &[C, P, P, P], G, Some(O::OwnDynamic);
         "champ_exit_prepare" => &[C, P, P], L, Some(O::ExitPrepare);
         "champ_exit_extend" => &[C, P, P, P], L, Some(O::ExitExtend);
         "champ_exit_replace" => &[C, P, P, P], L, Some(O::ExitReplace);

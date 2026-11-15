@@ -1,8 +1,8 @@
 #![cfg(feature = "champ-abi")]
-//! #569 C3b (open action invocation) and C6 (`any`) conformance cases, run end to
-//! end in Champ in process and compared with their case.json. A case the SPB 17
-//! backend does not take yet is checked through own and Low (`through_low!`);
-//! a case that stops before Low is ignored with its ticket.
+//! #569 C3b (open action invocation) conformance cases, run end to end in Champ in
+//! process and compared with their case.json. A case the SPB 17 backend does not take
+//! yet is checked through own and Low (`through_low!`); a case that stops before Low is
+//! ignored with its ticket. The C6 (`any`) cases are in `champ_cases_any.rs`.
 //! Only pure language cases: no processes, workers, network or test mode.
 
 use okkama_compiler::lowering::{LoadedModule, ModuleLoader, RootFile, oir2};
@@ -116,6 +116,15 @@ macro_rules! through_low {
     };
 }
 
+macro_rules! case {
+    ($name:ident, $id:literal) => {
+        #[test]
+        fn $name() {
+            check($id);
+        }
+    };
+}
+
 macro_rules! stops_before_low {
     ($name:ident, $id:literal, $reason:literal) => {
         #[test]
@@ -126,36 +135,88 @@ macro_rules! stops_before_low {
     };
 }
 
-// C6: `any` boundaries. High, own and Low pass; SPB 17 has no `any` type and no
-// role layout yet (`compile_low`: "type Any: not yet in S1"; `layout`).
-through_low!(any_overloads_selection, "L03.overloads.selection");
-through_low!(any_variadic_overload_by_tail_type, "L03.variadic.overload-by-tail-type");
-through_low!(any_ctor_typed_overload, "L04.ctor.typed-overload");
-through_low!(any_transport, "L05.any.transport");
-through_low!(any_array_replaced, "L05.array.replaced");
-through_low!(any_boundary_typed_values, "L05.boundary.typed-values");
-through_low!(any_generic_inference, "L05.generic.inference");
-through_low!(any_literal_empty_collections, "L05.literal.empty-collections");
-through_low!(any_literal_heterogeneous_boundaries, "L05.literal.heterogeneous-boundaries");
-through_low!(any_literal_heterogeneous_to_any, "L05.literal.heterogeneous-to-any");
-through_low!(any_literal_homogeneous_inference, "L05.literal.homogeneous-inference");
-stops_before_low!(any_variadic_string_tail_converts, "L03.variadic.string-tail-converts",
-    "#569: OIR-2 has no char-to-string conversion");
-
-// C3b: open action invocation. High, own and Low pass (#683: Low settles the Closure
-// transfer of an open call result in the cleanup automaton). SPB 17 has no `fn`
-// values, `fn.call`, `own.dynamic` or protocol table yet (`compile_low`: "protocols
-// ... not yet in S1"; #676 builds closure values), and no role layout (`layout`).
-through_low!(open_anon_capture_and_escape, "L03.anon.capture-and-escape");
-through_low!(open_anon_captures_self, "L03.anon.captures-self");
-through_low!(open_anon_compose, "L03.anon.compose");
-through_low!(open_anon_self_retained_only_when_read, "L03.anon.self-retained-only-when-read");
-through_low!(open_anonymous_lexical_scope, "L03.anonymous.lexical-scope");
-through_low!(open_caps_ordinary_block_body, "L04.caps.ordinary-block-body");
-through_low!(open_invariant_escaped_self_bound_action, "L04.invariant.escaped-self-bound-action");
-through_low!(open_privacy_closure_reads_self_field, "L04.privacy.closure-reads-self-field");
-through_low!(open_successor_bound_action_invoked, "L04.successor.bound-action-invoked");
-through_low!(open_successor_closure_transferred, "L04.successor.closure-transferred");
+// C3b: open action invocation. An open call dispatches over every closure layout of its `fn` type with the
+// registered open callable contract, and its result packet joins the scope through the Closure protocol
+// (`own.dynamic`, #676); the scope's cleanup releases what it holds once.
+case!(open_anon_capture_and_escape, "L03.anon.capture-and-escape");
+case!(open_anon_captures_self, "L03.anon.captures-self");
+case!(open_anon_compose, "L03.anon.compose");
+case!(open_anon_self_retained_only_when_read, "L03.anon.self-retained-only-when-read");
+case!(open_anonymous_lexical_scope, "L03.anonymous.lexical-scope");
+case!(open_caps_ordinary_block_body, "L04.caps.ordinary-block-body");
+case!(open_invariant_escaped_self_bound_action, "L04.invariant.escaped-self-bound-action");
+case!(open_privacy_closure_reads_self_field, "L04.privacy.closure-reads-self-field");
+case!(open_successor_bound_action_invoked, "L04.successor.bound-action-invoked");
+case!(open_successor_closure_transferred, "L04.successor.closure-transferred");
+// compile_low: a managed array and map of role values that reach resources.
 through_low!(open_regions_role_instances, "L07.regions.role-instances");
 stops_before_low!(open_collections_ordered_sets, "L09.collections.ordered-sets",
     "#687: low cleanup inventory inference exceeds the step budget");
+
+/// A single-file program of this test, run in Champ: its exit status and stdout.
+fn run_source(text: &str) -> Observed {
+    let directory = root().join("conformance/harness/okkama");
+    let bytes = compile(&directory, text).unwrap_or_else(|error| panic!("build: {error}"));
+    let limits = sparrow_core::budget::Limits { steps: Some(10_000_000), ..sparrow_core::budget::Limits::default() };
+    let run = sparrow_core::run_captured(bytes, limits).unwrap_or_else(|error| panic!("load: {error}"));
+    Observed { exit: run.result.ok(), stdout: String::from_utf8_lossy(&run.stdout).into_owned() }
+}
+
+/// An open call that returns a fresh resource: the Closure protocol moves it into the calling scope, which
+/// destroys it once when it ends. Tomato prints the same.
+#[test]
+fn an_open_call_result_is_destroyed_by_its_scope_once() {
+    let observed = run_source(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+object Factory {
+    Factory();
+    maker(name is string) is () is Res { () is Res { Res(name: name); }; }
+}
+main() is int {
+    let out = Stdout();
+    let make = Factory().maker("made");
+    {
+        let r = make();
+        out.writeln("got " + r.label());
+    }
+    let s = make();
+    out.writeln("again " + s.label());
+    out.writeln("end");
+    0;
+}"#);
+    let stdout = "got made\ndestroy made\nagain made\nend\ndestroy made\n";
+    assert_eq!(observed, Observed { exit: Some(0), stdout: stdout.into() });
+}
+
+/// An opaque action value that owns a resource it captured: each call reads it, and the resource is destroyed
+/// once, when the value's owner scope ends. Tomato prints the same.
+#[test]
+fn an_opaque_action_value_releases_its_captured_resource_once() {
+    let observed = run_source(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+object Factory {
+    Factory();
+    reader(res is Res) is () is string { () is string { res.label() + "!"; }; }
+}
+main() is int {
+    let out = Stdout();
+    let read = Factory().reader(Res(name: "kept"));
+    out.writeln(read());
+    out.writeln(read());
+    out.writeln("end");
+    0;
+}"#);
+    assert_eq!(observed, Observed { exit: Some(0), stdout: "kept!\nkept!\nend\ndestroy kept\n".into() });
+}

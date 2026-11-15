@@ -124,9 +124,9 @@ fn champ_s2_registry_layouts_effects_and_single_outcome_channel() {
     assert_eq!(size_of::<PacketSlot>(), 8);
     let helpers: Vec<_> = crate::jit::HELPERS.iter().filter(|(name, _)| name.starts_with("champ_")).collect();
     // #622 adds champ_machine_collection, champ_machine_builder and champ_machine_lookup; #675 adds
-    // champ_machine_scalar; #676 adds champ_machine_role_narrow; #601 V8 adds the eight async helpers of
-    // Champ draft 3 §14.4 and champ_machine_future_destination.
-    assert_eq!(helpers.len(), 70);
+    // champ_machine_scalar; #676 adds champ_machine_role_narrow and champ_own_dynamic; #601 V8 adds the eight
+    // async helpers of Champ draft 3 §14.4 and champ_machine_future_destination.
+    assert_eq!(helpers.len(), 71);
     for &(name, effects) in helpers {
         let abi = helper_abi(name).unwrap();
         let class = abi.class;
@@ -263,6 +263,42 @@ fn champ_s2_splits_disjoint_rest_selected_and_failure_preserves_original() {
     assert!(words(&h.runtime, &split_again.rest).is_empty());
     assert_eq!(words(&h.runtime, &split_again.selected), HashSet::from([a]));
     h.gc(&[split.rest.record, split_again.rest.record, split_again.selected.record]);
+}
+
+/// `own.dynamic`: a packet of unknown retention joins the scope inventory (its identities take the scope's
+/// holder and owner); a packet that fails the checks (an identity already in the scope) comes back unaccepted
+/// with the state, both unchanged, and a program failure.
+#[test]
+fn champ_s2_dynamic_transfer_joins_the_scope_or_returns_the_packet() {
+    let mut h = Harness::new();
+    let mut state = h.scope();
+    let target = scope(&h.runtime, state.record).unwrap();
+    let foreign = h.runtime.champ_new_owner().unwrap();
+    let (a, mut packet) = h.fresh(0, foreign);
+    let before = h.identity(a);
+    let mut post = ScopeSplitPost::default();
+    assert_eq!(rt_own_dynamic(&mut h.ctx, &mut state, &mut packet, &mut post), NORMAL);
+    assert_eq!((state.record, packet.record, post.selected.record, post.failure), (0, 0, 0, 0));
+    changed(before, h.identity(a), target.holder.get(), target.owner.get());
+    let joined = scope(&h.runtime, post.state.record).unwrap();
+    assert_eq!(joined.admission.words().collect::<Vec<_>>(), vec![a]);
+    h.gc(&[post.state.record]);
+    // The same identity again: it is already in the scope's inventory, so the check fails.
+    let mut state = ScopeSlot { record: post.state.record };
+    let mut again = PacketSlot::default();
+    let run = super::helpers::run(&h.runtime, vec![a], target.holder, target.owner);
+    again.record = super::helpers::store(&mut h.runtime, Data::Packet(run));
+    let (original, unaccepted) = (state.record, again.record);
+    let held = h.identity(a);
+    let mut failed = ScopeSplitPost::default();
+    assert_eq!(rt_own_dynamic(&mut h.ctx, &mut state, &mut again, &mut failed), UNWIND);
+    assert_eq!((failed.state.record, failed.selected.record), (original, unaccepted));
+    assert_eq!((state.record, again.record), (0, 0));
+    assert_eq!(h.identity(a), held);
+    assert_eq!(h.ctx.status, FAILED);
+    assert_eq!(h.ctx.failure, failed.failure);
+    assert!(matches!(h.runtime.failure(failed.failure).map(|failure| &failure.kind), Some(FailureKind::Program(_))));
+    h.gc(&[failed.state.record, failed.selected.record]);
 }
 
 #[test]

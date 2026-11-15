@@ -53,7 +53,7 @@ pub(super) fn consumed(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<
             BuilderPush | BuilderAppend | BuilderRange | BuilderFinish | BuilderAbandon => {
                 index + 1 == locations.len()
             }
-            OwnMove | OwnJoin | OwnAdmit | OwnAccept | CleanupBegin | ExitAbort | ExitDispatch => true,
+            OwnMove | OwnJoin | OwnAdmit | OwnAccept | OwnDynamic | CleanupBegin | ExitAbort | ExitDispatch => true,
             OwnBind | OwnRebind => index == 0 || index == 2,
             OwnStage => index < 1 + usize::from(between) || index + 1 == locations.len(),
             ScopeTransfer => index < 1 + usize::from(between),

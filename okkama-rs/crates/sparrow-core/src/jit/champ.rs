@@ -870,6 +870,11 @@ impl Emit<'_, '_> {
                     args.push(self.selection_record(id));
                 }
             }
+            O::OwnDynamic => {
+                helper = "champ_own_dynamic";
+                args.push(self.pointer(locations[0]));
+                args.push(self.pointer(locations[1]));
+            }
             O::ScopeTransfer => {
                 helper = "champ_scope_transfer";
                 let between = arguments.first() == Some(&A::Flag(true));

@@ -7,7 +7,7 @@ fn object(name: &str, handle: bool, storage_fields: Vec<Type>) -> Object {
         .filter(|(_, ty)| matches!(ty, Type::Str)).map(|(index, _)| index as u32).collect();
     Object {
         name: name.into(), fields: vec![], error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle,
-        role: None, implements: vec![],
+        role: None, implements: vec![], any_box: false,
         layout: ObjectRuntimeLayout {
             allocation_words: (1 + storage_fields.len() as u32).max(2),
             storage_fields, identity_offset: None, has_destroy: false, may_reach_resource: false,

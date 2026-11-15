@@ -7,6 +7,9 @@ pub(super) fn invoke(ctx: *mut Ctx, function: usize, io: *mut CallOwn, args: &[W
     let runtime = unsafe { &mut *(*ctx).runtime };
     let source = runtime.champ.machine.as_ref().expect("Champ program").source.clone();
     let name = source.functions[function].proofs.entry.as_ref().unwrap().external.as_deref().unwrap();
+    if name == s::p1::SYNC_CLOSURE_CLEANUP || name == s::p1::ANY_CLEANUP {
+        return opaque_cleanup(ctx, io);
+    }
     // Acceptance follows the packet ABI for every call-boundary entry, including replace.
     let mut post = CallPost::default();
     if !io.is_null() {
@@ -118,6 +121,27 @@ pub(super) fn native_refusal(ctx: *mut Ctx, name: &str) {
     let object = runtime.heap.object_new(descriptor, &fields);
     let failure = runtime.failure_new(FailureKind::Native(object));
     unsafe { (*ctx).failure = failure };
+}
+
+/// An opaque cleanup intrinsic releases the complete owner graph of an action value or `any` box: every
+/// identity of the packet it is given, once, through the common cleanup executor, then returns an empty
+/// packet. Its contract has no failure, so a destroy failure stops the machine.
+pub(super) fn opaque_cleanup(ctx: *mut Ctx, io: *mut CallOwn) -> Word {
+    if io.is_null() {
+        return super::helpers::stop(ctx, Error("opaque cleanup without its packet".into()));
+    }
+    let input = unsafe { &mut (*io).input };
+    match super::cleanup::close_packet(ctx, input, 0) {
+        Ok(0) => {}
+        Ok(_) => return super::helpers::stop(ctx, Error("opaque cleanup: a destroy failed".into())),
+        Err(error) => return super::helpers::stop(ctx, error),
+    }
+    let mut post = CallPost::default();
+    if rt_own_empty(ctx, &mut post.packet) != NORMAL {
+        return OUTCOME_STOP;
+    }
+    unsafe { (*io).output.write(post) };
+    NORMAL
 }
 
 pub(super) fn error_text(runtime: &Runtime, source: &s::Program, object: Word) -> String {

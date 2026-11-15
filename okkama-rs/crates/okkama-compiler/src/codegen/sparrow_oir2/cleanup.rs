@@ -167,6 +167,21 @@ impl Emitter<'_> {
                 arguments.push(A::Selection(self.selection(*selection)?));
                 (O::ScopeTransfer, arguments)
             }
+            Dynamic { state, packet, target, reason, protocol } => {
+                let kind = super::protocol(self.module, *protocol)?;
+                let expected = match kind {
+                    s::Protocol::Closure => o::DynamicReason::Closure,
+                    s::Protocol::Any => o::DynamicReason::Any,
+                };
+                let scope = match self.module.types.get(self.body.values.get(*state)?.ty)? {
+                    o::Type::Service(o::ServiceType::Scope(scope)) => Some(*scope),
+                    _ => None,
+                };
+                if *reason != expected || scope != Some(*target) {
+                    return Err(error("dynamic transfer reason, protocol or target scope mismatch"));
+                }
+                (O::OwnDynamic, vec![A::Protocol(kind), location(*state)?, location(*packet)?])
+            }
             _ => return Err(later(&format!("ownership operation {op:?} outside synchronous P1 transport"))),
         })
     }

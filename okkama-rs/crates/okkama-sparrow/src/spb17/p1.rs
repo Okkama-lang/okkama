@@ -14,10 +14,17 @@ pub struct P1Contracts {
     core: Vec<Function>,
     natives: BTreeMap<String, Function>,
     handles: BTreeMap<String, u32>,
+    /// The `fn` roles: one owning slot named `call`.
+    callables: Vec<u32>,
 }
 
 /// The failure mask of a native entry: a provider refusal (`NativeFailure`).
 pub const NATIVE_FAILURES: u32 = 8;
+
+/// The opaque cleanup intrinsic of an action value (OIR-2 catalogue, #569 C3b).
+pub const SYNC_CLOSURE_CLEANUP: &str = "oir.sync_closure.cleanup";
+/// The opaque cleanup intrinsic of an `any` box (OIR-2 catalogue, #569 C6).
+pub const ANY_CLEANUP: &str = "oir.any.cleanup";
 
 impl P1Contracts {
     pub fn new(objects: &[Object]) -> Result<Self, Error> {
@@ -102,7 +109,10 @@ impl P1Contracts {
                 natives.insert(native.symbol().to_owned(), function);
             }
         }
-        Ok(Self { core: entries, natives, handles })
+        let callables = objects.iter().enumerate().filter(|(_, object)| object.role.as_ref().is_some_and(|role| {
+            matches!(role.slots.as_slice(), [slot] if slot.name == "call" && slot.entry_abi == EntryAbi::Owned)
+        })).map(|(id, _)| id as u32).collect();
+        Ok(Self { core: entries, natives, handles, callables })
     }
 
     /// The finite P1 entries: Atomic operations, `Error.text` and the test intrinsics.
@@ -118,6 +128,9 @@ impl P1Contracts {
     /// The checked unresolved-provider adapter for `declared` (P2.4 §4.7): `None` unless its symbol is
     /// canonical and absent from the runtime table and every type is data or a handle of its module.
     pub fn adapter(&self, declared: &Function) -> Option<Function> {
+        if let Some(entry) = self.opaque_cleanup(declared) {
+            return Some(entry);
+        }
         let name = declared.proofs.entry.as_ref()?.external.as_deref()?;
         let symbol = catalogue::Symbol::parse(name)?;
         if catalogue::admitted(name) != Err(catalogue::Admission::Unknown) {
@@ -140,6 +153,36 @@ impl P1Contracts {
             return None;
         }
         Some(entry(name, registers.to_vec(), declared.results.clone(), true, NATIVE_FAILURES))
+    }
+}
+
+impl P1Contracts {
+    /// The opaque cleanup family, keyed by its first parameter (OIR-2 catalogue, #569 C3b and C6):
+    /// `oir.sync_closure.cleanup` takes an action value (a `fn` role: one owning `call` slot) and
+    /// `oir.any.cleanup` an `any` box, each with its deps and the packet of the value's complete owner graph.
+    /// The entry releases that graph and returns an empty packet; it cannot fail. It is recomputed from
+    /// the key alone, so the declaration must equal it exactly.
+    pub fn opaque_cleanup(&self, declared: &Function) -> Option<Function> {
+        let name = declared.proofs.entry.as_ref()?.external.as_deref()?;
+        let key = *declared.registers.first()?;
+        let admitted = match (name, key) {
+            (SYNC_CLOSURE_CLEANUP, Type::Role(id)) => self.callables.contains(&id),
+            (ANY_CLEANUP, Type::Any) => true,
+            _ => false,
+        };
+        if !admitted {
+            return None;
+        }
+        Some(Function {
+            symbol: name.into(), entry_abi: EntryAbi::Owned,
+            registers: vec![key], services: vec![ServiceKind::Deps, ServiceKind::Packet],
+            params: vec![Location::Register(0), Location::Service(0), Location::Service(1)], results: vec![],
+            blocks: vec![], code: vec![],
+            proofs: FunctionProofs {
+                entry: Some(EntryContract { external: Some(name.into()), ..EntryContract::default() }),
+                ..FunctionProofs::default()
+            },
+        })
     }
 }
 

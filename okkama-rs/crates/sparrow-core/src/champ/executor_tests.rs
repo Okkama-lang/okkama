@@ -506,6 +506,60 @@ fn champ_s3_fresh_argument_overflow_runs_destroy_bodies_once_and_preserves_overf
     assert!(f.h.runtime.failure(failure.secondary[0]).unwrap().cleanup_origin);
 }
 
+extern "C" fn opaque_cleanup_adapter(ctx: *mut Ctx, io: *mut CallOwn, _: *const Word, _: u64) -> Outcome {
+    super::p1::opaque_cleanup(ctx, io)
+}
+fn opaque_cleanup_entry(f: &mut Fixture) -> EntryId {
+    f.h.runtime.champ_register_entry(EntryContract {
+        invoke: opaque_cleanup_adapter, arguments: vec![Repr::Ref], replacements: 0, summary: 0,
+        cleanup_mode: CLEANUP_ORDINARY,
+    })
+}
+/// The opaque cleanup intrinsic releases the complete owner graph it is given: each identity of its packet is
+/// destroyed once, in descending serial order, and the result packet is empty.
+#[test]
+fn champ_s3_opaque_cleanup_destroys_the_graph_once_and_returns_an_empty_packet() {
+    let mut f = Fixture::new();
+    let owner = f.h.runtime.champ_new_owner().unwrap();
+    let a = f.fresh(1, false, owner);
+    let b = f.fresh(2, false, owner);
+    let packet = f.join(vec![a, b]);
+    let entry = opaque_cleanup_entry(&mut f);
+    for &(object, _) in &f.objects {
+        f.h.runtime.roots.push((object, Repr::Ref));
+    }
+    let args = [f.log];
+    let mut post = CallPost::default();
+    let mut io = CallOwn { input: packet, entry_abi: entry, output: &mut post, context: 0, cleanup_mode: 0 };
+    f.h.ctx.entry_frame = frame_pointer!();
+    assert_eq!(rt_call_owned(&mut f.h.ctx, entry, args.as_ptr(), 1, &mut io, &mut post), NORMAL);
+    assert_eq!(f.h.ctx.status, OK);
+    assert_eq!(io.input.record, 0);
+    assert!(f.h.runtime.champ_packet_keys(&post.packet).unwrap().is_empty());
+    assert_eq!(f.trace(), "21");
+    f.assert_once();
+}
+
+/// Its contract has no failure: a destroy that fails stops the machine instead of unwinding.
+#[test]
+fn champ_s3_opaque_cleanup_stops_on_a_failing_destroy() {
+    let mut f = Fixture::new();
+    let owner = f.h.runtime.champ_new_owner().unwrap();
+    let packet = f.fresh(1, true, owner);
+    let entry = opaque_cleanup_entry(&mut f);
+    for &(object, _) in &f.objects {
+        f.h.runtime.roots.push((object, Repr::Ref));
+    }
+    let args = [f.log];
+    let mut post = CallPost::default();
+    let mut io = CallOwn { input: packet, entry_abi: entry, output: &mut post, context: 0, cleanup_mode: 0 };
+    f.h.ctx.entry_frame = frame_pointer!();
+    assert_eq!(rt_call_owned(&mut f.h.ctx, entry, args.as_ptr(), 1, &mut io, &mut post), OUTCOME_STOP);
+    assert_ne!(f.h.ctx.status, OK);
+    assert_eq!(f.h.identity(f.objects[0].0).life, Life::Dead);
+    f.h.reset_fatal();
+}
+
 #[test]
 fn champ_s3_journal_head_tail_drains_have_linear_storage_work() {
     for tail in [false, true] {

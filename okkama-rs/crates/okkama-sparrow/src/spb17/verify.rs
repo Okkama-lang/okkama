@@ -43,6 +43,11 @@ pub fn role_reaches_resource(p: &Program, role: u32) -> bool {
     implementors(p, role).any(|(id, _)| p.objects[id as usize].layout.may_reach_resource)
 }
 
+/// An `any` value is managed when some any box may reach a resource.
+pub fn any_reaches_resource(p: &Program) -> bool {
+    p.objects.iter().any(|object| object.any_box && object.layout.may_reach_resource)
+}
+
 /// The function of `slot` in the implementation table of `object` for `role`.
 pub fn implementation(p: &Program, object: u32, role: u32, slot: u32) -> Option<u32> {
     let table = p.objects.get(object as usize)?.implements.iter().find(|table| table.role == role)?;
@@ -147,6 +152,11 @@ pub(crate) fn closed_plain(p: &Program, ty: Type) -> bool {
         match ty {
             Type::Int | Type::Bool | Type::Str | Type::Range | Type::Bytes | Type::Byte | Type::Float
                 | Type::Char | Type::Rat | Type::Never => {}
+            // An `any` value is plain when every any box is.
+            Type::Any => {
+                pending.extend(p.objects.iter().enumerate().filter(|(_, object)| object.any_box)
+                    .map(|(id, _)| Type::Object(id as u32)));
+            }
             // A role value is plain when every implementation of the role is.
             Type::Role(id) => {
                 if role_decl(p, id).is_err() {
@@ -440,6 +450,10 @@ pub fn verify(p: &Program) -> Check {
                 enforce(layout.may_reach_resource || !role_reaches_resource(p, id),
                     "OBJECT_RETENTION", "understated object retention metadata")?;
             }
+            if ty == Type::Any {
+                enforce(layout.may_reach_resource || !any_reaches_resource(p),
+                    "OBJECT_RETENTION", "understated object retention metadata")?;
+            }
             // The runtime selection walk reaches identities only through selected fields: a field that may refer
             // to a resource, directly or through a managed collection or a variant, is selected.
             if reaches_resource(p, ty) {
@@ -451,6 +465,14 @@ pub fn verify(p: &Program) -> Check {
         if let Some(role) = &object.role {
             check_role_decl(p, object, role)?;
         }
+        if object.any_box {
+            check_any_box(p, object)?;
+        }
+    }
+    // One any box per boxed type: the descriptor of a box names exactly one value type.
+    let mut boxed = std::collections::HashSet::new();
+    for object in p.objects.iter().filter(|object| object.any_box) {
+        enforce(boxed.insert(object.layout.storage_fields[0]), "ANY_BOX", "two any boxes hold one value type")?;
     }
     // Implementation tables after every role declaration is known to be well formed.
     for (id, object) in p.objects.iter().enumerate() {
@@ -495,6 +517,29 @@ fn check_role_decl(p: &Program, object: &Object, role: &RoleDecl) -> Check {
         }
     }
     Ok(())
+}
+
+/// An any box holds one value in its one field: no destroy, identity, cases, role or implementations. The value
+/// is not itself `any`; the box is traced and selected exactly as its value is, and reaches what it reaches.
+fn check_any_box(p: &Program, object: &Object) -> Check {
+    let layout = &object.layout;
+    let [value] = layout.storage_fields.as_slice() else {
+        return Err(violation("ANY_BOX", "an any box holds exactly one value"));
+    };
+    let reaches = reaches_resource(p, *value) || match *value {
+        Type::Role(id) | Type::RoleSuccessor(id) => role_reaches_resource(p, id),
+        Type::Error => p.objects.iter()
+            .any(|object| !object.error_cases.is_empty() && object.layout.may_reach_resource),
+        _ => false,
+    };
+    let selection: &[u32] = if reaches { &[0] } else { &[] };
+    let linear = matches!(value, Type::Builder(_) | Type::MapBuilder(_) | Type::Future(_));
+    let declaration = *value != Type::Any && !linear && object.fields.len() == 1 && object.fields[0].storage == 0
+        && !layout.has_destroy
+        && object.error_cases.is_empty() && object.enum_cases == 0 && object.variant_cases.is_empty()
+        && object.role.is_none() && object.implements.is_empty() && !object.handle
+        && layout.selection_layout == selection && layout.may_reach_resource == reaches;
+    enforce(declaration, "ANY_BOX", "an any box holds one value with its retention and nothing else")
 }
 
 /// Every implementation table names a role once, has a function for each of its slots, and each
@@ -710,7 +755,7 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
                     "DISPATCH_SITE", "dispatch needs distinct implementing targets and an in-range contract")?;
             }
             Argument::Binding(_) | Argument::Field(_) | Argument::Label(_) | Argument::Kind(_)
-                | Argument::Continuation(_) => {}
+                | Argument::Continuation(_) | Argument::Protocol(_) => {}
         }
     }
     if op.frame_bound() {
@@ -861,6 +906,14 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
         OwnSplit | OwnSplitChecked => {
             input(0, Packet)?;
             for index in 1..locations.len() { value(index)?; }
+        }
+        OwnDynamic => {
+            // A scope state and the packet of unknown retention it takes in (DYNAMIC_SITE).
+            enforce(locations.len() == 2 && loc_type(f, locations[0])? == ProducedType::Service(ScopeState)
+                && loc_type(f, locations[1])? == ProducedType::Service(Packet), "DYNAMIC_SITE",
+                "own.dynamic takes a scope state and a packet")?;
+            input(0, ScopeState)?;
+            input(1, Packet)?;
         }
         OwnAdmit | OwnAccept | OwnBind | OwnRebind => {
             input(0, ScopeState)?;
@@ -1169,6 +1222,7 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
             Label(_) => 'a', Flag(_) => '?', Kind(_) => 'k', Registration(_) => 'm', Destination(_) => 'x',
             Continuation(_) => 'c',
             Dispatch(_) => 'g',
+            Protocol(_) => 'q',
         }
     };
     let shape: String = args.iter().map(kind).collect();
@@ -1182,6 +1236,7 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         OwnMove | DepsOf => shape == "l",
         OwnJoin => !shape.is_empty() && shape.chars().all(|ch| ch == 'l'),
         OwnAdmit | OwnAccept => shape == "ll",
+        OwnDynamic => shape == "qll",
         OwnBind | OwnRebind => shape == "lisll",
         OwnStage => shape == "?lotll" || shape == "?llotll",
         OwnSplit => shape == "le",
@@ -1365,6 +1420,12 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
         }
         RoleNarrow => enforce(matches!((types, out), ([Type::Role(_)], Some(Type::Role(_)))), "ROLE_NARROW",
             "role narrowing converts a role value to another role"),
+        // any.box: an any box becomes an `any` value.
+        Move if out == Some(Type::Any) && types.len() == 1 && types[0] != Type::Any => {
+            let boxed = matches!(types[0], Type::Object(id)
+                if p.objects.get(id as usize).is_some_and(|object| object.any_box));
+            enforce(boxed, "ANY_WRAP", "only an any box converts to an any value")
+        }
         Move if matches!(out, Some(Type::Role(_) | Type::RoleSuccessor(_))) && types.len() == 1
             && out != Some(types[0]) =>
         {

@@ -40,6 +40,7 @@ fn object(name: &str, storage_fields: Vec<Type>, implements: Vec<RoleImpl>) -> O
     Object {
         name: name.into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false, role: None,
         implements,
+        any_box: false,
         fields: (0..count).map(|storage| Field { name: format!("f{storage}"), storage, once: false }).collect(),
         layout: layout(storage_fields),
     }

@@ -19,7 +19,7 @@ pub use registry::{CallAbi, CleanupAbi, Helper, HelperClass, MachineArgument, Op
 pub use registry::Tag;
 pub use registry::{helper, HELPER_TABLE, HELPER_ALLOCATES, HELPER_COLLECTS, HELPER_REENTERS, HELPER_UNWINDS, HELPER_STOPS};
 pub use registry::HELPER_SUSPENDS;
-pub use verify::{verify, result_context, implementation, role_reaches_resource};
+pub use verify::{any_reaches_resource, implementation, result_context, role_reaches_resource, verify};
 pub use load::{ExternalContracts, NoExternalContracts, verify_load, service_states};
 
 pub const VERSION: u16 = 17;
@@ -126,6 +126,8 @@ pub struct Object {
     pub role: Option<RoleDecl>,
     /// The roles this object implements, one implementation table per role (`ROLE_IMPL`).
     pub implements: Vec<RoleImpl>,
+    /// An any box: the one field holds a boxed value, and the descriptor names its type (`ANY_BOX`).
+    pub any_box: bool,
 }
 
 /// The slots of a role: each slot's entry ABI and its signature without the receiver.
@@ -207,6 +209,9 @@ pub enum Type {
     Builder(u32),
     /// A Future: a reference to its frame. Its outcome type is `ChampTables::future_results` at this index.
     Future(u32),
+    /// An `any` value: a reference to an any box (`Object::any_box`), which holds the value in its one
+    /// field and the value's type in its descriptor.
+    Any,
 }
 
 impl Type {
@@ -214,7 +219,7 @@ impl Type {
     pub fn traced(self) -> bool {
         matches!(self, Self::Error | Self::Bytes | Self::Array(_) | Self::Str | Self::Object(_) | Self::Successor(_)
             | Self::Failure | Self::Rat | Self::Variant(_) | Self::Handle(_) | Self::Map(_) | Self::MapBuilder(_)
-            | Self::Builder(_) | Self::Future(_) | Self::Role(_) | Self::RoleSuccessor(_))
+            | Self::Builder(_) | Self::Future(_) | Self::Role(_) | Self::RoleSuccessor(_) | Self::Any)
     }
 }
 
@@ -234,6 +239,7 @@ pub enum ArrayLeaf {
     Bytes,
     Object(u32),
     Role(u32),
+    Any,
     Float,
     Char,
     Rat,
@@ -255,6 +261,7 @@ impl ArrayType {
                 ArrayLeaf::Bytes => Type::Bytes,
                 ArrayLeaf::Object(id) => Type::Object(id),
                 ArrayLeaf::Role(id) => Type::Role(id),
+                ArrayLeaf::Any => Type::Any,
                 ArrayLeaf::Float => Type::Float,
                 ArrayLeaf::Char => Type::Char,
                 ArrayLeaf::Rat => Type::Rat,
@@ -277,6 +284,7 @@ impl ArrayType {
             Type::Bytes => ArrayLeaf::Bytes,
             Type::Object(id) => ArrayLeaf::Object(id),
             Type::Role(id) => ArrayLeaf::Role(id),
+            Type::Any => ArrayLeaf::Any,
             Type::Float => ArrayLeaf::Float,
             Type::Char => ArrayLeaf::Char,
             Type::Rat => ArrayLeaf::Rat,
@@ -474,6 +482,16 @@ pub enum Immediate {
     Updates(Vec<u32>),
 }
 
+/// A checked synchronous dynamic transfer protocol (`own.dynamic`, OIR-2 §6.4, §7.1): the open Closure
+/// protocol of an open action call's result packet, or the `any` protocol of a boxed value's packet. Both
+/// move a packet of unknown retention into the scope inventory after the owner, live-dependency, snapshot
+/// and transferability checks; on failure the packet comes back unaccepted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Protocol {
+    Closure,
+    Any,
+}
+
 /// Operands are typed references, not an untyped helper argument buffer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Argument {
@@ -499,6 +517,8 @@ pub enum Argument {
     /// A continuation of the function's frame layout (`frame.save`, `frame.resume`).
     Continuation(u32),
     Dispatch(Dispatch),
+    /// The protocol of `own.dynamic`.
+    Protocol(Protocol),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

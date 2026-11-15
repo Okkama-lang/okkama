@@ -329,6 +329,7 @@ fn legacy_type(ty: s::Type, futures: &[Option<okkama_sparrow::TypeRef>]) -> okka
         s::Type::Char => T::Char,
         // A Future is a reference to its frame (Champ draft 3 §2), with its outcome type when it has one.
         s::Type::Future(index) => T::Future(futures.get(index as usize).copied().flatten()),
+        s::Type::Any => T::Any,
     }
 }
 
@@ -845,8 +846,9 @@ pub(crate) fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, r
                 }
                 x.len() == y.len()
             }
+            // An `any` value compares as its box: one boxed type, equal values.
             s::Type::Object(_) | s::Type::Successor(_) | s::Type::Variant(_) | s::Type::Role(_)
-                | s::Type::RoleSuccessor(_) => {
+                | s::Type::RoleSuccessor(_) | s::Type::Any => {
                 let descriptor = heap::payload(runtime.heap.header_of(a));
                 if descriptor != heap::payload(runtime.heap.header_of(b)) {
                     return Ok(false);
