@@ -54,6 +54,14 @@ pub(super) fn inventory(
             continue;
         };
         let offered = inventory::may_offer(module, function, body, types, external, budget)?;
+        let builder_owners = if arrays::creates_builders(body) {
+            budget.work(body.insts.len() + body.blocks.len())?;
+            let owners = arrays::builder_owners(module, body)?;
+            budget.memory(owners.len() * 96)?;
+            owners
+        } else {
+            BTreeMap::new()
+        };
         let entry = body.blocks.get(body.entry).map_err(arena)?;
         let destroy = function.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Destroy(_)));
         let function_id = module.scopes.get(entry.lexical_scope).map_err(arena)?.function;
@@ -207,6 +215,17 @@ pub(super) fn inventory(
                         | CollectionOp::MapBuilderFinish { .. } | CollectionOp::MapBuilderAbandon { .. }) => {
                         scopes.get_mut(&block.lexical_scope).unwrap().blockers.insert(ElisionBlocker::Journal);
                     }
+                    // Inserted elements join the journal of the builder's owner.
+                    Operation::Collection(collection) if arrays::consumed_buffer(op)
+                        .is_some_and(|buffer| builder_owners.contains_key(&buffer)) => {
+                        let owner = builder_owners[&arrays::consumed_buffer(op).unwrap()];
+                        for value in arrays::inserted(collection) {
+                            if offered[value.as_u32() as usize] {
+                                let ty = body.values.get(value).map_err(arena)?.ty;
+                                add_type(&mut scopes, owner, ty, types, ElisionBlocker::Journal);
+                            }
+                        }
+                    }
                     Operation::Exit(ExitOp::Extend { .. }) => {
                         scopes.get_mut(&block.lexical_scope).unwrap().blockers.insert(ElisionBlocker::Reserve);
                     }
@@ -291,7 +310,7 @@ pub(super) fn inventory(
                     let Some(callee_body) = &callee.body else {
                         continue;
                     };
-                    if module.entry == Some(*target)
+                    if fixed_root(module, *target)
                         || callee.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Destroy(_))) {
                         continue;
                     }
