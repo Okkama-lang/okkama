@@ -31,6 +31,18 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   stopped with "no task can make progress"). The frame's next `await` now
   raises `Cancelled`, once, and it unwinds through the frame and the task.
   New case `L08.cancel.nested-frame-next-await`.
+- **Champ correctness, ten conformance cases (#677).** On the OIR-2 → SPB 17
+  → Champ path: a `raise` inside a try reaches the enclosing catch (a
+  non-matching catch or a bare rethrow in a nested try no longer escapes);
+  a match on a catch payload and on payload-free Error enums lowers; a
+  multi-file root keeps every file and `std.…` paths resolve; integer
+  literals beyond 63 bits load; a program without `main` fails with
+  `RuntimeError: Program requires main() declaration`; a constructor may
+  branch before binding its fields; compiled callees are called directly and
+  self tail calls run as loops, so a million-level recursion and ten million
+  tail calls fit the stack (#664). `okkama run` and `okkama build` no longer
+  parse `test` bodies outside test mode (§14), as imports and OCS already
+  did.
 
 - **Tomato keeps an await's outcome when the cancellation comes after it
   (#663).** A task whose awaited future had settled, and which was only

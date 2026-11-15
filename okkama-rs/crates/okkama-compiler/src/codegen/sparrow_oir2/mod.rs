@@ -8,6 +8,7 @@ use okkama_sparrow::spb17 as s;
 
 mod calls;
 mod successors;
+mod undef;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GenerateError(pub String);
@@ -62,6 +63,13 @@ fn generate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<
     if module.profile != o::Profile::Low {
         return Err(GenerateError("expected verified low profile".into()));
     }
+    let mut sunk = module.clone();
+    for (_, function) in sunk.functions.iter_mut() {
+        if let Some(body) = &mut function.body {
+            undef::sink_undef_params(body)?;
+        }
+    }
+    let module = &sunk;
     // The test profile carries its tests table; a tests table needs `requires test` and nothing else.
     let profile = |feature: &o::Feature| *feature == o::Feature::Core
         || *feature == o::Feature::Test && module.tests.is_some();

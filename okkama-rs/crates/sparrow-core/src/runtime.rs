@@ -756,7 +756,8 @@ impl Runtime {
             .loaded
             .program
             .entry
-            .ok_or_else(|| Error("Sparrow program has no entry function".into()))?
+            // A program without `main` fails when execution starts, with an ordinary runtime report.
+            .ok_or_else(|| Error("RuntimeError: Program requires main() declaration".into()))?
             .0 as usize;
         let result = self.run_function(entry, stack)?;
         match self.heap.integer(result) {

@@ -50,8 +50,9 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
         let post = builder.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 64, 3));
         let blocks = (0..source.code.len()).map(|_| builder.create_block()).collect();
         let stop = builder.create_block();
+        let invocations = runtime.invocations.as_ptr();
         let mut emit = Emit {
-            builder: &mut builder, jit: &mut runtime.jit, program: &program, source, index,
+            builder: &mut builder, jit: &mut runtime.jit, program: &program, source, index, invocations,
             ctx, io, storage, frame: &frame, scope_base, post, blocks, stop, pc: None,
             plans: &machine.plans[index], selections: &machine.selections[index], entries: &machine.entries,
             shielded_entries: &machine.shielded_entries,
@@ -163,6 +164,8 @@ struct Emit<'a, 'b> {
     program: &'a s::Program,
     source: &'a s::Function,
     index: usize,
+    /// The runtime's invocation table: a boxed slice, so its code words keep their addresses.
+    invocations: *const runtime::Invocation,
     ctx: Value,
     io: Value,
     storage: StackSlot,
@@ -256,6 +259,74 @@ impl Emit<'_, '_> {
             self.report_roots(instruction);
         }
         self.builder.inst_results(instruction).first().copied()
+    }
+
+    /// An observation call. A compiled callee with code is called directly, so a recursion costs one
+    /// machine frame per level; otherwise the machine helper compiles it or reaches its provider.
+    fn observe(&mut self, target: usize, values: &[Value]) -> Value {
+        let ctx = self.ctx;
+        let zero = self.iconst(0);
+        let function = self.iconst(target as u64);
+        let argc = self.iconst(values.len() as u64);
+        if self.program.functions[target].code.is_empty() || values.len() > 8 {
+            let argv = self.record(values);
+            return self.call("champ_machine_external", &[ctx, function, zero, argv, argc]).unwrap();
+        }
+        let entry = self.invocations.wrapping_add(target) as u64;
+        let word = self.iconst(entry + std::mem::offset_of!(runtime::Invocation, code) as u64);
+        let code = self.load(word, 0);
+        let direct = self.builder.create_block();
+        let helper = self.builder.create_block();
+        let done = self.builder.create_block();
+        let result = self.builder.append_block_param(done, types::I64);
+        self.builder.ins().brif(code, direct, &[], helper, &[]);
+        self.builder.switch_to_block(direct);
+        #[cfg(test)]
+        self.call("test_champ_safepoint", &[ctx]);
+        let signature = self.jit.signature(values.len());
+        let signature = self.builder.import_signature(signature);
+        let arguments = std::iter::once(ctx).chain(values.iter().copied()).collect::<Vec<_>>();
+        let call = self.builder.ins().call_indirect(signature, code, &arguments);
+        self.report_roots(call);
+        let value = self.builder.inst_results(call)[0];
+        self.builder.ins().jump(done, &[value.into()]);
+        self.builder.switch_to_block(helper);
+        let argv = self.record(values);
+        let value = self.call("champ_machine_external", &[ctx, function, zero, argv, argc]).unwrap();
+        self.builder.ins().jump(done, &[value.into()]);
+        self.builder.switch_to_block(done);
+        result
+    }
+
+    /// A self observation call in tail position (its result returned at once, directly or through
+    /// one branch) in a function without service state: no scope, packet or cleanup outlives it.
+    fn self_tail_call(&self, target: usize, flow: &s::Flow) -> bool {
+        let (Some(pc), s::Flow::Next(outputs)) = (self.pc, flow) else {
+            return false;
+        };
+        let [output] = outputs.as_slice() else {
+            return false;
+        };
+        if target != self.index || self.source.entry_abi != s::EntryAbi::Observation
+            || !self.source.services.is_empty()
+            || self.source.code.iter().any(|instruction| matches!(instruction,
+                s::Instruction::Champ { op, .. } if *op != O::InvokeObserve))
+        {
+            return false;
+        }
+        let returns = |pc: usize, value: L| matches!(self.source.code.get(pc),
+            Some(s::Instruction::Ret(values)) if values.as_slice() == [value].map(|value| match value {
+                L::Register(id) => id,
+                L::Service(_) => u32::MAX,
+            }));
+        match self.source.code.get(pc + 1) {
+            Some(s::Instruction::Ret(_)) => returns(pc + 1, *output),
+            Some(s::Instruction::Br(edge)) => edge.assignments.iter().any(|assignment| {
+                assignment.source == s::Source::Location(*output)
+                    && returns(edge.target_pc as usize, assignment.destination)
+            }),
+            _ => false,
+        }
     }
 
     fn enter_roots(&mut self) {
@@ -646,10 +717,16 @@ impl Emit<'_, '_> {
                 let count = self.program.functions[target].params.iter()
                     .filter(|location| matches!(location, L::Register(_))).count();
                 let values = locations[..count].iter().map(|&loc| self.word(loc)).collect::<Vec<_>>();
-                let argv = self.record(&values);
-                let argc = self.iconst(count as u64);
-                let function = self.iconst(target as u64);
-                let value = self.call("champ_machine_external", &[ctx, function, zero, argv, argc]).unwrap();
+                if self.self_tail_call(target, flow) {
+                    // A self call whose result is returned at once reuses this frame: a loop.
+                    let params = self.source.params.iter().filter(|location| matches!(location, L::Register(_)));
+                    for (&location, &value) in params.zip(&values).collect::<Vec<_>>() {
+                        self.write(location, &[value]);
+                    }
+                    self.builder.ins().jump(self.blocks[0], &[]);
+                    return Ok(());
+                }
+                let value = self.observe(target, &values);
                 let status = self.load(ctx, std::mem::offset_of!(Ctx, status));
                 let success = self.builder.create_block();
                 let failure = self.builder.create_block();

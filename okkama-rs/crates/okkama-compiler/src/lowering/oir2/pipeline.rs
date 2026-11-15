@@ -58,9 +58,16 @@ fn lower_linked_mode(roots: &[RootFile<'_>], loader: &mut dyn ModuleLoader, test
     let roots: Vec<_> = roots.iter().map(|root| {
         (root.program, root.source.name(), Some(root.source))
     }).collect();
+    // As for OIR-1: `std.…` paths of the root become hidden imports, and every root file
+    // belongs to the one root module (§5.1).
+    let programs = crate::lowering::desugared(&roots).map_err(|error| phase("imports", error))?;
+    let roots: Vec<_> = programs.iter().zip(&roots).map(|(program, (_, name, source))| {
+        (program, *name, *source)
+    }).collect();
     let graph = modules::load_graph(&roots, loader).map_err(|error| phase("imports", error))?;
     let sources = modules::source_modules(&graph, &roots);
-    let analysis = analysis::analyze_mode(sources, 1, test_mode).map_err(|error| phase("analysis", error))?;
+    let analysis = analysis::analyze_mode(sources, roots.len(), test_mode)
+        .map_err(|error| phase("analysis", error))?;
     // Async execution is #570: an async test stops the whole test profile before lowering, by name.
     let asynchronous = analysis.registry.tests.iter().filter(|test| test.is_async).collect::<Vec<_>>();
     if let Some(first) = asynchronous.first() {

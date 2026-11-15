@@ -777,7 +777,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
     }
 
     fn match_expr(&mut self, matching: &thir::Match, ty: Option<&Ty>, want: bool) -> Result<Option<ir::ValueId>> {
-        let Some(subject) = self.value(&matching.subject)? else {
+        let Some((subject, enum_subject)) = self.match_subject(&matching.subject)? else {
             return Ok(None);
         };
         let parent = self.scope();
@@ -789,7 +789,15 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             let types = self.local_types(&join.locals);
             let arm = self.new_block(scope, &types)?;
             for pattern in patterns {
-                let Some(pattern) = self.value(pattern)? else {
+                let lowered = match (enum_subject, &pattern.kind) {
+                    (Some(declaration), thir::ExprKind::Constant(thir::Constant::Int(case))) => {
+                        let case = case.parse::<u32>()
+                            .map_err(|_| LowerError::invalid(pattern.span, "enum case pattern out of range"))?;
+                        Some(self.core(ir::CoreOp::EnumCase { declaration, case })?)
+                    }
+                    _ => self.value(pattern)?,
+                };
+                let Some(pattern) = lowered else {
                     return Err(LowerError::unsupported(pattern.span, "diverging match pattern"));
                 };
                 let condition = self.equal(subject, pattern, matching.subject.span)?;
@@ -834,6 +842,22 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             return Ok(None);
         }
         self.finish_join(&join)
+    }
+
+    /// The value a match compares. The frontend matches every Error enum by its case tag; a
+    /// payload-free Error enum is an OIR-2 enum, so its value is compared with its cases instead.
+    fn match_subject(&mut self, subject: &thir::Expr) -> Result<Option<(ir::ValueId, Option<ir::DeclId>)>> {
+        if let thir::ExprKind::VariantTag(inner) = &subject.kind {
+            let Some(value) = self.value(inner)? else {
+                return Ok(None);
+            };
+            let ty = self.b.body().values.get(value)?.ty;
+            if let ir::Type::Enum(declaration) = *self.b.module().types.get(ty)? {
+                return Ok(Some((value, Some(declaration))));
+            }
+            return Ok(Some((self.core(ir::CoreOp::VariantTag { value })?, None)));
+        }
+        Ok(self.value(subject)?.map(|value| (value, None)))
     }
 
     fn loop_expr(&mut self, block: &thir::Block, ty: Option<&Ty>) -> Result<Option<ir::ValueId>> {
