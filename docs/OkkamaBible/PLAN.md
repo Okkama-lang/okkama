@@ -160,6 +160,17 @@ language.
 
 ## Progress
 
+- 2026-11-15 (idle work during the 0.6.0 rebuild): worked examples or
+  comparison sections added to chapters 1–6, 8, 9, 11, 14–16 (harbour,
+  units after the Mars Climate Orbiter report, slug, grouping and joining,
+  binary search, commit or roll back, the rules in one transfer; type
+  systems, collections and testing compared; histories of roles and
+  enums). Chapter 28 written (4.3 pages EN): what closed while the book was
+  written, open language issues (#286–#289), library and tool gaps, open
+  questions (data-object shorthand, narrowing `any`, a non-finite type,
+  `Maybe` combinators, errors in signatures, #148, generic actions), costs
+  accepted on purpose. Stale passages fixed: #214 and #233 (ch. 4, 8),
+  BigInt after #189 (ch. 5). Still unwritten: chapters 23 and 27.
 - Editorial pass (2026-11-14): applied “The language, not its organs” to
   all 21 remaining existing chapter pairs (1–19, 21–22); Chapter 20 was
   used as the reference and left unchanged. Removed and rewritten source
