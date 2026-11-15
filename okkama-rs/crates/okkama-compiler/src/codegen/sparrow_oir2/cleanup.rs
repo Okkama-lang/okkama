@@ -164,7 +164,12 @@ impl Emitter<'_> {
             ScopeTransfer { states, selection } => {
                 let mut arguments = vec![A::Flag(matches!(states, o::TransferStates::Between { .. }))];
                 arguments.extend(states.values().into_iter().map(location).collect::<Result<Vec<_>, _>>()?);
+                // An admissible selection moves only what the source admitted (TRANSFER_ADMISSION).
+                let admissible = matches!(self.body.selections.get(*selection)?, o::SelectionExpr::Admissible(_));
                 arguments.push(A::Selection(self.selection(*selection)?));
+                if admissible {
+                    arguments.push(A::Flag(true));
+                }
                 (O::ScopeTransfer, arguments)
             }
             _ => return Err(later(&format!("ownership operation {op:?} outside synchronous P1 transport"))),

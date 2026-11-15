@@ -125,8 +125,8 @@ fn champ_s2_registry_layouts_effects_and_single_outcome_channel() {
     let helpers: Vec<_> = crate::jit::HELPERS.iter().filter(|(name, _)| name.starts_with("champ_")).collect();
     // #622 adds champ_machine_collection, champ_machine_builder and champ_machine_lookup; #675 adds
     // champ_machine_scalar; #676 adds champ_machine_role_narrow; #601 V8 adds the eight async helpers of
-    // Champ draft 3 §14.4 and champ_machine_future_destination.
-    assert_eq!(helpers.len(), 70);
+    // Champ draft 3 §14.4 and champ_machine_future_destination; #697 adds champ_scope_transfer_admissible.
+    assert_eq!(helpers.len(), 71);
     for &(name, effects) in helpers {
         let abi = helper_abi(name).unwrap();
         let class = abi.class;
@@ -956,29 +956,81 @@ fn champ_checked_selection_leaves_foreign_collection_elements_with_their_owner()
     assert_eq!(h.ctx.status, FAILED);
 }
 
-/// A transferred value may borrow an identity an enclosing scope owns (an element of its managed array pushed
-/// into its builder): the transfer moves what its source holds and leaves the borrowed identity with its owner
-/// (#692).
+/// An admissible transfer (#697) moves only what its source admitted. A value pushed into an outer builder may
+/// borrow an identity an enclosing scope owns (an element of its managed array): it stays with its owner, and the
+/// source's bound and staged identities stay with the source.
 #[test]
-fn champ_transfer_leaves_a_borrowed_identity_with_its_owner() {
+fn champ_admissible_transfer_moves_only_admitted_identities() {
     let mut h = Harness::new();
     let mut from = h.scope();
     let mut to = h.scope();
     let from_scope = scope(&h.runtime, from.record).unwrap();
     let to_scope = scope(&h.runtime, to.record).unwrap();
-    let (moved, mut packet) = h.fresh(0, from_scope.owner);
-    assert_eq!(rt_own_accept(&mut h.ctx, &mut from, &mut packet, &mut from), NORMAL);
+    let admit = |h: &mut Harness, from: &mut ScopeSlot| {
+        let (object, mut packet) = h.fresh(0, from_scope.owner);
+        assert_eq!(rt_own_admit(&mut h.ctx, from, &mut packet, from), NORMAL);
+        object
+    };
+    let admitted = admit(&mut h, &mut from);
+    let bound = admit(&mut h, &mut from);
+    let mut empty = h.empty();
+    assert_eq!(rt_own_bind(&mut h.ctx, &mut from, 0, bound, &mut empty, &mut from), NORMAL);
+    let staged = admit(&mut h, &mut from);
+    let mut empty = h.empty();
+    let inputs = StageInputs {
+        state: &mut from, source: std::ptr::null_mut(), selection: 0, field: 0, value: staged, packet: &mut empty,
+    };
+    let mut staging = StagePost::default();
+    assert_eq!(rt_own_stage(&mut h.ctx, &inputs, &mut staging), NORMAL);
+    let mut from = staging.state;
     let (borrowed, mut owned) = h.fresh(0, to_scope.owner);
     assert_eq!(rt_own_accept(&mut h.ctx, &mut to, &mut owned, &mut to), NORMAL);
-    let kept = h.identity(borrowed);
-    let roots = [moved, borrowed];
+    let kept = [bound, staged, borrowed].map(|object| h.identity(object));
+    let roots = [admitted, bound, staged, borrowed];
+    let mut post = TransferPost::default();
+    let inputs = TransferInputs { from: &mut from, to: &mut to };
+    assert_eq!(rt_scope_transfer_admissible(&mut h.ctx, &inputs, &selection(&roots), &mut post), NORMAL);
+    let (from, to) = (post.from, post.to);
+    let source = scope(&h.runtime, from.record).unwrap();
+    assert!(source.admission.words().next().is_none());
+    assert_eq!(source.bound.words().collect::<Vec<_>>(), vec![bound]);
+    assert_eq!(source.staging.words().collect::<Vec<_>>(), vec![staged]);
+    assert_eq!(scope(&h.runtime, to.record).unwrap().all().words().collect::<HashSet<_>>(),
+        HashSet::from([admitted, borrowed]));
+    assert_eq!([bound, staged, borrowed].map(|object| h.identity(object)), kept);
+    h.gc(&[from.record, to.record]);
+}
+
+/// A transfer without the admission filter moves every selected identity, bound ones included, and its source
+/// must hold each: a root outside it is refused (#697).
+#[test]
+fn champ_plain_transfer_moves_every_selected_identity_of_its_source() {
+    let mut h = Harness::new();
+    let mut from = h.scope();
+    let mut to = h.scope();
+    let from_scope = scope(&h.runtime, from.record).unwrap();
+    let to_scope = scope(&h.runtime, to.record).unwrap();
+    let (bound, mut packet) = h.fresh(0, from_scope.owner);
+    assert_eq!(rt_own_admit(&mut h.ctx, &mut from, &mut packet, &mut from), NORMAL);
+    let mut empty = h.empty();
+    assert_eq!(rt_own_bind(&mut h.ctx, &mut from, 0, bound, &mut empty, &mut from), NORMAL);
+    let (borrowed, mut owned) = h.fresh(0, to_scope.owner);
+    assert_eq!(rt_own_accept(&mut h.ctx, &mut to, &mut owned, &mut to), NORMAL);
+    let roots = [borrowed];
+    let (old_from, old_to) = (from.record, to.record);
+    let mut refused = TransferPost::default();
+    let inputs = TransferInputs { from: &mut from, to: &mut to };
+    assert_eq!(rt_scope_transfer(&mut h.ctx, &inputs, &selection(&roots), &mut refused), UNWIND);
+    assert_eq!((refused.from.record, refused.to.record), (old_from, old_to));
+    let mut captured = 0;
+    assert_eq!(rt_failure_capture(&mut h.ctx, &mut captured), NORMAL);
+    let (mut from, mut to) = (refused.from, refused.to);
+    let roots = [bound];
     let mut post = TransferPost::default();
     let inputs = TransferInputs { from: &mut from, to: &mut to };
     assert_eq!(rt_scope_transfer(&mut h.ctx, &inputs, &selection(&roots), &mut post), NORMAL);
-    let (from, to) = (post.from, post.to);
-    assert_eq!(scope(&h.runtime, from.record).unwrap().all().words().count(), 0);
-    assert_eq!(scope(&h.runtime, to.record).unwrap().all().words().collect::<HashSet<_>>(),
-        HashSet::from([moved, borrowed]));
-    assert_eq!(h.identity(borrowed), kept);
-    h.gc(&[from.record, to.record]);
+    assert_eq!(scope(&h.runtime, post.from.record).unwrap().all().words().count(), 0);
+    assert_eq!(scope(&h.runtime, post.to.record).unwrap().bound.words().collect::<HashSet<_>>(),
+        HashSet::from([bound, borrowed]));
+    h.gc(&[post.from.record, post.to.record]);
 }
