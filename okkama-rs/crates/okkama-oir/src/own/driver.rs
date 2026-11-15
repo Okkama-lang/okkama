@@ -441,8 +441,10 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                         };
                     }
                     TermKind::Raise(failure) => {
+                        // A raise inside a try follows its block's unwind to the enclosing catch dispatch.
                         point.env.cleanup.failure = Some(point.env.value(*failure)?.value);
-                        driver.failures.push(FailureRoute { point, target: None });
+                        let target = driver.current_unwind.clone();
+                        driver.failures.push(FailureRoute { point, target });
                     }
                     // A tombstone with live linear state (an exhaustive match's
                     // default) becomes an unreachable trap: the verifier treats it
