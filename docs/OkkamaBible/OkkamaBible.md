@@ -13,7 +13,8 @@
   - [1.6 Okkama's razor, entity by entity](#16-okkamas-razor-entity-by-entity)
   - [1.7 A first taste](#17-a-first-taste)
   - [1.8 What the razor costs](#18-what-the-razor-costs)
-  - [1.9 How to read this book](#19-how-to-read-this-book)
+  - [1.9 The razor at work: three decisions](#19-the-razor-at-work-three-decisions)
+  - [1.10 How to read this book](#110-how-to-read-this-book)
 - [Chapter 2. A Short History of Objects](#chapter-2-a-short-history-of-objects)
   - [2.1 Simula: objects for simulation](#21-simula-objects-for-simulation)
   - [2.2 Smalltalk: everything is a message](#22-smalltalk-everything-is-a-message)
@@ -666,7 +667,47 @@ the main ones; later chapters return to each.
   object keys, default parameters (issues #145–#155, #210–#216). The razor is
   not an excuse for those gaps; Chapter 28 lists them openly.
 
-## 1.9 How to read this book
+## 1.9 The razor at work: three decisions
+
+A principle is easiest to judge by its verdicts. Here are three proposals
+the language received, each weighed the same way: what entity it adds, what
+work that entity does, and whether something already in the language could
+do the work.
+
+**Default bodies in roles: declined (issue #146).** The proposal let a role
+carry code for some of its actions, so that a decorator would not have to
+forward every action by hand. The entity is code inside a contract. The work
+it does is real but small: it saves typing. Against it stands what the
+entity brings back. A role with bodies is a base class by another name, and
+two roles that supply a body for the same action need a rule for which one
+wins, the question traits exist to answer (Chapter 14). An object that does
+the shared work, held by the decorators that need it, already does the job.
+Forwarding stays explicit, and Section 2.11 counts it among the costs.
+
+**`once let`: accepted (issue #491).** Objects never change, so an answer
+computed from their fields could be kept. Without a construct for it, a
+program had three choices, and each broke another rule: compute in the
+constructor, which would make constructors do work instead of binding and
+checking their input; keep a cache in a mutable field, which the language
+forbids; or compute again on every call. `once let x = expr;` does work
+nothing else could do, and it was admitted in its narrowest form: it reads
+only fields and constants, has no effects, holds no resource and takes no
+part in equality (Section 13.13).
+
+**Module constants: accepted, half of it (issue #153).** A module needs
+names for its limits and tables. The proposal could have been read as
+"module-level values", and that would have admitted global objects, static
+fields and singletons: shared state with a lifetime nobody can see. The
+language took the half that does the work and adds no state. `const` names
+a value the compiler computes; an expensive object is still built in `main`
+and passed to whoever needs it (Section 19.6).
+
+The pattern is the same in all three. An entity is admitted when it does
+work that no existing entity can do without breaking another rule, and then
+only in the smallest form that does that work. "It would be convenient" is
+an argument; it is weighed, not granted.
+
+## 1.10 How to read this book
 
 The book has seven parts. Part I gives the philosophy and history of Okkama. Parts II–V teach the language from values to whole programs, with runnable examples, sources and limits. Part VI describes the language’s cost model, measured from the outside. Part VII covers practice and judgement: real programs, comparisons with other languages and open problems.
 
