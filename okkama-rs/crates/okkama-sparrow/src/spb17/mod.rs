@@ -670,3 +670,7 @@ mod natives_tests;
 mod scalars_tests;
 #[cfg(test)]
 mod testmode_tests;
+#[cfg(test)]
+mod rules_tests;
+#[cfg(test)]
+mod budget_tests;
