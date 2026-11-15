@@ -198,8 +198,9 @@
   - [15.6 Свойства](#156-свойства)
   - [15.7 Разобранный набор: сервис с часами и хранилищем](#157-разобранный-набор-сервис-с-часами-и-хранилищем)
   - [15.8 Остальной инструментарий](#158-остальной-инструментарий)
-  - [15.9 Что пока не работает](#159-что-пока-не-работает)
-  - [15.10 Чего стоит такой замысел](#1510-чего-стоит-такой-замысел)
+  - [15.9 Okkama среди других языков](#159-okkama-среди-других-языков)
+  - [15.10 Что пока не работает](#1510-что-пока-не-работает)
+  - [15.11 Чего стоит такой замысел](#1511-чего-стоит-такой-замысел)
 - [Глава 16. Перечисления и сопоставление с образцом](#глава-16-перечисления-и-сопоставление-с-образцом)
   - [16.1 Закрытый набор имён](#161-закрытый-набор-имён)
   - [16.2 Варианты с данными](#162-варианты-с-данными)
@@ -9803,7 +9804,37 @@ PASS
 поэтому тест, который может зависнуть, должен ограничить себя бюджетом или
 сроком.
 
-## 15.9 Что пока не работает
+## 15.9 Okkama среди других языков
+
+Каждый язык с культурой тестирования отвечает на одни и те же четыре
+вопроса: где живёт тест, как его находит запускающий, что подменяет
+сотрудника и может ли машина придумывать входы.
+
+| Язык | Где живут тесты | Как их находят | Тестовые двойники | Сгенерированные входы |
+|---|---|---|---|---|
+| Java, JUnit 5 [[JUnit User Guide](#ref-junit5)] | отдельные тестовые классы, по соглашению сборщиков — в отдельном дереве исходников | аннотация `@Test` | библиотеки вне языка | библиотеки |
+| Go [[Go package testing](#ref-gotesting)] | файлы `_test.go` в пакете | функции с именами `TestXxx` | рукописные реализации интерфейсов | фаззинг по покрытию, `FuzzXxx` |
+| Rust [[Klabnik 2023](#ref-klabnik2023)] | модуль `#[cfg(test)]` в том же файле; интеграционные тесты в `tests/` | атрибут `#[test]` | крейты вне стандартной библиотеки | крейты вне стандартной библиотеки |
+| Python [[Python doctest](#ref-pydoctest); [Python unittest.mock](#ref-pymock)] | отдельные модули; примеры в docstring (`doctest`) | правила именования запускающего | `unittest.mock`, который подменяет объекты во время работы | библиотеки |
+| D [[D specification](#ref-dunittest)] | блоки `unittest` в модуле | включаются ключом `-unittest` | рукописные | — |
+| Okkama | блоки `test` в модуле, объекте или роли | `okkama run -t` | один `fake` на роль, проверяемый по роли | `testing/property`, со сжатием |
+
+Ближайшие родственники Okkama — D и Rust. Все три держат тесты в модуле,
+который тестируют, и не включают их в рабочую сборку: D компилирует блоки
+`unittest` только по запросу, Rust компилирует модуль `cfg(test)` только для
+`cargo test`, а парсер Okkama в обычном запуске пропускает блоки test и fake
+(раздел 15.1).
+
+У двух вещей в последней строке нет аналогов выше. Fake принадлежит роли:
+он написан один раз, рядом с контрактом, и компилятор сверяет его с этим
+контрактом при каждом изменении роли. В других языках это соглашение,
+которому команда может следовать [[Bugayenko 2016](#ref-bugayenko2016)]. И подмены во время работы
+нет: то, что делает `unittest.mock.patch` в Python, — замена атрибута
+модуля на время теста, — не на чем делать в языке, где объекты не
+меняются. Сотрудника подменяют так же, как в рабочем коде: передают другой
+объект, который исполняет роль.
+
+## 15.10 Что пока не работает
 
 - Форматов отчёта, seed и параллельных исполнителей в командной строке
   нет; они запланированы вместе с переписанной стандартной библиотекой
@@ -9813,7 +9844,7 @@ PASS
 использованным (#275). Теперь это обычный аргумент:
 `test.is(bottle.open().close(), bottle)` сравнивает две бутылки.
 
-## 15.10 Чего стоит такой замысел
+## 15.11 Чего стоит такой замысел
 
 - **Фейк надо написать.** Библиотека моков порождает двойника из
   интерфейса одной строкой. Фейк — это код, и для большой роли его много.
@@ -19554,6 +19585,7 @@ main() is int {
 - <a id="ref-cook2009"></a>William R. Cook (2009). On Understanding Data Abstraction, Revisited. In *Proceedings of OOPSLA 2009*, *ACM SIGPLAN Notices* 44(10): 557–572. https://doi.org/10.1145/1640089.1640133
 - <a id="ref-cox2018"></a>Russ Cox (2018). Minimal Version Selection. research!rsc, 21 February 2018. https://research.swtch.com/vgo-mvs
 - <a id="ref-cytron1991"></a>Ron Cytron, Jeanne Ferrante, Barry K. Rosen, Mark N. Wegman, F. Kenneth Zadeck (1991). Efficiently Computing Static Single Assignment Form and the Control Dependence Graph. *ACM TOPLAS* 13(4): 451–490. https://doi.org/10.1145/115372.115320
+- <a id="ref-dunittest"></a>D Language Foundation (2026). Unit Tests. *D Language Specification*. https://dlang.org/spec/unittest.html
 - <a id="ref-dahl1966"></a>Ole-Johan Dahl, Kristen Nygaard (1966). SIMULA — an ALGOL-Based Simulation Language. *Communications of the ACM* 9(9): 671–678. https://doi.org/10.1145/365813.365819
 - <a id="ref-dennis1966"></a>Jack B. Dennis, Earl C. Van Horn (1966). Programming Semantics for Multiprogrammed Computations. *Communications of the ACM* 9(3): 143–155. https://doi.org/10.1145/365230.365252
 - <a id="ref-dijkstra1968"></a>Edsger W. Dijkstra (1968). Go To Statement Considered Harmful. *Communications of the ACM* 11(3): 147–148. https://doi.org/10.1145/362929.362947
@@ -19568,6 +19600,7 @@ main() is int {
 - <a id="ref-fahndrich2003"></a>Manuel Fähndrich, K. Rustan M. Leino (2003). Declaring and Checking Non-null Types in an Object-Oriented Language. In *Proceedings of OOPSLA 2003*: 302–312. ACM. https://doi.org/10.1145/949305.949332
 - <a id="ref-gabriel1991"></a>Richard P. Gabriel (1991). The Rise of "Worse is Better". In *Lisp: Good News, Bad News, How to Win Big*. https://www.dreamsongs.com/RiseOfWorseIsBetter.html
 - <a id="ref-gamma1994"></a>Erich Gamma, Richard Helm, Ralph Johnson, John Vlissides (1994). *Design Patterns: Elements of Reusable Object-Oriented Software*. Addison-Wesley.
+- <a id="ref-gotesting"></a>The Go Authors (2026). Package testing. *Go standard library documentation*. https://pkg.go.dev/testing
 - <a id="ref-gospec"></a>The Go Authors (2026). *The Go Programming Language Specification*, language version go1.27 (26 May 2026). https://go.dev/ref/spec
 - <a id="ref-goldberg1983"></a>Adele Goldberg, David Robson (1983). *Smalltalk-80: The Language and Its Implementation*. Addison-Wesley.
 - <a id="ref-goldberg1991"></a>David Goldberg (1991). What Every Computer Scientist Should Know About Floating-Point Arithmetic. *ACM Computing Surveys* 23(1): 5–48. https://doi.org/10.1145/103162.103163
@@ -19587,6 +19620,7 @@ main() is int {
 - <a id="ref-jones2023"></a>Richard Jones, Antony Hosking, Eliot Moss (2023). *The Garbage Collection Handbook: The Art of Automatic Memory Management*, 2nd edition. CRC Press.
 - <a id="ref-baker1977"></a>Henry C. Baker Jr. and Carl Hewitt (1977). The Incremental Garbage Collection of Processes. MIT AI Laboratory Working Paper 149; also in *Proceedings of the Symposium on Artificial Intelligence and Programming Languages*, Rochester, NY. https://hdl.handle.net/1721.1/41969
 - <a id="ref-halstead1985"></a>Robert H. Halstead Jr. (1985). MULTILISP: A Language for Concurrent Symbolic Computation. *ACM Transactions on Programming Languages and Systems* 7(4): 501–538. https://doi.org/10.1145/4472.4478
+- <a id="ref-junit5"></a>The JUnit Team (2026). *JUnit User Guide*. https://docs.junit.org/current/user-guide/
 - <a id="ref-kahan1996"></a>William Kahan (1996). *Lecture Notes on the Status of IEEE Standard 754 for Binary Floating-Point Arithmetic*. University of California, Berkeley. https://people.eecs.berkeley.edu/~wkahan/ieee754status/IEEE754.PDF
 - <a id="ref-kay1993"></a>Alan C. Kay (1993). The Early History of Smalltalk. *ACM SIGPLAN Notices* 28(3): 69–95 (HOPL-II). https://doi.org/10.1145/155360.155364
 - <a id="ref-kay2003"></a>Alan Kay (2003). On the Meaning of "Object-Oriented Programming". E-mail to Stefan Ram, 23 July 2003. https://www.purl.org/stefan_ram/pub/doc_kay_oop_en
@@ -19641,6 +19675,8 @@ main() is int {
 - <a id="ref-posix2017"></a>IEEE and The Open Group (2018). Utility Conventions. In *The Open Group Base Specifications Issue 7, 2018 edition* (IEEE Std 1003.1-2017), Base Definitions, Chapter 12. https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap12.html
 - <a id="ref-prasad2020"></a>Aanand Prasad, Ben Firshman, Carl Tashian, Eva Parish (2020). *Command Line Interface Guidelines*. https://clig.dev/
 - <a id="ref-promisesaplus"></a>Promises/A+ organization. Promises/A+, rule 2.2.4 and note 3.1. https://promisesaplus.com/
+- <a id="ref-pydoctest"></a>Python Software Foundation (2026). doctest — Test interactive Python examples. *The Python Standard Library*. https://docs.python.org/3/library/doctest.html
+- <a id="ref-pymock"></a>Python Software Foundation (2026). unittest.mock — mock object library. *The Python Standard Library*. https://docs.python.org/3/library/unittest.mock.html
 - <a id="ref-r7rs2013"></a>Alex Shinn, John Cowan, Arthur A. Gleckler (eds.) (2013). *Revised⁷ Report on the Algorithmic Language Scheme*. https://small.r7rs.org/attachment/r7rs.pdf
 - <a id="ref-rfc3629"></a>François Yergeau (2003). *UTF-8, a Transformation Format of ISO 10646*. RFC 3629, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc3629
 - <a id="ref-rfc6901"></a>Paul C. Bryan, Kris Zyp, Mark Nottingham (eds.) (2013). *JavaScript Object Notation (JSON) Pointer*. RFC 6901, IETF. https://www.rfc-editor.org/rfc/rfc6901

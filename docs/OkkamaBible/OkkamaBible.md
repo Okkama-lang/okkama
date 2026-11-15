@@ -198,8 +198,9 @@
   - [15.6 Properties](#156-properties)
   - [15.7 A worked suite: a service with a clock and a store](#157-a-worked-suite-a-service-with-a-clock-and-a-store)
   - [15.8 The rest of the toolbox](#158-the-rest-of-the-toolbox)
-  - [15.9 What does not work yet](#159-what-does-not-work-yet)
-  - [15.10 What this design costs](#1510-what-this-design-costs)
+  - [15.9 Okkama among other languages](#159-okkama-among-other-languages)
+  - [15.10 What does not work yet](#1510-what-does-not-work-yet)
+  - [15.11 What this design costs](#1511-what-this-design-costs)
 - [Chapter 16. Enums and pattern matching](#chapter-16-enums-and-pattern-matching)
   - [16.1 A closed set of names](#161-a-closed-set-of-names)
   - [16.2 Cases that carry data](#162-cases-that-carry-data)
@@ -9691,7 +9692,37 @@ body and its cleanup before it records the result. Tasks still pending at
 the end are cancelled and drained. There is no implicit timeout, so a test
 that may hang should bound itself with a budget or a deadline.
 
-## 15.9 What does not work yet
+## 15.9 Okkama among other languages
+
+Every language with a test culture answers the same four questions: where a
+test lives, how the runner finds it, what stands in for a collaborator, and
+whether the machine can invent inputs.
+
+| Language | Where tests live | How they are found | Test doubles | Generated inputs |
+|---|---|---|---|---|
+| Java, JUnit 5 [[JUnit User Guide](#ref-junit5)] | separate test classes, by build-tool convention in a separate source tree | the `@Test` annotation | libraries outside the language | libraries |
+| Go [[Go package testing](#ref-gotesting)] | `_test.go` files in the package | functions named `TestXxx` | hand-written implementations of interfaces | coverage-guided fuzzing, `FuzzXxx` |
+| Rust [[Klabnik 2023](#ref-klabnik2023)] | a `#[cfg(test)]` module in the same file; integration tests in `tests/` | the `#[test]` attribute | crates outside the standard library | crates outside the standard library |
+| Python [[Python doctest](#ref-pydoctest); [Python unittest.mock](#ref-pymock)] | separate modules; examples inside docstrings (`doctest`) | the runner's naming rules | `unittest.mock`, which patches objects at run time | libraries |
+| D [[D specification](#ref-dunittest)] | `unittest` blocks in the module | compiled in with `-unittest` | hand-written | — |
+| Okkama | `test` blocks in a module, an object or a role | `okkama run -t` | one `fake` per role, checked against the role | `testing/property`, with shrinking |
+
+Okkama's nearest relatives are D and Rust. All three keep tests in the module
+they test and leave them out of a production build: D compiles `unittest`
+blocks only when asked, Rust compiles the `cfg(test)` module only for
+`cargo test`, and Okkama's parser skips test and fake blocks in a normal run
+(Section 15.1).
+
+Two things in the last row have no counterpart above. The fake belongs to
+the role: it is written once, next to the contract, and the compiler checks
+it against that contract whenever the role changes. Elsewhere this is a
+convention a team may follow [[Bugayenko 2016](#ref-bugayenko2016)]. And there is no run-time
+patching: what Python's `unittest.mock.patch` does, replacing an attribute
+of a module while a test runs, has nothing to act on in a language whose
+objects never change. A collaborator is replaced the way it is in
+production, by passing a different object that does the role.
+
+## 15.10 What does not work yet
 
 - Report formats, seeds and parallel workers are not in the command line;
   they are planned with the rewritten standard library (#339).
@@ -9700,7 +9731,7 @@ Until 0.4.1, a successor passed to `test.is` crashed the compiler and did
 not count as used (#275). It is now an ordinary argument:
 `test.is(bottle.open().close(), bottle)` compares the two bottles.
 
-## 15.10 What this design costs
+## 15.11 What this design costs
 
 - **A fake must be written.** A mocking library generates a double from an
   interface in one line. A fake is code, and for a large role it is a lot
@@ -19346,6 +19377,7 @@ limits are deliberate, and Chapter 28 discusses the ones that are not.
 - <a id="ref-cook2009"></a>William R. Cook (2009). On Understanding Data Abstraction, Revisited. In *Proceedings of OOPSLA 2009*, *ACM SIGPLAN Notices* 44(10): 557–572. https://doi.org/10.1145/1640089.1640133
 - <a id="ref-cox2018"></a>Russ Cox (2018). Minimal Version Selection. research!rsc, 21 February 2018. https://research.swtch.com/vgo-mvs
 - <a id="ref-cytron1991"></a>Ron Cytron, Jeanne Ferrante, Barry K. Rosen, Mark N. Wegman, F. Kenneth Zadeck (1991). Efficiently Computing Static Single Assignment Form and the Control Dependence Graph. *ACM TOPLAS* 13(4): 451–490. https://doi.org/10.1145/115372.115320
+- <a id="ref-dunittest"></a>D Language Foundation (2026). Unit Tests. *D Language Specification*. https://dlang.org/spec/unittest.html
 - <a id="ref-dahl1966"></a>Ole-Johan Dahl, Kristen Nygaard (1966). SIMULA — an ALGOL-Based Simulation Language. *Communications of the ACM* 9(9): 671–678. https://doi.org/10.1145/365813.365819
 - <a id="ref-dennis1966"></a>Jack B. Dennis, Earl C. Van Horn (1966). Programming Semantics for Multiprogrammed Computations. *Communications of the ACM* 9(3): 143–155. https://doi.org/10.1145/365230.365252
 - <a id="ref-dijkstra1968"></a>Edsger W. Dijkstra (1968). Go To Statement Considered Harmful. *Communications of the ACM* 11(3): 147–148. https://doi.org/10.1145/362929.362947
@@ -19360,6 +19392,7 @@ limits are deliberate, and Chapter 28 discusses the ones that are not.
 - <a id="ref-fahndrich2003"></a>Manuel Fähndrich, K. Rustan M. Leino (2003). Declaring and Checking Non-null Types in an Object-Oriented Language. In *Proceedings of OOPSLA 2003*: 302–312. ACM. https://doi.org/10.1145/949305.949332
 - <a id="ref-gabriel1991"></a>Richard P. Gabriel (1991). The Rise of "Worse is Better". In *Lisp: Good News, Bad News, How to Win Big*. https://www.dreamsongs.com/RiseOfWorseIsBetter.html
 - <a id="ref-gamma1994"></a>Erich Gamma, Richard Helm, Ralph Johnson, John Vlissides (1994). *Design Patterns: Elements of Reusable Object-Oriented Software*. Addison-Wesley.
+- <a id="ref-gotesting"></a>The Go Authors (2026). Package testing. *Go standard library documentation*. https://pkg.go.dev/testing
 - <a id="ref-gospec"></a>The Go Authors (2026). *The Go Programming Language Specification*, language version go1.27 (26 May 2026). https://go.dev/ref/spec
 - <a id="ref-goldberg1983"></a>Adele Goldberg, David Robson (1983). *Smalltalk-80: The Language and Its Implementation*. Addison-Wesley.
 - <a id="ref-goldberg1991"></a>David Goldberg (1991). What Every Computer Scientist Should Know About Floating-Point Arithmetic. *ACM Computing Surveys* 23(1): 5–48. https://doi.org/10.1145/103162.103163
@@ -19379,6 +19412,7 @@ limits are deliberate, and Chapter 28 discusses the ones that are not.
 - <a id="ref-jones2023"></a>Richard Jones, Antony Hosking, Eliot Moss (2023). *The Garbage Collection Handbook: The Art of Automatic Memory Management*, 2nd edition. CRC Press.
 - <a id="ref-baker1977"></a>Henry C. Baker Jr. and Carl Hewitt (1977). The Incremental Garbage Collection of Processes. MIT AI Laboratory Working Paper 149; also in *Proceedings of the Symposium on Artificial Intelligence and Programming Languages*, Rochester, NY. https://hdl.handle.net/1721.1/41969
 - <a id="ref-halstead1985"></a>Robert H. Halstead Jr. (1985). MULTILISP: A Language for Concurrent Symbolic Computation. *ACM Transactions on Programming Languages and Systems* 7(4): 501–538. https://doi.org/10.1145/4472.4478
+- <a id="ref-junit5"></a>The JUnit Team (2026). *JUnit User Guide*. https://docs.junit.org/current/user-guide/
 - <a id="ref-kahan1996"></a>William Kahan (1996). *Lecture Notes on the Status of IEEE Standard 754 for Binary Floating-Point Arithmetic*. University of California, Berkeley. https://people.eecs.berkeley.edu/~wkahan/ieee754status/IEEE754.PDF
 - <a id="ref-kay1993"></a>Alan C. Kay (1993). The Early History of Smalltalk. *ACM SIGPLAN Notices* 28(3): 69–95 (HOPL-II). https://doi.org/10.1145/155360.155364
 - <a id="ref-kay2003"></a>Alan Kay (2003). On the Meaning of "Object-Oriented Programming". E-mail to Stefan Ram, 23 July 2003. https://www.purl.org/stefan_ram/pub/doc_kay_oop_en
@@ -19433,6 +19467,8 @@ limits are deliberate, and Chapter 28 discusses the ones that are not.
 - <a id="ref-posix2017"></a>IEEE and The Open Group (2018). Utility Conventions. In *The Open Group Base Specifications Issue 7, 2018 edition* (IEEE Std 1003.1-2017), Base Definitions, Chapter 12. https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap12.html
 - <a id="ref-prasad2020"></a>Aanand Prasad, Ben Firshman, Carl Tashian, Eva Parish (2020). *Command Line Interface Guidelines*. https://clig.dev/
 - <a id="ref-promisesaplus"></a>Promises/A+ organization. Promises/A+, rule 2.2.4 and note 3.1. https://promisesaplus.com/
+- <a id="ref-pydoctest"></a>Python Software Foundation (2026). doctest — Test interactive Python examples. *The Python Standard Library*. https://docs.python.org/3/library/doctest.html
+- <a id="ref-pymock"></a>Python Software Foundation (2026). unittest.mock — mock object library. *The Python Standard Library*. https://docs.python.org/3/library/unittest.mock.html
 - <a id="ref-r7rs2013"></a>Alex Shinn, John Cowan, Arthur A. Gleckler (eds.) (2013). *Revised⁷ Report on the Algorithmic Language Scheme*. https://small.r7rs.org/attachment/r7rs.pdf
 - <a id="ref-rfc3629"></a>François Yergeau (2003). *UTF-8, a Transformation Format of ISO 10646*. RFC 3629, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc3629
 - <a id="ref-rfc6901"></a>Paul C. Bryan, Kris Zyp, Mark Nottingham (eds.) (2013). *JavaScript Object Notation (JSON) Pointer*. RFC 6901, IETF. https://www.rfc-editor.org/rfc/rfc6901

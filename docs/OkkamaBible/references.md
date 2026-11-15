@@ -39,6 +39,7 @@ bibliographic data were checked are listed.
 - [@dijkstra1972] Edsger W. Dijkstra (1972). The Humble Programmer. *Communications of the ACM* 15(10): 859–866. https://doi.org/10.1145/355604.361591
 - [@donovan2015] Alan A. A. Donovan, Brian W. Kernighan (2015). *The Go Programming Language*. Addison-Wesley. ISBN 978-0134190440.
 - [@duffy2016] Joe Duffy (2016). The Error Model. Blog post, 7 February 2016. http://joeduffyblog.com/2016/02/07/the-error-model/
+- [@dunittest] D Language Foundation (2026). Unit Tests. *D Language Specification*. https://dlang.org/spec/unittest.html {label: D specification}
 - [@elizarov2018] Roman Elizarov (2018). Structured concurrency. Blog post, 12 September 2018. https://medium.com/@elizarov/structured-concurrency-722d765aa952
 - [@fahndrich2003] Manuel Fähndrich, K. Rustan M. Leino (2003). Declaring and Checking Non-null Types in an Object-Oriented Language. In *Proceedings of OOPSLA 2003*: 302–312. ACM. https://doi.org/10.1145/949305.949332
 - [@fowler2007] Martin Fowler (2007). Mocks Aren't Stubs. https://martinfowler.com/articles/mocksArentStubs.html
@@ -52,6 +53,7 @@ bibliographic data were checked are listed.
 - [@goruntime] The Go Authors. The Go runtime scheduler, src/runtime/proc.go, function checkdead. https://go.dev/src/runtime/proc.go
 - [@gosling2023] James Gosling, Bill Joy, Guy Steele, Gilad Bracha, Alex Buckley, Daniel Smith, Gavin Bierman (2023). *The Java Language Specification, Java SE 21 Edition*. Oracle. https://docs.oracle.com/javase/specs/jls/se21/html/
 - [@gospec] The Go Authors (2026). *The Go Programming Language Specification*, language version go1.27 (26 May 2026). https://go.dev/ref/spec {label: Go specification}
+- [@gotesting] The Go Authors (2026). Package testing. *Go standard library documentation*. https://pkg.go.dev/testing {label: Go package testing}
 - [@griesemer2020] Robert Griesemer, Raymond Hu, Wen Kokke, Julien Lange, Ian Lance Taylor, Bernardo Toninho, Philip Wadler, Nobuko Yoshida (2020). Featherweight Go. *Proceedings of the ACM on Programming Languages* 4(OOPSLA): 149:1–149:29. https://doi.org/10.1145/3428217
 - [@grigore2017] Radu Grigore (2017). Java Generics are Turing Complete. In *Proceedings of POPL 2017*: 73–85. ACM. https://doi.org/10.1145/3009837.3009871
 - [@halstead1985] Robert H. Halstead Jr. (1985). MULTILISP: A Language for Concurrent Symbolic Computation. *ACM Transactions on Programming Languages and Systems* 7(4): 501–538. https://doi.org/10.1145/4472.4478
@@ -71,6 +73,7 @@ bibliographic data were checked are listed.
 - [@jep441] Gavin Bierman (2023). JEP 441: Pattern Matching for switch. OpenJDK. https://openjdk.org/jeps/441
 - [@jep453] OpenJDK (2023). JEP 453: Structured Concurrency (Preview). https://openjdk.org/jeps/453
 - [@jones2023] Richard Jones, Antony Hosking, Eliot Moss (2023). *The Garbage Collection Handbook: The Art of Automatic Memory Management*, 2nd edition. CRC Press.
+- [@junit5] The JUnit Team (2026). *JUnit User Guide*. https://docs.junit.org/current/user-guide/ {label: JUnit User Guide}
 - [@kahan1996] William Kahan (1996). *Lecture Notes on the Status of IEEE Standard 754 for Binary Floating-Point Arithmetic*. University of California, Berkeley. https://people.eecs.berkeley.edu/~wkahan/ieee754status/IEEE754.PDF
 - [@kay1993] Alan C. Kay (1993). The Early History of Smalltalk. *ACM SIGPLAN Notices* 28(3): 69–95 (HOPL-II). https://doi.org/10.1145/155360.155364
 - [@kay2003] Alan Kay (2003). On the Meaning of "Object-Oriented Programming". E-mail to Stefan Ram, 23 July 2003. https://www.purl.org/stefan_ram/pub/doc_kay_oop_en
@@ -126,6 +129,8 @@ bibliographic data were checked are listed.
 - [@posix2017] IEEE and The Open Group (2018). Utility Conventions. In *The Open Group Base Specifications Issue 7, 2018 edition* (IEEE Std 1003.1-2017), Base Definitions, Chapter 12. https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap12.html {label: POSIX}
 - [@prasad2020] Aanand Prasad, Ben Firshman, Carl Tashian, Eva Parish (2020). *Command Line Interface Guidelines*. https://clig.dev/
 - [@promisesaplus] Promises/A+ organization. Promises/A+, rule 2.2.4 and note 3.1. https://promisesaplus.com/
+- [@pydoctest] Python Software Foundation (2026). doctest — Test interactive Python examples. *The Python Standard Library*. https://docs.python.org/3/library/doctest.html {label: Python doctest}
+- [@pymock] Python Software Foundation (2026). unittest.mock — mock object library. *The Python Standard Library*. https://docs.python.org/3/library/unittest.mock.html {label: Python unittest.mock}
 - [@r7rs2013] Alex Shinn, John Cowan, Arthur A. Gleckler (eds.) (2013). *Revised⁷ Report on the Algorithmic Language Scheme*. https://small.r7rs.org/attachment/r7rs.pdf {label: R7RS}
 - [@rfc3629] François Yergeau (2003). *UTF-8, a Transformation Format of ISO 10646*. RFC 3629, Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc3629 {label: RFC 3629}
 - [@rfc6901] Paul C. Bryan, Kris Zyp, Mark Nottingham (eds.) (2013). *JavaScript Object Notation (JSON) Pointer*. RFC 6901, IETF. https://www.rfc-editor.org/rfc/rfc6901 {label: RFC 6901}

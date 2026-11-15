@@ -316,7 +316,37 @@ body and its cleanup before it records the result. Tasks still pending at
 the end are cancelled and drained. There is no implicit timeout, so a test
 that may hang should bound itself with a budget or a deadline.
 
-## 15.9 What does not work yet
+## 15.9 Okkama among other languages
+
+Every language with a test culture answers the same four questions: where a
+test lives, how the runner finds it, what stands in for a collaborator, and
+whether the machine can invent inputs.
+
+| Language | Where tests live | How they are found | Test doubles | Generated inputs |
+|---|---|---|---|---|
+| Java, JUnit 5 [@junit5] | separate test classes, by build-tool convention in a separate source tree | the `@Test` annotation | libraries outside the language | libraries |
+| Go [@gotesting] | `_test.go` files in the package | functions named `TestXxx` | hand-written implementations of interfaces | coverage-guided fuzzing, `FuzzXxx` |
+| Rust [@klabnik2023] | a `#[cfg(test)]` module in the same file; integration tests in `tests/` | the `#[test]` attribute | crates outside the standard library | crates outside the standard library |
+| Python [@pydoctest; @pymock] | separate modules; examples inside docstrings (`doctest`) | the runner's naming rules | `unittest.mock`, which patches objects at run time | libraries |
+| D [@dunittest] | `unittest` blocks in the module | compiled in with `-unittest` | hand-written | — |
+| Okkama | `test` blocks in a module, an object or a role | `okkama run -t` | one `fake` per role, checked against the role | `testing/property`, with shrinking |
+
+Okkama's nearest relatives are D and Rust. All three keep tests in the module
+they test and leave them out of a production build: D compiles `unittest`
+blocks only when asked, Rust compiles the `cfg(test)` module only for
+`cargo test`, and Okkama's parser skips test and fake blocks in a normal run
+(Section 15.1).
+
+Two things in the last row have no counterpart above. The fake belongs to
+the role: it is written once, next to the contract, and the compiler checks
+it against that contract whenever the role changes. Elsewhere this is a
+convention a team may follow [@bugayenko2016]. And there is no run-time
+patching: what Python's `unittest.mock.patch` does, replacing an attribute
+of a module while a test runs, has nothing to act on in a language whose
+objects never change. A collaborator is replaced the way it is in
+production, by passing a different object that does the role.
+
+## 15.10 What does not work yet
 
 - Report formats, seeds and parallel workers are not in the command line;
   they are planned with the rewritten standard library (#339).
@@ -325,7 +355,7 @@ Until 0.4.1, a successor passed to `test.is` crashed the compiler and did
 not count as used (#275). It is now an ordinary argument:
 `test.is(bottle.open().close(), bottle)` compares the two bottles.
 
-## 15.10 What this design costs
+## 15.11 What this design costs
 
 - **A fake must be written.** A mocking library generates a double from an
   interface in one line. A fake is code, and for a large role it is a lot
