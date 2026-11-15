@@ -1,5 +1,7 @@
 module bible/library v1.0.0;
 
+import "async/atomic" take Atomic;
+
 // A role ships its own fake. Tests use the fake; production code only ever
 // sees the role.
 enum Refused is Error = (because(reason is string));
@@ -10,9 +12,10 @@ role Books {
     has(id is int) is bool;
 
     fake {
-        remember(id is int, title is string) is void { fake.storage.set(id, title); }
-        title(id is int) is string { fake.storage.get(id); }
-        has(id is int) is bool { fake.storage.has(id); }
+        has shelf is Atomic<%int:string> = Atomic([:]);
+        remember(id is int, title is string) is void { shelf.replace(shelf.value() + [id: title]); }
+        title(id is int) is string { shelf.value()[id]; }
+        has(id is int) is bool { shelf.value().has(id); }
     }
 }
 

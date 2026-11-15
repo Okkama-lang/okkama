@@ -133,9 +133,10 @@ role Books {
     has(id is int) is bool;
 
     fake {
-        remember(id is int, title is string) is void { fake.storage.set(id, title); }
-        title(id is int) is string { fake.storage.get(id); }
-        has(id is int) is bool { fake.storage.has(id); }
+        has shelf is Atomic<%int:string> = Atomic([:]);
+        remember(id is int, title is string) is void { shelf.replace(shelf.value() + [id: title]); }
+        title(id is int) is string { shelf.value()[id]; }
+        has(id is int) is bool { shelf.value().has(id); }
     }
 }
 ```
@@ -200,24 +201,28 @@ role Door {
 `Door.fake().opened().open()` is `true`; the original fake still says
 `false`. This suits state that the role's own successors carry.
 
-**`fake.storage`.** For a fake that emulates a repository, the language
-provides a small key–value store, reachable only as `fake.storage.<op>(…)`
-inside the fake's own actions. The operations are `set(key, value)`,
-`get(key)`, `has(key)`, `remove(key)`, `clear()` and `size()`.
+**A field that holds an `Atomic`.** A fake that emulates a repository
+needs state that changes while the test runs, and a fake keeps it the way
+production code does: in a field that holds an `Atomic` (`async/atomic`), as
+`Books` above does with `shelf`. `value()` reads it and `replace(…)` puts a
+new value; the map inside is an ordinary immutable value, replaced whole.
 
-- Each `Role.fake()` gets its own store. A fake and all its successors
-  share one, so data survives a transition without being copied.
-- A missing key in `get` or `remove` is a programming error. There is no
-  `Maybe` result; use `has` first.
-- Keys follow the map-key rules; values may be anything, objects
-  included.
-- The store cannot be stored, passed, returned or compared. It is not
-  part of the fake's fields, so two fakes with different contents can
-  still be equal.
+- Each `Role.fake()` gets its own `Atomic`, because a field's default is
+  evaluated for each fake. Two fakes in one test never see each other's
+  data.
+- A successor copies the fields, and with them the reference to the same
+  `Atomic`, so a fake and all its successors share one state, and data
+  survives a transition without being copied.
+- The field cannot be a `Cell`. A cell stays inside one piece of synchronous
+  code and cannot be a field of anything (Section 26.3); a fake is an object
+  like any other, and the rule is the same.
+- A missing key reads as it does anywhere else: `shelf.value()[id]` on an
+  absent id is a runtime error, and `has` asks first.
 
-This is the one place where Okkama has hidden mutable state, and it is
-fenced on every side: test mode only, inside fake actions only, one store
-per fake.
+Until 0.6.0 the language had a separate key–value store for fakes,
+`fake.storage`. It was removed (#583): it was the one place with hidden
+mutable state, and a fake that keeps its state in a typed field needs no
+special rules and reads like the production code it stands in for.
 
 ## 15.6 Properties
 

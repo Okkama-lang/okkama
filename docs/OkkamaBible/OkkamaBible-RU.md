@@ -7420,6 +7420,8 @@ Haskell кладёт их в класс, и `Num` связывает вмест�
 ```okkama
 module bible/library v1.0.0;
 
+import "async/atomic" take Atomic;
+
 // A role ships its own fake. Tests use the fake; production code only ever
 // sees the role.
 enum Refused is Error = (because(reason is string));
@@ -7430,9 +7432,10 @@ role Books {
     has(id is int) is bool;
 
     fake {
-        remember(id is int, title is string) is void { fake.storage.set(id, title); }
-        title(id is int) is string { fake.storage.get(id); }
-        has(id is int) is bool { fake.storage.has(id); }
+        has shelf is Atomic<%int:string> = Atomic([:]);
+        remember(id is int, title is string) is void { shelf.replace(shelf.value() + [id: title]); }
+        title(id is int) is string { shelf.value()[id]; }
+        has(id is int) is bool { shelf.value().has(id); }
     }
 }
 
@@ -7662,9 +7665,10 @@ role Books {
     has(id is int) is bool;
 
     fake {
-        remember(id is int, title is string) is void { fake.storage.set(id, title); }
-        title(id is int) is string { fake.storage.get(id); }
-        has(id is int) is bool { fake.storage.has(id); }
+        has shelf is Atomic<%int:string> = Atomic([:]);
+        remember(id is int, title is string) is void { shelf.replace(shelf.value() + [id: title]); }
+        title(id is int) is string { shelf.value()[id]; }
+        has(id is int) is bool { shelf.value().has(id); }
     }
 }
 ```
@@ -7750,25 +7754,29 @@ role Door {
 `false`. Это подходит для состояния, которое несут собственные преемники
 роли.
 
-**`fake.storage`.** Для фейка, изображающего хранилище, язык даёт
-маленькое хранилище ключ–значение, доступное только как
-`fake.storage.<op>(…)` внутри собственных действий фейка. Операции:
-`set(key, value)`, `get(key)`, `has(key)`, `remove(key)`, `clear()` и
-`size()`.
+**Поле с `Atomic`.** Фейку, изображающему хранилище, нужно состояние,
+которое меняется по ходу теста, и фейк держит его так же, как рабочий код:
+в поле с `Atomic` (`async/atomic`), как `Books` выше держит `shelf`.
+`value()` читает его, `replace(…)` кладёт новое значение; словарь внутри —
+обычное неизменяемое значение, которое заменяется целиком.
 
-- Каждый `Role.fake()` получает собственное хранилище. Фейк и все его
-  преемники делят одно, поэтому данные переживают переход без копирования.
-- Отсутствующий ключ в `get` или `remove` — ошибка программиста.
-  Результата `Maybe` нет; сначала спросите `has`.
-- Ключи подчиняются правилам ключей словаря; значения могут быть любыми,
-  включая объекты.
-- Хранилище нельзя сохранить, передать, вернуть или сравнить. Оно не входит
-  в поля фейка, поэтому два фейка с разным содержимым всё ещё могут быть
-  равны.
+- Каждый `Role.fake()` получает собственный `Atomic`, потому что значение
+  поля по умолчанию вычисляется для каждого фейка. Два фейка в одном тесте
+  никогда не видят данных друг друга.
+- Преемник копирует поля, а вместе с ними ссылку на тот же `Atomic`, так что
+  фейк и все его преемники делят одно состояние и данные переживают переход
+  без копирования.
+- Поле не может быть `Cell`. Ячейка живёт внутри одного куска синхронного
+  кода и не может быть полем чего бы то ни было (раздел 26.3); фейк — такой
+  же объект, как любой другой, и правило то же.
+- Отсутствующий ключ читается так же, как везде: `shelf.value()[id]` для
+  отсутствующего id — ошибка времени выполнения, а `has` спрашивает заранее.
 
-Это единственное место, где у Okkama есть скрытое изменяемое состояние, и
-оно огорожено со всех сторон: только режим тестов, только внутри действий
-фейка, одно хранилище на фейк.
+До 0.6.0 у языка было отдельное хранилище ключ–значение для фейков,
+`fake.storage`. Его убрали (#583): это было единственное место со скрытым
+изменяемым состоянием, а фейку, который держит состояние в типизированном
+поле, не нужны особые правила, и читается он как рабочий код, который
+заменяет.
 
 ## 15.6 Свойства
 

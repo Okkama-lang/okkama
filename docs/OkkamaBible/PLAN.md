@@ -100,10 +100,11 @@ language.
 
 ## Language changes to reflect (0.6.0)
 
-- Chapter 15 (fakes): `fake.storage` was removed in 0.6.0 (#583). A fake's
-  mutable test state is a Cell or an Atomic, as in production code. The
-  example `15-library-tests` uses `fake.storage` and must be rewritten when
-  the Bible is checked against 0.6.0.
+- Chapter 15 (fakes): `fake.storage` was removed in 0.6.0 (#583). Done
+  2026-11-15: a fake's changing state is a field holding an `Atomic` (a Cell
+  cannot be a field); `15-library-tests` and 15.3/15.5 rewritten, and the
+  example passes on 0.5.8 (same pattern as the 0.6.0 conformance case
+  fakes.typed-state); recheck with the 0.6.0 toolchain.
 - Since 2026-11-15 `build.py --check` runs every example on Sparrow only,
   with `--engine sparrow`, which both the 0.5.8 and the 0.6.0 toolchains
   accept. The IR engine was removed in 0.6.0 (#584, owner's decision on
