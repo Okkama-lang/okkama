@@ -200,24 +200,16 @@ fn oir2_c4_closed_fields_and_open_boundaries() {
     });
 }
 
+/// The actual OrderedSet<int> keeps a role-valued once cache over plain implementations: once data since
+/// #717 (Bible §13.13, #520), so its High verifies.
 #[test]
-fn oir2_c4_ordered_set_cache_blocker() {
+fn oir2_c4_ordered_set_cache_verifies() {
     let source = include_str!("fixtures/p2_4/ordered-set-cached.ok");
     let module = super::lower_std(source).unwrap();
     // The runtime catalogue trusts the open-callable cleanup of its open invocations.
     let catalog = super::P1NativeSummaries::for_module(&module).unwrap();
     let context = ir::VerifyContext { external_contracts: &catalog, ..ir::VerifyContext::default() };
-    let report = ir::verify_high_with(&module, &ir::VerifyOptions::default(), context).unwrap_err();
-    assert_eq!(report.failure, ir::verify::VerifyFailure::Rejected);
-    assert!(!report.diagnostics.is_empty());
-    for diagnostic in &report.diagnostics {
-        assert_eq!(diagnostic.rule, ir::verify::RuleId::B111);
-        let ir::verify::EntityLocation::Declaration(decl) = diagnostic.primary.entity else {
-            panic!("expected the existing once-storage declaration blocker");
-        };
-        assert_eq!(module.declarations.get(decl).unwrap().name, "collections/set::OrderedSet<int>");
-    }
-    eprintln!("C4 actual OrderedSet<int>: lowers to high, verification blocked by once-storage B11.1");
+    ir::verify_high_with(&module, &ir::VerifyOptions::default(), context).unwrap_or_else(|report| panic!("{report:?}"));
 }
 
 const ESCAPED_ROLE_CALL: &str = "module app v1.0.0;

@@ -159,6 +159,16 @@ pub(crate) fn reaches_resource(p: &Program, ty: Type) -> bool {
 /// Whether every value of `ty` is closed plain data: no identity with destroy, no resource, no service
 /// and no unique builder anywhere in its graph. Unknown declarations are not plain.
 pub(crate) fn closed_plain(p: &Program, ty: Type) -> bool {
+    plain_graph(p, ty, true)
+}
+
+/// Whether values of `ty` compare structurally (`val.eq`, `test.is`, `array.difference`): closed plain data
+/// without a native handle, which has no structural value.
+pub(crate) fn comparable(p: &Program, ty: Type) -> bool {
+    plain_graph(p, ty, false)
+}
+
+fn plain_graph(p: &Program, ty: Type, handles: bool) -> bool {
     let mut pending = vec![ty];
     let mut seen = std::collections::HashSet::new();
     while let Some(ty) = pending.pop() {
@@ -189,6 +199,13 @@ pub(crate) fn closed_plain(p: &Program, ty: Type) -> bool {
                 }
                 pending.extend(&object.layout.storage_fields);
                 pending.extend(object.variant_cases.iter().map(|&case| Type::Object(case)));
+            }
+            // A native handle is the native registry's: it has no Okkama destroy and holds no ownership graph
+            // (P2.4 §4.7), so an object that keeps one (a regex match keeps its match state) stays plain data.
+            Type::Handle(id) => {
+                if !handles || !p.objects.get(id as usize).is_some_and(|object| object.handle) {
+                    return false;
+                }
             }
             // Nested arrays share their leaf: check it once, whatever the depth.
             Type::Array(shape) if shape.depth > 0 => {
@@ -1431,7 +1448,8 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
                 "map operation operand/result types mismatch"),
         ArrayConcat | ArrayJoin | ArraySlice | ArrayRemove | ArrayReplace | ArrayDifference => {
             // array.difference compares elements structurally, which only plain data allows.
-            let comparable = op != ArrayDifference || types.first().is_some_and(|&ty| closed_plain(p, ty));
+            let comparable = op != ArrayDifference
+                || types.first().is_some_and(|&ty| self::comparable(p, ty));
             enforce(array_types(op, types, out) && comparable, "ARRAY_OP_TYPE",
                 "array operation operand/result types mismatch")
         }
@@ -1503,7 +1521,7 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
             enforce(comparable && out == Some(Type::Bool), "VAL_EQ_TYPE",
                 "value comparison needs two values of one scalar, object or plain collection type")?;
             // Structural equality is defined on plain values; identities and error payloads are not compared.
-            enforce(closed_plain(p, types[0]), "VAL_EQ_TYPE", "value comparison needs closed plain operands")
+            enforce(self::comparable(p, types[0]), "VAL_EQ_TYPE", "value comparison needs closed plain operands")
         }
         Convert => enforce(matches!((types, out), ([from], Some(to)) if conversion(*from, to).is_some()),
             "CONVERT_TYPE", "conversion between these types is not defined"),
@@ -1525,7 +1543,7 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
                 [ty @ (Type::Object(_) | Type::Variant(_)), _] => Some(*ty),
                 _ => None,
             };
-            enforce(compared.is_none_or(|ty| closed_plain(p, ty)), "TEST_OPERAND",
+            enforce(compared.is_none_or(|ty| comparable(p, ty)), "TEST_OPERAND",
                 "test.is/test.isnt compare objects only when they are closed plain data")
         }
         RoleNarrow => enforce(matches!((types, out), ([Type::Role(_)], Some(Type::Role(_)))), "ROLE_NARROW",

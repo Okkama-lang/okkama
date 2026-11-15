@@ -158,20 +158,33 @@ fn handle_object() -> Object {
 }
 
 /// A map value that declares neither a destroy nor a resource is plain only if its whole graph is, as an array
-/// element is (`ARRAY_PLAIN`): a handle or a failure in it is not plain data (#692).
+/// element is (`ARRAY_PLAIN`): a failure in it is not plain data (#692).
 #[test]
 fn managed_map_values_follow_the_array_leaf_rule() {
-    for field in [Type::Failure, Type::Handle(6)] {
+    let holding = |field| {
         let mut p = program();
         p.objects.push(handle_object());
         p.objects[5].layout.storage_fields = vec![field];
         p.objects[5].layout.trace_layout = vec![0];
-        p.composites.push(Composite::Map { key: Type::Int, value: Type::Object(5) });
-        reject(&p, "MAP_PLAIN");
-        p.composites.pop();
-        p.functions[0].registers.push(Type::Array(ArrayType { leaf: ArrayLeaf::Object(5), depth: 1 }));
-        reject(&p, "ARRAY_PLAIN");
-    }
+        p
+    };
+    let mut p = holding(Type::Failure);
+    p.composites.push(Composite::Map { key: Type::Int, value: Type::Object(5) });
+    reject(&p, "MAP_PLAIN");
+    p.composites.pop();
+    p.functions[0].registers.push(Type::Array(ArrayType { leaf: ArrayLeaf::Object(5), depth: 1 }));
+    reject(&p, "ARRAY_PLAIN");
+    // A native handle has no Okkama destroy and holds no ownership graph (P2.4 §4.7): an object that keeps
+    // one is plain data (a regex match keeps its match state, #717).
+    let mut p = holding(Type::Handle(6));
+    p.composites.push(Composite::Map { key: Type::Int, value: Type::Object(5) });
+    p.functions[0].registers.push(Type::Array(ArrayType { leaf: ArrayLeaf::Object(5), depth: 1 }));
+    verify(&p).unwrap();
+    assert!(super::verify::closed_plain(&p, Type::Handle(6)));
+    // A handle has no structural value: `val.eq` and `test.is` still refuse its holder.
+    assert!(!super::verify::comparable(&p, Type::Object(5)));
+    // Only a handle declaration is a handle.
+    assert!(!super::verify::closed_plain(&p, Type::Handle(5)));
     // A closed plain object and a resource object are map values.
     let mut p = program();
     p.composites.push(Composite::Map { key: Type::Int, value: Type::Object(5) });

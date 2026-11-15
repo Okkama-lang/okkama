@@ -410,8 +410,8 @@ fn transfer(
             }
             Operation::Core(CoreOp::OnceStore { value, .. }) => {
                 let ty = body.values.get(*value).map_err(arena)?.ty;
-                if classification.types[&ty].certificate.is_none() {
-                    return Err(flow_error("once.store requires a full-graph plain certificate"));
+                if !classification.types[&ty].once_plain {
+                    return Err(flow_error("once.store requires a value that cannot retain a resource"));
                 }
             }
             Operation::Lexical(LexicalOp::Bind { binding, value }

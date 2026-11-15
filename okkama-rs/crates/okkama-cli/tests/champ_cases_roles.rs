@@ -279,6 +279,8 @@ case!(caps_internal_and_external, "L04.caps.internal-and-external");
 case!(caps_snapshot_after_successor, "L04.caps.snapshot-after-successor");
 case!(caps_time_operators, "L09.time.operators");
 case!(once_computed_once, "L04.once.computed-once");
+// A once let keeps a closure with plain captures and a role value over plain implementations (#717).
+case!(once_keeps_plain_closure_and_role, "L04.once.keeps-plain-closure-and-role");
 // Construction completion state: a role call on a receiver whose construction is pending fails (§11.4).
 case!(construction_escaped_self_role_call, "L04.invariant.escaped-self-role-call");
 
