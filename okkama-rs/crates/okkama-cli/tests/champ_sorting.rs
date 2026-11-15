@@ -32,7 +32,6 @@ fn run_unbounded(text: &str) -> Run {
 
 /// 10⁵ elements sort within a small wall-time budget: an O(n²) sort makes about 5·10⁹ element moves here.
 #[test]
-#[ignore = "#678: the OIR-2 sort is an O(n²) insertion sort"]
 fn sorts_a_hundred_thousand_ints_quickly() {
     let source = r#"module app v1.0.0;
 import "io/stdout" take Stdout;
@@ -88,21 +87,110 @@ fn sorts_edge_sizes_and_scalar_kinds() {
     }
 }
 
-/// Until roles reach the SPB 17 backend (#676) the case stops in layout after own and low; then it is
-/// checked in full against its case.json. Its second half sorts 10⁵ ints, which the O(n²) sort cannot do
-/// within the step budget.
+/// A failing `order()` stops the sort with its error, and a later sort of 10⁵ ints still works within the
+/// case's budget: checked in full against its case.json.
 #[test]
-#[ignore = "#678"]
 fn failing_order_stops_the_sort() {
     let id = "L09.compare.failing-order-stops-the-sort";
-    match run_case(id) {
-        Ok(()) => {}
-        Err(error) if BACKEND.iter().any(|phase| error.starts_with(&format!("compile: OIR-2 {phase}:"))) => {
-            println!("{id}: own and low passed; stops in {error}");
-        }
-        Err(error) => panic!("{id}: {error}"),
-    }
+    run_case(id).unwrap_or_else(|error| panic!("{id}: {error}"));
 }
 
-/// Stages after verify_low belong to the SPB 17 / Champ lanes.
-const BACKEND: [&str; 4] = ["layout", "compile_low", "verify_load", "encode"];
+/// Elements ordered by `Comparing<T>.order` sort by Tomato's bottom-up merge: every comparison calls `order`
+/// through role dispatch, so the effects inside `order` come in Tomato's order, equal ranks keep their order,
+/// and the source array is unchanged (#678).
+#[test]
+fn role_elements_merge_with_tomatos_comparisons() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "compare" take Comparing, Order;
+object Card does Comparing<Card> {
+    has rank is int;
+    has tag is string;
+    Card(:rank, :tag);
+    rank() is int { rank; }
+    tag() is string { tag; }
+    order(other is Card) is Order {
+        Stdout().writeln(tag + "?" + other.tag());
+        rank.order(other.rank());
+    }
+}
+main() is int {
+    let cards is @Card = [Card(rank: 5, tag: "a"), Card(rank: 3, tag: "b"), Card(rank: 8, tag: "c"),
+        Card(rank: 3, tag: "d"), Card(rank: 1, tag: "e"), Card(rank: 9, tag: "f"), Card(rank: 5, tag: "g")];
+    let sorted = cards.ordering();
+    Stdout().writeln(sorted.map() -> c { c.tag(); }.join(","));
+    Stdout().writeln(cards.map() -> c { c.tag(); }.join(","));
+    0;
+}
+"#;
+    let run = run_unbounded(source);
+    assert_eq!(run.result, Ok(0), "stdout={:?}", run.stdout);
+    // Tomato's output for this program (`okkama run` on a default build), which the merge below derives.
+    let tomato = "a?b\nc?d\ne?f\nb?d\na?d\na?c\ne?g\nf?g\nb?e\nb?g\nd?g\na?g\nc?g\nc?f\ne,b,d,a,g,c,f\na,b,c,d,e,f,g\n";
+    assert_eq!(run.stdout, tomato);
+    assert_eq!(merge_oracle(&[(5, "a"), (3, "b"), (8, "c"), (3, "d"), (1, "e"), (9, "f"), (5, "g")]), tomato);
+}
+
+/// The bottom-up merge of Tomato's `ordering`: the trace of `left?right` per comparison, then the sorted tags
+/// and the source tags.
+fn merge_oracle(cards: &[(i64, &str)]) -> String {
+    let mut trace = String::new();
+    let mut items = cards.to_vec();
+    let mut width = 1;
+    while width < items.len() {
+        let mut merged = Vec::new();
+        let mut left = 0;
+        while left < items.len() {
+            let mid = (left + width).min(items.len());
+            let end = (mid + width).min(items.len());
+            let (mut i, mut j) = (left, mid);
+            while i < mid && j < end {
+                trace.push_str(&format!("{}?{}\n", items[i].1, items[j].1));
+                if items[i].0 > items[j].0 {
+                    merged.push(items[j]);
+                    j += 1;
+                } else {
+                    merged.push(items[i]);
+                    i += 1;
+                }
+            }
+            merged.extend_from_slice(&items[i..mid]);
+            merged.extend_from_slice(&items[j..end]);
+            left = end;
+        }
+        items = merged;
+        width *= 2;
+    }
+    let tags = |list: &[(i64, &str)]| list.iter().map(|card| card.1).collect::<Vec<_>>().join(",");
+    format!("{trace}{}\n{}\n", tags(&items), tags(cards))
+}
+
+/// Elements that own a resource sort too: each comparison borrows them, the sorted array shares them with the
+/// source, and each is destroyed once when the scope ends, as in Tomato (#678).
+#[test]
+fn resource_elements_are_borrowed_by_the_comparisons() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "compare" take Comparing, Order;
+object Ranked does Comparing<Ranked> {
+    has n is int;
+    Ranked(:n);
+    n() is int { n; }
+    order(other is Ranked) is Order {
+        Stdout().writeln(n.string() + "?" + other.n().string());
+        n.order(other.n());
+    }
+    destroy { Stdout().writeln("destroy " + n.string()); }
+}
+main() is int {
+    let ranked = [Ranked(n: 3), Ranked(n: 1), Ranked(n: 2)];
+    let sorted = ranked.ordering();
+    Stdout().writeln(sorted.map() -> r { r.n().string(); }.join(","));
+    0;
+}
+"#;
+    let run = run_unbounded(source);
+    assert_eq!(run.result, Ok(0), "stdout={:?}", run.stdout);
+    // Tomato's output for this program (`okkama run` on a default build).
+    assert_eq!(run.stdout, "3?1\n1?2\n3?2\n1,2,3\ndestroy 2\ndestroy 1\ndestroy 3\n");
+}

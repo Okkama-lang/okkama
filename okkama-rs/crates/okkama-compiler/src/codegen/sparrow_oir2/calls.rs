@@ -398,6 +398,8 @@ impl Emitter<'_> {
     fn dispatch(&mut self, op: &o::CallOp) -> Result<(O, Vec<A>, s::ResultContext), GenerateError> {
         let (receiver, role, slot, call) = match op {
             o::CallOp::Role { receiver, role, slot, call } => (*receiver, role.as_u32(), *slot, call),
+            // A sort dispatches each comparison on the left element; its site describes one comparison.
+            o::CallOp::Order { array, role, slot, call } => (*array, role.as_u32(), *slot, call),
             o::CallOp::Closure { callee, call } => {
                 let ty = self.body.values.get(callee.value)?.ty;
                 (*callee, roles::callable_role(self.module, ty)?, 0, call)
@@ -458,6 +460,15 @@ impl Emitter<'_> {
                 o::Type::Object { decl, .. } => vec![decl.as_u32()],
                 _ => implementations,
             },
+            o::CallOp::Order { .. } => {
+                let o::Type::Array(element) = *self.module.types.get(self.body.values.get(receiver.value)?.ty)? else {
+                    return Err(error("call.order of a non-array"));
+                };
+                match self.module.types.get(element)? {
+                    o::Type::Object { decl, .. } => vec![decl.as_u32()],
+                    _ => implementations,
+                }
+            }
             // An open call can reach every closure layout of its `fn` type.
             _ if open => implementations,
             _ => {
@@ -477,6 +488,19 @@ impl Emitter<'_> {
         let dispatch = s::Dispatch {
             role, slot, failures, retained_params: retained.into_iter().collect(), targets,
         };
+        if let o::CallOp::Order { .. } = op {
+            // Each comparison borrows two elements: an owning slot gets an empty packet from the runtime, and
+            // the elements' obligations stay with the array's owner (their deps are proof-only). The sort
+            // yields a new array.
+            if call.packet.is_some() || !dispatch.retained_params.is_empty() {
+                return Err(error("call.order comparisons must borrow their elements"));
+            }
+            let array = self.loc(receiver.value)?;
+            let value = translate_type(self.module, self.body.values.get(receiver.value)?.ty)?;
+            return Ok((O::OrderDispatch, vec![A::Dispatch(dispatch), A::Location(array)], s::ResultContext {
+                value: Some(value), may_fail: failures != 0, ..s::ResultContext::default()
+            }));
+        }
         let mut arguments = vec![A::Dispatch(dispatch)];
         if !observation {
             arguments.push(A::Flag(shielded));
@@ -848,7 +872,8 @@ impl Emitter<'_> {
                         flow: s::Flow::Outcomes(outcomes),
                     });
                 }
-                if let o::Operation::Call(call @ (o::CallOp::Role { .. } | o::CallOp::Closure { .. })) = op.as_ref() {
+                if let o::Operation::Call(call @ (o::CallOp::Role { .. } | o::CallOp::Order { .. }
+                    | o::CallOp::Closure { .. })) = op.as_ref() {
                     let (opcode, arguments, context) = self.dispatch(call)?;
                     (opcode, arguments, context, vec![normal, unwind])
                 } else if let o::Operation::Call(o::CallOp::Cap { cap, field, call }) = op.as_ref() {
@@ -892,7 +917,7 @@ impl Emitter<'_> {
             }
             _ => return Err(error("expected invocation")),
         };
-        if !matches!(opcode, O::InvokeObserve | O::InvokeDispatch) {
+        if !matches!(opcode, O::InvokeObserve | O::InvokeDispatch | O::OrderDispatch) {
             opcode.call_abi().ok_or_else(|| error("missing shared helper ABI"))?;
         }
         let tags = opcode.tags(&context);
@@ -908,7 +933,7 @@ impl Emitter<'_> {
                 _ => return Err(error("unexpected call outcome")),
             };
             let schema = opcode.results(tag, &context)?;
-            if !matches!(opcode, O::InvokeObserve | O::InvokeDispatch) {
+            if !matches!(opcode, O::InvokeObserve | O::InvokeDispatch | O::OrderDispatch) {
                 opcode.call_post_offsets(tag, &context)?;
             }
             Ok(s::Outcome { tag, edge: self.edge(edge.block, &edge.args, outcome, &schema)? })
@@ -1251,7 +1276,8 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                     data(s::DataOp::Const, vec![], emitter.reg(inst.results[0])?,
                         s::Immediate::Constant(s::Constant::Descriptor(id)))
                 }
-                o::Operation::Call(call @ (o::CallOp::Role { .. } | o::CallOp::Closure { .. })) => {
+                o::Operation::Call(call @ (o::CallOp::Role { .. } | o::CallOp::Order { .. }
+                    | o::CallOp::Closure { .. })) => {
                     let (opcode, arguments, context) = emitter.dispatch(call)?;
                     if context.may_fail {
                         return Err(error("fallible call requires explicit outcomes"));

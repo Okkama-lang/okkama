@@ -1113,6 +1113,7 @@ pub(crate) fn collection_data(module: &o::Module, body: &o::Body, op: &o::Collec
         C::ArrayLen { array } => (D::ArrayLen, vec![*array]),
         C::ArrayConcat { arrays, packet: None, .. } => (D::ArrayConcat, arrays.clone()),
         C::ArrayJoin { array, separator } => (D::ArrayJoin, vec![*array, *separator]),
+        C::ArrayOrder { array } => (D::ArrayOrder, vec![*array]),
         C::ArraySlice { array, start, end, packet: None } => (D::ArraySlice, vec![*array, *start, *end]),
         C::ArrayRemove { array, index, packet: None } => (D::ArrayRemove, vec![*array, *index]),
         C::ArrayReplace { array, index, value, packet: None } => (D::ArrayReplace, vec![*array, *index, *value]),
@@ -1391,3 +1392,5 @@ fn complete_codegen_roots(function: &mut s::Function) -> Result<(), GenerateErro
     }).collect();
     Ok(())
 }
+#[cfg(test)]
+mod ordering_tests;
