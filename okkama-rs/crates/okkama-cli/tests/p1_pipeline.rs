@@ -108,7 +108,10 @@ fn p1_pipeline_scalar_run() {
 
 #[test]
 fn p1_pipeline_unsupported_does_not_fallback() {
-    let error = compile("module app; async main() is int { 0; }").unwrap_err();
+    // Plain async lowers since P2.5 V5; spawn stays outside it (plan §4 P1).
+    let source = concat!("module app; object W { W(); async run() is int { 1; } } ",
+        "async main() is int { await spawn W().run(); }");
+    let error = compile(source).unwrap_err();
     assert!(error.is_unsupported(), "{error}");
     assert!(error.to_string().contains("unsupported in OIR-2 lowering"));
 }

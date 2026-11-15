@@ -35,6 +35,10 @@ mod native_catalogue_tests;
 mod pipeline;
 pub use pipeline::{PipelineError, compile_linked, compile_linked_with, lower_linked_high};
 pub use pipeline::{compile_linked_tests_with, lower_linked_tests_high};
+#[path = "async.rs"]
+mod asynchronous;
+#[cfg(test)]
+mod async_tests;
 mod construction;
 mod declarations;
 mod defer;

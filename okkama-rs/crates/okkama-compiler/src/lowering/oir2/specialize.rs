@@ -557,6 +557,7 @@ impl Specializer<'_, '_> {
             }
             T::Varargs(inner) => T::Varargs(Box::new(self.ty(inner, span)?)),
             T::Successor(inner) => T::Successor(Box::new(self.ty(inner, span)?)),
+            T::Future(result) => T::Future(result.as_ref().map(|ty| self.ty(ty, span).map(Box::new)).transpose()?),
             T::Enum(id) => T::Enum(self.enumeration(*id, &[], span)?),
             T::Variant(id, args) => T::Variant(self.enumeration(*id, args, span)?, vec![]),
             T::Param(_) => return Err(LowerError::unsupported(span,
@@ -618,6 +619,7 @@ impl Specializer<'_, '_> {
 
     fn stmt(&mut self, stmt: &mut thir::Stmt, env: &[(ty::ParamId, ty::Ty)]) -> Result<()> {
         use thir::StmtKind as S;
+        super::asynchronous::check_defer(stmt)?;
         match &mut stmt.kind {
             S::Let { value, .. } | S::Expr(value) | S::Throw(value) | S::BindField { value, .. }
             | S::StageField { value, .. } | S::Rebind { value, .. } | S::Defer(value) => self.expr(value, env)?,
@@ -651,8 +653,8 @@ impl Specializer<'_, '_> {
 
     fn expr(&mut self, expr: &mut thir::Expr, env: &[(ty::ParamId, ty::Ty)]) -> Result<()> {
         use thir::ExprKind as E;
-        if let E::Await(_) | E::Spawn(_) = &expr.kind {
-            return Err(LowerError::unsupported(expr.span, "async operation (#570)"));
+        if let Some(construct) = super::asynchronous::outside_plain(expr) {
+            return Err(LowerError::unsupported(expr.span, construct));
         }
         if let E::StreamWrite { .. } = &expr.kind {
             let roles = super::streams::StreamRoles::find(&self.input.registry, expr.span)?;
@@ -797,7 +799,8 @@ impl Specializer<'_, '_> {
                 }
             }
             E::Unary { operand: value, .. } | E::Coerce { value, .. } | E::Cast { value, .. }
-            | E::Panic(value) | E::Unpack(value) | E::VariantTag(value) | E::VariantGet { value, .. } => {
+            | E::Panic(value) | E::Unpack(value) | E::VariantTag(value) | E::VariantGet { value, .. }
+            | E::Await(value) => {
                 self.expr(value, env)?;
             }
             E::Binary { left, right, .. } | E::Logical { left, right, .. }
