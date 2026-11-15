@@ -36,7 +36,11 @@ pub(super) fn consumed(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<
     locations.iter().copied().enumerate().filter_map(|(index, location)| {
         let consume = match op {
             ScopeBegin | OwnEmpty | OwnCreateCommit | DepsOf | DepsEmpty | InvokeObserve
-                | ArrayGet | Fail | Evaluate | Catch => false,
+                | ArrayGet | Fail | Evaluate | Catch | Lookup => false,
+            // The journal packet travels with the buffer; the buffer is a register (check_builders).
+            BuilderPush | BuilderAppend | BuilderRange | BuilderFinish | BuilderAbandon => {
+                index + 1 == locations.len()
+            }
             OwnMove | OwnJoin | OwnAdmit | OwnAccept | CleanupBegin | ExitAbort | ExitDispatch => true,
             OwnBind | OwnRebind => index == 0 || index == 2,
             OwnStage => index < 1 + usize::from(between) || index + 1 == locations.len(),

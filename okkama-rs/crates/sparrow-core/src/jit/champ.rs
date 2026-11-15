@@ -561,6 +561,72 @@ impl Emit<'_, '_> {
                 self.edge(&outcomes[1].edge, &[vec![failure]]);
                 return Ok(());
             }
+            O::Lookup => {
+                let s::Flow::Outcomes(outcomes) = flow else { unreachable!("verified lookup outcomes") };
+                let collection = self.word(locations[0]);
+                let index = self.word(locations[1]);
+                let function = self.iconst(self.index as u64);
+                let pc = self.iconst(self.pc.unwrap() as u64);
+                let found = self.call("champ_machine_lookup", &[ctx, function, pc, collection, index, post]).unwrap();
+                let status = self.load(ctx, std::mem::offset_of!(Ctx, status));
+                let running = self.builder.create_block();
+                self.builder.ins().brif(status, self.stop, &[], running, &[]);
+                self.builder.switch_to_block(running);
+                let yes = self.builder.create_block();
+                let no = self.builder.create_block();
+                self.builder.ins().brif(found, yes, &[], no, &[]);
+                self.builder.switch_to_block(yes);
+                let value = self.load(post, 0);
+                self.edge(&outcomes[0].edge, &[vec![value]]);
+                self.builder.switch_to_block(no);
+                self.edge(&outcomes[1].edge, &[]);
+                return Ok(());
+            }
+            O::BuilderPush | O::BuilderAppend | O::BuilderRange | O::BuilderFinish | O::BuilderAbandon => {
+                let (&packet, operands) = locations.split_last().expect("verified journal packet");
+                let words = operands.iter().map(|&location| self.word(location)).collect::<Vec<_>>();
+                let record = self.record(&words);
+                let count = self.iconst(words.len() as u64);
+                let function = self.iconst(self.index as u64);
+                let pc = self.iconst(self.pc.unwrap() as u64);
+                let value = self.call("champ_machine_builder", &[ctx, function, pc, record, count]).unwrap();
+                // The journal leaves with the buffer, as own.move moves a packet record. Both are read
+                // after the helper's safepoint, from their rooted frame slots.
+                let journal = self.read(packet);
+                let buffer = self.word(operands[0]);
+                match flow {
+                    s::Flow::Next(destinations) => {
+                        let status = self.load(ctx, std::mem::offset_of!(Ctx, status));
+                        let running = self.builder.create_block();
+                        self.builder.ins().brif(status, self.stop, &[], running, &[]);
+                        self.builder.switch_to_block(running);
+                        self.write(destinations[0], &journal);
+                        self.next();
+                    }
+                    s::Flow::Outcomes(outcomes) => {
+                        let status = self.load(ctx, std::mem::offset_of!(Ctx, status));
+                        let success = self.builder.create_block();
+                        let failure = self.builder.create_block();
+                        self.builder.ins().brif(status, failure, &[], success, &[]);
+                        self.builder.switch_to_block(success);
+                        self.edge(&outcomes[0].edge, &[vec![value], journal.clone()]);
+                        self.builder.switch_to_block(failure);
+                        let failed = self.builder.ins().icmp_imm_s(IntCC::Equal, status, FAILED as i64);
+                        let unwind = self.builder.create_block();
+                        self.builder.ins().brif(failed, unwind, &[], self.stop, &[]);
+                        self.builder.switch_to_block(unwind);
+                        let function = self.iconst(self.index as u64);
+                        let pc = self.iconst(self.pc.unwrap() as u64);
+                        let frame = self.builder.ins().get_frame_pointer(types::I64);
+                        self.call("trace", &[ctx, function, pc, frame]);
+                        let failure = self.load(ctx, std::mem::offset_of!(Ctx, failure));
+                        self.store(ctx, std::mem::offset_of!(Ctx, status), zero);
+                        self.store(ctx, std::mem::offset_of!(Ctx, failure), zero);
+                        self.edge(&outcomes[1].edge, &[vec![buffer], journal, vec![failure]]);
+                    }
+                }
+                return Ok(());
+            }
             O::ScopeBegin => {
                 let scope = arguments.iter().find_map(|arg| match arg {
                     A::Scope(id) => Some(*id), _ => None,
@@ -975,6 +1041,15 @@ impl Emit<'_, '_> {
         self.load(pointer, offset)
     }
 
+    /// A collection operation the runtime decodes from this instruction (`rt_machine_collection`).
+    fn collection(&mut self, words: &[Value]) -> Value {
+        let arguments = self.record(words);
+        let count = self.iconst(words.len() as u64);
+        let function = self.iconst(self.index as u64);
+        let pc = self.iconst(self.pc.expect("collection PC") as u64);
+        self.call("champ_machine_collection", &[self.ctx, function, pc, arguments, count]).unwrap()
+    }
+
     fn data(&mut self, op: s::DataOp, inputs: &[u32], output: Option<u32>, immediate: &s::Immediate)
         -> Result<(), Error>
     {
@@ -995,8 +1070,9 @@ impl Emit<'_, '_> {
             D::Const => {
                 let word = match immediate {
                     s::Immediate::Constant(s::Constant::Int(value)) => {
-                        let value = value.parse().map_err(|_| Error("invalid integer constant".into()))?;
-                        self.heap.int(value)
+                        let value = value.parse::<num_bigint::BigInt>()
+                            .map_err(|_| Error("invalid integer constant".into()))?;
+                        self.heap.big(value)
                     }
                     s::Immediate::Constant(s::Constant::Bool(value)) => u64::from(*value),
                     s::Immediate::Constant(s::Constant::Descriptor(value)) => *value as u64,
@@ -1050,6 +1126,10 @@ impl Emit<'_, '_> {
                 let inclusive = self.iconst(u64::from(*immediate == s::Immediate::Inclusive(true)));
                 self.call("champ_machine_range", &[self.ctx, kind, words[0], right, inclusive]).unwrap()
             }
+            D::ArrayNew if ty == s::Type::Bytes => self.collection(&words),
+            D::ValEq | D::ValNe if !matches!(self.source.registers[inputs[0] as usize], s::Type::Object(_)) => {
+                self.collection(&words)
+            }
             D::ArrayNew => {
                 let s::Type::Array(shape) = ty else {
                     unreachable!("verified plain array type")
@@ -1059,6 +1139,9 @@ impl Emit<'_, '_> {
                 let count = self.iconst(words.len() as u64);
                 self.call("array", &[self.ctx, repr, elements, count]).unwrap()
             }
+            D::MapNew | D::MapLen | D::MapHas | D::MapGet | D::MapKeys | D::MapValues | D::MapKeyAt
+                | D::MapValueAt | D::MapMerge | D::MapDifference | D::ArrayConcat | D::ArrayJoin | D::ArraySlice
+                | D::ArrayRemove | D::ArrayReplace | D::ArrayDifference | D::BuilderNew => self.collection(&words),
             D::ArrayLen => {
                 let header = self.load(words[0], 0);
                 let length = self.builder.ins().ushr_imm_u(header, 32);
@@ -1231,7 +1314,9 @@ impl Emit<'_, '_> {
 fn sets_status(op: s::DataOp) -> bool {
     use s::DataOp as D;
     matches!(op, D::IntMod | D::RangeNew | D::Convert | D::IntMul | D::StrConcat | D::RatNew | D::ValEq | D::ValNe
-        | D::VariantGet)
+        | D::VariantGet | D::MapNew | D::MapLen | D::MapHas | D::MapGet | D::MapKeys | D::MapValues | D::MapKeyAt
+        | D::MapValueAt | D::MapMerge | D::MapDifference | D::ArrayConcat | D::ArrayJoin | D::ArraySlice
+        | D::ArrayRemove | D::ArrayReplace | D::ArrayDifference | D::BuilderNew | D::ArrayNew)
 }
 
 #[cfg(test)]

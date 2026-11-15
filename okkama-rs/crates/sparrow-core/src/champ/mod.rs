@@ -9,6 +9,7 @@ mod records;
 mod abi;
 pub use abi::*;
 pub(crate) mod machine;
+pub(crate) mod collections;
 pub use machine::{ExternalEntry, PlainEntry};
 mod helpers;
 pub mod cleanup;

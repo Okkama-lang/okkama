@@ -38,12 +38,48 @@ fn fallible_scalar(op: &o::Operation) -> bool {
         o::Operation::Core(o::CoreOp::IntMod { .. } | o::CoreOp::RangeNew { .. } | o::CoreOp::IntDiv { .. }
             | o::CoreOp::RatNew { .. } | o::CoreOp::ValEq { .. } | o::CoreOp::ValNe { .. }
             | o::CoreOp::VariantGet { .. }) => true,
+        o::Operation::Collection(o::CollectionOp::MapGet { .. } | o::CollectionOp::MapKeyAt { .. }
+            | o::CollectionOp::MapValueAt { .. } | o::CollectionOp::MapDifference { packet: None, .. }
+            | o::CollectionOp::ArraySlice { packet: None, .. } | o::CollectionOp::ArrayRemove { packet: None, .. }
+            | o::CollectionOp::ArrayReplace { packet: None, .. }
+            | o::CollectionOp::ArrayDifference { packet: None, .. }) => true,
         o::Operation::Core(o::CoreOp::Convert { from, to, .. }) => {
             matches!((numeric_type(*from), numeric_type(*to)),
                 (Some(from), Some(to)) if s::conversion(from, to) == Some(true))
         }
         _ => false,
     }
+}
+
+/// The SPB 17 result of a fallible collection operation on operands of `inputs`.
+fn collection_result(module: &o::Module, op: s::DataOp, inputs: &[s::Type]) -> Result<s::Type, GenerateError> {
+    use s::DataOp as D;
+    let receiver = *inputs.first().ok_or_else(|| error("collection operation without a receiver"))?;
+    let entry = |index: u32| composites(module).entries().get(index as usize).copied();
+    Ok(match (op, receiver) {
+        (D::ArraySlice | D::ArrayRemove | D::ArrayReplace | D::ArrayDifference | D::MapDifference, _) => receiver,
+        (D::MapGet | D::MapValueAt, s::Type::Map(id)) => match entry(id) {
+            Some(s::Composite::Map { value, .. }) => value,
+            _ => return Err(error("map operation on a non-map composite")),
+        },
+        (D::MapKeyAt, s::Type::Map(id)) => match entry(id) {
+            Some(s::Composite::Map { key, .. }) => key,
+            _ => return Err(error("map operation on a non-map composite")),
+        },
+        _ => return Err(later("collection operation outcome")),
+    })
+}
+
+/// The Champ form of a builder transition with outcomes.
+fn builder_opcode(op: &o::CollectionOp) -> Option<O> {
+    use o::CollectionOp as C;
+    Some(match op {
+        C::BuilderPush { .. } | C::MapBuilderPut { .. } => O::BuilderPush,
+        C::BuilderAppend { .. } | C::MapBuilderAppend { .. } => O::BuilderAppend,
+        C::BuilderAppendRange { .. } => O::BuilderRange,
+        C::BuilderFinish { .. } | C::MapBuilderFinish { .. } => O::BuilderFinish,
+        _ => return None,
+    })
 }
 
 pub(super) fn needs_s2(module: &o::Module, function: &o::Function) -> Result<bool, GenerateError> {
@@ -365,6 +401,51 @@ impl Emitter<'_> {
         Ok(())
     }
 
+    /// A builder transition: buffer, operands and the journal packet in; outcomes per the registry.
+    fn builder(&mut self, opcode: O, op: &o::CollectionOp, normal: &o::InvokeEdge, unwind: &o::InvokeEdge)
+        -> Result<s::Instruction, GenerateError>
+    {
+        use o::CollectionOp as C;
+        let (flag, values, packet) = match op {
+            C::BuilderPush { buffer, value, packet } => (None, vec![*buffer, *value], packet),
+            C::MapBuilderPut { buffer, key, value, packet } => (None, vec![*buffer, *key, *value], packet),
+            C::BuilderAppend { buffer, array, packet } => (None, vec![*buffer, *array], packet),
+            C::MapBuilderAppend { buffer, map, packet } => (None, vec![*buffer, *map], packet),
+            C::BuilderAppendRange { buffer, start, end, inclusive, packet } => {
+                (Some(*inclusive), vec![*buffer, *start, *end], packet)
+            }
+            C::BuilderFinish { buffer, packet } | C::MapBuilderFinish { buffer, packet } => {
+                (None, vec![*buffer], packet)
+            }
+            _ => return Err(error("expected a builder transition")),
+        };
+        let packet = packet.ok_or_else(|| error("builder transition without its element journal"))?;
+        let mut arguments = flag.map(A::Flag).into_iter().collect::<Vec<_>>();
+        arguments.extend(values.iter().chain([&packet]).map(|&value| self.loc(value).map(A::Location))
+            .collect::<Result<Vec<_>, _>>()?);
+        let buffer = translate_type(self.module, self.body.values.get(values[0])?.ty)?;
+        let finished = match buffer {
+            s::Type::Builder(id) => match composites(self.module).entries().get(id as usize) {
+                Some(s::Composite::Builder { array }) => Some(*array),
+                _ => None,
+            },
+            s::Type::MapBuilder(id) => Some(s::Type::Map(id)),
+            _ => return Err(error("builder transition on a non-builder")),
+        };
+        let context = s::ResultContext {
+            buffer: Some(buffer),
+            value: if opcode == O::BuilderFinish { finished } else { None },
+            may_fail: true,
+            ..s::ResultContext::default()
+        };
+        let outcomes = [(s::Tag::Normal, o::Outcome::Normal, normal), (s::Tag::Unwind, o::Outcome::Unwind, unwind)]
+            .into_iter().map(|(tag, outcome, edge)| {
+                let schema = opcode.results(tag, &context)?;
+                Ok(s::Outcome { tag, edge: self.edge(edge.block, &edge.args, outcome, &schema)? })
+            }).collect::<Result<_, GenerateError>>()?;
+        Ok(s::Instruction::Champ { op: opcode, arguments, flow: s::Flow::Outcomes(outcomes) })
+    }
+
     fn invocation(&mut self, term: &o::TermKind) -> Result<s::Instruction, GenerateError> {
         let (opcode, arguments, context, edges) = match term {
             o::TermKind::InvokeOwn { op, normal, unwind } => {
@@ -416,6 +497,34 @@ impl Emitter<'_> {
                         return Ok(s::Instruction::Champ { op: O::Evaluate, arguments,
                             flow: s::Flow::Outcomes(outcomes) });
                     }
+                }
+                if let o::Operation::Collection(collection) = op.as_ref()
+                    && let Some(opcode) = builder_opcode(collection)
+                {
+                    return self.builder(opcode, collection, normal, unwind);
+                }
+                if let o::Operation::Collection(collection) = op.as_ref()
+                    && !matches!(collection, o::CollectionOp::ArrayGet { .. })
+                {
+                    let (data, values) = collection_data(self.module, self.body, collection, None)?
+                        .ok_or_else(|| later(op.opcode()))?;
+                    let inputs = values.iter()
+                        .map(|&value| translate_type(self.module, self.body.values.get(value)?.ty))
+                        .collect::<Result<Vec<_>, GenerateError>>()?;
+                    let result = collection_result(self.module, data, &inputs)?;
+                    let context = s::ResultContext {
+                        value: Some(result), may_fail: true, ..s::ResultContext::default()
+                    };
+                    let evaluation = s::Evaluation { op: data, result, immediate: s::Immediate::None };
+                    let mut arguments = vec![A::Evaluation(evaluation)];
+                    arguments.extend(values.iter().map(|&value| self.loc(value).map(A::Location))
+                        .collect::<Result<Vec<_>, _>>()?);
+                    let outcomes = [(s::Tag::Normal, o::Outcome::Normal, normal),
+                        (s::Tag::Unwind, o::Outcome::Unwind, unwind)].into_iter().map(|(tag, outcome, edge)| {
+                        let schema = O::Evaluate.results(tag, &context)?;
+                        Ok(s::Outcome { tag, edge: self.edge(edge.block, &edge.args, outcome, &schema)? })
+                    }).collect::<Result<_, GenerateError>>()?;
+                    return Ok(s::Instruction::Champ { op: O::Evaluate, arguments, flow: s::Flow::Outcomes(outcomes) });
                 }
                 if let o::Operation::Collection(o::CollectionOp::ArrayGet { array, index }) = op.as_ref() {
                     let s::Type::Array(shape) = translate_type(self.module, self.body.values.get(*array)?.ty)? else {
@@ -737,6 +846,13 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                     s::Instruction::Champ { op, arguments, flow: s::Flow::Next(inst.results.iter()
                         .map(|&value| emitter.loc(value)).collect::<Result<_, _>>()?) }
                 }
+                o::Operation::Collection(o::CollectionOp::BuilderAbandon { buffer, packet }
+                    | o::CollectionOp::MapBuilderAbandon { buffer, packet }) => {
+                    let packet = packet.ok_or_else(|| error("builder.abandon without its element journal"))?;
+                    let arguments = vec![A::Location(emitter.loc(*buffer)?), A::Location(emitter.loc(packet)?)];
+                    let outputs = inst.results.iter().map(|&value| emitter.loc(value)).collect::<Result<_, _>>()?;
+                    s::Instruction::Champ { op: O::BuilderAbandon, arguments, flow: s::Flow::Next(outputs) }
+                }
                 o::Operation::Cleanup(op) => emitter.cleanup_instruction(op, &inst.results)?,
                 o::Operation::Exit(op) => emitter.exit_instruction(op, &inst.results)?,
                 o::Operation::Core(o::CoreOp::TypeOf { ty, .. }) => {
@@ -869,6 +985,23 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                     arguments: vec![A::Label(kind), A::Location(L::Register(payload))],
                     flow: s::Flow::Outcomes(vec![s::Outcome { tag: s::Tag::Unwind, edge }]) }
             }
+            o::TermKind::Lookup { collection, key, found, missing, .. } => {
+                let value = match translate_type(module, body.values.get(*collection)?.ty)? {
+                    array @ (s::Type::Array(_) | s::Type::Bytes) => s::element_type(array),
+                    s::Type::Map(id) => match composites(module).entries().get(id as usize) {
+                        Some(s::Composite::Map { value, .. }) => Some(*value),
+                        _ => None,
+                    },
+                    _ => None,
+                }.ok_or_else(|| error("lookup on a value that is neither an array nor a map"))?;
+                s::Instruction::Champ { op: O::Lookup,
+                    arguments: vec![A::Location(emitter.loc(*collection)?), A::Location(emitter.loc(*key)?)],
+                    flow: s::Flow::Outcomes(vec![
+                        s::Outcome { tag: s::Tag::Some,
+                            edge: emitter.edge(found.block, &found.args, o::Outcome::Normal, &[P::Value(value)])? },
+                        s::Outcome { tag: s::Tag::None, edge: emitter.branch(missing)? },
+                    ]) }
+            }
             o::TermKind::Raise(failure) => s::Instruction::Raise(emitter.reg(*failure)?),
             o::TermKind::InvokeOwn { .. } | o::TermKind::InvokeDefer { .. } => emitter.invocation(&block.term.kind)?,
             o::TermKind::Br(target) => s::Instruction::Br(emitter.branch(target)?),
@@ -945,7 +1078,6 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                 s::Instruction::Champ { op: O::RetDefer, arguments, flow: s::Flow::Next(vec![]) }
             }
             o::TermKind::Unreachable => s::Instruction::Unreachable,
-            _ => return Err(later("failure/cleanup terminator")),
         };
         emitter.result.code.push(term);
     }

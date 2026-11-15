@@ -103,8 +103,9 @@ fn s1_truncation_and_malformed_inputs_never_panic() {
     assert!(decode(&trailing).unwrap_err().message.contains("trailing"));
     let p = Program { entry: None, ..plain() };
     let bytes = encode(&p).unwrap();
-    assert_eq!(&bytes[bytes.len() - 3..], &[142, 0, 0]);
-    let prefix = &bytes[..bytes.len() - 3];
+    // ret with no values, no entry, no composites.
+    assert_eq!(&bytes[bytes.len() - 4..], &[142, 0, 0, 0]);
+    let prefix = &bytes[..bytes.len() - 4];
     for id in [0, 19, 25, 34, 35, 36, 47, 127, 128, u32::MAX] {
         let mut malformed = prefix.to_vec();
         malformed.push(255);
@@ -167,9 +168,13 @@ fn s1_edges_reject_bad_arity_schema_and_cross_outcome_slots() {
 #[test]
 fn s1_registry_has_exact_p1_ids_and_normative_schemas() {
     let reserved = [0, 19, 25, 34, 35, 36];
-    assert_eq!(Opcode::ALL.len(), 41);
+    assert_eq!(Opcode::ALL.len(), 47);
     for id in 0..47 {
         assert_eq!(Opcode::from_id(id).is_err(), reserved.contains(&id));
+    }
+    // #622: builders and lookup take 56..=61; 47..=55 and 62..=95 stay unassigned here.
+    for id in 47..96 {
+        assert_eq!(Opcode::from_id(id).is_ok(), (56..=61).contains(&id), "{id}");
     }
     for &op in Opcode::ALL {
         assert_eq!(Opcode::from_id(op.id()).unwrap(), op);
@@ -179,7 +184,7 @@ fn s1_registry_has_exact_p1_ids_and_normative_schemas() {
     use ServiceKind::*;
     let ctx = ResultContext { value: Some(Type::Int), between: true, may_fail: true,
         labels: vec![DeferLabel { label: 9, result: Some(Type::Int) }, DeferLabel { label: 10, result: None }],
-        reserve: true, active_failure: false };
+        reserve: true, active_failure: false, buffer: None };
     assert_eq!(Opcode::DepsOf.id(), 40);
     assert_eq!(Opcode::InvokeObserve.id(), 41);
     assert_eq!(Opcode::DepsOf.results(Tag::Normal, &ctx).unwrap(), vec![S(Deps)]);

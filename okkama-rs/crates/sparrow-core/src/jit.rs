@@ -190,6 +190,15 @@ helpers! {
     champ_machine_variant_get = crate::champ::machine::rt_machine_variant_get as (ctx,
         case: Word, storage: Word, value: Word) -> u64; [Allocates, Fails, Stops];
     #[cfg(feature = "champ-abi")]
+    champ_machine_collection = crate::champ::collections::rt_machine_collection as (ctx,
+        function: u64, pc: u64, args: *const Word, count: u64) -> u64; [Allocates, Collects, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_builder = crate::champ::collections::rt_machine_builder as (ctx,
+        function: u64, pc: u64, args: *const Word, count: u64) -> u64; [Allocates, Collects, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_lookup = crate::champ::collections::rt_machine_lookup as (ctx,
+        function: u64, pc: u64, collection: Word, index: Word, post: *mut Word) -> u64; [Stops];
+    #[cfg(feature = "champ-abi")]
     champ_machine_catch = crate::champ::machine::rt_machine_catch as (ctx,
         failure: Word, descriptor: Word) -> u64; [];
     #[cfg(feature = "champ-abi")]

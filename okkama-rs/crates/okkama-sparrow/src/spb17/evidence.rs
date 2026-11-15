@@ -94,6 +94,11 @@ fn definitions(f: &Function) -> BTreeMap<Location, Vec<Definition>> {
     definitions
 }
 
+/// Builder transitions with outcomes: the journal packet is their last operand.
+fn journal_transition(op: Opcode) -> bool {
+    matches!(op, Opcode::BuilderPush | Opcode::BuilderAppend | Opcode::BuilderRange | Opcode::BuilderFinish)
+}
+
 fn arguments(instruction: &Instruction) -> Vec<Location> {
     match instruction {
         Instruction::Champ { arguments, .. } => arguments.iter().filter_map(|argument| match argument {
@@ -215,6 +220,10 @@ impl<'a> Evidence<'a> {
                             let input = arguments(&self.function.code[pc])[0];
                             self.query(input, 3)?;
                         }
+                        (op, _) if journal_transition(*op) => {
+                            let input = *arguments(&self.function.code[pc]).last()?;
+                            self.query(input, 3)?;
+                        }
                         _ => return None,
                     }
                 }
@@ -225,6 +234,9 @@ impl<'a> Evidence<'a> {
                             | Opcode::InvokeCallOwn => {}
                         Opcode::OwnMove | Opcode::OwnJoin | Opcode::OwnSplit => {
                             for input in arguments(&self.function.code[pc]) { self.query(input, 3)?; }
+                        }
+                        Opcode::BuilderAbandon => {
+                            self.query(*arguments(&self.function.code[pc]).last()?, 3)?;
                         }
                         _ => return self.inventory(location).filter(Inventory::is_empty),
                     }
@@ -305,6 +317,7 @@ impl<'a> Evidence<'a> {
                 if plain_results(self.program, entry) { Some(BTreeSet::new()) } else { None }
             }
             OwnEmpty | ScopeBegin => Some(BTreeSet::new()),
+            BuilderAbandon if !identity => self.resolve(*locations.last()?, false),
             OwnCreateCommit => {
                 let object = args.iter().find_map(|arg| match arg { Argument::Object(id) => Some(*id), _ => None })?;
                 Some(if self.program.objects[object as usize].layout.has_destroy {
@@ -377,6 +390,7 @@ impl<'a> Evidence<'a> {
                         }
                         (Opcode::InvokeCallOwn, Tag::Normal) => self.produced(pc, ordinal, slot as usize, false)?,
                         (Opcode::ExitDispatch, Tag::Pending) => self.produced(pc, ordinal, slot as usize, false)?,
+                        (op, _) if journal_transition(*op) => self.query(*locations.last()?, 2)?,
                         _ => return None,
                     }
                 }
@@ -396,6 +410,7 @@ impl<'a> Evidence<'a> {
                             joined
                         }
                         Opcode::OwnAccept => self.query(locations[0], 2)?,
+                        Opcode::BuilderAbandon => self.query(*locations.last()?, 2)?,
                         Opcode::OwnBind | Opcode::OwnRebind | Opcode::OwnStage
                             if *op != Opcode::OwnStage || args.first() == Some(&Argument::Flag(false)) => {
                             let mut admission = self.query(locations[0], 2)?;
@@ -521,6 +536,11 @@ impl<'a> Evidence<'a> {
         }
         if identity {
             return None;
+        }
+        if journal_transition(*op) {
+            // The journal packet leaves every outcome of a builder transition as it entered.
+            let input = *arguments(&self.function.code[pc]).last()?;
+            return self.resolve(input, false);
         }
         match (op, tag) {
             (Opcode::ScopeSplit | Opcode::OwnSplitChecked, Tag::Normal) => self.partition(args, slot == 1),

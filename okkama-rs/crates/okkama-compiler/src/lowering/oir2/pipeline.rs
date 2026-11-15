@@ -82,8 +82,9 @@ pub(super) fn compile_high_with(high: o::Module, mode: o::VerifyMode) -> Result<
     let low = o::low::lower_cleanup(own.module, &o::low::LowOptions::default())
         .map_err(|error| phase("low", error))?;
     o::verify_low_with(&low, &options.verify, context()).map_err(|error| phase("verify_low", error))?;
-    let layouts = layouts(&low)?;
-    let objects = sparrow_oir2::objects(&low, &layouts).map_err(|error| phase("layout", error))?;
+    let layouts = sparrow_oir2::with_composites(&low, || layouts(&low))?;
+    let objects = sparrow_oir2::with_composites(&low, || sparrow_oir2::objects(&low, &layouts))
+        .map_err(|error| phase("layout", error))?;
     let contracts = s::p1::P1Contracts::new(&objects).map_err(|error| phase("spb_contracts", error))?;
     let output = sparrow_oir2::compile_low_with(&low, &layouts, context(), &contracts, &options.verify)
         .map_err(|error| phase("compile_low", error))?;
@@ -115,10 +116,8 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
         } else if matches!(declaration.kind, o::DeclarationKind::Enum { .. }) {
             storage_fields = vec![s::Type::Int];
         }
-        let trace_layout = storage_fields.iter().enumerate().filter_map(|(index, ty)| {
-            matches!(ty, s::Type::Bytes | s::Type::Array(_) | s::Type::Str | s::Type::Object(_) | s::Type::Successor(_)
-                | s::Type::Failure | s::Type::Rat | s::Type::Variant(_)).then_some(index as u32)
-        }).collect::<Vec<_>>();
+        let trace_layout = storage_fields.iter().enumerate()
+            .filter_map(|(index, ty)| ty.traced().then_some(index as u32)).collect::<Vec<_>>();
         // Plain layouts can contain resource fields; compute the transitive fact below.
         layouts.insert(id.as_u32(), sparrow_oir2::ObjectLayout {
             runtime: s::ObjectRuntimeLayout {

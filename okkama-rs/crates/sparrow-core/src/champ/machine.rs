@@ -237,7 +237,9 @@ fn legacy_type(ty: s::Type) -> okkama_sparrow::Type {
     use okkama_sparrow::Type as T;
     match ty {
         s::Type::Error => T::Failure,
-        s::Type::Bytes | s::Type::Array(_) => T::Array(okkama_sparrow::TypeRef(0)),
+        s::Type::Bytes | s::Type::Array(_) | s::Type::Map(_) | s::Type::MapBuilder(_) | s::Type::Builder(_) => {
+            T::Array(okkama_sparrow::TypeRef(0))
+        }
         s::Type::Int => T::Int,
         s::Type::Bool | s::Type::Descriptor | s::Type::Never => T::Bool,
         s::Type::Str => T::Str,
@@ -551,7 +553,7 @@ pub extern "C" fn rt_machine_value_eq(ctx: *mut Ctx, descriptor: Word, left: Wor
     }
 }
 
-fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, right: Word, ty: s::Type)
+pub(crate) fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, right: Word, ty: s::Type)
     -> Result<bool, String>
 {
     let mut pending = vec![(left, right, ty)];
@@ -603,7 +605,24 @@ fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, right: Word,
                 }
                 true
             }
-            s::Type::Error | s::Type::Failure => false,
+            s::Type::Map(id) => {
+                let Some(&s::Composite::Map { value, .. }) = program.composites.get(id as usize) else {
+                    return Err("map equality on a non-map composite".into());
+                };
+                let x = &runtime.heap.payload::<crate::ops::MapValue>(a).expect("verified map").entries;
+                let y = &runtime.heap.payload::<crate::ops::MapValue>(b).expect("verified map").entries;
+                if x.len() != y.len() {
+                    return Ok(false);
+                }
+                for ((left_key, left), (right_key, right)) in x.iter().zip(y.iter()) {
+                    if left_key != right_key {
+                        return Ok(false);
+                    }
+                    pending.push((left.1, right.1, value));
+                }
+                true
+            }
+            s::Type::Error | s::Type::Failure | s::Type::Builder(_) | s::Type::MapBuilder(_) => false,
         };
         if !equal {
             return Ok(false);

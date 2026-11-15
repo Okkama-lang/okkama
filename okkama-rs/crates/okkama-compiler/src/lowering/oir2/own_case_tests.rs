@@ -296,14 +296,12 @@ fn oir2_own_conformance_lanes_reach_low_under_the_build_gate() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Stopped item: `core.StringSource` is a builtin service object with no
-/// registered summary in the producer's P1 catalog (`native_summaries.rs`).
+/// The builtin `core.StringSource` sources reach Low under the build gate.
 #[test]
-fn oir2_own_string_source_needs_a_producer_service_summary() {
+fn oir2_own_string_source_cases_reach_low() {
     for id in ["L01.lex.raw.concatenation", "L01.lex.raw.multiline", "L01.lex.string.escapes",
         "L02.range.for-and-functional", "L03.for.sources"] {
-        let error = case(id, ir::verify::VerifyMode::Structural).unwrap_err();
-        assert!(error.starts_with("own_elaborate:") && error.contains("unregistered P1 service"), "{id}: {error}");
+        case(id, ir::verify::VerifyMode::Structural).unwrap_or_else(|error| panic!("{id}: {error}"));
     }
 }
 

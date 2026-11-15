@@ -30,6 +30,8 @@ pub struct ResultContext {
     pub labels: Vec<DeferLabel>,
     pub reserve: bool,
     pub active_failure: bool,
+    /// The consumed builder of a builder transition: its normal (or unwind) result keeps this type.
+    pub buffer: Option<Type>,
 }
 
 macro_rules! registry {
@@ -99,6 +101,12 @@ registry! {
     44 => Evaluate, "evaluate";
     45 => Catch, "catch";
     46 => DepsEmpty, "deps.empty";
+    56 => BuilderPush, "builder.push";
+    57 => BuilderAppend, "builder.append";
+    58 => BuilderRange, "builder.range";
+    59 => BuilderFinish, "builder.finish";
+    60 => BuilderAbandon, "builder.abandon";
+    61 => Lookup, "lookup";
 }
 
 impl Opcode {
@@ -176,6 +184,21 @@ impl Opcode {
             }
             (FailureDispatch, Tag::None) => vec![],
             (FailureDispatch, Tag::Some) => vec![Value(Type::Failure)],
+            (BuilderPush | BuilderAppend | BuilderRange, Tag::Normal) => {
+                let buffer = context.buffer.ok_or_else(|| error("builder transition without a buffer type"))?;
+                vec![Value(buffer), S(Packet)]
+            }
+            (BuilderFinish, Tag::Normal) => {
+                let value = context.value.ok_or_else(|| error("builder.finish without a result type"))?;
+                vec![Value(value), S(Packet)]
+            }
+            (BuilderPush | BuilderAppend | BuilderRange | BuilderFinish, Tag::Unwind) => {
+                let buffer = context.buffer.ok_or_else(|| error("builder transition without a buffer type"))?;
+                vec![Value(buffer), S(Packet), Value(Type::Failure)]
+            }
+            (BuilderAbandon, Tag::Normal) => vec![S(Packet)],
+            (Lookup, Tag::Some) => context.value.into_iter().map(Value).collect(),
+            (Lookup, Tag::None) => vec![],
             _ => return Err(error(format!("invalid outcome {tag:?} for {}", self.name()))),
         };
         Ok(slots)
@@ -184,7 +207,8 @@ impl Opcode {
     pub fn tags(self, context: &ResultContext) -> Vec<Tag> {
         use Opcode::*;
         match self {
-            Catch => vec![Tag::Some, Tag::None],
+            Catch | Lookup => vec![Tag::Some, Tag::None],
+            BuilderPush | BuilderAppend | BuilderRange | BuilderFinish => vec![Tag::Normal, Tag::Unwind],
             Fail => vec![Tag::Unwind],
             OwnSplitChecked | ScopeSplit | ScopeTransfer | ArrayGet | Evaluate => vec![Tag::Normal, Tag::Unwind],
             InvokeObserve if context.may_fail => vec![Tag::Normal, Tag::Unwind],
@@ -219,7 +243,8 @@ impl Opcode {
         matches!(self, Self::OwnSplitChecked | Self::ScopeSplit | Self::ScopeTransfer |
             Self::InvokeCallOwn | Self::InvokeObserve | Self::InvokeDefer | Self::CleanupNext | Self::ExitDispatch |
             Self::FailureDispatch | Self::RetOwn | Self::RetDefer | Self::ArrayGet | Self::Fail | Self::Evaluate
-            | Self::Catch)
+            | Self::Catch | Self::BuilderPush | Self::BuilderAppend | Self::BuilderRange | Self::BuilderFinish
+            | Self::Lookup)
     }
 }
 
@@ -424,6 +449,9 @@ helper_registry! {
         "champ_machine_rat_order" => &[C, W, W], 0, None;
         "champ_machine_value_eq" => &[C, W, W, W], G, None;
         "champ_machine_variant_get" => &[C, W, W, W], G, None;
+        "champ_machine_collection" => &[C, W, W, P, W], G | HELPER_COLLECTS, None;
+        "champ_machine_builder" => &[C, W, W, P, W], G | HELPER_COLLECTS, None;
+        "champ_machine_lookup" => &[C, W, W, W, W, P], HELPER_STOPS, None;
         "champ_machine_catch" => &[C, W, W], 0, None;
         "champ_machine_plain_packet" => &[C, P], HELPER_STOPS, None;
         "champ_machine_text_order" => &[C, W, W], 0, None;

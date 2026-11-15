@@ -1368,6 +1368,8 @@ mod defer_tests;
 
 #[path = "own_case_tests.rs"]
 mod own_case_tests;
+#[path = "backend_collection_tests.rs"]
+mod backend_collection_tests;
 
 #[test]
 fn oir2_pipeline_scalar() {
