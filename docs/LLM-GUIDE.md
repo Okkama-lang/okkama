@@ -100,6 +100,18 @@ summary.
   Anything about Tomato is measured or tested with a default build.
 - **Docker disk.** Per-worktree target volumes take several GB each. When a
   build fails on space, run `docker system df`.
+- **Heavy runs on GitHub's runners.** The repository is public, so Actions
+  minutes are free. Push a branch named `wave/<name>` at the commit to test.
+  The `Wave` workflow (`.github/workflows/wave.yml`) runs the crate suites
+  (seven jobs in parallel) and conformance on Tomato and Champ, then the
+  blocker ranking (artifact `champ-blockers`). Delete the `wave/*` branch
+  afterwards. Use local Docker only when a result is needed faster than the
+  runners give it.
+- **Cloud Claude sessions** (routines, `RemoteTrigger`): 4 CPUs and 15 GB
+  each, Rust 1.97 and crates.io available. Two things are needed before
+  they can take implementation lanes: push access (the Claude GitHub App
+  installed on the repository) and access to the specifications in
+  `okkama-docs`.
 
 ## 2. Repository map
 
