@@ -60,3 +60,42 @@ full_check! {
     w1_order_lazy_branches => "L08.order.lazy-branches",
     w1_void_await_for_effect => "L08.void.await-for-effect",
 }
+
+/// #601 D25, OIR-2 §10.1 `make()`: a synchronous action returns a cold Future through `cache.rehome ... target
+/// caller`; the caller's scope admits it with its entry, awaits it, and settles it dynamically at its close, where
+/// the cached outcome Q is destroyed once (OIR-2 §10.2: the cache owns the outcome until its owner closes).
+#[test]
+fn d25_a_returned_future_is_settled_by_the_scope_that_admits_it() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has label is string;
+    Res(:label);
+    show() is string { label; }
+    destroy { Stdout().writeln("destroy " + label); }
+}
+object Work {
+    Work();
+    async run() is Res {
+        Stdout().writeln("running");
+        Res(label: "Q");
+    }
+}
+object Maker {
+    Maker();
+    make() is Future<Res> {
+        Work().run();
+    }
+}
+async main() is int {
+    let f = Maker().make();
+    Stdout().writeln("made");
+    let r = await f;
+    Stdout().writeln("got " + r.show());
+    0;
+}
+"#;
+    let run = champ_support::run_source(source).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(run.result, Ok(0), "{}", run.stdout);
+    assert_eq!(run.stdout, "made\nrunning\ngot Q\ndestroy Q\n");
+}
