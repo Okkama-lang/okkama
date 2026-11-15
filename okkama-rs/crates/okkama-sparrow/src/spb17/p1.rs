@@ -34,13 +34,7 @@ impl P1Contracts {
             && object.fields.is_empty() && object.layout.storage_fields == [Type::Int]
             && !object.layout.may_reach_resource);
         for object in objects.iter().filter(|object| !object.error_cases.is_empty()) {
-            let valid = if object.fields.is_empty() {
-                object.layout.storage_fields == [Type::Int]
-            } else {
-                object.error_cases.len() == 1 && object.layout.storage_fields.iter()
-                    .all(|ty| matches!(ty, Type::Str | Type::Int | Type::Bool))
-            };
-            if !valid || object.layout.may_reach_resource || object.layout.has_destroy {
+            if !error_layout(objects, object) {
                 return Err(error("invalid P1 plain Error layout"));
             }
         }
@@ -184,6 +178,39 @@ impl P1Contracts {
             },
         })
     }
+}
+
+/// A plain Error layout whose text `okkama.Error.text` writes: an Error enum (one case-number word), a
+/// case of an Error variant without payload (no storage), or a case with payload fields of the types an
+/// error payload may have and the text can show: scalars, plain enums that name their cases, and Error
+/// enums and Error variants (an `Error` role payload has no text on Tomato either).
+pub fn error_layout(objects: &[Object], object: &Object) -> bool {
+    let layout = &object.layout;
+    if layout.may_reach_resource || layout.has_destroy || object.enum_cases != 0 || !object.variant_cases.is_empty()
+        || object.handle || object.role.is_some() || object.any_box
+    {
+        return false;
+    }
+    if object.fields.is_empty() {
+        return layout.storage_fields == [Type::Int]
+            || (layout.storage_fields.is_empty() && object.error_cases.len() == 1);
+    }
+    let shown = |ty: &Type| match *ty {
+        Type::Str | Type::Int | Type::Bool | Type::Byte | Type::Float | Type::Rat => true,
+        Type::Object(id) => objects.get(id as usize).is_some_and(|payload| !payload.error_cases.is_empty()
+            || (payload.enum_cases > 0 && payload.enum_names.len() == payload.enum_cases as usize
+                && payload.fields.is_empty() && payload.layout.storage_fields == [Type::Int])),
+        Type::Variant(id) => objects.get(id as usize).is_some_and(|variant| !variant.variant_cases.is_empty()
+            && variant.variant_cases.iter().all(|&case| objects.get(case as usize)
+                .is_some_and(|case| !case.error_cases.is_empty()))),
+        _ => false,
+    };
+    // Every storage word is one payload field, shown in declaration order.
+    let mut storage = object.fields.iter().map(|field| field.storage as usize).collect::<Vec<_>>();
+    storage.sort_unstable();
+    object.error_cases.len() == 1 && object.fields.iter().all(|field| !field.once)
+        && storage.iter().copied().eq(0..layout.storage_fields.len())
+        && layout.storage_fields.iter().all(shown)
 }
 
 /// The runtime word type held by a registered plain Atomic specialization (P2.4 §4.8): a scalar, or

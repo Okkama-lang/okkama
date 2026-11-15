@@ -144,6 +144,8 @@ pub(super) fn opaque_cleanup(ctx: *mut Ctx, io: *mut CallOwn) -> Word {
     NORMAL
 }
 
+/// The text of a plain Error value, as Tomato's compiled `text()` writes it (#306): the case, then its
+/// payload in parentheses, strings as Okkama literals, plain enums and Error values by their own texts.
 pub(super) fn error_text(runtime: &Runtime, source: &s::Program, object: Word) -> String {
     let descriptor = heap::payload(runtime.heap.header_of(object)) as usize;
     if descriptor == runtime.champ.machine.as_ref().unwrap().native_failure as usize {
@@ -151,6 +153,9 @@ pub(super) fn error_text(runtime: &Runtime, source: &s::Program, object: Word) -
     }
     let declaration = &source.objects[descriptor];
     if declaration.fields.is_empty() {
+        if declaration.layout.storage_fields.is_empty() {
+            return declaration.error_cases[0].clone();
+        }
         let tag = runtime.small_or_big(runtime.heap.field(object, 0)).expect("enum tag") as usize;
         return declaration.error_cases[tag].clone();
     }
@@ -162,17 +167,47 @@ pub(super) fn error_text(runtime: &Runtime, source: &s::Program, object: Word) -
         }
         let word = runtime.heap.field(object, field.storage as usize);
         match declaration.layout.storage_fields[field.storage as usize] {
-            s::Type::Str => text.push_str(&format!("{:?}", runtime.heap.text(word))),
+            s::Type::Str => text.push_str(&literal(runtime.heap.text(word))),
             s::Type::Int => match runtime.heap.integer(word) {
                 heap::Integer::Small(value) => text.push_str(&value.to_string()),
                 heap::Integer::Big(value) => text.push_str(&value.to_string()),
             },
             s::Type::Bool => text.push_str(if word == 0 { "false" } else { "true" }),
+            s::Type::Byte => text.push_str(&word.to_string()),
+            s::Type::Float => text.push_str(&crate::scalar::float_text(f64::from_bits(word))),
+            s::Type::Rat => text.push_str(&runtime.rational(word).to_string()),
+            s::Type::Variant(_) => text.push_str(&error_text(runtime, source, word)),
+            s::Type::Object(id) if !source.objects[id as usize].error_cases.is_empty() => {
+                text.push_str(&error_text(runtime, source, word));
+            }
+            s::Type::Object(id) => {
+                let tag = runtime.small_or_big(runtime.heap.field(word, 0)).expect("enum tag") as usize;
+                text.push_str(&source.objects[id as usize].enum_names[tag]);
+            }
             _ => unreachable!("P1 error payload"),
         }
     }
     text.push(')');
     text
+}
+
+/// A string in Okkama literal syntax: backslash, quote, newline, tab and carriage return escaped, other
+/// control characters as `\u{hex}`, everything else unchanged (#306).
+fn literal(value: &str) -> String {
+    let mut out = String::from("\"");
+    for c in value.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 #[cfg(test)]

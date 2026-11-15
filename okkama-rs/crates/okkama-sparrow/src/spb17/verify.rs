@@ -222,6 +222,14 @@ pub(crate) fn key_type(p: &Program, ty: Type) -> bool {
     key(p, ty, &mut Vec::new())
 }
 
+/// A multi-case Error variant: a variant whose every case is a plain Error case object. Its values are
+/// Error values: they convert to `Error`, are thrown and are caught by the variant's declaration.
+fn error_variant(p: &Program, id: u32) -> bool {
+    p.objects.get(id as usize).is_some_and(|object| !object.variant_cases.is_empty()
+        && object.variant_cases.iter().all(|&case| p.objects.get(case as usize)
+            .is_some_and(|case| !case.error_cases.is_empty())))
+}
+
 /// Composite references point backwards, so composite types are finite and checkable in order.
 fn composite_valid(p: &Program, index: usize, composite: Composite) -> Check {
     let earlier = |ty: Type| -> bool {
@@ -417,6 +425,10 @@ pub fn verify(p: &Program) -> Check {
                 && !layout.may_reach_resource && layout.trace_layout.is_empty() && layout.selection_layout.is_empty();
             enforce(plain, "HANDLE_DECLARATION", "a native handle declaration has fields, cases or resources")?;
         }
+        // Case texts belong to a plain enum only, one per case; an enum may also carry none.
+        enforce(object.enum_names.is_empty()
+            || (object.enum_cases > 0 && object.enum_names.len() == object.enum_cases as usize),
+            "ENUM_NAMES", "enum case names belong to a plain enum, one per case")?;
         if !object.variant_cases.is_empty() {
             // A case object is never an identity, but it may refer to resources (Maybe<Resource>). The
             // variant declares that it reaches resources exactly when one of its cases does.
@@ -807,6 +819,8 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
                 "CATCH_FAILURE", "catch operand must be a failure")?;
             ctx.value = Some(match args.get(1) {
                 Some(Argument::Object(id)) if !p.objects[*id as usize].error_cases.is_empty() => Type::Object(*id),
+                // A multi-case Error variant catches each of its cases (descriptors of its `variant_cases`).
+                Some(Argument::Object(id)) if error_variant(p, *id) => Type::Variant(*id),
                 Some(Argument::Flag(true)) => Type::Error,
                 _ => return Err(violation("CATCH_TYPE", "catch target must be a declared plain Error")),
             });
@@ -832,6 +846,7 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             let ty = loc_type(f, locations[0])?;
             let valid = if kind == Some(0) {
                 matches!(ty, ProducedType::Value(Type::Object(id)) if !p.objects[id as usize].error_cases.is_empty())
+                    || matches!(ty, ProducedType::Value(Type::Variant(id)) if error_variant(p, id))
                     || ty == ProducedType::Value(Type::Error)
             } else {
                 ty == ProducedType::Value(Type::Str)
@@ -1444,6 +1459,7 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
                 (Type::Successor(a), Some(Type::Object(b))) if a == b)
                 || matches!((types[0], out), (Type::Object(id), Some(Type::Error))
                     if !p.objects[id as usize].error_cases.is_empty())
+                || matches!((types[0], out), (Type::Variant(id), Some(Type::Error)) if error_variant(p, id))
                 || matches!((types[0], out), (Type::Object(case), Some(Type::Variant(variant)))
                     if p.objects[variant as usize].variant_cases.contains(&case))
                 || out.is_some_and(|out| never_retag(&p.composites, types[0], out));

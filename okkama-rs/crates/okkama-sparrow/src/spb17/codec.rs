@@ -332,7 +332,7 @@ record! { ObjectRuntimeLayout {
 
 record! { Field { name, storage, once } }
 record! { Object {
-    name, fields, layout, error_cases; enum_cases, variant_cases, handle, role, implements, any_box,
+    name, fields, layout, error_cases; enum_cases, variant_cases, handle, role, implements, any_box, enum_names,
 } }
 record! { RoleDecl { slots } }
 record! { RoleSlot { name, entry_abi, params, results } }

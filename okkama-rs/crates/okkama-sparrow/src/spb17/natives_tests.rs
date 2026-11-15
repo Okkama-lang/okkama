@@ -7,7 +7,7 @@ fn object(name: &str, handle: bool, storage_fields: Vec<Type>) -> Object {
         .filter(|(_, ty)| matches!(ty, Type::Str)).map(|(index, _)| index as u32).collect();
     Object {
         name: name.into(), fields: vec![], error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle,
-        role: None, implements: vec![], any_box: false,
+        role: None, implements: vec![], any_box: false, enum_names: vec![],
         layout: ObjectRuntimeLayout {
             allocation_words: (1 + storage_fields.len() as u32).max(2),
             storage_fields, identity_offset: None, has_destroy: false, may_reach_resource: false,
@@ -193,6 +193,61 @@ fn atomic_entries_follow_the_registered_value_layout() {
     let mut wrong = objects.clone();
     wrong[0].layout.storage_fields = vec![Type::Str, Type::Bool];
     assert!(P1Contracts::new(&wrong).is_err());
+}
+
+/// An Error case `name` with payload fields of `types`, one storage word each.
+fn error_case(name: &str, types: Vec<Type>) -> Object {
+    let fields = (0..types.len() as u32).map(|storage| Field { name: format!("f{storage}"), storage, once: false })
+        .collect();
+    Object { error_cases: vec![name.into()], fields, ..object(name, false, types) }
+}
+
+fn p1(objects: Vec<Object>) -> Result<P1Contracts, Error> {
+    P1Contracts::new(&objects)
+}
+
+#[test]
+fn p1_error_text_admits_the_layouts_of_error_variants() {
+    // An Error enum, and a case of an Error variant without payload (no storage).
+    p1(vec![Object { error_cases: vec!["E.a".into(), "E.b".into()], ..object("E", false, vec![Type::Int]) }])
+        .unwrap();
+    p1(vec![error_case("F.plain", vec![])]).unwrap();
+    // Scalar payloads.
+    p1(vec![error_case("F.all", vec![Type::Str, Type::Int, Type::Bool, Type::Byte, Type::Float, Type::Rat])])
+        .unwrap();
+    // A plain enum that names its cases, an Error enum, and an Error variant.
+    let limit = Object { enum_cases: 2, enum_names: vec!["L.a".into(), "L.b".into()],
+        ..object("L", false, vec![Type::Int]) };
+    p1(vec![limit, error_case("F.kind", vec![Type::Object(0)])]).unwrap();
+    let inner = Object { error_cases: vec!["I.a".into()], ..object("I", false, vec![Type::Int]) };
+    p1(vec![inner, error_case("F.cause", vec![Type::Object(0)])]).unwrap();
+    let variant = Object { variant_cases: vec![1], ..object("V", false, vec![]) };
+    p1(vec![variant, error_case("V.one", vec![]), error_case("F.nested", vec![Type::Variant(0)])]).unwrap();
+}
+
+#[test]
+fn p1_error_text_refuses_payloads_it_cannot_show() {
+    let refused = |objects: Vec<Object>| {
+        let failure = p1(objects).unwrap_err();
+        assert!(failure.message.contains("invalid P1 plain Error layout"), "{failure}");
+    };
+    // A plain enum without its case names has no text.
+    let unnamed = Object { enum_cases: 2, ..object("L", false, vec![Type::Int]) };
+    refused(vec![unnamed, error_case("F.kind", vec![Type::Object(0)])]);
+    // Neither has an Error role value (as on Tomato), a plain variant, a plain object or a char.
+    refused(vec![error_case("F.any", vec![Type::Error])]);
+    let plain = Object { variant_cases: vec![1], ..object("V", false, vec![]) };
+    refused(vec![plain, object("V.one", false, vec![]), error_case("F.v", vec![Type::Variant(0)])]);
+    refused(vec![object("P", false, vec![Type::Int]), error_case("F.p", vec![Type::Object(0)])]);
+    refused(vec![error_case("F.c", vec![Type::Char])]);
+    // A case without payload holds no storage; a payload case's storage words are its fields.
+    refused(vec![Object { fields: vec![], ..error_case("F.tag", vec![Type::Str]) }]);
+    refused(vec![Object { fields: vec![Field { name: "s".into(), storage: 0, once: false }],
+        ..error_case("F.extra", vec![Type::Str, Type::Str]) }]);
+    // An Error enum keeps its case number; only a single case may hold no storage.
+    refused(vec![Object { error_cases: vec!["E.a".into(), "E.b".into()], ..object("E", false, vec![]) }]);
+    // A payload case has one case.
+    refused(vec![Object { error_cases: vec!["F.a".into(), "F.b".into()], ..error_case("F", vec![Type::Str]) }]);
 }
 
 #[test]

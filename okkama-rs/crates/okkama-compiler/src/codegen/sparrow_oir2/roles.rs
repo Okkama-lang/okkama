@@ -228,7 +228,7 @@ fn placeholder(name: String, role: Option<s::RoleDecl>, implements: Vec<s::RoleI
             storage_fields: vec![], allocation_words: 2, identity_offset: None, has_destroy: false,
             may_reach_resource: false, may_async_destroy: false, trace_layout: vec![], selection_layout: vec![],
         },
-        role, implements, any_box: false,
+        role, implements, any_box: false, enum_names: vec![],
     }
 }
 

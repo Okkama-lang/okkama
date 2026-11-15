@@ -91,10 +91,10 @@ fn array_loader_checks_transitive_element_graph_independently() {
     };
     p.objects = vec![
         Object { name: "plain_lie".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![],
-            handle: false, role: None, implements: vec![], any_box: false, fields: vec![],
+            handle: false, role: None, implements: vec![], any_box: false, enum_names: vec![], fields: vec![],
             layout: layout(vec![Type::Object(1)], false) },
         Object { name: "resource".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![],
-            handle: false, role: None, implements: vec![], any_box: false, fields: vec![],
+            handle: false, role: None, implements: vec![], any_box: false, enum_names: vec![], fields: vec![],
             layout: layout(vec![], true) },
     ];
     p.functions[0].registers[1] = Type::Array(ArrayType { leaf: ArrayLeaf::Object(0), depth: 1 });
@@ -143,7 +143,7 @@ fn scalar_outcome_extensions_reject_wrong_kinds_and_service_operands() {
 fn enum_case_checks_its_closed_catalog() {
     let mut p = fixture();
     p.objects.push(Object { name: "E".into(), fields: vec![], error_cases: vec!["E.one".into()], enum_cases: 0,
-        variant_cases: vec![], handle: false, role: None, implements: vec![], any_box: false,
+        variant_cases: vec![], handle: false, role: None, implements: vec![], any_box: false, enum_names: vec![],
         layout: ObjectRuntimeLayout {
             storage_fields: vec![Type::Int], allocation_words: 2, identity_offset: None,
             has_destroy: false, may_reach_resource: false, may_async_destroy: false,
@@ -163,7 +163,7 @@ fn element_array(fields: Vec<Type>, has_destroy: bool) -> Program {
         .map(|(index, _)| index as u32).collect();
     let count = fields.len() as u32;
     p.objects.push(Object { name: "Element".into(), fields: vec![], error_cases: vec![], enum_cases: 0,
-        variant_cases: vec![], handle: false, role: None, implements: vec![], any_box: false,
+        variant_cases: vec![], handle: false, role: None, implements: vec![], any_box: false, enum_names: vec![],
         layout: ObjectRuntimeLayout {
             storage_fields: fields,
             allocation_words: (1 + count + 4 * u32::from(has_destroy)).max(2),

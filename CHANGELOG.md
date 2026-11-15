@@ -8,6 +8,22 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Champ runs Error enums with payloads (#705).** The P1 contract of
+  `Error.text` admitted only Error enums and single-case payloads of strings,
+  ints and bools, while codegen emits a case without payload as a case object
+  with no storage, and payloads may be any scalar, a plain enum or another
+  Error variant: `L07.catch-pattern.cases-and-types`,
+  `L07.error-enum.text-escaping` and `L07.error-enum.uncaught` stopped at load
+  with `invalid P1 plain Error layout`. The contract now admits exactly the
+  layouts the text can show, a plain enum carries its case texts
+  (`enum_names`, rule `ENUM_NAMES`), and `Error.text` writes strings as Okkama
+  literals and enums and nested errors by their texts, as Tomato does. Every
+  Error variant is an SPB 17 variant of its case objects: `catch` of the
+  variant takes each of its cases, and its values are thrown and widened to
+  `Error` (`CATCH_TYPE`, `FAIL_OPERAND`, `move`). `L09.csv.rows-and-round-trip`
+  now passes these rules and stops later, at a dead unwind landing of a total
+  construction (see the ticket).
+
 - **Own never indexes a missing scope state (#672).** A constructor that
   stores a field which carries deps but holds no obligation (a role whose
   implementers are plain, as in `L09.math.aggregates` and `L09.time.zones`)

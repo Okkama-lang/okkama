@@ -252,7 +252,7 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
                 }).unwrap_or_default(),
             },
             variant_cases: match &declaration.kind {
-                o::DeclarationKind::Variant { cases, is_error: false } => {
+                o::DeclarationKind::Variant { cases, .. } => {
                     cases.iter().map(|case| case.layout.as_u32()).collect()
                 }
                 _ => vec![],
@@ -274,6 +274,13 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
             role,
             implements,
             any_box: false,
+            // A plain enum names its cases as Tomato's texts do (`Enum.case`): an Error payload shows them.
+            enum_names: match &declaration.kind {
+                o::DeclarationKind::Enum { cases, is_error: false } => cases.iter().map(|case| {
+                    format!("{}.{case}", declaration.name.rsplit('.').next().unwrap())
+                }).collect(),
+                _ => vec![],
+            },
         });
     }
     roles::synthetic_objects(module, &mut objects)?;
@@ -404,14 +411,11 @@ fn translate_with(module: &o::Module, id: o::TypeId, table: &Composites) -> Resu
         }
         o::Type::Enum(decl) => s::Type::Object(decl.as_u32()),
         o::Type::Variant(decl) => {
-            let o::DeclarationKind::Variant { cases, is_error } = &module.declarations.get(*decl)?.kind else {
+            // An Error variant is a variant too: its values are its case objects, which are Error values.
+            if !matches!(module.declarations.get(*decl)?.kind, o::DeclarationKind::Variant { .. }) {
                 return Err(GenerateError("variant type references non-variant declaration".into()));
-            };
-            if !is_error {
-                return Ok(s::Type::Variant(decl.as_u32()));
             }
-            let [case] = cases.as_slice() else { return Err(unsupported("multi-case Error variant type")); };
-            s::Type::Object(case.layout.as_u32())
+            s::Type::Variant(decl.as_u32())
         }
         o::Type::Descriptor => s::Type::Descriptor,
         o::Type::Handle(decl) => {

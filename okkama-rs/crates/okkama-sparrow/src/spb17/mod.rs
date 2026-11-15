@@ -128,6 +128,8 @@ pub struct Object {
     pub implements: Vec<RoleImpl>,
     /// An any box: the one field holds a boxed value, and the descriptor names its type (`ANY_BOX`).
     pub any_box: bool,
+    /// The case texts (`Enum.case`) of a plain enum, in case order, or empty (`ENUM_NAMES`).
+    pub enum_names: Vec<String>,
 }
 
 /// The slots of a role: each slot's entry ABI and its signature without the receiver.

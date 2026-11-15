@@ -33,7 +33,7 @@ fn object(name: &str, storage: Vec<s::Type>, role: Option<s::RoleDecl>, implemen
     let count = storage.len() as u32;
     s::Object {
         name: name.into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false, role,
-        implements, any_box: false,
+        implements, any_box: false, enum_names: vec![],
         fields: (0..count).map(|storage| s::Field { name: format!("f{storage}"), storage, once: false }).collect(),
         layout: s::ObjectRuntimeLayout {
             trace_layout: (0..count).collect(), storage_fields: storage, allocation_words: (1 + count).max(2),
