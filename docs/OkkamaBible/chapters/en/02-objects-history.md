@@ -199,7 +199,77 @@ integers gives an exact rational number, not a truncated integer, so turning
 it back into cents is a decision the program must write down. Chapter 5
 explains why.
 
-## 2.9 What was lost
+## 2.9 Roads not taken: prototypes and actors
+
+Classes were not the only way objects could have gone. Two other lines came
+out of the same decades, and each answers a question Okkama also had to
+answer.
+
+**Prototypes.** In Self, designed by David Ungar and Randall Smith, there are
+no classes at all [@ungar1987]. A new object is made by copying an existing
+one, its prototype, and an object that has no slot for a message passes the
+message on to a parent object. The model is smaller than Smalltalk's: one
+kind of thing instead of objects, classes and metaclasses. It reached a very
+large audience through JavaScript, whose objects delegate to prototypes in
+the same way [@wirfsbrock2020].
+
+Okkama keeps the kind. An `object` declaration states the fields and actions
+every instance has, and the compiler checks every call against it. A
+prototype language can check nothing of the sort before the message is sent,
+because any object may gain or lose a slot at any time. What Okkama takes
+from Self is narrower: a successor (Section 13.5) is a copy of an existing
+object with some fields replaced, which is the one operation of prototypes
+that does not need mutation.
+
+**Actors.** In 1973 Carl Hewitt, Peter Bishop and Richard Steiger proposed
+the actor as the single unit of computation [@hewitt1973]. An actor receives
+a message, and in response it may send messages, create actors and decide how
+it will handle the next message. There is no shared memory; an actor's state
+is reachable only through its mailbox. This is Kay's "local retention and
+protection of state-process" made into a model of concurrency, and Erlang
+built telephone switches on it, with processes that share nothing and are
+restarted when they fail [@armstrong2003].
+
+Okkama reaches the same place from the other side. Its objects share nothing
+that can change, because nothing in them changes. A task that owns a changing
+state keeps it in a local, moves it forward by rebinding the local to
+successors, and is reached by others through a channel (Section 20.6). An
+actor is therefore a pattern in Okkama, not a kind of object: most objects
+are plain values that need no mailbox, and only the few that carry a state
+through time are wrapped in a task.
+
+## 2.10 The harbour, once more
+
+Simula began with ships in a harbour, so the history can end there. Here is
+a harbour with one berth and one crane, written in the style the rest of the
+book teaches: no field ever changes, and every hour of the harbour's life is
+a new value.
+
+{{example:02-harbour}}
+
+- **A ship acts by producing its next state.** `unloaded(3)` does not lower
+  a counter inside the ship; it returns the ship with up to three fewer
+  containers. The ship the crane started on is still there, unchanged, for
+  anyone who holds it.
+- **The harbour is a value too.** `worked()` is one hour of the simulation:
+  it advances the clock, unloads the ship at the berth and lets an empty
+  ship sail. `arrived(ship)` puts a ship at the end of the queue. Both are
+  successors, so the harbour has no setters and no hidden state.
+- **Time is data.** Simula's processes move forward and forget: the harbour
+  of hour 2 is gone once hour 3 has run. Here `history` is an array of nine
+  harbours, one per hour, and `history[2]` answers a question about the past
+  without running anything again. The price is the memory of the states
+  kept; a program that does not need the past keeps only the last one.
+- **Order is written down.** The ships due in an hour join the queue before
+  the crane works, in the order of the schedule. Nothing happens "at the
+  same time" unless the program says so, and Chapter 20 shows how it says
+  so.
+
+Dahl and Nygaard's insight survives: a program is made of things that act.
+What changed is the meaning of "act". In Simula an object acts by changing
+itself; in Okkama it acts by answering with what comes next.
+
+## 2.11 What was lost
 
 Removing inheritance removes real conveniences, and it would be dishonest to
 pretend otherwise.

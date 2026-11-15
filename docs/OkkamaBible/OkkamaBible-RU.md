@@ -23,7 +23,9 @@
   - [2.6 Объекты как поведение](#26-объекты-как-поведение)
   - [2.7 Elegant Objects: дисциплина](#27-elegant-objects-дисциплина)
   - [2.8 Композиция на практике](#28-композиция-на-практике)
-  - [2.9 Что потеряно](#29-что-потеряно)
+  - [2.9 Дороги, по которым не пошли: прототипы и акторы](#29-дороги-по-которым-не-пошли-прототипы-и-акторы)
+  - [2.10 Ещё раз о гавани](#210-ещё-раз-о-гавани)
+  - [2.11 Что потеряно](#211-что-потеряно)
 - [Глава 3. Манифест, правило за правилом](#глава-3-манифест-правило-за-правилом)
   - [3.1 Правило первое: объекты дают поведение, а не состояние](#31-правило-первое-объекты-дают-поведение-а-не-состояние)
   - [3.2 Правило второе: состояние связывается при создании, конструкторы его охраняют](#32-правило-второе-состояние-связывается-при-создании-конструкторы-его-охраняют)
@@ -926,7 +928,168 @@ percent: 10)`. А скидка вычисляется с явным `int(...)`: 
 превращение его обратно в центы — решение, которое программа должна
 записать. Почему так — в главе 5.
 
-## 2.9 Что потеряно
+## 2.9 Дороги, по которым не пошли: прототипы и акторы
+
+Классы не были единственным путём, которым могли пойти объекты. В те же
+десятилетия появились ещё две линии, и каждая отвечает на вопрос, на который
+пришлось ответить и Okkama.
+
+**Прототипы.** В языке Self, который придумали Дэвид Ангар и Рэндалл Смит,
+классов нет совсем [[Ungar 1987](#ref-ungar1987)]. Новый объект получают копированием
+существующего, его прототипа, а объект, у которого нет слота для
+сообщения, передаёт сообщение родительскому объекту. Модель меньше, чем у
+Smalltalk: одна сущность вместо объектов, классов и метаклассов. К огромной
+аудитории она пришла через JavaScript, чьи объекты точно так же делегируют
+прототипам [[Wirfs-Brock 2020](#ref-wirfsbrock2020)].
+
+Okkama сохраняет вид. Объявление `object` задаёт поля и действия, которые
+есть у каждого экземпляра, и компилятор сверяет с ним каждый вызов.
+Язык прототипов ничего подобного проверить до отправки сообщения не может:
+любой объект в любой момент может получить слот или лишиться его. Из Self
+Okkama берёт меньшее: преемник (раздел 13.5) — это копия существующего
+объекта с заменёнными полями, то есть та единственная операция прототипов,
+которой не нужна мутация.
+
+**Акторы.** В 1973 году Карл Хьюитт, Питер Бишоп и Ричард Стайгер предложили
+актор как единственную единицу вычисления [[Hewitt 1973](#ref-hewitt1973)]. Актор получает
+сообщение и в ответ может отправить сообщения, создать акторов и решить, как
+он обработает следующее сообщение. Общей памяти нет; до состояния актора
+можно добраться только через его почтовый ящик. Это кеевское «локальное
+хранение, защита и сокрытие состояния-процесса», превращённое в модель
+конкурентности, и на нём Erlang построил телефонные коммутаторы — с
+процессами, которые ничего не разделяют и перезапускаются, когда падают
+[[Armstrong 2003](#ref-armstrong2003)].
+
+Okkama приходит туда же с другой стороны. Её объекты не разделяют ничего
+изменяемого, потому что в них ничего не меняется. Задача, которая владеет
+меняющимся состоянием, держит его в локальной привязке, двигает вперёд
+перепривязкой к преемникам, а остальные обращаются к ней через канал
+(раздел 20.6). Поэтому актор в Okkama — паттерн, а не вид объекта:
+большинство объектов — простые значения, которым почтовый ящик не нужен, и
+только немногие, несущие состояние сквозь время, оборачиваются в задачу.
+
+## 2.10 Ещё раз о гавани
+
+Simula началась с кораблей в гавани, так что историей можно там и
+закончить. Вот гавань с одним причалом и одним краном, написанная в стиле,
+которому учит остальная книга: ни одно поле не меняется, и каждый час жизни
+гавани — новое значение.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// A ship, as Simula saw it: something that acts over time.
+object Ship {
+    has name is string;
+    has cargo is int;
+    Ship(:name, :cargo);
+
+    // The crane lifts up to `count` containers; what remains is the ship's next state.
+    unloaded(count is int) is ^Ship {
+        ^cargo = if count < cargo { cargo - count; } else { 0; };
+    }
+    empty() is bool { cargo == 0; }
+    called() is string { name; }
+}
+
+// A ship due at a given hour.
+object Arrival {
+    has hour is int;
+    has ship is Ship;
+    Arrival(:hour, :ship);
+    due(at is int) is bool { hour == at; }
+    vessel() is Ship { ship; }
+}
+
+// One berth, one crane. The first ship in the queue is at the berth.
+object Harbour {
+    has queue is @Ship;
+    has rate is int;
+    has hour is int;
+    has log is @string;
+    Harbour(:rate) { self.queue = []; self.hour = 0; self.log = []; }
+
+    arrived(ship is Ship) is ^Harbour {
+        ^queue = queue + [ship];
+        ^log = log + ["h" + hour.string() + " " + ship.called() + " arrives"];
+    }
+
+    // One hour passes: the crane works on the ship at the berth; an empty ship sails.
+    worked() is ^Harbour {
+        ^hour = hour + 1;
+        if queue.size() > 0 {
+            let ship = queue.first().unloaded(rate);
+            if ship.empty() {
+                ^queue = queue.drop(1);
+                ^log = log + ["h" + (hour + 1).string() + " " + ship.called() + " sails"];
+            } else {
+                ^queue = queue.replaced(0, ship);
+            }
+        }
+    }
+    waiting() is int { queue.size(); }
+    journal() is @string { log; }
+}
+
+main() is int {
+    let out = Stdout();
+    let arrivals = [
+        Arrival(hour: 0, ship: Ship(name: "Tanker", cargo: 7)),
+        Arrival(hour: 1, ship: Ship(name: "Ferry", cargo: 2)),
+        Arrival(hour: 1, ship: Ship(name: "Collier", cargo: 4))
+    ];
+    let start = Harbour(rate: 3);
+    // Every hour is a new Harbour, so the whole history is an array of values.
+    let history = (0..8).reduce([start]) -> states, hour {
+        let now = arrivals.filter() -> a { a.due(hour); }
+            .reduce(states.last()) -> h, a { h.arrived(a.vessel()); };
+        states + [now.worked()];
+    };
+    out.writeln(history.last().journal().join("\n"));
+    out.writeln("waiting after hour 2: " + history[2].waiting().string());
+    out.writeln("waiting after hour 8: " + history[8].waiting().string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+h0 Tanker arrives
+h1 Ferry arrives
+h1 Collier arrives
+h3 Tanker sails
+h4 Ferry sails
+h6 Collier sails
+waiting after hour 2: 3
+waiting after hour 8: 0
+```
+
+- **Корабль действует, порождая своё следующее состояние.** `unloaded(3)`
+  не уменьшает счётчик внутри корабля; он возвращает корабль, на котором
+  контейнеров меньше не более чем на три. Корабль, с которого кран начал,
+  остаётся на месте, неизменный, для всех, кто его держит.
+- **Гавань — тоже значение.** `worked()` — один час моделирования: он
+  двигает часы, разгружает корабль у причала и отпускает пустой корабль.
+  `arrived(ship)` ставит корабль в конец очереди. Оба — преемники, поэтому
+  у гавани нет сеттеров и скрытого состояния.
+- **Время — это данные.** Процессы Simula идут вперёд и забывают: гавани
+  второго часа не стало, как только отработал третий. Здесь `history` —
+  массив из девяти гаваней, по одной на час, и `history[2]` отвечает на
+  вопрос о прошлом, ничего не запуская заново. Цена — память под хранимые
+  состояния; программа, которой прошлое не нужно, держит только последнее.
+- **Порядок записан.** Корабли, пришедшие за час, встают в очередь до того,
+  как кран начнёт работу, в порядке расписания. Ничего не происходит
+  «одновременно», пока программа этого не скажет, а как она это говорит,
+  показывает глава 20.
+
+Догадка Дала и Нюгора уцелела: программа состоит из вещей, которые
+действуют. Изменилось значение слова «действовать». В Simula объект
+действует, меняя себя; в Okkama — отвечая тем, что будет дальше.
+
+## 2.11 Что потеряно
 
 Убирая наследование, мы убираем настоящие удобства, и было бы нечестно
 делать вид, что это не так.
@@ -19103,6 +19266,7 @@ main() is int {
 - <a id="ref-griesemer2020"></a>Robert Griesemer, Raymond Hu, Wen Kokke, Julien Lange, Ian Lance Taylor, Bernardo Toninho, Philip Wadler, Nobuko Yoshida (2020). Featherweight Go. *Proceedings of the ACM on Programming Languages* 4(OOPSLA): 149:1–149:29. https://doi.org/10.1145/3428217
 - <a id="ref-grigore2017"></a>Radu Grigore (2017). Java Generics are Turing Complete. In *Proceedings of POPL 2017*: 73–85. ACM. https://doi.org/10.1145/3009837.3009871
 - <a id="ref-haskell2010"></a>Simon Marlow (ed.) (2010). *Haskell 2010 Language Report*. https://www.haskell.org/onlinereport/haskell2010/
+- <a id="ref-hewitt1973"></a>Carl Hewitt, Peter Bishop, Richard Steiger (1973). A Universal Modular ACTOR Formalism for Artificial Intelligence. In *Proceedings of the 3rd International Joint Conference on Artificial Intelligence (IJCAI '73)*, 235–245.
 - <a id="ref-hickey2008"></a>Rich Hickey (2008). The Clojure Programming Language. In *Proceedings of the 2008 Symposium on Dynamic Languages (DLS '08)*. ACM. https://doi.org/10.1145/1408681.1408682
 - <a id="ref-hickey2011"></a>Rich Hickey (2011). Simple Made Easy. Talk at Strange Loop, 20 September 2011. https://www.infoq.com/presentations/Simple-Made-Easy/
 - <a id="ref-hoare1978"></a>C. A. R. Hoare (1978). Communicating Sequential Processes. *Communications of the ACM* 21(8): 666–677. https://doi.org/10.1145/359576.359585
@@ -19195,10 +19359,12 @@ main() is int {
 - <a id="ref-tofte1997"></a>Mads Tofte, Jean-Pierre Talpin (1997). Region-Based Memory Management. *Information and Computation* 132(2): 109–176. https://doi.org/10.1006/inco.1996.2613
 - <a id="ref-uax15"></a>The Unicode Consortium (2024). *Unicode Standard Annex #15: Unicode Normalization Forms* (for Unicode 16.0.0). https://www.unicode.org/reports/tr15/
 - <a id="ref-uax29"></a>The Unicode Consortium (2024). *Unicode Standard Annex #29: Unicode Text Segmentation* (for Unicode 16.0.0). https://www.unicode.org/reports/tr29/
+- <a id="ref-ungar1987"></a>David Ungar, Randall B. Smith (1987). Self: The Power of Simplicity. In *Proceedings of OOPSLA '87*, 227–242. ACM. https://doi.org/10.1145/38765.38828
 - <a id="ref-unicode16"></a>The Unicode Consortium (2024). *The Unicode Standard, Version 16.0.0*. https://www.unicode.org/versions/Unicode16.0.0/
 - <a id="ref-wadler1989"></a>Philip Wadler (1989). Theorems for Free! In *Proceedings of FPCA 1989*: 347–359. ACM. https://doi.org/10.1145/99370.99404
 - <a id="ref-wadlerblott1989"></a>Philip Wadler, Stephen Blott (1989). How to Make Ad-hoc Polymorphism Less Ad Hoc. In *Proceedings of POPL 1989*: 60–76. ACM. https://doi.org/10.1145/75277.75283
 - <a id="ref-wadler1998"></a>Philip Wadler (1998). The Expression Problem. Note to the java-genericity mailing list, 12 November 1998. https://homepages.inf.ed.ac.uk/wadler/papers/expression/expression.txt
+- <a id="ref-wirfsbrock2020"></a>Allen Wirfs-Brock, Brendan Eich (2020). JavaScript: The First 20 Years. *Proceedings of the ACM on Programming Languages* 4(HOPL): 77:1–77:189. https://doi.org/10.1145/3386327
 - <a id="ref-wirth1971"></a>Niklaus Wirth (1971). The Programming Language Pascal. *Acta Informatica* 1(1): 35–63. https://doi.org/10.1007/BF00264291
 - <a id="ref-wirth1982"></a>Niklaus Wirth (1982). *Programming in Modula-2*. Springer-Verlag.
 - <a id="ref-wirth1995"></a>Niklaus Wirth (1995). A Plea for Lean Software. *Computer* 28(2): 64–68. https://doi.org/10.1109/2.348001
