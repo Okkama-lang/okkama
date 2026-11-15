@@ -156,7 +156,7 @@ const INLINE: &[(bool, &str)] = &[
      let n = (~5).bit_count() + 1.rotate_left(3) + byte(3).leading_zeros(); let m = byte(6) & byte(3); \
      a + b + n + m.int() - -byte(2); }"),
     (true, "module app; main() is int { let r = (2.rat() / 3.rat()).pow(-3); let f = (1.5).pow(2.0) * 2.0 / 4.0 + 1.0; \
-     (3).pow(4) + r.numerator().length() + r.denominator().length() + f.int() + (1.rat() + r - r * r).sign() \
+     (3).pow(4) + r.numerator() + r.denominator() + f.int() + (1.rat() + r - r * r).sign() \
      + (-7).abs() + 2.sqrt().int(); }"),
     (true, "module app; main() is int { let s = \" a,b \".trim().split(\",\"); \
      let t = \"ab\".repeat(2).upper().lower(); \

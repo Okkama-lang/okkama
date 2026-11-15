@@ -459,7 +459,7 @@ object NumberMagnitude {
     NumberMagnitude(coefficient is BigInt, exponent is rat, negative is bool) {
         confirm coefficient.sign() >= 0
             && coefficient.string().length() <= 1024
-            && exponent.denominator() == "1"
+            && exponent.denominator() == 1
             else throw InvalidLocalizedNumber.because(
                 "nonnegative coefficient up to 1024 digits and integral exponent required"
             );
@@ -869,7 +869,7 @@ hidden object NumberExponent {
         }
         else {
             origin;
-        }).numerator();
+        }).numerator().string();
         let padded = (if digits.length() < minimum {
             NumberZeroes(minimum - digits.length()).string();
         }
@@ -1008,7 +1008,7 @@ object NumberPrinting {
     hidden exponential(engineering is bool) is NumberRendered {
         let magnitude = origin.magnitude();
         let remainder = if engineering {
-            let rest = Number((BigInt(magnitude.numerator()) % BigInt(3)).string()).int();
+            let rest = magnitude.numerator() % 3;
             if rest < 0 {
                 rest + 3;
             }

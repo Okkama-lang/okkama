@@ -6,6 +6,18 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+### Changed
+
+- **`rat.numerator()` and `rat.denominator()` return `int` (#743, owner's
+  decision).** They returned decimal strings because a part could exceed the
+  old `int`; since `int` is exact and unbounded (#189) every part fits. The
+  denominator of the canonical form is positive. Migration: code that joined
+  a part as text writes `.string()` (`r.numerator().string() + "/" + ...`),
+  and a check such as `r.denominator() == "1"` becomes `r.denominator() == 1`.
+  The compiler, Tomato, Champ (OIR-2 `rat.numerator`/`rat.denominator` and
+  SPB 17 `rat.ext` now yield `int`), the IDE completion, the Book, the
+  standard library (ten call sites), `L02.rat.constructor` and `t/op` follow.
+
 ### Fixed
 
 - **Async tests load on Champ (#725).** The SPB 17 loader took only a

@@ -185,10 +185,11 @@ fn rat_arithmetic_is_exact_and_normalized() {
     assert_eq!(rat_text(rt, word), "3/4");
     let word = unary(rt, D::RatSign, (-3, 4));
     assert_eq!(int_text(rt, word), "-1");
+    // #743: the parts of the canonical form are ints.
     let word = unary(rt, D::RatNumerator, (-6, 8));
-    assert_eq!(rt.heap.text(word), "-3");
+    assert_eq!(int_text(rt, word), "-3");
     let word = unary(rt, D::RatDenominator, (-6, 8));
-    assert_eq!(rt.heap.text(word), "4");
+    assert_eq!(int_text(rt, word), "4");
 }
 
 fn texts(runtime: &Runtime, array: Word) -> Vec<String> {

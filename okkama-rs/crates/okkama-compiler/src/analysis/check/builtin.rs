@@ -275,8 +275,9 @@ impl Checker<'_, '_> {
                 vec![Param::Same, Param::Same],
                 Some(receiver.clone()),
             ),
-            (Ty::Rat, "numerator") => (Builtin::Numerator, vec![], Some(Ty::Str)),
-            (Ty::Rat, "denominator") => (Builtin::Denominator, vec![], Some(Ty::Str)),
+            // #743: the parts of the canonical form are ints; the denominator is positive.
+            (Ty::Rat, "numerator") => (Builtin::Numerator, vec![], Some(Ty::Int)),
+            (Ty::Rat, "denominator") => (Builtin::Denominator, vec![], Some(Ty::Int)),
             (Ty::Int | Ty::Byte, bits) if BIT_ACTIONS.contains(&bits) => {
                 let rotates = bits.starts_with("rotate");
                 let counts = matches!(bits, "bit_count" | "leading_zeros" | "trailing_zeros");

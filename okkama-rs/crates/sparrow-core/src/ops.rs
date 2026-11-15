@@ -1919,11 +1919,12 @@ pub(crate) fn rat_unary(runtime: &mut Runtime, negate: bool, value: Word) -> Out
     Ok(runtime.rational_new(result))
 }
 
-/// The numerator or denominator of a rat as decimal text.
+/// The numerator or denominator of a rat as an `int` (#743); the denominator of the canonical form is positive.
 pub(crate) fn rat_part(runtime: &mut Runtime, value: Word, denominator: bool) -> Word {
     let ratio = runtime.rational(value);
-    let text = if denominator { ratio.denominator() } else { ratio.numerator() }.to_string();
-    runtime.text_new(&text)
+    let part = if denominator { ratio.denominator() } else { ratio.numerator() };
+    let part = part.to_big().as_bigint().clone();
+    integer_word(runtime, part)
 }
 
 /// Code points `start..end`; a negative start, a reversed range or an end past the length fails.

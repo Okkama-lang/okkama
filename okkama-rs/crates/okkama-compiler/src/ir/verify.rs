@@ -1656,7 +1656,7 @@ impl<'a> FunctionVerifier<'a> {
             }
             InstKind::RatPart { value, .. } => {
                 self.expect_type(*value, &Type::Rat)?;
-                Type::Str
+                Type::Int
             }
             InstKind::Undef => {
                 return match result {

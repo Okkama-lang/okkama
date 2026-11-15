@@ -86,7 +86,7 @@ object SqliteOptions {
         confirm !(read_only && create)
             && busy_timeout::Span::seconds >= 0.rat()
             && busy_timeout::Span::seconds <= 60.rat()
-            && (busy_timeout::Span::seconds * 1000.rat()).denominator() == "1"
+            && (busy_timeout::Span::seconds * 1000.rat()).denominator() == 1
             else throw InvalidSqliteOptions.invalid;
         self.read_only = read_only;
         self.create = create;

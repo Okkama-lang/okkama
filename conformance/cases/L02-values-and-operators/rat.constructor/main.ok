@@ -9,7 +9,8 @@ main() is int {
     out.writeln(rat(2, -4).string());
     out.writeln(rat(0, 7).string());
     let r = rat(6, 4);
-    out.writeln(r.numerator() + "/" + r.denominator());
+    out.writeln(r.numerator().string() + "/" + r.denominator().string());
+    out.writeln((r.numerator() * 2 - r.denominator()).string());
     out.writeln(if rat(1, 2) == rat(2, 4) { "equal"; } else { "different"; });
     0;
 }

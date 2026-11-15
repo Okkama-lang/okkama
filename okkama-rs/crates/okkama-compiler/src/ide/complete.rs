@@ -1025,8 +1025,8 @@ pub fn builtin_members(key: &str) -> Vec<Completion> {
         conversions(&mut out, &["int", "byte", "float", "rat", "string"]);
         out.push(method("abs", &[], "rat", ""));
         out.push(method("sign", &[], "int", ""));
-        out.push(method("numerator", &[], "string", ""));
-        out.push(method("denominator", &[], "string", ""));
+        out.push(method("numerator", &[], "int", ""));
+        out.push(method("denominator", &[], "int", ""));
     } else if key == "bool" {
         out.push(method("string", &[], "string", "\"true\" or \"false\""));
     } else if key == "char" {
