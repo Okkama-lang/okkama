@@ -1,0 +1,72 @@
+// Extracted from branches; checkpoints use the plain P1 test log.
+module app;
+import "async/atomic" take Atomic;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    has log is Atomic<string>;
+    Res(name is string, log is Atomic<string>) {
+        self.name = name;
+        self.log = log;
+    }
+    label() is string {
+        name;
+    }
+    destroy {
+        log.replace(log.value() + name);
+    }
+}
+main() is int {
+    let log = Atomic("");
+    defer log.close();
+    {
+        let chosen = if true {
+            let local = Res("L", log);
+            Res("A", log);
+        }
+        else {
+            Res("Z", log);
+        };
+        confirm log.value() == "L";
+        Stdout().writeln(log.value());
+        chosen.label();
+    }
+    confirm log.value() == "LA";
+    Stdout().writeln(log.value());
+    log.replace("");
+    {
+        let chosen = match 2 {
+            case 1 {
+                Res("Z", log);
+            }
+            case 2 {
+                let local = Res("L", log);
+                Res("M", log);
+            }
+            else {
+                Res("Z", log);
+            }
+        };
+        confirm log.value() == "L";
+        Stdout().writeln(log.value());
+        chosen.label();
+    }
+    confirm log.value() == "LM";
+    Stdout().writeln(log.value());
+    log.replace("");
+    {
+        match 1 {
+            case 1 {
+                Res("D", log);
+            }
+            else {
+                Res("Z", log);
+            }
+        };
+        confirm log.value() == "D";
+        Stdout().writeln(log.value());
+    }
+    confirm log.value() == "D";
+    Stdout().writeln(log.value());
+    0;
+}

@@ -45,6 +45,41 @@ use okkama_compiler::syntax::{self, ParseMode, ParseOptions, ast, lexer, prune};
 const EXIT_DIAGNOSTICS: u8 = 1;
 const EXIT_USAGE: u8 = 2;
 const EXIT_IO: u8 = 3;
+#[cfg(feature = "champ-abi")]
+const EXIT_OIR2_UNSUPPORTED: u8 = 4;
+
+#[cfg(feature = "champ-abi")]
+fn oir2_selected() -> bool {
+    std::env::var_os("OKKAMA_PIPELINE").is_some_and(|value| value == "oir2")
+}
+
+#[cfg(feature = "champ-abi")]
+fn compile_oir2(sources: &[SourceFile], tests: bool, verify_ownership: bool) -> Result<Vec<u8>, Outcome> {
+    if tests {
+        return Err(Outcome::failure(
+            "okkama: unsupported in OIR-2 lowering: test profile\n".into(), EXIT_OIR2_UNSUPPORTED,
+        ));
+    }
+    let programs = parse_all(sources, false)?;
+    let roots = root_files(sources, &programs);
+    let environment = std::env::var_os("OKKAMA_VERIFY_OWNERSHIP");
+    let mode = ownership_verification_mode(verify_ownership, environment.as_deref());
+    lowering::oir2::compile_linked_with(&roots, &mut loader(false), mode).map_err(|error| {
+        let code = if error.is_unsupported() { EXIT_OIR2_UNSUPPORTED } else { EXIT_DIAGNOSTICS };
+        Outcome::failure(format!("okkama: {error}\n"), code)
+    })
+}
+
+#[cfg(feature = "champ-abi")]
+fn ownership_verification_mode(flag: bool, environment: Option<&std::ffi::OsStr>)
+    -> okkama_compiler::oir2::VerifyMode
+{
+    if flag || environment.is_some_and(|value| value == "1") {
+        okkama_compiler::oir2::VerifyMode::Full
+    } else {
+        okkama_compiler::oir2::VerifyMode::Structural
+    }
+}
 
 const HELP: &str = "\
 okkama — Okkama language front end and IR
@@ -104,9 +139,13 @@ IR OPTIONS:
 BUILD OPTIONS:
     --target sparrow      Select Sparrow bytecode (.spb; default)
     --backend NAME        Compatibility alias for --target
+    --verify-ownership    Full OIR-2 ownership verification (champ-abi);
+                          also enabled by OKKAMA_VERIFY_OWNERSHIP=1
     -o, --output FILE      Output artifact path (required)
 
 RUN OPTIONS:
+    --verify-ownership    Full OIR-2 ownership verification (champ-abi);
+                          also enabled by OKKAMA_VERIFY_OWNERSHIP=1
     --engine sparrow      Compile to Sparrow and execute it with JIT (default)
                           Place engine options before FILE; Sparrow runs
                           tests (-t), program arguments and `spawn` workers.
@@ -200,6 +239,8 @@ USAGE:
 OPTIONS:
     --target sparrow      Generate Sparrow bytecode (default)
     --backend NAME        Compatibility alias for --target
+    --verify-ownership    Full OIR-2 ownership verification (champ-abi);
+                          also enabled by OKKAMA_VERIFY_OWNERSHIP=1
     -o, --output FILE      Output artifact path (required)
 
 Use `-` as input to read Okkama source from standard input.
@@ -475,6 +516,8 @@ struct CommandLine {
     more_inputs: Vec<String>,
     /// `--tests`: тестовый режим (§14) — тесты корня вместо `main`.
     tests: bool,
+    #[cfg(feature = "champ-abi")]
+    verify_ownership: bool,
     format: Option<String>,
     spans: bool,
     mode: Option<String>,
@@ -507,6 +550,10 @@ fn parse_command_line(args: &[String], options: CommandOptions) -> Result<Comman
                 if matches!(options, CommandOptions::Program | CommandOptions::Build) =>
             {
                 line.tests = true;
+            }
+            #[cfg(feature = "champ-abi")]
+            "--verify-ownership" if options == CommandOptions::Build && inline_value.is_none() => {
+                line.verify_ownership = true;
             }
             "--format" if options != CommandOptions::Build => {
                 line.format = Some(value_for("--format")?);
@@ -1291,6 +1338,17 @@ fn build_command(args: &[String]) -> Outcome {
         Ok(sources) => sources,
         Err(outcome) => return outcome,
     };
+    #[cfg(feature = "champ-abi")]
+    if oir2_selected() {
+        let bytes = match compile_oir2(&sources, line.tests, line.verify_ownership) {
+            Ok(bytes) => bytes,
+            Err(outcome) => return outcome,
+        };
+        return match std::fs::write(output, bytes) {
+            Ok(()) => Outcome::success(String::new()),
+            Err(error) => Outcome::failure(format!("okkama: cannot write `{output}`: {error}\n"), EXIT_IO),
+        };
+    }
     let (module, warnings) = match lower_source(&sources, line.tests) {
         Ok(lowered) => lowered,
         Err(outcome) => return outcome,
@@ -1344,6 +1402,8 @@ fn build_command(args: &[String]) -> Outcome {
 fn run_command(args: &[String]) -> Outcome {
     let mut rest = args;
     let mut tests = false;
+    #[cfg(feature = "champ-abi")]
+    let mut verify_ownership = false;
     let mut filters: Vec<String> = Vec::new();
     let default = std::env::var("OKKAMA_ENGINE").unwrap_or_default();
     let mut limits = sparrow_core::budget::Limits::default();
@@ -1380,6 +1440,8 @@ fn run_command(args: &[String]) -> Outcome {
                 rest = &rest[1..];
             }
             "-t" | "--tests" => tests = true,
+            #[cfg(feature = "champ-abi")]
+            "--verify-ownership" => verify_ownership = true,
             "--filter" => {
                 let Some(value) = rest.get(1) else {
                     return Outcome::usage("--filter needs a text to look for in test names");
@@ -1425,6 +1487,8 @@ fn run_command(args: &[String]) -> Outcome {
     let mut line = CommandLine {
         input: Some(input.clone()),
         tests,
+        #[cfg(feature = "champ-abi")]
+        verify_ownership,
         ..CommandLine::default()
     };
     while let Some((next, tail)) = program_args.split_first() {
@@ -1441,6 +1505,21 @@ fn run_command(args: &[String]) -> Outcome {
         Ok(sources) => sources,
         Err(outcome) => return outcome,
     };
+    #[cfg(feature = "champ-abi")]
+    if oir2_selected() {
+        let bytes = match compile_oir2(&sources, line.tests, line.verify_ownership) {
+            Ok(bytes) => bytes,
+            Err(outcome) => return outcome,
+        };
+        let arguments = program_args.iter().map(|argument| argument.clone().into_bytes()).collect();
+        if let Some(flag) = &limits.interrupt {
+            watchdog(flag.clone());
+        }
+        let (outcome, _) = core_described(sparrow_core::run_described(
+            bytes, arguments, false, Vec::new(), limits,
+        ));
+        return outcome;
+    }
     let (mut module, warnings) = match lower_source(&sources, line.tests) {
         Ok(lowered) => lowered,
         Err(outcome) => return outcome,
@@ -1617,6 +1696,29 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|arg| arg.to_string()).collect()
+    }
+
+    #[test]
+    #[cfg(feature = "champ-abi")]
+    fn ownership_verification_flags_and_environment() {
+        use okkama_compiler::oir2::VerifyMode;
+        use std::ffi::OsStr;
+
+        let line = parse_command_line(
+            &args(&["x.ok", "--verify-ownership", "-o", "x.spb"]), CommandOptions::Build,
+        ).unwrap();
+        assert!(line.verify_ownership);
+        assert_eq!(ownership_verification_mode(false, None), VerifyMode::Structural);
+        assert_eq!(ownership_verification_mode(true, None), VerifyMode::Full);
+        assert_eq!(ownership_verification_mode(false, Some(OsStr::new("1"))), VerifyMode::Full);
+        assert_eq!(ownership_verification_mode(false, Some(OsStr::new("0"))), VerifyMode::Structural);
+        assert_eq!(ownership_verification_mode(true, Some(OsStr::new("0"))), VerifyMode::Full);
+        assert!(parse_command_line(&args(&["--verify-ownership=0"]), CommandOptions::Build).is_err());
+        assert!(parse_command_line(&args(&["--verify-ownership"]), CommandOptions::Program).is_err());
+        // Exercise run flag parsing without loading or running a source program.
+        let outcome = run_command(&args(&["--verify-ownership"]));
+        assert_eq!(outcome.code, EXIT_USAGE);
+        assert!(outcome.stderr.contains("missing input file"));
     }
 
     #[test]

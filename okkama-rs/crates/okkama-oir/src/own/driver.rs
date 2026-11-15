@@ -1,5 +1,6 @@
 //! Synchronous High normalization through the contract-driven outcome emitter.
 mod calls;
+mod protocols;
 mod exits;
 mod construction;
 mod control;
@@ -36,12 +37,25 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
             data.attrs.push(FunctionAttr::DeferEntry { replacements: vec![] });
         }
     }
+    let mut dictionaries = options.descriptors.clone();
+    for (_, function) in output.module.functions.iter() {
+        let Some(body) = &function.body else { continue };
+        for (_, instruction) in body.insts.iter() {
+            if let Operation::Core(CoreOp::TypeOf { ty, descriptor }) = &instruction.op {
+                dictionaries.insert(*ty, descriptor.clone());
+            }
+        }
+    }
     let mut emitter = OutcomeEmitter::new(&output.analysis, options);
     emitter.charge(output.stats.charged_work, output.stats.peak_auxiliary_bytes)?;
+    let entry_sets = super::entries::entry_sets(&output.module, emitter.budget_ref())?;
     let mut flows = BTreeMap::new();
     for function in &functions {
         let flow = analyze_function(&output.module, *function, &output.analysis, options)?;
-        emitter.charge(flow.stats.charged_work, flow.stats.peak_auxiliary_bytes)?;
+        let retained = flow.allocated_bytes() + 128;
+        let peak = flow.stats.peak_auxiliary_bytes.max(retained);
+        emitter.charge(flow.stats.charged_work, peak)?;
+        emitter.budget_ref().release(peak - retained);
         flows.insert(*function, flow);
     }
     // Decide empty entry specializations before rewriting any caller, including
@@ -59,6 +73,7 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
             output.module.functions.get_mut(*function).map_err(arena)?.summary = Some(summary);
         }
     }
+    super::entries::dictionary_summaries(&mut output.module, emitter.budget_ref())?;
     let external: Vec<_> = output.module.functions.iter().filter_map(|(id, data)| {
         data.body.is_none().then_some(id)
     }).collect();
@@ -68,8 +83,10 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
         let observation = summary.entry_kind == EntryKind::ObservationAdmissionStaysCaller;
         let mut signature = declaration.signature;
         let deps = output.module.types.intern(Type::Service(ServiceType::Deps)).map_err(arena)?;
-        let managed = signature.params.iter().filter(|ty| {
-            output.analysis.types.get(ty).is_some_and(TypeClassification::may_own)
+        let witness = entry_sets.witnesses.contains(&function);
+        let managed = signature.params.iter().enumerate().filter(|(index, ty)| {
+            (output.analysis.types.get(ty).is_some_and(TypeClassification::may_own)
+                || output.analysis.managed_references.contains(ty) || witness && *index == 0)
                 && !matches!(output.module.types.get(**ty), Ok(Type::Service(_) | Type::Descriptor))
         }).count();
         signature.params.extend(std::iter::repeat_n(deps, managed));
@@ -105,6 +122,16 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                 output.stats.elided_lexical_scopes += 1;
             }
         }
+        // Preserve the reviewed synchronous slice. Commit-4 entries additionally
+        // exploit snapshot admission facts before introducing checked splits.
+        let elide_offers = high.insts.iter().any(|(_, instruction)| matches!(
+            routing::handling(&instruction.op), routing::Handling::Snapshot)
+            || matches!(instruction.op, Operation::Call(CallOp::Closure { .. } | CallOp::Cap { .. }
+                | CallOp::Role { .. })))
+            || output.module.functions.get(function).map_err(arena)?.attrs.iter()
+                .any(|attr| matches!(attr, FunctionAttr::Lambda { .. }));
+        emitter.charge(high.values.len(), high.values.len() * 64)?;
+        let origins = origins::callable_origins(&output.module, &high, emitter.budget_ref())?;
         let mut driver = Driver {
             module: &mut output.module, high: &high, analysis: &output.analysis, emitter: &mut emitter,
             body: Body {
@@ -120,9 +147,12 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
             incomplete: BTreeMap::new(),
             replacement_returns: vec![],
             constructor_inputs: flows[&function].constructor_inputs.clone(),
+            flow: &flows[&function], elide_offers, definitions: BTreeMap::new(), origins,
+            witnesses: &entry_sets.witnesses,
         };
-        if !high.descriptor_bindings.is_empty() || !high.service_schedules.is_empty() {
-            return Err(phase_error(OwnDiagnosticKind::Commit4, "commit 4: descriptor or service metadata"));
+        if high.service_schedules.iter().any(|schedule| !schedule.duties.is_empty()) {
+            return Err(phase_error(OwnDiagnosticKind::UnsupportedAsync,
+                "nonempty service holder schedules require commit 5"));
         }
         let captured: BTreeSet<_> = high.insts.iter().flat_map(|(_, instruction)| match &instruction.op {
             Operation::Lexical(LexicalOp::DeferRegister { action, .. }) => action.bindings.clone(),
@@ -193,6 +223,11 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                     env.scopes.insert(scope, state);
                 }
             }
+            for value in &data.params {
+                if let Some(latest) = env.values.get(value) {
+                    driver.definitions.insert(*value, latest.value);
+                }
+            }
             driver.entries.insert(*original, env);
         }
         let prologue = block(&mut driver.body, root)?;
@@ -200,16 +235,19 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
         let mut env = LiveEnv::default();
         let destroy = driver.module.functions.get(function).map_err(arena)?.attrs.iter()
             .any(|attr| matches!(attr, FunctionAttr::Destroy(_)));
+        let witness = driver.witnesses.contains(&function);
         let mut params = vec![];
         for original in &high.blocks.get(high.entry).map_err(arena)?.params {
             let ty = high.values.get(*original).map_err(arena)?.ty;
             let value = parameter(&mut driver.body, prologue, ty, plain_or_service(driver.module, ty)?)?;
             params.push(ty);
             env.values.insert(*original, LatestValue { value, deps: None });
+            driver.definitions.insert(*original, value);
         }
-        for latest in env.values.values_mut() {
+        let first = env.values.keys().next().copied();
+        for (original, latest) in &mut env.values {
             let ty = driver.body.values.get(latest.value).map_err(arena)?.ty;
-            if driver.analysis.types.get(&ty).is_some_and(TypeClassification::may_own) {
+            if driver.managed(ty) || witness && Some(*original) == first {
                 if destroy {
                     let selection = driver.body.selections.alloc(SelectionExpr::Value(latest.value)).map_err(arena)?;
                     let deps = driver.body.deps.alloc(DepExpr::Retention {
@@ -241,6 +279,12 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                 env.values.get_mut(&original).unwrap().deps = Some(deps);
             }
         }
+        for binding in &high.descriptor_bindings {
+            driver.body.descriptor_bindings.push(DescriptorBinding {
+                dictionary: env.value(binding.dictionary)?.value,
+                contract: binding.contract.clone(),
+            });
+        }
         let explicit = driver.retained.contains(&root) && !destroy && driver.module.entry != Some(function);
         let mut signature = driver.module.functions.get(function).map_err(arena)?.signature.clone();
         let mut point = Landing { block: prologue, env, results: vec![], forwarded: BTreeMap::new() };
@@ -262,6 +306,46 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                 point = driver.emit(point, Operation::Ownership(OwnershipOp::ScopeBegin { scope: root }))?;
             }
         }
+        if let Some(protocol) = driver.module.functions.get(function).map_err(arena)?.summary
+            .and_then(|id| driver.module.summaries.get(id).ok()).and_then(|summary| summary.contract.protocol) {
+            let reason = protocols::reason(driver.module, protocol)?;
+            let packet = if matches!(reason, DynamicReason::Atomic | DynamicReason::Cell) {
+                point = driver.emit(point, Operation::Ownership(OwnershipOp::Empty {}))?;
+                point.result(SlotName::Packet)?
+            } else {
+                let values = point.env.values.values().filter_map(|latest| {
+                    driver.managed(driver.body.values.get(latest.value).unwrap().ty).then_some(latest.value)
+                }).collect();
+                let (next, packet) = driver.local_values(point, values)?;
+                point = next;
+                packet
+            };
+            let state = point.env.scopes.get(&root).copied()
+                .ok_or_else(|| flow_error("checked entry protocol needs its action root"))?;
+            point = driver.emit(point, Operation::Ownership(OwnershipOp::Dynamic {
+                state, packet, target: root, reason, protocol,
+            }))?;
+        }
+        for (ty, descriptor) in &dictionaries {
+            if matches!(driver.module.types.get(*ty), Ok(Type::Parameter(_))) {
+                continue;
+            }
+            let required = driver.analysis.scopes.iter().any(|(scope, facts)| {
+                driver.module.scopes.get(*scope).is_ok_and(|scope| scope.function == function)
+                    && facts.potential_owned_types.iter().any(|owned| {
+                        driver.analysis.types[owned].descriptors.iter().any(|bound| {
+                            bound.cleanup == descriptor.cleanup && bound.retention == descriptor.retention
+                                && bound.managed == descriptor.managed
+                        })
+                    })
+            });
+            if required {
+                let mut descriptor = descriptor.clone();
+                descriptor.summary = driver.module.functions.get(descriptor.cleanup).map_err(arena)?.summary
+                    .ok_or_else(|| flow_error("dictionary cleanup has no inferred summary"))?;
+                point = driver.emit(point, Operation::Core(CoreOp::TypeOf { ty: *ty, descriptor }))?;
+            }
+        }
         signature.params = params;
         driver.module.functions.get_mut(function).map_err(arena)?.signature = signature;
         driver.connect(point, &Target { block: high.entry, args: high.blocks.get(high.entry)
@@ -278,82 +362,94 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                 driver.current_instruction = Some(*instruction);
                 driver.live_after = continuations[instruction].clone();
                 let instruction = high.insts.get(*instruction).map_err(arena)?;
-                point = driver.instruction(point, instruction)?;
+                point = driver.instruction(point, instruction).map_err(|error| {
+                    at_high_site(error, function, HighOperationSite::Instruction(driver.current_instruction.unwrap()))
+                })?;
+                for original in &instruction.results {
+                    if let Some(latest) = point.env.values.get(original) {
+                        driver.definitions.insert(*original, latest.value);
+                    }
+                }
                 driver.prune(&mut point);
             }
-            match &data.term.kind {
-                TermKind::Br(target) => driver.connect(point, target, false, false, 0)?,
-                TermKind::Cond { condition, yes, no } => {
-                    let condition = point.env.value(*condition)?.value;
-                    let left = block(&mut driver.body, data.lexical_scope)?;
-                    let right = block(&mut driver.body, data.lexical_scope)?;
-                    driver.body.blocks.get_mut(point.block).map_err(arena)?.term.kind = TermKind::Cond {
-                        condition, yes: Target { block: left, args: vec![] }, no: Target { block: right, args: vec![] },
-                    };
-                    let mut left_point = point.clone();
-                    left_point.block = left;
-                    let mut right_point = point;
-                    right_point.block = right;
-                    driver.connect(left_point, yes, false, false, 0)?;
-                    driver.connect(right_point, no, false, false, 1)?;
-                }
-                TermKind::Switch { value, cases, default } => {
-                    driver.switch(point, *value, cases, default)?;
-                }
-                TermKind::Ret { values } | TermKind::RetDefer { values, .. } => {
-                    let tag = match &data.term.kind {
-                        TermKind::RetDefer { tag, .. } => Some(tag.clone()),
-                        _ if helpers.contains(&function) => Some(DeferReturnTag::Continue),
-                        _ => None,
-                    };
-                    point = driver.prepare(point, values.first().copied(), None)?;
-                    point = driver.close_all(point, false)?;
-                    let committed = if point.env.cleanup.pending.is_some() {
-                        let result = values.first().map(|value| high.values.get(*value).unwrap().ty);
-                        point = driver.commit(point, ExitDestination::Caller, result)?;
-                        let value = point.results.iter().find(|(name, _)| *name == SlotName::Value)
-                            .map(|(_, value)| *value);
-                        Some((value, point.result(SlotName::Packet)?, point.result(SlotName::Deps)?))
-                    } else {
-                        None
-                    };
-                    let mut values = values.iter().map(|value| point.env.value(*value).map(|latest| latest.value))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    if let Some((value, packet, deps)) = committed {
-                        values = value.into_iter().chain([packet]).collect();
-                        if matches!(tag, Some(DeferReturnTag::Replace(_))) {
-                            values.push(deps);
+            driver.current_instruction = None;
+            (|| -> Result<(), OwnError> {
+                match &data.term.kind {
+                    TermKind::Br(target) => driver.connect(point, target, false, false, 0)?,
+                    TermKind::Cond { condition, yes, no } => {
+                        let condition = point.env.value(*condition)?.value;
+                        let left = block(&mut driver.body, data.lexical_scope)?;
+                        let right = block(&mut driver.body, data.lexical_scope)?;
+                        driver.body.blocks.get_mut(point.block).map_err(arena)?.term.kind = TermKind::Cond {
+                            condition, yes: Target { block: left, args: vec![] },
+                            no: Target { block: right, args: vec![] },
+                        };
+                        let mut left_point = point.clone();
+                        left_point.block = left;
+                        let mut right_point = point;
+                        right_point.block = right;
+                        driver.connect(left_point, yes, false, false, 0)?;
+                        driver.connect(right_point, no, false, false, 1)?;
+                    }
+                    TermKind::Switch { value, cases, default } => {
+                        driver.switch(point, *value, cases, default)?;
+                    }
+                    TermKind::Ret { values } | TermKind::RetDefer { values, .. } => {
+                        let tag = match &data.term.kind {
+                            TermKind::RetDefer { tag, .. } => Some(tag.clone()),
+                            _ if helpers.contains(&function) => Some(DeferReturnTag::Continue),
+                            _ => None,
+                        };
+                        point = driver.prepare(point, values.first().copied(), None)?;
+                        point = driver.close_all(point, false)?;
+                        let committed = if point.env.cleanup.pending.is_some() {
+                            let result = values.first().map(|value| high.values.get(*value).unwrap().ty);
+                            point = driver.commit(point, ExitDestination::Caller, result)?;
+                            let value = point.results.iter().find(|(name, _)| *name == SlotName::Value)
+                                .map(|(_, value)| *value);
+                            Some((value, point.result(SlotName::Packet)?, point.result(SlotName::Deps)?))
+                        } else {
+                            None
+                        };
+                        let mut values = values.iter().map(|value| point.env.value(*value).map(|latest| latest.value))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        if let Some((value, packet, deps)) = committed {
+                            values = value.into_iter().chain([packet]).collect();
+                            if matches!(tag, Some(DeferReturnTag::Replace(_))) {
+                                values.push(deps);
+                            }
+                            point.env.linear.remove(&packet);
+                        } else if explicit && !helpers.contains(&function) {
+                            point = driver.emit(point, Operation::Ownership(OwnershipOp::Empty {}))?;
+                            values.push(point.result(SlotName::Packet)?);
                         }
-                        point.env.linear.remove(&packet);
-                    } else if explicit && !helpers.contains(&function) {
-                        point = driver.emit(point, Operation::Ownership(OwnershipOp::Empty {}))?;
-                        values.push(point.result(SlotName::Packet)?);
+                        driver.body.blocks.get_mut(point.block).map_err(arena)?.term.kind = match tag {
+                            Some(DeferReturnTag::Continue) => TermKind::RetDefer {
+                                tag: DeferReturnTag::Continue, values: vec![],
+                            },
+                            Some(tag) => TermKind::RetDefer { tag, values },
+                            None => TermKind::Ret { values },
+                        };
                     }
-                    driver.body.blocks.get_mut(point.block).map_err(arena)?.term.kind = match tag {
-                        Some(DeferReturnTag::Continue) => TermKind::RetDefer {
-                            tag: DeferReturnTag::Continue, values: vec![],
-                        },
-                        Some(tag) => TermKind::RetDefer { tag, values },
-                        None => TermKind::Ret { values },
-                    };
-                }
-                TermKind::Raise(failure) => {
-                    point.env.cleanup.failure = Some(point.env.value(*failure)?.value);
-                    driver.failures.push(FailureRoute { point, target: None });
-                }
-                TermKind::Unreachable => {
-                    if !point.env.all_linear().is_empty() {
-                        return Err(flow_error("unreachable tombstone contains live ownership"));
+                    TermKind::Raise(failure) => {
+                        point.env.cleanup.failure = Some(point.env.value(*failure)?.value);
+                        driver.failures.push(FailureRoute { point, target: None });
                     }
+                    TermKind::Unreachable => {
+                        if !point.env.all_linear().is_empty() {
+                            return Err(flow_error("unreachable tombstone contains live ownership"));
+                        }
+                    }
+                    TermKind::Throw(_) | TermKind::Panic(_) | TermKind::Trap { .. } => {
+                        driver.failure_term(point, &data.term.kind)?;
+                    }
+                    TermKind::Catch { failure, ty, handler, next } => {
+                        driver.catch(point, *failure, *ty, handler, next)?;
+                    }
+                    _ => return Err(flow_error("unsupported High terminator")),
                 }
-                TermKind::Throw(_) | TermKind::Panic(_) | TermKind::Trap { .. } => {
-                    driver.failure_term(point, &data.term.kind)?;
-                }
-                TermKind::Catch { failure, ty, handler, next } => {
-                    driver.catch(point, *failure, *ty, handler, next)?;
-                }
-                _ => return Err(flow_error("unsupported High terminator")),
-            }
+                Ok(())
+            })().map_err(|error| at_high_site(error, function, HighOperationSite::Terminator(*original)))?;
         }
         // Iterative cleanup queue: failed closes never recursively emit cleanup.
         driver.current_unwind = None;
@@ -409,10 +505,39 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
         for block in driver.blocks.values() {
             driver.ssa.seal(*block, driver.predecessors.get(block).copied().unwrap_or(0))?;
         }
+        for schedule in &high.service_schedules {
+            let mut schedule = schedule.clone();
+            schedule.dictionary = schedule.dictionary.map(|value| {
+                driver.definitions.get(&value).copied()
+                    .ok_or_else(|| flow_error("service dictionary has no reaching definition"))
+            }).transpose()?;
+            driver.body.service_schedules.push(schedule);
+        }
+        driver.emitter.charge(driver.body.values.len() * (1 + driver.body.descriptor_bindings.len()), 0)?;
+        for (_, value) in driver.body.values.iter_mut() {
+            let Type::Parameter(parameter) = driver.module.types.get(value.ty).map_err(arena)? else { continue };
+            if parameter.owner != GenericOwner::Function(function) {
+                continue;
+            }
+            if let Some(binding) = driver.body.descriptor_bindings.iter().find(|binding| {
+                binding.contract.managed == DescriptorManaged::Plain && !binding.contract.async_destroy
+                    && matches!(binding.contract.retention, SummarySelection::Descriptor(index)
+                        if u32::from(index) == parameter.index)
+            }) {
+                value.facts = ValueFacts::Plain { certificate: PlainCertificate::Descriptor(binding.dictionary) };
+            }
+        }
         driver.compact()?;
         driver.module.functions.get_mut(function).map_err(arena)?.body = Some(driver.body);
+        let flow = flows.remove(&function).unwrap();
+        emitter.budget_ref().release(flow.allocated_bytes() + 128);
     }
+    super::entries::role_signatures(&mut output.module)?;
     output.stats.emitted_checked_splits += emitter.stats().emitted_checked_splits;
+    output.stats.charged_work = emitter.stats().charged_work;
+    output.stats.peak_auxiliary_bytes = emitter.stats().peak_auxiliary_bytes;
+    output.stats.splits_elided += emitter.stats().splits_elided;
+    census::collect(&mut output, emitter.budget_ref())?;
     output.stats.charged_work = emitter.stats().charged_work;
     output.stats.peak_auxiliary_bytes = emitter.stats().peak_auxiliary_bytes;
     Ok(output)
@@ -434,6 +559,11 @@ struct Driver<'a, 'o> {
     module: &'a mut Module,
     high: &'a Body,
     analysis: &'a OwnAnalysis,
+    flow: &'a analyze::FunctionAnalysis,
+    elide_offers: bool,
+    definitions: BTreeMap<ValueId, ValueId>,
+    origins: BTreeMap<ValueId, origins::Origins>,
+    witnesses: &'a BTreeSet<FuncId>,
     emitter: &'a mut OutcomeEmitter<'o>,
     body: Body,
     retained: BTreeSet<ScopeId>,
@@ -456,7 +586,8 @@ struct Driver<'a, 'o> {
 }
 impl Driver<'_, '_> {
     fn managed(&self, ty: TypeId) -> bool {
-        self.analysis.types.get(&ty).is_some_and(TypeClassification::may_own)
+        (self.analysis.types.get(&ty).is_some_and(TypeClassification::may_own)
+            || matches!(self.module.types.get(ty), Ok(Type::Fn(_) | Type::Cap { .. } | Type::Role { .. } | Type::Any)))
             && !matches!(self.module.types.get(ty), Ok(Type::Service(_) | Type::Descriptor))
     }
     fn emit(&mut self, mut point: Landing, op: Operation) -> Result<Landing, OwnError> {
@@ -500,6 +631,7 @@ impl Driver<'_, '_> {
         Ok(normal)
     }
     fn instruction(&mut self, mut point: Landing, instruction: &Instruction) -> Result<Landing, OwnError> {
+        let _handling = routing::handling(&instruction.op);
         if matches!(instruction.op, Operation::Lexical(LexicalOp::Temp { .. } | LexicalOp::Want { .. }
             | LexicalOp::Discard { .. }) | Operation::Exit(ExitOp::Prepare { .. })) {
             return Ok(point);
@@ -559,6 +691,14 @@ impl Driver<'_, '_> {
             }
             Operation::Call(CallOp::Direct { function, .. } | CallOp::Native { function, .. }
                 | CallOp::Intrinsic { function, .. }) => return self.call(point, instruction, function),
+            Operation::Call(CallOp::Closure { .. } | CallOp::Cap { .. } | CallOp::Role { .. }) => {
+                return self.dispatch(point, instruction);
+            }
+            Operation::Core(CoreOp::FnClosure { .. } | CoreOp::FnBind { .. } | CoreOp::FnBindRole { .. }
+                | CoreOp::CapMake { .. } | CoreOp::AnyBox { .. } | CoreOp::RoleWrap { .. }
+                | CoreOp::RoleNarrow { .. } | CoreOp::OnceLoad { .. } | CoreOp::OnceStore { .. }) => {
+                return self.protocol_value(point, instruction);
+            }
             Operation::Lexical(LexicalOp::Stage { action, field, .. }) => {
                 let Operation::Lexical(LexicalOp::Stage { value, .. }) = instruction.op else { unreachable!() };
                 return self.stage(point, action, field, value);
@@ -568,6 +708,7 @@ impl Driver<'_, '_> {
                 | CoreOp::SuccTake { .. }) => {
                 return self.construct(point, instruction);
             }
+            Operation::Collection(_) if arrays::supported(self.module, self.high, self.analysis, &instruction.op) => {}
             Operation::Const(_) | Operation::Core(CoreOp::Undef { .. }) => {}
             Operation::Core(_) if instruction.results.iter().all(|value| {
                 !self.managed(self.high.values.get(*value).unwrap().ty)
@@ -758,13 +899,7 @@ fn live_in(
         let mut changed = false;
         for block in graph.rpo.iter().rev() {
             let data = body.blocks.get(*block).map_err(arena)?;
-            let mut values = BTreeSet::new();
-            match &data.term.kind {
-                TermKind::Cond { condition, .. } => { values.insert(*condition); }
-                TermKind::Ret { values: results } => values.extend(results),
-                TermKind::Raise(value) => { values.insert(*value); }
-                _ => {}
-            }
+            let mut values = control::term_values(&data.term.kind);
             for edge in graph.edges.iter().filter(|edge| edge.source == *block) {
                 values.extend(&edge.args);
                 values.extend(live[&edge.target].iter().filter(|value| {
@@ -799,8 +934,17 @@ fn live_in(
 /// Rewrite and run the independent Own postcondition. This certifies only the
 /// implemented verifier checks; #564's D8/D17/D18 semantic gate remains external.
 pub fn rewrite_synchronous(output: OwnOutput, options: &OwnOptions) -> Result<OwnOutput, OwnError> {
+    rewrite_synchronous_with(output, options, VerifyContext::default())
+}
+
+/// The same semantic gate with explicitly trusted runtime/native contracts.
+pub fn rewrite_synchronous_with(
+    output: OwnOutput,
+    options: &OwnOptions,
+    context: VerifyContext<'_>,
+) -> Result<OwnOutput, OwnError> {
     let output = rewrite_subset(output, options)?;
-    if let Err(mut report) = verify_with(&output.module, &options.verify, VerifyContext::default()) {
+    if let Err(mut report) = verify_with(&output.module, &options.verify, context) {
         if report.failure == VerifyFailure::Incomplete {
             return Err(OwnError::IncompleteVerification { report: Box::new(report), stats: Box::new(output.stats) });
         }
@@ -808,4 +952,14 @@ pub fn rewrite_synchronous(output: OwnOutput, options: &OwnOptions) -> Result<Ow
         return Err(OwnError::InvalidOutput(Box::new(report)));
     }
     Ok(output)
+}
+
+fn at_high_site(mut error: OwnError, function: FuncId, site: HighOperationSite) -> OwnError {
+    if let OwnError::Diagnostics { diagnostics, .. } = &mut error {
+        for diagnostic in diagnostics {
+            diagnostic.function.get_or_insert(function);
+            diagnostic.site.get_or_insert(site);
+        }
+    }
+    error
 }

@@ -440,3 +440,87 @@ fn sealed_latest_binding_waits_for_backedge_and_requires_paired_full_deps() {
     let ValueFacts::Managed { deps } = body.values.get(phi.value).unwrap().facts else { panic!() };
     assert_eq!(body.deps.get(deps).unwrap(), &DepExpr::FromSsa(phi.deps.unwrap()));
 }
+
+fn scalar_size_input(values: usize, blocks: usize) -> (Module, FuncId) {
+    let mut module = ModuleBuilder::new("memory", Profile::High);
+    let function = module.declare_function(function("main", vec![], vec![])).unwrap();
+    let root = scope(&mut module, function);
+    let mut builder = module.function_builder(function, root).unwrap();
+    for _ in 0..values {
+        builder.emit_schema(Operation::Const(Literal::Int("1".into()))).unwrap();
+    }
+    for _ in 1..blocks {
+        let next = builder.create_block(root, &[]).unwrap();
+        builder.terminate(TermKind::Br(Target { block: next, args: vec![] })).unwrap();
+        builder.switch_to(next).unwrap();
+    }
+    builder.terminate(TermKind::Ret { values: vec![] }).unwrap();
+    let body = builder.finish().unwrap();
+    module.define_function(function, body).unwrap();
+    (module.finish().unwrap(), function)
+}
+
+#[test]
+fn sparse_p1_size_memory_and_function_local_scope_dimensions() {
+    // Largest measured P1 main: 105 SSA values, 35 blocks (branches-wanted-match).
+    let (mut module, function) = scalar_size_input(105, 35);
+    let options = OwnOptions::default();
+    let output = analyzed(module.clone());
+    let flow = analyze_function(&output.module, function, &output.analysis, &options).unwrap();
+    assert_eq!(flow.equations.nodes, vec![Shape::Empty]);
+    assert!(flow.stats.peak_auxiliary_bytes < options.memory_limit / 64);
+    let unrelated = module.functions.alloc(super::function("unrelated", vec![], vec![])).unwrap();
+    for _ in 0..1000 {
+        module.scopes.alloc(ScopeDecl {
+            function: unrelated, parent: None, kind: ScopeKind::Action, loc: None,
+        }).unwrap();
+    }
+    let with_scopes = analyze_function(&module, function, &output.analysis, &options).unwrap();
+    assert_eq!(flow, with_scopes);
+    let exact = OwnOptions { memory_limit: flow.stats.peak_auxiliary_bytes, ..options.clone() };
+    assert_eq!(analyze_function(&output.module, function, &output.analysis, &exact).unwrap(), flow);
+    let below = OwnOptions { memory_limit: exact.memory_limit - 1, ..options };
+    let error = analyze_function(&output.module, function, &output.analysis, &below).unwrap_err();
+    assert!(matches!(error, OwnError::Incomplete { stats } if stats.exhausted_limit == Some(OwnLimit::Memory)));
+}
+
+#[test]
+fn genuinely_large_sparse_function_exhausts_default_memory_cheaply() {
+    // Linear CFG, but thousands of retained SSA states: real vector/snapshot storage
+    // exceeds 256 MiB. No enormous dense equation matrix or unbounded work is needed.
+    let mut module = ModuleBuilder::new("large_memory", Profile::High);
+    let int = module.intern_type(Type::Int).unwrap();
+    let f = module.declare_function(function("large", vec![int; 4096], vec![])).unwrap();
+    let root = scope(&mut module, f);
+    let mut builder = module.function_builder(f, root).unwrap();
+    for _ in 0..768 {
+        let next = builder.create_block(root, &[]).unwrap();
+        builder.terminate(TermKind::Br(Target { block: next, args: vec![] })).unwrap();
+        builder.switch_to(next).unwrap();
+    }
+    builder.terminate(TermKind::Ret { values: vec![] }).unwrap();
+    let body = builder.finish().unwrap();
+    module.define_function(f, body).unwrap();
+    let module = module.finish().unwrap();
+    let analysis = OwnAnalysis { types: classify_test(&module, &OwnOptions::default()), ..OwnAnalysis::default() };
+    let error = match analyze_function(&module, f, &analysis, &OwnOptions::default()) {
+        Err(error) => error,
+        Ok(flow) => panic!("large analysis unexpectedly completed: {:?}", flow.stats),
+    };
+    assert!(matches!(&error, OwnError::Incomplete { stats }
+        if stats.exhausted_limit == Some(OwnLimit::Memory) && stats.charged_work < 50_000_000), "{error:?}");
+}
+
+#[test]
+fn memory_scratch_is_released_and_peak_is_not_cumulative_allocation() {
+    let options = OwnOptions { memory_limit: 100, ..OwnOptions::default() };
+    let mut budget = Budget::new(&options);
+    budget.memory(40).unwrap();
+    for _ in 0..100 {
+        budget.memory(60).unwrap();
+        budget.release(60);
+    }
+    assert_eq!(budget.stats.peak_auxiliary_bytes, 100);
+    assert!(matches!(budget.memory(61), Err(OwnError::Incomplete { stats })
+        if stats.exhausted_limit == Some(OwnLimit::Memory)));
+}

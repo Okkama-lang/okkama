@@ -17,7 +17,9 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
     let source = &program.functions[index];
     let frame = Frame::new(source)?;
     let owned = source.entry_abi != s::EntryAbi::Observation;
-    let params = if owned { 3 } else { source.params.len() };
+    let params = if owned { 3 } else {
+        source.params.iter().filter(|location| matches!(location, L::Register(_))).count()
+    };
     let signature = runtime.jit.signature(params);
     let id = runtime.jit.module.declare_function(&format!("champ{index}"), Linkage::Local, &signature)
         .map_err(|error| Error(format!("Champ declare: {error}")))?;
@@ -459,6 +461,63 @@ impl Emit<'_, '_> {
                 let destination = self.scope_pointer(scope);
                 self.checked("champ_machine_destination", &[ctx, state, destination]);
                 return self.flow(op, flow, arguments, ordinal, "champ_scope_begin");
+            }
+            O::InvokeObserve => {
+                let target = arguments.iter().find_map(entry).unwrap() as usize;
+                let count = self.program.functions[target].params.iter()
+                    .filter(|location| matches!(location, L::Register(_))).count();
+                let values = locations[..count].iter().map(|&loc| self.word(loc)).collect::<Vec<_>>();
+                let argv = self.record(&values);
+                let argc = self.iconst(count as u64);
+                let function = self.iconst(target as u64);
+                let value = self.call("champ_machine_external", &[ctx, function, zero, argv, argc]).unwrap();
+                let status = self.load(ctx, std::mem::offset_of!(Ctx, status));
+                let success = self.builder.create_block();
+                let failure = self.builder.create_block();
+                self.builder.ins().brif(status, failure, &[], success, &[]);
+                self.builder.switch_to_block(success);
+                match flow {
+                    s::Flow::Next(outputs) => {
+                        if let Some(&output) = outputs.first() {
+                            self.write(output, &[value]);
+                        }
+                        self.next();
+                    }
+                    s::Flow::Outcomes(outcomes) => {
+                        let edge = &outcomes.iter().find(|outcome| outcome.tag == s::Tag::Normal).unwrap().edge;
+                        let produced = if self.program.functions[target].results.is_empty() {
+                            vec![]
+                        } else {
+                            vec![vec![value]]
+                        };
+                        self.edge(edge, &produced);
+                    }
+                }
+                self.builder.switch_to_block(failure);
+                let failed = self.builder.ins().icmp_imm_s(IntCC::Equal, status, FAILED as i64);
+                let unwind = self.builder.create_block();
+                self.builder.ins().brif(failed, unwind, &[], self.stop, &[]);
+                self.builder.switch_to_block(unwind);
+                if let s::Flow::Outcomes(outcomes) = flow
+                    && let Some(outcome) = outcomes.iter().find(|outcome| outcome.tag == s::Tag::Unwind)
+                {
+                    let function = self.iconst(self.index as u64);
+                    let pc = self.iconst(self.pc.unwrap() as u64);
+                    let frame = self.builder.ins().get_frame_pointer(types::I64);
+                    self.call("trace", &[ctx, function, pc, frame]);
+                    let failure = self.load(ctx, std::mem::offset_of!(Ctx, failure));
+                    self.store(ctx, std::mem::offset_of!(Ctx, status), zero);
+                    self.store(ctx, std::mem::offset_of!(Ctx, failure), zero);
+                    self.edge(&outcome.edge, &[vec![failure]]);
+                } else {
+                    self.builder.ins().jump(self.stop, &[]);
+                }
+                return Ok(());
+            }
+            O::DepsOf => {
+                // The result has a definition and proof dependencies, but no machine storage.
+                self.next();
+                return Ok(());
             }
             O::OwnEmpty => helper = "champ_own_empty",
             O::OwnMove => {

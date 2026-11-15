@@ -840,3 +840,261 @@ fn champ_j2_ir_maps_exclude_post_and_metadata_words() {
     }
     assert!(!runtime.jit.maps.is_empty(), "machine maps must be published to the existing frame walker");
 }
+
+fn p1_runtime() -> Box<Runtime> {
+    let mut program = s::Program::default();
+    for (name, fields, error_cases) in [
+        ("async.atomic.Atomic_int", vec![s::Type::Int, s::Type::Bool], vec![]),
+        ("async.atomic.Atomic_string", vec![s::Type::Str, s::Type::Bool], vec![]),
+        ("async.atomic.AtomicClosed", vec![s::Type::Int], vec!["AtomicClosed.closed".to_string()]),
+        ("app.Problem.note", vec![s::Type::Str], vec!["Problem.note".to_string()]),
+    ] {
+        let trace_layout = fields.iter().enumerate().filter_map(|(index, ty)| {
+            (*ty == s::Type::Str).then_some(index as u32)
+        }).collect();
+        program.objects.push(s::Object {
+            name: name.into(), error_cases,
+            fields: if name == "app.Problem.note" {
+                vec![s::Field { name: "message".into(), storage: 0, once: false }]
+            } else {
+                vec![]
+            },
+            layout: s::ObjectRuntimeLayout {
+                allocation_words: (1 + fields.len() as u32).max(2),
+                identity_offset: None, has_destroy: false, may_reach_resource: false,
+                may_async_destroy: false, storage_fields: fields, trace_layout, selection_layout: vec![],
+            },
+        });
+    }
+    let contracts = s::p1::P1Contracts::new(&program.objects).unwrap();
+    program.functions = contracts.entries().to_vec();
+    let mut runtime = Runtime::new_champ(program, vec![]).unwrap();
+    runtime.heap.set_stress(true);
+    runtime
+}
+
+fn p1_call(runtime: &mut Runtime, ctx: &mut Ctx, name: &str, args: &[Word]) -> (Word, Option<CallPost>) {
+    let source = runtime.champ.machine.as_ref().unwrap().source.clone();
+    let function = source.functions.iter().position(|function| {
+        function.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref()) == Some(name)
+    }).unwrap();
+    let code = compile(runtime, function).unwrap();
+    if source.functions[function].entry_abi == s::EntryAbi::Observation {
+        return (unsafe { invoke(code, ctx, args) }, None);
+    }
+    let mut post = CallPost::default();
+    let mut input = PacketSlot::default();
+    assert_eq!(c::rt_own_empty(ctx, &mut input), 0);
+    let mut io = CallOwn {
+        input, entry_abi: runtime.champ_entry_id(function).unwrap(), output: &mut post, context: 0, cleanup_mode: 0,
+    };
+    let entry: extern "C" fn(*mut Ctx, *mut CallOwn, *const Word, u64) -> Word =
+        unsafe { std::mem::transmute(code) };
+    let outcome = entry(ctx, &mut io, args.as_ptr(), args.len() as u64);
+    assert_eq!(io.input.record, 0);
+    (outcome, Some(post))
+}
+
+#[test]
+fn champ_p1_atomic_specializations_closed_failure_and_gc() {
+    for suffix in ["int", "string"] {
+        let mut runtime = p1_runtime();
+        let mut ctx = context(&mut runtime);
+        let (first, second, repr) = if suffix == "int" {
+            (runtime.heap.int(2), runtime.heap.int(7), Repr::Int)
+        } else {
+            (runtime.heap.allocate_text("old"), runtime.heap.allocate_text("новое"), Repr::Ref)
+        };
+        runtime.roots.extend([(first, repr), (second, repr)]);
+        let (_, post) = p1_call(&mut runtime, &mut ctx, &format!("okkama.atomic.Atomic.new_value${suffix}"), &[first]);
+        let post = post.unwrap();
+        let object = post.value;
+        runtime.roots.push((object, Repr::Ref));
+        assert!(runtime.champ_packet_keys(&post.packet).unwrap().is_empty());
+        let (outcome, post) = p1_call(&mut runtime, &mut ctx,
+            &format!("okkama.atomic.Atomic.replace${suffix}"), &[object, second]);
+        assert_eq!(outcome, c::NORMAL);
+        assert!(runtime.champ_packet_keys(&post.unwrap().packet).unwrap().is_empty());
+        let (value, post) = p1_call(&mut runtime, &mut ctx,
+            &format!("okkama.atomic.Atomic.value${suffix}"), &[object]);
+        assert!(post.is_none(), "value remains a borrowed observation");
+        assert_eq!(value, second);
+        runtime.roots.clear();
+        runtime.roots.push((object, Repr::Ref));
+        runtime.heap.collect(|visit| visit(object, Repr::Ref));
+        if suffix == "string" {
+            assert_eq!(runtime.heap.text(runtime.heap.field(object, 0)), "новое");
+        }
+        for _ in 0..2 {
+            let (_, post) = p1_call(&mut runtime, &mut ctx,
+                &format!("okkama.atomic.Atomic.close${suffix}"), &[object]);
+            assert!(post.is_none(), "close does not accept ownership of the borrowed value");
+            assert_eq!(ctx.status, OK);
+        }
+        let replacement = if suffix == "int" {
+            runtime.heap.int(11)
+        } else {
+            runtime.heap.allocate_text("ignored")
+        };
+        runtime.roots.push((replacement, repr));
+        for op in ["value", "replace"] {
+            let args = [object, replacement];
+            let count = 1 + usize::from(op == "replace");
+            let (outcome, post) = p1_call(&mut runtime, &mut ctx,
+                &format!("okkama.atomic.Atomic.{op}${suffix}"), &args[..count]);
+            assert_eq!(ctx.status, FAILED);
+            if op == "replace" {
+                assert_eq!(outcome, c::UNWIND);
+                let post = post.unwrap();
+                assert_eq!(post.failure, ctx.failure);
+                assert_eq!(post.packet.record, 0, "accepted input is settled before unwind");
+            } else {
+                assert!(post.is_none());
+            }
+            let FailureKind::Thrown(error) = runtime.failure(ctx.failure).unwrap().kind else { panic!("typed error") };
+            runtime.roots.push((error, Repr::Ref));
+            ctx.status = OK;
+            ctx.failure = 0;
+            let (text, _) = p1_call(&mut runtime, &mut ctx, "okkama.Error.text", &[error]);
+            assert_eq!(runtime.heap.text(text), "AtomicClosed.closed");
+            assert_eq!(runtime.heap.field(object, 0), word::UNBOUND);
+        }
+    }
+}
+
+#[test]
+fn champ_p1_atomic_replace_preserves_old_string_borrow() {
+    let mut runtime = p1_runtime();
+    let mut ctx = context(&mut runtime);
+    let old = runtime.heap.allocate_text("old");
+    runtime.roots.push((old, Repr::Ref));
+    let (_, post) = p1_call(&mut runtime, &mut ctx, "okkama.atomic.Atomic.new_value$string", &[old]);
+    let object = post.unwrap().value;
+    runtime.roots.push((object, Repr::Ref));
+    let (borrow, _) = p1_call(&mut runtime, &mut ctx, "okkama.atomic.Atomic.value$string", &[object]);
+    assert_eq!(borrow, old);
+    let fresh = runtime.heap.allocate_text("new");
+    runtime.roots.push((fresh, Repr::Ref));
+    let (outcome, post) = p1_call(&mut runtime, &mut ctx,
+        "okkama.atomic.Atomic.replace$string", &[object, fresh]);
+    assert_eq!(outcome, c::NORMAL);
+    assert!(runtime.champ_packet_keys(&post.unwrap().packet).unwrap().is_empty());
+    runtime.heap.collect(|visit| {
+        visit(object, Repr::Ref);
+        visit(borrow, Repr::Ref);
+    });
+    assert_eq!(runtime.heap.text(borrow), "old");
+    assert_eq!(runtime.heap.text(runtime.heap.field(object, 0)), "new");
+    p1_call(&mut runtime, &mut ctx, "okkama.atomic.Atomic.close$string", &[object]);
+    runtime.heap.collect(|visit| visit(borrow, Repr::Ref));
+    assert_eq!(runtime.heap.text(borrow), "old");
+}
+
+#[test]
+fn champ_p1_utf8_stdout_and_output_budget() {
+    let mut runtime = p1_runtime();
+    let mut ctx = context(&mut runtime);
+    let text = runtime.heap.allocate_text("Привет 🌍\n");
+    runtime.roots.push((text, Repr::Ref));
+    let (outcome, post) = p1_call(&mut runtime, &mut ctx, "runtime/utf@1::utf8_encode/1", &[text]);
+    assert_eq!(outcome, 0);
+    let bytes = post.unwrap().value;
+    runtime.roots.push((bytes, Repr::Ref));
+    let ((outcome, post), output) = okkama_runtime_core::stdout::capture(|| {
+        p1_call(&mut runtime, &mut ctx, "runtime/stdio@1::stdout_write/1", &[bytes])
+    });
+    assert_eq!(outcome, 0);
+    assert_eq!(output, "Привет 🌍\n".as_bytes());
+    assert_eq!(runtime.small_or_big(post.unwrap().value), Some(output.len() as i64));
+    runtime.limits.output = Some(0);
+    let (_, output) = okkama_runtime_core::stdout::capture(|| {
+        p1_call(&mut runtime, &mut ctx, "runtime/stdio@1::stdout_write/1", &[bytes])
+    });
+    assert!(output.is_empty());
+    assert_ne!(ctx.status, OK);
+}
+
+#[test]
+fn champ_p1_error_text_payload_is_plain_and_rooted() {
+    let mut runtime = p1_runtime();
+    let mut ctx = context(&mut runtime);
+    let text = runtime.heap.allocate_text("line\nquote\"");
+    let object = runtime.heap.object_new(3, &[text]);
+    runtime.roots.push((object, Repr::Ref));
+    let (text, _) = p1_call(&mut runtime, &mut ctx, "okkama.Error.text", &[object]);
+    assert_eq!(ctx.status, OK);
+    assert_eq!(runtime.heap.text(text), "Problem.note(\"line\\nquote\\\"\")");
+    assert!(runtime.heap.champ_identity(object).is_none());
+    let fields = ["io", "failed", "stdout_write", "io failed"].map(|text| runtime.heap.allocate_text(text));
+    let descriptor = runtime.champ.machine.as_ref().unwrap().native_failure;
+    let object = runtime.heap.object_new(descriptor, &fields);
+    runtime.roots.push((object, Repr::Ref));
+    let (text, _) = p1_call(&mut runtime, &mut ctx, "okkama.Error.text", &[object]);
+    assert_eq!(runtime.heap.text(text), "io failed");
+}
+
+#[test]
+fn champ_p1_observation_outcomes_and_gc() {
+    let template = p1_runtime();
+    let mut source = (*template.champ.machine.as_ref().unwrap().source).clone();
+    let target = source.functions.iter().position(|function| {
+        function.proofs.entry.as_ref().unwrap().external.as_deref() == Some("okkama.atomic.Atomic.value$int")
+    }).unwrap() as u32;
+    let reg = s::Location::Register;
+    let deps = s::Location::Service(0);
+    let summary = source.tables.summaries.len() as u32;
+    source.tables.summaries.push(s::Summary { entry: target, retained_params: vec![], may_fail: true });
+    let caller = source.functions.len();
+    source.functions.push(s::Function {
+        symbol: "observe".into(), entry_abi: s::EntryAbi::Observation,
+        registers: vec![s::Type::Object(0), s::Type::Int, s::Type::Failure],
+        services: vec![s::ServiceKind::Deps], params: vec![reg(0), deps], results: vec![s::Type::Int],
+        blocks: vec![
+            s::Block { pc: 0, params: vec![reg(0), deps] },
+            s::Block { pc: 1, params: vec![reg(1)] },
+            s::Block { pc: 2, params: vec![reg(2)] },
+        ],
+        proofs: s::FunctionProofs {
+            entry: Some(s::EntryContract { failures: 1, ..s::EntryContract::default() }),
+            roots: (0..3).map(|pc| s::RootRequirement { pc, locations: vec![reg(pc)] }).collect(),
+            ..s::FunctionProofs::default()
+        },
+        code: vec![
+            s::Instruction::Champ {
+                op: s::Opcode::InvokeObserve,
+                arguments: vec![s::Argument::Entry(target), s::Argument::Summary(summary),
+                    s::Argument::Location(reg(0)), s::Argument::Location(deps)],
+                flow: s::Flow::Outcomes(vec![
+                    s::Outcome { tag: s::Tag::Normal, edge: s::Edge {
+                        target_pc: 1, assignments: vec![s::Assignment {
+                            destination: reg(1), source: s::Source::ProducedSlot(0),
+                        }],
+                    } },
+                    s::Outcome { tag: s::Tag::Unwind, edge: s::Edge {
+                        target_pc: 2, assignments: vec![s::Assignment {
+                            destination: reg(2), source: s::Source::ProducedSlot(0),
+                        }],
+                    } },
+                ]),
+            },
+            s::Instruction::Ret(vec![1]),
+            s::Instruction::Raise(2),
+        ],
+    });
+    let mut runtime = Runtime::new_champ(source, vec![]).unwrap();
+    runtime.heap.set_stress(true);
+    let mut ctx = context(&mut runtime);
+    let value = runtime.heap.int(7);
+    let (_, post) = p1_call(&mut runtime, &mut ctx, "okkama.atomic.Atomic.new_value$int", &[value]);
+    let object = post.unwrap().value;
+    runtime.roots.push((object, Repr::Ref));
+    let code = compile(&mut runtime, caller).unwrap();
+    let value = unsafe { invoke(code, &mut ctx, &[object]) };
+    assert_eq!(runtime.small_or_big(value), Some(7));
+    assert_eq!(ctx.status, OK);
+    p1_call(&mut runtime, &mut ctx, "okkama.atomic.Atomic.close$int", &[object]);
+    unsafe { invoke(code, &mut ctx, &[object]) };
+    assert_eq!(ctx.status, FAILED);
+    assert!(matches!(runtime.failure(ctx.failure).unwrap().kind, FailureKind::Thrown(_)));
+    assert_eq!(runtime.failure(ctx.failure).unwrap().trace.len(), 1);
+}

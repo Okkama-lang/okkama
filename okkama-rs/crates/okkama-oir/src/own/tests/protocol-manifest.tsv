@@ -1,0 +1,33 @@
+# High and Own pairs: protocol-high/<fixture>.oir and protocol-goldens/<fixture>.oir plus <fixture>.stats.
+# model=n/a: textual IR evidence only. No behavioral/model certificate is claimed.
+# Group covers family/ownership IR; scheduling, collector positions and runtime traces belong to commit 5.
+fixture	anchor	rules	negative	model	schedule	level	status
+any-borrowed	OIR2:11;P1.3:12	B51/B53	outcome_mutation_test	n/a	sync	semantic	verified
+any-fresh	OIR2:11;P1.3:12	B51/B53	outcome_mutation_test	n/a	sync	semantic	verified
+any-known-plain	OIR2:11;P1.3:12	B51/B53	outcome_mutation_test	n/a	sync	semantic	verified
+bound-role	P1.3:3.1,7.2	B51/B112	role-parameter-hidden-async	n/a	sync	semantic	verified
+bound-snapshot	OIR2:11;P1.3:12	B51/B53	outcome_mutation_test	n/a	sync	semantic	verified
+cap-call	OIR2:11;P1.3:12	B112	cap-parameter-hidden-async	n/a	sync	semantic	verified
+cap-hidden	OIR2:11;P1.3:12	B112	cap-parameter-hidden-async	n/a	sync	semantic	verified
+cap-parameter	OIR2:11;P1.3:12	B112	cap-parameter-hidden-async	n/a	sync	semantic	verified
+closure-borrowed	OIR2:11;P1.3:12	B51/B53	outcome_mutation_test	n/a	sync	semantic	verified
+closure-empty	OIR2:11;P1.3:12	B51/B53	outcome_mutation_test	n/a	sync	semantic	verified
+closure-fresh	OIR2:11;P1.3:12	B51/B53	outcome_mutation_test	n/a	sync	semantic	verified
+closure-known	OIR2:11;P1.3:12	B51/B53	outcome_mutation_test	n/a	sync	semantic	verified
+closure-known-join	OIR2:11;P1.3:12	B51/B53	outcome_mutation_test	n/a	sync	semantic	verified
+closure-known-loop	P1.3:4.4,7.2,12	B51/B53	outcome_mutation_test	n/a	sync	semantic	verified
+closure-known-phi	OIR2:11;P1.3:12	B51/B53	outcome_mutation_test	n/a	sync	semantic	verified
+closure-open	OIR2:6.4;P1.3:D16	B51/B112	opaque-self-certified	n/a	sync	semantic	verified
+descriptor-binding	P1.3:D16	T4/B111	B11_corpus	n/a	sync	semantic	verified
+descriptor-plain-parameter	P1.3:D16	B111	descriptor-plain-without-proof	n/a	sync	semantic	verified
+dynamic-any	OIR2:7;P1.3:12	B71/B73	dynamic-any-wrong-family	n/a	sync	semantic	verified
+dynamic-atomic	OIR2:7;P1.3:12	B71/B73	dynamic-atomic-wrong-family	n/a	sync	semantic	verified
+dynamic-cell	OIR2:7;P1.3:12	B71/B73	dynamic-cell-wrong-family	n/a	sync	semantic	verified
+dynamic-channel	OIR2:7;P1.3:12	B71/B73	dynamic-channel-wrong-family	n/a	sync	semantic	verified
+dynamic-closure	OIR2:7;P1.3:12	B71/B73	dynamic-closure-wrong-family	n/a	sync	semantic	verified
+dynamic-group	OIR2:7;P1.3:12	B71/B73	dynamic-group-wrong-family	n/a	sync	semantic	verified
+once-plain	OIR2:3.1,12	B111	once-hidden-resource	n/a	sync	semantic	verified
+role-call	P1.3:3.1,7.2	B51/B112	role-parameter-hidden-async	n/a	sync	semantic	verified
+role-parameter	P1.3:3.1,7.2	B51/B112	role-parameter-hidden-async	n/a	sync	semantic	verified
+role-plain	P1.3:3.1,7.2	B51/B112	role-parameter-hidden-async	n/a	sync	semantic	verified
+service-schedule-empty	P1.3:D16	B106	B10_corpus	n/a	sync	semantic	verified

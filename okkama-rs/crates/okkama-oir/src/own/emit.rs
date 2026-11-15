@@ -70,7 +70,9 @@ impl<'a> OutcomeEmitter<'a> {
     pub fn new(analysis: &OwnAnalysis, options: &'a OwnOptions) -> Self {
         Self {
             budget: Budget::new(options),
-            managed: analysis.types.iter().filter_map(|(ty, facts)| facts.may_own().then_some(*ty)).collect(),
+            managed: analysis.types.iter().filter_map(|(ty, facts)| {
+                (facts.may_own() || analysis.managed_references.contains(ty)).then_some(*ty)
+            }).collect(),
         }
     }
     pub(super) fn budget_ref(&mut self) -> &mut Budget<'a> {
@@ -299,7 +301,9 @@ impl<'a> OutcomeEmitter<'a> {
         for (slot, value) in results {
             let ty = body.values.get(*value).map_err(arena)?.ty;
             if !self.managed.contains(&ty)
-                || matches!(module.types.get(ty).map_err(arena)?, Type::Service(_) | Type::Descriptor) {
+                || matches!(module.types.get(ty).map_err(arena)?, Type::Service(_) | Type::Descriptor
+                    | Type::Int | Type::Bool | Type::Byte | Type::Float | Type::Rat | Type::Char | Type::Str
+                    | Type::Range | Type::Enum(_) | Type::Never) {
                 continue;
             }
             let deps = if let Some((_, deps)) = result_deps.iter().find(|(name, _)| name == slot) {
@@ -327,8 +331,22 @@ impl<'a> OutcomeEmitter<'a> {
                     }
                 }
                 body.deps.alloc(DepExpr::Union(deps)).map_err(arena)?
+            } else if let Operation::Core(CoreOp::FnClosure { captures, .. }) = op {
+                let deps = captures.iter().filter_map(|value| match body.values.get(*value).ok()?.facts {
+                    ValueFacts::Managed { deps } => Some(deps),
+                    _ => None,
+                }).collect();
+                body.deps.alloc(DepExpr::Union(deps)).map_err(arena)?
+            } else if let Operation::Core(CoreOp::FnBind { receiver: input, .. }
+                | CoreOp::FnBindRole { receiver: input, .. } | CoreOp::CapMake { owner: input, .. }
+                | CoreOp::AnyBox { value: input, .. } | CoreOp::RoleWrap { value: input, .. }
+                | CoreOp::RoleNarrow { value: input, .. }) = op {
+                match body.values.get(*input).map_err(arena)?.facts {
+                    ValueFacts::Managed { deps } => deps,
+                    _ => body.deps.alloc(DepExpr::Empty).map_err(arena)?,
+                }
             } else if matches!(op, Operation::Call(_)
-                | Operation::Core(CoreOp::ObjGet { .. } | CoreOp::Undef { .. })) {
+                | Operation::Core(CoreOp::ObjGet { .. } | CoreOp::OnceLoad { .. } | CoreOp::Undef { .. })) {
                 let expression = if matches!(op, Operation::Core(CoreOp::Undef { .. })) {
                     DepExpr::Empty
                 } else {

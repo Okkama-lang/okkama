@@ -2,7 +2,7 @@ sparrow 17
 Program { module "fresh_call" version "" objects 1 Object { name "Res" fields 0 layout ObjectRuntimeLayout { 
 storage_fields 0 allocation_words 5 identity_offset 1 8 has_destroy 1 may_reach_resource 1 may_async_destroy 0 
 trace_layout 0 selection_layout 0 }
- }
+ error_cases 0 }
  tables ChampTables { scopes 4 Scope { function 1 parent 0 boundary 0 }
  Scope { function 2 parent 0 boundary 1 }
  Scope { function 2 parent 1 1 boundary 2 }

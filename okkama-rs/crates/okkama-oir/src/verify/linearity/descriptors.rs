@@ -2,6 +2,8 @@ use super::*;
 
 impl Engine<'_, '_> {
     pub(super) fn descriptor_operation(&mut self, op: &Operation, origin: Origin, slots: &mut [Slot]) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("descriptors::descriptor_operation");
         let Operation::Core(CoreOp::TypeOf { ty, descriptor }) = op else {
             return;
         };
@@ -39,6 +41,8 @@ impl Engine<'_, '_> {
     }
 
     pub(super) fn descriptor_arguments(&mut self, call: &CallSite, target: Option<FuncId>, flow: &Flow) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("descriptors::descriptor_arguments");
         let Some(body) = target.and_then(|id| self.module.functions.get(id).ok())
             .and_then(|function| function.body.as_ref()) else {
             return;

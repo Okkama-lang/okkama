@@ -3,6 +3,8 @@
 //! ownership/lifetime conservation, represented async protocols and lowered cleanup.
 //! `VerifyStats::structural_checks` names producer-metadata gaps; these are not
 //! certificates for frame layouts, continuation graphs or suspension root maps.
+#[cfg(any(test, feature = "verifier-differential"))]
+mod work_profile;
 mod diagnostic;
 mod limits;
 mod index;
@@ -15,6 +17,12 @@ mod effects;
 mod low_phases;
 mod low_roots;
 mod linearity;
+// Instantiate the same transfers over two domains so the oracle cannot drift.
+#[cfg(any(test, feature = "verifier-differential"))]
+#[allow(clippy::duplicate_mod)]
+mod precise_linearity;
+#[cfg(any(test, feature = "verifier-differential"))]
+mod differential;
 mod graph;
 mod dominance;
 mod contracts;
@@ -32,8 +40,17 @@ pub use limits::*;
 pub enum ErrorPolicy { First, #[default] All }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ExecutionMode { #[default] Production, Tests }
+/// Structural checks never enter the ownership/protocol solvers.
+/// Full remains the default for verifier callers and the mandatory test/CI gate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VerifyMode {
+    Structural,
+    #[default]
+    Full,
+}
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct VerifyOptions {
+    pub mode: VerifyMode,
     pub errors: ErrorPolicy,
     pub limits: VerifyLimits,
     pub execution: ExecutionMode,
@@ -45,6 +62,8 @@ pub trait ExternalContracts {
     fn intrinsic(&self, name: &str) -> Option<&Signature>;
     fn native_summary(&self, _: &str) -> Option<&Summary> { None }
     fn intrinsic_summary(&self, _: &str) -> Option<&Summary> { None }
+    /// Runtime entries authorized to destroy a descriptor's complete owner graph.
+    fn descriptor_cleanup(&self, _: &str) -> Option<&Summary> { None }
 }
 #[derive(Debug)]
 pub struct NoExternalContracts;
@@ -75,11 +94,13 @@ impl Default for VerifyContext<'_> {
 pub struct VerifiedModule<'m> {
     module: &'m Module,
     profile: Profile,
+    mode: VerifyMode,
     stats: VerifyStats,
 }
 impl<'m> VerifiedModule<'m> {
     pub fn module(&self) -> &'m Module { self.module }
     pub fn profile(&self) -> Profile { self.profile }
+    pub fn mode(&self) -> VerifyMode { self.mode }
     pub fn stats(&self) -> &VerifyStats { &self.stats }
 }
 
@@ -87,13 +108,25 @@ pub fn verify(module: &Module) -> Result<VerifiedModule<'_>, VerifyReport> {
     verify_with(module, &VerifyOptions::default(), VerifyContext::default())
 }
 macro_rules! profile_api {
-    ($($name:ident => $profile:ident),* $(,)?) => {$(
+    ($($name:ident, $with:ident => $profile:ident),* $(,)?) => {$(
         pub fn $name(module: &Module) -> Result<VerifiedModule<'_>, VerifyReport> {
-            run(module, &VerifyOptions::default(), VerifyContext::default(), Some(Profile::$profile), None)
+            $with(module, &VerifyOptions::default(), VerifyContext::default())
+        }
+        pub fn $with<'m>(
+            module: &'m Module,
+            options: &VerifyOptions,
+            context: VerifyContext<'_>,
+        ) -> Result<VerifiedModule<'m>, VerifyReport> {
+            run(module, options, context, Some(Profile::$profile), None)
         }
     )*};
 }
-profile_api!(verify_high => High, verify_own => Own, verify_coro => Coro, verify_low => Low);
+profile_api!(
+    verify_high, verify_high_with => High,
+    verify_own, verify_own_with => Own,
+    verify_coro, verify_coro_with => Coro,
+    verify_low, verify_low_with => Low,
+);
 pub fn verify_with<'m>(
     module: &'m Module,
     options: &VerifyOptions,
@@ -135,12 +168,15 @@ struct State<'a> {
     diagnostics: Vec<VerifyDiagnostic>,
     stats: VerifyStats,
     incomplete: bool,
+    #[cfg(any(test, feature = "verifier-differential"))]
+    exhausted_limit: Option<&'static str>,
     suppressed: usize,
     location: EntityLocation,
     source_loc: Option<DebugLoc>,
     poisoned: std::collections::BTreeSet<EntityLocation>,
     positions: std::collections::BTreeMap<(FuncId, InstId), (BlockId, usize)>,
     edge_positions: std::collections::BTreeMap<(FuncId, VerifyEdgeId), BlockId>,
+    cleanup_origins: Option<effects::OriginIndex>,
 }
 impl State<'_> {
     fn at(&mut self, location: EntityLocation, source: Option<DebugLoc>) {
@@ -183,12 +219,20 @@ impl State<'_> {
     fn step(&mut self, count: usize) -> bool {
         if self.incomplete { return false; }
         if !limits::add(&mut self.stats.steps, count, self.options.limits.steps) {
+            #[cfg(any(test, feature = "verifier-differential"))]
+            self.exhausted_limit.get_or_insert("steps");
             self.incomplete = true;
+        }
+        #[cfg(any(test, feature = "verifier-differential"))]
+        if !self.incomplete {
+            work_profile::charge(count);
         }
         !self.incomplete
     }
     fn memory(&mut self, bytes: usize) -> bool {
         if !limits::add(&mut self.stats.memory_bytes, bytes, self.options.limits.memory_bytes) {
+            #[cfg(any(test, feature = "verifier-differential"))]
+            self.exhausted_limit.get_or_insert("memory");
             self.incomplete = true;
         }
         !self.incomplete
@@ -206,18 +250,22 @@ impl State<'_> {
     }
 }
 
-fn run<'m>(
+fn run_mode<'m>(
     module: &'m Module,
     options: &VerifyOptions,
     context: VerifyContext<'_>,
     profile: Option<Profile>,
     function: Option<FuncId>,
+    _precise: bool,
 ) -> Result<VerifiedModule<'m>, VerifyReport> {
     let mut state = State {
         module, options, context, diagnostics: vec![], stats: VerifyStats::default(),
-        incomplete: false, suppressed: 0, location: EntityLocation::Module, source_loc: None,
+        incomplete: false,
+        #[cfg(any(test, feature = "verifier-differential"))]
+        exhausted_limit: None,
+        suppressed: 0, location: EntityLocation::Module, source_loc: None,
         poisoned: std::collections::BTreeSet::new(), positions: std::collections::BTreeMap::new(),
-        edge_positions: std::collections::BTreeMap::new(),
+        edge_positions: std::collections::BTreeMap::new(), cleanup_origins: None,
     };
     if profile.is_some_and(|expected| expected != module.profile) {
         state.error(RuleId::S1, "module profile does not match the requested verifier");
@@ -227,13 +275,38 @@ fn run<'m>(
     dominance::check(module, function, &mut state);
     contracts::check(module, function, &mut state);
     authority::check(module, function, &mut state);
-    summaries::check(module, function, &mut state);
-    high::check(module, function, &mut state);
-    linearity::check(module, function, &mut state);
-    low_phases::check(module, function, &mut state);
-    low_roots::check(module, function, &mut state);
-    later::async_cleanup_and_profiles(module, function, &mut state);
+    if options.mode == VerifyMode::Full {
+        summaries::check(module, function, &mut state);
+        high::check(module, function, &mut state);
+        #[cfg(any(test, feature = "verifier-differential"))]
+        if _precise {
+            precise_linearity::check(module, function, &mut state);
+        } else {
+            linearity::check(module, function, &mut state);
+        }
+        #[cfg(not(any(test, feature = "verifier-differential")))]
+        linearity::check(module, function, &mut state);
+        low_phases::check(module, function, &mut state);
+        low_roots::check(module, function, &mut state);
+        later::async_cleanup_and_profiles(module, function, &mut state);
+    }
     order_diagnostics(module, &mut state);
+    // Structural resource exhaustion rejects the build; it is not an ownership
+    // proof with an Incomplete verdict, and must never silently accept a prefix.
+    if state.incomplete && options.mode == VerifyMode::Structural {
+        state.diagnostics.push(VerifyDiagnostic {
+            rule: RuleId::S1,
+            primary: IrLocation {
+                entity: state.location.clone(),
+                text_span: context.text_locations.and_then(|table| table.span(&state.location)),
+                source_loc: state.source_loc,
+            },
+            related: vec![],
+            message: "structural verification resource limit exceeded".into(),
+            witness: None,
+        });
+        state.incomplete = false;
+    }
     // Passes emit in traversal order: module arenas, function/block arenas,
     // instruction positions, then operands/slots. No hash iteration controls diagnostics.
     if state.incomplete || !state.diagnostics.is_empty() {
@@ -241,12 +314,18 @@ fn run<'m>(
             state.suppressed = state.suppressed.saturating_add(state.diagnostics.len() - 1);
             state.diagnostics.truncate(1);
         }
+        #[cfg(any(test, feature = "verifier-differential"))]
+        if state.incomplete {
+            differential::record_limit(
+                module.profile, function, options.errors, _precise, &state.stats, state.exhausted_limit,
+            );
+        }
         return Err(VerifyReport {
             failure: if state.incomplete { VerifyFailure::Incomplete } else { VerifyFailure::Rejected },
             diagnostics: state.diagnostics, suppressed: state.suppressed, stats: state.stats,
         });
     }
-    Ok(VerifiedModule { module, profile: module.profile, stats: state.stats })
+    Ok(VerifiedModule { module, profile: module.profile, mode: options.mode, stats: state.stats })
 }
 
 #[cfg(test)]
@@ -360,4 +439,19 @@ fn diagnostic_key(
         _ => 6,
     };
     (pass, class, entity, function.map_or(0, FuncId::as_u32), block, position, minor, path, rule)
+}
+
+fn run<'m>(
+    module: &'m Module,
+    options: &VerifyOptions,
+    context: VerifyContext<'_>,
+    profile: Option<Profile>,
+    function: Option<FuncId>,
+) -> Result<VerifiedModule<'m>, VerifyReport> {
+    let candidate = run_mode(module, options, context, profile, function, false);
+    #[cfg(any(test, feature = "verifier-differential"))]
+    if options.mode == VerifyMode::Full && std::env::var_os("OKKAMA_634_DIFFERENTIAL").is_some() {
+        differential::compare(module, options, context, profile, function, &candidate);
+    }
+    candidate
 }

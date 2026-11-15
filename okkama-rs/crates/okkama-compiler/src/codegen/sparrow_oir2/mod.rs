@@ -68,38 +68,7 @@ pub fn generate_with_allocation(module: &o::Module, layouts: &dyn LayoutRegistry
         entry: module.entry.map(|id| id.as_u32()),
         ..s::Program::default()
     };
-    for (id, declaration) in module.declarations.iter() {
-        if !declaration.type_params.is_empty() {
-            return Err(unsupported("generic object declaration"));
-        }
-        let o::DeclarationKind::Object { fields, witnesses, destroy, .. } = &declaration.kind else {
-            return Err(unsupported("non-object declaration"));
-        };
-        if !witnesses.is_empty() {
-            return Err(unsupported("object witnesses"));
-        }
-        let layout = layouts.object_layout(id.as_u32())?;
-        if layout.runtime.has_destroy != destroy.is_some() {
-            return Err(GenerateError("descriptor destroy/layout mismatch".into()));
-        }
-        if fields.len() != layout.source_fields.len() {
-            return Err(GenerateError("layout registry field mapping arity mismatch".into()));
-        }
-        for (field, &physical) in fields.iter().zip(&layout.source_fields) {
-            if layout.runtime.storage_fields.get(physical as usize) != Some(&translate_type(module, field.ty)?) {
-                return Err(GenerateError("layout registry field type mismatch".into()));
-            }
-        }
-        p.objects.push(s::Object {
-            name: declaration.name.clone(),
-            fields: fields.iter().zip(&layout.source_fields).map(|(field, &storage)| s::Field {
-                name: field.name.clone(),
-                storage,
-                once: field.once,
-            }).collect(),
-            layout: layout.runtime,
-        });
-    }
+    p.objects = objects(module, layouts)?;
     for (id, scope) in module.scopes.iter() {
         p.tables.scopes.push(s::Scope {
             function: scope.function.as_u32(),
@@ -130,9 +99,69 @@ pub fn generate_with_allocation(module: &o::Module, layouts: &dyn LayoutRegistry
     Ok(AllocatedProgram { program: p, allocations })
 }
 
-fn translate_type(module: &o::Module, id: o::TypeId) -> Result<s::Type, GenerateError> {
+pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<Vec<s::Object>, GenerateError> {
+    let mut objects = Vec::new();
+    for (id, declaration) in module.declarations.iter() {
+        if !declaration.type_params.is_empty() {
+            return Err(unsupported("generic object declaration"));
+        }
+        let (fields, witnesses, destroy) = match &declaration.kind {
+            o::DeclarationKind::Object { fields, witnesses, destroy, .. } => {
+                (fields.as_slice(), witnesses.as_slice(), *destroy)
+            }
+            o::DeclarationKind::Enum { .. } | o::DeclarationKind::Variant { .. } => (&[][..], &[][..], None),
+            o::DeclarationKind::Role { builtin: true, .. } if declaration.name == "Error" => {
+                (&[][..], &[][..], None)
+            }
+            _ => return Err(unsupported("non-object declaration")),
+        };
+        if !witnesses.is_empty() {
+            return Err(unsupported("object witnesses"));
+        }
+        let layout = layouts.object_layout(id.as_u32())?;
+        if layout.runtime.has_destroy != destroy.is_some() {
+            return Err(GenerateError("descriptor destroy/layout mismatch".into()));
+        }
+        if fields.len() != layout.source_fields.len() {
+            return Err(GenerateError("layout registry field mapping arity mismatch".into()));
+        }
+        for (field, &physical) in fields.iter().zip(&layout.source_fields) {
+            if layout.runtime.storage_fields.get(physical as usize) != Some(&translate_type(module, field.ty)?) {
+                return Err(GenerateError("layout registry field type mismatch".into()));
+            }
+        }
+        objects.push(s::Object {
+            error_cases: match &declaration.kind {
+                o::DeclarationKind::Enum { cases, is_error: true } => cases.iter().map(|case| {
+                    format!("{}.{case}", declaration.name.rsplit('.').next().unwrap())
+                }).collect(),
+                _ => module.declarations.iter().find_map(|(_, parent)| {
+                    let o::DeclarationKind::Variant { cases, is_error: true } = &parent.kind else { return None };
+                    cases.iter().find(|case| case.layout == id).map(|case| {
+                        vec![format!("{}.{}", parent.name.rsplit('.').next().unwrap(), case.name)]
+                    })
+                }).unwrap_or_default(),
+            },
+            name: declaration.name.clone(),
+            fields: fields.iter().zip(&layout.source_fields).map(|(field, &storage)| s::Field {
+                name: field.name.clone(),
+                storage,
+                once: field.once,
+            }).collect(),
+            layout: layout.runtime,
+        });
+    }
+    Ok(objects)
+}
+
+pub(crate) fn translate_type(module: &o::Module, id: o::TypeId) -> Result<s::Type, GenerateError> {
     Ok(match module.types.get(id)? {
         o::Type::Int => s::Type::Int,
+        o::Type::Array(element) if module.types.get(*element)? == &o::Type::Byte => s::Type::Bytes,
+        o::Type::Role { decl, args } if args.is_empty() && module.declarations.get(*decl)?.name == "Error" => {
+            s::Type::Error
+        }
+        o::Type::Enum(decl) => s::Type::Object(decl.as_u32()),
         o::Type::Descriptor => s::Type::Descriptor,
         o::Type::Bool => s::Type::Bool,
         o::Type::Str => s::Type::Str,
@@ -532,10 +561,21 @@ pub fn compile_low(module: &o::Module, layouts: &dyn LayoutRegistry,
     context: o::VerifyContext<'_>, contracts: &dyn s::ExternalContracts)
     -> Result<AllocatedProgram, GenerateError>
 {
+    compile_low_with(module, layouts, context, contracts, &o::VerifyOptions::default())
+}
+
+/// Build policy may select structural verification; loader checks remain mandatory in either mode.
+pub fn compile_low_with(
+    module: &o::Module,
+    layouts: &dyn LayoutRegistry,
+    context: o::VerifyContext<'_>,
+    contracts: &dyn s::ExternalContracts,
+    options: &o::VerifyOptions,
+) -> Result<AllocatedProgram, GenerateError> {
     if module.profile != o::Profile::Low {
         return Err(GenerateError("expected Low profile".into()));
     }
-    o::verify_with(module, &o::VerifyOptions::default(), context)
+    o::verify_low_with(module, options, context)
         .map_err(|report| GenerateError(format!("verify_low: {report:?}")))?;
     let output = generate_with_allocation(module, layouts)?;
     s::verify_load(&output.program, contracts)?;

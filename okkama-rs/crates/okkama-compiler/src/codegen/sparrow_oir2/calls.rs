@@ -279,14 +279,45 @@ impl Emitter<'_> {
         }))
     }
 
+    fn observation(&mut self, function: o::FuncId, call: &o::CallSite)
+        -> Result<(Vec<A>, s::ResultContext), GenerateError>
+    {
+        let declaration = self.module.functions.get(function)?;
+        let summary = self.module.summaries.get(call.summary.ok_or_else(|| error("missing observation summary"))?)?;
+        if summary.entry_kind != o::EntryKind::ObservationAdmissionStaysCaller || call.packet.is_some()
+            || !call.type_args.is_empty() || !call.descriptors.is_empty() || summary.contract.suspends
+        {
+            return Err(error("invalid observation call"));
+        }
+        let may_fail = !summary.contract.failures.is_empty();
+        let id = self.summaries.len() as u32;
+        self.summaries.push(s::Summary { entry: function.as_u32(), may_fail, retained_params: vec![] });
+        let mut arguments = vec![A::Entry(function.as_u32()), A::Summary(id)];
+        arguments.extend(call.args.iter().map(|arg| self.loc(arg.value).map(A::Location))
+            .collect::<Result<Vec<_>, _>>()?);
+        arguments.extend(call.deps.iter().map(|&value| self.loc(value).map(A::Location))
+            .collect::<Result<Vec<_>, _>>()?);
+        Ok((arguments, s::ResultContext {
+            value: declaration.signature.results.first().map(|&ty| translate_type(self.module, ty)).transpose()?,
+            may_fail, ..s::ResultContext::default()
+        }))
+    }
+
     fn invocation(&mut self, term: &o::TermKind) -> Result<s::Instruction, GenerateError> {
         let (opcode, arguments, context, edges) = match term {
             o::TermKind::InvokeOwn { op, normal, unwind } => {
-                let o::Operation::Call(o::CallOp::Direct { function, call }) = op.as_ref() else {
+                let o::Operation::Call(o::CallOp::Direct { function, call } | o::CallOp::Native { function, call }
+                    | o::CallOp::Intrinsic { function, call }) = op.as_ref() else {
                     return Err(later(op.opcode()));
                 };
-                let (arguments, context) = self.call(*function, call, false)?;
-                (O::InvokeCallOwn, arguments, context, vec![normal, unwind])
+                let summary = self.module.summaries.get(call.summary.ok_or_else(|| error("missing summary"))?)?;
+                if summary.entry_kind == o::EntryKind::ObservationAdmissionStaysCaller {
+                    let (arguments, context) = self.observation(*function, call)?;
+                    (O::InvokeObserve, arguments, context, vec![normal, unwind])
+                } else {
+                    let (arguments, context) = self.call(*function, call, false)?;
+                    (O::InvokeCallOwn, arguments, context, vec![normal, unwind])
+                }
             }
             o::TermKind::InvokeDefer { function, call, continue_edge, replacements, unwind } => {
                 let (arguments, context) = self.call(*function, call, true)?;
@@ -311,7 +342,9 @@ impl Emitter<'_> {
             }
             _ => return Err(error("expected invocation")),
         };
-        opcode.call_abi().ok_or_else(|| error("missing shared helper ABI"))?;
+        if opcode != O::InvokeObserve {
+            opcode.call_abi().ok_or_else(|| error("missing shared helper ABI"))?;
+        }
         let tags = opcode.tags(&context);
         if edges.len() != tags.len() {
             return Err(error("invocation outcome inventory mismatch"));
@@ -325,7 +358,9 @@ impl Emitter<'_> {
                 _ => return Err(error("unexpected call outcome")),
             };
             let schema = opcode.results(tag, &context)?;
-            opcode.call_post_offsets(tag, &context)?;
+            if opcode != O::InvokeObserve {
+                opcode.call_post_offsets(tag, &context)?;
+            }
             Ok(s::Outcome { tag, edge: self.edge(edge.block, &edge.args, outcome, &schema)? })
         }).collect::<Result<_, GenerateError>>()?;
         Ok(s::Instruction::Champ { op: opcode, arguments, flow: s::Flow::Outcomes(outcomes) })
@@ -512,6 +547,16 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
             let translated = match &inst.op {
                 o::Operation::Ownership(op) => {
                     let (op, arguments) = match op {
+                        o::OwnershipOp::Dependencies { value } => {
+                            let anchor = emitter.loc(*value)?;
+                            let [result] = inst.results.as_slice() else {
+                                return Err(error("deps.of requires one result"));
+                            };
+                            emitter.result.proofs.dependencies.push(s::Dependency {
+                                value: emitter.loc(*result)?, obligations: vec![anchor],
+                            });
+                            (O::DepsOf, vec![A::Location(anchor)])
+                        }
                         o::OwnershipOp::Empty {} => (O::OwnEmpty, vec![]),
                         o::OwnershipOp::Move { packet } => (O::OwnMove, vec![A::Location(emitter.loc(*packet)?)]),
                         o::OwnershipOp::Join { packets } => (O::OwnJoin, packets.iter()
@@ -541,12 +586,23 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                     data(s::DataOp::Const, vec![], emitter.reg(inst.results[0])?,
                         s::Immediate::Constant(s::Constant::Descriptor(decl.as_u32())))
                 }
-                o::Operation::Call(o::CallOp::Direct { function, call }) => {
-                    let (arguments, context) = emitter.call(*function, call, false)?;
+                o::Operation::Call(o::CallOp::Direct { function, call } | o::CallOp::Native { function, call }
+                    | o::CallOp::Intrinsic { function, call }) => {
+                    let summary = module.summaries.get(call.summary.ok_or_else(|| error("missing summary"))?)?;
+                    let opcode = if summary.entry_kind == o::EntryKind::ObservationAdmissionStaysCaller {
+                        O::InvokeObserve
+                    } else {
+                        O::InvokeCallOwn
+                    };
+                    let (arguments, context) = if opcode == O::InvokeObserve {
+                        emitter.observation(*function, call)?
+                    } else {
+                        emitter.call(*function, call, false)?
+                    };
                     if context.may_fail {
                         return Err(error("fallible call requires explicit outcomes"));
                     }
-                    s::Instruction::Champ { op: O::InvokeCallOwn, arguments,
+                    s::Instruction::Champ { op: opcode, arguments,
                         flow: s::Flow::Next(inst.results.iter().map(|&v| emitter.loc(v))
                             .collect::<Result<_, _>>()?) }
                 }

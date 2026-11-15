@@ -780,12 +780,6 @@ impl Runtime {
         if self.poisoned {
             return Err(Error("internal error: the runtime is unusable after a panic in a native".into()));
         }
-        #[cfg(feature = "champ-abi")]
-        if let Some(machine) = &self.champ.machine
-            && machine.source.functions[entry].entry_abi != okkama_sparrow::spb17::EntryAbi::Observation
-        {
-            return Err(Error("owning Champ entry requires CallOwn transport".into()));
-        }
         let function = &self.loaded.program.functions[entry];
         if function.params.len() != arguments.len() {
             return Err(Error("argument count mismatch".into()));
@@ -833,6 +827,16 @@ impl Runtime {
             if ctx.status != OK {
                 return Err(Error(self.fatal.clone().unwrap_or_default()));
             }
+            #[cfg(feature = "champ-abi")]
+            if self.champ.machine.as_ref().is_some_and(|machine| {
+                machine.source.functions[entry].entry_abi != okkama_sparrow::spb17::EntryAbi::Observation
+            }) {
+                self.champ_run_owned(&mut ctx, entry, arguments)?
+            } else {
+                // SAFETY: an observation entry has the ordinary parameter ABI.
+                unsafe { crate::jit::invoke(code, &mut ctx, arguments) }
+            }
+            #[cfg(not(feature = "champ-abi"))]
             // SAFETY: compiled functions take the context and their parameters.
             unsafe { crate::jit::invoke(code, &mut ctx, arguments) }
         };

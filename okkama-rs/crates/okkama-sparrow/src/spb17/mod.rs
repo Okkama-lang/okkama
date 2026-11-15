@@ -4,6 +4,7 @@ mod allocation;
 mod codec;
 pub mod layout;
 mod registry;
+pub mod p1;
 mod verify;
 mod load;
 mod evidence;
@@ -83,6 +84,7 @@ impl ObjectRuntimeLayout {
 /// Maps source field indices to final physical storage indices.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Object {
+    pub error_cases: Vec<String>,
     pub name: String,
     pub fields: Vec<Field>,
     pub layout: ObjectRuntimeLayout,
@@ -97,6 +99,8 @@ pub struct Field {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
+    Error,
+    Bytes,
     Int,
     Bool,
     Str,

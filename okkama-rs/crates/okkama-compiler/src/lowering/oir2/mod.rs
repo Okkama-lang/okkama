@@ -1,6 +1,6 @@
 //! Developer-only THIR -> OIR-2 high producer for #566 and #567 S1–S3.
 //!
-//! This module is compiled only for library tests. It never enters the OIR-1
+//! This module is independent of OIR-1. It never enters the OIR-1
 //! pipeline. Every reachable imported ordinary action has a lowered source body;
 //! application declarations are checked in full. Only registered boundaries are external.
 //! Operations outside the synchronous slice produce source diagnostics. D11 result exits
@@ -29,6 +29,8 @@ mod test_profile_tests;
 #[cfg(test)]
 mod callable_tests;
 mod native_summaries;
+mod pipeline;
+pub use pipeline::{PipelineError, compile_linked, compile_linked_with, lower_linked_high};
 mod construction;
 mod declarations;
 mod defer;
@@ -56,7 +58,7 @@ use crate::oir2 as ir;
 use crate::source::Span;
 
 #[derive(Debug)]
-pub(crate) enum LowerError {
+pub enum LowerError {
     Unsupported { span: Span, message: String },
     Build(ir::BuildError),
     InvalidThir { span: Span, message: String },
@@ -113,7 +115,7 @@ type Result<T> = std::result::Result<T, LowerError>;
 
 /// Independent developer entry: analysis supplies resolved THIR and declarations.
 /// No CLI routing, ownership elaboration or semantic verifier is invoked here.
-pub(crate) fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
+pub fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
     let prepared = specialize::prepare(analysis)?;
     let analysis = &prepared.analysis;
     let mut declarations = declarations::Declarations::new(analysis)?;

@@ -1,0 +1,49 @@
+// Extracted from new-reserve-r-a; checkpoints use the plain P1 test log.
+module app;
+import "async/atomic" take Atomic;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    has log is Atomic<string>;
+    Res(name is string, log is Atomic<string>) {
+        self.name = name;
+        self.log = log;
+    }
+    label() is string {
+        name;
+    }
+    destroy {
+        log.replace(log.value() + name);
+    }
+}
+enum Cleanup is Error = (failed);
+object Bomb {
+    has log is Atomic<string>;
+    Bomb(:log);
+    destroy {
+        log.replace(log.value() + "C");
+        throw Cleanup.failed;
+    }
+}
+object Work {
+    Work();
+    returned(log is Atomic<string>) is Res {
+        let a = Res("A", log);
+        let result = Res("R", log);
+        let c = Bomb(log: log);
+        return result;
+    }
+}
+main() is int {
+    let log = Atomic("");
+    defer log.close();
+    try {
+        let r = Work().returned(log);
+        r.label();
+    }
+    catch e is Cleanup {
+        confirm log.value() == "CRA";
+        Stdout().writeln(log.value());
+    }
+    0;
+}

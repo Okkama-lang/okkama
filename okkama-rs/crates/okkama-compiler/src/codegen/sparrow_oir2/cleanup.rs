@@ -37,7 +37,7 @@ pub(super) fn entry_contract(module: &o::Module, f: &o::Function) -> Result<s::E
     Ok(s::EntryContract {
         retained_params,
         external: f.attrs.iter().find_map(|attr| match attr {
-            o::FunctionAttr::Extern(name) => Some(name.clone()),
+            o::FunctionAttr::Extern(name) | o::FunctionAttr::Intrinsic { name, .. } => Some(name.clone()),
             _ => None,
         }),
         fresh_singleton: summary.is_some_and(|summary| matches!(summary.results.as_slice(), [result]
@@ -157,7 +157,7 @@ impl Emitter<'_> {
                 arguments.push(A::Selection(self.selection(*selection)?));
                 (O::ScopeTransfer, arguments)
             }
-            _ => return Err(later("ownership operation outside synchronous P1 transport")),
+            _ => return Err(later(&format!("ownership operation {op:?} outside synchronous P1 transport"))),
         })
     }
 

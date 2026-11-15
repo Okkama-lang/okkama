@@ -593,6 +593,7 @@ impl<'a> ContractRegistry<'a> {
                 c.normal.transfers.push(TransferRule::Admit { state, packet, output: N::State, provenance });
                 c.normal.postconditions.push(match provenance { ProvenanceTransition::Preserve => Postcondition::PreserveProvenance,
                     ProvenanceTransition::Set(state) => Postcondition::FreshAdmission(state) });
+                c.normal.postconditions.push(Postcondition::EpochOnRealTransfer);
             }
             Rule::Stage(stage) => {
                 state_results(stage.states, &mut c.normal);

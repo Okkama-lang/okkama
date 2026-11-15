@@ -119,12 +119,36 @@ pub(super) fn classify(
     let mut dictionaries = options.descriptors.clone();
     let mut captures: BTreeMap<TypeId, BTreeSet<TypeId>> = BTreeMap::new();
     let mut origins = BTreeSet::new();
-    for (_, function) in module.functions.iter() {
+    let mut open = BTreeSet::new();
+    for (function_id, function) in module.functions.iter() {
         let Some(body) = &function.body else {
             continue;
         };
+        for binding in &body.descriptor_bindings {
+            let SummarySelection::Descriptor(index) = binding.contract.retention else { continue };
+            for (ty, data) in module.types.iter() {
+                budget.work(1)?;
+                if !matches!(data, Type::Parameter(parameter)
+                    if parameter.owner == GenericOwner::Function(function_id) && parameter.index == u32::from(index)) {
+                    continue;
+                }
+                if dictionaries.get(&ty).is_some_and(|old| old != &binding.contract) {
+                    return Err(budget.fail(OwnDiagnosticKind::InvalidDescriptor,
+                        format!("conflicting bound dictionaries for {ty:?}")));
+                }
+                budget.memory(512)?;
+                dictionaries.insert(ty, binding.contract.clone());
+            }
+        }
+        for value in &body.blocks.get(body.entry).map_err(arena)?.params {
+            let ty = body.values.get(*value).map_err(arena)?.ty;
+            if matches!(module.types.get(ty), Ok(Type::Fn(_) | Type::Any)) {
+                open.insert(ty);
+            }
+        }
         for (_, instruction) in body.insts.iter() {
             budget.work(1)?;
+            let _handling = routing::handling(&instruction.op);
             match &instruction.op {
                 Operation::Core(CoreOp::TypeOf { ty, descriptor }) => {
                     if dictionaries.get(ty).is_some_and(|old| old != descriptor) {
@@ -233,7 +257,7 @@ pub(super) fn classify(
                 }
                 Type::Fn(_) | Type::Any => {
                     children.extend(captures.get(&ty).into_iter().flatten().copied());
-                    if !origins.contains(&ty) {
+                    if !origins.contains(&ty) || open.contains(&ty) {
                         facts.unresolved.insert(ty);
                     }
                 }

@@ -6,6 +6,7 @@ mod bound_tests;
 mod cap_tests;
 
 use super::{LowerError, lower_to_oir2};
+use super::native_summaries::P1NativeSummaries;
 use crate::analysis::{self, thir};
 use crate::oir2 as ir;
 use crate::syntax::{self, ParseOptions};
@@ -1054,7 +1055,7 @@ fn oir2_all_stored_goldens_pass_verify_high() {
         verify_high(&module, path.to_str().expect("golden path"));
         count += 1;
     }
-    assert_eq!(count, 44, "every lowering golden must be verified");
+    assert_eq!(count, 45, "every lowering golden must be verified");
 }
 
 fn check_verified(module: &ir::Module) -> Result<(), LowerError> {
@@ -1184,10 +1185,12 @@ pub(super) fn lower_std(source: &str) -> Result<ir::Module, LowerError> {
     lower_to_oir2(&analysis)
 }
 
-const STD_SOURCES: [(&str, &str, &str); 3] = [
+const STD_SOURCES: [(&str, &str, &str); 4] = [
     ("std-log", include_str!("fixtures/std-log.ok"), include_str!("goldens/std-log.oir")),
     ("std-cell", include_str!("fixtures/std-cell.ok"), include_str!("goldens/std-cell.oir")),
     ("std-error", include_str!("fixtures/std-error.ok"), include_str!("goldens/std-error.oir")),
+    ("atomic-replace-fresh", include_str!("fixtures/atomic-replace-fresh.ok"),
+        include_str!("goldens/atomic-replace-fresh.oir")),
 ];
 
 #[test]
@@ -1360,3 +1363,561 @@ mod coverage;
 
 #[path = "defer_tests.rs"]
 mod defer_tests;
+
+#[test]
+fn oir2_pipeline_scalar() {
+    let source = SourceFile::new("app.ok", "module app; main() is int { 7; }").unwrap();
+    let program = syntax::parse(&source, &ParseOptions::default()).unwrap();
+    let roots = [crate::lowering::RootFile { source: &source, program: &program }];
+    let bytes = super::compile_linked(&roots, &mut StdLoader).unwrap();
+    let loaded = okkama_sparrow::spb17::decode(&bytes).unwrap();
+    okkama_sparrow::spb17::verify_load(&loaded, &okkama_sparrow::spb17::NoExternalContracts).unwrap();
+}
+
+#[test]
+fn oir2_p1_sources() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/ownership-corpus/p1");
+    let mut paths = std::fs::read_dir(root).unwrap().map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "ok")).collect::<Vec<_>>();
+    paths.sort();
+    let mut failures = Vec::new();
+    for path in paths {
+        let text = std::fs::read_to_string(&path).unwrap();
+        let source = SourceFile::new(path.to_string_lossy(), text).unwrap();
+        let program = match syntax::parse(&source, &ParseOptions::default()) {
+            Ok(program) => program,
+            Err(error) => {
+                failures.push(format!("{}: {error:?}", path.display()));
+                continue;
+            }
+        };
+        let roots = [crate::lowering::RootFile { source: &source, program: &program }];
+        match super::lower_linked_high(&roots, &mut StdLoader) {
+            Ok(module) => {
+                verify_high(&module, path.to_str().unwrap());
+                println!("SUPPORTED {}", path.file_stem().unwrap().to_str().unwrap());
+            }
+            Err(error) => failures.push(format!("{}: {error}", path.display())),
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn oir2_p1_excluded_defer_replacement() {
+    let text = include_str!(
+        "../../../../../../tests/ownership-corpus/p1/excluded/defer-return-replacement.ok"
+    );
+    // Return from defer is supported since #609 (D8 replacement); the fixture
+    // lowers and passes the high verifier. It rejoins the P1 manifest later.
+    let module = lower_std(text).unwrap_or_else(|error| panic!("{error}"));
+    verify_high(&module, "defer-return-replacement");
+}
+
+#[test]
+fn oir2_p1_own_diagnostics() {
+    use ir::own::{OwnError, OwnOptions, elaborate_ownership};
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("tools/ownership/p1-manifest.json")).unwrap(),
+    ).unwrap();
+    let mut rows = Vec::new();
+    for entry in manifest["entries"].as_array().unwrap() {
+        let text = std::fs::read_to_string(root.join(entry["source"].as_str().unwrap())).unwrap();
+        let module = lower_std(&text).unwrap();
+        let catalog = super::native_summaries::P1NativeSummaries::for_module(&module).unwrap();
+        let options = OwnOptions::default();
+        let inferred = elaborate_ownership(module, &catalog, &options).unwrap();
+        let mut functions = Vec::new();
+        let mut arrays = Vec::new();
+        for (id, function) in inferred.module.functions.iter() {
+            let Some(body) = &function.body else {
+                continue;
+            };
+            for (inst, data) in body.insts.iter() {
+                if data.op.opcode().starts_with("array.") {
+                    arrays.push(serde_json::json!({
+                        "function": function.symbol,
+                        "instruction": inst.as_u32(),
+                        "op": data.op.opcode(),
+                        "operation": format!("{:?}", data.op),
+                        "inputs": ir::cfg::operation_uses(&data.op, body).unwrap().iter().map(|operand| {
+                            let ty = body.values.get(operand.value).unwrap().ty;
+                            match inferred.module.types.get(ty).unwrap() {
+                                ir::Type::Array(element) => {
+                                    format!("array<{:?}>", inferred.module.types.get(*element).unwrap())
+                                }
+                                ty => format!("{ty:?}"),
+                            }
+                        }).collect::<Vec<_>>(),
+                        "results": data.results.iter().map(|value| {
+                            let data = body.values.get(*value).unwrap();
+                            format!("{:?}: {:?}", inferred.module.types.get(data.ty).unwrap(),
+                                inferred.analysis.types.get(&data.ty))
+                        }).collect::<Vec<_>>(),
+                    }));
+                }
+            }
+            let analyzed = ir::own::analyze::analyze_function(&inferred.module, id, &inferred.analysis, &options);
+            let (stats, equations, evaluations, error) = match analyzed {
+                Ok(flow) => (flow.stats, Some(flow.equations.nodes.len()), Some(flow.evaluations), None),
+                Err(OwnError::Incomplete { stats }) => (*stats, None, None, Some("incomplete".to_string())),
+                Err(error) => (ir::own::OwnStats::default(), None, None, Some(format!("{error:?}"))),
+            };
+            let mut edges = 0usize;
+            for (_, block) in body.blocks.iter() {
+                edges += match &block.term.kind {
+                    ir::TermKind::Br(_) => 1,
+                    ir::TermKind::Cond { .. } | ir::TermKind::Catch { .. } => 2,
+                    ir::TermKind::Switch { cases, .. } => 1 + cases.len(),
+                    ir::TermKind::Throw(_) | ir::TermKind::Panic(_) | ir::TermKind::Trap { .. } => {
+                        usize::from(block.unwind.is_some())
+                    }
+                    _ => 0,
+                };
+                if block.unwind.is_some() {
+                    edges += 1;
+                    for inst in &block.insts {
+                        let operation = &body.insts.get(*inst).unwrap().op;
+                        let schema = ir::ContractRegistry::new(&inferred.module).high_site_schema(
+                            operation, body, ir::HighOperationSite::Instruction(*inst),
+                        ).unwrap();
+                        edges += usize::from(schema.unwind.is_some() || matches!(operation,
+                            ir::Operation::Call(_) | ir::Operation::Lexical(ir::LexicalOp::Bind { .. }
+                                | ir::LexicalOp::Rebind { .. } | ir::LexicalOp::Stage { .. })));
+                    }
+                }
+            }
+            let function_scopes = inferred.module.scopes.iter().filter(|(_, scope)| scope.function == id).count();
+            let origins = 1 + body.values.len() + 2 * body.insts.len() + function_scopes * body.values.len();
+            let facts = body.values.len() * (2 * origins + 8)
+                + inferred.module.scopes.len() * origins * 4
+                + body.bindings.len() * (body.values.len() + 2 * origins);
+            let dense_charge = (body.blocks.len() + edges) * facts * 64;
+            functions.push(serde_json::json!({
+                "id": id.as_u32(), "function": function.symbol, "blocks": body.blocks.len(),
+                "values": body.values.len(), "instructions": body.insts.len(),
+                "module_scopes": inferred.module.scopes.len(),
+                "function_scopes": inferred.module.scopes.iter().filter(|(_, s)| s.function == id).count(),
+                "bindings": body.bindings.len(), "equations": equations, "indexed_equations": origins,
+                "edges": edges, "dense_charge": dense_charge, "evaluations": evaluations,
+                "charged_work": stats.charged_work, "charged_bytes": stats.peak_auxiliary_bytes,
+                "limit": format!("{:?}", stats.exhausted_limit), "error": error,
+            }));
+        }
+        rows.push(serde_json::json!({"id": entry["id"], "functions": functions, "arrays": arrays}));
+    }
+    if let Some(path) = std::env::var_os("OKKAMA_P1_DIAGNOSTICS") {
+        std::fs::write(path, serde_json::to_string_pretty(&rows).unwrap() + "\n").unwrap();
+    }
+    assert_eq!(rows.len(), 25);
+}
+
+fn compile_p1_source(text: &str) -> Result<Vec<u8>, super::PipelineError> {
+    let source = SourceFile::new("app.ok", text).unwrap();
+    let program = syntax::parse(&source, &ParseOptions::default()).unwrap();
+    let roots = [crate::lowering::RootFile { source: &source, program: &program }];
+    super::compile_linked(&roots, &mut StdLoader)
+}
+
+#[test]
+fn oir2_pipeline_deps_golden() {
+    let bytes = compile_p1_source(
+        "module app; object R { R(); destroy { } } main() is int { let r = R(); 0; }",
+    ).unwrap();
+    let program = okkama_sparrow::spb17::decode(&bytes).unwrap();
+    let deps = program.functions.iter().flat_map(|function| &function.code).filter(|inst| {
+        matches!(inst, okkama_sparrow::spb17::Instruction::Champ {
+            op: okkama_sparrow::spb17::Opcode::DepsOf, ..
+        })
+    }).count();
+    assert!(deps > 0);
+    assert_eq!(okkama_sparrow::spb17::layout::service_layout(
+        okkama_sparrow::spb17::ServiceKind::Deps,
+    ).words, 0);
+    let mut missing = program.clone();
+    for function in &mut missing.functions {
+        function.proofs.dependencies.retain(|dependency| !matches!(dependency.value,
+            okkama_sparrow::spb17::Location::Service(id)
+                if function.services[id as usize] == okkama_sparrow::spb17::ServiceKind::Deps));
+    }
+    let failure = okkama_sparrow::spb17::verify_load(&missing, &okkama_sparrow::spb17::NoExternalContracts)
+        .unwrap_err();
+    assert!(failure.to_string().contains("deps.of must retain"));
+    let actual = okkama_sparrow::spb17::disassemble(&program).unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/codegen/sparrow_oir2/fixtures/deps.spb17");
+    if std::env::var_os("OKKAMA_UPDATE_S3_GOLDENS").is_some() {
+        std::fs::write(&path, &actual).unwrap();
+    }
+    assert_eq!(actual, std::fs::read_to_string(path).unwrap());
+}
+
+#[test]
+fn oir2_pipeline_p1_atomic_contracts() {
+    for source in [
+        concat!("module app; import \"async/atomic\" take Atomic; ",
+            "main() is int { let a = Atomic(2); a.replace(7); a.value(); }"),
+        concat!("module app; import \"async/atomic\" take Atomic; ",
+            "main() is int { let a = Atomic(\"a\"); a.replace(\"b\"); a.close(); 0; }"),
+    ] {
+        let bytes = compile_p1_source(source).unwrap();
+        let program = okkama_sparrow::spb17::decode(&bytes).unwrap();
+        let catalog = okkama_sparrow::spb17::p1::P1Contracts::new(&program.objects).unwrap();
+        okkama_sparrow::spb17::verify_load(&program, &catalog).unwrap();
+        let mut forged = program.clone();
+        let external = forged.functions.iter_mut().find(|function| {
+            function.proofs.entry.as_ref().is_some_and(|entry| entry.external.is_some())
+        }).unwrap();
+        external.proofs.entry.as_mut().unwrap().retained_params.push(0);
+        assert!(okkama_sparrow::spb17::verify_load(&forged, &catalog).is_err());
+    }
+}
+
+#[test]
+fn oir2_p1_compiler_and_trusted_entry_kinds_agree() {
+    use okkama_sparrow::spb17::{self as s, ExternalContracts};
+    let source = concat!("module app; import \"async/atomic\" take Atomic; ",
+        "main() is int { let a = Atomic(1); let b = Atomic(\"a\"); ",
+        "a.replace(a.value() + 1); b.replace(b.value() + \"b\"); a.close(); b.close(); 0; }");
+    let program = s::decode(&compile_p1_source(source).unwrap()).unwrap();
+    let trusted = s::p1::P1Contracts::new(&program.objects).unwrap();
+    let mut checked = std::collections::BTreeSet::new();
+    for source in [source, include_str!("fixtures/std-error.ok"), include_str!("fixtures/std-log.ok")] {
+        let high = lower_std(source).unwrap();
+        for (_, function) in high.functions.iter() {
+            let name = function.attrs.iter().find_map(|attr| match attr {
+                ir::FunctionAttr::Intrinsic { name, .. } | ir::FunctionAttr::Extern(name) => Some(name),
+                _ => None,
+            });
+            let Some(name) = name else {
+                continue;
+            };
+            let summary = high.summaries.get(function.summary.unwrap()).unwrap();
+            let expected = if name.starts_with("okkama.atomic.Atomic.value$")
+                || name.starts_with("okkama.atomic.Atomic.close$") || name == "okkama.Error.text"
+            {
+                ir::EntryKind::ObservationAdmissionStaysCaller
+            } else {
+                ir::EntryKind::CallBoundary
+            };
+            assert_eq!(summary.entry_kind, expected, "{name}");
+            let abi = match summary.entry_kind {
+                ir::EntryKind::CallBoundary => s::EntryAbi::Owned,
+                ir::EntryKind::ObservationAdmissionStaysCaller => s::EntryAbi::Observation,
+                kind => panic!("unexpected P1 entry kind {kind:?}: {name}"),
+            };
+            assert_eq!(trusted.entry(name).unwrap().entry_abi, abi, "{name}");
+            checked.insert(name.clone());
+        }
+    }
+    assert_eq!(checked.len(), 11, "eight Atomic entries, Error.text and two natives");
+}
+
+#[test]
+fn oir2_p1_rejects_observation_declared_replace() {
+    use okkama_sparrow::spb17 as s;
+    let source = include_str!("fixtures/atomic-replace-fresh.ok");
+    let mut high = lower_std(source).unwrap();
+    let catalog = super::native_summaries::P1NativeSummaries::for_module(&high).unwrap();
+    let replace = high.functions.iter().find_map(|(_, function)| {
+        (function.symbol == "okkama.atomic.Atomic.replace#string").then(|| function.summary.unwrap())
+    }).unwrap();
+    high.summaries.get_mut(replace).unwrap().entry_kind = ir::EntryKind::ObservationAdmissionStaysCaller;
+    let context = ir::VerifyContext { external_contracts: &catalog, ..ir::VerifyContext::default() };
+    let report = ir::verify_with(&high, &ir::VerifyOptions::default(), context).unwrap_err();
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == ir::verify::RuleId::B51
+        && diagnostic.message.contains("entry kind differs")), "{report:?}");
+
+    let program = s::decode(&compile_p1_source(source).unwrap()).unwrap();
+    let trusted = s::p1::P1Contracts::new(&program.objects).unwrap();
+    let mut replace = program.functions.iter().find(|function| {
+        function.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref())
+            == Some("okkama.atomic.Atomic.replace$string")
+    }).unwrap().clone();
+    // Isolate the old observation declaration so caller ABI checks cannot mask
+    // the independent trusted-catalog consistency check.
+    replace.entry_abi = s::EntryAbi::Observation;
+    replace.params.pop();
+    assert_eq!(replace.services.pop(), Some(s::ServiceKind::Packet));
+    let forged = s::Program { objects: program.objects, functions: vec![replace], ..s::Program::default() };
+    s::verify(&forged).unwrap();
+    let error = s::verify_load(&forged, &trusted).unwrap_err();
+    assert!(error.to_string().contains("external signature/summary mismatch"), "{error}");
+}
+
+#[test]
+fn oir2_pipeline_atomic_replace_fresh_golden() {
+    use okkama_sparrow::spb17 as s;
+    let bytes = compile_p1_source(include_str!("fixtures/atomic-replace-fresh.ok")).unwrap();
+    let program = s::decode(&bytes).unwrap();
+    let replace = program.functions.iter().position(|function| {
+        function.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref())
+            == Some("okkama.atomic.Atomic.replace$string")
+    }).unwrap() as u32;
+    assert!(program.functions.iter().flat_map(|function| &function.code).any(|inst| matches!(inst,
+        s::Instruction::Champ { op: s::Opcode::InvokeCallOwn, arguments, .. }
+            if arguments.contains(&s::Argument::Entry(replace)))));
+    let actual = s::disassemble(&program).unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/codegen/sparrow_oir2/fixtures/atomic-replace-fresh.spb17");
+    if std::env::var_os("OKKAMA_UPDATE_S3_GOLDENS").is_some() {
+        std::fs::write(&path, &actual).unwrap();
+    }
+    assert_eq!(actual, std::fs::read_to_string(path).unwrap());
+}
+
+// Opt-in measurements include every body, even after a module verdict stopped
+// visiting functions. Charges are conservative verifier bounds, not process RSS.
+fn p1_function_charges(name: &str, module: &ir::Module, context: ir::verify::VerifyContext<'_>) {
+    let Some(path) = std::env::var_os("OKKAMA_634_P1_FUNCTIONS") else {
+        return;
+    };
+    use std::io::Write;
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    for (function, declaration) in module.functions.iter() {
+        if declaration.body.is_none() {
+            continue;
+        }
+        let report = ir::verify::verify_function(module, function, context, &ir::verify::VerifyOptions::default());
+        let diagnostics: Vec<_> = report.diagnostics.iter()
+            .map(|diagnostic| (diagnostic.rule, &diagnostic.primary.entity)).collect();
+        let record = format!("{name}\t{:?}\t{function:?}\t{}\t{:?}\t{}\t{}\t{diagnostics:?}\n",
+            module.profile, declaration.symbol, report.failure, report.stats.memory_bytes, report.stats.steps,
+        );
+        let _guard = LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&path).unwrap();
+        file.write_all(record.as_bytes()).unwrap();
+    }
+}
+
+// An opt-in diagnostic probe also measures Low when default Own verification
+// is incomplete/rejected. These results never authorize the production path.
+fn p1_unchecked_low_probe(name: &str, own: &ir::Module) {
+    let Some(path) = std::env::var_os("OKKAMA_634_P1_LOW_RESULTS") else {
+        return;
+    };
+    let low = ir::low::lower_cleanup(own.clone(), &ir::low::LowOptions::default()).unwrap();
+    let catalog = P1NativeSummaries::for_module(&low).unwrap();
+    let context = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
+    p1_function_charges(name, &low, context);
+    let result = ir::verify::verify_with(&low, &ir::verify::VerifyOptions::default(), context);
+    let (failure, stats, diagnostics) = match &result {
+        Ok(verified) => (None, verified.stats(), Vec::new()),
+        Err(report) => (Some(report.failure), &report.stats, report.diagnostics.iter()
+            .map(|diagnostic| (diagnostic.rule, &diagnostic.primary.entity)).collect()),
+    };
+    let record = format!("{name}\t{failure:?}\t{}\t{}\t{diagnostics:?}\n", stats.memory_bytes, stats.steps);
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path).unwrap();
+    file.write_all(record.as_bytes()).unwrap();
+}
+
+fn p1_rejection_dump(name: &str, module: &ir::Module, report: &ir::verify::VerifyReport) {
+    let Some(directory) = std::env::var_os("OKKAMA_P1_OWN_DUMP") else {
+        return;
+    };
+    let mut details = String::new();
+    for diagnostic in &report.diagnostics {
+        details.push_str(&format!("{diagnostic:#?}\n"));
+        if let ir::verify::EntityLocation::Instruction { function, instruction } = diagnostic.primary.entity {
+            let body = module.functions.get(function).unwrap().body.as_ref().unwrap();
+            details.push_str(&format!("{:#?}\n", body.insts.get(instruction).unwrap()));
+            for (_, map) in body.cleanup.roots.iter().filter(|(_, map)| {
+                map.boundary == ir::RootBoundary::BeforeInstruction(instruction)
+            }) {
+                details.push_str(&format!("{map:#?}\n"));
+                for binding in &map.bindings {
+                    details.push_str(&format!("{:?}: {:#?}\n", binding.value,
+                        body.values.get(binding.value).unwrap()));
+                }
+            }
+        }
+    }
+    let path = std::path::Path::new(&directory).join(format!("{name}.{:?}.rejections", module.profile));
+    std::fs::write(path, details).unwrap();
+}
+
+fn p1_verify(
+    module: &ir::Module,
+    options: &ir::verify::VerifyOptions,
+    context: ir::verify::VerifyContext<'_>,
+) -> Result<(), ir::verify::VerifyReport> {
+    let Ok(selected) = std::env::var("OKKAMA_P1_VERIFY_FUNCTIONS") else {
+        return ir::verify::verify_with(module, options, context).map(|_| ());
+    };
+    let mut checked = 0;
+    for (function, declaration) in module.functions.iter() {
+        if !selected.split(',').any(|item| item == declaration.symbol || item == function.as_u32().to_string()) {
+            continue;
+        }
+        checked += 1;
+        let report = ir::verify::verify_function(module, function, context, options);
+        eprintln!("{:?} {}: {report:#?}", module.profile, declaration.symbol);
+        if let Some(failure) = report.failure {
+            return Err(ir::verify::VerifyReport {
+                failure,
+                diagnostics: report.diagnostics,
+                suppressed: report.suppressed,
+                stats: report.stats,
+            });
+        }
+    }
+    assert!(checked > 0, "no matching P1 functions: {selected}");
+    Ok(())
+}
+
+#[test]
+fn oir2_p1_followup_own_from_593_sources() {
+    use ir::own::{OwnOptions, analyze::analyze_function, elaborate_ownership, rewrite_subset};
+    let root = std::path::Path::new("/Volumes/SamsungSSD/stuff/okkama-work/593");
+    let sources = root.join("tests/ownership-corpus/p1");
+    if !sources.exists() {
+        eprintln!("P1 integration checkout is unavailable: {}", sources.display());
+        return;
+    }
+    let mut paths: Vec<_> = std::fs::read_dir(sources).unwrap().map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "ok")).collect();
+    paths.sort();
+    assert_eq!(paths.len(), 25);
+    let mut rows = Vec::new();
+    for path in paths {
+        let name = path.file_stem().unwrap().to_str().unwrap();
+        if std::env::var("OKKAMA_P1_OWN_ONLY").is_ok_and(|selected| !selected.split(',').any(|item| item == name)) {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).unwrap();
+        eprintln!("{name}: high");
+        let module = lower_std(&source).unwrap_or_else(|error| panic!("{name}: {error}"));
+        verify_high(&module, name);
+        let high_catalog = super::native_summaries::P1NativeSummaries::for_module(&module).unwrap();
+        p1_function_charges(name, &module, ir::verify::VerifyContext {
+            text_locations: None, external_contracts: &high_catalog,
+        });
+        if let Some(directory) = std::env::var_os("OKKAMA_P1_OWN_DUMP") {
+            std::fs::write(std::path::Path::new(&directory).join(format!("{name}.high.oir")),
+                ir::text::print(&module).unwrap()).unwrap();
+        }
+        let catalog = super::native_summaries::P1NativeSummaries::for_module(&module).unwrap();
+        let mut options = OwnOptions::default();
+        if std::env::var_os("OKKAMA_P1_RAISED_LIMITS").is_some() {
+            options.verify.limits.memory_bytes = 2 << 30;
+            options.verify.limits.steps = 500_000_000;
+        }
+        let inferred = elaborate_ownership(module, &catalog, &options).unwrap();
+        let main = inferred.module.functions.iter().find(|(_, function)| function.symbol == "main").unwrap().0;
+        let flow = analyze_function(&inferred.module, main, &inferred.analysis, &options)
+            .unwrap_or_else(|error| panic!("{name} main analysis: {error:#?}"));
+        assert!(flow.stats.peak_auxiliary_bytes < options.memory_limit / 16, "{name}");
+        let (stage, error) = match rewrite_subset(inferred, &options) {
+            Ok(output) => {
+                eprintln!("{name}: own completed");
+                if let Some(directory) = std::env::var_os("OKKAMA_P1_OWN_DUMP") {
+                    std::fs::write(std::path::Path::new(&directory).join(format!("{name}.own.oir")),
+                        ir::text::print(&output.module).unwrap()).unwrap();
+                }
+                let catalog = P1NativeSummaries::for_module(&output.module).unwrap();
+                let context = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
+                p1_function_charges(name, &output.module, context);
+                p1_unchecked_low_probe(name, &output.module);
+                match p1_verify(&output.module, &options.verify, context) {
+                    Ok(_) => match ir::low::lower_cleanup(output.module, &ir::low::LowOptions::default()) {
+                        Ok(module) => {
+                            if let Some(directory) = std::env::var_os("OKKAMA_P1_OWN_DUMP") {
+                                let path = std::path::Path::new(&directory).join(format!("{name}.low.oir"));
+                                std::fs::write(path, ir::text::print(&module).unwrap()).unwrap();
+                            }
+                            let catalog = P1NativeSummaries::for_module(&module).unwrap();
+                            let context = ir::verify::VerifyContext {
+                                text_locations: None, external_contracts: &catalog,
+                            };
+                            if std::env::var_os("OKKAMA_634_P1_LOW_RESULTS").is_none() {
+                                p1_function_charges(name, &module, context);
+                            }
+                            match p1_verify(&module, &options.verify, context) {
+                                Ok(_) => ("beyond", None),
+                                Err(error) => {
+                                    p1_rejection_dump(name, &module, &error);
+                                    ("low", Some(format!("verify_low: {error:#?}")))
+                                }
+                            }
+                        },
+                        Err(error) => ("low", Some(format!("{error:#?}"))),
+                    },
+                    Err(error) => {
+                        p1_rejection_dump(name, &output.module, &error);
+                        ("verify_own", Some(format!("{error:#?}")))
+                    }
+                }
+            },
+            Err(error) => ("own", Some(format!("{error:#?}"))),
+        };
+        eprintln!("{name}: {stage}");
+        rows.push(format!("{name}\t{stage}\t{}\t{}\t{}\t{error:?}\n",
+            flow.stats.peak_auxiliary_bytes, flow.stats.charged_work, flow.equations.nodes.len()));
+    }
+    if std::env::var_os("OKKAMA_P1_OWN_ONLY").is_none() {
+        assert_eq!(rows.len(), 25);
+    }
+    let report = rows.concat();
+    if let Some(path) = std::env::var_os("OKKAMA_P1_OWN_FOLLOWUP_REPORT") {
+        std::fs::write(path, &report).unwrap();
+    }
+    eprintln!("{report}");
+    // #634 previously required dense verify_own exhaustion above 251658240
+    // bytes (15/16 of 256 MiB). Compact charges vary with each fixture's actual
+    // allocations; preserve the observed stage and failure, including rejection.
+    // A regression back into own must still fail this test.
+    for row in &rows {
+        let mut fields = row.split('\t');
+        let name = fields.next().unwrap();
+        let stage = fields.next().unwrap();
+        assert!(matches!(stage, "verify_own" | "low" | "beyond"), "{name}: {row}");
+        if stage == "verify_own" {
+            assert!(row.contains("failure: Incomplete") || row.contains("failure: Rejected"), "{row}");
+        }
+    }
+}
+
+#[test]
+fn oir2_own_plain_call_packet_golden() {
+    own_regression_golden("own-plain-call-packet", concat!(
+        "module app; import \"encoding/utf\" take Utf8Encoded; ",
+        "main() is int { Utf8Encoded(origin: \"\").bytes(); 0; }",
+    ));
+}
+
+#[test]
+fn oir2_own_throw_live_golden() {
+    own_regression_golden("own-throw-live", concat!(
+        "module app; enum Stop is Error = (now); ",
+        "object O { has n is int = 0; O(); ",
+        "staged() is ^O { try { ^n = 1; throw Stop.now; } catch e is Stop {} } } ",
+        "main() is int { let o = O(); o = o.staged(); 0; }",
+    ));
+}
+
+fn own_regression_golden(name: &str, source: &str) {
+    let module = lower_std(source).unwrap();
+    verify_high(&module, source);
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lowering/oir2/own-goldens");
+    let high_path = directory.join(format!("{name}.high.oir"));
+    let high = ir::text::print(&module).unwrap();
+    assert_eq!(high, std::fs::read_to_string(high_path).unwrap());
+    let catalog = super::native_summaries::P1NativeSummaries::for_module(&module).unwrap();
+    let options = ir::own::OwnOptions::default();
+    let inferred = ir::own::elaborate_ownership(module, &catalog, &options).unwrap();
+    let output = ir::own::rewrite_subset(inferred, &options).unwrap();
+    let catalog = P1NativeSummaries::for_module(&output.module).unwrap();
+    ir::verify::verify_with(&output.module, &options.verify,
+        ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog }).unwrap();
+    let actual = ir::text::print(&output.module).unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/lowering/oir2/own-goldens").join(format!("{name}.oir"));
+    assert_eq!(actual, std::fs::read_to_string(path).unwrap());
+    let parsed = ir::text::parse(&actual).unwrap();
+    assert_eq!(ir::text::print(&parsed).unwrap(), actual);
+    let catalog = P1NativeSummaries::for_module(&parsed).unwrap();
+    ir::verify::verify_with(&parsed, &options.verify,
+        ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog }).unwrap();
+}

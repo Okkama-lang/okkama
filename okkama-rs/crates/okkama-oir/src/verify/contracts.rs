@@ -104,7 +104,7 @@ fn edge_slots(
         }
     }
     for (slot, count) in schema.results.iter().zip(uses) {
-        if linear_slot(module, body, &slot.ty) && count != 1 {
+        if state.options.mode == super::VerifyMode::Full && linear_slot(module, body, &slot.ty) && count != 1 {
             state.error(R::B62, "each linear edge result must be forwarded exactly once on its edge");
         }
     }

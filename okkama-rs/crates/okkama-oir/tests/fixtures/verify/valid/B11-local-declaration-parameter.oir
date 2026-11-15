@@ -1,0 +1,26 @@
+oir 2 own
+module opaque_cleanup
+summary Mc call-boundary parameters [parameter_effect(convention=take,
+    destination=none)] contract call_contract(publication=atomic)
+func @drop(%value: any; %deps: deps, %packet: own) -> own
+    [intrinsic "fixture.cleanup.any"] abi explicit(input_packet=2, output_packet=0) summary(Mc);
+object Box<T> {
+    field value: T
+}
+scope S action in @f
+summary Mf call-boundary parameters [parameter_effect(convention=borrow, destination=none),
+    parameter_effect(convention=borrow, destination=none)] contract call_contract(publication=atomic)
+func @f(%self: Box<param<declaration(Box), 0>> facts(managed(deps=db)),
+    %closed: Box<int> facts(plain(certificate=closed_graph(ty=Box<int>)))) -> void [method Box] summary(Mf) {
+    dependency db: dependency = retention(value=%self, selection=selection(%self))
+    selection sf: selection = projection(field(value=%self, field=field_ref(declaration=Box, index=0)))
+    dependency df: dependency = retention(value=%self, selection=sf)
+    dependency de: dependency = empty
+^entry in S:
+    %field: param<declaration(Box), 0> facts(managed(deps=df)) = obj.get %self, value
+    %boxed: any facts(managed(deps=df)) = any.box %field, ty any
+    %other: any facts(managed(deps=de)) = any.box %closed, ty any
+    %dictionary: type = type.of ty any, descriptor descriptor_contract(managed=runtime,
+        retention=owner_graph(0), cleanup=@drop, async_destroy=true, summary=Mc)
+    ret
+}

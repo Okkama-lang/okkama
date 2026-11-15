@@ -10,6 +10,27 @@
 use std::io::{self, IsTerminal, Write};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
+thread_local! {
+    static CAPTURE: std::cell::RefCell<Option<Vec<u8>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Capture a bounded embedding run on the current VM thread, including explicit flushes.
+/// The guard restores the previous destination even if the embedding panics.
+pub fn capture<T>(body: impl FnOnce() -> T) -> (T, Vec<u8>) {
+    struct Restore(Option<Vec<u8>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CAPTURE.with(|capture| *capture.borrow_mut() = self.0.take());
+        }
+    }
+    let previous = CAPTURE.with(|capture| capture.replace(Some(Vec::new())));
+    let restore = Restore(previous);
+    let result = body();
+    let output = CAPTURE.with(|capture| capture.borrow_mut().take().unwrap_or_default());
+    drop(restore);
+    (result, output)
+}
+
 /// The block a pipe or a file gets at once.
 const BLOCK: usize = 64 * 1024;
 
@@ -31,6 +52,17 @@ pub fn terminal() -> bool {
 /// Append `bytes`: a terminal gets every complete line now, and a full block
 /// goes out at once.
 pub fn write(bytes: &[u8]) -> io::Result<()> {
+    if CAPTURE.with(|capture| {
+        let mut capture = capture.borrow_mut();
+        if let Some(output) = capture.as_mut() {
+            output.extend_from_slice(bytes);
+            true
+        } else {
+            false
+        }
+    }) {
+        return Ok(());
+    }
     let mut pending = pending();
     pending.extend_from_slice(bytes);
     if terminal() {
@@ -48,6 +80,9 @@ pub fn write(bytes: &[u8]) -> io::Result<()> {
 
 /// Write out everything pending.
 pub fn flush() -> io::Result<()> {
+    if CAPTURE.with(|capture| capture.borrow().is_some()) {
+        return Ok(());
+    }
     let mut pending = pending();
     let all = std::mem::take(&mut *pending);
     emit(&all)

@@ -87,7 +87,7 @@ impl Driver<'_, '_> {
         self.finish_construction(point, op, instruction, &recipes, restore_to)
     }
 
-    fn finish_construction(
+    pub(super) fn finish_construction(
         &mut self,
         point: Landing,
         op: Operation,

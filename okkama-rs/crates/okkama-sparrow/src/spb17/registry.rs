@@ -92,6 +92,8 @@ registry! {
     37 => ExitAbort, "exit.abort";
     38 => CleanupDestroy, "cleanup.destroy";
     39 => FailureDispatch, "failure.dispatch";
+    40 => DepsOf, "deps.of";
+    41 => InvokeObserve, "invoke.observe";
 }
 
 impl Opcode {
@@ -112,6 +114,7 @@ impl Opcode {
             (ScopeBegin | OwnAdmit | OwnAccept | OwnBind | OwnRebind | DeferRegister, Tag::Normal) => {
                 vec![S(ScopeState)]
             }
+            (DepsOf, Tag::Normal) => vec![S(Deps)],
             (OwnEmpty | OwnMove | OwnJoin | OwnCreateCommit, Tag::Normal) => vec![S(Packet)],
             (OwnStage, Tag::Normal) => {
                 if context.between { vec![S(ScopeState), S(ScopeState)] } else { vec![S(ScopeState)] }
@@ -138,6 +141,8 @@ impl Opcode {
             (CleanupNext, Tag::Done) => vec![S(Cleanup)],
             (DestroyDirect | CleanupDestroy, Tag::Normal) => vec![S(Cleanup), S(FailureState)],
             (CleanupFinish, Tag::Normal) => vec![S(Closed), S(FailureState), S(ExitState)],
+            (InvokeObserve, Tag::Normal) => context.value.into_iter().map(Value).collect(),
+            (InvokeObserve, Tag::Unwind) if context.may_fail => vec![Value(Type::Failure)],
             (InvokeCallOwn, Tag::Normal) => valued(),
             (InvokeCallOwn | InvokeDefer, Tag::Unwind) if context.may_fail => vec![Value(Type::Failure)],
             (InvokeDefer, Tag::Continue) => vec![],
@@ -168,6 +173,7 @@ impl Opcode {
         use Opcode::*;
         match self {
             OwnSplitChecked | ScopeSplit | ScopeTransfer => vec![Tag::Normal, Tag::Unwind],
+            InvokeObserve if context.may_fail => vec![Tag::Normal, Tag::Unwind],
             InvokeCallOwn => {
                 if context.may_fail { vec![Tag::Normal, Tag::Unwind] } else { vec![Tag::Normal] }
             }
@@ -197,7 +203,7 @@ impl Opcode {
 
     pub fn is_terminator(self) -> bool {
         matches!(self, Self::OwnSplitChecked | Self::ScopeSplit | Self::ScopeTransfer |
-            Self::InvokeCallOwn | Self::InvokeDefer | Self::CleanupNext | Self::ExitDispatch |
+            Self::InvokeCallOwn | Self::InvokeObserve | Self::InvokeDefer | Self::CleanupNext | Self::ExitDispatch |
             Self::FailureDispatch | Self::RetOwn | Self::RetDefer)
     }
 }

@@ -135,10 +135,26 @@ fake fields; role fakes and their ordinary typed fields remain available.
     Every read names its projection (index, slice, map entry, keys,
     values, removal, path), so ownership follows exactly what is taken.
   - **Builders.** Streaming builders for large literals.
+  - **Traversal.** `for` over arrays, ranges, maps, `Iterating` and
+    `Batching`, with the cursor protocol and per-iteration lifetimes.
+  - **Functional blocks.** `map`, `filter`, `reduce`, `any`, `all` and
+    `find` lower as code inside the enclosing action, never as lambda calls.
+  - **Plain `once let`.** A failed computation publishes nothing. The std
+    collections List, Frequencies, Heap and Deque lower from their own
+    source.
+  - **Object map keys** that the language allows (no destroy, no caps,
+    key fields) are accepted by the verifier (#635).
 
-  A coverage manifest classifies all 143 conformance and corpus cases it
-  answers for. Traversal, functional blocks and std collections are still
-  to come.
+  A coverage manifest classifies the 145 conformance and corpus cases it
+  answers for. `return` from a `defer` now lowers as a replacement of the
+  enclosing result (#609).
+
+- **First end-to-end wiring of the new pipeline (#593, #648).** Under the
+  feature `champ-abi`, `OKKAMA_PIPELINE=oir2` runs a program through the
+  OIR-2 pipeline into Champ: high, own, low, SPB 17 and the JIT. Builds run
+  the structural checks; the full ownership verifier is a test and CI
+  gate, and runs in a build only with `--verify-ownership`. `Atomic.replace`
+  is now a call-boundary entry (#606).
 
 - **OIR-2 ownership elaboration, synchronous part (#565).** A pass from
   `high` to `own` makes ownership explicit for synchronous code. It covers:
@@ -151,7 +167,31 @@ fake fields; role fakes and their ordinary typed fields remain available.
   verifier rules, so an independent audit checked them. It found three
   rules that accepted a borrow outliving its owner. Each is now rejected,
   and each has an invalid fixture that the earlier verifier accepted.
-  Closures, `any`, the dynamic fallback and async are still to come.
+  A later part covers closures (captures snapshotted, only fresh parts
+  transferred), bound and open invocation, caps with their owner graph,
+  `any` boxes, opaque values, roles and dynamic protocols. The first P1
+  run then showed four own defects, all fixed: plain arrays on the
+  `Stdout` path, real memory accounting, call packets that must still be
+  consumed when their scope is elided, and terminator liveness after a
+  staging split. Every P1 fixture now passes the own rewrite. Async is
+  still to come.
+
+- **OIR-2 verifier: memory and work (#634).** The ownership verifier ran
+  out of its 256 MiB budget on the P1 programs: every flow state held dense
+  vectors over every SSA value. Flow relations are now stored per value,
+  sparsely, and shared between states through a persistent tree of 64-value
+  pages, so a change copies only its path. Work is charged by the
+  operations actually made, a dirty-state worklist runs each state once with
+  its final input, and history that no observer can read (dead scalar
+  constants) is dropped. The limits stay 50M work and 256 MiB.
+
+  Verdicts do not change. A differential mode runs the previous dense
+  solver beside the new one (`okkama-rs/tools/verifier-differential.sh`,
+  feature `verifier-differential`) and reports every disagreement; on the
+  whole corpus it compares 19,560 runs with 0 mismatches. An independent
+  audit found no unsound acceptance; its findings (a false B105 when dropped
+  history was named by a cleanup root map, an unchecked fast path in alias
+  remapping, too broad differential exclusions) are fixed.
 
 - **OIR-2 cleanup specialization (#591).** A pass from `own` to `low`
   expands scope closes into an explicit cleanup automaton: one plan in

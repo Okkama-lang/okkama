@@ -636,7 +636,8 @@ fn known_closure_equations_are_memoized_before_solving() {
     let module = module.finish().unwrap();
     let output = elaborate_ownership(module, &TestNatives::default(), &OwnOptions::default()).unwrap();
     assert_eq!(output.stats.adapter_equations, 1);
-    assert_eq!(output.stats.universe_nodes, 3);
+    assert_eq!(output.stats.materialized_adapters, 1);
+    assert_eq!(output.stats.universe_nodes, 4);
 }
 
 #[test]
@@ -799,3 +800,7 @@ fn native_lookup_receives_the_actual_substitution_before_the_universe_is_frozen(
 mod machinery;
 
 mod synchronous;
+
+mod protocols;
+
+mod arrays;

@@ -35,6 +35,14 @@ impl Universe {
                     }
                 }
             }
+            for binding in &mut body.descriptor_bindings {
+                binding.contract.summary = ids[binding.contract.cleanup.as_u32() as usize];
+            }
+            for (_, instruction) in body.insts.iter_mut() {
+                if let Operation::Core(CoreOp::TypeOf { descriptor, .. }) = &mut instruction.op {
+                    descriptor.summary = ids[descriptor.cleanup.as_u32() as usize];
+                }
+            }
             if module.profile == Profile::High {
                 for record in records {
                     if let Some(old) = body.high_effects.iter_mut().find(|old| old.site == record.site) {
