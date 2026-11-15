@@ -141,6 +141,18 @@ language.
   tracked by regions (#292); 09-closures with `os/environment` imported runs
   6× slower on the JVM. Also for Chapter 11's limits, with #285 (tail calls
   lost to empty regions, fixed in 0.4.1).
+- Chapter 7 (absence): 7.4 pages (EN), 7.6 (RU) of its floor of 14
+  (2026-11-15). Written: what null meant, one construct per meaning (bare
+  `none` does not parse either), `Maybe` and its four exits, where a `Maybe`
+  comes from (searches, indexes and keys with fallbacks, readers, `try?`,
+  streams; `07-sources`), `else` in detail (lazy, typed, three fallback kinds,
+  chains, `confirm`), `Maybe` as a value (equality, fields, not a map key,
+  owns what it holds), `Presence`, absence at the edges (env, config, json
+  `maybe`/`presence`, SQL `NULL`, Codd's marks), a worked settings example
+  (`07-settings`), the null object and sentinels, a comparison table with Go,
+  costs, limits. To add: `Maybe` in generic code (a cache `Index<K, V>`);
+  measured cost of a `Maybe` on the hot path against a sentinel; an
+  absence-heavy case study from std (the HTTP client's optional headers).
 - Chapter 20 (async): `async destroy`, awaited at scope exit (#154);
   structured await — cancelling a task cancels the future it awaits unless
   another task awaits it, and waits for it to settle (#147); why one child
