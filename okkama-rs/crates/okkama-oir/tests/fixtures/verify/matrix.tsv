@@ -60,7 +60,7 @@ OIR2-H2	valid/H2-nonlinear-high.oir	invalid/H2-linear-high.oir
 OIR2-H3	valid/H3-dominating-defer-prefix.oir	invalid/H3-defer-prefix-merge.oir
 OIR2-H4	valid/H4-prepared-return.oir	invalid/H4-missing-exit-prepare.oir
 OIR2-H5	valid/H5-explicit-failure-path.oir	invalid/H5-missing-failure-path.oir
-OIR2-H6	valid/H6-no-future-state.oir	invalid/H6-future-state-in-high.oir
+OIR2-H6	valid/H6-future-query-in-high.oir	invalid/H6-future-state-in-high.oir
 OIR2-H7	valid/H7-SSA-binding.oir	invalid/H7-duplicate-binding.oir
 OIR2-H8	valid/H8-explicit-rebind-destination.oir	invalid/H8-wrong-rebind-destination.oir
 OIR2-H9	valid/H9-early-self.oir	invalid/H9-incomplete-with-bound-pending.oir

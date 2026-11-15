@@ -712,6 +712,8 @@ pub enum DataOp {
     StrStartsWith,
     StrEndsWith,
     StrUtf8,
+    /// The code points of a text as an array of char (#679).
+    StrCharacters,
 }
 
 /// The int, byte, float, rat and str families of wire codes 14..=18, in sub-code order. A family's
@@ -729,7 +731,7 @@ pub(crate) const SCALAR_FAMILIES: [(u8, &str, &[DataOp]); 5] = {
             RatDenominator]),
         (18, "str.ext", &[StrSlice, StrSplit, StrReplace, StrReplaceFirst, StrRepeat, StrTrim, StrChomp,
             StrTrimStart, StrTrimEnd, StrLower, StrUpper, StrFind, StrFindLast, StrStartsWith, StrEndsWith,
-            StrUtf8]),
+            StrUtf8, StrCharacters]),
     ]
 };
 
@@ -763,6 +765,7 @@ impl DataOp {
         use DataOp::*;
         use Type::{Bool, Byte, Bytes, Float, Int, Rat, Str};
         const STR_ARRAY: Type = Type::Array(ArrayType { leaf: ArrayLeaf::Str, depth: 1 });
+        const CHAR_ARRAY: Type = Type::Array(ArrayType { leaf: ArrayLeaf::Char, depth: 1 });
         Some(match self {
             IntAnd | IntOr | IntXor | IntShl | IntShr | IntUshr | IntRotl | IntRotr => (&[Int, Int], Int),
             IntNot | IntAbs | IntSign | IntBitCount | IntLeadingZeros | IntTrailingZeros | IntReverseBits
@@ -786,6 +789,7 @@ impl DataOp {
             StrFind | StrFindLast => (&[Str, Str], Int),
             StrStartsWith | StrEndsWith => (&[Str, Str], Bool),
             StrUtf8 => (&[Str], Bytes),
+            StrCharacters => (&[Str], CHAR_ARRAY),
             _ => return None,
         })
     }
@@ -825,10 +829,12 @@ impl DataOp {
 /// total, `None` where it is not a conversion. The same table as OIR-2 `cvt`.
 pub fn conversion(from: Type, to: Type) -> Option<bool> {
     match (from, to) {
-        (Type::Int, Type::Float | Type::Byte) | (Type::Float, Type::Int | Type::Byte)
+        // `char(n)` fails outside the Unicode scalar values (#679).
+        (Type::Int, Type::Float | Type::Byte | Type::Char) | (Type::Float, Type::Int | Type::Byte)
             | (Type::Rat, Type::Float | Type::Byte) => Some(true),
         (Type::Byte, Type::Int | Type::Float | Type::Rat) | (Type::Int | Type::Float, Type::Rat)
-            | (Type::Rat, Type::Int) | (Type::Int | Type::Byte | Type::Float | Type::Rat | Type::Bool, Type::Str) => {
+            | (Type::Rat, Type::Int) | (Type::Char, Type::Int)
+            | (Type::Int | Type::Byte | Type::Float | Type::Rat | Type::Bool | Type::Char, Type::Str) => {
             Some(false)
         }
         _ => None,

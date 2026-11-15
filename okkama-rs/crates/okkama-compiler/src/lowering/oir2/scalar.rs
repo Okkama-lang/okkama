@@ -140,13 +140,8 @@ impl BodyLowerer<'_, '_> {
             CastTarget::Float => ir::NumericType::Float,
             CastTarget::Rat => ir::NumericType::Rat,
             CastTarget::Str => ir::NumericType::Str,
-            CastTarget::Char => {
-                let ty = self.b.body().values.get(value)?.ty;
-                if matches!(self.b.module().types.get(ty)?, ir::Type::Char) {
-                    return Ok(value);
-                }
-                return Err(LowerError::unsupported(span, "char conversion"));
-            }
+            // `char(n)` fails outside the Unicode scalar values (#679).
+            CastTarget::Char => ir::NumericType::Char,
         };
         self.convert(value, to, span)
     }
@@ -160,6 +155,7 @@ impl BodyLowerer<'_, '_> {
             ir::Type::Float => ir::NumericType::Float,
             ir::Type::Rat => ir::NumericType::Rat,
             ir::Type::Str => ir::NumericType::Str,
+            ir::Type::Char => ir::NumericType::Char,
             _ => return Err(LowerError::unsupported(span, "conversion from a non-S1 type")),
         };
         if from == to {

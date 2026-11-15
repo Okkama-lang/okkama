@@ -1,11 +1,18 @@
 use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NumericType { Int, Byte, Float, Rat, Bool, Str }
+pub enum NumericType { Int, Byte, Float, Rat, Bool, Str, Char }
 impl NumericType {
     pub(crate) fn result_type(self) -> ResultType {
-        ResultType::Scalar(match self { Self::Int => ScalarType::Int, Self::Byte => ScalarType::Byte,
-            Self::Float => ScalarType::Float, Self::Rat => ScalarType::Rat, Self::Bool => ScalarType::Bool, Self::Str => ScalarType::Str })
+        ResultType::Scalar(match self {
+            Self::Int => ScalarType::Int,
+            Self::Byte => ScalarType::Byte,
+            Self::Float => ScalarType::Float,
+            Self::Rat => ScalarType::Rat,
+            Self::Bool => ScalarType::Bool,
+            Self::Str => ScalarType::Str,
+            Self::Char => ScalarType::Char,
+        })
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

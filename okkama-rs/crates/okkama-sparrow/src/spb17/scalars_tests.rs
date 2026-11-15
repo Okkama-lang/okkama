@@ -81,6 +81,35 @@ fn trapping_conversion_keeps_its_failure() {
     verify_load(&program(vec![Type::Int, Type::Byte], code(), false, 2), &NoExternalContracts).unwrap();
 }
 
+/// #679: char -> int and char -> str are total; int -> char fails outside the Unicode scalar values.
+#[test]
+fn char_conversions_load_with_their_fallibility() {
+    let from_char = || vec![constant(0, Constant::Char(0x416)), data(DataOp::Convert, vec![0], 1, Immediate::None)];
+    for to in [Type::Int, Type::Str] {
+        verify_load(&program(vec![Type::Char, to], from_char(), true, 0), &NoExternalContracts)
+            .unwrap_or_else(|error| panic!("char -> {to:?}: {error}"));
+    }
+    let to_char = || {
+        vec![constant(0, Constant::Int("55296".into())), data(DataOp::Convert, vec![0], 1, Immediate::None)]
+    };
+    reject(&program(vec![Type::Int, Type::Char], to_char(), false, 0), "ENTRY_FAILURE_MASK");
+    reject(&program(vec![Type::Int, Type::Char], to_char(), true, 2), "FALLIBLE_DATA_OUTCOMES");
+    verify_load(&program(vec![Type::Int, Type::Char], to_char(), false, 2), &NoExternalContracts).unwrap();
+}
+
+/// #679 adds only the three char pairs: char stays unconvertible to and from every other type.
+#[test]
+fn char_conversion_pairs_stay_closed() {
+    let code = || vec![constant(0, Constant::Char(0x61)), data(DataOp::Convert, vec![0], 1, Immediate::None)];
+    for to in [Type::Byte, Type::Float, Type::Rat, Type::Bool, Type::Char] {
+        reject(&program(vec![Type::Char, to], code(), false, 2), "CONVERT_TYPE");
+    }
+    let code = vec![constant(0, Constant::Byte(97)), data(DataOp::Convert, vec![0], 1, Immediate::None)];
+    reject(&program(vec![Type::Byte, Type::Char], code, false, 2), "CONVERT_TYPE");
+    let code = vec![constant(0, Constant::Str("a".into())), data(DataOp::Convert, vec![0], 1, Immediate::None)];
+    reject(&program(vec![Type::Str, Type::Char], code, false, 2), "CONVERT_TYPE");
+}
+
 #[test]
 fn evaluate_refuses_a_total_conversion() {
     let mut p = program(vec![Type::Int, Type::Str, Type::Failure], vec![], false, 2);
@@ -316,6 +345,7 @@ fn scalar_family_wire_codes_are_fixed() {
     assert_eq!(DataOp::RatDiv.family(), Some((17, 3)));
     assert_eq!(DataOp::StrSlice.family(), Some((18, 0)));
     assert_eq!(DataOp::StrUtf8.family(), Some((18, 15)));
+    assert_eq!(DataOp::StrCharacters.family(), Some((18, 16)));
     assert_eq!(DataOp::IntAdd.family(), None);
     // Wire codes reserved for other lanes stay free.
     for code in (56..=63).chain(19..=19).chain(21..=23).chain(27..=39).chain(73..=79) {
@@ -330,7 +360,9 @@ fn scalar_family_decoder_refuses_unknown_sub_codes() {
     assert!(text.contains("float.ext 0"), "{text}");
     let unknown = text.replace("float.ext 0", "float.ext 10");
     assert_eq!(assemble(&unknown).unwrap_err().rule, "SPB_DECODE");
-    let unknown = text.replace("float.ext 0", "str.ext 16");
+    // The first sub-code past the end of str.ext, which grows only at its end.
+    let next = SCALAR_FAMILIES.iter().find(|(code, _, _)| *code == 18).unwrap().2.len();
+    let unknown = text.replace("float.ext 0", &format!("str.ext {next}"));
     assert_eq!(assemble(&unknown).unwrap_err().rule, "SPB_DECODE");
 }
 

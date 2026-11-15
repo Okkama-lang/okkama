@@ -269,6 +269,13 @@ fn string_replace_trim_and_case_follow_tomato() {
     let value = text(rt, "é");
     let bytes = run(rt, D::StrUtf8, &[value]).unwrap();
     assert_eq!(rt.heap.bytes(bytes), [0xc3, 0xa9]);
+    // #679: code points, not bytes; a CR stays a character.
+    let value = text(rt, "aé\r😀");
+    let chars = run(rt, D::StrCharacters, &[value]).unwrap();
+    assert_eq!(rt.heap.elements(chars).to_vec(), vec![0x61, 0xe9, 0x0d, 0x1f600]);
+    let value = text(rt, "");
+    let chars = run(rt, D::StrCharacters, &[value]).unwrap();
+    assert!(rt.heap.elements(chars).is_empty());
 }
 
 #[test]
@@ -321,4 +328,35 @@ fn scalar_helper_fails_with_a_program_failure_and_stops_on_the_memory_budget() {
     rt_machine_scalar(&mut ctx, 0, value, 0, 0);
     assert_ne!(ctx.status, OK);
     assert_ne!(ctx.status, FAILED);
+}
+
+/// #679: Champ's `Convert` takes char operand codes and keeps Tomato's semantics and message.
+#[test]
+fn convert_helper_takes_char() {
+    use super::machine::{rt_machine_convert, scalar_code};
+    let code = |ty| scalar_code(ty).unwrap();
+    let mut rt = runtime();
+    let mut ctx = context(&mut rt);
+    let letter = u64::from(u32::from('Ж'));
+    let number = rt_machine_convert(&mut ctx, code(s::Type::Char), code(s::Type::Int), letter);
+    assert_eq!(ctx.status, OK);
+    assert_eq!(int_text(&rt, number), "1046");
+    let mut ctx = context(&mut rt);
+    let text = rt_machine_convert(&mut ctx, code(s::Type::Char), code(s::Type::Str), letter);
+    assert_eq!(ctx.status, OK);
+    assert_eq!(rt.heap.text(text), "Ж");
+    let mut ctx = context(&mut rt);
+    let bug = rt.heap.int(128030);
+    assert_eq!(rt_machine_convert(&mut ctx, code(s::Type::Int), code(s::Type::Char), bug), 128030);
+    assert_eq!(ctx.status, OK);
+    for refused in ["55296", "57343", "1114112", "-1", "18446744073709551617"] {
+        let mut ctx = context(&mut rt);
+        let value = int(&mut rt, refused);
+        assert_eq!(rt_machine_convert(&mut ctx, code(s::Type::Int), code(s::Type::Char), value), 0);
+        assert_eq!(ctx.status, FAILED, "{refused}");
+        let failure = rt.failure(ctx.failure).unwrap();
+        let message = format!("{:?}", failure.kind);
+        let expected = "char needs a Unicode scalar value (0..0x10FFFF, not a surrogate)";
+        assert!(message.contains(expected), "{refused}: {message}");
+    }
 }

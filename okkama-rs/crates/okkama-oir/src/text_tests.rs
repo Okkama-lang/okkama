@@ -885,7 +885,8 @@ fn every_typed_payload_enum_branch_roundtrips() {
         NumericType::Float,
         NumericType::Rat,
         NumericType::Bool,
-        NumericType::Str
+        NumericType::Str,
+        NumericType::Char
     ];
     assert_eq!(cases.len(), NumericType::TEXT_VARIANTS.len(), "NumericType branch missing");
     for value in cases { crate::text::payload_roundtrip(value); }

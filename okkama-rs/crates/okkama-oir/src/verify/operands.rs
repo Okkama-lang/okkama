@@ -483,6 +483,7 @@ impl Checker<'_, '_> {
                     NumericType::Rat => Type::Rat,
                     NumericType::Bool => Type::Bool,
                     NumericType::Str => Type::Str,
+                    NumericType::Char => Type::Char,
                 })?;
             }
             CoreOp::ByteFrom { value, .. } => {

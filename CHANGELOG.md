@@ -26,7 +26,23 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   deps-carrying reference with no obligation, and a function that
   partitions one declares the program failure of its `scope.split`
   (`ENTRY_FAILURE_MASK`). The loader rules are unchanged.
-
+- **Char conversions on the OIR-2 → SPB 17 → Champ path (#679).** `c.code()`,
+  `char(n)`, `string(c)` and `c.string()` stopped the OIR-2 producer: `cvt`
+  had no char kind. OIR-2 `cvt` now takes char (char → int and char → str
+  total; int → char fails outside 0..0x10FFFF and on surrogates with Tomato's
+  message "char needs a Unicode scalar value (0..0x10FFFF, not a
+  surrogate)"); SPB 17 `Convert` admits the same three pairs, and Champ and
+  its JIT run them with Tomato's semantics. `s.characters()` reaches SPB 17
+  as `str.ext` sub-code 16 (`StrCharacters`, appended; no existing id
+  changed). Cases `L01.lex.crlf.raw-string-keeps-cr`,
+  `L02.char.code-round-trip`, `L02.char.string-cast` and
+  `L02.char.surrogate-rejected` pass on Champ; `L06.const.values` now passes
+  own and low and stops in the SPB 17 layout on its collection constants.
+- **The OIR-2 High verifier admits `fut.done`, `fut.cancel` and `fut.cancelled`
+  (#688).** Rule H6 rejected them although plan P2.5 §3.1 lowers
+  `f.done()`, `f.cancel()` and `f.cancelled()` to these operations in High
+  (spec §10.1); a program using them stopped in `verify_high`. H6 still
+  rejects every other Future ownership or state operation in High.
 - **The SPB 17 loader tracks a successor's must-use permission through calls
   and the exit protocol (#680).** A successor result of a call that cannot
   fail (`invoke.observe` with a plain next flow) could be dropped, and taking
