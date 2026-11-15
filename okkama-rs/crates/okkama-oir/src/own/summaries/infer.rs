@@ -21,9 +21,16 @@ impl Universe {
         let mut values = vec![normal::empty_relation(); body.values.len()];
         let entry = body.blocks.get(body.entry).map_err(arena)?;
         let mut parameter = 0u16;
+        // #700, #731: parameters with deps and no obligation. A result that keeps one depends on it and owns
+        // nothing of it: the parameter stays borrowed (OIR-2 §7.2, §10.2; P2.4 §4.8: storage must not become
+        // ownership).
+        let mut borrowed = BTreeSet::new();
         for value in &entry.params {
             let ty = body.values.get(*value).map_err(arena)?.ty;
             if !language(module, &[ty]).is_empty() {
+                if !types[&ty].may_own() && types[&ty].references {
+                    borrowed.insert(parameter);
+                }
                 if types[&ty].may_own() {
                     let relation = &mut values[value.as_u32() as usize];
                     relation.aliases.push(SummarySelection::Parameter(parameter));
@@ -259,7 +266,7 @@ impl Universe {
                         }
                         if let Some(selection) = &effect.retention {
                             let relation = instantiate(selection, &arguments, &values, budget)?;
-                            retain_inputs(&mut summary, &relation, effect.destination.clone(), budget)?;
+                            retain_inputs(&mut summary, &relation, effect.destination.clone(), &borrowed, budget)?;
                         }
                     }
                 }
@@ -288,7 +295,7 @@ impl Universe {
                         let relation = replacements.entry(label.clone()).or_insert_with(normal::empty_relation);
                         normal::relation(relation, &values[value.as_u32() as usize], budget)?;
                         retain_inputs(&mut summary, &values[value.as_u32() as usize],
-                            TransferDestination::Result, budget)?;
+                            TransferDestination::Result, &borrowed, budget)?;
                     }
                 }
                 TermKind::Ret { values: returned } | TermKind::RetDefer { values: returned, .. } => {
@@ -348,7 +355,7 @@ impl Universe {
         }
         if summary.entry_kind == EntryKind::CallBoundary {
             for result in summary.results.clone() {
-                retain_inputs(&mut summary, &result, TransferDestination::Result, budget)?;
+                retain_inputs(&mut summary, &result, TransferDestination::Result, &borrowed, budget)?;
             }
         }
         if entry.params.iter().any(|value| body.values.get(*value).is_ok_and(|value| {
@@ -591,10 +598,14 @@ fn join_value(
     }
 }
 
+/// The parameters whose graphs `relation` retains become taken, with that retention and destination. A
+/// `borrowed` parameter (deps, no obligation) is never taken: the relation's external deps already state that
+/// the result depends on it (#700, #731).
 fn retain_inputs(
     summary: &mut Summary,
     relation: &ResultRelation,
     destination: TransferDestination,
+    borrowed: &BTreeSet<u16>,
     budget: &mut Budget<'_>,
 ) -> Result<(), OwnError> {
     let mut selections = normal::selections(&relation.aliases, budget)?;
@@ -603,6 +614,7 @@ fn retain_inputs(
             selections.push(SummarySelection::OwnerGraph(*parameter));
         }
     }
+    selections.retain(|selection| !borrowed.contains(&normal::parameter(selection)));
     for selection in selections {
         let parameter = normal::parameter(&selection);
         let effect = summary.parameters.get_mut(usize::from(parameter)).ok_or_else(|| {

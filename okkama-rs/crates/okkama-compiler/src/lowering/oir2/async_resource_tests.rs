@@ -425,3 +425,50 @@ fn oir2_r3_spawn_keeps_its_diagnostic_inside_defer_await() {
         Some("spawn W().run()"),
     );
 }
+
+/// A resource that keeps a borrowed Atomic, returned from a sync action (#731; the same shape as its async form).
+const BORROWED_HOLDER: &str = concat!(
+    "module app; import \"async/atomic\" take Atomic; ",
+    "object R { has log is Atomic<string>; R(log is Atomic<string>) { self.log = log; } destroy { } } ",
+    "object Work { Work(); make(log is Atomic<string>) is R { R(log); } } ",
+    "main() is int { let log = Atomic(\"\"); let kept = Work().make(log); 0; }",
+);
+
+#[test]
+fn oir2_r6_a_reference_without_obligation_is_borrowed_into_its_result() {
+    // #700, #731, decision (a) (OIR-2 §7.2, §10.2; P2.4 §4.8: storage must not become ownership): the
+    // constructor that stores the caller's Atomic and the action that returns that holder borrow it and declare
+    // that their result depends on it; own's output passes the full verifier.
+    let own = high_to_own(lower(BORROWED_HOLDER));
+    for (symbol, log) in [("app.R.new#0", 0_u16), ("app.Work.make#0", 1)] {
+        let declared = summary(&own, function(&own, symbol).summary);
+        let effect = &declared.parameters[usize::from(log)];
+        assert_eq!((effect.convention, &effect.retention), (ir::FreshConvention::Borrow, &None), "{symbol}");
+        assert!(declared.results[0].external_deps.contains(&log), "{symbol}: {declared:?}");
+    }
+}
+
+#[test]
+fn oir2_r6_a_borrowed_resource_cannot_reach_the_result() {
+    // B5.1: only a reference without obligation may reach a result as declared external deps. A constructor that
+    // stores a resource it claims to borrow exports an obligation it never took.
+    let mut own = high_to_own(lower(concat!(
+        "module app; object L { L(); destroy { } } ",
+        "object R { has l is L; R(l is L) { self.l = l; } destroy { } } ",
+        "main() is int { let r = R(L()); 0; }",
+    )));
+    let id = function(&own, "app.R.new#0").summary.unwrap();
+    let declared = own.summaries.get_mut(id).unwrap();
+    assert_eq!(declared.parameters[0].convention, ir::FreshConvention::Take, "the resource is taken");
+    declared.parameters[0].convention = ir::FreshConvention::Borrow;
+    declared.parameters[0].retention = None;
+    declared.parameters[0].destination = ir::TransferDestination::None;
+    declared.results[0].external_deps = vec![0];
+    let verify = ir::verify::VerifyOptions { mode: ir::verify::VerifyMode::Full, ..Default::default() };
+    let catalog = super::native_summaries::P1NativeSummaries::for_module(&own).unwrap();
+    let context = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
+    let report = ir::verify::verify_own_with(&own, &verify, context).unwrap_err();
+    let exported = report.diagnostics.iter().any(|diagnostic| diagnostic.rule == ir::verify::RuleId::B51
+        && diagnostic.message == "body exports accepted inputs beyond its declared take retention");
+    assert!(exported, "{report:?}");
+}
