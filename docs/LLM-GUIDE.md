@@ -202,6 +202,8 @@ times and work/capacity counters on stderr, #540; includes the baseline busy
 set clones and the final function clone separately). This is compiler
 diagnostics, separate from JIT machine-register allocation or runtime timing;
 keep it out of timed samples.
+`OKKAMA_PROFILE_PIPELINE=1` (OIR-2 pipeline: one `pipeline <stage> <ms>` line
+on stderr per stage, from imports to codegen with its `verify_load`, #701).
 Other runtime diagnostics:
 `SPARROW_CORE_DUMP`/`SPARROW_CORE_UNOPTIMIZED`/`SPARROW_CORE_PLAIN=symbol,…|*`
 (§9), `SPARROW_CORE_OLD_DISPATCH=symbol,…|*` (keep reference lazy dispatch
