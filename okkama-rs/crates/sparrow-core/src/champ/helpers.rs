@@ -220,12 +220,10 @@ fn static_selection(runtime: &Runtime, packet: &Packet, plan: PlanId) -> Result<
 /// What a selection walk insists on for the identities it reaches without a managed collection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Authority {
-    /// Nothing: identities outside the source are not selected (a binding, a scope split).
+    /// Nothing: identities outside the source are not selected (a binding, a scope split, an admissible
+    /// transfer).
     Any,
-    /// A selected identity is live; one outside the source stays with its owner (a scope transfer, whose
-    /// value may borrow an identity an enclosing scope owns, such as an element of its managed array).
-    Live,
-    /// The identity is in the source and live (a checked packet split).
+    /// The identity is in the source and live (a checked packet split, a transfer).
     Source,
 }
 fn checked_selection(runtime: &Runtime, packet: &Packet, selection: &Selection, authority: Authority)
@@ -305,11 +303,8 @@ fn selection_walk(runtime: &Runtime, packet: &Packet, selection: &Selection, aut
             let inside = available.contains(&object);
             // A collection refers to identities it does not own: an element outside the source stays with its
             // owner, and only an identity reached without one answers to the authority.
-            let refused = !collected && match authority {
-                Authority::Any => false,
-                Authority::Live => inside && identity.life != Life::Live,
-                Authority::Source => !inside || identity.life != Life::Live,
-            };
+            let refused = !collected && authority == Authority::Source
+                && (!inside || identity.life != Life::Live);
             if refused {
                 return Err(error("selection outside source authority"));
             }
@@ -836,8 +831,22 @@ pub extern "C" fn rt_own_dynamic(ctx: *mut Ctx, state: *mut ScopeSlot, input: *m
     }
     outcome
 }
+/// A transfer moves every selected identity of its source, which must hold each one it is given.
 pub extern "C" fn rt_scope_transfer(ctx: *mut Ctx, inputs: *const TransferInputs,
     selection: *const Selection, post: *mut TransferPost) -> Outcome
+{
+    scope_transfer(ctx, inputs, selection, post, false)
+}
+/// An admissible transfer (`TRANSFER_ADMISSION`) moves only the selected identities its source admitted. Bound,
+/// staged and outside identities stay with their owners: the value may borrow an identity an enclosing scope
+/// owns, such as an element of its managed array pushed into its builder.
+pub extern "C" fn rt_scope_transfer_admissible(ctx: *mut Ctx, inputs: *const TransferInputs,
+    selection: *const Selection, post: *mut TransferPost) -> Outcome
+{
+    scope_transfer(ctx, inputs, selection, post, true)
+}
+fn scope_transfer(ctx: *mut Ctx, inputs: *const TransferInputs, selection: *const Selection,
+    post: *mut TransferPost, admissible: bool) -> Outcome
 {
     if unsafe { (*ctx).status } != runtime::OK || unsafe { (*ctx).failure } != 0 {
         return stop(ctx, error("checked helper entered with active bridge failure"));
@@ -848,7 +857,9 @@ pub extern "C" fn rt_scope_transfer(ctx: *mut Ctx, inputs: *const TransferInputs
     let to = unsafe { (*inputs.to).record };
     let same = inputs.from == inputs.to;
     let result = (|| {
-        if let Some(object) = checked_endpoint(runtime, from, unsafe { &*selection }, true)? {
+        if !admissible
+            && let Some(object) = checked_endpoint(runtime, from, unsafe { &*selection }, true)?
+        {
             if same {
                 return Ok((from, 0));
             }
@@ -857,7 +868,12 @@ pub extern "C" fn rt_scope_transfer(ctx: *mut Ctx, inputs: *const TransferInputs
         }
         let mut source = scope(runtime, from)?;
         let all = source.all();
-        let selected = checked_selection(runtime, &all, unsafe { &*selection }, Authority::Live)?;
+        let authority = if admissible { Authority::Any } else { Authority::Source };
+        let mut selected = checked_selection(runtime, &all, unsafe { &*selection }, authority)?;
+        if admissible {
+            let eligible = source.admission.words().collect::<HashSet<_>>();
+            selected.retain(|object| eligible.contains(object));
+        }
         if same {
             return Ok((from, 0));
         }
