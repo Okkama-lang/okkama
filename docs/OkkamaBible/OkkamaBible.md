@@ -74,7 +74,8 @@
   - [6.7 Characters](#67-characters)
   - [6.8 What text costs](#68-what-text-costs)
   - [6.9 Laying out text](#69-laying-out-text)
-  - [6.10 Limits](#610-limits)
+  - [6.10 A worked example: a slug from a title](#610-a-worked-example-a-slug-from-a-title)
+  - [6.11 Limits](#611-limits)
 - [Chapter 7. Absence Without Null](#chapter-7-absence-without-null)
   - [7.1 What null means — too many things](#71-what-null-means--too-many-things)
   - [7.2 Okkama's answer: one construct per meaning](#72-okkamas-answer-one-construct-per-meaning)
@@ -2007,6 +2008,7 @@ The compiler answers:
 
 ```text
 04-units-rejected.ok:18:17: semantic error: No action "plus" on object "NewtonSeconds" accepts (PoundSeconds)
+Available: plus(other is NewtonSeconds)
 ```
 
 The compiler names the action, the argument it was given and the parameter
@@ -2927,7 +2929,96 @@ is a value, so a layout is built by nesting — `Indented(origin:
 Wrapped(...).string(), prefix: "  ")` — rather than by calling a chain of
 methods on a mutable buffer.
 
-## 6.10 Limits
+## 6.10 A worked example: a slug from a title
+
+A *slug* is the part of a web address made from a title: `creme-brulee` for
+"Crème brûlée". Making one touches every layer of this chapter, and every
+step is a decision that the program states.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "unicode/normalization" take Normalized, NormalizationForm;
+import "unicode/character" take UnicodeCharacter, UnicodeCategory;
+
+// A URL slug: lower-case ASCII letters and digits, words joined by "-".
+object Slug {
+    has title is string;
+    Slug(:title);
+
+    string() is string {
+        // The sharp s has no decomposition; spelling it "ss" is a decision, so it is written down.
+        let spelled = title.lower().replace("ß", "ss");
+        // NFKD splits "è" into "e" and a combining accent, and the ligature "ﬁ" into "f" and "i".
+        let decomposed = Normalized(origin: spelled, form: NormalizationForm.nfkd).string();
+        let kept = decomposed.characters().map() -> c {
+            if self.word_character(c) {
+                c.string();
+            } else if UnicodeCharacter(c).category() == UnicodeCategory.nonspacing_mark {
+                "";
+            } else {
+                " ";
+            }
+        };
+        let words = kept.join("").split(" ").filter() -> word { !word.empty(); };
+        words.join("-");
+    }
+
+    hidden word_character(c is char) is bool {
+        let n = c.code();
+        (n >= 97 && n <= 122) || (n >= 48 && n <= 57);
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let titles = ["Crème brûlée, at home", "  Ten   Things!  ", "Straße 42", "Ärger über Öl", "ﬁve ﬁsh", "日本語"];
+    for titles -> title {
+        out.writeln("[" + Slug(title: title).string() + "]");
+    }
+    0;
+}
+```
+
+Output:
+
+```text
+[creme-brulee-at-home]
+[ten-things]
+[strasse-42]
+[arger-uber-ol]
+[five-fish]
+[]
+```
+
+- **Case first.** `lower()` applies the Unicode default case mapping
+  (Section 6.4). It needs no locale and gives the same result everywhere.
+- **Spelling rules are explicit.** The German sharp s has no decomposition,
+  so no Unicode algorithm turns `ß` into `ss`. The slug does it with a
+  literal `replace`, and the comment says why. German readers would also
+  expect `ä` to become `ae`; this slug does not do that, and a program for
+  German titles would add one more `replace` in the same place.
+- **Decompose, then drop the marks.** NFKD splits `è` into `e` and a
+  combining grave accent, and it folds the ligature `ﬁ` into `f` and `i`
+  (Section 6.5). The combining marks are recognised by their Unicode general
+  category, *nonspacing mark*, through `unicode/character`, and removed.
+  Nothing here guesses: the tables are those of Unicode 16.0.0.
+- **Everything else separates words.** ASCII letters and digits are kept,
+  and any other character becomes a space. `split(" ")` keeps the empty
+  fields between repeated spaces (Section 6.4), so `filter` drops them
+  before `join("-")`.
+- **The edge is visible.** A title in a script without a Latin
+  decomposition, such as `日本語`, gives an empty slug. Transliteration from
+  Japanese to Latin letters is a separate problem with its own conventions,
+  and a real program would fall back to an identifier. The example prints
+  `[]` rather than hiding the case.
+
+None of these steps is hidden in the string type or in a default of the
+library. When the slug comes out wrong for some title, the missing rule is
+missing from the program text, where a reader can find it and add it.
+
+## 6.11 Limits
 
 - **Text assembly.** Extending a chain with `text + piece` costs the appended text rather than a copy of everything so far. A `TextBuffer` makes the intention to build one result explicit.
 - **Case conversion has no locale.** `lower()` and `upper()` follow the

@@ -260,7 +260,41 @@ is a value, so a layout is built by nesting — `Indented(origin:
 Wrapped(...).string(), prefix: "  ")` — rather than by calling a chain of
 methods on a mutable buffer.
 
-## 6.10 Limits
+## 6.10 A worked example: a slug from a title
+
+A *slug* is the part of a web address made from a title: `creme-brulee` for
+"Crème brûlée". Making one touches every layer of this chapter, and every
+step is a decision that the program states.
+
+{{example:06-slug}}
+
+- **Case first.** `lower()` applies the Unicode default case mapping
+  (Section 6.4). It needs no locale and gives the same result everywhere.
+- **Spelling rules are explicit.** The German sharp s has no decomposition,
+  so no Unicode algorithm turns `ß` into `ss`. The slug does it with a
+  literal `replace`, and the comment says why. German readers would also
+  expect `ä` to become `ae`; this slug does not do that, and a program for
+  German titles would add one more `replace` in the same place.
+- **Decompose, then drop the marks.** NFKD splits `è` into `e` and a
+  combining grave accent, and it folds the ligature `ﬁ` into `f` and `i`
+  (Section 6.5). The combining marks are recognised by their Unicode general
+  category, *nonspacing mark*, through `unicode/character`, and removed.
+  Nothing here guesses: the tables are those of Unicode 16.0.0.
+- **Everything else separates words.** ASCII letters and digits are kept,
+  and any other character becomes a space. `split(" ")` keeps the empty
+  fields between repeated spaces (Section 6.4), so `filter` drops them
+  before `join("-")`.
+- **The edge is visible.** A title in a script without a Latin
+  decomposition, such as `日本語`, gives an empty slug. Transliteration from
+  Japanese to Latin letters is a separate problem with its own conventions,
+  and a real program would fall back to an identifier. The example prints
+  `[]` rather than hiding the case.
+
+None of these steps is hidden in the string type or in a default of the
+library. When the slug comes out wrong for some title, the missing rule is
+missing from the program text, where a reader can find it and add it.
+
+## 6.11 Limits
 
 - **Text assembly.** Extending a chain with `text + piece` costs the appended text rather than a copy of everything so far. A `TextBuffer` makes the intention to build one result explicit.
 - **Case conversion has no locale.** `lower()` and `upper()` follow the

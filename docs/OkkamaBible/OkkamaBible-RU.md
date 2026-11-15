@@ -74,7 +74,8 @@
   - [6.7 Символы](#67-символы)
   - [6.8 Чего стоит текст](#68-чего-стоит-текст)
   - [6.9 Раскладка текста](#69-раскладка-текста)
-  - [6.10 Ограничения](#610-ограничения)
+  - [6.10 Разобранный пример: slug из заголовка](#610-разобранный-пример-slug-из-заголовка)
+  - [6.11 Ограничения](#611-ограничения)
 - [Глава 7. Отсутствие без null](#глава-7-отсутствие-без-null)
   - [7.1 Что означает null — слишком многое](#71-что-означает-null--слишком-многое)
   - [7.2 Ответ Okkama: одна конструкция на один смысл](#72-ответ-okkama-одна-конструкция-на-один-смысл)
@@ -2037,6 +2038,7 @@ main() is int {
 
 ```text
 04-units-rejected.ok:18:17: semantic error: No action "plus" on object "NewtonSeconds" accepts (PoundSeconds)
+Available: plus(other is NewtonSeconds)
 ```
 
 Компилятор называет действие, переданный аргумент и ожидаемый параметр.
@@ -2974,7 +2976,96 @@ pattern and values disagree
 вложением — `Indented(origin: Wrapped(...).string(), prefix: "  ")`, — а не
 цепочкой вызовов над изменяемым буфером.
 
-## 6.10 Ограничения
+## 6.10 Разобранный пример: slug из заголовка
+
+*Slug* — часть веб-адреса, сделанная из заголовка: `creme-brulee` для
+«Crème brûlée». Чтобы его получить, приходится пройти все слои этой главы, и
+каждый шаг — решение, которое программа записывает.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "unicode/normalization" take Normalized, NormalizationForm;
+import "unicode/character" take UnicodeCharacter, UnicodeCategory;
+
+// A URL slug: lower-case ASCII letters and digits, words joined by "-".
+object Slug {
+    has title is string;
+    Slug(:title);
+
+    string() is string {
+        // The sharp s has no decomposition; spelling it "ss" is a decision, so it is written down.
+        let spelled = title.lower().replace("ß", "ss");
+        // NFKD splits "è" into "e" and a combining accent, and the ligature "ﬁ" into "f" and "i".
+        let decomposed = Normalized(origin: spelled, form: NormalizationForm.nfkd).string();
+        let kept = decomposed.characters().map() -> c {
+            if self.word_character(c) {
+                c.string();
+            } else if UnicodeCharacter(c).category() == UnicodeCategory.nonspacing_mark {
+                "";
+            } else {
+                " ";
+            }
+        };
+        let words = kept.join("").split(" ").filter() -> word { !word.empty(); };
+        words.join("-");
+    }
+
+    hidden word_character(c is char) is bool {
+        let n = c.code();
+        (n >= 97 && n <= 122) || (n >= 48 && n <= 57);
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let titles = ["Crème brûlée, at home", "  Ten   Things!  ", "Straße 42", "Ärger über Öl", "ﬁve ﬁsh", "日本語"];
+    for titles -> title {
+        out.writeln("[" + Slug(title: title).string() + "]");
+    }
+    0;
+}
+```
+
+Вывод:
+
+```text
+[creme-brulee-at-home]
+[ten-things]
+[strasse-42]
+[arger-uber-ol]
+[five-fish]
+[]
+```
+
+- **Сначала регистр.** `lower()` применяет стандартное отображение регистра
+  Unicode (раздел 6.4). Ему не нужна локаль, и результат везде одинаков.
+- **Правила написания — явные.** У немецкой эсцет нет разложения, поэтому
+  ни один алгоритм Unicode не превратит `ß` в `ss`. Slug делает это
+  буквальным `replace`, а комментарий объясняет почему. Немецкий читатель
+  ждал бы ещё и `ae` вместо `ä`; этот slug так не делает, и программа для
+  немецких заголовков добавила бы ещё один `replace` в том же месте.
+- **Разложить, потом снять знаки.** NFKD раскладывает `è` на `e` и
+  комбинирующий гравис, а лигатуру `ﬁ` — на `f` и `i` (раздел 6.5).
+  Комбинирующие знаки узнаются по общей категории Unicode, *nonspacing
+  mark*, через `unicode/character`, и удаляются. Ничего не угадывается:
+  таблицы — Unicode 16.0.0.
+- **Всё остальное разделяет слова.** ASCII-буквы и цифры остаются, любой
+  другой символ становится пробелом. `split(" ")` сохраняет пустые поля
+  между повторными пробелами (раздел 6.4), поэтому `filter` убирает их
+  перед `join("-")`.
+- **Край виден.** Заголовок на письменности без латинского разложения,
+  например `日本語`, даёт пустой slug. Транслитерация японского латиницей —
+  отдельная задача со своими соглашениями, и настоящая программа перешла бы
+  на идентификатор. Пример печатает `[]`, а не прячет этот случай.
+
+Ни один из этих шагов не спрятан в строковом типе или в умолчаниях
+библиотеки. Если для какого-то заголовка slug выйдет неправильным,
+недостающее правило отсутствует в тексте программы — там, где читатель
+может его найти и дописать.
+
+## 6.11 Ограничения
 
 - **Сборка текста.** Продолжение цепочки `text + piece` стоит дописываемого текста, а не копии всего накопленного. `TextBuffer` явно выражает намерение собрать один результат.
 - **Регистр без локали.** `lower()` и `upper()` следуют умолчанию Unicode;
