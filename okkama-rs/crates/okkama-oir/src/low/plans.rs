@@ -21,7 +21,7 @@ struct Recipe {
     alternatives: bool,
     partition: Option<(SelectionId, bool)>,
 }
-fn incoming(body: &Body, block: BlockId, index: usize) -> Vec<(BlockId, EdgeArg)> {
+pub(super) fn incoming(body: &Body, block: BlockId, index: usize) -> Vec<(BlockId, EdgeArg)> {
     let mut args = vec![];
     for (id, data) in body.blocks.iter() {
         let mut edge = |target: BlockId, values: Vec<EdgeArg>| {

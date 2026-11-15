@@ -350,6 +350,9 @@ pub(super) fn cleanup(module: &Module, body: &Body, ty: TypeId, state: &mut Stat
                     unknown(&mut result);
                 }
             }
+            // D20 §2.6, async ABI D24.2: in Low a Future duty is settled without waiting in 0.6.0, and its
+            // outcome packet then joins the plan with the identities of the result graph.
+            Ok(Type::Future(result_type)) if module.profile == Profile::Low => pending.extend(*result_type),
             Ok(Type::Future(_) | Type::Frame(_) | Type::Role { .. }) => unknown(&mut result),
             _ => {}
         }

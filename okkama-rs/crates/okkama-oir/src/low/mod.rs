@@ -1,13 +1,23 @@
-//! Synchronous Own → Low cleanup specialization.
+//! Own → Low and Coro → Low cleanup specialization.
 //!
-//! The caller supplies semantically verified Own and verifies the returned Low.
+//! The caller supplies semantically verified Own or Coro and verifies the returned Low.
 //! This producer never invokes the independent verifier (including on error paths).
 //! The verifier runs the complete conservation, lifetime, failure and cleanup automaton on this output.
+//!
+//! For Coro input (plain async, plan V4) the pass also:
+//! - drops the bracket of every close, whose cleanup steps cannot suspend in 0.6.0 (D20 §2.6, `narrow`);
+//! - settles the scheduled service duties of each close before its plan (OIR-2 §9.3, `services`);
+//! - delivers the final cancellation of a D18 close after its plan (`cleanup`);
+//! - recomputes the D21 frame layout (`layout`).
 mod cleanup;
+mod compact;
 mod eligibility;
+mod layout;
+mod narrow;
 mod roots;
 mod graph;
 mod plans;
+mod services;
 pub use plans::check_cleanup_plans;
 
 use crate::*;
@@ -83,9 +93,10 @@ impl Budget<'_> {
 /// Expand every close, preserving lexical boundaries and the already elaborated D8 CFG.
 /// Direct plans require complete finite inventory, serial evidence and the B2 reserve condition.
 pub fn lower_cleanup(mut module: Module, options: &LowOptions) -> Result<Module, LowError> {
-    if module.profile != Profile::Own {
-        return Err(LowError::InvalidInput { function: None, message: "expected Own profile".into() });
+    if !matches!(module.profile, Profile::Own | Profile::Coro) {
+        return Err(LowError::InvalidInput { function: None, message: "expected Own or Coro profile".into() });
     }
+    let coro = module.profile == Profile::Coro;
     let mut budget = Budget { options, steps: 0, blocks: 0, roots: 0 };
     eligibility::check(&module, &mut budget)?;
     let fresh = plans::fresh_summaries(&module, &mut budget)?;
@@ -94,7 +105,19 @@ pub fn lower_cleanup(mut module: Module, options: &LowOptions) -> Result<Module,
         let Some(mut body) = module.functions.get_mut(function)?.body.take() else {
             continue;
         };
-        cleanup::expand(&mut module, &mut body, &fresh, &mut budget)?;
+        let mut removed = std::collections::BTreeSet::new();
+        let mut duties = std::collections::BTreeMap::new();
+        if coro {
+            removed = narrow::closes(&mut body, &mut budget)?;
+            compact::compact(&mut body)?;
+            duties = services::assign(&module, function, &body, &mut budget)?;
+            // Low keeps the schedules close-local (B10.6).
+            body.service_schedules.clear();
+        }
+        cleanup::expand(&mut module, &mut body, &fresh, &duties, &mut budget)?;
+        if coro {
+            layout::relayout(&mut body, &removed, &mut budget)?;
+        }
         roots::collect(&module, &mut body, &mut budget)?;
         module.functions.get_mut(function)?.body = Some(body);
     }
@@ -114,3 +137,6 @@ mod direct_tests;
 
 #[cfg(test)]
 mod merge_tests;
+
+#[cfg(test)]
+mod async_tests;
