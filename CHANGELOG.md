@@ -163,6 +163,37 @@ fake fields; role fakes and their ordinary typed fields remain available.
   gate, and runs in a build only with `--verify-ownership`. `Atomic.replace`
   is now a call-boundary entry (#606).
 
+- **All 25 P1 programs run in Champ and match the oracle (#633).** Stdout,
+  checkpoints, exit code, stderr and the destroy trace all agree with the
+  current Sparrow, through high, own, low, SPB 17, the loader and the JIT. To
+  get there:
+  - SPB 17 and Champ gained plain arrays (`array.new/len/get`, with a
+    bounds unwind), completed plain construction, `obj.next` with a
+    successor packet, and explicit outcomes for what low leaves as block
+    unwind;
+  - an admission fix stopped bound resources from reaching calls early.
+
+  The full ownership gate stays red (19 Incomplete, one B51).
+
+  An `okkama` built with `champ-abi` now runs Champ when
+  `OKKAMA_PIPELINE=oir2` is set. It refuses SPB 16, because that build
+  compiles Tomato's resource tracking out.
+- **Champ loader rules from two independent audits (#652).**
+  - `RETURN_PACKET_NOT_FLAT`: a returned packet must hold only admission.
+  - `ENTRY_BLOCK_TARGET`: no edge may enter the entry block.
+  - `FALLIBLE_DATA_OUTCOMES`: a fallible data operation in a function that
+    holds services must have explicit outcomes. In plain functions the JIT
+    now checks the status after it instead of using a zero.
+  - `CREATION_UNCOMMITTED`: an object that may reach a resource must be
+    committed before any other use.
+
+  Selection walks treat arrays and ranges as leaves.
+- **Conformance on Champ (#593).** `adapters/rust/adapter-champ.json` runs the
+  suite on Champ. `tools/champ_blockers.py` ranks the Champ-only failures by
+  normalised cause, and `tools/run_champ.sh` runs both engines. The first
+  run passed 534 of 1038 cases on Champ, with no case failing on both
+  engines.
+
 - **OIR-2 ownership elaboration, synchronous part (#565).** A pass from
   `high` to `own` makes ownership explicit for synchronous code. It covers:
   - scope ends, call conventions and per-scope exits with the reserve;
