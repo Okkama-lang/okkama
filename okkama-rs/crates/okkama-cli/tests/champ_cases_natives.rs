@@ -170,6 +170,67 @@ fn champ_natives_missing_provider_with_handles() {
     assert!(error.contains("Native symbol \"app@1::port_open/1\" is not registered"), "{error}");
 }
 
+/// A missing provider is a program failure of the call, not the native's own failure: `catch e is NativeFailure`
+/// does not take it, and the run ends with Tomato's report (#719, language spec 9.5, L06.native.missing-provider).
+/// Tomato (`okkama run`) prints `RuntimeError: Native symbol "app@1::conformance_unlinked_symbol/1" is not
+/// registered` and exits 1.
+#[test]
+fn champ_natives_missing_provider_passes_a_native_failure_catch() {
+    let run = run_source(concat!(
+        "module app v1.0.0;\n",
+        "import \"io/stdout\" take Stdout;\n",
+        "native conformance_unlinked_symbol(x is int) is int;\n",
+        "main() is int {\n",
+        "    let text = try {\n",
+        "        conformance_unlinked_symbol(1).string();\n",
+        "    } catch e is NativeFailure {\n",
+        "        \"caught: \" + e.message();\n",
+        "    };\n",
+        "    Stdout().writeln(text);\n",
+        "    0;\n",
+        "}\n",
+    )).unwrap();
+    assert_eq!(run.stdout, "");
+    let error = run.result.unwrap_err();
+    assert!(error.starts_with("RuntimeError: Native symbol \"app@1::conformance_unlinked_symbol/1\" is not registered"),
+        "{error}");
+}
+
+/// A native the embedder's groups refuse fails with a program failure of the call that no catch takes, as on Tomato
+/// (`natives::call` is shared): `catch e is NativeFailure` and `catch e is Error` let it pass (#719).
+#[test]
+fn champ_natives_permission_refusal_passes_every_catch() {
+    let source = concat!(
+        "module app v1.0.0;\n",
+        "import \"io/stdout\" take Stdout;\n",
+        "import \"runtime/time\" take monotonic_clock;\n",
+        "main() is int {\n",
+        "    Stdout().writeln(\"before\");\n",
+        "    let text = try {\n",
+        "        monotonic_clock().string();\n",
+        "    } catch e is NativeFailure {\n",
+        "        \"native: \" + e.message();\n",
+        "    } catch e is Error {\n",
+        "        \"error: \" + e.text();\n",
+        "    };\n",
+        "    Stdout().writeln(text);\n",
+        "    0;\n",
+        "}\n",
+    );
+    let name = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/champ_support/inline.ok");
+    let file = okkama_compiler::SourceFile::new(name.to_string_lossy(), source.to_string()).unwrap();
+    let bytes = champ_support::compile(&[file]).unwrap();
+    // Without restriction the clock is read; with every group refused the call fails uncaught.
+    let open = sparrow_core::run_captured(bytes.clone(), sparrow_core::budget::Limits::default()).unwrap();
+    assert_eq!(open.result.map_err(|error| error.0), Ok(0));
+    let limits = sparrow_core::budget::Limits { natives: Some(vec![]), ..sparrow_core::budget::Limits::default() };
+    let refused = sparrow_core::run_captured(bytes, limits).unwrap();
+    assert_eq!(String::from_utf8_lossy(&refused.stdout), "before\n");
+    let error = refused.result.unwrap_err().0;
+    assert!(error.starts_with("RuntimeError: Native runtime/time@1::monotonic_clock/0 needs the Clock permission"),
+        "{error}");
+}
+
 /// Registered Atomic operations for every plain scalar specialization (P2.4 §4.8), as Tomato does them.
 #[test]
 fn champ_atomic_plain_specializations() {

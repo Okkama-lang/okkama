@@ -8,6 +8,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A native's program failure passes every catch on Champ, as on Tomato (#719).** Language spec 9.5:
+  only a native's own `NativeFailure` takes part in matching. Champ no longer rewrites a synchronous
+  native's program failure (a missing provider, a refused permission group) into a catchable
+  `NativeFailure`; it ends the run with Tomato's report and exit 1. The OIR-2 native contract and the
+  SPB 17 native entry mask (`NATIVE_FAILURES`, `EXTERNAL_SIGNATURE`) now declare Program besides Native;
+  a thrown value or a `Panic` failure from a provider stops the machine as a broken entry contract.
 - **`once let` keeps plain closures, plain role values and native handles on the OIR-2 path (#717).**
   Bible §13.13: a once value must not retain a resource, and a closure or role value is allowed when it
   cannot retain one in this program; P2.4 §4.7: a native handle has no Okkama destroy. The OIR-2

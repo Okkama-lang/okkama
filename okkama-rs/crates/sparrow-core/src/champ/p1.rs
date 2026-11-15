@@ -95,32 +95,23 @@ pub(super) fn invoke(ctx: *mut Ctx, function: usize, io: *mut CallOwn, args: &[W
     }
 }
 
-/// A synchronous native's entry may fail only with a native failure (`NATIVE_FAILURES`). Every other
-/// refusal of the provider (a program failure, a raised cancellation or error value, a panic) becomes a
-/// `NativeFailure` of the operation carrying the refusal's message; a native failure passes unchanged.
+/// A synchronous native's entry fails only as its mask (`NATIVE_FAILURES`) admits, and the failure keeps its kind
+/// (#719, language spec 9.5): the provider's own `NativeFailure` (Native), which a catch may take, and a program
+/// failure of the call (a missing provider, a refused permission), which passes every catch with its message, as
+/// on Tomato. A cancellation passes unchanged too (sync masks carry no cancellation bit). A thrown value or a
+/// `Panic` failure is outside the trusted contract: it stops the machine, naming the native. A Rust panic in a
+/// provider never gets here: `rt_native` stops the run with an internal error on both engines.
 pub(super) fn native_refusal(ctx: *mut Ctx, name: &str) {
     let runtime = unsafe { &mut *(*ctx).runtime };
     if unsafe { (*ctx).status } != runtime::FAILED {
         return;
     }
-    let message = match runtime.failure(unsafe { (*ctx).failure }).map(|failure| &failure.kind) {
-        Some(FailureKind::Native(_)) => return,
-        Some(FailureKind::Program(message) | FailureKind::Panic(message)) => message.clone(),
-        Some(FailureKind::Cancelled) => "Operation was cancelled".to_owned(),
-        Some(FailureKind::Thrown(object)) => super::machine::error_text(runtime, *object)
-            .unwrap_or_else(|| "native provider raised an error value".to_owned()),
-        None => "native provider failed without a failure record".to_owned(),
-    };
-    let descriptor = runtime.champ.machine.as_ref().unwrap().native_failure;
-    let fields = [
-        runtime.heap.allocate_text("runtime"),
-        runtime.heap.allocate_text("native"),
-        runtime.heap.allocate_text(name),
-        runtime.heap.allocate_text(&message),
-    ];
-    let object = runtime.heap.object_new(descriptor, &fields);
-    let failure = runtime.failure_new(FailureKind::Native(object));
-    unsafe { (*ctx).failure = failure };
+    match runtime.failure(unsafe { (*ctx).failure }).map(|failure| &failure.kind) {
+        Some(FailureKind::Native(_) | FailureKind::Program(_) | FailureKind::Cancelled) => {}
+        Some(FailureKind::Thrown(_) | FailureKind::Panic(_)) | None => {
+            super::helpers::stop(ctx, Error(format!("native {name} failed outside its entry contract")));
+        }
+    }
 }
 
 /// An opaque cleanup intrinsic releases the complete owner graph of an action value or `any` box: every
