@@ -287,7 +287,34 @@ system, as in F#'s units of measure [@kennedy2010]; Okkama has no such feature, 
 combination is written by hand. For the few quantities that cross a boundary
 between programs or teams, the declaration is cheap insurance.
 
-## 4.11 Limits
+## 4.11 Okkama among other languages
+
+| | Java [@gosling2023] | Go [@gospec] | TypeScript [@tscompat] | Rust [@klabnik2023] | Python with hints [@pep484] | Haskell [@haskell2010] | Okkama |
+|---|---|---|---|---|---|---|---|
+| Checked | before running | before running | before running; types erased | before running | by a separate checker; nothing at run time | before running | before running |
+| Compatibility | nominal | nominal types, structural interfaces | structural | nominal | nominal classes | nominal | nominal |
+| Inference | local (`var`, generic calls) | local (`:=`) | local and contextual | inside function bodies | depends on the checker | whole program | inside bodies |
+| Top type | `Object` | `any` | `any`, `unknown` | none (`dyn Any` to downcast) | `Any`, `object` | none | `any`, opaque |
+| Absence | `null` in every reference type | `nil` for pointers, interfaces, maps, slices | `null`, `undefined` (strict checks optional) | `Option` | `None`, `Optional` | `Maybe` | `Maybe` |
+| Implicit numeric conversion | widening | none | one number type | none | `int` to `float` | none | none |
+
+Three rows place Okkama.
+
+- **Compatibility and inference.** Okkama is nominal and infers inside
+  bodies from what is written there, with every declaration annotated. Rust
+  made the same choice: function signatures are written, bodies are
+  inferred. Haskell infers whole programs; Python leaves typing to a tool
+  that the language does not run [@pep484].
+- **The top type.** Every language with a top type except Okkama has a way
+  back from it. A Go `any` yields its value to a type assertion, a
+  TypeScript `unknown` to narrowing, and a TypeScript `any` turns checking
+  off for everything it touches. An Okkama `any` can be stored and passed
+  on, and only the native layer opens it (Section 4.6).
+- **Absence.** Java and Go let a missing value hide inside ordinary types;
+  TypeScript makes that a compiler option, `strictNullChecks` [@tseveryday].
+  Rust, Haskell and Okkama put it in a type of its own (Chapter 7).
+
+## 4.12 Limits
 
 - **No union or intersection types.** A value is of one type; a choice
   between types is expressed by a role or by an enum with cases.

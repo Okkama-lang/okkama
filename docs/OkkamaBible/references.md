@@ -125,6 +125,7 @@ bibliographic data were checked are listed.
 - [@parnas1972] David L. Parnas (1972). On the Criteria To Be Used in Decomposing Systems into Modules. *Communications of the ACM* 15(12): 1053–1058. https://doi.org/10.1145/361598.361623
 - [@pep237] Moshe Zadka, Guido van Rossum (2001). PEP 237 — Unifying Long Integers and Integers. Python Enhancement Proposals. https://peps.python.org/pep-0237/ {label: PEP 237}
 - [@pep343] Guido van Rossum, Nick Coghlan (2005). PEP 343 — The "with" Statement. Python Enhancement Proposals. https://peps.python.org/pep-0343/
+- [@pep484] Guido van Rossum, Jukka Lehtosalo, Łukasz Langa (2014). PEP 484 — Type Hints. Python Enhancement Proposals. https://peps.python.org/pep-0484/
 - [@peters2004] Tim Peters (2004). *PEP 20 — The Zen of Python*. https://peps.python.org/pep-0020/
 - [@pierce2002] Benjamin C. Pierce (2002). *Types and Programming Languages*. MIT Press.
 - [@pike2015] Rob Pike (2015). Errors are values. *The Go Blog*, 12 January 2015. https://go.dev/blog/errors-are-values
@@ -162,6 +163,8 @@ bibliographic data were checked are listed.
 - [@syme2011] Don Syme, Tomas Petricek and Dmitry Lomov (2011). The F# Asynchronous Programming Model. *Practical Aspects of Declarative Languages (PADL 2011)*, LNCS 6539: 175–189. https://doi.org/10.1007/978-3-642-18378-2_15
 - [@thorburn1918] W. M. Thorburn (1918). The Myth of Occam's Razor. *Mind* 27(107): 345–353. https://doi.org/10.1093/mind/XXVII.3.345
 - [@tofte1997] Mads Tofte, Jean-Pierre Talpin (1997). Region-Based Memory Management. *Information and Computation* 132(2): 109–176. https://doi.org/10.1006/inco.1996.2613
+- [@tscompat] Microsoft (2026). Type Compatibility. *TypeScript Handbook*. https://www.typescriptlang.org/docs/handbook/type-compatibility.html {label: TypeScript Handbook}
+- [@tseveryday] Microsoft (2026). Everyday Types. *TypeScript Handbook*. https://www.typescriptlang.org/docs/handbook/2/everyday-types.html {label: TypeScript Handbook}
 - [@uax15] The Unicode Consortium (2024). *Unicode Standard Annex #15: Unicode Normalization Forms* (for Unicode 16.0.0). https://www.unicode.org/reports/tr15/ {label: UAX #15}
 - [@uax29] The Unicode Consortium (2024). *Unicode Standard Annex #29: Unicode Text Segmentation* (for Unicode 16.0.0). https://www.unicode.org/reports/tr29/ {label: UAX #29}
 - [@ungar1987] David Ungar, Randall B. Smith (1987). Self: The Power of Simplicity. In *Proceedings of OOPSLA '87*, 227–242. ACM. https://doi.org/10.1145/38765.38828

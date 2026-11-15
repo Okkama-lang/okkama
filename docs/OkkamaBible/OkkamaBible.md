@@ -52,7 +52,8 @@
   - [4.8 Conversions are explicit](#48-conversions-are-explicit)
   - [4.9 What the compiler checks, and what remains for run time](#49-what-the-compiler-checks-and-what-remains-for-run-time)
   - [4.10 A worked example: units the compiler checks](#410-a-worked-example-units-the-compiler-checks)
-  - [4.11 Limits](#411-limits)
+  - [4.11 Okkama among other languages](#411-okkama-among-other-languages)
+  - [4.12 Limits](#412-limits)
 - [Chapter 5. Numbers](#chapter-5-numbers)
   - [5.1 Four categories](#51-four-categories)
   - [5.2 Exact integers](#52-exact-integers)
@@ -2154,7 +2155,34 @@ system, as in F#'s units of measure [[Kennedy 2010](#ref-kennedy2010)]; Okkama h
 combination is written by hand. For the few quantities that cross a boundary
 between programs or teams, the declaration is cheap insurance.
 
-## 4.11 Limits
+## 4.11 Okkama among other languages
+
+| | Java [[Gosling 2023](#ref-gosling2023)] | Go [[Go specification](#ref-gospec)] | TypeScript [[TypeScript Handbook](#ref-tscompat)] | Rust [[Klabnik 2023](#ref-klabnik2023)] | Python with hints [[Rossum 2014](#ref-pep484)] | Haskell [[Haskell 2010](#ref-haskell2010)] | Okkama |
+|---|---|---|---|---|---|---|---|
+| Checked | before running | before running | before running; types erased | before running | by a separate checker; nothing at run time | before running | before running |
+| Compatibility | nominal | nominal types, structural interfaces | structural | nominal | nominal classes | nominal | nominal |
+| Inference | local (`var`, generic calls) | local (`:=`) | local and contextual | inside function bodies | depends on the checker | whole program | inside bodies |
+| Top type | `Object` | `any` | `any`, `unknown` | none (`dyn Any` to downcast) | `Any`, `object` | none | `any`, opaque |
+| Absence | `null` in every reference type | `nil` for pointers, interfaces, maps, slices | `null`, `undefined` (strict checks optional) | `Option` | `None`, `Optional` | `Maybe` | `Maybe` |
+| Implicit numeric conversion | widening | none | one number type | none | `int` to `float` | none | none |
+
+Three rows place Okkama.
+
+- **Compatibility and inference.** Okkama is nominal and infers inside
+  bodies from what is written there, with every declaration annotated. Rust
+  made the same choice: function signatures are written, bodies are
+  inferred. Haskell infers whole programs; Python leaves typing to a tool
+  that the language does not run [[Rossum 2014](#ref-pep484)].
+- **The top type.** Every language with a top type except Okkama has a way
+  back from it. A Go `any` yields its value to a type assertion, a
+  TypeScript `unknown` to narrowing, and a TypeScript `any` turns checking
+  off for everything it touches. An Okkama `any` can be stored and passed
+  on, and only the native layer opens it (Section 4.6).
+- **Absence.** Java and Go let a missing value hide inside ordinary types;
+  TypeScript makes that a compiler option, `strictNullChecks` [[TypeScript Handbook](#ref-tseveryday)].
+  Rust, Haskell and Okkama put it in a type of its own (Chapter 7).
+
+## 4.12 Limits
 
 - **No union or intersection types.** A value is of one type; a choice
   between types is expressed by a role or by an enum with cases.
@@ -19856,6 +19884,7 @@ limits are deliberate, and Chapter 28 discusses the ones that are not.
 - <a id="ref-rissanen1978"></a>Jorma Rissanen (1978). Modeling by Shortest Data Description. *Automatica* 14(5): 465–471. https://doi.org/10.1016/0005-1098(78)90005-5
 - <a id="ref-ritchie1993"></a>Dennis M. Ritchie (1993). The Development of the C Language. *HOPL-II: The Second ACM SIGPLAN Conference on History of Programming Languages*: 201–208. https://doi.org/10.1145/154766.155580
 - <a id="ref-pep343"></a>Guido van Rossum, Nick Coghlan (2005). PEP 343 — The "with" Statement. Python Enhancement Proposals. https://peps.python.org/pep-0343/
+- <a id="ref-pep484"></a>Guido van Rossum, Jukka Lehtosalo, Łukasz Langa (2014). PEP 484 — Type Hints. Python Enhancement Proposals. https://peps.python.org/pep-0484/
 - <a id="ref-saltzer1975"></a>Jerome H. Saltzer, Michael D. Schroeder (1975). The Protection of Information in Computer Systems. *Proceedings of the IEEE* 63(9): 1278–1308. https://doi.org/10.1109/PROC.1975.9939
 - <a id="ref-scales2022"></a>Dan Scales (2022). Go 1.18 Implementation of Generics via Dictionaries and Gcshape Stenciling. Design document, Go proposal repository, 22 February 2022. https://go.googlesource.com/proposal/+/master/design/generics-implementation-dictionaries-go1.18.md
 - <a id="ref-goruntime"></a>The Go Authors. The Go runtime scheduler, src/runtime/proc.go, function checkdead. https://go.dev/src/runtime/proc.go
@@ -19873,6 +19902,8 @@ limits are deliberate, and Chapter 28 discusses the ones that are not.
 - <a id="ref-syme2011"></a>Don Syme, Tomas Petricek and Dmitry Lomov (2011). The F# Asynchronous Programming Model. *Practical Aspects of Declarative Languages (PADL 2011)*, LNCS 6539: 175–189. https://doi.org/10.1007/978-3-642-18378-2_15
 - <a id="ref-thorburn1918"></a>W. M. Thorburn (1918). The Myth of Occam's Razor. *Mind* 27(107): 345–353. https://doi.org/10.1093/mind/XXVII.3.345
 - <a id="ref-tofte1997"></a>Mads Tofte, Jean-Pierre Talpin (1997). Region-Based Memory Management. *Information and Computation* 132(2): 109–176. https://doi.org/10.1006/inco.1996.2613
+- <a id="ref-tscompat"></a>Microsoft (2026). Type Compatibility. *TypeScript Handbook*. https://www.typescriptlang.org/docs/handbook/type-compatibility.html
+- <a id="ref-tseveryday"></a>Microsoft (2026). Everyday Types. *TypeScript Handbook*. https://www.typescriptlang.org/docs/handbook/2/everyday-types.html
 - <a id="ref-uax15"></a>The Unicode Consortium (2024). *Unicode Standard Annex #15: Unicode Normalization Forms* (for Unicode 16.0.0). https://www.unicode.org/reports/tr15/
 - <a id="ref-uax29"></a>The Unicode Consortium (2024). *Unicode Standard Annex #29: Unicode Text Segmentation* (for Unicode 16.0.0). https://www.unicode.org/reports/tr29/
 - <a id="ref-ungar1987"></a>David Ungar, Randall B. Smith (1987). Self: The Power of Simplicity. In *Proceedings of OOPSLA '87*, 227–242. ACM. https://doi.org/10.1145/38765.38828

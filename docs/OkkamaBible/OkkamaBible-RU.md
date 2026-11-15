@@ -52,7 +52,8 @@
   - [4.8 Преобразования явные](#48-преобразования-явные)
   - [4.9 Что проверяет компилятор, а что остаётся на время выполнения](#49-что-проверяет-компилятор-а-что-остаётся-на-время-выполнения)
   - [4.10 Разобранный пример: единицы, которые проверяет компилятор](#410-разобранный-пример-единицы-которые-проверяет-компилятор)
-  - [4.11 Ограничения](#411-ограничения)
+  - [4.11 Okkama среди других языков](#411-okkama-среди-других-языков)
+  - [4.12 Ограничения](#412-ограничения)
 - [Глава 5. Числа](#глава-5-числа)
   - [5.1 Четыре категории](#51-четыре-категории)
   - [5.2 Точные целые](#52-точные-целые)
@@ -2186,7 +2187,35 @@ Available: plus(other is NewtonSeconds)
 сочетание пишется вручную. Для немногих величин, пересекающих границу между
 программами или командами, объявление — дешёвая страховка.
 
-## 4.11 Ограничения
+## 4.11 Okkama среди других языков
+
+| | Java [[Gosling 2023](#ref-gosling2023)] | Go [[Go specification](#ref-gospec)] | TypeScript [[TypeScript Handbook](#ref-tscompat)] | Rust [[Klabnik 2023](#ref-klabnik2023)] | Python с подсказками [[Rossum 2014](#ref-pep484)] | Haskell [[Haskell 2010](#ref-haskell2010)] | Okkama |
+|---|---|---|---|---|---|---|---|
+| Проверка | до запуска | до запуска | до запуска; типы стираются | до запуска | отдельной программой; во время работы — никакой | до запуска | до запуска |
+| Совместимость | номинальная | номинальные типы, структурные интерфейсы | структурная | номинальная | номинальные классы | номинальная | номинальная |
+| Вывод | локальный (`var`, обобщённые вызовы) | локальный (`:=`) | локальный и контекстный | внутри тел функций | зависит от программы проверки | по всей программе | внутри тел |
+| Верхний тип | `Object` | `any` | `any`, `unknown` | нет (`dyn Any` для приведения вниз) | `Any`, `object` | нет | `any`, непрозрачный |
+| Отсутствие | `null` в любом ссылочном типе | `nil` у указателей, интерфейсов, словарей, срезов | `null`, `undefined` (строгая проверка по выбору) | `Option` | `None`, `Optional` | `Maybe` | `Maybe` |
+| Неявное числовое преобразование | расширяющее | нет | один числовой тип | нет | `int` в `float` | нет | нет |
+
+Три строки определяют место Okkama.
+
+- **Совместимость и вывод.** Okkama номинальна и выводит типы внутри тел из
+  того, что там написано, при аннотированных объявлениях. Rust сделал тот же
+  выбор: сигнатуры функций пишутся, тела выводятся. Haskell выводит всю
+  программу; Python оставляет типизацию инструменту, который язык не
+  запускает [[Rossum 2014](#ref-pep484)].
+- **Верхний тип.** У всех языков с верхним типом, кроме Okkama, есть путь
+  обратно. `any` в Go отдаёт значение утверждению типа, `unknown` в
+  TypeScript — сужению, а `any` в TypeScript выключает проверку для всего,
+  к чему прикасается. `any` в Okkama можно хранить и передавать дальше, а
+  открывает его только слой natives (раздел 4.6).
+- **Отсутствие.** Java и Go позволяют пропавшему значению прятаться внутри
+  обычных типов; TypeScript делает это опцией компилятора,
+  `strictNullChecks` [[TypeScript Handbook](#ref-tseveryday)]. Rust, Haskell и Okkama выносят его в
+  отдельный тип (глава 7).
+
+## 4.12 Ограничения
 
 - **Нет объединений и пересечений типов.** Значение имеет один тип; выбор
   между типами выражается ролью или перечислением со случаями.
@@ -20069,6 +20098,7 @@ main() is int {
 - <a id="ref-rissanen1978"></a>Jorma Rissanen (1978). Modeling by Shortest Data Description. *Automatica* 14(5): 465–471. https://doi.org/10.1016/0005-1098(78)90005-5
 - <a id="ref-ritchie1993"></a>Dennis M. Ritchie (1993). The Development of the C Language. *HOPL-II: The Second ACM SIGPLAN Conference on History of Programming Languages*: 201–208. https://doi.org/10.1145/154766.155580
 - <a id="ref-pep343"></a>Guido van Rossum, Nick Coghlan (2005). PEP 343 — The "with" Statement. Python Enhancement Proposals. https://peps.python.org/pep-0343/
+- <a id="ref-pep484"></a>Guido van Rossum, Jukka Lehtosalo, Łukasz Langa (2014). PEP 484 — Type Hints. Python Enhancement Proposals. https://peps.python.org/pep-0484/
 - <a id="ref-saltzer1975"></a>Jerome H. Saltzer, Michael D. Schroeder (1975). The Protection of Information in Computer Systems. *Proceedings of the IEEE* 63(9): 1278–1308. https://doi.org/10.1109/PROC.1975.9939
 - <a id="ref-scales2022"></a>Dan Scales (2022). Go 1.18 Implementation of Generics via Dictionaries and Gcshape Stenciling. Design document, Go proposal repository, 22 February 2022. https://go.googlesource.com/proposal/+/master/design/generics-implementation-dictionaries-go1.18.md
 - <a id="ref-goruntime"></a>The Go Authors. The Go runtime scheduler, src/runtime/proc.go, function checkdead. https://go.dev/src/runtime/proc.go
@@ -20086,6 +20116,8 @@ main() is int {
 - <a id="ref-syme2011"></a>Don Syme, Tomas Petricek and Dmitry Lomov (2011). The F# Asynchronous Programming Model. *Practical Aspects of Declarative Languages (PADL 2011)*, LNCS 6539: 175–189. https://doi.org/10.1007/978-3-642-18378-2_15
 - <a id="ref-thorburn1918"></a>W. M. Thorburn (1918). The Myth of Occam's Razor. *Mind* 27(107): 345–353. https://doi.org/10.1093/mind/XXVII.3.345
 - <a id="ref-tofte1997"></a>Mads Tofte, Jean-Pierre Talpin (1997). Region-Based Memory Management. *Information and Computation* 132(2): 109–176. https://doi.org/10.1006/inco.1996.2613
+- <a id="ref-tscompat"></a>Microsoft (2026). Type Compatibility. *TypeScript Handbook*. https://www.typescriptlang.org/docs/handbook/type-compatibility.html
+- <a id="ref-tseveryday"></a>Microsoft (2026). Everyday Types. *TypeScript Handbook*. https://www.typescriptlang.org/docs/handbook/2/everyday-types.html
 - <a id="ref-uax15"></a>The Unicode Consortium (2024). *Unicode Standard Annex #15: Unicode Normalization Forms* (for Unicode 16.0.0). https://www.unicode.org/reports/tr15/
 - <a id="ref-uax29"></a>The Unicode Consortium (2024). *Unicode Standard Annex #29: Unicode Text Segmentation* (for Unicode 16.0.0). https://www.unicode.org/reports/tr29/
 - <a id="ref-ungar1987"></a>David Ungar, Randall B. Smith (1987). Self: The Power of Simplicity. In *Proceedings of OOPSLA '87*, 227–242. ACM. https://doi.org/10.1145/38765.38828
