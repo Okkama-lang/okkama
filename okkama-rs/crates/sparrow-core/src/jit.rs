@@ -199,6 +199,9 @@ helpers! {
     champ_machine_lookup = crate::champ::collections::rt_machine_lookup as (ctx,
         function: u64, pc: u64, collection: Word, index: Word, post: *mut Word) -> u64; [Stops];
     #[cfg(feature = "champ-abi")]
+    champ_machine_test = crate::champ::testing::rt_machine_test as (ctx,
+        kind: Word, function: Word, register: Word, left: Word, right: Word) -> u64; [Allocates, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
     champ_machine_catch = crate::champ::machine::rt_machine_catch as (ctx,
         failure: Word, descriptor: Word) -> u64; [];
     #[cfg(feature = "champ-abi")]

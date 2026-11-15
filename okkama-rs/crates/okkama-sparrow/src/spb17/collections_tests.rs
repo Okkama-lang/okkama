@@ -68,7 +68,7 @@ fn plain_object(name: &str, fields: Vec<Type>, resource: bool) -> Object {
     let trace_layout = fields.iter().enumerate().filter_map(|(index, ty)| ty.traced().then_some(index as u32))
         .collect();
     Object {
-        name: name.into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![],
+        name: name.into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false,
         fields: (0..fields.len() as u32).map(|storage| Field { name: format!("f{storage}"), storage, once: false })
             .collect(),
         layout: ObjectRuntimeLayout {
@@ -144,11 +144,15 @@ fn map_keys_follow_the_key_object_rule() {
 }
 
 #[test]
-fn map_values_and_builder_arrays_are_closed_plain() {
+fn map_values_and_builder_arrays_are_plain_or_resource_references() {
+    // A map may refer to resource objects as values (a managed map, managed_tests); its keys stay plain.
     let mut p = fixture();
     p.objects = vec![plain_object("Res", vec![], true)];
     p.composites.push(Composite::Map { key: Type::Str, value: Type::Object(0) });
-    reject(&p, "MAP_PLAIN");
+    verify(&p).unwrap();
+    p.composites.push(Composite::Map { key: Type::Str, value: INTS });
+    p.composites.push(Composite::Map { key: Type::Str, value: Type::Map(2) });
+    verify(&p).unwrap();
     let mut p = fixture();
     p.composites.push(Composite::Builder { array: Type::Int });
     reject(&p, "BUILDER_ARRAY");

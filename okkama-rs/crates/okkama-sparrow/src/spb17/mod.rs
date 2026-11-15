@@ -59,6 +59,9 @@ pub struct Program {
     pub tables: ChampTables,
     pub functions: Vec<Function>,
     pub entry: Option<u32>,
+    /// The test profile (§14): the tests in run order. `Some([])` is an empty suite, which the runner
+    /// rejects; `None` is a production program. Test operations and test intrinsics need `Some`.
+    pub tests: Option<Vec<Test>>,
     /// Map and builder shapes named by `Type::Map`, `Type::MapBuilder` and `Type::Builder`. An entry refers
     /// only to earlier entries, so the table is acyclic (`COMPOSITE_ORDER`).
     pub composites: Vec<Composite>,
@@ -72,6 +75,16 @@ pub enum Composite {
     /// A unique array builder whose finished value has type `array` (an `Array` or `Bytes`).
     Builder { array: Type },
 }
+
+/// One test of the test profile: a `() -> void` observation entry run on a fresh runtime.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Test {
+    pub name: String,
+    pub function: u32,
+}
+
+/// The test intrinsics (`okkama.test.*` external entries) and test operations need a tests table.
+pub const TEST_INTRINSIC_PREFIX: &str = "okkama.test.";
 
 /// Immutable final descriptor supplied by the runtime layout registry (§2.7).
 /// Physical storage includes hidden construction/$once slots, never the tail.
@@ -101,6 +114,8 @@ pub struct Object {
     pub enum_cases: u32,
     /// Case object descriptors of a plain (non-Error) variant, in case order; empty otherwise.
     pub variant_cases: Vec<u32>,
+    /// A native handle declaration: no fields, no storage and never constructed by a program.
+    pub handle: bool,
     pub name: String,
     pub fields: Vec<Field>,
     pub layout: ObjectRuntimeLayout,
@@ -133,6 +148,9 @@ pub enum Type {
     Successor(u32),
     /// A value of a plain variant declaration: a reference to one of its case objects (`Object::variant_cases`).
     Variant(u32),
+    /// A native handle (`native object`): a reference to the native registry's state, declared by
+    /// the handle object `Object::handle` with this index. It owns no Okkama obligation (P2.4 §4.7).
+    Handle(u32),
     Never,
     Descriptor,
     /// A finished map: `Composite::Map` at this index of `Program::composites`.
@@ -147,7 +165,8 @@ impl Type {
     /// Words the collector must trace as references (tagged integers are traced separately).
     pub fn traced(self) -> bool {
         matches!(self, Self::Error | Self::Bytes | Self::Array(_) | Self::Str | Self::Object(_) | Self::Successor(_)
-            | Self::Failure | Self::Rat | Self::Variant(_) | Self::Map(_) | Self::MapBuilder(_) | Self::Builder(_))
+            | Self::Failure | Self::Rat | Self::Variant(_) | Self::Handle(_) | Self::Map(_) | Self::MapBuilder(_)
+            | Self::Builder(_))
     }
 }
 
@@ -525,6 +544,13 @@ pub enum DataOp {
     ArrayDifference,
     /// An empty unique builder of the result's builder type.
     BuilderNew,
+    /// Test assertions (`test.ok`, `test.is`, `test.isnt`, `test.fail`) of the test profile. Each
+    /// records a failed check in the running case and continues; the bool result says whether the
+    /// check held. Outside a running case each fails with a program failure.
+    TestOk,
+    TestIs,
+    TestIsnt,
+    TestFail,
 }
 
 impl DataOp {
@@ -537,6 +563,7 @@ impl DataOp {
             Self::IntMod | Self::RangeNew | Self::RatNew | Self::ValEq | Self::ValNe | Self::VariantGet
                 | Self::MapGet | Self::MapKeyAt | Self::MapValueAt | Self::MapDifference | Self::ArraySlice
                 | Self::ArrayRemove | Self::ArrayReplace | Self::ArrayDifference => true,
+            Self::TestOk | Self::TestIs | Self::TestIsnt | Self::TestFail => true,
             Self::Convert => matches!((operands, result), ([from], Some(to)) if conversion(*from, to) == Some(true)),
             _ => false,
         }
@@ -754,6 +781,12 @@ mod load_tests;
 #[cfg(test)]
 mod arrays_tests;
 #[cfg(test)]
+mod natives_tests;
+#[cfg(test)]
 mod scalars_tests;
 #[cfg(test)]
 mod collections_tests;
+#[cfg(test)]
+mod managed_tests;
+#[cfg(test)]
+mod testmode_tests;

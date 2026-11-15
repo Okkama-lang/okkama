@@ -1,7 +1,7 @@
 use super::*;
 
 impl Reader<'_> {
-    fn high_instruction(&mut self) -> Result<InstId, Diagnostic> {
+    pub(super) fn high_instruction(&mut self) -> Result<InstId, Diagnostic> {
         let mut token = self.next()?;
         if let Some(number) = token.text.strip_prefix('#') {
             token.text = format!("i{number}");
@@ -71,7 +71,7 @@ impl Writer<'_> {
         Ok(())
     }
 
-    fn high_instruction(&mut self, instruction: InstId) -> Result<(), PrintError> {
+    pub(super) fn high_instruction(&mut self, instruction: InstId) -> Result<(), PrintError> {
         self.push("#");
         // Canonical instruction labels are iN, in block/instruction order.
         let name = self.names.get(&(self.scope, "inst", instruction.as_u32()))

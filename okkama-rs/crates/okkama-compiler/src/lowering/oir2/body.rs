@@ -26,6 +26,7 @@ pub(super) struct BodyContext<'t> {
     pub bound_entries: &'t std::collections::HashSet<ir::FuncId>,
     pub lambdas: &'t [super::anonymous::Lambda],
     pub globals: &'t HashMap<usize, ir::DeclId>,
+    pub test_intrinsics: &'t HashMap<String, ir::FuncId>,
 }
 
 pub(super) struct BodyLowerer<'a, 't> {

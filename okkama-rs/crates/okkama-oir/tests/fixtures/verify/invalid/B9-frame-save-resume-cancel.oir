@@ -15,6 +15,6 @@ func @f() -> (frame<@target>, own) summary(Mf) {
     %frame: frame<@target> = frame.alloc @target
     %p: own = own.empty
     %saved: frame<@target> = frame.save %frame, slots [frame_slot(slot=0, value=%p, mode=observe)], continuation 1
-    (%resumed: frame<@target>, %part: own) = frame.resume %saved, slots [saved_slot(slot=0, ty=own, linear=true)]
+    (%resumed: frame<@target>, %part: own) = frame.resume %saved, continuation 1, slots [saved_slot(slot=0, ty=own, linear=true)]
     ret %resumed, %part
 }

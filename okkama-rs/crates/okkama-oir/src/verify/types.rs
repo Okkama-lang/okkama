@@ -1008,9 +1008,13 @@ fn terminator<'a>(
                 }
             }
             TermKind::Ret { values } => {
-                let tagged = module.functions.get(function)?.attrs.iter()
+                let declaration = module.functions.get(function)?;
+                let tagged = declaration.attrs.iter()
                     .any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. }));
-                checker.require(!tagged, "defer entry requires a tagged return");
+                // C-6: an async defer entry in the D21 form exits by `fut.publish` then `ret` (C-2).
+                let async_body = matches!(module.profile, Profile::Coro | Profile::Low)
+                    && declaration.attrs.contains(&FunctionAttr::Async) && body.frame_layout.is_some();
+                checker.require(!tagged || async_body, "defer entry requires a tagged return");
                 if values.len() != signature.results.len() { checker.report(R::T2, "return arity mismatch"); }
                 for (&value, &ty) in values.iter().zip(&signature.results) { checker.exact(value, ty)?; }
             }

@@ -9,8 +9,9 @@ type Inventory = BTreeSet<(u32, Option<u32>)>;
 /// The loader checks every call, and the machine entry checks the host boundary.
 pub fn plain_inputs(p: &Program, f: &Function) -> bool {
     f.params.iter().all(|&location| match verify::loc_type(f, location) {
-        Ok(ProducedType::Value(Type::Object(id) | Type::Successor(id))) => {
-            !p.objects[id as usize].layout.may_reach_resource
+        Ok(ProducedType::Value(ty @ (Type::Object(_) | Type::Successor(_) | Type::Array(_) | Type::Map(_)
+            | Type::Variant(_)))) => {
+            !verify::reaches_resource(p, ty)
         }
         Ok(ProducedType::Value(Type::Error)) => p.objects.iter().filter(|object| !object.error_cases.is_empty())
             .all(|object| !object.layout.may_reach_resource),
@@ -21,7 +22,9 @@ pub fn plain_inputs(p: &Program, f: &Function) -> bool {
 
 pub fn plain_results(p: &Program, f: &Function) -> bool {
     f.results.iter().all(|ty| match ty {
-        Type::Object(id) | Type::Successor(id) => !p.objects[*id as usize].layout.may_reach_resource,
+        Type::Object(_) | Type::Successor(_) | Type::Array(_) | Type::Map(_) | Type::Variant(_) => {
+            !verify::reaches_resource(p, *ty)
+        }
         Type::Error => p.objects.iter().filter(|object| !object.error_cases.is_empty())
             .all(|object| !object.layout.may_reach_resource),
         _ => true,
@@ -453,17 +456,7 @@ impl<'a> Evidence<'a> {
         }
         let mut keys = Inventory::new();
         for &location in &selection.locations {
-            let plain = match verify::loc_type(self.function, location).ok()? {
-                ProducedType::Value(Type::Object(id) | Type::Successor(id)) => {
-                    !self.program.objects[id as usize].layout.may_reach_resource
-                }
-                ProducedType::Value(Type::Int | Type::Bool | Type::Str | Type::Bytes | Type::Array(_)
-                    | Type::Range | Type::Descriptor | Type::Byte | Type::Float | Type::Char | Type::Rat
-                    | Type::Variant(_)) => true,
-                _ => false,
-            };
-            if plain { continue; }
-            keys.insert(self.identity(location)?);
+            keys.extend(self.selected_identities(location)?);
         }
         if selected && keys.is_empty() {
             return Some(keys);
@@ -478,6 +471,62 @@ impl<'a> Evidence<'a> {
             return None;
         }
         Some(if selected { keys } else { input.difference(&keys).copied().collect() })
+    }
+
+    /// The identities a selected value names: none for plain data, its own for a resource object, and
+    /// for a managed array or map those of its elements. A collection whose elements are not proved by
+    /// the `array.new` or `map.new` that built it has no static inventory, so a selection never loses them.
+    pub fn selected_identities(&mut self, location: Location) -> Option<Inventory> {
+        let ty = match verify::loc_type(self.function, location).ok()? {
+            ProducedType::Value(ty) => ty,
+            ProducedType::Service(_) => return None,
+        };
+        match ty {
+            // A case object refers to resources without being an identity: no static inventory.
+            Type::Variant(_) if verify::reaches_resource(self.program, ty) => None,
+            Type::Object(_) | Type::Successor(_) | Type::Array(_) | Type::Map(_)
+                if verify::reaches_resource(self.program, ty) =>
+            {
+                if !matches!(ty, Type::Array(_) | Type::Map(_)) {
+                    return Some(BTreeSet::from([self.identity(location)?]));
+                }
+                let mut keys = Inventory::new();
+                for element in self.collection_elements(location)? {
+                    keys.extend(self.selected_identities(element)?);
+                }
+                Some(keys)
+            }
+            Type::Object(_) | Type::Successor(_) | Type::Int | Type::Bool | Type::Str | Type::Bytes | Type::Array(_)
+                | Type::Range | Type::Descriptor | Type::Byte | Type::Float | Type::Char | Type::Rat
+                | Type::Variant(_) | Type::Handle(_) | Type::Map(_) => Some(Inventory::new()),
+            _ => None,
+        }
+    }
+
+    /// The element locations of the single `array.new` (or the values of the single `map.new`), through
+    /// moves, that defines `location`.
+    fn collection_elements(&mut self, location: Location) -> Option<Vec<Location>> {
+        let mut current = location;
+        for _ in 0..65_536 {
+            self.steps += 1;
+            if self.steps > 1_000_000 {
+                self.exhausted = true;
+                return None;
+            }
+            let [Definition::Instruction(pc, _)] = self.definitions.get(&current)?.as_slice() else { return None };
+            match &self.function.code[*pc] {
+                Instruction::Data { op: DataOp::ArrayNew, inputs, .. } => {
+                    return Some(inputs.iter().map(|&id| Location::Register(id)).collect());
+                }
+                Instruction::Data { op: DataOp::MapNew, inputs, .. } => {
+                    return Some(inputs.iter().skip(1).step_by(2).map(|&id| Location::Register(id)).collect());
+                }
+                Instruction::Data { op: DataOp::Move, inputs, .. } => current = Location::Register(inputs[0]),
+                _ => return None,
+            }
+        }
+        self.exhausted = true;
+        None
     }
 
     fn cleanup_begins(&mut self, location: Location) -> Option<BTreeSet<usize>> {
@@ -587,7 +636,7 @@ pub fn static_selections(p: &Program, f: &Function) -> Result<Vec<StaticSelectio
     Ok(result)
 }
 
-pub(super) fn static_selections_with(p: &Program, f: &Function, evidence: &mut Evidence<'_>)
+pub(super) fn static_selections_with(_p: &Program, f: &Function, evidence: &mut Evidence<'_>)
     -> Result<Vec<StaticSelection>, Error>
 {
     let mut result = Vec::new();
@@ -604,17 +653,15 @@ pub(super) fn static_selections_with(p: &Program, f: &Function, evidence: &mut E
         }
         let mut keys = Inventory::new();
         for &location in &f.proofs.selections[selection as usize].locations {
-            if let Ok(ProducedType::Value(Type::Object(id))) = verify::loc_type(f, location) {
-                if !p.objects[id as usize].layout.may_reach_resource { continue }
-                keys.insert(evidence.identity(location).ok_or_else(|| error("unknown static selection identity"))?);
-            } else if matches!(verify::loc_type(f, location), Ok(ProducedType::Value(
-                Type::Bool | Type::Int | Type::Str | Type::Descriptor | Type::Bytes | Type::Range | Type::Array(_)
-                | Type::Byte | Type::Float | Type::Char | Type::Rat | Type::Variant(_))))
-            {
-                continue;
-            } else {
+            let static_value = matches!(verify::loc_type(f, location), Ok(ProducedType::Value(
+                Type::Object(_) | Type::Bool | Type::Int | Type::Str | Type::Descriptor | Type::Bytes | Type::Range
+                | Type::Array(_) | Type::Byte | Type::Float | Type::Char | Type::Rat | Type::Variant(_)
+                | Type::Handle(_))));
+            if !static_value {
                 return Err(error("runtime traversal cannot be used as a static selection"));
             }
+            keys.extend(evidence.selected_identities(location)
+                .ok_or_else(|| error("unknown static selection identity"))?);
         }
         let indices = if keys.is_empty() {
             vec![]

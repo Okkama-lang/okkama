@@ -10,7 +10,7 @@ fn object(name: &str, fields: Vec<s::Type>, enum_cases: u32) -> s::Object {
         (0..fields.len() as u32).map(|storage| s::Field { name: format!("f{storage}"), storage, once: false }).collect()
     };
     s::Object {
-        name: name.into(), error_cases: vec![], enum_cases, variant_cases: vec![], fields: source,
+        name: name.into(), error_cases: vec![], enum_cases, variant_cases: vec![], handle: false, fields: source,
         layout: s::ObjectRuntimeLayout {
             allocation_words: (1 + fields.len() as u32).max(2),
             trace_layout: fields.iter().enumerate().filter_map(|(index, ty)| ty.traced().then_some(index as u32))

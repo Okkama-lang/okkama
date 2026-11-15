@@ -17,7 +17,9 @@ from,to,failure
 packet
 packet,deps
 packet,failure
+packet,state
 packet,to,failure
+pending
 pin,state
 rest,selected,external_deps
 slot0,slot1,slot2
@@ -25,11 +27,13 @@ slot0,slot1,slot2,packet,deps
 state
 state,failure
 state,packet,failure
+state,pending
 state,rest
 state,selected,external_deps
 state,selected
 state,slot0
 state,slot0,slot1,slot2
+state,task
 state,to
 state,to,failure
 task,packet,failure

@@ -91,7 +91,7 @@ impl Engine<'_, '_> {
                     }
                 }
             }
-            AsyncOp::CacheRehome { state, target, .. } => {
+            AsyncOp::CacheRehome { form: RehomeForm::State(state), target, .. } => {
                 let mut token = before.tokens[state.as_u32() as usize].clone();
                 token.scope = Some(*target);
                 let changed = before.tokens[state.as_u32() as usize].scope != Some(*target);
@@ -253,7 +253,7 @@ impl Engine<'_, '_> {
                     slot.token = before.tokens[frame.as_u32() as usize].clone();
                 }
             }
-            AsyncOp::FrameResume { frame, slots: saved } => {
+            AsyncOp::FrameResume { frame, slots: saved, .. } => {
                 let frame_key = before.tokens[frame.as_u32() as usize].frame;
                 let mut layout = frame_key.and_then(|key| before.frames.get(&key).cloned()).unwrap_or_default();
                 if frame_key.is_none() {
@@ -371,18 +371,7 @@ impl Engine<'_, '_> {
                     }
                 }
             }
-            AsyncOp::FuturePublish { packet, cache, .. } => {
-                if let Some(slot) = slots.first_mut() {
-                    slot.token = before.tokens[packet.as_u32() as usize].clone();
-                    slot.token.private = true;
-                    slot.token.cache = before.tokens[cache.as_u32() as usize].cache;
-                    slot.token.pieces = slot.token.pieces.iter().cloned().map(|mut piece| {
-                        piece.provenance = provenance_bit(AdmissionProvenance::CacheOwned);
-                        piece.holder = before.tokens[cache.as_u32() as usize].cache;
-                        piece
-                    }).collect();
-                }
-            }
+            // `fut.publish` (C-2) has no result slot; its async linearity belongs to a later slice.
             _ => {}
         }
     }

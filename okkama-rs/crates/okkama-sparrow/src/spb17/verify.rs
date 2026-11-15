@@ -17,7 +17,11 @@ fn at<T>(items: &[T], index: u32) -> Result<&T, Error> {
 fn ty_valid(ty: Type, p: &Program) -> Check {
     match ty {
         Type::Object(id) | Type::Successor(id) => {
-            at(&p.objects, id)?;
+            enforce(!at(&p.objects, id)?.handle, "HANDLE_TYPE", "an object type names a native handle declaration")?;
+        }
+        Type::Handle(id) => {
+            enforce(p.objects.get(id as usize).is_some_and(|object| object.handle),
+                "HANDLE_TYPE", "a handle type names no native handle declaration")?;
         }
         Type::Variant(id) => {
             enforce(p.objects.get(id as usize).is_some_and(|object| !object.variant_cases.is_empty()),
@@ -36,7 +40,17 @@ fn ty_valid(ty: Type, p: &Program) -> Check {
                     _ => matches!(p.composites.get(id as usize), Some(Composite::Map { .. })),
                 }, "ARRAY_ELEMENT", "unknown array element declaration")?;
             }
-            enforce(closed_plain(p, ty), "ARRAY_PLAIN", "array element graph is not closed plain data")?;
+            if let Type::Object(id) = element {
+                enforce(!p.objects[id as usize].handle, "HANDLE_TYPE",
+                    "an array element names a native handle declaration")?;
+            }
+            // A managed array holds references to resource objects; it owns none of them (own keeps the
+            // elements' obligations with their owners). Any other leaf is closed plain data.
+            let leaf = match element {
+                Type::Object(id) => !p.objects[id as usize].layout.may_async_destroy,
+                _ => closed_plain(p, element),
+            };
+            enforce(leaf, "ARRAY_PLAIN", "array element graph is neither plain data nor resource objects")?;
         }
         Type::Map(id) | Type::MapBuilder(id) => {
             enforce(matches!(p.composites.get(id as usize), Some(Composite::Map { .. })),
@@ -49,6 +63,22 @@ fn ty_valid(ty: Type, p: &Program) -> Check {
         _ => {}
     }
     Ok(())
+}
+
+/// Whether a value of `ty` may refer to an identity that reaches a resource: a resource object or successor,
+/// or a managed array or map of them. Plain collections never do (`ARRAY_PLAIN`, `MAP_PLAIN`).
+pub(crate) fn reaches_resource(p: &Program, ty: Type) -> bool {
+    let leaf = match ty {
+        Type::Array(shape) => ArrayType { depth: 1, ..shape }.element(),
+        Type::Variant(id) => return p.objects.get(id as usize).is_some_and(|object| object.layout.may_reach_resource),
+        Type::Map(id) => match p.composites.get(id as usize) {
+            Some(Composite::Map { value, .. }) => Some(*value),
+            _ => None,
+        },
+        ty => Some(ty),
+    };
+    matches!(leaf, Some(Type::Object(id) | Type::Successor(id))
+        if p.objects.get(id as usize).is_some_and(|object| object.layout.may_reach_resource))
 }
 
 /// Whether every value of `ty` is closed plain data: no identity with destroy, no resource, no service
@@ -65,7 +95,9 @@ pub(crate) fn closed_plain(p: &Program, ty: Type) -> bool {
                 | Type::Char | Type::Rat | Type::Never => {}
             Type::Object(id) | Type::Variant(id) => {
                 let Some(object) = p.objects.get(id as usize) else { return false };
-                if object.layout.has_destroy || object.layout.may_reach_resource || object.layout.may_async_destroy {
+                if object.handle || object.layout.has_destroy || object.layout.may_reach_resource
+                    || object.layout.may_async_destroy
+                {
                     return false;
                 }
                 pending.extend(&object.layout.storage_fields);
@@ -138,7 +170,11 @@ fn composite_valid(p: &Program, index: usize, composite: Composite) -> Check {
             ty_valid(key, p)?;
             ty_valid(value, p)?;
             enforce(key_type(p, key), "MAP_KEY", "map key is not a key type")?;
-            enforce(closed_plain(p, value), "MAP_PLAIN", "map value graph is not closed plain data")
+            // A managed map refers to resource objects as values; like a managed array it owns none.
+            let resource = matches!(value, Type::Object(id) if p.objects.get(id as usize)
+                .is_some_and(|object| !object.handle && !object.layout.may_async_destroy));
+            enforce(closed_plain(p, value) || resource, "MAP_PLAIN",
+                "map value graph is neither plain data nor resource objects")
         }
         Composite::Builder { array } => {
             enforce(earlier(array), "COMPOSITE_ORDER", "builder composite refers forward")?;
@@ -177,8 +213,10 @@ fn constant_type(value: &Constant) -> Result<Type, Error> {
             Ok(Type::Char)
         }
         Constant::Float(bits) => {
-            let canonical = bits.parse::<u64>().is_ok_and(|value| value.to_string() == *bits);
-            enforce(canonical, "CONST_FLOAT", "float constant is not a canonical binary64 bit pattern")?;
+            // Floats are always finite in Okkama; every other source of a float checks it at run time.
+            let canonical = bits.parse::<u64>()
+                .is_ok_and(|value| value.to_string() == *bits && f64::from_bits(value).is_finite());
+            enforce(canonical, "CONST_FLOAT", "float constant is not a canonical finite binary64 bit pattern")?;
             Ok(Type::Float)
         }
     }
@@ -191,6 +229,7 @@ pub fn verify(p: &Program) -> Check {
     for (index, &composite) in p.composites.iter().enumerate() {
         composite_valid(p, index, composite)?;
     }
+    check_tests(p)?;
     for object in &p.objects {
         let layout = &object.layout;
         let count = layout.storage_fields.len() as u64;
@@ -208,13 +247,25 @@ pub fn verify(p: &Program) -> Check {
             }
             Ok(())
         };
+        if object.handle {
+            let plain = object.fields.is_empty() && object.error_cases.is_empty() && object.enum_cases == 0
+                && object.variant_cases.is_empty() && layout.storage_fields.is_empty() && !layout.has_destroy
+                && !layout.may_reach_resource && layout.trace_layout.is_empty() && layout.selection_layout.is_empty();
+            enforce(plain, "HANDLE_DECLARATION", "a native handle declaration has fields, cases or resources")?;
+        }
         if !object.variant_cases.is_empty() {
+            // A case object is never an identity, but it may refer to resources (Maybe<Resource>). The
+            // variant declares that it reaches resources exactly when one of its cases does.
             let mut seen = BTreeSet::new();
-            let plain = object.fields.is_empty() && layout.storage_fields.is_empty() && !layout.may_reach_resource
-                && object.variant_cases.iter().all(|&case| seen.insert(case) && p.objects.get(case as usize)
-                    .is_some_and(|case| case.variant_cases.is_empty() && !case.layout.has_destroy
-                        && !case.layout.may_reach_resource));
-            enforce(plain, "VARIANT_CASES", "variant cases must be distinct plain case objects")?;
+            let cases = object.variant_cases.iter().all(|&case| seen.insert(case) && p.objects.get(case as usize)
+                .is_some_and(|case| case.variant_cases.is_empty() && !case.layout.has_destroy && !case.handle));
+            let reaches = object.variant_cases.iter().any(|&case| {
+                p.objects.get(case as usize).is_some_and(|case| case.layout.may_reach_resource)
+            });
+            let declaration = object.fields.is_empty() && layout.storage_fields.is_empty()
+                && layout.selection_layout.is_empty() && layout.may_reach_resource == reaches;
+            enforce(cases && declaration, "VARIANT_CASES",
+                "variant cases must be distinct case objects without identity, its retention their union")?;
         }
         unique(&object.fields.iter().map(|field| field.storage).collect::<Vec<_>>())?;
         unique(&layout.trace_layout)?;
@@ -223,9 +274,14 @@ pub fn verify(p: &Program) -> Check {
             ty_valid(ty, p)?;
             enforce(!matches!(ty, Type::Builder(_) | Type::MapBuilder(_)), "BUILDER_LINEAR",
                 "object storage cannot hold a unique builder")?;
+            // Retention flags are checked object by object, so a managed collection's leaf flag can be trusted.
             if let Type::Object(id) | Type::Successor(id) = ty {
-                require(layout.may_reach_resource || !p.objects[id as usize].layout.may_reach_resource,
-                    "understated object retention metadata")?;
+                enforce(layout.may_reach_resource || !p.objects[id as usize].layout.may_reach_resource,
+                    "OBJECT_RETENTION", "understated object retention metadata")?;
+            }
+            if matches!(ty, Type::Array(_) | Type::Map(_) | Type::Variant(_)) && reaches_resource(p, ty) {
+                enforce(layout.may_reach_resource && layout.selection_layout.contains(&(index as u32)),
+                    "COLLECTION_RETENTION", "a field holding resource objects must be selected and reach resources")?;
             }
             require(layout.trace_layout.contains(&(index as u32)) == ty.traced(), "incorrect object trace layout")?;
         }
@@ -249,6 +305,33 @@ pub fn verify(p: &Program) -> Check {
     }
     for f in &p.functions {
         verify_function(p, f).map_err(|e| Error { message: format!("{}: {}", f.symbol, e.message), ..e })?;
+    }
+    Ok(())
+}
+
+/// The tests table of the test profile: unique names, distinct `() -> void` observation bodies that are
+/// not the program entry. Test intrinsics belong to the test profile only.
+fn check_tests(p: &Program) -> Check {
+    for f in &p.functions {
+        let name = f.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref());
+        enforce(p.tests.is_some() || !name.is_some_and(|name| name.starts_with(TEST_INTRINSIC_PREFIX)),
+            "TEST_PROFILE", "test intrinsics need a tests table")?;
+    }
+    let Some(tests) = &p.tests else {
+        return Ok(());
+    };
+    let mut names = BTreeSet::new();
+    let mut functions = BTreeSet::new();
+    for test in tests {
+        enforce(!test.name.is_empty() && names.insert(test.name.as_str()), "TEST_TABLE",
+            "test names must be non-empty and unique")?;
+        let f = p.functions.get(test.function as usize)
+            .ok_or_else(|| violation("TEST_TABLE", "test function index out of range"))?;
+        enforce(functions.insert(test.function), "TEST_TABLE", "two tests share one function")?;
+        enforce(p.entry != Some(test.function), "TEST_ENTRY", "the program entry cannot be a test")?;
+        let external = f.proofs.entry.as_ref().is_some_and(|entry| entry.external.is_some());
+        enforce(f.entry_abi == EntryAbi::Observation && f.params.is_empty() && f.results.is_empty()
+            && !external && !f.code.is_empty(), "TEST_ENTRY", "a test needs a () -> void observation body")?;
     }
     Ok(())
 }
@@ -809,7 +892,10 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
             | MapDifference => enforce(map_types(p, op, types, out), "MAP_OP_TYPE",
                 "map operation operand/result types mismatch"),
         ArrayConcat | ArrayJoin | ArraySlice | ArrayRemove | ArrayReplace | ArrayDifference => {
-            enforce(array_types(op, types, out), "ARRAY_OP_TYPE", "array operation operand/result types mismatch")
+            // array.difference compares elements structurally, which only plain data allows.
+            let comparable = op != ArrayDifference || types.first().is_some_and(|&ty| closed_plain(p, ty));
+            enforce(array_types(op, types, out) && comparable, "ARRAY_OP_TYPE",
+                "array operation operand/result types mismatch")
         }
         BuilderNew => enforce(types.is_empty() && matches!(out, Some(Type::Builder(_) | Type::MapBuilder(_))),
             "BUILDER_NEW_TYPE", "builder.new must produce a builder"),
@@ -868,15 +954,30 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
             let comparable = match types {
                 [Type::Object(left), Type::Object(right)] => left == right,
                 [left @ (Type::Array(_) | Type::Bytes | Type::Map(_) | Type::Variant(_) | Type::Range), right] => {
-                    left == right && closed_plain(p, *left)
+                    left == right
                 }
                 _ => false,
             };
             enforce(comparable && out == Some(Type::Bool), "VAL_EQ_TYPE",
-                "value comparison needs two objects of one declaration or two plain collections of one type")
+                "value comparison needs two objects of one declaration or two plain collections of one type")?;
+            // Structural equality is defined on plain values; identities and error payloads are not compared.
+            enforce(closed_plain(p, types[0]), "VAL_EQ_TYPE", "value comparison needs closed plain operands")
         }
         Convert => enforce(matches!((types, out), ([from], Some(to)) if conversion(*from, to).is_some()),
             "CONVERT_TYPE", "conversion between these types is not defined"),
+        TestOk | TestFail | TestIs | TestIsnt => {
+            enforce(p.tests.is_some(), "TEST_PROFILE", "test operations need a tests table")?;
+            let valid = match (op, types) {
+                (TestOk, [Type::Bool]) | (TestFail, [Type::Str]) => true,
+                (TestIs | TestIsnt, [left, right]) => left == right && matches!(left,
+                    Type::Int | Type::Bool | Type::Byte | Type::Float | Type::Char | Type::Rat | Type::Str
+                    | Type::Range | Type::Bytes | Type::Array(_) | Type::Object(_) | Type::Successor(_)
+                    | Type::Variant(_)),
+                _ => false,
+            };
+            enforce(valid && out == Some(Type::Bool), "TEST_OPERAND",
+                "test operation operand types differ from its check, or its result is not bool")
+        }
         Move => {
             require(types.len() == 1, "move requires one source")?;
             let valid = out == Some(types[0]) || matches!((types[0], out),
@@ -1214,20 +1315,88 @@ fn verify_function(p: &Program, f: &Function) -> Check {
                     && let Some(defined) = def_pc
                     && matches!(f.code[defined], Instruction::Data { op: DataOp::Undef, .. })
                 {
-                    let allowed = match &f.code[pc] {
-                        Instruction::Data { op: DataOp::ObjNew, .. } => true,
-                        Instruction::Data { op: DataOp::ObjInit | DataOp::ObjNext, inputs, .. } => {
-                            inputs.first() != Some(&reg)
-                        }
-                        _ => false,
-                    };
+                    // Forwarding along an edge is not a read: check_unbound tracks the parameter it binds.
+                    let forwarded = !operand_reads(&f.code[pc]).contains(&used) && !metadata.contains(&used)
+                        && edge_sources(&f.code[pc]).contains(&used);
+                    let allowed = construction_operand(&f.code[pc], reg) || forwarded;
                     require(allowed, &format!("undef r{reg} outside construction fields at {pc}: {:?}", f.code[pc]))?;
                 }
             }
         }
     }
+    check_unbound(f)?;
     check_successors(p, f, &pcs)?;
     check_builders(p, f, &pcs)?;
+    Ok(())
+}
+
+/// A construction field operand: any operand of obj.new, a non-receiver operand of obj.init/obj.next.
+fn construction_operand(inst: &Instruction, reg: u32) -> bool {
+    match inst {
+        Instruction::Data { op: DataOp::ObjNew, .. } => true,
+        Instruction::Data { op: DataOp::ObjInit | DataOp::ObjNext, inputs, .. } => inputs.first() != Some(&reg),
+        _ => false,
+    }
+}
+
+/// Locations an instruction reads as operands, without its edges.
+fn operand_reads(inst: &Instruction) -> BTreeSet<Location> {
+    match inst {
+        Instruction::Data { inputs, .. } | Instruction::Ret(inputs) => {
+            inputs.iter().copied().map(Location::Register).collect()
+        }
+        Instruction::Cond { condition: id, .. } | Instruction::Raise(id) => BTreeSet::from([Location::Register(*id)]),
+        Instruction::Champ { arguments, .. } => arguments.iter().filter_map(|argument| match argument {
+            Argument::Location(location) => Some(*location),
+            _ => None,
+        }).collect(),
+        _ => BTreeSet::new(),
+    }
+}
+
+fn edge_sources(inst: &Instruction) -> BTreeSet<Location> {
+    allocation::outgoing(inst).into_iter().flat_map(|edge| edge.assignments.iter()).filter_map(|assignment| {
+        match assignment.source {
+            Source::Location(location) => Some(location),
+            Source::ProducedSlot(_) => None,
+        }
+    }).collect()
+}
+
+/// A block parameter that an edge may bind to an undef placeholder is itself possibly unbound: like the
+/// placeholder, it is read only as a construction field operand, or forwarded to another parameter.
+fn check_unbound(f: &Function) -> Check {
+    let mut unbound = f.code.iter().filter_map(|inst| match inst {
+        Instruction::Data { op: DataOp::Undef, output: Some(id), .. } => Some(Location::Register(*id)),
+        _ => None,
+    }).collect::<BTreeSet<_>>();
+    let placeholders = unbound.clone();
+    loop {
+        let mut changed = false;
+        for inst in &f.code {
+            for edge in allocation::outgoing(inst) {
+                for assignment in &edge.assignments {
+                    if let Source::Location(source) = assignment.source
+                        && unbound.contains(&source)
+                    {
+                        changed |= unbound.insert(assignment.destination);
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    for (pc, inst) in f.code.iter().enumerate() {
+        for location in operand_reads(inst) {
+            let Location::Register(reg) = location else { continue };
+            if unbound.contains(&location) && !placeholders.contains(&location) {
+                enforce(construction_operand(inst, reg), "UNBOUND_READ",
+                    &format!("possibly unbound r{reg} read outside construction fields at {pc}"))?;
+            }
+        }
+    }
     Ok(())
 }
 

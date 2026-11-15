@@ -217,6 +217,7 @@ fn second_split_failure_forwards_and_restores_all_live_linear_slots() {
     let resource_decl = *decl;
     let mut body = Body {
         high_results: vec![], high_effects: vec![], descriptor_bindings: vec![], service_schedules: vec![],
+        frame_layout: None,
         entry: BlockId::from_u32(0), values: Arena::new(), blocks: Arena::new(), insts: Arena::new(),
         bindings: Arena::new(), boundaries: Arena::new(), deps: Arena::new(), keys: Arena::new(),
         selections: Arena::new(), cleanup: Default::default(),

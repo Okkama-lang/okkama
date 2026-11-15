@@ -32,8 +32,12 @@ fn kind(module: &o::Module, ty: o::TypeId) -> Result<P, GenerateError> {
 }
 
 /// OIR scalar operations whose SPB data form is fallible (`DataOp::fallible`). A conversion fails only
-/// where its pair of types can trap; a total one (int to string) stays plain data.
+/// where its pair of types can trap; a total one (int to string) stays plain data. Test assertions are
+/// evaluated the same way: they fail only outside a running case.
 fn fallible_scalar(op: &o::Operation) -> bool {
+    if test_check(op).is_some() {
+        return true;
+    }
     match op {
         o::Operation::Core(o::CoreOp::IntMod { .. } | o::CoreOp::RangeNew { .. } | o::CoreOp::IntDiv { .. }
             | o::CoreOp::RatNew { .. } | o::CoreOp::ValEq { .. } | o::CoreOp::ValNe { .. }
@@ -78,6 +82,20 @@ fn builder_opcode(op: &o::CollectionOp) -> Option<O> {
         C::BuilderAppend { .. } | C::MapBuilderAppend { .. } => O::BuilderAppend,
         C::BuilderAppendRange { .. } => O::BuilderRange,
         C::BuilderFinish { .. } | C::MapBuilderFinish { .. } => O::BuilderFinish,
+        _ => return None,
+    })
+}
+
+/// A test assertion as its SPB 17 test operation and operands.
+fn test_check(op: &o::Operation) -> Option<(s::DataOp, Vec<o::ValueId>)> {
+    let o::Operation::Core(core) = op else {
+        return None;
+    };
+    Some(match *core {
+        o::CoreOp::TestOk { condition } => (s::DataOp::TestOk, vec![condition]),
+        o::CoreOp::TestIs { left, right } => (s::DataOp::TestIs, vec![left, right]),
+        o::CoreOp::TestIsnt { left, right } => (s::DataOp::TestIsnt, vec![left, right]),
+        o::CoreOp::TestFail { message } => (s::DataOp::TestFail, vec![message]),
         _ => return None,
     })
 }
@@ -401,6 +419,35 @@ impl Emitter<'_> {
         Ok(())
     }
 
+    /// The field write that completes an incomplete construction, then the completed identity's admission
+    /// into `state`. An object without destroy completes no obligation, so its packet is empty.
+    fn complete_construction(&mut self, object: o::ValueId, field: o::FieldRef, value: o::ValueId,
+        state: o::ValueId, results: &[o::ValueId]) -> Result<(), GenerateError>
+    {
+        let [result] = results else { return Err(error("construction completion needs its state result")) };
+        let s::Type::Object(descriptor) = translate_type(self.module, self.body.values.get(object)?.ty)? else {
+            return Err(error("construction completion of a non-object"));
+        };
+        if self.objects[descriptor as usize].layout.has_destroy {
+            return Err(later("construction completion of an identity with destroy"));
+        }
+        let storage = self.objects.get(descriptor as usize)
+            .and_then(|declared| declared.fields.get(field.index as usize))
+            .filter(|_| field.declaration.as_u32() == descriptor)
+            .map(|declared| declared.storage).ok_or_else(|| error("invalid completion field"))?;
+        let packet = L::Service(self.result.services.len() as u32);
+        self.result.services.push(K::Packet);
+        self.result.code.push(s::Instruction::Data { op: s::DataOp::ObjInit,
+            inputs: vec![self.reg(object)?, self.reg(value)?], output: None,
+            immediate: s::Immediate::Field(storage) });
+        self.result.code.push(s::Instruction::Champ { op: O::OwnEmpty, arguments: vec![],
+            flow: s::Flow::Next(vec![packet]) });
+        self.result.code.push(s::Instruction::Champ { op: O::OwnAdmit,
+            arguments: vec![A::Location(self.loc(state)?), A::Location(packet)],
+            flow: s::Flow::Next(vec![self.loc(*result)?]) });
+        Ok(())
+    }
+
     /// A builder transition: buffer, operands and the journal packet in; outcomes per the registry.
     fn builder(&mut self, opcode: O, op: &o::CollectionOp, normal: &o::InvokeEdge, unwind: &o::InvokeEdge)
         -> Result<s::Instruction, GenerateError>
@@ -480,7 +527,8 @@ impl Emitter<'_> {
                             }
                             Some((s::DataOp::Convert, target, s::Immediate::None, vec![*value]))
                         }
-                        _ => None,
+                        // The check's bool outcome (whether it held) is not used by the source.
+                        _ => test_check(op).map(|(check, inputs)| (check, s::Type::Bool, s::Immediate::None, inputs)),
                     };
                     if let Some((op, result, immediate, inputs)) = scalar {
                         let context = s::ResultContext {
@@ -717,6 +765,8 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
             inst_pcs.insert(inst_id, pc);
             let size = match &inst.op {
                 o::Operation::Core(o::CoreOp::RangeLen { .. }) => 3,
+                // The last field write, the completed identity's packet, and its admission into the state.
+                o::Operation::Core(o::CoreOp::ObjInit { completion: Some(_), .. }) => 3,
                 // D8 registration is static CFG metadata, not a second runtime defer runner.
                 o::Operation::Lexical(o::LexicalOp::DeferRegister { .. }) => 0,
                 // evaluate, then the function failure exit unless the block unwind receives the failure.
@@ -740,6 +790,10 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
             o::TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(),
                 o::Operation::Core(o::CoreOp::ObjNew { packet: None, .. }
                     | o::CoreOp::ObjNext { packet: None, .. } | o::CoreOp::VariantNew { packet: None, .. })) => 2,
+            // A case that refers to resources: allocate/commit/join, then the move into the variant type.
+            o::TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(),
+                o::Operation::Core(o::CoreOp::VariantNew { packet: Some(_), ty, .. })
+                    if matches!(translate_type(module, *ty), Ok(s::Type::Variant(_)))) => 5,
             o::TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(),
                 o::Operation::Core(o::CoreOp::ObjNew { .. } | o::CoreOp::ObjNext { .. }
                     | o::CoreOp::VariantNew { .. })) => 4,
@@ -853,6 +907,10 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                     let outputs = inst.results.iter().map(|&value| emitter.loc(value)).collect::<Result<_, _>>()?;
                     s::Instruction::Champ { op: O::BuilderAbandon, arguments, flow: s::Flow::Next(outputs) }
                 }
+                o::Operation::Core(o::CoreOp::ObjInit { object, field, value, completion: Some(completion) }) => {
+                    emitter.complete_construction(*object, *field, *value, completion.state, &inst.results)?;
+                    continue;
+                }
                 o::Operation::Cleanup(op) => emitter.cleanup_instruction(op, &inst.results)?,
                 o::Operation::Exit(op) => emitter.exit_instruction(op, &inst.results)?,
                 o::Operation::Core(o::CoreOp::TypeOf { ty, .. }) => {
@@ -886,6 +944,17 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                     if !inst.results.is_empty() {
                         return Err(error("defer registration cannot produce execution results"));
                     }
+                    continue;
+                }
+                op if test_check(op).is_some() => {
+                    let (op, operands) = test_check(op).expect("test assertion");
+                    if !inst.results.is_empty() {
+                        return Err(error("test assertion cannot produce results"));
+                    }
+                    let inputs = operands.iter().map(|&value| emitter.reg(value)).collect::<Result<_, _>>()?;
+                    // The check's outcome is a fresh bool: whether it held. The source discards it.
+                    let held = fresh(&mut emitter.result, s::Type::Bool)?;
+                    emitter.evaluate(data(op, inputs, held, s::Immediate::None), block.unwind.as_ref())?;
                     continue;
                 }
                 o::Operation::Core(o::CoreOp::RangeLen { value }) => {

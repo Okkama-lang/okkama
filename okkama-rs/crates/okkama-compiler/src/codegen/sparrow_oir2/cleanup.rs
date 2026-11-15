@@ -40,9 +40,13 @@ pub(super) fn entry_contract(module: &o::Module, f: &o::Function) -> Result<s::E
             o::FunctionAttr::Extern(name) | o::FunctionAttr::Intrinsic { name, .. } => Some(name.clone()),
             _ => None,
         }),
+        // A singleton result is the fresh identity itself; a managed array of fresh elements is not.
         fresh_singleton: summary.is_some_and(|summary| matches!(summary.results.as_slice(), [result]
             if result.fresh.len() == 1 && result.aliases.is_empty()
-                && result.provenance == o::AdmissionProvenance::UnboundResult)),
+                && result.provenance == o::AdmissionProvenance::UnboundResult))
+            && f.signature.results.iter().any(|&ty| {
+                matches!(kind(module, ty), Ok(P::Value(s::Type::Object(_) | s::Type::Successor(_))))
+            }),
         failures: mask(&summary.map_or(&[][..], |summary| summary.contract.failures.as_slice())
             .iter().copied().filter(|kind| *kind != o::FailureKind::Cancelled).collect::<Vec<_>>())?,
         destroy: f.attrs.iter().find_map(|attr| match attr {
@@ -265,6 +269,10 @@ impl Emitter<'_> {
                 o::RootBoundary::AfterInstruction(id) => {
                     match &self.body.insts.get(id)?.op {
                         o::Operation::Core(o::CoreOp::RangeLen { .. }) => (instructions[&id] + 2, true),
+                        // After the completing write, its empty packet and the admission.
+                        o::Operation::Core(o::CoreOp::ObjInit { completion: Some(_), .. }) => {
+                            (instructions[&id] + 2, true)
+                        }
                         o::Operation::Lexical(o::LexicalOp::DeferRegister { .. }) => (instructions[&id], false),
                         // An evaluate has no post state: its result exists where the normal outcome lands.
                         op if super::fallible_scalar(op) => {
@@ -461,7 +469,18 @@ impl Emitter<'_> {
             }
             return Ok(s::Instruction::Br(edge));
         }
+        let mut variant = None;
         let (declaration, inputs, packet, construction, op, immediate, ty) = match op {
+            o::Operation::Core(o::CoreOp::VariantNew { ty, case, fields, packet: Some(packet) })
+                if let s::Type::Variant(declared) = translate_type(self.module, *ty)? =>
+            {
+                let object = *self.objects[declared as usize].variant_cases.get(*case as usize)
+                    .ok_or_else(|| error("variant construction of an unknown case"))?;
+                variant = Some(declared);
+                let inputs = fields.iter().map(|&value| self.reg(value)).collect::<Result<Vec<_>, _>>()?;
+                (o::DeclId::from_u32(object), inputs, Some(*packet), o::ConstructionStatus::Complete,
+                    s::DataOp::ObjNew, s::Immediate::Object(object), s::Type::Object(object))
+            }
             o::Operation::Core(o::CoreOp::VariantNew { ty, case: 0, fields, packet }) => {
                 let s::Type::Object(id) = translate_type(self.module, *ty)? else {
                     return Err(error("variant construction requires a single plain Error case"));
@@ -538,12 +557,21 @@ impl Emitter<'_> {
             self.result.code.push(s::Instruction::Champ { op: O::OwnMove,
                 arguments: vec![A::Location(committed)], flow: s::Flow::Next(vec![joined]) });
         }
+        // The case object is the variant value, moved into the variant type.
+        let value = match variant {
+            Some(declared) => {
+                let moved = fresh(&mut self.result, s::Type::Variant(declared))?;
+                self.result.code.push(data(s::DataOp::Move, vec![object], moved, s::Immediate::None));
+                moved
+            }
+            None => object,
+        };
         let params = &self.body.blocks.get(normal.block)?.params;
         let assignments = params.iter().zip(&normal.args).map(|(&dst, arg)| {
             let source = match *arg {
                 o::EdgeArg::Value(value) => self.loc(value)?,
                 o::EdgeArg::Produced(slot) if slot.outcome == o::Outcome::Normal => match slot.slot {
-                    0 => L::Register(object),
+                    0 => L::Register(value),
                     1 => joined,
                     _ => return Err(error("unexpected construction payload")),
                 },
@@ -683,10 +711,21 @@ impl Emitter<'_> {
                 self.result.proofs.post_roots.push(s::RootRequirement {
                     pc: pc as u32 + 1, locations: committed_roots.into_iter().collect(),
                 });
-                values.extend(after);
+                values.extend(after.clone());
                 self.result.proofs.post_roots.push(s::RootRequirement {
-                    pc: pc as u32 + 2, locations: values.into_iter().collect(),
+                    pc: pc as u32 + 2, locations: values.clone().into_iter().collect(),
                 });
+                // A variant construction moves the case object into its variant type before the branch.
+                if let Some(s::Instruction::Data { op: s::DataOp::Move, output: Some(moved), .. })
+                    = self.result.code.get(pc + 3)
+                    && matches!(self.result.registers[*moved as usize], s::Type::Variant(_))
+                {
+                    states.insert(pc as u32 + 4, after);
+                    values.insert(L::Register(*moved));
+                    self.result.proofs.roots.push(s::RootRequirement {
+                        pc: pc as u32 + 4, locations: values.into_iter().collect(),
+                    });
+                }
             }
         }
         for pc in 0..self.result.code.len().saturating_sub(1) {
@@ -702,6 +741,36 @@ impl Emitter<'_> {
                 roots.insert(L::Register(object));
                 self.result.proofs.roots.push(s::RootRequirement {
                     pc: pc as u32 + 1, locations: roots.into_iter().collect(),
+                });
+            }
+        }
+        // A completing field write expands to obj.init/own.empty/own.admit. The empty packet has no Low
+        // SSA name, so its state and roots are recorded at the expansion's own boundaries.
+        for pc in 0..self.result.code.len().saturating_sub(2) {
+            if matches!(self.result.code[pc], s::Instruction::Data { op: s::DataOp::ObjInit, .. })
+                && let s::Instruction::Champ { op: O::OwnEmpty, flow: s::Flow::Next(empty), .. }
+                    = &self.result.code[pc + 1]
+                && matches!(self.result.code[pc + 2], s::Instruction::Champ { op: O::OwnAdmit, .. })
+            {
+                let before = states.get(&(pc as u32)).cloned().unwrap_or_default();
+                states.insert(pc as u32 + 1, before.clone());
+                let mut during = before.clone();
+                during.extend(empty);
+                states.insert(pc as u32 + 2, during.clone());
+                let values = self.result.proofs.roots.iter().filter(|root| root.pc == pc as u32)
+                    .flat_map(|root| root.locations.iter().copied()).filter(|loc| matches!(loc, L::Register(_)))
+                    .collect::<BTreeSet<_>>();
+                for (offset, services) in [(1, &before), (2, &during)] {
+                    let mut roots = values.clone();
+                    roots.extend(services);
+                    self.result.proofs.roots.push(s::RootRequirement {
+                        pc: pc as u32 + offset, locations: roots.into_iter().collect(),
+                    });
+                }
+                let mut after = values;
+                after.extend(&during);
+                self.result.proofs.post_roots.push(s::RootRequirement {
+                    pc: pc as u32 + 1, locations: after.into_iter().collect(),
                 });
             }
         }

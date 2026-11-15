@@ -247,9 +247,8 @@ fn oir2_own_conformance_other_full() {
     }
 }
 
-// Every listed case of the three lanes passes own and low under the build gate.
-// Five ownother cases stop earlier, at the producer's native catalog: see
-// `oir2_own_string_source_needs_a_producer_service_summary`.
+// Every listed case of the three lanes passes own and low under the build gate. The five
+// string-source cases are checked against case.json in okkama-cli/tests/champ_cases_own.rs.
 const OWNCOLL: [&str; 55] = [
     "L01.gram.collections.literals", "L01.gram.functional.inside-operators", "L01.gram.functional.suffix",
     "L01.gram.types.nested-map", "L01.lex.contextual.has-action-and-field", "L01.lex.float.range-not-float",
@@ -294,15 +293,6 @@ fn oir2_own_conformance_lanes_reach_low_under_the_build_gate() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
-
-/// The builtin `core.StringSource` sources reach Low under the build gate.
-#[test]
-fn oir2_own_string_source_cases_reach_low() {
-    for id in ["L01.lex.raw.concatenation", "L01.lex.raw.multiline", "L01.lex.string.escapes",
-        "L02.range.for-and-functional", "L03.for.sources"] {
-        case(id, ir::verify::VerifyMode::Structural).unwrap_or_else(|error| panic!("{id}: {error}"));
-    }
 }
 
 /// Opt-in triage: `OKKAMA_OWN_CASES=<file with one id per line>` prints the stage each

@@ -320,8 +320,10 @@ macro_rules! record {
 }
 
 record! { Program {
-    module, version, objects, tables, functions, entry; composites,
+    module, version, objects, tables, functions, entry; tests, composites,
 } }
+
+record! { Test { name, function } }
 
 record! { ObjectRuntimeLayout {
     storage_fields, allocation_words, identity_offset, has_destroy,
@@ -330,7 +332,7 @@ record! { ObjectRuntimeLayout {
 
 record! { Field { name, storage, once } }
 record! { Object {
-    name, fields, layout, error_cases; enum_cases, variant_cases,
+    name, fields, layout, error_cases; enum_cases, variant_cases, handle,
 } }
 
 record! { Assignment {
@@ -431,8 +433,8 @@ tagged! { Type {
     0 => Int, 1 => Bool, 2 => Byte, 3 => Float, 4 => Rat, 5 => Char,
     6 => Str, 20 => Range, 11 => Failure, 21 => Bytes, 22 => Error,
     7 => Object(id: u32), 8 => Successor(id: u32), 13 => Never, 9 => Descriptor,
-    23 => Array(shape: ArrayType), 24 => Variant(id: u32),
-    25 => Map(id: u32), 26 => MapBuilder(id: u32), 27 => Builder(id: u32),
+    23 => Array(shape: ArrayType), 24 => Variant(id: u32), 25 => Handle(id: u32),
+    26 => Map(id: u32), 27 => MapBuilder(id: u32), 28 => Builder(id: u32),
 } }
 impl Wire for Composite {
     fn put(&self, w: &mut Writer) {
@@ -574,6 +576,7 @@ fn opcode_name(code: u8) -> Option<&'static str> {
         147 => Some("raise"),
         136 => Some("fail.secondary"),
         137 => Some("fail.caused"),
+        150 => Some("test.check"),
         255 => Some("champ"),
         _ => None,
     }
@@ -669,11 +672,15 @@ impl DataOp {
             Self::ArrayReplace => (57, Some(4)),
             Self::ArrayDifference => (57, Some(5)),
             Self::BuilderNew => (58, None),
+            Self::TestOk => (150, Some(0)),
+            Self::TestIs => (150, Some(1)),
+            Self::TestIsnt => (150, Some(2)),
+            Self::TestFail => (150, Some(3)),
         }
     }
 
     fn read(code: u8, r: &mut Reader<'_>) -> Result<Self, Error> {
-        let sub = if matches!(code, 24 | 41 | 71 | 85 | 47..=50 | 52 | 53 | 56 | 57) {
+        let sub = if matches!(code, 24 | 41 | 71 | 85 | 47..=50 | 52 | 53 | 56 | 57 | 150) {
             Some(r.number()?)
         } else {
             None
@@ -766,6 +773,10 @@ impl DataOp {
             (57, Some(4)) => Ok(Self::ArrayReplace),
             (57, Some(5)) => Ok(Self::ArrayDifference),
             (58, None) => Ok(Self::BuilderNew),
+            (150, Some(0)) => Ok(Self::TestOk),
+            (150, Some(1)) => Ok(Self::TestIs),
+            (150, Some(2)) => Ok(Self::TestIsnt),
+            (150, Some(3)) => Ok(Self::TestFail),
             _ => Err(r.fail(format!("unknown scalar opcode {code}/{sub:?}"))),
         }
     }

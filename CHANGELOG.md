@@ -8,6 +8,15 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Tomato delivers a cancellation to a nested frame resumed by the scheduler
+  (#670).** A task awaiting its own async call, whose frame's awaited future
+  had settled and queued it, ignored a cancellation requested before that
+  frame ran: the request stayed on the task, the frame's next `await`
+  suspended, a second `cancel()` did nothing, and the task hung (or the run
+  stopped with "no task can make progress"). The frame's next `await` now
+  raises `Cancelled`, once, and it unwinds through the frame and the task.
+  New case `L08.cancel.nested-frame-next-await`.
+
 - **Tomato keeps an await's outcome when the cancellation comes after it
   (#663).** A task whose awaited future had settled, and which was only
   waiting for its turn, raised `Cancelled` at that finished `await` when it was
@@ -204,6 +213,39 @@ fake fields; role fakes and their ordinary typed fields remain available.
   normalised cause, and `tools/run_champ.sh` runs both engines. The first
   run passed 534 of 1038 cases on Champ, with no case failing on both
   engines.
+
+- **Champ coverage, wave 2 (#660, #661, #569, #657).** On Champ the
+  conformance suite rose from 534 to 665 of 1039 cases, and no case
+  fails on both engines.
+  - **Backend.**
+    - A conversion is fallible only where its types make it so: `int.string()`
+      is total, so code with a live resource no longer needs an unwind for it
+      (#658).
+    - SPB 17 carries `byte`, `float`, `rat`, `char` and enum variants, with
+      comparisons, structural equality and variant access. The loader checks
+      each new form, keeps float constants finite and restricts structural
+      equality to plain values.
+  - **Own and low.**
+    - Collections, maps and variants keep their elements' obligations with
+      their owners.
+    - A builder carries an explicit journal of its elements.
+    - A `catch` landing has a deps recipe, and `m[k] else …` lowers.
+  - **Producer.**
+    - Arithmetic and bit operations on `float`, `rat` and `byte`, and the
+      string builtins.
+    - `catch case`, `try?`, stream writes, module constants and spread
+      arguments.
+  - **Open calls (O1).** A call of an action value whose target is unknown
+    follows one registered contract, checked against a catalogue:
+    - the environment is borrowed, so one action value can be called many
+      times;
+    - the result may be fresh or alias the environment or an argument.
+
+    The verifier treats two filters with the same keys as one cell, so
+    repeated calls of one callable no longer leave phantom fresh inputs.
+
+  Independent audits found no unsound acceptance; their findings are fixed
+  or ticketed (#653–#656, #666–#670).
 
 - **OIR-2 ownership elaboration, synchronous part (#565).** A pass from
   `high` to `own` makes ownership explicit for synchronous code. It covers:

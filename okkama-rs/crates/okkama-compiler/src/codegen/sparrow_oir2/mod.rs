@@ -62,15 +62,23 @@ fn generate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<
     if module.profile != o::Profile::Low {
         return Err(GenerateError("expected verified low profile".into()));
     }
-    if !module.imports.is_empty() || !module.protocols.is_empty()
-        || module.tests.is_some() || module.requires.iter().any(|feature| *feature != o::Feature::Core)
+    // The test profile carries its tests table; a tests table needs `requires test` and nothing else.
+    let profile = |feature: &o::Feature| *feature == o::Feature::Core
+        || *feature == o::Feature::Test && module.tests.is_some();
+    if !module.imports.is_empty() || !module.protocols.is_empty() || !module.requires.iter().all(profile)
+        || module.tests.is_some() != module.requires.contains(&o::Feature::Test)
     {
         return Err(unsupported("unresolved declarations, protocols or service metadata"));
     }
+    let tests = module.tests.as_ref().map(|tests| tests.iter().map(|test| s::Test {
+        name: test.name.clone(),
+        function: test.function.as_u32(),
+    }).collect());
     let mut p = s::Program {
         module: module.name.clone(),
         version: module.version.clone().unwrap_or_default(),
         entry: module.entry.map(|id| id.as_u32()),
+        tests,
         ..s::Program::default()
     };
     p.objects = objects(module, layouts)?;
@@ -86,10 +94,24 @@ fn generate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<
     for (id, function) in module.functions.iter() {
         if let Some(body) = &function.body {
             for (_, value) in body.values.iter() {
-                let collection = matches!(translate_type(module, value.ty), Ok(s::Type::Array(_) | s::Type::Map(_)));
-                if collection && value.facts != (o::ValueFacts::Plain {
+                let ty = translate_type(module, value.ty);
+                let collection = matches!(ty, Ok(s::Type::Array(_) | s::Type::Map(_)));
+                let plain = value.facts == (o::ValueFacts::Plain {
                     certificate: o::PlainCertificate::ClosedGraph { ty: value.ty },
-                }) {
+                });
+                // A managed array or map refers to resource objects: own proves its deps on their owners.
+                let leaf = match ty {
+                    Ok(s::Type::Array(shape)) => s::ArrayType { depth: 1, ..shape }.element(),
+                    Ok(s::Type::Map(id)) => match composites(module).entries().get(id as usize) {
+                        Some(s::Composite::Map { value, .. }) => Some(*value),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let managed = matches!(value.facts, o::ValueFacts::Managed { .. })
+                    && matches!(leaf, Some(s::Type::Object(id))
+                        if p.objects.get(id as usize).is_some_and(|object| object.layout.may_reach_resource));
+                if collection && !plain && !managed {
                     return Err(GenerateError("plain array or map requires own ClosedGraph certificate".into()));
                 }
             }
@@ -140,6 +162,7 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
             o::DeclarationKind::Role { builtin: true, .. } if declaration.name == "Error" => {
                 (&[][..], &[][..], None)
             }
+            o::DeclarationKind::Handle => (&[][..], &[][..], None),
             _ => return Err(unsupported("non-object declaration")),
         };
         if !witnesses.is_empty() {
@@ -149,8 +172,9 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
         if let o::DeclarationKind::Variant { cases, is_error: false } = &declaration.kind {
             for case in cases {
                 let case = layouts.object_layout(case.layout.as_u32())?;
-                if case.runtime.has_destroy || case.runtime.may_reach_resource {
-                    return Err(unsupported("variant case that reaches resources"));
+                // A case may refer to resources (Maybe<Resource>); it is never an identity itself.
+                if case.runtime.has_destroy {
+                    return Err(unsupported("variant case with destroy"));
                 }
             }
         }
@@ -189,6 +213,7 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
                 }
                 _ => 0,
             },
+            handle: matches!(declaration.kind, o::DeclarationKind::Handle),
             name: declaration.name.clone(),
             fields: fields.iter().zip(&layout.source_fields).map(|(field, &storage)| s::Field {
                 name: field.name.clone(),
@@ -321,6 +346,12 @@ fn translate_with(module: &o::Module, id: o::TypeId, table: &Composites) -> Resu
             s::Type::Object(case.layout.as_u32())
         }
         o::Type::Descriptor => s::Type::Descriptor,
+        o::Type::Handle(decl) => {
+            if !matches!(module.declarations.get(*decl)?.kind, o::DeclarationKind::Handle) {
+                return Err(GenerateError("handle type references a non-handle declaration".into()));
+            }
+            s::Type::Handle(decl.as_u32())
+        }
         o::Type::Bool => s::Type::Bool,
         o::Type::Byte => s::Type::Byte,
         o::Type::Float => s::Type::Float,
@@ -354,6 +385,18 @@ pub(crate) fn variant_storage(module: &o::Module, objects: &[s::Object], field: 
     }
     objects.get(field.declaration.as_u32() as usize).and_then(|case| case.fields.get(field.index as usize))
         .map(|field| field.storage).ok_or_else(|| GenerateError("invalid variant payload field".into()))
+}
+
+/// The storage of a once slot: a source field marked `once` (#491).
+fn once_field(module: &o::Module, objects: &[s::Object], field: o::FieldRef) -> Result<u32, GenerateError> {
+    let o::DeclarationKind::Object { fields, .. } = &module.declarations.get(field.declaration)?.kind else {
+        return Err(GenerateError("once slot outside an object".into()));
+    };
+    if !fields.get(field.index as usize).is_some_and(|source| source.once) {
+        return Err(GenerateError("once.load/once.store needs a once slot".into()));
+    }
+    objects.get(field.declaration.as_u32() as usize).and_then(|object| object.fields.get(field.index as usize))
+        .map(|field| field.storage).ok_or_else(|| GenerateError("invalid once slot".into()))
 }
 
 /// The SPB 17 type of an OIR-2 conversion operand.
@@ -724,6 +767,15 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
                     }
                 }
                 (D::ObjGet, vec![reg(*object)])
+            }
+            C::OnceLoad { object, field: reference } => {
+                immediate = s::Immediate::Field(once_field(module, objects, *reference)?);
+                (D::ObjGet, vec![reg(*object)])
+            }
+            C::OnceStore { object, field: reference, value } => {
+                immediate = s::Immediate::Field(once_field(module, objects, *reference)?);
+                field(*object, *reference)?;
+                (D::ObjInit, vec![reg(*object), reg(*value)])
             }
             C::ObjInit { object, field: reference, value, completion } => {
                 if completion.is_some() {

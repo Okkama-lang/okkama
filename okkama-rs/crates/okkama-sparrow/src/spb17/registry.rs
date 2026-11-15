@@ -452,6 +452,7 @@ helper_registry! {
         "champ_machine_collection" => &[C, W, W, P, W], G | HELPER_COLLECTS, None;
         "champ_machine_builder" => &[C, W, W, P, W], G | HELPER_COLLECTS, None;
         "champ_machine_lookup" => &[C, W, W, W, W, P], HELPER_STOPS, None;
+        "champ_machine_test" => &[C, W, W, W, W, W], G, None;
         "champ_machine_catch" => &[C, W, W], 0, None;
         "champ_machine_plain_packet" => &[C, P], HELPER_STOPS, None;
         "champ_machine_text_order" => &[C, W, W], 0, None;

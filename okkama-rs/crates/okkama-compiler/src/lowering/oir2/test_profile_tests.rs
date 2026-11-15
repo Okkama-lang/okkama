@@ -197,19 +197,77 @@ fn oir2_c8a_async_identity_empty_suite_and_production() {
     assert!(ir::verify::verify_high(&with_main).is_err(), "test module rejected in production mode");
 }
 
-#[test]
-fn oir2_c8a_skip_and_unregistered_typed_assertions_stay_unsupported() {
-    for (name, args, message) in [
-        ("skip", "\"later\"", "pending audited S1 contract"),
-        ("close", "1.0, 1.0, 0.1", "typed test intrinsic outside C8a"),
-        ("text", "\"a\", \"a\"", "typed test intrinsic outside C8a"),
-        ("bytes", "[byte(1)], [byte(1)]", "typed test intrinsic outside C8a"),
-    ] {
-        let source = format!("module app; test \"unsupported\" {{ test.{name}({args}); }}");
-        let error = lower(&source, true).unwrap_err();
-        assert!(matches!(&error, super::LowerError::Unsupported { span, message: text }
-            if !span.is_empty() && text.contains(message)), "{error}");
+/// The registered test intrinsic `name` of the module and its calls.
+fn intrinsic_calls(module: &ir::Module, name: &str) -> (ir::FuncId, Vec<(ir::FuncId, ir::BlockId)>) {
+    let (id, _) = module.functions.iter().find(|(_, function)| function.attrs.iter().any(|attr| {
+        matches!(attr, ir::FunctionAttr::Intrinsic { name: intrinsic, .. } if intrinsic == name)
+    })).unwrap_or_else(|| panic!("{name} declared"));
+    let mut calls = vec![];
+    for (caller, function) in module.functions.iter() {
+        let Some(body) = &function.body else { continue };
+        for (block_id, block) in body.blocks.iter() {
+            for inst in &block.insts {
+                if matches!(body.insts.get(*inst).unwrap().op,
+                    ir::Operation::Call(ir::CallOp::Intrinsic { function, .. }) if function == id) {
+                    calls.push((caller, block_id));
+                }
+            }
+        }
     }
+    (id, calls)
+}
+
+#[test]
+fn oir2_c8b_skip_is_an_uncatchable_intrinsic_without_continuation() {
+    let source = concat!(
+        "module app; object Lookup { Lookup(); value() is int { test.skip(\"in an action\"); 1; } } ",
+        "test \"skipped\" { test.skip(\"not today\"); test.ok(false); } ",
+        "test \"from an action\" { test.is(Lookup().value(), 2); }",
+    );
+    let module = lower(source, true).unwrap();
+    verify(&module, "skip");
+    let (skip, calls) = intrinsic_calls(&module, "okkama.test.skip");
+    assert_eq!(calls.len(), 2);
+    let declaration = module.functions.get(skip).unwrap();
+    assert!(declaration.body.is_none());
+    let summary = module.summaries.get(declaration.summary.unwrap()).unwrap();
+    assert_eq!(summary.entry_kind, ir::EntryKind::ObservationAdmissionStaysCaller);
+    assert_eq!(summary.contract.failures, [ir::FailureKind::Program]);
+    assert!(summary.contract.results.is_empty());
+    for (caller, block) in calls {
+        // Nothing follows the call: the block after it has no instructions and ends unreachable.
+        let body = module.functions.get(caller).unwrap().body.as_ref().unwrap();
+        let block = body.blocks.get(block).unwrap();
+        assert_eq!(*block.insts.last().unwrap(), *block.insts.iter().find(|inst| matches!(
+            body.insts.get(**inst).unwrap().op, ir::Operation::Call(ir::CallOp::Intrinsic { .. }))).unwrap());
+        assert_eq!(block.term.kind, ir::TermKind::Unreachable);
+    }
+    let first = module.functions.get(module.tests.as_ref().unwrap()[0].function).unwrap();
+    assert!(!first.body.as_ref().unwrap().insts.iter().any(|(_, inst)| matches!(inst.op,
+        ir::Operation::Core(ir::CoreOp::TestOk { .. }))), "the check after skip is dead");
+}
+
+#[test]
+fn oir2_c8b_typed_checks_are_registered_intrinsics() {
+    let source = concat!(
+        "module app; test \"typed\" { test.close(1.0, 1.5, 0.1); test.text(\"a\", \"b\"); ",
+        "test.bytes([byte(1)], [byte(2)]); test.text(\"c\", \"c\"); }",
+    );
+    let module = lower(source, true).unwrap();
+    verify(&module, "typed checks");
+    for (name, arity, count) in [("okkama.test.close", 3, 1), ("okkama.test.text", 2, 2), ("okkama.test.bytes", 2, 1)] {
+        let (id, calls) = intrinsic_calls(&module, name);
+        assert_eq!(calls.len(), count, "{name}");
+        let declaration = module.functions.get(id).unwrap();
+        assert_eq!(declaration.signature.params.len(), arity, "{name}");
+        let summary = module.summaries.get(declaration.summary.unwrap()).unwrap();
+        assert_eq!(summary.entry_kind, ir::EntryKind::ObservationAdmissionStaysCaller);
+        assert_eq!(summary.contract.failures, [ir::FailureKind::Program]);
+    }
+    let production = lower(source, false).unwrap();
+    assert!(production.functions.iter().all(|(_, function)| function.attrs.iter().all(|attr| {
+        !matches!(attr, ir::FunctionAttr::Intrinsic { name, .. } if name.starts_with("okkama.test."))
+    })));
 }
 
 #[test]

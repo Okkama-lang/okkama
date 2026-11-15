@@ -1,0 +1,46 @@
+oir 2 coro
+// C-3: await.unwind is a suspending instruction that consumes the waiter's task and receipt.
+module c3_await_unwind
+protocol Services kind services holders [scope, cache, frame, receipt] rules [protocol_rule(transition=settle,
+    from=receipt, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope,
+    state=settled))]
+scope S action in @main
+summary Mmain internal contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+func @main(%frame: frame<@main>) -> void [async] summary(Mmain) {
+    frame.layout {
+        slot 0: scope<S> linear
+        slot 1: future<int>
+        slot 2: failure
+        slot 3: task-state linear
+        slot 4: receipt linear
+    }
+    continuation 0 start saves [1]
+    continuation 1 at ^entry saves [0] operands [1]
+    continuation 2 at #9 saves [] operands [0, 2, 3, 4]
+^entry in S:
+    (%fr0: frame<@main>, %fut: future<int>) = frame.resume %frame, continuation 0, slots [saved_slot(slot=1,
+        ty=future<int>, linear=false)]
+    %q: scope<S> = scope.begin S
+    %fr1: frame<@main> = frame.save %fr0, slots [frame_slot(slot=0, value=%q, mode=consume)], continuation 1
+    invoke.own await %fut, result int
+        normal ^ok($value, $deps)
+        unwind ^bad($failure, $task, $receipt)
+^ok(%v: int, %d: deps) in S:
+    (%fr2: frame<@main>, %q1: scope<S>) = frame.resume %fr1, continuation 1, slots [saved_slot(slot=0, ty=scope<S>,
+        linear=true)]
+    %closed: closed = scope.end %q1, effects scope_effects(failures=[], suspends=false, cancel=false)
+    %p: own = own.empty
+    fut.publish %fr2, success(packet=%p, deps=%d)
+    ret
+^bad(%f: failure, %t: task-state, %r: receipt) in S:
+    (%fr3: frame<@main>, %q2: scope<S>) = frame.resume %fr1, continuation 1, slots [saved_slot(slot=0, ty=scope<S>,
+        linear=true)]
+    %fr4: frame<@main> = frame.save %fr3, continuation 2
+    [i9] (%q3: scope<S>, %f1: failure) = await.unwind %q2, %f, %t, %r, protocol Services
+    %fr5: frame<@main> = frame.resume %fr4, continuation 2
+    %combined: failure = scope.unwind %q3, %f1, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=false, cancel=false)
+    fut.publish %fr5, failure(%combined)
+    ret
+}

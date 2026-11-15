@@ -269,3 +269,20 @@ fn champ_cases_array_operations_and_equality() {
         "L05.variants.search",
     ]);
 }
+
+/// Arrays and maps that refer to resource objects they do not own, and variants whose case holds one.
+#[test]
+fn champ_cases_managed_collections_and_variants() {
+    check(&[
+        "L07.ownership.shared-structure-loop",
+        "L07.ownership.shared-structure-returned",
+        "L07.ownership.reduce-builder",
+        "L05.variants.ownership",
+    ]);
+}
+
+/// Constructions whose self escapes before the last field is written.
+#[test]
+fn champ_cases_construction_completion() {
+    check(&["L04.equality.cyclic-graphs", "L04.invariant.early-self-in-blocks"]);
+}
