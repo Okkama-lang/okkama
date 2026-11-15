@@ -170,8 +170,9 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
             constructor_inputs: flows[&function].constructor_inputs.clone(),
             flow: &flows[&function], elide_offers, definitions: BTreeMap::new(), origins,
             witnesses: &entry_sets.witnesses, builder_owners, cache_duties: vec![], exit_landing: None,
-            dynamic_owners: BTreeSet::new(),
+            dynamic_owners: BTreeSet::new(), temporaries: BTreeSet::new(),
         };
+        driver.temporaries = driver.temporary_futures();
         let captured: BTreeSet<_> = high.insts.iter().flat_map(|(_, instruction)| match &instruction.op {
             Operation::Lexical(LexicalOp::DeferRegister { action, .. }) => action.bindings.clone(),
             _ => vec![],
@@ -638,6 +639,8 @@ struct Driver<'a, 'o> {
     /// Scopes that admit service entries at run time: their schedules end with
     /// the dynamic step (D25.3).
     dynamic_owners: BTreeSet<ScopeId>,
+    /// High Futures that their awaiting scope takes (OIR-2 §10.2, §10.3).
+    temporaries: BTreeSet<ValueId>,
 }
 impl Driver<'_, '_> {
     /// Whether values of `ty` carry full dependencies. Linear buffers never do:

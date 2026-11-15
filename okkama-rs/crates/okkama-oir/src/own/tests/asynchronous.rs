@@ -56,6 +56,7 @@ const WITNESSES: &[&str] = &[
     "r1-cold-escape",
     "r1-make-escape",
     "r1-never-started-close",
+    "r1-temporary-take",
     "r1-view-escape",
 ];
 
@@ -503,4 +504,49 @@ fn r1_the_token_state_rehome_names_a_scope() {
     assert!(!rejected_by(&valid, RuleId::B94, message));
     let caller = edit(&valid, "target Souter", "target caller");
     assert!(rejected_by(&caller, RuleId::B94, message), "{:?}", rejections(&caller));
+}
+
+/// OIR-2 §10.2, §10.3, elaboration §13.2: the awaiting block takes a temporary Future of a managed outcome.
+/// The proof carries the full evidence (its creation, no alias, frame slot, storage, waiter, view or collector, the block of
+/// the take) and the take's boundary is the awaiting scope, which admits the actual outcome packet. A bound or a
+/// plain temporary Future stays a shared await.
+#[test]
+fn r1_a_temporary_future_is_taken_by_its_awaiting_scope() {
+    let output = rewrite_async(&input("r1-temporary-take")).unwrap();
+    let module = &output.module;
+    let (main_id, main) = function(module, "main");
+    let body = main.body.as_ref().unwrap();
+    let inner = scope_named(module, main_id, true);
+    let (proof_block, proof) = body.blocks.iter().find_map(|(id, block)| block.insts.iter().find_map(|inst| {
+        match &body.insts.get(*inst).unwrap().op {
+            Operation::Async(AsyncOp::UniqueCacheProof { proof }) => Some((id, proof.clone())),
+            _ => None,
+        }
+    })).unwrap();
+    let Definition::InstResult { inst, .. } = body.values.get(proof.future).unwrap().def else { panic!("future") };
+    assert!(matches!(body.insts.get(inst).unwrap().op, Operation::Async(AsyncOp::FutureNew { owner, .. })
+        if owner == inner));
+    assert_eq!(proof.scope, inner);
+    assert_eq!(proof.region, [proof_block]);
+    assert_eq!(proof.evidence, UniqueCacheEvidence {
+        creation: CreationOrigin::Instruction(inst), aliases: vec![], frame_slots: vec![], no_external_storage: true,
+        no_other_waiters: true, no_live_views: true, no_collector_retention: true, scheduler_cannot_publish: true,
+    });
+    let TermKind::InvokeOwn { op, normal, .. } = &body.blocks.get(proof_block).unwrap().term.kind else {
+        panic!("take")
+    };
+    let Operation::Async(AsyncOp::AwaitTake { future, boundary, .. }) = op.as_ref() else { panic!("{op:?}") };
+    assert_eq!((*future, *boundary), (proof.future, TakeBoundary::Temporary { awaiting: inner }));
+    // The landing admits the taken packet into the awaiting scope, and no edge carries the Future on.
+    let landing = body.blocks.get(normal.block).unwrap();
+    let packet = landing.params[1];
+    assert!(landing.insts.iter().any(|inst| matches!(&body.insts.get(*inst).unwrap().op,
+        Operation::Ownership(OwnershipOp::Admit { packet: admitted, .. }) if *admitted == packet)));
+    assert!(!normal.args.contains(&EdgeArg::Value(proof.future)));
+    for name in ["r1-cached-outcome", "async-void"] {
+        let output = rewrite_async(&input(name)).unwrap();
+        let (_, main) = function(&output.module, "main");
+        assert!(!operations(main.body.as_ref().unwrap()).iter().any(|op| matches!(op,
+            Operation::Async(AsyncOp::AwaitTake { .. } | AsyncOp::UniqueCacheProof { .. }))), "{name}");
+    }
 }

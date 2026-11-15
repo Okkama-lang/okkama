@@ -84,9 +84,15 @@ impl Driver<'_, '_> {
             packet, deps, owner_state, environment, result, owner,
         }))?;
         let future = point.result(SlotName::Value)?;
-        point = self.emit(point, Operation::Ownership(OwnershipOp::Dependencies { value: future }))?;
-        let deps = point.result(SlotName::Value)?;
-        point.env.values.insert(*original, LatestValue { value: future, deps: Some(deps) });
+        // A temporary Future has no use but its take: naming its deps would be another use of
+        // the cache that the unique-cache evidence excludes (§10.3).
+        let deps = if self.temporaries.contains(original) {
+            None
+        } else {
+            point = self.emit(point, Operation::Ownership(OwnershipOp::Dependencies { value: future }))?;
+            Some(point.result(SlotName::Value)?)
+        };
+        point.env.values.insert(*original, LatestValue { value: future, deps });
         self.cache_duties.push((owner, future));
         Ok(point)
     }
@@ -97,11 +103,14 @@ impl Driver<'_, '_> {
     /// the failure, the task and the receipt with the owner state before any
     /// other use, so no failure block can drop the task or the receipt.
     pub(super) fn await_future(&mut self, mut point: Landing, instruction: &Instruction) -> Result<Landing, OwnError> {
-        let Operation::Async(AsyncOp::Await { future, result }) = instruction.op else {
+        let Operation::Async(AsyncOp::Await { future: original, result }) = instruction.op else {
             return Err(flow_error("expected a shared await"));
         };
         let protocol = services_protocol(self.module)?;
-        let future = point.env.value(future)?.value;
+        let future = point.env.value(original)?.value;
+        if self.temporaries.contains(&original) {
+            return self.take_future(point, instruction, future, protocol);
+        }
         point.env.unwind_values = Some(self.unwind_needed(&point));
         let emission = self.emitter.emit(self.module, &mut self.body, point.block, point.env,
             Operation::Async(AsyncOp::Await { future, result }))?;
@@ -119,6 +128,96 @@ impl Driver<'_, '_> {
             normal.env.values.insert(*original, LatestValue { value, deps });
         }
         Ok(normal)
+    }
+
+    /// OIR-2 §10.2, §10.3: the awaiting scope takes the outcome of a temporary
+    /// Future. The unique-cache proof carries the full evidence: the creation
+    /// is this function's `fut.new`, the Future has no alias, frame slot,
+    /// storage, other waiter, view or collector retention, and the region is
+    /// the block of the take. `await.take` extracts the actual outcome packet,
+    /// which the awaiting scope admits as a temporary await result; a borrowed
+    /// result stays borrowed (the packet is empty).
+    fn take_future(&mut self, mut point: Landing, instruction: &Instruction, future: ValueId, protocol: ProtocolId)
+        -> Result<Landing, OwnError> {
+        let Operation::Async(AsyncOp::Await { future: original, result }) = instruction.op else {
+            return Err(flow_error("expected an await"));
+        };
+        let Definition::InstResult { inst: creation, .. } = self.body.values.get(future).map_err(arena)?.def else {
+            return Err(flow_error("a temporary Future is the result of its fut.new"));
+        };
+        let scope = self.owner_scope(&point)?;
+        let evidence = UniqueCacheEvidence {
+            creation: CreationOrigin::Instruction(creation),
+            aliases: vec![],
+            frame_slots: vec![],
+            no_external_storage: true,
+            no_other_waiters: true,
+            no_live_views: true,
+            no_collector_retention: true,
+            scheduler_cannot_publish: true,
+        };
+        let proof = UniqueCacheProof { future, scope, region: vec![point.block], evidence };
+        point = self.emit(point, Operation::Async(AsyncOp::UniqueCacheProof { proof }))?;
+        let unique = point.result(SlotName::Unique)?;
+        let boundary = TakeBoundary::Temporary { awaiting: scope };
+        // The take is the Future's last use: no edge carries an alias of the taken cache.
+        point.env.values.remove(&original);
+        point.env.unwind_values = Some(self.unwind_needed(&point));
+        let emission = self.emitter.emit(self.module, &mut self.body, point.block, point.env,
+            Operation::Async(AsyncOp::AwaitTake { future, result, unique, boundary }))?;
+        let failed = emission.unwind.ok_or_else(|| flow_error("await.take has no unwind outcome"))?;
+        let failed = self.await_unwind(failed, protocol)?;
+        let target = self.unwind_target(&failed.env);
+        self.record_failure(failed, target)?;
+        let mut normal = emission.normal;
+        normal.env.cleanup.primary_before_failure = None;
+        let packet = normal.result(SlotName::Packet)?;
+        let deps = normal.result(SlotName::Deps)?;
+        let value = result.map(|_| normal.result(SlotName::Value)).transpose()?;
+        let state = normal.env.state(scope)?;
+        normal = self.emit(normal, Operation::Ownership(OwnershipOp::Admit { state, packet }))?;
+        if let (Some(original), Some(value)) = (instruction.results.first(), value) {
+            normal.env.values.insert(*original, LatestValue { value, deps: Some(deps) });
+        }
+        Ok(normal)
+    }
+
+    /// The High Futures taken by their awaiting scope (OIR-2 §10.2): created by a call of
+    /// an async entry and marked `temp`, with a managed outcome awaited once in the same
+    /// block, and no other use. A plain outcome has nothing to take; it stays shared.
+    pub(super) fn temporary_futures(&self) -> BTreeSet<ValueId> {
+        // Every use of a value: operands, edge arguments, schedules and facts.
+        let mut uses: BTreeMap<ValueId, usize> = BTreeMap::new();
+        let registry = ContractRegistry::new(self.module);
+        let walked = cfg::walk_body(self.high, registry, |event| {
+            if let cfg::CfgEvent::Use { operand, .. } = event {
+                *uses.entry(operand.value).or_default() += 1;
+            }
+        });
+        if walked.is_err() {
+            return BTreeSet::new();
+        }
+        let mut temporaries = BTreeSet::new();
+        for (_, block) in self.high.blocks.iter() {
+            let ops: Vec<_> = block.insts.iter().filter_map(|inst| self.high.insts.get(*inst).ok()).collect();
+            for (index, instruction) in ops.iter().enumerate() {
+                let Operation::Call(CallOp::Direct { function, .. }) = &instruction.op else { continue };
+                let Some(&future) = instruction.results.first() else { continue };
+                if !crate::own::futures::is_async(self.module, *function) || uses.get(&future) != Some(&2) {
+                    continue;
+                }
+                let later = &ops[index + 1..];
+                let temp = later.iter().any(|next| matches!(next.op,
+                    Operation::Lexical(LexicalOp::Temp { value, .. }) if value == future));
+                let taken = later.iter().any(|next| matches!(next.op,
+                    Operation::Async(AsyncOp::Await { future: awaited, result: Some(ty) })
+                        if awaited == future && self.managed(ty)));
+                if temp && taken {
+                    temporaries.insert(future);
+                }
+            }
+        }
+        temporaries
     }
 
     /// `@oir.await.unwind` on an await's exceptional landing (async ABI C-3).
