@@ -20,22 +20,7 @@ pub(super) fn invoke(ctx: *mut Ctx, function: usize, io: *mut CallOwn, args: &[W
     }
     let value = if super::machine::native_symbol(name) {
         let value = runtime::rt_native(ctx, function as u64, args.as_ptr(), args.len() as u64);
-        if unsafe { (*ctx).status } == runtime::FAILED
-            && let Some(FailureKind::Program(message)) = runtime.failure(unsafe { (*ctx).failure })
-                .map(|failure| &failure.kind)
-        {
-            let message = message.clone();
-            let descriptor = runtime.champ.machine.as_ref().unwrap().native_failure;
-            let fields = [
-                runtime.heap.allocate_text("runtime"),
-                runtime.heap.allocate_text("native"),
-                runtime.heap.allocate_text(name),
-                runtime.heap.allocate_text(&message),
-            ];
-            let object = runtime.heap.object_new(descriptor, &fields);
-            let failure = runtime.failure_new(FailureKind::Native(object));
-            unsafe { (*ctx).failure = failure };
-        }
+        native_refusal(ctx, name);
         value
     } else if let Some(check) = name.strip_prefix(s::TEST_INTRINSIC_PREFIX) {
         super::testing::intrinsic(ctx, check, args)
@@ -107,6 +92,34 @@ pub(super) fn invoke(ctx: *mut Ctx, function: usize, io: *mut CallOwn, args: &[W
     }
 }
 
+/// A synchronous native's entry may fail only with a native failure (`NATIVE_FAILURES`). Every other
+/// refusal of the provider (a program failure, a raised cancellation or error value, a panic) becomes a
+/// `NativeFailure` of the operation carrying the refusal's message; a native failure passes unchanged.
+pub(super) fn native_refusal(ctx: *mut Ctx, name: &str) {
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    if unsafe { (*ctx).status } != runtime::FAILED {
+        return;
+    }
+    let message = match runtime.failure(unsafe { (*ctx).failure }).map(|failure| &failure.kind) {
+        Some(FailureKind::Native(_)) => return,
+        Some(FailureKind::Program(message) | FailureKind::Panic(message)) => message.clone(),
+        Some(FailureKind::Cancelled) => "Operation was cancelled".to_owned(),
+        Some(FailureKind::Thrown(object)) => super::machine::error_text(runtime, *object)
+            .unwrap_or_else(|| "native provider raised an error value".to_owned()),
+        None => "native provider failed without a failure record".to_owned(),
+    };
+    let descriptor = runtime.champ.machine.as_ref().unwrap().native_failure;
+    let fields = [
+        runtime.heap.allocate_text("runtime"),
+        runtime.heap.allocate_text("native"),
+        runtime.heap.allocate_text(name),
+        runtime.heap.allocate_text(&message),
+    ];
+    let object = runtime.heap.object_new(descriptor, &fields);
+    let failure = runtime.failure_new(FailureKind::Native(object));
+    unsafe { (*ctx).failure = failure };
+}
+
 pub(super) fn error_text(runtime: &Runtime, source: &s::Program, object: Word) -> String {
     let descriptor = heap::payload(runtime.heap.header_of(object)) as usize;
     if descriptor == runtime.champ.machine.as_ref().unwrap().native_failure as usize {
@@ -137,3 +150,7 @@ pub(super) fn error_text(runtime: &Runtime, source: &s::Program, object: Word) -
     text.push(')');
     text
 }
+
+#[cfg(test)]
+#[path = "p1_tests.rs"]
+mod tests;
