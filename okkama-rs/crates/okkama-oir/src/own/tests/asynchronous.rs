@@ -54,8 +54,10 @@ const WITNESSES: &[&str] = &[
     // Commit 5b (R1): resources across the Future boundary.
     "r1-cached-outcome",
     "r1-cold-escape",
+    "r1-loop-escape",
     "r1-make-escape",
     "r1-never-started-close",
+    "r1-plain-temporary",
     "r1-temporary-take",
     "r1-view-escape",
 ];
@@ -543,7 +545,7 @@ fn r1_a_temporary_future_is_taken_by_its_awaiting_scope() {
     assert!(landing.insts.iter().any(|inst| matches!(&body.insts.get(*inst).unwrap().op,
         Operation::Ownership(OwnershipOp::Admit { packet: admitted, .. }) if *admitted == packet)));
     assert!(!normal.args.contains(&EdgeArg::Value(proof.future)));
-    for name in ["r1-cached-outcome", "async-void"] {
+    for name in ["r1-cached-outcome", "async-void", "r1-plain-temporary"] {
         let output = rewrite_async(&input(name)).unwrap();
         let (_, main) = function(&output.module, "main");
         assert!(!operations(main.body.as_ref().unwrap()).iter().any(|op| matches!(op,
@@ -600,4 +602,95 @@ fn a_future_created_in_a_loop_of_its_owner_is_unsupported() {
     // An iteration scope owns the Future of each round and closes it before the next one.
     let output = rewrite_async(&creation_in_loop(true)).unwrap();
     crate::verify_own(&output.module).unwrap();
+}
+
+
+
+/// C-4 through a loop exit: the commit names the loop boundary, which has no scope, so the rehome names the scope
+/// where the exit lands (the block SO around the loop); the duty then leaves SO for S as its value.
+#[test]
+fn r1_a_loop_exit_rehomes_into_the_scope_where_it_lands() {
+    let output = rewrite_async(&input("r1-loop-escape")).unwrap();
+    let module = &output.module;
+    let (main_id, main) = function(module, "main");
+    let body = main.body.as_ref().unwrap();
+    let scope = |kind: ScopeKind| module.scopes.iter().find(|(_, data)| data.function == main_id && data.kind == kind)
+        .map(|(id, _)| id).unwrap();
+    let (root, block, iteration) = (scope(ScopeKind::Action), scope(ScopeKind::Block), scope(ScopeKind::Iteration));
+    let mut found = rehomes(module, body);
+    found.sort_by_key(|(scope, _)| scope.as_u32());
+    let mut expected = vec![(iteration, RehomeTarget::Scope(block)), (block, RehomeTarget::Scope(root))];
+    expected.sort_by_key(|(scope, _)| scope.as_u32());
+    assert_eq!(found, expected);
+    let commits: Vec<_> = body.insts.iter().filter_map(|(_, instruction)| match &instruction.op {
+        Operation::Exit(ExitOp::Commit { destination, .. }) => Some(*destination),
+        _ => None,
+    }).collect();
+    assert!(commits.iter().any(|destination| matches!(destination, ExitDestination::Loop(_))), "{commits:?}");
+    assert!(commits.contains(&ExitDestination::Scope(root)), "{commits:?}");
+    // A loop exit's rehome that names a scope other than the landing one is refused where the packet lands.
+    let golden = golden("r1-loop-escape");
+    let rehome = "future %78, target S4, protocol P0";
+    let elsewhere = edit(&golden, rehome, &rehome.replace("target S4", "target S3"));
+    let message = "committed packet must be admitted into its declared destination";
+    assert!(rejected_by(&elsewhere, RuleId::B101, message), "{:?}", rejections(&elsewhere));
+}
+
+/// OIR-2 §10.2, D12 (`future.passed-and-awaited-elsewhere`): a Future passed to an async entry stays in the cache
+/// of its owner. The creation of the outer Future offers nothing for it, so no selection names the inner Future:
+/// its duty never travels through an offer, and a run-time selection walk never meets a Future.
+#[test]
+fn r1_a_future_input_of_a_cold_future_is_never_offered() {
+    let source = input("async-plain-await")
+        .replace("scope S action in @main\n", "scope SO action in @outer\nscope S action in @main\n")
+        .replace("func @main()", "summary MouterC call-boundary parameters [parameter_effect(convention=borrow, \
+            destination=none)] results [result_relation(provenance=unbound_result)] contract \
+            call_contract(results=[future<int>], publication=atomic)
+summary MouterB call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results \
+            [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, \
+            program, panic, native, cancelled], suspends=true, publication=atomic)
+func @outer(%g: future<int>) -> int [async] async-creation(MouterC) async-body(MouterB) {
+    boundary BO lexical in SO
+    ^entry in SO unwind ^failed:
+    %n: int = await %g, result int
+    want %n
+    [iprepo] exit.prepare return %n at BO
+    result.exit edge normal(0), value %n, demand want, prepare iprepo
+    ret %n
+    ^failed(%failure: failure) in SO:
+    raise %failure
+}
+func @main()")
+        .replace("    %v: int = await %f, result int\n", "    %h: future<int> = call @outer(%f)\n    temp %h, S\n    \
+            %v: int = await %h, result int\n");
+    let output = rewrite_async(&source).unwrap();
+    verify_own(&output.module).unwrap();
+    let (_, main) = function(&output.module, "main");
+    let body = main.body.as_ref().unwrap();
+    let mut creations = 0;
+    for op in operations(body) {
+        let selection = match op {
+            Operation::Ownership(OwnershipOp::ScopeSplit { selection, .. } | OwnershipOp::Split { selection, .. }) => {
+                *selection
+            }
+            Operation::Async(AsyncOp::FutureNew { .. }) => {
+                creations += 1;
+                continue;
+            }
+            _ => continue,
+        };
+        let mut pending = vec![selection];
+        while let Some(selection) = pending.pop() {
+            match body.selections.get(selection).unwrap() {
+                SelectionExpr::Union(items) => pending.extend(items),
+                SelectionExpr::Admissible(inner) => pending.push(*inner),
+                SelectionExpr::Value(value) => {
+                    let ty = output.module.types.get(body.values.get(*value).unwrap().ty).unwrap();
+                    assert!(!matches!(ty, Type::Future(_)), "a selection names a Future: {op:?}");
+                }
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(creations, 2);
 }

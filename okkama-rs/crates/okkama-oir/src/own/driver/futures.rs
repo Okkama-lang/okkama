@@ -29,13 +29,18 @@ impl Driver<'_, '_> {
             return Err(flow_error("Future creation is a direct call of the async entry"));
         };
         let originals: Vec<_> = original_call.args.iter().map(|argument| argument.value).collect();
+        let ty = |original: &ValueId| self.high.values.get(*original).map(|value| value.ty);
         let managed: Vec<_> = originals.iter().copied()
-            .filter(|original| self.high.values.get(*original).is_ok_and(|value| self.managed(value.ty))).collect();
+            .filter(|original| ty(original).is_ok_and(|ty| self.managed(ty) && !is_future(self.module, ty))).collect();
+        // A Future input borrows its cache: its duty never travels through an offer (OIR-2 §10.2,
+        // D12), and no selection names it.
+        let future_input = originals.iter().copied()
+            .find(|original| ty(original).is_ok_and(|ty| is_future(self.module, ty)));
         // OIR-2 §10.1, #587: the creation retains the fresh part of every managed input in the
         // input packet, which the Future's inputs holder keeps until the first start, and the
         // Future depends on their external deps (the creation summary). Plain inputs offer
         // nothing: their empty deps are those of a plain argument, or the external deps of an
-        // empty selection when there is no argument.
+        // empty selection when there is no argument. A Future input alone gives its own deps.
         let deps;
         let mut packet;
         if !managed.is_empty() {
@@ -55,7 +60,7 @@ impl Driver<'_, '_> {
         } else {
             point = self.emit(point, Operation::Ownership(OwnershipOp::Empty {}))?;
             packet = point.result(SlotName::Packet)?;
-            deps = if let Some(&argument) = originals.first() {
+            deps = if let Some(argument) = future_input.or_else(|| originals.first().copied()) {
                 let value = point.env.value(argument)?.value;
                 point = self.emit(point, Operation::Ownership(OwnershipOp::Dependencies { value }))?;
                 point.result(SlotName::Value)?
