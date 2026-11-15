@@ -3,7 +3,15 @@ use super::*;
 fn unsupported(function: FuncId, message: &str) -> LowError {
     LowError::Unsupported { function, message: message.into() }
 }
+/// Async destroy suspends inside the cleanup plan; slice D1 (wave 4) lowers it.
+pub(super) const ASYNC_DESTROY: &str = "async destroy is lowered by slice D1 (wave 4)";
+/// An async defer entry (C-6) suspends inside the defer prefix; slice R2 (wave 2) lowers it.
+pub(super) const ASYNC_DEFER: &str = "async defer (C-6) is lowered by slice R2 (wave 2)";
+
+/// Own input is synchronous only. Coro input (verified by `verify_coro`) keeps its frames and service values;
+/// the async forms that a later slice lowers keep a named rejection.
 pub(super) fn check(module: &Module, budget: &mut Budget<'_>) -> Result<(), LowError> {
+    let coro = module.profile == Profile::Coro;
     let mut entities = 0_usize;
     for count in [module.types.len(), module.scopes.len(), module.functions.len(), module.declarations.len(),
         module.summaries.len(), module.protocols.len(), module.files.len()] {
@@ -13,20 +21,34 @@ pub(super) fn check(module: &Module, budget: &mut Budget<'_>) -> Result<(), LowE
         return Err(LowError::LimitExceeded("input entities"));
     }
     for (id, function) in module.functions.iter() {
-        if function.body.is_some() && function.attrs.contains(&FunctionAttr::Async) {
+        let is_async = function.attrs.contains(&FunctionAttr::Async);
+        if function.body.is_some() && is_async && !coro {
             return Err(unsupported(id, "async function"));
         }
         if let Some(summary) = function.summary.filter(|_| function.body.is_some()) {
             let contract = &module.summaries.get(summary)?.contract;
-            if contract.suspends || contract.async_destroy || contract.failures.contains(&FailureKind::Cancelled) {
+            if contract.async_destroy {
+                return Err(unsupported(id, ASYNC_DESTROY));
+            }
+            // An async body of Coro may suspend and be cancelled (D20, D18); everything else is synchronous.
+            let async_body = coro && is_async;
+            if !async_body && (contract.suspends || contract.failures.contains(&FailureKind::Cancelled)) {
                 return Err(unsupported(id, "summary does not prove synchronous execution and owned cleanup"));
             }
         } else if function.body.is_some() {
             return Err(unsupported(id, "missing final function summary"));
         }
+        if coro && is_async && function.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. })) {
+            return Err(unsupported(id, ASYNC_DEFER));
+        }
         let Some(body) = &function.body else {
             continue;
         };
+        if coro && is_async && body.frame_layout.is_none() {
+            return Err(LowError::InvalidInput {
+                function: Some(id), message: "an async Coro body declares its D21 frame layout".into(),
+            });
+        }
         for count in [body.values.len(), body.blocks.len(), body.insts.len(), body.bindings.len(),
             body.boundaries.len(), body.deps.len(), body.keys.len(), body.selections.len(),
             body.descriptor_bindings.len(), body.service_schedules.len()] {
@@ -35,7 +57,7 @@ pub(super) fn check(module: &Module, budget: &mut Budget<'_>) -> Result<(), LowE
         if entities > budget.options.max_entities {
             return Err(LowError::LimitExceeded("input entities"));
         }
-        if !body.service_schedules.is_empty() {
+        if !body.service_schedules.is_empty() && !coro {
             return Err(unsupported(id, "nonempty service duty inventory"));
         }
         if body.cleanup != CleanupMetadata::default() || !body.high_results.is_empty() {
@@ -67,29 +89,41 @@ pub(super) fn check(module: &Module, budget: &mut Budget<'_>) -> Result<(), LowE
         }
         for (_, value) in body.values.iter() {
             budget.step(1)?;
-            if matches!(module.types.get(value.ty)?, Type::Frame(_)
-                | Type::Service(ServiceType::TaskState | ServiceType::CacheState | ServiceType::CarrierState
+            let ty = module.types.get(value.ty)?;
+            if matches!(ty, Type::Service(ServiceType::CarrierState)) {
+                return Err(unsupported(id, "owned carrier-state values are excluded from 0.6.0"));
+            }
+            if !coro && matches!(ty, Type::Frame(_)
+                | Type::Service(ServiceType::TaskState | ServiceType::CacheState
                     | ServiceType::Pin | ServiceType::Receipt | ServiceType::UniqueCache)) {
-                return Err(unsupported(id, "service duty or coroutine state requires a later lowering slice"));
+                return Err(unsupported(id, "service duty or coroutine state requires Coro input"));
             }
         }
         for binding in &body.descriptor_bindings {
             budget.step(1)?;
             let descriptor = &binding.contract;
             let contract = &module.summaries.get(descriptor.summary)?.contract;
-            if descriptor.async_destroy || contract.suspends || contract.async_destroy
-                || contract.failures.contains(&FailureKind::Cancelled) {
+            if descriptor.async_destroy || contract.async_destroy {
+                return Err(unsupported(id, ASYNC_DESTROY));
+            }
+            if contract.suspends || contract.failures.contains(&FailureKind::Cancelled) {
                 return Err(unsupported(id, "descriptor permits asynchronous owned cleanup"));
             }
         }
+        let context = Context { module, function: id, coro, is_async };
         for (_, block) in body.blocks.iter() {
             for instruction in &block.insts {
                 budget.step(1)?;
-                operation(module, id, &body.insts.get(*instruction)?.op)?;
+                context.operation(&body.insts.get(*instruction)?.op)?;
             }
             match &block.term.kind {
-                TermKind::InvokeOwn { op, .. } => operation(module, id, op)?,
-                TermKind::InvokeDefer { call, .. } => call_summary(module, id, call)?,
+                TermKind::InvokeOwn { op, .. } => context.operation(op)?,
+                TermKind::InvokeDefer { function: target, call, .. } => {
+                    if module.functions.get(*target)?.attrs.contains(&FunctionAttr::Async) {
+                        return Err(unsupported(id, ASYNC_DEFER));
+                    }
+                    call_summary(module, id, call)?;
+                }
                 TermKind::CleanupNext { .. } | TermKind::ExitDispatch { .. } | TermKind::FailureDispatch { .. } => {
                     return Err(unsupported(id, "Low terminator in Own"));
                 }
@@ -113,6 +147,58 @@ fn call_summary(module: &Module, function: FuncId, call: &CallSite) -> Result<()
     }
     Ok(())
 }
+/// The function whose operations are checked, and its input profile.
+struct Context<'a> {
+    module: &'a Module,
+    function: FuncId,
+    coro: bool,
+    is_async: bool,
+}
+
+impl Context<'_> {
+    fn operation(&self, op: &Operation) -> Result<(), LowError> {
+        if let Operation::Async(op) = op {
+            return self.async_operation(op);
+        }
+        if let Operation::Ownership(OwnershipOp::ScopeEnd { .. } | OwnershipOp::ScopeUnwind { .. }) = op
+            && self.coro && self.is_async {
+            // D20/D18: an async close may suspend and deliver the final cancellation; the cleanup steps
+            // decide whether it still suspends in Low (D20 §2.6).
+            return Ok(());
+        }
+        operation(self.module, self.function, op)
+    }
+
+    /// The async forms of plain async (plan V4); the others belong to later slices.
+    fn async_operation(&self, op: &AsyncOp) -> Result<(), LowError> {
+        let function = self.function;
+        if !self.coro {
+            return Err(unsupported(function, "async/service operation requires Coro input"));
+        }
+        match op {
+            AsyncOp::FutureNew { environment: FutureEnvironment::Frame(_), .. } | AsyncOp::AwaitShielded { .. }
+            | AsyncOp::FrameAlloc { .. } | AsyncOp::FrameLoad { .. } | AsyncOp::FrameStore { .. }
+            | AsyncOp::FrameCancel { .. } | AsyncOp::FutureSettle { .. } => Err(LowError::InvalidInput {
+                function: Some(function), message: "a form that coro does not produce (D20, C-1)".into(),
+            }),
+            AsyncOp::FutureNew { .. } | AsyncOp::Await { .. } | AsyncOp::AwaitUnwind { .. }
+            | AsyncOp::FrameSave { .. } | AsyncOp::FrameResume { .. } | AsyncOp::FuturePublish { .. }
+            | AsyncOp::FutureCancel { .. } | AsyncOp::FutureDone { .. } | AsyncOp::FutureCancelled { .. } => Ok(()),
+            AsyncOp::AwaitTake { .. } | AsyncOp::UniqueCacheProof { .. } | AsyncOp::CacheRehome { .. }
+            | AsyncOp::ServiceMaterialize { .. } | AsyncOp::ServiceAbsorb { .. } => {
+                Err(unsupported(function, "take, rehome and packet duties (D25) are lowered by slice R2 (wave 2)"))
+            }
+            AsyncOp::FutureSpawn { .. } => Err(unsupported(function, "spawn (D24) is lowered by slice P1 (wave 3)")),
+            AsyncOp::Pin { .. } | AsyncOp::PinTransfer { .. } | AsyncOp::Unpin { .. } => {
+                Err(unsupported(function, "pins (D23) are lowered by slice Q2 (wave 3)"))
+            }
+            AsyncOp::WorkerBind { .. } | AsyncOp::WorkerSpawn { .. } | AsyncOp::ProcessSpawn { .. } => {
+                Err(unsupported(function, "process workers are lowered by slice X1 (wave 4)"))
+            }
+        }
+    }
+}
+
 fn operation(module: &Module, function: FuncId, op: &Operation) -> Result<(), LowError> {
     match op {
         Operation::Lexical(_) => return Err(unsupported(function, "High-only operation in Own")),

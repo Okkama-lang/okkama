@@ -78,14 +78,16 @@ impl Engine<'_, '_> {
             }
             let mut fact = CleanupFact {
                 aborted: false,
-                // G1 P1 carries D9 shielding in begin; general suspending/cancellation cleanup
-                // retains the explicit shield transition checked by the coroutine automaton.
+                // Plan §3.4: in a D21 async body of Low the shield is a property of the close, not an
+                // operation, so every close begins shielded, including a final close that delivers cancellation.
+                // A body without a frame layout keeps the P1 form: G1 carries D9 shielding in begin, and a
+                // suspending or cancelling close needs the explicit shield transition.
                 phase: 0,
                 shield: self.module.profile == Profile::Low && self.body.cleanup.closes.get(*close)
-                    .is_ok_and(|close| !close.effects.suspends && !close.effects.cancel),
+                    .is_ok_and(|close| self.frame_body() || !close.effects.suspends && !close.effects.cancel),
                 pending: pending.is_some(),
                 inventory: token.pieces.union(&reserve).cloned().collect(), reserve,
-                failures, failure_origin, cancel_delivered: false, may_fail: false,
+                failures, failure_origin, cancel_delivered: false, cancel_open: false, may_fail: false,
                 awaiting_failure: false, awaiting_source: None, awaiting_origin: None, selected: None,
                 executed: BTreeSet::new(), services: BTreeSet::new(), had_services: false,
                 close: *close, plan: None,
@@ -112,15 +114,16 @@ impl Engine<'_, '_> {
                 let owner_matches = self.body.cleanup.closes.get(*close).is_ok_and(|close| {
                     matches!(close.source, CleanupSource::Scope(owner) if token.scope == Some(owner))
                 });
+                // D16: a static inventory of duty tokens names its Services protocol; a runtime dictionary is
+                // optional and, when present, must be live.
+                if let Some(dictionary) = schedule.dictionary {
+                    self.live_use(before, dictionary);
+                }
                 let service_contract = (schedule.holders.is_empty() || owner_matches)
-                    && match (schedule.dictionary, schedule.protocol) {
-                    (None, None) => schedule.holders.is_empty(),
-                    (Some(dictionary), Some(protocol)) => {
-                        self.live_use(before, dictionary);
-                        self.module.protocols.get(protocol)
-                            .is_ok_and(|protocol| protocol.kind == ProtocolKind::Services)
-                    }
-                    _ => false,
+                    && match schedule.protocol {
+                    None => schedule.holders.is_empty() && schedule.dictionary.is_none(),
+                    Some(protocol) => self.module.protocols.get(protocol)
+                        .is_ok_and(|protocol| protocol.kind == ProtocolKind::Services),
                 };
                 if !service_contract {
                     self.error(R::B106, "service duties need their owner's checked schedule dictionary/protocol");
@@ -212,10 +215,19 @@ impl Engine<'_, '_> {
                 if fact.phase > 1 {
                     self.error(R::B106, "service settlement must precede the serial plan");
                 }
-                if !before.tokens[holder.as_u32() as usize].service.is_some_and(|key| fact.services.remove(&key)) {
-                    self.error(R::B106, "settlement is not one of this cleanup's outstanding service duties");
+                let key = before.tokens[holder.as_u32() as usize].service;
+                if !key.is_some_and(|key| fact.services.remove(&key)) {
+                    if key.is_some() && self.scheduled(before, fact.close, key) {
+                        self.error(R::LowDutySettledTwice, "a scheduled service duty is settled once per close");
+                    } else {
+                        self.error(R::B106, "settlement is not one of this cleanup's outstanding service duties");
+                    }
                 }
-                fact.may_fail = true;
+                // D24.2: the settle of a cache duty releases its outcome or closes its unstarted inputs; it never
+                // fails in 0.6.0. Other holders keep a captured settle failure.
+                let cache = matches!(super::super::later::value_type(self.module, self.body, *holder),
+                    Some(Type::Service(ServiceType::CacheState)));
+                fact.may_fail |= !(cache && self.module.profile == Profile::Low);
                 let incoming = &before.tokens[holder.as_u32() as usize];
                 if incoming.frame.and_then(|key| before.frames.get(&key)).is_some_and(|layout| {
                     layout.values().any(|slot| slot.token.saved_type.is_some_and(|ty| {
@@ -323,10 +335,28 @@ impl Engine<'_, '_> {
                 fact.pending = false;
             }
             CleanupOp::DeliverCancel { .. } => {
+                // D18: only the final successful close of an async action delivers a deferred cancellation;
+                // a nested or failing close keeps it for the next await or for the final exit.
                 let action = token.scope.and_then(|id| self.module.scopes.get(id).ok());
+                let close = self.body.cleanup.closes.get(fact.close).ok();
                 if !self.declaration.attrs.contains(&FunctionAttr::Async)
-                    || action.is_none_or(|scope| scope.kind != ScopeKind::Action || scope.parent.is_some()) {
-                    self.error(R::B105, "cancellation is delivered only at the final async action exit");
+                    || action.is_none_or(|scope| scope.kind != ScopeKind::Action || scope.parent.is_some())
+                    || close.is_none_or(|close| !close.effects.cancel || close.active_failure) {
+                    self.error(R::LowCancelOutsideFinalExit,
+                        "cancellation is delivered only by the final successful close of an async action");
+                }
+                if self.frame_body() {
+                    self.conditional_cancel(&token, &mut fact);
+                    token.cleanup = Some(fact);
+                    if let Some(slot) = slots.first_mut() {
+                        slot.token = token;
+                        let index = cleanup.as_u32() as usize;
+                        slot.refs = before.refs[index].clone();
+                        slot.requirements = before.full_deps[index].clone();
+                        slot.aliases = before.aliases[index].clone();
+                        slot.identity = before.identities[index];
+                    }
+                    return;
                 }
                 if fact.failures == 0 {
                     fact.failures = failure_bit(FailureKind::Cancelled);
@@ -348,6 +378,9 @@ impl Engine<'_, '_> {
             CleanupOp::Finish { .. } => {
                 if fact.phase != 2 || !token.pieces.is_empty() || !fact.services.is_empty() {
                     self.error(R::B102, "cleanup.finish skips an unprocessed remainder or service phase");
+                }
+                if fact.cancel_open {
+                    self.error(R::B105, "an open cancellation delivery is decided by the selector of its plan");
                 }
                 let destroyed: Vec<_> = fact.inventory.difference(&fact.reserve).cloned().collect();
                 self.invalidate(before, flow, &destroyed);
@@ -442,6 +475,63 @@ impl Engine<'_, '_> {
                 slot.identity = before.identities[index];
             }
         }
+    }
+
+    /// Champ draft 3 §5: in a D21 body `cleanup.deliver_cancel` delivers only a cancellation that was
+    /// requested and not yet delivered, and only without a primary failure. It runs once, after the plan has
+    /// drained (OIR-2 §9.3 step 6), so the executed prefix stays executed; a second plan then closes the
+    /// reserve if the cancellation was delivered. The next selector forks into both outcomes.
+    fn conditional_cancel(&mut self, token: &Token, fact: &mut CleanupFact) {
+        if fact.phase != 2 || !token.pieces.is_empty() || fact.awaiting_failure || fact.cancel_delivered {
+            self.error(R::B105, "cancellation is delivered once, after the plan has drained");
+        }
+        fact.cancel_delivered = true;
+        fact.phase = 1;
+        fact.plan = None;
+        if fact.failures == 0 {
+            // A primary failure keeps priority; without one the delivery is decided at run time.
+            fact.cancel_open = true;
+            fact.failure_origin = match self.state.location {
+                L::Instruction { instruction, .. } => Some(Origin::ViewInstruction(instruction, u16::MAX)),
+                _ => None,
+            };
+        }
+    }
+
+    /// The two outcomes of an open cancellation delivery: not delivered, with the reserve still reserved for
+    /// the commit; delivered, with Cancelled as the primary failure and the reserve aborted into the plan.
+    /// Each outcome is paired with whether it delivered the cancellation.
+    fn cancel_outcomes(&self, token: &Token) -> Vec<(Token, bool)> {
+        let Some(fact) = token.cleanup.as_ref().filter(|fact| fact.cancel_open) else {
+            return vec![(token.clone(), false)];
+        };
+        let mut kept = token.clone();
+        if let Some(fact) = &mut kept.cleanup {
+            fact.cancel_open = false;
+            fact.failure_origin = None;
+        }
+        let mut delivered = token.clone();
+        let reserve = fact.reserve.clone();
+        if let Some(fact) = &mut delivered.cleanup {
+            fact.cancel_open = false;
+            fact.failures = failure_bit(FailureKind::Cancelled);
+            if fact.pending {
+                fact.aborted = true;
+                fact.pending = false;
+                fact.reserve.clear();
+            }
+        }
+        if token.cleanup.as_ref().is_some_and(|fact| fact.pending) {
+            delivered.pieces.extend(reserve);
+        }
+        vec![(kept, false), (delivered, true)]
+    }
+
+    /// Whether the D16 schedule of `close` lists a holder whose service key is `key`.
+    fn scheduled(&self, before: &Flow, close: CleanupCloseId, key: Option<Origin>) -> bool {
+        self.body.cleanup.schedules.iter().filter(|(_, schedule)| schedule.close == close)
+            .flat_map(|(_, schedule)| &schedule.holders)
+            .any(|value| before.tokens[value.as_u32() as usize].service == key)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -653,8 +743,11 @@ impl Engine<'_, '_> {
             self.error(R::B105, "lowered cancellation delivery is missing from its close envelope");
         }
         let mut effects = self.required_effects(&fact.inventory, flow);
-        effects.suspends |= fact.had_services;
-        if fact.had_services {
+        // D20 §2.6: in Low a close suspends or fails only through its steps. No service settle waits or fails in
+        // 0.6.0 (async ABI D24.2); the outcome identities a settle releases are in the inventory with their types.
+        let services = fact.had_services && self.module.profile != Profile::Low;
+        effects.suspends |= services;
+        if services {
             for kind in [FailureKind::Thrown, FailureKind::Program, FailureKind::Panic, FailureKind::Native] {
                 if !effects.failures.contains(&kind) {
                     effects.failures.push(kind);
@@ -930,23 +1023,30 @@ impl Engine<'_, '_> {
             self.error(R::B102, "runtime selector cannot replace a direct plan's finite order");
         }
         let index = cleanup.as_u32() as usize;
-        let slot = Slot {
-            token: token.clone(), refs: before.refs[index].clone(), requirements: before.full_deps[index].clone(),
-            aliases: before.aliases[index].clone(), identity: before.identities[index], ..Slot::default()
-        };
-        if let Some(piece) = token.pieces.iter().next() {
-            let mut selected_slot = slot.clone();
-            selected_slot.token.cleanup.as_mut().unwrap().selected = Some(piece.origin);
-            let mut key = Slot::default();
-            key.refs.insert(piece.origin);
-            key.token.sources.insert(cleanup);
-            outgoing.push(self.edge(flow, selected.block, &selected.args, &[selected_slot, key], R::B102));
-        }
-        if token.pieces.is_empty() || token.pieces.iter().all(|piece| piece.family) {
-            let mut drained = slot;
-            drained.token.pieces.clear();
-            drained.token.cleanup.as_mut().unwrap().selected = None;
-            outgoing.push(self.edge(flow, done.block, &done.args, &[drained], R::B102));
+        for (token, delivered) in self.cancel_outcomes(&token) {
+            let mut branch = flow.clone();
+            if let Some(fact) = token.cleanup.as_ref().filter(|_| delivered) {
+                branch.active_failure = fact.failures;
+                branch.active_failure_origin = fact.failure_origin;
+            }
+            let slot = Slot {
+                token: token.clone(), refs: before.refs[index].clone(), requirements: before.full_deps[index].clone(),
+                aliases: before.aliases[index].clone(), identity: before.identities[index], ..Slot::default()
+            };
+            if let Some(piece) = token.pieces.iter().next() {
+                let mut selected_slot = slot.clone();
+                selected_slot.token.cleanup.as_mut().unwrap().selected = Some(piece.origin);
+                let mut key = Slot::default();
+                key.refs.insert(piece.origin);
+                key.token.sources.insert(cleanup);
+                outgoing.push(self.edge(&branch, selected.block, &selected.args, &[selected_slot, key], R::B102));
+            }
+            if token.pieces.is_empty() || token.pieces.iter().all(|piece| piece.family) {
+                let mut drained = slot;
+                drained.token.pieces.clear();
+                drained.token.cleanup.as_mut().unwrap().selected = None;
+                outgoing.push(self.edge(&branch, done.block, &done.args, &[drained], R::B102));
+            }
         }
     }
 

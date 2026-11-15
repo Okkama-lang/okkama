@@ -105,6 +105,34 @@ fn boundary(
         state.error(R::B105, "root map omits a live value, ownership holder or full dependency operand");
     }
 }
+/// B10.4, D21 §3.3: the roots of a suspended frame are its saved and operand slots. The operands are live
+/// at the boundary of the suspending operation, so the root map there must survive the suspension.
+fn suspension_maps(function: FuncId, declaration: &Function, body: &Body, maps: &Maps<'_>, state: &mut State<'_>) {
+    if !declaration.attrs.contains(&FunctionAttr::Async) {
+        return;
+    }
+    let Some(layout) = &body.frame_layout else {
+        return;
+    };
+    for continuation in &layout.continuations {
+        if !state.step(1) {
+            return;
+        }
+        let (boundary, location) = match continuation.site {
+            SuspendSite::Start => continue,
+            SuspendSite::Instruction(instruction) => {
+                (RootBoundary::BeforeInstruction(instruction), L::Instruction { function, instruction })
+            }
+            SuspendSite::Terminator(block) => (RootBoundary::Terminator(block), L::Terminator { function, block }),
+        };
+        let maps = maps.get(&boundary_key(&boundary)).map_or(&[][..], Vec::as_slice);
+        if maps.iter().any(|map| !map.through_suspend) {
+            state.at(location, None);
+            state.error(R::B105, "the root map of a suspension site must survive the suspension (B10.4, D21)");
+        }
+    }
+}
+
 pub(super) fn check(module: &Module, selected: Option<FuncId>, state: &mut State<'_>) {
     if module.profile != Profile::Low {
         return;
@@ -126,6 +154,7 @@ pub(super) fn check(module: &Module, selected: Option<FuncId>, state: &mut State
             }
             maps.entry(boundary_key(&map.boundary)).or_default().push(map);
         }
+        suspension_maps(function, declaration, body, &maps, state);
         let edges = super::graph::edges(body, state);
         let mut successors = vec![BTreeSet::new(); body.blocks.len()];
         for edge in &edges {

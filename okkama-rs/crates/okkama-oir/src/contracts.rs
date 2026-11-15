@@ -1017,7 +1017,9 @@ impl<'a> ContractRegistry<'a> {
                 }
             }
             Rule::CleanupSettle { cleanup: plan, holder, protocol } => {
-                cleanup(c);
+                // Async ABI D20, D24.2: no service settle waits in 0.6.0; settle failures are captured by the
+                // cleanup state (Champ draft 3 §14.4, opcode 21, class L).
+                captured_cleanup(c);
                 c.normal.results.push(ResultSlot::new(N::State, ResultType::SameAs(plan)));
                 c.normal.transfers.push(TransferRule::Settle { inputs: vec![holder, plan] });
                 self.protocol(protocol, ProtocolTransition::Settle, c, validate)?;

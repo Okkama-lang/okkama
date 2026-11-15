@@ -18,7 +18,8 @@ fn trace(module: &Module, body: &Body, value: ValueId) -> Result<Option<RootTrac
     Ok(Some(trace))
 }
 fn record(
-    module: &Module, body: &mut Body, boundary: RootBoundary, live: &BTreeSet<ValueId>, budget: &mut Budget<'_>,
+    module: &Module, body: &mut Body, boundary: RootBoundary, live: &BTreeSet<ValueId>,
+    suspensions: &[RootBoundary], budget: &mut Budget<'_>,
 ) -> Result<(), LowError> {
     let mut expanded = live.clone();
     let mut values: Vec<_> = live.iter().copied().collect();
@@ -57,11 +58,26 @@ fn record(
             bindings.push(RootBinding { value, trace });
         }
     }
-    body.cleanup.roots.alloc(RootRequirement { boundary, bindings, through_suspend: false })?;
+    let through_suspend = suspensions.contains(&boundary);
+    body.cleanup.roots.alloc(RootRequirement { boundary, bindings, through_suspend })?;
     Ok(())
 }
 
+/// D21 §3.3, B10.4: the boundary of each suspension site of the frame layout. The map there holds the
+/// operands of the suspending operation, which stay rooted while the frame is suspended.
+fn suspensions(body: &Body) -> Vec<RootBoundary> {
+    let Some(layout) = &body.frame_layout else {
+        return Vec::new();
+    };
+    layout.continuations.iter().filter_map(|continuation| match continuation.site {
+        SuspendSite::Start => None,
+        SuspendSite::Instruction(inst) => Some(RootBoundary::BeforeInstruction(inst)),
+        SuspendSite::Terminator(block) => Some(RootBoundary::Terminator(block)),
+    }).collect()
+}
+
 pub(super) fn collect(module: &Module, body: &mut Body, budget: &mut Budget<'_>) -> Result<(), LowError> {
+    let suspensions = suspensions(body);
     let count = body.blocks.len();
     let mut incoming = vec![BTreeSet::<ValueId>::new(); count];
     let mut outgoing = incoming.clone();
@@ -106,14 +122,14 @@ pub(super) fn collect(module: &Module, body: &mut Body, budget: &mut Budget<'_>)
     for id in blocks {
         let data = body.blocks.get(id)?.clone();
         let mut live = outgoing[id.as_u32() as usize].clone();
-        record(module, body, RootBoundary::Terminator(id), &live, budget)?;
+        record(module, body, RootBoundary::Terminator(id), &live, &suspensions, budget)?;
         for instruction in data.insts.iter().rev() {
             let inst = body.insts.get(*instruction)?.clone();
             let contract = ContractRegistry::new(module).construction_schema(&inst.op, body)
                 .map_err(|error| LowError::InvalidOutput(error.to_string()))?;
             let mut after = live.clone();
             after.extend(inst.results.iter().copied());
-            record(module, body, RootBoundary::AfterInstruction(*instruction), &after, budget)?;
+            record(module, body, RootBoundary::AfterInstruction(*instruction), &after, &suspensions, budget)?;
             for result in &inst.results {
                 live.remove(result);
             }
@@ -122,10 +138,10 @@ pub(super) fn collect(module: &Module, body: &mut Body, budget: &mut Budget<'_>)
                 && let Some(unwind) = &data.unwind {
                 live.extend(unwind.target.args.iter().copied());
             }
-            record(module, body, RootBoundary::BeforeInstruction(*instruction), &live, budget)?;
+            record(module, body, RootBoundary::BeforeInstruction(*instruction), &live, &suspensions, budget)?;
         }
         live.extend(data.params);
-        record(module, body, RootBoundary::Entry(id), &live, budget)?;
+        record(module, body, RootBoundary::Entry(id), &live, &suspensions, budget)?;
     }
     Ok(())
 }
