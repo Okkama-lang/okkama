@@ -143,6 +143,173 @@ fn selected_identities_never_lose_unproved_elements() {
     assert_eq!(evidence.selected_identities(Location::Register(2)), Some(Default::default()));
 }
 
+/// A native handle declaration (no fields, no resources), appended as object 6.
+fn handle_object() -> Object {
+    Object {
+        name: "Native".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: true,
+        fields: vec![],
+        layout: ObjectRuntimeLayout {
+            allocation_words: 2, storage_fields: vec![], identity_offset: None, has_destroy: false,
+            may_reach_resource: false, may_async_destroy: false, trace_layout: vec![], selection_layout: vec![],
+        },
+    }
+}
+
+/// A map value that declares neither a destroy nor a resource is plain only if its whole graph is, as an array
+/// element is (`ARRAY_PLAIN`): a handle or a failure in it is not plain data (#692).
+#[test]
+fn managed_map_values_follow_the_array_leaf_rule() {
+    for field in [Type::Failure, Type::Handle(6)] {
+        let mut p = program();
+        p.objects.push(handle_object());
+        p.objects[5].layout.storage_fields = vec![field];
+        p.objects[5].layout.trace_layout = vec![0];
+        p.composites.push(Composite::Map { key: Type::Int, value: Type::Object(5) });
+        reject(&p, "MAP_PLAIN");
+        p.composites.pop();
+        p.functions[0].registers.push(Type::Array(ArrayType { leaf: ArrayLeaf::Object(5), depth: 1 }));
+        reject(&p, "ARRAY_PLAIN");
+    }
+    // A closed plain object and a resource object are map values.
+    let mut p = program();
+    p.composites.push(Composite::Map { key: Type::Int, value: Type::Object(5) });
+    p.composites.push(Composite::Map { key: Type::Int, value: Type::Object(0) });
+    verify(&p).unwrap();
+}
+
+/// An object field that refers to a resource object or successor raises the object's retention.
+#[test]
+fn object_fields_declare_the_retention_of_their_targets() {
+    verify(&program()).unwrap();
+    let mut p = program();
+    p.objects[1].layout.may_reach_resource = false;
+    reject(&p, "OBJECT_RETENTION");
+    let mut p = program();
+    p.objects[1].layout.storage_fields = vec![Type::Successor(0)];
+    p.objects[1].layout.may_reach_resource = false;
+    reject(&p, "OBJECT_RETENTION");
+}
+
+/// A case object (`some(value: R)`) or an ordinary object whose field refers to a resource object or successor
+/// selects that field: the runtime walk reaches the identity only through selected fields (#692).
+#[test]
+fn object_fields_referring_to_resources_are_selected() {
+    let mut p = program();
+    p.objects[1].layout.selection_layout.clear();
+    reject(&p, "COLLECTION_RETENTION");
+    let mut p = program();
+    p.objects[1].layout.storage_fields = vec![Type::Successor(0)];
+    verify(&p).unwrap();
+    p.objects[1].layout.selection_layout.clear();
+    reject(&p, "COLLECTION_RETENTION");
+    // A plain object field is not selected.
+    let mut p = program();
+    p.objects[1].layout.storage_fields = vec![Type::Object(5)];
+    p.objects[1].layout.selection_layout.clear();
+    p.objects[1].layout.may_reach_resource = false;
+    p.objects[3].layout.may_reach_resource = false;
+    verify(&p).unwrap();
+}
+
+fn champ(op: Opcode, arguments: Vec<Argument>, outputs: Vec<Location>) -> Instruction {
+    Instruction::Champ { op, arguments, flow: Flow::Next(outputs) }
+}
+
+/// `r = Res()` admitted to a scope, then `value` bound in it, then a split of `r` filtered by admission.
+/// Registers: r0 = r, r1 = `[r]`, r2 = an int.
+fn bound_then_split(value: u32) -> Program {
+    use Argument::Location as At;
+    use Location::{Register as R, Service as S};
+    let mut f = tests::empty_function();
+    f.entry_abi = EntryAbi::Owned;
+    f.registers = vec![Type::Object(0), RES_ARRAY, Type::Int];
+    f.services = vec![ServiceKind::Packet, ServiceKind::ScopeState, ServiceKind::Packet, ServiceKind::ScopeState,
+        ServiceKind::Packet, ServiceKind::ScopeState];
+    f.params = vec![S(0)];
+    f.blocks[0].params = f.params.clone();
+    f.proofs.selections = vec![Selection { locations: vec![R(0)] }];
+    let stop = Edge { target_pc: 9, assignments: vec![] };
+    f.code = vec![
+        champ(Opcode::ScopeBegin, vec![Argument::Scope(0), Argument::Boundary(0)], vec![S(1)]),
+        Instruction::Data { op: DataOp::ObjNew, inputs: vec![], output: Some(0), immediate: Immediate::Object(0) },
+        champ(Opcode::OwnCreateCommit, vec![At(R(0)), Argument::Object(0), Argument::Boundary(0)], vec![S(2)]),
+        champ(Opcode::OwnAdmit, vec![At(S(1)), At(S(2))], vec![S(3)]),
+        Instruction::Data { op: DataOp::ArrayNew, inputs: vec![0], output: Some(1), immediate: Immediate::None },
+        Instruction::Data { op: DataOp::Const, inputs: vec![], output: Some(2),
+            immediate: Immediate::Constant(Constant::Int("0".into())) },
+        champ(Opcode::OwnEmpty, vec![], vec![S(4)]),
+        champ(Opcode::OwnBind,
+            vec![At(S(3)), Argument::Binding(0), Argument::Scope(0), At(R(value)), At(S(4))], vec![S(5)]),
+        Instruction::Champ { op: Opcode::ScopeSplit,
+            arguments: vec![At(S(5)), Argument::Selection(0), Argument::Flag(true)],
+            flow: Flow::Outcomes(vec![
+                Outcome { tag: Tag::Normal, edge: stop.clone() },
+                Outcome { tag: Tag::Unwind, edge: stop },
+            ]) },
+        Instruction::Unreachable,
+    ];
+    Program { objects: objects(), functions: vec![f], ..Program::default() }
+}
+
+/// The runtime binds every identity a bound value reaches, the elements of a managed array included: once `[r]`
+/// is bound, `r` is no longer admissible, so the admission filter of a later split is not redundant (#692).
+#[test]
+fn binding_a_managed_array_removes_its_elements_from_admission() {
+    let redundant = |value| {
+        let p = bound_then_split(value);
+        evidence::redundant_admission_filters(&p, &p.functions[0]).unwrap()
+    };
+    // Binding an int binds nothing: `r` stays admissible and the filter selects it either way.
+    assert_eq!(redundant(2), vec![8]);
+    // Binding `r` itself, or an array of it, binds `r`: the filtered split selects nothing.
+    assert_eq!(redundant(0), Vec::<usize>::new());
+    assert_eq!(redundant(1), Vec::<usize>::new());
+}
+
+/// `map.new` over two fresh resources whose keys are the constants `first` and `second`.
+fn keyed_map(first: &str, second: &str) -> Program {
+    use Argument::Location as At;
+    use Location::{Register as R, Service as S};
+    let mut f = tests::empty_function();
+    f.registers = vec![Type::Object(0), Type::Object(0), Type::Str, Type::Str, Type::Map(0)];
+    f.services = vec![ServiceKind::Packet, ServiceKind::Packet];
+    let key = |value: &str, output| Instruction::Data { op: DataOp::Const, inputs: vec![], output: Some(output),
+        immediate: Immediate::Constant(Constant::Str(value.into())) };
+    let create = |output| Instruction::Data { op: DataOp::ObjNew, inputs: vec![], output: Some(output),
+        immediate: Immediate::Object(0) };
+    let commit = |identity, packet| champ(Opcode::OwnCreateCommit,
+        vec![At(R(identity)), Argument::Object(0), Argument::Boundary(0)], vec![S(packet)]);
+    f.code = vec![
+        create(0),
+        commit(0, 0),
+        create(1),
+        commit(1, 1),
+        key(first, 2),
+        key(second, 3),
+        Instruction::Data { op: DataOp::MapNew, inputs: vec![2, 0, 3, 1], output: Some(4),
+            immediate: Immediate::None },
+        Instruction::Ret(vec![]),
+    ];
+    let mut p = program();
+    p.functions = vec![f];
+    p
+}
+
+/// A repeated key keeps only its last value: the values of `map.new` are its elements only when the keys are
+/// pairwise distinct constants (#692).
+#[test]
+fn a_map_with_a_repeated_key_has_no_static_inventory() {
+    let selected = |p: &Program| evidence::Evidence::new(p, &p.functions[0]).selected_identities(Location::Register(4));
+    let distinct = keyed_map("k", "j");
+    assert_eq!(selected(&distinct), Some([(1, None), (3, None)].into_iter().collect()));
+    assert_eq!(selected(&keyed_map("k", "k")), None);
+    // A key that is not a constant may repeat another.
+    let mut p = keyed_map("k", "j");
+    let f = &mut p.functions[0];
+    f.code[5] = Instruction::Data { op: DataOp::Move, inputs: vec![2], output: Some(3), immediate: Immediate::None };
+    assert_eq!(selected(&p), None);
+}
+
 /// `undef r0` reaches block 1 as r1, which obj.new stores; the object's field is returned.
 fn construction(read_parameter: bool) -> Program {
     let mut f = tests::empty_function();

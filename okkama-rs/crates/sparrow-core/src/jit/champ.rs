@@ -51,9 +51,11 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
         let blocks = (0..source.code.len()).map(|_| builder.create_block()).collect();
         let stop = builder.create_block();
         let invocations = runtime.invocations.as_ptr();
+        let polled = runtime.limits.polled();
+        let fuel = runtime.budget.fuel.address();
         let mut emit = Emit {
             builder: &mut builder, jit: &mut runtime.jit, program: &program, source, index, invocations,
-            ctx, io, storage, frame: &frame, scope_base, post, blocks, stop, pc: None,
+            ctx, io, storage, frame: &frame, scope_base, post, blocks, stop, pc: None, polled, fuel,
             plans: &machine.plans[index], selections: &machine.selections[index], entries: &machine.entries,
             shielded_entries: &machine.shielded_entries,
             constants: &mut runtime.constants, heap: &mut runtime.heap,
@@ -115,6 +117,11 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
             for (pc, instruction) in source.code.iter().enumerate() {
                 emit.pc = Some(pc);
                 emit.builder.switch_to_block(emit.blocks[pc]);
+                if pc == 0 && emit.polled {
+                    // No edge enters block 0 (ENTRY_BLOCK_TARGET): it is reached at the function entry and by a
+                    // self tail call, each a step as in Tomato.
+                    emit.poll();
+                }
                 if pc == 0 && owned && s::plain_inputs(&program, source) {
                     emit.checked("champ_machine_plain_packet", &[ctx, io]);
                 }
@@ -175,6 +182,10 @@ struct Emit<'a, 'b> {
     blocks: Vec<Block>,
     stop: Block,
     pc: Option<usize>,
+    /// Whether a budget is set (`Limits::polled`): only then does machine code count steps.
+    polled: bool,
+    /// Address of the runtime's fuel cell.
+    fuel: i64,
     plans: &'a [u64],
     selections: &'a [(u32, u64)],
     entries: &'a [u64],
@@ -358,8 +369,31 @@ impl Emit<'_, '_> {
         self.builder.ins().jump(self.blocks[self.pc.unwrap() + 1], &[]);
     }
 
+    /// One budget step (`budget`), counted as Tomato counts them: below zero fuel calls `rt_poll`, and an
+    /// exhausted budget or an interrupt stops the run (no handler catches it, no destroy runs).
+    fn poll(&mut self) {
+        let cell = self.iconst(self.fuel as u64);
+        let fuel = self.load(cell, 0);
+        let left = self.builder.ins().iadd_imm_s(fuel, -1);
+        self.store(cell, 0, left);
+        let empty = self.builder.ins().icmp_imm_s(IntCC::SignedLessThan, left, 0);
+        let slow = self.builder.create_block();
+        let next = self.builder.create_block();
+        self.builder.set_cold_block(slow);
+        self.builder.ins().brif(empty, slow, &[], next, &[]);
+        self.builder.switch_to_block(slow);
+        self.call("poll", &[self.ctx]);
+        let status = self.load(self.ctx, std::mem::offset_of!(Ctx, status));
+        self.builder.ins().brif(status, self.stop, &[], next, &[]);
+        self.builder.switch_to_block(next);
+    }
+
     fn edge(&mut self, edge: &s::Edge, produced: &[Vec<Value>]) {
         let pc = self.pc.expect("edge PC");
+        if self.polled && edge.target_pc as usize <= pc {
+            // A loop back-edge is a step.
+            self.poll();
+        }
         let ordinal = roots::outgoing(&self.source.code[pc]).iter()
             .position(|candidate| std::ptr::eq(*candidate, edge)).expect("source edge");
         for copy in &self.frame.allocation.edges[&(pc as u32, ordinal as u32)] {

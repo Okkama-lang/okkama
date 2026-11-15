@@ -6,6 +6,13 @@ use super::*;
 
 type Check = Result<(), Error>;
 
+/// An object field has type never.
+const NEVER_FIELD: &str = "NEVER_FIELD";
+/// A data or Champ instruction reads a value of type never.
+const NEVER_OPERAND: &str = "NEVER_OPERAND";
+/// A collection of never leaves is retagged to another shape, or a key-less map to another value type.
+const NEVER_RETAG: &str = "NEVER_RETAG";
+
 fn require(condition: bool, message: &str) -> Check {
     if condition { Ok(()) } else { Err(error(message)) }
 }
@@ -44,19 +51,8 @@ fn ty_valid(ty: Type, p: &Program) -> Check {
                 enforce(!p.objects[id as usize].handle, "HANDLE_TYPE",
                     "an array element names a native handle declaration")?;
             }
-            // A managed array holds references to resource objects; it owns none of them (own keeps the
-            // elements' obligations with their owners). Any other leaf is closed plain data.
-            let resource = match element {
-                Type::Object(id) => {
-                    let layout = &p.objects[id as usize].layout;
-                    layout.has_destroy || layout.may_reach_resource
-                }
-                _ => false,
-            };
             // An object with an async destroy is rejected for every use outside P1, arrays included.
-            if !resource {
-                enforce(closed_plain(p, element), "ARRAY_PLAIN", "array element graph is not closed plain data")?;
-            }
+            enforce(collection_leaf(p, element), "ARRAY_PLAIN", "array element graph is not closed plain data")?;
         }
         Type::Map(id) | Type::MapBuilder(id) => {
             enforce(matches!(p.composites.get(id as usize), Some(Composite::Map { .. })),
@@ -69,6 +65,18 @@ fn ty_valid(ty: Type, p: &Program) -> Check {
         _ => {}
     }
     Ok(())
+}
+
+/// The leaf of a collection (an array element or a map value): a resource object, which a managed collection
+/// refers to without owning it (own keeps its obligation with its owner), or closed plain data. An object that
+/// declares neither a destroy nor a resource is plain only if its whole graph is (`ARRAY_PLAIN`, `MAP_PLAIN`).
+fn collection_leaf(p: &Program, leaf: Type) -> bool {
+    let resource = match leaf {
+        Type::Object(id) => p.objects.get(id as usize)
+            .is_some_and(|object| object.layout.has_destroy || object.layout.may_reach_resource),
+        _ => false,
+    };
+    resource || closed_plain(p, leaf)
 }
 
 /// Whether a value of `ty` may refer to an identity that reaches a resource: a resource object or successor,
@@ -177,9 +185,7 @@ fn composite_valid(p: &Program, index: usize, composite: Composite) -> Check {
             ty_valid(value, p)?;
             enforce(key_type(p, key), "MAP_KEY", "map key is not a key type")?;
             // A managed map refers to resource objects as values; like a managed array it owns none.
-            let resource = matches!(value, Type::Object(id) if p.objects.get(id as usize)
-                .is_some_and(|object| !object.handle && !object.layout.may_async_destroy));
-            enforce(closed_plain(p, value) || resource, "MAP_PLAIN",
+            enforce(collection_leaf(p, value), "MAP_PLAIN",
                 "map value graph is neither plain data nor resource objects")
         }
         Composite::Builder { array } => {
@@ -361,12 +367,16 @@ pub fn verify(p: &Program) -> Check {
             ty_valid(ty, p)?;
             enforce(!matches!(ty, Type::Builder(_) | Type::MapBuilder(_)), "BUILDER_LINEAR",
                 "object storage cannot hold a unique builder")?;
+            // No value of type never exists: a field of it would be read as a forged word.
+            enforce(ty != Type::Never, NEVER_FIELD, "object storage cannot have type never")?;
             // Retention flags are checked object by object, so a managed collection's leaf flag can be trusted.
             if let Type::Object(id) | Type::Successor(id) = ty {
                 enforce(layout.may_reach_resource || !p.objects[id as usize].layout.may_reach_resource,
                     "OBJECT_RETENTION", "understated object retention metadata")?;
             }
-            if matches!(ty, Type::Array(_) | Type::Map(_) | Type::Variant(_)) && reaches_resource(p, ty) {
+            // The runtime selection walk reaches identities only through selected fields: a field that may refer
+            // to a resource, directly or through a managed collection or a variant, is selected.
+            if reaches_resource(p, ty) {
                 enforce(layout.may_reach_resource && layout.selection_layout.contains(&(index as u32)),
                     "COLLECTION_RETENTION", "a field holding resource objects must be selected and reach resources")?;
             }
@@ -1078,6 +1088,13 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
                 || matches!((types[0], out), (Type::Object(case), Some(Type::Variant(variant)))
                     if p.objects[variant as usize].variant_cases.contains(&case))
                 || out.is_some_and(|out| never_retag(&p.composites, types[0], out));
+            let never_source = match types[0] {
+                Type::Array(shape) => shape.leaf == ArrayLeaf::Never,
+                Type::Map(id) => matches!(p.composites.get(id as usize), Some(Composite::Map { key: Type::Never, .. })),
+                _ => false,
+            };
+            enforce(valid || !never_source, NEVER_RETAG,
+                "a collection of never leaves retags only to its own shape, keeping a map's value type")?;
             require(valid, "invalid move/succ.take type")
         }
         Undef => require(types.is_empty() && out.is_some(), "invalid undef"),
@@ -1293,6 +1310,13 @@ fn verify_function(p: &Program, f: &Function) -> Check {
         for pc in block.pc as usize..end {
             let inst = &f.code[pc];
             require(terminates(inst) == (pc + 1 == end), "missing or early block terminator")?;
+            if matches!(inst, Instruction::Data { .. } | Instruction::Champ { .. }) {
+                // A never value comes only from an unreachable read (an element of an empty collection, an
+                // undef placeholder): no operation may consume it as a word of any type.
+                let never = operand_reads(inst).into_iter()
+                    .any(|location| matches!(loc_type(f, location), Ok(ProducedType::Value(Type::Never))));
+                enforce(!never, NEVER_OPERAND, &format!("an operation reads a value of type never at {pc}"))?;
+            }
             match inst {
                 Instruction::Data { op, inputs, output, immediate } => {
                     check_data(p, f, *op, inputs, *output, immediate)?;
@@ -1549,10 +1573,20 @@ fn check_builders(p: &Program, f: &Function, pcs: &BTreeMap<u32, usize>) -> Chec
             if terminal {
                 linear(active.is_empty(), "a live builder is neither finished nor abandoned")?;
             }
-            for (edge, _) in checked_edges(p, f, inst)? {
+            for (edge, produced) in checked_edges(p, f, inst)? {
                 let mut next = active.clone();
                 let mut consumed = BTreeSet::new();
                 let mut destinations = Vec::new();
+                // The builder an outcome produces continues in exactly one location, like a produced service.
+                for (slot, ty) in produced.iter().enumerate() {
+                    if !matches!(ty, ProducedType::Value(Type::Builder(_) | Type::MapBuilder(_))) {
+                        continue;
+                    }
+                    let uses = edge.assignments.iter()
+                        .filter(|assignment| assignment.source == Source::ProducedSlot(slot as u32)).count();
+                    linear(uses != 0, "an outcome drops its produced builder")?;
+                    linear(uses == 1, "an outcome duplicates its produced builder")?;
+                }
                 for assignment in &edge.assignments {
                     if !builder(assignment.destination) {
                         continue;

@@ -914,3 +914,55 @@ fn champ_selection_walk_descends_into_managed_arrays() {
     assert!(words(&h.runtime, &post.rest).is_empty());
     h.gc(&[post.rest.record, post.selected.record]);
 }
+
+/// A managed array may refer to identities another packet owns (the result of mapping a managed array): a
+/// checked split selects the elements in its source and leaves the others with their owner, while a direct
+/// root outside the source is still refused (#692).
+#[test]
+fn champ_checked_selection_leaves_foreign_collection_elements_with_their_owner() {
+    let mut h = Harness::new();
+    let owner = h.runtime.champ_new_owner().unwrap();
+    let (a, mut source) = h.fresh(0, owner);
+    let (b, other) = h.fresh(0, owner);
+    let managed = h.runtime.heap.allocate_array(Repr::Ref, &[a, b]);
+    let nested = h.runtime.heap.allocate_array(Repr::Ref, &[managed]);
+    let mut post = SplitPost::default();
+    let roots = [nested];
+    assert_eq!(rt_own_split_checked(&mut h.ctx, &mut source, &selection(&roots), &mut post), NORMAL);
+    assert_eq!(words(&h.runtime, &post.selected), HashSet::from([a]));
+    assert!(words(&h.runtime, &post.rest).is_empty());
+    assert_eq!(words(&h.runtime, &other), HashSet::from([b]));
+    h.gc(&[post.rest.record, post.selected.record, other.record]);
+    let mut selected = post.selected;
+    let roots = [b];
+    let mut refused = SplitPost::default();
+    assert_eq!(rt_own_split_checked(&mut h.ctx, &mut selected, &selection(&roots), &mut refused), UNWIND);
+    assert_eq!(h.ctx.status, FAILED);
+}
+
+/// A transferred value may borrow an identity an enclosing scope owns (an element of its managed array pushed
+/// into its builder): the transfer moves what its source holds and leaves the borrowed identity with its owner
+/// (#692).
+#[test]
+fn champ_transfer_leaves_a_borrowed_identity_with_its_owner() {
+    let mut h = Harness::new();
+    let mut from = h.scope();
+    let mut to = h.scope();
+    let from_scope = scope(&h.runtime, from.record).unwrap();
+    let to_scope = scope(&h.runtime, to.record).unwrap();
+    let (moved, mut packet) = h.fresh(0, from_scope.owner);
+    assert_eq!(rt_own_accept(&mut h.ctx, &mut from, &mut packet, &mut from), NORMAL);
+    let (borrowed, mut owned) = h.fresh(0, to_scope.owner);
+    assert_eq!(rt_own_accept(&mut h.ctx, &mut to, &mut owned, &mut to), NORMAL);
+    let kept = h.identity(borrowed);
+    let roots = [moved, borrowed];
+    let mut post = TransferPost::default();
+    let inputs = TransferInputs { from: &mut from, to: &mut to };
+    assert_eq!(rt_scope_transfer(&mut h.ctx, &inputs, &selection(&roots), &mut post), NORMAL);
+    let (from, to) = (post.from, post.to);
+    assert_eq!(scope(&h.runtime, from.record).unwrap().all().words().count(), 0);
+    assert_eq!(scope(&h.runtime, to.record).unwrap().all().words().collect::<HashSet<_>>(),
+        HashSet::from([moved, borrowed]));
+    assert_eq!(h.identity(borrowed), kept);
+    h.gc(&[from.record, to.record]);
+}
