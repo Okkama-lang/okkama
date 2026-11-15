@@ -35,6 +35,7 @@ bibliographic data were checked are listed.
 - [@codd1990] E. F. Codd (1990). *The Relational Model for Database Management: Version 2*. Addison-Wesley.
 - [@cook2009] William R. Cook (2009). On Understanding Data Abstraction, Revisited. In *Proceedings of OOPSLA 2009*, *ACM SIGPLAN Notices* 44(10): 557–572. https://doi.org/10.1145/1640089.1640133
 - [@cox2018] Russ Cox (2018). Minimal Version Selection. research!rsc, 21 February 2018. https://research.swtch.com/vgo-mvs
+- [@csrecords] Microsoft (2026). Records (C# reference). *C# language reference*. https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/record {label: C# language reference}
 - [@cwe] The MITRE Corporation (2026). *Common Weakness Enumeration (CWE)*, version 5.0. https://cwe.mitre.org/ {label: MITRE CWE}
 - [@cytron1991] Ron Cytron, Jeanne Ferrante, Barry K. Rosen, Mark N. Wegman, F. Kenneth Zadeck (1991). Efficiently Computing Static Single Assignment Form and the Control Dependence Graph. *ACM TOPLAS* 13(4): 451–490. https://doi.org/10.1145/115372.115320
 - [@dahl1966] Ole-Johan Dahl, Kristen Nygaard (1966). SIMULA — an ALGOL-Based Simulation Language. *Communications of the ACM* 9(9): 671–678. https://doi.org/10.1145/365813.365819
@@ -48,6 +49,7 @@ bibliographic data were checked are listed.
 - [@dunittest] D Language Foundation (2026). Unit Tests. *D Language Specification*. https://dlang.org/spec/unittest.html {label: D specification}
 - [@elizarov2018] Roman Elizarov (2018). Structured concurrency. Blog post, 12 September 2018. https://medium.com/@elizarov/structured-concurrency-722d765aa952
 - [@erlangref] Ericsson AB (2026). *Erlang Reference Manual*. Erlang/OTP documentation. https://www.erlang.org/doc/system/reference_manual.html {label: Erlang Reference Manual}
+- [@evans2003] Eric Evans (2003). *Domain-Driven Design: Tackling Complexity in the Heart of Software*. Addison-Wesley.
 - [@fahndrich2003] Manuel Fähndrich, K. Rustan M. Leino (2003). Declaring and Checking Non-null Types in an Object-Oriented Language. In *Proceedings of OOPSLA 2003*: 302–312. ACM. https://doi.org/10.1145/949305.949332
 - [@fowler2007] Martin Fowler (2007). Mocks Aren't Stubs. https://martinfowler.com/articles/mocksArentStubs.html
 - [@gabriel1991] Richard P. Gabriel (1991). The Rise of "Worse is Better". In *Lisp: Good News, Bad News, How to Win Big*. https://www.dreamsongs.com/RiseOfWorseIsBetter.html

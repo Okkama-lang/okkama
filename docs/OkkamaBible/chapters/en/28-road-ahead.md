@@ -161,7 +161,7 @@ The rest of the limits named in this book are not gaps. They are what the
 language is, argued where they appear:
 
 - forwarding by hand in decorators, and no default bodies in roles
-  (Sections 2.11, 14.6);
+  (Sections 2.12, 14.6);
 - no retroactive conformance, and operators that look only to their left
   operand (Section 14.11);
 - no downcast from a role, ever (Section 14.3);

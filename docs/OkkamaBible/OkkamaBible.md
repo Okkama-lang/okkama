@@ -26,7 +26,8 @@
   - [2.8 Composition in practice](#28-composition-in-practice)
   - [2.9 Roads not taken: prototypes and actors](#29-roads-not-taken-prototypes-and-actors)
   - [2.10 The harbour, once more](#210-the-harbour-once-more)
-  - [2.11 What was lost](#211-what-was-lost)
+  - [2.11 Values come back](#211-values-come-back)
+  - [2.12 What was lost](#212-what-was-lost)
 - [Chapter 3. The Manifesto, Rule by Rule](#chapter-3-the-manifesto-rule-by-rule)
   - [3.1 Rule one: objects expose behaviour, not state](#31-rule-one-objects-expose-behaviour-not-state)
   - [3.2 Rule two: state is bound at construction, and constructors guard it](#32-rule-two-state-is-bound-at-construction-and-constructors-guard-it)
@@ -709,7 +710,7 @@ entity brings back. A role with bodies is a base class by another name, and
 two roles that supply a body for the same action need a rule for which one
 wins, the question traits exist to answer (Chapter 14). An object that does
 the shared work, held by the decorators that need it, already does the job.
-Forwarding stays explicit, and Section 2.11 counts it among the costs.
+Forwarding stays explicit, and Section 2.12 counts it among the costs.
 
 **`once let`: accepted (issue #491).** Objects never change, so an answer
 computed from their fields could be kept. Without a construct for it, a
@@ -1157,7 +1158,39 @@ Dahl and Nygaard's insight survives: a program is made of things that act.
 What changed is the meaning of "act". In Simula an object acts by changing
 itself; in Okkama it acts by answering with what comes next.
 
-## 2.11 What was lost
+## 2.11 Values come back
+
+The discipline of Section 2.7 did not stay a minority view. In the 2000s and
+2010s the mainstream rediscovered immutable values from several directions
+at once.
+
+- **Value objects.** Evans's *Domain-Driven Design* separated entities,
+  which keep an identity through change, from value objects, which are
+  defined by their attributes, have no identity of their own and should be
+  immutable. An amount of money or a date range is a value object: it is
+  replaced, not edited [[Evans 2003](#ref-evans2003)].
+- **Minimal mutability.** Bloch's *Effective Java* advised making a class
+  immutable unless there is a good reason not to, because an immutable
+  object is simple, safe to share between threads and free to reuse
+  [[Bloch 2018](#ref-bloch2018)].
+- **Declarations for values.** Languages followed with syntax. Kotlin's
+  data classes generate equality and a copying operation [[Kotlin documentation](#ref-kotlindata)];
+  Java records, final in Java 16, are transparent carriers of immutable data
+  [[Bierman 2021](#ref-jep395)]; C# 9 added records with equality by value and non-destructive
+  change through `with` [[C# language reference](#ref-csrecords)].
+
+What these share with Okkama is the value itself: equality by contents, no
+mutation, a new value for every change (successors, Section 13.5; objects
+as values, Section 12.9). Okkama parts from them on the other side of
+Evans's distinction. A record is defined by its fields and hands them out,
+while Okkama keeps the manifesto's first rule even for values: an object
+answers questions and keeps its fields (Section 3.1), and a shorthand for
+data objects is still an open question (Section 28.4). Nor does Okkama have
+entities in Evans's sense, mutable state behind a stable identity, except
+through `Cell` and `Atomic`. What persists through change is a name rebound
+to successors, or state owned by one task (Section 20.6).
+
+## 2.12 What was lost
 
 Removing inheritance removes real conveniences, and it would be dishonest to
 pretend otherwise.
@@ -20839,7 +20872,7 @@ The rest of the limits named in this book are not gaps. They are what the
 language is, argued where they appear:
 
 - forwarding by hand in decorators, and no default bodies in roles
-  (Sections 2.11, 14.6);
+  (Sections 2.12, 14.6);
 - no retroactive conformance, and operators that look only to their left
   operand (Section 14.11);
 - no downcast from a role, ever (Section 14.3);
@@ -20898,6 +20931,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-bugayenko2016"></a>Yegor Bugayenko (2016). *Elegant Objects*, Volume 1. Self-published (CreateSpace).
 - <a id="ref-bugayenko2017"></a>Yegor Bugayenko (2017). *Elegant Objects*, Volume 2. Self-published (CreateSpace).
 - <a id="ref-burstall1980"></a>R. M. Burstall, D. B. MacQueen, D. T. Sannella (1980). HOPE: An Experimental Applicative Language. In *Proceedings of the 1980 ACM Conference on LISP and Functional Programming*, 136–143. https://doi.org/10.1145/800087.802799
+- <a id="ref-csrecords"></a>Microsoft (2026). Records (C# reference). *C# language reference*. https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/record
 - <a id="ref-canning1989"></a>Peter Canning, William Cook, Walter Hill, Walter Olthoff, John C. Mitchell (1989). F-Bounded Polymorphism for Object-Oriented Programming. In *Proceedings of FPCA 1989*: 273–280. ACM. https://doi.org/10.1145/99370.99392
 - <a id="ref-cardelli1985"></a>Luca Cardelli, Peter Wegner (1985). On Understanding Types, Data Abstraction, and Polymorphism. *ACM Computing Surveys* 17(4): 471–523. https://doi.org/10.1145/6041.6042
 - <a id="ref-jep421"></a>Brent Christian (2021). JEP 421: Deprecate Finalization for Removal. OpenJDK. https://openjdk.org/jeps/421
@@ -20922,6 +20956,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-duffy2016"></a>Joe Duffy (2016). The Error Model. Blog post, 7 February 2016. http://joeduffyblog.com/2016/02/07/the-error-model/
 - <a id="ref-elizarov2018"></a>Roman Elizarov (2018). Structured concurrency. Blog post, 12 September 2018. https://medium.com/@elizarov/structured-concurrency-722d765aa952
 - <a id="ref-erlangref"></a>Ericsson AB (2026). *Erlang Reference Manual*. Erlang/OTP documentation. https://www.erlang.org/doc/system/reference_manual.html
+- <a id="ref-evans2003"></a>Eric Evans (2003). *Domain-Driven Design: Tackling Complexity in the Heart of Software*. Addison-Wesley.
 - <a id="ref-se0304"></a>Swift Evolution (2021). SE-0304: Structured Concurrency. https://github.com/swiftlang/swift-evolution/blob/main/proposals/0304-structured-concurrency.md
 - <a id="ref-fowler2007"></a>Martin Fowler (2007). Mocks Aren't Stubs. https://martinfowler.com/articles/mocksArentStubs.html
 - <a id="ref-fahndrich2003"></a>Manuel Fähndrich, K. Rustan M. Leino (2003). Declaring and Checking Non-null Types in an Object-Oriented Language. In *Proceedings of OOPSLA 2003*: 302–312. ACM. https://doi.org/10.1145/949305.949332

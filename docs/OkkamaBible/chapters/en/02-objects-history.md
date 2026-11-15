@@ -269,7 +269,39 @@ Dahl and Nygaard's insight survives: a program is made of things that act.
 What changed is the meaning of "act". In Simula an object acts by changing
 itself; in Okkama it acts by answering with what comes next.
 
-## 2.11 What was lost
+## 2.11 Values come back
+
+The discipline of Section 2.7 did not stay a minority view. In the 2000s and
+2010s the mainstream rediscovered immutable values from several directions
+at once.
+
+- **Value objects.** Evans's *Domain-Driven Design* separated entities,
+  which keep an identity through change, from value objects, which are
+  defined by their attributes, have no identity of their own and should be
+  immutable. An amount of money or a date range is a value object: it is
+  replaced, not edited [@evans2003].
+- **Minimal mutability.** Bloch's *Effective Java* advised making a class
+  immutable unless there is a good reason not to, because an immutable
+  object is simple, safe to share between threads and free to reuse
+  [@bloch2018].
+- **Declarations for values.** Languages followed with syntax. Kotlin's
+  data classes generate equality and a copying operation [@kotlindata];
+  Java records, final in Java 16, are transparent carriers of immutable data
+  [@jep395]; C# 9 added records with equality by value and non-destructive
+  change through `with` [@csrecords].
+
+What these share with Okkama is the value itself: equality by contents, no
+mutation, a new value for every change (successors, Section 13.5; objects
+as values, Section 12.9). Okkama parts from them on the other side of
+Evans's distinction. A record is defined by its fields and hands them out,
+while Okkama keeps the manifesto's first rule even for values: an object
+answers questions and keeps its fields (Section 3.1), and a shorthand for
+data objects is still an open question (Section 28.4). Nor does Okkama have
+entities in Evans's sense, mutable state behind a stable identity, except
+through `Cell` and `Atomic`. What persists through change is a name rebound
+to successors, or state owned by one task (Section 20.6).
+
+## 2.12 What was lost
 
 Removing inheritance removes real conveniences, and it would be dishonest to
 pretend otherwise.

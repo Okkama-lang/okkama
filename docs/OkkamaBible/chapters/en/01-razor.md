@@ -303,7 +303,7 @@ entity brings back. A role with bodies is a base class by another name, and
 two roles that supply a body for the same action need a rule for which one
 wins, the question traits exist to answer (Chapter 14). An object that does
 the shared work, held by the decorators that need it, already does the job.
-Forwarding stays explicit, and Section 2.11 counts it among the costs.
+Forwarding stays explicit, and Section 2.12 counts it among the costs.
 
 **`once let`: accepted (issue #491).** Objects never change, so an answer
 computed from their fields could be kept. Without a construct for it, a

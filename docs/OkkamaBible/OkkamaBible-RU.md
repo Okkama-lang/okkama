@@ -26,7 +26,8 @@
   - [2.8 Композиция на практике](#28-композиция-на-практике)
   - [2.9 Дороги, по которым не пошли: прототипы и акторы](#29-дороги-по-которым-не-пошли-прототипы-и-акторы)
   - [2.10 Ещё раз о гавани](#210-ещё-раз-о-гавани)
-  - [2.11 Что потеряно](#211-что-потеряно)
+  - [2.11 Значения возвращаются](#211-значения-возвращаются)
+  - [2.12 Что потеряно](#212-что-потеряно)
 - [Глава 3. Манифест, правило за правилом](#глава-3-манифест-правило-за-правилом)
   - [3.1 Правило первое: объекты дают поведение, а не состояние](#31-правило-первое-объекты-дают-поведение-а-не-состояние)
   - [3.2 Правило второе: состояние связывается при создании, конструкторы его охраняют](#32-правило-второе-состояние-связывается-при-создании-конструкторы-его-охраняют)
@@ -714,7 +715,7 @@ its successor is open
 тому же действию, нужно правило, чьё победит, — вопрос, ради которого
 существуют трейты (глава 14). Объект, делающий общую работу и удерживаемый
 декораторами, которым она нужна, уже справляется с задачей. Передача
-вызовов остаётся явной, и раздел 2.11 числит её среди издержек.
+вызовов остаётся явной, и раздел 2.12 числит её среди издержек.
 
 **`once let`: принято (issue #491).** Объекты не меняются, так что ответ,
 вычисленный из их полей, можно сохранить. Без конструкции для этого у
@@ -1169,7 +1170,40 @@ waiting after hour 8: 0
 действуют. Изменилось значение слова «действовать». В Simula объект
 действует, меняя себя; в Okkama — отвечая тем, что будет дальше.
 
-## 2.11 Что потеряно
+## 2.11 Значения возвращаются
+
+Дисциплина раздела 2.7 не осталась взглядом меньшинства. В 2000-х и 2010-х
+мейнстрим заново открыл неизменяемые значения сразу с нескольких сторон.
+
+- **Объекты-значения.** «Предметно-ориентированное проектирование» Эванса
+  разделило сущности, которые сохраняют идентичность при изменении, и
+  объекты-значения, которые определяются своими атрибутами, не имеют
+  собственной идентичности и должны быть неизменяемыми. Сумма денег или
+  диапазон дат — объект-значение: его заменяют, а не редактируют
+  [[Evans 2003](#ref-evans2003)].
+- **Минимальная изменяемость.** «Эффективный Java» Блоха советовал делать
+  класс неизменяемым, если нет веской причины поступить иначе, потому что
+  неизменяемый объект прост, безопасен для разделения между потоками и
+  свободно переиспользуется [[Bloch 2018](#ref-bloch2018)].
+- **Объявления для значений.** Языки ответили синтаксисом. data-классы
+  Kotlin порождают равенство и операцию копирования [[Kotlin documentation](#ref-kotlindata)]; записи
+  Java, окончательные в Java 16, — прозрачные носители неизменяемых данных
+  [[Bierman 2021](#ref-jep395)]; C# 9 добавил записи с равенством по значению и
+  неразрушающим изменением через `with` [[C# language reference](#ref-csrecords)].
+
+С Okkama всё это роднит само значение: равенство по содержимому, никакой
+мутации, новое значение на каждое изменение (преемники, раздел 13.5;
+объекты как значения, раздел 12.9). Расходится Okkama с ними по другую
+сторону различения Эванса. Запись определяется своими полями и отдаёт их, а
+Okkama и для значений держит первое правило манифеста: объект отвечает на
+вопросы и оставляет поля при себе (раздел 3.1), а сокращение для
+объектов-данных — всё ещё открытый вопрос (раздел 28.4). Нет в Okkama и
+сущностей в смысле Эванса — изменяемого состояния за устойчивой
+идентичностью, — кроме как через `Cell` и `Atomic`. То, что сохраняется при
+изменении, — это имя, перепривязываемое к преемникам, или состояние, которым
+владеет одна задача (раздел 20.6).
+
+## 2.12 Что потеряно
 
 Убирая наследование, мы убираем настоящие удобства, и было бы нечестно
 делать вид, что это не так.
@@ -21062,7 +21096,7 @@ Objects* утверждает, что такие объекты зовут ло�
 язык есть, и обоснованы они там, где появились:
 
 - передача вызовов вручную в декораторах и отсутствие тел по умолчанию в
-  ролях (разделы 2.11, 14.6);
+  ролях (разделы 2.12, 14.6);
 - нет соответствия задним числом, а операторы смотрят только на левый
   операнд (раздел 14.11);
 - никакого приведения вниз от роли, никогда (раздел 14.3);
@@ -21124,6 +21158,7 @@ Objects* утверждает, что такие объекты зовут ло�
 - <a id="ref-bugayenko2016"></a>Yegor Bugayenko (2016). *Elegant Objects*, Volume 1. Self-published (CreateSpace).
 - <a id="ref-bugayenko2017"></a>Yegor Bugayenko (2017). *Elegant Objects*, Volume 2. Self-published (CreateSpace).
 - <a id="ref-burstall1980"></a>R. M. Burstall, D. B. MacQueen, D. T. Sannella (1980). HOPE: An Experimental Applicative Language. In *Proceedings of the 1980 ACM Conference on LISP and Functional Programming*, 136–143. https://doi.org/10.1145/800087.802799
+- <a id="ref-csrecords"></a>Microsoft (2026). Records (C# reference). *C# language reference*. https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/record
 - <a id="ref-canning1989"></a>Peter Canning, William Cook, Walter Hill, Walter Olthoff, John C. Mitchell (1989). F-Bounded Polymorphism for Object-Oriented Programming. In *Proceedings of FPCA 1989*: 273–280. ACM. https://doi.org/10.1145/99370.99392
 - <a id="ref-cardelli1985"></a>Luca Cardelli, Peter Wegner (1985). On Understanding Types, Data Abstraction, and Polymorphism. *ACM Computing Surveys* 17(4): 471–523. https://doi.org/10.1145/6041.6042
 - <a id="ref-jep421"></a>Brent Christian (2021). JEP 421: Deprecate Finalization for Removal. OpenJDK. https://openjdk.org/jeps/421
@@ -21148,6 +21183,7 @@ Objects* утверждает, что такие объекты зовут ло�
 - <a id="ref-duffy2016"></a>Joe Duffy (2016). The Error Model. Blog post, 7 February 2016. http://joeduffyblog.com/2016/02/07/the-error-model/
 - <a id="ref-elizarov2018"></a>Roman Elizarov (2018). Structured concurrency. Blog post, 12 September 2018. https://medium.com/@elizarov/structured-concurrency-722d765aa952
 - <a id="ref-erlangref"></a>Ericsson AB (2026). *Erlang Reference Manual*. Erlang/OTP documentation. https://www.erlang.org/doc/system/reference_manual.html
+- <a id="ref-evans2003"></a>Eric Evans (2003). *Domain-Driven Design: Tackling Complexity in the Heart of Software*. Addison-Wesley.
 - <a id="ref-se0304"></a>Swift Evolution (2021). SE-0304: Structured Concurrency. https://github.com/swiftlang/swift-evolution/blob/main/proposals/0304-structured-concurrency.md
 - <a id="ref-fowler2007"></a>Martin Fowler (2007). Mocks Aren't Stubs. https://martinfowler.com/articles/mocksArentStubs.html
 - <a id="ref-fahndrich2003"></a>Manuel Fähndrich, K. Rustan M. Leino (2003). Declaring and Checking Non-null Types in an Object-Oriented Language. In *Proceedings of OOPSLA 2003*: 302–312. ACM. https://doi.org/10.1145/949305.949332
