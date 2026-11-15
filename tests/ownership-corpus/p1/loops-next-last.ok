@@ -1,0 +1,37 @@
+// Extracted from loops; checkpoints use the plain P1 test log.
+module app;
+import "async/atomic" take Atomic;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    has log is Atomic<string>;
+    Res(name is string, log is Atomic<string>) {
+        self.name = name;
+        self.log = log;
+    }
+    label() is string {
+        name;
+    }
+    destroy {
+        log.replace(log.value() + name);
+    }
+}
+main() is int {
+    let log = Atomic("");
+    defer log.close();
+    for 0..3 -> i {
+        let r = Res(if i == 0 {
+            "A";
+        }
+        else {
+            "B";
+        }
+        , log);
+        defer log.replace(log.value() + "d");
+        next if i == 0;
+        last;
+    }
+    confirm log.value() == "dAdB";
+    Stdout().writeln(log.value());
+    0;
+}

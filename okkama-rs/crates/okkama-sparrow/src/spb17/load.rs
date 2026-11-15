@@ -35,7 +35,7 @@ pub(super) fn consumed(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<
     let between = arguments.first() == Some(&Argument::Flag(true));
     locations.iter().copied().enumerate().filter_map(|(index, location)| {
         let consume = match op {
-            ScopeBegin | OwnEmpty | OwnCreateCommit => false,
+            ScopeBegin | OwnEmpty | OwnCreateCommit | DepsOf | InvokeObserve => false,
             OwnMove | OwnJoin | OwnAdmit | OwnAccept | CleanupBegin | ExitAbort | ExitDispatch => true,
             OwnBind | OwnRebind => index == 0 || index == 2,
             OwnStage => index < 1 + usize::from(between) || index + 1 == locations.len(),
@@ -393,7 +393,9 @@ fn check_service_results(p: &Program, f: &Function) -> Check {
 
 fn check_call_contracts(p: &Program, f: &Function) -> Check {
     for instruction in &f.code {
-        let Instruction::Champ { op: Opcode::InvokeCallOwn | Opcode::InvokeDefer, arguments, .. } = instruction
+        let Instruction::Champ {
+            op: Opcode::InvokeCallOwn | Opcode::InvokeObserve | Opcode::InvokeDefer, arguments, ..
+        } = instruction
             else { continue };
         let summary = arguments.iter().find_map(|arg| match *arg {
             Argument::Summary(id) => p.tables.summaries.get(id as usize), _ => None,
@@ -451,11 +453,13 @@ fn check_failure_mask(p: &Program, f: &Function) -> Check {
             for (ordinal, edge) in allocation::outgoing(inst).iter().enumerate() {
                 let produced = if let Instruction::Champ { op, arguments, flow: Flow::Outcomes(outcomes) } = inst {
                     match (op, outcomes[ordinal].tag) {
-                        (Opcode::InvokeCallOwn | Opcode::InvokeDefer, Tag::Unwind) => arguments.iter()
+                        (Opcode::InvokeCallOwn | Opcode::InvokeObserve | Opcode::InvokeDefer, Tag::Unwind) => {
+                            arguments.iter()
                             .find_map(|arg| match arg {
                                 Argument::Entry(id) => Some(p.functions[*id as usize].proofs.entry.as_ref()
                                     .map_or(15, |entry| entry.failures)), _ => None,
-                            }).unwrap_or(15),
+                            }).unwrap_or(15)
+                        }
                         (Opcode::ExitDispatch, Tag::Failure) => f.proofs.envelopes.iter()
                             .fold(0, |mask, envelope| mask | envelope.failures)
                             | masks.values().fold(0, |mask, value| mask | value),

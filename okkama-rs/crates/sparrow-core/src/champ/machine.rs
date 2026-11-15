@@ -26,6 +26,8 @@ pub(crate) struct Program {
     pub entries: Vec<EntryId>,
     pub shielded_entries: Vec<EntryId>,
     pub external: Vec<Option<ExternalEntry>>,
+    pub p1: Vec<bool>,
+    pub native_failure: u32,
 }
 
 impl Program {
@@ -35,12 +37,12 @@ impl Program {
     }
 }
 
-struct Catalog<'a>(&'a [ExternalEntry]);
+struct Catalog<'a>(&'a [ExternalEntry], s::p1::P1Contracts);
 impl s::ExternalContracts for Catalog<'_> {
     fn entry(&self, name: &str) -> Option<&s::Function> {
-        self.0.iter().map(|entry| &entry.declaration).find(|entry| {
+        self.1.entry(name).or_else(|| self.0.iter().map(|entry| &entry.declaration).find(|entry| {
             entry.proofs.entry.as_ref().and_then(|contract| contract.external.as_deref()) == Some(name)
-        })
+        }))
     }
 }
 
@@ -53,6 +55,41 @@ pub(crate) fn repr(ty: s::Type) -> Repr {
 }
 
 impl Runtime {
+    /// A source main offers an empty packet. Resource parameters need an explicit host transport.
+    pub(crate) fn champ_run_owned(&mut self, ctx: &mut Ctx, function: usize, arguments: &[Word])
+        -> Result<Word, Error>
+    {
+        if !arguments.is_empty() {
+            return Err(error("parameterized owning entry requires CallOwn transport"));
+        }
+        let entry = self.champ_entry_id(function).ok_or_else(|| error("missing Champ entry"))?;
+        let mut input = PacketSlot::default();
+        if rt_own_empty(ctx, &mut input) != 0 {
+            return Err(error("cannot initialize entry packet"));
+        }
+        let mut post = CallPost::default();
+        let mut io = CallOwn { input, entry_abi: entry, output: &mut post, context: 0, cleanup_mode: 0 };
+        let outcome = cleanup::rt_call_owned(ctx, entry, arguments.as_ptr(), 0, &mut io, &mut post);
+        if ctx.status != runtime::OK {
+            return Ok(0);
+        }
+        match outcome {
+            0 => {
+                if !self.champ_packet_keys(&post.packet)?.is_empty() {
+                    return Err(error("main returned an ownership packet"));
+                }
+                post.packet.record = 0;
+                Ok(post.value)
+            }
+            1 => {
+                ctx.failure = post.failure;
+                ctx.status = runtime::FAILED;
+                Ok(0)
+            }
+            _ => Err(error("invalid main outcome")),
+        }
+    }
+
     /// Runtime-local CallOwn entry ID for a verified SPB function index.
     pub fn champ_entry_id(&self, function: usize) -> Option<EntryId> {
         self.champ.machine.as_ref()?.entries.get(function).copied()
@@ -66,12 +103,14 @@ impl Runtime {
                 return Err(error("external implementation ABI mismatch"));
             }
         }
-        let catalog = Catalog(&external);
+        let p1 = s::p1::P1Contracts::new(&source.objects).map_err(|error| Error(error.to_string()))?;
+        let catalog = Catalog(&external, p1);
         s::verify_load(&source, &catalog).map_err(|error| Error(error.to_string()))?;
         let mut legacy = okkama_sparrow::Program {
             entry: source.entry.map(okkama_sparrow::FuncRef),
             ..okkama_sparrow::Program::default()
         };
+        legacy.types.push(okkama_sparrow::Type::Byte);
         // This declaration view serves existing descriptors, diagnostics and heap layout consumers only.
         // No old bytecode is generated or executed.
         for object in &source.objects {
@@ -99,12 +138,26 @@ impl Runtime {
                 _ => None,
             }).collect();
             legacy.functions.push(okkama_sparrow::Function {
-                symbol: function.symbol.clone(), is_async: false, native: None, intrinsic: None,
+                symbol: function.symbol.clone(), is_async: false,
+                native: function.proofs.entry.as_ref().and_then(|entry| entry.external.clone())
+                    .filter(|name| name.starts_with("runtime/")),
+                intrinsic: None,
                 registers, params, result: None, code: vec![], handlers: vec![],
             });
         }
+        // Native diagnostics use Sparrow's existing four-string NativeFailure carrier.
+        // This private runtime descriptor is never a source object or a resource identity.
+        let native_failure = legacy.objects.len() as u32;
+        let text = okkama_sparrow::TypeRef(legacy.types.len() as u32);
+        legacy.types.push(okkama_sparrow::Type::Str);
+        legacy.objects.push(okkama_sparrow::ObjectDecl {
+            name: "NativeFailure".into(),
+            fields: ["domain", "code", "operation", "message"].into_iter()
+                .map(|name| (name.into(), text)).collect(),
+            does: vec![], destroy: None, builtin: true,
+        });
         let mut runtime = Self::new(crate::program::Loaded::new(legacy))?;
-        let layouts = source.objects.iter().map(|object| {
+        let mut layouts = source.objects.iter().map(|object| {
             let layout = &object.layout;
             ObjectRuntimeLayout::new(layout.storage_fields.iter().copied().map(repr).collect(), LayoutFacts {
                 has_destroy: layout.has_destroy,
@@ -112,6 +165,8 @@ impl Runtime {
                 may_async_destroy: layout.may_async_destroy,
             }, layout.selection_layout.iter().map(|&index| index as usize).collect())
         }).collect::<Result<Vec<_>, _>>().map_err(|error| Error(error.to_string()))?;
+        layouts.push(ObjectRuntimeLayout::new(vec![Repr::Ref; 4], LayoutFacts::default(), vec![])
+            .map_err(|error| Error(error.to_string()))?);
         runtime.heap = Heap::new_champ(runtime.loaded.layouts(), layouts.into_boxed_slice());
         let plans = runtime.champ_load_cleanup_plans(&source, &catalog)?;
         let mut selections = Vec::new();
@@ -151,8 +206,13 @@ impl Runtime {
                     entry.declaration.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref()) == Some(name)
                 })).cloned());
         }
+        let p1 = source.functions.iter().map(|function| {
+            function.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref())
+                .is_some_and(|name| s::ExternalContracts::entry(&catalog.1, name).is_some())
+        }).collect();
         runtime.champ.machine = Some(Program {
-            source: Arc::new(source), plans, selections, entries, shielded_entries, external: implementations,
+            source: Arc::new(source), plans, selections, entries, shielded_entries,
+            external: implementations, p1, native_failure,
         });
         Ok(Box::new(runtime))
     }
@@ -161,6 +221,8 @@ impl Runtime {
 fn legacy_type(ty: s::Type) -> okkama_sparrow::Type {
     use okkama_sparrow::Type as T;
     match ty {
+        s::Type::Error => T::Failure,
+        s::Type::Bytes => T::Array(okkama_sparrow::TypeRef(0)),
         s::Type::Int => T::Int,
         s::Type::Bool | s::Type::Descriptor | s::Type::Never => T::Bool,
         s::Type::Str => T::Str,
@@ -190,7 +252,24 @@ pub extern "C" fn rt_machine_external(ctx: *mut Ctx, function: u64, io: *mut Cal
     args: *const Word, count: u64) -> Word
 {
     let runtime = unsafe { &mut *(*ctx).runtime };
-    let external = runtime.champ.machine.as_ref().expect("Champ program").external[function as usize].clone();
+    let machine = runtime.champ.machine.as_ref().expect("Champ program");
+    if io.is_null() && !machine.source.functions[function as usize].code.is_empty() {
+        let code = match crate::jit::compile(runtime, function as usize) {
+            Ok(code) => code,
+            Err(error) => return stop(ctx, error),
+        };
+        let arguments = if count == 0 { &[] } else {
+            unsafe { std::slice::from_raw_parts(args, count as usize) }
+        };
+        return unsafe { crate::jit::invoke(code, ctx, arguments) };
+    }
+    if machine.p1[function as usize] {
+        let arguments = if count == 0 { &[] } else {
+            unsafe { std::slice::from_raw_parts(args, count as usize) }
+        };
+        return super::p1::invoke(ctx, function as usize, io, arguments);
+    }
+    let external = machine.external[function as usize].clone();
     let Some(external) = external else { return stop(ctx, error("unbound external entry")) };
     if io.is_null() {
         match external.plain {

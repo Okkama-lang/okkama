@@ -1,0 +1,58 @@
+// Extracted from defer-order; checkpoints use the plain P1 test log.
+module app;
+import "async/atomic" take Atomic;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    has log is Atomic<string>;
+    Res(name is string, log is Atomic<string>) {
+        self.name = name;
+        self.log = log;
+    }
+    label() is string {
+        name;
+    }
+    destroy {
+        log.replace(log.value() + name);
+    }
+}
+object Work {
+    Work();
+    returned(log is Atomic<string>) is Res {
+        let local = Res("L", log);
+        defer log.replace(log.value() + "d");
+        return Res("R", log);
+    }
+}
+main() is int {
+    let log = Atomic("");
+    defer log.close();
+    {
+        defer log.replace(log.value() + "1");
+        let a = Res("A", log);
+        defer log.replace(log.value() + a.label());
+        let b = Res("B", log);
+        defer log.replace(log.value() + "2");
+    }
+    confirm log.value() == "2A1BA";
+    Stdout().writeln(log.value());
+    log.replace("");
+    {
+        let a = Res("A", log);
+        defer Res("D", log).label();
+        confirm log.value() == "";
+        Stdout().writeln(log.value());
+    }
+    confirm log.value() == "DA";
+    Stdout().writeln(log.value());
+    log.replace("");
+    {
+        let r = Work().returned(log);
+        confirm log.value() == "dL";
+        Stdout().writeln(log.value());
+        r.label();
+    }
+    confirm log.value() == "dLR";
+    Stdout().writeln(log.value());
+    0;
+}

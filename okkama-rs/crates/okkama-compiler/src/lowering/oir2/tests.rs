@@ -1047,7 +1047,7 @@ fn oir2_all_stored_goldens_pass_verify_high() {
         verify_high(&module, path.to_str().expect("golden path"));
         count += 1;
     }
-    assert_eq!(count, 44, "every lowering golden must be verified");
+    assert_eq!(count, 45, "every lowering golden must be verified");
 }
 
 fn check_verified(module: &ir::Module) -> Result<(), LowerError> {
@@ -1177,10 +1177,12 @@ pub(super) fn lower_std(source: &str) -> Result<ir::Module, LowerError> {
     lower_to_oir2(&analysis)
 }
 
-const STD_SOURCES: [(&str, &str, &str); 3] = [
+const STD_SOURCES: [(&str, &str, &str); 4] = [
     ("std-log", include_str!("fixtures/std-log.ok"), include_str!("goldens/std-log.oir")),
     ("std-cell", include_str!("fixtures/std-cell.ok"), include_str!("goldens/std-cell.oir")),
     ("std-error", include_str!("fixtures/std-error.ok"), include_str!("goldens/std-error.oir")),
+    ("atomic-replace-fresh", include_str!("fixtures/atomic-replace-fresh.ok"),
+        include_str!("goldens/atomic-replace-fresh.oir")),
 ];
 
 #[test]
@@ -1354,3 +1356,306 @@ mod coverage;
 
 #[path = "defer_tests.rs"]
 mod defer_tests;
+
+#[test]
+fn oir2_pipeline_scalar() {
+    let source = SourceFile::new("app.ok", "module app; main() is int { 7; }").unwrap();
+    let program = syntax::parse(&source, &ParseOptions::default()).unwrap();
+    let roots = [crate::lowering::RootFile { source: &source, program: &program }];
+    let bytes = super::compile_linked(&roots, &mut StdLoader).unwrap();
+    let loaded = okkama_sparrow::spb17::decode(&bytes).unwrap();
+    okkama_sparrow::spb17::verify_load(&loaded, &okkama_sparrow::spb17::NoExternalContracts).unwrap();
+}
+
+#[test]
+fn oir2_p1_sources() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/ownership-corpus/p1");
+    let mut paths = std::fs::read_dir(root).unwrap().map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "ok")).collect::<Vec<_>>();
+    paths.sort();
+    let mut failures = Vec::new();
+    for path in paths {
+        let text = std::fs::read_to_string(&path).unwrap();
+        let source = SourceFile::new(path.to_string_lossy(), text).unwrap();
+        let program = match syntax::parse(&source, &ParseOptions::default()) {
+            Ok(program) => program,
+            Err(error) => {
+                failures.push(format!("{}: {error:?}", path.display()));
+                continue;
+            }
+        };
+        let roots = [crate::lowering::RootFile { source: &source, program: &program }];
+        match super::lower_linked_high(&roots, &mut StdLoader) {
+            Ok(module) => {
+                verify_high(&module, path.to_str().unwrap());
+                println!("SUPPORTED {}", path.file_stem().unwrap().to_str().unwrap());
+            }
+            Err(error) => failures.push(format!("{}: {error}", path.display())),
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn oir2_p1_excluded_defer_replacement() {
+    let text = include_str!(
+        "../../../../../../tests/ownership-corpus/p1/excluded/defer-return-replacement.ok"
+    );
+    // Return from defer is supported since #609 (D8 replacement); the fixture
+    // lowers and passes the high verifier. It rejoins the P1 manifest later.
+    let module = lower_std(text).unwrap_or_else(|error| panic!("{error}"));
+    verify_high(&module, "defer-return-replacement");
+}
+
+#[test]
+fn oir2_p1_own_diagnostics() {
+    use ir::own::{OwnError, OwnOptions, elaborate_ownership};
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("tools/ownership/p1-manifest.json")).unwrap(),
+    ).unwrap();
+    let mut rows = Vec::new();
+    for entry in manifest["entries"].as_array().unwrap() {
+        let text = std::fs::read_to_string(root.join(entry["source"].as_str().unwrap())).unwrap();
+        let module = lower_std(&text).unwrap();
+        let catalog = super::native_summaries::P1NativeSummaries::for_module(&module).unwrap();
+        let options = OwnOptions::default();
+        let inferred = elaborate_ownership(module, &catalog, &options).unwrap();
+        let mut functions = Vec::new();
+        let mut arrays = Vec::new();
+        for (id, function) in inferred.module.functions.iter() {
+            let Some(body) = &function.body else {
+                continue;
+            };
+            for (inst, data) in body.insts.iter() {
+                if data.op.opcode().starts_with("array.") {
+                    arrays.push(serde_json::json!({
+                        "function": function.symbol,
+                        "instruction": inst.as_u32(),
+                        "op": data.op.opcode(),
+                        "operation": format!("{:?}", data.op),
+                        "inputs": ir::cfg::operation_uses(&data.op, body).unwrap().iter().map(|operand| {
+                            let ty = body.values.get(operand.value).unwrap().ty;
+                            match inferred.module.types.get(ty).unwrap() {
+                                ir::Type::Array(element) => {
+                                    format!("array<{:?}>", inferred.module.types.get(*element).unwrap())
+                                }
+                                ty => format!("{ty:?}"),
+                            }
+                        }).collect::<Vec<_>>(),
+                        "results": data.results.iter().map(|value| {
+                            let data = body.values.get(*value).unwrap();
+                            format!("{:?}: {:?}", inferred.module.types.get(data.ty).unwrap(),
+                                inferred.analysis.types.get(&data.ty))
+                        }).collect::<Vec<_>>(),
+                    }));
+                }
+            }
+            let analyzed = ir::own::analyze::analyze_function(&inferred.module, id, &inferred.analysis, &options);
+            let (stats, equations, evaluations, error) = match analyzed {
+                Ok(flow) => (flow.stats, Some(flow.equations.nodes.len()), Some(flow.evaluations), None),
+                Err(OwnError::Incomplete { stats }) => (*stats, None, None, Some("incomplete".to_string())),
+                Err(error) => (ir::own::OwnStats::default(), None, None, Some(format!("{error:?}"))),
+            };
+            let mut edges = 0usize;
+            for (_, block) in body.blocks.iter() {
+                edges += match &block.term.kind {
+                    ir::TermKind::Br(_) => 1,
+                    ir::TermKind::Cond { .. } | ir::TermKind::Catch { .. } => 2,
+                    ir::TermKind::Switch { cases, .. } => 1 + cases.len(),
+                    ir::TermKind::Throw(_) | ir::TermKind::Panic(_) | ir::TermKind::Trap { .. } => {
+                        usize::from(block.unwind.is_some())
+                    }
+                    _ => 0,
+                };
+                if block.unwind.is_some() {
+                    edges += 1;
+                    for inst in &block.insts {
+                        let operation = &body.insts.get(*inst).unwrap().op;
+                        let schema = ir::ContractRegistry::new(&inferred.module).high_site_schema(
+                            operation, body, ir::HighOperationSite::Instruction(*inst),
+                        ).unwrap();
+                        edges += usize::from(schema.unwind.is_some() || matches!(operation,
+                            ir::Operation::Call(_) | ir::Operation::Lexical(ir::LexicalOp::Bind { .. }
+                                | ir::LexicalOp::Rebind { .. } | ir::LexicalOp::Stage { .. })));
+                    }
+                }
+            }
+            let function_scopes = inferred.module.scopes.iter().filter(|(_, scope)| scope.function == id).count();
+            let origins = 1 + body.values.len() + 2 * body.insts.len() + function_scopes * body.values.len();
+            let facts = body.values.len() * (2 * origins + 8)
+                + inferred.module.scopes.len() * origins * 4
+                + body.bindings.len() * (body.values.len() + 2 * origins);
+            let dense_charge = (body.blocks.len() + edges) * facts * 64;
+            functions.push(serde_json::json!({
+                "id": id.as_u32(), "function": function.symbol, "blocks": body.blocks.len(),
+                "values": body.values.len(), "instructions": body.insts.len(),
+                "module_scopes": inferred.module.scopes.len(),
+                "function_scopes": inferred.module.scopes.iter().filter(|(_, s)| s.function == id).count(),
+                "bindings": body.bindings.len(), "equations": equations, "indexed_equations": origins,
+                "edges": edges, "dense_charge": dense_charge, "evaluations": evaluations,
+                "charged_work": stats.charged_work, "charged_bytes": stats.peak_auxiliary_bytes,
+                "limit": format!("{:?}", stats.exhausted_limit), "error": error,
+            }));
+        }
+        rows.push(serde_json::json!({"id": entry["id"], "functions": functions, "arrays": arrays}));
+    }
+    if let Some(path) = std::env::var_os("OKKAMA_P1_DIAGNOSTICS") {
+        std::fs::write(path, serde_json::to_string_pretty(&rows).unwrap() + "\n").unwrap();
+    }
+    assert_eq!(rows.len(), 25);
+}
+
+fn compile_p1_source(text: &str) -> Result<Vec<u8>, super::PipelineError> {
+    let source = SourceFile::new("app.ok", text).unwrap();
+    let program = syntax::parse(&source, &ParseOptions::default()).unwrap();
+    let roots = [crate::lowering::RootFile { source: &source, program: &program }];
+    super::compile_linked(&roots, &mut StdLoader)
+}
+
+#[test]
+fn oir2_pipeline_deps_golden() {
+    let bytes = compile_p1_source(
+        "module app; object R { R(); destroy { } } main() is int { let r = R(); 0; }",
+    ).unwrap();
+    let program = okkama_sparrow::spb17::decode(&bytes).unwrap();
+    let deps = program.functions.iter().flat_map(|function| &function.code).filter(|inst| {
+        matches!(inst, okkama_sparrow::spb17::Instruction::Champ {
+            op: okkama_sparrow::spb17::Opcode::DepsOf, ..
+        })
+    }).count();
+    assert!(deps > 0);
+    assert_eq!(okkama_sparrow::spb17::layout::service_layout(
+        okkama_sparrow::spb17::ServiceKind::Deps,
+    ).words, 0);
+    let mut missing = program.clone();
+    for function in &mut missing.functions {
+        function.proofs.dependencies.retain(|dependency| !matches!(dependency.value,
+            okkama_sparrow::spb17::Location::Service(id)
+                if function.services[id as usize] == okkama_sparrow::spb17::ServiceKind::Deps));
+    }
+    let failure = okkama_sparrow::spb17::verify_load(&missing, &okkama_sparrow::spb17::NoExternalContracts)
+        .unwrap_err();
+    assert!(failure.to_string().contains("deps.of must retain"));
+    let actual = okkama_sparrow::spb17::disassemble(&program).unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/codegen/sparrow_oir2/fixtures/deps.spb17");
+    if std::env::var_os("OKKAMA_UPDATE_S3_GOLDENS").is_some() {
+        std::fs::write(&path, &actual).unwrap();
+    }
+    assert_eq!(actual, std::fs::read_to_string(path).unwrap());
+}
+
+#[test]
+fn oir2_pipeline_p1_atomic_contracts() {
+    for source in [
+        concat!("module app; import \"async/atomic\" take Atomic; ",
+            "main() is int { let a = Atomic(2); a.replace(7); a.value(); }"),
+        concat!("module app; import \"async/atomic\" take Atomic; ",
+            "main() is int { let a = Atomic(\"a\"); a.replace(\"b\"); a.close(); 0; }"),
+    ] {
+        let bytes = compile_p1_source(source).unwrap();
+        let program = okkama_sparrow::spb17::decode(&bytes).unwrap();
+        let catalog = okkama_sparrow::spb17::p1::P1Contracts::new(&program.objects).unwrap();
+        okkama_sparrow::spb17::verify_load(&program, &catalog).unwrap();
+        let mut forged = program.clone();
+        let external = forged.functions.iter_mut().find(|function| {
+            function.proofs.entry.as_ref().is_some_and(|entry| entry.external.is_some())
+        }).unwrap();
+        external.proofs.entry.as_mut().unwrap().retained_params.push(0);
+        assert!(okkama_sparrow::spb17::verify_load(&forged, &catalog).is_err());
+    }
+}
+
+#[test]
+fn oir2_p1_compiler_and_trusted_entry_kinds_agree() {
+    use okkama_sparrow::spb17::{self as s, ExternalContracts};
+    let source = concat!("module app; import \"async/atomic\" take Atomic; ",
+        "main() is int { let a = Atomic(1); let b = Atomic(\"a\"); ",
+        "a.replace(a.value() + 1); b.replace(b.value() + \"b\"); a.close(); b.close(); 0; }");
+    let program = s::decode(&compile_p1_source(source).unwrap()).unwrap();
+    let trusted = s::p1::P1Contracts::new(&program.objects).unwrap();
+    let mut checked = std::collections::BTreeSet::new();
+    for source in [source, include_str!("fixtures/std-error.ok"), include_str!("fixtures/std-log.ok")] {
+        let high = lower_std(source).unwrap();
+        for (_, function) in high.functions.iter() {
+            let name = function.attrs.iter().find_map(|attr| match attr {
+                ir::FunctionAttr::Intrinsic { name, .. } | ir::FunctionAttr::Extern(name) => Some(name),
+                _ => None,
+            });
+            let Some(name) = name else {
+                continue;
+            };
+            let summary = high.summaries.get(function.summary.unwrap()).unwrap();
+            let expected = if name.starts_with("okkama.atomic.Atomic.value$")
+                || name.starts_with("okkama.atomic.Atomic.close$") || name == "okkama.Error.text"
+            {
+                ir::EntryKind::ObservationAdmissionStaysCaller
+            } else {
+                ir::EntryKind::CallBoundary
+            };
+            assert_eq!(summary.entry_kind, expected, "{name}");
+            let abi = match summary.entry_kind {
+                ir::EntryKind::CallBoundary => s::EntryAbi::Owned,
+                ir::EntryKind::ObservationAdmissionStaysCaller => s::EntryAbi::Observation,
+                kind => panic!("unexpected P1 entry kind {kind:?}: {name}"),
+            };
+            assert_eq!(trusted.entry(name).unwrap().entry_abi, abi, "{name}");
+            checked.insert(name.clone());
+        }
+    }
+    assert_eq!(checked.len(), 11, "eight Atomic entries, Error.text and two natives");
+}
+
+#[test]
+fn oir2_p1_rejects_observation_declared_replace() {
+    use okkama_sparrow::spb17 as s;
+    let source = include_str!("fixtures/atomic-replace-fresh.ok");
+    let mut high = lower_std(source).unwrap();
+    let catalog = super::native_summaries::P1NativeSummaries::for_module(&high).unwrap();
+    let replace = high.functions.iter().find_map(|(_, function)| {
+        (function.symbol == "okkama.atomic.Atomic.replace#string").then(|| function.summary.unwrap())
+    }).unwrap();
+    high.summaries.get_mut(replace).unwrap().entry_kind = ir::EntryKind::ObservationAdmissionStaysCaller;
+    let context = ir::VerifyContext { external_contracts: &catalog, ..ir::VerifyContext::default() };
+    let report = ir::verify_with(&high, &ir::VerifyOptions::default(), context).unwrap_err();
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == ir::verify::RuleId::B51
+        && diagnostic.message.contains("entry kind differs")), "{report:?}");
+
+    let program = s::decode(&compile_p1_source(source).unwrap()).unwrap();
+    let trusted = s::p1::P1Contracts::new(&program.objects).unwrap();
+    let mut replace = program.functions.iter().find(|function| {
+        function.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref())
+            == Some("okkama.atomic.Atomic.replace$string")
+    }).unwrap().clone();
+    // Isolate the old observation declaration so caller ABI checks cannot mask
+    // the independent trusted-catalog consistency check.
+    replace.entry_abi = s::EntryAbi::Observation;
+    replace.params.pop();
+    assert_eq!(replace.services.pop(), Some(s::ServiceKind::Packet));
+    let forged = s::Program { objects: program.objects, functions: vec![replace], ..s::Program::default() };
+    s::verify(&forged).unwrap();
+    let error = s::verify_load(&forged, &trusted).unwrap_err();
+    assert!(error.to_string().contains("external signature/summary mismatch"), "{error}");
+}
+
+#[test]
+fn oir2_pipeline_atomic_replace_fresh_golden() {
+    use okkama_sparrow::spb17 as s;
+    let bytes = compile_p1_source(include_str!("fixtures/atomic-replace-fresh.ok")).unwrap();
+    let program = s::decode(&bytes).unwrap();
+    let replace = program.functions.iter().position(|function| {
+        function.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref())
+            == Some("okkama.atomic.Atomic.replace$string")
+    }).unwrap() as u32;
+    assert!(program.functions.iter().flat_map(|function| &function.code).any(|inst| matches!(inst,
+        s::Instruction::Champ { op: s::Opcode::InvokeCallOwn, arguments, .. }
+            if arguments.contains(&s::Argument::Entry(replace)))));
+    let actual = s::disassemble(&program).unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/codegen/sparrow_oir2/fixtures/atomic-replace-fresh.spb17");
+    if std::env::var_os("OKKAMA_UPDATE_S3_GOLDENS").is_some() {
+        std::fs::write(&path, &actual).unwrap();
+    }
+    assert_eq!(actual, std::fs::read_to_string(path).unwrap());
+}

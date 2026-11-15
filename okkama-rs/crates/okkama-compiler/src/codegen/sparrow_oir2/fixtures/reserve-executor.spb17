@@ -2,7 +2,7 @@ sparrow 17
 Program { module "reserve_executor" version "" objects 1 Object { name "Res" fields 0 layout ObjectRuntimeLayout { 
 storage_fields 0 allocation_words 5 identity_offset 1 8 has_destroy 1 may_reach_resource 1 may_async_destroy 0 
 trace_layout 0 selection_layout 0 }
- }
+ error_cases 0 }
  tables ChampTables { scopes 1 Scope { function 2 parent 0 boundary 0 }
  boundaries 1 Boundary { scope 0 }
  summaries 2 Summary { entry 1 may_fail 0 retained_params 0 }

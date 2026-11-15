@@ -4,6 +4,7 @@
 #![allow(unsafe_code)]
 
 mod layout;
+mod p1;
 mod records;
 mod abi;
 pub use abi::*;
@@ -94,6 +95,7 @@ pub(crate) struct State {
     holder: u64,
     owner: u64,
     trace: Option<std::fs::File>,
+    pub(crate) captured_trace: Option<Vec<u8>>,
     selections: Vec<Vec<usize>>,
     entries: Vec<EntryContract>,
     cleanup_plans: Vec<CleanupPlan>,
@@ -238,6 +240,10 @@ impl Runtime {
         if let Some(mut trace) = self.champ.trace.take() {
             let _ = self.champ_trace_destroy(key, &mut trace);
             self.champ.trace = Some(trace);
+        }
+        if let Some(mut trace) = self.champ.captured_trace.take() {
+            let _ = self.champ_trace_destroy(key, &mut trace);
+            self.champ.captured_trace = Some(trace);
         }
         Ok(())
     }

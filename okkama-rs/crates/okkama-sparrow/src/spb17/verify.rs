@@ -73,7 +73,8 @@ pub fn verify(p: &Program) -> Check {
                 require(layout.may_reach_resource || !p.objects[id as usize].layout.may_reach_resource,
                     "understated object retention metadata")?;
             }
-            let traced = matches!(ty, Type::Str | Type::Object(_) | Type::Successor(_) | Type::Failure);
+            let traced = matches!(ty, Type::Error | Type::Bytes | Type::Str | Type::Object(_)
+                | Type::Successor(_) | Type::Failure);
             require(layout.trace_layout.contains(&(index as u32)) == traced, "incorrect object trace layout")?;
         }
     }
@@ -271,6 +272,7 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             "OPERAND_VALUE", "value operand cannot contain a service")
     };
     match op {
+        DepsOf => value(0)?,
         OwnMove | OwnJoin => {
             for index in 0..locations.len() {
                 input(index, Packet)?;
@@ -370,6 +372,18 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             input(2, ExitState)?;
         }
         FailureDispatch => input(0, FailureState)?,
+        InvokeObserve => {
+            let entry = args.iter().find_map(|arg| match arg { Argument::Entry(id) => Some(*id), _ => None })
+                .ok_or_else(|| error("missing observation entry"))?;
+            let summary = args.iter().find_map(|arg| match arg { Argument::Summary(id) => Some(*id), _ => None })
+                .ok_or_else(|| error("missing observation summary"))?;
+            require(at(&p.tables.summaries, summary)?.entry == entry, "entry/summary mismatch")?;
+            let callee = at(&p.functions, entry)?;
+            require(callee.entry_abi == EntryAbi::Observation, "observation entry ABI mismatch")?;
+            let expected = callee.params.iter().map(|&loc| loc_type(callee, loc)).collect::<Result<Vec<_>, _>>()?;
+            let actual = locations.iter().map(|&loc| loc_type(f, loc)).collect::<Result<Vec<_>, _>>()?;
+            require(actual == expected, "observation argument schema mismatch")?;
+        }
         InvokeCallOwn | InvokeDefer => {
             let entry = args.iter().find_map(|arg| match arg { Argument::Entry(id) => Some(*id), _ => None })
                 .ok_or_else(|| error("missing entry"))?;
@@ -456,7 +470,7 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
     let valid = match op {
         ScopeBegin => shape == "sb",
         OwnEmpty => shape.is_empty(),
-        OwnMove => shape == "l",
+        OwnMove | DepsOf => shape == "l",
         OwnJoin => !shape.is_empty() && shape.chars().all(|ch| ch == 'l'),
         OwnAdmit | OwnAccept => shape == "ll",
         OwnBind | OwnRebind => shape == "lisll",
@@ -474,6 +488,7 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         CleanupPlan => shape == "lp",
         CleanupNext | CleanupFinish | FailureDispatch => shape == "l",
         DestroyDirect => shape == "llof",
+        InvokeObserve => shape.starts_with("fu") && shape[2..].chars().all(|ch| ch == 'l'),
         InvokeCallOwn => shape.starts_with("fu") && shape[2..].chars().all(|ch| ch == 'l' || ch == '?'),
         InvokeDefer => shape.starts_with("fum") && shape[3..].chars().all(|ch| ch == 'l' || ch == 'i'),
         RetOwn | RetDefer => shape.chars().all(|ch| matches!(ch, 'l' | 'a')),
@@ -590,8 +605,14 @@ pub(crate) fn checked_edges<'a>(p: &Program, f: &Function, inst: &'a Instruction
         match flow {
             Flow::Next(destinations) => {
                 require(!op.is_terminator() || matches!(op, Opcode::RetOwn | Opcode::RetDefer)
-                    || *op == Opcode::InvokeCallOwn && !ctx.may_fail,
+                    || matches!(op, Opcode::InvokeCallOwn | Opcode::InvokeObserve) && !ctx.may_fail,
                     "terminator requires outcomes")?;
+                if *op == Opcode::DepsOf {
+                    let [Argument::Location(anchor)] = arguments.as_slice() else { unreachable!() };
+                    require(destinations.len() == 1 && f.proofs.dependencies.iter().any(|dependency| {
+                        dependency.value == destinations[0] && dependency.obligations.contains(anchor)
+                    }), "deps.of must retain its full-deps anchor")?;
+                }
                 let results = op.results(Tag::Normal, &ctx)?;
                 require(destinations.len() == results.len(), "bad multi-result arity")?;
                 for (&loc, &ty) in destinations.iter().zip(&results) {

@@ -66,7 +66,11 @@ pub fn run_with(bytes: Vec<u8>, arguments: Vec<Vec<u8>>) -> Result<i64, Error> {
 /// the intrinsic contracts of the core (`sparrow check`).
 pub fn check(bytes: &[u8]) -> Result<(), Error> {
     let program = decode_runtime(bytes).map_err(|e| Error(e.to_string()))?;
-    contracts::check(&program::Loaded::new(program))
+    match program {
+        DecodedProgram::Legacy(program) => contracts::check(&program::Loaded::new(program)),
+        #[cfg(feature = "champ-abi")]
+        DecodedProgram::Champ(program) => runtime::Runtime::new_champ(program, Vec::new()).map(|_| ()),
+    }
 }
 
 /// `run_with`, optionally printing runtime event counts to stderr at exit
@@ -108,6 +112,31 @@ pub fn run_described(
         let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
         let mut runtime = configured_runtime(program, arguments, stats, worker_command, limits)?;
         Ok(execute(&mut runtime).map_err(|failure| *failure))
+    })
+}
+
+/// A bounded P1 run with the same stdout and destroy formatter as source/bytecode execution.
+/// Captures belong to the VM thread; no process-wide environment mutation is necessary.
+#[cfg(feature = "champ-abi")]
+#[derive(Debug)]
+pub struct CapturedRun {
+    pub result: Result<i64, Error>,
+    pub stdout: Vec<u8>,
+    pub destroy_trace: Vec<u8>,
+}
+
+#[cfg(feature = "champ-abi")]
+pub fn run_captured(bytes: Vec<u8>, limits: budget::Limits) -> Result<CapturedRun, Error> {
+    on_vm_thread(move || {
+        let program = decode_runtime(&bytes).map_err(|error| Error(error.to_string()))?;
+        if !matches!(program, DecodedProgram::Champ(_)) {
+            return Err(Error("P1 capture requires SPB 17".into()));
+        }
+        let mut runtime = configured_runtime(program, Vec::new(), false, Vec::new(), limits)?;
+        runtime.champ.captured_trace = Some(Vec::new());
+        let (result, stdout) = stdout::capture(|| runtime.run_entry(STACK_BYTES));
+        let destroy_trace = runtime.champ.captured_trace.take().unwrap_or_default();
+        Ok(CapturedRun { result, stdout, destroy_trace })
     })
 }
 
@@ -166,10 +195,11 @@ pub fn run_executable(
         if let Some(prepare) = on_verified {
             prepare();
         }
-        if program.tests.is_some() && let Some(out) = tests {
-            return Ok(test_program(program, out).map(Execution::Tests).map_err(ExecutionError::Load));
+        if program.has_tests() && let Some(out) = tests
+        {
+            return Ok(test_program(program.legacy()?, out).map(Execution::Tests).map_err(ExecutionError::Load));
         }
-        let original_functions = program.functions.len();
+        let original_functions = program.function_count();
         let mut runtime = configured_runtime(program, arguments, stats, worker_command, limits)?;
         let result = execute(&mut runtime).map_err(|failure| {
             let (error, uncaught) = *failure;
@@ -202,13 +232,17 @@ pub fn run_executable(
 }
 
 fn configured_runtime(
-    program: okkama_sparrow::Program,
+    program: DecodedProgram,
     arguments: Vec<Vec<u8>>,
     stats: bool,
     worker_command: Vec<std::ffi::OsString>,
     limits: budget::Limits,
 ) -> Result<Box<runtime::Runtime>, Error> {
-    let mut runtime = Box::new(runtime::Runtime::new(program::Loaded::new(program))?);
+    let mut runtime = match program {
+        DecodedProgram::Legacy(program) => Box::new(runtime::Runtime::new(program::Loaded::new(program))?),
+        #[cfg(feature = "champ-abi")]
+        DecodedProgram::Champ(program) => runtime::Runtime::new_champ(program, Vec::new())?,
+    };
     runtime.worker_command = worker_command;
     runtime.limits = limits;
     if stats && runtime.stats.is_none() {
@@ -324,7 +358,7 @@ pub fn run_reported(
 pub fn run_tests(bytes: Vec<u8>, out: Box<dyn std::io::Write + Send>) -> Result<bool, Error> {
     on_vm_thread(move || {
         let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
-        test_program(program, out)
+        test_program(program.legacy()?, out)
     })
 }
 
@@ -391,7 +425,7 @@ fn test_program(program: okkama_sparrow::Program, mut out: Box<dyn std::io::Writ
 pub fn run_worker(bytes: Vec<u8>, request: Vec<u8>, worker_command: Vec<std::ffi::OsString>) -> Result<Vec<u8>, Error> {
     on_vm_thread(move || {
         let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
-        let mut runtime = Box::new(runtime::Runtime::new(program::Loaded::new(program))?);
+        let mut runtime = Box::new(runtime::Runtime::new(program::Loaded::new(program.legacy()?))?);
         runtime.worker_command = worker_command;
         Ok(worker::respond(&mut runtime, &request, STACK_BYTES))
     })
@@ -437,20 +471,47 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Until #572/#573 provide the candidate runtime, no public execution entry
-/// can accidentally load or execute an SPB 16 artifact with `champ-abi`.
-fn decode_runtime(bytes: &[u8]) -> Result<okkama_sparrow::Program, okkama_sparrow::CodecError> {
-    #[cfg(not(feature = "champ-abi"))]
-    {
-        okkama_sparrow::decode(bytes)
-    }
+/// Select a reader by the explicit version header; neither reader retries the other ABI.
+#[derive(Debug)]
+enum DecodedProgram {
+    Legacy(okkama_sparrow::Program),
     #[cfg(feature = "champ-abi")]
-    {
-        let program = okkama_sparrow::spb17::decode(bytes)?;
-        okkama_sparrow::spb17::verify_load(&program, &okkama_sparrow::spb17::NoExternalContracts)?;
-        Err(okkama_sparrow::CodecError {
-            offset: None,
-            message: "Champ runtime is not yet available: requires #572 and #573-P1".into(),
-        })
+    Champ(okkama_sparrow::spb17::Program),
+}
+
+impl DecodedProgram {
+    fn legacy(self) -> Result<okkama_sparrow::Program, Error> {
+        match self {
+            Self::Legacy(program) => Ok(program),
+            #[cfg(feature = "champ-abi")]
+            Self::Champ(_) => Err(Error("test profiles and workers are outside P1".into())),
+        }
     }
+
+    fn has_tests(&self) -> bool {
+        match self {
+            Self::Legacy(program) => program.tests.is_some(),
+            #[cfg(feature = "champ-abi")]
+            Self::Champ(_) => false,
+        }
+    }
+
+    fn function_count(&self) -> usize {
+        match self {
+            Self::Legacy(program) => program.functions.len(),
+            #[cfg(feature = "champ-abi")]
+            Self::Champ(program) => program.functions.len(),
+        }
+    }
+}
+
+fn decode_runtime(bytes: &[u8]) -> Result<DecodedProgram, okkama_sparrow::CodecError> {
+    #[cfg(feature = "champ-abi")]
+    if bytes.get(..6) == Some(&[b'S', b'P', b'R', b'W', 0, 17]) {
+        let program = okkama_sparrow::spb17::decode(bytes)?;
+        let contracts = okkama_sparrow::spb17::p1::P1Contracts::new(&program.objects)?;
+        okkama_sparrow::spb17::verify_load(&program, &contracts)?;
+        return Ok(DecodedProgram::Champ(program));
+    }
+    okkama_sparrow::decode(bytes).map(DecodedProgram::Legacy)
 }
