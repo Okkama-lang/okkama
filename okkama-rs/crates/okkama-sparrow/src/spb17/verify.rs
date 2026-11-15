@@ -46,11 +46,17 @@ fn ty_valid(ty: Type, p: &Program) -> Check {
             }
             // A managed array holds references to resource objects; it owns none of them (own keeps the
             // elements' obligations with their owners). Any other leaf is closed plain data.
-            let leaf = match element {
-                Type::Object(id) => !p.objects[id as usize].layout.may_async_destroy,
-                _ => closed_plain(p, element),
+            let resource = match element {
+                Type::Object(id) => {
+                    let layout = &p.objects[id as usize].layout;
+                    layout.has_destroy || layout.may_reach_resource
+                }
+                _ => false,
             };
-            enforce(leaf, "ARRAY_PLAIN", "array element graph is neither plain data nor resource objects")?;
+            // An object with an async destroy is rejected for every use outside P1, arrays included.
+            if !resource {
+                enforce(closed_plain(p, element), "ARRAY_PLAIN", "array element graph is not closed plain data")?;
+            }
         }
         Type::Map(id) | Type::MapBuilder(id) => {
             enforce(matches!(p.composites.get(id as usize), Some(Composite::Map { .. })),

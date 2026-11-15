@@ -136,8 +136,10 @@ fn oir2_unsupported_source_constructs_are_diagnostics() {
 #[test]
 fn oir2_any_coercion_boxes_the_value() {
     let text = print_oir2("module app; main() is int { let i is any = 8; 0; }").unwrap();
-    assert!(text.contains("= any.box %0"), "{text}");
-    assert!(text.contains(": any = any.box"), "{text}");
+    // The boxed operand is the int constant itself, whatever its SSA number.
+    let constant = text.lines().find_map(|line| line.trim().strip_suffix(": int = const 8"))
+        .unwrap_or_else(|| panic!("no int constant 8: {text}"));
+    assert!(text.contains(&format!(": any = any.box {constant}, ty any")), "{text}");
 }
 
 /// `byte >>> int` counts in int, as Tomato does: it is byte.shr, never a narrowed byte.ushr count.

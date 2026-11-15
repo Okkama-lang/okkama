@@ -101,10 +101,9 @@ fn array_loader_checks_transitive_element_graph_independently() {
     p.objects[0].layout.storage_fields = vec![p.functions[0].registers[1], Type::Object(1)];
     p.objects[0].layout.allocation_words = 3;
     p.objects[0].layout.trace_layout = vec![0, 1];
-    // #622: an array may refer to resource objects (managed arrays), so the array's element graph is not
-    // walked here. The array is classified by its leaf's retention flag, which the loader checks object by
-    // object: the leaf that hides a resource field is rejected on its own.
-    assert_eq!(verify_load(&p, &NoExternalContracts).unwrap_err().rule, "OBJECT_RETENTION");
+    // The leaf claims to be plain (no destroy, no resource) but its graph reaches a resource: an array of
+    // it is not closed plain data. Managed arrays (#622) admit only leaves that declare their resources.
+    assert_eq!(verify_load(&p, &NoExternalContracts).unwrap_err().rule, "ARRAY_PLAIN");
 }
 
 #[test]
@@ -205,12 +204,20 @@ fn array_element_fields_must_be_closed_plain_data() {
     }
 }
 
+/// Arrays may hold resource objects (managed arrays, #622; owner decision 2026-11-15): the array
+/// references the elements, and own keeps their obligations with their owners.
 #[test]
-fn array_element_cannot_have_a_destroy() {
-    // A destroy layout always reaches resources (verify: "destroy layout must reach self"), so this
-    // element fails both conditions of the same ARRAY_PLAIN check.
+fn array_of_resource_objects_loads() {
     let p = element_array(vec![Type::Int], true);
+    verify_load(&p, &NoExternalContracts).unwrap();
+}
+
+/// An element whose destroy may suspend cannot be held by an array: async destroy is outside P1 for
+/// every object, so the general rule rejects it before any array rule.
+#[test]
+fn array_element_cannot_have_an_async_destroy() {
+    let mut p = element_array(vec![Type::Int], true);
+    p.objects[0].layout.may_async_destroy = true;
     let failure = verify_load(&p, &NoExternalContracts).unwrap_err();
-    assert_eq!(failure.rule, "ARRAY_PLAIN", "{failure}");
-    assert!(failure.message.contains("reaches resources"), "{failure}");
+    assert!(failure.message.contains("async destroy is outside P1"), "{failure}");
 }
