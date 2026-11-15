@@ -53,7 +53,9 @@ fn ready(cleanup: &Cleanup) -> Result<(), Error> {
     }
     Ok(())
 }
+/// Merge `packet`'s identity runs into the serial stream. Its service entries were settled first (draft 3 §6.3).
 fn stream_append(runtime: &Runtime, stream: &mut Stream, packet: Packet) {
+    debug_assert!(packet.services.is_empty(), "service entries settle before their packet joins a plan");
     for run in packet.journals.into_iter().flatten() {
         if let Some(object) = run.front() {
             let serial = runtime.heap.champ_identity(object).expect("validated identity").serial;
@@ -62,15 +64,56 @@ fn stream_append(runtime: &Runtime, stream: &mut Stream, packet: Packet) {
         }
     }
 }
-fn abort(runtime: &Runtime, cleanup: &mut Cleanup) {
-    if let Some(pending) = cleanup.pending.take() {
+/// Draft 3 §6.3 (ABI D25.4): before `packet` joins a plan, settle its service entries in list order, each
+/// released packet's entries first, and add the identities they release to it. `packet` is outside `cleanup`; the
+/// whole inventory is checked before anything changes, so this is L.
+fn settle_services(runtime: &mut Runtime, cleanup: &Cleanup, packet: &mut Packet) -> Result<(), Error> {
+    if packet.services.is_empty() {
+        return Ok(());
+    }
+    let services = std::mem::take(&mut packet.services);
+    let mut plan = Vec::new();
+    let mut released = Packet::default();
+    runtime.champ_plan_services(&services, cleanup.owner, &mut plan, &mut released)?;
+    let mut all = inventory(cleanup);
+    all.append(packet.clone());
+    all.append(released.clone());
+    validate(runtime, &all)?;
+    runtime.champ_apply_services(plan)?;
+    packet.append(released);
+    Ok(())
+}
+/// Everything a cleanup holds: its remainder, its stream and its reserve.
+fn inventory(cleanup: &Cleanup) -> Packet {
+    let mut all = cleanup.remainder.clone();
+    for run in &cleanup.stream.runs {
+        all.append(Packet::from_run(run.clone()));
+    }
+    if let Some(pending) = &cleanup.pending {
+        all.append(pending.reserve.clone());
+    }
+    all
+}
+/// The whole reserve is consumed (D3). Before the plan it joins the remainder, whose entries the settle phase or
+/// the plan settles; after it, its entries are settled here before its identities merge (ABI C-4 step 3).
+fn abort(runtime: &mut Runtime, cleanup: &mut Cleanup) -> Result<(), Error> {
+    if let Some(mut pending) = cleanup.pending.take() {
         if cleanup.planned {
+            settle_services(runtime, cleanup, &mut pending.reserve)?;
             stream_append(runtime, &mut cleanup.stream, pending.reserve);
         } else {
             cleanup.remainder.append(pending.reserve);
         }
         cleanup.aborted = true;
     }
+    Ok(())
+}
+/// The remainder joins the plan: its entries settle first (draft 3 §6.3).
+fn plan_remainder(runtime: &mut Runtime, cleanup: &mut Cleanup) -> Result<(), Error> {
+    let mut remainder = std::mem::take(&mut cleanup.remainder);
+    settle_services(runtime, cleanup, &mut remainder)?;
+    stream_append(runtime, &mut cleanup.stream, remainder);
+    Ok(())
 }
 fn record_failure(runtime: &mut Runtime, cleanup: &mut Cleanup, failure: Word) -> Result<(), Error> {
     ready(cleanup)?;
@@ -85,8 +128,7 @@ fn record_failure(runtime: &mut Runtime, cleanup: &mut Cleanup, failure: Word) -
         }
         runtime.failure_link(cleanup.failure, failure, true);
     }
-    abort(runtime, cleanup);
-    Ok(())
+    abort(runtime, cleanup)
 }
 impl Runtime {
     pub fn champ_register_cleanup_plan(&mut self, plan: CleanupPlan) -> PlanId {
@@ -250,28 +292,51 @@ pub extern "C" fn rt_service_settle(ctx: *mut Ctx, this: Word, input: *mut Clean
             if cleanup.settlements != count - index {
                 return Err(error("duty settled out of schedule order"));
             }
+            if runtime.champ_cache(duty)?.flags & super::REHOMED != 0 {
+                return Err(error("a cache duty in an exit reserve settles with the reserve"));
+            }
             let settle = runtime.champ_cache_settlement(duty, cleanup.owner)?;
+            // The released packets' own entries settle first (draft 3 §6.3); their identities join the run.
+            let mut plan = Vec::new();
             let mut released = Packet::default();
-            let records = match settle {
-                super::futures::CacheSettle::Release { inputs, outcome, .. } => [inputs, outcome],
-                _ => [0, 0],
-            };
-            for record in records.into_iter().filter(|&record| record != 0) {
-                released.append(packet(runtime, record)?);
-            }
-            let mut all = cleanup.remainder.clone();
+            let service = Service { holder: duty, kind: SERVICE_CACHE, target: None };
+            runtime.champ_plan_duty(service, settle, cleanup.owner, &mut plan, &mut released)?;
+            let mut all = inventory(cleanup);
             all.append(released.clone());
-            if let Some(pending) = &cleanup.pending {
-                all.append(pending.reserve.clone());
-            }
             validate(runtime, &all)?;
-            runtime.champ_cache_settle(duty, settle)?;
-            for record in records.into_iter().filter(|&record| record != 0) {
-                consume(runtime, record);
-            }
+            runtime.champ_apply_services(plan)?;
             cleanup.remainder.append(released);
             cleanup.settlements -= 1;
             cleanup.settled = cleanup.settlements == 0;
+            Ok(())
+        })?;
+        unsafe {
+            (*input).record = 0;
+            post.write(CleanupSlot { record });
+        }
+        Ok(())
+    })
+}
+/// `cleanup.settle.dynamic` (SPB 84), class L (draft 3 §6.2, ABI D25.3): after the static steps, settle every
+/// entry of the closing scope's service list in list order, each released packet's entries first, with the rows of
+/// draft 3 §6.2; the released identities join the settled run. Nothing waits in 0.6.0, so the list is settled in
+/// one step and the cursor of the draft is the list itself. Once per close; it completes the settlement.
+pub extern "C" fn rt_cleanup_settle_dynamic(ctx: *mut Ctx, this: Word, input: *mut CleanupSlot,
+    post: *mut CleanupSlot) -> Outcome
+{
+    let _ = this;
+    leaf(ctx, |runtime| {
+        let record = unsafe { (*input).record };
+        edit(runtime, record, |runtime, cleanup| {
+            ready(cleanup)?;
+            if cleanup.planned || cleanup.dynamic || cleanup.settlements != 0 {
+                return Err(error("one dynamic settle per close, after its static duties and before its plan"));
+            }
+            let mut remainder = std::mem::take(&mut cleanup.remainder);
+            settle_services(runtime, cleanup, &mut remainder)?;
+            cleanup.remainder = remainder;
+            cleanup.dynamic = true;
+            cleanup.settled = true;
             Ok(())
         })?;
         unsafe {
@@ -304,7 +369,7 @@ pub extern "C" fn rt_cleanup_deliver_cancel(ctx: *mut Ctx, this: Word, input: *m
             if requested && cleanup.failure == 0 {
                 let failure = runtime.champ_take_emergency(this)?;
                 cleanup.failure = failure;
-                abort(runtime, cleanup);
+                abort(runtime, cleanup)?;
                 set(task, FLAGS, current | flags::CANCEL_DELIVERED);
             }
             Ok(())
@@ -329,15 +394,11 @@ pub extern "C" fn rt_exit_abort(ctx: *mut Ctx, input: *mut PendingSlot, state: *
             if cleanup.aborted || cleanup.pending.is_some() {
                 return Err(error("reserve already attached or aborted"));
             }
-            let mut all = cleanup.remainder.clone();
-            for run in &cleanup.stream.runs {
-                all.append(Packet::from_run(run.clone()));
-            }
+            let mut all = inventory(cleanup);
             all.append(pending.reserve.clone());
             validate(runtime, &all)?;
             cleanup.pending = Some(pending);
-            abort(runtime, cleanup);
-            Ok(())
+            abort(runtime, cleanup)
         })?;
         consume(runtime, pending_record);
         unsafe {
@@ -367,7 +428,7 @@ pub extern "C" fn rt_cleanup_plan(ctx: *mut Ctx, input: *mut CleanupSlot, plan: 
             if plan.direct && plan.may_fail && !reserve_empty {
                 return Err(error("B2: fallible direct plan with nonempty reserve"));
             }
-            stream_append(runtime, &mut cleanup.stream, std::mem::take(&mut cleanup.remainder));
+            plan_remainder(runtime, cleanup)?;
             cleanup.planned = true;
             Ok(())
         })?;
@@ -381,7 +442,7 @@ pub extern "C" fn rt_cleanup_plan(ctx: *mut Ctx, input: *mut CleanupSlot, plan: 
 /// The aborted reserve's executor plan (OIR-2 D18 at an async body's final exit, decision L2): it follows the
 /// delivery that follows the first plan, and no close has a third. The stream then holds what the delivery
 /// aborted, or nothing when no cancellation was delivered and the reserve stays pending.
-fn second_plan(runtime: &Runtime, cleanup: &mut Cleanup, plan: CleanupPlan) -> Result<(), Error> {
+fn second_plan(runtime: &mut Runtime, cleanup: &mut Cleanup, plan: CleanupPlan) -> Result<(), Error> {
     let idle = cleanup.active.is_none() && cleanup.selected.is_none() && cleanup.captured == 0;
     if !cleanup.delivered || cleanup.second || !idle {
         return Err(error("a second plan follows a delivered cancellation; a close has at most two plans"));
@@ -389,7 +450,7 @@ fn second_plan(runtime: &Runtime, cleanup: &mut Cleanup, plan: CleanupPlan) -> R
     if plan.direct || plan.reserve != (cleanup.pending.is_some() || cleanup.aborted) {
         return Err(error("the aborted reserve runs its own executor plan"));
     }
-    stream_append(runtime, &mut cleanup.stream, std::mem::take(&mut cleanup.remainder));
+    plan_remainder(runtime, cleanup)?;
     cleanup.second = true;
     cleanup.done = false;
     Ok(())
@@ -439,7 +500,7 @@ pub extern "C" fn rt_cleanup_finish(ctx: *mut Ctx, input: *mut CleanupSlot,
         let output = edit(runtime, record, |runtime, cleanup| {
             if !cleanup.planned || !cleanup.settled || cleanup.active.is_some()
                 || cleanup.selected.is_some() || cleanup.captured != 0
-                || !cleanup.stream.heads.is_empty() || cleanup.remainder.words().next().is_some()
+                || !cleanup.stream.heads.is_empty() || !cleanup.remainder.is_empty()
                 || (cleanup.failure != 0 && cleanup.pending.is_some())
             {
                 return Err(error("finish before complete cleanup"));

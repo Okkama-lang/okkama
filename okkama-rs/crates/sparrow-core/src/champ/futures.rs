@@ -34,6 +34,11 @@ pub const CHAMP: u64 = 512;
 pub const DETACHED: u64 = 1024;
 /// `CacheRecord::flags`: the cache duty has been settled.
 pub const RELEASED: u64 = 1;
+/// `CacheRecord::flags`: the cache duty is a receipt in an exit reserve (draft 3 §12): custody stays with the
+/// reserve until `exit.commit` moves it to the target or an abort settles it in S.
+pub const REHOMED: u64 = 2;
+/// `CacheRecord::flags`: `await.take` consumed the outcome (draft 3 §4.2).
+pub const CONSUMED_BY_TAKE: u64 = 4;
 /// Await receipts (draft 3 §14.2).
 pub const RECEIPT_NOT_STARTED: u64 = 0;
 pub const RECEIPT_SETTLED: u64 = 1;
@@ -210,7 +215,7 @@ impl Runtime {
         self.heap.payload::<CacheRecord>(get(future, CACHE)).ok_or_else(|| error("Future without a cache"))
     }
 
-    fn champ_cache_mut(&mut self, future: Word) -> Result<&mut CacheRecord, Error> {
+    pub(super) fn champ_cache_mut(&mut self, future: Word) -> Result<&mut CacheRecord, Error> {
         self.champ_body(future)?;
         self.heap.payload_mut::<CacheRecord>(get(future, CACHE)).ok_or_else(|| error("Future without a cache"))
     }
@@ -222,7 +227,7 @@ impl Runtime {
     }
 
     /// The owner of everything detached to the root (draft 3 §6.2, ABI D24.2).
-    fn champ_root_owner(&mut self) -> Result<OwnerId, Error> {
+    pub(super) fn champ_root_owner(&mut self) -> Result<OwnerId, Error> {
         if let Some(owner) = self.champ.root_owner {
             return Ok(owner);
         }
@@ -233,7 +238,7 @@ impl Runtime {
 
     /// Creation step 1 (draft 3 §2.4): the frame, its cache record and its emergency failure. This allocates
     /// and touches no input; the caller collects afterwards with the result rooted.
-    fn champ_future_alloc(&mut self, function: usize, owner: OwnerId) -> Result<Word, Error> {
+    pub(super) fn champ_future_alloc(&mut self, function: usize, owner: OwnerId) -> Result<Word, Error> {
         let map = self.champ_frame_map(function).ok_or_else(|| error("fut.new of a function that is not async"))?;
         let (words, tail) = (map.words, map.tail);
         let holder = self.champ_new_holder()?;
@@ -396,10 +401,115 @@ impl Runtime {
         Ok(CacheSettle::Release { inputs, outcome, cold: state == tasks::COLD })
     }
 
+    /// The packet records a cache duty answers for: its success's outcome and, until its body starts, its inputs
+    /// in continuation 0 (a running body's slot area is its own).
+    fn champ_duty_packets(&self, future: Word) -> Result<[Word; 2], Error> {
+        let packet_slot = self.champ_body(future)?.packet();
+        let inputs = match packet_slot {
+            Some(offset) if get(future, tasks::STATE) != tasks::RUNNING => get(future, offset),
+            _ => 0,
+        };
+        Ok([self.champ_cache(future)?.packet, inputs])
+    }
+
+    /// Preflight of a cache duty taking `owner` (G1 §3 through ABI D25.1): a live duty, and every identity of
+    /// its outcome and inputs can take the transition.
+    pub(super) fn champ_duty_preflight(&self, future: Word, owner: OwnerId) -> Result<(), Error> {
+        let cache = self.champ_cache(future)?;
+        if cache.flags & RELEASED != 0 {
+            return Err(error("a settled cache duty in a packet"));
+        }
+        if cache.owner == owner {
+            return Ok(());
+        }
+        for record in self.champ_duty_packets(future)?.into_iter().filter(|&record| record != 0) {
+            super::helpers::owner_preflight(self, &packet(self, record)?, owner)?;
+        }
+        Ok(())
+    }
+
+    /// The owner transition of a preflighted cache duty: the cache, its outcome identities and its inputs take
+    /// `owner` (draft 3 §12: "the duties and any outcome identities already published"), and a receipt ends.
+    pub(super) fn champ_duty_transition(&mut self, future: Word, owner: OwnerId) {
+        let records = self.champ_duty_packets(future).expect("preflighted duty");
+        let cache = self.champ_cache_mut(future).expect("preflighted duty");
+        cache.flags &= !REHOMED;
+        if cache.owner == owner {
+            return;
+        }
+        cache.owner = owner;
+        for record in records.into_iter().filter(|&record| record != 0) {
+            let moved = super::helpers::owner_transition(self, packet(self, record).expect("preflighted"), owner);
+            replace(self, record, Data::Packet(moved));
+        }
+    }
+
+    /// Plan the settle of `services` in list order, each released packet's own entries first (draft 3 §§6.2–6.3,
+    /// ABI D24.2, D25.4), changing nothing. `closing` is the owner whose duties settle (a cache of another owner
+    /// settles to nothing); a packet close (None) settles each cache for its own owner. A spawned task that
+    /// detaches takes its cache with it, so the cache entry after it settles to nothing. The released packets'
+    /// identities are appended to `released`.
+    pub(super) fn champ_plan_services(&self, services: &[Service], closing: Option<OwnerId>,
+        plan: &mut Vec<(Service, CacheSettle)>, released: &mut Packet) -> Result<(), Error>
+    {
+        for &service in services {
+            let detached = plan.iter().any(|(entry, settle)| {
+                entry.holder == service.holder && *settle == CacheSettle::Detach
+            });
+            let settle = match service.kind {
+                SERVICE_TASK if !detached && get(service.holder, tasks::STATE) == tasks::RUNNING => {
+                    self.champ_body(service.holder)?;
+                    CacheSettle::Detach
+                }
+                SERVICE_TASK => CacheSettle::Nothing,
+                SERVICE_CACHE if detached => CacheSettle::Nothing,
+                SERVICE_CACHE => {
+                    let owner = closing.unwrap_or(self.champ_cache(service.holder)?.owner);
+                    self.champ_cache_settlement(service.holder, Some(owner))?
+                }
+                _ => return Err(error("unknown service kind")),
+            };
+            self.champ_plan_duty(service, settle, closing, plan, released)?;
+        }
+        Ok(())
+    }
+
+    /// Add one decided settle to `plan`, then the entries of the packets it releases, then their identities.
+    pub(super) fn champ_plan_duty(&self, service: Service, settle: CacheSettle, closing: Option<OwnerId>,
+        plan: &mut Vec<(Service, CacheSettle)>, released: &mut Packet) -> Result<(), Error>
+    {
+        plan.push((service, settle));
+        if let CacheSettle::Release { inputs, outcome, .. } = settle {
+            for record in [inputs, outcome].into_iter().filter(|&record| record != 0) {
+                let mut packet = packet(self, record)?;
+                let nested = std::mem::take(&mut packet.services);
+                self.champ_plan_services(&nested, closing, plan, released)?;
+                released.append(packet);
+            }
+        }
+        Ok(())
+    }
+
+    /// Apply a checked plan of [`Runtime::champ_plan_services`]: L, no collection, no callback.
+    pub(super) fn champ_apply_services(&mut self, plan: Vec<(Service, CacheSettle)>) -> Result<(), Error> {
+        for (service, settle) in plan {
+            self.champ_cache_settle(service.holder, settle)?;
+            if let CacheSettle::Release { inputs, outcome, .. } = settle {
+                for record in [inputs, outcome].into_iter().filter(|&record| record != 0) {
+                    consume(self, record);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Apply a checked settlement: L, no collection, no callback.
     pub(super) fn champ_cache_settle(&mut self, duty: Word, settle: CacheSettle) -> Result<(), Error> {
         let map = self.champ_body(duty)?;
         let (packet_slot, tail) = (map.packet(), map.tail);
+        if settle != CacheSettle::Nothing {
+            self.champ_cache_mut(duty)?.flags &= !REHOMED;
+        }
         match settle {
             CacheSettle::Nothing => {}
             CacheSettle::Detach => {
@@ -459,6 +569,20 @@ fn clear(frame: Word, from: u64, to: u64) {
     }
 }
 
+/// Acceptance of a preflighted inputs packet by a Future's inputs holder `holder` (draft 3 §2.4): its runs keep
+/// their owners; the duties of Futures among the inputs go with them and keep their owners too.
+fn accept_inputs(runtime: &mut Runtime, offered: Packet, holder: HolderId) -> Packet {
+    let mut moved = Packet { services: offered.services, ..Packet::default() };
+    for (index, runs) in offered.journals.into_iter().enumerate() {
+        for run in runs {
+            let owner = run.owner;
+            let mut updated = transition(runtime, Packet::from_run(run), holder, owner);
+            moved.journals[index].append(&mut updated.journals[0]);
+        }
+    }
+    moved
+}
+
 /// `fut.new` (SPB 64), class G (draft 3 §§2.4, 14.4). The frame, its cache record and its emergency failure are
 /// allocated before any input is accepted: until Normal the inputs packet and the owner state stay with the
 /// caller. Acceptance moves the packet's runs to the Future's inputs holder and writes continuation 0, then
@@ -478,6 +602,7 @@ pub extern "C" fn rt_future_new_owned(ctx: *mut Ctx, inputs: *const FutureNewIn,
     let prepared = (|| {
         let owner = scope(runtime, unsafe { (*io.owner).record })?.owner;
         let offered = packet(runtime, offered_record)?;
+        super::helpers::validate(runtime, &offered)?;
         let map = runtime.champ_frame_map(io.entry as usize)
             .ok_or_else(|| error("fut.new of a function that is not async"))?;
         if map.inputs() != args.len() {
@@ -501,14 +626,7 @@ pub extern "C" fn rt_future_new_owned(ctx: *mut Ctx, inputs: *const FutureNewIn,
     // The only collection point: the caller keeps the operands rooted until return.
     runtime.safepoint(frame_pointer, unsafe { &*ctx }, &[(future, Repr::Ref), (accepted, Repr::Ref)]);
     // Acceptance: one batch without a safepoint.
-    let mut moved = Packet::default();
-    for (index, runs) in offered.journals.into_iter().enumerate() {
-        for run in runs {
-            let owner = run.owner;
-            let mut updated = transition(runtime, Packet::from_run(run), holder, owner);
-            moved.journals[index].append(&mut updated.journals[0]);
-        }
-    }
+    let moved = accept_inputs(runtime, offered, holder);
     replace(runtime, accepted, Data::Packet(moved));
     consume(runtime, offered_record);
     runtime.champ_write_start(future, args, accepted);
@@ -521,21 +639,28 @@ pub extern "C" fn rt_future_new_owned(ctx: *mut Ctx, inputs: *const FutureNewIn,
     NORMAL
 }
 
-/// `await` (SPB 66), class S (draft 3 §4.1): a deliverable cancellation first, exactly as Tomato's `rt_await`
-/// (#546, #663); then a cold Future starts on this stack; a settled one gives its value (deps take no words) or
-/// its cached failure; a running one registers `this` and returns PENDING. Re-entered after PENDING, the step
-/// continues: a settle wake honours only a delivered cancellation.
-pub extern "C" fn rt_await_view(ctx: *mut Ctx, this: Word, future: Word, post: *mut AwaitPost) -> Outcome {
-    let frame_pointer = frame_pointer!();
+/// What the common half of `await` and `await.take` found.
+enum Awaited {
+    /// A settled or running Future: the caller reads its state.
+    Ready,
+    /// A cancellation for this frame, with its receipt.
+    Cancelled(Word, u64),
+    Stop(Outcome),
+}
+
+/// `await` and `await.take` up to the Future's state (draft 3 §§4.1–4.2): a deliverable cancellation first,
+/// exactly as Tomato's `rt_await` (#546, #663); then a cold Future starts on this stack. Re-entered after
+/// PENDING, a settle wake honours only a delivered cancellation.
+fn await_entry(ctx: *mut Ctx, frame_pointer: u64, this: Word, future: Word) -> Awaited {
     if !bridge_clear(ctx) {
-        return stop(ctx, error("S helper entered with an active bridge failure"));
+        return Awaited::Stop(stop(ctx, error("S helper entered with an active bridge failure")));
     }
     let runtime = unsafe { &mut *(*ctx).runtime };
     if let Err(failure) = runtime.champ_body(this).and_then(|_| runtime.champ_body(future)) {
-        return stop(ctx, failure);
+        return Awaited::Stop(stop(ctx, failure));
     }
     if get(this, tasks::STATE) != tasks::RUNNING {
-        return stop(ctx, error("await from a frame that is not running"));
+        return Awaited::Stop(stop(ctx, error("await from a frame that is not running")));
     }
     runtime.count(|_| "await".into());
     // A collection at every entry, the first and each re-entry: operands are rooted by the caller.
@@ -554,14 +679,35 @@ pub extern "C" fn rt_await_view(ctx: *mut Ctx, this: Word, future: Word, post: *
         runtime.champ_deliverable_cancel().map(|failure| (failure, receipt))
     };
     if let Some((failure, receipt)) = cancel {
-        return unwind(ctx, post, failure, future, receipt);
+        return Awaited::Cancelled(failure, receipt);
     }
     set(future, tasks::FLAGS, get(future, tasks::FLAGS) | flags::OBSERVED);
     if get(future, tasks::STATE) == tasks::COLD {
         runtime.champ_future_start(ctx, this, future);
         if unsafe { (*ctx).status } != OK {
-            return OUTCOME_STOP;
+            return Awaited::Stop(OUTCOME_STOP);
         }
+    }
+    Awaited::Ready
+}
+
+/// A running Future: register `this` as its waiter and suspend (draft 3 §4.1).
+fn await_pending(ctx: *mut Ctx, frame_pointer: u64, this: Word, future: Word) -> Outcome {
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    runtime.champ_add_waiter(future, this);
+    set(this, tasks::FLAGS, get(this, tasks::FLAGS) | flags::AWAIT_SUSPENDED);
+    runtime.safepoint(frame_pointer, unsafe { &*ctx }, &[]);
+    OUTCOME_PENDING
+}
+
+/// `await` (SPB 66), class S (draft 3 §4.1): a settled Future gives its value (deps take no words) or its cached
+/// failure; a running one registers `this` and returns PENDING. The outcome packet stays in the cache.
+pub extern "C" fn rt_await_view(ctx: *mut Ctx, this: Word, future: Word, post: *mut AwaitPost) -> Outcome {
+    let frame_pointer = frame_pointer!();
+    match await_entry(ctx, frame_pointer, this, future) {
+        Awaited::Ready => {}
+        Awaited::Cancelled(failure, receipt) => return unwind(ctx, post, failure, future, receipt),
+        Awaited::Stop(outcome) => return outcome,
     }
     match get(future, tasks::STATE) {
         tasks::DONE => {
@@ -569,14 +715,69 @@ pub extern "C" fn rt_await_view(ctx: *mut Ctx, this: Word, future: Word, post: *
             NORMAL
         }
         tasks::FAILURE_STATE => unwind(ctx, post, get(future, tasks::FAILURE), future, RECEIPT_SETTLED),
-        tasks::RUNNING => {
-            runtime.champ_add_waiter(future, this);
-            set(this, tasks::FLAGS, get(this, tasks::FLAGS) | flags::AWAIT_SUSPENDED);
-            runtime.safepoint(frame_pointer, unsafe { &*ctx }, &[]);
-            OUTCOME_PENDING
-        }
+        tasks::RUNNING => await_pending(ctx, frame_pointer, this, future),
         // B91 excludes a shared await of a taken cache.
         _ => stop(ctx, error("await of a consumed Future")),
+    }
+}
+
+/// `await.take` (SPB 67), class S (draft 3 §4.2): `await` that, on success, consumes the cache. The outcome
+/// packet goes to Post in one transition to the boundary owner `boundary` under a new holder, as an unbound
+/// admission (provenance `temporary-await-result`), its Futures' duties with it; the Future becomes CONSUMED with
+/// RESULT, FAILURE and the cache's packet cleared. A failure or a cancellation leaves the cache unconsumed. The
+/// zero-word `unique-cache` capability is the loader's proof (SPB_TAKE_CAPABILITY); the runtime does not probe it.
+pub extern "C" fn rt_await_take(ctx: *mut Ctx, this: Word, future: Word, boundary: u64, post: *mut AwaitTakePost)
+    -> Outcome
+{
+    let frame_pointer = frame_pointer!();
+    let unwound = |ctx: *mut Ctx, failure: Word, receipt: u64| {
+        unsafe {
+            (*ctx).failure = failure;
+            (*ctx).status = FAILED;
+            post.write(AwaitTakePost { value: failure, packet: PacketSlot::default(), task: future, receipt });
+        }
+        UNWIND
+    };
+    match await_entry(ctx, frame_pointer, this, future) {
+        Awaited::Ready => {}
+        Awaited::Cancelled(failure, receipt) => return unwound(ctx, failure, receipt),
+        Awaited::Stop(outcome) => return outcome,
+    }
+    match get(future, tasks::STATE) {
+        tasks::DONE => {}
+        tasks::FAILURE_STATE => return unwound(ctx, get(future, tasks::FAILURE), RECEIPT_SETTLED),
+        tasks::RUNNING => return await_pending(ctx, frame_pointer, this, future),
+        _ => return stop(ctx, error("await.take of a consumed Future")),
+    }
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    let taken = (|| {
+        let cache = runtime.champ_cache(future)?;
+        if cache.flags & (RELEASED | REHOMED) != 0 {
+            return Err(error("await.take of a settled or rehomed cache"));
+        }
+        let record = cache.packet;
+        let outcome = packet(runtime, record)?;
+        let holder = runtime.champ_new_holder()?;
+        preflight(runtime, &outcome, holder, OwnerId(boundary))?;
+        let mut moved = transition(runtime, outcome, holder, OwnerId(boundary));
+        let runs = moved.journals.iter_mut().flat_map(std::mem::take).collect();
+        moved.journals = [runs, Default::default(), Default::default()];
+        replace(runtime, record, Data::Packet(moved));
+        let cache = runtime.champ_cache_mut(future)?;
+        cache.packet = 0;
+        cache.flags |= CONSUMED_BY_TAKE;
+        Ok(record)
+    })();
+    match taken {
+        Ok(record) => {
+            let value = get(future, tasks::RESULT);
+            set(future, tasks::RESULT, 0);
+            set(future, tasks::FAILURE, 0);
+            set(future, tasks::STATE, tasks::CONSUMED);
+            unsafe { post.write(AwaitTakePost { value, packet: PacketSlot { record }, task: 0, receipt: 0 }) };
+            NORMAL
+        }
+        Err(failure) => stop(ctx, failure),
     }
 }
 
@@ -648,7 +849,11 @@ pub extern "C" fn rt_future_publish(ctx: *mut Ctx, this: Word, inputs: *const Pu
                 let outcome = packet(runtime, record)?;
                 super::helpers::validate(runtime, &outcome)?;
                 let cache = runtime.champ_cache(this)?;
-                if outcome.runs().any(|run| run.holder != cache.holder || run.owner != cache.owner) {
+                let foreign_duty = |service: &Service| service.kind == SERVICE_CACHE
+                    && runtime.champ_cache(service.holder).is_ok_and(|duty| duty.owner != cache.owner);
+                if outcome.runs().any(|run| run.holder != cache.holder || run.owner != cache.owner)
+                    || outcome.services.iter().any(|service| service.target.is_some() || foreign_duty(service))
+                {
                     return Err(error("an outcome packet outside its cache"));
                 }
                 runtime.champ_cache_mut(this)?.packet = record;
@@ -741,4 +946,120 @@ pub extern "C" fn rt_machine_future_destination(ctx: *mut Ctx, frame: Word, post
         }
         Err(failure) => stop(ctx, failure),
     }
+}
+
+/// `invoke.defer` of an async defer entry in an async body `this` (draft 3 §11, ABI C-6), class S: the entry runs
+/// as a shielded child Future (`SHIELDED | OBSERVED`, its own task) on this stack, and `this` listens to it
+/// (§5: `listen` only, so a cancellation of `this` stays requested). The child is the frame's STEP until it
+/// settles; re-entered with the same operands, the step continues with it. A success is Continue (ordinal 0) and
+/// a failure is Unwind (ordinal 1) with the child's carrier, captured by the caller (G1 §5.3). Replace does not
+/// exist in 0.6.0: the registration has no labels.
+///
+/// The first entry moves the defer's input packet into the child's continuation 0 and leaves the operand an empty
+/// packet, so PENDING consumes no operand (class S, §1.1); the completion consumes it. `entry` is the function
+/// index of the defer body; `args` are its continuation-0 values (arguments, then captures).
+pub extern "C" fn rt_invoke_defer_async(ctx: *mut Ctx, this: Word, entry: u64, args: *const Word, argc: u64,
+    io: *mut super::CallOwn, registration: *const super::RegistrationMap, post: *mut super::DeferPost) -> Outcome
+{
+    let frame_pointer = frame_pointer!();
+    if !bridge_clear(ctx) {
+        return stop(ctx, error("S helper entered with an active bridge failure"));
+    }
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    let tail = match runtime.champ_tail(this) {
+        Ok(tail) if get(this, tasks::STATE) == tasks::RUNNING => tail,
+        Ok(_) => return stop(ctx, error("an async defer from a frame that is not running")),
+        Err(failure) => return stop(ctx, failure),
+    };
+    runtime.safepoint(frame_pointer, unsafe { &*ctx }, &[]);
+    if get(this, tail + STEP) == 0 {
+        let args = if argc == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(args, argc as usize) } };
+        let input = unsafe { (*io).input.record };
+        let prepared = (|| {
+            if unsafe { (*registration).replacements } != 0 {
+                return Err(error("an async defer has no replacement labels (ABI C-6)"));
+            }
+            let map = runtime.champ_frame_map(entry as usize)
+                .ok_or_else(|| error("an async defer entry that is not an async body"))?;
+            if map.inputs() != args.len() || map.packet().is_none() {
+                return Err(error("async defer argument count"));
+            }
+            let offered = packet(runtime, input)?;
+            let holder = runtime.champ_new_holder()?;
+            for run in offered.runs() {
+                preflight(runtime, &Packet::from_run(run.clone()), holder, run.owner)?;
+            }
+            super::helpers::validate(runtime, &offered)?;
+            let owner = runtime.champ_root_owner()?;
+            Ok((offered, holder, owner))
+        })();
+        let (offered, holder, owner) = match prepared {
+            Ok(prepared) => prepared,
+            Err(failure) => return stop(ctx, failure),
+        };
+        let child = match runtime.champ_future_alloc(entry as usize, owner) {
+            Ok(child) => child,
+            Err(failure) => return stop(ctx, failure),
+        };
+        let accepted = store(runtime, Data::Packet(Packet::default()));
+        runtime.safepoint(frame_pointer, unsafe { &*ctx }, &[(child, Repr::Ref), (accepted, Repr::Ref)]);
+        let moved = accept_inputs(runtime, offered, holder);
+        replace(runtime, accepted, Data::Packet(moved));
+        replace(runtime, input, Data::Packet(Packet::default()));
+        runtime.champ_write_start(child, args, accepted);
+        set(child, tasks::FLAGS, get(child, tasks::FLAGS) | flags::SHIELDED | flags::OBSERVED);
+        set(this, tail + STEP, child);
+        runtime.champ_future_start(ctx, 0, child);
+        if unsafe { (*ctx).status } != OK {
+            return OUTCOME_STOP;
+        }
+    }
+    let child = get(this, tail + STEP);
+    let state = get(child, tasks::STATE);
+    if state == tasks::RUNNING {
+        // A re-entry while the child still runs listens once.
+        if !runtime.champ_listens(child, this) {
+            runtime.listen(child, this);
+        }
+        runtime.safepoint(frame_pointer, unsafe { &*ctx }, &[]);
+        return OUTCOME_PENDING;
+    }
+    // The child settled: its duty ends here, and the defer's input operand is consumed.
+    let settled = (|| {
+        let record = runtime.champ_cache(child)?.packet;
+        if state == tasks::DONE && !packet(runtime, record)?.is_empty() {
+            return Err(error("an async defer published an outcome packet"));
+        }
+        if state != tasks::DONE && state != tasks::FAILURE_STATE {
+            return Err(error("an async defer child in an unexpected state"));
+        }
+        let input = unsafe { (*io).input.record };
+        if !packet(runtime, input)?.is_empty() {
+            return Err(error("an async defer's input operand changed while it was pending"));
+        }
+        if record != 0 {
+            consume(runtime, record);
+        }
+        consume(runtime, input);
+        let cache = runtime.champ_cache_mut(child)?;
+        cache.packet = 0;
+        cache.flags |= RELEASED;
+        Ok(())
+    })();
+    if let Err(failure) = settled {
+        return stop(ctx, failure);
+    }
+    set(this, tail + STEP, 0);
+    unsafe { (*io).input.record = 0 };
+    if state == tasks::DONE {
+        unsafe { post.write(super::DeferPost::default()) };
+        return NORMAL;
+    }
+    let failure = get(child, tasks::FAILURE);
+    unsafe {
+        (*ctx).failure = failure;
+        (*ctx).status = FAILED;
+        post.write(super::DeferPost { value: 0, packet: PacketSlot::default(), failure });
+    }
+    UNWIND
 }
