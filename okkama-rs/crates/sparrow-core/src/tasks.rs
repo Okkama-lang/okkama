@@ -290,33 +290,42 @@ impl Runtime {
 
     /// The frame with an undelivered cancellation request among the frames
     /// awaiting `frame`, and the frames awaiting those, up to their task
-    /// (#670). Frames that only listen to `frame` do not count.
+    /// (#670). Frames that only listen to `frame` do not count. The walk is
+    /// depth first in waiter order with an explicit stack, so a deep chain of
+    /// nested frames never grows the process stack.
     fn requested_above(&self, frame: Word) -> Option<Word> {
-        let waiters = get(frame, WAITER);
-        if waiters == UNBOUND {
-            return None;
+        let mut pending = Vec::new();
+        self.push_waiters(frame, &mut pending);
+        while let Some((awaited, waiter)) = pending.pop() {
+            // A frame that only listens to `awaited` does not await it.
+            if get(waiter, AWAITING) != awaited {
+                continue;
+            }
+            let flags = get(waiter, FLAGS);
+            if flags & CANCEL_REQUESTED != 0 && flags & CANCEL_DELIVERED == 0 {
+                return Some(waiter);
+            }
+            if flags & (SPAWNED | SHIELDED) != 0 {
+                continue;
+            }
+            self.push_waiters(waiter, &mut pending);
         }
-        if heap::kind(self.heap.header_of(waiters)) == heap::FRAME {
-            return self.requested_from(frame, waiters);
-        }
-        let list = &self.heap.payload::<Waiters>(waiters).expect("waiters").0;
-        list.iter().find_map(|&waiter| self.requested_from(frame, waiter))
+        None
     }
 
-    /// `waiter`, or a frame above it, with an undelivered cancellation
-    /// request, when `waiter` awaits `frame` (see `requested_above`).
-    fn requested_from(&self, frame: Word, waiter: Word) -> Option<Word> {
-        if get(waiter, AWAITING) != frame {
-            return None;
+    /// Push the waiters of `frame`, each paired with `frame`, so that the
+    /// first waiter is popped first.
+    fn push_waiters(&self, frame: Word, pending: &mut Vec<(Word, Word)>) {
+        let waiters = get(frame, WAITER);
+        if waiters == UNBOUND {
+            return;
         }
-        let flags = get(waiter, FLAGS);
-        if flags & CANCEL_REQUESTED != 0 && flags & CANCEL_DELIVERED == 0 {
-            return Some(waiter);
+        if heap::kind(self.heap.header_of(waiters)) == heap::FRAME {
+            pending.push((frame, waiters));
+            return;
         }
-        if flags & (SPAWNED | SHIELDED) != 0 {
-            return None;
-        }
-        self.requested_above(waiter)
+        let list = &self.heap.payload::<Waiters>(waiters).expect("waiters").0;
+        pending.extend(list.iter().rev().map(|&waiter| (frame, waiter)));
     }
 
     /// Deliver a cancellation to a suspended task: its innermost waiting
