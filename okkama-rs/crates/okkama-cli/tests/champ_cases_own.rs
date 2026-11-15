@@ -143,13 +143,13 @@ macro_rules! through_low {
     };
 }
 
-// Task 1: collections. Every case passes own and low; the backend lane has no
-// builders, maps or managed arrays in SPB 17 yet.
-through_low!(collections_map_access, "L05.map.access");
+// Task 1: collections. Builders, maps, plain collection operations and managed arrays run in Champ
+// (#622); role declarations still stop in the backend.
+case!(collections_map_access, "L05.map.access");
 through_low!(collections_array_removed_at, "L05.array.removed-at");
-through_low!(collections_range_expansion, "L02.range.expansion");
-through_low!(collections_map_merge, "L05.collections.map-merge");
-through_low!(collections_alias_borrows, "L07.ownership.alias-borrows");
+case!(collections_range_expansion, "L02.range.expansion");
+case!(collections_map_merge, "L05.collections.map-merge");
+case!(collections_alias_borrows, "L07.ownership.alias-borrows");
 
 // Task 2: deps recipes (caught role payloads) and tombstones.
 case!(deps_catch_error_role_binding, "L07.catch.error-role-binding");
@@ -157,14 +157,14 @@ case!(deps_catch_source_order, "L07.catch.source-order");
 case!(deps_confirm_bare_uncatchable, "L07.confirm.bare-uncatchable");
 case!(deps_confirm_else_panic, "L07.confirm.else-panic");
 case!(deps_panic_not_catchable, "L07.panic.not-catchable");
-through_low!(deps_choice_evaluation, "L05.choice.evaluation");
+case!(deps_choice_evaluation, "L05.choice.evaluation");
 
 // Task 3: defer helpers, field defaults and lookup fallbacks.
 case!(other_defer_all_run_and_precedence, "L07.defer.all-run-and-precedence");
 case!(other_defer_failure_beats_destroy, "L07.defer.failure-beats-destroy");
-through_low!(other_fields_defaults_per_construction, "L04.fields.defaults-per-construction");
-through_low!(other_index_fallback, "L01.gram.index.fallback");
-through_low!(other_map_fallback_lazy, "L05.map.fallback-lazy");
+case!(other_fields_defaults_per_construction, "L04.fields.defaults-per-construction");
+case!(other_index_fallback, "L01.gram.index.fallback");
+case!(other_map_fallback_lazy, "L05.map.fallback-lazy");
 // String sources (core.StringSource is an ordinary lowered object): checked against case.json.
 through_low!(strings_raw_concatenation, "L01.lex.raw.concatenation");
 through_low!(strings_raw_multiline, "L01.lex.raw.multiline");

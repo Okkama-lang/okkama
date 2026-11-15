@@ -382,7 +382,9 @@ fn compare_flag(op: Cmp, order: Ordering) -> Word {
     })
 }
 
-fn slice_bounds(runtime: &Runtime, length: usize, start: Word, end: Word) -> Result<std::ops::Range<usize>, String> {
+pub(crate) fn slice_bounds(runtime: &Runtime, length: usize, start: Word, end: Word)
+    -> Result<std::ops::Range<usize>, String>
+{
     let (start, end) = (runtime.big_value(start), runtime.big_value(end));
     if start.is_negative() {
         return Err("Slice start must not be negative".into());
@@ -861,7 +863,7 @@ pub extern "C" fn rt_scalar_safepoint(ctx: *mut Ctx, conversion: u64) {
     runtime.safepoint(frame, ctx, &[]);
 }
 
-fn builder_new(runtime: &mut Runtime, repr: Repr) -> Word {
+pub(crate) fn builder_new(runtime: &mut Runtime, repr: Repr) -> Word {
     let spare = runtime.heap.allocate_spare(|payload| {
         match payload.as_any_mut().downcast_mut::<Builder>() {
             Some(builder) => {
@@ -875,7 +877,7 @@ fn builder_new(runtime: &mut Runtime, repr: Repr) -> Word {
     spare.unwrap_or_else(|| runtime.heap.allocate_payload(Box::new(Builder { repr, items: Vec::new() })))
 }
 
-fn builder_finish(runtime: &mut Runtime, object: Word, packed: bool) -> Word {
+pub(crate) fn builder_finish(runtime: &mut Runtime, object: Word, packed: bool) -> Word {
     let builder = runtime.heap.payload_mut::<Builder>(object).expect("builder");
     let (repr, mut items) = (builder.repr, std::mem::take(&mut builder.items));
     let array = if packed {
@@ -930,9 +932,9 @@ pub extern "C" fn rt_trie_get(ctx: *mut Ctx, array: Word, position: u64) -> Word
 /// Grow a builder's items and charge the capacity its vector took on
 /// (#331): O(1), and nothing at all while the capacity holds.
 /// The most integers a range adds to a builder at once (#448).
-const RANGE_CHUNK: i64 = 1 << 16;
+pub(crate) const RANGE_CHUNK: i64 = 1 << 16;
 
-fn grow_builder(heap: &mut crate::heap::Heap, builder: Word, grow: impl FnOnce(&mut Vec<Word>)) {
+pub(crate) fn grow_builder(heap: &mut crate::heap::Heap, builder: Word, grow: impl FnOnce(&mut Vec<Word>)) {
     let grown = {
         let items = &mut heap.payload_mut::<Builder>(builder).expect("builder").items;
         let before = items.capacity();

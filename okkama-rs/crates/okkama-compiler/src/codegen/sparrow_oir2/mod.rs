@@ -55,6 +55,10 @@ pub struct AllocatedProgram {
 pub fn generate_with_allocation(module: &o::Module, layouts: &dyn LayoutRegistry)
     -> Result<AllocatedProgram, GenerateError>
 {
+    with_composites(module, || generate_program(module, layouts))
+}
+
+fn generate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<AllocatedProgram, GenerateError> {
     if module.profile != o::Profile::Low {
         return Err(GenerateError("expected verified low profile".into()));
     }
@@ -78,6 +82,7 @@ pub fn generate_with_allocation(module: &o::Module, layouts: &dyn LayoutRegistry
         ..s::Program::default()
     };
     p.objects = objects(module, layouts)?;
+    p.composites = composites(module).entries().to_vec();
     for (id, scope) in module.scopes.iter() {
         p.tables.scopes.push(s::Scope {
             function: scope.function.as_u32(),
@@ -89,12 +94,25 @@ pub fn generate_with_allocation(module: &o::Module, layouts: &dyn LayoutRegistry
     for (id, function) in module.functions.iter() {
         if let Some(body) = &function.body {
             for (_, value) in body.values.iter() {
-                if matches!(translate_type(module, value.ty), Ok(s::Type::Array(_)))
-                    && value.facts != (o::ValueFacts::Plain {
-                        certificate: o::PlainCertificate::ClosedGraph { ty: value.ty },
-                    })
-                {
-                    return Err(GenerateError("plain array requires own ClosedGraph certificate".into()));
+                let ty = translate_type(module, value.ty);
+                let collection = matches!(ty, Ok(s::Type::Array(_) | s::Type::Map(_)));
+                let plain = value.facts == (o::ValueFacts::Plain {
+                    certificate: o::PlainCertificate::ClosedGraph { ty: value.ty },
+                });
+                // A managed array or map refers to resource objects: own proves its deps on their owners.
+                let leaf = match ty {
+                    Ok(s::Type::Array(shape)) => s::ArrayType { depth: 1, ..shape }.element(),
+                    Ok(s::Type::Map(id)) => match composites(module).entries().get(id as usize) {
+                        Some(s::Composite::Map { value, .. }) => Some(*value),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let managed = matches!(value.facts, o::ValueFacts::Managed { .. })
+                    && matches!(leaf, Some(s::Type::Object(id))
+                        if p.objects.get(id as usize).is_some_and(|object| object.layout.may_reach_resource));
+                if collection && !plain && !managed {
+                    return Err(GenerateError("plain array or map requires own ClosedGraph certificate".into()));
                 }
             }
         }
@@ -154,8 +172,9 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
         if let o::DeclarationKind::Variant { cases, is_error: false } = &declaration.kind {
             for case in cases {
                 let case = layouts.object_layout(case.layout.as_u32())?;
-                if case.runtime.has_destroy || case.runtime.may_reach_resource {
-                    return Err(unsupported("variant case that reaches resources"));
+                // A case may refer to resources (Maybe<Resource>); it is never an identity itself.
+                if case.runtime.has_destroy {
+                    return Err(unsupported("variant case with destroy"));
                 }
             }
         }
@@ -207,26 +226,110 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
     Ok(objects)
 }
 
+/// SPB 17 collection shapes of one module, in OIR type order. Equal shapes share one entry.
+#[derive(Debug, Default)]
+pub(crate) struct Composites {
+    index: std::collections::HashMap<o::TypeId, u32>,
+    entries: Vec<s::Composite>,
+}
+
+impl Composites {
+    fn build(module: &o::Module) -> Self {
+        let mut table = Self::default();
+        for (id, ty) in module.types.iter() {
+            let composite = match ty {
+                o::Type::Map(key, value) | o::Type::MapBuilder(key, value) => {
+                    match (translate_with(module, *key, &table), translate_with(module, *value, &table)) {
+                        (Ok(key), Ok(value)) => s::Composite::Map { key, value },
+                        _ => continue,
+                    }
+                }
+                o::Type::Builder(element) => match translate_with(module, *element, &table) {
+                    Ok(element) => match s::ArrayType::of(element) {
+                        Some(array) => s::Composite::Builder { array },
+                        None => continue,
+                    },
+                    Err(_) => continue,
+                },
+                _ => continue,
+            };
+            let position = match table.entries.iter().position(|entry| *entry == composite) {
+                Some(position) => position,
+                None => {
+                    table.entries.push(composite);
+                    table.entries.len() - 1
+                }
+            };
+            table.index.insert(id, position as u32);
+        }
+        table
+    }
+
+    pub(crate) fn entries(&self) -> &[s::Composite] {
+        &self.entries
+    }
+}
+
+thread_local! {
+    /// The table of the module being generated, keyed by its address; outside `with_composites` every
+    /// lookup rebuilds the table, so a stale entry can never be read.
+    static COMPOSITES: std::cell::RefCell<Option<(usize, std::rc::Rc<Composites>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn module_key(module: &o::Module) -> usize {
+    module as *const o::Module as usize
+}
+
+/// Run `body` with the module's composite table built once.
+pub(crate) fn with_composites<T>(module: &o::Module, body: impl FnOnce() -> T) -> T {
+    struct Restore(Option<(usize, std::rc::Rc<Composites>)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = self.0.take();
+            COMPOSITES.with(|slot| *slot.borrow_mut() = previous);
+        }
+    }
+    let table = std::rc::Rc::new(Composites::build(module));
+    let previous = COMPOSITES.with(|slot| slot.borrow_mut().replace((module_key(module), table)));
+    let _restore = Restore(previous);
+    body()
+}
+
+pub(crate) fn composites(module: &o::Module) -> std::rc::Rc<Composites> {
+    let cached = COMPOSITES.with(|slot| slot.borrow().as_ref()
+        .filter(|(key, _)| *key == module_key(module)).map(|(_, table)| table.clone()));
+    cached.unwrap_or_else(|| std::rc::Rc::new(Composites::build(module)))
+}
+
 pub(crate) fn translate_type(module: &o::Module, id: o::TypeId) -> Result<s::Type, GenerateError> {
+    translate_with(module, id, &composites(module))
+}
+
+fn translate_with(module: &o::Module, id: o::TypeId, table: &Composites) -> Result<s::Type, GenerateError> {
     Ok(match module.types.get(id)? {
         o::Type::Int => s::Type::Int,
-        o::Type::Array(element) if module.types.get(*element)? == &o::Type::Byte => s::Type::Bytes,
         o::Type::Array(element) => {
-            let leaf = match translate_type(module, *element)? {
-                s::Type::Int => s::ArrayLeaf::Int,
-                s::Type::Bool => s::ArrayLeaf::Bool,
-                s::Type::Str => s::ArrayLeaf::Str,
-                s::Type::Range => s::ArrayLeaf::Range,
-                s::Type::Bytes => s::ArrayLeaf::Bytes,
-                s::Type::Object(id) => s::ArrayLeaf::Object(id),
-                s::Type::Array(shape) => {
-                    let depth = shape.depth.checked_add(1)
-                        .ok_or_else(|| GenerateError("array nesting overflow".into()))?;
-                    return Ok(s::Type::Array(s::ArrayType { depth, ..shape }));
+            let element = translate_with(module, *element, table)?;
+            s::ArrayType::of(element).ok_or_else(|| unsupported("array element type"))?
+        }
+        o::Type::Map(..) | o::Type::MapBuilder(..) | o::Type::Builder(_) => {
+            let Some(&index) = table.index.get(&id) else {
+                let parts = match module.types.get(id)? {
+                    o::Type::Map(key, value) | o::Type::MapBuilder(key, value) => vec![*key, *value],
+                    o::Type::Builder(element) => vec![*element],
+                    _ => vec![],
+                };
+                for part in parts {
+                    translate_with(module, part, table)?;
                 }
-                _ => return Err(unsupported("array element type")),
+                return Err(unsupported("collection shape outside SPB 17"));
             };
-            s::Type::Array(s::ArrayType { leaf, depth: 1 })
+            match module.types.get(id)? {
+                o::Type::Map(..) => s::Type::Map(index),
+                o::Type::MapBuilder(..) => s::Type::MapBuilder(index),
+                _ => s::Type::Builder(index),
+            }
         }
         o::Type::Role { decl, args } if args.is_empty() && module.declarations.get(*decl)?.name == "Error" => {
             s::Type::Error
@@ -282,6 +385,18 @@ pub(crate) fn variant_storage(module: &o::Module, objects: &[s::Object], field: 
     }
     objects.get(field.declaration.as_u32() as usize).and_then(|case| case.fields.get(field.index as usize))
         .map(|field| field.storage).ok_or_else(|| GenerateError("invalid variant payload field".into()))
+}
+
+/// The storage of a once slot: a source field marked `once` (#491).
+fn once_field(module: &o::Module, objects: &[s::Object], field: o::FieldRef) -> Result<u32, GenerateError> {
+    let o::DeclarationKind::Object { fields, .. } = &module.declarations.get(field.declaration)?.kind else {
+        return Err(GenerateError("once slot outside an object".into()));
+    };
+    if !fields.get(field.index as usize).is_some_and(|source| source.once) {
+        return Err(GenerateError("once.load/once.store needs a once slot".into()));
+    }
+    objects.get(field.declaration.as_u32() as usize).and_then(|object| object.fields.get(field.index as usize))
+        .map(|field| field.storage).ok_or_else(|| GenerateError("invalid once slot".into()))
 }
 
 /// The SPB 17 type of an OIR-2 conversion operand.
@@ -527,18 +642,18 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
             .ok_or_else(|| GenerateError("invalid source field index".into()))
     };
     let mut immediate = s::Immediate::None;
-    let (op, inputs) = match &inst.op {
+    let (op, inputs): (D, Vec<u32>) = match &inst.op {
         o::Operation::Const(value) => {
             immediate = s::Immediate::Constant(translate_constant(value)?);
             (D::Const, vec![])
         }
-        o::Operation::Collection(collection) => match collection {
-            o::CollectionOp::ArrayNew { values, packet: None, .. } => {
-                (D::ArrayNew, values.iter().map(|value| reg(*value)).collect())
-            }
-            o::CollectionOp::ArrayLen { array } => (D::ArrayLen, vec![reg(*array)]),
-            _ => return Err(unsupported(inst.op.opcode())),
-        },
+        o::Operation::Collection(collection) => {
+            let result = inst.results.first().map(|&value| body.values.get(value).map(|value| value.ty))
+                .transpose()?;
+            let (op, values) = collection_data(module, body, collection, result)?
+                .ok_or_else(|| unsupported(inst.op.opcode()))?;
+            (op, values.into_iter().map(reg).collect())
+        }
         o::Operation::Core(core) => match core {
             C::EnumCase { declaration, case } => {
                 immediate = s::Immediate::Updates(vec![declaration.as_u32(), *case]);
@@ -653,6 +768,15 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
                 }
                 (D::ObjGet, vec![reg(*object)])
             }
+            C::OnceLoad { object, field: reference } => {
+                immediate = s::Immediate::Field(once_field(module, objects, *reference)?);
+                (D::ObjGet, vec![reg(*object)])
+            }
+            C::OnceStore { object, field: reference, value } => {
+                immediate = s::Immediate::Field(once_field(module, objects, *reference)?);
+                field(*object, *reference)?;
+                (D::ObjInit, vec![reg(*object), reg(*value)])
+            }
             C::ObjInit { object, field: reference, value, completion } => {
                 if completion.is_some() {
                     return Err(unsupported("construction completion state"));
@@ -715,6 +839,59 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
         output: inst.results.first().map(|id| reg(*id)),
         immediate,
     })
+}
+
+/// The data form of a plain collection operation: its operation and OIR input values. `result` is the
+/// OIR type of its result, for retags. `None` for builder transitions and operations with packets.
+pub(crate) fn collection_data(module: &o::Module, body: &o::Body, op: &o::CollectionOp, result: Option<o::TypeId>)
+    -> Result<Option<(s::DataOp, Vec<o::ValueId>)>, GenerateError>
+{
+    use o::CollectionOp as C;
+    use s::DataOp as D;
+    Ok(Some(match op {
+        C::ArrayNew { values, packet: None, .. } => (D::ArrayNew, values.clone()),
+        C::ArrayLen { array } => (D::ArrayLen, vec![*array]),
+        C::ArrayConcat { arrays, packet: None, .. } => (D::ArrayConcat, arrays.clone()),
+        C::ArrayJoin { array, separator } => (D::ArrayJoin, vec![*array, *separator]),
+        C::ArraySlice { array, start, end, packet: None } => (D::ArraySlice, vec![*array, *start, *end]),
+        C::ArrayRemove { array, index, packet: None } => (D::ArrayRemove, vec![*array, *index]),
+        C::ArrayReplace { array, index, value, packet: None } => (D::ArrayReplace, vec![*array, *index, *value]),
+        C::ArrayDifference { array, removed, packet: None } => {
+            (D::ArrayDifference, std::iter::once(*array).chain(removed.iter().copied()).collect())
+        }
+        C::MapNew { entries, packet: None, .. } => {
+            (D::MapNew, entries.iter().flat_map(|&(key, value)| [key, value]).collect())
+        }
+        C::MapMerge { maps, packet: None, .. } => (D::MapMerge, maps.clone()),
+        C::MapDifference { map, removed, packet: None } => {
+            (D::MapDifference, std::iter::once(*map).chain(removed.iter().copied()).collect())
+        }
+        C::MapLen { map } => (D::MapLen, vec![*map]),
+        C::MapHas { map, key } => (D::MapHas, vec![*map, *key]),
+        C::MapGet { map, key } => (D::MapGet, vec![*map, *key]),
+        C::MapKeys { map } => (D::MapKeys, vec![*map]),
+        C::MapValues { map } => (D::MapValues, vec![*map]),
+        C::MapKeyAt { map, index } => (D::MapKeyAt, vec![*map, *index]),
+        C::MapValueAt { map, index } => (D::MapValueAt, vec![*map, *index]),
+        C::ArrayRetag { array: value, ty } | C::MapRetag { map: value, ty } => {
+            let source = translate_type(module, body.values.get(*value)?.ty)?;
+            let target = translate_type(module, *ty)?;
+            let empty = s::Type::Array(s::ArrayType { leaf: s::ArrayLeaf::Never, depth: 1 });
+            if result.is_some_and(|result| result != *ty) {
+                return Err(GenerateError("collection retag result annotation mismatch".into()));
+            }
+            if (source, target) == (empty, s::Type::Bytes) {
+                // An uninferred `[]` becomes an empty byte array, which has its own representation.
+                (D::ArrayNew, vec![])
+            } else if target == source || s::never_retag(composites(module).entries(), source, target) {
+                (D::Move, vec![*value])
+            } else {
+                return Err(unsupported("collection retag that changes the SPB 17 type"));
+            }
+        }
+        C::BuilderNew { .. } | C::MapBuilderNew { .. } => (D::BuilderNew, vec![]),
+        _ => return Ok(None),
+    }))
 }
 
 fn fresh(function: &mut s::Function, ty: s::Type) -> Result<u32, GenerateError> {

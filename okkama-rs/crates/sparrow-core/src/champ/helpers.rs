@@ -244,12 +244,43 @@ fn selection_walk(runtime: &Runtime, packet: &Packet, selection: &Selection, str
             continue;
         }
         let header = runtime.heap.header_of(object);
-        // Kinds without identity are leaves: the loader's ARRAY_PLAIN admits only arrays whose
-        // element graph is closed and plain. Of the payloads only a Range is a leaf; failures and
+        // A managed array (ARRAY_PLAIN admits resource object leaves) refers to identities it does not
+        // own: its elements are selected like fields. Arrays are homogeneous, so the first element shows
+        // whether the elements can hold identities at all; text, numbers and plain leaves stop here.
+        if heap::kind(header) == heap::ARRAY {
+            if runtime.heap.is_bytes(object) {
+                continue;
+            }
+            let elements = runtime.heap.elements(object);
+            let nested = elements.iter().find(|&&element| element != 0 && element & 1 == 0)
+                .is_some_and(|&element| {
+                    matches!(heap::kind(runtime.heap.header_of(element)), heap::OBJECT | heap::ARRAY)
+                });
+            if heap::element_repr(header) == crate::word::Repr::Ref && nested {
+                work.extend(elements.iter().copied());
+            }
+            continue;
+        }
+        // A managed map refers to resource objects as values, selected like a managed array's elements.
+        if heap::kind(header) == heap::PAYLOAD
+            && let Some(map) = runtime.heap.payload::<crate::ops::MapValue>(object)
+        {
+            if map.value == crate::word::Repr::Ref {
+                let values: Vec<Word> = map.entries.values().map(|&(_, value)| value).collect();
+                let nested = values.iter().find(|&&value| value != 0 && value & 1 == 0).is_some_and(|&value| {
+                    matches!(heap::kind(runtime.heap.header_of(value)), heap::OBJECT | heap::ARRAY)
+                });
+                if nested {
+                    work.extend(values);
+                }
+            }
+            continue;
+        }
+        // Other kinds without identity are leaves. Of the payloads only a Range is a leaf; failures and
         // service records can hold identities and still stop the walk.
         let range = heap::kind(header) == heap::PAYLOAD
             && runtime.heap.payload::<crate::ops::RangeValue>(object).is_some();
-        if range || matches!(heap::kind(header), heap::STRING | heap::BIGINT | heap::ARRAY) {
+        if range || matches!(heap::kind(header), heap::STRING | heap::BIGINT) {
             continue;
         }
         if heap::kind(header) != heap::OBJECT {

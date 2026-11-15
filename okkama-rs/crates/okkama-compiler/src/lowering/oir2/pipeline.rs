@@ -116,8 +116,9 @@ pub(super) fn compile_high_with(high: o::Module, mode: o::VerifyMode) -> Result<
     let low = o::low::lower_cleanup(own.module, &o::low::LowOptions::default())
         .map_err(|error| phase("low", error))?;
     o::verify_low_with(&low, &options.verify, context()).map_err(|error| phase("verify_low", error))?;
-    let layouts = layouts(&low)?;
-    let objects = sparrow_oir2::objects(&low, &layouts).map_err(|error| phase("layout", error))?;
+    let layouts = sparrow_oir2::with_composites(&low, || layouts(&low))?;
+    let objects = sparrow_oir2::with_composites(&low, || sparrow_oir2::objects(&low, &layouts))
+        .map_err(|error| phase("layout", error))?;
     let contracts = s::p1::P1Contracts::new(&objects).map_err(|error| phase("spb_contracts", error))?;
     let output = sparrow_oir2::compile_low_with(&low, &layouts, context(), &contracts, &options.verify)
         .map_err(|error| phase("compile_low", error))?;
@@ -138,7 +139,9 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
         let atomic = declaration.name.strip_prefix("async.atomic.Atomic_")
             .filter(|_| builtin && fields.is_empty() && destroy.is_none())
             .and_then(s::p1::atomic_value);
-        if (builtin && atomic.is_none()) || fields.iter().any(|field| field.once) {
+        // A once slot is an ordinary Maybe field: the producer stores Maybe.none at construction and
+        // once.load/once.store read and fill it (SPB 17 `Field::once` keeps it out of equality and keys).
+        if builtin && atomic.is_none() {
             return Err(phase("layout", format!("missing final runtime override for {}", declaration.name)));
         }
         let mut storage_fields = fields.iter().map(|field| sparrow_oir2::translate_type(module, field.ty))
@@ -148,10 +151,8 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
         } else if matches!(declaration.kind, o::DeclarationKind::Enum { .. }) {
             storage_fields = vec![s::Type::Int];
         }
-        let trace_layout = storage_fields.iter().enumerate().filter_map(|(index, ty)| {
-            matches!(ty, s::Type::Bytes | s::Type::Array(_) | s::Type::Str | s::Type::Object(_) | s::Type::Successor(_)
-                | s::Type::Failure | s::Type::Rat | s::Type::Variant(_) | s::Type::Handle(_)).then_some(index as u32)
-        }).collect::<Vec<_>>();
+        let trace_layout = storage_fields.iter().enumerate()
+            .filter_map(|(index, ty)| ty.traced().then_some(index as u32)).collect::<Vec<_>>();
         // Plain layouts can contain resource fields; compute the transitive fact below.
         layouts.insert(id.as_u32(), sparrow_oir2::ObjectLayout {
             runtime: s::ObjectRuntimeLayout {
@@ -172,10 +173,33 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
             .collect::<std::collections::BTreeSet<_>>();
         let mut changed = false;
         for layout in layouts.values_mut() {
+            // A field holding a resource object, or a managed array of them, is selected: the runtime
+            // selection walk reaches the identities through it (ARRAY_RETENTION).
             layout.runtime.selection_layout = layout.runtime.storage_fields.iter().enumerate().filter_map(|(i, ty)| {
-                matches!(ty, s::Type::Object(id) | s::Type::Successor(id) if reaches.contains(id)).then_some(i as u32)
+                let leaf = match *ty {
+                    s::Type::Array(shape) => s::ArrayType { depth: 1, ..shape }.element(),
+                    s::Type::Map(id) => match sparrow_oir2::composites(module).entries().get(id as usize) {
+                        Some(s::Composite::Map { value, .. }) => Some(*value),
+                        _ => None,
+                    },
+                    ty => Some(ty),
+                };
+                matches!(leaf, Some(s::Type::Object(id) | s::Type::Successor(id) | s::Type::Variant(id))
+                    if reaches.contains(&id))
+                    .then_some(i as u32)
             }).collect();
             if !layout.runtime.may_reach_resource && !layout.runtime.selection_layout.is_empty() {
+                layout.runtime.may_reach_resource = true;
+                changed = true;
+            }
+        }
+        // A variant reaches resources when one of its cases does (VARIANT_CASES).
+        for (id, declaration) in module.declarations.iter() {
+            let o::DeclarationKind::Variant { cases, .. } = &declaration.kind else { continue };
+            let reaches_case = cases.iter().any(|case| reaches.contains(&case.layout.as_u32()));
+            if let Some(layout) = layouts.get_mut(&id.as_u32())
+                && reaches_case && !layout.runtime.may_reach_resource
+            {
                 layout.runtime.may_reach_resource = true;
                 changed = true;
             }

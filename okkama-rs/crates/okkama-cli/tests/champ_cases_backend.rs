@@ -209,3 +209,80 @@ fn champ_cases_scalar_enum_and_variant_types() {
         "L05.maybe.presence",
     ]);
 }
+
+/// Builders with element journals, maps, lookups and plain collection operations (#622).
+#[test]
+fn champ_cases_builders_and_collections() {
+    check(&[
+        "L01.gram.functional.inside-operators",
+        "L01.gram.functional.suffix",
+        "L01.lex.contextual.has-action-and-field",
+        "L01.lex.float.range-not-float",
+        "L02.cast.arrays",
+        "L02.range.empty-and-single",
+        "L02.range.expansion-bounds",
+        "L02.string.order-consistent",
+        "L03.functional.empty-sources",
+        "L03.return.from-functional-block",
+        "L05.array.search-and-shape",
+        "L05.reduce.accumulator-in-place",
+        "L05.collections.array-difference",
+        "L05.collections.array-concat",
+    ]);
+}
+
+#[test]
+fn champ_cases_maps() {
+    check(&[
+        "L01.gram.collections.literals",
+        "L01.gram.types.nested-map",
+        "L01.lex.whitespace.minimal",
+        "L03.functional.arrays-ranges-maps",
+        "L05.collections.map-difference",
+        "L05.functional.early-exit",
+        "L05.map.int-key-order",
+        "L05.map.key-types",
+        "L05.map.missing-key",
+        "L05.map.float-key-fallback",
+        "L05.map.rat-keys",
+        "L05.typed-identity.empty-results-keep-tag",
+    ]);
+}
+
+/// array.slice/remove/replace/concat/join, value equality of plain collections and ranges.
+#[test]
+fn champ_cases_array_operations_and_equality() {
+    check(&[
+        "L01.lex.string.unicode-escape",
+        "L02.cast.array-element-out-of-range",
+        "L02.cast.int-arbitrary-precision",
+        "L02.equality.composite",
+        "L02.equality.composite-boundary",
+        "L02.eval-order.cast-operands",
+        "L04.harness.deliberate-failures",
+        "L05.array.access",
+        "L05.array.removed-at-empty",
+        "L05.array.removed-at-past-end",
+        "L05.array.replaced-negative",
+        "L05.array.replaced-past-end",
+        "L05.array.take-negative",
+        "L05.variants.search",
+    ]);
+}
+
+/// Arrays and maps that refer to resource objects they do not own, and variants whose case holds one.
+#[test]
+fn champ_cases_managed_collections_and_variants() {
+    check(&[
+        "L07.ownership.shared-structure-loop",
+        "L07.ownership.shared-structure-returned",
+        "L07.ownership.reduce-builder",
+        "L05.variants.ownership",
+    ]);
+}
+
+/// Constructions whose self escapes before the last field is written.
+#[test]
+fn champ_cases_construction_completion() {
+    check(&["L04.equality.cyclic-graphs", "L04.invariant.early-self-in-blocks"]);
+}

@@ -43,7 +43,11 @@ pub(super) fn consumed(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<
     locations.iter().copied().enumerate().filter_map(|(index, location)| {
         let consume = match op {
             ScopeBegin | OwnEmpty | OwnCreateCommit | DepsOf | DepsEmpty | InvokeObserve
-                | ArrayGet | Fail | Evaluate | Catch => false,
+                | ArrayGet | Fail | Evaluate | Catch | Lookup => false,
+            // The journal packet travels with the buffer; the buffer is a register (check_builders).
+            BuilderPush | BuilderAppend | BuilderRange | BuilderFinish | BuilderAbandon => {
+                index + 1 == locations.len()
+            }
             OwnMove | OwnJoin | OwnAdmit | OwnAccept | CleanupBegin | ExitAbort | ExitDispatch => true,
             OwnBind | OwnRebind => index == 0 || index == 2,
             OwnStage => index < 1 + usize::from(between) || index + 1 == locations.len(),
@@ -238,6 +242,13 @@ fn check_roots(f: &Function) -> Check {
     let live = live_locations(&bare)?;
     let supplied = root_index(&f.proofs.roots);
     let post = root_index(&f.proofs.post_roots);
+    // An undef placeholder is the constant zero until a construction stores over it; verify() admits
+    // it only as a construction operand or forwarded to a parameter, so it is never a reference.
+    let placeholders = f.code.iter().filter_map(|inst| match inst {
+        Instruction::Data { op: DataOp::Undef, output: Some(id), .. } => Some(Location::Register(*id)),
+        _ => None,
+    }).collect::<BTreeSet<_>>();
+    let traced = |f: &Function, location: Location| traced(f, location) && !placeholders.contains(&location);
     for (pc, required) in live.iter().enumerate() {
         let roots = supplied.get(&(pc as u32));
         enforce(required.iter().filter(|&&loc| traced(f, loc))

@@ -15,54 +15,174 @@ fn at<T>(items: &[T], index: u32) -> Result<&T, Error> {
 }
 
 fn ty_valid(ty: Type, p: &Program) -> Check {
-    if let Type::Object(id) | Type::Successor(id) = ty {
-        enforce(!at(&p.objects, id)?.handle, "HANDLE_TYPE", "an object type names a native handle declaration")?;
-    }
-    if let Type::Handle(id) = ty {
-        enforce(p.objects.get(id as usize).is_some_and(|object| object.handle),
-            "HANDLE_TYPE", "a handle type names no native handle declaration")?;
-    }
-    if let Type::Variant(id) = ty {
-        enforce(p.objects.get(id as usize).is_some_and(|object| !object.variant_cases.is_empty()),
-            "VARIANT_TYPE", "variant type names a declaration without variant cases")?;
-    }
-    if let Type::Array(shape) = ty {
-        enforce(shape.depth > 0, "ARRAY_SHAPE", "array depth must be positive")?;
-        if let ArrayLeaf::Object(id) = shape.leaf {
-            let handle = p.objects.get(id as usize).is_some_and(|object| object.handle);
-            enforce(!handle, "HANDLE_TYPE", "an array element names a native handle declaration")?;
-            closed_plain(id, p, "ARRAY_PLAIN")?;
+    match ty {
+        Type::Object(id) | Type::Successor(id) => {
+            enforce(!at(&p.objects, id)?.handle, "HANDLE_TYPE", "an object type names a native handle declaration")?;
         }
+        Type::Handle(id) => {
+            enforce(p.objects.get(id as usize).is_some_and(|object| object.handle),
+                "HANDLE_TYPE", "a handle type names no native handle declaration")?;
+        }
+        Type::Variant(id) => {
+            enforce(p.objects.get(id as usize).is_some_and(|object| !object.variant_cases.is_empty()),
+                "VARIANT_TYPE", "variant type names a declaration without variant cases")?;
+        }
+        Type::Array(shape) => {
+            enforce(shape.depth > 0, "ARRAY_SHAPE", "array depth must be positive")?;
+            let element = ArrayType { depth: 1, ..shape }.element()
+                .ok_or_else(|| violation("ARRAY_SHAPE", "array without element"))?;
+            if let Type::Object(id) | Type::Variant(id) | Type::Map(id) = element {
+                enforce(match element {
+                    Type::Object(_) => (id as usize) < p.objects.len(),
+                    Type::Variant(_) => {
+                        p.objects.get(id as usize).is_some_and(|object| !object.variant_cases.is_empty())
+                    }
+                    _ => matches!(p.composites.get(id as usize), Some(Composite::Map { .. })),
+                }, "ARRAY_ELEMENT", "unknown array element declaration")?;
+            }
+            if let Type::Object(id) = element {
+                enforce(!p.objects[id as usize].handle, "HANDLE_TYPE",
+                    "an array element names a native handle declaration")?;
+            }
+            // A managed array holds references to resource objects; it owns none of them (own keeps the
+            // elements' obligations with their owners). Any other leaf is closed plain data.
+            let leaf = match element {
+                Type::Object(id) => !p.objects[id as usize].layout.may_async_destroy,
+                _ => closed_plain(p, element),
+            };
+            enforce(leaf, "ARRAY_PLAIN", "array element graph is neither plain data nor resource objects")?;
+        }
+        Type::Map(id) | Type::MapBuilder(id) => {
+            enforce(matches!(p.composites.get(id as usize), Some(Composite::Map { .. })),
+                "COMPOSITE_TYPE", "map type names no map composite")?;
+        }
+        Type::Builder(id) => {
+            enforce(matches!(p.composites.get(id as usize), Some(Composite::Builder { .. })),
+                "COMPOSITE_TYPE", "builder type names no builder composite")?;
+        }
+        _ => {}
     }
     Ok(())
 }
 
-/// The object graph from `root` is closed plain data: no destroy, nothing that reaches a resource,
-/// and only scalar, text, range, bytes, array and plain object fields. `rule` names the caller's rule.
-fn closed_plain(root: u32, p: &Program, rule: &'static str) -> Check {
-    let mut pending = vec![Type::Object(root)];
-    let mut seen = BTreeSet::new();
+/// Whether a value of `ty` may refer to an identity that reaches a resource: a resource object or successor,
+/// or a managed array or map of them. Plain collections never do (`ARRAY_PLAIN`, `MAP_PLAIN`).
+pub(crate) fn reaches_resource(p: &Program, ty: Type) -> bool {
+    let leaf = match ty {
+        Type::Array(shape) => ArrayType { depth: 1, ..shape }.element(),
+        Type::Variant(id) => return p.objects.get(id as usize).is_some_and(|object| object.layout.may_reach_resource),
+        Type::Map(id) => match p.composites.get(id as usize) {
+            Some(Composite::Map { value, .. }) => Some(*value),
+            _ => None,
+        },
+        ty => Some(ty),
+    };
+    matches!(leaf, Some(Type::Object(id) | Type::Successor(id))
+        if p.objects.get(id as usize).is_some_and(|object| object.layout.may_reach_resource))
+}
+
+/// Whether every value of `ty` is closed plain data: no identity with destroy, no resource, no service
+/// and no unique builder anywhere in its graph. Unknown declarations are not plain.
+pub(crate) fn closed_plain(p: &Program, ty: Type) -> bool {
+    let mut pending = vec![ty];
+    let mut seen = std::collections::HashSet::new();
     while let Some(ty) = pending.pop() {
+        if !seen.insert(ty) {
+            continue;
+        }
         match ty {
-            Type::Object(id) if seen.insert(id) => {
-                let object = p.objects.get(id as usize)
-                    .ok_or_else(|| violation("ARRAY_ELEMENT", "unknown array element object"))?;
-                enforce(!object.layout.has_destroy && !object.layout.may_reach_resource
-                    && !object.layout.may_async_destroy, rule, "object graph reaches resources")?;
-                pending.extend(&object.layout.storage_fields);
-            }
-            Type::Array(inner) => {
-                enforce(inner.depth > 0, "ARRAY_SHAPE", "array depth must be positive")?;
-                if let ArrayLeaf::Object(id) = inner.leaf {
-                    pending.push(Type::Object(id));
+            Type::Int | Type::Bool | Type::Str | Type::Range | Type::Bytes | Type::Byte | Type::Float
+                | Type::Char | Type::Rat | Type::Never => {}
+            Type::Object(id) | Type::Variant(id) => {
+                let Some(object) = p.objects.get(id as usize) else { return false };
+                if object.handle || object.layout.has_destroy || object.layout.may_reach_resource
+                    || object.layout.may_async_destroy
+                {
+                    return false;
                 }
+                pending.extend(&object.layout.storage_fields);
+                pending.extend(object.variant_cases.iter().map(|&case| Type::Object(case)));
             }
-            Type::Int | Type::Bool | Type::Str | Type::Range | Type::Bytes | Type::Object(_)
-                | Type::Byte | Type::Float | Type::Char | Type::Rat => {}
-            _ => return Err(violation(rule, "object graph is not closed plain data")),
+            // Nested arrays share their leaf: check it once, whatever the depth.
+            Type::Array(shape) if shape.depth > 0 => {
+                pending.extend(ArrayType { depth: 1, ..shape }.element());
+            }
+            Type::Map(id) => match p.composites.get(id as usize) {
+                Some(Composite::Map { key, value }) => pending.extend([*key, *value]),
+                _ => return false,
+            },
+            _ => return false,
         }
     }
-    Ok(())
+    true
+}
+
+/// A map key: a scalar, string, rat, enum or key object (no destroy, no resource, every source field a key,
+/// not containing itself), the frontend's `object_key_problem` rule (OIR-2 §3.1).
+pub(crate) fn key_type(p: &Program, ty: Type) -> bool {
+    fn key(p: &Program, ty: Type, open: &mut Vec<u32>) -> bool {
+        match ty {
+            // A `never` key belongs to an uninferred empty map: no key value exists.
+            Type::Int | Type::Bool | Type::Byte | Type::Char | Type::Float | Type::Rat | Type::Str | Type::Never => {
+                true
+            }
+            Type::Object(id) => {
+                let Some(object) = p.objects.get(id as usize) else { return false };
+                if open.contains(&id) || object.layout.has_destroy || object.layout.may_reach_resource
+                    || !object.variant_cases.is_empty()
+                {
+                    return false;
+                }
+                if object.fields.is_empty() {
+                    // A plain enum or Error enum: its single storage word is the case number.
+                    return object.layout.storage_fields == [Type::Int]
+                        && (object.enum_cases > 0 || !object.error_cases.is_empty());
+                }
+                open.push(id);
+                let fields = object.fields.iter().filter(|field| !field.once)
+                    .all(|field| object.layout.storage_fields.get(field.storage as usize)
+                        .is_some_and(|&field| key(p, field, open)));
+                open.pop();
+                fields
+            }
+            _ => false,
+        }
+    }
+    key(p, ty, &mut Vec::new())
+}
+
+/// Composite references point backwards, so composite types are finite and checkable in order.
+fn composite_valid(p: &Program, index: usize, composite: Composite) -> Check {
+    let earlier = |ty: Type| -> bool {
+        let mut pending = vec![ty];
+        while let Some(ty) = pending.pop() {
+            match ty {
+                Type::Map(id) | Type::MapBuilder(id) | Type::Builder(id) if id as usize >= index => return false,
+                Type::Array(shape) => pending.extend(ArrayType { depth: 1, ..shape }.element()),
+                _ => {}
+            }
+        }
+        true
+    };
+    match composite {
+        Composite::Map { key, value } => {
+            enforce(earlier(key) && earlier(value), "COMPOSITE_ORDER", "map composite refers forward")?;
+            ty_valid(key, p)?;
+            ty_valid(value, p)?;
+            enforce(key_type(p, key), "MAP_KEY", "map key is not a key type")?;
+            // A managed map refers to resource objects as values; like a managed array it owns none.
+            let resource = matches!(value, Type::Object(id) if p.objects.get(id as usize)
+                .is_some_and(|object| !object.handle && !object.layout.may_async_destroy));
+            enforce(closed_plain(p, value) || resource, "MAP_PLAIN",
+                "map value graph is neither plain data nor resource objects")
+        }
+        Composite::Builder { array } => {
+            enforce(earlier(array), "COMPOSITE_ORDER", "builder composite refers forward")?;
+            enforce(matches!(array, Type::Array(_) | Type::Bytes), "BUILDER_ARRAY",
+                "builder composite must finish an array")?;
+            ty_valid(array, p)
+        }
+    }
 }
 
 pub(crate) fn loc_type(f: &Function, location: Location) -> Result<ProducedType, Error> {
@@ -106,6 +226,9 @@ pub fn verify(p: &Program) -> Check {
     if let Some(entry) = p.entry {
         at(&p.functions, entry)?;
     }
+    for (index, &composite) in p.composites.iter().enumerate() {
+        composite_valid(p, index, composite)?;
+    }
     check_tests(p)?;
     for object in &p.objects {
         let layout = &object.layout;
@@ -131,25 +254,36 @@ pub fn verify(p: &Program) -> Check {
             enforce(plain, "HANDLE_DECLARATION", "a native handle declaration has fields, cases or resources")?;
         }
         if !object.variant_cases.is_empty() {
+            // A case object is never an identity, but it may refer to resources (Maybe<Resource>). The
+            // variant declares that it reaches resources exactly when one of its cases does.
             let mut seen = BTreeSet::new();
-            let plain = object.fields.is_empty() && layout.storage_fields.is_empty() && !layout.may_reach_resource
-                && object.variant_cases.iter().all(|&case| seen.insert(case) && p.objects.get(case as usize)
-                    .is_some_and(|case| case.variant_cases.is_empty() && !case.layout.has_destroy
-                        && !case.layout.may_reach_resource));
-            enforce(plain, "VARIANT_CASES", "variant cases must be distinct plain case objects")?;
+            let cases = object.variant_cases.iter().all(|&case| seen.insert(case) && p.objects.get(case as usize)
+                .is_some_and(|case| case.variant_cases.is_empty() && !case.layout.has_destroy && !case.handle));
+            let reaches = object.variant_cases.iter().any(|&case| {
+                p.objects.get(case as usize).is_some_and(|case| case.layout.may_reach_resource)
+            });
+            let declaration = object.fields.is_empty() && layout.storage_fields.is_empty()
+                && layout.selection_layout.is_empty() && layout.may_reach_resource == reaches;
+            enforce(cases && declaration, "VARIANT_CASES",
+                "variant cases must be distinct case objects without identity, its retention their union")?;
         }
         unique(&object.fields.iter().map(|field| field.storage).collect::<Vec<_>>())?;
         unique(&layout.trace_layout)?;
         unique(&layout.selection_layout)?;
         for (index, &ty) in layout.storage_fields.iter().enumerate() {
             ty_valid(ty, p)?;
+            enforce(!matches!(ty, Type::Builder(_) | Type::MapBuilder(_)), "BUILDER_LINEAR",
+                "object storage cannot hold a unique builder")?;
+            // Retention flags are checked object by object, so a managed collection's leaf flag can be trusted.
             if let Type::Object(id) | Type::Successor(id) = ty {
-                require(layout.may_reach_resource || !p.objects[id as usize].layout.may_reach_resource,
-                    "understated object retention metadata")?;
+                enforce(layout.may_reach_resource || !p.objects[id as usize].layout.may_reach_resource,
+                    "OBJECT_RETENTION", "understated object retention metadata")?;
             }
-            let traced = matches!(ty, Type::Error | Type::Bytes | Type::Array(_) | Type::Str | Type::Object(_)
-                | Type::Successor(_) | Type::Failure | Type::Rat | Type::Variant(_) | Type::Handle(_));
-            require(layout.trace_layout.contains(&(index as u32)) == traced, "incorrect object trace layout")?;
+            if matches!(ty, Type::Array(_) | Type::Map(_) | Type::Variant(_)) && reaches_resource(p, ty) {
+                enforce(layout.may_reach_resource && layout.selection_layout.contains(&(index as u32)),
+                    "COLLECTION_RETENTION", "a field holding resource objects must be selected and reach resources")?;
+            }
+            require(layout.trace_layout.contains(&(index as u32)) == ty.traced(), "incorrect object trace layout")?;
         }
     }
     for (index, scope) in p.tables.scopes.iter().enumerate() {
@@ -428,6 +562,55 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             ctx.value = shape.element();
             ctx.may_fail = true;
         }
+        BuilderPush | BuilderAppend | BuilderRange | BuilderFinish | BuilderAbandon => {
+            let ty = |index: usize| match locations.get(index).map(|&location| loc_type(f, location)) {
+                Some(Ok(ProducedType::Value(ty))) => Some(ty),
+                _ => None,
+            };
+            let buffer = ty(0);
+            let packet = locations.last().map(|&location| loc_type(f, location));
+            let (finished, element) = match buffer {
+                Some(Type::Builder(id)) => match p.composites.get(id as usize) {
+                    Some(&Composite::Builder { array }) => (Some(array), element_type(array).map(|item| (None, item))),
+                    _ => (None, None),
+                },
+                Some(Type::MapBuilder(id)) => match p.composites.get(id as usize) {
+                    Some(&Composite::Map { key, value }) => (Some(Type::Map(id)), Some((Some(key), value))),
+                    _ => (None, None),
+                },
+                _ => (None, None),
+            };
+            let operands = match (op, element) {
+                (BuilderPush, Some((None, item))) => locations.len() == 3 && ty(1) == Some(item),
+                (BuilderPush, Some((Some(key), value))) => locations.len() == 4 && ty(1) == Some(key)
+                    && ty(2) == Some(value),
+                (BuilderAppend, Some(_)) => locations.len() == 3 && ty(1) == finished,
+                (BuilderRange, Some((None, Type::Int))) => {
+                    locations.len() == 4 && ty(1) == Some(Type::Int) && ty(2) == Some(Type::Int)
+                }
+                (BuilderFinish | BuilderAbandon, Some(_)) => locations.len() == 2,
+                _ => false,
+            };
+            enforce(operands && packet == Some(Ok(ProducedType::Service(Packet))), "BUILDER_OPERANDS",
+                "builder transition operands differ from its buffer, elements and journal packet")?;
+            ctx.buffer = buffer;
+            ctx.value = finished;
+            ctx.may_fail = op != BuilderAbandon;
+        }
+        Lookup => {
+            let types = locations.iter().map(|&location| loc_type(f, location)).collect::<Result<Vec<_>, _>>()?;
+            ctx.value = match types.as_slice() {
+                [ProducedType::Value(array @ (Type::Array(_) | Type::Bytes)), ProducedType::Value(Type::Int)] => {
+                    element_type(*array)
+                }
+                [ProducedType::Value(Type::Map(id)), ProducedType::Value(key)] => match p.composites.get(*id as usize) {
+                    Some(Composite::Map { key: declared, value }) if declared == key => Some(*value),
+                    _ => None,
+                },
+                _ => None,
+            };
+            enforce(ctx.value.is_some(), "LOOKUP_OPERANDS", "lookup needs an array and int or a map and its key")?;
+        }
         DepsOf => value(0)?,
         OwnMove | OwnJoin => {
             for index in 0..locations.len() {
@@ -658,6 +841,10 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         RetOwn | RetDefer => shape.chars().all(|ch| matches!(ch, 'l' | 'a')),
         ExitDispatch => shape == "lll???",
         OwnCreateCommit => shape == "lob",
+        BuilderPush => shape == "lll" || shape == "llll",
+        BuilderAppend => shape == "lll",
+        BuilderRange => shape == "?llll",
+        BuilderFinish | BuilderAbandon | Lookup => shape == "ll",
     };
     require(valid, &format!("invalid operands for {}", op.name()))
 }
@@ -693,14 +880,25 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
             expect(&[], Some(Type::Object(*id)))
         }
         ArrayNew => {
-            let Some(Type::Array(shape)) = out else {
+            let Some(element) = out.and_then(element_type) else {
                 return Err(violation("ARRAY_NEW_TYPE", "array.new must produce a plain array"));
             };
-            enforce(shape.element().is_some_and(|element| types.iter().all(|ty| *ty == element)),
+            enforce(types.iter().all(|ty| *ty == element),
                 "ARRAY_NEW_TYPE", "array.new element types differ from the result element")
         }
         ArrayLen => enforce(matches!(types, [Type::Array(_) | Type::Bytes]) && out == Some(Type::Int),
             "ARRAY_LEN_TYPE", "array.len needs a plain array and an int result"),
+        MapNew | MapLen | MapHas | MapGet | MapKeys | MapValues | MapKeyAt | MapValueAt | MapMerge
+            | MapDifference => enforce(map_types(p, op, types, out), "MAP_OP_TYPE",
+                "map operation operand/result types mismatch"),
+        ArrayConcat | ArrayJoin | ArraySlice | ArrayRemove | ArrayReplace | ArrayDifference => {
+            // array.difference compares elements structurally, which only plain data allows.
+            let comparable = op != ArrayDifference || types.first().is_some_and(|&ty| closed_plain(p, ty));
+            enforce(array_types(op, types, out) && comparable, "ARRAY_OP_TYPE",
+                "array operation operand/result types mismatch")
+        }
+        BuilderNew => enforce(types.is_empty() && matches!(out, Some(Type::Builder(_) | Type::MapBuilder(_))),
+            "BUILDER_NEW_TYPE", "builder.new must produce a builder"),
         Const => {
             let Immediate::Constant(value) = imm else { return Err(error("missing constant")); };
             if let Constant::Descriptor(id) = value {
@@ -753,12 +951,17 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
                 "variant.get needs a case of the variant and one of its payload fields")
         }
         ValEq | ValNe => {
-            let object = matches!(types, [Type::Object(left), Type::Object(right)] if left == right);
-            enforce(object && out == Some(Type::Bool), "VAL_EQ_TYPE",
-                "value comparison needs two objects of one declaration and a bool result")?;
+            let comparable = match types {
+                [Type::Object(left), Type::Object(right)] => left == right,
+                [left @ (Type::Array(_) | Type::Bytes | Type::Map(_) | Type::Variant(_) | Type::Range), right] => {
+                    left == right
+                }
+                _ => false,
+            };
+            enforce(comparable && out == Some(Type::Bool), "VAL_EQ_TYPE",
+                "value comparison needs two objects of one declaration or two plain collections of one type")?;
             // Structural equality is defined on plain values; identities and error payloads are not compared.
-            let [Type::Object(id), _] = types else { return Ok(()) };
-            closed_plain(*id, p, "VAL_EQ_TYPE")
+            enforce(closed_plain(p, types[0]), "VAL_EQ_TYPE", "value comparison needs closed plain operands")
         }
         Convert => enforce(matches!((types, out), ([from], Some(to)) if conversion(*from, to).is_some()),
             "CONVERT_TYPE", "conversion between these types is not defined"),
@@ -782,7 +985,8 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
                 || matches!((types[0], out), (Type::Object(id), Some(Type::Error))
                     if !p.objects[id as usize].error_cases.is_empty())
                 || matches!((types[0], out), (Type::Object(case), Some(Type::Variant(variant)))
-                    if p.objects[variant as usize].variant_cases.contains(&case));
+                    if p.objects[variant as usize].variant_cases.contains(&case))
+                || out.is_some_and(|out| never_retag(&p.composites, types[0], out));
             require(valid, "invalid move/succ.take type")
         }
         Undef => require(types.is_empty() && out.is_some(), "invalid undef"),
@@ -827,6 +1031,55 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
                 }
             }
         }
+    }
+}
+
+/// Operand and result types of a map operation.
+fn map_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>) -> bool {
+    use DataOp::*;
+    let map = |ty: Type| match ty {
+        Type::Map(id) => match p.composites.get(id as usize) {
+            Some(Composite::Map { key, value }) => Some((*key, *value)),
+            _ => None,
+        },
+        _ => None,
+    };
+    if op == MapNew {
+        let Some((key, value)) = out.and_then(map) else { return false };
+        return types.len().is_multiple_of(2) && types.chunks(2).all(|pair| pair == [key, value]);
+    }
+    if op == MapMerge {
+        return !types.is_empty() && out.and_then(map).is_some() && types.iter().all(|&ty| Some(ty) == out);
+    }
+    let Some(&receiver) = types.first() else { return false };
+    let Some((key, value)) = map(receiver) else { return false };
+    match op {
+        MapLen => types.len() == 1 && out == Some(Type::Int),
+        MapHas => types == [receiver, key] && out == Some(Type::Bool),
+        MapGet => types == [receiver, key] && out == Some(value),
+        MapKeys => types.len() == 1 && out.is_some() && out == ArrayType::of(key),
+        MapValues => types.len() == 1 && out.is_some() && out == ArrayType::of(value),
+        MapKeyAt => types == [receiver, Type::Int] && out == Some(key),
+        MapValueAt => types == [receiver, Type::Int] && out == Some(value),
+        MapDifference => out == Some(receiver)
+            && types[1..].iter().all(|&ty| map(ty).is_some_and(|(removed, _)| removed == key)),
+        _ => false,
+    }
+}
+
+/// Operand and result types of an array operation; the receiver is an array or a byte array.
+fn array_types(op: DataOp, types: &[Type], out: Option<Type>) -> bool {
+    use DataOp::*;
+    let Some(&receiver) = types.first() else { return false };
+    let Some(element) = element_type(receiver) else { return false };
+    match op {
+        ArrayConcat => out == Some(receiver) && types.iter().all(|&ty| ty == receiver),
+        ArrayJoin => types == [receiver, Type::Str] && element == Type::Str && out == Some(Type::Str),
+        ArraySlice => types == [receiver, Type::Int, Type::Int] && out == Some(receiver),
+        ArrayRemove => types == [receiver, Type::Int] && out == Some(receiver),
+        ArrayReplace => types == [receiver, Type::Int, element] && out == Some(receiver),
+        ArrayDifference => out == Some(receiver) && types.iter().all(|&ty| ty == receiver),
+        _ => false,
     }
 }
 
@@ -1062,19 +1315,181 @@ fn verify_function(p: &Program, f: &Function) -> Check {
                     && let Some(defined) = def_pc
                     && matches!(f.code[defined], Instruction::Data { op: DataOp::Undef, .. })
                 {
-                    let allowed = match &f.code[pc] {
-                        Instruction::Data { op: DataOp::ObjNew, .. } => true,
-                        Instruction::Data { op: DataOp::ObjInit | DataOp::ObjNext, inputs, .. } => {
-                            inputs.first() != Some(&reg)
-                        }
-                        _ => false,
-                    };
+                    // Forwarding along an edge is not a read: check_unbound tracks the parameter it binds.
+                    let forwarded = !operand_reads(&f.code[pc]).contains(&used) && !metadata.contains(&used)
+                        && edge_sources(&f.code[pc]).contains(&used);
+                    let allowed = construction_operand(&f.code[pc], reg) || forwarded;
                     require(allowed, &format!("undef r{reg} outside construction fields at {pc}: {:?}", f.code[pc]))?;
                 }
             }
         }
     }
+    check_unbound(f)?;
     check_successors(p, f, &pcs)?;
+    check_builders(p, f, &pcs)?;
+    Ok(())
+}
+
+/// A construction field operand: any operand of obj.new, a non-receiver operand of obj.init/obj.next.
+fn construction_operand(inst: &Instruction, reg: u32) -> bool {
+    match inst {
+        Instruction::Data { op: DataOp::ObjNew, .. } => true,
+        Instruction::Data { op: DataOp::ObjInit | DataOp::ObjNext, inputs, .. } => inputs.first() != Some(&reg),
+        _ => false,
+    }
+}
+
+/// Locations an instruction reads as operands, without its edges.
+fn operand_reads(inst: &Instruction) -> BTreeSet<Location> {
+    match inst {
+        Instruction::Data { inputs, .. } | Instruction::Ret(inputs) => {
+            inputs.iter().copied().map(Location::Register).collect()
+        }
+        Instruction::Cond { condition: id, .. } | Instruction::Raise(id) => BTreeSet::from([Location::Register(*id)]),
+        Instruction::Champ { arguments, .. } => arguments.iter().filter_map(|argument| match argument {
+            Argument::Location(location) => Some(*location),
+            _ => None,
+        }).collect(),
+        _ => BTreeSet::new(),
+    }
+}
+
+fn edge_sources(inst: &Instruction) -> BTreeSet<Location> {
+    allocation::outgoing(inst).into_iter().flat_map(|edge| edge.assignments.iter()).filter_map(|assignment| {
+        match assignment.source {
+            Source::Location(location) => Some(location),
+            Source::ProducedSlot(_) => None,
+        }
+    }).collect()
+}
+
+/// A block parameter that an edge may bind to an undef placeholder is itself possibly unbound: like the
+/// placeholder, it is read only as a construction field operand, or forwarded to another parameter.
+fn check_unbound(f: &Function) -> Check {
+    let mut unbound = f.code.iter().filter_map(|inst| match inst {
+        Instruction::Data { op: DataOp::Undef, output: Some(id), .. } => Some(Location::Register(*id)),
+        _ => None,
+    }).collect::<BTreeSet<_>>();
+    let placeholders = unbound.clone();
+    loop {
+        let mut changed = false;
+        for inst in &f.code {
+            for edge in allocation::outgoing(inst) {
+                for assignment in &edge.assignments {
+                    if let Source::Location(source) = assignment.source
+                        && unbound.contains(&source)
+                    {
+                        changed |= unbound.insert(assignment.destination);
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    for (pc, inst) in f.code.iter().enumerate() {
+        for location in operand_reads(inst) {
+            let Location::Register(reg) = location else { continue };
+            if unbound.contains(&location) && !placeholders.contains(&location) {
+                enforce(construction_operand(inst, reg), "UNBOUND_READ",
+                    &format!("possibly unbound r{reg} read outside construction fields at {pc}"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn builder_transition(op: Opcode) -> bool {
+    matches!(op, Opcode::BuilderPush | Opcode::BuilderAppend | Opcode::BuilderRange | Opcode::BuilderFinish
+        | Opcode::BuilderAbandon)
+}
+
+/// A builder is unique: `builder.new` or a transition outcome creates it, exactly one transition or edge
+/// consumes it on every reachable path, and nothing else reads it (`BUILDER_LINEAR`).
+fn check_builders(p: &Program, f: &Function, pcs: &BTreeMap<u32, usize>) -> Check {
+    let builder = |location| matches!(loc_type(f, location),
+        Ok(ProducedType::Value(Type::Builder(_) | Type::MapBuilder(_))));
+    let linear = |condition: bool, message: &str| enforce(condition, "BUILDER_LINEAR", message);
+    linear(!f.params.iter().any(|&param| builder(param))
+        && !f.results.iter().any(|ty| matches!(ty, Type::Builder(_) | Type::MapBuilder(_))),
+        "a builder cannot cross an entry")?;
+    let mut incoming: Vec<Option<BTreeSet<Location>>> = vec![None; f.blocks.len()];
+    incoming[0] = Some(BTreeSet::new());
+    let mut stored = 0usize;
+    let mut work = vec![0];
+    while let Some(index) = work.pop() {
+        let mut active = incoming[index].as_ref().expect("queued block").clone();
+        let block = &f.blocks[index];
+        let end = f.blocks.get(index + 1).map_or(f.code.len(), |block| block.pc as usize);
+        for pc in block.pc as usize..end {
+            let inst = &f.code[pc];
+            let reads = match inst {
+                Instruction::Data { inputs, .. } | Instruction::Ret(inputs) => {
+                    inputs.iter().copied().map(Location::Register).collect()
+                }
+                Instruction::Cond { condition: id, .. } | Instruction::Raise(id) => vec![Location::Register(*id)],
+                Instruction::Champ { arguments, .. } => arguments.iter().filter_map(|argument| match argument {
+                    Argument::Location(location) => Some(*location),
+                    _ => None,
+                }).collect(),
+                _ => vec![],
+            };
+            for (position, location) in reads.into_iter().enumerate() {
+                if !builder(location) {
+                    continue;
+                }
+                let transition = matches!(inst, Instruction::Champ { op, .. } if builder_transition(*op));
+                linear(transition && position == 0, "a builder is read outside its own transition")?;
+                linear(active.remove(&location), "a builder is used after its transition")?;
+            }
+            if let Instruction::Data { op, output: Some(output), .. } = inst
+                && builder(Location::Register(*output))
+            {
+                linear(*op == DataOp::BuilderNew, "only builder.new or a transition creates a builder")?;
+                linear(active.insert(Location::Register(*output)), "builder overwritten")?;
+            }
+            if let Instruction::Champ { flow: Flow::Next(outputs), .. } = inst {
+                linear(!outputs.iter().any(|&output| builder(output)), "a builder needs transition outcomes")?;
+            }
+            let terminal = matches!(inst, Instruction::Ret(_) | Instruction::Raise(_) | Instruction::Unreachable)
+                || matches!(inst, Instruction::Champ { op: Opcode::RetOwn | Opcode::RetDefer, .. });
+            if terminal {
+                linear(active.is_empty(), "a live builder is neither finished nor abandoned")?;
+            }
+            for (edge, _) in checked_edges(p, f, inst)? {
+                let mut next = active.clone();
+                let mut consumed = BTreeSet::new();
+                let mut destinations = Vec::new();
+                for assignment in &edge.assignments {
+                    if !builder(assignment.destination) {
+                        continue;
+                    }
+                    if let Source::Location(source) = assignment.source {
+                        linear(active.contains(&source) && consumed.insert(source),
+                            "an edge forwards a consumed or duplicated builder")?;
+                    }
+                    destinations.push(assignment.destination);
+                }
+                for source in consumed {
+                    next.remove(&source);
+                }
+                for destination in destinations {
+                    linear(next.insert(destination), "an edge overwrites a live builder")?;
+                }
+                let target = pcs[&edge.target_pc];
+                if let Some(expected) = &incoming[target] {
+                    linear(*expected == next, "inconsistent live builders at a CFG join")?;
+                } else {
+                    stored = stored.saturating_add(next.len());
+                    enforce(stored <= 8 * 1024 * 1024, "LOAD_WORK_BUDGET",
+                        "builder storage exceeds verification work budget")?;
+                    incoming[target] = Some(next);
+                    work.push(target);
+                }
+            }
+        }
+    }
     Ok(())
 }
 

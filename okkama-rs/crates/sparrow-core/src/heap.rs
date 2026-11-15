@@ -153,7 +153,7 @@ pub fn payload(header: u64) -> u32 {
     (header >> 32) as u32
 }
 #[inline]
-fn element_repr(header: u64) -> Repr {
+pub(crate) fn element_repr(header: u64) -> Repr {
     Repr::from_bits((header >> 9) & 3)
 }
 

@@ -98,10 +98,13 @@ fn array_loader_checks_transitive_element_graph_independently() {
             layout: layout(vec![], true) },
     ];
     p.functions[0].registers[1] = Type::Array(ArrayType { leaf: ArrayLeaf::Object(0), depth: 1 });
-    // Visit the graph from the first object's array field before ordinary retention checks.
     p.objects[0].layout.storage_fields = vec![p.functions[0].registers[1], Type::Object(1)];
     p.objects[0].layout.allocation_words = 3;
-    assert_eq!(verify_load(&p, &NoExternalContracts).unwrap_err().rule, "ARRAY_PLAIN");
+    p.objects[0].layout.trace_layout = vec![0, 1];
+    // #622: an array may refer to resource objects (managed arrays), so the array's element graph is not
+    // walked here. The array is classified by its leaf's retention flag, which the loader checks object by
+    // object: the leaf that hides a resource field is rejected on its own.
+    assert_eq!(verify_load(&p, &NoExternalContracts).unwrap_err().rule, "OBJECT_RETENTION");
 }
 
 #[test]

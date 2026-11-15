@@ -62,6 +62,18 @@ pub struct Program {
     /// The test profile (§14): the tests in run order. `Some([])` is an empty suite, which the runner
     /// rejects; `None` is a production program. Test operations and test intrinsics need `Some`.
     pub tests: Option<Vec<Test>>,
+    /// Map and builder shapes named by `Type::Map`, `Type::MapBuilder` and `Type::Builder`. An entry refers
+    /// only to earlier entries, so the table is acyclic (`COMPOSITE_ORDER`).
+    pub composites: Vec<Composite>,
+}
+
+/// A collection shape that does not fit inline in `Type`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Composite {
+    /// `map<key, value>`: the key is a key type (`MAP_KEY`), the value closed plain data (`MAP_PLAIN`).
+    Map { key: Type, value: Type },
+    /// A unique array builder whose finished value has type `array` (an `Array` or `Bytes`).
+    Builder { array: Type },
 }
 
 /// One test of the test profile: a `() -> void` observation entry run on a fresh runtime.
@@ -141,6 +153,21 @@ pub enum Type {
     Handle(u32),
     Never,
     Descriptor,
+    /// A finished map: `Composite::Map` at this index of `Program::composites`.
+    Map(u32),
+    /// A unique map builder whose finished value is `Type::Map` of the same index.
+    MapBuilder(u32),
+    /// A unique array builder: `Composite::Builder` at this index.
+    Builder(u32),
+}
+
+impl Type {
+    /// Words the collector must trace as references (tagged integers are traced separately).
+    pub fn traced(self) -> bool {
+        matches!(self, Self::Error | Self::Bytes | Self::Array(_) | Self::Str | Self::Object(_) | Self::Successor(_)
+            | Self::Failure | Self::Rat | Self::Variant(_) | Self::Handle(_) | Self::Map(_) | Self::MapBuilder(_)
+            | Self::Builder(_))
+    }
 }
 
 /// A finite array shape, including nested plain arrays. No resource/service leaf is representable.
@@ -158,6 +185,13 @@ pub enum ArrayLeaf {
     Range,
     Bytes,
     Object(u32),
+    Float,
+    Char,
+    Rat,
+    Variant(u32),
+    Map(u32),
+    /// The leaf of an uninferred empty literal: no element value exists.
+    Never,
 }
 
 impl ArrayType {
@@ -171,9 +205,61 @@ impl ArrayType {
                 ArrayLeaf::Range => Type::Range,
                 ArrayLeaf::Bytes => Type::Bytes,
                 ArrayLeaf::Object(id) => Type::Object(id),
+                ArrayLeaf::Float => Type::Float,
+                ArrayLeaf::Char => Type::Char,
+                ArrayLeaf::Rat => Type::Rat,
+                ArrayLeaf::Variant(id) => Type::Variant(id),
+                ArrayLeaf::Map(id) => Type::Map(id),
+                ArrayLeaf::Never => Type::Never,
             }),
             depth => Some(Type::Array(Self { depth: depth - 1, ..self })),
         }
+    }
+
+    /// The array whose elements have type `element`; `None` for an element no array leaf represents.
+    /// An array of bytes is `Type::Bytes`, not an array shape.
+    pub fn of(element: Type) -> Option<Type> {
+        let leaf = match element {
+            Type::Int => ArrayLeaf::Int,
+            Type::Bool => ArrayLeaf::Bool,
+            Type::Str => ArrayLeaf::Str,
+            Type::Range => ArrayLeaf::Range,
+            Type::Bytes => ArrayLeaf::Bytes,
+            Type::Object(id) => ArrayLeaf::Object(id),
+            Type::Float => ArrayLeaf::Float,
+            Type::Char => ArrayLeaf::Char,
+            Type::Rat => ArrayLeaf::Rat,
+            Type::Variant(id) => ArrayLeaf::Variant(id),
+            Type::Map(id) => ArrayLeaf::Map(id),
+            Type::Never => ArrayLeaf::Never,
+            Type::Byte => return Some(Type::Bytes),
+            Type::Array(shape) => {
+                return shape.depth.checked_add(1).map(|depth| Type::Array(Self { depth, ..shape }));
+            }
+            _ => return None,
+        };
+        Some(Type::Array(Self { leaf, depth: 1 }))
+    }
+}
+
+/// A retag of a collection whose leaves cannot exist (an uninferred `[]` or `[:]`) to a collection of the same
+/// shape: no element is reinterpreted. Byte arrays have their own representation and are excluded.
+pub fn never_retag(composites: &[Composite], from: Type, to: Type) -> bool {
+    match (from, to) {
+        (Type::Array(from), Type::Array(to)) => from.leaf == ArrayLeaf::Never && from.depth == to.depth,
+        (Type::Map(from), Type::Map(_)) => {
+            matches!(composites.get(from as usize), Some(Composite::Map { key: Type::Never, .. }))
+        }
+        _ => false,
+    }
+}
+
+/// The element type of an array or byte array value.
+pub fn element_type(array: Type) -> Option<Type> {
+    match array {
+        Type::Array(shape) => shape.element(),
+        Type::Bytes => Some(Type::Byte),
+        _ => None,
     }
 }
 
@@ -430,6 +516,34 @@ pub enum DataOp {
     ArrayLen,
     FailSecondary,
     FailCaused,
+    /// `map.new k0, v0, k1, v1, ...`: later equal keys replace the value and keep the first key word.
+    MapNew,
+    MapLen,
+    MapHas,
+    /// The value under a key; a missing key fails.
+    MapGet,
+    MapKeys,
+    MapValues,
+    /// The key or value at a position in key order; a position outside the map fails.
+    MapKeyAt,
+    MapValueAt,
+    /// The union of maps: the rightmost value wins, the leftmost key word stays.
+    MapMerge,
+    /// The first map without the keys of the others.
+    MapDifference,
+    ArrayConcat,
+    /// The elements' text joined by a separator (string elements only).
+    ArrayJoin,
+    /// `array.slice a, start, end`; bounds outside the array fail.
+    ArraySlice,
+    /// A copy without the element at an index; an index outside the array fails.
+    ArrayRemove,
+    /// A copy with the element at an index replaced; an index outside the array fails.
+    ArrayReplace,
+    /// The first array without the elements equal to an element of the others.
+    ArrayDifference,
+    /// An empty unique builder of the result's builder type.
+    BuilderNew,
     /// Test assertions (`test.ok`, `test.is`, `test.isnt`, `test.fail`) of the test profile. Each
     /// records a failed check in the running case and continues; the bool result says whether the
     /// check held. Outside a running case each fails with a program failure.
@@ -446,7 +560,9 @@ impl DataOp {
     /// outcomes. A conversion fails only where its pair of types can trap (`conversion`).
     pub fn fallible(self, operands: &[Type], result: Option<Type>) -> bool {
         match self {
-            Self::IntMod | Self::RangeNew | Self::RatNew | Self::ValEq | Self::ValNe | Self::VariantGet => true,
+            Self::IntMod | Self::RangeNew | Self::RatNew | Self::ValEq | Self::ValNe | Self::VariantGet
+                | Self::MapGet | Self::MapKeyAt | Self::MapValueAt | Self::MapDifference | Self::ArraySlice
+                | Self::ArrayRemove | Self::ArrayReplace | Self::ArrayDifference => true,
             Self::TestOk | Self::TestIs | Self::TestIsnt | Self::TestFail => true,
             Self::Convert => matches!((operands, result), ([from], Some(to)) if conversion(*from, to) == Some(true)),
             _ => false,
@@ -668,6 +784,10 @@ mod arrays_tests;
 mod natives_tests;
 #[cfg(test)]
 mod scalars_tests;
+#[cfg(test)]
+mod collections_tests;
+#[cfg(test)]
+mod managed_tests;
 #[cfg(test)]
 mod testmode_tests;
 #[cfg(test)]
