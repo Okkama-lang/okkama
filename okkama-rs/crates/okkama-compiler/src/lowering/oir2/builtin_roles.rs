@@ -15,8 +15,23 @@ pub(super) fn declare(declarations: &mut Declarations, analysis: &Analysis<'_>) 
             }
         });
     }
+    let mut cursors = vec![];
+    for body in &analysis.bodies {
+        super::walk::block(&body.block, &mut |expr| {
+            let cursor = thir::Builtin::ArrayCursor;
+            if let thir::ExprKind::Call { callee: thir::Callee::Builtin { receiver, op }, .. } = &expr.kind
+                && *op == cursor
+                && let (Some(source), Some(target)) = (&receiver.ty, &expr.ty)
+                && let (Some(&source), Some(&target))
+                    = (declarations.types.get(source), declarations.types.get(target)) {
+                cursors.push((source, target));
+            }
+        });
+    }
     pairs.sort();
     pairs.dedup();
+    cursors.sort();
+    cursors.dedup();
     for (input, role) in pairs {
         let ir::Type::Role { decl, .. } = *declarations.builder.module().types.get(role)? else {
             continue;
@@ -32,6 +47,12 @@ pub(super) fn declare(declarations: &mut Declarations, analysis: &Analysis<'_>) 
         } else if let Some(kind) = super::sorting::scalar_kind(declarations.builder.module().types.get(input)?)
             && methods.len() == 1 && methods[0].name == "order" {
             scalar(declarations, input, role, kind, methods[0].signature.results[0])?;
+        }
+    }
+    // `xs.cursor()`: the same array cursor evidence, reached without the Iterating adapter.
+    for (input, cursor_role) in cursors {
+        if matches!(declarations.builder.module().types.get(input)?, ir::Type::Array(_)) {
+            cursor(declarations, input, cursor_role)?;
         }
     }
     Ok(())
@@ -128,6 +149,30 @@ fn witness(declarations: &mut Declarations, owner: ir::DeclId, role: ir::TypeId,
 
 fn array(declarations: &mut Declarations, input: ir::TypeId, role: ir::TypeId, cursor_role: ir::TypeId)
     -> Result<()> {
+    let ctor = cursor(declarations, input, cursor_role)?;
+    let sequence_name = format!("builtin.ArraySequence.t{}", input.as_u32());
+    let (sequence, sequence_ty) = object(declarations, sequence_name, vec![input])?;
+    let ctor_sequence = function(declarations, sequence, "new", vec![input], sequence_ty, true, |builder, _| {
+        construct(builder, sequence, builder.block_params(builder.entry())?.to_vec())
+    })?;
+    let open = function(declarations, sequence, "cursor", vec![sequence_ty], cursor_role, false, |builder, _| {
+        let receiver = builder.block_params(builder.entry())?[0];
+        let array = get(builder, receiver, sequence, 0)?;
+        let zero = builder.emit_schema(ir::Operation::Const(ir::Literal::Int("0".into())))?[0];
+        let value = call(builder, ctor, vec![array, zero])?;
+        core(builder, ir::CoreOp::RoleWrap { value, ty: cursor_role })
+    })?;
+    witness(declarations, sequence, role, vec![open])?;
+    declarations.builtin_adapters.insert((input, role), ctor_sequence);
+    Ok(())
+}
+
+/// The array cursor object (`items`, `at`) for `cursor_role`, once per array type; its
+/// constructor `(items, at)` is the builtin adapter of `(array, cursor role)`.
+fn cursor(declarations: &mut Declarations, input: ir::TypeId, cursor_role: ir::TypeId) -> Result<ir::FuncId> {
+    if let Some(&ctor) = declarations.builtin_adapters.get(&(input, cursor_role)) {
+        return Ok(ctor);
+    }
     let int = declarations.builder.intern_type(ir::Type::Int)?;
     let bool_ty = declarations.builder.intern_type(ir::Type::Bool)?;
     let ir::Type::Array(element) = *declarations.builder.module().types.get(input)? else {
@@ -178,21 +223,8 @@ fn array(declarations: &mut Declarations, input: ir::TypeId, role: ir::TypeId, c
         slots.push(target);
     }
     witness(declarations, cursor, cursor_role, slots)?;
-    let sequence_name = format!("builtin.ArraySequence.t{}", input.as_u32());
-    let (sequence, sequence_ty) = object(declarations, sequence_name, vec![input])?;
-    let ctor_sequence = function(declarations, sequence, "new", vec![input], sequence_ty, true, |builder, _| {
-        construct(builder, sequence, builder.block_params(builder.entry())?.to_vec())
-    })?;
-    let open = function(declarations, sequence, "cursor", vec![sequence_ty], cursor_role, false, |builder, _| {
-        let receiver = builder.block_params(builder.entry())?[0];
-        let array = get(builder, receiver, sequence, 0)?;
-        let zero = builder.emit_schema(ir::Operation::Const(ir::Literal::Int("0".into())))?[0];
-        let value = call(builder, ctor, vec![array, zero])?;
-        core(builder, ir::CoreOp::RoleWrap { value, ty: cursor_role })
-    })?;
-    witness(declarations, sequence, role, vec![open])?;
-    declarations.builtin_adapters.insert((input, role), ctor_sequence);
-    Ok(())
+    declarations.builtin_adapters.insert((input, cursor_role), ctor);
+    Ok(ctor)
 }
 
 fn scalar(declarations: &mut Declarations, input: ir::TypeId, role: ir::TypeId,

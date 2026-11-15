@@ -164,6 +164,9 @@ pub(super) fn prepare_with_limits<'a>(input: &Analysis<'a>, limits: Limits) -> R
         });
         slice.block(&mut body.block, &env)
             .map_err(|error| error.in_function(&slice.body_name(&body.owner)))?;
+        // Bindings introduced by desugaring (stream element loops) follow the source locals.
+        let lexical = slice.lexical.as_ref().expect("lexical context of the walked body");
+        body.locals.extend(lexical.locals[body.locals.len()..].iter().cloned());
         slice.inventory.bodies.push(callables::DiscoveredBody {
             key,
             #[cfg(test)]
@@ -635,15 +638,22 @@ impl Specializer<'_, '_> {
         Ok(())
     }
 
+    /// A compiler binding of the body being walked, with its concrete type.
+    fn fresh_local(&mut self, ty: ty::Ty, span: Span, env: &[(ty::ParamId, ty::Ty)]) -> Result<thir::LocalId> {
+        let ty = self.ty(&ty.subst(env), span)?;
+        let lexical = self.lexical.as_mut().expect("lexical context of the walked body");
+        lexical.locals.push(thir::Local { name: "$item".into(), ty, rebindable: false, variadic: false, span });
+        Ok(thir::LocalId(lexical.locals.len() - 1))
+    }
+
     fn expr(&mut self, expr: &mut thir::Expr, env: &[(ty::ParamId, ty::Ty)]) -> Result<()> {
         use thir::ExprKind as E;
-        let unsupported = match &expr.kind {
-            E::Await(_) | E::Spawn(_) => Some("async operation (#570)"),
-            E::StreamWrite { .. } => Some("stream operation (#569)"),
-            _ => None,
-        };
-        if let Some(construct) = unsupported {
-            return Err(LowerError::unsupported(expr.span, construct));
+        if let E::Await(_) | E::Spawn(_) = &expr.kind {
+            return Err(LowerError::unsupported(expr.span, "async operation (#570)"));
+        }
+        if let E::StreamWrite { .. } = &expr.kind {
+            let roles = super::streams::StreamRoles::find(&self.input.registry, expr.span)?;
+            super::streams::desugar(expr, &roles, &mut |ty, span| self.fresh_local(ty, span, env))?;
         }
         expr.ty = expr.ty.as_ref().map(|ty| self.ty(&ty.subst(env), expr.span)).transpose()?;
         match &mut expr.kind {
@@ -765,6 +775,15 @@ impl Specializer<'_, '_> {
                                 unreachable!("role receiver");
                             };
                             *callee = thir::Callee::Method { receiver: receiver.clone(), object, method };
+                            // Objects with a registered direct ABI (Stdout) have no requested
+                            // witnesses, so the devirtualized method is requested here.
+                            let (original, args) = self.instances.iter()
+                                .find_map(|(key, &instance)| (instance == object).then(|| key.clone()))
+                                .unwrap_or((object, vec![]));
+                            let source = &self.input.registry.objects[original.0];
+                            let subst = source.params.iter().copied().zip(args).collect();
+                            self.queue(thir::BodyOwner::Method { object: original, method },
+                                thir::BodyOwner::Method { object, method }, subst, None, expr.span)?;
                         }
                     }
                     thir::Callee::Builtin { receiver, .. } => self.expr(receiver, env)?,

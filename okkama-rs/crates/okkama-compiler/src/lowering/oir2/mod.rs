@@ -47,6 +47,9 @@ mod std_collection_tests;
 mod roles;
 mod walk;
 mod scalar;
+mod operators;
+mod globals;
+mod streams;
 mod structure;
 #[cfg(test)]
 mod tests;
@@ -54,6 +57,8 @@ mod tests;
 mod specialization_tests;
 #[cfg(test)]
 mod role_tests;
+#[cfg(test)]
+mod case_tests;
 
 use crate::analysis::{Analysis, thir};
 use crate::oir2 as ir;
@@ -131,9 +136,17 @@ pub(crate) fn lower_to_oir2_with_open_calls(analysis: &Analysis<'_>) -> Result<i
 
 fn lower(analysis: &Analysis<'_>, open_calls: bool) -> Result<ir::Module> {
     let prepared = specialize::prepare(analysis)?;
+    let constants = &analysis.registry.const_state;
+    let constant_names: Vec<_> = analysis.registry.consts.iter().map(|constant| {
+        let module = &analysis.registry.modules[constant.module].name;
+        format!("{}.const.{}", module.replace('/', "."), constant.name)
+    }).collect();
     let analysis = &prepared.analysis;
     let mut declarations = declarations::Declarations::new(analysis)?;
     declarations.declare_lambdas(&prepared.callables)?;
+    let walked: Vec<_> = analysis.bodies.iter()
+        .chain(prepared.callables.bodies.iter().map(|discovered| &discovered.body)).collect();
+    let globals = declarations.declare_globals(constants, &constant_names, &walked)?;
     let bound_entries = bound::entries(declarations.builder.module(), &prepared.callables,
         &declarations.functions, &declarations.types)?;
     let calls = std::cell::RefCell::new(known_calls::CallSpans::new());
@@ -186,7 +199,7 @@ fn lower(analysis: &Analysis<'_>, open_calls: bool) -> Result<ir::Module> {
                 defers: &declarations.defers,
                 deferred: None,
                 key: callables::BodyKey { root: body.owner.clone(), path: vec![] },
-                lambdas: &declarations.lambdas, calls: &calls, bound_entries: &bound_entries,
+                lambdas: &declarations.lambdas, globals: &globals, calls: &calls, bound_entries: &bound_entries,
             };
             let lowered = body::BodyLowerer::lower(builder, body, root, &declarations.types, context)
                 .map_err(|error| error.in_function(&symbol))?;
@@ -208,7 +221,7 @@ fn lower(analysis: &Analysis<'_>, open_calls: bool) -> Result<ir::Module> {
             objects: &declarations.objects,
             constructors: &declarations.constructors,
             given: vec![], listed: None, defers: &declarations.defers, deferred: None,
-            key: lambda.source.key.clone(), lambdas: &declarations.lambdas,
+            key: lambda.source.key.clone(), lambdas: &declarations.lambdas, globals: &globals,
             calls: &calls, bound_entries: &bound_entries,
         };
         let lowered = body::BodyLowerer::lower(builder, &lambda.source.body, root, &declarations.types, context)
@@ -231,7 +244,8 @@ fn lower(analysis: &Analysis<'_>, open_calls: bool) -> Result<ir::Module> {
             constructors: &declarations.constructors,
             given: vec![], listed: None, defers: &declarations.defers,
             deferred: Some(deferred.receiver),
-            key: deferred.key.clone(), lambdas: &declarations.lambdas, calls: &calls, bound_entries: &bound_entries,
+            key: deferred.key.clone(), lambdas: &declarations.lambdas, globals: &globals,
+            calls: &calls, bound_entries: &bound_entries,
         };
         let lowered = body::BodyLowerer::lower(builder, &deferred.source, root, &declarations.types, context)
             .map_err(|error| error.in_function(&symbol))?;
