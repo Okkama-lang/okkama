@@ -1034,3 +1034,18 @@ fn champ_plain_transfer_moves_every_selected_identity_of_its_source() {
         HashSet::from([bound, borrowed]));
     h.gc(&[post.from.record, post.to.record]);
 }
+
+/// A payload read of an inactive case is Tomato's program failure, with Tomato's text (#698). No source program
+/// reaches it: a payload is read only in the arm that matched its case.
+#[test]
+fn champ_inactive_variant_payload_is_tomato_failure() {
+    let mut h = Harness::new();
+    let owner = h.runtime.champ_new_owner().unwrap();
+    let (object, packet) = h.fresh(0, owner);
+    assert_eq!(super::machine::rt_machine_variant_get(&mut h.ctx, 1, 0, object), 0);
+    assert_eq!(h.ctx.status, FAILED);
+    let failure = h.runtime.failure(h.ctx.failure).unwrap();
+    assert!(matches!(&failure.kind, crate::runtime::FailureKind::Program(text)
+        if text == "Variant payload of an inactive case"), "{:?}", failure.kind);
+    h.gc(&[packet.record]);
+}

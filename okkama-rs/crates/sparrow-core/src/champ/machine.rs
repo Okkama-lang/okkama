@@ -568,7 +568,8 @@ pub extern "C" fn rt_machine_convert(ctx: *mut Ctx, from: Word, to: Word, value:
             word
         }
         Err(message) => {
-            super::helpers::fail(ctx, error(&message));
+            // A program failure with Tomato's message, as the program sees it.
+            super::helpers::fail(ctx, crate::Error(message));
             0
         }
     }
@@ -597,7 +598,8 @@ pub extern "C" fn rt_machine_scalar(ctx: *mut Ctx, op: Word, first: Word, second
             word
         }
         Err(message) => {
-            super::helpers::fail(ctx, error(&message));
+            // A program failure with Tomato's message, as the program sees it.
+            super::helpers::fail(ctx, crate::Error(message));
             0
         }
     }
@@ -727,7 +729,7 @@ pub(crate) fn scalar(runtime: &mut Runtime, op: s::DataOp, first: Word, second: 
 pub extern "C" fn rt_machine_variant_get(ctx: *mut Ctx, case: Word, storage: Word, value: Word) -> Word {
     let runtime = unsafe { &*(*ctx).runtime };
     if u64::from(heap::payload(runtime.heap.header_of(value))) != case {
-        super::helpers::fail(ctx, error("Variant payload of an inactive case"));
+        super::helpers::fail(ctx, crate::Error("Variant payload of an inactive case".into()));
         return 0;
     }
     runtime.heap.field(value, storage as usize)
@@ -777,7 +779,8 @@ pub extern "C" fn rt_machine_value_eq(ctx: *mut Ctx, descriptor: Word, left: Wor
     match value_equal(runtime, &program, left, right, s::Type::Object(descriptor as u32)) {
         Ok(equal) => Word::from(equal),
         Err(message) => {
-            super::helpers::fail(ctx, error(&message));
+            // A program failure with Tomato's message, as the program sees it.
+            super::helpers::fail(ctx, crate::Error(message));
             0
         }
     }
@@ -833,7 +836,13 @@ pub(crate) fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, r
                     for index in storage {
                         let field = object.layout.storage_fields[index as usize];
                         let index = index as usize;
-                        pending.push((runtime.heap.field(a, index), runtime.heap.field(b, index), field));
+                        let (x, y) = (runtime.heap.field(a, index), runtime.heap.field(b, index));
+                        // As in Tomato, meeting an unbound field fails before any field is compared. An unbound
+                        // reference or int is the zero word; a raw scalar field has no unbound marker.
+                        if (field.traced() || field == s::Type::Int) && (x == 0 || y == 0) {
+                            return Err("cannot compare unbound object fields".into());
+                        }
+                        pending.push((x, y, field));
                     }
                 }
                 true
