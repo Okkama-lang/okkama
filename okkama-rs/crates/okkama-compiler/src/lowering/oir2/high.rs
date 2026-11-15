@@ -114,11 +114,16 @@ fn check_catch_values(module: &ir::Module, body: &ir::Body) -> Result<()> {
                 let ir::Definition::BlockParam { block: entry, .. } = body.values.get(value)?.def else {
                     return Err(invalid("catch binding must bind the handler payload parameter"));
                 };
-                if body.blocks.get(entry)?.lexical_scope != body.bindings.get(binding)?.scope
-                    || data.lexical_scope != body.bindings.get(binding)?.scope {
+                let handler = body.blocks.get(entry)?.lexical_scope;
+                let scope = body.bindings.get(binding)?.scope;
+                if data.lexical_scope != scope || !ancestors(module, scope)?.contains(&handler) {
                     return Err(invalid("catch binding must be local to its Catch scope"));
                 }
-                caught.insert(value, entry);
+                // A later binding inside the handler (a match on the payload) is an alias of
+                // the value; the catch binding itself is the one in the Catch scope.
+                if scope == handler {
+                    caught.insert(value, entry);
+                }
             }
         }
     }

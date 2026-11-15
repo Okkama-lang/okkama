@@ -967,6 +967,61 @@ fn oir2_s3_self_check_catch_payload_and_binding_dominance() {
     }
 }
 
+/// A match on a catch payload binds it again inside the handler (#677).
+const CATCH_MATCH: &str = concat!("module app; enum Stop is Error = (now); main() is int { ",
+    "try { throw Stop.now; } catch e is Stop { match e { case Stop.now { 7; } } } }");
+
+#[test]
+fn oir2_catch_payload_matched_inside_its_handler() {
+    with_analysis(CATCH_MATCH, |analysis| {
+        let module = lower_to_oir2(analysis).unwrap_or_else(|error| panic!("{error}"));
+        verify_high(&module, CATCH_MATCH);
+        let body = body_for_entry(&module);
+        let binds = body.insts.iter().filter(|(_, inst)| {
+            matches!(inst.op, ir::Operation::Lexical(ir::LexicalOp::Bind { .. }))
+        }).count();
+        assert!(binds >= 2, "the catch binding and the match alias");
+    });
+}
+
+#[test]
+fn oir2_payload_free_error_enum_match_compares_enum_cases() {
+    let source = concat!("module app; enum Stop is Error = (now, later); main() is int { ",
+        "let s = Stop.later; match s { case Stop.now { 1; } case Stop.later { 2; } } }");
+    with_analysis(source, |analysis| {
+        let module = lower_to_oir2(analysis).unwrap_or_else(|error| panic!("{error}"));
+        verify_high(&module, source);
+        let body = body_for_entry(&module);
+        let ops: Vec<_> = body.insts.iter().map(|(_, inst)| &inst.op).collect();
+        assert!(!ops.iter().any(|op| matches!(op, ir::Operation::Core(ir::CoreOp::VariantTag { .. }))));
+        let compares = ops.iter().filter(|op| matches!(op, ir::Operation::Core(ir::CoreOp::EnumEq { .. }))).count();
+        assert_eq!(compares, 2);
+    });
+}
+
+#[test]
+fn oir2_catch_payload_alias_does_not_replace_the_catch_binding() {
+    with_analysis(CATCH_MATCH, |analysis| {
+        let mut broken = lower_to_oir2(analysis).unwrap();
+        let entry = broken.entry.unwrap();
+        let catch_scopes: Vec<_> = broken.scopes.iter()
+            .filter_map(|(id, scope)| (scope.kind == ir::ScopeKind::Catch).then_some(id))
+            .collect();
+        let body = broken.functions.get_mut(entry).unwrap().body.as_mut().unwrap();
+        // Drop the binding in the Catch scope itself; only the match alias in a nested scope remains.
+        let bind = body.insts.iter().find_map(|(id, inst)| match inst.op {
+            ir::Operation::Lexical(ir::LexicalOp::Bind { binding, .. })
+                if catch_scopes.contains(&body.bindings.get(binding).unwrap().scope) => Some(id),
+            _ => None,
+        }).unwrap();
+        for (_, block) in body.blocks.iter_mut() {
+            block.insts.retain(|&id| id != bind);
+        }
+        let error = super::high::check(&broken, body_for_entry(&broken)).expect_err("alias only");
+        assert!(error.to_string().contains("catch payload requires a lexical binding"), "{error}");
+    });
+}
+
 #[test]
 fn oir2_s3_self_check_requires_unwind_for_suspension() {
     let source = "oir 2 high
