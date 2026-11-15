@@ -58,6 +58,10 @@ pub enum SelectionExpr {
     /// Restrict to obligations with UnboundResult or TemporaryAwaitResult
     /// provenance; this never creates a new admission right.
     Admissible(SelectionId), Union(Vec<SelectionId>), Descriptor { descriptor: ValueId, value: ValueId },
+    /// The obligations a `scope.transfer` source admitted or bound among those the inner selection reaches
+    /// (#697). Staged obligations and those outside the source stay with their owners. Only the whole
+    /// selection of a `scope.transfer` between two states names it.
+    Held(SelectionId),
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Projection {

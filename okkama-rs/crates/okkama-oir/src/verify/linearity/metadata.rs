@@ -467,6 +467,8 @@ impl Engine<'_, '_> {
             }
             match self.body.selections.get(id) {
                 Ok(SelectionExpr::Admissible(inner)) => pending.push((*inner, true)),
+                // A held selection takes what the source holds of the inner one, admitted or bound (#697).
+                Ok(SelectionExpr::Held(inner)) => pending.push((*inner, fresh)),
                 Ok(SelectionExpr::Union(items)) => pending.extend(items.iter().map(|id| (*id, fresh))),
                 Ok(selection) => {
                     let (keys, _) = self.selection(flow, id);
@@ -523,6 +525,10 @@ impl Engine<'_, '_> {
                 }
                 Ok(SelectionExpr::Union(items)) => {
                     pending.extend(items);
+                    continue;
+                }
+                Ok(SelectionExpr::Held(inner)) => {
+                    pending.push(*inner);
                     continue;
                 }
                 Err(_) => continue,

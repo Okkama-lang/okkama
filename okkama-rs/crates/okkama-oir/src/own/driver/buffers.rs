@@ -6,11 +6,11 @@
 //! the journal, which is admitted at the lexical owner of the instruction.
 //!
 //! Inserted elements go to the journal of the builder's owner (spec §4.1, §8):
-//! the fresh parts of an inserted value move from inner retained scopes into the
-//! nearest retained scope enclosing the `builder.new`. That scope encloses every
-//! transition and the finish, so it outlives the buffer, and it closes where
-//! Tomato destroys the collection: a builder made in a loop body releases its
-//! elements at the end of each iteration. Already owned parts stay borrowed.
+//! the parts of an inserted value that inner retained scopes hold, admitted or
+//! bound (#697), move into the nearest retained scope enclosing the `builder.new`.
+//! That scope encloses every transition and the finish, so it outlives the buffer,
+//! and it closes where Tomato destroys the collection: a builder made in a loop body
+//! releases its elements at the end of each iteration. Parts owned outside stay borrowed.
 use super::*;
 
 impl Driver<'_, '_> {
@@ -103,8 +103,11 @@ impl Driver<'_, '_> {
         Ok(values)
     }
 
-    /// Move the admissible parts of `originals` from every retained scope inside
-    /// the builder's owner into the nearest retained scope enclosing its `builder.new`.
+    /// Move what every retained scope inside the builder's owner holds of `originals` into the nearest retained
+    /// scope enclosing its `builder.new`: `held(...)` takes the admitted and the bound parts (#697). An element may
+    /// borrow an identity a nested scope binds, such as the field of a cursor step bound in the iteration scope;
+    /// that identity lives as long as the collection, as in Tomato. An identity outside the source stays with its
+    /// owner, and only the source's own parts move: the cursor step itself stays unless the element reaches it.
     fn rehome(&mut self, mut point: Landing, buffer: ValueId, originals: &[ValueId]) -> Result<Landing, OwnError> {
         if originals.is_empty() {
             return Ok(point);
@@ -125,7 +128,7 @@ impl Driver<'_, '_> {
                 selections.push(self.body.selections.alloc(SelectionExpr::Value(value)).map_err(arena)?);
             }
             let selection = self.body.selections.alloc(SelectionExpr::Union(selections)).map_err(arena)?;
-            let selection = self.body.selections.alloc(SelectionExpr::Admissible(selection)).map_err(arena)?;
+            let selection = self.body.selections.alloc(SelectionExpr::Held(selection)).map_err(arena)?;
             let states = TransferStates::Between { from: point.env.state(*scope)?, to: point.env.state(outer)? };
             point = self.emit(point, Operation::Ownership(OwnershipOp::ScopeTransfer { states, selection }))?;
         }

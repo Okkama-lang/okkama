@@ -1,0 +1,71 @@
+oir 2 own
+// spec: 4.2; status: v2; expected-rule: -
+// #697: a held transfer moves what its source admitted or bound. The resource bound in the block outlives the
+// block in the action, where it is read after the block closed.
+module 04-held-transfer
+object R {
+    field x: int
+    destroy @destroy
+}
+scope Sd action in @destroy
+scope S action in @f
+scope SI block in @f parent S
+summary Md call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(publication=atomic)
+summary M0 internal contract call_contract(failures=[thrown, program, panic, native, cancelled], publication=atomic)
+func @destroy(%self: R facts(managed(deps=dd))) -> void [destroy R] summary(Md) {
+    dependency dd: dependency = retention(value=%self, selection=selection(%self))
+^entry in Sd:
+    ret
+}
+scope Sc action in @create
+summary Mc internal results [result_relation(fresh=[0], provenance=unbound_result)] contract call_contract(results=[R], failures=[thrown, program, panic, native, cancelled], publication=atomic)
+func @create(%input: own) -> (R, own) [ctor R] summary(Mc) {
+    key kc: key = created(site=0, instance=%made)
+    dependency dc: dependency = key(kc)
+    boundary Bc call in Sc
+^entry in Sc:
+    invoke.own obj.new R { x: 1; %input }
+        normal ^ok($value, $packet)
+        unwind ^bad($packet, $failure)
+^ok(%made: R facts(managed(deps=dc)), %packet: own) in Sc:
+    ret %made, %packet
+^bad(%rest: own, %failure: failure) in Sc:
+    %closed: closed = end %rest, boundary Bc
+    raise %failure
+}
+func @f() -> void summary(M0) {
+    binding b0 "kept": R in SI
+    key k0: key = created(site=0, instance=%made)
+    dependency d0: dependency = key(k0)
+    selection sh: selection = held(selection(%made))
+^entry in S:
+    %root: scope<S> = scope.begin S
+    %inner: scope<SI> = scope.begin SI
+    invoke.own call @create(; own.empty)
+        normal ^made($value, $packet, %root, %inner)
+        unwind ^failed_inner(%root, %inner, $failure)
+^made(%made: R facts(managed(deps=d0)), %p: own, %q: scope<S>, %qi: scope<SI>) in SI:
+    %bound: scope<SI> = own.bind binding elaborated_binding(binding=b0, resource=resource_value(value=%made, packet=%p), state=%qi, original_scope=SI)
+    invoke.own scope.transfer sh, states between(from=%bound, to=%q)
+        normal ^moved(%made, $from, $to)
+        unwind ^failed_inner($to, $from, $failure)
+^moved(%kept: R facts(managed(deps=d0)), %rest: scope<SI>, %owner: scope<S>) in SI:
+    invoke.own scope.end %rest, effects scope_effects(failures=[thrown, program, panic, native], suspends=true, cancel=false)
+        normal ^after(%kept, %owner)
+        unwind ^failed(%owner, $failure)
+^after(%alive: R facts(managed(deps=d0)), %open: scope<S>) in S:
+    %read: R facts(managed(deps=d0)) = retag %alive, ty R
+    invoke.own scope.end %open, effects scope_effects(failures=[thrown, program, panic, native], suspends=true, cancel=false)
+        normal ^done($closed)
+        unwind ^closed_failed($closed, $failure)
+^failed_inner(%outer_state: scope<S>, %inner_state: scope<SI>, %error: failure) in SI:
+    %inner_error: failure = scope.unwind %inner_state, %error, effects scope_effects(failures=[thrown, program, panic, native], suspends=true, cancel=false)
+    br ^failed(%outer_state, %inner_error)
+^failed(%state: scope<S>, %failure2: failure) in S:
+    %final: failure = scope.unwind %state, %failure2, effects scope_effects(failures=[thrown, program, panic, native], suspends=true, cancel=false)
+    raise %final
+^closed_failed(%closed: closed, %closing_failure: failure) in S:
+    raise %closing_failure
+^done(%closed2: closed) in S:
+    ret
+}

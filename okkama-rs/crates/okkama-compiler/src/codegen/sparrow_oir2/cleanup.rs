@@ -154,6 +154,9 @@ impl Emitter<'_> {
                 if admissible && op != O::ScopeSplit {
                     return Err(error("admissible packet selection requires provenance transport"));
                 }
+                if matches!(self.body.selections.get(*selection)?, o::SelectionExpr::Held(_)) {
+                    return Err(error("a held selection belongs only to scope.transfer"));
+                }
                 let selection = self.selection(*selection)?;
                 let mut arguments = vec![packet, A::Selection(selection)];
                 if admissible { arguments.push(A::Flag(true)); }
@@ -174,11 +177,16 @@ impl Emitter<'_> {
             ScopeTransfer { states, selection } => {
                 let mut arguments = vec![A::Flag(matches!(states, o::TransferStates::Between { .. }))];
                 arguments.extend(states.values().into_iter().map(location).collect::<Result<Vec<_>, _>>()?);
-                // An admissible selection moves only what the source admitted (TRANSFER_ADMISSION).
-                let admissible = matches!(self.body.selections.get(*selection)?, o::SelectionExpr::Admissible(_));
+                // An admissible selection moves only what the source admitted, a held one what it admitted or bound
+                // (TRANSFER_ADMISSION: a `true` or a `false` flag after the selection, #697).
+                let filter = match self.body.selections.get(*selection)? {
+                    o::SelectionExpr::Admissible(_) => Some(true),
+                    o::SelectionExpr::Held(_) => Some(false),
+                    _ => None,
+                };
                 arguments.push(A::Selection(self.selection(*selection)?));
-                if admissible {
-                    arguments.push(A::Flag(true));
+                if let Some(admitted) = filter {
+                    arguments.push(A::Flag(admitted));
                 }
                 (O::ScopeTransfer, arguments)
             }

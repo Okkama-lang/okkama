@@ -58,7 +58,7 @@ pub(crate) fn expression_children(reference: OperandRef, body: &Body) -> Result<
                     value(*keys);
                 }
             },
-            SelectionExpr::Admissible(id) => refs.push(OperandRef::Selection(*id)),
+            SelectionExpr::Admissible(id) | SelectionExpr::Held(id) => refs.push(OperandRef::Selection(*id)),
             SelectionExpr::Union(items) => refs.extend(items.iter().copied().map(OperandRef::Selection)),
             SelectionExpr::Descriptor { descriptor, value: v } => {
                 value(*descriptor);

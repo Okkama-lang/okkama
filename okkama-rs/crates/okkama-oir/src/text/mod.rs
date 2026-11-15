@@ -682,6 +682,7 @@ variants!(DepExpr {
 });
 variants!(SelectionExpr {
     Admissible(x0) => "admissible",
+    Held(x0) => "held",
     Value(x0) => "value",
     Projection(x0) => "projection",
     OwnerGraph(x0) => "owner_graph",

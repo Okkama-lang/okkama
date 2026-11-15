@@ -126,10 +126,10 @@ fn champ_s2_registry_layouts_effects_and_single_outcome_channel() {
     // #622 adds champ_machine_collection, champ_machine_builder and champ_machine_lookup; #675 adds
     // champ_machine_scalar; #676 adds champ_machine_role_narrow and champ_own_dynamic; #601 V8 adds the eight
     // async helpers of Champ draft 3 §14.4 and champ_machine_future_destination; #697 adds
-    // champ_scope_transfer_admissible; #601 V9 adds champ_body_reject; #601 R5 adds champ_await_take and
-    // champ_cache_rehome; #601 D25 adds champ_cleanup_settle_dynamic, champ_service_materialize,
-    // champ_service_absorb and champ_invoke_defer_async; #678 adds champ_machine_order.
-    assert_eq!(helpers.len(), 80);
+    // champ_scope_transfer_admissible and champ_scope_transfer_held; #601 V9 adds champ_body_reject; #601 R5
+    // adds champ_await_take and champ_cache_rehome; #601 D25 adds champ_cleanup_settle_dynamic,
+    // champ_service_materialize, champ_service_absorb and champ_invoke_defer_async; #678 adds champ_machine_order.
+    assert_eq!(helpers.len(), 81);
     for &(name, effects) in helpers {
         let abi = helper_abi(name).unwrap();
         let class = abi.class;
@@ -1050,6 +1050,56 @@ fn champ_admissible_transfer_moves_only_admitted_identities() {
         HashSet::from([admitted, borrowed]));
     assert_eq!([bound, staged, borrowed].map(|object| h.identity(object)), kept);
     h.gc(&[from.record, to.record]);
+}
+
+/// A held transfer (#697) moves what its source admitted or bound among the selected identities. A builder element
+/// may borrow an identity its cursor's scope binds: that one leaves with it. Staged identities stay with their
+/// action, and a root outside the source stays with its owner without a failure.
+#[test]
+fn champ_held_transfer_moves_admitted_and_bound_identities_of_its_source() {
+    let mut h = Harness::new();
+    let mut from = h.scope();
+    let mut to = h.scope();
+    let mut elsewhere = h.scope();
+    let from_scope = scope(&h.runtime, from.record).unwrap();
+    let to_scope = scope(&h.runtime, to.record).unwrap();
+    let elsewhere_scope = scope(&h.runtime, elsewhere.record).unwrap();
+    let admit = |h: &mut Harness, from: &mut ScopeSlot| {
+        let (object, mut packet) = h.fresh(0, from_scope.owner);
+        assert_eq!(rt_own_admit(&mut h.ctx, from, &mut packet, from), NORMAL);
+        object
+    };
+    let admitted = admit(&mut h, &mut from);
+    let bound = admit(&mut h, &mut from);
+    let mut empty = h.empty();
+    assert_eq!(rt_own_bind(&mut h.ctx, &mut from, 0, bound, &mut empty, &mut from), NORMAL);
+    let staged = admit(&mut h, &mut from);
+    let mut empty = h.empty();
+    let inputs = StageInputs {
+        state: &mut from, source: std::ptr::null_mut(), selection: 0, field: 0, value: staged, packet: &mut empty,
+    };
+    let mut staging = StagePost::default();
+    assert_eq!(rt_own_stage(&mut h.ctx, &inputs, &mut staging), NORMAL);
+    let mut from = staging.state;
+    let (borrowed, mut owned) = h.fresh(0, to_scope.owner);
+    assert_eq!(rt_own_accept(&mut h.ctx, &mut to, &mut owned, &mut to), NORMAL);
+    let (outside, mut theirs) = h.fresh(0, elsewhere_scope.owner);
+    assert_eq!(rt_own_accept(&mut h.ctx, &mut elsewhere, &mut theirs, &mut elsewhere), NORMAL);
+    let kept = [staged, borrowed, outside].map(|object| h.identity(object));
+    let roots = [admitted, bound, staged, borrowed, outside];
+    let mut post = TransferPost::default();
+    let inputs = TransferInputs { from: &mut from, to: &mut to };
+    assert_eq!(rt_scope_transfer_held(&mut h.ctx, &inputs, &selection(&roots), &mut post), NORMAL);
+    let (from, to) = (post.from, post.to);
+    let source = scope(&h.runtime, from.record).unwrap();
+    assert!(source.admission.words().next().is_none());
+    assert!(source.bound.words().next().is_none());
+    assert_eq!(source.staging.words().collect::<Vec<_>>(), vec![staged]);
+    assert_eq!(scope(&h.runtime, to.record).unwrap().all().words().collect::<HashSet<_>>(),
+        HashSet::from([admitted, bound, borrowed]));
+    assert_eq!(scope(&h.runtime, elsewhere.record).unwrap().all().words().collect::<Vec<_>>(), vec![outside]);
+    assert_eq!([staged, borrowed, outside].map(|object| h.identity(object)), kept);
+    h.gc(&[from.record, to.record, elsewhere.record]);
 }
 
 /// A transfer without the admission filter moves every selected identity, bound ones included, and its source
