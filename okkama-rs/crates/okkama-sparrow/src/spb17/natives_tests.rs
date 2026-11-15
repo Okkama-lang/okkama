@@ -58,6 +58,19 @@ fn table_natives_are_trusted_entries_from_the_table() {
     assert_eq!(P1Contracts::new(&[]).unwrap().native("runtime/buffer@1::buffer_state_size/1"), None);
 }
 
+/// Float arrays cross the native bridge as raw binary64 elements (`statistics.exact-samples`, #710).
+#[test]
+fn table_natives_take_and_return_float_arrays() {
+    let floats = Type::Array(ArrayType { leaf: ArrayLeaf::Float, depth: 1 });
+    let mean = declaration("runtime/statistics@1::statistics_mean/1", vec![floats], vec![Type::Float]);
+    let quantiles = declaration("runtime/statistics@1::statistics_quantiles/3",
+        vec![floats, Type::Int, Type::Str], vec![floats]);
+    load(&program(vec![], vec![mean.clone(), quantiles.clone()])).unwrap();
+    let contracts = P1Contracts::new(&[]).unwrap();
+    assert_eq!(contracts.native("runtime/statistics@1::statistics_mean/1"), Some(&mean));
+    assert_eq!(contracts.native("runtime/statistics@1::statistics_quantiles/3"), Some(&quantiles));
+}
+
 #[test]
 fn a_table_native_cannot_change_its_signature() {
     let hex = declaration("runtime/hex@1::hex_encode/1", vec![Type::Str], vec![Type::Str]);
@@ -173,7 +186,12 @@ fn atomic_entries_follow_the_registered_value_layout() {
     assert_eq!(atomic_value("array_string"), Some(strings));
     assert_eq!(atomic_value("array_array_int"), Some(Type::Array(ArrayType { leaf: ArrayLeaf::Int, depth: 2 })));
     assert_eq!(atomic_value("array_byte"), Some(Type::Bytes));
-    for suffix in ["array_float", "array_char", "range", "array_", "map_int"] {
+    // Every concrete plain specialization is registered (P2.4 §4.8), arrays of every plain scalar included.
+    let arrays = [("array_float", ArrayLeaf::Float), ("array_char", ArrayLeaf::Char), ("array_rat", ArrayLeaf::Rat)];
+    for (suffix, leaf) in arrays {
+        assert_eq!(atomic_value(suffix), Some(Type::Array(ArrayType { leaf, depth: 1 })), "{suffix}");
+    }
+    for suffix in ["range", "array_", "map_int"] {
         assert_eq!(atomic_value(suffix), None, "{suffix}");
     }
     let closed = Object { error_cases: vec!["AtomicClosed.closed".into()], ..object("async.atomic.AtomicClosed", false,

@@ -1313,6 +1313,11 @@ impl Emit<'_, '_> {
                 self.iconst(object)
             }
             D::Move => words[0],
+            // An unbound reference or int is the zero word; a raw scalar, whose zero is a value, holds Tomato's
+            // unbound marker (a NaN no finite float and no bool, byte or char uses).
+            D::Undef if matches!(ty, s::Type::Float | s::Type::Bool | s::Type::Byte | s::Type::Char) => {
+                self.iconst(crate::word::UNBOUND_RAW)
+            }
             D::Undef => self.iconst(0),
             D::StrConcat => self.call("concat", &[self.ctx, words[0], words[1]]).unwrap(),
             D::StrLen => self.call("champ_machine_text_len", &[self.ctx, words[0]]).unwrap(),

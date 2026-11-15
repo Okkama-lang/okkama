@@ -890,10 +890,12 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
         Catch => {
             enforce(loc_type(f, locations[0])? == ProducedType::Value(Type::Failure),
                 "CATCH_FAILURE", "catch operand must be a failure")?;
+            // A plain Error, the Error role, or the system NativeFailure (language spec 9.5).
             ctx.value = Some(match args.get(1) {
                 Some(Argument::Object(id)) if !p.objects[*id as usize].error_cases.is_empty() => Type::Object(*id),
                 // A multi-case Error variant catches each of its cases (descriptors of its `variant_cases`).
                 Some(Argument::Object(id)) if error_variant(p, *id) => Type::Variant(*id),
+                Some(Argument::Object(id)) if native_failure(p) == Some(*id) => Type::Object(*id),
                 Some(Argument::Flag(true)) => Type::Error,
                 _ => return Err(violation("CATCH_TYPE", "catch target must be a declared plain Error")),
             });
@@ -1493,10 +1495,13 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
                 [left @ (Type::Array(_) | Type::Bytes | Type::Map(_) | Type::Variant(_) | Type::Range), right] => {
                     left == right
                 }
+                // A generic `==` specialized to a scalar (`Frequencies<string>`) compares two values of it.
+                [left @ (Type::Int | Type::Bool | Type::Str | Type::Float | Type::Char | Type::Byte | Type::Rat),
+                    right] => left == right,
                 _ => false,
             };
             enforce(comparable && out == Some(Type::Bool), "VAL_EQ_TYPE",
-                "value comparison needs two objects of one declaration or two plain collections of one type")?;
+                "value comparison needs two values of one scalar, object or plain collection type")?;
             // Structural equality is defined on plain values; identities and error payloads are not compared.
             enforce(closed_plain(p, types[0]), "VAL_EQ_TYPE", "value comparison needs closed plain operands")
         }

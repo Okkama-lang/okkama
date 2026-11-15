@@ -97,7 +97,7 @@ impl P1Contracts {
                 abi::Type::Void => Some(vec![]),
                 ty => abi_type(ty, &prefix, &handles).map(|ty| vec![ty]),
             };
-            // An operation over a type SPB 17 cannot carry (maps, float arrays) has no entry yet.
+            // An operation over a type this bridge does not carry (maps, char and rat arrays) has no entry yet.
             if let (Some(registers), Some(results)) = (registers, results) {
                 let function = entry(native.symbol(), registers, results, true, NATIVE_FAILURES);
                 natives.insert(native.symbol().to_owned(), function);
@@ -231,6 +231,9 @@ pub fn atomic_value(suffix: &str) -> Option<Type> {
                 Type::Bool => ArrayLeaf::Bool,
                 Type::Str => ArrayLeaf::Str,
                 Type::Bytes => ArrayLeaf::Bytes,
+                Type::Float => ArrayLeaf::Float,
+                Type::Char => ArrayLeaf::Char,
+                Type::Rat => ArrayLeaf::Rat,
                 Type::Array(shape) => {
                     let depth = shape.depth.checked_add(1)?;
                     return Some(Type::Array(ArrayType { depth, ..shape }));
@@ -262,6 +265,7 @@ fn abi_type(ty: &abi::Type, prefix: &str, handles: &BTreeMap<String, u32>) -> Op
             let leaf = match abi_type(item, prefix, handles)? {
                 Type::Int => ArrayLeaf::Int,
                 Type::Bool => ArrayLeaf::Bool,
+                Type::Float => ArrayLeaf::Float,
                 Type::Str => ArrayLeaf::Str,
                 Type::Bytes => ArrayLeaf::Bytes,
                 Type::Array(shape) => {

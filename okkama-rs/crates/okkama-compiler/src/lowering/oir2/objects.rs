@@ -317,7 +317,10 @@ impl BodyLowerer<'_, '_> {
                 };
                 let value = self.take(value)?;
                 let function = self.context.functions[&thir::BodyOwner::Method { object: *object, method: *method }];
-                self.check_pending(value, self.context.objects[object], function)?;
+                // The system NativeFailure has no source declaration and is never pending.
+                if let Some(&declaration) = self.context.objects.get(object) {
+                    self.check_pending(value, declaration, function)?;
+                }
                 values.push(value);
                 function
             }

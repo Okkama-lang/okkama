@@ -299,7 +299,8 @@ through_low!(collections_batching_functional, "L05.batching.functional");
 through_low!(collections_persistent_list, "L09.collections.persistent-list");
 through_low!(caps_in_collections_and_closures, "L12.caps-in-collections-and-closures");
 through_low!(once_collections_heap_and_deque, "L09.collections.heap-and-deque");
-// compile_low: VAL_EQ_TYPE, a value comparison in collections/frequencies.
+// compile_low: ENTRY_FAILURE_MASK (#706), the witness entry of `CursorItems.cursor`; its scalar `val.eq`
+// loads since #710.
 through_low!(once_collections_frequencies, "L09.collections.frequencies");
 // Batching sources holding an Atomic: the constructor's fresh evidence (FRESH_PACKET).
 through_low!(batching_empty_and_nested, "L05.batching.empty-and-nested");

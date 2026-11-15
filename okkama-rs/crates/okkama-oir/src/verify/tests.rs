@@ -929,3 +929,35 @@ func @f(%value: Stop) -> void {
         rejected(&module, RuleId::T1);
     }
 }
+
+/// `catch e is NativeFailure` (#673): a catch type guarantees Error, and besides error enums and the Error role
+/// the language admits only the system NativeFailure (spec 9.5); an object never implements Error (OIR-2 §9.4).
+fn native_failure_catch(fields: &str) -> Module {
+    let source = include_str!("../own/tests/lowering/s3-catch.oir")
+        .replace("enum app.Stop is Error = (now)\n",
+            &format!("enum app.Stop is Error = (now)\nobject NativeFailure {{\n{fields}}}\n"))
+        .replace("binding b0 \"e\": app.Stop in S2", "binding b0 \"e\": NativeFailure in S2")
+        .replace("catch %2 is app.Stop,", "catch %2 is NativeFailure,")
+        .replace("^b5(%4: failure, %5: app.Stop)", "^b5(%4: failure, %5: NativeFailure)");
+    crate::text::parse(&source).unwrap()
+}
+
+/// The diagnostics of the catch rule (the fixture's High result metadata is out of scope here).
+fn catch_rule_rejects(module: &Module) -> bool {
+    verify(module).err().is_some_and(|report| report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.rule == RuleId::T1 && diagnostic.message.contains("catch needs an Error type")
+    }))
+}
+
+#[test]
+fn only_the_system_native_failure_object_is_a_catch_type() {
+    let canonical = "    field domain: str\n    field code: str\n    field operation: str\n    field message: str\n";
+    assert!(!catch_rule_rejects(&native_failure_catch(canonical)));
+    // Another shape under the same name is an ordinary object, which never implements Error.
+    let renamed = canonical.replace("field code: str", "field kind: str");
+    let extra = format!("{canonical}    field port: int\n");
+    let retyped = canonical.replace("field domain: str", "field domain: int");
+    for fields in [renamed, extra, retyped] {
+        assert!(catch_rule_rejects(&native_failure_catch(&fields)), "{fields}");
+    }
+}

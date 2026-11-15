@@ -307,6 +307,41 @@ impl Declarations {
                     vec![this.types[&ty::Ty::Str]], vec![], source.program.module.span)?);
             }
         }
+        // The system NativeFailure (language spec 9.5), when a body names it: the payload a native failure
+        // carries and `catch e is NativeFailure` binds. Source never constructs it.
+        let native_failure = ty::Ty::object(reg.system.native_failure);
+        let mut uses_native_failure = all_bodies.iter()
+            .any(|body| body.locals.iter().any(|local| local.ty == native_failure));
+        for body in &all_bodies {
+            super::walk::block(&body.block, &mut |expr| {
+                uses_native_failure |= expr.ty.as_ref() == Some(&native_failure);
+            });
+        }
+        if uses_native_failure {
+            let text = this.types[&ty::Ty::Str];
+            let fields = ir::NATIVE_FAILURE_FIELDS.iter().map(|&name| ir::Field {
+                name: name.into(), ty: text, default: None, once: false,
+            }).collect();
+            let declaration = this.builder.declare(ir::Declaration {
+                name: ir::NATIVE_FAILURE.into(), type_params: vec![], loc: None,
+                kind: ir::DeclarationKind::Object { fields, witnesses: vec![], destroy: None, builtin: false },
+            })?;
+            let lowered = this.builder.intern_type(ir::Type::Object { decl: declaration, args: vec![] })?;
+            this.types.insert(native_failure, lowered);
+            // Its actions read its fields, `text()` the message, as in Tomato; they are methods of the object, so
+            // they hold its field authority.
+            for (method, &name) in crate::analysis::registry::NATIVE_FAILURE_METHODS.iter().enumerate() {
+                let field = if name == "text" { "message" } else { name };
+                let index = ir::NATIVE_FAILURE_FIELDS.iter().position(|&known| known == field)
+                    .expect("a NativeFailure field") as u32;
+                let getter = super::builtin_roles::function(&mut this, declaration, name, vec![lowered], text, false,
+                    |builder, _| {
+                        let receiver = builder.block_params(builder.entry())?[0];
+                        super::builtin_roles::get(builder, receiver, declaration, index)
+                    })?;
+                this.functions.insert(thir::BodyOwner::Method { object: reg.system.native_failure, method }, getter);
+            }
+        }
         if reg.test_mode {
             this.declare_test_intrinsics(&all_bodies, source.program.module.span)?;
         }

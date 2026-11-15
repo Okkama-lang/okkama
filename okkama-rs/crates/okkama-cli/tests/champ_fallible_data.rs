@@ -179,7 +179,10 @@ main() is int {{
 
 #[test]
 fn value_equality_failures_report_tomato_messages() {
-    for (ty, one) in [("string", "\"x\""), ("int", "1")] {
+    // #713: an unbound raw scalar field (float, bool, byte, char) is detected as in Tomato.
+    let cases = [("string", "\"x\""), ("int", "1"), ("float", "1.5"), ("bool", "true"), ("byte", "7.byte()"),
+        ("char", "'x'")];
+    for (ty, one) in cases {
         let text = early_equality(ty, one);
         let bytes = compile(&text).unwrap_or_else(|error| panic!("{error}"));
         let limits = sparrow_core::budget::Limits { steps: Some(100_000), ..sparrow_core::budget::Limits::default() };

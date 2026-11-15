@@ -92,9 +92,12 @@ impl Driver<'_, '_> {
         self.record_failure(failed, target)?;
         let mut normal = emission.normal;
         normal.env.cleanup.primary_before_failure = None;
-        if let (Some(original), Some(_)) = (instruction.results.first(), result) {
+        if let (Some(original), Some(ty)) = (instruction.results.first(), result) {
             let value = normal.result(SlotName::Value)?;
-            normal.env.values.insert(*original, LatestValue { value, deps: None });
+            // A managed outcome (a role value of a plain object) carries the await's full deps: the cache
+            // service key and the outcome's external deps (`PreserveFullDependencies`).
+            let deps = if self.managed(ty) { Some(normal.result(SlotName::Deps)?) } else { None };
+            normal.env.values.insert(*original, LatestValue { value, deps });
         }
         Ok(normal)
     }

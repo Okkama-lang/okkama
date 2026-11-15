@@ -286,3 +286,11 @@ fn champ_cases_managed_collections_and_variants() {
 fn champ_cases_construction_completion() {
     check(&["L04.equality.cyclic-graphs", "L04.invariant.early-self-in-blocks"]);
 }
+
+/// Single blockers of the wave-4 conformance run (#710): an `Atomic` of a float array (the registered
+/// specializations cover float, char and rat leaves), a literal choice whose other arm holds a collection
+/// the join's empty type cannot take, and natives over float arrays.
+#[test]
+fn champ_cases_wave4_single_blockers() {
+    check(&["L02.equality.signed-zero-composite", "L05.choice.empty-collections", "L09.statistics.exact-samples"]);
+}
