@@ -168,6 +168,12 @@ language.
   while writing: #743 (`rat.numerator()`/`denominator()` return strings).
   Many "To add" notes below are already written (14.8 iteration, 16.6
   protocol, 12.11 domain model, 11.11 pool, 20.12 pool and pipeline).
+- 2026-11-16: 27.8–27.10 Python, Swift, Erlang; 5.12 floating point in
+  practice (`05-kahan`, checked against Python); 3.13 the weaknesses each
+  rule removes (CWE classes, titles checked at MITRE); 11.11 replacing a
+  resource (`11-rotation`: rebinding keeps old values, a fold releases);
+  2.11 values come back (Evans, Bloch, records); 8.8 sorting worked through
+  (`08-sorting`); 28.1 the gap the book found (#743).
 
 - 2026-11-15 (idle work during the 0.6.0 rebuild): worked examples or
   comparison sections added to chapters 1–6, 8, 9, 11, 14–16 (harbour,
