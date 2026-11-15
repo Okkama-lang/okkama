@@ -340,22 +340,22 @@ fn a_fixed_root_publishes_its_value_with_an_empty_packet_and_deps_taken_before_i
 }
 
 #[test]
-fn a_fixed_root_whose_exit_follows_a_close_instruction_takes_its_deps_before_the_close() {
-    let close = concat!(
-        "    invoke.own scope.end %11, effects scope_effects(failures=[], suspends=false, cancel=true)\n",
-        "        normal ^b4($closed, %8)\n        unwind ^b5($closed, $failure)\n");
-    let source = edited(PLAIN, close, concat!(
-        "    %closed: closed = scope.end %11, effects scope_effects(failures=[], suspends=false, cancel=false)\n",
-        "    br ^b4(%closed, %8)\n"));
-    let source = edited(&source, "    ^b5(%22: closed, %23: failure) in S1:\n    raise %23\n",
-        "    ^b5 in S1:\n    unreachable\n");
-    // The exit block follows the close through a branch: the deps are taken before the close instruction.
+fn a_fixed_root_whose_exit_follows_its_close_through_a_branch_takes_its_deps_before_the_close() {
+    // D18 (#695): the successful close of an async root carries cancel=true, so it is an invoke with an unwind edge
+    // and never a close instruction. Its normal edge may still reach the exit block through a branch.
+    let source = edited(PLAIN, "        normal ^b4($closed, %8)\n", "        normal ^b6($closed, %8)\n");
+    let source = edited(&source, "    ^b5(%22: closed, %23: failure) in S1:\n    raise %23\n}",
+        "    ^b5(%22: closed, %23: failure) in S1:\n    raise %23\n    \
+        ^b6(%24: closed, %25: int) in S1:\n    br ^b4(%24, %25)\n}");
+    // The exit block follows the close through a branch: the deps are taken at the end of the closing block.
     let output = lowered("root-close", &source);
     let body = body(&output, "main");
     let (block, position, _) = body.insts.iter().find_map(|(_, inst)| match &inst.op {
         Operation::Async(AsyncOp::FuturePublish { outcome: PublishOutcome::Success { deps, .. }, .. }) => Some(*deps),
         _ => None,
     }).map(|deps| definition(body, deps)).unwrap();
-    let next = body.insts.get(body.blocks.get(block).unwrap().insts[position + 1]).unwrap();
-    assert!(matches!(next.op, Operation::Ownership(OwnershipOp::ScopeEnd { .. })));
+    let data = body.blocks.get(block).unwrap();
+    assert_eq!(position + 1, data.insts.len());
+    let TermKind::InvokeOwn { op, .. } = &data.term.kind else { panic!("the deps block ends with the close") };
+    assert!(matches!(**op, Operation::Ownership(OwnershipOp::ScopeEnd { .. })));
 }

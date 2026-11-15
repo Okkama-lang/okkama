@@ -339,3 +339,77 @@ fn an_open_delivery_is_decided_before_finish() {
         && diagnostic.primary.entity == EntityLocation::Instruction { function: work, instruction: finish });
     assert!(found, "{:?}", diagnostics(&output));
 }
+
+/// C-3 (#695): a settle step never takes the task or the receipt of an await unwind edge; those reach only
+/// `await.unwind`. Here the unwind close of main settles them instead of the adapter consuming them.
+#[test]
+fn a_settle_step_never_takes_an_await_task() {
+    let (name, coro, _) = GOLDENS[PLAIN];
+    let mut output = lowered(name, coro);
+    let main = function_id(&output, "main");
+    let mut body = output.functions.get_mut(main).unwrap().body.take().unwrap();
+    let (block, position) = body.blocks.iter().find_map(|(id, data)| data.insts.iter().position(|inst| {
+        matches!(body.insts.get(*inst).unwrap().op, Operation::Async(AsyncOp::AwaitUnwind { .. }))
+    }).map(|position| (id, position))).unwrap();
+    let insts = body.blocks.get(block).unwrap().insts.clone();
+    let save = body.insts.get(insts[position - 1]).unwrap().clone();
+    let unwind = body.insts.get(insts[position]).unwrap().clone();
+    let resume = body.insts.get(insts[position + 1]).unwrap().clone();
+    let Operation::Async(AsyncOp::FrameSave { frame, slots, .. }) = &save.op else { panic!("a save brackets it") };
+    let Operation::Async(AsyncOp::AwaitUnwind { state, failure, task, receipt, .. }) = unwind.op else {
+        unreachable!();
+    };
+    let cache = slots[0].value;
+    let mut editor = FunctionEditor::new(&mut output, &mut body);
+    for (old, new) in [(resume.results[0], *frame), (resume.results[1], cache), (unwind.results[0], state),
+        (unwind.results[1], failure)] {
+        editor.replace_uses(old, new).unwrap();
+    }
+    body.blocks.get_mut(block).unwrap().insts.drain(position - 1..position + 2);
+    // The bracket of await.unwind is the last continuation of main; it goes with the adapter.
+    let site = SuspendSite::Instruction(insts[position]);
+    body.frame_layout.as_mut().unwrap().continuations.retain(|continuation| continuation.site != site);
+    let settle = body.blocks.get(block).unwrap().insts[position];
+    let Operation::Cleanup(CleanupOp::Settle { cleanup: begun, protocol, .. }) = body.insts.get(settle).unwrap().op
+    else {
+        panic!("the begin of the unwind close is followed by its settle");
+    };
+    let ty = body.values.get(begun).unwrap().ty;
+    let mut previous = begun;
+    let mut steps = Vec::new();
+    for holder in [task, receipt] {
+        let inst = body.insts.alloc(Instruction {
+            results: vec![], op: Operation::Cleanup(CleanupOp::Settle { cleanup: previous, holder, protocol }),
+            facts: InstructionFacts::default(), loc: None,
+        }).unwrap();
+        previous = body.values.alloc(ValueData {
+            ty, def: Definition::InstResult { inst, index: 0 }, facts: ValueFacts::Service,
+        }).unwrap();
+        body.insts.get_mut(inst).unwrap().results = vec![previous];
+        steps.push(inst);
+    }
+    let Operation::Cleanup(CleanupOp::Settle { cleanup, .. }) = &mut body.insts.get_mut(settle).unwrap().op else {
+        unreachable!();
+    };
+    *cleanup = previous;
+    let data = body.blocks.get_mut(block).unwrap();
+    data.insts.splice(position..position, steps);
+    for (_, schedule) in body.cleanup.schedules.iter_mut() {
+        if schedule.holders == [cache] {
+            schedule.holders = vec![task, receipt, cache];
+        }
+    }
+    body.cleanup.roots = Arena::new();
+    compact::compact(&mut body).unwrap();
+    output.functions.get_mut(main).unwrap().body = Some(body);
+    rebuild_roots(&mut output, "main");
+    let body = output.functions.get(main).unwrap().body.as_ref().unwrap();
+    let task_state = Ok(&Type::Service(ServiceType::TaskState));
+    let first = body.insts.iter().find(|(_, inst)| matches!(inst.op,
+        Operation::Cleanup(CleanupOp::Settle { holder, .. })
+            if body.values.get(holder).is_ok_and(|value| output.types.get(value.ty) == task_state)))
+        .map(|(id, _)| id).unwrap();
+    let found = diagnostics(&output).into_iter().any(|diagnostic| diagnostic.rule == RuleId::B91
+        && diagnostic.primary.entity == EntityLocation::Instruction { function: main, instruction: first });
+    assert!(found, "{:?}", diagnostics(&output));
+}
