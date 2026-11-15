@@ -72,6 +72,39 @@ pub fn open_callable_protocol() -> ProtocolDecl {
     }
 }
 
+/// The Services protocol of plain async (elaboration D16, async ABI D24.2 and
+/// D24.4). Own names it in every `await.unwind` and cache schedule, so a module
+/// whose bodies hold Futures declares it once:
+/// - a cache duty settles into its owner scope, or detaches a running Future to
+///   the root registry (D24.2, parity);
+/// - an await receipt settles into the awaiting scope (C-3).
+///
+/// Spawned-task duties (`frame → root`, P1) and the D23 families arrive with
+/// their slices.
+pub fn services_protocol() -> ProtocolDecl {
+    let checks = vec![ProtocolCheck::Owner, ProtocolCheck::LiveDependencies];
+    let settle = |from: HolderKind, holder: HolderKind, state: HolderState| ProtocolRule {
+        transition: ProtocolTransition::Settle,
+        from,
+        to: holder,
+        checks: checks.clone(),
+        normal: ProtocolPoststate { holder, state },
+        unwind: None,
+        cancel: None,
+    };
+    ProtocolDecl {
+        kind: ProtocolKind::Services,
+        holders: vec![HolderKind::Scope, HolderKind::Cache, HolderKind::Frame, HolderKind::Receipt,
+            HolderKind::RootRegistry],
+        rules: vec![
+            settle(HolderKind::Cache, HolderKind::Scope, HolderState::Settled),
+            settle(HolderKind::Receipt, HolderKind::Scope, HolderState::Settled),
+            settle(HolderKind::Cache, HolderKind::RootRegistry, HolderState::Running),
+        ],
+        roots: vec![],
+    }
+}
+
 /// The first declaration of the module that is exactly the open Closure protocol.
 pub fn open_callable_protocol_id(module: &Module) -> Option<ProtocolId> {
     let expected = open_callable_protocol();

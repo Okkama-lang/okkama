@@ -455,10 +455,14 @@ impl Engine<'_, '_> {
             .chain(reserve.into_iter().flat_map(|value| &before.tokens[value.as_u32() as usize].pieces))
             .cloned().collect();
         let mut required = self.required_effects(&pieces, before);
-        let has_services = before.tokens.iter().enumerate().any(|(index, token)| {
-            before.availability[index] == AVAILABLE && token.service.is_some()
+        // A cache-state token settles by the parity protocol of async ABI D24.2: it adds neither suspension nor
+        // failures, and the cleanup effects of its outcome come with its duty in the inventory (D12, B10.4). Any
+        // other service token keeps the unknown effects.
+        let unknown = before.tokens.iter().enumerate().any(|(index, token)| {
+            before.availability[index] == AVAILABLE
+                && token.service.is_some_and(|origin| !self.cache_state(origin))
         });
-        if has_services {
+        if unknown {
             required.suspends = true;
             required.failures = vec![
                 FailureKind::Thrown, FailureKind::Program, FailureKind::Panic, FailureKind::Native,
@@ -551,6 +555,22 @@ impl Engine<'_, '_> {
             Ok(Operation::Async(AsyncOp::FutureNew { result, .. })) => Some(*result),
             _ => None,
         }
+    }
+
+    /// Whether a service token is the cache-state result of a `fut.new` (C-1).
+    fn cache_state(&self, service: Origin) -> bool {
+        let (Origin::Instruction(inst, index) | Origin::RetiredInstruction(inst, index)) = service else {
+            return false;
+        };
+        let Ok(instruction) = self.body.insts.get(inst) else {
+            return false;
+        };
+        if !matches!(instruction.op, Operation::Async(AsyncOp::FutureNew { .. })) {
+            return false;
+        }
+        let cache = index.checked_sub(0x8000_0000).and_then(|index| instruction.results.get(index as usize));
+        cache.and_then(|cache| self.body.values.get(*cache).ok())
+            .is_some_and(|value| self.module.types.get(value.ty) == Ok(&Type::Service(ServiceType::CacheState)))
     }
 
     fn origin_types(&self, origin: Origin, piece: &Piece, flow: &Flow) -> Vec<TypeId> {

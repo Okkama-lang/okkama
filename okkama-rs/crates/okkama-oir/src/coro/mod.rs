@@ -10,10 +10,13 @@
 //! - saves the values that are live after the operation and are not its operands; the duties of a
 //!   service schedule count as used at every close site of their owner scope (D20, review B4);
 //! - emits the D21 frame layout, whose per-scope area the loader derives from the lexical scopes;
-//! - publishes the body outcome through `fut.publish` at every exit (C-2).
+//! - publishes the body outcome through `fut.publish` at every exit (C-2). A fixed root (`async main`, an
+//!   async test: observation ABI, no exit transaction) publishes its value with an empty packet and the
+//!   value's deps, taken before its scope closes.
 //!
 //! In every function, `fut.new` keeps its deferred or external environment and gains the owner's
-//! `cache-state` (C-1); every close of the owner scope names those duties in a service schedule.
+//! `cache-state` (C-1). Own declares the Services schedules (D16); the pass renames each Future of them to
+//! its token, and every close of the owner names the versions of the tokens that reach it, in own's order.
 mod body;
 mod graph;
 mod layout;

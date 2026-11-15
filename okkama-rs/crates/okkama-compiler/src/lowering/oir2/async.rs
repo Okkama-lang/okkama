@@ -98,6 +98,25 @@ fn envelope(parameters: usize, results: Vec<ir::TypeId>, creation: bool) -> ir::
     }
 }
 
+/// Declares the registered Services protocol (`okkama_oir::catalogue::services_protocol`) once in a
+/// module whose bodies hold a Future. Own names it in every `await.unwind` and in the D16 schedule of
+/// each cache duty (elaboration §13.3, D16); like the open Closure protocol (#569), a registered
+/// protocol is declared by the producer, never inferred from a spelling. A module without Futures,
+/// such as one whose only async entry is a test, declares nothing.
+pub(super) fn attach_services(module: &mut ir::Module) -> Result<()> {
+    let declared = module.protocols.iter().any(|(_, protocol)| protocol.kind == ir::ProtocolKind::Services);
+    if declared {
+        return Ok(());
+    }
+    let holds_future = module.functions.iter().filter_map(|(_, function)| function.body.as_ref()).any(|body| {
+        body.values.iter().any(|(_, value)| matches!(module.types.get(value.ty), Ok(ir::Type::Future(_))))
+    });
+    if holds_future {
+        module.protocols.alloc(ir::catalogue::services_protocol())?;
+    }
+    Ok(())
+}
+
 /// The owners whose async bodies plain async lowers: actions, `async main` and async tests.
 /// `async destroy` belongs to slice D1.
 pub(super) fn check_owner(registry: &Registry<'_>, body: &thir::Body) -> Result<()> {

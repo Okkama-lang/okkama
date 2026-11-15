@@ -475,3 +475,74 @@ fn oir2_v5_bound_async_action_values_keep_their_diagnostic() {
         Some("work(1)"),
     );
 }
+
+/// One W1 High golden through High -> verify_high -> own (V2) -> verify_own (Full) -> coro (V3)
+/// -> verify_coro (Full), plan §4 V2, V3 and V10. `Err` names the stage that stopped.
+fn w1_high_to_coro(id: &str) -> Result<ir::Module, String> {
+    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/lowering/oir2/goldens/p2_5");
+    let text = std::fs::read_to_string(directory.join(format!("{id}.oir"))).unwrap();
+    let high = ir::text::parse(&text).map_err(|error| format!("parse: {error:?}"))?;
+    let verify = ir::verify::VerifyOptions { mode: ir::verify::VerifyMode::Full, ..Default::default() };
+    let catalog = super::native_summaries::P1NativeSummaries::for_module(&high)
+        .map_err(|error| format!("contracts: {error:?}"))?;
+    let context = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
+    ir::verify::verify_high_with(&high, &verify, context).map_err(|error| format!("verify_high: {error:?}"))?;
+    let options = ir::own::OwnOptions { verify: verify.clone(), ..ir::own::OwnOptions::default() };
+    let inferred = ir::own::elaborate_ownership(high, &catalog, &options)
+        .map_err(|error| format!("own_elaborate: {error:?}"))?;
+    let own = ir::own::rewrite_subset(inferred, &options).map_err(|error| format!("own_rewrite: {error:?}"))?;
+    let catalog = super::native_summaries::P1NativeSummaries::for_module(&own.module)
+        .map_err(|error| format!("contracts_own: {error:?}"))?;
+    let context = || ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
+    ir::verify::verify_own_with(&own.module, &verify, context()).map_err(|error| format!("verify_own: {error:?}"))?;
+    let coro = ir::coro::lower_coro(own.module, &ir::coro::CoroOptions::default())
+        .map_err(|error| format!("coro: {error}"))?;
+    ir::verify::verify_coro_with(&coro, &verify, context()).map_err(|error| format!("verify_coro: {error:?}"))?;
+    Ok(coro)
+}
+
+macro_rules! w1_reaches_verified_coro {
+    ($($test:ident => $id:literal,)*) => {
+        /// The W1 cases that have an end-to-end test below.
+        const W1_CORO: [&str; 8] = [$($id,)*];
+        $(
+            #[test]
+            fn $test() {
+                w1_high_to_coro($id).unwrap_or_else(|error| panic!("{}: {error}", $id));
+            }
+        )*
+    };
+}
+
+w1_reaches_verified_coro! {
+    oir2_w1_await_in_async_main_reaches_verified_coro => "L08.await.in-async-main",
+    oir2_w1_failure_rethrown_at_every_await_reaches_verified_coro => "L08.failure.rethrown-at-every-await",
+    oir2_w1_future_lazy_and_cached_reaches_verified_coro => "L08.future.lazy-and-cached",
+    oir2_w1_future_never_awaited_reaches_verified_coro => "L08.future.never-awaited",
+    oir2_w1_future_passed_and_awaited_elsewhere_reaches_verified_coro => "L08.future.passed-and-awaited-elsewhere",
+    oir2_w1_order_across_suspension_reaches_verified_coro => "L08.order.across-suspension",
+    oir2_w1_order_lazy_branches_reaches_verified_coro => "L08.order.lazy-branches",
+    oir2_w1_void_await_for_effect_reaches_verified_coro => "L08.void.await-for-effect",
+}
+
+#[test]
+fn oir2_w1_every_case_reaches_verified_coro() {
+    assert_eq!(W1_CORO, W1);
+}
+
+fn services(module: &ir::Module) -> Vec<ir::ProtocolDecl> {
+    module.protocols.iter().filter(|(_, protocol)| protocol.kind == ir::ProtocolKind::Services)
+        .map(|(_, protocol)| protocol.clone()).collect()
+}
+
+#[test]
+fn oir2_v5_a_module_that_holds_futures_declares_the_services_protocol_once() {
+    // D16: own names the registered Services protocol in every await.unwind and cache schedule. Like the open
+    // Closure protocol (#569), the producer declares it, once, from okkama-oir's catalogue.
+    let module = lower(concat!("module app; object J { J(); async run() is int { 1; } } ",
+        "async main() is int { let f = J().run(); (await f) + (await J().run()); }"));
+    assert_eq!(services(&module), [ir::catalogue::services_protocol()]);
+    // An async entry alone creates no Future and needs no Services protocol.
+    let module = lower("module app; async main() is int { 5; }");
+    assert_eq!(services(&module), []);
+}

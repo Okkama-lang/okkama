@@ -88,23 +88,41 @@ pub(super) fn check_boundary(module: &Module, id: FuncId, budget: &mut Budget<'_
 /// Plain async: the language inputs and the outcome of an async entry own
 /// nothing. Cold fresh inputs (#587) and cache-owned outcome packets arrive
 /// with R1.
+///
+/// A Future input is plain when its outcome is: its cache duty stays in the
+/// owner state (D12) and never travels through an argument offer (OIR-2
+/// §10.2), so passing it offers only its deps (`future.passed-and-awaited-
+/// elsewhere`). Returning a Future escapes its owner and needs `cache.rehome`
+/// (R1), so a Future outcome stays resource-bearing.
 pub(super) fn check_plain(
     module: &Module,
     function: &Function,
     types: &BTreeMap<TypeId, TypeClassification>,
 ) -> Result<(), OwnError> {
-    let owns = |ty: &TypeId| types.get(ty).is_none_or(TypeClassification::may_own);
-    if language(module, &function.signature.params).iter().any(owns) {
+    let offers = |ty: &TypeId| types.get(ty).is_none_or(|classification| offers_obligation(module, classification));
+    if language(module, &function.signature.params).iter().any(offers) {
         return Err(unsupported_async(format!(
             "resource-bearing async input of {}: cold Future inputs arrive with R1", function.symbol,
         )));
     }
+    let owns = |ty: &TypeId| types.get(ty).is_none_or(TypeClassification::may_own);
     if language(module, &function.signature.results).iter().any(owns) {
         return Err(unsupported_async(format!(
             "resource-bearing async outcome of {}: cache-owned outcome packets arrive with R1", function.symbol,
         )));
     }
     Ok(())
+}
+
+/// Whether a language input of this classification may offer an obligation to
+/// a cold Future: a resource, an unresolved type, a managed descriptor or a
+/// service holder other than a Future. A Future's outcome is a child of its
+/// type, so what the outcome owns is still seen.
+fn offers_obligation(module: &Module, classification: &TypeClassification) -> bool {
+    !classification.reachable_resources.is_empty()
+        || !classification.unresolved.is_empty()
+        || classification.descriptors.iter().any(|descriptor| descriptor.managed != DescriptorManaged::Plain)
+        || classification.service_types.iter().any(|ty| !is_future(module, *ty))
 }
 
 /// The creation summary of an async entry (elaboration H6, §3.3; plan §3.2).

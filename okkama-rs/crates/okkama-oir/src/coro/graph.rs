@@ -63,6 +63,22 @@ pub(super) fn push_argument(term: &mut TermKind, target: BlockId, value: ValueId
     apply(term, target_edge, invoke_edge);
 }
 
+/// The argument at `index` of the first edge of `term` that enters `target`.
+pub(super) fn edge_argument(term: &TermKind, target: BlockId, index: usize) -> Option<EdgeArg> {
+    let found = std::cell::Cell::new(None);
+    let mut term = term.clone();
+    apply(&mut term, |edge| {
+        if edge.block == target && found.get().is_none() {
+            found.set(Some(edge.args.get(index).copied().map(EdgeArg::Value)));
+        }
+    }, |edge| {
+        if edge.block == target && found.get().is_none() {
+            found.set(Some(edge.args.get(index).copied()));
+        }
+    });
+    found.get().flatten()
+}
+
 fn apply(term: &mut TermKind, mut target: impl FnMut(&mut Target), mut invoke: impl FnMut(&mut InvokeEdge)) {
     match term {
         TermKind::CleanupNext { selected, done, .. } => {

@@ -256,6 +256,7 @@ fn lower(analysis: &Analysis<'_>) -> Result<ir::Module> {
     structure::finish(&mut module)?;
     test_profile::check(&module)?;
     open_calls::attach(&mut module, &calls.into_inner())?;
+    asynchronous::attach_services(&mut module)?;
     any::attach_descriptors(&mut module)?;
     structure::check(&module)?;
     once::check(&module)?;

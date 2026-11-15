@@ -145,15 +145,21 @@ fn async_v1_fixtures_roundtrip_and_verify_structurally() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Slice V3 fixtures: the hand-written own inputs, their coro goldens and the B9.5 negatives, all under the
-/// full verifier (OIR-2 §12: own → verify(own) → coro → verify(coro)).
+/// Slice V3 fixtures: the own inputs of the coro pass (V2's own goldens and the V2-shaped variants), their coro
+/// goldens and the B9.5 negatives, all under the full verifier (OIR-2 §12: own → verify(own) → coro →
+/// verify(coro)).
 #[test]
 fn async_v3_coro_fixtures_verify_fully() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/async");
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = manifest.join("tests/fixtures/async");
     let mut failures = Vec::new();
     for class in ["own", "coro", "coro-invalid"] {
         let mut paths: Vec<_> = fs::read_dir(root.join(class)).unwrap()
             .map(|entry| entry.unwrap().path()).collect();
+        if class == "own" {
+            paths.extend(fs::read_dir(manifest.join("src/own/tests/async-goldens")).unwrap()
+                .map(|entry| entry.unwrap().path()));
+        }
         paths.sort();
         assert!(!paths.is_empty(), "{class}");
         for path in paths {

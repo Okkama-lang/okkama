@@ -42,10 +42,15 @@ fn operations(body: &Body) -> Vec<&Operation> {
 // Reviewed expectations; changes require an explanation of the semantic difference.
 const WITNESSES: &[&str] = &[
     "async-await-failure",
+    "async-caught-throw",
     "async-never-awaited",
     "async-plain-await",
     "async-repeated-await",
     "async-void",
+    // The extra shapes of the coro pass (V3): its inputs are these own goldens.
+    "coro-nested-cold-await",
+    "coro-schedule-duty-live-across-await",
+    "coro-start-continuation",
 ];
 
 #[test]
@@ -63,6 +68,18 @@ fn reviewed_async_goldens_verify() {
             verify_own(module).unwrap_or_else(|report| panic!("{name}: {report:?}"));
             async_invariants(name, module);
         }
+    }
+}
+
+#[test]
+fn every_async_high_input_declares_the_registered_services_protocol() {
+    // D16: the producer declares the registered Services protocol (okkama_oir::catalogue), and so do these
+    // High inputs, so own sees the form that real producer output has.
+    for path in fixtures("async-high") {
+        let module = crate::text::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let services: Vec<_> = module.protocols.iter().filter(|(_, protocol)| protocol.kind == ProtocolKind::Services)
+            .map(|(_, protocol)| protocol.clone()).collect();
+        assert_eq!(services, [crate::catalogue::services_protocol()], "{}", path.display());
     }
 }
 

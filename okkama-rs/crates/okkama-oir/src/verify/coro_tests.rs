@@ -112,11 +112,16 @@ fn layout_machine_words_follow_service_layout_and_scope_area() {
 const PLAIN: &str = include_str!("../../tests/fixtures/async/coro/async-plain-await.oir");
 const FAILURE: &str = include_str!("../../tests/fixtures/async/coro/async-await-failure.oir");
 const REPEATED: &str = include_str!("../../tests/fixtures/async/coro/async-repeated-await.oir");
+const OWN_PLAIN: &str = include_str!("../own/tests/async-goldens/async-plain-await.oir");
 
 fn full(source: &str) -> Vec<RuleId> {
     let module = text::parse(source).unwrap_or_else(|error| panic!("{error}"));
+    full_module(&module)
+}
+
+fn full_module(module: &Module) -> Vec<RuleId> {
     let options = VerifyOptions { execution: ExecutionMode::Tests, ..VerifyOptions::default() };
-    match verify_with(&module, &options, VerifyContext::default()) {
+    match verify_with(module, &options, VerifyContext::default()) {
         Ok(_) => vec![],
         Err(report) => report.diagnostics.into_iter().map(|diagnostic| diagnostic.rule).collect(),
     }
@@ -131,21 +136,34 @@ fn coro_goldens_pass_the_full_verifier() {
 
 #[test]
 fn d21_bodies_keep_their_language_signature_in_continuation_zero() {
+    let work_body = "summary M4 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] \
+        results";
     let cases = [
         // B5.1: the summary results disagree with the published value.
-        (PLAIN, "call_contract(results=[int],\n    failures=", "call_contract(results=[str],\n    failures=",
-            RuleId::B51),
+        (PLAIN, "summary M4 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results \
+            [result_relation(provenance=unbound_result)] contract call_contract(results=[int],",
+            "summary M4 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results \
+            [result_relation(provenance=unbound_result)] contract call_contract(results=[str],", RuleId::B51),
         // B5.1: the summary has no parameter for the argument restored from continuation 0.
-        (PLAIN, "summary Mwb call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results",
-            "summary Mwb call-boundary results", RuleId::B51),
+        (PLAIN, work_body, "summary M4 call-boundary results", RuleId::B51),
         // T1: the deferred environment no longer matches the callee's start continuation.
-        (PLAIN, "function=@work, arguments=[%seven]", "function=@work, arguments=[]", RuleId::T1),
+        (PLAIN, "function=@work, arguments=[%4]", "function=@work, arguments=[]", RuleId::T1),
         // B5.1: the published failure has a kind that the body summary does not declare.
-        (FAILURE, "call_contract(results=[int],\n    failures=[thrown, program, panic, native, cancelled]",
-            "call_contract(results=[int],\n    failures=[program, panic, native, cancelled]", RuleId::B51),
+        (FAILURE, "summary M4 call-boundary results [result_relation(provenance=unbound_result)] contract \
+            call_contract(results=[int], failures=[thrown, cancelled]",
+            "summary M4 call-boundary results [result_relation(provenance=unbound_result)] contract \
+            call_contract(results=[int], failures=[cancelled]", RuleId::B51),
+        // B5.1, ruling 3: a fixed root keeps the observation ABI that its summary's entry kind states.
+        (PLAIN, "-> void [entry, async] abi observation summary(M9)", "-> void [entry, async] summary(M9)",
+            RuleId::B51),
+        // S3, ruling 3: the language signature of the D21 entry publishes its int.
+        (PLAIN, "fut.publish %35, success(value=%29, packet=%30, deps=%17)",
+            "fut.publish %35, success(packet=%30, deps=%17)", RuleId::S3),
     ];
     for (source, from, to, rule) in cases {
-        let rules = full(&edited(source, from, to));
+        let from = from.split_whitespace().collect::<Vec<_>>().join(" ");
+        let to = to.split_whitespace().collect::<Vec<_>>().join(" ");
+        let rules = full(&edited(source, &from, &to));
         assert!(rules.contains(&rule), "{rule:?} for {from:?}: {rules:?}");
     }
 }
@@ -154,17 +172,14 @@ fn d21_bodies_keep_their_language_signature_in_continuation_zero() {
 fn b95_variants_report_their_stable_codes() {
     let cases = [
         // D21: the save lists its slots in another order than the declared saved set.
-        (PLAIN, "continuation 1 at ^entry saves [1, 2]", "continuation 1 at ^entry saves [2, 1]",
+        (PLAIN, "continuation 1 at ^b1 saves [0, 1, 2]", "continuation 1 at ^b1 saves [1, 0, 2]",
             RuleId::CoroLayoutTypeMismatch),
-        // D21: the operand slots of the close omit the cache duty it settles.
-        (PLAIN, "continuation 2 at ^ok saves [] operands [1, 4, 2]", "continuation 2 at ^ok saves [] operands [1, 4]",
-            RuleId::CoroLayoutTypeMismatch),
-        // D21: the declared saved set of continuation 3 omits the slot that its save fills.
-        (PLAIN, "    continuation 3 at #90 saves [2] operands [1, 5, 6, 7]\n",
-            "    continuation 3 at #90 saves [] operands [1, 5, 6, 7]\n", RuleId::CoroLayoutTypeMismatch),
+        // D21: the declared saved set of continuation 2 omits the slot that its save fills.
+        (PLAIN, "    continuation 2 at #10 saves [2] operands [0, 4, 5, 6]\n",
+            "    continuation 2 at #10 saves [] operands [0, 4, 5, 6]\n", RuleId::CoroLayoutTypeMismatch),
         // A read of a saved value at an instruction after its resume.
-        (REPEATED, "    br ^second(%b0, %bd0, %q3r, %ar)",
-            "    %dup: int = int.add %a, %b0\n    br ^second(%b0, %bd0, %q3r, %ar)", RuleId::CoroReadAfterSave),
+        (REPEATED, "    br ^b4(%64, %65, %67, %14, %68, %69)",
+            "    %dup: int = int.add %12, %12\n    br ^b4(%64, %65, %67, %14, %68, %69)", RuleId::CoroReadAfterSave),
     ];
     for (source, from, to, rule) in cases {
         let rules = full(&edited(source, from, to));
@@ -172,16 +187,47 @@ fn b95_variants_report_their_stable_codes() {
     }
 }
 
+/// The coro output of plain-await whose final close of main declares a conservative suspending envelope.
+fn suspending_close() -> Module {
+    let close = "invoke.own scope.end %11, effects scope_effects(failures=[], suspends=false, cancel=true)";
+    let suspending = "invoke.own scope.end %11, effects scope_effects(failures=[], suspends=true, cancel=true)";
+    let source = edited(OWN_PLAIN, close, suspending);
+    let own = text::parse(&source).unwrap();
+    assert_eq!(full_module(&own), []);
+    crate::coro::lower_coro(own, &crate::coro::CoroOptions::default()).unwrap()
+}
+
+#[test]
+fn the_duties_of_a_suspending_close_are_its_tail_operand_slots() {
+    // D20, review B4: a suspending close settles the duties of its owner, so they are operand slots of its
+    // continuation after the close's own operands.
+    let mut module = suspending_close();
+    assert_eq!(full_module(&module), []);
+    let main = module.functions.iter().find(|(_, function)| function.symbol == "main").unwrap().0;
+    let body = module.functions.get_mut(main).unwrap().body.as_mut().unwrap();
+    let close = body.blocks.iter().find_map(|(block, data)| match &data.term.kind {
+        TermKind::InvokeOwn { op, .. } => matches!(**op, Operation::Ownership(OwnershipOp::ScopeEnd { .. }))
+            .then_some(block),
+        _ => None,
+    }).unwrap();
+    let layout = body.frame_layout.as_mut().unwrap();
+    let continuation = layout.continuations.iter_mut()
+        .find(|continuation| continuation.site == SuspendSite::Terminator(close)).unwrap();
+    let duty = continuation.operands.pop().unwrap();
+    assert!(layout.slots[duty as usize].linear);
+    assert!(full_module(&module).contains(&RuleId::CoroLayoutTypeMismatch));
+}
+
 #[test]
 fn a_duty_left_running_across_await_unwind_is_an_incomplete_saved_set() {
-    let source = edited(PLAIN, "    continuation 3 at #90 saves [2] operands [1, 5, 6, 7]\n",
-        "    continuation 3 at #90 saves [] operands [1, 5, 6, 7]\n");
-    let source = edited(&source, "frame.save %fr6, slots [frame_slot(slot=2, value=%c2, mode=consume)], continuation 3",
-        "frame.save %fr6, continuation 3");
-    let resume = concat!("    (%fr8: frame<@main>, %c3: cache-state) = frame.resume %fr7, continuation 3, ",
-        "slots [saved_slot(slot=2,\n        ty=cache-state, linear=true)]");
-    let source = edited(&source, resume, "    %fr8: frame<@main> = frame.resume %fr7, continuation 3");
-    let source = edited(&source, "duties [%c3]", "duties [%c2]");
+    let source = edited(PLAIN, "    continuation 2 at #10 saves [2] operands [0, 4, 5, 6]\n",
+        "    continuation 2 at #10 saves [] operands [0, 4, 5, 6]\n");
+    let source = edited(&source, "frame.save %42, slots [frame_slot(slot=2, value=%45, mode=consume)], continuation 2",
+        "frame.save %42, continuation 2");
+    let resume = concat!("(%25: frame<@main>, %26: cache-state) = frame.resume %22, continuation 2, ",
+        "slots [saved_slot(slot=2, ty=cache-state, linear=true)]");
+    let source = edited(&source, resume, "%25: frame<@main> = frame.resume %22, continuation 2");
+    let source = edited(&source, "duties [%26]", "duties [%45]");
     assert_eq!(full(&source), [RuleId::CoroSavedSetIncomplete]);
 }
 
@@ -210,15 +256,118 @@ fn only_a_failure_that_leaves_a_d21_body_must_be_published() {
     assert_eq!(structural(CAUGHT), []);
     assert_eq!(full(CAUGHT), []);
     assert_eq!(full(FAILURE), []);
-    let caught = "^throw(%e: Stop facts(plain(certificate=scalar)), %q2: scope<SW>) in SW";
-    for terminator in ["throw %e", "panic %e"] {
-        let source = edited(CAUGHT, "    throw %e\n", &format!("    {terminator}\n"));
+    let caught = "^b2(%7: scope<S0>, %8: Stop facts(plain(certificate=scalar))) in S0";
+    for terminator in ["throw %8", "panic %8"] {
+        let source = edited(CAUGHT, "    throw %8\n", &format!("    {terminator}\n"));
         assert!(!structural(&source).contains(&RuleId::CoroBodyRaises), "{terminator}");
         // Without its unwind edge the same terminator leaves the body unpublished.
-        let source = edited(&source, &format!("{caught} unwind ^thrown(%q2):"), &format!("{caught}:"));
+        let source = edited(&source, &format!("{caught} unwind ^b3(%7):"), &format!("{caught}:"));
         assert!(structural(&source).contains(&RuleId::CoroBodyRaises), "{terminator}");
     }
     // The raise after the lexical unwind leaves the body when the pass has not rewritten it.
-    let source = edited(CAUGHT, "    fut.publish %fr0, failure(%combined)\n    ret\n", "    raise %combined\n");
+    let source = edited(CAUGHT, "    fut.publish %1, failure(%11)\n    ret\n", "    raise %11\n");
     assert!(structural(&source).contains(&RuleId::CoroBodyRaises));
+}
+
+/// A sync owner that creates a Future of `@task` whose outcome R has a destroy that may throw, and closes
+/// its scope with `close`; lowered to coro by the pass (D16: own declares the schedule).
+fn cache_outcome(close: &str) -> Module {
+    cache_outcome_with("", close)
+}
+
+/// [`cache_outcome`] whose owner also takes the entry parameters `params`.
+fn cache_outcome_with(params: &str, close: &str) -> Module {
+    let source = format!("oir 2 own
+module cache_outcome
+protocol Services kind services holders [scope, cache] rules [protocol_rule(transition=settle, from=cache, to=scope,
+    checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled))]
+object R {{
+    destroy @R.destroy
+}}
+scope SD action in @R.destroy
+scope S action in @f
+summary Md internal contract call_contract(failures=[thrown], publication=atomic)
+summary Mt internal contract call_contract(results=[R], failures=[cancelled], suspends=true, publication=atomic)
+summary Mf internal contract call_contract(failures=[thrown], publication=atomic)
+func @R.destroy(%self: R) -> void [destroy R] summary(Md);
+func @task() -> R [async] summary(Mt);
+func @f({params}) -> void summary(Mf) {{
+    service.schedule Schedule0 owner S, protocol Services, duties [%t]
+    selection s0: selection = union([])
+    key k0: key = service_of(value=%t, kind=cache)
+    dependency d0: dependency = key(k0)
+^entry in S:
+    %q0: scope<S> = scope.begin S
+    %e: own = own.empty
+    (%l: own, %r: own, %deps: deps) = own.split %e, s0
+    %in: own = own.join [%l, %r]
+    (%t: future<R> facts(managed(deps=d0)), %q1: scope<S>) = fut.new %in, %deps, %q0, environment deferred(
+        function=@task), result R, owner S
+{close}
+}}
+");
+    let own = text::parse(&source).unwrap();
+    crate::coro::lower_coro(own, &crate::coro::CoroOptions::default()).unwrap()
+}
+
+/// The close of `cache_outcome` whose envelope states the cleanup effects of R exactly.
+const EXACT_CLOSE: &str = "    invoke.own scope.end %q1, effects scope_effects(failures=[thrown],
+        suspends=false, cancel=false)
+        normal ^done($closed)
+        unwind ^failed($closed, $failure)
+^done(%closed: closed) in S:
+    ret
+^failed(%closed2: closed, %failure: failure) in S:
+    raise %failure";
+
+fn close_rules(module: &Module) -> Vec<RuleId> {
+    let function = module.functions.iter().find(|(_, function)| function.symbol == "f").unwrap().0;
+    let options = VerifyOptions { execution: ExecutionMode::Tests, ..VerifyOptions::default() };
+    let report = verify_function(module, function, VerifyContext::default(), &options);
+    report.diagnostics.into_iter().map(|diagnostic| diagnostic.rule).collect()
+}
+
+#[test]
+fn a_cache_state_token_needs_the_cleanup_effects_of_its_outcome() {
+    // Async ABI D24.2 (ruling 4): no settle waits, and a settled Future releases its outcome into the owner's
+    // plan. The token adds no effect of its own; the close states exactly the cleanup effects of the outcome,
+    // which come with the duty in the inventory, in a sync owner too.
+    let exact = cache_outcome(EXACT_CLOSE);
+    assert_eq!(close_rules(&exact), []);
+    let understated = cache_outcome(concat!(
+        "    %closed: closed = scope.end %q1, effects scope_effects(failures=[], suspends=false, cancel=false)\n",
+        "    ret"));
+    assert_eq!(close_rules(&understated), [RuleId::B104]);
+    // Any other service token at the close keeps unknown cleanup effects.
+    let task = cache_outcome_with("%task: task-state", EXACT_CLOSE);
+    assert!(close_rules(&task).contains(&RuleId::B104), "{:?}", close_rules(&task));
+}
+
+/// A verifier state over `module`, as the verifier runs it.
+fn state<'a>(module: &'a Module, options: &'a VerifyOptions) -> State<'a> {
+    State {
+        module, options, context: VerifyContext::default(), diagnostics: vec![], stats: VerifyStats::default(),
+        incomplete: false, exhausted_limit: None, suppressed: 0, location: EntityLocation::Module, source_loc: None,
+        poisoned: std::collections::BTreeSet::new(), positions: std::collections::BTreeMap::new(),
+        edge_positions: std::collections::BTreeMap::new(), cleanup_origins: None,
+    }
+}
+
+#[test]
+fn the_cleanup_of_a_future_is_the_cleanup_of_its_outcome() {
+    // Async ABI D24.2: a Future's obligation is its cache duty, which never waits; a settled Future releases
+    // its outcome, so its cleanup effects are those of the outcome type.
+    let mut module = cache_outcome(EXACT_CLOSE);
+    let int = module.types.intern(Type::Int).unwrap();
+    let r = module.types.iter().find(|(_, ty)| matches!(ty, Type::Object { .. })).unwrap().0;
+    let futures = [Type::Future(Some(r)), Type::Future(Some(int)), Type::Future(None)]
+        .map(|ty| module.types.intern(ty).unwrap());
+    let options = VerifyOptions::default();
+    let mut state = state(&module, &options);
+    let body = module.functions.iter().find(|(_, function)| function.symbol == "f").unwrap().1.body.as_ref().unwrap();
+    let effects = futures.map(|ty| {
+        let effects = super::super::effects::cleanup(&module, body, ty, &mut state);
+        (effects.suspends, effects.failures)
+    });
+    assert_eq!(effects, [(false, vec![FailureKind::Thrown]), (false, vec![]), (false, vec![])]);
 }

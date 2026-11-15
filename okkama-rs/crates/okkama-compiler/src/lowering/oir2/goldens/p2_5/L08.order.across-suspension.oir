@@ -71,6 +71,7 @@ summary M12 call-boundary results [result_relation(provenance=unbound_result)] c
 summary M13 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], failures=[program, panic, native], publication=atomic)
 summary M14 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[array<byte>], failures=[native], publication=atomic)
 summary M15 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[native], publication=atomic)
+protocol P0 kind services holders [scope, cache, frame, receipt, root] rules [protocol_rule(transition=settle, from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root, checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running))]
 
 func @app.Job.new#0(%0: str, %1: int) -> app.Job [ctor app.Job] {
     binding b0 "name": str in S13
