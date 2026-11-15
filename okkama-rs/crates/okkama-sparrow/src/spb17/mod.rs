@@ -12,6 +12,7 @@ pub use evidence::{static_selections, plain_inputs, plain_results, redundant_adm
 mod automaton;
 pub use automaton::infer_plan_reserves;
 mod suspension;
+mod take;
 
 pub use allocation::{AllocatedRoot, Allocation, Copy, CopySource, allocate, check_allocation, live_locations};
 pub use codec::{assemble, decode, disassemble, encode};
@@ -390,13 +391,17 @@ pub enum ServiceKind {
     TaskState,
     /// An await receipt (NotStarted 0, Settled 1, Withdrawn 2, ChildCancelled 3): one raw word.
     Receipt,
+    /// The take capability of one Future (OIR `unique-cache`): linear, zero words. Only `unique_cache.proof`
+    /// produces it and only `await.take` consumes it (`SPB_TAKE_CAPABILITY`).
+    UniqueCache,
 }
 
 impl ServiceKind {
     /// A linear token: consumed exactly once on every path, never copied.
     pub fn linear(self) -> bool {
         matches!(self, Self::Packet | Self::ScopeState | Self::Pending | Self::Cleanup | Self::StableKey
-            | Self::FailureState | Self::ExitState | Self::Frame | Self::CacheState | Self::TaskState | Self::Receipt)
+            | Self::FailureState | Self::ExitState | Self::Frame | Self::CacheState | Self::TaskState | Self::Receipt
+            | Self::UniqueCache)
     }
 }
 
@@ -1175,6 +1180,8 @@ mod rules_tests;
 mod budget_tests;
 #[cfg(test)]
 mod async_tests;
+#[cfg(test)]
+mod async_resources_tests;
 #[cfg(test)]
 mod roles_tests;
 #[cfg(test)]

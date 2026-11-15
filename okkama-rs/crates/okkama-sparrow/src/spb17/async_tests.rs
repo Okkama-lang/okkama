@@ -10,42 +10,42 @@ use Argument as A;
 use Opcode as O;
 use ServiceKind as K;
 
-const FUTURE_INT: Type = Type::Future(0);
-const FUTURE_VOID: Type = Type::Future(1);
+pub(super) const FUTURE_INT: Type = Type::Future(0);
+pub(super) const FUTURE_VOID: Type = Type::Future(1);
 /// Scopes: 0 is @work's, 1 is @main's, 2 is a child of @main that no instruction opens, 3 is @consume's
 /// and 4 is @make's. Each scope's boundary has its index.
-const WORK: u32 = 0;
-const MAIN: u32 = 1;
-const INNER: u32 = 2;
-const CONSUME: u32 = 3;
-const MAKE: u32 = 4;
+pub(super) const WORK: u32 = 0;
+pub(super) const MAIN: u32 = 1;
+pub(super) const INNER: u32 = 2;
+pub(super) const CONSUME: u32 = 3;
+pub(super) const MAKE: u32 = 4;
 
-fn l(location: Location) -> Argument {
+pub(super) fn l(location: Location) -> Argument {
     A::Location(location)
 }
 
-fn p(slot: u32) -> Source {
+pub(super) fn p(slot: u32) -> Source {
     Source::ProducedSlot(slot)
 }
 
-fn s(location: Location) -> Source {
+pub(super) fn s(location: Location) -> Source {
     Source::Location(location)
 }
 
-fn value(ty: Type) -> FrameSlot {
+pub(super) fn value(ty: Type) -> FrameSlot {
     FrameSlot { ty: ProducedType::Value(ty), linear: false }
 }
 
-fn service(kind: ServiceKind) -> FrameSlot {
+pub(super) fn service(kind: ServiceKind) -> FrameSlot {
     FrameSlot { ty: ProducedType::Service(kind), linear: kind.linear() }
 }
 
 /// Builds one function block by block; edge targets stay labels until `finish`.
-struct Body {
-    f: Function,
+pub(super) struct Body {
+    pub(super) f: Function,
     labels: BTreeMap<&'static str, u32>,
     targets: Vec<(usize, usize, &'static str, Vec<Source>)>,
-    sites: BTreeMap<u32, u32>,
+    pub(super) sites: BTreeMap<u32, u32>,
     /// A counterexample: closes run the empty settle form before settling their duties.
     settle_empty_first: bool,
     /// How a cancelling close delivers its deferred cancellation: the D18 form or one counterexample.
@@ -77,7 +77,7 @@ enum Delivery {
 }
 
 impl Body {
-    fn new(symbol: &str, entry_abi: EntryAbi, results: Vec<Type>) -> Self {
+    pub(super) fn new(symbol: &str, entry_abi: EntryAbi, results: Vec<Type>) -> Self {
         let f = Function {
             symbol: symbol.into(), entry_abi, registers: vec![], services: vec![], params: vec![], results,
             blocks: vec![], proofs: FunctionProofs::default(), code: vec![],
@@ -87,44 +87,44 @@ impl Body {
     }
 
     /// An async body: its only parameter is its frame.
-    fn asynchronous(symbol: &str, layout: u32, results: Vec<Type>) -> (Self, Location) {
+    pub(super) fn asynchronous(symbol: &str, layout: u32, results: Vec<Type>) -> (Self, Location) {
         let mut body = Self::new(symbol, EntryAbi::AsyncBody { layout }, results);
         let frame = body.service(K::Frame);
         body.f.params = vec![frame];
         (body, frame)
     }
 
-    fn register(&mut self, ty: Type) -> Location {
+    pub(super) fn register(&mut self, ty: Type) -> Location {
         self.f.registers.push(ty);
         Location::Register(self.f.registers.len() as u32 - 1)
     }
 
-    fn service(&mut self, kind: ServiceKind) -> Location {
+    pub(super) fn service(&mut self, kind: ServiceKind) -> Location {
         self.f.services.push(kind);
         Location::Service(self.f.services.len() as u32 - 1)
     }
 
-    fn pc(&self) -> u32 {
+    pub(super) fn pc(&self) -> u32 {
         self.f.code.len() as u32
     }
 
-    fn block(&mut self, label: &'static str, params: &[Location]) {
+    pub(super) fn block(&mut self, label: &'static str, params: &[Location]) {
         self.labels.insert(label, self.pc());
         self.f.blocks.push(Block { pc: self.pc(), params: params.to_vec() });
     }
 
-    fn next(&mut self, op: Opcode, arguments: Vec<Argument>, outputs: Vec<Location>) {
+    pub(super) fn next(&mut self, op: Opcode, arguments: Vec<Argument>, outputs: Vec<Location>) {
         self.f.code.push(Instruction::Champ { op, arguments, flow: Flow::Next(outputs) });
     }
 
     /// One output of a new location of `kind`.
-    fn emit(&mut self, op: Opcode, arguments: Vec<Argument>, kind: ServiceKind) -> Location {
+    pub(super) fn emit(&mut self, op: Opcode, arguments: Vec<Argument>, kind: ServiceKind) -> Location {
         let output = self.service(kind);
         self.next(op, arguments, vec![output]);
         output
     }
 
-    fn constant(&mut self, constant: Constant, ty: Type) -> Location {
+    pub(super) fn constant(&mut self, constant: Constant, ty: Type) -> Location {
         let output = self.register(ty);
         let Location::Register(id) = output else { unreachable!() };
         self.f.code.push(Instruction::Data { op: DataOp::Const, inputs: vec![], output: Some(id),
@@ -132,7 +132,9 @@ impl Body {
         output
     }
 
-    fn outcomes(&mut self, op: Opcode, arguments: Vec<Argument>, edges: Vec<(Tag, &'static str, Vec<Source>)>) {
+    pub(super) fn outcomes(&mut self, op: Opcode, arguments: Vec<Argument>,
+        edges: Vec<(Tag, &'static str, Vec<Source>)>)
+    {
         let pc = self.f.code.len();
         let mut outcomes = Vec::new();
         for (ordinal, (tag, label, sources)) in edges.into_iter().enumerate() {
@@ -142,22 +144,32 @@ impl Body {
         self.f.code.push(Instruction::Champ { op, arguments, flow: Flow::Outcomes(outcomes) });
     }
 
-    fn br(&mut self, label: &'static str, sources: Vec<Source>) {
+    /// A branch on a bool register to `yes` or `no`.
+    pub(super) fn cond(&mut self, condition: Location, yes: &'static str, no: &'static str) {
+        let Location::Register(condition) = condition else { panic!("a condition is a register") };
+        let pc = self.f.code.len();
+        self.targets.push((pc, 0, yes, vec![]));
+        self.targets.push((pc, 1, no, vec![]));
+        let edge = Edge { target_pc: 0, assignments: vec![] };
+        self.f.code.push(Instruction::Cond { condition, yes: edge.clone(), no: edge });
+    }
+
+    pub(super) fn br(&mut self, label: &'static str, sources: Vec<Source>) {
         self.targets.push((self.f.code.len(), 0, label, sources));
         self.f.code.push(Instruction::Br(Edge { target_pc: 0, assignments: vec![] }));
     }
 
-    fn ret(&mut self) {
+    pub(super) fn ret(&mut self) {
         self.f.code.push(Instruction::Ret(vec![]));
     }
 
-    fn selection(&mut self) -> u32 {
+    pub(super) fn selection(&mut self) -> u32 {
         self.f.proofs.selections.push(Selection { locations: vec![] });
         self.f.proofs.selections.len() as u32 - 1
     }
 
     /// `frame.save` of continuation `k`, then the suspending operation at the site the layout names.
-    fn save(&mut self, frame: Location, k: u32, values: &[Location]) -> Location {
+    pub(super) fn save(&mut self, frame: Location, k: u32, values: &[Location]) -> Location {
         let mut arguments = vec![l(frame), A::Continuation(k)];
         arguments.extend(values.iter().copied().map(l));
         let saved = self.emit(O::FrameSave, arguments, K::Frame);
@@ -166,7 +178,7 @@ impl Body {
     }
 
     /// `frame.resume` of continuation `k`: the frame, then the saved values of `types`.
-    fn resume(&mut self, frame: Location, k: u32, types: &[ProducedType]) -> (Location, Vec<Location>) {
+    pub(super) fn resume(&mut self, frame: Location, k: u32, types: &[ProducedType]) -> (Location, Vec<Location>) {
         let resumed = self.service(K::Frame);
         let values = types.iter().map(|ty| match *ty {
             ProducedType::Value(ty) => self.register(ty),
@@ -183,7 +195,7 @@ impl Body {
     /// cancellation, it delivers it after the plan and runs the aborted reserve's executor plan. Returns the
     /// cleanup.finish outputs.
     #[allow(clippy::too_many_arguments)]
-    fn close(&mut self, state: Location, pending: Option<Location>, failure: Option<Location>, scope: u32,
+    pub(super) fn close(&mut self, state: Location, pending: Option<Location>, failure: Option<Location>, scope: u32,
         duties: &[Location], failures: u32, merge: bool) -> (Location, Location, Location)
     {
         let proofs = &mut self.f.proofs;
@@ -233,13 +245,13 @@ impl Body {
         (outputs[0], outputs[1], outputs[2])
     }
 
-    fn deliver(&mut self, cleanup: Location) -> Location {
+    pub(super) fn deliver(&mut self, cleanup: Location) -> Location {
         self.emit(O::CleanupDeliverCancel, vec![l(cleanup)], K::Cleanup)
     }
 
     /// One plan of close `close` and its evidence, then its executor when it merges. Returns the cleanup state
     /// after the plan has run.
-    fn plan(&mut self, cleanup: Location, close: u32, reserve: bool, merge: bool) -> Location {
+    pub(super) fn plan(&mut self, cleanup: Location, close: u32, reserve: bool, merge: bool) -> Location {
         let selection = self.selection();
         let proofs = &mut self.f.proofs;
         proofs.order_witnesses.push(OrderWitness { creation_pcs: vec![] });
@@ -256,7 +268,7 @@ impl Body {
     }
 
     /// The merge executor: destroy selected keys until done, capturing failures. Returns the done cleanup.
-    fn executor(&mut self, cleanup: Location) -> Location {
+    pub(super) fn executor(&mut self, cleanup: Location) -> Location {
         let [looping, selected, key, destroyed, failure_state, failed, failure, recorded, done] = [
             self.service(K::Cleanup), self.service(K::Cleanup), self.service(K::StableKey), self.service(K::Cleanup),
             self.service(K::FailureState), self.service(K::Cleanup), self.register(Type::Failure),
@@ -283,7 +295,7 @@ impl Body {
         done
     }
 
-    fn dispatch(&mut self, finished: (Location, Location, Location), flags: [bool; 3],
+    pub(super) fn dispatch(&mut self, finished: (Location, Location, Location), flags: [bool; 3],
         edges: Vec<(Tag, &'static str, Vec<Source>)>)
     {
         let (closed, failure, exit) = finished;
@@ -292,20 +304,22 @@ impl Body {
         self.outcomes(O::ExitDispatch, arguments, edges);
     }
 
-    fn finish(self) -> Function {
+    pub(super) fn finish(self) -> Function {
         let mut f = self.finish_unchecked();
         refresh(&mut f);
         f
     }
 
     /// Resolve the edges only; the proof maps stay empty.
-    fn finish_unchecked(mut self) -> Function {
+    pub(super) fn finish_unchecked(mut self) -> Function {
         for (pc, ordinal, label, sources) in std::mem::take(&mut self.targets) {
             let target = self.labels[label];
             let params = self.f.blocks.iter().find(|block| block.pc == target).unwrap().params.clone();
             let edge = match &mut self.f.code[pc] {
                 Instruction::Br(edge) => edge,
                 Instruction::Champ { flow: Flow::Outcomes(outcomes), .. } => &mut outcomes[ordinal].edge,
+                Instruction::Cond { yes, .. } if ordinal == 0 => yes,
+                Instruction::Cond { no, .. } => no,
                 _ => unreachable!("edge"),
             };
             edge.target_pc = target;
@@ -319,7 +333,7 @@ impl Body {
 /// The program around async bodies and their layouts; scopes as the constants above name them. A `main` with an
 /// input packet is an ordinary async body: a fixed root (the entry, a test) starts empty (#667), which
 /// `fixed_root_program` builds.
-fn program(functions: Vec<Function>, frames: Vec<FrameLayout>, entry: Option<u32>) -> Program {
+pub(super) fn program(functions: Vec<Function>, frames: Vec<FrameLayout>, entry: Option<u32>) -> Program {
     let scopes = [(0, None), (1, None), (1, Some(MAIN)), (2, None), (3, None)].into_iter()
         .filter(|&(function, _)| function < functions.len() as u32).collect::<Vec<_>>();
     let mut p = Program {
@@ -342,7 +356,7 @@ fn program(functions: Vec<Function>, frames: Vec<FrameLayout>, entry: Option<u32
 }
 
 /// Returns `n` through a direct close; the coro golden `async-plain-await`'s @work.
-fn work() -> (Function, FrameLayout) {
+pub(super) fn work() -> (Function, FrameLayout) {
     let (mut b, frame) = Body::asynchronous("work", 0, vec![Type::Int]);
     b.block("entry", &[frame]);
     let (body, start) = b.resume(frame, 0, &[ProducedType::Value(Type::Int), ProducedType::Service(K::Packet)]);
@@ -399,13 +413,13 @@ fn main_slots() -> Vec<FrameSlot> {
         service(K::TaskState), service(K::Receipt)]
 }
 
-fn slot_types(slots: &[FrameSlot], indices: &[u32]) -> Vec<ProducedType> {
+pub(super) fn slot_types(slots: &[FrameSlot], indices: &[u32]) -> Vec<ProducedType> {
     indices.iter().map(|&slot| slots[slot as usize].ty).collect()
 }
 
 /// Closes @main's scope after a failure, settling its duty, and publishes the failure.
 #[allow(clippy::too_many_arguments)]
-fn fail_close(b: &mut Body, body: Location, state: Location, failure: Location, duty: Location,
+pub(super) fn fail_close(b: &mut Body, body: Location, state: Location, failure: Location, duty: Location,
     pending: Option<Location>, label: &'static str, cancel: bool)
 {
     let failures = if cancel { ENVELOPE_CANCEL } else { 0 };
@@ -420,7 +434,8 @@ fn fail_close(b: &mut Body, body: Location, state: Location, failure: Location, 
 /// The await.unwind adapter of continuation `k` (form b), then the failure close. A pending return in
 /// slot 10 lives across the adapter too.
 #[allow(clippy::too_many_arguments)]
-fn adapter(b: &mut Body, slots: &[FrameSlot], frame: Location, k: u32, state: Location, unwind: [Location; 3],
+pub(super) fn adapter(b: &mut Body, slots: &[FrameSlot], frame: Location, k: u32, state: Location,
+    unwind: [Location; 3],
     duty: Location, pending: Option<Location>, label: &'static str, cancel: bool)
 {
     let mut values = vec![duty];
@@ -573,12 +588,12 @@ fn main_of(p: &mut Program) -> &mut Function {
     &mut p.functions[1]
 }
 
-fn find(f: &Function, op: Opcode) -> usize {
+pub(super) fn find(f: &Function, op: Opcode) -> usize {
     f.code.iter().position(|instruction| matches!(instruction, Instruction::Champ { op: found, .. } if *found == op))
         .unwrap()
 }
 
-fn arguments(f: &mut Function, pc: usize) -> &mut Vec<Argument> {
+pub(super) fn arguments(f: &mut Function, pc: usize) -> &mut Vec<Argument> {
     let Instruction::Champ { arguments, .. } = &mut f.code[pc] else { panic!("not a champ instruction") };
     arguments
 }
@@ -724,7 +739,7 @@ fn twice_program(keep_first: bool) -> Program {
 }
 
 /// Object 0: `Res`, an identity with a destroy.
-fn res() -> Object {
+pub(super) fn res() -> Object {
     Object {
         name: "Res".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false,
         role: None, implements: vec![], any_box: false, enum_names: vec![], fields: vec![],
@@ -735,7 +750,7 @@ fn res() -> Object {
 }
 
 /// The destroy entry of `Res`, declaring `failures`.
-fn destroy(failures: u32) -> Function {
+pub(super) fn destroy(failures: u32) -> Function {
     let mut b = Body::new("destroy", EntryAbi::Observation, vec![]);
     let target = b.register(Type::Object(0));
     b.f.params = vec![target];
@@ -813,7 +828,7 @@ fn make(merge: bool, failures: u32) -> Function {
     b.finish()
 }
 
-fn owner_program(merge: bool) -> Program {
+pub(super) fn owner_program(merge: bool) -> Program {
     owner_failing(merge, 0, 0)
 }
 
@@ -828,7 +843,7 @@ fn owner_failing(merge: bool, destroys: u32, envelope: u32) -> Program {
     p
 }
 
-fn reject_with(p: &Program, code: &'static str, message: &str) {
+pub(super) fn reject_with(p: &Program, code: &'static str, message: &str) {
     let failure = verify_load(p, &NoExternalContracts).unwrap_err();
     assert_eq!(failure.rule, code, "{failure}");
     assert!(failure.message.contains(message), "{failure}");
@@ -841,14 +856,15 @@ fn async_block_ids_follow_draft3() {
     let assigned = [(64, O::FutureNew, "fut.new"), (66, O::Await, "await"), (70, O::FuturePublish, "fut.publish"),
         (71, O::FutureCancel, "fut.cancel"), (72, O::FutureDone, "fut.done"), (73, O::FutureCancelled, "fut.cancelled"),
         (74, O::FrameSave, "frame.save"), (75, O::FrameResume, "frame.resume"), (76, O::AwaitUnwind, "await.unwind"),
-        (77, O::CleanupDeliverCancel, "cleanup.deliver_cancel")];
+        (77, O::CleanupDeliverCancel, "cleanup.deliver_cancel"), (67, O::AwaitTake, "await.take"),
+        (68, O::UniqueCacheProof, "unique_cache.proof"), (69, O::CacheRehome, "cache.rehome")];
     for (id, op, name) in assigned {
         assert_eq!((op.id(), op.name()), (id, name));
         assert_eq!(Opcode::from_id(id).unwrap(), op);
     }
-    // Spawn, take, its proof, rehome, pins, workers, the dynamic settle, service materialize/absorb and the
-    // unassigned tail stay reserved until their slices.
-    for id in [65, 67, 68, 69].into_iter().chain(78..=95) {
+    // Spawn, pins, workers, the dynamic settle, service materialize/absorb and the unassigned tail stay reserved
+    // until their slices.
+    for id in [65].into_iter().chain(78..=95) {
         assert!(Opcode::from_id(id).unwrap_err().message.contains("reserved"), "{id}");
     }
     assert_eq!(Opcode::CleanupSettle.id(), 21);
@@ -859,7 +875,7 @@ fn async_classes_and_suspension_sites_follow_draft3() {
     use HelperClass::*;
     let classes = [(O::FutureNew, G), (O::Await, S), (O::FuturePublish, L), (O::FutureCancel, L),
         (O::FutureDone, L), (O::FutureCancelled, L), (O::FrameSave, L), (O::FrameResume, L), (O::AwaitUnwind, S),
-        (O::CleanupDeliverCancel, L), (O::CleanupSettle, L)];
+        (O::CleanupDeliverCancel, L), (O::CleanupSettle, L), (O::AwaitTake, S), (O::CacheRehome, L)];
     for (op, class) in classes {
         assert_eq!(op.helper_class(), Some(class), "{}", op.name());
         assert_eq!(op.suspends(), class == S, "{}", op.name());
@@ -891,7 +907,10 @@ fn async_classes_and_suspension_sites_follow_draft3() {
     let settle = helper("champ_cleanup_settle").unwrap();
     assert_eq!((settle.opcode, Some(class_of(settle))), (Some(O::CleanupSettle), O::CleanupSettle.helper_class()));
     assert_eq!(O::InvokeCallOwn.helper_class(), None);
-    let frame_bound = [O::Await, O::AwaitUnwind, O::FuturePublish, O::FrameSave, O::FrameResume,
+    // The proof has no helper and no class: the loader proves the capability (draft 3 §14.4, ID 68).
+    assert_eq!(O::UniqueCacheProof.helper_class(), None);
+    assert!(!O::UniqueCacheProof.suspends());
+    let frame_bound = [O::Await, O::AwaitTake, O::AwaitUnwind, O::FuturePublish, O::FrameSave, O::FrameResume,
         O::CleanupDeliverCancel];
     for op in Opcode::ALL {
         assert_eq!(op.frame_bound(), frame_bound.contains(op), "{}", op.name());

@@ -42,13 +42,15 @@ pub(super) fn consumed(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<
         let consume = match op {
             ScopeBegin | OwnEmpty | OwnCreateCommit | DepsOf | DepsEmpty | InvokeObserve | InvokeDispatch
                 | ArrayGet | Fail | Evaluate | Catch | Lookup => false,
-            // A Future is a language value: awaiting, cancelling or reading it consumes nothing.
-            Await | FutureCancel | FutureDone | FutureCancelled => false,
+            // A Future is a language value: awaiting, cancelling or reading it consumes nothing. Its proof
+            // produces a capability, which the take consumes.
+            Await | FutureCancel | FutureDone | FutureCancelled | UniqueCacheProof => false,
+            AwaitTake => index == 1,
             // Every linear operand: fut.new takes the input packet and the owner state; fut.publish the frame
             // and the success packet; frame.save the frame and the saved tokens; await.unwind the state, task and
             // receipt; cleanup.settle the cleanup state and its duty.
             FutureNew | FuturePublish | FrameSave | FrameResume | AwaitUnwind | CleanupDeliverCancel
-                | CleanupSettle => true,
+                | CleanupSettle | CacheRehome => true,
             // The journal packet travels with the buffer; the buffer is a register (check_builders).
             BuilderPush | BuilderAppend | BuilderRange | BuilderFinish | BuilderAbandon => {
                 index + 1 == locations.len()
@@ -173,7 +175,7 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
                 "destroy entry signature mismatch")?;
         }
     }
-    for f in &p.functions {
+    for (index, f) in p.functions.iter().enumerate() {
         if matches!(f.entry_abi, EntryAbi::Owned | EntryAbi::Defer { .. }) {
             require(f.params.iter().filter(|&&location| verify::loc_type(f, location)
                 == Ok(ProducedType::Service(ServiceKind::Packet))).count() == 1,
@@ -183,7 +185,7 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
             Ok(ProducedType::Service(ServiceKind::Pending | ServiceKind::Cleanup | ServiceKind::ExitState
                 | ServiceKind::StableKey | ServiceKind::DestroyBorrow | ServiceKind::ScopeState
                 | ServiceKind::FailureState | ServiceKind::CacheState | ServiceKind::TaskState
-                | ServiceKind::Receipt)))),
+                | ServiceKind::Receipt | ServiceKind::UniqueCache)))),
             "ENTRY_PRIVATE_SERVICE", "private service contents cannot be entry arguments")?;
         if let Some(entry) = &f.proofs.entry
             && let Some(name) = &entry.external
@@ -209,6 +211,7 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
         check_call_contracts(p, f)?;
         check_service_results(p, f)?;
         suspension::check_flow(p, f)?;
+        take::check(p, index as u32, f)?;
         let states = service_states(f)?;
         enforce(f.proofs.states == states, "EVIDENCE_STATES",
             "service maps differ from reconstructed lifetimes")?;

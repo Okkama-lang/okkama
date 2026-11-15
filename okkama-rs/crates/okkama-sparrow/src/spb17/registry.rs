@@ -111,10 +111,13 @@ registry! {
     60 => BuilderAbandon, "builder.abandon";
     61 => Lookup, "lookup";
     // The async block, Champ draft 3 §14.1 (plan IDs 42–61 are superseded, CQ-1). Wave 1 assigns plain
-    // await; spawn (65), take (67), its proof (68), rehome (69), pins (78–80), workers (81–83), the dynamic
-    // settle (84) and service materialize/absorb (85–86) stay reserved.
+    // await, wave 2 (#601 R4) the temporary take, its proof and the rehome; spawn (65), pins (78–80), workers
+    // (81–83), the dynamic settle (84) and service materialize/absorb (85–86) stay reserved.
     64 => FutureNew, "fut.new";
     66 => Await, "await";
+    67 => AwaitTake, "await.take";
+    68 => UniqueCacheProof, "unique_cache.proof";
+    69 => CacheRehome, "cache.rehome";
     70 => FuturePublish, "fut.publish";
     71 => FutureCancel, "fut.cancel";
     72 => FutureDone, "fut.done";
@@ -232,7 +235,13 @@ impl Opcode {
                 slots.push(S(Deps));
                 slots
             }
-            (Await, Tag::Unwind) => vec![Value(Type::Failure), S(TaskState), S(Receipt)],
+            (Await | AwaitTake, Tag::Unwind) => vec![Value(Type::Failure), S(TaskState), S(Receipt)],
+            // The taken outcome: its value, the cache's outcome packet (now the boundary's) and its deps.
+            (AwaitTake, Tag::Normal) => valued(),
+            // The take capability: a proof position of zero words (draft 3 §14.2).
+            (UniqueCacheProof, Tag::Normal) => vec![S(UniqueCache)],
+            // The token form of C-4: the cache duty joins the pending reserve, which continues the exit.
+            (CacheRehome, Tag::Normal) => vec![S(Pending)],
             (FuturePublish | FutureCancel, Tag::Normal) => vec![],
             (FutureDone | FutureCancelled, Tag::Normal) => vec![Value(Type::Bool)],
             (FrameSave, Tag::Normal) => vec![S(Frame)],
@@ -254,7 +263,7 @@ impl Opcode {
             Catch | Lookup => vec![Tag::Some, Tag::None],
             BuilderPush | BuilderAppend | BuilderRange | BuilderFinish => vec![Tag::Normal, Tag::Unwind],
             Fail => vec![Tag::Unwind],
-            OwnSplitChecked | ScopeSplit | ScopeTransfer | OwnDynamic | ArrayGet | Evaluate | Await => {
+            OwnSplitChecked | ScopeSplit | ScopeTransfer | OwnDynamic | ArrayGet | Evaluate | Await | AwaitTake => {
                 vec![Tag::Normal, Tag::Unwind]
             }
             InvokeObserve | InvokeDispatch if context.may_fail => vec![Tag::Normal, Tag::Unwind],
@@ -291,7 +300,7 @@ impl Opcode {
             Self::InvokeDispatch | Self::InvokeDispatchOwn |
             Self::FailureDispatch | Self::RetOwn | Self::RetDefer | Self::ArrayGet | Self::Fail | Self::Evaluate
             | Self::Catch | Self::BuilderPush | Self::BuilderAppend | Self::BuilderRange | Self::BuilderFinish
-            | Self::Lookup | Self::Await)
+            | Self::Lookup | Self::Await | Self::AwaitTake)
     }
 }
 
@@ -303,14 +312,15 @@ pub enum HelperClass { L, G, X, S }
 impl Opcode {
     /// The class of an async operation (Champ draft 3 §14.4), including the nonempty form of
     /// `cleanup.settle`, which is L in 0.6.0 because no settle waits. The shared effects of each async helper in
-    /// `HELPER_TABLE` give the same class.
+    /// `HELPER_TABLE` give the same class. `unique_cache.proof` has no helper and no class: it is a proof the
+    /// loader checks (`SPB_TAKE_CAPABILITY`).
     pub const fn helper_class(self) -> Option<HelperClass> {
         use HelperClass::*;
         Some(match self {
             Self::FutureNew => G,
-            Self::Await | Self::AwaitUnwind => S,
+            Self::Await | Self::AwaitTake | Self::AwaitUnwind => S,
             Self::FuturePublish | Self::FutureCancel | Self::FutureDone | Self::FutureCancelled | Self::FrameSave
-                | Self::FrameResume | Self::CleanupDeliverCancel | Self::CleanupSettle => L,
+                | Self::FrameResume | Self::CleanupDeliverCancel | Self::CleanupSettle | Self::CacheRehome => L,
             _ => return None,
         })
     }
@@ -323,8 +333,8 @@ impl Opcode {
     /// Operations that act on the running body's own frame (draft 3 helpers taking `Word this`): they
     /// belong to async bodies only.
     pub const fn frame_bound(self) -> bool {
-        matches!(self, Self::Await | Self::AwaitUnwind | Self::FuturePublish | Self::FrameSave | Self::FrameResume
-            | Self::CleanupDeliverCancel)
+        matches!(self, Self::Await | Self::AwaitTake | Self::AwaitUnwind | Self::FuturePublish | Self::FrameSave
+            | Self::FrameResume | Self::CleanupDeliverCancel)
     }
 }
 
@@ -468,7 +478,9 @@ impl Opcode {
                 Self::ScopeTransfer => "champ_scope_transfer",
                 Self::OwnDynamic => "champ_own_dynamic",
                 Self::OwnCreateCommit => "champ_own_create_commit",
-                // Champ draft 3 §14.4. `fut.done`, `frame.save` and `frame.resume` are inline.
+                // Champ draft 3 §14.4. `fut.done`, `frame.save` and `frame.resume` are inline; the helpers of
+                // `await.take` (`champ_await_take`) and `cache.rehome` (`champ_cache_rehome`) join the shared table
+                // with their runtime (#601 R5), and `unique_cache.proof` has none.
                 Self::FutureNew => "champ_future_new",
                 Self::Await => "champ_await_view",
                 Self::AwaitUnwind => "champ_await_unwind",

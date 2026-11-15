@@ -272,7 +272,8 @@ pub const fn service_layout(kind: s::ServiceKind) -> ServiceLayout {
     use s::ServiceKind::*;
     match kind {
         // The frame token names the activation's own frame word, which is a root of its own (draft 3 §13).
-        Deps | Closed | Frame => ServiceLayout { words: 0, references: &[] },
+        // The take capability is a proof position (draft 3 §14.2).
+        Deps | Closed | Frame | UniqueCache => ServiceLayout { words: 0, references: &[] },
         StableKey => ServiceLayout { words: 2, references: &[0] },
         DestroyBorrow => ServiceLayout { words: 5, references: &[0, 32] },
         // A receipt is a raw enumeration word (draft 3 §14.2).
