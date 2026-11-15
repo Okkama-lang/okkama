@@ -288,7 +288,8 @@ pub extern "C" fn rt_machine_collection(ctx: *mut Ctx, function: u64, pc: u64, a
             word
         }
         Err(message) => {
-            fail(ctx, error(&message));
+            // A program failure with Tomato's message (`crate::ops`), as the program sees it.
+            fail(ctx, crate::Error(message));
             0
         }
     }

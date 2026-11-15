@@ -51,7 +51,7 @@ pub(super) fn fallible_scalar(op: &o::Operation) -> bool {
             | o::CollectionOp::MapValueAt { .. } | o::CollectionOp::MapDifference { packet: None, .. }
             | o::CollectionOp::ArraySlice { packet: None, .. } | o::CollectionOp::ArrayRemove { packet: None, .. }
             | o::CollectionOp::ArrayReplace { packet: None, .. }
-            | o::CollectionOp::ArrayDifference { packet: None, .. }) => true,
+            | o::CollectionOp::ArrayDifference { packet: None, .. } | o::CollectionOp::ArrayJoin { .. }) => true,
         o::Operation::Core(o::CoreOp::Convert { from, to, .. }) => {
             matches!((numeric_type(*from), numeric_type(*to)),
                 (Some(from), Some(to)) if s::conversion(from, to) == Some(true))
@@ -67,6 +67,7 @@ fn collection_result(module: &o::Module, op: s::DataOp, inputs: &[s::Type]) -> R
     let entry = |index: u32| composites(module).entries().get(index as usize).copied();
     Ok(match (op, receiver) {
         (D::ArraySlice | D::ArrayRemove | D::ArrayReplace | D::ArrayDifference | D::MapDifference, _) => receiver,
+        (D::ArrayJoin, _) => s::Type::Str,
         (D::MapGet | D::MapValueAt, s::Type::Map(id)) => match entry(id) {
             Some(s::Composite::Map { value, .. }) => value,
             _ => return Err(error("map operation on a non-map composite")),

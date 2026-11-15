@@ -502,11 +502,15 @@ impl<'a> Evidence<'a> {
                         Opcode::OwnBind | Opcode::OwnRebind | Opcode::OwnStage
                             if *op != Opcode::OwnStage || args.first() == Some(&Argument::Flag(false)) => {
                             let mut admission = self.query(locations[0], 2)?;
-                            if let ProducedType::Value(Type::Object(id) | Type::Successor(id))
-                                = verify::loc_type(self.function, locations[1]).ok()?
-                                && self.program.objects[id as usize].layout.may_reach_resource
-                            {
-                                admission.remove(&self.identity(locations[1])?);
+                            // The runtime binds every identity the value reaches: its own, and the elements of
+                            // a managed collection. Without a static inventory of them there is no admission.
+                            let ProducedType::Value(ty) = verify::loc_type(self.function, locations[1]).ok()? else {
+                                return None;
+                            };
+                            if verify::reaches_resource(self.program, ty) {
+                                for key in self.selected_identities(locations[1])? {
+                                    admission.remove(&key);
+                                }
                             }
                             admission
                         }
@@ -610,6 +614,16 @@ impl<'a> Evidence<'a> {
                     return Some(inputs.iter().map(|&id| Location::Register(id)).collect());
                 }
                 Instruction::Data { op: DataOp::MapNew, inputs, .. } => {
+                    // A repeated key keeps only its last value: the values are the map's elements only when
+                    // the keys are pairwise distinct constants.
+                    let mut keys = BTreeSet::new();
+                    for &key in inputs.iter().step_by(2) {
+                        self.steps += 1;
+                        let key = self.key_constant(Location::Register(key))?;
+                        if !keys.insert(key) {
+                            return None;
+                        }
+                    }
                     return Some(inputs.iter().skip(1).step_by(2).map(|&id| Location::Register(id)).collect());
                 }
                 Instruction::Data { op: DataOp::Move, inputs, .. } => current = Location::Register(inputs[0]),
@@ -618,6 +632,22 @@ impl<'a> Evidence<'a> {
         }
         self.exhausted = true;
         None
+    }
+
+    /// The value of a map key defined by a single constant, in a form where equal keys are equal: constants
+    /// are canonical, except that the two float zeros are one key.
+    fn key_constant(&self, location: Location) -> Option<String> {
+        let [Definition::Instruction(pc, _)] = self.definitions.get(&location)?.as_slice() else { return None };
+        let instruction = &self.function.code[*pc];
+        let Instruction::Data { op: DataOp::Const, immediate: Immediate::Constant(value), .. } = instruction else {
+            return None;
+        };
+        if let Constant::Float(bits) = value
+            && bits.parse::<u64>().ok().map(f64::from_bits) == Some(0.0)
+        {
+            return Some(format!("{:?}", Constant::Float("0".into())));
+        }
+        Some(format!("{value:?}"))
     }
 
     fn cleanup_begins(&mut self, location: Location) -> Option<BTreeSet<usize>> {

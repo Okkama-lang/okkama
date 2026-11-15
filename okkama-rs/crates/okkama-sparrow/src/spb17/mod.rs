@@ -293,13 +293,18 @@ impl ArrayType {
 }
 
 /// A retag of a collection whose leaves cannot exist (an uninferred `[]` or `[:]`) to a collection of the same
-/// shape: no element is reinterpreted. Byte arrays have their own representation and are excluded.
+/// shape: no element is reinterpreted. Byte arrays have their own representation and are excluded. A map
+/// without keys has no values either, but its value type is kept unless it is `never` too: a value word is
+/// never read as another type.
 pub fn never_retag(composites: &[Composite], from: Type, to: Type) -> bool {
     match (from, to) {
         (Type::Array(from), Type::Array(to)) => from.leaf == ArrayLeaf::Never && from.depth == to.depth,
-        (Type::Map(from), Type::Map(_)) => {
-            matches!(composites.get(from as usize), Some(Composite::Map { key: Type::Never, .. }))
-        }
+        (Type::Map(from), Type::Map(to)) => match (composites.get(from as usize), composites.get(to as usize)) {
+            (Some(Composite::Map { key: Type::Never, value: old }), Some(Composite::Map { value: new, .. })) => {
+                *old == Type::Never || old == new
+            }
+            _ => false,
+        },
         _ => false,
     }
 }
@@ -796,6 +801,8 @@ impl DataOp {
                 | Self::RoleNarrow | Self::MapGet | Self::MapKeyAt | Self::MapValueAt | Self::MapDifference
                 | Self::ArraySlice
                 | Self::ArrayRemove | Self::ArrayReplace | Self::ArrayDifference => true,
+            // A joined string longer than the 4 GiB a string can hold fails, as in Tomato.
+            Self::ArrayJoin => true,
             Self::TestOk | Self::TestIs | Self::TestIsnt | Self::TestFail => true,
             // Tomato's failures: an int outside signed 64 bits in a bit operation, a shift or rotation
             // count out of range, a float result that is not finite, a zero rat divisor, slice bounds and
@@ -1082,6 +1089,8 @@ mod scalars_tests;
 mod collections_tests;
 #[cfg(test)]
 mod managed_tests;
+#[cfg(test)]
+mod builders_tests;
 #[cfg(test)]
 mod testmode_tests;
 #[cfg(test)]

@@ -204,6 +204,51 @@ fn builders_elements_die_with_their_iteration() {
         " round0:2 -1 -0 round1:2 -11 -10 end\n");
 }
 
+// #692: `map` and `filter` over a managed array build arrays of the same resources. Selecting such an array
+// leaves its elements with their owner, which destroys each exactly once. The expected stdout is Tomato's.
+const MAPPED_RESOURCES: &str = r#"module app;
+
+import "io/stdout" take Stdout;
+import "async/atomic" take Atomic;
+
+object Res {
+    has n is int;
+    has log is Atomic<string>;
+    Res(:n, :log);
+    destroy { log.replace(log.value() + " -" + n.string()); }
+}
+
+object Calc {
+    Calc();
+    run(log is Atomic<string>) is int {
+        let xs = [Res(n: 1, log: log), Res(n: 2, log: log)];
+        let mapped = xs.map() -> r { r; };
+        let kept = xs.filter() -> r { true; };
+        let nested = xs.map() -> r { [r]; };
+        log.replace(log.value() + " sizes " + mapped.size().string() + kept.size().string()
+            + nested.size().string());
+        0;
+    }
+}
+
+main() is int {
+    let log = Atomic("");
+    defer Stdout().writeln(log.value());
+    Calc().run(log);
+}
+"#;
+
+#[test]
+fn mapped_and_filtered_resources_are_destroyed_once_by_their_owner() {
+    let directory = root().join("conformance/harness/okkama");
+    let bytes = compile(&directory, MAPPED_RESOURCES).unwrap_or_else(|error| panic!("{error}"));
+    let limits = sparrow_core::budget::Limits { steps: Some(10_000_000), ..sparrow_core::budget::Limits::default() };
+    let run = sparrow_core::run_captured(bytes, limits).unwrap();
+    assert_eq!(run.result, Ok(0));
+    assert_eq!(String::from_utf8_lossy(&run.stdout), " sizes 222 -2 -1\n");
+    assert_eq!(String::from_utf8_lossy(&run.destroy_trace), "app.Res 2\napp.Res 1\n");
+}
+
 /// Opt-in triage: `OKKAMA_CHAMP_CASES=<file with one id per line>` prints where each case stops.
 #[test]
 fn champ_cases_own_triage() {

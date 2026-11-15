@@ -209,7 +209,9 @@ fn run_source(text: &str) -> sparrow_core::CapturedRun {
     let mode = okkama_compiler::oir2::VerifyMode::Structural;
     let bytes = oir2::compile_linked_with(&roots, &mut CaseLoader { stdlib }, mode)
         .unwrap_or_else(|error| panic!("compile: {error}"));
-    let limits = sparrow_core::budget::Limits { steps: Some(1_000_000), ..sparrow_core::budget::Limits::default() };
+    // Champ counts steps as Tomato does (#692): a call is a step, so the recursion depth tests need more than
+    // a million. The budget only stops a runaway program, as in `check`.
+    let limits = sparrow_core::budget::Limits { steps: Some(100_000_000), ..sparrow_core::budget::Limits::default() };
     sparrow_core::run_captured(bytes, limits).unwrap()
 }
 

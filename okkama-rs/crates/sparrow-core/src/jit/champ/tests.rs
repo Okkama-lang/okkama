@@ -1289,3 +1289,63 @@ fn champ_unresolved_native_fails_as_a_missing_provider() {
     let (text, _) = p1_call(&mut runtime, &mut ctx, "okkama.Error.text", &[payload]);
     assert_eq!(runtime.heap.text(text), "Native symbol \"app@1::port_open/1\" is not registered");
 }
+
+/// An endless loop back-edge, and a self tail call compiled as a jump: each is a step, as in Tomato, so under a
+/// step budget either stops with Tomato's exhausted-budget report (#692).
+#[test]
+fn champ_endless_loops_and_tail_calls_exhaust_the_step_budget() {
+    let reg = L::Register;
+    let roots = |mut function: s::Function| {
+        let live = s::live_locations(&function).unwrap();
+        function.proofs.roots = live.iter().enumerate()
+            .map(|(pc, locations)| s::RootRequirement { pc: pc as u32, locations: locations.iter().copied().collect() })
+            .collect();
+        for (pc, instruction) in function.code.iter().enumerate() {
+            if matches!(instruction, s::Instruction::Champ { flow: s::Flow::Next(_), .. }) {
+                let locations = live[pc + 1].iter().copied().collect();
+                function.proofs.post_roots.push(s::RootRequirement { pc: pc as u32, locations });
+            }
+        }
+        function
+    };
+    let spin = s::Function {
+        symbol: "spin".into(), entry_abi: s::EntryAbi::Observation,
+        registers: vec![], services: vec![], params: vec![], results: vec![],
+        blocks: vec![s::Block { pc: 0, params: vec![] }, s::Block { pc: 1, params: vec![] }],
+        proofs: s::FunctionProofs { entry: Some(s::EntryContract::default()), ..s::FunctionProofs::default() },
+        code: vec![
+            s::Instruction::Br(s::Edge { target_pc: 1, assignments: vec![] }),
+            s::Instruction::Br(s::Edge { target_pc: 1, assignments: vec![] }),
+        ],
+    };
+    let one = s::Immediate::Constant(s::Constant::Int("1".into()));
+    let tail = s::Function {
+        symbol: "tail".into(), entry_abi: s::EntryAbi::Observation,
+        registers: vec![s::Type::Int; 4], services: vec![], params: vec![reg(0)], results: vec![s::Type::Int],
+        blocks: vec![s::Block { pc: 0, params: vec![reg(0)] }],
+        proofs: s::FunctionProofs { entry: Some(s::EntryContract::default()), ..s::FunctionProofs::default() },
+        code: vec![
+            s::Instruction::Data { op: s::DataOp::Const, inputs: vec![], output: Some(1), immediate: one },
+            s::Instruction::Data { op: s::DataOp::IntAdd, inputs: vec![0, 1], output: Some(2),
+                immediate: s::Immediate::None },
+            s::Instruction::Champ { op: O::InvokeObserve,
+                arguments: vec![A::Entry(1), A::Summary(0), A::Location(reg(2))], flow: s::Flow::Next(vec![reg(3)]) },
+            s::Instruction::Ret(vec![3]),
+        ],
+    };
+    let program = s::Program {
+        functions: vec![roots(spin), roots(tail)],
+        tables: s::ChampTables {
+            summaries: vec![s::Summary { entry: 1, may_fail: false, retained_params: vec![] }],
+            ..s::ChampTables::default()
+        },
+        ..s::Program::default()
+    };
+    for entry in [0, 1] {
+        let mut runtime = Runtime::new_champ(program.clone(), vec![]).unwrap();
+        runtime.limits.steps = Some(10_000);
+        let arguments = if entry == 0 { vec![] } else { vec![runtime.heap.int(0)] };
+        let result = runtime.run_function_with(entry, &arguments, crate::STACK_BYTES);
+        assert_eq!(result.unwrap_err().0, "Execution budget exhausted: steps", "function {entry}");
+    }
+}

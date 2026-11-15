@@ -262,6 +262,128 @@ fn never_shapes_retag_only_to_their_own_shape() {
     assert!(verify(&p).unwrap_err().message.contains("invalid move"));
 }
 
+/// A key-less map keeps its value type unless that is never too: no value word is read as another type.
+#[test]
+fn never_keyed_maps_keep_their_value_type() {
+    let composites = [
+        Composite::Map { key: Type::Never, value: Type::Never },
+        Composite::Map { key: Type::Never, value: Type::Float },
+        Composite::Map { key: Type::Int, value: Type::Float },
+        Composite::Map { key: Type::Int, value: Type::Object(0) },
+    ];
+    assert!(never_retag(&composites, Type::Map(0), Type::Map(3)));
+    assert!(never_retag(&composites, Type::Map(1), Type::Map(2)));
+    assert!(!never_retag(&composites, Type::Map(1), Type::Map(3)));
+    // `map.new` with no entries, then a retag of the empty map.
+    let retag = |from: u32, to: u32| {
+        let mut p = straight(vec![Type::Map(from), Type::Map(to), Type::Int], vec![
+            data(DataOp::MapNew, vec![], 0),
+            data(DataOp::Move, vec![0], 1),
+            data(DataOp::MapLen, vec![1], 2),
+        ]);
+        p.objects = vec![plain_object("P", vec![Type::Int], false)];
+        p.composites = composites.to_vec();
+        p
+    };
+    verify_load(&retag(0, 3), &NoExternalContracts).unwrap();
+    verify_load(&retag(1, 2), &NoExternalContracts).unwrap();
+    reject(&retag(1, 3), "NEVER_RETAG");
+    // An array of never leaves keeps its depth.
+    let empty = Type::Array(ArrayType { leaf: ArrayLeaf::Never, depth: 1 });
+    let deep = Type::Array(ArrayType { leaf: ArrayLeaf::Int, depth: 2 });
+    let p = straight(vec![empty, deep, Type::Int], vec![
+        data(DataOp::ArrayNew, vec![], 0),
+        data(DataOp::Move, vec![0], 1),
+        data(DataOp::ArrayLen, vec![1], 2),
+    ]);
+    reject(&p, "NEVER_RETAG");
+}
+
+/// The audit's type confusion: an `undef` stored in a never field and read back is a never value; a map of it
+/// with a float value, retagged to a map of objects, would read the float's word as an object reference.
+fn never_map_confusion() -> Program {
+    let mut f = tests::empty_function();
+    f.registers = vec![
+        Type::Never,
+        Type::Object(0),
+        Type::Never,
+        Type::Float,
+        Type::Map(0),
+        Type::Map(1),
+        Type::Int,
+        Type::Object(1),
+        Type::Int,
+    ];
+    f.results = vec![Type::Int];
+    f.proofs.entry = Some(EntryContract { failures: 2, ..EntryContract::default() });
+    let forged = Constant::Float(4_702_111_234_474_983_745u64.to_string());
+    f.code = vec![
+        Instruction::Data { op: DataOp::Undef, inputs: vec![], output: Some(0), immediate: Immediate::None },
+        Instruction::Data { op: DataOp::ObjNew, inputs: vec![0], output: Some(1), immediate: Immediate::Object(0) },
+        Instruction::Data { op: DataOp::ObjGet, inputs: vec![1], output: Some(2), immediate: Immediate::Field(0) },
+        constant(forged, 3),
+        data(DataOp::MapNew, vec![2, 3], 4),
+        data(DataOp::Move, vec![4], 5),
+        constant(Constant::Int("0".into()), 6),
+        data(DataOp::MapValueAt, vec![5, 6], 7),
+        Instruction::Data { op: DataOp::ObjGet, inputs: vec![7], output: Some(8), immediate: Immediate::Field(0) },
+        Instruction::Ret(vec![8]),
+    ];
+    Program {
+        objects: vec![plain_object("Holder", vec![Type::Never], false), plain_object("P", vec![Type::Int], false)],
+        functions: vec![with_roots(f)],
+        entry: Some(0),
+        composites: vec![
+            Composite::Map { key: Type::Never, value: Type::Float },
+            Composite::Map { key: Type::Int, value: Type::Object(1) },
+        ],
+        ..Program::default()
+    }
+}
+
+#[test]
+fn no_value_of_type_never_is_stored_or_read() {
+    reject(&never_map_confusion(), "NEVER_FIELD");
+    // The same map built from a never value that arrives as a parameter: map.new cannot read it.
+    let mut p = straight(vec![Type::Never, Type::Float, Type::Map(0), Type::Int], vec![
+        constant(Constant::Float(0u64.to_string()), 1),
+        data(DataOp::MapNew, vec![0, 1], 2),
+        data(DataOp::MapLen, vec![2], 3),
+    ]);
+    p.composites = vec![Composite::Map { key: Type::Never, value: Type::Float }];
+    let f = &mut p.functions[0];
+    f.params = vec![Location::Register(0)];
+    f.blocks[0].params = f.params.clone();
+    p.functions[0] = with_roots(p.functions[0].clone());
+    reject(&p, "NEVER_OPERAND");
+    // The empty map of the same type loads.
+    let Instruction::Data { inputs, .. } = &mut p.functions[0].code[1] else { unreachable!() };
+    inputs.clear();
+    verify_load(&p, &NoExternalContracts).unwrap();
+}
+
+/// An array of never leaves exists only empty: `array.new` cannot read a never element into it.
+#[test]
+fn a_never_array_cannot_be_built_from_a_never_value() {
+    let empty = Type::Array(ArrayType { leaf: ArrayLeaf::Never, depth: 1 });
+    let objects = Type::Array(ArrayType { leaf: ArrayLeaf::Object(0), depth: 1 });
+    let mut p = straight(vec![Type::Never, empty, objects, Type::Int], vec![
+        data(DataOp::ArrayNew, vec![0], 1),
+        data(DataOp::Move, vec![1], 2),
+        data(DataOp::ArrayLen, vec![2], 3),
+    ]);
+    p.objects = vec![plain_object("P", vec![Type::Int], false)];
+    let f = &mut p.functions[0];
+    f.params = vec![Location::Register(0)];
+    f.blocks[0].params = f.params.clone();
+    p.functions[0] = with_roots(p.functions[0].clone());
+    reject(&p, "NEVER_OPERAND");
+    // Without its element the same program is the empty literal and loads.
+    let Instruction::Data { inputs, .. } = &mut p.functions[0].code[0] else { unreachable!() };
+    inputs.clear();
+    verify_load(&p, &NoExternalContracts).unwrap();
+}
+
 fn lookup_arguments(p: &mut Program, receiver: u32, key: u32) {
     let Instruction::Champ { arguments, .. } = &mut p.functions[0].code[7] else { unreachable!() };
     *arguments = vec![Argument::Location(Location::Register(receiver)), Argument::Location(Location::Register(key))];
